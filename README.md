@@ -28,6 +28,7 @@
 | `api-surface.md` | (제어평면 API) | REST 엔드포인트 인벤토리·If-Match·Idempotency-Key·as_of(D1 OpenAPI 입력) — v1.5 |
 | `ops-defaults.md` | (운영 기본값) | 전이 임계·lease TTL·서킷·LLM retry/budget·artifact retention·sweeper 주기 + 테스트 픽스처값 — v1.6 |
 | `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·transitions.fixtures.ts. tsc strict 통과·전이 63/63 PASS — v1.7 |
+| `architecture.md` | (구현 설계, 계약 아님) | 스택·실행기(**Stagehand v3 CDP, Playwright 제거**)·컴포넌트↔계약 매핑·배포·빌드순서 — v2.0 |
 
 ---
 
@@ -322,3 +323,10 @@
 
 > **기각(2)**: gateway policy If-Match(동일 문서가 optional로 이미 분리), @human_task 입력 kind 3종 vs enum 5종(핸들러 입력 목록 vs 전체 enum — 값 충돌 아님).
 > **잔여 P3(추후 폴리시)**: ① codegen/types.ts에 `ValidationReport`/`ValidationIssue` 미생성(ir-static-validation §3) ② transitions.ts R4 `humanTaskKind:"captcha"` 하드코딩(mfa 손실) — state-machine R4에 kind 결정규칙 고정 후 guard 파라미터화 필요 ③ 목업 IR 예시 @end_no_data witness(V7) 부재.
+
+---
+
+## v2.0 패치 로그 (구현 아키텍처 확정 — Stagehand v3, Playwright 제거)
+
+> 구현 청사진을 `architecture.md`(신규)로 고정. **브라우저 드라이버 결정: Stagehand v3 (CDP-native) 채택, Playwright 제거.** 근거(web-verified 2026): Stagehand v3가 Playwright 하드의존을 제거하고 CDP-native 모듈러 드라이버로 전환(복잡 DOM ~44% 개선), Playwright는 `connectOverCDP` 선택 연결만 가능(architecture.md §8 출처).
+> 계약 영향: `ts/core-types.ts` 주석 `PlaywrightUtility` → `Utility(CDP)`로 일반화 — `ExecutorPlugin {dom/vision/utility}` 타입·의미는 **불변**(capability 분리는 "LLM vs 결정형"이지 도구 무관). 스택 요약: TS/Node · PostgreSQL 15+ · Graphile Worker · Fastify · ajv · OTel · React+Vite. 빌드순서 D1–D7은 architecture.md §6.

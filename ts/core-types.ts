@@ -1,6 +1,6 @@
 /**
  * Core Runtime Types v1
- * Executor 구현체(Stagehand / Vision / PlaywrightUtility) 공유 계약.
+ * Executor 구현체(Stagehand / Vision / Utility(CDP)) 공유 계약.
  * 결과 포맷 통일 → 런타임 안정성. brand 타입은 보안 경계(impl-contracts-bundle.md C 참조).
  */
 
@@ -126,7 +126,7 @@ export type RunContext = {
 
 // ===== PageState 생산자 계약 =====
 // [FIX] PageState는 page_state.resolve span·IREL flags.* 의 원천인데 생산자 계약이 없었다.
-// Stagehand 없이도 D3 골격에서 동작 가능(PlaywrightUtility 기반 resolver).
+// Stagehand(act/observe/extract) 없이도 D3 골격에서 동작 가능(결정형 CDP 유틸리티 기반 resolver — Stagehand v3 CDP-native, Playwright 비의존).
 export interface PageStateResolver {
   resolvePageState(ctx: RunContext): Promise<PageState>;
 }
