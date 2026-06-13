@@ -55,5 +55,7 @@ Single-file vanilla-JS prototype. Architecture: a `views` object (~line 1923) ma
 
 The ten views mirror the contract domains: `scenarioStudio`, `playground`, `dashboard`, `workitems`, `humanTasks`, `runTrace`, `irValidation`, `llmGateway`, `security`, `idempotency`. UI copy is intentionally non-technical Korean (end-operator audience); keep that register when editing labels.
 
+**v1.8 additions (Phase 5)**: navigation is now a **hash router** — `navigate()` sets `location.hash`, `hashchange` drives `renderView` (deep-link `#viewKey` + browser back/forward); `renderView` is render-only. Topbar has a freshness indicator (`live-dot` + `touchUpdated()`), route changes show `#routeProgress`. `emptyState()`/`errorState()` are reusable state components (empty wired into `setFilter` 0-match). Accessibility: global `:focus-visible`, `prefers-reduced-motion`, modal/drawer focus trap (`getFocusable`/`moveFocusInto`/`restoreFocus` + Tab keydown), icons `aria-hidden` via `refreshIcons`. Run state board includes the `cancelled`("취소됨") terminal. Verified by a jsdom smoke test (not committed).
+
 ## 미결정 (open questions — do not invent answers)
 README flags these as decided-elsewhere: Codex SSE structured-output streaming scope + abort spec, P1 vLLM SSE support, and per-site default credential concurrency. If a task depends on one of these, surface it as a `TODO: [BLOCKED]` rather than guessing.

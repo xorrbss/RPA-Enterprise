@@ -286,4 +286,21 @@
 | `codegen/transitions.fixtures.ts` | 전이표 63 케이스(+race/IllegalTransition), ops-defaults 픽스처값 | 실행 PASS |
 
 > 검증 하니스: `codegen/{package.json,tsconfig.json}`(typescript/ajv/ajv-formats/tsx). `npm --prefix codegen run typecheck`(tsc strict EXIT=0, 7산출물+계약ts 전체) / `run fixtures`(63/63). `node_modules/` gitignore. event_type 실측 31종(스키마와 일치, events_outbox CHECK도 31).
-> 다음: Phase 5(HTML 목업 — 빈/오류/로딩 상태·라우팅·실시간 갱신).
+> 다음: Phase 5(HTML 목업). **→ v1.8로 완료.**
+
+---
+
+## v1.8 패치 로그 (Phase 5 — HTML 목업 보강, 갭분석 화면·설계 잔여)
+
+> 화면·설계 분석에서 "미적용(설계 결정 필요)"로 남겼던 항목을 `rpa_enterprise_console.html`에 구현. jsdom 런타임 스모크 12/12 PASS.
+
+| 항목 | 구현 |
+|---|---|
+| 라우팅/딥링크·뒤로가기 | 해시 라우터(`viewFromHash`/`navigate`/`hashchange`). `#viewKey` 딥링크 진입, 브라우저 back/forward, nav는 history 추가 |
+| 실시간·마지막 갱신 | topbar `live-dot`(pulse) + `방금 갱신 HH:MM:SS`(`touchUpdated`, 렌더/새로고침 시 갱신) |
+| 로딩 표시 | 라우트 전환 시 상단 `route-progress` 바 + `skeleton` 클래스 |
+| 빈 상태 | `emptyState()` 컴포넌트 + 실행보드 필터 0건 시 빈 상태 행(`setFilter`) |
+| 오류 상태 | `errorState()` 컴포넌트(재시도 버튼 포함, 실 UI용 재사용 패턴) |
+| 접근성(누적) | 전역 `:focus-visible`·`prefers-reduced-motion`·modal/drawer 포커스 트랩·아이콘 `aria-hidden`(분석 시 반영) |
+
+> **전체 프로그램 완료**: Phase 1(계약 내부)·2(DDL/RBAC/API)·3(운영 기본값)·4(D1 codegen)·5(HTML 목업). 갭분석 P0~P2 + 외부 의존 맵 + 화면·설계 항목이 모두 본 패키지에 정의·검증·반영됨. 남은 외부 사실(모델 컨텍스트·Codex 스트리밍 실범위)만 구현 시 라이브 확정.

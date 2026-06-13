@@ -51,6 +51,26 @@
       }
     }
 
+    /* [Phase 5] 라우트 로딩 바 */
+    .route-progress { position: fixed; top: 0; left: 0; height: 3px; width: 0; background: var(--blue); z-index: 100; opacity: 0; transition: width .3s ease, opacity .3s ease; }
+    .route-progress.active { width: 100%; opacity: 1; }
+
+    /* [Phase 5] 마지막 갱신 · 라이브 표시 */
+    .freshness { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .live-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--green); animation: livePulse 2s infinite; }
+    @keyframes livePulse { 0%{box-shadow:0 0 0 0 rgba(15,159,110,.45)} 70%{box-shadow:0 0 0 6px rgba(15,159,110,0)} 100%{box-shadow:0 0 0 0 rgba(15,159,110,0)} }
+
+    /* [Phase 5] 빈 / 오류 상태 */
+    .empty-state, .error-state { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 36px 16px; color: var(--muted); }
+    .empty-state .es-icon, .error-state .es-icon { width: 40px; height: 40px; border-radius: 999px; display: grid; place-items: center; background: var(--soft); }
+    .error-state .es-icon { background: var(--red-soft); color: var(--red); }
+    .empty-state strong, .error-state strong { color: var(--text); font-size: 14px; }
+    .empty-row td { padding: 0 !important; }
+
+    /* [Phase 5] 로딩 스켈레톤 */
+    .skeleton { background: linear-gradient(90deg, var(--soft) 25%, var(--surface-2) 37%, var(--soft) 63%); background-size: 400% 100%; animation: shimmer 1.2s infinite; border-radius: 6px; }
+    @keyframes shimmer { 0%{background-position:100% 0} 100%{background-position:-100% 0} }
+
     body {
       margin: 0;
       min-width: 320px;
@@ -1530,6 +1550,7 @@
 
     <main>
       <header class="topbar">
+        <div class="route-progress" id="routeProgress"></div>
         <div class="page-title">
           <h1 id="pageTitle">RPA 운영 대시보드</h1>
           <p id="pageSubtitle">실행 상태, 사람 확인, AI 비용, 보안 상태를 통합 모니터링</p>
@@ -1541,6 +1562,7 @@
         </label>
 
         <div class="top-actions">
+          <div class="freshness" title="실시간 갱신"><span class="live-dot" aria-hidden="true"></span><span id="lastUpdated">실시간</span></div>
           <button class="icon-btn" type="button" title="알림" data-action="notifications"><i data-lucide="bell"></i></button>
           <button class="icon-btn" type="button" title="새로고침" data-action="refresh"><i data-lucide="refresh-cw"></i></button>
           <button class="toolbar-btn" type="button" data-action="deployIr"><i data-lucide="upload-cloud"></i><span>자동화 배포</span></button>
@@ -2598,8 +2620,34 @@
       return `<div class="field"><label>${label}</label><input value="${value}" /></div>`;
     }
 
+    // [Phase 5] 해시 라우팅 · 갱신표시 · 로딩 · 빈/오류 상태 헬퍼
+    function viewFromHash() {
+      const h = (location.hash || "").replace(/^#/, "");
+      return views[h] ? h : "dashboard";
+    }
+    function navigate(view) {
+      const v = views[view] ? view : "dashboard";
+      // 해시 변경 → history 항목 추가 + hashchange가 렌더(뒤로/앞으로·딥링크 지원).
+      // 동일 해시(현재 뷰 재클릭)는 hashchange가 안 뜨므로 직접 렌더.
+      if ((location.hash || "").replace(/^#/, "") === v) renderView(v);
+      else location.hash = v;
+    }
+    function touchUpdated() {
+      const el = document.getElementById("lastUpdated");
+      if (el) el.textContent = "방금 갱신 " + new Date().toTimeString().slice(0, 8);
+    }
+    function startRouteProgress() { const b = document.getElementById("routeProgress"); if (b) b.classList.add("active"); }
+    function endRouteProgress() { const b = document.getElementById("routeProgress"); if (b) setTimeout(() => b.classList.remove("active"), 350); }
+    function emptyState(icon, title, hint) {
+      return `<div class="empty-state"><span class="es-icon"><i data-lucide="${icon}"></i></span><strong>${title}</strong><span>${hint}</span></div>`;
+    }
+    function errorState(title, hint, action) {
+      return `<div class="error-state"><span class="es-icon"><i data-lucide="alert-triangle"></i></span><strong>${title}</strong><span>${hint}</span>${action ? button("refresh-cw", "다시 시도", "refresh-cw", action) : ""}</div>`;
+    }
+
     function renderView(view) {
       const safeView = views[view] ? view : "dashboard";
+      startRouteProgress();
       content.innerHTML = views[safeView]();
       const [title, subtitle] = viewMeta[safeView];
       pageTitle.textContent = title;
@@ -2609,6 +2657,8 @@
       });
       window.scrollTo({ top: 0, left: 0 });
       refreshIcons();
+      touchUpdated();
+      endRouteProgress();
     }
 
     function setFilter(filter) {
@@ -2617,10 +2667,25 @@
         tab.classList.toggle("active", on);
         tab.setAttribute("aria-pressed", on ? "true" : "false");
       });
+      let visible = 0;
       document.querySelectorAll("[data-run-row]").forEach((row) => {
-        const state = row.dataset.state;
-        row.hidden = filter !== "all" && state !== filter;
+        const hide = filter !== "all" && row.dataset.state !== filter;
+        row.hidden = hide;
+        if (!hide) visible++;
       });
+      // [Phase 5] 0건이면 빈 상태 행 표시
+      const tbody = document.getElementById("runTable");
+      if (tbody) {
+        const old = tbody.querySelector(".empty-row");
+        if (old) old.remove();
+        if (visible === 0) {
+          const tr = document.createElement("tr");
+          tr.className = "empty-row";
+          tr.innerHTML = `<td colspan="8">${emptyState("inbox", "해당 상태의 실행이 없습니다", "다른 필터를 선택하거나 새로고침하세요")}</td>`;
+          tbody.appendChild(tr);
+          refreshIcons();
+        }
+      }
     }
 
     let lastFocused = null;
@@ -2767,6 +2832,8 @@
     }
 
     function handleAction(action) {
+      // [Phase 5] 새로고침: 현재 뷰 재렌더(로딩 바 + 갱신시각) 후 알림
+      if (action === "refresh") { renderView(viewFromHash()); showToast("최신 상태로 새로고침했습니다."); return; }
       const drawerActions = {
         notifications: ["알림", "최근 장애와 마감 시간 이벤트", `<div class="check-list">${checkRow("사이트 일시중단", "쇼핑몰 KR 차단율 임계 초과", "risk")}${checkRow("사람 확인 마감", "HT-1881 8분 남음", "pending")}${checkRow("예산 초과 차단", "실행-2822 비용 한도 초과", "system")}</div>`],
         termsHelp: ["용어 설명", "처음 쓰는 사람을 위한 짧은 설명", `<div class="check-list">
@@ -2906,7 +2973,7 @@ side_effect = 결과가 남는 작업 정책</pre>`],
       const routeActions = { goTrace: "runTrace", dryRun: "playground" };
       if (routeActions[action]) {
         closeDrawer();
-        renderView(routeActions[action]);
+        navigate(routeActions[action]);
         if (action === "dryRun") showToast("테스트 실행 화면을 준비했습니다.");
         return;
       }
@@ -2949,7 +3016,7 @@ side_effect = 결과가 남는 작업 정책</pre>`],
     document.addEventListener("click", (event) => {
       const nav = event.target.closest("[data-view-target]");
       if (nav) {
-        renderView(nav.dataset.viewTarget);
+        navigate(nav.dataset.viewTarget);
         return;
       }
 
@@ -2988,7 +3055,9 @@ side_effect = 결과가 남는 작업 정책</pre>`],
       }
     });
 
-    renderView("dashboard");
+    // [Phase 5] 해시 기반 라우팅: 뒤로/앞으로·딥링크 지원 + 초기 해시로 진입
+    window.addEventListener("hashchange", () => renderView(viewFromHash()));
+    renderView(viewFromHash());
   </script>
 </body>
 </html>
