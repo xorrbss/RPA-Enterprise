@@ -34,10 +34,32 @@ CREATE TABLE site_profiles (
   risk            text        NOT NULL DEFAULT 'green'
                     CHECK (risk IN ('green','amber','red')),  -- red = 승인 워크플로우 필요(amber=중간; api-surface/openapi SiteRisk와 정합)
   approved        boolean     NOT NULL DEFAULT false,       -- risk=red 승인 여부(SITE_PROFILE_BLOCKED 게이트)
+  circuit_state   text        NOT NULL DEFAULT 'closed'
+                    CHECK (circuit_state IN ('closed','open','half_open')),  -- 사이트 서킷(event site.circuit_opened/closed, GET /sites 조회원)
+  circuit_until   timestamptz,                              -- open cooldown 만료 — ops-defaults §3 site.circuit.open_duration
   created_at      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, name)
 );
 CREATE INDEX idx_site_profiles_tenant ON site_profiles (tenant_id);
+
+-- ------------------------------------------------------------
+-- workers — 실행기 생존(heartbeat) + 워커 서킷 상태 레지스트리.
+--   runs.worker_id / browser_leases.owner_worker_id / credential_leases.run_id 연계 워커의 영속처.
+--   worker.heartbeat·worker.circuit_opened/closed(event-envelope) 이벤트의 저장 대상.
+--   **인프라 레벨(테넌트 비종속) — RLS 미적용**(auth-rbac §4 BYPASSRLS 도메인). tenant_id 없음.
+-- ------------------------------------------------------------
+CREATE TABLE workers (
+  id              uuid        PRIMARY KEY,
+  kind            text        NOT NULL CHECK (kind IN ('orchestrator','browser','gateway','sweeper')),
+  status          text        NOT NULL DEFAULT 'active' CHECK (status IN ('active','draining','dead')),
+  heartbeat_at    timestamptz NOT NULL DEFAULT now(),       -- 생존 신호. 만료 시 dead 판정 → lease sweeper 회수(ops-defaults §2)
+  circuit_state   text        NOT NULL DEFAULT 'closed'
+                    CHECK (circuit_state IN ('closed','open','half_open')),  -- worker 서킷(ops-defaults §3 worker.circuit.*)
+  circuit_until   timestamptz,
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_workers_heartbeat ON workers (heartbeat_at) WHERE status = 'active';
+-- 참고: runs.worker_id·browser_leases.owner_worker_id는 workers.id를 논리 참조(인프라/테넌트 도메인 분리로 hard FK는 선택).
 
 -- browser_identities — 브라우저 지문/정체성. version은 action_plan_cache family 키 구성요소.
 CREATE TABLE browser_identities (

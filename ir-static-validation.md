@@ -36,6 +36,8 @@
 | V11 | **fallback_chain 정합** — `tier`는 `T0..T3` 중 **중복 없이** 단조 사용. `entry_node`는 V1 적용. `advance_when` 생략·마지막 티어 실패 시 의미는 §4. | `IR_SCHEMA_INVALID` | error | `fallback_chain_invalid` |
 
 > V3/V4의 도달성·사이클 판정은 흐름 그래프를 노드=정점, (`next`/`on[].target`/`fallback entry_node`/`loop` 본문)=간선으로 구성해 수행한다. `@challenge`/`@human_task`는 복귀 노드(reserved-handlers `returnNodeOnResolve`)로 이어지는 간선으로 취급, `@end_no_data`/`terminal`은 종료 정점.
+>
+> **정적 한계**: V3는 *구조* 도달성만 보장한다. `on[]`의 모든 `when`이 런타임에 false가 되는 **값-의존 무매칭**은 정적으로 잡을 수 없으며, 인터프리터가 `IR_NO_BRANCH_MATCHED`(System 예외 → 노드 재시도)로 표면화한다(ir-expression §5·§7, error-catalog). "조용한 dead-end" 금지.
 
 ---
 

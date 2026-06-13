@@ -16,7 +16,7 @@ Three things live here:
 
 ## 핵심 원칙: contracts가 진실원천이다
 
-`_analysis_files_v1_2_patched/README.md` is the authoritative changelog and design-decision record. When the contract docs disagree with an external PRD, the **contracts win** and the PRD is to be brought into line (see README §"본 패키지에서 내린 설계 결정" and the v1.1/v1.2 patch logs). Before changing any contract, read the README patch log — most edits there fix a *verified internal inconsistency*, and each carries a stated rationale. Preserve that discipline: change the contract only to fix a real internal contradiction, and record why.
+`README.md` (repo root) is the authoritative changelog and design-decision record. When the contract docs disagree with an external PRD, the **contracts win** and the PRD is to be brought into line (see README §"본 패키지에서 내린 설계 결정" and the v1.1/v1.2 patch logs). Before changing any contract, read the README patch log — most edits there fix a *verified internal inconsistency*, and each carries a stated rationale. Preserve that discipline: change the contract only to fix a real internal contradiction, and record why.
 
 A recurring, deliberate design rule across all docs — **"조용한 false/unknown 금지"** (no silent failure): unclassified exceptions are absorbed into `system` (never a typed `unknown`), missing IREL scope is a System exception (not a false), and undefined state transitions `throw IllegalTransition` (never a silent no-op). Honor this when extending anything.
 

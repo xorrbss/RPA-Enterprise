@@ -110,6 +110,8 @@ CREATE POLICY tenant_isolation ON <table>
 Phase 2 core_entities(README v1.4 footer 목록 — 정의 시 동일 패턴 적용):
 - `runs`, `run_steps`, `workitems`, `human_tasks`, `scenarios`, `scenario_versions`, `artifacts`, `events_outbox`, `dead_letter`, `stagehand_calls`, `site_profiles`, `browser_identities`, `network_policies`
 
+**RLS 제외(인프라, 테넌트 비종속)**: `workers`(실행기 생존·서킷 레지스트리, migration_core_entities.sql) — `tenant_id` 없음, **BYPASSRLS 도메인**(운영/스케줄러 롤). 서킷 상태는 사이트=`site_profiles.circuit_state`(tenant-scoped, RLS 적용)·워커=`workers.circuit_state`(인프라)에 각각 영속.
+
 비고:
 - `credential_leases`/`browser_leases`처럼 tenant_id가 복합 PK 일부인 테이블도 RLS는 행 단위 USING으로 추가 적용한다(PK 제약과 독립).
 - FK 참조는 tenant 내부 일관성을 가정한다(예: `normalized_records.raw_item_id → raw_items.id`는 동일 tenant). cross-tenant FK는 RLS로 자연 차단.

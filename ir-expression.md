@@ -106,6 +106,7 @@ function evalExpression(ast: IRELNode, scope: IRELScope): IRELValue;
 - **결정론**: 같은 (expr, scope) → 항상 같은 결과. 현재시각·랜덤·외부조회 함수 없음.
 - **[FIX #12] 상대 날짜 패턴**: `now()`를 제공하지 않으므로(결정론 보장) "오늘 기준 N일 이내" 같은 식은 IREL 내부에서 표현 불가. 기준 시각이 필요하면 **실행 파라미터 `params.as_of`(ISO-8601 string)로 주입**하고 `date_after(x, params.as_of)` 형태로 비교한다. as_of는 Run 생성 시 1회 고정되어 재시도·replay에도 결정론이 유지된다(런타임 now() 금지).
 - **평가 실패 처리**(런타임): 정의된 변수인데 scope에 값이 없으면(예: 선행 노드가 skipped여서 `node.x.row_count` 부재) → 평가 결과 `null`/`false` 단락이 아니라 **`IREL_RUNTIME_MISSING` 예외 → System 예외로 분류 → 해당 노드 재시도**. "조용한 false"는 금지(false success 위험).
+- **`on[]` 무매칭 처리**(런타임): priority 내림차순으로 모든 `when`을 평가했는데 **어느 것도 true가 아니면** → 분기 없음을 조용히 흘리지 않고 **`IR_NO_BRANCH_MATCHED` 예외 → System 분류 → 해당 노드 재시도**(IREL_RUNTIME_MISSING과 동일 원칙, "조용한 dead-end" 금지). 정적검증(ir-static-validation V3 도달가능성)은 *구조*만 보장하며 값 의존 무매칭은 못 잡으므로, 런타임은 반드시 이 예외로 표면화한다.
 - **컴파일 시점**: 시나리오 저장/승격 시 모든 expression을 파싱+타입체크. 하나라도 실패하면 **저장 거부**(prod 승격 차단). 런타임에 파싱하지 않는다(AST 캐시).
 
 ---
@@ -145,5 +146,6 @@ function evalExpression(ast: IRELNode, scope: IRELScope): IRELValue;
 | `IREL_FORWARD_REF` | compile | 미실행 노드 참조 |
 | `IREL_SCOPE_VIOLATION` | compile | loop 밖 loop.* 참조 등 |
 | `IREL_RUNTIME_MISSING` | runtime | scope에 기대 값 부재 → System 예외 |
+| `IR_NO_BRANCH_MATCHED` | runtime | on[] 전 분기 false(무매칭) → System 예외(error-catalog 동명 코드) |
 
 컴파일 에러는 전부 시나리오 저장 거부 사유. 런타임 에러는 `error-catalog`의 `IR_EXPRESSION_RUNTIME`으로 매핑.

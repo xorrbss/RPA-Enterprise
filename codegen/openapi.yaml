@@ -38,6 +38,11 @@ tags:
   - name: Sites
     description: 사이트 risk 승인 (api-surface §7)
 
+# 전 엔드포인트 기본 인증(api-surface §0.1 / auth-rbac §3: tenant_id·roles는 JWT 클레임에서 도출).
+# 공개 엔드포인트 없음. 개별 operation에서 override하지 않는 한 이 전역 보안이 적용된다.
+security:
+  - bearerAuth: []
+
 paths:
   # ============================================================
   # 1. Runs (실행 제어) — api-surface §1
@@ -721,6 +726,15 @@ paths:
 # Components
 # ============================================================
 components:
+  # --- Security schemes (auth-rbac §3: JWT bearer, tenant_id+roles from claims) ---
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        JWT bearer. tenant_id 및 roles(Role[]) 클레임에서 도출(auth-rbac §3). 클라이언트 body/query의
+        tenant_id는 불신. 권한 부족 시 AUTHZ_FORBIDDEN(403), tenant 누락/모호 시 거부.
   # --- Reusable parameters ---
   parameters:
     RunId:

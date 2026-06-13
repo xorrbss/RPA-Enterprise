@@ -17,6 +17,7 @@ export type ErrorCode =
   | "IR_SCHEMA_INVALID"
   | "IR_EXPRESSION_COMPILE_ERROR"      // IREL 컴파일 실패 → 저장 거부
   | "IR_EXPRESSION_RUNTIME"            // IREL 런타임(scope missing) → system
+  | "IR_NO_BRANCH_MATCHED"             // on[] 런타임 전 분기 false(무매칭) → system(재시도)
   // --- Site Access / Session / Challenge ---
   | "SITE_PROFILE_BLOCKED"             // risk=red 미승인
   | "SITE_CIRCUIT_OPEN"
@@ -81,6 +82,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   IR_SCHEMA_INVALID:           { retryable: false, httpStatus: 422, exceptionClass: "business", userMessage: "시나리오 정의 오류.", operatorAction: "IR 스키마 검증 로그 확인" },
   IR_EXPRESSION_COMPILE_ERROR: { retryable: false, httpStatus: 422, exceptionClass: "business", userMessage: "조건식 오류.", operatorAction: "IREL 컴파일 에러 위치 확인" },
   IR_EXPRESSION_RUNTIME:       { retryable: true,  httpStatus: 500, exceptionClass: "system",   userMessage: "일시 오류.", operatorAction: "선행 노드 skip 여부 확인" },
+  IR_NO_BRANCH_MATCHED:        { retryable: true,  httpStatus: 500, exceptionClass: "system",   userMessage: "일시 오류.", operatorAction: "on[] 분기 조건/PageState flags 확인(무매칭 — IREL_RUNTIME_MISSING과 동일 원칙)" },
 
   SITE_PROFILE_BLOCKED:        { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "해당 사이트는 승인이 필요합니다.", operatorAction: "site risk=red 승인 워크플로우" },
   SITE_CIRCUIT_OPEN:           { retryable: true,  httpStatus: 503, exceptionClass: "system",   userMessage: "일시적으로 수집이 중단되었습니다.", operatorAction: "차단율 대시보드 확인, 윈도우 재개" },

@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "fixtures": "tsx run-fixtures.ts"
+    "fixtures": "tsx run-fixtures.ts",
+    "validators": "tsx validators.fixtures.ts",
+    "test": "npm run typecheck && npm run fixtures && npm run validators"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

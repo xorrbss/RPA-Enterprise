@@ -344,3 +344,19 @@
 | 목업 IR `@end_no_data` witness(V7) 부재 | observe_reviews에 `empty_result_allowed`(when=`flags.no_review_message_visible`) witness 추가 → V7 정합 |
 
 > architecture.md §9(D3 상세): UtilityExecutor/PageStateResolver 우선 골격 + Stagehand v3 결정형 CDP API **PoC 체크리스트 10항목** + PageState 산출 알고리즘(structuralHash) + 수용기준/폴백(raw CDP). → 갭분석 잔여 P3 0건.
+
+---
+
+## v2.2 패치 로그 (착수 전 Top 5 리스크 종료 — 설계 스코어카드 후속)
+
+> 설계 완성도 스코어카드(8차원 독립채점→캘리브레이션, **84/B+**)의 Top 5 리스크를 사용자 결정대로 전부 종료. **재검증: `npm test`(tsc strict EXIT=0 + 전이 63/63 + validators 10/10), error-catalog union=ERROR_CATALOG=44, openapi/asyncapi YAML 파싱 OK.**
+
+| # | 리스크 | 결정·조치 |
+|---|---|---|
+| 1 | `on[]` 런타임 무매칭 미정의(조용한 dead-end) | **`IR_NO_BRANCH_MATCHED`(System 예외→재시도)** 신설 — error-catalog + ir-expression §5/§7 + ir-static-validation V3 정적한계 명시. IREL_RUNTIME_MISSING과 동일 원칙 |
+| 2 | boundary validators in-repo 미검증 | `codegen/validators.fixtures.ts`(positive/negative 10케이스) + `npm run validators`/`npm test`. **10/10 PASS** |
+| 3 | 생성 OpenAPI 인증 스킴 부재 | `securitySchemes.bearerAuth`(JWT) + 전역 `security` 추가(auth-rbac §3) |
+| 4 | worker 생존·circuit 영속처 부재 | **`workers` 테이블**(heartbeat·worker circuit, 인프라 비-RLS) + **`site_profiles.circuit_state/until` 컬럼** 신설. auth-rbac §4에 workers RLS 제외 명시 |
+| 5 | CLAUDE.md 죽은 경로(line 19) | `_analysis_files_v1_2_patched/README.md` → `README.md`(루트) 교정 |
+
+> 예상 재점수: **84(B+) → ~90(A-)**(스코어카드 가점 합 기준). 정식 재채점은 요청 시 워크플로우 재실행.
