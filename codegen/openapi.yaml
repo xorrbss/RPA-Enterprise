@@ -1,0 +1,1219 @@
+openapi: 3.1.0
+info:
+  title: RPA Control-Plane API
+  version: "1.0"
+  description: >
+    제어평면 REST API (v1). 운영 콘솔/외부 클라이언트가 호출하는 제어평면 엔드포인트의
+    경로·메서드·요청/응답 요지·주요 에러코드를 고정한다. 본 문서는 api-surface.md(Control-Plane
+    API Surface v1)를 1:1 변환한 D1 codegen 산출물이다.
+
+
+    요지 수준 규약: components.schemas는 요지(shape) 수준이며, 상세 타입(IR/Verify/Event payload·필드
+    required·examples)은 계약 ts/schema 및 codegen/types를 참조한다. 어휘 체인 abort → cancelled →
+    run.cancelled, "조용한 false/unknown 금지", error-catalog 메타(httpStatus/exceptionClass)를 그대로 따른다.
+
+
+    - 인증: 모든 엔드포인트 인증 필수. tenant_id는 요청 본문/쿼리가 아니라 인증 주체(토큰)에서 도출한다(api-surface §0.1).
+
+    - 에러 본문: 모든 4xx/5xx는 ApiError(ts/error-catalog.ts). HTTP 상태코드는 ERROR_CATALOG[code].httpStatus를 그대로 사용한다(api-surface §0.2).
+
+    - DEAD_LETTER(httpStatus 200)는 API 오류 응답이 아니다 — 상태 통지 전용 코드이므로 ApiError로 반환하지 않는다(api-surface §0.2/§4).
+servers:
+  - url: /v1
+    description: Control-plane v1 base path.
+
+tags:
+  - name: Runs
+    description: 실행 제어 (api-surface §1)
+  - name: Scenarios
+    description: 시나리오 CRUD · 검증 · 승격 (api-surface §2)
+  - name: HumanTasks
+    description: 휴먼 태스크 인박스 (api-surface §3)
+  - name: Workitems
+    description: 작업항목 · 데드레터 (api-surface §4)
+  - name: Artifacts
+    description: 산출물 조회 — redaction + RBAC 게이트 (api-surface §5)
+  - name: GatewayPolicy
+    description: LLM 게이트웨이 정책 (api-surface §6)
+  - name: Sites
+    description: 사이트 risk 승인 (api-surface §7)
+
+paths:
+  # ============================================================
+  # 1. Runs (실행 제어) — api-surface §1
+  # ============================================================
+  /runs:
+    post:
+      tags: [Runs]
+      operationId: createRun
+      summary: 실행 생성
+      description: >
+        run 생성. 서버가 params.as_of를 1회 고정한다(요청 명시 시 그 값, 미지정 시 생성 시각;
+        api-surface §0.6) → runs.as_of 영속화 → IREL date_* 결정론 보장. run.created 이벤트 emit.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunCreateRequest'
+      responses:
+        '201':
+          description: 생성됨. run 리소스(status=queued). run.created 이벤트 emit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '403':
+          $ref: '#/components/responses/Error'        # SITE_PROFILE_BLOCKED
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+    get:
+      tags: [Runs]
+      operationId: listRuns
+      summary: 실행 목록
+      parameters:
+        - name: status
+          in: query
+          description: RunState 값으로 필터(state-machine-types.ts RunState).
+          required: false
+          schema:
+            $ref: '#/components/schemas/RunState'
+        - name: scenario_version_id
+          in: query
+          required: false
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 커서 페이지(items=Run).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Runs]
+      operationId: getRun
+      summary: 실행 상세
+      responses:
+        '200':
+          description: run 상세(status ∈ RunState, worker_id, attempts, as_of, 진행 노드).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '404':
+          $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/{run_id}/abort:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [Runs]
+      operationId: abortRun
+      summary: 실행 중단(취소) 요청
+      description: >
+        어휘 정합: 명령은 abort → 상태는 aborting→cancelled(R6/R10/R16/R23/R24/R26/R27/R28) →
+        이벤트는 run.cancelled → UI 문구 "취소됨". 엔드포인트명은 abort 유지(api-surface §1).
+        completing은 finalize 우선(R25) — abort 거부, RUN_ALREADY_TERMINAL(409). queued/claimed는
+        dispatcher 큐/claim 회수로 처리하되 API는 동일하게 202 수락(결과 cancelled로 수렴).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AbortRequest'
+      responses:
+        '202':
+          description: abort 수락(aborting 경유 cancelled). run.cancelled 이벤트.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '404':
+          $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # RUN_ALREADY_TERMINAL / RUN_ABORTED
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 2. Scenarios — api-surface §2
+  # ============================================================
+  /scenarios:
+    post:
+      tags: [Scenarios]
+      operationId: createScenario
+      summary: 시나리오 생성
+      description: >
+        body는 IR 문서(schema/ir.schema.json). 저장 시 전 expression 파싱+타입체크(IREL) +
+        IR 그래프 정적검증(V1..V11) 수행, 하나라도 실패 시 거부(api-surface §2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IRDocument'
+      responses:
+        '201':
+          description: 생성됨. scenario(+초기 version).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+    get:
+      tags: [Scenarios]
+      operationId: listScenarios
+      summary: 시나리오 목록
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 커서 페이지(items=Scenario).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    get:
+      tags: [Scenarios]
+      operationId: getScenario
+      summary: 시나리오 상세
+      description: 시나리오 메타 + 최신 version. 응답에 ETag(=scenario_versions.version) 포함.
+      responses:
+        '200':
+          description: 시나리오 메타 + 최신 version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+    put:
+      tags: [Scenarios]
+      operationId: updateScenario
+      summary: 시나리오 갱신
+      description: >
+        scenario mutation → If-Match 필수(낙관적 동시성, api-surface §0.3). ETag 불일치 시
+        SCENARIO_VERSION_CONFLICT(412). body는 갱신 IR. 저장 시 IREL+V1..V11 재검증.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IRDocument'
+      responses:
+        '200':
+          description: 새 version. ETag 갱신.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/validate:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    post:
+      tags: [Scenarios]
+      operationId: validateScenario
+      summary: 시나리오 검증(dry-run)
+      description: >
+        부작용 없는 dry-run(저장하지 않음). body는 검증할 IR 또는 기존 version 참조.
+        ValidationReport 반환(ir-static-validation.md V1..V11). 컴파일 에러는
+        IR_EXPRESSION_COMPILE_ERROR(422), 그래프 검증 실패는 IR_SCHEMA_INVALID(422, details=reason).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateRequest'
+      responses:
+        '200':
+          description: ValidationReport.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationReport'
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/promote:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    post:
+      tags: [Scenarios]
+      operationId: promoteScenario
+      summary: 시나리오 승격
+      description: >
+        prod 승격 + AST 캐시 빌드. If-Match(version) + Idempotency-Key 필요. body.target(예: prod).
+        승격 시 IREL+V1..V11 재검증.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromoteRequest'
+      responses:
+        '200':
+          description: 승격된 version(AST 캐시 빌드).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 3. Human Tasks — api-surface §3
+  # ============================================================
+  /human-tasks:
+    get:
+      tags: [HumanTasks]
+      operationId: listHumanTasks
+      summary: 휴먼 태스크 인박스 목록
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/HumanTaskState'
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/HumanTaskKind'
+        - name: assignee
+          in: query
+          required: false
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 커서 페이지(items=HumanTask).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanTaskPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /human-tasks/{human_task_id}:
+    parameters:
+      - $ref: '#/components/parameters/HumanTaskId'
+    get:
+      tags: [HumanTasks]
+      operationId: getHumanTask
+      summary: 휴먼 태스크 상세
+      responses:
+        '200':
+          description: 태스크 상세(state, kind, assignee, timeout, on_timeout, payload, run 연계).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanTask'
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /human-tasks/{human_task_id}/resolve:
+    parameters:
+      - $ref: '#/components/parameters/HumanTaskId'
+    post:
+      tags: [HumanTasks]
+      operationId: resolveHumanTask
+      summary: 휴먼 태스크 해소
+      description: >
+        해소 결과(kind별 payload). HumanTask in_progress→resolved(H3), human_task.resolved 이벤트 →
+        Run suspended→resume_requested(R13). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410, business).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HumanTaskResolveRequest'
+      responses:
+        '200':
+          description: resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanTask'
+        '410':
+          $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
+        default:
+          $ref: '#/components/responses/Error'
+
+  /human-tasks/{human_task_id}/assign:
+    parameters:
+      - $ref: '#/components/parameters/HumanTaskId'
+    post:
+      tags: [HumanTasks]
+      operationId: assignHumanTask
+      summary: 휴먼 태스크 배정
+      description: assigned(H1/H6). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HumanTaskAssignRequest'
+      responses:
+        '200':
+          description: assigned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanTask'
+        '410':
+          $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
+        default:
+          $ref: '#/components/responses/Error'
+
+  /human-tasks/{human_task_id}/escalate:
+    parameters:
+      - $ref: '#/components/parameters/HumanTaskId'
+    post:
+      tags: [HumanTasks]
+      operationId: escalateHumanTask
+      summary: 휴먼 태스크 에스컬레이션
+      description: >
+        escalated(H5, 수동 진입만 담당). 관리자 큐, Run R15(suspended 유지). human_task.escalated 이벤트.
+        timeout 기반 H4b/H8은 타이머 주도(API 비주도). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HumanTaskEscalateRequest'
+      responses:
+        '200':
+          description: escalated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanTask'
+        '410':
+          $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 4. Workitems / DLQ — api-surface §4
+  # ============================================================
+  /workitems:
+    get:
+      tags: [Workitems]
+      operationId: listWorkitems
+      summary: 작업항목 목록
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/WorkitemState'
+        - name: target_id
+          in: query
+          required: false
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 커서 페이지(items=Workitem).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkitemPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /workitems/{workitem_id}:
+    parameters:
+      - $ref: '#/components/parameters/WorkitemId'
+    get:
+      tags: [Workitems]
+      operationId: getWorkitem
+      summary: 작업항목 상세
+      responses:
+        '200':
+          description: 상세(status ∈ WorkitemState, attempts, unique_reference, checked_out_by/at, 연계 run).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workitem'
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /dlq:
+    get:
+      tags: [Workitems]
+      operationId: listDeadLetters
+      summary: 데드레터 목록
+      description: >
+        항목은 DEAD_LETTER 상태 통지(ApiError 아님 — api-surface §0.2/§4). kind=workitem|sink.
+        sink DLQ는 데이터평면(sink_deliveries.status='dead_letter').
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [workitem, sink]
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 커서 페이지(items=DeadLetter; 상태값으로만 DEAD_LETTER 노출).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeadLetterPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /dlq/{dead_letter_id}/replay:
+    parameters:
+      - $ref: '#/components/parameters/DeadLetterId'
+    post:
+      tags: [Workitems]
+      operationId: replayDeadLetter
+      summary: 데드레터 재처리
+      description: >
+        운영자 재처리 권한 필요(operatorAuthorized guard, W10). workitem은 new로 복원(attempts 리셋,
+        DLQ에서 복원). sink는 재전달 트리거(SINK_DELIVERY_FAILED 재시도 경로). 권한 부족 → AUTHZ_FORBIDDEN(403).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: 재처리 수락(workitem new로 복원 / sink 재전달 트리거).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayResult'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '409':
+          $ref: '#/components/responses/Error'        # WORKITEM_CHECKOUT_CONFLICT
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 5. Artifacts — api-surface §5
+  # ============================================================
+  /artifacts/{artifact_id}:
+    parameters:
+      - $ref: '#/components/parameters/ArtifactId'
+    get:
+      tags: [Artifacts]
+      operationId: getArtifact
+      summary: 산출물 조회
+      description: >
+        미들웨어 1지점에서 순서대로 게이트: ① redaction(pending/failed → ARTIFACT_NOT_REDACTED 409),
+        ② RBAC(권한 부족 → SECRET_ACCESS_DENIED 403). 본문은 항상 마스킹된 RedactedString/redacted object.
+      responses:
+        '200':
+          description: artifact(또는 서명 URL). redaction → RBAC 2단 게이트 통과 시에만.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Artifact'
+        '403':
+          $ref: '#/components/responses/Error'        # SECRET_ACCESS_DENIED
+        '409':
+          $ref: '#/components/responses/Error'        # ARTIFACT_NOT_REDACTED
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 6. Gateway Policy — api-surface §6
+  # ============================================================
+  /gateway/policy:
+    get:
+      tags: [GatewayPolicy]
+      operationId: getGatewayPolicy
+      summary: LLM 게이트웨이 정책 조회
+      description: capabilities는 llm-gateway-adapter.md ModelCapabilities.
+      parameters:
+        - name: model
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: 모델 정책(model, capabilities, budget, fallback).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayPolicy'
+        default:
+          $ref: '#/components/responses/Error'
+    put:
+      tags: [GatewayPolicy]
+      operationId: updateGatewayPolicy
+      summary: LLM 게이트웨이 정책 갱신
+      description: >
+        정책이 capabilities와 모순되게 model/jsonMode 설정 시 LLM_CAPABILITY_MISMATCH(422).
+        If-Match(정책 버전) + Idempotency-Key. 단, gateway policy 버전 컬럼은 Phase 2 DDL 미정 —
+        If-Match 적용은 정책 엔티티 버전 확정 후(api-surface §6). 따라서 If-Match는 v1에서 optional.
+      parameters:
+        - $ref: '#/components/parameters/IfMatchOptional'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayPolicy'
+      responses:
+        '200':
+          description: 갱신 정책.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayPolicy'
+        '422':
+          $ref: '#/components/responses/Error'        # LLM_CAPABILITY_MISMATCH
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 7. Sites — api-surface §7
+  # ============================================================
+  /sites:
+    get:
+      tags: [Sites]
+      operationId: listSites
+      summary: 사이트 목록
+      parameters:
+        - name: risk
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/SiteRisk'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 커서 페이지(items=Site; site_profiles 요약).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SitePage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+    get:
+      tags: [Sites]
+      operationId: getSite
+      summary: 사이트 상세
+      description: risk, 승인 상태, circuit 상태(조회로만 노출; 강제 재개는 비노출).
+      responses:
+        '200':
+          description: 사이트 상세(risk, 승인 상태, circuit 상태).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Site'
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+    post:
+      tags: [Sites]
+      operationId: approveSite
+      summary: 사이트 risk 승인
+      description: >
+        risk=red 사이트 실행 허용(SITE_PROFILE_BLOCKED 승인 워크플로우의 제어평면 진입점). 승인 권한 필요 —
+        미보유 시 AUTHZ_FORBIDDEN(403). (SITE_PROFILE_BLOCKED는 런타임 실행 차단용으로 별개.)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteApproveRequest'
+      responses:
+        '200':
+          description: 승인 반영(risk=red 사이트 실행 허용).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Site'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        default:
+          $ref: '#/components/responses/Error'
+
+# ============================================================
+# Components
+# ============================================================
+components:
+  # --- Reusable parameters ---
+  parameters:
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema: { type: string }
+    ScenarioId:
+      name: scenario_id
+      in: path
+      required: true
+      schema: { type: string }
+    HumanTaskId:
+      name: human_task_id
+      in: path
+      required: true
+      schema: { type: string }
+    WorkitemId:
+      name: workitem_id
+      in: path
+      required: true
+      schema: { type: string }
+    DeadLetterId:
+      name: dead_letter_id
+      in: path
+      required: true
+      schema: { type: string }
+    ArtifactId:
+      name: artifact_id
+      in: path
+      required: true
+      schema: { type: string }
+    SiteProfileId:
+      name: site_profile_id
+      in: path
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: 페이지 크기. 상한 기본값은 운영 정책(Phase 3) — 본 계약은 파라미터 형태만 고정(api-surface §0.5).
+      schema:
+        type: integer
+        minimum: 1
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: 불투명 커서. 직전 응답 next_cursor 값을 그대로 전달(api-surface §0.5).
+      schema:
+        type: string
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: >
+        낙관적 동시성(api-surface §0.3). 값 = scenario_versions.version(integer, ir.schema meta.version).
+        불일치 → SCENARIO_VERSION_CONFLICT(412).
+      schema:
+        type: string
+    IfMatchOptional:
+      name: If-Match
+      in: header
+      required: false
+      description: >
+        gateway policy 버전 컬럼은 Phase 2 DDL 미정 → v1에서는 optional(api-surface §6). 확정 후 required로 승격.
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >
+        부작용 명령형 POST의 중복 제출 보호(api-surface §0.4). 서버는 (tenant_id, endpoint, key)로
+        최초 결과를 보관, 동일 키 재제출 시 부작용 재실행 없이 최초 응답 반환. sink_idempotency_key(데이터평면)와는 다른 계층.
+      schema:
+        type: string
+
+  # --- Reusable headers ---
+  headers:
+    ETag:
+      description: scenario_versions.version(integer). 변경 요청 시 If-Match로 되돌린다(api-surface §0.3).
+      schema:
+        type: string
+
+  # --- Reusable responses ---
+  responses:
+    Error:
+      description: >
+        오류 응답. 본문은 ApiError(ts/error-catalog.ts). HTTP 상태는 ERROR_CATALOG[code].httpStatus를
+        그대로 사용한다. DEAD_LETTER는 오류 응답이 아니므로 본문 code로 반환되지 않는다(api-surface §0.2).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+  # --- Schemas (요지 수준; 상세 타입은 계약 ts/schema 및 codegen/types 참조) ---
+  schemas:
+    # ===== Common error =====
+    ApiError:
+      type: object
+      description: 공통 에러 응답(ts/error-catalog.ts ApiError).
+      required: [code, message, correlation_id]
+      additionalProperties: false
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: userMessage 또는 상세(민감정보 없음).
+        details:
+          description: 코드별 상세 페이로드(예 IR_SCHEMA_INVALID의 reason). 구조는 D1 위임(api-surface §9).
+        correlation_id:
+          type: string
+          format: uuid
+          description: event-envelope·trace correlation_id와 동일 값(api-surface §0.2).
+
+    ErrorCode:
+      type: string
+      description: >
+        ts/error-catalog.ts ErrorCode(43개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
+        ApiError 응답 code로는 반환되지 않는다(api-surface §0.2).
+      enum:
+        - RUN_NOT_FOUND
+        - RESOURCE_NOT_FOUND
+        - RUN_ALREADY_TERMINAL
+        - RUN_ABORTED
+        - SCENARIO_VERSION_CONFLICT
+        - IR_SCHEMA_INVALID
+        - IR_EXPRESSION_COMPILE_ERROR
+        - IR_EXPRESSION_RUNTIME
+        - SITE_PROFILE_BLOCKED
+        - SITE_CIRCUIT_OPEN
+        - SESSION_LOCKED
+        - SESSION_GENERATION_CONFLICT
+        - CHALLENGE_UNRESOLVED
+        - RATE_BUDGET_EXCEEDED
+        - BROWSER_LEASE_EXPIRED
+        - BROWSER_CRASH
+        - CDP_DISCONNECTED
+        - LLM_BUDGET_EXCEEDED
+        - LLM_CAPABILITY_MISMATCH
+        - LLM_STREAM_TIMEOUT
+        - LLM_STREAM_IDLE_TIMEOUT
+        - LLM_MALFORMED_OUTPUT
+        - LLM_CONTENT_FILTERED
+        - LLM_RATE_LIMITED
+        - LLM_BACKEND_UNAVAILABLE
+        - LLM_CONNECTION_FAILED
+        - EXTRACT_SCHEMA_INVALID
+        - VERIFY_FAILED
+        - EMPTY_RESULT_NO_WITNESS
+        - SECRET_ACCESS_DENIED
+        - DOMAIN_POLICY_VIOLATION
+        - PROMPT_INJECTION_DETECTED
+        - ARTIFACT_NOT_REDACTED
+        - SHELL_COMMAND_NOT_ALLOWED
+        - AUTHZ_FORBIDDEN
+        - CONNECTOR_PERMISSION_DENIED
+        - CONNECTOR_INCOMPATIBLE
+        - CONNECTOR_HOOK_FAILED
+        - SINK_DELIVERY_FAILED
+        - RAW_PERSIST_FAILED
+        - HUMAN_TASK_EXPIRED
+        - WORKITEM_CHECKOUT_CONFLICT
+        - DEAD_LETTER
+
+    # ===== State enums (ts/state-machine-types.ts — 정확히 일치) =====
+    RunState:
+      type: string
+      enum:
+        - queued
+        - claimed
+        - running
+        - suspending
+        - suspended
+        - resume_requested
+        - resuming
+        - completing
+        - completed
+        - aborting
+        - cancelled
+        - failed_business
+        - failed_system
+    WorkitemState:
+      type: string
+      enum:
+        - new
+        - processing
+        - successful
+        - retry
+        - failed_business
+        - failed_system
+        - abandoned
+    HumanTaskState:
+      type: string
+      enum:
+        - open
+        - assigned
+        - in_progress
+        - resolved
+        - expired
+        - cancelled
+        - escalated
+    HumanTaskKind:
+      type: string
+      enum:
+        - approval
+        - validation
+        - exception
+        - captcha
+        - mfa
+    SiteRisk:
+      type: string
+      description: site_profiles risk 등급. 값은 Phase 2 DDL 확정 전 api-surface §7 표기(red/amber/green) 기준.
+      enum:
+        - red
+        - amber
+        - green
+
+    # ===== Pagination envelopes (api-surface §0.5: { items, next_cursor }) =====
+    RunPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Run' }
+        next_cursor:
+          type: [string, "null"]
+    ScenarioPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Scenario' }
+        next_cursor:
+          type: [string, "null"]
+    HumanTaskPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/HumanTask' }
+        next_cursor:
+          type: [string, "null"]
+    WorkitemPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Workitem' }
+        next_cursor:
+          type: [string, "null"]
+    DeadLetterPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DeadLetter' }
+        next_cursor:
+          type: [string, "null"]
+    SitePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Site' }
+        next_cursor:
+          type: [string, "null"]
+
+    # ===== Resource shapes (요지; 상세 필드 타입은 codegen/types 참조) =====
+    Run:
+      type: object
+      description: 실행 리소스(요지). 상세 진행 노드/타이밍 필드는 codegen/types 참조.
+      properties:
+        run_id: { type: string }
+        status: { $ref: '#/components/schemas/RunState' }
+        scenario_version_id: { type: string }
+        worker_id: { type: [string, "null"] }
+        attempts: { type: integer }
+        as_of:
+          type: string
+          format: date-time
+          description: 서버가 생성 시 1회 고정(api-surface §0.6). 재시도/replay/resume에 재사용.
+        workitem_id: { type: [string, "null"] }
+        current_node: { type: [string, "null"] }
+
+    RunCreateRequest:
+      type: object
+      required: [scenario_version_id, params]
+      properties:
+        scenario_version_id: { type: string }
+        params:
+          type: object
+          description: params_schema 준수(scenario의 params_schema). params.as_of 포함 가능.
+        workitem_id:
+          type: string
+          description: optional. 작업항목 연계 시.
+      additionalProperties: false
+
+    AbortRequest:
+      type: object
+      properties:
+        reason: { type: string }
+      additionalProperties: false
+
+    Scenario:
+      type: object
+      description: 시나리오 메타 + 최신 version(요지). version=ETag 대상(scenario_versions.version).
+      properties:
+        scenario_id: { type: string }
+        version:
+          type: integer
+          description: 최신 version(ir.schema meta.version). ETag 값.
+        latest_version_id: { type: string }
+        ir:
+          $ref: '#/components/schemas/IRDocument'
+
+    IRDocument:
+      type: object
+      description: IR 문서. 상세 구조는 schema/ir.schema.json(권위). 본 문서는 body=IR 문서임만 고정.
+      additionalProperties: true
+
+    ValidateRequest:
+      type: object
+      description: 검증할 IR(저장 안 함) 또는 기존 version 참조. 둘 중 하나(oneOf는 D1 상세화).
+      properties:
+        ir:
+          $ref: '#/components/schemas/IRDocument'
+        version_id:
+          type: string
+      additionalProperties: false
+
+    ValidationReport:
+      type: object
+      description: ir-static-validation.md V1..V11 검증 보고서(요지). 상세 issue 구조는 codegen/types 참조.
+      properties:
+        valid: { type: boolean }
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              rule:
+                type: string
+                description: V1..V11 등 규칙 식별자.
+              message: { type: string }
+              code:
+                $ref: '#/components/schemas/ErrorCode'
+
+    PromoteRequest:
+      type: object
+      required: [target]
+      properties:
+        target:
+          type: string
+          description: 승격 대상 환경(예 prod).
+      additionalProperties: false
+
+    HumanTask:
+      type: object
+      description: 휴먼 태스크 상세(요지). payload는 kind별 구조(codegen/types 참조).
+      properties:
+        human_task_id: { type: string }
+        state: { $ref: '#/components/schemas/HumanTaskState' }
+        kind: { $ref: '#/components/schemas/HumanTaskKind' }
+        assignee: { type: [string, "null"] }
+        timeout: { type: [string, "null"] }
+        on_timeout:
+          type: string
+          enum: [fail, escalate]
+          description: reserved-handlers @human_task 입력(기본 fail). HumanTaskGuard.onTimeout과 정합.
+        run_id: { type: [string, "null"] }
+        payload:
+          type: object
+          description: kind별 본문(approval/validation/exception/captcha/mfa).
+
+    HumanTaskResolveRequest:
+      type: object
+      description: 해소 결과(kind별 payload). 상세 구조는 reserved-handlers/codegen/types 참조.
+      additionalProperties: true
+
+    HumanTaskAssignRequest:
+      type: object
+      required: [assignee]
+      properties:
+        assignee: { type: string }
+      additionalProperties: false
+
+    HumanTaskEscalateRequest:
+      type: object
+      properties:
+        reason: { type: string }
+      additionalProperties: false
+
+    Workitem:
+      type: object
+      description: 작업항목 상세(요지).
+      properties:
+        workitem_id: { type: string }
+        status: { $ref: '#/components/schemas/WorkitemState' }
+        attempts: { type: integer }
+        unique_reference: { type: [string, "null"] }
+        target_id: { type: [string, "null"] }
+        checked_out_by: { type: [string, "null"] }
+        checked_out_at: { type: [string, "null"], format: date-time }
+        run_id: { type: [string, "null"] }
+
+    DeadLetter:
+      type: object
+      description: >
+        데드레터 항목(요지). status는 DEAD_LETTER 상태 통지(ApiError 아님 — api-surface §0.2).
+      properties:
+        dead_letter_id: { type: string }
+        kind:
+          type: string
+          enum: [workitem, sink]
+        status:
+          type: string
+          description: DEAD_LETTER 상태 통지(상태 필드로만 노출).
+        source_id:
+          type: string
+          description: 원본 workitem_id 또는 sink delivery id.
+
+    ReplayResult:
+      type: object
+      description: 재처리 결과(요지). workitem은 new 복원, sink는 재전달 트리거.
+      properties:
+        dead_letter_id: { type: string }
+        accepted: { type: boolean }
+        workitem_id: { type: [string, "null"] }
+
+    Artifact:
+      type: object
+      description: >
+        산출물(요지). redaction → RBAC 2단 게이트 통과 시에만 반환. 본문은 항상 마스킹(RedactedString/redacted object).
+      properties:
+        artifact_id: { type: string }
+        redaction_status:
+          type: string
+          enum: [redacted, not_required, pending, failed]
+          description: 조회 허용은 {redacted, not_required}만(security-contracts §8).
+        signed_url: { type: [string, "null"] }
+        content:
+          description: 마스킹된 redacted object(평문 노출 금지).
+
+    GatewayPolicy:
+      type: object
+      description: LLM 게이트웨이 정책(요지). capabilities는 llm-gateway-adapter.md ModelCapabilities.
+      properties:
+        model: { type: string }
+        capabilities:
+          type: object
+          description: jsonMode/vision 등(llm-gateway-adapter.md ModelCapabilities).
+          properties:
+            jsonMode: { type: boolean }
+            vision: { type: boolean }
+          additionalProperties: true
+        budget:
+          type: object
+          properties:
+            maxInputTokens: { type: integer }
+            maxOutputTokens: { type: integer }
+            maxCost: { type: number }
+          additionalProperties: true
+        fallback:
+          description: fallback 모델/폴백 설정(adapter §7).
+
+    Site:
+      type: object
+      description: site_profiles 요약/상세(요지). risk 등급값·컬럼은 Phase 2 DDL.
+      properties:
+        site_profile_id: { type: string }
+        risk: { $ref: '#/components/schemas/SiteRisk' }
+        approval_status:
+          type: string
+          description: 승인 상태(요지). 상세 enum은 Phase 2.
+        circuit_status:
+          type: string
+          description: circuit 상태(조회로만 노출; site.circuit_opened/closed 이벤트 연계).
+
+    SiteApproveRequest:
+      type: object
+      properties:
+        reason: { type: string }
+        expires_at:
+          type: string
+          format: date-time
+      additionalProperties: false

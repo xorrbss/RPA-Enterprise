@@ -7,3 +7,6 @@ Thumbs.db
 
 # 스냅샷 아카이브 (CLAUDE.md: 별도 요청 없으면 무시)
 files_v1.2_patched.zip
+
+# codegen 의존 설치물(생성물 아님). package.json/package-lock로 재현.
+codegen/node_modules/

@@ -1,0 +1,17 @@
+{
+  "name": "rpa-codegen",
+  "version": "1.0.0",
+  "private": true,
+  "description": "D1 codegen 산출물(계약→실행코드). 계약 SSoT는 상위 디렉터리.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "fixtures": "tsx run-fixtures.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "ajv": "^8.17.0",
+    "ajv-formats": "^3.0.1",
+    "tsx": "^4.16.0"
+  }
+}

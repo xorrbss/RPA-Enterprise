@@ -27,6 +27,7 @@
 | `auth-rbac.md` | (인증·인가·테넌시) | RBAC 역할(viewer/operator/reviewer/approver/admin)·권한 매트릭스·tenant_id 출처·RLS 정책 — v1.5 |
 | `api-surface.md` | (제어평면 API) | REST 엔드포인트 인벤토리·If-Match·Idempotency-Key·as_of(D1 OpenAPI 입력) — v1.5 |
 | `ops-defaults.md` | (운영 기본값) | 전이 임계·lease TTL·서킷·LLM retry/budget·artifact retention·sweeper 주기 + 테스트 픽스처값 — v1.6 |
+| `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·transitions.fixtures.ts. tsc strict 통과·전이 63/63 PASS — v1.7 |
 
 ---
 
@@ -266,4 +267,23 @@
 
 > §"외부 의존 맵" §6(정책·수치 임계)의 "운영 정책(TODO)"를 `ops-defaults.md`(신규)로 해소. 모든 임계에 코드 기본값 + 시뮬레이션-클록 테스트 픽스처값을 부여(오버라이드 계층: 시스템<테넌트<사이트<노드). Run/Workitem 전이 임계, lease TTL·sweeper 주기, 서킷 차단율·윈도우, LLM retry/timeout/budget, 캐시·verify·self-heal 상한, artifact retention·redaction 실패 임계, challenge/resume_token TTL. 외부 사실(모델 maxContextTokens·Codex 스트리밍 범위)만 "구현 시 라이브 확정"으로 잔존.
 
-> 다음: Phase 4(D1 codegen — ajv validator/TS 타입/transition 함수/OpenAPI/AsyncAPI/픽스처), Phase 5(HTML 목업 — 빈/오류/로딩·라우팅·실시간).
+> 다음: Phase 4(D1 codegen). **→ v1.7로 완료.**
+
+---
+
+## v1.7 패치 로그 (Phase 4 — D1 codegen 산출, 빌드 검증 포함)
+
+> README §"D1에서 함께 산출할 것"을 `codegen/`에 실제 생성하고 **빌드로 검증**. 계약→코드 변환만 수행(새 계약 없음). 7개 산출물을 워크플로우 병렬 생성 후 메인이 통합·전체 검증.
+
+| 산출물 | 내용 | 검증 |
+|---|---|---|
+| `codegen/types.ts` | ir/verify/event 스키마 → TS 인터페이스(흐름키 union·shell/side_effect 식별 union). core-types 재사용 | tsc strict |
+| `codegen/validators.ts` | ajv(2020)+ajv-formats로 3스키마 컴파일, validateIR/Verify/Event. ir→verify $ref 해소 | tsc + agent 14 스모크 |
+| `codegen/transitions.ts` | transitionRun/Workitem/HumanTask 완전 구현(R1–R28/W1–W11/H1–H8), 미정의 조합 IllegalTransition | **전이 63/63 PASS**(run-fixtures) |
+| `codegen/error-middleware.ts` | ErrorCode→ApiError/HTTP 매핑(43코드), DEAD_LETTER 통지 분리 | tsc strict |
+| `codegen/openapi.yaml` | api-surface 21 path → OpenAPI 3.1, ErrorCode 43, $ref 46 해소 | YAML parse |
+| `codegen/asyncapi.yaml` | event-envelope → AsyncAPI 2.6, event_type 31 채널 | YAML parse |
+| `codegen/transitions.fixtures.ts` | 전이표 63 케이스(+race/IllegalTransition), ops-defaults 픽스처값 | 실행 PASS |
+
+> 검증 하니스: `codegen/{package.json,tsconfig.json}`(typescript/ajv/ajv-formats/tsx). `npm --prefix codegen run typecheck`(tsc strict EXIT=0, 7산출물+계약ts 전체) / `run fixtures`(63/63). `node_modules/` gitignore. event_type 실측 31종(스키마와 일치, events_outbox CHECK도 31).
+> 다음: Phase 5(HTML 목업 — 빈/오류/로딩 상태·라우팅·실시간 갱신).

@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 이 저장소의 성격 (read this first)
 
-This is **not an application** — it is the **계약(contract) 단일 진실원천(single source of truth)** for an enterprise RPA platform (v1.2), plus a standalone UI mockup. There is **no build system, no package manager, no tests, no git**. Do not look for `package.json`, `npm`, or a dev server — they don't exist.
+This is primarily the **계약(contract) 단일 진실원천(single source of truth)** for an enterprise RPA platform (v1.2), plus a UI mockup and the D1 codegen outputs generated from the contracts. The **contract root has no build system** — it is consumed, not executed. Git-tracked (GitHub: `xorrbss/RPA-Enterprise`, **private**).
 
-Two independent artifacts live here:
+Three things live here:
 
-1. `_analysis_files_v1_2_patched/` — the contract package. Schemas (JSON Schema), TypeScript type/interface declarations, SQL migrations, and `.md` specs that **define** the system to be built. These are consumed downstream ("D1") to codegen validators + TS types; nothing here is executed.
+1. **The contract package — at the repo root** (NOT in `_analysis_files_v1_2_patched/`; that old path is superseded per README v1.2 #9). Schemas (`schema/`), TS type/interface declarations (`ts/`), SQL migrations (`db/`), and root `.md` specs that **define** the system. The contract files themselves are not executed.
 2. `rpa_enterprise_console.html` — a single-file, dependency-free (vanilla JS + lucide-icons CDN) operations-console **mockup**. Open it directly in a browser; no server needed.
+3. `codegen/` — **D1 outputs generated from the contracts** (TS types, ajv validators, transition functions, error middleware, OpenAPI/AsyncAPI, transition fixtures). This is the one part that **builds/runs**: it has its own `package.json`/`tsconfig.json` — `npm install --prefix codegen` then `npm --prefix codegen run typecheck` (tsc strict) / `run fixtures` (63 transition cases). `node_modules/` is gitignored. Regenerate from contracts when contracts change; do not hand-edit as a source of truth.
 
 `files_v1.2_patched.zip` is a snapshot archive of (1); ignore unless asked.
 
