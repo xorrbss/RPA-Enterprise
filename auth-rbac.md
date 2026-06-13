@@ -51,14 +51,14 @@ export type Role =
 | sink DLQ replay | error-catalog `SINK_DELIVERY_FAILED` operatorAction | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario promote(prod 승격) | error-catalog `SCENARIO_VERSION_CONFLICT`(If-Match 412) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | artifact 조회 | security-contracts §8(redaction→RBAC 게이트) | ✓ | ✓ | ✓ | ✓ | ✓ | `SECRET_ACCESS_DENIED` |
-| site risk=red 승인 | error-catalog `SITE_PROFILE_BLOCKED`(security) | — | — | — | ✓ | ✓ | `SITE_PROFILE_BLOCKED` |
+| site risk=red 승인 권한 | approver 게이트(권한 부족=일반 RBAC 거부) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | secret 접근(SecretStore.resolve 스코프) | security-contracts §1, core-types `SecretStore` | — | — | — | — | ✓ | `SECRET_ACCESS_DENIED` |
 | connector enable/install | security-contracts §7, error-catalog `CONNECTOR_PERMISSION_DENIED` | — | — | — | — | ✓ | `CONNECTOR_PERMISSION_DENIED` |
 | network policy 편집(allowed_domains) | security-contracts §6 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | RBAC 역할 부여/회수 | 본 문서 §1 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 
 거부 ErrorCode 선택 규칙(조용한 false/unknown 금지):
-- **자원 종류가 특정된 보안 게이트**는 그 자원 코드를 쓴다: artifact·secret → `SECRET_ACCESS_DENIED`(security, 403), connector → `CONNECTOR_PERMISSION_DENIED`(security, 403), site risk=red → `SITE_PROFILE_BLOCKED`(security, 403).
+- **자원 종류가 특정된 보안 게이트**는 그 자원 코드를 쓴다: artifact·secret → `SECRET_ACCESS_DENIED`(security, 403), connector → `CONNECTOR_PERMISSION_DENIED`(security, 403). `SITE_PROFILE_BLOCKED`는 **런타임 실행 차단**(미승인 red 사이트 실행 시도) 전용이며, site **승인 권한** 부족은 일반 RBAC 거부 `AUTHZ_FORBIDDEN`이다(api-surface §7과 정합).
 - **그 외 일반 역할/액션 권한 부족**(run abort·DLQ replay·promote·human_task resolve·역할관리 등)은 신규 `AUTHZ_FORBIDDEN`(security, 403, retryable=false)로 통일한다. 이는 SECRET/CONNECTOR/SITE 어느 자원 게이트에도 속하지 않는 RBAC 거부의 단일 코드다.
 
 비고(assignee 스코핑):

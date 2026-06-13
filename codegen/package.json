@@ -11,7 +11,7 @@
   "devDependencies": {
     "typescript": "^5.5.0",
     "ajv": "^8.17.0",
-    "ajv-formats": "^3.0.1",
-    "tsx": "^4.16.0"
+    "tsx": "^4.16.0",
+    "@types/node": "^20.14.0"
   }
 }

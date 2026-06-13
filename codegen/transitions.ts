@@ -381,7 +381,7 @@ export function transitionHumanTask(
       if (ev.type === "timeout") return timeoutBranch(cur, g);
       // H5: open + escalate → escalated (관리자 수동 에스컬레이션)
       if (ev.type === "escalate") {
-        return r("escalated", [{ kind: "reassignAssignee" }]);
+        return r("escalated", [{ kind: "emitEvent", event: "human_task.escalated" }, { kind: "reassignAssignee" }]);
       }
       break;
 
@@ -394,7 +394,7 @@ export function transitionHumanTask(
       if (ev.type === "timeout") return timeoutBranch(cur, g);
       // H5: assigned + escalate → escalated
       if (ev.type === "escalate") {
-        return r("escalated", [{ kind: "reassignAssignee" }]);
+        return r("escalated", [{ kind: "emitEvent", event: "human_task.escalated" }, { kind: "reassignAssignee" }]);
       }
       break;
 
@@ -409,7 +409,7 @@ export function transitionHumanTask(
       if (ev.type === "timeout") return timeoutBranch(cur, g);
       // H5: in_progress + escalate → escalated
       if (ev.type === "escalate") {
-        return r("escalated", [{ kind: "reassignAssignee" }]);
+        return r("escalated", [{ kind: "emitEvent", event: "human_task.escalated" }, { kind: "reassignAssignee" }]);
       }
       break;
 

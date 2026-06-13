@@ -8,6 +8,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "types": ["node"],
     "forceConsistentCasingInFileNames": true
   },
   "include": ["**/*.ts", "../ts/**/*.ts"]

@@ -32,7 +32,7 @@ CREATE TABLE site_profiles (
   name            text        NOT NULL,
   url_pattern     text        NOT NULL,                     -- 사이트 식별 패턴(정규화)
   risk            text        NOT NULL DEFAULT 'green'
-                    CHECK (risk IN ('green','yellow','red')),  -- red = 승인 워크플로우 필요
+                    CHECK (risk IN ('green','amber','red')),  -- red = 승인 워크플로우 필요(amber=중간; api-surface/openapi SiteRisk와 정합)
   approved        boolean     NOT NULL DEFAULT false,       -- risk=red 승인 여부(SITE_PROFILE_BLOCKED 게이트)
   created_at      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, name)

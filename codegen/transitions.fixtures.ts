@@ -7,7 +7,7 @@
  *  - 전이 로직: ../state-machine.md (R1..R28 / W1..W11 / H1..H8)
  *  - 전이 타입: ../ts/state-machine-types.ts (State/Event/Guard/SideEffectCmd/transition 시그니처/IllegalTransition)
  *  - 임계·픽스처값: ../ops-defaults.md (시뮬레이션-클록 단위테스트 픽스처)
- *  - 이벤트 어휘: ../schema/event-envelope.schema.json (event_type 32)
+ *  - 이벤트 어휘: ../schema/event-envelope.schema.json (event_type 31)
  *
  * 본 파일은 계약을 코드로 변환만 한다(새 계약 생성 금지).
  *
@@ -553,6 +553,7 @@ export const HUMANTASK_FIXTURES: HumanTaskFixture[] = [
     cur: "in_progress",
     event: { type: "escalate" },
     expectNext: "escalated",
+    expectEmits: ["human_task.escalated"],
   },
   // --- H6: escalated 재배정 ---
   {

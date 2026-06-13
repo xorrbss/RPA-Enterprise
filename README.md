@@ -253,7 +253,7 @@
 
 | # | 항목 | 위치 | 조치 |
 |---|---|---|---|
-| 1 | 핵심 엔티티 DDL 부재(runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/site_profiles/browser_identities/network_policies) | `db/migration_core_entities.sql`(신규) | 14개 테이블. 상태 CHECK enum = `state-machine-types.ts`(Run 13/Workitem 7/HumanTask 7/Kind 5)·`core-types` StepStatus 8·cache_mode 6·event_type 32와 **정확히 일치**. 기존 migration 테이블 재정의 없이 ALTER로 FK 보강(적용 순서: concurrency→core) |
+| 1 | 핵심 엔티티 DDL 부재(runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/site_profiles/browser_identities/network_policies) | `db/migration_core_entities.sql`(신규) | 14개 테이블. 상태 CHECK enum = `state-machine-types.ts`(Run 13/Workitem 7/HumanTask 7/Kind 5)·`core-types` StepStatus 8·cache_mode 6·event_type 31과 **정확히 일치**. 기존 migration 테이블 재정의 없이 ALTER로 FK 보강(적용 순서: concurrency→core) |
 | 2 | `action_plan_cache` 본체(PRD §7) | `db/migration_core_entities.sql` | UNIQUE 7키 = migration_concurrency §4 ON CONFLICT 규약과 일치. status active/suspect/stale/quarantined(§7.2) |
 | 3 | RBAC 역할·권한 매트릭스·tenant_id 출처·RLS 부재 | `auth-rbac.md`(신규) | 역할 enum(viewer/operator/reviewer/approver/admin) + 권한 매트릭스 + JWT 클레임 tenant_id 출처 + RLS(SET LOCAL + current_setting strict, FORCE RLS) |
 | 4 | 제어평면 API 표면 부재 | `api-surface.md`(신규) | runs/scenarios/human-tasks/workitems·DLQ/artifacts/gateway/sites 엔드포인트 인벤토리(D1 OpenAPI 입력). If-Match(scenario.version)·Idempotency-Key·params.as_of 주입 규약. 어휘체인 abort→cancelled 정합 |
@@ -278,14 +278,14 @@
 | 산출물 | 내용 | 검증 |
 |---|---|---|
 | `codegen/types.ts` | ir/verify/event 스키마 → TS 인터페이스(흐름키 union·shell/side_effect 식별 union). core-types 재사용 | tsc strict |
-| `codegen/validators.ts` | ajv(2020)+ajv-formats로 3스키마 컴파일, validateIR/Verify/Event. ir→verify $ref 해소 | tsc + agent 14 스모크 |
+| `codegen/validators.ts` | ajv(2020) + uuid/date-time format 수동 등록으로 3스키마 컴파일, validateIR/Verify/Event. ir→verify $ref 해소 | tsc + agent 14 스모크 |
 | `codegen/transitions.ts` | transitionRun/Workitem/HumanTask 완전 구현(R1–R28/W1–W11/H1–H8), 미정의 조합 IllegalTransition | **전이 63/63 PASS**(run-fixtures) |
 | `codegen/error-middleware.ts` | ErrorCode→ApiError/HTTP 매핑(43코드), DEAD_LETTER 통지 분리 | tsc strict |
 | `codegen/openapi.yaml` | api-surface 21 path → OpenAPI 3.1, ErrorCode 43, $ref 46 해소 | YAML parse |
 | `codegen/asyncapi.yaml` | event-envelope → AsyncAPI 2.6, event_type 31 채널 | YAML parse |
 | `codegen/transitions.fixtures.ts` | 전이표 63 케이스(+race/IllegalTransition), ops-defaults 픽스처값 | 실행 PASS |
 
-> 검증 하니스: `codegen/{package.json,tsconfig.json}`(typescript/ajv/ajv-formats/tsx). `npm --prefix codegen run typecheck`(tsc strict EXIT=0, 7산출물+계약ts 전체) / `run fixtures`(63/63). `node_modules/` gitignore. event_type 실측 31종(스키마와 일치, events_outbox CHECK도 31).
+> 검증 하니스: `codegen/{package.json,tsconfig.json}`(typescript/ajv/tsx/@types/node). `npm --prefix codegen run typecheck`(tsc strict EXIT=0, 7산출물+계약ts 전체) / `run fixtures`(63/63). `node_modules/` gitignore. event_type 실측 31종(스키마와 일치, events_outbox CHECK도 31).
 > 다음: Phase 5(HTML 목업). **→ v1.8로 완료.**
 
 ---
@@ -304,3 +304,21 @@
 | 접근성(누적) | 전역 `:focus-visible`·`prefers-reduced-motion`·modal/drawer 포커스 트랩·아이콘 `aria-hidden`(분석 시 반영) |
 
 > **전체 프로그램 완료**: Phase 1(계약 내부)·2(DDL/RBAC/API)·3(운영 기본값)·4(D1 codegen)·5(HTML 목업). 갭분석 P0~P2 + 외부 의존 맵 + 화면·설계 항목이 모두 본 패키지에 정의·검증·반영됨. 남은 외부 사실(모델 컨텍스트·Codex 스트리밍 실범위)만 구현 시 라이브 확정.
+
+---
+
+## v1.9 패치 로그 (마감 교차정합 검토 — 적대검증 후 교정)
+
+> 확장 패키지(Phase 1-5)에 4관점 적대검증(17발견·15확정·2기각). Phase 1-5에서 새로 도입된 교차 드리프트를 교정. **재검증: tsc strict EXIT=0, 전이 63/63 PASS(H5 emit 회귀가드 포함).**
+
+| 등급 | 항목 | 조치 |
+|---|---|---|
+| P1 | `site_profiles.risk` DDL=`yellow` ↔ api-surface/openapi=`amber`(닫힌 enum 분기 — `?risk=amber`가 저장행 매칭 불가) | DDL CHECK를 `('green','amber','red')`로 통일(`amber` 권위) |
+| P1 | site 승인 권한거부 코드: auth-rbac=`SITE_PROFILE_BLOCKED` ↔ api-surface=`AUTHZ_FORBIDDEN` | auth-rbac §2/거부규칙을 `AUTHZ_FORBIDDEN`으로 정정(`SITE_PROFILE_BLOCKED`는 런타임 실행차단 전용) |
+| P1 | codegen `tsc` 실제 FAIL(`run-fixtures.ts`의 `process` — `@types/node` 누락; v1.7 EXIT=0 주장이 추가 후 거짓이 됨) | `@types/node` + tsconfig `types:["node"]` → tsc EXIT=0 회복 |
+| P1 | H5 수동 에스컬레이션이 `human_task.escalated` 미emit → Run R15 미발화(H4b와 비대칭) | transitions.ts H5 3분기 `emitEvent` 추가 + fixture `expectEmits` 회귀가드 |
+| P3 | README v1.5/fixtures "event_type 32" 오기재(실측 31) | 31로 정정 |
+| P3 | `ajv-formats` dead dependency(validators는 format 수동 등록) | package.json 제거 + README 정정 |
+
+> **기각(2)**: gateway policy If-Match(동일 문서가 optional로 이미 분리), @human_task 입력 kind 3종 vs enum 5종(핸들러 입력 목록 vs 전체 enum — 값 충돌 아님).
+> **잔여 P3(추후 폴리시)**: ① codegen/types.ts에 `ValidationReport`/`ValidationIssue` 미생성(ir-static-validation §3) ② transitions.ts R4 `humanTaskKind:"captcha"` 하드코딩(mfa 손실) — state-machine R4에 kind 결정규칙 고정 후 guard 파라미터화 필요 ③ 목업 IR 예시 @end_no_data witness(V7) 부재.
