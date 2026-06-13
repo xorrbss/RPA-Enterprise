@@ -59,7 +59,7 @@ type LLMMessage =
   | { role: "user"; content: RedactedString | RedactedContentBlock[] };  // 페이지 컨텍스트는 여기로만
 ```
 
-규칙: **messages는 이미 redaction 통과한 상태로 adapter에 전달**(redaction은 Gateway §5.1 step2, adapter 진입 전). adapter는 redaction 책임 없음. `images`도 마스킹된 참조만.
+규칙: **messages는 이미 redaction 통과한 상태로 adapter에 전달**(redaction은 Gateway redaction 단계 — `security-contracts.md` §4 step2, adapter 진입 전). adapter는 redaction 책임 없음. `images`도 마스킹된 참조만.
 
 ---
 

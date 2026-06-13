@@ -54,7 +54,7 @@ ident        = (letter | "_") , { letter | digit | "_" } ;
 
 규칙:
 - `node.<id>`는 **DAG 상 선행(이미 완료)된 노드만** 참조 가능. 미실행/미래 노드 참조는 컴파일 에러(`IREL_FORWARD_REF`).
-- `flags.*`는 인터프리터가 매 노드 평가 직전 PageState/observe 결과로부터 채운다. 정의되지 않은 flag 참조는 컴파일 에러.
+- `flags.*`는 인터프리터가 매 노드 평가 직전 PageState/observe 결과로부터 채운다. 정의되지 않은 flag 참조는 컴파일 에러. **허용 flag 집합(닫힌 레지스트리)의 권위 목록은 `ir-static-validation.md` §2** — 여기 위 표는 예시이며, 검증·추가 절차는 그 레지스트리를 따른다.
 - `loop.*`는 loop 노드 밖에서 참조 시 컴파일 에러(`IREL_SCOPE_VIOLATION`).
 
 표준 노드 출력 필드(참조 가능): `row_count`(int), `status`(string), `extracted_ref`(string), `tier`(string, fallback 시).

@@ -41,7 +41,7 @@
         "workitem.completed", "workitem.dead_lettered",
         "pipeline.stage.completed", "sink.delivered", "sink.dead_lettered",
         "site.circuit_opened", "site.circuit_closed",
-        "worker.heartbeat", "worker.circuit_opened"
+        "worker.heartbeat", "worker.circuit_opened", "worker.circuit_closed"
       ]
     }
   }

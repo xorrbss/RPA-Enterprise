@@ -97,6 +97,8 @@ export type StepResult = {
 
 // ===== VerifyResult =====
 export type VerifyResult = {
+  // status는 step.verify.failed 이벤트 payload와 verify.run span attr(status)에 그대로 실려
+  // fail_det(결정형 검증 실패)와 fail_vlm(VLM 검증 실패)를 소비자/운영 UI가 구분한다.
   status: "pass" | "fail_det" | "fail_vlm" | "uncertain";
   confidence: number;
   failedCriteria: string[];

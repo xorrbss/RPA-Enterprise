@@ -121,6 +121,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   HUMAN_TASK_EXPIRED:          { retryable: false, httpStatus: 410, exceptionClass: "business", userMessage: "처리 기한 만료.", operatorAction: "재처리 또는 escalate" },
 
   WORKITEM_CHECKOUT_CONFLICT:  { retryable: true,  httpStatus: 409, exceptionClass: "system",   userMessage: "재시도됩니다.", operatorAction: "unique_reference 중복 확인" },
+  // [note] DEAD_LETTER는 HTTP 에러 응답이 아니라 상태 통지(이벤트/operatorAction)용 코드 — httpStatus 200은 "API 오류 아님"을 뜻한다. ApiError로 반환하지 않는다.
   DEAD_LETTER:                 { retryable: false, httpStatus: 200, exceptionClass: "system",   userMessage: "수동 재처리 대기.", operatorAction: "DLQ replay API" },
 };
 

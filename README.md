@@ -19,7 +19,10 @@
 | `impl-contracts-bundle.md` | #4 #9 #12 #14 #15 | connector hook 실행모델·artifact lifecycle job·cache classifier·런타임 redaction boundary·trace span |
 | `schema/verify.schema.json` | (verify DSL) | criteria 타입 레지스트리, min_rows:0 금지 |
 | `schema/event-envelope.schema.json` | (이벤트) | envelope + event_type 레지스트리 |
-| `ts/core-types.ts` | (타입 계약) | PageState/StepResult/VerifyResult/RunContext/brand 타입 |
+| `ts/core-types.ts` | (타입 계약) | PageState/StepResult/VerifyResult/RunContext/brand 타입 + `SecretStore` |
+| `ir-static-validation.md` | (IR 검증) | 그래프 정적검증(target 무결성·도달성·사이클·flags 레지스트리·value_match·fallback) — v1.4 |
+| `security-contracts.md` | (보안) | SecretStore·shell registry·prompt-injection·redaction 알고리즘·network policy·kid·connector perms·artifact RBAC — v1.4 |
+| `ts/state-machine-types.ts` | (전이 타입) | RunState/Event/Guard/SideEffectCmd + transition*() 시그니처(codegen 대상) — v1.4 |
 
 ---
 
@@ -79,7 +82,9 @@
 > 본 패키지는 PRD v3.1의 **보충판**이다(맨 위 참조). 핵심 데이터 모델·제어평면 API·인증/인가·일부 보안 계약은 이 패키지가 아니라 **PRD 본문 / 형제 스펙(LLM Gateway) / D1 codegen / 운영 정책**에서 확정된다. 아래 맵은 본 패키지가 *참조하지만 정의하지 않는* 모든 외부 의존을 한곳에 모은 것이다. 목적: 개발자가 컬럼/엔드포인트/역할/임계를 **임의 추정하지 않도록** 위치를 고정한다.
 >
 > **상태 범례** — `PRD 확정`(섹션 인용 있음) · `위치 미확정(TODO)`(PRD/형제 스펙에 있을 것으로 보이나 섹션 미인용 — PRD 소유자가 채울 것) · `형제 스펙` · `D1 codegen` · `운영 정책` · `미결정(§19)`.
-> **원칙(가정 금지)**: 인용 없는 섹션 번호를 지어내지 않는다. 미인용 항목은 TODO로 남겨 PRD 소유자가 채운다. TODO가 빈 채로 해당 코드 경로에 착수해야 하면 `TODO: [BLOCKED]`(violated/reason/required_change)로 중단·보고.
+> **원칙(가정 금지)**: 인용 없는 섹션 번호를 지어내지 않는다. TODO가 빈 채로 해당 코드 경로에 착수해야 하면 `TODO: [BLOCKED]`(violated/reason/required_change)로 중단·보고.
+>
+> **[v1.4 갱신] 별도 PRD 소유자 없음 → 본 패키지가 직접 정의한다.** §5(보안 계약) 전 항목·`SecretStore`·shell registry·redaction·network policy·kid·connector perms·artifact RBAC는 `security-contracts.md`/`ts/core-types.ts`로, IR 정적검증·flags 레지스트리는 `ir-static-validation.md`로, transition 타입은 `ts/state-machine-types.ts`로, LLM terminal 코드는 `error-catalog.ts`로 **해소 완료**(v1.4 로그). 데이터모델 DDL·RBAC 역할·제어평면 API·테넌시/RLS는 **Phase 2에서 정의 예정** — 아래 표의 "위치 미확정(TODO)"는 "Phase 2 정의 예정"으로 읽는다.
 
 ### 1. 데이터 모델 (DDL) — 상태머신·job·캐시가 의존하나 본 패키지엔 DDL 없음
 | 엔티티 | 본 패키지 참조(근거) | 외부 위치 | 상태 |
@@ -208,4 +213,29 @@
 | 3 | P1 | HumanTask timeout 정책 split-brain(H4 "항상 expired" vs R14 guard `on_timeout=fail` vs handler "또는 escalate") + `transitionHumanTask`에 guard 인자 부재로 분기 불가 | state-machine.md / reserved-handlers.md | **H4→H4a(on_timeout=fail→expired)/H4b(on_timeout=escalate→escalated) 분기**. `transitionHumanTask`에 `HumanTaskGuard` 추가. R14 guard 제거(정책은 HumanTask 단계로 **일원화**, Run은 expired를 무조건 수용). @human_task 입력에 `on_timeout(fail\|escalate, 기본 fail)` 추가 |
 | 4 | P1 | W9 checkout timer **pause만 있고 resume(un-pause) 부재** → run 재개 후 타이머 영구 정지/오발 | state-machine.md | **W11 추가**(run_resumed→timer 재개, pause 잔여 TTL부터). checkout_expired 판정은 pause 구간 제외 계산 |
 
-> 잔여(이번 범위 외, 별도 결정 필요): queued/claimed 단계 abort의 Run 전이화 여부(현재 dispatcher 처리 전제), H7 와일드카드 `*`가 종결 상태 포함하는 P2 정밀화. 갭 분석 P1/P2 중 **외부에서 확정되는 항목(데이터모델 DDL·API·RBAC·보안 인터페이스·수치 임계)은 위 §"외부 의존 맵"으로 정리**했고, 본 패키지 내부에서 정의해야 할 항목(IR 정적검증 계약 등)은 미착수.
+> 잔여(이번 범위 외, 별도 결정 필요): queued/claimed 단계 abort의 Run 전이화 여부(현재 dispatcher 처리 전제), H7 와일드카드 `*`가 종결 상태 포함하는 P2 정밀화. 갭 분석 P1/P2 중 **외부에서 확정되는 항목(데이터모델 DDL·API·RBAC·보안 인터페이스·수치 임계)은 위 §"외부 의존 맵"으로 정리**했고, 본 패키지 내부에서 정의해야 할 항목(IR 정적검증 계약 등)은 v1.4에서 착수.
+
+---
+
+## v1.4 패치 로그 (단일 SSoT 전환 — Phase 1: 계약 내부 P1)
+
+> **[결정] 별도 PRD 소유자가 없어 본 패키지가 완전한 단일 진실원천이 된다.** §"외부 의존 맵"의 "위치 미확정(TODO)"은 외부로 미루지 않고 본 패키지에서 직접 정의한다. 아래는 1차분(계약 내부 P1).
+
+| # | 항목 | 위치 | 조치 |
+|---|---|---|---|
+| 1 | IR 그래프 정적검증 부재(target 무결성·도달성·사이클·terminal·priority 동률) | `ir-static-validation.md`(신규) | V1..V11 규칙 + ValidationReport. `IR_SCHEMA_INVALID`(reason)/`IR_EXPRESSION_COMPILE_ERROR` 매핑 |
+| 2 | flags closed/open 모순 | `ir-static-validation.md` §2 · `ir-expression.md` §2 | **닫힌 레지스트리로 확정**(7개, `reviews_visible` 포함). ir-expression은 포인터로 정합 |
+| 3 | transition codegen 타입 부재 | `ts/state-machine-types.ts`(신규) | RunState/Event/Guard/SideEffectCmd + transition*() 시그니처 + `IllegalTransition` |
+| 4 | SecretStore 시그니처 부재 | `ts/core-types.ts` | `SecretStore.resolve(SecretRef)→PlainSecret` |
+| 5 | 보안 계약 공백(shell registry·injection·redaction §5.1 댕글링·network policy·kid·connector perms·artifact RBAC·sensitive/recording) | `security-contracts.md`(신규) | 9개 절로 고정. **redaction §5.1 댕글링 → 본 문서 §4로 해소** |
+| 6 | LLM `RATE_LIMIT`/`BACKEND_ERROR`/`CONNECTION_FAILED` terminal 코드 부재 | `error-catalog.ts` · `llm-gateway-adapter.md` §4 | `LLM_RATE_LIMITED`/`LLM_BACKEND_UNAVAILABLE`/`LLM_CONNECTION_FAILED` + 표 매핑 |
+| 7 | shell 미등록 명령 코드 부재 | `error-catalog.ts` | `SHELL_COMMAND_NOT_ALLOWED`(security) |
+| 8 | verify criterion 오타 통과 | `verify.schema.json` | 각 criterion `additionalProperties:false` + `value_match.path` 문법 명시 |
+| 9 | verify fail surfacing·DEAD_LETTER 200·worker 서킷 비대칭 | core-types · error-catalog · event-envelope | status surfacing 주석, DEAD_LETTER 통지전용 주석, `worker.circuit_closed` 추가 |
+
+### §19 미결정 결정 (owner=본 패키지)
+- **credential 동시성 기본값 = 1** (DDL DEFAULT와 일치, 사이트별 `credential_concurrency_policies`로 상향).
+- **P1 vLLM SSE**: OpenAI 호환 adapter 재사용, `sse=false` 모델만 sync 폴백(adapter §7) — 별도 구현 불요.
+- **Codex structured-output 스트리밍·abort**: `capabilities.jsonMode` 게이트 + 미지원 시 prompt-schema+strict(§7), abort=HTTP close(§3). 실제 지원범위는 **구현 시 라이브 API로 capabilities 확정**(안전 폴백 정의됨).
+
+> 다음(Phase 2): 핵심 DDL(runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/site_profiles/browser_identities/network_policies) + RBAC 역할 + tenant/RLS + 제어평면 API 인벤토리 → §"외부 의존 맵" 잔여 TODO 해소.
