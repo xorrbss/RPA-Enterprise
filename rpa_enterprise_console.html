@@ -2078,6 +2078,7 @@
   "nodes": {
     "observe_reviews": {
       "what": [{ "action": "observe", "instruction": "리뷰 목록 화면인지 판단하고 flags를 설정" }],
+      "verify": { "criteria": [{ "type": "empty_result_allowed", "when": "flags.no_review_message_visible" }] },
       "on": [
         { "when": "flags.blocked", "target": "@challenge", "priority": 100 },
         { "when": "flags.reviews_visible", "target": "extract_reviews", "priority": 80 },

@@ -69,8 +69,10 @@ export function transitionRun(
     case "running":
       // R4: running + step.challenge_detected (policy=human_first) → suspending
       if (ev.type === "step.challenge_detected") {
+        // human_task kind = challenge 분류(ChallengeSummary.type): mfa면 mfa, 그 외 captcha 폴백
+        // (reserved-handlers @challenge: human_assist=captcha|mfa). ChallengeDetector가 ev.challengeKind 설정.
         return r("suspending", [
-          { kind: "createHumanTask", humanTaskKind: "captcha" },
+          { kind: "createHumanTask", humanTaskKind: ev.challengeKind ?? "captcha" },
           { kind: "startBookmark" },
         ]);
       }

@@ -330,3 +330,17 @@
 
 > 구현 청사진을 `architecture.md`(신규)로 고정. **브라우저 드라이버 결정: Stagehand v3 (CDP-native) 채택, Playwright 제거.** 근거(web-verified 2026): Stagehand v3가 Playwright 하드의존을 제거하고 CDP-native 모듈러 드라이버로 전환(복잡 DOM ~44% 개선), Playwright는 `connectOverCDP` 선택 연결만 가능(architecture.md §8 출처).
 > 계약 영향: `ts/core-types.ts` 주석 `PlaywrightUtility` → `Utility(CDP)`로 일반화 — `ExecutorPlugin {dom/vision/utility}` 타입·의미는 **불변**(capability 분리는 "LLM vs 결정형"이지 도구 무관). 스택 요약: TS/Node · PostgreSQL 15+ · Graphile Worker · Fastify · ajv · OTel · React+Vite. 빌드순서 D1–D7은 architecture.md §6.
+
+---
+
+## v2.1 패치 로그 (잔여 P3 해소 + D3 PoC 상세)
+
+> v1.9에서 미룬 잔여 P3 3건 해소 + architecture.md §9에 D3 Stagehand v3 PoC 절 추가. **재검증: tsc strict EXIT=0, 전이 63/63 PASS, jsdom 12/12.**
+
+| 항목 | 조치 |
+|---|---|
+| codegen/types.ts `ValidationReport`/`ValidationIssue` 미생성 | ir-static-validation §3 그대로 추가(`IRValidationRule` V1–V11 + errors/warnings split) |
+| transitions.ts R4 `humanTaskKind:"captcha"` 하드코딩(mfa 손실) | `RunEvent.step.challenge_detected`에 `challengeKind?` 추가 → R4가 `ev.challengeKind ?? "captcha"`. state-machine.md R4에 **kind=ChallengeSummary.type(mfa→mfa, else captcha)** 규칙 고정 |
+| 목업 IR `@end_no_data` witness(V7) 부재 | observe_reviews에 `empty_result_allowed`(when=`flags.no_review_message_visible`) witness 추가 → V7 정합 |
+
+> architecture.md §9(D3 상세): UtilityExecutor/PageStateResolver 우선 골격 + Stagehand v3 결정형 CDP API **PoC 체크리스트 10항목** + PageState 산출 알고리즘(structuralHash) + 수용기준/폴백(raw CDP). → 갭분석 잔여 P3 0건.

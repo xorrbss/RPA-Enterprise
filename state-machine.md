@@ -17,7 +17,7 @@
 | R2 | claimed | run.started | running | INIT 성공 | run.started 이벤트 |
 | R3a | claimed | init_failed | queued | 연속 실패 임계 **미만** | **재큐**(attempts+1, 백오프) |
 | R3b | claimed | init_failed | failed_system | 연속 실패 임계 **초과** | 서킷 오픈, DLQ 판단, 더 이상 재큐 안 함 |
-| R4 | running | step.challenge_detected | suspending | policy=human_first | human_task 생성, bookmark 시작 |
+| R4 | running | step.challenge_detected | suspending | policy=human_first | human_task 생성(**kind=ChallengeSummary.type: mfa면 mfa, 그 외 captcha**), bookmark 시작 |
 | R5 | running | node→@human_task | suspending | — | human_task 생성 |
 | R6 | running | abort_requested | aborting | — | **SSE close + browser drain** |
 | R7 | running | last_node_success | completing | 흐름 종료(terminal 도달) | 산출 확정 시작 |

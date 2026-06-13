@@ -29,7 +29,7 @@ export type RunEvent =
   | { type: "worker.claimed" }
   | { type: "run.started" }
   | { type: "init_failed" }
-  | { type: "step.challenge_detected" }
+  | { type: "step.challenge_detected"; challengeKind?: "captcha" | "mfa" }   // ChallengeSummary.type → human-assist kind(R4)
   | { type: "human_task_required" }              // R5: node→@human_task
   | { type: "abort_requested" }
   | { type: "last_node_success" }

@@ -431,3 +431,29 @@ export const EVENT_TYPES: readonly EventType[] = [
   "worker.circuit_opened",
   "worker.circuit_closed",
 ] as const;
+
+/* ========================================================================
+ * IR Static Validation Report  (ir-static-validation.md §3)
+ *   IR 저장/승격 시 그래프 정적검증(V1–V11) 산출. errors 비면 거부, warnings(V5/V7)는
+ *   draft 저장 허용·prod 승격 차단. 구조 위반→IR_SCHEMA_INVALID, 표현식→IR_EXPRESSION_COMPILE_ERROR.
+ * ====================================================================== */
+
+/** 그래프 정적검증 규칙 식별자(ir-static-validation.md §1). */
+export type IRValidationRule =
+  | "V1" | "V2" | "V3" | "V4" | "V5" | "V6" | "V7" | "V8" | "V9" | "V10" | "V11";
+
+export interface ValidationIssue {
+  rule: IRValidationRule;
+  /** §1 표의 reason 태그(예: target_not_found / unreachable_node / duplicate_priority). */
+  reason: string;
+  code: "IR_SCHEMA_INVALID" | "IR_EXPRESSION_COMPILE_ERROR";
+  /** 위반 위치 노드 id(있으면). */
+  nodeId?: string;
+  /** 사람이 읽는 설명(민감정보 없음). */
+  detail: string;
+}
+
+export interface ValidationReport {
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+}
