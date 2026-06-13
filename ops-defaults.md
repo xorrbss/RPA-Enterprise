@@ -1,0 +1,104 @@
+# 운영 기본값 · 수치 임계 (Operational Defaults v1)
+
+> 전이 guard·정책·job에 쓰이지만 계약 본문이 값을 비워둔 수치의 **기본값 단일 진실원천**. 모든 값은 **환경별 설정으로 오버라이드 가능**한 운영 정책이며, 본 문서는 (a) 코드 기본값과 (b) 시뮬레이션-클록 단위테스트 픽스처값을 함께 고정한다(README §"D1에서 함께 산출할 것"의 픽스처 근거).
+> 원칙: 임계는 결정론적으로 평가(IREL `now()` 금지와 별개 — 인프라 타이머). "조용한 false 금지" — 임계 도달은 명시적 전이/예외로만 표면화.
+
+---
+
+## 1. Run / Workitem 전이 임계 (state-machine.md)
+
+| 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
+|---|---|---|---|---|
+| `run.init_fail_threshold` | 3 | 2 | R3a/R3b | 연속 INIT 실패 < 임계 → 재큐(R3a), ≥ 임계 → `failed_system`+서킷(R3b) |
+| `run.init_backoff` | base 2s · factor 2 · max 60s · jitter ±20% | base 10ms · max 50ms | R3a "백오프" | 지수 백오프 |
+| `workitem.max_attempts` | 3 | 2 | W4/W5/W6/W7 | attempts < max → retry, ≥ max → abandoned(dead_letter) |
+| `workitem.retry_backoff` | base 5s · factor 2 · max 5m | base 10ms · max 50ms | W4 "백오프" | W8 재checkout 시 step/loop 카운터 리셋·cursor 보존 |
+| `run.abort_timeout` | 30s | 100ms | R24 `drain_timeout` | drain 초과 시 강제 lease kill → cancelled |
+| `workitem.checkout_timeout` | 10m | 300ms | W6/W7 `checkout_expired` | W9 suspend 중 pause, W11 resume 시 잔여 TTL 재개(pause 구간 제외) |
+
+---
+
+## 2. Lease TTL · sweeper 주기 (migration SQL · impl-bundle §B)
+
+| 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
+|---|---|---|---|---|
+| `browser_lease.ttl` | 5m | 500ms | browser_leases.expires_at | heartbeat 갱신 시 연장 |
+| `browser_lease.heartbeat_interval` | 30s | 100ms | renewal 주석 | 만료 전 갱신 |
+| `credential_lease.locked_until_ttl` | 15m | 500ms | credential_leases.locked_until | 만료 시 sweeper 회수 |
+| `credential.default_max_concurrency` | **1** | 1 | §19 결정·credential_concurrency_policies | 사이트별 정책으로 상향 |
+| `lease_sweeper.poll_interval` | 5s | 20ms | §B "수초 폴링" | browser+credential 만료 회수(idempotent) |
+
+---
+
+## 3. 서킷 임계 (error-catalog · reserved-handlers)
+
+| 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
+|---|---|---|---|---|
+| `site.circuit.block_rate_threshold` | 30% | 50% | `SITE_CIRCUIT_OPEN` | rolling window 내 차단율 |
+| `site.circuit.window` | 5m · min_samples 20 | 1s · 4 | site.circuit_opened | 표본 부족 시 미발동 |
+| `site.circuit.open_duration` | 15m | 1s | site.circuit_closed | cooldown 후 half-open 프로브 |
+| `challenge.block_rate_threshold` | 30% | 50% | reserved-handlers SITE_CIRCUIT_OPEN | provider는 risk=red면 skip |
+| `worker.circuit.consecutive_failures` | 5 | 3 | worker.circuit_opened | 워커 격리 |
+| `worker.circuit.open_duration` | 1m | 200ms | worker.circuit_closed | |
+
+---
+
+## 4. LLM Gateway (llm-gateway-adapter.md)
+
+| 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
+|---|---|---|---|---|
+| `llm.retry_max` | 2 | 1 | §4 "최대 N" | RATE_LIMIT/BACKEND_ERROR 재시도, 소진 시 terminal(LLM_RATE_LIMITED 등) |
+| `llm.stream_idle_timeout` | 20s | 100ms | `STREAM_IDLE_TIMEOUT` | 토큰 무수신 → 1회 재시도 → fallback |
+| `llm.stream_wall_timeout` | 120s | 300ms | `STREAM_TIMEOUT` | wall-clock 초과 → System(비재시도) |
+| `llm.fallback_attempts` | 1 | 1 | §4 fallback model | secondary adapter 1회 |
+| `llm.repair_attempts` | 1 | 1 | §5 | MALFORMED_OUTPUT repair 최대 1회 |
+| `llm.budget.max_output_tokens` | 4096 | 256 | LLMRequest.budget | per-call. 초과 시 스트림 중 즉시 close(BUDGET_EXCEEDED) |
+| `llm.budget.max_cost_per_run` | $0.85 | $0.01 | budget.maxCost | run 단위 누계 상한 |
+| `llm.budget.max_input_tokens` | model `maxContextTokens`의 90% | 1024 | capabilities | 모델별 상한 비례 |
+
+---
+
+## 5. 캐시 · 검증 · self-heal (ir.schema · verify.schema · impl-bundle §D)
+
+| 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
+|---|---|---|---|---|
+| `node.max_self_heal` | 2 | 1 | ir.schema nodePolicy(기본 2) | 스키마 기본값 유지 |
+| `loop.max_iterations` (상한) | 10000 | 10 | ir.schema(max 10000) | 시나리오가 더 작게 지정 권장 |
+| `node.timeout_ms` 기본 | 30000 | 200 | nodePolicy.timeout_ms(min 1000) | 미지정 시 적용 |
+| `node.timeout_ms` 상한 | 300000 | — | — | 초과 지정 거부(저장 검증) |
+| `verify.element_visible.timeout_ms` 기본 | 10000 | 100 | verify.schema | 미지정 시 적용 |
+| `action_plan_cache` family 재해석 | suspect 1회 기록 후 재히트 시 재해석 | 동일 | §D / §7.2 | active만 재생, 늦은 해석 폐기 |
+
+---
+
+## 6. Artifact lifecycle (impl-bundle §B · security-contracts)
+
+| 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
+|---|---|---|---|---|
+| `artifact.retention_default` | 90d | 1s | retention_until | legal_hold 태그는 예외(보존) |
+| `artifact_redaction_job.poll` | 5s | 20ms | §B "수초 폴링" | pending→redacted |
+| `artifact.redaction_fail_threshold` | 5 | 2 | §B "실패 N회 → failed+알림" | 초과 시 `failed`+알림, 조회 차단(ARTIFACT_NOT_REDACTED) |
+| `artifact_retention_sweeper` | daily 02:00 KST | tick | §B "일배치" | retention_until < now() 삭제+soft-delete |
+| `artifact_integrity_checker` | daily | tick | §B | sha256 불일치 → quarantine+알림 |
+| `artifact_orphan_sweeper` | daily | tick | §B | 참조 없는 object 정리 |
+
+---
+
+## 7. Challenge / Resume / 기타
+
+| 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
+|---|---|---|---|---|
+| `challenge.network_retry_max` | 2 | 1 | reserved-handlers @challenge | network_retry attempt 횟수 |
+| `challenge.attempt_backoff` | 5s | 20ms | attempt 순차 실행 | session_refresh→retry→network→human_assist→provider→fail 순 |
+| `resume_token.ttl` (expiresAt) | 30m | 2s | reserved-handlers ResumeToken | 만료 시 resume 거부→재로그인/System |
+| `resume_token.key_rotation_grace` | 7d | — | security-contracts §5 | 폐기 키 검증 유예 |
+| `human_task.default_timeout` | 30m | 2s | @human_task `timeout` | kind별 시나리오 오버라이드 |
+
+---
+
+## 8. 적용 규약
+
+- **오버라이드 계층**: 시스템 기본(본 문서) < 테넌트 설정 < 사이트 프로파일 < 시나리오 노드 정책(`nodePolicy`). 좁은 범위가 우선.
+- **테스트 픽스처값**은 시뮬레이션 클록(가상 시간)에서 전이/타임아웃 경로를 빠르게 검증하기 위한 값이며, 운영 의미는 동일(스케일만 축소). state-machine 전이 테스트·sweeper 멱등 테스트가 사용.
+- **미확정(외부 사실)**: LLM 모델별 정확한 `maxContextTokens`·실제 Codex structured-output 스트리밍 지원범위는 구현 시 라이브 capabilities로 확정(README v1.4 §19). 본 문서 값은 안전 기본값.
+- 모든 임계는 메트릭으로 노출(impl-bundle §E `*_rate`/`queue_depth` 등)되어 운영자가 조정 근거를 본다.

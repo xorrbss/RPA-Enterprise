@@ -26,6 +26,7 @@
 | `db/migration_core_entities.sql` | (핵심 DDL) | runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/action_plan_cache/site_profiles/browser_identities/network_policies — v1.5 |
 | `auth-rbac.md` | (인증·인가·테넌시) | RBAC 역할(viewer/operator/reviewer/approver/admin)·권한 매트릭스·tenant_id 출처·RLS 정책 — v1.5 |
 | `api-surface.md` | (제어평면 API) | REST 엔드포인트 인벤토리·If-Match·Idempotency-Key·as_of(D1 OpenAPI 입력) — v1.5 |
+| `ops-defaults.md` | (운영 기본값) | 전이 임계·lease TTL·서킷·LLM retry/budget·artifact retention·sweeper 주기 + 테스트 픽스처값 — v1.6 |
 
 ---
 
@@ -257,4 +258,12 @@
 | 4 | 제어평면 API 표면 부재 | `api-surface.md`(신규) | runs/scenarios/human-tasks/workitems·DLQ/artifacts/gateway/sites 엔드포인트 인벤토리(D1 OpenAPI 입력). If-Match(scenario.version)·Idempotency-Key·params.as_of 주입 규약. 어휘체인 abort→cancelled 정합 |
 | 5 | 엔티티 404 코드 오용·일반 RBAC 거부 코드 부재 | `error-catalog.ts` | `RESOURCE_NOT_FOUND`(404, run 외 엔티티)·`AUTHZ_FORBIDDEN`(403, 일반 RBAC 거부) 추가. 자원특정 거부(secret/connector/site)는 기존 코드 유지 |
 
-> 다음(Phase 3): 운영 기본값·수치 임계 문서(전이 임계·lease TTL·서킷·LLM retry/budget·retention·sweeper 주기). 이후 Phase 4(D1 codegen), Phase 5(HTML 목업 보강).
+> 다음(Phase 3): 운영 기본값·수치 임계 문서. **→ v1.6 `ops-defaults.md`로 완료.**
+
+---
+
+## v1.6 패치 로그 (Phase 3 — 운영 기본값·수치 임계)
+
+> §"외부 의존 맵" §6(정책·수치 임계)의 "운영 정책(TODO)"를 `ops-defaults.md`(신규)로 해소. 모든 임계에 코드 기본값 + 시뮬레이션-클록 테스트 픽스처값을 부여(오버라이드 계층: 시스템<테넌트<사이트<노드). Run/Workitem 전이 임계, lease TTL·sweeper 주기, 서킷 차단율·윈도우, LLM retry/timeout/budget, 캐시·verify·self-heal 상한, artifact retention·redaction 실패 임계, challenge/resume_token TTL. 외부 사실(모델 maxContextTokens·Codex 스트리밍 범위)만 "구현 시 라이브 확정"으로 잔존.
+
+> 다음: Phase 4(D1 codegen — ajv validator/TS 타입/transition 함수/OpenAPI/AsyncAPI/픽스처), Phase 5(HTML 목업 — 빈/오류/로딩·라우팅·실시간).
