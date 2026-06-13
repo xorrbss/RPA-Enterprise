@@ -1,0 +1,9 @@
+# Claude Code 로컬 런타임/설정
+.claude/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# 스냅샷 아카이브 (CLAUDE.md: 별도 요청 없으면 무시)
+files_v1.2_patched.zip

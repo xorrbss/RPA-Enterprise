@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rpa.local/contracts/event-envelope.schema.json",
+  "title": "Event Envelope v1",
+  "description": "전 내부 이벤트 공통 봉투. 상태 변경과 동일 DB 트랜잭션에서 인큐(단일 Postgres 스택, outbox 내장). idempotency_key로 중복 소비 무시, ordering_key=run_id로 run 순서 보장.",
+  "type": "object",
+  "required": ["event_id", "event_type", "event_version", "tenant_id", "correlation_id", "occurred_at", "idempotency_key", "payload_schema_ref", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "$ref": "#/$defs/eventType" },
+    "event_version": { "type": "integer", "minimum": 1 },
+    "tenant_id": { "type": "string", "format": "uuid" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "workitem_id": { "type": "string", "format": "uuid" },
+    "step_id": { "type": "string" },
+    "correlation_id": { "type": "string", "format": "uuid" },
+    "causation_id": { "type": "string", "format": "uuid", "description": "이 이벤트를 유발한 이벤트 id" },
+    "ordering_key": { "type": "string", "description": "기본 run_id — run 단위 순서 보장. run 없는 이벤트(worker.heartbeat, site.circuit_* 등)는 생략 가능(그래서 required 아님)." },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "idempotency_key": { "type": "string", "description": "예: run:step:attempt:verify — 소비자 중복 무시" },
+    "payload_schema_ref": {
+      "type": "string",
+      "description": "[FIX #7] 이 event_type의 payload를 검증할 등록 스키마 참조(예: 'events/run.completed@1'). 소비자는 payload를 freeform으로 신뢰하지 말고 이 ref로 ajv 검증. event_type↔payload_schema_ref 매핑은 별도 payload 레지스트리(D1 codegen 산출)에서 고정하며, 본 envelope은 매핑 강제 메커니즘만 제공."
+    },
+    "payload": {
+      "type": "object",
+      "description": "event_type별 본문. payload_schema_ref에 등록된 스키마로 검증되어야 함(경계에서 ajv)."
+    }
+  },
+  "$defs": {
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "run.created", "run.started", "run.suspended", "run.resume_requested", "run.resumed", "run.cancelled", "run.completed",
+        "run.failed_business", "run.failed_system",
+        "step.started", "step.completed", "step.verify.failed",
+        "llm.stream.started", "llm.stream.completed", "llm.stream.aborted",
+        "challenge.detected", "challenge.resolved",
+        "human_task.created", "human_task.resolved", "human_task.expired", "human_task.escalated",
+        "workitem.completed", "workitem.dead_lettered",
+        "pipeline.stage.completed", "sink.delivered", "sink.dead_lettered",
+        "site.circuit_opened", "site.circuit_closed",
+        "worker.heartbeat", "worker.circuit_opened"
+      ]
+    }
+  }
+}

@@ -1,0 +1,2994 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RPA 운영 콘솔</title>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --surface-2: #f9fafb;
+      --line: #dce3ea;
+      --line-strong: #c5d0dc;
+      --text: #1e293b;
+      --muted: #64748b;
+      --soft: #eef3f8;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --green: #0f9f6e;
+      --green-soft: #e7f8f0;
+      --amber: #b7791f;
+      --amber-soft: #fff5dc;
+      --red: #c24141;
+      --red-soft: #fdecec;
+      --purple: #6d5bd0;
+      --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 10px 30px rgba(15, 23, 42, .05);
+      --radius: 8px;
+      --sidebar: 268px;
+      font-family: Inter, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    /* [a11y] 키보드 포커스 표시 — 모든 인터랙티브 요소에 일관 적용 */
+    *:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* [a11y] 모션 감소 선호 시 전환/애니메이션 최소화 */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--text);
+      background: var(--bg);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #111827;
+      color: #e5e7eb;
+      padding: 18px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 40px;
+      font-weight: 700;
+    }
+
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #2563eb;
+      color: #fff;
+      box-shadow: inset 0 -10px 18px rgba(0, 0, 0, .16);
+    }
+
+    .nav-group {
+      display: grid;
+      gap: 4px;
+    }
+
+    .nav-title {
+      color: #9ca3af;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin: 8px 10px;
+    }
+
+    .nav-item {
+      width: 100%;
+      min-height: 38px;
+      border: 0;
+      border-radius: 8px;
+      color: #cbd5e1;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .nav-item svg,
+    .icon-btn svg,
+    .toolbar-btn svg,
+    .small-btn svg,
+    .tab svg {
+      width: 17px;
+      height: 17px;
+      stroke-width: 2;
+      flex: 0 0 auto;
+    }
+
+    .nav-item.active {
+      background: #1f2937;
+      color: #fff;
+    }
+
+    .nav-item:hover {
+      background: #1b2432;
+      color: #fff;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      display: grid;
+      gap: 10px;
+    }
+
+    .env-card {
+      border: 1px solid rgba(255, 255, 255, .1);
+      border-radius: 8px;
+      padding: 12px;
+      background: rgba(255, 255, 255, .05);
+    }
+
+    .env-card strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #fff;
+    }
+
+    .env-card span {
+      color: #aab4c1;
+      font-size: 12px;
+    }
+
+    main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      height: 68px;
+      background: rgba(255, 255, 255, .92);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 24px;
+    }
+
+    .page-title {
+      min-width: 220px;
+    }
+
+    .page-title h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+      font-weight: 760;
+    }
+
+    .page-title p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .search {
+      max-width: 460px;
+      min-width: 180px;
+      flex: 1;
+      position: relative;
+    }
+
+    .search svg {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      color: var(--muted);
+    }
+
+    .search input {
+      width: 100%;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      padding: 0 12px 0 36px;
+      color: var(--text);
+      outline: 0;
+    }
+
+    .search input:focus {
+      border-color: #8bb4ff;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .13);
+      background: #fff;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .icon-btn,
+    .toolbar-btn,
+    .small-btn {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .icon-btn {
+      width: 38px;
+      height: 38px;
+      padding: 0;
+    }
+
+    .toolbar-btn {
+      height: 38px;
+      padding: 0 12px;
+      font-weight: 650;
+    }
+
+    .toolbar-btn.primary {
+      color: #fff;
+      border-color: var(--blue);
+      background: var(--blue);
+    }
+
+    .small-btn {
+      height: 30px;
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .content {
+      padding: 22px 24px 32px;
+      display: grid;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      min-height: 118px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 15px;
+      box-shadow: var(--shadow);
+      display: grid;
+      align-content: space-between;
+      gap: 12px;
+    }
+
+    .metric-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .metric-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--soft);
+      color: var(--blue);
+    }
+
+    .metric-icon svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .metric-value {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .metric-value strong {
+      font-size: 26px;
+      line-height: 1;
+      font-weight: 760;
+    }
+
+    .delta {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    .delta.warn {
+      color: var(--amber);
+    }
+
+    .delta.bad {
+      color: var(--red);
+    }
+
+    .panel-grid {
+      display: grid;
+      grid-template-columns: minmax(620px, 1.62fr) minmax(320px, .9fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .lower-grid {
+      display: grid;
+      grid-template-columns: minmax(360px, .92fr) minmax(420px, 1.08fr) minmax(300px, .82fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      min-height: 58px;
+      border-bottom: 1px solid var(--line);
+      padding: 13px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .panel-title {
+      min-width: 0;
+    }
+
+    .panel-title h2 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.25;
+      font-weight: 760;
+    }
+
+    .panel-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tabs {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 2px;
+      background: var(--surface-2);
+      gap: 2px;
+    }
+
+    .tab {
+      height: 30px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 10px;
+      cursor: pointer;
+      font-weight: 650;
+      font-size: 12px;
+    }
+
+    .tab.active {
+      background: #fff;
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .08);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      background: #fbfcfe;
+      font-size: 11px;
+      text-transform: uppercase;
+      font-weight: 800;
+    }
+
+    td {
+      font-size: 13px;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .run-id {
+      font-weight: 750;
+      color: #0f172a;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      border-radius: 999px;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .status::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+
+    .status.running,
+    .status.completed,
+    .status.active {
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .status.suspended,
+    .status.waiting,
+    .status.pending {
+      color: var(--amber);
+      background: var(--amber-soft);
+    }
+
+    .status.failed,
+    .status.risk {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    /* 취소됨: 사용자 주도 종결 — 실패(빨강)와 구분되는 중립색 */
+    .status.cancelled {
+      color: var(--muted);
+      background: var(--soft);
+    }
+
+    .status.system {
+      color: var(--purple);
+      background: #f0edff;
+    }
+
+    .progress {
+      width: 128px;
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e7edf4;
+    }
+
+    .progress span {
+      display: block;
+      height: 100%;
+      border-radius: 999px;
+      background: var(--blue);
+    }
+
+    .progress.green span {
+      background: var(--green);
+    }
+
+    .progress.amber span {
+      background: #d69e2e;
+    }
+
+    .progress.red span {
+      background: var(--red);
+    }
+
+    .flow-strip {
+      padding: 14px 16px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfe;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(96px, 1fr));
+      gap: 8px;
+    }
+
+    .flow-step {
+      min-height: 58px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 9px;
+    }
+
+    .flow-step strong {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .flow-step span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .task-list,
+    .check-list,
+    .timeline,
+    .health-list {
+      display: grid;
+    }
+
+    .task-list {
+      padding: 8px;
+      gap: 8px;
+    }
+
+    .task-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      background: #fff;
+    }
+
+    .task-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .task-top strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .task-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .pill {
+      min-height: 22px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      padding: 0 8px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .task-actions {
+      display: flex;
+      gap: 7px;
+      justify-content: flex-end;
+    }
+
+    .check-list {
+      padding: 8px 14px 14px;
+    }
+
+    .check-row,
+    .health-row {
+      min-height: 48px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .check-row:last-child,
+    .health-row:last-child {
+      border-bottom: 0;
+    }
+
+    .check-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--green);
+    }
+
+    .check-icon.warn {
+      background: var(--amber);
+    }
+
+    .check-icon svg {
+      width: 13px;
+      height: 13px;
+    }
+
+    .check-name {
+      min-width: 0;
+    }
+
+    .check-name strong {
+      display: block;
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .check-name span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .gateway-body {
+      padding: 15px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .budget-row {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr) 52px;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 9px;
+      border-radius: 999px;
+      background: #e7edf4;
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      background: var(--blue);
+      border-radius: 999px;
+    }
+
+    .bar.green span {
+      background: var(--green);
+    }
+
+    .bar.amber span {
+      background: var(--amber);
+    }
+
+    .bar.red span {
+      background: var(--red);
+    }
+
+    .gateway-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .mini-stat {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--surface-2);
+    }
+
+    .mini-stat strong {
+      display: block;
+      font-size: 16px;
+      margin-bottom: 3px;
+    }
+
+    .mini-stat span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .timeline {
+      padding: 12px 15px 14px;
+      gap: 0;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr);
+      gap: 10px;
+      position: relative;
+      padding-bottom: 13px;
+    }
+
+    .timeline-item:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      left: 9px;
+      top: 20px;
+      bottom: 0;
+      width: 1px;
+      background: var(--line-strong);
+    }
+
+    .dot {
+      width: 19px;
+      height: 19px;
+      border-radius: 999px;
+      background: var(--blue);
+      border: 4px solid #eaf1ff;
+      z-index: 1;
+    }
+
+    .dot.green {
+      background: var(--green);
+      border-color: #e7f8f0;
+    }
+
+    .dot.amber {
+      background: var(--amber);
+      border-color: #fff5dc;
+    }
+
+    .dot.red {
+      background: var(--red);
+      border-color: #fdecec;
+    }
+
+    .timeline-copy strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .timeline-copy span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .health-list {
+      padding: 6px 14px 12px;
+    }
+
+    .health-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .health-row strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .health-row span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .risk-board {
+      padding: 14px 15px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .risk-tile {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 11px;
+      min-height: 78px;
+    }
+
+    .risk-tile strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 7px;
+    }
+
+    .risk-tile span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .drawer {
+      position: fixed;
+      inset: 0 0 0 auto;
+      width: min(456px, 100vw);
+      background: #fff;
+      border-left: 1px solid var(--line);
+      box-shadow: -24px 0 60px rgba(15, 23, 42, .18);
+      transform: translateX(100%);
+      transition: transform .22s ease;
+      z-index: 20;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .drawer.open {
+      transform: translateX(0);
+    }
+
+    .drawer-header {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .drawer-header h2 {
+      margin: 0 0 4px;
+      font-size: 18px;
+    }
+
+    .drawer-body {
+      padding: 18px;
+      overflow: auto;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .detail-cell {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--surface-2);
+    }
+
+    .detail-cell span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 5px;
+    }
+
+    .detail-cell strong {
+      font-size: 13px;
+    }
+
+    .backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, .22);
+      z-index: 19;
+      display: none;
+    }
+
+    .backdrop.open {
+      display: block;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: none;
+      place-items: center;
+      padding: 18px;
+      background: rgba(15, 23, 42, .28);
+    }
+
+    .modal.open {
+      display: grid;
+    }
+
+    .modal-panel {
+      width: min(520px, 100%);
+      max-height: calc(100vh - 36px);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 30px 80px rgba(15, 23, 42, .24);
+      border: 1px solid var(--line);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+    }
+
+    .modal-header,
+    .modal-footer {
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-footer {
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      justify-content: flex-end;
+      background: var(--surface-2);
+    }
+
+    .modal-header h2 {
+      margin: 0 0 4px;
+      font-size: 17px;
+    }
+
+    .modal-body {
+      padding: 16px;
+      overflow: auto;
+      display: grid;
+      gap: 12px;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 40;
+      min-width: 260px;
+      max-width: min(420px, calc(100vw - 36px));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f172a;
+      color: #fff;
+      padding: 12px 14px;
+      box-shadow: 0 20px 60px rgba(15, 23, 42, .25);
+      transform: translateY(18px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .screen-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, .45fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .screen-grid.even {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .screen-grid.three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      min-height: 38px;
+      padding: 8px 10px;
+      outline: 0;
+    }
+
+    .field textarea {
+      min-height: 86px;
+      resize: vertical;
+    }
+
+    .field input:focus,
+    .field select:focus,
+    .field textarea:focus {
+      border-color: #8bb4ff;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .13);
+    }
+
+    .action-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .section-band {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+      box-shadow: var(--shadow);
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .section-band h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .code-block {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f172a;
+      color: #dbeafe;
+      padding: 14px;
+      overflow: auto;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .pipeline-node {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      min-height: 96px;
+      padding: 12px;
+      display: grid;
+      align-content: space-between;
+      gap: 8px;
+    }
+
+    .pipeline-node strong {
+      font-size: 13px;
+    }
+
+    .pipeline-node span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .split-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 42px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .split-row:last-child {
+      border-bottom: 0;
+    }
+
+    .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    [data-run-row] {
+      cursor: pointer;
+    }
+
+    [data-run-row]:hover td {
+      background: #f8fbff;
+    }
+
+    .studio-grid {
+      display: grid;
+      grid-template-columns: minmax(380px, .9fr) minmax(460px, 1.1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .studio-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .browser-frame {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+      min-height: 420px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .urlbar {
+      min-height: 42px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+    }
+
+    .urlbar input {
+      flex: 1;
+      min-width: 0;
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0 12px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .page-preview {
+      min-height: 360px;
+      padding: 18px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.88), rgba(255,255,255,.92)),
+        repeating-linear-gradient(0deg, #edf2f7, #edf2f7 1px, transparent 1px, transparent 28px);
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .mock-page-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+
+    .mock-page-head strong {
+      font-size: 15px;
+    }
+
+    .mock-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mock-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      min-height: 108px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .mock-card span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .step-stack {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .step-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .step-card.active-step {
+      border-color: #8bb4ff;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .1);
+    }
+
+    .step-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .step-head strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .primitive {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      border-radius: 999px;
+      padding: 0 8px;
+      color: #fff;
+      background: var(--blue);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .primitive.observe {
+      background: var(--purple);
+    }
+
+    .primitive.act {
+      background: var(--blue);
+    }
+
+    .primitive.extract {
+      background: var(--green);
+    }
+
+    .primitive.verify {
+      background: var(--amber);
+    }
+
+    .builder-grid {
+      display: grid;
+      grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .node-palette {
+      display: grid;
+      gap: 8px;
+    }
+
+    .node-palette .small-btn {
+      justify-content: flex-start;
+      height: 36px;
+    }
+
+    .run-console {
+      display: grid;
+      grid-template-columns: minmax(360px, .82fr) minmax(460px, 1.18fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .executor-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .executor-card h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .playhead {
+      display: grid;
+      gap: 8px;
+    }
+
+    [data-run-row][hidden] {
+      display: none;
+    }
+
+    @media (max-width: 1400px) {
+      .metric-grid {
+        grid-template-columns: repeat(3, minmax(160px, 1fr));
+      }
+
+      .panel-grid,
+      .lower-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-strip {
+        grid-template-columns: repeat(3, minmax(96px, 1fr));
+      }
+    }
+
+    @media (max-width: 840px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        height: auto;
+        position: static;
+        padding: 12px;
+      }
+
+      .nav-group {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .nav-title,
+      .sidebar-footer {
+        display: none;
+      }
+
+      .topbar {
+        height: auto;
+        padding: 14px;
+        flex-wrap: wrap;
+      }
+
+      .page-title {
+        min-width: 100%;
+      }
+
+      .top-actions {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+
+      .content {
+        padding: 14px;
+      }
+
+      .metric-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .panel-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .risk-board,
+      .gateway-summary,
+      .detail-grid,
+      .screen-grid,
+      .screen-grid.even,
+      .screen-grid.three,
+      .form-grid,
+      .pipeline,
+      .studio-grid,
+      .builder-grid,
+      .run-console,
+      .mock-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-strip {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .nav-group,
+      .flow-strip {
+        grid-template-columns: 1fr;
+      }
+
+      .tabs {
+        width: 100%;
+        overflow-x: auto;
+      }
+
+      .tab {
+        flex: 1 0 auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="주요 메뉴">
+      <div class="brand">
+        <div class="brand-mark"><i data-lucide="workflow"></i></div>
+        <span>RPA Console</span>
+      </div>
+
+      <nav class="nav-group">
+        <div class="nav-title">제작</div>
+        <button class="nav-item" type="button" data-view-target="scenarioStudio"><i data-lucide="video"></i><span>자동화 만들기</span></button>
+        <button class="nav-item" type="button" data-view-target="playground"><i data-lucide="play-square"></i><span>테스트 실행</span></button>
+      </nav>
+
+      <nav class="nav-group">
+        <div class="nav-title">운영</div>
+        <button class="nav-item active" type="button" data-view-target="dashboard"><i data-lucide="layout-dashboard"></i><span>운영 현황</span></button>
+        <button class="nav-item" type="button" data-view-target="workitems"><i data-lucide="list-checks"></i><span>작업 목록</span></button>
+        <button class="nav-item" type="button" data-view-target="humanTasks"><i data-lucide="inbox"></i><span>사람 확인</span></button>
+        <button class="nav-item" type="button" data-view-target="runTrace"><i data-lucide="route"></i><span>실행 기록</span></button>
+      </nav>
+
+      <nav class="nav-group">
+        <div class="nav-title">고급 설정</div>
+        <button class="nav-item" type="button" data-view-target="irValidation"><i data-lucide="file-code-2"></i><span>시나리오 검사</span></button>
+        <button class="nav-item" type="button" data-view-target="llmGateway"><i data-lucide="bot"></i><span>AI 모델 설정</span></button>
+        <button class="nav-item" type="button" data-view-target="security"><i data-lucide="shield-check"></i><span>보안/개인정보</span></button>
+        <button class="nav-item" type="button" data-view-target="idempotency"><i data-lucide="database-zap"></i><span>중복 방지</span></button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="env-card">
+          <strong>운영 환경</strong>
+          <span>작업 대기열 · 데이터 저장소 · AI 응답</span>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="page-title">
+          <h1 id="pageTitle">RPA 운영 대시보드</h1>
+          <p id="pageSubtitle">실행 상태, 사람 확인, AI 비용, 보안 상태를 통합 모니터링</p>
+        </div>
+
+        <label class="search" aria-label="검색">
+          <i data-lucide="search"></i>
+          <input type="search" placeholder="실행번호, 작업명, 자동화 검색" />
+        </label>
+
+        <div class="top-actions">
+          <button class="icon-btn" type="button" title="알림" data-action="notifications"><i data-lucide="bell"></i></button>
+          <button class="icon-btn" type="button" title="새로고침" data-action="refresh"><i data-lucide="refresh-cw"></i></button>
+          <button class="toolbar-btn" type="button" data-action="deployIr"><i data-lucide="upload-cloud"></i><span>자동화 배포</span></button>
+          <button class="toolbar-btn primary" type="button" data-action="newRun"><i data-lucide="play"></i><span>실행하기</span></button>
+        </div>
+      </header>
+
+      <section class="content" id="content">
+        <div class="metric-grid" aria-label="핵심 지표">
+          <article class="metric">
+            <div class="metric-head"><span>자동화 성공률</span><span class="metric-icon"><i data-lucide="check-circle-2"></i></span></div>
+            <div class="metric-value"><strong>97.4%</strong><span class="delta">+2.1%</span></div>
+            <div class="subtle">1,284건 완료 · 31건 시스템 재시도</div>
+          </article>
+          <article class="metric">
+            <div class="metric-head"><span>대기 작업</span><span class="metric-icon"><i data-lucide="rows-3"></i></span></div>
+            <div class="metric-value"><strong>86</strong><span class="delta warn">+14</span></div>
+            <div class="subtle">실행 담당자 배정 대기</div>
+          </article>
+          <article class="metric">
+            <div class="metric-head"><span>사람 확인</span><span class="metric-icon"><i data-lucide="user-check"></i></span></div>
+            <div class="metric-value"><strong>12</strong><span class="delta warn">마감 3건</span></div>
+            <div class="subtle">보안문자 · 승인 · 검증</div>
+          </article>
+          <article class="metric">
+            <div class="metric-head"><span>AI 사용 비용</span><span class="metric-icon"><i data-lucide="badge-dollar-sign"></i></span></div>
+            <div class="metric-value"><strong>$41.80</strong><span class="delta">-8%</span></div>
+            <div class="subtle">예산 초과 차단 2건 · 재사용률 74%</div>
+          </article>
+          <article class="metric">
+            <div class="metric-head"><span>사이트 차단률</span><span class="metric-icon"><i data-lucide="octagon-alert"></i></span></div>
+            <div class="metric-value"><strong>1.8%</strong><span class="delta bad">위험 1건</span></div>
+            <div class="subtle">쇼핑몰 KR 수집 일시중단</div>
+          </article>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h2>실행 상태 보드</h2>
+                <span>대기, 실행, 보류, 완료, 실패 흐름</span>
+              </div>
+              <div class="tabs" role="group" aria-label="실행 필터">
+                <button class="tab active" type="button" data-filter="all" aria-pressed="true"><i data-lucide="list-filter"></i>전체</button>
+                <button class="tab" type="button" data-filter="running" aria-pressed="false"><i data-lucide="activity"></i>실행</button>
+                <button class="tab" type="button" data-filter="suspended" aria-pressed="false"><i data-lucide="pause-circle"></i>보류</button>
+                <button class="tab" type="button" data-filter="failed" aria-pressed="false"><i data-lucide="circle-alert"></i>실패</button>
+                <button class="tab" type="button" data-filter="cancelled" aria-pressed="false"><i data-lucide="ban"></i>취소</button>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>실행</th>
+                    <th>상태</th>
+                    <th>자동화</th>
+                    <th>작업 건</th>
+                    <th>진행</th>
+                    <th>AI</th>
+                    <th>브라우저</th>
+                    <th>최근 이벤트</th>
+                  </tr>
+                </thead>
+                <tbody id="runTable">
+                  <tr data-run-row data-state="running" data-action="runDetail">
+                    <td><span class="run-id">실행-2841</span><div class="subtle">추적번호 7f12</div></td>
+                    <td><span class="status running">실행 중</span></td>
+                    <td>쿠팡 리뷰 수집</td>
+                    <td>WI-9137</td>
+                    <td><div class="progress"><span style="width: 68%"></span></div></td>
+                    <td>$0.42</td>
+                    <td><span class="status active">사용 중</span></td>
+                    <td>단계 완료</td>
+                  </tr>
+                  <tr data-run-row data-state="suspended" data-action="runDetail">
+                    <td><span class="run-id">실행-2838</span><div class="subtle">추적번호 09ad</div></td>
+                    <td><span class="status suspended">사람 확인 대기</span></td>
+                    <td>판매자 포털</td>
+                    <td>WI-9104</td>
+                    <td><div class="progress amber"><span style="width: 44%"></span></div></td>
+                    <td>$0.19</td>
+                    <td><span class="status waiting">반납됨</span></td>
+                    <td>사람 확인 요청</td>
+                  </tr>
+                  <tr data-run-row data-state="completed" data-action="runDetail">
+                    <td><span class="run-id">실행-2832</span><div class="subtle">추적번호 61bc</div></td>
+                    <td><span class="status completed">완료</span></td>
+                    <td>네이버 스토어</td>
+                    <td>WI-9098</td>
+                    <td><div class="progress green"><span style="width: 100%"></span></div></td>
+                    <td>$0.31</td>
+                    <td><span class="status active">종료</span></td>
+                    <td>외부 전송 완료</td>
+                  </tr>
+                  <tr data-run-row data-state="failed" data-action="runDetail">
+                    <td><span class="run-id">실행-2829</span><div class="subtle">추적번호 a3c9</div></td>
+                    <td><span class="status failed">시스템 실패</span></td>
+                    <td>쇼핑몰 KR</td>
+                    <td>WI-9093</td>
+                    <td><div class="progress red"><span style="width: 36%"></span></div></td>
+                    <td>$0.67</td>
+                    <td><span class="status risk">만료</span></td>
+                    <td>사이트 일시중단</td>
+                  </tr>
+                  <tr data-run-row data-state="cancelled" data-action="runDetail">
+                    <td><span class="run-id">실행-2825</span><div class="subtle">추적번호 b8e2</div></td>
+                    <td><span class="status cancelled">취소됨</span></td>
+                    <td>리뷰 가져오기</td>
+                    <td>WI-9089</td>
+                    <td><div class="progress"><span style="width: 52%"></span></div></td>
+                    <td>$0.12</td>
+                    <td><span class="status waiting">회수됨</span></td>
+                    <td>사용자 취소 · 브라우저 정리</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="flow-strip">
+              <div class="flow-step"><strong>대기</strong><span>실행 담당자 배정</span></div>
+              <div class="flow-step"><strong>실행 중</strong><span>현재 화면 확인</span></div>
+              <div class="flow-step"><strong>사람 확인</strong><span>캡처 화면으로 처리</span></div>
+              <div class="flow-step"><strong>재개</strong><span>화면 복원 확인</span></div>
+              <div class="flow-step"><strong>마무리</strong><span>결과 저장</span></div>
+              <div class="flow-step"><strong>종료</strong><span>완료 · 취소 · 실패</span></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h2>사람 확인함</h2>
+                <span>보안문자, 승인, 예외 상황 처리</span>
+              </div>
+              <button class="small-btn" type="button" data-action="sortTasks"><i data-lucide="sliders-horizontal"></i>정렬</button>
+            </div>
+            <div class="task-list">
+              <article class="task-item">
+                <div class="task-top">
+                  <div>
+                    <strong>보안문자 확인</strong>
+                    <span class="subtle">실행-2838 · 판매자 포털</span>
+                  </div>
+                  <span class="status suspended">8분 남음</span>
+                </div>
+                <div class="task-meta">
+                  <span class="pill">종류: 보안문자</span>
+                  <span class="pill">브라우저 반납됨</span>
+                  <span class="pill">이어하기 준비됨</span>
+                </div>
+                <div class="task-actions">
+                  <button class="small-btn" type="button" data-action="taskDetail"><i data-lucide="eye"></i>보기</button>
+                  <button class="small-btn" type="button" data-action="resolveTask"><i data-lucide="check"></i>해소</button>
+                </div>
+              </article>
+              <article class="task-item">
+                <div class="task-top">
+                  <div>
+                    <strong>빈 결과 승인</strong>
+                    <span class="subtle">실행-2819 · 리뷰 가져오기</span>
+                  </div>
+                  <span class="status pending">대기</span>
+                </div>
+                <div class="task-meta">
+                  <span class="pill">빈 결과 허용</span>
+                  <span class="pill">증거 확인</span>
+                </div>
+                <div class="task-actions">
+                  <button class="small-btn" type="button" data-action="evidence"><i data-lucide="file-search"></i>증빙</button>
+                  <button class="small-btn" type="button" data-action="assignTask"><i data-lucide="send"></i>할당</button>
+                </div>
+              </article>
+              <article class="task-item">
+                <div class="task-top">
+                  <div>
+                    <strong>추가 인증 입력 요청</strong>
+                    <span class="subtle">실행-2807 · 파트너 로그인</span>
+                  </div>
+                  <span class="status system">상위 담당자</span>
+                </div>
+                <div class="task-meta">
+                  <span class="pill">담당: 운영 리더</span>
+                  <span class="pill">마감 14:20</span>
+                </div>
+                <div class="task-actions">
+                  <button class="small-btn" type="button" data-action="assignTask"><i data-lucide="user-plus"></i>재할당</button>
+                </div>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <div class="lower-grid">
+          <section class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h2>시나리오 검사</h2>
+                <span>문법, 조건식, 특수 처리 규칙</span>
+              </div>
+              <button class="small-btn" type="button" data-action="downloadReport"><i data-lucide="download"></i>리포트</button>
+            </div>
+            <div class="check-list">
+              <div class="check-row">
+                <span class="check-icon"><i data-lucide="check"></i></span>
+                <div class="check-name"><strong>시나리오 문법</strong><span>흐름 키와 이동 대상 검사</span></div>
+                <span class="status active">통과</span>
+              </div>
+              <div class="check-row">
+                <span class="check-icon"><i data-lucide="check"></i></span>
+                <div class="check-name"><strong>조건식 검사</strong><span>앞 단계 참조, 범위, 타입 검사</span></div>
+                <span class="status active">통과</span>
+              </div>
+              <div class="check-row">
+                <span class="check-icon warn"><i data-lucide="minus"></i></span>
+                <div class="check-name"><strong>이벤트 내용 규칙</strong><span>실행 완료 이벤트 형식 필요</span></div>
+                <span class="status pending">open</span>
+              </div>
+              <div class="check-row">
+                <span class="check-icon warn"><i data-lucide="minus"></i></span>
+                <div class="check-name"><strong>명령어 허용 목록</strong><span>서명된 명령 정책 검토 필요</span></div>
+                <span class="status pending">open</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h2>AI 모델 상태</h2>
+                <span>실시간 응답, 예산 차단, 결과 형식</span>
+              </div>
+              <button class="small-btn" type="button" data-action="gatewayPolicy"><i data-lucide="settings-2"></i>정책</button>
+            </div>
+            <div class="gateway-body">
+              <div class="budget-row">
+                <span>비용</span>
+                <div class="bar green"><span style="width: 52%"></span></div>
+                <strong>52%</strong>
+              </div>
+              <div class="budget-row">
+                <span>응답 길이</span>
+                <div class="bar amber"><span style="width: 71%"></span></div>
+                <strong>71%</strong>
+              </div>
+              <div class="budget-row">
+                <span>응답 지연</span>
+                <div class="bar"><span style="width: 18%"></span></div>
+                <strong>18%</strong>
+              </div>
+              <div class="gateway-summary">
+                <div class="mini-stat"><strong>74%</strong><span>계획 재사용</span></div>
+                <div class="mini-stat"><strong>183ms</strong><span>첫 응답 평균</span></div>
+                <div class="mini-stat"><strong>2</strong><span>예산 차단</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <h2>보안 · 브라우저 사용</h2>
+                <span>개인정보 마스킹, 계정 사용, 브라우저 회수</span>
+              </div>
+              <button class="small-btn" type="button" data-action="auditLog"><i data-lucide="shield"></i>감사</button>
+            </div>
+            <div class="health-list">
+              <div class="health-row">
+                <div><strong>화면/파일 마스킹</strong><span>대기 4 · 실패 0</span></div>
+                <span class="status active">정상</span>
+              </div>
+              <div class="health-row">
+                <div><strong>계정 사용 잠금</strong><span>사용 중 16 · 동시 사용 정책</span></div>
+                <span class="status active">정상</span>
+              </div>
+              <div class="health-row">
+                <div><strong>브라우저 회수</strong><span>만료 1 · 6초마다 정리</span></div>
+                <span class="status pending">확인</span>
+              </div>
+            </div>
+            <div class="risk-board">
+              <div class="risk-tile"><strong>악성 지시 차단</strong><span>숨은 명령 3건 차단</span></div>
+              <div class="risk-tile"><strong>허용 사이트 정책</strong><span>허용 범위 이탈 0건</span></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <h2>실행 기록</h2>
+              <span>추적번호 기준 이벤트, 작업 대기열, 외부 전송 흐름</span>
+            </div>
+            <button class="small-btn" type="button" data-action="copyCorrelation"><i data-lucide="copy"></i>추적번호 복사</button>
+          </div>
+          <div class="timeline">
+            <div class="timeline-item">
+              <span class="dot green"></span>
+              <div class="timeline-copy"><strong>실행 시작</strong><span>실행 담당자 배정 후 브라우저 확보</span></div>
+            </div>
+            <div class="timeline-item">
+              <span class="dot"></span>
+              <div class="timeline-copy"><strong>단계 완료</strong><span>성공 기준 통과 · 기존 실행 계획 재사용</span></div>
+            </div>
+            <div class="timeline-item">
+              <span class="dot amber"></span>
+              <div class="timeline-copy"><strong>사람 확인 요청</strong><span>보안문자 화면 저장 · 브라우저 반납</span></div>
+            </div>
+            <div class="timeline-item">
+              <span class="dot green"></span>
+              <div class="timeline-copy"><strong>외부 전송 완료</strong><span>중복 방지 키 적용 · 중복 전송 무시</span></div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div class="backdrop" id="backdrop"></div>
+  <aside class="drawer" id="drawer" aria-label="새 실행 설정">
+    <div class="drawer-header">
+      <div>
+        <h2>자동화 실행</h2>
+        <span class="subtle">시나리오 v1 · 작업 대기열 · 추적번호 자동 생성</span>
+      </div>
+      <button class="icon-btn" type="button" id="closeDrawer" title="닫기"><i data-lucide="x"></i></button>
+    </div>
+    <div class="drawer-body">
+      <div class="detail-grid">
+        <div class="detail-cell"><span>자동화</span><strong>쿠팡 리뷰 수집 v17</strong></div>
+        <div class="detail-cell"><span>시작 위치</span><strong>로그인 확인</strong></div>
+        <div class="detail-cell"><span>계정 사용</span><strong>동시 2개까지</strong></div>
+        <div class="detail-cell"><span>화면 기록</span><strong>실패 시 마스킹 저장</strong></div>
+      </div>
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <h2>실행 전 검사</h2>
+            <span>실행 전에 막아야 할 항목</span>
+          </div>
+        </div>
+        <div class="check-list">
+          <div class="check-row">
+            <span class="check-icon"><i data-lucide="check"></i></span>
+            <div class="check-name"><strong>조건식 검사</strong><span>조건 8개 준비 완료</span></div>
+            <span class="status active">통과</span>
+          </div>
+          <div class="check-row">
+            <span class="check-icon"><i data-lucide="check"></i></span>
+            <div class="check-name"><strong>개인정보 마스킹</strong><span>마스킹 전 화면 조회 차단</span></div>
+            <span class="status active">통과</span>
+          </div>
+          <div class="check-row">
+            <span class="check-icon warn"><i data-lucide="minus"></i></span>
+            <div class="check-name"><strong>이벤트 내용 규칙</strong><span>실행 완료 이벤트 검토 필요</span></div>
+            <span class="status pending">검토</span>
+          </div>
+        </div>
+      </section>
+      <button class="toolbar-btn primary" type="button" data-action="submitRun"><i data-lucide="play"></i><span>실행 요청</span></button>
+    </div>
+  </aside>
+  <section class="modal" id="modal" role="dialog" aria-modal="true" aria-label="작업 확인">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div>
+          <h2 id="modalTitle">작업 확인</h2>
+          <span class="subtle" id="modalSubtitle">선택한 항목을 처리합니다.</span>
+        </div>
+        <button class="icon-btn" type="button" id="closeModal" title="닫기"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer">
+        <button class="toolbar-btn" type="button" id="cancelModal">취소</button>
+        <button class="toolbar-btn primary" type="button" id="confirmModal">확인</button>
+      </div>
+    </div>
+  </section>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const content = document.getElementById("content");
+    const pageTitle = document.getElementById("pageTitle");
+    const pageSubtitle = document.getElementById("pageSubtitle");
+    const drawer = document.getElementById("drawer");
+    const drawerTitle = drawer.querySelector(".drawer-header h2");
+    const drawerSubtitle = drawer.querySelector(".drawer-header .subtle");
+    const drawerBody = drawer.querySelector(".drawer-body");
+    const backdrop = document.getElementById("backdrop");
+    const modal = document.getElementById("modal");
+    const modalTitle = document.getElementById("modalTitle");
+    const modalSubtitle = document.getElementById("modalSubtitle");
+    const modalBody = document.getElementById("modalBody");
+    const confirmModal = document.getElementById("confirmModal");
+    const toast = document.getElementById("toast");
+    const dashboardView = content.innerHTML.trim();
+
+    const viewMeta = {
+      scenarioStudio: ["자동화 만들기", "업무를 한 번 보여주고 반복 실행할 자동화 시나리오로 정리"],
+      playground: ["테스트 실행", "만든 자동화를 안전하게 시험 실행하고 실제 실행 전 결과를 확인"],
+      dashboard: ["RPA 운영 대시보드", "실행 상태, 사람 확인, AI 비용, 보안 상태를 통합 모니터링"],
+      workitems: ["작업 목록", "대기, 재시도, 실패, 외부 전달 상태를 추적"],
+      humanTasks: ["사람 확인", "보안문자, 추가 인증, 승인, 검증 업무를 담당자 기준으로 처리"],
+      runTrace: ["실행 기록", "자동화가 어떤 순서로 판단하고 실행했는지 조회"],
+      irValidation: ["시나리오 검사", "자동화 시나리오의 문법, 연결, 성공 기준을 배포 전에 검사"],
+      llmGateway: ["AI 모델 설정", "AI 실행기, 실시간 응답, 예산, 결과 형식 정책"],
+      security: ["보안/개인정보", "비밀번호, 개인정보 마스킹, 사이트 접근 정책, 감사 이벤트"],
+      idempotency: ["중복 방지", "같은 데이터를 반복 저장하거나 전송하지 않도록 보장"]
+    };
+
+    const views = {
+      scenarioStudio: () => `
+        <div class="metric-grid" aria-label="시나리오 제작 단계">
+          ${metric("1. 업무 사이트", "준비", "열기 대기", "자동화할 사이트 주소를 입력", "globe")}
+          ${metric("2. 기록된 작업", "5", "+2", "클릭/입력/추출 후보", "list-plus")}
+          ${metric("3. 자동화 초안", "7", "초안", "반복 실행 계획 생성 전", "git-branch", "warn")}
+          ${metric("4. 배포 상태", "초안", "미배포", "테스트 후 배포 가능", "file-lock", "warn")}
+        </div>
+        <div class="section-band">
+          <div class="split-row"><h3>처음이라면 이 순서로 하세요</h3>${button("help-circle", "용어 설명", "help-circle", "termsHelp")}</div>
+          <div class="pipeline">
+            ${pipelineNode("1 업무 사이트 열기", "자동화할 화면을 엽니다", "pending")}
+            ${pipelineNode("2 내가 하는 작업 기록", "한 번 직접 해봅니다", "pending")}
+            ${pipelineNode("3 자동화 시나리오 만들기", "기록을 실행 계획으로 정리", "pending")}
+            ${pipelineNode("4 테스트 실행", "실제 반영 없이 검증", "pending")}
+            ${pipelineNode("5 실제 실행", "검증된 시나리오를 작업 대기열에 등록", "pending")}
+          </div>
+        </div>
+        <div class="studio-grid">
+          <section class="panel">
+            ${panelHeader("1. 업무 사이트 열기와 기록", "사람이 한 번 보여준 작업을 자동화 후보로 저장", [
+              button("play", "내가 하는 작업 기록", "circle-dot", "startRecording"),
+              button("pause", "잠깐 멈춤", "pause", "pauseRecording"),
+              button("square", "기록 끝내기", "square", "stopRecording")
+            ])}
+            <div class="studio-toolbar">
+              <div class="field" style="flex:1; min-width:220px;"><label>업무 사이트 주소</label><input value="https://vendor.example.com/reviews" /></div>
+              ${button("globe", "업무 사이트 열기", "globe", "openBrowserTarget")}
+              ${button("shield-check", "비밀번호/개인정보 숨김 표시", "shield-check", "markSensitive")}
+            </div>
+            <div class="browser-frame">
+              <div class="urlbar"><i data-lucide="lock"></i><input value="vendor.example.com/reviews?page=1" readonly /><span class="status running">기록 중</span></div>
+              <div class="page-preview">
+                <div class="mock-page-head">
+                  <div><strong>판매자 리뷰 포털</strong><div class="subtle">실행기는 나중에 이 화면을 다시 보고 같은 업무를 수행합니다.</div></div>
+                  <button class="small-btn" type="button" data-action="captureCurrentState"><i data-lucide="scan-line"></i>현재 화면 기억하기</button>
+                </div>
+                <div class="mock-grid">
+                  <div class="mock-card"><strong>리뷰 표</strong><span>24개 행이 보입니다. 가져올 데이터 후보입니다.</span><button class="small-btn" type="button" data-action="addExtract"><i data-lucide="table"></i>데이터 가져오기 추가</button></div>
+                  <div class="mock-card"><strong>다음 페이지 버튼</strong><span>반복 수집을 위해 클릭할 버튼입니다.</span><button class="small-btn" type="button" data-action="addAct"><i data-lucide="mouse-pointer-click"></i>클릭 작업 추가</button></div>
+                  <div class="mock-card"><strong>리뷰 없음 메시지</strong><span>데이터가 없을 때 정상 종료할 증거입니다.</span><button class="small-btn" type="button" data-action="addObserve"><i data-lucide="eye"></i>화면 확인 추가</button></div>
+                  <div class="mock-card"><strong>차단/인증 화면</strong><span>보안문자나 추가 인증이 나오면 사람에게 넘깁니다.</span><button class="small-btn" type="button" data-action="addChallenge"><i data-lucide="shield-alert"></i>인증 대응 추가</button></div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("2. 기록된 작업 정리", "클릭 좌표가 아니라 사람이 이해하는 업무 지시로 정리", [
+              button("wand-sparkles", "자동화 시나리오 만들기", "wand-sparkles", "generateIr"),
+              button("save", "저장", "save", "saveScenario")
+            ])}
+            <div class="step-stack">
+              ${studioStep("observe", "페이지 상태 확인", "리뷰 목록 화면인지 확인", "주소와 리뷰 표 단서로 확인", true)}
+              ${studioStep("extract", "리뷰 데이터 가져오기", "현재 페이지의 리뷰 행을 정해진 형식으로 가져오기", "형식 검사 통과 · 최소 행 수 확인")}
+              ${studioStep("act", "다음 페이지 이동", "다음 버튼을 눌러 다음 리뷰 페이지로 이동", "읽기 전용 작업 · 다시 시도 가능")}
+              ${studioStep("verify", "빈 결과 확인", "리뷰 없음 메시지가 보이면 정상 종료", "데이터 없음도 정상 결과로 인정")}
+            </div>
+            <div class="builder-grid">
+              <div class="section-band">
+                <h3>작업 추가</h3>
+                <div class="node-palette">
+                  <button class="small-btn" data-action="addObserve"><i data-lucide="eye"></i>화면 확인: 현재 화면이 맞는지 보기</button>
+                  <button class="small-btn" data-action="addAct"><i data-lucide="mouse-pointer-click"></i>클릭/입력: 버튼 누르기나 값 입력</button>
+                  <button class="small-btn" data-action="addExtract"><i data-lucide="table"></i>데이터 가져오기: 표나 목록 추출</button>
+                  <button class="small-btn" data-action="addVerify"><i data-lucide="check-circle-2"></i>성공 기준: 잘 됐는지 확인</button>
+                </div>
+              </div>
+              <div class="section-band">
+                <h3>선택한 작업</h3>
+                <div class="field"><label>AI에게 시킬 말</label><textarea>현재 페이지에서 리뷰 테이블을 찾아 작성자, 평점, 본문, 작성일을 가져온다. 비밀번호나 개인정보는 포함하지 않는다.</textarea></div>
+                <div class="form-grid">${field("작업 종류", "데이터 가져오기")}${field("결과 형식", "리뷰 목록")}${field("성공 기준", "형식 검사 통과")}${field("실패하면", "한 번 다시 찾아보기")}</div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <section class="panel">
+          ${panelHeader("설계 매핑", "쉬운 작업이 실제 실행 계약으로 어떻게 바뀌는지 확인", [
+            button("file-code-2", "전문 구조 보기", "file-code-2", "irContractMap")
+          ])}
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>쉬운 용어</th><th>화면에서 하는 일</th><th>실행 계약</th><th>검사 포인트</th></tr></thead>
+              <tbody>
+                ${contractRow("화면 조건", "어떤 화면인지 판단", "화면 조건", "주소 패턴, 표/버튼 단서")}
+                ${contractRow("할 일", "AI에게 시킬 작업", "할 일 목록", "화면 확인, 클릭/입력, 데이터 가져오기")}
+                ${contractRow("성공 기준", "잘 됐는지 확인", "성공 기준", "형식 검사, 최소 행 수, 빈 결과 증거")}
+                ${contractRow("다음 이동", "성공/차단/빈 결과 분기", "다음/분기", "우선순위 충돌 금지")}
+                ${contractRow("반복", "다음 페이지를 계속 처리", "반복 조건", "최대 반복 수와 종료 조건")}
+                ${contractRow("결과가 남는 작업", "저장/전송/업로드", "부작용 정책", "중복 방지 키 필수")}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          ${panelHeader("3. 자동화 시나리오 미리보기", "아래 전문 형식은 개발자 확인용입니다. 실제 사용자는 위 작업 목록만 봐도 됩니다.", [
+            button("play", "테스트 실행", "play", "dryRun"),
+            button("upload-cloud", "검증 후 배포", "upload-cloud", "promoteIr")
+          ])}
+          <pre class="code-block">{
+  "start": "observe_reviews",
+  "nodes": {
+    "observe_reviews": {
+      "what": [{ "action": "observe", "instruction": "리뷰 목록 화면인지 판단하고 flags를 설정" }],
+      "on": [
+        { "when": "flags.blocked", "target": "@challenge", "priority": 100 },
+        { "when": "flags.reviews_visible", "target": "extract_reviews", "priority": 80 },
+        { "when": "flags.no_review_message_visible", "target": "@end_no_data", "priority": 10 }
+      ]
+    },
+    "extract_reviews": {
+      "what": [{ "action": "extract", "schema_ref": "reviews@1",
+        "instruction": "리뷰 행을 작성자, 평점, 본문, 작성일로 추출" }],
+      "verify": { "criteria": [{ "type": "extract_schema_valid", "schema_ref": "reviews@1" }] },
+      "next": "next_page"
+    }
+  }
+}</pre>
+        </section>`,
+      playground: () => `
+        <div class="metric-grid" aria-label="플레이 실행 지표">
+          ${metric("실행 방식", "테스트", "안전", "실제 저장/전송은 차단", "shield")}
+          ${metric("현재 작업", "리뷰 가져오기", "대기", "AI 실행기 대기", "crosshair")}
+          ${metric("화면 인식", "94%", "일치", "현재 화면이 시나리오와 일치", "scan-search")}
+          ${metric("사용 한도", "52%", "$0.42", "이번 실행 예산", "badge-dollar-sign")}
+        </div>
+        <div class="run-console">
+          <section class="panel">
+            ${panelHeader("실행 설정", "어떤 자동화를 어떤 값으로 실행할지 정합니다", [
+              button("play", "실제 실행", "play", "playScenario"),
+              button("bug", "테스트 실행", "bug", "dryRun"),
+              button("step-forward", "한 단계 실행", "step-forward", "stepOnce")
+            ])}
+            <div class="step-stack">
+              <div class="form-grid">${field("자동화", "쿠팡 리뷰 수집 v17")}${field("작업 건", "WI-9137")}${field("최대 페이지", "12")}${field("기준 날짜", "2026-06-13")}</div>
+              <div class="section-band">
+                <h3>AI 실행 계획</h3>
+                <div class="playhead">
+                  <div class="split-row"><span>1. 현재 화면이 리뷰 목록인지 확인</span><span class="status active">완료</span></div>
+                  <div class="split-row"><span>2. 리뷰 데이터를 가져오기</span><span class="status running">진행 중</span></div>
+                  <div class="split-row"><span>3. 가져온 데이터 형식 확인</span><span class="status pending">다음</span></div>
+                  <div class="split-row"><span>4. 다음 페이지로 이동</span><span class="status pending">대기</span></div>
+                </div>
+              </div>
+              <div class="section-band">
+                <h3>실행 원칙</h3>
+                <div class="split-row"><span>무엇을 할지</span><span class="status active">업무 지시문</span></div>
+                <div class="split-row"><span>어디를 누를지</span><span class="status system">현재 화면을 보고 판단</span></div>
+                <div class="split-row"><span>성공 여부</span><span class="status active">성공 기준으로 확인</span></div>
+              </div>
+              <div class="section-band">
+                <div class="split-row"><h3>현재 화면 판단 근거</h3>${button("scan-search", "근거 자세히", "scan-search", "pageStateEvidence")}</div>
+                <div class="split-row"><span>주소 패턴</span><span class="status active">/reviews?page={n}</span></div>
+                <div class="split-row"><span>찾은 화면 단서</span><span class="status active">리뷰 표, 다음 버튼</span></div>
+                <div class="split-row"><span>실행 중 표시</span><span class="status active">리뷰 표 보임</span></div>
+                <div class="split-row"><span>인증/차단</span><span class="status pending">없음</span></div>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("실행 화면", "현재 페이지를 보고 AI 실행기가 판단한 내용", [
+              button("scan-line", "화면 다시 보기", "scan-line", "stagehandObserve"),
+              button("wand-sparkles", "다시 찾기", "wand-sparkles", "selfHeal"),
+              button("x", "중지", "x", "abortRun")
+            ])}
+            <div class="browser-frame">
+              <div class="urlbar"><i data-lucide="globe"></i><input value="vendor.example.com/reviews?page=2" readonly /><span class="status running">실행 중</span></div>
+              <div class="page-preview">
+                <div class="executor-card">
+                  <h3>현재 화면 정보</h3>
+                  <div class="form-grid">${field("주소 패턴", "/reviews?page={n}")}${field("화면 구조 값", "9af3c1")}${field("리뷰 표 보임", "예")}${field("인증/차단", "없음")}</div>
+                </div>
+                <div class="executor-card">
+                  <h3>AI 호출 정보</h3>
+                  ${budget("비용 한도", 52, "green")}
+                  ${budget("응답 길이", 41, "")}
+                  <div class="split-row"><span>실시간 응답</span><span class="status active">진행 중</span></div>
+                  <div class="split-row"><span>형식 검사</span><span class="status active">통과</span></div>
+                  <pre class="code-block">작업: "데이터 가져오기"
+모델: "codex-sse"
+결과 형식: "정해진 형식"
+마스킹: "통과"</pre>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <section class="panel">
+          ${panelHeader("실행 기록", "AI 실행기가 그때그때 페이지를 보고 내린 판단", [button("download", "로그 저장", "download", "exportTrace")])}
+          <div class="timeline">
+            ${timeline("green", "화면 확인", "AI 실행기가 리뷰 표와 주소 패턴을 확인")}
+            ${timeline("", "데이터 가져오기", "리뷰 24행을 정해진 형식으로 추출")}
+            ${timeline("green", "성공 확인", "형식 검사 통과 · 확신도 0.96")}
+            ${timeline("amber", "클릭/입력", "다음 버튼 클릭 예정 · 테스트 실행에서는 차단")}
+          </div>
+        </section>`
+      ,
+      dashboard: () => dashboardView,
+      workitems: () => `
+        <div class="metric-grid" aria-label="작업 지표">
+          ${metric("대기 작업", "86", "+14", "실행 대기열에 있음", "rows-3")}
+          ${metric("재시도 예정", "23", "시스템", "잠시 후 다시 실행", "rotate-ccw")}
+          ${metric("수동 확인 필요", "7", "검토", "실패 보관함", "triangle-alert", "warn")}
+          ${metric("외부 전송 지연", "4", "평균 2분", "외부 시스템 재전송", "send")}
+        </div>
+        <div class="screen-grid">
+          <section class="panel">
+            ${panelHeader("작업 대기열", "작업 상태, 재시도 횟수, 연결된 실행", [
+              button("filter", "필터", "sliders-horizontal", "filterWorkitems"),
+              button("download", "내보내기", "download", "exportCsv")
+            ])}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>작업 건</th><th>상태</th><th>자동화</th><th>시도</th><th>실행</th><th>점유 상태</th><th>처리</th></tr></thead>
+                <tbody>
+                  ${workitemRow("WI-9137", "processing", "쿠팡 리뷰 수집", "1 / 3", "run_2841", "active", "workitemDetail")}
+                  ${workitemRow("WI-9104", "processing", "판매자 포털", "1 / 3", "run_2838", "paused", "workitemDetail")}
+                  ${workitemRow("WI-9093", "retry", "쇼핑몰 KR", "2 / 3", "run_2829", "backoff 07m", "workitemDetail")}
+                  ${workitemRow("WI-9042", "abandoned", "파트너 로그인", "3 / 3", "-", "실패 보관", "replayDlq")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("실패 작업 재처리", "중단된 작업을 다시 실행", [button("play", "재처리", "play", "replayDlq")])}
+            <div class="check-list">
+              ${checkRow("작업 점유 충돌", "같은 작업을 두 실행기가 동시에 잡으려 함", "pending")}
+              ${checkRow("사이트 일시중단", "차단률 회복 후 재시도", "waiting")}
+              ${checkRow("결과 저장 실패", "저장소 회복 확인", "system")}
+            </div>
+          </section>
+        </div>
+        <section class="panel">
+          ${panelHeader("외부 전송 상태", "수집 성공과 외부 전달을 분리해서 추적", [
+            button("send", "전송 재시도", "send", "retrySink")
+          ])}
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>전송 건</th><th>대상</th><th>중복 방지 키</th><th>상태</th><th>최근 응답</th></tr></thead>
+              <tbody>
+                ${sinkRow("SD-4421", "리뷰 저장소", "리뷰수집:상품-773:리뷰-991", "delivered", "200 OK")}
+                ${sinkRow("SD-4422", "CRM", "리뷰수집:상품-773:리뷰-992", "pending", "2분 후 재시도")}
+                ${sinkRow("SD-4423", "데이터 웨어하우스", "리뷰수집:상품-773:리뷰-993", "dead_letter", "인증 만료")}
+              </tbody>
+            </table>
+          </div>
+        </section>`,
+      humanTasks: () => `
+        <div class="metric-grid" aria-label="사람 확인 지표">
+          ${metric("미처리", "12", "마감 3건", "사람 확인 대기", "inbox", "warn")}
+          ${metric("처리 완료", "38", "+11", "오늘 처리", "check-check")}
+          ${metric("상위 담당자", "2", "리더", "관리자 재배정", "user-plus", "warn")}
+          ${metric("기한 만료", "1", "업무 실패", "시간 초과", "timer-off", "bad")}
+          ${metric("평균 처리", "06m", "-1m", "최근 24시간", "clock")}
+        </div>
+        <div class="screen-grid">
+          <section class="panel">
+            ${panelHeader("사람 확인함", "할당, 진행 중, 상위 담당자 이관", [
+              button("user-plus", "일괄 할당", "user-plus", "bulkAssign"),
+              button("sliders-horizontal", "마감순 정렬", "sliders-horizontal", "sortTasks")
+            ])}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>확인 건</th><th>종류</th><th>상태</th><th>실행</th><th>담당자</th><th>남은 시간</th><th>처리</th></tr></thead>
+                <tbody>
+                  ${taskTableRow("HT-1881", "captcha", "open", "run_2838", "운영-1", "08m", "taskDetail")}
+                  ${taskTableRow("HT-1872", "validation", "assigned", "run_2819", "검수-2", "21m", "evidence")}
+                  ${taskTableRow("HT-1868", "mfa", "escalated", "run_2807", "운영 리더", "03m", "assignTask")}
+                  ${taskTableRow("HT-1859", "approval", "in_progress", "run_2798", "재무팀", "17m", "resolveTask")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("캡처 화면 확인", "브라우저를 붙잡지 않고 저장된 화면으로 처리", [button("eye", "미리보기", "eye", "taskDetail")])}
+            <div class="task-list">
+              <article class="task-item">
+                <div class="task-top"><div><strong>보안문자 캡처</strong><span class="subtle">민감정보 마스킹 완료 · 화면번호 ps_441</span></div><span class="status suspended">8분 남음</span></div>
+                <div class="task-meta"><span class="pill">이어할 작업: 리뷰 가져오기</span><span class="pill">서명키: 2026-06</span></div>
+                <div class="task-actions">${button("check", "해소", "check", "resolveTask")}${button("x", "취소", "x", "cancelTask")}</div>
+              </article>
+            </div>
+          </section>
+        </div>
+        <section class="panel">
+          ${panelHeader("이어하기 정보", "사람 확인 후 자동화가 어디서 다시 시작되는지 확인", [
+            button("key-round", "복원 정보", "key-round", "resumeDetail")
+          ])}
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>확인 건</th><th>재개할 작업</th><th>화면 복원</th><th>이어하기 키</th><th>만료</th></tr></thead>
+              <tbody>
+                ${resumeRow("HT-1881", "리뷰 데이터 가져오기", "리뷰 목록 화면 94%", "키-9f12", "14:20")}
+                ${resumeRow("HT-1872", "빈 결과 확인", "데이터 없음 메시지", "키-82ca", "14:33")}
+                ${resumeRow("HT-1868", "추가 인증 후 로그인", "로그인 화면", "키-a771", "14:15")}
+              </tbody>
+            </table>
+          </div>
+        </section>`,
+      runTrace: () => `
+        <div class="section-band">
+          <div class="action-strip">
+            ${button("search", "추적번호 조회", "search", "traceSearch")}
+            ${button("copy", "추적번호 복사", "copy", "copyCorrelation")}
+            ${button("download", "기록 내보내기", "download", "exportTrace")}
+          </div>
+          <div class="pipeline">
+            ${pipelineNode("실행 배정", "실행기-03", "active")}
+            ${pipelineNode("브라우저 확보", "브라우저-772", "active")}
+            ${pipelineNode("작업 수행", "리뷰 가져오기", "active")}
+            ${pipelineNode("성공 확인", "통과 · 94%", "active")}
+            ${pipelineNode("외부 전송", "재시도 대기", "pending")}
+          </div>
+        </div>
+        <section class="panel">
+          ${panelHeader("전체 상태 전이", "실행 상태머신과 작업/사람 확인 상태를 한 줄로 연결", [button("route", "전이 규칙", "route", "transitionDetail")])}
+          <div class="pipeline">
+            ${pipelineNode("대기", "작업 대기열", "active")}
+            ${pipelineNode("점유", "실행기 배정", "active")}
+            ${pipelineNode("실행 중", "화면 판단/작업", "active")}
+            ${pipelineNode("중단 준비", "보안문자 감지", "pending")}
+            ${pipelineNode("사람 확인", "브라우저 반납", "pending")}
+          </div>
+          <div class="pipeline">
+            ${pipelineNode("재개 요청", "처리 완료 이벤트", "pending")}
+            ${pipelineNode("복원 중", "화면 상태 대조", "pending")}
+            ${pipelineNode("마무리", "결과 저장 우선", "pending")}
+            ${pipelineNode("완료", "증빙/이벤트 확정", "pending")}
+            ${pipelineNode("외부 전송", "실행 종료와 분리", "system")}
+          </div>
+        </section>
+        <div class="screen-grid">
+          <section class="panel">
+            ${panelHeader("상태 흐름", "실행, 작업, 사람 확인의 상태 변화", [button("route", "상세 보기", "route", "transitionDetail")])}
+            <div class="timeline">
+              ${timeline("green", "대기 → 배정", "실행기 배정 · 브라우저 확보")}
+              ${timeline("", "배정 → 실행 중", "초기 준비 성공")}
+              ${timeline("amber", "실행 중 → 사람 확인", "차단/인증 감지 · 이어하기 지점 저장")}
+              ${timeline("green", "사람 확인 → 재개 요청", "담당자 처리 완료")}
+              ${timeline("", "재개 중 → 실행 중", "현재 화면 확인 통과")}
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("이벤트 내용", "추적번호와 중복 방지 키", [button("file-code-2", "내용 규칙", "file-code-2", "payloadSchema")])}
+            <pre class="code-block">이벤트 종류: "실행 재개 요청"
+내용 규칙: "사람 확인 후 이어하기"
+추적번호: "7f12-..."
+정렬 기준: "실행-2838"
+중복 방지 키: "실행-2838:이어하기:HT-1881"</pre>
+          </section>
+        </div>`,
+      irValidation: () => `
+        <div class="metric-grid" aria-label="시나리오 검사 지표">
+          ${metric("문법", "통과", "v1", "시나리오 정의", "file-check")}
+          ${metric("조건식", "8", "저장됨", "조건식 검사 성공", "braces")}
+          ${metric("흐름", "2", "주의", "도달 안 되는 단계 후보", "git-branch", "warn")}
+          ${metric("특수 처리", "3", "규칙", "인증/사람확인/빈결과", "at-sign")}
+        </div>
+        <div class="screen-grid">
+          <section class="panel">
+            ${panelHeader("검사 결과", "저장/배포 전 확인 항목", [
+              button("play", "검증 실행", "play", "validateIr"),
+              button("upload-cloud", "승격", "upload-cloud", "promoteIr")
+            ])}
+            <div class="check-list">
+              ${checkRow("흐름 키", "다음/분기/반복/대체/종료 중 하나만 사용", "active")}
+              ${checkRow("조건식 범위", "파라미터, 이전 단계, 현재 화면 조건 참조 정상", "active")}
+              ${checkRow("이동 대상", "login_retry 단계가 정의되지 않았을 수 있음", "pending")}
+              ${checkRow("빈 결과 증거", "데이터 없음 종료 조건 확인 필요", "pending")}
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("전문 형식 미리보기", "분기 우선순위와 특수 처리", [button("file-search", "규칙 보기", "file-search", "viewSchema")])}
+            <pre class="code-block">"on": [
+  { "when": "flags.blocked", "target": "@challenge", "priority": 100 },
+  { "when": "flags.login_required", "target": "login_flow", "priority": 90 },
+  { "when": "flags.reviews_visible", "target": "extract_reviews", "priority": 80 }
+]</pre>
+          </section>
+        </div>`,
+      llmGateway: () => `
+        <div class="metric-grid" aria-label="AI 지표">
+          ${metric("AI 호출", "1,482", "+6%", "실시간 응답", "radio-tower")}
+          ${metric("첫 응답", "183ms", "-22ms", "평균", "timer")}
+          ${metric("형식 오류", "9", "1회 보정", "결과 형식 재요청", "wrench", "warn")}
+          ${metric("예산 차단", "2", "차단", "비용 한도 초과", "ban", "bad")}
+        </div>
+        <div class="screen-grid even">
+          <section class="panel">
+            ${panelHeader("AI 모델 능력", "사용 가능한 모델과 지원 기능", [button("settings-2", "정책", "settings-2", "gatewayPolicy")])}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>모델 연결</th><th>이미지 이해</th><th>정형 결과</th><th>실시간 응답</th><th>최대 입력</th><th>상태</th></tr></thead>
+                <tbody>
+                  ${adapterRow("codex-sse", "true", "true", "true", "128k", "active")}
+                  ${adapterRow("litellm-sse", "true", "true", "true", "64k", "active")}
+                  ${adapterRow("vllm-sse", "false", "partial", "true", "32k", "pending")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("예산 보호", "비용과 응답 길이가 한도를 넘으면 즉시 중단", [button("save", "저장", "save", "savePolicy")])}
+            <div class="gateway-body">
+              ${budget("비용", 52, "green")}
+              ${budget("응답 길이", 71, "amber")}
+              ${budget("응답 지연", 18, "")}
+              <div class="form-grid">
+                ${field("최대 비용", "$0.85 / 실행")}
+                ${field("지연 제한", "12초")}
+                ${field("대체 모델", "gpt-4.1-mini")}
+                ${field("형식 보정", "1회")}
+              </div>
+            </div>
+          </section>
+        </div>
+        <section class="panel">
+          ${panelHeader("AI 호출 상세", "응답 스트림, 사용량, 예산 차단, 대체 모델 사용 여부", [
+            button("radio-tower", "호출 로그", "radio-tower", "llmCallDetail")
+          ])}
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>호출</th><th>작업</th><th>실시간 응답</th><th>사용량</th><th>결과 형식</th><th>대체 모델</th><th>상태</th></tr></thead>
+              <tbody>
+                ${llmCallRow("AI-9021", "데이터 가져오기", "첫 응답 183ms", "$0.42 / 52%", "통과", "미사용", "active")}
+                ${llmCallRow("AI-9018", "화면 확인", "무응답 8초", "$0.11 / 18%", "통과", "사용", "system")}
+                ${llmCallRow("AI-9004", "데이터 가져오기", "중단됨", "$0.85 / 100%", "폐기", "미사용", "risk")}
+              </tbody>
+            </table>
+          </div>
+        </section>`,
+      security: () => `
+        <div class="metric-grid" aria-label="보안 지표">
+          ${metric("마스킹 대기", "4", "실패 0", "화면/파일 마스킹", "scan-eye")}
+          ${metric("비밀값 접근", "0", "거부", "권한 정책", "key-round")}
+          ${metric("사이트 이탈", "0", "정상", "허용 사이트만 접근", "shield-check")}
+          ${metric("브라우저 만료", "1", "정리됨", "사용 후 회수", "power", "warn")}
+        </div>
+        <div class="screen-grid">
+          <section class="panel">
+            ${panelHeader("보안 경계", "비밀번호, 화면 파일, 악성 지시 차단", [button("shield", "감사 로그", "shield", "auditLog")])}
+            <div class="check-list">
+              ${checkRow("안전한 기록 저장", "로그와 이벤트에 비밀번호가 섞이지 않게 검사", "active")}
+              ${checkRow("마스킹 전 조회 차단", "마스킹 완료 전 화면/파일 조회 금지", "active")}
+              ${checkRow("악성 지시 감지", "숨은 명령 3건 차단", "system")}
+              ${checkRow("명령어 허용 목록", "서명된 명령 정책 필요", "pending")}
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("계정/브라우저 회수", "계정과 브라우저를 동시에 안전하게 사용", [
+              button("rotate-ccw", "정리 작업 실행", "rotate-ccw", "runSweeper"),
+              button("octagon-alert", "사이트 일시중단", "octagon-alert", "openCircuit")
+            ])}
+            <div class="health-list">
+              ${health("계정 사용 잠금", "사용 중 16 · 최대 동시 2개", "active")}
+              ${health("브라우저 사용 잠금", "만료 1 · 전체 정리 정책", "pending")}
+              ${health("사이트 일시중단", "쇼핑몰 KR 중단 · 12분 남음", "risk")}
+              ${health("파일 무결성", "해시 불일치 0", "active")}
+            </div>
+          </section>
+        </div>
+        <section class="panel">
+          ${panelHeader("증빙 파일 처리", "화면 파일은 마스킹, 보존, 무결성 검사를 통과해야 조회 가능", [
+            button("scan-eye", "증빙 처리 상세", "scan-eye", "artifactLifecycle")
+          ])}
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>처리 작업</th><th>주기</th><th>대상</th><th>실패</th><th>상태</th></tr></thead>
+              <tbody>
+                ${jobRow("마스킹 작업", "수초마다", "대기 4건", "0건", "active")}
+                ${jobRow("보존기간 정리", "하루 1회", "만료 18건", "0건", "pending")}
+                ${jobRow("무결성 검사", "하루 1회", "파일 1,204개", "0건", "active")}
+                ${jobRow("고아 파일 정리", "하루 1회", "참조 없음 7건", "1건", "risk")}
+              </tbody>
+            </table>
+          </div>
+        </section>`,
+      idempotency: () => `
+        <div class="metric-grid" aria-label="중복 방지 지표">
+          ${metric("원본 중복 제거", "99.1%", "+0.4", "같은 데이터 1건만 저장", "database")}
+          ${metric("외부 전송 재시도", "18", "중복 방지", "전송 키 사용", "send")}
+          ${metric("인증 시도", "6", "중복 없음", "같은 인증은 한 번만", "fingerprint")}
+          ${metric("계획 충돌", "3", "폐기", "먼저 검증된 계획 사용", "git-compare")}
+        </div>
+        <div class="screen-grid">
+          <section class="panel">
+            ${panelHeader("중복 방지 규칙", "원본 저장, 외부 전송, 인증 시도", [button("file-code-2", "상세 규칙", "file-code-2", "viewDdl")])}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>대상</th><th>중복 판단 기준</th><th>최근 처리</th><th>상태</th></tr></thead>
+                <tbody>
+                  ${idemRow("원본 데이터", "고객+자동화+대상+원본키+내용해시", "42건 무시", "active")}
+                  ${idemRow("외부 전송", "정리된 레코드+전송 대상+시도번호", "18건 재시도", "pending")}
+                  ${idemRow("인증 처리", "인증 이벤트+처리 방식", "2건 무시", "active")}
+                  ${idemRow("실행 계획", "시나리오+단계+화면 특징+모델", "3건 폐기", "system")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            ${panelHeader("동시 실행 충돌 처리", "여러 실행기가 같은 화면을 동시에 해석할 때", [button("play", "시뮬레이션", "play", "simulateRace")])}
+            <div class="pipeline">
+              ${pipelineNode("계획 없음", "실행기 A/B", "pending")}
+              ${pipelineNode("AI 해석", "동시 진행", "system")}
+              ${pipelineNode("검증 통과", "실행기 A", "active")}
+              ${pipelineNode("저장 충돌", "실행기 B", "risk")}
+              ${pipelineNode("기존 계획 사용", "늦은 결과 폐기", "active")}
+            </div>
+          </section>
+        </div>
+        <section class="panel">
+          ${panelHeader("계정/브라우저 점유 상세", "동시에 같은 계정과 브라우저를 잡을 때 충돌을 막습니다", [
+            button("lock-keyhole", "점유 규칙", "lock-keyhole", "leaseDetail")
+          ])}
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>대상</th><th>점유 기준</th><th>현재 사용</th><th>만료</th><th>처리</th></tr></thead>
+              <tbody>
+                ${leaseRow("판매자 기본 계정", "사이트별 2개 슬롯", "2 / 2", "12분 후", "대기")}
+                ${leaseRow("브라우저-772", "실행 단위", "사용 중", "8분 후", "정리 예정")}
+                ${leaseRow("쇼핑몰 KR", "사이트 일시중단", "중단", "12분 후", "자동 재개")}
+              </tbody>
+            </table>
+          </div>
+        </section>`
+    };
+
+    function metric(label, value, delta, note, icon, tone = "") {
+      const deltaClass = tone === "bad" ? "delta bad" : tone === "warn" ? "delta warn" : "delta";
+      return `<article class="metric">
+        <div class="metric-head"><span>${label}</span><span class="metric-icon"><i data-lucide="${icon}"></i></span></div>
+        <div class="metric-value"><strong>${value}</strong><span class="${deltaClass}">${delta}</span></div>
+        <div class="subtle">${note}</div>
+      </article>`;
+    }
+
+    function studioStep(kind, title, instruction, meta, active = false) {
+      const primitiveLabel = {
+        observe: "화면 확인",
+        act: "클릭/입력",
+        extract: "데이터 가져오기",
+        verify: "성공 확인"
+      }[kind] || kind;
+      return `<article class="step-card ${active ? "active-step" : ""}">
+        <div class="step-head">
+          <div><strong>${title}</strong><span class="subtle">${instruction}</span></div>
+          <span class="primitive ${kind}">${primitiveLabel}</span>
+        </div>
+        <div class="task-meta"><span class="pill">${meta}</span><span class="pill">AI 실행기</span><span class="pill">성공 기준 필요</span></div>
+        <div class="action-strip">${button("edit", "편집", "pencil", "editStep")}${button("play", "이 작업 테스트", "play", "stepOnce")}${button("copy", "복제", "copy", "duplicateStep")}</div>
+      </article>`;
+    }
+
+    function button(icon, label, lucideIcon, action) {
+      return `<button class="small-btn" type="button" data-action="${action}"><i data-lucide="${lucideIcon || icon}"></i>${label}</button>`;
+    }
+
+    function panelHeader(title, subtitle, actions = []) {
+      return `<div class="panel-header"><div class="panel-title"><h2>${title}</h2><span>${subtitle}</span></div><div class="action-strip">${actions.join("")}</div></div>`;
+    }
+
+    function contractRow(label, easy, contract, check) {
+      return `<tr><td><strong>${label}</strong></td><td>${easy}</td><td><span class="run-id">${contract}</span></td><td>${check}</td></tr>`;
+    }
+
+    function sinkRow(id, target, key, state, response) {
+      const stateMap = {
+        delivered: ["active", "전송 완료"],
+        pending: ["pending", "재시도 대기"],
+        dead_letter: ["risk", "수동 확인"]
+      };
+      const [statusClass, label] = stateMap[state] || ["system", state];
+      return `<tr><td><span class="run-id">${id}</span></td><td>${target}</td><td class="mono">${key}</td><td><span class="status ${statusClass}">${label}</span></td><td>${response}</td></tr>`;
+    }
+
+    function resumeRow(id, node, restore, token, expires) {
+      return `<tr><td><span class="run-id">${id}</span></td><td>${node}</td><td>${restore}</td><td>${token}</td><td><span class="status pending">${expires}</span></td></tr>`;
+    }
+
+    function llmCallRow(id, task, stream, usage, format, fallback, state) {
+      const stateLabel = { active: "정상", system: "대체 모델", risk: "예산 차단" }[state] || state;
+      return `<tr><td><span class="run-id">${id}</span></td><td>${task}</td><td>${stream}</td><td>${usage}</td><td>${format}</td><td>${fallback}</td><td><span class="status ${state}">${stateLabel}</span></td></tr>`;
+    }
+
+    function jobRow(name, cadence, target, failed, state) {
+      const stateLabel = { active: "정상", pending: "대기", risk: "확인 필요", system: "시스템" }[state] || state;
+      return `<tr><td><strong>${name}</strong></td><td>${cadence}</td><td>${target}</td><td>${failed}</td><td><span class="status ${state}">${stateLabel}</span></td></tr>`;
+    }
+
+    function leaseRow(target, rule, current, expires, handling) {
+      return `<tr><td><strong>${target}</strong></td><td>${rule}</td><td>${current}</td><td>${expires}</td><td>${handling}</td></tr>`;
+    }
+
+    function workitemRow(id, state, connector, attempts, run, checkout, action) {
+      const stateLabel = { processing: "처리 중", retry: "재시도 대기", abandoned: "수동 확인" }[state] || state;
+      const checkoutLabel = { active: "사용 중", paused: "일시정지", "backoff 07m": "7분 후 재시도", DLQ: "실패 보관", "실패 보관": "실패 보관" }[checkout] || checkout;
+      return `<tr data-action="${action}"><td><span class="run-id">${id}</span></td><td><span class="status ${state === "abandoned" ? "failed" : state === "retry" ? "pending" : "running"}">${stateLabel}</span></td><td>${connector}</td><td>${attempts}</td><td>${run.replace("run_", "실행-")}</td><td>${checkoutLabel}</td><td>${button("eye", "상세", "eye", action)}</td></tr>`;
+    }
+
+    function taskTableRow(id, kind, state, run, assignee, sla, action) {
+      const statusClass = state === "escalated" ? "system" : state === "open" ? "pending" : "running";
+      const kindLabel = { captcha: "보안문자", validation: "검증", mfa: "추가 인증", approval: "승인" }[kind] || kind;
+      const stateLabel = { open: "대기", assigned: "할당됨", escalated: "상위 담당자", in_progress: "진행 중" }[state] || state;
+      return `<tr data-action="${action}"><td><span class="run-id">${id}</span></td><td>${kindLabel}</td><td><span class="status ${statusClass}">${stateLabel}</span></td><td>${run.replace("run_", "실행-")}</td><td>${assignee}</td><td>${sla}</td><td>${button("eye", "열기", "eye", action)}</td></tr>`;
+    }
+
+    function adapterRow(name, vision, json, sse, context, state) {
+      const yesNo = { true: "지원", false: "미지원", partial: "일부 지원" };
+      const stateLabel = { active: "사용 중", pending: "검토 중" }[state] || state;
+      return `<tr><td><span class="run-id">${name}</span></td><td>${yesNo[vision] || vision}</td><td>${yesNo[json] || json}</td><td>${yesNo[sse] || sse}</td><td>${context}</td><td><span class="status ${state}">${stateLabel}</span></td></tr>`;
+    }
+
+    function idemRow(table, key, conflicts, state) {
+      const stateLabel = { active: "정상", pending: "대기", system: "확인" }[state] || state;
+      return `<tr><td><span class="run-id">${table}</span></td><td class="mono">${key}</td><td>${conflicts}</td><td><span class="status ${state}">${stateLabel}</span></td></tr>`;
+    }
+
+    function checkRow(name, detail, state) {
+      const icon = state === "active" ? "check" : "minus";
+      const iconClass = state === "active" ? "check-icon" : "check-icon warn";
+      const stateLabel = { active: "정상", pending: "확인 필요", waiting: "대기", system: "시스템", risk: "위험" }[state] || state;
+      return `<div class="check-row"><span class="${iconClass}"><i data-lucide="${icon}"></i></span><div class="check-name"><strong>${name}</strong><span>${detail}</span></div><span class="status ${state}">${stateLabel}</span></div>`;
+    }
+
+    function health(name, detail, state) {
+      const stateLabel = { active: "정상", pending: "확인", risk: "주의", system: "시스템" }[state] || state;
+      return `<div class="health-row"><div><strong>${name}</strong><span>${detail}</span></div><span class="status ${state}">${stateLabel}</span></div>`;
+    }
+
+    function pipelineNode(name, detail, state) {
+      const stateLabel = { active: "완료", pending: "대기", system: "진행", risk: "주의" }[state] || state;
+      return `<div class="pipeline-node"><strong>${name}</strong><span>${detail}</span><span class="status ${state}">${stateLabel}</span></div>`;
+    }
+
+    function timeline(color, title, detail) {
+      return `<div class="timeline-item"><span class="dot ${color}"></span><div class="timeline-copy"><strong>${title}</strong><span>${detail}</span></div></div>`;
+    }
+
+    function budget(label, pct, tone) {
+      return `<div class="budget-row"><span>${label}</span><div class="bar ${tone}"><span style="width:${pct}%"></span></div><strong>${pct}%</strong></div>`;
+    }
+
+    function field(label, value) {
+      return `<div class="field"><label>${label}</label><input value="${value}" /></div>`;
+    }
+
+    function renderView(view) {
+      const safeView = views[view] ? view : "dashboard";
+      content.innerHTML = views[safeView]();
+      const [title, subtitle] = viewMeta[safeView];
+      pageTitle.textContent = title;
+      pageSubtitle.textContent = subtitle;
+      document.querySelectorAll("[data-view-target]").forEach((item) => {
+        item.classList.toggle("active", item.dataset.viewTarget === safeView);
+      });
+      window.scrollTo({ top: 0, left: 0 });
+      refreshIcons();
+    }
+
+    function setFilter(filter) {
+      document.querySelectorAll("[data-filter]").forEach((tab) => {
+        const on = tab.dataset.filter === filter;
+        tab.classList.toggle("active", on);
+        tab.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      document.querySelectorAll("[data-run-row]").forEach((row) => {
+        const state = row.dataset.state;
+        row.hidden = filter !== "all" && state !== filter;
+      });
+    }
+
+    let lastFocused = null;
+    function getFocusable(container) {
+      return [...container.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+        .filter((el) => el.offsetParent !== null);
+    }
+    function moveFocusInto(container) {
+      lastFocused = document.activeElement;
+      const f = getFocusable(container);
+      if (f.length) f[0].focus();
+    }
+    function restoreFocus() {
+      if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus();
+      lastFocused = null;
+    }
+
+    function setDrawer(open) {
+      drawer.classList.toggle("open", open);
+      backdrop.classList.toggle("open", open);
+      if (open) moveFocusInto(drawer);
+      else restoreFocus();
+    }
+
+    function openDrawer(title, subtitle, body) {
+      drawerTitle.textContent = title;
+      drawer.setAttribute("aria-label", title);
+      drawerSubtitle.textContent = subtitle;
+      drawerBody.innerHTML = body;
+      setDrawer(true);
+      refreshIcons();
+    }
+
+    function closeDrawer() {
+      setDrawer(false);
+    }
+
+    function openModal(title, subtitle, body, confirmLabel = "확인", onConfirm = null) {
+      modalTitle.textContent = title;
+      modal.setAttribute("aria-label", title);
+      modalSubtitle.textContent = subtitle;
+      modalBody.innerHTML = body;
+      confirmModal.textContent = confirmLabel;
+      confirmModal.onclick = () => {
+        if (onConfirm) onConfirm();
+        setModal(false);
+      };
+      setModal(true);
+      refreshIcons();
+    }
+
+    function setModal(open) {
+      modal.classList.toggle("open", open);
+      if (open) moveFocusInto(modal);
+      else restoreFocus();
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 2400);
+    }
+
+    function refreshIcons() {
+      if (window.lucide) lucide.createIcons();
+      // [a11y] 장식용 아이콘은 스크린리더에서 숨김(버튼 텍스트/타이틀이 접근명 제공)
+      document.querySelectorAll("svg.lucide").forEach((svg) => svg.setAttribute("aria-hidden", "true"));
+    }
+
+    function newRunBody() {
+      return `<div class="detail-grid">
+        <div class="detail-cell"><span>자동화</span><strong>쿠팡 리뷰 수집 v17</strong></div>
+        <div class="detail-cell"><span>시작 위치</span><strong>로그인 확인</strong></div>
+        <div class="detail-cell"><span>계정 사용</span><strong>동시 2개까지</strong></div>
+        <div class="detail-cell"><span>화면 기록</span><strong>실패 시 마스킹 저장</strong></div>
+      </div>
+      <div class="form-grid">
+        ${field("작업 대상", "상품 리뷰 수집")}
+        ${field("최대 페이지", "12")}
+        ${field("기준 날짜", "2026-06-13")}
+        ${field("실행 예산", "$0.85")}
+      </div>
+      <section class="section-band">
+        <h3>실행 전 검사</h3>
+        ${checkRow("조건식 검사", "조건 8개 준비 완료", "active")}
+        ${checkRow("개인정보 마스킹", "마스킹 전 화면 조회 차단", "active")}
+        ${checkRow("이벤트 내용 규칙", "실행 완료 이벤트 검토 필요", "pending")}
+      </section>
+      <button class="toolbar-btn primary" type="button" data-action="submitRun"><i data-lucide="play"></i><span>실행 요청</span></button>`;
+    }
+
+    function deployBody() {
+      return `<div class="form-grid">
+        ${field("자동화 이름", "쿠팡 리뷰 수집")}
+        ${field("버전", "18")}
+        <div class="field"><label>배포 환경</label><select><option>운영</option><option>스테이징</option></select></div>
+        <div class="field"><label>적용 범위</label><select><option>10% 먼저 적용</option><option>50%</option><option>100%</option></select></div>
+      </div>
+      <section class="section-band">
+        <h3>배포 전 확인</h3>
+        ${checkRow("시나리오 형식", "실행 규칙과 이벤트 내용 검사 통과", "active")}
+        ${checkRow("흐름 연결", "이동 대상 검토 필요", "pending")}
+        ${checkRow("비밀값 정책", "비밀번호는 보관함 참조만 허용", "active")}
+      </section>
+      <button class="toolbar-btn primary" type="button" data-action="confirmDeploy"><i data-lucide="upload-cloud"></i><span>배포 시작</span></button>`;
+    }
+
+    function runDetailBody() {
+      return `<div class="detail-grid">
+        <div class="detail-cell"><span>실행</span><strong>실행-2838</strong></div>
+        <div class="detail-cell"><span>상태</span><strong>사람 확인 대기</strong></div>
+        <div class="detail-cell"><span>추적번호</span><strong>09ad-7f12</strong></div>
+        <div class="detail-cell"><span>브라우저</span><strong>반납됨</strong></div>
+      </div>
+      <div class="timeline">
+        ${timeline("green", "실행 시작", "실행기-03 배정")}
+        ${timeline("", "단계 완료", "로그인 상태 확인")}
+        ${timeline("amber", "사람 확인 요청", "보안문자 화면 저장")}
+        ${timeline("", "이어하기 대기", "14:20에 만료")}
+      </div>
+      <div class="action-strip">${button("route", "실행 기록 열기", "route", "goTrace")}${button("x", "취소", "x", "abortRun")}</div>`;
+    }
+
+    function evidenceBody() {
+      return `<div class="detail-grid">
+        <div class="detail-cell"><span>증빙 파일</span><strong>화면-338</strong></div>
+        <div class="detail-cell"><span>마스킹</span><strong>완료</strong></div>
+      </div>
+      <section class="section-band">
+        <h3>증빙 요약</h3>
+        <div class="split-row"><span>빈 결과 허용 증거</span><span class="status active">통과</span></div>
+        <div class="split-row"><span>리뷰 없음 메시지 보임</span><span class="status active">예</span></div>
+        <div class="split-row"><span>원본 행 수</span><span class="status pending">0</span></div>
+      </section>`;
+    }
+
+    function actionBody(kind) {
+      return `<div class="form-grid">
+        ${field("담당자", kind === "assign" ? "운영 리더" : "운영-1")}
+        ${field("사유", kind === "resolve" ? "보안문자 확인 완료" : "마감 시간 기준 재배정")}
+      </div>
+      <div class="field"><label>메모</label><textarea>${kind === "resolve" ? "저장된 화면 기준으로 처리 완료. 자동화가 이어서 실행됩니다." : "담당자 변경 후 마감 시간은 유지됩니다."}</textarea></div>`;
+    }
+
+    function handleAction(action) {
+      const drawerActions = {
+        notifications: ["알림", "최근 장애와 마감 시간 이벤트", `<div class="check-list">${checkRow("사이트 일시중단", "쇼핑몰 KR 차단율 임계 초과", "risk")}${checkRow("사람 확인 마감", "HT-1881 8분 남음", "pending")}${checkRow("예산 초과 차단", "실행-2822 비용 한도 초과", "system")}</div>`],
+        termsHelp: ["용어 설명", "처음 쓰는 사람을 위한 짧은 설명", `<div class="check-list">
+          ${checkRow("업무 사이트 열기", "자동화하고 싶은 웹사이트를 RPA가 관찰하는 브라우저로 엽니다.", "active")}
+          ${checkRow("내가 하는 작업 기록", "사람이 한 번 직접 해보면 클릭, 입력, 화면 변화가 작업 후보로 저장됩니다.", "active")}
+          ${checkRow("자동화 시나리오 만들기", "기록된 행동을 '무엇을 하라' 중심의 반복 실행 계획으로 정리합니다.", "active")}
+          ${checkRow("테스트 실행", "실제 저장/전송은 막고 AI 실행기가 페이지를 잘 찾는지 확인합니다.", "pending")}
+          ${checkRow("실제 실행", "검증된 자동화를 작업 대기열에 등록해 반복 수행합니다.", "system")}
+        </div>`],
+        newRun: ["자동화 실행", "검증된 자동화를 작업 대기열에 등록합니다", newRunBody()],
+        deployIr: ["자동화 배포", "테스트가 끝난 자동화를 운영 환경에 적용", deployBody()],
+        generateIr: ["자동화 시나리오 만들기 결과", "기록된 행동을 반복 실행 가능한 업무 흐름으로 정리", `<pre class="code-block">화면 확인 → 데이터 가져오기 → 다음 페이지 이동
+
+검사 결과:
+- 분기 우선순위 중복 없음
+- 이동 대상 모두 확인
+- 조건식 타입 검사 통과
+- 빈 결과 증거 확인 필요</pre><div class="action-strip">${button("play", "테스트 실행으로 이동", "play", "dryRun")}${button("save", "초안 저장", "save", "saveScenario")}</div>`],
+        irContractMap: ["전문 구조 보기", "쉬운 작업 목록이 실제 시나리오 계약으로 변환되는 방식", `<div class="check-list">
+          ${checkRow("화면 조건", "주소 패턴, 화면 의도, 표/버튼 단서를 저장합니다.", "active")}
+          ${checkRow("할 일 목록", "화면 확인, 클릭/입력, 데이터 가져오기 같은 작업을 순서대로 둡니다.", "active")}
+          ${checkRow("성공 기준", "형식 검사, 최소 행 수, 증빙 캡처로 성공 여부를 판정합니다.", "active")}
+          ${checkRow("분기와 반복", "차단, 로그인 필요, 빈 결과, 다음 페이지를 우선순위로 결정합니다.", "pending")}
+          ${checkRow("부작용 정책", "저장/전송/업로드 작업은 중복 방지 키 없이는 실행하지 않습니다.", "system")}
+        </div><pre class="code-block">전문 키:
+where = 화면 조건
+what = 할 일 목록
+verify = 성공 기준
+on = 분기
+loop = 반복
+side_effect = 결과가 남는 작업 정책</pre>`],
+        editStep: ["작업 편집", "AI에게 시킬 말과 성공 기준을 명확히 적습니다", `<div class="field"><label>AI에게 시킬 말</label><textarea>현재 페이지에서 리뷰 테이블을 찾아 작성자, 평점, 본문, 작성일을 가져온다. 버튼 위치나 CSS 선택자에만 의존하지 말고 화면의 표/버튼 이름을 우선한다.</textarea></div><div class="form-grid">${field("작업 종류", "데이터 가져오기")}${field("결과 형식", "리뷰 목록")}${field("성공 기준", "형식 검사 통과")}${field("실패하면", "한 번 다시 찾기")}</div><button class="toolbar-btn primary" data-action="saveScenario"><i data-lucide="save"></i><span>저장</span></button>`],
+        stagehandObserve: ["현재 화면 다시 보기", "AI 실행기가 현재 페이지를 보고 판단한 내용", `<div class="detail-grid"><div class="detail-cell"><span>화면 종류</span><strong>리뷰 목록</strong></div><div class="detail-cell"><span>확신도</span><strong>94%</strong></div><div class="detail-cell"><span>리뷰 표 보임</span><strong>예</strong></div><div class="detail-cell"><span>차단 화면</span><strong>아니오</strong></div></div><pre class="code-block">찾은 단서:
+- 표: 리뷰 목록
+- 버튼: 다음
+- 문구: 리뷰 없음 메시지(숨김)</pre>`],
+        pageStateEvidence: ["화면 판단 근거", "현재 화면을 왜 리뷰 목록으로 판단했는지 확인", `<div class="detail-grid">
+          <div class="detail-cell"><span>주소 패턴</span><strong>/reviews?page={n}</strong></div>
+          <div class="detail-cell"><span>화면 구조 값</span><strong>9af3c1</strong></div>
+          <div class="detail-cell"><span>화면 단서</span><strong>리뷰 표 · 다음 버튼</strong></div>
+          <div class="detail-cell"><span>인증/차단</span><strong>없음</strong></div>
+        </div><div class="check-list">
+          ${checkRow("리뷰 표 보임", "표 제목과 행 24개가 확인됨", "active")}
+          ${checkRow("다음 버튼 보임", "반복 수집을 이어갈 수 있음", "active")}
+          ${checkRow("리뷰 없음 문구", "현재는 숨김 상태라 빈 결과 아님", "pending")}
+          ${checkRow("로그인 만료", "만료 또는 차단 신호 없음", "active")}
+        </div>`],
+        selfHeal: ["다시 찾기 제안", "화면이 바뀌었을 때 다른 단서로 찾아보는 방법", `<div class="check-list">${checkRow("표 위치 변경", "정확한 위치 대신 '리뷰 표' 역할을 기준으로 찾기", "pending")}${checkRow("다음 버튼 이름 변경", "다음, 다음 페이지, > 후보를 함께 확인", "system")}${checkRow("재시도 안전", "읽기 작업이라 한 번 더 시도 가능", "active")}</div>`],
+        runDetail: ["실행 상세", "상태 흐름, 증빙, 브라우저, 실행 기록", runDetailBody()],
+        taskDetail: ["사람 확인 상세", "캡처 화면, 이어하기 정보, 담당자", `${evidenceBody()}<section class="section-band"><h3>이어하기 정보</h3><div class="split-row"><span>재개할 작업</span><span class="status active">리뷰 데이터 가져오기</span></div><div class="split-row"><span>화면 복원</span><span class="status active">리뷰 목록 화면 94%</span></div><div class="split-row"><span>이어하기 키</span><span class="status pending">키-9f12</span></div><div class="split-row"><span>만료</span><span class="status pending">14:20</span></div></section><div class="action-strip">${button("check", "해소", "check", "resolveTask")}${button("send", "재할당", "send", "assignTask")}</div>`],
+        resumeDetail: ["복원 정보", "사람 확인 후 자동화가 이어서 실행되는 기준", `<div class="check-list">
+          ${checkRow("브라우저 반납", "사람 확인 중에는 브라우저를 붙잡지 않습니다.", "active")}
+          ${checkRow("화면 상태 저장", "중단 시점 화면 참조와 반복 위치를 저장했습니다.", "active")}
+          ${checkRow("복원 대조", "이어하기 전에 현재 화면과 저장 화면을 비교합니다.", "pending")}
+          ${checkRow("복원 실패 처리", "로그인 화면이면 로그인 확인 단계로 우회합니다.", "system")}
+        </div>`],
+        evidence: ["증빙 보기", "마스킹된 화면과 성공 증거", evidenceBody()],
+        downloadReport: ["검사 리포트", "시나리오 문법, 조건식, 흐름 결과", `<pre class="code-block">시나리오 문법 오류: 0
+조건식 오류: 0
+이동 대상 주의: 2
+빈 결과 증거 누락: 1</pre>`],
+        gatewayPolicy: ["AI 모델 정책", "주 모델, 예산, 대체 모델, 형식 보정 설정", `<div class="form-grid">${field("주 모델", "codex-sse")}${field("대체 모델", "litellm-sse")}${field("최대 비용", "0.85")}${field("형식 보정 횟수", "1")}</div><button class="toolbar-btn primary" data-action="savePolicy"><i data-lucide="save"></i><span>저장</span></button>`],
+        llmCallDetail: ["AI 호출 로그", "응답 스트림과 예산 차단 기준", `<div class="check-list">
+          ${checkRow("실시간 응답 시작", "첫 응답 183ms", "active")}
+          ${checkRow("사용량 누적", "비용 52%, 응답 길이 41%", "active")}
+          ${checkRow("형식 검사", "정해진 결과 형식 검사 통과", "active")}
+          ${checkRow("예산 초과 처리", "한도 초과 시 즉시 중단하고 부분 결과 폐기", "system")}
+          ${checkRow("대체 모델", "무응답이면 1회 대체 모델로 재시도", "pending")}
+        </div>`],
+        auditLog: ["감사 로그", "보안 경계와 운영자 작업", `<div class="timeline">${timeline("green", "마스킹 전 조회 차단", "시스템 자동 차단")}${timeline("", "비밀값 접근 거부", "자동화 권한 부족")}${timeline("amber", "명령어 허용 목록 검토", "정책 대기")}</div>`],
+        artifactLifecycle: ["증빙 처리 상세", "마스킹과 보존 정책을 통과한 파일만 조회 가능", `<div class="check-list">
+          ${checkRow("마스킹 작업", "대기 화면 4건 처리 중, 실패 0건", "active")}
+          ${checkRow("조회 차단", "마스킹 전 증빙 파일은 열람 금지", "active")}
+          ${checkRow("보존기간 정리", "만료된 파일은 하루 1회 정리", "pending")}
+          ${checkRow("무결성 검사", "해시 불일치 0건", "active")}
+          ${checkRow("고아 파일 정리", "참조 없는 파일 1건 확인 필요", "risk")}
+        </div>`],
+        payloadSchema: ["이벤트 내용 규칙", "이벤트 종류별 필요한 내용", `<pre class="code-block">실행 완료 이벤트
+필수: 실행번호, 상태, 사용량, 증빙 파일
+
+사람 확인 완료 이벤트
+필수: 확인번호, 이어하기 키, 처리자</pre>`],
+        viewSchema: ["규칙 보기", "시나리오 / 성공 기준 / 이벤트 규칙", `<pre class="code-block">필수: 이름, 시작 단계, 단계 목록
+단계 흐름: 다음 | 분기 | 반복 | 대체 | 종료 중 하나
+이동 대상: 인증 대응 | 사람 확인 | 데이터 없음 종료 | 단계 이름</pre>`],
+        viewDdl: ["상세 규칙", "중복 방지 핵심 기준", `<pre class="code-block">원본 데이터 중복 기준:
+고객 + 자동화 + 대상 + 원본키 + 내용해시
+
+인증 처리 중복 기준:
+인증 이벤트 + 처리 방식</pre>`],
+        leaseDetail: ["점유 규칙", "계정과 브라우저를 동시에 안전하게 사용하는 기준", `<div class="check-list">
+          ${checkRow("계정 슬롯", "판매자 기본 계정은 동시에 2개 실행까지만 허용", "pending")}
+          ${checkRow("브라우저 점유", "실행 단위로 브라우저를 점유하고 만료 시 회수", "active")}
+          ${checkRow("만료 정리", "만료된 브라우저와 계정 잠금은 정리 작업이 회수", "active")}
+          ${checkRow("사이트 일시중단", "차단률이 높으면 새 실행을 잠시 막음", "risk")}
+        </div>`],
+        transitionDetail: ["상태 흐름 상세", "정의되지 않은 상태 변화는 오류로 처리", `<div class="timeline">
+          ${timeline("green", "대기 → 점유", "작업 대기열에서 실행기가 작업을 잡음")}
+          ${timeline("", "점유 → 실행 중", "브라우저와 계정 사용권 확보")}
+          ${timeline("amber", "실행 중 → 중단 준비", "보안문자 또는 사람 확인 필요")}
+          ${timeline("amber", "중단 준비 → 사람 확인", "이어하기 정보 저장 후 브라우저 반납")}
+          ${timeline("green", "사람 확인 → 재개 요청", "담당자 처리 완료")}
+          ${timeline("", "재개 요청 → 복원 중", "새 브라우저 확보 후 화면 상태 대조")}
+          ${timeline("green", "복원 중 → 실행 중", "저장된 화면과 현재 화면이 일치")}
+          ${timeline("", "실행 중 → 마무리", "마지막 단계 성공 후 결과 저장")}
+          ${timeline("green", "마무리 → 완료", "증빙과 이벤트 확정")}
+          ${timeline("amber", "마무리 중 취소", "결과 저장을 우선하고 취소는 거부")}
+          ${timeline("red", "마무리 실패", "결과 저장 실패 → 시스템 실패")}
+        </div>`]
+      };
+
+      if (drawerActions[action]) {
+        openDrawer(...drawerActions[action]);
+        return;
+      }
+
+      const modalActions = {
+        resolveTask: ["사람 확인 완료", "처리 결과를 저장하고 자동화를 이어서 실행합니다.", actionBody("resolve"), "완료"],
+        assignTask: ["담당자 할당", "선택한 확인 건의 담당자를 변경합니다.", actionBody("assign"), "할당"],
+        bulkAssign: ["일괄 할당", "선택된 대기 건을 운영 그룹에 배정합니다.", actionBody("assign"), "일괄 할당"],
+        cancelTask: ["확인 건 취소", "연결된 실행을 취소 요청합니다.", `<p class="subtle">사람 확인이 취소되면 연결된 자동화 실행도 취소 흐름으로 이동합니다.</p>`, "취소 실행"],
+        abortRun: ["실행 취소", "진행 중인 자동화를 정리하고 브라우저를 회수합니다.", `<p class="subtle">실행 중·보류·재개 중인 작업은 정리 후 <strong>취소됨</strong> 상태로 마감합니다.</p>${checkRow("마무리 단계는 취소 거부", "결과 저장이 시작된 실행(마무리)은 취소보다 저장을 우선합니다 · 이미 종료로 응답", "system")}${checkRow("종결된 실행", "이미 완료·취소·실패한 실행은 다시 취소할 수 없습니다", "pending")}`, "실행 취소"],
+        filterWorkitems: ["작업 필터", "상태와 자동화 기준으로 목록을 좁힙니다.", `<div class="form-grid">${field("상태", "처리 중, 재시도 대기")}${field("자동화", "쿠팡 리뷰 수집")}</div>`, "적용"],
+        sortTasks: ["확인 건 정렬", "마감이 임박하고 상위 담당자에게 넘어간 건을 먼저 봅니다.", `<div class="form-grid">${field("첫 번째 기준", "남은 시간")}${field("두 번째 기준", "상위 담당자 우선")}</div>`, "적용"],
+        traceSearch: ["실행 기록 조회", "추적번호 또는 실행번호를 입력합니다.", `<div class="field"><label>검색어</label><input value="실행-2838" /></div>`, "조회"],
+        playScenario: ["실제 실행", "선택한 자동화를 실제 작업 대기열에 넣습니다.", `<div class="form-grid">${field("자동화", "쿠팡 리뷰 수집 v17")}${field("실행 방식", "실제 실행")}${field("사용 계정", "판매자 기본 계정")}${field("예산", "$0.85")}</div><p class="subtle">저장, 전송, 업로드처럼 결과가 남는 작업은 중복 방지 키와 승인 정책을 확인한 뒤 실행합니다.</p>`, "실행"],
+        openCircuit: ["사이트 일시중단", "선택한 사이트의 수집을 잠시 멈춥니다.", `<div class="form-grid">${field("사이트", "쇼핑몰 KR")}${field("중단 시간", "30분")}</div>`, "일시중단"],
+        simulateRace: ["동시 실행 시뮬레이션", "여러 실행기가 같은 작업을 동시에 잡는 상황을 재현합니다.", `<p class="subtle">먼저 저장된 실행 계획을 사용하고 늦게 도착한 중복 결과는 버립니다.</p>`, "실행"]
+      };
+
+      if (modalActions[action]) {
+        const [title, subtitle, body, confirmLabel] = modalActions[action];
+        openModal(title, subtitle, body, confirmLabel, () => showToast(`${confirmLabel} 처리됨`));
+        return;
+      }
+
+      const routeActions = { goTrace: "runTrace", dryRun: "playground" };
+      if (routeActions[action]) {
+        closeDrawer();
+        renderView(routeActions[action]);
+        if (action === "dryRun") showToast("테스트 실행 화면을 준비했습니다.");
+        return;
+      }
+
+      const toastActions = {
+        refresh: "최신 상태로 새로고침했습니다.",
+        startRecording: "작업 기록을 시작했습니다. 지금부터 하는 클릭과 입력을 자동화 후보로 저장합니다.",
+        pauseRecording: "작업 기록을 잠깐 멈췄습니다.",
+        stopRecording: "작업 기록을 끝내고 자동화 후보를 정리했습니다.",
+        openBrowserTarget: "업무 사이트 브라우저를 열었습니다.",
+        markSensitive: "민감 영역 마킹 모드가 켜졌습니다.",
+        captureCurrentState: "현재 화면을 기억했습니다.",
+        addObserve: "화면 확인 작업을 추가했습니다.",
+        addAct: "클릭/입력 작업을 추가했습니다.",
+        addExtract: "데이터 가져오기 작업을 추가했습니다.",
+        addChallenge: "인증/차단 대응 작업을 추가했습니다.",
+        addVerify: "성공 기준을 추가했습니다.",
+        submitRun: "자동화 실행을 요청했습니다.",
+        confirmDeploy: "자동화 배포 작업을 시작했습니다.",
+        copyCorrelation: "추적번호를 복사했습니다.",
+        exportCsv: "내보내기 파일을 준비했습니다.",
+        replayDlq: "실패 보관 작업의 재처리 요청을 등록했습니다.",
+        retrySink: "외부 전송 재시도 요청을 등록했습니다.",
+        exportTrace: "실행 기록 내보내기를 생성했습니다.",
+        validateIr: "시나리오 검사를 다시 실행했습니다.",
+        promoteIr: "승격 승인 대기 상태로 전환했습니다.",
+        saveScenario: "자동화 초안을 저장했습니다.",
+        stepOnce: "현재 작업을 한 단계 테스트했습니다.",
+        duplicateStep: "작업을 복제했습니다.",
+        savePolicy: "정책 변경사항을 저장했습니다.",
+        runSweeper: "만료된 브라우저와 계정 사용 잠금을 정리했습니다."
+      };
+
+      if (toastActions[action]) {
+        if (["submitRun", "confirmDeploy", "savePolicy"].includes(action)) closeDrawer();
+        showToast(toastActions[action]);
+      }
+    }
+
+    document.addEventListener("click", (event) => {
+      const nav = event.target.closest("[data-view-target]");
+      if (nav) {
+        renderView(nav.dataset.viewTarget);
+        return;
+      }
+
+      const filter = event.target.closest("[data-filter]");
+      if (filter) {
+        setFilter(filter.dataset.filter);
+        return;
+      }
+
+      const actionEl = event.target.closest("[data-action]");
+      if (actionEl) {
+        handleAction(actionEl.dataset.action);
+      }
+    });
+
+    document.getElementById("closeDrawer").addEventListener("click", closeDrawer);
+    backdrop.addEventListener("click", closeDrawer);
+    document.getElementById("closeModal").addEventListener("click", () => setModal(false));
+    document.getElementById("cancelModal").addEventListener("click", () => setModal(false));
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeDrawer();
+        setModal(false);
+        return;
+      }
+      // [a11y] 열린 모달/드로어 안에서 Tab 포커스 가두기
+      if (event.key === "Tab") {
+        const container = modal.classList.contains("open") ? modal
+          : drawer.classList.contains("open") ? drawer : null;
+        if (!container) return;
+        const f = getFocusable(container);
+        if (!f.length) return;
+        const first = f[0], last = f[f.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    });
+
+    renderView("dashboard");
+  </script>
+</body>
+</html>

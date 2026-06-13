@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rpa.local/contracts/ir.schema.json",
+  "title": "RPA Scenario IR v1",
+  "description": "선언형 시나리오 IR. graph 노드 구조. 제어흐름은 한 Workitem 내부만. product 반복은 Workitem 전개가 담당.",
+  "type": "object",
+  "required": ["meta", "start", "nodes"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "ir_version": { "type": "string", "const": "1.x" }
+      }
+    },
+    "params_schema": {
+      "description": "실행 파라미터 JSON Schema. IREL params.* 타입 추론 근거.",
+      "type": "object"
+    },
+    "assets": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Assets 스토어 참조 키(값 아님)"
+    },
+    "start": { "type": "string", "description": "시작 노드 id" },
+    "nodes": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/node" },
+      "minProperties": 1
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "where": { "$ref": "#/$defs/where" },
+        "what": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+        "verify": { "$ref": "#/$defs/verify" },
+        "policy": { "$ref": "#/$defs/nodePolicy" },
+        "side_effect": { "$ref": "#/$defs/sideEffect" },
+        "next": { "$ref": "#/$defs/target" },
+        "on": {
+          "type": "array",
+          "description": "[FIX] 분기 목록. 키 순서 의존 제거. priority 내림차순으로 when(IREL 불린식) 평가, 첫 true 채택. 동률 priority는 컴파일 거부(비결정 방지).",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["when", "target", "priority"],
+            "additionalProperties": false,
+            "properties": {
+              "when": { "type": "string", "description": "IREL 불린식. 예: flags.blocked" },
+              "target": { "$ref": "#/$defs/target" },
+              "priority": { "type": "integer", "description": "높을수록 우선. 동률 금지(컴파일 검증)." }
+            }
+          }
+        },
+        "loop": {
+          "type": "object",
+          "required": ["until", "max_iterations"],
+          "additionalProperties": false,
+          "properties": {
+            "until": { "type": "string", "description": "IREL 불린식. 컴파일 타임 타입체크." },
+            "max_iterations": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "무한루프 가드 필수" }
+          }
+        },
+        "fallback_chain": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fallbackTier" },
+          "description": "T0→T1→T2→T3 등. 순서대로 시도, advance_when 충족 시 다음 티어."
+        },
+        "terminal": {
+          "type": "string",
+          "enum": ["success", "success_empty", "fail_business", "fail_system"],
+          "description": "종료 노드. 다른 흐름 키와 함께 쓸 수 없음."
+        }
+      },
+      "$comment": "[FIX #11] 흐름 제어 키(next/on/loop/fallback_chain/terminal) 중 정확히 하나만 존재. 아래 oneOf가 강제(0개·2개 이상 모두 거부). 코드 검증 의존 제거.",
+      "oneOf": [
+        { "required": ["next"],           "not": { "anyOf": [ { "required": ["on"] }, { "required": ["loop"] }, { "required": ["fallback_chain"] }, { "required": ["terminal"] } ] } },
+        { "required": ["on"],             "not": { "anyOf": [ { "required": ["next"] }, { "required": ["loop"] }, { "required": ["fallback_chain"] }, { "required": ["terminal"] } ] } },
+        { "required": ["loop"],           "not": { "anyOf": [ { "required": ["next"] }, { "required": ["on"] }, { "required": ["fallback_chain"] }, { "required": ["terminal"] } ] } },
+        { "required": ["fallback_chain"], "not": { "anyOf": [ { "required": ["next"] }, { "required": ["on"] }, { "required": ["loop"] }, { "required": ["terminal"] } ] } },
+        { "required": ["terminal"],       "not": { "anyOf": [ { "required": ["next"] }, { "required": ["on"] }, { "required": ["loop"] }, { "required": ["fallback_chain"] } ] } }
+      ]
+    },
+    "where": {
+      "type": "object",
+      "description": "상태 패턴. 생략 시 직전 PageState 계승.",
+      "additionalProperties": false,
+      "properties": {
+        "url": { "type": "string" },
+        "page_intent": { "type": "string" },
+        "selectors": { "type": "array", "items": { "type": "string" } },
+        "logic": { "type": "string", "enum": ["AND", "OR", "NOT"], "default": "AND" },
+        "priority": { "type": "integer", "description": "다중 매칭 시 우선순위(높을수록 우선)" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["act", "observe", "extract", "navigate", "download", "upload", "api_call", "file", "human_task", "shell"]
+        },
+        "instruction": { "type": "string" },
+        "schema_ref": { "type": "string", "description": "extract 출력 스키마" },
+        "vars": { "type": "array", "items": { "type": "string" }, "description": "Assets/credential 참조" },
+        "url_ref": { "type": "string" },
+        "cmd_ref": { "type": "string", "description": "shell 전용 — signed command registry 키. 미등록 시 거부." },
+        "sensitive": { "type": "boolean", "default": false }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "shell" } } },
+          "then": { "required": ["cmd_ref"] }
+        }
+      ]
+    },
+    "verify": {
+      "$ref": "verify.schema.json"
+    },
+    "nodePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeout_ms": { "type": "integer", "minimum": 1000 },
+        "max_self_heal": { "type": "integer", "minimum": 0, "default": 2 },
+        "requires_approval": { "type": "boolean", "default": false },
+        "recording": { "type": "string", "enum": ["always", "masked_on_failure", "never"], "default": "masked_on_failure" }
+      }
+    },
+    "sideEffect": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["read_only", "login", "submit", "create", "update", "delete", "upload"] },
+        "idempotent": { "type": "boolean" },
+        "idempotency_key": { "type": "string", "description": "비-read_only면 필수(코드 검증)" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "not": { "const": "read_only" } } } },
+          "then": { "required": ["idempotency_key"] }
+        }
+      ]
+    },
+    "fallbackTier": {
+      "type": "object",
+      "required": ["tier", "entry_node"],
+      "additionalProperties": false,
+      "properties": {
+        "tier": { "type": "string", "enum": ["T0", "T1", "T2", "T3"] },
+        "entry_node": { "type": "string", "description": "이 티어의 진입 노드 id" },
+        "advance_when": { "type": "string", "description": "IREL 불린식. true면 다음 티어로 전환." }
+      }
+    },
+    "target": {
+      "type": "string",
+      "description": "노드 id 또는 예약 핸들러(@challenge / @human_task / @end_no_data).",
+      "pattern": "^(@challenge|@human_task|@end_no_data|[a-zA-Z_][a-zA-Z0-9_]*)$"
+    },
+    "reservedHandler": {
+      "$comment": "예약 핸들러는 노드처럼 IR에 정의되지 않고 인터프리터가 제공. 아래는 호출 계약(런타임 타입, 스키마 검증 대상 아님).",
+      "type": "object",
+      "properties": {
+        "handler": { "type": "string", "enum": ["@challenge", "@human_task", "@end_no_data"] }
+      }
+    }
+  }
+}
