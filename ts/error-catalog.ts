@@ -10,6 +10,7 @@ export type ExceptionClass =
 export type ErrorCode =
   // --- Run / Scenario ---
   | "RUN_NOT_FOUND"
+  | "RESOURCE_NOT_FOUND"                // run 외 엔티티(scenario/workitem/human_task/artifact/site) 미존재
   | "RUN_ALREADY_TERMINAL"
   | "RUN_ABORTED"
   | "SCENARIO_VERSION_CONFLICT"        // optimistic concurrency (If-Match)
@@ -47,6 +48,7 @@ export type ErrorCode =
   | "PROMPT_INJECTION_DETECTED"        // hidden instruction
   | "ARTIFACT_NOT_REDACTED"
   | "SHELL_COMMAND_NOT_ALLOWED"        // shell cmd_ref가 signed command registry 미등록
+  | "AUTHZ_FORBIDDEN"                  // 역할 권한 부족(일반 RBAC 거부 — auth-rbac.md §2)
   // --- Connector ---
   | "CONNECTOR_PERMISSION_DENIED"
   | "CONNECTOR_INCOMPATIBLE"           // runtime/ir version mismatch
@@ -70,6 +72,7 @@ export interface ErrorMeta {
 
 export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   RUN_NOT_FOUND:               { retryable: false, httpStatus: 404, exceptionClass: "none",     userMessage: "실행을 찾을 수 없습니다.", operatorAction: "run_id 확인" },
+  RESOURCE_NOT_FOUND:          { retryable: false, httpStatus: 404, exceptionClass: "none",     userMessage: "대상을 찾을 수 없습니다.", operatorAction: "리소스 id/종류 확인(api-surface.md)" },
   RUN_ALREADY_TERMINAL:        { retryable: false, httpStatus: 409, exceptionClass: "none",     userMessage: "이미 종료된 실행입니다.", operatorAction: "상태 확인 후 새 실행" },
   // [FIX] 어휘 통일: API 명령=abort → Run 상태=cancelled → 이벤트=run.cancelled.
   //   RUN_ABORTED는 "이미 중단(취소)된 run에 대한 작업 거부" 의미. UI 문구는 "취소됨"으로 통일 권고.
@@ -110,6 +113,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   PROMPT_INJECTION_DETECTED:   { retryable: false, httpStatus: 422, exceptionClass: "security", userMessage: "비정상 콘텐츠 감지.", operatorAction: "페이지 출처/공격 가능성 검토" },
   ARTIFACT_NOT_REDACTED:       { retryable: false, httpStatus: 409, exceptionClass: "security", userMessage: "준비 중입니다.", operatorAction: "redaction job 상태 확인" },
   SHELL_COMMAND_NOT_ALLOWED:   { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "허용되지 않은 명령입니다.", operatorAction: "signed command registry 등록 확인(security-contracts.md §shell)" },
+  AUTHZ_FORBIDDEN:             { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "권한이 없습니다.", operatorAction: "역할/권한 매트릭스 확인(auth-rbac.md §2)" },
 
   CONNECTOR_PERMISSION_DENIED: { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "커넥터 권한 위반.", operatorAction: "manifest permissions 확인" },
   CONNECTOR_INCOMPATIBLE:      { retryable: false, httpStatus: 409, exceptionClass: "system",   userMessage: "버전 비호환.", operatorAction: "runtime/IR 버전 호환 확인" },

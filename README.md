@@ -23,6 +23,9 @@
 | `ir-static-validation.md` | (IR 검증) | 그래프 정적검증(target 무결성·도달성·사이클·flags 레지스트리·value_match·fallback) — v1.4 |
 | `security-contracts.md` | (보안) | SecretStore·shell registry·prompt-injection·redaction 알고리즘·network policy·kid·connector perms·artifact RBAC — v1.4 |
 | `ts/state-machine-types.ts` | (전이 타입) | RunState/Event/Guard/SideEffectCmd + transition*() 시그니처(codegen 대상) — v1.4 |
+| `db/migration_core_entities.sql` | (핵심 DDL) | runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/action_plan_cache/site_profiles/browser_identities/network_policies — v1.5 |
+| `auth-rbac.md` | (인증·인가·테넌시) | RBAC 역할(viewer/operator/reviewer/approver/admin)·권한 매트릭스·tenant_id 출처·RLS 정책 — v1.5 |
+| `api-surface.md` | (제어평면 API) | REST 엔드포인트 인벤토리·If-Match·Idempotency-Key·as_of(D1 OpenAPI 입력) — v1.5 |
 
 ---
 
@@ -84,7 +87,7 @@
 > **상태 범례** — `PRD 확정`(섹션 인용 있음) · `위치 미확정(TODO)`(PRD/형제 스펙에 있을 것으로 보이나 섹션 미인용 — PRD 소유자가 채울 것) · `형제 스펙` · `D1 codegen` · `운영 정책` · `미결정(§19)`.
 > **원칙(가정 금지)**: 인용 없는 섹션 번호를 지어내지 않는다. TODO가 빈 채로 해당 코드 경로에 착수해야 하면 `TODO: [BLOCKED]`(violated/reason/required_change)로 중단·보고.
 >
-> **[v1.4 갱신] 별도 PRD 소유자 없음 → 본 패키지가 직접 정의한다.** §5(보안 계약) 전 항목·`SecretStore`·shell registry·redaction·network policy·kid·connector perms·artifact RBAC는 `security-contracts.md`/`ts/core-types.ts`로, IR 정적검증·flags 레지스트리는 `ir-static-validation.md`로, transition 타입은 `ts/state-machine-types.ts`로, LLM terminal 코드는 `error-catalog.ts`로 **해소 완료**(v1.4 로그). 데이터모델 DDL·RBAC 역할·제어평면 API·테넌시/RLS는 **Phase 2에서 정의 예정** — 아래 표의 "위치 미확정(TODO)"는 "Phase 2 정의 예정"으로 읽는다.
+> **[v1.4 갱신] 별도 PRD 소유자 없음 → 본 패키지가 직접 정의한다.** §5(보안 계약) 전 항목·`SecretStore`·shell registry·redaction·network policy·kid·connector perms·artifact RBAC는 `security-contracts.md`/`ts/core-types.ts`로, IR 정적검증·flags 레지스트리는 `ir-static-validation.md`로, transition 타입은 `ts/state-machine-types.ts`로, LLM terminal 코드는 `error-catalog.ts`로 **해소 완료**(v1.4 로그). 데이터모델 DDL·RBAC 역할·제어평면 API·테넌시/RLS는 **Phase 2(v1.5)에서 본 패키지에 정의 완료**: DDL→`db/migration_core_entities.sql`, RBAC·테넌시/RLS→`auth-rbac.md`, 제어평면 API→`api-surface.md`. 아래 §1·§3·§4 표의 "위치 미확정(TODO)"는 이 파일들로 **해소됨**(v1.5 로그).
 
 ### 1. 데이터 모델 (DDL) — 상태머신·job·캐시가 의존하나 본 패키지엔 DDL 없음
 | 엔티티 | 본 패키지 참조(근거) | 외부 위치 | 상태 |
@@ -238,4 +241,20 @@
 - **P1 vLLM SSE**: OpenAI 호환 adapter 재사용, `sse=false` 모델만 sync 폴백(adapter §7) — 별도 구현 불요.
 - **Codex structured-output 스트리밍·abort**: `capabilities.jsonMode` 게이트 + 미지원 시 prompt-schema+strict(§7), abort=HTTP close(§3). 실제 지원범위는 **구현 시 라이브 API로 capabilities 확정**(안전 폴백 정의됨).
 
-> 다음(Phase 2): 핵심 DDL(runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/site_profiles/browser_identities/network_policies) + RBAC 역할 + tenant/RLS + 제어평면 API 인벤토리 → §"외부 의존 맵" 잔여 TODO 해소.
+> 다음(Phase 2): 핵심 DDL + RBAC 역할 + tenant/RLS + 제어평면 API 인벤토리 → §"외부 의존 맵" 잔여 TODO 해소. **→ v1.5에서 완료.**
+
+---
+
+## v1.5 패치 로그 (Phase 2 — 핵심 DDL · RBAC/테넌시 · 제어평면 API)
+
+> §"외부 의존 맵"의 §1(데이터 모델)·§3(제어평면 API)·§4(인증·인가·테넌시) "위치 미확정(TODO)"를 본 패키지에 직접 정의해 해소.
+
+| # | 항목 | 위치 | 조치 |
+|---|---|---|---|
+| 1 | 핵심 엔티티 DDL 부재(runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/site_profiles/browser_identities/network_policies) | `db/migration_core_entities.sql`(신규) | 14개 테이블. 상태 CHECK enum = `state-machine-types.ts`(Run 13/Workitem 7/HumanTask 7/Kind 5)·`core-types` StepStatus 8·cache_mode 6·event_type 32와 **정확히 일치**. 기존 migration 테이블 재정의 없이 ALTER로 FK 보강(적용 순서: concurrency→core) |
+| 2 | `action_plan_cache` 본체(PRD §7) | `db/migration_core_entities.sql` | UNIQUE 7키 = migration_concurrency §4 ON CONFLICT 규약과 일치. status active/suspect/stale/quarantined(§7.2) |
+| 3 | RBAC 역할·권한 매트릭스·tenant_id 출처·RLS 부재 | `auth-rbac.md`(신규) | 역할 enum(viewer/operator/reviewer/approver/admin) + 권한 매트릭스 + JWT 클레임 tenant_id 출처 + RLS(SET LOCAL + current_setting strict, FORCE RLS) |
+| 4 | 제어평면 API 표면 부재 | `api-surface.md`(신규) | runs/scenarios/human-tasks/workitems·DLQ/artifacts/gateway/sites 엔드포인트 인벤토리(D1 OpenAPI 입력). If-Match(scenario.version)·Idempotency-Key·params.as_of 주입 규약. 어휘체인 abort→cancelled 정합 |
+| 5 | 엔티티 404 코드 오용·일반 RBAC 거부 코드 부재 | `error-catalog.ts` | `RESOURCE_NOT_FOUND`(404, run 외 엔티티)·`AUTHZ_FORBIDDEN`(403, 일반 RBAC 거부) 추가. 자원특정 거부(secret/connector/site)는 기존 코드 유지 |
+
+> 다음(Phase 3): 운영 기본값·수치 임계 문서(전이 임계·lease TTL·서킷·LLM retry/budget·retention·sweeper 주기). 이후 Phase 4(D1 codegen), Phase 5(HTML 목업 보강).

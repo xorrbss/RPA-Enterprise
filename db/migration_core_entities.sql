@@ -1,0 +1,407 @@
+-- ============================================================
+-- Migration: 핵심 엔티티 DDL (Phase 2 — README §외부 의존 맵 잔여 TODO 해소)
+-- 대상: runs, run_steps, workitems, human_tasks, scenarios,
+--       scenario_versions, artifacts, events_outbox, dead_letter,
+--       stagehand_calls, action_plan_cache, site_profiles,
+--       browser_identities, network_policies
+-- 범위: 상태머신·job·캐시·이벤트가 의존하는 영속 컬럼/제약의 단일 진실원천.
+--   migration_concurrency_idempotency.sql(동시성·idempotency 보강)과 **별개 파일**이며
+--   그 파일이 정의한 테이블(credential_*/browser_leases/raw_items/normalized_records/
+--   sink_deliveries/challenge_resolution_attempts)은 **재정의하지 않고 FK로만 참조**한다.
+-- 전제:
+--   - 모든 테이블 tenant_id 보유 + RLS(P2). RLS 정책 본문은 rbac 정책 파일에서 정의(여기선 컬럼만).
+--   - 상태 컬럼 CHECK enum은 ts/state-machine-types.ts(RunState/WorkitemState/HumanTaskState/
+--     HumanTaskKind)·ts/core-types.ts(StepStatus)와 **정확히 일치**.
+--   - 모든 상태 전이는 DB 조건부 UPDATE(CAS): UPDATE ... WHERE id=? AND status=<cur> (state-machine.md §4).
+--   - 어휘 체인: API abort → Run cancelled → 이벤트 run.cancelled.
+--   - §19 결정: credential 동시성 기본=1(credential_concurrency_policies), Codex/vLLM는 capabilities 게이트.
+--   - "조용한 false/unknown 금지": 미정의 전이는 IllegalTransition(throw), reason_code는 항상 명시.
+--   - PostgreSQL 15+.
+-- ============================================================
+
+-- ============================================================
+-- 1. site_profiles / browser_identities / network_policies
+--    lease 테이블(migration_concurrency_idempotency.sql)이 uuid로 참조하는 본체.
+--    먼저 생성해 FK 대상이 되게 한다.
+-- ============================================================
+
+-- site_profiles — 사이트 위험 등급·정책 묶음. risk=red는 미승인 시 SITE_PROFILE_BLOCKED(security).
+CREATE TABLE site_profiles (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  name            text        NOT NULL,
+  url_pattern     text        NOT NULL,                     -- 사이트 식별 패턴(정규화)
+  risk            text        NOT NULL DEFAULT 'green'
+                    CHECK (risk IN ('green','yellow','red')),  -- red = 승인 워크플로우 필요
+  approved        boolean     NOT NULL DEFAULT false,       -- risk=red 승인 여부(SITE_PROFILE_BLOCKED 게이트)
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, name)
+);
+CREATE INDEX idx_site_profiles_tenant ON site_profiles (tenant_id);
+
+-- browser_identities — 브라우저 지문/정체성. version은 action_plan_cache family 키 구성요소.
+CREATE TABLE browser_identities (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  site_profile_id uuid        REFERENCES site_profiles(id),
+  label           text        NOT NULL,
+  version         int         NOT NULL DEFAULT 1,           -- 정체성 변경 시 증가 → cache browser_identity_version과 정합
+  fingerprint_ref text,                                     -- UA/뷰포트/locale 등 지문 정의 참조(값 아님)
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, label, version)
+);
+CREATE INDEX idx_browser_identities_tenant ON browser_identities (tenant_id);
+
+-- network_policies — security-contracts.md §6 NetworkPolicy 구조와 일치. RunContext.networkPolicyId 대상.
+CREATE TABLE network_policies (
+  id                 uuid        PRIMARY KEY,
+  tenant_id          uuid        NOT NULL,
+  allowed_domains    text[]      NOT NULL DEFAULT '{}',     -- 정확/와일드카드(*.vendor.com) 허용 목록
+  block_on_violation boolean     NOT NULL DEFAULT true,     -- 기본 true. 이탈 시 DOMAIN_POLICY_VIOLATION(security)
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_network_policies_tenant ON network_policies (tenant_id);
+
+-- ============================================================
+-- 2. scenarios / scenario_versions
+--    SCENARIO_VERSION_CONFLICT(412, If-Match) 근거 = scenario_versions.version 낙관적 락(ETag).
+--    IREL은 컴파일 타임 검증(README §결정3) → compiled_ast는 검증 통과분만 영속.
+-- ============================================================
+
+CREATE TABLE scenarios (
+  id          uuid        PRIMARY KEY,
+  tenant_id   uuid        NOT NULL,
+  name        text        NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, name)
+);
+CREATE INDEX idx_scenarios_tenant ON scenarios (tenant_id);
+
+CREATE TABLE scenario_versions (
+  id                uuid        PRIMARY KEY,
+  tenant_id         uuid        NOT NULL,
+  scenario_id       uuid        NOT NULL REFERENCES scenarios(id),
+  version           int         NOT NULL,                   -- ir.schema meta.version. optimistic lock/ETag 근거
+  promotion_status  text        NOT NULL DEFAULT 'draft'
+                      CHECK (promotion_status IN ('draft','prod')),  -- prod 승격은 ValidationReport warnings 차단(ir-static-validation §3)
+  ir                jsonb       NOT NULL,                   -- ir.schema.json 원본
+  compiled_ast      text,                                   -- IREL AST 캐시 참조(저장/승격 시 컴파일 통과분만)
+  params_schema     jsonb,                                  -- ir.schema params_schema(IREL params.* 타입 추론 근거)
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  promoted_at       timestamptz,
+  -- (scenario, version) 유일 → If-Match 충돌 시 SCENARIO_VERSION_CONFLICT(412)
+  UNIQUE (tenant_id, scenario_id, version)
+);
+CREATE INDEX idx_scenario_versions_scenario ON scenario_versions (scenario_id, version);
+CREATE UNIQUE INDEX uq_scenario_versions_prod ON scenario_versions (tenant_id, scenario_id)
+  WHERE promotion_status = 'prod';                          -- scenario당 prod 1건
+
+-- ============================================================
+-- 3. workitems
+--    state-machine.md §2 (W1..W11). unique_reference = tenant+connector 단위 dedup.
+--    checkout timer pause/resume(W9/W11)는 cursor/evidence와 함께 추적.
+-- ============================================================
+
+CREATE TABLE workitems (
+  id                uuid        PRIMARY KEY,
+  tenant_id         uuid        NOT NULL,
+  connector_id      text        NOT NULL,
+  unique_reference  text        NOT NULL,                   -- W1: 중복 checkout 차단 키
+  status            text        NOT NULL DEFAULT 'new'
+                      CHECK (status IN ('new','processing','successful','retry',
+                                        'failed_business','failed_system','abandoned')),  -- WorkitemState 7개
+  attempts          int         NOT NULL DEFAULT 0,         -- W4/W5/W6/W7 attempts < max 판정
+  checked_out_by    uuid,                                   -- W1 checked_out_by set(worker)
+  checked_out_at    timestamptz,                            -- W1
+  checkout_expires_at timestamptz,                          -- W6/W7 checkout_expired 판정(W9 pause 구간 제외 계산)
+  checkout_paused_at  timestamptz,                          -- W9 timer pause 시각(W11 resume 시 잔여 TTL 재개)
+  cursor            jsonb,                                  -- W8 cursor 보존(재시도 시 리셋 안 함)
+  evidence_ref      text,                                   -- W4/W6 evidence 유지(artifact 참조)
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  -- tenant+connector 내 unique_reference 유일(W1 멱등 checkout)
+  UNIQUE (tenant_id, connector_id, unique_reference)
+);
+CREATE INDEX idx_workitems_status ON workitems (tenant_id, status);
+CREATE INDEX idx_workitems_checkout_expiry ON workitems (checkout_expires_at)
+  WHERE status = 'processing';                              -- checkout 만료 sweeper
+
+-- ============================================================
+-- 4. runs
+--    state-machine.md §1 (R1..R28). 1 Workitem = 1 Run(기본).
+--    resume_token = reserved-handlers.md ResumeToken(kid/hmac 포함). 키 자료는 SecretStore/KMS,
+--    DB에는 봉투(jsonb)만 — hmac은 위변조 서명값일 뿐 시크릿 평문 아님(security-contracts §5).
+-- ============================================================
+
+CREATE TABLE runs (
+  id                  uuid        PRIMARY KEY,
+  tenant_id           uuid        NOT NULL,
+  scenario_version_id uuid        NOT NULL REFERENCES scenario_versions(id),
+  workitem_id         uuid        REFERENCES workitems(id),  -- 1 Workitem = 1 Run(기본). run-less 경로 위해 nullable
+  worker_id           uuid,                                 -- R1/R17 lease 확보 시 set
+  status              text        NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued','claimed','running','suspending','suspended',
+                                          'resume_requested','resuming','completing','completed',
+                                          'aborting','cancelled','failed_business','failed_system')),  -- RunState 13개
+  attempts            int         NOT NULL DEFAULT 0,        -- R3a 재큐 시 attempts+1
+  resume_token        jsonb,                                 -- ResumeToken 봉투(runId/resumeNodeId/loopContext/pageStateRef/kid/hmac)
+  params              jsonb,                                 -- 실행 파라미터(params_schema로 검증)
+  as_of               timestamptz,                           -- ir-expression §5: Run 생성 시 1회 고정(params.as_of)
+  correlation_id      uuid        NOT NULL,                  -- 이벤트 envelope·trace span 공통 상관키
+  -- usage 누계(R21 usage flush) — 비용/토큰 집계
+  usage_input_tokens  bigint      NOT NULL DEFAULT 0,
+  usage_output_tokens bigint      NOT NULL DEFAULT 0,
+  usage_cost          numeric(14,6) NOT NULL DEFAULT 0,
+  started_at          timestamptz,                           -- R2 run.started
+  ended_at            timestamptz,                           -- terminal 진입 시각
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_runs_status ON runs (tenant_id, status);
+CREATE INDEX idx_runs_workitem ON runs (workitem_id);
+CREATE INDEX idx_runs_correlation ON runs (correlation_id);
+
+-- ============================================================
+-- 5. run_steps
+--    core-types.ts StepResult를 영속화. status=StepStatus 8개. cache.mode 6개.
+--    page_state_before/after = PageStateRef(참조). artifacts/stagehand_call_ids는 배열.
+-- ============================================================
+
+CREATE TABLE run_steps (
+  id                 uuid        PRIMARY KEY,
+  run_id             uuid        NOT NULL REFERENCES runs(id),
+  tenant_id          uuid        NOT NULL,
+  step_id            text        NOT NULL,                  -- StepResult.stepId
+  node_id            text        NOT NULL,                  -- IR 노드 id
+  action             text        NOT NULL
+                       CHECK (action IN ('act','observe','extract','navigate','download','upload',
+                                         'api_call','file','human_task','shell')),  -- IRActionType
+  status             text        NOT NULL
+                       CHECK (status IN ('success','failed_business','failed_system','failed_challenge',
+                                         'failed_security','uncertain','skipped','suspended')),  -- StepStatus 8개
+  cache_mode         text        NOT NULL DEFAULT 'bypass'
+                       CHECK (cache_mode IN ('hit','miss','bypass','suspect','stale','quarantined')),  -- StepResult.cache.mode
+  action_plan_cache_id uuid,                                 -- StepResult.cache.actionPlanCacheId. FK는 §10 말미 ALTER로 보강(테이블 생성 순서)
+  page_state_before  text,                                  -- PageStateRef
+  page_state_after   text,                                  -- PageStateRef
+  artifacts          text[]      NOT NULL DEFAULT '{}',     -- ArtifactRef[]
+  stagehand_call_ids text[]      NOT NULL DEFAULT '{}',     -- StepResult.stagehandCallIds
+  side_effect        jsonb,                                 -- {kind,idempotencyKey?,receiptRef?,committed}
+  exception          jsonb,                                 -- ClassifiedException {class,code,message,evidenceRefs?}
+  started_at         timestamptz,                           -- timings.startedAt
+  ended_at           timestamptz,                           -- timings.endedAt
+  duration_ms        int,                                   -- timings.durationMs
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+-- NOTE: action_plan_cache는 §10에서 생성되므로 위 FK는 선언 불가 — 아래 §10 이후 ALTER로 추가.
+-- (테이블 정의 순서 의존을 피하기 위해 위 컬럼은 일단 참조만, 실제 FK는 §10 말미에서 보강.)
+CREATE INDEX idx_run_steps_run ON run_steps (run_id);
+CREATE INDEX idx_run_steps_tenant ON run_steps (tenant_id);
+
+-- ============================================================
+-- 6. human_tasks
+--    state-machine.md §3 (H1..H8). state=HumanTaskState 7개, kind=HumanTaskKind 5개.
+--    on_timeout = fail|escalate (H4a/H4b 분기, reserved-handlers @human_task 입력 정책).
+-- ============================================================
+
+CREATE TABLE human_tasks (
+  id            uuid        PRIMARY KEY,
+  tenant_id     uuid        NOT NULL,
+  run_id        uuid        NOT NULL REFERENCES runs(id),
+  kind          text        NOT NULL
+                  CHECK (kind IN ('approval','validation','exception','captcha','mfa')),  -- HumanTaskKind 5개
+  state         text        NOT NULL DEFAULT 'open'
+                  CHECK (state IN ('open','assigned','in_progress','resolved',
+                                   'expired','cancelled','escalated')),  -- HumanTaskState 7개
+  assignee      uuid,                                       -- H1 assignee set
+  assignee_role text,                                       -- RBAC 역할(Phase 2 역할 레지스트리)
+  on_timeout    text        NOT NULL DEFAULT 'fail'
+                  CHECK (on_timeout IN ('fail','escalate')),  -- H4a(fail→expired)/H4b(escalate→escalated)
+  expires_at    timestamptz,                                -- timeout 기준 시각
+  payload_ref   text,                                       -- 작업 본문 참조(artifact/payload)
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  resolved_at   timestamptz,
+  updated_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_human_tasks_run ON human_tasks (run_id);
+CREATE INDEX idx_human_tasks_state ON human_tasks (tenant_id, state);
+CREATE INDEX idx_human_tasks_expiry ON human_tasks (expires_at)
+  WHERE state IN ('open','assigned','in_progress','escalated');  -- timeout sweeper(H4/H8)
+
+-- ============================================================
+-- 7. artifacts
+--    impl-contracts-bundle.md §B/§C + security-contracts §8.
+--    redaction_status 게이트(redacted/not_required 아니면 조회 차단 → ARTIFACT_NOT_REDACTED).
+-- ============================================================
+
+CREATE TABLE artifacts (
+  id               uuid        PRIMARY KEY,
+  tenant_id        uuid        NOT NULL,
+  run_id           uuid        REFERENCES runs(id),         -- orphan_sweeper 대상(run 삭제/취소 후 참조 없으면 정리)
+  step_id          text,                                    -- 생성 step(run_steps.step_id, 느슨 참조)
+  type             text        NOT NULL,                    -- vlm_input/screenshot/receipt/evidence 등(개방형)
+  redaction_status text        NOT NULL DEFAULT 'pending'
+                     CHECK (redaction_status IN ('pending','redacted','failed','not_required')),  -- §B redaction job
+  redaction_attempts int       NOT NULL DEFAULT 0,          -- 실패 N회 → failed + 알림(§B)
+  sha256           text,                                    -- §B integrity_checker 대조 대상
+  object_ref       text        NOT NULL,                    -- 스토리지 객체 참조
+  retention_until  timestamptz,                             -- §B retention_sweeper(법정 보존은 legal_hold로 예외)
+  legal_hold       boolean     NOT NULL DEFAULT false,      -- true면 retention sweeper 예외
+  quarantine       boolean     NOT NULL DEFAULT false,      -- §B integrity 불일치 시 격리
+  created_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_artifacts_run ON artifacts (run_id);
+CREATE INDEX idx_artifacts_redaction ON artifacts (redaction_status)
+  WHERE redaction_status = 'pending';                       -- redaction_job 폴링
+CREATE INDEX idx_artifacts_retention ON artifacts (retention_until)
+  WHERE legal_hold = false;                                 -- retention_sweeper
+
+-- ============================================================
+-- 8. events_outbox
+--    event-envelope.schema.json 봉투를 컬럼화. 상태 변경과 **동일 트랜잭션** INSERT(README §결정2).
+--    idempotency_key UNIQUE(소비자 중복 무시). published_at NULL = 미발행(outbox relay 대상).
+-- ============================================================
+
+CREATE TABLE events_outbox (
+  event_id           uuid        PRIMARY KEY,               -- envelope event_id
+  event_type         text        NOT NULL
+                       CHECK (event_type IN (
+                         'run.created','run.started','run.suspended','run.resume_requested','run.resumed',
+                         'run.cancelled','run.completed','run.failed_business','run.failed_system',
+                         'step.started','step.completed','step.verify.failed',
+                         'llm.stream.started','llm.stream.completed','llm.stream.aborted',
+                         'challenge.detected','challenge.resolved',
+                         'human_task.created','human_task.resolved','human_task.expired','human_task.escalated',
+                         'workitem.completed','workitem.dead_lettered',
+                         'pipeline.stage.completed','sink.delivered','sink.dead_lettered',
+                         'site.circuit_opened','site.circuit_closed',
+                         'worker.heartbeat','worker.circuit_opened','worker.circuit_closed'
+                       )),                                  -- event-envelope eventType enum
+  event_version      int         NOT NULL CHECK (event_version >= 1),
+  tenant_id          uuid        NOT NULL,
+  run_id             uuid,                                  -- run 없는 이벤트(worker.heartbeat 등) 위해 nullable
+  workitem_id        uuid,
+  step_id            text,
+  correlation_id     uuid        NOT NULL,                  -- envelope required
+  causation_id       uuid,                                  -- 유발 이벤트 id
+  ordering_key       text,                                  -- 기본 run_id. run-less 이벤트는 생략(envelope optional)
+  occurred_at        timestamptz NOT NULL,
+  idempotency_key    text        NOT NULL,                  -- 예: run:step:attempt:verify
+  payload_schema_ref text        NOT NULL,                  -- 예: events/run.completed@1
+  payload            jsonb       NOT NULL,
+  published_at       timestamptz,                           -- NULL = 미발행(relay가 발행 후 set)
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (idempotency_key)                                  -- 중복 인큐 차단(소비자 멱등)
+);
+CREATE INDEX idx_events_outbox_unpublished ON events_outbox (created_at)
+  WHERE published_at IS NULL;                               -- outbox relay 미발행 스캔
+CREATE INDEX idx_events_outbox_run ON events_outbox (run_id);
+
+-- ============================================================
+-- 9. dead_letter
+--    state-machine W5/W7(생성)·W10(manual_replay 복원). error-catalog DEAD_LETTER.
+--    reason_code = ErrorCode(text — ErrorCode는 TS enum, DB enum 아님. error-catalog.ts가 권위).
+-- ============================================================
+
+CREATE TABLE dead_letter (
+  id           uuid        PRIMARY KEY,
+  tenant_id    uuid        NOT NULL,
+  workitem_id  uuid        REFERENCES workitems(id),        -- W5/W7 workitem 차원 DLQ
+  run_id       uuid        REFERENCES runs(id),
+  reason_code  text        NOT NULL,                        -- error-catalog.ts ErrorCode(예: DEAD_LETTER, WORKITEM_CHECKOUT_CONFLICT)
+  evidence_ref text,                                        -- 실패 증빙(artifact 참조)
+  replayable   boolean     NOT NULL DEFAULT true,           -- W10 manual_replay 가능 여부
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  replayed_at  timestamptz                                  -- W10 복원 시각(NULL = 미복원)
+);
+CREATE INDEX idx_dead_letter_workitem ON dead_letter (workitem_id);
+CREATE INDEX idx_dead_letter_replayable ON dead_letter (tenant_id)
+  WHERE replayed_at IS NULL AND replayable = true;          -- DLQ replay 인박스
+
+-- ============================================================
+-- 10. action_plan_cache (§7 본체)
+--    impl-bundle §D classifier + migration_concurrency_idempotency.sql의 ON CONFLICT 규약.
+--    UNIQUE는 그 SQL 주석이 명시한 7개 컬럼과 **정확히 일치**(insert-race "먼저 검증된 active가 이긴다").
+--    status는 core-types StepResult.cache.mode의 캐시 상태(active/suspect/stale/quarantined)와 정합(§7.2 전이).
+-- ============================================================
+
+CREATE TABLE action_plan_cache (
+  id                       uuid        PRIMARY KEY,
+  tenant_id                uuid        NOT NULL,
+  scenario_version_id      uuid        NOT NULL REFERENCES scenario_versions(id),
+  step_id                  text        NOT NULL,
+  url_pattern              text        NOT NULL,             -- url_pattern_normalized(page/offset placeholder)
+  dom_structural_hash      text        NOT NULL,             -- family 키(impl-bundle §D, visible_text 제외)
+  model                    text        NOT NULL,
+  prompt_template_version  text        NOT NULL,
+  browser_identity_version int         NOT NULL,             -- browser_identities.version과 정합
+  plan_ref                 text,                             -- 해석된 action plan 참조
+  status                   text        NOT NULL DEFAULT 'active'
+                             CHECK (status IN ('active','suspect','stale','quarantined')),  -- §7.2: suspect→stale(재생 차단)
+  success_count            int         NOT NULL DEFAULT 0,   -- ON CONFLICT DO UPDATE 시 +1
+  last_success_at          timestamptz,
+  created_at               timestamptz NOT NULL DEFAULT now(),
+  -- migration_concurrency_idempotency.sql §4 ON CONFLICT 규약이 참조하는 UNIQUE(7개 컬럼) — 정확히 일치
+  UNIQUE (scenario_version_id, step_id, url_pattern, dom_structural_hash,
+          model, prompt_template_version, browser_identity_version)
+);
+CREATE INDEX idx_action_plan_cache_lookup
+  ON action_plan_cache (scenario_version_id, step_id, url_pattern, dom_structural_hash)
+  WHERE status = 'active';                                  -- cache.lookup(active만 재생)
+
+-- run_steps.action_plan_cache_id FK 보강(§5에서 선언 미룬 것 — action_plan_cache 생성 후)
+ALTER TABLE run_steps
+  ADD CONSTRAINT fk_run_steps_action_plan_cache
+  FOREIGN KEY (action_plan_cache_id) REFERENCES action_plan_cache(id);
+
+-- ============================================================
+-- 11. stagehand_calls
+--    llm-gateway-adapter.md(stream_status·transport)·core-types StepResult.stagehandCallIds.
+--    transport: SSE 스트리밍 기본, sync 폴백. stream_status에 fallback 사유 기록(adapter §4).
+-- ============================================================
+
+CREATE TABLE stagehand_calls (
+  id                      uuid        PRIMARY KEY,
+  tenant_id               uuid        NOT NULL,
+  run_id                  uuid        NOT NULL REFERENCES runs(id),
+  step_id                 text        NOT NULL,             -- run_steps.step_id(느슨 참조)
+  model                   text        NOT NULL,             -- LLMRequest.model
+  transport               text        NOT NULL DEFAULT 'sse'
+                            CHECK (transport IN ('sse','sync')),  -- 기본 SSE, sync는 폴백(adapter §1)
+  stream_status           text,                             -- open/done/aborted/error/fallback 사유(adapter §3/§4)
+  ttfb_ms                 int,                              -- llm_gateway.call span attr
+  input_tokens            int,
+  output_tokens           int,
+  cost                    numeric(14,6),
+  prompt_template_version text,                             -- 캐시 키·기록(LLMRequest.promptTemplateVersion)
+  output_ref              text,                             -- 누적 결과 참조(adapter §6)
+  input_redacted_ref      text,                             -- 기본 hash만(adapter §6, redacted prompt)
+  created_at              timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_stagehand_calls_run ON stagehand_calls (run_id);
+CREATE INDEX idx_stagehand_calls_step ON stagehand_calls (run_id, step_id);
+
+-- ============================================================
+-- FK: lease 테이블(migration_concurrency_idempotency.sql)의 uuid 참조 보강
+--   해당 파일은 site_profile_id/browser_identity_id/run_id/workitem_id를 uuid 컬럼으로만 두고
+--   FK는 본 핵심 엔티티 마이그레이션(이 파일)에서 보강한다(테이블 본체가 여기 있으므로).
+--   두 마이그레이션의 적용 순서: concurrency_idempotency 이후 core_entities (이 파일이 뒤).
+-- ============================================================
+ALTER TABLE credential_leases
+  ADD CONSTRAINT fk_credlease_run FOREIGN KEY (run_id) REFERENCES runs(id),
+  ADD CONSTRAINT fk_credlease_workitem FOREIGN KEY (workitem_id) REFERENCES workitems(id),
+  ADD CONSTRAINT fk_credlease_site FOREIGN KEY (site_profile_id) REFERENCES site_profiles(id);
+
+ALTER TABLE credential_concurrency_policies
+  ADD CONSTRAINT fk_credpolicy_site FOREIGN KEY (site_profile_id) REFERENCES site_profiles(id);
+
+ALTER TABLE browser_leases
+  ADD CONSTRAINT fk_browserlease_site FOREIGN KEY (site_profile_id) REFERENCES site_profiles(id),
+  ADD CONSTRAINT fk_browserlease_identity FOREIGN KEY (browser_identity_id) REFERENCES browser_identities(id),
+  ADD CONSTRAINT fk_browserlease_run FOREIGN KEY (run_id) REFERENCES runs(id);
+
+ALTER TABLE challenge_resolution_attempts
+  ADD CONSTRAINT fk_challenge_run FOREIGN KEY (run_id) REFERENCES runs(id),
+  ADD CONSTRAINT fk_challenge_workitem FOREIGN KEY (workitem_id) REFERENCES workitems(id);
+
+-- raw_items.target_id는 connector 대상(target) 식별 — target 테이블은 connector 도메인(범위 외) → FK 미보강.
