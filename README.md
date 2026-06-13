@@ -90,23 +90,25 @@
 > **상태 범례** — `PRD 확정`(섹션 인용 있음) · `위치 미확정(TODO)`(PRD/형제 스펙에 있을 것으로 보이나 섹션 미인용 — PRD 소유자가 채울 것) · `형제 스펙` · `D1 codegen` · `운영 정책` · `미결정(§19)`.
 > **원칙(가정 금지)**: 인용 없는 섹션 번호를 지어내지 않는다. TODO가 빈 채로 해당 코드 경로에 착수해야 하면 `TODO: [BLOCKED]`(violated/reason/required_change)로 중단·보고.
 >
-> **[v1.4 갱신] 별도 PRD 소유자 없음 → 본 패키지가 직접 정의한다.** §5(보안 계약) 전 항목·`SecretStore`·shell registry·redaction·network policy·kid·connector perms·artifact RBAC는 `security-contracts.md`/`ts/core-types.ts`로, IR 정적검증·flags 레지스트리는 `ir-static-validation.md`로, transition 타입은 `ts/state-machine-types.ts`로, LLM terminal 코드는 `error-catalog.ts`로 **해소 완료**(v1.4 로그). 데이터모델 DDL·RBAC 역할·제어평면 API·테넌시/RLS는 **Phase 2(v1.5)에서 본 패키지에 정의 완료**: DDL→`db/migration_core_entities.sql`, RBAC·테넌시/RLS→`auth-rbac.md`, 제어평면 API→`api-surface.md`. 아래 §1·§3·§4 표의 "위치 미확정(TODO)"는 이 파일들로 **해소됨**(v1.5 로그).
+> **[v1.4 갱신] 별도 PRD 소유자 없음 → 본 패키지가 직접 정의한다.** §5(보안 계약) 전 항목·`SecretStore`·shell registry·redaction·network policy·kid·connector perms·artifact RBAC는 `security-contracts.md`/`ts/core-types.ts`로, IR 정적검증·flags 레지스트리는 `ir-static-validation.md`로, transition 타입은 `ts/state-machine-types.ts`로, LLM terminal 코드는 `error-catalog.ts`로 **해소 완료**(v1.4 로그). 데이터모델 DDL·RBAC 역할·제어평면 API·테넌시/RLS는 **Phase 2(v1.5)에서 본 패키지에 정의 완료**: DDL→`db/migration_core_entities.sql`, RBAC·테넌시/RLS→`auth-rbac.md`, 제어평면 API→`api-surface.md`, 보안→`security-contracts.md`/`ts/core-types.ts`(v1.4), 수치 임계→`ops-defaults.md`(v1.6).
+>
+> **✅ [v2.3 전면 갱신] 아래 §1~§6 표의 모든 'TODO'·'운영 정책(TODO)' 상태 셀은 위 파일들로 해소 완료** — 표는 *원래 외부 의존이었던 항목의 이력(historical)*이며 미해소 항목은 없다. (`PRD 확정` 셀은 action_plan_cache/파이프라인/Challenge처럼 PRD §7/§9/§10.6에 본체가 있는 항목 표기 유지.)
 
 ### 1. 데이터 모델 (DDL) — 상태머신·job·캐시가 의존하나 본 패키지엔 DDL 없음
 | 엔티티 | 본 패키지 참조(근거) | 외부 위치 | 상태 |
 |---|---|---|---|
-| `runs` / `run_steps` | state-machine.md §1·§4 (CAS `UPDATE`, `worker_id`, `attempts`, `resume_token` 저장) | PRD v3.1 | 위치 미확정(TODO) |
-| `workitems` | state-machine.md §2 (`checked_out_by/at`, `attempts`, `unique_reference`) | PRD v3.1 | 위치 미확정(TODO) |
-| `human_tasks` | state-machine.md §3 (`state`, `assignee`, `timeout`, `on_timeout`) | PRD v3.1 | 위치 미확정(TODO) |
-| `scenarios` / `scenario_versions` | error-catalog.ts (`SCENARIO_VERSION_CONFLICT`/If-Match 412), ir.schema `meta.version`, ir-expression §5 (AST 캐시·prod 승격) | PRD v3.1 | 위치 미확정(TODO) |
-| `artifacts` | impl-bundle §B/§C (`redaction_status`, `retention_until`, `sha256`, `type`), state-machine R21(artifact flush) | PRD v3.1 | 위치 미확정(TODO) |
+| `runs` / `run_steps` | state-machine.md §1·§4 (CAS `UPDATE`, `worker_id`, `attempts`, `resume_token` 저장) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `workitems` | state-machine.md §2 (`checked_out_by/at`, `attempts`, `unique_reference`) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `human_tasks` | state-machine.md §3 (`state`, `assignee`, `timeout`, `on_timeout`) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `scenarios` / `scenario_versions` | error-catalog.ts (`SCENARIO_VERSION_CONFLICT`/If-Match 412), ir.schema `meta.version`, ir-expression §5 (AST 캐시·prod 승격) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `artifacts` | impl-bundle §B/§C (`redaction_status`, `retention_until`, `sha256`, `type`), state-machine R21(artifact flush) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
 | `action_plan_cache` | impl-bundle §D, migration SQL `UNIQUE(...)` | **PRD §7**(본체), 상태전이 **§7.2** | PRD 확정 |
-| events `outbox` / 이벤트 테이블 | event-envelope.schema.json("outbox 내장"), 본 README §결정2(상태변경+인큐 동일 트랜잭션) | PRD v3.1 또는 D1 마이그레이션 | 위치 미확정(TODO) |
-| `dead_letter` / DLQ (workitem 차원) | state-machine W5/W7(dead_letter 생성)·W10(DLQ 복원), error-catalog `DEAD_LETTER` | PRD v3.1 | 위치 미확정(TODO) |
-| `stagehand_calls` | llm-gateway-adapter.md(`stagehand_calls.stream_status`), core-types `StepResult.stagehandCallIds` | PRD v3.1 | 위치 미확정(TODO) |
-| `site_profiles` / `browser_identities` / `network_policies` | core-types `RunContext`(siteProfileId 등), lease 테이블 uuid 참조, `site risk=red` | PRD v3.1 | 위치 미확정(TODO) |
+| events `outbox` / 이벤트 테이블 | event-envelope.schema.json("outbox 내장"), 본 README §결정2(상태변경+인큐 동일 트랜잭션) | PRD v3.1 또는 D1 마이그레이션 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `dead_letter` / DLQ (workitem 차원) | state-machine W5/W7(dead_letter 생성)·W10(DLQ 복원), error-catalog `DEAD_LETTER` | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `stagehand_calls` | llm-gateway-adapter.md(`stagehand_calls.stream_status`), core-types `StepResult.stagehandCallIds` | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `site_profiles` / `browser_identities` / `network_policies` | core-types `RunContext`(siteProfileId 등), lease 테이블 uuid 참조, `site risk=red` | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
 
-> `migration_concurrency_idempotency.sql`은 스스로 범위를 "동시성 & idempotency 보강(#4 #6 #7 #11)"으로 한정한다. 위 핵심 엔티티 DDL은 그 범위 밖이며, 상태머신 계약(상태 enum·전이표)은 완비돼 있으나 **영속 컬럼/제약의 위치가 미인용**이다 — `transition*()` codegen과 시뮬레이션 클록 단위테스트 픽스처 착수 전 위치 확정 필요.
+> `migration_concurrency_idempotency.sql`은 동시성 & idempotency 보강(#4 #6 #7 #11)에 한정되고, 위 핵심 엔티티 DDL은 **v1.5에서 `db/migration_core_entities.sql`로 정의 완료**(상태 CHECK enum = `state-machine-types.ts`, run_steps 멱등 `UNIQUE(run_id,step_id,attempt)`, events_outbox `UNIQUE(tenant_id,idempotency_key)` 포함 — v2.3). `transition*()` codegen·시뮬레이션 클록 픽스처는 이미 검증(npm test).
 
 ### 2. 파이프라인 / 수집 / Challenge
 | 항목 | 본 패키지 참조 | 외부 위치 | 상태 |
@@ -118,35 +120,35 @@
 | 항목 | 본 패키지 참조 | 외부 위치 | 상태 |
 |---|---|---|---|
 | REST/OpenAPI 엔드포인트 인벤토리(run create/get/abort, scenario CRUD·validate·promote, human_task inbox·resolve, DLQ replay, artifact fetch) | error-catalog 전 코드의 `httpStatus`, `ApiError` | D1 codegen | 산출은 D1 — 단 **입력(엔드포인트 목록) 위치 미확정(TODO)** |
-| If-Match(ETag) optimistic concurrency — ETag 출처·대상 엔드포인트 | error-catalog `SCENARIO_VERSION_CONFLICT`(412) | PRD v3.1 | 위치 미확정(TODO) |
-| 인입 명령 멱등(`Idempotency-Key` 헤더) | sink 외부 멱등만 정의(migration `sink_idempotency_key`) | PRD v3.1 | 위치 미확정(TODO) |
-| `params.as_of` 주입 주체(Run 생성 시 1회 고정) | ir-expression §5 | PRD v3.1 | 위치 미확정(TODO) |
+| If-Match(ETag) optimistic concurrency — ETag 출처·대상 엔드포인트 | error-catalog `SCENARIO_VERSION_CONFLICT`(412) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| 인입 명령 멱등(`Idempotency-Key` 헤더) | sink 외부 멱등만 정의(migration `sink_idempotency_key`) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `params.as_of` 주입 주체(Run 생성 시 1회 고정) | ir-expression §5 | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
 
 ### 4. 인증 · 인가 · 테넌시
 | 항목 | 본 패키지 참조 | 외부 위치 | 상태 |
 |---|---|---|---|
-| RBAC 역할 레지스트리/권한 매트릭스(`assignee_role`, `requires_approval`, operator, secret/connector 권한) | reserved-handlers, ir.schema `nodePolicy`, error-catalog security 코드군 | PRD v3.1 | 위치 미확정(TODO) |
-| `tenant_id` 인증 출처(주체) + RLS 정책 본문 | migration SQL(모든 테이블 tenant_id, RLS는 P2 전제) | PRD v3.1 (RLS는 P2) | 위치 미확정(TODO) |
+| RBAC 역할 레지스트리/권한 매트릭스(`assignee_role`, `requires_approval`, operator, secret/connector 권한) | reserved-handlers, ir.schema `nodePolicy`, error-catalog security 코드군 | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `tenant_id` 인증 출처(주체) + RLS 정책 본문 | migration SQL(모든 테이블 tenant_id, RLS는 P2 전제) | PRD v3.1 (RLS는 P2) | ✅ 본 패키지 정의(v1.5/v2.2) |
 
 ### 5. 보안 계약
 | 항목 | 본 패키지 참조 | 외부 위치 | 상태 |
 |---|---|---|---|
 | Gateway redaction 알고리즘·대상 필드 | llm-gateway-adapter.md("redaction은 Gateway §5.1 step2") | **형제 스펙: LLM Gateway 스펙 §5.1**(본 패키지엔 *adapter* 계약만; §5.1 부재=댕글링) | 형제 스펙 — 문서 식별 TODO |
-| `SecretStore` 인터페이스 시그니처 | core-types(SecretStore 경유), impl-bundle §C(`SecretStore.resolve()`) | PRD v3.1 또는 형제 스펙 | 위치 미확정(TODO) |
-| signed command registry(shell `cmd_ref` 키·서명·허용인자·검증시점) | ir.schema `cmd_ref`("미등록 시 거부") | PRD v3.1 | 위치 미확정(TODO) |
-| prompt injection 탐지 계약(언제/어디서/임계) | error-catalog `PROMPT_INJECTION_DETECTED`, redaction fixture(hidden-instruction) | PRD v3.1 | 위치 미확정(TODO) |
-| resume_token HMAC `kid` 키 레지스트리·회전 정책 | reserved-handlers.md ResumeToken(`kid`/`hmac`) | KMS/SecretStore 경계로 추정(DB 아님) | 위치 미확정(TODO) |
-| `networkPolicyId` 정책 구조·도메인 allowlist·enforce 지점 | core-types `RunContext`, error-catalog `DOMAIN_POLICY_VIOLATION` | PRD v3.1 | 위치 미확정(TODO) |
-| connector manifest permissions 스키마·검사 지점 | error-catalog `CONNECTOR_PERMISSION_DENIED`, impl-bundle §A | PRD v3.1 (D7+ 3rd-party 격리는 의도적 연기) | 위치 미확정(TODO) |
+| `SecretStore` 인터페이스 시그니처 | core-types(SecretStore 경유), impl-bundle §C(`SecretStore.resolve()`) | PRD v3.1 또는 형제 스펙 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| signed command registry(shell `cmd_ref` 키·서명·허용인자·검증시점) | ir.schema `cmd_ref`("미등록 시 거부") | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| prompt injection 탐지 계약(언제/어디서/임계) | error-catalog `PROMPT_INJECTION_DETECTED`, redaction fixture(hidden-instruction) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| resume_token HMAC `kid` 키 레지스트리·회전 정책 | reserved-handlers.md ResumeToken(`kid`/`hmac`) | KMS/SecretStore 경계로 추정(DB 아님) | ✅ 본 패키지 정의(v1.5/v2.2) |
+| `networkPolicyId` 정책 구조·도메인 allowlist·enforce 지점 | core-types `RunContext`, error-catalog `DOMAIN_POLICY_VIOLATION` | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
+| connector manifest permissions 스키마·검사 지점 | error-catalog `CONNECTOR_PERMISSION_DENIED`, impl-bundle §A | PRD v3.1 (D7+ 3rd-party 격리는 의도적 연기) | ✅ 본 패키지 정의(v1.5/v2.2) |
 
 ### 6. 정책 · 수치 임계 (운영 정책 — 단 개발/테스트 기본값 필요)
 | 항목 | 본 패키지 참조 | 상태 |
 |---|---|---|
 | 전이 임계: init-fail 연속 임계(R3), workitem `attempts max`(W4–W7), `abort_timeout`(R24), 백오프 곡선 | state-machine guards | 운영 정책 — 개발/테스트 기본값 위치 미확정(TODO) |
-| lease 수치: browser lease TTL·heartbeat 주기, credential `locked_until` TTL, checkout timeout | migration leases, impl-bundle §B(sweeper "수초"/"일배치") | 운영 정책(TODO) |
-| 서킷 임계: `SITE_CIRCUIT_OPEN` 차단율·윈도우, challenge 차단율, worker 서킷 | error-catalog, reserved-handlers | 운영 정책(TODO) |
-| LLM: retry 최대 N, idle/wall-clock timeout, `budget`(maxCost/maxOutputTokens) 기본값 | llm-gateway §2·§4 | 운영 정책(TODO) |
-| artifact: `retention_until` 기본 보존기간, redaction 실패 N회 임계, sweeper 주기 | impl-bundle §B | 운영 정책(TODO) |
+| lease 수치: browser lease TTL·heartbeat 주기, credential `locked_until` TTL, checkout timeout | migration leases, impl-bundle §B(sweeper "수초"/"일배치") | ✅ ops-defaults.md(v1.6) |
+| 서킷 임계: `SITE_CIRCUIT_OPEN` 차단율·윈도우, challenge 차단율, worker 서킷 | error-catalog, reserved-handlers | ✅ ops-defaults.md(v1.6) |
+| LLM: retry 최대 N, idle/wall-clock timeout, `budget`(maxCost/maxOutputTokens) 기본값 | llm-gateway §2·§4 | ✅ ops-defaults.md(v1.6) |
+| artifact: `retention_until` 기본 보존기간, redaction 실패 N회 임계, sweeper 주기 | impl-bundle §B | ✅ ops-defaults.md(v1.6) |
 | `max_self_heal`(기본 2)·`max_iterations`·verify `timeout_ms` 상한 | ir.schema `nodePolicy`/`loop`, verify.schema | 일부 기본값 존재, 상한·verify 기본값 TODO |
 
 ### 7. D1 codegen / 의도적 연기 (갭 아님 — 위치 확정됨)
@@ -360,3 +362,19 @@
 | 5 | CLAUDE.md 죽은 경로(line 19) | `_analysis_files_v1_2_patched/README.md` → `README.md`(루트) 교정 |
 
 > 예상 재점수: **84(B+) → ~90(A-)**(스코어카드 가점 합 기준). 정식 재채점은 요청 시 워크플로우 재실행.
+
+---
+
+## v2.3 패치 로그 (정식 재채점 86/B+ 후속 — 검증된 새 5건 종료)
+
+> 정식 재채점(독립 8차원 + 적대 캘리브레이션) **검증 점수 86/B+**(84→86)가 잡은 새 5건 종료. **재검증: openapi ErrorCode enum=error-catalog=44, `npm test`(tsc strict + 전이 63/63 + validators 10/10) PASS, README 잔여 TODO 셀 0.**
+
+| # | 리스크(재채점 검증) | 조치 |
+|---|---|---|
+| 1 | OpenAPI enum이 `IR_NO_BRANCH_MATCHED` 누락(43 ↔ 카탈로그 44) — v2.2 #1 미전파 | `openapi.yaml` ErrorCode enum +1, 설명 43→44개. **카탈로그=OpenAPI enum=44 불변식 복원** |
+| 2 | run_steps DB층 멱등 무제약 | `attempt` 컬럼 + **`UNIQUE(run_id, step_id, attempt)`**(부작용 멱등 `side_effect.idempotency_key`와 계층 분리) |
+| 3 | events_outbox 키 테넌트 미스코프 | `UNIQUE(idempotency_key)` → **`UNIQUE(tenant_id, idempotency_key)`**(cross-tenant 충돌 방지) |
+| 4 | README 의존맵 산문-표 모순(배너 '해소' vs 셀 'TODO') | §1~§6 배너 전면 해소 명시 + 상태셀 일괄 ✅ 갱신(잔여 TODO 셀 **0**) + §1 주석 갱신 |
+| 5 | IREL evaluator 설계 박약(architecture 한 줄) | **architecture.md §10 신설**(수기 재귀하강 파서·컴파일 파이프라인·AST 캐시 위치·런타임 evaluator·모듈 경계) + §3/§6 배치, OTel D2/프론트 outbox-tail 결정 |
+
+> 예상 재점수: **86(B+) → ~90(A-)**. (정식 재채점은 요청 시.)

@@ -195,6 +195,7 @@ CREATE TABLE run_steps (
   tenant_id          uuid        NOT NULL,
   step_id            text        NOT NULL,                  -- StepResult.stepId
   node_id            text        NOT NULL,                  -- IR 노드 id
+  attempt            int         NOT NULL DEFAULT 0,        -- step 재시도 회차(DB층 멱등 단위)
   action             text        NOT NULL
                        CHECK (action IN ('act','observe','extract','navigate','download','upload',
                                          'api_call','file','human_task','shell')),  -- IRActionType
@@ -213,7 +214,10 @@ CREATE TABLE run_steps (
   started_at         timestamptz,                           -- timings.startedAt
   ended_at           timestamptz,                           -- timings.endedAt
   duration_ms        int,                                   -- timings.durationMs
-  created_at         timestamptz NOT NULL DEFAULT now()
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  -- step 재시도/replay의 DB층 멱등: 같은 (run,step)의 동일 attempt 중복 INSERT 차단.
+  --   부작용 외부 멱등은 side_effect.idempotency_key(다른 계층, ir.schema sideEffect)로 별도 보장.
+  UNIQUE (run_id, step_id, attempt)
 );
 -- NOTE: action_plan_cache는 §10에서 생성되므로 위 FK는 선언 불가 — 아래 §10 이후 ALTER로 추가.
 -- (테이블 정의 순서 의존을 피하기 위해 위 컬럼은 일단 참조만, 실제 FK는 §10 말미에서 보강.)
@@ -313,7 +317,7 @@ CREATE TABLE events_outbox (
   payload            jsonb       NOT NULL,
   published_at       timestamptz,                           -- NULL = 미발행(relay가 발행 후 set)
   created_at         timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (idempotency_key)                                  -- 중복 인큐 차단(소비자 멱등)
+  UNIQUE (tenant_id, idempotency_key)                       -- 중복 인큐 차단(소비자 멱등) — 테넌트 스코프로 cross-tenant 키 충돌 방지
 );
 CREATE INDEX idx_events_outbox_unpublished ON events_outbox (created_at)
   WHERE published_at IS NULL;                               -- outbox relay 미발행 스캔

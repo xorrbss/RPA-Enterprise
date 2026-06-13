@@ -856,7 +856,7 @@ components:
     ErrorCode:
       type: string
       description: >
-        ts/error-catalog.ts ErrorCode(43개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
+        ts/error-catalog.ts ErrorCode(44개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
         ApiError 응답 code로는 반환되지 않는다(api-surface §0.2).
       enum:
         - RUN_NOT_FOUND
@@ -867,6 +867,7 @@ components:
         - IR_SCHEMA_INVALID
         - IR_EXPRESSION_COMPILE_ERROR
         - IR_EXPRESSION_RUNTIME
+        - IR_NO_BRANCH_MATCHED
         - SITE_PROFILE_BLOCKED
         - SITE_CIRCUIT_OPEN
         - SESSION_LOCKED
