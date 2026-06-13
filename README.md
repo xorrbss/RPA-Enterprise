@@ -28,7 +28,8 @@
 | `api-surface.md` | (제어평면 API) | REST 엔드포인트 인벤토리·If-Match·Idempotency-Key·as_of(D1 OpenAPI 입력) — v1.5 |
 | `ops-defaults.md` | (운영 기본값) | 전이 임계·lease TTL·서킷·LLM retry/budget·artifact retention·sweeper 주기 + 테스트 픽스처값 — v1.6 |
 | `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·transitions.fixtures.ts. tsc strict 통과·전이 63/63 PASS — v1.7 |
-| `architecture.md` | (구현 설계, 계약 아님) | 스택·실행기(**Stagehand v3 CDP, Playwright 제거**)·컴포넌트↔계약 매핑·배포·빌드순서 — v2.0 |
+| `architecture.md` | (구현 설계, 계약 아님) | 스택·실행기(**Stagehand v3 CDP, Playwright 제거**)·컴포넌트↔계약 매핑·배포·빌드순서·§10 IREL — v2.0 |
+| `build-prompt.md` | (개발 착수 프롬프트) | 코딩 에이전트용 프로덕션 빌드 마스터 프롬프트(D2–D7 단계별 DoD·검증 게이트·품질 바) — v2.4 |
 
 ---
 
