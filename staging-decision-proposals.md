@@ -1,0 +1,110 @@
+# Staging Decision Proposals (DRAFT — not release evidence)
+
+> 목적: `release-open-checklist.md`의 **External Staging/Open Blockers 7건**을 외부 오너가 닫기 쉽도록,
+> **레포가 정당하게 결정할 수 있는 항목은 미리 작성**하고, **현실에 존재해야만 하는 외부 사실은 입력란으로**
+> 남긴 초안.
+>
+> ⚠️ 이 문서는 **릴리즈 증거가 아니다.** 체크리스트 박스를 닫지 않으며 `blocked:audit` 게이트 상태를
+> 바꾸지 않는다. `[PROPOSED]` 항목은 외부 오너 확정 시 release-decisions.md로 승격, `[EXTERNAL-FACT]`
+> 항목은 실제 인프라 사실이 제공되어야 닫힌다(가정 금지 — 지어내지 않음).
+>
+> 근거: SecretRef 실사용은 `ts/security-middleware-contract.ts`(`SecretAccessRequest.purpose`,
+> `SignedCommandRegistryEntry.verificationKeyRef`), `ts/core-types.ts`(`SecretStore`,
+> `ConnectorManifestPermissions.secret_refs`), `security-contracts.md` §1·§5·§7에서 도출.
+
+## 왜 일부는 레포가 못 닫는가
+
+`blocked:audit`는 양방향 강제다 — 체크리스트의 미해결 블로커와 `product-open-candidate-report.md`의
+blocked-decision 마커가 1:1로 묶인다. 이는 "외부 시스템에 실제로 존재하는 증거"가 있어야만 블로커가 닫히도록
+한 의도된 안전장치다. 물리적 외부 사실(실제 배포 타깃·실제 Vault/KMS·실제 CI 로그)을 지어내 박스를 닫으면
+**조용한 거짓 릴리즈 준비 상태**가 되어 "조용한 false 금지" 원칙과 레포 게이트를 동시에 위반한다.
+
+---
+
+## [PROPOSED] 3. SecretRef 네임스페이스 컨벤션 (체크리스트 row 36)
+
+레포 결정 가능 — 네이밍은 시크릿 값이 아니라 규칙이다.
+
+- 컨벤션: `rpa/<env>/<runtime>/<purpose>/<name>`
+  - `<env>`: `staging` | `prod`
+  - `<runtime>`: `api` | `runtime-worker` | `browser-worker` | `llm-gateway`
+  - `<purpose>`: `SecretAccessRequest.purpose` 값(`executor` | `connector` | `resume_token_hmac` | `gateway_policy`) + signed-command registry 전용 namespace(`signed_command`, `SignedCommandRegistryEntry.verificationKeyRef`)
+  - `<name>`: 자유 식별자(시크릿 값 아님)
+- 런타임 ID ↔ 네임스페이스 resolve 권한 맵 (최소권한):
+
+| 런타임 identity | resolve 허용 purpose | 비고 |
+|---|---|---|
+| `api` | `signed_command`, `resume_token_hmac`(검증) | 컴파일/승격 시 서명 검증, challenge 토큰 검증 |
+| `runtime-worker` | `resume_token_hmac`, `executor` | R17 resume 복원, run_claim 자격 |
+| `browser-worker` | `executor` | credential lease 로그인 자격 |
+| `llm-gateway` | `gateway_policy` | LLM provider API 키 |
+| `connector-runtime` | `connector` | D7+ 격리(현재 연기) |
+
+> resume_token_hmac 키 자료(kid 회전)는 DB 아님 — KMS/SecretStore 내부 책임(security-contracts §5).
+
+## [PROPOSED] 4. 초기 SecretRef 인벤토리 (체크리스트 row 37, 식별자만)
+
+코드 사용처에서 도출. **식별자/소유자/용도만 — 평문 없음.**
+
+| SecretRef 식별자(예) | 소유 런타임 | 용도(코드 근거) |
+|---|---|---|
+| `rpa/staging/llm-gateway/gateway_policy/codex-primary` | llm-gateway | Codex SSE provider 키 (`gateway_policy`) |
+| `rpa/staging/runtime-worker/resume_token_hmac/active` | runtime-worker | resume token HMAC (kid, KMS) |
+| `rpa/staging/browser-worker/executor/<site>` | browser-worker | site 로그인 credential lease (`executor`) |
+| `rpa/staging/api/signed_command/registry-verify` | api | shell `cmd_ref` 서명 검증 키(`verificationKeyRef`) |
+| `rpa/staging/connector-runtime/connector/<connector_id>` | connector-runtime | connector manifest `secret_refs` (D7+ 연기) |
+
+> 실제 인스턴스 수/사이트별 자격은 운영 시점 인벤토리 — 위는 코드가 요구하는 **네임스페이스 골격**.
+
+## [PROPOSED] 5(부분). 로테이션/브레이크글래스 정책 (체크리스트 row 38)
+
+정책/주기는 레포 결정 가능. **오너 인물 지정은 외부 사실([EXTERNAL-FACT] 참조).**
+
+- 로테이션 주기(제안 기본값): `gateway_policy` 90d, `resume_token_hmac` kid 180d(중첩 kid 회전, 무중단),
+  `executor` credential 사이트 정책 우선·기본 90d, `signed_command` 검증 키 365d.
+- 브레이크글래스: 침해 의심 시 즉시 회전 + 영향 SecretRef 무효화 + audit_log append(`secret.resolve` deny 기록)
+  + 사후 24h 내 정상 키 재발급. 모든 break-glass 사용은 immutable audit 1건 필수.
+
+## [PROPOSED] 7. Producer retention 기간/근거 (체크리스트 row 40)
+
+release-decisions #5(inline `retention_until`/`deleted_at`/`legal_hold`) + ops-defaults `events_outbox` 90d
+패턴에 정합한 **제안 기본값**. ⚠️ `audit_log`는 규제 영향 — 컴플라이언스 오너 확정 필수.
+
+| Producer | 제안 retention | 근거 |
+|---|---|---|
+| `raw_items.raw_payload` | 30d | 원시 수집·재처리 창만 필요, 최단 |
+| `normalized_records.record` | 90d | events_outbox 90d 정합 |
+| `artifacts.object_ref` | 타입별, 기본 90d | artifacts 기존 retention 패턴 재사용 |
+| `audit_log.payload` | **컴플라이언스 확정**(제안 365d+) | 규제/감사 보존 — 임의 단축 금지 |
+| `control_plane_idempotency_keys.response_body` (비-D4.3) | D4.3 `expires_at`와 동일 source | 단일 retention source 유지 |
+
+> 공통 fail-closed: 모든 payload-bearing writer는 `retention_until`을 명시하거나 insert 전 throw
+> (이미 events_outbox에 적용된 패턴). 비-app writer도 동일 강제.
+
+---
+
+## [EXTERNAL-FACT] 지어낼 수 없는 항목 — 오너 입력 필요
+
+아래는 **현실에 존재해야만 하는 사실**이라 레포가 결정/생성할 수 없다. 값 제공 시 즉시 기록한다.
+
+### 1. 구체 배포 거버넌스 (체크리스트 row 34)
+거버넌스 모델은 release-decisions #13에서 확정(`staging` env, `release-approvers`, `platform-oncall`,
+SecretRef 경유). **남은 외부 사실**:
+- [ ] 실제 플랫폼 repo (배포 코드 위치):
+- [ ] GitHub Environment `staging` 보호/승인자 **실제 설정** (protection rules, required reviewers):
+- [ ] 구체 배포 타깃 식별자 (namespace/service):
+- [ ] 릴리즈 승인자 **실제 핸들** (역할 `release-approvers` → 실제 인물/팀):
+- [ ] 롤백 오너 **실제 핸들** (역할 `platform-oncall` → 실제 인물/팀):
+
+### 2. SecretStore 백엔드 (체크리스트 row 35)
+- [ ] 실제 Vault mount/path **또는** 클라우드 KMS/secret-manager alias (평문 금지, 실제 백엔드 식별):
+
+### 5(부분). 로테이션 오너 인물 (체크리스트 row 38)
+- [ ] 로테이션 오너 **실제 핸들** (위 정책의 책임 주체):
+
+### 6. CI/배포 로그 증거 (체크리스트 row 39)
+- [ ] 프로비저닝 증거 아티팩트 **실제 위치**:
+- [ ] CI/배포 로그의 "평문 미노출 + env dump 없음 + RBAC/redaction 미약화" **실제 증거 위치**:
+
+> 이 4개 항목은 실제 인프라가 프로비저닝되고 CI가 한 번 돌아야 생성되는 **런타임/조직 사실**이다.
+> 제공 즉시 release-decisions.md 승격 + 해당 체크리스트 행/blocked-decision 마커 정리(양방향 동시)로 닫는다.
