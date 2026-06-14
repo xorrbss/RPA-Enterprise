@@ -277,6 +277,20 @@ jobs:
       - name: Run app unit tests
         run: npm --prefix app run test:unit
 
+      - name: Locate Chrome for D3 executor dry-run
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          if [ -z "${CHROME}" ]; then
+            echo "Chrome or Chromium is required for npm --prefix app run test:executor"
+            exit 1
+          fi
+          echo "CHROME_PATH=${CHROME}" >> "${GITHUB_ENV}"
+
+      - name: Run D3 executor dry-run tests
+        run: npm --prefix app run test:executor
+
       - name: Install PostgreSQL client
         shell: bash
         run: |
