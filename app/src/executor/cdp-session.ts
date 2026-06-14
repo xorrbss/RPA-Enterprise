@@ -21,6 +21,8 @@ export interface CdpSession {
   /** Stagehand 공개 raw CDP(동일 세션). 예: Accessibility.getFullAXTree, Browser.setDownloadBehavior. */
   sendCDP<T = unknown>(method: string, params?: object): Promise<T>;
   click(selector: string): Promise<void>;
+  fill(selector: string, value: string): Promise<void>;
+  selectOption(selector: string, value: string): Promise<void>;
   setInputFiles(selector: string, files: string | string[]): Promise<void>;
   /** 격리 다운로드 디렉토리(browser_leases.download_dir_ref 대응). */
   downloadDir(): string;
@@ -36,6 +38,8 @@ export interface CdpSessionProvider {
 // ── Stagehand 구조적 타입(딥 임포트 회피, 저결합) ──────────────────────────────
 interface ShLocator {
   click(opts?: object): Promise<void>;
+  fill(value: string): Promise<void>;
+  selectOption(values: string | string[]): Promise<string[]>;
   setInputFiles(files: string | string[]): Promise<void>;
 }
 interface ShPage {
@@ -88,6 +92,14 @@ export class StagehandCdpSession implements CdpSession {
 
   async click(selector: string): Promise<void> {
     await this.page.locator(selector).click();
+  }
+
+  async fill(selector: string, value: string): Promise<void> {
+    await this.page.locator(selector).fill(value);
+  }
+
+  async selectOption(selector: string, value: string): Promise<void> {
+    await this.page.locator(selector).selectOption(value);
   }
 
   async setInputFiles(selector: string, files: string | string[]): Promise<void> {
