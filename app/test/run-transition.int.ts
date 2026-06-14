@@ -14,10 +14,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import type { TenantId } from "../../ts/security-middleware-contract";
+
 import { createPool, withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { applyWorkitemTransition } from "../src/runtime/workitem-transition";
 import { applyHumanTaskTransition } from "../src/runtime/human-task-transition";
+import { PgRuntimeWorker } from "../src/worker/runtime-worker";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TENANT = "00000000-0000-0000-0000-0000000000a1";
@@ -267,6 +270,32 @@ async function main(): Promise<void> {
       }),
     );
     check("H CAS conflict (resolved) not applied", !hConflict.applied && hConflict.observed === "resolved", JSON.stringify(hConflict));
+
+    // --- Worker: outbox relay (publish CAS, idempotent) via RuntimeWorker.handle ---
+    // 앞 전이들이 발행한 미발행 이벤트(run.started/workitem.completed/human_task.resolved)를 발행.
+    const worker = new PgRuntimeWorker(pool);
+    const relay1 = await worker.handle({ kind: "outbox_relay", tenantId: TENANT as TenantId });
+    check(
+      "relay published >=3 events",
+      relay1.kind === "completed" && relay1.emittedEvents.length >= 3,
+      JSON.stringify(relay1),
+    );
+    const relay2 = await worker.handle({ kind: "outbox_relay", tenantId: TENANT as TenantId });
+    check("relay idempotent (0 on second pass)", relay2.kind === "completed" && relay2.emittedEvents.length === 0);
+    await withTenantTx(pool, TENANT, async (c) => {
+      const unpub = await c.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM events_outbox WHERE published_at IS NULL`,
+      );
+      check("no unpublished outbox rows remain", unpub.rows[0]?.n === 0, `n=${unpub.rows[0]?.n}`);
+    });
+
+    // unimplemented 잡 kind → 명시적 throw(조용한 no-op 금지)
+    try {
+      await worker.handle({ kind: "run_claim", tenantId: TENANT as TenantId });
+      check("unimplemented job kind throws", false, "expected throw");
+    } catch {
+      check("unimplemented job kind throws", true);
+    }
   } finally {
     await pool.end();
   }
