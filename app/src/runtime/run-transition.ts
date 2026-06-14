@@ -161,9 +161,11 @@ export async function applyRunTransition(
   const emitted: EmittedEvent[] = [];
   for (const cmd of emitEvents) {
     const eventType = cmd.event;
-    const payloadSchemaRef = EVENT_PAYLOAD_SCHEMA_REFS[eventType];
+    // EventEnvelopeType ⊋ EventType: worker.*(인프라 텔레메트리)는 레지스트리/outbox 키 밖.
+    // 전이는 worker.*를 emit하지 않지만 인덱싱은 방어적으로 — 부재 시 조용히 null 넣지 않고 throw.
+    const refs: Readonly<Record<string, string | undefined>> = EVENT_PAYLOAD_SCHEMA_REFS;
+    const payloadSchemaRef = refs[eventType];
     if (payloadSchemaRef === undefined) {
-      // 닫힌 레지스트리 밖의 이벤트는 outbox CHECK도 거부 — 조용히 null 넣지 않는다.
       throw new Error(`applyRunTransition: no payload_schema_ref for event_type ${eventType}`);
     }
     const eventId = randomUUID();
