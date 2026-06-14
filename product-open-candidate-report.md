@@ -188,11 +188,12 @@ Remote CI evidence:
 - `main` after PR #3:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489679454`
 - PR #5 current staging-readiness delta gates:
-  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27493658329`
-  (success, pull_request event, branch
-  `codex/d44-app-runtime-staging-evidence-20260614`, commit
-  `2846f847b40a72037105e322c6783973d26aa05e`; includes `secret-scan`,
-  `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests`).
+  `https://github.com/xorrbss/RPA-Enterprise/pull/5`
+  (latest successful `Contract Gates` check rollup on branch
+  `codex/d44-app-runtime-staging-evidence-20260614`; release packet must attach
+  the latest successful PR or main run URL plus `secret-scan`, `PostgreSQL 15
+  migration smoke`, and `App runtime typecheck and tests` job URLs from that
+  latest head).
 
 Browser route smoke evidence:
 
@@ -228,10 +229,10 @@ Environment note:
 ## Remaining Gap to Product Open
 
 - Repo-controlled Product Open Candidate gap: remote `app-runtime` CI evidence
-  for the current staging-readiness delta is now attached through PR #5 run
-  `27493658329`. None remain for the tagged repo-controlled Product Open
-  Candidate baseline; this does not close the current D4.4 staging-readiness
-  delta below.
+  for the current staging-readiness delta is now represented by PR #5's latest
+  successful `Contract Gates` check rollup. None remain for the tagged
+  repo-controlled Product Open Candidate baseline; this does not close the
+  current D4.4 staging-readiness delta below.
 - Current D4.4 branch-delta gap: executable scenario runtime readiness now has
   per-expression `compiled_ast` export, app promote `If-Match`/idempotency
   coverage, and `SecretRef`/`SecretStore`-backed signed command registry wiring
