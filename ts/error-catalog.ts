@@ -59,6 +59,7 @@ export type ErrorCode =
   // --- Pipeline / Sink ---
   | "SINK_DELIVERY_FAILED"
   | "RAW_PERSIST_FAILED"
+  | "CONTROL_PLANE_INTERNAL_ERROR"
   // --- Human Task ---
   | "HUMAN_TASK_EXPIRED"
   // --- Queue ---
@@ -129,6 +130,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
 
   SINK_DELIVERY_FAILED:        { retryable: true,  httpStatus: 502, exceptionClass: "system",   userMessage: "전달 재시도 중.", operatorAction: "Sink DLQ replay" },
   RAW_PERSIST_FAILED:          { retryable: true,  httpStatus: 500, exceptionClass: "system",   userMessage: "재시도됩니다.", operatorAction: "스토리지 상태 확인" },
+  CONTROL_PLANE_INTERNAL_ERROR: { retryable: false, httpStatus: 500, exceptionClass: "system",   userMessage: "내부 오류가 발생했습니다.", operatorAction: "control-plane error log와 correlation_id 확인" },
 
   HUMAN_TASK_EXPIRED:          { retryable: false, httpStatus: 410, exceptionClass: "business", userMessage: "처리 기한 만료.", operatorAction: "재처리 또는 escalate" },
 

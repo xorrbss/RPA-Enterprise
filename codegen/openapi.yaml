@@ -894,7 +894,7 @@ components:
     ErrorCode:
       type: string
       description: >
-        ts/error-catalog.ts ErrorCode(46개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
+        ts/error-catalog.ts ErrorCode(47개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
         ApiError 응답 code로는 반환되지 않는다(api-surface §0.2).
       enum:
         - RUN_NOT_FOUND
@@ -940,6 +940,7 @@ components:
         - CONNECTOR_HOOK_FAILED
         - SINK_DELIVERY_FAILED
         - RAW_PERSIST_FAILED
+        - CONTROL_PLANE_INTERNAL_ERROR
         - HUMAN_TASK_EXPIRED
         - WORKITEM_CHECKOUT_CONFLICT
         - DEAD_LETTER

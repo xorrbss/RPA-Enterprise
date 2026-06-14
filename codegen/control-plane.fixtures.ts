@@ -487,11 +487,20 @@ async function assertApiError(
   try {
     await fn();
   } catch (error: unknown) {
-    if (error instanceof ApiResponseException) {
+    if (isApiResponseExceptionLike(error)) {
       assert.equal(error.code, code);
       return;
     }
     throw error;
   }
   throw new Error(`expected ${code}`);
+}
+
+function isApiResponseExceptionLike(error: unknown): error is { code: ApiResponseException["code"] } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string"
+  );
 }

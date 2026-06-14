@@ -414,3 +414,13 @@
 | codegen 정합 | `codegen/openapi.yaml` ErrorCode enum +1(45→46개), `bearerAuth` 설명에 401/403 분기 명시. `contract-consistency.ts` enum=카탈로그 불변식 유지 |
 | 산문 SSoT | `api-surface.md §0.1`·`auth-rbac.md §3/§5`에 authn(401)/authz(403) 분기 명시 |
 | 참조 스캐폴드 정합 | `control-plane/fake-request-runner.ts`의 토큰 누락 분기를 `UNAUTHENTICATED`로 정렬, `codegen/control-plane.fixtures.ts`에 401 경로 단언 추가 |
+
+## v2.6 패치 로그 (D4.1 제어평면 미분류 예외 카탈로그화)
+
+> 제어평면 Fastify 경계에서 임의 throwable을 raw 500으로 흘리지 않고 `CONTROL_PLANE_INTERNAL_ERROR`(500, system)로 매핑한다. 원본 error/details는 로그에만 남기고, 응답은 `ApiError` + `correlation_id`로 고정한다. **재검증 대상: OpenAPI ErrorCode enum=ERROR_CATALOG=47.**
+
+| 항목 | 조치 |
+|---|---|
+| 미분류 예외 응답 | `app/src/api/errors.ts`가 unknown throwable을 catalog-backed `CONTROL_PLANE_INTERNAL_ERROR`로 변환 |
+| ErrorCode 정합 | `ts/error-catalog.ts`와 `codegen/openapi.yaml`에 `CONTROL_PLANE_INTERNAL_ERROR` 추가 |
+| 산문 SSoT | `api-surface.md §0.2`에 미분류 제어평면 예외의 로그/응답 경계 명시 |

@@ -21,6 +21,7 @@
   interface ApiError { code: ErrorCode; message: string; details?: unknown; correlation_id: string; }
   ```
 - HTTP 상태코드는 `ERROR_CATALOG[code].httpStatus`를 **그대로** 사용한다(중복 정의 금지). `userMessage`는 외부 노출용(민감정보 없음), `operatorAction`은 내부 운영용으로 응답에 싣지 않는다.
+- 분류되지 않은 제어평면 예외는 `CONTROL_PLANE_INTERNAL_ERROR`(500, system)로 매핑한다. 원본 throwable/details는 로그에만 남기며, 응답에는 catalog-backed `ApiError`와 `correlation_id`만 노출한다.
 - `correlation_id`는 event-envelope `correlation_id` 및 trace `correlation_id`(impl-bundle §E)와 **동일 값**으로 트레이스↔이벤트↔로그를 상호 연결한다.
 - `DEAD_LETTER`(httpStatus 200)는 **API 오류 응답이 아니다** — 상태 통지/운영 알림 전용 코드이므로 `ApiError`로 반환하지 않는다(error-catalog 주석). DLQ 목록/replay 결과 본문에서 상태값으로만 노출.
 

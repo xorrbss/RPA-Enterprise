@@ -5,9 +5,8 @@
  *  - api-surface.md §0.2: 모든 4xx/5xx 본문은 ApiError(ts/error-catalog.ts). HTTP 상태는
  *    ERROR_CATALOG[code].httpStatus 그대로(중복 정의 금지). correlation_id는 trace/event와 동일 값.
  *  - codegen/error-middleware.ts(toApiError)를 재사용해 ErrorCode→HTTP를 단일 지점에서 매핑한다.
- *  - "조용한 false/unknown 금지": 분류된 ApiResponseError만 ApiError 본문으로 매핑한다. 임의 throwable의
- *    카탈로그 코드 분류는 본 계층 밖(codegen/error-middleware.ts 주석: 상위에서 system 코드로 분류)이며,
- *    카탈로그에 일반 내부오류(500) 코드가 없으므로 미분류 예외는 코드를 날조하지 않고 로깅 후 표면화한다.
+ *  - "조용한 false/unknown 금지": 분류된 ApiResponseError는 해당 catalog code로, 임의 throwable은
+ *    CONTROL_PLANE_INTERNAL_ERROR로 매핑한다. raw error/details는 로그에만 남기고 응답에는 노출하지 않는다.
  */
 import type { FastifyInstance } from "fastify";
 
@@ -29,13 +28,7 @@ export class ApiResponseError extends Error {
 
 /**
  * Fastify 에러 핸들러 등록. ApiResponseError → toApiError(ErrorCode→HTTP + ApiError 본문, codegen 재사용).
- * 미분류 예외는 카탈로그 코드를 날조하지 않고(가정 금지) 로깅 후 500으로 표면화한다.
- *
- * TODO: [BLOCKED]
- *   violated: api-surface §0.2(모든 4xx/5xx 본문=ApiError, code 필수)
- *   reason: error-catalog에 일반 내부오류(500) 코드가 없어 미분류 예외에 실을 카탈로그 code가 없다.
- *   required_change: 임의 throwable→ExceptionClass(system) 분류 계층 + 일반 500 카탈로그 코드 신설 결정
- *     (D4 범위 밖; codegen/error-middleware.ts 주석의 "upstream system 분류"와 동일 미해결 지점).
+ * 미분류 예외는 CONTROL_PLANE_INTERNAL_ERROR로 매핑해 ApiError shape와 catalog-backed code를 유지한다.
  */
 export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
@@ -49,8 +42,12 @@ export function registerErrorHandler(app: FastifyInstance): void {
       reply.code(500).send({ message: "내부 오류가 발생했습니다.", correlation_id: request.correlationId });
       return;
     }
-    // 미분류 예외: 일반 내부오류 카탈로그 코드 부재(위 TODO) → 로깅 후 500. 코드 날조 금지.
     request.log.error({ err: error, correlation_id: request.correlationId }, "unclassified control-plane error");
+    const mapped = toApiError("CONTROL_PLANE_INTERNAL_ERROR", request.correlationId);
+    if (isApiErrorResponse(mapped)) {
+      reply.code(mapped.status).send(mapped.body);
+      return;
+    }
     reply.code(500).send({ message: "내부 오류가 발생했습니다.", correlation_id: request.correlationId });
   });
 }
