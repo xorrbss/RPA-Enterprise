@@ -117,13 +117,28 @@ async function main(): Promise<void> {
     await withTenantTx(pool, TENANT, async (c) => {
       const run = await c.query<{ status: string }>(`SELECT status FROM runs WHERE id=$1`, [RUN]);
       check("runs.status persisted = running", run.rows[0]?.status === "running", run.rows[0]?.status);
-      const ev = await c.query<{ event_type: string; payload: unknown; published_at: string | null }>(
-        `SELECT event_type, payload, published_at FROM events_outbox WHERE run_id=$1 AND event_type='run.started'`,
+      const ev = await c.query<{
+        event_type: string;
+        payload: unknown;
+        published_at: string | null;
+        retention_until: Date | null;
+        retention_in_default_window: boolean;
+      }>(
+        `SELECT event_type,
+                payload,
+                published_at,
+                retention_until,
+                retention_until > now() + interval '89 days'
+                  AND retention_until < now() + interval '91 days' AS retention_in_default_window
+           FROM events_outbox
+          WHERE run_id=$1 AND event_type='run.started'`,
         [RUN],
       );
       check("outbox has 1 run.started", ev.rowCount === 1, `rowCount=${ev.rowCount}`);
       check("outbox payload closed-empty", JSON.stringify(ev.rows[0]?.payload) === "{}");
       check("outbox unpublished (relay pending)", ev.rows[0]?.published_at === null);
+      check("outbox retention_until set", ev.rows[0]?.retention_until != null, JSON.stringify(ev.rows[0]));
+      check("outbox retention uses default 90d window", ev.rows[0]?.retention_in_default_window === true, JSON.stringify(ev.rows[0]));
     });
 
     // --- 테스트 3: 동일 fromStatus 재시도 → CAS 경합 거부 ---
@@ -287,6 +302,10 @@ async function main(): Promise<void> {
         `SELECT count(*)::int AS n FROM events_outbox WHERE published_at IS NULL`,
       );
       check("no unpublished outbox rows remain", unpub.rows[0]?.n === 0, `n=${unpub.rows[0]?.n}`);
+      const missingRetention = await c.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM events_outbox WHERE retention_until IS NULL`,
+      );
+      check("all runtime outbox rows set retention_until", missingRetention.rows[0]?.n === 0, `n=${missingRetention.rows[0]?.n}`);
     });
 
     // unimplemented 잡 kind → 명시적 throw(조용한 no-op 금지)

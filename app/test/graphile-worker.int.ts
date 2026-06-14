@@ -12,7 +12,7 @@ import { quickAddJob, runMigrations } from "graphile-worker";
 import type { TenantId } from "../../ts/security-middleware-contract";
 
 import { createPool, withTenantTx } from "../src/db/pool";
-import { emitOutboxEvent } from "../src/runtime/outbox";
+import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent, type OutboxEmit } from "../src/runtime/outbox";
 import { runOnceRuntimeWorker, RUNTIME_JOB_TASK } from "../src/worker/graphile-runner";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -55,6 +55,72 @@ async function main(): Promise<void> {
     await runMigrations({ connectionString: conn });
     console.log("migrations applied (app schema + graphile_worker)");
 
+    await withTenantTx(pool, TENANT, async (c) => {
+      try {
+        await emitOutboxEvent(c, {
+          tenantId: TENANT,
+          eventType: "site.circuit_opened",
+          correlationId: CORRELATION,
+          idempotencyKey: "gw-int:missing-retention-policy",
+        } as OutboxEmit);
+        check("missing retention policy fails closed", false, "expected throw");
+      } catch (err) {
+        check(
+          "missing retention policy fails closed",
+          String(err).includes("retentionPolicy is required"),
+          String(err),
+        );
+      }
+      try {
+        await emitOutboxEvent(c, {
+          tenantId: TENANT,
+          eventType: "site.circuit_opened",
+          correlationId: CORRELATION,
+          idempotencyKey: "gw-int:unsupported-retention-policy-source",
+          retentionPolicy: {
+            source: "external-policy@unknown" as typeof EVENTS_OUTBOX_RETENTION_POLICY.source,
+            durationSeconds: EVENTS_OUTBOX_RETENTION_POLICY.durationSeconds,
+          },
+        });
+        check("unsupported retention policy source fails closed", false, "expected throw");
+      } catch (err) {
+        check(
+          "unsupported retention policy source fails closed",
+          String(err).includes("unsupported retention policy source"),
+          String(err),
+        );
+      }
+      try {
+        await emitOutboxEvent(c, {
+          tenantId: TENANT,
+          eventType: "site.circuit_opened",
+          correlationId: CORRELATION,
+          idempotencyKey: "gw-int:invalid-retention-policy",
+          retentionPolicy: {
+            source: EVENTS_OUTBOX_RETENTION_POLICY.source,
+            durationSeconds: 0,
+          },
+        });
+        check("invalid retention policy fails closed", false, "expected throw");
+      } catch (err) {
+        check(
+          "invalid retention policy fails closed",
+          String(err).includes("durationSeconds must be a positive finite number"),
+          String(err),
+        );
+      }
+      const failedRows = await c.query<{ n: number }>(
+        `SELECT count(*)::int AS n
+           FROM events_outbox
+          WHERE idempotency_key IN (
+            'gw-int:missing-retention-policy',
+            'gw-int:unsupported-retention-policy-source',
+            'gw-int:invalid-retention-policy'
+          )`,
+      );
+      check("failed retention policy inserts no outbox rows", failedRows.rows[0]?.n === 0, `n=${failedRows.rows[0]?.n}`);
+    });
+
     // run-less tenant 이벤트(site.circuit_opened) 미발행 1건 시드 — run FK 불필요.
     await withTenantTx(pool, TENANT, (c) =>
       emitOutboxEvent(c, {
@@ -62,6 +128,8 @@ async function main(): Promise<void> {
         eventType: "site.circuit_opened",
         correlationId: CORRELATION,
         idempotencyKey: "gw-int:site.circuit_opened",
+        occurredAt: new Date("2000-01-01T00:00:00.000Z"),
+        retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
       }),
     );
 
@@ -75,11 +143,35 @@ async function main(): Promise<void> {
 
     // 효과: 큐 소비 task가 relay를 돌려 이벤트가 발행됨.
     await withTenantTx(pool, TENANT, async (c) => {
-      const row = await c.query<{ published_at: string | null }>(
-        `SELECT published_at FROM events_outbox WHERE tenant_id=$1 AND event_type='site.circuit_opened'`,
+      const row = await c.query<{
+        published_at: string | null;
+        retention_until: Date | null;
+        occurred_from_input: boolean;
+        retention_from_tx_clock: boolean;
+        retention_not_backdated: boolean;
+      }>(
+        `SELECT published_at,
+                retention_until,
+                occurred_at = '2000-01-01T00:00:00.000Z'::timestamptz AS occurred_from_input,
+                retention_until > now() + interval '89 days' AS retention_from_tx_clock,
+                retention_until > occurred_at + interval '365 days' AS retention_not_backdated
+           FROM events_outbox
+          WHERE tenant_id=$1 AND event_type='site.circuit_opened'`,
         [TENANT],
       );
-      check("queue-driven relay published the event", row.rows[0]?.published_at !== null, JSON.stringify(row.rows[0]));
+      check("queue-driven relay published the event", row.rows[0]?.published_at != null, JSON.stringify(row.rows[0]));
+      check("outbox retention_until set", row.rows[0]?.retention_until != null, JSON.stringify(row.rows[0]));
+      check("outbox occurred_at accepts supplied occurredAt", row.rows[0]?.occurred_from_input === true, JSON.stringify(row.rows[0]));
+      check(
+        "outbox retention calculated from DB transaction clock",
+        row.rows[0]?.retention_from_tx_clock === true,
+        JSON.stringify(row.rows[0]),
+      );
+      check(
+        "outbox retention is not backdated from supplied occurredAt",
+        row.rows[0]?.retention_not_backdated === true,
+        JSON.stringify(row.rows[0]),
+      );
       const unpub = await c.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM events_outbox WHERE published_at IS NULL`,
       );

@@ -10,6 +10,9 @@ import type {
 import type { ErrorCode } from "../ts/error-catalog";
 import {
   MINIMUM_BYPASS_RLS_POLICY,
+  SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+  SECURITY_AUDIT_REQUIRED_ACTIONS,
+  type AuditedSecurityDecision,
   type ArtifactAccessDecision,
   type ArtifactAccessGate,
   type ArtifactAccessSubject,
@@ -22,6 +25,7 @@ import {
   type ConnectorManifestPermissionChecker,
   type ConnectorManifestPermissions,
   type DomainAllowlistMiddleware,
+  type DurableSecurityAuditDecisionWriter,
   type ImmutableAuditLogAppendInput,
   type ImmutableAuditLogAppendOnly,
   type ImmutableAuditLogRecord,
@@ -35,9 +39,11 @@ import {
   type RbacAction,
   type RbacMiddleware,
   type Role,
+  type SecurityAuditDecisionAction,
+  type SecurityAuditDecisionAppendInput,
 } from "../ts/security-middleware-contract";
 
-export { MINIMUM_BYPASS_RLS_POLICY };
+export { MINIMUM_BYPASS_RLS_POLICY, SECURITY_AUDIT_PAYLOAD_SCHEMA_REF, SECURITY_AUDIT_REQUIRED_ACTIONS };
 
 type AuthorizationDenyCode = Extract<AuthorizationDecision, { kind: "deny" }>["code"];
 
@@ -58,6 +64,17 @@ export class SecurityContractError extends Error {
   ) {
     super(message);
     this.name = "SecurityContractError";
+  }
+}
+
+export class AuditAppendRequiredError extends SecurityContractError {
+  constructor(
+    readonly action: SecurityAuditDecisionAction,
+    cause: unknown,
+  ) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super("AUTHZ_FORBIDDEN", `security audit append failed closed for ${action}: ${message}`);
+    this.name = "AuditAppendRequiredError";
   }
 }
 
@@ -435,6 +452,9 @@ export class InMemoryImmutableAuditLog implements ImmutableAuditLogAppendOnly {
   private records: ImmutableAuditLogRecord[] = [];
 
   async append(input: ImmutableAuditLogAppendInput): Promise<ImmutableAuditLogRecord> {
+    if (input.payloadSchemaRef !== SECURITY_AUDIT_PAYLOAD_SCHEMA_REF) {
+      throw new SecurityContractError("AUTHZ_FORBIDDEN", "unknown security audit payload_schema_ref");
+    }
     safeSerialize(input.payload ?? null);
     const previousHash = this.records.at(-1)?.hash ?? "GENESIS";
     const canonical = canonicalize({ ...input, previousHash });
@@ -451,6 +471,38 @@ export class InMemoryImmutableAuditLog implements ImmutableAuditLogAppendOnly {
 
   snapshot(): readonly ImmutableAuditLogRecord[] {
     return [...this.records];
+  }
+}
+
+const SECURITY_AUDIT_ACTION_SET = new Set<string>(SECURITY_AUDIT_REQUIRED_ACTIONS);
+
+export class ContractDurableSecurityAuditWriter implements DurableSecurityAuditDecisionWriter {
+  constructor(private readonly audit: ImmutableAuditLogAppendOnly) {}
+
+  async recordDecision<TDecision>(
+    input: SecurityAuditDecisionAppendInput,
+    decision: TDecision,
+  ): Promise<AuditedSecurityDecision<TDecision>> {
+    try {
+      assertSecurityAuditAppendInput(input);
+      const auditRecord = await this.audit.append(input);
+      return { decision, auditRecord };
+    } catch (error) {
+      if (error instanceof AuditAppendRequiredError) throw error;
+      throw new AuditAppendRequiredError(input.action, error);
+    }
+  }
+}
+
+function assertSecurityAuditAppendInput(input: SecurityAuditDecisionAppendInput): void {
+  if (!SECURITY_AUDIT_ACTION_SET.has(input.action)) {
+    throw new SecurityContractError("AUTHZ_FORBIDDEN", `security audit action is not covered: ${input.action}`);
+  }
+  if (input.payloadSchemaRef !== SECURITY_AUDIT_PAYLOAD_SCHEMA_REF) {
+    throw new SecurityContractError("AUTHZ_FORBIDDEN", "security audit payload_schema_ref is not the v1 boundary schema");
+  }
+  if (input.failClosed !== true) {
+    throw new SecurityContractError("AUTHZ_FORBIDDEN", "security audit writer must be fail-closed");
   }
 }
 

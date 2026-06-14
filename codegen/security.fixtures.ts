@@ -1,17 +1,23 @@
 import type {
   AuthenticatedPrincipal,
+  AuditOutcome,
   ConnectorManifestPermissions,
   CorrelationId,
   IdempotencyKey,
+  ImmutableAuditLogAppendOnly,
   IsoDateTime,
   NetworkPolicy,
   PrincipalId,
+  SecurityAuditDecisionAppendInput,
   TenantId,
 } from "../ts/security-middleware-contract";
 import {
+  ContractDurableSecurityAuditWriter,
   ContractArtifactAccessGate,
   FakeSecretStore,
   InMemoryImmutableAuditLog,
+  SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+  SECURITY_AUDIT_REQUIRED_ACTIONS,
   asRedactedString,
   asSecretRef,
   checkBypassRlsUse,
@@ -27,6 +33,7 @@ const failures: string[] = [];
 
 const tenantId = "11111111-1111-4111-8111-111111111111" as TenantId;
 const subjectId = "33333333-3333-4333-8333-333333333333" as PrincipalId;
+const auditRetentionUntil = "2026-09-11T00:00:00Z" as IsoDateTime;
 
 const viewer: AuthenticatedPrincipal = {
   subjectId,
@@ -204,6 +211,8 @@ await fixture("Immutable audit log appends hash-linked records only", async () =
     correlationId: "44444444-4444-4444-8444-444444444444" as CorrelationId,
     idempotencyKey: "audit-fixture-1" as IdempotencyKey,
     occurredAt: "2026-06-13T00:00:00Z" as IsoDateTime,
+    retentionUntil: auditRetentionUntil,
+    payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
     payload: { ref: "secret://tenant/payments" },
   });
   const second = await audit.append({
@@ -215,6 +224,8 @@ await fixture("Immutable audit log appends hash-linked records only", async () =
     correlationId: "55555555-5555-4555-8555-555555555555" as CorrelationId,
     idempotencyKey: "audit-fixture-2" as IdempotencyKey,
     occurredAt: "2026-06-13T00:00:01Z" as IsoDateTime,
+    retentionUntil: auditRetentionUntil,
+    payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
     payload: { useCase: "artifact_redaction_job" },
   });
   assertEqual(first.sequence, 1);
@@ -235,11 +246,106 @@ await fixture("Immutable audit log appends hash-linked records only", async () =
         correlationId: "66666666-6666-4666-8666-666666666666" as CorrelationId,
         idempotencyKey: "audit-fixture-secret" as IdempotencyKey,
         occurredAt: "2026-06-13T00:00:02Z" as IsoDateTime,
+        retentionUntil: auditRetentionUntil,
+        payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
         payload: { secret },
       }),
     "Immutable audit log must reject PlainSecret payloads",
   );
   assertEqual(audit.snapshot().length, 2);
+});
+
+await fixture("Durable security audit writer records covered decisions before returning", async () => {
+  const audit = new InMemoryImmutableAuditLog();
+  const writer = new ContractDurableSecurityAuditWriter(audit);
+
+  for (const [index, action] of SECURITY_AUDIT_REQUIRED_ACTIONS.entries()) {
+    const result = await writer.recordDecision(
+      {
+        tenantId,
+        actor: { subjectId, roles: ["admin"] },
+        action,
+        outcome: auditOutcomeForAction(action),
+        resource: resourceForAuditAction(action, index),
+        reason: `fixture:${action}`,
+        correlationId: "77777777-7777-4777-8777-777777777777" as CorrelationId,
+        idempotencyKey: `audit-boundary-${index + 1}` as IdempotencyKey,
+        occurredAt: `2026-06-13T00:01:0${index}Z` as IsoDateTime,
+        retentionUntil: auditRetentionUntil,
+        payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+        failClosed: true,
+        payload: {
+          decision_kind: action,
+          evidence_ref: `evidence:${index + 1}`,
+        },
+      },
+      { kind: "returned", action },
+    );
+
+    assertEqual(result.decision.kind, "returned");
+    assertEqual(result.auditRecord.action, action);
+    assertEqual(result.auditRecord.payloadSchemaRef, SECURITY_AUDIT_PAYLOAD_SCHEMA_REF);
+  }
+
+  assertEqual(
+    audit.snapshot().map((record) => record.action).join(","),
+    SECURITY_AUDIT_REQUIRED_ACTIONS.join(","),
+  );
+
+  const failingAudit: ImmutableAuditLogAppendOnly = {
+    append: async () => {
+      throw new Error("durable audit store unavailable");
+    },
+  };
+  const failingWriter = new ContractDurableSecurityAuditWriter(failingAudit);
+  await assertRejects(
+    () =>
+      failingWriter.recordDecision(
+        {
+          tenantId,
+          actor: { subjectId, roles: ["admin"] },
+          action: "artifact.read",
+          outcome: "allow",
+          resource: { kind: "artifact", id: "artifact-fail-closed" },
+          reason: "fixture:audit_unavailable",
+          correlationId: "88888888-8888-4888-8888-888888888888" as CorrelationId,
+          idempotencyKey: "audit-boundary-fail-closed" as IdempotencyKey,
+          occurredAt: "2026-06-13T00:02:00Z" as IsoDateTime,
+          retentionUntil: auditRetentionUntil,
+          payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+          failClosed: true,
+          payload: { decision_kind: "artifact.read" },
+        },
+        { kind: "would_not_return" },
+      ),
+    "Durable security audit writer must fail closed when append fails",
+  );
+
+  const store = new FakeSecretStore({ "secret://tenant/audit-boundary": "audit-boundary-secret" });
+  const secret = await store.resolve(asSecretRef("secret://tenant/audit-boundary"));
+  await assertRejects(
+    () =>
+      writer.recordDecision(
+        {
+          tenantId,
+          actor: { subjectId, roles: ["admin"] },
+          action: "secret.resolve",
+          outcome: "allow",
+          resource: { kind: "secret", id: "secret://tenant/audit-boundary" },
+          reason: "fixture:plain_secret_payload",
+          correlationId: "99999999-9999-4999-8999-999999999999" as CorrelationId,
+          idempotencyKey: "audit-boundary-secret-payload" as IdempotencyKey,
+          occurredAt: "2026-06-13T00:03:00Z" as IsoDateTime,
+          retentionUntil: auditRetentionUntil,
+          payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+          failClosed: true,
+          payload: { secret },
+        },
+        { kind: "would_not_return" },
+      ),
+    "Durable security audit writer must reject PlainSecret payloads",
+  );
+  assertEqual(audit.snapshot().length, SECURITY_AUDIT_REQUIRED_ACTIONS.length);
 });
 
 await fixture("Minimum BYPASSRLS policy rejects app-role and allows job role", async () => {
@@ -270,7 +376,7 @@ if (failures.length > 0) {
   for (const failure of failures) console.error("FAIL:", failure);
   process.exit(1);
 }
-console.log("redaction/audit smoke: PlainSecret serialization, artifact redaction-before-RBAC, prompt credential-exfiltration block, immutable audit hash chain, and BYPASSRLS policy covered");
+console.log("redaction/audit smoke: PlainSecret serialization, artifact redaction-before-RBAC, prompt credential-exfiltration block, immutable audit hash chain, durable audit writer fail-closed boundary, and BYPASSRLS policy covered");
 console.log("ALL PASS");
 
 type FixtureFn = () => void | Promise<void>;
@@ -311,4 +417,24 @@ async function assertRejects(fn: () => Promise<unknown>, reason: string): Promis
     return;
   }
   throw new Error(reason);
+}
+
+type SecurityAuditAction = (typeof SECURITY_AUDIT_REQUIRED_ACTIONS)[number];
+
+function auditOutcomeForAction(action: SecurityAuditAction): AuditOutcome {
+  if (action === "artifact.read") return "deny";
+  if (action === "network.request" || action === "prompt.inspect") return "blocked";
+  return "allow";
+}
+
+function resourceForAuditAction(
+  action: SecurityAuditAction,
+  index: number,
+): SecurityAuditDecisionAppendInput["resource"] {
+  if (action === "artifact.read") return { kind: "artifact", id: `artifact-${index + 1}` };
+  if (action === "secret.resolve") return { kind: "secret", id: "secret://tenant/payments" };
+  if (action === "connector.enable" || action === "connector.install") return { kind: "connector", id: "connector-payments" };
+  if (action === "network.request") return { kind: "network_policy", id: "policy-payments" };
+  if (action === "prompt.inspect") return { kind: "run", id: "run-prompt-inspect" };
+  return undefined;
 }

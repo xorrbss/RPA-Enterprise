@@ -13,7 +13,7 @@ import type {
   WorkitemGuard,
   SideEffectCmd,
 } from "../../../ts/state-machine-types";
-import { emitOutboxEvent, type EmittedEvent } from "./outbox";
+import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent, type EmittedEvent } from "./outbox";
 
 export interface WorkitemTransitionContext {
   readonly tenantId: string;
@@ -91,6 +91,7 @@ export async function applyWorkitemTransition(
         workitemId: ctx.workitemId,
         idempotencyKey: `${anchor}:${cmd.event}`,
         occurredAt: ctx.occurredAt,
+        retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
       }),
     );
   }

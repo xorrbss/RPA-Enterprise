@@ -143,10 +143,9 @@ this repository.
 - `events_outbox` rejects same-tenant duplicate idempotency keys, allows the same
   key across tenants, rejects cross-tenant run references through composite FKs,
   rejects `worker.*` infrastructure telemetry, and uses publish CAS
-  (`published_at IS NULL`) to avoid double publish. Smoke fixtures set an
-  explicit `retention_until` so the DB gate does not normalize NULL payload
-  retention; the app/runtime `events_outbox` producer duration/source remains a
-  separate release blocker until contract owners define it.
+  (`published_at IS NULL`) to avoid double publish. `retention_until` is
+  `NOT NULL`; smoke fixtures use explicit retention and also prove omitted
+  retention is rejected.
 - Step-bound artifacts, step events, and `stagehand_calls` reference
   `run_steps` by `(tenant_id, run_id, step_id, attempt)`.
 - Payload-bearing tables carry inline `retention_until`, `deleted_at`, and
@@ -155,6 +154,9 @@ this repository.
   rejects same-tenant duplicate idempotency keys.
 - `audit_log` is tenant-scoped, append-only, and hash-chained with a
   tenant-local genesis row and no cross-tenant continuation.
+- `audit_log.payload_schema_ref` is fixed to
+  `audit/security-boundary-decision@1` so durable security-boundary decisions
+  have an explicit schema anchor and unknown refs fail closed at insert time.
 
 ## Resolved DB Release Decisions
 

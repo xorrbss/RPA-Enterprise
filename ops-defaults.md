@@ -91,6 +91,7 @@
 
 - Decision v1: payload-bearing PostgreSQL tables carry inline `retention_until`, `deleted_at`, and `legal_hold` columns. This applies to `control_plane_idempotency_keys.response_body`, `raw_items.raw_payload`, `normalized_records.record`, `events_outbox.payload`, `artifacts.object_ref` metadata rows, and `audit_log.payload`.
 - `legal_hold = true` blocks retention deletion. `deleted_at` records soft-delete/tombstone state; physical purge/archive workers may be added later, but the table-level columns are the authoritative v1 retention contract.
+- `events_outbox.retention_default` is the repo-owned v1 source for app/runtime outbox producers: uniform 90d for every tenant-scoped event type. `emitOutboxEvent` calculates `retention_until` from the PostgreSQL transaction timestamp (`now()`) plus this duration; supplied `occurredAt` only sets the envelope `occurred_at` and does not backdate retention. Missing, unsupported, non-finite, or non-positive policy input is a fail-closed producer error, and `events_outbox.retention_until` is `NOT NULL` so direct SQL producers cannot persist unknown retention.
 - artifact는 위 표의 `artifact.retention_default`와 sweeper 규칙을 따른다. 다른 payload-bearing 테이블은 각 row의 `retention_until`을 기준으로 하며, 값이 없으면 해당 producer 계약이 보존 기간을 아직 산출하지 못한 오류로 취급한다(조용한 unknown 금지).
 
 ---

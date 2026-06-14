@@ -196,8 +196,10 @@ function checkPayloadRetentionContracts() {
     requireRegex(`${table} legal_hold`, body, /legal_hold\s+boolean\s+NOT\s+NULL\s+DEFAULT\s+false/i);
   }
 
+  requireRegex("events_outbox retention_until not null", createTableBody("events_outbox"), /retention_until\s+timestamptz\s+NOT\s+NULL/i);
   requireRegex("migration_smoke.sql retention column check", smoke, /payload-bearing table % missing retention column %/i);
   requireRegex("events_outbox smoke retention assertion", smoke, /events_outbox smoke rows must set retention_until explicitly/i);
+  requireRegex("events_outbox null retention rejection", smoke, /events_outbox must reject missing retention_until/i);
 }
 
 function checkCanonicalStepReferences() {
@@ -227,6 +229,11 @@ function checkAuditLogContract() {
   requireRegex("audit log sequence", body, /sequence_no\s+bigint\s+NOT\s+NULL\s+CHECK\s*\(sequence_no\s*>=\s*1\)/i);
   requireRegex("audit log previous hash", body, /previous_hash\s+text/i);
   requireRegex("audit log hash", body, /hash\s+text\s+NOT\s+NULL\s+CHECK\s*\(length\(hash\)\s*>\s*0\)/i);
+  requireRegex(
+    "audit log payload schema ref",
+    body,
+    /payload_schema_ref\s+text\s+NOT\s+NULL\s+DEFAULT\s+'audit\/security-boundary-decision@1'\s+CHECK\s*\(\s*payload_schema_ref\s*=\s*'audit\/security-boundary-decision@1'\s*\)/i,
+  );
   requireRegex("audit log tenant sequence unique", body, /UNIQUE\s*\(tenant_id,\s*sequence_no\)/i);
   requireRegex("audit log idempotency unique", body, /UNIQUE\s*\(tenant_id,\s*idempotency_key\)/i);
   requireRegex("audit log hash unique", body, /UNIQUE\s*\(tenant_id,\s*hash\)/i);
@@ -234,6 +241,7 @@ function checkAuditLogContract() {
   requireRegex("audit log single genesis", allMigrations, /CREATE\s+UNIQUE\s+INDEX\s+uq_audit_log_tenant_genesis\s+ON\s+audit_log\s*\(tenant_id\)\s+WHERE\s+previous_hash\s+IS\s+NULL/i);
   requireRegex("audit log no branching", allMigrations, /CREATE\s+UNIQUE\s+INDEX\s+uq_audit_log_tenant_previous_hash\s+ON\s+audit_log\s*\(tenant_id,\s*previous_hash\)\s+WHERE\s+previous_hash\s+IS\s+NOT\s+NULL/i);
   requireRegex("audit log append-only trigger", allMigrations, /CREATE\s+TRIGGER\s+trg_audit_log_append_only\s+BEFORE\s+UPDATE\s+OR\s+DELETE\s+ON\s+audit_log/i);
+  requireRegex("audit log payload schema smoke", smoke, /audit_log must reject unknown payload_schema_ref/i);
   requireRegex("audit log append-only smoke", smoke, /audit_log must reject UPDATE[\s\S]*?audit_log must reject DELETE/i);
   requireRegex("audit log cross-tenant chain smoke", smoke, /audit_log must reject cross-tenant previous_hash chaining/i);
 }

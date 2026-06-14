@@ -19,7 +19,7 @@ import type { PoolClient } from "pg";
 
 import { transitionRun } from "../../../codegen/transitions";
 import type { RunState, RunEvent, RunGuard, SideEffectCmd } from "../../../ts/state-machine-types";
-import { emitOutboxEvent, type EmittedEvent } from "./outbox";
+import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent, type EmittedEvent } from "./outbox";
 
 /** state-machine.md §1: Run 종결 상태 — 진입 시 ended_at 확정. */
 const TERMINAL_RUN_STATES: ReadonlySet<RunState> = new Set<RunState>([
@@ -153,6 +153,7 @@ export async function applyRunTransition(
         runId: ctx.runId,
         idempotencyKey: `${anchor}:${cmd.event}`,
         occurredAt: ctx.occurredAt,
+        retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
       }),
     );
   }
