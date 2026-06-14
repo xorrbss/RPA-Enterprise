@@ -15,6 +15,7 @@ import type {
 } from "../../../ts/core-types";
 import type { CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
+import { setDownloadBehavior } from "./raw-cdp";
 
 /** 본 실행기가 지원하는 결정형 액션(IRActionType 의 utility 부분집합). */
 export type UtilityAction =
@@ -83,11 +84,7 @@ export class UtilityExecutor implements ExecutorPlugin {
         break;
       }
       case "download": {
-        await this.withAbort(ctx, session.sendCDP("Browser.setDownloadBehavior", {
-          behavior: "allow",
-          downloadPath: session.downloadDir(),
-          eventsEnabled: true,
-        }));
+        await this.withAbort(ctx, setDownloadBehavior(session, session.downloadDir())); // raw CDP 보완(§9.2 #5)
         await this.withAbort(ctx, session.click(a.trigger.selector));
         const captured = await this.withAbort(ctx, session.waitForDownload(a.fileName, a.timeoutMs ?? 5000));
         if (!captured) {

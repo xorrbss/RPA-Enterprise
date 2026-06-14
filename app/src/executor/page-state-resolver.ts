@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import type { DomLandmark, FrameSummary, PageState, RunContext } from "../../../ts/core-types";
 import { IREL_ALLOWED_FLAGS } from "../../../codegen/irel-compile";
 import type { CdpSessionProvider } from "./cdp-session";
+import { getAccessibilityTree } from "./raw-cdp";
 
 const sha1 = (s: string): string => createHash("sha1").update(s).digest("hex").slice(0, 16);
 export const PAGESTATE_CONTRACT_MARKER = "d3-dryrun-v1";
@@ -48,8 +49,6 @@ type _PagestateFlagsRegistered =
   `flags.${(typeof PAGESTATE_FLAG_KEYS)[number]}` extends (typeof IREL_ALLOWED_FLAGS)[number] ? true : false;
 const _pagestateFlagsRegistered: _PagestateFlagsRegistered = true;
 void _pagestateFlagsRegistered;
-
-type AxNode = { role?: { value?: unknown }; name?: { value?: unknown } };
 
 type Signals = {
   contractMarker: string;
@@ -138,7 +137,7 @@ export class CdpPageStateResolver {
   async resolvePageState(ctx: RunContext): Promise<PageState> {
     const session = this.sessions.forLease(ctx.leaseId);
 
-    const { nodes } = await session.sendCDP<{ nodes: AxNode[] }>("Accessibility.getFullAXTree");
+    const nodes = await getAccessibilityTree(session); // raw CDP 보완(§9.2 #2/#3) + 빈응답 정규화
     const landmarks: DomLandmark[] = [];
     nodes.forEach((n, idx) => {
       const role = n.role?.value;
