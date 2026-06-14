@@ -22,7 +22,7 @@
 
 - [x] HTML HTTP/UI route smoke: `npm --prefix codegen run html:http-smoke` 또는 `node scripts/html-http-smoke.mjs`. Standalone console를 `127.0.0.1` ephemeral port로 serve하고 initial `#openGate`, every hash route, invalid-hash fallback to `#dashboard`, Product-open to workitems nav click, no backend calls, HTTP 200/content-type/404/inline script syntax smoke를 확인.
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact redaction RLS, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
-- [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output: 24 markers, 10 actionable blockers, 13 known release decisions tracked, 13 release decisions checked.
+- [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output: 28 markers, 14 actionable blockers, 13 known release decisions tracked, 13 release decisions checked.
 - [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. External staging/deploy rollback evidence remains outside this contract repository and must be supplied by the platform/release owner.
 
 ## External Staging/Open Blockers
@@ -45,7 +45,11 @@ These are not part of the tagged Product Open Candidate baseline, but they block
 claiming the current D4.4 branch delta as executable staging-ready.
 
 - [x] D4.4 signed command registry source. `ApiServerDeps` now requires a `SecretRef`/`SecretStore`-backed `SignedCommandRegistry`; scenario save/validate/promote pass registry refs into static validation, and shell `cmd_ref` tests cover registered, unregistered, and registry-unavailable paths.
-- [ ] D4.4 events_outbox retention source. Required decision: define the repo-owned `events_outbox.retention_until` duration/source for `emitOutboxEvent`; after the decision, app/runtime producers must set `retention_until` or fail closed before the current app-runtime delta can claim executable staging readiness.
+- [ ] D4.4 events_outbox retention source - policy authority/source is named. Required decision: name the repo-owned contract/config/dependency source that `emitOutboxEvent` must use for `events_outbox.retention_until`.
+- [ ] D4.4 events_outbox retention source - effective duration/scope is named. Required decision: define the concrete retention duration/class and whether it is uniform, event-family/event-type scoped, or tenant-policy scoped.
+- [ ] D4.4 events_outbox retention source - calculation basis is named. Required decision: define the timestamp basis/clock used to compute `retention_until` from the policy source, including how supplied `occurredAt` is handled.
+- [ ] D4.4 events_outbox retention source - fail-closed behavior is named. Required decision: define the missing/invalid policy behavior so `emitOutboxEvent` cannot persist NULL/unknown `retention_until`.
+- [ ] D4.4 events_outbox retention source - app/runtime evidence is named. Required decision: update `emitOutboxEvent` and app/runtime tests to prove rows set `retention_until` and missing/invalid source fails closed.
 
 ## Manual Release Review
 
