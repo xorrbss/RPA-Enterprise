@@ -119,16 +119,10 @@ export class LlmGateway {
       const reservation = await idem.reserve(req);
       if (reservation.kind === "replay") return reservation.response; // side effect 재실행 금지(§ store)
       if (reservation.kind === "reserved") callId = reservation.callId;
-      else {
-        // TODO: [BLOCKED]
-        //   violated: 가정 금지(전용 ErrorCode 부재)
-        //   reason: in_flight(동시 호출)·blocked(request_hash_mismatch)는 전용 카탈로그 코드가 없다
-        //           (security-middleware-contract 주석: "until a dedicated catalog code exists").
-        //   required_change: gateway conflict 정책 코드 신설 후 매핑. 현재는 명시적 throw(조용한 진행 금지).
-        throw new GatewayError(
-          "CONTROL_PLANE_INTERNAL_ERROR",
-          `idempotency reservation '${reservation.kind}' has no dedicated gateway policy yet`,
-        );
+      else if (reservation.kind === "in_flight") {
+        throw new GatewayError("WORKITEM_CHECKOUT_CONFLICT", `idempotency call '${reservation.callId}' is still in flight`);
+      } else {
+        throw new GatewayError("SCENARIO_VERSION_CONFLICT", `idempotency blocked: ${reservation.reason}`);
       }
     }
 
