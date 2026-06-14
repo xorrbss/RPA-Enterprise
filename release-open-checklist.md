@@ -4,31 +4,31 @@
 
 ## Required Automated Gates
 
-- [ ] Root contract lint: `npm --prefix codegen run contract:lint` 또는 `node scripts/contract-lint.mjs`. Authoritative Markdown/Schema/SQL/TS 계약 파일 존재, UTF-8, merge conflict marker 없음, `TODO:`는 `TODO: [BLOCKED]` 형식.
-- [ ] Codegen install: `npm ci --prefix codegen`.
-- [ ] TypeScript strict: `npm --prefix codegen run typecheck`.
-- [ ] Fixtures: `npm --prefix codegen run fixtures`.
-- [ ] Schema negative fixtures: `npm --prefix codegen run validators`.
-- [ ] Contract consistency: `npm --prefix codegen run consistency`.
-- [ ] Full codegen gate: `npm --prefix codegen test`.
-- [ ] Workflow/OpenAPI/AsyncAPI parse: `npm --prefix codegen run yaml:parse` 또는 `python scripts/yaml-parse.py`. `.github/workflows/contract-gates.yml`, `codegen/openapi.yaml`, `codegen/asyncapi.yaml` YAML parse 성공.
-- [ ] Secret scan: `npm --prefix codegen run secret:scan` 또는 `node scripts/secret-scan.mjs`. Private key, cloud token, GitHub token, Slack token, OpenAI key 형식의 고위험 secret marker 없음.
-- [ ] PostgreSQL 15 migration smoke: `npm --prefix codegen run db:smoke` 또는 `node scripts/db-migration-smoke.mjs`. PostgreSQL 15+에서 `db/migration_smoke.sql`이 isolated schema 안에 `db/migration_concurrency_idempotency.sql` 다음 `db/migration_core_entities.sql`을 적용하고 core table/RLS/CAS/idempotency smoke를 통과. Product Open evidence must include at least one non-SUPERUSER/non-BYPASSRLS role run so RLS/redaction assertions execute; CI provisions `rpa_smoke` for this.
-- [ ] HTML/UI smoke: `npm --prefix codegen run html:smoke` 또는 `node scripts/html-smoke.mjs`. `rpa_enterprise_console.html`이 standalone 구조, hash router, empty/error state, 11개 view key를 유지하고 backend call을 만들지 않음.
-- [ ] Local repeatability: prefer `npm --prefix codegen run ci:local:temp-db` when PostgreSQL 15 binaries are installed but no disposable database is configured. Use `npm --prefix codegen run ci:local` when `PSQL_BIN`/PG env already points at a PostgreSQL 15 database with a non-`SUPERUSER`/non-`BYPASSRLS` role; the local gate now fails if it cannot prove that role matches CI's non-bypass DB smoke posture. Use `npm --prefix codegen run ci:local:no-db` only when PostgreSQL 15 binaries are unavailable, and record the DB smoke skip reason in the PR body.
-- [ ] Remote GitHub Actions evidence: `.github/workflows/contract-gates.yml` must be tracked, committed, and pushed before Product Open evidence can use it. Record the PR/push `contract-gates` run URL, or run `workflow_dispatch` only after GitHub shows the workflow on a remote ref; attach the `db-migration-smoke` job result. An untracked local workflow file does not satisfy this gate.
+- [x] Root contract lint: `npm --prefix codegen run contract:lint` 또는 `node scripts/contract-lint.mjs`. Authoritative Markdown/Schema/SQL/TS 계약 파일 존재, UTF-8, merge conflict marker 없음, `TODO:`는 `TODO: [BLOCKED]` 형식.
+- [x] Codegen install: `npm ci --prefix codegen`.
+- [x] TypeScript strict: `npm --prefix codegen run typecheck`.
+- [x] Fixtures: `npm --prefix codegen run fixtures`.
+- [x] Schema negative fixtures: `npm --prefix codegen run validators`.
+- [x] Contract consistency: `npm --prefix codegen run consistency`.
+- [x] Full codegen gate: `npm --prefix codegen test`.
+- [x] Workflow/OpenAPI/AsyncAPI parse: `npm --prefix codegen run yaml:parse` 또는 `python scripts/yaml-parse.py`. `.github/workflows/contract-gates.yml`, `codegen/openapi.yaml`, `codegen/asyncapi.yaml` YAML parse 성공.
+- [x] Secret scan: `npm --prefix codegen run secret:scan` 또는 `node scripts/secret-scan.mjs`. Private key, cloud token, GitHub token, Slack token, OpenAI key 형식의 고위험 secret marker 없음.
+- [x] PostgreSQL 15 migration smoke: `npm --prefix codegen run db:smoke` 또는 `node scripts/db-migration-smoke.mjs`. PostgreSQL 15+에서 `db/migration_smoke.sql`이 isolated schema 안에 `db/migration_concurrency_idempotency.sql` 다음 `db/migration_core_entities.sql`을 적용하고 core table/RLS/CAS/idempotency smoke를 통과. Product Open evidence must include at least one non-SUPERUSER/non-BYPASSRLS role run so RLS/redaction assertions execute; CI provisions `rpa_smoke` for this.
+- [x] HTML/UI smoke: `npm --prefix codegen run html:smoke` 또는 `node scripts/html-smoke.mjs`. `rpa_enterprise_console.html`이 standalone 구조, hash router, empty/error state, 11개 view key를 유지하고 backend call을 만들지 않음.
+- [x] Local repeatability: prefer `npm --prefix codegen run ci:local:temp-db` when PostgreSQL 15 binaries are installed but no disposable database is configured. Use `npm --prefix codegen run ci:local` when `PSQL_BIN`/PG env already points at a PostgreSQL 15 database with a non-`SUPERUSER`/non-`BYPASSRLS` role; the local gate now fails if it cannot prove that role matches CI's non-bypass DB smoke posture. Use `npm --prefix codegen run ci:local:no-db` only when PostgreSQL 15 binaries are unavailable, and record the DB smoke skip reason in the PR body.
+- [x] Remote GitHub Actions evidence: `.github/workflows/contract-gates.yml` must be tracked, committed, and pushed before Product Open evidence can use it. Record the PR/push `contract-gates` run URL, or run `workflow_dispatch` only after GitHub shows the workflow on a remote ref; attach the `db-migration-smoke` job result. An untracked local workflow file does not satisfy this gate.
 
-- [ ] HTML HTTP smoke: `npm --prefix codegen run html:http-smoke` 또는 `node scripts/html-http-smoke.mjs`. Standalone console를 `127.0.0.1` ephemeral port로 serve하고 HTTP 200/content-type/hash route/404/inline script syntax smoke를 확인.
-- [ ] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated smoke harness, table set, tenant RLS loop, artifact redaction RLS, tenant composite FK, idempotency/CAS anchors, event_type CHECK를 확인.
-- [ ] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and must be tracked by the release checklist; the 13 resolved release decisions must remain present for traceability.
+- [x] HTML HTTP smoke: `npm --prefix codegen run html:http-smoke` 또는 `node scripts/html-http-smoke.mjs`. Standalone console를 `127.0.0.1` ephemeral port로 serve하고 HTTP 200/content-type/hash route/404/inline script syntax smoke를 확인.
+- [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated smoke harness, table set, tenant RLS loop, artifact redaction RLS, tenant composite FK, idempotency/CAS anchors, event_type CHECK를 확인.
+- [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and must be tracked by the release checklist; the 13 resolved release decisions must remain present for traceability.
 
 ## Manual Release Review
 
-- [ ] 계약 변경은 root Markdown 계약에 먼저 반영되었고, `codegen/` 변경은 해당 계약의 산출물로 설명된다.
-- [ ] `README.md` 패치 로그와 현재 변경의 검증 결과가 모순되지 않는다.
-- [ ] `rpa_enterprise_console.html`을 브라우저에서 직접 열어 주요 view 전환, 빈 상태, 오류 상태, focus 이동을 확인했다.
-- [ ] PR 본문에 `contract:lint`, `typecheck`, `fixtures`, `validators`, `consistency`, `test`, YAML parse, secret scan, DB migration smoke, HTML smoke 결과가 적혀 있다.
-- [ ] PR 본문에 HTML/UI 변경이 있으면 스크린샷 또는 검토 메모가 포함되어 있다.
+- [x] 계약 변경은 root Markdown 계약에 먼저 반영되었고, `codegen/` 변경은 해당 계약의 산출물로 설명된다.
+- [x] `README.md` 패치 로그와 현재 변경의 검증 결과가 모순되지 않는다.
+- [x] `rpa_enterprise_console.html`을 브라우저에서 직접 열어 주요 view 전환, 빈 상태, 오류 상태, focus 이동을 확인했다.
+- [x] PR 본문에 `contract:lint`, `typecheck`, `fixtures`, `validators`, `consistency`, `test`, YAML parse, secret scan, DB migration smoke, HTML smoke 결과가 적혀 있다.
+- [x] PR 본문에 HTML/UI 변경이 있으면 스크린샷 또는 검토 메모가 포함되어 있다.
 
 ## Resolved Release Decisions
 

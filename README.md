@@ -424,3 +424,14 @@
 | 미분류 예외 응답 | `app/src/api/errors.ts`가 unknown throwable을 catalog-backed `CONTROL_PLANE_INTERNAL_ERROR`로 변환 |
 | ErrorCode 정합 | `ts/error-catalog.ts`와 `codegen/openapi.yaml`에 `CONTROL_PLANE_INTERNAL_ERROR` 추가 |
 | 산문 SSoT | `api-surface.md §0.2`에 미분류 제어평면 예외의 로그/응답 경계 명시 |
+
+## v2.7 패치 로그 (D4.2 RBAC 경계 + Node 24 CI)
+
+> D4.2 제어평면 RBAC 미들웨어를 `auth-rbac.md §2` 매트릭스에 맞춰 배선하고, Product Open contract gates를 Node 24 Actions 런타임으로 전환했다. **재검증 대상: RBAC unit/integration, `ci:local:temp-db`, GitHub Actions Contract Gates.**
+
+| 항목 | 조치 |
+|---|---|
+| RBAC 매트릭스 | `app/src/api/rbac.ts`에 `RoleMatrixRbacMiddleware` 추가. 역할별 허용 액션은 `auth-rbac.md §2`를 미러링하고 미허용/tenant mismatch는 `AUTHZ_FORBIDDEN`으로 fail-closed |
+| 제어평면 배선 | `app/src/api/server.ts`가 auth 이후 `rbacAction`을 평가. `GET /v1/runs/{run_id}`는 `run.read`; 매칭 라우트의 `rbacAction` 누락은 403, 미매칭/미지원 메서드는 404 `RESOURCE_NOT_FOUND` |
+| 회귀 테스트 | `app/test/rbac.unit.ts`와 `app/test/api-runs.int.ts`로 역할 합집합, 빈 역할 거부, tenant mismatch, fail-closed, 404/403 경계를 검증 |
+| Node 24 CI | `.github/workflows/contract-gates.yml`의 `NODE_VERSION=24`, `actions/checkout@v5`, `actions/setup-node@v5` 적용. CRLF에서도 AsyncAPI 문자열 fixture/consistency가 동일하게 동작하도록 줄끝 정규화 |
