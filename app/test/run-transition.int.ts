@@ -16,6 +16,8 @@ import { fileURLToPath } from "node:url";
 
 import { createPool, withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
+import { applyWorkitemTransition } from "../src/runtime/workitem-transition";
+import { applyHumanTaskTransition } from "../src/runtime/human-task-transition";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TENANT = "00000000-0000-0000-0000-0000000000a1";
@@ -23,6 +25,9 @@ const SCENARIO = "10000000-0000-0000-0000-000000000003";
 const SCENARIO_VERSION = "10000000-0000-0000-0000-000000000004";
 const WORKITEM = "10000000-0000-0000-0000-000000000005";
 const RUN = "10000000-0000-0000-0000-000000000007";
+const HUMAN_TASK = "10000000-0000-0000-0000-000000000009";
+const WORKER = "10000000-0000-0000-0000-000000000010";
+const ASSIGNEE = "10000000-0000-0000-0000-000000000011";
 const CORRELATION = "20000000-0000-0000-0000-000000000001";
 
 let failures = 0;
@@ -78,8 +83,13 @@ async function main(): Promise<void> {
          VALUES ($1,$2,$3,$4,'claimed',$5)`,
         [RUN, TENANT, SCENARIO_VERSION, WORKITEM, CORRELATION],
       );
+      await c.query(
+        `INSERT INTO human_tasks (id, tenant_id, run_id, kind, state, on_timeout)
+         VALUES ($1,$2,$3,'approval','open','fail')`,
+        [HUMAN_TASK, TENANT, RUN],
+      );
     });
-    console.log("seeded scenario/version/workitem/run(claimed)");
+    console.log("seeded scenario/version/workitem/run(claimed)/human_task(open)");
 
     // --- 테스트 1+2: R2 CAS 성공 + outbox 발행 ---
     const outcome = await withTenantTx(pool, TENANT, (c) =>
@@ -148,6 +158,115 @@ async function main(): Promise<void> {
     if (advance.applied) {
       check("R7 finalizeOutputs preserved in pending", advance.pending.some((p) => p.kind === "finalizeOutputs"));
     }
+
+    // --- Workitem: W1(new→processing, checkout) → W2(processing→successful, run_succeeded) ---
+    const w1 = await withTenantTx(pool, TENANT, (c) =>
+      applyWorkitemTransition(c, {
+        tenantId: TENANT,
+        workitemId: WORKITEM,
+        fromStatus: "new",
+        event: { type: "checkout" },
+        guard: { uniqueReferenceFree: true },
+        correlationId: CORRELATION,
+        runId: RUN,
+        workerId: WORKER,
+      }),
+    );
+    check("W1 new→processing", w1.applied && w1.next === "processing", JSON.stringify(w1));
+    await withTenantTx(pool, TENANT, async (c) => {
+      const wi = await c.query<{ status: string; checked_out_by: string | null }>(
+        `SELECT status, checked_out_by FROM workitems WHERE id=$1`,
+        [WORKITEM],
+      );
+      check("W1 checked_out_by set", wi.rows[0]?.checked_out_by === WORKER, wi.rows[0]?.checked_out_by ?? "null");
+    });
+    const w2 = await withTenantTx(pool, TENANT, (c) =>
+      applyWorkitemTransition(c, {
+        tenantId: TENANT,
+        workitemId: WORKITEM,
+        fromStatus: "processing",
+        event: { type: "run_succeeded" },
+        guard: { sinkPolicyMet: true },
+        correlationId: CORRELATION,
+        runId: RUN,
+      }),
+    );
+    check("W2 processing→successful", w2.applied && w2.next === "successful", JSON.stringify(w2));
+    check("W2 emitted workitem.completed", w2.applied && w2.emitted.some((e) => e.eventType === "workitem.completed"));
+    await withTenantTx(pool, TENANT, async (c) => {
+      const ev = await c.query(
+        `SELECT 1 FROM events_outbox WHERE workitem_id=$1 AND event_type='workitem.completed'`,
+        [WORKITEM],
+      );
+      check("workitem.completed in outbox (workitem_id linked)", ev.rowCount === 1, `rowCount=${ev.rowCount}`);
+    });
+
+    // --- HumanTask: H1(open→assigned) → H2(assigned→in_progress) → H3(in_progress→resolved) ---
+    const h1 = await withTenantTx(pool, TENANT, (c) =>
+      applyHumanTaskTransition(c, {
+        tenantId: TENANT,
+        humanTaskId: HUMAN_TASK,
+        runId: RUN,
+        fromState: "open",
+        event: { type: "assign" },
+        guard: {},
+        correlationId: CORRELATION,
+        assignee: ASSIGNEE,
+      }),
+    );
+    check("H1 open→assigned", h1.applied && h1.next === "assigned", JSON.stringify(h1));
+    const h2 = await withTenantTx(pool, TENANT, (c) =>
+      applyHumanTaskTransition(c, {
+        tenantId: TENANT,
+        humanTaskId: HUMAN_TASK,
+        runId: RUN,
+        fromState: "assigned",
+        event: { type: "start" },
+        guard: {},
+        correlationId: CORRELATION,
+      }),
+    );
+    check("H2 assigned→in_progress", h2.applied && h2.next === "in_progress", JSON.stringify(h2));
+    const h3 = await withTenantTx(pool, TENANT, (c) =>
+      applyHumanTaskTransition(c, {
+        tenantId: TENANT,
+        humanTaskId: HUMAN_TASK,
+        runId: RUN,
+        fromState: "in_progress",
+        event: { type: "resolve" },
+        guard: {},
+        correlationId: CORRELATION,
+      }),
+    );
+    check("H3 in_progress→resolved", h3.applied && h3.next === "resolved", JSON.stringify(h3));
+    check("H3 emitted human_task.resolved", h3.applied && h3.emitted.some((e) => e.eventType === "human_task.resolved"));
+    await withTenantTx(pool, TENANT, async (c) => {
+      const ht = await c.query<{ state: string; assignee: string | null; resolved_at: string | null }>(
+        `SELECT state, assignee, resolved_at FROM human_tasks WHERE id=$1`,
+        [HUMAN_TASK],
+      );
+      check("H resolved_at set", ht.rows[0]?.resolved_at !== null);
+      check("H assignee persisted (H1)", ht.rows[0]?.assignee === ASSIGNEE, ht.rows[0]?.assignee ?? "null");
+      const ev = await c.query(
+        `SELECT 1 FROM events_outbox WHERE run_id=$1 AND event_type='human_task.resolved'`,
+        [RUN],
+      );
+      check("human_task.resolved in outbox (run_id linked)", ev.rowCount === 1, `rowCount=${ev.rowCount}`);
+    });
+
+    // CAS 경합: 이미 resolved인 task를 다시 resolve(in_progress 기대) → 거부
+    const hConflict = await withTenantTx(pool, TENANT, (c) =>
+      applyHumanTaskTransition(c, {
+        tenantId: TENANT,
+        humanTaskId: HUMAN_TASK,
+        runId: RUN,
+        fromState: "in_progress",
+        event: { type: "resolve" },
+        guard: {},
+        correlationId: CORRELATION,
+      }),
+    );
+    check("H CAS conflict (resolved) not applied", !hConflict.applied && hConflict.observed === "resolved", JSON.stringify(hConflict));
   } finally {
     await pool.end();
   }

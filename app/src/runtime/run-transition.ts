@@ -15,19 +15,11 @@
  *
  * 본 모듈은 호출측(Worker 잡)이 트랜잭션과 테넌트 바인딩을 이미 연 client를 받는다(db/pool.ts).
  */
-import { randomUUID } from "node:crypto";
-
 import type { PoolClient } from "pg";
 
 import { transitionRun } from "../../../codegen/transitions";
-import { EVENT_PAYLOAD_SCHEMA_REFS } from "../../../codegen/event-payload-registry";
-import type {
-  RunState,
-  RunEvent,
-  RunGuard,
-  SideEffectCmd,
-  EventEnvelopeType,
-} from "../../../ts/state-machine-types";
+import type { RunState, RunEvent, RunGuard, SideEffectCmd } from "../../../ts/state-machine-types";
+import { emitOutboxEvent, type EmittedEvent } from "./outbox";
 
 /** state-machine.md §1: Run 종결 상태 — 진입 시 ended_at 확정. */
 const TERMINAL_RUN_STATES: ReadonlySet<RunState> = new Set<RunState>([
@@ -56,13 +48,6 @@ export interface RunTransitionContext {
   readonly eventIdempotencyKey?: string;
   /** 결정론/테스트용 발생 시각 주입. 미지정 시 DB now(). */
   readonly occurredAt?: Date;
-}
-
-export interface EmittedEvent {
-  readonly eventId: string;
-  readonly eventType: EventEnvelopeType;
-  readonly idempotencyKey: string;
-  readonly payloadSchemaRef: string;
 }
 
 export type RunTransitionOutcome =
@@ -156,39 +141,20 @@ export async function applyRunTransition(
     };
   }
 
-  // 4) emitEvent → events_outbox INSERT(동일 트랜잭션).
+  // 4) emitEvent → events_outbox INSERT(동일 트랜잭션, 공용 헬퍼).
   const anchor = ctx.eventIdempotencyKey ?? ctx.runId;
   const emitted: EmittedEvent[] = [];
   for (const cmd of emitEvents) {
-    const eventType = cmd.event;
-    // EventEnvelopeType ⊋ EventType: worker.*(인프라 텔레메트리)는 레지스트리/outbox 키 밖.
-    // 전이는 worker.*를 emit하지 않지만 인덱싱은 방어적으로 — 부재 시 조용히 null 넣지 않고 throw.
-    const refs: Readonly<Record<string, string | undefined>> = EVENT_PAYLOAD_SCHEMA_REFS;
-    const payloadSchemaRef = refs[eventType];
-    if (payloadSchemaRef === undefined) {
-      throw new Error(`applyRunTransition: no payload_schema_ref for event_type ${eventType}`);
-    }
-    const eventId = randomUUID();
-    const idempotencyKey = `${anchor}:${eventType}`;
-    await client.query(
-      `INSERT INTO events_outbox
-         (event_id, event_type, event_version, tenant_id, run_id,
-          correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload)
-       VALUES ($1::uuid, $2, 1, $3::uuid, $4::uuid,
-               $5::uuid, $6, COALESCE($7::timestamptz, now()), $8, $9, '{}'::jsonb)`,
-      [
-        eventId,
-        eventType,
-        ctx.tenantId,
-        ctx.runId,
-        ctx.correlationId,
-        ctx.runId, // ordering_key 기본 = run_id (events_outbox DDL)
-        ctx.occurredAt ?? null,
-        idempotencyKey,
-        payloadSchemaRef,
-      ],
+    emitted.push(
+      await emitOutboxEvent(client, {
+        tenantId: ctx.tenantId,
+        eventType: cmd.event,
+        correlationId: ctx.correlationId,
+        runId: ctx.runId,
+        idempotencyKey: `${anchor}:${cmd.event}`,
+        occurredAt: ctx.occurredAt,
+      }),
     );
-    emitted.push({ eventId, eventType, idempotencyKey, payloadSchemaRef });
   }
 
   return { applied: true, next, emitted, pending };
