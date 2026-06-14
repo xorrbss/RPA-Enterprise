@@ -48,6 +48,13 @@ export function compileScenario(irDoc: unknown, options: CompileOptions = {}): C
     return { ok: false, code, report, details: { stage: "static", report } };
   }
 
+  // TODO: [BLOCKED]
+  //   violated: ir-expression §5 / architecture §10 — compiled_ast는 런타임이 평가할 per-expression AST 캐시여야 한다(런타임 재파싱 금지).
+  //   reason: codegen validateScenarioStatic은 내부에서 compileIrelExpression(ast 반환)을 호출하지만 ValidationReport만
+  //     반환하고 expression 슬롯→AST 매핑을 노출하지 않아, 저장 경로가 직렬화할 실 AST를 얻을 수 없다.
+  //   required_change: codegen이 validateScenarioStatic(또는 형제 export)에서 슬롯별 컴파일 AST를 반환 → 저장 경로가
+  //     compiled_ast에 실 AST를 직렬화하고 flow-control.ts(D2 인터프리터)가 로드. 현재는 컴파일 통과 마커만 영속하며,
+  //     인터프리터가 아직 compiled_ast를 로드하지 않으므로(미연결) 런타임 위반은 없다.
   const compiledAst = JSON.stringify({ irel_compiled: true, ir_version: ir.meta.version });
   return { ok: true, ir, report, compiledAst };
 }

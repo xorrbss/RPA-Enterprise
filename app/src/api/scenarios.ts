@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto";
 
 import type { FastifyInstance } from "fastify";
 
-import type { IRScenario } from "../../../codegen/types";
 import { withTenantTx } from "../db/pool";
 import { compileScenario } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
@@ -16,6 +15,12 @@ import { requirePrincipal, type ApiServerDeps } from "./server";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// TODO: [BLOCKED]
+//   violated: security-contracts §2 — shell action cmd_ref는 저장/승격 경계에서 signed command registry로 검증해야 한다.
+//   reason: signed command registry 소스가 ApiServerDeps/DB/config 어디에도 없어 compileScenario에 signedCommandRefs를
+//     전달하지 못한다 → static-validation V8이 미등록으로 간주해 shell 액션 포함 시나리오를 차단한다(fail-closed: 안전하나
+//     적법 cmd_ref도 저장 불가). 현재 wired 라우트(create/validate)는 옵션 미전달이라 shell 시나리오를 저장할 수 없다.
+//   required_change: SignedCommandRegistry 소스를 ApiServerDeps에 연결하고 cmd_refs를 compileScenario(create/validate)에 전달.
 export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   // POST /v1/scenarios — 생성(저장). body=IR 문서 → 파이프라인 통과 시 scenario + scenario_version(v=meta.version, draft).
   app.post("/v1/scenarios", { config: { rbacAction: "scenario.create" } }, async (request, reply) => {
