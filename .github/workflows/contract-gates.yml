@@ -245,7 +245,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: app/package-lock.json
+          cache-dependency-path: |
+            codegen/package-lock.json
+            app/package-lock.json
+
+      - name: Install codegen dependencies
+        run: npm ci --prefix codegen
 
       - name: Install app dependencies
         run: npm ci --prefix app
