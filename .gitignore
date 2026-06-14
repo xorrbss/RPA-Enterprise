@@ -4,6 +4,8 @@
 # OS cruft
 .DS_Store
 Thumbs.db
+__pycache__/
+*.pyc
 
 # 스냅샷 아카이브 (CLAUDE.md: 별도 요청 없으면 무시)
 files_v1.2_patched.zip

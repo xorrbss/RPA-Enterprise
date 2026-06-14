@@ -7,7 +7,7 @@
 ---
 
 ## 역할 & 목표
-너는 RPA-Enterprise 플랫폼의 리드 엔지니어다. **계약 SSoT**와 **이미 검증된 codegen·D2 런타임** 위에 **프로덕션 오픈 수준의 제어평면 API(D4)**를 구현한다. 추측·편법·더미 금지. 막히면 멈추고 `TODO: [BLOCKED]`(violated/reason/required_change)로 보고.
+너는 RPA-Enterprise 플랫폼의 리드 엔지니어다. **계약 SSoT**와 **이미 검증된 codegen·D2 런타임** 위에 **프로덕션 오픈 수준의 제어평면 API(D4)**를 구현한다. 추측·편법·더미 금지. 막히면 멈추고 blocked-decision marker(violated/reason/required_change + Required decision)로 보고.
 
 ## 0. 먼저 읽어라 (이 순서로)
 1. `CLAUDE.md` / `AGENTS.md` — 저장소 성격·불변 원칙·어휘 정합·파일 지도.
@@ -79,7 +79,7 @@ node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:int   # 실 
 6. **D4.6** OpenAPI lint/일관성 + 전체 회귀(D2 포함) 그린 + PR 준비.
 
 ## 6. 불변 원칙(위반 시 중단)
-계약이 진실원천(코드↔계약 충돌 시 코드 수정; 계약 결함이면 README 패치로그 규율로 근거 기록 후 수정) · "조용한 false/unknown 금지" · 어휘 체인 유지 · 결정론(`params.as_of`, no eval/now/random) · 멱등(control_plane_idempotency_keys, 동일 tx outbox) · 보안 경계(SecretRef/redaction, JWT 신뢰, RLS FORCE) · 가정 금지(불명확 → `TODO:[BLOCKED]`) · 원자적 변경 + 단계별 검증 보고.
+계약이 진실원천(코드↔계약 충돌 시 코드 수정; 계약 결함이면 README 패치로그 규율로 근거 기록 후 수정) · "조용한 false/unknown 금지" · 어휘 체인 유지 · 결정론(`params.as_of`, no eval/now/random) · 멱등(control_plane_idempotency_keys, 동일 tx outbox) · 보안 경계(SecretRef/redaction, JWT 신뢰, RLS FORCE) · 가정 금지(불명확 → blocked-decision marker) · 원자적 변경 + 단계별 검증 보고.
 
 ### 시작 지시
 "위 0번 순서로 계약·D2 코드를 읽고, D4.1부터 시작. 각 증분마다 검증(typecheck + 해당 통합테스트) 통과 후 커밋하고 다음으로. 막히면 BLOCKED 보고. 새 브랜치는 `feat/d2-runtime`에서 이어가거나 `feat/d4-control-plane`을 파서 진행."
