@@ -1,0 +1,15 @@
+{
+  "name": "d5-codex-sse-poc",
+  "version": "0.0.0",
+  "private": true,
+  "description": "D5 PoC — llm-gateway-adapter.md §7 / README §19 live external facts: structured-output streaming scope (jsonMode), abort signal behavior, maxContextTokens. Verifies the real app/src/gateway adapter+transport against a live OpenAI-compatible Codex endpoint. Credentials via env only.",
+  "type": "module",
+  "scripts": {
+    "poc": "tsx run-poc.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
