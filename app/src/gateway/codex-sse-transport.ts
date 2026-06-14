@@ -5,8 +5,9 @@
  * `OpenAiSseChunk` 로 파싱한다. abort 는 fetch `signal` 로 연결 close(§3·§7). **라이브 경계** —
  * 도달 가능한 엔드포인트+키가 있어야 동작하며(이 환경 미실행), capabilities 실범위는 PoC 로 확정한다(README §19).
  *
- * 안전 경로: jsonMode 미확정이라 `response_format` 를 native 로 보내지 않는다(어댑터 capabilities 보수적).
- * structured output 은 Gateway 가 prompt-schema 로 messages 에 주입한 상태로 전달된다(redaction 완료, §2).
+ * structured output 은 기본적으로 Gateway 가 prompt-schema 로 messages 에 주입한 상태로 전달된다
+ * (redaction 완료, §2). **빠른경로**(`nativeStructuredOutput`)를 켜면 provider 측 유효-JSON 강제를 위해
+ * `response_format` 도 함께 전송한다 — D5 라이브 PoC 2026-06-15 #3 로 가용 확정(app/poc/d5-codex-sse).
  */
 import type { LLMRequest } from "../../../ts/security-middleware-contract";
 import type { CodexSseTransport, OpenAiSseChunk } from "./codex-sse-adapter";
@@ -18,6 +19,15 @@ export interface FetchCodexSseOptions {
   model: string;
   /** 테스트/대체용 fetch 주입(기본 global fetch). */
   fetchImpl?: typeof fetch;
+  /**
+   * 빠른경로(jsonMode native). true 면 `req.responseFormat` 존재 시 OpenAI `response_format`을 전송해
+   * provider 측 **유효-JSON 강제**(prompt-schema 는 그대로 유지, Gateway validator 가 스키마 적합성 검증).
+   * D5 라이브 PoC 2026-06-15 #3 로 가용 확정. 현재는 `{type:"json_object"}`만 — `LLMRequest.responseFormat`
+   * 은 `schemaRef`만 담고 스키마 본문이 없어, 스키마 적합성까지 provider 강제하는 `json_schema` 는 schemaRef
+   * 해석 레지스트리(= ajv validator 와 동일 갭) 도입 후속이다. 반드시 어댑터 `capabilities.jsonMode=true`
+   * 와 짝으로만 켠다(capabilities 와 전송 불일치 = 조용한 false 금지).
+   */
+  nativeStructuredOutput?: boolean;
 }
 
 export class FetchCodexSseTransport implements CodexSseTransport {
@@ -33,6 +43,10 @@ export class FetchCodexSseTransport implements CodexSseTransport {
         role: m.role,
         content: typeof m.content === "string" ? m.content : "",
       })),
+      // 빠른경로: responseFormat 가 있을 때만 provider 유효-JSON 강제(자유텍스트 호출엔 강제 안 함).
+      ...(this.opts.nativeStructuredOutput && req.responseFormat
+        ? { response_format: { type: "json_object" as const } }
+        : {}),
       ...(req.sampling ? { temperature: req.sampling.temperature, seed: req.sampling.seed } : {}),
     };
 

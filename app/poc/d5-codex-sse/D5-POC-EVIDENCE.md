@@ -82,12 +82,15 @@ release evidence: #1/#2/#4 모두 PASS ✅. #5 GAP 은 보수적 maxContextToken
 - **abort**: 변경 없음 — 현 어댑터가 규격 충족(#4 PASS).
 - **maxContextTokens**: 보수적 `cfg.maxContextTokens`(128000) 유지 — provider 메타데이터 부재(#5 GAP).
 - **안전경로(jsonMode=false)**: 현 production 기본 유지 — 라이브 검증 완료(#1·#2 PASS).
-- **빠른경로(jsonMode=true) — 이제 해소됨, 후속 구현 항목**: #3 PASS 로 native json_schema 가 *가용*함이
-  확정됐다. 단, 활성은 플래그 1개가 아니다. (1) `FetchCodexSseTransport` 가 `req.responseFormat` 시
-  `response_format:{type:json_schema, json_schema:{…, strict:true}}` 를 전송하도록,
-  (2) Gateway 가 jsonMode=true 일 때 prompt-schema 주입 대신 provider 강제에 의존하도록,
-  (3) `capabilities:{ jsonMode:true }` override — 셋이 함께 가야 한다. 플래그만 켜면 capabilities 와
-  실제 전송이 불일치(조용한 false)하므로 금지. 후속 PR 로 셋을 묶어 적용 후 회귀 검증한다.
+- **빠른경로(jsonMode native) — 1단계 구현됨**: `FetchCodexSseTransport` 에 opt-in `nativeStructuredOutput`
+  추가 → `req.responseFormat` 존재 시 `response_format:{type:"json_object"}` 전송으로 **provider 측 유효-JSON
+  강제**(prompt-schema 유지 + Gateway validator 가 스키마 적합성 검증). 켤 때 어댑터 `capabilities.jsonMode=true`
+  와 짝(불일치=조용한 false 금지). 검증: `app/test/codex-sse-transport.unit.ts`(opt-out 미전송 / opt-in 전송 /
+  무responseFormat 미강제 / stream 유지).
+- **빠른경로 2단계(json_schema 스키마 적합성 provider 강제) — 후속**: `LLMRequest.responseFormat` 은
+  `schemaRef`만 담아 스키마 본문이 없다 → `response_format:{type:"json_schema", json_schema:{schema}}` 는
+  schemaRef→스키마 해석 **레지스트리**가 선행돼야 한다(= ajv `StructuredOutputValidator` 와 동일 갭).
+  레지스트리 도입 시 transport 가 json_schema 로 승격하고 회귀 검증한다.
 
 ## 결정 로그
 
