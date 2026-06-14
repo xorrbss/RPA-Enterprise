@@ -508,7 +508,7 @@ CREATE TABLE audit_log (
   sequence_no      bigint      NOT NULL CHECK (sequence_no >= 1),
   actor            jsonb       NOT NULL,
   action           text        NOT NULL CHECK (length(action) > 0),
-  outcome          text        NOT NULL CHECK (outcome IN ('allowed','denied','succeeded','failed')),
+  outcome          text        NOT NULL CHECK (outcome IN ('allow','deny','blocked','error')),
   reason           text,
   correlation_id   uuid        NOT NULL,
   idempotency_key  text        NOT NULL CHECK (length(idempotency_key) > 0),

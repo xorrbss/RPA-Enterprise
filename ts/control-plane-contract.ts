@@ -141,9 +141,9 @@ export const CONTROL_PLANE_MIDDLEWARE_ORDER: readonly ControlPlaneMiddlewareStep
   "authenticate",
   "bindTenant",
   "openApiValidate",
+  "rbac",
   "idempotencyReplay",
   "ifMatch",
-  "rbac",
   "handler",
   "errorMapper",
 ];

@@ -13,7 +13,8 @@ if (args.has("--help") || args.has("-h")) {
   process.exit(0);
 }
 
-const unknownArgs = [...args].filter((arg) => arg !== "--preflight-only");
+const requireNonBypass = args.has("--require-non-bypass");
+const unknownArgs = [...args].filter((arg) => arg !== "--preflight-only" && arg !== "--require-non-bypass");
 if (unknownArgs.length > 0) {
   fail([`unknown option(s): ${unknownArgs.join(", ")}`], 2);
 }
@@ -35,10 +36,22 @@ console.log(
 );
 
 if (serverInfo.bypassesRls === "true") {
+  if (requireNonBypass) {
+    fail([
+      "current role has SUPERUSER or BYPASSRLS, but --require-non-bypass was set.",
+      "Use a PostgreSQL role with NOSUPERUSER and NOBYPASSRLS for release DB smoke evidence.",
+    ], 2);
+  }
   console.warn(
     "WARN: current role has SUPERUSER or BYPASSRLS; row-visibility assertions will be skipped. Repeat under a non-bypass application/migration role for Product Open.",
   );
 } else if (serverInfo.bypassesRls !== "false") {
+  if (requireNonBypass) {
+    fail([
+      "could not prove current role BYPASSRLS status, but --require-non-bypass was set.",
+      "Release DB smoke evidence must prove a NOSUPERUSER/NOBYPASSRLS role.",
+    ], 2);
+  }
   console.warn(
     "WARN: could not prove current role BYPASSRLS status; Product Open still requires one non-bypass RLS smoke run.",
   );
@@ -54,7 +67,10 @@ run(psql, ["-X", "-v", "ON_ERROR_STOP=1", "-f", smokeFile], {
   diagnostic: "run migration smoke SQL",
 });
 
-console.log("db migration smoke: PostgreSQL 15 contract smoke passed");
+const postureEvidence = serverInfo.bypassesRls === "false"
+  ? "non-bypass RLS/redaction row-visibility assertions executed"
+  : "catalog/non-RLS assertions only; Product Open still requires one non-SUPERUSER/non-BYPASSRLS role run";
+console.log(`db migration smoke: PostgreSQL 15 contract smoke passed (${postureEvidence})`);
 
 function run(command, args, options) {
   const result = spawnSync(command, args, {
@@ -176,14 +192,14 @@ function detectContainerRuntimes() {
 
 function printUsage() {
   console.log([
-    "Usage: node scripts/db-migration-smoke.mjs [--preflight-only]",
+    "Usage: node scripts/db-migration-smoke.mjs [--preflight-only] [--require-non-bypass]",
     "",
     "Environment:",
     "  PSQL_BIN     Optional path to PostgreSQL 15+ psql. Defaults to psql on PATH.",
     "  PGHOST       PostgreSQL host, or libpq default when unset.",
     "  PGPORT       PostgreSQL port, or libpq default when unset.",
     "  PGDATABASE   Target database. The smoke creates and rolls back an isolated schema inside it.",
-    "  PGUSER       Database role. Product Open requires at least one run without SUPERUSER/BYPASSRLS.",
+    "  PGUSER       Database role. Product Open release evidence should use --require-non-bypass.",
     "  PGPASSWORD   Database password. Never printed by this script.",
     "  PGSERVICE    Optional libpq service name.",
   ].join("\n"));

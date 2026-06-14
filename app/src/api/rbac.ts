@@ -11,8 +11,9 @@
  *  - §2 비고 assignee 스코핑(human_task resolve: 역할 충족 AND assignee/assignee_role 일치)은 human_task
  *    resolve 라우트(D4.5)와 함께 추가한다(현재 wired 액션은 run.read뿐 — humanTask 컨텍스트 없음).
  *
- * 매트릭스 데이터의 SSoT는 auth-rbac §2(문서)다. 본 표는 그 미러이며(참조 스캐폴드
- * control-plane/fake-request-runner.ts와 동일 값) 변경 시 문서와 동기화한다.
+ * 매트릭스 데이터의 SSoT는 auth-rbac §2(문서)다. 본 표는 그 미러이며 변경 시 §2와 동기화한다. (참조 스캐폴드
+ * control-plane/fake-request-runner.ts는 같은 매트릭스를 따르되 scaffold가 배선한 액션만 평가 — scenario는 promote만 —
+ * 하므로, D4 신설 scenario.read/create/update는 본 표·auth-rbac §2·security/compliance-scaffold에만 반영돼 있다.)
  */
 import type {
   AuthenticatedPrincipal,
@@ -25,7 +26,7 @@ import type {
 
 /** auth-rbac §2: 역할별 허용 액션 집합(합집합 평가). 표에 없는 액션은 해당 역할에 대해 거부. */
 const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
-  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read"],
+  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read", "scenario.read"],
   operator: [
     "run.read",
     "run.create",
@@ -37,6 +38,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.start",
     "dlq.replay",
     "sink_dlq.replay",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   reviewer: [
     "run.read",
@@ -54,6 +58,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.resolve.exception",
     "human_task.resolve.captcha",
     "human_task.resolve.mfa",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   approver: [
     "run.read",
@@ -74,6 +81,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.resolve.approval",
     "node_policy.approve",
     "site.approve",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   admin: [
     "run.read",
@@ -99,6 +109,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "gateway_policy.edit",
     "network_policy.edit",
     "rbac.grant",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
     "scenario.promote",
   ],
 };

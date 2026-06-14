@@ -355,6 +355,7 @@ const credentialAgain = await store.acquireCredential({
 });
 assert(credentialAgain.kind === "acquired", "expired credential slot must be reusable by CAS upsert");
 
+console.log("runtime recovery smoke: DLQ replay restores workitem, replay closes idempotently, outbox publish CAS dedupes, lease sweepers are idempotent");
 console.log("runtime fixtures: ALL PASS");
 
 function mustApply<S>(

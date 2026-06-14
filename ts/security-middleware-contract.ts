@@ -76,6 +76,9 @@ export type RbacAction =
   | "node_policy.approve"
   | "dlq.replay"
   | "sink_dlq.replay"
+  | "scenario.create"
+  | "scenario.read"
+  | "scenario.update"
   | "scenario.promote"
   | "artifact.read"
   | "site.approve"
@@ -163,6 +166,47 @@ export interface SecretStoreBoundary {
    * remains tainted and cannot be serialized/logged/artifacted.
    */
   resolveAuthorized(request: SecretAccessRequest): Promise<PlainSecret>;
+}
+
+export type SignedCommandRegistryPurpose =
+  | "scenario.save"
+  | "scenario.validate"
+  | "scenario.promote";
+
+export interface SignedCommandRegistryReadRequest {
+  principal: AuthenticatedPrincipal;
+  purpose: SignedCommandRegistryPurpose;
+}
+
+export interface SignedCommandRegistryEntry {
+  cmdRef: string;
+  kid: string;
+  signature: string;
+  sideEffectKind: "read_only" | "create" | "update" | "delete" | "upload";
+  /** SecretStore/KMS reference for signature verification key material. */
+  verificationKeyRef: SecretRef;
+}
+
+export interface SignedCommandRegistrySnapshot {
+  /**
+   * Metadata-only SecretRef for the signed command registry source. Command
+   * material and signing keys stay behind SecretStore/KMS.
+   */
+  sourceRef: SecretRef;
+  commands: readonly SignedCommandRegistryEntry[];
+}
+
+export type SignedCommandRegistryReadResult =
+  | { kind: "available"; snapshot: SignedCommandRegistrySnapshot }
+  | { kind: "unavailable"; reason: string; sourceRef?: SecretRef };
+
+export interface SignedCommandRegistry {
+  /**
+   * Returns only registered cmd_ref keys visible to the principal. Returning an
+   * empty list is a fail-closed deny-all registry; plaintext command material is
+   * never exposed through the API compile boundary.
+   */
+  listAllowedCommandRefs(request: SignedCommandRegistryReadRequest): Promise<SignedCommandRegistryReadResult>;
 }
 
 export interface PlainSecretSerializationBoundary {

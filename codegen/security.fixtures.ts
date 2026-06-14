@@ -270,6 +270,7 @@ if (failures.length > 0) {
   for (const failure of failures) console.error("FAIL:", failure);
   process.exit(1);
 }
+console.log("redaction/audit smoke: PlainSecret serialization, artifact redaction-before-RBAC, prompt credential-exfiltration block, immutable audit hash chain, and BYPASSRLS policy covered");
 console.log("ALL PASS");
 
 type FixtureFn = () => void | Promise<void>;

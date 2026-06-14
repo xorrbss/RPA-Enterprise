@@ -4,7 +4,7 @@
  * 실행: npm --prefix codegen run validators (tsx). 테스트 러너 비종속.
  */
 import { validateIR, validateVerify, validateEvent, validators } from "./validators";
-import { validateScenarioStatic } from "./static-validation";
+import { compileScenarioStatic, validateScenarioStatic } from "./static-validation";
 import {
   EVENT_PAYLOAD_SCHEMA_REFS,
   EVENT_PAYLOAD_SCHEMAS,
@@ -424,6 +424,22 @@ for (const c of STATIC_CASES) {
   if (warningReasons.some((reason) => !c.expectWarnings.includes(reason))) {
     staticFails.push(`${c.name} — unexpected warnings [${warningReasons.join(", ")}]`);
   }
+}
+const compiled = compileScenarioStatic({
+  meta: { name: "compiled", version: 1 },
+  start: "n1",
+  nodes: {
+    n1: { on: [{ when: "flags.blocked", target: "n2", priority: 1 }] },
+    n2: { terminal: "success" },
+  },
+});
+if (compiled.report.errors.length > 0 || compiled.compiledAst === undefined) {
+  staticFails.push("Static valid compiled AST fixture must return compiledAst");
+} else if (
+  compiled.compiledAst.kind !== "rpa.scenario.compiled_ast.v1" ||
+  compiled.compiledAst.nodes.n1?.on?.[0]?.when.kind !== "variable"
+) {
+  staticFails.push("Static compiled AST fixture must expose per-expression AST");
 }
 console.log(`static validation smoke: ${STATIC_CASES.length} total, ${staticFails.length} failed`);
 if (staticFails.length) { for (const f of staticFails) console.error("FAIL:", f); process.exit(1); }

@@ -6,8 +6,10 @@
   "description": "D2+ 프로덕션 런타임 — 계약(ts/·schema/·db/)과 검증된 codegen 산출물을 PostgreSQL·Worker에 연결한다. 계약 SSoT는 상위 디렉터리(consumed, not redefined).",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run typecheck && npm run test:unit",
     "test:unit": "tsx test/flow-control.unit.ts && tsx test/telemetry.unit.ts && tsx test/rbac.unit.ts",
-    "test:int": "tsx test/run-transition.int.ts && tsx test/graphile-worker.int.ts && tsx test/api-runs.int.ts"
+    "test:int": "tsx test/run-transition.int.ts && tsx test/graphile-worker.int.ts && tsx test/api-runs-graphile.int.ts && tsx test/api-runs.int.ts && tsx test/scenarios.int.ts",
+    "test:ci": "npm run test && npm run test:int"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",

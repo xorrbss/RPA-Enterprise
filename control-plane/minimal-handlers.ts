@@ -143,7 +143,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   async createRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
     const body = requireBody(ctx);
     const runId = `run-${++this.runSequence}`;
-    const params = isRecord(body.params) ? body.params : {};
+    const params = requireRecord(body, "params");
     const asOf = typeof params.as_of === "string" ? params.as_of : new Date().toISOString();
     const run: MinimalRun = {
       run_id: runId,

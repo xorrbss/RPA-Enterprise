@@ -27,7 +27,13 @@ const knownReleaseDecisions = [
 const releaseDecisionRules = [
   {
     label: "Staging deploy target is not defined",
-    aliases: ["Staging deploy target is not defined"],
+    aliases: [
+      "Staging deploy target is not defined",
+      "External concrete staging deploy target",
+      "External staging SecretRef/SecretStore provisioning readiness",
+      "staging secret provisioning",
+      "SecretStore backend",
+    ],
   },
   {
     label: "Event-specific closed payload body fields are not defined",
@@ -161,6 +167,81 @@ const releaseDecisionRules = [
   },
 ];
 
+const activeBlockerRules = [
+  {
+    label: "External concrete staging deploy target",
+    aliases: [
+      "External concrete staging deploy target",
+      "exact staging platform repo",
+      "GitHub Environment `staging` protection",
+      "concrete deploy target identifier",
+      "rollback owner",
+      "release approver",
+    ],
+  },
+  {
+    label: "External staging SecretRef/SecretStore provisioning readiness",
+    aliases: [
+      "External staging SecretRef/SecretStore provisioning readiness",
+      "SecretStore backend",
+      "Vault mount/path",
+      "cloud KMS/secret-manager alias",
+      "SecretRef namespace convention",
+      "runtime identities",
+      "staging secret provisioning",
+    ],
+  },
+  {
+    label: "External staging producer retention duration/source policy",
+    aliases: [
+      "External staging producer retention duration/source policy",
+      "raw_items.raw_payload",
+      "normalized_records.record",
+      "artifacts.object_ref",
+      "audit_log.payload",
+      "non-D4.3 writer",
+      "producer retention duration/source",
+    ],
+  },
+  {
+    label: "D4.4 events_outbox retention source",
+    aliases: [
+      "D4.4 events_outbox retention source",
+      "events_outbox retention",
+      "events_outbox.retention_until",
+      "repo-owned events_outbox",
+      "emitOutboxEvent",
+      "unknown retention boundary",
+    ],
+  },
+];
+const activeBlockerSectionHeadings = new Set([
+  "## External Staging/Open Blockers",
+  "## Active Repo-Controlled D4.4 Blockers",
+]);
+const activeChecklistEvidenceRules = [
+  {
+    checklistText: "External staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path",
+    todoLineAliases: ["evidence is missing the SecretStore backend alias/path"],
+  },
+  {
+    checklistText: "External staging SecretRef/SecretStore provisioning readiness - SecretRef namespace convention",
+    todoLineAliases: ["evidence is missing the SecretRef namespace convention and runtime identity map"],
+  },
+  {
+    checklistText: "External staging SecretRef/SecretStore provisioning readiness - initial SecretRef inventory",
+    todoLineAliases: ["evidence is missing the initial SecretRef inventory"],
+  },
+  {
+    checklistText: "External staging SecretRef/SecretStore provisioning readiness - rotation owner/cadence",
+    todoLineAliases: ["evidence is missing rotation and break-glass ownership"],
+  },
+  {
+    checklistText: "External staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location",
+    todoLineAliases: ["evidence is missing CI/deploy negative-log proof"],
+  },
+];
+
 const scanExtensions = new Set([
   ".md",
   ".json",
@@ -188,6 +269,9 @@ const informationalFiles = new Set([
 const failures = [];
 const todos = [];
 let releaseDecisionLines = [];
+let activeChecklistLines = [];
+let activeBlockerChecklistItems = [];
+let releaseChecklistText = "";
 
 for (const relPath of collectFiles(ROOT)) {
   let text;
@@ -230,6 +314,19 @@ console.log(
 
 function checkReleaseChecklist() {
   const checklist = readFileSync(join(ROOT, "release-open-checklist.md"), "utf8");
+  releaseChecklistText = checklist;
+  const checklistLines = checklist.split(/\r?\n/);
+  activeChecklistLines = checklistLines.filter((line) => line.trim().startsWith("- [ ]"));
+  activeBlockerChecklistItems = [];
+  let inActiveBlockerSection = false;
+  for (const [index, line] of checklistLines.entries()) {
+    if (line.startsWith("## ")) {
+      inActiveBlockerSection = activeBlockerSectionHeadings.has(line.trim());
+    }
+    if (inActiveBlockerSection && line.trim().startsWith("- [ ]")) {
+      activeBlockerChecklistItems.push({ line, lineNo: index + 1 });
+    }
+  }
   const sectionMatch = checklist.match(/## Resolved Release Decisions([\s\S]*?)(?:\n## |$)/);
   if (!sectionMatch) {
     failures.push("release-open-checklist.md: missing Resolved Release Decisions section");
@@ -270,11 +367,33 @@ function checkReleaseChecklist() {
 }
 
 function checkActionableChecklistTracking() {
+  const actionable = actionableTodos();
   for (const todo of actionableTodos()) {
-    const rule = trackedDecisionFor(todo);
+    const rule = trackedActiveBlockerFor(todo);
     if (!rule) {
       failures.push(
-        `${todo.relPath}:${todo.lineNo}: actionable blocked TODO must be tracked by release-open-checklist.md Required Release Decisions`,
+        `${todo.relPath}:${todo.lineNo}: actionable blocked TODO must be tracked by an active unchecked blocker in release-open-checklist.md`,
+      );
+    }
+  }
+
+  for (const item of activeBlockerChecklistItems) {
+    const rule = activeBlockerRules.find((candidate) => item.line.includes(candidate.label));
+    if (!rule) {
+      failures.push(
+        `release-open-checklist.md:${item.lineNo}: active unchecked blocker must match a configured active blocker label`,
+      );
+      continue;
+    }
+    if (!actionable.some((todo) => todoMatchesActiveBlockerRule(todo, rule))) {
+      failures.push(
+        `release-open-checklist.md:${item.lineNo}: active unchecked blocker must have matching actionable TODO: [BLOCKED] with Required decision in product-open-candidate-report.md or code`,
+      );
+    }
+    const evidenceRule = activeChecklistEvidenceRules.find((candidate) => item.line.includes(candidate.checklistText));
+    if (evidenceRule && !actionable.some((todo) => todoLineMatchesEvidenceRule(todo, evidenceRule))) {
+      failures.push(
+        `release-open-checklist.md:${item.lineNo}: active SecretRef evidence blocker must have a matching specific evidence-packet TODO line`,
       );
     }
   }
@@ -386,16 +505,25 @@ function actionableTodos() {
   return todos.filter((todo) => !isInformational(todo.relPath, todo.line));
 }
 
-function trackedDecisionFor(todo) {
-  const text = `${todo.relPath}\n${todo.context}`.toLocaleLowerCase("en-US");
-  for (const rule of releaseDecisionRules) {
-    const trackedInChecklist = releaseDecisionLines.some((line) => line.includes(rule.label));
+function trackedActiveBlockerFor(todo) {
+  for (const rule of activeBlockerRules) {
+    const trackedInChecklist = activeChecklistLines.some((line) => line.includes(rule.label));
     if (!trackedInChecklist) continue;
-    if (rule.aliases.some((alias) => text.includes(alias.toLocaleLowerCase("en-US")))) {
+    if (todoMatchesActiveBlockerRule(todo, rule)) {
       return rule;
     }
   }
   return undefined;
+}
+
+function todoMatchesActiveBlockerRule(todo, rule) {
+  const text = `${todo.relPath}\n${todo.context}`.toLocaleLowerCase("en-US");
+  return rule.aliases.some((alias) => text.includes(alias.toLocaleLowerCase("en-US")));
+}
+
+function todoLineMatchesEvidenceRule(todo, rule) {
+  const line = todo.line.toLocaleLowerCase("en-US");
+  return rule.todoLineAliases.some((alias) => line.includes(alias.toLocaleLowerCase("en-US")));
 }
 
 function escapeRegExp(value) {

@@ -109,7 +109,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Scan for high-risk secret material
+      - name: Check secret scan workflow hazard fixtures
+        run: node scripts/secret-scan.mjs --self-test
+
+      - name: Scan for high-risk secret material and staging workflow hazards
         run: node scripts/secret-scan.mjs
 
   db-static-smoke:
@@ -130,6 +133,9 @@ jobs:
   db-migration-smoke:
     name: PostgreSQL 15 migration smoke
     runs-on: ubuntu-latest
+    # These visible postgres/rpa_smoke values are isolated service-container
+    # credentials for CI smoke only. They are not staging SecretStore
+    # provisioning evidence and must not be reused for deploy/runtime material.
     services:
       postgres:
         image: postgres:15
@@ -147,9 +153,7 @@ jobs:
       PGPORT: "5432"
       PGDATABASE: rpa_contract_gate
       PGADMIN_USER: postgres
-      PGADMIN_PASSWORD: postgres
       PGSMOKE_USER: rpa_smoke
-      PGSMOKE_PASSWORD: rpa_smoke
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -179,8 +183,13 @@ jobs:
 
       - name: Prepare non-bypass db:smoke role and database
         shell: bash
+        env:
+          PGADMIN_PASSWORD: postgres
+          PGSMOKE_PASSWORD: rpa_smoke
         run: |
           set -euo pipefail
+          echo "::add-mask::${PGADMIN_PASSWORD}"
+          echo "::add-mask::${PGSMOKE_PASSWORD}"
           export PGUSER="${PGADMIN_USER}"
           export PGPASSWORD="${PGADMIN_PASSWORD}"
           psql -v ON_ERROR_STOP=1 -d postgres <<'SQL'
@@ -203,8 +212,95 @@ jobs:
       - name: Run migration contract smoke
         env:
           PGUSER: ${{ env.PGSMOKE_USER }}
-          PGPASSWORD: ${{ env.PGSMOKE_PASSWORD }}
-        run: node scripts/db-migration-smoke.mjs
+          PGPASSWORD: rpa_smoke
+        run: node scripts/db-migration-smoke.mjs --require-non-bypass
+
+  app-runtime:
+    name: App runtime typecheck and tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: rpa_contract_gate
+      PGADMIN_USER: postgres
+      PGSMOKE_USER: rpa_smoke
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            codegen/package-lock.json
+            app/package-lock.json
+
+      - name: Install codegen dependencies
+        run: npm ci --prefix codegen
+
+      - name: Install app dependencies
+        run: npm ci --prefix app
+
+      - name: Typecheck app runtime
+        run: npm --prefix app run typecheck
+
+      - name: Run app unit tests
+        run: npm --prefix app run test:unit
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
+      - name: Prepare non-bypass app integration role and database
+        shell: bash
+        env:
+          PGADMIN_PASSWORD: postgres
+          PGSMOKE_PASSWORD: rpa_smoke
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${PGADMIN_PASSWORD}"
+          echo "::add-mask::${PGSMOKE_PASSWORD}"
+          export PGUSER="${PGADMIN_USER}"
+          export PGPASSWORD="${PGADMIN_PASSWORD}"
+          psql -v ON_ERROR_STOP=1 -d postgres <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rpa_smoke') THEN
+              CREATE ROLE rpa_smoke LOGIN PASSWORD 'rpa_smoke'
+                NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+            ELSE
+              ALTER ROLE rpa_smoke LOGIN PASSWORD 'rpa_smoke'
+                NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+            END IF;
+          END;
+          $$;
+          SQL
+          psql -v ON_ERROR_STOP=1 -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${PGDATABASE}'" | grep -q 1 || createdb --owner "${PGSMOKE_USER}" "${PGDATABASE}"
+          psql -v ON_ERROR_STOP=1 -d postgres -c "ALTER DATABASE ${PGDATABASE} OWNER TO ${PGSMOKE_USER}"
+          psql -v ON_ERROR_STOP=1 -d postgres -Atqc "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = '${PGSMOKE_USER}'" | grep -qx f
+
+      - name: Run app integration tests
+        env:
+          PGUSER: ${{ env.PGSMOKE_USER }}
+          PGPASSWORD: rpa_smoke
+        run: npm --prefix app run test:int
 
   html-smoke:
     name: HTML console smoke

@@ -31,7 +31,11 @@ const steps = [
   ["Full codegen test", "npm", ["--prefix", "codegen", "test"]],
   ["DB static smoke", "node", ["scripts/db-static-smoke.mjs"]],
   ["Workflow/OpenAPI/AsyncAPI YAML parse", "python", ["scripts/yaml-parse.py"]],
+  ["Secret scan fixtures", "node", ["scripts/secret-scan.mjs", "--self-test"]],
   ["Secret scan", "node", ["scripts/secret-scan.mjs"]],
+  ["App install", "npm", ["ci", "--prefix", "app"]],
+  ["App runtime typecheck", "npm", ["--prefix", "app", "run", "typecheck"]],
+  ["App runtime unit tests", "npm", ["--prefix", "app", "run", "test:unit"]],
   ["HTML smoke", "node", ["scripts/html-smoke.mjs"]],
   ["HTML HTTP smoke", "node", ["scripts/html-http-smoke.mjs"]],
 ];
@@ -46,12 +50,13 @@ if (!skipDb) {
     ].join("\n"),
   );
   steps.push(["PostgreSQL non-bypass role proof", verifyNonBypassDbRole]);
-  steps.push(["PostgreSQL 15 migration smoke", "node", ["scripts/db-migration-smoke.mjs"]]);
+  steps.push(["PostgreSQL 15 migration smoke", "node", ["scripts/db-migration-smoke.mjs", "--require-non-bypass"]]);
+  steps.push(["App runtime integration tests", "npm", ["--prefix", "app", "run", "test:int"]]);
 } else {
   console.log(
     [
-      "WARNING: PostgreSQL 15 migration smoke skipped by --skip-db.",
-      "This does not satisfy the CI db:smoke gate; record the local skip reason in the PR/release notes.",
+      "WARNING: PostgreSQL 15 DB-dependent gates skipped by --skip-db.",
+      "This does not satisfy the CI db:smoke or app-runtime integration gates; record the local skip reason in the PR/release notes.",
     ].join("\n"),
   );
 }
@@ -64,7 +69,7 @@ for (const [label, command, args] of steps) {
 
 console.log(
   skipDb
-    ? "\nlocal contract gates passed (db:smoke skipped; CI still requires it)"
+    ? "\nlocal contract gates passed (DB-dependent gates skipped; CI still requires them)"
     : "\nlocal contract gates passed",
 );
 
@@ -73,8 +78,8 @@ function printUsage() {
     [
       "Usage: node scripts/run-local-gates.mjs [--skip-db]",
       "",
-      "Runs the same automated contract gate set as CI.",
-      "--skip-db may be used only when local PostgreSQL 15 is unavailable; CI still requires db:smoke.",
+      "Runs the same automated contract and app-runtime gate set as CI.",
+      "--skip-db may be used only when local PostgreSQL 15 is unavailable; CI still requires db:smoke and app integration.",
     ].join("\n"),
   );
 }
