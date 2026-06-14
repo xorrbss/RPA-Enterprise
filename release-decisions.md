@@ -76,12 +76,16 @@ dependent implementation artifact has already been migrated.
     Worker health/circuit telemetry belongs to infrastructure telemetry, while
     tenant-visible site circuit state remains tenant-scoped.
 
-13. Staging deploy target
-    Decision: use GitHub Environment `staging`; deploy target is the staging
-    namespace/service selected by the platform repo; approval owner is
+13. Staging deployment governance
+    Decision: use GitHub Environment `staging`; the concrete platform repo and
+    namespace/service remain external Required decision blockers before executable
+    staging/open deployment; approval owner is
     `release-approvers`; rollback owner is `platform-oncall`; deployment secrets
     are provisioned only through `SecretRef`/`SecretStore`. CI may validate but
-    must not materialize plaintext secrets.
+    must not materialize staging/deploy/runtime secrets or `SecretRef`-resolved
+    material. Repo-visible ephemeral PostgreSQL credentials are allowed only for
+    isolated CI service containers and must not be used as staging secret
+    provisioning evidence.
 
 ## Follow-Up Rule
 

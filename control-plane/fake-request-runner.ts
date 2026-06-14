@@ -145,6 +145,14 @@ export class FakeControlPlaneRunner {
       requestHash,
     };
 
+    const authorization = await this.authorizeIfNeeded(ctx, operation);
+    if (authorization !== undefined) {
+      ctx = { ...ctx, authorization };
+      if (authorization.kind === "deny") {
+        return apiErrorResponse(authorization.code, correlationId);
+      }
+    }
+
     let reservation: IdempotencyReservation | undefined;
     try {
       reservation = await this.reserveIdempotencyIfNeeded(operation, ctx, parsedUrl.pathname);
@@ -174,14 +182,6 @@ export class FakeControlPlaneRunner {
       }
       if (ifMatchDecision.kind === "missing") {
         return fail(ifMatchDecision.code, { reason: "missing_if_match" });
-      }
-    }
-
-    const authorization = await this.authorizeIfNeeded(ctx, operation);
-    if (authorization !== undefined) {
-      ctx = { ...ctx, authorization };
-      if (authorization.kind === "deny") {
-        return fail(authorization.code, { reason: authorization.reason, action: authorization.action });
       }
     }
 
@@ -395,14 +395,11 @@ export class HeaderAuthenticationBoundary implements AuthenticationBoundary {
       return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "missing_roles_claim" };
     }
 
-    const roles = rolesHeader
-      .split(",")
-      .map((role) => role.trim())
-      .filter(isRole);
-
-    if (roles.length === 0) {
-      return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "no_valid_roles" };
+    const roleClaims = rolesHeader.split(",").map((role) => role.trim());
+    if (roleClaims.length === 0 || roleClaims.some((role) => !isRole(role))) {
+      return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "invalid_roles_claim" };
     }
+    const roles = roleClaims as Role[];
 
     const principal: AuthenticatedPrincipal = {
       subjectId: (headers["x-subject-id"] ?? "fake-subject") as AuthenticatedPrincipal["subjectId"],

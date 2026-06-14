@@ -10,6 +10,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const isWin = process.platform === "win32";
 const ROLE = "rpa_smoke";
 const DATABASE = "rpa_contract_gate";
+const ROLE_PASSWORD = "rpa_smoke";
 
 const parsed = parseArgs(process.argv.slice(2));
 if (parsed.help) {
@@ -52,7 +53,7 @@ try {
     "-d",
     "postgres",
     "-c",
-    `CREATE ROLE ${ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;`,
+    `CREATE ROLE ${ROLE} LOGIN PASSWORD '${ROLE_PASSWORD}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;`,
   ], {
     diagnostic: "create non-bypass smoke role",
     env: adminEnv,
@@ -110,9 +111,9 @@ try {
     PGPORT: String(port),
     PGDATABASE: DATABASE,
     PGUSER: ROLE,
+    PGPASSWORD: ROLE_PASSWORD,
     PGCONNECT_TIMEOUT: "5",
   };
-  delete env.PGPASSWORD;
   delete env.PGSERVICE;
   delete env.PGPASSFILE;
 
@@ -186,8 +187,8 @@ function parseArgs(args) {
 function targetCommand(parsed) {
   if (parsed.command.length > 0) return parsed.command;
   if (parsed.localGates) return ["node", "scripts/run-local-gates.mjs"];
-  if (parsed.preflightOnly) return ["node", "scripts/db-migration-smoke.mjs", "--preflight-only"];
-  return ["node", "scripts/db-migration-smoke.mjs"];
+  if (parsed.preflightOnly) return ["node", "scripts/db-migration-smoke.mjs", "--preflight-only", "--require-non-bypass"];
+  return ["node", "scripts/db-migration-smoke.mjs", "--require-non-bypass"];
 }
 
 function discoverPostgresBinaries() {
@@ -368,7 +369,7 @@ function printUsage() {
     "PSQL_BIN/PGHOST/PGPORT/PGDATABASE/PGUSER set, then stops and removes the cluster.",
     "",
     "Default gate:",
-    "  node scripts/db-migration-smoke.mjs",
+    "  node scripts/db-migration-smoke.mjs --require-non-bypass",
     "",
     "Examples:",
     "  npm --prefix codegen run db:temp-smoke",

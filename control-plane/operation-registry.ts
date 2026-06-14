@@ -111,6 +111,7 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     requestBodySchemaRef: "#/components/schemas/ValidateRequest",
     requestBodyRequired: true,
     responseSchemaRef: "#/components/schemas/ValidationReport",
+    rbacAction: "scenario.read",
   }),
   operation({
     operationId: "promoteScenario",
@@ -298,8 +299,32 @@ const passQuery = (schemaRef: string): BoundaryValidator => ({
   },
 });
 
+const requireRunCreateBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    for (const key of Object.keys(input)) {
+      if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id") {
+        return validationFailure({ schemaRef, reason: "additional_property", key });
+      }
+    }
+    if (typeof input.scenario_version_id !== "string" || input.scenario_version_id.length === 0) {
+      return validationFailure({ schemaRef, reason: "missing_required_string", prop: "scenario_version_id" });
+    }
+    if (!isRecord(input.params)) {
+      return validationFailure({ schemaRef, reason: "missing_required_object", prop: "params" });
+    }
+    if (input.workitem_id !== undefined && (typeof input.workitem_id !== "string" || input.workitem_id.length === 0)) {
+      return validationFailure({ schemaRef, reason: "invalid_optional_string", prop: "workitem_id" });
+    }
+    return { valid: true, value: input };
+  },
+});
+
 const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<OperationId, BoundaryValidator>([
-  ["createRun", requireObject("#/components/schemas/RunCreateRequest", ["scenario_version_id"])],
+  ["createRun", requireRunCreateBody("#/components/schemas/RunCreateRequest")],
   ["abortRun", requireObject("#/components/schemas/AbortRequest", [], true)],
   ["validateScenario", requireObject("#/components/schemas/ValidateRequest")],
   ["promoteScenario", requireObject("#/components/schemas/PromoteRequest", ["target"])],
@@ -379,9 +404,9 @@ export function createRouteBinder(
           "authenticate",
           "bindTenant",
           "openApiValidate",
+          "rbac",
           "idempotencyReplay",
           "ifMatch",
-          "rbac",
           "handler",
           "errorMapper",
         ],

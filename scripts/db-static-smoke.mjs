@@ -71,6 +71,9 @@ if (failures.length > 0) {
 console.log(
   `db static smoke: ${expectedTables.length} tables, ${tenantTables.length} tenant RLS tables, ${expectedEventTypes.length} event types checked`,
 );
+console.log(
+  "db static smoke coverage: artifact redaction RLS, immutable audit hash-chain, idempotency/CAS anchors, rollback harness",
+);
 
 function checkSmokeHarness() {
   const includeOrder = [...smoke.matchAll(/^\\ir\s+(.+)$/gim)].map((match) => match[1].trim());
@@ -194,6 +197,7 @@ function checkPayloadRetentionContracts() {
   }
 
   requireRegex("migration_smoke.sql retention column check", smoke, /payload-bearing table % missing retention column %/i);
+  requireRegex("events_outbox smoke retention assertion", smoke, /events_outbox smoke rows must set retention_until explicitly/i);
 }
 
 function checkCanonicalStepReferences() {
@@ -219,6 +223,7 @@ function checkCanonicalStepReferences() {
 
 function checkAuditLogContract() {
   const body = createTableBody("audit_log");
+  requireRegex("audit log outcome enum", body, /outcome\s+text\s+NOT\s+NULL\s+CHECK\s*\(\s*outcome\s+IN\s*\('allow','deny','blocked','error'\)\s*\)/i);
   requireRegex("audit log sequence", body, /sequence_no\s+bigint\s+NOT\s+NULL\s+CHECK\s*\(sequence_no\s*>=\s*1\)/i);
   requireRegex("audit log previous hash", body, /previous_hash\s+text/i);
   requireRegex("audit log hash", body, /hash\s+text\s+NOT\s+NULL\s+CHECK\s*\(length\(hash\)\s*>\s*0\)/i);

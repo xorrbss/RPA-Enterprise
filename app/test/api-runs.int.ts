@@ -25,6 +25,8 @@ import { PgControlPlaneIdempotencyStore, canonicalRequestHash } from "../src/api
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueueInput, RunEnqueuer } from "../src/api/run-queue";
 import { buildServer } from "../src/api/server";
+import type { SecretRef } from "../../ts/core-types";
+import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 import type { CanonicalRequestHash, IdempotencyKey, TenantId } from "../../ts/security-middleware-contract";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -45,6 +47,17 @@ const ABSENT_RUN = "10000000-0000-0000-0000-0000000000ff";
 
 // HS256 공유 시크릿(테스트 전용, >=32바이트). 운영은 RS256/JWKS 검증기 주입.
 const SECRET = new TextEncoder().encode("d41-int-test-secret-do-not-use-in-prod-0123456789");
+const signedCommandRegistry: SignedCommandRegistry = {
+  async listAllowedCommandRefs() {
+    return {
+      kind: "available",
+      snapshot: {
+        sourceRef: "secret://staging/signed-command-registry" as SecretRef,
+        commands: [],
+      },
+    };
+  },
+};
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -124,6 +137,7 @@ async function main(): Promise<void> {
       rbac: new RoleMatrixRbacMiddleware(),
       idempotency: new PgControlPlaneIdempotencyStore(pool),
       enqueuer: spyEnqueuer,
+      signedCommandRegistry,
     });
     // 테스트 전용: rbacAction 미선언(매칭) 라우트 → fail-closed 게이트(403) 검증용.
     app.get("/v1/_norbac_probe", async () => ({ ok: true }));
@@ -134,6 +148,7 @@ async function main(): Promise<void> {
       const tokenViewer = await mint({ sub: "user-v", tenant_id: TENANT_A, roles: ["viewer"] });
       const tokenNoRole = await mint({ sub: "user-z", tenant_id: TENANT_A, roles: [] });
       const tokenBadRole = await mint({ sub: "user-badrole", tenant_id: TENANT_A, roles: ["viewer", "bogus"] });
+      const tokenNoSubject = await mint({ tenant_id: TENANT_A, roles: ["viewer"] });
 
       // 1) 미인증: Authorization 없음 → 401 UNAUTHENTICATED + correlation_id 에코.
       const noAuth = await app.inject({
@@ -201,6 +216,13 @@ async function main(): Promise<void> {
       });
       check("unknown role claim → 403", badRoleRead.statusCode === 403, badRoleRead.body);
       check("unknown role claim → AUTHZ_FORBIDDEN", badRoleRead.json().code === "AUTHZ_FORBIDDEN", badRoleRead.body);
+      const noSubjectRead = await app.inject({
+        method: "GET",
+        url: `/v1/runs/${RUN_A}`,
+        headers: { authorization: `Bearer ${tokenNoSubject}` },
+      });
+      check("missing subject claim → 403", noSubjectRead.statusCode === 403, noSubjectRead.body);
+      check("missing subject claim → AUTHZ_FORBIDDEN", noSubjectRead.json().code === "AUTHZ_FORBIDDEN", noSubjectRead.body);
 
       // 3d) fail-closed: rbacAction 미선언(매칭) 라우트는 인증돼도 403(미설정 시 통과 금지).
       const noRbacRoute = await app.inject({
@@ -317,6 +339,19 @@ async function main(): Promise<void> {
         check("exactly 1 run row for idempotent create", n.rows[0]?.n === 1, `n=${n.rows[0]?.n}`);
         const ev = await c.query(`SELECT 1 FROM events_outbox WHERE run_id=$1::uuid AND event_type='run.created'`, [firstRunId]);
         check("run.created outbox emitted", ev.rowCount === 1, `rowCount=${ev.rowCount}`);
+        const idem = await c.query<{ has_retention: boolean; retention_matches_expiry: boolean }>(
+          `SELECT retention_until IS NOT NULL AS has_retention,
+                  retention_until = expires_at AS retention_matches_expiry
+             FROM control_plane_idempotency_keys
+            WHERE endpoint='createRun' AND idempotency_key=$1`,
+          ["run-create-1"],
+        );
+        check("idempotency response retention set", idem.rows[0]?.has_retention === true, JSON.stringify(idem.rows[0]));
+        check(
+          "idempotency response retention follows expires_at",
+          idem.rows[0]?.retention_matches_expiry === true,
+          JSON.stringify(idem.rows[0]),
+        );
       });
 
       // 6g) in-flight 409(pipeline): 동일 키의 미완(processing) 예약이 있으면 재요청은 WORKITEM_CHECKOUT_CONFLICT(409).
@@ -339,15 +374,48 @@ async function main(): Promise<void> {
       check("in-flight dup → 409", inflight.statusCode === 409, inflight.body);
       check("in-flight → WORKITEM_CHECKOUT_CONFLICT", inflight.json().code === "WORKITEM_CHECKOUT_CONFLICT", inflight.body);
 
-      // 6h) RBAC: viewer는 run.create 미허용 → 403(인가 단계 차단, 멱등 이전).
+      // 6h) RBAC: viewer는 run.create 미허용 → 403(멱등 예약 이전 차단; key 오염 금지).
       const viewerCreate = await app.inject({
         method: "POST",
         url: "/v1/runs",
         headers: { authorization: `Bearer ${tokenViewer}`, "idempotency-key": "run-create-viewer" },
-        payload: { scenario_version_id: SVER_A },
+        payload: { scenario_version_id: SVER_A, params: {} },
       });
       check("viewer run.create → 403", viewerCreate.statusCode === 403, viewerCreate.body);
       check("viewer create → AUTHZ_FORBIDDEN", viewerCreate.json().code === "AUTHZ_FORBIDDEN", viewerCreate.body);
+      const viewerReplay = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenViewer}`, "idempotency-key": "run-create-viewer" },
+        payload: { scenario_version_id: SVER_A, params: {} },
+      });
+      check("viewer run.create replay → 403", viewerReplay.statusCode === 403, viewerReplay.body);
+      check("viewer replay no enqueue", enqueued.length === 1, `enqueued=${enqueued.length}`);
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const reservedByViewer = await c.query<{ n: number }>(
+          `SELECT count(*)::int AS n
+             FROM control_plane_idempotency_keys
+            WHERE endpoint='createRun' AND idempotency_key=$1`,
+          ["run-create-viewer"],
+        );
+        check(
+          "viewer deny did not reserve idempotency key",
+          reservedByViewer.rows[0]?.n === 0,
+          `n=${reservedByViewer.rows[0]?.n}`,
+        );
+      });
+      const operatorAfterViewerDeny = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-viewer" },
+        payload: { scenario_version_id: SVER_A, params: {} },
+      });
+      check(
+        "authorized create after viewer deny → 201",
+        operatorAfterViewerDeny.statusCode === 201,
+        operatorAfterViewerDeny.body,
+      );
+      check("viewer deny did not poison key", enqueued.length === 2, `enqueued=${enqueued.length}`);
 
       // 6i) 잘못된 as_of(비-ISO) → 422 IR_SCHEMA_INVALID(예약 이전, ::timestamptz cast 500 회피).
       const badAsOf = await app.inject({

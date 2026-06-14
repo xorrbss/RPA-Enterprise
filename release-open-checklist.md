@@ -7,27 +7,52 @@
 - [x] Root contract lint: `npm --prefix codegen run contract:lint` 또는 `node scripts/contract-lint.mjs`. Authoritative Markdown/Schema/SQL/TS 계약 파일 존재, UTF-8, merge conflict marker 없음, `TODO:`는 `TODO: [BLOCKED]` 형식.
 - [x] Codegen install: `npm ci --prefix codegen`.
 - [x] TypeScript strict: `npm --prefix codegen run typecheck`.
-- [x] Fixtures: `npm --prefix codegen run fixtures`.
+- [x] Fixtures: `npm --prefix codegen run fixtures`. Targeted evidence aliases are also rerunnable: `npm --prefix codegen run api:smoke`, `npm --prefix codegen run redaction:audit-smoke`, and `npm --prefix codegen run runtime:recovery-smoke`.
 - [x] Schema negative fixtures: `npm --prefix codegen run validators`.
 - [x] Contract consistency: `npm --prefix codegen run consistency`.
 - [x] Full codegen gate: `npm --prefix codegen test`.
+- [x] Local app runtime gate: `npm ci --prefix app`, `npm --prefix app run typecheck`, `npm --prefix app run test:unit`, and `npm --prefix app run test:int` under PostgreSQL 15 with a non-`SUPERUSER`/non-`BYPASSRLS` role. CI job `app-runtime` runs this without deploys or GitHub Environment binding; full local equivalent is `npm --prefix codegen run ci:local:temp-db`, and the targeted app integration rerun is `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:int`. The integration chain now includes real `PgGraphileRunEnqueuer` commit/rollback evidence for `run_claim` enqueue and D4.4 `SignedCommandRegistry` save/validate/promote coverage.
 - [x] Workflow/OpenAPI/AsyncAPI parse: `npm --prefix codegen run yaml:parse` 또는 `python scripts/yaml-parse.py`. `.github/workflows/contract-gates.yml`, `codegen/openapi.yaml`, `codegen/asyncapi.yaml` YAML parse 성공.
-- [x] Secret scan: `npm --prefix codegen run secret:scan` 또는 `node scripts/secret-scan.mjs`. Private key, cloud token, GitHub token, Slack token, OpenAI key 형식의 고위험 secret marker 없음.
-- [x] PostgreSQL 15 migration smoke: `npm --prefix codegen run db:smoke` 또는 `node scripts/db-migration-smoke.mjs`. PostgreSQL 15+에서 `db/migration_smoke.sql`이 isolated schema 안에 `db/migration_concurrency_idempotency.sql` 다음 `db/migration_core_entities.sql`을 적용하고 core table/RLS/CAS/idempotency smoke를 통과. Product Open evidence must include at least one non-SUPERUSER/non-BYPASSRLS role run so RLS/redaction assertions execute; CI provisions `rpa_smoke` for this.
+- [x] Secret scan: `npm --prefix codegen run secret:scan-fixtures` and `npm --prefix codegen run secret:scan`. Private key, cloud token, GitHub token, Slack token, OpenAI key 형식의 고위험 secret marker 없음; contract workflow also has no GitHub secret context reference, `environment: staging` binding, or env dump command.
+- [x] PostgreSQL 15 migration smoke: release evidence uses `npm --prefix codegen run db:smoke:release` 또는 `node scripts/db-migration-smoke.mjs --require-non-bypass`. PostgreSQL 15+에서 `db/migration_smoke.sql`이 isolated schema 안에 `db/migration_concurrency_idempotency.sql` 다음 `db/migration_core_entities.sql`을 적용하고 core table/RLS/CAS/idempotency smoke를 통과. Product Open evidence must include at least one non-SUPERUSER/non-BYPASSRLS role run so RLS/redaction assertions execute; CI provisions `rpa_smoke` for this, and the final smoke output must state that non-bypass RLS/redaction row-visibility assertions executed. Plain `db:smoke` remains diagnostic only when release evidence is not being claimed.
 - [x] HTML/UI smoke: `npm --prefix codegen run html:smoke` 또는 `node scripts/html-smoke.mjs`. `rpa_enterprise_console.html`이 standalone 구조, hash router, empty/error state, 11개 view key를 유지하고 backend call을 만들지 않음.
-- [x] Local repeatability: prefer `npm --prefix codegen run ci:local:temp-db` when PostgreSQL 15 binaries are installed but no disposable database is configured. Use `npm --prefix codegen run ci:local` when `PSQL_BIN`/PG env already points at a PostgreSQL 15 database with a non-`SUPERUSER`/non-`BYPASSRLS` role; the local gate now fails if it cannot prove that role matches CI's non-bypass DB smoke posture. Use `npm --prefix codegen run ci:local:no-db` only when PostgreSQL 15 binaries are unavailable, and record the DB smoke skip reason in the PR body.
-- [x] Remote GitHub Actions evidence: `.github/workflows/contract-gates.yml` must be tracked, committed, and pushed before Product Open evidence can use it. Record the PR/push `contract-gates` run URL, or run `workflow_dispatch` only after GitHub shows the workflow on a remote ref; attach the `db-migration-smoke` job result. An untracked local workflow file does not satisfy this gate.
+- [x] Local repeatability: prefer `npm --prefix codegen run ci:local:temp-db` when PostgreSQL 15 binaries are installed but no disposable database is configured. Use `npm --prefix codegen run ci:local` when `PSQL_BIN`/PG env already points at a PostgreSQL 15 database with a non-`SUPERUSER`/non-`BYPASSRLS` role; the local gate now fails if it cannot prove that role matches CI's non-bypass DB smoke posture. The local gate includes app install, typecheck, unit tests, `db:smoke`, and app integration when DB is available. Use `npm --prefix codegen run ci:local:no-db` only when PostgreSQL 15 binaries are unavailable; it still runs app typecheck/unit but skips DB-dependent `db:smoke` and app integration, so record that skip reason in the PR body.
+- [x] Historical remote GitHub Actions evidence: the tagged Product Open Candidate baseline has recorded `contract-gates` run URLs in `product-open-candidate-report.md`.
+- [ ] Current staging-readiness delta remote evidence: `.github/workflows/contract-gates.yml` must be tracked, committed, and pushed before updated Product Open evidence can use the new `app-runtime` job. This is a required evidence gate outside the `blocked:audit` actionable-decision count. Record the PR/push `contract-gates` run URL, attach the `secret-scan`, `db-migration-smoke`, and `app-runtime` job results, or run `workflow_dispatch` only after GitHub shows the workflow on a remote ref. An uncommitted or unpushed local workflow change does not satisfy this gate.
 
-- [x] HTML HTTP smoke: `npm --prefix codegen run html:http-smoke` 또는 `node scripts/html-http-smoke.mjs`. Standalone console를 `127.0.0.1` ephemeral port로 serve하고 HTTP 200/content-type/hash route/404/inline script syntax smoke를 확인.
-- [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated smoke harness, table set, tenant RLS loop, artifact redaction RLS, tenant composite FK, idempotency/CAS anchors, event_type CHECK를 확인.
-- [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and must be tracked by the release checklist; the 13 resolved release decisions must remain present for traceability.
+- [x] HTML HTTP/UI route smoke: `npm --prefix codegen run html:http-smoke` 또는 `node scripts/html-http-smoke.mjs`. Standalone console를 `127.0.0.1` ephemeral port로 serve하고 initial `#openGate`, every hash route, invalid-hash fallback to `#dashboard`, Product-open to workitems nav click, no backend calls, HTTP 200/content-type/404/inline script syntax smoke를 확인.
+- [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact redaction RLS, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
+- [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output: 24 markers, 10 actionable blockers, 13 known release decisions tracked, 13 release decisions checked.
+- [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. External staging/deploy rollback evidence remains outside this contract repository and must be supplied by the platform/release owner.
+
+## External Staging/Open Blockers
+
+These do not invalidate the tagged repo-controlled Product Open Candidate, but
+they block any executable staging/open deployment until external owners close
+them in the release packet.
+
+- [ ] External concrete staging deploy target, GitHub Environment `staging` protection/approver configuration, release approver, rollback owner, and SecretRef/SecretStore provisioning path. Required decision: see `product-open-candidate-report.md`.
+- [ ] External staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path is named without plaintext secret values. Required decision: see `product-open-candidate-report.md`.
+- [ ] External staging SecretRef/SecretStore provisioning readiness - SecretRef namespace convention and runtime identities allowed to resolve each namespace are named. Required decision: see `product-open-candidate-report.md`.
+- [ ] External staging SecretRef/SecretStore provisioning readiness - initial SecretRef inventory is listed by SecretRef identifiers only, with owning service/runtime and no resolved material. Required decision: see `product-open-candidate-report.md`.
+- [ ] External staging SecretRef/SecretStore provisioning readiness - rotation owner/cadence and break-glass/update procedure are named. Required decision: see `product-open-candidate-report.md`.
+- [ ] External staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location, CI/deploy log redaction proof, and no-env-dump proof are named. Required decision: see `product-open-candidate-report.md`.
+- [ ] External staging producer retention duration/source policy. Required decision: see `product-open-candidate-report.md`.
+
+## Active Repo-Controlled D4.4 Blockers
+
+These are not part of the tagged Product Open Candidate baseline, but they block
+claiming the current D4.4 branch delta as executable staging-ready.
+
+- [x] D4.4 signed command registry source. `ApiServerDeps` now requires a `SecretRef`/`SecretStore`-backed `SignedCommandRegistry`; scenario save/validate/promote pass registry refs into static validation, and shell `cmd_ref` tests cover registered, unregistered, and registry-unavailable paths.
+- [ ] D4.4 events_outbox retention source. Required decision: define the repo-owned `events_outbox.retention_until` duration/source for `emitOutboxEvent`; after the decision, app/runtime producers must set `retention_until` or fail closed before the current app-runtime delta can claim executable staging readiness.
 
 ## Manual Release Review
 
 - [x] 계약 변경은 root Markdown 계약에 먼저 반영되었고, `codegen/` 변경은 해당 계약의 산출물로 설명된다.
 - [x] `README.md` 패치 로그와 현재 변경의 검증 결과가 모순되지 않는다.
 - [x] `rpa_enterprise_console.html`을 브라우저에서 직접 열어 주요 view 전환, 빈 상태, 오류 상태, focus 이동을 확인했다.
-- [x] PR 본문에 `contract:lint`, `typecheck`, `fixtures`, `validators`, `consistency`, `test`, YAML parse, secret scan, DB migration smoke, HTML smoke 결과가 적혀 있다.
+- [x] PR 본문에 `contract:lint`, `typecheck`, `fixtures`, `validators`, `consistency`, `test`, YAML parse, secret scan fixtures, secret scan, app runtime typecheck/unit/integration, DB migration smoke, HTML smoke 결과가 적혀 있다.
 - [x] PR 본문에 HTML/UI 변경이 있으면 스크린샷 또는 검토 메모가 포함되어 있다.
 
 ## Resolved Release Decisions
@@ -89,9 +114,10 @@
   - Owner: Connector platform.
 - Resolved: Staging deploy target is not defined. Former Required decision: GitHub Environment name, deploy target, approval owner, rollback owner, and secret provisioning model. CI must not create external deploys or materialize plaintext secrets from this contract-only repo.
   - Decision v1: GitHub Environment `staging`; approval owner `release-approvers`; rollback owner `platform-oncall`; secrets only through `SecretRef`/`SecretStore`. See `release-decisions.md`.
-  - 권고: GitHub Environment `staging`, 컨테이너 배포(단일 노드/k8s ns), approval·rollback owner=lead, 시크릿=Vault/KMS. 배포 단계(D7 이후)에서 확정.
+  - Scope note: Decision v1 resolves only the governance owner/environment/SecretRef model. The concrete platform repo, namespace/service deploy target, protection/approver configuration, rollback confirmation, and SecretStore provisioning evidence remain active external blockers above.
+  - Historical recommendation superseded by Decision v1: use GitHub Environment `staging`; concrete deploy target is selected by the platform repo; approval owner is `release-approvers`; rollback owner is `platform-oncall`; secrets remain behind `SecretRef`/`SecretStore`.
   - Owner: Platform/DevOps.
 
 ## Release Decision
 
-Release is open only when every automated gate is green, the manual review is complete, and no new required release decision remains blocking for the intended release scope. Any staging or external deploy uses the resolved staging decision above.
+Release is open only when every automated gate is green, the manual review is complete, the current-delta remote evidence gate is closed, and no new required release decision remains blocking for the intended release scope. Any staging or external deploy must also close the active external blockers for the concrete deploy target, approvals, rollback owner confirmation, and SecretRef/SecretStore evidence.

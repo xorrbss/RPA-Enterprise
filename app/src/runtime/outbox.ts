@@ -33,6 +33,10 @@ export interface OutboxEmit {
   readonly occurredAt?: Date;
 }
 
+// TODO: [BLOCKED]
+//   Required decision: Contract/runtime owners must define the repo-owned events_outbox retention duration/source for emitOutboxEvent before the app-runtime delta can claim staging readiness.
+//   required_change: once decided, emitOutboxEvent must set events_outbox.retention_until from that source or fail closed instead of persisting an unknown retention boundary.
+
 /** outbox 행 1건 INSERT(호출측 트랜잭션 내). payload는 닫힌 빈 객체. */
 export async function emitOutboxEvent(client: PoolClient, e: OutboxEmit): Promise<EmittedEvent> {
   // EventEnvelopeType ⊋ EventType: 닫힌 레지스트리 밖(worker.*)이면 조용히 null 넣지 않고 throw.

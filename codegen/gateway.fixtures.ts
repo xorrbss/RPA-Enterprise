@@ -224,6 +224,7 @@ async function run(): Promise<void> {
     reason: "request_hash_mismatch",
   });
 
+  console.log("gateway redaction smoke: token/password redaction, prompt injection block, allowlist wildcard semantics, credential exfiltration block, and LLM idempotency replay/mismatch covered");
   console.log("gateway fixtures: all checks passed");
 }
 

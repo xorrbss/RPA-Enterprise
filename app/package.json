@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "npm run typecheck && npm run test:unit",
     "test:unit": "tsx test/flow-control.unit.ts && tsx test/telemetry.unit.ts && tsx test/rbac.unit.ts",
-    "test:int": "tsx test/run-transition.int.ts && tsx test/graphile-worker.int.ts && tsx test/api-runs.int.ts && tsx test/scenarios.int.ts",
+    "test:int": "tsx test/run-transition.int.ts && tsx test/graphile-worker.int.ts && tsx test/api-runs-graphile.int.ts && tsx test/api-runs.int.ts && tsx test/scenarios.int.ts",
     "test:ci": "npm run test && npm run test:int"
   },
   "dependencies": {

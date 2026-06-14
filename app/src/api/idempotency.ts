@@ -48,8 +48,8 @@ export class PgControlPlaneIdempotencyStore implements ControlPlaneIdempotencySt
       const rowId = randomUUID();
       const inserted = await c.query<{ id: string }>(
         `INSERT INTO control_plane_idempotency_keys
-           (id, tenant_id, endpoint, idempotency_key, request_hash, status, expires_at)
-         VALUES ($1::uuid, $2::uuid, $3, $4, $5, 'processing', $6::timestamptz)
+           (id, tenant_id, endpoint, idempotency_key, request_hash, status, expires_at, retention_until)
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5, 'processing', $6::timestamptz, $6::timestamptz)
          ON CONFLICT (tenant_id, endpoint, idempotency_key) DO NOTHING
          RETURNING id`,
         [rowId, req.tenantId, req.endpoint, req.key, req.requestHash, req.expiresAt],

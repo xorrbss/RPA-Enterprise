@@ -351,6 +351,7 @@ DECLARE
   run_b uuid := '10000000-0000-0000-0000-000000000033';
   smoke_event_b_id uuid := '10000000-0000-0000-0000-000000000034';
   wrong_worker_id uuid := '10000000-0000-0000-0000-000000000035';
+  smoke_retention_until timestamptz := now() + interval '1 day';
   bypasses_rls boolean;
   row_count int;
 BEGIN
@@ -689,23 +690,27 @@ BEGIN
 
   INSERT INTO events_outbox (
     event_id, event_type, event_version, tenant_id, run_id, workitem_id,
-    correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload
+    correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload,
+    retention_until
   )
   VALUES (
     smoke_event_id, 'run.started', 1, tenant_a, run_1, workitem_1,
     '20000000-0000-0000-0000-000000000001', run_1::text, now(),
-    'run-1:started', 'events/run.started@1', '{}'::jsonb
+    'run-1:started', 'events/run.started@1', '{}'::jsonb,
+    smoke_retention_until
   );
 
   BEGIN
     INSERT INTO events_outbox (
       event_id, event_type, event_version, tenant_id, run_id, workitem_id,
-      correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload
+      correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload,
+      retention_until
     )
     VALUES (
       '10000000-0000-0000-0000-000000000015', 'run.started', 1, tenant_a, run_1, workitem_1,
       '20000000-0000-0000-0000-000000000001', run_1::text, now(),
-      'run-1:started', 'events/run.started@1', '{}'::jsonb
+      'run-1:started', 'events/run.started@1', '{}'::jsonb,
+      smoke_retention_until
     );
     RAISE EXCEPTION 'events_outbox tenant-scoped idempotency key should reject duplicates';
   EXCEPTION
@@ -716,24 +721,26 @@ BEGIN
   INSERT INTO events_outbox (
     event_id, event_type, event_version, tenant_id, run_id, workitem_id,
     step_id, attempt, correlation_id, ordering_key, occurred_at,
-    idempotency_key, payload_schema_ref, payload
+    idempotency_key, payload_schema_ref, payload, retention_until
   )
   VALUES (
     step_event_id, 'step.started', 1, tenant_a, run_1, workitem_1,
     'step-1', 0, '20000000-0000-0000-0000-000000000001', run_1::text, now(),
-    'run-1:step-1:0:started', 'events/step.started@1', '{}'::jsonb
+    'run-1:step-1:0:started', 'events/step.started@1', '{}'::jsonb,
+    smoke_retention_until
   );
 
   BEGIN
     INSERT INTO events_outbox (
       event_id, event_type, event_version, tenant_id, run_id, workitem_id,
       step_id, attempt, correlation_id, ordering_key, occurred_at,
-      idempotency_key, payload_schema_ref, payload
+      idempotency_key, payload_schema_ref, payload, retention_until
     )
     VALUES (
       '10000000-0000-0000-0000-000000000027', 'step.started', 1, tenant_a, run_1, workitem_1,
       'step-1', 9, '20000000-0000-0000-0000-000000000001', run_1::text, now(),
-      'run-1:step-1:9:started', 'events/step.started@1', '{}'::jsonb
+      'run-1:step-1:9:started', 'events/step.started@1', '{}'::jsonb,
+      smoke_retention_until
     );
     RAISE EXCEPTION 'events_outbox step event must reject unknown (tenant_id, run_id, step_id, attempt)';
   EXCEPTION
@@ -744,12 +751,14 @@ BEGIN
   BEGIN
     INSERT INTO events_outbox (
       event_id, event_type, event_version, tenant_id,
-      correlation_id, occurred_at, idempotency_key, payload_schema_ref, payload
+      correlation_id, occurred_at, idempotency_key, payload_schema_ref, payload,
+      retention_until
     )
     VALUES (
       '10000000-0000-0000-0000-000000000028', 'worker.heartbeat', 1, tenant_a,
       '20000000-0000-0000-0000-000000000001', now(),
-      'worker-heartbeat-tenant-outbox-forbidden', 'events/worker.heartbeat@1', '{}'::jsonb
+      'worker-heartbeat-tenant-outbox-forbidden', 'events/worker.heartbeat@1', '{}'::jsonb,
+      smoke_retention_until
     );
     RAISE EXCEPTION 'events_outbox must reject worker.* infrastructure telemetry';
   EXCEPTION
@@ -773,23 +782,35 @@ BEGIN
 
   INSERT INTO events_outbox (
     event_id, event_type, event_version, tenant_id, run_id, workitem_id,
-    correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload
+    correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload,
+    retention_until
   )
   VALUES (
     smoke_event_b_id, 'run.started', 1, tenant_b, run_b, workitem_b,
     '20000000-0000-0000-0000-000000000003', run_b::text, now(),
-    'run-1:started', 'events/run.started@1', '{}'::jsonb
+    'run-1:started', 'events/run.started@1', '{}'::jsonb,
+    smoke_retention_until
   );
+
+  IF EXISTS (
+    SELECT 1 FROM events_outbox
+     WHERE event_id = smoke_event_b_id
+       AND retention_until IS NULL
+  ) THEN
+    RAISE EXCEPTION 'events_outbox smoke rows must set retention_until explicitly';
+  END IF;
 
   BEGIN
     INSERT INTO events_outbox (
       event_id, event_type, event_version, tenant_id, run_id,
-      correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload
+      correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload,
+      retention_until
     )
     VALUES (
       '10000000-0000-0000-0000-000000000016', 'run.started', 1, tenant_b, run_1,
       '20000000-0000-0000-0000-000000000004', run_1::text, now(),
-      'tenant-b:cross-run', 'events/run.started@1', '{}'::jsonb
+      'tenant-b:cross-run', 'events/run.started@1', '{}'::jsonb,
+      smoke_retention_until
     );
     RAISE EXCEPTION 'events_outbox composite FK should reject cross-tenant run reference';
   EXCEPTION
@@ -798,13 +819,21 @@ BEGIN
   END;
   PERFORM set_config('app.tenant_id', tenant_a::text, true);
 
+  IF EXISTS (
+    SELECT 1 FROM events_outbox
+     WHERE event_id IN (smoke_event_id, step_event_id)
+       AND retention_until IS NULL
+  ) THEN
+    RAISE EXCEPTION 'events_outbox smoke rows must set retention_until explicitly';
+  END IF;
+
   INSERT INTO audit_log (
     id, tenant_id, sequence_no, actor, action, outcome, reason, correlation_id,
     idempotency_key, occurred_at, payload, retention_until, hash
   )
   VALUES (
     audit_1, tenant_a, 1, '{"kind":"system","id":"smoke"}'::jsonb,
-    'artifact.read', 'denied', 'ARTIFACT_NOT_REDACTED',
+    'artifact.read', 'deny', 'ARTIFACT_NOT_REDACTED',
     '20000000-0000-0000-0000-000000000001',
     'audit-smoke-1', now(), '{"artifact_id":"10000000-0000-0000-0000-000000000020"}'::jsonb,
     now() + interval '90 days', 'sha256:audit-smoke-1'
@@ -816,7 +845,7 @@ BEGIN
   )
   VALUES (
     audit_2, tenant_a, 2, '{"kind":"system","id":"smoke"}'::jsonb,
-    'domain.policy.check', 'succeeded', NULL,
+    'domain.policy.check', 'allow', NULL,
     '20000000-0000-0000-0000-000000000001',
     'audit-smoke-2', now(), '{"domain":"example.test"}'::jsonb,
     'sha256:audit-smoke-1', 'sha256:audit-smoke-2'
@@ -850,7 +879,7 @@ BEGIN
     VALUES (
       '10000000-0000-0000-0000-000000000042', tenant_b, 2,
       '{"kind":"system","id":"smoke"}'::jsonb, 'audit.chain.cross_tenant',
-      'failed', '20000000-0000-0000-0000-000000000003',
+      'error', '20000000-0000-0000-0000-000000000003',
       'audit-smoke-cross-tenant', now(), '{}'::jsonb,
       'sha256:audit-smoke-1', 'sha256:audit-smoke-tenant-b'
     );

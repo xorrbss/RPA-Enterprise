@@ -68,8 +68,14 @@ export class JwtAuthenticationBoundary implements AuthenticationBoundary {
       return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "missing_or_invalid_tenant_claim" };
     }
 
-    const roles = Array.isArray(payload.roles) ? payload.roles.filter(isRole) : [];
-    const subjectId = (typeof payload.sub === "string" && payload.sub.length > 0 ? payload.sub : "unknown") as PrincipalId;
+    if (!Array.isArray(payload.roles) || payload.roles.some((role) => !isRole(role))) {
+      return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "invalid_roles_claim" };
+    }
+    const roles = payload.roles as Role[];
+    if (typeof payload.sub !== "string" || payload.sub.length === 0) {
+      return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "missing_or_invalid_subject_claim" };
+    }
+    const subjectId = payload.sub as PrincipalId;
 
     const principal: AuthenticatedPrincipal = {
       subjectId,

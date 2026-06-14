@@ -169,13 +169,16 @@ assert.equal(registry.getOperation("promoteScenario").ifMatch?.entity, "scenario
 assert.equal(registry.getOperation("updateGatewayPolicy").ifMatch?.entity, "gateway_policy");
 assert.equal(staticRbacAction("createRun"), "run.create");
 assert.equal(staticRbacAction("abortRun"), "run.abort");
+assert.equal(staticRbacAction("validateScenario"), "scenario.read");
 assert.equal(staticRbacAction("assignHumanTask"), "human_task.assign");
 assert.equal(staticRbacAction("escalateHumanTask"), "human_task.escalate");
 assert.equal(staticRbacAction("updateGatewayPolicy"), "gateway_policy.edit");
 assert.throws(() => registry.getOperation("unknownOperation" as OperationId), /No control-plane operation binding/);
 
 assert.equal(registry.getBodyValidator("createRun")?.validate({}).valid, false);
-assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1" }).valid, true);
+assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1" }).valid, false);
+assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {} }).valid, true);
+assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, tenant_id: "t1" }).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({ assignee: "reviewer-1" }).valid, true);
 assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
@@ -192,9 +195,9 @@ assert.deepEqual(runRoute.preHandlers, [
   "authenticate",
   "bindTenant",
   "openApiValidate",
+  "rbac",
   "idempotencyReplay",
   "ifMatch",
-  "rbac",
   "handler",
   "errorMapper",
 ]);
@@ -350,7 +353,7 @@ const missingIdempotency = await scaffold.runner.inject({
   method: "POST",
   url: "/v1/runs",
   headers: { ...baseHeaders, "x-roles": "admin" },
-  body: { scenario_version_id: "sv-2" },
+  body: { scenario_version_id: "sv-2", params: {} },
 });
 assert.equal(missingIdempotency.status, 422);
 assert.equal((missingIdempotency.body as { code: string }).code, "IR_SCHEMA_INVALID");
@@ -358,30 +361,46 @@ const viewerCreate = await scaffold.runner.inject({
   method: "POST",
   url: "/v1/runs",
   headers: { ...baseHeaders, "x-roles": "viewer", "idempotency-key": "run-create-viewer" },
-  body: { scenario_version_id: "sv-2" },
+  body: { scenario_version_id: "sv-2", params: {} },
 });
 assert.equal(viewerCreate.status, 403);
 assert.equal((viewerCreate.body as { code: string }).code, "AUTHZ_FORBIDDEN");
+assert.equal("reason" in (viewerCreate.body as Record<string, unknown>), false);
+assert.equal("action" in (viewerCreate.body as Record<string, unknown>), false);
+const invalidRoleClaim = await scaffold.runner.inject({
+  method: "GET",
+  url: "/v1/runs/run-existing",
+  headers: { ...baseHeaders, "x-roles": "viewer,bogus" },
+});
+assert.equal(invalidRoleClaim.status, 403);
+assert.equal((invalidRoleClaim.body as { code: string }).code, "AUTHZ_FORBIDDEN");
+const adminAfterViewerDeny = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/runs",
+  headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-viewer" },
+  body: { scenario_version_id: "sv-2", params: {} },
+});
+assert.equal(adminAfterViewerDeny.status, 201);
 
 const inFlight = await scaffold.runner.inject({
   method: "POST",
   url: "/v1/runs",
   headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-1" },
-  body: { scenario_version_id: "sv-2" },
+  body: { scenario_version_id: "sv-2", params: {} },
 });
 assert.equal(inFlight.status, 201);
 const secondCreate = await scaffold.runner.inject({
   method: "POST",
   url: "/v1/runs",
   headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-2" },
-  body: { scenario_version_id: "sv-3" },
+  body: { scenario_version_id: "sv-3", params: {} },
 });
 assert.equal(secondCreate.status, 201);
 const mismatch = await scaffold.runner.inject({
   method: "POST",
   url: "/v1/runs",
   headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-2" },
-  body: { scenario_version_id: "sv-4" },
+  body: { scenario_version_id: "sv-4", params: {} },
 });
 assert.equal(mismatch.status, 412);
 assert.equal((mismatch.body as { code: string }).code, "SCENARIO_VERSION_CONFLICT");
@@ -406,7 +425,7 @@ const inFlightResponse = await inFlightRunner.inject({
   method: "POST",
   url: "/v1/runs",
   headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-processing" },
-  body: { scenario_version_id: "sv-2" },
+  body: { scenario_version_id: "sv-2", params: {} },
 });
 assert.equal(inFlightResponse.status, 409);
 assert.equal((inFlightResponse.body as { code: string }).code, "WORKITEM_CHECKOUT_CONFLICT");
@@ -452,6 +471,7 @@ const matchingAssigneeResolve = await scaffold.runner.inject({
 assert.equal(matchingAssigneeResolve.status, 200);
 assert.equal((matchingAssigneeResolve.body as { state: string }).state, "resolved");
 
+console.log("api smoke: control-plane route registry, validators, auth/tenant/RBAC, idempotency replay/mismatch/in-flight, If-Match, unmatched route, and redaction-gated artifact access covered");
 console.log("control-plane fixtures: ALL PASS");
 
 function ctx(operationId: OperationId, overrides: {

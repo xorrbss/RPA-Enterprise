@@ -75,6 +75,11 @@ node scripts/db-migration-smoke.mjs
 `PGSERVICE` is also honored by `psql`. Do not commit passwords or service files;
 secrets remain outside the repository behind `SecretRef`/`SecretStore`.
 
+Product-open evidence must preserve the wrapper's role posture. A run as
+`SUPERUSER`/`BYPASSRLS` is catalog/non-RLS evidence only and does not satisfy
+Product Open DB smoke by itself. The migration smoke `ROLLBACK` proves cleanup
+of the isolated migration harness; it is not external deploy rollback evidence.
+
 If the PostgreSQL client is not installed locally, the wrapper reports whether
 `docker` or `podman` is available. A container-only fallback is:
 
@@ -138,7 +143,10 @@ this repository.
 - `events_outbox` rejects same-tenant duplicate idempotency keys, allows the same
   key across tenants, rejects cross-tenant run references through composite FKs,
   rejects `worker.*` infrastructure telemetry, and uses publish CAS
-  (`published_at IS NULL`) to avoid double publish.
+  (`published_at IS NULL`) to avoid double publish. Smoke fixtures set an
+  explicit `retention_until` so the DB gate does not normalize NULL payload
+  retention; the app/runtime `events_outbox` producer duration/source remains a
+  separate release blocker until contract owners define it.
 - Step-bound artifacts, step events, and `stagehand_calls` reference
   `run_steps` by `(tenant_id, run_id, step_id, attempt)`.
 - Payload-bearing tables carry inline `retention_until`, `deleted_at`, and

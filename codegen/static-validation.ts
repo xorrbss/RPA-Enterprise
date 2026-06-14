@@ -14,7 +14,7 @@ import {
   compileIrelExpression,
   validateParamsSchemaForIrel,
 } from "./irel-compile";
-import type { IRELCompileDiagnostic } from "./irel-compile";
+import type { IRELCompileDiagnostic, IRELNode } from "./irel-compile";
 
 const END_NO_DATA_TARGET = "@end_no_data";
 const RETURNING_RESERVED_HANDLERS = new Set(["@challenge", "@human_task"]);
@@ -25,6 +25,48 @@ const VALUE_PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 export interface StaticValidationOptions {
   readonly signedCommandRefs?: ReadonlySet<string> | readonly string[];
 }
+
+export interface CompiledScenarioAst {
+  readonly kind: "rpa.scenario.compiled_ast.v1";
+  readonly ir_version: "1.x";
+  readonly scenario_version: number;
+  readonly nodes: Record<string, CompiledNodeAst>;
+}
+
+export interface CompiledNodeAst {
+  readonly on?: readonly CompiledOnBranchAst[];
+  readonly loop?: CompiledLoopAst;
+  readonly fallback_chain?: readonly CompiledFallbackTierAst[];
+  readonly verify?: CompiledVerifyAst;
+}
+
+export interface CompiledOnBranchAst {
+  readonly when: IRELNode;
+  readonly target: unknown;
+  readonly priority: number;
+}
+
+export interface CompiledLoopAst {
+  readonly until: IRELNode;
+  readonly body_target: string;
+  readonly exit_target: string;
+  readonly max_iterations: number;
+}
+
+export interface CompiledFallbackTierAst {
+  readonly tier: string;
+  readonly entry_node: string;
+  readonly advance_when?: IRELNode;
+}
+
+export interface CompiledVerifyAst {
+  readonly vlm_fallback_when?: IRELNode;
+  readonly empty_result_allowed?: readonly IRELNode[];
+}
+
+export type CompileScenarioStaticResult =
+  | { readonly report: ValidationReport; readonly compiledAst: CompiledScenarioAst }
+  | { readonly report: ValidationReport; readonly compiledAst?: undefined };
 
 interface ExpressionRef {
   readonly expression: string;
@@ -78,9 +120,17 @@ export function validateScenarioStatic(
   ir: IRScenario,
   options: StaticValidationOptions = {},
 ): ValidationReport {
+  return compileScenarioStatic(ir, options).report;
+}
+
+export function compileScenarioStatic(
+  ir: IRScenario,
+  options: StaticValidationOptions = {},
+): CompileScenarioStaticResult {
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
   const nodeIds = new Set(Object.keys(ir.nodes));
+  const compiledNodes: Record<string, CompiledNodeAst> = {};
   const signedCommandRefs =
     options.signedCommandRefs instanceof Set
       ? options.signedCommandRefs
@@ -105,7 +155,8 @@ export function validateScenarioStatic(
     validateEndNoDataWitness(nodeId, node, warnings);
     validateFallbackChain(nodeId, node, errors);
     validateValuePaths(nodeId, node, errors);
-    validateExpressions(nodeId, node, ir, nodeIds, graph, errors);
+    const compiledNode = validateExpressions(nodeId, node, ir, nodeIds, graph, errors);
+    if (compiledNode !== undefined) compiledNodes[nodeId] = compiledNode;
     validateSignedCommands(nodeId, node, signedCommandRefs, errors);
     validateLoopContract(nodeId, node, errors);
   }
@@ -126,7 +177,17 @@ export function validateScenarioStatic(
     errors.push(issue("V4", "illegal_cycle", "IR_SCHEMA_INVALID", `cycle reaches '${nodeId}' without a loop node`, nodeId));
   }
 
-  return { errors, warnings };
+  const report = { errors, warnings };
+  if (errors.length > 0) return { report };
+  return {
+    report,
+    compiledAst: {
+      kind: "rpa.scenario.compiled_ast.v1",
+      ir_version: ir.meta.ir_version ?? "1.x",
+      scenario_version: ir.meta.version,
+      nodes: compiledNodes,
+    },
+  };
 }
 
 function validateTargets(
@@ -208,21 +269,105 @@ function validateExpressions(
   nodeIds: ReadonlySet<string>,
   graph: ReadonlyMap<string, readonly string[]>,
   errors: ValidationIssue[],
-): void {
-  for (const expressionRef of expressionsOf(node)) {
-    const result = compileIrelExpression(expressionRef.expression, {
-      currentNodeId: nodeId,
-      nodeIds,
-      graph,
-      paramsSchema: ir.params_schema,
-      additionalPriorNodeIds: expressionRef.additionalPriorNodeIds,
-      allowLoopScope: expressionRef.allowLoopScope,
-      expectedType: "boolean",
-    });
-    if (!result.ok) {
-      errors.push(...result.diagnostics.map((diagnostic) => expressionIssue(diagnostic, nodeId)));
+): CompiledNodeAst | undefined {
+  const compiled: {
+    on?: CompiledOnBranchAst[];
+    loop?: CompiledLoopAst;
+    fallback_chain?: CompiledFallbackTierAst[];
+    verify?: CompiledVerifyAst;
+  } = {};
+
+  const on: CompiledOnBranchAst[] = [];
+  for (const branch of onBranchesOf(node)) {
+    if (typeof branch.when !== "string") continue;
+    const when = compileBooleanExpression(nodeId, branch.when, ir, nodeIds, graph, errors);
+    if (when !== undefined && typeof branch.priority === "number") {
+      on.push({ when, target: branch.target, priority: branch.priority });
     }
   }
+  if (on.length > 0) compiled.on = on;
+
+  const loop = loopOf(node);
+  if (loop !== undefined && typeof loop.until === "string") {
+    const until = compileBooleanExpression(nodeId, loop.until, ir, nodeIds, graph, errors, { allowLoopScope: true });
+    if (
+      until !== undefined &&
+      typeof loop.body_target === "string" &&
+      typeof loop.exit_target === "string" &&
+      typeof loop.max_iterations === "number"
+    ) {
+      compiled.loop = {
+        until,
+        body_target: loop.body_target,
+        exit_target: loop.exit_target,
+        max_iterations: loop.max_iterations,
+      };
+    }
+  }
+
+  const fallbackChain: CompiledFallbackTierAst[] = [];
+  const priorTierNodes = new Set<string>();
+  for (const tier of fallbackChainOf(node)) {
+    if (typeof tier.entry_node === "string") priorTierNodes.add(tier.entry_node);
+    if (typeof tier.tier !== "string" || typeof tier.entry_node !== "string") continue;
+
+    let advanceWhen: IRELNode | undefined;
+    if (typeof tier.advance_when === "string") {
+      advanceWhen = compileBooleanExpression(nodeId, tier.advance_when, ir, nodeIds, graph, errors, {
+        additionalPriorNodeIds: new Set(priorTierNodes),
+      });
+    }
+    fallbackChain.push(
+      advanceWhen === undefined
+        ? { tier: tier.tier, entry_node: tier.entry_node }
+        : { tier: tier.tier, entry_node: tier.entry_node, advance_when: advanceWhen },
+    );
+  }
+  if (fallbackChain.length > 0) compiled.fallback_chain = fallbackChain;
+
+  const verify: {
+    vlm_fallback_when?: IRELNode;
+    empty_result_allowed?: IRELNode[];
+  } = {};
+  if (typeof node.verify?.vlm_fallback?.when === "string") {
+    const vlmFallbackWhen = compileBooleanExpression(nodeId, node.verify.vlm_fallback.when, ir, nodeIds, graph, errors);
+    if (vlmFallbackWhen !== undefined) verify.vlm_fallback_when = vlmFallbackWhen;
+  }
+  const emptyResultAllowed: IRELNode[] = [];
+  for (const criterion of node.verify?.criteria ?? []) {
+    if (criterion.type !== "empty_result_allowed") continue;
+    const witness = compileBooleanExpression(nodeId, criterion.when, ir, nodeIds, graph, errors);
+    if (witness !== undefined) emptyResultAllowed.push(witness);
+  }
+  if (emptyResultAllowed.length > 0) verify.empty_result_allowed = emptyResultAllowed;
+  if (verify.vlm_fallback_when !== undefined || verify.empty_result_allowed !== undefined) compiled.verify = verify;
+
+  return Object.keys(compiled).length > 0 ? compiled : undefined;
+}
+
+function compileBooleanExpression(
+  nodeId: string,
+  expression: string,
+  ir: IRScenario,
+  nodeIds: ReadonlySet<string>,
+  graph: ReadonlyMap<string, readonly string[]>,
+  errors: ValidationIssue[],
+  options: Pick<ExpressionRef, "additionalPriorNodeIds" | "allowLoopScope"> = {},
+): IRELNode | undefined {
+  const result = compileIrelExpression(expression, {
+    currentNodeId: nodeId,
+    nodeIds,
+    graph,
+    paramsSchema: ir.params_schema,
+    additionalPriorNodeIds: options.additionalPriorNodeIds,
+    allowLoopScope: options.allowLoopScope,
+    expectedType: "boolean",
+  });
+  if (!result.ok) {
+    errors.push(...result.diagnostics.map((diagnostic) => expressionIssue(diagnostic, nodeId)));
+    return undefined;
+  }
+  return result.compiled.ast;
 }
 
 function validateSignedCommands(

@@ -30,6 +30,7 @@ import type {
   IdempotencyKey,
   RbacAction,
   RbacMiddleware,
+  SignedCommandRegistry,
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { emitOutboxEvent } from "../runtime/outbox";
@@ -59,6 +60,7 @@ export interface ApiServerDeps {
   rbac: RbacMiddleware;
   idempotency: ControlPlaneIdempotencyStore;
   enqueuer: RunEnqueuer;
+  signedCommandRegistry: SignedCommandRegistry;
 }
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
