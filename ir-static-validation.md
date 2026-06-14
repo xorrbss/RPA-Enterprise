@@ -23,19 +23,23 @@
 
 | # | 규칙 | 위반 시 | 심각도 | reason 태그 |
 |---|---|---|---|---|
-| V1 | **target 참조 무결성** — 모든 흐름 target(`next`, `on[].target`, `fallback_chain[].entry_node`)이 `nodes`에 존재하거나 예약 핸들러(`@challenge`/`@human_task`/`@end_no_data`)여야 한다. | `IR_SCHEMA_INVALID` | error | `target_not_found` |
+| V1 | **target 참조 무결성** — 모든 노드 target(`next`, `on[].target`의 노드 id, 복귀형 예약 핸들러 `return_node`, `fallback_chain[].entry_node`, `loop.body_target`, `loop.exit_target`)은 `nodes`에 존재해야 한다. `@challenge`/`@human_task`는 string target 금지, closed handler-call object만 허용한다. `@end_no_data`는 return node 없는 terminal target이다. | `IR_SCHEMA_INVALID` | error | `target_not_found`, `reserved_handler_call_shape_invalid` |
 | V2 | **start 존재** — `start`가 `nodes`에 존재해야 한다. | `IR_SCHEMA_INVALID` | error | `start_not_found` |
 | V3 | **종료 도달성** — `start`에서 흐름 그래프를 따라 적어도 하나의 종료(`terminal` 노드 또는 `@end_no_data`)에 도달 가능해야 한다. | `IR_SCHEMA_INVALID` | error | `no_reachable_terminal` |
-| V4 | **사이클 제약** — 흐름 그래프의 back-edge(사이클)는 **`loop` 노드를 경유할 때만** 허용. `loop` 없는 무가드 사이클(next/on back-edge)은 무한 비종료 위험으로 금지. | `IR_SCHEMA_INVALID` | error | `illegal_cycle` |
+| V4 | **loop/사이클 제약** — `loop`는 closed `{ body_target, exit_target, until, max_iterations }` shape를 사용한다. 두 target은 V1을 통과해야 하고, `exit_target`은 loop 노드에서 도달 가능해야 하며, `max_iterations`는 `ops-defaults.md` 상한(10000) 이하여야 한다. 흐름 그래프의 back-edge(사이클)는 **해당 사이클 안에 `loop` 노드가 있을 때만** 허용한다. | `IR_SCHEMA_INVALID` | error | `illegal_cycle`, `loop_target_invalid`, `loop_exit_unreachable`, `loop_max_iterations_unbounded` |
 | V5 | **고아 노드** — `start`에서 도달 불가한 노드. 실행되지 않으므로 무해하나 작성 실수 신호. | (저장 허용) | promote-block | `unreachable_node` |
 | V6 | **on priority 동률 금지** — 한 노드 `on[]` 내 동일 `priority` 둘 이상 금지(비결정 분기 방지). | `IR_SCHEMA_INVALID` | error | `duplicate_priority` |
-| V7 | **@end_no_data witness 필수** — `@end_no_data`로 가는 `on` 분기가 있으면, 그 진입 경로의 노드 `verify.criteria`에 `empty_result_allowed` witness가 있어야 한다. 없으면 수집 실패를 빈 데이터로 위장할 위험. | (저장 허용) | promote-block | `end_no_data_without_witness` |
+| V7 | **@end_no_data witness 필수** — `@end_no_data` target 또는 `terminal: success_empty`로 가는 진입 노드의 `verify.criteria`에 `empty_result_allowed` witness가 있어야 한다. 없으면 수집 실패를 빈 데이터로 위장할 위험. | (저장 허용) | promote-block | `empty_result_without_witness` |
 | V8 | **flags 레지스트리 준수** — 모든 `flags.*` 참조는 §2 권위 레지스트리에 등록된 키여야 한다(닫힌 집합). | `IR_EXPRESSION_COMPILE_ERROR`(IREL_UNKNOWN_VARIABLE) | error | `unknown_flag` |
 | V9 | **node 출력 필드 한정** — `node.<id>.*`는 표준 출력 필드(`row_count`/`status`/`extracted_ref`/`tier`)만 참조 가능. | `IR_EXPRESSION_COMPILE_ERROR` | error | `unknown_node_field` |
 | V10 | **value_match.path 문법** — §3 path 문법(dot-path, 인덱싱 금지)을 위반하거나 평가 대상이 부재. | `IR_SCHEMA_INVALID` | error | `invalid_value_path` |
 | V11 | **fallback_chain 정합** — `tier`는 `T0..T3` 중 **중복 없이** 단조 사용. `entry_node`는 V1 적용. `advance_when` 생략·마지막 티어 실패 시 의미는 §4. | `IR_SCHEMA_INVALID` | error | `fallback_chain_invalid` |
 
-> V3/V4의 도달성·사이클 판정은 흐름 그래프를 노드=정점, (`next`/`on[].target`/`fallback entry_node`/`loop` 본문)=간선으로 구성해 수행한다. `@challenge`/`@human_task`는 복귀 노드(reserved-handlers `returnNodeOnResolve`)로 이어지는 간선으로 취급, `@end_no_data`/`terminal`은 종료 정점.
+> V3/V4의 도달성·사이클 판정은 흐름 그래프를 노드=정점, (`next`/`on[].target` 노드 id/복귀형 예약 핸들러 `return_node`/`fallback entry_node`/`loop.body_target`/`loop.exit_target`)=간선으로 구성해 수행한다. `@end_no_data`/`terminal`은 종료 정점이다.
+>
+> **결정 #3 적용**: 복귀형 예약 핸들러 target은 closed object `{ handler, input, return_node }`다. `handler`는 `@challenge` 또는 `@human_task`, `input`은 명시 객체, `return_node`는 existing node id여야 한다. `@challenge`/`@human_task` string target은 저장 거부한다. `@end_no_data`는 데이터 없음 terminal이며 `return_node`를 갖지 않는다.
+>
+> **결정 #4 적용**: `loop`는 closed `{ body_target, exit_target, until, max_iterations }` shape다. validator는 두 target 존재, exit target 도달성, `until` IREL boolean compile, 그리고 bounded `max_iterations`를 검증한다. `loop` 없는 cycle은 무한 비종료 위험으로 거부한다.
 >
 > **정적 한계**: V3는 *구조* 도달성만 보장한다. `on[]`의 모든 `when`이 런타임에 false가 되는 **값-의존 무매칭**은 정적으로 잡을 수 없으며, 인터프리터가 `IR_NO_BRANCH_MATCHED`(System 예외 → 노드 재시도)로 표면화한다(ir-expression §5·§7, error-catalog). "조용한 dead-end" 금지.
 

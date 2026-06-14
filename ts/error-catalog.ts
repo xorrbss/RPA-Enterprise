@@ -14,6 +14,7 @@ export type ErrorCode =
   | "RUN_ALREADY_TERMINAL"
   | "RUN_ABORTED"
   | "SCENARIO_VERSION_CONFLICT"        // optimistic concurrency (If-Match)
+  | "POLICY_VERSION_CONFLICT"          // gateway/network policy optimistic concurrency (If-Match)
   | "IR_SCHEMA_INVALID"
   | "IR_EXPRESSION_COMPILE_ERROR"      // IREL 컴파일 실패 → 저장 거부
   | "IR_EXPRESSION_RUNTIME"            // IREL 런타임(scope missing) → system
@@ -49,6 +50,7 @@ export type ErrorCode =
   | "PROMPT_INJECTION_DETECTED"        // hidden instruction
   | "ARTIFACT_NOT_REDACTED"
   | "SHELL_COMMAND_NOT_ALLOWED"        // shell cmd_ref가 signed command registry 미등록
+  | "UNAUTHENTICATED"                  // 인증 미성립(Bearer 토큰 누락/서명 무효) — authn 실패(auth-rbac.md §3)
   | "AUTHZ_FORBIDDEN"                  // 역할 권한 부족(일반 RBAC 거부 — auth-rbac.md §2)
   // --- Connector ---
   | "CONNECTOR_PERMISSION_DENIED"
@@ -57,6 +59,7 @@ export type ErrorCode =
   // --- Pipeline / Sink ---
   | "SINK_DELIVERY_FAILED"
   | "RAW_PERSIST_FAILED"
+  | "CONTROL_PLANE_INTERNAL_ERROR"
   // --- Human Task ---
   | "HUMAN_TASK_EXPIRED"
   // --- Queue ---
@@ -79,6 +82,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   //   RUN_ABORTED는 "이미 중단(취소)된 run에 대한 작업 거부" 의미. UI 문구는 "취소됨"으로 통일 권고.
   RUN_ABORTED:                 { retryable: false, httpStatus: 409, exceptionClass: "none",     userMessage: "실행이 중단되었습니다.", operatorAction: "-" },
   SCENARIO_VERSION_CONFLICT:   { retryable: false, httpStatus: 412, exceptionClass: "none",     userMessage: "버전 충돌. 최신본을 다시 불러오세요.", operatorAction: "If-Match 재시도" },
+  POLICY_VERSION_CONFLICT:     { retryable: false, httpStatus: 412, exceptionClass: "none",     userMessage: "정책 버전 충돌. 최신 정책을 다시 불러오세요.", operatorAction: "gateway_policies.version If-Match 재시도" },
   IR_SCHEMA_INVALID:           { retryable: false, httpStatus: 422, exceptionClass: "business", userMessage: "시나리오 정의 오류.", operatorAction: "IR 스키마 검증 로그 확인" },
   IR_EXPRESSION_COMPILE_ERROR: { retryable: false, httpStatus: 422, exceptionClass: "business", userMessage: "조건식 오류.", operatorAction: "IREL 컴파일 에러 위치 확인" },
   IR_EXPRESSION_RUNTIME:       { retryable: true,  httpStatus: 500, exceptionClass: "system",   userMessage: "일시 오류.", operatorAction: "선행 노드 skip 여부 확인" },
@@ -115,6 +119,9 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   PROMPT_INJECTION_DETECTED:   { retryable: false, httpStatus: 422, exceptionClass: "security", userMessage: "비정상 콘텐츠 감지.", operatorAction: "페이지 출처/공격 가능성 검토" },
   ARTIFACT_NOT_REDACTED:       { retryable: false, httpStatus: 409, exceptionClass: "security", userMessage: "준비 중입니다.", operatorAction: "redaction job 상태 확인" },
   SHELL_COMMAND_NOT_ALLOWED:   { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "허용되지 않은 명령입니다.", operatorAction: "signed command registry 등록 확인(security-contracts.md §shell)" },
+  // [FIX] authn/authz 분리: 인증 미성립(토큰 누락/서명 무효)은 401, 인증됐으나 권한 부족은 403(AUTHZ_FORBIDDEN).
+  //   userMessage는 자원 존재/종류 비노출 위해 최소화. api-surface §0.1·auth-rbac §3/§5와 정합.
+  UNAUTHENTICATED:             { retryable: false, httpStatus: 401, exceptionClass: "security", userMessage: "인증이 필요합니다.", operatorAction: "유효한 Bearer JWT 제시(auth-rbac.md §3) — 토큰 누락/서명 무효" },
   AUTHZ_FORBIDDEN:             { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "권한이 없습니다.", operatorAction: "역할/권한 매트릭스 확인(auth-rbac.md §2)" },
 
   CONNECTOR_PERMISSION_DENIED: { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "커넥터 권한 위반.", operatorAction: "manifest permissions 확인" },
@@ -123,6 +130,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
 
   SINK_DELIVERY_FAILED:        { retryable: true,  httpStatus: 502, exceptionClass: "system",   userMessage: "전달 재시도 중.", operatorAction: "Sink DLQ replay" },
   RAW_PERSIST_FAILED:          { retryable: true,  httpStatus: 500, exceptionClass: "system",   userMessage: "재시도됩니다.", operatorAction: "스토리지 상태 확인" },
+  CONTROL_PLANE_INTERNAL_ERROR: { retryable: false, httpStatus: 500, exceptionClass: "system",   userMessage: "내부 오류가 발생했습니다.", operatorAction: "control-plane error log와 correlation_id 확인" },
 
   HUMAN_TASK_EXPIRED:          { retryable: false, httpStatus: 410, exceptionClass: "business", userMessage: "처리 기한 만료.", operatorAction: "재처리 또는 escalate" },
 

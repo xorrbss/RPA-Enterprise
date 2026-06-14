@@ -1,7 +1,32 @@
 # 예약 핸들러 계약 (Reserved Handlers v1)
 
-> IR `target`이 `@challenge` / `@human_task` / `@end_no_data`일 때 인터프리터가 호출하는 내장 핸들러의 입출력·복귀 계약.
-> 핸들러는 IR 노드가 아니라 **인터프리터 제공 함수**다. IR은 진입만 지정하고, 복귀 노드는 핸들러 결과가 결정한다.
+> IR `target`이 복귀형 예약 핸들러 호출(`@challenge` / `@human_task`) 또는 `@end_no_data` 터미널일 때 인터프리터가 호출하는 내장 핸들러의 입출력·복귀 계약.
+> 핸들러는 IR 노드가 아니라 **인터프리터 제공 함수**다. 복귀형 핸들러는 IR target의 `return_node`로 재개하고, `@end_no_data`는 return node 없이 즉시 정상 종료한다.
+
+---
+
+## IR target shape
+
+```ts
+type ReservedHandlerTarget =
+  | { handler: "@challenge"; input: {}; return_node: IRNodeId }
+  | { handler: "@human_task"; input: HumanTaskInput; return_node: IRNodeId }
+  | "@end_no_data";
+
+type HumanTaskInput = {
+  kind: "approval" | "validation" | "exception";
+  payload?: Record<string, unknown>;
+  assignee_role: string;
+  timeout?: string;
+  on_timeout?: "fail" | "escalate"; // default fail
+};
+```
+
+규칙:
+- `@challenge`/`@human_task` string target은 금지한다. 반드시 `{ handler, input, return_node }` closed object를 사용한다.
+- `return_node`는 `nodes`에 존재하는 노드 id여야 하며, 정적 검증 그래프의 간선으로 취급한다.
+- `@end_no_data`는 terminal target이다. `return_node`를 갖지 않으며 `empty_result_allowed` witness 없이는 prod 승격이 차단된다.
+- handler-call object의 최상위 추가 키는 금지한다. `input` 의미는 본 문서의 핸들러별 섹션이 권위다.
 
 ---
 
@@ -18,7 +43,7 @@ type HandlerContext = {
   pageStateRef: PageStateRef;
   siteProfileId: string; browserIdentityId: string; networkPolicyId: string;
   challengeEventId?: string;                              // @challenge 진입 시 ChallengeDetector가 생성
-  returnNodeOnResolve: IRNodeId;                          // IR이 지정한 "성공 시 복귀 노드"
+  returnNodeOnResolve: IRNodeId;                          // IR target.return_node
 };
 ```
 
@@ -80,7 +105,7 @@ ChallengeResolutionPolicy 상태머신(PRD §10.6)을 실행한다.
 
 | 종료 | 결과 |
 |---|---|
-| 항상 | `{ status: "resolved", next: "__terminal__" }` 후 Run을 `terminal: success_empty`로 마감 |
+| 항상 | `{ status: "resolved", next: "__terminal__" }` 후 Run은 `completed`로 마감하고 `run.completed` payload outcome/reason에 `success_empty`를 기록 |
 
 주의: verify의 `empty_result_allowed` witness 없이 `@end_no_data`로 보내는 IR은 **승격 시 경고**(수집 실패를 빈 데이터로 위장할 위험).
 

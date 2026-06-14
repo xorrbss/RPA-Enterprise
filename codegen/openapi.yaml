@@ -402,6 +402,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanTask'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '410':
+          $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
+        default:
+          $ref: '#/components/responses/Error'
+
+  /human-tasks/{human_task_id}/start:
+    parameters:
+      - $ref: '#/components/parameters/HumanTaskId'
+    post:
+      tags: [HumanTasks]
+      operationId: startHumanTask
+      summary: 휴먼 태스크 처리 시작
+      description: >
+        assigned→in_progress(H2). 배정된 담당자/역할 스코프 필요. 만료/종결 태스크 →
+        HUMAN_TASK_EXPIRED(410), 권한 부족 → AUTHZ_FORBIDDEN(403).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: in_progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanTask'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
         '410':
           $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
         default:
@@ -414,7 +442,7 @@ paths:
       tags: [HumanTasks]
       operationId: assignHumanTask
       summary: 휴먼 태스크 배정
-      description: assigned(H1/H6). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
+      description: assigned(H1/H6). 권한 부족 → AUTHZ_FORBIDDEN(403). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -430,6 +458,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanTask'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
         '410':
           $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
         default:
@@ -444,7 +474,8 @@ paths:
       summary: 휴먼 태스크 에스컬레이션
       description: >
         escalated(H5, 수동 진입만 담당). 관리자 큐, Run R15(suspended 유지). human_task.escalated 이벤트.
-        timeout 기반 H4b/H8은 타이머 주도(API 비주도). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
+        timeout 기반 H4b/H8은 타이머 주도(API 비주도). 권한 부족 → AUTHZ_FORBIDDEN(403).
+        만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -460,6 +491,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanTask'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
         '410':
           $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
         default:
@@ -623,10 +656,10 @@ paths:
       summary: LLM 게이트웨이 정책 갱신
       description: >
         정책이 capabilities와 모순되게 model/jsonMode 설정 시 LLM_CAPABILITY_MISMATCH(422).
-        If-Match(정책 버전) + Idempotency-Key. 단, gateway policy 버전 컬럼은 Phase 2 DDL 미정 —
-        If-Match 적용은 정책 엔티티 버전 확정 후(api-surface §6). 따라서 If-Match는 v1에서 optional.
+        If-Match(정책 버전) + Idempotency-Key. ETag 대상은
+        db/migration_core_entities.sql gateway_policies.version.
       parameters:
-        - $ref: '#/components/parameters/IfMatchOptional'
+        - $ref: '#/components/parameters/IfMatchPolicy'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -641,6 +674,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GatewayPolicy'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '412':
+          $ref: '#/components/responses/Error'        # POLICY_VERSION_CONFLICT
         '422':
           $ref: '#/components/responses/Error'        # LLM_CAPABILITY_MISMATCH
         default:
@@ -734,7 +771,8 @@ components:
       bearerFormat: JWT
       description: >
         JWT bearer. tenant_id 및 roles(Role[]) 클레임에서 도출(auth-rbac §3). 클라이언트 body/query의
-        tenant_id는 불신. 권한 부족 시 AUTHZ_FORBIDDEN(403), tenant 누락/모호 시 거부.
+        tenant_id는 불신. 인증 미성립(토큰 누락/서명 무효) 시 UNAUTHENTICATED(401), 인증됐으나 tenant
+        누락/모호 또는 역할 권한 부족 시 AUTHZ_FORBIDDEN(403). 두 경우 모두 본문은 ApiError.
   # --- Reusable parameters ---
   parameters:
     RunId:
@@ -796,12 +834,12 @@ components:
         불일치 → SCENARIO_VERSION_CONFLICT(412).
       schema:
         type: string
-    IfMatchOptional:
+    IfMatchPolicy:
       name: If-Match
       in: header
-      required: false
+      required: true
       description: >
-        gateway policy 버전 컬럼은 Phase 2 DDL 미정 → v1에서는 optional(api-surface §6). 확정 후 required로 승격.
+        gateway_policies.version(integer). 정책 변경 요청 시 If-Match로 되돌린다(api-surface §6).
       schema:
         type: string
     IdempotencyKey:
@@ -856,7 +894,7 @@ components:
     ErrorCode:
       type: string
       description: >
-        ts/error-catalog.ts ErrorCode(44개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
+        ts/error-catalog.ts ErrorCode(47개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
         ApiError 응답 code로는 반환되지 않는다(api-surface §0.2).
       enum:
         - RUN_NOT_FOUND
@@ -864,6 +902,7 @@ components:
         - RUN_ALREADY_TERMINAL
         - RUN_ABORTED
         - SCENARIO_VERSION_CONFLICT
+        - POLICY_VERSION_CONFLICT
         - IR_SCHEMA_INVALID
         - IR_EXPRESSION_COMPILE_ERROR
         - IR_EXPRESSION_RUNTIME
@@ -894,12 +933,14 @@ components:
         - PROMPT_INJECTION_DETECTED
         - ARTIFACT_NOT_REDACTED
         - SHELL_COMMAND_NOT_ALLOWED
+        - UNAUTHENTICATED
         - AUTHZ_FORBIDDEN
         - CONNECTOR_PERMISSION_DENIED
         - CONNECTOR_INCOMPATIBLE
         - CONNECTOR_HOOK_FAILED
         - SINK_DELIVERY_FAILED
         - RAW_PERSIST_FAILED
+        - CONTROL_PLANE_INTERNAL_ERROR
         - HUMAN_TASK_EXPIRED
         - WORKITEM_CHECKOUT_CONFLICT
         - DEAD_LETTER
@@ -1068,7 +1109,10 @@ components:
 
     ValidateRequest:
       type: object
-      description: 검증할 IR(저장 안 함) 또는 기존 version 참조. 둘 중 하나(oneOf는 D1 상세화).
+      description: 검증할 IR(저장 안 함) 또는 기존 version 참조. 둘 중 정확히 하나.
+      oneOf:
+        - required: [ir]
+        - required: [version_id]
       properties:
         ir:
           $ref: '#/components/schemas/IRDocument'
@@ -1079,19 +1123,34 @@ components:
     ValidationReport:
       type: object
       description: ir-static-validation.md V1..V11 검증 보고서(요지). 상세 issue 구조는 codegen/types 참조.
+      required: [errors, warnings]
+      additionalProperties: false
       properties:
-        valid: { type: boolean }
-        issues:
+        errors:
           type: array
           items:
-            type: object
-            properties:
-              rule:
-                type: string
-                description: V1..V11 등 규칙 식별자.
-              message: { type: string }
-              code:
-                $ref: '#/components/schemas/ErrorCode'
+            $ref: '#/components/schemas/ValidationIssue'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+
+    ValidationIssue:
+      type: object
+      required: [rule, reason, code, detail]
+      additionalProperties: false
+      properties:
+        rule:
+          type: string
+          enum: [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11]
+        reason:
+          type: string
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        nodeId:
+          type: string
+        detail:
+          type: string
 
     PromoteRequest:
       type: object
@@ -1183,8 +1242,8 @@ components:
         artifact_id: { type: string }
         redaction_status:
           type: string
-          enum: [redacted, not_required, pending, failed]
-          description: 조회 허용은 {redacted, not_required}만(security-contracts §8).
+          enum: [redacted, not_required]
+          description: 200 응답은 redaction → RBAC 2단 게이트 통과 상태만 반환한다. pending/failed는 ARTIFACT_NOT_REDACTED(409).
         signed_url: { type: [string, "null"] }
         content:
           description: 마스킹된 redacted object(평문 노출 금지).

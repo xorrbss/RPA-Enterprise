@@ -1,0 +1,506 @@
+import assert from "node:assert/strict";
+
+import { apiErrorResponse, ApiResponseException, exceptionResponse } from "../control-plane/errors";
+import {
+  createControlPlaneValidatorRegistry,
+  createFastifyCompatibleRoutes,
+  createRouteBinder,
+  CONTROL_PLANE_OPERATION_BINDINGS,
+  staticRbacAction,
+} from "../control-plane/operation-registry";
+import {
+  createMinimalControlPlaneHandlers,
+  InMemoryControlPlaneServices,
+} from "../control-plane/minimal-handlers";
+import {
+  createFakeControlPlaneScaffold,
+  createInMemoryAuthorizationResolver,
+  FakeControlPlaneRunner,
+} from "../control-plane/fake-request-runner";
+import type {
+  ControlPlaneRequestContext,
+  IfMatchDecision,
+  OperationId,
+} from "../ts/control-plane-contract";
+import type {
+  ArtifactAccessGate,
+  ArtifactAccessSubject,
+  AuthenticatedPrincipal,
+  CanonicalRequestHash,
+  CorrelationId,
+  PrincipalId,
+  TenantBindingStatement,
+  TenantId,
+} from "../ts/security-middleware-contract";
+import type { ArtifactRef } from "../ts/core-types";
+
+const tenantId = "11111111-1111-4111-8111-111111111111" as TenantId;
+const otherTenantId = "22222222-2222-4222-8222-222222222222" as TenantId;
+const principal: AuthenticatedPrincipal = {
+  subjectId: "principal-1" as PrincipalId,
+  tenantId,
+  roles: ["admin"],
+  source: "jwt",
+  claims: {},
+};
+const tenantBinding: TenantBindingStatement = {
+  sql: "SET LOCAL app.tenant_id = $1",
+  values: [tenantId],
+};
+
+class FixtureArtifactGate implements ArtifactAccessGate {
+  async check(_principal: AuthenticatedPrincipal, artifact: ArtifactAccessSubject) {
+    if (artifact.redactionStatus !== "redacted" && artifact.redactionStatus !== "not_required") {
+      return {
+        kind: "deny" as const,
+        stage: "redaction" as const,
+        code: "ARTIFACT_NOT_REDACTED" as const,
+        reason: "artifact is not redacted",
+      };
+    }
+    return { kind: "allow" as const, artifactRef: `artifact://${artifact.artifactId}` as ArtifactRef };
+  }
+}
+
+const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
+  runs: [{
+    run_id: "run-existing",
+    tenant_id: tenantId,
+    scenario_version_id: "sv-1",
+    status: "running",
+    attempts: 0,
+    as_of: "2026-06-13T00:00:00Z",
+  }, {
+    run_id: "run-other-tenant",
+    tenant_id: otherTenantId,
+    scenario_version_id: "sv-1",
+    status: "running",
+    attempts: 0,
+    as_of: "2026-06-13T00:00:00Z",
+  }],
+  humanTasks: [{
+    human_task_id: "task-open",
+    tenant_id: tenantId,
+    state: "in_progress",
+    kind: "captcha",
+    run_id: "run-existing",
+  }, {
+    human_task_id: "task-assign",
+    tenant_id: tenantId,
+    state: "open",
+    kind: "captcha",
+    run_id: "run-existing",
+  }, {
+    human_task_id: "task-expired",
+    tenant_id: tenantId,
+    state: "expired",
+    kind: "captcha",
+    run_id: "run-existing",
+  }],
+  workitems: [{
+    workitem_id: "wi-1",
+    tenant_id: tenantId,
+    status: "processing",
+    attempts: 1,
+    target_id: "target-1",
+  }],
+  artifacts: [{
+    artifact_id: "artifact-pending",
+    tenant_id: tenantId,
+    redaction_status: "pending",
+    ref: "artifact://pending",
+    body: { secret: "[redacted]" },
+  }, {
+    artifact_id: "artifact-redacted",
+    tenant_id: tenantId,
+    redaction_status: "redacted",
+    ref: "artifact://redacted",
+    body: { ok: true },
+  }],
+  gatewayPolicies: [{
+    id: "gp-default",
+    tenant_id: tenantId,
+    model: "default",
+    version: 1,
+    capabilities: { jsonMode: true },
+    budget: { maxCost: 1 },
+  }],
+  sites: [{
+    site_profile_id: "site-red",
+    tenant_id: tenantId,
+    risk: "red",
+    approved: false,
+    circuit_state: "closed",
+  }],
+});
+
+const handlers = createMinimalControlPlaneHandlers(services);
+const registry = createControlPlaneValidatorRegistry();
+const binder = createRouteBinder(handlers, registry);
+
+const operationIds = CONTROL_PLANE_OPERATION_BINDINGS.map((binding) => binding.operationId);
+for (const operationId of [
+  "createRun",
+  "getRun",
+  "listRuns",
+  "abortRun",
+  "validateScenario",
+  "promoteScenario",
+  "listHumanTasks",
+  "startHumanTask",
+  "resolveHumanTask",
+  "assignHumanTask",
+  "escalateHumanTask",
+  "listWorkitems",
+  "replayDeadLetter",
+  "getArtifact",
+  "getGatewayPolicy",
+  "updateGatewayPolicy",
+  "listSites",
+  "approveSite",
+] satisfies OperationId[]) {
+  assert.ok(operationIds.includes(operationId), `operation binding missing ${operationId}`);
+}
+
+assert.equal(registry.getOperation("createRun").requiresAuth, true);
+assert.equal(registry.getOperation("createRun").requiresTenantBinding, true);
+assert.equal(registry.getOperation("createRun").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("promoteScenario").ifMatch?.entity, "scenario_version");
+assert.equal(registry.getOperation("updateGatewayPolicy").ifMatch?.entity, "gateway_policy");
+assert.equal(staticRbacAction("createRun"), "run.create");
+assert.equal(staticRbacAction("abortRun"), "run.abort");
+assert.equal(staticRbacAction("assignHumanTask"), "human_task.assign");
+assert.equal(staticRbacAction("escalateHumanTask"), "human_task.escalate");
+assert.equal(staticRbacAction("updateGatewayPolicy"), "gateway_policy.edit");
+assert.throws(() => registry.getOperation("unknownOperation" as OperationId), /No control-plane operation binding/);
+
+assert.equal(registry.getBodyValidator("createRun")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1" }).valid, true);
+assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({ assignee: "reviewer-1" }).valid, true);
+assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
+assert.equal(registry.getParamsValidator("getRun")?.validate({}).valid, false);
+assert.equal(registry.getParamsValidator("getRun")?.validate({ run_id: "run-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("assignHumanTask")?.validate({ human_task_id: "task-open" }).valid, true);
+assert.equal(registry.getQueryValidator("listRuns")?.validate(undefined).valid, false);
+
+const runRoute = binder.bind("createRun");
+assert.equal(runRoute.method, "POST");
+assert.equal(runRoute.url, "/v1/runs");
+assert.deepEqual(runRoute.preHandlers, [
+  "correlation",
+  "authenticate",
+  "bindTenant",
+  "openApiValidate",
+  "idempotencyReplay",
+  "ifMatch",
+  "rbac",
+  "handler",
+  "errorMapper",
+]);
+assert.throws(() => createRouteBinder({}, registry).bind("getRun"), /No control-plane handler/);
+
+const fastifyRoutes = createFastifyCompatibleRoutes([binder.bind("getRun")], {
+  async inject() {
+    return { status: 200, body: { ok: true } };
+  },
+});
+assert.equal(fastifyRoutes[0]?.url, "/v1/runs/:run_id");
+
+const created = await handlers.createRun!(ctx("createRun", {
+  method: "POST",
+  path: "/v1/runs",
+  body: { scenario_version_id: "sv-2", params: { as_of: "2026-06-13T10:00:00Z" } },
+}));
+assert.equal(created.status, 201);
+assert.equal((created.body as { status: string }).status, "queued");
+assert.equal((created.body as { as_of: string }).as_of, "2026-06-13T10:00:00Z");
+
+const listed = await handlers.listRuns!(ctx("listRuns", {
+  method: "GET",
+  path: "/v1/runs",
+  query: { status: "running" },
+}));
+assert.equal((listed.body as { items: unknown[] }).items.length, 1);
+
+const aborted = await handlers.abortRun!(ctx("abortRun", {
+  method: "POST",
+  path: "/v1/runs/{run_id}/abort",
+  params: { run_id: "run-existing" },
+}));
+assert.equal(aborted.status, 202);
+assert.equal((aborted.body as { status: string }).status, "cancelled");
+await assertApiError(
+  () => handlers.abortRun!(ctx("abortRun", { method: "POST", path: "/v1/runs/{run_id}/abort", params: { run_id: "run-existing" } })),
+  "RUN_ALREADY_TERMINAL",
+);
+
+const resolved = await handlers.resolveHumanTask!(ctx("resolveHumanTask", {
+  method: "POST",
+  path: "/v1/human-tasks/{human_task_id}/resolve",
+  params: { human_task_id: "task-open" },
+  body: { result: "ok" },
+}));
+assert.equal((resolved.body as { state: string }).state, "resolved");
+const assigned = await handlers.assignHumanTask!(ctx("assignHumanTask", {
+  method: "POST",
+  path: "/v1/human-tasks/{human_task_id}/assign",
+  params: { human_task_id: "task-assign" },
+  body: { assignee: "reviewer-1" },
+}));
+assert.equal((assigned.body as { state: string }).state, "assigned");
+assert.equal((assigned.body as { assignee: string }).assignee, "reviewer-1");
+const escalated = await handlers.escalateHumanTask!(ctx("escalateHumanTask", {
+  method: "POST",
+  path: "/v1/human-tasks/{human_task_id}/escalate",
+  params: { human_task_id: "task-assign" },
+}));
+assert.equal((escalated.body as { state: string }).state, "escalated");
+await assertApiError(
+  () => handlers.startHumanTask!(ctx("startHumanTask", { method: "POST", path: "/v1/human-tasks/{human_task_id}/start", params: { human_task_id: "task-open" } })),
+  "HUMAN_TASK_EXPIRED",
+);
+
+await assertApiError(
+  () => handlers.getArtifact!(ctx("getArtifact", { method: "GET", path: "/v1/artifacts/{artifact_id}", params: { artifact_id: "artifact-pending" } })),
+  "ARTIFACT_NOT_REDACTED",
+);
+const artifact = await handlers.getArtifact!(ctx("getArtifact", {
+  method: "GET",
+  path: "/v1/artifacts/{artifact_id}",
+  params: { artifact_id: "artifact-redacted" },
+}));
+assert.equal(artifact.status, 200);
+
+const promoted = await handlers.promoteScenario!(ctx("promoteScenario", {
+  method: "POST",
+  path: "/v1/scenarios/{scenario_id}/promote",
+  params: { scenario_id: "scenario-1" },
+  body: { target: "prod" },
+  ifMatch: { kind: "match", currentVersion: 1, nextVersion: 2 },
+}));
+assert.equal(promoted.headers?.ETag, "2");
+
+const policy = await handlers.updateGatewayPolicy!(ctx("updateGatewayPolicy", {
+  method: "PUT",
+  path: "/v1/gateway/policy",
+  body: { model: "default", capabilities: { jsonMode: true }, budget: { maxCost: 1 } },
+  ifMatch: { kind: "match", currentVersion: 1, nextVersion: 2 },
+}));
+assert.equal(policy.headers?.ETag, "2");
+
+const site = await handlers.approveSite!(ctx("approveSite", {
+  method: "POST",
+  path: "/v1/sites/{site_profile_id}/approve",
+  params: { site_profile_id: "site-red" },
+  body: { reason: "approved for smoke" },
+}));
+assert.equal((site.body as { approved: boolean }).approved, true);
+
+assert.deepEqual(apiErrorResponse("AUTHZ_FORBIDDEN", "corr").status, 403);
+assert.equal(exceptionResponse(new ApiResponseException("RUN_NOT_FOUND"), "corr").status, 404);
+
+const scaffold = createFakeControlPlaneScaffold({
+  humanTasks: [{
+    human_task_id: "task-escalate-rbac",
+    tenant_id: tenantId,
+    state: "open",
+    kind: "captcha",
+    run_id: "run-existing",
+  }, {
+    human_task_id: "task-assignee-scope",
+    tenant_id: tenantId,
+    state: "in_progress",
+    kind: "captcha",
+    run_id: "run-existing",
+    assignee: "other-principal",
+    assignee_role: "reviewer",
+  }, {
+    human_task_id: "task-assignee-role-scope",
+    tenant_id: tenantId,
+    state: "in_progress",
+    kind: "captcha",
+    run_id: "run-existing",
+    assignee: "principal-1",
+    assignee_role: "approver",
+  }, {
+    human_task_id: "task-assignee-ok",
+    tenant_id: tenantId,
+    state: "in_progress",
+    kind: "captcha",
+    run_id: "run-existing",
+    assignee: "principal-1",
+    assignee_role: "reviewer",
+  }],
+});
+const baseHeaders = {
+  authorization: "Bearer fixture",
+  "x-tenant-id": tenantId,
+  "x-subject-id": "principal-1",
+};
+const unmatchedRoute = await scaffold.runner.inject({
+  method: "GET",
+  url: "/v1/no-such-route",
+  headers: { ...baseHeaders, "x-roles": "admin" },
+});
+assert.equal(unmatchedRoute.status, 404);
+assert.equal((unmatchedRoute.body as { code: string }).code, "RESOURCE_NOT_FOUND");
+
+const missingIdempotency = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/runs",
+  headers: { ...baseHeaders, "x-roles": "admin" },
+  body: { scenario_version_id: "sv-2" },
+});
+assert.equal(missingIdempotency.status, 422);
+assert.equal((missingIdempotency.body as { code: string }).code, "IR_SCHEMA_INVALID");
+const viewerCreate = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/runs",
+  headers: { ...baseHeaders, "x-roles": "viewer", "idempotency-key": "run-create-viewer" },
+  body: { scenario_version_id: "sv-2" },
+});
+assert.equal(viewerCreate.status, 403);
+assert.equal((viewerCreate.body as { code: string }).code, "AUTHZ_FORBIDDEN");
+
+const inFlight = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/runs",
+  headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-1" },
+  body: { scenario_version_id: "sv-2" },
+});
+assert.equal(inFlight.status, 201);
+const secondCreate = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/runs",
+  headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-2" },
+  body: { scenario_version_id: "sv-3" },
+});
+assert.equal(secondCreate.status, 201);
+const mismatch = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/runs",
+  headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-2" },
+  body: { scenario_version_id: "sv-4" },
+});
+assert.equal(mismatch.status, 412);
+assert.equal((mismatch.body as { code: string }).code, "SCENARIO_VERSION_CONFLICT");
+
+const inFlightScaffold = createFakeControlPlaneScaffold();
+const inFlightDeps: typeof inFlightScaffold.deps = {
+  ...inFlightScaffold.deps,
+  idempotency: {
+    async reserve() {
+      return { kind: "in_flight", recordId: "idem-processing", status: "processing" as const };
+    },
+    async saveResult() {},
+    async saveFailure() {},
+  },
+};
+const inFlightRunner = new FakeControlPlaneRunner({
+  routes: inFlightScaffold.routes,
+  deps: inFlightDeps,
+  authorizationResolver: createInMemoryAuthorizationResolver(inFlightScaffold.services),
+});
+const inFlightResponse = await inFlightRunner.inject({
+  method: "POST",
+  url: "/v1/runs",
+  headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "run-create-processing" },
+  body: { scenario_version_id: "sv-2" },
+});
+assert.equal(inFlightResponse.status, 409);
+assert.equal((inFlightResponse.body as { code: string }).code, "WORKITEM_CHECKOUT_CONFLICT");
+
+const operatorEscalate = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/human-tasks/task-escalate-rbac/escalate",
+  headers: { ...baseHeaders, "x-roles": "operator", "idempotency-key": "escalate-operator" },
+  body: {},
+});
+assert.equal(operatorEscalate.status, 403);
+assert.equal((operatorEscalate.body as { code: string }).code, "AUTHZ_FORBIDDEN");
+const reviewerEscalate = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/human-tasks/task-escalate-rbac/escalate",
+  headers: { ...baseHeaders, "x-roles": "reviewer", "idempotency-key": "escalate-reviewer" },
+  body: {},
+});
+assert.equal(reviewerEscalate.status, 200);
+assert.equal((reviewerEscalate.body as { state: string }).state, "escalated");
+const wrongAssigneeResolve = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/human-tasks/task-assignee-scope/resolve",
+  headers: { ...baseHeaders, "x-roles": "reviewer", "idempotency-key": "resolve-wrong-assignee" },
+  body: { result: "ok" },
+});
+assert.equal(wrongAssigneeResolve.status, 403);
+assert.equal((wrongAssigneeResolve.body as { code: string }).code, "AUTHZ_FORBIDDEN");
+const wrongAssigneeRoleResolve = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/human-tasks/task-assignee-role-scope/resolve",
+  headers: { ...baseHeaders, "x-roles": "reviewer", "idempotency-key": "resolve-wrong-assignee-role" },
+  body: { result: "ok" },
+});
+assert.equal(wrongAssigneeRoleResolve.status, 403);
+assert.equal((wrongAssigneeRoleResolve.body as { code: string }).code, "AUTHZ_FORBIDDEN");
+const matchingAssigneeResolve = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/human-tasks/task-assignee-ok/resolve",
+  headers: { ...baseHeaders, "x-roles": "reviewer", "idempotency-key": "resolve-matching-assignee" },
+  body: { result: "ok" },
+});
+assert.equal(matchingAssigneeResolve.status, 200);
+assert.equal((matchingAssigneeResolve.body as { state: string }).state, "resolved");
+
+console.log("control-plane fixtures: ALL PASS");
+
+function ctx(operationId: OperationId, overrides: {
+  method: ControlPlaneRequestContext["method"];
+  path: ControlPlaneRequestContext["path"];
+  params?: Record<string, string>;
+  query?: Record<string, string>;
+  body?: unknown;
+  ifMatch?: IfMatchDecision;
+}): ControlPlaneRequestContext {
+  return {
+    method: overrides.method,
+    path: overrides.path,
+    operationId,
+    headers: {},
+    params: overrides.params ?? {},
+    query: overrides.query ?? {},
+    body: overrides.body,
+    principal,
+    tenantBinding,
+    authorization: undefined,
+    idempotency: undefined,
+    ifMatch: overrides.ifMatch,
+    correlationId: "corr" as CorrelationId,
+    requestHash: "sha256:fixture" as CanonicalRequestHash,
+  };
+}
+
+async function assertApiError(
+  fn: () => Promise<unknown>,
+  code: ApiResponseException["code"],
+): Promise<void> {
+  try {
+    await fn();
+  } catch (error: unknown) {
+    if (isApiResponseExceptionLike(error)) {
+      assert.equal(error.code, code);
+      return;
+    }
+    throw error;
+  }
+  throw new Error(`expected ${code}`);
+}
+
+function isApiResponseExceptionLike(error: unknown): error is { code: ApiResponseException["code"] } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string"
+  );
+}

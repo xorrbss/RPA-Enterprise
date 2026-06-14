@@ -23,11 +23,11 @@
 | `ir-static-validation.md` | (IR 검증) | 그래프 정적검증(target 무결성·도달성·사이클·flags 레지스트리·value_match·fallback) — v1.4 |
 | `security-contracts.md` | (보안) | SecretStore·shell registry·prompt-injection·redaction 알고리즘·network policy·kid·connector perms·artifact RBAC — v1.4 |
 | `ts/state-machine-types.ts` | (전이 타입) | RunState/Event/Guard/SideEffectCmd + transition*() 시그니처(codegen 대상) — v1.4 |
-| `db/migration_core_entities.sql` | (핵심 DDL) | runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/action_plan_cache/site_profiles/browser_identities/network_policies — v1.5 |
+| `db/migration_core_entities.sql` | (핵심 DDL) | runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/action_plan_cache/site_profiles/site_profile_approvals/browser_identities/network_policies/gateway_policies/control_plane_idempotency_keys/workers — v2.4 |
 | `auth-rbac.md` | (인증·인가·테넌시) | RBAC 역할(viewer/operator/reviewer/approver/admin)·권한 매트릭스·tenant_id 출처·RLS 정책 — v1.5 |
 | `api-surface.md` | (제어평면 API) | REST 엔드포인트 인벤토리·If-Match·Idempotency-Key·as_of(D1 OpenAPI 입력) — v1.5 |
 | `ops-defaults.md` | (운영 기본값) | 전이 임계·lease TTL·서킷·LLM retry/budget·artifact retention·sweeper 주기 + 테스트 픽스처값 — v1.6 |
-| `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·transitions.fixtures.ts. tsc strict 통과·전이 63/63 PASS — v1.7 |
+| `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·static-validation.ts·event-payload-registry.ts·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·fixtures. tsc strict 통과·전이 fixtures 84/84 PASS·validators 42/42 PASS·static validation 33/33 PASS — v2.4 |
 | `architecture.md` | (구현 설계, 계약 아님) | 스택·실행기(**Stagehand v3 CDP, Playwright 제거**)·컴포넌트↔계약 매핑·배포·빌드순서·§10 IREL — v2.0 |
 | `build-prompt.md` | (개발 착수 프롬프트) | 코딩 에이전트용 프로덕션 빌드 마스터 프롬프트(D2–D7 단계별 DoD·검증 게이트·품질 바) — v2.4 |
 
@@ -80,7 +80,7 @@
 - OpenAPI(control-plane) / AsyncAPI(run-events) 생성 — 본 envelope·error 기반
 - redaction fixture 데이터(케이스 목록은 impl-bundle §C)
 
-> 미결정(PRD §19와 동일): Codex SSE structured-output 스트리밍 범위·abort 규격(#5), P1 vLLM SSE 지원 여부, credential 동시성 기본값. 이 3건은 adapter 구현 착수 전 확정 필요.
+> 구현 시 라이브 확인: Codex SSE structured-output 스트리밍의 실제 지원 범위와 abort 동작은 `capabilities.jsonMode`/HTTP close fallback 계약을 유지한 채 adapter 구현 시 실측 확정한다. P1 vLLM SSE와 credential 동시성 기본값은 v1.4에서 본 패키지가 결정했다.
 
 ---
 
@@ -120,7 +120,7 @@
 ### 3. 제어평면 API
 | 항목 | 본 패키지 참조 | 외부 위치 | 상태 |
 |---|---|---|---|
-| REST/OpenAPI 엔드포인트 인벤토리(run create/get/abort, scenario CRUD·validate·promote, human_task inbox·resolve, DLQ replay, artifact fetch) | error-catalog 전 코드의 `httpStatus`, `ApiError` | D1 codegen | 산출은 D1 — 단 **입력(엔드포인트 목록) 위치 미확정(TODO)** |
+| REST/OpenAPI 엔드포인트 인벤토리(run create/get/abort, scenario CRUD·validate·promote, human_task inbox·start·resolve, DLQ replay, artifact fetch) | error-catalog 전 코드의 `httpStatus`, `ApiError` | `api-surface.md` → `codegen/openapi.yaml` | ✅ 본 패키지 정의(v1.5/v2.4) |
 | If-Match(ETag) optimistic concurrency — ETag 출처·대상 엔드포인트 | error-catalog `SCENARIO_VERSION_CONFLICT`(412) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
 | 인입 명령 멱등(`Idempotency-Key` 헤더) | sink 외부 멱등만 정의(migration `sink_idempotency_key`) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
 | `params.as_of` 주입 주체(Run 생성 시 1회 고정) | ir-expression §5 | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
@@ -134,7 +134,7 @@
 ### 5. 보안 계약
 | 항목 | 본 패키지 참조 | 외부 위치 | 상태 |
 |---|---|---|---|
-| Gateway redaction 알고리즘·대상 필드 | llm-gateway-adapter.md("redaction은 Gateway §5.1 step2") | **형제 스펙: LLM Gateway 스펙 §5.1**(본 패키지엔 *adapter* 계약만; §5.1 부재=댕글링) | 형제 스펙 — 문서 식별 TODO |
+| Gateway redaction 알고리즘·대상 필드 | llm-gateway-adapter.md("redaction은 Gateway §5.1 step2") | `security-contracts.md` §4 | ✅ 본 패키지 정의(v1.4/v2.4) |
 | `SecretStore` 인터페이스 시그니처 | core-types(SecretStore 경유), impl-bundle §C(`SecretStore.resolve()`) | PRD v3.1 또는 형제 스펙 | ✅ 본 패키지 정의(v1.5/v2.2) |
 | signed command registry(shell `cmd_ref` 키·서명·허용인자·검증시점) | ir.schema `cmd_ref`("미등록 시 거부") | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
 | prompt injection 탐지 계약(언제/어디서/임계) | error-catalog `PROMPT_INJECTION_DETECTED`, redaction fixture(hidden-instruction) | PRD v3.1 | ✅ 본 패키지 정의(v1.5/v2.2) |
@@ -145,19 +145,19 @@
 ### 6. 정책 · 수치 임계 (운영 정책 — 단 개발/테스트 기본값 필요)
 | 항목 | 본 패키지 참조 | 상태 |
 |---|---|---|
-| 전이 임계: init-fail 연속 임계(R3), workitem `attempts max`(W4–W7), `abort_timeout`(R24), 백오프 곡선 | state-machine guards | 운영 정책 — 개발/테스트 기본값 위치 미확정(TODO) |
+| 전이 임계: init-fail 연속 임계(R3), workitem `attempts max`(W4–W7), `abort_timeout`(R24), 백오프 곡선 | state-machine guards | ✅ ops-defaults.md(v1.6) |
 | lease 수치: browser lease TTL·heartbeat 주기, credential `locked_until` TTL, checkout timeout | migration leases, impl-bundle §B(sweeper "수초"/"일배치") | ✅ ops-defaults.md(v1.6) |
 | 서킷 임계: `SITE_CIRCUIT_OPEN` 차단율·윈도우, challenge 차단율, worker 서킷 | error-catalog, reserved-handlers | ✅ ops-defaults.md(v1.6) |
 | LLM: retry 최대 N, idle/wall-clock timeout, `budget`(maxCost/maxOutputTokens) 기본값 | llm-gateway §2·§4 | ✅ ops-defaults.md(v1.6) |
 | artifact: `retention_until` 기본 보존기간, redaction 실패 N회 임계, sweeper 주기 | impl-bundle §B | ✅ ops-defaults.md(v1.6) |
-| `max_self_heal`(기본 2)·`max_iterations`·verify `timeout_ms` 상한 | ir.schema `nodePolicy`/`loop`, verify.schema | 일부 기본값 존재, 상한·verify 기본값 TODO |
+| `max_self_heal`(기본 2)·`max_iterations`·verify `timeout_ms` 상한 | ir.schema `nodePolicy`/`loop`, verify.schema | ✅ ops-defaults.md + schema 상한(v1.6/v2.4) |
 
 ### 7. D1 codegen / 의도적 연기 (갭 아님 — 위치 확정됨)
 | 항목 | 위치 | 상태 |
 |---|---|---|
-| event `payload_schema_ref` ↔ event_type 매핑 레지스트리 | event-envelope.schema.json(설명), 본 README §"D1에서 함께 산출할 것" | D1 codegen |
+| event `payload_schema_ref` ↔ event_type 매핑 레지스트리 | event-envelope.schema.json(설명), 본 README §"D1에서 함께 산출할 것" | ✅ `codegen/event-payload-registry.ts`(ref 매핑) + v1 closed-empty payload body enforcement |
 | ajv validator + TS 타입(ir/verify/event), `transition*()` 함수, error 매핑 미들웨어, OpenAPI/AsyncAPI | 본 README §"D1에서 함께 산출할 것" | D1 codegen |
-| 미결정 3건(Codex SSE 스트리밍 범위·abort, P1 vLLM SSE, credential 동시성 기본값) | **PRD §19** | 미결정(adapter 착수 전 확정) |
+| Codex SSE 스트리밍 범위·abort 실지원 | llm-gateway-adapter.md §3/§7, README v1.4 결정 | 구현 시 라이브 capability 확인(안전 fallback 계약 고정) |
 | Human Task 실시간 live view, 3rd-party 커넥터 WASM 격리, P3 event bridge, QueueBackend 대체 | 본 README §결정·#8·#10·#12 | 의도적 연기(D7/D11/D12) |
 
 > **사용법**: 새 코드 경로 착수 전 이 맵에서 의존 항목의 상태를 확인한다. `PRD 확정`은 인용 섹션을 열어 컬럼/규약을 따른다. `위치 미확정(TODO)`은 PRD 소유자가 섹션을 채울 때까지 **추정 금지** — 채워지기 전 착수가 불가피하면 해당 위치에 `TODO: [BLOCKED]`를 남긴다. 이 맵 자체가 PRD 정합 점검의 체크리스트다.
@@ -207,7 +207,7 @@
 ### 반영하지 않은 리뷰 항목 (사유 명시)
 - **ExceptionClass에 `unknown` 추가**: 본 설계의 명시 원칙이 "미분류→system 흡수"라, unknown을 타입에 넣으면 미분류 상태가 전 경로로 전파되어 오히려 후퇴. 대신 core-types(4개, 예외 분류)와 error-catalog(`none` 포함, 에러코드 메타)의 **용도 차이를 주석으로 고정**.
 - **IR `graph` 래퍼 통일(P0-1)** / **Human Task Phase A 정의(P0-4)**: 둘 다 **PRD 본문 vs contracts** 불일치 주장이라 contracts만으로 단정 불가. contracts는 내부 일관적이며, contracts가 단일 진실원천이면 **PRD 본문을 contracts에 맞추는 방향**으로 결정 권고. (Phase A는 contracts가 이미 리뷰가 "더 안전"이라 인정한 snapshot/replay로 확정한 상태)
-- **`ordering_key` required**: run 없는 이벤트(worker.heartbeat 등)는 run_id 기본값이 없어 required 부적합. 의도적 optional 유지.
+- **`ordering_key` required**: run 없는 이벤트(site.circuit_* 등)는 run_id 기본값이 없어 required 부적합. 의도적 optional 유지.
 
 ---
 
@@ -240,7 +240,7 @@
 | 6 | LLM `RATE_LIMIT`/`BACKEND_ERROR`/`CONNECTION_FAILED` terminal 코드 부재 | `error-catalog.ts` · `llm-gateway-adapter.md` §4 | `LLM_RATE_LIMITED`/`LLM_BACKEND_UNAVAILABLE`/`LLM_CONNECTION_FAILED` + 표 매핑 |
 | 7 | shell 미등록 명령 코드 부재 | `error-catalog.ts` | `SHELL_COMMAND_NOT_ALLOWED`(security) |
 | 8 | verify criterion 오타 통과 | `verify.schema.json` | 각 criterion `additionalProperties:false` + `value_match.path` 문법 명시 |
-| 9 | verify fail surfacing·DEAD_LETTER 200·worker 서킷 비대칭 | core-types · error-catalog · event-envelope | status surfacing 주석, DEAD_LETTER 통지전용 주석, `worker.circuit_closed` 추가 |
+| 9 | verify fail surfacing·DEAD_LETTER 200·worker 서킷 비대칭 | core-types · error-catalog · event-envelope | status surfacing 주석, DEAD_LETTER 통지전용 주석, worker telemetry tenant outbox 분리 |
 
 ### §19 미결정 결정 (owner=본 패키지)
 - **credential 동시성 기본값 = 1** (DDL DEFAULT와 일치, 사이트별 `credential_concurrency_policies`로 상향).
@@ -257,7 +257,7 @@
 
 | # | 항목 | 위치 | 조치 |
 |---|---|---|---|
-| 1 | 핵심 엔티티 DDL 부재(runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/site_profiles/browser_identities/network_policies) | `db/migration_core_entities.sql`(신규) | 14개 테이블. 상태 CHECK enum = `state-machine-types.ts`(Run 13/Workitem 7/HumanTask 7/Kind 5)·`core-types` StepStatus 8·cache_mode 6·event_type 31과 **정확히 일치**. 기존 migration 테이블 재정의 없이 ALTER로 FK 보강(적용 순서: concurrency→core) |
+| 1 | 핵심 엔티티 DDL 부재(runs/run_steps/workitems/human_tasks/scenarios/scenario_versions/artifacts/events_outbox/dead_letter/stagehand_calls/site_profiles/browser_identities/network_policies) | `db/migration_core_entities.sql`(신규) | 18개 테이블로 확장. 상태 CHECK enum = `state-machine-types.ts`(Run 13/Workitem 7/HumanTask 7/Kind 5)·`core-types` StepStatus 8·cache_mode 6·event_type 31과 **정확히 일치**. 기존 migration 테이블 재정의 없이 ALTER로 FK/RLS 보강(적용 순서: concurrency→core) |
 | 2 | `action_plan_cache` 본체(PRD §7) | `db/migration_core_entities.sql` | UNIQUE 7키 = migration_concurrency §4 ON CONFLICT 규약과 일치. status active/suspect/stale/quarantined(§7.2) |
 | 3 | RBAC 역할·권한 매트릭스·tenant_id 출처·RLS 부재 | `auth-rbac.md`(신규) | 역할 enum(viewer/operator/reviewer/approver/admin) + 권한 매트릭스 + JWT 클레임 tenant_id 출처 + RLS(SET LOCAL + current_setting strict, FORCE RLS) |
 | 4 | 제어평면 API 표면 부재 | `api-surface.md`(신규) | runs/scenarios/human-tasks/workitems·DLQ/artifacts/gateway/sites 엔드포인트 인벤토리(D1 OpenAPI 입력). If-Match(scenario.version)·Idempotency-Key·params.as_of 주입 규약. 어휘체인 abort→cancelled 정합 |
@@ -283,13 +283,16 @@
 |---|---|---|
 | `codegen/types.ts` | ir/verify/event 스키마 → TS 인터페이스(흐름키 union·shell/side_effect 식별 union). core-types 재사용 | tsc strict |
 | `codegen/validators.ts` | ajv(2020) + uuid/date-time format 수동 등록으로 3스키마 컴파일, validateIR/Verify/Event. ir→verify $ref 해소 | tsc + agent 14 스모크 |
-| `codegen/transitions.ts` | transitionRun/Workitem/HumanTask 완전 구현(R1–R28/W1–W11/H1–H8), 미정의 조합 IllegalTransition | **전이 63/63 PASS**(run-fixtures) |
-| `codegen/error-middleware.ts` | ErrorCode→ApiError/HTTP 매핑(43코드), DEAD_LETTER 통지 분리 | tsc strict |
-| `codegen/openapi.yaml` | api-surface 21 path → OpenAPI 3.1, ErrorCode 43, $ref 46 해소 | YAML parse |
+| `codegen/transitions.ts` | transitionRun/Workitem/HumanTask 완전 구현(R1–R28/W1–W11/H1–H8), 미정의 조합 IllegalTransition, guard 누락 시 silent false 금지 | **전이 fixtures 84/84 PASS**(run-fixtures) |
+| `codegen/error-middleware.ts` | ErrorCode→ApiError/HTTP 매핑(44코드), DEAD_LETTER 통지 분리 | tsc strict |
+| `codegen/openapi.yaml` | api-surface 22 path → OpenAPI 3.1, ErrorCode 44, $ref 정합 | YAML parse |
 | `codegen/asyncapi.yaml` | event-envelope → AsyncAPI 2.6, event_type 31 채널 | YAML parse |
-| `codegen/transitions.fixtures.ts` | 전이표 63 케이스(+race/IllegalTransition), ops-defaults 픽스처값 | 실행 PASS |
+| `codegen/transitions.fixtures.ts` | 전이표 84 케이스(+race/IllegalTransition/side-effect assertion), ops-defaults 픽스처값 | 실행 PASS |
+| `codegen/validators.fixtures.ts` | IR/Verify/Event validator 42케이스 + static validation 33케이스 | 실행 PASS |
+| `codegen/event-payload-registry.ts` | event_type ↔ payload_schema_ref 매핑 고정. v1 body schema는 closed empty object 결정에 맞춰 검증 | 실행 PASS |
 
-> 검증 하니스: `codegen/{package.json,tsconfig.json}`(typescript/ajv/tsx/@types/node). `npm --prefix codegen run typecheck`(tsc strict EXIT=0, 7산출물+계약ts 전체) / `run fixtures`(63/63). `node_modules/` gitignore. event_type 실측 31종(스키마와 일치, events_outbox CHECK도 31).
+> 검증 하니스: `codegen/{package.json,tsconfig.json}`(typescript/ajv/tsx/@types/node). `npm --prefix codegen run typecheck`(tsc strict EXIT=0, codegen+계약ts 전체) / `run fixtures`(validators 42/42 + static validation 33/33 + transition fixtures 84/84) / `run validators`(42/42 + 33/33). `node_modules/` gitignore. event_type 실측 31종(스키마와 일치, events_outbox CHECK도 31).
+> Product Open release gates: authoritative gate list is `release-open-checklist.md`. Local full repeatability with a disposable PostgreSQL 15 cluster is `npm --prefix codegen run ci:local:temp-db`; direct DB smoke is `npm --prefix codegen run db:smoke` with `PSQL_BIN`/PG env, or `npm --prefix codegen run db:temp-smoke` when only local PostgreSQL 15 binaries are installed. DB runbook and CI service-DB details live in `db/README.md`.
 > 다음: Phase 5(HTML 목업). **→ v1.8로 완료.**
 
 ---
@@ -307,7 +310,7 @@
 | 오류 상태 | `errorState()` 컴포넌트(재시도 버튼 포함, 실 UI용 재사용 패턴) |
 | 접근성(누적) | 전역 `:focus-visible`·`prefers-reduced-motion`·modal/drawer 포커스 트랩·아이콘 `aria-hidden`(분석 시 반영) |
 
-> **전체 프로그램 완료**: Phase 1(계약 내부)·2(DDL/RBAC/API)·3(운영 기본값)·4(D1 codegen)·5(HTML 목업). 갭분석 P0~P2 + 외부 의존 맵 + 화면·설계 항목이 모두 본 패키지에 정의·검증·반영됨. 남은 외부 사실(모델 컨텍스트·Codex 스트리밍 실범위)만 구현 시 라이브 확정.
+> **전체 프로그램 완료**: Phase 1(계약 내부)·2(DDL/RBAC/API)·3(운영 기본값)·4(D1 codegen)·5(HTML 목업). 갭분석 P0~P2 + 외부 의존 맵 + 화면·설계 항목이 본 패키지에 정의·검증·반영됨. Product-open release decision의 권위 목록은 `release-open-checklist.md`의 `Resolved Release Decisions` 섹션이며, 모든 항목은 `release-decisions.md`에 결정값을 둔다.
 
 ---
 
@@ -379,3 +382,45 @@
 | 5 | IREL evaluator 설계 박약(architecture 한 줄) | **architecture.md §10 신설**(수기 재귀하강 파서·컴파일 파이프라인·AST 캐시 위치·런타임 evaluator·모듈 경계) + §3/§6 배치, OTel D2/프론트 outbox-tail 결정 |
 
 > 예상 재점수: **86(B+) → ~90(A-)**. (정식 재채점은 요청 시.)
+
+---
+
+## v2.4 패치 로그 (product-open 정합성 보강 — 계약·스키마·DB·codegen·목업)
+
+> product-open 검토를 막는 교차 드리프트를 재감사해 계약→스키마→DB→TS/codegen→fixture→HTML 목업을 동시 보강. **재검증: `npm --prefix codegen run typecheck`, `run fixtures`(validators 42/42 + static validation 33/33 + transition fixtures 84/84), `run validators`, `npm --prefix codegen test`, HTML 브라우저 콘솔 스모크 PASS.**
+
+| 항목 | 조치 |
+|---|---|
+| Run/HumanTask 전이 drift | `run.resumed`, R10 drain side effects, R25 terminal abort reject, H7 terminal cancel 차단, R8/R9/R10 exceptionClass guard를 계약·타입·transition fixture에 반영 |
+| silent false/unknown 위험 | guard 누락 시 `IllegalTransition`을 강제하고 omitted/wrong-guard fixture 및 exact emit 검증 추가 |
+| JSON Schema edge case | IR action closed shape, verify regex/timeout/minLength, idempotency_key 빈 값 차단, params_schema 검증 강화 |
+| DB tenant/idempotency/audit | control-plane idempotency, gateway policy version/conflict, site approval audit, artifact soft-delete/RLS redaction gate, tenant composite FK, credential slot trigger 보강 |
+| event payload registry | event_type ↔ payload_schema_ref 매핑을 codegen에 고정하고 undocumented payload field 차단. v1 per-event body schema는 closed empty object로 고정 |
+| Static validation | V1–V11 deterministic smoke implementation, success_empty witness, signed shell cmd registry, loop-flow BLOCKED 검증 추가 |
+| HTML product-open review | tenant/RBAC/redaction/idempotency/audit/gateway policy version/sink key가 목업 화면에 드러나도록 보강 |
+
+> Product-open release decisions의 권위 목록은 `release-open-checklist.md`의 `Resolved Release Decisions` 섹션이다. 새로운 미결정이 생기면 추측하지 않고 `TODO: [BLOCKED]`와 `Required decision:`으로 남긴다.
+
+---
+
+## v2.5 패치 로그 (D4 착수 — authn/authz 분리: `UNAUTHENTICATED`(401) 신설)
+
+> D4(제어평면 API) 빌드 중 발견한 계약 공백을 교정. 기존 error-catalog는 **인증 미성립**(Bearer 토큰 누락/서명 무효)과 **인가 거부**(역할/tenant 권한 부족)를 모두 `AUTHZ_FORBIDDEN`(403) 하나로만 모델링했다 — HTTP 의미상 전자는 401이 정확하며, `security-middleware-contract.ts`의 `AuthFailureCode`도 403만 표현해 인증 경계가 401을 반환할 수 없었다. `api-surface.md §0.2`("모든 4xx/5xx 본문=ApiError", "httpStatus는 카탈로그 그대로")가 401을 강제하지 못하게 막던 구조이므로, 카탈로그에 코드를 신설해 정합을 회복했다. **재검증: `npm --prefix codegen run test`(typecheck + fixtures 84 + validators + consistency: OpenAPI ErrorCode enum=ERROR_CATALOG=46) PASS.**
+
+| 항목 | 조치 |
+|---|---|
+| 인증/인가 코드 분리 | `ts/error-catalog.ts`에 **`UNAUTHENTICATED`(retryable=false, httpStatus=401, security)** 신설. 인증 미성립=401, 인증됐으나 권한/테넌트 부족=403(`AUTHZ_FORBIDDEN`) |
+| 미들웨어 경계 타입 | `ts/security-middleware-contract.ts` `AuthFailureCode`를 `UNAUTHENTICATED \| AUTHZ_FORBIDDEN`로 확장 — `AuthenticationBoundary`가 401/403을 모두 표현 |
+| codegen 정합 | `codegen/openapi.yaml` ErrorCode enum +1(45→46개), `bearerAuth` 설명에 401/403 분기 명시. `contract-consistency.ts` enum=카탈로그 불변식 유지 |
+| 산문 SSoT | `api-surface.md §0.1`·`auth-rbac.md §3/§5`에 authn(401)/authz(403) 분기 명시 |
+| 참조 스캐폴드 정합 | `control-plane/fake-request-runner.ts`의 토큰 누락 분기를 `UNAUTHENTICATED`로 정렬, `codegen/control-plane.fixtures.ts`에 401 경로 단언 추가 |
+
+## v2.6 패치 로그 (D4.1 제어평면 미분류 예외 카탈로그화)
+
+> 제어평면 Fastify 경계에서 임의 throwable을 raw 500으로 흘리지 않고 `CONTROL_PLANE_INTERNAL_ERROR`(500, system)로 매핑한다. 원본 error/details는 로그에만 남기고, 응답은 `ApiError` + `correlation_id`로 고정한다. **재검증 대상: OpenAPI ErrorCode enum=ERROR_CATALOG=47.**
+
+| 항목 | 조치 |
+|---|---|
+| 미분류 예외 응답 | `app/src/api/errors.ts`가 unknown throwable을 catalog-backed `CONTROL_PLANE_INTERNAL_ERROR`로 변환 |
+| ErrorCode 정합 | `ts/error-catalog.ts`와 `codegen/openapi.yaml`에 `CONTROL_PLANE_INTERNAL_ERROR` 추가 |
+| 산문 SSoT | `api-surface.md §0.2`에 미분류 제어평면 예외의 로그/응답 경계 명시 |

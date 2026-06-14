@@ -2,7 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rpa.local/contracts/event-envelope.schema.json",
   "title": "Event Envelope v1",
-  "description": "전 내부 이벤트 공통 봉투. 상태 변경과 동일 DB 트랜잭션에서 인큐(단일 Postgres 스택, outbox 내장). idempotency_key로 중복 소비 무시, ordering_key=run_id로 run 순서 보장.",
+  "description": "Tenant-scoped event envelope for the events_outbox contract. State changes and event writes happen in the same database transaction; idempotency_key suppresses duplicate delivery and ordering_key defaults to run_id.",
+  "$comment": "Decision v1: tenant-scoped event contracts use canonical step refs (tenant_id, run_id, step_id, attempt); payload bodies are closed empty objects; worker telemetry is not stored in tenant-scoped events_outbox.",
   "type": "object",
   "required": ["event_id", "event_type", "event_version", "tenant_id", "correlation_id", "occurred_at", "idempotency_key", "payload_schema_ref", "payload"],
   "additionalProperties": false,
@@ -13,35 +14,204 @@
     "tenant_id": { "type": "string", "format": "uuid" },
     "run_id": { "type": "string", "format": "uuid" },
     "workitem_id": { "type": "string", "format": "uuid" },
-    "step_id": { "type": "string" },
+    "step_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Canonical step reference component for step.* events. Together with tenant_id, run_id, and attempt it identifies the run_steps row; no run_step_id surrogate is used in v1."
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Canonical step reference attempt component for step.* events, matching run_steps.attempt."
+    },
     "correlation_id": { "type": "string", "format": "uuid" },
-    "causation_id": { "type": "string", "format": "uuid", "description": "이 이벤트를 유발한 이벤트 id" },
-    "ordering_key": { "type": "string", "description": "기본 run_id — run 단위 순서 보장. run 없는 이벤트(worker.heartbeat, site.circuit_* 등)는 생략 가능(그래서 required 아님)." },
+    "causation_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Event id that directly caused this event, when available."
+    },
+    "ordering_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Default run ordering key. Run-less tenant-visible site circuit events may omit it; worker telemetry is outside tenant-scoped events_outbox in v1."
+    },
     "occurred_at": { "type": "string", "format": "date-time" },
-    "idempotency_key": { "type": "string", "description": "예: run:step:attempt:verify — 소비자 중복 무시" },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+      "description": "Consumer duplicate-suppression key. Empty keys are rejected."
+    },
     "payload_schema_ref": {
       "type": "string",
-      "description": "[FIX #7] 이 event_type의 payload를 검증할 등록 스키마 참조(예: 'events/run.completed@1'). 소비자는 payload를 freeform으로 신뢰하지 말고 이 ref로 ajv 검증. event_type↔payload_schema_ref 매핑은 별도 payload 레지스트리(D1 codegen 산출)에서 고정하며, 본 envelope은 매핑 강제 메커니즘만 제공."
+      "minLength": 1,
+      "pattern": "^events/[a-z0-9_.-]+@[0-9]+$",
+      "description": "Registered schema ref for validating this event_type payload, for example events/run.completed@1. The event_type to payload_schema_ref mapping is fixed by the D1 payload registry."
     },
     "payload": {
       "type": "object",
-      "description": "event_type별 본문. payload_schema_ref에 등록된 스키마로 검증되어야 함(경계에서 ajv)."
+      "additionalProperties": false,
+      "description": "Event body. In v1 every events/{event_type}@1 payload body is a closed empty object; identity and correlation stay in the envelope. Adding body fields requires a versioned schema change."
     }
   },
+  "allOf": [
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.created" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.created@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.started" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.started@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.suspended" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.suspended@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.resume_requested" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.resume_requested@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.resumed" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.resumed@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.cancelled" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.cancelled@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.completed" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.completed@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.failed_business" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.failed_business@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "run.failed_system" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/run.failed_system@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "step.started" } }, "required": ["event_type"] },
+      "then": {
+        "type": "object",
+        "required": ["run_id", "step_id", "attempt"],
+        "properties": { "payload_schema_ref": { "const": "events/step.started@1" } }
+      }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "step.completed" } }, "required": ["event_type"] },
+      "then": {
+        "type": "object",
+        "required": ["run_id", "step_id", "attempt"],
+        "properties": { "payload_schema_ref": { "const": "events/step.completed@1" } }
+      }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "step.verify.failed" } }, "required": ["event_type"] },
+      "then": {
+        "type": "object",
+        "required": ["run_id", "step_id", "attempt"],
+        "properties": { "payload_schema_ref": { "const": "events/step.verify.failed@1" } }
+      }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "llm.stream.started" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/llm.stream.started@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "llm.stream.completed" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/llm.stream.completed@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "llm.stream.aborted" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/llm.stream.aborted@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "challenge.detected" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/challenge.detected@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "challenge.resolved" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/challenge.resolved@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "human_task.created" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/human_task.created@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "human_task.resolved" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/human_task.resolved@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "human_task.expired" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/human_task.expired@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "human_task.escalated" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/human_task.escalated@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "workitem.completed" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/workitem.completed@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "workitem.dead_lettered" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/workitem.dead_lettered@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "pipeline.stage.completed" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/pipeline.stage.completed@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "sink.delivered" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/sink.delivered@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "sink.dead_lettered" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/sink.dead_lettered@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "site.circuit_opened" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/site.circuit_opened@1" } } }
+    },
+    {
+      "if": { "type": "object", "properties": { "event_type": { "const": "site.circuit_closed" } }, "required": ["event_type"] },
+      "then": { "type": "object", "properties": { "payload_schema_ref": { "const": "events/site.circuit_closed@1" } } }
+    }
+  ],
   "$defs": {
     "eventType": {
       "type": "string",
       "enum": [
-        "run.created", "run.started", "run.suspended", "run.resume_requested", "run.resumed", "run.cancelled", "run.completed",
-        "run.failed_business", "run.failed_system",
-        "step.started", "step.completed", "step.verify.failed",
-        "llm.stream.started", "llm.stream.completed", "llm.stream.aborted",
-        "challenge.detected", "challenge.resolved",
-        "human_task.created", "human_task.resolved", "human_task.expired", "human_task.escalated",
-        "workitem.completed", "workitem.dead_lettered",
-        "pipeline.stage.completed", "sink.delivered", "sink.dead_lettered",
-        "site.circuit_opened", "site.circuit_closed",
-        "worker.heartbeat", "worker.circuit_opened", "worker.circuit_closed"
+        "run.created",
+        "run.started",
+        "run.suspended",
+        "run.resume_requested",
+        "run.resumed",
+        "run.cancelled",
+        "run.completed",
+        "run.failed_business",
+        "run.failed_system",
+        "step.started",
+        "step.completed",
+        "step.verify.failed",
+        "llm.stream.started",
+        "llm.stream.completed",
+        "llm.stream.aborted",
+        "challenge.detected",
+        "challenge.resolved",
+        "human_task.created",
+        "human_task.resolved",
+        "human_task.expired",
+        "human_task.escalated",
+        "workitem.completed",
+        "workitem.dead_lettered",
+        "pipeline.stage.completed",
+        "sink.delivered",
+        "sink.dead_lettered",
+        "site.circuit_opened",
+        "site.circuit_closed"
       ]
     }
   }

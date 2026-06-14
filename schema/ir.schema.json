@@ -10,6 +10,7 @@
     "meta": {
       "type": "object",
       "required": ["name", "version"],
+      "additionalProperties": false,
       "properties": {
         "name": { "type": "string" },
         "version": { "type": "integer", "minimum": 1 },
@@ -60,15 +61,18 @@
         },
         "loop": {
           "type": "object",
-          "required": ["until", "max_iterations"],
+          "required": ["body_target", "exit_target", "until", "max_iterations"],
           "additionalProperties": false,
           "properties": {
+            "body_target": { "$ref": "#/$defs/nodeTarget", "description": "loop 본문 진입 노드 id" },
+            "exit_target": { "$ref": "#/$defs/nodeTarget", "description": "until=true 또는 max_iterations 도달 시 탈출 노드 id" },
             "until": { "type": "string", "description": "IREL 불린식. 컴파일 타임 타입체크." },
             "max_iterations": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "무한루프 가드 필수" }
           }
         },
         "fallback_chain": {
           "type": "array",
+          "minItems": 1,
           "items": { "$ref": "#/$defs/fallbackTier" },
           "description": "T0→T1→T2→T3 등. 순서대로 시도, advance_when 충족 시 다음 티어."
         },
@@ -102,23 +106,32 @@
     "action": {
       "type": "object",
       "required": ["action"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "action": {
           "type": "string",
           "enum": ["act", "observe", "extract", "navigate", "download", "upload", "api_call", "file", "human_task", "shell"]
         },
-        "instruction": { "type": "string" },
-        "schema_ref": { "type": "string", "description": "extract 출력 스키마" },
-        "vars": { "type": "array", "items": { "type": "string" }, "description": "Assets/credential 참조" },
-        "url_ref": { "type": "string" },
-        "cmd_ref": { "type": "string", "description": "shell 전용 — signed command registry 키. 미등록 시 거부." },
-        "sensitive": { "type": "boolean", "default": false }
+        "instruction": { "type": "string", "minLength": 1 },
+        "schema_ref": { "type": "string", "minLength": 1, "description": "extract 출력 스키마" },
+        "vars": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Assets/credential 참조" },
+        "url_ref": { "type": "string", "minLength": 1 },
+        "cmd_ref": { "type": "string", "minLength": 1, "description": "shell 전용 — signed command registry 키. 미등록 시 거부." },
+        "sensitive": { "type": "boolean", "default": false },
+        "args": { "type": "object", "additionalProperties": true, "description": "action별 확장 입력은 최상위 오타 방지를 위해 args 아래에만 둔다." }
       },
       "allOf": [
         {
           "if": { "properties": { "action": { "const": "shell" } } },
           "then": { "required": ["cmd_ref"] }
+        },
+        {
+          "if": { "properties": { "action": { "const": "extract" } } },
+          "then": { "required": ["schema_ref"] }
+        },
+        {
+          "if": { "properties": { "action": { "const": "navigate" } } },
+          "then": { "required": ["url_ref"] }
         }
       ]
     },
@@ -129,7 +142,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "timeout_ms": { "type": "integer", "minimum": 1000 },
+        "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 300000 },
         "max_self_heal": { "type": "integer", "minimum": 0, "default": 2 },
         "requires_approval": { "type": "boolean", "default": false },
         "recording": { "type": "string", "enum": ["always", "masked_on_failure", "never"], "default": "masked_on_failure" }
@@ -142,7 +155,12 @@
       "properties": {
         "kind": { "type": "string", "enum": ["read_only", "login", "submit", "create", "update", "delete", "upload"] },
         "idempotent": { "type": "boolean" },
-        "idempotency_key": { "type": "string", "description": "비-read_only면 필수(코드 검증)" }
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "description": "비-read_only면 필수(코드 검증). 빈 키 금지."
+        }
       },
       "allOf": [
         {
@@ -157,20 +175,40 @@
       "additionalProperties": false,
       "properties": {
         "tier": { "type": "string", "enum": ["T0", "T1", "T2", "T3"] },
-        "entry_node": { "type": "string", "description": "이 티어의 진입 노드 id" },
+        "entry_node": { "$ref": "#/$defs/nodeTarget", "description": "이 티어의 진입 노드 id" },
         "advance_when": { "type": "string", "description": "IREL 불린식. true면 다음 티어로 전환." }
       }
     },
     "target": {
-      "type": "string",
-      "description": "노드 id 또는 예약 핸들러(@challenge / @human_task / @end_no_data).",
-      "pattern": "^(@challenge|@human_task|@end_no_data|[a-zA-Z_][a-zA-Z0-9_]*)$"
+      "oneOf": [
+        { "$ref": "#/$defs/nodeTarget" },
+        { "$ref": "#/$defs/endNoDataTarget" },
+        { "$ref": "#/$defs/reservedHandlerCall" }
+      ],
+      "description": "노드 id, @end_no_data 터미널, 또는 복귀형 예약 핸들러 호출 객체."
     },
-    "reservedHandler": {
-      "$comment": "예약 핸들러는 노드처럼 IR에 정의되지 않고 인터프리터가 제공. 아래는 호출 계약(런타임 타입, 스키마 검증 대상 아님).",
+    "nodeTarget": {
+      "type": "string",
+      "description": "nodes에 정의되어야 하는 노드 id.",
+      "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
+    },
+    "endNoDataTarget": {
+      "type": "string",
+      "description": "@end_no_data는 return_node 없는 터미널 target이다.",
+      "const": "@end_no_data"
+    },
+    "reservedHandlerCall": {
+      "$comment": "복귀형 예약 핸들러 호출 객체. @end_no_data는 터미널이므로 이 객체에 포함하지 않는다.",
       "type": "object",
+      "required": ["handler", "input", "return_node"],
+      "additionalProperties": false,
       "properties": {
-        "handler": { "type": "string", "enum": ["@challenge", "@human_task", "@end_no_data"] }
+        "handler": { "type": "string", "enum": ["@challenge", "@human_task"] },
+        "input": {
+          "type": "object",
+          "description": "핸들러별 명시 입력. 상세 의미는 reserved-handlers.md가 권위이며, 호출 객체 자체는 closed shape이다."
+        },
+        "return_node": { "$ref": "#/$defs/nodeTarget", "description": "핸들러 resolved 후 재개할 노드 id" }
       }
     }
   }
