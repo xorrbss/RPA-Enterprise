@@ -1,0 +1,19 @@
+{
+  "name": "d3-stagehand-poc",
+  "version": "0.0.0",
+  "private": true,
+  "description": "D3 PoC — architecture.md §9.2 Stagehand v3 deterministic CDP page API coverage (10 items). Isolated from app/ verified build.",
+  "type": "module",
+  "scripts": {
+    "poc": "tsx run-poc.ts"
+  },
+  "dependencies": {
+    "@browserbasehq/stagehand": "3.5.0",
+    "puppeteer-core": "^24.43.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

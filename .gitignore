@@ -15,3 +15,10 @@ codegen/node_modules/
 
 # app(D2+ 런타임) 의존 설치물. package.json/package-lock로 재현.
 app/node_modules/
+
+# D3 PoC/executor 의존 설치물. package.json/package-lock로 재현.
+app/poc/**/node_modules/
+
+# PoC 런타임 로그(일회성).
+app/**/poc.log
+app/exec.log
