@@ -3,11 +3,11 @@
 This report records the repository evidence for a Product Open Candidate state.
 It is a contract-first candidate report, not an external release approval or
 deployment authorization. The tagged Product Open Candidate baseline has green
-repo-controlled evidence on `main`; the last merged staging-readiness baseline
-has PR #6 and post-merge `main` remote CI evidence, but later D4.4 deltas still
-need their own green remote Contract Gates evidence before they can be cited as
-current. This delta names and evidences the durable security audit writer
-boundary locally, including PostgreSQL append evidence; any remaining active blocker is listed in
+repo-controlled evidence on `main`; the current merged D4.4
+staging-readiness evidence is PR #8 plus post-merge `main` `Contract Gates`
+run `27499599708` on merge `276bae845c74c5d40f218dec661fdcdc255afac6`.
+This current merged delta names and evidences the durable security audit writer
+boundary, including PostgreSQL append evidence; any remaining active blocker is listed in
 `release-open-checklist.md` and the packets below. External
 Product Open still requires the resolved staging/release owners to approve and
 operate the deployment path outside this repository.
@@ -198,15 +198,17 @@ Remote CI evidence:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489653721`
 - `main` after PR #3:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489679454`
-- PR #6 merged staging-readiness baseline evidence packet:
-  `https://github.com/xorrbss/RPA-Enterprise/pull/6`
-- `main` after PR #6:
-  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27497854075`
-  (`Contract Gates` success on merge `357795d2eff3a3f7f1d0c6a559f94e53f7f9f271`).
-- Post-merge `main` required merged-baseline job URLs:
-  `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27497854075/job/81275168021`
-  `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27497854075/job/81275168108`
-  `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27497854075/job/81275168208`
+- PR #8 current D4.4 staging-readiness evidence packet:
+  `https://github.com/xorrbss/RPA-Enterprise/pull/8`
+- PR #8 head `Contract Gates` run:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499567251`
+- `main` after PR #8:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708`
+  (`Contract Gates` success on merge `276bae845c74c5d40f218dec661fdcdc255afac6`).
+- Post-merge `main` required current-D4.4 job URLs:
+  `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945156`
+  `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945033`
+  `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945101`
 
 Browser route smoke evidence:
 
@@ -242,13 +244,12 @@ Environment note:
 ## Remaining Gap to Product Open
 
 - Repo-controlled Product Open Candidate gap: none remain for the tagged
-  repo-controlled Product Open Candidate baseline. Last merged
-  staging-readiness baseline remote evidence is represented by PR #6 and
-  post-merge `main` `Contract Gates` run `27497854075`; this closes only the
-  merged-baseline remote evidence pointer and does not close later branch/delta
-  evidence requirements. This branch delta still needs its own green remote
-  Contract Gates evidence before being cited as current.
-- Current D4.4 branch-delta gap: executable scenario runtime readiness now has
+  repo-controlled Product Open Candidate baseline. Current merged D4.4
+  staging-readiness remote evidence is represented by PR #8 and post-merge
+  `main` `Contract Gates` run `27499599708`; this closes only the
+  repo-controlled D4.4 remote evidence pointer and does not close external
+  staging/open approval or active external blockers.
+- Current D4.4 repo-controlled evidence: executable scenario runtime readiness now has
   per-expression `compiled_ast` export, app promote `If-Match`/idempotency
   coverage, `SecretRef`/`SecretStore`-backed signed command registry wiring
   for shell `cmd_ref` validation, repo-owned `events_outbox.retention_until`
