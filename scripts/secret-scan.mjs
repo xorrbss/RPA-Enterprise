@@ -20,10 +20,18 @@ const patterns = [
   ["openai key", /\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b/g],
 ];
 const workflowHazards = [
-  ["GitHub secret context reference in contract workflow", /\$\{\{\s*secrets\./g],
-  ["staging environment binding in contract workflow", /^\s*environment\s*:\s*staging\b/gim],
-  ["workflow env dump command", /^\s*(?:-\s*)?(?:printenv(?:\s|$)|env(?!:)(?:\s|$)|set\s+-x\b|Get-ChildItem\s+Env:)/gim],
-  ["workflow one-line env dump command", /^\s*(?:-\s*)?run\s*:\s*["']?(?:printenv\b|env\b|set\s+-x\b|Get-ChildItem\s+Env:)/gim],
+  ["GitHub secret context reference in contract workflow", /\$\{\{[^}]*\bsecrets\b[^}]*\}\}/g],
+  ["staging environment binding in contract workflow", /^\s*environment\s*:\s*(?:"staging"|'staging'|staging)(?=\s*(?:#|$))/gim],
+  ["staging environment inline object in contract workflow", /^\s*environment\s*:\s*\{\s*name\s*:\s*(?:"staging"|'staging'|staging)(?=\s*(?:,|\}|#|$))/gim],
+  ["staging environment object name in contract workflow", /^\s*environment\s*:\s*\n(?:\s+[A-Za-z0-9_-]+\s*:\s*.*\n)*\s+name\s*:\s*(?:"staging"|'staging'|staging)(?=\s*(?:#|$))/gim],
+  [
+    "workflow env dump command",
+    /^\s*(?:-\s*)?(?:printenv(?:\s|$)|env(?!:)(?:\s|$)|set\s+(?:-[A-Za-z]*x[A-Za-z]*\b|-o\s+xtrace\b)|bash\s+-[A-Za-z]*x[A-Za-z]*\b|(?:pwsh|powershell)(?:\.exe)?\s+-(?:c|command)\s+(?:Get-ChildItem|gci|dir)\s+Env:|(?:Get-ChildItem|gci|dir)\s+Env:)/gim,
+  ],
+  [
+    "workflow one-line env dump command",
+    /^\s*(?:-\s*)?run\s*:\s*["']?(?:printenv\b|env\b|set\s+(?:-[A-Za-z]*x[A-Za-z]*\b|-o\s+xtrace\b)|bash\s+-[A-Za-z]*x[A-Za-z]*\b|(?:pwsh|powershell)(?:\.exe)?\s+-(?:c|command)\s+(?:Get-ChildItem|gci|dir)\s+Env:|(?:Get-ChildItem|gci|dir)\s+Env:)/gim,
+  ],
 ];
 
 if (unknownArgs.length > 0) {
@@ -87,12 +95,24 @@ function scanPatterns(text, relPath, scanPatterns, hits) {
 function runSelfTest() {
   const rejectCases = [
     ["GitHub secret context", "name: bad\njobs:\n  test:\n    steps:\n      - run: echo ${{ secrets.STAGING_TOKEN }}\n"],
+    ["GitHub bracket secret context", "name: bad\njobs:\n  test:\n    steps:\n      - run: echo ${{ secrets['STAGING_TOKEN'] }}\n"],
+    ["GitHub toJSON secrets context", "name: bad\njobs:\n  test:\n    steps:\n      - run: echo ${{ toJSON(secrets) }}\n"],
     ["staging environment", "name: bad\njobs:\n  deploy:\n    environment: staging\n    steps: []\n"],
+    ["quoted staging environment", "name: bad\njobs:\n  deploy:\n    environment: \"staging\"\n    steps: []\n"],
+    ["inline object staging environment", "name: bad\njobs:\n  deploy:\n    environment: { name: staging }\n    steps: []\n"],
+    ["object staging environment", "name: bad\njobs:\n  deploy:\n    environment:\n      name: staging\n    steps: []\n"],
     ["one-line env", "name: bad\njobs:\n  test:\n    steps:\n      - run: env\n"],
     ["one-line printenv", "name: bad\njobs:\n  test:\n    steps:\n      - run: printenv\n"],
     ["one-line set -x", "name: bad\njobs:\n  test:\n    steps:\n      - run: \"set -x\"\n"],
+    ["one-line set xtrace", "name: bad\njobs:\n  test:\n    steps:\n      - run: set -o xtrace\n"],
+    ["one-line set combined xtrace", "name: bad\njobs:\n  test:\n    steps:\n      - run: set -euxo pipefail\n"],
+    ["one-line bash xtrace", "name: bad\njobs:\n  test:\n    steps:\n      - run: bash -x scripts/deploy.sh\n"],
+    ["one-line bash combined xtrace", "name: bad\njobs:\n  test:\n    steps:\n      - run: bash -eux scripts/check.sh\n"],
     ["one-line powershell env", "name: bad\njobs:\n  test:\n    steps:\n      - run: Get-ChildItem Env:\n"],
+    ["one-line pwsh env", "name: bad\njobs:\n  test:\n    steps:\n      - run: pwsh -c gci Env:\n"],
+    ["one-line powershell command env", "name: bad\njobs:\n  test:\n    steps:\n      - run: pwsh -Command Get-ChildItem Env:\n"],
     ["block env", "name: bad\njobs:\n  test:\n    steps:\n      - run: |\n          env | sort\n"],
+    ["block dir env", "name: bad\njobs:\n  test:\n    steps:\n      - run: |\n          dir Env:\n"],
   ];
   const allowCases = [
     ["workflow env map", "name: ok\nenv:\n  NODE_VERSION: \"24\"\njobs:\n  test:\n    steps:\n      - run: node scripts/secret-scan.mjs\n"],

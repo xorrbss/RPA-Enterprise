@@ -425,7 +425,7 @@ export class DefaultTenantSessionBinder implements TenantSessionBinder {
 }
 
 const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
-  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read"],
+  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read", "scenario.read"],
   operator: [
     "run.read",
     "run.create",
@@ -437,6 +437,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.start",
     "dlq.replay",
     "sink_dlq.replay",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   reviewer: [
     "run.read",
@@ -454,6 +457,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.resolve.exception",
     "human_task.resolve.captcha",
     "human_task.resolve.mfa",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   approver: [
     "run.read",
@@ -474,6 +480,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.resolve.approval",
     "node_policy.approve",
     "site.approve",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   admin: [
     "run.read",
@@ -499,9 +508,20 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "gateway_policy.edit",
     "network_policy.edit",
     "rbac.grant",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
     "scenario.promote",
   ],
 };
+
+type AuthorizationDenyCode = Extract<AuthorizationDecision, { kind: "deny" }>["code"];
+
+function roleActionDenyCode(action: RbacAction): AuthorizationDenyCode {
+  if (action === "connector.enable") return "CONNECTOR_PERMISSION_DENIED";
+  if (action === "artifact.read" || action === "secret.resolve") return "SECRET_ACCESS_DENIED";
+  return "AUTHZ_FORBIDDEN";
+}
 
 export class RoleMatrixRbacMiddleware implements RbacMiddleware {
   async authorize(principal: AuthenticatedPrincipal, check: AuthorizationCheck): Promise<AuthorizationDecision> {
@@ -517,7 +537,7 @@ export class RoleMatrixRbacMiddleware implements RbacMiddleware {
       }
     }
 
-    return { kind: "deny", action: check.action, code: "AUTHZ_FORBIDDEN", reason: "role_action_not_allowed" };
+    return { kind: "deny", action: check.action, code: roleActionDenyCode(check.action), reason: "role_action_not_allowed" };
   }
 }
 

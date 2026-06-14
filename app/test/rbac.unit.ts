@@ -2,7 +2,7 @@
  * D4.2 단위 테스트 — RoleMatrixRbacMiddleware가 auth-rbac §2 매트릭스를 따르는지 검증.
  *
  * 순수(외부 의존 없음): 역할×액션 허용/거부, 합집합 평가, tenant 불일치 차단을 확인한다.
- * 거부는 일반 역할/액션 부족이므로 전부 AUTHZ_FORBIDDEN(§2 거부 통일 코드).
+ * 거부는 일반 역할/액션 부족은 AUTHZ_FORBIDDEN, 자원특정 액션은 SSoT 보안 코드를 확인한다.
  */
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type {
@@ -37,11 +37,11 @@ async function expectAllow(roles: Role[], action: RbacAction): Promise<void> {
   check(`${roles.join("+") || "∅"} allow ${action}`, d.kind === "allow", JSON.stringify(d));
 }
 
-async function expectDeny(roles: Role[], action: RbacAction): Promise<void> {
+async function expectDeny(roles: Role[], action: RbacAction, code = "AUTHZ_FORBIDDEN"): Promise<void> {
   const d = await rbac.authorize(principal(roles), { action, tenantId: TENANT });
   check(
     `${roles.join("+") || "∅"} deny ${action}`,
-    d.kind === "deny" && d.code === "AUTHZ_FORBIDDEN",
+    d.kind === "deny" && d.code === code,
     JSON.stringify(d),
   );
 }
@@ -50,8 +50,11 @@ async function main(): Promise<void> {
   // viewer: 조회 허용, 변경 거부
   await expectAllow(["viewer"], "run.read");
   await expectAllow(["viewer"], "artifact.read");
+  await expectAllow(["viewer"], "scenario.read");
   await expectDeny(["viewer"], "run.create");
   await expectDeny(["viewer"], "run.abort");
+  await expectDeny(["viewer"], "scenario.create");
+  await expectDeny(["viewer"], "scenario.update");
   await expectDeny(["viewer"], "scenario.promote");
 
   // operator: run create/abort·DLQ replay 허용, resolve·promote 거부
@@ -60,6 +63,8 @@ async function main(): Promise<void> {
   await expectAllow(["operator"], "run.abort");
   await expectAllow(["operator"], "human_task.assign");
   await expectAllow(["operator"], "dlq.replay");
+  await expectAllow(["operator"], "scenario.create");
+  await expectAllow(["operator"], "scenario.update");
   await expectDeny(["operator"], "human_task.resolve.validation");
   await expectDeny(["operator"], "human_task.escalate");
   await expectDeny(["operator"], "scenario.promote");
@@ -75,7 +80,8 @@ async function main(): Promise<void> {
   await expectAllow(["approver"], "human_task.resolve.approval");
   await expectAllow(["approver"], "node_policy.approve");
   await expectAllow(["approver"], "site.approve");
-  await expectDeny(["approver"], "secret.resolve");
+  await expectDeny(["approver"], "secret.resolve", "SECRET_ACCESS_DENIED");
+  await expectDeny(["approver"], "connector.enable", "CONNECTOR_PERMISSION_DENIED");
   await expectDeny(["approver"], "scenario.promote");
 
   // admin: 전권

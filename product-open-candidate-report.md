@@ -3,10 +3,13 @@
 This report records the repository evidence for a Product Open Candidate state.
 It is a contract-first candidate report, not an external release approval or
 deployment authorization. The tagged Product Open Candidate baseline has green
-repo-controlled evidence on `main`; the current staging-readiness delta has PR
-remote CI evidence, but still retains the active `events_outbox.retention_until`
-blocker below. External Product Open still requires the resolved staging/release
-owners to approve and operate the deployment path outside this repository.
+repo-controlled evidence on `main`; the last merged staging-readiness baseline
+has PR #6 and post-merge `main` remote CI evidence, but still retains active
+D4.4 blockers below: `events_outbox.retention_until` and durable security audit
+writer coverage. Any later branch or dirty-worktree delta needs its own green
+remote Contract Gates evidence before it can be cited as current. External
+Product Open still requires the resolved staging/release owners to approve and
+operate the deployment path outside this repository.
 
 ## Candidate Status
 
@@ -51,13 +54,15 @@ owners to approve and operate the deployment path outside this repository.
   blockers split by scope: external/staging blocker categories for concrete
   deploy target, secret provisioning, and non-app producer retention policy;
   an expanded SecretRef evidence packet with five specific unchecked rows; and
-  one repo-controlled D4.4 branch-delta blocker for the
-  `events_outbox.retention_until` source used by the app/runtime outbox helper.
+  two repo-controlled D4.4 branch-delta blockers: the
+  `events_outbox.retention_until` source used by the app/runtime outbox helper
+  and durable security audit writer coverage for security boundary decisions.
   The current audit enforces both directions: every actionable blocked-decision
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 28 markers, 14 actionable blockers, and 13 resolved release decisions
+  output: 29 markers, 15 actionable blockers, 13 active checklist rows, 2
+  repo-controlled D4.4 blocker categories, and 13 resolved release decisions
   checked. New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -144,16 +149,21 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 28 markers, 14 actionable blockers, 13 known release
+  (current output: 29 markers, 15 actionable blockers, 13 known release
   decisions tracked, 13 release decisions checked)
+- `npm --prefix codegen run yaml:parse`
+  (parses every workflow YAML plus OpenAPI/AsyncAPI, preserves the GitHub
+  Actions `on` key, blocks deploy/environment-bound contract jobs, and requires
+  checkout steps to set `persist-credentials: false`)
 - `npm --prefix codegen run secret:scan-fixtures`
   (covers reject/allow fixtures for workflow secret contexts,
-  `environment: staging`, one-line and block env dump commands, YAML `env:`
-  maps, and CI-only PostgreSQL smoke credentials)
+  scalar/quoted/object-form `environment: staging`, one-line and block env
+  dump/xtrace commands, YAML `env:` maps, and CI-only PostgreSQL smoke
+  credentials)
 - `npm --prefix codegen run secret:scan`
   (covers high-risk secret markers plus staging workflow hazards such as
-  GitHub secret context references, `environment: staging`, and env dump
-  commands)
+  GitHub secret context references, scalar/quoted/object-form
+  `environment: staging`, and env dump/xtrace commands)
 - `npm --prefix codegen run db:static-smoke`
   (covers artifact redaction RLS, immutable audit hash-chain, idempotency/CAS
   anchors, smoke-only explicit `events_outbox.retention_until` fixtures, and
@@ -187,13 +197,15 @@ Remote CI evidence:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489653721`
 - `main` after PR #3:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489679454`
-- PR #5 current staging-readiness delta gates:
-  `https://github.com/xorrbss/RPA-Enterprise/pull/5`
-  (latest successful `Contract Gates` check rollup on branch
-  `codex/d44-app-runtime-staging-evidence-20260614`; release packet must attach
-  the latest successful PR or main run URL plus `secret-scan`, `PostgreSQL 15
-  migration smoke`, and `App runtime typecheck and tests` job URLs from that
-  latest head).
+- PR #6 merged staging-readiness baseline evidence packet:
+  `https://github.com/xorrbss/RPA-Enterprise/pull/6`
+- `main` after PR #6:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27497854075`
+  (`Contract Gates` success on merge `357795d2eff3a3f7f1d0c6a559f94e53f7f9f271`).
+- Post-merge `main` required merged-baseline job URLs:
+  `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27497854075/job/81275168021`
+  `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27497854075/job/81275168108`
+  `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27497854075/job/81275168208`
 
 Browser route smoke evidence:
 
@@ -228,17 +240,19 @@ Environment note:
 
 ## Remaining Gap to Product Open
 
-- Repo-controlled Product Open Candidate gap: remote `app-runtime` CI evidence
-  for the current staging-readiness delta is now represented by PR #5's latest
-  successful `Contract Gates` check rollup. None remain for the tagged
-  repo-controlled Product Open Candidate baseline; this does not close the
-  current D4.4 staging-readiness delta below.
+- Repo-controlled Product Open Candidate gap: none remain for the tagged
+  repo-controlled Product Open Candidate baseline. Last merged
+  staging-readiness baseline remote evidence is represented by PR #6 and
+  post-merge `main` `Contract Gates` run `27497854075`; this closes only the
+  merged-baseline remote evidence pointer and does not close later branch/delta
+  evidence requirements or the current D4.4 staging-readiness blockers below.
 - Current D4.4 branch-delta gap: executable scenario runtime readiness now has
   per-expression `compiled_ast` export, app promote `If-Match`/idempotency
   coverage, and `SecretRef`/`SecretStore`-backed signed command registry wiring
-  for shell `cmd_ref` validation. The remaining repo-controlled app-runtime gap
-  is the `events_outbox.retention_until` source for repo-owned outbox producers.
-  This is tracked in `release-open-checklist.md` and must not be inferred.
+  for shell `cmd_ref` validation. The remaining repo-controlled app-runtime gaps
+  are the `events_outbox.retention_until` source for repo-owned outbox producers
+  and durable security audit writer coverage for security boundary decisions.
+  These are tracked in `release-open-checklist.md` and must not be inferred.
 - Current app-runtime scope gap: the real Fastify app gate covers the wired app
   routes (`GET/POST /v1/runs` subset plus scenario create/read/validate/promote).
   Broader api-surface routes such as run abort, human-task commands, workitem/DLQ
@@ -255,6 +269,16 @@ Environment note:
   Required decision: External staging secret provisioning must name the SecretStore backend (Vault mount/path or cloud KMS/secret-manager alias), SecretRef namespace convention, runtime identities allowed to resolve each namespace, initial secret inventory, rotation owner/cadence, and evidence location. No staging deploy may proceed until CI/deploy logs prove no plaintext secret materialization, no env dump, and no weakening of RBAC/redaction gates.
 - TODO: [BLOCKED] External staging producer retention duration/source policy is not defined for non-app writers that must set `retention_until`.
   Required decision: Runtime/platform owners must define per-producer retention duration/source for `raw_items.raw_payload`, `normalized_records.record`, `artifacts.object_ref`, `audit_log.payload`, and any non-D4.3 writer of `control_plane_idempotency_keys.response_body`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source, while repo-owned `events_outbox` retention is tracked separately above. Staging evidence must prove each payload-bearing writer sets `retention_until` or fails closed.
+
+### Durable Security Audit Writer Decision Packet
+
+Contract/runtime owners must provide this packet before the current app-runtime
+delta can claim executable staging readiness. Do not treat fixture-only audit
+hash-chain coverage as proof that real runtime/control-plane security boundary
+decisions append durable audit rows.
+
+- TODO: [BLOCKED] Repo-owned durable security audit writer boundary is not defined for executable staging readiness.
+  Required decision: Contract/runtime owners must name the repo-owned runtime/control-plane audit writer boundary and evidence path for security boundary decisions, including artifact read, SecretStore resolve, connector enable/install, domain/prompt policy blocks, and any BYPASSRLS use. Each covered path must append immutable `audit_log` rows with safe-serialized payload and retention/deletion metadata, or be explicitly scoped out of the staging packet before executable staging readiness is claimed.
 
 ### Events Outbox Retention Decision Packet
 
@@ -302,5 +326,8 @@ dumps, or deployment credentials in this repository.
    deployment.
 4. Define the repo-owned `events_outbox.retention_until` source and then update
    `emitOutboxEvent` plus app/runtime tests to set or fail closed on retention.
-5. Keep any new unresolved behavior out of implementation paths unless it uses
+5. Define the durable security audit writer boundary and evidence path for
+   runtime/control-plane security boundary decisions before claiming executable
+   staging readiness.
+6. Keep any new unresolved behavior out of implementation paths unless it uses
    the repository blocked-decision marker with nearby required-decision text.
