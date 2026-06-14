@@ -25,7 +25,7 @@ import type {
 
 /** auth-rbac §2: 역할별 허용 액션 집합(합집합 평가). 표에 없는 액션은 해당 역할에 대해 거부. */
 const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
-  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read"],
+  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read", "scenario.read"],
   operator: [
     "run.read",
     "run.create",
@@ -37,6 +37,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.start",
     "dlq.replay",
     "sink_dlq.replay",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   reviewer: [
     "run.read",
@@ -54,6 +57,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.resolve.exception",
     "human_task.resolve.captcha",
     "human_task.resolve.mfa",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   approver: [
     "run.read",
@@ -74,6 +80,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "human_task.resolve.approval",
     "node_policy.approve",
     "site.approve",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
   ],
   admin: [
     "run.read",
@@ -99,6 +108,9 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "gateway_policy.edit",
     "network_policy.edit",
     "rbac.grant",
+    "scenario.read",
+    "scenario.create",
+    "scenario.update",
     "scenario.promote",
   ],
 };

@@ -36,6 +36,7 @@ import { emitOutboxEvent } from "../runtime/outbox";
 import { ApiResponseError, registerErrorHandler } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import type { RunEnqueuer } from "./run-queue";
+import { registerScenarioRoutes } from "./scenarios";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -45,7 +46,6 @@ declare module "fastify" {
   // 라우트별 RBAC 액션 선언(auth-rbac §2). RBAC preHandler가 이 값으로 authorize를 호출한다.
   interface FastifyContextConfig {
     rbacAction?: RbacAction;
-    idempotencyBeforeRbac?: boolean;
   }
 }
 
@@ -169,10 +169,12 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     reply.code(result.status).send(result.body);
   });
 
+  registerScenarioRoutes(app, deps);
+
   return app;
 }
 
-function requirePrincipal(request: FastifyRequest): AuthenticatedPrincipal {
+export function requirePrincipal(request: FastifyRequest): AuthenticatedPrincipal {
   if (request.principal === null) {
     // preHandler 인증이 선행 보장. 방어적(가정 금지) — 도달 시 인증 경계 결함. 사유는 응답에 노출하지 않는다.
     request.log.error({ correlation_id: request.correlationId }, "principal missing after auth preHandler");

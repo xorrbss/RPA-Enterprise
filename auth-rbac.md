@@ -50,6 +50,8 @@ export type Role =
 | `nodePolicy.requires_approval` 승인 | ir.schema `requires_approval` | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | DLQ `manual_replay` (W10) | state-machine W10 `operatorAuthorized` | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | sink DLQ replay | error-catalog `SINK_DELIVERY_FAILED` operatorAction | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| scenario 조회/검증(read·validate dry-run) | api-surface §2 `GET /v1/scenarios` · `POST .../validate` | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| scenario 작성/수정(create·save) | api-surface §2 `POST /v1/scenarios`·`PUT` (D4 결정: operator+ 작성) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario promote(prod 승격) | error-catalog `SCENARIO_VERSION_CONFLICT`(If-Match 412) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | artifact 조회 | security-contracts §8(redaction→RBAC 게이트) | ✓ | ✓ | ✓ | ✓ | ✓ | `SECRET_ACCESS_DENIED` |
 | site risk=red 승인 권한 | approver 게이트(권한 부족=일반 RBAC 거부) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
