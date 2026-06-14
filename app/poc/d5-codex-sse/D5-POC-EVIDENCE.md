@@ -26,8 +26,7 @@ npm --prefix app/poc/d5-codex-sse install
 npm --prefix app/poc/d5-codex-sse run poc    # stdout 표를 아래에 옮긴다
 ```
 
-이 환경은 라이브 Codex 엔드포인트/키가 없어 **하니스만 제공**한다. 실행 권한자(자격증명 보유)가
-위 명령으로 실행하고 결과 표를 아래 `결과` 절에 채운다.
+2026-06-15 자격증명 보유자가 위 명령으로 실행 완료 → 결과는 아래 `결과` 절 참조. 재실측 시 동일 명령.
 
 ## 검사 항목(하니스가 실행하는 5개 테스트)
 
@@ -49,32 +48,46 @@ npm --prefix app/poc/d5-codex-sse run poc    # stdout 표를 아래에 옮긴다
 Release evidence 기준: #1 기본 SSE, #2 prompt-schema 안전경로, #4 abort 규격은 반드시 `PASS` 여야 한다.
 이 셋 중 하나라도 `GAP`/`ERROR` 이면 하니스는 nonzero 로 종료하고 D5 release evidence 로 사용할 수 없다.
 
-## 결과 (라이브 실행 후 채움)
+## 결과 (라이브 실행 2026-06-15)
 
-> 상태: **PENDING — 자격증명 보유자의 라이브 실행 대기.** 이 환경에서는 미실행.
+> 상태: **CONFIRMED.** 실행 환경 = OpenAI `api.openai.com/v1`, model `gpt-4o-mini`,
+> `CODEX_MAX_CONTEXT_TOKENS=128000`. OpenAI 호환 계약(Bearer + `/chat/completions` SSE +
+> `response_format:{json_schema}`)을 실측했다. 실제 Codex 엔드포인트가 다르면 그 엔드포인트로 재실측한다.
 
 ```
-| # | 필요 기능 | 상태 | 경로(via) | 증거 |
-|---|---|---|---|---|
-| 1 | 기본 SSE 스트리밍(안전경로 정규화) | (실행 후) | ... | ... |
-| 2 | structured-output(안전경로 prompt-schema) | (실행 후) | ... | ... |
-| 3 | native json_schema 스트리밍(빠른경로 → jsonMode) | (실행 후) | ... | ... |
-| 4 | abort 시그널 규격 | (실행 후) | ... | ... |
-| 5 | maxContextTokens | (실행 후) | ... | ... |
+| # | 필요 기능 | 상태 | 증거 |
+|---|---|---|---|
+| 1 | 기본 SSE 스트리밍(안전경로 정규화) | PASS | events=[open,text_delta×3,usage,done] textLen=5 |
+| 2 | structured-output(안전경로 prompt-schema) | PASS | parsed={"city":"Paris","country":"France"} |
+| 3 | native json_schema 스트리밍(빠른경로 → jsonMode) | PASS | accepted + valid streamed JSON → jsonMode=true 활성 가능 |
+| 4 | abort 시그널 규격 | PASS | events=[open,text_delta,aborted] aborted=true elapsedMs=639 postAbortDeltas=0 |
+| 5 | maxContextTokens | GAP | /models 에 context 필드 없음 → 보수적 config(128000) 유지 |
 
-결과: _/5 PASS
-release evidence: #1/#2/#4 모두 PASS 필요. #3/#5 GAP 은 fallback 근거와 함께 허용.
+결과: 4/5 PASS
+release evidence: #1/#2/#4 모두 PASS ✅. #5 GAP 은 보수적 maxContextTokens fallback 으로 허용.
 ```
 
-## capabilities 결론 → 어댑터 config 반영
+### 확정 결론 (D5 하드 블로커 해소)
 
-라이브 실행 후 확정값을 `CodexSseConfig.capabilities` / `maxContextTokens` 에 반영한다.
+- **① structured-output 스트리밍 = 지원(jsonMode native 가용).** #3 PASS — provider 가
+  `response_format:{type:json_schema}` + `stream:true` 를 수용하고 유효 JSON 을 스트리밍.
+- **② abort 규격 = 확정.** #4 PASS — `signal.abort()` 후 close + `aborted` 1회, hang 없음,
+  abort 후 토큰 누수 0. 현 어댑터 구현이 규격 충족(변경 불요).
+- **③ maxContextTokens = 메타데이터 부재.** #5 GAP — `/models` 미노출. 보수적 config 유지가 정답.
+- **안전경로 자체가 production-ready.** #1·#2 PASS — jsonMode=false prompt-schema+strict 경로가
+  라이브에서 유효 JSON 산출. 빠른경로 미적용이어도 D5 동작은 완결.
 
-- **③ jsonMode=true 로 확정되면**: `CodexSseAdapter` 생성 시 `capabilities: { jsonMode: true }` override +
-  전송이 `response_format` 를 native 로 전달하도록 빠른경로 활성. (현재는 보수적 기본 false.)
-- **③ jsonMode=false(GAP) 이면**: 변경 없음 — Gateway prompt-schema+strict 안전경로가 정답(테스트 2 가 입증).
-- **② abort PASS**: 현 어댑터 구현이 규격 충족 — 변경 없음.
-- **⑤ maxContextTokens PASS**: 확정값을 `cfg.maxContextTokens` 로 설정(현재 보수적 기본).
+## 어댑터 config 반영 / 후속
+
+- **abort**: 변경 없음 — 현 어댑터가 규격 충족(#4 PASS).
+- **maxContextTokens**: 보수적 `cfg.maxContextTokens`(128000) 유지 — provider 메타데이터 부재(#5 GAP).
+- **안전경로(jsonMode=false)**: 현 production 기본 유지 — 라이브 검증 완료(#1·#2 PASS).
+- **빠른경로(jsonMode=true) — 이제 해소됨, 후속 구현 항목**: #3 PASS 로 native json_schema 가 *가용*함이
+  확정됐다. 단, 활성은 플래그 1개가 아니다. (1) `FetchCodexSseTransport` 가 `req.responseFormat` 시
+  `response_format:{type:json_schema, json_schema:{…, strict:true}}` 를 전송하도록,
+  (2) Gateway 가 jsonMode=true 일 때 prompt-schema 주입 대신 provider 강제에 의존하도록,
+  (3) `capabilities:{ jsonMode:true }` override — 셋이 함께 가야 한다. 플래그만 켜면 capabilities 와
+  실제 전송이 불일치(조용한 false)하므로 금지. 후속 PR 로 셋을 묶어 적용 후 회귀 검증한다.
 
 ## 결정 로그
 
