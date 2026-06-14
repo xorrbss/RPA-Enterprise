@@ -170,6 +170,7 @@ assert.equal(registry.getOperation("updateGatewayPolicy").ifMatch?.entity, "gate
 assert.equal(staticRbacAction("createRun"), "run.create");
 assert.equal(staticRbacAction("abortRun"), "run.abort");
 assert.equal(staticRbacAction("validateScenario"), "scenario.read");
+assert.equal(staticRbacAction("promoteScenario"), "scenario.promote");
 assert.equal(staticRbacAction("assignHumanTask"), "human_task.assign");
 assert.equal(staticRbacAction("escalateHumanTask"), "human_task.escalate");
 assert.equal(staticRbacAction("updateGatewayPolicy"), "gateway_policy.edit");
@@ -367,6 +368,21 @@ assert.equal(viewerCreate.status, 403);
 assert.equal((viewerCreate.body as { code: string }).code, "AUTHZ_FORBIDDEN");
 assert.equal("reason" in (viewerCreate.body as Record<string, unknown>), false);
 assert.equal("action" in (viewerCreate.body as Record<string, unknown>), false);
+const viewerValidateScenario = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/scenarios/sv-1/validate",
+  headers: { ...baseHeaders, "x-roles": "viewer" },
+  body: { dry_run: true },
+});
+assert.equal(viewerValidateScenario.status, 200);
+const viewerPromoteScenario = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/scenarios/sv-1/promote",
+  headers: { ...baseHeaders, "x-roles": "viewer", "idempotency-key": "viewer-promote", "if-match": "1" },
+  body: { target: "prod" },
+});
+assert.equal(viewerPromoteScenario.status, 403);
+assert.equal((viewerPromoteScenario.body as { code: string }).code, "AUTHZ_FORBIDDEN");
 const invalidRoleClaim = await scaffold.runner.inject({
   method: "GET",
   url: "/v1/runs/run-existing",

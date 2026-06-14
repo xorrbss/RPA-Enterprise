@@ -220,6 +220,21 @@ const activeBlockerRules = [
       "app/runtime verification evidence",
     ],
   },
+  {
+    label: "D4.4 durable security audit writer boundary",
+    aliases: [
+      "D4.4 durable security audit writer boundary",
+      "durable security audit writer",
+      "security boundary decisions",
+      "artifact read",
+      "SecretStore resolve",
+      "connector enable/install",
+      "domain/prompt policy blocks",
+      "BYPASSRLS use",
+      "immutable audit append",
+      "audit writer evidence",
+    ],
+  },
 ];
 const activeBlockerSectionHeadings = new Set([
   "## External Staging/Open Blockers",
