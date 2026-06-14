@@ -1,12 +1,17 @@
 # Product Open Candidate Report
 
-This report records the current repository evidence for a Product Open Candidate
-state. It is a contract-first candidate report, not an external release approval.
-Product Open itself now depends on capturing remote CI evidence and completing
-manual release review outside this contract-first repository.
+This report records the repository evidence for a Product Open Candidate state.
+It is a contract-first candidate report, not an external release approval or
+deployment authorization. Repo-controlled Product Open Candidate gates are green
+on `main`; external Product Open still requires the resolved staging/release
+owners to approve and operate the deployment path outside this repository.
 
 ## Candidate Status
 
+- Candidate tag target: `product-open-candidate-2026-06-14`.
+- `main` includes Product Open Candidate PR #2 and Node 24 CI PR #3. The D4.2
+  RBAC evidence update adds the control-plane role matrix middleware and route
+  authorization boundary before the candidate tag is created.
 - Repo-controlled automated gates are repeatable locally with DB coverage through
   `npm --prefix codegen run ci:local:temp-db` when PostgreSQL 15 binaries are
   installed, or through `npm --prefix codegen run ci:local` when `PSQL_BIN`/PG
@@ -27,6 +32,12 @@ manual release review outside this contract-first repository.
 - Control-plane and gateway security scaffolds enforce `run.create` RBAC,
   human-task assignee scope, pre-mask credential-exfiltration detection, and
   tenant-scoped LLM idempotency keys.
+- D4.2 control-plane RBAC is wired for `GET /v1/runs/{run_id}` using
+  `auth-rbac.md` §2. Routes without an explicit `rbacAction` fail closed, while
+  unmatched routes and unsupported methods converge to `RESOURCE_NOT_FOUND`
+  instead of leaking authorization state.
+- GitHub Actions contract gates now run under Node 24 with Node 24-compatible
+  official actions (`actions/checkout@v5`, `actions/setup-node@v5`).
 - The 13 release decisions are resolved and tracked by
   `release-open-checklist.md` / `release-decisions.md`.
 - `blocked:audit` reports zero actionable blockers. New unresolved behavior must
@@ -94,6 +105,9 @@ Passed locally:
 
 - `npm --prefix codegen run ci:local:no-db`
 - `npm --prefix codegen run ci:local:temp-db`
+- `npm --prefix app run typecheck`
+- `npm --prefix app run test:unit`
+- `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:int`
 - `npm --prefix codegen test`
 - `npm --prefix codegen run typecheck`
 - `npm --prefix codegen run fixtures`
@@ -111,6 +125,19 @@ Passed locally:
   cluster wrapper around the same non-bypass DB smoke. The full temp-DB local
   gate uses the same wrapper and verified `rpa_smoke` as non-`SUPERUSER` and
   non-`BYPASSRLS`.
+
+Remote CI evidence:
+
+- PR #2 Product Open Candidate gates:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489202401`
+- `main` after PR #2:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489228840`
+- `main` after Product Open README evidence patch:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489263731`
+- PR #3 Node 24 gates:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489653721`
+- `main` after PR #3:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27489679454`
 
 Browser route smoke evidence:
 
@@ -145,29 +172,21 @@ Environment note:
 
 ## Remaining Gap to Product Open
 
-- CI should still capture the GitHub Actions service-DB smoke as remote release
-  evidence.
-- Remote GitHub Actions cannot be run from this exact worktree yet:
-  `.github/workflows/contract-gates.yml` is untracked, absent from
-  `origin/main`, and `feat/d2-runtime` is not a remote branch. The workflow must
-  first be included in a commit and pushed through a branch/PR before
-  `contract-gates` can produce release evidence.
-- Manual release review still needs PR-level evidence attachment: gate outputs,
-  UI route smoke note/screenshot, and DB smoke result or documented
-  local-environment exception.
+- Repo-controlled Product Open Candidate gap: none after the D4.2 RBAC evidence
+  PR is green on `main` and the candidate tag is pushed.
+- External Product Open gap: staging approval, secret provisioning, deployment,
+  rollback ownership, and any production/staging operation remain outside this
+  contract-first repository. Those steps must use the resolved staging decision
+  and must not materialize plaintext secrets in this repo.
 
 ## Next 24h Actions
 
-1. Commit the workflow/checklist/report artifacts, push a branch or open a PR,
-   and confirm GitHub shows the `contract-gates` workflow for that remote ref.
-2. Capture the remote `contract-gates` run URL from the PR/push run, or use
-   `workflow_dispatch` only after the workflow file is present remotely, then
-   attach the `db-migration-smoke` job result.
-3. If local DB evidence is required, install PostgreSQL 15 client/server or set
-   `PSQL_BIN`/PG env to an existing PostgreSQL 15 target and run
-   `npm --prefix codegen run db:smoke`; otherwise run
-   `npm --prefix codegen run db:temp-smoke`.
-4. Attach the local `ci:local:temp-db` evidence, including PostgreSQL 15.18 and
-   non-`SUPERUSER`/non-`BYPASSRLS` `rpa_smoke` role proof.
-5. Attach `product-open-browser-smoke.png` or an equivalent reviewer note for
-   the Product-open gate and representative route coverage.
+1. Merge the D4.2 RBAC evidence PR after local and remote gates are green.
+2. Create and push annotated tag `product-open-candidate-2026-06-14` on the
+   final green `main` commit.
+3. Attach the tag, latest `contract-gates` run URL, DB migration smoke job, and
+   UI smoke screenshot/note to the external release review packet.
+4. Hand external Product Open to the resolved staging owners:
+   `release-approvers` for approval and `platform-oncall` for rollback.
+5. Keep any new unresolved behavior out of implementation paths unless it uses
+   the repository blocked-decision marker with nearby required-decision text.

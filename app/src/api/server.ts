@@ -7,8 +7,9 @@
  *  3) RLS 바인딩: 모든 DB 작업은 app/src/db/pool.ts의 withTenantTx(pool, principal.tenantId, …) 경유
  *     (SET LOCAL app.tenant_id, FORCE RLS) — cross-tenant row는 보이지 않는다(auth-rbac §3/§4).
  *  4) 에러 매핑: codegen toApiError(error-middleware) 재사용(errors.ts).
+ *  5) authorize(RBAC): 라우트가 선언한 rbacAction을 auth-rbac §2 매트릭스로 평가(rbac.ts). 미허용 → AUTHZ_FORBIDDEN.
  *
- * RBAC(authorize)·경계검증(ajv)·멱등/If-Match·컴파일 파이프라인은 후속 증분(D4.2+)에서 동일 경계에 추가한다.
+ * 경계검증(ajv)·멱등/If-Match·컴파일 파이프라인은 후속 증분(D4.3+)에서 동일 경계에 추가한다.
  * 실행기 의존 e2e는 D3 BLOCKED — 본 계층은 executor 없이 검증 가능한 인증/RLS/에러 경계만 다룬다.
  */
 import { randomUUID } from "node:crypto";
@@ -16,7 +17,12 @@ import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 
-import type { AuthenticatedPrincipal, AuthenticationBoundary } from "../../../ts/security-middleware-contract";
+import type {
+  AuthenticatedPrincipal,
+  AuthenticationBoundary,
+  RbacAction,
+  RbacMiddleware,
+} from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { ApiResponseError, registerErrorHandler } from "./errors";
 
@@ -25,6 +31,10 @@ declare module "fastify" {
     correlationId: string;
     principal: AuthenticatedPrincipal | null;
   }
+  // 라우트별 RBAC 액션 선언(auth-rbac §2). RBAC preHandler가 이 값으로 authorize를 호출한다.
+  interface FastifyContextConfig {
+    rbacAction?: RbacAction;
+  }
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -32,6 +42,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export interface ApiServerDeps {
   pool: Pool;
   auth: AuthenticationBoundary;
+  rbac: RbacMiddleware;
 }
 
 /** RLS 스코프로 조회한 run 상세(api-surface §1 GET /v1/runs/{run_id}). */
@@ -57,6 +68,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
 
   // 2) authenticate — 인증 경계 위임(auth.ts). 거부 코드(401/403)를 ApiResponseError로 표면화.
   app.addHook("preHandler", async (request) => {
+    if (request.is404) return; // 미매칭 라우트는 인증 이전에 notFoundHandler로 404 수렴(api-surface §2 각주1).
     const result = await deps.auth.authenticate({ authorization: request.headers.authorization });
     if (result.kind === "denied") {
       // 내부 분류 사유는 로그에만 남긴다(보안 경계: 자원/존재/분류 비노출, auth-rbac §5). 응답엔 code+일반 메시지만.
@@ -69,10 +81,38 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     request.principal = result.principal;
   });
 
+  // 5) authorize(RBAC) — auth 다음(미들웨어 순서 …→rbac→handler). 라우트 선언 rbacAction을 §2 매트릭스로 평가.
+  app.addHook("preHandler", async (request) => {
+    if (request.is404) return; // 미매칭/미지원 메서드는 RBAC 평가 없이 notFoundHandler로 404(403·오탐 로그 방지).
+    const action = request.routeOptions.config.rbacAction;
+    if (action === undefined) {
+      // rbacAction 미선언 = 보안 게이트 누락(설정 오류). 조용히 통과시키지 않고 차단(fail-closed,
+      // auth-rbac "미설정 시 통과 금지"). 모든 제어평면 라우트는 §2 액션을 선언해야 한다.
+      request.log.error(
+        { url: request.url, correlation_id: request.correlationId },
+        "route missing rbacAction — denying (misconfiguration)",
+      );
+      throw new ApiResponseError("AUTHZ_FORBIDDEN");
+    }
+    const principal = requirePrincipal(request);
+    const decision = await deps.rbac.authorize(principal, { action, tenantId: principal.tenantId });
+    if (decision.kind === "deny") {
+      // 내부 사유는 로그에만(보안 경계: 비노출, auth-rbac §5). 응답엔 code(AUTHZ_FORBIDDEN 등)만.
+      request.log.warn(
+        { action: decision.action, code: decision.code, reason: decision.reason, correlation_id: request.correlationId },
+        "rbac denied",
+      );
+      throw new ApiResponseError(decision.code);
+    }
+  });
+
   registerErrorHandler(app);
 
   // GET /v1/runs/{run_id} — RLS 스코프 조회. cross-tenant/부재/형식무효 id → RUN_NOT_FOUND(404).
-  app.get<{ Params: { run_id: string } }>("/v1/runs/:run_id", async (request) => {
+  app.get<{ Params: { run_id: string } }>(
+    "/v1/runs/:run_id",
+    { config: { rbacAction: "run.read" } },
+    async (request) => {
     const principal = requirePrincipal(request);
     const runId = request.params.run_id;
     // 형식 무효 id는 존재할 수 없다 → 404(존재 노출 회피, "조용한 false 금지": 500 크래시 대신 not-found).
