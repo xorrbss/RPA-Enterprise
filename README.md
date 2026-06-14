@@ -411,7 +411,7 @@
 |---|---|
 | 인증/인가 코드 분리 | `ts/error-catalog.ts`에 **`UNAUTHENTICATED`(retryable=false, httpStatus=401, security)** 신설. 인증 미성립=401, 인증됐으나 권한/테넌트 부족=403(`AUTHZ_FORBIDDEN`) |
 | 미들웨어 경계 타입 | `ts/security-middleware-contract.ts` `AuthFailureCode`를 `UNAUTHENTICATED \| AUTHZ_FORBIDDEN`로 확장 — `AuthenticationBoundary`가 401/403을 모두 표현 |
-| codegen 정합 | `codegen/openapi.yaml` ErrorCode enum +1(45→46개), `bearerAuth` 설명에 401/403 분기 명시. `contract-consistency.ts` enum=카탈로그 불변식 유지 |
+| codegen 정합 | `codegen/openapi.yaml` ErrorCode enum에 `UNAUTHENTICATED`(401) 추가, `bearerAuth` 설명에 401/403 분기 명시. `contract-consistency.ts`의 enum=ERROR_CATALOG 불변식 유지(절대 개수는 이후 Product Open 커밋에서 계속 변동하므로 본 행은 고정 수치를 단언하지 않는다) |
 | 산문 SSoT | `api-surface.md §0.1`·`auth-rbac.md §3/§5`에 authn(401)/authz(403) 분기 명시 |
 | 참조 스캐폴드 정합 | `control-plane/fake-request-runner.ts`의 토큰 누락 분기를 `UNAUTHENTICATED`로 정렬, `codegen/control-plane.fixtures.ts`에 401 경로 단언 추가 |
 
