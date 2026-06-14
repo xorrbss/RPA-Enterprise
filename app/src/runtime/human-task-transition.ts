@@ -14,7 +14,7 @@ import type {
   HumanTaskGuard,
   SideEffectCmd,
 } from "../../../ts/state-machine-types";
-import { emitOutboxEvent, type EmittedEvent } from "./outbox";
+import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent, type EmittedEvent } from "./outbox";
 
 export interface HumanTaskTransitionContext {
   readonly tenantId: string;
@@ -91,6 +91,7 @@ export async function applyHumanTaskTransition(
         runId: ctx.runId,
         idempotencyKey: `${anchor}:${cmd.event}`,
         occurredAt: ctx.occurredAt,
+        retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
       }),
     );
   }

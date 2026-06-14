@@ -33,7 +33,7 @@ import type {
   SignedCommandRegistry,
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
-import { emitOutboxEvent } from "../runtime/outbox";
+import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "../runtime/outbox";
 import { ApiResponseError, registerErrorHandler } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import type { RunEnqueuer } from "./run-queue";
@@ -288,6 +288,7 @@ async function createRun(deps: ApiServerDeps, request: FastifyRequest): Promise<
         correlationId: request.correlationId,
         runId,
         idempotencyKey: `${runId}:run.created`,
+        retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
       });
       await deps.enqueuer.enqueueRunClaim(c, {
         tenantId: principal.tenantId,

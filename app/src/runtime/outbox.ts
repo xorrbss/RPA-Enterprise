@@ -21,7 +21,20 @@ export interface EmittedEvent {
   readonly eventType: EventEnvelopeType;
   readonly idempotencyKey: string;
   readonly payloadSchemaRef: string;
+  readonly retentionUntil: Date;
 }
+
+export interface EventsOutboxRetentionPolicy {
+  readonly source: "ops-defaults.md#events_outbox.retention_default";
+  readonly durationSeconds: number;
+}
+
+const SECONDS_PER_DAY = 24 * 60 * 60;
+
+export const EVENTS_OUTBOX_RETENTION_POLICY: EventsOutboxRetentionPolicy = Object.freeze({
+  source: "ops-defaults.md#events_outbox.retention_default",
+  durationSeconds: 90 * SECONDS_PER_DAY,
+});
 
 export interface OutboxEmit {
   readonly tenantId: string;
@@ -31,11 +44,9 @@ export interface OutboxEmit {
   readonly workitemId?: string;
   readonly idempotencyKey: string;
   readonly occurredAt?: Date;
+  readonly retentionPolicy: EventsOutboxRetentionPolicy;
 }
 
-// TODO: [BLOCKED]
-//   Required decision: Contract/runtime owners must define the repo-owned events_outbox retention duration/source for emitOutboxEvent before the app-runtime delta can claim staging readiness.
-//   required_change: once decided, emitOutboxEvent must set events_outbox.retention_until from that source or fail closed instead of persisting an unknown retention boundary.
 
 /** outbox 행 1건 INSERT(호출측 트랜잭션 내). payload는 닫힌 빈 객체. */
 export async function emitOutboxEvent(client: PoolClient, e: OutboxEmit): Promise<EmittedEvent> {
@@ -45,13 +56,17 @@ export async function emitOutboxEvent(client: PoolClient, e: OutboxEmit): Promis
   if (payloadSchemaRef === undefined) {
     throw new Error(`emitOutboxEvent: no payload_schema_ref for event_type ${e.eventType}`);
   }
+  const retentionDurationSeconds = validateEventsOutboxRetentionPolicy(e.retentionPolicy);
   const eventId = randomUUID();
-  await client.query(
+  const inserted = await client.query<{ retention_until: Date }>(
     `INSERT INTO events_outbox
        (event_id, event_type, event_version, tenant_id, run_id, workitem_id,
-        correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload)
+        correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload,
+        retention_until)
      VALUES ($1::uuid, $2, 1, $3::uuid, $4::uuid, $5::uuid,
-             $6::uuid, $7, COALESCE($8::timestamptz, now()), $9, $10, '{}'::jsonb)`,
+             $6::uuid, $7, COALESCE($8::timestamptz, now()), $9, $10, '{}'::jsonb,
+             now() + ($11::double precision * interval '1 second'))
+     RETURNING retention_until`,
     [
       eventId,
       e.eventType,
@@ -63,7 +78,25 @@ export async function emitOutboxEvent(client: PoolClient, e: OutboxEmit): Promis
       e.occurredAt ?? null,
       e.idempotencyKey,
       payloadSchemaRef,
+      retentionDurationSeconds,
     ],
   );
-  return { eventId, eventType: e.eventType, idempotencyKey: e.idempotencyKey, payloadSchemaRef };
+  const retentionUntil = inserted.rows[0]?.retention_until;
+  if (retentionUntil === undefined) {
+    throw new Error("emitOutboxEvent: insert did not return retention_until");
+  }
+  return { eventId, eventType: e.eventType, idempotencyKey: e.idempotencyKey, payloadSchemaRef, retentionUntil };
+}
+
+function validateEventsOutboxRetentionPolicy(policy: EventsOutboxRetentionPolicy | undefined): number {
+  if (policy === undefined) {
+    throw new Error("emitOutboxEvent: retentionPolicy is required for events_outbox.retention_until");
+  }
+  if (policy.source !== EVENTS_OUTBOX_RETENTION_POLICY.source) {
+    throw new Error(`emitOutboxEvent: unsupported retention policy source ${String(policy.source)}`);
+  }
+  if (!Number.isFinite(policy.durationSeconds) || policy.durationSeconds <= 0) {
+    throw new Error("emitOutboxEvent: retention policy durationSeconds must be a positive finite number");
+  }
+  return policy.durationSeconds;
 }

@@ -766,6 +766,22 @@ BEGIN
       NULL;
   END;
 
+  BEGIN
+    INSERT INTO events_outbox (
+      event_id, event_type, event_version, tenant_id,
+      correlation_id, occurred_at, idempotency_key, payload_schema_ref, payload
+    )
+    VALUES (
+      '10000000-0000-0000-0000-000000000029', 'site.circuit_opened', 1, tenant_a,
+      '20000000-0000-0000-0000-000000000001', now(),
+      'site-circuit-opened-missing-retention', 'events/site.circuit_opened@1', '{}'::jsonb
+    );
+    RAISE EXCEPTION 'events_outbox must reject missing retention_until';
+  EXCEPTION
+    WHEN not_null_violation THEN
+      NULL;
+  END;
+
   PERFORM set_config('app.tenant_id', tenant_b::text, true);
 
   INSERT INTO scenarios (id, tenant_id, name)
@@ -829,27 +845,48 @@ BEGIN
 
   INSERT INTO audit_log (
     id, tenant_id, sequence_no, actor, action, outcome, reason, correlation_id,
-    idempotency_key, occurred_at, payload, retention_until, hash
+    idempotency_key, occurred_at, payload_schema_ref, payload, retention_until, hash
   )
   VALUES (
     audit_1, tenant_a, 1, '{"kind":"system","id":"smoke"}'::jsonb,
     'artifact.read', 'deny', 'ARTIFACT_NOT_REDACTED',
     '20000000-0000-0000-0000-000000000001',
-    'audit-smoke-1', now(), '{"artifact_id":"10000000-0000-0000-0000-000000000020"}'::jsonb,
+    'audit-smoke-1', now(), 'audit/security-boundary-decision@1',
+    '{"decision_kind":"artifact.read","artifact_id":"10000000-0000-0000-0000-000000000020"}'::jsonb,
     now() + interval '90 days', 'sha256:audit-smoke-1'
   );
 
   INSERT INTO audit_log (
     id, tenant_id, sequence_no, actor, action, outcome, reason, correlation_id,
-    idempotency_key, occurred_at, payload, previous_hash, hash
+    idempotency_key, occurred_at, payload_schema_ref, payload, retention_until, previous_hash, hash
   )
   VALUES (
     audit_2, tenant_a, 2, '{"kind":"system","id":"smoke"}'::jsonb,
-    'domain.policy.check', 'allow', NULL,
+    'network.request', 'allow', NULL,
     '20000000-0000-0000-0000-000000000001',
-    'audit-smoke-2', now(), '{"domain":"example.test"}'::jsonb,
-    'sha256:audit-smoke-1', 'sha256:audit-smoke-2'
+    'audit-smoke-2', now(), 'audit/security-boundary-decision@1',
+    '{"decision_kind":"network.request","domain":"example.test"}'::jsonb,
+    now() + interval '90 days', 'sha256:audit-smoke-1', 'sha256:audit-smoke-2'
   );
+
+  BEGIN
+    INSERT INTO audit_log (
+      id, tenant_id, sequence_no, actor, action, outcome, correlation_id,
+      idempotency_key, occurred_at, payload_schema_ref, payload, previous_hash, hash
+    )
+    VALUES (
+      '10000000-0000-0000-0000-000000000043', tenant_a, 3,
+      '{"kind":"system","id":"smoke"}'::jsonb, 'prompt.inspect',
+      'blocked', '20000000-0000-0000-0000-000000000001',
+      'audit-smoke-bad-schema', now(), 'audit/unknown@1',
+      '{"decision_kind":"prompt.inspect"}'::jsonb,
+      'sha256:audit-smoke-2', 'sha256:audit-smoke-bad-schema'
+    );
+    RAISE EXCEPTION 'audit_log must reject unknown payload_schema_ref';
+  EXCEPTION
+    WHEN check_violation THEN
+      NULL;
+  END;
 
   BEGIN
     UPDATE audit_log
@@ -878,7 +915,7 @@ BEGIN
     )
     VALUES (
       '10000000-0000-0000-0000-000000000042', tenant_b, 2,
-      '{"kind":"system","id":"smoke"}'::jsonb, 'audit.chain.cross_tenant',
+      '{"kind":"system","id":"smoke"}'::jsonb, 'bypassrls.use',
       'error', '20000000-0000-0000-0000-000000000003',
       'audit-smoke-cross-tenant', now(), '{}'::jsonb,
       'sha256:audit-smoke-1', 'sha256:audit-smoke-tenant-b'

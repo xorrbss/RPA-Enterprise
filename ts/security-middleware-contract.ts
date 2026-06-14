@@ -354,13 +354,28 @@ export interface GatewayRedactionBoundary {
 
 export type AuditOutcome = "allow" | "deny" | "blocked" | "error";
 
+export const SECURITY_AUDIT_PAYLOAD_SCHEMA_REF = "audit/security-boundary-decision@1" as const;
+export type SecurityAuditPayloadSchemaRef = typeof SECURITY_AUDIT_PAYLOAD_SCHEMA_REF;
+
+export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
+  "artifact.read",
+  "secret.resolve",
+  "connector.enable",
+  "connector.install",
+  "network.request",
+  "prompt.inspect",
+  "bypassrls.use",
+] as const;
+
+export type SecurityAuditDecisionAction = (typeof SECURITY_AUDIT_REQUIRED_ACTIONS)[number];
+
 export interface ImmutableAuditLogAppendInput {
   tenantId: TenantId;
   actor: {
     subjectId: PrincipalId;
     roles: readonly Role[];
   };
-  action: RbacAction | "secret.resolve" | "network.request" | "prompt.inspect" | "bypassrls.use";
+  action: SecurityAuditDecisionAction;
   outcome: AuditOutcome;
   resource?: {
     kind: NonNullable<AuthorizationCheck["resource"]>["kind"];
@@ -370,6 +385,8 @@ export interface ImmutableAuditLogAppendInput {
   correlationId: CorrelationId;
   idempotencyKey: IdempotencyKey;
   occurredAt: IsoDateTime;
+  retentionUntil: IsoDateTime;
+  payloadSchemaRef: SecurityAuditPayloadSchemaRef;
   payload?: unknown;
 }
 
@@ -386,6 +403,31 @@ export interface ImmutableAuditLogAppendOnly {
    * boundary before hashing.
    */
   append(input: ImmutableAuditLogAppendInput): Promise<ImmutableAuditLogRecord>;
+}
+
+export interface SecurityAuditDecisionAppendInput extends ImmutableAuditLogAppendInput {
+  /**
+   * Security boundary decisions are never best-effort audit events. If append
+   * fails, the caller must fail closed and must not return the protected result.
+   */
+  failClosed: true;
+}
+
+export interface AuditedSecurityDecision<TDecision> {
+  decision: TDecision;
+  auditRecord: ImmutableAuditLogRecord;
+}
+
+export interface DurableSecurityAuditDecisionWriter {
+  /**
+   * Repo-owned D4.4 audit writer boundary for security-relevant API/runtime
+   * decisions. Implementations append to PostgreSQL audit_log before returning
+   * the decision to the caller.
+   */
+  recordDecision<TDecision>(
+    input: SecurityAuditDecisionAppendInput,
+    decision: TDecision,
+  ): Promise<AuditedSecurityDecision<TDecision>>;
 }
 
 export type BypassRlsUseCase =

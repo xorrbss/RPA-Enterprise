@@ -383,7 +383,7 @@ CREATE TABLE events_outbox (
   idempotency_key    text        NOT NULL CHECK (length(idempotency_key) > 0), -- 예: run:step:attempt:verify
   payload_schema_ref text        NOT NULL,                  -- 예: events/run.completed@1
   payload            jsonb       NOT NULL,
-  retention_until    timestamptz,
+  retention_until    timestamptz NOT NULL,
   legal_hold         boolean     NOT NULL DEFAULT false,
   deleted_at         timestamptz,
   published_at       timestamptz,                           -- NULL = 미발행(relay가 발행 후 set)
@@ -514,6 +514,8 @@ CREATE TABLE audit_log (
   idempotency_key  text        NOT NULL CHECK (length(idempotency_key) > 0),
   occurred_at      timestamptz NOT NULL,
   payload          jsonb       NOT NULL,
+  payload_schema_ref text      NOT NULL DEFAULT 'audit/security-boundary-decision@1'
+                    CHECK (payload_schema_ref = 'audit/security-boundary-decision@1'),
   retention_until  timestamptz,
   legal_hold       boolean     NOT NULL DEFAULT false,
   deleted_at       timestamptz,

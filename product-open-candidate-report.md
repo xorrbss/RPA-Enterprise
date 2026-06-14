@@ -4,10 +4,11 @@ This report records the repository evidence for a Product Open Candidate state.
 It is a contract-first candidate report, not an external release approval or
 deployment authorization. The tagged Product Open Candidate baseline has green
 repo-controlled evidence on `main`; the last merged staging-readiness baseline
-has PR #6 and post-merge `main` remote CI evidence, but still retains active
-D4.4 blockers below: `events_outbox.retention_until` and durable security audit
-writer coverage. Any later branch or dirty-worktree delta needs its own green
-remote Contract Gates evidence before it can be cited as current. External
+has PR #6 and post-merge `main` remote CI evidence, but later D4.4 deltas still
+need their own green remote Contract Gates evidence before they can be cited as
+current. This delta names and evidences the durable security audit writer
+boundary locally, including PostgreSQL append evidence; any remaining active blocker is listed in
+`release-open-checklist.md` and the packets below. External
 Product Open still requires the resolved staging/release owners to approve and
 operate the deployment path outside this repository.
 
@@ -53,17 +54,16 @@ operate the deployment path outside this repository.
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
   blockers split by scope: external/staging blocker categories for concrete
   deploy target, secret provisioning, and non-app producer retention policy;
-  an expanded SecretRef evidence packet with five specific unchecked rows; and
-  two repo-controlled D4.4 branch-delta blockers: the
-  `events_outbox.retention_until` source used by the app/runtime outbox helper
-  and durable security audit writer coverage for security boundary decisions.
+  an expanded SecretRef evidence packet with five specific unchecked rows.
+  The durable security audit writer D4.4 row is now resolved locally by
+  `DurableSecurityAuditDecisionWriter` evidence.
   The current audit enforces both directions: every actionable blocked-decision
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 29 markers, 15 actionable blockers, 13 active checklist rows, 2
-  repo-controlled D4.4 blocker categories, and 13 resolved release decisions
-  checked. New unresolved behavior must still use the repository
+  output: 22 markers, 8 actionable blockers, 13 known release decisions tracked,
+  and 13 release decisions checked. New unresolved
+  behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
 ## Changed Files
@@ -84,7 +84,8 @@ Tracked modified contract/artifact areas:
   `db/migration_core_entities.sql`.
 - App runtime/API staging-readiness delta: `app/src/api/*`,
   `app/src/runtime/outbox.ts`, `app/test/api-runs.int.ts`,
-  `app/test/api-runs-graphile.int.ts`, and `app/test/scenarios.int.ts`.
+  `app/test/api-runs-graphile.int.ts`, `app/test/scenarios.int.ts`, and
+  `app/test/security-audit.int.ts`.
 - UI mock: `rpa_enterprise_console.html`.
 
 New repo-local support artifacts:
@@ -149,7 +150,7 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 29 markers, 15 actionable blockers, 13 known release
+  (current output: 22 markers, 8 actionable blockers, 13 known release
   decisions tracked, 13 release decisions checked)
 - `npm --prefix codegen run yaml:parse`
   (parses every workflow YAML plus OpenAPI/AsyncAPI, preserves the GitHub
@@ -166,8 +167,8 @@ Passed locally:
   `environment: staging`, and env dump/xtrace commands)
 - `npm --prefix codegen run db:static-smoke`
   (covers artifact redaction RLS, immutable audit hash-chain, idempotency/CAS
-  anchors, smoke-only explicit `events_outbox.retention_until` fixtures, and
-  rollback harness)
+  anchors, explicit and missing `events_outbox.retention_until` smoke fixtures,
+  and rollback harness)
 - `npm --prefix codegen run html:smoke`
 - `npm --prefix codegen run html:http-smoke`
 - `python scripts/yaml-parse.py`
@@ -245,14 +246,16 @@ Environment note:
   staging-readiness baseline remote evidence is represented by PR #6 and
   post-merge `main` `Contract Gates` run `27497854075`; this closes only the
   merged-baseline remote evidence pointer and does not close later branch/delta
-  evidence requirements or the current D4.4 staging-readiness blockers below.
+  evidence requirements. This branch delta still needs its own green remote
+  Contract Gates evidence before being cited as current.
 - Current D4.4 branch-delta gap: executable scenario runtime readiness now has
   per-expression `compiled_ast` export, app promote `If-Match`/idempotency
-  coverage, and `SecretRef`/`SecretStore`-backed signed command registry wiring
-  for shell `cmd_ref` validation. The remaining repo-controlled app-runtime gaps
-  are the `events_outbox.retention_until` source for repo-owned outbox producers
-  and durable security audit writer coverage for security boundary decisions.
-  These are tracked in `release-open-checklist.md` and must not be inferred.
+  coverage, `SecretRef`/`SecretStore`-backed signed command registry wiring
+  for shell `cmd_ref` validation, repo-owned `events_outbox.retention_until`
+  source/duration/calculation/fail-closed evidence, and durable security audit
+  writer coverage for security boundary decisions. No repo-controlled D4.4
+  blocker remains in the local checklist after this delta; remaining blockers
+  are external/staging scope and must not be inferred closed.
 - Current app-runtime scope gap: the real Fastify app gate covers the wired app
   routes (`GET/POST /v1/runs` subset plus scenario create/read/validate/promote).
   Broader api-surface routes such as run abort, human-task commands, workitem/DLQ
@@ -272,31 +275,49 @@ Environment note:
 
 ### Durable Security Audit Writer Decision Packet
 
-Contract/runtime owners must provide this packet before the current app-runtime
-delta can claim executable staging readiness. Do not treat fixture-only audit
-hash-chain coverage as proof that real runtime/control-plane security boundary
-decisions append durable audit rows.
+Resolved locally for the repo-owned boundary/evidence slice:
 
-- TODO: [BLOCKED] Repo-owned durable security audit writer boundary is not defined for executable staging readiness.
-  Required decision: Contract/runtime owners must name the repo-owned runtime/control-plane audit writer boundary and evidence path for security boundary decisions, including artifact read, SecretStore resolve, connector enable/install, domain/prompt policy blocks, and any BYPASSRLS use. Each covered path must append immutable `audit_log` rows with safe-serialized payload and retention/deletion metadata, or be explicitly scoped out of the staging packet before executable staging readiness is claimed.
+- Boundary: `DurableSecurityAuditDecisionWriter` in
+  `ts/security-middleware-contract.ts`; app-runtime durable implementation:
+  `PgDurableSecurityAuditDecisionWriter` in `app/src/api/security-audit.ts`.
+- Covered security decisions: `artifact.read`, `secret.resolve`,
+  `connector.enable`, `connector.install`, `network.request`, `prompt.inspect`,
+  and `bypassrls.use`.
+- Durable schema anchor: PostgreSQL `audit_log.payload_schema_ref` is fixed to
+  `audit/security-boundary-decision@1`; unknown refs fail closed at insert time.
+- Runtime evidence: `security/compliance-scaffold.ts`
+  `ContractDurableSecurityAuditWriter` proves the typed boundary, while
+  `app/src/api/security-audit.ts` `PgDurableSecurityAuditDecisionWriter`
+  appends to PostgreSQL `audit_log` before returning the protected decision,
+  rejects PlainSecret payloads through `safeSerialize`, validates
+  `retentionUntil`, and fails closed if durable append is unavailable.
+- Test evidence: `npm --prefix codegen run redaction:audit-smoke` covers all
+  listed actions, append-before-return, append failure, and PlainSecret payload
+  rejection; `app/test/security-audit.int.ts` covers PostgreSQL hash-chain,
+  payload schema, retention, duplicate-idempotency, PlainSecret rejection, and
+  fail-closed append behavior.
+- Scope note: broader Fastify routes that do not exist in the repo-owned app
+  runtime are still scoped out until implemented or explicitly wired to this
+  boundary.
 
 ### Events Outbox Retention Decision Packet
 
-Contract/runtime owners must provide this packet before the current app-runtime
-delta can claim executable staging readiness. Do not infer the source or
-duration from smoke fixtures; `db/migration_smoke.sql` uses a smoke-only explicit
-value only to prove the DB gate does not normalize NULL retention.
+Resolved for repo-owned app/runtime outbox producers.
 
-- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing the policy authority/source.
-  Required decision: Contract/runtime owners must name the repo-owned contract, config, or injected dependency source that `emitOutboxEvent` must use for `events_outbox.retention_until`.
-- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing the effective duration/scope.
-  Required decision: Contract/runtime owners must define the concrete retention duration/class and whether it is uniform, event-family/event-type scoped, or tenant-policy scoped.
-- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing the calculation basis.
-  Required decision: Contract/runtime owners must define the timestamp basis/clock used to compute `retention_until` from the policy source, including how supplied `occurredAt` is handled.
-- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing the fail-closed runtime behavior.
-  Required decision: Contract/runtime owners must define the missing/invalid policy behavior so `emitOutboxEvent` cannot persist NULL/unknown `retention_until`.
-- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing app/runtime verification evidence.
-  Required decision: Contract/runtime owners must update `emitOutboxEvent` and app/runtime tests to prove rows set `retention_until` and missing/invalid source fails closed.
+- Source: `ops-defaults.md#events_outbox.retention_default`, passed explicitly
+  into `emitOutboxEvent` as `EVENTS_OUTBOX_RETENTION_POLICY`.
+- Duration/scope: uniform 90d for every tenant-scoped `events_outbox` event
+  type in v1.
+- Calculation basis: `retention_until = PostgreSQL transaction timestamp
+  (now()) + duration`; supplied `occurredAt` only sets envelope `occurred_at`
+  and does not backdate retention.
+- Fail-closed behavior: missing, unsupported, non-finite, or non-positive
+  runtime policy input throws before insert, and `events_outbox.retention_until`
+  is `NOT NULL` so direct SQL producers cannot persist unknown retention.
+- Evidence: `app/test/graphile-worker.int.ts` covers missing/invalid runtime
+  policy and supplied historical `occurredAt`; `app/test/run-transition.int.ts`
+  covers transition-produced rows; `db/migration_smoke.sql` and
+  `scripts/db-static-smoke.mjs` cover direct SQL NULL rejection.
 
 ### Staging Secret Provisioning Evidence Packet
 
@@ -324,10 +345,7 @@ dumps, or deployment credentials in this repository.
 3. Obtain the concrete external staging deploy target, SecretStore provisioning
    evidence, release approver, and rollback confirmation before any staging/open
    deployment.
-4. Define the repo-owned `events_outbox.retention_until` source and then update
-   `emitOutboxEvent` plus app/runtime tests to set or fail closed on retention.
-5. Define the durable security audit writer boundary and evidence path for
-   runtime/control-plane security boundary decisions before claiming executable
-   staging readiness.
-6. Keep any new unresolved behavior out of implementation paths unless it uses
+4. Keep the durable security audit writer wired as broader security-relevant app
+   routes are implemented.
+5. Keep any new unresolved behavior out of implementation paths unless it uses
    the repository blocked-decision marker with nearby required-decision text.
