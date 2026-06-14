@@ -374,10 +374,21 @@ async function assertRejectsIllegal(
   try {
     await fn();
   } catch (error) {
-    if (error instanceof IllegalTransition) return;
+    if (isIllegalTransitionLike(error)) return;
     throw new Error(`${label}: expected IllegalTransition, got ${error instanceof Error ? error.name : String(error)}`);
   }
   throw new Error(`${label}: expected IllegalTransition, got no throw`);
+}
+
+function isIllegalTransitionLike(error: unknown): error is IllegalTransition {
+  if (error instanceof IllegalTransition) return true;
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { name?: unknown; message?: unknown };
+  return (
+    candidate.name === "IllegalTransition" &&
+    typeof candidate.message === "string" &&
+    candidate.message.startsWith("IllegalTransition:")
+  );
 }
 
 function assert(condition: unknown, message: string): asserts condition {

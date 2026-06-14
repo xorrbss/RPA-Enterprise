@@ -150,7 +150,7 @@ async function main(): Promise<void> {
       check("own run body.status", runBody.status === "running", JSON.stringify(runBody));
       check("own run body.attempts", runBody.attempts === 2, JSON.stringify(runBody));
       check("own run body.worker_id null", runBody.worker_id === null, JSON.stringify(runBody));
-      check("own run body.as_of present", typeof runBody.as_of === "string" && runBody.as_of.length > 0, JSON.stringify(runBody));
+      check("own run body.as_of round-trips", typeof runBody.as_of === "string" && new Date(runBody.as_of).toISOString() === "2026-06-14T00:00:00.000Z", JSON.stringify(runBody));
 
       // 4) RLS 격리: tenant A 토큰으로 tenant B run 조회 → 404(cross-tenant 차단).
       const crossTenant = await app.inject({

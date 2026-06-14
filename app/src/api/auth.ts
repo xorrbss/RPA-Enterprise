@@ -33,11 +33,12 @@ export type JwtVerifier = (token: string) => Promise<JWTPayload>;
 
 /**
  * HS256 공유 시크릿 검증기. alg를 HS256으로 고정해 alg-confusion/`none`을 차단한다.
- * jose가 exp/nbf를 자동 검증하므로 만료 토큰은 throw → UNAUTHENTICATED.
+ * exp를 필수(requiredClaims)로 강제 — exp 없는 토큰은 throw(만료 없는 자격증명의 무한 유효 방지, fail-closed).
+ * exp/nbf는 jose가 자동 검증하므로 만료/미래(nbf) 토큰도 throw → UNAUTHENTICATED.
  */
 export function hmacJwtVerifier(secret: Uint8Array): JwtVerifier {
   return async (token) => {
-    const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"] });
+    const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"], requiredClaims: ["exp"] });
     return payload;
   };
 }

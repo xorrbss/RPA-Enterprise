@@ -59,7 +59,12 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   app.addHook("preHandler", async (request) => {
     const result = await deps.auth.authenticate({ authorization: request.headers.authorization });
     if (result.kind === "denied") {
-      throw new ApiResponseError(result.code, { reason: result.reason });
+      // 내부 분류 사유는 로그에만 남긴다(보안 경계: 자원/존재/분류 비노출, auth-rbac §5). 응답엔 code+일반 메시지만.
+      request.log.warn(
+        { reason: result.reason, code: result.code, correlation_id: request.correlationId },
+        "auth denied",
+      );
+      throw new ApiResponseError(result.code);
     }
     request.principal = result.principal;
   });
@@ -99,8 +104,9 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
 
 function requirePrincipal(request: FastifyRequest): AuthenticatedPrincipal {
   if (request.principal === null) {
-    // preHandler 인증이 선행 보장. 방어적(가정 금지) — 도달 시 인증 경계 결함.
-    throw new ApiResponseError("UNAUTHENTICATED", { reason: "principal_missing" });
+    // preHandler 인증이 선행 보장. 방어적(가정 금지) — 도달 시 인증 경계 결함. 사유는 응답에 노출하지 않는다.
+    request.log.error({ correlation_id: request.correlationId }, "principal missing after auth preHandler");
+    throw new ApiResponseError("UNAUTHENTICATED");
   }
   return request.principal;
 }

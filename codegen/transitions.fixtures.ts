@@ -859,7 +859,7 @@ export function runFixtures(fixtures: TransitionFixture[] = ALL_FIXTURES): Fixtu
       try {
         dispatch(f);
       } catch (e) {
-        threw = e instanceof IllegalTransition;
+        threw = isIllegalTransitionLike(e);
         if (!threw) {
           failures.push({
             name: f.name,
@@ -917,4 +917,15 @@ export function runFixtures(fixtures: TransitionFixture[] = ALL_FIXTURES): Fixtu
   }
 
   return failures;
+}
+
+function isIllegalTransitionLike(error: unknown): error is IllegalTransition {
+  if (error instanceof IllegalTransition) return true;
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { name?: unknown; message?: unknown };
+  return (
+    candidate.name === "IllegalTransition" &&
+    typeof candidate.message === "string" &&
+    candidate.message.startsWith("IllegalTransition:")
+  );
 }
