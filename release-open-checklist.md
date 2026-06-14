@@ -18,7 +18,7 @@
 - [x] HTML/UI smoke: `npm --prefix codegen run html:smoke` 또는 `node scripts/html-smoke.mjs`. `rpa_enterprise_console.html`이 standalone 구조, hash router, empty/error state, 11개 view key를 유지하고 backend call을 만들지 않음.
 - [x] Local repeatability: prefer `npm --prefix codegen run ci:local:temp-db` when PostgreSQL 15 binaries are installed but no disposable database is configured. Use `npm --prefix codegen run ci:local` when `PSQL_BIN`/PG env already points at a PostgreSQL 15 database with a non-`SUPERUSER`/non-`BYPASSRLS` role; the local gate now fails if it cannot prove that role matches CI's non-bypass DB smoke posture. The local gate includes app install, typecheck, unit tests, `db:smoke`, and app integration when DB is available. Use `npm --prefix codegen run ci:local:no-db` only when PostgreSQL 15 binaries are unavailable; it still runs app typecheck/unit but skips DB-dependent `db:smoke` and app integration, so record that skip reason in the PR body.
 - [x] Historical remote GitHub Actions evidence: the tagged Product Open Candidate baseline has recorded `contract-gates` run URLs in `product-open-candidate-report.md`.
-- [x] Last merged staging-readiness baseline remote evidence: PR #6 plus post-merge `main` `Contract Gates` run `27497854075` on merge `357795d2eff3a3f7f1d0c6a559f94e53f7f9f271` is the authoritative merged-baseline evidence source. Any later branch or dirty-worktree delta must attach its own latest successful PR or main run URL and the `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs from that latest head. This closes only the merged-baseline remote evidence gate; it does not close external staging/open approval, and this branch delta must still attach its own green remote evidence before being cited as current.
+- [x] Current merged D4.4 staging-readiness remote evidence: PR #8 plus post-merge `main` `Contract Gates` run `27499599708` on merge `276bae845c74c5d40f218dec661fdcdc255afac6` is the authoritative merged evidence source for the D4.4 retention/audit delta. Any later branch or dirty-worktree delta must attach its own latest successful PR or main run URL and the `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs from that latest head. This closes only the repo-controlled D4.4 remote evidence gate; it does not close external staging/open approval or active external blockers.
 
 - [x] HTML HTTP/UI route smoke: `npm --prefix codegen run html:http-smoke` 또는 `node scripts/html-http-smoke.mjs`. Standalone console를 `127.0.0.1` ephemeral port로 serve하고 initial `#openGate`, every hash route, invalid-hash fallback to `#dashboard`, Product-open to workitems nav click, no backend calls, HTTP 200/content-type/404/inline script syntax smoke를 확인.
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact redaction RLS, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
@@ -39,10 +39,12 @@ them in the release packet.
 - [ ] External staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location, CI/deploy log redaction proof, and no-env-dump proof are named. Required decision: see `product-open-candidate-report.md`.
 - [ ] External staging producer retention duration/source policy. Required decision: see `product-open-candidate-report.md`.
 
-## Active Repo-Controlled D4.4 Blockers
+## Repo-Controlled D4.4 Evidence
 
-These are not part of the tagged Product Open Candidate baseline, but they block
-claiming the current D4.4 branch delta as executable staging-ready.
+These rows record the repo-controlled D4.4 evidence now included in merged PR #8
+and post-merge `main` run `27499599708`; no repo-controlled D4.4 blocker
+remains active. Future branch or dirty-worktree deltas must attach their own
+green remote evidence before being cited as current.
 
 - [x] D4.4 signed command registry source. `ApiServerDeps` now requires a `SecretRef`/`SecretStore`-backed `SignedCommandRegistry`; scenario save/validate/promote pass registry refs into static validation, and shell `cmd_ref` tests cover registered, unregistered, and registry-unavailable paths.
 - [x] D4.4 events_outbox retention source - policy authority/source is named. `ops-defaults.md#events_outbox.retention_default` is passed explicitly to `emitOutboxEvent` as `EVENTS_OUTBOX_RETENTION_POLICY`.
