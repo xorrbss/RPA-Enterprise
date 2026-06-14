@@ -99,13 +99,15 @@ export class StagehandCdpSession implements CdpSession {
   }
 
   async waitForDownload(fileName: string, timeoutMs: number): Promise<boolean> {
-    const deadline = timeoutMs / 150;
-    for (let i = 0; i < deadline; i += 1) {
-      const done = readdirSync(this.downloads).filter((f) => !f.endsWith(".crdownload"));
-      if (done.includes(fileName)) return true;
-      await sleep(150);
+    // 경과시간(wall-clock) 기준 폴링. 매 폴에서 확인하고, 남은 시간만큼만 sleep 한 뒤 루프 상단에서
+    // 다시 확인한다 → 마지막 sleep 직후 떨어지는 파일도 놓치지 않는다(반복횟수=타임아웃 혼동 제거).
+    const start = Date.now();
+    for (;;) {
+      if (readdirSync(this.downloads).includes(fileName)) return true;
+      const remaining = timeoutMs - (Date.now() - start);
+      if (remaining <= 0) return false;
+      await sleep(Math.min(150, remaining));
     }
-    return false;
   }
 
   async close(): Promise<void> {

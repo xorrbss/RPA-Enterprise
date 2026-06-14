@@ -10,7 +10,7 @@
     "test:unit": "tsx test/flow-control.unit.ts && tsx test/telemetry.unit.ts && tsx test/rbac.unit.ts",
     "test:int": "tsx test/run-transition.int.ts && tsx test/graphile-worker.int.ts && tsx test/api-runs-graphile.int.ts && tsx test/api-runs.int.ts && tsx test/scenarios.int.ts && tsx test/security-audit.int.ts",
     "test:executor": "tsx test/executor-dryrun.int.ts",
-    "test:ci": "npm run test && npm run test:int"
+    "test:ci": "npm run test && npm run test:executor && npm run test:int"
   },
   "dependencies": {
     "@browserbasehq/stagehand": "3.5.0",

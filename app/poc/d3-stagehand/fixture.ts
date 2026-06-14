@@ -53,7 +53,7 @@ function mainDoc(q: URLSearchParams): string {
   return `<!doctype html>
 <html lang="ko">
 <head><meta charset="utf-8"><title>D3 PoC fixture</title></head>
-<body data-auth="${authAttr}">
+<body data-page-state-contract="d3-dryrun-v1" data-auth="${authAttr}">
   <header role="banner"><h1>상점 콘솔</h1></header>
   <nav role="navigation" aria-label="주 메뉴"><a href="#a">홈</a><a href="#b">리뷰</a></nav>
   <main role="main">

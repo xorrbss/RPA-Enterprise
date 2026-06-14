@@ -14,7 +14,7 @@ import { Stagehand } from "@browserbasehq/stagehand";
 import { FIXTURE_ORIGIN, startFixtureServer } from "./fixture.js";
 import { PAGESTATE_FLAG_KEYS, resolvePageState, type CdpPage } from "./pagestate.js";
 
-const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const CHROME = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 
 interface Locator {
   setInputFiles(files: string | string[]): Promise<void>;
@@ -148,7 +148,7 @@ async function main() {
       "download (+dir 격리)",
       got ? "PASS(sendCDP)" : "GAP",
       "Browser.setDownloadBehavior(downloadPath) via sendCDP",
-      `dir=${cdpDownloadDir} files=[${files.join(",")}]`,
+      `dir=<temp>/d3poc-cdpdl-* files=[${files.join(",")}]`,
     );
   } catch (e) {
     rec(5, "download (+dir 격리)", "ERROR", "sendCDP/click", String(e));

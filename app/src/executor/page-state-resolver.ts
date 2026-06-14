@@ -6,15 +6,18 @@
  * flags 는 ir-static-validation §2 닫힌 레지스트리의 **PageState 원천 키만** set(미등록 키 금지;
  * cursor_reached 는 interpreter 원천이라 여기서 산출하지 않음).
  *
- * "조용한 false/unknown 금지": 6개 PageState-origin flag 를 항상 명시적으로 set 한다(부재 시 IREL 평가가
- * IREL_RUNTIME_MISSING 으로 표면화되도록 — 흡수하지 않음).
+ * "조용한 false/unknown 금지": 이 D3 dry-run resolver 는 명시적 fixture contract marker 가 있는 페이지에서만
+ * auth/flags 를 산출한다. 임의 staging 사이트나 미계약 페이지는 blocked=false 같은 추정을 만들지 않고
+ * PAGE_STATE_UNRESOLVED 로 실패시킨다.
  */
 import { createHash } from "node:crypto";
 
 import type { DomLandmark, FrameSummary, PageState, RunContext } from "../../../ts/core-types";
+import { IREL_ALLOWED_FLAGS } from "../../../codegen/irel-compile";
 import type { CdpSessionProvider } from "./cdp-session";
 
 const sha1 = (s: string): string => createHash("sha1").update(s).digest("hex").slice(0, 16);
+export const PAGESTATE_CONTRACT_MARKER = "d3-dryrun-v1";
 
 /** landmark 로 취급할 ARIA role(a11y 트리 필터). */
 const LANDMARK_ROLES = new Set([
@@ -38,9 +41,18 @@ export const PAGESTATE_FLAG_KEYS = [
   "reviews_visible",
 ] as const;
 
+// 드리프트 방지(SSoT 결속): resolver 가 산출하는 flag 는 전부 §2 닫힌 레지스트리(codegen IREL_ALLOWED_FLAGS)
+// 소속이어야 한다. 미등록 키를 PAGESTATE_FLAG_KEYS 에 추가하면 아래 타입이 false 가 되어 빌드가 깨진다
+// (손복제 리스트가 레지스트리에서 말없이 갈라져 런타임 IREL_RUNTIME_MISSING 으로 터지는 것을 컴파일에서 예방).
+type _PagestateFlagsRegistered =
+  `flags.${(typeof PAGESTATE_FLAG_KEYS)[number]}` extends (typeof IREL_ALLOWED_FLAGS)[number] ? true : false;
+const _pagestateFlagsRegistered: _PagestateFlagsRegistered = true;
+void _pagestateFlagsRegistered;
+
 type AxNode = { role?: { value?: unknown }; name?: { value?: unknown } };
 
 type Signals = {
+  contractMarker: string;
   visibleText: string;
   authAttr: string;
   hasLogout: boolean;
@@ -59,8 +71,9 @@ const COLLECT_FN = `(() => {
   const nextEl = document.querySelector('a[rel="next"]');
   const nextDisabled = !nextEl || nextEl.getAttribute('aria-disabled') === 'true';
   return {
+    contractMarker: (document.body && document.body.getAttribute('data-page-state-contract')) || '',
     visibleText: text,
-    authAttr: (document.body && document.body.getAttribute('data-auth')) || 'unknown',
+    authAttr: (document.body && document.body.getAttribute('data-auth')) || '',
     hasLogout: !!document.querySelector('[data-action="logout"]'),
     reviewsVisible: !!document.querySelector('[data-landmark="reviews"] .review-item'),
     emptyMsg: !!document.querySelector('[data-empty-msg]'),
@@ -71,6 +84,16 @@ const COLLECT_FN = `(() => {
     iframeCount: document.querySelectorAll('iframe').length,
   };
 })()`;
+
+export class PageStateResolverError extends Error {
+  constructor(
+    readonly code: "PAGE_STATE_UNRESOLVED",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PageStateResolverError";
+  }
+}
 
 function urlPattern(raw: string): string {
   try {
@@ -86,7 +109,10 @@ function classifyAuth(s: Signals): PageState["auth"] {
   if (s.authAttr === "authenticated" || s.hasLogout) return "authenticated";
   if (s.authAttr === "expired") return "expired";
   if (s.authAttr === "anonymous") return "anonymous";
-  return "unknown";
+  throw new PageStateResolverError(
+    "PAGE_STATE_UNRESOLVED",
+    `page auth signal is not covered by ${PAGESTATE_CONTRACT_MARKER}`,
+  );
 }
 
 function classifyFlags(s: Signals): Record<string, boolean> {
@@ -122,6 +148,12 @@ export class CdpPageStateResolver {
     });
 
     const s = await session.evaluate<Signals>(COLLECT_FN);
+    if (s.contractMarker !== PAGESTATE_CONTRACT_MARKER) {
+      throw new PageStateResolverError(
+        "PAGE_STATE_UNRESOLVED",
+        `page is missing data-page-state-contract=${PAGESTATE_CONTRACT_MARKER}; refusing silent auth/flag inference`,
+      );
+    }
     const frames: FrameSummary[] = [];
     for (let i = 0; i < s.iframeCount; i += 1) frames.push({ kind: "iframe", landmarkCount: 1 });
 

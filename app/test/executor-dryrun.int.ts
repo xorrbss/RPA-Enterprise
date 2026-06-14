@@ -26,6 +26,7 @@ import { UtilityExecutor } from "../src/executor/utility-executor";
 const PORT = 39281;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const CHROME = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const CONTRACT_MARKER = "d3-dryrun-v1";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -41,7 +42,7 @@ function page(n: number, hasNext: boolean): string {
     ? `<a rel="next" href="/p/${n + 1}" role="link">다음</a>`
     : `<a rel="next" href="#" role="link" aria-disabled="true">다음</a>`;
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>p${n}</title></head>
-<body data-auth="authenticated">
+<body data-page-state-contract="${CONTRACT_MARKER}" data-auth="authenticated">
 <header role="banner"><h1>리뷰</h1></header>
 <nav role="navigation" aria-label="메뉴"><a href="#">홈</a></nav>
 <main role="main">
@@ -88,6 +89,16 @@ function step(cur: RunState, ev: Parameters<typeof transitionRun>[1], g: RunGuar
   return transitionRun(cur, ev, g).next;
 }
 
+function seedPageState(): PageState {
+  return {
+    url: { raw: "about:blank", canonical: "about:blank", pattern: "about:blank" },
+    dom: { structuralHash: "seed", visibleTextHash: "seed", landmarks: [], frames: [] },
+    auth: "anonymous",
+    flags: {},
+    matchedWhere: [],
+  };
+}
+
 async function main(): Promise<void> {
   const server = await startServer();
   const downloadDir = mkdtempSync(join(tmpdir(), "d3exec-dl-"));
@@ -114,9 +125,8 @@ async function main(): Promise<void> {
     leaseId: "lease-1",
     assetRefs: {},
     abortSignal: new AbortController().signal,
-    pageState: undefined as unknown as PageState, // seed 직후 채움
+    pageState: seedPageState(),
   };
-  ctx.pageState = await resolver.resolvePageState(ctx); // about:blank seed
 
   // ── 시나리오 루프: navigate → observe(resolve) → on[] → collect/download → next_page ──
   const nav = await executor.execute("navigate_p1", { type: "navigate", url: `${ORIGIN}/p/1` }, ctx);
@@ -138,7 +148,7 @@ async function main(): Promise<void> {
     check(`page${pagesVisited}: on[] → collect`, route === "collect", `got ${route}`);
 
     // 결정형 verify(min_rows)
-    const v = await executor.verify({ type: "min_rows", selector: ".review-item", min: 1 }, ctx);
+    const v = await executor.verify({ type: "min_rows", selector: ".review-item", n: 1 }, ctx);
     check(`page${pagesVisited}: verify reviews pass`, v.status === "pass");
 
     // loop.until 대역: no_next_page true → terminal
@@ -172,6 +182,31 @@ async function main(): Promise<void> {
     threw = (e as { code?: string }).code === "EXECUTOR_CAPABILITY_MISMATCH";
   }
   check("dom action 'act' → EXECUTOR_CAPABILITY_MISMATCH", threw);
+
+  threw = false;
+  try {
+    await executor.execute("bad_nav", { type: "navigate" }, ctx);
+  } catch (e) {
+    threw = (e as { code?: string }).code === "IR_SCHEMA_INVALID";
+  }
+  check("invalid navigate action → IR_SCHEMA_INVALID", threw);
+
+  threw = false;
+  try {
+    await executor.verify({ type: "min_rows", selector: ".review-item", n: 0 }, ctx);
+  } catch (e) {
+    threw = (e as { code?: string }).code === "IR_SCHEMA_INVALID";
+  }
+  check("invalid min_rows n=0 → IR_SCHEMA_INVALID", threw);
+
+  threw = false;
+  await session.goto(`${ORIGIN}/missing`);
+  try {
+    await resolver.resolvePageState(ctx);
+  } catch (e) {
+    threw = (e as { code?: string }).code === "PAGE_STATE_UNRESOLVED";
+  }
+  check("unmarked page → PAGE_STATE_UNRESOLVED", threw);
 
   // ── teardown(전송/저장 없었음 — DB·outbox·pg 미임포트) ──────────────────────
   await session.close();

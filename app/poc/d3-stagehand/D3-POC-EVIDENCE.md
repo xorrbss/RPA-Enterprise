@@ -12,7 +12,7 @@
 | 2 | DOM structuralHash | `PASS(sendCDP)` | Accessibility.getFullAXTree via page.sendCDP | hash=53c329e45996f268 stable-on-reload=true landmarks=5 |
 | 3 | visibleTextHash·landmarks·frames | `PASS(sendCDP)` | page.evaluate + AXTree + page.frames() | roles=[banner,navigation,main,contentinfo,form] frames=1 textHash=8ff03a60793db9a7 |
 | 4 | element by selector / role+name | `PASS(sendCDP)` | page.locator(css) + AXTree role/name match | selector#dl=1 role=button,name=로그아웃 matched=true |
-| 5 | download (+dir 격리) | `PASS(sendCDP)` | Browser.setDownloadBehavior(downloadPath) via sendCDP | dir=C:\Users\ibiz\AppData\Local\Temp\d3poc-cdpdl-iIpZml files=[report.csv] |
+| 5 | download (+dir 격리) | `PASS(sendCDP)` | Browser.setDownloadBehavior(downloadPath) via sendCDP | dir=<temp>/d3poc-cdpdl-* files=[report.csv] |
 | 6 | upload (file input) | `PASS` | locator.setInputFiles | attached="d3poc-upload.txt" |
 | 7 | click/type | `PASS` | locator.fill + locator.click | filled="리뷰검색" |
 | 8 | auth 상태 감지 | `PASS(sendCDP)` | PageStateResolver.auth | authed->authenticated anon->anonymous expired->expired |

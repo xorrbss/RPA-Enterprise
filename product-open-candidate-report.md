@@ -133,6 +133,10 @@ Passed locally:
 - `npm --prefix codegen run ci:local:temp-db`
 - `npm --prefix app run typecheck`
 - `npm --prefix app run test:unit`
+- `npm --prefix app run test:executor`
+  (D3 deterministic Stagehand v3/CDP dry-run only; this is not staging
+  execution readiness because runtime-worker, tenant BrowserLease, artifact,
+  audit, and RBAC/tenant runtime gates remain unwired for real run execution.)
 - `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:int`
 - `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:ci`
 - App integration now includes real `PgGraphileRunEnqueuer` commit/rollback
@@ -257,6 +261,11 @@ Environment note:
   writer coverage for security boundary decisions. No repo-controlled D4.4
   blocker remains in the local checklist after this delta; remaining blockers
   are external/staging scope and must not be inferred closed.
+- Current D3 executor evidence: deterministic Stagehand v3/CDP
+  UtilityExecutor/PageStateResolver is proven as PoC/dry-run evidence only.
+  It is not Product Open/staging execution readiness until runtime-worker
+  `run_claim`/`run_resume`, tenant BrowserLease lookup, artifact retention/audit,
+  and RBAC/tenant execution gates are wired and evidenced.
 - Current app-runtime scope gap: the real Fastify app gate covers the wired app
   routes (`GET/POST /v1/runs` subset plus scenario create/read/validate/promote).
   Broader api-surface routes such as run abort, human-task commands, workitem/DLQ

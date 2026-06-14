@@ -55,6 +55,7 @@ export const PAGESTATE_FLAG_KEYS = [
   "no_review_message_visible",
   "reviews_visible",
 ] as const;
+export const PAGESTATE_CONTRACT_MARKER = "d3-dryrun-v1";
 
 /** url 정규화: 쿼리/프래그먼트/말단 숫자 id 를 패턴화(structuralHash 안정화). */
 function urlPattern(raw: string): string {
@@ -89,8 +90,9 @@ const COLLECT_FN = `(() => {
   const nextEl = document.querySelector('a[rel="next"]');
   const nextDisabled = !nextEl || nextEl.getAttribute('aria-disabled') === 'true';
   return {
+    contractMarker: (document.body && document.body.getAttribute('data-page-state-contract')) || '',
     visibleText: text,
-    authAttr: (document.body && document.body.getAttribute('data-auth')) || 'unknown',
+    authAttr: (document.body && document.body.getAttribute('data-auth')) || '',
     hasLogout: !!document.querySelector('[data-action="logout"]'),
     reviewsVisible: !!document.querySelector('[data-landmark="reviews"] .review-item'),
     emptyMsg: !!document.querySelector('[data-empty-msg]'),
@@ -103,6 +105,7 @@ const COLLECT_FN = `(() => {
 })()`;
 
 type Signals = {
+  contractMarker: string;
   visibleText: string;
   authAttr: string;
   hasLogout: boolean;
@@ -119,7 +122,7 @@ function classifyAuth(s: Signals): Auth {
   if (s.authAttr === "authenticated" || s.hasLogout) return "authenticated";
   if (s.authAttr === "expired") return "expired";
   if (s.authAttr === "anonymous") return "anonymous";
-  return "unknown";
+  throw new Error(`PAGE_STATE_UNRESOLVED: page auth signal is not covered by ${PAGESTATE_CONTRACT_MARKER}`);
 }
 
 function classifyFlags(s: Signals): Record<string, boolean> {
@@ -138,6 +141,9 @@ export async function resolvePageState(page: CdpPage): Promise<PageStateLite> {
   const raw = page.url();
   const landmarks = await landmarksFromAxTree(page);
   const s = await page.evaluate<Signals>(COLLECT_FN);
+  if (s.contractMarker !== PAGESTATE_CONTRACT_MARKER) {
+    throw new Error(`PAGE_STATE_UNRESOLVED: missing data-page-state-contract=${PAGESTATE_CONTRACT_MARKER}`);
+  }
 
   const frames: FrameSummary[] = [];
   for (let i = 0; i < s.iframeCount; i++) {
