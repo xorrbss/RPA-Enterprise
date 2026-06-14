@@ -3,7 +3,8 @@
 -- 대상: runs, run_steps, workitems, human_tasks, scenarios,
 --       scenario_versions, artifacts, events_outbox, dead_letter,
 --       stagehand_calls, action_plan_cache, site_profiles,
---       browser_identities, network_policies
+--       site_profile_approvals, browser_identities, network_policies,
+--       gateway_policies, control_plane_idempotency_keys, workers
 -- 범위: 상태머신·job·캐시·이벤트가 의존하는 영속 컬럼/제약의 단일 진실원천.
 --   migration_concurrency_idempotency.sql(동시성·idempotency 보강)과 **별개 파일**이며
 --   그 파일이 정의한 테이블(credential_*/browser_leases/raw_items/normalized_records/
@@ -34,6 +35,10 @@ CREATE TABLE site_profiles (
   risk            text        NOT NULL DEFAULT 'green'
                     CHECK (risk IN ('green','amber','red')),  -- red = 승인 워크플로우 필요(amber=중간; api-surface/openapi SiteRisk와 정합)
   approved        boolean     NOT NULL DEFAULT false,       -- risk=red 승인 여부(SITE_PROFILE_BLOCKED 게이트)
+  approved_at     timestamptz,
+  approved_by     uuid,                                      -- approver subject id(JWT/session principal)
+  approval_reason text,
+  approval_expires_at timestamptz,
   circuit_state   text        NOT NULL DEFAULT 'closed'
                     CHECK (circuit_state IN ('closed','open','half_open')),  -- 사이트 서킷(event site.circuit_opened/closed, GET /sites 조회원)
   circuit_until   timestamptz,                              -- open cooldown 만료 — ops-defaults §3 site.circuit.open_duration
@@ -42,10 +47,21 @@ CREATE TABLE site_profiles (
 );
 CREATE INDEX idx_site_profiles_tenant ON site_profiles (tenant_id);
 
+CREATE TABLE site_profile_approvals (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  site_profile_id uuid        NOT NULL REFERENCES site_profiles(id),
+  approved_by     uuid        NOT NULL,
+  reason          text,
+  expires_at      timestamptz,
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_site_profile_approvals_site ON site_profile_approvals (tenant_id, site_profile_id, created_at DESC);
+
 -- ------------------------------------------------------------
 -- workers — 실행기 생존(heartbeat) + 워커 서킷 상태 레지스트리.
 --   runs.worker_id / browser_leases.owner_worker_id / credential_leases.run_id 연계 워커의 영속처.
---   worker.heartbeat·worker.circuit_opened/closed(event-envelope) 이벤트의 저장 대상.
+--   worker.* health/circuit telemetry is infrastructure telemetry, not tenant-scoped events_outbox.
 --   **인프라 레벨(테넌트 비종속) — RLS 미적용**(auth-rbac §4 BYPASSRLS 도메인). tenant_id 없음.
 -- ------------------------------------------------------------
 CREATE TABLE workers (
@@ -79,10 +95,52 @@ CREATE TABLE network_policies (
   id                 uuid        PRIMARY KEY,
   tenant_id          uuid        NOT NULL,
   allowed_domains    text[]      NOT NULL DEFAULT '{}',     -- 정확/와일드카드(*.vendor.com) 허용 목록
-  block_on_violation boolean     NOT NULL DEFAULT true,     -- 기본 true. 이탈 시 DOMAIN_POLICY_VIOLATION(security)
+  block_on_violation boolean     NOT NULL DEFAULT true CHECK (block_on_violation = true), -- Product Open: monitor-only mode is not contracted; 이탈 시 DOMAIN_POLICY_VIOLATION(security)
   created_at         timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_network_policies_tenant ON network_policies (tenant_id);
+
+-- gateway_policies — /v1/gateway/policy If-Match(version) 영속 근거.
+CREATE TABLE gateway_policies (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  model           text        NOT NULL,
+  version         int         NOT NULL DEFAULT 1 CHECK (version >= 1),
+  capabilities    jsonb       NOT NULL,                    -- llm-gateway-adapter.md ModelCapabilities
+  budget          jsonb       NOT NULL,                    -- maxInputTokens/maxOutputTokens/maxCost 등
+  fallback_config jsonb,                                   -- fallback model/transport policy
+  updated_by      uuid,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, model)
+);
+CREATE INDEX idx_gateway_policies_tenant ON gateway_policies (tenant_id);
+
+-- control_plane_idempotency_keys — api-surface.md §0.4 명령형 POST 중복 제출 보호.
+CREATE TABLE control_plane_idempotency_keys (
+  id               uuid        PRIMARY KEY,
+  tenant_id        uuid        NOT NULL,
+  endpoint         text        NOT NULL,
+  idempotency_key  text        NOT NULL CHECK (length(idempotency_key) > 0),
+  request_hash     text        NOT NULL,                   -- method/path/body canonical hash
+  status           text        NOT NULL DEFAULT 'processing'
+                     CHECK (status IN ('processing','succeeded','failed')),
+  response_status  int         CHECK (response_status BETWEEN 100 AND 599),
+  response_body    jsonb,
+  retention_until  timestamptz,
+  legal_hold       boolean     NOT NULL DEFAULT false,
+  deleted_at       timestamptz,
+  response_ref     text,                                   -- 큰 응답/첨부가 있으면 artifact/object ref
+  expires_at       timestamptz NOT NULL,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, endpoint, idempotency_key)
+);
+CREATE INDEX idx_control_plane_idempotency_expiry
+  ON control_plane_idempotency_keys (expires_at);
+CREATE INDEX idx_control_plane_idempotency_retention
+  ON control_plane_idempotency_keys (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
 
 -- ============================================================
 -- 2. scenarios / scenario_versions
@@ -217,7 +275,7 @@ CREATE TABLE run_steps (
   created_at         timestamptz NOT NULL DEFAULT now(),
   -- step 재시도/replay의 DB층 멱등: 같은 (run,step)의 동일 attempt 중복 INSERT 차단.
   --   부작용 외부 멱등은 side_effect.idempotency_key(다른 계층, ir.schema sideEffect)로 별도 보장.
-  UNIQUE (run_id, step_id, attempt)
+  UNIQUE (tenant_id, run_id, step_id, attempt)
 );
 -- NOTE: action_plan_cache는 §10에서 생성되므로 위 FK는 선언 불가 — 아래 §10 이후 ALTER로 추가.
 -- (테이블 정의 순서 의존을 피하기 위해 위 컬럼은 일단 참조만, 실제 FK는 §10 말미에서 보강.)
@@ -265,6 +323,7 @@ CREATE TABLE artifacts (
   tenant_id        uuid        NOT NULL,
   run_id           uuid        REFERENCES runs(id),         -- orphan_sweeper 대상(run 삭제/취소 후 참조 없으면 정리)
   step_id          text,                                    -- 생성 step(run_steps.step_id, 느슨 참조)
+  attempt          int         CHECK (attempt >= 0),        -- step attempt; with run_id+step_id forms the canonical step key
   type             text        NOT NULL,                    -- vlm_input/screenshot/receipt/evidence 등(개방형)
   redaction_status text        NOT NULL DEFAULT 'pending'
                      CHECK (redaction_status IN ('pending','redacted','failed','not_required')),  -- §B redaction job
@@ -274,13 +333,22 @@ CREATE TABLE artifacts (
   retention_until  timestamptz,                             -- §B retention_sweeper(법정 보존은 legal_hold로 예외)
   legal_hold       boolean     NOT NULL DEFAULT false,      -- true면 retention sweeper 예외
   quarantine       boolean     NOT NULL DEFAULT false,      -- §B integrity 불일치 시 격리
-  created_at       timestamptz NOT NULL DEFAULT now()
+  deleted_at       timestamptz,                             -- object 삭제 후 row soft-delete 시각
+  deleted_reason   text,
+  deleted_by_job   text,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    (step_id IS NULL AND attempt IS NULL)
+    OR (run_id IS NOT NULL AND step_id IS NOT NULL AND attempt IS NOT NULL)
+  )
 );
 CREATE INDEX idx_artifacts_run ON artifacts (run_id);
+CREATE INDEX idx_artifacts_step ON artifacts (tenant_id, run_id, step_id, attempt)
+  WHERE step_id IS NOT NULL;
 CREATE INDEX idx_artifacts_redaction ON artifacts (redaction_status)
   WHERE redaction_status = 'pending';                       -- redaction_job 폴링
 CREATE INDEX idx_artifacts_retention ON artifacts (retention_until)
-  WHERE legal_hold = false;                                 -- retention_sweeper
+  WHERE legal_hold = false AND deleted_at IS NULL;          -- retention_sweeper
 
 -- ============================================================
 -- 8. events_outbox
@@ -300,28 +368,45 @@ CREATE TABLE events_outbox (
                          'human_task.created','human_task.resolved','human_task.expired','human_task.escalated',
                          'workitem.completed','workitem.dead_lettered',
                          'pipeline.stage.completed','sink.delivered','sink.dead_lettered',
-                         'site.circuit_opened','site.circuit_closed',
-                         'worker.heartbeat','worker.circuit_opened','worker.circuit_closed'
+                         'site.circuit_opened','site.circuit_closed'
                        )),                                  -- event-envelope eventType enum
   event_version      int         NOT NULL CHECK (event_version >= 1),
   tenant_id          uuid        NOT NULL,
-  run_id             uuid,                                  -- run 없는 이벤트(worker.heartbeat 등) 위해 nullable
+  run_id             uuid,                                  -- run 없는 tenant-visible 이벤트(site.circuit_* 등)를 위해 nullable
   workitem_id        uuid,
   step_id            text,
+  attempt            int         CHECK (attempt >= 0),
   correlation_id     uuid        NOT NULL,                  -- envelope required
   causation_id       uuid,                                  -- 유발 이벤트 id
   ordering_key       text,                                  -- 기본 run_id. run-less 이벤트는 생략(envelope optional)
   occurred_at        timestamptz NOT NULL,
-  idempotency_key    text        NOT NULL,                  -- 예: run:step:attempt:verify
+  idempotency_key    text        NOT NULL CHECK (length(idempotency_key) > 0), -- 예: run:step:attempt:verify
   payload_schema_ref text        NOT NULL,                  -- 예: events/run.completed@1
   payload            jsonb       NOT NULL,
+  retention_until    timestamptz,
+  legal_hold         boolean     NOT NULL DEFAULT false,
+  deleted_at         timestamptz,
   published_at       timestamptz,                           -- NULL = 미발행(relay가 발행 후 set)
   created_at         timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, idempotency_key)                       -- 중복 인큐 차단(소비자 멱등) — 테넌트 스코프로 cross-tenant 키 충돌 방지
+  UNIQUE (tenant_id, idempotency_key),                      -- 중복 인큐 차단(소비자 멱등) — 테넌트 스코프로 cross-tenant 키 충돌 방지
+  CHECK (
+    (step_id IS NULL AND attempt IS NULL)
+    OR (run_id IS NOT NULL AND step_id IS NOT NULL AND attempt IS NOT NULL)
+  )
 );
 CREATE INDEX idx_events_outbox_unpublished ON events_outbox (created_at)
   WHERE published_at IS NULL;                               -- outbox relay 미발행 스캔
 CREATE INDEX idx_events_outbox_run ON events_outbox (run_id);
+CREATE INDEX idx_events_outbox_step ON events_outbox (tenant_id, run_id, step_id, attempt)
+  WHERE step_id IS NOT NULL;
+CREATE INDEX idx_events_outbox_retention ON events_outbox (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+-- outbox relay publish CAS:
+--   UPDATE events_outbox
+--      SET published_at = now()
+--    WHERE event_id = $1 AND published_at IS NULL
+--   RETURNING event_id;
+-- 0 row면 이미 다른 relay가 발행했거나 row가 없으므로 재발행하지 않는다.
 
 -- ============================================================
 -- 9. dead_letter
@@ -391,6 +476,9 @@ CREATE TABLE stagehand_calls (
   tenant_id               uuid        NOT NULL,
   run_id                  uuid        NOT NULL REFERENCES runs(id),
   step_id                 text        NOT NULL,             -- run_steps.step_id(느슨 참조)
+  attempt                 int         NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  idempotency_key         text        NOT NULL CHECK (length(idempotency_key) > 0),
+  request_hash            text        NOT NULL,
   model                   text        NOT NULL,             -- LLMRequest.model
   transport               text        NOT NULL DEFAULT 'sse'
                             CHECK (transport IN ('sse','sync')),  -- 기본 SSE, sync는 폴백(adapter §1)
@@ -402,10 +490,66 @@ CREATE TABLE stagehand_calls (
   prompt_template_version text,                             -- 캐시 키·기록(LLMRequest.promptTemplateVersion)
   output_ref              text,                             -- 누적 결과 참조(adapter §6)
   input_redacted_ref      text,                             -- 기본 hash만(adapter §6, redacted prompt)
-  created_at              timestamptz NOT NULL DEFAULT now()
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, idempotency_key)
 );
 CREATE INDEX idx_stagehand_calls_run ON stagehand_calls (run_id);
-CREATE INDEX idx_stagehand_calls_step ON stagehand_calls (run_id, step_id);
+CREATE INDEX idx_stagehand_calls_step ON stagehand_calls (tenant_id, run_id, step_id, attempt);
+
+-- ============================================================
+-- 12. audit_log
+--    PostgreSQL v1 authority for immutable audit records.
+--    Hash chaining is tenant-scoped; external WORM mirroring is optional later.
+-- ============================================================
+
+CREATE TABLE audit_log (
+  id               uuid        PRIMARY KEY,
+  tenant_id        uuid        NOT NULL,
+  sequence_no      bigint      NOT NULL CHECK (sequence_no >= 1),
+  actor            jsonb       NOT NULL,
+  action           text        NOT NULL CHECK (length(action) > 0),
+  outcome          text        NOT NULL CHECK (outcome IN ('allowed','denied','succeeded','failed')),
+  reason           text,
+  correlation_id   uuid        NOT NULL,
+  idempotency_key  text        NOT NULL CHECK (length(idempotency_key) > 0),
+  occurred_at      timestamptz NOT NULL,
+  payload          jsonb       NOT NULL,
+  retention_until  timestamptz,
+  legal_hold       boolean     NOT NULL DEFAULT false,
+  deleted_at       timestamptz,
+  previous_hash    text,
+  hash             text        NOT NULL CHECK (length(hash) > 0),
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, sequence_no),
+  UNIQUE (tenant_id, idempotency_key),
+  UNIQUE (tenant_id, hash),
+  FOREIGN KEY (tenant_id, previous_hash) REFERENCES audit_log(tenant_id, hash),
+  CHECK (
+    (sequence_no = 1 AND previous_hash IS NULL)
+    OR (sequence_no > 1 AND previous_hash IS NOT NULL)
+  )
+);
+CREATE UNIQUE INDEX uq_audit_log_tenant_genesis ON audit_log (tenant_id)
+  WHERE previous_hash IS NULL;
+CREATE UNIQUE INDEX uq_audit_log_tenant_previous_hash ON audit_log (tenant_id, previous_hash)
+  WHERE previous_hash IS NOT NULL;
+CREATE INDEX idx_audit_log_tenant_time ON audit_log (tenant_id, occurred_at);
+CREATE INDEX idx_audit_log_retention ON audit_log (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
+CREATE OR REPLACE FUNCTION prevent_audit_log_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'audit_log is append-only'
+    USING ERRCODE = '55000';
+  RETURN OLD;
+END $$;
+
+CREATE TRIGGER trg_audit_log_append_only
+BEFORE UPDATE OR DELETE ON audit_log
+FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_mutation();
 
 -- ============================================================
 -- FK: lease 테이블(migration_concurrency_idempotency.sql)의 uuid 참조 보강
@@ -431,3 +575,169 @@ ALTER TABLE challenge_resolution_attempts
   ADD CONSTRAINT fk_challenge_workitem FOREIGN KEY (workitem_id) REFERENCES workitems(id);
 
 -- raw_items.target_id는 connector 대상(target) 식별 — target 테이블은 connector 도메인(범위 외) → FK 미보강.
+
+-- ============================================================
+-- Tenant boundary hardening
+--   RLS는 행 가시성을 차단하지만, FK 무결성은 tenant_id를 포함한 복합 FK로 한 번 더 고정한다.
+--   workers는 auth-rbac.md §4의 인프라/BYPASSRLS 도메인이므로 제외.
+-- ============================================================
+
+ALTER TABLE site_profiles       ADD CONSTRAINT uq_site_profiles_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE browser_identities  ADD CONSTRAINT uq_browser_identities_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scenarios           ADD CONSTRAINT uq_scenarios_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scenario_versions   ADD CONSTRAINT uq_scenario_versions_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE workitems           ADD CONSTRAINT uq_workitems_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE runs                ADD CONSTRAINT uq_runs_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE raw_items           ADD CONSTRAINT uq_raw_items_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE normalized_records  ADD CONSTRAINT uq_normalized_records_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE action_plan_cache   ADD CONSTRAINT uq_action_plan_cache_tenant_id_id UNIQUE (tenant_id, id);
+
+ALTER TABLE site_profile_approvals
+  ADD CONSTRAINT fk_site_profile_approvals_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
+
+ALTER TABLE browser_identities
+  ADD CONSTRAINT fk_browser_identities_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
+
+ALTER TABLE scenario_versions
+  ADD CONSTRAINT fk_scenario_versions_scenario_tenant
+  FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios(tenant_id, id);
+
+ALTER TABLE runs
+  ADD CONSTRAINT fk_runs_scenario_version_tenant
+  FOREIGN KEY (tenant_id, scenario_version_id) REFERENCES scenario_versions(tenant_id, id),
+  ADD CONSTRAINT fk_runs_workitem_tenant
+  FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id);
+
+ALTER TABLE run_steps
+  ADD CONSTRAINT fk_run_steps_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_run_steps_action_plan_cache_tenant
+  FOREIGN KEY (tenant_id, action_plan_cache_id) REFERENCES action_plan_cache(tenant_id, id);
+
+ALTER TABLE human_tasks
+  ADD CONSTRAINT fk_human_tasks_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id);
+
+ALTER TABLE artifacts
+  ADD CONSTRAINT fk_artifacts_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_artifacts_step_attempt_tenant
+  FOREIGN KEY (tenant_id, run_id, step_id, attempt) REFERENCES run_steps(tenant_id, run_id, step_id, attempt);
+
+ALTER TABLE events_outbox
+  ADD CONSTRAINT fk_events_outbox_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_events_outbox_workitem_tenant
+  FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id),
+  ADD CONSTRAINT fk_events_outbox_step_attempt_tenant
+  FOREIGN KEY (tenant_id, run_id, step_id, attempt) REFERENCES run_steps(tenant_id, run_id, step_id, attempt);
+
+ALTER TABLE dead_letter
+  ADD CONSTRAINT fk_dead_letter_workitem_tenant
+  FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id),
+  ADD CONSTRAINT fk_dead_letter_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id);
+
+ALTER TABLE action_plan_cache
+  ADD CONSTRAINT fk_action_plan_cache_scenario_version_tenant
+  FOREIGN KEY (tenant_id, scenario_version_id) REFERENCES scenario_versions(tenant_id, id);
+
+ALTER TABLE stagehand_calls
+  ADD CONSTRAINT fk_stagehand_calls_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_stagehand_calls_step_attempt_tenant
+  FOREIGN KEY (tenant_id, run_id, step_id, attempt) REFERENCES run_steps(tenant_id, run_id, step_id, attempt);
+
+ALTER TABLE credential_leases
+  ADD CONSTRAINT fk_credlease_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_credlease_workitem_tenant
+  FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id),
+  ADD CONSTRAINT fk_credlease_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
+
+ALTER TABLE credential_concurrency_policies
+  ADD CONSTRAINT fk_credpolicy_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
+
+ALTER TABLE browser_leases
+  ADD CONSTRAINT fk_browserlease_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id),
+  ADD CONSTRAINT fk_browserlease_identity_tenant
+  FOREIGN KEY (tenant_id, browser_identity_id) REFERENCES browser_identities(tenant_id, id),
+  ADD CONSTRAINT fk_browserlease_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id);
+
+ALTER TABLE challenge_resolution_attempts
+  ADD CONSTRAINT fk_challenge_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_challenge_workitem_tenant
+  FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id);
+
+ALTER TABLE normalized_records
+  ADD CONSTRAINT fk_normalized_records_raw_item_tenant
+  FOREIGN KEY (tenant_id, raw_item_id) REFERENCES raw_items(tenant_id, id);
+
+ALTER TABLE sink_deliveries
+  ADD CONSTRAINT fk_sink_deliveries_normalized_record_tenant
+  FOREIGN KEY (tenant_id, normalized_record_id) REFERENCES normalized_records(tenant_id, id);
+
+DO $$
+DECLARE
+  tenant_table text;
+BEGIN
+  FOREACH tenant_table IN ARRAY ARRAY[
+    'credential_concurrency_policies',
+    'credential_leases',
+    'browser_leases',
+    'raw_items',
+    'normalized_records',
+    'sink_deliveries',
+    'challenge_resolution_attempts',
+    'site_profiles',
+    'site_profile_approvals',
+    'browser_identities',
+    'network_policies',
+    'gateway_policies',
+    'control_plane_idempotency_keys',
+    'scenarios',
+    'scenario_versions',
+    'workitems',
+    'runs',
+    'run_steps',
+    'human_tasks',
+    'events_outbox',
+    'dead_letter',
+    'action_plan_cache',
+    'stagehand_calls',
+    'audit_log'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tenant_table);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', tenant_table);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I USING (tenant_id = current_setting(''app.tenant_id'')::uuid) WITH CHECK (tenant_id = current_setting(''app.tenant_id'')::uuid)',
+      tenant_table
+    );
+  END LOOP;
+END $$;
+
+ALTER TABLE artifacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE artifacts FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY artifacts_visible_isolation ON artifacts
+  FOR SELECT
+  USING (
+    tenant_id = current_setting('app.tenant_id')::uuid
+    AND deleted_at IS NULL
+    AND redaction_status IN ('redacted','not_required')
+  );
+
+CREATE POLICY artifacts_insert_isolation ON artifacts
+  FOR INSERT
+  WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+
+-- redaction/retention/integrity jobs that must read pending/failed/deleted artifact rows run under
+-- an explicit operational role with BYPASSRLS, not the application role(auth-rbac.md §4).

@@ -25,7 +25,7 @@ CREATE TABLE credential_leases (
   tenant_id        uuid        NOT NULL,
   credential_ref   text        NOT NULL,
   site_profile_id  uuid        NOT NULL,
-  slot_no          int         NOT NULL DEFAULT 0,        -- 0 .. (policy.max_concurrency-1)
+  slot_no          int         NOT NULL DEFAULT 0 CHECK (slot_no >= 0), -- 0 .. (policy.max_concurrency-1)
   run_id           uuid        NOT NULL,
   workitem_id      uuid,
   status           text        NOT NULL CHECK (status IN ('active','released','expired')),
@@ -33,6 +33,33 @@ CREATE TABLE credential_leases (
   acquired_at      timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, credential_ref, site_profile_id, slot_no)  -- slot당 1 active
 );
+CREATE OR REPLACE FUNCTION validate_credential_lease_slot()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  allowed_max int;
+BEGIN
+  SELECT max_concurrency
+    INTO allowed_max
+    FROM credential_concurrency_policies
+   WHERE tenant_id = NEW.tenant_id
+     AND credential_ref = NEW.credential_ref
+     AND site_profile_id = NEW.site_profile_id;
+
+  allowed_max := COALESCE(allowed_max, 1);
+  IF NEW.slot_no < 0 OR NEW.slot_no >= allowed_max THEN
+    RAISE EXCEPTION 'credential lease slot_no % exceeds max_concurrency %', NEW.slot_no, allowed_max
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE TRIGGER trg_validate_credential_lease_slot
+BEFORE INSERT OR UPDATE OF tenant_id, credential_ref, site_profile_id, slot_no
+ON credential_leases
+FOR EACH ROW EXECUTE FUNCTION validate_credential_lease_slot();
+
 -- 획득(원자적, slot 1개를 점유):
 --   dispatcher는 credential_concurrency_policies.max_concurrency(없으면 기본 1)를 읽어
 --   0..max_concurrency-1 중 하나의 slot_no를 골라 조건부 upsert.
@@ -67,9 +94,16 @@ CREATE TABLE browser_leases (
   created_at          timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_browserlease_expiry ON browser_leases (expires_at) WHERE state IN ('reserved','active');
--- renewal: 긴 step/Live Assist 중 UPDATE ... SET heartbeat_at=now(), expires_at=now()+ttl WHERE id=? AND owner_worker_id=?
--- sweeper(애플리케이션 job): expires_at < now() AND state IN ('reserved','active')
---   → 프로세스 kill + cleanup 재실행(idempotent) + state='expired'. 책임 주체 = lease-sweeper job(§artifact-lifecycle와 동일 스케줄러).
+-- renewal(CAS): 긴 step/Live Assist 중
+--   UPDATE browser_leases
+--      SET heartbeat_at=now(), expires_at=now()+ttl
+--    WHERE id=? AND owner_worker_id=? AND state IN ('reserved','active') AND expires_at >= now();
+--   0 row면 이미 sweeper/drain이 이긴 것이므로 lease 재생 금지(조용한 revive 금지).
+-- sweeper(애플리케이션 job, CAS):
+--   UPDATE browser_leases SET state='expired'
+--    WHERE expires_at < now() AND state IN ('reserved','active')
+--   RETURNING *;
+--   → 반환 row만 프로세스 kill + cleanup 재실행(idempotent). 책임 주체 = lease-sweeper job(§artifact-lifecycle와 동일 스케줄러).
 
 -- ------------------------------------------------------------
 -- #11 raw_items idempotency — extract/page retry 시 중복 인입 방지
@@ -79,6 +113,8 @@ CREATE TABLE raw_items (
   tenant_id            uuid        NOT NULL,
   connector_id         text        NOT NULL,
   target_id            uuid        NOT NULL,
+  -- Decision v1: (tenant_id, connector_id, target_id) is the canonical connector target key.
+  -- Until connector target tables exist, raw rows carry the triple as their natural target reference.
   source_item_key      text,                       -- 아이템 단위 키(review_id 등)
   source_page_key      text,                       -- 페이지 단위 키(page no/cursor)
   collection_attempt_id uuid       NOT NULL,        -- 동일 raw의 재시도 구분
@@ -90,6 +126,9 @@ CREATE TABLE raw_items (
   --   - collect_tier는 hash에 **미포함**(동일 내용을 다른 tier로 재수집해도 dedup되도록)
   --   - 이미지/바이너리 메타는 콘텐츠 식별자(URL canonical 또는 자체 해시)만 포함, 휘발 헤더 제외
   raw_payload          jsonb       NOT NULL,
+  retention_until      timestamptz,
+  legal_hold           boolean     NOT NULL DEFAULT false,
+  deleted_at           timestamptz,
   collect_tier         text,
   pipeline_run_id      uuid,                        -- 재처리 라운드 식별
   collected_at         timestamptz NOT NULL DEFAULT now(),
@@ -113,6 +152,9 @@ CREATE TABLE raw_items (
 --   page_attempt      : UNIQUE NULLS NOT DISTINCT (…, source_page_key, collection_attempt_id)
 --                       — source_page_key도 nullable이므로 동일하게 NULLS NOT DISTINCT 필수
 -- 기본은 dedup_by_hash. cursor commit은 raw 영속화 성공 직후(§9 파이프라인).
+CREATE INDEX idx_raw_items_connector_target ON raw_items (tenant_id, connector_id, target_id);
+CREATE INDEX idx_raw_items_retention ON raw_items (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
 
 CREATE TABLE normalized_records (
   id            uuid PRIMARY KEY,
@@ -121,11 +163,16 @@ CREATE TABLE normalized_records (
   schema_ref    text NOT NULL,
   natural_key   text NOT NULL,                     -- 예: product_id+review_id
   record        jsonb NOT NULL,
+  retention_until timestamptz,
+  legal_hold     boolean NOT NULL DEFAULT false,
+  deleted_at     timestamptz,
   masked        boolean NOT NULL DEFAULT true,
   dedup_action  text CHECK (dedup_action IN ('insert','keep_existing','update_latest','merge')),
   created_at    timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, schema_ref, natural_key)        -- 자연키 dedup
 );
+CREATE INDEX idx_normalized_records_retention ON normalized_records (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
 
 CREATE TABLE sink_deliveries (
   id                  uuid PRIMARY KEY,
@@ -136,8 +183,9 @@ CREATE TABLE sink_deliveries (
   -- [FIX #7] 외부 sink로 보내는 멱등키. 재시도/at-least-once에도 다운스트림 중복 방지.
   --   값 규약: tenant_id:sink_config_id:schema_ref:natural_key (attempt_no는 포함 안 함 — 같은 레코드의
   --   모든 attempt가 동일 키를 보내 외부에서 1건으로 흡수). 외부 API의 Idempotency-Key 헤더 등에 사용.
-  sink_idempotency_key text NOT NULL,
-  status              text CHECK (status IN ('pending','delivered','failed','dead_letter')),
+  sink_idempotency_key text NOT NULL CHECK (length(sink_idempotency_key) > 0),
+  status              text NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','delivered','failed','dead_letter')),
   response_ref        text,
   attempted_at        timestamptz NOT NULL DEFAULT now(),
   UNIQUE (normalized_record_id, sink_config_id, attempt_no)   -- 내부 attempt 이력 멱등

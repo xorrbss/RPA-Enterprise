@@ -13,9 +13,10 @@
     },
     "vlm_fallback": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "prompt": { "type": "string" },
-        "when": { "type": "string", "description": "IREL식. 기본 'criteria_uncertain'" }
+        "prompt": { "type": "string", "minLength": 1 },
+        "when": { "type": "string", "minLength": 1, "description": "verify-engine 상태 조건. 기본 'criteria_uncertain'(IREL scope 아님)" }
       },
       "required": ["prompt"]
     },
@@ -37,28 +38,28 @@
         { "$ref": "#/$defs/receipt_captured" }
       ]
     },
-    "url_matches":         { "type": "object", "additionalProperties": false, "required": ["type", "pattern"], "properties": { "type": { "const": "url_matches" }, "pattern": { "type": "string" }, "required": { "type": "boolean" } } },
-    "element_visible":     { "type": "object", "additionalProperties": false, "required": ["type", "target"], "properties": { "type": { "const": "element_visible" }, "target": { "$ref": "#/$defs/elementTarget" }, "timeout_ms": { "type": "integer" }, "required": { "type": "boolean" } } },
+    "url_matches":         { "type": "object", "additionalProperties": false, "required": ["type", "pattern"], "properties": { "type": { "const": "url_matches" }, "pattern": { "type": "string", "minLength": 1, "format": "regex" }, "required": { "type": "boolean" } } },
+    "element_visible":     { "type": "object", "additionalProperties": false, "required": ["type", "target"], "properties": { "type": { "const": "element_visible" }, "target": { "$ref": "#/$defs/elementTarget" }, "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 300000 }, "required": { "type": "boolean" } } },
     "element_absent":      { "type": "object", "additionalProperties": false, "required": ["type", "target"], "properties": { "type": { "const": "element_absent" }, "target": { "$ref": "#/$defs/elementTarget" }, "required": { "type": "boolean" } } },
-    "text_includes":       { "type": "object", "additionalProperties": false, "required": ["type", "texts"], "properties": { "type": { "const": "text_includes" }, "texts": { "type": "array", "items": { "type": "string" } }, "required": { "type": "boolean" } } },
-    "extract_schema_valid":{ "type": "object", "additionalProperties": false, "required": ["type", "schema_ref"], "properties": { "type": { "const": "extract_schema_valid" }, "schema_ref": { "type": "string" }, "required": { "type": "boolean" } } },
+    "text_includes":       { "type": "object", "additionalProperties": false, "required": ["type", "texts"], "properties": { "type": { "const": "text_includes" }, "texts": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "required": { "type": "boolean" } } },
+    "extract_schema_valid":{ "type": "object", "additionalProperties": false, "required": ["type", "schema_ref"], "properties": { "type": { "const": "extract_schema_valid" }, "schema_ref": { "type": "string", "minLength": 1 }, "required": { "type": "boolean" } } },
     "min_rows":            { "type": "object", "additionalProperties": false, "required": ["type", "n"], "properties": { "type": { "const": "min_rows" }, "n": { "type": "integer", "minimum": 1, "description": "0 금지 — 빈결과는 empty_result_allowed로만" }, "required": { "type": "boolean" } } },
-    "http_status":         { "type": "object", "additionalProperties": false, "required": ["type", "codes"], "properties": { "type": { "const": "http_status" }, "codes": { "type": "array", "items": { "type": "integer" } }, "required": { "type": "boolean" } } },
-    "value_match":         { "type": "object", "additionalProperties": false, "required": ["type", "path", "equals"], "properties": { "type": { "const": "value_match" }, "path": { "type": "string", "description": "dot-path(ident('.'ident)*), 인덱싱 금지 — ir-static-validation.md §3" }, "equals": {}, "required": { "type": "boolean" } } },
-    "empty_result_allowed":{ "type": "object", "additionalProperties": false, "required": ["type", "when"], "properties": { "type": { "const": "empty_result_allowed" }, "when": { "type": "string", "description": "IREL 불린식 witness. 예: flags.no_review_message_visible" } } },
+    "http_status":         { "type": "object", "additionalProperties": false, "required": ["type", "codes"], "properties": { "type": { "const": "http_status" }, "codes": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 100, "maximum": 599 } }, "required": { "type": "boolean" } } },
+    "value_match":         { "type": "object", "additionalProperties": false, "required": ["type", "path", "equals"], "properties": { "type": { "const": "value_match" }, "path": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$", "description": "dot-path(ident('.'ident)*), 인덱싱 금지 — ir-static-validation.md §3" }, "equals": {}, "required": { "type": "boolean" } } },
+    "empty_result_allowed":{ "type": "object", "additionalProperties": false, "required": ["type", "when"], "properties": { "type": { "const": "empty_result_allowed" }, "when": { "type": "string", "minLength": 1, "description": "IREL 불린식 witness. 예: flags.no_review_message_visible" } } },
     "receipt_captured":    { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "receipt_captured" }, "required": { "type": "boolean" } }, "description": "side_effect 비-read_only 노드 후 증빙 캡처 검증" },
     "elementTarget": {
       "type": "object",
       "additionalProperties": false,
       "oneOf": [
-        { "required": ["selector"] },
-        { "required": ["role", "name"] }
+        { "required": ["selector"], "not": { "anyOf": [ { "required": ["role"] }, { "required": ["name"] } ] } },
+        { "required": ["role", "name"], "not": { "required": ["selector"] } }
       ],
       "description": "[FIX] 빈 target 거부. selector 단독 또는 role+name 조합 필수.",
       "properties": {
-        "role": { "type": "string" },
-        "name": { "type": "string" },
-        "selector": { "type": "string" }
+        "role": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "selector": { "type": "string", "minLength": 1 }
       }
     }
   }

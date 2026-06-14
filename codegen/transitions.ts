@@ -53,11 +53,11 @@ export function transitionRun(
       }
       // R3a/R3b: claimed + init_failed → 임계 분기
       if (ev.type === "init_failed") {
-        if (g.initFailBelowThreshold) {
+        if (requireBool("run", cur, ev.type, g.initFailBelowThreshold)) {
           // R3a: 연속 실패 임계 미만 → 재큐(attempts+1, 백오프)
           return r("queued", [{ kind: "requeue", backoff: true }]);
         }
-        // R3b: 임계 초과 → 서킷 오픈 + DLQ 판단, 더 이상 재큐 안 함
+        // R3b: 임계 이상 → 서킷 오픈 + DLQ 판단, 더 이상 재큐 안 함
         return r("failed_system", [
           { kind: "openCircuit" },
           { kind: "evaluateDeadLetter" },
@@ -95,7 +95,7 @@ export function transitionRun(
         return r("completing", [{ kind: "finalizeOutputs" }]);
       }
       // R8: running + unrecoverable_exception (system, 재시도 소진) → failed_system
-      if (ev.type === "unrecoverable_exception") {
+      if (ev.type === "unrecoverable_exception" && g.exceptionClass === "system") {
         return r("failed_system", [
           { kind: "captureFailureScreenshot" },
           { kind: "evaluateDeadLetter" },
@@ -103,14 +103,18 @@ export function transitionRun(
         ]);
       }
       // R9: running + business_exception → failed_business
-      if (ev.type === "business_exception") {
+      if (ev.type === "business_exception" && g.exceptionClass === "business") {
         return r("failed_business", [
           { kind: "emitEvent", event: "run.failed_business" },
         ]);
       }
       // R10: running + security_exception → aborting (즉시 중단 + 알림)
-      if (ev.type === "security_exception") {
-        return r("aborting", [{ kind: "notify" }]);
+      if (ev.type === "security_exception" && g.exceptionClass === "security") {
+        return r("aborting", [
+          { kind: "sseClose" },
+          { kind: "browserDrain" },
+          { kind: "notify" },
+        ]);
       }
       break;
 
@@ -185,13 +189,13 @@ export function transitionRun(
     case "resuming":
       // R18: resuming + restore_ok (pageState 대조 통과) → running (진입 노드부터 재개)
       if (ev.type === "restore_ok" && g.restoreOk) {
-        return r("running", []);
+        return r("running", [{ kind: "emitEvent", event: "run.resumed" }]);
       }
       // R19/R20: resuming + restore_failed → 재로그인 우회 분기
       if (ev.type === "restore_failed") {
-        if (g.loginBypassPossible) {
+        if (requireBool("run", cur, ev.type, g.loginBypassPossible)) {
           // R19: 우회 가능 → running (login_flow 분기)
-          return r("running", []);
+          return r("running", [{ kind: "emitEvent", event: "run.resumed" }]);
         }
         // R20: 우회 불가 → failed_system (실패 마감)
         return r("failed_system", [
@@ -226,7 +230,9 @@ export function transitionRun(
       }
       // R25: completing + abort_requested → completing (abort 무시/거부 — finalize 우선, 상태 유지)
       if (ev.type === "abort_requested") {
-        return r("completing", []);
+        return r("completing", [
+          { kind: "rejectCommand", code: "RUN_ALREADY_TERMINAL", httpStatus: 409 },
+        ]);
       }
       break;
 
@@ -289,7 +295,7 @@ export function transitionWorkitem(
       }
       // W4/W5: processing + system_exception → attempts 분기
       if (ev.type === "system_exception") {
-        if (g.attemptsBelowMax) {
+        if (requireBool("workitem", cur, ev.type, g.attemptsBelowMax)) {
           // W4: attempts < max → retry (evidence 유지, 백오프)
           return r("retry", []);
         }
@@ -301,7 +307,7 @@ export function transitionWorkitem(
       }
       // W6/W7: processing + checkout_expired → attempts 분기
       if (ev.type === "checkout_expired") {
-        if (g.attemptsBelowMax) {
+        if (requireBool("workitem", cur, ev.type, g.attemptsBelowMax)) {
           // W6: attempts < max → retry (체크아웃 회수, evidence 유지)
           return r("retry", []);
         }
@@ -463,6 +469,16 @@ function timeoutBranch(
 }
 
 // ===== helper =====
+function requireBool(
+  entity: "run" | "workitem" | "human_task",
+  state: string,
+  event: string,
+  value: boolean | undefined,
+): boolean {
+  if (value === true || value === false) return value;
+  throw new IllegalTransition(entity, state, event);
+}
+
 function r<S>(next: S, sideEffects: SideEffectCmd[]): TransitionResult<S> {
   return { next, sideEffects };
 }

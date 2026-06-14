@@ -28,6 +28,11 @@
 | `credential.default_max_concurrency` | **1** | 1 | §19 결정·credential_concurrency_policies | 사이트별 정책으로 상향 |
 | `lease_sweeper.poll_interval` | 5s | 20ms | §B "수초 폴링" | browser+credential 만료 회수(idempotent) |
 
+### 2.1 Product-open DB smoke binding
+
+- `db/migration_smoke.sql` is the release smoke for these lease defaults: active credential slots are not stolen, released/expired slots can be reacquired by CAS, browser renewal is owner-only, expired browser leases are not revived, and the sweeper is idempotent.
+- Run the smoke from `db/README.md` before product-open promotion. A run under `SUPERUSER`/`BYPASSRLS` is only a syntax/catalog check; at least one non-bypass application-role run is required to exercise RLS row visibility.
+
 ---
 
 ## 3. 서킷 임계 (error-catalog · reserved-handlers)
@@ -81,6 +86,12 @@
 | `artifact_retention_sweeper` | daily 02:00 KST | tick | §B "일배치" | retention_until < now() 삭제+soft-delete |
 | `artifact_integrity_checker` | daily | tick | §B | sha256 불일치 → quarantine+알림 |
 | `artifact_orphan_sweeper` | daily | tick | §B | 참조 없는 object 정리 |
+
+### 6.1 DB payload retention 계약
+
+- Decision v1: payload-bearing PostgreSQL tables carry inline `retention_until`, `deleted_at`, and `legal_hold` columns. This applies to `control_plane_idempotency_keys.response_body`, `raw_items.raw_payload`, `normalized_records.record`, `events_outbox.payload`, `artifacts.object_ref` metadata rows, and `audit_log.payload`.
+- `legal_hold = true` blocks retention deletion. `deleted_at` records soft-delete/tombstone state; physical purge/archive workers may be added later, but the table-level columns are the authoritative v1 retention contract.
+- artifact는 위 표의 `artifact.retention_default`와 sweeper 규칙을 따른다. 다른 payload-bearing 테이블은 각 row의 `retention_until`을 기준으로 하며, 값이 없으면 해당 producer 계약이 보존 기간을 아직 산출하지 못한 오류로 취급한다(조용한 unknown 금지).
 
 ---
 

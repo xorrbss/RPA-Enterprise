@@ -95,8 +95,19 @@ export interface HumanTaskGuard {
 }
 
 // ===== Side effects (전이표 'sideEffects' 열) =====
+export type EventEnvelopeType =
+  | "run.created" | "run.started" | "run.suspended" | "run.resume_requested" | "run.resumed"
+  | "run.cancelled" | "run.completed" | "run.failed_business" | "run.failed_system"
+  | "step.started" | "step.completed" | "step.verify.failed"
+  | "llm.stream.started" | "llm.stream.completed" | "llm.stream.aborted"
+  | "challenge.detected" | "challenge.resolved"
+  | "human_task.created" | "human_task.resolved" | "human_task.expired" | "human_task.escalated"
+  | "workitem.completed" | "workitem.dead_lettered"
+  | "pipeline.stage.completed" | "sink.delivered" | "sink.dead_lettered"
+  | "site.circuit_opened" | "site.circuit_closed";
+
 export type SideEffectCmd =
-  | { kind: "emitEvent"; event: string }                              // event-envelope event_type
+  | { kind: "emitEvent"; event: EventEnvelopeType }                   // event-envelope event_type
   | { kind: "setField"; entity: "run" | "workitem" | "human_task"; field: string }
   | { kind: "requeue"; backoff: true }                                // R3a
   | { kind: "openCircuit" }                                           // R3b
@@ -119,6 +130,7 @@ export type SideEffectCmd =
   | { kind: "reassignAssignee" }                                      // H5/H6
   | { kind: "captureFailureScreenshot" }                              // R8
   | { kind: "consistencyRecovery" }                                   // R12/R22
+  | { kind: "rejectCommand"; code: string; httpStatus: number }        // R25 등 명시적 명령 거부
   | { kind: "notify"; channel?: string };                             // R10/R14 알림
 
 // ===== Transition functions (state-machine.md §4) =====

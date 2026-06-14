@@ -22,6 +22,11 @@ import Ajv2020, { ErrorObject, ValidateFunction } from "ajv/dist/2020";
 import irSchema from "../schema/ir.schema.json";
 import verifySchema from "../schema/verify.schema.json";
 import eventEnvelopeSchema from "../schema/event-envelope.schema.json";
+import {
+  EVENT_PAYLOAD_SCHEMA_REFS,
+  EVENT_PAYLOAD_SCHEMAS,
+} from "./event-payload-registry";
+import type { EventType } from "./types";
 
 /** 경계 검증 결과. 실패 시 ajv 에러 배열 동봉(소비자가 IR_SCHEMA_INVALID 등으로 매핑). */
 export interface ValidationResult {
@@ -70,6 +75,19 @@ ajv.addFormat("date-time", {
     ) && !Number.isNaN(Date.parse(s)),
 });
 
+// Verify DSL url_matches.pattern. Invalid regex must fail at validation time.
+ajv.addFormat("regex", {
+  type: "string",
+  validate: (s: string): boolean => {
+    try {
+      new RegExp(s);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+});
+
 // --- 스키마 등록 & 컴파일 ---
 // 등록 순서 무관(Ajv는 $id로 cross-ref 해소)하지만, 의존 스키마(verify)를
 // 먼저 addSchema 한 뒤 ir을 컴파일해 상대 $ref "verify.schema.json"을 해소한다.
@@ -78,15 +96,64 @@ ajv.addSchema(verifySchema, verifySchema.$id);
 const irValidate: ValidateFunction = ajv.compile(irSchema);
 const verifyValidate: ValidateFunction = ajv.getSchema(verifySchema.$id) as ValidateFunction;
 const eventValidate: ValidateFunction = ajv.compile(eventEnvelopeSchema);
+const eventPayloadValidators = Object.fromEntries(
+  Object.entries(EVENT_PAYLOAD_SCHEMAS).map(([eventType, schema]) => [
+    eventType,
+    ajv.compile(schema),
+  ]),
+) as Record<EventType, ValidateFunction>;
 
 function run(fn: ValidateFunction, data: unknown): ValidationResult {
   const valid = fn(data) as boolean;
   return { valid, errors: valid ? null : (fn.errors ?? null) };
 }
 
+function contractError(message: string, instancePath: string): ErrorObject {
+  return {
+    instancePath,
+    schemaPath: "#/payloadRegistry",
+    keyword: "payloadRegistry",
+    params: {},
+    message,
+  };
+}
+
+function isEventEnvelope(
+  data: unknown,
+): data is { event_type: EventType; payload_schema_ref: string; payload: unknown } {
+  if (typeof data !== "object" || data === null) return false;
+  const candidate = data as Record<string, unknown>;
+  return (
+    typeof candidate.event_type === "string" &&
+    Object.prototype.hasOwnProperty.call(EVENT_PAYLOAD_SCHEMA_REFS, candidate.event_type) &&
+    typeof candidate.payload_schema_ref === "string" &&
+    typeof candidate.payload === "object" &&
+    candidate.payload !== null &&
+    !Array.isArray(candidate.payload)
+  );
+}
+
 /** 시나리오 IR(ir.schema.json) 경계 검증. 내부적으로 verify.schema.json($ref) 포함. */
 export function validateIR(data: unknown): ValidationResult {
-  return run(irValidate, data);
+  const base = run(irValidate, data);
+  if (!base.valid) return base;
+
+  if (typeof data === "object" && data !== null && "params_schema" in data) {
+    const paramsSchema = (data as { params_schema?: unknown }).params_schema;
+    if (paramsSchema !== undefined) {
+      const validSchema = ajv.validateSchema(paramsSchema as object);
+      if (!validSchema) {
+        return {
+          valid: false,
+          errors: ajv.errors ?? [
+            contractError("params_schema must be a valid JSON Schema draft 2020-12 schema", "/params_schema"),
+          ],
+        };
+      }
+    }
+  }
+
+  return base;
 }
 
 /** Verify DSL(verify.schema.json) 경계 검증. */
@@ -96,12 +163,49 @@ export function validateVerify(data: unknown): ValidationResult {
 
 /** Event Envelope(event-envelope.schema.json) 경계 검증. */
 export function validateEvent(data: unknown): ValidationResult {
-  return run(eventValidate, data);
+  const envelope = run(eventValidate, data);
+  if (!envelope.valid) return envelope;
+
+  if (!isEventEnvelope(data)) {
+    return {
+      valid: false,
+      errors: [
+        contractError("event_type/payload_schema_ref/payload shape mismatch", ""),
+      ],
+    };
+  }
+
+  const expectedRef = EVENT_PAYLOAD_SCHEMA_REFS[data.event_type];
+  if (data.payload_schema_ref !== expectedRef) {
+    return {
+      valid: false,
+      errors: [
+        contractError(
+          `payload_schema_ref must be ${expectedRef} for ${data.event_type}`,
+          "/payload_schema_ref",
+        ),
+      ],
+    };
+  }
+
+  const payloadValidate = eventPayloadValidators[data.event_type];
+  const validPayload = payloadValidate(data.payload) as boolean;
+  return {
+    valid: validPayload,
+    errors: validPayload ? null : (payloadValidate.errors ?? null),
+  };
 }
 
-/** 진단/테스트용. 컴파일된 validate 함수 직접 노출(원시 ajv 에러 접근). */
+/** 진단/테스트용 원시 Ajv validators. Event는 envelope-only이므로 public boundary로 쓰지 않는다. */
+export const rawValidators = {
+  ir: irValidate,
+  verify: verifyValidate,
+  eventEnvelope: eventValidate,
+} as const;
+
+/** Public boundary validators. event는 payload registry 검증까지 포함한다. */
 export const validators = {
   ir: irValidate,
   verify: verifyValidate,
-  event: eventValidate,
+  event: (data: unknown): boolean => validateEvent(data).valid,
 } as const;

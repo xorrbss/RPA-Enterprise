@@ -5,10 +5,24 @@
   "description": "D1 codegen 산출물(계약→실행코드). 계약 SSoT는 상위 디렉터리.",
   "type": "module",
   "scripts": {
+    "contract:lint": "node ../scripts/contract-lint.mjs",
+    "blocked:audit": "node ../scripts/blocked-decisions-audit.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "fixtures": "tsx run-fixtures.ts",
     "validators": "tsx validators.fixtures.ts",
-    "test": "npm run typecheck && npm run fixtures && npm run validators"
+    "consistency": "tsx contract-consistency.ts",
+    "yaml:parse": "python ../scripts/yaml-parse.py",
+    "secret:scan": "node ../scripts/secret-scan.mjs",
+    "html:smoke": "node ../scripts/html-smoke.mjs",
+    "html:http-smoke": "node ../scripts/html-http-smoke.mjs",
+    "db:static-smoke": "node ../scripts/db-static-smoke.mjs",
+    "db:smoke": "node ../scripts/db-migration-smoke.mjs",
+    "db:smoke:temp": "node ../scripts/db-temp-postgres-gate.mjs",
+    "db:temp-smoke": "node ../scripts/db-temp-postgres-gate.mjs",
+    "ci:local": "node ../scripts/run-local-gates.mjs",
+    "ci:local:temp-db": "node ../scripts/db-temp-postgres-gate.mjs --local-gates",
+    "ci:local:no-db": "node ../scripts/run-local-gates.mjs --skip-db",
+    "test": "npm run typecheck && npm run fixtures && npm run validators && npm run consistency"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rpa.local/contracts/events/common-empty-payload@1",
+  "title": "Common closed empty event payload v1",
+  "description": "Shared v1 event payload contract. Event bodies are closed empty objects; identity and correlation fields stay in the event envelope. Adding body fields requires a versioned schema change.",
+  "type": "object",
+  "additionalProperties": false
+}

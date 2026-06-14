@@ -9,6 +9,8 @@
 
 상태: `queued, claimed, running, suspending, suspended, resume_requested, resuming, completing, completed, aborting, cancelled, failed_business, failed_system`.
 
+IR terminal `success_empty`는 RunState를 새로 만들지 않고 `completed` + `run.completed` payload의 outcome/reason(`success_empty`)로 표현한다. 빈 결과 witness 없이 이 경로를 쓰는 IR은 승격 차단/경고 대상이다(reserved-handlers.md `@end_no_data`).
+
 종결(terminal): `completed, cancelled, failed_business, failed_system`.
 
 | # | 현재 | 이벤트 | 다음 | guard | sideEffects |
@@ -16,14 +18,14 @@
 | R1 | queued | worker.claimed | claimed | lease 확보 | runs.worker_id set |
 | R2 | claimed | run.started | running | INIT 성공 | run.started 이벤트 |
 | R3a | claimed | init_failed | queued | 연속 실패 임계 **미만** | **재큐**(attempts+1, 백오프) |
-| R3b | claimed | init_failed | failed_system | 연속 실패 임계 **초과** | 서킷 오픈, DLQ 판단, 더 이상 재큐 안 함 |
+| R3b | claimed | init_failed | failed_system | 연속 실패 임계 **이상** | 서킷 오픈, DLQ 판단, 더 이상 재큐 안 함 |
 | R4 | running | step.challenge_detected | suspending | policy=human_first | human_task 생성(**kind=ChallengeSummary.type: mfa면 mfa, 그 외 captcha**), bookmark 시작 |
 | R5 | running | node→@human_task | suspending | — | human_task 생성 |
 | R6 | running | abort_requested | aborting | — | **SSE close + browser drain** |
 | R7 | running | last_node_success | completing | 흐름 종료(terminal 도달) | 산출 확정 시작 |
 | R8 | running | unrecoverable_exception | failed_system | system, 재시도 소진 | 실패 스크린샷, DLQ 판단 |
 | R9 | running | business_exception | failed_business | business | human 후속 없으면 종결 |
-| R10 | running | security_exception | aborting | security | 즉시 중단 + 알림 |
+| R10 | running | security_exception | aborting | security | **SSE close + browser drain + 알림** |
 | R11 | suspending | bookmark_saved | suspended | resume_token 생성됨 | browser lease **반납**(Phase A 기본) 또는 유지(Live Assist) |
 | R12 | suspending | bookmark_failed | failed_system | — | 일관성 복구 |
 | R13 | suspended | human_task.resolved | resume_requested | task valid | resume 이벤트 |
@@ -31,14 +33,14 @@
 | R15 | suspended | human_task.escalated | suspended | escalate | 담당자 재배정(상태 유지) |
 | R16 | suspended | abort_requested | aborting | — | resume 무시 |
 | R17 | resume_requested | worker.claimed | resuming | lease 확보 | session restore 시작 |
-| R18 | resuming | restore_ok | running | pageState 대조 통과 | 진입 노드부터 재개 |
-| R19 | resuming | restore_failed | running | 재로그인 우회 가능 | login_flow로 분기 |
+| R18 | resuming | restore_ok | running | pageState 대조 통과 | 진입 노드부터 재개, **run.resumed 이벤트** |
+| R19 | resuming | restore_failed | running | 재로그인 우회 가능 | login_flow로 분기, **run.resumed 이벤트** |
 | R20 | resuming | restore_failed | failed_system | 우회 불가 | 실패 마감 |
 | R21 | completing | finalize_ok | completed | **artifact flush + 산출 확정 + 이벤트 발행 성공** (sink 전달 대기 안 함 — §2 decoupled) | run.completed, usage flush |
 | R22 | completing | finalize_failed | failed_system | 저장/이벤트 발행 실패 | 보상 시도 후 마감, 일관성 로그 |
 | R23 | aborting | drain_ok | cancelled | — | run.cancelled, lease 회수 |
 | R24 | aborting | drain_timeout | cancelled | abort_timeout 초과 | 강제 lease kill |
-| R25 | completing | abort_requested | completing | — | **abort 무시(거부)**: finalize가 이긴다. RUN_ALREADY_TERMINAL로 응답, 상태 유지 |
+| R25 | completing | abort_requested | completing | — | **abort 무시(거부)**: finalize가 이긴다. `rejectCommand(RUN_ALREADY_TERMINAL, 409)`, 상태 유지 |
 | R26 | suspending | abort_requested | aborting | bookmark 진행 취소 가능 | bookmark 중단 후 drain. 불가 시 suspended 도달까지 대기 후 R16 |
 | R27 | resuming | abort_requested | aborting | — | restore 중단 + drain, resume 무시 |
 | R28 | resume_requested | abort_requested | aborting | — | **resume 무시**(트리거된 resume 폐기). Phase A는 R11에서 lease 반납 상태 → drain 즉시 완료 후 R23으로 cancelled |
@@ -88,7 +90,7 @@
 | H4b | open/assigned/in_progress | timeout | escalated | on_timeout=escalate | 관리자 큐로 **자동 에스컬레이션**, run R15(suspended 유지) |
 | H5 | open/assigned/in_progress | escalate | escalated | — | 관리자 **수동 에스컬레이션** → assigned로 복귀 가능, run R15 |
 | H6 | escalated | assign | assigned | — | 새 담당자 재배정 |
-| H7 | * | cancel | cancelled | — | run abort 연동(R16) |
+| H7 | open/assigned/in_progress/escalated | cancel | cancelled | — | run abort 연동(R16). resolved/expired/cancelled에서 cancel은 IllegalTransition |
 | H8 | escalated | timeout | expired | — | **에스컬레이션 후에도 미해소 → 최종 만료**(재에스컬레이션 없음 — 무한 대기 방지), run R14 |
 
 규칙: Phase A에서는 `live_assist` 종류 없이 approval/validation/captcha/mfa/exception만. captcha/mfa는 **snapshot 기반 처리**(Phase A, lease 반납됨) — 실시간 제어는 Phase B(D12).

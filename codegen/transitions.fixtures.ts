@@ -16,8 +16,8 @@
  *  - 모든 fixture는 계약 표의 특정 행(R#/W#/H#)에 1:1 대응한다.
  *
  * 테스트 러너 비종속: plain 배열 + 파일 하단의 간단 assert 루프(runFixtures)만 사용.
- * SideEffectCmd 비교는 표가 명시적으로 고정한 emitEvent(event-envelope event_type)만 부분 검증한다
- * (표가 산출물 키만 서술하고 정확한 cmd 시퀀스를 고정하지 않는 행은 next/throw만 검증).
+ * SideEffectCmd 비교는 표가 명시적으로 고정한 emitEvent(event-envelope event_type)와
+ * product-open 안전에 필요한 sideEffect kind만 부분 검증한다.
  */
 import type {
   RunState,
@@ -41,6 +41,9 @@ import {
   transitionWorkitem,
   transitionHumanTask,
 } from "./transitions";
+import { EVENT_TYPES } from "./types";
+
+const EVENT_TYPE_SET = new Set<string>(EVENT_TYPES);
 
 // ===== 시뮬레이션-클록 픽스처값 (ops-defaults.md) =====
 // 운영 의미는 동일, 스케일만 축소. 타이머 구동 전이(R24/W6/W7/W9/W11)와
@@ -63,6 +66,7 @@ export const FIXTURE_CLOCK = {
 // ===== Fixture 형태 =====
 // {name, entity, cur, event, guard?, expectNext | expectThrow}
 // expectEmits: 표가 명시적으로 고정한 emitEvent(event_type)만 부분검증(옵션).
+// expectSideEffects: emit 외 sideEffect kind를 부분검증(옵션).
 export interface RunFixture {
   name: string;
   entity: "run";
@@ -72,6 +76,7 @@ export interface RunFixture {
   expectNext?: RunState;
   expectThrow?: "IllegalTransition";
   expectEmits?: string[];
+  expectSideEffects?: SideEffectCmd["kind"][];
 }
 export interface WorkitemFixture {
   name: string;
@@ -82,6 +87,7 @@ export interface WorkitemFixture {
   expectNext?: WorkitemState;
   expectThrow?: "IllegalTransition";
   expectEmits?: string[];
+  expectSideEffects?: SideEffectCmd["kind"][];
 }
 export interface HumanTaskFixture {
   name: string;
@@ -92,6 +98,7 @@ export interface HumanTaskFixture {
   expectNext?: HumanTaskState;
   expectThrow?: "IllegalTransition";
   expectEmits?: string[];
+  expectSideEffects?: SideEffectCmd["kind"][];
 }
 export type TransitionFixture = RunFixture | WorkitemFixture | HumanTaskFixture;
 
@@ -131,6 +138,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "init_failed" },
     guard: { initFailBelowThreshold: false },
     expectNext: "failed_system",
+    expectEmits: ["run.failed_system"],
   },
   // --- R4/R5: challenge / human_task → suspending ---
   {
@@ -154,6 +162,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     cur: "running",
     event: { type: "abort_requested" },
     expectNext: "aborting",
+    expectSideEffects: ["sseClose", "browserDrain"],
   },
   // --- R7/R8/R9/R10: 흐름 종료 / 예외 분기 ---
   {
@@ -171,6 +180,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "unrecoverable_exception" },
     guard: { exceptionClass: "system" },
     expectNext: "failed_system",
+    expectEmits: ["run.failed_system"],
   },
   {
     name: "R9 running + business_exception → failed_business",
@@ -179,6 +189,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "business_exception" },
     guard: { exceptionClass: "business" },
     expectNext: "failed_business",
+    expectEmits: ["run.failed_business"],
   },
   {
     name: "R10 running + security_exception → aborting (즉시 중단 + 알림)",
@@ -187,6 +198,29 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "security_exception" },
     guard: { exceptionClass: "security" },
     expectNext: "aborting",
+    expectSideEffects: ["sseClose", "browserDrain", "notify"],
+  },
+  {
+    name: "IllegalTransition: running + unrecoverable_exception guard 누락 (unknown classifier 금지)",
+    entity: "run",
+    cur: "running",
+    event: { type: "unrecoverable_exception" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: running + business_exception wrong guard (classifier 불일치 금지)",
+    entity: "run",
+    cur: "running",
+    event: { type: "business_exception" },
+    guard: { exceptionClass: "system" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: running + security_exception guard 누락 (unknown classifier 금지)",
+    entity: "run",
+    cur: "running",
+    event: { type: "security_exception" },
+    expectThrow: "IllegalTransition",
   },
   // --- R11/R12: suspending 종결 ---
   {
@@ -196,6 +230,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "bookmark_saved" },
     guard: { resumeTokenIssued: true },
     expectNext: "suspended",
+    expectEmits: ["run.suspended"],
   },
   {
     name: "R12 suspending + bookmark_failed → failed_system (일관성 복구)",
@@ -203,6 +238,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     cur: "suspending",
     event: { type: "bookmark_failed" },
     expectNext: "failed_system",
+    expectEmits: ["run.failed_system"],
   },
   // --- R13/R14/R15: suspended human_task 후속 ---
   {
@@ -220,6 +256,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     cur: "suspended",
     event: { type: "human_task.expired" },
     expectNext: "failed_business",
+    expectEmits: ["run.failed_business"],
   },
   {
     name: "R15 suspended + human_task.escalated (escalate) → suspended (상태 유지, 재배정)",
@@ -227,6 +264,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     cur: "suspended",
     event: { type: "human_task.escalated" },
     expectNext: "suspended",
+    expectSideEffects: ["reassignAssignee"],
   },
   // --- R16: abort vs resolve race — abort 우선 ---
   {
@@ -252,6 +290,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "restore_ok" },
     guard: { restoreOk: true },
     expectNext: "running",
+    expectEmits: ["run.resumed"],
   },
   {
     name: "R19 resuming + restore_failed (재로그인 우회 가능) → running (login_flow 분기)",
@@ -260,6 +299,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "restore_failed" },
     guard: { loginBypassPossible: true },
     expectNext: "running",
+    expectEmits: ["run.resumed"],
   },
   {
     name: "R20 resuming + restore_failed (우회 불가) → failed_system",
@@ -268,6 +308,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "restore_failed" },
     guard: { loginBypassPossible: false },
     expectNext: "failed_system",
+    expectEmits: ["run.failed_system"],
   },
   // --- R21/R22: completing finalize ---
   {
@@ -286,6 +327,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "finalize_failed" },
     guard: { finalizeOk: false },
     expectNext: "failed_system",
+    expectEmits: ["run.failed_system"],
   },
   // --- R23/R24: aborting drain → cancelled (어휘 체인 abort→cancelled→run.cancelled) ---
   {
@@ -312,6 +354,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     cur: "completing",
     event: { type: "abort_requested" },
     expectNext: "completing",
+    expectSideEffects: ["rejectCommand"],
   },
   // --- R26/R27: abort 보편성 (suspending / resuming) ---
   {
@@ -321,6 +364,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     event: { type: "abort_requested" },
     guard: { bookmarkCancelable: true },
     expectNext: "aborting",
+    expectSideEffects: ["sseClose", "browserDrain"],
   },
   {
     name: "R27 resuming + abort_requested → aborting (restore 중단 + drain, resume 무시)",
@@ -328,6 +372,7 @@ export const RUN_FIXTURES: RunFixture[] = [
     cur: "resuming",
     event: { type: "abort_requested" },
     expectNext: "aborting",
+    expectSideEffects: ["sseClose", "browserDrain"],
   },
   // --- R28 race: resume_requested + abort_requested → aborting (트리거된 resume 폐기) ---
   {
@@ -363,6 +408,84 @@ export const RUN_FIXTURES: RunFixture[] = [
     name: "IllegalTransition: running + finalize_ok (completing 경유 없이 finalize 불가)",
     entity: "run",
     cur: "running",
+    event: { type: "finalize_ok" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: claimed + init_failed guard 누락 (unknown branch 금지)",
+    entity: "run",
+    cur: "claimed",
+    event: { type: "init_failed" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: resuming + restore_failed guard 누락 (unknown branch 금지)",
+    entity: "run",
+    cur: "resuming",
+    event: { type: "restore_failed" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: queued + worker.claimed guard missing (lease unknown)",
+    entity: "run",
+    cur: "queued",
+    event: { type: "worker.claimed" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: claimed + run.started guard missing (init unknown)",
+    entity: "run",
+    cur: "claimed",
+    event: { type: "run.started" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: running + last_node_success guard missing (terminal unknown)",
+    entity: "run",
+    cur: "running",
+    event: { type: "last_node_success" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: suspending + bookmark_saved guard missing (resume token unknown)",
+    entity: "run",
+    cur: "suspending",
+    event: { type: "bookmark_saved" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: suspending + abort_requested bookmark not cancelable (wait for suspended)",
+    entity: "run",
+    cur: "suspending",
+    event: { type: "abort_requested" },
+    guard: { bookmarkCancelable: false },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: suspended + human_task.resolved guard missing (task unknown)",
+    entity: "run",
+    cur: "suspended",
+    event: { type: "human_task.resolved" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: resume_requested + worker.claimed guard missing (lease unknown)",
+    entity: "run",
+    cur: "resume_requested",
+    event: { type: "worker.claimed" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: resuming + restore_ok guard missing (restore unknown)",
+    entity: "run",
+    cur: "resuming",
+    event: { type: "restore_ok" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: completing + finalize_ok guard missing (finalize unknown)",
+    entity: "run",
+    cur: "completing",
     event: { type: "finalize_ok" },
     expectThrow: "IllegalTransition",
   },
@@ -446,6 +569,7 @@ export const WORKITEM_FIXTURES: WorkitemFixture[] = [
     cur: "processing",
     event: { type: "run_suspended" },
     expectNext: "processing",
+    expectSideEffects: ["pauseCheckoutTimer"],
   },
   {
     name: "W11 timer: processing + run_resumed → processing (상태 유지, checkout timer resume — 잔여 TTL부터)",
@@ -453,6 +577,7 @@ export const WORKITEM_FIXTURES: WorkitemFixture[] = [
     cur: "processing",
     event: { type: "run_resumed" },
     expectNext: "processing",
+    expectSideEffects: ["resumeCheckoutTimer"],
   },
   // --- W10: abandoned 재처리 ---
   {
@@ -482,6 +607,48 @@ export const WORKITEM_FIXTURES: WorkitemFixture[] = [
     name: "IllegalTransition: failed_business + manual_replay (manual_replay은 abandoned에서만)",
     entity: "workitem",
     cur: "failed_business",
+    event: { type: "manual_replay" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: processing + system_exception guard 누락 (unknown branch 금지)",
+    entity: "workitem",
+    cur: "processing",
+    event: { type: "system_exception" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: processing + checkout_expired guard 누락 (unknown branch 금지)",
+    entity: "workitem",
+    cur: "processing",
+    event: { type: "checkout_expired" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: new + checkout guard missing (unique reference unknown)",
+    entity: "workitem",
+    cur: "new",
+    event: { type: "checkout" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: processing + run_succeeded guard missing (sink policy unknown)",
+    entity: "workitem",
+    cur: "processing",
+    event: { type: "run_succeeded" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: retry + checkout guard missing (backoff unknown)",
+    entity: "workitem",
+    cur: "retry",
+    event: { type: "checkout" },
+    expectThrow: "IllegalTransition",
+  },
+  {
+    name: "IllegalTransition: abandoned + manual_replay guard missing (operator unknown)",
+    entity: "workitem",
+    cur: "abandoned",
     event: { type: "manual_replay" },
     expectThrow: "IllegalTransition",
   },
@@ -528,6 +695,7 @@ export const HUMANTASK_FIXTURES: HumanTaskFixture[] = [
     event: { type: "timeout" },
     guard: { onTimeout: "fail" },
     expectNext: "expired",
+    expectEmits: ["human_task.expired"],
   },
   {
     name: "H4b assigned + timeout (on_timeout=escalate) → escalated (자동 에스컬레이션, run R15 suspended 유지)",
@@ -545,6 +713,7 @@ export const HUMANTASK_FIXTURES: HumanTaskFixture[] = [
     event: { type: "timeout" },
     guard: { onTimeout: "escalate" },
     expectNext: "escalated",
+    expectEmits: ["human_task.escalated"],
   },
   // --- H5: 수동 에스컬레이션 ---
   {
@@ -562,6 +731,7 @@ export const HUMANTASK_FIXTURES: HumanTaskFixture[] = [
     cur: "escalated",
     event: { type: "assign" },
     expectNext: "assigned",
+    expectSideEffects: ["reassignAssignee", "setField"],
   },
   // --- H7: cancel (* → cancelled), run abort 연동(R16) ---
   {
@@ -617,6 +787,13 @@ export const HUMANTASK_FIXTURES: HumanTaskFixture[] = [
     event: { type: "timeout" },
     expectThrow: "IllegalTransition",
   },
+  {
+    name: "IllegalTransition: open + timeout guard missing (on_timeout unknown)",
+    entity: "human_task",
+    cur: "open",
+    event: { type: "timeout" },
+    expectThrow: "IllegalTransition",
+  },
 ];
 
 export const ALL_FIXTURES: TransitionFixture[] = [
@@ -644,6 +821,27 @@ function emittedEvents(sideEffects: SideEffectCmd[]): string[] {
   return sideEffects
     .filter((c): c is Extract<SideEffectCmd, { kind: "emitEvent" }> => c.kind === "emitEvent")
     .map((c) => c.event);
+}
+
+function sideEffectKinds(sideEffects: SideEffectCmd[]): SideEffectCmd["kind"][] {
+  return sideEffects.map((c) => c.kind);
+}
+
+function nonEmitSideEffectKinds(sideEffects: SideEffectCmd[]): SideEffectCmd["kind"][] {
+  return sideEffects.filter((c) => c.kind !== "emitEvent").map((c) => c.kind);
+}
+
+function sameMultiset<T extends string>(actual: T[], expected: T[]): boolean {
+  if (actual.length !== expected.length) return false;
+  const counts = new Map<T, number>();
+  for (const item of expected) counts.set(item, (counts.get(item) ?? 0) + 1);
+  for (const item of actual) {
+    const count = counts.get(item) ?? 0;
+    if (count === 0) return false;
+    if (count === 1) counts.delete(item);
+    else counts.set(item, count - 1);
+  }
+  return counts.size === 0;
 }
 
 export interface FixtureFailure {
@@ -691,13 +889,28 @@ export function runFixtures(fixtures: TransitionFixture[] = ALL_FIXTURES): Fixtu
       failures.push({ name: f.name, reason: `next: expected ${f.expectNext}, got ${result.next}` });
     }
 
-    if (f.expectEmits && f.expectEmits.length > 0) {
-      const emitted = emittedEvents(result.sideEffects);
-      const missing = f.expectEmits.filter((ev) => !emitted.includes(ev));
-      if (missing.length > 0) {
+    const emitted = emittedEvents(result.sideEffects);
+    const unknownEmits = emitted.filter((event) => !EVENT_TYPE_SET.has(event));
+    if (unknownEmits.length > 0) {
+      failures.push({
+        name: f.name,
+        reason: `emits: unknown event_type [${unknownEmits.join(", ")}]`,
+      });
+    }
+    const expectedEmits = f.expectEmits ?? [];
+    if (!sameMultiset(emitted, expectedEmits)) {
+      failures.push({
+        name: f.name,
+        reason: `emits: expected exactly [${expectedEmits.join(", ")}], got [${emitted.join(", ")}]`,
+      });
+    }
+
+    if (f.expectSideEffects) {
+      const kinds = nonEmitSideEffectKinds(result.sideEffects);
+      if (!sameMultiset(kinds, f.expectSideEffects)) {
         failures.push({
           name: f.name,
-          reason: `emits: missing [${missing.join(", ")}], got [${emitted.join(", ")}]`,
+          reason: `sideEffects: expected exactly [${f.expectSideEffects.join(", ")}], got [${kinds.join(", ")}]`,
         });
       }
     }

@@ -42,7 +42,7 @@ export interface IRScenario {
   nodes: Record<string, IRNode>;
 }
 
-/** required: name, version. (additionalProperties 미지정 → 추가 허용이지만 계약 표면만 노출) */
+/** required: name, version. additionalProperties:false. */
 export interface IRMeta {
   name: string;
   /** integer, minimum 1 */
@@ -90,6 +90,8 @@ export interface IROnBranch {
 
 /** required: until, max_iterations. additionalProperties:false. */
 export interface IRLoop {
+  body_target: IRNodeTarget;
+  exit_target: IRNodeTarget;
   /** IREL 불린식. 컴파일 타임 타입체크. */
   until: string;
   /** integer, minimum 1, maximum 10000. 무한루프 가드 필수. */
@@ -104,7 +106,15 @@ export type IRTerminal = "success" | "success_empty" | "fail_business" | "fail_s
  * pattern: ^(@challenge|@human_task|@end_no_data|[a-zA-Z_][a-zA-Z0-9_]*)$
  * (TS 는 정규식 제약을 표현하지 못하므로 string 별칭으로 둔다 — 검증은 ajv 경계.)
  */
-export type IRTarget = string;
+export type IRNodeTarget = string;
+export type IREndNoDataTarget = "@end_no_data";
+export type IRReservedHandlerName = "@challenge" | "@human_task";
+export interface IRReservedHandlerCall {
+  handler: IRReservedHandlerName;
+  input: Record<string, unknown>;
+  return_node: IRNodeTarget;
+}
+export type IRTarget = IRNodeTarget | IREndNoDataTarget | IRReservedHandlerCall;
 
 /** 상태 패턴. additionalProperties:false. (전부 optional) */
 export interface IRWhere {
@@ -118,7 +128,7 @@ export interface IRWhere {
 }
 
 /**
- * 액션. required: action. additionalProperties:TRUE → 알 수 없는 추가 키 허용(index signature).
+ * 액션. required: action. additionalProperties:false → 최상위 오타 금지.
  * action==="shell" 이면 cmd_ref 필수(allOf if/then) — 타입에서는 식별 union 으로 강제한다.
  */
 export type IRAction = IRShellAction | IRNonShellAction;
@@ -135,7 +145,7 @@ export interface IRShellAction extends IRActionFields {
   cmd_ref: string;
 }
 
-/** 액션 공통 필드 + additionalProperties:true 표현용 index signature. */
+/** 액션 공통 필드. action별 확장 입력은 args 하위 객체로만 허용한다. */
 export interface IRActionFields {
   instruction?: string;
   /** extract 출력 스키마 */
@@ -147,13 +157,13 @@ export interface IRActionFields {
   cmd_ref?: string;
   /** default false */
   sensitive?: boolean;
-  /** additionalProperties:true — 스키마에 명시되지 않은 추가 키 허용. */
-  [key: string]: unknown;
+  /** action별 확장 입력. 최상위 unknown key는 schema가 거부한다. */
+  args?: Record<string, unknown>;
 }
 
 /** 노드 정책. additionalProperties:false. (전부 optional) */
 export interface IRNodePolicy {
-  /** integer, minimum 1000 */
+  /** integer, minimum 1000, maximum 300000 */
   timeout_ms?: number;
   /** integer, minimum 0, default 2 */
   max_self_heal?: number;
@@ -317,7 +327,7 @@ export type VerifyElementTarget =
  * 전 내부 이벤트 공통 봉투. additionalProperties:false.
  * required: event_id, event_type, event_version, tenant_id, correlation_id,
  *           occurred_at, idempotency_key, payload_schema_ref, payload.
- * ordering_key 는 의도적으로 optional(run 없는 이벤트 — worker.heartbeat / site.circuit_* 등).
+ * ordering_key 는 의도적으로 optional(run 없는 이벤트 — site.circuit_* 등).
  */
 export interface EventEnvelope {
   /** uuid */
@@ -391,11 +401,7 @@ export type EventType =
   | "sink.dead_lettered"
   // Site circuit
   | "site.circuit_opened"
-  | "site.circuit_closed"
-  // Worker
-  | "worker.heartbeat"
-  | "worker.circuit_opened"
-  | "worker.circuit_closed";
+  | "site.circuit_closed";
 
 /** 런타임 멤버십 검사용 동결 배열(EventType 와 동기). */
 export const EVENT_TYPES: readonly EventType[] = [
@@ -427,9 +433,6 @@ export const EVENT_TYPES: readonly EventType[] = [
   "sink.dead_lettered",
   "site.circuit_opened",
   "site.circuit_closed",
-  "worker.heartbeat",
-  "worker.circuit_opened",
-  "worker.circuit_closed",
 ] as const;
 
 /* ========================================================================

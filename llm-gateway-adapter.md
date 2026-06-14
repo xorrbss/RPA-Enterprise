@@ -3,6 +3,7 @@
 > Gateway ↔ 모델 백엔드(Codex / LiteLLM / self-hosted vLLM) 사이의 adapter 인터페이스.
 > 모든 Executor(StagehandExecutor, VLM verifier, VisionExecutor)는 Gateway만 호출하고, Gateway가 adapter를 호출한다. Executor는 adapter를 직접 알 수 없다.
 > 전송 기본: **SSE 스트리밍**. sync는 폴백.
+> 구현 scaffold: adapter/capability/idempotency 경계 타입은 `ts/security-middleware-contract.ts`가 고정한다(실행 코드 아님).
 
 ---
 

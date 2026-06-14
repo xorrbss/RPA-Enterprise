@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rpa.local/contracts/events/llm.stream.aborted@1",
+  "title": "llm.stream.aborted payload v1",
+  "description": "Closed empty payload body for v1. Identity and correlation fields stay in the event envelope; adding body fields requires a versioned schema change.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}
