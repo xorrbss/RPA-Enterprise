@@ -21,8 +21,11 @@ import { SignJWT } from "jose";
 
 import { createPool, withTenantTx } from "../src/db/pool";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
+import { PgControlPlaneIdempotencyStore, canonicalRequestHash } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
+import type { RunEnqueueInput, RunEnqueuer } from "../src/api/run-queue";
 import { buildServer } from "../src/api/server";
+import type { CanonicalRequestHash, IdempotencyKey, TenantId } from "../../ts/security-middleware-contract";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_api_int";
@@ -32,6 +35,7 @@ const TENANT_B = "00000000-0000-0000-0000-0000000000b2";
 const SCENARIO_A = "10000000-0000-0000-0000-0000000000a3";
 const SVER_A = "10000000-0000-0000-0000-0000000000a4";
 const RUN_A = "10000000-0000-0000-0000-0000000000a7";
+const WORKITEM_A = "10000000-0000-0000-0000-0000000000a5";
 const CORR_A = "20000000-0000-0000-0000-0000000000a1";
 const SCENARIO_B = "10000000-0000-0000-0000-0000000000b3";
 const SVER_B = "10000000-0000-0000-0000-0000000000b4";
@@ -102,12 +106,24 @@ async function main(): Promise<void> {
 
     await seedTenantRun(pool, TENANT_A, SCENARIO_A, SVER_A, RUN_A, CORR_A);
     await seedTenantRun(pool, TENANT_B, SCENARIO_B, SVER_B, RUN_B, CORR_B);
+    await withTenantTx(pool, TENANT_A, (c) =>
+      c.query(`INSERT INTO workitems (id, tenant_id, connector_id, unique_reference) VALUES ($1,$2,'d43','wi-a')`, [WORKITEM_A, TENANT_A]),
+    );
     console.log("seeded runs for tenant A and tenant B");
 
+    // run create enqueue 스파이(graphile 미설치 테스트 환경 — enqueue 호출만 기록).
+    const enqueued: RunEnqueueInput[] = [];
+    const spyEnqueuer: RunEnqueuer = {
+      async enqueueRunClaim(_client, input) {
+        enqueued.push(input);
+      },
+    };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
       rbac: new RoleMatrixRbacMiddleware(),
+      idempotency: new PgControlPlaneIdempotencyStore(pool),
+      enqueuer: spyEnqueuer,
     });
     // 테스트 전용: rbacAction 미선언(매칭) 라우트 → fail-closed 게이트(403) 검증용.
     app.get("/v1/_norbac_probe", async () => ({ ok: true }));
@@ -117,6 +133,7 @@ async function main(): Promise<void> {
       const tokenNoTenant = await mint({ sub: "user-x", roles: ["operator"] });
       const tokenViewer = await mint({ sub: "user-v", tenant_id: TENANT_A, roles: ["viewer"] });
       const tokenNoRole = await mint({ sub: "user-z", tenant_id: TENANT_A, roles: [] });
+      const tokenBadRole = await mint({ sub: "user-badrole", tenant_id: TENANT_A, roles: ["viewer", "bogus"] });
 
       // 1) 미인증: Authorization 없음 → 401 UNAUTHENTICATED + correlation_id 에코.
       const noAuth = await app.inject({
@@ -177,6 +194,13 @@ async function main(): Promise<void> {
       });
       check("no-role run.read → 403 (RBAC deny)", noRoleRead.statusCode === 403, noRoleRead.body);
       check("no-role → AUTHZ_FORBIDDEN", noRoleRead.json().code === "AUTHZ_FORBIDDEN", noRoleRead.body);
+      const badRoleRead = await app.inject({
+        method: "GET",
+        url: `/v1/runs/${RUN_A}`,
+        headers: { authorization: `Bearer ${tokenBadRole}` },
+      });
+      check("unknown role claim → 403", badRoleRead.statusCode === 403, badRoleRead.body);
+      check("unknown role claim → AUTHZ_FORBIDDEN", badRoleRead.json().code === "AUTHZ_FORBIDDEN", badRoleRead.body);
 
       // 3d) fail-closed: rbacAction 미선언(매칭) 라우트는 인증돼도 403(미설정 시 통과 금지).
       const noRbacRoute = await app.inject({
@@ -222,6 +246,141 @@ async function main(): Promise<void> {
       check("absent run → 404", absent.statusCode === 404, absent.body);
       check("absent → RUN_NOT_FOUND", absent.json().code === "RUN_NOT_FOUND", absent.body);
       check("absent correlation_id echo", absent.json().correlation_id === "corr-absent", absent.body);
+
+      // 6) POST /v1/runs 멱등(release-decisions #7) + params.as_of(§0.6). tokenA=operator(run.create 허용).
+      // 6a) Idempotency-Key 누락 → 422 IR_SCHEMA_INVALID(예약 이전 선검사).
+      const missingKey = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { scenario_version_id: SVER_A },
+      });
+      check("POST /runs missing Idempotency-Key → 422", missingKey.statusCode === 422, missingKey.body);
+      check("missing key → IR_SCHEMA_INVALID", missingKey.json().code === "IR_SCHEMA_INVALID", missingKey.body);
+
+      // 6b) params 누락/unknown field → 422 IR_SCHEMA_INVALID(예약 이전 선검사, OpenAPI closed shape).
+      const missingParams = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-missing-params" },
+        payload: { scenario_version_id: SVER_A },
+      });
+      check("POST /runs missing params → 422", missingParams.statusCode === 422, missingParams.body);
+      check("missing params → IR_SCHEMA_INVALID", missingParams.json().code === "IR_SCHEMA_INVALID", missingParams.body);
+      const unknownField = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-tenant-in-body" },
+        payload: { scenario_version_id: SVER_A, params: {}, tenant_id: TENANT_B },
+      });
+      check("POST /runs unknown tenant_id field → 422", unknownField.statusCode === 422, unknownField.body);
+      check("unknown field → IR_SCHEMA_INVALID", unknownField.json().code === "IR_SCHEMA_INVALID", unknownField.body);
+
+      // 6c) 최초 생성 → 201 queued + as_of 1회 고정 + enqueue 1회.
+      const createBody = { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T09:00:00Z" } };
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-1" },
+        payload: createBody,
+      });
+      check("POST /runs → 201", created.statusCode === 201, created.body);
+      const createdBody = created.json();
+      check("created status=queued", createdBody.status === "queued", JSON.stringify(createdBody));
+      check("created as_of fixed", createdBody.as_of === "2026-06-14T09:00:00Z", JSON.stringify(createdBody));
+      check("enqueue called once", enqueued.length === 1, `enqueued=${enqueued.length}`);
+      const firstRunId = createdBody.run_id;
+
+      // 6d) 동일 키+본문 재요청 → 멱등 재생(같은 응답, 새 run/enqueue 없음).
+      const replay = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-1" },
+        payload: createBody,
+      });
+      check("replay → 201 same run_id", replay.statusCode === 201 && replay.json().run_id === firstRunId, replay.body);
+      check("replay no new enqueue", enqueued.length === 1, `enqueued=${enqueued.length}`);
+
+      // 6e) 동일 키 + 다른 본문 → 412 SCENARIO_VERSION_CONFLICT(request_hash mismatch, #7).
+      const hashMismatch = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-1" },
+        payload: { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T10:00:00Z" } },
+      });
+      check("same key + diff body → 412", hashMismatch.statusCode === 412, hashMismatch.body);
+      check("hash mismatch → SCENARIO_VERSION_CONFLICT", hashMismatch.json().code === "SCENARIO_VERSION_CONFLICT", hashMismatch.body);
+
+      // 6f) runs 행은 정확히 1건 + run.created outbox 1건(재생/충돌이 중복 부작용 없음).
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const n = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM runs WHERE id = $1::uuid`, [firstRunId]);
+        check("exactly 1 run row for idempotent create", n.rows[0]?.n === 1, `n=${n.rows[0]?.n}`);
+        const ev = await c.query(`SELECT 1 FROM events_outbox WHERE run_id=$1::uuid AND event_type='run.created'`, [firstRunId]);
+        check("run.created outbox emitted", ev.rowCount === 1, `rowCount=${ev.rowCount}`);
+      });
+
+      // 6g) in-flight 409(pipeline): 동일 키의 미완(processing) 예약이 있으면 재요청은 WORKITEM_CHECKOUT_CONFLICT(409).
+      const inflightBody = { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T11:00:00Z" } };
+      const store = new PgControlPlaneIdempotencyStore(pool);
+      const reserved = await store.reserve({
+        tenantId: TENANT_A as TenantId,
+        endpoint: "createRun",
+        key: "run-create-inflight" as IdempotencyKey,
+        requestHash: canonicalRequestHash("POST", "/v1/runs", inflightBody) as CanonicalRequestHash,
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      });
+      check("pre-reserve → reserved", reserved.kind === "reserved", JSON.stringify(reserved));
+      const inflight = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-inflight" },
+        payload: inflightBody,
+      });
+      check("in-flight dup → 409", inflight.statusCode === 409, inflight.body);
+      check("in-flight → WORKITEM_CHECKOUT_CONFLICT", inflight.json().code === "WORKITEM_CHECKOUT_CONFLICT", inflight.body);
+
+      // 6h) RBAC: viewer는 run.create 미허용 → 403(인가 단계 차단, 멱등 이전).
+      const viewerCreate = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenViewer}`, "idempotency-key": "run-create-viewer" },
+        payload: { scenario_version_id: SVER_A },
+      });
+      check("viewer run.create → 403", viewerCreate.statusCode === 403, viewerCreate.body);
+      check("viewer create → AUTHZ_FORBIDDEN", viewerCreate.json().code === "AUTHZ_FORBIDDEN", viewerCreate.body);
+
+      // 6i) 잘못된 as_of(비-ISO) → 422 IR_SCHEMA_INVALID(예약 이전, ::timestamptz cast 500 회피).
+      const badAsOf = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-bad-asof" },
+        payload: { scenario_version_id: SVER_A, params: { as_of: "not-a-date" } },
+      });
+      check("invalid as_of → 422", badAsOf.statusCode === 422, badAsOf.body);
+      check("invalid as_of → IR_SCHEMA_INVALID", badAsOf.json().code === "IR_SCHEMA_INVALID", badAsOf.body);
+
+      // 6j) workitem_id 연결: 존재하는 workitem → 201 + runs.workitem_id 연결(무성 드롭 아님).
+      const linked = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-wi" },
+        payload: { scenario_version_id: SVER_A, workitem_id: WORKITEM_A, params: { as_of: "2026-06-14T12:00:00Z" } },
+      });
+      check("POST /runs with workitem_id → 201", linked.statusCode === 201, linked.body);
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const r = await c.query<{ workitem_id: string | null }>(`SELECT workitem_id FROM runs WHERE id=$1::uuid`, [linked.json().run_id]);
+        check("run linked to workitem", r.rows[0]?.workitem_id === WORKITEM_A, JSON.stringify(r.rows[0]));
+      });
+
+      // 6k) 존재하지 않는 workitem_id → 422(FK 위반 500 아님).
+      const badWi = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-badwi" },
+        payload: { scenario_version_id: SVER_A, workitem_id: "10000000-0000-0000-0000-0000000000ee", params: {} },
+      });
+      check("nonexistent workitem_id → 422", badWi.statusCode === 422, badWi.body);
+      check("nonexistent workitem → IR_SCHEMA_INVALID", badWi.json().code === "IR_SCHEMA_INVALID", badWi.body);
     } finally {
       await app.close();
     }
@@ -233,7 +392,7 @@ async function main(): Promise<void> {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: D4.1 control-plane API integration green");
+  console.log("\nPASS: D4.3 control-plane API/idempotency integration green");
 }
 
 main().catch((err) => {
