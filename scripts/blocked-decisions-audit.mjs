@@ -212,6 +212,12 @@ const activeBlockerRules = [
       "repo-owned events_outbox",
       "emitOutboxEvent",
       "unknown retention boundary",
+      "retention decision packet",
+      "policy authority/source",
+      "effective duration/scope",
+      "calculation basis",
+      "fail-closed runtime behavior",
+      "app/runtime verification evidence",
     ],
   },
 ];
@@ -239,6 +245,26 @@ const activeChecklistEvidenceRules = [
   {
     checklistText: "External staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location",
     todoLineAliases: ["evidence is missing CI/deploy negative-log proof"],
+  },
+  {
+    checklistText: "D4.4 events_outbox retention source - policy authority/source",
+    todoLineAliases: ["retention source is missing the policy authority/source"],
+  },
+  {
+    checklistText: "D4.4 events_outbox retention source - effective duration/scope",
+    todoLineAliases: ["retention source is missing the effective duration/scope"],
+  },
+  {
+    checklistText: "D4.4 events_outbox retention source - calculation basis",
+    todoLineAliases: ["retention source is missing the calculation basis"],
+  },
+  {
+    checklistText: "D4.4 events_outbox retention source - fail-closed behavior",
+    todoLineAliases: ["retention source is missing the fail-closed runtime behavior"],
+  },
+  {
+    checklistText: "D4.4 events_outbox retention source - app/runtime evidence",
+    todoLineAliases: ["retention source is missing app/runtime verification evidence"],
   },
 ];
 
@@ -393,7 +419,7 @@ function checkActionableChecklistTracking() {
     const evidenceRule = activeChecklistEvidenceRules.find((candidate) => item.line.includes(candidate.checklistText));
     if (evidenceRule && !actionable.some((todo) => todoLineMatchesEvidenceRule(todo, evidenceRule))) {
       failures.push(
-        `release-open-checklist.md:${item.lineNo}: active SecretRef evidence blocker must have a matching specific evidence-packet TODO line`,
+        `release-open-checklist.md:${item.lineNo}: active evidence blocker must have a matching specific evidence-packet TODO line`,
       );
     }
   }

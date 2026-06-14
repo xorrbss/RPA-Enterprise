@@ -57,7 +57,7 @@ owners to approve and operate the deployment path outside this repository.
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 24 markers, 10 actionable blockers, and 13 resolved release decisions
+  output: 28 markers, 14 actionable blockers, and 13 resolved release decisions
   checked. New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -144,7 +144,7 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 24 markers, 10 actionable blockers, 13 known release
+  (current output: 28 markers, 14 actionable blockers, 13 known release
   decisions tracked, 13 release decisions checked)
 - `npm --prefix codegen run secret:scan-fixtures`
   (covers reject/allow fixtures for workflow secret contexts,
@@ -249,14 +249,30 @@ Environment note:
   rollback ownership, and any production/staging operation remain outside this
   contract-first repository. Those steps must use the resolved staging decision
   and must not materialize plaintext secrets in this repo.
-- TODO: [BLOCKED] Repo-owned events_outbox retention source is not defined for executable app-runtime staging readiness.
-  Required decision: Contract/runtime owners must define the duration/source used by `emitOutboxEvent` to populate `events_outbox.retention_until`; after the decision, app/runtime producers must set `retention_until` from that source or fail closed instead of persisting an unknown retention boundary.
 - TODO: [BLOCKED] External concrete staging deploy target is not defined for executable Product Open deployment outside this contract repository.
   Required decision: Platform/release authority must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier (namespace/service or equivalent), rollback owner, release approver, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
 - TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness is not defined outside this repository.
   Required decision: External staging secret provisioning must name the SecretStore backend (Vault mount/path or cloud KMS/secret-manager alias), SecretRef namespace convention, runtime identities allowed to resolve each namespace, initial secret inventory, rotation owner/cadence, and evidence location. No staging deploy may proceed until CI/deploy logs prove no plaintext secret materialization, no env dump, and no weakening of RBAC/redaction gates.
 - TODO: [BLOCKED] External staging producer retention duration/source policy is not defined for non-app writers that must set `retention_until`.
   Required decision: Runtime/platform owners must define per-producer retention duration/source for `raw_items.raw_payload`, `normalized_records.record`, `artifacts.object_ref`, `audit_log.payload`, and any non-D4.3 writer of `control_plane_idempotency_keys.response_body`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source, while repo-owned `events_outbox` retention is tracked separately above. Staging evidence must prove each payload-bearing writer sets `retention_until` or fails closed.
+
+### Events Outbox Retention Decision Packet
+
+Contract/runtime owners must provide this packet before the current app-runtime
+delta can claim executable staging readiness. Do not infer the source or
+duration from smoke fixtures; `db/migration_smoke.sql` uses a smoke-only explicit
+value only to prove the DB gate does not normalize NULL retention.
+
+- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing the policy authority/source.
+  Required decision: Contract/runtime owners must name the repo-owned contract, config, or injected dependency source that `emitOutboxEvent` must use for `events_outbox.retention_until`.
+- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing the effective duration/scope.
+  Required decision: Contract/runtime owners must define the concrete retention duration/class and whether it is uniform, event-family/event-type scoped, or tenant-policy scoped.
+- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing the calculation basis.
+  Required decision: Contract/runtime owners must define the timestamp basis/clock used to compute `retention_until` from the policy source, including how supplied `occurredAt` is handled.
+- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing the fail-closed runtime behavior.
+  Required decision: Contract/runtime owners must define the missing/invalid policy behavior so `emitOutboxEvent` cannot persist NULL/unknown `retention_until`.
+- TODO: [BLOCKED] Repo-owned events_outbox retention source is missing app/runtime verification evidence.
+  Required decision: Contract/runtime owners must update `emitOutboxEvent` and app/runtime tests to prove rows set `retention_until` and missing/invalid source fails closed.
 
 ### Staging Secret Provisioning Evidence Packet
 
