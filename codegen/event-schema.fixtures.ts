@@ -236,7 +236,7 @@ function otherPayloadRef(eventType: TenantEventType): string {
 }
 
 const expected = expectedRegistry();
-const asyncApi = readFileSync(ASYNCAPI_PATH, "utf8");
+const asyncApi = readFileSync(ASYNCAPI_PATH, "utf8").replace(/\r\n/g, "\n");
 
 // Envelope schema and correlation checks that are explicitly contract-backed.
 compareStringArrays(

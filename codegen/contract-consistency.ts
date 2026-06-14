@@ -97,7 +97,7 @@ if (failures.length > 0) {
 console.log("contract consistency: all checks passed");
 
 function text(pathFromRoot: string): string {
-  return readFileSync(`${ROOT}/${pathFromRoot}`, "utf8");
+  return readFileSync(`${ROOT}/${pathFromRoot}`, "utf8").replace(/\r\n/g, "\n");
 }
 
 function schemaEventTypes(): string[] {
