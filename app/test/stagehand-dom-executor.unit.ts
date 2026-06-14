@@ -44,7 +44,7 @@ function makeCtx(over: Partial<RunContext> = {}): RunContext {
   };
 }
 
-const cfg = { model: "codex", promptTemplateVersion: "v1", budget: { maxInputTokens: 10000, maxOutputTokens: 4096, maxCost: 0.85 } };
+const cfg = { model: "codex", promptTemplateVersion: "v1", budget: { maxInputTokens: 10000, maxOutputTokens: 4096, maxCost: 0.85 }, scenarioVersionId: "sv-1", browserIdentityVersion: 1 };
 
 function countingGateway(resp: Partial<LLMResponse> = {}) {
   let n = 0;
@@ -79,10 +79,11 @@ function fakeSessions() {
 
 function fakeCache(seed?: ActionPlan) {
   let stored = seed;
-  const calls = { get: 0, put: 0 };
+  const calls = { get: 0, put: 0, suspect: 0 };
   const cache: ActionPlanCache = {
     get: async () => { calls.get += 1; return stored; },
-    put: async ({ plan }) => { calls.put += 1; stored = plan; },
+    put: async (_key, plan) => { calls.put += 1; stored = plan; },
+    markSuspect: async () => { calls.suspect += 1; },
   };
   return { cache, calls };
 }

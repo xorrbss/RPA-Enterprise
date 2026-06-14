@@ -25,6 +25,7 @@ import type {
 } from "../../../ts/core-types";
 import type { LLMRequest, LLMResponse } from "../../../ts/security-middleware-contract";
 import { GatewayError } from "../gateway/llm-gateway";
+import { parseActionPlan, type ActionPlan, type ActionPlanCache, type ActionPlanCacheKey } from "./action-plan-cache";
 import type { CdpSession, CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
 
@@ -33,17 +34,8 @@ export interface LlmGatewayCaller {
   call(req: LLMRequest, signal: AbortSignal): Promise<LLMResponse>;
 }
 
-/** act 의 LLM 산출 — 결정형으로 적용 가능한 동작 계획(impl-bundle §D ActionPlanCache 재생 단위). */
-export type ActionPlan =
-  | { operation: "click"; selector: string }
-  | { operation: "fill"; selector: string; value: string }
-  | { operation: "select"; selector: string; value: string };
-
-/** ActionPlanCache 포트(impl-bundle §D). familyKey 로 hit 시 LLM 없이 plan 재생. */
-export interface ActionPlanCache {
-  get(input: { tenantId: string; siteProfileId: string; familyKey: string }): Promise<ActionPlan | undefined>;
-  put(input: { tenantId: string; siteProfileId: string; familyKey: string; plan: ActionPlan }): Promise<void>;
-}
+// 캐시 계약(ActionPlan/Key/포트)은 공용 action-plan-cache.ts — PgActionPlanCache 가 동일 포트를 구현.
+export type { ActionPlan, ActionPlanCache, ActionPlanCacheKey } from "./action-plan-cache";
 
 /** dom 실행기가 지원하는 LLM 프리미티브 액션(IRActionType 의 dom 부분집합). */
 export type DomAction =
@@ -67,6 +59,9 @@ export interface StagehandDomExecutorConfig {
   model: string;
   promptTemplateVersion: string;
   budget: LLMRequest["budget"];
+  // ActionPlanCache 키 스코프(run-scoped — 오케스트레이터가 run 단위로 주입). url_pattern/structuralHash 는 ctx.pageState 에서.
+  scenarioVersionId: string;
+  browserIdentityVersion: number;
 }
 
 const UTILITY_ACTIONS = new Set(["navigate", "download", "upload", "api_call", "file", "shell"]);
@@ -86,17 +81,6 @@ function classify(code: ErrorCode): { status: StepStatus; cls: ExceptionClass } 
     default: // system | none → system
       return { status: "failed_system", cls: "system" };
   }
-}
-
-function parsePlan(value: unknown): ActionPlan | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const v = value as { operation?: unknown; selector?: unknown; value?: unknown };
-  if (typeof v.selector !== "string" || v.selector.length === 0) return undefined;
-  if (v.operation === "click") return { operation: "click", selector: v.selector };
-  if ((v.operation === "fill" || v.operation === "select") && typeof v.value === "string") {
-    return { operation: v.operation, selector: v.selector, value: v.value };
-  }
-  return undefined;
 }
 
 export class StagehandDomExecutor implements ExecutorPlugin {
@@ -164,14 +148,24 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     const session = this.sessions.forLease(ctx.leaseId);
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
-    const familyKey = sha(`${ctx.pageState.dom.structuralHash}|${a.instruction}`);
+    // 캐시 키 = action_plan_cache UNIQUE 7컬럼 + tenant(§D family=(url_pattern, dom_structural_hash)).
+    const cacheKey: ActionPlanCacheKey = {
+      tenantId: ctx.tenantId,
+      scenarioVersionId: this.cfg.scenarioVersionId,
+      stepId,
+      urlPattern: ctx.pageState.url.pattern,
+      domStructuralHash: ctx.pageState.dom.structuralHash,
+      model: this.cfg.model,
+      promptTemplateVersion: this.cfg.promptTemplateVersion,
+      browserIdentityVersion: this.cfg.browserIdentityVersion,
+    };
 
     let plan: ActionPlan | undefined;
     let cacheMode: StepResult["cache"]["mode"] = "bypass";
     let callIds: string[] = [];
 
     if (this.cache) {
-      plan = await this.cache.get({ tenantId: ctx.tenantId, siteProfileId: ctx.siteProfileId, familyKey });
+      plan = await this.cache.get(cacheKey);
       cacheMode = plan ? "hit" : "miss";
     }
 
@@ -186,10 +180,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         if (e instanceof GatewayError) return this.failResult(stepId, "act", before, startedAt, e.code, callIds);
         throw e;
       }
-      const parsed = parsePlan(res.parsedJson);
+      const parsed = parseActionPlan(res.parsedJson);
       if (!parsed) return this.failResult(stepId, "act", before, startedAt, "LLM_MALFORMED_OUTPUT", callIds);
       plan = parsed;
-      if (this.cache) await this.cache.put({ tenantId: ctx.tenantId, siteProfileId: ctx.siteProfileId, familyKey, plan });
+      if (this.cache) await this.cache.put(cacheKey, plan);
     }
 
     // 적용: CDP 로 실제 mutation(click/fill/select). 적용 실패는 런타임 예외로 전파(분류는 상위).
@@ -205,7 +199,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       pageStateAfter: before,
       artifacts: [],
       stagehandCallIds: callIds,
-      cache: { mode: cacheMode, ...(this.cache ? { actionPlanCacheId: familyKey } : {}) },
+      cache: { mode: cacheMode, ...(this.cache ? { actionPlanCacheId: cacheKey.domStructuralHash } : {}) },
       // act 는 페이지를 바꾼다 — sideEffect.kind 는 시나리오(IR)가 선언(submit/login 등); 미지정 시 update.
       sideEffect: { kind: a.sideEffect ?? "update", committed: true },
       timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
