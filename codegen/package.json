@@ -15,6 +15,7 @@
     "validators": "tsx validators.fixtures.ts",
     "consistency": "tsx contract-consistency.ts",
     "yaml:parse": "python ../scripts/yaml-parse.py",
+    "spectral": "spectral lint openapi.yaml asyncapi.yaml --ruleset .spectral.yaml --fail-severity error",
     "secret:scan-fixtures": "node ../scripts/secret-scan.mjs --self-test",
     "secret:scan": "node ../scripts/secret-scan.mjs",
     "html:smoke": "node ../scripts/html-smoke.mjs",
@@ -30,9 +31,10 @@
     "test": "npm run typecheck && npm run fixtures && npm run validators && npm run consistency"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
+    "@stoplight/spectral-cli": "^6.16.0",
+    "@types/node": "^20.14.0",
     "ajv": "^8.17.0",
     "tsx": "^4.16.0",
-    "@types/node": "^20.14.0"
+    "typescript": "^5.5.0"
   }
 }

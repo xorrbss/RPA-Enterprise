@@ -1,0 +1,22 @@
+# Spectral ruleset for the D1 codegen API contracts (openapi.yaml / asyncapi.yaml).
+#
+# build-prompt.md §4/§6 + D4 DoD require an OpenAPI/AsyncAPI **spectral lint** gate
+# distinct from the parse-only check in scripts/yaml-parse.py. This extends the
+# stock Stoplight rulesets so both generated specs are checked for structural
+# integrity (resolvable $ref, valid schema/operation/channel shapes, duplicate
+# operationIds, etc.). Spectral auto-applies the OpenAPI rules to openapi.yaml and
+# the AsyncAPI rules to asyncapi.yaml based on the detected format.
+#
+# Gate severity: the `spectral` npm script runs with `--fail-severity error`, so the
+# gate fails on real spec errors / unresolvable references (these surface as error
+# results or a non-zero processing exit) while cosmetic, doc-only warnings remain
+# visible but non-blocking. Cosmetic warnings (operation-description,
+# info-contact/license, asyncapi-servers/tags) are intentionally NOT failed:
+#   - these are codegen-generated machine specs; the human-facing semantics live in
+#     api-surface.md / event-envelope.schema.json (the SSoT), not in the YAML, and
+#   - the missing metadata values (contact, license, server URLs) are external
+#     facts that must not be invented here ("가정 금지" — CLAUDE.md). If those values
+#     are decided later, raise the relevant rules to error severity then.
+extends:
+  - "spectral:oas"
+  - "spectral:asyncapi"
