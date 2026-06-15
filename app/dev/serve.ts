@@ -24,6 +24,8 @@ import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
+import { compileScenario } from "../src/api/compile-pipeline";
+import { startRunLoop, type RunLoop } from "./run-loop";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -31,6 +33,14 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DIST = join(ROOT, "web", "dist");
 const SCHEMA = "rpa_dev_console";
 const PORT = Number(process.env.DEV_CONSOLE_PORT ?? 8080);
+// 마커 픽스처(/fixture/reviews) — dev 런타임 루프가 실제로 completed까지 구동할 수 있는 PageState 계약 페이지.
+const FIXTURE_PATH = "/fixture/reviews";
+const FIXTURE_HTML = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>리뷰</title></head>
+<body data-page-state-contract="d3-dryrun-v1" data-auth="authenticated">
+<header role="banner"><h1>리뷰</h1></header><nav role="navigation" aria-label="메뉴"><a href="#">홈</a></nav>
+<main role="main"><ul data-landmark="reviews"><li class="review-item">A</li><li class="review-item">B</li></ul>
+<a rel="next" href="#" role="link" aria-disabled="true">다음</a></main>
+<footer role="contentinfo"><small>©</small></footer></body></html>`;
 // dev 전용 HMAC 시크릿(프로덕션 사용 금지 — SecretStore 경계 밖, 시드 데이터에만 적용).
 const SECRET = new TextEncoder().encode("dev-console-serve-secret-do-not-use-in-prod-0123456789");
 
@@ -39,6 +49,8 @@ const ASSIGNEE = "70000000-0000-0000-0000-0000000000c1";
 const SCEN = "70000000-0000-0000-0000-00000000d101";
 const SVER1 = "70000000-0000-0000-0000-00000000d102";
 const SVER2 = "70000000-0000-0000-0000-00000000d103";
+const DEMO_SCEN = "70000000-0000-0000-0000-00000000d201";
+const DEMO_SVER = "70000000-0000-0000-0000-00000000d202";
 const ts = (i: number) => `2026-06-15T10:0${i}:00Z`;
 
 type Pool = ReturnType<typeof createPool>;
@@ -89,6 +101,35 @@ async function seed(pool: Pool): Promise<void> {
        VALUES ($1,$2,$3,1,'prod',$5::jsonb), ($4,$2,$3,2,'draft',$5::jsonb)`,
       [SVER1, TENANT, SCEN, SVER2, seedIr],
     );
+
+    // 데모 자동화: 마커 픽스처(/fixture/reviews)를 가리켜 dev 런타임 루프가 실제 completed까지 구동 가능(compiled_ast 포함).
+    const demo = compileScenario(
+      {
+        meta: { name: "데모 — 마커 페이지 수집(실행 가능)", version: 1 },
+        start: "open",
+        nodes: {
+          open: { what: [{ action: "navigate", url_ref: `http://127.0.0.1:${PORT}${FIXTURE_PATH}` }], next: "check" },
+          check: {
+            what: [{ action: "observe" }],
+            on: [
+              { when: "flags.not_found", target: "empty", priority: 2 },
+              { when: "flags.reviews_visible", target: "done", priority: 1 },
+            ],
+          },
+          done: { terminal: "success" },
+          empty: { terminal: "success_empty" },
+        },
+      },
+      {},
+    );
+    if (demo.ok) {
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'데모 — 마커 페이지 수집(실행 가능)')`, [DEMO_SCEN, TENANT]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+         VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+        [DEMO_SVER, TENANT, DEMO_SCEN, JSON.stringify(demo.ir), demo.compiledAst],
+      );
+    }
   });
 
   // runs: running×3 / completed / suspended.
@@ -288,6 +329,12 @@ async function main(): Promise<void> {
       req.pipe(pReq);
       return;
     }
+    if ((reqUrl.split("?")[0] ?? "") === FIXTURE_PATH) {
+      // PageState 계약 마커 픽스처(데모 자동화 대상). 실행기가 flags를 산출할 수 있는 유일한 페이지.
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(FIXTURE_HTML);
+      return;
+    }
     const [pathPart, queryPart] = reqUrl.split("?");
     const p = (pathPart ?? "/").replace(/^\/+/, "");
     const file = p === "" ? "" : join(DIST, p);
@@ -314,11 +361,23 @@ async function main(): Promise<void> {
   console.log("  종료: Ctrl-C (temp-PG 게이트가 클러스터 회수)");
   console.log("────────────────────────────────────────────────────────\n");
 
+  // dev 런타임 루프: queued run을 claim→실행기 구동(실 Chrome). 마커 픽스처 데모 시나리오만 completed까지 간다.
+  const runLoop: RunLoop | null = await startRunLoop(pool, TENANT);
+
   const shutdown = (): void => {
     console.log("shutting down dev console…");
-    server.close(() => {
-      void api.close().then(() => pool.end()).then(() => process.exit(0));
-    });
+    void (async () => {
+      if (runLoop !== null) {
+        try {
+          await runLoop.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      server.close(() => {
+        void api.close().then(() => pool.end()).then(() => process.exit(0));
+      });
+    })();
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
