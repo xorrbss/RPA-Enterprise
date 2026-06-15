@@ -67,10 +67,27 @@ function contentType(ext: string): string {
 async function seed(pool: Pool): Promise<void> {
   await withTenantTx(pool, TENANT, async (c) => {
     await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'주문 수집 자동화')`, [SCEN, TENANT]);
+    // 실행 계획이 있는 IR(테스트 실행/편집 prefill 데모용). raw seed라 compile은 건너뜀(promote 시 재검증).
+    const seedIr = JSON.stringify({
+      meta: { name: "주문 수집 자동화", version: 1 },
+      start: "n1",
+      nodes: {
+        n1: { what: [{ action: "navigate", url_ref: "orders_url" }], next: "n2" },
+        n2: {
+          what: [{ action: "observe" }],
+          on: [
+            { when: "flags.reviews_visible", target: "n3", priority: 2 },
+            { when: "flags.not_found", target: "n4", priority: 1 },
+          ],
+        },
+        n3: { what: [{ action: "extract", schema_ref: "order_rows" }], next: "n4" },
+        n4: { terminal: "success" },
+      },
+    });
     await c.query(
       `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir)
-       VALUES ($1,$2,$3,1,'prod','{"nodes":[]}'::jsonb), ($4,$2,$3,2,'draft','{"nodes":[]}'::jsonb)`,
-      [SVER1, TENANT, SCEN, SVER2],
+       VALUES ($1,$2,$3,1,'prod',$5::jsonb), ($4,$2,$3,2,'draft',$5::jsonb)`,
+      [SVER1, TENANT, SCEN, SVER2, seedIr],
     );
   });
 
@@ -215,7 +232,7 @@ async function main(): Promise<void> {
   const apiPort = apiAddr.port;
 
   // dev 토큰: 전 역할 union(최대 권한) → read + 모든 운영자 명령 클릭 테스트. 12h.
-  const token = await new SignJWT({ sub: "dev", tenant_id: TENANT, roles: ["viewer", "operator", "reviewer", "approver", "admin"] })
+  const token = await new SignJWT({ sub: "00000000-0000-0000-0000-0000000000de", tenant_id: TENANT, roles: ["viewer", "operator", "reviewer", "approver", "admin"] })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("12h")

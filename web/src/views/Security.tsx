@@ -1,6 +1,7 @@
 import { useApiClient } from "../api/context";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
+import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
 import { SITE_RISKS } from "./filters";
@@ -22,6 +23,21 @@ export function SecurityView(): JSX.Element {
         { header: "위험도", render: (r) => <StatusBadge status={r.risk} /> },
         { header: "승인", render: (r) => <StatusBadge status={r.approval_status} /> },
         { header: "서킷", render: (r) => <StatusBadge status={r.circuit_status} /> },
+        {
+          header: "작업",
+          render: (r) =>
+            r.approval_status === "pending" ? (
+              <ActionButton
+                label="승인"
+                action="site.approve"
+                confirmText={`${r.name ?? r.site_profile_id.slice(0, 8)} (위험도 ${r.risk})을(를) 실행 승인할까요? risk=red 사이트의 실행 차단(SITE_PROFILE_BLOCKED)이 해제됩니다.`}
+                run={(key) => api.approveSite(r.site_profile_id, key)}
+                invalidateKeys={[["sites"]]}
+              />
+            ) : (
+              "—"
+            ),
+        },
       ]}
     />
   );

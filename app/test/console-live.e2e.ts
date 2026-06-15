@@ -34,6 +34,9 @@ const SVER = "70000000-0000-0000-0000-00000000e702";
 const RUN = "71000000-0000-0000-0000-00000000e701";
 const WI = "75000000-0000-0000-0000-00000000e701";
 const DL = "77000000-0000-0000-0000-00000000e701";
+const RUN_SUSP = "71000000-0000-0000-0000-00000000e7a2"; // 사람확인 대기 중인 suspended run(R13 대상)
+const HT = "73000000-0000-0000-0000-00000000e701"; // in_progress human_task(exception)
+const SUBJECT = "00000000-0000-0000-0000-00000000e7de"; // 운영자 subject = human_task assignee(assignee scope 통과)
 const SECRET = new TextEncoder().encode("console-live-e2e-secret-do-not-use-in-prod-0123456789");
 
 let failures = 0;
@@ -111,8 +114,18 @@ async function main(): Promise<void> {
         `INSERT INTO dead_letter (id, tenant_id, workitem_id, reason_code, replayable) VALUES ($1,$2,$3,'DEAD_LETTER',true)`,
         [DL, TENANT, WI],
       );
+      // 사람확인 대기 라이프사이클: suspended run + in_progress human_task(exception, assignee=운영자).
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of) VALUES ($1,$2,$3,'suspended',$1,1,'2026-06-15T00:00:00Z')`,
+        [RUN_SUSP, TENANT, SVER],
+      );
+      await c.query(
+        `INSERT INTO human_tasks (id, tenant_id, run_id, kind, state, assignee, assignee_role, expires_at)
+         VALUES ($1,$2,$3,'exception','in_progress',$4::uuid,'reviewer','2026-07-01T00:00:00Z')`,
+        [HT, TENANT, RUN_SUSP, SUBJECT],
+      );
     });
-    console.log("seeded run(running) + workitem(abandoned) + dead_letter");
+    console.log("seeded run(running) + workitem(abandoned) + dead_letter + suspended-run/in_progress-human_task");
 
     // 2) 실 Fastify 제어평면 + listen
     const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
@@ -166,7 +179,7 @@ async function main(): Promise<void> {
     const base = `http://127.0.0.1:${proxyAddr.port}`;
 
     // 4) operator JWT(run.read·workitem.read·dlq.replay)
-    const token = await new SignJWT({ sub: "op", tenant_id: TENANT, roles: ["operator"] })
+    const token = await new SignJWT({ sub: SUBJECT, tenant_id: TENANT, roles: ["operator", "reviewer", "approver", "admin"] })
       .setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("10m").sign(SECRET);
 
     // 5) 실 브라우저 구동
@@ -216,6 +229,52 @@ async function main(): Promise<void> {
       return r.rows[0]?.replayed_at ?? null;
     });
     check("dead_letter.replayed_at 마킹(중복 복원 방지)", replayedAt !== null);
+
+    // 명령: 자동화 실행(run-create) — scenarioStudio '실행' 클릭 → 새 queued run(실 DB).
+    await page.evaluate(() => {
+      location.hash = "#scenarioStudio";
+    });
+    await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some((b) => b.textContent === "실행"), { timeout: 15_000 });
+    await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "실행");
+      (btn as HTMLButtonElement | undefined)?.click();
+    });
+    let queuedRuns = 0;
+    for (let i = 0; i < 30; i += 1) {
+      queuedRuns = await withTenantTx(pool, TENANT, async (c) => {
+        const r = await c.query<{ n: string }>(`SELECT count(*)::text AS n FROM runs WHERE scenario_version_id=$1::uuid AND status='queued'`, [SVER]);
+        return Number(r.rows[0]?.n ?? "0");
+      });
+      if (queuedRuns >= 1) break;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    check("자동화 실행(run-create) → 새 queued run (실 DB)", queuedRuns >= 1, `queued=${queuedRuns}`);
+
+    // 명령: 사람확인 처리완료(resolve) — humanTasks '처리완료' 클릭 → task resolved + 연계 run resume_requested(H3+R13).
+    await page.evaluate(() => {
+      location.hash = "#humanTasks";
+    });
+    await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some((b) => b.textContent === "처리완료"), { timeout: 15_000 });
+    await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "처리완료");
+      (btn as HTMLButtonElement | undefined)?.click();
+    });
+    let htState = "";
+    let suspRunState = "";
+    for (let i = 0; i < 30; i += 1) {
+      const row = await withTenantTx(pool, TENANT, async (c) => {
+        const ht = await c.query<{ state: string }>(`SELECT state FROM human_tasks WHERE id=$1::uuid`, [HT]);
+        const run = await c.query<{ status: string }>(`SELECT status FROM runs WHERE id=$1::uuid`, [RUN_SUSP]);
+        return { task: ht.rows[0]?.state ?? "", run: run.rows[0]?.status ?? "" };
+      });
+      htState = row.task;
+      suspRunState = row.run;
+      if (htState === "resolved" && suspRunState === "resume_requested") break;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    check("사람확인 처리완료(resolve) → human_task resolved (실 DB)", htState === "resolved", `state=${htState}`);
+    check("처리완료 → 연계 run resume_requested (R13, 실 DB)", suspRunState === "resume_requested", `run=${suspRunState}`);
+
     check("브라우저 페이지 에러 없음", pageErrors.length === 0, pageErrors.join("; "));
   } finally {
     if (browser !== null) await browser.close();
