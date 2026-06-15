@@ -974,6 +974,7 @@ export class InMemoryRuntimeWorker implements RuntimeWorker {
       case "workitem_checkout":
       case "artifact_redaction":
       case "artifact_retention":
+      case "sink_deliver":
         // Decision v1 defines these as closed job-kind inputs; the fake runtime
         // intentionally fails unsupported execution instead of inventing effects.
         return { kind: "failed", code: "IR_EXPRESSION_RUNTIME" };

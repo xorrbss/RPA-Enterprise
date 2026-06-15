@@ -435,3 +435,22 @@
 | 제어평면 배선 | `app/src/api/server.ts`가 auth 이후 `rbacAction`을 평가. `GET /v1/runs/{run_id}`는 `run.read`; 매칭 라우트의 `rbacAction` 누락은 403, 미매칭/미지원 메서드는 404 `RESOURCE_NOT_FOUND` |
 | 회귀 테스트 | `app/test/rbac.unit.ts`와 `app/test/api-runs.int.ts`로 역할 합집합, 빈 역할 거부, tenant mismatch, fail-closed, 404/403 경계를 검증 |
 | Node 24 CI | `.github/workflows/contract-gates.yml`의 `NODE_VERSION=24`, `actions/checkout@v5`, `actions/setup-node@v5` 적용. CRLF에서도 AsyncAPI 문자열 fixture/consistency가 동일하게 동작하도록 줄끝 정규화 |
+
+## v2.8 패치 로그 (D6 — Pipeline/Sink + outbox 소비, 데이터평면 멱등/DLQ)
+
+> architecture.md §6 D6를 빌드했다. raw→normalized→sink 데이터 파이프라인의 **DB측 멱등/dedup/DLQ 메커니즘**과
+> outbox 발행 순서/중복 보증을 구현·검증한다(전부 결정형, `app/` 내). 실 외부 sink 네트워크 전송은 외부 사실
+> 경계라 주입형 포트(real_sink|test_fake)로 분리하고 기존 외부 object-store/SecretStore 블로커에 귀속한다. 계약은
+> 새 결함 교정이 아니라 D6 런타임이 요구하는 표면(런타임 포트·sink 임계)을 in-pattern으로 확장한 것이다.
+> **재검증: `npm --prefix app run typecheck`·`test:unit`(+raw-hash) + temp-PG `test:int`(pipeline/sink-delivery/outbox-relay/api-reads), `npm --prefix codegen run typecheck`.**
+
+| 항목 | 조치 |
+|---|---|
+| raw 멱등 인입 | `app/src/runtime/pipeline/raw-hash.ts`(FIX#6 canonicalization: 키정렬·NFC·volatile 제외) + `raw-ingest.ts`(`ON CONFLICT DO NOTHING`, NULLS NOT DISTINCT dedup, `pipeline.raw_persist` span). RAW_PERSIST_FAILED는 호출측 매핑 |
+| 정규화 | `normalize.ts`(자연키 UNIQUE dedup + `dedup_action` insert/keep_existing/update_latest/merge, 재처리 멱등) + `pipeline.stage.completed` 발행(닫힌 빈 payload) |
+| sink 전달 | `sink-delivery.ts`(claim→port→finalize: `sink_idempotency_key=tenant:sink_config:schema_ref:natural_key`(attempt_no 제외)·attempt 원장·status CAS pending→delivered/failed/dead_letter·`sink.delivered`/`sink.dead_lettered`). 주입형 `SinkDeliveryPort`(real_sink|test_fake) + `SinkDeliveryPolicy`를 `ts/runtime-contract.ts`에 추가 |
+| sink 임계 | `ops-defaults.md#sink.delivery`(max_attempts/retry_backoff/sweeper) 신설 — workitem retry family 정렬(release-decisions D6-1). 코드 상수 금지, 정책 주입 |
+| sink DLQ 목록 | `app/src/api/reads.ts` `GET /v1/dlq?kind=sink` → `sink_deliveries.status='dead_letter'` 실 조회(이전 빈-페이지 placeholder 대체). DEAD_LETTER 상태 통지(ApiError 아님), 커서/RLS |
+| outbox 소비 | 기존 `relayOutbox`(published_at CAS, created_at 순)에 순서/중복 회귀테스트 추가(at-least-once + 재발행 0) |
+| worker 잡 | `RuntimeWorkerJob.kind`에 `sink_deliver` 추가 + `PgRuntimeWorker.handleSinkDeliver`(포트/상한 fail-closed, test_fake opt-in). `runtime/fake-store.ts` 닫힌 union 정합 |
+| 연기(release-decisions D6-2~4) | 실 sink egress(외부, 기존 블로커 귀속) · sink-DLQ replay 라우팅(api-surface 모호) · checkout-expiry W6/W7 + W9/W11 pause-TTL(미고정 공식) — D6 코어 비의존, 추측 빌드 금지 |

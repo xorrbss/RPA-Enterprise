@@ -108,7 +108,29 @@
 
 ---
 
-## 8. 적용 규약
+## 8. Sink delivery (D6 — db sink_deliveries, 데이터평면 외부 전달)
+
+> sink_deliveries 테이블은 존재하나 v1.6 시점엔 전달 상한이 미정의였다. D6 빌드가 failed→dead_letter
+> 전이를 결정하려면 attempt 상한이 필요하다. **결정(release-decisions.md D6-1)**: sink 전달은 구조적으로
+> 재시도형 system 작업이므로 `workitem` retry family를 그대로 정렬해 v1 기본값으로 둔다(별도 운영정책이
+> 이를 대체할 때까지). 값은 코드 상수가 아니라 `SinkDeliveryPolicy`(runtime-contract)로 **주입**한다 —
+> 조용한 하드코딩 금지.
+
+| 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
+|---|---|---|---|---|
+| `sink.delivery.max_attempts` | 3 | 2 | sink_deliveries.status | attempt_no < max → `failed`(재전달), ≥ max 실패 → `dead_letter`(SINK_DELIVERY_FAILED 소진) |
+| `sink.delivery.retry_backoff` | base 5s · factor 2 · max 5m | base 10ms · max 50ms | `failed` 재전달 | `workitem.retry_backoff`와 정렬. 같은 sink_idempotency_key로 재전달(외부 1건 흡수) |
+| `sink.delivery.sweeper.poll` | 5s | 20ms | impl-bundle §B "수초 폴링" | `failed`(상한 미달) 행 재전달 스케줄(idempotent) |
+
+- 멱등키 `sink_idempotency_key = tenant_id:sink_config_id:schema_ref:natural_key`(attempt_no 제외)는 모든
+  재시도가 동일 키를 보내 외부 다운스트림이 1건으로 흡수하게 한다(migration SQL FIX#7). 제어평면
+  `Idempotency-Key`와 다른 계층(api-surface §0.4).
+- 실 외부 전달(네트워크 전송)은 외부 사실 경계다 — `SinkDeliveryPort`의 `real_sink` 바인딩(SecretRef-backed)
+  으로 분리하고, 로컬은 `test_fake` 바인딩(staging 증거 아님)으로 검증한다(artifact object-I/O 포트와 동형).
+
+---
+
+## 9. 적용 규약
 
 - **오버라이드 계층**: 시스템 기본(본 문서) < 테넌트 설정 < 사이트 프로파일 < 시나리오 노드 정책(`nodePolicy`). 좁은 범위가 우선.
 - **테스트 픽스처값**은 시뮬레이션 클록(가상 시간)에서 전이/타임아웃 경로를 빠르게 검증하기 위한 값이며, 운영 의미는 동일(스케일만 축소). state-machine 전이 테스트·sweeper 멱등 테스트가 사용.

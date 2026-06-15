@@ -764,6 +764,72 @@ export const ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT = {
   retentionFailureMustNotTombstone: true,
 } as const;
 
+// ============================================================================
+// D6 — Sink delivery port (데이터평면 외부 전달)
+//
+// sink_deliveries 외부 전달의 주입형 포트. artifact object-I/O 포트와 동형(real|test_fake):
+// real_sink는 SecretRef-backed 실 다운스트림 전달(외부 사실 — staging 증거), test_fake는 로컬 픽스처
+// 증거 전용(staging 증거 불가). DB측 멱등키/attempt 원장/status CAS/DLQ/이벤트는 결정형(app/ 내 빌드),
+// 실 네트워크 전송만 외부 경계로 남는다.
+//
+// sink_idempotency_key = `tenant_id:sink_config_id:schema_ref:natural_key`(attempt_no 제외 — 같은
+// 레코드의 모든 attempt가 동일 키를 보내 외부가 1건으로 흡수). 제어평면 Idempotency-Key와 다른 계층
+// (api-surface §0.4).
+// ============================================================================
+export const SINK_DELIVERY_EVIDENCE_SCHEMA_REF = "sink/delivery-evidence@1" as const;
+export const SINK_DELIVERY_LOCAL_TEST_SCHEMA_REF = "sink/delivery-local-test@1" as const;
+
+export interface SinkRealDeliveryPortBinding {
+  kind: "real_sink";
+  backendAlias: string;
+  credentialRef: SecretRef;
+  evidenceSchemaRef: typeof SINK_DELIVERY_EVIDENCE_SCHEMA_REF;
+}
+
+export interface SinkLocalTestPortBinding {
+  kind: "test_fake";
+  backendAlias: "local-test-fake";
+  evidenceSchemaRef: typeof SINK_DELIVERY_LOCAL_TEST_SCHEMA_REF;
+  testOnly: true;
+}
+
+export type SinkDeliveryPortBinding = SinkRealDeliveryPortBinding | SinkLocalTestPortBinding;
+
+/**
+ * sink attempt 상한 정책. attempt_no < maxAttempts 실패 → 'failed'(재전달 가능),
+ * attempt_no >= maxAttempts 실패 → 'dead_letter'. 값 출처 = ops-defaults.md#sink.delivery
+ * (release-decisions #14: workitem retry family 정렬). 코드에 상수 하드코딩 금지 — 주입형.
+ */
+export interface SinkDeliveryPolicy {
+  source: "ops-defaults.md#sink.delivery";
+  maxAttempts: number;
+}
+
+export interface SinkDeliveryRequest {
+  tenantId: TenantId;
+  correlationId: CorrelationId;
+  sinkConfigId: string;
+  sinkIdempotencyKey: string;
+  normalizedRecordId: string;
+  attemptNo: number;
+  portBinding: SinkDeliveryPortBinding;
+}
+
+export type SinkDeliveryDecision =
+  | { kind: "delivered"; receiptRef?: string }
+  | { kind: "transient_failed"; reason: string };
+
+export interface SinkDeliveryPort {
+  readonly binding: SinkDeliveryPortBinding;
+  /**
+   * 외부 다운스트림에 1건 전달(sinkIdempotencyKey를 외부 Idempotency-Key로 사용). delivered 또는
+   * transient_failed만 반환 — dead_letter(상한 도달)는 호출측 SinkDeliveryPolicy가 판정한다. SINK_DELIVERY_FAILED는
+   * retryable이므로 포트는 영구실패를 표현하지 않고, 영구성은 attempt 상한 소진으로 표현된다. test_fake 바인딩은
+   * 로컬 픽스처 증거 전용이며 staging/product-open 전달 증거가 될 수 없다.
+   */
+  deliver(input: SinkDeliveryRequest): Promise<SinkDeliveryDecision>;
+}
+
 export interface RuntimeWorkerJob {
   kind:
     | "run_claim"
@@ -774,13 +840,23 @@ export interface RuntimeWorkerJob {
     | "lease_sweeper"
     | "artifact_redaction"
     | "artifact_retention"
-    | "dlq_replay";
+    | "dlq_replay"
+    | "sink_deliver";
   tenantId?: TenantId;
   runId?: RunId;
   workitemId?: WorkitemId;
   deadLetterId?: string;
   correlationId?: CorrelationId;
   abortTimeoutMs?: number;
+  /**
+   * sink_deliver 잡 입력(closed, release-decision #9). 데이터평면 외부 전달 대상.
+   * schema_ref/natural_key는 잡에 싣지 않는다 — sink_idempotency_key는 normalized_records 행의
+   * 권위 컬럼에서 산출하므로(FIX#7) 페이로드 중복은 stale 키 위험만 만든다.
+   */
+  sinkDelivery?: {
+    sinkConfigId: string;
+    normalizedRecordId: string;
+  };
 }
 
 export type RuntimeJobResult =
