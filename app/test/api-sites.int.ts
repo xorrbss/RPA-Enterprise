@@ -89,13 +89,11 @@ async function main(): Promise<void> {
     try {
       const approver = await mint({ sub: APPROVER_SUB, tenant_id: TENANT_A, roles: ["approver"] });
       const viewer = await mint({ sub: "70000000-0000-0000-0000-0000000000c1", tenant_id: TENANT_A, roles: ["viewer"] });
-      const approve = (siteId: string, token: string, key: string | undefined, body: unknown = {}) =>
-        app.inject({
-          method: "POST",
-          url: `/v1/sites/${siteId}/approve`,
-          headers: { authorization: `Bearer ${token}`, ...(key !== undefined ? { "idempotency-key": key } : {}) },
-          payload: body,
-        });
+      const approve = (siteId: string, token: string, key: string | undefined, body: unknown = {}) => {
+        const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+        if (key !== undefined) headers["idempotency-key"] = key;
+        return app.inject({ method: "POST", url: `/v1/sites/${siteId}/approve`, headers, payload: body as object | undefined });
+      };
       const getSite = (siteId: string, token: string) =>
         app.inject({ method: "GET", url: `/v1/sites/${siteId}`, headers: { authorization: `Bearer ${token}` } });
 
