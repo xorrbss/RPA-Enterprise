@@ -10,7 +10,7 @@
 > 기준: origin/main `212e18cc`. 출처: 6차원 적대적 리뷰 워크플로우(wf_e867d618, 12 findings 전부 refute 통과 real=true) + 직접 스팟리뷰.
 
 ## 상태 요약 (2026-06-16)
-- 총 18 이슈. resolution: [확정] 0 · OPEN 14 · BLOCK 3 · (suspected 6 포함).
+- 총 18 이슈. resolution: **[확정] 1** · OPEN 13 · BLOCK 3 · (suspected 6 포함).
 - **현재 "사람 검토 대기"** — OPEN/[추정]/BLOCK 잔존. 완료 아님.
 - 우선 처리(backend, 충돌 낮음): RQ-001(CI 안정) → RQ-008 → RQ-009 → RQ-002 → RQ-003 → RQ-004 → RQ-007/014/015. 프론트(RQ-005/006/012/013)는 콘솔 스트림(병렬 codex) 영역 — 조율/충돌 주의. BLOCK(RQ-010/011-egress/RQ-009-or-amend)은 Required decision 추적.
 
@@ -18,7 +18,7 @@
 
 | ID | dim | 제목 | sev | confidence | resolution | 증거 | 수정 / Required decision |
 |---|---|---|---|---|---|---|---|
-| RQ-001 | tests-CI | `test:executor`(D3 dry-run) CDP 기동 레이스 — `cdp-session.ts` 단일 `sh.init()` 무재시도 → `ECONNREFUSED` 간헐 실패가 app-runtime 게이트 전체를 비결정적으로 깸(무관 PR도 차단) | P1 | confirmed | OPEN | `app/src/executor/cdp-session.ts:139-155`; `contract-gates.yml:298-299`; `raw-cdp.ts`는 runtime call만 커버 | repo-fix: `sh.init()`+newPage를 bounded retry/backoff(ECONNREFUSED=retryable, readiness probe)로 감싸고 종결 실패는 `CDP_DISCONNECTED`로 분류. |
+| RQ-001 | tests-CI | `test:executor`(D3 dry-run) CDP 기동 레이스 — `cdp-session.ts` 단일 `sh.init()` 무재시도 → `ECONNREFUSED` 간헐 실패가 app-runtime 게이트 전체를 비결정적으로 깸(무관 PR도 차단) | P1 | confirmed | **[확정]** | `app/src/executor/cdp-session.ts`; `contract-gates.yml:298-299` | **수정 완료**: `createStagehandSession`에 bounded retry/backoff(ECONNREFUSED/ECONNRESET=retryable, 200·400·800·1600ms, 5회) + 부분기동 정리, 소진 시 `CdpDisconnectedError`(CDP_DISCONNECTED, 원텍스트 미노출), 비-연결거부는 즉시 전파. DI(attemptInit)로 단위검증: `app/test/cdp-session.unit.ts` 4/4(재시도-성공·소진-분류·즉시전파). |
 | RQ-002 | correctness | 인터프리터가 on[] scope에 `{flags}`만 전달 → 계약상 허용된 params/node/cursor 참조가 항상 `IREL_RUNTIME_MISSING` throw → 해당 시나리오 실행 불가 | P1 | confirmed | OPEN | `ir-interpreter.ts:120,99`; `irel-compile.ts:638-664`; `static-validation.ts:283`; `ir-expression.md §2/§6` | repo-fix: selectOnBranch에 full scope(params/누적 node 표준출력/cursor/flags) 주입(RunContext+StepResult output 누적 필요); 또는 1단계 승격을 flags-only on[]으로 제한·강제. |
 | RQ-003 | security | LLM Gateway에 redaction/prompt-injection 경계 미배선 — `security-contracts §4`는 adapter 전 step2 Gateway-owned redaction+injection 강제(LLMMessage user=RedactedString)인데 `LlmGateway.call`에 단계 없음; 참조 impl(`redaction-boundary.ts`) 미사용; `stagehand-dom-executor.buildRequest`가 `as unknown` 캐스트로 brand 우회 | P1 | confirmed | OPEN | `llm-gateway.ts:47-55,108-159,285`; `stagehand-dom-executor.ts:254-289`(cast 288); `security-contracts.md §3/§4`; `redaction-boundary.ts:27-110` | repo-fix: LlmGatewayDeps에 redaction boundary+injection detector 포트 추가, call() 첫 단계로 `redactForGateway` 호출; buildRequest가 page text를 경계 통과시키고 cast 제거. (현 스켈레톤은 raw DOM 미포함이나 untrusted instruction이 무검사 전달 + 경계 부재) |
 | RQ-004 | contract-fidelity | R5 `@human_task` 전이가 `humanTaskKind="exception"` 하드코딩 → approval/validation kind 유실 → RBAC 오라우팅(approval 태스크를 reviewer가 resolve 가능). 근본: `RunEvent.human_task_required`에 kind 필드 부재(R4 challengeKind와 비대칭) | P1 | confirmed | OPEN | `codegen/transitions.ts:80-84`; `state-machine-types.ts:33`; `reserved-handlers.md:16-22`; `auth-rbac.md:49-50`+`rbac.ts:122-128`; fixture `transitions.fixtures.ts:151-157` | repo-fix(계약 편집 포함): `state-machine-types.ts` human_task_required에 kind 추가(IR @human_task input 출처) → createHumanTask 전달 → R5 fixture에 kind 단언 → codegen 재생성. (현재 R5 런타임 미배선=latent) |
@@ -39,3 +39,4 @@
 
 ## 처리 로그 (append)
 - 2026-06-16: 레지스터 생성. 18 이슈 등록(워크플로우 12 + 스팟 6). 전부 OPEN/BLOCK — 완료 아님("사람 검토 대기"). 다음: RQ-001부터 backend 우선 수정.
+- 2026-06-16: **RQ-001 [확정]** — cdp-session 기동 retry/backoff + DI 단위테스트. CI 안정 키스톤. 다음: RQ-008(ir-translate drift)·RQ-009(§3vs§5 계약 개정)·RQ-002(on[] scope).
