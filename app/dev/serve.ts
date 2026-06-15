@@ -232,7 +232,7 @@ async function main(): Promise<void> {
   const apiPort = apiAddr.port;
 
   // dev 토큰: 전 역할 union(최대 권한) → read + 모든 운영자 명령 클릭 테스트. 12h.
-  const token = await new SignJWT({ sub: "dev", tenant_id: TENANT, roles: ["viewer", "operator", "reviewer", "approver", "admin"] })
+  const token = await new SignJWT({ sub: "00000000-0000-0000-0000-0000000000de", tenant_id: TENANT, roles: ["viewer", "operator", "reviewer", "approver", "admin"] })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("12h")

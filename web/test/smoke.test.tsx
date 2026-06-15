@@ -244,4 +244,26 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(screen.getByText("실행 상세 — run-abc1")).toBeInTheDocument());
     expect(screen.getByText("w-7")).toBeInTheDocument(); // 워커
   });
+
+  test("사이트 승인(approve) 디스패치 — pending 사이트만", async () => {
+    const calls: Array<{ id: string; key: string }> = [];
+    window.confirm = () => true;
+    renderApp(
+      fakeClient({
+        listSites: async () => ({
+          items: [{ site_profile_id: "site-1", risk: "red", approval_status: "pending", circuit_status: "open", name: "red-site" }],
+          next_cursor: null,
+        }),
+        approveSite: async (id, key) => {
+          calls.push({ id, key });
+          return { site_profile_id: id, approval_status: "approved" };
+        },
+      }),
+    );
+    location.hash = "#security";
+    (await screen.findByRole("button", { name: "승인" })).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.id).toBe("site-1");
+    expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
+  });
 });
