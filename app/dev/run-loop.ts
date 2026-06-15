@@ -19,23 +19,11 @@ import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
 import { createStagehandSession, SingleSessionProvider } from "../src/executor/cdp-session";
-import { SitePageStateResolver, type SitePageStateConfig } from "../src/executor/site-page-state-resolver";
+import { SitePageStateResolver } from "../src/executor/site-page-state-resolver";
+import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
 import { UtilityExecutor } from "../src/executor/utility-executor";
 
 const WORKER_ID = "9a000000-0000-0000-0000-0000000000df";
-
-// dev 데모 사이트 프로파일(마커 없는 /fixture/reviews 의 셀렉터 매핑).
-// 향후 site_profiles.page_state_selectors(DB 컬럼)로 영속화될 in-memory 표현의 stand-in.
-const DEMO_SITE_CONFIG: SitePageStateConfig = {
-  authenticatedWhen: { selector: ".user-menu" },
-  flags: {
-    reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 },
-    not_found: { kind: "present", selector: ".empty-results" },
-    no_next_page: { kind: "present", selector: "a.next-page.disabled" },
-    login_required: { kind: "present", selector: ".login-form" },
-    blocked: { kind: "present", selector: ".blocked-banner" },
-  },
-};
 
 export interface RunLoop {
   stop(): Promise<void>;
@@ -62,8 +50,10 @@ interface QueuedRun {
 
 /**
  * queued run 폴링 루프 시작. Chrome 미발견 시 null(루프 비활성). tenantId 스코프(dev 단일 테넌트).
+ * siteProfileId 의 page_state_selectors(DB)를 로드해 PageState 산출 규칙으로 사용한다(dev 단일 사이트;
+ * 프로덕션은 run별 BrowserLeasePlan.siteProfileId 로 사이트를 해소한 뒤 동일 로더 사용).
  */
-export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 2000): Promise<RunLoop | null> {
+export async function startRunLoop(pool: Pool, tenantId: string, siteProfileId: string, intervalMs = 2000): Promise<RunLoop | null> {
   const chrome = findChrome();
   if (chrome === null) {
     console.log("run-loop: Chrome 미발견 → 실행 비활성(만든 run은 queued로 대기). CHROME_PATH 설정 시 활성화.");
@@ -72,9 +62,19 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
   const downloadDir = mkdtempSync(join(tmpdir(), "dev-runloop-"));
   const session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
   const provider = new SingleSessionProvider(session);
-  const resolver = new SitePageStateResolver(provider, DEMO_SITE_CONFIG);
   const executor = new UtilityExecutor(provider);
-  console.log("run-loop: 실 Chrome 실행기 활성 — queued run을 polling해 구동(site-profile 셀렉터로 마커 없는 실 URL풍 페이지 completed).");
+
+  // DB 영속 page_state_selectors 로드 → resolver 구성. 미설정/무효면 PAGE_STATE_UNRESOLVED → 루프 비활성(은폐 금지).
+  let resolver: SitePageStateResolver;
+  try {
+    const config = await withTenantTx(pool, tenantId, (c) => loadSitePageStateConfig(c, tenantId, siteProfileId));
+    resolver = new SitePageStateResolver(provider, config);
+  } catch (e) {
+    console.error(`run-loop: site_profile page_state_selectors 로드 실패 → 실행 비활성 — ${e instanceof Error ? e.message : String(e)}`);
+    await session.close();
+    return null;
+  }
+  console.log("run-loop: 실 Chrome 실행기 활성 — queued run을 polling해 구동(DB site-profile 셀렉터로 마커 없는 실 URL풍 페이지 completed).");
 
   let stopped = false;
   let busy = false;
@@ -118,7 +118,7 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
             scenarioVersionId: next.scenario_version_id,
             correlationId: next.correlation_id,
             leaseId: "dev-lease",
-            siteProfileId: "dev-site",
+            siteProfileId,
             browserIdentityId: "dev-bid",
             networkPolicyId: "dev-np",
           },

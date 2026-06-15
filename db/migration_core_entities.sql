@@ -42,6 +42,7 @@ CREATE TABLE site_profiles (
   circuit_state   text        NOT NULL DEFAULT 'closed'
                     CHECK (circuit_state IN ('closed','open','half_open')),  -- 사이트 서킷(event site.circuit_opened/closed, GET /sites 조회원)
   circuit_until   timestamptz,                              -- open cooldown 만료 — ops-defaults §3 site.circuit.open_duration
+  page_state_selectors jsonb,                                -- D3 executor PageState 산출 규칙(SitePageStateConfig: authenticatedWhen?·flags{닫힌 6키:present/absent/min_count}). 마커 없는 실 사이트에서 닫힌 flags 산출 근거(executor/site-page-state-config). null=미설정 → 해당 사이트 비-마커 실행 시 PAGE_STATE_UNRESOLVED.
   created_at      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, name)
 );

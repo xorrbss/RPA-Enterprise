@@ -454,3 +454,20 @@
 | outbox 소비 | 기존 `relayOutbox`(published_at CAS, created_at 순)에 순서/중복 회귀테스트 추가(at-least-once + 재발행 0) |
 | worker 잡 | `RuntimeWorkerJob.kind`에 `sink_deliver` 추가 + `PgRuntimeWorker.handleSinkDeliver`(포트/상한 fail-closed, test_fake opt-in). `runtime/fake-store.ts` 닫힌 union 정합 |
 | 연기(release-decisions D6-2~4) | 실 sink egress(외부, 기존 블로커 귀속) · sink-DLQ replay 라우팅(api-surface 모호) · checkout-expiry W6/W7 + W9/W11 pause-TTL(미고정 공식) — D6 코어 비의존, 추측 빌드 금지 |
+
+## v2.9 패치 로그 (D3 가동 2단계 — site-profile PageState 영속화)
+
+> D3 실행기 가동 2단계: PageStateResolver의 dry-run 마커(`d3-dryrun-v1`) 제약을 **사이트별 셀렉터 설정**으로 대체해
+> 마커 없는 실 사이트에서도 닫힌 레지스트리 6 flags를 산출한다(위저드가 만든 실 URL 시나리오 가동의 토대). 실행 모델은
+> run당 site_profile 1개(`BrowserLeasePlan.siteProfileId`)이므로, 그 site_profile이 해당 사이트의 PageState 산출 규칙의
+> 진실원천이다. 계약은 새 결함 교정이 아니라 D3 런타임이 요구하는 **표면(site_profile에 PageState 설정 영속)** 을
+> in-pattern(기존 `gateway_policies.capabilities` jsonb 설정 컬럼과 동형)으로 확장한 것이다.
+> **재검증: `npm --prefix app run typecheck`·`test:unit`(+site-page-state-config) + temp-PG `test:pipeline-site`(DB 라운드트립)·`test:site-resolver`(실 Chrome), `node scripts/db-static-smoke.mjs`·`contract-lint.mjs`.**
+
+| 항목 | 조치 |
+|---|---|
+| 계약 컬럼 | `db/migration_core_entities.sql` `site_profiles.page_state_selectors jsonb`(nullable) 신설 — `SitePageStateConfig`(authenticatedWhen?·flags{닫힌 6키: present/absent/min_count}) 영속. null=미설정 → 비-마커 실행 시 `PAGE_STATE_UNRESOLVED`(조용한 all-false 금지) |
+| resolver | `app/src/executor/site-page-state-resolver.ts` `SitePageStateResolver` — 마커 대신 셀렉터→flag 규칙으로 닫힌 6키 산출(미지정=false 명시 결정). config 무매칭은 인터프리터 `IR_NO_BRANCH_MATCHED`로 표면화 |
+| 로더 | `app/src/executor/site-page-state-config.ts` `parseSitePageStateConfig`(jsonb 엄격 검증·무효→`PAGE_STATE_UNRESOLVED`) + `loadSitePageStateConfig`(run의 site_profile에서 로드, RLS tx) |
+| dev 배선 | `app/dev/run-loop.ts`가 DB site_profile의 page_state_selectors 로드해 resolver 구성, `serve.ts`가 데모 site_profile + 마커 없는 실 URL풍 FIXTURE 시드 — 콘솔 '실행'이 마커 없는 페이지에서 completed |
+| 연기 | run별 site_profile 해소 실구현(`BrowserLeasePlanResolver` 포트, 현 dev는 단일 사이트) · url_ref/schema_ref 해석 · NetworkPolicy 도메인 허용목록 강제 · 예약핸들러(@end_no_data/@challenge) — D3 가동 코어 비의존 |
