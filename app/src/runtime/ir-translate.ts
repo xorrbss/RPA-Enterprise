@@ -33,8 +33,11 @@ export function compiledScenarioFrom(
 
   for (const [id, raw] of Object.entries(ir.nodes)) {
     if (!isRec(raw)) throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${id}' 형식 오류`);
+    // act 의 sideEffect 는 node 레벨 side_effect.kind 에서 소싱(IR엔 action-level side_effect 없음 — 가정 금지).
+    const nodeSideEffect =
+      isRec(raw.side_effect) && typeof raw.side_effect.kind === "string" ? (raw.side_effect.kind as string) : undefined;
     const what = (Array.isArray(raw.what) ? raw.what : []).flatMap((a) => {
-      const mapped = mapAction(id, a, params);
+      const mapped = mapAction(id, a, params, nodeSideEffect);
       return mapped === null ? [] : [mapped];
     });
 
@@ -65,7 +68,13 @@ export function compiledScenarioFrom(
 }
 
 // IR 액션 → ExecutorPlugin 액션. observe는 on[] PageState resolve가 대신하므로 drop(null).
-function mapAction(nodeId: string, a: unknown, params: Record<string, unknown> | undefined): unknown | null {
+// dom 프리미티브(act/extract)는 StagehandDomExecutor 가 받는 DomAction 형태로 산출(composite-executor 가 type 으로 라우팅).
+function mapAction(
+  nodeId: string,
+  a: unknown,
+  params: Record<string, unknown> | undefined,
+  nodeSideEffect: string | undefined,
+): unknown | null {
   if (!isRec(a) || typeof a.action !== "string") {
     throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' action 형식 오류`);
   }
@@ -82,7 +91,31 @@ function mapAction(nodeId: string, a: unknown, params: Record<string, unknown> |
       throw e;
     }
   }
-  throw new InterpreterError("ACTION_UNSUPPORTED", `compiledScenarioFrom: node '${nodeId}' action '${a.action}' 미지원(1단계: navigate/observe)`);
+  if (a.action === "act") {
+    if (typeof a.instruction !== "string" || a.instruction.trim().length === 0) {
+      throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' act.instruction 필요`);
+    }
+    // sideEffect 는 node 레벨 side_effect.kind 에서(미지정 시 생략 → 실행기 기본 'update'; 기본값 single-source 는 실행기).
+    return { type: "act", instruction: a.instruction, ...(nodeSideEffect !== undefined ? { sideEffect: nodeSideEffect } : {}) };
+  }
+  if (a.action === "extract") {
+    if (typeof a.instruction !== "string" || a.instruction.trim().length === 0) {
+      throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.instruction 필요`);
+    }
+    if (typeof a.schema_ref !== "string" || a.schema_ref.length === 0) {
+      throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.schema_ref 필요`);
+    }
+    // schemaVersion/strict 는 IR에 없음 → args(typo-safe 확장 슬롯)에서 명시 소싱. 기본 strict=true(미스매치 시 loud
+    // EXTRACT_SCHEMA_INVALID, 조용한 repair 아님), schemaVersion="1". 버전드 schema_ref 메타 레지스트리는 후속.
+    const args = isRec(a.args) ? a.args : {};
+    const schemaVersion = typeof args.schema_version === "string" ? args.schema_version : "1";
+    const strict = typeof args.strict === "boolean" ? args.strict : true;
+    return { type: "extract", instruction: a.instruction, output: { schemaRef: a.schema_ref, schemaVersion, strict } };
+  }
+  throw new InterpreterError(
+    "ACTION_UNSUPPORTED",
+    `compiledScenarioFrom: node '${nodeId}' action '${a.action}' 미지원(1단계: navigate/observe/act/extract)`,
+  );
 }
 
 // compiled_ast on[] branch(when=AST, target, priority) → CompiledOnBranch.
