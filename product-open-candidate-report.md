@@ -80,7 +80,7 @@ operate the deployment path outside this repository.
 This section is a cumulative candidate/delta scope list, not a live
 `git status` inventory. Every final release packet must also paste the current
 `git status --short --branch -uall` and `git diff --stat` output before
-approval. The current local dirty runtime packet includes new recorder and
+approval. The Phase 7 runtime packet includes new recorder and
 runtime-worker tests such as `app/src/runtime/executor-invocation-recorder.ts`,
 `app/test/executor-invocation-recorder.int.ts`,
 `app/test/graphile-runner.unit.ts`, `app/test/raw-cdp.unit.ts`, and
@@ -167,7 +167,7 @@ Passed locally:
 - `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:ci`
 - App integration now includes real `PgGraphileRunEnqueuer` commit/rollback
   evidence for `POST /v1/runs` `run_claim` enqueue, queue-driven configured
-  `run_claim` consumption evidence in the local dirty runtime delta, and D4.4
+  `run_claim` consumption evidence in the Phase 7 runtime delta, and D4.4
   `SignedCommandRegistry` registry-ref use during save/validate/promote; shell
   `cmd_ref` tests cover registered, unregistered, and registry-unavailable
   paths. It also includes final `PgExecutorInvocationRecorder` evidence for
@@ -217,7 +217,7 @@ Passed locally:
   decisions tracked, 13 release decisions checked (11 active external/staging
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
-- Current dirty-delta local gate evidence for 2026-06-15 KST includes
+- Current Phase 7 local gate evidence for 2026-06-15 KST includes
   DB-backed release posture from `npm --prefix codegen run ci:local:temp-db`,
   `npm --prefix codegen run db:temp-smoke`, or
   `node scripts/db-temp-postgres-gate.mjs -- npm --prefix codegen run db:smoke:release`,
@@ -225,7 +225,7 @@ Passed locally:
   `npm --prefix app run test:executor`, and `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:int`.
   `ci:local:no-db` remains diagnostic skip-only evidence and does not prove
   DB posture.
-  This proves the local non-bypass PostgreSQL 15 posture for the dirty runtime
+  This proves the local non-bypass PostgreSQL 15 posture for the Phase 7 runtime
   delta only; remote PR/main `Contract Gates` job URLs remain required before
   this delta can be cited as merged/current staging-open evidence.
 - `npm --prefix codegen run yaml:parse`
@@ -296,10 +296,10 @@ Remote CI evidence:
   `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945156`
   `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945033`
   `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945101`
-- Phase 7 `main` dirty-delta `Contract Gates` attempt:
+- Phase 7 `main` runtime-delta `Contract Gates` attempt:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27525226281`
-  on commit `6ac33af251bd362a4de200d2eba956d371408cf3`. The latest Phase 7
-  push run, the prior code-delta run `27524267891`, and the failed-job rerun did
+  on commit `6ac33af251bd362a4de200d2eba956d371408cf3`. The latest non-skipped
+  Phase 7 push run, the prior code-delta run `27524267891`, and the failed-job rerun did
   not start hosted runner jobs. GitHub Actions annotations report that recent
   account payments have failed or the spending limit must be increased. This is
   external billing/admin evidence, not a repo-code failure, and it does not
@@ -472,7 +472,7 @@ Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 - TODO: [BLOCKED] Runtime artifact_retention production/staging external object deletion evidence is not complete.
   Required decision: Runtime/platform owners must provide staging or production evidence from a real `ArtifactRetentionStore` delete port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, with idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal-hold/quarantine handling, evidence/audit semantics, and approved staging credential/SecretRef path before Product Open can claim external artifact purge. The local fake/test port evidence proves repo guardrails only and is not staging external object deletion evidence.
 - TODO: [BLOCKED] Runtime execution staging gates are not yet complete remote evidence.
-  Required decision: Release/runtime owners or repository billing administrators must restore GitHub Actions hosted-runner execution by resolving the account payment/spending-limit blocker, rerun `Contract Gates` on the Phase 7 `main` head, and provide PR/main evidence proving tenant boundary, RBAC/redaction, no `BYPASSRLS`, no silent false/unknown behavior, plus the required `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs for the dirty runtime delta before citing it as current staging/open evidence. Local non-bypass temp-DB evidence is recorded above but does not replace remote release evidence.
+  Required decision: Release/runtime owners or repository billing administrators must restore GitHub Actions hosted-runner execution by resolving the account payment/spending-limit blocker, rerun `Contract Gates` on the Phase 7 `main` head, and provide PR/main evidence proving tenant boundary, RBAC/redaction, no `BYPASSRLS`, no silent false/unknown behavior, plus the required `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs for the Phase 7 runtime delta before citing it as current staging/open evidence. Local non-bypass temp-DB evidence is recorded above but does not replace remote release evidence.
 
 ### Durable Security Audit Writer Decision Packet
 
