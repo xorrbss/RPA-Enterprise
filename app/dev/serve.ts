@@ -33,13 +33,14 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const DIST = join(ROOT, "web", "dist");
 const SCHEMA = "rpa_dev_console";
 const PORT = Number(process.env.DEV_CONSOLE_PORT ?? 8080);
-// 마커 픽스처(/fixture/reviews) — dev 런타임 루프가 실제로 completed까지 구동할 수 있는 PageState 계약 페이지.
+// site-profile 픽스처(/fixture/reviews) — 마커 없는 실 URL풍 리뷰 페이지.
+// dev 런타임 루프가 SitePageStateResolver(셀렉터→flag)로 PageState를 산출해 completed까지 구동한다(2단계).
 const FIXTURE_PATH = "/fixture/reviews";
-const FIXTURE_HTML = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>리뷰</title></head>
-<body data-page-state-contract="d3-dryrun-v1" data-auth="authenticated">
-<header role="banner"><h1>리뷰</h1></header><nav role="navigation" aria-label="메뉴"><a href="#">홈</a></nav>
-<main role="main"><ul data-landmark="reviews"><li class="review-item">A</li><li class="review-item">B</li></ul>
-<a rel="next" href="#" role="link" aria-disabled="true">다음</a></main>
+const FIXTURE_HTML = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>상품 리뷰</title></head>
+<body>
+<header role="banner"><h1>상품</h1><div class="user-menu">내 계정</div></header>
+<main role="main"><section class="reviews"><article class="review-item">좋아요</article><article class="review-item">별로</article><article class="review-item">보통</article></section>
+<a class="next-page disabled" aria-disabled="true">다음</a></main>
 <footer role="contentinfo"><small>©</small></footer></body></html>`;
 // dev 전용 HMAC 시크릿(프로덕션 사용 금지 — SecretStore 경계 밖, 시드 데이터에만 적용).
 const SECRET = new TextEncoder().encode("dev-console-serve-secret-do-not-use-in-prod-0123456789");
@@ -102,10 +103,11 @@ async function seed(pool: Pool): Promise<void> {
       [SVER1, TENANT, SCEN, SVER2, seedIr],
     );
 
-    // 데모 자동화: 마커 픽스처(/fixture/reviews)를 가리켜 dev 런타임 루프가 실제 completed까지 구동 가능(compiled_ast 포함).
+    // 데모 자동화: site-profile 픽스처(/fixture/reviews, 마커 없음)를 가리켜 dev 런타임 루프가
+    // SitePageStateResolver로 실제 completed까지 구동 가능(compiled_ast 포함).
     const demo = compileScenario(
       {
-        meta: { name: "데모 — 마커 페이지 수집(실행 가능)", version: 1 },
+        meta: { name: "데모 — 리뷰 수집(실행 가능)", version: 1 },
         start: "open",
         nodes: {
           open: { what: [{ action: "navigate", url_ref: `http://127.0.0.1:${PORT}${FIXTURE_PATH}` }], next: "check" },
@@ -123,7 +125,7 @@ async function seed(pool: Pool): Promise<void> {
       {},
     );
     if (demo.ok) {
-      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'데모 — 마커 페이지 수집(실행 가능)')`, [DEMO_SCEN, TENANT]);
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'데모 — 리뷰 수집(실행 가능)')`, [DEMO_SCEN, TENANT]);
       await c.query(
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
          VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
