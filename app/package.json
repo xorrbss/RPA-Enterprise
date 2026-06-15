@@ -32,6 +32,7 @@
     "test:site-resolver": "tsx test/site-page-state.int.ts",
     "test:pipeline-site": "tsx test/run-pipeline-site.int.ts",
     "test:multisite": "tsx test/run-multisite-resolution.int.ts",
+    "test:interpreter-llm": "tsx test/interpreter-llm.int.ts",
     "test:console-e2e": "tsx test/console-browser.e2e.ts",
     "test:console-live-e2e": "tsx test/console-live.e2e.ts",
     "test:ci": "npm run test && npm run test:executor && npm run test:int"

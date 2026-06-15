@@ -125,11 +125,53 @@ function main(): void {
     check("navigate.url_ref 키 누락 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
+  // ── (C) dom 프리미티브 act/extract 매핑 ──
+  // 10) act: instruction + node side_effect.kind → sideEffect 소싱.
+  {
+    const ir = { start: "a", nodes: { a: { what: [{ action: "act", instruction: "click login" }], side_effect: { kind: "submit" }, terminal: "success" } } };
+    const s = compiledScenarioFrom(ir, {});
+    const act = s.nodes.a?.what[0] as { type: string; instruction: string; sideEffect?: string } | undefined;
+    check("act: instruction + node side_effect.kind → sideEffect", act?.type === "act" && act.instruction === "click login" && act.sideEffect === "submit", JSON.stringify(act));
+  }
+
+  // 11) act: node side_effect 없으면 sideEffect 생략(실행기 기본 'update' 경로).
+  {
+    const s = compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "fill name" }], terminal: "success" } } }, {});
+    const act = s.nodes.a?.what[0] as { type: string; sideEffect?: string } | undefined;
+    check("act: side_effect 없으면 sideEffect 생략", act?.type === "act" && act.sideEffect === undefined, JSON.stringify(act));
+  }
+
+  // 12) extract: schema_ref→schemaRef + 기본 schemaVersion='1'/strict=true.
+  {
+    const s = compiledScenarioFrom({ start: "g", nodes: { g: { what: [{ action: "extract", instruction: "get reviews", schema_ref: "reviews" }], terminal: "success" } } }, {});
+    const ex = s.nodes.g?.what[0] as { type: string; output: { schemaRef: string; schemaVersion: string; strict: boolean } } | undefined;
+    check("extract: schema_ref→schemaRef + 기본 v1/strict", ex?.type === "extract" && ex.output.schemaRef === "reviews" && ex.output.schemaVersion === "1" && ex.output.strict === true, JSON.stringify(ex));
+  }
+
+  // 13) extract: args.schema_version/args.strict 오버라이드.
+  {
+    const s = compiledScenarioFrom({ start: "g", nodes: { g: { what: [{ action: "extract", instruction: "x", schema_ref: "r", args: { schema_version: "2", strict: false } }], terminal: "success" } } }, {});
+    const ex = s.nodes.g?.what[0] as { output: { schemaVersion: string; strict: boolean } } | undefined;
+    check("extract: args 오버라이드(v2/strict=false)", ex?.output.schemaVersion === "2" && ex.output.strict === false, JSON.stringify(ex));
+  }
+
+  // 14) extract: schema_ref 누락 → IR_SCHEMA_INVALID.
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "g", nodes: { g: { what: [{ action: "extract", instruction: "x" }], terminal: "success" } } }, {}));
+    check("extract: schema_ref 누락 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
+  // 15) act: instruction 누락 → IR_SCHEMA_INVALID.
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act" }], terminal: "success" } } }, {}));
+    check("act: instruction 누락 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: ir-translate — compiled_ast on[] 드리프트(RQ-008) + url_ref→params URL 해소/InterpreterError 경계");
+  console.log("\nPASS: ir-translate — 드리프트(RQ-008) + url_ref→params 해소 + act/extract→DomAction 매핑");
   process.exit(0);
 }
 

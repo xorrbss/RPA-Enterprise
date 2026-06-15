@@ -518,3 +518,20 @@
 > 정합). null 동등성은 여전히 `== null`/`!= null`로만 명시. 정상 경로는 타입체커가 null 수치 피연산자를 차단하므로
 > 이 경로는 런타임 데이터 불일치 시에만 도달. 기존 fixture(runtime evaluator throws on missing scope)가 fail-loud
 > 불변을 이미 검증한다. **재검증: contract-lint(66) + codegen consistency green.**
+
+## v2.13 패치 로그 (D3 가동 3단계 증분1 — LLM dom act/extract 인터프리터 배선)
+
+> 이미 빌드·단위검증된 `StagehandDomExecutor`(act→CDP mutation, extract→parsedJson)를 **인터프리터 실행 경로에 연결**한다.
+> 두 가지: (1) `ir-translate`가 act/extract 를 ACTION_UNSUPPORTED로 막던 것을 풀어 `StagehandDomExecutor`가 받는
+> DomAction 형태로 매핑; (2) 얇은 `CompositeExecutor`가 단일 ExecutorPlugin 제약 하에서 action.type 으로
+> navigate→Utility, act/extract→Dom 라우팅. 라이브 LLM(Codex)은 사용자 자격증명 의존이라 이 환경 미실행 — fake
+> `LlmGatewayCaller`로 **인터프리터→composite→dom→CDP 배선**을 offline 검증(act 가 실 Chrome 페이지를 실제 fill).
+> 설계는 워크플로(조사4+종합+적대검증)로 확정. **재검증: `test:unit`(ir-translate act/extract 매핑) + 실 Chrome
+> `test:interpreter-llm`(navigate→act(실 CDP)→extract→on[]→completed + node.* loud) + `test:executor` 회귀.**
+
+| 항목 | 조치 |
+|---|---|
+| translate | `ir-translate.ts` mapAction에 act/extract 분기. act.instruction 필수, sideEffect는 **node 레벨 side_effect.kind에서 소싱**(IR에 action-level 없음 — 미지정 시 생략→실행기 기본 'update'). extract: schema_ref→schemaRef, schemaVersion/strict는 **args(typo-safe 슬롯)에서 명시 소싱**(기본 v1/strict=true — 미스매치 시 loud EXTRACT_SCHEMA_INVALID). 가정 금지: 버전드 schema_ref 메타 레지스트리 미발명(후속) |
+| composite | `composite-executor.ts` `CompositeExecutor` — action.type 라우팅(dom: act/observe/extract; utility: navigate/download/upload; 미지원/garbage→utility의 타입화 throw). 디스패처는 에러처리 없음(각 실행기 typed throw/StepStatus 그대로 전파). capabilities=union |
+| 검증 | `test:interpreter-llm`(offline, fake gateway, 실 Chrome) — act가 #q를 실제 fill(composite→dom→CDP 증명), extract success, completed; **on[] node.* 참조→IREL_RUNTIME_MISSING**(flags-only 스코프 loud 단언) + `ir-translate.unit` act/extract 매핑 6케이스 |
+| 연기(명시) | **node.* on[]/loop 스코프(OPEN ISSUES RQ-002, P1 correctness)**: 인터프리터가 {flags}만 주입 → extract 데이터로 분기 불가(StepResult→{row_count,status,extracted_ref,tier} 투영이 계약 미명시 — 가정 금지). extract는 1단계서 **실행·StepResult.extracted 부착만**(분기 불가). **라이브 gateway 조립**(LlmGatewayDeps=gate+idempotency+sink+validator+adapter+transport — 무거움, 자격증명 필요): dev 루프는 utility-only 유지(act/extract는 EXECUTOR_CAPABILITY_MISMATCH로 loud), composite+라이브 gateway 배선은 별도 증분. **redaction §4**(RQ-003) · dom-observe · sensitive/vars · loop/fallback · download/upload translate · fail_* terminal 전이도 연기 |
