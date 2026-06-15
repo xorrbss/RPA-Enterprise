@@ -352,3 +352,31 @@ jobs:
 
       - name: Local HTTP smoke for standalone console
         run: node scripts/html-http-smoke.mjs
+
+  console:
+    name: Operations console (web) typecheck, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install console dependencies
+        run: npm ci --prefix web
+
+      - name: Typecheck console
+        run: npm --prefix web run typecheck
+
+      - name: Run console tests
+        run: npm --prefix web run test
+
+      - name: Build console
+        run: npm --prefix web run build

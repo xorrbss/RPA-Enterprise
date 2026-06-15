@@ -39,6 +39,10 @@ const steps = [
   ["D3 executor dry-run", "npm", ["--prefix", "app", "run", "test:executor"]],
   ["HTML smoke", "node", ["scripts/html-smoke.mjs"]],
   ["HTML HTTP smoke", "node", ["scripts/html-http-smoke.mjs"]],
+  ["Console install", "npm", ["ci", "--prefix", "web"]],
+  ["Console typecheck", "npm", ["--prefix", "web", "run", "typecheck"]],
+  ["Console tests", "npm", ["--prefix", "web", "run", "test"]],
+  ["Console build", "npm", ["--prefix", "web", "run", "build"]],
 ];
 
 if (!skipDb) {

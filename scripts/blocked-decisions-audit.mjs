@@ -457,6 +457,7 @@ const scanExtensions = new Set([
 const skippedDirs = new Set([".git", "node_modules", ".next", "dist", "coverage"]);
 const informationalFiles = new Set([
   "AGENTS.md",
+  "autonomous-loop-prompt.md",
   "build-prompt.md",
   "CLAUDE.md",
   "README.md",
