@@ -12,6 +12,8 @@ import { readdirSync } from "node:fs";
 
 import { Stagehand } from "@browserbasehq/stagehand";
 
+import { CdpDisconnectedError } from "./raw-cdp";
+
 /** 결정형 브라우저 프리미티브 — resolver/executor 가 의존하는 최소 표면. */
 export interface CdpSession {
   url(): string;
@@ -135,8 +137,17 @@ export interface StagehandSessionOptions {
   initialUrl?: string;
 }
 
-/** Stagehand v3 LOCAL 세션을 띄워 CdpSession 을 만든다(LLM 미사용). */
-export async function createStagehandSession(opts: StagehandSessionOptions): Promise<CdpSession> {
+const LAUNCH_RETRYABLE_RE = /ECONNREFUSED|ECONNRESET|connection refused/i;
+
+/** CDP 기동 연결거부(레이스)인지 — 재시도 대상. 원 예외 텍스트는 분류에만 쓰고 로그/응답엔 싣지 않는다. */
+function isLaunchConnRefused(e: unknown): boolean {
+  const code = typeof e === "object" && e !== null && "code" in e ? String((e as { code?: unknown }).code) : "";
+  const msg = e instanceof Error ? e.message : String(e);
+  return LAUNCH_RETRYABLE_RE.test(`${code} ${msg}`);
+}
+
+/** Stagehand LOCAL 세션 1회 기동(빌드+init+newPage). 부분 실패 시 좀비 세션 정리 후 재던진다. */
+async function attemptStagehandSession(opts: StagehandSessionOptions): Promise<CdpSession> {
   const sh = new Stagehand({
     env: "LOCAL",
     verbose: 0,
@@ -148,10 +159,47 @@ export async function createStagehandSession(opts: StagehandSessionOptions): Pro
       downloadsPath: opts.downloadDir,
     },
   } as unknown as ConstructorParameters<typeof Stagehand>[0]) as unknown as ShInstance;
+  try {
+    await sh.init();
+    const page = await sh.context.newPage(opts.initialUrl);
+    return new StagehandCdpSession(sh, page, opts.downloadDir);
+  } catch (e) {
+    // 부분 기동(좀비 Chrome) 정리 — 다음 시도 전. close 무응답은 타임아웃으로 무시.
+    await Promise.race([sh.close().catch(() => undefined), sleep(2000)]);
+    throw e;
+  }
+}
 
-  await sh.init();
-  const page = await sh.context.newPage(opts.initialUrl);
-  return new StagehandCdpSession(sh, page, opts.downloadDir);
+/** 테스트 주입/튜닝용. attemptInit 기본=실 Stagehand 기동(RQ-001 단위검증을 위한 DI 경계). */
+export interface CreateStagehandSessionDeps {
+  attemptInit?: (opts: StagehandSessionOptions) => Promise<CdpSession>;
+  maxAttempts?: number;
+  baseDelayMs?: number;
+}
+
+/**
+ * Stagehand v3 LOCAL 세션을 띄워 CdpSession 을 만든다(LLM 미사용).
+ * CDP 기동 레이스(ECONNREFUSED)는 비결정적이라 bounded retry/backoff 로 흡수한다(RQ-001 — CI 안정).
+ * 비-연결거부 예외는 즉시 전파(가정 금지), 연결거부 재시도 소진은 CDP_DISCONNECTED 로 분류(원 텍스트 미노출).
+ */
+export async function createStagehandSession(
+  opts: StagehandSessionOptions,
+  deps: CreateStagehandSessionDeps = {},
+): Promise<CdpSession> {
+  const attemptInit = deps.attemptInit ?? attemptStagehandSession;
+  const maxAttempts = Math.max(1, deps.maxAttempts ?? 5);
+  const baseDelayMs = deps.baseDelayMs ?? 200;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await attemptInit(opts);
+    } catch (e) {
+      if (!isLaunchConnRefused(e)) throw e; // 비-연결거부 → 즉시 전파(원 예외 보존)
+      if (attempt === maxAttempts - 1) break;
+      await sleep(baseDelayMs * 2 ** attempt); // 200·400·800·1600 ms
+    }
+  }
+  // 연결거부 재시도 소진 → CDP_DISCONNECTED 분류(error-catalog, retryable). 원 예외 텍스트 미노출.
+  throw new CdpDisconnectedError("stagehand.init", "disconnected");
 }
 
 /** 단일 세션을 모든 lease 에 바인딩(dry-run/단일 워커). 다중 lease 풀은 D3 lease(DB) 단계. */
