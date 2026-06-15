@@ -54,6 +54,7 @@ import type {
 } from "../../../ts/runtime-contract";
 import type { CorrelationId, RunId, StepId, TenantId } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
+import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
 import { applyRunTransition } from "../runtime/run-transition";
 import { applyWorkitemTransition } from "../runtime/workitem-transition";
 import { relayOutbox } from "../runtime/outbox-relay";
@@ -340,11 +341,13 @@ export class PgRuntimeWorker implements RuntimeWorker {
       const run = await this.loadExpectedRun(client, tenantId, runId, "queued");
       if (run.kind !== "ok") return run.result;
 
-      const lease = await this.acquireBrowserLease(client, {
-        tenantId,
-        runId,
-        workerId,
-        plan: await leasePlanResolver(client, { tenantId, runId }),
+      // §E 필수 span: run.claim(루트) ⊃ browser.lease.acquire. 공통속성은 적재된 run의 correlation_id.
+      const correlationId = job.correlationId ?? run.row.correlation_id;
+      const common: CommonSpanAttrs = { tenant_id: tenantId, run_id: runId, correlation_id: correlationId };
+      return withSpan(SPAN.runClaim, common, { worker_id: workerId }, async () => {
+      const lease = await withSpan(SPAN.browserLeaseAcquire, common, {}, async () => {
+        const plan = await leasePlanResolver(client, { tenantId, runId });
+        return this.acquireBrowserLease(client, { tenantId, runId, workerId, plan });
       });
       if (lease.kind !== "acquired") return lease;
 
@@ -354,7 +357,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         fromStatus: "queued",
         event: { type: "worker.claimed" },
         guard: { leaseAcquired: true },
-        correlationId: job.correlationId ?? run.row.correlation_id,
+        correlationId,
         workerId,
         eventIdempotencyKey: `${runId}:run_claim`,
       });
@@ -372,6 +375,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         kind: "completed",
         emittedEvents: transition.emitted.map((e) => e.eventId as EventId),
       };
+      });
     });
   }
 
@@ -609,11 +613,15 @@ export class PgRuntimeWorker implements RuntimeWorker {
         workerId,
       });
       if (lease === null) {
-        const acquired = await this.acquireBrowserLease(client, {
-          tenantId,
-          runId,
-          workerId,
-          plan: await leasePlanResolver(client, { tenantId, runId }),
+        // §E browser.lease.acquire — resume 경로의 lease 확보도 동일 span으로 계측.
+        const resumeCommon: CommonSpanAttrs = {
+          tenant_id: tenantId,
+          run_id: runId,
+          correlation_id: job.correlationId ?? row.correlation_id,
+        };
+        const acquired = await withSpan(SPAN.browserLeaseAcquire, resumeCommon, {}, async () => {
+          const plan = await leasePlanResolver(client, { tenantId, runId });
+          return this.acquireBrowserLease(client, { tenantId, runId, workerId, plan });
         });
         if (acquired.kind !== "acquired") return { kind: "job_result", result: acquired };
         lease = acquired.leaseId;
@@ -668,7 +676,14 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
     if (txA.kind === "job_result") return txA.result;
 
-    const restoreResult = await sessionRestorer.restoreSession(txA.intent).catch(
+    // §E 필수 span: session.restore — restoreSession은 DB 트랜잭션 밖(외부 I/O)에서 실행되며 그 경계를 계측.
+    //   예외는 withSpan이 record+ERROR로 표면화 후 재던지고, 바깥 catch가 terminal_failure로 흡수(제어흐름).
+    const restoreResult = await withSpan(
+      SPAN.sessionRestore,
+      { tenant_id: txA.intent.tenantId, run_id: txA.intent.runId, correlation_id: txA.intent.correlationId },
+      {},
+      () => sessionRestorer.restoreSession(txA.intent),
+    ).catch(
       (err): SessionRestoreResult => ({
         kind: "terminal_failure",
         reason: unknownToReason(err),

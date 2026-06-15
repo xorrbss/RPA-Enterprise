@@ -12,7 +12,7 @@ import { performance } from "node:perf_hooks";
 
 import type { ArtifactRef } from "../../../ts/core-types";
 import type { ErrorCode } from "../../../ts/error-catalog";
-import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
+import { SPAN, recordLlmCost, recordLlmTtfbMs, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
 import type {
   AdapterErrorCode,
   CapabilityGate,
@@ -143,6 +143,9 @@ export class LlmGateway {
           const consumed = await this.runWithRetryAndFallback(req, decision.transport, signal);
           span.setAttributes({ stream_status: consumed.finishReason, ttfb_ms: consumed.ttfbMs ?? 0 });
           const response = await this.finalize(req, consumed, decision.transport, signal);
+          // §E 필수 메트릭: llm_cost(usage.cost 누적) + llm_ttfb_ms(첫 토큰 지연). 저카디널리티 attr(tenant/model).
+          recordLlmCost(response.usage.cost, { tenant_id: meta.tenantId, model: req.model });
+          recordLlmTtfbMs(consumed.ttfbMs ?? 0, { tenant_id: meta.tenantId, model: req.model });
           if (idem && callId) await idem.complete(callId, response);
           return response;
         },
