@@ -230,13 +230,19 @@ async function main(): Promise<void> {
     });
     check("dead_letter.replayed_at 마킹(중복 복원 방지)", replayedAt !== null);
 
-    // 명령: 자동화 실행(run-create) — scenarioStudio '실행' 클릭 → 새 queued run(실 DB).
+    // 명령: 자동화 실행(run-create) — scenarioStudio '실행' 클릭(패널 열기) → '실행 시작' 클릭 → 새 queued run(실 DB).
+    // 시드 IR은 nodes 없음(url_ref 키 없음) → 패널은 추가 입력 없이 '실행 시작' 활성.
     await page.evaluate(() => {
       location.hash = "#scenarioStudio";
     });
     await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some((b) => b.textContent === "실행"), { timeout: 15_000 });
     await page.evaluate(() => {
       const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "실행");
+      (btn as HTMLButtonElement | undefined)?.click();
+    });
+    await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some((b) => b.textContent === "실행 시작"), { timeout: 15_000 });
+    await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "실행 시작");
       (btn as HTMLButtonElement | undefined)?.click();
     });
     let queuedRuns = 0;
