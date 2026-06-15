@@ -22,3 +22,6 @@ app/poc/**/node_modules/
 # PoC 런타임 로그(일회성).
 app/**/poc.log
 app/exec.log
+
+# 캡처 PoC 산출물 — 라이브 세션 쿠키/시크릿 포함, 절대 커밋 금지.
+app/poc/d3-stagehand/capture-reviews-output.json
