@@ -65,4 +65,39 @@ describe("D7 운영 콘솔 shell", () => {
     );
     await waitFor(() => expect(screen.getByText("불러오지 못했습니다")).toBeInTheDocument());
   });
+
+  test("운영자 명령: 실행 취소(abort) 디스패치 + Idempotency-Key", async () => {
+    const calls: Array<{ runId: string; key: string }> = [];
+    const client = fakeClient({
+      abortRun: async (runId, key) => {
+        calls.push({ runId, key });
+        return { status: "cancelled" };
+      },
+    });
+    window.confirm = () => true; // jsdom confirm 스텁
+    renderApp(client);
+    location.hash = "#runTrace";
+    const abortBtn = await screen.findByRole("button", { name: "취소" });
+    abortBtn.click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.runId).toBe("11111111-aaaa-bbbb-cccc-000000000001");
+    expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
+    await waitFor(() => expect(screen.getByText("완료")).toBeInTheDocument());
+  });
+
+  test("운영자 명령 실패 → 코드 표면화", async () => {
+    const { ApiError } = await import("../src/api/types");
+    window.confirm = () => true;
+    renderApp(
+      fakeClient({
+        abortRun: async () => {
+          throw new ApiError(409, "RUN_ABORTED", { code: "RUN_ABORTED" });
+        },
+      }),
+    );
+    location.hash = "#runTrace";
+    const abortBtn = await screen.findByRole("button", { name: "취소" });
+    abortBtn.click();
+    await waitFor(() => expect(screen.getByText("RUN_ABORTED (409)")).toBeInTheDocument());
+  });
 });

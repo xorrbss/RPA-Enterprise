@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { QueryPanel } from "../components/QueryPanel";
+import { ActionButton } from "../components/ActionButton";
 import { StatusBadge } from "../components/badges";
 import type { DeadLetterItem, WorkitemItem } from "../api/types";
 
@@ -35,6 +36,17 @@ export function WorkitemsView(): JSX.Element {
           { header: "DLQ ID", render: (r) => <code>{r.dead_letter_id.slice(0, 8)}</code> },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
           { header: "원본", render: (r) => (r.source_id ? <code>{r.source_id.slice(0, 8)}</code> : "—") },
+          {
+            header: "작업",
+            render: (r) => (
+              <ActionButton
+                label="재처리"
+                confirmText="이 작업항목을 재처리(W10: abandoned→new)할까요?"
+                run={(key) => api.replayDeadLetter(r.dead_letter_id, key)}
+                invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
+              />
+            ),
+          },
         ]}
       />
       <QueryPanel<DeadLetterItem>

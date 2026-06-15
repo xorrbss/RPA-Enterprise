@@ -20,6 +20,9 @@ export interface ApiClient {
   listScenarios(p?: ListParams): Promise<Paginated<ScenarioItem>>;
   listSites(p?: ListParams): Promise<Paginated<SiteItem>>;
   getGatewayPolicy(model?: string): Promise<GatewayPolicy>;
+  // 운영자 명령(POST + Idempotency-Key). 어휘체인 abort→cancelled, W10 replay.
+  abortRun(runId: string, idempotencyKey: string): Promise<unknown>;
+  replayDeadLetter(deadLetterId: string, idempotencyKey: string): Promise<unknown>;
 }
 
 export interface HttpApiClientOptions {
@@ -41,15 +44,12 @@ function queryString(p?: ListParams): string {
 export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
   const doFetch = opts.fetchImpl ?? fetch;
 
-  async function get<T>(path: string): Promise<T> {
+  function authHeaders(): Record<string, string> {
     const token = opts.getToken();
-    const res = await doFetch(`${opts.baseUrl}${path}`, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        ...(token !== null ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    });
+    return token !== null ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  async function parseOrThrow<T>(res: Response): Promise<T> {
     if (!res.ok) {
       // 조용한 실패 금지: 4xx/5xx 본문(ApiError)을 타입화해 표면화.
       let body = null;
@@ -63,6 +63,28 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     return (await res.json()) as T;
   }
 
+  async function get<T>(path: string): Promise<T> {
+    const res = await doFetch(`${opts.baseUrl}${path}`, {
+      method: "GET",
+      headers: { Accept: "application/json", ...authHeaders() },
+    });
+    return parseOrThrow<T>(res);
+  }
+
+  async function post<T>(path: string, idempotencyKey: string, body?: unknown): Promise<T> {
+    const res = await doFetch(`${opts.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+        ...authHeaders(),
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+    return parseOrThrow<T>(res);
+  }
+
   return {
     listRuns: (p) => get(`/v1/runs${queryString(p)}`),
     listWorkitems: (p) => get(`/v1/workitems${queryString(p)}`),
@@ -71,5 +93,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listScenarios: (p) => get(`/v1/scenarios${queryString(p)}`),
     listSites: (p) => get(`/v1/sites${queryString(p)}`),
     getGatewayPolicy: (model) => get(`/v1/gateway/policy${queryString(model ? { model } : undefined)}`),
+    abortRun: (runId, idempotencyKey) => post(`/v1/runs/${runId}/abort`, idempotencyKey),
+    replayDeadLetter: (deadLetterId, idempotencyKey) => post(`/v1/dlq/${deadLetterId}/replay`, idempotencyKey),
   };
 }

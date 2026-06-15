@@ -14,6 +14,8 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     listScenarios: empty,
     listSites: empty,
     getGatewayPolicy: async () => ({ model: "gpt-4o-mini", capabilities: { jsonMode: true } }),
+    abortRun: async () => ({ status: "cancelled" }),
+    replayDeadLetter: async () => ({ status: "new" }),
     ...overrides,
   };
 }
