@@ -52,6 +52,18 @@ const SVER1 = "70000000-0000-0000-0000-00000000d102";
 const SVER2 = "70000000-0000-0000-0000-00000000d103";
 const DEMO_SCEN = "70000000-0000-0000-0000-00000000d201";
 const DEMO_SVER = "70000000-0000-0000-0000-00000000d202";
+const DEMO_SITE = "70000000-0000-0000-0000-00000000d203";
+// 데모 사이트 프로파일의 PageState 산출 규칙(마커 없는 /fixture/reviews 셀렉터 매핑) — page_state_selectors 로 영속.
+const DEMO_PAGE_STATE_SELECTORS = {
+  authenticatedWhen: { selector: ".user-menu" },
+  flags: {
+    reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 },
+    not_found: { kind: "present", selector: ".empty-results" },
+    no_next_page: { kind: "present", selector: "a.next-page.disabled" },
+    login_required: { kind: "present", selector: ".login-form" },
+    blocked: { kind: "present", selector: ".blocked-banner" },
+  },
+};
 const ts = (i: number) => `2026-06-15T10:0${i}:00Z`;
 
 type Pool = ReturnType<typeof createPool>;
@@ -125,6 +137,12 @@ async function seed(pool: Pool): Promise<void> {
       {},
     );
     if (demo.ok) {
+      // 데모 site_profile + page_state_selectors(jsonb) 영속 — run-loop 가 이 사이트의 산출 규칙을 DB에서 로드.
+      await c.query(
+        `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, page_state_selectors)
+         VALUES ($1,$2,'데모 사이트(리뷰)',$3,$4::jsonb)`,
+        [DEMO_SITE, TENANT, `http://127.0.0.1:${PORT}${FIXTURE_PATH}`, JSON.stringify(DEMO_PAGE_STATE_SELECTORS)],
+      );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'데모 — 리뷰 수집(실행 가능)')`, [DEMO_SCEN, TENANT]);
       await c.query(
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
@@ -364,7 +382,7 @@ async function main(): Promise<void> {
   console.log("────────────────────────────────────────────────────────\n");
 
   // dev 런타임 루프: queued run을 claim→실행기 구동(실 Chrome). 마커 픽스처 데모 시나리오만 completed까지 간다.
-  const runLoop: RunLoop | null = await startRunLoop(pool, TENANT);
+  const runLoop: RunLoop | null = await startRunLoop(pool, TENANT, DEMO_SITE);
 
   const shutdown = (): void => {
     console.log("shutting down dev console…");

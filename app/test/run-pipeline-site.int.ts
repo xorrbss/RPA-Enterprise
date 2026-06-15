@@ -1,10 +1,10 @@
 /**
  * Run 전 구간 파이프라인 — site-profile 모드 (D3 가동 2단계 증분2). 실 PostgreSQL + 실 Stagehand v3 + 로컬 Chrome.
  *
- * run-pipeline.int(마커 모드)와 동형이되, dev 콘솔이 실제로 타는 경로를 검증한다:
- *   queued run → claim(queued→claimed) → driveClaimedRun(실 UtilityExecutor + **SitePageStateResolver**) →
- *   실 Chrome으로 **마커 없는** 실 URL풍 리뷰 페이지를 navigate → site-profile 셀렉터로 PageState flags 산출 →
- *   on[] 분기 → completed. (serve.ts FIXTURE_HTML + run-loop.ts DEMO_SITE_CONFIG 와 동일 셀렉터/구조)
+ * run-pipeline.int(마커 모드)와 동형이되, dev 콘솔이 실제로 타는 경로 + **DB 영속 라운드트립**을 검증한다:
+ *   site_profiles.page_state_selectors(jsonb) 시드 → loadSitePageStateConfig 로 로드 → SitePageStateResolver →
+ *   queued run → claim → driveClaimedRun → 실 Chrome으로 **마커 없는** 실 URL풍 페이지 navigate →
+ *   DB에서 로드한 셀렉터로 PageState flags 산출 → on[] 분기 → completed. (serve.ts 시드와 동일 셀렉터/구조)
  *
  * 실행(temp PG15 게이트 + Chrome):
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec -- tsx app/test/run-pipeline-site.int.ts
@@ -21,6 +21,7 @@ import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun, type ClaimedRun } from "../src/runtime/run-step-driver";
 import { createStagehandSession, SingleSessionProvider } from "../src/executor/cdp-session";
 import { SitePageStateResolver, type SitePageStateConfig } from "../src/executor/site-page-state-resolver";
+import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
 import { UtilityExecutor } from "../src/executor/utility-executor";
 
 const PORT = 39289;
@@ -33,6 +34,7 @@ const TENANT = "00000000-0000-0000-0000-0000000000b1";
 const SCEN = "72000000-0000-0000-0000-0000000000e1";
 const SVER = "72000000-0000-0000-0000-0000000000e2";
 const RUN = "73000000-0000-0000-0000-0000000000e1";
+const SITE = "74000000-0000-0000-0000-0000000000e1";
 const WORKER = "9a000000-0000-0000-0000-0000000000e2";
 
 let failures = 0;
@@ -98,7 +100,6 @@ async function main(): Promise<void> {
   const downloadDir = mkdtempSync(join(tmpdir(), "d3site-pipe-dl-"));
   const session = await createStagehandSession({ chromeExecutablePath: CHROME, downloadDir, headless: true });
   const provider = new SingleSessionProvider(session);
-  const resolver = new SitePageStateResolver(provider, siteConfig);
   const executor = new UtilityExecutor(provider);
 
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
@@ -119,6 +120,12 @@ async function main(): Promise<void> {
     if (!compiled.ok) throw new Error("scenario did not compile");
 
     await withTenantTx(pool, TENANT, async (c) => {
+      // site_profile 에 page_state_selectors(jsonb) 영속 — run 의 site_profile 이 PageState 산출 규칙의 진실원천.
+      await c.query(
+        `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, page_state_selectors)
+         VALUES ($1,$2,'site-pipeline',$3,$4::jsonb)`,
+        [SITE, TENANT, ORIGIN, JSON.stringify(siteConfig)],
+      );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'site-pipeline')`, [SCEN, TENANT]);
       await c.query(
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
@@ -131,6 +138,11 @@ async function main(): Promise<void> {
         [RUN, TENANT, SVER],
       );
     });
+
+    // DB 영속 page_state_selectors 라운드트립: run 의 site_profile 에서 config 로드 → resolver 구성.
+    const loaded = await withTenantTx(pool, TENANT, (c) => loadSitePageStateConfig(c, TENANT, SITE));
+    check("DB page_state_selectors 라운드트립(loadSitePageStateConfig)", loaded.flags.reviews_visible?.kind === "min_count" && loaded.authenticatedWhen?.selector === ".user-menu");
+    const resolver = new SitePageStateResolver(provider, loaded);
 
     const claimed = await withTenantTx(pool, TENANT, (c) =>
       applyRunTransition(c, {
@@ -152,7 +164,7 @@ async function main(): Promise<void> {
       scenarioVersionId: SVER,
       correlationId: RUN,
       leaseId: "lease-1",
-      siteProfileId: "site-1",
+      siteProfileId: SITE,
       browserIdentityId: "bid-1",
       networkPolicyId: "np-1",
     };
