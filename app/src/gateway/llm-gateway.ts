@@ -16,6 +16,7 @@ import { SPAN, recordLlmCost, recordLlmTtfbMs, withSpan, type CommonSpanAttrs } 
 import type {
   AdapterErrorCode,
   CapabilityGate,
+  GatewayRedactionBoundary,
   LLMBackendAdapter,
   LLMCallIdempotencyStore,
   LLMRequest,
@@ -51,6 +52,8 @@ export interface LlmGatewayDeps {
   validator: StructuredOutputValidator;
   sink: GatewayArtifactSink;
   idempotency?: LLMCallIdempotencyStore;
+  /** security-contracts §4 step2(차단 지점, Gateway 소유): adapter 호출 전 user 메시지 redaction + §3 injection 탐지. */
+  redactionBoundary: GatewayRedactionBoundary;
   config: LlmGatewayConfig;
 }
 
@@ -140,9 +143,11 @@ export class LlmGateway {
         common,
         { primitive: meta.primitive, model: req.model, transport: decision.transport },
         async (span) => {
-          const consumed = await this.runWithRetryAndFallback(req, decision.transport, signal);
+          // §4 step2(차단 지점): adapter 전 user 메시지 redaction + injection 탐지. injection이면 여기서 throw.
+          const redactedReq = await this.redactRequest(req);
+          const consumed = await this.runWithRetryAndFallback(redactedReq, decision.transport, signal);
           span.setAttributes({ stream_status: consumed.finishReason, ttfb_ms: consumed.ttfbMs ?? 0 });
-          const response = await this.finalize(req, consumed, decision.transport, signal);
+          const response = await this.finalize(redactedReq, consumed, decision.transport, signal);
           // §E 필수 메트릭: llm_cost(usage.cost 누적) + llm_ttfb_ms(첫 토큰 지연). 저카디널리티 attr(tenant/model).
           recordLlmCost(response.usage.cost, { tenant_id: meta.tenantId, model: req.model });
           recordLlmTtfbMs(consumed.ttfbMs ?? 0, { tenant_id: meta.tenantId, model: req.model });
@@ -156,6 +161,32 @@ export class LlmGateway {
       }
       throw e;
     }
+  }
+
+  /**
+   * security-contracts §4 step2(차단 지점, Gateway 소유): user 메시지(페이지 파생·비신뢰)를 redaction 경계로
+   * 통과시켜 비밀/PII 마스킹 + §3 prompt-injection 탐지. injection이면 `PROMPT_INJECTION_DETECTED`로 차단
+   * (조용한 통과 금지 — adapter는 마스킹된 참조만 수신, §4 step3). system 메시지는 Gateway 생성 신뢰 텍스트라 통과.
+   */
+  private async redactRequest(req: LLMRequest): Promise<LLMRequest> {
+    const out: LLMRequest["messages"][number][] = [];
+    for (const m of req.messages) {
+      if (m.role !== "user") {
+        out.push(m);
+        continue;
+      }
+      const result = await this.deps.redactionBoundary.redactForGateway({
+        tenantId: req.metadata.tenantId,
+        runId: req.metadata.runId,
+        rawTextOrObject: m.content,
+      });
+      if (result.kind === "blocked") {
+        const signals = result.evidence.map((e) => e.signal).join(",");
+        throw new GatewayError(result.code, `prompt injection blocked at gateway (${signals})`);
+      }
+      out.push({ role: "user", content: result.content });
+    }
+    return { ...req, messages: out };
   }
 
   private async runWithRetryAndFallback(

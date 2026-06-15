@@ -137,13 +137,16 @@ export interface StagehandSessionOptions {
   initialUrl?: string;
 }
 
-const LAUNCH_RETRYABLE_RE = /ECONNREFUSED|ECONNRESET|connection refused/i;
+// CDP 기동 레이스(재시도 대상): 연결거부 + 연결 타임아웃/websocket 미수락(Stagehand ConnectionTimeoutError).
+// 둘 다 Chrome CDP 엔드포인트가 아직 연결을 받지 못한 비결정적 기동 상태다(코드/이름/메시지 어느 쪽으로든 매칭).
+const LAUNCH_RETRYABLE_RE = /ECONNREFUSED|ECONNRESET|connection refused|connection timeout|timed out waiting for cdp|ConnectionTimeoutError/i;
 
-/** CDP 기동 연결거부(레이스)인지 — 재시도 대상. 원 예외 텍스트는 분류에만 쓰고 로그/응답엔 싣지 않는다. */
-function isLaunchConnRefused(e: unknown): boolean {
+/** CDP 기동 레이스(재시도 대상)인지. 원 예외 텍스트는 분류에만 쓰고 로그/응답엔 싣지 않는다. */
+function isRetryableLaunchError(e: unknown): boolean {
   const code = typeof e === "object" && e !== null && "code" in e ? String((e as { code?: unknown }).code) : "";
+  const name = e instanceof Error ? e.name : "";
   const msg = e instanceof Error ? e.message : String(e);
-  return LAUNCH_RETRYABLE_RE.test(`${code} ${msg}`);
+  return LAUNCH_RETRYABLE_RE.test(`${code} ${name} ${msg}`);
 }
 
 /** Stagehand LOCAL 세션 1회 기동(빌드+init+newPage). 부분 실패 시 좀비 세션 정리 후 재던진다. */
@@ -193,7 +196,7 @@ export async function createStagehandSession(
     try {
       return await attemptInit(opts);
     } catch (e) {
-      if (!isLaunchConnRefused(e)) throw e; // 비-연결거부 → 즉시 전파(원 예외 보존)
+      if (!isRetryableLaunchError(e)) throw e; // 비-기동-레이스 → 즉시 전파(원 예외 보존)
       if (attempt === maxAttempts - 1) break;
       await sleep(baseDelayMs * 2 ** attempt); // 200·400·800·1600 ms
     }
