@@ -459,6 +459,7 @@ const informationalFiles = new Set([
   "AGENTS.md",
   "autonomous-loop-prompt.md",
   "build-prompt.md",
+  "finish-loop-prompt.md",
   "CLAUDE.md",
   "README.md",
   "rpa_enterprise_console.html",

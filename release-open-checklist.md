@@ -27,7 +27,7 @@
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact read/mutation RLS posture, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
 - [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output is recorded in the next row.
 - [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. External staging/deploy rollback evidence remains outside this contract repository and must be supplied by the platform/release owner.
-- [x] Current local blocked:audit output: 28 markers, 11 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (11 active external/staging checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows).
+- [x] Current local blocked:audit output: 30 markers, 11 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (11 active external/staging checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows).
 
 ## External Staging/Open Blockers
 
