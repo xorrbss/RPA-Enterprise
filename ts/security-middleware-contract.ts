@@ -82,9 +82,11 @@ export type RbacAction =
   | "scenario.update"
   | "scenario.promote"
   | "artifact.read"
+  | "site.read"
   | "site.approve"
   | "secret.resolve"
   | "connector.enable"
+  | "gateway_policy.read"
   | "gateway_policy.edit"
   | "network_policy.edit"
   | "rbac.grant";

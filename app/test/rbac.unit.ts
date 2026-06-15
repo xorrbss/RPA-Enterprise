@@ -76,7 +76,11 @@ async function main(): Promise<void> {
   await expectAllow(["viewer"], "run.read");
   await expectAllow(["viewer"], "artifact.read");
   await expectAllow(["viewer"], "scenario.read");
+  await expectAllow(["viewer"], "site.read");
+  await expectAllow(["viewer"], "gateway_policy.read");
   await expectDeny(["viewer"], "run.create");
+  await expectDeny(["viewer"], "site.approve");
+  await expectDeny(["viewer"], "gateway_policy.edit");
   await expectDeny(["viewer"], "run.abort");
   await expectDeny(["viewer"], "scenario.create");
   await expectDeny(["viewer"], "scenario.update");

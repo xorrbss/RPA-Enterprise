@@ -40,8 +40,10 @@ import { ApiResponseError, registerErrorHandler } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { registerDlqRoutes } from "./dlq";
 import { registerHumanTaskRoutes } from "./human-tasks";
+import { registerReadRoutes } from "./reads";
 import type { RunEnqueuer } from "./run-queue";
 import { registerScenarioRoutes } from "./scenarios";
+import { registerSecurity, type SecurityConfig } from "./security";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -65,6 +67,8 @@ export interface ApiServerDeps {
   idempotency: ControlPlaneIdempotencyStore;
   enqueuer: RunEnqueuer;
   signedCommandRegistry: SignedCommandRegistry;
+  /** B2/B3 보안 인프라(선택). 미지정 시 베이스라인 헤더만 적용하고 CORS는 비활성(same-origin). */
+  security?: SecurityConfig;
 }
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -85,6 +89,10 @@ interface RunRow {
 
 export function buildServer(deps: ApiServerDeps): FastifyInstance {
   const app = Fastify({ logger: false, genReqId: () => randomUUID() });
+
+  // B2/B3 보안(헤더 + opt-in CORS) — 라우트/인증 훅보다 먼저 등록해 CORS preflight가 인증보다 앞서 처리되고
+  //   베이스라인 헤더가 모든 응답(에러 포함)에 적용된다(D7 분석 §4.3).
+  registerSecurity(app, deps.security ?? {});
 
   app.decorateRequest("correlationId", "");
   app.decorateRequest("principal", null);
@@ -191,6 +199,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerScenarioRoutes(app, deps);
   registerHumanTaskRoutes(app, deps);
   registerDlqRoutes(app, deps);
+  registerReadRoutes(app, deps);
 
   return app;
 }

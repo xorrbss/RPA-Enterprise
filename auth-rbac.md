@@ -55,9 +55,11 @@ export type Role =
 | scenario 작성/수정(create·save) | api-surface §2 `POST /v1/scenarios`·`PUT` (D4 결정: operator+ 작성) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario promote(prod 승격) | error-catalog `SCENARIO_VERSION_CONFLICT`(If-Match 412) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | artifact 조회 | security-contracts §8(redaction→RBAC 게이트) | ✓ | ✓ | ✓ | ✓ | ✓ | `SECRET_ACCESS_DENIED` |
+| site 조회(risk/circuit 상태) | api-surface §7 `GET /v1/sites`·`/{id}` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | site risk=red 승인 권한 | approver 게이트(권한 부족=일반 RBAC 거부) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | secret 접근(SecretStore.resolve 스코프) | security-contracts §1, core-types `SecretStore` | — | — | — | — | ✓ | `SECRET_ACCESS_DENIED` |
 | connector enable/install | security-contracts §7, error-catalog `CONNECTOR_PERMISSION_DENIED` | — | — | — | — | ✓ | `CONNECTOR_PERMISSION_DENIED` |
+| gateway policy 조회 | api-surface §6 `GET /v1/gateway/policy` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | gateway policy 편집 | api-surface §6 `PUT /v1/gateway/policy` | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | network policy 편집(allowed_domains) | security-contracts §6 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | RBAC 역할 부여/회수 | 본 문서 §1 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |

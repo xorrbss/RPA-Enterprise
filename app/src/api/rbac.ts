@@ -25,13 +25,15 @@ import type {
 
 /** auth-rbac §2: 역할별 허용 액션 집합(합집합 평가). 표에 없는 액션은 해당 역할에 대해 거부. */
 const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
-  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read", "scenario.read"],
+  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read", "site.read", "gateway_policy.read", "scenario.read"],
   operator: [
     "run.read",
     "run.create",
     "workitem.read",
     "human_task.read",
     "artifact.read",
+    "site.read",
+    "gateway_policy.read",
     "run.abort",
     "human_task.assign",
     "human_task.start",
@@ -47,6 +49,8 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "workitem.read",
     "human_task.read",
     "artifact.read",
+    "site.read",
+    "gateway_policy.read",
     "run.abort",
     "human_task.assign",
     "human_task.escalate",
@@ -67,6 +71,8 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "workitem.read",
     "human_task.read",
     "artifact.read",
+    "site.read",
+    "gateway_policy.read",
     "run.abort",
     "human_task.assign",
     "human_task.escalate",
@@ -90,6 +96,8 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
     "workitem.read",
     "human_task.read",
     "artifact.read",
+    "site.read",
+    "gateway_policy.read",
     "run.abort",
     "human_task.assign",
     "human_task.escalate",
