@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 
 import { VIEW_KEYS, navigate, type ViewKey } from "../router";
 import { VIEW_META } from "../views/meta";
+import { Freshness } from "./Freshness";
 
 const ICONS: Record<string, LucideIcon> = {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
@@ -44,9 +45,7 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
             <h1>{meta.title}</h1>
             <div className="sub">{meta.subtitle}</div>
           </div>
-          <span className="freshness">
-            <span className="live-dot" aria-hidden="true" /> 실시간 폴링
-          </span>
+          <Freshness />
         </header>
         <main className="content">{children}</main>
       </div>
