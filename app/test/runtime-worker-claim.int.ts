@@ -23,13 +23,20 @@ import type {
   WorkitemId,
 } from "../../ts/runtime-contract";
 
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+
 import { createPool, withTenantTx } from "../src/db/pool";
+import { bootstrapTracing } from "../src/observability/bootstrap";
 import {
   PgRuntimeWorker,
   drainBrowserLease,
   renewBrowserLease,
   type BrowserLeasePlanResolver,
 } from "../src/worker/runtime-worker";
+
+// §E run.claim/browser.lease.acquire span 발행 검증용 in-memory exporter(외부 의존 없음).
+const spanExporter = new InMemorySpanExporter();
+bootstrapTracing(spanExporter);
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_runtime_claim_int";
@@ -695,6 +702,7 @@ async function main(): Promise<void> {
 
     const configured = new PgRuntimeWorker(pool, { workerId: WORKER, browserLeasePlanResolver: planResolver });
 
+    spanExporter.reset();
     const ok = await configured.handle({
       kind: "run_claim",
       tenantId: TENANT_A as TenantId,
@@ -702,6 +710,25 @@ async function main(): Promise<void> {
       correlationId: CORRELATION as CorrelationId,
     });
     check("run_claim success -> completed", ok.kind === "completed", JSON.stringify(ok));
+    // §E: run.claim(루트) ⊃ browser.lease.acquire span이 실 call-site에서 발행되고 공통속성을 가진다.
+    {
+      const spans = spanExporter.getFinishedSpans();
+      const claimSpan = spans.find((s) => s.name === "run.claim");
+      const leaseSpan = spans.find((s) => s.name === "browser.lease.acquire");
+      check("run_claim emits run.claim span", claimSpan !== undefined);
+      check("run_claim emits browser.lease.acquire span", leaseSpan !== undefined);
+      check(
+        "run.claim span carries common attrs",
+        claimSpan?.attributes.tenant_id === TENANT_A &&
+          claimSpan?.attributes.run_id === RUN_OK &&
+          claimSpan?.attributes.correlation_id === CORRELATION,
+        JSON.stringify(claimSpan?.attributes),
+      );
+      check(
+        "browser.lease.acquire nests under run.claim",
+        leaseSpan?.parentSpanId !== undefined && leaseSpan?.parentSpanId === claimSpan?.spanContext().spanId,
+      );
+    }
     const okRun = await runStatus(pool, RUN_OK);
     check("run_claim sets run claimed", okRun.status === "claimed", JSON.stringify(okRun));
     check("run_claim sets worker_id", okRun.workerId === WORKER, JSON.stringify(okRun));
