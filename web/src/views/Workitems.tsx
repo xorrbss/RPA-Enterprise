@@ -1,16 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
+import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
+import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
+import { WORKITEM_STATES } from "./filters";
 import type { DeadLetterItem, WorkitemItem } from "../api/types";
 
 const POLL_MS = 5_000;
 
 export function WorkitemsView(): JSX.Element {
   const api = useApiClient();
-  const wi = useQuery({ queryKey: ["workitems"], queryFn: () => api.listWorkitems({ limit: 50 }), refetchInterval: POLL_MS });
+  const wi = useListView<WorkitemItem>(["workitems"], (p) => api.listWorkitems(p), { refetchInterval: POLL_MS });
   const wiDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: POLL_MS });
   const sinkDlq = useQuery({ queryKey: ["dlq", "sink"], queryFn: () => api.listDlq("sink", { limit: 50 }), refetchInterval: POLL_MS });
 
@@ -18,9 +21,11 @@ export function WorkitemsView(): JSX.Element {
     <>
       <QueryPanel<WorkitemItem>
         title="작업 목록"
-        query={wi}
+        query={wi.query}
+        pager={wi.pager}
+        actions={<FilterSelect label="상태" value={wi.filter.status} options={WORKITEM_STATES} onChange={(v) => wi.setFilter({ status: v })} />}
         rowKey={(r) => r.workitem_id}
-        emptyMessage="작업 항목이 없습니다."
+        emptyMessage="조건에 맞는 작업 항목이 없습니다."
         columns={[
           { header: "참조", render: (r) => r.unique_reference },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },

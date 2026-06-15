@@ -1,10 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
-
 import { useApiClient } from "../api/context";
 import type { ApiClient } from "../api/client";
+import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
+import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
+import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
 import type { HumanTaskItem } from "../api/types";
 
 const KEYS = [["human-tasks"]] as const;
@@ -50,17 +51,20 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
 
 export function HumanTasksView(): JSX.Element {
   const api = useApiClient();
-  const query = useQuery({
-    queryKey: ["human-tasks"],
-    queryFn: () => api.listHumanTasks({ limit: 50 }),
-    refetchInterval: 5_000,
-  });
+  const lv = useListView<HumanTaskItem>(["human-tasks"], (p) => api.listHumanTasks(p), { refetchInterval: 5_000 });
   return (
     <QueryPanel<HumanTaskItem>
       title="사람 확인 인박스"
-      query={query}
+      query={lv.query}
+      pager={lv.pager}
+      actions={
+        <>
+          <FilterSelect label="상태" value={lv.filter.status} options={HUMANTASK_STATES} onChange={(v) => lv.setFilter({ ...lv.filter, status: v })} />
+          <FilterSelect label="종류" value={lv.filter.kind} options={HUMANTASK_KINDS} onChange={(v) => lv.setFilter({ ...lv.filter, kind: v })} />
+        </>
+      }
       rowKey={(r) => r.human_task_id}
-      emptyMessage="대기 중인 사람 확인 업무가 없습니다."
+      emptyMessage="조건에 맞는 사람 확인 업무가 없습니다."
       columns={[
         { header: "종류", render: (r) => r.kind },
         { header: "상태", render: (r) => <StatusBadge status={r.state} /> },

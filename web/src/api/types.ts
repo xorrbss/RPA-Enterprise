@@ -90,6 +90,8 @@ export interface ListParams {
   cursor?: string;
   status?: string;
   kind?: string;
+  risk?: string;
+  assignee?: string;
   // query-bag: 뷰별 추가 필터(model 등)를 허용. URLSearchParams로 직렬화.
   [k: string]: string | number | undefined;
 }

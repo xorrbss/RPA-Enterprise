@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { EmptyState, ErrorState, Loading } from "./states";
 import { ApiError } from "../api/types";
+import type { Pager } from "../api/useListView";
 
 export interface Column<T> {
   readonly header: string;
@@ -17,13 +18,14 @@ export function QueryPanel<T>(props: {
   rowKey: (row: T) => string;
   emptyMessage: string;
   actions?: ReactNode;
+  pager?: Pager;
 }): JSX.Element {
-  const { title, query, columns, rowKey, emptyMessage, actions } = props;
+  const { title, query, columns, rowKey, emptyMessage, actions, pager } = props;
   return (
     <section className="panel">
       <div className="panel-head">
         <h2>{title}</h2>
-        {actions}
+        <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>{actions}</span>
       </div>
       <div className="panel-body">
         {query.isLoading ? (
@@ -51,6 +53,17 @@ export function QueryPanel<T>(props: {
               ))}
             </tbody>
           </table>
+        )}
+        {pager !== undefined && (pager.hasPrev || pager.hasNext) && (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px", alignItems: "center" }}>
+            <button className="btn" type="button" onClick={pager.onPrev} disabled={!pager.hasPrev}>
+              이전
+            </button>
+            <span style={{ color: "var(--muted)", fontSize: 12 }}>{pager.pageIndex + 1} 페이지</span>
+            <button className="btn" type="button" onClick={pager.onNext} disabled={!pager.hasNext}>
+              다음
+            </button>
+          </div>
         )}
       </div>
     </section>

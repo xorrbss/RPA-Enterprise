@@ -1,19 +1,22 @@
-import { useQuery } from "@tanstack/react-query";
-
 import { useApiClient } from "../api/context";
+import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
+import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
+import { SITE_RISKS } from "./filters";
 import type { SiteItem } from "../api/types";
 
 export function SecurityView(): JSX.Element {
   const api = useApiClient();
-  const query = useQuery({ queryKey: ["sites"], queryFn: () => api.listSites({ limit: 50 }), refetchInterval: 10_000 });
+  const lv = useListView<SiteItem>(["sites"], (p) => api.listSites(p), { refetchInterval: 10_000 });
   return (
     <QueryPanel<SiteItem>
       title="사이트 접근 정책"
-      query={query}
+      query={lv.query}
+      pager={lv.pager}
+      actions={<FilterSelect label="위험도" value={lv.filter.risk} options={SITE_RISKS} onChange={(v) => lv.setFilter({ risk: v })} />}
       rowKey={(r) => r.site_profile_id}
-      emptyMessage="등록된 사이트 프로파일이 없습니다."
+      emptyMessage="조건에 맞는 사이트 프로파일이 없습니다."
       columns={[
         { header: "사이트", render: (r) => r.name ?? r.site_profile_id.slice(0, 8) },
         { header: "위험도", render: (r) => <StatusBadge status={r.risk} /> },

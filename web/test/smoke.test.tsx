@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -44,7 +44,7 @@ describe("D7 운영 콘솔 shell", () => {
       expect(screen.getByRole("heading", { level: 1, name: "작업 목록" })).toBeInTheDocument(),
     );
     // 빈 상태는 쿼리 resolve 후 표시(로딩 → 빈)
-    await waitFor(() => expect(screen.getByText("작업 항목이 없습니다.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("조건에 맞는 작업 항목이 없습니다.")).toBeInTheDocument());
   });
 
   test("잘못된 해시 → dashboard 폴백", async () => {
@@ -126,6 +126,40 @@ describe("D7 운영 콘솔 shell", () => {
     btn.click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3 });
+  });
+
+  test("페이지네이션: next_cursor 있으면 '다음' 클릭 시 cursor 전달", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    renderApp(
+      fakeClient({
+        listRuns: async (p) => {
+          calls.push(p ?? {});
+          // 커서 기준(호출 횟수 무관): 첫 페이지→cursor-1, 진행 후→끝.
+          return { items: [{ run_id: "r1", status: "running", current_node: null, as_of: null }], next_cursor: p?.cursor ? null : "cursor-1" };
+        },
+      }),
+    );
+    location.hash = "#runTrace";
+    const nextBtn = await screen.findByRole("button", { name: "다음" });
+    expect(nextBtn).not.toBeDisabled();
+    nextBtn.click();
+    await waitFor(() => expect(calls.some((c) => c.cursor === "cursor-1")).toBe(true));
+  });
+
+  test("필터: 상태 선택 시 fetcher에 status 전달", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    renderApp(
+      fakeClient({
+        listRuns: async (p) => {
+          calls.push(p ?? {});
+          return { items: [], next_cursor: null };
+        },
+      }),
+    );
+    location.hash = "#runTrace";
+    const select = await screen.findByLabelText("상태");
+    fireEvent.change(select, { target: { value: "running" } });
+    await waitFor(() => expect(calls.some((c) => c.status === "running")).toBe(true));
   });
 
   test("운영자 명령 실패 → 코드 표면화", async () => {
