@@ -297,12 +297,13 @@ Remote CI evidence:
   `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945033`
   `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945101`
 - Phase 7 `main` dirty-delta `Contract Gates` attempt:
-  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27524267891`
-  on commit `737aaa3d33e2db222e423738b12721420eeacd32`. The initial run and
-  failed-job rerun did not start hosted runner jobs. GitHub Actions annotations
-  report that recent account payments have failed or the spending limit must be
-  increased. This is external billing/admin evidence, not a repo-code failure,
-  and it does not close the required remote job URL gate for the Phase 7 delta.
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27525226281`
+  on commit `6ac33af251bd362a4de200d2eba956d371408cf3`. The latest Phase 7
+  push run, the prior code-delta run `27524267891`, and the failed-job rerun did
+  not start hosted runner jobs. GitHub Actions annotations report that recent
+  account payments have failed or the spending limit must be increased. This is
+  external billing/admin evidence, not a repo-code failure, and it does not
+  close the required remote job URL gate for the Phase 7 delta.
 
 Browser route smoke evidence:
 
