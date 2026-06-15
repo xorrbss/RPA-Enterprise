@@ -506,5 +506,5 @@
 | 스레딩 | `run-loop`가 `runs.params` 로드 → `resolveUrlRef(extractEntryNavigateUrlRef(ir), params)`로 entry URL 산출 후 origin-match(해소가 origin 추출보다 선행); `run-step-driver.ClaimedRun.params` → `compiledScenarioFrom(ir, ast, params)`가 navigate.url을 동일 함수로 해소 |
 | 에러 경계 | `compiledScenarioFrom` 내 `SiteResolutionError(URL_REF_*)`는 `InterpreterError`로 환원(타입 경계 — untyped 누출 금지). `resolveSiteProfileId`의 비-절대URL 가드는 방어적 불변식으로 잔존(해소 누락 호출측 버그 표면화) |
 | migration | url_ref 리터럴을 쓰던 시드/테스트(serve 데모·run-pipeline·pipeline-site·multisite·run-step-driver)를 `url_ref:"entry_url"` + 각 run의 `params.entry_url`로 이전. serve는 **queued 데모 run을 params와 함께 시드**(부팅 시 run-loop가 구동) |
-| 콘솔 한계(명시) | `web/src/views/Scenarios.tsx`의 '실행'은 `params:{}` 전송 — 파라미터 시나리오엔 부족(런타임이 `URL_REF_PARAM_MISSING`로 loud 실패, 조용한 실패 아님). params 입력 폼(params_schema 기반)은 후속(TODO 명시) |
+| 콘솔 params 입력 | `web` 콘솔의 '실행'은 시나리오 IR에서 navigate `url_ref` 키를 도출(`getScenario`→`extractUrlRefKeys`)해 **키별 입력 폼**(`RunScenarioButton`)을 띄우고 그 값으로 `createRun(params)`. 키 없으면 추가 입력 없이 실행. (params_schema 기반 타입 폼·기본값은 후속 — 현재 url_ref 키 = 운영자 입력 URL) |
 | 연기 | **`params.*` in `on[].when`/`loop.until`**: 인터프리터가 평가 스코프에 `{flags}`만 주입 → params 분기 조건은 여전히 `IREL_RUNTIME_MISSING`(이번 url_ref 해소가 이를 배선하지 않음 — 별도 증분). IREL-expression url_ref(예: `concat(params.host,'/p')`)·`schema_ref` 해석·`URL_REF_*` 카탈로그 ErrorCode化도 연기 |
