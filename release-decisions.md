@@ -54,7 +54,8 @@ dependent implementation artifact has already been migrated.
 
 9. Worker job payload/completion events
    Decision: worker jobs use closed input payloads keyed by job kind:
-   `run_claim`, `run_resume`, `workitem_checkout`, and `artifact_redaction`.
+   `run_claim`, `run_resume`, `run_abort`, `workitem_checkout`,
+   `artifact_redaction`, and `artifact_retention`.
    Completion is represented by the existing state/event family:
    `run.started`, `run.resumed`, workitem state events, and artifact audit
    records; no freeform job completion event is allowed.
@@ -62,9 +63,10 @@ dependent implementation artifact has already been migrated.
 10. Durable LLM idempotency
     Decision: store LLM idempotency in `stagehand_calls` using
     `idempotency_key` and `request_hash`, unique by `(tenant_id,
-    idempotency_key)`. Hash mismatch maps to the same 409-style gateway conflict
-    policy used by the in-memory gateway fixture until a dedicated catalog code
-    is added.
+    idempotency_key)`. Request-hash mismatch maps to
+    `SCENARIO_VERSION_CONFLICT`/412; concurrent in-flight duplicate maps to
+    `WORKITEM_CHECKOUT_CONFLICT`/409 and remains retryable until a dedicated LLM
+    idempotency catalog code is added.
 
 11. Durable immutable audit storage
     Decision: v1 uses a PostgreSQL append-only `audit_log` table with

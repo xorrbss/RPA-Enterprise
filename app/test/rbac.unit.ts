@@ -7,6 +7,7 @@
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type {
   AuthenticatedPrincipal,
+  AuthorizationCheck,
   PrincipalId,
   RbacAction,
   Role,
@@ -28,8 +29,8 @@ function check(label: string, cond: boolean, detail?: string): void {
   }
 }
 
-function principal(roles: Role[], tenantId: TenantId = TENANT): AuthenticatedPrincipal {
-  return { subjectId: "p1" as PrincipalId, tenantId, roles, source: "jwt", claims: {} };
+function principal(roles: Role[], tenantId: TenantId = TENANT, subjectId = "p1"): AuthenticatedPrincipal {
+  return { subjectId: subjectId as PrincipalId, tenantId, roles, source: "jwt", claims: {} };
 }
 
 async function expectAllow(roles: Role[], action: RbacAction): Promise<void> {
@@ -44,6 +45,30 @@ async function expectDeny(roles: Role[], action: RbacAction, code = "AUTHZ_FORBI
     d.kind === "deny" && d.code === code,
     JSON.stringify(d),
   );
+}
+
+async function expectAllowCheck(label: string, roles: Role[], check: AuthorizationCheck, subjectId = "p1"): Promise<void> {
+  const d = await rbac.authorize(principal(roles, TENANT, subjectId), check);
+  checkResult(label, d.kind === "allow", JSON.stringify(d));
+}
+
+async function expectDenyCheck(
+  label: string,
+  roles: Role[],
+  authCheck: AuthorizationCheck,
+  subjectId = "p1",
+  reason?: string,
+): Promise<void> {
+  const d = await rbac.authorize(principal(roles, TENANT, subjectId), authCheck);
+  checkResult(
+    label,
+    d.kind === "deny" && d.code === "AUTHZ_FORBIDDEN" && (reason === undefined || d.reason === reason),
+    JSON.stringify(d),
+  );
+}
+
+function checkResult(label: string, cond: boolean, detail?: string): void {
+  check(label, cond, detail);
 }
 
 async function main(): Promise<void> {
@@ -70,14 +95,61 @@ async function main(): Promise<void> {
   await expectDeny(["operator"], "scenario.promote");
 
   // reviewer: validation/exception/captcha/mfa resolve + escalate 허용, approval resolve 거부
-  await expectAllow(["reviewer"], "human_task.resolve.validation");
-  await expectAllow(["reviewer"], "human_task.resolve.mfa");
+  await expectDeny(["reviewer"], "human_task.resolve.validation");
+  await expectAllowCheck(
+    "reviewer allow human_task.resolve.validation with assignee scope",
+    ["reviewer"],
+    {
+      action: "human_task.resolve.validation",
+      tenantId: TENANT,
+      humanTask: { kind: "validation", assigneeId: "p1" as PrincipalId, assigneeRole: "reviewer" },
+    },
+  );
+  await expectAllowCheck(
+    "reviewer allow human_task.resolve.mfa with assignee scope",
+    ["reviewer"],
+    {
+      action: "human_task.resolve.mfa",
+      tenantId: TENANT,
+      humanTask: { kind: "mfa", assigneeId: "p1" as PrincipalId, assigneeRole: "reviewer" },
+    },
+  );
+  await expectDenyCheck(
+    "reviewer deny human_task.resolve.exception wrong assignee",
+    ["reviewer"],
+    {
+      action: "human_task.resolve.exception",
+      tenantId: TENANT,
+      humanTask: { kind: "exception", assigneeId: "other" as PrincipalId, assigneeRole: "reviewer" },
+    },
+    "p1",
+    "human_task_assignee_mismatch",
+  );
+  await expectDenyCheck(
+    "reviewer deny human_task.resolve.exception wrong assignee_role",
+    ["reviewer"],
+    {
+      action: "human_task.resolve.exception",
+      tenantId: TENANT,
+      humanTask: { kind: "exception", assigneeId: "p1" as PrincipalId, assigneeRole: "approver" },
+    },
+    "p1",
+    "human_task_assignee_role_mismatch",
+  );
   await expectAllow(["reviewer"], "human_task.escalate");
   await expectDeny(["reviewer"], "human_task.resolve.approval");
   await expectDeny(["reviewer"], "node_policy.approve");
 
   // approver: approval resolve·node_policy·site 승인 허용, secret/promote 거부
-  await expectAllow(["approver"], "human_task.resolve.approval");
+  await expectAllowCheck(
+    "approver allow human_task.resolve.approval with assignee scope",
+    ["approver"],
+    {
+      action: "human_task.resolve.approval",
+      tenantId: TENANT,
+      humanTask: { kind: "approval", assigneeId: "p1" as PrincipalId, assigneeRole: "approver" },
+    },
+  );
   await expectAllow(["approver"], "node_policy.approve");
   await expectAllow(["approver"], "site.approve");
   await expectDeny(["approver"], "secret.resolve", "SECRET_ACCESS_DENIED");

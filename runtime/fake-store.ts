@@ -558,6 +558,7 @@ export class InMemoryRuntimeStore
   }
 
   async renewBrowser(input: {
+    tenantId: TenantId;
     leaseId: LeaseId;
     workerId: WorkerId;
     ttlMs: number;
@@ -565,6 +566,7 @@ export class InMemoryRuntimeStore
     const lease = this.browserLeases.get(input.leaseId);
     if (
       !lease ||
+      lease.tenantId !== input.tenantId ||
       lease.ownerWorkerId !== input.workerId ||
       (lease.state !== "reserved" && lease.state !== "active") ||
       this.isExpired(lease.expiresAt)
@@ -582,12 +584,13 @@ export class InMemoryRuntimeStore
   }
 
   async drainBrowser(input: {
+    tenantId: TenantId;
     leaseId: LeaseId;
     workerId: WorkerId;
-    reason: "run_cancelled" | "run_completed" | "sweeper";
+    reason: "run_cancelled" | "run_completed" | "run_suspended" | "sweeper";
   }): Promise<void> {
     const lease = this.browserLeases.get(input.leaseId);
-    if (!lease || lease.ownerWorkerId !== input.workerId) return;
+    if (!lease || lease.tenantId !== input.tenantId || lease.ownerWorkerId !== input.workerId) return;
     lease.state = input.reason === "sweeper" ? "expired" : "draining";
     lease.expiresAt = this.now();
   }
@@ -966,6 +969,7 @@ export class InMemoryRuntimeWorker implements RuntimeWorker {
         return { kind: "failed", code: replay.code };
       }
       case "run_claim":
+      case "run_abort":
       case "run_resume":
       case "workitem_checkout":
       case "artifact_redaction":

@@ -18,42 +18,102 @@ import type { CdpSession } from "./cdp-session";
 /** a11y 노드(필요 필드만 — role/name 의 value). */
 export type AxNode = { role?: { value?: unknown }; name?: { value?: unknown } };
 
-/** CDP 레벨 실패. error-catalog `CDP_DISCONNECTED`(retryable/system) 매핑 — lease sweeper 회수(§9.5). */
-export class CdpDisconnectedError extends Error {
+const RAW_CDP_TIMEOUT_MS = 5000;
+
+export type RawCdpFailureKind = "disconnected" | "timeout" | "protocol_error";
+
+/**
+ * Raw CDP 실패. 현재 error-catalog 의 CDP 계열 공개 코드는 `CDP_DISCONNECTED`뿐이므로
+ * `failureKind` 로 세부 원인을 보존하되, 사용자/로그 메시지에는 원 예외 문자열을 싣지 않는다.
+ */
+export class RawCdpError extends Error {
   readonly code = "CDP_DISCONNECTED" as const;
 
-  constructor(method: string, cause: unknown) {
-    super(`raw CDP '${method}' failed (session disconnected): ${String(cause)}`);
+  constructor(
+    readonly method: string,
+    readonly failureKind: RawCdpFailureKind,
+  ) {
+    super(`raw CDP '${method}' failed (${failureKind})`);
+    this.name = "RawCdpError";
+  }
+}
+
+/** CDP 세션 단절/타임아웃 계열 실패. error-catalog `CDP_DISCONNECTED` 매핑. */
+export class CdpDisconnectedError extends RawCdpError {
+  constructor(method: string, failureKind: Extract<RawCdpFailureKind, "disconnected" | "timeout">) {
+    super(method, failureKind);
     this.name = "CdpDisconnectedError";
   }
 }
 
+/** raw CDP 응답이 계약 shape 와 맞지 않는 경우. PageState 를 조용히 만들지 않는다. */
+export class RawCdpMalformedResponseError extends Error {
+  readonly code = "PAGE_STATE_UNRESOLVED" as const;
+
+  constructor(readonly method: string, message: string) {
+    super(`raw CDP '${method}' returned malformed response: ${message}`);
+    this.name = "RawCdpMalformedResponseError";
+  }
+}
+
+type RawCdpOptions = { timeoutMs?: number };
+
+function classifyFailure(cause: unknown): RawCdpFailureKind {
+  const text = cause instanceof Error ? `${cause.name} ${cause.message}` : String(cause);
+  return /closed|disconnect|detached|target closed|session closed|browser has disconnected/i.test(text)
+    ? "disconnected"
+    : "protocol_error";
+}
+
 /** sendCDP 를 CDP_DISCONNECTED 매핑으로 감싼다(원 예외를 조용히 흡수하지 않고 분류·전파). */
-async function rawCdp<T>(session: CdpSession, method: string, params?: object): Promise<T> {
+async function rawCdp<T>(
+  session: CdpSession,
+  method: string,
+  params?: object,
+  opts: RawCdpOptions = {},
+): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? RAW_CDP_TIMEOUT_MS;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new CdpDisconnectedError(method, "timeout")), timeoutMs);
+  });
+
   try {
-    return await session.sendCDP<T>(method, params);
+    return await Promise.race([session.sendCDP<T>(method, params), timeoutPromise]);
   } catch (cause) {
-    throw new CdpDisconnectedError(method, cause);
+    if (cause instanceof RawCdpError) throw cause;
+    const failureKind = classifyFailure(cause);
+    if (failureKind === "disconnected") throw new CdpDisconnectedError(method, failureKind);
+    throw new RawCdpError(method, failureKind);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
   }
 }
 
 /**
  * #2/#3: 전체 a11y 트리. Stagehand page 에 접근자가 없어 raw CDP 로 보완한다.
- * nodes 미반환(빈 응답)도 빈 배열로 정규화 — landmark 0개 PageState 는 유효(조용한 크래시 금지).
+ * nodes 미반환/비배열 응답은 malformed 로 실패시킨다. 빈 배열 자체만 "landmark 0개"로 유효하다.
  */
-export async function getAccessibilityTree(session: CdpSession): Promise<AxNode[]> {
-  const res = await rawCdp<{ nodes?: AxNode[] }>(session, "Accessibility.getFullAXTree");
-  return res.nodes ?? [];
+export async function getAccessibilityTree(session: CdpSession, opts: RawCdpOptions = {}): Promise<AxNode[]> {
+  const res = await rawCdp<{ nodes?: unknown }>(session, "Accessibility.getFullAXTree", undefined, opts);
+  if (!Array.isArray(res.nodes)) {
+    throw new RawCdpMalformedResponseError("Accessibility.getFullAXTree", "nodes must be an array");
+  }
+  return res.nodes as AxNode[];
 }
 
 /**
  * #5: 다운로드를 격리 디렉토리로 라우팅. page API 에 경로 격리 옵션이 없어 raw CDP 로 보완한다
  * (browser_leases.download_dir_ref 격리, eventsEnabled 로 진행 이벤트 활성).
  */
-export async function setDownloadBehavior(session: CdpSession, downloadPath: string): Promise<void> {
+export async function setDownloadBehavior(
+  session: CdpSession,
+  downloadPath: string,
+  opts: RawCdpOptions = {},
+): Promise<void> {
   await rawCdp(session, "Browser.setDownloadBehavior", {
     behavior: "allow",
     downloadPath,
     eventsEnabled: true,
-  });
+  }, opts);
 }

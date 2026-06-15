@@ -23,6 +23,7 @@ const tempRoot = mkdtempSync(join(tmpdir(), "rpa-pg15-smoke-"));
 const dataDir = join(tempRoot, "data");
 const logFile = join(tempRoot, "postgres.log");
 let started = false;
+let targetStatus = 0;
 
 try {
   const port = parsed.port ?? await findFreePort();
@@ -31,12 +32,12 @@ try {
 
   run(bin.initdb, ["-D", dataDir, "--username=postgres", "--auth=trust", "--encoding=UTF8", "--locale=C"], {
     diagnostic: "initialize temporary PostgreSQL cluster",
-    timeoutMs: 60000,
+    timeoutMs: 120000,
   });
 
   run(bin.pgCtl, ["-D", dataDir, "-l", logFile, "-o", `-p ${port} -h 127.0.0.1`, "-w", "-t", "30", "start"], {
     diagnostic: "start temporary PostgreSQL cluster",
-    timeoutMs: 45000,
+    timeoutMs: 60000,
   });
   started = true;
 
@@ -118,8 +119,10 @@ try {
   delete env.PGPASSFILE;
 
   const status = runTarget(command, env);
-  if (status !== 0) process.exit(status);
-  console.log("temp postgres gate: command passed");
+  targetStatus = status;
+  if (status === 0) {
+    console.log("temp postgres gate: command passed");
+  }
 } finally {
   if (started) {
     const stopResult = spawnSync(bin.pgCtl, ["-D", dataDir, "-m", "fast", "-w", "-t", "30", "stop"], {
@@ -144,6 +147,8 @@ try {
     cleanupTemp(tempRoot);
   }
 }
+
+if (targetStatus !== 0) process.exit(targetStatus);
 
 function parseArgs(args) {
   const commandIndex = args.indexOf("--");

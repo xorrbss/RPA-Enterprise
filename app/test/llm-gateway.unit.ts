@@ -45,7 +45,7 @@ function makeReq(over: Record<string, unknown> = {}): LLMRequest {
     model: "codex",
     promptTemplateVersion: "v1",
     messages: [{ role: "user", content: "hi" }],
-    metadata: { tenantId: "t", runId: "r", stepId: "s", primitive: "act", correlationId: "c" },
+    metadata: { tenantId: "t", runId: "r", stepId: "s", attempt: 0, primitive: "act", correlationId: "c" },
     budget: { maxInputTokens: 10000, maxOutputTokens: 10000, maxCost: 100 },
     idempotencyKey: "idem",
     requestHash: "hash",
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
 
   // ── structured output(§5): strict 위반 → EXTRACT_SCHEMA_INVALID ─────────────
   {
-    const req = makeReq({ metadata: { tenantId: "t", runId: "r", stepId: "s", primitive: "extract", correlationId: "c" }, responseFormat: { type: "json_schema", schemaRef: "s", schemaVersion: "1", strict: true } });
+    const req = makeReq({ metadata: { tenantId: "t", runId: "r", stepId: "s", attempt: 0, primitive: "extract", correlationId: "c" }, responseFormat: { type: "json_schema", schemaRef: "s", schemaVersion: "1", strict: true } });
     const err = await caught(gateway({ primary: queueAdapter([textDone("not json")]).adapter }).call(req, sig()));
     check("call: extract strict malformed → EXTRACT_SCHEMA_INVALID", err?.code === "EXTRACT_SCHEMA_INVALID");
   }
@@ -167,10 +167,34 @@ async function main(): Promise<void> {
   {
     let n = 0;
     const validator: StructuredOutputValidator = { validate: () => (n++ === 0 ? { ok: false, reason: "schema" } : { ok: true }) };
-    const req = makeReq({ metadata: { tenantId: "t", runId: "r", stepId: "s", primitive: "extract", correlationId: "c" }, responseFormat: { type: "json_schema", schemaRef: "s", schemaVersion: "1", strict: false } });
+    const req = makeReq({ metadata: { tenantId: "t", runId: "r", stepId: "s", attempt: 0, primitive: "extract", correlationId: "c" }, responseFormat: { type: "json_schema", schemaRef: "s", schemaVersion: "1", strict: false } });
     const q = queueAdapter([textDone('{"a":1}'), textDone('{"a":2}')]);
     const res = await gateway({ primary: q.adapter, validator }).call(req, sig());
     check("call: non-strict repair once → success", res.parsedJson !== undefined && (res.parsedJson as { a: number }).a === 2 && q.calls() === 2);
+  }
+
+  {
+    const q = queueAdapter([textDone("should-not-run")]);
+    const err = await caught(
+      gateway({
+        primary: q.adapter,
+        idempotency: { reserve: async () => ({ kind: "in_flight", callId: "c-in-flight" }), complete: async () => {}, fail: async () => {} },
+      }).call(makeReq(), sig()),
+    );
+    check("call: idempotency in_flight -> WORKITEM_CHECKOUT_CONFLICT", err?.code === "WORKITEM_CHECKOUT_CONFLICT");
+    check("call: idempotency in_flight does not call adapter", q.calls() === 0);
+  }
+
+  {
+    const q = queueAdapter([textDone("should-not-run")]);
+    const err = await caught(
+      gateway({
+        primary: q.adapter,
+        idempotency: { reserve: async () => ({ kind: "blocked", reason: "request_hash_mismatch" }), complete: async () => {}, fail: async () => {} },
+      }).call(makeReq(), sig()),
+    );
+    check("call: idempotency hash mismatch -> SCENARIO_VERSION_CONFLICT", err?.code === "SCENARIO_VERSION_CONFLICT");
+    check("call: idempotency hash mismatch does not call adapter", q.calls() === 0);
   }
 
   if (failures > 0) {

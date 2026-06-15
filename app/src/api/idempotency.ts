@@ -73,6 +73,20 @@ export class PgControlPlaneIdempotencyStore implements ControlPlaneIdempotencySt
         return { kind: "blocked", reason: "request_hash_mismatch" };
       }
       if (row.status === "processing") {
+        const reclaimed = await c.query<{ id: string }>(
+          `UPDATE control_plane_idempotency_keys
+              SET expires_at=$1::timestamptz, retention_until=$1::timestamptz, updated_at=now()
+            WHERE tenant_id=$2::uuid
+              AND id=$3::uuid
+              AND status='processing'
+              AND request_hash=$4
+              AND expires_at <= now()
+            RETURNING id`,
+          [req.expiresAt, req.tenantId, row.id, req.requestHash],
+        );
+        if (reclaimed.rowCount === 1) {
+          return { kind: "reserved", recordId: encodeRecordId(req.tenantId, row.id) };
+        }
         return { kind: "in_flight", recordId: encodeRecordId(req.tenantId, row.id), status: "processing" };
       }
       // succeeded/failed → 저장된 최초 응답 재생(부작용 재실행 없음).

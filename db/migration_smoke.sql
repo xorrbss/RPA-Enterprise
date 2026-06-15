@@ -233,17 +233,33 @@ BEGIN
      OR select_policy !~ 'app\.tenant_id'
      OR select_policy ~ ',[[:space:]]*true'
      OR select_policy !~ 'deleted_at IS NULL'
+     OR select_policy !~ 'quarantine = false'
      OR select_policy !~ 'redaction_status'
      OR select_policy !~ 'redacted'
      OR select_policy !~ 'not_required' THEN
-    RAISE EXCEPTION 'artifact SELECT policy must enforce tenant + redaction + soft-delete gate: %', select_policy;
+    RAISE EXCEPTION 'artifact SELECT policy must enforce tenant + redaction + quarantine + soft-delete gate: %', select_policy;
   END IF;
 
   IF insert_policy IS NULL
      OR insert_policy !~ 'current_setting'
      OR insert_policy !~ 'app\.tenant_id'
+     OR insert_policy !~ 'lifecycle_claim_id IS NULL'
+     OR insert_policy !~ 'lifecycle_claim_kind IS NULL'
+     OR insert_policy !~ 'lifecycle_claim_worker_id IS NULL'
+     OR insert_policy !~ 'lifecycle_claim_correlation_id IS NULL'
+     OR insert_policy !~ 'lifecycle_claimed_at IS NULL'
+     OR insert_policy !~ 'lifecycle_claim_expires_at IS NULL'
      OR insert_policy ~ ',[[:space:]]*true' THEN
-    RAISE EXCEPTION 'artifact INSERT policy must use strict tenant isolation: %', insert_policy;
+    RAISE EXCEPTION 'artifact INSERT policy must use strict tenant isolation and reject application-supplied lifecycle claims: %', insert_policy;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM pg_policy p
+     WHERE p.polrelid = rel_id
+       AND p.polcmd IN ('w','d','*')
+  ) THEN
+    RAISE EXCEPTION 'artifact UPDATE/DELETE policies must not exist for the application role; lifecycle mutation requires audited operational BYPASSRLS';
   END IF;
 END $$;
 
@@ -334,6 +350,7 @@ DECLARE
   workitem_2 uuid := '10000000-0000-0000-0000-000000000006';
   run_1 uuid := '10000000-0000-0000-0000-000000000007';
   run_2 uuid := '10000000-0000-0000-0000-000000000008';
+  run_duplicate_workitem uuid := '10000000-0000-0000-0000-000000000016';
   worker_id uuid := '10000000-0000-0000-0000-000000000009';
   browser_lease_id uuid := '10000000-0000-0000-0000-000000000010';
   raw_item_id uuid := '10000000-0000-0000-0000-000000000011';
@@ -341,8 +358,10 @@ DECLARE
   smoke_event_id uuid := '10000000-0000-0000-0000-000000000013';
   run_step_1 uuid := '10000000-0000-0000-0000-000000000017';
   run_step_2 uuid := '10000000-0000-0000-0000-000000000018';
+  run_step_started uuid := '10000000-0000-0000-0000-000000000036';
   stagehand_call_id uuid := '10000000-0000-0000-0000-000000000019';
   step_event_id uuid := '10000000-0000-0000-0000-000000000022';
+  step_started_event_id uuid := '10000000-0000-0000-0000-000000000037';
   audit_1 uuid := '10000000-0000-0000-0000-000000000040';
   audit_2 uuid := '10000000-0000-0000-0000-000000000041';
   scenario_b_id uuid := '10000000-0000-0000-0000-000000000030';
@@ -352,6 +371,7 @@ DECLARE
   smoke_event_b_id uuid := '10000000-0000-0000-0000-000000000034';
   wrong_worker_id uuid := '10000000-0000-0000-0000-000000000035';
   smoke_retention_until timestamptz := now() + interval '1 day';
+  smoke_now timestamptz := now();
   bypasses_rls boolean;
   row_count int;
 BEGIN
@@ -384,23 +404,67 @@ BEGIN
     (run_1, tenant_a, scenario_version_id, workitem_1, 'queued', '20000000-0000-0000-0000-000000000001'),
     (run_2, tenant_a, scenario_version_id, workitem_2, 'queued', '20000000-0000-0000-0000-000000000002');
 
+  BEGIN
+    INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, correlation_id)
+    VALUES (run_duplicate_workitem, tenant_a, scenario_version_id, workitem_1, 'queued', '20000000-0000-0000-0000-000000000016');
+    RAISE EXCEPTION 'runs must reject duplicate workitem_id per tenant';
+  EXCEPTION WHEN unique_violation THEN
+    NULL;
+  END;
+
+  INSERT INTO runs (id, tenant_id, scenario_version_id, status, abort_source_status, correlation_id)
+  VALUES (
+    '10000000-0000-0000-0000-000000000042',
+    tenant_a,
+    scenario_version_id,
+    'aborting',
+    'running',
+    '20000000-0000-0000-0000-000000000042'
+  );
+
+  IF NOT EXISTS (
+    SELECT 1
+      FROM runs
+     WHERE id = '10000000-0000-0000-0000-000000000042'
+       AND abort_source_status = 'running'
+  ) THEN
+    RAISE EXCEPTION 'run abort source status should accept persisted abort source';
+  END IF;
+
+  BEGIN
+    INSERT INTO runs (id, tenant_id, scenario_version_id, status, abort_source_status, correlation_id)
+    VALUES (
+      '10000000-0000-0000-0000-000000000043',
+      tenant_a,
+      scenario_version_id,
+      'aborting',
+      'queued',
+      '20000000-0000-0000-0000-000000000043'
+    );
+    RAISE EXCEPTION 'run abort source status must reject unknown source';
+  EXCEPTION WHEN check_violation THEN
+    NULL;
+  END;
+
   INSERT INTO run_steps (id, tenant_id, run_id, step_id, node_id, attempt, action, status)
   VALUES
     (run_step_1, tenant_a, run_1, 'step-1', 'node-1', 0, 'act', 'success'),
-    (run_step_2, tenant_a, run_2, 'step-1', 'node-1', 0, 'act', 'success');
+    (run_step_2, tenant_a, run_2, 'step-1', 'node-1', 0, 'act', 'success'),
+    (run_step_started, tenant_a, run_1, 'step-started', 'node-started', 0, 'extract', 'started');
 
   INSERT INTO workers (id, kind)
   VALUES (worker_id, 'browser');
 
-  INSERT INTO artifacts (id, tenant_id, run_id, step_id, attempt, type, redaction_status, object_ref)
+  INSERT INTO artifacts (id, tenant_id, run_id, step_id, attempt, type, redaction_status, object_ref, retention_until, quarantine)
   VALUES
-    ('10000000-0000-0000-0000-000000000020', tenant_a, run_1, 'step-1', 0, 'screenshot', 'pending', 'obj/pending'),
-    ('10000000-0000-0000-0000-000000000021', tenant_a, run_1, 'step-1', 0, 'screenshot', 'redacted', 'obj/redacted');
+    ('10000000-0000-0000-0000-000000000020', tenant_a, run_1, 'step-1', 0, 'screenshot', 'pending', 'obj/pending', smoke_retention_until, false),
+    ('10000000-0000-0000-0000-000000000021', tenant_a, run_1, 'step-1', 0, 'screenshot', 'redacted', 'obj/redacted', smoke_retention_until, false),
+    ('10000000-0000-0000-0000-000000000022', tenant_a, run_1, 'step-1', 0, 'screenshot', 'redacted', 'obj/quarantined', smoke_retention_until, true);
 
   IF NOT bypasses_rls THEN
     SELECT count(*) INTO row_count FROM artifacts WHERE tenant_id = tenant_a;
     IF row_count <> 1 THEN
-      RAISE EXCEPTION 'artifact redaction SELECT gate expected 1 visible row, got %', row_count;
+      RAISE EXCEPTION 'artifact redaction/quarantine SELECT gate expected 1 visible row, got %', row_count;
     END IF;
 
     PERFORM set_config('app.tenant_id', tenant_b::text, true);
@@ -412,13 +476,303 @@ BEGIN
   END IF;
 
   BEGIN
-    INSERT INTO artifacts (id, tenant_id, run_id, step_id, attempt, type, redaction_status, object_ref)
-    VALUES ('10000000-0000-0000-0000-000000000024', tenant_a, run_1, 'step-1', 9, 'screenshot', 'redacted', 'obj/bad-step-attempt');
+    INSERT INTO artifacts (id, tenant_id, run_id, step_id, attempt, type, redaction_status, object_ref, retention_until)
+    VALUES ('10000000-0000-0000-0000-000000000024', tenant_a, run_1, 'step-1', 9, 'screenshot', 'redacted', 'obj/bad-step-attempt', smoke_retention_until);
     RAISE EXCEPTION 'artifact step reference must reject unknown (tenant_id, run_id, step_id, attempt)';
   EXCEPTION
     WHEN foreign_key_violation THEN
       NULL;
   END;
+
+  BEGIN
+    INSERT INTO artifacts (id, tenant_id, run_id, step_id, attempt, type, redaction_status, object_ref)
+    VALUES ('10000000-0000-0000-0000-000000000029', tenant_a, run_1, 'step-1', 0, 'screenshot', 'pending', 'obj/missing-retention');
+    RAISE EXCEPTION 'artifact metadata must reject missing retention_until unless legal_hold';
+  EXCEPTION
+    WHEN check_violation THEN
+      NULL;
+  END;
+
+  BEGIN
+    INSERT INTO artifacts (
+      id, tenant_id, run_id, step_id, attempt, type, redaction_status, object_ref, retention_until,
+      lifecycle_claim_id, lifecycle_claim_kind, lifecycle_claim_worker_id, lifecycle_claim_correlation_id,
+      lifecycle_claimed_at, lifecycle_claim_expires_at
+    )
+    VALUES (
+      '10000000-0000-0000-0000-000000000030', tenant_a, run_1, 'step-1', 0, 'screenshot', 'pending', 'obj/app-claim',
+      smoke_retention_until, '10000000-0000-0000-0000-000000000031', 'artifact_redaction', worker_id,
+      '20000000-0000-0000-0000-000000000001', smoke_now, smoke_now + interval '5 minutes'
+    );
+    RAISE EXCEPTION 'artifact application insert must not set lifecycle claim lease fields';
+  EXCEPTION
+    WHEN insufficient_privilege OR check_violation THEN
+      NULL;
+  END;
+
+  INSERT INTO artifacts (id, tenant_id, run_id, step_id, attempt, type, redaction_status, object_ref, retention_until)
+  VALUES ('10000000-0000-0000-0000-000000000025', tenant_a, run_1, 'step-1', 0, 'receipt', 'not_required', 'obj/retention-cas', smoke_now - interval '1 day');
+
+  EXECUTE 'ALTER TABLE artifacts DISABLE ROW LEVEL SECURITY';
+
+  WITH claimed AS (
+    UPDATE artifacts
+       SET lifecycle_claim_id = '10000000-0000-0000-0000-000000000031',
+           lifecycle_claim_kind = 'artifact_redaction',
+           lifecycle_claim_worker_id = worker_id,
+           lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000001',
+           lifecycle_claimed_at = smoke_now,
+           lifecycle_claim_expires_at = smoke_now + interval '5 minutes'
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000020'
+       AND redaction_status = 'pending'
+       AND deleted_at IS NULL
+       AND quarantine = false
+       AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= smoke_now)
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM claimed;
+  IF row_count <> 1 THEN
+    RAISE EXCEPTION 'artifact lifecycle redaction claim should acquire one eligible row, got %', row_count;
+  END IF;
+
+  WITH stolen AS (
+    UPDATE artifacts
+       SET lifecycle_claim_id = '10000000-0000-0000-0000-000000000032',
+           lifecycle_claim_kind = 'artifact_redaction',
+           lifecycle_claim_worker_id = wrong_worker_id,
+           lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000002',
+           lifecycle_claimed_at = smoke_now,
+           lifecycle_claim_expires_at = smoke_now + interval '5 minutes'
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000020'
+       AND redaction_status = 'pending'
+       AND deleted_at IS NULL
+       AND quarantine = false
+       AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= smoke_now)
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM stolen;
+  IF row_count <> 0 THEN
+    RAISE EXCEPTION 'artifact lifecycle active claim must not be stolen, got %', row_count;
+  END IF;
+
+  UPDATE artifacts
+     SET lifecycle_claimed_at = smoke_now - interval '10 minutes',
+         lifecycle_claim_expires_at = smoke_now - interval '1 second'
+   WHERE tenant_id = tenant_a
+     AND id = '10000000-0000-0000-0000-000000000020'
+     AND lifecycle_claim_id = '10000000-0000-0000-0000-000000000031';
+
+  WITH reclaimed AS (
+    UPDATE artifacts
+       SET lifecycle_claim_id = '10000000-0000-0000-0000-000000000033',
+           lifecycle_claim_kind = 'artifact_redaction',
+           lifecycle_claim_worker_id = worker_id,
+           lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000003',
+           lifecycle_claimed_at = smoke_now,
+           lifecycle_claim_expires_at = smoke_now + interval '5 minutes'
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000020'
+       AND redaction_status = 'pending'
+       AND deleted_at IS NULL
+       AND quarantine = false
+       AND lifecycle_claim_expires_at <= smoke_now
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM reclaimed;
+  IF row_count <> 1 THEN
+    RAISE EXCEPTION 'artifact lifecycle expired claim should be reclaimed exactly once, got %', row_count;
+  END IF;
+
+  WITH wrong_finalize AS (
+    UPDATE artifacts
+       SET redaction_status = 'redacted',
+           object_ref = 'obj/wrong-claim-redacted',
+           lifecycle_claim_id = NULL,
+           lifecycle_claim_kind = NULL,
+           lifecycle_claim_worker_id = NULL,
+           lifecycle_claim_correlation_id = NULL,
+           lifecycle_claimed_at = NULL,
+           lifecycle_claim_expires_at = NULL
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000020'
+       AND lifecycle_claim_id = '10000000-0000-0000-0000-000000000032'
+       AND lifecycle_claim_kind = 'artifact_redaction'
+       AND lifecycle_claim_worker_id = worker_id
+       AND lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000003'
+       AND lifecycle_claim_expires_at > smoke_now
+       AND redaction_status = 'pending'
+       AND deleted_at IS NULL
+       AND quarantine = false
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM wrong_finalize;
+  IF row_count <> 0 THEN
+    RAISE EXCEPTION 'artifact lifecycle finalize CAS must reject wrong claim id, got %', row_count;
+  END IF;
+
+  WITH cross_tenant_finalize AS (
+    UPDATE artifacts
+       SET redaction_status = 'redacted'
+     WHERE tenant_id = tenant_b
+       AND id = '10000000-0000-0000-0000-000000000020'
+       AND lifecycle_claim_id = '10000000-0000-0000-0000-000000000033'
+       AND lifecycle_claim_kind = 'artifact_redaction'
+       AND lifecycle_claim_worker_id = worker_id
+       AND lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000003'
+       AND lifecycle_claim_expires_at > smoke_now
+       AND redaction_status = 'pending'
+       AND deleted_at IS NULL
+       AND quarantine = false
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM cross_tenant_finalize;
+  IF row_count <> 0 THEN
+    RAISE EXCEPTION 'artifact lifecycle finalize CAS must reject cross-tenant claim, got %', row_count;
+  END IF;
+
+  UPDATE artifacts
+     SET lifecycle_claimed_at = smoke_now - interval '10 minutes',
+         lifecycle_claim_expires_at = smoke_now - interval '1 second'
+   WHERE tenant_id = tenant_a
+     AND id = '10000000-0000-0000-0000-000000000020'
+     AND lifecycle_claim_id = '10000000-0000-0000-0000-000000000033';
+
+  WITH expired_finalize AS (
+    UPDATE artifacts
+       SET redaction_status = 'redacted'
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000020'
+       AND lifecycle_claim_id = '10000000-0000-0000-0000-000000000033'
+       AND lifecycle_claim_kind = 'artifact_redaction'
+       AND lifecycle_claim_worker_id = worker_id
+       AND lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000003'
+       AND lifecycle_claim_expires_at > smoke_now
+       AND redaction_status = 'pending'
+       AND deleted_at IS NULL
+       AND quarantine = false
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM expired_finalize;
+  IF row_count <> 0 THEN
+    RAISE EXCEPTION 'artifact lifecycle finalize CAS must reject expired claim, got %', row_count;
+  END IF;
+
+  WITH reclaimed_again AS (
+    UPDATE artifacts
+       SET lifecycle_claim_id = '10000000-0000-0000-0000-000000000034',
+           lifecycle_claim_kind = 'artifact_redaction',
+           lifecycle_claim_worker_id = worker_id,
+           lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000004',
+           lifecycle_claimed_at = smoke_now,
+           lifecycle_claim_expires_at = smoke_now + interval '5 minutes'
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000020'
+       AND redaction_status = 'pending'
+       AND deleted_at IS NULL
+       AND quarantine = false
+       AND lifecycle_claim_expires_at <= smoke_now
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM reclaimed_again;
+  IF row_count <> 1 THEN
+    RAISE EXCEPTION 'artifact lifecycle expired claim should be reclaimable before finalization, got %', row_count;
+  END IF;
+
+  WITH finalized AS (
+    UPDATE artifacts
+       SET redaction_status = 'redacted',
+           redaction_attempts = redaction_attempts + 1,
+           object_ref = 'obj/redacted-by-cas',
+           sha256 = 'sha256:redacted-by-cas',
+           lifecycle_claim_id = NULL,
+           lifecycle_claim_kind = NULL,
+           lifecycle_claim_worker_id = NULL,
+           lifecycle_claim_correlation_id = NULL,
+           lifecycle_claimed_at = NULL,
+           lifecycle_claim_expires_at = NULL
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000020'
+       AND lifecycle_claim_id = '10000000-0000-0000-0000-000000000034'
+       AND lifecycle_claim_kind = 'artifact_redaction'
+       AND lifecycle_claim_worker_id = worker_id
+       AND lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000004'
+       AND lifecycle_claim_expires_at > smoke_now
+       AND redaction_status = 'pending'
+       AND deleted_at IS NULL
+       AND quarantine = false
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM finalized;
+  IF row_count <> 1 THEN
+    RAISE EXCEPTION 'artifact lifecycle redaction finalize CAS should update one claim-bound row, got %', row_count;
+  END IF;
+
+  WITH retention_claimed AS (
+    UPDATE artifacts
+       SET lifecycle_claim_id = '10000000-0000-0000-0000-000000000035',
+           lifecycle_claim_kind = 'artifact_retention',
+           lifecycle_claim_worker_id = worker_id,
+           lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000005',
+           lifecycle_claimed_at = smoke_now,
+           lifecycle_claim_expires_at = smoke_now + interval '5 minutes'
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000025'
+       AND deleted_at IS NULL
+       AND legal_hold = false
+       AND quarantine = false
+       AND retention_until IS NOT NULL
+       AND retention_until <= smoke_now
+       AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= smoke_now)
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM retention_claimed;
+  IF row_count <> 1 THEN
+    RAISE EXCEPTION 'artifact lifecycle retention claim should acquire one due row, got %', row_count;
+  END IF;
+
+  WITH retention_transient AS (
+    UPDATE artifacts
+       SET lifecycle_claim_id = NULL,
+           lifecycle_claim_kind = NULL,
+           lifecycle_claim_worker_id = NULL,
+           lifecycle_claim_correlation_id = NULL,
+           lifecycle_claimed_at = NULL,
+           lifecycle_claim_expires_at = NULL
+     WHERE tenant_id = tenant_a
+       AND id = '10000000-0000-0000-0000-000000000025'
+       AND lifecycle_claim_id = '10000000-0000-0000-0000-000000000035'
+       AND lifecycle_claim_kind = 'artifact_retention'
+       AND lifecycle_claim_worker_id = worker_id
+       AND lifecycle_claim_correlation_id = '20000000-0000-0000-0000-000000000005'
+       AND lifecycle_claim_expires_at > smoke_now
+       AND deleted_at IS NULL
+       AND legal_hold = false
+       AND quarantine = false
+       AND retention_until IS NOT NULL
+       AND retention_until <= smoke_now
+     RETURNING 1
+  )
+  SELECT count(*) INTO row_count FROM retention_transient;
+  IF row_count <> 1 THEN
+    RAISE EXCEPTION 'artifact lifecycle transient retention failure should clear one claim, got %', row_count;
+  END IF;
+
+  SELECT count(*) INTO row_count
+    FROM artifacts
+   WHERE tenant_id = tenant_a
+     AND id = '10000000-0000-0000-0000-000000000025'
+     AND deleted_at IS NULL
+     AND deleted_reason IS NULL
+     AND deleted_by_job IS NULL
+     AND lifecycle_claim_id IS NULL;
+  IF row_count <> 1 THEN
+    RAISE EXCEPTION 'artifact lifecycle transient retention failure must not tombstone or retain claim, got %', row_count;
+  END IF;
+
+  EXECUTE 'ALTER TABLE artifacts ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'ALTER TABLE artifacts FORCE ROW LEVEL SECURITY';
 
   INSERT INTO control_plane_idempotency_keys (
     id, tenant_id, endpoint, idempotency_key, request_hash, status, response_status,
@@ -724,11 +1078,41 @@ BEGIN
     idempotency_key, payload_schema_ref, payload, retention_until
   )
   VALUES (
-    step_event_id, 'step.started', 1, tenant_a, run_1, workitem_1,
+    step_event_id, 'step.completed', 1, tenant_a, run_1, workitem_1,
     'step-1', 0, '20000000-0000-0000-0000-000000000001', run_1::text, now(),
-    'run-1:step-1:0:started', 'events/step.started@1', '{}'::jsonb,
+    'run-1:step-1:0:completed', 'events/step.completed@1', '{}'::jsonb,
     smoke_retention_until
   );
+
+  INSERT INTO events_outbox (
+    event_id, event_type, event_version, tenant_id, run_id, workitem_id,
+    step_id, attempt, correlation_id, ordering_key, occurred_at,
+    idempotency_key, payload_schema_ref, payload, retention_until
+  )
+  VALUES (
+    step_started_event_id, 'step.started', 1, tenant_a, run_1, workitem_1,
+    'step-started', 0, '20000000-0000-0000-0000-000000000001', run_1::text, now(),
+    'run-1:step-started:0:started', 'events/step.started@1', '{}'::jsonb,
+    smoke_retention_until
+  );
+
+  BEGIN
+    INSERT INTO events_outbox (
+      event_id, event_type, event_version, tenant_id, run_id, workitem_id,
+      correlation_id, ordering_key, occurred_at,
+      idempotency_key, payload_schema_ref, payload, retention_until
+    )
+    VALUES (
+      '10000000-0000-0000-0000-000000000023', 'step.completed', 1, tenant_a, run_1, workitem_1,
+      '20000000-0000-0000-0000-000000000001', run_1::text, now(),
+      'run-1:step-1:missing-ref:completed', 'events/step.completed@1', '{}'::jsonb,
+      smoke_retention_until
+    );
+    RAISE EXCEPTION 'events_outbox step event must reject missing step_id/attempt';
+  EXCEPTION
+    WHEN check_violation THEN
+      NULL;
+  END;
 
   BEGIN
     INSERT INTO events_outbox (
@@ -737,9 +1121,9 @@ BEGIN
       idempotency_key, payload_schema_ref, payload, retention_until
     )
     VALUES (
-      '10000000-0000-0000-0000-000000000027', 'step.started', 1, tenant_a, run_1, workitem_1,
+      '10000000-0000-0000-0000-000000000027', 'step.completed', 1, tenant_a, run_1, workitem_1,
       'step-1', 9, '20000000-0000-0000-0000-000000000001', run_1::text, now(),
-      'run-1:step-1:9:started', 'events/step.started@1', '{}'::jsonb,
+      'run-1:step-1:9:completed', 'events/step.completed@1', '{}'::jsonb,
       smoke_retention_until
     );
     RAISE EXCEPTION 'events_outbox step event must reject unknown (tenant_id, run_id, step_id, attempt)';

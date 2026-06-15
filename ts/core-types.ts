@@ -9,7 +9,9 @@ export type SecretRef = string & { readonly __brand: "SecretRef" };
 export type PlainSecret = string & { readonly __brand: "PlainSecret_DoNotLog" };
 export type RedactedString = string & { readonly __brand: "Redacted" };
 
-export type ArtifactRef = string;
+export type ArtifactRef = string & { readonly __brand: "ArtifactRef" }; // artifacts.id
+export type ArtifactId = ArtifactRef;
+export type ObjectRef = string & { readonly __brand: "ObjectRef" }; // artifacts.object_ref
 export type PageStateRef = string;
 
 // ===== SecretStore (시크릿 경계 진입점) =====
@@ -114,6 +116,7 @@ export type RunContext = {
   workitemId?: string;
   tenantId: string;
   nodeId: string;
+  attempt: number;
   pageState: PageState;
   siteProfileId: string;
   browserIdentityId: string;

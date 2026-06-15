@@ -21,7 +21,7 @@ function makeReq(over: Record<string, unknown> = {}): LLMRequest {
     model: "codex",
     promptTemplateVersion: "v1",
     messages: [{ role: "user", content: "hello world" }],
-    metadata: { tenantId: "t", runId: "r", stepId: "s", primitive: "extract", correlationId: "c" },
+    metadata: { tenantId: "t", runId: "r", stepId: "s", attempt: 0, primitive: "extract", correlationId: "c" },
     budget: { maxInputTokens: 10000, maxOutputTokens: 10000, maxCost: 100 },
     idempotencyKey: "idem",
     requestHash: "hash",

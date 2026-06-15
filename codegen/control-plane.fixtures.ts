@@ -58,7 +58,15 @@ class FixtureArtifactGate implements ArtifactAccessGate {
         reason: "artifact is not redacted",
       };
     }
-    return { kind: "allow" as const, artifactRef: `artifact://${artifact.artifactId}` as ArtifactRef };
+    if (artifact.quarantine === true) {
+      return {
+        kind: "deny" as const,
+        stage: "redaction" as const,
+        code: "ARTIFACT_NOT_REDACTED" as const,
+        reason: "artifact is quarantined",
+      };
+    }
+    return { kind: "allow" as const, objectRef: artifact.objectRef };
   }
 }
 
@@ -116,6 +124,13 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
     redaction_status: "redacted",
     ref: "artifact://redacted",
     body: { ok: true },
+  }, {
+    artifact_id: "artifact-quarantined",
+    tenant_id: tenantId,
+    redaction_status: "redacted",
+    quarantine: true,
+    ref: "artifact://quarantined",
+    body: { quarantined: true },
   }],
   gatewayPolicies: [{
     id: "gp-default",
@@ -269,12 +284,17 @@ await assertApiError(
   () => handlers.getArtifact!(ctx("getArtifact", { method: "GET", path: "/v1/artifacts/{artifact_id}", params: { artifact_id: "artifact-pending" } })),
   "ARTIFACT_NOT_REDACTED",
 );
+await assertApiError(
+  () => handlers.getArtifact!(ctx("getArtifact", { method: "GET", path: "/v1/artifacts/{artifact_id}", params: { artifact_id: "artifact-quarantined" } })),
+  "ARTIFACT_NOT_REDACTED",
+);
 const artifact = await handlers.getArtifact!(ctx("getArtifact", {
   method: "GET",
   path: "/v1/artifacts/{artifact_id}",
   params: { artifact_id: "artifact-redacted" },
 }));
 assert.equal(artifact.status, 200);
+assert.equal((artifact.body as { ref: string }).ref, "artifact://redacted");
 
 const promoted = await handlers.promoteScenario!(ctx("promoteScenario", {
   method: "POST",

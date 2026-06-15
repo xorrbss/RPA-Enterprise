@@ -18,6 +18,7 @@ import type {
   TenantId,
 } from "../ts/security-middleware-contract";
 import type {
+  ArtifactLifecycleOperationalUseCase,
   EventId,
   HumanTaskId,
   IsoDateTime,
@@ -27,6 +28,7 @@ import type {
   WorkerId,
   WorkitemId,
 } from "../ts/runtime-contract";
+import { ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT as artifactLifecycleContract } from "../ts/runtime-contract";
 
 const tenantId = "11111111-1111-4111-8111-111111111111" as TenantId;
 const runId = "22222222-2222-4222-8222-222222222222" as RunId;
@@ -36,6 +38,101 @@ const siteProfileId = "55555555-5555-4555-8555-555555555555" as PolicyId;
 const workerId = "66666666-6666-4666-8666-666666666666" as WorkerId;
 const correlationId = "77777777-7777-4777-8777-777777777777" as CorrelationId;
 const credentialRef = "secret://tenant/main-login" as SecretRef;
+
+const artifactLifecycleUseCases: readonly ArtifactLifecycleOperationalUseCase[] =
+  artifactLifecycleContract.requiresDedicatedBypassRlsUseCases;
+assert(
+  artifactLifecycleUseCases.includes("artifact_redaction_job") &&
+    artifactLifecycleUseCases.includes("artifact_retention_sweeper"),
+  "artifact lifecycle contract must name dedicated BYPASSRLS use cases",
+);
+assert(
+  artifactLifecycleContract.applicationRoleMayBypassRls === false,
+  "artifact lifecycle contract must not allow application-role BYPASSRLS",
+);
+assert(
+  artifactLifecycleContract.applicationRoleMayMutatePendingArtifacts === false,
+  "artifact lifecycle contract must not let application role mutate pending artifacts",
+);
+assert(
+  artifactLifecycleContract.requiresTenantScopedSql === true,
+  "artifact lifecycle contract must still require tenant-scoped SQL under operational roles",
+);
+assert(
+  artifactLifecycleContract.requiresAuditBeforeMutation === true &&
+    artifactLifecycleContract.auditAction === "bypassrls.use" &&
+    artifactLifecycleContract.auditFailClosed === true,
+  "artifact lifecycle contract must require fail-closed bypassrls audit before mutation",
+);
+assert(
+  artifactLifecycleContract.operationalRole.requiresNonSuperuser === true &&
+    artifactLifecycleContract.operationalRole.mayServeUserTraffic === false,
+  "artifact lifecycle operational role must be non-superuser and isolated from user traffic",
+);
+assert(
+  artifactLifecycleContract.objectRefInternalOnly === true &&
+    artifactLifecycleContract.publicEvidenceUsesArtifactRefOnly === true &&
+    artifactLifecycleContract.objectRefMayReachLogs === false,
+  "artifact lifecycle contract must keep ObjectRef internal, expose ArtifactRef only, and keep ObjectRef out of logs",
+);
+assert(
+  artifactLifecycleContract.claimLease.requiredBeforeObjectIo === true &&
+    artifactLifecycleContract.claimLease.persistedOnArtifactRow === true &&
+    artifactLifecycleContract.claimLease.applicationInsertMaySetClaimLease === false &&
+    artifactLifecycleContract.claimLease.uniqueClaimIdPerTenant === true &&
+    artifactLifecycleContract.claimLease.workerAndCorrelationBound === true &&
+    artifactLifecycleContract.claimLease.shortDbTransactionOnly === true &&
+    artifactLifecycleContract.claimLease.expiresAtRequired === true &&
+    artifactLifecycleContract.claimLease.staleLeaseMayBeReclaimed === true &&
+    artifactLifecycleContract.claimLease.activeUnexpiredClaimDefers === true &&
+    artifactLifecycleContract.claimLease.retryAfterRequired === true &&
+    artifactLifecycleContract.claimLease.objectIoInsideClaimTransaction === false,
+  "artifact lifecycle claim lease must be persisted, app-insert protected, short-lived, defer active claims with retry metadata, and avoid object I/O inside the claim transaction",
+);
+assert(
+  artifactLifecycleContract.finalizeCas.requiredAfterObjectIo === true &&
+    artifactLifecycleContract.finalizeCas.requiresClaimId === true &&
+    artifactLifecycleContract.finalizeCas.requiresUnexpiredClaim === true &&
+    artifactLifecycleContract.finalizeCas.tenantScoped === true &&
+    artifactLifecycleContract.finalizeCas.staleObjectIoResultMustNotFinalize === true &&
+    artifactLifecycleContract.finalizeCas.objectIoInsideFinalizeTransaction === false &&
+    artifactLifecycleContract.finalizeCas.unknownPortResultFailClosed === true &&
+    artifactLifecycleContract.finalizeCas.portExceptionMessageMayReachLogs === false,
+  "artifact lifecycle finalize CAS must be claim-bound, tenant-scoped, lease-fresh, and fail closed on stale, unknown, or leaking port results",
+);
+assert(
+  artifactLifecycleContract.redactionClaim.redactionStatus === "pending" &&
+    artifactLifecycleContract.redactionClaim.deletedAt === null &&
+    artifactLifecycleContract.redactionClaim.quarantine === false,
+  "artifact redaction claim must select only pending, undeleted, non-quarantined artifacts",
+);
+assert(
+  artifactLifecycleContract.redactionFinalizePredicate.redactionStatus === "pending" &&
+    artifactLifecycleContract.redactionFinalizePredicate.deletedAt === null &&
+    artifactLifecycleContract.redactionFinalizePredicate.quarantine === false,
+  "artifact redaction finalize CAS must still require pending, undeleted, non-quarantined artifacts",
+);
+assert(
+  artifactLifecycleContract.retentionClaim.deletedAt === null &&
+    artifactLifecycleContract.retentionClaim.legalHold === false &&
+    artifactLifecycleContract.retentionClaim.quarantine === false &&
+    artifactLifecycleContract.retentionClaim.retentionUntil === "past_required",
+  "artifact retention claim must skip deleted, legal-hold, quarantined, and unexpired artifacts",
+);
+assert(
+  artifactLifecycleContract.retentionFinalizePredicate.deletedAt === null &&
+    artifactLifecycleContract.retentionFinalizePredicate.legalHold === false &&
+    artifactLifecycleContract.retentionFinalizePredicate.quarantine === false &&
+    artifactLifecycleContract.retentionFinalizePredicate.retentionUntil === "past_required",
+  "artifact retention finalize CAS must still skip deleted, legal-hold, quarantined, and unexpired artifacts",
+);
+assert(
+  artifactLifecycleContract.retentionSuccessKinds.length === 2 &&
+    artifactLifecycleContract.retentionSuccessKinds.includes("deleted") &&
+    artifactLifecycleContract.retentionSuccessKinds.includes("not_found") &&
+    artifactLifecycleContract.retentionFailureMustNotTombstone === true,
+  "artifact retention delete must be idempotent and transient failure must not tombstone",
+);
 
 const store = new InMemoryRuntimeStore({
   nowMs: Date.parse("2026-06-13T00:00:00.000Z"),
@@ -252,6 +349,27 @@ assert(
   "worker outbox_relay must tolerate empty polls",
 );
 
+const unsupportedRedaction = await worker.handle({
+  kind: "artifact_redaction",
+  tenantId,
+  runId,
+  correlationId,
+});
+assert(
+  unsupportedRedaction.kind === "failed" && unsupportedRedaction.code === "IR_EXPRESSION_RUNTIME",
+  "artifact_redaction must fail closed until object I/O is implemented",
+);
+
+const unsupportedRetention = await worker.handle({
+  kind: "artifact_retention",
+  tenantId,
+  correlationId,
+});
+assert(
+  unsupportedRetention.kind === "failed" && unsupportedRetention.code === "IR_EXPRESSION_RUNTIME",
+  "artifact_retention must fail closed until object deletion receipt is implemented",
+);
+
 const browser = await store.acquireBrowser({
   tenantId,
   runId,
@@ -277,6 +395,7 @@ const browserConflict = await store.acquireBrowser({
 assert(browserConflict.kind === "deferred", "active browser lease must defer");
 
 const renewed = await store.renewBrowser({
+  tenantId,
   leaseId: browser.lease.id,
   workerId,
   ttlMs: 500,
@@ -285,6 +404,7 @@ assert(renewed.kind === "renewed", "browser lease must renew before expiry");
 
 store.advanceMs(501);
 const lost = await store.renewBrowser({
+  tenantId,
   leaseId: browser.lease.id,
   workerId,
   ttlMs: 500,

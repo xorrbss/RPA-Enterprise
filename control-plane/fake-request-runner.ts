@@ -568,6 +568,7 @@ export class DefaultArtifactAccessGate implements ArtifactAccessGate {
   async check(principal: AuthenticatedPrincipal, artifact: ArtifactAccessSubject): Promise<ArtifactAccessDecision> {
     if (
       artifact.deletedAt !== undefined ||
+      artifact.quarantine === true ||
       (artifact.redactionStatus !== "redacted" && artifact.redactionStatus !== "not_required")
     ) {
       return { kind: "deny", stage: "redaction", code: "ARTIFACT_NOT_REDACTED", reason: "artifact_not_ready" };
@@ -582,7 +583,7 @@ export class DefaultArtifactAccessGate implements ArtifactAccessGate {
       return { kind: "deny", stage: "rbac", code: "SECRET_ACCESS_DENIED", reason: decision.reason };
     }
 
-    return { kind: "allow", artifactRef: artifact.artifactId };
+    return { kind: "allow", objectRef: artifact.objectRef };
   }
 }
 

@@ -56,6 +56,7 @@ async function main(): Promise<void> {
     const coreSql = readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8");
     const setup = await pool.connect();
     try {
+      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(concurrencySql);
@@ -310,7 +311,7 @@ async function main(): Promise<void> {
 
     // unimplemented 잡 kind → 명시적 throw(조용한 no-op 금지)
     try {
-      await worker.handle({ kind: "run_claim", tenantId: TENANT as TenantId });
+      await worker.handle({ kind: "run_resume", tenantId: TENANT as TenantId });
       check("unimplemented job kind throws", false, "expected throw");
     } catch {
       check("unimplemented job kind throws", true);

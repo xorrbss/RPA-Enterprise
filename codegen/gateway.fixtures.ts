@@ -37,6 +37,7 @@ const BASE_REQUEST: LLMRequest = {
     tenantId: "tenant-1" as TenantId,
     runId: "run-1" as RunId,
     stepId: "step-1" as StepId,
+    attempt: 0,
     primitive: "extract",
     correlationId: "corr-1" as CorrelationId,
   },

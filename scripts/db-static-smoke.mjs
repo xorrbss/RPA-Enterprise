@@ -72,7 +72,7 @@ console.log(
   `db static smoke: ${expectedTables.length} tables, ${tenantTables.length} tenant RLS tables, ${expectedEventTypes.length} event types checked`,
 );
 console.log(
-  "db static smoke coverage: artifact redaction RLS, immutable audit hash-chain, idempotency/CAS anchors, rollback harness",
+  "db static smoke coverage: artifact read/mutation RLS, artifact lifecycle claim/finalize CAS anchors, immutable audit hash-chain, idempotency/CAS anchors, rollback harness",
 );
 
 function checkSmokeHarness() {
@@ -124,8 +124,14 @@ function checkArtifactRls() {
   requireRegex("artifacts RLS", allMigrations, /ALTER\s+TABLE\s+artifacts\s+FORCE\s+ROW\s+LEVEL\s+SECURITY/i);
   requireRegex("artifacts RLS", allMigrations, /CREATE\s+POLICY\s+artifacts_visible_isolation\s+ON\s+artifacts/i);
   requireRegex("artifacts RLS", allMigrations, /deleted_at\s+IS\s+NULL/i);
+  requireRegex("artifacts RLS", allMigrations, /quarantine\s*=\s*false/i);
   requireRegex("artifacts RLS", allMigrations, /redaction_status\s+IN\s+\('redacted','not_required'\)/i);
   requireRegex("artifacts RLS", allMigrations, /CREATE\s+POLICY\s+artifacts_insert_isolation\s+ON\s+artifacts/i);
+  requireRegex("artifacts insert policy lifecycle claim guard", allMigrations, /lifecycle_claim_id\s+IS\s+NULL/i);
+  requireRegex("artifacts insert policy lifecycle claim guard", allMigrations, /lifecycle_claim_expires_at\s+IS\s+NULL/i);
+  rejectRegex("artifacts RLS", allMigrations, /CREATE\s+POLICY\s+\S+\s+ON\s+artifacts\s+FOR\s+(UPDATE|DELETE|ALL)\b/i);
+  requireRegex("migration_smoke.sql artifacts no app mutation policy check", smoke, /artifact UPDATE\/DELETE policies must not exist for the application role/i);
+  requireRegex("migration_smoke.sql artifacts lifecycle claim insert check", smoke, /artifact application insert must not set lifecycle claim lease fields/i);
 }
 
 function checkWorkerBypassDomain() {
@@ -168,15 +174,43 @@ function checkTenantForeignKeys() {
 }
 
 function checkIdempotencyAndCasContracts() {
+  const artifactsBody = createTableBody("artifacts");
+  for (const column of [
+    "lifecycle_claim_id",
+    "lifecycle_claim_kind",
+    "lifecycle_claim_worker_id",
+    "lifecycle_claim_correlation_id",
+    "lifecycle_claimed_at",
+    "lifecycle_claim_expires_at",
+  ]) {
+    requireRegex(`artifact lifecycle claim column ${column}`, artifactsBody, new RegExp(`${column}\\s+`, "i"));
+  }
+  requireRegex("artifact lifecycle claim kind enum", artifactsBody, /lifecycle_claim_kind\s+text\s+CHECK\s*\(\s*lifecycle_claim_kind\s+IN\s+\('artifact_redaction','artifact_retention'\)\s*\)/i);
+  requireRegex("artifact lifecycle claim worker FK", artifactsBody, /lifecycle_claim_worker_id\s+uuid\s+REFERENCES\s+workers\(id\)/i);
+  requireRegex("artifact lifecycle claim all-or-none check", artifactsBody, /lifecycle_claim_id\s+IS\s+NULL[\s\S]*?lifecycle_claim_expires_at\s+IS\s+NULL[\s\S]*?lifecycle_claim_id\s+IS\s+NOT\s+NULL[\s\S]*?lifecycle_claim_expires_at\s+>\s+lifecycle_claimed_at/i);
+  requireRegex("artifact lifecycle claim unique tenant claim id", allMigrations, /CREATE\s+UNIQUE\s+INDEX\s+idx_artifacts_lifecycle_claim\s+ON\s+artifacts\s*\(tenant_id,\s*lifecycle_claim_id\)[\s\S]*?WHERE\s+lifecycle_claim_id\s+IS\s+NOT\s+NULL/i);
+  requireRegex("artifact lifecycle claim expiry index", allMigrations, /CREATE\s+INDEX\s+idx_artifacts_lifecycle_claim_expiry\s+ON\s+artifacts\s*\(tenant_id,\s*lifecycle_claim_kind,\s*lifecycle_claim_expires_at\)[\s\S]*?WHERE\s+lifecycle_claim_id\s+IS\s+NOT\s+NULL/i);
+  requireRegex("artifact lifecycle claim smoke active no-steal", smoke, /artifact lifecycle active claim must not be stolen/i);
+  requireRegex("artifact lifecycle claim smoke expired reclaim", smoke, /artifact lifecycle expired claim should be reclaimed exactly once/i);
+  requireRegex("artifact lifecycle finalize smoke wrong claim", smoke, /artifact lifecycle finalize CAS must reject wrong claim id/i);
+  requireRegex("artifact lifecycle finalize smoke cross tenant", smoke, /artifact lifecycle finalize CAS must reject cross-tenant claim/i);
+  requireRegex("artifact lifecycle finalize smoke expired claim", smoke, /artifact lifecycle finalize CAS must reject expired claim/i);
+  requireRegex("artifact lifecycle finalize smoke worker binding", smoke, /lifecycle_claim_worker_id\s*=\s*worker_id[\s\S]*?lifecycle_claim_correlation_id\s*=/i);
+  requireRegex("artifact lifecycle retention transient smoke", smoke, /artifact lifecycle transient retention failure must not tombstone or retain claim/i);
   requireRegex("raw item dedup", allMigrations, /UNIQUE\s+NULLS\s+NOT\s+DISTINCT\s*\(tenant_id,\s*connector_id,\s*target_id,\s*source_item_key,\s*raw_hash\)/i);
   requireRegex("raw connector target key", allMigrations, /CREATE\s+INDEX\s+idx_raw_items_connector_target\s+ON\s+raw_items\s*\(tenant_id,\s*connector_id,\s*target_id\)/i);
   requireRegex("control-plane idempotency", allMigrations, /UNIQUE\s*\(tenant_id,\s*endpoint,\s*idempotency_key\)/i);
   requireRegex("events outbox idempotency", allMigrations, /UNIQUE\s*\(tenant_id,\s*idempotency_key\)/i);
+  requireRegex("one run per workitem", allMigrations, /CREATE\s+UNIQUE\s+INDEX\s+idx_runs_one_per_workitem\s+ON\s+runs\s*\(tenant_id,\s*workitem_id\)[\s\S]*?WHERE\s+workitem_id\s+IS\s+NOT\s+NULL/i);
+  requireRegex("run abort source status column", createTableBody("runs"), /abort_source_status\s+text[\s\S]*?CHECK\s*\(\s*abort_source_status\s+IS\s+NULL\s+OR\s+abort_source_status\s+IN\s+\('running','suspended','resume_requested','resuming'\)\s*\)/i);
+  requireRegex("run abort source status positive smoke", smoke, /run abort source status should accept persisted abort source/i);
+  requireRegex("run abort source status negative smoke", smoke, /run abort source status must reject unknown source/i);
   requireRegex("stagehand idempotency", allMigrations, /CREATE\s+TABLE\s+stagehand_calls\s*\([\s\S]*?idempotency_key\s+text\s+NOT\s+NULL[\s\S]*?request_hash\s+text\s+NOT\s+NULL[\s\S]*?UNIQUE\s*\(tenant_id,\s*idempotency_key\)/i);
   requireRegex("action plan cache family", allMigrations, /UNIQUE\s*\(scenario_version_id,\s*step_id,\s*url_pattern,\s*dom_structural_hash,\s*model,\s*prompt_template_version,\s*browser_identity_version\)/i);
   requireRegex("credential lease slot PK", allMigrations, /PRIMARY\s+KEY\s*\(tenant_id,\s*credential_ref,\s*site_profile_id,\s*slot_no\)/i);
   requireRegex("credential slot trigger", allMigrations, /CREATE\s+TRIGGER\s+trg_validate_credential_lease_slot/i);
   requireRegex("control-plane idempotency smoke", smoke, /INSERT\s+INTO\s+control_plane_idempotency_keys[\s\S]*?WHEN\s+unique_violation/i);
+  requireRegex("one run per workitem smoke", smoke, /runs must reject duplicate workitem_id per tenant/i);
   requireRegex("browser lease owner heartbeat CAS", smoke, /owner_worker_id\s*=\s*wrong_worker_id[\s\S]*?ROW_COUNT/i);
   requireRegex("event publish CAS", smoke, /WHERE\s+events_outbox\.event_id\s*=\s*smoke_event_id[\s\S]*?AND\s+published_at\s+IS\s+NULL/i);
 }
@@ -204,6 +238,7 @@ function checkPayloadRetentionContracts() {
 
 function checkCanonicalStepReferences() {
   requireRegex("run_steps canonical step key", allMigrations, /UNIQUE\s*\(tenant_id,\s*run_id,\s*step_id,\s*attempt\)/i);
+  requireRegex("run_steps started attempt status", createTableBody("run_steps"), /status\s+IN\s*\('started','success'/i);
 
   for (const table of ["artifacts", "events_outbox", "stagehand_calls"]) {
     const body = createTableBody(table);
@@ -219,7 +254,12 @@ function checkCanonicalStepReferences() {
   }
 
   requireRegex("artifact step FK smoke", smoke, /artifact step reference must reject unknown/i);
+  requireRegex("artifact retention CHECK", createTableBody("artifacts"), /CHECK\s*\(\s*legal_hold\s+OR\s+retention_until\s+IS\s+NOT\s+NULL\s*\)/i);
+  requireRegex("artifact missing retention smoke", smoke, /artifact metadata must reject missing retention_until unless legal_hold/i);
   requireRegex("stagehand step FK smoke", smoke, /stagehand_calls step reference must reject unknown/i);
+  requireRegex("events_outbox step ref CHECK", allMigrations, /event_type\s+NOT\s+LIKE\s+'step\.%'/i);
+  requireIn("migration_smoke.sql step.started payload ref", smoke, "'events/step.started@1'");
+  requireRegex("events_outbox missing step ref smoke", smoke, /events_outbox step event must reject missing step_id\/attempt/i);
   requireRegex("events_outbox step FK smoke", smoke, /events_outbox step event must reject unknown/i);
 }
 
@@ -335,6 +375,10 @@ function requireIn(label, source, needle) {
 
 function requireRegex(label, source, pattern) {
   if (!pattern.test(source)) failures.push(`${label}: missing ${pattern}`);
+}
+
+function rejectRegex(label, source, pattern) {
+  if (pattern.test(source)) failures.push(`${label}: forbidden ${pattern}`);
 }
 
 function unique(values) {

@@ -179,3 +179,9 @@
 - 전체 OpenAPI 본문: 요청/응답 **스키마 본문**(필드 타입·required·examples), 파라미터 상세, `details` 페이로드 구조 — D1 codegen이 본 envelope/error-catalog/schema 기반으로 생성.
 - [해소 v1.5] run 외 엔티티 미존재 → `RESOURCE_NOT_FOUND`(404) 신설. 일반 RBAC 거부 → `AUTHZ_FORBIDDEN`(403) 신설(auth-rbac.md). 자원특정 거부(시크릿/artifact→`SECRET_ACCESS_DENIED`, 커넥터→`CONNECTOR_PERMISSION_DENIED`, 사이트 런타임 차단→`SITE_PROFILE_BLOCKED`)는 유지.
 - RBAC 역할·권한 매트릭스: `auth-rbac.md`. gateway policy 버전 컬럼: `db/migration_core_entities.sql` `gateway_policies.version`. 전체 OpenAPI 본문(스키마/파라미터/details)은 D1 codegen 위임.
+
+> TODO: [BLOCKED] Runtime-owned abort drain/finalization remains undefined for cancelable `suspending` abort responses while bookmark save is in flight.
+> Required decision: Runtime/API owners must define bookmark-cancel ownership, a durable bookmark-cancel port, or a durable abort intent that waits for `suspended` before applying R16; until then implementations must keep rejecting `suspending` abort before idempotency reservation instead of returning successful responses with unknown bookmark side effects, preserving no silent false/unknown.
+
+> TODO: [BLOCKED] Human-task `reassignAssignee` side-effect ownership remains undefined for H5 manual escalate and R15 run coupling.
+> Required decision: Runtime/API owners must define whether `reassignAssignee` maps to an assignee, assignee_role, admin queue, durable human-task routing port, or another explicit assignment policy before control-plane implementations may return successful `escalate` responses; until then they must fail closed and roll back instead of returning success with an unknown reassignment side effect.

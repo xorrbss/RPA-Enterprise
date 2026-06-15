@@ -219,6 +219,8 @@ CREATE TABLE runs (
   scenario_version_id uuid        NOT NULL REFERENCES scenario_versions(id),
   workitem_id         uuid        REFERENCES workitems(id),  -- 1 Workitem = 1 Run(기본). run-less 경로 위해 nullable
   worker_id           uuid,                                 -- R1/R17 lease 확보 시 set
+  abort_source_status text
+                        CHECK (abort_source_status IS NULL OR abort_source_status IN ('running','suspended','resume_requested','resuming')), -- run_abort worker must not infer whether drain was required.
   status              text        NOT NULL DEFAULT 'queued'
                         CHECK (status IN ('queued','claimed','running','suspending','suspended',
                                           'resume_requested','resuming','completing','completed',
@@ -239,11 +241,14 @@ CREATE TABLE runs (
 );
 CREATE INDEX idx_runs_status ON runs (tenant_id, status);
 CREATE INDEX idx_runs_workitem ON runs (workitem_id);
+CREATE UNIQUE INDEX idx_runs_one_per_workitem ON runs (tenant_id, workitem_id)
+  WHERE workitem_id IS NOT NULL;                              -- Product Open: 1 Workitem = 1 Run
 CREATE INDEX idx_runs_correlation ON runs (correlation_id);
 
 -- ============================================================
 -- 5. run_steps
---    core-types.ts StepResult를 영속화. status=StepStatus 8개. cache.mode 6개.
+--    executor attempt row를 영속화. status='started'는 step.started/FK 선점용
+--    nonterminal 상태이고, 그 외 8개 값은 core-types.ts StepResult final StepStatus.
 --    page_state_before/after = PageStateRef(참조). artifacts/stagehand_call_ids는 배열.
 -- ============================================================
 
@@ -258,8 +263,8 @@ CREATE TABLE run_steps (
                        CHECK (action IN ('act','observe','extract','navigate','download','upload',
                                          'api_call','file','human_task','shell')),  -- IRActionType
   status             text        NOT NULL
-                       CHECK (status IN ('success','failed_business','failed_system','failed_challenge',
-                                         'failed_security','uncertain','skipped','suspended')),  -- StepStatus 8개
+                       CHECK (status IN ('started','success','failed_business','failed_system','failed_challenge',
+                                         'failed_security','uncertain','skipped','suspended')),
   cache_mode         text        NOT NULL DEFAULT 'bypass'
                        CHECK (cache_mode IN ('hit','miss','bypass','suspect','stale','quarantined')),  -- StepResult.cache.mode
   action_plan_cache_id uuid,                                 -- StepResult.cache.actionPlanCacheId. FK는 §10 말미 ALTER로 보강(테이블 생성 순서)
@@ -333,10 +338,36 @@ CREATE TABLE artifacts (
   retention_until  timestamptz,                             -- §B retention_sweeper(법정 보존은 legal_hold로 예외)
   legal_hold       boolean     NOT NULL DEFAULT false,      -- true면 retention sweeper 예외
   quarantine       boolean     NOT NULL DEFAULT false,      -- §B integrity 불일치 시 격리
+  lifecycle_claim_id uuid,
+  lifecycle_claim_kind text CHECK (lifecycle_claim_kind IN ('artifact_redaction','artifact_retention')),
+  lifecycle_claim_worker_id uuid REFERENCES workers(id),
+  lifecycle_claim_correlation_id uuid,
+  lifecycle_claimed_at timestamptz,
+  lifecycle_claim_expires_at timestamptz,
   deleted_at       timestamptz,                             -- object 삭제 후 row soft-delete 시각
   deleted_reason   text,
   deleted_by_job   text,
   created_at       timestamptz NOT NULL DEFAULT now(),
+  CHECK (legal_hold OR retention_until IS NOT NULL),
+  CHECK (
+    (
+      lifecycle_claim_id IS NULL
+      AND lifecycle_claim_kind IS NULL
+      AND lifecycle_claim_worker_id IS NULL
+      AND lifecycle_claim_correlation_id IS NULL
+      AND lifecycle_claimed_at IS NULL
+      AND lifecycle_claim_expires_at IS NULL
+    )
+    OR (
+      lifecycle_claim_id IS NOT NULL
+      AND lifecycle_claim_kind IS NOT NULL
+      AND lifecycle_claim_worker_id IS NOT NULL
+      AND lifecycle_claim_correlation_id IS NOT NULL
+      AND lifecycle_claimed_at IS NOT NULL
+      AND lifecycle_claim_expires_at IS NOT NULL
+      AND lifecycle_claim_expires_at > lifecycle_claimed_at
+    )
+  ),
   CHECK (
     (step_id IS NULL AND attempt IS NULL)
     OR (run_id IS NOT NULL AND step_id IS NOT NULL AND attempt IS NOT NULL)
@@ -349,6 +380,10 @@ CREATE INDEX idx_artifacts_redaction ON artifacts (redaction_status)
   WHERE redaction_status = 'pending';                       -- redaction_job 폴링
 CREATE INDEX idx_artifacts_retention ON artifacts (retention_until)
   WHERE legal_hold = false AND deleted_at IS NULL;          -- retention_sweeper
+CREATE UNIQUE INDEX idx_artifacts_lifecycle_claim ON artifacts (tenant_id, lifecycle_claim_id)
+  WHERE lifecycle_claim_id IS NOT NULL;
+CREATE INDEX idx_artifacts_lifecycle_claim_expiry ON artifacts (tenant_id, lifecycle_claim_kind, lifecycle_claim_expires_at)
+  WHERE lifecycle_claim_id IS NOT NULL;
 
 -- ============================================================
 -- 8. events_outbox
@@ -394,6 +429,12 @@ CREATE TABLE events_outbox (
     OR (run_id IS NOT NULL AND step_id IS NOT NULL AND attempt IS NOT NULL)
   )
 );
+ALTER TABLE events_outbox
+  ADD CONSTRAINT ck_events_outbox_step_events_require_step_ref
+  CHECK (
+    event_type NOT LIKE 'step.%'
+    OR (run_id IS NOT NULL AND step_id IS NOT NULL AND attempt IS NOT NULL)
+  );
 CREATE INDEX idx_events_outbox_unpublished ON events_outbox (created_at)
   WHERE published_at IS NULL;                               -- outbox relay 미발행 스캔
 CREATE INDEX idx_events_outbox_run ON events_outbox (run_id);
@@ -734,12 +775,21 @@ CREATE POLICY artifacts_visible_isolation ON artifacts
   USING (
     tenant_id = current_setting('app.tenant_id')::uuid
     AND deleted_at IS NULL
+    AND quarantine = false
     AND redaction_status IN ('redacted','not_required')
   );
 
 CREATE POLICY artifacts_insert_isolation ON artifacts
   FOR INSERT
-  WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+  WITH CHECK (
+    tenant_id = current_setting('app.tenant_id')::uuid
+    AND lifecycle_claim_id IS NULL
+    AND lifecycle_claim_kind IS NULL
+    AND lifecycle_claim_worker_id IS NULL
+    AND lifecycle_claim_correlation_id IS NULL
+    AND lifecycle_claimed_at IS NULL
+    AND lifecycle_claim_expires_at IS NULL
+  );
 
 -- redaction/retention/integrity jobs that must read pending/failed/deleted artifact rows run under
 -- an explicit operational role with BYPASSRLS, not the application role(auth-rbac.md §4).

@@ -8,6 +8,7 @@
  * verify 는 결정형 기준(element_present/min_rows)만 처리하고 VLM 의존 기준은 vision 실행기(후행, §9.1)로 위임 throw.
  */
 import type {
+  ArtifactRef,
   ExecutorPlugin,
   RunContext,
   StepResult,
@@ -93,7 +94,7 @@ export class UtilityExecutor implements ExecutorPlugin {
             `download '${a.fileName}' not captured within timeout`,
           );
         }
-        const receiptRef = `dryrun://${ctx.tenantId}/${ctx.runId}/${encodeURIComponent(a.fileName)}`;
+        const receiptRef = `dryrun://${ctx.tenantId}/${ctx.runId}/${encodeURIComponent(a.fileName)}` as ArtifactRef;
         sideEffectKind = { kind: "read_only", receiptRef, committed: true };
         output = { fileName: a.fileName, receiptRef };
         break;

@@ -86,6 +86,7 @@ async function main(): Promise<void> {
     const coreSql = readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8");
     const setup = await pool.connect();
     try {
+      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(concurrencySql);
@@ -150,6 +151,36 @@ async function main(): Promise<void> {
     await expectReject("invalid retention timestamp fails closed", () =>
       writer.recordDecision(
         auditInput("audit-int-bad-retention", { retentionUntil: "not-a-date" as IsoDateTime }),
+        { kind: "must_not_return" },
+      ),
+    );
+    await expectReject("bare date occurredAt fails closed", () =>
+      writer.recordDecision(
+        auditInput("audit-int-bad-occurred-date", { occurredAt: "2026-06-14" as IsoDateTime }),
+        { kind: "must_not_return" },
+      ),
+    );
+    await expectReject("natural-language occurredAt fails closed", () =>
+      writer.recordDecision(
+        auditInput("audit-int-bad-occurred-human", { occurredAt: "June 14 2026" as IsoDateTime }),
+        { kind: "must_not_return" },
+      ),
+    );
+    await expectReject("malformed retention offset fails closed", () =>
+      writer.recordDecision(
+        auditInput("audit-int-bad-retention-offset", { retentionUntil: "2026-09-12T00:00:00+0900" as IsoDateTime }),
+        { kind: "must_not_return" },
+      ),
+    );
+    await expectReject("calendar-invalid retention fails closed", () =>
+      writer.recordDecision(
+        auditInput("audit-int-bad-retention-calendar", { retentionUntil: "2026-02-31T00:00:00Z" as IsoDateTime }),
+        { kind: "must_not_return" },
+      ),
+    );
+    await expectReject("non-security audit action fails closed", () =>
+      writer.recordDecision(
+        auditInput("audit-int-bad-action", { action: "executor.invocation.record" as never }),
         { kind: "must_not_return" },
       ),
     );

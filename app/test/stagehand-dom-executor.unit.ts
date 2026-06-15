@@ -37,7 +37,7 @@ function makeCtx(over: Partial<RunContext> = {}): RunContext {
     matchedWhere: [],
   };
   return {
-    runId: "run-1", tenantId: "t-1", nodeId: "n-1", siteProfileId: "site-1",
+    runId: "run-1", tenantId: "t-1", nodeId: "n-1", attempt: 0, siteProfileId: "site-1",
     browserIdentityId: "bid-1", networkPolicyId: "np-1", leaseId: "lease-1",
     assetRefs: {}, abortSignal: new AbortController().signal, pageState: ps,
     ...over,

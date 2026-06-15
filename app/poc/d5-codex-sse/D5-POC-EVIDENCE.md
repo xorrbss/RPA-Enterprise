@@ -17,9 +17,11 @@
 
 ```bash
 # 자격증명은 셸 env 로만 주입 — repo 에 저장 금지
-export CODEX_BASE_URL=https://<host>/v1     # 끝 슬래시 없음
-export CODEX_API_KEY=<key>
+export CODEX_BASE_URL=https://<host>/v1     # required HTTPS; no userinfo/query/fragment
+export CODEX_API_KEY=<SecretRef-resolved env value> # never paste into evidence
 export CODEX_MODEL=<model-id>
+export CODEX_EVIDENCE_ENDPOINT_ALIAS='[staging-endpoint-alias]' # required redacted alias; no URL/secret
+export CODEX_EVIDENCE_MODEL_ALIAS='[staging-model-alias]'       # required redacted alias; no raw model/secret
 export CODEX_MAX_CONTEXT_TOKENS=<n>          # 선택(기본 8192)
 
 npm --prefix app/poc/d5-codex-sse install
@@ -48,9 +50,9 @@ npm --prefix app/poc/d5-codex-sse run poc    # stdout 표를 아래에 옮긴다
 Release evidence 기준: #1 기본 SSE, #2 prompt-schema 안전경로, #4 abort 규격은 반드시 `PASS` 여야 한다.
 이 셋 중 하나라도 `GAP`/`ERROR` 이면 하니스는 nonzero 로 종료하고 D5 release evidence 로 사용할 수 없다.
 
-## 결과 (라이브 실행 2026-06-15)
+## 결과 (reference 라이브 실행 2026-06-15)
 
-> 상태: **CONFIRMED.** 실행 환경 = OpenAI `api.openai.com/v1`, model `gpt-4o-mini`,
+> 상태: **CONFIRMED.** 실행 환경 = OpenAI-compatible endpoint alias `[reference-endpoint]`, model alias `[reference-model]`,
 > `CODEX_MAX_CONTEXT_TOKENS=128000`. OpenAI 호환 계약(Bearer + `/chat/completions` SSE +
 > `response_format:{json_schema}`)을 실측했다. 실제 Codex 엔드포인트가 다르면 그 엔드포인트로 재실측한다.
 
@@ -67,7 +69,7 @@ Release evidence 기준: #1 기본 SSE, #2 prompt-schema 안전경로, #4 abort 
 release evidence: #1/#2/#4 모두 PASS ✅. #5 GAP 은 보수적 maxContextTokens fallback 으로 허용.
 ```
 
-### 확정 결론 (D5 하드 블로커 해소)
+### Reference 결론 (harness ready, staging blocker remains open)
 
 - **① structured-output 스트리밍 = 지원(jsonMode native 가용).** #3 PASS — provider 가
   `response_format:{type:json_schema}` + `stream:true` 를 수용하고 유효 JSON 을 스트리밍.
@@ -96,4 +98,6 @@ release evidence: #1/#2/#4 모두 PASS ✅. #5 GAP 은 보수적 maxContextToken
 
 이 PoC 는 D5 의 라이브 외부 사실을 닫기 위한 하니스다. #1/#2/#4 가 PASS 여야 release evidence 로
 인용할 수 있고, #3/#5 GAP 은 이미 정의된 fallback 경로를 유지한다는 뜻일 뿐이다. 어느 경우든
-"조용한 false/unknown" 없이 명시 경로로 수렴한다.
+"조용한 false/unknown" 없이 명시 경로로 수렴한다. 위 2026-06-15 실행은 OpenAI-compatible
+reference evidence이며, Product Open 의 intended staging model/endpoint blocker 는 그 정확한
+대상에서 SecretRef-resolved credentials 와 redacted alias output 으로 재실측되어야 닫힌다.

@@ -126,8 +126,22 @@ this repository.
 - Tenant tables have `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY`.
 - Tenant policies use strict `current_setting('app.tenant_id')`.
 - Missing tenant binding fails under non-bypass RLS roles.
-- Artifact `SELECT` gate requires tenant match, `deleted_at IS NULL`, and
-  `redaction_status IN ('redacted','not_required')`.
+- Artifact `SELECT` gate requires tenant match, `deleted_at IS NULL`,
+  `quarantine = false`, and `redaction_status IN ('redacted','not_required')`.
+- Artifact application-role `UPDATE`/`DELETE` policies are intentionally absent.
+  Redaction, retention, integrity, and orphan sweeper mutations require a
+  dedicated operational role with BYPASSRLS plus immutable `bypassrls.use`
+  audit evidence before mutation.
+- Artifact lifecycle claim lease anchors live on `artifacts` as all-or-none
+  claim fields with tenant-local unique claim IDs, worker/correlation binding,
+  expiry ordering, and an application-role insert policy that rejects
+  application-supplied claim fields. Migration smoke also proves SQL-level
+  active claim no-steal, expired claim reclaim, claim-bound finalize CAS miss
+  for wrong/cross-tenant/expired claims, and no tombstone on transient
+  retention failure.
+- Artifact metadata rejects unknown retention deadlines unless `legal_hold` is
+  true: `artifacts` requires `legal_hold OR retention_until IS NOT NULL`, and
+  smoke fixtures prove missing retention fails closed.
 - `workers` remains infrastructure-scoped with no `tenant_id` and no tenant RLS;
   user traffic must not be routed through BYPASSRLS infrastructure roles.
 - `control_plane_idempotency_keys` rejects same-tenant duplicate
@@ -148,8 +162,12 @@ this repository.
   retention is rejected.
 - Step-bound artifacts, step events, and `stagehand_calls` reference
   `run_steps` by `(tenant_id, run_id, step_id, attempt)`.
+- `run_steps.status='started'` is the nonterminal executor attempt row used for
+  truthful `step.started`/producer FK ownership; final executor `StepResult`
+  values still use the eight final `StepStatus` values.
 - Payload-bearing tables carry inline `retention_until`, `deleted_at`, and
-  `legal_hold` columns.
+  `legal_hold` columns; artifact writers must not persist non-legal-hold rows
+  with unknown retention.
 - `stagehand_calls` stores durable LLM `idempotency_key`/`request_hash` and
   rejects same-tenant duplicate idempotency keys.
 - `audit_log` is tenant-scoped, append-only, and hash-chained with a

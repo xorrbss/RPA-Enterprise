@@ -174,8 +174,9 @@ function containerDiagnostics() {
   const runtime = runtimes[0];
   return [
     `Detected container runtime: ${runtimes.join(", ")}.`,
-    `Container-only smoke fallback: ${runtime} run --rm --name rpa-pg15-smoke -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rpa_contract_gate -p 55432:5432 -v <repo-absolute-path>:/work -w /work postgres:15`,
-    `Then run inside that container: ${runtime} exec -w /work rpa-pg15-smoke psql -U postgres -d rpa_contract_gate -v ON_ERROR_STOP=1 -f db/migration_smoke.sql`,
+    `Diagnostic-only superuser smoke fallback: ${runtime} run --rm --name rpa-pg15-smoke -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rpa_contract_gate -p 55432:5432 -v <repo-absolute-path>:/work -w /work postgres:15`,
+    `Diagnostic-only command inside that container: ${runtime} exec -w /work rpa-pg15-smoke psql -U postgres -d rpa_contract_gate -v ON_ERROR_STOP=1 -f db/migration_smoke.sql`,
+    "Release evidence must instead run node scripts/db-migration-smoke.mjs --require-non-bypass or npm --prefix codegen run db:smoke:release under a non-SUPERUSER/non-BYPASSRLS role.",
   ];
 }
 

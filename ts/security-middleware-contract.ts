@@ -14,6 +14,7 @@
 
 import type {
   ArtifactRef,
+  ObjectRef,
   PlainSecret,
   RedactedString,
   SecretRef,
@@ -223,14 +224,17 @@ export type ArtifactRedactionStatus = "pending" | "redacted" | "failed" | "not_r
 
 export interface ArtifactAccessSubject {
   artifactId: string;
+  /** Redacted object-store reference returned only after redaction and RBAC gates pass. */
+  objectRef: ObjectRef;
   tenantId: TenantId;
   runId?: RunId;
   redactionStatus: ArtifactRedactionStatus;
   deletedAt?: IsoDateTime;
+  quarantine?: boolean;
 }
 
 export type ArtifactAccessDecision =
-  | { kind: "allow"; artifactRef: ArtifactRef }
+  | { kind: "allow"; objectRef: ObjectRef }
   | { kind: "deny"; stage: "redaction"; code: Extract<ErrorCode, "ARTIFACT_NOT_REDACTED">; reason: string }
   | { kind: "deny"; stage: "rbac"; code: Extract<ErrorCode, "SECRET_ACCESS_DENIED">; reason: string };
 
@@ -490,6 +494,8 @@ export interface LLMRequestMetadata {
   tenantId: TenantId;
   runId: RunId;
   stepId: StepId;
+  /** Canonical step attempt; must be a non-negative integer. */
+  attempt: number;
   primitive: LLMPrimitive;
   correlationId: CorrelationId;
 }
@@ -579,8 +585,9 @@ export type LLMIdempotencyReservation =
   | {
       kind: "blocked";
       reason: "request_hash_mismatch";
-      // Product Open v1 stores request_hash on stagehand_calls and maps mismatch
-      // through the gateway conflict policy until a dedicated catalog code exists.
+      // Product Open v1 stores request_hash on stagehand_calls. Mismatch maps to
+      // SCENARIO_VERSION_CONFLICT; in-flight duplicates map to WORKITEM_CHECKOUT_CONFLICT
+      // until a dedicated LLM idempotency catalog code exists.
     };
 
 export interface LLMCallIdempotencyStore {

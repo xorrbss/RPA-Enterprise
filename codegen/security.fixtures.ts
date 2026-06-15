@@ -1,3 +1,4 @@
+import type { ObjectRef } from "../ts/core-types";
 import type {
   AuthenticatedPrincipal,
   AuditOutcome,
@@ -63,6 +64,7 @@ await fixture("Artifact gate checks redaction before RBAC", async () => {
   const gate = new ContractArtifactAccessGate();
   const pending = await gate.check(noRole, {
     artifactId: "a1",
+    objectRef: "artifact://object/a1" as ObjectRef,
     tenantId,
     redactionStatus: "pending",
   });
@@ -71,6 +73,7 @@ await fixture("Artifact gate checks redaction before RBAC", async () => {
 
   const redactedNoRole = await gate.check(noRole, {
     artifactId: "a2",
+    objectRef: "artifact://object/a2" as ObjectRef,
     tenantId,
     redactionStatus: "redacted",
   });
@@ -82,10 +85,12 @@ await fixture("Artifact gate checks redaction before RBAC", async () => {
 
   const allowed = await gate.check(viewer, {
     artifactId: "a3",
+    objectRef: "artifact://object/a3" as ObjectRef,
     tenantId,
     redactionStatus: "not_required",
   });
   assertEqual(allowed.kind, "allow");
+  if (allowed.kind === "allow") assertEqual(allowed.objectRef, "artifact://object/a3");
 });
 
 await fixture("Domain allowlist supports exact and subdomain wildcard", async () => {
@@ -362,6 +367,26 @@ await fixture("Minimum BYPASSRLS policy rejects app-role and allows job role", a
   assertEqual(
     checkBypassRlsUse({
       useCase: "artifact_redaction_job",
+      applicationRole: false,
+      servesUserTraffic: false,
+      reasonCode: "fixture",
+      immutableAuditAppendConfigured: true,
+    }).kind,
+    "allow",
+  );
+  assertEqual(
+    checkBypassRlsUse({
+      useCase: "artifact_retention_sweeper",
+      applicationRole: true,
+      servesUserTraffic: false,
+      reasonCode: "fixture",
+      immutableAuditAppendConfigured: true,
+    }).kind,
+    "deny",
+  );
+  assertEqual(
+    checkBypassRlsUse({
+      useCase: "artifact_retention_sweeper",
       applicationRole: false,
       servesUserTraffic: false,
       reasonCode: "fixture",

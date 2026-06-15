@@ -42,7 +42,12 @@ operate the deployment path outside this repository.
 - The D4.3 app idempotency producer writes
   `control_plane_idempotency_keys.retention_until` from the same source as
   `expires_at`, so persisted command responses have an explicit retention
-  boundary instead of a silent unknown.
+  boundary instead of a silent unknown. Expired `processing` rows are reclaimable
+  only for the same canonical request hash; different-hash reuse still maps to
+  `SCENARIO_VERSION_CONFLICT` instead of silently re-running side effects.
+  Cross-tenant `scenario_version_id` and `workitem_id` command references fail
+  without enqueueing, while the same idempotency key remains tenant-local and
+  independently usable by the owning tenant.
 - D4.2 control-plane RBAC is wired for `GET /v1/runs/{run_id}` using
   `auth-rbac.md` §2. Routes without an explicit `rbacAction` fail closed, while
   unmatched routes and unsupported methods converge to `RESOURCE_NOT_FOUND`
@@ -53,20 +58,34 @@ operate the deployment path outside this repository.
   `release-open-checklist.md` / `release-decisions.md`.
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
   blockers split by scope: external/staging blocker categories for concrete
-  deploy target, secret provisioning, and non-app producer retention policy;
-  an expanded SecretRef evidence packet with five specific unchecked rows.
+  deploy target, secret provisioning, non-app producer retention policy, and
+  D5 Codex SSE live capability evidence;
+  an expanded SecretRef evidence packet with five specific unchecked rows; and
+  repo-controlled D4.5 API P1 and D3 runtime rows for cancelable suspending
+  abort bookmark-cancel ownership, human-task reassignment ownership, runtime executor orchestration/audit semantics, artifact
+  redaction/retention object I/O, and remote gate evidence.
   The durable security audit writer D4.4 row is now resolved locally by
   `DurableSecurityAuditDecisionWriter` evidence.
   The current audit enforces both directions: every actionable blocked-decision
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 22 markers, 8 actionable blockers, 13 known release decisions tracked,
-  and 13 release decisions checked. New unresolved
-  behavior must still use the repository
+  output: 32 markers, 18 actionable blockers, 13 known release decisions tracked,
+  13 release decisions checked (8 active external/staging checklist rows;
+  2 repo-controlled D4.5 API P1 open rows; 4 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
-## Changed Files
+## Changed Files / Evidence Scope
+
+This section is a cumulative candidate/delta scope list, not a live
+`git status` inventory. Every final release packet must also paste the current
+`git status --short --branch -uall` and `git diff --stat` output before
+approval. The current local dirty runtime packet includes new recorder and
+runtime-worker tests such as `app/src/runtime/executor-invocation-recorder.ts`,
+`app/test/executor-invocation-recorder.int.ts`,
+`app/test/graphile-runner.unit.ts`, `app/test/raw-cdp.unit.ts`, and
+`app/test/runtime-worker-claim.int.ts`; they are not part of the tagged Product
+Open Candidate baseline until merged and backed by a later PR/main gate.
 
 Tracked modified contract/artifact areas:
 
@@ -83,9 +102,15 @@ Tracked modified contract/artifact areas:
 - DB contracts: `db/migration_concurrency_idempotency.sql`,
   `db/migration_core_entities.sql`.
 - App runtime/API staging-readiness delta: `app/src/api/*`,
-  `app/src/runtime/outbox.ts`, `app/test/api-runs.int.ts`,
-  `app/test/api-runs-graphile.int.ts`, `app/test/scenarios.int.ts`, and
-  `app/test/security-audit.int.ts`.
+  `app/src/runtime/outbox.ts`, `app/src/worker/runtime-worker.ts`,
+  `app/src/gateway/llm-gateway.ts`,
+  `app/src/gateway/pg-gateway-artifact-sink.ts`, `app/src/executor/*`, and the app tests
+  covering API, Graphile enqueue, scenario promotion, security audit, raw CDP,
+  gateway, artifact sink pending metadata, runtime-worker claim/lease behavior,
+  and final executor invocation recording.
+- D5 live capability harness: `app/poc/d5-codex-sse/*`. This is a
+  credential-holder PoC harness only; pending live output is not release
+  evidence.
 - UI mock: `rpa_enterprise_console.html`.
 
 New repo-local support artifacts:
@@ -135,15 +160,49 @@ Passed locally:
 - `npm --prefix app run test:unit`
 - `npm --prefix app run test:executor`
   (D3 deterministic Stagehand v3/CDP dry-run only; this is not staging
-  execution readiness because runtime-worker, tenant BrowserLease, artifact,
-  audit, and RBAC/tenant runtime gates remain unwired for real run execution.)
+  execution readiness because real executor orchestration,
+  artifact redaction/retention jobs, executor audit semantics, and remote
+  RBAC/tenant runtime gates remain unwired for real run execution.)
 - `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:int`
 - `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:ci`
 - App integration now includes real `PgGraphileRunEnqueuer` commit/rollback
-  evidence for `POST /v1/runs` `run_claim` enqueue and D4.4
+  evidence for `POST /v1/runs` `run_claim` enqueue, queue-driven configured
+  `run_claim` consumption evidence in the local dirty runtime delta, and D4.4
   `SignedCommandRegistry` registry-ref use during save/validate/promote; shell
   `cmd_ref` tests cover registered, unregistered, and registry-unavailable
-  paths.
+  paths. It also includes final `PgExecutorInvocationRecorder` evidence for
+  tenant-bound `run_steps`, canonical `step.completed` outbox refs, pending
+  artifact metadata retention, stagehand ref rollback, duplicate/cross-tenant
+  fail-closed behavior, and PlainSecret rejection. The D5
+  `PgGatewayArtifactSink` integration covers producer-side pending artifact
+  metadata/object-store writes, canonical `(run_id, step_id, attempt)` linkage,
+  `outputRef` as `artifacts.id`/`ArtifactRef` while raw `object_ref` remains an
+  internal `ObjectRef`, pending-redaction RLS invisibility, cross-tenant
+  isolation, object cleanup on metadata insert failure/missing `run_step`,
+  PlainSecret rejection before object write, and invalid retentionDays
+  rejection. Control-plane fake fixtures now keep `/v1/artifacts/{artifact_id}`
+  lookup keyed by `artifacts.id` and authorize the internal redacted `ObjectRef`
+  only after redaction/RBAC gates pass before the artifact response exposes a
+  `ref`. `app/test/api-human-tasks.int.ts` now covers D4.5 human_task command
+  behavior: matching assignee and assignee_role can resolve, mismatched
+  assignee or assignee_role returns `AUTHZ_FORBIDDEN` before idempotency-key
+  reservation, denied tasks remain `in_progress`, H6 assign from `escalated`
+  records the explicit reassigned assignee, and H5 manual escalate fails closed
+  with rollback while `reassignAssignee` ownership is unresolved. `app/test/api-runs-abort.int.ts`
+  now proves queued abort cancellation, claimed abort BrowserLease expiry,
+  claimed multi-lease fail-closed rollback, running/resuming abort `aborting`
+  state entry with persisted `abort_source_status` and same-transaction
+  `run_abort` enqueue, idempotent `aborting` replay re-enqueue, and fail-closed
+  rejection of `suspending` before idempotency reservation while bookmark-cancel
+  ownership is unresolved. `app/test/runtime-worker-abort-finalization.int.ts`
+  proves `run_abort` drains and timeouts finalize through R23/R24 exactly once,
+  expire BrowserLease rows by tenant/run/owner CAS, claim one lease as
+  `draining` so duplicate jobs defer instead of invoking the drainer twice,
+  release transient/terminal drain claims for retry, finalize expired leases via
+  timeout without a false drain, fail closed on multiple leases, missing drain
+  ports, or running-source missing workers, and preserve cancelled replay
+  idempotency. `app/test/api-runs-graphile.int.ts` proves stale cancelled
+  `run_claim` jobs are consumed without invoking the browser lease resolver.
 - `npm --prefix codegen test`
 - `npm --prefix codegen run typecheck`
 - `npm --prefix codegen run fixtures`
@@ -154,8 +213,21 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 22 markers, 8 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked)
+  (current output: 32 markers, 18 actionable blockers, 13 known release
+  decisions tracked, 13 release decisions checked (8 active external/staging
+  checklist rows; 2 repo-controlled D4.5 API P1 open rows; 4 repo-controlled D3
+  runtime open rows))
+- Current dirty-delta local gate evidence for 2026-06-15 KST includes
+  DB-backed release posture from `npm --prefix codegen run ci:local:temp-db`,
+  `npm --prefix codegen run db:temp-smoke`, or
+  `node scripts/db-temp-postgres-gate.mjs -- npm --prefix codegen run db:smoke:release`,
+  plus `npm --prefix app run typecheck`, `npm --prefix app run test:unit`,
+  `npm --prefix app run test:executor`, and `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:int`.
+  `ci:local:no-db` remains diagnostic skip-only evidence and does not prove
+  DB posture.
+  This proves the local non-bypass PostgreSQL 15 posture for the dirty runtime
+  delta only; remote PR/main `Contract Gates` job URLs remain required before
+  this delta can be cited as merged/current staging-open evidence.
 - `npm --prefix codegen run yaml:parse`
   (parses every workflow YAML plus OpenAPI/AsyncAPI, preserves the GitHub
   Actions `on` key, blocks deploy/environment-bound contract jobs, and requires
@@ -164,7 +236,8 @@ Passed locally:
   (covers reject/allow fixtures for workflow secret contexts,
   scalar/quoted/object-form `environment: staging`, one-line and block env
   dump/xtrace commands, YAML `env:` maps, and CI-only PostgreSQL smoke
-  credentials)
+  credentials, plus sensitive filename deny rules for `.env*`, private key,
+  certificate bundle, and service-account JSON paths)
 - `npm --prefix codegen run secret:scan`
   (covers high-risk secret markers plus staging workflow hazards such as
   GitHub secret context references, scalar/quoted/object-form
@@ -172,10 +245,20 @@ Passed locally:
 - `npm --prefix codegen run db:static-smoke`
   (covers artifact redaction RLS, immutable audit hash-chain, idempotency/CAS
   anchors, explicit and missing `events_outbox.retention_until` smoke fixtures,
-  and rollback harness)
+  canonical `step.*` outbox ref checks, the artifact metadata retention
+  deadline check, and rollback harness)
 - `npm --prefix codegen run html:smoke`
 - `npm --prefix codegen run html:http-smoke`
 - `python scripts/yaml-parse.py`
+- `npm --prefix app/poc/d5-codex-sse run typecheck`
+  (harness typecheck only; live `npm --prefix app/poc/d5-codex-sse run poc`
+  requires external Codex endpoint/model credentials and is not executed in
+  this repository environment)
+- `npm --prefix app/poc/d5-codex-sse run test:redaction`
+  (proves D5 live evidence cells redact Bearer/sk/API-key/token/secret/password
+  patterns, JSON-style provider error bodies, URL userinfo/query secrets,
+  multiline/control characters, length overflow, and Markdown table pipes before
+  release evidence is copied)
 - `git diff --check`
 - `node --check` for the repo-local gate scripts
 - `npm --prefix codegen run db:temp-smoke` for a repo-local temp PostgreSQL
@@ -242,8 +325,8 @@ Environment note:
 ## Resolved Release Decisions
 
 - The 13 Product Open decisions are resolved in `release-decisions.md`.
-- Dependent schema/DB/TS/codegen/runtime artifacts have been migrated to those
-  decisions for the repo-controlled Product Open gate surface.
+- Repo-controlled schema/DB/TS/codegen/runtime contract artifacts needed for
+  the Product Open gate surface have been migrated to those decisions.
 
 ## Remaining Gap to Product Open
 
@@ -253,7 +336,7 @@ Environment note:
   `main` `Contract Gates` run `27499599708`; this closes only the
   repo-controlled D4.4 remote evidence pointer and does not close external
   staging/open approval or active external blockers.
-- Current D4.4 repo-controlled evidence: executable scenario runtime readiness now has
+- Current D4.4 repo-controlled contract/runtime evidence includes
   per-expression `compiled_ast` export, app promote `If-Match`/idempotency
   coverage, `SecretRef`/`SecretStore`-backed signed command registry wiring
   for shell `cmd_ref` validation, repo-owned `events_outbox.retention_until`
@@ -261,27 +344,118 @@ Environment note:
   writer coverage for security boundary decisions. No repo-controlled D4.4
   blocker remains in the local checklist after this delta; remaining blockers
   are external/staging scope and must not be inferred closed.
-- Current D3 executor evidence: deterministic Stagehand v3/CDP
+- Current local dirty-worktree D3 runtime evidence: deterministic Stagehand v3/CDP
   UtilityExecutor/PageStateResolver is proven as PoC/dry-run evidence only.
-  It is not Product Open/staging execution readiness until runtime-worker
-  `run_claim`/`run_resume`, tenant BrowserLease lookup, artifact retention/audit,
-  and RBAC/tenant execution gates are wired and evidenced.
+  `PgRuntimeWorker` now has `run_resume` R17-R20 evidence that consumes the R17
+  `restoreSession` side effect through an injected `SessionRestorer` outside
+  the DB transaction, persists R17 worker ownership under tenant lock, maps
+  restored/login-bypass/invalid-token outcomes through R18/R19/R20, and handles
+  `resuming` retry plus active lease deferral.
+  `PgRuntimeWorker` now has first-slice `run_claim` claim/BrowserLease gate
+  evidence when an explicit worker identity and lease plan resolver are
+  configured, plus first-slice `workitem_checkout` W1 `new → processing`
+  evidence that requires worker identity and correlation id, fails duplicate
+  checkout explicitly, and preserves tenant boundaries. `PgRuntimeWorker` also
+  owns the closed `run_abort` runtime job for `running`/`resuming` aborts after
+  `aborting` state entry, trusts persisted `abort_source_status`, resolves
+  stored worker/BrowserLease ownership under tenant lock, claims exactly one
+  active/reserved lease as `draining` before external drain work, defers
+  duplicate jobs, invokes the injected `RunAbortDrainer` outside the DB
+  transaction, finalizes drained/timeout/expired-lease outcomes through R23/R24,
+  releases transient/terminal drain claims for retry without acknowledgement,
+  and fails closed on ambiguous lease, missing worker, or port ownership.
+  Graphile runtime task
+  wiring can inject that worker identity and resolver without putting worker
+  identity into the job payload, Graphile task
+  acknowledgment is restricted to `completed` results so `deferred`/`failed`
+  worker outcomes cannot become silent successes, non-browser or open-circuit
+  workers reject fail-closed, the 5-minute browser lease default matches
+  `ops-defaults.md`, and tenant/owner-bound BrowserLease
+  heartbeat/drain CAS primitives plus tenant-scoped `lease_sweeper` evidence
+  cover stale BrowserLease/CredentialLease expiry under RLS. The local
+  `PgExecutorInvocationRecorder` slice persists final `StepResult` rows,
+  canonical `step.completed` outbox events, and pending artifact metadata with
+  explicit retention while failing closed on missing stagehand refs,
+  duplicate/cross-tenant refs, missing step outbox refs, and PlainSecret values
+  in JSON payloads plus page-state/artifact/object refs. `PgRuntimeWorker`
+  now gates `artifact_redaction` and `artifact_retention` behind explicit
+  injected lifecycle ports, worker identity, correlation id, and a
+  non-`SUPERUSER` dedicated `BYPASSRLS` operational role. The local worker now
+  persists a short artifact-row claim lease, calls injected fakeable
+  `ArtifactRedactor` / `ArtifactRetentionStore` ports outside the DB
+  transaction, and finalizes by tenant/claim/worker/correlation/unexpired-lease
+  CAS; local non-bypass evidence proves application roles still refuse both
+  jobs before object I/O, while temporary non-superuser BYPASSRLS evidence
+  proves active-claim defer, redaction finalize, retention deleted/not-found
+  success, transient no-tombstone behavior, skip predicates, and no audit
+  `ObjectRef` leak.
+  `ts/runtime-contract.ts`
+  names the operational guardrail contract for those future jobs: dedicated
+  `artifact_redaction_job` / `artifact_retention_sweeper` BYPASSRLS use cases,
+  tenant-scoped SQL even under operational roles, fail-closed `bypassrls.use`
+  audit before mutation, internal-only `ObjectRef`, public `ArtifactRef`
+  evidence, no `ObjectRef` logs, persisted artifact-row claim lease anchors
+  that application inserts cannot set, tenant-unique claim IDs,
+  worker/correlation binding, active-claim defer/retry metadata, no object I/O
+  inside claim/finalize DB transactions, SQL-level active claim no-steal,
+  expired claim reclaim, claim-id-bound tenant finalize CAS with an unexpired
+  lease, wrong/cross-tenant/expired finalize CAS miss, stale object-I/O result
+  rejection, fail-closed unknown/leaking port results, non-quarantined
+  claim/finalize filters, and idempotent delete/not-found retention semantics.
+  The DB boundary now rejects non-legal-hold artifact metadata with unknown
+  `retention_until` and application-supplied lifecycle claims. This
+  local dirty delta is not merged/current remote release evidence until a later
+  PR/main `Contract Gates` run attaches the required job URLs, and it is still
+  not Product Open/staging execution readiness until real executor
+  orchestration, artifact redaction/retention jobs, executor audit semantics,
+  production/staging SecretRef-backed artifact object I/O/deletion
+  implementations and evidence using the repo-defined claim-lease/finalize-CAS
+  contract, and RBAC/tenant execution gates are wired and evidenced.
 - Current app-runtime scope gap: the real Fastify app gate covers the wired app
-  routes (`GET/POST /v1/runs` subset plus scenario create/read/validate/promote).
-  Broader api-surface routes such as run abort, human-task commands, workitem/DLQ
-  replay, artifact read, gateway policy update, and site approval still rely on
+  routes (`GET/POST /v1/runs`, run abort, human-task assign/start/resolve and
+  fail-closed escalate, DLQ replay, and scenario create/read/validate/promote).
+  Broader api-surface routes such as workitem checkout/read APIs, artifact read,
+  gateway policy update, network policy update, site approval, connector
+  enable/install, and SecretStore resolution endpoints still rely on
   contract/fake control-plane fixtures until their real app routes are
   implemented or explicitly scoped out of a staging packet.
+- Current D5 gateway scope gap: the repo-owned Codex SSE adapter safe path,
+  live-probe harness, and local `PgGatewayArtifactSink` pending-metadata path
+  exist, but the intended staging model/endpoint has not been probed by a
+  credential holder. The harness must record mandatory PASS for basic SSE,
+  prompt-schema safe path, and abort behavior before it can be cited as external
+  live-model evidence, and its evidence table uses endpoint/model aliases,
+  rejects endpoint URLs carrying credentials/query/fragment material, and
+  redacts provider error bodies plus secret-like fields before printing;
+  optional native `json_schema` and model metadata GAP results are allowed only
+  with documented fallback. The local artifact sink
+  evidence is producer-side metadata/object-store evidence only, keeps
+  `ArtifactRef` aligned to `artifacts.id` while raw object locators remain
+  `ObjectRef`, and does not close artifact redaction/retention worker object-I/O
+  blockers.
 - External Product Open gap: staging approval, secret provisioning, deployment,
   rollback ownership, and any production/staging operation remain outside this
   contract-first repository. Those steps must use the resolved staging decision
   and must not materialize plaintext secrets in this repo.
 - TODO: [BLOCKED] External concrete staging deploy target is not defined for executable Product Open deployment outside this contract repository.
-  Required decision: Platform/release authority must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier (namespace/service or equivalent), rollback owner, release approver, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
-- TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness is not defined outside this repository.
-  Required decision: External staging secret provisioning must name the SecretStore backend (Vault mount/path or cloud KMS/secret-manager alias), SecretRef namespace convention, runtime identities allowed to resolve each namespace, initial secret inventory, rotation owner/cadence, and evidence location. No staging deploy may proceed until CI/deploy logs prove no plaintext secret materialization, no env dump, and no weakening of RBAC/redaction gates.
+  Required decision: Platform/release authority must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier (namespace/service or equivalent), release approval evidence under `release-approvers`, rollback confirmation under `platform-oncall`, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
+- Blocked summary: External staging SecretRef/SecretStore provisioning readiness is not defined outside this repository; the specific actionable evidence blockers are tracked in the Staging Secret Provisioning Evidence Packet below.
 - TODO: [BLOCKED] External staging producer retention duration/source policy is not defined for non-app writers that must set `retention_until`.
   Required decision: Runtime/platform owners must define per-producer retention duration/source for `raw_items.raw_payload`, `normalized_records.record`, `artifacts.object_ref`, `audit_log.payload`, and any non-D4.3 writer of `control_plane_idempotency_keys.response_body`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source, while repo-owned `events_outbox` retention is tracked separately above. Staging evidence must prove each payload-bearing writer sets `retention_until` or fails closed.
+- TODO: [BLOCKED] External D5 Codex SSE live capability evidence is missing for the intended staging model/endpoint.
+  Required decision: The staging LLM owner must run `npm --prefix app/poc/d5-codex-sse run poc` with an absolute HTTPS `CODEX_BASE_URL` containing no credentials/query/fragment material, `CODEX_API_KEY`, and `CODEX_MODEL` resolved outside the repository through SecretRef/SecretStore, plus required redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` and `CODEX_EVIDENCE_MODEL_ALIAS` values, then record redacted output proving mandatory checks #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior PASS; #3 native `json_schema` and #5 model metadata may be GAP only when the fallback path/config is explicitly retained. No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material may be recorded.
+- TODO: [BLOCKED] Runtime-owned abort drain/finalization remains undefined for cancelable `suspending` abort responses while bookmark save is in flight.
+  Required decision: Runtime/API owners must define bookmark-cancel ownership, a durable bookmark-cancel port, or a durable abort intent that waits for `suspended` before applying R16; until then control-plane implementations must keep rejecting `suspending` abort before idempotency reservation instead of returning successful responses with unknown bookmark side effects, preserving no silent false/unknown.
+- TODO: [BLOCKED] Human-task `reassignAssignee` side-effect ownership remains undefined for H5 manual escalate and R15 run coupling.
+  Required decision: Runtime/API owners must define whether `reassignAssignee` maps to an assignee, assignee_role, admin queue, durable human-task routing port, or another explicit assignment policy before the control plane may return successful `escalate` responses; until then Fastify must fail closed and roll back instead of returning success with an unknown reassignment side effect, preserving no silent false/unknown.
+- TODO: [BLOCKED] Runtime executor orchestration and executor audit semantics remain incomplete beyond the local started-attempt and terminal success/business-failure completion slices.
+  Required decision: Runtime owners must still define the wiring that invokes executor plugins outside the DB transaction, requires the local `ExecutorStepAttemptStore`/`step.started` contract before every step-bound producer writes, reconciles artifacts produced during execution with final `StepResult` evidence, maps system/security/challenge/unknown final `StepResult` statuses to explicit run/workitem transitions and artifact redaction/retention job policy, and defines durable executor audit evidence without misusing the security-boundary-only `audit_log`; unresolved executor outcomes must map to explicit state-machine/error-catalog paths, not default success/failure.
+- TODO: [BLOCKED] Runtime artifact_redaction production object I/O and redacted-output evidence is not complete.
+  Required decision: Runtime/security owners must provide the production/staging `ArtifactRedactor` implementation and evidence using the repo-defined claim lease/finalize CAS contract, plus SecretRef-backed operational role wiring so it reads `artifacts.object_ref` outside long DB transactions, produces a redaction-safe object/ref or explicit `not_required` decision, updates `redaction_status` by tenant-scoped CAS from `pending` under an unexpired claim, handles `redaction_attempts`/threshold/alerting, preserves legal-hold/retention metadata, persists `sha256`/quarantine behavior, appends required `bypassrls.use` audit for the operational role, and proves no plaintext Secret/PII or internal `ObjectRef` is emitted. The local `PgRuntimeWorker` fakeable-port plumbing proves the repo-owned claim/port/finalize shape, but it must not be cited as staging redaction evidence until the real port, SecretRef-backed operational credential path, and object-store evidence are approved.
+- TODO: [BLOCKED] Runtime artifact_retention production external object deletion evidence is not complete.
+  Required decision: Runtime/platform owners must provide the production/staging `ArtifactRetentionStore` delete implementation and evidence using the repo-defined claim lease/finalize CAS contract, plus SecretRef-backed operational role wiring for `object_ref`, idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal_hold/quarantine handling, evidence/audit semantics, and staging credential/SecretRef path before Product Open can claim external artifact purge. The local `PgRuntimeWorker` fakeable-port plumbing proves the repo-owned claim/port/finalize shape, but it is not staging external object deletion evidence without the approved real port and object-store credential path.
+- TODO: [BLOCKED] Runtime execution staging gates are not yet complete remote evidence.
+  Required decision: Release/runtime owners must provide PR/main `Contract Gates` evidence proving tenant boundary, RBAC/redaction, no `BYPASSRLS`, no silent false/unknown behavior, and the required `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs for the dirty runtime delta before citing it as current staging/open evidence. Local non-bypass temp-DB evidence is recorded above but does not replace remote release evidence.
 
 ### Durable Security Audit Writer Decision Packet
 
@@ -308,7 +482,77 @@ Resolved locally for the repo-owned boundary/evidence slice:
   fail-closed append behavior.
 - Scope note: broader Fastify routes that do not exist in the repo-owned app
   runtime are still scoped out until implemented or explicitly wired to this
-  boundary.
+  boundary. Executor invocation recording does not use `audit_log` as a generic
+  recorder; executor audit semantics remain blocked until the runtime contract
+  defines that evidence path.
+
+### Executor Invocation Recorder Evidence Packet
+
+Resolved locally for the started-attempt, final-recording, and terminal
+success/business-failure completion slices only:
+
+- Boundary: `ExecutorInvocationRecorder` in `ts/runtime-contract.ts`; app-runtime
+  implementation: `PgExecutorInvocationRecorder` in
+  `app/src/runtime/executor-invocation-recorder.ts`.
+- Covered behavior: records already-final `StepResult` values to `run_steps`,
+  emits canonical `step.completed` outbox rows with `(run_id, step_id, attempt)`,
+  persists pending artifact metadata with explicit retention, and keeps browser,
+  LLM, and plugin side effects outside the DB transaction.
+- Local started-attempt ownership: `ExecutorStepAttemptStore` and
+  `RunStepPersistedStatus` in `ts/runtime-contract.ts` preserve final-only
+  `StepResult.status` while allowing persisted `run_steps.status='started'` as
+  a truthful nonterminal row. `PgExecutorStepAttemptStore` in
+  `app/src/runtime/executor-step-attempt-store.ts` locks the running run, owns
+  `MAX(attempt)+1` allocation, inserts the canonical step attempt, and emits
+  `step.started` in the same transaction. Local evidence proves cross-tenant
+  fail-closed start, retry attempt ownership, `stagehand_calls` FK insertion
+  after start, recorder CAS finalization of the same row, and
+  `PgGatewayArtifactSink` pending artifact metadata writes after the started row.
+- Local terminal success/business-failure completion: `PgExecutorCompletionCoordinator` in
+  `app/src/runtime/executor-completion-coordinator.ts` reuses the recorder inside
+  the same tenant transaction, requires every terminal-success finalization
+  evidence key to be present and exactly `true`, rejects unknown evidence keys, maps a
+  successful terminal result through `running -> completing -> completed` and
+  linked workitem `processing -> successful`, maps `failed_business` with
+  `exception.class='business'` through `running -> failed_business` and linked
+  workitem `processing -> failed_business`, emits canonical `run.completed` or
+  `run.failed_business` plus `step.completed`, enqueues artifact
+  redaction/retention runtime job intents when artifacts exist, and rolls back
+  the step/run/workitem transition when artifact-producing completion lacks a
+  lifecycle enqueue port.
+- Fail-closed behavior: duplicate final attempts, cross-tenant references,
+  cross-tenant starts, missing stagehand calls, artifact metadata mismatches,
+  missing `step.*` outbox refs, invalid timings, missing/false/unknown terminal
+  finalization evidence, missing lifecycle enqueue port for artifact-producing
+  terminal completion, missing/wrong business exception
+  classification, and PlainSecret values in JSON payloads plus page-state,
+  artifact, and object refs roll back the transaction instead of silently
+  succeeding.
+- DB boundary: non-legal-hold artifact metadata must set `retention_until`;
+  artifact reads require tenant match, `deleted_at IS NULL`,
+  `quarantine = false`, and `redaction_status IN ('redacted','not_required')`.
+  Application-role artifact `UPDATE`/`DELETE` policies are intentionally absent;
+  redaction/retention mutation requires audited operational BYPASSRLS.
+  `db/migration_smoke.sql`, `scripts/db-static-smoke.mjs`, and
+  `codegen/control-plane.fixtures.ts` prove omitted retention, quarantined
+  artifact reads, and accidental app-role artifact mutation policy exposure
+  fail closed before any lifecycle job can inherit an unknown or unsafe artifact
+  state.
+- Artifact lifecycle guardrail boundary: `ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT`
+  in `ts/runtime-contract.ts`; runtime fixtures prove dedicated operational
+  BYPASSRLS use cases, tenant-scoped SQL, fail-closed audit-before-mutation,
+  internal `ObjectRef`, public `ArtifactRef`, claim filters, and idempotent
+  retention delete semantics. This does not provide production/staging lifecycle
+  object I/O evidence or operational credential approval.
+- Scope note: this does not execute the real runner, does not require every
+  executor path to call the started-attempt contract yet, does not reconcile
+  every artifact-producing execution path with final `StepResult` evidence, does
+  not map system/security/challenge/unknown outcomes, does not run artifact redaction or retention
+  object I/O, and does not define generic executor audit semantics beyond local
+  started-attempt and terminal success/business-failure completion evidence.
+- Test evidence: `app/test/executor-invocation-recorder.int.ts`,
+  `app/test/gateway-artifact-sink.int.ts`, `db/migration_smoke.sql`, and
+  `scripts/db-static-smoke.mjs`.
 
 ### Events Outbox Retention Decision Packet
 
@@ -335,6 +579,36 @@ External owners must provide this packet with redacted aliases and `SecretRef`
 identifiers only. Do not record secret values, resolved SecretRef material, env
 dumps, or deployment credentials in this repository.
 
+| Evidence field | Required redacted content | Status |
+|---|---|---|
+| SecretStore backend alias/path | Vault mount/path or cloud KMS/secret-manager alias only; no plaintext values | BLOCKED external evidence |
+| SecretRef namespace and runtime identity map | Namespace convention plus runtime identities allowed to resolve each namespace | BLOCKED external evidence |
+| Initial SecretRef inventory | SecretRef identifiers, owning service/runtime, and intended purpose only | BLOCKED external evidence |
+| Rotation and break-glass ownership | Rotation owner/cadence plus break-glass/update owner and procedure | BLOCKED external evidence |
+| CI/deploy and SecretStore resolution proof | Artifact URL proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening | BLOCKED external evidence |
+| Release approver and rollback confirmation | Approval evidence under `release-approvers` and rollback confirmation under `platform-oncall` | Tracked by external deploy target blocker above |
+
+Evidence intake rules for this packet:
+
+- Allowed fields: redacted endpoint/model aliases, `SecretRef` identifiers,
+  SecretStore backend alias/path, namespace convention, runtime identity names,
+  owning service/runtime, purpose, rotation cadence/owner, break-glass owner,
+  `secret.resolve` audit row IDs/hashes/counts, allow/deny outcomes,
+  CI/deploy artifact URLs, and release/rollback approval references.
+- Forbidden fields: plaintext secret values, bearer/API keys, resolved
+  `SecretRef` material, raw staging endpoint URLs, raw model identifiers when
+  they are considered sensitive by the staging owner, value-derived hashes or
+  fingerprints, sensitive raw backend paths, env dumps, shell xtrace output,
+  `secrets.*` GitHub context output, provider error bodies containing
+  credentials, or screenshots/logs that bypass RBAC/redaction.
+- Required negative proof: the attached CI/deploy evidence must identify the
+  secret-scan or equivalent control that rejects high-risk secret markers,
+  GitHub `secrets` context echoing, `environment: staging` binding in this
+  contract-only workflow, env dump commands, and xtrace before the staging
+  packet can be treated as ready. The same packet must include SecretStore
+  allow/deny smoke and `secret.resolve` audit metadata without resolved
+  material before it can be treated as staging-ready.
+
 - TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing the SecretStore backend alias/path.
   Required decision: External staging owners must name the Vault mount/path or cloud KMS/secret-manager alias used by staging without exposing plaintext secret values.
 - TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing the SecretRef namespace convention and runtime identity map.
@@ -343,8 +617,8 @@ dumps, or deployment credentials in this repository.
   Required decision: External staging owners must list initial SecretRef identifiers, owning service/runtime, and intended purpose only; resolved secret material must remain outside this repository.
 - TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing rotation and break-glass ownership.
   Required decision: External staging owners must name the rotation owner/cadence and break-glass/update procedure before staging deploy.
-- TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing CI/deploy negative-log proof.
-  Required decision: External staging owners must provide the evidence artifact location proving no plaintext secret materialization, no env dump, and no RBAC/redaction weakening in staging CI/deploy logs.
+- TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing CI/deploy negative-log, secret-scan or equivalent negative control, and SecretStore resolution proof.
+  Required decision: External staging owners must provide the evidence artifact location proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext secret materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening in staging CI/deploy logs.
 
 ## Next 24h Actions
 
@@ -353,9 +627,15 @@ dumps, or deployment credentials in this repository.
 2. Hand external Product Open to the resolved staging owners:
    `release-approvers` for approval and `platform-oncall` for rollback.
 3. Obtain the concrete external staging deploy target, SecretStore provisioning
-   evidence, release approver, and rollback confirmation before any staging/open
-   deployment.
-4. Keep the durable security audit writer wired as broader security-relevant app
+   evidence, release approval evidence under `release-approvers`, and rollback
+   confirmation under `platform-oncall` before any staging/open deployment.
+4. Have the staging LLM owner run the D5 Codex SSE PoC with SecretRef-resolved
+   credentials outside the repo and attach redacted mandatory PASS evidence.
+5. Define the next repo-owned runtime slice: real executor orchestration,
+   artifact redaction/retention jobs, executor audit semantics, and real app
+   artifact-read routing backed by the redaction/RBAC
+   `ArtifactRef`/`ObjectRef` boundary.
+6. Keep the durable security audit writer wired as broader security-relevant app
    routes are implemented.
-5. Keep any new unresolved behavior out of implementation paths unless it uses
+7. Keep any new unresolved behavior out of implementation paths unless it uses
    the repository blocked-decision marker with nearby required-decision text.

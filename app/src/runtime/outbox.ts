@@ -42,6 +42,8 @@ export interface OutboxEmit {
   readonly correlationId: string;
   readonly runId?: string;
   readonly workitemId?: string;
+  readonly stepId?: string;
+  readonly attempt?: number;
   readonly idempotencyKey: string;
   readonly occurredAt?: Date;
   readonly retentionPolicy: EventsOutboxRetentionPolicy;
@@ -56,16 +58,17 @@ export async function emitOutboxEvent(client: PoolClient, e: OutboxEmit): Promis
   if (payloadSchemaRef === undefined) {
     throw new Error(`emitOutboxEvent: no payload_schema_ref for event_type ${e.eventType}`);
   }
+  validateStepReference(e);
   const retentionDurationSeconds = validateEventsOutboxRetentionPolicy(e.retentionPolicy);
   const eventId = randomUUID();
   const inserted = await client.query<{ retention_until: Date }>(
     `INSERT INTO events_outbox
-       (event_id, event_type, event_version, tenant_id, run_id, workitem_id,
+       (event_id, event_type, event_version, tenant_id, run_id, workitem_id, step_id, attempt,
         correlation_id, ordering_key, occurred_at, idempotency_key, payload_schema_ref, payload,
         retention_until)
-     VALUES ($1::uuid, $2, 1, $3::uuid, $4::uuid, $5::uuid,
-             $6::uuid, $7, COALESCE($8::timestamptz, now()), $9, $10, '{}'::jsonb,
-             now() + ($11::double precision * interval '1 second'))
+     VALUES ($1::uuid, $2, 1, $3::uuid, $4::uuid, $5::uuid, $6, $7::int,
+             $8::uuid, $9, COALESCE($10::timestamptz, now()), $11, $12, '{}'::jsonb,
+             now() + ($13::double precision * interval '1 second'))
      RETURNING retention_until`,
     [
       eventId,
@@ -73,6 +76,8 @@ export async function emitOutboxEvent(client: PoolClient, e: OutboxEmit): Promis
       e.tenantId,
       e.runId ?? null,
       e.workitemId ?? null,
+      e.stepId ?? null,
+      e.attempt ?? null,
       e.correlationId,
       e.runId ?? e.workitemId ?? null, // ordering_key 기본 = run_id(없으면 workitem_id)
       e.occurredAt ?? null,
@@ -86,6 +91,33 @@ export async function emitOutboxEvent(client: PoolClient, e: OutboxEmit): Promis
     throw new Error("emitOutboxEvent: insert did not return retention_until");
   }
   return { eventId, eventType: e.eventType, idempotencyKey: e.idempotencyKey, payloadSchemaRef, retentionUntil };
+}
+
+function validateStepReference(e: OutboxEmit): void {
+  const hasAnyStepRef = e.stepId !== undefined || e.attempt !== undefined;
+  if (e.eventType.startsWith("step.")) {
+    if (
+      e.runId === undefined ||
+      typeof e.stepId !== "string" ||
+      e.stepId.trim().length === 0 ||
+      !Number.isInteger(e.attempt) ||
+      (e.attempt ?? -1) < 0
+    ) {
+      throw new Error(`emitOutboxEvent: ${e.eventType} requires runId, stepId, and non-negative integer attempt`);
+    }
+    return;
+  }
+  if (hasAnyStepRef) {
+    if (
+      e.runId === undefined ||
+      typeof e.stepId !== "string" ||
+      e.stepId.trim().length === 0 ||
+      !Number.isInteger(e.attempt) ||
+      (e.attempt ?? -1) < 0
+    ) {
+      throw new Error("emitOutboxEvent: step reference requires runId, stepId, and non-negative integer attempt");
+    }
+  }
 }
 
 function validateEventsOutboxRetentionPolicy(policy: EventsOutboxRetentionPolicy | undefined): number {

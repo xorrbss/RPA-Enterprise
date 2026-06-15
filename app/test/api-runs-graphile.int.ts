@@ -1,8 +1,8 @@
 /**
  * D4.3 integration test - POST /v1/runs uses the real Graphile enqueuer.
  *
- * This verifies enqueue evidence only. It intentionally does not consume
- * run_claim jobs because the D3 executor is not implemented in this slice.
+ * This verifies enqueue evidence and the obsolete run_claim path after a
+ * queued run is aborted before Graphile consumes the job.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -18,13 +18,15 @@ import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import { PgGraphileRunEnqueuer, type RunEnqueueInput, type RunEnqueuer } from "../src/api/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
-import { RUNTIME_JOB_TASK } from "../src/worker/graphile-runner";
+import { RUNTIME_JOB_TASK, runOnceRuntimeWorker } from "../src/worker/graphile-runner";
+import type { BrowserLeasePlanResolver } from "../src/worker/runtime-worker";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_api_graphile_int";
 const TENANT = "00000000-0000-0000-0000-0000000000d4";
 const SCENARIO = "10000000-0000-0000-0000-0000000000d3";
 const SVER = "10000000-0000-0000-0000-0000000000d4";
+const WORKER = "10000000-0000-0000-0000-0000000000d5";
 const SECRET = new TextEncoder().encode("d43-graphile-test-secret-do-not-use-in-prod");
 
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -92,6 +94,7 @@ async function main(): Promise<void> {
   try {
     const setup = await pool.connect();
     try {
+      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));
@@ -104,6 +107,11 @@ async function main(): Promise<void> {
     console.log("migrations applied (app schema + graphile_worker)");
 
     const token = await mint();
+    let staleRunClaimResolverCalls = 0;
+    const staleRunClaimPlan: BrowserLeasePlanResolver = async () => {
+      staleRunClaimResolverCalls += 1;
+      throw new Error("obsolete run_claim must not resolve a browser lease plan");
+    };
     const realEnqueuer = new PgGraphileRunEnqueuer();
     const app = buildServer({
       pool,
@@ -140,9 +148,23 @@ async function main(): Promise<void> {
         check("run row committed", rows.rows[0]?.runs === 1, JSON.stringify(rows.rows[0]));
         check("run.created outbox committed", rows.rows[0]?.events === 1, JSON.stringify(rows.rows[0]));
       });
+      const aborted = await app.inject({
+        method: "POST",
+        url: `/v1/runs/${committedRunId}/abort`,
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": "graphile-run-abort-before-worker" },
+      });
+      check("queued graphile run aborts before worker -> 202", aborted.statusCode === 202, aborted.body);
+      check("queued graphile run abort body.status=cancelled", aborted.json().status === "cancelled", aborted.body);
     } finally {
       await app.close();
     }
+
+    await runOnceRuntimeWorker(connectionString(), pool, {
+      workerId: WORKER,
+      browserLeasePlanResolver: staleRunClaimPlan,
+    });
+    check("obsolete run_claim does not invoke lease resolver", staleRunClaimResolverCalls === 0);
+    check("obsolete run_claim job consumed", (await graphilePayloadForRun(pool, committedRunId)) === null);
 
     let attemptedRollbackRunId: string | null = null;
     const rollbackEnqueuer: RunEnqueuer = {
@@ -150,6 +172,9 @@ async function main(): Promise<void> {
         attemptedRollbackRunId = input.runId;
         await realEnqueuer.enqueueRunClaim(client, input);
         throw new Error("test rollback after graphile enqueue");
+      },
+      async enqueueRunAbort(client, input: RunEnqueueInput) {
+        await realEnqueuer.enqueueRunAbort(client, input);
       },
     };
     const rollbackApp = buildServer({

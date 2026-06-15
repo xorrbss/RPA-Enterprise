@@ -32,7 +32,7 @@ export interface StructuredOutputValidator {
 
 /** 누적 출력 저장 포트 → outputRef(§6 artifact). */
 export interface GatewayArtifactSink {
-  put(content: string, meta: Pick<LLMRequest["metadata"], "tenantId" | "runId" | "stepId">): Promise<ArtifactRef>;
+  put(content: string, meta: Pick<LLMRequest["metadata"], "tenantId" | "runId" | "stepId" | "attempt">): Promise<ArtifactRef>;
 }
 
 export interface LlmGatewayConfig {

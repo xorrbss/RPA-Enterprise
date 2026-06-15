@@ -115,3 +115,9 @@ function transitionHumanTask(cur: HumanTaskState, ev: HumanTaskEvent, g: HumanTa
 ```
 
 finalization 일관성: 종결 상태 진입 시 run_steps/workitems/events가 모두 최종값으로 commit되어야 하며, 부분 실패는 R22/W5로 흡수한다.
+
+> TODO: [BLOCKED] Human-task `reassignAssignee` side-effect ownership remains undefined for H5 manual escalate and R15 run coupling.
+> Required decision: Runtime/API owners must define whether `reassignAssignee` maps to an assignee, assignee_role, admin queue, durable human-task routing port, or another explicit assignment policy before control-plane implementations may return successful `escalate` responses; until then they must fail closed and roll back instead of returning success with an unknown reassignment side effect.
+
+> TODO: [BLOCKED] Runtime-owned abort drain/finalization remains undefined for cancelable `suspending` abort responses while bookmark save is in flight.
+> Required decision: Runtime owners must define bookmark-cancel ownership, a durable bookmark-cancel port, or a durable abort intent that waits for `suspended` before applying R16; until then control-plane implementations must keep rejecting `suspending` abort before idempotency reservation instead of returning successful responses with unknown bookmark side effects, preserving no silent false/unknown.

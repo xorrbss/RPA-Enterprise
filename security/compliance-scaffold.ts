@@ -270,7 +270,7 @@ export class ContractArtifactAccessGate implements ArtifactAccessGate {
       };
     }
 
-    return { kind: "allow", artifactRef: `artifact:${artifact.artifactId}` as ArtifactRef };
+    return { kind: "allow", objectRef: artifact.objectRef };
   }
 }
 

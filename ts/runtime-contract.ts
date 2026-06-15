@@ -13,7 +13,15 @@
  * - reserved-handlers.md
  */
 
-import type { ArtifactRef, PageStateRef, SecretRef } from "./core-types";
+import type {
+  ArtifactRef,
+  IRActionType,
+  ObjectRef,
+  PageStateRef,
+  SecretRef,
+  StepResult,
+  StepStatus,
+} from "./core-types";
 import type { ErrorCode } from "./error-catalog";
 import type {
   EventEnvelopeType,
@@ -31,6 +39,7 @@ import type {
   WorkitemState,
 } from "./state-machine-types";
 import type {
+  BypassRlsUseCase,
   CorrelationId,
   LLMCallIdempotencyKey,
   PolicyId,
@@ -190,8 +199,13 @@ export interface LeaseManager {
     ttlMs: number;
   }): Promise<LeaseAcquireResult<BrowserLease>>;
 
-  renewBrowser(input: { leaseId: LeaseId; workerId: WorkerId; ttlMs: number }): Promise<LeaseRenewResult>;
-  drainBrowser(input: { leaseId: LeaseId; workerId: WorkerId; reason: "run_cancelled" | "run_completed" | "sweeper" }): Promise<void>;
+  renewBrowser(input: { tenantId: TenantId; leaseId: LeaseId; workerId: WorkerId; ttlMs: number }): Promise<LeaseRenewResult>;
+  drainBrowser(input: {
+    tenantId: TenantId;
+    leaseId: LeaseId;
+    workerId: WorkerId;
+    reason: "run_cancelled" | "run_completed" | "run_suspended" | "sweeper";
+  }): Promise<void>;
 
   acquireCredential(input: {
     tenantId: TenantId;
@@ -252,6 +266,65 @@ export interface ResumeTokenRepository {
   recover(input: { tenantId: TenantId; runId: RunId }): Promise<ResumeTokenRecovery>;
 }
 
+export interface SessionRestoreInput {
+  tenantId: TenantId;
+  runId: RunId;
+  leaseId: LeaseId;
+  workerId: WorkerId;
+  correlationId: CorrelationId;
+  token: ResumeTokenEnvelope;
+  expectedPageStateRef: PageStateRef;
+  resumeNodeId: string;
+}
+
+export type SessionRestoreResult =
+  | { kind: "restored"; pageStateRef: PageStateRef }
+  | { kind: "login_bypass"; reason: string }
+  | { kind: "terminal_failure"; reason: string }
+  | {
+      kind: "invalid_token";
+      code: Extract<ErrorCode, "CHALLENGE_UNRESOLVED" | "IR_EXPRESSION_RUNTIME">;
+      reason: string;
+    }
+  | {
+      kind: "page_state_mismatch";
+      actualPageStateRef?: PageStateRef;
+      loginBypassPossible: boolean;
+      reason: string;
+    };
+
+export interface SessionRestorer {
+  /**
+   * Performs resume_token verification and browser/session restoration outside
+   * the DB transaction. HMAC/KMS/SecretStore details remain behind this port.
+   */
+  restoreSession(input: SessionRestoreInput): Promise<SessionRestoreResult>;
+}
+
+export interface RunAbortDrainInput {
+  tenantId: TenantId;
+  runId: RunId;
+  leaseId: LeaseId;
+  workerId: WorkerId;
+  correlationId: CorrelationId;
+  timeoutMs: number;
+}
+
+export type RunAbortDrainResult =
+  | { kind: "drained" }
+  | { kind: "timeout" }
+  | { kind: "transient_failed"; retryAfterMs?: number; reason: string }
+  | { kind: "terminal_failed"; reason: string };
+
+export interface RunAbortDrainer {
+  /**
+   * Performs SSE close and browser drain outside the DB transaction. A
+   * successful or timed-out result is finalized through R23/R24 by the runtime
+   * worker; transient failures leave the run in aborting for Graphile retry.
+   */
+  drainAbort(input: RunAbortDrainInput): Promise<RunAbortDrainResult>;
+}
+
 export interface DeadLetterRecord {
   id: string;
   tenantId: TenantId;
@@ -285,22 +358,265 @@ export interface StagehandCallRecord {
   tenantId: TenantId;
   runId: RunId;
   stepId: StepId;
+  attempt: number;
+  idempotencyKey: LLMCallIdempotencyKey;
+  requestHash: string;
   model: string;
   transport: "sse" | "sync";
   streamStatus?: "open" | "done" | "aborted" | "error" | "fallback";
   promptTemplateVersion: string;
   inputRedactedRef?: string;
   outputRef?: ArtifactRef;
-  idempotencyKey?: LLMCallIdempotencyKey;
   inputTokens?: number;
   outputTokens?: number;
   cost?: number;
   ttfbMs?: number;
 }
 
+export interface StepExecutionKey {
+  tenantId: TenantId;
+  runId: RunId;
+  stepId: StepId;
+  attempt: number;
+}
+
+export type RunStepPersistedStatus = "started" | StepStatus;
+
+export interface ExecutorStepAttemptStartInput {
+  tenantId: TenantId;
+  runId: RunId;
+  stepId: StepId;
+  nodeId: string;
+  action: IRActionType;
+  correlationId: CorrelationId;
+  startedAt?: IsoDateTime;
+}
+
+export interface ExecutorStepAttemptStartResult {
+  key: StepExecutionKey;
+  runStepId: string;
+  emittedEvents: readonly EventId[];
+}
+
+export interface ExecutorStepAttemptStore {
+  begin(input: ExecutorStepAttemptStartInput): Promise<ExecutorStepAttemptStartResult>;
+}
+
+export type ExecutorArtifactRedactionStatus = "pending" | "redacted" | "failed" | "not_required";
+
+export interface ExecutorInvocationArtifactMetadata {
+  artifactRef: ArtifactRef;
+  objectRef: ObjectRef;
+  type: string;
+  redactionStatus: Extract<ExecutorArtifactRedactionStatus, "pending">;
+  retentionUntil: IsoDateTime;
+  sha256?: string;
+  legalHold?: boolean;
+  quarantine?: boolean;
+}
+
+export interface ExecutorInvocationRecordInput {
+  key: StepExecutionKey;
+  nodeId: string;
+  correlationId: CorrelationId;
+  result: StepResult;
+  artifacts: readonly ExecutorInvocationArtifactMetadata[];
+}
+
+export interface ExecutorInvocationRecordResult {
+  runStepId: string;
+  emittedEvents: readonly EventId[];
+}
+
+export interface ExecutorInvocationRecorder {
+  record(input: ExecutorInvocationRecordInput): Promise<ExecutorInvocationRecordResult>;
+}
+
+export type ArtifactLifecycleJobKind = "artifact_redaction" | "artifact_retention";
+export type ArtifactLifecycleOperationalUseCase = Extract<
+  BypassRlsUseCase,
+  "artifact_redaction_job" | "artifact_retention_sweeper"
+>;
+
+export interface ArtifactLifecycleTarget {
+  tenantId: TenantId;
+  artifactRef: ArtifactRef;
+  objectRef: ObjectRef;
+  runId?: RunId;
+  stepId?: StepId;
+  attempt?: number;
+  type: string;
+  redactionStatus: ExecutorArtifactRedactionStatus;
+  redactionAttempts: number;
+  sha256?: string;
+  retentionUntil?: IsoDateTime;
+  legalHold: boolean;
+  quarantine: boolean;
+  deletedAt?: IsoDateTime;
+  deletedReason?: string;
+  deletedByJob?: string;
+}
+
+export interface ArtifactLifecycleOperationalAudit {
+  useCase: ArtifactLifecycleOperationalUseCase;
+  action: "bypassrls.use";
+  failClosed: true;
+  correlationId: CorrelationId;
+  reasonCode: string;
+}
+
+export type ArtifactLifecycleClaimId = string & { readonly __brand: "ArtifactLifecycleClaimId" };
+export type ArtifactLifecyclePhase = "claim" | "object_io" | "finalize";
+
+export interface ArtifactLifecycleClaimLease {
+  claimId: ArtifactLifecycleClaimId;
+  jobKind: ArtifactLifecycleJobKind;
+  tenantId: TenantId;
+  artifactRef: ArtifactRef;
+  workerId: WorkerId;
+  correlationId: CorrelationId;
+  claimedAt: IsoDateTime;
+  expiresAt: IsoDateTime;
+  audit: ArtifactLifecycleOperationalAudit;
+  artifactSnapshot: ArtifactLifecycleTarget;
+}
+
+export type ArtifactLifecycleFinalizeOutcome =
+  | { kind: "redacted"; redactedObjectRef: ObjectRef; sha256?: string }
+  | { kind: "not_required"; reason: string }
+  | { kind: "redaction_failed"; terminal: boolean; reason: string; evidenceRef?: ArtifactRef }
+  | { kind: "retention_deleted"; deleteResult: "deleted" | "not_found"; deletedReason: "retention_expired" }
+  | { kind: "retention_transient_failed"; reason: string };
+
+export interface ArtifactLifecycleFinalizeRequest {
+  tenantId: TenantId;
+  claim: ArtifactLifecycleClaimLease;
+  outcome: ArtifactLifecycleFinalizeOutcome;
+}
+
+export interface ArtifactRedactionPolicy {
+  maxAttempts: number;
+}
+
+export interface ArtifactRedactionRequest {
+  tenantId: TenantId;
+  correlationId: CorrelationId;
+  artifact: ArtifactLifecycleTarget;
+  policy: ArtifactRedactionPolicy;
+  audit: ArtifactLifecycleOperationalAudit & { useCase: "artifact_redaction_job" };
+}
+
+export type ArtifactRedactionDecision =
+  | { kind: "redacted"; redactedObjectRef: ObjectRef; sha256?: string }
+  | { kind: "not_required"; reason: string }
+  | { kind: "retryable_failed"; reason: string }
+  | { kind: "terminal_failed"; reason: string; evidenceRef?: ArtifactRef };
+
+export interface ArtifactRedactor {
+  /**
+   * Reads the internal ObjectRef and writes a redaction-safe object/ref behind
+   * this port. Public events/logs/audit payloads must use ArtifactRef only.
+   */
+  redact(input: ArtifactRedactionRequest): Promise<ArtifactRedactionDecision>;
+}
+
+export interface ArtifactRetentionPolicy {
+  deleteReason: "retention_expired";
+}
+
+export interface ArtifactRetentionDeleteRequest {
+  tenantId: TenantId;
+  correlationId: CorrelationId;
+  artifact: ArtifactLifecycleTarget;
+  jobId: string;
+  policy: ArtifactRetentionPolicy;
+  audit: ArtifactLifecycleOperationalAudit & { useCase: "artifact_retention_sweeper" };
+}
+
+export type ArtifactRetentionDeleteResult =
+  | { kind: "deleted" }
+  | { kind: "not_found" }
+  | { kind: "transient_failed"; reason: string };
+
+export interface ArtifactRetentionStore {
+  /**
+   * Deletes the internal object. `deleted` and `not_found` are idempotent
+   * success; `transient_failed` must not set artifacts.deleted_at.
+   */
+  deleteObject(input: ArtifactRetentionDeleteRequest): Promise<ArtifactRetentionDeleteResult>;
+}
+
+export const ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT = {
+  requiresTenantScopedSql: true,
+  applicationRoleMayBypassRls: false,
+  applicationRoleMayMutatePendingArtifacts: false,
+  requiresDedicatedBypassRlsUseCases: [
+    "artifact_redaction_job",
+    "artifact_retention_sweeper",
+  ],
+  requiresAuditBeforeMutation: true,
+  auditAction: "bypassrls.use",
+  auditFailClosed: true,
+  operationalRole: {
+    requiresNonSuperuser: true,
+    mayServeUserTraffic: false,
+  },
+  objectRefInternalOnly: true,
+  publicEvidenceUsesArtifactRefOnly: true,
+  objectRefMayReachLogs: false,
+  claimLease: {
+    requiredBeforeObjectIo: true,
+    persistedOnArtifactRow: true,
+    applicationInsertMaySetClaimLease: false,
+    uniqueClaimIdPerTenant: true,
+    workerAndCorrelationBound: true,
+    shortDbTransactionOnly: true,
+    expiresAtRequired: true,
+    staleLeaseMayBeReclaimed: true,
+    activeUnexpiredClaimDefers: true,
+    retryAfterRequired: true,
+    objectIoInsideClaimTransaction: false,
+  },
+  finalizeCas: {
+    requiredAfterObjectIo: true,
+    requiresClaimId: true,
+    requiresUnexpiredClaim: true,
+    tenantScoped: true,
+    staleObjectIoResultMustNotFinalize: true,
+    objectIoInsideFinalizeTransaction: false,
+    unknownPortResultFailClosed: true,
+    portExceptionMessageMayReachLogs: false,
+  },
+  redactionClaim: {
+    redactionStatus: "pending",
+    deletedAt: null,
+    quarantine: false,
+  },
+  redactionFinalizePredicate: {
+    redactionStatus: "pending",
+    deletedAt: null,
+    quarantine: false,
+  },
+  retentionClaim: {
+    deletedAt: null,
+    legalHold: false,
+    quarantine: false,
+    retentionUntil: "past_required",
+  },
+  retentionFinalizePredicate: {
+    deletedAt: null,
+    legalHold: false,
+    quarantine: false,
+    retentionUntil: "past_required",
+  },
+  retentionSuccessKinds: ["deleted", "not_found"],
+  retentionFailureMustNotTombstone: true,
+} as const;
+
 export interface RuntimeWorkerJob {
   kind:
     | "run_claim"
+    | "run_abort"
     | "run_resume"
     | "workitem_checkout"
     | "outbox_relay"
@@ -313,6 +629,7 @@ export interface RuntimeWorkerJob {
   workitemId?: WorkitemId;
   deadLetterId?: string;
   correlationId?: CorrelationId;
+  abortTimeoutMs?: number;
 }
 
 export type RuntimeJobResult =

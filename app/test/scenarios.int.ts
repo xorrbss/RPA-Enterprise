@@ -121,6 +121,7 @@ async function main(): Promise<void> {
     const coreSql = readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8");
     const setup = await pool.connect();
     try {
+      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(concurrencySql);
@@ -130,7 +131,7 @@ async function main(): Promise<void> {
     }
     console.log("migrations applied (concurrency → core)");
 
-    const enqueuer: RunEnqueuer = { async enqueueRunClaim() {} };
+    const enqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),

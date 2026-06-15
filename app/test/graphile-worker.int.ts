@@ -14,11 +14,18 @@ import type { TenantId } from "../../ts/security-middleware-contract";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent, type OutboxEmit } from "../src/runtime/outbox";
 import { runOnceRuntimeWorker, RUNTIME_JOB_TASK } from "../src/worker/graphile-runner";
+import type { BrowserLeasePlanResolver } from "../src/worker/runtime-worker";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_gw_int";
 const TENANT = "00000000-0000-0000-0000-0000000000c3";
 const CORRELATION = "20000000-0000-0000-0000-0000000000c3";
+const SCENARIO = "30000000-0000-0000-0000-0000000000c3";
+const SCENARIO_VERSION = "30000000-0000-0000-0000-0000000000c4";
+const RUN_CLAIM = "30000000-0000-0000-0000-0000000000c5";
+const WORKER = "40000000-0000-0000-0000-0000000000c3";
+const SITE_PROFILE = "50000000-0000-0000-0000-0000000000c3";
+const BROWSER_IDENTITY = "50000000-0000-0000-0000-0000000000c4";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -36,6 +43,13 @@ function connectionString(): string {
   const db = process.env.PGDATABASE ?? "postgres";
   return `postgres://${user}@${host}:${port}/${db}`;
 }
+
+const runClaimPlan: BrowserLeasePlanResolver = async () => ({
+  siteProfileId: SITE_PROFILE,
+  browserIdentityId: BROWSER_IDENTITY,
+  ttlMs: 60_000,
+  downloadDirRef: "lease://graphile-run-claim",
+});
 
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
@@ -179,6 +193,70 @@ async function main(): Promise<void> {
     });
 
     // TenantId 브랜드 정합(타입 경계 확인 — 런타임 무관, 컴파일 의미).
+    await pool.query(
+      `INSERT INTO workers (id, kind, status, circuit_state)
+       VALUES ($1::uuid,'browser','active','closed')`,
+      [WORKER],
+    );
+    await withTenantTx(pool, TENANT, async (c) => {
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'graphile-runtime-claim')`, [
+        SCENARIO,
+        TENANT,
+      ]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir)
+         VALUES ($1,$2,$3,1,'draft','{"nodes":[]}'::jsonb)`,
+        [SCENARIO_VERSION, TENANT, SCENARIO],
+      );
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id)
+         VALUES ($1,$2,$3,'queued',$4)`,
+        [RUN_CLAIM, TENANT, SCENARIO_VERSION, CORRELATION],
+      );
+      await c.query(
+        `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved)
+         VALUES ($1,$2,'graphile-claim','https://graphile.example/*','green',false)`,
+        [SITE_PROFILE, TENANT],
+      );
+      await c.query(
+        `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label)
+         VALUES ($1,$2,$3,'graphile-claim')`,
+        [BROWSER_IDENTITY, TENANT, SITE_PROFILE],
+      );
+    });
+
+    await quickAddJob({ connectionString: conn }, RUNTIME_JOB_TASK, {
+      kind: "run_claim",
+      tenantId: TENANT,
+      runId: RUN_CLAIM,
+      correlationId: CORRELATION,
+    });
+    await runOnceRuntimeWorker(conn, pool, {
+      workerId: WORKER,
+      browserLeasePlanResolver: runClaimPlan,
+    });
+    console.log("enqueued run_claim + ran configured queue once");
+
+    await withTenantTx(pool, TENANT, async (c) => {
+      const run = await c.query<{ status: string; worker_id: string | null }>(
+        `SELECT status, worker_id::text FROM runs WHERE id=$1::uuid`,
+        [RUN_CLAIM],
+      );
+      check("queue-driven run_claim sets claimed", run.rows[0]?.status === "claimed", JSON.stringify(run.rows[0]));
+      check("queue-driven run_claim sets worker_id", run.rows[0]?.worker_id === WORKER, JSON.stringify(run.rows[0]));
+      const leases = await c.query<{ n: number }>(
+        `SELECT count(*)::int AS n
+           FROM browser_leases
+          WHERE tenant_id=$1::uuid
+            AND run_id=$2::uuid
+            AND owner_worker_id=$3::uuid
+            AND state='active'
+            AND expires_at >= now()`,
+        [TENANT, RUN_CLAIM, WORKER],
+      );
+      check("queue-driven run_claim creates active BrowserLease", leases.rows[0]?.n === 1, `n=${leases.rows[0]?.n}`);
+    });
+
     const _typed: TenantId = TENANT as TenantId;
     void _typed;
   } finally {

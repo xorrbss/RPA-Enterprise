@@ -60,6 +60,7 @@ export interface MinimalArtifact {
   run_id?: string;
   redaction_status: ArtifactRedactionStatus;
   deleted_at?: string;
+  quarantine?: boolean;
   ref: string;
   body: unknown;
 }
@@ -287,10 +288,12 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
 
     const subject: ArtifactAccessSubject = {
       artifactId: artifact.artifact_id,
+      objectRef: artifact.ref as ArtifactAccessSubject["objectRef"],
       tenantId: ctx.principal.tenantId,
       runId: artifact.run_id as RunId | undefined,
       redactionStatus: artifact.redaction_status,
       deletedAt: artifact.deleted_at as IsoDateTime | undefined,
+      quarantine: artifact.quarantine,
     };
     const decision = await this.artifactGate.check(ctx.principal, subject);
     if (decision.kind === "deny") throw new ApiResponseException(decision.code, { stage: decision.stage });
@@ -299,7 +302,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       status: 200,
       body: {
         artifact_id: artifact.artifact_id,
-        ref: decision.artifactRef,
+        ref: decision.objectRef,
         body: artifact.body,
       },
     };

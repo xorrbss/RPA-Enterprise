@@ -9,5 +9,5 @@
     "allowImportingTsExtensions": false,
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["run-poc.ts", "../../src/gateway/**/*.ts", "../../../ts/**/*.ts"]
+  "include": ["*.ts", "../../src/gateway/**/*.ts", "../../../ts/**/*.ts"]
 }

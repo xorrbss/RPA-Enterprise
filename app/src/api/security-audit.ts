@@ -5,6 +5,7 @@ import type { Pool } from "pg";
 import { safeSerialize } from "../../../security/compliance-scaffold";
 import {
   SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+  SECURITY_AUDIT_REQUIRED_ACTIONS,
   type AuditedSecurityDecision,
   type DurableSecurityAuditDecisionWriter,
   type ImmutableAuditLogRecord,
@@ -12,6 +13,9 @@ import {
   type SecurityAuditDecisionAppendInput,
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
+
+// Keep this aligned with the API server's strict ISO-8601 date-time gate for params.as_of.
+const ISO_8601_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 
 export class PgSecurityAuditAppendRequiredError extends Error {
   constructor(
@@ -99,12 +103,44 @@ function assertAuditInput(input: SecurityAuditDecisionAppendInput): void {
   if (input.payloadSchemaRef !== SECURITY_AUDIT_PAYLOAD_SCHEMA_REF) {
     throw new Error("security audit payload_schema_ref is not the v1 boundary schema");
   }
-  if (Number.isNaN(Date.parse(input.occurredAt))) {
+  if (!SECURITY_AUDIT_REQUIRED_ACTIONS.includes(input.action)) {
+    throw new Error(`security audit action is not in the required boundary allowlist: ${input.action}`);
+  }
+  if (!isStrictIsoDateTime(input.occurredAt)) {
     throw new Error("security audit occurredAt must be an ISO timestamp");
   }
-  if (Number.isNaN(Date.parse(input.retentionUntil))) {
+  if (!isStrictIsoDateTime(input.retentionUntil)) {
     throw new Error("security audit retentionUntil must be an ISO timestamp");
   }
+}
+
+function isStrictIsoDateTime(value: string): boolean {
+  const match = ISO_8601_RE.exec(value);
+  if (!match) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, offsetText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  if (month < 1 || month > 12) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  if (offsetText !== "Z") {
+    const offsetHour = Number(offsetText.slice(1, 3));
+    const offsetMinute = Number(offsetText.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+  return day >= 1 && day <= daysInMonth(year, month);
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
 }
 
 function hashAuditRecord(

@@ -19,17 +19,24 @@ const patterns = [
   ["slack token", /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/g],
   ["openai key", /\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b/g],
 ];
+const sensitiveFilenamePatterns = [
+  ["secret-bearing filename", /(^|\/)\.env(?:[.\w-]*)?$/i],
+  ["secret-bearing filename", /(^|\/)(?:id_rsa|id_ed25519|.*\.(?:pem|p12|pfx|key))$/i],
+  ["secret-bearing filename", /(^|\/).*service[-_]?account.*\.json$/i],
+];
 const workflowHazards = [
   ["GitHub secret context reference in contract workflow", /\$\{\{[^}]*\bsecrets\b[^}]*\}\}/g],
   ["staging environment binding in contract workflow", /^\s*environment\s*:\s*(?:"staging"|'staging'|staging)(?=\s*(?:#|$))/gim],
   ["staging environment inline object in contract workflow", /^\s*environment\s*:\s*\{\s*name\s*:\s*(?:"staging"|'staging'|staging)(?=\s*(?:,|\}|#|$))/gim],
   ["staging environment object name in contract workflow", /^\s*environment\s*:\s*\n(?:\s+[A-Za-z0-9_-]+\s*:\s*.*\n)*\s+name\s*:\s*(?:"staging"|'staging'|staging)(?=\s*(?:#|$))/gim],
+];
+const envDumpHazards = [
   [
-    "workflow env dump command",
+    "env dump/xtrace command",
     /^\s*(?:-\s*)?(?:printenv(?:\s|$)|env(?!:)(?:\s|$)|set\s+(?:-[A-Za-z]*x[A-Za-z]*\b|-o\s+xtrace\b)|bash\s+-[A-Za-z]*x[A-Za-z]*\b|(?:pwsh|powershell)(?:\.exe)?\s+-(?:c|command)\s+(?:Get-ChildItem|gci|dir)\s+Env:|(?:Get-ChildItem|gci|dir)\s+Env:)/gim,
   ],
   [
-    "workflow one-line env dump command",
+    "workflow one-line env dump/xtrace command",
     /^\s*(?:-\s*)?run\s*:\s*["']?(?:printenv\b|env\b|set\s+(?:-[A-Za-z]*x[A-Za-z]*\b|-o\s+xtrace\b)|bash\s+-[A-Za-z]*x[A-Za-z]*\b|(?:pwsh|powershell)(?:\.exe)?\s+-(?:c|command)\s+(?:Get-ChildItem|gci|dir)\s+Env:|(?:Get-ChildItem|gci|dir)\s+Env:)/gim,
   ],
 ];
@@ -52,12 +59,13 @@ if (hits.length > 0) {
   process.exit(1);
 }
 
-console.log("secret scan: no high-risk secret markers or staging secret workflow hazards found");
+console.log("secret scan: no high-risk secret markers or staging/workflow/script secret hazards found");
 
 function scanRepository(root) {
   const hits = [];
   for (const abs of walk(root)) {
     const relPath = relative(root, abs).replaceAll("\\", "/");
+    hits.push(...scanPath(relPath));
     const stat = statSync(abs);
     if (stat.size > MAX_BYTES) continue;
 
@@ -73,13 +81,29 @@ function scanRepository(root) {
   return hits;
 }
 
+function scanPath(relPath) {
+  const hits = [];
+  for (const [label, pattern] of sensitiveFilenamePatterns) {
+    pattern.lastIndex = 0;
+    if (pattern.test(relPath)) hits.push(`${relPath}:1: ${label}`);
+  }
+  return hits;
+}
+
 function scanText(text, relPath) {
   const hits = [];
   scanPatterns(text, relPath, patterns, hits);
   if (relPath.startsWith(".github/workflows/")) {
     scanPatterns(text, relPath, workflowHazards, hits);
+    scanPatterns(text, relPath, envDumpHazards, hits);
+  } else if (isScriptSurface(relPath)) {
+    scanPatterns(text, relPath, envDumpHazards, hits);
   }
   return hits;
+}
+
+function isScriptSurface(relPath) {
+  return relPath.startsWith("scripts/") || relPath.endsWith(".sh") || relPath.endsWith(".ps1");
 }
 
 function scanPatterns(text, relPath, scanPatterns, hits) {
@@ -114,6 +138,23 @@ function runSelfTest() {
     ["block env", "name: bad\njobs:\n  test:\n    steps:\n      - run: |\n          env | sort\n"],
     ["block dir env", "name: bad\njobs:\n  test:\n    steps:\n      - run: |\n          dir Env:\n"],
   ];
+  const scriptRejectCases = [
+    ["script printenv", "printenv\n"],
+    ["script set xtrace", "set -x\n"],
+    ["script bash xtrace", "bash -x scripts/deploy.sh\n"],
+    ["script powershell env", "Get-ChildItem Env:\n"],
+  ];
+  const pathRejectCases = [
+    ".env",
+    ".env.example",
+    "secrets/staging.pem",
+    "secrets/staging.p12",
+    "secrets/staging.pfx",
+    "secrets/private.key",
+    "secrets/id_rsa",
+    "secrets/id_ed25519",
+    "secrets/staging-service-account.json",
+  ];
   const allowCases = [
     ["workflow env map", "name: ok\nenv:\n  NODE_VERSION: \"24\"\njobs:\n  test:\n    steps:\n      - run: node scripts/secret-scan.mjs\n"],
     ["ci postgres smoke credentials", "services:\n  postgres:\n    env:\n      POSTGRES_PASSWORD: postgres\nenv:\n  PGSMOKE_USER: rpa_smoke\nsteps:\n  - run: node scripts/db-migration-smoke.mjs --require-non-bypass\n"],
@@ -123,6 +164,14 @@ function runSelfTest() {
   for (const [label, text] of rejectCases) {
     const hits = scanText(text, ".github/workflows/fixture.yml");
     if (hits.length === 0) failures.push(`${label}: expected workflow hazard hit`);
+  }
+  for (const [label, text] of scriptRejectCases) {
+    const hits = scanText(text, "scripts/deploy.sh");
+    if (hits.length === 0) failures.push(`${label}: expected script hazard hit`);
+  }
+  for (const relPath of pathRejectCases) {
+    const hits = scanPath(relPath);
+    if (hits.length === 0) failures.push(`${relPath}: expected sensitive filename hit`);
   }
   for (const [label, text] of allowCases) {
     const hits = scanText(text, ".github/workflows/fixture.yml");
@@ -134,7 +183,7 @@ function runSelfTest() {
     for (const failure of failures) console.error(`FAIL: ${failure}`);
     process.exit(1);
   }
-  console.log("secret scan self-test: workflow hazard fixtures passed");
+  console.log("secret scan self-test: workflow hazard and sensitive filename fixtures passed");
 }
 
 function* walk(dir) {

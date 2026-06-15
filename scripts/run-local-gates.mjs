@@ -46,6 +46,7 @@ if (!skipDb) {
     [
       "db:smoke requires PostgreSQL 15+ server and psql client.",
       "Set PSQL_BIN when psql is not on PATH, and set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE as needed.",
+      "Release DB evidence must use npm --prefix codegen run db:smoke:release or node scripts/db-migration-smoke.mjs --require-non-bypass.",
       "Local db:smoke must use a non-SUPERUSER/non-BYPASSRLS role, matching the CI rpa_smoke role.",
       "Use --skip-db only for local environments without PostgreSQL 15; CI always runs db:smoke.",
     ].join("\n"),
@@ -123,6 +124,7 @@ function verifyNonBypassDbRole() {
       [
         "FAIL: psql is required to prove the local db:smoke role matches CI.",
         "Install PostgreSQL 15 tools, set PSQL_BIN, or use npm --prefix codegen run ci:local:temp-db.",
+        "Release DB evidence should use npm --prefix codegen run db:smoke:release or node scripts/db-migration-smoke.mjs --require-non-bypass.",
       ].join("\n"),
     );
     return 2;

@@ -191,7 +191,8 @@ jobs:
           echo "db:smoke requires a PostgreSQL 15+ server and psql client."
           echo "CI provides postgres:15 at PGHOST=${PGHOST}, PGPORT=${PGPORT}, PGDATABASE=${PGDATABASE}."
           echo "CI runs db:smoke as ${PGSMOKE_USER}, a non-SUPERUSER/non-BYPASSRLS role, so RLS/redaction assertions are not skipped."
-          echo "Local equivalent: npm --prefix codegen run ci:local; use ci:local:no-db only with a documented local PostgreSQL gap."
+          echo "Release evidence command: npm --prefix codegen run db:smoke:release or node scripts/db-migration-smoke.mjs --require-non-bypass."
+          echo "Local full equivalents: npm --prefix codegen run ci:local:temp-db, or ci:local when PG env already points at a non-bypass role; ci:local:no-db is diagnostic skip-only."
           psql --version
           pg_isready -h "${PGHOST}" -p "${PGPORT}" -U "${PGADMIN_USER}" -d postgres
 

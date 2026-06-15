@@ -8,26 +8,40 @@
 import { runOnce, type Task, type TaskList } from "graphile-worker";
 import type pg from "pg";
 
-import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
-import { PgRuntimeWorker } from "./runtime-worker";
+import type { RuntimeJobResult, RuntimeWorkerJob } from "../../../ts/runtime-contract";
+import { PgRuntimeWorker, type PgRuntimeWorkerOptions } from "./runtime-worker";
 
 /** 모든 RuntimeWorkerJob을 처리하는 단일 task 식별자. */
 export const RUNTIME_JOB_TASK = "process_runtime_job";
 
-export function buildTaskList(pool: pg.Pool): TaskList {
-  const worker = new PgRuntimeWorker(pool);
+export function buildTaskList(pool: pg.Pool, workerOptions: PgRuntimeWorkerOptions = {}): TaskList {
+  const worker = new PgRuntimeWorker(pool, workerOptions);
   const task: Task = async (payload) => {
     // graphile는 jsonb로 페이로드를 전달 — RuntimeWorkerJob로 신뢰 경계 검증.
     const job = payload as RuntimeWorkerJob;
     if (job === null || typeof job !== "object" || typeof job.kind !== "string") {
       throw new Error(`process_runtime_job: invalid job payload ${JSON.stringify(payload)}`);
     }
-    await worker.handle(job);
+    assertRuntimeJobCompleted(job, await worker.handle(job));
   };
   return { [RUNTIME_JOB_TASK]: task };
 }
 
+export function assertRuntimeJobCompleted(job: RuntimeWorkerJob, result: RuntimeJobResult): void {
+  if (result.kind === "completed") return;
+  if (result.kind === "deferred") {
+    throw new Error(
+      `process_runtime_job: ${job.kind} deferred with ${result.code}; retryAfterMs=${result.retryAfterMs}`,
+    );
+  }
+  throw new Error(`process_runtime_job: ${job.kind} failed with ${result.code}`);
+}
+
 /** 큐의 대기 잡을 1회 소진하고 종료(테스트/배치). 런타임 상시 소비는 graphile `run`. */
-export async function runOnceRuntimeWorker(connectionString: string, pool: pg.Pool): Promise<void> {
-  await runOnce({ connectionString, taskList: buildTaskList(pool) });
+export async function runOnceRuntimeWorker(
+  connectionString: string,
+  pool: pg.Pool,
+  workerOptions: PgRuntimeWorkerOptions = {},
+): Promise<void> {
+  await runOnce({ connectionString, taskList: buildTaskList(pool, workerOptions) });
 }

@@ -119,6 +119,7 @@ async function main(): Promise<void> {
     runId: "run-dry-0001",
     tenantId: "11111111-1111-1111-1111-111111111111",
     nodeId: "node-1",
+    attempt: 0,
     siteProfileId: "site-1",
     browserIdentityId: "bid-1",
     networkPolicyId: "np-1",

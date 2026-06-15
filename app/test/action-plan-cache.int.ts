@@ -61,6 +61,7 @@ async function main(): Promise<void> {
     const coreSql = readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8");
     const setup = await pool.connect();
     try {
+      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(concurrencySql);

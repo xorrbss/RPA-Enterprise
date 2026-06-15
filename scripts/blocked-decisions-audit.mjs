@@ -130,7 +130,7 @@ const releaseDecisionRules = [
     label: "Worker job payload/completion event contracts are not defined",
     aliases: [
       "Worker job payload/completion event contracts are not defined",
-      "Worker job payloads for run_claim/run_resume/workitem_checkout",
+      "Worker job payloads for run_claim/run_resume/run_abort/workitem_checkout",
       "job-specific input payloads and completion events",
       "artifact jobs",
     ],
@@ -169,14 +169,15 @@ const releaseDecisionRules = [
 
 const activeBlockerRules = [
   {
-    label: "External concrete staging deploy target",
+    label: "External concrete staging platform repo and deploy target identifier",
     aliases: [
       "External concrete staging deploy target",
       "exact staging platform repo",
       "GitHub Environment `staging` protection",
       "concrete deploy target identifier",
-      "rollback owner",
-      "release approver",
+      "release approval evidence",
+      "rollback confirmation",
+      "SecretRef/SecretStore provisioning path",
     ],
   },
   {
@@ -201,6 +202,24 @@ const activeBlockerRules = [
       "audit_log.payload",
       "non-D4.3 writer",
       "producer retention duration/source",
+    ],
+  },
+  {
+    label: "External D5 Codex SSE live capability evidence",
+    aliases: [
+      "External D5 Codex SSE live capability evidence",
+      "Codex SSE live capability evidence",
+      "intended staging model/endpoint",
+      "basic SSE",
+      "prompt-schema safe path",
+      "abort behavior PASS",
+      "native `json_schema`",
+      "model metadata",
+      "absolute HTTPS `CODEX_BASE_URL`",
+      "no credentials/query/fragment material",
+      "CODEX_EVIDENCE_ENDPOINT_ALIAS",
+      "CODEX_EVIDENCE_MODEL_ALIAS",
+      "No plaintext API key",
     ],
   },
   {
@@ -235,12 +254,138 @@ const activeBlockerRules = [
       "audit writer evidence",
     ],
   },
+  {
+    label: "PgRuntimeWorker handles `run_resume`",
+    aliases: [
+      "PgRuntimeWorker handles `run_resume`",
+      "run_resume restore side-effect execution contract",
+      "R17 restoreSession",
+      "SessionRestorer",
+      "ResumeCoordinator",
+      "resume_token",
+      "PageStateRef",
+    ],
+  },
+  {
+    label: "Runtime executor orchestration and audit semantics",
+    aliases: [
+      "Runtime executor orchestration and audit semantics",
+      "Runtime executor orchestration",
+      "executor audit semantics",
+      "real executor orchestration",
+      "real executor invocation",
+      "StepResult",
+      "StepStatus",
+      "step.started",
+      "system/security/challenge/unknown",
+      "artifact redaction/retention jobs",
+      "durable executor audit evidence",
+      "durable audit evidence under RLS",
+    ],
+  },
+  {
+    label: "Runtime artifact_redaction production/staging object I/O and redacted-output implementation",
+    aliases: [
+      "Runtime artifact_redaction production/staging object I/O and redacted-output implementation",
+      "Runtime artifact_redaction object I/O and redacted-output contract",
+      "artifact_redaction object I/O",
+      "redacted-output contract",
+      "ArtifactStore/ArtifactRedactor",
+      "SecretRef-backed ArtifactRedactor",
+      "fakeable-port plumbing",
+      "redaction-safe object/ref",
+      "not_required decision",
+      "redaction_attempts",
+      "object-I/O",
+      "artifact lifecycle fail-closed",
+      "ArtifactRef/ObjectRef boundary",
+      "artifacts.object_ref",
+      "raw object locator",
+      "raw object locators",
+    ],
+  },
+  {
+    label: "Runtime artifact_retention production/staging external object deletion implementation",
+    aliases: [
+      "Runtime artifact_retention production/staging external object deletion implementation",
+      "Runtime artifact_retention external object deletion contract",
+      "artifact_retention external object deletion",
+      "ArtifactStore delete API",
+      "SecretRef-backed ArtifactRetentionStore",
+      "fakeable-port plumbing",
+      "object_ref",
+      "idempotent not-found",
+      "when `deleted_at` may be set",
+      "external artifact purge",
+      "object-I/O",
+      "artifact lifecycle fail-closed",
+      "ArtifactRef/ObjectRef boundary",
+      "artifacts.object_ref",
+      "raw object locator",
+      "raw object locators",
+    ],
+  },
+  {
+    label: "Runtime execution gates prove",
+    aliases: [
+      "Runtime execution gates prove",
+      "tenant boundary",
+      "RBAC/redaction",
+      "no `BYPASSRLS`",
+      "no silent false/unknown",
+      "remote CI evidence",
+    ],
+  },
+  {
+    label: "Runtime-owned abort drain/finalization",
+    aliases: [
+      "Runtime-owned abort drain/finalization",
+      "cancelable `suspending` abort responses",
+      "bookmark-cancel ownership",
+      "durable bookmark-cancel port",
+      "durable abort intent",
+      "abort drain/finalization",
+      "sseClose",
+      "browserDrain",
+      "run.abort_timeout",
+      "R23/R24 finalization",
+      "no silent false/unknown",
+    ],
+  },
+  {
+    label: "Human-task `reassignAssignee` side-effect ownership",
+    aliases: [
+      "Human-task `reassignAssignee` side-effect ownership",
+      "reassignAssignee",
+      "manual escalate",
+      "admin queue",
+      "durable human-task routing port",
+      "unknown reassignment side effect",
+    ],
+  },
 ];
 const activeBlockerSectionHeadings = new Set([
   "## External Staging/Open Blockers",
-  "## Active Repo-Controlled D4.4 Blockers",
+  "## Repo-Controlled D4.5 API P1 Evidence / Open",
+  "## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)",
+]);
+const expectedActiveBlockerSectionCounts = new Map([
+  ["## External Staging/Open Blockers", 8],
+  ["## Repo-Controlled D4.5 API P1 Evidence / Open", 2],
+  ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 4],
 ]);
 const activeChecklistEvidenceRules = [
+  {
+    checklistText: "External concrete staging platform repo and deploy target identifier",
+    todoLineAliases: [
+      "exact staging platform repo",
+      "GitHub Environment `staging` protection/approver configuration",
+      "concrete deploy target identifier",
+      "release approval evidence",
+      "rollback confirmation",
+      "SecretRef/SecretStore provisioning path",
+    ],
+  },
   {
     checklistText: "External staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path",
     todoLineAliases: ["evidence is missing the SecretStore backend alias/path"],
@@ -259,7 +404,21 @@ const activeChecklistEvidenceRules = [
   },
   {
     checklistText: "External staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location",
-    todoLineAliases: ["evidence is missing CI/deploy negative-log proof"],
+    todoLineAliases: [
+      "evidence is missing CI/deploy negative-log",
+      "secret-scan or equivalent negative control",
+      "SecretStore resolution proof",
+    ],
+  },
+  {
+    checklistText: "External D5 Codex SSE live capability evidence",
+    todoLineAliases: [
+      "absolute HTTPS `CODEX_BASE_URL`",
+      "no credentials/query/fragment material",
+      "CODEX_EVIDENCE_ENDPOINT_ALIAS",
+      "CODEX_EVIDENCE_MODEL_ALIAS",
+      "No plaintext API key",
+    ],
   },
   {
     checklistText: "D4.4 events_outbox retention source - policy authority/source",
@@ -312,6 +471,7 @@ const todos = [];
 let releaseDecisionLines = [];
 let activeChecklistLines = [];
 let activeBlockerChecklistItems = [];
+let activeBlockerSectionCounts = new Map();
 let releaseChecklistText = "";
 
 for (const relPath of collectFiles(ROOT)) {
@@ -342,30 +502,57 @@ checkReleaseChecklist();
 checkActionableChecklistTracking();
 checkEventPlaceholderCoverage();
 
+const actionable = actionableTodos().length;
+const auditOutput = buildAuditOutput(actionable);
+checkReportedAuditOutputs(auditOutput);
+
 if (failures.length > 0) {
   console.error(`blocked decision audit: ${failures.length} failed`);
   for (const failure of failures) console.error(`FAIL: ${failure}`);
   process.exit(1);
 }
 
-const actionable = actionableTodos().length;
-console.log(
-  `blocked decision audit: ${todos.length} markers, ${actionable} actionable blockers, ${knownReleaseDecisions.length} known release decisions tracked, ${releaseDecisionLines.length} release decisions checked`,
-);
+console.log(`blocked decision audit: ${auditOutput}`);
 
 function checkReleaseChecklist() {
   const checklist = readFileSync(join(ROOT, "release-open-checklist.md"), "utf8");
   releaseChecklistText = checklist;
   const checklistLines = checklist.split(/\r?\n/);
-  activeChecklistLines = checklistLines.filter((line) => line.trim().startsWith("- [ ]"));
+  const allUncheckedChecklistItems = checklistLines
+    .map((line, index) => ({ line, lineNo: index + 1 }))
+    .filter((item) => item.line.trim().startsWith("- [ ]"));
+  activeChecklistLines = allUncheckedChecklistItems.map((item) => item.line);
   activeBlockerChecklistItems = [];
+  activeBlockerSectionCounts = new Map();
   let inActiveBlockerSection = false;
+  let activeBlockerSectionHeading = "";
   for (const [index, line] of checklistLines.entries()) {
     if (line.startsWith("## ")) {
-      inActiveBlockerSection = activeBlockerSectionHeadings.has(line.trim());
+      activeBlockerSectionHeading = line.trim();
+      inActiveBlockerSection = activeBlockerSectionHeadings.has(activeBlockerSectionHeading);
     }
     if (inActiveBlockerSection && line.trim().startsWith("- [ ]")) {
       activeBlockerChecklistItems.push({ line, lineNo: index + 1 });
+      activeBlockerSectionCounts.set(
+        activeBlockerSectionHeading,
+        (activeBlockerSectionCounts.get(activeBlockerSectionHeading) ?? 0) + 1,
+      );
+    }
+  }
+  if (allUncheckedChecklistItems.length !== activeBlockerChecklistItems.length) {
+    const activeLineNos = new Set(activeBlockerChecklistItems.map((item) => item.lineNo));
+    for (const item of allUncheckedChecklistItems) {
+      if (!activeLineNos.has(item.lineNo)) {
+        failures.push(
+          `release-open-checklist.md:${item.lineNo}: unchecked checklist row must live under a configured active blocker section`,
+        );
+      }
+    }
+  }
+  for (const [heading, expected] of expectedActiveBlockerSectionCounts) {
+    const actual = activeBlockerSectionCounts.get(heading) ?? 0;
+    if (actual !== expected) {
+      failures.push(`release-open-checklist.md: expected ${expected} active blockers in ${heading}, found ${actual}`);
     }
   }
   const sectionMatch = checklist.match(/## Resolved Release Decisions([\s\S]*?)(?:\n## |$)/);
@@ -563,8 +750,34 @@ function todoMatchesActiveBlockerRule(todo, rule) {
 }
 
 function todoLineMatchesEvidenceRule(todo, rule) {
-  const line = todo.line.toLocaleLowerCase("en-US");
-  return rule.todoLineAliases.some((alias) => line.includes(alias.toLocaleLowerCase("en-US")));
+  const text = `${todo.line}\n${todo.context}`.toLocaleLowerCase("en-US");
+  return rule.todoLineAliases.every((alias) => text.includes(alias.toLocaleLowerCase("en-US")));
+}
+
+function buildAuditOutput(actionable) {
+  const externalCount = activeBlockerSectionCounts.get("## External Staging/Open Blockers") ?? 0;
+  const repoD45Count =
+    activeBlockerSectionCounts.get("## Repo-Controlled D4.5 API P1 Evidence / Open") ?? 0;
+  const repoD3Count =
+    activeBlockerSectionCounts.get("## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)") ?? 0;
+  return `${todos.length} markers, ${actionable} actionable blockers, ${knownReleaseDecisions.length} known release decisions tracked, ${releaseDecisionLines.length} release decisions checked (${externalCount} active external/staging checklist rows; ${repoD45Count} repo-controlled D4.5 API P1 open rows; ${repoD3Count} repo-controlled D3 runtime open rows)`;
+}
+
+function checkReportedAuditOutputs(auditOutput) {
+  const expected = normalizeForAuditOutput(auditOutput);
+  const files = [
+    ["release-open-checklist.md", releaseChecklistText],
+    ["product-open-candidate-report.md", readFileSync(join(ROOT, "product-open-candidate-report.md"), "utf8")],
+  ];
+  for (const [relPath, text] of files) {
+    if (!normalizeForAuditOutput(text).includes(expected)) {
+      failures.push(`${relPath}: Current local blocked:audit output must match computed output: ${auditOutput}`);
+    }
+  }
+}
+
+function normalizeForAuditOutput(value) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function escapeRegExp(value) {

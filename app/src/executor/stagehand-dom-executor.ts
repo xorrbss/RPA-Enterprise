@@ -281,7 +281,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         { role: "user", content: `${a.instruction}\n[page]${context}` },
       ],
       ...(responseFormat ? { responseFormat } : {}),
-      metadata: { tenantId: ctx.tenantId, runId: ctx.runId, stepId, primitive: a.type, correlationId: ctx.runId },
+      metadata: { tenantId: ctx.tenantId, runId: ctx.runId, stepId, attempt: ctx.attempt, primitive: a.type, correlationId: ctx.runId },
       budget: this.cfg.budget,
       idempotencyKey: key,
       requestHash: key,

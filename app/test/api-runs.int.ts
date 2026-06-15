@@ -42,6 +42,7 @@ const CORR_A = "20000000-0000-0000-0000-0000000000a1";
 const SCENARIO_B = "10000000-0000-0000-0000-0000000000b3";
 const SVER_B = "10000000-0000-0000-0000-0000000000b4";
 const RUN_B = "10000000-0000-0000-0000-0000000000b7";
+const WORKITEM_B = "10000000-0000-0000-0000-0000000000b5";
 const CORR_B = "20000000-0000-0000-0000-0000000000b1";
 const ABSENT_RUN = "10000000-0000-0000-0000-0000000000ff";
 
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
     const coreSql = readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8");
     const setup = await pool.connect();
     try {
+      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(concurrencySql);
@@ -122,6 +124,9 @@ async function main(): Promise<void> {
     await withTenantTx(pool, TENANT_A, (c) =>
       c.query(`INSERT INTO workitems (id, tenant_id, connector_id, unique_reference) VALUES ($1,$2,'d43','wi-a')`, [WORKITEM_A, TENANT_A]),
     );
+    await withTenantTx(pool, TENANT_B, (c) =>
+      c.query(`INSERT INTO workitems (id, tenant_id, connector_id, unique_reference) VALUES ($1,$2,'d43','wi-b')`, [WORKITEM_B, TENANT_B]),
+    );
     console.log("seeded runs for tenant A and tenant B");
 
     // run create enqueue 스파이(graphile 미설치 테스트 환경 — enqueue 호출만 기록).
@@ -130,6 +135,7 @@ async function main(): Promise<void> {
       async enqueueRunClaim(_client, input) {
         enqueued.push(input);
       },
+      async enqueueRunAbort() {},
     };
     const app = buildServer({
       pool,
@@ -144,6 +150,7 @@ async function main(): Promise<void> {
     await app.ready();
     try {
       const tokenA = await mint({ sub: "user-a", tenant_id: TENANT_A, roles: ["operator"] });
+      const tokenB = await mint({ sub: "user-b", tenant_id: TENANT_B, roles: ["operator"] });
       const tokenNoTenant = await mint({ sub: "user-x", roles: ["operator"] });
       const tokenViewer = await mint({ sub: "user-v", tenant_id: TENANT_A, roles: ["viewer"] });
       const tokenNoRole = await mint({ sub: "user-z", tenant_id: TENANT_A, roles: [] });
@@ -300,10 +307,15 @@ async function main(): Promise<void> {
 
       // 6c) 최초 생성 → 201 queued + as_of 1회 고정 + enqueue 1회.
       const createBody = { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T09:00:00Z" } };
+      const createCorrelationId = "20000000-0000-0000-0000-00000000c001";
       const created = await app.inject({
         method: "POST",
         url: "/v1/runs",
-        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-1" },
+        headers: {
+          authorization: `Bearer ${tokenA}`,
+          "idempotency-key": "run-create-1",
+          "x-correlation-id": createCorrelationId,
+        },
         payload: createBody,
       });
       check("POST /runs → 201", created.statusCode === 201, created.body);
@@ -311,6 +323,7 @@ async function main(): Promise<void> {
       check("created status=queued", createdBody.status === "queued", JSON.stringify(createdBody));
       check("created as_of fixed", createdBody.as_of === "2026-06-14T09:00:00Z", JSON.stringify(createdBody));
       check("enqueue called once", enqueued.length === 1, `enqueued=${enqueued.length}`);
+      check("enqueue correlation_id matches request", enqueued[0]?.correlationId === createCorrelationId, JSON.stringify(enqueued[0]));
       const firstRunId = createdBody.run_id;
 
       // 6d) 동일 키+본문 재요청 → 멱등 재생(같은 응답, 새 run/enqueue 없음).
@@ -335,10 +348,18 @@ async function main(): Promise<void> {
 
       // 6f) runs 행은 정확히 1건 + run.created outbox 1건(재생/충돌이 중복 부작용 없음).
       await withTenantTx(pool, TENANT_A, async (c) => {
-        const n = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM runs WHERE id = $1::uuid`, [firstRunId]);
+        const n = await c.query<{ n: number; correlation_id: string | null }>(
+          `SELECT count(*)::int AS n, max(correlation_id::text) AS correlation_id FROM runs WHERE id = $1::uuid`,
+          [firstRunId],
+        );
         check("exactly 1 run row for idempotent create", n.rows[0]?.n === 1, `n=${n.rows[0]?.n}`);
-        const ev = await c.query(`SELECT 1 FROM events_outbox WHERE run_id=$1::uuid AND event_type='run.created'`, [firstRunId]);
+        check("run correlation_id matches request", n.rows[0]?.correlation_id === createCorrelationId, JSON.stringify(n.rows[0]));
+        const ev = await c.query<{ correlation_id: string }>(
+          `SELECT correlation_id::text FROM events_outbox WHERE run_id=$1::uuid AND event_type='run.created'`,
+          [firstRunId],
+        );
         check("run.created outbox emitted", ev.rowCount === 1, `rowCount=${ev.rowCount}`);
+        check("run.created outbox correlation_id matches request", ev.rows[0]?.correlation_id === createCorrelationId, JSON.stringify(ev.rows[0]));
         const idem = await c.query<{ has_retention: boolean; retention_matches_expiry: boolean }>(
           `SELECT retention_until IS NOT NULL AS has_retention,
                   retention_until = expires_at AS retention_matches_expiry
@@ -373,6 +394,84 @@ async function main(): Promise<void> {
       });
       check("in-flight dup → 409", inflight.statusCode === 409, inflight.body);
       check("in-flight → WORKITEM_CHECKOUT_CONFLICT", inflight.json().code === "WORKITEM_CHECKOUT_CONFLICT", inflight.body);
+
+      const expiredBody = { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T11:10:00Z" } };
+      const expiredHash = canonicalRequestHash("POST", "/v1/runs", expiredBody) as CanonicalRequestHash;
+      const expiredReserved = await store.reserve({
+        tenantId: TENANT_A as TenantId,
+        endpoint: "createRun",
+        key: "run-create-expired" as IdempotencyKey,
+        requestHash: expiredHash,
+        expiresAt: new Date(Date.now() - 3600000).toISOString(),
+      });
+      check("expired processing seed → reserved", expiredReserved.kind === "reserved", JSON.stringify(expiredReserved));
+      const reclaimedExpiresAt = new Date(Date.now() + 3600000).toISOString();
+      const expiredReclaimed = await store.reserve({
+        tenantId: TENANT_A as TenantId,
+        endpoint: "createRun",
+        key: "run-create-expired" as IdempotencyKey,
+        requestHash: expiredHash,
+        expiresAt: reclaimedExpiresAt,
+      });
+      check("expired processing same hash → reserved", expiredReclaimed.kind === "reserved", JSON.stringify(expiredReclaimed));
+      if (expiredReserved.kind === "reserved" && expiredReclaimed.kind === "reserved") {
+        check(
+          "expired processing reclaim keeps record id",
+          expiredReclaimed.recordId === expiredReserved.recordId,
+          JSON.stringify({ expiredReserved, expiredReclaimed }),
+        );
+      }
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const reclaimed = await c.query<{
+          status: string;
+          expires_in_future: boolean;
+          retention_matches_expiry: boolean;
+        }>(
+          `SELECT status,
+                  expires_at > now() AS expires_in_future,
+                  retention_until = expires_at AS retention_matches_expiry
+             FROM control_plane_idempotency_keys
+            WHERE endpoint='createRun' AND idempotency_key=$1`,
+          ["run-create-expired"],
+        );
+        check("expired processing reclaim row exists", reclaimed.rowCount === 1, `rowCount=${reclaimed.rowCount}`);
+        check("expired processing reclaim stays processing", reclaimed.rows[0]?.status === "processing", JSON.stringify(reclaimed.rows[0]));
+        check(
+          "expired processing reclaim refreshes expires_at",
+          reclaimed.rows[0]?.expires_in_future === true,
+          JSON.stringify(reclaimed.rows[0]),
+        );
+        check(
+          "expired processing reclaim refreshes retention_until",
+          reclaimed.rows[0]?.retention_matches_expiry === true,
+          JSON.stringify(reclaimed.rows[0]),
+        );
+      });
+      const expiredMismatchBody = { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T11:20:00Z" } };
+      const expiredMismatchReserved = await store.reserve({
+        tenantId: TENANT_A as TenantId,
+        endpoint: "createRun",
+        key: "run-create-expired-mismatch" as IdempotencyKey,
+        requestHash: canonicalRequestHash("POST", "/v1/runs", expiredMismatchBody) as CanonicalRequestHash,
+        expiresAt: new Date(Date.now() - 3600000).toISOString(),
+      });
+      check(
+        "expired processing mismatch seed → reserved",
+        expiredMismatchReserved.kind === "reserved",
+        JSON.stringify(expiredMismatchReserved),
+      );
+      const expiredMismatch = await store.reserve({
+        tenantId: TENANT_A as TenantId,
+        endpoint: "createRun",
+        key: "run-create-expired-mismatch" as IdempotencyKey,
+        requestHash: canonicalRequestHash("POST", "/v1/runs", { ...expiredMismatchBody, params: {} }) as CanonicalRequestHash,
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      });
+      check(
+        "expired processing different hash → request_hash_mismatch",
+        expiredMismatch.kind === "blocked" && expiredMismatch.reason === "request_hash_mismatch",
+        JSON.stringify(expiredMismatch),
+      );
 
       // 6h) RBAC: viewer는 run.create 미허용 → 403(멱등 예약 이전 차단; key 오염 금지).
       const viewerCreate = await app.inject({
@@ -417,6 +516,141 @@ async function main(): Promise<void> {
       );
       check("viewer deny did not poison key", enqueued.length === 2, `enqueued=${enqueued.length}`);
 
+      const beforeCrossTenantCommandEnqueue = enqueued.length;
+      const crossTenantScenario = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-cross-tenant-sver" },
+        payload: { scenario_version_id: SVER_B, params: { as_of: "2026-06-14T11:05:00Z" } },
+      });
+      check("cross-tenant scenario_version POST → 422", crossTenantScenario.statusCode === 422, crossTenantScenario.body);
+      check(
+        "cross-tenant scenario_version POST → scenario_version_not_found",
+        crossTenantScenario.json().details?.reason === "scenario_version_not_found",
+        crossTenantScenario.body,
+      );
+      check("cross-tenant scenario_version POST no enqueue", enqueued.length === beforeCrossTenantCommandEnqueue, `enqueued=${enqueued.length}`);
+      const tenantBIndependentScenario = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenB}`, "idempotency-key": "run-create-cross-tenant-sver" },
+        payload: { scenario_version_id: SVER_B, params: { as_of: "2026-06-14T11:05:00Z" } },
+      });
+      check("same idempotency key usable by tenant B → 201", tenantBIndependentScenario.statusCode === 201, tenantBIndependentScenario.body);
+      check("tenant B independent scenario enqueue once", enqueued.length === beforeCrossTenantCommandEnqueue + 1, `enqueued=${enqueued.length}`);
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const a = await c.query<{ status: string; response_reason: string | null }>(
+          `SELECT status, response_body->'details'->>'reason' AS response_reason
+             FROM control_plane_idempotency_keys
+            WHERE endpoint='createRun' AND idempotency_key=$1`,
+          ["run-create-cross-tenant-sver"],
+        );
+        check("tenant A cross-tenant scenario failure idempotency row exists", a.rowCount === 1, `rowCount=${a.rowCount}`);
+        check("tenant A cross-tenant scenario failure persisted", a.rows[0]?.status === "failed", JSON.stringify(a.rows[0]));
+        check(
+          "tenant A cross-tenant scenario failure reason persisted",
+          a.rows[0]?.response_reason === "scenario_version_not_found",
+          JSON.stringify(a.rows[0]),
+        );
+      });
+      await withTenantTx(pool, TENANT_B, async (c) => {
+        const b = await c.query<{ n: number; idem_status: string }>(
+          `SELECT
+             (SELECT count(*)::int FROM runs WHERE id=$1::uuid) AS n,
+             i.status AS idem_status
+           FROM control_plane_idempotency_keys i
+          WHERE i.endpoint='createRun' AND i.idempotency_key=$2`,
+          [tenantBIndependentScenario.json().run_id, "run-create-cross-tenant-sver"],
+        );
+        check("tenant B same key created exactly one run", b.rows[0]?.n === 1, JSON.stringify(b.rows[0]));
+        check("tenant B same key idempotency row succeeded", b.rows[0]?.idem_status === "succeeded", JSON.stringify(b.rows[0]));
+      });
+
+      const beforeCrossTenantWorkitemEnqueue = enqueued.length;
+      const crossTenantWorkitem = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-cross-tenant-workitem" },
+        payload: { scenario_version_id: SVER_A, workitem_id: WORKITEM_B, params: { as_of: "2026-06-14T11:06:00Z" } },
+      });
+      check("cross-tenant workitem POST → 422", crossTenantWorkitem.statusCode === 422, crossTenantWorkitem.body);
+      check(
+        "cross-tenant workitem POST → workitem_not_found",
+        crossTenantWorkitem.json().details?.reason === "workitem_not_found",
+        crossTenantWorkitem.body,
+      );
+      check("cross-tenant workitem POST no enqueue", enqueued.length === beforeCrossTenantWorkitemEnqueue, `enqueued=${enqueued.length}`);
+      const tenantBIndependentWorkitem = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenB}`, "idempotency-key": "run-create-cross-tenant-workitem" },
+        payload: { scenario_version_id: SVER_B, workitem_id: WORKITEM_B, params: { as_of: "2026-06-14T11:06:00Z" } },
+      });
+      check("same workitem key usable by tenant B → 201", tenantBIndependentWorkitem.statusCode === 201, tenantBIndependentWorkitem.body);
+      check("tenant B independent workitem enqueue once", enqueued.length === beforeCrossTenantWorkitemEnqueue + 1, `enqueued=${enqueued.length}`);
+      await withTenantTx(pool, TENANT_B, async (c) => {
+        const b = await c.query<{ workitem_id: string | null; idem_status: string }>(
+          `SELECT r.workitem_id, i.status AS idem_status
+             FROM runs r
+             JOIN control_plane_idempotency_keys i ON i.response_body->>'run_id' = r.id::text
+            WHERE r.id=$1::uuid AND i.endpoint='createRun' AND i.idempotency_key=$2`,
+          [tenantBIndependentWorkitem.json().run_id, "run-create-cross-tenant-workitem"],
+        );
+        check("tenant B same workitem key linked to tenant B workitem", b.rows[0]?.workitem_id === WORKITEM_B, JSON.stringify(b.rows[0]));
+        check("tenant B same workitem key idempotency row succeeded", b.rows[0]?.idem_status === "succeeded", JSON.stringify(b.rows[0]));
+      });
+
+      const apiReclaimBody = { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T11:30:00Z" } };
+      const apiReclaimHash = canonicalRequestHash("POST", "/v1/runs", apiReclaimBody) as CanonicalRequestHash;
+      const apiReclaimSeed = await store.reserve({
+        tenantId: TENANT_A as TenantId,
+        endpoint: "createRun",
+        key: "run-create-expired-api" as IdempotencyKey,
+        requestHash: apiReclaimHash,
+        expiresAt: new Date(Date.now() - 3600000).toISOString(),
+      });
+      check("API expired processing seed → reserved", apiReclaimSeed.kind === "reserved", JSON.stringify(apiReclaimSeed));
+      const beforeApiReclaimEnqueue = enqueued.length;
+      const apiReclaim = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-expired-api" },
+        payload: apiReclaimBody,
+      });
+      check("API expired processing same hash → 201", apiReclaim.statusCode === 201, apiReclaim.body);
+      const apiReclaimBodyJson = apiReclaim.json();
+      check("API expired processing enqueues once", enqueued.length === beforeApiReclaimEnqueue + 1, `enqueued=${enqueued.length}`);
+      const apiReclaimReplay = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-expired-api" },
+        payload: apiReclaimBody,
+      });
+      check("API expired processing replay → 201", apiReclaimReplay.statusCode === 201, apiReclaimReplay.body);
+      check("API expired processing replay same run_id", apiReclaimReplay.json().run_id === apiReclaimBodyJson.run_id, apiReclaimReplay.body);
+      check("API expired processing replay no extra enqueue", enqueued.length === beforeApiReclaimEnqueue + 1, `enqueued=${enqueued.length}`);
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const r = await c.query<{
+          run_count: number;
+          outbox_count: number;
+          idem_status: string;
+          response_status: number | null;
+        }>(
+          `SELECT
+             (SELECT count(*)::int FROM runs WHERE id=$1::uuid) AS run_count,
+             (SELECT count(*)::int FROM events_outbox WHERE idempotency_key=$1::text || ':run.created') AS outbox_count,
+             i.status AS idem_status,
+             i.response_status
+           FROM control_plane_idempotency_keys i
+          WHERE i.endpoint='createRun' AND i.idempotency_key=$2`,
+          [apiReclaimBodyJson.run_id, "run-create-expired-api"],
+        );
+        check("API expired processing created one run", r.rows[0]?.run_count === 1, JSON.stringify(r.rows[0]));
+        check("API expired processing emitted one outbox event", r.rows[0]?.outbox_count === 1, JSON.stringify(r.rows[0]));
+        check("API expired processing completed idempotency row", r.rows[0]?.idem_status === "succeeded", JSON.stringify(r.rows[0]));
+        check("API expired processing persisted response_status=201", r.rows[0]?.response_status === 201, JSON.stringify(r.rows[0]));
+      });
+
       // 6i) 잘못된 as_of(비-ISO) → 422 IR_SCHEMA_INVALID(예약 이전, ::timestamptz cast 500 회피).
       const badAsOf = await app.inject({
         method: "POST",
@@ -426,6 +660,14 @@ async function main(): Promise<void> {
       });
       check("invalid as_of → 422", badAsOf.statusCode === 422, badAsOf.body);
       check("invalid as_of → IR_SCHEMA_INVALID", badAsOf.json().code === "IR_SCHEMA_INVALID", badAsOf.body);
+      const impossibleAsOf = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-impossible-asof" },
+        payload: { scenario_version_id: SVER_A, params: { as_of: "2026-02-31T00:00:00Z" } },
+      });
+      check("calendar-invalid as_of → 422", impossibleAsOf.statusCode === 422, impossibleAsOf.body);
+      check("calendar-invalid as_of → IR_SCHEMA_INVALID", impossibleAsOf.json().code === "IR_SCHEMA_INVALID", impossibleAsOf.body);
 
       // 6j) workitem_id 연결: 존재하는 workitem → 201 + runs.workitem_id 연결(무성 드롭 아님).
       const linked = await app.inject({
@@ -438,6 +680,68 @@ async function main(): Promise<void> {
       await withTenantTx(pool, TENANT_A, async (c) => {
         const r = await c.query<{ workitem_id: string | null }>(`SELECT workitem_id FROM runs WHERE id=$1::uuid`, [linked.json().run_id]);
         check("run linked to workitem", r.rows[0]?.workitem_id === WORKITEM_A, JSON.stringify(r.rows[0]));
+      });
+
+      const beforeDuplicateWorkitemEnqueue = enqueued.length;
+      const duplicateWorkitemRun = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-wi-duplicate" },
+        payload: { scenario_version_id: SVER_A, workitem_id: WORKITEM_A, params: { as_of: "2026-06-14T12:01:00Z" } },
+      });
+      check("duplicate workitem_id with new key → 409", duplicateWorkitemRun.statusCode === 409, duplicateWorkitemRun.body);
+      const duplicateWorkitemBody = duplicateWorkitemRun.json();
+      check("duplicate workitem_id → WORKITEM_CHECKOUT_CONFLICT", duplicateWorkitemBody.code === "WORKITEM_CHECKOUT_CONFLICT", duplicateWorkitemRun.body);
+      check(
+        "duplicate workitem_id details.reason=workitem_run_exists",
+        duplicateWorkitemBody.details?.reason === "workitem_run_exists",
+        duplicateWorkitemRun.body,
+      );
+      check("duplicate workitem_id did not enqueue", enqueued.length === beforeDuplicateWorkitemEnqueue, `enqueued=${enqueued.length}`);
+      const duplicateWorkitemReplay = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-wi-duplicate" },
+        payload: { scenario_version_id: SVER_A, workitem_id: WORKITEM_A, params: { as_of: "2026-06-14T12:01:00Z" } },
+      });
+      check("duplicate workitem_id replay → same 409", duplicateWorkitemReplay.statusCode === 409, duplicateWorkitemReplay.body);
+      const duplicateWorkitemReplayBody = duplicateWorkitemReplay.json();
+      check(
+        "duplicate workitem_id replay details.reason=workitem_run_exists",
+        duplicateWorkitemReplayBody.details?.reason === "workitem_run_exists",
+        duplicateWorkitemReplay.body,
+      );
+      check(
+        "duplicate workitem_id replay correlation_id matches first failure",
+        duplicateWorkitemReplayBody.correlation_id === duplicateWorkitemBody.correlation_id,
+        duplicateWorkitemReplay.body,
+      );
+      check("duplicate workitem_id replay no enqueue", enqueued.length === beforeDuplicateWorkitemEnqueue, `enqueued=${enqueued.length}`);
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const r = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM runs WHERE workitem_id=$1::uuid`, [WORKITEM_A]);
+        check("exactly 1 run per workitem", r.rows[0]?.n === 1, `n=${r.rows[0]?.n}`);
+        const idem = await c.query<{
+          status: string;
+          response_status: number | null;
+          response_code: string | null;
+          response_reason: string | null;
+        }>(
+          `SELECT status, response_status,
+                  response_body->>'code' AS response_code,
+                  response_body->'details'->>'reason' AS response_reason
+             FROM control_plane_idempotency_keys
+            WHERE endpoint='createRun' AND idempotency_key=$1`,
+          ["run-create-wi-duplicate"],
+        );
+        check("duplicate workitem failure idempotency row exists", idem.rowCount === 1, `rowCount=${idem.rowCount}`);
+        check("duplicate workitem failure persisted as failed", idem.rows[0]?.status === "failed", JSON.stringify(idem.rows[0]));
+        check("duplicate workitem failure persisted response_status=409", idem.rows[0]?.response_status === 409, JSON.stringify(idem.rows[0]));
+        check(
+          "duplicate workitem failure persisted response details.reason",
+          idem.rows[0]?.response_code === "WORKITEM_CHECKOUT_CONFLICT" &&
+            idem.rows[0]?.response_reason === "workitem_run_exists",
+          JSON.stringify(idem.rows[0]),
+        );
       });
 
       // 6k) 존재하지 않는 workitem_id → 422(FK 위반 500 아님).

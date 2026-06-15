@@ -8,8 +8,8 @@
  *  - 거부 코드: 일반 역할/액션 권한 부족 → AUTHZ_FORBIDDEN(§2 거부 통일 코드).
  *    자원특정 액션은 SSoT의 보안 코드(artifact/secret→SECRET_ACCESS_DENIED,
  *    connector→CONNECTOR_PERMISSION_DENIED)를 직접 반환한다.
- *  - §2 비고 assignee 스코핑(human_task resolve: 역할 충족 AND assignee/assignee_role 일치)은 human_task
- *    resolve 라우트(D4.5)와 함께 추가한다(현재 wired 액션은 run.read뿐 — humanTask 컨텍스트 없음).
+ *  - §2 비고 assignee 스코핑(human_task resolve: 역할 충족 AND assignee/assignee_role 일치)은
+ *    AuthorizationCheck.humanTask 컨텍스트가 있는 resolve 액션에서 fail-closed로 적용한다.
  *
  * 매트릭스 데이터의 SSoT는 auth-rbac §2(문서)다. 본 표는 그 미러이며 변경 시 §2와 동기화한다. (참조 스캐폴드
  * control-plane/fake-request-runner.ts는 같은 매트릭스를 따르며, D4 scenario 액션도 함께 동기화한다.)
@@ -123,6 +123,14 @@ function roleActionDenyCode(action: RbacAction): AuthorizationDenyCode {
   return "AUTHZ_FORBIDDEN";
 }
 
+function isHumanTaskResolveAction(action: RbacAction): boolean {
+  return action.startsWith("human_task.resolve.");
+}
+
+function deny(action: RbacAction, reason: string): AuthorizationDecision {
+  return { kind: "deny", action, code: roleActionDenyCode(action), reason };
+}
+
 export class RoleMatrixRbacMiddleware implements RbacMiddleware {
   async authorize(
     principal: AuthenticatedPrincipal,
@@ -135,6 +143,16 @@ export class RoleMatrixRbacMiddleware implements RbacMiddleware {
     // 합집합 평가: 보유 역할 중 하나라도 액션을 허용하면 통과.
     for (const role of principal.roles) {
       if (ROLE_ACTIONS[role].includes(check.action)) {
+        if (isHumanTaskResolveAction(check.action)) {
+          const humanTask = check.humanTask;
+          if (humanTask === undefined) return deny(check.action, "human_task_scope_required");
+          if (humanTask.assigneeId === undefined) return deny(check.action, "human_task_assignee_required");
+          if (humanTask.assigneeId !== principal.subjectId) return deny(check.action, "human_task_assignee_mismatch");
+          if (humanTask.assigneeRole === undefined) return deny(check.action, "human_task_assignee_role_required");
+          if (!principal.roles.includes(humanTask.assigneeRole)) {
+            return deny(check.action, "human_task_assignee_role_mismatch");
+          }
+        }
         return { kind: "allow", principal, action: check.action };
       }
     }

@@ -165,3 +165,4 @@ TS 코드 계약: `ts/security-middleware-contract.ts` `ImmutableAuditLogAppendO
 - 그 외 운영 편의성 작업은 `TODO: [BLOCKED]` 결정 없이 확장 금지. Required decision: 신규 BYPASSRLS use case, operational DB role, reason code, immutable audit append contract.
 
 TS 코드 계약: `ts/security-middleware-contract.ts` `BypassRlsPolicyContract` 및 `MINIMUM_BYPASS_RLS_POLICY`.
+- Release/staging evidence may record only `SecretRef` identifiers, SecretStore backend aliases/paths, namespace conventions, runtime identity aliases, and `secret.resolve` audit outcome metadata such as row IDs, hashes, counts, and allow/deny results. It must never include `PlainSecret`/resolved material, value-derived hashes or fingerprints, raw credential payloads, or sensitive backend paths designated non-evidence by the staging owner.
