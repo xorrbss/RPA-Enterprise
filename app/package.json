@@ -13,7 +13,7 @@
     "test:unit": "tsx test/flow-control.unit.ts && tsx test/telemetry.unit.ts && tsx test/rbac.unit.ts && tsx test/raw-cdp.unit.ts && tsx test/pipeline-raw-hash.unit.ts && npm run test:gateway-unit && npm run test:dom-executor && tsx test/graphile-runner.unit.ts && npm run test:lint",
     "test:gateway-unit": "tsx test/llm-gateway.unit.ts && tsx test/codex-sse-adapter.unit.ts && tsx test/codex-sse-transport.unit.ts",
     "test:dom-executor": "tsx test/stagehand-dom-executor.unit.ts",
-    "test:int": "tsx test/run-transition.int.ts && tsx test/runtime-worker-claim.int.ts && tsx test/runtime-worker-resume.int.ts && tsx test/runtime-worker-abort-finalization.int.ts && tsx test/executor-invocation-recorder.int.ts && tsx test/action-plan-cache.int.ts && tsx test/pipeline.int.ts && tsx test/sink-delivery.int.ts && tsx test/outbox-relay.int.ts && tsx test/graphile-worker.int.ts && tsx test/gateway-artifact-sink.int.ts && tsx test/api-runs-graphile.int.ts && tsx test/api-runs.int.ts && tsx test/api-runs-abort.int.ts && tsx test/api-human-tasks.int.ts && tsx test/api-dlq.int.ts && tsx test/api-reads.int.ts && tsx test/api-sites-approve.int.ts && tsx test/api-security.int.ts && tsx test/scenarios.int.ts && tsx test/security-audit.int.ts",
+    "test:int": "tsx test/run-transition.int.ts && tsx test/runtime-worker-claim.int.ts && tsx test/runtime-worker-resume.int.ts && tsx test/runtime-worker-abort-finalization.int.ts && tsx test/executor-invocation-recorder.int.ts && tsx test/action-plan-cache.int.ts && tsx test/pipeline.int.ts && tsx test/sink-delivery.int.ts && tsx test/outbox-relay.int.ts && tsx test/graphile-worker.int.ts && tsx test/gateway-artifact-sink.int.ts && tsx test/api-runs-graphile.int.ts && tsx test/api-runs.int.ts && tsx test/api-runs-abort.int.ts && tsx test/api-human-tasks.int.ts && tsx test/api-dlq.int.ts && tsx test/api-reads.int.ts && tsx test/api-sites-approve.int.ts && tsx test/api-security.int.ts && tsx test/scenarios.int.ts && tsx test/run-step-driver.int.ts && tsx test/security-audit.int.ts",
     "test:pipeline": "tsx test/pipeline.int.ts && tsx test/sink-delivery.int.ts && tsx test/outbox-relay.int.ts",
     "test:api-idempotency": "tsx test/api-runs.int.ts",
     "test:action-plan-cache": "tsx test/action-plan-cache.int.ts",
@@ -25,7 +25,8 @@
     "test:runtime-claim": "tsx test/runtime-worker-claim.int.ts",
     "test:runtime-resume": "tsx test/runtime-worker-resume.int.ts",
     "test:runtime-abort": "tsx test/runtime-worker-abort-finalization.int.ts",
-    "test:executor": "tsx test/executor-dryrun.int.ts",
+    "test:executor": "tsx test/executor-dryrun.int.ts && tsx test/ir-interpreter.int.ts",
+    "test:interpreter": "tsx test/ir-interpreter.int.ts",
     "test:console-e2e": "tsx test/console-browser.e2e.ts",
     "test:console-live-e2e": "tsx test/console-live.e2e.ts",
     "test:ci": "npm run test && npm run test:executor && npm run test:int"
