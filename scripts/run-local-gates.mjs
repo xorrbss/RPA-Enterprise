@@ -39,6 +39,12 @@ const steps = [
   ["D3 executor dry-run", "npm", ["--prefix", "app", "run", "test:executor"]],
   ["HTML smoke", "node", ["scripts/html-smoke.mjs"]],
   ["HTML HTTP smoke", "node", ["scripts/html-http-smoke.mjs"]],
+  ["Console install", "npm", ["ci", "--prefix", "web"]],
+  ["Console typecheck", "npm", ["--prefix", "web", "run", "typecheck"]],
+  ["Console tests", "npm", ["--prefix", "web", "run", "test"]],
+  ["Console build", "npm", ["--prefix", "web", "run", "build"]],
+  // 실 브라우저 e2e(빌드 dist + 스텁 API). Chrome 없으면 스크립트가 SKIP(exit 0). app puppeteer-core 재사용.
+  ["Console browser e2e", "npm", ["--prefix", "app", "run", "test:console-e2e"]],
 ];
 
 if (!skipDb) {
@@ -54,6 +60,8 @@ if (!skipDb) {
   steps.push(["PostgreSQL non-bypass role proof", verifyNonBypassDbRole]);
   steps.push(["PostgreSQL 15 migration smoke", "node", ["scripts/db-migration-smoke.mjs", "--require-non-bypass"]]);
   steps.push(["App runtime integration tests", "npm", ["--prefix", "app", "run", "test:int"]]);
+  // 라이브 e2e(browser→Fastify→PostgreSQL). web/dist(Console build) + PG env + Chrome 필요(없으면 SKIP).
+  steps.push(["Console live e2e (browser->API->DB)", "npm", ["--prefix", "app", "run", "test:console-live-e2e"]]);
 } else {
   console.log(
     [

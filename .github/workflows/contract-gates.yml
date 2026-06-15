@@ -335,6 +335,17 @@ jobs:
           PGADMIN_PASSWORD: postgres
         run: npm --prefix app run test:int
 
+      - name: Install and build console for live e2e
+        run: |
+          npm ci --prefix web
+          npm --prefix web run build
+
+      - name: Run console live e2e (browser to API to PostgreSQL)
+        env:
+          PGUSER: ${{ env.PGSMOKE_USER }}
+          PGPASSWORD: rpa_smoke
+        run: npm --prefix app run test:console-live-e2e
+
   html-smoke:
     name: HTML console smoke
     runs-on: ubuntu-latest
@@ -354,3 +365,48 @@ jobs:
 
       - name: Local HTTP smoke for standalone console
         run: node scripts/html-http-smoke.mjs
+
+  console:
+    name: Operations console (web) typecheck, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install console dependencies
+        run: npm ci --prefix web
+
+      - name: Typecheck console
+        run: npm --prefix web run typecheck
+
+      - name: Run console tests
+        run: npm --prefix web run test
+
+      - name: Build console
+        run: npm --prefix web run build
+
+      - name: Install app dependencies (puppeteer-core for e2e)
+        run: npm ci --prefix app
+
+      - name: Locate Chrome for console browser e2e
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          if [ -z "${CHROME}" ]; then
+            echo "Chrome or Chromium is required for the console browser e2e"
+            exit 1
+          fi
+          echo "CHROME_PATH=${CHROME}" >> "${GITHUB_ENV}"
+
+      - name: Run console browser e2e
+        run: npm --prefix app run test:console-e2e
