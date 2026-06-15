@@ -76,10 +76,12 @@ export function transitionRun(
           { kind: "startBookmark" },
         ]);
       }
-      // R5: running + node→@human_task → suspending
+      // R5: running + node→@human_task → suspending. kind는 @human_task input(approval|validation|exception,
+      // reserved-handlers)에서 옴 — 하드코딩 금지(approval/validation을 exception으로 오라우팅하면 RBAC 권한 혼선).
+      // 미지정 시 exception 기본(R4의 ev.challengeKind ?? captcha와 동일 패턴).
       if (ev.type === "human_task_required") {
         return r("suspending", [
-          { kind: "createHumanTask", humanTaskKind: "exception" },
+          { kind: "createHumanTask", humanTaskKind: ev.humanTaskKind ?? "exception" },
           { kind: "startBookmark" },
         ]);
       }

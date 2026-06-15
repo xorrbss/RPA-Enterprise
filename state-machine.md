@@ -20,7 +20,7 @@ IR terminal `success_empty`는 RunState를 새로 만들지 않고 `completed` +
 | R3a | claimed | init_failed | queued | 연속 실패 임계 **미만** | **재큐**(attempts+1, 백오프) |
 | R3b | claimed | init_failed | failed_system | 연속 실패 임계 **이상** | 서킷 오픈, DLQ 판단, 더 이상 재큐 안 함 |
 | R4 | running | step.challenge_detected | suspending | policy=human_first | human_task 생성(**kind=ChallengeSummary.type: mfa면 mfa, 그 외 captcha**), bookmark 시작 |
-| R5 | running | node→@human_task | suspending | — | human_task 생성 |
+| R5 | running | node→@human_task | suspending | — | human_task 생성(**kind=@human_task input kind**: approval\|validation\|exception(reserved-handlers), 미지정 시 exception 기본). RunEvent `human_task_required.humanTaskKind`로 전파 — 하드코딩 금지(approval/validation을 exception으로 오라우팅하면 RBAC resolve 권한 혼선, auth-rbac §2) |
 | R6 | running | abort_requested | aborting | — | **SSE close + browser drain** |
 | R7 | running | last_node_success | completing | 흐름 종료(terminal 도달) | 산출 확정 시작 |
 | R8 | running | unrecoverable_exception | failed_system | system, 재시도 소진 | 실패 스크린샷, DLQ 판단 |
