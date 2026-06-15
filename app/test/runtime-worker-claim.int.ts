@@ -10,7 +10,18 @@ import { fileURLToPath } from "node:url";
 
 import type { ObjectRef } from "../../ts/core-types";
 import type { CorrelationId, RunId, TenantId } from "../../ts/security-middleware-contract";
-import type { ArtifactRedactor, ArtifactRetentionStore, WorkitemId } from "../../ts/runtime-contract";
+import {
+  ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
+} from "../../ts/runtime-contract";
+import type {
+  ArtifactObjectIoEvidence,
+  ArtifactObjectIoOperation,
+  ArtifactObjectIoPortBinding,
+  ArtifactRedactor,
+  ArtifactRetentionStore,
+  WorkitemId,
+} from "../../ts/runtime-contract";
 
 import { createPool, withTenantTx } from "../src/db/pool";
 import {
@@ -115,14 +126,46 @@ const planResolver: BrowserLeasePlanResolver = async (_client, input) => {
 const redactionCalls: Array<Parameters<ArtifactRedactor["redact"]>[0]> = [];
 const retentionCalls: Array<Parameters<ArtifactRetentionStore["deleteObject"]>[0]> = [];
 
+const localTestPortBinding = {
+  kind: "test_fake",
+  backendAlias: "local-test-fake",
+  evidenceSchemaRef: ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
+  testOnly: true,
+} as const satisfies ArtifactObjectIoPortBinding;
+
+function localTestEvidence(input: {
+  artifact: { artifactRef: Parameters<ArtifactRedactor["redact"]>[0]["artifact"]["artifactRef"] };
+  correlationId: CorrelationId;
+  portBinding: ArtifactObjectIoPortBinding;
+}, operation: ArtifactObjectIoOperation, receiptId: string, sha256?: string): ArtifactObjectIoEvidence {
+  if (input.portBinding.kind !== "test_fake") {
+    throw new Error("test fixture expected a test_fake port binding");
+  }
+  return {
+    schemaRef: ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
+    portKind: "test_fake",
+    backendAlias: "local-test-fake",
+    operation,
+    artifactRef: input.artifact.artifactRef,
+    correlationId: input.correlationId,
+    receiptId,
+    objectRefInternalOnly: true,
+    mayBeUsedAsStagingEvidence: false,
+    ...(sha256 === undefined ? {} : { sha256 }),
+  };
+}
+
 const fakeArtifactRedactor: ArtifactRedactor = {
+  binding: localTestPortBinding,
   redact: async (input) => {
     redactionCalls.push(input);
     if (input.artifact.artifactRef === ARTIFACT_REDACTION_PENDING) {
+      const sha256 = "sha256:redacted-safe";
       return {
         kind: "redacted",
         redactedObjectRef: "object://runtime-worker/redacted-safe" as ObjectRef,
-        sha256: "sha256:redacted-safe",
+        sha256,
+        evidence: localTestEvidence(input, "redact", "local-redaction-receipt", sha256),
       };
     }
     return { kind: "terminal_failed", reason: `unexpected redaction fixture ${input.artifact.artifactRef}` };
@@ -130,10 +173,21 @@ const fakeArtifactRedactor: ArtifactRedactor = {
 };
 
 const fakeArtifactRetentionStore: ArtifactRetentionStore = {
+  binding: localTestPortBinding,
   deleteObject: async (input) => {
     retentionCalls.push(input);
-    if (input.artifact.artifactRef === ARTIFACT_RETENTION_DELETE) return { kind: "deleted" };
-    if (input.artifact.artifactRef === ARTIFACT_RETENTION_NOT_FOUND) return { kind: "not_found" };
+    if (input.artifact.artifactRef === ARTIFACT_RETENTION_DELETE) {
+      return {
+        kind: "deleted",
+        evidence: localTestEvidence(input, "delete", "local-retention-delete-receipt"),
+      };
+    }
+    if (input.artifact.artifactRef === ARTIFACT_RETENTION_NOT_FOUND) {
+      return {
+        kind: "not_found",
+        evidence: localTestEvidence(input, "delete", "local-retention-not-found-receipt"),
+      };
+    }
     if (input.artifact.artifactRef === ARTIFACT_RETENTION_TRANSIENT) {
       return { kind: "transient_failed", reason: "object store unavailable" };
     }
@@ -571,25 +625,33 @@ async function artifactLifecycleDetails(
 async function artifactLifecycleAuditSummary(pool: ReturnType<typeof createPool>): Promise<{
   count: number;
   objectRefLeakCount: number;
+  localTestEvidenceCount: number;
+  stagingEvidenceCount: number;
   reasons: string[];
 }> {
   return withTenantTx(pool, TENANT_A, async (c) => {
     const row = await c.query<{
       count: number;
       object_ref_leak_count: number;
+      local_test_evidence_count: number;
+      staging_evidence_count: number;
       reasons: string[];
     }>(
       `SELECT count(*)::int AS count,
               count(*) FILTER (WHERE payload::text LIKE '%object://%')::int AS object_ref_leak_count,
+              count(*) FILTER (WHERE payload->>'object_io_evidence_schema_ref' = $2)::int AS local_test_evidence_count,
+              count(*) FILTER (WHERE payload->>'object_io_may_be_used_as_staging_evidence' = 'true')::int AS staging_evidence_count,
               coalesce(array_agg(reason ORDER BY sequence_no), ARRAY[]::text[]) AS reasons
          FROM audit_log
         WHERE tenant_id=$1::uuid
           AND reason LIKE 'artifact_lifecycle.%'`,
-      [TENANT_A],
+      [TENANT_A, ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF],
     );
     return {
       count: row.rows[0]?.count ?? 0,
       objectRefLeakCount: row.rows[0]?.object_ref_leak_count ?? 0,
+      localTestEvidenceCount: row.rows[0]?.local_test_evidence_count ?? 0,
+      stagingEvidenceCount: row.rows[0]?.staging_evidence_count ?? 0,
       reasons: row.rows[0]?.reasons ?? [],
     };
   });
@@ -866,9 +928,98 @@ async function main(): Promise<void> {
       );
     }
 
+    const unboundRedactor = {
+      redact: fakeArtifactRedactor.redact,
+    } as unknown as ArtifactRedactor;
+    try {
+      await new PgRuntimeWorker(pool, {
+        workerId: WORKER,
+        artifactRedactor: unboundRedactor,
+      }).handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        runId: RUN_HOLDER as RunId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_redaction without object-store binding throws", false, "expected throw");
+    } catch (err) {
+      check(
+        "artifact_redaction without object-store binding throws",
+        String(err).includes("real object-store port binding"),
+        String(err),
+      );
+    }
+
+    const malformedRealRedactor = {
+      binding: {
+        kind: "real_object_store",
+        backendAlias: "staging-object-store",
+        evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+      },
+      redact: fakeArtifactRedactor.redact,
+    } as unknown as ArtifactRedactor;
+    try {
+      await new PgRuntimeWorker(pool, {
+        workerId: WORKER,
+        artifactRedactor: malformedRealRedactor,
+      }).handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        runId: RUN_HOLDER as RunId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_redaction real port without SecretRef throws", false, "expected throw");
+    } catch (err) {
+      check(
+        "artifact_redaction real port without SecretRef throws",
+        String(err).includes("SecretRef"),
+        String(err),
+      );
+    }
+
+    try {
+      await new PgRuntimeWorker(pool, {
+        workerId: WORKER,
+        artifactRedactor: fakeArtifactRedactor,
+      }).handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        runId: RUN_HOLDER as RunId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_redaction test_fake port is rejected without test opt-in", false, "expected throw");
+    } catch (err) {
+      check(
+        "artifact_redaction test_fake port is rejected without test opt-in",
+        String(err).includes("local-test-only"),
+        String(err),
+      );
+    }
+    check("artifact_redaction port wiring failures call no redactor", redactionCalls.length === 0);
+
+    try {
+      await new PgRuntimeWorker(pool, {
+        workerId: WORKER,
+        artifactRetentionStore: fakeArtifactRetentionStore,
+      }).handle({
+        kind: "artifact_retention",
+        tenantId: TENANT_A as TenantId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_retention test_fake port is rejected without test opt-in", false, "expected throw");
+    } catch (err) {
+      check(
+        "artifact_retention test_fake port is rejected without test opt-in",
+        String(err).includes("local-test-only"),
+        String(err),
+      );
+    }
+    check("artifact_retention port wiring failures call no object store", retentionCalls.length === 0);
+
     const nonBypassRedactor = new PgRuntimeWorker(pool, {
       workerId: WORKER,
       artifactRedactor: fakeArtifactRedactor,
+      allowTestArtifactLifecyclePorts: true,
     });
     try {
       await nonBypassRedactor.handle({
@@ -890,6 +1041,7 @@ async function main(): Promise<void> {
     const nonBypassRetention = new PgRuntimeWorker(pool, {
       workerId: WORKER,
       artifactRetentionStore: fakeArtifactRetentionStore,
+      allowTestArtifactLifecyclePorts: true,
     });
     try {
       await nonBypassRetention.handle({
@@ -921,6 +1073,7 @@ async function main(): Promise<void> {
         workerId: WORKER,
         artifactRedactor: fakeArtifactRedactor,
         artifactRetentionStore: fakeArtifactRetentionStore,
+        allowTestArtifactLifecyclePorts: true,
       });
       const activeClaim = await bypassWorker.handle({
         kind: "artifact_redaction",
@@ -953,9 +1106,10 @@ async function main(): Promise<void> {
       );
       check("artifact_redaction calls redactor exactly once", redactionCalls.length === 1);
       check(
-        "artifact_redaction port receives ArtifactRef and policy",
+        "artifact_redaction port receives ArtifactRef, policy, and local-test binding",
         redactionCalls[0]?.artifact.artifactRef === ARTIFACT_REDACTION_PENDING &&
-          redactionCalls[0]?.policy.maxAttempts === 3,
+          redactionCalls[0]?.policy.maxAttempts === 3 &&
+          redactionCalls[0]?.portBinding.kind === "test_fake",
         JSON.stringify(redactionCalls[0]),
       );
       check(
@@ -1038,6 +1192,11 @@ async function main(): Promise<void> {
       const lifecycleAudit = await artifactLifecycleAuditSummary(pool);
       check("artifact lifecycle appends claim/finalize audits", lifecycleAudit.count >= 8, JSON.stringify(lifecycleAudit));
       check("artifact lifecycle audit payloads do not leak ObjectRef", lifecycleAudit.objectRefLeakCount === 0, JSON.stringify(lifecycleAudit));
+      check(
+        "artifact lifecycle local fake evidence is marked non-staging",
+        lifecycleAudit.localTestEvidenceCount >= 3 && lifecycleAudit.stagingEvidenceCount === 0,
+        JSON.stringify(lifecycleAudit),
+      );
     } finally {
       await lifecycleBypassPool.end();
     }

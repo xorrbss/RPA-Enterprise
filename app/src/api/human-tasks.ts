@@ -88,6 +88,7 @@ export function registerHumanTaskRoutes(app: FastifyInstance, deps: ApiServerDep
   );
 
   // POST /v1/human-tasks/{id}/escalate — H5(open/assigned/in_progress→escalated) + Run R15(suspended 유지, 재배정).
+  //   reassignAssignee routing owner가 없으면 assert*에서 fail-closed rollback한다(조용한 admin queue 추정 금지).
   app.post<{ Params: { id: string } }>(
     "/v1/human-tasks/:id/escalate",
     { config: { rbacAction: "human_task.escalate" } },

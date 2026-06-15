@@ -182,7 +182,15 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   async abortRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
     const run = this.runs.get(key(tenant(ctx), requireParam(ctx, "run_id")));
     if (run === undefined) throw new ApiResponseException("RUN_NOT_FOUND");
-    if (RUN_TERMINAL.includes(run.status)) throw new ApiResponseException("RUN_ALREADY_TERMINAL");
+    if (RUN_TERMINAL.includes(run.status) || run.status === "completing") {
+      throw new ApiResponseException("RUN_ALREADY_TERMINAL");
+    }
+    if (run.status === "suspending") {
+      throw new ApiResponseException("WORKITEM_CHECKOUT_CONFLICT", {
+        reason: "run_bookmark_in_progress",
+        status: run.status,
+      });
+    }
 
     run.status = "cancelled";
     this.runs.set(key(run.tenant_id, run.run_id), run);
@@ -254,9 +262,17 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
 
   async escalateHumanTask(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
     const task = this.requireHumanTask(ctx);
-    ensureHumanTaskOpen(task);
-    task.state = "escalated";
-    return { status: 200, body: task };
+    if (HUMANTASK_TERMINAL.includes(task.state)) throw new ApiResponseException("HUMAN_TASK_EXPIRED");
+    if (task.state === "escalated") {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", {
+        reason: "invalid_state_for_command",
+        state: task.state,
+      });
+    }
+    throw new ApiResponseException("CONTROL_PLANE_INTERNAL_ERROR", {
+      reason: "human_task_pending_side_effects_unsupported",
+      pending: ["reassignAssignee"],
+    });
   }
 
   async listWorkitems(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {

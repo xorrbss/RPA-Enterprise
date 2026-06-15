@@ -370,9 +370,9 @@ const activeBlockerSectionHeadings = new Set([
   "## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)",
 ]);
 const expectedActiveBlockerSectionCounts = new Map([
-  ["## External Staging/Open Blockers", 8],
-  ["## Repo-Controlled D4.5 API P1 Evidence / Open", 2],
-  ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 4],
+  ["## External Staging/Open Blockers", 11],
+  ["## Repo-Controlled D4.5 API P1 Evidence / Open", 0],
+  ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 0],
 ]);
 const activeChecklistEvidenceRules = [
   {

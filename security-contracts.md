@@ -162,6 +162,8 @@ TS 코드 계약: `ts/security-middleware-contract.ts` `ImmutableAuditLogAppendO
 - `BYPASSRLS` 전용 DB role은 user HTTP/API traffic을 처리할 수 없다.
 - 전용 DB role, reason code, immutable audit append가 모두 필수다.
 - 허용 use case는 schema migration, artifact redaction/retention/integrity/orphan jobs, lease sweeper, scheduler/worker registry infra 작업으로 제한한다.
+- artifact redaction/retention object I/O는 `real_object_store` 포트 바인딩 + `SecretRef` credential path + `artifact/object-io-evidence@1` 성공 receipt가 있어야 finalize CAS가 가능하다. `test_fake` / `artifact/object-io-local-test@1` 포트는 repo-local 테스트 전용이며 staging/product-open object-store evidence로 인용 금지.
+- object I/O evidence는 `ArtifactRef`, backend alias, `SecretRef` 식별자, receipt id, operation, sha256 메타데이터만 기록할 수 있다. `ObjectRef`, `PlainSecret`, resolved secret material은 audit/log/event/release evidence에 남기지 않는다.
 - 그 외 운영 편의성 작업은 `TODO: [BLOCKED]` 결정 없이 확장 금지. Required decision: 신규 BYPASSRLS use case, operational DB role, reason code, immutable audit append contract.
 
 TS 코드 계약: `ts/security-middleware-contract.ts` `BypassRlsPolicyContract` 및 `MINIMUM_BYPASS_RLS_POLICY`.

@@ -22,11 +22,19 @@ export CODEX_API_KEY=<SecretRef-resolved env value> # never paste into evidence
 export CODEX_MODEL=<model-id>
 export CODEX_EVIDENCE_ENDPOINT_ALIAS='[staging-endpoint-alias]' # required redacted alias; no URL/secret
 export CODEX_EVIDENCE_MODEL_ALIAS='[staging-model-alias]'       # required redacted alias; no raw model/secret
-export CODEX_MAX_CONTEXT_TOKENS=<n>          # 선택(기본 8192)
+export CODEX_MAX_CONTEXT_TOKENS=<n>          # 선택(기본 8192; 제공 시 positive integer 필수)
 
 npm --prefix app/poc/d5-codex-sse install
 npm --prefix app/poc/d5-codex-sse run poc    # stdout 표를 아래에 옮긴다
 ```
+
+### 증거 출력 하드닝
+
+- `CODEX_BASE_URL` 은 하니스 시작 시 absolute HTTPS URL 로 파싱되며 username/password, query, fragment 가 있으면 실행하지 않는다.
+- `CODEX_EVIDENCE_ENDPOINT_ALIAS` 와 `CODEX_EVIDENCE_MODEL_ALIAS` 는 `[alias]` 형태의 redacted alias 만 허용한다. raw URL, raw model identifier, whitespace, URL 구분자, credential-like 문자열은 거부한다.
+- stdout/Markdown cell 은 provider error body, HTTP status text, JSON fragment, env-like 문자열에 포함된 `CODEX_BASE_URL`/host, `CODEX_API_KEY`, raw `CODEX_MODEL` 값을 각각 endpoint/model alias 또는 `[REDACTED]` 로 치환한 뒤 기록한다.
+- `CODEX_MAX_CONTEXT_TOKENS` 는 `/models` metadata 가 없을 때 쓰는 fallback config 이다. 누락 시 기본 8192 를 사용하고, 제공 시 positive safe integer 가 아니면 실행하지 않는다.
+- #3 native `json_schema` 와 #5 model metadata 는 `GAP` 이 허용되는 유일한 항목이다. #3 GAP 은 `jsonMode=false` prompt-schema+strict 안전경로 유지, #5 GAP 은 검증된 fallback `maxContextTokens` config 유지로 기록한다.
 
 2026-06-15 자격증명 보유자가 위 명령으로 실행 완료 → 결과는 아래 `결과` 절 참조. 재실측 시 동일 명령.
 
@@ -69,7 +77,7 @@ Release evidence 기준: #1 기본 SSE, #2 prompt-schema 안전경로, #4 abort 
 release evidence: #1/#2/#4 모두 PASS ✅. #5 GAP 은 보수적 maxContextTokens fallback 으로 허용.
 ```
 
-### Reference 결론 (harness ready, staging blocker remains open)
+### Reference 결론 (harness hardened, staging blocker remains external)
 
 - **① structured-output 스트리밍 = 지원(jsonMode native 가용).** #3 PASS — provider 가
   `response_format:{type:json_schema}` + `stream:true` 를 수용하고 유효 JSON 을 스트리밍.
@@ -98,6 +106,16 @@ release evidence: #1/#2/#4 모두 PASS ✅. #5 GAP 은 보수적 maxContextToken
 
 이 PoC 는 D5 의 라이브 외부 사실을 닫기 위한 하니스다. #1/#2/#4 가 PASS 여야 release evidence 로
 인용할 수 있고, #3/#5 GAP 은 이미 정의된 fallback 경로를 유지한다는 뜻일 뿐이다. 어느 경우든
-"조용한 false/unknown" 없이 명시 경로로 수렴한다. 위 2026-06-15 실행은 OpenAI-compatible
-reference evidence이며, Product Open 의 intended staging model/endpoint blocker 는 그 정확한
-대상에서 SecretRef-resolved credentials 와 redacted alias output 으로 재실측되어야 닫힌다.
+"조용한 false/unknown" 없이 명시 경로로 수렴한다.
+
+Repo-controlled blocker 는 하니스/증거 출력 경계에서 닫혔다: absolute HTTPS `CODEX_BASE_URL` 검증,
+redacted endpoint/model alias 강제, env/secret/raw endpoint/raw model redaction, fallback
+`maxContextTokens` validation, native `json_schema`/model metadata GAP fallback 이 모두 하니스 self-test 로
+검증된다.
+
+남은 blocker 는 **external live staging evidence** 뿐이다. 위 2026-06-15 실행은 OpenAI-compatible
+reference evidence이며, Product Open 의 intended staging model/endpoint blocker 는 그 정확한 대상에서
+SecretRef/SecretStore 로 resolve 된 credential 을 repo 밖 env 로 주입하고, stdout 에는
+`CODEX_EVIDENCE_ENDPOINT_ALIAS` / `CODEX_EVIDENCE_MODEL_ALIAS` 로 redacted 된 결과만 기록해 재실측되어야 닫힌다.
+No plaintext API key, resolved SecretRef material, raw endpoint URL, raw model identifier, env dump, xtrace,
+provider credential echo, or RBAC/redaction-bypassing screenshot/log may be attached as evidence.

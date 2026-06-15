@@ -28,7 +28,15 @@ import type {
   WorkerId,
   WorkitemId,
 } from "../ts/runtime-contract";
-import { ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT as artifactLifecycleContract } from "../ts/runtime-contract";
+import {
+  ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT as artifactLifecycleContract,
+  ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
+} from "../ts/runtime-contract";
+import {
+  EXECUTOR_AUDIT_EVIDENCE_CONTRACT as executorAuditEvidenceContract,
+  EXECUTOR_OUTCOME_MAPPING_CONTRACT as executorOutcomeMappingContract,
+} from "../ts/runtime-contract";
 
 const tenantId = "11111111-1111-4111-8111-111111111111" as TenantId;
 const runId = "22222222-2222-4222-8222-222222222222" as RunId;
@@ -74,6 +82,17 @@ assert(
     artifactLifecycleContract.publicEvidenceUsesArtifactRefOnly === true &&
     artifactLifecycleContract.objectRefMayReachLogs === false,
   "artifact lifecycle contract must keep ObjectRef internal, expose ArtifactRef only, and keep ObjectRef out of logs",
+);
+assert(
+  artifactLifecycleContract.objectIoEvidence.realSchemaRef === ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF &&
+    artifactLifecycleContract.objectIoEvidence.localTestSchemaRef === ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF &&
+    artifactLifecycleContract.objectIoEvidence.realPortRequiresSecretRef === true &&
+    artifactLifecycleContract.objectIoEvidence.localTestPortMayBeUsedAsStagingEvidence === false &&
+    artifactLifecycleContract.objectIoEvidence.successEvidenceRequiredBeforeFinalize === true &&
+    artifactLifecycleContract.objectIoEvidence.evidenceMayContainObjectRef === false &&
+    artifactLifecycleContract.objectIoEvidence.evidenceMayContainSecretRefIdentifier === true &&
+    artifactLifecycleContract.objectIoEvidence.evidenceMayContainPlainSecret === false,
+  "artifact lifecycle object I/O evidence must require real SecretRef-backed ports and keep local fake evidence non-staging",
 );
 assert(
   artifactLifecycleContract.claimLease.requiredBeforeObjectIo === true &&
@@ -132,6 +151,37 @@ assert(
     artifactLifecycleContract.retentionSuccessKinds.includes("not_found") &&
     artifactLifecycleContract.retentionFailureMustNotTombstone === true,
   "artifact retention delete must be idempotent and transient failure must not tombstone",
+);
+assert(
+  executorOutcomeMappingContract.requiresStartedAttemptBeforeProducerWrites === true &&
+    executorOutcomeMappingContract.pluginExecutionInsideDbTransaction === false &&
+    executorOutcomeMappingContract.finalProducerWritesUseStartedAttemptCas === true,
+  "executor outcome mapping must require local started attempts and keep plugin execution outside DB transactions",
+);
+assert(
+  executorOutcomeMappingContract.systemFailure.runTransition === "R8" &&
+    executorOutcomeMappingContract.systemFailure.workitemTransition === "W4_or_W5" &&
+    executorOutcomeMappingContract.systemFailure.unknownOutcomeMapsTo === "CONTROL_PLANE_INTERNAL_ERROR",
+  "executor system/unknown outcomes must map to explicit R8 and W4/W5 error-catalog paths",
+);
+assert(
+  executorOutcomeMappingContract.securityFailure.runTransition === "R10" &&
+    executorOutcomeMappingContract.securityFailure.requiresRunAbortJob === true &&
+    executorOutcomeMappingContract.securityFailure.requiresNotificationPort === true,
+  "executor security outcomes must map to R10 and require explicit abort/notify ports",
+);
+assert(
+  executorOutcomeMappingContract.challengeFailure.runTransition === "R4_then_R11" &&
+    executorOutcomeMappingContract.challengeFailure.requiresSuspensionBookmarkPort === true,
+  "executor challenge outcomes must map to R4/R11 through an explicit suspension bookmark port",
+);
+assert(
+  executorAuditEvidenceContract.executorOutcomesMustNotUseSecurityAuditLog === true &&
+    executorAuditEvidenceContract.durableEvidenceAuthorities.includes("run_steps") &&
+    executorAuditEvidenceContract.durableEvidenceAuthorities.includes("events_outbox") &&
+    executorAuditEvidenceContract.durableEvidenceAuthorities.includes("stagehand_calls") &&
+    executorAuditEvidenceContract.auditLogAllowedForExecutorOnlyWhen.includes("security_boundary_decision"),
+  "executor audit evidence must use runtime evidence authorities and reserve audit_log for boundary decisions",
 );
 
 const store = new InMemoryRuntimeStore({

@@ -411,6 +411,10 @@ async function main(): Promise<void> {
       check("escalate unresolved rolls back task", (await taskRow(pool, TENANT_A, HT_ESCALATE_OPEN))?.state === "open");
       check("escalate unresolved leaves run suspended", (await runStatus(pool, TENANT_A, RUN_SUSP_ESCALATE)) === "suspended");
       check("escalate unresolved emits no human_task.escalated", (await outboxCount(pool, TENANT_A, RUN_SUSP_ESCALATE, "human_task.escalated")) === 0);
+      check("escalate unresolved stores deterministic failure", (await idemRowCount(pool, TENANT_A, "escalateHumanTask", "escalate-open")) === 1);
+      const e1Replay = await escalate(HT_ESCALATE_OPEN, "escalate-open", reviewer, { reason: "need admin" });
+      check("escalate unresolved same-key replay → 500", e1Replay.statusCode === 500 && e1Replay.json().code === "CONTROL_PLANE_INTERNAL_ERROR", e1Replay.body);
+      check("escalate unresolved replay leaves task open", (await taskRow(pool, TENANT_A, HT_ESCALATE_OPEN))?.state === "open");
 
       // 20) escalated + escalate → 422(H5는 escalated에서 정의 안 됨).
       const e2 = await escalate(HT_ESCALATED_AGAIN, "escalate-again");

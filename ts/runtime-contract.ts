@@ -432,11 +432,144 @@ export interface ExecutorInvocationRecorder {
   record(input: ExecutorInvocationRecordInput): Promise<ExecutorInvocationRecordResult>;
 }
 
+export type ExecutorOutcomeTransitionPath =
+  | "record_only"
+  | "terminal_success_R7_R21_W2"
+  | "terminal_business_R9_W3"
+  | "terminal_system_R8_W4_or_W5"
+  | "terminal_security_R10_then_run_abort"
+  | "terminal_challenge_R4_then_bookmark_R11"
+  | "unsupported_fail_closed";
+
+export const EXECUTOR_OUTCOME_MAPPING_CONTRACT = {
+  requiresStartedAttemptBeforeProducerWrites: true,
+  pluginExecutionInsideDbTransaction: false,
+  finalProducerWritesUseStartedAttemptCas: true,
+  stepCompletedRequiresRunStepForeignKey: true,
+  systemFailure: {
+    acceptedStepStatuses: ["failed_system", "uncertain"],
+    requiredExceptionClass: "system",
+    requiredErrorCatalogClass: "system",
+    runTransition: "R8",
+    workitemTransition: "W4_or_W5",
+    unknownOutcomeMapsTo: "CONTROL_PLANE_INTERNAL_ERROR",
+  },
+  securityFailure: {
+    acceptedStepStatuses: ["failed_security"],
+    requiredExceptionClass: "security",
+    requiredErrorCatalogClass: "security",
+    runTransition: "R10",
+    requiresRunAbortJob: true,
+    requiresNotificationPort: true,
+  },
+  challengeFailure: {
+    acceptedStepStatuses: ["failed_challenge"],
+    requiredExceptionClass: "challenge",
+    requiredErrorCatalogClass: "challenge",
+    runTransition: "R4_then_R11",
+    requiresSuspensionBookmarkPort: true,
+  },
+  unsupportedStatusesFailClosed: ["skipped", "suspended"],
+} as const;
+
+export const EXECUTOR_AUDIT_EVIDENCE_CONTRACT = {
+  securityBoundaryAuditLogReserved: true,
+  executorOutcomesMustNotUseSecurityAuditLog: true,
+  durableEvidenceAuthorities: [
+    "run_steps",
+    "events_outbox",
+    "stagehand_calls",
+    "artifacts",
+    "dead_letter",
+  ],
+  runStepsEvidence: {
+    canonicalKey: ["tenant_id", "run_id", "step_id", "attempt"],
+    requiresStartedBeforeFinal: true,
+    stores: [
+      "status",
+      "action",
+      "cache_mode",
+      "action_plan_cache_id",
+      "page_state_before",
+      "page_state_after",
+      "artifacts",
+      "stagehand_call_ids",
+      "side_effect",
+      "exception",
+      "started_at",
+      "ended_at",
+      "duration_ms",
+    ],
+  },
+  eventsEvidence: {
+    startedAndCompletedAreStepBound: true,
+    terminalRunAndWorkitemEventsUseOutbox: true,
+  },
+  artifactEvidence: {
+    pendingRowsRequireLifecycleJobs: true,
+    objectRefInternalOnly: true,
+    publicEvidenceUsesArtifactRefOnly: true,
+  },
+  auditLogAllowedForExecutorOnlyWhen: [
+    "security_boundary_decision",
+    "artifact_lifecycle_bypassrls_use",
+  ],
+} as const;
+
 export type ArtifactLifecycleJobKind = "artifact_redaction" | "artifact_retention";
 export type ArtifactLifecycleOperationalUseCase = Extract<
   BypassRlsUseCase,
   "artifact_redaction_job" | "artifact_retention_sweeper"
 >;
+export const ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF = "artifact/object-io-evidence@1" as const;
+export const ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF = "artifact/object-io-local-test@1" as const;
+
+export type ArtifactObjectIoOperation = "redact" | "delete";
+
+export interface ArtifactRealObjectStorePortBinding {
+  kind: "real_object_store";
+  backendAlias: string;
+  credentialRef: SecretRef;
+  evidenceSchemaRef: typeof ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF;
+}
+
+export interface ArtifactLocalTestPortBinding {
+  kind: "test_fake";
+  backendAlias: "local-test-fake";
+  evidenceSchemaRef: typeof ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF;
+  testOnly: true;
+}
+
+export type ArtifactObjectIoPortBinding =
+  | ArtifactRealObjectStorePortBinding
+  | ArtifactLocalTestPortBinding;
+
+export type ArtifactObjectIoEvidence =
+  | {
+      schemaRef: typeof ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF;
+      portKind: "real_object_store";
+      backendAlias: string;
+      credentialRef: SecretRef;
+      operation: ArtifactObjectIoOperation;
+      artifactRef: ArtifactRef;
+      correlationId: CorrelationId;
+      receiptId: string;
+      objectRefInternalOnly: true;
+      mayBeUsedAsStagingEvidence: true;
+      sha256?: string;
+    }
+  | {
+      schemaRef: typeof ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF;
+      portKind: "test_fake";
+      backendAlias: "local-test-fake";
+      operation: ArtifactObjectIoOperation;
+      artifactRef: ArtifactRef;
+      correlationId: CorrelationId;
+      receiptId: string;
+      objectRefInternalOnly: true;
+      mayBeUsedAsStagingEvidence: false;
+      sha256?: string;
+    };
 
 export interface ArtifactLifecycleTarget {
   tenantId: TenantId;
@@ -503,19 +636,23 @@ export interface ArtifactRedactionRequest {
   correlationId: CorrelationId;
   artifact: ArtifactLifecycleTarget;
   policy: ArtifactRedactionPolicy;
+  portBinding: ArtifactObjectIoPortBinding;
   audit: ArtifactLifecycleOperationalAudit & { useCase: "artifact_redaction_job" };
 }
 
 export type ArtifactRedactionDecision =
-  | { kind: "redacted"; redactedObjectRef: ObjectRef; sha256?: string }
-  | { kind: "not_required"; reason: string }
-  | { kind: "retryable_failed"; reason: string }
-  | { kind: "terminal_failed"; reason: string; evidenceRef?: ArtifactRef };
+  | { kind: "redacted"; redactedObjectRef: ObjectRef; sha256: string; evidence: ArtifactObjectIoEvidence }
+  | { kind: "not_required"; reason: string; evidence: ArtifactObjectIoEvidence }
+  | { kind: "retryable_failed"; reason: string; evidence?: ArtifactObjectIoEvidence }
+  | { kind: "terminal_failed"; reason: string; evidence?: ArtifactObjectIoEvidence; evidenceRef?: ArtifactRef };
 
 export interface ArtifactRedactor {
+  readonly binding: ArtifactObjectIoPortBinding;
   /**
    * Reads the internal ObjectRef and writes a redaction-safe object/ref behind
    * this port. Public events/logs/audit payloads must use ArtifactRef only.
+   * `test_fake` bindings are local fixture evidence only and cannot satisfy
+   * staging/product-open object-store evidence.
    */
   redact(input: ArtifactRedactionRequest): Promise<ArtifactRedactionDecision>;
 }
@@ -530,18 +667,22 @@ export interface ArtifactRetentionDeleteRequest {
   artifact: ArtifactLifecycleTarget;
   jobId: string;
   policy: ArtifactRetentionPolicy;
+  portBinding: ArtifactObjectIoPortBinding;
   audit: ArtifactLifecycleOperationalAudit & { useCase: "artifact_retention_sweeper" };
 }
 
 export type ArtifactRetentionDeleteResult =
-  | { kind: "deleted" }
-  | { kind: "not_found" }
+  | { kind: "deleted"; evidence: ArtifactObjectIoEvidence }
+  | { kind: "not_found"; evidence: ArtifactObjectIoEvidence }
   | { kind: "transient_failed"; reason: string };
 
 export interface ArtifactRetentionStore {
+  readonly binding: ArtifactObjectIoPortBinding;
   /**
    * Deletes the internal object. `deleted` and `not_found` are idempotent
-   * success; `transient_failed` must not set artifacts.deleted_at.
+   * success; `transient_failed` must not set artifacts.deleted_at. `test_fake`
+   * bindings are local fixture evidence only and cannot satisfy staging/product
+   * object deletion evidence.
    */
   deleteObject(input: ArtifactRetentionDeleteRequest): Promise<ArtifactRetentionDeleteResult>;
 }
@@ -564,6 +705,16 @@ export const ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT = {
   objectRefInternalOnly: true,
   publicEvidenceUsesArtifactRefOnly: true,
   objectRefMayReachLogs: false,
+  objectIoEvidence: {
+    realSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+    localTestSchemaRef: ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
+    realPortRequiresSecretRef: true,
+    localTestPortMayBeUsedAsStagingEvidence: false,
+    successEvidenceRequiredBeforeFinalize: true,
+    evidenceMayContainObjectRef: false,
+    evidenceMayContainSecretRefIdentifier: true,
+    evidenceMayContainPlainSecret: false,
+  },
   claimLease: {
     requiredBeforeObjectIo: true,
     persistedOnArtifactRow: true,

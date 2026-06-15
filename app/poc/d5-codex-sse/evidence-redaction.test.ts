@@ -1,9 +1,11 @@
 import {
+  buildCodexEvidenceRedactions,
   errorEvidence,
   markdownCell,
   redactEvidence,
   validateCodexBaseUrl,
   validateEvidenceAlias,
+  validatePositiveIntegerEnv,
 } from "./evidence-redaction";
 
 const SECRET_FRAGMENTS = [
@@ -69,6 +71,37 @@ const bounded = markdownCell(`prefix ${"x".repeat(700)} token=token-value`);
 check("bounds markdown cell length", bounded.length <= 500, `${bounded.length}`);
 check("redacts before truncation", !bounded.includes("token-value"), "secret-like material remained");
 
+const liveRules = buildCodexEvidenceRedactions({
+  baseUrl: "https://live.example.test/v1",
+  apiKey: "opaque-live-key-value",
+  model: "codex-real-model-2026",
+  endpointAlias: "[staging-endpoint]",
+  modelAlias: "[staging-model]",
+});
+
+const liveProviderDetail = markdownCell(
+  [
+    "CODEX_BASE_URL=https://live.example.test/v1",
+    "CODEX_API_KEY=opaque-live-key-value",
+    "CODEX_MODEL=codex-real-model-2026",
+    "provider rejected model codex-real-model-2026 at https://live.example.test/v1/chat/completions",
+    "authorization: Bearer opaque-live-key-value",
+  ].join(" "),
+  liveRules,
+);
+
+for (const fragment of ["https://live.example.test/v1", "live.example.test", "codex-real-model-2026", "opaque-live-key-value"]) {
+  check(`redacts live configured value ${fragment}`, !liveProviderDetail.includes(fragment), "configured value remained");
+}
+check("uses endpoint alias in live redaction", liveProviderDetail.includes("[staging-endpoint]"), liveProviderDetail);
+check("uses model alias in live redaction", liveProviderDetail.includes("[staging-model]"), liveProviderDetail);
+
+const liveError = errorEvidence(
+  new Error("HTTP 400 model=codex-real-model-2026 endpoint=https://live.example.test/v1 apiKey=opaque-live-key-value"),
+  liveRules,
+);
+check("redacts configured values in Error evidence", !/live\.example|codex-real-model|opaque-live-key/.test(liveError), liveError);
+
 const normalizedBaseUrl = validateCodexBaseUrl(" https://SERVICE.EXAMPLE.test/v1/// ");
 check("normalizes valid absolute CODEX_BASE_URL", normalizedBaseUrl === "https://service.example.test/v1", normalizedBaseUrl);
 
@@ -107,6 +140,30 @@ checkThrows(
   "rejects CODEX_BASE_URL non-HTTPS scheme",
   () => validateCodexBaseUrl("http://service.example.test/v1"),
   /absolute https URL/,
+);
+
+check(
+  "defaults missing CODEX_MAX_CONTEXT_TOKENS",
+  validatePositiveIntegerEnv("CODEX_MAX_CONTEXT_TOKENS", undefined, 8192) === 8192,
+);
+check(
+  "accepts positive CODEX_MAX_CONTEXT_TOKENS",
+  validatePositiveIntegerEnv("CODEX_MAX_CONTEXT_TOKENS", "128000", 8192) === 128000,
+);
+checkThrows(
+  "rejects CODEX_MAX_CONTEXT_TOKENS zero",
+  () => validatePositiveIntegerEnv("CODEX_MAX_CONTEXT_TOKENS", "0", 8192),
+  /positive integer/,
+);
+checkThrows(
+  "rejects CODEX_MAX_CONTEXT_TOKENS decimal",
+  () => validatePositiveIntegerEnv("CODEX_MAX_CONTEXT_TOKENS", "8192.5", 8192),
+  /positive integer/,
+);
+checkThrows(
+  "rejects CODEX_MAX_CONTEXT_TOKENS unsafe integer",
+  () => validatePositiveIntegerEnv("CODEX_MAX_CONTEXT_TOKENS", "9007199254740993", 8192),
+  /positive safe integer/,
 );
 
 const endpointAlias = validateEvidenceAlias("CODEX_EVIDENCE_ENDPOINT_ALIAS", "[reference-endpoint]");

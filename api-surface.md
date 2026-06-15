@@ -54,10 +54,11 @@
 | POST | `/v1/runs` | `Idempotency-Key` 헤더. body: `scenario_version_id`, `params`(params_schema 준수), optional `params.as_of`, optional `workitem_id`. operator+ 권한 필요 | 201 + run 리소스(`run_id`, `status=queued`). `run.created` 이벤트 emit | `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422), `AUTHZ_FORBIDDEN`(403), `SITE_PROFILE_BLOCKED`(403) |
 | GET | `/v1/runs/{run_id}` | — | 200 + run 상세(`status` ∈ RunState, `worker_id`, `attempts`, `as_of`, 진행 노드) | `RUN_NOT_FOUND`(404) |
 | GET | `/v1/runs` | 쿼리: `?status=<RunState>&scenario_version_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` | — |
-| POST | `/v1/runs/{run_id}/abort` | `Idempotency-Key` 헤더. body: optional `reason` | 202 (abort 수락 → `aborting` 경유 `cancelled`). `run.cancelled` 이벤트 | `RUN_NOT_FOUND`(404), `RUN_ALREADY_TERMINAL`(409), `RUN_ABORTED`(409) |
+| POST | `/v1/runs/{run_id}/abort` | `Idempotency-Key` 헤더. body: optional `reason` | 202 (abort 수락 → `aborting` 경유 `cancelled`). `run.cancelled` 이벤트 | `RUN_NOT_FOUND`(404), `RUN_ALREADY_TERMINAL`(409), `RUN_ABORTED`(409), `WORKITEM_CHECKOUT_CONFLICT`(409, `suspending` bookmark in-flight) |
 
 **어휘 정합(필수)**: API 명령은 `abort` → Run 상태는 `aborting`→`cancelled`(state-machine R6/R10/R16/R23/R24/R26/R27/R28) → 이벤트는 `run.cancelled`(event-envelope) → UI 문구는 "취소됨". 엔드포인트명은 `abort`를 유지한다.
 - `abort` 대상 상태: 비종결 실행 상태 전체(running·suspending·suspended·resume_requested·resuming). **예외: `completing`** — finalize 우선(R25), abort는 거부되고 `RUN_ALREADY_TERMINAL`(409)로 응답(상태 유지).
+- `suspending`은 R26 guard(`bookmarkCancelable`)가 런타임 소유 bookmark 저장/취소 상태를 증명할 때만 성공 응답을 낼 수 있다. Product Open v1 제어평면에는 bookmark-cancel port나 durable abort intent가 없으므로, 영속 상태가 `suspending`인 abort 요청은 멱등 예약 전에 `WORKITEM_CHECKOUT_CONFLICT`(409, `details.reason="run_bookmark_in_progress"`)로 실패시킨다. 클라이언트는 R11로 `suspended`에 도달한 뒤 같은 `Idempotency-Key`로 재시도할 수 있고, 그때 R16을 적용한다. bookmark 저장 중 202 성공을 반환해 side effect를 추정하는 동작은 금지한다.
 - 이미 종결(`completed`/`cancelled`/`failed_*`)된 run에 abort → `RUN_ALREADY_TERMINAL`(409). 이미 취소된 run에 대한 후속 작업 거부 → `RUN_ABORTED`(409).
 - `queued`/`claimed` 단계 abort는 run.started 이전이라 Run 전이가 아니라 dispatcher의 큐/claim 회수로 처리(state-machine §1 "abort 보편성" 주석). dispatcher는 `(id,status)` CAS로 큐/claim을 취소하고 같은 트랜잭션 outbox에 `run.cancelled`를 기록한다. 0 rows면 재조회해 `RUN_ALREADY_TERMINAL` 또는 최신 상태 기준으로 재판정한다. API는 동일하게 202를 수락하되 결과는 `cancelled`로 수렴.
 
@@ -92,11 +93,12 @@
 | POST | `/v1/human-tasks/{human_task_id}/start` | `Idempotency-Key`. 배정된 담당자/역할 스코프 필요 | 200 + `in_progress`(H2) | `HUMAN_TASK_EXPIRED`(410), `AUTHZ_FORBIDDEN`(403) |
 | POST | `/v1/human-tasks/{human_task_id}/resolve` | `Idempotency-Key`. body: 해소 결과(kind별 payload) | 200 + `resolved`. `human_task.resolved` 이벤트 → Run `resume_requested`(R13/H3) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
 | POST | `/v1/human-tasks/{human_task_id}/assign` | `Idempotency-Key`. body: `assignee` | 200 + `assigned`(H1/H6) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
-| POST | `/v1/human-tasks/{human_task_id}/escalate` | `Idempotency-Key`. body: optional `reason` | 200 + `escalated`(H5). 관리자 큐, Run R15(suspended 유지) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
+| POST | `/v1/human-tasks/{human_task_id}/escalate` | `Idempotency-Key`. body: optional `reason` | 200 + `escalated`(H5)는 명시 routing/assignment owner가 `reassignAssignee`를 처리할 때만 가능. 현재 Fastify 경로는 미정의 routing이면 fail-closed. | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410), `CONTROL_PLANE_INTERNAL_ERROR`(500, unsupported `reassignAssignee`) |
 
 - 상태값은 `HumanTaskState`(`open`/`assigned`/`in_progress`/`resolved`/`expired`/`cancelled`/`escalated`)·`HumanTaskKind`(`approval`/`validation`/`exception`/`captcha`/`mfa`)와 정확히 일치(state-machine-types.ts).
 - 만료/종결 태스크에 resolve/assign/escalate 시도 → `HUMAN_TASK_EXPIRED`(410, business). timeout 정책 분기(fail→expired H4a / escalate→escalated H4b)는 태스크 생성 시 `on_timeout`(reserved-handlers @human_task 입력, 기본 `fail`)로 일원화되며 API가 재판정하지 않는다.
 - 재에스컬레이션 후에도 미해소 → H8(escalated→timeout→expired, 무한 대기 방지). escalate API는 H5(수동) 진입만 담당하고 timeout 기반 H4b/H8은 타이머 주도(API 비주도).
+- assignment/routing 계약: `assignee`는 명시 담당자 uuid, `assignee_role`은 @human_task 입력에서 온 역할 스코프이며 API가 임의로 "admin queue"로 재해석하지 않는다. `reassignAssignee` side effect는 반드시 호출측이 명시적으로 소비해야 한다. 현재 성공 가능한 소비자는 H6 `assign`뿐이며, 요청 body의 `assignee`로 `human_tasks.assignee`를 설정한다. H5 수동 escalate와 R15 coupling에서 발생하는 `reassignAssignee`는 durable routing port/assignee policy가 없으면 미지원 pending side effect로 보고 동일 트랜잭션을 rollback한 뒤 `CONTROL_PLANE_INTERNAL_ERROR`로 fail-closed해야 한다(`human_task.escalated` 이벤트 emit 금지, run 상태 유지).
 - `cancel`(H7)은 별도 엔드포인트를 두지 않는다 — Run abort(§1) 연동으로만 발생(R16). 직접 API 노출은 Phase 2 결정.
 
 ---
@@ -169,7 +171,7 @@
 | `POST /runs` | (dispatch) → `queued` | `run.created` | "대기" |
 | `POST /runs/{id}/abort` | `*` → `aborting` → `cancelled` (R6/R10/R16/R23/R24/R26/R27/R28), `completing`은 거부(R25) | `run.cancelled` | "취소됨" |
 | `POST /human-tasks/{id}/resolve` | HumanTask `in_progress`→`resolved`(H3), Run `suspended`→`resume_requested`(R13) | `human_task.resolved` | "처리완료" |
-| `POST /human-tasks/{id}/escalate` | HumanTask `*`→`escalated`(H5), Run R15(suspended 유지) | `human_task.escalated` | "관리자 이관" |
+| `POST /human-tasks/{id}/escalate` | H5/R15 `reassignAssignee` 처리 owner가 있을 때만 HumanTask `*`→`escalated`, Run R15(suspended 유지). 미지원이면 fail-closed rollback | `human_task.escalated`(성공 시) | "관리자 이관" |
 | `POST /dlq/{id}/replay` | Workitem `abandoned`→`new`(W10) | (workitem 재인입) | "재처리" |
 | `POST /scenarios/{id}/promote` | (version 승격 + AST 캐시 빌드) | — | "승격됨" |
 
@@ -180,8 +182,6 @@
 - [해소 v1.5] run 외 엔티티 미존재 → `RESOURCE_NOT_FOUND`(404) 신설. 일반 RBAC 거부 → `AUTHZ_FORBIDDEN`(403) 신설(auth-rbac.md). 자원특정 거부(시크릿/artifact→`SECRET_ACCESS_DENIED`, 커넥터→`CONNECTOR_PERMISSION_DENIED`, 사이트 런타임 차단→`SITE_PROFILE_BLOCKED`)는 유지.
 - RBAC 역할·권한 매트릭스: `auth-rbac.md`. gateway policy 버전 컬럼: `db/migration_core_entities.sql` `gateway_policies.version`. 전체 OpenAPI 본문(스키마/파라미터/details)은 D1 codegen 위임.
 
-> TODO: [BLOCKED] Runtime-owned abort drain/finalization remains undefined for cancelable `suspending` abort responses while bookmark save is in flight.
-> Required decision: Runtime/API owners must define bookmark-cancel ownership, a durable bookmark-cancel port, or a durable abort intent that waits for `suspended` before applying R16; until then implementations must keep rejecting `suspending` abort before idempotency reservation instead of returning successful responses with unknown bookmark side effects, preserving no silent false/unknown.
+> Repo-controlled fail-closed v1: `suspending` abort success requires a runtime-owned bookmark-cancel port or durable abort intent; absent that owner, API rejects before idempotency reservation and allows retry after `suspended`.
 
-> TODO: [BLOCKED] Human-task `reassignAssignee` side-effect ownership remains undefined for H5 manual escalate and R15 run coupling.
-> Required decision: Runtime/API owners must define whether `reassignAssignee` maps to an assignee, assignee_role, admin queue, durable human-task routing port, or another explicit assignment policy before control-plane implementations may return successful `escalate` responses; until then they must fail closed and roll back instead of returning success with an unknown reassignment side effect.
+> Repo-controlled fail-closed v1: H5/R15 `reassignAssignee` success requires an explicit routing/assignment owner; absent that owner, API rolls back and returns `CONTROL_PLANE_INTERNAL_ERROR` instead of reporting `escalated`.

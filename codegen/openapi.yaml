@@ -134,6 +134,8 @@ paths:
         이벤트는 run.cancelled → UI 문구 "취소됨". 엔드포인트명은 abort 유지(api-surface §1).
         completing은 finalize 우선(R25) — abort 거부, RUN_ALREADY_TERMINAL(409). queued/claimed는
         dispatcher 큐/claim 회수로 처리하되 API는 동일하게 202 수락(결과 cancelled로 수렴).
+        suspending은 bookmark-cancel port/durable abort intent가 없으면 bookmark 저장 중 side effect를
+        추정하지 않고 멱등 예약 전에 WORKITEM_CHECKOUT_CONFLICT(run_bookmark_in_progress)로 fail-closed한다.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -152,7 +154,7 @@ paths:
         '404':
           $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
         '409':
-          $ref: '#/components/responses/Error'        # RUN_ALREADY_TERMINAL / RUN_ABORTED
+          $ref: '#/components/responses/Error'        # RUN_ALREADY_TERMINAL / RUN_ABORTED / WORKITEM_CHECKOUT_CONFLICT(suspending)
         default:
           $ref: '#/components/responses/Error'
 
@@ -473,9 +475,11 @@ paths:
       operationId: escalateHumanTask
       summary: 휴먼 태스크 에스컬레이션
       description: >
-        escalated(H5, 수동 진입만 담당). 관리자 큐, Run R15(suspended 유지). human_task.escalated 이벤트.
-        timeout 기반 H4b/H8은 타이머 주도(API 비주도). 권한 부족 → AUTHZ_FORBIDDEN(403).
-        만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
+        escalated(H5, 수동 진입만 담당). 성공 응답은 명시 routing/assignment owner가 reassignAssignee를
+        소비할 때만 가능하다. 현재 Fastify 경로는 H5/R15 reassignAssignee를 admin queue/assignee_role로
+        추정 매핑하지 않고, 미지원 pending side effect면 rollback 후 CONTROL_PLANE_INTERNAL_ERROR로
+        fail-closed한다. timeout 기반 H4b/H8은 타이머 주도(API 비주도). 권한 부족 →
+        AUTHZ_FORBIDDEN(403). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -495,6 +499,8 @@ paths:
           $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
         '410':
           $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
+        '500':
+          $ref: '#/components/responses/Error'        # CONTROL_PLANE_INTERNAL_ERROR unsupported reassignAssignee
         default:
           $ref: '#/components/responses/Error'
 

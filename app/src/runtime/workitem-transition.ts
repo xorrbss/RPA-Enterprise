@@ -48,6 +48,7 @@ export async function applyWorkitemTransition(
   const setsCheckedBy = hasSetField(sideEffects, "checked_out_by");
   const setsCheckedAt = hasSetField(sideEffects, "checked_out_at");
   const resetsAttempts = hasSetField(sideEffects, "attempts"); // W10: attempts 리셋
+  const incrementsAttempts = ctx.event.type === "system_exception" || ctx.event.type === "checkout_expired";
   const emitEvents = sideEffects.filter(
     (s): s is Extract<SideEffectCmd, { kind: "emitEvent" }> => s.kind === "emitEvent",
   );
@@ -65,10 +66,24 @@ export async function applyWorkitemTransition(
             updated_at     = now(),
             checked_out_by = CASE WHEN $2::boolean THEN $3::uuid ELSE checked_out_by END,
             checked_out_at = CASE WHEN $4::boolean THEN now() ELSE checked_out_at END,
-            attempts       = CASE WHEN $5::boolean THEN 0 ELSE attempts END
-      WHERE id = $6::uuid AND tenant_id = $7::uuid AND status = $8
+            attempts       = CASE
+                               WHEN $5::boolean THEN 0
+                               WHEN $6::boolean THEN attempts + 1
+                               ELSE attempts
+                             END
+      WHERE id = $7::uuid AND tenant_id = $8::uuid AND status = $9
     RETURNING status`,
-    [next, setsCheckedBy, ctx.workerId ?? null, setsCheckedAt, resetsAttempts, ctx.workitemId, ctx.tenantId, ctx.fromStatus],
+    [
+      next,
+      setsCheckedBy,
+      ctx.workerId ?? null,
+      setsCheckedAt,
+      resetsAttempts,
+      incrementsAttempts,
+      ctx.workitemId,
+      ctx.tenantId,
+      ctx.fromStatus,
+    ],
   );
 
   if (updated.rowCount === 0) {

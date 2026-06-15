@@ -166,6 +166,7 @@ export function transitionRun(
         ]);
       }
       // R15: suspended + human_task.escalated → suspended (담당자 재배정, 상태 유지)
+      //   reassignAssignee는 호출측이 명시 routing/assignee로 소비해야 하며, 미지원이면 fail-closed.
       if (ev.type === "human_task.escalated") {
         return r("suspended", [{ kind: "reassignAssignee" }]);
       }
@@ -388,6 +389,7 @@ export function transitionHumanTask(
       // H4a/H4b: open + timeout → on_timeout 분기
       if (ev.type === "timeout") return timeoutBranch(cur, g);
       // H5: open + escalate → escalated (관리자 수동 에스컬레이션)
+      //   reassignAssignee는 자동 admin queue 추정 금지; 호출측 미지원이면 rollback + fail-closed.
       if (ev.type === "escalate") {
         return r("escalated", [{ kind: "emitEvent", event: "human_task.escalated" }, { kind: "reassignAssignee" }]);
       }
@@ -401,6 +403,7 @@ export function transitionHumanTask(
       // H4a/H4b: assigned + timeout → on_timeout 분기
       if (ev.type === "timeout") return timeoutBranch(cur, g);
       // H5: assigned + escalate → escalated
+      //   reassignAssignee는 자동 admin queue 추정 금지; 호출측 미지원이면 rollback + fail-closed.
       if (ev.type === "escalate") {
         return r("escalated", [{ kind: "emitEvent", event: "human_task.escalated" }, { kind: "reassignAssignee" }]);
       }
@@ -416,6 +419,7 @@ export function transitionHumanTask(
       // H4a/H4b: in_progress + timeout → on_timeout 분기
       if (ev.type === "timeout") return timeoutBranch(cur, g);
       // H5: in_progress + escalate → escalated
+      //   reassignAssignee는 자동 admin queue 추정 금지; 호출측 미지원이면 rollback + fail-closed.
       if (ev.type === "escalate") {
         return r("escalated", [{ kind: "emitEvent", event: "human_task.escalated" }, { kind: "reassignAssignee" }]);
       }

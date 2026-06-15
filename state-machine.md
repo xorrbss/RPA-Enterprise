@@ -49,6 +49,8 @@ IR terminal `success_empty`는 RunState를 새로 만들지 않고 `completed` +
 
 **abort 보편성**: abort_requested는 비종결 실행 상태 전체에서 정의된다 — running(R6)·suspending(R26)·suspended(R16)·resume_requested(R28)·resuming(R27). 어느 상태에서도 `aborting`을 경유해 `cancelled`로 마감(어휘 체인 abort→cancelled→run.cancelled 유지). 유일한 예외는 `completing`(R25, finalize 우선). (queued/claimed 단계 abort는 run.started 이전이므로 dispatcher가 큐/claim 회수로 처리 — Run 전이 아님.)
 
+**R26 fail-closed 규칙**: `suspending`은 bookmark 저장 중인 전이 상태라 API가 `bookmarkCancelable=true`를 추정하면 안 된다. bookmark-cancel port 또는 durable abort intent가 연결된 런타임만 R26을 즉시 적용할 수 있다. Product Open v1 제어평면은 그 소유권이 없으므로 `suspending` abort를 멱등 예약 전에 `WORKITEM_CHECKOUT_CONFLICT`(`run_bookmark_in_progress`)로 거부하고, R11로 `suspended`에 도달한 뒤 R16으로 재시도하게 한다. 이는 성공 응답으로 알 수 없는 bookmark side effect를 숨기는 것을 금지하기 위한 계약이다.
+
 ---
 
 ## 2. Workitem 상태
@@ -95,6 +97,8 @@ IR terminal `success_empty`는 RunState를 새로 만들지 않고 `completed` +
 
 규칙: Phase A에서는 `live_assist` 종류 없이 approval/validation/captcha/mfa/exception만. captcha/mfa는 **snapshot 기반 처리**(Phase A, lease 반납됨) — 실시간 제어는 Phase B(D12).
 
+**assignment/routing 규칙**: `reassignAssignee`는 자동 DB 반영이 아니라 호출측이 반드시 소비해야 하는 pending side effect다. H6 `assign`은 요청 body의 명시 `assignee`로 이 side effect를 소비한다. H5 수동 escalate와 Run R15는 durable routing port/assignee policy가 없으면 어떤 assignee/assignee_role/admin queue로도 추정 매핑하지 않는다. 현재 API 구현은 이 pending side effect를 미지원으로 보고 동일 트랜잭션 rollback + `CONTROL_PLANE_INTERNAL_ERROR`로 fail-closed한다.
+
 ---
 
 ## 4. 전이 함수 시그니처 (codegen 대상)
@@ -116,8 +120,6 @@ function transitionHumanTask(cur: HumanTaskState, ev: HumanTaskEvent, g: HumanTa
 
 finalization 일관성: 종결 상태 진입 시 run_steps/workitems/events가 모두 최종값으로 commit되어야 하며, 부분 실패는 R22/W5로 흡수한다.
 
-> TODO: [BLOCKED] Human-task `reassignAssignee` side-effect ownership remains undefined for H5 manual escalate and R15 run coupling.
-> Required decision: Runtime/API owners must define whether `reassignAssignee` maps to an assignee, assignee_role, admin queue, durable human-task routing port, or another explicit assignment policy before control-plane implementations may return successful `escalate` responses; until then they must fail closed and roll back instead of returning success with an unknown reassignment side effect.
+> Repo-controlled fail-closed v1: H5/R15 `reassignAssignee` success requires an explicit routing/assignment owner; absent that owner, API rolls back and returns `CONTROL_PLANE_INTERNAL_ERROR` instead of reporting `escalated`.
 
-> TODO: [BLOCKED] Runtime-owned abort drain/finalization remains undefined for cancelable `suspending` abort responses while bookmark save is in flight.
-> Required decision: Runtime owners must define bookmark-cancel ownership, a durable bookmark-cancel port, or a durable abort intent that waits for `suspended` before applying R16; until then control-plane implementations must keep rejecting `suspending` abort before idempotency reservation instead of returning successful responses with unknown bookmark side effects, preserving no silent false/unknown.
+> Repo-controlled fail-closed v1: `suspending` abort success requires a runtime-owned bookmark-cancel port or durable abort intent; absent that owner, API rejects before idempotency reservation and allows retry after `suspended`.

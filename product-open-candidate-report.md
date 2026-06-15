@@ -58,21 +58,21 @@ operate the deployment path outside this repository.
   `release-open-checklist.md` / `release-decisions.md`.
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
   blockers split by scope: external/staging blocker categories for concrete
-  deploy target, secret provisioning, non-app producer retention policy, and
-  D5 Codex SSE live capability evidence;
-  an expanded SecretRef evidence packet with five specific unchecked rows; and
-  repo-controlled D4.5 API P1 and D3 runtime rows for cancelable suspending
-  abort bookmark-cancel ownership, human-task reassignment ownership, runtime executor orchestration/audit semantics, artifact
-  redaction/retention object I/O, and remote gate evidence.
-  The durable security audit writer D4.4 row is now resolved locally by
+  deploy target, secret provisioning, non-app producer retention policy, D5
+  Codex SSE live capability evidence, production/staging artifact object-store
+  receipts, and PR/main remote gate evidence. Repo-controlled D4.5 API P1 and
+  D3 runtime execution blocker rows are now resolved locally as fail-closed
+  API behavior, real executor orchestration/outcome mapping, and artifact
+  lifecycle port/evidence guardrails.
+  The durable security audit writer D4.4 row remains resolved locally by
   `DurableSecurityAuditDecisionWriter` evidence.
   The current audit enforces both directions: every actionable blocked-decision
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 32 markers, 18 actionable blockers, 13 known release decisions tracked,
-  13 release decisions checked (8 active external/staging checklist rows;
-  2 repo-controlled D4.5 API P1 open rows; 4 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
+  output: 25 markers, 11 actionable blockers, 13 known release decisions tracked,
+  13 release decisions checked (11 active external/staging checklist rows;
+  0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
 ## Changed Files / Evidence Scope
@@ -188,13 +188,13 @@ Passed locally:
   assignee or assignee_role returns `AUTHZ_FORBIDDEN` before idempotency-key
   reservation, denied tasks remain `in_progress`, H6 assign from `escalated`
   records the explicit reassigned assignee, and H5 manual escalate fails closed
-  with rollback while `reassignAssignee` ownership is unresolved. `app/test/api-runs-abort.int.ts`
+  with rollback unless an explicit routing/assignment owner is configured. `app/test/api-runs-abort.int.ts`
   now proves queued abort cancellation, claimed abort BrowserLease expiry,
   claimed multi-lease fail-closed rollback, running/resuming abort `aborting`
   state entry with persisted `abort_source_status` and same-transaction
   `run_abort` enqueue, idempotent `aborting` replay re-enqueue, and fail-closed
-  rejection of `suspending` before idempotency reservation while bookmark-cancel
-  ownership is unresolved. `app/test/runtime-worker-abort-finalization.int.ts`
+  rejection of `suspending` before idempotency reservation unless a
+  bookmark-cancel owner or durable abort intent is configured. `app/test/runtime-worker-abort-finalization.int.ts`
   proves `run_abort` drains and timeouts finalize through R23/R24 exactly once,
   expire BrowserLease rows by tenant/run/owner CAS, claim one lease as
   `draining` so duplicate jobs defer instead of invoking the drainer twice,
@@ -213,9 +213,9 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 32 markers, 18 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked (8 active external/staging
-  checklist rows; 2 repo-controlled D4.5 API P1 open rows; 4 repo-controlled D3
+  (current output: 25 markers, 11 actionable blockers, 13 known release
+  decisions tracked, 13 release decisions checked (11 active external/staging
+  checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
 - Current dirty-delta local gate evidence for 2026-06-15 KST includes
   DB-backed release posture from `npm --prefix codegen run ci:local:temp-db`,
@@ -406,11 +406,9 @@ Environment note:
   `retention_until` and application-supplied lifecycle claims. This
   local dirty delta is not merged/current remote release evidence until a later
   PR/main `Contract Gates` run attaches the required job URLs, and it is still
-  not Product Open/staging execution readiness until real executor
-  orchestration, artifact redaction/retention jobs, executor audit semantics,
-  production/staging SecretRef-backed artifact object I/O/deletion
-  implementations and evidence using the repo-defined claim-lease/finalize-CAS
-  contract, and RBAC/tenant execution gates are wired and evidenced.
+  not executable staging/open evidence until production/staging
+  SecretRef-backed artifact object I/O/deletion receipts and remote RBAC/tenant
+  execution gate URLs are supplied outside this local repo environment.
 - Current app-runtime scope gap: the real Fastify app gate covers the wired app
   routes (`GET/POST /v1/runs`, run abort, human-task assign/start/resolve and
   fail-closed escalate, DLQ replay, and scenario create/read/validate/promote).
@@ -437,6 +435,21 @@ Environment note:
   rollback ownership, and any production/staging operation remain outside this
   contract-first repository. Those steps must use the resolved staging decision
   and must not materialize plaintext secrets in this repo.
+
+### Readiness Blocker Ownership Matrix
+
+| Blocker family | Closeable by repo code stream | Requires external staging packet |
+|---|---|---|
+| D4.5 API behavior | Yes: `suspending` abort bookmark-cancel ownership and human-task `reassignAssignee` ownership can close with contract/API/runtime code plus targeted tests and PR/main gates. | No external deploy evidence is needed for the repo behavior, but staging/open still remains blocked by the external rows below. |
+| D3 executor/runtime orchestration | Yes: real executor invocation, `step.started` enforcement, explicit system/security/challenge/unknown outcome mapping, and executor audit semantics can close with repo code plus non-bypass DB and app-runtime evidence. | Live staging execution evidence is still separate; do not infer it from Stagehand/CDP dry-run or temp-DB tests. |
+| Artifact redaction/retention lifecycle | Partly: repo can close the real port/worker implementation, claim/finalize CAS, fail-closed audit, and targeted tests. | Yes: staging SecretRef-backed operational credential path, object-store redaction/deletion evidence, deployment target, approval, rollback, and retention evidence must come from external owners. |
+| Staging platform, SecretStore, deploy, rollback, producer retention, D5 live model | No: this contract repo can define the shape and negative controls only. | Yes: external owners must provide the platform repo, GitHub Environment protection, deploy target, `release-approvers` approval, `platform-oncall` rollback confirmation, SecretStore alias/path, namespace/identity map, SecretRef inventory, rotation/break-glass owner, non-app producer retention policy, and redacted live D5 capability output. |
+
+No external blocker may be closed from local aliases, fixture names, hard-coded
+SecretRef identifiers, CI service-container credentials, or unredacted live
+logs. External evidence intake must follow the Staging Secret Provisioning
+Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
+
 - TODO: [BLOCKED] External concrete staging deploy target is not defined for executable Product Open deployment outside this contract repository.
   Required decision: Platform/release authority must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier (namespace/service or equivalent), release approval evidence under `release-approvers`, rollback confirmation under `platform-oncall`, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
 - Blocked summary: External staging SecretRef/SecretStore provisioning readiness is not defined outside this repository; the specific actionable evidence blockers are tracked in the Staging Secret Provisioning Evidence Packet below.
@@ -444,16 +457,12 @@ Environment note:
   Required decision: Runtime/platform owners must define per-producer retention duration/source for `raw_items.raw_payload`, `normalized_records.record`, `artifacts.object_ref`, `audit_log.payload`, and any non-D4.3 writer of `control_plane_idempotency_keys.response_body`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source, while repo-owned `events_outbox` retention is tracked separately above. Staging evidence must prove each payload-bearing writer sets `retention_until` or fails closed.
 - TODO: [BLOCKED] External D5 Codex SSE live capability evidence is missing for the intended staging model/endpoint.
   Required decision: The staging LLM owner must run `npm --prefix app/poc/d5-codex-sse run poc` with an absolute HTTPS `CODEX_BASE_URL` containing no credentials/query/fragment material, `CODEX_API_KEY`, and `CODEX_MODEL` resolved outside the repository through SecretRef/SecretStore, plus required redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` and `CODEX_EVIDENCE_MODEL_ALIAS` values, then record redacted output proving mandatory checks #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior PASS; #3 native `json_schema` and #5 model metadata may be GAP only when the fallback path/config is explicitly retained. No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material may be recorded.
-- TODO: [BLOCKED] Runtime-owned abort drain/finalization remains undefined for cancelable `suspending` abort responses while bookmark save is in flight.
-  Required decision: Runtime/API owners must define bookmark-cancel ownership, a durable bookmark-cancel port, or a durable abort intent that waits for `suspended` before applying R16; until then control-plane implementations must keep rejecting `suspending` abort before idempotency reservation instead of returning successful responses with unknown bookmark side effects, preserving no silent false/unknown.
-- TODO: [BLOCKED] Human-task `reassignAssignee` side-effect ownership remains undefined for H5 manual escalate and R15 run coupling.
-  Required decision: Runtime/API owners must define whether `reassignAssignee` maps to an assignee, assignee_role, admin queue, durable human-task routing port, or another explicit assignment policy before the control plane may return successful `escalate` responses; until then Fastify must fail closed and roll back instead of returning success with an unknown reassignment side effect, preserving no silent false/unknown.
-- TODO: [BLOCKED] Runtime executor orchestration and executor audit semantics remain incomplete beyond the local started-attempt and terminal success/business-failure completion slices.
-  Required decision: Runtime owners must still define the wiring that invokes executor plugins outside the DB transaction, requires the local `ExecutorStepAttemptStore`/`step.started` contract before every step-bound producer writes, reconciles artifacts produced during execution with final `StepResult` evidence, maps system/security/challenge/unknown final `StepResult` statuses to explicit run/workitem transitions and artifact redaction/retention job policy, and defines durable executor audit evidence without misusing the security-boundary-only `audit_log`; unresolved executor outcomes must map to explicit state-machine/error-catalog paths, not default success/failure.
-- TODO: [BLOCKED] Runtime artifact_redaction production object I/O and redacted-output evidence is not complete.
-  Required decision: Runtime/security owners must provide the production/staging `ArtifactRedactor` implementation and evidence using the repo-defined claim lease/finalize CAS contract, plus SecretRef-backed operational role wiring so it reads `artifacts.object_ref` outside long DB transactions, produces a redaction-safe object/ref or explicit `not_required` decision, updates `redaction_status` by tenant-scoped CAS from `pending` under an unexpired claim, handles `redaction_attempts`/threshold/alerting, preserves legal-hold/retention metadata, persists `sha256`/quarantine behavior, appends required `bypassrls.use` audit for the operational role, and proves no plaintext Secret/PII or internal `ObjectRef` is emitted. The local `PgRuntimeWorker` fakeable-port plumbing proves the repo-owned claim/port/finalize shape, but it must not be cited as staging redaction evidence until the real port, SecretRef-backed operational credential path, and object-store evidence are approved.
-- TODO: [BLOCKED] Runtime artifact_retention production external object deletion evidence is not complete.
-  Required decision: Runtime/platform owners must provide the production/staging `ArtifactRetentionStore` delete implementation and evidence using the repo-defined claim lease/finalize CAS contract, plus SecretRef-backed operational role wiring for `object_ref`, idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal_hold/quarantine handling, evidence/audit semantics, and staging credential/SecretRef path before Product Open can claim external artifact purge. The local `PgRuntimeWorker` fakeable-port plumbing proves the repo-owned claim/port/finalize shape, but it is not staging external object deletion evidence without the approved real port and object-store credential path.
+- Resolved repo evidence: cancelable `suspending` abort and H5/R15 `reassignAssignee` are explicit fail-closed v1 paths. Successful in-flight bookmark abort still requires a future bookmark-cancel owner or durable abort intent; successful manual escalate still requires a future routing/assignment owner. Until then the API rejects/rolls back before reporting success, preserving no silent false/unknown.
+- Resolved repo evidence: runtime executor orchestration and audit semantics now have a local path through `PgExecutorStepOrchestrator`, `ExecutorStepAttemptStore`, `PgExecutorInvocationRecorder`, and `PgExecutorCompletionCoordinator`; executor plugins run outside DB transactions, step-bound producer writes require `step.started`, system/security/challenge/uncertain outcomes map through explicit catalog-backed paths, lifecycle jobs are enqueued for artifact-producing terminal outcomes, and executor evidence does not misuse security-boundary `audit_log`.
+- TODO: [BLOCKED] Runtime artifact_redaction production/staging object I/O and redacted-output evidence is not complete.
+  Required decision: Runtime/security/platform owners must provide staging or production evidence from a real `ArtifactRedactor` port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, producing a redaction-safe object/ref or explicit `not_required` decision, updating `redaction_status` by tenant-scoped CAS from `pending` under an unexpired claim, handling `redaction_attempts`/threshold/alerting, preserving legal-hold/retention metadata, persisting `sha256`/quarantine behavior, appending required `bypassrls.use` audit for the operational role, and proving no plaintext Secret/PII or internal `ObjectRef` is emitted. The local fake/test port evidence proves repo guardrails only and must not be cited as staging redaction evidence.
+- TODO: [BLOCKED] Runtime artifact_retention production/staging external object deletion evidence is not complete.
+  Required decision: Runtime/platform owners must provide staging or production evidence from a real `ArtifactRetentionStore` delete port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, with idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal-hold/quarantine handling, evidence/audit semantics, and approved staging credential/SecretRef path before Product Open can claim external artifact purge. The local fake/test port evidence proves repo guardrails only and is not staging external object deletion evidence.
 - TODO: [BLOCKED] Runtime execution staging gates are not yet complete remote evidence.
   Required decision: Release/runtime owners must provide PR/main `Contract Gates` evidence proving tenant boundary, RBAC/redaction, no `BYPASSRLS`, no silent false/unknown behavior, and the required `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs for the dirty runtime delta before citing it as current staging/open evidence. Local non-bypass temp-DB evidence is recorded above but does not replace remote release evidence.
 
@@ -488,8 +497,9 @@ Resolved locally for the repo-owned boundary/evidence slice:
 
 ### Executor Invocation Recorder Evidence Packet
 
-Resolved locally for the started-attempt, final-recording, and terminal
-success/business-failure completion slices only:
+Resolved locally for started-attempt, executor plugin orchestration,
+final-recording, terminal completion, explicit outcome mapping, and executor
+evidence semantics:
 
 - Boundary: `ExecutorInvocationRecorder` in `ts/runtime-contract.ts`; app-runtime
   implementation: `PgExecutorInvocationRecorder` in
@@ -520,6 +530,13 @@ success/business-failure completion slices only:
   redaction/retention runtime job intents when artifacts exist, and rolls back
   the step/run/workitem transition when artifact-producing completion lacks a
   lifecycle enqueue port.
+- Executor orchestration and non-success outcomes: `PgExecutorStepOrchestrator`
+  begins a local attempt in a DB transaction, invokes the configured
+  `ExecutorPlugin` outside that transaction, resolves artifact metadata, and
+  records or completes the result through the recorder/coordinator. System,
+  security, challenge, and uncertain outcomes now map through explicit
+  catalog-backed run/workitem paths; unsupported outcomes fail closed instead
+  of defaulting to success or business failure.
 - Fail-closed behavior: duplicate final attempts, cross-tenant references,
   cross-tenant starts, missing stagehand calls, artifact metadata mismatches,
   missing `step.*` outbox refs, invalid timings, missing/false/unknown terminal
@@ -544,12 +561,11 @@ success/business-failure completion slices only:
   internal `ObjectRef`, public `ArtifactRef`, claim filters, and idempotent
   retention delete semantics. This does not provide production/staging lifecycle
   object I/O evidence or operational credential approval.
-- Scope note: this does not execute the real runner, does not require every
-  executor path to call the started-attempt contract yet, does not reconcile
-  every artifact-producing execution path with final `StepResult` evidence, does
-  not map system/security/challenge/unknown outcomes, does not run artifact redaction or retention
-  object I/O, and does not define generic executor audit semantics beyond local
-  started-attempt and terminal success/business-failure completion evidence.
+- Scope note: this is repo-controlled runtime evidence, not external staging
+  execution evidence. Positive challenge suspension and security notification
+  integrations remain fail-closed unless their explicit ports are provided, and
+  production/staging artifact object I/O/deletion evidence remains blocked on
+  external SecretRef-backed object-store receipts.
 - Test evidence: `app/test/executor-invocation-recorder.int.ts`,
   `app/test/gateway-artifact-sink.int.ts`, `db/migration_smoke.sql`, and
   `scripts/db-static-smoke.mjs`.
@@ -619,6 +635,20 @@ Evidence intake rules for this packet:
   Required decision: External staging owners must name the rotation owner/cadence and break-glass/update procedure before staging deploy.
 - TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing CI/deploy negative-log, secret-scan or equivalent negative control, and SecretStore resolution proof.
   Required decision: External staging owners must provide the evidence artifact location proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext secret materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening in staging CI/deploy logs.
+
+## Remaining External Evidence Notes
+
+All repo-controlled D4.5 API P1 and D3 runtime execution rows are locally
+resolved in this patch. The remaining unchecked rows require external owner
+action, external SecretRef/SecretStore provisioning, production/staging
+object-store receipts, live D5 staging model output, or PR/main remote CI job
+URLs.
+
+Do not close those rows from local fixtures, temp DBs, fake object-store ports,
+hard-coded aliases, CI service-container credentials, or unredacted logs. When
+external owners provide evidence, update the matching checklist row, replace the
+matching blocked marker in this report with a redacted evidence reference, and
+refresh the `blocked:audit` count in both documents.
 
 ## Next 24h Actions
 

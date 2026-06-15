@@ -1,5 +1,9 @@
+import { randomUUID } from "node:crypto";
+
 import type pg from "pg";
 
+import type { ClassifiedException } from "../../../ts/core-types";
+import { ERROR_CATALOG, type ErrorCode } from "../../../ts/error-catalog";
 import type {
   EventId,
   ExecutorInvocationRecordInput,
@@ -14,6 +18,41 @@ import { recordExecutorInvocationInTx } from "./executor-invocation-recorder";
 
 export interface RuntimeJobEnqueuePort {
   enqueueRuntimeJob(client: pg.PoolClient, job: RuntimeWorkerJob): Promise<void>;
+}
+
+export interface ExecutorSecurityNotificationPort {
+  notifySecurityException(
+    client: pg.PoolClient,
+    input: {
+      tenantId: string;
+      runId: string;
+      stepId: string;
+      attempt: number;
+      correlationId: string;
+      exception: ClassifiedException;
+    },
+  ): Promise<void>;
+}
+
+export interface ExecutorChallengeSuspensionPort {
+  suspendForChallenge(
+    client: pg.PoolClient,
+    input: {
+      tenantId: string;
+      runId: string;
+      stepId: string;
+      attempt: number;
+      correlationId: string;
+      exception: ClassifiedException;
+      pendingSideEffects: readonly SideEffectCmd[];
+    },
+  ): Promise<{ readonly emittedEvents: readonly EventId[]; readonly enqueuedRuntimeJobs?: readonly RuntimeWorkerJob[] }>;
+}
+
+export interface PgExecutorCompletionCoordinatorOptions {
+  readonly workitemMaxAttempts?: number;
+  readonly securityNotificationPort?: ExecutorSecurityNotificationPort;
+  readonly challengeSuspensionPort?: ExecutorChallengeSuspensionPort;
 }
 
 export interface ExecutorTerminalSuccessEvidence {
@@ -55,6 +94,17 @@ export interface ExecutorTerminalBusinessFailureCompletionResult {
   readonly enqueuedRuntimeJobs: readonly RuntimeWorkerJob[];
 }
 
+export interface ExecutorTerminalOutcomeCompletionInput extends ExecutorInvocationRecordInput {
+  readonly finalization?: ExecutorTerminalSuccessEvidence;
+}
+
+export interface ExecutorTerminalOutcomeCompletionResult {
+  readonly record: ExecutorInvocationRecordResult;
+  readonly emittedEvents: readonly EventId[];
+  readonly enqueuedRuntimeJobs: readonly RuntimeWorkerJob[];
+  readonly satisfiedSideEffects: readonly SideEffectCmd[];
+}
+
 export class PgExecutorCompletionRequiredError extends Error {
   constructor(message: string) {
     super(message);
@@ -66,7 +116,52 @@ export class PgExecutorCompletionCoordinator {
   constructor(
     private readonly pool: pg.Pool,
     private readonly runtimeJobEnqueuer?: RuntimeJobEnqueuePort,
+    private readonly options: PgExecutorCompletionCoordinatorOptions = {},
   ) {}
+
+  async completeTerminalOutcome(
+    input: ExecutorTerminalOutcomeCompletionInput,
+  ): Promise<ExecutorTerminalOutcomeCompletionResult> {
+    switch (input.result.status) {
+      case "success": {
+        if (input.finalization === undefined) {
+          throw new PgExecutorCompletionRequiredError("executor success outcome requires terminal finalization evidence");
+        }
+        const success = await this.completeTerminalSuccess({ ...input, finalization: input.finalization });
+        return {
+          record: success.record,
+          emittedEvents: success.emittedEvents,
+          enqueuedRuntimeJobs: success.enqueuedRuntimeJobs,
+          satisfiedSideEffects: success.satisfiedSideEffects,
+        };
+      }
+      case "failed_business": {
+        const business = await this.completeTerminalBusinessFailure(input);
+        return {
+          record: business.record,
+          emittedEvents: business.emittedEvents,
+          enqueuedRuntimeJobs: business.enqueuedRuntimeJobs,
+          satisfiedSideEffects: [],
+        };
+      }
+      case "failed_system":
+      case "uncertain":
+        return this.completeTerminalSystemFailure(input);
+      case "failed_security":
+        return this.completeTerminalSecurityFailure(input);
+      case "failed_challenge":
+        return this.completeTerminalChallengeFailure(input);
+      case "skipped":
+      case "suspended":
+        throw new PgExecutorCompletionRequiredError(
+          `executor outcome status ${input.result.status} is not terminal-outcome-mappable`,
+        );
+      default: {
+        const exhaustive: never = input.result.status;
+        throw new PgExecutorCompletionRequiredError(`executor outcome status ${String(exhaustive)} is unknown`);
+      }
+    }
+  }
 
   async completeTerminalSuccess(
     input: ExecutorTerminalSuccessCompletionInput,
@@ -288,6 +383,297 @@ export class PgExecutorCompletionCoordinator {
       };
     });
   }
+
+  private async completeTerminalSystemFailure(
+    input: ExecutorTerminalOutcomeCompletionInput,
+  ): Promise<ExecutorTerminalOutcomeCompletionResult> {
+    const exception = requireCatalogException(input, {
+      expectedClass: "system",
+      label: input.result.status === "uncertain" ? "executor uncertain outcome" : "executor system failure",
+    });
+
+    return withTenantTx(this.pool, input.key.tenantId, async (client) => {
+      const record = await recordExecutorInvocationInTx(client, input);
+      const run = await client.query<{ status: string; workitem_id: string | null; correlation_id: string }>(
+        `SELECT status, workitem_id::text, correlation_id::text
+           FROM runs
+          WHERE tenant_id=$1::uuid AND id=$2::uuid
+          FOR UPDATE`,
+        [input.key.tenantId, input.key.runId],
+      );
+      const runRow = run.rows[0];
+      if (runRow === undefined) {
+        throw new PgExecutorCompletionRequiredError("executor system failure run not found in tenant scope");
+      }
+      if (runRow.status !== "running") {
+        throw new PgExecutorCompletionRequiredError(
+          `executor system failure requires run status running; got ${runRow.status}`,
+        );
+      }
+
+      const r8 = await applyRunTransition(client, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        fromStatus: "running",
+        event: { type: "unrecoverable_exception" },
+        guard: { exceptionClass: "system" },
+        correlationId: input.correlationId,
+        eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:terminal-system-failure`,
+        occurredAt: new Date(input.result.timings.endedAt),
+      });
+      if (!r8.applied) {
+        throw new PgExecutorCompletionRequiredError(
+          `executor system failure R8 CAS conflict; observed=${r8.observed ?? "null"}`,
+        );
+      }
+      assertOnlyPendingKinds(r8.pending, ["captureFailureScreenshot", "evaluateDeadLetter"], "executor system failure R8");
+
+      const workitemEvents: EventId[] = [];
+      const satisfiedSideEffects: SideEffectCmd[] = [...r8.pending];
+      if (runRow.workitem_id !== null) {
+        const workitem = await client.query<{ status: WorkitemState; attempts: number }>(
+          `SELECT status, attempts
+             FROM workitems
+            WHERE tenant_id=$1::uuid AND id=$2::uuid
+            FOR UPDATE`,
+          [input.key.tenantId, runRow.workitem_id],
+        );
+        const workitemRow = workitem.rows[0];
+        if (workitemRow?.status !== "processing") {
+          throw new PgExecutorCompletionRequiredError(
+            `executor system failure requires linked workitem status processing; got ${workitemRow?.status ?? "missing"}`,
+          );
+        }
+        const w = await applyWorkitemTransition(client, {
+          tenantId: input.key.tenantId,
+          workitemId: runRow.workitem_id,
+          fromStatus: "processing",
+          event: { type: "system_exception" },
+          guard: { attemptsBelowMax: workitemRow.attempts + 1 < this.workitemMaxAttempts() },
+          correlationId: input.correlationId,
+          runId: input.key.runId,
+          eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:workitem-system-failure`,
+          occurredAt: new Date(input.result.timings.endedAt),
+        });
+        if (!w.applied) {
+          throw new PgExecutorCompletionRequiredError(
+            `executor system failure workitem CAS conflict; observed=${w.observed ?? "null"}`,
+          );
+        }
+        if (w.next === "abandoned") {
+          assertOnlyPendingKinds(w.pending, ["createDeadLetter"], "executor system failure W5");
+          await insertDeadLetterForExecutorFailure(client, {
+            tenantId: input.key.tenantId,
+            workitemId: runRow.workitem_id,
+            runId: input.key.runId,
+            reasonCode: exception.code as ErrorCode,
+            evidenceRef: exception.evidenceRefs?.[0],
+          });
+          satisfiedSideEffects.push(...w.pending);
+        } else {
+          assertOnlyPendingKinds(w.pending, [], "executor system failure W4");
+        }
+        workitemEvents.push(...w.emitted.map((event) => event.eventId as EventId));
+      }
+
+      const enqueuedRuntimeJobs = await enqueueArtifactLifecycleJobs(client, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        correlationId: input.correlationId,
+        artifactCount: input.artifacts.length,
+        enqueuer: this.runtimeJobEnqueuer,
+      });
+
+      return {
+        record,
+        emittedEvents: [
+          ...record.emittedEvents,
+          ...r8.emitted.map((event) => event.eventId as EventId),
+          ...workitemEvents,
+        ],
+        enqueuedRuntimeJobs,
+        satisfiedSideEffects,
+      };
+    });
+  }
+
+  private async completeTerminalSecurityFailure(
+    input: ExecutorTerminalOutcomeCompletionInput,
+  ): Promise<ExecutorTerminalOutcomeCompletionResult> {
+    const exception = requireCatalogException(input, {
+      expectedClass: "security",
+      label: "executor security failure",
+    });
+    if (this.runtimeJobEnqueuer === undefined) {
+      throw new PgExecutorCompletionRequiredError("executor security failure requires a RuntimeJobEnqueuePort for run_abort");
+    }
+    const enqueuer = this.runtimeJobEnqueuer;
+    const notifier = this.options.securityNotificationPort;
+    if (notifier === undefined) {
+      throw new PgExecutorCompletionRequiredError("executor security failure requires an ExecutorSecurityNotificationPort");
+    }
+
+    return withTenantTx(this.pool, input.key.tenantId, async (client) => {
+      const record = await recordExecutorInvocationInTx(client, input);
+      const run = await client.query<{ status: string; workitem_id: string | null; correlation_id: string }>(
+        `SELECT status, workitem_id::text, correlation_id::text
+           FROM runs
+          WHERE tenant_id=$1::uuid AND id=$2::uuid
+          FOR UPDATE`,
+        [input.key.tenantId, input.key.runId],
+      );
+      const runRow = run.rows[0];
+      if (runRow === undefined) {
+        throw new PgExecutorCompletionRequiredError("executor security failure run not found in tenant scope");
+      }
+      if (runRow.status !== "running") {
+        throw new PgExecutorCompletionRequiredError(
+          `executor security failure requires run status running; got ${runRow.status}`,
+        );
+      }
+
+      const r10 = await applyRunTransition(client, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        fromStatus: "running",
+        event: { type: "security_exception" },
+        guard: { exceptionClass: "security" },
+        correlationId: input.correlationId,
+        eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:terminal-security-failure`,
+        occurredAt: new Date(input.result.timings.endedAt),
+      });
+      if (!r10.applied) {
+        throw new PgExecutorCompletionRequiredError(
+          `executor security failure R10 CAS conflict; observed=${r10.observed ?? "null"}`,
+        );
+      }
+      assertOnlyPendingKinds(r10.pending, ["sseClose", "browserDrain", "notify"], "executor security failure R10");
+
+      const sourceRecorded = await client.query(
+        `UPDATE runs
+            SET abort_source_status = 'running'
+          WHERE tenant_id = $1::uuid
+            AND id = $2::uuid
+            AND status = 'aborting'`,
+        [input.key.tenantId, input.key.runId],
+      );
+      if (sourceRecorded.rowCount !== 1) {
+        throw new PgExecutorCompletionRequiredError("executor security failure could not persist abort_source_status");
+      }
+
+      const runAbortJob: RuntimeWorkerJob = {
+        kind: "run_abort",
+        tenantId: input.key.tenantId as RuntimeWorkerJob["tenantId"],
+        runId: input.key.runId as RuntimeWorkerJob["runId"],
+        correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
+      };
+      await enqueuer.enqueueRuntimeJob(client, runAbortJob);
+      await notifier.notifySecurityException(client, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        stepId: input.key.stepId,
+        attempt: input.key.attempt,
+        correlationId: input.correlationId,
+        exception,
+      });
+      const lifecycleJobs = await enqueueArtifactLifecycleJobs(client, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        correlationId: input.correlationId,
+        artifactCount: input.artifacts.length,
+        enqueuer,
+      });
+
+      return {
+        record,
+        emittedEvents: [...record.emittedEvents, ...r10.emitted.map((event) => event.eventId as EventId)],
+        enqueuedRuntimeJobs: [runAbortJob, ...lifecycleJobs],
+        satisfiedSideEffects: r10.pending,
+      };
+    });
+  }
+
+  private async completeTerminalChallengeFailure(
+    input: ExecutorTerminalOutcomeCompletionInput,
+  ): Promise<ExecutorTerminalOutcomeCompletionResult> {
+    const exception = requireCatalogException(input, {
+      expectedClass: "challenge",
+      label: "executor challenge failure",
+    });
+    const suspensionPort = this.options.challengeSuspensionPort;
+    if (suspensionPort === undefined) {
+      throw new PgExecutorCompletionRequiredError("executor challenge failure requires an ExecutorChallengeSuspensionPort");
+    }
+
+    return withTenantTx(this.pool, input.key.tenantId, async (client) => {
+      const record = await recordExecutorInvocationInTx(client, input);
+      const run = await client.query<{ status: string }>(
+        `SELECT status
+           FROM runs
+          WHERE tenant_id=$1::uuid AND id=$2::uuid
+          FOR UPDATE`,
+        [input.key.tenantId, input.key.runId],
+      );
+      const runStatus = run.rows[0]?.status;
+      if (runStatus !== "running") {
+        throw new PgExecutorCompletionRequiredError(
+          `executor challenge failure requires run status running; got ${runStatus ?? "missing"}`,
+        );
+      }
+
+      const r4 = await applyRunTransition(client, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        fromStatus: "running",
+        event: { type: "step.challenge_detected" },
+        guard: {},
+        correlationId: input.correlationId,
+        eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:challenge-detected`,
+        occurredAt: new Date(input.result.timings.endedAt),
+      });
+      if (!r4.applied) {
+        throw new PgExecutorCompletionRequiredError(
+          `executor challenge failure R4 CAS conflict; observed=${r4.observed ?? "null"}`,
+        );
+      }
+      assertOnlyPendingKinds(r4.pending, ["createHumanTask", "startBookmark"], "executor challenge failure R4");
+      const suspension = await suspensionPort.suspendForChallenge(client, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        stepId: input.key.stepId,
+        attempt: input.key.attempt,
+        correlationId: input.correlationId,
+        exception,
+        pendingSideEffects: r4.pending,
+      });
+      const lifecycleJobs = await enqueueArtifactLifecycleJobs(client, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        correlationId: input.correlationId,
+        artifactCount: input.artifacts.length,
+        enqueuer: this.runtimeJobEnqueuer,
+      });
+
+      return {
+        record,
+        emittedEvents: [
+          ...record.emittedEvents,
+          ...r4.emitted.map((event) => event.eventId as EventId),
+          ...suspension.emittedEvents,
+        ],
+        enqueuedRuntimeJobs: [...(suspension.enqueuedRuntimeJobs ?? []), ...lifecycleJobs],
+        satisfiedSideEffects: r4.pending,
+      };
+    });
+  }
+
+  private workitemMaxAttempts(): number {
+    const maxAttempts = this.options.workitemMaxAttempts ?? 3;
+    if (!Number.isInteger(maxAttempts) || maxAttempts <= 0) {
+      throw new PgExecutorCompletionRequiredError("executor completion workitemMaxAttempts must be a positive integer");
+    }
+    return maxAttempts;
+  }
 }
 
 function assertTerminalSuccessEvidence(evidence: ExecutorTerminalSuccessEvidence): void {
@@ -353,4 +739,73 @@ async function enqueueArtifactLifecycleJobs(
     await input.enqueuer.enqueueRuntimeJob(client, job);
   }
   return jobs;
+}
+
+function requireCatalogException(
+  input: ExecutorInvocationRecordInput,
+  expectation: { expectedClass: "system" | "security" | "challenge"; label: string },
+): ClassifiedException {
+  const exception = input.result.exception;
+  if (exception === undefined) {
+    throw new PgExecutorCompletionRequiredError(`${expectation.label} requires StepResult.exception`);
+  }
+  if (exception.class !== expectation.expectedClass) {
+    throw new PgExecutorCompletionRequiredError(`${expectation.label} requires exception.class=${expectation.expectedClass}`);
+  }
+  if (!isErrorCode(exception.code)) {
+    throw new PgExecutorCompletionRequiredError(`${expectation.label} requires exception.code from error-catalog`);
+  }
+  const catalogClass = ERROR_CATALOG[exception.code].exceptionClass;
+  if (catalogClass !== expectation.expectedClass) {
+    throw new PgExecutorCompletionRequiredError(
+      `${expectation.label} code ${exception.code} has error-catalog class ${catalogClass}`,
+    );
+  }
+  return exception;
+}
+
+function isErrorCode(value: string): value is ErrorCode {
+  return Object.prototype.hasOwnProperty.call(ERROR_CATALOG, value);
+}
+
+function assertOnlyPendingKinds(
+  sideEffects: readonly SideEffectCmd[],
+  allowedKinds: readonly SideEffectCmd["kind"][],
+  label: string,
+): void {
+  const allowed = new Set<string>(allowedKinds);
+  for (const sideEffect of sideEffects) {
+    if (!allowed.has(sideEffect.kind)) {
+      throw new PgExecutorCompletionRequiredError(`${label} produced unsupported pending side effect ${sideEffect.kind}`);
+    }
+  }
+  for (const kind of allowedKinds) {
+    if (!sideEffects.some((sideEffect) => sideEffect.kind === kind)) {
+      throw new PgExecutorCompletionRequiredError(`${label} missing pending side effect ${kind}`);
+    }
+  }
+}
+
+async function insertDeadLetterForExecutorFailure(
+  client: pg.PoolClient,
+  input: {
+    tenantId: string;
+    workitemId: string;
+    runId: string;
+    reasonCode: ErrorCode;
+    evidenceRef?: string;
+  },
+): Promise<void> {
+  await client.query(
+    `INSERT INTO dead_letter (id, tenant_id, workitem_id, run_id, reason_code, evidence_ref, replayable)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, true)`,
+    [
+      randomUUID(),
+      input.tenantId,
+      input.workitemId,
+      input.runId,
+      input.reasonCode,
+      input.evidenceRef ?? null,
+    ],
+  );
 }

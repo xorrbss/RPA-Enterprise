@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import type pg from "pg";
 
 import { safeSerialize } from "../../../security/compliance-scaffold";
@@ -53,7 +51,7 @@ export async function recordExecutorInvocationInTx(
 ): Promise<ExecutorInvocationRecordResult> {
   const normalized = validateInput(input);
   await requireRun(client, normalized.tenantId, normalized.runId);
-  const runStepId = await finalizeOrInsertRunStep(client, normalized);
+  const runStepId = await finalizeStartedRunStepOrThrow(client, normalized);
   await insertArtifactMetadata(client, runStepId, normalized);
   await requireStagehandCalls(client, normalized);
   const completed = await emitOutboxEvent(client, {
@@ -147,16 +145,15 @@ async function requireRun(client: pg.PoolClient, tenantId: string, runId: string
   }
 }
 
-async function finalizeOrInsertRunStep(
+async function finalizeStartedRunStepOrThrow(
   client: pg.PoolClient,
   input: NormalizedRecordInput,
 ): Promise<string> {
   const finalized = await finalizeStartedRunStep(client, input);
   if (finalized !== undefined) return finalized;
-
-  const runStepId = randomUUID();
-  await insertFinalRunStep(client, runStepId, input);
-  return runStepId;
+  throw new PgExecutorInvocationRecordRequiredError(
+    "executor invocation requires an existing local started attempt before producer writes",
+  );
 }
 
 async function finalizeStartedRunStep(
@@ -207,48 +204,6 @@ async function finalizeStartedRunStep(
     ],
   );
   return updated.rows[0]?.id;
-}
-
-async function insertFinalRunStep(
-  client: pg.PoolClient,
-  runStepId: string,
-  input: NormalizedRecordInput,
-): Promise<void> {
-  await client.query(
-    `INSERT INTO run_steps (
-       id, tenant_id, run_id, step_id, node_id, attempt, action, status,
-       cache_mode, action_plan_cache_id, page_state_before, page_state_after,
-       artifacts, stagehand_call_ids, side_effect, exception,
-       started_at, ended_at, duration_ms
-     )
-     VALUES (
-       $1::uuid, $2::uuid, $3::uuid, $4, $5, $6::int, $7, $8,
-       $9, $10::uuid, $11, $12,
-       $13::text[], $14::text[], $15::jsonb, $16::jsonb,
-       $17::timestamptz, $18::timestamptz, $19::int
-     )`,
-    [
-      runStepId,
-      input.tenantId,
-      input.runId,
-      input.stepId,
-      input.nodeId,
-      input.attempt,
-      input.result.action,
-      input.result.status,
-      input.result.cache.mode,
-      input.actionPlanCacheId,
-      input.result.pageStateBefore,
-      input.result.pageStateAfter,
-      input.result.artifacts,
-      input.result.stagehandCallIds ?? [],
-      input.sideEffectJson,
-      input.exceptionJson,
-      input.startedAt,
-      input.endedAt,
-      input.result.timings.durationMs,
-    ],
-  );
 }
 
 async function insertArtifactMetadata(

@@ -55,6 +55,12 @@ type HookResult = { ok: true } | { ok: false; code: "CONNECTOR_HOOK_FAILED"; rea
 | `artifact_orphan_sweeper` | 일배치 | run 삭제/취소 후 참조 없는 object 정리 |
 | `lease_sweeper` | 수초 폴링 | `browser_leases.expires_at < now()` → 프로세스 kill + cleanup 재실행(idempotent) + `expired`. credential_leases 만료도 동일 회수 |
 
+Artifact lifecycle port boundary:
+- `artifact_redaction_job` / `artifact_retention_sweeper` first claim an `artifacts` row by tenant-scoped claim lease, then perform object I/O outside the DB transaction, then finalize by `(tenant_id, artifact_id, lifecycle_claim_id, worker_id, correlation_id, unexpired claim)` CAS.
+- Real object-store ports must declare `real_object_store` binding with a `SecretRef` credential path and emit `artifact/object-io-evidence@1` receipts before success finalize. Evidence may include `ArtifactRef`, backend alias, `SecretRef` identifier, receipt id, operation, and sha256 metadata; it must never include `ObjectRef` or `PlainSecret`.
+- Local fake ports must declare `test_fake` / `artifact/object-io-local-test@1`; they are allowed only for repo tests and are not staging/product-open object-store evidence.
+- Missing port binding, missing real-port `SecretRef`, unknown port result, stale claim, expired claim, legal hold, quarantine, missing retention deadline, or object-I/O evidence mismatch fails closed and must not silently mark rows `redacted`, `not_required`, or `deleted_at`.
+
 규칙: 모든 sweeper는 **idempotent**(중복 실행 안전). cleanup 중 워커 크래시 → 다음 틱이 재청소.
 
 ---

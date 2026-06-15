@@ -25,7 +25,7 @@ export type Role =
 |---|---|---|
 | `viewer` | run/workitem/human_task/대시보드·트레이스·artifact 조회만. 상태 변경 불가. | 운영 콘솔 read-only audience |
 | `operator` | run `create`/`abort`(R6), DLQ `manual_replay`(W10 `operatorAuthorized`), sink DLQ replay, human_task 인박스 assign/start. 조회 포함. | api-surface run create, state-machine W10 "운영자 재처리 권한", R6, error-catalog `DEAD_LETTER`/`SINK_DELIVERY_FAILED` operatorAction |
-| `reviewer` | human_task `resolve`(H3, kind=validation/exception/captcha/mfa). operator 권한 포함(assign/start). | reserved-handlers @human_task kind, state-machine H1/H2/H3 |
+| `reviewer` | human_task `resolve`(H3, kind=validation/exception/captcha/mfa) 및 manual `escalate`(H5). operator 권한 포함(assign/start). | reserved-handlers @human_task kind, state-machine H1/H2/H3/H5 |
 | `approver` | human_task `resolve`(kind=approval), `nodePolicy.requires_approval` 승인, site risk=red 승인. reviewer 권한 포함. | ir.schema `requires_approval`, error-catalog `SITE_PROFILE_BLOCKED`(risk=red), reserved-handlers kind=approval |
 | `admin` | scenario promote(prod 승격), secret 접근, connector enable, RBAC 역할 부여, network policy 편집. 전 권한 포함. | error-catalog `SECRET_ACCESS_DENIED`/`CONNECTOR_PERMISSION_DENIED`, SCENARIO_VERSION_CONFLICT(승격 경로) |
 
@@ -45,6 +45,7 @@ export type Role =
 | run `create` | api-surface `POST /v1/runs` | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run `abort` (R6 → cancelled) | error-catalog `RUN_ABORTED` 어휘체인 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | human_task `assign`/`start` (H1/H2) | state-machine H1·H2 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| human_task `escalate` (H5) | state-machine H5, api-surface fail-closed routing 규칙 | — | — | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | human_task `resolve` — kind=validation/exception/captcha/mfa (H3) | reserved-handlers @human_task | — | — | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | human_task `resolve` — kind=approval (H3) | reserved-handlers kind=approval | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | `nodePolicy.requires_approval` 승인 | ir.schema `requires_approval` | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |

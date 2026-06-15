@@ -16,13 +16,22 @@ import {
   checkBypassRlsUse,
   safeSerialize,
 } from "../../../security/compliance-scaffold";
-import type { ArtifactRef, ObjectRef } from "../../../ts/core-types";
+import type { ArtifactRef, ObjectRef, SecretRef } from "../../../ts/core-types";
 import type { RunState, WorkitemState } from "../../../ts/state-machine-types";
+import {
+  ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
+} from "../../../ts/runtime-contract";
 import type {
   ArtifactLifecycleOperationalAudit,
   ArtifactLifecycleOperationalUseCase,
   ArtifactLifecycleTarget,
+  ArtifactObjectIoEvidence,
+  ArtifactObjectIoOperation,
+  ArtifactObjectIoPortBinding,
   ArtifactRedactor,
+  ArtifactRedactionDecision,
+  ArtifactRetentionDeleteResult,
   ArtifactRetentionStore,
   EventId,
   IsoDateTime,
@@ -69,6 +78,7 @@ export interface PgRuntimeWorkerOptions {
   readonly runAbortDrainer?: RunAbortDrainer;
   readonly artifactRedactor?: ArtifactRedactor;
   readonly artifactRetentionStore?: ArtifactRetentionStore;
+  readonly allowTestArtifactLifecyclePorts?: boolean;
   readonly defaultBrowserLeaseTtlMs?: number;
   readonly artifactRedactionMaxAttempts?: number;
   readonly artifactLifecycleClaimTtlMs?: number;
@@ -150,6 +160,8 @@ type LifecycleAuditAppendInput = {
   readonly artifact: ArtifactLifecycleTarget;
   readonly jobId: string;
   readonly retentionDays: number;
+  readonly portBinding?: ArtifactObjectIoPortBinding;
+  readonly objectIoEvidence?: ArtifactObjectIoEvidence;
 };
 const DEFAULT_BROWSER_LEASE_TTL_MS = 300_000;
 const DEFAULT_ARTIFACT_LIFECYCLE_CLAIM_TTL_MS = 300_000;
@@ -657,9 +669,15 @@ export class PgRuntimeWorker implements RuntimeWorker {
       this.options.workerId,
       "PgRuntimeWorkerOptions.workerId for artifact_redaction",
     );
-    if (this.options.artifactRedactor === undefined) {
+    const redactor = this.options.artifactRedactor;
+    if (redactor === undefined) {
       throw new Error("RuntimeWorker: artifact_redaction requires an explicit ArtifactRedactor");
     }
+    const portBinding = requireArtifactObjectIoPortBinding(
+      redactor.binding,
+      "artifact_redaction",
+      this.options.allowTestArtifactLifecyclePorts === true,
+    );
     const maxAttempts = this.options.artifactRedactionMaxAttempts ?? DEFAULT_ARTIFACT_REDACTION_MAX_ATTEMPTS;
     if (!Number.isInteger(maxAttempts) || maxAttempts <= 0) {
       throw new Error("RuntimeWorker: artifact_redaction maxAttempts must be a positive integer");
@@ -674,6 +692,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         correlationId,
         claimTtlMs: this.lifecycleClaimTtlMs(),
         maxAttempts,
+        portBinding,
       });
     });
     if (claim.kind === "deferred") {
@@ -688,17 +707,24 @@ export class PgRuntimeWorker implements RuntimeWorker {
       correlationId,
       reasonCode: "artifact_lifecycle.redaction.object_io",
     });
-    const decision = await this.options.artifactRedactor.redact({
+    const decision = await redactor.redact({
       tenantId: tenantId as TenantId,
       correlationId: correlationId as CorrelationId,
       artifact: claim.claim.artifact,
       policy: { maxAttempts },
+      portBinding,
       audit,
     }).catch(() => ({ kind: "retryable_failed", reason: "redactor_exception" }) as const);
+    validateArtifactRedactionDecision(decision, {
+      operation: "redact",
+      artifactRef: claim.claim.artifact.artifactRef,
+      correlationId,
+      portBinding,
+    });
 
     await withTenantTx(this.pool, tenantId, async (client) => {
       await assertLifecycleBypassUse(client, "artifact_redaction_job", "artifact_lifecycle.redaction.finalize");
-      await this.finalizeRedactionDecision(client, { claim: claim.claim, decision, maxAttempts });
+      await this.finalizeRedactionDecision(client, { claim: claim.claim, decision, maxAttempts, portBinding });
     });
     return { kind: "completed", emittedEvents: [] };
   }
@@ -710,9 +736,15 @@ export class PgRuntimeWorker implements RuntimeWorker {
       this.options.workerId,
       "PgRuntimeWorkerOptions.workerId for artifact_retention",
     );
-    if (this.options.artifactRetentionStore === undefined) {
+    const retentionStore = this.options.artifactRetentionStore;
+    if (retentionStore === undefined) {
       throw new Error("RuntimeWorker: artifact_retention requires an explicit ArtifactRetentionStore");
     }
+    const portBinding = requireArtifactObjectIoPortBinding(
+      retentionStore.binding,
+      "artifact_retention",
+      this.options.allowTestArtifactLifecyclePorts === true,
+    );
 
     const claim = await withTenantTx(this.pool, tenantId, async (client) => {
       await assertLifecycleBypassUse(client, "artifact_retention_sweeper", "artifact_lifecycle.retention.claim");
@@ -721,6 +753,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         workerId,
         correlationId,
         claimTtlMs: this.lifecycleClaimTtlMs(),
+        portBinding,
       });
     });
     if (claim.kind === "deferred") {
@@ -735,18 +768,25 @@ export class PgRuntimeWorker implements RuntimeWorker {
       correlationId,
       reasonCode: "artifact_lifecycle.retention.object_delete",
     });
-    const deleteResult = await this.options.artifactRetentionStore.deleteObject({
+    const deleteResult = await retentionStore.deleteObject({
       tenantId: tenantId as TenantId,
       correlationId: correlationId as CorrelationId,
       artifact: claim.claim.artifact,
       jobId: claim.claim.claimId,
       policy: { deleteReason: "retention_expired" },
+      portBinding,
       audit,
     }).catch(() => ({ kind: "transient_failed", reason: "retention_store_exception" }) as const);
+    validateArtifactRetentionDeleteResult(deleteResult, {
+      operation: "delete",
+      artifactRef: claim.claim.artifact.artifactRef,
+      correlationId,
+      portBinding,
+    });
 
     await withTenantTx(this.pool, tenantId, async (client) => {
       await assertLifecycleBypassUse(client, "artifact_retention_sweeper", "artifact_lifecycle.retention.finalize");
-      await this.finalizeRetentionDecision(client, { claim: claim.claim, deleteResult });
+      await this.finalizeRetentionDecision(client, { claim: claim.claim, deleteResult, portBinding });
     });
     return { kind: "completed", emittedEvents: [] };
   }
@@ -1079,6 +1119,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       correlationId: string;
       claimTtlMs: number;
       maxAttempts: number;
+      portBinding: ArtifactObjectIoPortBinding;
     },
   ): Promise<ArtifactLifecycleClaimResult> {
     const active = await client.query<{ retry_after_ms: number }>(
@@ -1137,6 +1178,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       artifact: target,
       jobId: claimId,
       retentionDays: this.lifecycleAuditRetentionDays(),
+      portBinding: input.portBinding,
     });
 
     const claimed = await client.query(
@@ -1179,6 +1221,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       workerId: string;
       correlationId: string;
       claimTtlMs: number;
+      portBinding: ArtifactObjectIoPortBinding;
     },
   ): Promise<ArtifactLifecycleClaimResult> {
     const active = await client.query<{ retry_after_ms: number }>(
@@ -1237,6 +1280,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       artifact: target,
       jobId: claimId,
       retentionDays: this.lifecycleAuditRetentionDays(),
+      portBinding: input.portBinding,
     });
 
     const claimed = await client.query(
@@ -1277,8 +1321,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
     client: pg.PoolClient,
     input: {
       claim: ArtifactLifecycleClaim;
-      decision: Awaited<ReturnType<ArtifactRedactor["redact"]>>;
+      decision: ArtifactRedactionDecision;
       maxAttempts: number;
+      portBinding: ArtifactObjectIoPortBinding;
     },
   ): Promise<void> {
     if (input.claim.kind !== "artifact_redaction") {
@@ -1322,6 +1367,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
       artifact: input.claim.artifact,
       jobId: `${input.claim.claimId}:finalize`,
       retentionDays: this.lifecycleAuditRetentionDays(),
+      portBinding: input.portBinding,
+      objectIoEvidence: evidenceFromRedactionDecision(input.decision),
     });
 
     const updated = await client.query(
@@ -1366,7 +1413,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
     client: pg.PoolClient,
     input: {
       claim: ArtifactLifecycleClaim;
-      deleteResult: Awaited<ReturnType<ArtifactRetentionStore["deleteObject"]>>;
+      deleteResult: ArtifactRetentionDeleteResult;
+      portBinding: ArtifactObjectIoPortBinding;
     },
   ): Promise<void> {
     if (input.claim.kind !== "artifact_retention") {
@@ -1400,6 +1448,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
       artifact: input.claim.artifact,
       jobId: `${input.claim.claimId}:finalize`,
       retentionDays: this.lifecycleAuditRetentionDays(),
+      portBinding: input.portBinding,
+      objectIoEvidence: evidenceFromRetentionDeleteResult(input.deleteResult),
     });
 
     const updated = await client.query(
@@ -1608,6 +1658,218 @@ function lifecycleOperationalAudit<TUseCase extends ArtifactLifecycleOperational
   };
 }
 
+function requireArtifactObjectIoPortBinding(
+  value: unknown,
+  jobKind: ArtifactLifecycleClaimKind,
+  allowTestPort: boolean,
+): ArtifactObjectIoPortBinding {
+  if (!isRecord(value)) {
+    throw new Error(`RuntimeWorker: ${jobKind} requires a real object-store port binding with SecretRef`);
+  }
+  const kind = value.kind;
+  if (kind === "real_object_store") {
+    const backendAlias = stringField(value, "backendAlias");
+    const credentialRef = stringField(value, "credentialRef");
+    if (
+      backendAlias === null ||
+      credentialRef === null ||
+      value.evidenceSchemaRef !== ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF
+    ) {
+      throw new Error(`RuntimeWorker: ${jobKind} real object-store port binding requires backendAlias, SecretRef, and artifact/object-io-evidence@1`);
+    }
+    return {
+      kind,
+      backendAlias,
+      credentialRef: credentialRef as SecretRef,
+      evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+    };
+  }
+  if (kind === "test_fake") {
+    if (!allowTestPort) {
+      throw new Error(
+        `RuntimeWorker: ${jobKind} test_fake artifact lifecycle port is local-test-only and cannot be used as staging object-store evidence`,
+      );
+    }
+    if (
+      value.backendAlias !== "local-test-fake" ||
+      value.evidenceSchemaRef !== ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF ||
+      value.testOnly !== true
+    ) {
+      throw new Error(`RuntimeWorker: ${jobKind} test_fake port binding must use artifact/object-io-local-test@1`);
+    }
+    return {
+      kind,
+      backendAlias: "local-test-fake",
+      evidenceSchemaRef: ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
+      testOnly: true,
+    };
+  }
+  throw new Error(`RuntimeWorker: ${jobKind} requires a real object-store port binding with SecretRef`);
+}
+
+function validateArtifactRedactionDecision(
+  decision: ArtifactRedactionDecision,
+  expected: {
+    operation: ArtifactObjectIoOperation;
+    artifactRef: ArtifactRef;
+    correlationId: string;
+    portBinding: ArtifactObjectIoPortBinding;
+  },
+): void {
+  switch (decision.kind) {
+    case "redacted":
+      if (typeof decision.redactedObjectRef !== "string" || decision.redactedObjectRef.trim().length === 0) {
+        throw new Error("RuntimeWorker: artifact_redaction redacted result requires redactedObjectRef");
+      }
+      if (typeof decision.sha256 !== "string" || decision.sha256.trim().length === 0) {
+        throw new Error("RuntimeWorker: artifact_redaction redacted result requires sha256 evidence");
+      }
+      validateArtifactObjectIoEvidence(decision.evidence, expected, decision.sha256);
+      return;
+    case "not_required":
+      validateArtifactObjectIoEvidence(decision.evidence, expected);
+      return;
+    case "retryable_failed":
+    case "terminal_failed":
+      if (decision.evidence !== undefined) validateArtifactObjectIoEvidence(decision.evidence, expected);
+      return;
+    default:
+      throw new Error(
+        `RuntimeWorker: artifact_redaction unknown port result kind ${String(
+          (decision as { kind?: unknown }).kind ?? "missing",
+        )}`,
+      );
+  }
+}
+
+function validateArtifactRetentionDeleteResult(
+  result: ArtifactRetentionDeleteResult,
+  expected: {
+    operation: ArtifactObjectIoOperation;
+    artifactRef: ArtifactRef;
+    correlationId: string;
+    portBinding: ArtifactObjectIoPortBinding;
+  },
+): void {
+  switch (result.kind) {
+    case "deleted":
+    case "not_found":
+      validateArtifactObjectIoEvidence(result.evidence, expected);
+      return;
+    case "transient_failed":
+      return;
+    default:
+      throw new Error(
+        `RuntimeWorker: artifact_retention unknown port result kind ${String(
+          (result as { kind?: unknown }).kind ?? "missing",
+        )}`,
+      );
+  }
+}
+
+function validateArtifactObjectIoEvidence(
+  evidence: ArtifactObjectIoEvidence | undefined,
+  expected: {
+    operation: ArtifactObjectIoOperation;
+    artifactRef: ArtifactRef;
+    correlationId: string;
+    portBinding: ArtifactObjectIoPortBinding;
+  },
+  expectedSha256?: string,
+): void {
+  if (!isRecord(evidence)) {
+    throw new Error("RuntimeWorker: artifact lifecycle success requires object I/O evidence");
+  }
+  if (
+    evidence.operation !== expected.operation ||
+    evidence.artifactRef !== expected.artifactRef ||
+    evidence.correlationId !== expected.correlationId ||
+    evidence.objectRefInternalOnly !== true ||
+    stringField(evidence, "receiptId") === null
+  ) {
+    throw new Error("RuntimeWorker: artifact lifecycle object I/O evidence does not match the claim");
+  }
+  if (expectedSha256 !== undefined && evidence.sha256 !== expectedSha256) {
+    throw new Error("RuntimeWorker: artifact lifecycle object I/O evidence sha256 mismatch");
+  }
+
+  if (expected.portBinding.kind === "real_object_store") {
+    assertOnlyEvidenceKeys(evidence, [
+      "schemaRef",
+      "portKind",
+      "backendAlias",
+      "credentialRef",
+      "operation",
+      "artifactRef",
+      "correlationId",
+      "receiptId",
+      "objectRefInternalOnly",
+      "mayBeUsedAsStagingEvidence",
+      "sha256",
+    ]);
+    if (
+      evidence.schemaRef !== ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF ||
+      evidence.portKind !== "real_object_store" ||
+      evidence.backendAlias !== expected.portBinding.backendAlias ||
+      evidence.credentialRef !== expected.portBinding.credentialRef ||
+      evidence.mayBeUsedAsStagingEvidence !== true
+    ) {
+      throw new Error("RuntimeWorker: real object-store evidence must match the SecretRef-backed port binding");
+    }
+    return;
+  }
+
+  assertOnlyEvidenceKeys(evidence, [
+    "schemaRef",
+    "portKind",
+    "backendAlias",
+    "operation",
+    "artifactRef",
+    "correlationId",
+    "receiptId",
+    "objectRefInternalOnly",
+    "mayBeUsedAsStagingEvidence",
+    "sha256",
+  ]);
+  if (
+    evidence.schemaRef !== ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF ||
+    evidence.portKind !== "test_fake" ||
+    evidence.backendAlias !== "local-test-fake" ||
+    evidence.mayBeUsedAsStagingEvidence !== false
+  ) {
+    throw new Error("RuntimeWorker: test_fake object I/O evidence must remain local-test-only");
+  }
+}
+
+function assertOnlyEvidenceKeys(evidence: Readonly<Record<string, unknown>>, allowed: readonly string[]): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(evidence)) {
+    if (!allowedSet.has(key)) {
+      throw new Error(`RuntimeWorker: artifact lifecycle object I/O evidence has unsupported field ${key}`);
+    }
+  }
+}
+
+function evidenceFromRedactionDecision(decision: ArtifactRedactionDecision): ArtifactObjectIoEvidence | undefined {
+  switch (decision.kind) {
+    case "redacted":
+    case "not_required":
+    case "retryable_failed":
+    case "terminal_failed":
+      return decision.evidence;
+  }
+}
+
+function evidenceFromRetentionDeleteResult(result: ArtifactRetentionDeleteResult): ArtifactObjectIoEvidence | undefined {
+  switch (result.kind) {
+    case "deleted":
+    case "not_found":
+      return result.evidence;
+    case "transient_failed":
+      return undefined;
+  }
+}
+
 async function assertLifecycleBypassUse(
   client: pg.PoolClient,
   useCase: ArtifactLifecycleOperationalUseCase,
@@ -1666,6 +1928,17 @@ async function appendLifecycleAuditWithClient(client: pg.PoolClient, input: Life
     deleted_at_present: input.artifact.deletedAt !== undefined,
     object_ref_internal_only: true,
     fail_closed: true,
+    object_io_port_kind: input.portBinding?.kind,
+    object_io_backend_alias: input.portBinding?.backendAlias,
+    object_io_credential_ref:
+      input.portBinding?.kind === "real_object_store" ? input.portBinding.credentialRef : undefined,
+    object_io_evidence_schema_ref: input.objectIoEvidence?.schemaRef,
+    object_io_operation: input.objectIoEvidence?.operation,
+    object_io_receipt_id: input.objectIoEvidence?.receiptId,
+    object_io_sha256_present: input.objectIoEvidence?.sha256 !== undefined,
+    object_io_may_be_used_as_staging_evidence:
+      input.objectIoEvidence?.mayBeUsedAsStagingEvidence ??
+      (input.portBinding?.kind === "test_fake" ? false : undefined),
   };
   const payloadJson = safeSerialize(payload);
   const idempotencyKey = `${input.useCase}:${input.artifact.artifactRef}:${input.jobId}`;

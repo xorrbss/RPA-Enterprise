@@ -21,7 +21,15 @@
 import { CodexSseAdapter } from "../../src/gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "../../src/gateway/codex-sse-transport";
 import type { LLMRequest, LLMStreamEvent } from "../../../ts/security-middleware-contract";
-import { errorEvidence, markdownCell, redactEvidence, validateCodexBaseUrl, validateEvidenceAlias } from "./evidence-redaction";
+import {
+  buildCodexEvidenceRedactions,
+  errorEvidence,
+  markdownCell,
+  redactEvidence,
+  validateCodexBaseUrl,
+  validateEvidenceAlias,
+  validatePositiveIntegerEnv,
+} from "./evidence-redaction";
 
 type Status = "PASS" | "GAP" | "ERROR";
 interface Row {
@@ -43,12 +51,22 @@ function env(name: string): string {
 const BASE_URL = validateCodexBaseUrl(env("CODEX_BASE_URL"));
 const API_KEY = env("CODEX_API_KEY");
 const MODEL = env("CODEX_MODEL");
-const CONFIGURED_MAX_CTX = Number(process.env.CODEX_MAX_CONTEXT_TOKENS ?? "8192");
+const CONFIGURED_MAX_CTX = validatePositiveIntegerEnv("CODEX_MAX_CONTEXT_TOKENS", process.env.CODEX_MAX_CONTEXT_TOKENS, 8192);
 const EVIDENCE_ENDPOINT_ALIAS = validateEvidenceAlias(
   "CODEX_EVIDENCE_ENDPOINT_ALIAS",
   env("CODEX_EVIDENCE_ENDPOINT_ALIAS"),
 );
 const EVIDENCE_MODEL_ALIAS = validateEvidenceAlias("CODEX_EVIDENCE_MODEL_ALIAS", env("CODEX_EVIDENCE_MODEL_ALIAS"));
+const EVIDENCE_REDACTIONS = buildCodexEvidenceRedactions({
+  baseUrl: BASE_URL,
+  apiKey: API_KEY,
+  model: MODEL,
+  endpointAlias: EVIDENCE_ENDPOINT_ALIAS,
+  modelAlias: EVIDENCE_MODEL_ALIAS,
+});
+const redact = (value: unknown): string => redactEvidence(value, EVIDENCE_REDACTIONS);
+const err = (error: unknown): string => errorEvidence(error, EVIDENCE_REDACTIONS);
+const cell = (value: unknown): string => markdownCell(value, EVIDENCE_REDACTIONS);
 
 // LLMRequest 의 브랜드 필드는 PoC 테스트 데이터다. 프로덕션 redaction/멱등 경계는 Gateway 책임이므로
 // 여기서는 어댑터/전송의 라이브 동작만 본다(브랜드 캐스팅은 하니스 한정).
@@ -123,7 +141,7 @@ async function test1Basic(): Promise<Row> {
       evidence: `events=[${kinds(events)}] textLen=${text.length}`,
     };
   } catch (e) {
-    return { n: 1, feature: "기본 SSE 스트리밍(안전경로 정규화)", status: "ERROR", via: "streamCall", evidence: errorEvidence(e) };
+    return { n: 1, feature: "기본 SSE 스트리밍(안전경로 정규화)", status: "ERROR", via: "streamCall", evidence: err(e) };
   }
 }
 
@@ -152,10 +170,10 @@ async function test2PromptSchema(): Promise<Row> {
       feature: "structured-output(안전경로 prompt-schema+strict 검증)",
       status: valid ? "PASS" : "GAP",
       via: "prompt 지시 → 텍스트 스트림 → JSON.parse + shape 검증",
-      evidence: valid ? `parsed=${redactEvidence(JSON.stringify(parsed))}` : `non-conforming text="${redactEvidence(text.slice(0, 120))}"`,
+      evidence: valid ? `parsed=${redact(JSON.stringify(parsed))}` : `non-conforming text="${redact(text.slice(0, 120))}"`,
     };
   } catch (e) {
-    return { n: 2, feature: "structured-output(안전경로 prompt-schema)", status: "ERROR", via: "streamCall", evidence: errorEvidence(e) };
+    return { n: 2, feature: "structured-output(안전경로 prompt-schema)", status: "ERROR", via: "streamCall", evidence: err(e) };
   }
 }
 
@@ -196,7 +214,7 @@ async function test3NativeJsonMode(): Promise<Row> {
         feature: "native json_schema 스트리밍(빠른경로 → jsonMode)",
         status: "GAP",
         via: "직접 POST response_format:{json_schema} stream:true",
-        evidence: `HTTP ${res.status} ${redactEvidence(res.statusText)} ${redactEvidence(detail.slice(0, 160))} → jsonMode=false(안전경로 유지)`,
+        evidence: `HTTP ${res.status} ${redact(res.statusText)} ${redact(detail.slice(0, 160))} → jsonMode=false(안전경로 유지)`,
       };
     }
     // 스트림 누적 후 JSON 유효성 확인.
@@ -240,11 +258,11 @@ async function test3NativeJsonMode(): Promise<Row> {
       status: valid ? "PASS" : "GAP",
       via: "직접 POST response_format:{json_schema} stream:true",
       evidence: valid
-        ? `accepted + valid streamed JSON → jsonMode=true 활성 가능. assembled=${redactEvidence(assembled.slice(0, 120))}`
-        : `accepted but JSON invalid → jsonMode=false 유지. assembled="${redactEvidence(assembled.slice(0, 120))}"`,
+        ? `accepted + valid streamed JSON → jsonMode=true 활성 가능. assembled=${redact(assembled.slice(0, 120))}`
+        : `accepted but JSON invalid → jsonMode=false 유지. assembled="${redact(assembled.slice(0, 120))}"`,
     };
   } catch (e) {
-    return { n: 3, feature: "native json_schema 스트리밍(빠른경로)", status: "ERROR", via: "직접 POST", evidence: errorEvidence(e) };
+    return { n: 3, feature: "native json_schema 스트리밍(빠른경로)", status: "ERROR", via: "직접 POST", evidence: err(e) };
   }
 }
 
@@ -280,7 +298,7 @@ async function test4Abort(): Promise<Row> {
       evidence: `events=[${kinds(events)}] aborted=${abortedSeen} elapsedMs=${elapsed} postAbortDeltas=${postAbortDeltas}`,
     };
   } catch (e) {
-    return { n: 4, feature: "abort 시그널 규격", status: "ERROR", via: "signal.abort", evidence: errorEvidence(e) };
+    return { n: 4, feature: "abort 시그널 규격", status: "ERROR", via: "signal.abort", evidence: err(e) };
   }
 }
 
@@ -322,13 +340,13 @@ async function test5MaxContext(): Promise<Row> {
       evidence: `model entry 에 context 필드 없음 → 보수적 config(${CONFIGURED_MAX_CTX}) 유지 권고`,
     };
   } catch (e) {
-    return { n: 5, feature: "maxContextTokens", status: "ERROR", via: "GET /models", evidence: errorEvidence(e) };
+    return { n: 5, feature: "maxContextTokens", status: "ERROR", via: "GET /models", evidence: err(e) };
   }
 }
 
 async function main(): Promise<void> {
   console.log(
-    `# D5 Codex SSE 라이브 PoC\n- endpointAlias: ${markdownCell(EVIDENCE_ENDPOINT_ALIAS)}\n- modelAlias: ${markdownCell(EVIDENCE_MODEL_ALIAS)}\n`,
+    `# D5 Codex SSE 라이브 PoC\n- endpointAlias: ${cell(EVIDENCE_ENDPOINT_ALIAS)}\n- modelAlias: ${cell(EVIDENCE_MODEL_ALIAS)}\n`,
   );
   const rows: Row[] = [];
   rows.push(await test1Basic());
@@ -340,7 +358,7 @@ async function main(): Promise<void> {
   console.log("\n| # | 필요 기능 | 상태 | 경로(via) | 증거 |");
   console.log("|---|---|---|---|---|");
   for (const r of rows) {
-    console.log(`| ${r.n} | ${markdownCell(r.feature)} | \`${r.status}\` | ${markdownCell(r.via)} | ${markdownCell(r.evidence)} |`);
+    console.log(`| ${r.n} | ${cell(r.feature)} | \`${r.status}\` | ${cell(r.via)} | ${cell(r.evidence)} |`);
   }
   const pass = rows.filter((r) => r.status === "PASS").length;
   console.log(`\n결과: ${pass}/${rows.length} PASS`);

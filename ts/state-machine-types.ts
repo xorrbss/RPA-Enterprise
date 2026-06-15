@@ -127,7 +127,7 @@ export type SideEffectCmd =
   | { kind: "resetStepLoopCounters" }                                 // W8
   | { kind: "pauseCheckoutTimer" }                                    // W9
   | { kind: "resumeCheckoutTimer" }                                   // W11
-  | { kind: "reassignAssignee" }                                      // H5/H6
+  | { kind: "reassignAssignee" }                                      // H5/H6/R15: 호출측이 명시 routing/assignee로 소비
   | { kind: "captureFailureScreenshot" }                              // R8
   | { kind: "consistencyRecovery" }                                   // R12/R22
   | { kind: "rejectCommand"; code: string; httpStatus: number }        // R25 등 명시적 명령 거부

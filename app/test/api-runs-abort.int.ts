@@ -392,6 +392,10 @@ async function main(): Promise<void> {
       check("suspending -> WORKITEM_CHECKOUT_CONFLICT", suspendingAbort.json().code === "WORKITEM_CHECKOUT_CONFLICT", suspendingAbort.body);
       check("suspending reject did not reserve key", (await idemRowCount(pool, TENANT_A, "abort-suspending")) === 0);
       check("suspending unchanged", (await statusOf(pool, TENANT_A, RUN_SUSPENDING)) === "suspending");
+      await forceRunStatus(pool, TENANT_A, RUN_SUSPENDING, "suspended");
+      const suspendingRetry = await abort(RUN_SUSPENDING, "abort-suspending");
+      check("suspending same-key retry after suspended -> 202 aborting", suspendingRetry.statusCode === 202 && suspendingRetry.json().status === "aborting", suspendingRetry.body);
+      check("suspending retry records suspended source", (await abortSourceStatusOf(pool, TENANT_A, RUN_SUSPENDING)) === "suspended");
 
       const absentAbort = await abort(ABSENT_RUN, "abort-absent");
       check("absent run abort -> 404 RUN_NOT_FOUND", absentAbort.statusCode === 404 && absentAbort.json().code === "RUN_NOT_FOUND", absentAbort.body);

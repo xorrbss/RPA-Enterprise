@@ -79,6 +79,13 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
     attempts: 0,
     as_of: "2026-06-13T00:00:00Z",
   }, {
+    run_id: "run-suspending",
+    tenant_id: tenantId,
+    scenario_version_id: "sv-1",
+    status: "suspending",
+    attempts: 0,
+    as_of: "2026-06-13T00:00:00Z",
+  }, {
     run_id: "run-other-tenant",
     tenant_id: otherTenantId,
     scenario_version_id: "sv-1",
@@ -253,6 +260,10 @@ await assertApiError(
   () => handlers.abortRun!(ctx("abortRun", { method: "POST", path: "/v1/runs/{run_id}/abort", params: { run_id: "run-existing" } })),
   "RUN_ALREADY_TERMINAL",
 );
+await assertApiError(
+  () => handlers.abortRun!(ctx("abortRun", { method: "POST", path: "/v1/runs/{run_id}/abort", params: { run_id: "run-suspending" } })),
+  "WORKITEM_CHECKOUT_CONFLICT",
+);
 
 const resolved = await handlers.resolveHumanTask!(ctx("resolveHumanTask", {
   method: "POST",
@@ -269,12 +280,14 @@ const assigned = await handlers.assignHumanTask!(ctx("assignHumanTask", {
 }));
 assert.equal((assigned.body as { state: string }).state, "assigned");
 assert.equal((assigned.body as { assignee: string }).assignee, "reviewer-1");
-const escalated = await handlers.escalateHumanTask!(ctx("escalateHumanTask", {
-  method: "POST",
-  path: "/v1/human-tasks/{human_task_id}/escalate",
-  params: { human_task_id: "task-assign" },
-}));
-assert.equal((escalated.body as { state: string }).state, "escalated");
+await assertApiError(
+  () => handlers.escalateHumanTask!(ctx("escalateHumanTask", {
+    method: "POST",
+    path: "/v1/human-tasks/{human_task_id}/escalate",
+    params: { human_task_id: "task-assign" },
+  })),
+  "CONTROL_PLANE_INTERNAL_ERROR",
+);
 await assertApiError(
   () => handlers.startHumanTask!(ctx("startHumanTask", { method: "POST", path: "/v1/human-tasks/{human_task_id}/start", params: { human_task_id: "task-open" } })),
   "HUMAN_TASK_EXPIRED",
@@ -480,8 +493,8 @@ const reviewerEscalate = await scaffold.runner.inject({
   headers: { ...baseHeaders, "x-roles": "reviewer", "idempotency-key": "escalate-reviewer" },
   body: {},
 });
-assert.equal(reviewerEscalate.status, 200);
-assert.equal((reviewerEscalate.body as { state: string }).state, "escalated");
+assert.equal(reviewerEscalate.status, 500);
+assert.equal((reviewerEscalate.body as { code: string }).code, "CONTROL_PLANE_INTERNAL_ERROR");
 const wrongAssigneeResolve = await scaffold.runner.inject({
   method: "POST",
   url: "/v1/human-tasks/task-assignee-scope/resolve",

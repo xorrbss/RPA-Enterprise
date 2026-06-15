@@ -374,6 +374,7 @@ async function abortRun(deps: ApiServerDeps, runId: string, request: FastifyRequ
   }
 
   // 예약 이전 선검사: 부작용 없는 거부 경로(부재/종결/completing/suspending)는 멱등 키를 소모하지 않는다.
+  // suspending은 bookmark-cancel port/durable abort intent가 없으므로 retry-after-suspended로 fail-closed한다.
   const requestHash = canonicalRequestHash("POST", `/v1/runs/${runId}/abort`, request.body ?? null);
   const existingIdempotency = await readAbortIdempotencyExisting(
     deps.pool,

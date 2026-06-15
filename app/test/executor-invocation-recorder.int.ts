@@ -9,16 +9,29 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { FakeSecretStore, asSecretRef } from "../../security/compliance-scaffold";
-import type { ArtifactRef, ObjectRef, PageStateRef, PlainSecret, RedactedString, StepResult } from "../../ts/core-types";
+import type {
+  ArtifactRef,
+  ExecutorPlugin,
+  ObjectRef,
+  PageState,
+  PageStateRef,
+  PlainSecret,
+  RedactedString,
+  RunContext,
+  StepResult,
+  VerifyResult,
+} from "../../ts/core-types";
 import type { CorrelationId, RunId, StepId, TenantId } from "../../ts/security-middleware-contract";
 import type { ExecutorInvocationArtifactMetadata, IsoDateTime, RuntimeWorkerJob } from "../../ts/runtime-contract";
 import { createPool, withTenantTx } from "../src/db/pool";
 import {
   PgExecutorCompletionCoordinator,
   type ExecutorTerminalSuccessEvidence,
+  type ExecutorSecurityNotificationPort,
   type RuntimeJobEnqueuePort,
 } from "../src/runtime/executor-completion-coordinator";
 import { PgExecutorInvocationRecorder } from "../src/runtime/executor-invocation-recorder";
+import { PgExecutorStepOrchestrator } from "../src/runtime/executor-step-orchestrator";
 import { PgExecutorStepAttemptStore } from "../src/runtime/executor-step-attempt-store";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "../src/runtime/outbox";
 
@@ -40,6 +53,17 @@ const WORKITEM_BUSINESS = "30000000-0000-0000-0000-0000000000a9";
 const RUN_BUSINESS = "30000000-0000-0000-0000-0000000000aa";
 const WORKITEM_BUSINESS_NO_ENQUEUER = "30000000-0000-0000-0000-0000000000ab";
 const RUN_BUSINESS_NO_ENQUEUER = "30000000-0000-0000-0000-0000000000ac";
+const WORKITEM_SYSTEM_RETRY = "30000000-0000-0000-0000-0000000000ad";
+const RUN_SYSTEM_RETRY = "30000000-0000-0000-0000-0000000000ae";
+const WORKITEM_SYSTEM_ABANDON = "30000000-0000-0000-0000-0000000000af";
+const RUN_SYSTEM_ABANDON = "30000000-0000-0000-0000-0000000000b0";
+const WORKITEM_SECURITY = "30000000-0000-0000-0000-0000000000b1";
+const RUN_SECURITY = "30000000-0000-0000-0000-0000000000b2";
+const WORKITEM_CHALLENGE = "30000000-0000-0000-0000-0000000000b4";
+const RUN_CHALLENGE = "30000000-0000-0000-0000-0000000000b5";
+const WORKITEM_UNCERTAIN = "30000000-0000-0000-0000-0000000000b6";
+const RUN_UNCERTAIN = "30000000-0000-0000-0000-0000000000b7";
+const RUN_ORCHESTRATED = "30000000-0000-0000-0000-0000000000b8";
 const SCENARIO_B = "30000000-0000-0000-0000-0000000000b1";
 const SCENARIO_VERSION_B = "30000000-0000-0000-0000-0000000000b2";
 const RUN_B = "30000000-0000-0000-0000-0000000000b3";
@@ -133,13 +157,13 @@ async function seedTenant(pool: ReturnType<typeof createPool>, tenantId: string,
 
 async function seedTerminalRun(
   pool: ReturnType<typeof createPool>,
-  input: { workitemId: string; runId: string; uniqueReference: string },
+  input: { workitemId: string; runId: string; uniqueReference: string; attempts?: number },
 ): Promise<void> {
   await withTenantTx(pool, TENANT_A, async (c) => {
     await c.query(
-      `INSERT INTO workitems (id, tenant_id, connector_id, unique_reference, status)
-       VALUES ($1,$2,'executor-recorder',$3,'processing')`,
-      [input.workitemId, TENANT_A, input.uniqueReference],
+      `INSERT INTO workitems (id, tenant_id, connector_id, unique_reference, status, attempts)
+       VALUES ($1,$2,'executor-recorder',$3,'processing',$4::int)`,
+      [input.workitemId, TENANT_A, input.uniqueReference, input.attempts ?? 0],
     );
     await c.query(
       `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, correlation_id)
@@ -156,6 +180,21 @@ async function runStepCount(pool: ReturnType<typeof createPool>, tenantId: strin
       [tenantId, runId, stepId],
     );
     return row.rows[0]?.n ?? -1;
+  });
+}
+
+async function runStepStatus(
+  pool: ReturnType<typeof createPool>,
+  tenantId: string,
+  runId: string,
+  stepId: string,
+): Promise<string | undefined> {
+  return withTenantTx(pool, tenantId, async (c) => {
+    const row = await c.query<{ status: string }>(
+      `SELECT status FROM run_steps WHERE tenant_id=$1::uuid AND run_id=$2::uuid AND step_id=$3`,
+      [tenantId, runId, stepId],
+    );
+    return row.rows[0]?.status;
   });
 }
 
@@ -180,13 +219,41 @@ async function stepEventCount(
   });
 }
 
+function testPageState(): PageState {
+  return {
+    url: { raw: "https://executor.example/run", canonical: "https://executor.example/run", pattern: "https://executor.example/*" },
+    dom: { structuralHash: "executor-test", visibleTextHash: "executor-visible", landmarks: [], frames: [] },
+    auth: "authenticated",
+    flags: {},
+    matchedWhere: [],
+  };
+}
+
+function testRunContext(runId: string, overrides: Partial<RunContext> = {}): RunContext {
+  return {
+    runId,
+    tenantId: TENANT_A,
+    nodeId: "node-orchestrated",
+    attempt: 0,
+    pageState: testPageState(),
+    siteProfileId: "site-orchestrated",
+    browserIdentityId: "browser-orchestrated",
+    networkPolicyId: "network-orchestrated",
+    leaseId: "lease-orchestrated",
+    assetRefs: {},
+    abortSignal: new AbortController().signal,
+    ...overrides,
+  };
+}
+
 async function runAndWorkitemStatus(pool: ReturnType<typeof createPool>, runId: string, workitemId: string): Promise<{
   runStatus?: string;
   workitemStatus?: string;
+  workitemAttempts?: number;
 }> {
   return withTenantTx(pool, TENANT_A, async (c) => {
-    const row = await c.query<{ run_status: string; workitem_status: string }>(
-      `SELECT r.status AS run_status, w.status AS workitem_status
+    const row = await c.query<{ run_status: string; workitem_status: string; workitem_attempts: number }>(
+      `SELECT r.status AS run_status, w.status AS workitem_status, w.attempts AS workitem_attempts
          FROM runs r
          JOIN workitems w ON w.tenant_id = r.tenant_id AND w.id = r.workitem_id
         WHERE r.tenant_id=$1::uuid AND r.id=$2::uuid AND w.id=$3::uuid`,
@@ -195,6 +262,7 @@ async function runAndWorkitemStatus(pool: ReturnType<typeof createPool>, runId: 
     return {
       runStatus: row.rows[0]?.run_status,
       workitemStatus: row.rows[0]?.workitem_status,
+      workitemAttempts: row.rows[0]?.workitem_attempts,
     };
   });
 }
@@ -236,6 +304,39 @@ async function main(): Promise<void> {
       runId: RUN_BUSINESS_NO_ENQUEUER,
       uniqueReference: "terminal-business-no-enqueuer",
     });
+    await seedTerminalRun(pool, {
+      workitemId: WORKITEM_SYSTEM_RETRY,
+      runId: RUN_SYSTEM_RETRY,
+      uniqueReference: "terminal-system-retry",
+    });
+    await seedTerminalRun(pool, {
+      workitemId: WORKITEM_SYSTEM_ABANDON,
+      runId: RUN_SYSTEM_ABANDON,
+      uniqueReference: "terminal-system-abandon",
+      attempts: 1,
+    });
+    await seedTerminalRun(pool, {
+      workitemId: WORKITEM_SECURITY,
+      runId: RUN_SECURITY,
+      uniqueReference: "terminal-security",
+    });
+    await seedTerminalRun(pool, {
+      workitemId: WORKITEM_CHALLENGE,
+      runId: RUN_CHALLENGE,
+      uniqueReference: "terminal-challenge",
+    });
+    await seedTerminalRun(pool, {
+      workitemId: WORKITEM_UNCERTAIN,
+      runId: RUN_UNCERTAIN,
+      uniqueReference: "terminal-uncertain",
+    });
+    await withTenantTx(pool, TENANT_A, async (c) => {
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id)
+         VALUES ($1,$2,$3,'running',$4)`,
+        [RUN_ORCHESTRATED, TENANT_A, SCENARIO_VERSION_A, CORRELATION],
+      );
+    });
 
     const attemptStore = new PgExecutorStepAttemptStore(pool);
     const recorder = new PgExecutorInvocationRecorder(pool);
@@ -245,7 +346,31 @@ async function main(): Promise<void> {
         enqueuedRuntimeJobs.push(job);
       },
     };
-    const completionCoordinator = new PgExecutorCompletionCoordinator(pool, runtimeJobEnqueuer);
+    const securityNotifications: Array<{ runId: string; code: string }> = [];
+    const securityNotificationPort: ExecutorSecurityNotificationPort = {
+      async notifySecurityException(_client, input) {
+        securityNotifications.push({ runId: input.runId, code: input.exception.code });
+      },
+    };
+    const completionCoordinator = new PgExecutorCompletionCoordinator(pool, runtimeJobEnqueuer, {
+      workitemMaxAttempts: 2,
+      securityNotificationPort,
+    });
+    const beginStarted = (
+      runId: string,
+      stepId: string,
+      action: StepResult["action"] = "navigate",
+      nodeId = `node-${stepId}`,
+    ) =>
+      attemptStore.begin({
+        tenantId: TENANT_A as TenantId,
+        runId: runId as RunId,
+        stepId: stepId as StepId,
+        nodeId,
+        action,
+        correlationId: CORRELATION as CorrelationId,
+        startedAt: "2026-06-14T00:00:00.000Z" as IsoDateTime,
+      });
 
     const started = await attemptStore.begin({
       tenantId: TENANT_A as TenantId,
@@ -352,15 +477,72 @@ async function main(): Promise<void> {
         }),
       "run not found",
     );
+    await expectReject(
+      "executor recorder without local started attempt fails closed",
+      () =>
+        recorder.record({
+          key: { tenantId: TENANT_A as TenantId, runId: RUN_A as RunId, stepId: "step-no-start" as StepId, attempt: 0 },
+          nodeId: "node-no-start",
+          correlationId: CORRELATION as CorrelationId,
+          result: stepResult("step-no-start", { artifacts: [] }),
+          artifacts: [],
+        }),
+      "existing local started attempt",
+    );
+    check("no-start recorder emits no step.completed", (await stepEventCount(pool, TENANT_A, RUN_A, "step-no-start")) === 0);
+
+    const pluginObservedStartedStatuses: string[] = [];
+    const fakePlugin: ExecutorPlugin = {
+      capabilities: () => ({ dom: false, vision: false, utility: true }),
+      execute: async (stepId, _action, ctx) => {
+        pluginObservedStartedStatuses.push(
+          (await runStepStatus(pool, TENANT_A, ctx.runId, stepId)) ?? "missing",
+        );
+        return stepResult(stepId, {
+          artifacts: [],
+          timings: {
+            startedAt: "2026-06-14T00:00:00.000Z",
+            endedAt: "2026-06-14T00:00:01.000Z",
+            durationMs: 1000,
+          },
+        });
+      },
+      verify: async (): Promise<VerifyResult> => ({
+        status: "pass",
+        confidence: 1,
+        failedCriteria: [],
+        evidenceRefs: [],
+        recommendation: "continue",
+      }),
+    };
+    const orchestrator = new PgExecutorStepOrchestrator(attemptStore, recorder, completionCoordinator);
+    const orchestrated = await orchestrator.execute({
+      tenantId: TENANT_A as TenantId,
+      runId: RUN_ORCHESTRATED as RunId,
+      stepId: "step-orchestrated" as StepId,
+      nodeId: "node-orchestrated",
+      actionType: "navigate",
+      action: { type: "navigate", url: "https://executor.example/run" },
+      correlationId: CORRELATION as CorrelationId,
+      context: testRunContext(RUN_ORCHESTRATED),
+      executor: fakePlugin,
+      completion: { kind: "record_only" },
+    });
+    check(
+      "executor orchestrator invokes plugin after started attempt commit",
+      pluginObservedStartedStatuses[0] === "started" && orchestrated.kind === "recorded",
+      JSON.stringify({ pluginObservedStartedStatuses, orchestrated }),
+    );
+    check(
+      "executor orchestrator records plugin result after out-of-tx execute",
+      (await runStepStatus(pool, TENANT_A, RUN_ORCHESTRATED, "step-orchestrated")) === "success" &&
+        (await stepEventCount(pool, TENANT_A, RUN_ORCHESTRATED, "step-orchestrated")) === 1,
+    );
 
     const terminalResult = stepResult("step-terminal");
+    const terminalStarted = await beginStarted(RUN_TERMINAL, "step-terminal", terminalResult.action, "node-terminal");
     const terminal = await completionCoordinator.completeTerminalSuccess({
-      key: {
-        tenantId: TENANT_A as TenantId,
-        runId: RUN_TERMINAL as RunId,
-        stepId: "step-terminal" as StepId,
-        attempt: 0,
-      },
+      key: terminalStarted.key,
       nodeId: "node-terminal",
       correlationId: CORRELATION as CorrelationId,
       result: terminalResult,
@@ -407,7 +589,7 @@ async function main(): Promise<void> {
       check(
         "executor completion persisted canonical events",
         JSON.stringify(events.rows.map((row) => row.event_type)) ===
-          JSON.stringify(["run.completed", "step.completed", "workitem.completed"]),
+          JSON.stringify(["run.completed", "step.completed", "step.started", "workitem.completed"]),
         JSON.stringify(events.rows),
       );
     });
@@ -485,16 +667,12 @@ async function main(): Promise<void> {
 
     const noEnqueuerCoordinator = new PgExecutorCompletionCoordinator(pool);
     const noEnqueuerResult = stepResult("step-no-enqueuer");
+    const noEnqueuerStarted = await beginStarted(RUN_NO_ENQUEUER, "step-no-enqueuer", noEnqueuerResult.action, "node-no-enqueuer");
     await expectReject(
       "executor completion with artifacts requires lifecycle enqueue port",
       () =>
         noEnqueuerCoordinator.completeTerminalSuccess({
-          key: {
-            tenantId: TENANT_A as TenantId,
-            runId: RUN_NO_ENQUEUER as RunId,
-            stepId: "step-no-enqueuer" as StepId,
-            attempt: 0,
-          },
+          key: noEnqueuerStarted.key,
           nodeId: "node-no-enqueuer",
           correlationId: CORRELATION as CorrelationId,
           result: noEnqueuerResult,
@@ -503,7 +681,8 @@ async function main(): Promise<void> {
         }),
       "requires a RuntimeJobEnqueuePort",
     );
-    check("executor completion enqueue failure rolls back run_step", (await runStepCount(pool, TENANT_A, RUN_NO_ENQUEUER, "step-no-enqueuer")) === 0);
+    check("executor completion enqueue failure preserves started attempt", (await runStepStatus(pool, TENANT_A, RUN_NO_ENQUEUER, "step-no-enqueuer")) === "started");
+    check("executor completion enqueue failure emits no step.completed", (await stepEventCount(pool, TENANT_A, RUN_NO_ENQUEUER, "step-no-enqueuer")) === 0);
     const rolledBackStatus = await runAndWorkitemStatus(pool, RUN_NO_ENQUEUER, WORKITEM_NO_ENQUEUER);
     check(
       "executor completion enqueue failure rolls back run/workitem state",
@@ -521,13 +700,9 @@ async function main(): Promise<void> {
         evidenceRefs: [],
       },
     });
+    const businessStarted = await beginStarted(RUN_BUSINESS, "step-business", businessResult.action, "node-business");
     const business = await completionCoordinator.completeTerminalBusinessFailure({
-      key: {
-        tenantId: TENANT_A as TenantId,
-        runId: RUN_BUSINESS as RunId,
-        stepId: "step-business" as StepId,
-        attempt: 0,
-      },
+      key: businessStarted.key,
       nodeId: "node-business",
       correlationId: CORRELATION as CorrelationId,
       result: businessResult,
@@ -563,7 +738,8 @@ async function main(): Promise<void> {
       );
       check(
         "executor business failure persisted canonical events",
-        JSON.stringify(events.rows.map((row) => row.event_type)) === JSON.stringify(["run.failed_business", "step.completed"]),
+        JSON.stringify(events.rows.map((row) => row.event_type)) ===
+          JSON.stringify(["run.failed_business", "step.completed", "step.started"]),
         JSON.stringify(events.rows),
       );
       const auditRows = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM audit_log`);
@@ -579,16 +755,17 @@ async function main(): Promise<void> {
         message: "business rule failed" as RedactedString,
       },
     });
+    const businessNoEnqueuerStarted = await beginStarted(
+      RUN_BUSINESS_NO_ENQUEUER,
+      "step-business-no-enqueuer",
+      businessNoEnqueuerResult.action,
+      "node-business-no-enqueuer",
+    );
     await expectReject(
       "executor business failure with artifacts requires lifecycle enqueue port",
       () =>
         businessNoEnqueuerCoordinator.completeTerminalBusinessFailure({
-          key: {
-            tenantId: TENANT_A as TenantId,
-            runId: RUN_BUSINESS_NO_ENQUEUER as RunId,
-            stepId: "step-business-no-enqueuer" as StepId,
-            attempt: 0,
-          },
+          key: businessNoEnqueuerStarted.key,
           nodeId: "node-business-no-enqueuer",
           correlationId: CORRELATION as CorrelationId,
           result: businessNoEnqueuerResult,
@@ -597,8 +774,12 @@ async function main(): Promise<void> {
       "requires a RuntimeJobEnqueuePort",
     );
     check(
-      "executor business failure enqueue failure rolls back run_step",
-      (await runStepCount(pool, TENANT_A, RUN_BUSINESS_NO_ENQUEUER, "step-business-no-enqueuer")) === 0,
+      "executor business failure enqueue failure preserves started attempt",
+      (await runStepStatus(pool, TENANT_A, RUN_BUSINESS_NO_ENQUEUER, "step-business-no-enqueuer")) === "started",
+    );
+    check(
+      "executor business failure enqueue failure emits no step.completed",
+      (await stepEventCount(pool, TENANT_A, RUN_BUSINESS_NO_ENQUEUER, "step-business-no-enqueuer")) === 0,
     );
     const businessRollbackStatus = await runAndWorkitemStatus(pool, RUN_BUSINESS_NO_ENQUEUER, WORKITEM_BUSINESS_NO_ENQUEUER);
     check(
@@ -628,9 +809,245 @@ async function main(): Promise<void> {
       "exception.class=business",
     );
 
+    const systemRetryResult = stepResult("step-system-retry", {
+      status: "failed_system",
+      output: undefined,
+      exception: {
+        class: "system",
+        code: "LLM_BACKEND_UNAVAILABLE",
+        message: "backend unavailable" as RedactedString,
+      },
+    });
+    const systemRetryStarted = await beginStarted(
+      RUN_SYSTEM_RETRY,
+      "step-system-retry",
+      systemRetryResult.action,
+      "node-system-retry",
+    );
+    const systemRetry = await completionCoordinator.completeTerminalOutcome({
+      key: systemRetryStarted.key,
+      nodeId: "node-system-retry",
+      correlationId: CORRELATION as CorrelationId,
+      result: systemRetryResult,
+      artifacts: artifactFor(systemRetryResult),
+    });
+    check(
+      "executor system failure maps R8/W4 retry",
+      (await runAndWorkitemStatus(pool, RUN_SYSTEM_RETRY, WORKITEM_SYSTEM_RETRY)).runStatus === "failed_system" &&
+        (await runAndWorkitemStatus(pool, RUN_SYSTEM_RETRY, WORKITEM_SYSTEM_RETRY)).workitemStatus === "retry",
+    );
+    check(
+      "executor system failure increments workitem attempts",
+      (await runAndWorkitemStatus(pool, RUN_SYSTEM_RETRY, WORKITEM_SYSTEM_RETRY)).workitemAttempts === 1,
+    );
+    check(
+      "executor system failure emits step/run events and lifecycle jobs",
+      systemRetry.emittedEvents.length === 2 &&
+        systemRetry.enqueuedRuntimeJobs.length === 2 &&
+        systemRetry.enqueuedRuntimeJobs[0]?.kind === "artifact_redaction" &&
+        systemRetry.enqueuedRuntimeJobs[1]?.kind === "artifact_retention",
+      JSON.stringify(systemRetry),
+    );
+
+    const systemAbandonResult = stepResult("step-system-abandon", {
+      status: "failed_system",
+      artifacts: [],
+      exception: {
+        class: "system",
+        code: "BROWSER_CRASH",
+        message: "browser crashed" as RedactedString,
+      },
+    });
+    const systemAbandonStarted = await beginStarted(
+      RUN_SYSTEM_ABANDON,
+      "step-system-abandon",
+      systemAbandonResult.action,
+      "node-system-abandon",
+    );
+    const systemAbandon = await completionCoordinator.completeTerminalOutcome({
+      key: systemAbandonStarted.key,
+      nodeId: "node-system-abandon",
+      correlationId: CORRELATION as CorrelationId,
+      result: systemAbandonResult,
+      artifacts: [],
+    });
+    const abandonedStatus = await runAndWorkitemStatus(pool, RUN_SYSTEM_ABANDON, WORKITEM_SYSTEM_ABANDON);
+    check(
+      "executor system failure maps W5 abandoned when max attempts reached",
+      abandonedStatus.runStatus === "failed_system" &&
+        abandonedStatus.workitemStatus === "abandoned" &&
+        abandonedStatus.workitemAttempts === 2,
+      JSON.stringify(abandonedStatus),
+    );
+    await withTenantTx(pool, TENANT_A, async (c) => {
+      const dlq = await c.query<{ reason_code: string; n: number }>(
+        `SELECT reason_code, count(*)::int AS n
+           FROM dead_letter
+          WHERE tenant_id=$1::uuid AND run_id=$2::uuid
+          GROUP BY reason_code`,
+        [TENANT_A, RUN_SYSTEM_ABANDON],
+      );
+      check(
+        "executor system failure creates dead_letter with catalog reason",
+        dlq.rows[0]?.reason_code === "BROWSER_CRASH" && dlq.rows[0]?.n === 1,
+        JSON.stringify(dlq.rows),
+      );
+    });
+    check(
+      "executor system abandoned emits workitem.dead_lettered",
+      systemAbandon.emittedEvents.length === 3,
+      JSON.stringify(systemAbandon),
+    );
+
+    const securityResult = stepResult("step-security", {
+      status: "failed_security",
+      artifacts: [],
+      exception: {
+        class: "security",
+        code: "DOMAIN_POLICY_VIOLATION",
+        message: "domain blocked" as RedactedString,
+      },
+    });
+    const securityStarted = await beginStarted(RUN_SECURITY, "step-security", securityResult.action, "node-security");
+    const security = await completionCoordinator.completeTerminalOutcome({
+      key: securityStarted.key,
+      nodeId: "node-security",
+      correlationId: CORRELATION as CorrelationId,
+      result: securityResult,
+      artifacts: [],
+    });
+    const securityStatus = await runAndWorkitemStatus(pool, RUN_SECURITY, WORKITEM_SECURITY);
+    check(
+      "executor security failure maps R10 to aborting without workitem terminal mutation",
+      securityStatus.runStatus === "aborting" && securityStatus.workitemStatus === "processing",
+      JSON.stringify(securityStatus),
+    );
+    check(
+      "executor security failure enqueues run_abort and notification",
+      security.enqueuedRuntimeJobs.length === 1 &&
+        security.enqueuedRuntimeJobs[0]?.kind === "run_abort" &&
+        securityNotifications.some((item) => item.runId === RUN_SECURITY && item.code === "DOMAIN_POLICY_VIOLATION"),
+      JSON.stringify({ jobs: security.enqueuedRuntimeJobs, securityNotifications }),
+    );
+    await withTenantTx(pool, TENANT_A, async (c) => {
+      const row = await c.query<{ abort_source_status: string | null }>(
+        `SELECT abort_source_status FROM runs WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+        [TENANT_A, RUN_SECURITY],
+      );
+      check("executor security failure persists abort_source_status", row.rows[0]?.abort_source_status === "running");
+      const auditRows = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM audit_log`);
+      check("executor security failure does not use security audit_log", auditRows.rows[0]?.n === 0, `n=${auditRows.rows[0]?.n}`);
+    });
+
+    const noNotifyCoordinator = new PgExecutorCompletionCoordinator(pool, runtimeJobEnqueuer);
+    await expectReject(
+      "executor security failure without notification port fails closed",
+      () =>
+        noNotifyCoordinator.completeTerminalOutcome({
+          key: { tenantId: TENANT_A as TenantId, runId: RUN_A as RunId, stepId: "step-security-no-port" as StepId, attempt: 0 },
+          nodeId: "node-security-no-port",
+          correlationId: CORRELATION as CorrelationId,
+          result: stepResult("step-security-no-port", {
+            status: "failed_security",
+            artifacts: [],
+            exception: {
+              class: "security",
+              code: "DOMAIN_POLICY_VIOLATION",
+              message: "domain blocked" as RedactedString,
+            },
+          }),
+          artifacts: [],
+        }),
+      "ExecutorSecurityNotificationPort",
+    );
+
+    const challengeResult = stepResult("step-challenge", {
+      status: "failed_challenge",
+      artifacts: [],
+      exception: {
+        class: "challenge",
+        code: "CHALLENGE_UNRESOLVED",
+        message: "challenge detected" as RedactedString,
+      },
+    });
+    const challengeStarted = await beginStarted(RUN_CHALLENGE, "step-challenge", challengeResult.action, "node-challenge");
+    await expectReject(
+      "executor challenge failure requires suspension bookmark port",
+      () =>
+        completionCoordinator.completeTerminalOutcome({
+          key: challengeStarted.key,
+          nodeId: "node-challenge",
+          correlationId: CORRELATION as CorrelationId,
+          result: challengeResult,
+          artifacts: [],
+        }),
+      "ExecutorChallengeSuspensionPort",
+    );
+    check("executor challenge failure leaves started attempt", (await runStepStatus(pool, TENANT_A, RUN_CHALLENGE, "step-challenge")) === "started");
+    check("executor challenge failure leaves run running", (await runAndWorkitemStatus(pool, RUN_CHALLENGE, WORKITEM_CHALLENGE)).runStatus === "running");
+
+    const uncertainResult = stepResult("step-uncertain", {
+      status: "uncertain",
+      artifacts: [],
+      exception: {
+        class: "system",
+        code: "VERIFY_FAILED",
+        message: "verify uncertain" as RedactedString,
+      },
+    });
+    const uncertainStarted = await beginStarted(RUN_UNCERTAIN, "step-uncertain", uncertainResult.action, "node-uncertain");
+    await completionCoordinator.completeTerminalOutcome({
+      key: uncertainStarted.key,
+      nodeId: "node-uncertain",
+      correlationId: CORRELATION as CorrelationId,
+      result: uncertainResult,
+      artifacts: [],
+    });
+    const uncertainStatus = await runAndWorkitemStatus(pool, RUN_UNCERTAIN, WORKITEM_UNCERTAIN);
+    check(
+      "executor uncertain outcome maps through explicit system catalog path",
+      uncertainStatus.runStatus === "failed_system" && uncertainStatus.workitemStatus === "retry",
+      JSON.stringify(uncertainStatus),
+    );
+
+    await expectReject(
+      "executor skipped outcome is unsupported fail-closed",
+      () =>
+        completionCoordinator.completeTerminalOutcome({
+          key: { tenantId: TENANT_A as TenantId, runId: RUN_A as RunId, stepId: "step-skipped" as StepId, attempt: 0 },
+          nodeId: "node-skipped",
+          correlationId: CORRELATION as CorrelationId,
+          result: stepResult("step-skipped", { status: "skipped", artifacts: [] }),
+          artifacts: [],
+        }),
+      "not terminal-outcome-mappable",
+    );
+
+    await expectReject(
+      "executor system failure requires catalog code",
+      () =>
+        completionCoordinator.completeTerminalOutcome({
+          key: { tenantId: TENANT_A as TenantId, runId: RUN_A as RunId, stepId: "step-system-unknown-code" as StepId, attempt: 0 },
+          nodeId: "node-system-unknown-code",
+          correlationId: CORRELATION as CorrelationId,
+          result: stepResult("step-system-unknown-code", {
+            status: "failed_system",
+            artifacts: [],
+            exception: {
+              class: "system",
+              code: "SYSTEM_UNKNOWN",
+              message: "unknown system" as RedactedString,
+            },
+          }),
+          artifacts: [],
+        }),
+      "error-catalog",
+    );
+
     const okResult = stepResult("step-ok");
+    const okStarted = await beginStarted(RUN_A, "step-ok", okResult.action, "node-ok");
     const recorded = await recorder.record({
-      key: { tenantId: TENANT_A as TenantId, runId: RUN_A as RunId, stepId: "step-ok" as StepId, attempt: 0 },
+      key: okStarted.key,
       nodeId: "node-ok",
       correlationId: CORRELATION as CorrelationId,
       result: okResult,
@@ -678,13 +1095,13 @@ async function main(): Promise<void> {
       "duplicate step attempt fails closed",
       () =>
         recorder.record({
-          key: { tenantId: TENANT_A as TenantId, runId: RUN_A as RunId, stepId: "step-ok" as StepId, attempt: 0 },
+          key: okStarted.key,
           nodeId: "node-ok",
           correlationId: CORRELATION as CorrelationId,
           result: okResult,
           artifacts: artifactFor(okResult),
         }),
-      "executor invocation record failed closed",
+      "executor invocation requires an existing local started attempt",
     );
     check("duplicate does not create extra event", (await stepEventCount(pool, TENANT_A, RUN_A, "step-ok")) === 1);
 
@@ -692,16 +1109,17 @@ async function main(): Promise<void> {
       artifacts: [],
       stagehandCallIds: ["10000000-0000-0000-0000-0000000000ff"],
     });
+    const stagehandMissingStarted = await beginStarted(
+      RUN_A,
+      "step-stagehand-missing",
+      stagehandMissing.action,
+      "node-stagehand-missing",
+    );
     await expectReject(
       "missing stagehand call rolls back run_step",
       () =>
         recorder.record({
-          key: {
-            tenantId: TENANT_A as TenantId,
-            runId: RUN_A as RunId,
-            stepId: "step-stagehand-missing" as StepId,
-            attempt: 0,
-          },
+          key: stagehandMissingStarted.key,
           nodeId: "node-stagehand-missing",
           correlationId: CORRELATION as CorrelationId,
           result: stagehandMissing,
@@ -709,7 +1127,7 @@ async function main(): Promise<void> {
         }),
       "stagehandCallIds are not durably persisted",
     );
-    check("stagehand failure leaves no run_step", (await runStepCount(pool, TENANT_A, RUN_A, "step-stagehand-missing")) === 0);
+    check("stagehand failure leaves started run_step", (await runStepStatus(pool, TENANT_A, RUN_A, "step-stagehand-missing")) === "started");
     check("stagehand failure leaves no event", (await stepEventCount(pool, TENANT_A, RUN_A, "step-stagehand-missing")) === 0);
 
     const crossTenant = stepResult("step-cross", { artifacts: [] });
