@@ -1,92 +1,105 @@
 /**
- * Site risk 승인 라우트 (api-surface §7).
+ * 사이트 승인 명령 라우트 (api-surface §6 — sites).
  *
- * `POST /v1/sites/{site_profile_id}/approve` — risk=red 사이트 실행 승인의 제어평면 진입점.
- * Idempotency-Key 필수, 승인 권한(site.approve = approver/admin, auth-rbac §2). body: optional reason/expires_at.
- * 효과: site_profiles.approved=true(+ approved_at/by/reason/expires) CAS + site_profile_approvals 감사행.
- * GET /v1/sites가 approval_status='approved'로 반영(reads.ts). SITE_PROFILE_BLOCKED(런타임 실행 차단)와 별개.
+ * `POST /v1/sites/{site_profile_id}/approve` — risk=red 사이트 실행 승인 워크플로우의 제어평면 진입점.
+ * 승인 시 site_profiles.approved=true(SITE_PROFILE_BLOCKED 런타임 게이트 해제) + site_profile_approvals 감사 행.
+ * approver+ 권한(auth-rbac §2, rbacAction=site.approve; 미보유→AUTHZ_FORBIDDEN). Idempotency-Key 멱등.
  *
- * 에러: site 미존재/타테넌트 → RESOURCE_NOT_FOUND(404, RLS 비노출). 승인 권한 미보유 → AUTHZ_FORBIDDEN(403, RBAC preHandler).
- *   body malformed → IR_SCHEMA_INVALID(422, 키 소모 이전).
+ * 에러: 형식 무효 id/미존재(RLS 포함)→RESOURCE_NOT_FOUND(404), body 형상 무효→IR_SCHEMA_INVALID(422),
+ * 멱등 키 누락→422. 승인은 flip-to-true라 멱등 안전(재승인은 reason/expires 갱신 + 200).
  */
 import { randomUUID } from "node:crypto";
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { type ApiServerDeps, requirePrincipal } from "./server";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+interface ApproveBody {
+  readonly reason?: string;
+  readonly expiresAt?: string;
+}
+
+/** body 형상 선검사(키 소모 이전). optional reason(string)·expires_at(ISO-8601). 그 외 키/형 무효→422. */
+function parseApproveBody(raw: unknown): ApproveBody {
+  if (raw === undefined || raw === null) return {};
+  if (!isRecord(raw)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "request_body_object_required" });
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "reason" && key !== "expires_at") {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unexpected_field", field: key });
+    }
+  }
+  const reason = raw.reason;
+  if (reason !== undefined && typeof reason !== "string") {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_reason" });
+  }
+  const expiresAt = raw.expires_at;
+  if (expiresAt !== undefined) {
+    if (typeof expiresAt !== "string" || Number.isNaN(Date.parse(expiresAt))) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_expires_at" });
+    }
+  }
+  return { reason, expiresAt: expiresAt as string | undefined };
+}
+
 export function registerSiteRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
-  app.post<{ Params: { siteId: string } }>(
-    "/v1/sites/:siteId/approve",
+  app.post<{ Params: { id: string } }>(
+    "/v1/sites/:id/approve",
     { config: { rbacAction: "site.approve" } },
-    async (request, reply) => {
-      const siteId = request.params.siteId;
-      if (!UUID_RE.test(siteId)) {
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const id = request.params.id;
+      if (!UUID_RE.test(id)) {
+        // 형식 무효 id는 존재할 수 없다 → 404(존재 비노출, 500 크래시 금지).
         throw new ApiResponseError("RESOURCE_NOT_FOUND");
       }
-
-      // body 형상 선검사(멱등키 소모 이전, malformed→422). reason/expires_at는 선택.
-      const body = request.body;
-      if (body !== undefined && body !== null && !isRecord(body)) {
-        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_body" });
-      }
-      const reason = isRecord(body) ? body.reason : undefined;
-      const expiresAt = isRecord(body) ? body.expires_at : undefined;
-      if (reason !== undefined && typeof reason !== "string") {
-        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "reason_must_be_string" });
-      }
-      if (expiresAt !== undefined && (typeof expiresAt !== "string" || Number.isNaN(Date.parse(expiresAt)))) {
-        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "expires_at_invalid" });
-      }
-
-      // approved_by는 uuid 컬럼 — subject(sub claim)가 uuid가 아니면 조용한 500 대신 fail-closed.
       const principal = requirePrincipal(request);
-      if (!UUID_RE.test(principal.subjectId)) {
-        throw new ApiResponseError("AUTHZ_FORBIDDEN", { reason: "subject_not_uuid" });
-      }
-      const approverId = principal.subjectId;
-      const reasonValue = reason ?? null;
-      const expiresValue = expiresAt ?? null;
-
-      const result = await runIdempotentCommand(deps, request, "approveSite", `/v1/sites/${siteId}/approve`, (client, tenantId) =>
-        applyApprove(client, tenantId, siteId, approverId, reasonValue, expiresValue),
+      const body = parseApproveBody(request.body); // 키 소모 이전 선검사(malformed→422)
+      const result = await runIdempotentCommand(
+        deps,
+        request,
+        "approveSite",
+        `/v1/sites/${id}/approve`,
+        (client, tenantId) => applySiteApproval(client, tenantId, id, principal.subjectId, body),
       );
       reply.code(result.status).send(result.body);
     },
   );
 }
 
-async function applyApprove(
+async function applySiteApproval(
   client: PoolClient,
   tenantId: string,
   siteId: string,
-  approverId: string,
-  reason: string | null,
-  expiresAt: string | null,
+  approvedBy: string,
+  body: ApproveBody,
 ): Promise<CommandResponse> {
+  // 사이트 존재 확인(RLS 스코프). 미존재/타테넌트 → 404(존재 비노출).
   const site = await client.query<{ id: string }>(
     `SELECT id FROM site_profiles WHERE id=$1::uuid AND tenant_id=$2::uuid`,
     [siteId, tenantId],
   );
-  if (site.rows[0] === undefined) {
-    // RLS가 타테넌트 row를 숨기므로 cross-tenant도 동일하게 not-found(존재 비노출).
+  if ((site.rowCount ?? 0) === 0) {
     throw new ApiResponseError("RESOURCE_NOT_FOUND");
   }
+  // 승인 반영(flip-to-true, 멱등 안전): approved + approver/시각/사유/만료.
   await client.query(
     `UPDATE site_profiles
-        SET approved=true, approved_at=now(), approved_by=$3::uuid, approval_reason=$4, approval_expires_at=$5::timestamptz
-      WHERE tenant_id=$2::uuid AND id=$1::uuid`,
-    [siteId, tenantId, approverId, reason, expiresAt],
+        SET approved = true, approved_by = $1::uuid, approved_at = now(),
+            approval_reason = $2, approval_expires_at = $3::timestamptz
+      WHERE id = $4::uuid AND tenant_id = $5::uuid`,
+    [approvedBy, body.reason ?? null, body.expiresAt ?? null, siteId, tenantId],
   );
+  // 감사 행(불변 이력) — 매 승인마다 1행.
   await client.query(
     `INSERT INTO site_profile_approvals (id, tenant_id, site_profile_id, approved_by, reason, expires_at)
      VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::timestamptz)`,
-    [randomUUID(), tenantId, siteId, approverId, reason, expiresAt],
+    [randomUUID(), tenantId, siteId, approvedBy, body.reason ?? null, body.expiresAt ?? null],
   );
-  return { status: 200, body: { site_profile_id: siteId, approval_status: "approved" } };
+  return { status: 200, body: { site_profile_id: siteId, approved: true, approved_by: approvedBy } };
 }

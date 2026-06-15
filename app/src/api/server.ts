@@ -41,9 +41,9 @@ import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { registerDlqRoutes } from "./dlq";
 import { registerHumanTaskRoutes } from "./human-tasks";
 import { registerReadRoutes } from "./reads";
+import { registerSiteRoutes } from "./sites";
 import type { RunEnqueuer } from "./run-queue";
 import { registerScenarioRoutes } from "./scenarios";
-import { registerSiteRoutes } from "./sites";
 import { registerSecurity, type SecurityConfig } from "./security";
 
 declare module "fastify" {
@@ -200,8 +200,8 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerScenarioRoutes(app, deps);
   registerHumanTaskRoutes(app, deps);
   registerDlqRoutes(app, deps);
-  registerSiteRoutes(app, deps);
   registerReadRoutes(app, deps);
+  registerSiteRoutes(app, deps);
 
   return app;
 }

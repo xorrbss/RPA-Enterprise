@@ -70,7 +70,7 @@ operate the deployment path outside this repository.
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 28 markers, 11 actionable blockers, 13 known release decisions tracked,
+  output: 30 markers, 11 actionable blockers, 13 known release decisions tracked,
   13 release decisions checked (11 active external/staging checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
@@ -213,7 +213,7 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 28 markers, 11 actionable blockers, 13 known release
+  (current output: 30 markers, 11 actionable blockers, 13 known release
   decisions tracked, 13 release decisions checked (11 active external/staging
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
