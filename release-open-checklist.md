@@ -28,23 +28,26 @@
 - [x] HTML HTTP/UI route smoke: `npm --prefix codegen run html:http-smoke` 또는 `node scripts/html-http-smoke.mjs`. Standalone console를 `127.0.0.1` ephemeral port로 serve하고 initial `#openGate`, every hash route, invalid-hash fallback to `#dashboard`, Product-open to workitems nav click, no backend calls, HTTP 200/content-type/404/inline script syntax smoke를 확인.
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact read/mutation RLS posture, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
 - [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output is recorded in the next row.
-- [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. External staging/deploy rollback evidence remains outside this contract repository and must be supplied by the platform/release owner.
-- [x] Current local blocked:audit output: 30 markers, 11 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (11 active external/staging checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows).
+- [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. Staging/deploy rollback evidence remains outside this contract repository and must be supplied by the project owner at deploy time.
+- [x] Current local blocked:audit output: 30 markers, 11 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (11 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows).
 
-## External Staging/Open Blockers
+## Deploy-Time Provisioning Blockers
 
 These do not invalidate the tagged repo-controlled Product Open Candidate, but
-they block any executable staging/open deployment until external owners close
-them in the release packet.
+they block any executable staging/open deployment until the single project owner
+provisions and evidences them at deploy time. There is no external
+platform/release/security team; "owner" throughout means this project's owner,
+and these rows close only when real infrastructure exists and produces real
+evidence (local fixtures/test_fake cannot close them).
 
-- [ ] External concrete staging platform repo and deploy target identifier, GitHub Environment `staging` protection/approver configuration, release approval evidence under `release-approvers`, rollback confirmation under `platform-oncall`, and SecretRef/SecretStore provisioning path. Required decision: see `product-open-candidate-report.md`.
-- [ ] External staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path is named without plaintext secret values. Required decision: see `product-open-candidate-report.md`.
-- [ ] External staging SecretRef/SecretStore provisioning readiness - SecretRef namespace convention and runtime identities allowed to resolve each namespace are named. Required decision: see `product-open-candidate-report.md`.
-- [ ] External staging SecretRef/SecretStore provisioning readiness - initial SecretRef inventory is listed by SecretRef identifiers only, with owning service/runtime and no resolved material. Required decision: see `product-open-candidate-report.md`.
-- [ ] External staging SecretRef/SecretStore provisioning readiness - rotation owner/cadence and break-glass/update procedure are named. Required decision: see `product-open-candidate-report.md`.
-- [ ] External staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location, authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, CI/deploy log redaction proof, no-env-dump/xtrace proof, and the secret-scan or equivalent negative control are named. Required decision: see `product-open-candidate-report.md`.
-- [ ] External staging producer retention duration/source policy. Required decision: see `product-open-candidate-report.md`.
-- [ ] External D5 Codex SSE live capability evidence for the intended staging model/endpoint, run with an absolute HTTPS `CODEX_BASE_URL` containing no credentials/query/fragment material, and recorded only as redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` / `CODEX_EVIDENCE_MODEL_ALIAS` output. Required decision: see `product-open-candidate-report.md`.
+- [ ] Deploy-time concrete staging platform repo and deploy target identifier, GitHub Environment `staging` protection/approver configuration, owner release-approval and rollback confirmation, and SecretRef/SecretStore provisioning path. Required decision: see `product-open-candidate-report.md`.
+- [ ] Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path is named without plaintext secret values. Required decision: see `product-open-candidate-report.md`.
+- [ ] Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretRef namespace convention and runtime identities allowed to resolve each namespace are named. Required decision: see `product-open-candidate-report.md`.
+- [ ] Deploy-time staging SecretRef/SecretStore provisioning readiness - initial SecretRef inventory is listed by SecretRef identifiers only, with owning service/runtime and no resolved material. Required decision: see `product-open-candidate-report.md`.
+- [ ] Deploy-time staging SecretRef/SecretStore provisioning readiness - rotation owner/cadence and break-glass/update procedure are named. Required decision: see `product-open-candidate-report.md`.
+- [ ] Deploy-time staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location, authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, CI/deploy log redaction proof, no-env-dump/xtrace proof, and the secret-scan or equivalent negative control are named. Required decision: see `product-open-candidate-report.md`.
+- [ ] Deploy-time staging producer retention duration/source policy. Required decision: see `product-open-candidate-report.md`.
+- [ ] Deploy-time D5 Codex SSE live capability evidence for the intended staging model/endpoint, run with an absolute HTTPS `CODEX_BASE_URL` containing no credentials/query/fragment material, and recorded only as redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` / `CODEX_EVIDENCE_MODEL_ALIAS` output. Required decision: see `product-open-candidate-report.md`.
 - [ ] Runtime artifact_redaction production/staging object I/O and redacted-output implementation is evidenced with SecretRef-backed real object-store credentials and redacted object receipts. Required decision: see `product-open-candidate-report.md`.
 - [ ] Runtime artifact_retention production/staging external object deletion implementation is evidenced with SecretRef-backed real object-store credentials, delete/not-found receipts, and legal-hold/quarantine handling proof. Required decision: see `product-open-candidate-report.md`.
 - [ ] Runtime execution gates prove tenant boundary, RBAC/redaction, no `BYPASSRLS`, and no silent false/unknown behavior in remote PR/main CI evidence with the required job URLs for the Phase 7 runtime delta. Latest non-skipped Phase 7 `main` run `27525226281` on commit `6ac33af251bd362a4de200d2eba956d371408cf3` failed before steps because GitHub did not start hosted runner jobs; annotations say account payments failed or the spending limit must be increased. Required decision: see `product-open-candidate-report.md`.
@@ -53,7 +56,7 @@ Closure boundary summary:
 
 | Scope | Closure authority | Evidence that may close rows | Evidence that must not be inferred |
 |---|---|---|---|
-| External staging/open | Platform, release, staging LLM, SecretStore, and retention owners outside this repo | Redacted external release packet naming staging platform repo, GitHub Environment protection, deploy target, approval/rollback references, SecretStore alias/path, namespace/identity map, SecretRef inventory, retention policy, and live D5 evidence | Local fixtures, hard-coded aliases, CI service containers, or code-only SecretRef names |
+| Deploy-time provisioning | Single project owner, at deploy time (no external platform/release/security team exists) | Redacted release packet naming staging platform repo, GitHub Environment protection, deploy target, approval/rollback references, SecretStore alias/path, namespace/identity map, SecretRef inventory, retention policy, and live D5 evidence | Local fixtures, hard-coded aliases, CI service containers, or code-only SecretRef names |
 | Repo-controlled code/evidence | Repo code stream plus PR/main `Contract Gates` evidence | Contract/runtime/API changes, targeted tests, non-bypass DB evidence, secret scan, migration smoke, and app-runtime job URLs | Staging deploy approval, SecretStore provisioning path, production object-store credentials, or live model behavior |
 | Hybrid artifact lifecycle | Repo runtime owners for port/worker implementation; platform/SecretStore owners for real staging credentials and object store evidence | Repo rows can close only after real `ArtifactRedactor`/`ArtifactRetentionStore` wiring plus tests and remote gates; external rows stay open until SecretRef-backed staging object-store evidence exists | Fakeable local ports or temp-DB BYPASSRLS checks as proof of production/staging object I/O |
 
@@ -155,8 +158,8 @@ PR/main `Contract Gates` run attaches the required job URLs.
 
 ## Remaining External Evidence Notes
 
-The only unchecked rows left in this checklist require external owner action or
-remote evidence: concrete staging deploy target, SecretStore provisioning,
+The only unchecked rows left in this checklist require owner deploy-time
+provisioning or remote evidence: concrete staging deploy target, SecretStore provisioning,
 non-app producer retention policy, D5 live model capability output, real
 artifact object-store receipts, GitHub Actions billing/spending-limit recovery,
 and PR/main `Contract Gates` URLs. Do not close
@@ -229,9 +232,9 @@ unredacted logs.
   - 권고: 3rd-party 커넥터가 README #12로 D7+ 연기이므로 함께 연기. 커넥터 도입 시 `(tenant_id, connector_id, target_id)` 키 확정.
   - Owner: Connector platform.
 - Resolved: Staging deploy target is not defined. Former Required decision: GitHub Environment name, deploy target, approval owner, rollback owner, and secret provisioning model. CI must not create external deploys or materialize plaintext secrets from this contract-only repo.
-  - Decision v1: GitHub Environment `staging`; approval owner `release-approvers`; rollback owner `platform-oncall`; secrets only through `SecretRef`/`SecretStore`. See `release-decisions.md`.
+  - Decision v1: GitHub Environment `staging`; approval and rollback are owned by the single project owner at deploy time (no external `release-approvers`/`platform-oncall` team exists); secrets only through `SecretRef`/`SecretStore`. See `release-decisions.md`.
   - Scope note: Decision v1 resolves only the governance owner/environment/SecretRef model. The concrete platform repo, namespace/service deploy target, protection/approver configuration, rollback confirmation, and SecretStore provisioning evidence remain active external blockers above.
-  - Historical recommendation superseded by Decision v1: use GitHub Environment `staging`; concrete deploy target is selected by the platform repo; approval owner is `release-approvers`; rollback owner is `platform-oncall`; secrets remain behind `SecretRef`/`SecretStore`.
+  - Historical recommendation superseded by Decision v1: use GitHub Environment `staging`; concrete deploy target is selected by the platform repo; approval and rollback are the project owner's at deploy time; secrets remain behind `SecretRef`/`SecretStore`.
   - Owner: Platform/DevOps.
 
 ## Release Decision

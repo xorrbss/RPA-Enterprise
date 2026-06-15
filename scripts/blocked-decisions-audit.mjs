@@ -29,8 +29,8 @@ const releaseDecisionRules = [
     label: "Staging deploy target is not defined",
     aliases: [
       "Staging deploy target is not defined",
-      "External concrete staging deploy target",
-      "External staging SecretRef/SecretStore provisioning readiness",
+      "Deploy-time concrete staging deploy target",
+      "Deploy-time staging SecretRef/SecretStore provisioning readiness",
       "staging secret provisioning",
       "SecretStore backend",
     ],
@@ -169,9 +169,9 @@ const releaseDecisionRules = [
 
 const activeBlockerRules = [
   {
-    label: "External concrete staging platform repo and deploy target identifier",
+    label: "Deploy-time concrete staging platform repo and deploy target identifier",
     aliases: [
-      "External concrete staging deploy target",
+      "Deploy-time concrete staging deploy target",
       "exact staging platform repo",
       "GitHub Environment `staging` protection",
       "concrete deploy target identifier",
@@ -181,9 +181,9 @@ const activeBlockerRules = [
     ],
   },
   {
-    label: "External staging SecretRef/SecretStore provisioning readiness",
+    label: "Deploy-time staging SecretRef/SecretStore provisioning readiness",
     aliases: [
-      "External staging SecretRef/SecretStore provisioning readiness",
+      "Deploy-time staging SecretRef/SecretStore provisioning readiness",
       "SecretStore backend",
       "Vault mount/path",
       "cloud KMS/secret-manager alias",
@@ -193,9 +193,9 @@ const activeBlockerRules = [
     ],
   },
   {
-    label: "External staging producer retention duration/source policy",
+    label: "Deploy-time staging producer retention duration/source policy",
     aliases: [
-      "External staging producer retention duration/source policy",
+      "Deploy-time staging producer retention duration/source policy",
       "raw_items.raw_payload",
       "normalized_records.record",
       "artifacts.object_ref",
@@ -205,9 +205,9 @@ const activeBlockerRules = [
     ],
   },
   {
-    label: "External D5 Codex SSE live capability evidence",
+    label: "Deploy-time D5 Codex SSE live capability evidence",
     aliases: [
-      "External D5 Codex SSE live capability evidence",
+      "Deploy-time D5 Codex SSE live capability evidence",
       "Codex SSE live capability evidence",
       "intended staging model/endpoint",
       "basic SSE",
@@ -365,18 +365,18 @@ const activeBlockerRules = [
   },
 ];
 const activeBlockerSectionHeadings = new Set([
-  "## External Staging/Open Blockers",
+  "## Deploy-Time Provisioning Blockers",
   "## Repo-Controlled D4.5 API P1 Evidence / Open",
   "## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)",
 ]);
 const expectedActiveBlockerSectionCounts = new Map([
-  ["## External Staging/Open Blockers", 11],
+  ["## Deploy-Time Provisioning Blockers", 11],
   ["## Repo-Controlled D4.5 API P1 Evidence / Open", 0],
   ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 0],
 ]);
 const activeChecklistEvidenceRules = [
   {
-    checklistText: "External concrete staging platform repo and deploy target identifier",
+    checklistText: "Deploy-time concrete staging platform repo and deploy target identifier",
     todoLineAliases: [
       "exact staging platform repo",
       "GitHub Environment `staging` protection/approver configuration",
@@ -387,23 +387,23 @@ const activeChecklistEvidenceRules = [
     ],
   },
   {
-    checklistText: "External staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path",
+    checklistText: "Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path",
     todoLineAliases: ["evidence is missing the SecretStore backend alias/path"],
   },
   {
-    checklistText: "External staging SecretRef/SecretStore provisioning readiness - SecretRef namespace convention",
+    checklistText: "Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretRef namespace convention",
     todoLineAliases: ["evidence is missing the SecretRef namespace convention and runtime identity map"],
   },
   {
-    checklistText: "External staging SecretRef/SecretStore provisioning readiness - initial SecretRef inventory",
+    checklistText: "Deploy-time staging SecretRef/SecretStore provisioning readiness - initial SecretRef inventory",
     todoLineAliases: ["evidence is missing the initial SecretRef inventory"],
   },
   {
-    checklistText: "External staging SecretRef/SecretStore provisioning readiness - rotation owner/cadence",
+    checklistText: "Deploy-time staging SecretRef/SecretStore provisioning readiness - rotation owner/cadence",
     todoLineAliases: ["evidence is missing rotation and break-glass ownership"],
   },
   {
-    checklistText: "External staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location",
+    checklistText: "Deploy-time staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location",
     todoLineAliases: [
       "evidence is missing CI/deploy negative-log",
       "secret-scan or equivalent negative control",
@@ -411,7 +411,7 @@ const activeChecklistEvidenceRules = [
     ],
   },
   {
-    checklistText: "External D5 Codex SSE live capability evidence",
+    checklistText: "Deploy-time D5 Codex SSE live capability evidence",
     todoLineAliases: [
       "absolute HTTPS `CODEX_BASE_URL`",
       "no credentials/query/fragment material",
@@ -757,12 +757,12 @@ function todoLineMatchesEvidenceRule(todo, rule) {
 }
 
 function buildAuditOutput(actionable) {
-  const externalCount = activeBlockerSectionCounts.get("## External Staging/Open Blockers") ?? 0;
+  const externalCount = activeBlockerSectionCounts.get("## Deploy-Time Provisioning Blockers") ?? 0;
   const repoD45Count =
     activeBlockerSectionCounts.get("## Repo-Controlled D4.5 API P1 Evidence / Open") ?? 0;
   const repoD3Count =
     activeBlockerSectionCounts.get("## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)") ?? 0;
-  return `${todos.length} markers, ${actionable} actionable blockers, ${knownReleaseDecisions.length} known release decisions tracked, ${releaseDecisionLines.length} release decisions checked (${externalCount} active external/staging checklist rows; ${repoD45Count} repo-controlled D4.5 API P1 open rows; ${repoD3Count} repo-controlled D3 runtime open rows)`;
+  return `${todos.length} markers, ${actionable} actionable blockers, ${knownReleaseDecisions.length} known release decisions tracked, ${releaseDecisionLines.length} release decisions checked (${externalCount} active deploy-time provisioning checklist rows; ${repoD45Count} repo-controlled D4.5 API P1 open rows; ${repoD3Count} repo-controlled D3 runtime open rows)`;
 }
 
 function checkReportedAuditOutputs(auditOutput) {

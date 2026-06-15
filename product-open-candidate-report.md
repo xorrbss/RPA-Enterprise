@@ -8,9 +8,9 @@ staging-readiness evidence is PR #8 plus post-merge `main` `Contract Gates`
 run `27499599708` on merge `276bae845c74c5d40f218dec661fdcdc255afac6`.
 This current merged delta names and evidences the durable security audit writer
 boundary, including PostgreSQL append evidence; any remaining active blocker is listed in
-`release-open-checklist.md` and the packets below. External
-Product Open still requires the resolved staging/release owners to approve and
-operate the deployment path outside this repository.
+`release-open-checklist.md` and the packets below. Product
+Open still requires the project owner to approve and operate the deployment
+path at deploy time (no external release/oncall team exists).
 
 ## Candidate Status
 
@@ -71,7 +71,7 @@ operate the deployment path outside this repository.
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
   output: 30 markers, 11 actionable blockers, 13 known release decisions tracked,
-  13 release decisions checked (11 active external/staging checklist rows;
+  13 release decisions checked (11 active deploy-time provisioning checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -214,7 +214,7 @@ Passed locally:
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
   (current output: 30 markers, 11 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked (11 active external/staging
+  decisions tracked, 13 release decisions checked (11 active deploy-time provisioning
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
@@ -439,38 +439,39 @@ Environment note:
   `ArtifactRef` aligned to `artifacts.id` while raw object locators remain
   `ObjectRef`, and does not close artifact redaction/retention worker object-I/O
   blockers.
-- External Product Open gap: staging approval, secret provisioning, deployment,
-  rollback ownership, and any production/staging operation remain outside this
-  contract-first repository. Those steps must use the resolved staging decision
-  and must not materialize plaintext secrets in this repo.
+- Deploy-time gap: staging approval, secret provisioning, deployment,
+  rollback, and any production/staging operation remain the project owner's
+  deploy-time work outside this contract-first repository. Those steps must use
+  the resolved staging decision and must not materialize plaintext secrets in
+  this repo.
 
 ### Readiness Blocker Ownership Matrix
 
-| Blocker family | Closeable by repo code stream | Requires external staging packet |
+| Blocker family | Closeable by repo code stream | Requires owner deploy-time provisioning |
 |---|---|---|
-| D4.5 API behavior | Yes: `suspending` abort bookmark-cancel ownership and human-task `reassignAssignee` ownership can close with contract/API/runtime code plus targeted tests and PR/main gates. | No external deploy evidence is needed for the repo behavior, but staging/open still remains blocked by the external rows below. |
+| D4.5 API behavior | Yes: `suspending` abort bookmark-cancel ownership and human-task `reassignAssignee` ownership can close with contract/API/runtime code plus targeted tests and PR/main gates. | No external deploy evidence is needed for the repo behavior, but staging/open still remains blocked by the deploy-time rows below. |
 | D3 executor/runtime orchestration | Yes: real executor invocation, `step.started` enforcement, explicit system/security/challenge/unknown outcome mapping, and executor audit semantics can close with repo code plus non-bypass DB and app-runtime evidence. | Live staging execution evidence is still separate; do not infer it from Stagehand/CDP dry-run or temp-DB tests. |
-| Artifact redaction/retention lifecycle | Partly: repo can close the real port/worker implementation, claim/finalize CAS, fail-closed audit, and targeted tests. | Yes: staging SecretRef-backed operational credential path, object-store redaction/deletion evidence, deployment target, approval, rollback, and retention evidence must come from external owners. |
-| Staging platform, SecretStore, deploy, rollback, producer retention, D5 live model | No: this contract repo can define the shape and negative controls only. | Yes: external owners must provide the platform repo, GitHub Environment protection, deploy target, `release-approvers` approval, `platform-oncall` rollback confirmation, SecretStore alias/path, namespace/identity map, SecretRef inventory, rotation/break-glass owner, non-app producer retention policy, and redacted live D5 capability output. |
+| Artifact redaction/retention lifecycle | Partly: repo can close the real port/worker implementation, claim/finalize CAS, fail-closed audit, and targeted tests. | Yes: staging SecretRef-backed operational credential path, object-store redaction/deletion evidence, deployment target, approval, rollback, and retention evidence must come from the project owner at deploy time. |
+| Staging platform, SecretStore, deploy, rollback, producer retention, D5 live model | No: this contract repo can define the shape and negative controls only. | Yes: at deploy time the project owner must provide the platform repo, GitHub Environment protection, deploy target, owner release-approval, owner rollback confirmation, SecretStore alias/path, namespace/identity map, SecretRef inventory, rotation/break-glass owner, non-app producer retention policy, and redacted live D5 capability output. |
 
-No external blocker may be closed from local aliases, fixture names, hard-coded
-SecretRef identifiers, CI service-container credentials, or unredacted live
-logs. External evidence intake must follow the Staging Secret Provisioning
+No deploy-time blocker may be closed from local aliases, fixture names,
+hard-coded SecretRef identifiers, CI service-container credentials, or unredacted
+live logs. Evidence intake must follow the Staging Secret Provisioning
 Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 
-- TODO: [BLOCKED] External concrete staging deploy target is not defined for executable Product Open deployment outside this contract repository.
-  Required decision: Platform/release authority must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier (namespace/service or equivalent), release approval evidence under `release-approvers`, rollback confirmation under `platform-oncall`, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
-- Blocked summary: External staging SecretRef/SecretStore provisioning readiness is not defined outside this repository; the specific actionable evidence blockers are tracked in the Staging Secret Provisioning Evidence Packet below.
-- TODO: [BLOCKED] External staging producer retention duration/source policy is not defined for non-app writers that must set `retention_until`.
-  Required decision: Runtime/platform owners must define per-producer retention duration/source for `raw_items.raw_payload`, `normalized_records.record`, `artifacts.object_ref`, `audit_log.payload`, and any non-D4.3 writer of `control_plane_idempotency_keys.response_body`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source, while repo-owned `events_outbox` retention is tracked separately above. Staging evidence must prove each payload-bearing writer sets `retention_until` or fails closed.
-- TODO: [BLOCKED] External D5 Codex SSE live capability evidence is missing for the intended staging model/endpoint.
-  Required decision: The staging LLM owner must run `npm --prefix app/poc/d5-codex-sse run poc` with an absolute HTTPS `CODEX_BASE_URL` containing no credentials/query/fragment material, `CODEX_API_KEY`, and `CODEX_MODEL` resolved outside the repository through SecretRef/SecretStore, plus required redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` and `CODEX_EVIDENCE_MODEL_ALIAS` values, then record redacted output proving mandatory checks #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior PASS; #3 native `json_schema` and #5 model metadata may be GAP only when the fallback path/config is explicitly retained. No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material may be recorded.
+- TODO: [BLOCKED] Deploy-time concrete staging deploy target is not defined for executable Product Open deployment outside this contract repository.
+  Required decision: At deploy time, the project owner must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier (namespace/service or equivalent), release approval evidence, rollback confirmation, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
+- Blocked summary: Deploy-time staging SecretRef/SecretStore provisioning readiness is not defined outside this repository; the specific actionable evidence blockers are tracked in the Staging Secret Provisioning Evidence Packet below.
+- TODO: [BLOCKED] Deploy-time staging producer retention duration/source policy is not defined for non-app writers that must set `retention_until`.
+  Required decision: At deploy time, the project owner must define per-producer retention duration/source for `raw_items.raw_payload`, `normalized_records.record`, `artifacts.object_ref`, `audit_log.payload`, and any non-D4.3 writer of `control_plane_idempotency_keys.response_body`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source, while repo-owned `events_outbox` retention is tracked separately above. Staging evidence must prove each payload-bearing writer sets `retention_until` or fails closed.
+- TODO: [BLOCKED] Deploy-time D5 Codex SSE live capability evidence is missing for the intended staging model/endpoint.
+  Required decision: At deploy time, the project owner runs `npm --prefix app/poc/d5-codex-sse run poc` with an absolute HTTPS `CODEX_BASE_URL` containing no credentials/query/fragment material, `CODEX_API_KEY`, and `CODEX_MODEL` resolved outside the repository through SecretRef/SecretStore, plus required redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` and `CODEX_EVIDENCE_MODEL_ALIAS` values, then record redacted output proving mandatory checks #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior PASS; #3 native `json_schema` and #5 model metadata may be GAP only when the fallback path/config is explicitly retained. No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material may be recorded.
 - Resolved repo evidence: cancelable `suspending` abort and H5/R15 `reassignAssignee` are explicit fail-closed v1 paths. Successful in-flight bookmark abort still requires a future bookmark-cancel owner or durable abort intent; successful manual escalate still requires a future routing/assignment owner. Until then the API rejects/rolls back before reporting success, preserving no silent false/unknown.
 - Resolved repo evidence: runtime executor orchestration and audit semantics now have a local path through `PgExecutorStepOrchestrator`, `ExecutorStepAttemptStore`, `PgExecutorInvocationRecorder`, and `PgExecutorCompletionCoordinator`; executor plugins run outside DB transactions, step-bound producer writes require `step.started`, system/security/challenge/uncertain outcomes map through explicit catalog-backed paths, lifecycle jobs are enqueued for artifact-producing terminal outcomes, and executor evidence does not misuse security-boundary `audit_log`.
 - TODO: [BLOCKED] Runtime artifact_redaction production/staging object I/O and redacted-output evidence is not complete.
-  Required decision: Runtime/security/platform owners must provide staging or production evidence from a real `ArtifactRedactor` port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, producing a redaction-safe object/ref or explicit `not_required` decision, updating `redaction_status` by tenant-scoped CAS from `pending` under an unexpired claim, handling `redaction_attempts`/threshold/alerting, preserving legal-hold/retention metadata, persisting `sha256`/quarantine behavior, appending required `bypassrls.use` audit for the operational role, and proving no plaintext Secret/PII or internal `ObjectRef` is emitted. The local fake/test port evidence proves repo guardrails only and must not be cited as staging redaction evidence.
+  Required decision: At deploy time, the project owner must provide staging or production evidence from a real `ArtifactRedactor` port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, producing a redaction-safe object/ref or explicit `not_required` decision, updating `redaction_status` by tenant-scoped CAS from `pending` under an unexpired claim, handling `redaction_attempts`/threshold/alerting, preserving legal-hold/retention metadata, persisting `sha256`/quarantine behavior, appending required `bypassrls.use` audit for the operational role, and proving no plaintext Secret/PII or internal `ObjectRef` is emitted. The local fake/test port evidence proves repo guardrails only and must not be cited as staging redaction evidence.
 - TODO: [BLOCKED] Runtime artifact_retention production/staging external object deletion evidence is not complete.
-  Required decision: Runtime/platform owners must provide staging or production evidence from a real `ArtifactRetentionStore` delete port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, with idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal-hold/quarantine handling, evidence/audit semantics, and approved staging credential/SecretRef path before Product Open can claim external artifact purge. The local fake/test port evidence proves repo guardrails only and is not staging external object deletion evidence.
+  Required decision: At deploy time, the project owner must provide staging or production evidence from a real `ArtifactRetentionStore` delete port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, with idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal-hold/quarantine handling, evidence/audit semantics, and approved staging credential/SecretRef path before Product Open can claim external artifact purge. The local fake/test port evidence proves repo guardrails only and is not staging external object deletion evidence.
 - TODO: [BLOCKED] Runtime execution staging gates are not yet complete remote evidence.
   Required decision: Release/runtime owners or repository billing administrators must restore GitHub Actions hosted-runner execution by resolving the account payment/spending-limit blocker, rerun `Contract Gates` on the Phase 7 `main` head, and provide PR/main evidence proving tenant boundary, RBAC/redaction, no `BYPASSRLS`, no silent false/unknown behavior, plus the required `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs for the Phase 7 runtime delta before citing it as current staging/open evidence. Local non-bypass temp-DB evidence is recorded above but does not replace remote release evidence.
 
@@ -599,8 +600,8 @@ Resolved for repo-owned app/runtime outbox producers.
 
 ### Staging Secret Provisioning Evidence Packet
 
-External owners must provide this packet with redacted aliases and `SecretRef`
-identifiers only. Do not record secret values, resolved SecretRef material, env
+At deploy time, the project owner provides this packet with redacted aliases
+and `SecretRef` identifiers only. Do not record secret values, resolved SecretRef material, env
 dumps, or deployment credentials in this repository.
 
 | Evidence field | Required redacted content | Status |
@@ -610,7 +611,7 @@ dumps, or deployment credentials in this repository.
 | Initial SecretRef inventory | SecretRef identifiers, owning service/runtime, and intended purpose only | BLOCKED external evidence |
 | Rotation and break-glass ownership | Rotation owner/cadence plus break-glass/update owner and procedure | BLOCKED external evidence |
 | CI/deploy and SecretStore resolution proof | Artifact URL proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening | BLOCKED external evidence |
-| Release approver and rollback confirmation | Approval evidence under `release-approvers` and rollback confirmation under `platform-oncall` | Tracked by external deploy target blocker above |
+| Release approval and rollback confirmation | Owner release-approval and rollback confirmation at deploy time | Tracked by the deploy target blocker above |
 
 Evidence intake rules for this packet:
 
@@ -633,29 +634,66 @@ Evidence intake rules for this packet:
   allow/deny smoke and `secret.resolve` audit metadata without resolved
   material before it can be treated as staging-ready.
 
-- TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing the SecretStore backend alias/path.
-  Required decision: External staging owners must name the Vault mount/path or cloud KMS/secret-manager alias used by staging without exposing plaintext secret values.
-- TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing the SecretRef namespace convention and runtime identity map.
-  Required decision: External staging owners must name the namespace convention and the runtime identities allowed to resolve each namespace before staging deploy.
-- TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing the initial SecretRef inventory.
-  Required decision: External staging owners must list initial SecretRef identifiers, owning service/runtime, and intended purpose only; resolved secret material must remain outside this repository.
-- TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing rotation and break-glass ownership.
-  Required decision: External staging owners must name the rotation owner/cadence and break-glass/update procedure before staging deploy.
-- TODO: [BLOCKED] External staging SecretRef/SecretStore provisioning readiness evidence is missing CI/deploy negative-log, secret-scan or equivalent negative control, and SecretStore resolution proof.
-  Required decision: External staging owners must provide the evidence artifact location proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext secret materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening in staging CI/deploy logs.
+- TODO: [BLOCKED] Deploy-time staging SecretRef/SecretStore provisioning readiness evidence is missing the SecretStore backend alias/path.
+  Required decision: At deploy time, the project owner must name the Vault mount/path or cloud KMS/secret-manager alias used by staging without exposing plaintext secret values.
+- TODO: [BLOCKED] Deploy-time staging SecretRef/SecretStore provisioning readiness evidence is missing the SecretRef namespace convention and runtime identity map.
+  Required decision: At deploy time, the project owner must name the namespace convention and the runtime identities allowed to resolve each namespace before staging deploy.
+- TODO: [BLOCKED] Deploy-time staging SecretRef/SecretStore provisioning readiness evidence is missing the initial SecretRef inventory.
+  Required decision: At deploy time, the project owner must list initial SecretRef identifiers, owning service/runtime, and intended purpose only; resolved secret material must remain outside this repository.
+- TODO: [BLOCKED] Deploy-time staging SecretRef/SecretStore provisioning readiness evidence is missing rotation and break-glass ownership.
+  Required decision: At deploy time, the project owner must name the rotation owner/cadence and break-glass/update procedure before staging deploy.
+- TODO: [BLOCKED] Deploy-time staging SecretRef/SecretStore provisioning readiness evidence is missing CI/deploy negative-log, secret-scan or equivalent negative control, and SecretStore resolution proof.
+  Required decision: At deploy time, the project owner must provide the evidence artifact location proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext secret materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening in staging CI/deploy logs.
+
+### Artifact Object-Store Evidence Packet (B3 / checklist rows 48-49)
+
+At deploy time, the project owner provides redacted object-I/O receipts only. The evidence
+shape is fixed by `ts/runtime-contract.ts` (`ArtifactObjectIoEvidence`,
+`artifact/object-io-evidence@1`); `test_fake` bindings carry
+`mayBeUsedAsStagingEvidence:false` and cannot close these rows. Do not record
+`ObjectRef`, plaintext credentials, or resolved SecretRef material.
+
+| Evidence field | Required redacted content | Status |
+|---|---|---|
+| Object-store backend + credential | `real_object_store` `backendAlias` plus SecretRef `credentialRef` identifier only; no plaintext | BLOCKED external evidence |
+| Redaction receipt | `artifact/object-io-evidence@1` with `operation:redact`, `redacted`/`not_required` outcome, `artifactRef`, `receiptId`, `sha256`, and no `ObjectRef` | BLOCKED external evidence |
+| Retention delete receipt | `operation:delete`, `deleted`/`not_found` idempotent outcome, legal-hold/quarantine handling, and `transient_failed` leaving `deleted_at` unset | BLOCKED external evidence |
+| Operational audit + redaction proof | `bypassrls.use` audit for `artifact_redaction_job`/`artifact_retention_sweeper` with no plaintext Secret/PII or `ObjectRef` emitted | BLOCKED external evidence |
+| Object-store credential SecretRef purpose | Open sub-decision (Contract lead): reuse `executor` or add a new `object_store` value to `SecretAccessRequest.purpose`; not inventable here | BLOCKED pending decision |
+
+These rows are tracked by the existing artifact_redaction and artifact_retention
+object-I/O blocked markers above; this packet fixes only the redacted evidence
+shape and neither adds a new blocker nor closes an existing one.
+
+### D5 Codex SSE Live Capability Evidence Packet (B4 / checklist row 47)
+
+At deploy time, the project owner runs `npm --prefix app/poc/d5-codex-sse run poc`
+outside this repo and records only redacted aliases. Raw endpoint/model
+identifiers, plaintext keys, env dumps, and resolved SecretRef material are
+forbidden.
+
+| Evidence field | Required redacted content | Status |
+|---|---|---|
+| Endpoint/model aliases | `CODEX_EVIDENCE_ENDPOINT_ALIAS` / `CODEX_EVIDENCE_MODEL_ALIAS` only; absolute HTTPS `CODEX_BASE_URL` with no credential/query/fragment material | BLOCKED external evidence |
+| Mandatory PASS | #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior all PASS | BLOCKED external evidence |
+| Optional GAP | #3 native `json_schema` / #5 model metadata may GAP only with documented fallback | BLOCKED external evidence |
+| Redaction proof | Harness `run test:redaction` self-test plus redacted provider error bodies before evidence copy | BLOCKED external evidence |
+
+This packet is tracked by the existing D5 live-capability blocked marker above;
+it fixes the redacted intake shape only and neither adds nor closes a blocker.
 
 ## Remaining External Evidence Notes
 
 All repo-controlled D4.5 API P1 and D3 runtime execution rows are locally
-resolved in this patch. The remaining unchecked rows require external owner
-action, external SecretRef/SecretStore provisioning, production/staging
+resolved in this patch. The remaining unchecked rows require owner deploy-time
+provisioning, real SecretRef/SecretStore provisioning, production/staging
 object-store receipts, live D5 staging model output, or PR/main remote CI job
 URLs, including recovery from the current GitHub Actions account
 payment/spending-limit blocker.
 
 Do not close those rows from local fixtures, temp DBs, fake object-store ports,
 hard-coded aliases, CI service-container credentials, or unredacted logs. When
-external owners provide evidence, update the matching checklist row, replace the
+the owner provisions evidence at deploy time, update the matching checklist row, replace the
 matching blocked marker in this report with a redacted evidence reference, and
 refresh the `blocked:audit` count in both documents.
 
@@ -663,12 +701,12 @@ refresh the `blocked:audit` count in both documents.
 
 1. Attach the tag, latest `contract-gates` run URL, DB migration smoke job, and
    UI smoke screenshot/note to the external release review packet.
-2. Hand external Product Open to the resolved staging owners:
-   `release-approvers` for approval and `platform-oncall` for rollback.
-3. Obtain the concrete external staging deploy target, SecretStore provisioning
-   evidence, release approval evidence under `release-approvers`, and rollback
-   confirmation under `platform-oncall` before any staging/open deployment.
-4. Have the staging LLM owner run the D5 Codex SSE PoC with SecretRef-resolved
+2. As the single project owner, take Product Open through deploy-time approval
+   and rollback ownership (no external release/oncall team exists).
+3. Obtain the concrete staging deploy target, SecretStore provisioning
+   evidence, owner release-approval, and rollback confirmation before any
+   staging/open deployment.
+4. At deploy time, run the D5 Codex SSE PoC with SecretRef-resolved
    credentials outside the repo and attach redacted mandatory PASS evidence.
 5. Define the next repo-owned runtime slice: real executor orchestration,
    artifact redaction/retention jobs, executor audit semantics, and real app
