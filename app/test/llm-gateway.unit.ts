@@ -4,6 +4,8 @@
  * 주입형 fake(adapter·validator·sink·멱등 store)로 키/DB 없이 게이트·retry·fallback·structured-output·
  * repair·멱등 replay 경로를 검증한다. 실행: `tsx test/llm-gateway.unit.ts`.
  */
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+
 import type { ArtifactRef } from "../../ts/core-types";
 import type {
   AdapterErrorCode,
@@ -13,6 +15,7 @@ import type {
   LLMStreamEvent,
   ModelCapabilities,
 } from "../../ts/security-middleware-contract";
+import { bootstrapTracing } from "../src/observability/bootstrap";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
 import {
   GatewayError,
@@ -20,6 +23,10 @@ import {
   type LlmGatewayDeps,
   type StructuredOutputValidator,
 } from "../src/gateway/llm-gateway";
+
+// OTel in-memory exporter — llm_gateway.call span(§E) 계측 검증용(외부 의존 없음).
+const spanExporter = new InMemorySpanExporter();
+bootstrapTracing(spanExporter);
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -118,6 +125,35 @@ async function main(): Promise<void> {
   {
     const res = await gateway({ primary: queueAdapter([textDone("hello")]).adapter }).call(makeReq(), sig());
     check("call: happy path returns outputRef+usage", res.outputRef === "art://ref" && res.finishReason === "stop" && res.usage.outputTokens === 1);
+  }
+
+  // ── OTel: llm_gateway.call span(§E 고정 이름·속성) ──────────────────────────
+  {
+    spanExporter.reset();
+    await gateway({ primary: queueAdapter([textDone("hi")]).adapter }).call(makeReq(), sig());
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === "llm_gateway.call");
+    check("span: llm_gateway.call emitted", span !== undefined);
+    check(
+      "span: llm_gateway.call §E attrs(primitive/model/transport/stream_status/ttfb_ms + common)",
+      span?.attributes.primitive === "act" &&
+        span?.attributes.model === "codex" &&
+        span?.attributes.transport === "sse" &&
+        span?.attributes.stream_status === "stop" &&
+        typeof span?.attributes.ttfb_ms === "number" &&
+        span?.attributes.tenant_id === "t" &&
+        span?.attributes.run_id === "r" &&
+        span?.attributes.correlation_id === "c",
+    );
+    // 멱등 replay는 실 LLM 호출이 아니므로 span 미발행(비용/지연 중복 계측 방지).
+    spanExporter.reset();
+    const cached: LLMResponse = { outputRef: "art://c" as ArtifactRef, usage: { inputTokens: 0, outputTokens: 0, cost: 0 }, finishReason: "stop" };
+    await gateway({
+      idempotency: { reserve: async () => ({ kind: "replay", response: cached }), complete: async () => {}, fail: async () => {} },
+    }).call(makeReq(), sig());
+    check(
+      "span: replay emits no llm_gateway.call span",
+      spanExporter.getFinishedSpans().find((s) => s.name === "llm_gateway.call") === undefined,
+    );
   }
 
   // ── 멱등 replay 단락(adapter 미호출) ───────────────────────────────────────
