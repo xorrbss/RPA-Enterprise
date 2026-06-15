@@ -39,6 +39,7 @@ import { applyRunTransition } from "../runtime/run-transition";
 import { ApiResponseError, registerErrorHandler } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { registerDlqRoutes } from "./dlq";
+import { registerGatewayRoutes } from "./gateway";
 import { registerHumanTaskRoutes } from "./human-tasks";
 import { registerReadRoutes } from "./reads";
 import { registerSiteRoutes } from "./sites";
@@ -202,6 +203,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerDlqRoutes(app, deps);
   registerReadRoutes(app, deps);
   registerSiteRoutes(app, deps);
+  registerGatewayRoutes(app, deps);
 
   return app;
 }
