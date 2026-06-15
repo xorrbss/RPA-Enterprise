@@ -25,6 +25,7 @@ const AXE_OPTS = { rules: { "color-contrast": { enabled: false } } };
 describe("D7 운영 콘솔 a11y (axe)", () => {
   beforeEach(() => {
     location.hash = "";
+    localStorage.setItem("rpa.token", "test-token"); // TokenGate 통과
   });
 
   test("대시보드 axe 위반 없음", async () => {

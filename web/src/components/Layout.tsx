@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { VIEW_KEYS, navigate, type ViewKey } from "../router";
 import { VIEW_META } from "../views/meta";
 import { Freshness } from "./Freshness";
+import { clearToken } from "./TokenGate";
 
 const ICONS: Record<string, LucideIcon> = {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
@@ -45,7 +46,12 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
             <h1>{meta.title}</h1>
             <div className="sub">{meta.subtitle}</div>
           </div>
-          <Freshness />
+          <span style={{ display: "inline-flex", gap: 12, alignItems: "center" }}>
+            <Freshness />
+            <button className="btn" type="button" onClick={clearToken}>
+              로그아웃
+            </button>
+          </span>
         </header>
         <main className="content">{children}</main>
       </div>

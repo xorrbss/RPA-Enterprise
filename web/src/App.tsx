@@ -1,4 +1,5 @@
 import { Layout } from "./components/Layout";
+import { TokenGate } from "./components/TokenGate";
 import { useHashRoute, type ViewKey } from "./router";
 import { DashboardView } from "./views/Dashboard";
 import { RunTraceView } from "./views/RunTrace";
@@ -42,5 +43,9 @@ function renderView(view: ViewKey): JSX.Element {
 
 export function App(): JSX.Element {
   const view = useHashRoute();
-  return <Layout view={view}>{renderView(view)}</Layout>;
+  return (
+    <TokenGate>
+      <Layout view={view}>{renderView(view)}</Layout>
+    </TokenGate>
+  );
 }

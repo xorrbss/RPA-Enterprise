@@ -21,6 +21,14 @@ function renderApp(client: ApiClient = fakeClient()): void {
 describe("D7 운영 콘솔 shell", () => {
   beforeEach(() => {
     location.hash = "";
+    localStorage.setItem("rpa.token", "test-token"); // TokenGate 통과
+  });
+
+  test("토큰 게이트: 토큰 없으면 접속 화면", () => {
+    localStorage.removeItem("rpa.token");
+    renderApp();
+    expect(screen.getByRole("heading", { level: 1, name: "RPA 운영 콘솔 접속" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "주 메뉴" })).toBeNull();
   });
 
   test("사이드바 + 11 nav item 렌더", () => {
