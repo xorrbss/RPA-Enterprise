@@ -49,6 +49,7 @@ import type {
   SessionRestoreInput,
   SessionRestoreResult,
   SessionRestorer,
+  SinkDeliveryPort,
   WorkerId,
 } from "../../../ts/runtime-contract";
 import type { CorrelationId, RunId, StepId, TenantId } from "../../../ts/security-middleware-contract";
@@ -56,6 +57,7 @@ import { withTenantTx } from "../db/pool";
 import { applyRunTransition } from "../runtime/run-transition";
 import { applyWorkitemTransition } from "../runtime/workitem-transition";
 import { relayOutbox } from "../runtime/outbox-relay";
+import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 
 export interface BrowserLeasePlan {
   readonly siteProfileId: string;
@@ -85,6 +87,11 @@ export interface PgRuntimeWorkerOptions {
   readonly artifactLifecycleRetryAfterMs?: number;
   readonly artifactLifecycleAuditRetentionDays?: number;
   readonly runAbortTimeoutMs?: number;
+  // D6 sink_deliver: 주입형 포트 + ops-defaults #sink.delivery 상한(코드 상수 금지).
+  readonly sinkDeliveryPort?: SinkDeliveryPort;
+  readonly sinkDeliveryMaxAttempts?: number;
+  readonly sinkDeliveryRetryAfterMs?: number;
+  readonly allowTestSinkDeliveryPort?: boolean;
 }
 
 export interface BrowserLeaseRenewInput {
@@ -166,6 +173,8 @@ type LifecycleAuditAppendInput = {
 const DEFAULT_BROWSER_LEASE_TTL_MS = 300_000;
 const DEFAULT_ARTIFACT_LIFECYCLE_CLAIM_TTL_MS = 300_000;
 const DEFAULT_ARTIFACT_REDACTION_MAX_ATTEMPTS = 3;
+// sink failed(상한 미달) 재전달 backoff 기본(ops-defaults #sink.delivery.retry_backoff base 5s).
+const DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS = 5_000;
 const DEFAULT_ARTIFACT_LIFECYCLE_RETRY_AFTER_MS = 60_000;
 const DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS = 90;
 const DEFAULT_RUN_ABORT_TIMEOUT_MS = 30_000;
@@ -252,6 +261,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
       case "artifact_retention":
         return this.handleArtifactRetention(job);
 
+      case "sink_deliver":
+        return this.handleSinkDeliver(job);
+
       case "dlq_replay":
         throw new Error(
           `RuntimeWorker: job kind '${job.kind}' is not implemented in D2 (pending D3 executor/lease or D6 pipeline)`,
@@ -263,6 +275,53 @@ export class PgRuntimeWorker implements RuntimeWorker {
         throw new Error(`RuntimeWorker: unknown job kind ${String(exhaustive)}`);
       }
     }
+  }
+
+  /**
+   * D6 sink_deliver: 데이터평면 외부 전달. 주입형 SinkDeliveryPort(real|test_fake) + ops-defaults 상한 필수.
+   * failed(상한 미달) → deferred(SINK_DELIVERY_FAILED 재전달), delivered/already_delivered/dead_letter → completed.
+   * test_fake 포트는 명시 opt-in 없이는 거부(실 전달 증거 위조 방지 — artifact 포트와 동형 fail-closed).
+   */
+  private async handleSinkDeliver(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
+    const tenantId = requireString(job.tenantId, "sink_deliver.tenantId");
+    const correlationId = requireString(job.correlationId, "sink_deliver.correlationId");
+    const target = job.sinkDelivery;
+    if (target === undefined) {
+      throw new Error("RuntimeWorker: sink_deliver requires sinkDelivery payload (closed job input)");
+    }
+    const port = this.options.sinkDeliveryPort;
+    if (port === undefined) {
+      throw new Error("RuntimeWorker: sink_deliver requires an injected SinkDeliveryPort (fail-closed)");
+    }
+    if (port.binding.kind === "test_fake" && this.options.allowTestSinkDeliveryPort !== true) {
+      throw new Error("RuntimeWorker: test_fake sink port requires explicit allowTestSinkDeliveryPort opt-in");
+    }
+    const maxAttempts = this.options.sinkDeliveryMaxAttempts;
+    if (maxAttempts === undefined || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
+      throw new Error("RuntimeWorker: sink_deliver requires sinkDeliveryMaxAttempts (ops-defaults #sink.delivery)");
+    }
+    const outcome = await deliverNormalizedRecord(
+      { pool: this.pool, port, policy: { source: "ops-defaults.md#sink.delivery", maxAttempts } },
+      {
+        tenantId,
+        normalizedRecordId: target.normalizedRecordId,
+        sinkConfigId: target.sinkConfigId,
+        correlationId,
+      },
+    );
+    if (outcome.status === "failed") {
+      // 상한 미달 일시 실패 → 재전달. 조용한 성공 금지: 실패를 deferred로 표면화.
+      return {
+        kind: "deferred",
+        retryAfterMs: this.options.sinkDeliveryRetryAfterMs ?? DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS,
+        code: "SINK_DELIVERY_FAILED",
+      };
+    }
+    // delivered / already_delivered / dead_letter → 처리 완료(DLQ도 종결 처리). emitted 이벤트 전달.
+    return {
+      kind: "completed",
+      emittedEvents: outcome.emitted ? [outcome.emitted.eventId as EventId] : [],
+    };
   }
 
   private async handleRunClaim(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {

@@ -64,6 +64,13 @@ interface DeadLetterRow {
   created_at: Date;
 }
 
+interface SinkDlqRow {
+  id: string;
+  normalized_record_id: string;
+  sink_idempotency_key: string;
+  attempted_at: Date;
+}
+
 interface ScenarioRow {
   id: string;
   name: string;
@@ -257,10 +264,11 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     },
   );
 
-  // GET /v1/dlq — 데드레터 인박스(items=DeadLetter; status는 DEAD_LETTER 통지, ApiError 아님). RLS 스코프.
-  //   본 엔드포인트는 workitem DLQ(dead_letter 테이블, 미복원 replayed_at IS NULL)만. sink DLQ는 데이터평면
-  //   sink_deliveries(D6 미배선) → kind=sink는 빈 페이지(가용 소스에 sink 항목 없음, 정직).
-  //   RBAC: 조회는 read(workitem.read, viewer+) — DLQ 항목은 dead workitem. replay 명령만 dlq.replay(operator+).
+  // GET /v1/dlq — 데드레터 인박스(items 상태는 DEAD_LETTER 통지, ApiError 아님). RLS 스코프.
+  //   본 엔드포인트는 두 소스를 분리 제공한다(api-surface §4, 병합 안 함):
+  //     kind=workitem(기본) → dead_letter 테이블(미복원 replayed_at IS NULL)
+  //     kind=sink          → 데이터평면 sink_deliveries.status='dead_letter'
+  //   RBAC: 조회는 read(workitem.read, viewer+). replay 명령만 dlq.replay/sink_dlq.replay(operator+).
   app.get("/v1/dlq", { config: { rbacAction: "workitem.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
     const query = request.query as Record<string, unknown>;
@@ -268,7 +276,30 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     const kind = dlqKindFilter(query.kind);
 
     if (kind === "sink") {
-      reply.code(200).send({ items: [], next_cursor: null });
+      // sink DLQ(데이터평면): sink_deliveries.status='dead_letter'. DEAD_LETTER 상태 통지(ApiError 아님).
+      // workitem dead_letter 테이블과 별개 소스(api-surface §4) — 병합하지 않는다.
+      const sinkRows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const result = await c.query<SinkDlqRow>(
+          `SELECT id, normalized_record_id, sink_idempotency_key, attempted_at
+             FROM sink_deliveries
+            WHERE tenant_id = $1::uuid
+              AND status = 'dead_letter'
+              AND ($2::timestamptz IS NULL OR (attempted_at, id) < ($2::timestamptz, $3::uuid))
+            ORDER BY attempted_at DESC, id DESC
+            LIMIT $4`,
+          [principal.tenantId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+        );
+        return result.rows;
+      });
+      reply.code(200).send(
+        paginate(sinkRows, limit, (r) => ({ createdAt: r.attempted_at, id: r.id }), (r) => ({
+          dead_letter_id: r.id,
+          kind: "sink",
+          status: "DEAD_LETTER",
+          source_id: r.normalized_record_id,
+          sink_idempotency_key: r.sink_idempotency_key,
+        })),
+      );
       return;
     }
 

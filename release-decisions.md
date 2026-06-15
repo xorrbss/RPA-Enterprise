@@ -89,6 +89,59 @@ dependent implementation artifact has already been migrated.
     isolated CI service containers and must not be used as staging secret
     provisioning evidence.
 
+## D6 Decisions (Pipeline / Sink + outbox consumption)
+
+These resolve or defer the open points surfaced while building the D6 data
+pipeline. They are repo-controlled contract/scope decisions, not proof that the
+real external sink integration exists.
+
+D6-1. Sink delivery retry threshold
+   Decision: sink delivery reuses the `workitem` retry family as its v1 default
+   (`sink.delivery.max_attempts = 3`, `retry_backoff` base 5s·factor 2·max 5m,
+   `sweeper.poll = 5s`), recorded in `ops-defaults.md#sink.delivery`. Rationale:
+   sink delivery is structurally a retryable `system` operation (SINK_DELIVERY_FAILED
+   is retryable), so the existing retry family is the conservative, in-pattern
+   default; the value is injected via `SinkDeliveryPolicy`, never hardcoded.
+   Impact if wrong: too few/many attempts before `dead_letter`; reversible by
+   changing the ops-default (a dedicated sink operational policy may supersede it).
+
+D6-2. Real sink egress is deferred behind an injected port
+   Decision: D6 v1 builds the DB-side mechanics (sink_idempotency_key, attempt
+   ledger, status CAS, dead_letter, sink.delivered/sink.dead_lettered events) and a
+   `test_fake` `SinkDeliveryPort`. The actual network egress to a real downstream
+   sink (real_sink binding, SecretRef-backed) is an external fact deferred behind
+   the binding — same posture as the outbox→real-bus bridge (P3/D11) and the
+   artifact object-store ports. It is covered by the existing external
+   object-store/SecretStore blockers; `test_fake` is local fixture evidence only and
+   is not staging/product-open delivery evidence. Impact if wrong: none for v1
+   mechanics; the real adapter is a later phase.
+
+D6-3. Sink-DLQ list wired; sink-DLQ replay routing deferred
+   Decision: `GET /v1/dlq?kind=sink` now lists `sink_deliveries.status='dead_letter'`
+   (api-surface §4), tenant-scoped and cursor-paginated. The sink-DLQ replay path is
+   deferred: api-surface §4 says a sink replay triggers re-delivery, but the shared
+   `POST /v1/dlq/{id}/replay` route resolves ids against the workitem `dead_letter`
+   table only and the contract does not disambiguate a sink id at that path, nor does
+   the W10 `abandoned→new` transition map onto sink statuses. Re-delivery also depends
+   on the deferred real egress (D6-2). Open decision: a separate sink-replay endpoint
+   vs a `kind` discriminator on the shared route, with the sink-replay action being
+   "enqueue a new sink_deliveries attempt (new attempt_no, same sink_idempotency_key)"
+   rather than a state transition on the original row. Impact if wrong: operators can
+   observe the sink DLQ but cannot replay it until routed — conservative (no false
+   success); the D6 core does not depend on it.
+
+D6-4. Checkout-expiry sweeper (W6/W7) + pause-window TTL deferred
+   Decision: the workitem checkout-expiry sweeper that drives W6 (retry) / W7
+   (abandoned + dead_letter) is not built in D6. state-machine W11 mandates that
+   `checkout_expired` be computed excluding the W9 pause window (`checkout_paused_at`),
+   but no contract pins the exact remaining-TTL formula. Building it on a guessed
+   formula could falsely expire suspended workitems (spurious dead-letters), so it is
+   deferred. The D6 pipeline/sink core does not depend on it (it is a workitem
+   lifecycle concern). Open decision: on W11 resume, rewrite
+   `checkout_expires_at = now() + remaining-TTL-captured-at-pause` vs accumulate the
+   paused duration and subtract at sweep time. Impact if wrong: incorrect expiry
+   timing for suspended workitems — deferred rather than guessed.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is

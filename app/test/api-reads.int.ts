@@ -115,6 +115,32 @@ async function seedDeadLetter(
   );
 }
 
+// sink DLQ(데이터평면): raw_item → normalized_record → sink_deliveries(status). FK 체인이 필요해 3단 시드.
+async function seedSinkDelivery(
+  pool: Pool, tenant: string, sinkDeliveryId: string, naturalKey: string, status: string, attemptedAt: string,
+): Promise<void> {
+  const rawId = `7c00${sinkDeliveryId.slice(4)}`;
+  const normId = `7d00${sinkDeliveryId.slice(4)}`;
+  const sinkConfig = "50000000-0000-0000-0000-000000000001";
+  await withTenantTx(pool, tenant, async (c) => {
+    await c.query(
+      `INSERT INTO raw_items (id, tenant_id, connector_id, target_id, collection_attempt_id, raw_hash, raw_payload)
+       VALUES ($1,$2,'reviews','20000000-0000-0000-0000-0000000000e1','40000000-0000-0000-0000-0000000000aa',$3,'{}'::jsonb)`,
+      [rawId, tenant, `hash-${naturalKey}`],
+    );
+    await c.query(
+      `INSERT INTO normalized_records (id, tenant_id, raw_item_id, schema_ref, natural_key, record, dedup_action)
+       VALUES ($1,$2,$3,'schemas/review@1',$4,'{}'::jsonb,'insert')`,
+      [normId, tenant, rawId, naturalKey],
+    );
+    await c.query(
+      `INSERT INTO sink_deliveries (id, tenant_id, normalized_record_id, sink_config_id, attempt_no, sink_idempotency_key, status, attempted_at)
+       VALUES ($1,$2,$3,$4,1,$5,$6,$7::timestamptz)`,
+      [sinkDeliveryId, tenant, normId, sinkConfig, `${tenant}:${sinkConfig}:schemas/review@1:${naturalKey}`, status, attemptedAt],
+    );
+  });
+}
+
 async function seedGatewayPolicy(pool: Pool, tenant: string, id: string, model: string): Promise<void> {
   await withTenantTx(pool, tenant, (c) =>
     c.query(
@@ -206,6 +232,17 @@ async function main(): Promise<void> {
     await seedDeadLetter(pool, TENANT_A, DL2, WI1, ts(1), false);
     await seedDeadLetter(pool, TENANT_A, DL_REPLAYED, WI2, ts(2), true);
     await seedDeadLetter(pool, TENANT_B, DL_B, WI_B, ts(0), false);
+
+    // sink DLQ(데이터평면): tenant A 2 dead_letter + 1 delivered(목록 제외), tenant B 1 dead_letter.
+    const SINK_DL1 = "7e000000-0000-0000-0000-000000000001";
+    const SINK_DL2 = "7e000000-0000-0000-0000-000000000002";
+    const SINK_DELIVERED = "7e000000-0000-0000-0000-000000000003";
+    const SINK_DL_B = "7f000000-0000-0000-0000-0000000000b1";
+    await seedSinkDelivery(pool, TENANT_A, SINK_DL1, "snk-a1", "dead_letter", ts(0));
+    await seedSinkDelivery(pool, TENANT_A, SINK_DL2, "snk-a2", "dead_letter", ts(1));
+    await seedSinkDelivery(pool, TENANT_A, SINK_DELIVERED, "snk-a3", "delivered", ts(2));
+    await seedSinkDelivery(pool, TENANT_B, SINK_DL_B, "snk-b1", "dead_letter", ts(0));
+
     // gateway_policies: tenant A 2 모델(model 미지정 모호성), tenant B 1 모델(단일).
     await seedGatewayPolicy(pool, TENANT_A, "79000000-0000-0000-0000-000000000001", "gpt-4o-mini");
     await seedGatewayPolicy(pool, TENANT_A, "79000000-0000-0000-0000-000000000002", "claude-haiku");
@@ -364,8 +401,16 @@ async function main(): Promise<void> {
         dlq.json().items.every((d: { kind: string; status: string; source_id: string }) => d.kind === "workitem" && d.status === "DEAD_LETTER") &&
         dlq.json().items.some((d: { dead_letter_id: string; source_id: string }) => d.dead_letter_id === DL1 && d.source_id === WI3),
         JSON.stringify(dlq.json().items));
+      // sink DLQ(데이터평면): tenant A 2 dead_letter, delivered 1건 제외, kind=sink/status=DEAD_LETTER.
       const dlqSink = await get("/v1/dlq?kind=sink");
-      check("dlq kind=sink → empty (sink source D6)", dlqSink.json().items.length === 0 && dlqSink.json().next_cursor === null, dlqSink.body);
+      check("dlq kind=sink → 2 dead_letter (delivered excluded)", dlqSink.statusCode === 200 && dlqSink.json().items.length === 2, dlqSink.body);
+      check("sink DLQ shape (kind=sink/status=DEAD_LETTER/idempotency key)",
+        dlqSink.json().items.every((d: { kind: string; status: string }) => d.kind === "sink" && d.status === "DEAD_LETTER") &&
+        dlqSink.json().items.some((d: { dead_letter_id: string; source_id: string; sink_idempotency_key: string }) =>
+          d.dead_letter_id === SINK_DL2 && typeof d.source_id === "string" && d.sink_idempotency_key.includes("snk-a2")),
+        JSON.stringify(dlqSink.json().items));
+      const dlqSinkB = await get("/v1/dlq?kind=sink", viewerB);
+      check("tenant B sink DLQ isolation (1)", dlqSinkB.json().items.length === 1, JSON.stringify(dlqSinkB.json().items));
       const dlqBadKind = await get("/v1/dlq?kind=bogus");
       check("dlq invalid kind → 422", dlqBadKind.statusCode === 422, dlqBadKind.body);
       const dlqB = await get("/v1/dlq", viewerB);
