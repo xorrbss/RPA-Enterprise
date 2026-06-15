@@ -218,6 +218,105 @@ D7-4. Migration model is forward-only with transactional rollback
    runner's responsibility, not the DDL's; documented so future agents do not "fix"
    migrations by bulk-adding `IF NOT EXISTS`.
 
+## D8 Decisions (finish-loop contract/design resolutions)
+
+These resolve the six open contract/design questions (A1–A6) surfaced by the gap
+scan as "needs a decision before building". Each states the chosen resolution, the
+rationale, the impact-if-wrong, and the build-condition (what unblocks the
+implementation). Where a build is gated on an external fact or another stream,
+that is named; the decision itself is no longer open. Boundary-sensitive choices
+default to the most conservative reading (auth-rbac §2 / least-privilege).
+
+D8-A1. GET /v1/artifacts/{id} — pending-artifact disclosure
+   Decision: in v1 the application role returns `RESOURCE_NOT_FOUND` (404) for any
+   artifact that is pending/failed redaction, quarantined, or soft-deleted — i.e. the
+   existing `artifacts_visible_isolation` RLS is the gate (existence non-disclosure).
+   `ARTIFACT_NOT_REDACTED` (409, "준비 중") is NOT exposed in v1. Rationale: most
+   conservative (do not reveal unredacted-artifact existence to the app role); honoring
+   api-surface §5's 409 would require a tenant-only metadata-visible RLS policy plus a
+   separate body-egress gate, and would disclose redaction status — deferred. Impact:
+   operators see 404 (not 409) for not-yet-redacted artifacts; when built, api-surface §5
+   is amended to record the v1 404 behavior. Build-condition: this decision (done) AND
+   the external object-store binding for the 200 body (B3) — so the endpoint is not built
+   until object I/O exists. Alternative if 409 is later required: add a SECURITY DEFINER
+   metadata read path (not a second permissive RLS policy, which would broaden all
+   artifact SELECTs) + RBAC-before-disclosure ordering.
+
+D8-A2. PUT /v1/gateway/policy — version concurrency + PUT-time coherence
+   Decision: PUT validates the body shape, requires `If-Match`(current version) and
+   `Idempotency-Key`, enforces admin RBAC (`gateway_policy.edit`), and applies a
+   `(tenant_id, model, version)` CAS update bumping `gateway_policies.version`; a missing
+   policy or stale version maps to `POLICY_VERSION_CONFLICT` (412). PUT-time
+   `LLM_CAPABILITY_MISMATCH` (422) is the deterministic STRUCTURAL coherence check only —
+   `budget.maxInputTokens`/`maxOutputTokens` must not exceed `capabilities.maxContextTokens`
+   (a token budget that cannot fit the model context is incoherent). SEMANTIC
+   model-capability truth (does the model really support jsonMode?) stays at call time
+   (existing `SafeCapabilityGate`) + the external D5 live-capability probe — PUT does not
+   guess live caps. Rationale: the endpoint is fully contracted (api-surface §6, openapi)
+   and self-contained; the only unspecified piece was the PUT-time coherence rule, and the
+   token-vs-context bound is the one model-capability coherence checkable without live caps.
+   Impact: a policy with an impossible token budget is rejected at definition; subtle live
+   incompatibilities still surface at call time. Build-condition: **buildable now in-repo**
+   (no external dependency). Implementation note: add `updateGatewayPolicy` to the
+   `OperationId` union (ts/control-plane-contract.ts) for the idempotency endpoint key; set
+   `gateway_policies.updated_by = principal.subjectId`.
+
+D8-A3. POST /v1/dlq/{id}/replay — sink-DLQ routing (resolves D6-3)
+   Decision: the shared replay route takes `?kind=workitem|sink` (matching the
+   `GET /v1/dlq?kind=` list). For `kind=sink` the `{id}` resolves a
+   `sink_deliveries.status='dead_letter'` row; the replay action ENQUEUES A NEW
+   `sink_deliver` attempt (new `attempt_no`, same `sink_idempotency_key`) — it is not a
+   state transition (W10 abandoned→new does not map onto sink statuses). RBAC for the sink
+   branch is `sink_dlq.replay` (authorized in-handler; its role set is identical to
+   `dlq.replay`). Rationale: a `kind` discriminator keeps one operator-facing route and
+   matches the list endpoint; "new attempt, same idempotency key" preserves downstream
+   dedup. Impact: operators can trigger sink re-delivery from the DLQ they already see.
+   Build-condition: control-plane routing + enqueue are buildable now (the
+   `sink_deliver` worker uses the injected `SinkDeliveryPort`); the ACTUAL network
+   re-delivery stays behind the port (test_fake local; real egress = D6-2/B3 external).
+   Implementation note: add `replaySinkDeadLetter` to `OperationId`; add an
+   `enqueueSinkDeliver` enqueuer method.
+
+D8-A4. Checkout-expiry timer formula (resolves D6-4)
+   Decision: the W9/W11 pause-window model is REWRITE-AT-RESUME. W1/W8 stamp
+   `checkout_expires_at = now() + workitem.checkout_timeout` (ops-defaults §1). At W9
+   (run_suspended) set `checkout_paused_at = now()` and capture remaining =
+   `checkout_expires_at - now()`. At W11 (run_resumed) set
+   `checkout_expires_at = now() + remaining` and clear `checkout_paused_at`. The sweeper
+   selects rows where `checkout_paused_at IS NULL AND checkout_expires_at < now()` and
+   emits `checkout_expired` → W6 (retry, attempts<max) / W7 (abandoned + dead_letter).
+   Rationale: rewrite-at-resume is simpler and correct (no accumulation arithmetic at
+   sweep time) and never expires a currently-suspended item. Impact if wrong: mis-timed
+   expiry for suspended workitems — bounded by re-reading the captured remaining. Build-
+   condition: the timer stamping (W1/W8/W9/W11) + the W6/W7 transition driver + the sweep
+   query are buildable and unit/integration-testable now (sweep invoked directly in a
+   test); the RECURRING auto-invocation depends on D8-A6 (tenant fan-out).
+
+D8-A5. openGate / idempotency console views
+   Decision: `openGate` is a STATIC contract-documentation view — it renders the
+   release-gate map / RBAC matrix from contract-derived constants with no backend (there
+   is no control-plane gate/checklist resource, and inventing one is YAGNI). `idempotency`
+   requires a tenant-scoped read endpoint over `control_plane_idempotency_keys` (cursor-
+   paginated, RLS) if operators need that surface; until that endpoint is decided it stays
+   an honest Placeholder. Rationale: do not invent backend resources; openGate's content
+   is documentation, idempotency's is a real (but unspecified) read surface. Impact:
+   openGate becomes a real (static) view; idempotency stays Placeholder until an endpoint
+   is added. Build-condition: both are FRONTEND work owned by the console stream (currently
+   the parallel codex); idempotency additionally needs the read-endpoint decision/build.
+
+D8-A6. Tenant registry for recurring sweeper fan-out (recommendation — owner review)
+   Recommendation (NOT unilaterally adopted — schema + deploy impact, needs DB/security
+   lead sign-off): add a `tenants` registry table (`tenant_id` PK, `status`, timestamps)
+   and a dedicated non-`SUPERUSER` `BYPASSRLS` infra-relay role, so a recurring scheduler
+   (graphile crontab) can enumerate active tenants and enqueue per-tenant outbox-relay /
+   lease-sweeper / artifact-lifecycle jobs. Rationale: `tenant_id` is currently a JWT
+   claim only (no registry), so recurring RLS-scoped jobs have no enumeration source
+   (this is the root blocker behind D7-3). Impact: enables time-based sweeps; introduces a
+   new table + a privileged operational role (deploy-coupled). Build-condition: owner
+   approval of the registry + infra-role addition; then the scheduler (and D8-A4's
+   recurring invocation) is buildable. Until approved, this stays a recommendation, not a
+   decision.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
