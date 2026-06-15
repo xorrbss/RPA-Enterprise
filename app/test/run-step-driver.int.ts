@@ -71,7 +71,7 @@ const scenarioIr = {
   meta: { name: "driver-test", version: 1 },
   start: "open",
   nodes: {
-    open: { what: [{ action: "navigate", url_ref: "https://example.com" }], next: "check" },
+    open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
     check: {
       what: [{ action: "observe" }],
       on: [
@@ -126,6 +126,7 @@ async function main(): Promise<void> {
       siteProfileId: "site-1",
       browserIdentityId: "bid-1",
       networkPolicyId: "np-1",
+      params: { entry_url: "https://example.com" },
     };
     const result = await driveClaimedRun(run, { pool, executor: fakeExecutor, resolver: fakeResolver, workerId: WORKER });
 

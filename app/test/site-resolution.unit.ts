@@ -10,6 +10,7 @@ import {
   extractEntryNavigateUrlRef,
   originOf,
   resolveSiteProfileId,
+  resolveUrlRef,
   SiteResolutionError,
 } from "../src/runtime/site-resolution";
 
@@ -88,20 +89,28 @@ throwsCode(
 // 7) ir 형식 무효 → IR_SCHEMA_INVALID
 throwsCode("ir 형식 무효 → IR_SCHEMA_INVALID", () => extractEntryNavigateUrlRef({ nodes: {} }), "IR_SCHEMA_INVALID");
 
-// 8) resolveSiteProfileId 심볼릭 가드 — DB 질의 전 throw(never-call 스텁이 호출되면 실패)
+// 8) resolveUrlRef — url_ref(키) → params 의 절대 URL. 키-only, fallback 없음(조용한 coercion 금지).
+check("resolveUrlRef: 정상 키→절대 URL", resolveUrlRef("entry_url", { entry_url: "http://a.example/x" }) === "http://a.example/x");
+throwsCode("resolveUrlRef: params undefined → URL_REF_PARAM_MISSING", () => resolveUrlRef("entry_url", undefined), "URL_REF_PARAM_MISSING");
+throwsCode("resolveUrlRef: 키 부재 → URL_REF_PARAM_MISSING", () => resolveUrlRef("entry_url", {}), "URL_REF_PARAM_MISSING");
+throwsCode("resolveUrlRef: 비-문자열 → URL_REF_PARAM_NOT_STRING", () => resolveUrlRef("k", { k: 7 }), "URL_REF_PARAM_NOT_STRING");
+throwsCode("resolveUrlRef: 빈 문자열 → URL_REF_PARAM_EMPTY", () => resolveUrlRef("k", { k: "" }), "URL_REF_PARAM_EMPTY");
+throwsCode("resolveUrlRef: 비-절대URL 값 → URL_REF_VALUE_NOT_ABSOLUTE_URL", () => resolveUrlRef("k", { k: "orders_url" }), "URL_REF_VALUE_NOT_ABSOLUTE_URL");
+
+// 9) resolveSiteProfileId 방어적 불변식 — 비-절대URL 직접 전달(해소 누락 호출측 버그)은 질의 전 loud throw.
 const neverClient = {
   query: () => {
-    throw new Error("DB가 호출되면 안 됨(심볼릭은 질의 전 throw)");
+    throw new Error("DB가 호출되면 안 됨(비-절대URL은 질의 전 throw)");
   },
 } as unknown as pg.PoolClient;
 
 await (async () => {
   try {
     await resolveSiteProfileId(neverClient, { tenantId: "t", entryUrlRef: "orders_url" });
-    check("심볼릭 url_ref → URL_REF_SYMBOLIC_UNRESOLVED(질의 전)", false, "throw 기대");
+    check("resolveSiteProfileId 방어 가드: 비-절대URL → URL_REF_SYMBOLIC_UNRESOLVED(질의 전)", false, "throw 기대");
   } catch (e) {
     check(
-      "심볼릭 url_ref → URL_REF_SYMBOLIC_UNRESOLVED(질의 전)",
+      "resolveSiteProfileId 방어 가드: 비-절대URL → URL_REF_SYMBOLIC_UNRESOLVED(질의 전)",
       e instanceof SiteResolutionError && e.code === "URL_REF_SYMBOLIC_UNRESOLVED",
       e instanceof Error ? e.message : String(e),
     );

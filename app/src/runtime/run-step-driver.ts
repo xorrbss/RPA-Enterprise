@@ -27,6 +27,8 @@ export interface ClaimedRun {
   readonly siteProfileId: string;
   readonly browserIdentityId: string;
   readonly networkPolicyId: string;
+  /** runs.params(실행 파라미터). navigate.url_ref 가 이 params 의 키로 해소된다. */
+  readonly params?: Record<string, unknown>;
 }
 
 export interface DriveDeps {
@@ -69,7 +71,8 @@ export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise
   // ir=jsonb(객체), compiled_ast=text(JSON 문자열) — 컬럼 타입에 맞춰 정규화.
   const irDoc = typeof sv.ir === "string" ? (JSON.parse(sv.ir) as unknown) : sv.ir;
   const compiledAst = typeof sv.compiled_ast === "string" ? (JSON.parse(sv.compiled_ast) as unknown) : sv.compiled_ast;
-  const scenario = compiledScenarioFrom(irDoc, compiledAst);
+  // navigate.url_ref 는 run.params 의 키로 해소된다(URL_REF_* 실패는 InterpreterError 로 표면화).
+  const scenario = compiledScenarioFrom(irDoc, compiledAst, run.params);
 
   // 3) 인터프리터로 그래프 순회 실행 (트랜잭션 밖).
   const ctx: RunContext = {

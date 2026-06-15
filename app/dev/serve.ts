@@ -122,7 +122,7 @@ async function seed(pool: Pool): Promise<void> {
         meta: { name: "데모 — 리뷰 수집(실행 가능)", version: 1 },
         start: "open",
         nodes: {
-          open: { what: [{ action: "navigate", url_ref: `http://127.0.0.1:${PORT}${FIXTURE_PATH}` }], next: "check" },
+          open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
           check: {
             what: [{ action: "observe" }],
             on: [
@@ -171,6 +171,22 @@ async function seed(pool: Pool): Promise<void> {
     );
   }
   const SUSPENDED_RUN = RUNS[3][0];
+
+  // 실행 가능 데모 run: queued + params.entry_url(navigate.url_ref 가 이 키로 해소) → 부팅 시 run-loop가 구동.
+  // (콘솔 '실행' 버튼은 params:{} 를 보내므로 파라미터 시나리오엔 부족 — web 측 params 입력은 후속, 아래 TODO 참조)
+  await withTenantTx(pool, TENANT, (c) =>
+    c.query(
+      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, params, as_of, created_at)
+       VALUES ($1,$2,$3,'queued',$1,1,$4::jsonb,'2026-06-15T00:00:00Z',$5::timestamptz)`,
+      [
+        "71000000-0000-0000-0000-0000000000d6",
+        TENANT,
+        DEMO_SVER,
+        JSON.stringify({ entry_url: `http://127.0.0.1:${PORT}${FIXTURE_PATH}` }),
+        ts(6),
+      ],
+    ),
+  );
 
   // human_tasks: open(exception) / assigned(approval) / open(approval) — assign·start·resolve·escalate 테스트용.
   const HTS: ReadonlyArray<readonly [string, string, string, string | null, number]> = [

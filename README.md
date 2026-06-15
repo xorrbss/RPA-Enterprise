@@ -470,7 +470,7 @@
 | resolver | `app/src/executor/site-page-state-resolver.ts` `SitePageStateResolver` — 마커 대신 셀렉터→flag 규칙으로 닫힌 6키 산출(미지정=false 명시 결정). config 무매칭은 인터프리터 `IR_NO_BRANCH_MATCHED`로 표면화 |
 | 로더 | `app/src/executor/site-page-state-config.ts` `parseSitePageStateConfig`(jsonb 엄격 검증·무효→`PAGE_STATE_UNRESOLVED`) + `loadSitePageStateConfig`(run의 site_profile에서 로드, RLS tx) |
 | dev 배선 | `app/dev/run-loop.ts`가 DB site_profile의 page_state_selectors 로드해 resolver 구성, `serve.ts`가 데모 site_profile + 마커 없는 실 URL풍 FIXTURE 시드 — 콘솔 '실행'이 마커 없는 페이지에서 completed |
-| 연기 | run별 site_profile 해소 실구현(`BrowserLeasePlanResolver` 포트, 현 dev는 단일 사이트) · url_ref/schema_ref 해석 · NetworkPolicy 도메인 허용목록 강제 · 예약핸들러(@end_no_data/@challenge) — D3 가동 코어 비의존 *(run→site dev 해소는 v2.10에서 구현; 아래 참조)* |
+| 연기 | run별 site_profile 해소 실구현(`BrowserLeasePlanResolver` 포트, 현 dev는 단일 사이트) · url_ref/schema_ref 해석 · NetworkPolicy 도메인 허용목록 강제 · 예약핸들러(@end_no_data/@challenge) — D3 가동 코어 비의존 *(run→site dev 해소는 v2.10, url_ref params 해소는 v2.11에서 구현; 아래 참조)* |
 
 ## v2.10 패치 로그 (D3 가동 2단계 — run→site_profile 해소: 멀티사이트)
 
@@ -486,6 +486,25 @@
 | 항목 | 조치 |
 |---|---|
 | 해소 함수 | `app/src/runtime/site-resolution.ts` — `extractEntryNavigateUrlRef`(ir.start BFS: next+on[].target, 첫 navigate; 부재→IR_SCHEMA_INVALID) + `resolveSiteProfileId`(origin 매칭, 후보 전부 앱측 비교; 0-match→SITE_PROFILE_UNRESOLVED, 다중→SITE_PROFILE_AMBIGUOUS) |
-| 조용한 false 금지 | symbolic url_ref(절대 URL 아님; url_ref 심볼 해석은 별도 연기)는 `URL_REF_SYMBOLIC_UNRESOLVED`로 loud — URL인 양 0-match로 흡수 금지 |
+| 조용한 false 금지 | (v2.10 시점) symbolic url_ref는 `URL_REF_SYMBOLIC_UNRESOLVED`로 loud. **→ v2.11에서 url_ref=params 키로 해소하도록 대체**(resolveUrlRef); 이 가드는 방어적 불변식으로만 잔존 |
 | dev 배선 | `run-loop.ts`가 run별로 `extractEntryNavigateUrlRef→resolveSiteProfileId→loadSitePageStateConfig→SitePageStateResolver` 구성(시작 시 단일 resolver 제거), `serve.ts` `startRunLoop`에서 고정 site 인자 제거·데모 url_pattern을 canonical origin으로 |
 | 연기(좁힘) | v2.9의 "run별 site_profile 해소 실구현" → **프로덕션 `BrowserLeasePlanResolver`(브라우저 풀 페어링) 실구현**으로 축소(dev 해소는 구현됨). 시나리오 내 멀티-오리진은 entry만 바인딩(연기). 카탈로그 ErrorCode化(SITE_PROFILE_UNRESOLVED 등)는 프로덕션 포트와 함께(현재 dev 로컬 `SiteResolutionError`) |
+
+## v2.11 패치 로그 (D3 가동 2단계 — url_ref → URL 해소: params 바인딩)
+
+> v2.10까지 url_ref는 리터럴 절대 URL을 가정했다(symbolic은 `URL_REF_SYMBOLIC_UNRESOLVED`로 연기). 이 증분은 그 연기를
+> 풀어, **위저드/템플릿이 만든 파라미터 시나리오**(예: 주문 URL을 실행 시 입력)를 실제로 구동되게 한다.
+> **확정한 해석 규칙(이전 미명시)**: `navigate.url_ref`는 **run params의 키**다(`runs.params` jsonb, params_schema 검증
+> 대상이자 IREL `params.*` 입력 스코프와 동일 출처). `resolveUrlRef(url_ref, params)` = `params[url_ref]`이고 그 값은
+> 절대 URL이어야 한다. **params-key-only**(fallback 없음 — 키 자체를 URL로 취급하는 조용한 coercion 금지). 같은 함수의
+> 결과가 site-match(origin)와 실행기(navigate)에 동일하게 쓰여 드리프트가 없다. 리터럴 URL은 "이미 URL인 params 값"일 뿐.
+> **재검증: `test:unit`(+site-resolution resolveUrlRef·ir-translate 경계) + temp-PG `test:multisite`(같은 IR 키 `entry_url`이 run별 params로 다른 origin→다른 site→completed)·`test:pipeline-site`·`test:pipeline-run`·`test:run-step-driver`.**
+
+| 항목 | 조치 |
+|---|---|
+| 해석 함수 | `app/src/runtime/site-resolution.ts` `resolveUrlRef(rawRef, params)` — `params[rawRef]` 가 절대 URL. 키 부재→`URL_REF_PARAM_MISSING`·비문자열→`URL_REF_PARAM_NOT_STRING`·빈값→`URL_REF_PARAM_EMPTY`·비-절대URL→`URL_REF_VALUE_NOT_ABSOLUTE_URL`(전부 loud) |
+| 스레딩 | `run-loop`가 `runs.params` 로드 → `resolveUrlRef(extractEntryNavigateUrlRef(ir), params)`로 entry URL 산출 후 origin-match(해소가 origin 추출보다 선행); `run-step-driver.ClaimedRun.params` → `compiledScenarioFrom(ir, ast, params)`가 navigate.url을 동일 함수로 해소 |
+| 에러 경계 | `compiledScenarioFrom` 내 `SiteResolutionError(URL_REF_*)`는 `InterpreterError`로 환원(타입 경계 — untyped 누출 금지). `resolveSiteProfileId`의 비-절대URL 가드는 방어적 불변식으로 잔존(해소 누락 호출측 버그 표면화) |
+| migration | url_ref 리터럴을 쓰던 시드/테스트(serve 데모·run-pipeline·pipeline-site·multisite·run-step-driver)를 `url_ref:"entry_url"` + 각 run의 `params.entry_url`로 이전. serve는 **queued 데모 run을 params와 함께 시드**(부팅 시 run-loop가 구동) |
+| 콘솔 한계(명시) | `web/src/views/Scenarios.tsx`의 '실행'은 `params:{}` 전송 — 파라미터 시나리오엔 부족(런타임이 `URL_REF_PARAM_MISSING`로 loud 실패, 조용한 실패 아님). params 입력 폼(params_schema 기반)은 후속(TODO 명시) |
+| 연기 | **`params.*` in `on[].when`/`loop.until`**: 인터프리터가 평가 스코프에 `{flags}`만 주입 → params 분기 조건은 여전히 `IREL_RUNTIME_MISSING`(이번 url_ref 해소가 이를 배선하지 않음 — 별도 증분). IREL-expression url_ref(예: `concat(params.host,'/p')`)·`schema_ref` 해석·`URL_REF_*` 카탈로그 ErrorCode化도 연기 |

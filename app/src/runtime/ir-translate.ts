@@ -7,16 +7,24 @@
  *
  * 범위(1단계): 액션은 navigate(url_ref→url)/observe(drop, on[] resolve가 observe 역할)만, 흐름은 next/on[]/terminal만.
  * loop/fallback_chain·download/extract/act 등은 후속 — 미지원은 조용히 흘리지 않고 InterpreterError로 표면화한다.
+ *
+ * url_ref 해석: navigate.url_ref 는 run params 의 키다. resolveUrlRef(url_ref, params)로 절대 URL 을 산출해 navigate.url 로
+ * 넣는다(site-match 와 동일 함수 → 드리프트 없음). 해소 실패(URL_REF_*)는 InterpreterError 로 환원해 타입 경계 유지.
  */
 import type { IRELNode } from "../../../codegen/irel-compile";
 import type { CompiledOnBranch } from "./flow-control";
+import { resolveUrlRef, SiteResolutionError } from "./site-resolution";
 import { InterpreterError, type CompiledScenario, type NodeFlow, type ScenarioNode } from "./ir-interpreter";
 
 function isRec(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-export function compiledScenarioFrom(ir: unknown, compiledAst: unknown): CompiledScenario {
+export function compiledScenarioFrom(
+  ir: unknown,
+  compiledAst: unknown,
+  params?: Record<string, unknown>,
+): CompiledScenario {
   if (!isRec(ir) || typeof ir.start !== "string" || !isRec(ir.nodes)) {
     throw new InterpreterError("IR_SCHEMA_INVALID", "compiledScenarioFrom: ir.start/nodes 누락");
   }
@@ -26,7 +34,7 @@ export function compiledScenarioFrom(ir: unknown, compiledAst: unknown): Compile
   for (const [id, raw] of Object.entries(ir.nodes)) {
     if (!isRec(raw)) throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${id}' 형식 오류`);
     const what = (Array.isArray(raw.what) ? raw.what : []).flatMap((a) => {
-      const mapped = mapAction(id, a);
+      const mapped = mapAction(id, a, params);
       return mapped === null ? [] : [mapped];
     });
 
@@ -48,7 +56,7 @@ export function compiledScenarioFrom(ir: unknown, compiledAst: unknown): Compile
 }
 
 // IR 액션 → ExecutorPlugin 액션. observe는 on[] PageState resolve가 대신하므로 drop(null).
-function mapAction(nodeId: string, a: unknown): unknown | null {
+function mapAction(nodeId: string, a: unknown, params: Record<string, unknown> | undefined): unknown | null {
   if (!isRec(a) || typeof a.action !== "string") {
     throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' action 형식 오류`);
   }
@@ -57,7 +65,13 @@ function mapAction(nodeId: string, a: unknown): unknown | null {
     if (typeof a.url_ref !== "string") {
       throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' navigate.url_ref 누락`);
     }
-    return { type: "navigate", url: a.url_ref };
+    // url_ref(키) → params 의 절대 URL. URL_REF_* 해소 실패는 InterpreterError 로 환원(타입 경계 유지).
+    try {
+      return { type: "navigate", url: resolveUrlRef(a.url_ref, params) };
+    } catch (e) {
+      if (e instanceof SiteResolutionError) throw new InterpreterError(e.code, `node '${nodeId}': ${e.message}`);
+      throw e;
+    }
   }
   throw new InterpreterError("ACTION_UNSUPPORTED", `compiledScenarioFrom: node '${nodeId}' action '${a.action}' 미지원(1단계: navigate/observe)`);
 }

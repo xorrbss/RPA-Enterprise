@@ -59,6 +59,9 @@ export function ScenariosView(): JSX.Element {
                   label="실행"
                   action="run.create"
                   confirmText={`${r.name} 최신 버전(v${r.version})으로 실행을 시작할까요? 새 실행이 대기열(queued)에 등록됩니다. 진행은 워커 연결 시 시작됩니다(미연결 시 queued 대기). ‘실행 기록’에서 확인하세요.`}
+                  // TODO(후속): params:{} 는 파라미터 시나리오(navigate.url_ref 가 params 키)엔 부족 —
+                  //   url_ref 가 params 에 없으면 런타임이 URL_REF_PARAM_MISSING 으로 loud 실패한다(조용한 실패 아님).
+                  //   params 입력 폼(params_schema 기반)을 추가하면 콘솔에서 파라미터 시나리오 실행 가능. dev 데모는 serve.ts 가 queued run 을 params 와 함께 시드.
                   run={(key) => api.createRun({ scenario_version_id: r.latest_version_id, params: {} }, key)}
                   invalidateKeys={[["runs"]]}
                 />
