@@ -106,6 +106,28 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(calls).toContain("ht-1"));
   });
 
+  test("scenario prod 승격 디스패치 (If-Match=version)", async () => {
+    const calls: Array<{ id: string; version: number }> = [];
+    window.confirm = () => true;
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000001", name: "리뷰 수집", version: 3, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000001" }],
+          next_cursor: null,
+        }),
+        promoteScenario: async (id, version) => {
+          calls.push({ id, version });
+          return { version, promotion_status: "prod" };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    const btn = await screen.findByRole("button", { name: "prod 승격" });
+    btn.click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3 });
+  });
+
   test("운영자 명령 실패 → 코드 표면화", async () => {
     const { ApiError } = await import("../src/api/types");
     window.confirm = () => true;

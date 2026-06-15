@@ -6,6 +6,7 @@ import { WorkitemsView } from "./views/Workitems";
 import { HumanTasksView } from "./views/HumanTasks";
 import { SecurityView } from "./views/Security";
 import { GatewayView } from "./views/Gateway";
+import { ScenariosView } from "./views/Scenarios";
 import { PlaceholderView } from "./views/Placeholder";
 
 // 라우트 → 뷰. read 백엔드가 있는 뷰는 실 연결, 그 외는 정직한 placeholder(D7.2+ 워크플로우 대상).
@@ -24,7 +25,7 @@ function renderView(view: ViewKey): JSX.Element {
     case "llmGateway":
       return <GatewayView />;
     case "scenarioStudio":
-      return <PlaceholderView title="자동화 만들기" note="시나리오 편집/저장은 D7.2(저장→정적검증→승격 워크플로우)에서 연결됩니다." />;
+      return <ScenariosView />;
     case "playground":
       return <PlaceholderView title="테스트 실행" note="dry-run 시험 실행은 D7.2에서 연결됩니다." />;
     case "openGate":

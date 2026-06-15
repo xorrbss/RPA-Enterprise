@@ -29,6 +29,8 @@ export interface ApiClient {
   startHumanTask(id: string, idempotencyKey: string): Promise<unknown>;
   resolveHumanTask(id: string, idempotencyKey: string, result?: Record<string, unknown>): Promise<unknown>;
   escalateHumanTask(id: string, idempotencyKey: string, reason?: string): Promise<unknown>;
+  // scenario 승격: If-Match(현재 version) + body{target:"prod"} + Idempotency-Key. 충돌→SCENARIO_VERSION_CONFLICT 표면화.
+  promoteScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
 }
 
 export interface HttpApiClientOptions {
@@ -77,13 +79,19 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     return parseOrThrow<T>(res);
   }
 
-  async function post<T>(path: string, idempotencyKey: string, body?: unknown): Promise<T> {
+  async function post<T>(
+    path: string,
+    idempotencyKey: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+  ): Promise<T> {
     const res = await doFetch(`${opts.baseUrl}${path}`, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
         "Idempotency-Key": idempotencyKey,
+        ...(extraHeaders ?? {}),
         ...authHeaders(),
       },
       body: JSON.stringify(body ?? {}),
@@ -105,5 +113,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     startHumanTask: (id, key) => post(`/v1/human-tasks/${id}/start`, key),
     resolveHumanTask: (id, key, result) => post(`/v1/human-tasks/${id}/resolve`, key, result !== undefined ? { result } : {}),
     escalateHumanTask: (id, key, reason) => post(`/v1/human-tasks/${id}/escalate`, key, reason !== undefined ? { reason } : {}),
+    promoteScenario: (scenarioId, version, key) =>
+      post(`/v1/scenarios/${scenarioId}/promote`, key, { target: "prod" }, { "If-Match": String(version) }),
   };
 }

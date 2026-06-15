@@ -20,6 +20,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     startHumanTask: async () => ({ status: "in_progress" }),
     resolveHumanTask: async () => ({ status: "resolved" }),
     escalateHumanTask: async () => ({ status: "escalated" }),
+    promoteScenario: async () => ({ version: 2, promotion_status: "prod" }),
     ...overrides,
   };
 }
