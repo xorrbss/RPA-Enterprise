@@ -46,6 +46,15 @@ export function compiledScenarioFrom(
     } else if (Array.isArray(raw.on)) {
       const ca = isRec(caNodes[id]) ? (caNodes[id] as Record<string, unknown>) : {};
       const onAst = Array.isArray(ca.on) ? ca.on : [];
+      // IR on[]과 compiled_ast on[]은 1:1 대응이어야 한다(승격 시 static-validation이 compile). 부재/개수
+      // 불일치는 캐시 드리프트(구조 결함)이지 value 무매칭(IR_NO_BRANCH_MATCHED)이 아니다 — 빈 branches로
+      // 조용히 떨어뜨리면 런타임에서 NoBranchMatched로 오분류되므로 IR_SCHEMA_INVALID로 표면화(RQ-008).
+      if (raw.on.length !== onAst.length) {
+        throw new InterpreterError(
+          "IR_SCHEMA_INVALID",
+          `compiledScenarioFrom: node '${id}' on[] compiled_ast 드리프트(ir ${raw.on.length} vs compiled ${onAst.length})`,
+        );
+      }
       flow = { kind: "on", branches: onAst.map((b) => toBranch(id, b)) };
     } else {
       throw new InterpreterError("UNSUPPORTED_FLOW", `compiledScenarioFrom: node '${id}' loop/fallback_chain 미지원(1단계)`);
