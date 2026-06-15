@@ -7,6 +7,7 @@ import type {
 } from "../../../ts/runtime-contract";
 import type { CorrelationId, RunId, StepId, TenantId } from "../../../ts/security-middleware-contract";
 import { pageStateRef } from "../executor/page-state-resolver";
+import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
 import type {
   ExecutorTerminalOutcomeCompletionInput,
   ExecutorTerminalOutcomeCompletionResult,
@@ -77,9 +78,24 @@ export class PgExecutorStepOrchestrator {
       nodeId: input.nodeId,
       attempt: started.key.attempt,
     };
-    const result = await input.executor
-      .execute(input.stepId, input.action, context)
-      .catch((error: unknown) => failureStepResult(input, context, startedAt, error));
+    // §E 필수 span: executor.execute(attr node_id/action/executor). 실 플러그인 실행은 DB tx 밖.
+    //   executor 라벨은 플러그인 capabilities()에서 도출(dom/vision/utility — ExecutorPlugin엔 id 없음).
+    //   예외는 withSpan이 record+ERROR로 표면화 후 재던지고, 바깥 catch가 failureStepResult로 흡수(제어흐름).
+    const execCommon: CommonSpanAttrs = {
+      tenant_id: input.tenantId,
+      run_id: input.runId,
+      correlation_id: input.correlationId,
+    };
+    const result = await withSpan(
+      SPAN.executorExecute,
+      execCommon,
+      { node_id: input.nodeId, action: input.actionType, executor: capabilityLabel(input.executor.capabilities()) },
+      async (span) => {
+        const r = await input.executor.execute(input.stepId, input.action, context);
+        span.setAttribute("status", r.status);
+        return r;
+      },
+    ).catch((error: unknown) => failureStepResult(input, context, startedAt, error));
     const artifacts = await this.artifactResolver.metadataFor({
       result,
       tenantId: input.tenantId,
@@ -120,6 +136,12 @@ class EmptyArtifactMetadataResolver implements ExecutorArtifactMetadataResolver 
     }
     return [];
   }
+}
+
+/** §E executor.execute의 `executor` 속성 — 플러그인 활성 capability 라벨(dom/vision/utility). */
+function capabilityLabel(caps: { dom: boolean; vision: boolean; utility: boolean }): string {
+  const active = (["dom", "vision", "utility"] as const).filter((k) => caps[k]);
+  return active.length > 0 ? active.join("+") : "none";
 }
 
 function failureStepResult(
