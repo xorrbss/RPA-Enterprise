@@ -231,17 +231,42 @@ async function main(): Promise<void> {
   if (apiAddr === null || typeof apiAddr === "string") throw new Error("api addr");
   const apiPort = apiAddr.port;
 
-  // dev 토큰: 전 역할 union(최대 권한) → read + 모든 운영자 명령 클릭 테스트. 12h.
-  const token = await new SignJWT({ sub: "00000000-0000-0000-0000-0000000000de", tenant_id: TENANT, roles: ["viewer", "operator", "reviewer", "approver", "admin"] })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("12h")
-    .sign(SECRET);
+  // dev 토큰: 전 역할 union(최대 권한)이 기본. ?role=<viewer|operator|reviewer|approver|admin>로 단일 역할
+  // 토큰을 주입해 RBAC UI 게이팅(권한 없는 명령 버튼 숨김)을 시연한다. 12h.
+  const SUBJECT = "00000000-0000-0000-0000-0000000000de";
+  const mintToken = (roles: readonly string[]): Promise<string> =>
+    new SignJWT({ sub: SUBJECT, tenant_id: TENANT, roles })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("12h")
+      .sign(SECRET);
+  const ROLE_SETS: Record<string, readonly string[]> = {
+    all: ["viewer", "operator", "reviewer", "approver", "admin"],
+    viewer: ["viewer"],
+    operator: ["operator"],
+    reviewer: ["reviewer"],
+    approver: ["approver"],
+    admin: ["admin"],
+  };
 
-  // index.html에 토큰 부트스트랩 주입(모듈 스크립트 이전) → 브라우저만 열면 인증됨.
+  // index.html에 역할별 토큰 부트스트랩 주입(모듈 스크립트 이전) → 브라우저만 열면 인증됨.
   const indexRaw = readFileSync(join(DIST, "index.html"), "utf8");
-  const bootstrap = `<script>try{localStorage.setItem("rpa.token",${JSON.stringify(token)})}catch(e){}</script>`;
-  const indexHtml = indexRaw.includes("</head>") ? indexRaw.replace("</head>", `${bootstrap}</head>`) : bootstrap + indexRaw;
+  // 토큰 부트스트랩(head) + dev 역할 전환 위젯(body, 고정 위치 드롭다운 → ?role= 이동). dev 전용, React 앱 무관.
+  const injectHtml = (roleName: string, tk: string): string => {
+    const bootstrap = `<script>try{localStorage.setItem("rpa.token",${JSON.stringify(tk)})}catch(e){}</script>`;
+    const opts = ["all", "viewer", "operator", "reviewer", "approver", "admin"]
+      .map((r) => `<option value="${r}"${r === roleName ? " selected" : ""}>${r}</option>`)
+      .join("");
+    const widget =
+      `<div style="position:fixed;top:8px;right:8px;z-index:99999;background:#fff;border:1px solid #ccc;border-radius:6px;padding:4px 8px;font:12px sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.15)">` +
+      `dev 역할 <select onchange="location.href='/?role='+this.value" style="font:12px sans-serif">${opts}</select></div>`;
+    let html = indexRaw.includes("</head>") ? indexRaw.replace("</head>", `${bootstrap}</head>`) : bootstrap + indexRaw;
+    html = html.includes("</body>") ? html.replace("</body>", `${widget}</body>`) : html + widget;
+    return html;
+  };
+  const htmlByRole: Record<string, string> = {};
+  for (const [name, roles] of Object.entries(ROLE_SETS)) htmlByRole[name] = injectHtml(name, await mintToken(roles));
+  const indexHtml = htmlByRole.all ?? injectHtml("all", await mintToken(ROLE_SETS.all ?? []));
 
   const server = http.createServer((req, res) => {
     const reqUrl = req.url ?? "/";
@@ -263,11 +288,15 @@ async function main(): Promise<void> {
       req.pipe(pReq);
       return;
     }
-    const p = (reqUrl.split("?")[0] ?? "/").replace(/^\/+/, "");
+    const [pathPart, queryPart] = reqUrl.split("?");
+    const p = (pathPart ?? "/").replace(/^\/+/, "");
     const file = p === "" ? "" : join(DIST, p);
     if (p === "" || !existsSync(file) || statSync(file).isDirectory()) {
+      // ?role=<role>이면 단일 역할 토큰 주입(게이팅 시연), 아니면 전 역할 기본.
+      const roleParam = new URLSearchParams(queryPart ?? "").get("role");
+      const html = roleParam !== null && htmlByRole[roleParam] !== undefined ? htmlByRole[roleParam] : indexHtml;
       res.writeHead(200, { "content-type": "text/html" });
-      res.end(indexHtml); // SPA fallback + 토큰 주입
+      res.end(html); // SPA fallback + 토큰 주입
       return;
     }
     res.writeHead(200, { "content-type": contentType(extname(file)) });
@@ -280,7 +309,7 @@ async function main(): Promise<void> {
   console.log(`  RPA 운영 콘솔 dev 서버 (실 Fastify → PostgreSQL)`);
   console.log(`  URL:    ${url}`);
   console.log(`  tenant: ${TENANT}`);
-  console.log(`  roles:  viewer, operator, reviewer, approver, admin (dev 토큰 자동 주입)`);
+  console.log(`  roles:  전 역할 자동 주입 (기본). ?role=viewer|operator|reviewer|approver|admin 로 단일 역할 시연`);
   console.log(`  api:    127.0.0.1:${apiPort} (내부, /api/* 프록시)`);
   console.log("  종료: Ctrl-C (temp-PG 게이트가 클러스터 회수)");
   console.log("────────────────────────────────────────────────────────\n");
