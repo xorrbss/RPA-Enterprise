@@ -76,7 +76,7 @@ ident        = (letter | "_") , { letter | digit | "_" } ;
 | `until` / `when` / `on` 조건 전체 | **최상위 결과가 boolean이어야** | int 단독을 조건으로 쓰면 에러 |
 
 - params 타입은 `params_schema`(JSON Schema)에서 추론. `node.*`/`cursor.*`/`flags.*`/`loop.*` 타입은 본 문서가 고정.
-- **null 처리**: 산술/비교 피연산자가 null이면 결과는 `false`로 단락(부울 조건) 또는 `null` 전파(값 위치). null 비교는 `== null` / `!= null`로만 명시. 암묵 NPE 금지.
+- **null 처리**: null 동등성은 `== null` / `!= null`로만 명시한다. **순서/수치 비교(`> >= < <=`)·산술(`+ -`)의 피연산자가 런타임에 null/부재이면 `false`로 조용히 단락하지 않고 `IREL_RUNTIME_MISSING`(System 예외 → 노드 재시도)으로 표면화한다** — §5 "평가 실패 처리" 및 "조용한 false 금지" 불변과 일치(false success 위험 차단). 타입체커가 정상 경로의 null 수치 피연산자를 차단하므로 이 경로는 런타임 데이터 불일치(컴파일 타입 위반) 시에만 도달한다. 값 위치의 null은 `== null`/`!= null` 명시 비교로만 다룬다. 암묵 NPE 금지.
 
 ---
 

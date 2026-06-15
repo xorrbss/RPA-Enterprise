@@ -508,3 +508,13 @@
 | migration | url_ref 리터럴을 쓰던 시드/테스트(serve 데모·run-pipeline·pipeline-site·multisite·run-step-driver)를 `url_ref:"entry_url"` + 각 run의 `params.entry_url`로 이전. serve는 **queued 데모 run을 params와 함께 시드**(부팅 시 run-loop가 구동) |
 | 콘솔 한계(명시) | `web/src/views/Scenarios.tsx`의 '실행'은 `params:{}` 전송 — 파라미터 시나리오엔 부족(런타임이 `URL_REF_PARAM_MISSING`로 loud 실패, 조용한 실패 아님). params 입력 폼(params_schema 기반)은 후속(TODO 명시) |
 | 연기 | **`params.*` in `on[].when`/`loop.until`**: 인터프리터가 평가 스코프에 `{flags}`만 주입 → params 분기 조건은 여전히 `IREL_RUNTIME_MISSING`(이번 url_ref 해소가 이를 배선하지 않음 — 별도 증분). IREL-expression url_ref(예: `concat(params.host,'/p')`)·`schema_ref` 해석·`URL_REF_*` 카탈로그 ErrorCode化도 연기 |
+
+## v2.12 패치 로그 (검토 후속 — IREL §3↔§5 내부 모순 교정: null 수치 비교는 fail-loud)
+
+> 검토(review-qa-admin 미션, OPEN ISSUES RQ-009)가 잡은 **검증된 내부 모순** 1건 교정. `ir-expression.md §3`은
+> "산술/비교 피연산자가 null이면 `false`로 단락"이라 했으나, `§5`("평가 실패 처리")와 "조용한 false 금지" 불변,
+> 그리고 실 evaluator(`codegen/irel-compile.ts` `expectRuntimeNumber`)는 모두 **null/부재 수치 피연산자를
+> `IREL_RUNTIME_MISSING`(System 예외 → 재시도)으로 표면화**한다. §3을 코드/§5에 맞춰 교정(코드 변경 없음 — 문서만
+> 정합). null 동등성은 여전히 `== null`/`!= null`로만 명시. 정상 경로는 타입체커가 null 수치 피연산자를 차단하므로
+> 이 경로는 런타임 데이터 불일치 시에만 도달. 기존 fixture(runtime evaluator throws on missing scope)가 fail-loud
+> 불변을 이미 검증한다. **재검증: contract-lint(66) + codegen consistency green.**
