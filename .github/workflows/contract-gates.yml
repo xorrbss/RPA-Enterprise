@@ -331,6 +331,8 @@ jobs:
         env:
           PGUSER: ${{ env.PGSMOKE_USER }}
           PGPASSWORD: rpa_smoke
+          # superuser 비밀번호: runtime-worker-claim.int가 BYPASSRLS 역할 생성에 postgres로 접속(격리 service-container 자격).
+          PGADMIN_PASSWORD: postgres
         run: npm --prefix app run test:int
 
       - name: Install and build console for live e2e
