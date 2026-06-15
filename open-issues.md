@@ -10,7 +10,7 @@
 > 기준: origin/main `212e18cc`. 출처: 6차원 적대적 리뷰 워크플로우(wf_e867d618, 12 findings 전부 refute 통과 real=true) + 직접 스팟리뷰.
 
 ## 상태 요약 (2026-06-16)
-- 총 18 이슈. resolution: **[확정] 1** · OPEN 13 · BLOCK 3 · (suspected 6 포함).
+- 총 18 이슈. resolution: **[확정] 2** · OPEN 12 · BLOCK 3 · (suspected 6 포함).
 - **현재 "사람 검토 대기"** — OPEN/[추정]/BLOCK 잔존. 완료 아님.
 - 우선 처리(backend, 충돌 낮음): RQ-001(CI 안정) → RQ-008 → RQ-009 → RQ-002 → RQ-003 → RQ-004 → RQ-007/014/015. 프론트(RQ-005/006/012/013)는 콘솔 스트림(병렬 codex) 영역 — 조율/충돌 주의. BLOCK(RQ-010/011-egress/RQ-009-or-amend)은 Required decision 추적.
 
@@ -25,7 +25,7 @@
 | RQ-005 | console-fidelity | openGate가 D8-A5(정적 contract-doc 뷰 결정)에도 Placeholder | P1 | confirmed | OPEN | `web/src/App.tsx:34-35`; `release-decisions.md D8-A5`; `rpa_enterprise_console.html:2411-2520` | repo-fix(프론트, 콘솔 스트림 소유): openGate 정적 뷰 구현(gate-map/RBAC 매트릭스 상수). |
 | RQ-006 | admin/console | admin gateway-policy 편집 UI 부재 — PUT 백엔드(A2)+RBAC 존재하나 React는 read-only(ApiClient에 updateGatewayPolicy 없음, GatewayPolicy 타입에 version 없음, permissions admin에 gateway_policy.edit 없음) | P1 | confirmed | OPEN | `gateway.ts:33,55,61`; `Gateway.tsx:9`; `client.ts:20-54`; `types.ts:90-95`; `permissions.ts:21-26` | repo-fix(어드민 스트림): ApiClient.updateGatewayPolicy(If-Match+Idempotency-Key), GatewayPolicy.version, permissions admin gateway_policy.edit, admin-gated 편집 폼(POLICY_VERSION_CONFLICT/LLM_CAPABILITY_MISMATCH/403 표면화). |
 | RQ-007 | tests-CI | `SitePageStateResolver.resolvePageState`(dev/run-loop 프로덕션 경로)가 `site-page-state.int.ts`로만 검증되는데 그 테스트가 **어느 CI 체인에도 없음**(test:site-resolver 별칭만). CI는 config 파서 unit만 커버 → 런타임 flag 산출 무검증 | P1 | confirmed | OPEN | `package.json:32`(test:site-resolver, 어느 체인에도 부재); `site-page-state.int.ts:96,114`; `dev/run-loop.ts:22,71` | repo-fix: test:site-resolver를 app-runtime Chrome 단계에 편입(RQ-001 CDP 하든 동반). |
-| RQ-008 | correctness | IR에 on[] 있으나 compiled_ast에 없으면 빈 branches → `IR_NO_BRANCH_MATCHED`로 표면화(계약상 value 무매칭 전용 코드를 cache drift에 오용) | P2 | confirmed | OPEN | `ir-translate.ts:38-41`; `flow-control.ts:58-63`; `ir-static-validation.md §1` | repo-fix: IR on 비어있지 않은데 compiled_ast on 부재/빈이면 `IR_SCHEMA_INVALID` throw(다른 shape 오류와 일관). 도달성 낮음(cache 손상 한정). |
+| RQ-008 | correctness | IR에 on[] 있으나 compiled_ast에 없으면 빈 branches → `IR_NO_BRANCH_MATCHED`로 표면화(계약상 value 무매칭 전용 코드를 cache drift에 오용) | P2 | confirmed | **[확정]** | `ir-translate.ts`; `ir-static-validation.md §1` | **수정 완료**: `compiledScenarioFrom`이 IR on[] 개수 ≠ compiled_ast on[] 개수(부재 포함)면 `IR_SCHEMA_INVALID`(드리프트) throw — 빈 branches로 떨어뜨리지 않음. 단위검증 `app/test/ir-translate.unit.ts` 5/5(정상·부재드리프트·개수불일치·next/terminal·미지원흐름). |
 | RQ-009 | correctness | null 수치 비교 피연산자에서 evaluator가 throw — `ir-expression §3`(null→false 단락)와 `§5`(throw) 충돌, 코드는 §5/no-silent-false 선택 | P2 | suspected | BLOCK | `ir-expression.md §3 L79` vs `§5 L108`; `irel-compile.ts:677-685,565-571` | Required decision(계약 owner): §3을 코드(IREL_RUNTIME_MISSING)에 맞춰 개정 권고(검증된 내부 모순 — README 패치로그 규율로 수정 가능). 타입체커가 정상경로 차단해 도달성 낮음. |
 | RQ-010 | contract-fidelity / role-QA | GET /v1/artifacts/{id} 미구현(api-surface §5/openapi 선언, artifact.read RBAC 존재하나 라우트 없음). 전 역할 artifact 조회 capability 도달 불가 | P2 | confirmed | BLOCK | `api-surface.md:123-132`; `openapi.yaml:612`; `rbac.ts:28-31,130`; `release-decisions.md D7-1/D8-A1` | BLOCK(외부+계약): redaction-gate read 메커니즘(메타-가시 RLS 분리 vs pending⇒404) + object-store egress. fail-closed(노출 없음). 이미 D7-1/D8-A1 결정·공시. |
 | RQ-011 | role-QA / pipeline | sink_dlq.replay가 매트릭스/rbac.ts/web-permissions에 있으나 라우트 없음(공유 replay는 dlq.replay+workitem 전용, sink 행 not_replayable 거부). 운영자 sink replay capability 도달 불가 | P2 | confirmed | BLOCK | `rbac.ts:41,59,81,106`; `permissions.ts:9`; `dlq.ts:28,73-76`; `api-surface.md:116`; `release-decisions D6-3/D8-A3` | repo-fix 가능(라우트=D8-A3 결정)이나 실 재전달은 egress(B3/D6-2) 의존 → 라우팅 build + egress BLOCK. fail-closed. |
@@ -40,3 +40,4 @@
 ## 처리 로그 (append)
 - 2026-06-16: 레지스터 생성. 18 이슈 등록(워크플로우 12 + 스팟 6). 전부 OPEN/BLOCK — 완료 아님("사람 검토 대기"). 다음: RQ-001부터 backend 우선 수정.
 - 2026-06-16: **RQ-001 [확정]** — cdp-session 기동 retry/backoff + DI 단위테스트. CI 안정 키스톤. 다음: RQ-008(ir-translate drift)·RQ-009(§3vs§5 계약 개정)·RQ-002(on[] scope).
+- 2026-06-16: **RQ-008 [확정]** — ir-translate compiled_ast 드리프트 → IR_SCHEMA_INVALID + 단위테스트 5/5. 다음: RQ-009(§3vs§5 계약 개정)·RQ-002(on[] scope full).
