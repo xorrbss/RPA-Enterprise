@@ -23,7 +23,9 @@ import type {
 } from "../../ts/core-types";
 import type { CorrelationId, RunId, StepId, TenantId } from "../../ts/security-middleware-contract";
 import type { ExecutorInvocationArtifactMetadata, IsoDateTime, RuntimeWorkerJob } from "../../ts/runtime-contract";
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { createPool, withTenantTx } from "../src/db/pool";
+import { bootstrapTracing } from "../src/observability/bootstrap";
 import {
   PgExecutorCompletionCoordinator,
   type ExecutorTerminalSuccessEvidence,
@@ -37,6 +39,10 @@ import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "../src/runtime/
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_executor_recorder_int";
+
+// §E executor.execute span 발행 검증용 in-memory exporter(외부 의존 없음).
+const spanExporter = new InMemorySpanExporter();
+bootstrapTracing(spanExporter);
 
 const TENANT_A = "00000000-0000-0000-0000-0000000000a1";
 const TENANT_B = "00000000-0000-0000-0000-0000000000b2";
@@ -516,6 +522,7 @@ async function main(): Promise<void> {
       }),
     };
     const orchestrator = new PgExecutorStepOrchestrator(attemptStore, recorder, completionCoordinator);
+    spanExporter.reset();
     const orchestrated = await orchestrator.execute({
       tenantId: TENANT_A as TenantId,
       runId: RUN_ORCHESTRATED as RunId,
@@ -533,6 +540,21 @@ async function main(): Promise<void> {
       pluginObservedStartedStatuses[0] === "started" && orchestrated.kind === "recorded",
       JSON.stringify({ pluginObservedStartedStatuses, orchestrated }),
     );
+    // §E: executor.execute span이 실 call-site에서 발행되고 node_id/action/executor + 공통속성을 가진다.
+    {
+      const execSpan = spanExporter.getFinishedSpans().find((s) => s.name === "executor.execute");
+      check("orchestrator emits executor.execute span", execSpan !== undefined);
+      check(
+        "executor.execute span carries §E attrs",
+        execSpan?.attributes.node_id === "node-orchestrated" &&
+          execSpan?.attributes.action === "navigate" &&
+          typeof execSpan?.attributes.executor === "string" &&
+          execSpan?.attributes.tenant_id === TENANT_A &&
+          execSpan?.attributes.run_id === RUN_ORCHESTRATED &&
+          execSpan?.attributes.correlation_id === CORRELATION,
+        JSON.stringify(execSpan?.attributes),
+      );
+    }
     check(
       "executor orchestrator records plugin result after out-of-tx execute",
       (await runStepStatus(pool, TENANT_A, RUN_ORCHESTRATED, "step-orchestrated")) === "success" &&
