@@ -470,4 +470,22 @@
 | resolver | `app/src/executor/site-page-state-resolver.ts` `SitePageStateResolver` — 마커 대신 셀렉터→flag 규칙으로 닫힌 6키 산출(미지정=false 명시 결정). config 무매칭은 인터프리터 `IR_NO_BRANCH_MATCHED`로 표면화 |
 | 로더 | `app/src/executor/site-page-state-config.ts` `parseSitePageStateConfig`(jsonb 엄격 검증·무효→`PAGE_STATE_UNRESOLVED`) + `loadSitePageStateConfig`(run의 site_profile에서 로드, RLS tx) |
 | dev 배선 | `app/dev/run-loop.ts`가 DB site_profile의 page_state_selectors 로드해 resolver 구성, `serve.ts`가 데모 site_profile + 마커 없는 실 URL풍 FIXTURE 시드 — 콘솔 '실행'이 마커 없는 페이지에서 completed |
-| 연기 | run별 site_profile 해소 실구현(`BrowserLeasePlanResolver` 포트, 현 dev는 단일 사이트) · url_ref/schema_ref 해석 · NetworkPolicy 도메인 허용목록 강제 · 예약핸들러(@end_no_data/@challenge) — D3 가동 코어 비의존 |
+| 연기 | run별 site_profile 해소 실구현(`BrowserLeasePlanResolver` 포트, 현 dev는 단일 사이트) · url_ref/schema_ref 해석 · NetworkPolicy 도메인 허용목록 강제 · 예약핸들러(@end_no_data/@challenge) — D3 가동 코어 비의존 *(run→site dev 해소는 v2.10에서 구현; 아래 참조)* |
+
+## v2.10 패치 로그 (D3 가동 2단계 — run→site_profile 해소: 멀티사이트)
+
+> v2.9의 단일-사이트 dev 가정을 풀어, **서로 다른 사이트를 가리키는 시나리오가 각자 맞는 site_profile로 해소**되게 한다.
+> 계약은 runs/scenario_versions에 site 링크를 두지 않고(런타임 해소가 설계 의도) `site_profiles.url_pattern`("사이트
+> 식별 패턴")만 가지므로, run의 시나리오 **entry navigate URL의 origin**을 url_pattern에 매칭해 단일 site_profile을 고른다.
+> **확정한 매칭 규칙(이전엔 미명시)**: `url_pattern` 매칭은 `URL.origin`(scheme://host:port) 동일성 — 경로/glob 접미사는
+> run→site 선택에서 무시(URL.origin이 정규화하므로 저장형식 origin/full-URL/`/*` 모두 동작). 같은 origin 다중 매칭 =
+> config 오류로 loud(SQL LIMIT 임의선택 금지). 이는 BrowserLeasePlanResolver **프로덕션 포트**의 본체가 될 재사용 함수의
+> dev 절반이다(브라우저 풀 페어링 절반은 계속 연기 — 풀 미구축).
+> **재검증: `test:unit`(+site-resolution) + temp-PG `test:multisite`(2 origin/2 셀렉터셋/2 시나리오→각자 completed + 0-match/ambiguity loud, 실 Chrome).**
+
+| 항목 | 조치 |
+|---|---|
+| 해소 함수 | `app/src/runtime/site-resolution.ts` — `extractEntryNavigateUrlRef`(ir.start BFS: next+on[].target, 첫 navigate; 부재→IR_SCHEMA_INVALID) + `resolveSiteProfileId`(origin 매칭, 후보 전부 앱측 비교; 0-match→SITE_PROFILE_UNRESOLVED, 다중→SITE_PROFILE_AMBIGUOUS) |
+| 조용한 false 금지 | symbolic url_ref(절대 URL 아님; url_ref 심볼 해석은 별도 연기)는 `URL_REF_SYMBOLIC_UNRESOLVED`로 loud — URL인 양 0-match로 흡수 금지 |
+| dev 배선 | `run-loop.ts`가 run별로 `extractEntryNavigateUrlRef→resolveSiteProfileId→loadSitePageStateConfig→SitePageStateResolver` 구성(시작 시 단일 resolver 제거), `serve.ts` `startRunLoop`에서 고정 site 인자 제거·데모 url_pattern을 canonical origin으로 |
+| 연기(좁힘) | v2.9의 "run별 site_profile 해소 실구현" → **프로덕션 `BrowserLeasePlanResolver`(브라우저 풀 페어링) 실구현**으로 축소(dev 해소는 구현됨). 시나리오 내 멀티-오리진은 entry만 바인딩(연기). 카탈로그 ErrorCode化(SITE_PROFILE_UNRESOLVED 등)는 프로덕션 포트와 함께(현재 dev 로컬 `SiteResolutionError`) |
