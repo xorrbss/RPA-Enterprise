@@ -1,0 +1,83 @@
+/* D7 운영 콘솔 — rpa_enterprise_console.html 디자인 토큰/레이아웃 이식 */
+:root {
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --surface-2: #f9fafb;
+  --line: #dce3ea;
+  --line-strong: #c5d0dc;
+  --text: #1e293b;
+  --muted: #64748b;
+  --soft: #eef3f8;
+  --blue: #2563eb;
+  --blue-soft: #e8f0ff;
+  --green: #0f9f6e;
+  --green-soft: #e7f8f0;
+  --amber: #b7791f;
+  --amber-soft: #fff5dc;
+  --red: #c24141;
+  --red-soft: #fdecec;
+  --purple: #6d5bd0;
+  --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 10px 30px rgba(15, 23, 42, .05);
+  --radius: 8px;
+  --sidebar: 268px;
+  font-family: Inter, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+
+/* [a11y] 키보드 포커스 + 모션 감소 */
+*:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+
+.app { display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: 100vh; }
+.sidebar { background: var(--surface); border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; }
+.brand { font-weight: 700; font-size: 15px; padding: 8px 10px 14px; display: flex; align-items: center; gap: 8px; }
+.nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; background: transparent; color: var(--muted); border-radius: var(--radius); cursor: pointer; font-size: 13px; text-align: left; }
+.nav-item:hover { background: var(--soft); color: var(--text); }
+.nav-item.active { background: var(--blue-soft); color: var(--blue); font-weight: 600; }
+.nav-item svg { width: 16px; height: 16px; flex: none; }
+
+.main { display: flex; flex-direction: column; min-width: 0; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 10; }
+.topbar h1 { font-size: 18px; margin: 0; }
+.topbar .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.freshness { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.live-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--green); animation: livePulse 2s infinite; }
+@keyframes livePulse { 0%{box-shadow:0 0 0 0 rgba(15,159,110,.45)} 70%{box-shadow:0 0 0 6px rgba(15,159,110,0)} 100%{box-shadow:0 0 0 0 rgba(15,159,110,0)} }
+.route-progress { position: fixed; top: 0; left: 0; height: 3px; width: 0; background: var(--blue); z-index: 100; opacity: 0; transition: width .3s ease, opacity .3s ease; }
+.route-progress.active { width: 100%; opacity: 1; }
+
+.content { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.panel-head { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.panel-head h2 { font-size: 14px; margin: 0; }
+.panel-body { padding: 8px 0; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.metric { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+.metric .label { color: var(--muted); font-size: 12px; }
+.metric .value { font-size: 24px; font-weight: 700; margin-top: 6px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+tbody tr:hover { background: var(--surface-2); }
+
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.badge.green { background: var(--green-soft); color: var(--green); }
+.badge.amber { background: var(--amber-soft); color: var(--amber); }
+.badge.red { background: var(--red-soft); color: var(--red); }
+.badge.blue { background: var(--blue-soft); color: var(--blue); }
+.badge.muted { background: var(--soft); color: var(--muted); }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); cursor: pointer; font-size: 13px; }
+.btn:hover { background: var(--soft); }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.empty-state, .error-state { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 36px 16px; color: var(--muted); }
+.empty-state .es-icon, .error-state .es-icon { width: 40px; height: 40px; border-radius: 999px; display: grid; place-items: center; background: var(--soft); }
+.error-state .es-icon { background: var(--red-soft); color: var(--red); }
+.empty-state strong, .error-state strong { color: var(--text); font-size: 14px; }
+.skeleton { padding: 24px 16px; color: var(--muted); }
