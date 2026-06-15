@@ -352,7 +352,7 @@ Environment note:
   writer coverage for security boundary decisions. No repo-controlled D4.4
   blocker remains in the local checklist after this delta; remaining blockers
   are external/staging scope and must not be inferred closed.
-- Current local dirty-worktree D3 runtime evidence: deterministic Stagehand v3/CDP
+- Phase 7 local D3 runtime evidence: deterministic Stagehand v3/CDP
   UtilityExecutor/PageStateResolver is proven as PoC/dry-run evidence only.
   `PgRuntimeWorker` now has `run_resume` R17-R20 evidence that consumes the R17
   `restoreSession` side effect through an injected `SessionRestorer` outside
@@ -412,7 +412,7 @@ Environment note:
   claim/finalize filters, and idempotent delete/not-found retention semantics.
   The DB boundary now rejects non-legal-hold artifact metadata with unknown
   `retention_until` and application-supplied lifecycle claims. This
-  local dirty delta is not merged/current remote release evidence until a later
+  Phase 7 local delta is not merged/current remote release evidence until a later
   PR/main `Contract Gates` run attaches the required job URLs, and it is still
   not executable staging/open evidence until production/staging
   SecretRef-backed artifact object I/O/deletion receipts and remote RBAC/tenant

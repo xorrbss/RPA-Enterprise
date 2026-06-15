@@ -68,11 +68,11 @@ green remote evidence before being cited as current.
 - [x] D4.4 events_outbox retention source - fail-closed behavior is named. Missing/unsupported/non-finite/non-positive policy input throws before insert, and `events_outbox.retention_until` is `NOT NULL`.
 - [x] D4.4 events_outbox retention source - app/runtime evidence is named. Covered by `app/test/graphile-worker.int.ts`, `app/test/run-transition.int.ts`, `db/migration_smoke.sql`, and `scripts/db-static-smoke.mjs`.
 - [x] D4.4 durable security audit writer boundary is named and evidenced. `DurableSecurityAuditDecisionWriter` covers `artifact.read`, `secret.resolve`, `connector.enable`, `connector.install`, `network.request`, `prompt.inspect`, and `bypassrls.use`; `PgDurableSecurityAuditDecisionWriter` appends to PostgreSQL `audit_log` before returning and `app/test/security-audit.int.ts` proves hash-chain, payload schema, retention, duplicate-idempotency, PlainSecret rejection, and fail-closed append behavior. Targeted rerun: `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:security-audit`. Broader app routes remain scoped out until implemented or explicitly wired.
-- [x] D4.5 human_task resolve assignee scope is locally evidenced. `app/src/api/human-tasks.ts` now evaluates kind-specific resolve RBAC plus `auth-rbac.md` assignee/assignee_role scope before idempotency-key reservation; `app/test/api-human-tasks.int.ts` proves matching assignee and role may resolve, mismatched assignee or assignee_role returns `AUTHZ_FORBIDDEN`, denied requests do not reserve the idempotency key, and the task remains `in_progress`. Targeted rerun: `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/api-human-tasks.int.ts`. Scope note: human-task `reassignAssignee` pending side effects remain a separate dirty API risk until ownership is decided or implemented.
+- [x] D4.5 human_task resolve assignee scope is locally evidenced. `app/src/api/human-tasks.ts` now evaluates kind-specific resolve RBAC plus `auth-rbac.md` assignee/assignee_role scope before idempotency-key reservation; `app/test/api-human-tasks.int.ts` proves matching assignee and role may resolve, mismatched assignee or assignee_role returns `AUTHZ_FORBIDDEN`, denied requests do not reserve the idempotency key, and the task remains `in_progress`. Targeted rerun: `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/api-human-tasks.int.ts`. Scope note: H5/R15 `reassignAssignee` is now explicitly fail-closed unless a future routing/assignment owner is provided.
 
-## Repo-Controlled D4.5 API P1 Evidence / Open
+## Repo-Controlled D4.5 API P1 Evidence / Resolved
 
-These rows describe current local dirty-worktree API P1 evidence. They must not
+These rows describe Phase 7 local API P1 evidence. They must not
 be cited as merged/current remote release evidence until a later PR/main
 `Contract Gates` run attaches the required `secret-scan`, `PostgreSQL 15
 migration smoke`, and `App runtime typecheck and tests` job URLs.
@@ -90,9 +90,9 @@ migration smoke`, and `App runtime typecheck and tests` job URLs.
 ## Repo-Controlled D3 Executor PoC Evidence
 
 These rows record deterministic Stagehand v3/CDP executor PoC evidence only.
-They must not be cited as executable staging readiness until real executor
-orchestration, artifact redaction/retention jobs, executor audit semantics, and
-RBAC/tenant gates are wired and evidenced.
+They must not be cited as executable staging readiness until the Phase 7 runtime
+orchestration evidence has current remote gates and the external artifact/D5
+staging evidence rows are closed.
 
 - [x] D3 UtilityExecutor/PageStateResolver dry-run evidence is named. `app/test/executor-dryrun.int.ts` runs real Stagehand v3 + local Chrome/CDP without `act`, drives navigate/resolve/branch/verify/download/pagination, rejects dom actions with `EXECUTOR_CAPABILITY_MISMATCH`, rejects invalid utility/verify inputs with `IR_SCHEMA_INVALID`, and rejects unmarked pages with `PAGE_STATE_UNRESOLVED`.
 - [x] D3 Stagehand API coverage PoC is named. `app/poc/d3-stagehand/D3-POC-EVIDENCE.md` records 10/10 local fixture coverage and is reproducible with `npm --prefix app/poc/d3-stagehand run poc` when `CHROME_PATH` points at a local Chrome/Chromium binary.
@@ -107,11 +107,11 @@ is run by a credential holder and recorded without plaintext secrets.
 
 - [x] D5 Codex SSE adapter/transport safe-path unit evidence is named. Targeted rerun: `npm --prefix app run test:gateway-unit`. `app/test/llm-gateway.unit.ts` proves capability gating, retry/fallback, budget fail-closed behavior, idempotency replay/mismatch/in-flight handling, and `jsonMode=false` prompt-schema fallback routing; `app/test/codex-sse-adapter.unit.ts` and `app/test/codex-sse-transport.unit.ts` cover the adapter/transport stream boundary.
 - [x] D5 live Codex SSE PoC harness is present and fail-closed for release evidence. `app/poc/d5-codex-sse/run-poc.ts` uses env-only credentials, requires an absolute HTTPS `CODEX_BASE_URL`, rejects endpoint URLs that embed credentials/query/fragment material, requires bracketed endpoint/model evidence aliases, redacts evidence cells including provider error bodies before printing, and exits nonzero unless mandatory checks #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior all PASS; #3 native `json_schema` and #5 model metadata may GAP only with documented fallback. Redaction self-test: `npm --prefix app/poc/d5-codex-sse run test:redaction`.
-- [x] D5 `PgGatewayArtifactSink` producer-side pending metadata evidence is named. `app/test/gateway-artifact-sink.int.ts` runs under PostgreSQL 15 via `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:gateway-artifact-sink` and proves canonical `(run_id, step_id, attempt)` metadata insert, filesystem object-store write, `outputRef` as `artifacts.id`/`ArtifactRef` while raw `object_ref` stays an internal `ObjectRef`, pending-redaction RLS invisibility, cross-tenant isolation, object cleanup on metadata insert failure/missing `run_step`, PlainSecret rejection before object write, and invalid retentionDays rejection. Scope note: this requires a pre-existing `run_steps` attempt row and does not close real executor orchestration ordering, artifact redaction/retention worker object-I/O blockers, or the external D5 live-model evidence blocker.
+- [x] D5 `PgGatewayArtifactSink` producer-side pending metadata evidence is named. `app/test/gateway-artifact-sink.int.ts` runs under PostgreSQL 15 via `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:gateway-artifact-sink` and proves canonical `(run_id, step_id, attempt)` metadata insert, filesystem object-store write, `outputRef` as `artifacts.id`/`ArtifactRef` while raw `object_ref` stays an internal `ObjectRef`, pending-redaction RLS invisibility, cross-tenant isolation, object cleanup on metadata insert failure/missing `run_step`, PlainSecret rejection before object write, and invalid retentionDays rejection. Scope note: this requires a pre-existing `run_steps` attempt row and does not close production/staging artifact redaction/retention object-I/O receipts or the external D5 live-model evidence blocker.
 
-## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)
+## Repo-Controlled D3 Runtime Execution Readiness (Local Evidence / External Remote Gate Open)
 
-These rows describe current local dirty-worktree evidence. They must not be
+These rows describe Phase 7 local runtime evidence. They must not be
 cited as merged/current remote release evidence until a later PR/main
 `Contract Gates` run attaches the required `secret-scan`, `PostgreSQL 15
 migration smoke`, and `App runtime typecheck and tests` job URLs.
