@@ -44,7 +44,7 @@
 3. **인증** — JWT(`auth-rbac.md`): `tenant_id`/`roles`는 **JWT 클레임에서만**(본문 불신).
 4. **인가(RBAC)** — `auth-rbac.md §2` 권한 매트릭스 미들웨어. 일반 거부 → `AUTHZ_FORBIDDEN`. `human_task.escalate`는 reviewer/approver/admin(release-decisions #8).
 5. **RLS 세션 바인딩** — 모든 핸들러 DB 작업은 `app/src/db/pool.ts`의 `withTenantTx(pool, jwt.tenant_id, …)` 경유(strict `current_setting`, FORCE RLS). cross-tenant 차단.
-6. **에러 매핑** — `codegen/error-middleware.ts`로 `error-catalog.ts` 44코드 → HTTP. `ApiError` 일관, retryable/httpStatus 준수.
+6. **에러 매핑** — `codegen/error-middleware.ts`로 `error-catalog.ts` 47코드 → HTTP. `ApiError` 일관, retryable/httpStatus 준수.
 7. **동시성/멱등 헤더** — `If-Match`(scenario.version, 불일치 → `SCENARIO_VERSION_CONFLICT`/412) · `Idempotency-Key`(`control_plane_idempotency_keys` 테이블, **release-decisions #7** 매핑: unmatched route→`RESOURCE_NOT_FOUND`/404, missing key→`IR_SCHEMA_INVALID`/422, request_hash mismatch→`SCENARIO_VERSION_CONFLICT`/412, in-flight 중복→`WORKITEM_CHECKOUT_CONFLICT`/409 retryable) · `params.as_of` 주입(ir-expression §5 결정론).
 8. **컴파일 파이프라인(§10)** — 시나리오 **저장/승격** 시: ① ajv(`codegen/validators`) → ② IREL parse+typecheck(`compileIrelExpression`, 전 expression) → ③ IR 그래프 정적검증 **V1–V11**(`codegen/static-validation.ts`, `ValidationReport`). 하나라도 실패 → 저장 거부(`IR_SCHEMA_INVALID`/`IR_EXPRESSION_COMPILE_ERROR`). **prod 승격은 warnings도 차단**(ir-static-validation §3). 통과분 AST를 `scenario_versions.compiled_ast`에 캐시(런타임 파싱 없음).
 9. **어휘 체인** — API `abort` → Run `aborting`→`cancelled` → event `run.cancelled` → UI "취소됨". run 명령은 D2 전이 런타임(`applyRunTransition`)으로 위임.

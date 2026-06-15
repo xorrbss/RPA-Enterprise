@@ -10,11 +10,11 @@
 
 ## 0. 먼저 읽어라 (진실원천 — 이 순서로)
 
-1. `README.md` — 권위 changelog(v1.1~v2.3 패치로그)·"외부 의존 맵"·설계 결정. 모든 계약 변경의 "왜"가 여기 있다.
+1. `README.md` — 권위 changelog(v1.1~현행 패치로그)·"외부 의존 맵"·설계 결정. 모든 계약 변경의 "왜"가 여기 있다.
 2. `CLAUDE.md` / `AGENTS.md` — 저장소 성격·불변 원칙·어휘 정합·파일 지도.
 3. `architecture.md` — **구현 청사진**: 스택(§0)·실행기 3분할(§2)·컴포넌트↔계약↔codegen 매핑(§3)·데이터/이벤트(§4)·배포(§5)·빌드순서 D1–D7(§6)·결정점(§7)·D3 PoC(§9)·**IREL evaluator §10**.
 4. 계약(권위 — **충돌 시 계약이 이긴다**): `ir-expression.md`·`ir-static-validation.md`·`state-machine.md`·`reserved-handlers.md`·`llm-gateway-adapter.md`·`impl-contracts-bundle.md`·`security-contracts.md`·`auth-rbac.md`·`api-surface.md`·`ops-defaults.md`·`schema/*.json`·`db/*.sql`·`ts/*.ts`.
-5. **이미 검증된 codegen — 재사용/확장하고 손으로 다시 만들지 말 것**: `codegen/{types,validators,transitions,error-middleware,transitions.fixtures,run-fixtures,validators.fixtures}.ts`·`codegen/{openapi,asyncapi}.yaml`. 검증: `npm --prefix codegen test`(tsc strict + 전이 63/63 + validators 10/10 PASS). 계약이 바뀌면 codegen을 **재생성**한다.
+5. **이미 검증된 codegen — 재사용/확장하고 손으로 다시 만들지 말 것**: `codegen/{types,validators,transitions,static-validation,irel-compile,error-middleware,event-payload-registry,transitions.fixtures,run-fixtures,validators.fixtures}.ts`·`codegen/{openapi,asyncapi}.yaml`. 검증: `npm --prefix codegen test`(tsc strict + 전이 84/84 + validators 42/42 + static validation 33/33 PASS — 수치는 `npm --prefix codegen run fixtures` 실측 출력 기준). 계약이 바뀌면 codegen을 **재생성**한다.
 
 ## 1. 불변 원칙 (위반 시 구현 중단)
 
@@ -36,15 +36,15 @@ TypeScript/Node 단일 · PostgreSQL 15+ · **Graphile Worker**(상태변경+job
 
 - **D2 — Transition 런타임 + Worker 골격 + IREL evaluator·IR 정적검증.**
   - `codegen/transitions.ts`를 실 DB에 연결(CAS UPDATE, sideEffect 실행, outbox INSERT 동일 트랜잭션). Graphile Worker job = run/workitem/human_task 진행.
-  - **IREL evaluator(§10)**: 수기 재귀하강 파서(no eval) + 타입체커 + 그래프 정적검증 V1–V11(`ValidationReport`), AST 캐시(`scenario_versions.compiled_ast`), 순수 런타임 evaluator.
+  - **IREL 런타임 연결(§10)**: 파서·타입체커·그래프 정적검증 V1–V11·순수 evaluator는 **D1 codegen(`codegen/irel-compile.ts`·`codegen/static-validation.ts`) 재사용** — 손으로 다시 만들지 말 것. D2는 이를 런타임에 연결: Interpreter가 캐시 AST(`scenario_versions.compiled_ast`)로 on[]/loop.until/fallback.advance_when을 평가(no eval). 저장/승격 시 compile 파이프라인(parse+typecheck+V1–V11) 호출은 D4.
   - OTel 부트스트랩(span 이름 고정 적용 시작).
-  - **DoD/게이트**: transition 63/63 회귀 유지 + IREL 단위테스트(positive/negative, IR_NO_BRANCH_MATCHED/IREL_RUNTIME_MISSING 포함) + 최소 시나리오 상태기계 통합테스트(testcontainers Postgres) 그린.
+  - **DoD/게이트**: transition 84/84 회귀 유지 + IREL 단위테스트(positive/negative, IR_NO_BRANCH_MATCHED/IREL_RUNTIME_MISSING 포함) + 최소 시나리오 상태기계 통합테스트(실 PG15 — temp/local DB 게이트 `scripts/db-temp-postgres-gate.mjs`) 그린.
 - **D3 — Executor 골격(architecture §9).** UtilityExecutor(CDP)·PageStateResolver **먼저**(Stagehand `act` 없이 flags·structuralHash 산출) → Stagehand v3 dom(act/observe/extract) → VisionExecutor. **§9.2 PoC 10항목**을 실측, 갭은 raw CDP 보완.
   - **DoD/게이트**: PoC 체크리스트 통과/보완 문서화 + `observe→extract→next_page` dry-run(실 저장/전송 차단) 통과 + browser/credential lease·heartbeat·sweeper 동작.
-- **D4 — Control-plane API.** `codegen/openapi.yaml`→Fastify 라우트, `validators`로 경계검증, RBAC 미들웨어(auth-rbac §2 매트릭스), RLS 세션 바인딩(§3·§4), `error-middleware`로 ErrorCode 44종 매핑, If-Match/Idempotency-Key/`params.as_of` 주입, 저장/승격 시 **§10 컴파일 파이프라인** 호출.
+- **D4 — Control-plane API.** `codegen/openapi.yaml`→Fastify 라우트, `validators`로 경계검증, RBAC 미들웨어(auth-rbac §2 매트릭스), RLS 세션 바인딩(§3·§4), `error-middleware`로 ErrorCode 47종 매핑, If-Match/Idempotency-Key/`params.as_of` 주입, 저장/승격 시 **§10 컴파일 파이프라인** 호출.
   - **DoD/게이트**: OpenAPI lint(spectral) + 엔드포인트 통합테스트(인증/인가/멱등/If-Match/404 경로) + RLS 격리 테스트(cross-tenant 차단) 그린.
 - **D5 — LLM Gateway.** Codex SSE adapter(llm-gateway-adapter), capabilities 게이트, budget 강제(스트림 중 abort), redaction(§4) 경계, retry 분류→error-catalog(LLM_*), stagehand_calls 기록.
-  - **DoD/게이트**: SSE/budget/abort/repair/fallback 통합테스트(모킹 백엔드) + redaction fixture(security-contracts §C 케이스) 그린.
+  - **DoD/게이트**: SSE/budget/abort/repair/fallback 통합테스트(모킹 백엔드) + redaction fixture(impl-contracts-bundle §C 케이스 + security-contracts §4 알고리즘) 그린.
 - **D6 — Pipeline/Sink + outbox 소비.** raw→normalized→sink(멱등·DLQ), outbox 발행 워커(at-least-once + idempotency_key), sink 외부 멱등키, dead_letter replay(W10).
   - **DoD/게이트**: 멱등 재인입/재시도/replay 통합테스트 + outbox→bus 순서/중복 테스트 그린.
 - **D7 — 운영 콘솔(프론트).** `rpa_enterprise_console.html` 디자인을 React+Vite로 구현, OpenAPI 클라이언트, 실시간 갱신(v1=outbox tail 폴링), 10뷰·운영자 워크플로우(abort/resolve/replay/promote/approve), 접근성(focus-visible·포커스트랩·aria) 유지.
@@ -53,13 +53,13 @@ TypeScript/Node 단일 · PostgreSQL 15+ · **Graphile Worker**(상태변경+job
 
 ## 4. 프로덕션 오픈 품질 바 (전 단계 공통)
 
-- **테스트**: 단위(transition/IREL/validator/redaction) + 통합(API↔Postgres↔worker, **testcontainers**) + e2e(전체 흐름). codegen fixtures(63 전이·10 validator) 회귀 유지.
+- **테스트**: 단위(transition/IREL/validator/redaction) + 통합(API↔Postgres↔worker, 실 PostgreSQL — temp/local DB 게이트 `scripts/db-temp-postgres-gate.mjs`; Docker 미사용으로 testcontainers 불가) + e2e(전체 흐름). codegen fixtures(84 전이·42 validator·33 static validation) 회귀 유지.
 - **CI(그린 게이트)**: eslint(+secret taint 룰) · `tsc --strict` · 전체 테스트 · 마이그레이션 적용/롤백 검사 · OpenAPI/AsyncAPI lint(spectral) · 컨테이너 빌드.
 - **마이그레이션**: 적용 순서 `migration_concurrency_idempotency.sql` → `migration_core_entities.sql`, 멱등·롤백 가능, RLS 정책(auth-rbac §4) 포함.
 - **관측**: impl-bundle §E의 span/metric **이름 그대로** OTel 계측, 필수 메트릭(run_success_rate·cache_hit_rate·llm_cost·queue_depth 등) 노출, correlation_id로 trace↔event↔log 연결.
 - **보안**: secret taint lint가 빌드 차단, redaction 경계 강제, 인증/인가 전 엔드포인트, RLS 격리, shell signed registry, prompt-injection 차단, artifact redaction 게이트.
 - **운영**: `ops-defaults.md` 기본값 적용(환경 오버라이드), sweeper(artifact/lease)·서킷브레이커(site/worker)·DLQ replay 동작.
-- **에러**: `error-catalog.ts` 44코드 전부 `error-middleware`로 매핑, `ApiError` 일관, retryable/httpStatus 준수.
+- **에러**: `error-catalog.ts` 47코드 전부 `error-middleware`로 매핑, `ApiError` 일관, retryable/httpStatus 준수.
 
 ## 5. 작업 방식 (원칙)
 

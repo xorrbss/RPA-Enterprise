@@ -284,8 +284,8 @@
 | `codegen/types.ts` | ir/verify/event 스키마 → TS 인터페이스(흐름키 union·shell/side_effect 식별 union). core-types 재사용 | tsc strict |
 | `codegen/validators.ts` | ajv(2020) + uuid/date-time format 수동 등록으로 3스키마 컴파일, validateIR/Verify/Event. ir→verify $ref 해소 | tsc + agent 14 스모크 |
 | `codegen/transitions.ts` | transitionRun/Workitem/HumanTask 완전 구현(R1–R28/W1–W11/H1–H8), 미정의 조합 IllegalTransition, guard 누락 시 silent false 금지 | **전이 fixtures 84/84 PASS**(run-fixtures) |
-| `codegen/error-middleware.ts` | ErrorCode→ApiError/HTTP 매핑(44코드), DEAD_LETTER 통지 분리 | tsc strict |
-| `codegen/openapi.yaml` | api-surface 22 path → OpenAPI 3.1, ErrorCode 44, $ref 정합 | YAML parse |
+| `codegen/error-middleware.ts` | ErrorCode→ApiError/HTTP 매핑(47코드), DEAD_LETTER 통지 분리 | tsc strict |
+| `codegen/openapi.yaml` | api-surface 22 path → OpenAPI 3.1, ErrorCode 47, $ref 정합 | YAML parse |
 | `codegen/asyncapi.yaml` | event-envelope → AsyncAPI 2.6, event_type 31 채널 | YAML parse |
 | `codegen/transitions.fixtures.ts` | 전이표 84 케이스(+race/IllegalTransition/side-effect assertion), ops-defaults 픽스처값 | 실행 PASS |
 | `codegen/validators.fixtures.ts` | IR/Verify/Event validator 42케이스 + static validation 33케이스 | 실행 PASS |
