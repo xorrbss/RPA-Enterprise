@@ -19,10 +19,23 @@ import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
 import { createStagehandSession, SingleSessionProvider } from "../src/executor/cdp-session";
-import { CdpPageStateResolver } from "../src/executor/page-state-resolver";
+import { SitePageStateResolver, type SitePageStateConfig } from "../src/executor/site-page-state-resolver";
 import { UtilityExecutor } from "../src/executor/utility-executor";
 
 const WORKER_ID = "9a000000-0000-0000-0000-0000000000df";
+
+// dev 데모 사이트 프로파일(마커 없는 /fixture/reviews 의 셀렉터 매핑).
+// 향후 site_profiles.page_state_selectors(DB 컬럼)로 영속화될 in-memory 표현의 stand-in.
+const DEMO_SITE_CONFIG: SitePageStateConfig = {
+  authenticatedWhen: { selector: ".user-menu" },
+  flags: {
+    reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 },
+    not_found: { kind: "present", selector: ".empty-results" },
+    no_next_page: { kind: "present", selector: "a.next-page.disabled" },
+    login_required: { kind: "present", selector: ".login-form" },
+    blocked: { kind: "present", selector: ".blocked-banner" },
+  },
+};
 
 export interface RunLoop {
   stop(): Promise<void>;
@@ -59,9 +72,9 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
   const downloadDir = mkdtempSync(join(tmpdir(), "dev-runloop-"));
   const session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
   const provider = new SingleSessionProvider(session);
-  const resolver = new CdpPageStateResolver(provider);
+  const resolver = new SitePageStateResolver(provider, DEMO_SITE_CONFIG);
   const executor = new UtilityExecutor(provider);
-  console.log("run-loop: 실 Chrome 실행기 활성 — queued run을 polling해 구동(마커 픽스처 데모 시나리오만 completed).");
+  console.log("run-loop: 실 Chrome 실행기 활성 — queued run을 polling해 구동(site-profile 셀렉터로 마커 없는 실 URL풍 페이지 completed).");
 
   let stopped = false;
   let busy = false;
