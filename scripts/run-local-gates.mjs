@@ -36,6 +36,7 @@ const steps = [
   ["Secret scan", "node", ["scripts/secret-scan.mjs"]],
   ["App install", "npm", ["ci", "--prefix", "app"]],
   ["App runtime typecheck", "npm", ["--prefix", "app", "run", "typecheck"]],
+  ["App ESLint (secret-taint gate)", "npm", ["--prefix", "app", "run", "lint"]],
   ["App runtime unit tests", "npm", ["--prefix", "app", "run", "test:unit"]],
   ["D3 executor dry-run", "npm", ["--prefix", "app", "run", "test:executor"]],
   ["HTML smoke", "node", ["scripts/html-smoke.mjs"]],

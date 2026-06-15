@@ -278,6 +278,9 @@ jobs:
       - name: Typecheck app runtime
         run: npm --prefix app run typecheck
 
+      - name: Lint app runtime (secret-taint gate)
+        run: npm --prefix app run lint
+
       - name: Run app unit tests
         run: npm --prefix app run test:unit
 

@@ -6,9 +6,11 @@
   "description": "D2+ 프로덕션 런타임 — 계약(ts/·schema/·db/)과 검증된 codegen 산출물을 PostgreSQL·Worker에 연결한다. 계약 SSoT는 상위 디렉터리(consumed, not redefined).",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src",
+    "test:lint": "tsx tools/eslint-rules/no-secret-taint.test.ts",
     "dev:serve": "tsx dev/serve.ts",
     "test": "npm run typecheck && npm run test:unit",
-    "test:unit": "tsx test/flow-control.unit.ts && tsx test/telemetry.unit.ts && tsx test/rbac.unit.ts && tsx test/raw-cdp.unit.ts && tsx test/pipeline-raw-hash.unit.ts && npm run test:gateway-unit && npm run test:dom-executor && tsx test/graphile-runner.unit.ts",
+    "test:unit": "tsx test/flow-control.unit.ts && tsx test/telemetry.unit.ts && tsx test/rbac.unit.ts && tsx test/raw-cdp.unit.ts && tsx test/pipeline-raw-hash.unit.ts && npm run test:gateway-unit && npm run test:dom-executor && tsx test/graphile-runner.unit.ts && npm run test:lint",
     "test:gateway-unit": "tsx test/llm-gateway.unit.ts && tsx test/codex-sse-adapter.unit.ts && tsx test/codex-sse-transport.unit.ts",
     "test:dom-executor": "tsx test/stagehand-dom-executor.unit.ts",
     "test:int": "tsx test/run-transition.int.ts && tsx test/runtime-worker-claim.int.ts && tsx test/runtime-worker-resume.int.ts && tsx test/runtime-worker-abort-finalization.int.ts && tsx test/executor-invocation-recorder.int.ts && tsx test/action-plan-cache.int.ts && tsx test/pipeline.int.ts && tsx test/sink-delivery.int.ts && tsx test/outbox-relay.int.ts && tsx test/graphile-worker.int.ts && tsx test/gateway-artifact-sink.int.ts && tsx test/api-runs-graphile.int.ts && tsx test/api-runs.int.ts && tsx test/api-runs-abort.int.ts && tsx test/api-human-tasks.int.ts && tsx test/api-dlq.int.ts && tsx test/api-reads.int.ts && tsx test/api-sites-approve.int.ts && tsx test/api-security.int.ts && tsx test/scenarios.int.ts && tsx test/security-audit.int.ts",
@@ -43,7 +45,11 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/pg": "^8.11.10",
+    "@typescript-eslint/rule-tester": "^8.61.0",
+    "@typescript-eslint/utils": "^8.61.0",
+    "eslint": "^9.39.4",
     "tsx": "^4.16.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.61.0"
   }
 }

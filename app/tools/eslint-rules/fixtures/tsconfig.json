@@ -1,0 +1,12 @@
+{
+  "comment": "Type-aware RuleTester fixtures project for no-secret-taint.test.ts. Inline test code is parsed as a default-project file under this dir so the brand types declared in each test case are type-checked.",
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["*.ts"]
+}
