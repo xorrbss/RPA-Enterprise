@@ -142,6 +142,77 @@ D6-4. Checkout-expiry sweeper (W6/W7) + pause-window TTL deferred
    paused duration and subtract at sweep time. Impact if wrong: incorrect expiry
    timing for suspended workitems — deferred rather than guessed.
 
+## D7 Decisions (finish-loop build deferrals)
+
+These record scope/deferral decisions surfaced while completing the buildable
+backlog in the autonomous finish-loop. They are repo-controlled decisions, not
+proof that the deferred external/runtime work exists. None is an active external
+release blocker (those stay in `release-open-checklist.md`); each names the
+condition under which it becomes buildable.
+
+D7-1. GET /v1/artifacts/{id} deferred
+   Decision: the artifact fetch endpoint (api-surface §5) is not implemented in v1.
+   Rationale: two independent blockers. (a) The `redaction → RBAC` 2-gate cannot be
+   honored under the current RLS: `artifacts_visible_isolation` (migration_core_entities.sql)
+   hides any artifact whose `redaction_status` is not `redacted`/`not_required` (also
+   deleted/quarantined) from the application role, so the endpoint cannot distinguish
+   `ARTIFACT_NOT_REDACTED` (409, "준비 중입니다") from `RESOURCE_NOT_FOUND` (404) without
+   BYPASSRLS, which the API layer must never use (auth-rbac §4). (b) The 200 response
+   body / signed URL is external object-store egress, covered by the existing external
+   object-store/SecretStore blockers. Required decision before building: the redaction-gate
+   read mechanism — either split the artifact RLS into a tenant-only metadata-visible
+   policy plus a separate body-egress gate, or accept "pending ⇒ 404" (existence
+   non-disclosure, which contradicts api-surface §5's 409) — plus the object-store binding.
+   Impact: operators cannot fetch artifact bodies through the control plane in v1; all
+   other artifact lifecycle mechanics (metadata, RLS read gate, lifecycle jobs) exist.
+
+D7-2. OTel call-site instrumentation: wired spans done; remainder + metrics + prod export deferred
+   Decision: §E trace spans are instrumented at every call site that is wired into a
+   tested runtime/gateway flow (7/11): `llm_gateway.call`, `pipeline.raw_persist`,
+   `sink.deliver`, `run.claim`, `browser.lease.acquire`, `session.restore`,
+   `executor.execute`. The remaining 4 (`page_state.resolve`, `action_plan_cache.lookup`,
+   `verify.run`, `artifact.capture`) live in D3-skeletal executor-plugin code that is not
+   yet wired into a tested execution flow (`resolvePageState` has no runtime caller;
+   `verify.run`/`artifact.capture` are dry-run/Chrome-only; `action_plan_cache.lookup` is in
+   the LLM DOM executor pending D5). Metrics (`@opentelemetry/sdk-metrics` + the §E metric
+   recorders) are not started. Rationale: instrumenting uncalled/skeletal code is YAGNI and
+   cannot be integration-tested; metric value and span export only materialize once a
+   provider/exporter is registered in a long-lived process. The OTel provider/exporter
+   production wiring is out of repo scope (architecture §5 — browser/worker pools are
+   separate deploy processes; this repo has no long-lived worker entry, and recurring
+   per-tenant fan-out is blocked by D7-3). Becomes buildable when: the executor flow lands
+   (remaining spans), and a deploy owner registers a TracerProvider/MeterProvider +
+   exporter target (activation). Impact: existing instrumentation is correct and unit/
+   integration-tested with in-memory providers; it is inert until a provider is registered.
+
+D7-3. Recurring scheduler / sweeper per-tenant fan-out deferred
+   Decision: the recurring scheduler that periodically enqueues outbox relay + lease
+   sweeper + artifact lifecycle sweepers (architecture §4/§5, ops-defaults §2/§6) is not
+   built. Rationale: those jobs are tenant-scoped (RLS), so a recurring driver must
+   enumerate tenants, but there is no tenant registry (`tenants` table) in the schema to
+   enumerate, and a cross-tenant infra relay would need a dedicated BYPASSRLS role that is
+   not provisioned. The per-job handlers (relayOutbox, handleLeaseSweeper, artifact
+   redaction/retention, sink_deliver) and the enqueue paths (which carry tenantId in the
+   job payload) are complete and tested — only the recurring tenant fan-out is missing.
+   Required decision before building: a tenant enumeration source (tenant registry table +
+   a dedicated non-superuser BYPASSRLS infra-relay role), per release-decisions #13's
+   SecretStore/role boundary. Impact: enqueued jobs run; time-based sweeps are not
+   auto-scheduled in v1 (operationally driven until the fan-out source exists).
+
+D7-4. Migration model is forward-only with transactional rollback
+   Decision: v1 SQL migrations are forward-only and applied exactly once, in order
+   (`migration_concurrency_idempotency.sql` then `migration_core_entities.sql`). DDL-level
+   re-apply idempotency (e.g. blanket `IF NOT EXISTS`) is intentionally NOT adopted; the
+   migration runner/ledger is responsible for not re-applying a migration. The rollback
+   model is transactional: `db/migration_smoke.sql` applies both migrations inside a
+   `BEGIN … ROLLBACK` isolated schema, proving clean reversibility of a single apply; no
+   down-migration scripts are authored. Rationale: adding ~30 `CREATE … IF NOT EXISTS`
+   guards + guarded policies would be a large, low-value DDL change of debatable
+   correctness (it would mask drift), and forward-only + runner-tracked is the conventional
+   v1 model. Impact: re-running a migration against an already-migrated database is the
+   runner's responsibility, not the DDL's; documented so future agents do not "fix"
+   migrations by bulk-adding `IF NOT EXISTS`.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
