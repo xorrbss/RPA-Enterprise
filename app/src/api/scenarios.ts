@@ -88,8 +88,8 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
         throw new ApiResponseError("RESOURCE_NOT_FOUND");
       }
       const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
-        const r = await c.query<{ id: string; name: string; version: number; promotion_status: string }>(
-          `SELECT s.id, s.name, sv.version, sv.promotion_status
+        const r = await c.query<{ id: string; name: string; version: number; promotion_status: string; ir: unknown }>(
+          `SELECT s.id, s.name, sv.version, sv.promotion_status, sv.ir
              FROM scenarios s
              JOIN scenario_versions sv ON sv.tenant_id = s.tenant_id AND sv.scenario_id = s.id
             WHERE s.tenant_id = $1::uuid AND s.id = $2::uuid
@@ -102,10 +102,11 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
       if (row === null) {
         throw new ApiResponseError("RESOURCE_NOT_FOUND");
       }
+      // ir 본문 포함 — 콘솔 편집 화면이 직전 버전을 prefill할 수 있게 한다(목록 응답에는 ir 미포함 유지).
       reply
         .code(200)
         .header("ETag", String(row.version))
-        .send({ scenario_id: row.id, name: row.name, version: row.version, promotion_status: row.promotion_status });
+        .send({ scenario_id: row.id, name: row.name, version: row.version, promotion_status: row.promotion_status, ir: row.ir });
     },
   );
 
@@ -123,6 +124,75 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
         return { valid: false, report: outcome.report };
       }
       return { valid: true, report: outcome.report };
+    },
+  );
+
+  // PUT /v1/scenarios/{id} — 기존 시나리오 편집 = 새 draft version 작성(api-surface §74).
+  // If-Match(현재 version) 필수, 컴파일 파이프라인 재실행. 이름은 생성 시 고정, version은 직전+1로만 단조 증가.
+  app.put<{ Params: { scenarioId: string } }>(
+    "/v1/scenarios/:scenarioId",
+    { config: { rbacAction: "scenario.update" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const scenarioId = request.params.scenarioId;
+      if (!UUID_RE.test(scenarioId)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const expectedVersion = parseIfMatch(request.headers["if-match"]);
+      if (expectedVersion === undefined) {
+        throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "missing_if_match" });
+      }
+      const signedCommandRefs = await signedCommandRefsFor(deps, principal, "scenario.save");
+      const outcome = compileScenario(request.body, { signedCommandRefs });
+      if (!outcome.ok) {
+        throw new ApiResponseError(outcome.code, outcome.details);
+      }
+      const ir = outcome.ir;
+      const updated = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const current = await c.query<{ name: string; version: number }>(
+          `SELECT s.name, sv.version
+             FROM scenarios s
+             JOIN scenario_versions sv ON sv.tenant_id = s.tenant_id AND sv.scenario_id = s.id
+            WHERE s.tenant_id = $1::uuid AND s.id = $2::uuid
+            ORDER BY sv.version DESC
+            LIMIT 1`,
+          [principal.tenantId, scenarioId],
+        );
+        const row = current.rows[0];
+        if (row === undefined) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        if (row.version !== expectedVersion) {
+          throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "if_match_mismatch", currentVersion: row.version });
+        }
+        // 이름은 scenarios.name에 고정 — 버전 IR의 meta.name 불일치를 조용히 넘기지 않는다.
+        if (ir.meta.name !== row.name) {
+          throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_name_immutable", expected: row.name });
+        }
+        // meta.version 권위 유지 + 갭/충돌 방지: 새 version은 직전+1이어야 한다.
+        if (ir.meta.version !== row.version + 1) {
+          throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "version_must_increment", expected: row.version + 1 });
+        }
+        await c.query(
+          `INSERT INTO scenario_versions
+             (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast, params_schema)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)`,
+          [
+            randomUUID(),
+            principal.tenantId,
+            scenarioId,
+            ir.meta.version,
+            JSON.stringify(ir),
+            outcome.compiledAst,
+            ir.params_schema !== undefined ? JSON.stringify(ir.params_schema) : null,
+          ],
+        );
+        return { version: ir.meta.version };
+      });
+      reply
+        .code(200)
+        .header("ETag", String(updated.version))
+        .send({ scenario_id: scenarioId, version: updated.version, promotion_status: "draft" });
     },
   );
 

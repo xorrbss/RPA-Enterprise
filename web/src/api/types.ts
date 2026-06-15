@@ -65,11 +65,20 @@ export interface ScenarioDetail {
   readonly name: string;
   readonly version: number;
   readonly promotion_status: string;
+  // GET 상세는 IR 본문을 포함(편집 prefill). 목록(ScenarioItem)에는 없음.
+  readonly ir?: unknown;
 }
 
 export interface ValidationResult {
   readonly valid: boolean;
   readonly report: unknown;
+}
+
+/** scenario 생성(POST)·편집(PUT) 응답. */
+export interface ScenarioMutationResult {
+  readonly scenario_id: string;
+  readonly version: number;
+  readonly promotion_status: string;
 }
 
 export interface CreateRunBody {

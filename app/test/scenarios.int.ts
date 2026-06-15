@@ -174,6 +174,7 @@ async function main(): Promise<void> {
       const got = await app.inject({ method: "GET", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: `Bearer ${viewer}` } });
       check("get scenario (viewer read) → 200", got.statusCode === 200, got.body);
       check("get version=1 + ETag", got.json().version === 1 && got.headers.etag === "1", got.body);
+      check("get returns ir body (편집 prefill용)", got.json().ir?.meta?.name === "scenario-a", got.body);
       await withTenantTx(pool, TENANT_A, async (c) => {
         const r = await c.query<{ compiled_ast: string | null }>(`SELECT compiled_ast FROM scenario_versions WHERE scenario_id=$1::uuid`, [scenarioId]);
         const compiled = typeof r.rows[0]?.compiled_ast === "string" ? JSON.parse(r.rows[0].compiled_ast) as unknown : null;
@@ -301,6 +302,31 @@ async function main(): Promise<void> {
       const absent = await app.inject({ method: "GET", url: "/v1/scenarios/10000000-0000-0000-0000-0000000000ff", headers: { authorization: `Bearer ${operator}` } });
       check("absent scenario → 404", absent.statusCode === 404, absent.body);
       check("absent → RESOURCE_NOT_FOUND", absent.json().code === "RESOURCE_NOT_FOUND", absent.body);
+
+      // 7) PUT 편집 = 새 draft version(If-Match, meta.version=현재+1). scenarioId는 현재 version 1.
+      const irV = (name: string, version: number) => ({ ...validIr(name), meta: { name, version } });
+      const auth = (token: string) => `Bearer ${token}`;
+
+      const edited = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(operator), "if-match": "1" }, payload: irV("scenario-a", 2) });
+      check("edit PUT If-Match:1 → 200 v2 + ETag", edited.statusCode === 200 && edited.json().version === 2 && edited.headers.etag === "2", edited.body);
+      check("edit promotion_status=draft", edited.json().promotion_status === "draft", edited.body);
+      const editGot = await app.inject({ method: "GET", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(viewer) } });
+      check("after edit GET version=2", editGot.json().version === 2, editGot.body);
+
+      const editStale = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(operator), "if-match": "1" }, payload: irV("scenario-a", 3) });
+      check("edit stale If-Match → 412 SCENARIO_VERSION_CONFLICT", editStale.statusCode === 412 && editStale.json().code === "SCENARIO_VERSION_CONFLICT", editStale.body);
+      const editNoMatch = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(operator) }, payload: irV("scenario-a", 3) });
+      check("edit missing If-Match → 412 missing_if_match", editNoMatch.statusCode === 412 && editNoMatch.json().details?.reason === "missing_if_match", editNoMatch.body);
+      const editBadVer = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(operator), "if-match": "2" }, payload: irV("scenario-a", 9) });
+      check("edit wrong meta.version → 422 version_must_increment", editBadVer.statusCode === 422 && editBadVer.json().details?.reason === "version_must_increment", editBadVer.body);
+      const editRename = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(operator), "if-match": "2" }, payload: irV("renamed", 3) });
+      check("edit rename → 422 scenario_name_immutable", editRename.statusCode === 422 && editRename.json().details?.reason === "scenario_name_immutable", editRename.body);
+      const editInvalid = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(operator), "if-match": "2" }, payload: { meta: { name: "scenario-a", version: 3 }, start: "missing", nodes: { n1: { terminal: "success" } } } });
+      check("edit invalid IR → 422 IR_SCHEMA_INVALID", editInvalid.statusCode === 422 && editInvalid.json().code === "IR_SCHEMA_INVALID", editInvalid.body);
+      const editViewer = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(viewer), "if-match": "2" }, payload: irV("scenario-a", 3) });
+      check("viewer edit → 403 AUTHZ_FORBIDDEN", editViewer.statusCode === 403 && editViewer.json().code === "AUTHZ_FORBIDDEN", editViewer.body);
+      const editAbsent = await app.inject({ method: "PUT", url: "/v1/scenarios/10000000-0000-0000-0000-0000000000ff", headers: { authorization: auth(operator), "if-match": "1" }, payload: irV("ghost", 2) });
+      check("edit absent scenario → 404 RESOURCE_NOT_FOUND", editAbsent.statusCode === 404 && editAbsent.json().code === "RESOURCE_NOT_FOUND", editAbsent.body);
     } finally {
       await app.close();
     }

@@ -11,6 +11,7 @@ import {
   type RunItem,
   type ScenarioDetail,
   type ScenarioItem,
+  type ScenarioMutationResult,
   type SiteItem,
   type ValidationResult,
   type WorkitemItem,
@@ -43,6 +44,10 @@ export interface ApiClient {
   getSite(id: string): Promise<SiteItem>;
   // scenario validate(V1–V11 dry-run, 비변이 POST, body=IR). run 생성(멱등 명령).
   validateScenario(scenarioId: string, ir: unknown, idempotencyKey: string): Promise<ValidationResult>;
+  // scenario 생성(POST body=IR, 컴파일 파이프라인 통과 시 draft 저장)·편집(PUT If-Match=현재 version → 새 draft version).
+  // 둘 다 Idempotency-Key 불요(api-surface §35). 무효 IR/충돌은 ApiError로 표면화.
+  createScenario(ir: unknown): Promise<ScenarioMutationResult>;
+  updateScenario(scenarioId: string, ir: unknown, version: number): Promise<ScenarioMutationResult>;
   createRun(body: CreateRunBody, idempotencyKey: string): Promise<unknown>;
 }
 
@@ -92,6 +97,26 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     return parseOrThrow<T>(res);
   }
 
+  // Idempotency-Key 없는 변이(scenario create/update). If-Match 등은 extraHeaders로.
+  async function send<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+  ): Promise<T> {
+    const res = await doFetch(`${opts.baseUrl}${path}`, {
+      method,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...(extraHeaders ?? {}),
+        ...authHeaders(),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    return parseOrThrow<T>(res);
+  }
+
   async function post<T>(
     path: string,
     idempotencyKey: string,
@@ -134,6 +159,9 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     getScenario: (id) => get(`/v1/scenarios/${id}`),
     getSite: (id) => get(`/v1/sites/${id}`),
     validateScenario: (scenarioId, ir, key) => post(`/v1/scenarios/${scenarioId}/validate`, key, ir),
+    createScenario: (ir) => send("POST", `/v1/scenarios`, ir),
+    updateScenario: (scenarioId, ir, version) =>
+      send("PUT", `/v1/scenarios/${scenarioId}`, ir, { "If-Match": String(version) }),
     createRun: (body, key) => post(`/v1/runs`, key, body),
   };
 }
