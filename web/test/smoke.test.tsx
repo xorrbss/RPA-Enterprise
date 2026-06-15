@@ -162,6 +162,25 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(calls.some((c) => c.status === "running")).toBe(true));
   });
 
+  test("시나리오 검사: validate 디스패치 + ValidationReport 렌더", async () => {
+    const calls: Array<{ id: string }> = [];
+    renderApp(
+      fakeClient({
+        validateScenario: async (id) => {
+          calls.push({ id });
+          return { valid: false, report: { errors: [{ rule: "V3", message: "no branch matched" }], warnings: [] } };
+        },
+      }),
+    );
+    location.hash = "#irValidation";
+    const idInput = await screen.findByPlaceholderText(/00000000/);
+    fireEvent.change(idInput, { target: { value: "scn-1" } });
+    screen.getByRole("button", { name: "검사 실행" }).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await waitFor(() => expect(screen.getByText("거부")).toBeInTheDocument());
+    expect(screen.getByText(/no branch matched/)).toBeInTheDocument();
+  });
+
   test("운영자 명령 실패 → 코드 표면화", async () => {
     const { ApiError } = await import("../src/api/types");
     window.confirm = () => true;
