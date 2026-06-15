@@ -22,6 +22,12 @@ const FAKE_SESSION = { __fake: true } as unknown as CdpSession;
 function connRefused(): Error {
   return Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:9222"), { code: "ECONNREFUSED" });
 }
+// Stagehand 기동 타임아웃 변종(websocket 미수락) — ECONNREFUSED와 별개지만 동일 기동 레이스.
+function connTimeout(): Error {
+  const e = new Error("Connection timeout: Timed out waiting for CDP websocket to accept connections at ws://127.0.0.1:45893/devtools/browser/x");
+  e.name = "ConnectionTimeoutError";
+  return e;
+}
 
 async function caught(p: Promise<unknown>): Promise<unknown> {
   try {
@@ -63,6 +69,18 @@ async function main(): Promise<void> {
       err instanceof Error && !/ECONNREFUSED/.test(err.message),
       err instanceof Error ? err.message : String(err),
     );
+  }
+
+  // 2b) 연결 타임아웃 변종(ConnectionTimeoutError / "Timed out waiting for CDP websocket") → 동일 기동 레이스로 재시도.
+  {
+    let n = 0;
+    const attemptInit = async (): Promise<CdpSession> => {
+      n += 1;
+      if (n < 2) throw connTimeout();
+      return FAKE_SESSION;
+    };
+    const s = await createStagehandSession(OPTS, { attemptInit, baseDelayMs: 1, maxAttempts: 5 });
+    check("conn-timeout variant → retried to success", s === FAKE_SESSION && n === 2, `n=${n}`);
   }
 
   // 3) 비-연결거부 예외 → 즉시 전파(재시도 안 함, 원 예외 보존).
