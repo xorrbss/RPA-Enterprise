@@ -43,6 +43,8 @@ const steps = [
   ["Console typecheck", "npm", ["--prefix", "web", "run", "typecheck"]],
   ["Console tests", "npm", ["--prefix", "web", "run", "test"]],
   ["Console build", "npm", ["--prefix", "web", "run", "build"]],
+  // 실 브라우저 e2e(빌드 dist + 스텁 API). Chrome 없으면 스크립트가 SKIP(exit 0). app puppeteer-core 재사용.
+  ["Console browser e2e", "npm", ["--prefix", "app", "run", "test:console-e2e"]],
 ];
 
 if (!skipDb) {

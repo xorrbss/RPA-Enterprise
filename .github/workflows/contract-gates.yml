@@ -380,3 +380,20 @@ jobs:
 
       - name: Build console
         run: npm --prefix web run build
+
+      - name: Install app dependencies (puppeteer-core for e2e)
+        run: npm ci --prefix app
+
+      - name: Locate Chrome for console browser e2e
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          if [ -z "${CHROME}" ]; then
+            echo "Chrome or Chromium is required for the console browser e2e"
+            exit 1
+          fi
+          echo "CHROME_PATH=${CHROME}" >> "${GITHUB_ENV}"
+
+      - name: Run console browser e2e
+        run: npm --prefix app run test:console-e2e
