@@ -83,6 +83,9 @@ jobs:
       - name: Run cross-contract consistency
         run: npm --prefix codegen run consistency
 
+      - name: Lint OpenAPI/AsyncAPI specs (spectral)
+        run: npm --prefix codegen run spectral
+
       - name: Run full codegen test gate
         run: npm --prefix codegen test
 

@@ -28,6 +28,7 @@ const steps = [
   ["State-machine fixtures", "npm", ["--prefix", "codegen", "run", "fixtures"]],
   ["Validator fixtures", "npm", ["--prefix", "codegen", "run", "validators"]],
   ["Contract consistency", "npm", ["--prefix", "codegen", "run", "consistency"]],
+  ["OpenAPI/AsyncAPI spectral lint", "npm", ["--prefix", "codegen", "run", "spectral"]],
   ["Full codegen test", "npm", ["--prefix", "codegen", "test"]],
   ["DB static smoke", "node", ["scripts/db-static-smoke.mjs"]],
   ["Workflow/OpenAPI/AsyncAPI YAML parse", "python", ["scripts/yaml-parse.py"]],
