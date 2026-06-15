@@ -204,4 +204,44 @@ describe("D7 운영 콘솔 shell", () => {
     abortBtn.click();
     await waitFor(() => expect(screen.getByText("RUN_ABORTED (409)")).toBeInTheDocument());
   });
+
+  test("자동화 실행(run-start) 디스패치 — 최신 버전 createRun + Idempotency-Key", async () => {
+    const calls: Array<{ sver: string; key: string }> = [];
+    window.confirm = () => true;
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000001", name: "리뷰 수집", version: 2, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000099" }],
+          next_cursor: null,
+        }),
+        createRun: async (body, key) => {
+          calls.push({ sver: body.scenario_version_id, key });
+          return { run_id: "run-1", status: "queued" };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    (await screen.findByRole("button", { name: "실행" })).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.sver).toBe("33333333-aaaa-bbbb-cccc-000000000099"); // latest_version_id 전달
+    expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
+  });
+
+  test("실행 상세 drill-down — getRun 패널(워커/시도 표시)", async () => {
+    const calls: string[] = [];
+    renderApp(
+      fakeClient({
+        listRuns: async () => ({ items: [{ run_id: "run-abc12345", status: "running", current_node: null, as_of: null }], next_cursor: null }),
+        getRun: async (id) => {
+          calls.push(id);
+          return { run_id: id, status: "running", worker_id: "w-7", attempts: 2, as_of: "2026-06-15T00:00:00.000Z" };
+        },
+      }),
+    );
+    location.hash = "#runTrace";
+    (await screen.findByRole("button", { name: "상세" })).click();
+    await waitFor(() => expect(calls).toContain("run-abc12345"));
+    await waitFor(() => expect(screen.getByText("실행 상세 — run-abc1")).toBeInTheDocument());
+    expect(screen.getByText("w-7")).toBeInTheDocument(); // 워커
+  });
 });

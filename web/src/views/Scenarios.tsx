@@ -48,6 +48,12 @@ export function ScenariosView(): JSX.Element {
                   run={(key) => api.promoteScenario(r.scenario_id, r.version, key)}
                   invalidateKeys={[["scenarios"]]}
                 />
+                <ActionButton
+                  label="실행"
+                  confirmText={`${r.name} 최신 버전(v${r.version})으로 실행을 시작할까요? 새 실행이 대기열(queued)에 등록됩니다. 진행은 워커 연결 시 시작됩니다(미연결 시 queued 대기). ‘실행 기록’에서 확인하세요.`}
+                  run={(key) => api.createRun({ scenario_version_id: r.latest_version_id, params: {} }, key)}
+                  invalidateKeys={[["runs"]]}
+                />
               </span>
             ),
           },
