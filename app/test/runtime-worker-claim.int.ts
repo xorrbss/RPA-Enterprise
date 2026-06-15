@@ -41,6 +41,8 @@ const OTHER_WORKER = "10000000-0000-0000-0000-000000000011";
 const GATEWAY_WORKER = "10000000-0000-0000-0000-000000000012";
 const OPEN_CIRCUIT_WORKER = "10000000-0000-0000-0000-000000000013";
 const LIFECYCLE_BYPASS_ROLE = "rpa_lifecycle_bypass";
+// 테스트 전용 BYPASSRLS 역할 비밀번호(역할명과 동일, rpa_smoke 패턴). CI 비밀번호 인증용; 로컬 trust는 무시.
+const LIFECYCLE_BYPASS_PASSWORD = "rpa_lifecycle_bypass";
 const CORRELATION = "20000000-0000-0000-0000-000000000001";
 
 const SCENARIO = "30000000-0000-0000-0000-000000000001";
@@ -296,6 +298,8 @@ async function createLifecycleBypassRole(): Promise<void> {
     port: process.env.PGPORT === undefined ? undefined : Number(process.env.PGPORT),
     database: process.env.PGDATABASE,
     user: "postgres",
+    // CI(비밀번호 인증)는 superuser 비밀번호 필요(PGADMIN_PASSWORD). 로컬 temp-PG(trust)는 무시.
+    password: process.env.PGADMIN_PASSWORD,
     options: `-c search_path=${SCHEMA},public`,
   });
   try {
@@ -303,6 +307,7 @@ async function createLifecycleBypassRole(): Promise<void> {
     await admin.query(
       `CREATE ROLE ${LIFECYCLE_BYPASS_ROLE}
          LOGIN
+         PASSWORD '${LIFECYCLE_BYPASS_PASSWORD}'
          NOSUPERUSER
          NOCREATEDB
          NOCREATEROLE
@@ -1065,6 +1070,8 @@ async function main(): Promise<void> {
       port: process.env.PGPORT === undefined ? undefined : Number(process.env.PGPORT),
       database: process.env.PGDATABASE,
       user: LIFECYCLE_BYPASS_ROLE,
+      // 역할 비밀번호 명시(env PGPASSWORD=rpa_smoke가 아님). 로컬 trust는 무시.
+      password: LIFECYCLE_BYPASS_PASSWORD,
       options: `-c search_path=${SCHEMA},public`,
     });
     try {

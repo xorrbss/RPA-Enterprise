@@ -55,7 +55,10 @@ function connectionString(): string {
   const port = process.env.PGPORT ?? "5432";
   const user = process.env.PGUSER ?? "postgres";
   const db = process.env.PGDATABASE ?? "postgres";
-  return `postgres://${user}@${host}:${port}/${db}`;
+  // 비밀번호 포함(URL-encode) — CI는 비밀번호 인증, 로컬 temp-PG는 trust라 포함돼도 무시.
+  const pw = process.env.PGPASSWORD;
+  const auth = pw !== undefined && pw !== "" ? `${encodeURIComponent(user)}:${encodeURIComponent(pw)}` : encodeURIComponent(user);
+  return `postgres://${auth}@${host}:${port}/${db}`;
 }
 
 function mint(): Promise<string> {
