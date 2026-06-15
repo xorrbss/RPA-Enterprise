@@ -46,6 +46,7 @@ export function WorkitemsView(): JSX.Element {
             render: (r) => (
               <ActionButton
                 label="재처리"
+                action="dlq.replay"
                 confirmText="이 작업항목을 재처리(W10: abandoned→new)할까요?"
                 run={(key) => api.replayDeadLetter(r.dead_letter_id, key)}
                 invalidateKeys={[["dlq", "workitem"], ["workitems"]]}

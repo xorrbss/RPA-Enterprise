@@ -45,6 +45,7 @@ export function RunTraceView(): JSX.Element {
                 {!TERMINAL.has(r.status) && (
                   <ActionButton
                     label="취소"
+                    action="run.abort"
                     confirmText={`실행 ${r.run_id.slice(0, 8)}을(를) 취소할까요? (abort→cancelled)`}
                     run={(key) => api.abortRun(r.run_id, key)}
                     invalidateKeys={[["runs"]]}

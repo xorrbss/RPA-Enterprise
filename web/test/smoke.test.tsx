@@ -18,10 +18,17 @@ function renderApp(client: ApiClient = fakeClient()): void {
   );
 }
 
+// roles 클레임을 담은 가짜 JWT(서명 미검증 — 프론트는 표시 판단용으로만 payload를 읽는다).
+function jwt(roles: readonly string[]): string {
+  const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `e30.${payload}.sig`;
+}
+const ALL_ROLES = ["viewer", "operator", "reviewer", "approver", "admin"];
+
 describe("D7 운영 콘솔 shell", () => {
   beforeEach(() => {
     location.hash = "";
-    localStorage.setItem("rpa.token", "test-token"); // TokenGate 통과
+    localStorage.setItem("rpa.token", jwt(ALL_ROLES)); // 전 역할 — 명령 버튼 표시 + TokenGate 통과
   });
 
   test("토큰 게이트: 토큰 없으면 접속 화면", () => {
@@ -265,5 +272,33 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.id).toBe("site-1");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
+  });
+
+  test("RBAC UI 게이팅: viewer는 읽기 전용 — 명령 버튼 미표시", async () => {
+    localStorage.setItem("rpa.token", jwt(["viewer"]));
+    renderApp(
+      fakeClient({
+        listRuns: async () => ({ items: [{ run_id: "r1", status: "running", current_node: null, as_of: null }], next_cursor: null }),
+      }),
+    );
+    location.hash = "#runTrace";
+    await waitFor(() => expect(screen.getByRole("button", { name: "상세" })).toBeInTheDocument()); // 읽기 drill-down은 허용
+    expect(screen.queryByRole("button", { name: "취소" })).toBeNull(); // run.abort 미보유 → 숨김
+  });
+
+  test("RBAC UI 게이팅: scenario.promote는 admin만 — operator는 승격 숨김, 실행/편집은 표시", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "s1", name: "a", version: 1, latest_version_id: "v1" }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    await waitFor(() => expect(screen.getByRole("button", { name: "실행" })).toBeInTheDocument()); // run.create: operator 보유
+    expect(screen.getByRole("button", { name: "편집" })).toBeInTheDocument(); // scenario.update: operator 보유
+    expect(screen.queryByRole("button", { name: "prod 승격" })).toBeNull(); // scenario.promote: admin만
   });
 });

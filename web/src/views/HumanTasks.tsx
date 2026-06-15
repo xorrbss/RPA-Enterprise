@@ -16,6 +16,7 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
   const assign = (
     <ActionButton
       label="배정"
+      action="human_task.assign"
       confirmText="담당자를 배정할까요?"
       run={(key) => {
         const a = window.prompt("담당자 ID(uuid)")?.trim();
@@ -26,20 +27,20 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
     />
   );
   const escalate = (
-    <ActionButton label="에스컬레이션" confirmText="이 업무를 에스컬레이션할까요?" run={(key) => api.escalateHumanTask(id, key)} invalidateKeys={KEYS} />
+    <ActionButton label="에스컬레이션" action="human_task.escalate" confirmText="이 업무를 에스컬레이션할까요?" run={(key) => api.escalateHumanTask(id, key)} invalidateKeys={KEYS} />
   );
   return (
     <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
       {task.state === "open" && (<>{assign}{escalate}</>)}
       {task.state === "assigned" && (
         <>
-          <ActionButton label="시작" confirmText="이 업무를 시작할까요?" run={(key) => api.startHumanTask(id, key)} invalidateKeys={KEYS} />
+          <ActionButton label="시작" action="human_task.start" confirmText="이 업무를 시작할까요?" run={(key) => api.startHumanTask(id, key)} invalidateKeys={KEYS} />
           {escalate}
         </>
       )}
       {task.state === "in_progress" && (
         <>
-          <ActionButton label="처리완료" confirmText="이 업무를 처리완료할까요?" run={(key) => api.resolveHumanTask(id, key)} invalidateKeys={KEYS} />
+          <ActionButton label="처리완료" action={`human_task.resolve.${task.kind}`} confirmText="이 업무를 처리완료할까요?" run={(key) => api.resolveHumanTask(id, key)} invalidateKeys={KEYS} />
           {escalate}
         </>
       )}

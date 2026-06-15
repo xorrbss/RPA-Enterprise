@@ -29,6 +29,7 @@ export function SecurityView(): JSX.Element {
             r.approval_status === "pending" ? (
               <ActionButton
                 label="승인"
+                action="site.approve"
                 confirmText={`${r.name ?? r.site_profile_id.slice(0, 8)} (위험도 ${r.risk})을(를) 실행 승인할까요? risk=red 사이트의 실행 차단(SITE_PROFILE_BLOCKED)이 해제됩니다.`}
                 run={(key) => api.approveSite(r.site_profile_id, key)}
                 invalidateKeys={[["sites"]]}

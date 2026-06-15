@@ -2,16 +2,19 @@ import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-quer
 import { useState } from "react";
 
 import { ApiError } from "../api/types";
+import { useCan } from "../api/permissions";
 
 // 운영자 명령 버튼: 확인 → mutate(Idempotency-Key 1회 생성) → 관련 쿼리 invalidate → 결과/오류 인라인.
-// 조용한 실패 금지: 오류는 ApiError 코드로 표면화.
+// 조용한 실패 금지: 오류는 ApiError 코드로 표면화. action 지정 시 역할이 없으면 숨김(RBAC UI 게이팅; 최종 강제는 백엔드).
 export function ActionButton(props: {
   label: string;
   confirmText: string;
   run: (idempotencyKey: string) => Promise<unknown>;
   invalidateKeys: readonly QueryKey[];
   disabled?: boolean;
-}): JSX.Element {
+  action?: string;
+}): JSX.Element | null {
+  const can = useCan();
   const qc = useQueryClient();
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
   const mut = useMutation({
@@ -23,6 +26,8 @@ export function ActionButton(props: {
     onError: (e) =>
       setMsg({ tone: "red", text: e instanceof ApiError ? `${e.code} (${e.httpStatus})` : "실패" }),
   });
+  // 권한 없는 명령은 표시하지 않는다(viewer 등 읽기 전용). 백엔드가 최종 강제하므로 보안 경계는 아니다.
+  if (props.action !== undefined && !can(props.action)) return null;
   return (
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
       <button
