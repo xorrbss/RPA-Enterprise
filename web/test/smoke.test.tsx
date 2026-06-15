@@ -228,10 +228,44 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    (await screen.findByRole("button", { name: "실행" })).click();
+    (await screen.findByRole("button", { name: "실행" })).click(); // 실행 패널 열기
+    // getScenario(ir 없음 → url_ref 키 없음) → 추가 입력 없이 '실행 시작'.
+    (await screen.findByRole("button", { name: "실행 시작" })).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.sver).toBe("33333333-aaaa-bbbb-cccc-000000000099"); // latest_version_id 전달
     expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
+  });
+
+  test("파라미터 시나리오 실행 — url_ref 키 입력 폼 → createRun(params)", async () => {
+    const calls: Array<{ params: Record<string, unknown> }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000002", name: "주문 수집", version: 1, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000002" }],
+          next_cursor: null,
+        }),
+        getScenario: async (id) => ({
+          scenario_id: id,
+          name: "주문 수집",
+          version: 1,
+          promotion_status: "prod",
+          ir: { start: "open", nodes: { open: { what: [{ action: "navigate", url_ref: "orders_url" }], next: "done" }, done: { terminal: "success" } } },
+        }),
+        createRun: async (body) => {
+          calls.push({ params: body.params ?? {} });
+          return { run_id: "run-2", status: "queued" };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    (await screen.findByRole("button", { name: "실행" })).click(); // 패널 열기 → getScenario → 키 도출
+    const field = await screen.findByLabelText("orders_url");
+    // 값 미입력 시 '실행 시작' 비활성(필수값 가드).
+    expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled();
+    fireEvent.change(field, { target: { value: "https://shop.example/orders/9" } });
+    screen.getByRole("button", { name: "실행 시작" }).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.params).toEqual({ orders_url: "https://shop.example/orders/9" });
   });
 
   test("실행 상세 drill-down — getRun 패널(워커/시도 표시)", async () => {
