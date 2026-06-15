@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { ApiError, type ValidationResult } from "../api/types";
+import { StepBuilder } from "./StepBuilder";
 
 // 자동화(시나리오) 작성/편집 폼. IR 문서(ir.schema)를 입력 → 저장 시 백엔드 컴파일 파이프라인
 // (ajv→IREL→V1–V11)이 검증. 편집은 GET으로 직전 IR을 불러와 prefill하고 [검사](dry-run) 후
@@ -72,6 +73,9 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
   const [text, setText] = useState<string | null>(() => (isEdit ? null : template("새 자동화 예시", 1)));
   const [report, setReport] = useState<ValidationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 생성은 '양식(단계 빌더)' 기본, 편집은 직전 IR을 불러오므로 'IR 직접 편집' 고정.
+  const [editor, setEditor] = useState<"form" | "ir">(isEdit ? "ir" : "form");
+  const handleBuilderChange = useCallback((ir: unknown) => setText(JSON.stringify(ir, null, 2)), []);
 
   useEffect(() => {
     if (mode.kind !== "edit" || text !== null || detail.data === undefined) return;
@@ -143,13 +147,27 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
         자동화 시나리오를 IR 문서로 작성합니다. 저장 시 문법(ajv)·조건식(IREL)·그래프(V1–V11) 검증을 통과해야 합니다.
         {isEdit ? " 편집은 새 버전(draft)으로 저장되며 이름은 바꿀 수 없습니다." : ""}
       </p>
-      <textarea
-        value={text ?? ""}
-        onChange={(e) => setText(e.target.value)}
-        spellCheck={false}
-        aria-label="IR 문서"
-        style={{ width: "100%", minHeight: 260, fontFamily: "monospace", fontSize: 13, padding: 10, boxSizing: "border-box" }}
-      />
+      {!isEdit && (
+        <div role="tablist" style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          <button className="btn" type="button" aria-pressed={editor === "form"} onClick={() => setEditor("form")}>
+            양식으로 작성
+          </button>
+          <button className="btn" type="button" aria-pressed={editor === "ir"} onClick={() => setEditor("ir")}>
+            IR 직접 편집
+          </button>
+        </div>
+      )}
+      {!isEdit && editor === "form" ? (
+        <StepBuilder onChange={handleBuilderChange} />
+      ) : (
+        <textarea
+          value={text ?? ""}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+          aria-label="IR 문서"
+          style={{ width: "100%", minHeight: 260, fontFamily: "monospace", fontSize: 13, padding: 10, boxSizing: "border-box" }}
+        />
+      )}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
         {isEdit && (
           <button className="btn" type="button" onClick={() => validate.mutate()} disabled={busy}>
