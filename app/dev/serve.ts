@@ -137,11 +137,12 @@ async function seed(pool: Pool): Promise<void> {
       {},
     );
     if (demo.ok) {
-      // 데모 site_profile + page_state_selectors(jsonb) 영속 — run-loop 가 이 사이트의 산출 규칙을 DB에서 로드.
+      // 데모 site_profile + page_state_selectors(jsonb) 영속 — run-loop가 entry URL origin으로 이 사이트를 해소해
+      // 산출 규칙을 DB에서 로드. url_pattern은 canonical origin(scheme://host:port) — 매칭은 URL.origin 동일성.
       await c.query(
         `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, page_state_selectors)
          VALUES ($1,$2,'데모 사이트(리뷰)',$3,$4::jsonb)`,
-        [DEMO_SITE, TENANT, `http://127.0.0.1:${PORT}${FIXTURE_PATH}`, JSON.stringify(DEMO_PAGE_STATE_SELECTORS)],
+        [DEMO_SITE, TENANT, `http://127.0.0.1:${PORT}`, JSON.stringify(DEMO_PAGE_STATE_SELECTORS)],
       );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'데모 — 리뷰 수집(실행 가능)')`, [DEMO_SCEN, TENANT]);
       await c.query(
@@ -382,7 +383,7 @@ async function main(): Promise<void> {
   console.log("────────────────────────────────────────────────────────\n");
 
   // dev 런타임 루프: queued run을 claim→실행기 구동(실 Chrome). 마커 픽스처 데모 시나리오만 completed까지 간다.
-  const runLoop: RunLoop | null = await startRunLoop(pool, TENANT, DEMO_SITE);
+  const runLoop: RunLoop | null = await startRunLoop(pool, TENANT);
 
   const shutdown = (): void => {
     console.log("shutting down dev console…");

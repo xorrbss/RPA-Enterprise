@@ -1,12 +1,12 @@
 /**
  * Dev 런타임 루프 (D3 가동 1단계 — 증분3b, 테스트용). 상주 graphile 워커의 dev 대역.
  *
- * queued run을 주기 폴링 → claim(queued→claimed) → driveClaimedRun(실 UtilityExecutor + CdpPageStateResolver,
- * 실 Chrome)로 completed까지 구동한다. 단일 세션이라 한 번에 한 run만 처리.
+ * queued run을 주기 폴링 → claim(queued→claimed) → **run별 site_profile 해소** → driveClaimedRun(실 UtilityExecutor +
+ * SitePageStateResolver, 실 Chrome)로 completed까지 구동한다. 단일 세션이라 한 번에 한 run만 처리.
  *
- * 한계(정직): PageStateResolver는 'd3-dryrun-v1' 마커가 있는 페이지에서만 flags를 산출한다. 따라서 dev에서
- * 실제로 completed까지 가는 건 **마커 픽스처(serve.ts 제공)를 가리키는 데모 시나리오** 뿐이다. 위저드가 만든
- * 실 URL 시나리오는 PAGE_STATE_UNRESOLVED로 실패하며(2단계 대기), 그 run은 실패 로그를 남기고 멈춘다.
+ * 멀티사이트: run의 시나리오 entry navigate URL의 origin을 site_profiles.url_pattern에 매칭해(resolveSiteProfileId)
+ * 그 사이트의 page_state_selectors를 로드, run별 resolver를 구성한다. 서로 다른 사이트를 가리키는 시나리오가 각자
+ * 맞는 셀렉터로 구동된다. 해소 불가(0-match/ambiguous)·symbolic url_ref·셀렉터 미설정은 loud 로그 후 건너뜀(은폐 금지).
  * Chrome이 없으면 루프는 비활성(run은 queued 유지). 프로덕션은 graphile 워커 데몬 + 브라우저 풀(후속).
  */
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -18,6 +18,7 @@ import type { Pool } from "pg";
 import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
+import { extractEntryNavigateUrlRef, resolveSiteProfileId } from "../src/runtime/site-resolution";
 import { createStagehandSession, SingleSessionProvider } from "../src/executor/cdp-session";
 import { SitePageStateResolver } from "../src/executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
@@ -46,14 +47,14 @@ interface QueuedRun {
   id: string;
   scenario_version_id: string;
   correlation_id: string;
+  ir: unknown;
 }
 
 /**
  * queued run 폴링 루프 시작. Chrome 미발견 시 null(루프 비활성). tenantId 스코프(dev 단일 테넌트).
- * siteProfileId 의 page_state_selectors(DB)를 로드해 PageState 산출 규칙으로 사용한다(dev 단일 사이트;
- * 프로덕션은 run별 BrowserLeasePlan.siteProfileId 로 사이트를 해소한 뒤 동일 로더 사용).
+ * run별로 시나리오 entry URL→site_profile을 해소하고 그 사이트의 page_state_selectors로 resolver를 구성한다.
  */
-export async function startRunLoop(pool: Pool, tenantId: string, siteProfileId: string, intervalMs = 2000): Promise<RunLoop | null> {
+export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 2000): Promise<RunLoop | null> {
   const chrome = findChrome();
   if (chrome === null) {
     console.log("run-loop: Chrome 미발견 → 실행 비활성(만든 run은 queued로 대기). CHROME_PATH 설정 시 활성화.");
@@ -63,18 +64,7 @@ export async function startRunLoop(pool: Pool, tenantId: string, siteProfileId: 
   const session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
   const provider = new SingleSessionProvider(session);
   const executor = new UtilityExecutor(provider);
-
-  // DB 영속 page_state_selectors 로드 → resolver 구성. 미설정/무효면 PAGE_STATE_UNRESOLVED → 루프 비활성(은폐 금지).
-  let resolver: SitePageStateResolver;
-  try {
-    const config = await withTenantTx(pool, tenantId, (c) => loadSitePageStateConfig(c, tenantId, siteProfileId));
-    resolver = new SitePageStateResolver(provider, config);
-  } catch (e) {
-    console.error(`run-loop: site_profile page_state_selectors 로드 실패 → 실행 비활성 — ${e instanceof Error ? e.message : String(e)}`);
-    await session.close();
-    return null;
-  }
-  console.log("run-loop: 실 Chrome 실행기 활성 — queued run을 polling해 구동(DB site-profile 셀렉터로 마커 없는 실 URL풍 페이지 completed).");
+  console.log("run-loop: 실 Chrome 실행기 활성 — queued run을 polling해 구동(run별 site_profile 해소 → DB 셀렉터로 completed).");
 
   let stopped = false;
   let busy = false;
@@ -85,8 +75,10 @@ export async function startRunLoop(pool: Pool, tenantId: string, siteProfileId: 
     try {
       const next = await withTenantTx(pool, tenantId, async (c) => {
         const r = await c.query<QueuedRun>(
-          `SELECT id::text AS id, scenario_version_id::text AS scenario_version_id, correlation_id::text AS correlation_id
-             FROM runs WHERE status='queued' ORDER BY created_at LIMIT 1`,
+          `SELECT r.id::text AS id, r.scenario_version_id::text AS scenario_version_id,
+                  r.correlation_id::text AS correlation_id, sv.ir AS ir
+             FROM runs r JOIN scenario_versions sv ON sv.id = r.scenario_version_id
+            WHERE r.status='queued' ORDER BY r.created_at LIMIT 1`,
         );
         return r.rows[0] ?? null;
       });
@@ -111,6 +103,15 @@ export async function startRunLoop(pool: Pool, tenantId: string, siteProfileId: 
       }
 
       try {
+        // run별 site_profile 해소 → 그 사이트의 page_state_selectors로 resolver 구성.
+        const resolved = await withTenantTx(pool, tenantId, async (c) => {
+          const entryUrlRef = extractEntryNavigateUrlRef(next.ir);
+          const siteProfileId = await resolveSiteProfileId(c, { tenantId, entryUrlRef });
+          const config = await loadSitePageStateConfig(c, tenantId, siteProfileId);
+          return { siteProfileId, config };
+        });
+        const resolver = new SitePageStateResolver(provider, resolved.config);
+
         const result = await driveClaimedRun(
           {
             runId: next.id,
@@ -118,16 +119,16 @@ export async function startRunLoop(pool: Pool, tenantId: string, siteProfileId: 
             scenarioVersionId: next.scenario_version_id,
             correlationId: next.correlation_id,
             leaseId: "dev-lease",
-            siteProfileId,
+            siteProfileId: resolved.siteProfileId,
             browserIdentityId: "dev-bid",
             networkPolicyId: "dev-np",
           },
           { pool, executor, resolver, workerId: WORKER_ID },
         );
-        console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (${result.outcome.visited.join("→")})`);
+        console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
       } catch (e) {
-        // 실패(예: 마커 없는 실 URL → PAGE_STATE_UNRESOLVED)는 표면화. run은 running에서 멈춤(실패 전이는 후속).
-        console.error(`run-loop: ${next.id.slice(0, 8)} 구동 실패 — ${e instanceof Error ? e.message : String(e)}`);
+        // 해소 실패(symbolic url_ref·0-match·ambiguous·셀렉터 미설정) 또는 구동 실패는 표면화(은폐 금지). run은 claimed에서 멈춤.
+        console.error(`run-loop: ${next.id.slice(0, 8)} 해소/구동 실패 — ${e instanceof Error ? e.message : String(e)}`);
       }
     } catch (e) {
       console.error("run-loop tick error:", e instanceof Error ? e.message : String(e));
