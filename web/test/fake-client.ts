@@ -21,6 +21,13 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     resolveHumanTask: async () => ({ status: "resolved" }),
     escalateHumanTask: async () => ({ status: "escalated" }),
     promoteScenario: async () => ({ version: 2, promotion_status: "prod" }),
+    getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+    getWorkitem: async (id) => ({ workitem_id: id, status: "new", unique_reference: "wi", target_id: null }),
+    getHumanTask: async (id) => ({ human_task_id: id, state: "open", kind: "approval", assignee: null, timeout: null, run_id: null }),
+    getScenario: async (id) => ({ scenario_id: id, name: "s", version: 1, promotion_status: "draft" }),
+    getSite: async (id) => ({ site_profile_id: id, risk: "green", approval_status: "pending", circuit_status: "closed" }),
+    validateScenario: async () => ({ valid: true, report: { errors: [], warnings: [] } }),
+    createRun: async () => ({ run_id: "00000000-0000-0000-0000-000000000099", status: "queued" }),
     ...overrides,
   };
 }

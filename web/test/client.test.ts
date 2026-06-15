@@ -79,6 +79,33 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.body).toEqual({ assignee: "user-9" });
   });
 
+  test("detail GET-by-id 경로", async () => {
+    const { calls, client } = harness({ body: { run_id: "r1", status: "running", worker_id: null, attempts: 1, as_of: null } });
+    await client.getRun("r1");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/runs/r1");
+    const w = harness({ body: {} });
+    await w.client.getHumanTask("ht-9");
+    expect(w.calls[0]?.url).toBe("http://api.test/v1/human-tasks/ht-9");
+  });
+
+  test("validateScenario → POST .../validate + body=IR", async () => {
+    const { calls, client } = harness({ body: { valid: true, report: {} } });
+    const ir = { nodes: [{ id: "n1" }] };
+    await client.validateScenario("scn-1", ir, "k");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenarios/scn-1/validate");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.body).toEqual(ir);
+  });
+
+  test("createRun → POST /v1/runs + body{scenario_version_id} + Idempotency-Key", async () => {
+    const { calls, client } = harness({ body: { run_id: "x" } });
+    await client.createRun({ scenario_version_id: "sv-1" }, "idem-run");
+    expect(calls[0]?.url).toBe("http://api.test/v1/runs");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-run");
+    expect(calls[0]?.body).toEqual({ scenario_version_id: "sv-1" });
+  });
+
   test("4xx 응답 → ApiError(code, httpStatus) 표면화 (조용한 실패 금지)", async () => {
     const { client } = harness({ status: 409, body: { code: "RUN_ABORTED" } });
     await expect(client.abortRun("run-x", "k")).rejects.toMatchObject({ httpStatus: 409, code: "RUN_ABORTED" });

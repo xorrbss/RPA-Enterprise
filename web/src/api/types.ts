@@ -52,6 +52,32 @@ export interface SiteItem {
   readonly name?: string;
 }
 
+export interface RunDetail {
+  readonly run_id: string;
+  readonly status: string;
+  readonly worker_id: string | null;
+  readonly attempts: number;
+  readonly as_of: string | null;
+}
+
+export interface ScenarioDetail {
+  readonly scenario_id: string;
+  readonly name: string;
+  readonly version: number;
+  readonly promotion_status: string;
+}
+
+export interface ValidationResult {
+  readonly valid: boolean;
+  readonly report: unknown;
+}
+
+export interface CreateRunBody {
+  readonly scenario_version_id: string;
+  readonly params?: Record<string, unknown>;
+  readonly workitem_id?: string;
+}
+
 export interface GatewayPolicy {
   readonly model: string;
   readonly capabilities?: Record<string, unknown>;

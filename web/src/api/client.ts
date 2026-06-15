@@ -1,14 +1,18 @@
 // 주입형 ApiClient 포트 + HTTP 구현. 테스트는 동일 인터페이스의 fake를 주입(백엔드 무의존).
 import {
   ApiError,
+  type CreateRunBody,
   type DeadLetterItem,
   type GatewayPolicy,
   type HumanTaskItem,
   type ListParams,
   type Paginated,
+  type RunDetail,
   type RunItem,
+  type ScenarioDetail,
   type ScenarioItem,
   type SiteItem,
+  type ValidationResult,
   type WorkitemItem,
 } from "./types";
 
@@ -31,6 +35,15 @@ export interface ApiClient {
   escalateHumanTask(id: string, idempotencyKey: string, reason?: string): Promise<unknown>;
   // scenario 승격: If-Match(현재 version) + body{target:"prod"} + Idempotency-Key. 충돌→SCENARIO_VERSION_CONFLICT 표면화.
   promoteScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
+  // 상세 GET-by-id(RLS 스코프, 미존재/타테넌트→404). drill-down 뷰의 선행.
+  getRun(runId: string): Promise<RunDetail>;
+  getWorkitem(id: string): Promise<WorkitemItem>;
+  getHumanTask(id: string): Promise<HumanTaskItem>;
+  getScenario(id: string): Promise<ScenarioDetail>;
+  getSite(id: string): Promise<SiteItem>;
+  // scenario validate(V1–V11 dry-run, 비변이 POST, body=IR). run 생성(멱등 명령).
+  validateScenario(scenarioId: string, ir: unknown, idempotencyKey: string): Promise<ValidationResult>;
+  createRun(body: CreateRunBody, idempotencyKey: string): Promise<unknown>;
 }
 
 export interface HttpApiClientOptions {
@@ -115,5 +128,12 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     escalateHumanTask: (id, key, reason) => post(`/v1/human-tasks/${id}/escalate`, key, reason !== undefined ? { reason } : {}),
     promoteScenario: (scenarioId, version, key) =>
       post(`/v1/scenarios/${scenarioId}/promote`, key, { target: "prod" }, { "If-Match": String(version) }),
+    getRun: (id) => get(`/v1/runs/${id}`),
+    getWorkitem: (id) => get(`/v1/workitems/${id}`),
+    getHumanTask: (id) => get(`/v1/human-tasks/${id}`),
+    getScenario: (id) => get(`/v1/scenarios/${id}`),
+    getSite: (id) => get(`/v1/sites/${id}`),
+    validateScenario: (scenarioId, ir, key) => post(`/v1/scenarios/${scenarioId}/validate`, key, ir),
+    createRun: (body, key) => post(`/v1/runs`, key, body),
   };
 }
