@@ -16,7 +16,9 @@ const FLAGS = [
   "reviews_visible",
 ] as const;
 const TERMINALS = ["success", "success_empty", "fail_business", "fail_system"] as const;
-const ACTIONS = ["none", "observe", "act"] as const;
+// 빌더가 안전 생성하는 액션: 추가 필수 필드가 없거나(act/observe) 단일 ref만 필요한 것(extract→schema_ref,
+// navigate→url_ref). shell(cmd_ref 등록 필요)·api_call 등은 'IR 직접 편집'에서 다룬다.
+const ACTIONS = ["none", "observe", "act", "extract", "navigate"] as const;
 
 type Rule = { when: string; target: string; priority: number };
 type Flow =
@@ -26,14 +28,31 @@ type Flow =
 export interface Step {
   id: string;
   action: (typeof ACTIONS)[number];
+  schemaRef?: string; // extract 전용
+  urlRef?: string; // navigate 전용
   flow: Flow;
+}
+
+// 액션 객체 생성(ir.schema action: additionalProperties false → 허용 키만 emit, 필수 필드 포함).
+function actionObj(s: Step): Record<string, unknown> | null {
+  switch (s.action) {
+    case "none":
+      return null;
+    case "extract":
+      return { action: "extract", schema_ref: s.schemaRef && s.schemaRef.length > 0 ? s.schemaRef : "extracted_rows" };
+    case "navigate":
+      return { action: "navigate", url_ref: s.urlRef && s.urlRef.length > 0 ? s.urlRef : "target_url" };
+    default:
+      return { action: s.action }; // act, observe
+  }
 }
 
 function stepsToIr(name: string, steps: readonly Step[]): unknown {
   const nodes: Record<string, Record<string, unknown>> = {};
   for (const s of steps) {
     const node: Record<string, unknown> = {};
-    if (s.action !== "none") node.what = [{ action: s.action }];
+    const act = actionObj(s);
+    if (act !== null) node.what = [act];
     if (s.flow.kind === "terminal") node.terminal = s.flow.terminal;
     else if (s.flow.kind === "next") node.next = s.flow.target;
     else node.on = s.flow.rules.map((r) => ({ when: r.when, target: r.target, priority: r.priority }));
@@ -89,12 +108,37 @@ export function StepBuilder({ onChange }: { onChange: (ir: unknown) => void }): 
             <strong style={{ minWidth: 34 }}>{i === 0 ? `${s.id}★` : s.id}</strong>
             <label>
               <span className="subtle">동작</span>{" "}
-              <select value={s.action} onChange={(e) => update(i, { action: e.target.value as Step["action"] })} style={SELECT}>
+              <select
+                value={s.action}
+                onChange={(e) => {
+                  const action = e.target.value as Step["action"];
+                  const patch: Partial<Step> = { action };
+                  // 필수 ref를 비우지 않도록 전환 시 기본값 채움(유효 IR 유지).
+                  if (action === "extract" && (s.schemaRef === undefined || s.schemaRef.length === 0)) patch.schemaRef = "extracted_rows";
+                  if (action === "navigate" && (s.urlRef === undefined || s.urlRef.length === 0)) patch.urlRef = "target_url";
+                  update(i, patch);
+                }}
+                style={SELECT}
+              >
                 <option value="none">없음(흐름만)</option>
                 <option value="observe">관찰(observe)</option>
                 <option value="act">조작(act)</option>
+                <option value="extract">추출(extract)</option>
+                <option value="navigate">이동(navigate)</option>
               </select>
             </label>
+            {s.action === "extract" && (
+              <label>
+                <span className="subtle">출력 스키마(schema_ref)</span>{" "}
+                <input value={s.schemaRef ?? ""} onChange={(e) => update(i, { schemaRef: e.target.value })} style={{ ...SELECT, width: 150 }} />
+              </label>
+            )}
+            {s.action === "navigate" && (
+              <label>
+                <span className="subtle">이동 URL(url_ref)</span>{" "}
+                <input value={s.urlRef ?? ""} onChange={(e) => update(i, { urlRef: e.target.value })} style={{ ...SELECT, width: 170 }} />
+              </label>
+            )}
             <label>
               <span className="subtle">다음</span>{" "}
               <select value={s.flow.kind} onChange={(e) => setFlowKind(i, e.target.value as Flow["kind"])} style={SELECT}>
@@ -142,7 +186,7 @@ export function StepBuilder({ onChange }: { onChange: (ir: unknown) => void }): 
         + 단계 추가
       </button>
       <p className="subtle" style={{ margin: "8px 0 0" }}>
-        ★ = 시작 단계. 저장 시 그래프 검증(V1–V11)을 통과해야 합니다. 세부 동작(extract/입력 등)은 ‘IR 직접 편집’에서 보강하세요.
+        ★ = 시작 단계. 저장 시 그래프 검증(V1–V11)을 통과해야 합니다. shell·api_call 등 추가 동작은 ‘IR 직접 편집’에서 보강하세요.
       </p>
     </div>
   );
