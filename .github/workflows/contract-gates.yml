@@ -333,6 +333,17 @@ jobs:
           PGPASSWORD: rpa_smoke
         run: npm --prefix app run test:int
 
+      - name: Install and build console for live e2e
+        run: |
+          npm ci --prefix web
+          npm --prefix web run build
+
+      - name: Run console live e2e (browser to API to PostgreSQL)
+        env:
+          PGUSER: ${{ env.PGSMOKE_USER }}
+          PGPASSWORD: rpa_smoke
+        run: npm --prefix app run test:console-live-e2e
+
   html-smoke:
     name: HTML console smoke
     runs-on: ubuntu-latest

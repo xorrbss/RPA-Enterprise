@@ -60,6 +60,8 @@ if (!skipDb) {
   steps.push(["PostgreSQL non-bypass role proof", verifyNonBypassDbRole]);
   steps.push(["PostgreSQL 15 migration smoke", "node", ["scripts/db-migration-smoke.mjs", "--require-non-bypass"]]);
   steps.push(["App runtime integration tests", "npm", ["--prefix", "app", "run", "test:int"]]);
+  // 라이브 e2e(browser→Fastify→PostgreSQL). web/dist(Console build) + PG env + Chrome 필요(없으면 SKIP).
+  steps.push(["Console live e2e (browser->API->DB)", "npm", ["--prefix", "app", "run", "test:console-live-e2e"]]);
 } else {
   console.log(
     [
