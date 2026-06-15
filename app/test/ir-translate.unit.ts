@@ -1,9 +1,11 @@
 /**
- * RQ-008 단위 테스트 — compiledScenarioFrom(ir + compiled_ast → CompiledScenario) 순수 변환 검증.
+ * 단위 테스트 — compiledScenarioFrom(ir + compiled_ast → CompiledScenario) 순수 변환.
  *
- * 핵심: IR on[]과 compiled_ast on[]의 드리프트(개수 불일치/부재)는 구조 결함이므로 IR_SCHEMA_INVALID로
- * 표면화(조용한 빈 branches → 런타임 IR_NO_BRANCH_MATCHED 오분류 금지). 정상 변환·next/terminal·미지원 흐름도 확인.
- * 실행: tsx test/ir-translate.unit.ts.
+ * 두 관심사를 함께 검증한다(외부 의존 없음). 실행: tsx test/ir-translate.unit.ts.
+ *  (A) RQ-008 compiled_ast on[] 드리프트: IR on[]과 compiled_ast on[]의 개수 불일치/부재는 구조 결함이므로
+ *      IR_SCHEMA_INVALID로 표면화(조용한 빈 branches → 런타임 IR_NO_BRANCH_MATCHED 오분류 금지).
+ *  (B) url_ref → params URL 해소: navigate.url_ref(키)가 params로 해소돼 navigate.url로 들어가고, 해소 실패(URL_REF_*)는
+ *      InterpreterError로 환원돼 타입 경계를 넘지 않는다(조용한 unknown 금지). 드라이버는 compiledScenarioFrom(ir,ast,run.params)로 이 경로를 탄다.
  */
 import { compiledScenarioFrom } from "../src/runtime/ir-translate";
 import { InterpreterError } from "../src/runtime/ir-interpreter";
@@ -36,7 +38,17 @@ const irOn = {
 };
 const astOn1 = { nodes: { n1: { on: [{ when: { kind: "flag", name: "x" }, target: "n2", priority: 0 }] } } };
 
+// navigate(url_ref=키) → terminal IR.
+const irNav = {
+  start: "open",
+  nodes: {
+    open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "done" },
+    done: { terminal: "success" },
+  },
+};
+
 function main(): void {
+  // ── (A) compiled_ast on[] 드리프트 (RQ-008) ──
   // 1) 정상: ir on[] 1개 ↔ compiled on[] 1개 → branches 1개.
   {
     const s = compiledScenarioFrom(irOn, astOn1);
@@ -49,7 +61,7 @@ function main(): void {
     const err = caught(() => compiledScenarioFrom(irOn, { nodes: {} }));
     check(
       "compiled_ast on 부재 → IR_SCHEMA_INVALID(드리프트)",
-      err instanceof InterpreterError && (err as InterpreterError).code === "IR_SCHEMA_INVALID" && /드리프트/.test((err as Error).message),
+      err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID" && /드리프트/.test((err as Error).message),
       String(err),
     );
   }
@@ -59,7 +71,7 @@ function main(): void {
     const err = caught(() => compiledScenarioFrom(irOn, { nodes: { n1: { on: [] } } }));
     check(
       "compiled_ast on 개수 불일치 → IR_SCHEMA_INVALID",
-      err instanceof InterpreterError && (err as InterpreterError).code === "IR_SCHEMA_INVALID",
+      err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID",
       String(err),
     );
   }
@@ -75,14 +87,49 @@ function main(): void {
   {
     const ir = { start: "a", nodes: { a: { loop: {} } } };
     const err = caught(() => compiledScenarioFrom(ir, {}));
-    check("미지원 흐름 → UNSUPPORTED_FLOW", err instanceof InterpreterError && (err as InterpreterError).code === "UNSUPPORTED_FLOW", String(err));
+    check("미지원 흐름 → UNSUPPORTED_FLOW", err instanceof InterpreterError && err.code === "UNSUPPORTED_FLOW", String(err));
+  }
+
+  // ── (B) url_ref → params URL 해소 ──
+  // 6) 정상: url_ref(키) → params 의 절대 URL 이 navigate.url 로.
+  {
+    const s = compiledScenarioFrom(irNav, {}, { entry_url: "http://a.example/orders" });
+    const nav = s.nodes.open?.what[0] as { type: string; url: string } | undefined;
+    check("navigate.url_ref(키) → params URL 해소", nav?.type === "navigate" && nav.url === "http://a.example/orders", JSON.stringify(nav));
+  }
+
+  // 7) params 누락 → InterpreterError(URL_REF_PARAM_MISSING) (SiteResolutionError 가 타입 경계 넘지 않음)
+  {
+    const err1 = caught(() => compiledScenarioFrom(irNav, {}, {}));
+    const err2 = caught(() => compiledScenarioFrom(irNav, {}));
+    check(
+      "params 누락/undefined → InterpreterError(URL_REF_PARAM_MISSING)",
+      err1 instanceof InterpreterError && err1.code === "URL_REF_PARAM_MISSING" && err2 instanceof InterpreterError && err2.code === "URL_REF_PARAM_MISSING",
+      `${String(err1)} / ${String(err2)}`,
+    );
+  }
+
+  // 8) 비-절대URL params 값 → InterpreterError(URL_REF_VALUE_NOT_ABSOLUTE_URL)
+  {
+    const err = caught(() => compiledScenarioFrom(irNav, {}, { entry_url: "orders_url" }));
+    check(
+      "비-절대URL params 값 → InterpreterError(URL_REF_VALUE_NOT_ABSOLUTE_URL)",
+      err instanceof InterpreterError && err.code === "URL_REF_VALUE_NOT_ABSOLUTE_URL",
+      String(err),
+    );
+  }
+
+  // 9) url_ref 키 자체 누락(문자열 아님) → IR_SCHEMA_INVALID
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "o", nodes: { o: { what: [{ action: "navigate" }], terminal: "success" } } }, {}, {}));
+    check("navigate.url_ref 키 누락 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: RQ-008 ir-translate compiled_ast drift unit green");
+  console.log("\nPASS: ir-translate — compiled_ast on[] 드리프트(RQ-008) + url_ref→params URL 해소/InterpreterError 경계");
   process.exit(0);
 }
 

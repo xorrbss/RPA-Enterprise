@@ -18,7 +18,7 @@ import type { Pool } from "pg";
 import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
-import { extractEntryNavigateUrlRef, resolveSiteProfileId } from "../src/runtime/site-resolution";
+import { extractEntryNavigateUrlRef, resolveSiteProfileId, resolveUrlRef } from "../src/runtime/site-resolution";
 import { createStagehandSession, SingleSessionProvider } from "../src/executor/cdp-session";
 import { SitePageStateResolver } from "../src/executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
@@ -48,6 +48,13 @@ interface QueuedRun {
   scenario_version_id: string;
   correlation_id: string;
   ir: unknown;
+  params: unknown;
+}
+
+// runs.params(jsonb) 정규화: 문자열이면 파싱, null/부재면 undefined(빈 {} 와 구분 — navigate 키 해소가 loud 실패).
+function normalizeParams(raw: unknown): Record<string, unknown> | undefined {
+  const v = typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
+  return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
 }
 
 /**
@@ -76,7 +83,7 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
       const next = await withTenantTx(pool, tenantId, async (c) => {
         const r = await c.query<QueuedRun>(
           `SELECT r.id::text AS id, r.scenario_version_id::text AS scenario_version_id,
-                  r.correlation_id::text AS correlation_id, sv.ir AS ir
+                  r.correlation_id::text AS correlation_id, sv.ir AS ir, r.params AS params
              FROM runs r JOIN scenario_versions sv ON sv.id = r.scenario_version_id
             WHERE r.status='queued' ORDER BY r.created_at LIMIT 1`,
         );
@@ -103,10 +110,11 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
       }
 
       try {
-        // run별 site_profile 해소 → 그 사이트의 page_state_selectors로 resolver 구성.
+        // url_ref(키) → params 의 절대 URL 해소 → 그 origin 으로 site_profile 해소 → page_state_selectors 로 resolver.
+        const params = normalizeParams(next.params);
         const resolved = await withTenantTx(pool, tenantId, async (c) => {
-          const entryUrlRef = extractEntryNavigateUrlRef(next.ir);
-          const siteProfileId = await resolveSiteProfileId(c, { tenantId, entryUrlRef });
+          const entryUrl = resolveUrlRef(extractEntryNavigateUrlRef(next.ir), params);
+          const siteProfileId = await resolveSiteProfileId(c, { tenantId, entryUrlRef: entryUrl });
           const config = await loadSitePageStateConfig(c, tenantId, siteProfileId);
           return { siteProfileId, config };
         });
@@ -122,12 +130,13 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
             siteProfileId: resolved.siteProfileId,
             browserIdentityId: "dev-bid",
             networkPolicyId: "dev-np",
+            params,
           },
           { pool, executor, resolver, workerId: WORKER_ID },
         );
         console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
       } catch (e) {
-        // 해소 실패(symbolic url_ref·0-match·ambiguous·셀렉터 미설정) 또는 구동 실패는 표면화(은폐 금지). run은 claimed에서 멈춤.
+        // 해소 실패(url_ref params 누락·0-match·ambiguous·셀렉터 미설정) 또는 구동 실패는 표면화(은폐 금지). run은 claimed에서 멈춤.
         console.error(`run-loop: ${next.id.slice(0, 8)} 해소/구동 실패 — ${e instanceof Error ? e.message : String(e)}`);
       }
     } catch (e) {

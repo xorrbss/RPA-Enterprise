@@ -18,7 +18,7 @@ import { compileScenario } from "../src/api/compile-pipeline";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun, type ClaimedRun } from "../src/runtime/run-step-driver";
-import { extractEntryNavigateUrlRef, resolveSiteProfileId, SiteResolutionError } from "../src/runtime/site-resolution";
+import { extractEntryNavigateUrlRef, resolveSiteProfileId, resolveUrlRef, SiteResolutionError } from "../src/runtime/site-resolution";
 import { createStagehandSession, SingleSessionProvider } from "../src/executor/cdp-session";
 import { SitePageStateResolver } from "../src/executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
@@ -73,12 +73,13 @@ function startServer(port: number, html: () => string): Promise<Server> {
 const selectorsA = { authenticatedWhen: { selector: ".user-menu" }, flags: { reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 } } };
 const selectorsB = { authenticatedWhen: { selector: ".user-menu" }, flags: { no_review_message_visible: { kind: "present", selector: ".no-reviews" } } };
 
-function scenarioIr(origin: string, flag: string): unknown {
+// url_ref는 params 키 "entry_url" — 같은 IR이 run별 params로 서로 다른 origin을 가리킨다(멀티사이트 핵심).
+function scenarioIr(flag: string): unknown {
   return {
     meta: { name: `multisite-${flag}`, version: 1 },
     start: "open",
     nodes: {
-      open: { what: [{ action: "navigate", url_ref: `${origin}/p` }], next: "check" },
+      open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
       check: { what: [{ action: "observe" }], on: [{ when: `flags.${flag}`, target: "done", priority: 1 }] },
       done: { terminal: "success" },
     },
@@ -106,8 +107,8 @@ async function main(): Promise<void> {
       setup.release();
     }
 
-    const compA = compileScenario(scenarioIr(ORIGIN_A, "reviews_visible"), {});
-    const compB = compileScenario(scenarioIr(ORIGIN_B, "no_review_message_visible"), {});
+    const compA = compileScenario(scenarioIr("reviews_visible"), {});
+    const compB = compileScenario(scenarioIr("no_review_message_visible"), {});
     check("두 시나리오 컴파일", compA.ok && compB.ok);
     if (!compA.ok || !compB.ok) throw new Error("scenario compile 실패");
 
@@ -122,16 +123,24 @@ async function main(): Promise<void> {
           [sver, TENANT, scen, JSON.stringify(comp.ir), comp.compiledAst],
         );
       }
-      for (const [run, sver] of [[RUN_A, SVER_A] as const, [RUN_B, SVER_B] as const]) {
-        await c.query(`INSERT INTO runs (id,tenant_id,scenario_version_id,status,correlation_id,attempts,as_of) VALUES ($1,$2,$3,'queued',$1,1,'2026-06-16T00:00:00Z')`, [run, TENANT, sver]);
+      // run별 params.entry_url 로 서로 다른 origin 주입(같은 IR 키 'entry_url').
+      for (const [run, sver, entryUrl] of [[RUN_A, SVER_A, `${ORIGIN_A}/p`] as const, [RUN_B, SVER_B, `${ORIGIN_B}/p`] as const]) {
+        await c.query(
+          `INSERT INTO runs (id,tenant_id,scenario_version_id,status,correlation_id,attempts,params,as_of) VALUES ($1,$2,$3,'queued',$1,1,$4::jsonb,'2026-06-16T00:00:00Z')`,
+          [run, TENANT, sver, JSON.stringify({ entry_url: entryUrl })],
+        );
       }
     });
 
-    // run-loop의 per-run 해소 경로를 그대로 재현.
+    // run-loop의 per-run 해소 경로를 그대로 재현: runs.params 로드 → url_ref→URL → origin→site.
     async function driveRun(runId: string, sver: string, ir: unknown): Promise<{ siteId: string; flagKeys: string[]; state: string; dbStatus: string | null }> {
+      const params = await withTenantTx(pool, TENANT, async (c) => {
+        const r = await c.query<{ params: unknown }>(`SELECT params FROM runs WHERE id=$1::uuid`, [runId]);
+        return (r.rows[0]?.params ?? undefined) as Record<string, unknown> | undefined;
+      });
       const resolved = await withTenantTx(pool, TENANT, async (c) => {
-        const entryUrlRef = extractEntryNavigateUrlRef(ir);
-        const siteId = await resolveSiteProfileId(c, { tenantId: TENANT, entryUrlRef });
+        const entryUrl = resolveUrlRef(extractEntryNavigateUrlRef(ir), params);
+        const siteId = await resolveSiteProfileId(c, { tenantId: TENANT, entryUrlRef: entryUrl });
         const config = await loadSitePageStateConfig(c, TENANT, siteId);
         return { siteId, config };
       });
@@ -139,7 +148,7 @@ async function main(): Promise<void> {
       await withTenantTx(pool, TENANT, (c) =>
         applyRunTransition(c, { tenantId: TENANT, runId, fromStatus: "queued", event: { type: "worker.claimed" }, guard: { leaseAcquired: true }, correlationId: runId, workerId: WORKER, eventIdempotencyKey: `${runId}:worker.claimed` }),
       );
-      const run: ClaimedRun = { runId, tenantId: TENANT, scenarioVersionId: sver, correlationId: runId, leaseId: "lease", siteProfileId: resolved.siteId, browserIdentityId: "bid", networkPolicyId: "np" };
+      const run: ClaimedRun = { runId, tenantId: TENANT, scenarioVersionId: sver, correlationId: runId, leaseId: "lease", siteProfileId: resolved.siteId, browserIdentityId: "bid", networkPolicyId: "np", params };
       const result = await driveClaimedRun(run, { pool, executor, resolver, workerId: WORKER });
       const dbStatus = await withTenantTx(pool, TENANT, async (c) => {
         const r = await c.query<{ status: string }>(`SELECT status FROM runs WHERE id=$1::uuid`, [runId]);

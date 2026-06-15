@@ -82,7 +82,7 @@ const scenarioIr = {
   meta: { name: "site-pipeline-test", version: 1 },
   start: "open",
   nodes: {
-    open: { what: [{ action: "navigate", url_ref: `${ORIGIN}/fixture/reviews` }], next: "check" },
+    open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
     check: {
       what: [{ action: "observe" }],
       on: [
@@ -167,6 +167,7 @@ async function main(): Promise<void> {
       siteProfileId: SITE,
       browserIdentityId: "bid-1",
       networkPolicyId: "np-1",
+      params: { entry_url: `${ORIGIN}/fixture/reviews` },
     };
     const result = await driveClaimedRun(run, { pool, executor, resolver, workerId: WORKER });
 
