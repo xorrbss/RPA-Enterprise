@@ -80,9 +80,10 @@ dependent implementation artifact has already been migrated.
 
 13. Staging deployment governance
     Decision: use GitHub Environment `staging`; the concrete platform repo and
-    namespace/service remain external Required decision blockers before executable
-    staging/open deployment; approval owner is
-    `release-approvers`; rollback owner is `platform-oncall`; deployment secrets
+    namespace/service remain deploy-time Required decision blockers before executable
+    staging/open deployment; approval and rollback are owned by the single project
+    owner at deploy time (no external `release-approvers`/`platform-oncall` team
+    exists); deployment secrets
     are provisioned only through `SecretRef`/`SecretStore`. CI may validate but
     must not materialize staging/deploy/runtime secrets or `SecretRef`-resolved
     material. Repo-visible ephemeral PostgreSQL credentials are allowed only for

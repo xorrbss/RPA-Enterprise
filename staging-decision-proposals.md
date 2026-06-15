@@ -1,11 +1,11 @@
 # Staging Decision Proposals (DRAFT — not release evidence)
 
-> 목적: `release-open-checklist.md`의 **External Staging/Open Blockers 7건**을 외부 오너가 닫기 쉽도록,
+> 목적: `release-open-checklist.md`의 **Deploy-Time Provisioning Blockers 11건 전부**를 배포 시 오너가 닫기 쉽도록,
 > **레포가 정당하게 결정할 수 있는 항목은 미리 작성**하고, **현실에 존재해야만 하는 외부 사실은 입력란으로**
 > 남긴 초안.
 >
 > ⚠️ 이 문서는 **릴리즈 증거가 아니다.** 체크리스트 박스를 닫지 않으며 `blocked:audit` 게이트 상태를
-> 바꾸지 않는다. `[PROPOSED]` 항목은 외부 오너 확정 시 release-decisions.md로 승격, `[EXTERNAL-FACT]`
+> 바꾸지 않는다. `[PROPOSED]` 항목은 배포 시 오너 확정 시 release-decisions.md로 승격, `[EXTERNAL-FACT]`
 > 항목은 실제 인프라 사실이 제공되어야 닫힌다(가정 금지 — 지어내지 않음).
 >
 > 근거: SecretRef 실사용은 `ts/security-middleware-contract.ts`(`SecretAccessRequest.purpose`,
@@ -81,6 +81,28 @@ release-decisions #5(inline `retention_until`/`deleted_at`/`legal_hold`) + ops-d
 > 공통 fail-closed: 모든 payload-bearing writer는 `retention_until`을 명시하거나 insert 전 throw
 > (이미 events_outbox에 적용된 패턴). 비-app writer도 동일 강제.
 
+## [PROPOSED] B3. Artifact object-store redaction/retention 증거 형태 (체크리스트 rows 48-49)
+
+증거의 **형태**는 `ts/runtime-contract.ts` 포트 계약에서 도출 — 레포가 정한다. 실 객체 I/O **값/영수증**은 외부 사실([EXTERNAL-FACT] 8).
+
+- real 포트 바인딩: `ArtifactRealObjectStorePortBinding { kind:"real_object_store", backendAlias, credentialRef: SecretRef, evidenceSchemaRef:"artifact/object-io-evidence@1" }`.
+  `test_fake` 바인딩은 `mayBeUsedAsStagingEvidence:false` — **계약상** staging 증거가 될 수 없다(편법 차단이 타입에 박혀 있음).
+- 영수증 필수 필드(`ArtifactObjectIoEvidence` real 변형): `portKind:"real_object_store"`, `backendAlias`, `credentialRef`(SecretRef 식별자만), `operation:"redact"|"delete"`, `artifactRef`(public), `correlationId`, `receiptId`, `sha256?`. `objectRefInternalOnly:true` — `ObjectRef`는 로그/이벤트/감사에 절대 노출 금지(`publicEvidenceUsesArtifactRefOnly`).
+- redaction 결과: `redacted`/`not_required`/`retryable_failed`/`terminal_failed`. finalize는 미만료 claim lease + `bypassrls.use` audit(useCase `artifact_redaction_job`, failClosed) 이후 CAS로만.
+- retention 결과: `deleted`/`not_found`(멱등 성공)/`transient_failed`(→ `deleted_at` 설정 금지). useCase `artifact_retention_sweeper`.
+- 제안 기본값(레포 결정 가능): redaction `maxAttempts`는 `ops-defaults.md` redaction/self-heal 상한에 정합(하드코딩 금지), retention 기간은 [PROPOSED] 7 표를 따른다.
+
+> ⚠️ object-store 자격증명 SecretRef **purpose 미정**: 현재 `SecretAccessRequest.purpose`는 `executor|connector|resume_token_hmac|gateway_policy`뿐 — `object_store`가 없다. `executor` 재사용 vs 신규 `object_store` purpose 추가(코드/계약 변경)는 **미결정 (Owner: Contract lead)**. 지어내지 않고 결정 항목으로 남긴다.
+
+## [PROPOSED] B4. D5 Codex SSE 라이브 capability 증거 형태 (체크리스트 row 47)
+
+증거의 **형태/금지 규칙**은 `app/poc/d5-codex-sse` 하니스가 이미 강제 — 레포가 정한다. 라이브 **출력**은 외부 사실([EXTERNAL-FACT] 9).
+
+- 입력: 절대 HTTPS `CODEX_BASE_URL`(자격증명/query/fragment 금지), `CODEX_API_KEY`·`CODEX_MODEL`은 SecretRef/SecretStore로 레포 밖 해석.
+- 기록: redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` / `CODEX_EVIDENCE_MODEL_ALIAS`만 — 원시 endpoint/model 식별자 금지.
+- 필수 PASS: #1 basic SSE, #2 prompt-schema safe path, #4 abort. #3 native `json_schema`·#5 model metadata는 fallback 명시 시에만 GAP 허용.
+- 하니스가 provider error body·secret-유사 필드를 출력 전 redaction(자체 테스트 `run test:redaction`).
+
 ---
 
 ## [EXTERNAL-FACT] 지어낼 수 없는 항목 — 오너 입력 필요
@@ -88,13 +110,13 @@ release-decisions #5(inline `retention_until`/`deleted_at`/`legal_hold`) + ops-d
 아래는 **현실에 존재해야만 하는 사실**이라 레포가 결정/생성할 수 없다. 값 제공 시 즉시 기록한다.
 
 ### 1. 구체 배포 거버넌스 (체크리스트 row 34)
-거버넌스 모델은 release-decisions #13에서 확정(`staging` env, `release-approvers`, `platform-oncall`,
-SecretRef 경유). **남은 외부 사실**:
+거버넌스 모델은 release-decisions #13에서 확정(`staging` env, 승인·롤백은 단일 프로젝트 오너,
+SecretRef 경유 — 외부 승인자/oncall 팀 없음). **남은 배포 시 사실**:
 - [ ] 실제 플랫폼 repo (배포 코드 위치):
 - [ ] GitHub Environment `staging` 보호/승인자 **실제 설정** (protection rules, required reviewers):
 - [ ] 구체 배포 타깃 식별자 (namespace/service):
-- [ ] 릴리즈 승인자 **실제 핸들** (역할 `release-approvers` → 실제 인물/팀):
-- [ ] 롤백 오너 **실제 핸들** (역할 `platform-oncall` → 실제 인물/팀):
+- [ ] 릴리즈 승인 주체 확인 (단일 오너 본인 — 외부 승인자 팀 없음):
+- [ ] 롤백 주체 확인 (단일 오너 본인 — 외부 oncall 팀 없음):
 
 ### 2. SecretStore 백엔드 (체크리스트 row 35)
 - [ ] 실제 Vault mount/path **또는** 클라우드 KMS/secret-manager alias (평문 금지, 실제 백엔드 식별):
@@ -108,3 +130,17 @@ SecretRef 경유). **남은 외부 사실**:
 
 > 이 4개 항목은 실제 인프라가 프로비저닝되고 CI가 한 번 돌아야 생성되는 **런타임/조직 사실**이다.
 > 제공 즉시 release-decisions.md 승격 + 해당 체크리스트 행/blocked-decision 마커 정리(양방향 동시)로 닫는다.
+
+### 8. Artifact object-store 백엔드/영수증 (체크리스트 rows 48-49)
+- [ ] 실제 object-store 백엔드 식별 + SecretRef-backed `credentialRef` (평문 금지, `real_object_store` `backendAlias`):
+- [ ] redaction 실 영수증 (`artifact/object-io-evidence@1`, `redacted`/`not_required`, `sha256`, `receiptId`, `ObjectRef` 미노출):
+- [ ] retention 실 삭제 영수증 (`deleted`/`not_found`, legal-hold/quarantine 처리, transient 시 `deleted_at` 미설정):
+- [ ] operational role `bypassrls.use` audit + 평문/PII/`ObjectRef` 미노출 증명:
+
+### 9. D5 라이브 모델 출력 (체크리스트 row 47)
+- [ ] staging LLM 오너의 `run poc` redacted 출력 (#1/#2/#4 PASS, alias만):
+
+### 10. Remote CI gate (체크리스트 row 50)
+- [ ] GitHub Actions billing/spending-limit 복구 후 Phase 7 `main` `Contract Gates` 재실행 + 필수 job URL (secret-scan / migration smoke / app-runtime):
+
+> 8~10도 실제 인프라/조직 사실이라 지어낼 수 없다. 제공 즉시 해당 체크리스트 행 + `product-open-candidate-report.md`의 기존 blocked-decision 마커(rows 47/48/49/50)를 redacted 증거 참조로 교체(양방향 audit 동시 갱신)로 닫는다.
