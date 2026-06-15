@@ -44,7 +44,7 @@ them in the release packet.
 - [ ] External D5 Codex SSE live capability evidence for the intended staging model/endpoint, run with an absolute HTTPS `CODEX_BASE_URL` containing no credentials/query/fragment material, and recorded only as redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` / `CODEX_EVIDENCE_MODEL_ALIAS` output. Required decision: see `product-open-candidate-report.md`.
 - [ ] Runtime artifact_redaction production/staging object I/O and redacted-output implementation is evidenced with SecretRef-backed real object-store credentials and redacted object receipts. Required decision: see `product-open-candidate-report.md`.
 - [ ] Runtime artifact_retention production/staging external object deletion implementation is evidenced with SecretRef-backed real object-store credentials, delete/not-found receipts, and legal-hold/quarantine handling proof. Required decision: see `product-open-candidate-report.md`.
-- [ ] Runtime execution gates prove tenant boundary, RBAC/redaction, no `BYPASSRLS`, and no silent false/unknown behavior in remote PR/main CI evidence with the required job URLs for the dirty runtime delta. Required decision: see `product-open-candidate-report.md`.
+- [ ] Runtime execution gates prove tenant boundary, RBAC/redaction, no `BYPASSRLS`, and no silent false/unknown behavior in remote PR/main CI evidence with the required job URLs for the dirty runtime delta. Phase 7 push run `27524267891` on `main` was attempted and rerun, but GitHub did not start hosted runner jobs because account payments failed or the spending limit must be increased. Required decision: see `product-open-candidate-report.md`.
 
 Closure boundary summary:
 
@@ -139,7 +139,8 @@ migration smoke`, and `App runtime typecheck and tests` job URLs.
 The only unchecked rows left in this checklist require external owner action or
 remote evidence: concrete staging deploy target, SecretStore provisioning,
 non-app producer retention policy, D5 live model capability output, real
-artifact object-store receipts, and PR/main `Contract Gates` URLs. Do not close
+artifact object-store receipts, GitHub Actions billing/spending-limit recovery,
+and PR/main `Contract Gates` URLs. Do not close
 those rows from local fixtures, temp DBs, fake ports, hard-coded aliases, or
 unredacted logs.
 

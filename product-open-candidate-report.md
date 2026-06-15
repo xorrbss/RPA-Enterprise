@@ -296,6 +296,13 @@ Remote CI evidence:
   `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945156`
   `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945033`
   `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945101`
+- Phase 7 `main` dirty-delta `Contract Gates` attempt:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27524267891`
+  on commit `737aaa3d33e2db222e423738b12721420eeacd32`. The initial run and
+  failed-job rerun did not start hosted runner jobs. GitHub Actions annotations
+  report that recent account payments have failed or the spending limit must be
+  increased. This is external billing/admin evidence, not a repo-code failure,
+  and it does not close the required remote job URL gate for the Phase 7 delta.
 
 Browser route smoke evidence:
 
@@ -464,7 +471,7 @@ Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 - TODO: [BLOCKED] Runtime artifact_retention production/staging external object deletion evidence is not complete.
   Required decision: Runtime/platform owners must provide staging or production evidence from a real `ArtifactRetentionStore` delete port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, with idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal-hold/quarantine handling, evidence/audit semantics, and approved staging credential/SecretRef path before Product Open can claim external artifact purge. The local fake/test port evidence proves repo guardrails only and is not staging external object deletion evidence.
 - TODO: [BLOCKED] Runtime execution staging gates are not yet complete remote evidence.
-  Required decision: Release/runtime owners must provide PR/main `Contract Gates` evidence proving tenant boundary, RBAC/redaction, no `BYPASSRLS`, no silent false/unknown behavior, and the required `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs for the dirty runtime delta before citing it as current staging/open evidence. Local non-bypass temp-DB evidence is recorded above but does not replace remote release evidence.
+  Required decision: Release/runtime owners or repository billing administrators must restore GitHub Actions hosted-runner execution by resolving the account payment/spending-limit blocker, rerun `Contract Gates` on the Phase 7 `main` head, and provide PR/main evidence proving tenant boundary, RBAC/redaction, no `BYPASSRLS`, no silent false/unknown behavior, plus the required `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs for the dirty runtime delta before citing it as current staging/open evidence. Local non-bypass temp-DB evidence is recorded above but does not replace remote release evidence.
 
 ### Durable Security Audit Writer Decision Packet
 
@@ -642,7 +649,8 @@ All repo-controlled D4.5 API P1 and D3 runtime execution rows are locally
 resolved in this patch. The remaining unchecked rows require external owner
 action, external SecretRef/SecretStore provisioning, production/staging
 object-store receipts, live D5 staging model output, or PR/main remote CI job
-URLs.
+URLs, including recovery from the current GitHub Actions account
+payment/spending-limit blocker.
 
 Do not close those rows from local fixtures, temp DBs, fake object-store ports,
 hard-coded aliases, CI service-container credentials, or unredacted logs. When
