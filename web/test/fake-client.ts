@@ -16,6 +16,10 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     getGatewayPolicy: async () => ({ model: "gpt-4o-mini", capabilities: { jsonMode: true } }),
     abortRun: async () => ({ status: "cancelled" }),
     replayDeadLetter: async () => ({ status: "new" }),
+    assignHumanTask: async () => ({ status: "assigned" }),
+    startHumanTask: async () => ({ status: "in_progress" }),
+    resolveHumanTask: async () => ({ status: "resolved" }),
+    escalateHumanTask: async () => ({ status: "escalated" }),
     ...overrides,
   };
 }

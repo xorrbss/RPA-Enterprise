@@ -23,6 +23,12 @@ export interface ApiClient {
   // 운영자 명령(POST + Idempotency-Key). 어휘체인 abort→cancelled, W10 replay.
   abortRun(runId: string, idempotencyKey: string): Promise<unknown>;
   replayDeadLetter(deadLetterId: string, idempotencyKey: string): Promise<unknown>;
+  // human-task 전이(api-surface §4 / app human-tasks.ts 실 shape): assign{assignee}·start(무body)·
+  // resolve{result?}·escalate{reason?}. 권한/assignee 범위는 백엔드가 강제(거부 시 AUTHZ_FORBIDDEN 표면화).
+  assignHumanTask(id: string, assignee: string, idempotencyKey: string): Promise<unknown>;
+  startHumanTask(id: string, idempotencyKey: string): Promise<unknown>;
+  resolveHumanTask(id: string, idempotencyKey: string, result?: Record<string, unknown>): Promise<unknown>;
+  escalateHumanTask(id: string, idempotencyKey: string, reason?: string): Promise<unknown>;
 }
 
 export interface HttpApiClientOptions {
@@ -95,5 +101,9 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     getGatewayPolicy: (model) => get(`/v1/gateway/policy${queryString(model ? { model } : undefined)}`),
     abortRun: (runId, idempotencyKey) => post(`/v1/runs/${runId}/abort`, idempotencyKey),
     replayDeadLetter: (deadLetterId, idempotencyKey) => post(`/v1/dlq/${deadLetterId}/replay`, idempotencyKey),
+    assignHumanTask: (id, assignee, key) => post(`/v1/human-tasks/${id}/assign`, key, { assignee }),
+    startHumanTask: (id, key) => post(`/v1/human-tasks/${id}/start`, key),
+    resolveHumanTask: (id, key, result) => post(`/v1/human-tasks/${id}/resolve`, key, result !== undefined ? { result } : {}),
+    escalateHumanTask: (id, key, reason) => post(`/v1/human-tasks/${id}/escalate`, key, reason !== undefined ? { reason } : {}),
   };
 }

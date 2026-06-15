@@ -85,6 +85,27 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(screen.getByText("완료")).toBeInTheDocument());
   });
 
+  test("human-task 처리완료(resolve) 디스패치", async () => {
+    const calls: string[] = [];
+    window.confirm = () => true;
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({
+          items: [{ human_task_id: "ht-1", state: "in_progress", kind: "approval", assignee: null, timeout: null, run_id: null }],
+          next_cursor: null,
+        }),
+        resolveHumanTask: async (id) => {
+          calls.push(id);
+          return {};
+        },
+      }),
+    );
+    location.hash = "#humanTasks";
+    const btn = await screen.findByRole("button", { name: "처리완료" });
+    btn.click();
+    await waitFor(() => expect(calls).toContain("ht-1"));
+  });
+
   test("운영자 명령 실패 → 코드 표면화", async () => {
     const { ApiError } = await import("../src/api/types");
     window.confirm = () => true;
