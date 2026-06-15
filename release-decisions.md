@@ -174,8 +174,13 @@ D7-2. OTel call-site instrumentation: wired spans done; remainder + metrics + pr
    `verify.run`, `artifact.capture`) live in D3-skeletal executor-plugin code that is not
    yet wired into a tested execution flow (`resolvePageState` has no runtime caller;
    `verify.run`/`artifact.capture` are dry-run/Chrome-only; `action_plan_cache.lookup` is in
-   the LLM DOM executor pending D5). Metrics (`@opentelemetry/sdk-metrics` + the §E metric
-   recorders) are not started. Rationale: instrumenting uncalled/skeletal code is YAGNI and
+   the LLM DOM executor pending D5). Metrics (`@opentelemetry/sdk-metrics`): the gateway-sourced
+   §E metrics `llm_cost` and `llm_ttfb_ms` are recorded (low-cardinality tenant_id/model attrs,
+   unit-tested with an in-memory metric reader); the remaining §E metrics (`run_success_rate`,
+   `cache_hit_rate`, `self_heal_rate`, `vlm_fallback_rate`, `challenge_rate`, `site_block_rate`,
+   `workitem_sla_violation`, `queue_depth`) are deferred — their source events are spread across
+   flows not all wired (same deferral basis as the remaining spans). Rationale: instrumenting
+   uncalled/skeletal code is YAGNI and
    cannot be integration-tested; metric value and span export only materialize once a
    provider/exporter is registered in a long-lived process. The OTel provider/exporter
    production wiring is out of repo scope (architecture §5 — browser/worker pools are

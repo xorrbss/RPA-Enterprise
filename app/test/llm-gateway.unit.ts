@@ -4,6 +4,11 @@
  * 주입형 fake(adapter·validator·sink·멱등 store)로 키/DB 없이 게이트·retry·fallback·structured-output·
  * repair·멱등 replay 경로를 검증한다. 실행: `tsx test/llm-gateway.unit.ts`.
  */
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 
 import type { ArtifactRef } from "../../ts/core-types";
@@ -15,7 +20,7 @@ import type {
   LLMStreamEvent,
   ModelCapabilities,
 } from "../../ts/security-middleware-contract";
-import { bootstrapTracing } from "../src/observability/bootstrap";
+import { bootstrapMetrics, bootstrapTracing } from "../src/observability/bootstrap";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
 import {
   GatewayError,
@@ -27,6 +32,11 @@ import {
 // OTel in-memory exporter — llm_gateway.call span(§E) 계측 검증용(외부 의존 없음).
 const spanExporter = new InMemorySpanExporter();
 bootstrapTracing(spanExporter);
+
+// OTel in-memory metric reader — llm_cost/llm_ttfb_ms(§E) 계측 검증용. 큰 interval로 백그라운드 export 회피.
+const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+const metricReader = new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 2 ** 30 });
+const metricProvider = bootstrapMetrics(metricReader);
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -153,6 +163,27 @@ async function main(): Promise<void> {
     check(
       "span: replay emits no llm_gateway.call span",
       spanExporter.getFinishedSpans().find((s) => s.name === "llm_gateway.call") === undefined,
+    );
+  }
+
+  // ── OTel 메트릭: llm_cost + llm_ttfb_ms(§E 고정 이름·저카디널리티 attr) ──────
+  {
+    const costSeq: LLMStreamEvent[] = [
+      { type: "text_delta", text: "x" },
+      { type: "usage", inputTokens: 10, outputTokens: 5, cost: 0.05 },
+      { type: "done", finishReason: "stop" },
+    ];
+    await gateway({ primary: queueAdapter([costSeq]).adapter }).call(makeReq(), sig());
+    await metricProvider.forceFlush();
+    const allMetrics = metricExporter.getMetrics().flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics));
+    const cost = allMetrics.find((m) => m.descriptor.name === "llm_cost");
+    const ttfb = allMetrics.find((m) => m.descriptor.name === "llm_ttfb_ms");
+    check("metric: llm_cost recorded", cost !== undefined && cost.dataPoints.length > 0);
+    check("metric: llm_ttfb_ms recorded", ttfb !== undefined && ttfb.dataPoints.length > 0);
+    check(
+      "metric: llm_cost carries tenant_id/model attrs",
+      cost?.dataPoints.some((dp) => dp.attributes.tenant_id === "t" && dp.attributes.model === "codex") === true,
+      JSON.stringify(cost?.dataPoints.map((dp) => dp.attributes)),
     );
   }
 

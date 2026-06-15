@@ -5,9 +5,20 @@
  * 고정해 D3+ 전 단계가 동일 이름을 쓰도록 한다. executor.execute/llm_gateway.call 등 실제 계측
  * 지점은 해당 컴포넌트(D3/D5)에서 본 상수로 span을 연다 — 여기서는 이름·공통속성·래퍼만 확정.
  */
-import { trace, SpanStatusCode, type Attributes, type Span, type Tracer } from "@opentelemetry/api";
+import {
+  metrics,
+  trace,
+  SpanStatusCode,
+  type Attributes,
+  type Counter,
+  type Histogram,
+  type Meter,
+  type Span,
+  type Tracer,
+} from "@opentelemetry/api";
 
 export const TRACER_NAME = "rpa-runtime";
+export const METER_NAME = "rpa-runtime";
 
 /** 필수 span(이름 고정, §E). 부모관계는 startActiveSpan 컨텍스트로 표현. */
 export const SPAN = {
@@ -50,6 +61,30 @@ export interface CommonSpanAttrs {
 
 export function getTracer(): Tracer {
   return trace.getTracer(TRACER_NAME);
+}
+
+export function getMeter(): Meter {
+  return metrics.getMeter(METER_NAME);
+}
+
+// §E 필수 메트릭 — lazy 생성(전역 MeterProvider 등록 후 첫 record 시 바인딩). 속성은 저카디널리티만.
+let llmCostCounter: Counter | undefined;
+let llmTtfbHistogram: Histogram | undefined;
+
+/** llm_cost(USD 누적) 기록. attrs는 저카디널리티(tenant_id/model)만 — run_id 등 고카디널리티 금지. */
+export function recordLlmCost(cost: number, attrs: { tenant_id: string; model: string }): void {
+  if (llmCostCounter === undefined) {
+    llmCostCounter = getMeter().createCounter(METRIC.llmCost, { description: "LLM 호출 누적 비용(USD)", unit: "USD" });
+  }
+  llmCostCounter.add(cost, attrs);
+}
+
+/** llm_ttfb_ms(첫 토큰까지 지연) 기록. */
+export function recordLlmTtfbMs(ms: number, attrs: { tenant_id: string; model: string }): void {
+  if (llmTtfbHistogram === undefined) {
+    llmTtfbHistogram = getMeter().createHistogram(METRIC.llmTtfbMs, { description: "LLM 첫 토큰까지 지연(ms)", unit: "ms" });
+  }
+  llmTtfbHistogram.record(ms, attrs);
 }
 
 function commonToAttributes(c: CommonSpanAttrs): Attributes {
