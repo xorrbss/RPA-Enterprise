@@ -25,7 +25,8 @@
     "test:runtime-claim": "tsx test/runtime-worker-claim.int.ts",
     "test:runtime-resume": "tsx test/runtime-worker-resume.int.ts",
     "test:runtime-abort": "tsx test/runtime-worker-abort-finalization.int.ts",
-    "test:executor": "tsx test/executor-dryrun.int.ts",
+    "test:executor": "tsx test/executor-dryrun.int.ts && tsx test/ir-interpreter.int.ts",
+    "test:interpreter": "tsx test/ir-interpreter.int.ts",
     "test:console-e2e": "tsx test/console-browser.e2e.ts",
     "test:console-live-e2e": "tsx test/console-live.e2e.ts",
     "test:ci": "npm run test && npm run test:executor && npm run test:int"
