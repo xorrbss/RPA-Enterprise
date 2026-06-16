@@ -82,6 +82,7 @@ interface ScenarioRow {
 
 interface GatewayPolicyRow {
   model: string;
+  version: number;
   capabilities: unknown;
   budget: unknown;
   fallback_config: unknown;
@@ -376,7 +377,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<GatewayPolicyRow>(
-        `SELECT model, capabilities, budget, fallback_config
+        `SELECT model, version, capabilities, budget, fallback_config
            FROM gateway_policies
           WHERE tenant_id = $1::uuid AND ($2::text IS NULL OR model = $2)
           ORDER BY model ASC`,
@@ -392,6 +393,8 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
       // model 미지정 + 다건 → 단수 응답으로 임의 선택 불가(가정 금지).
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "model_required", available: rows.length });
     }
+    // ETag = gateway_policies.version(api-surface §6/§0.3, PUT와 동일 ETag 대상). PUT If-Match의 선행 read.
+    reply.header("ETag", String(rows[0].version));
     reply.code(200).send(mapGatewayPolicy(rows[0]));
   });
 

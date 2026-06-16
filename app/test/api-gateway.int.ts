@@ -100,6 +100,11 @@ async function main(): Promise<void> {
       const put = (token: string, headers: Record<string, string>, payload: Record<string, unknown>) =>
         app.inject({ method: "PUT", url: "/v1/gateway/policy", headers: { authorization: `Bearer ${token}`, ...headers }, payload });
 
+      // GET은 ETag=version(낙관적 동시성 토큰)으로 노출 → PUT If-Match의 선행 read(RQ-006). body shape는 불변.
+      const got = await app.inject({ method: "GET", url: "/v1/gateway/policy?model=codex", headers: { authorization: `Bearer ${admin}` } });
+      check("GET policy → 200 + ETag = 1 (seed version)", got.statusCode === 200 && got.headers.etag === "1", `${got.statusCode} etag=${got.headers.etag}`);
+      check("GET body는 version 미포함(ETag로만 노출)", got.json().version === undefined && got.json().model === "codex", got.body);
+
       // 성공: admin If-Match:1 → 200, version 2, ETag 2.
       const ok = await put(admin, { "if-match": "1", "idempotency-key": "gw-a" }, body());
       check("admin PUT If-Match:1 → 200 version 2", ok.statusCode === 200 && ok.json().version === 2, `${ok.statusCode} ${ok.body}`);
