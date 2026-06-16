@@ -48,8 +48,8 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp();
     expect(screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("최근 실행")).toBeInTheDocument());
-    // fake 실행이 running 상태로 표시
-    await waitFor(() => expect(screen.getByText("running")).toBeInTheDocument());
+    // fake 실행이 running 상태로 표시(StatusBadge 한국어 라벨)
+    await waitFor(() => expect(screen.getByText("실행 중")).toBeInTheDocument());
   });
 
   test("해시 라우팅 → workitems", async () => {
@@ -68,6 +68,14 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" })).toBeInTheDocument(),
     );
+  });
+
+  test("openGate: 정적 contract-doc 뷰 렌더(Placeholder 아님)", async () => {
+    renderApp();
+    location.hash = "#openGate";
+    await waitFor(() => expect(screen.getByText("Product-open gate map")).toBeInTheDocument());
+    expect(screen.getByText("RBAC 화면/액션 gate")).toBeInTheDocument(); // 계약 파생 행
+    expect(screen.queryByText("준비 중")).toBeNull(); // Placeholder 배지 미노출
   });
 
   test("오류 상태 표면화 (조용한 빈화면 금지)", async () => {
@@ -89,11 +97,11 @@ describe("D7 운영 콘솔 shell", () => {
         return { status: "cancelled" };
       },
     });
-    window.confirm = () => true; // jsdom confirm 스텁
     renderApp(client);
     location.hash = "#runTrace";
     const abortBtn = await screen.findByRole("button", { name: "취소" });
     abortBtn.click();
+    (await screen.findByRole("button", { name: "확인" })).click(); // 포커스 트랩 다이얼로그 확인
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.runId).toBe("11111111-aaaa-bbbb-cccc-000000000001");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
@@ -102,7 +110,6 @@ describe("D7 운영 콘솔 shell", () => {
 
   test("human-task 처리완료(resolve) 디스패치", async () => {
     const calls: string[] = [];
-    window.confirm = () => true;
     renderApp(
       fakeClient({
         listHumanTasks: async () => ({
@@ -118,12 +125,42 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#humanTasks";
     const btn = await screen.findByRole("button", { name: "처리완료" });
     btn.click();
+    (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toContain("ht-1"));
+  });
+
+  test("확인 다이얼로그: role=dialog + aria-modal + 포커스 이동 + Esc 취소(focus trap)", async () => {
+    const calls: string[] = [];
+    renderApp(fakeClient({ abortRun: async () => { calls.push("x"); return {}; } }));
+    location.hash = "#runTrace";
+    (await screen.findByRole("button", { name: "취소" })).click();
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog.contains(document.activeElement)).toBe(true); // 포커스가 다이얼로그 내부로 이동
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); // Esc로 닫힘
+    expect(calls).toHaveLength(0); // 취소 → mutate 안 됨(조용한 실행 금지)
+  });
+
+  test("배정 다이얼로그: assignee 입력 폼 → assignHumanTask(uuid) (native prompt 대체)", async () => {
+    const calls: Array<{ assignee: string }> = [];
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({ items: [{ human_task_id: "ht-9", state: "open", kind: "approval", assignee: null, timeout: null, run_id: null }], next_cursor: null }),
+        assignHumanTask: async (_id, assignee) => { calls.push({ assignee }); return {}; },
+      }),
+    );
+    location.hash = "#humanTasks";
+    (await screen.findByRole("button", { name: "배정" })).click();
+    expect(await screen.findByRole("button", { name: "확인" })).toBeDisabled(); // 빈 입력 → 확인 비활성(가드)
+    fireEvent.change(screen.getByLabelText("담당자 ID(uuid)"), { target: { value: "00000000-0000-0000-0000-0000000000aa" } });
+    screen.getByRole("button", { name: "확인" }).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.assignee).toBe("00000000-0000-0000-0000-0000000000aa");
   });
 
   test("scenario prod 승격 디스패치 (If-Match=version)", async () => {
     const calls: Array<{ id: string; version: number }> = [];
-    window.confirm = () => true;
     renderApp(
       fakeClient({
         listScenarios: async () => ({
@@ -139,6 +176,7 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#scenarioStudio";
     const btn = await screen.findByRole("button", { name: "prod 승격" });
     btn.click();
+    (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3 });
   });
@@ -198,7 +236,6 @@ describe("D7 운영 콘솔 shell", () => {
 
   test("운영자 명령 실패 → 코드 표면화", async () => {
     const { ApiError } = await import("../src/api/types");
-    window.confirm = () => true;
     renderApp(
       fakeClient({
         abortRun: async () => {
@@ -209,6 +246,7 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#runTrace";
     const abortBtn = await screen.findByRole("button", { name: "취소" });
     abortBtn.click();
+    (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(screen.getByText("RUN_ABORTED (409)")).toBeInTheDocument());
   });
 
@@ -288,7 +326,6 @@ describe("D7 운영 콘솔 shell", () => {
 
   test("사이트 승인(approve) 디스패치 — pending 사이트만", async () => {
     const calls: Array<{ id: string; key: string }> = [];
-    window.confirm = () => true;
     renderApp(
       fakeClient({
         listSites: async () => ({
@@ -303,9 +340,58 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#security";
     (await screen.findByRole("button", { name: "승인" })).click();
+    (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.id).toBe("site-1");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
+  });
+
+  test("admin gateway 정책 편집: PUT If-Match(version)+Idempotency-Key 디스패치", async () => {
+    const calls: Array<{ version: number; model: string; key: string }> = [];
+    renderApp(
+      fakeClient({
+        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: { jsonMode: true }, budget: { maxInputTokens: 800 } }),
+        updateGatewayPolicy: async (version, body, key) => {
+          calls.push({ version, model: body.model, key });
+          return { model: "gpt-4o", version: version + 1 };
+        },
+      }),
+    );
+    location.hash = "#llmGateway";
+    const saveBtn = await screen.findByRole("button", { name: "정책 저장" });
+    saveBtn.click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.version).toBe(5); // If-Match=현재 version
+    expect(calls[0]?.model).toBe("gpt-4o");
+    expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
+    await waitFor(() => expect(screen.getByText("저장됨")).toBeInTheDocument());
+  });
+
+  test("RBAC UI 게이팅: gateway 편집은 admin만 — operator는 폼 숨김(읽기 전용)", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(
+      fakeClient({
+        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: { jsonMode: true } }),
+      }),
+    );
+    location.hash = "#llmGateway";
+    await waitFor(() => expect(screen.getByText("gpt-4o")).toBeInTheDocument()); // 읽기 표시
+    expect(screen.queryByRole("button", { name: "정책 저장" })).toBeNull(); // 편집 폼 미노출
+  });
+
+  test("admin gateway 편집: 버전 충돌 → POLICY_VERSION_CONFLICT 표면화", async () => {
+    const { ApiError } = await import("../src/api/types");
+    renderApp(
+      fakeClient({
+        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: {}, budget: {} }),
+        updateGatewayPolicy: async () => {
+          throw new ApiError(412, "POLICY_VERSION_CONFLICT", { code: "POLICY_VERSION_CONFLICT" });
+        },
+      }),
+    );
+    location.hash = "#llmGateway";
+    (await screen.findByRole("button", { name: "정책 저장" })).click();
+    await waitFor(() => expect(screen.getByText(/다른 사용자가 먼저 수정/)).toBeInTheDocument());
   });
 
   test("RBAC UI 게이팅: viewer는 읽기 전용 — 명령 버튼 미표시", async () => {

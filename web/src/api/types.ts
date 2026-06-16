@@ -89,9 +89,19 @@ export interface CreateRunBody {
 
 export interface GatewayPolicy {
   readonly model: string;
+  // 낙관적 동시성 토큰(GET ETag = gateway_policies.version). PUT If-Match에 사용. ETag 부재 시 undefined → 편집 차단.
+  readonly version?: number;
   readonly capabilities?: Record<string, unknown>;
   readonly budget?: Record<string, unknown>;
   readonly fallback?: Record<string, unknown>;
+}
+
+// PUT /v1/gateway/policy body(닫힌 shape — 백엔드 parsePolicyBody와 정합). model이 갱신 대상 정책 키.
+export interface GatewayPolicyUpdate {
+  readonly model: string;
+  readonly capabilities: Record<string, unknown>;
+  readonly budget: Record<string, unknown>;
+  readonly fallback_config?: Record<string, unknown> | null;
 }
 
 export interface ListParams {

@@ -29,6 +29,7 @@ import type {
   RunGuard,
   WorkitemGuard,
   HumanTaskGuard,
+  HumanTaskKind,
   SideEffectCmd,
   TransitionResult,
 } from "../ts/state-machine-types";
@@ -77,6 +78,8 @@ export interface RunFixture {
   expectThrow?: "IllegalTransition";
   expectEmits?: string[];
   expectSideEffects?: SideEffectCmd["kind"][];
+  /** createHumanTask side effect의 humanTaskKind 값 검증(R4/R5 kind 전파, RBAC 라우팅 정합). */
+  expectHumanTaskKind?: HumanTaskKind;
 }
 export interface WorkitemFixture {
   name: string;
@@ -142,18 +145,44 @@ export const RUN_FIXTURES: RunFixture[] = [
   },
   // --- R4/R5: challenge / human_task → suspending ---
   {
-    name: "R4 running + step.challenge_detected (policy=human_first) → suspending",
+    name: "R4 running + step.challenge_detected (kind 미지정→captcha 기본) → suspending",
     entity: "run",
     cur: "running",
     event: { type: "step.challenge_detected" },
     expectNext: "suspending",
+    expectHumanTaskKind: "captcha",
   },
   {
-    name: "R5 running + human_task_required → suspending",
+    name: "R4 running + step.challenge_detected(mfa) → suspending (challengeKind 전파)",
+    entity: "run",
+    cur: "running",
+    event: { type: "step.challenge_detected", challengeKind: "mfa" },
+    expectNext: "suspending",
+    expectHumanTaskKind: "mfa",
+  },
+  {
+    name: "R5 running + human_task_required (kind 미지정→exception 기본) → suspending",
     entity: "run",
     cur: "running",
     event: { type: "human_task_required" },
     expectNext: "suspending",
+    expectHumanTaskKind: "exception",
+  },
+  {
+    name: "R5 running + human_task_required(approval) → suspending (kind 전파 — RBAC 라우팅 정합)",
+    entity: "run",
+    cur: "running",
+    event: { type: "human_task_required", humanTaskKind: "approval" },
+    expectNext: "suspending",
+    expectHumanTaskKind: "approval",
+  },
+  {
+    name: "R5 running + human_task_required(validation) → suspending (kind 전파)",
+    entity: "run",
+    cur: "running",
+    event: { type: "human_task_required", humanTaskKind: "validation" },
+    expectNext: "suspending",
+    expectHumanTaskKind: "validation",
   },
   // --- R6: abort_requested (running) → aborting (SSE close + drain) ---
   {
@@ -911,6 +940,20 @@ export function runFixtures(fixtures: TransitionFixture[] = ALL_FIXTURES): Fixtu
         failures.push({
           name: f.name,
           reason: `sideEffects: expected exactly [${f.expectSideEffects.join(", ")}], got [${kinds.join(", ")}]`,
+        });
+      }
+    }
+
+    if (f.entity === "run" && f.expectHumanTaskKind !== undefined) {
+      const ht = result.sideEffects.find(
+        (c): c is Extract<SideEffectCmd, { kind: "createHumanTask" }> => c.kind === "createHumanTask",
+      );
+      if (ht === undefined) {
+        failures.push({ name: f.name, reason: `humanTaskKind: no createHumanTask side effect` });
+      } else if (ht.humanTaskKind !== f.expectHumanTaskKind) {
+        failures.push({
+          name: f.name,
+          reason: `humanTaskKind: expected ${f.expectHumanTaskKind}, got ${ht.humanTaskKind}`,
         });
       }
     }

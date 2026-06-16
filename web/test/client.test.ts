@@ -66,6 +66,31 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.body).toEqual({ target: "prod" });
   });
 
+  test("getGatewayPolicy → ETag(version) 헤더를 body.version으로 병합", async () => {
+    const { calls, client } = harness({ body: { model: "gpt-4o", capabilities: {} }, headers: { ETag: "7" } });
+    const policy = await client.getGatewayPolicy("gpt-4o");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/gateway/policy?model=gpt-4o");
+    expect(policy.version).toBe(7);
+    expect(policy.model).toBe("gpt-4o");
+  });
+
+  test("getGatewayPolicy → ETag 부재 시 version undefined(편집 차단 가드)", async () => {
+    const { client } = harness({ body: { model: "gpt-4o" } });
+    const policy = await client.getGatewayPolicy();
+    expect(policy.version).toBeUndefined();
+  });
+
+  test("updateGatewayPolicy → PUT /v1/gateway/policy + If-Match + Idempotency-Key + body", async () => {
+    const { calls, client } = harness({ body: { model: "gpt-4o", version: 3 } });
+    await client.updateGatewayPolicy(2, { model: "gpt-4o", capabilities: { maxContextTokens: 8000 }, budget: { maxInputTokens: 100, maxOutputTokens: 100, maxCost: 1 } }, "idem-gw");
+    expect(calls[0]?.method).toBe("PUT");
+    expect(calls[0]?.url).toBe("http://api.test/v1/gateway/policy");
+    expect(calls[0]?.headers.get("if-match")).toBe("2");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-gw");
+    expect(calls[0]?.body).toEqual({ model: "gpt-4o", capabilities: { maxContextTokens: 8000 }, budget: { maxInputTokens: 100, maxOutputTokens: 100, maxCost: 1 } });
+  });
+
   test("resolveHumanTask(result) → body{result}", async () => {
     const { calls, client } = harness();
     await client.resolveHumanTask("ht-1", "k1", { outcome: "approved" });

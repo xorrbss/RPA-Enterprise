@@ -196,10 +196,10 @@ async function main(): Promise<void> {
       }
     }, token);
 
-    // dashboard: 실 API에서 시드 run(running) 렌더
+    // dashboard: 실 API에서 시드 run(running) 렌더 — StatusBadge가 한국어 라벨('실행 중')로 표시
     await page.goto(`${base}/`, { waitUntil: "networkidle0", timeout: 30_000 });
-    await page.waitForFunction(() => document.body.innerText.includes("running"), { timeout: 15_000 });
-    check("실 API read → 시드 run(running) 렌더", (await page.evaluate(() => document.body.innerText)).includes("running"));
+    await page.waitForFunction(() => document.body.innerText.includes("실행 중"), { timeout: 15_000 });
+    check("실 API read → 시드 run('실행 중') 렌더", (await page.evaluate(() => document.body.innerText)).includes("실행 중"));
 
     // workitems: DLQ 패널에 시드 dead_letter 렌더
     await page.evaluate(() => {
@@ -211,6 +211,12 @@ async function main(): Promise<void> {
     // 명령: DLQ 재처리(W10) → DB 변이 확인
     await page.evaluate(() => {
       const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "재처리");
+      (btn as HTMLButtonElement | undefined)?.click();
+    });
+    // 포커스 트랩 확인 다이얼로그(RQ-013) → '확인' 클릭으로 명령 디스패치(native confirm 대체).
+    await page.waitForFunction(() => Array.from(document.querySelectorAll("[role=dialog] button")).some((b) => b.textContent === "확인"), { timeout: 15_000 });
+    await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll("[role=dialog] button")).find((b) => b.textContent === "확인");
       (btn as HTMLButtonElement | undefined)?.click();
     });
     // 워크아이템이 new로 전이될 때까지 폴링(실 DB)
@@ -263,6 +269,12 @@ async function main(): Promise<void> {
     await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some((b) => b.textContent === "처리완료"), { timeout: 15_000 });
     await page.evaluate(() => {
       const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "처리완료");
+      (btn as HTMLButtonElement | undefined)?.click();
+    });
+    // 포커스 트랩 확인 다이얼로그(RQ-013) → '확인' 클릭.
+    await page.waitForFunction(() => Array.from(document.querySelectorAll("[role=dialog] button")).some((b) => b.textContent === "확인"), { timeout: 15_000 });
+    await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll("[role=dialog] button")).find((b) => b.textContent === "확인");
       (btn as HTMLButtonElement | undefined)?.click();
     });
     let htState = "";

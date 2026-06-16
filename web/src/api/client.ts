@@ -4,6 +4,7 @@ import {
   type CreateRunBody,
   type DeadLetterItem,
   type GatewayPolicy,
+  type GatewayPolicyUpdate,
   type HumanTaskItem,
   type ListParams,
   type Paginated,
@@ -25,6 +26,9 @@ export interface ApiClient {
   listScenarios(p?: ListParams): Promise<Paginated<ScenarioItem>>;
   listSites(p?: ListParams): Promise<Paginated<SiteItem>>;
   getGatewayPolicy(model?: string): Promise<GatewayPolicy>;
+  // admin gateway policy 갱신: PUT If-Match(현재 version) + Idempotency-Key + body. 충돌→POLICY_VERSION_CONFLICT(412),
+  // 예산>컨텍스트→LLM_CAPABILITY_MISMATCH(422), 권한 없음→AUTHZ_FORBIDDEN(403) 표면화.
+  updateGatewayPolicy(version: number, body: GatewayPolicyUpdate, idempotencyKey: string): Promise<unknown>;
   // 운영자 명령(POST + Idempotency-Key). 어휘체인 abort→cancelled, W10 replay.
   abortRun(runId: string, idempotencyKey: string): Promise<unknown>;
   replayDeadLetter(deadLetterId: string, idempotencyKey: string): Promise<unknown>;
@@ -57,6 +61,13 @@ export interface HttpApiClientOptions {
   readonly baseUrl: string;
   readonly getToken: () => string | null;
   readonly fetchImpl?: typeof fetch;
+}
+
+// ETag(약한 접두/따옴표 허용) → version(int). 백엔드 parseIfMatch 규약과 동일. 부재/무효 → undefined(편집 차단).
+function parseEtagVersion(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  const n = Number.parseInt(value.replace(/^W\//, "").replace(/^"|"$/g, ""), 10);
+  return Number.isInteger(n) && n >= 1 ? n : undefined;
 }
 
 function queryString(p?: ListParams): string {
@@ -146,7 +157,18 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listDlq: (kind, p) => get(`/v1/dlq${queryString({ ...p, kind })}`),
     listScenarios: (p) => get(`/v1/scenarios${queryString(p)}`),
     listSites: (p) => get(`/v1/sites${queryString(p)}`),
-    getGatewayPolicy: (model) => get(`/v1/gateway/policy${queryString(model ? { model } : undefined)}`),
+    getGatewayPolicy: async (model) => {
+      // GET은 ETag(=version) 헤더로 동시성 토큰을 노출 → PUT If-Match의 선행 read. body shape는 불변.
+      const res = await doFetch(`${opts.baseUrl}/v1/gateway/policy${queryString(model ? { model } : undefined)}`, {
+        method: "GET",
+        headers: { Accept: "application/json", ...authHeaders() },
+      });
+      const body = await parseOrThrow<GatewayPolicy>(res);
+      const version = parseEtagVersion(res.headers.get("etag"));
+      return version !== undefined ? { ...body, version } : body;
+    },
+    updateGatewayPolicy: (version, body, key) =>
+      send("PUT", `/v1/gateway/policy`, body, { "If-Match": String(version), "Idempotency-Key": key }),
     abortRun: (runId, idempotencyKey) => post(`/v1/runs/${runId}/abort`, idempotencyKey),
     replayDeadLetter: (deadLetterId, idempotencyKey) => post(`/v1/dlq/${deadLetterId}/replay`, idempotencyKey),
     approveSite: (siteId, key, opts) => post(`/v1/sites/${siteId}/approve`, key, opts ?? {}),
