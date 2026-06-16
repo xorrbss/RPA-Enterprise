@@ -370,7 +370,7 @@ const activeBlockerSectionHeadings = new Set([
   "## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)",
 ]);
 const expectedActiveBlockerSectionCounts = new Map([
-  ["## Deploy-Time Provisioning Blockers", 4],
+  ["## Deploy-Time Provisioning Blockers", 2],
   ["## Repo-Controlled D4.5 API P1 Evidence / Open", 0],
   ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 0],
 ]);

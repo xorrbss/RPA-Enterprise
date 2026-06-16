@@ -549,6 +549,28 @@ D8-A14. Owner-accepted staging architecture + audit_log retention value
    repo/Environment config (row 43), and resolution-smoke CI evidence (row 48) remain deploy-time
    [EXTERNAL-FACT] that only the owner can provide. Build-condition: audit value recorded (ops-defaults
    §6.1); architecture chosen; deploy-time rows close as the owner provides each real artifact.
+   (Update: the rows 51/52 **object-I/O** half is amended by D8-A15 — closed via an owner-operated
+   real S3-protocol store; the S3 bucket name + credential value remain deploy-time external facts.)
+
+D8-A15. Owner ratification: an owner-operated REAL object store (real S3 protocol) is acceptable
+   evidence for the object-I/O half of rows 51/52 (amends the Deploy-Time Provisioning Blockers gate)
+   Decision (owner-ratified): for the artifact redaction (row 51) and retention-deletion (row 52)
+   **object-I/O** evidence, an object store **operated by the project owner** that speaks the real S3 wire
+   protocol (SigV4 over HTTPS) with a **SecretRef-backed credential resolved via the real SecretStore**
+   (Vault AppRole → `VaultSecretStore.resolve`) and that exercises the production adapters
+   (`S3ObjectStore` / `S3ArtifactRedactor` / `S3ArtifactRetentionStore`) IS acceptable — including a
+   self-hosted S3-compatible server such as MinIO. This does NOT relax the ban on **in-process test_fake /
+   fakeable ports / temp-DB BYPASSRLS**, which remain forbidden as object-I/O proof.
+   Rationale / 비발명: the deploy-time risk these rows guard is "do the production object-store adapters +
+   SecretRef resolution work against a real object store with no plaintext/`ObjectRef` leak", which a real
+   S3-protocol server fully exercises; whether the wire endpoint is owner-local or cloud does not change
+   adapter correctness. The DB-side lifecycle CAS — `redaction_status` from `pending`, `redaction_attempts`
+   threshold, legal-hold/quarantine claim **skip**, and `bypassrls.use` audit — stays REPO-CONTROLLED
+   (`runtime-worker.ts` claim queries `claimRedactionArtifact` / retention claim with
+   `legal_hold = false AND quarantine = false`, proven by `runtime-worker-claim.int.ts` under main
+   `Contract Gates` `test:int`) and is scope-split out of the object-I/O smoke. Build-condition: gate intro +
+   closure-boundary table amended to admit owner-operated real object stores; rows 51/52 close on the
+   owner-operated MinIO + Vault SecretRef-backed `objectstore:smoke` evidence (redacted alias `[s3-staging-1]`).
 
 ## Follow-Up Rule
 

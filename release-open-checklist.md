@@ -29,7 +29,7 @@
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact read/mutation RLS posture, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
 - [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output is recorded in the next row.
 - [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. Staging/deploy rollback evidence remains outside this contract repository and must be supplied by the project owner at deploy time.
-- [x] Current local blocked:audit output: 23 markers, 4 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (4 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows).
+- [x] Current local blocked:audit output: 21 markers, 2 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (2 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows).
 
 ## Deploy-Time Provisioning Blockers
 
@@ -38,7 +38,13 @@ they block any executable staging/open deployment until the single project owner
 provisions and evidences them at deploy time. There is no external
 platform/release/security team; "owner" throughout means this project's owner,
 and these rows close only when real infrastructure exists and produces real
-evidence (local fixtures/test_fake cannot close them).
+evidence. In-process `test_fake` / fakeable ports / temp-DB `BYPASSRLS` checks
+cannot close them. For the object-I/O rows 51/52, an object store **operated by
+the project owner** that speaks the real S3 wire protocol (SigV4 over HTTPS) with
+a SecretRef-backed credential resolved via the real SecretStore — including a
+self-hosted S3-compatible server such as MinIO — IS acceptable real evidence
+(owner ratification, release-decisions D8-A15); the in-process-fake ban is
+unchanged.
 
 - [ ] Deploy-time concrete staging platform repo and deploy target identifier, GitHub Environment `staging` protection/approver configuration, owner release-approval and rollback confirmation, and SecretRef/SecretStore provisioning path. Required decision: see `product-open-candidate-report.md`.
 - [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path is named without plaintext secret values (owner-attested: HashiCorp Vault, KV v2, mount `secret/`, base path `secret/data/rpa/staging/<runtime>/<purpose>/<name>`, identity map per D8-A12; auth=AppRole evidenced at the row-48 resolution smoke). No plaintext.
@@ -48,8 +54,8 @@ evidence (local fixtures/test_fake cannot close them).
 - [ ] Deploy-time staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location, authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, CI/deploy log redaction proof, no-env-dump/xtrace proof, and the secret-scan or equivalent negative control are named. Required decision: see `product-open-candidate-report.md`.
 - [x] Deploy-time staging producer retention duration/source policy — defined (release-decisions D8-A11 / D8-A14) and proven on a real staging PostgreSQL under a non-`SUPERUSER`/non-`BYPASSRLS` application role: `db:smoke:release` PASSED (`non-bypass RLS/redaction row-visibility assertions executed`; retention columns on every payload table, `artifacts` CHECK + `events_outbox.retention_until` NOT NULL fail-closed, tenant RLS) and producer integration tests PASSED proving each payload-bearing writer sets `retention_until` or fails closed (`security-audit.int`: all rows persist `retention_until` + invalid/malformed retention fails closed; `executor-invocation-recorder.int`: `step.completed retention set`; `pipeline.int`/`outbox-relay.int`/`api-artifacts.int`). Redacted endpoint alias `[staging-pg-1]`; no plaintext host/IP/credential. See `product-open-candidate-report.md` producer-retention resolution.
 - [x] Deploy-time D5 Codex SSE live capability evidence — captured (owner-attested live run). Production `CodexSseAdapter`/`FetchCodexSseTransport` ran live against endpoint `[codex-staging-1]` / model `[model-a]` (redacted aliases; absolute HTTPS, no credentials/query/fragment). Result **4/5 PASS**: mandatory #1 basic SSE / #2 prompt-schema safe path / #4 abort all PASS; #3 native `json_schema` PASS (jsonMode=true); #5 model metadata GAP with documented fallback (conservative `maxContextTokens=8192` retained). No plaintext key/raw identifier/env dump recorded (harness self-redaction). See `product-open-candidate-report.md` D5 packet.
-- [ ] Runtime artifact_redaction production/staging object I/O and redacted-output implementation is evidenced with SecretRef-backed real object-store credentials and redacted object receipts. Required decision: see `product-open-candidate-report.md`.
-- [ ] Runtime artifact_retention production/staging external object deletion implementation is evidenced with SecretRef-backed real object-store credentials, delete/not-found receipts, and legal-hold/quarantine handling proof. Required decision: see `product-open-candidate-report.md`.
+- [x] Runtime artifact_redaction production/staging object I/O and redacted-output implementation is evidenced (object-I/O half) on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via Vault AppRole (`VaultSecretStore.resolve`; `S3_SECRET_ACCESS_KEY` unset). `objectstore:smoke` PASS: production `S3ArtifactRedactor` + injected `ContentRedactionTransform` read→transform→write a redacted object; planted credential+email confirmed ABSENT from the redacted object on re-GET, sha256 in the redacted real-port receipt, self-check confirms no creds/accessKeyId/internal `ObjectRef`/AWS-credential-shape in output or raw rows. Redacted backend alias `[s3-staging-1]`. Scope-split (repo-controlled): `redaction_status` CAS-from-`pending`, claim/skip (quarantine/deleted/already-redacted), and `bypassrls.use` audit live in `runtime-worker.ts` `claimRedactionArtifact` and are proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime row below); the `redaction_attempts < max` threshold predicate is present in code (claim + finalize retry→failed) but exercised at attempts=0 only by that test. Owner ratification D8-A15. See `product-open-candidate-report.md`.
+- [x] Runtime artifact_retention production/staging external object deletion implementation is evidenced (object-I/O half) on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via Vault AppRole. `objectstore:smoke` PASS: production `S3ArtifactRetentionStore.deleteObject` returns `deleted` on first delete and `not_found` on re-delete (idempotent — via the merged HEAD-then-DELETE fix, since real S3 DELETE returns 204 even for a missing key), each with a redacted real-port receipt; transient (5xx/network) maps to `transient_failed` with no tombstone. Redacted backend alias `[s3-staging-1]`. Scope-split (repo-controlled): legal-hold/quarantine SKIP + `deleted_at`-under-claim CAS live in `runtime-worker.ts` retention claim (`legal_hold = false AND quarantine = false AND deleted_at IS NULL`), proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime row below). Owner ratification D8-A15. See `product-open-candidate-report.md`.
 - [x] Runtime execution gates prove tenant boundary, RBAC/redaction, no `BYPASSRLS`, and no silent false/unknown behavior in remote main CI evidence with the required job URLs for the Phase 7 runtime delta. GitHub Actions hosted-runner execution is restored (the prior account payment/spending-limit blocker no longer applies); the Phase 7 runtime delta is merged on `main` (`executor-step-orchestrator.ts` / `executor-completion-coordinator.ts` / `executor-invocation-recorder.ts`), and `main` `Contract Gates` run `27609993667` (commit `848413ce`) is `success` with the required job URLs: `App runtime typecheck and tests` https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653454 (runs `test:int` under a non-`SUPERUSER`/non-`BYPASSRLS` PostgreSQL 15 role — tenant RLS/RBAC/no-bypass/fail-closed), `Secret scan` https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653459, `PostgreSQL 15 migration smoke` https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653766.
 
 Closure boundary summary:
@@ -58,7 +64,7 @@ Closure boundary summary:
 |---|---|---|---|
 | Deploy-time provisioning | Single project owner, at deploy time (no external platform/release/security team exists) | Redacted release packet naming staging platform repo, GitHub Environment protection, deploy target, approval/rollback references, SecretStore alias/path, namespace/identity map, SecretRef inventory, retention policy, and live D5 evidence | Local fixtures, hard-coded aliases, CI service containers, or code-only SecretRef names |
 | Repo-controlled code/evidence | Repo code stream plus PR/main `Contract Gates` evidence | Contract/runtime/API changes, targeted tests, non-bypass DB evidence, secret scan, migration smoke, and app-runtime job URLs | Staging deploy approval, SecretStore provisioning path, production object-store credentials, or live model behavior |
-| Hybrid artifact lifecycle | Repo runtime owners for port/worker implementation; platform/SecretStore owners for real staging credentials and object store evidence | Repo rows can close only after real `ArtifactRedactor`/`ArtifactRetentionStore` wiring plus tests and remote gates; external rows stay open until SecretRef-backed staging object-store evidence exists | Fakeable local ports or temp-DB BYPASSRLS checks as proof of production/staging object I/O |
+| Hybrid artifact lifecycle | Repo runtime owners for port/worker implementation; the single project owner for real object-store + SecretStore evidence | Repo rows close after real `ArtifactRedactor`/`ArtifactRetentionStore` wiring plus tests and remote gates; the object-I/O rows 51/52 close on SecretRef-backed real object-store evidence — an owner-operated real S3-protocol store (incl. self-hosted MinIO, per D8-A15) exercising the production adapters — with DB-side claim/CAS/legal-hold/quarantine/audit scope-split to repo-controlled `runtime-worker.ts` + `runtime-worker-claim.int.ts` | In-process `test_fake` / fakeable ports or temp-DB `BYPASSRLS` checks as proof of object I/O (a real S3-protocol object store, not an in-process fake, is required) |
 
 ## Repo-Controlled D4.4 Evidence
 
@@ -159,12 +165,11 @@ PR/main `Contract Gates` run attaches the required job URLs.
 ## Remaining External Evidence Notes
 
 The only unchecked rows left in this checklist require owner deploy-time
-provisioning or remote evidence: concrete staging deploy target, SecretStore provisioning,
-non-app producer retention policy, D5 live model capability output, real
-artifact object-store receipts, GitHub Actions billing/spending-limit recovery,
-and PR/main `Contract Gates` URLs. Do not close
-those rows from local fixtures, temp DBs, fake ports, hard-coded aliases, or
-unredacted logs.
+provisioning: the concrete staging platform repo / deploy target + GitHub
+Environment protection (row 43), and the SecretRef/SecretStore
+provisioning-evidence artifact + authorized/unauthorized resolution smoke
+(row 48). Do not close those rows from local fixtures, temp DBs, in-process
+fake ports, hard-coded aliases, or unredacted logs.
 
 ## Manual Release Review
 
