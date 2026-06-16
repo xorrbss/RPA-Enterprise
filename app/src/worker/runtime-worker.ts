@@ -29,7 +29,8 @@ import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 import { type BrowserSessionProvider } from "../executor/browser-session-provider";
 import { requireString } from "./worker-util";
-import { ArtifactLifecycleRunner } from "./artifact-lifecycle-runner";
+import { ArtifactRedactionRunner } from "./artifact-redaction-runner";
+import { ArtifactRetentionRunner } from "./artifact-retention-runner";
 import { RunAbortRunner } from "./run-abort-runner";
 import { RunResumeRunner } from "./run-resume-runner";
 import { RunClaimRunner } from "./run-claim-runner";
@@ -103,7 +104,8 @@ type WorkitemRow = { status: WorkitemState };
 const DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS = 5_000;
 
 export class PgRuntimeWorker implements RuntimeWorker {
-  private readonly artifactLifecycle: ArtifactLifecycleRunner;
+  private readonly artifactRedaction: ArtifactRedactionRunner;
+  private readonly artifactRetention: ArtifactRetentionRunner;
   private readonly runAbort: RunAbortRunner;
   private readonly leases: BrowserLeaseManager;
   private readonly runResume: RunResumeRunner;
@@ -113,7 +115,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
     private readonly pool: pg.Pool,
     private readonly options: PgRuntimeWorkerOptions = {},
   ) {
-    this.artifactLifecycle = new ArtifactLifecycleRunner(this.pool, this.options);
+    this.artifactRedaction = new ArtifactRedactionRunner(this.pool, this.options);
+    this.artifactRetention = new ArtifactRetentionRunner(this.pool, this.options);
     this.runAbort = new RunAbortRunner(this.pool, this.options);
     this.leases = new BrowserLeaseManager(this.pool, this.options);
     this.runResume = new RunResumeRunner(this.pool, this.options, this.leases);
@@ -147,10 +150,10 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
       // D3(executor/lease)·D6(pipeline) 의존 — D2 골격 미구현. 조용한 no-op 금지: 명시적 throw.
       case "artifact_redaction":
-        return this.artifactLifecycle.handleArtifactRedaction(job);
+        return this.artifactRedaction.handleArtifactRedaction(job);
 
       case "artifact_retention":
-        return this.artifactLifecycle.handleArtifactRetention(job);
+        return this.artifactRetention.handleArtifactRetention(job);
 
       case "sink_deliver":
         return this.handleSinkDeliver(job);
