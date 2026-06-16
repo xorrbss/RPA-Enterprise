@@ -22,6 +22,8 @@ const TENANT = "00000000-0000-0000-0000-0000000000a1";
 const SCEN = "70000000-0000-0000-0000-0000000000d1";
 const SVER = "70000000-0000-0000-0000-0000000000d2";
 const RUN = "71000000-0000-0000-0000-0000000000d1";
+const RUN_FAIL_BIZ = "71000000-0000-0000-0000-0000000000d3";
+const RUN_FAIL_SYS = "71000000-0000-0000-0000-0000000000d4";
 const WORKER = "9a000000-0000-0000-0000-0000000000a1";
 
 let failures = 0;
@@ -53,6 +55,29 @@ const fakeExecutor: ExecutorPlugin = {
     throw new Error("verify not used in driver int");
   },
 };
+
+// 실패 terminal 구동 검증용: 첫 스텝(navigate)에서 지정 StepStatus 반환 → 인터프리터가 fail_business/fail_system terminal 로 매핑.
+function failingExecutor(status: "failed_business" | "failed_system"): ExecutorPlugin {
+  return {
+    capabilities: () => ({ dom: false, vision: false, utility: true }),
+    async execute(stepId) {
+      const now = new Date().toISOString();
+      return {
+        stepId,
+        action: "navigate",
+        status,
+        pageStateBefore: "ref",
+        pageStateAfter: "ref",
+        artifacts: [],
+        cache: { mode: "bypass" },
+        timings: { startedAt: now, endedAt: now, durationMs: 0 },
+      };
+    },
+    async verify() {
+      throw new Error("verify not used in driver int");
+    },
+  };
+}
 
 // fake resolver: reviews_visible=true → on[] 분기가 done(terminal)으로 라우팅.
 const fakeResolver: PageStateResolver = {
@@ -110,11 +135,13 @@ async function main(): Promise<void> {
         [SVER, TENANT, SCEN, JSON.stringify(compiled.ir), compiled.compiledAst],
       );
       // R1을 우회해 claimed 상태로 직접 시드(드라이버는 R2부터). correlation_id=run_id.
-      await c.query(
-        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
-         VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
-        [RUN, TENANT, SVER, WORKER],
-      );
+      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS]) {
+        await c.query(
+          `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
+           VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
+          [rid, TENANT, SVER, WORKER],
+        );
+      }
     });
 
     const run: ClaimedRun = {
@@ -154,6 +181,47 @@ async function main(): Promise<void> {
       return r.rows.map((x) => x.event_type);
     });
     check("outbox에 run 전이 이벤트 emit됨", events.length >= 1, events.join(","));
+
+    // 실패 terminal 구동(2a): fail_business → failed_business(R9 단일 전이), fail_system → failed_system(R8 단일 전이).
+    // applyRunTransition 이 run.failed_* emit + ended_at 설정 — 드라이버는 단일 전이만 적용(success 의 2-hop 과 비대칭).
+    for (const f of [
+      { rid: RUN_FAIL_BIZ, status: "failed_business" as const, terminal: "fail_business", state: "failed_business", event: "run.failed_business" },
+      { rid: RUN_FAIL_SYS, status: "failed_system" as const, terminal: "fail_system", state: "failed_system", event: "run.failed_system" },
+    ]) {
+      const fres = await driveClaimedRun(
+        {
+          runId: f.rid,
+          tenantId: TENANT,
+          scenarioVersionId: SVER,
+          correlationId: f.rid,
+          leaseId: "lease-f",
+          siteProfileId: "site-1",
+          browserIdentityId: "bid-1",
+          networkPolicyId: "np-1",
+          params: { entry_url: "https://example.com" },
+        },
+        { pool, executor: failingExecutor(f.status), resolver: fakeResolver, workerId: WORKER },
+      );
+      check(`driver(${f.status}) → state=${f.state}`, fres.state === f.state, fres.state);
+      check(`${f.status} → terminal=${f.terminal}`, fres.outcome.terminal === f.terminal, fres.outcome.terminal);
+      const fdb = await withTenantTx(pool, TENANT, async (c) => {
+        const r = await c.query<{ status: string; ended_at: Date | null }>(
+          `SELECT status, ended_at FROM runs WHERE id=$1::uuid`,
+          [f.rid],
+        );
+        return r.rows[0] ?? null;
+      });
+      check(`DB runs.status = ${f.state}`, fdb?.status === f.state, JSON.stringify(fdb));
+      check(`${f.state} ended_at 기록(terminal)`, fdb?.ended_at !== null && fdb?.ended_at !== undefined);
+      const fevents = await withTenantTx(pool, TENANT, async (c) => {
+        const r = await c.query<{ event_type: string }>(
+          `SELECT event_type FROM events_outbox WHERE correlation_id=$1::uuid ORDER BY created_at`,
+          [f.rid],
+        );
+        return r.rows.map((x) => x.event_type);
+      });
+      check(`outbox에 ${f.event}`, fevents.includes(f.event), fevents.join(","));
+    }
 
     // 멱등 재구동: 이미 completed → claimed→running CAS 0 rows → 표면화(조용한 false 금지).
     let reDriveThrew = false;

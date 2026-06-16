@@ -421,7 +421,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
     );
 
     // Phase B: 구동(tx 밖 — 브라우저 작업이 DB 커넥션 점유 금지). 미주입/미구동이면 claimed 결과 반환.
-    // success-only: driveClaimedRun 은 비-success terminal 에서 throw(run-step-driver) → 표면화(propagate). 세션은 finally 해제.
+    // driveClaimedRun: success→completed, fail_business/fail_system→failed_*(2a). suspend/challenge 등 그 외 terminal 은
+    // 미구현 throw 로 표면화(propagate). 세션은 어느 경로든 finally 에서 해제.
     if (claim.drive === undefined || sessionProvider === undefined) return claim.result;
     const d = claim.drive;
     const siteConfig = await withTenantTx(this.pool, tenantId, (c) =>
