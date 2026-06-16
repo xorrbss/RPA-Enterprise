@@ -25,18 +25,27 @@ const CREDENTIAL_EXFILTRATION_PATTERNS: readonly RegExp[] = [
 ];
 
 // security-contracts §3 신호(b): "ignore previous / system / 너는 이제~ 류 지시 패턴".
-// §53(패턴 사전은 운영 정책으로 갱신)에 따라 영어 변형 + 한국어 canonical을 사전화한다.
+// §53(패턴 사전은 운영 정책으로 갱신)에 따라 영어 변형 + 한국어 canonical/축약을 사전화한다.
 // 제품 운영자/페이지 언어가 한국어(CLAUDE.md)이므로 한국어 instruction-override 신호 누락은 실효 우회였다(RQ-020).
+// 자매 detector security/compliance-scaffold.ts INSTRUCTION_OVERRIDE_RE(you-are-now·너는 이제 등)와 최소 정합 —
+// 동일 §3(b) 신호에 비대칭 판정이 나지 않도록 이 사전이 그 토큰을 superset으로 포함한다.
+// (두 detector를 단일 패턴 SSoT로 통합하는 구조 정리는 RQ-031로 추적. bare 'system prompt' 등 보수적 과차단은
+//  §3 "신호≥1→차단(기본)" 허용 trade-off로, scaffold와 동일 동작을 유지한다.)
 const INSTRUCTION_OVERRIDE_PATTERNS: readonly RegExp[] = [
-  // 영어: ignore/disregard + (all/any) previous/prior/above/earlier/system/instructions ("ignore all previous instructions" 등 비연속 변형 포함)
+  // 영어 — 이전/시스템 지시 무시(비연속 변형 "ignore all previous instructions" 포함):
   /\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|preceding)\b/i,
   /\b(?:ignore|disregard|override)\s+(?:the\s+)?(?:system|developer)?\s*(?:prompt|instructions?|rules?|message)\b/i,
   /\bsystem\s+prompt\b/i,
-  // 한국어(security-contracts §3 신호 b "너는 이제~" canonical + 명백한 지시-override 등가):
-  /너는\s*이제/,
-  /당신은\s*이제/,
-  /(?:이전|위|앞|기존)\s*(?:의)?\s*(?:지시|명령|규칙|프롬프트)(?:사항)?\s*(?:을|를)?\s*(?:모두\s*)?무시/,
-  /(?:지시|명령|규칙|프롬프트)(?:사항)?\s*(?:을|를)?\s*(?:모두\s*)?무시\s*(?:하|해|할)/,
+  /\bdeveloper\s+message\b/i,
+  // 영어 — 역할 재지정("너는 이제~"의 영어 등가, scaffold 정합):
+  /\b(?:you\s+are|you're)\s+now\b/i,
+  /\bfrom\s+now\s+on\b[\s\S]{0,24}\byou\s+(?:are|will|must|should)\b/i,
+  // 한국어 — security-contracts §3 canonical "너는 이제~" + 축약(넌)/어순(이제부터 너는) 변형:
+  /(?:너는|넌|당신은)\s*(?:이제|이제부터)/,
+  /(?:이제부터|지금부터)\s*(?:너는|넌|당신은)/,
+  // 한국어 — 이전 지시/지침/규칙 무시·망각:
+  /(?:이전|위|앞|기존)\s*(?:의)?\s*(?:지시|지침|명령|규칙|프롬프트)(?:사항)?\s*(?:을|를)?\s*(?:모두\s*)?(?:무시|잊)/,
+  /(?:지시|지침|명령|규칙|프롬프트)(?:사항)?\s*(?:을|를)?\s*(?:모두\s*)?무시/,
   /시스템\s*프롬프트/,
 ];
 

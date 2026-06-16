@@ -500,10 +500,14 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
         });
         if (row === null) {
           // RLS가 비가시(pending/failed/quarantined/deleted/cross-tenant) 행을 숨김 → 404(존재 비노출, D8-A1).
+          // 여기서는 §10 audit를 남기지 않는다(의도적 scoping): RLS-숨김은 "이 테넌트에 해당 artifact가 존재하지 않음"
+          // 이라 audit할 artifact.read 결정 대상이 없고(존재 비노출과도 정합), 역할-수준 RBAC deny는 본 핸들러 이전
+          // preHandler(server.ts)에서 disclosure와 무관하게 차단된다. §10의 fail-closed 의무는 **본문 disclosure(allow)**
+          // 경로에 적용한다. (deny/blocked까지 문자 그대로 audit하려면 별도 결정 필요 — RQ-019 노트.)
           throw new ApiResponseError("RESOURCE_NOT_FOUND");
         }
-        // security-contracts §10:147-148: artifact.read(allow) 결정을 **본문 반환 전** append-only audit log에
-        //   fail-closed로 남긴다. recordDecision throw(PgSecurityAuditAppendRequiredError) 시 본문 미반환(fail-closed).
+        // security-contracts §10:147-148: artifact.read(allow=본문 disclosure) 결정을 **본문 반환 전** append-only
+        //   audit log에 fail-closed로 남긴다. recordDecision throw(PgSecurityAuditAppendRequiredError) 시 본문 미반환.
         const occurredAt = new Date();
         await securityAudit.recordDecision(
           {

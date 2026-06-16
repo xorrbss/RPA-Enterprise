@@ -177,10 +177,20 @@ export class UtilityExecutor implements ExecutorPlugin {
       if (url === undefined) {
         throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' navigate.url must be a non-empty string`);
       }
+      let parsed: URL;
       try {
-        new URL(url);
+        parsed = new URL(url);
       } catch {
         throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' navigate.url must be an absolute URL`);
+      }
+      // 방어심층(RQ-021): 실행기는 url을 독립 재검증하는 신뢰경계다 — http(s)만 허용한다. opaque scheme
+      //   (file:/javascript:/data:/blob: 등)은 producer(site-resolution.originOf)가 막아도 실행기에서 fail-closed로
+      //   재차단(단일 producer 가정에 의존하지 않음, 조용한 false 금지). site-resolution.originOf와 동일 규약.
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new UtilityExecutorError(
+          "IR_SCHEMA_INVALID",
+          `step '${stepId}' navigate.url must be an http(s) URL (got scheme '${parsed.protocol}')`,
+        );
       }
       return { type, url };
     }
