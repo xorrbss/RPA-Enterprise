@@ -186,6 +186,14 @@ async function main(): Promise<void> {
       const r10 = await get("not-a-uuid");
       check("invalid uuid → 404", r10.statusCode === 404 && r10.json().code === "RESOURCE_NOT_FOUND", r10.body);
 
+      // 10b) RQ-022: 가시(redacted) artifact인데 object bytes 부재(스토리지 유실) → 미분류 500이 아니라 fail-closed 404.
+      //   disclosure 자체가 불가하므로 §10 audit 행도 미추가(여전히 3).
+      const objMissing = await seedArtifact(pool, store, TENANT_A, "will-be-deleted", { redaction_status: "redacted" });
+      await store.delete(objMissing.objectRef); // object 파일만 삭제(artifacts row는 가시로 남김).
+      const r10b = await get(objMissing.id);
+      check("object bytes 부재 → 404 (500 아님)", r10b.statusCode === 404 && r10b.json().code === "RESOURCE_NOT_FOUND", r10b.body);
+      check("object 부재 404은 audit 미추가(여전히 3)", (await artifactReadAuditCount(pool, TENANT_A)) === 3);
+
       // 11) RQ-019 fail-closed: artifactStore가 있는데 securityAudit 미주입 → 라우트 등록이 fail-closed throw
       //     (audit 없이 artifact 본문 노출 불가, security-contracts §10).
       let buildThrew = false;

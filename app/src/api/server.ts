@@ -70,7 +70,8 @@ const ISO_8601_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9
  * deploy-time(B3, release-decisions D8-A1) — 미지정 시 GET /v1/artifacts 라우트는 미등록(조회 capability 미노출).
  */
 export interface ArtifactObjectReader {
-  get(objectRef: ObjectRef): Promise<string>;
+  /** object bytes 반환. **부재 시 null**(라우트가 fail-closed 404 처리 — 가시 metadata인데 object 부재=무결성 이슈). */
+  get(objectRef: ObjectRef): Promise<string | null>;
 }
 
 export interface ApiServerDeps {

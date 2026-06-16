@@ -506,8 +506,20 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           // 경로에 적용한다. (deny/blocked까지 문자 그대로 audit하려면 별도 결정 필요 — RQ-019 노트.)
           throw new ApiResponseError("RESOURCE_NOT_FOUND");
         }
+        // 본문은 redacted/not_required object(at rest 마스킹) — 평문 노출 없음(security-contracts §4/§9).
+        // object를 audit **전에** 읽는다: 부재(null)면 disclosure 자체가 불가하므로 audit를 남기지 않고 fail-closed 404
+        //   (RQ-022 — 가시 metadata인데 object bytes 부재 = 데이터 무결성 이슈; 미분류 500이 아니라 결정형 404).
+        const content = await artifactStore.get(row.object_ref as ObjectRef);
+        if (content === null) {
+          // 운영 가시성: 무결성 이슈를 error 로깅(클라이언트엔 존재 비노출=404로만 표면화). §10 audit는 실제 disclosure만.
+          request.log.error(
+            { artifact_id: row.id, correlation_id: request.correlationId },
+            "artifact object bytes missing for visible row — fail-closed 404 (data integrity)",
+          );
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
         // security-contracts §10:147-148: artifact.read(allow=본문 disclosure) 결정을 **본문 반환 전** append-only
-        //   audit log에 fail-closed로 남긴다. recordDecision throw(PgSecurityAuditAppendRequiredError) 시 본문 미반환.
+        //   audit log에 fail-closed로 남긴다(object 확인 후 = 실제 disclosure 경로). recordDecision throw 시 본문 미반환.
         const occurredAt = new Date();
         await securityAudit.recordDecision(
           {
@@ -531,8 +543,6 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           },
           { artifact_id: row.id },
         );
-        // 본문은 redacted/not_required object(at rest 마스킹) — 평문 노출 없음(security-contracts §4/§9).
-        const content = await artifactStore.get(row.object_ref as ObjectRef);
         reply.code(200).send({
           artifact_id: row.id,
           type: row.type,
