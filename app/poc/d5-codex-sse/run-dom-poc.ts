@@ -194,7 +194,7 @@ async function main(): Promise<void> {
       feature: "dom extract 라이브 — production 배선(factory→composite→dom→gateway→adapter→Codex)",
       status: ok ? "PASS" : "GAP",
       via: "ExecutorPlugin.execute(extract) → LlmGateway.call → CodexSseAdapter.streamCall(live)",
-      evidence: redact(JSON.stringify({ status: res.status, action: res.action, finishReason: (res.output as { finishReason?: unknown })?.finishReason, extracted: res.extracted, sinkStored: lastSinkContent !== null })),
+      evidence: redact(JSON.stringify({ status: res.status, action: res.action, exception: res.exception, finishReason: (res.output as { finishReason?: unknown })?.finishReason, extracted: res.extracted, sinkStored: lastSinkContent !== null })),
     });
   } catch (e) {
     rows.push({
