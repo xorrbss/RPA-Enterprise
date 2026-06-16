@@ -205,11 +205,45 @@ export async function createStagehandSession(
   throw new CdpDisconnectedError("stagehand.init", "disconnected");
 }
 
-/** 단일 세션을 모든 lease 에 바인딩(dry-run/단일 워커). 다중 lease 풀은 D3 lease(DB) 단계. */
+/** 단일 세션을 모든 lease 에 바인딩(dry-run/단일 워커). 다중 lease 풀은 LeaseKeyedSessionProvider. */
 export class SingleSessionProvider implements CdpSessionProvider {
   constructor(private readonly session: CdpSession) {}
 
   forLease(_leaseId: string): CdpSession {
     return this.session;
+  }
+}
+
+/**
+ * leaseId → 세션 다중 바인딩. SingleSessionProvider 의 일반화(브라우저 워커 풀의 in-process 레지스트리):
+ * 동시 다수 lease 가 각자 자기 세션을 받고, lease 간 세션 공유는 없다(cross-lease 상태 누수 = 정확성·보안 위반).
+ * 세션 생성/close 는 소유하지 않는다(저결합) — register 는 호출측이 만든 세션을 등록하고, unbind 는 호출측이
+ * close 하도록 세션을 돌려준다. forLease 는 run 당 여러 번(execute/verify/resolvePageState) 호출되므로 동기·idempotent.
+ */
+export class LeaseKeyedSessionProvider implements CdpSessionProvider {
+  private readonly sessions = new Map<string, CdpSession>();
+
+  /** lease 에 세션을 등록. 이미 바인딩된 leaseId 면 throw — 조용한 덮어쓰기는 이전 세션을 고아로 누수시킨다. */
+  register(leaseId: string, session: CdpSession): void {
+    if (this.sessions.has(leaseId)) {
+      throw new Error(`LeaseKeyedSessionProvider: leaseId '${leaseId}' already bound (중복 bind — 세션 누수 방지)`);
+    }
+    this.sessions.set(leaseId, session);
+  }
+
+  /** 바인딩된 세션 반환. 미바인딩(미등록·해제·sweep)이면 typed throw — 조용한 null 금지. CDP_DISCONNECTED(재시도/lease 회수). */
+  forLease(leaseId: string): CdpSession {
+    const session = this.sessions.get(leaseId);
+    if (session === undefined) {
+      throw new CdpDisconnectedError(`LeaseKeyedSessionProvider.forLease(${leaseId})`, "disconnected");
+    }
+    return session;
+  }
+
+  /** lease 바인딩 해제 후 세션 반환(호출측이 close 책임 — 레지스트리는 lifecycle 비소유). 미바인딩이면 undefined(idempotent). */
+  unbind(leaseId: string): CdpSession | undefined {
+    const session = this.sessions.get(leaseId);
+    this.sessions.delete(leaseId);
+    return session;
   }
 }
