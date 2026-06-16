@@ -57,10 +57,9 @@ path at deploy time (no external release/oncall team exists).
 - The 13 release decisions are resolved and tracked by
   `release-open-checklist.md` / `release-decisions.md`.
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
-  blockers split by scope: the two remaining external/staging blocker categories
-  are the concrete staging platform/deploy target + GitHub Environment, and the
-  SecretRef/SecretStore provisioning-evidence artifact + authorized/unauthorized
-  resolution smoke. Repo-controlled D4.5 API P1 and
+  blockers split by scope: the one remaining external/staging blocker category
+  is the concrete staging platform/deploy target + GitHub Environment.
+  Repo-controlled D4.5 API P1 and
   D3 runtime execution blocker rows are now resolved locally as fail-closed
   API behavior, real executor orchestration/outcome mapping, and artifact
   lifecycle port/evidence guardrails.
@@ -70,8 +69,8 @@ path at deploy time (no external release/oncall team exists).
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 21 markers, 2 actionable blockers, 13 known release decisions tracked,
-  13 release decisions checked (2 active deploy-time provisioning checklist rows;
+  output: 20 markers, 1 actionable blockers, 13 known release decisions tracked,
+  13 release decisions checked (1 active deploy-time provisioning checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -212,8 +211,8 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 21 markers, 2 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked (2 active deploy-time provisioning
+  (current output: 20 markers, 1 actionable blockers, 13 known release
+  decisions tracked, 13 release decisions checked (1 active deploy-time provisioning
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
@@ -607,7 +606,7 @@ dumps, or deployment credentials in this repository.
 | SecretRef namespace and runtime identity map | Namespace convention plus runtime identities allowed to resolve each namespace | BLOCKED external evidence |
 | Initial SecretRef inventory | SecretRef identifiers, owning service/runtime, and intended purpose only | BLOCKED external evidence |
 | Rotation and break-glass ownership | Rotation owner/cadence plus break-glass/update owner and procedure | BLOCKED external evidence |
-| CI/deploy and SecretStore resolution proof | Artifact URL proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening | BLOCKED external evidence |
+| CI/deploy and SecretStore resolution proof | Artifact URL proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening | Resolved — owner-operated real Vault `secretstore:smoke` PASS ([A] ALLOW + [B] DENY, `secret.resolve` audit seq/hash, redaction self-check), per D8-A15; bucket/secret values remain deploy-time |
 | Release approval and rollback confirmation | Owner release-approval and rollback confirmation at deploy time | Tracked by the deploy target blocker above |
 
 Evidence intake rules for this packet:
@@ -635,8 +634,7 @@ Evidence intake rules for this packet:
 - Resolved (D8-A12): SecretRef namespace convention and runtime identity map are named — `rpa/<env>/<runtime>/<purpose>/<name>` with the owner-confirmed least-privilege resolve matrix (incl. `artifact-lifecycle`→`object_store`, D8-A10) in staging-decision-proposals.md §3. The real SecretStore backend mount/path remains row 44 (external). Former Required decision: name the namespace convention and the runtime identities allowed to resolve each namespace before staging deploy.
 - Resolved (D8-A12): Initial SecretRef inventory is listed by identifier only (owning runtime + purpose, no resolved material) in staging-decision-proposals.md §4. Former Required decision: list initial SecretRef identifiers, owning service/runtime, and intended purpose only; resolved secret material must remain outside this repository.
 - Resolved (D8-A13): Rotation/break-glass policy and rotation owner are named — cadence defaults (`gateway_policy` 90d, `resume_token_hmac` kid 180d, `executor` 90d, `signed_command` 365d), break-glass procedure, and rotation owner = single project owner (release-decisions #13) in staging-decision-proposals.md §5. Former Required decision: name the rotation owner/cadence and break-glass/update procedure before staging deploy.
-- TODO: [BLOCKED] Deploy-time staging SecretRef/SecretStore provisioning readiness evidence is missing CI/deploy negative-log, secret-scan or equivalent negative control, and SecretStore resolution proof.
-  Required decision: At deploy time, the project owner must provide the evidence artifact location proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext secret materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening in staging CI/deploy logs.
+- Resolved (owner-ratified Vault resolution evidence, D8-A15): SecretStore resolution + `secret.resolve` audit are evidenced on an owner-operated real HashiCorp Vault (AppRole auth, KV v2) with the durable `PgDurableSecurityAuditDecisionWriter` writing the hash-chained audit to a real PostgreSQL `audit_log` under a non-`SUPERUSER`/non-`BYPASSRLS` role. `secretstore:smoke` PASS: [A] authorized `runtime-worker` → `resume_token_hmac` (ref `rpa/staging/runtime-worker/resume_token_hmac/active`) → **ALLOW** (resolved via AppRole; PlainSecret non-empty, value never materialized/printed), `secret.resolve` audit seq#1 + hash; [B] unauthorized `browser-worker` → `gateway_policy` → **DENY** (`SECRET_ACCESS_DENIED`, least-privilege D8-A12 matrix, denied in-app before any Vault read), audit seq#2 + hash. redaction self-check PASS: no AppRole role_id/secret_id, Vault token, or resolved secret value in the printed output or raw report (no env dump/xtrace). The repo `Secret scan` CI gate is the standing negative control (AppRole creds are env-only, never committed). Owner ratification recorded in release-decisions D8-A15 and the amended Deploy-Time Provisioning Blockers gate. Former Required decision: provide authorized/unauthorized SecretStore resolution smoke + `secret.resolve` audit proof without material + log redaction + no-env-dump + secret-scan negative control.
 
 ### Artifact Object-Store Evidence Packet (B3 / checklist rows 48-49)
 
@@ -678,10 +676,9 @@ mandatory #1/#2/#4 PASS). The `CODEX_API_KEY` stays in a gitignored local `.env`
 ## Remaining External Evidence Notes
 
 All repo-controlled D4.5 API P1 and D3 runtime execution rows are locally
-resolved in this patch. The two remaining unchecked rows require owner deploy-time
+resolved in this patch. The one remaining unchecked row requires owner deploy-time
 provisioning: the concrete staging platform/deploy target + GitHub Environment
-(row 43), and the SecretRef/SecretStore provisioning-evidence artifact +
-authorized/unauthorized resolution smoke (row 48).
+(row 43).
 
 Do not close those rows from local fixtures, temp DBs, fake object-store ports,
 hard-coded aliases, CI service-container credentials, or unredacted logs. When

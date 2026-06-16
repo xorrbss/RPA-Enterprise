@@ -571,6 +571,11 @@ D8-A15. Owner ratification: an owner-operated REAL object store (real S3 protoco
    `Contract Gates` `test:int`) and is scope-split out of the object-I/O smoke. Build-condition: gate intro +
    closure-boundary table amended to admit owner-operated real object stores; rows 51/52 close on the
    owner-operated MinIO + Vault SecretRef-backed `objectstore:smoke` evidence (redacted alias `[s3-staging-1]`).
+   The same ratification extends to **row 48 (SecretStore resolution)**: an owner-operated real HashiCorp
+   Vault (AppRole auth + KV v2) is acceptable for the authorized/unauthorized `secretstore:smoke` +
+   `secret.resolve` audit (written hash-chained by `PgDurableSecurityAuditDecisionWriter` to a real
+   PostgreSQL `audit_log` under a non-`SUPERUSER`/non-`BYPASSRLS` role), under the same in-process-fake ban;
+   the real Vault mount/path and resolved secret values remain deploy-time external facts.
 
 ## Follow-Up Rule
 
