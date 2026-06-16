@@ -156,6 +156,36 @@ async function main(): Promise<void> {
     check("deleteDistinguishing 404 → not_found", (await store404.deleteDistinguishing("s3://examplebucket/x" as ObjectRef)) === "not_found");
   }
 
+  // === (4b) deleteDistinguishing 는 HEAD 로 존재를 먼저 확인한다(실 S3/MinIO: DELETE 는 부재여도 204 라
+  //          DELETE status 단독으로는 deleted/not_found 를 구분할 수 없다 — method-aware mock 으로 실 시퀀스 검증). ===
+  {
+    // 존재(HEAD 200) → DELETE 204 → deleted. 호출 순서 [HEAD, DELETE].
+    const calls: Call[] = [];
+    const storeExists = makeStore(
+      recordingTransport(calls, (c) => okBytes(c.method === "DELETE" ? 204 : 200, new Uint8Array())),
+      true,
+    );
+    const r1 = await storeExists.deleteDistinguishing("s3://examplebucket/x" as ObjectRef);
+    check("HEAD 200 + DELETE 204 → deleted", r1 === "deleted", r1);
+    check(
+      "존재 시 HEAD 후 DELETE(2 calls)",
+      calls.length === 2 && calls[0]?.method === "HEAD" && calls[1]?.method === "DELETE",
+      calls.map((c) => c.method).join(","),
+    );
+
+    // 부재(HEAD 404) → not_found, DELETE 미호출(1 call: HEAD only). DELETE 가 부재를 204 로 흡수해도
+    // not_found 가 deleted 로 둔갑하지 않음을 보장(실 S3 의 멱등-204 함정).
+    const calls2: Call[] = [];
+    const storeMissing = makeStore(recordingTransport(calls2, () => okBytes(404, new Uint8Array())), true);
+    const r2 = await storeMissing.deleteDistinguishing("s3://examplebucket/missing" as ObjectRef);
+    check("HEAD 404 → not_found", r2 === "not_found", r2);
+    check(
+      "부재 시 HEAD 만(DELETE 미호출)",
+      calls2.length === 1 && calls2[0]?.method === "HEAD",
+      calls2.map((c) => c.method).join(","),
+    );
+  }
+
   // === (5) delete 5xx → throw(삭제로 간주 금지) + 자격/서명 미누설. ===
   {
     const store = makeStore(recordingTransport([], () => okBytes(503, new Uint8Array())), true);
