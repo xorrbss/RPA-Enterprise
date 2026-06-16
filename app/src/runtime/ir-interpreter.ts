@@ -37,7 +37,7 @@ export interface InterpreterDeps {
   readonly resolver: PageStateResolver;
   /** run 실행 파라미터(runs.params). on[].when 의 params.* 참조 스코프. 드라이버가 run.params 를 주입. */
   readonly params?: Record<string, unknown>;
-  /** 그래프 비종료(무한 루프) 방어 상한. ops-defaults 연동은 후속. */
+  /** 그래프 비종료(무한 루프) 방어 상한(총 노드 순회). 미지정 시 ops-defaults.md §5 `interpreter.graph_max_steps`(200) 적용. */
   readonly maxSteps?: number;
 }
 
@@ -63,6 +63,8 @@ export class InterpreterError extends Error {
   }
 }
 
+// ops-defaults.md §5 `interpreter.graph_max_steps` — 그래프 총 노드 순회 상한(비종료 방어).
+// loop.max_iterations(loop body 전용)와 구분. 환경별 오버라이드는 deps.maxSteps 주입.
 const DEFAULT_MAX_STEPS = 200;
 
 // 실패 status → terminal 매핑. 처리 못 하는 status(suspended/challenge/uncertain 등)는 null → 호출부가 표면화.
