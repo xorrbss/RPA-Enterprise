@@ -88,8 +88,9 @@ export class InterpreterError extends Error {
   }
 }
 
-// ops-defaults.md §5 `interpreter.graph_max_steps` — 그래프 총 노드 순회 상한(비종료 방어).
-// loop.max_iterations(loop body 전용)와 구분. 환경별 오버라이드는 deps.maxSteps 주입.
+// ops-defaults.md §5 `interpreter.graph_max_steps` — **구조적(non-loop) 노드 순회** 상한(비종료 방어, D8-A7/A8).
+// loop 반복은 max_iterations로 독립 바운드되며 runScenario가 loop별 (max_iterations×nodeCount) 만큼 budget을 확장해
+// 두 가드를 실제 독립화한다(loop 반복이 구조 상한을 spurious 소진 방지). 환경별/중첩-loop 오버라이드는 deps.maxSteps.
 const DEFAULT_MAX_STEPS = 200;
 
 // 실패 status → terminal 매핑. 처리 못 하는 status(suspended/challenge/uncertain 등)는 null → 호출부가 표면화.
@@ -108,7 +109,16 @@ export async function runScenario(
   initialCtx: RunContext,
   deps: InterpreterDeps,
 ): Promise<ScenarioOutcome> {
-  const maxSteps = deps.maxSteps ?? DEFAULT_MAX_STEPS;
+  // graph_max_steps(=DEFAULT_MAX_STEPS, D8-A7)는 **구조적(non-loop) 순회** 상한이다. loop 반복은 max_iterations로
+  // 독립 바운드되므로(loopState, graceful exit_target), 그 반복분이 구조 상한을 spurious하게 소진해 IR_LOOP_LIMIT로
+  // 떨어지지 않도록 loop별 (max_iterations × nodeCount) 만큼 budget을 확장한다 → 두 가드가 실제로 독립(D8-A7/A8).
+  // deps.maxSteps 명시 override는 그대로 사용(운영자 전권). 깊은 중첩 loop는 override 권장(D8-A8). 비-loop 그래프는 200 불변.
+  const nodeCount = Object.keys(scenario.nodes).length;
+  let loopAllowance = 0;
+  for (const n of Object.values(scenario.nodes)) {
+    if (n.flow.kind === "loop") loopAllowance += n.flow.maxIterations * nodeCount;
+  }
+  const maxSteps = deps.maxSteps ?? DEFAULT_MAX_STEPS + loopAllowance;
   const visited: string[] = [];
   const steps: InterpreterStep[] = [];
   // 실행 완료 노드의 표준 출력(node.<id>.*). status(항상) + extract 노드의 row_count({rows} 봉투 길이)·extracted_ref
@@ -193,6 +203,6 @@ export async function runScenario(
 
   throw new InterpreterError(
     "IR_LOOP_LIMIT",
-    `interpreter: exceeded ${maxSteps} steps without reaching terminal (비종료 그래프 의심)`,
+    `interpreter: exceeded ${maxSteps} steps (graph_max_steps + loop allowance) without reaching terminal (비종료 그래프 의심 — loop은 max_iterations로 graceful exit)`,
   );
 }

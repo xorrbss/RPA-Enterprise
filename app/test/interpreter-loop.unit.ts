@@ -120,6 +120,43 @@ async function main(): Promise<void> {
   const o6 = await runFull(loopScenario("loop.page_count >= params.max_pages", 10), { max_pages: 0 });
   check("즉시 종료(max_pages=0): body 0회", bodyPasses(o6) === 0 && o6.terminal === "success", `passes=${bodyPasses(o6)}`);
 
+  // 7) high max_iterations graceful exit(break-it P2): max=300, 기본 budget(deps.maxSteps 미지정)에서 iteration>=250
+  //    까지 돌고 graceful exit(IR_LOOP_LIMIT 아님). graph_max_steps(200)가 loop 누적을 막지 않음 = 두 가드 독립(D8-A7/A8).
+  const o7 = await runFull(loopScenario("loop.iteration >= 250", 300), {});
+  check("high max_iterations(300): iteration>=250 graceful exit(IR_LOOP_LIMIT 아님)", bodyPasses(o7) === 250 && o7.terminal === "success", `passes=${bodyPasses(o7)} term=${o7.terminal}`);
+
+  // 8) until 참조 flag 를 resolver 가 누락 → IREL_RUNTIME_MISSING(loud). IREL eager-OR(non short-circuit)·조용한 false 금지.
+  //    (플랫폼 IREL evaluator 동작 — on[]과 동형. 미설정 flag 를 false로 단락하지 않음.) resolver flags={}(no_next_page 미제공).
+  const e8 = await runThrows(loopScenario("flags.no_next_page || loop.page_count >= params.max_pages", 10), { max_pages: 3 }, [{}]);
+  check(
+    "until 참조 flag 누락 → IREL_RUNTIME_MISSING(loud)",
+    e8 instanceof Error && (e8 as { code?: string }).code === "IREL_RUNTIME_MISSING",
+    e8 instanceof Error ? `${(e8 as { code?: string }).code ?? ""}: ${e8.message}` : String(e8),
+  );
+
+  // 9) loop 노드의 what 은 매 도착(탈출 도착 포함)마다 실행 — 컨트롤 포인트(D8-A8; 작업은 body_target에). iteration+1회.
+  {
+    let loopNodeExec = 0;
+    const exec: ExecutorPlugin = {
+      ...fakeExecutor,
+      execute: async (stepId: string): Promise<StepResult> => {
+        if (stepId.startsWith("L.")) loopNodeExec += 1;
+        return stepResult("success");
+      },
+    };
+    const scn: CompiledScenario = {
+      start: "L",
+      nodes: {
+        L: { what: [{ type: "act" }], flow: { kind: "loop", until: ast("loop.iteration >= 2"), bodyTarget: "B", exitTarget: "done", maxIterations: 10 } },
+        B: { what: [{ type: "act" }], flow: { kind: "next", target: "L" } },
+        done: { what: [], flow: { kind: "terminal", terminal: "success" } },
+      },
+    };
+    const o9 = await runScenario(scn, ctx(), { executor: exec, resolver: resolver(), params: {} });
+    // iter0→body, iter1→body, iter2(2>=2)→exit. body 2회, L 도착 3회(탈출 포함) → L.what 3회.
+    check("loop 노드 what: 매 도착(탈출 포함) 실행(iterations+1)", loopNodeExec === 3 && bodyPasses(o9) === 2, `loopNodeExec=${loopNodeExec} passes=${bodyPasses(o9)}`);
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

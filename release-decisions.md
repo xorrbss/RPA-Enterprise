@@ -366,9 +366,26 @@ D8-A8. Loop interpreter execution + `loop.page_count` semantics (resolves RQ-002
    cycles back to the loop node (V4 permits cycles only when they contain a loop node); on each
    arrival the interpreter resolves PageState (flags, same boundary as `on[]`), injects the
    `loop.*` scope, and evaluates the compiled `until`. `until == true` OR `iteration >= max_iterations`
-   → `exit_target` (both graceful, per ir.schema; distinct from the whole-graph
-   `interpreter.graph_max_steps` guard which throws `IR_LOOP_LIMIT`, D8-A7). `loop.iteration` is the
+   → `exit_target` (both graceful, per ir.schema). `loop.iteration` is the
    0-base count of completed body passes (run-scoped, per loop node).
+   **graph_max_steps vs loop independence (break-it wf_bc9d71fe correction):** D8-A7 sized
+   `interpreter.graph_max_steps`=200 as "total node traversal" *before loops landed*; counting loop
+   body re-iterations against it would make a loop with `max_iterations > ~99` trip `IR_LOOP_LIMIT`
+   instead of exiting gracefully — contradicting the "independent guards" intent. To make them truly
+   independent, `runScenario` sizes the effective step budget to **`graph_max_steps +
+   Σ_loopNodes(max_iterations × nodeCount)`**: graph_max_steps bounds the *structural (non-loop)*
+   traversal; each loop's iterations are bounded solely by its own `max_iterations` (loopState,
+   graceful exit) and contribute an allowance so they don't spuriously consume the structural
+   ceiling. `IR_LOOP_LIMIT` now only fires on an actual non-terminating bug (loops self-bound; V4
+   forbids non-loop cycles). Non-loop graphs are unchanged (allowance 0 → 200). Deeply-nested loops
+   (a loop body containing another loop) may still need a `deps.maxSteps` override (the additive
+   allowance under-counts the multiplicative nesting). The 200 baseline value is unchanged.
+   **Loop-node `what` semantics:** the loop node is a **control point** — its own `what` actions run on
+   every arrival (to feed the `until` evaluation, e.g. an observe refreshing flags), *including the
+   final exit arrival* (run `iterations+1` times). Scenario work belongs in the `body_target`
+   subgraph, not the loop node. (Canonical pagination loop nodes are observe-only → empty `what`
+   after translate, so this is a control-point convention, not a behavioral surprise for well-formed
+   scenarios.)
    **`loop.page_count` is defined equal to `loop.iteration`** in the deterministic interpreter:
    one loop body pass = one "page", so the interpreter has no page concept distinct from a body
    pass. Rationale / 비발명: ir-expression §2 lists both `loop.iteration` and `loop.page_count` as
