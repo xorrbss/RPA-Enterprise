@@ -11,7 +11,7 @@
 
 1. **schema**: `ir.schema.json`(ajv) — 노드 구조·흐름키 oneOf. 실패 → `IR_SCHEMA_INVALID`.
 2. **IREL compile**: 모든 expression 파싱+타입체크(`ir-expression.md`). 실패 → `IR_EXPRESSION_COMPILE_ERROR`.
-3. **graph static validation**: 본 문서 §1 규칙(V1..V11). 구조 위반 → `IR_SCHEMA_INVALID`(reason 태그), 표현식 위반 → `IR_EXPRESSION_COMPILE_ERROR`.
+3. **graph static validation**: 본 문서 §1 규칙(V1..V12). 구조 위반 → `IR_SCHEMA_INVALID`(reason 태그), 표현식 위반 → `IR_EXPRESSION_COMPILE_ERROR`.
 
 검증 결과는 `ValidationReport`(§3). `errors`가 하나라도 있으면 **저장 거부**. `warnings`는 draft 저장은 허용하되 **prod 승격은 차단**(§3).
 
@@ -34,6 +34,7 @@
 | V9 | **node 출력 필드 한정** — `node.<id>.*`는 표준 출력 필드(`row_count`/`status`/`extracted_ref`/`tier`)만 참조 가능. | `IR_EXPRESSION_COMPILE_ERROR` | error | `unknown_node_field` |
 | V10 | **value_match.path 문법** — §3 path 문법(dot-path, 인덱싱 금지)을 위반하거나 평가 대상이 부재. | `IR_SCHEMA_INVALID` | error | `invalid_value_path` |
 | V11 | **fallback_chain 정합** — `tier`는 `T0..T3` 중 **중복 없이** 단조 사용. `entry_node`는 V1 적용. `advance_when` 생략·마지막 티어 실패 시 의미는 §4. | `IR_SCHEMA_INVALID` | error | `fallback_chain_invalid` |
+| V12 | **fallback_chain 멱등성** — 체인 내 어느 티어든 `entry_node`가 **비-read_only** `side_effect`를 선언하면(=체인이 비-read_only), fallback이 티어를 재실행하므로 **모든 티어 `entry_node`**가 `side_effect.idempotency_key`(비어있지 않음)를 명시해야 한다(§4). `entry_node`가 `side_effect` 미선언이거나 `read_only`(키 없음)면 위반 — 스키마(`ir.schema.json`)는 *선언된* 비-read_only side_effect에만 키를 강제하므로 못 잡는 **무방비 재실행 진입점**이다. | `IR_SCHEMA_INVALID` | error | `fallback_side_effect_idempotency_missing` |
 
 > V3/V4의 도달성·사이클 판정은 흐름 그래프를 노드=정점, (`next`/`on[].target` 노드 id/복귀형 예약 핸들러 `return_node`/`fallback entry_node`/`loop.body_target`/`loop.exit_target`)=간선으로 구성해 수행한다. `@end_no_data`/`terminal`은 종료 정점이다.
 >
@@ -76,7 +77,7 @@
 ### ValidationReport (검증 산출 — codegen 대상)
 ```ts
 type ValidationIssue = {
-  rule: "V1"|"V2"|"V3"|"V4"|"V5"|"V6"|"V7"|"V8"|"V9"|"V10"|"V11";
+  rule: "V1"|"V2"|"V3"|"V4"|"V5"|"V6"|"V7"|"V8"|"V9"|"V10"|"V11"|"V12";
   reason: string;            // 위 표 reason 태그
   code: "IR_SCHEMA_INVALID" | "IR_EXPRESSION_COMPILE_ERROR";
   nodeId?: string;           // 위반 위치
@@ -95,7 +96,7 @@ type ValidationReport = { errors: ValidationIssue[]; warnings: ValidationIssue[]
 - 각 티어를 `entry_node`부터 실행. `advance_when`(IREL 불린식) **true**면 다음 티어로 전환.
 - `advance_when` **생략 시 기본**: 해당 티어가 실패(StepResult.status=`failed_*`)하면 자동으로 다음 티어 시도.
 - **마지막 티어 실패 시**: 더 전환할 티어 없음 → 노드는 마지막 티어의 `StepResult`를 그대로 채택(분류대로 business/system/challenge/security 처리). 빈 결과로 위장하지 않는다("조용한 false 금지").
-- 모든 티어가 read_only가 아니면 각 `entry_node` 경로에 `side_effect.idempotency_key` 필수(재시도 안전).
+- **멱등성(V12 강제)**: 체인이 비-read_only면(= 어느 티어든 `entry_node`가 비-read_only `side_effect`를 선언) **모든 티어 `entry_node`**가 `side_effect.idempotency_key`를 명시해야 한다(재시도 안전). fallback은 `advance_when`/실패 시 티어를 재실행하므로, 키 없는 진입점은 부작용을 조용히 중복시킨다. 검사 범위는 **티어 `entry_node` 자체**다(다운스트림 경로 노드는 스키마가 노드별로 비-read_only side_effect에 키를 이미 강제 → 전역 보장). 인터프리터는 멱등 적용을 executor/DB 레이어에 위임한다(런타임 추가검사 없음).
 
 ---
 
@@ -103,7 +104,7 @@ type ValidationReport = { errors: ValidationIssue[]; warnings: ValidationIssue[]
 
 | 위반 부류 | ErrorCode | exceptionClass | 시점 |
 |---|---|---|---|
-| 구조/그래프(V1·V2·V3·V4·V6·V10·V11) | `IR_SCHEMA_INVALID` | business | 저장 |
+| 구조/그래프(V1·V2·V3·V4·V6·V10·V11·V12) | `IR_SCHEMA_INVALID` | business | 저장 |
 | 표현식/스코프(V8 flag·V9 node 필드) | `IR_EXPRESSION_COMPILE_ERROR` | business | 저장 |
 | 승격 차단(V5·V7) | (warning, 코드 없음) | — | 승격 |
 

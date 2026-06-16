@@ -1,5 +1,5 @@
 /**
- * D1 codegen — IR graph static validation (ir-static-validation.md V1..V11).
+ * D1 codegen — IR graph static validation (ir-static-validation.md V1..V12).
  *
  * This is intentionally deterministic and side-effect free. It runs after
  * `validateIR` succeeds, so it can use the generated IRScenario shape.
@@ -154,6 +154,7 @@ export function compileScenarioStatic(
     validateOnPriorities(nodeId, node, errors);
     validateEndNoDataWitness(nodeId, node, warnings);
     validateFallbackChain(nodeId, node, errors);
+    validateFallbackIdempotency(nodeId, node, ir, errors);
     validateValuePaths(nodeId, node, errors);
     const compiledNode = validateExpressions(nodeId, node, ir, nodeIds, graph, errors);
     if (compiledNode !== undefined) compiledNodes[nodeId] = compiledNode;
@@ -251,6 +252,46 @@ function validateFallbackChain(nodeId: string, node: IRNode, errors: ValidationI
     }
     seen.add(tier.tier);
     previous = order;
+  }
+}
+
+// V12 — fallback_chain side-effect 멱등성(ir-static-validation.md §4).
+// 스키마(ir.schema.json)는 *선언된* non-read_only side_effect 에만 idempotency_key 를 강제한다.
+// V12 는 그 너머를 강제한다: 체인 내 어느 티어든 entry_node 가 mutating side_effect 를 선언하면
+// (= 체인이 비-read_only), fallback 이 티어를 재실행하므로 *모든* 티어 entry_node 가
+// side_effect.idempotency_key 를 명시해야 한다(재시도 안전). entry_node 가 side_effect 미선언이거나
+// read_only(키 없음)면 V12 위반 — 스키마로는 못 잡는 무방비 재실행 진입점이다(결정: Option A).
+function validateFallbackIdempotency(
+  nodeId: string,
+  node: IRNode,
+  ir: IRScenario,
+  errors: ValidationIssue[],
+): void {
+  const tiers: { readonly tier: string; readonly entry_node: string }[] = [];
+  for (const tier of fallbackChainOf(node)) {
+    if (typeof tier.tier === "string" && typeof tier.entry_node === "string") {
+      tiers.push({ tier: tier.tier, entry_node: tier.entry_node });
+    }
+  }
+  if (tiers.length === 0) return;
+
+  const chainIsNonReadOnly = tiers.some((tier) => {
+    const sideEffect = ir.nodes[tier.entry_node]?.side_effect;
+    return sideEffect !== undefined && sideEffect.kind !== "read_only";
+  });
+  if (!chainIsNonReadOnly) return;
+
+  for (const tier of tiers) {
+    const key = ir.nodes[tier.entry_node]?.side_effect?.idempotency_key;
+    if (typeof key !== "string" || key.length === 0) {
+      errors.push(issue(
+        "V12",
+        "fallback_side_effect_idempotency_missing",
+        "IR_SCHEMA_INVALID",
+        `fallback_chain tier '${tier.tier}' entry_node '${tier.entry_node}' requires side_effect.idempotency_key (non-read_only fallback re-executes tiers; §4)`,
+        nodeId,
+      ));
+    }
   }
 }
 
