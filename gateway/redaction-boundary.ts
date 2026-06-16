@@ -24,6 +24,22 @@ const CREDENTIAL_EXFILTRATION_PATTERNS: readonly RegExp[] = [
   /\b(?:credential|credentials|secret|secrets|token|tokens|password|passwords|otp|api[-_ ]?key|authorization)\s+(?:to|into)\s+https?:\/\//i,
 ];
 
+// security-contracts §3 신호(b): "ignore previous / system / 너는 이제~ 류 지시 패턴".
+// §53(패턴 사전은 운영 정책으로 갱신)에 따라 영어 변형 + 한국어 canonical을 사전화한다.
+// 제품 운영자/페이지 언어가 한국어(CLAUDE.md)이므로 한국어 instruction-override 신호 누락은 실효 우회였다(RQ-020).
+const INSTRUCTION_OVERRIDE_PATTERNS: readonly RegExp[] = [
+  // 영어: ignore/disregard + (all/any) previous/prior/above/earlier/system/instructions ("ignore all previous instructions" 등 비연속 변형 포함)
+  /\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|preceding)\b/i,
+  /\b(?:ignore|disregard|override)\s+(?:the\s+)?(?:system|developer)?\s*(?:prompt|instructions?|rules?|message)\b/i,
+  /\bsystem\s+prompt\b/i,
+  // 한국어(security-contracts §3 신호 b "너는 이제~" canonical + 명백한 지시-override 등가):
+  /너는\s*이제/,
+  /당신은\s*이제/,
+  /(?:이전|위|앞|기존)\s*(?:의)?\s*(?:지시|명령|규칙|프롬프트)(?:사항)?\s*(?:을|를)?\s*(?:모두\s*)?무시/,
+  /(?:지시|명령|규칙|프롬프트)(?:사항)?\s*(?:을|를)?\s*(?:모두\s*)?무시\s*(?:하|해|할)/,
+  /시스템\s*프롬프트/,
+];
+
 export class DeterministicPromptInjectionDetector implements PromptInjectionDetector {
   inspect(input: {
     tenantId: TenantId;
@@ -33,7 +49,7 @@ export class DeterministicPromptInjectionDetector implements PromptInjectionDete
   }): PromptInjectionDecision {
     const text = String(input.redactedText).toLowerCase();
 
-    if (text.includes("ignore previous") || text.includes("ignore system") || text.includes("system prompt")) {
+    if (INSTRUCTION_OVERRIDE_PATTERNS.some((pattern) => pattern.test(text))) {
       return {
         kind: "blocked",
         code: "PROMPT_INJECTION_DETECTED",
