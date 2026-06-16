@@ -18,6 +18,8 @@
  *
  * 결과는 D3 PoC 와 동일한 PASS/GAP/ERROR 표로 stdout 에 출력 → D5-POC-EVIDENCE.md 에 옮긴다.
  */
+import { readFileSync } from "node:fs";
+
 import { CodexSseAdapter } from "../../src/gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "../../src/gateway/codex-sse-transport";
 import type { LLMRequest, LLMStreamEvent } from "../../../ts/security-middleware-contract";
@@ -47,6 +49,30 @@ function env(name: string): string {
   }
   return v.trim();
 }
+
+// .env 자동 로드(무-의존성): 이 스크립트 옆 .env 가 있으면 KEY=VALUE 를 process.env 로 채운다.
+// 이미 설정된 셸 env 가 우선(덮어쓰지 않음). .env 는 .gitignore 로 커밋 차단 — 비밀은 .env(로컬)/Vault 로만.
+function loadDotEnvIfPresent(): void {
+  let text: string;
+  try {
+    text = readFileSync(new URL("./.env", import.meta.url), "utf8");
+  } catch {
+    return; // .env 없으면 셸 env 만 사용.
+  }
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined || process.env[key] === "") process.env[key] = val;
+  }
+}
+loadDotEnvIfPresent();
 
 const BASE_URL = validateCodexBaseUrl(env("CODEX_BASE_URL"));
 const API_KEY = env("CODEX_API_KEY");
