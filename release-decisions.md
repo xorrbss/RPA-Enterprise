@@ -318,6 +318,27 @@ D8-A6. Tenant registry for recurring sweeper fan-out (recommendation — owner r
    recurring invocation) is buildable. Until approved, this stays a recommendation, not a
    decision.
 
+D8-A7. Interpreter graph-step ceiling — ops-defaults source (resolves RQ-017)
+   Decision: the IR interpreter's whole-graph non-termination guard
+   (`ir-interpreter.ts` `runScenario`) is sourced from a new ops-defaults row
+   `interpreter.graph_max_steps` (§5), default **200** — identical to the prior inline
+   `DEFAULT_MAX_STEPS`, so this is a zero-behavior-change contract-fidelity alignment, not a
+   value change. Rationale: RQ-017 flagged the 200 as a hardcoded default with no
+   ops-defaults source; ops-defaults.md is the designated SSoT for "numeric values the
+   contract body leaves empty" (its own §intro), so the graph-step ceiling belongs there.
+   It is **distinct from `loop.max_iterations`** (10000, ir.schema): that bounds iterations
+   *within one loop node body*; `interpreter.graph_max_steps` bounds the *total node
+   traversal* from start to terminal. The value is not invented — 200 is the pre-existing
+   defensive guard now made traceable (inline-value-with-`// ops-defaults §5`-citation,
+   matching every other ops-defaults consumer: codex-sse-adapter, llm-gateway, outbox,
+   sink-delivery). Exceeding it throws `InterpreterError("IR_LOOP_LIMIT")` (no silent
+   infinite loop). Impact if wrong: a graph legitimately needing >200 distinct node visits
+   would fail loud (overridable per-run via `deps.maxSteps`); 200 is generous for the v1
+   deterministic-traversal interpreter (no loop/fallback yet). Build-condition: done
+   (contract row + citation landed; no runtime wiring beyond the citation is needed because
+   the repo convention for ops-defaults values is inline-with-citation, not a central
+   config module).
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
