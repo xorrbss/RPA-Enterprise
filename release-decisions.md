@@ -360,6 +360,93 @@ D8-A7. Interpreter graph-step ceiling — ops-defaults source (resolves RQ-017)
    the repo convention for ops-defaults values is inline-with-citation, not a central
    config module).
 
+D8-A8. Loop interpreter execution + `loop.page_count` semantics (resolves RQ-002 loop)
+   Decision: implement the IR `loop` flow in the interpreter as a **while-loop controlled at the
+   loop node** (`ir-interpreter.ts` `runScenario`, `ir-translate.ts`). The `body_target` subgraph
+   cycles back to the loop node (V4 permits cycles only when they contain a loop node); on each
+   arrival the interpreter resolves PageState (flags, same boundary as `on[]`), injects the
+   `loop.*` scope, and evaluates the compiled `until`. `until == true` OR `iteration >= max_iterations`
+   → `exit_target` (both graceful, per ir.schema). `loop.iteration` is the
+   0-base count of completed body passes (run-scoped, per loop node).
+   **graph_max_steps vs loop independence (break-it wf_bc9d71fe correction):** D8-A7 sized
+   `interpreter.graph_max_steps`=200 as "total node traversal" *before loops landed*; counting loop
+   body re-iterations against it would make a loop with `max_iterations > ~99` trip `IR_LOOP_LIMIT`
+   instead of exiting gracefully — contradicting the "independent guards" intent. To make them truly
+   independent, `runScenario` sizes the effective step budget to **`graph_max_steps +
+   Σ_loopNodes(max_iterations × nodeCount)`**: graph_max_steps bounds the *structural (non-loop)*
+   traversal; each loop's iterations are bounded solely by its own `max_iterations` (loopState,
+   graceful exit) and contribute an allowance so they don't spuriously consume the structural
+   ceiling. `IR_LOOP_LIMIT` now only fires on an actual non-terminating bug (loops self-bound; V4
+   forbids non-loop cycles). Non-loop graphs are unchanged (allowance 0 → 200). Deeply-nested loops
+   (a loop body containing another loop) may still need a `deps.maxSteps` override (the additive
+   allowance under-counts the multiplicative nesting). The 200 baseline value is unchanged.
+   **Loop-node `what` semantics:** the loop node is a **control point** — its own `what` actions run on
+   every arrival (to feed the `until` evaluation, e.g. an observe refreshing flags), *including the
+   final exit arrival* (run `iterations+1` times). Scenario work belongs in the `body_target`
+   subgraph, not the loop node. (Canonical pagination loop nodes are observe-only → empty `what`
+   after translate, so this is a control-point convention, not a behavioral surprise for well-formed
+   scenarios.)
+   **`loop.page_count` is defined equal to `loop.iteration`** in the deterministic interpreter:
+   one loop body pass = one "page", so the interpreter has no page concept distinct from a body
+   pass. Rationale / 비발명: ir-expression §2 lists both `loop.iteration` and `loop.page_count` as
+   loop-scope ints but does not pin a separate increment rule for `page_count`; equating it to the
+   single observable (completed body passes) is the minimal non-inventing mapping. A finer
+   "pages that yielded data" metric, and the `cursor.*` namespace, are **collection-pipeline**
+   concerns that don't exist yet — they remain **un-projected** and surface as `IREL_RUNTIME_MISSING`
+   when referenced (ir-expression §2 line 68, "compile-then-throw, 발명 금지"; not silently false).
+   Impact if wrong: a scenario relying on `page_count` meaning "data pages only" (≠ body passes)
+   would over/under-count; revisited when the collection cursor/pipeline lands (same increment that
+   would populate `cursor.*`). Build-condition: loop done (ir-translate loop flow + interpreter
+   while-loop + `loop.*` scope; tests interpreter-loop.unit 10 + ir-translate.unit loop cases).
+
+D8-A9. fallback_chain interpreter execution + `tier` projection (resolves RQ-002 fallback)
+   Decision: implement the IR `fallback_chain` flow. ir-static-validation §4 fixes the *semantics*
+   (tiers tried T0→T3 in order; `advance_when` true → try next tier; omitted `advance_when` → advance
+   if the tier failed; last tier still failing → the node adopts that tier's result, not a masked
+   empty/success); ir.schema/V11 fix the structure. This decision records the *runtime execution
+   model*, which §4 leaves to the interpreter and which the graph model + the static fixtures imply
+   (since V4 forbids non-loop cycles, a tier subgraph cannot loop back to the fallback node):
+   - **Each tier is a recursive sub-traversal** from its `entry_node`, sharing the run's
+     nodeScope/loopState/step-budget (refactor: `runScenario` → reentrant `traverse`). A tier runs its
+     entry_node subgraph until a terminal (the fixture `entry_node` is itself a terminal node).
+   - **The fallback node is terminal-producing:** the adopted (winning, or last) tier's terminal *is*
+     the node's outcome. There is no separate `exit_target` (unlike loop) and no continuation after the
+     fallback node — any "post-fallback" work lives inside the winning tier's subgraph. (Consistent
+     with the graph: F's only out-edges are to tier `entry_node`s; tiers flow forward to terminals.)
+   - **`tier` projection:** nodes executed *under* a tier carry `tier` (T0..T3) in their `node.<id>.*`
+     output (`traverse(currentTier)`), so a node inside the winning tier's subgraph can branch on which
+     tier it runs under (`node.<id>.tier`). This makes the projection observable (projecting only onto
+     the terminal-producing fallback node would be dead). The fallback node's own output adopts the
+     winning tier's `entry_node` result (+`tier`), per §4 "노드는 ... 마지막 티어의 StepResult를 채택".
+   - **`advance_when` scope** = `{flags (resolved PageState), params, node}` — matching its compile
+     scope (no `allowLoopScope`, so no `loop.*`/`cursor.*`).
+   - **Step budget:** each fallback node adds `tiers.length × nodeCount` to the structural budget
+     (same independence rationale as loop, D8-A8) so tier retries don't trip `IR_LOOP_LIMIT`.
+   Rationale / 비발명: the inferred aspects (sub-traversal, terminal-producing, tier-onto-tier-nodes)
+   are the only model consistent with §4 + V4 (no non-loop cycles) + the static fixture (`entry_node`
+   = a terminal node); they are recorded here rather than silently assumed. Impact if wrong: a scenario
+   author expecting a post-fallback continuation node (outside the tiers) or `tier` on the fallback
+   node itself would need rework — but no contract/fixture exercises that shape. Build-condition: done
+   (ir-translate fallback flow + interpreter sub-traversal + `tier` projection; tests
+   interpreter-fallback.unit + ir-translate.unit fallback cases).
+   **break-it (wf_24e16f1b) corrections:** (1) **failed-tier status now projected** — a step that
+   fails is recorded in nodeScope (`status`=failed_*, +`tier`) *before* the failure terminal returns,
+   so the canonical `advance_when: node.<entry>.status == "failed_system"` works on the failure path
+   (previously threw `IREL_RUNTIME_MISSING`); aligns with ir-expression §2 "status ← StepResult.status
+   for every executed node". (2) **last tier's `advance_when` is not evaluated** (no tier to advance
+   to per §4) — avoids a wasted `resolvePageState` and a spurious throw if it references an
+   absent value. (3) the **fallback node's `status` is derived from the adopted *terminal*** (not the
+   entry-node output) so a deeper tier-node failure isn't masked as entry success (only observable via
+   nested fallback). (4) default-advance uses an **exact `fail_business`/`fail_system`/`fail_security`
+   match**, not `startsWith("fail")`, to avoid misclassifying a `failover_*`-style success terminal.
+   **Known, deferred:** non-adopted/sibling tier node outputs **persist** in the shared nodeScope
+   (not rolled back) — this is consistent with the compile scope intentionally allowing `advance_when`
+   to reference prior tiers' `entry_node`s (additionalPriorNodeIds); runtime correctness relies on the
+   compile-time forward-ref guard, not on per-tier scope isolation (which would break legitimate
+   cross-tier references). §4's "non-read_only tiers need `side_effect.idempotency_key`" is **not yet
+   statically enforced** (no V-rule; the interpreter re-runs shared tier nodes) — tracked as a separate
+   static-validation gap (register RQ-032). Adversarially break-it verified.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
