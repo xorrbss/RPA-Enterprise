@@ -73,6 +73,9 @@ export type OperationId =
   | "getWorkitem"
   | "listDeadLetters"
   | "replayDeadLetter"
+  // replaySinkDeadLetter shares the POST /v1/dlq/{id}/replay path (?kind=sink, release-decisions D8-A3) —
+  // a distinct OperationId only to partition the idempotency namespace from the workitem branch.
+  | "replaySinkDeadLetter"
   | "getArtifact"
   | "getGatewayPolicy"
   | "updateGatewayPolicy"
@@ -217,6 +220,7 @@ export type CommandEndpoint =
       | "assignHumanTask"
       | "escalateHumanTask"
       | "replayDeadLetter"
+      | "replaySinkDeadLetter"
       | "updateGatewayPolicy"
       | "approveSite"
     >;

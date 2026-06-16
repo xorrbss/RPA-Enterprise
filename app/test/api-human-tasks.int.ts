@@ -247,7 +247,7 @@ async function main(): Promise<void> {
     });
     console.log("seeded human tasks across states");
 
-    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
+    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),

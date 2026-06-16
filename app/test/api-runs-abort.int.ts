@@ -269,6 +269,7 @@ async function main(): Promise<void> {
       async enqueueRunAbort(_client, input) {
         abortEnqueued.push(input);
       },
+      async enqueueSinkDeliver() {},
     };
     const app = buildServer({
       pool,

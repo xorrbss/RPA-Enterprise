@@ -179,6 +179,9 @@ async function main(): Promise<void> {
       async enqueueRunAbort(client, input: RunEnqueueInput) {
         await realEnqueuer.enqueueRunAbort(client, input);
       },
+      async enqueueSinkDeliver(client, input) {
+        await realEnqueuer.enqueueSinkDeliver(client, input);
+      },
     };
     const rollbackApp = buildServer({
       pool,

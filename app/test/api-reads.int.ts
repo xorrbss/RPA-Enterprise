@@ -259,7 +259,7 @@ async function main(): Promise<void> {
     await seedSite(pool, TENANT_B, SITE_B, "b-site", "red", false, "closed", ts(0));
     console.log("seeded runs + human tasks + workitems + dead letters + gateway + sites");
 
-    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
+    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),

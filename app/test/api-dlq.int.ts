@@ -147,7 +147,7 @@ async function main(): Promise<void> {
     await seedDeadLetter(pool, TENANT_B, DL_B, WI_B, true);
     console.log("seeded workitems + dead letters");
 
-    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
+    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),

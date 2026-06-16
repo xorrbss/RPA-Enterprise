@@ -136,6 +136,7 @@ async function main(): Promise<void> {
         enqueued.push(input);
       },
       async enqueueRunAbort() {},
+      async enqueueSinkDeliver() {},
     };
     const app = buildServer({
       pool,

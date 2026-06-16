@@ -128,7 +128,7 @@ async function main(): Promise<void> {
     console.log("seeded run(running) + workitem(abandoned) + dead_letter + suspended-run/in_progress-human_task");
 
     // 2) 실 Fastify 제어평면 + listen
-    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
+    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const signedCommandRegistry: SignedCommandRegistry = {
       async listAllowedCommandRefs() {
         return { kind: "available", snapshot: { sourceRef: "secret://staging/registry" as SecretRef, commands: [] } };

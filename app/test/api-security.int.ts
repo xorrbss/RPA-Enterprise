@@ -44,7 +44,7 @@ function buildWith(pool: ReturnType<typeof createPool>, security?: SecurityConfi
     auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
     rbac: new RoleMatrixRbacMiddleware(),
     idempotency: new PgControlPlaneIdempotencyStore(pool),
-    enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {} } as RunEnqueuer,
+    enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} } as RunEnqueuer,
     signedCommandRegistry,
     security,
   };
