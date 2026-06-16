@@ -309,16 +309,23 @@ export class LlmGateway {
     transport: Transport,
     signal: AbortSignal,
   ): Promise<ConsumeResult & { kind: "ok" }> {
+    // RQ-029/§4 step2: repair user 메시지는 prior LLM 출력(priorText=비신뢰; 페이지 컨텍스트가 모델을 거쳐 echo될
+    //   수 있음)을 담으므로, adapter 전 **반드시** redaction/injection 경계를 통과해야 한다. call() 정상 경로의
+    //   redactRequest와 동일 불변(모든 user 메시지는 step2 통과). 원 req.messages는 이미 redaction 통과 상태
+    //   (call→redactRequest→finalize(redactedReq))이므로 이중 처리(RedactedContentBlock[] 재-stringify로 mangle)를
+    //   피해 **신규 repair 메시지만** 통과시킨다. injection이면 PROMPT_INJECTION_DETECTED로 fail-closed.
+    const redacted = await this.deps.redactionBoundary.redactForGateway({
+      tenantId: req.metadata.tenantId,
+      runId: req.metadata.runId,
+      rawTextOrObject: `Previous output was invalid (${reason}). Return only corrected JSON.\n${priorText}`,
+    });
+    if (redacted.kind === "blocked") {
+      const signals = redacted.evidence.map((e) => e.signal).join(",");
+      throw new GatewayError(redacted.code, `prompt injection blocked at gateway repair (${signals})`);
+    }
     const repairReq: LLMRequest = {
       ...req,
-      messages: [
-        ...req.messages,
-        // repair 지시는 Gateway 생성 신뢰 텍스트(페이지 컨텍스트 아님). 메시지는 이미 redaction 통과 상태.
-        {
-          role: "user",
-          content: `Previous output was invalid (${reason}). Return only corrected JSON.\n${priorText}`,
-        } as unknown as LLMRequest["messages"][number],
-      ],
+      messages: [...req.messages, { role: "user", content: redacted.content } as LLMRequest["messages"][number]],
     };
     const r = await this.consumeOnce(this.deps.primary, repairReq, transport, signal);
     if (r.kind === "ok") return r;
