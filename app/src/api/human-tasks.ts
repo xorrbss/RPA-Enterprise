@@ -33,6 +33,7 @@ import { applyRunTransition } from "../runtime/run-transition";
 import { runIdempotentCommand, isRecord, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import { requirePrincipal, type ApiServerDeps } from "./server";
+import type { RunEnqueuer } from "./run-queue";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -176,11 +177,20 @@ async function resolveHumanTask(
     "resolveHumanTask",
     `/v1/human-tasks/${id}/resolve`,
     (client, tenantId) =>
-      applyHumanTaskCommand(client, tenantId, id, request.correlationId, { type: "resolve" }, undefined, {
-        // R13: suspended + human_task.resolved && humanTaskValid → resume_requested.
-        event: { type: "human_task.resolved" },
-        guard: { humanTaskValid: true },
-      }),
+      applyHumanTaskCommand(
+        client,
+        tenantId,
+        id,
+        request.correlationId,
+        { type: "resolve" },
+        undefined,
+        {
+          // R13: suspended + human_task.resolved && humanTaskValid → resume_requested.
+          event: { type: "human_task.resolved" },
+          guard: { humanTaskValid: true },
+        },
+        deps.enqueuer,
+      ),
   );
 }
 
@@ -214,6 +224,7 @@ async function applyHumanTaskCommand(
   event: HumanTaskEvent,
   assignee: string | undefined,
   runCoupling?: RunCoupling,
+  enqueuer?: RunEnqueuer,
 ): Promise<CommandResponse> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const cur = await client.query<HumanTaskRow>(
@@ -253,7 +264,7 @@ async function applyHumanTaskCommand(
     // 교차 전이(R13/R15): human_task 전이 직후 동일 tx에서 연관 run 전이 적용.
     assertHumanTaskPendingHandled(event, assignee, outcome.pending);
     if (runCoupling !== undefined) {
-      await applyCoupledRunTransition(client, tenantId, row.run_id, correlationId, runCoupling);
+      await applyCoupledRunTransition(client, tenantId, row.run_id, correlationId, runCoupling, enqueuer);
     }
     return { status: 200, body: { human_task_id: humanTaskId, state: outcome.next } };
   }
@@ -296,6 +307,7 @@ async function applyCoupledRunTransition(
   runId: string,
   fallbackCorrelationId: string,
   coupling: RunCoupling,
+  enqueuer?: RunEnqueuer,
 ): Promise<void> {
   const cur = await client.query<{ status: RunState; correlation_id: string | null }>(
     `SELECT status, correlation_id::text AS correlation_id FROM runs WHERE id=$1::uuid AND tenant_id=$2::uuid`,
@@ -317,6 +329,19 @@ async function applyCoupledRunTransition(
     throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", { reason: "human_task_run_coupling_cas_contention" });
   }
   assertRunCouplingPendingHandled(outcome.pending);
+
+  // R13(human_task.resolved → resume_requested): run_resume 잡을 같은 tx 로 인큐(원자). 미인큐 시 run 이 resume_requested 에
+  // 영구 stuck — 조용한 stuck 금지: resolve 가 R13 을 발화했는데 enqueuer 가 run_resume 미지원이면 loud throw. (escalate R15 는 비해당.)
+  if (coupling.event.type === "human_task.resolved") {
+    if (enqueuer?.enqueueRunResume === undefined) {
+      throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", { reason: "run_resume_enqueuer_not_configured" });
+    }
+    await enqueuer.enqueueRunResume(client, {
+      tenantId,
+      runId,
+      correlationId: run.correlation_id ?? fallbackCorrelationId,
+    });
+  }
 }
 
 function requireTaskId(id: string): string {

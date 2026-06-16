@@ -247,7 +247,15 @@ async function main(): Promise<void> {
     });
     console.log("seeded human tasks across states");
 
-    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
+    const resumeEnqueued: string[] = [];
+    const noopEnqueuer: RunEnqueuer = {
+      async enqueueRunClaim() {},
+      async enqueueRunAbort() {},
+      async enqueueSinkDeliver() {},
+      async enqueueRunResume(_client, input) {
+        resumeEnqueued.push(input.runId);
+      },
+    };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
@@ -361,12 +369,14 @@ async function main(): Promise<void> {
       check("resolve → run resume_requested (R13)", (await runStatus(pool, TENANT_A, RUN_SUSP_RESOLVE)) === "resume_requested");
       check("resolve emits human_task.resolved", (await outboxCount(pool, TENANT_A, RUN_SUSP_RESOLVE, "human_task.resolved")) === 1);
       check("resolve emits run.resume_requested", (await outboxCount(pool, TENANT_A, RUN_SUSP_RESOLVE, "run.resume_requested")) === 1);
+      check("resolve(R13) → run_resume 잡 인큐(같은 tx)", resumeEnqueued.includes(RUN_SUSP_RESOLVE), resumeEnqueued.join(","));
 
       // 15) run이 suspended가 아니면(running) 교차 전이 건너뜀 — task는 resolved, run 불변.
       const r2 = await resolve(HT_RESOLVE_NOCOUPLE, "resolve-nocouple");
       check("resolve (run running) → 200 resolved", r2.statusCode === 200 && r2.json().state === "resolved", r2.body);
       check("resolve coupling skipped → run still running", (await runStatus(pool, TENANT_A, RUN_RUNNING)) === "running");
       check("resolve coupling skipped → no run.resume_requested", (await outboxCount(pool, TENANT_A, RUN_RUNNING, "run.resume_requested")) === 0);
+      check("coupling 건너뜀(running) → run_resume 미인큐", !resumeEnqueued.includes(RUN_RUNNING));
 
       // 16) assigned + resolve → 422(H3는 in_progress에서만).
       const r3 = await resolve(HT_RESOLVE_ASSIGNED, "resolve-assigned");
