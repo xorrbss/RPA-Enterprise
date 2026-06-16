@@ -8,6 +8,10 @@
  * 검증: operator 202 + sink_deliver 인큐(normalizedRecordId·sinkConfigId), viewer 403(키 미소모·미인큐),
  *   cross-tenant 404(RLS), dead_letter 아님(delivered/미존재) 404, kind 무효 422, Idempotency-Key 누락 422,
  *   멱등 재생(동일 키 → 인큐 1회), kind=workitem 회귀(기본 경로 무결). 실 재전달은 worker egress 의존(범위 밖).
+ *   in-handler sink_dlq.replay 인가 게이트(RQ-028): viewer 거부는 preHandler(dlq.replay)에서 먼저 막혀
+ *   in-handler deny 분기가 미도달이고, 실 매트릭스는 두 액션 역할집합이 동일(D8-A3)이라 어떤 역할로도 도달
+ *   불가 → 분기 RBAC(dlq.replay allow / sink_dlq.replay deny)로 그 분기를 구동(403·미소모·미인큐) + 동일
+ *   RBAC의 workitem 통과(202)로 403이 in-handler 고유임을 증명한다.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -30,7 +34,13 @@ import {
   type SinkDeliveryPort,
   type SinkDeliveryRequest,
 } from "../../ts/runtime-contract";
-import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
+import type {
+  AuthenticatedPrincipal,
+  AuthorizationCheck,
+  AuthorizationDecision,
+  RbacMiddleware,
+  SignedCommandRegistry,
+} from "../../ts/security-middleware-contract";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_sink_replay_int";
@@ -45,6 +55,9 @@ const CORR = "70000000-0000-0000-0000-000000000001";
 // workitem 회귀용.
 const WI_ABANDONED = "61000000-0000-0000-0000-000000000001";
 const DL_WORKITEM = "63000000-0000-0000-0000-000000000001";
+// RQ-028 split-RBAC 검증용(다른 테스트와 독립한 별도 행).
+const WI_SPLIT = "61000000-0000-0000-0000-000000000002";
+const DL_WI_SPLIT = "63000000-0000-0000-0000-000000000002";
 
 const SECRET = new TextEncoder().encode("sink-replay-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -52,6 +65,19 @@ const signedCommandRegistry: SignedCommandRegistry = {
     return { kind: "available", snapshot: { sourceRef: "secret://staging/registry" as SecretRef, commands: [] } };
   },
 };
+
+// RQ-028: in-handler sink_dlq.replay 인가 게이트(dlq.ts)를 구동하는 분기 RBAC test double.
+//   실 매트릭스(D8-A3, rbac.ts)는 dlq.replay와 sink_dlq.replay의 역할집합이 동일해, preHandler(dlq.replay)를
+//   통과한 어떤 principal도 in-handler(sink_dlq.replay)에서 거부되지 않는다 → 게이트 deny 분기가 도달 불가.
+//   이 double은 dlq.replay만 allow / sink_dlq.replay만 deny해 그 분기를 명시 구동한다(다른 액션은 평가 안 함).
+class SplitSinkDenyRbac implements RbacMiddleware {
+  async authorize(principal: AuthenticatedPrincipal, check: AuthorizationCheck): Promise<AuthorizationDecision> {
+    if (check.action === "sink_dlq.replay") {
+      return { kind: "deny", action: "sink_dlq.replay", code: "AUTHZ_FORBIDDEN", reason: "rq028_split_deny" };
+    }
+    return { kind: "allow", principal, action: check.action };
+  }
+}
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -154,19 +180,20 @@ async function main(): Promise<void> {
     const dlIdem = await seedSinkDeadLetter(pool, TENANT_A, "nk-idem");
     const dlDelivered = await seedSinkDelivered(pool, TENANT_A, "nk-delivered");
     const dlB = await seedSinkDeadLetter(pool, TENANT_B, "nk-b");
-    // workitem 회귀용 dead_letter(abandoned workitem).
+    const dlSplit = await seedSinkDeadLetter(pool, TENANT_A, "nk-split"); // RQ-028 in-handler deny 대상.
+    // workitem 회귀용 dead_letter(abandoned workitem). WI_SPLIT은 RQ-028 split-RBAC가 preHandler를 통과함을 보일 행.
     await withTenantTx(pool, TENANT_A, (c) =>
       c.query(
         `INSERT INTO workitems (id, tenant_id, connector_id, unique_reference, status, attempts)
-         VALUES ($1,$2,'sinkrepl','wi-abandoned','abandoned',4)`,
-        [WI_ABANDONED, TENANT_A],
+         VALUES ($1,$2,'sinkrepl','wi-abandoned','abandoned',4), ($3,$2,'sinkrepl','wi-split','abandoned',4)`,
+        [WI_ABANDONED, TENANT_A, WI_SPLIT],
       ),
     );
     await withTenantTx(pool, TENANT_A, (c) =>
       c.query(
         `INSERT INTO dead_letter (id, tenant_id, workitem_id, reason_code, replayable)
-         VALUES ($1,$2,$3,'WORKITEM_CHECKOUT_CONFLICT',true)`,
-        [DL_WORKITEM, TENANT_A, WI_ABANDONED],
+         VALUES ($1,$2,$3,'WORKITEM_CHECKOUT_CONFLICT',true), ($4,$2,$5,'WORKITEM_CHECKOUT_CONFLICT',true)`,
+        [DL_WORKITEM, TENANT_A, WI_ABANDONED, DL_WI_SPLIT, WI_SPLIT],
       ),
     );
     console.log("seeded sink dead-letters + delivered + workitem dl");
@@ -262,6 +289,41 @@ async function main(): Promise<void> {
         headers: { authorization: `Bearer ${op}`, "idempotency-key": "wi-regression" },
       });
       check("workitem replay (default kind) → 202 new", w1.statusCode === 202 && w1.json().status === "new", w1.body);
+
+      // 10) RQ-028: in-handler sink_dlq.replay 인가 게이트(dlq.ts:50-61) 검증 — 분기 RBAC로 구동.
+      //   실 매트릭스(D8-A3)는 dlq.replay와 sink_dlq.replay 역할집합이 동일해 in-handler deny 분기가 어떤
+      //   역할로도 도달 불가 → split RBAC(dlq.replay allow / sink_dlq.replay deny)로 그 분기를 명시 구동한다.
+      //   동일 RBAC로 workitem(기본 kind)은 통과(202)함을 동반 단언 → 403이 preHandler(dlq.replay)가 아니라
+      //   in-handler(sink_dlq.replay)에서 났음을 증명한다(in-handler 게이트를 제거하면 sink 403/미인큐 검사가 깨진다).
+      const splitApp = buildServer({
+        pool,
+        auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+        rbac: new SplitSinkDenyRbac(),
+        idempotency: new PgControlPlaneIdempotencyStore(pool),
+        enqueuer,
+        signedCommandRegistry,
+      });
+      await splitApp.ready();
+      try {
+        const enqBefore = sinkEnqueued.length;
+        const s = await splitApp.inject({
+          method: "POST",
+          url: `/v1/dlq/${dlSplit.id}/replay?kind=sink`,
+          headers: { authorization: `Bearer ${op}`, "idempotency-key": "sink-split-deny" },
+        });
+        check("split-RBAC sink replay → 403 AUTHZ_FORBIDDEN (in-handler gate)", s.statusCode === 403 && s.json().code === "AUTHZ_FORBIDDEN", s.body);
+        check("in-handler deny: key unused", (await idemRowCount(pool, "sink-split-deny")) === 0);
+        check("in-handler deny: did not enqueue", sinkEnqueued.length === enqBefore, JSON.stringify(sinkEnqueued));
+        // 같은 split-RBAC로 workitem(기본 kind)은 preHandler(dlq.replay) 통과 → 202. 위 403이 in-handler 고유임을 증명.
+        const w = await splitApp.inject({
+          method: "POST",
+          url: `/v1/dlq/${DL_WI_SPLIT}/replay`,
+          headers: { authorization: `Bearer ${op}`, "idempotency-key": "wi-split-pass" },
+        });
+        check("split-RBAC workitem replay → 202 (preHandler dlq.replay 허용; 403은 in-handler 고유)", w.statusCode === 202 && w.json().status === "new", w.body);
+      } finally {
+        await splitApp.close();
+      }
     } finally {
       await app.close();
     }
