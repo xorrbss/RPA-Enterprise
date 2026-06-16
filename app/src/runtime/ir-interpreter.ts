@@ -52,7 +52,10 @@ export type NodeFlow =
   | { readonly kind: "loop"; readonly until: IRELNode; readonly bodyTarget: string; readonly exitTarget: string; readonly maxIterations: number }
   // fallback: 티어(T0→T3)를 순서대로 entry_node 부터 서브그래프 실행(sub-traversal), advance_when(true=전환) 또는 기본
   // (실패 시 전환)으로 다음 티어 시도. 채택 티어의 terminal이 노드 outcome(terminal-producing), tier 투영(ir-static-validation §4).
-  | { readonly kind: "fallback"; readonly tiers: readonly { readonly tier: string; readonly entryNode: string; readonly advanceWhen?: IRELNode }[] };
+  | { readonly kind: "fallback"; readonly tiers: readonly { readonly tier: string; readonly entryNode: string; readonly advanceWhen?: IRELNode }[] }
+  // reserved_handler: 복귀형 예약 핸들러 호출(@challenge/@human_task, reserved-handlers.md). next/on target 이 {handler,input,return_node}
+  // 객체일 때. @human_task 는 항상 suspend(R5, 트리거 ii). @challenge(ChallengeResolutionPolicy)는 미구현 — dispatch 시 loud throw.
+  | { readonly kind: "reserved_handler"; readonly handler: "@challenge" | "@human_task"; readonly input: Record<string, unknown>; readonly returnNode: string };
 
 /** 인터프리터가 순회하는 노드. what 은 ExecutorPlugin.execute가 받는 액션(형 검증은 실행기 책임). */
 export interface ScenarioNode {
@@ -83,18 +86,31 @@ export interface InterpreterStep {
 }
 
 /**
- * suspend(중단) 컨텍스트 — executor step 이 status='suspended' 반환 시 산출(트리거 i, A.1 suspend 경로).
- * terminal === "suspend" 일 때만 ScenarioOutcome.suspend 에 존재. driver 가 R4(running→suspending)+포트+R11 에 사용.
- * resumeNodeId = 같은 노드 재진입(오너 결정: idempotent 재실행). pageStateRef = res.pageStateAfter(재개 검증용).
+ * suspend(중단) 컨텍스트 — terminal === "suspend" 일 때만 ScenarioOutcome.suspend 에 존재. driver 가 R4/R5+포트+R11 에 사용.
+ * 두 트리거(kind 로 판별):
+ *   - challenge(트리거 i): executor step status='suspended'. driver 가 R4(running→suspending, step.challenge_detected).
+ *     resumeNodeId = 같은 노드 재진입(오너 결정: idempotent 재실행). pageStateRef = res.pageStateAfter.
+ *   - human_task(트리거 ii, R5): IR @human_task 노드. driver 가 R5(running→suspending, human_task_required).
+ *     resumeNodeId = @human_task input.return_node(해소 후 재개, reserved-handlers). pageStateRef = 현 페이지(재개 검증).
  */
-export interface SuspendContext {
+interface SuspendContextBase {
   readonly stepId: string;
   readonly resumeNodeId: string;
   readonly attempt: number;
-  readonly challengeKind: "captcha" | "mfa";
   readonly pageStateRef: string;
   readonly exception?: ClassifiedException;
 }
+export interface ChallengeSuspendContext extends SuspendContextBase {
+  readonly kind: "challenge";
+  readonly challengeKind: "captcha" | "mfa";
+}
+export interface HumanTaskSuspendContext extends SuspendContextBase {
+  readonly kind: "human_task";
+  readonly humanTaskKind: "approval" | "validation" | "exception";
+  readonly assigneeRole: string;
+  readonly onTimeout: "fail" | "escalate";
+}
+export type SuspendContext = ChallengeSuspendContext | HumanTaskSuspendContext;
 
 export interface ScenarioOutcome {
   readonly terminal: string; // success | success_empty | fail_business | fail_system | suspend
@@ -160,6 +176,42 @@ function isFailureTerminal(terminal: string): boolean {
 }
 
 /**
+ * @human_task input(reserved-handlers) → 타입 검증된 산출. 미정/오류는 조용히 흘리지 않고 IR_SCHEMA_INVALID 로 표면화.
+ * kind 미지정→exception 기본(R5), on_timeout 미지정→fail 기본(reserved-handlers/DDL). assignee_role 은 필수(미할당 task 금지).
+ * payload·timeout(둘 다 optional)은 v1 의도적 미투영(은폐 아님, 명시 deferral): payload 는 inline 저장 부재(read 측 v1
+ * 미포함, payload_ref 만) · timeout→expires_at 은 human_task timeout 스위퍼(H4/H8)가 미구현이라 발화 소비자 없음
+ * (challenge 경로도 expires_at 미설정 동일). 스위퍼 증분에서 timeout 파싱+expires_at+payload_ref 를 함께 배선.
+ */
+function parseHumanTaskInput(
+  nodeId: string,
+  input: Record<string, unknown>,
+): { humanTaskKind: "approval" | "validation" | "exception"; assigneeRole: string; onTimeout: "fail" | "escalate" } {
+  const kindRaw = input.kind;
+  let humanTaskKind: "approval" | "validation" | "exception";
+  if (kindRaw === undefined) humanTaskKind = "exception";
+  else if (kindRaw === "approval" || kindRaw === "validation" || kindRaw === "exception") humanTaskKind = kindRaw;
+  else
+    throw new InterpreterError(
+      "IR_SCHEMA_INVALID",
+      `@human_task node '${nodeId}': input.kind '${String(kindRaw)}' 무효(approval|validation|exception)`,
+    );
+  const assigneeRole = input.assignee_role;
+  if (typeof assigneeRole !== "string" || assigneeRole.trim().length === 0) {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `@human_task node '${nodeId}': input.assignee_role 필수(비어있지 않은 string)`);
+  }
+  const onTimeoutRaw = input.on_timeout;
+  let onTimeout: "fail" | "escalate";
+  if (onTimeoutRaw === undefined) onTimeout = "fail";
+  else if (onTimeoutRaw === "fail" || onTimeoutRaw === "escalate") onTimeout = onTimeoutRaw;
+  else
+    throw new InterpreterError(
+      "IR_SCHEMA_INVALID",
+      `@human_task node '${nodeId}': input.on_timeout '${String(onTimeoutRaw)}' 무효(fail|escalate)`,
+    );
+  return { humanTaskKind, assigneeRole, onTimeout };
+}
+
+/**
  * startNode 부터 terminal 까지 순회하며 terminal 문자열을 반환한다(가변 state 공유, ctx 원본 불변).
  * fallback 티어는 본 함수를 재귀 호출(sub-traversal)해 같은 state(nodeScope/loopState/budget) 위에서 실행한다.
  */
@@ -202,6 +254,7 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       // mfa 는 executor 신호 필요 — 후속). resumeNodeId=nodeId(같은 노드 재진입, 오너 결정). pageStateRef=res.pageStateAfter.
       if (res.status === "suspended") {
         state.suspendBox.current = {
+          kind: "challenge",
           stepId: `${nodeId}.${k}`,
           resumeNodeId: nodeId,
           attempt: ctx.attempt,
@@ -285,6 +338,32 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       //   break-it). tier 투영(ir-expression §2). terminal-producing(채택 terminal=run outcome). 티어 노드 출력은 node.<id>로 별도 참조.
       state.nodeScope[fallbackNodeId] = { status: terminalToStatus(adoptedTerminal), tier: adopted.tier };
       return adoptedTerminal;
+    }
+    if (node.flow.kind === "reserved_handler") {
+      const rh = node.flow;
+      if (rh.handler !== "@human_task") {
+        // @challenge: ChallengeResolutionPolicy(PRD §10.6)·ChallengeDetector 미구현 — 조용히 흘리지 않고 표면화.
+        throw new InterpreterError(
+          "RESERVED_HANDLER_UNSUPPORTED",
+          `interpreter: reserved-handler '${rh.handler}' node '${nodeId}' 미구현(@challenge ResolutionPolicy 후속)`,
+        );
+      }
+      // R5(트리거 ii): @human_task → 항상 suspend. kind/assignee_role/on_timeout 을 input 에서 파싱(하드코딩 금지, reserved-handlers).
+      const ht = parseHumanTaskInput(nodeId, rh.input);
+      // pageStateRef: what 실행 시 마지막 StepResult.pageStateAfter(challenge 와 동일 출처), what-less 면 현 페이지뷰 ref
+      //   (page-state-resolver.pageStateRef 규약 `ps_${structuralHash}` 와 일치 — resume 검증이 양측 일치 의존).
+      const pageRef = lastResult !== undefined ? lastResult.pageStateAfter : `ps_${ctx.pageState.dom.structuralHash}`;
+      state.suspendBox.current = {
+        kind: "human_task",
+        stepId: `${nodeId}.@human_task`,
+        resumeNodeId: rh.returnNode,
+        attempt: ctx.attempt,
+        humanTaskKind: ht.humanTaskKind,
+        assigneeRole: ht.assigneeRole,
+        onTimeout: ht.onTimeout,
+        pageStateRef: pageRef,
+      };
+      return "suspend";
     }
     // on[]: PageState(flags) 산출(observe) → 분기. scope = flags + params + 누적 node.
     // 주의: on[].when 이 참조하는 node.<id> 는 컴파일 시 graph-ancestor 보장이나 런타임 도달 보장은 dominator 뿐 —

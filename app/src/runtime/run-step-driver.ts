@@ -129,11 +129,11 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" });
     return { state: "failed_system", outcome };
   }
-  // suspend(트리거 i; resume 중 재-suspend 포함): running→suspending(R4)+포트→resume-token+R11→suspended.
+  // suspend(트리거 i challenge=R4 / 트리거 ii @human_task=R5; resume 중 재-suspend 포함): running→suspending+포트→resume-token+R11→suspended.
   if (outcome.terminal === "suspend") {
     return driveSuspend(run, deps, outcome);
   }
-  // 그 외 terminal(@challenge/@human_task IR 노드 등): 미구현 — 조용히 흘리지 않고 throw로 표면화(terminal 은 string).
+  // 그 외 terminal: 미구현 — 조용히 흘리지 않고 throw로 표면화(terminal 은 string). @challenge IR 노드는 인터프리터에서 loud throw(미도달).
   throw new Error(`driveScenario: terminal '${outcome.terminal}' 종료 전이 미구현(success/success_empty/fail_business/fail_system/suspend 외). 후속 증분에서 추가.`);
 }
 
@@ -154,23 +154,30 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
     throw new Error("driveSuspend: suspend 경로는 suspensionPort + resumeTokenCodec 주입 필요(미구성)");
   }
 
-  // 1) R4(running→suspending) + 포트(human_task INSERT + human_task.created + bookmark) — 한 tenant tx.
+  // 1) R4(challenge)/R5(@human_task)(running→suspending) + 포트(human_task INSERT + human_task.created + bookmark) — 한 tenant tx.
+  //    두 트리거 모두 pending=[createHumanTask(kind), startBookmark] → 같은 포트가 소비. event/idem 키만 kind 로 분기.
   await withTenantTx(deps.pool, run.tenantId, async (client) => {
-    const r4 = await applyRunTransition(client, {
+    const event =
+      s.kind === "human_task"
+        ? ({ type: "human_task_required", humanTaskKind: s.humanTaskKind } as const)
+        : ({ type: "step.challenge_detected", challengeKind: s.challengeKind } as const);
+    const idemSuffix = s.kind === "human_task" ? "human-task-required" : "challenge-detected";
+    const rule = s.kind === "human_task" ? "R5" : "R4";
+    const t = await applyRunTransition(client, {
       tenantId: run.tenantId,
       runId: run.runId,
       fromStatus: "running",
-      event: { type: "step.challenge_detected", challengeKind: s.challengeKind },
+      event,
       guard: {},
       correlationId: run.correlationId,
-      eventIdempotencyKey: `${run.runId}:${s.stepId}:${s.attempt}:challenge-detected`,
+      eventIdempotencyKey: `${run.runId}:${s.stepId}:${s.attempt}:${idemSuffix}`,
     });
-    if (!r4.applied) {
-      throw new Error(`driveSuspend: R4 not applied (${r4.reason}, observed=${r4.observed ?? "none"})`);
+    if (!t.applied) {
+      throw new Error(`driveSuspend: ${rule} not applied (${t.reason}, observed=${t.observed ?? "none"})`);
     }
-    // exception 은 포트가 미사용(vestigial 필수 파라미터) — 있으면 전달, 없으면 challenge 기본.
+    // exception 은 포트가 미사용(vestigial 필수 파라미터) — 있으면 전달, 없으면 기본.
     const exception: ClassifiedException =
-      s.exception ?? { class: "challenge", code: "CHALLENGE_UNRESOLVED", message: "challenge suspend" as RedactedString };
+      s.exception ?? { class: "challenge", code: "CHALLENGE_UNRESOLVED", message: "suspend" as RedactedString };
     await port.suspendForChallenge(client, {
       tenantId: run.tenantId,
       runId: run.runId,
@@ -178,7 +185,11 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
       attempt: s.attempt,
       correlationId: run.correlationId,
       exception,
-      pendingSideEffects: r4.pending,
+      pendingSideEffects: t.pending,
+      // @human_task(R5)만 human_tasks 라우팅/타임아웃 정책 + bookmark reason 전달(challenge 는 omit → 기존 동작).
+      ...(s.kind === "human_task"
+        ? { assigneeRole: s.assigneeRole, onTimeout: s.onTimeout, reason: "human_task" }
+        : {}),
     });
   });
 

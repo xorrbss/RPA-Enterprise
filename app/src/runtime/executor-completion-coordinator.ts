@@ -35,6 +35,8 @@ export interface ExecutorSecurityNotificationPort {
 }
 
 export interface ExecutorChallengeSuspensionPort {
+  // challenge(R4) 와 @human_task(R5) 두 suspend 트리거가 공유하는 human_task 생성 포트(human_tasks INSERT + human_task.created
+  // emit + suspend bookmark). humanTaskKind 는 pendingSideEffects 의 createHumanTask 에서 온다(하드코딩 금지).
   suspendForChallenge(
     client: pg.PoolClient,
     input: {
@@ -45,6 +47,11 @@ export interface ExecutorChallengeSuspensionPort {
       correlationId: string;
       exception: ClassifiedException;
       pendingSideEffects: readonly SideEffectCmd[];
+      // @human_task(R5) suspend 시 human_tasks 라우팅/타임아웃 정책(reserved-handlers). challenge(R4)는 omit(둘 다 부재).
+      assigneeRole?: string;
+      onTimeout?: "fail" | "escalate";
+      // bookmark reason 마커("challenge"|"human_task"). 미지정 시 "challenge"(기존 동작 보존).
+      reason?: string;
     },
   ): Promise<{ readonly emittedEvents: readonly EventId[]; readonly enqueuedRuntimeJobs?: readonly RuntimeWorkerJob[] }>;
 }

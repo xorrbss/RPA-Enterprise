@@ -28,6 +28,9 @@ export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPor
       correlationId: string;
       exception: ClassifiedException;
       pendingSideEffects: readonly SideEffectCmd[];
+      assigneeRole?: string;
+      onTimeout?: "fail" | "escalate";
+      reason?: string;
     },
   ): Promise<{ readonly emittedEvents: readonly EventId[] }> {
     // R4 pending = [createHumanTask{humanTaskKind}, startBookmark] (coordinator 가 정확히 이 둘을 assert).
@@ -42,11 +45,13 @@ export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPor
       throw new Error("PgChallengeSuspensionPort: pendingSideEffects 에 startBookmark 부재(조용한 false 금지)");
     }
 
-    // 1) human_tasks row 생성(최소: id/tenant/run/kind; state='open'·on_timeout='fail' 는 DDL 기본). assignee_role 등은 후속 정책.
+    // 1) human_tasks row 생성. kind 는 createHumanTask 에서; assignee_role/on_timeout 은 @human_task(R5) input 에서(challenge 는
+    //    미지정 → NULL/DDL 기본 'fail'). state='open' 은 DDL 기본. on_timeout NOT NULL 이라 COALESCE 로 기본 'fail' 보장.
     const humanTaskId = randomUUID();
     await client.query(
-      `INSERT INTO human_tasks (id, tenant_id, run_id, kind) VALUES ($1::uuid, $2::uuid, $3::uuid, $4)`,
-      [humanTaskId, input.tenantId, input.runId, createCmd.humanTaskKind],
+      `INSERT INTO human_tasks (id, tenant_id, run_id, kind, assignee_role, on_timeout)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, COALESCE($6, 'fail'))`,
+      [humanTaskId, input.tenantId, input.runId, createCmd.humanTaskKind, input.assigneeRole ?? null, input.onTimeout ?? null],
     );
 
     // 2) suspend bookmark 영속(전용 runs.bookmark — resume_token 과 분리). 재개 지점 마커(서명 봉투 아님; pageStateRef/kid/hmac 은 R11 후속).
@@ -55,7 +60,7 @@ export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPor
       [
         input.tenantId,
         input.runId,
-        JSON.stringify({ stepId: input.stepId, attempt: input.attempt, reason: "challenge", humanTaskId }),
+        JSON.stringify({ stepId: input.stepId, attempt: input.attempt, reason: input.reason ?? "challenge", humanTaskId }),
       ],
     );
     if (bookmarkUpdate.rowCount !== 1) {

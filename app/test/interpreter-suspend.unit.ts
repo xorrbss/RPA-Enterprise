@@ -1,9 +1,11 @@
 /**
- * 단위 — 인터프리터 suspend outcome (트리거 i: executor step status='suspended'). 외부 의존 없음.
+ * 단위 — 인터프리터 suspend outcome (트리거 i: executor status='suspended' / 트리거 ii: @human_task IR 노드). 외부 의존 없음.
  *
- * 검증: status='suspended' → terminal "suspend" + SuspendContext(resumeNodeId=같은 노드·challengeKind=captcha·
- * stepId·attempt·pageStateRef=res.pageStateAfter). failed_business → terminal(suspend 아님). 기타 미지원 status(skipped)
- * → EXECUTOR_STATUS_UNSUPPORTED throw(조용한 false/unknown 금지). 실행: tsx test/interpreter-suspend.unit.ts.
+ * 검증: 트리거 i status='suspended' → terminal "suspend" + ChallengeSuspendContext(kind=challenge·challengeKind=captcha·
+ * resumeNodeId=같은 노드·pageStateRef=res.pageStateAfter). 트리거 ii @human_task → HumanTaskSuspendContext(kind=human_task·
+ * humanTaskKind=input.kind(미지정 exception)·assigneeRole·onTimeout(미지정 fail)·resumeNodeId=return_node). assignee_role
+ * 부재/kind 오류 → IR_SCHEMA_INVALID, @challenge → RESERVED_HANDLER_UNSUPPORTED. failed_business → terminal(suspend 아님).
+ * 기타 미지원 status(skipped) → EXECUTOR_STATUS_UNSUPPORTED(조용한 false/unknown 금지). 실행: tsx test/interpreter-suspend.unit.ts.
  */
 import type { ClassifiedException, ExecutorPlugin, PageState, RedactedString, RunContext, StepResult, StepStatus, VerifyResult } from "../../ts/core-types";
 import { runScenario, type CompiledScenario } from "../src/runtime/ir-interpreter";
@@ -69,7 +71,8 @@ async function main(): Promise<void> {
     const o = await runScenario(scenario, ctx(), { executor: executorReturning("suspended", exc), resolver: fakeResolver });
     check("terminal === 'suspend'", o.terminal === "suspend", o.terminal);
     check("suspend.resumeNodeId === 'challenge' (같은 노드 재진입)", o.suspend?.resumeNodeId === "challenge", o.suspend?.resumeNodeId);
-    check("suspend.challengeKind === 'captcha'", o.suspend?.challengeKind === "captcha", o.suspend?.challengeKind);
+    check("suspend.kind === 'challenge'", o.suspend?.kind === "challenge", o.suspend?.kind);
+    check("suspend.challengeKind === 'captcha'", o.suspend?.kind === "challenge" && o.suspend.challengeKind === "captcha", JSON.stringify(o.suspend));
     check("suspend.stepId === 'challenge.0'", o.suspend?.stepId === "challenge.0", o.suspend?.stepId);
     check("suspend.attempt === 0", o.suspend?.attempt === 0, String(o.suspend?.attempt));
     check("suspend.pageStateRef === res.pageStateAfter('ps_after')", o.suspend?.pageStateRef === "ps_after", o.suspend?.pageStateRef);
@@ -119,11 +122,76 @@ async function main(): Promise<void> {
     check("startNode='b' → b부터 재진입(a 스킵)", fromB.visited.join(",") === "b" && fromB.terminal === "success", fromB.visited.join(","));
   }
 
+  // 6) @human_task(R5, 트리거 ii): reserved_handler next-target → suspend(human_task). what-less/what 양쪽 + 거부 경로.
+  const htScenario = (input: Record<string, unknown>, what: unknown[] = []): CompiledScenario => ({
+    start: "task",
+    nodes: {
+      task: { what, flow: { kind: "reserved_handler", handler: "@human_task", input, returnNode: "after" } },
+      after: { what: [], flow: { kind: "terminal", terminal: "success" } },
+    },
+  });
+  const htDeps = () => ({ executor: executorReturning("success"), resolver: fakeResolver });
+  {
+    const o = await runScenario(htScenario({ kind: "approval", assignee_role: "approver" }), ctx(), htDeps());
+    check("@human_task → terminal 'suspend'", o.terminal === "suspend", o.terminal);
+    check("@human_task suspend.kind === 'human_task'", o.suspend?.kind === "human_task", o.suspend?.kind);
+    if (o.suspend?.kind === "human_task") {
+      check("humanTaskKind === 'approval'", o.suspend.humanTaskKind === "approval", o.suspend.humanTaskKind);
+      check("assigneeRole === 'approver'", o.suspend.assigneeRole === "approver", o.suspend.assigneeRole);
+      check("onTimeout === 'fail'(기본)", o.suspend.onTimeout === "fail", o.suspend.onTimeout);
+      check("resumeNodeId === 'after'(return_node 재개)", o.suspend.resumeNodeId === "after", o.suspend.resumeNodeId);
+      check("stepId === 'task.@human_task'", o.suspend.stepId === "task.@human_task", o.suspend.stepId);
+      check("pageStateRef === 'ps_h'(what-less → ctx.pageState ref)", o.suspend.pageStateRef === "ps_h", o.suspend.pageStateRef);
+    }
+    check("@human_task suspend → exception 부재(challenge 전용)", o.suspend?.exception === undefined);
+    check("visited=task only(suspend 전 after 미도달)", o.visited.join(",") === "task", o.visited.join(","));
+  }
+  {
+    // kind 미지정 → exception 기본(R5: 하드코딩 금지 + 미지정 exception).
+    const o = await runScenario(htScenario({ assignee_role: "ops" }), ctx(), htDeps());
+    check("@human_task kind 미지정 → 'exception' 기본", o.suspend?.kind === "human_task" && o.suspend.humanTaskKind === "exception", JSON.stringify(o.suspend));
+  }
+  {
+    // on_timeout=escalate 투영(H4b).
+    const o = await runScenario(htScenario({ kind: "validation", assignee_role: "reviewer", on_timeout: "escalate" }), ctx(), htDeps());
+    check("@human_task on_timeout=escalate 투영", o.suspend?.kind === "human_task" && o.suspend.onTimeout === "escalate", JSON.stringify(o.suspend));
+  }
+  {
+    // what 실행 노드 → pageStateRef = 마지막 StepResult.pageStateAfter(challenge 와 동일 출처).
+    const o = await runScenario(htScenario({ kind: "approval", assignee_role: "approver" }, [{ type: "act" }]), ctx(), htDeps());
+    check("@human_task what 실행 시 pageStateRef = res.pageStateAfter('ps_after')", o.suspend?.kind === "human_task" && o.suspend.pageStateRef === "ps_after", JSON.stringify(o.suspend));
+  }
+  {
+    // assignee_role 부재 → IR_SCHEMA_INVALID(미할당 task 금지, 조용한 false 금지).
+    let threw: unknown;
+    try { await runScenario(htScenario({ kind: "approval" }), ctx(), htDeps()); } catch (e) { threw = e; }
+    check("@human_task assignee_role 부재 → IR_SCHEMA_INVALID throw", threw instanceof Error && (threw as { code?: string }).code === "IR_SCHEMA_INVALID", String(threw));
+  }
+  {
+    // kind 비정상 값 → IR_SCHEMA_INVALID(approval/validation/exception 외, 오라우팅 금지).
+    let threw: unknown;
+    try { await runScenario(htScenario({ kind: "weird", assignee_role: "ops" }), ctx(), htDeps()); } catch (e) { threw = e; }
+    check("@human_task kind 'weird' → IR_SCHEMA_INVALID throw", threw instanceof Error && (threw as { code?: string }).code === "IR_SCHEMA_INVALID", String(threw));
+  }
+  {
+    // @challenge reserved-handler 노드 → RESERVED_HANDLER_UNSUPPORTED(ResolutionPolicy 미구현, 조용한 false 금지).
+    const challengeNode: CompiledScenario = {
+      start: "c",
+      nodes: {
+        c: { what: [], flow: { kind: "reserved_handler", handler: "@challenge", input: {}, returnNode: "after" } },
+        after: { what: [], flow: { kind: "terminal", terminal: "success" } },
+      },
+    };
+    let threw: unknown;
+    try { await runScenario(challengeNode, ctx(), htDeps()); } catch (e) { threw = e; }
+    check("@challenge reserved-handler → RESERVED_HANDLER_UNSUPPORTED throw", threw instanceof Error && (threw as { code?: string }).code === "RESERVED_HANDLER_UNSUPPORTED", String(threw));
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: 인터프리터 suspend outcome + startNode 재진입 (A.1 suspend/resume)");
+  console.log("\nPASS: 인터프리터 suspend outcome(challenge i + @human_task ii) + startNode 재진입 (A.1 suspend/resume)");
   process.exit(0);
 }
 

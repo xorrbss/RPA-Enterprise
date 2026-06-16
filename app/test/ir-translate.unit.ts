@@ -136,6 +136,51 @@ function main(): void {
     check("흐름 키 전무 → UNSUPPORTED_FLOW", err instanceof InterpreterError && err.code === "UNSUPPORTED_FLOW", String(err));
   }
 
+  // ── (R) reservedHandlerCall next-target(@human_task/@challenge, P3) ──
+  // 16) next 객체 @human_task → NodeFlow.reserved_handler(handler/input/returnNode). input 의미검증은 인터프리터 소관.
+  {
+    const ir = { start: "t", nodes: { t: { next: { handler: "@human_task", input: { kind: "approval", assignee_role: "approver" }, return_node: "after" } }, after: { terminal: "success" } } };
+    const s = compiledScenarioFrom(ir, {});
+    const f = s.nodes.t?.flow;
+    check(
+      "@human_task next → reserved_handler(handler/returnNode/input)",
+      f?.kind === "reserved_handler" && f.handler === "@human_task" && f.returnNode === "after" && (f.input as { kind?: string }).kind === "approval",
+      JSON.stringify(f),
+    );
+  }
+  // 17) next 객체 @challenge → reserved_handler(translate 는 구조만; @challenge dispatch 거부는 인터프리터).
+  {
+    const ir = { start: "c", nodes: { c: { next: { handler: "@challenge", input: {}, return_node: "after" } }, after: { terminal: "success" } } };
+    const f = compiledScenarioFrom(ir, {}).nodes.c?.flow;
+    check("@challenge next → reserved_handler(handler=@challenge)", f?.kind === "reserved_handler" && f.handler === "@challenge", JSON.stringify(f));
+  }
+  // 18) handler 무효(@foo) → IR_SCHEMA_INVALID(조용한 false 금지).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "t", nodes: { t: { next: { handler: "@foo", input: {}, return_node: "after" } }, after: { terminal: "success" } } }, {}));
+    check("reservedHandler handler 무효 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+  // 19) return_node 누락 → IR_SCHEMA_INVALID.
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "t", nodes: { t: { next: { handler: "@human_task", input: { kind: "approval" } } }, after: { terminal: "success" } } }, {}));
+    check("reservedHandler return_node 누락 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+  // 20) input 비-객체 → IR_SCHEMA_INVALID.
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "t", nodes: { t: { next: { handler: "@human_task", input: "x", return_node: "after" } }, after: { terminal: "success" } } }, {}));
+    check("reservedHandler input 비-객체 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+  // 21) on[] 분기 target 이 reservedHandlerCall → 미지원 명시 표면화(IR_SCHEMA_INVALID, 일반 "형식 오류" 아닌 명확 메시지).
+  {
+    const ir = { start: "c", nodes: { c: { on: [{ when: "flags.x", target: { handler: "@human_task", input: {}, return_node: "after" }, priority: 1 }] }, after: { terminal: "success" } } };
+    const ast = { nodes: { c: { on: [{ when: { kind: "flag", name: "x" }, target: { handler: "@human_task", input: {}, return_node: "after" }, priority: 1 }] } } };
+    const err = caught(() => compiledScenarioFrom(ir, ast));
+    check(
+      "on[] reservedHandlerCall target → IR_SCHEMA_INVALID(미지원, 명시)",
+      err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID" && /reservedHandlerCall/.test((err as Error).message),
+      String(err),
+    );
+  }
+
   // ── (B) url_ref → params URL 해소 ──
   // 6) 정상: url_ref(키) → params 의 절대 URL 이 navigate.url 로.
   {
@@ -217,7 +262,7 @@ function main(): void {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: ir-translate — 드리프트(RQ-008) + url_ref→params 해소 + act/extract→DomAction 매핑");
+  console.log("\nPASS: ir-translate — 드리프트(RQ-008) + url_ref→params 해소 + act/extract 매핑 + reservedHandlerCall(@human_task/@challenge)");
   process.exit(0);
 }
 
