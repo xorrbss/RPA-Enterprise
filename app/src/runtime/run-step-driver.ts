@@ -6,17 +6,24 @@
  * 각 전이는 독립 CAS 트랜잭션(applyRunTransition: UPDATE WHERE status=<cur> + 동일 tx outbox). 인터프리터(브라우저
  * 작업)는 트랜잭션 밖에서 수행한다(긴 작업으로 커넥션 점유 금지).
  *
- * 범위: success/success_empty → completed(R7→R21), fail_business → failed_business(R9), fail_system → failed_system(R8).
- * suspend/challenge 등 그 외 terminal 은 미구현 — 조용히 흘리지 않고 throw로 표면화한다("조용한 false/unknown 금지").
+ * 범위: success/success_empty → completed(R7→R21), fail_business → failed_business(R9), fail_system → failed_system(R8),
+ * suspend → suspended(R4→포트→resume-token 발행→R11, driveSuspend). 그 외 terminal 은 미구현 — 조용히 흘리지 않고
+ * throw로 표면화한다("조용한 false/unknown 금지").
  */
 import type { Pool } from "pg";
 
-import type { ExecutorPlugin, PageState, PageStateResolver, RunContext } from "../../../ts/core-types";
+import type { ClassifiedException, ExecutorPlugin, PageState, PageStateRef, PageStateResolver, RedactedString, RunContext } from "../../../ts/core-types";
+import type { IsoDateTime, ResumeTokenCodec, ResumeTokenEnvelope } from "../../../ts/runtime-contract";
+import type { RunId } from "../../../ts/security-middleware-contract";
 import type { RunEvent, RunGuard, RunState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import { applyRunTransition } from "./run-transition";
+import type { ExecutorChallengeSuspensionPort } from "./executor-completion-coordinator";
 import { compiledScenarioFrom } from "./ir-translate";
-import { runScenario, type ScenarioOutcome } from "./ir-interpreter";
+import { runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
+
+// ops-defaults.md resume_token.ttl=30m(expiresAt). 코드 상수 금지 규약 — inline 인용(RQ-017 패턴).
+const RESUME_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 export interface ClaimedRun {
   readonly runId: string;
@@ -36,6 +43,9 @@ export interface DriveDeps {
   readonly executor: ExecutorPlugin;
   readonly resolver: PageStateResolver;
   readonly workerId: string;
+  // suspend 경로(트리거 i) 주입 — 미주입 시 suspend terminal 은 loud throw(미구성). 둘 다 있어야 구동.
+  readonly suspensionPort?: ExecutorChallengeSuspensionPort;
+  readonly resumeTokenCodec?: ResumeTokenCodec;
 }
 
 export interface DriveResult {
@@ -109,9 +119,95 @@ export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise
     return { state: "failed_system", outcome };
   }
 
-  // success/success_empty/fail_business/fail_system 외(suspend/challenge 등): 미구현 — 조용히 흘리지 않고 throw로 표면화.
-  // (ScenarioOutcome.terminal 은 string 타입이라 컴파일러가 누락 케이스를 못 잡는다 → loud default 유지.)
-  throw new Error(`driveClaimedRun: terminal '${outcome.terminal}' 종료 전이 미구현(success/success_empty/fail_business/fail_system 외). 후속 증분에서 추가.`);
+  // suspend(트리거 i): running→suspending(R4) + human_task 포트 → resume-token 발행 + R11 → suspended.
+  if (outcome.terminal === "suspend") {
+    return driveSuspend(run, deps, outcome);
+  }
+
+  // 그 외 terminal(@challenge/@human_task IR 노드 등): 미구현 — 조용히 흘리지 않고 throw로 표면화(terminal 은 string).
+  throw new Error(`driveClaimedRun: terminal '${outcome.terminal}' 종료 전이 미구현(success/success_empty/fail_business/fail_system/suspend 외). 후속 증분에서 추가.`);
+}
+
+/**
+ * suspend 경로(A.1 step2+3). 인터프리터 suspend outcome → R4(running→suspending)+human_task 포트 → resume-token 발행+R11(→suspended).
+ * R4+포트는 한 tx(R4 pending=[createHumanTask,startBookmark] 를 포트에 전달). 토큰 발행은 SecretStore.resolve(tx 밖, 네트워크).
+ * 토큰 save+R11 은 한 tx(원자: 토큰 없이 suspended 금지). R11 pending(issueResumeToken/releaseLease)은 driver 미소비
+ * (success/fail 경로와 동일 — lease 회수는 deferred lease lifecycle; 토큰은 R11 전에 이미 발행·저장).
+ */
+async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioOutcome): Promise<DriveResult> {
+  const s: SuspendContext | undefined = outcome.suspend;
+  if (s === undefined) {
+    throw new Error("driveSuspend: terminal 'suspend' 인데 suspend 컨텍스트 부재(인터프리터 불변 위반)");
+  }
+  const port = deps.suspensionPort;
+  const codec = deps.resumeTokenCodec;
+  if (port === undefined || codec === undefined) {
+    throw new Error("driveSuspend: suspend 경로는 suspensionPort + resumeTokenCodec 주입 필요(미구성)");
+  }
+
+  // 1) R4(running→suspending) + 포트(human_task INSERT + human_task.created + bookmark) — 한 tenant tx.
+  await withTenantTx(deps.pool, run.tenantId, async (client) => {
+    const r4 = await applyRunTransition(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      fromStatus: "running",
+      event: { type: "step.challenge_detected", challengeKind: s.challengeKind },
+      guard: {},
+      correlationId: run.correlationId,
+      eventIdempotencyKey: `${run.runId}:${s.stepId}:${s.attempt}:challenge-detected`,
+    });
+    if (!r4.applied) {
+      throw new Error(`driveSuspend: R4 not applied (${r4.reason}, observed=${r4.observed ?? "none"})`);
+    }
+    // exception 은 포트가 미사용(vestigial 필수 파라미터) — 있으면 전달, 없으면 challenge 기본.
+    const exception: ClassifiedException =
+      s.exception ?? { class: "challenge", code: "CHALLENGE_UNRESOLVED", message: "challenge suspend" as RedactedString };
+    await port.suspendForChallenge(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      stepId: s.stepId,
+      attempt: s.attempt,
+      correlationId: run.correlationId,
+      exception,
+      pendingSideEffects: r4.pending,
+    });
+  });
+
+  // 2) resume-token 발행(SecretStore.resolve — tx 밖). canonical bytes 로 로컬 HMAC 서명.
+  const now = Date.now();
+  const token: ResumeTokenEnvelope = await codec.issue({
+    runId: run.runId as RunId,
+    resumeNodeId: s.resumeNodeId,
+    pageStateRef: s.pageStateRef as PageStateRef,
+    issuedAt: new Date(now).toISOString() as IsoDateTime,
+    expiresAt: new Date(now + RESUME_TOKEN_TTL_MS).toISOString() as IsoDateTime,
+  });
+
+  // 3) 토큰 save + R11(suspending→suspended) — 한 tx(원자). guard.resumeTokenIssued=true 는 실제 발행 후에만(stranding 금지).
+  await withTenantTx(deps.pool, run.tenantId, async (client) => {
+    const saved = await client.query(
+      `UPDATE runs SET resume_token = $3::jsonb, updated_at = now()
+        WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'suspending'`,
+      [run.tenantId, run.runId, JSON.stringify(token)],
+    );
+    if (saved.rowCount !== 1) {
+      throw new Error(`driveSuspend: resume_token save affected ${saved.rowCount ?? 0} rows (run not in suspending)`);
+    }
+    const r11 = await applyRunTransition(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      fromStatus: "suspending",
+      event: { type: "bookmark_saved" },
+      guard: { resumeTokenIssued: true },
+      correlationId: run.correlationId,
+      eventIdempotencyKey: `${run.runId}:bookmark_saved`,
+    });
+    if (!r11.applied) {
+      throw new Error(`driveSuspend: R11 not applied (${r11.reason}, observed=${r11.observed ?? "none"})`);
+    }
+  });
+
+  return { state: "suspended", outcome };
 }
 
 // 단일 전이를 자체 CAS 트랜잭션으로 적용. eventIdempotencyKey는 이벤트별 접미(outbox UNIQUE 충돌 방지).
