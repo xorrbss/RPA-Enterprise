@@ -29,7 +29,7 @@
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact read/mutation RLS posture, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
 - [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output is recorded in the next row.
 - [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. Staging/deploy rollback evidence remains outside this contract repository and must be supplied by the project owner at deploy time.
-- [x] Current local blocked:audit output: 21 markers, 2 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (2 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows).
+- [x] Current local blocked:audit output: 20 markers, 1 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (1 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows).
 
 ## Deploy-Time Provisioning Blockers
 
@@ -44,14 +44,17 @@ the project owner** that speaks the real S3 wire protocol (SigV4 over HTTPS) wit
 a SecretRef-backed credential resolved via the real SecretStore — including a
 self-hosted S3-compatible server such as MinIO — IS acceptable real evidence
 (owner ratification, release-decisions D8-A15); the in-process-fake ban is
-unchanged.
+unchanged. Likewise, for the SecretStore resolution row 48, an owner-operated
+real HashiCorp Vault (AppRole auth + KV v2) with the `secret.resolve` audit
+written to a real PostgreSQL `audit_log` IS acceptable real evidence (same
+D8-A15 ratification).
 
 - [ ] Deploy-time concrete staging platform repo and deploy target identifier, GitHub Environment `staging` protection/approver configuration, owner release-approval and rollback confirmation, and SecretRef/SecretStore provisioning path. Required decision: see `product-open-candidate-report.md`.
 - [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path is named without plaintext secret values (owner-attested: HashiCorp Vault, KV v2, mount `secret/`, base path `secret/data/rpa/staging/<runtime>/<purpose>/<name>`, identity map per D8-A12; auth=AppRole evidenced at the row-48 resolution smoke). No plaintext.
 - [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretRef namespace convention and runtime identities allowed to resolve each namespace are named (release-decisions D8-A12 / staging-decision-proposals.md §3; owner-confirmed least-privilege access matrix incl. `artifact-lifecycle`→`object_store`). The real SecretStore backend mount/path remains row 44 (external).
 - [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - initial SecretRef inventory is listed by SecretRef identifiers only, with owning service/runtime and no resolved material (release-decisions D8-A12 / staging-decision-proposals.md §4). Resolved credential values remain deploy-time.
 - [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - rotation owner/cadence and break-glass/update procedure are named (release-decisions D8-A13 / staging-decision-proposals.md §5; rotation owner = single project owner per #13). Actual rotation execution + real SecretStore binding remain deploy-time operations.
-- [ ] Deploy-time staging SecretRef/SecretStore provisioning readiness - provisioning evidence artifact location, authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, CI/deploy log redaction proof, no-env-dump/xtrace proof, and the secret-scan or equivalent negative control are named. Required decision: see `product-open-candidate-report.md`.
+- [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - evidenced on an owner-operated real HashiCorp Vault (AppRole auth, KV v2; owner ratification D8-A15) with the `secret.resolve` audit written hash-chained to a real PostgreSQL `audit_log` under a non-`SUPERUSER`/non-`BYPASSRLS` role. `secretstore:smoke` PASS: [A] authorized `runtime-worker`→`resume_token_hmac` ALLOW (resolved; value never printed) + audit seq#1/hash; [B] unauthorized `browser-worker`→`gateway_policy` DENY (`SECRET_ACCESS_DENIED`, least-privilege D8-A12) + audit seq#2/hash; redaction self-check PASS (no AppRole creds / Vault token / secret value / env dump in output). The repo `Secret scan` CI gate is the standing negative control (creds env-only). See `product-open-candidate-report.md`.
 - [x] Deploy-time staging producer retention duration/source policy — defined (release-decisions D8-A11 / D8-A14) and proven on a real staging PostgreSQL under a non-`SUPERUSER`/non-`BYPASSRLS` application role: `db:smoke:release` PASSED (`non-bypass RLS/redaction row-visibility assertions executed`; retention columns on every payload table, `artifacts` CHECK + `events_outbox.retention_until` NOT NULL fail-closed, tenant RLS) and producer integration tests PASSED proving each payload-bearing writer sets `retention_until` or fails closed (`security-audit.int`: all rows persist `retention_until` + invalid/malformed retention fails closed; `executor-invocation-recorder.int`: `step.completed retention set`; `pipeline.int`/`outbox-relay.int`/`api-artifacts.int`). Redacted endpoint alias `[staging-pg-1]`; no plaintext host/IP/credential. See `product-open-candidate-report.md` producer-retention resolution.
 - [x] Deploy-time D5 Codex SSE live capability evidence — captured (owner-attested live run). Production `CodexSseAdapter`/`FetchCodexSseTransport` ran live against endpoint `[codex-staging-1]` / model `[model-a]` (redacted aliases; absolute HTTPS, no credentials/query/fragment). Result **4/5 PASS**: mandatory #1 basic SSE / #2 prompt-schema safe path / #4 abort all PASS; #3 native `json_schema` PASS (jsonMode=true); #5 model metadata GAP with documented fallback (conservative `maxContextTokens=8192` retained). No plaintext key/raw identifier/env dump recorded (harness self-redaction). See `product-open-candidate-report.md` D5 packet.
 - [x] Runtime artifact_redaction production/staging object I/O and redacted-output implementation is evidenced (object-I/O half) on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via Vault AppRole (`VaultSecretStore.resolve`; `S3_SECRET_ACCESS_KEY` unset). `objectstore:smoke` PASS: production `S3ArtifactRedactor` + injected `ContentRedactionTransform` read→transform→write a redacted object; planted credential+email confirmed ABSENT from the redacted object on re-GET, sha256 in the redacted real-port receipt, self-check confirms no creds/accessKeyId/internal `ObjectRef`/AWS-credential-shape in output or raw rows. Redacted backend alias `[s3-staging-1]`. Scope-split (repo-controlled): `redaction_status` CAS-from-`pending`, claim/skip (quarantine/deleted/already-redacted), and `bypassrls.use` audit live in `runtime-worker.ts` `claimRedactionArtifact` and are proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime row below); the `redaction_attempts < max` threshold predicate is present in code (claim + finalize retry→failed) but exercised at attempts=0 only by that test. Owner ratification D8-A15. See `product-open-candidate-report.md`.
@@ -164,12 +167,10 @@ PR/main `Contract Gates` run attaches the required job URLs.
 
 ## Remaining External Evidence Notes
 
-The only unchecked rows left in this checklist require owner deploy-time
+The only unchecked row left in this checklist requires owner deploy-time
 provisioning: the concrete staging platform repo / deploy target + GitHub
-Environment protection (row 43), and the SecretRef/SecretStore
-provisioning-evidence artifact + authorized/unauthorized resolution smoke
-(row 48). Do not close those rows from local fixtures, temp DBs, in-process
-fake ports, hard-coded aliases, or unredacted logs.
+Environment protection (row 43). Do not close that row from local fixtures,
+temp DBs, in-process fake ports, hard-coded aliases, or unredacted logs.
 
 ## Manual Release Review
 
