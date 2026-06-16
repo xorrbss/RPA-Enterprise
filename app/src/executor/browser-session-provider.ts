@@ -158,6 +158,8 @@ export class FakeCdpSession implements CdpSession {
   private current = "about:blank";
   /** 테스트 단언용 close 호출 횟수. */
   closeCalls = 0;
+  /** 테스트 단언용 goto(navigate) 호출 횟수 — resume 재진입이 앞선 노드를 건너뛰는지 검증. */
+  gotoCalls = 0;
 
   constructor(private readonly downloads: string) {}
 
@@ -165,6 +167,7 @@ export class FakeCdpSession implements CdpSession {
     return this.current;
   }
   async goto(url: string): Promise<void> {
+    this.gotoCalls += 1;
     this.current = url;
   }
   async reload(): Promise<void> {}

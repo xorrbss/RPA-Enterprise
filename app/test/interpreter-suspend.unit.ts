@@ -104,11 +104,26 @@ async function main(): Promise<void> {
     );
   }
 
+  // 5) startNode 재진입(resume): deps.startNode 지정 시 그 노드부터 순회(scenario.start 무시).
+  {
+    const twoNode: CompiledScenario = {
+      start: "a",
+      nodes: {
+        a: { what: [], flow: { kind: "next", target: "b" } },
+        b: { what: [], flow: { kind: "terminal", terminal: "success" } },
+      },
+    };
+    const fromStart = await runScenario(twoNode, ctx(), { executor: executorReturning("success"), resolver: fakeResolver });
+    check("startNode 미지정 → scenario.start(a)부터 (a,b)", fromStart.visited.join(",") === "a,b", fromStart.visited.join(","));
+    const fromB = await runScenario(twoNode, ctx(), { executor: executorReturning("success"), resolver: fakeResolver, startNode: "b" });
+    check("startNode='b' → b부터 재진입(a 스킵)", fromB.visited.join(",") === "b" && fromB.terminal === "success", fromB.visited.join(","));
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: 인터프리터 suspend outcome — status='suspended' → SuspendContext (A.1 suspend 트리거 i)");
+  console.log("\nPASS: 인터프리터 suspend outcome + startNode 재진입 (A.1 suspend/resume)");
   process.exit(0);
 }
 

@@ -72,6 +72,8 @@ export interface InterpreterDeps {
   readonly params?: Record<string, unknown>;
   /** 그래프 비종료(무한 루프) 방어 상한(총 노드 순회). 미지정 시 ops-defaults.md §5 `interpreter.graph_max_steps`(200) 적용. */
   readonly maxSteps?: number;
+  /** resume 재진입 노드(ResumeToken.resumeNodeId). 미지정 시 scenario.start. 재개 시 드라이버가 주입(같은 노드 재진입). */
+  readonly startNode?: string;
 }
 
 export interface InterpreterStep {
@@ -324,7 +326,8 @@ export async function runScenario(
     budget: { remaining: maxSteps },
     suspendBox: {},
   };
-  const terminal = await traverse(state, scenario.start, initialCtx);
+  // resume: deps.startNode(ResumeToken.resumeNodeId)부터 재진입. 미지정 시 scenario.start(정상 시작). traverse 는 임의 노드 시작 지원(fallback sub-traversal과 동일).
+  const terminal = await traverse(state, deps.startNode ?? scenario.start, initialCtx);
   return {
     terminal,
     visited: state.visited,

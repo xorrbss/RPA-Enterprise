@@ -128,7 +128,8 @@ async function main(): Promise<void> {
     console.log("seeded run(running) + workitem(abandoned) + dead_letter + suspended-run/in_progress-human_task");
 
     // 2) 실 Fastify 제어평면 + listen
-    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
+    // resolve(R13) → run_resume 잡 인큐 경계(step2): e2e 는 잡 소비를 검증하지 않으므로 no-op. 미제공 시 resolve loud throw.
+    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {}, async enqueueRunResume() {} };
     const signedCommandRegistry: SignedCommandRegistry = {
       async listAllowedCommandRefs() {
         return { kind: "available", snapshot: { sourceRef: "secret://staging/registry" as SecretRef, commands: [] } };

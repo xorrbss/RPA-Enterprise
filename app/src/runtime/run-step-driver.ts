@@ -64,10 +64,24 @@ function seedPageState(): PageState {
 }
 
 export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise<DriveResult> {
-  // 1) claimed → running (R2, started_at).
+  // claimed → running (R2, started_at). 이후 인터프리터 구동·terminal 매핑은 공유 driveScenario(scenario.start 부터).
   await transition(deps.pool, run, "claimed", { type: "run.started" }, { initOk: true }, deps.workerId);
+  return driveScenario(run, deps);
+}
 
-  // 2) scenario_versions(ir + compiled_ast) 로드 (RLS 스코프).
+/**
+ * resume 구동(A.1 resume step4). worker handleRunResume 이 이미 R18(→running)을 적용 — R2 없이 resumeNodeId 부터
+ * 재진입해 terminal 까지 구동한다. success/fail/suspend(재-suspend) 모두 driveScenario 의 terminal 매핑 재사용.
+ */
+export async function driveResumedRun(run: ClaimedRun, deps: DriveDeps, resumeNodeId: string): Promise<DriveResult> {
+  return driveScenario(run, deps, resumeNodeId);
+}
+
+/**
+ * scenario_versions(ir+compiled_ast) 로드 → 인터프리터(startNode 부터, 미지정 시 scenario.start) → terminal DB 전이.
+ * 호출 전 run 은 'running' 이어야 한다(driveClaimedRun=R2, driveResumedRun=R18). 인터프리터(브라우저 작업)는 tx 밖.
+ */
+async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: string): Promise<DriveResult> {
   const sv = await withTenantTx(deps.pool, run.tenantId, async (c) => {
     const r = await c.query<{ ir: unknown; compiled_ast: unknown }>(
       `SELECT ir, compiled_ast FROM scenario_versions WHERE id=$1::uuid AND tenant_id=$2::uuid`,
@@ -76,19 +90,17 @@ export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise
     return r.rows[0] ?? null;
   });
   if (sv === null) {
-    throw new Error(`driveClaimedRun: scenario_version '${run.scenarioVersionId}' not found (tenant ${run.tenantId})`);
+    throw new Error(`driveScenario: scenario_version '${run.scenarioVersionId}' not found (tenant ${run.tenantId})`);
   }
   // ir=jsonb(객체), compiled_ast=text(JSON 문자열) — 컬럼 타입에 맞춰 정규화.
   const irDoc = typeof sv.ir === "string" ? (JSON.parse(sv.ir) as unknown) : sv.ir;
   const compiledAst = typeof sv.compiled_ast === "string" ? (JSON.parse(sv.compiled_ast) as unknown) : sv.compiled_ast;
-  // navigate.url_ref 는 run.params 의 키로 해소된다(URL_REF_* 실패는 InterpreterError 로 표면화).
   const scenario = compiledScenarioFrom(irDoc, compiledAst, run.params);
 
-  // 3) 인터프리터로 그래프 순회 실행 (트랜잭션 밖).
   const ctx: RunContext = {
     runId: run.runId,
     tenantId: run.tenantId,
-    nodeId: scenario.start,
+    nodeId: startNode ?? scenario.start,
     attempt: 0,
     siteProfileId: run.siteProfileId,
     browserIdentityId: run.browserIdentityId,
@@ -98,10 +110,10 @@ export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise
     abortSignal: new AbortController().signal,
     pageState: seedPageState(),
   };
-  // run.params 를 인터프리터 스코프에 주입(on[].when 의 params.* 참조). navigate url_ref 해소와 동일 출처.
-  const outcome = await runScenario(scenario, ctx, { executor: deps.executor, resolver: deps.resolver, params: run.params });
+  // startNode(resume): 인터프리터가 그 노드부터 재진입(미지정 시 scenario.start). run.params 를 스코프에 주입(on[].when params.*).
+  const outcome = await runScenario(scenario, ctx, { executor: deps.executor, resolver: deps.resolver, params: run.params, startNode });
 
-  // 4) terminal 결과를 DB 전이로 종료.
+  // terminal 결과를 DB 전이로 종료(run 은 이미 running — driveClaimedRun R2 / driveResumedRun R18).
   if (outcome.terminal === "success" || outcome.terminal === "success_empty") {
     await transition(deps.pool, run, "running", { type: "last_node_success" }, { flowTerminalReached: true });
     await transition(deps.pool, run, "completing", { type: "finalize_ok" }, { finalizeOk: true });
@@ -113,19 +125,16 @@ export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise
     return { state: "failed_business", outcome };
   }
   if (outcome.terminal === "fail_system") {
-    // R8 은 pending side-effect(captureFailureScreenshot·evaluateDeadLetter)도 반환하지만, 그 디스패치는 다운스트림
-    // 디스패처(impl-contracts) 소유다 — driveClaimedRun 은 전이 적용만 하고 pending 을 직접 소비하지 않는다(success 경로와 동일).
+    // R8 pending(captureFailureScreenshot·evaluateDeadLetter)은 다운스트림 디스패처 소유 — driver 미소비(success 경로와 동일).
     await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" });
     return { state: "failed_system", outcome };
   }
-
-  // suspend(트리거 i): running→suspending(R4) + human_task 포트 → resume-token 발행 + R11 → suspended.
+  // suspend(트리거 i; resume 중 재-suspend 포함): running→suspending(R4)+포트→resume-token+R11→suspended.
   if (outcome.terminal === "suspend") {
     return driveSuspend(run, deps, outcome);
   }
-
   // 그 외 terminal(@challenge/@human_task IR 노드 등): 미구현 — 조용히 흘리지 않고 throw로 표면화(terminal 은 string).
-  throw new Error(`driveClaimedRun: terminal '${outcome.terminal}' 종료 전이 미구현(success/success_empty/fail_business/fail_system/suspend 외). 후속 증분에서 추가.`);
+  throw new Error(`driveScenario: terminal '${outcome.terminal}' 종료 전이 미구현(success/success_empty/fail_business/fail_system/suspend 외). 후속 증분에서 추가.`);
 }
 
 /**
