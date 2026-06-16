@@ -10,6 +10,7 @@ import {
   FakeCdpSession,
   StagehandBrowserSessionProvider,
   TestFakeBrowserSessionProvider,
+  gateBrowserSessionProvider,
   type BrowserSessionBindInput,
 } from "../src/executor/browser-session-provider";
 import type { CdpSession } from "../src/executor/cdp-session";
@@ -129,6 +130,17 @@ async function main(): Promise<void> {
     check("test_fake bind → FakeCdpSession", session instanceof FakeCdpSession);
     await bound.release();
     check("test_fake release closes session", (session as FakeCdpSession).closeCalls === 1);
+  }
+
+  // 7) gateBrowserSessionProvider — fail-closed test_fake opt-in 게이트(worker 주입 정책).
+  {
+    const real = new StagehandBrowserSessionProvider({ chromeExecutablePath: "/x/chrome", createSession: fakeCreateSession });
+    const fake = new TestFakeBrowserSessionProvider();
+    check("gate: undefined provider → undefined (no drive, claimed-only 기존 동작)", gateBrowserSessionProvider(undefined, false) === undefined);
+    check("gate: real provider → opt-in 무관 통과", gateBrowserSessionProvider(real, false) === real && gateBrowserSessionProvider(real, true) === real);
+    const denied = caughtSync(() => gateBrowserSessionProvider(fake, false));
+    check("gate: test_fake without opt-in → throws (fail-closed)", denied instanceof Error, String(denied));
+    check("gate: test_fake with opt-in → passes", gateBrowserSessionProvider(fake, true) === fake);
   }
 
   if (failures > 0) {

@@ -52,6 +52,24 @@ export interface BrowserSessionProvider {
   bind(input: BrowserSessionBindInput): Promise<BoundBrowserSession>;
 }
 
+/**
+ * worker 주입 게이트(fail-closed). test_fake provider 는 명시 opt-in(allowTestBrowserSessionProvider) 없이는 거부
+ * — 실 run 구동 위조 방지(D6 sinkDeliveryPort·artifact 포트와 동형). 미주입(undefined) → undefined(구동 안 함,
+ * claimed 까지만 = 기존 worker 동작). real → opt-in 무관 통과.
+ */
+export function gateBrowserSessionProvider(
+  provider: BrowserSessionProvider | undefined,
+  allowTestProvider: boolean,
+): BrowserSessionProvider | undefined {
+  if (provider === undefined) return undefined;
+  if (provider.binding.kind === "test_fake" && allowTestProvider !== true) {
+    throw new Error(
+      "RuntimeWorker: test_fake browser session provider requires explicit allowTestBrowserSessionProvider opt-in",
+    );
+  }
+  return provider;
+}
+
 // Phase 1 지원 범위 가드: fresh-per-lease(=browser 격리) + clear_all 만. 그 외는 미지원 feature → loud throw.
 function assertPhase1Supported(input: BrowserSessionBindInput): void {
   if (input.isolation !== "browser" || input.cleanupPolicy !== "clear_all") {

@@ -59,6 +59,7 @@ import { applyRunTransition } from "../runtime/run-transition";
 import { applyWorkitemTransition } from "../runtime/workitem-transition";
 import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
+import type { BrowserSessionProvider } from "../executor/browser-session-provider";
 
 export interface BrowserLeasePlan {
   readonly siteProfileId: string;
@@ -93,6 +94,10 @@ export interface PgRuntimeWorkerOptions {
   readonly sinkDeliveryMaxAttempts?: number;
   readonly sinkDeliveryRetryAfterMs?: number;
   readonly allowTestSinkDeliveryPort?: boolean;
+  // A.1 run-drive: claim 후 lease 에 라이브 세션을 바인딩해 driveClaimedRun 으로 구동(미주입 시 claimed 까지만 = 기존 동작).
+  // test_fake 포트는 allowTestBrowserSessionProvider opt-in 필수(gateBrowserSessionProvider, sink 포트와 동형 fail-closed).
+  readonly browserSessionProvider?: BrowserSessionProvider;
+  readonly allowTestBrowserSessionProvider?: boolean;
 }
 
 export interface BrowserLeaseRenewInput {
