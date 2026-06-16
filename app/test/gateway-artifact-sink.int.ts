@@ -69,6 +69,11 @@ class CountingObjectStore implements ObjectStore {
     return ""; // 본 테스트는 read 경로 미사용(put/delete만 검증).
   }
 
+  async getBytes(_objectRef: ObjectRef): Promise<Uint8Array> {
+    this.gets += 1;
+    return new Uint8Array(); // 본 테스트는 read 경로 미사용(put/delete만 검증).
+  }
+
   async delete(_objectRef: ObjectRef): Promise<void> {
     this.deletes += 1;
   }

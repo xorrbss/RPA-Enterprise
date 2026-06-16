@@ -99,14 +99,16 @@ export class S3ArtifactRedactor implements ArtifactRedactor {
 
     const sourceRef: ObjectRef = input.artifact.objectRef;
 
-    // (2) 내부 object 읽기. 부재(null)는 terminal(삭제 대상 없음 — 재시도 무의미).
+    // (2) 내부 object 의 RAW 바이트 읽기(getBytes — 디코드/치환 없음). 부재(null)는 terminal(삭제 대상
+    //     없음 — 재시도 무의미). raw-byte discipline: get()(텍스트)을 쓰면 binary 가 U+FFFD 로 손상돼
+    //     transform 의 fatal-decode 가드가 무력화된다(VULN1). 디코드/바이너리 판정은 transform 책임.
     let sourceBytes: Uint8Array;
     try {
-      const content = await this.objectStore.get(sourceRef);
-      if (content === null) {
+      const bytes = await this.objectStore.getBytes(sourceRef);
+      if (bytes === null) {
         return { kind: "terminal_failed", reason: "source object not found for redaction" };
       }
-      sourceBytes = new TextEncoder().encode(content);
+      sourceBytes = bytes;
     } catch (err) {
       return this.mapIoFailure(err, input.artifact, input.policy.maxAttempts);
     }
@@ -137,6 +139,8 @@ export class S3ArtifactRedactor implements ArtifactRedactor {
     // (4) 마스킹된 바이트를 새 ObjectRef 로 기록 + sha256 산출.
     let redactedObjectRef: ObjectRef;
     try {
+      // transform.bytes 는 변환이 산출한 **마스킹된 텍스트**(항상 valid UTF-8) — source binary 가 아니다.
+      // (source 의 binary fail-closed 는 transform 안에서 이미 throw 로 끝났다.) 따라서 여기 디코드는 무손실.
       const redactedContent = new TextDecoder().decode(transformed.bytes);
       redactedObjectRef = await this.objectStore.put(redactedContent);
     } catch (err) {

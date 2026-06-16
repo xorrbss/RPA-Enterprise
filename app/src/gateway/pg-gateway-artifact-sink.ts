@@ -26,8 +26,17 @@ type ArtifactMeta = Pick<LLMRequest["metadata"], "tenantId" | "runId" | "stepId"
 /** 바이트 저장소 경계 — object_ref 반환. 프로덕션은 S3/오브젝트 스토리지, 본 구현은 파일시스템. */
 export interface ObjectStore {
   put(content: string): Promise<ObjectRef>;
-  /** object bytes 반환. **부재 시 null**(존재하지 않는 object — 호출부가 fail-closed 처리; impl-agnostic). */
+  /**
+   * object 를 **UTF-8 텍스트**로 반환(텍스트 read 경로 — artifact read route 등). 부재 시 null.
+   * 비-UTF8 바이트는 lossy 디코드될 수 있으므로 redaction/무결성 경로는 `getBytes()`(raw)를 써야 한다.
+   */
   get(objectRef: ObjectRef): Promise<string | null>;
+  /**
+   * object 의 **RAW 바이트**를 디코드 없이 반환(부재 시 null). redaction 파이프라인은 이 경로로 읽어야
+   * 바이너리 fail-closed 가 성립한다 — `get()`(텍스트)은 U+FFFD 치환으로 binary 를 손상시켜 fatal 디코드
+   * 가드를 무력화하므로 raw-byte discipline 이 필수다.
+   */
+  getBytes(objectRef: ObjectRef): Promise<Uint8Array | null>;
   delete(objectRef: ObjectRef): Promise<void>;
 }
 
@@ -47,6 +56,17 @@ export class FsObjectStore implements ObjectStore {
     const target = this.resolveWithinDir(objectRef); // 경로 이탈은 throw(전파 — 무결성/공격 오류, not-found 아님).
     try {
       return readFileSync(target, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null; // object bytes 부재 → null
+      throw err; // 그 외(권한 등)는 전파
+    }
+  }
+
+  async getBytes(objectRef: ObjectRef): Promise<Uint8Array | null> {
+    const target = this.resolveWithinDir(objectRef); // 경로 이탈은 throw(전파 — 무결성/공격 오류, not-found 아님).
+    try {
+      // 인코딩 미지정 → Buffer(raw 바이트). 디코드/치환 없음(바이너리 fail-closed 보존).
+      return new Uint8Array(readFileSync(target));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null; // object bytes 부재 → null
       throw err; // 그 외(권한 등)는 전파

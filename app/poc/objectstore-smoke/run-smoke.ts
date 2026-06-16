@@ -8,9 +8,11 @@
  * 실증 시나리오:
  *   [row 52] retention delete 멱등 — 임시 test object key 를 PUT → S3ArtifactRetentionStore.deleteObject
  *            → `deleted` 기대; 같은 ObjectRef 재삭제 → `not_found` 기대(멱등). REDACTED 영수증 출력.
- *   [row 51] redaction — ArtifactContentTransform 이 구성된 경우에만 실행한다. 미구성 시
- *            "redaction transform not configured — row 51 needs the masking-algorithm decision" 출력
- *            (가짜 redaction 금지 — fail-closed 설계 그대로).
+ *   [row 51] redaction — ContentRedactionTransform(security-contracts §4 default text/JSON redactor)을
+ *            주입해 end-to-end 실증한다. 가짜 credential + email 을 담은 텍스트 object 를 PUT →
+ *            S3ArtifactRedactor.redact → 새 ObjectRef 에서 redacted 바이트를 다시 GET → planted
+ *            시크릿이 사라졌는지 assert(마스킹 실패 = nonzero exit). transform 미주입 시에는 어댑터가
+ *            terminal_failed 로 fail-close 한다(가짜 redaction 금지) — 그 동작은 단위 테스트가 커버.
  *
  * 자격증명은 env 로만 주입(레포에 남기지 않음). secretAccessKey 는 (a) 직접 env(S3_SECRET_ACCESS_KEY) 또는
  * (b) Vault credentialRef(purpose object_store) → SecretStore.resolve 로 도착한다(둘 중 하나).
@@ -23,6 +25,7 @@
  */
 import { randomUUID } from "node:crypto";
 
+import { ContentRedactionTransform } from "../../src/artifacts/content-redaction-transform";
 import { S3ArtifactRedactor } from "../../src/artifacts/s3-artifact-redactor";
 import { S3ArtifactRetentionStore } from "../../src/artifacts/s3-artifact-retention-store";
 import { S3ObjectStore } from "../../src/artifacts/s3-object-store";
@@ -65,10 +68,20 @@ const CREDENTIAL_REF = (optEnv("S3_CREDENTIAL_REF") ?? "rpa/staging/artifact-lif
 const VAULT_ROLE_ID = optEnv("VAULT_ARTIFACT_LIFECYCLE_ROLE_ID");
 const VAULT_SECRET_ID = optEnv("VAULT_ARTIFACT_LIFECYCLE_SECRET_ID");
 
-// 출력 자체-검열용 비밀 문자열(원시값은 화면/리포트에 절대 미등장).
-const SECRET_STRINGS = [S3_ACCESS_KEY_ID, DIRECT_SECRET, VAULT_ROLE_ID, VAULT_SECRET_ID].filter(
-  (s): s is string => typeof s === "string" && s.length > 0,
-);
+// [row51] redaction 실증용 PLANTED 시크릿(명백히 가짜 — secret-scan 마커 미포함). redaction 이 실제로
+// 마스킹하지 못하면 이 리터럴이 redacted object/영수증에 남아 self-check tripwire 가 누출로 잡는다.
+const ROW51_PLANTED_PASSWORD = "hunter2plantedFAKE";
+const ROW51_PLANTED_EMAIL = "victim@example.com";
+
+// 출력 자체-검열용 비밀 문자열(원시값은 화면/리포트에 절대 미등장). row51 planted password 도 등록 —
+// redaction 실패로 누출되면 cred# 라벨로 잡힌다(email 은 PII 라 추가 assert 로 별도 검사).
+const SECRET_STRINGS = [
+  S3_ACCESS_KEY_ID,
+  DIRECT_SECRET,
+  VAULT_ROLE_ID,
+  VAULT_SECRET_ID,
+  ROW51_PLANTED_PASSWORD,
+].filter((s): s is string => typeof s === "string" && s.length > 0);
 // 런타임에 resolve된 비밀(예: Vault credentialRef 경로로 받은 S3 secretAccessKey)도 self-check
 // tripwire에 등록한다 — env 리터럴이 아니라 정적 SECRET_STRINGS가 모르던 값(bare 시크릿은 shape로 못 잡음).
 // 이미 SigV4용으로 메모리에 존재하므로 노출 증가는 없고, redact/scanForLeaks가 라벨만 출력(값 미재노출).
@@ -222,20 +235,70 @@ async function main(): Promise<void> {
 
   retentionPass = first.kind === "deleted" && second.kind === "not_found";
 
-  // === [row 51] redaction — transform 미구성이면 가짜 redaction 금지(fail-closed 설계 그대로) ===
-  // 본 하니스는 마스킹 ALGORITHM 결정 전이라 transform 을 구성하지 않는다. S3ArtifactRedactor 는
-  // transform 미주입 시 terminal_failed 로 fail-close 한다(미마스킹 바이트를 redacted 로 위장 안 함).
-  const redactor = new S3ArtifactRedactor(objectStore, REAL_BINDING, undefined);
-  const redactionConfigured = false; // 마스킹 알고리즘 미결정 → transform 미구성.
+  // === [row 51] redaction — ContentRedactionTransform(§4 default) 으로 end-to-end 실증 ===
+  // 가짜 credential + email 을 담은 작은 텍스트 object 를 PUT → S3ArtifactRedactor.redact 로 마스킹 →
+  // 새 ObjectRef 에서 redacted 바이트를 다시 GET → planted 시크릿이 사라졌는지 assert(마스킹 실패 시
+  // self-check tripwire 가 password 리터럴을, redactionMaskedOk 가 email 까지 잡아 nonzero exit).
+  const redactor = new S3ArtifactRedactor(objectStore, REAL_BINDING, new ContentRedactionTransform());
+  const r51ArtifactRef = `smoke-redact-${randomUUID()}` as ArtifactRef;
+  const r51SourceContent = `{"password": "${ROW51_PLANTED_PASSWORD}"}\ncontact: ${ROW51_PLANTED_EMAIL}\n`;
+  const r51SourceRef = await objectStore.put(r51SourceContent);
+  const r51Target: ArtifactLifecycleTarget = {
+    tenantId: TENANT_ID,
+    artifactRef: r51ArtifactRef,
+    objectRef: r51SourceRef,
+    type: "llm_output",
+    redactionStatus: "pending",
+    redactionAttempts: 0,
+    legalHold: false,
+    quarantine: false,
+  };
+  const corr3 = randomUUID() as CorrelationId;
+  const redaction = await redactor.redact({
+    tenantId: TENANT_ID,
+    correlationId: corr3,
+    artifact: r51Target,
+    policy: { maxAttempts: 3 },
+    portBinding: REAL_BINDING,
+    audit: {
+      useCase: "artifact_redaction_job",
+      action: "bypassrls.use",
+      failClosed: true,
+      correlationId: corr3,
+      reasonCode: "redaction",
+    },
+  });
+
+  // redacted object 를 다시 읽어 planted 시크릿이 실제로 사라졌는지 검증(증거: 진짜 마스킹).
+  let redactionMaskedOk = false;
   let redactionLine: string;
-  if (redactionConfigured) {
-    // (도달 불가 — 마스킹 결정 후 실제 transform 주입 시 이 분기에서 redact 실증)
-    redactionLine = "redaction: configured (run not implemented in this harness build)";
+  if (redaction.kind === "redacted") {
+    const redactedBack = await objectStore.get(redaction.redactedObjectRef);
+    redactionMaskedOk =
+      redactedBack !== null &&
+      !redactedBack.includes(ROW51_PLANTED_PASSWORD) &&
+      !redactedBack.includes(ROW51_PLANTED_EMAIL);
+    rows.push(
+      receiptFrom(
+        "[row51] redact",
+        "redacted",
+        redaction.kind,
+        redaction.evidence,
+        redactionMaskedOk ? "planted credential+email masked in redacted object" : "MASK FAILED — planted secret still present",
+      ),
+    );
+    redactionLine = `redaction: redacted (operation=${redaction.evidence.operation}, masked=${redactionMaskedOk}, sha256 in receipt)`;
   } else {
-    // fail-closed 동작을 실증만(가짜 redaction 절대 금지): transform 없는 redact 가 terminal_failed.
-    void redactor;
-    redactionLine =
-      "redaction transform not configured — row 51 needs the masking-algorithm decision (adapter fails closed; no fake redaction performed)";
+    rows.push(
+      receiptFrom(
+        "[row51] redact",
+        "redacted",
+        redaction.kind,
+        redaction.kind === "retryable_failed" ? undefined : redaction.evidence,
+        "reason" in redaction ? redaction.reason : "(no reason)",
+      ),
+    );
+    redactionLine = `redaction: ${redaction.kind} (expected redacted) — ${"reason" in redaction ? redaction.reason : ""}`;
   }
 
   // === REDACTED report (조립 → 같은 문자열 스캔 → 출력) ===
@@ -259,11 +322,16 @@ async function main(): Promise<void> {
   // === self-check (gate) — 출력 + raw rows 둘 다 스캔 ===
   // rawProbe = rows 의 raw 직렬화(ObjectRef/자격이 들어가면 안 되는 것). printed/rawProbe 둘 다에서
   // 자격 리터럴(dynamic 포함)·AWS 자격-형태·내부 ObjectRef 값을 찾는다(값 재노출 금지 — 라벨만).
-  const objStr = String(objectRef);
   const rawProbe = JSON.stringify(rows);
   const leaked = [...new Set([...scanForLeaks(printed), ...scanForLeaks(rawProbe)])];
-  // ObjectRef 는 내부 전용 — printed/rawProbe 어디에도 없어야 한다(있으면 누출).
-  if (printed.includes(objStr) || rawProbe.includes(objStr)) leaked.push("object-ref-in-output");
+  // ObjectRef 는 내부 전용 — printed/rawProbe 어디에도 없어야 한다(있으면 누출). row52 source + row51 source/redacted 모두.
+  const objStrs = [String(objectRef), String(r51SourceRef)];
+  if (redaction.kind === "redacted") objStrs.push(String(redaction.redactedObjectRef));
+  for (const o of objStrs) {
+    if (printed.includes(o) || rawProbe.includes(o)) leaked.push("object-ref-in-output");
+  }
+  // row51 planted PII(email)는 SECRET_STRINGS(cred shape)가 아니므로 별도로 출력/raw 에서 누출 검사.
+  if (printed.includes(ROW51_PLANTED_EMAIL) || rawProbe.includes(ROW51_PLANTED_EMAIL)) leaked.push("planted-email-in-output");
 
   const selfCheckPass = leaked.length === 0;
   console.log(printed);
@@ -271,10 +339,16 @@ async function main(): Promise<void> {
     `\nredaction self-check: ${selfCheckPass ? "PASS (no creds / accessKeyId / ObjectRef / AWS-credential-shape in printed output or raw rows)" : `FAIL (${[...new Set(leaked)].join(", ")})`}`,
   );
 
-  const pass = selfCheckPass && retentionPass;
-  console.log(`\n결과: retention [A]=${rows[0]?.observed} [B]=${rows[1]?.observed} → ${pass ? "PASS" : "FAIL"}`);
+  // row51 은 실제로 마스킹돼야(redaction.kind=redacted AND planted 시크릿이 redacted object 에서 사라짐) 통과.
+  const redactionPass = redaction.kind === "redacted" && redactionMaskedOk;
+  const pass = selfCheckPass && retentionPass && redactionPass;
+  console.log(
+    `\n결과: retention [A]=${rows[0]?.observed} [B]=${rows[1]?.observed} / redaction=${redaction.kind} masked=${redactionMaskedOk} → ${pass ? "PASS" : "FAIL"}`,
+  );
   if (!pass) {
-    console.error("FAIL: row 52 requires first-delete=deleted, re-delete=not_found, and a clean redaction self-check.");
+    console.error(
+      "FAIL: requires row52 first-delete=deleted + re-delete=not_found, row51 redaction actually masking the planted secret, and a clean redaction self-check.",
+    );
   }
   process.exitCode = pass ? 0 : 1;
 }
