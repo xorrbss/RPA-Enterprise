@@ -176,15 +176,23 @@ export class S3ObjectStore implements ObjectStore {
   }
 
   /**
-   * ObjectRef 가 부재(404/NoSuchKey)인지 구분 가능한 멱등 삭제. retention 계층이
-   * deleted/not_found 를 구분하는 데 사용한다(ObjectStore.delete 는 void 라 둘을 합치므로 별도 표면).
-   * 5xx/네트워크 오류는 throw(삭제로 간주 금지).
+   * ObjectRef 가 부재(이미 삭제됨)인지 구분 가능한 멱등 삭제. retention 계층이 deleted/not_found 를
+   * 구분하는 데 사용한다(ObjectStore.delete 는 void 라 둘을 합치므로 별도 표면).
+   *
+   * 실 S3/MinIO 의 DELETE 는 **부재여도 204** 를 돌려준다(404 가 아님 — delete() 주석 참조). 따라서 DELETE
+   * status 만으로는 deleted/not_found 를 구분할 수 없다 → **HEAD 로 존재를 먼저 확인**한다: 부재(404)면
+   * not_found(DELETE 생략), 존재하면 DELETE 후 deleted. HEAD~DELETE 사이 타 actor 가 지워 DELETE 가 404 여도
+   * 객체는 사라진 상태이므로 deleted 로 본다. 5xx/네트워크 오류는 throw(삭제로 간주 금지).
    */
   async deleteDistinguishing(objectRef: ObjectRef): Promise<"deleted" | "not_found"> {
     const key = this.keyFromObjectRef(objectRef, "delete");
+    const head = await this.send("HEAD", key, undefined);
+    if (head.status === 404) return "not_found";
+    if (!head.ok) {
+      throw new S3ObjectStoreError("delete", `s3 head returned HTTP ${head.status}`, key, head.status);
+    }
     const res = await this.send("DELETE", key, undefined);
-    if (res.status === 404) return "not_found";
-    if (res.ok) return "deleted";
+    if (res.ok || res.status === 404) return "deleted";
     throw new S3ObjectStoreError("delete", `s3 delete returned HTTP ${res.status}`, key, res.status);
   }
 
@@ -206,7 +214,7 @@ export class S3ObjectStore implements ObjectStore {
 
   /** SigV4 서명 후 단일 HTTP 요청 송신. 네트워크 오류는 자격 누설 없이 throw. */
   private async send(
-    method: "GET" | "PUT" | "DELETE",
+    method: "GET" | "PUT" | "DELETE" | "HEAD",
     key: string,
     body: Uint8Array | undefined,
   ): Promise<S3HttpTransportResponse> {
