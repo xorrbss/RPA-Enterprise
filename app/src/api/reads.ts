@@ -7,9 +7,17 @@
  *
  * 포함: listRuns, listHumanTasks, getHumanTask. (workitems/dlq/scenarios/sites/gateway read는 후속.)
  */
+import { randomUUID } from "node:crypto";
+
 import type { FastifyInstance } from "fastify";
 
 import type { ObjectRef } from "../../../ts/core-types";
+import {
+  SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+  type CorrelationId,
+  type IdempotencyKey,
+  type IsoDateTime,
+} from "../../../ts/security-middleware-contract";
 import type { HumanTaskKind, HumanTaskState, RunState, WorkitemState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
@@ -25,6 +33,9 @@ import {
 import { requirePrincipal, type ApiServerDeps } from "./server";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// artifact.read audit 보존일수 — worker artifact-lifecycle audit(DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS=90)과
+// 동일(비발명, 기존 artifact audit 보존 정책 재사용). 전용 ops-defaults 행 도입 시 그 값으로 대체.
+const ARTIFACT_READ_AUDIT_RETENTION_DAYS = 90;
 
 interface RunListRow {
   id: string;
@@ -462,6 +473,14 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
   // 본문은 object store(redacted at rest)에서 read. artifactStore 미주입 시 미등록 — 실 분산 store 바인딩은 deploy-time(B3).
   if (deps.artifactStore !== undefined) {
     const artifactStore = deps.artifactStore;
+    // security-contracts §10: artifact.read 본문 disclosure는 audit boundary 없이 노출 불가(fail-closed).
+    //   artifactStore가 있는데 securityAudit가 없으면 미설정(fail-open) — 라우트를 등록하지 않고 명시 차단.
+    const securityAudit = deps.securityAudit;
+    if (securityAudit === undefined) {
+      throw new Error(
+        "registerReadRoutes: artifactStore requires securityAudit — security-contracts §10은 artifact.read 본문 반환 전 audit boundary append를 강제한다(fail-closed)",
+      );
+    }
     app.get<{ Params: { id: string } }>(
       "/v1/artifacts/:id",
       { config: { rbacAction: "artifact.read" } },
@@ -483,6 +502,31 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           // RLS가 비가시(pending/failed/quarantined/deleted/cross-tenant) 행을 숨김 → 404(존재 비노출, D8-A1).
           throw new ApiResponseError("RESOURCE_NOT_FOUND");
         }
+        // security-contracts §10:147-148: artifact.read(allow) 결정을 **본문 반환 전** append-only audit log에
+        //   fail-closed로 남긴다. recordDecision throw(PgSecurityAuditAppendRequiredError) 시 본문 미반환(fail-closed).
+        const occurredAt = new Date();
+        await securityAudit.recordDecision(
+          {
+            tenantId: principal.tenantId,
+            actor: { subjectId: principal.subjectId, roles: principal.roles },
+            action: "artifact.read",
+            outcome: "allow",
+            resource: { kind: "artifact", id: row.id },
+            reason: "artifact_body_disclosed",
+            correlationId: request.correlationId as CorrelationId,
+            // 각 disclosure = 별개 audit 이벤트(idempotency_key UNIQUE). correlation 재사용에도 충돌 없게 per-read UUID.
+            idempotencyKey: randomUUID() as IdempotencyKey,
+            occurredAt: occurredAt.toISOString() as IsoDateTime,
+            // artifact lifecycle audit 보존(worker DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS=90)과 동일 — 비발명.
+            retentionUntil: new Date(
+              occurredAt.getTime() + ARTIFACT_READ_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+            ).toISOString() as IsoDateTime,
+            payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+            failClosed: true,
+            payload: { decision_kind: "artifact.read", artifact_id: row.id, redaction_status: row.redaction_status },
+          },
+          { artifact_id: row.id },
+        );
         // 본문은 redacted/not_required object(at rest 마스킹) — 평문 노출 없음(security-contracts §4/§9).
         const content = await artifactStore.get(row.object_ref as ObjectRef);
         reply.code(200).send({

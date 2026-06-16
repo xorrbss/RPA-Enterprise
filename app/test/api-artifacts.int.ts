@@ -22,6 +22,7 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
+import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { FsObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
@@ -60,6 +61,16 @@ function mint(claims: Record<string, unknown>): Promise<string> {
 }
 
 type Pool = ReturnType<typeof createPool>;
+
+/** RQ-019: artifact.read audit boundary 행 수(tenant-scoped). security-contracts §10 — disclosure당 1행. */
+async function artifactReadAuditCount(pool: Pool, tenant: string): Promise<number> {
+  return withTenantTx(pool, tenant, async (c) => {
+    const r = await c.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM audit_log WHERE action='artifact.read' AND outcome='allow'`,
+    );
+    return r.rows[0]?.n ?? 0;
+  });
+}
 
 /** object 기록(FsObjectStore.put) + artifacts 행 직접 INSERT(run 링크 불요 — run_id nullable). */
 async function seedArtifact(
@@ -118,6 +129,7 @@ async function main(): Promise<void> {
       enqueuer: noopEnqueuer,
       signedCommandRegistry,
       artifactStore: store,
+      securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
     });
     await app.ready();
     try {
@@ -141,9 +153,14 @@ async function main(): Promise<void> {
       const r3 = await get(redacted.id, viewer);
       check("viewer artifact.read → 200", r3.statusCode === 200 && r3.json().content === "redacted-body-A", r3.body);
 
+      // RQ-019: 성공 disclosure(r1·r2·r3 = 3건)는 security-contracts §10 audit boundary에 artifact.read/allow 행을 남긴다.
+      check("성공 disclosure 3건 → audit_log artifact.read/allow 3행", (await artifactReadAuditCount(pool, TENANT_A)) === 3, "audit rows after 3 reads");
+
       // 4) pending → 404(RLS 비가시; D8-A1 — 409 ARTIFACT_NOT_REDACTED 미노출, 존재 비노출).
       const r4 = await get(pending.id);
       check("pending → 404 RESOURCE_NOT_FOUND", r4.statusCode === 404 && r4.json().code === "RESOURCE_NOT_FOUND", r4.body);
+      // 404(비가시)는 본문 미노출 → audit 행 미추가(disclosure 없음).
+      check("404은 audit 행 미추가(여전히 3)", (await artifactReadAuditCount(pool, TENANT_A)) === 3);
 
       // 5) failed → 404.
       const r5 = await get(failed.id);
@@ -168,6 +185,24 @@ async function main(): Promise<void> {
       // 10) 무효 uuid → 404.
       const r10 = await get("not-a-uuid");
       check("invalid uuid → 404", r10.statusCode === 404 && r10.json().code === "RESOURCE_NOT_FOUND", r10.body);
+
+      // 11) RQ-019 fail-closed: artifactStore가 있는데 securityAudit 미주입 → 라우트 등록이 fail-closed throw
+      //     (audit 없이 artifact 본문 노출 불가, security-contracts §10).
+      let buildThrew = false;
+      try {
+        buildServer({
+          pool,
+          auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+          rbac: new RoleMatrixRbacMiddleware(),
+          idempotency: new PgControlPlaneIdempotencyStore(pool),
+          enqueuer: noopEnqueuer,
+          signedCommandRegistry,
+          artifactStore: store,
+        });
+      } catch {
+        buildThrew = true;
+      }
+      check("artifactStore without securityAudit → buildServer fail-closed throw", buildThrew);
     } finally {
       await app.close();
     }
