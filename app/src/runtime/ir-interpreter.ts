@@ -35,6 +35,8 @@ export interface CompiledScenario {
 export interface InterpreterDeps {
   readonly executor: ExecutorPlugin;
   readonly resolver: PageStateResolver;
+  /** run 실행 파라미터(runs.params). on[].when 의 params.* 참조 스코프. 드라이버가 run.params 를 주입. */
+  readonly params?: Record<string, unknown>;
   /** 그래프 비종료(무한 루프) 방어 상한. ops-defaults 연동은 후속. */
   readonly maxSteps?: number;
 }
@@ -82,6 +84,9 @@ export async function runScenario(
   const maxSteps = deps.maxSteps ?? DEFAULT_MAX_STEPS;
   const visited: string[] = [];
   const steps: InterpreterStep[] = [];
+  // 실행 완료 노드의 표준 출력(node.<id>.*). 1단계는 status 만 충실 투영(StepResult.status); extracted_ref/row_count/
+  // tier 는 StepResult→필드 투영이 계약 미명시라 미설정(RQ-002 연기) → 해당 참조는 IREL_RUNTIME_MISSING(loud).
+  const nodeScope: Record<string, { status: StepStatus }> = {};
   let ctx = initialCtx;
   let nodeId = scenario.start;
 
@@ -94,9 +99,11 @@ export async function runScenario(
     ctx = { ...ctx, nodeId };
 
     // 1) 노드의 결정형 what 액션을 순서대로 실행. 비-success는 terminal 실패로 매핑하거나 표면화.
+    let lastStatus: StepStatus | undefined;
     for (let k = 0; k < node.what.length; k += 1) {
       const res = await deps.executor.execute(`${nodeId}.${k}`, node.what[k], ctx);
       steps.push({ nodeId, action: res.action, status: res.status });
+      lastStatus = res.status;
       if (res.status === "success") continue;
       const term = failureTerminal(res.status);
       if (term !== null) return { terminal: term, visited, steps };
@@ -105,6 +112,10 @@ export async function runScenario(
         `interpreter: step '${nodeId}.${k}' returned status '${res.status}' (suspend/challenge/loop 미지원 — 1단계)`,
       );
     }
+    // what 루프 직후 무조건 기록(terminal/next/on 분기 전 공통점). 빈 what[](observe 전용) 노드는 lastStatus 미정 →
+    // nodeScope 미기록 → node.<id>.* 참조는 IREL_RUNTIME_MISSING(loud). 비-success는 위에서 이미 return/throw 하므로
+    // 여기 도달하면 lastStatus 는 항상 "success"(현 short-circuit 시맨틱 — 실패/suspend 연속 경로는 후속).
+    if (lastStatus !== undefined) nodeScope[nodeId] = { status: lastStatus };
 
     // 2) 흐름 전이.
     if (node.flow.kind === "terminal") {
@@ -114,10 +125,12 @@ export async function runScenario(
       nodeId = node.flow.target;
       continue;
     }
-    // on[]: PageState(flags) 산출(observe) → 분기. 무매칭/scope missing은 flow-control이 throw(전파).
+    // on[]: PageState(flags) 산출(observe) → 분기. scope = flags + params + 누적 node.status.
+    // 주의: on[].when 이 참조하는 node.<id> 는 컴파일 시 graph-ancestor 보장(static-validation forward-ref)이나
+    // 런타임 도달 보장은 dominator 뿐 — diamond DAG 에서 분기로 건너뛴 ancestor 참조는 IREL_RUNTIME_MISSING(loud, 정상).
     const pageState = await deps.resolver.resolvePageState(ctx);
     ctx = { ...ctx, pageState };
-    nodeId = selectOnBranch(nodeId, node.flow.branches, { flags: pageState.flags });
+    nodeId = selectOnBranch(nodeId, node.flow.branches, { flags: pageState.flags, params: deps.params, node: nodeScope });
   }
 
   throw new InterpreterError(

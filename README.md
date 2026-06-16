@@ -535,3 +535,17 @@
 | composite | `composite-executor.ts` `CompositeExecutor` — action.type 라우팅(dom: act/observe/extract; utility: navigate/download/upload; 미지원/garbage→utility의 타입화 throw). 디스패처는 에러처리 없음(각 실행기 typed throw/StepStatus 그대로 전파). capabilities=union |
 | 검증 | `test:interpreter-llm`(offline, fake gateway, 실 Chrome) — act가 #q를 실제 fill(composite→dom→CDP 증명), extract success, completed; **on[] node.* 참조→IREL_RUNTIME_MISSING**(flags-only 스코프 loud 단언) + `ir-translate.unit` act/extract 매핑 6케이스 |
 | 연기(명시) | **node.* on[]/loop 스코프(OPEN ISSUES RQ-002, P1 correctness)**: 인터프리터가 {flags}만 주입 → extract 데이터로 분기 불가(StepResult→{row_count,status,extracted_ref,tier} 투영이 계약 미명시 — 가정 금지). extract는 1단계서 **실행·StepResult.extracted 부착만**(분기 불가). **라이브 gateway 조립**(LlmGatewayDeps=gate+idempotency+sink+validator+adapter+transport — 무거움, 자격증명 필요): dev 루프는 utility-only 유지(act/extract는 EXECUTOR_CAPABILITY_MISMATCH로 loud), composite+라이브 gateway 배선은 별도 증분. **redaction §4**(RQ-003) · dom-observe · sensitive/vars · loop/fallback · download/upload translate · fail_* terminal 전이도 연기 |
+
+## v2.14 패치 로그 (RQ-002 부분 — on[] 스코프에 params + node.status 배선)
+
+> RQ-002(인터프리터가 on[] 스코프에 `{flags}`만 주입 → 계약상 허용된 params/node 참조가 실행 불가)의 **충실히 도출 가능한
+> 부분**을 배선한다. 설계는 워크플로(조사3+종합+적대검증)로 확정 — 4개 node 출력 필드 중 **status만 StepResult.status로
+> 단일출처 투영 가능**, 나머지(extracted_ref/row_count/tier)는 StepResult→필드 투영이 계약 미명시라 **연기**(가정 금지).
+> **재검증: `test:unit`(interpreter-scope 5케이스: params 분기·node.status·부재노드·미투영필드 loud) + `test:executor`·`test:pipeline-site` 회귀.**
+
+| 항목 | 조치 |
+|---|---|
+| 배선 | `ir-interpreter.ts` selectOnBranch 스코프 `{flags}` → `{flags, params: deps.params, node: nodeScope}`. `InterpreterDeps.params` 추가, `run-step-driver`가 run.params 주입(navigate url_ref 해소와 동일 출처). nodeScope는 what 루프 직후 무조건 `{status: lastStatus}` 기록(빈 what[] 노드는 미기록) |
+| 필드 투영 | **status만 INCLUDE**(StepResult.status 단일출처). extracted_ref(outputRef/artifacts[0]/extracted 셋 다 가능·권위 없음)·row_count(StepResult에 필드 부재)·tier(fallback 미구현)는 **DEFER** — 미투영 필드 참조는 IREL_RUNTIME_MISSING(loud) |
+| 정직한 공개 | (1) **compile-then-throw**: `node.X.row_count` 등은 V9가 허용해 컴파일되나 런타임에 IREL_RUNTIME_MISSING — 의도된 조용한-false-금지 동작(결함 아님). (2) **graph-ancestor ≠ executed**: diamond DAG에서 분기로 건너뛴 ancestor의 node.X.status 참조는 컴파일되나 런타임 loud. (3) **status는 현재 항상 'success'**(실패/suspend는 flow 전 short-circuit) — failure-continuation 전까지 status 분기는 저효용 |
+| 연기(잔존) | node.{extracted_ref,row_count,tier}(투영 계약 미명시) · cursor.*·loop.until(loop 미구현) · 실패-연속 status. RQ-002는 **부분**(status+params) — 잔존 필드/네임스페이스는 계약 투영 결정 후 |
