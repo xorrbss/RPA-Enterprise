@@ -70,8 +70,8 @@ path at deploy time (no external release/oncall team exists).
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 27 markers, 8 actionable blockers, 13 known release decisions tracked,
-  13 release decisions checked (8 active deploy-time provisioning checklist rows;
+  output: 26 markers, 7 actionable blockers, 13 known release decisions tracked,
+  13 release decisions checked (7 active deploy-time provisioning checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -212,8 +212,8 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 27 markers, 8 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked (8 active deploy-time provisioning
+  (current output: 26 markers, 7 actionable blockers, 13 known release
+  decisions tracked, 13 release decisions checked (7 active deploy-time provisioning
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
@@ -639,8 +639,7 @@ Evidence intake rules for this packet:
   Required decision: At deploy time, the project owner must name the Vault mount/path or cloud KMS/secret-manager alias used by staging without exposing plaintext secret values.
 - Resolved (D8-A12): SecretRef namespace convention and runtime identity map are named — `rpa/<env>/<runtime>/<purpose>/<name>` with the owner-confirmed least-privilege resolve matrix (incl. `artifact-lifecycle`→`object_store`, D8-A10) in staging-decision-proposals.md §3. The real SecretStore backend mount/path remains row 44 (external). Former Required decision: name the namespace convention and the runtime identities allowed to resolve each namespace before staging deploy.
 - Resolved (D8-A12): Initial SecretRef inventory is listed by identifier only (owning runtime + purpose, no resolved material) in staging-decision-proposals.md §4. Former Required decision: list initial SecretRef identifiers, owning service/runtime, and intended purpose only; resolved secret material must remain outside this repository.
-- TODO: [BLOCKED] Deploy-time staging SecretRef/SecretStore provisioning readiness evidence is missing rotation and break-glass ownership.
-  Required decision: At deploy time, the project owner must name the rotation owner/cadence and break-glass/update procedure before staging deploy.
+- Resolved (D8-A13): Rotation/break-glass policy and rotation owner are named — cadence defaults (`gateway_policy` 90d, `resume_token_hmac` kid 180d, `executor` 90d, `signed_command` 365d), break-glass procedure, and rotation owner = single project owner (release-decisions #13) in staging-decision-proposals.md §5. Former Required decision: name the rotation owner/cadence and break-glass/update procedure before staging deploy.
 - TODO: [BLOCKED] Deploy-time staging SecretRef/SecretStore provisioning readiness evidence is missing CI/deploy negative-log, secret-scan or equivalent negative control, and SecretStore resolution proof.
   Required decision: At deploy time, the project owner must provide the evidence artifact location proving authorized/unauthorized SecretStore resolution smoke, `secret.resolve` audit proof without material, no plaintext secret materialization, no env dump/xtrace, the secret-scan or equivalent negative control, and no RBAC/redaction weakening in staging CI/deploy logs.
 

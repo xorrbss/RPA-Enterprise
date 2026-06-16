@@ -518,6 +518,21 @@ D8-A12. SecretRef namespace convention + initial inventory (resolves checklist r
    §3/§4 promoted); real SecretStore backend binding, resolution smoke, and credential values are
    filled at deploy time and close rows 44/47/48.
 
+D8-A13. SecretRef rotation/break-glass policy + rotation owner (resolves checklist row 47)
+   Decision: adopt the staging-decision-proposals.md §5 rotation/break-glass policy as the v1
+   contract. Rotation cadence (v1 defaults, owner-overridable): `gateway_policy` 90d,
+   `resume_token_hmac` kid 180d (overlapping-kid zero-downtime rotation), `executor` credential
+   site-policy-first default 90d, `signed_command` verification key 365d. Break-glass: on suspected
+   compromise, immediate rotation + invalidate affected SecretRef + `audit_log` append (`secret.resolve`
+   deny recorded) + reissue within 24h; every break-glass use requires one immutable audit row.
+   Rotation owner = the **single project owner** (release-decisions #13 — no external release/oncall
+   team exists; same owner as deploy approval/rollback); the real owner handle is the project owner at
+   deploy time, not a separate external party. Rationale / 비발명: cadence values are precedent-based
+   operational defaults (overridable, like D8-A11), the break-glass procedure is a repo-decidable
+   policy, and the owner identity reuses the already-resolved #13 determination rather than inventing a
+   new external fact. Build-condition: policy + owner named (this decision + §5 promoted); actual
+   rotation execution + real SecretStore binding are deploy-time operations.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
