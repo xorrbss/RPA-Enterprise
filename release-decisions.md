@@ -396,10 +396,39 @@ D8-A8. Loop interpreter execution + `loop.page_count` semantics (resolves RQ-002
    when referenced (ir-expression §2 line 68, "compile-then-throw, 발명 금지"; not silently false).
    Impact if wrong: a scenario relying on `page_count` meaning "data pages only" (≠ body passes)
    would over/under-count; revisited when the collection cursor/pipeline lands (same increment that
-   would populate `cursor.*`). `fallback_chain` + the `tier` projection are a separate later increment
-   (the tier-subgraph orchestration model needs its own decision). Build-condition: loop done
-   (ir-translate loop flow + interpreter while-loop + `loop.*` scope; tests interpreter-loop.unit
-   6 + ir-translate.unit loop cases).
+   would populate `cursor.*`). Build-condition: loop done (ir-translate loop flow + interpreter
+   while-loop + `loop.*` scope; tests interpreter-loop.unit 10 + ir-translate.unit loop cases).
+
+D8-A9. fallback_chain interpreter execution + `tier` projection (resolves RQ-002 fallback)
+   Decision: implement the IR `fallback_chain` flow. ir-static-validation §4 fixes the *semantics*
+   (tiers tried T0→T3 in order; `advance_when` true → try next tier; omitted `advance_when` → advance
+   if the tier failed; last tier still failing → the node adopts that tier's result, not a masked
+   empty/success); ir.schema/V11 fix the structure. This decision records the *runtime execution
+   model*, which §4 leaves to the interpreter and which the graph model + the static fixtures imply
+   (since V4 forbids non-loop cycles, a tier subgraph cannot loop back to the fallback node):
+   - **Each tier is a recursive sub-traversal** from its `entry_node`, sharing the run's
+     nodeScope/loopState/step-budget (refactor: `runScenario` → reentrant `traverse`). A tier runs its
+     entry_node subgraph until a terminal (the fixture `entry_node` is itself a terminal node).
+   - **The fallback node is terminal-producing:** the adopted (winning, or last) tier's terminal *is*
+     the node's outcome. There is no separate `exit_target` (unlike loop) and no continuation after the
+     fallback node — any "post-fallback" work lives inside the winning tier's subgraph. (Consistent
+     with the graph: F's only out-edges are to tier `entry_node`s; tiers flow forward to terminals.)
+   - **`tier` projection:** nodes executed *under* a tier carry `tier` (T0..T3) in their `node.<id>.*`
+     output (`traverse(currentTier)`), so a node inside the winning tier's subgraph can branch on which
+     tier it runs under (`node.<id>.tier`). This makes the projection observable (projecting only onto
+     the terminal-producing fallback node would be dead). The fallback node's own output adopts the
+     winning tier's `entry_node` result (+`tier`), per §4 "노드는 ... 마지막 티어의 StepResult를 채택".
+   - **`advance_when` scope** = `{flags (resolved PageState), params, node}` — matching its compile
+     scope (no `allowLoopScope`, so no `loop.*`/`cursor.*`).
+   - **Step budget:** each fallback node adds `tiers.length × nodeCount` to the structural budget
+     (same independence rationale as loop, D8-A8) so tier retries don't trip `IR_LOOP_LIMIT`.
+   Rationale / 비발명: the inferred aspects (sub-traversal, terminal-producing, tier-onto-tier-nodes)
+   are the only model consistent with §4 + V4 (no non-loop cycles) + the static fixture (`entry_node`
+   = a terminal node); they are recorded here rather than silently assumed. Impact if wrong: a scenario
+   author expecting a post-fallback continuation node (outside the tiers) or `tier` on the fallback
+   node itself would need rework — but no contract/fixture exercises that shape. Build-condition: done
+   (ir-translate fallback flow + interpreter sub-traversal + `tier` projection; tests
+   interpreter-fallback.unit 9 + ir-translate.unit fallback cases). Adversarially break-it verified.
 
 ## Follow-Up Rule
 

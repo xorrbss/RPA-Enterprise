@@ -8,12 +8,14 @@
  * 의존 방향(§10 단방향): Interpreter → {ExecutorPlugin, PageStateResolver, flow-control(codegen evaluator)}.
  * 런타임 파싱 없음 — 저장/승격 시 컴파일된 on[] AST(CompiledOnBranch)만 평가한다.
  *
- * 범위(결정형): navigate/download/upload(UtilityExecutor) + next/on[]/terminal/**loop**(RQ-002).
+ * 범위(결정형): navigate/download/upload(UtilityExecutor) + next/on[]/terminal/**loop·fallback_chain**(RQ-002).
  *   - loop: body_target 서브그래프를 until/max_iterations 까지 반복(while-loop; body가 loop 노드로 사이클백, V4).
  *     loop.* 스코프(iteration/page_count) 주입. cursor.*·데이터-단위 page 의미는 수집 파이프라인 소관(미투영, loud).
+ *   - fallback_chain: 티어(T0→T3)를 순서대로 entry_node 부터 sub-traversal 실행, advance_when/기본(실패)으로 전환.
+ *     채택 티어 terminal이 노드 outcome(terminal-producing), 티어 노드 출력에 tier 투영(D8-A9).
  *   - dom act/observe/extract(LLM)·vision은 실행기가 EXECUTOR_CAPABILITY_MISMATCH로 거부 → 그대로 전파(가정 금지).
- *   - fallback_chain·예약핸들러(@challenge/@human_task/@end_no_data)·suspend는 후속 단계. 미처리 status는
- *     조용히 흘리지 않고 InterpreterError로 표면화한다("조용한 false/unknown 금지").
+ *   - 예약핸들러(@challenge/@human_task/@end_no_data)·suspend는 후속 단계. 미처리 status는 조용히 흘리지 않고
+ *     InterpreterError로 표면화한다("조용한 false/unknown 금지").
  */
 import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
 import type { ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
@@ -24,6 +26,8 @@ interface NodeOutput {
   readonly status: StepStatus;
   readonly row_count?: number;
   readonly extracted_ref?: string;
+  // tier: fallback_chain 노드가 채택한 티어(T0..T3). fallback 노드 출력에만 부착(ir-expression §2). 비-fallback은 부재(loud).
+  readonly tier?: string;
 }
 
 /** StepResult → 표준 노드 출력 투영(ir-expression §2). status는 항상; row_count/extracted_ref는 extract 액션만. */
@@ -44,7 +48,10 @@ export type NodeFlow =
   | { readonly kind: "on"; readonly branches: readonly CompiledOnBranch<string>[] }
   // loop: body_target 서브그래프를 until=true 또는 max_iterations 도달까지 반복(둘 다 exit_target로 graceful 탈출,
   // ir.schema/V4). body 서브그래프는 loop 노드로 사이클백(V4: 사이클은 loop 노드 포함 시만 허용). until은 컴파일 AST.
-  | { readonly kind: "loop"; readonly until: IRELNode; readonly bodyTarget: string; readonly exitTarget: string; readonly maxIterations: number };
+  | { readonly kind: "loop"; readonly until: IRELNode; readonly bodyTarget: string; readonly exitTarget: string; readonly maxIterations: number }
+  // fallback: 티어(T0→T3)를 순서대로 entry_node 부터 서브그래프 실행(sub-traversal), advance_when(true=전환) 또는 기본
+  // (실패 시 전환)으로 다음 티어 시도. 채택 티어의 terminal이 노드 outcome(terminal-producing), tier 투영(ir-static-validation §4).
+  | { readonly kind: "fallback"; readonly tiers: readonly { readonly tier: string; readonly entryNode: string; readonly advanceWhen?: IRELNode }[] };
 
 /** 인터프리터가 순회하는 노드. what 은 ExecutorPlugin.execute가 받는 액션(형 검증은 실행기 책임). */
 export interface ScenarioNode {
@@ -100,66 +107,81 @@ function failureTerminal(status: StepStatus): string | null {
   return null;
 }
 
-/**
- * 컴파일된 시나리오를 한 run에 대해 순회 실행하고 terminal outcome을 반환한다.
- * ctx는 노드마다 nodeId/pageState를 갱신한 사본으로 실행기에 전달된다(원본 불변).
- */
-export async function runScenario(
-  scenario: CompiledScenario,
-  initialCtx: RunContext,
-  deps: InterpreterDeps,
-): Promise<ScenarioOutcome> {
-  // graph_max_steps(=DEFAULT_MAX_STEPS, D8-A7)는 **구조적(non-loop) 순회** 상한이다. loop 반복은 max_iterations로
-  // 독립 바운드되므로(loopState, graceful exit_target), 그 반복분이 구조 상한을 spurious하게 소진해 IR_LOOP_LIMIT로
-  // 떨어지지 않도록 loop별 (max_iterations × nodeCount) 만큼 budget을 확장한다 → 두 가드가 실제로 독립(D8-A7/A8).
-  // deps.maxSteps 명시 override는 그대로 사용(운영자 전권). 깊은 중첩 loop는 override 권장(D8-A8). 비-loop 그래프는 200 불변.
-  const nodeCount = Object.keys(scenario.nodes).length;
-  let loopAllowance = 0;
-  for (const n of Object.values(scenario.nodes)) {
-    if (n.flow.kind === "loop") loopAllowance += n.flow.maxIterations * nodeCount;
-  }
-  const maxSteps = deps.maxSteps ?? DEFAULT_MAX_STEPS + loopAllowance;
-  const visited: string[] = [];
-  const steps: InterpreterStep[] = [];
-  // 실행 완료 노드의 표준 출력(node.<id>.*). status(항상) + extract 노드의 row_count({rows} 봉투 길이)·extracted_ref
-  // (출력 아티팩트). tier(fallback)·비-extract row_count 등 미투영 필드 참조는 IREL_RUNTIME_MISSING(loud, ir-expression §2).
-  const nodeScope: Record<string, NodeOutput> = {};
-  // loop 노드별 0-base 반복 카운트(= 완료된 body pass 수, run 내 영속). exit 시 삭제(재진입 시 0부터).
-  const loopState = new Map<string, number>();
-  let ctx = initialCtx;
-  let nodeId = scenario.start;
+/** 순회 공유 가변 상태 — fallback 티어 sub-traversal 이 nodeScope/loopState/steps/visited/budget 을 공유한다. */
+interface TraversalState {
+  readonly scenario: CompiledScenario;
+  readonly deps: InterpreterDeps;
+  readonly nodeScope: Record<string, NodeOutput>;
+  readonly loopState: Map<string, number>;
+  readonly visited: string[];
+  readonly steps: InterpreterStep[];
+  readonly budget: { remaining: number };
+}
 
-  for (let i = 0; i < maxSteps; i += 1) {
-    const node = scenario.nodes[nodeId];
+/** IRELScope.node 캐스트(NodeOutput record → IREL 평가용). */
+function nodeScopeRef(state: TraversalState): Record<string, Record<string, unknown>> {
+  return state.nodeScope as unknown as Record<string, Record<string, unknown>>;
+}
+
+/** terminal 문자열 → StepStatus(fallback 노드 출력의 status 도출 — 채택 티어 entry_node 출력 부재 시). */
+function terminalToStatus(terminal: string): StepStatus {
+  if (terminal === "fail_business") return "failed_business";
+  if (terminal === "fail_system" || terminal === "fail_security") return "failed_system";
+  return "success";
+}
+
+/** fallback advance 기본(§4): 티어 결과가 실패 terminal 이면 다음 티어로 전환. */
+function isFailureTerminal(terminal: string): boolean {
+  return terminal.startsWith("fail");
+}
+
+/**
+ * startNode 부터 terminal 까지 순회하며 terminal 문자열을 반환한다(가변 state 공유, ctx 원본 불변).
+ * fallback 티어는 본 함수를 재귀 호출(sub-traversal)해 같은 state(nodeScope/loopState/budget) 위에서 실행한다.
+ */
+async function traverse(state: TraversalState, startNode: string, initialCtx: RunContext, currentTier?: string): Promise<string> {
+  // currentTier: 이 순회가 fallback 티어 sub-traversal 일 때 그 티어(T0..T3). 실행 노드 출력에 tier 부착(ir-expression §2,
+  // node.<id>.tier 참조 가능 — 같은 티어 서브그래프 내 노드가 어느 티어로 실행 중인지 분기 가능). 최상위(non-fallback)는 undefined.
+  let nodeId = startNode;
+  let ctx = initialCtx;
+  for (;;) {
+    // 비종료 방어(budget = graph_max_steps + loop/fallback allowance). 소진 시 IR_LOOP_LIMIT(조용한 무한루프 금지).
+    if (state.budget.remaining <= 0) {
+      throw new InterpreterError(
+        "IR_LOOP_LIMIT",
+        `interpreter: exceeded step budget (graph_max_steps + loop/fallback allowance) without terminal (비종료 의심 — loop은 max_iterations로 graceful exit)`,
+      );
+    }
+    state.budget.remaining -= 1;
+    const node = state.scenario.nodes[nodeId];
     if (node === undefined) {
       throw new InterpreterError("IR_SCHEMA_INVALID", `interpreter: unknown node '${nodeId}'`);
     }
-    visited.push(nodeId);
+    state.visited.push(nodeId);
     ctx = { ...ctx, nodeId };
 
-    // 1) 노드의 결정형 what 액션을 순서대로 실행. 비-success는 terminal 실패로 매핑하거나 표면화.
+    // 1) 결정형 what 액션 실행. 비-success는 terminal 실패로 매핑하거나 표면화.
     let lastResult: StepResult | undefined;
     for (let k = 0; k < node.what.length; k += 1) {
-      const res = await deps.executor.execute(`${nodeId}.${k}`, node.what[k], ctx);
-      steps.push({ nodeId, action: res.action, status: res.status });
+      const res = await state.deps.executor.execute(`${nodeId}.${k}`, node.what[k], ctx);
+      state.steps.push({ nodeId, action: res.action, status: res.status });
       lastResult = res;
       if (res.status === "success") continue;
       const term = failureTerminal(res.status);
-      if (term !== null) return { terminal: term, visited, steps };
+      if (term !== null) return term;
       throw new InterpreterError(
         "EXECUTOR_STATUS_UNSUPPORTED",
-        `interpreter: step '${nodeId}.${k}' returned status '${res.status}' (suspend/challenge/loop 미지원 — 1단계)`,
+        `interpreter: step '${nodeId}.${k}' returned status '${res.status}' (suspend/challenge 미지원)`,
       );
     }
-    // what 루프 직후 무조건 기록(terminal/next/on 분기 전 공통점). 빈 what[](observe 전용) 노드는 lastResult 미정 →
-    // nodeScope 미기록 → node.<id>.* 참조는 IREL_RUNTIME_MISSING(loud). 비-success는 위에서 이미 return/throw 하므로
-    // 여기 도달하면 status 는 항상 "success"(현 short-circuit 시맨틱 — 실패/suspend 연속 경로는 후속).
-    if (lastResult !== undefined) nodeScope[nodeId] = projectNodeOutput(lastResult);
+    if (lastResult !== undefined) {
+      const out = projectNodeOutput(lastResult);
+      // fallback 티어 sub-traversal(currentTier 있음)이면 노드 출력에 tier 부착(ir-expression §2 tier 투영).
+      state.nodeScope[nodeId] = currentTier !== undefined ? { ...out, tier: currentTier } : out;
+    }
 
     // 2) 흐름 전이.
-    if (node.flow.kind === "terminal") {
-      return { terminal: node.flow.terminal, visited, steps };
-    }
+    if (node.flow.kind === "terminal") return node.flow.terminal;
     if (node.flow.kind === "next") {
       nodeId = node.flow.target;
       continue;
@@ -167,42 +189,96 @@ export async function runScenario(
     if (node.flow.kind === "loop") {
       const lf = node.flow;
       // flags 산출(on[]과 동일 경계) — until 이 flags.* 참조 가능. loop.* 스코프는 loop 노드 내부 전용(ir-expression §2).
-      const loopPageState = await deps.resolver.resolvePageState(ctx);
+      const loopPageState = await state.deps.resolver.resolvePageState(ctx);
       ctx = { ...ctx, pageState: loopPageState };
-      const iteration = loopState.get(nodeId) ?? 0;
+      const iteration = state.loopState.get(nodeId) ?? 0;
       const loopScope: IRELScope = {
         flags: loopPageState.flags,
-        params: deps.params,
-        node: nodeScope as unknown as Record<string, Record<string, unknown>>,
-        // page_count=iteration: 결정형 인터프리터는 "page"를 loop body pass와 구분하지 않는다(1 pass=1 page).
-        // 데이터-단위 page/cursor.* 의미는 수집 파이프라인 소관(미투영 → IREL_RUNTIME_MISSING, ir-expression §2). release-decisions D8-A?? 참조.
+        params: state.deps.params,
+        node: nodeScopeRef(state),
+        // page_count=iteration(D8-A8): 결정형 인터프리터는 page를 body pass와 구분 안 함. cursor.*/데이터-page는 미투영(loud).
         loop: { iteration, page_count: iteration },
       };
-      // until=true 또는 max_iterations 도달 → exit_target(둘 다 graceful 탈출, ir.schema/V4 — graph_max_steps→IR_LOOP_LIMIT와 구분).
-      //   until 평가의 cursor.* 등 미투영 참조는 evaluator가 IREL_RUNTIME_MISSING(loud, 조용한 false 금지).
+      // until=true 또는 max_iterations 도달 → exit_target(둘 다 graceful, ir.schema/V4). cursor.* 미투영 참조는 IREL_RUNTIME_MISSING(loud).
       if (evaluateCondition(lf.until, loopScope) || iteration >= lf.maxIterations) {
-        loopState.delete(nodeId);
+        state.loopState.delete(nodeId);
         nodeId = lf.exitTarget;
       } else {
-        loopState.set(nodeId, iteration + 1);
+        state.loopState.set(nodeId, iteration + 1);
         nodeId = lf.bodyTarget;
       }
       continue;
     }
-    // on[]: PageState(flags) 산출(observe) → 분기. scope = flags + params + 누적 node.status.
-    // 주의: on[].when 이 참조하는 node.<id> 는 컴파일 시 graph-ancestor 보장(static-validation forward-ref)이나
-    // 런타임 도달 보장은 dominator 뿐 — diamond DAG 에서 분기로 건너뛴 ancestor 참조는 IREL_RUNTIME_MISSING(loud, 정상).
-    const pageState = await deps.resolver.resolvePageState(ctx);
+    if (node.flow.kind === "fallback") {
+      const fallbackNodeId = nodeId;
+      const tiers = node.flow.tiers;
+      // 티어 순서대로 entry_node 서브그래프 실행(sub-traversal, state 공유). advance_when(true)/기본(실패 terminal) → 다음 티어.
+      // 마지막 티어는 무조건 채택(§4 "마지막 티어 실패 시 마지막 티어 StepResult 채택"). 채택 terminal이 노드 outcome(terminal-producing).
+      let adopted = tiers[tiers.length - 1];
+      let adoptedTerminal = "";
+      for (let t = 0; t < tiers.length; t += 1) {
+        const tier = tiers[t];
+        // 티어 sub-traversal: currentTier=tier.tier 로 실행 → 티어 서브그래프 노드 출력에 tier 부착(node.<id>.tier 투영).
+        const tierTerminal = await traverse(state, tier.entryNode, ctx, tier.tier);
+        const isLast = t === tiers.length - 1;
+        let advance: boolean;
+        if (tier.advanceWhen !== undefined) {
+          // advance_when 스코프 = flags(resolve) + params + node(티어 출력 포함). loop/cursor 없음(compile scope 동형).
+          const fps = await state.deps.resolver.resolvePageState({ ...ctx, nodeId: fallbackNodeId });
+          advance = evaluateCondition(tier.advanceWhen, { flags: fps.flags, params: state.deps.params, node: nodeScopeRef(state) });
+        } else {
+          advance = isFailureTerminal(tierTerminal);
+        }
+        if (!advance || isLast) {
+          adopted = tier;
+          adoptedTerminal = tierTerminal;
+          break;
+        }
+      }
+      // §4: 노드 출력 = 채택 티어 결과(entry_node 출력 기반) + tier 투영(ir-expression §2). terminal-producing.
+      const entryOut = state.nodeScope[adopted.entryNode];
+      state.nodeScope[fallbackNodeId] = { ...(entryOut ?? { status: terminalToStatus(adoptedTerminal) }), tier: adopted.tier };
+      return adoptedTerminal;
+    }
+    // on[]: PageState(flags) 산출(observe) → 분기. scope = flags + params + 누적 node.
+    // 주의: on[].when 이 참조하는 node.<id> 는 컴파일 시 graph-ancestor 보장이나 런타임 도달 보장은 dominator 뿐 —
+    // diamond DAG 에서 분기로 건너뛴 ancestor 참조는 IREL_RUNTIME_MISSING(loud, 정상).
+    const pageState = await state.deps.resolver.resolvePageState(ctx);
     ctx = { ...ctx, pageState };
     nodeId = selectOnBranch(nodeId, node.flow.branches, {
       flags: pageState.flags,
-      params: deps.params,
-      node: nodeScope as unknown as Record<string, Record<string, unknown>>,
+      params: state.deps.params,
+      node: nodeScopeRef(state),
     });
   }
+}
 
-  throw new InterpreterError(
-    "IR_LOOP_LIMIT",
-    `interpreter: exceeded ${maxSteps} steps (graph_max_steps + loop allowance) without reaching terminal (비종료 그래프 의심 — loop은 max_iterations로 graceful exit)`,
-  );
+/**
+ * 컴파일된 시나리오를 한 run에 대해 순회 실행하고 terminal outcome을 반환한다(ctx 원본 불변).
+ */
+export async function runScenario(
+  scenario: CompiledScenario,
+  initialCtx: RunContext,
+  deps: InterpreterDeps,
+): Promise<ScenarioOutcome> {
+  // budget = graph_max_steps(구조적) + loop/fallback allowance(D8-A8/A9). loop 반복·fallback 티어 재시도가 구조 상한을
+  // spurious 소진하지 않게 확장(두 가드 독립). deps.maxSteps override는 그대로(운영자 전권). 비-loop/비-fallback은 200 불변.
+  const nodeCount = Object.keys(scenario.nodes).length;
+  let allowance = 0;
+  for (const n of Object.values(scenario.nodes)) {
+    if (n.flow.kind === "loop") allowance += n.flow.maxIterations * nodeCount;
+    else if (n.flow.kind === "fallback") allowance += n.flow.tiers.length * nodeCount;
+  }
+  const maxSteps = deps.maxSteps ?? DEFAULT_MAX_STEPS + allowance;
+  const state: TraversalState = {
+    scenario,
+    deps,
+    nodeScope: {},
+    loopState: new Map(),
+    visited: [],
+    steps: [],
+    budget: { remaining: maxSteps },
+  };
+  const terminal = await traverse(state, scenario.start, initialCtx);
+  return { terminal, visited: state.visited, steps: state.steps };
 }

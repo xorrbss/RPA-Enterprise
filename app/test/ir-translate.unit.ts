@@ -103,12 +103,37 @@ function main(): void {
     check("loop compiled_ast 부재 → IR_SCHEMA_INVALID(드리프트)", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
-  // 5c) fallback_chain 은 후속 증분 → UNSUPPORTED_FLOW(조용한 흐름 금지).
+  // 5c) fallback_chain 변환(RQ-002): ir fallback_chain + compiled_ast.fallback_chain(tier·entry_node·advance_when AST) → NodeFlow fallback.
   {
-    const err = caught(() =>
-      compiledScenarioFrom({ start: "a", nodes: { a: { fallback_chain: [{ tier: "T0", entry_node: "t0" }] }, t0: { terminal: "success" } } }, {}),
+    const irFb = {
+      start: "F",
+      nodes: {
+        F: { fallback_chain: [{ tier: "T0", entry_node: "t0", advance_when: 'node.t0.status == "failed_system"' }, { tier: "T1", entry_node: "t1" }] },
+        t0: { terminal: "fail_system" },
+        t1: { terminal: "success" },
+      },
+    };
+    const astFb = { nodes: { F: { fallback_chain: [{ tier: "T0", entry_node: "t0", advance_when: { kind: "flag", name: "x" } }, { tier: "T1", entry_node: "t1" }] } } };
+    const s = compiledScenarioFrom(irFb, astFb);
+    const F = s.nodes.F;
+    check(
+      "fallback_chain 변환 → NodeFlow fallback(tier·entryNode·advanceWhen)",
+      F?.flow.kind === "fallback" && F.flow.tiers.length === 2 && F.flow.tiers[0].tier === "T0" && F.flow.tiers[0].entryNode === "t0" && F.flow.tiers[0].advanceWhen !== undefined && F.flow.tiers[1].advanceWhen === undefined,
+      JSON.stringify(F?.flow),
     );
-    check("fallback_chain → UNSUPPORTED_FLOW(후속 증분)", err instanceof InterpreterError && err.code === "UNSUPPORTED_FLOW", String(err));
+  }
+
+  // 5d) fallback 드리프트: ir fallback 2티어인데 compiled 1티어 → IR_SCHEMA_INVALID(조용한 흐름 금지).
+  {
+    const irFb = { start: "F", nodes: { F: { fallback_chain: [{ tier: "T0", entry_node: "t0" }, { tier: "T1", entry_node: "t1" }] }, t0: { terminal: "success" }, t1: { terminal: "success" } } };
+    const err = caught(() => compiledScenarioFrom(irFb, { nodes: { F: { fallback_chain: [{ tier: "T0", entry_node: "t0" }] } } }));
+    check("fallback compiled_ast 개수 불일치 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
+  // 5e) 흐름 키 전무(next/on/loop/fallback/terminal 모두 없음) → UNSUPPORTED_FLOW.
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [] } } }, {}));
+    check("흐름 키 전무 → UNSUPPORTED_FLOW", err instanceof InterpreterError && err.code === "UNSUPPORTED_FLOW", String(err));
   }
 
   // ── (B) url_ref → params URL 해소 ──
