@@ -7,8 +7,6 @@
  *
  * 큐 런너(Graphile Worker) 연결은 D2.5 어댑터에서 본 handle()에 위임한다.
  */
-import { randomUUID } from "node:crypto";
-
 import type pg from "pg";
 
 import type { RunState, WorkitemState } from "../../../ts/state-machine-types";
@@ -16,11 +14,9 @@ import type {
   ArtifactRedactor,
   ArtifactRetentionStore,
   EventId,
-  IsoDateTime,
   LeaseCleanupPolicy,
   LeaseIsolation,
   LeaseId,
-  LeaseRenewResult,
   RunAbortDrainer,
   ResumeTokenEnvelope,
   RuntimeJobResult,
@@ -47,6 +43,14 @@ import { gateBrowserSessionProvider, type BrowserSessionProvider } from "../exec
 import { isRecord, stringField, unknownToReason, requireString } from "./worker-util";
 import { ArtifactLifecycleRunner } from "./artifact-lifecycle-runner";
 import { RunAbortRunner } from "./run-abort-runner";
+import {
+  BrowserLeaseManager,
+  drainBrowserLease,
+  renewBrowserLease,
+} from "./browser-lease-manager";
+
+// browser-lease 모듈 함수는 browser-lease-manager 로 이동. 외부(test) import 경로 유지를 위해 re-export.
+export { drainBrowserLease, renewBrowserLease };
 
 export interface BrowserLeasePlan {
   readonly siteProfileId: string;
@@ -129,57 +133,13 @@ type RunResumeTxAResult =
   | { kind: "ready"; intent: RunResumeIntent }
   | { kind: "job_result"; result: RuntimeJobResult };
 type WorkitemRow = { status: WorkitemState };
-const DEFAULT_BROWSER_LEASE_TTL_MS = 300_000;
 // sink failed(상한 미달) 재전달 backoff 기본(ops-defaults #sink.delivery.retry_backoff base 5s).
 const DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS = 5_000;
-
-export async function renewBrowserLease(
-  client: pg.PoolClient,
-  input: BrowserLeaseRenewInput,
-): Promise<LeaseRenewResult> {
-  if (!Number.isInteger(input.ttlMs) || input.ttlMs <= 0) {
-    throw new Error("renewBrowserLease: ttlMs must be a positive integer");
-  }
-  const renewed = await client.query<{ expires_at: string }>(
-    `UPDATE browser_leases
-        SET heartbeat_at = now(),
-            expires_at = now() + ($4::int * interval '1 millisecond')
-      WHERE tenant_id = $1::uuid
-        AND id = $2::uuid
-        AND owner_worker_id = $3::uuid
-        AND state IN ('reserved','active')
-        AND expires_at >= now()
-      RETURNING expires_at::text`,
-    [input.tenantId, input.leaseId, input.workerId, input.ttlMs],
-  );
-  const row = renewed.rows[0];
-  if (row !== undefined) return { kind: "renewed", expiresAt: row.expires_at as IsoDateTime };
-  return {
-    kind: "lost",
-    code: "BROWSER_LEASE_EXPIRED",
-    reason: "lease missing, owned by another worker, drained, cross-tenant, or expired",
-  };
-}
-
-export async function drainBrowserLease(
-  client: pg.PoolClient,
-  input: BrowserLeaseDrainInput,
-): Promise<void> {
-  await client.query(
-    `UPDATE browser_leases
-        SET state = CASE WHEN $4 = 'sweeper' THEN 'expired' ELSE 'draining' END,
-            expires_at = now()
-      WHERE tenant_id = $1::uuid
-        AND id = $2::uuid
-        AND owner_worker_id = $3::uuid
-        AND state IN ('reserved','active')`,
-    [input.tenantId, input.leaseId, input.workerId, input.reason],
-  );
-}
 
 export class PgRuntimeWorker implements RuntimeWorker {
   private readonly artifactLifecycle: ArtifactLifecycleRunner;
   private readonly runAbort: RunAbortRunner;
+  private readonly leases: BrowserLeaseManager;
 
   constructor(
     private readonly pool: pg.Pool,
@@ -187,6 +147,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
   ) {
     this.artifactLifecycle = new ArtifactLifecycleRunner(this.pool, this.options);
     this.runAbort = new RunAbortRunner(this.pool, this.options);
+    this.leases = new BrowserLeaseManager(this.pool, this.options);
   }
 
   async handle(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
@@ -306,7 +267,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       this.pool,
       tenantId,
       async (client): Promise<{ result: RuntimeJobResult; drive?: RunClaimDriveInputs }> => {
-        const run = await this.loadExpectedRun(client, tenantId, runId, "queued");
+        const run = await this.leases.loadExpectedRun(client, tenantId, runId, "queued");
         if (run.kind !== "ok") return { result: run.result };
 
         // §E 필수 span: run.claim(루트) ⊃ browser.lease.acquire. 공통속성은 적재된 run의 correlation_id.
@@ -315,7 +276,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         return withSpan(SPAN.runClaim, common, { worker_id: workerId }, async () => {
           const plan = await leasePlanResolver(client, { tenantId, runId });
           const lease = await withSpan(SPAN.browserLeaseAcquire, common, {}, async () =>
-            this.acquireBrowserLease(client, { tenantId, runId, workerId, plan }),
+            this.leases.acquireBrowserLease(client, { tenantId, runId, workerId, plan }),
           );
           if (lease.kind !== "acquired") return { result: lease };
 
@@ -544,7 +505,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         };
       }
 
-      let lease = await this.findActiveBrowserLeaseForRun(client, {
+      let lease = await this.leases.findActiveBrowserLeaseForRun(client, {
         tenantId,
         runId,
         workerId,
@@ -558,7 +519,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         };
         const acquired = await withSpan(SPAN.browserLeaseAcquire, resumeCommon, {}, async () => {
           const plan = await leasePlanResolver(client, { tenantId, runId });
-          return this.acquireBrowserLease(client, { tenantId, runId, workerId, plan });
+          return this.leases.acquireBrowserLease(client, { tenantId, runId, workerId, plan });
         });
         if (acquired.kind !== "acquired") return { kind: "job_result", result: acquired };
         lease = acquired.leaseId;
@@ -673,161 +634,6 @@ export class PgRuntimeWorker implements RuntimeWorker {
     });
   }
 
-  private async loadExpectedRun(
-    client: pg.PoolClient,
-    tenantId: string,
-    runId: string,
-    expectedStatus: RunState,
-  ): Promise<{ kind: "ok"; row: RunRow } | { kind: "failed"; result: RuntimeJobResult }> {
-    const run = await client.query<RunRow>(
-      `SELECT status, correlation_id::text
-         FROM runs
-        WHERE tenant_id = $1::uuid AND id = $2::uuid
-        FOR UPDATE`,
-      [tenantId, runId],
-    );
-    const row = run.rows[0];
-    if (row === undefined) {
-      return { kind: "failed", result: { kind: "failed", code: "RUN_NOT_FOUND" } };
-    }
-    if (row.status !== expectedStatus) {
-      if (expectedStatus === "queued" && row.status === "cancelled") {
-        // A queued/claimed run can be cancelled by the API before its stale run_claim job is consumed.
-        return { kind: "failed", result: { kind: "completed", emittedEvents: [] } };
-      }
-      return { kind: "failed", result: { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" } };
-    }
-    return { kind: "ok", row };
-  }
-
-  private async acquireBrowserLease(
-    client: pg.PoolClient,
-    input: {
-      tenantId: string;
-      runId: string;
-      workerId: string;
-      plan: BrowserLeasePlan | null;
-    },
-  ): Promise<RuntimeJobResult | { kind: "acquired"; leaseId: string }> {
-    if (input.plan === null) {
-      return { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" };
-    }
-
-    const ttlMs = input.plan.ttlMs ?? this.options.defaultBrowserLeaseTtlMs ?? DEFAULT_BROWSER_LEASE_TTL_MS;
-    if (!Number.isInteger(ttlMs) || ttlMs <= 0) {
-      throw new Error("RuntimeWorker: browser lease ttlMs must be a positive integer");
-    }
-    const isolation = input.plan.isolation ?? "context";
-    const cleanupPolicy = input.plan.cleanupPolicy ?? "clear_all";
-
-    const worker = await client.query<{ kind: string; status: string; circuit_state: string }>(
-      `SELECT kind, status, circuit_state FROM workers WHERE id = $1::uuid`,
-      [input.workerId],
-    );
-    const workerRow = worker.rows[0];
-    if (workerRow?.kind !== "browser" || workerRow.status !== "active" || workerRow.circuit_state === "open") {
-      return { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" };
-    }
-
-    const identity = await client.query<{ risk: string; approved: boolean }>(
-      `SELECT sp.risk, sp.approved
-         FROM browser_identities bi
-         JOIN site_profiles sp
-           ON sp.tenant_id = bi.tenant_id
-          AND sp.id = bi.site_profile_id
-        WHERE bi.tenant_id = $1::uuid
-          AND bi.id = $2::uuid
-          AND sp.id = $3::uuid
-        FOR UPDATE OF bi`,
-      [input.tenantId, input.plan.browserIdentityId, input.plan.siteProfileId],
-    );
-    const site = identity.rows[0];
-    if (site === undefined) {
-      return { kind: "failed", code: "RESOURCE_NOT_FOUND" };
-    }
-    if (site.risk === "red" && !site.approved) {
-      return { kind: "failed", code: "SITE_PROFILE_BLOCKED" };
-    }
-
-    await client.query(
-      `UPDATE browser_leases
-          SET state = 'expired'
-        WHERE tenant_id = $1::uuid
-          AND site_profile_id = $2::uuid
-          AND browser_identity_id = $3::uuid
-          AND state IN ('reserved','active')
-          AND expires_at < now()`,
-      [input.tenantId, input.plan.siteProfileId, input.plan.browserIdentityId],
-    );
-
-    const active = await client.query<{ retry_after_ms: number }>(
-      `SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (expires_at - now())) * 1000))::int AS retry_after_ms
-         FROM browser_leases
-        WHERE tenant_id = $1::uuid
-          AND site_profile_id = $2::uuid
-          AND browser_identity_id = $3::uuid
-          AND state IN ('reserved','active')
-          AND expires_at >= now()
-        ORDER BY expires_at ASC
-        LIMIT 1
-        FOR UPDATE`,
-      [input.tenantId, input.plan.siteProfileId, input.plan.browserIdentityId],
-    );
-    const activeLease = active.rows[0];
-    if (activeLease !== undefined) {
-      return { kind: "deferred", code: "SESSION_LOCKED", retryAfterMs: activeLease.retry_after_ms };
-    }
-
-    const leaseId = randomUUID();
-    await client.query(
-      `INSERT INTO browser_leases (
-         id, tenant_id, site_profile_id, browser_identity_id, run_id, owner_worker_id,
-         isolation, state, cleanup_policy, download_dir_ref, expires_at
-       )
-       VALUES (
-         $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
-         $7, 'active', $8, $9, now() + ($10::int * interval '1 millisecond')
-       )`,
-      [
-        leaseId,
-        input.tenantId,
-        input.plan.siteProfileId,
-        input.plan.browserIdentityId,
-        input.runId,
-        input.workerId,
-        isolation,
-        cleanupPolicy,
-        input.plan.downloadDirRef ?? null,
-        ttlMs,
-      ],
-    );
-
-    return { kind: "acquired", leaseId };
-  }
-
-  private async findActiveBrowserLeaseForRun(
-    client: pg.PoolClient,
-    input: {
-      tenantId: string;
-      runId: string;
-      workerId: string;
-    },
-  ): Promise<string | null> {
-    const lease = await client.query<{ id: string }>(
-      `SELECT id::text
-         FROM browser_leases
-        WHERE tenant_id = $1::uuid
-          AND run_id = $2::uuid
-          AND owner_worker_id = $3::uuid
-          AND state IN ('reserved','active')
-          AND expires_at >= now()
-        ORDER BY created_at DESC
-        LIMIT 1
-        FOR UPDATE`,
-      [input.tenantId, input.runId, input.workerId],
-    );
-    return lease.rows[0]?.id ?? null;
-  }
 }
 
 function parseResumeTokenEnvelope(value: unknown, expectedRunId: string): ResumeTokenEnvelope | null {
