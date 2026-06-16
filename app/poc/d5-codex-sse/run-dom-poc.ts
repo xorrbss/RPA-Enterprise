@@ -15,8 +15,10 @@
  * 재현:
  *   CODEX_BASE_URL=... CODEX_API_KEY=... CODEX_MODEL=... CODEX_EVIDENCE_ENDPOINT_ALIAS=... CODEX_EVIDENCE_MODEL_ALIAS=... \
  *   npm --prefix app/poc/d5-codex-sse install && npm --prefix app/poc/d5-codex-sse run dom-poc
- *   (.env 자동로드는 d5 README/dotenv 패턴 — CODEX_* 이 셸 env 에 있으면 그대로.)
+ *   (.env 자동로드: 같은 폴더 .env 를 무-의존성 로드 — d5 run-poc 와 동형, 셸 env 우선.)
  */
+import { readFileSync } from "node:fs";
+
 import type { ArtifactRef, ExecutorPlugin, PageState, RunContext } from "../../../ts/core-types";
 import type { LLMRequest, LLMResponse } from "../../../ts/security-middleware-contract";
 import { CodexSseAdapter } from "../../src/gateway/codex-sse-adapter";
@@ -52,6 +54,30 @@ function env(name: string): string {
   }
   return v.trim();
 }
+
+// .env 자동 로드(무-의존성, d5 run-poc 와 동형): 이 스크립트 옆 .env 가 있으면 KEY=VALUE 를 process.env 로 채운다.
+// 이미 설정된 셸 env 가 우선(덮어쓰지 않음). .env 는 .gitignore 로 커밋 차단 — 비밀은 .env(로컬)/Vault 로만.
+function loadDotEnvIfPresent(): void {
+  let text: string;
+  try {
+    text = readFileSync(new URL("./.env", import.meta.url), "utf8");
+  } catch {
+    return; // .env 없으면 셸 env 만 사용.
+  }
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined || process.env[key] === "") process.env[key] = val;
+  }
+}
+loadDotEnvIfPresent();
 
 const BASE_URL = validateCodexBaseUrl(env("CODEX_BASE_URL"));
 const API_KEY = env("CODEX_API_KEY");
