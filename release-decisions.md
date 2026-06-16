@@ -483,10 +483,9 @@ D8-A11. Per-producer payload retention duration/source
      matching the `events_outbox` 90d tier.
    - `control_plane_idempotency_keys.response_body` → the D4.3 app idempotency writer already sources
      retention from the same value as `expires_at` (no separate duration; single source preserved).
-   - `audit_log.payload` → **owner compliance [EXTERNAL-FACT]** (proposed ≥365d). Regulatory/audit
-     retention is a real-world legal fact that must not be invented here (가정 금지); the app
-     `PgDurableSecurityAuditDecisionWriter` already validates a supplied `retentionUntil` and fails
-     closed if absent, so the *enforcement* exists — only the *duration value* is the owner's input.
+   - `audit_log.payload` → **2555d (7y)** as the owner-accepted v1 default (D8-A14; owner-overridable).
+     The app `PgDurableSecurityAuditDecisionWriter` already validates a supplied `retentionUntil` and
+     fails closed if absent (enforcement exists); the duration value is now set per D8-A14.
    Source model: ops-defaults.md is the SSoT for these durations (per its §intro). The currently-built
    `raw_items`/`normalized_records` producers (`ingestRawItem`/`normalize`) take `retentionUntil` as
    input and have **no production caller yet** (the connector/extractor that feeds them is out of D6
@@ -532,6 +531,24 @@ D8-A13. SecretRef rotation/break-glass policy + rotation owner (resolves checkli
    policy, and the owner identity reuses the already-resolved #13 determination rather than inventing a
    new external fact. Build-condition: policy + owner named (this decision + §5 promoted); actual
    rotation execution + real SecretStore binding are deploy-time operations.
+
+D8-A14. Owner-accepted staging architecture + audit_log retention value
+   (proceeds with the recommended answers; real aliases/endpoints/receipts remain deploy-time [EXTERNAL-FACT])
+   Decision (owner-accepted recommendations): (a) `audit_log.payload` retention = **2555d (7 years)** v1
+   default (owner-overridable) — under-retaining audit data is the worse failure and the payload is
+   redacted low-PII, so conservative-long is the safe default; adjust if a specific regulation differs.
+   (b) Staging architecture choices: SecretStore backend = **HashiCorp Vault** (maps to the SecretRef
+   namespace/kid-rotation/`secret.resolve`-audit model; D8-A12/A13); artifact object-store = **S3 /
+   S3-compatible** (ObjectStore get/delete port, object retention/legal-hold); deploy = managed-container
+   target + GitHub Environment `staging` with the single project owner as approver (#13); D5 = absolute
+   HTTPS SSE endpoint (no creds/query/fragment) with the provider's most-capable model, key via SecretRef
+   `rpa/staging/llm-gateway/gateway_policy/codex-primary`. Rationale / 비발명: the audit value is an
+   overridable operational default (like D8-A11/A13); the backend *types* are the owner's accepted
+   recommendation, not invented external facts. The real Vault mount/path (row 44), S3 bucket +
+   `credentialRef` (rows 51/52), D5 endpoint/model identifiers + live PASS (row 50), concrete platform
+   repo/Environment config (row 43), and resolution-smoke CI evidence (row 48) remain deploy-time
+   [EXTERNAL-FACT] that only the owner can provide. Build-condition: audit value recorded (ops-defaults
+   §6.1); architecture chosen; deploy-time rows close as the owner provides each real artifact.
 
 ## Follow-Up Rule
 
