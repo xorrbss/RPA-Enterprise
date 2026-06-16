@@ -1838,25 +1838,37 @@ function parseLoopContext(
   return { iteration, pageCount };
 }
 
+// SessionRestoreResult → R18(restore_ok)/R19·R20(restore_failed) 전이. 모든 변형을 명시 처리 + never 가드로
+// 미정의 변형을 loud throw(조용한 unknown 금지 — catch-all 흡수 금지). loginBypassPossible=true 만 R19(재로그인 우회),
+// false 는 R20(failed_system). resume-token 검증 실패(invalid_token)는 신뢰 불가 토큰이라 우회 불가 → R20(security-contracts §5).
 function restoreTransitionFor(
   result: SessionRestoreResult,
   expectedPageStateRef: string,
 ):
   | { event: { type: "restore_ok" }; guard: { restoreOk: true } }
   | { event: { type: "restore_failed" }; guard: { loginBypassPossible: boolean } } {
-  if (result.kind === "restored" && result.pageStateRef === expectedPageStateRef) {
-    return { event: { type: "restore_ok" }, guard: { restoreOk: true } };
+  switch (result.kind) {
+    case "restored":
+      // pageStateRef 대조 — 일치 시에만 R18. 불일치(restorer 자기모순)는 fail-closed R20(우회 불가).
+      return result.pageStateRef === expectedPageStateRef
+        ? { event: { type: "restore_ok" }, guard: { restoreOk: true } }
+        : { event: { type: "restore_failed" }, guard: { loginBypassPossible: false } };
+    case "login_bypass":
+      return { event: { type: "restore_failed" }, guard: { loginBypassPossible: true } };
+    case "page_state_mismatch":
+      return { event: { type: "restore_failed" }, guard: { loginBypassPossible: result.loginBypassPossible } };
+    case "invalid_token":
+      // resume-token 검증 실패(만료=CHALLENGE_UNRESOLVED / 위변조·kid 불일치=IR_EXPRESSION_RUNTIME, security-contracts §5).
+      // 신뢰 불가 토큰의 resumeNodeId 로 재로그인 우회 금지 → R20 failed_system("resume 거부 → system 예외"). 조용히 흘리지 않음.
+      return { event: { type: "restore_failed" }, guard: { loginBypassPossible: false } };
+    case "terminal_failure":
+      return { event: { type: "restore_failed" }, guard: { loginBypassPossible: false } };
+    default: {
+      // 미정의 SessionRestoreResult 변형 — catch-all 흡수(조용한 unknown) 금지. 컴파일 시 exhaustive 강제 + 런타임 loud throw.
+      const exhaustive: never = result;
+      throw new Error(`restoreTransitionFor: unhandled SessionRestoreResult kind ${JSON.stringify(exhaustive)}`);
+    }
   }
-  if (result.kind === "login_bypass") {
-    return { event: { type: "restore_failed" }, guard: { loginBypassPossible: true } };
-  }
-  if (result.kind === "page_state_mismatch") {
-    return {
-      event: { type: "restore_failed" },
-      guard: { loginBypassPossible: result.loginBypassPossible },
-    };
-  }
-  return { event: { type: "restore_failed" }, guard: { loginBypassPossible: false } };
 }
 
 function isOnlyRestoreSessionPending(pending: readonly { kind: string }[]): boolean {
