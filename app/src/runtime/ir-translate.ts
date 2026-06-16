@@ -151,7 +151,14 @@ function mapAction(
     const args = isRec(a.args) ? a.args : {};
     const schemaVersion = typeof args.schema_version === "string" ? args.schema_version : "1";
     const strict = typeof args.strict === "boolean" ? args.strict : true;
-    return { type: "extract", instruction: a.instruction, output: { schemaRef: a.schema_ref, schemaVersion, strict } };
+    // Inline JSON Schema body (args.schema, typo-safe extension slot — same pattern as schema_version/strict).
+    // Threaded to the gateway responseFormat so the ajv validator can check the extract output (no registry).
+    const schema = isRec(args.schema) ? (args.schema as Record<string, unknown>) : undefined;
+    return {
+      type: "extract",
+      instruction: a.instruction,
+      output: { schemaRef: a.schema_ref, schemaVersion, strict, ...(schema !== undefined ? { schema } : {}) },
+    };
   }
   throw new InterpreterError(
     "ACTION_UNSUPPORTED",

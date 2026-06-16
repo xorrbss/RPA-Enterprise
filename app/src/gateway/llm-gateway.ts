@@ -29,7 +29,7 @@ type FinishReason = LLMResponse["finishReason"];
 
 /** §5 structured output 검증 포트(ajv 등 실제 검증기 주입 — 재구현 금지). */
 export interface StructuredOutputValidator {
-  validate(input: { schemaRef: string; schemaVersion: string; value: unknown }):
+  validate(input: { schemaRef: string; schemaVersion: string; schema?: unknown; value: unknown }):
     | { ok: true }
     | { ok: false; reason: string };
 }
@@ -272,7 +272,7 @@ export class LlmGateway {
     for (let repair = 0; ; repair += 1) {
       const parsed = this.tryParse(text);
       if (parsed.ok) {
-        const v = this.deps.validator.validate({ schemaRef: rf.schemaRef, schemaVersion: rf.schemaVersion, value: parsed.value });
+        const v = this.deps.validator.validate({ schemaRef: rf.schemaRef, schemaVersion: rf.schemaVersion, schema: rf.schema, value: parsed.value });
         if (v.ok) {
           const outputRef = await this.deps.sink.put(text, meta);
           return { outputRef, usage, finishReason: consumed.finishReason, parsedJson: parsed.value };
