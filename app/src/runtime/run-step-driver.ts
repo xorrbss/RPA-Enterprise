@@ -88,7 +88,8 @@ export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise
     abortSignal: new AbortController().signal,
     pageState: seedPageState(),
   };
-  const outcome = await runScenario(scenario, ctx, { executor: deps.executor, resolver: deps.resolver });
+  // run.params 를 인터프리터 스코프에 주입(on[].when 의 params.* 참조). navigate url_ref 해소와 동일 출처.
+  const outcome = await runScenario(scenario, ctx, { executor: deps.executor, resolver: deps.resolver, params: run.params });
 
   // 4) terminal 결과를 DB 전이로 종료.
   if (outcome.terminal === "success" || outcome.terminal === "success_empty") {

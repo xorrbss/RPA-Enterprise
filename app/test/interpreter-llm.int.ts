@@ -143,7 +143,8 @@ async function main(): Promise<void> {
     const filled = await session.evaluate<string>('(() => { const el = document.querySelector("#q"); return el ? el.value : ""; })()');
     check("act 가 실 DOM 변이(#q='hello')", filled === "hello", filled);
 
-    // node.* 분기는 인터프리터 flags-only 스코프라 loud (RQ-002 — node 스코프 미배선, 결함 연기).
+    // 미실행 노드(grab은 이 그래프에 없음) 참조 → node-missing 경로로 loud(RQ-002 후 params/node.status는 배선됐으나
+    // 부재 노드·미투영 필드 row_count는 여전히 IREL_RUNTIME_MISSING). 스코프 배선의 정밀 검증은 interpreter-scope.unit.
     const nodeBranch: CompiledOnBranch<string>[] = [{ when: ast("node.grab.row_count >= 1"), target: "done", priority: 1 }];
     const nodeScenario: CompiledScenario = {
       start: "check",
@@ -159,7 +160,7 @@ async function main(): Promise<void> {
       nodeErr = e;
     }
     check(
-      "on[] node.* 참조 → IREL_RUNTIME_MISSING (flags-only 스코프, 조용한 false 아님)",
+      "미실행 노드 node.grab.row_count 참조 → IREL_RUNTIME_MISSING (조용한 false 아님)",
       nodeErr instanceof Error && (nodeErr as { code?: string }).code === "IREL_RUNTIME_MISSING",
       nodeErr instanceof Error ? `${(nodeErr as { code?: string }).code ?? ""}: ${nodeErr.message}` : String(nodeErr),
     );
