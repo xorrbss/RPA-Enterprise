@@ -117,7 +117,7 @@ async function main(): Promise<void> {
     await page.waitForFunction(() => document.body.innerText.includes("최근 실행"), { timeout: 15_000 });
     const dash = await page.evaluate(() => document.body.innerText);
     check("dashboard 부팅 + '최근 실행' 렌더", dash.includes("최근 실행"));
-    check("시드 실행이 running으로 표시", dash.includes("running"), dash.slice(0, 200));
+    check("시드 실행이 '실행 중'으로 표시(StatusBadge 한국어 라벨)", dash.includes("실행 중"), dash.slice(0, 200));
     check("사이드바 11 nav 렌더", await page.$$eval("nav.sidebar button", (b) => b.length) === 11);
 
     // 2) 해시 라우팅 → workitems, 시드 작업항목 렌더

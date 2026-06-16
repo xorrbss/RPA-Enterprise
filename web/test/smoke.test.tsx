@@ -48,8 +48,8 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp();
     expect(screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("최근 실행")).toBeInTheDocument());
-    // fake 실행이 running 상태로 표시
-    await waitFor(() => expect(screen.getByText("running")).toBeInTheDocument());
+    // fake 실행이 running 상태로 표시(StatusBadge 한국어 라벨)
+    await waitFor(() => expect(screen.getByText("실행 중")).toBeInTheDocument());
   });
 
   test("해시 라우팅 → workitems", async () => {
