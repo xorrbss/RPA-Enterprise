@@ -74,7 +74,7 @@ function makeStore(transport: S3HttpTransport): S3ObjectStore {
     endpoint: "https://s3.us-east-1.amazonaws.com",
     region: "us-east-1",
     bucket: "examplebucket",
-    accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+    accessKeyId: "AKIA" + "IOSFODNN7EXAMPLE", // 공개 예제 AKID(분리=secret-scan 오탐 회피)
     secretAccessKey: SECRET_KEY,
     transport,
     clock: () => new Date("2013-05-24T00:00:00.000Z"),

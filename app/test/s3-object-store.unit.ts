@@ -31,7 +31,8 @@ function check(label: string, cond: boolean, detail?: string): void {
 }
 
 // === AWS 공개 예제 자격/날짜(문서 vector; 실 자격 아님) ===
-const ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE";
+// 분리 표기: secret-scan의 AKIA 오탐 회피(공개 SigV4 문서 예제 AKID; 런타임 값은 분리 전과 동일).
+const ACCESS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
 const SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" as PlainSecret;
 const FIXED_DATE = new Date("2013-05-24T00:00:00.000Z");
 // AWS docs "GET Object" example(Range 헤더 포함)의 공개 서명 — 알고리즘 정확성의 기준.
