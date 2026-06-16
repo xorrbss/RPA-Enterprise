@@ -85,9 +85,16 @@ export type BrowserLeasePlanResolver = (
   input: { tenantId: string; runId: string },
 ) => Promise<BrowserLeasePlan | null>;
 
-/** run-drive 시 bound 세션 provider 에서 ExecutorPlugin 을 만드는 seam. 기본은 UtilityExecutor(결정형). suspend-가능
- *  executor 주입 시 worker-driven suspend 가 트리거·검증된다(실 challenge 감지는 DOM/vision executor 후행). */
-export type RunExecutorFactory = (provider: CdpSessionProvider) => ExecutorPlugin;
+/** executorFactory seam 에 run 단위로 넘기는 컨텍스트 — dom executor 의 ActionPlanCache 키 스코프(run-scoped).
+ *  기본 UtilityExecutor 는 무시한다(인자 적은 함수는 그대로 할당 가능). dom-executor-factory 의 DomExecutorRunContext 와 동형. */
+export interface RunExecutorContext {
+  readonly scenarioVersionId: string;
+  readonly browserIdentityVersion: number;
+}
+
+/** run-drive 시 bound 세션 provider + run-scoped 컨텍스트에서 ExecutorPlugin 을 만드는 seam. 기본은 UtilityExecutor(결정형).
+ *  dom/vision executor 주입(createDomUtilityExecutorFactory) 시 LLM 액션·worker-driven suspend 가 트리거·검증된다. */
+export type RunExecutorFactory = (provider: CdpSessionProvider, run: RunExecutorContext) => ExecutorPlugin;
 const defaultExecutorFactory: RunExecutorFactory = (provider) => new UtilityExecutor(provider);
 
 export interface PgRuntimeWorkerOptions {
@@ -143,6 +150,7 @@ interface RunClaimDriveInputs {
   readonly leaseId: string;
   readonly siteProfileId: string;
   readonly browserIdentityId: string;
+  readonly browserIdentityVersion: number;
   readonly networkPolicyId: string;
   readonly isolation: LeaseIsolation;
   readonly cleanupPolicy: LeaseCleanupPolicy;
@@ -454,7 +462,10 @@ export class PgRuntimeWorker implements RuntimeWorker {
       cleanupPolicy: d.cleanupPolicy,
     });
     try {
-      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider);
+      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider, {
+        scenarioVersionId: d.scenarioVersionId,
+        browserIdentityVersion: d.browserIdentityVersion,
+      });
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
       await driveClaimedRun(
         {
@@ -490,14 +501,18 @@ export class PgRuntimeWorker implements RuntimeWorker {
         "RuntimeWorker: run-drive requires BrowserLeasePlan.networkPolicyId (identity 3-tuple); plan 미공급",
       );
     }
-    const r = await client.query<{ scenario_version_id: string; params: unknown }>(
-      `SELECT scenario_version_id::text AS scenario_version_id, params
-         FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
-      [tenantId, runId],
+    // browser_identity_version: dom executor ActionPlanCache 키 스코프(StagehandDomExecutorConfig). plan.browserIdentityId 로 JOIN.
+    const r = await client.query<{ scenario_version_id: string; params: unknown; browser_identity_version: number }>(
+      `SELECT r.scenario_version_id::text AS scenario_version_id, r.params,
+              bi.version AS browser_identity_version
+         FROM runs r
+         JOIN browser_identities bi ON bi.id = $3::uuid AND bi.tenant_id = $1::uuid
+        WHERE r.tenant_id = $1::uuid AND r.id = $2::uuid`,
+      [tenantId, runId, plan.browserIdentityId],
     );
     const row = r.rows[0];
     if (row === undefined) {
-      throw new Error("RuntimeWorker: run-drive run row not found in tenant scope");
+      throw new Error("RuntimeWorker: run-drive run/browser_identity row not found in tenant scope");
     }
     return {
       scenarioVersionId: row.scenario_version_id,
@@ -505,6 +520,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       leaseId,
       siteProfileId: plan.siteProfileId,
       browserIdentityId: plan.browserIdentityId,
+      browserIdentityVersion: row.browser_identity_version,
       networkPolicyId: plan.networkPolicyId,
       isolation: plan.isolation ?? "context",
       cleanupPolicy: plan.cleanupPolicy ?? "clear_all",
@@ -901,7 +917,10 @@ export class PgRuntimeWorker implements RuntimeWorker {
       cleanupPolicy: drive.cleanupPolicy,
     });
     try {
-      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider);
+      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider, {
+        scenarioVersionId: drive.scenarioVersionId,
+        browserIdentityVersion: drive.browserIdentityVersion,
+      });
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
       // R18 후 run 은 running — driveResumedRun 은 R2 없이 resumeNodeId 부터 재진입(success→completed / fail→failed_*).
       await driveResumedRun(
