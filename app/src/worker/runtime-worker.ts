@@ -16,33 +16,23 @@ import type {
   EventId,
   LeaseCleanupPolicy,
   LeaseIsolation,
-  LeaseId,
   RunAbortDrainer,
-  ResumeTokenEnvelope,
   RuntimeJobResult,
   RuntimeWorker,
   RuntimeWorkerJob,
-  SessionRestoreInput,
-  SessionRestoreResult,
   SessionRestorer,
   SinkDeliveryPort,
-  WorkerId,
 } from "../../../ts/runtime-contract";
-import type { CorrelationId, RunId, TenantId } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
-import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
-import { applyRunTransition } from "../runtime/run-transition";
 import { applyWorkitemTransition } from "../runtime/workitem-transition";
 import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
-import { driveClaimedRun } from "../runtime/run-step-driver";
-import { UtilityExecutor } from "../executor/utility-executor";
-import { SitePageStateResolver } from "../executor/site-page-state-resolver";
-import { loadSitePageStateConfig } from "../executor/site-page-state-config";
-import { gateBrowserSessionProvider, type BrowserSessionProvider } from "../executor/browser-session-provider";
-import { isRecord, stringField, unknownToReason, requireString } from "./worker-util";
+import { type BrowserSessionProvider } from "../executor/browser-session-provider";
+import { requireString } from "./worker-util";
 import { ArtifactLifecycleRunner } from "./artifact-lifecycle-runner";
 import { RunAbortRunner } from "./run-abort-runner";
+import { RunResumeRunner } from "./run-resume-runner";
+import { RunClaimRunner } from "./run-claim-runner";
 import {
   BrowserLeaseManager,
   drainBrowserLease,
@@ -107,31 +97,7 @@ export interface BrowserLeaseDrainInput {
   readonly reason: "run_cancelled" | "run_completed" | "run_suspended" | "sweeper";
 }
 
-// A.1 run-drive: claim tx 에서 캡처해 tx 밖(Phase B)에서 driveClaimedRun 에 넘기는 입력(브라우저 작업은 커넥션 밖).
-interface RunClaimDriveInputs {
-  readonly scenarioVersionId: string;
-  readonly correlationId: string;
-  readonly leaseId: string;
-  readonly siteProfileId: string;
-  readonly browserIdentityId: string;
-  readonly networkPolicyId: string;
-  readonly isolation: LeaseIsolation;
-  readonly cleanupPolicy: LeaseCleanupPolicy;
-  readonly params?: Record<string, unknown>;
-}
-
-// runs.params(jsonb) 정규화: 문자열이면 파싱, null/부재면 undefined(빈 {} 와 구분 — navigate 키 해소가 loud 실패). run-loop 와 동형.
-function normalizeRunParams(raw: unknown): Record<string, unknown> | undefined {
-  const v = typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
-  return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
-}
-
 export type RunRow = { status: RunState; correlation_id: string };
-type RunResumeRow = RunRow & { resume_token: unknown };
-type RunResumeIntent = SessionRestoreInput;
-type RunResumeTxAResult =
-  | { kind: "ready"; intent: RunResumeIntent }
-  | { kind: "job_result"; result: RuntimeJobResult };
 type WorkitemRow = { status: WorkitemState };
 // sink failed(상한 미달) 재전달 backoff 기본(ops-defaults #sink.delivery.retry_backoff base 5s).
 const DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS = 5_000;
@@ -140,6 +106,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
   private readonly artifactLifecycle: ArtifactLifecycleRunner;
   private readonly runAbort: RunAbortRunner;
   private readonly leases: BrowserLeaseManager;
+  private readonly runResume: RunResumeRunner;
+  private readonly runClaim: RunClaimRunner;
 
   constructor(
     private readonly pool: pg.Pool,
@@ -148,6 +116,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
     this.artifactLifecycle = new ArtifactLifecycleRunner(this.pool, this.options);
     this.runAbort = new RunAbortRunner(this.pool, this.options);
     this.leases = new BrowserLeaseManager(this.pool, this.options);
+    this.runResume = new RunResumeRunner(this.pool, this.options, this.leases);
+    this.runClaim = new RunClaimRunner(this.pool, this.options, this.leases);
   }
 
   async handle(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
@@ -161,7 +131,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       }
 
       case "run_claim":
-        return this.handleRunClaim(job);
+        return this.runClaim.handleRunClaim(job);
 
       case "run_abort":
         return this.runAbort.handleRunAbort(job);
@@ -173,7 +143,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         return this.handleWorkitemCheckout(job);
 
       case "run_resume":
-        return this.handleRunResume(job);
+        return this.runResume.handleRunResume(job);
 
       // D3(executor/lease)·D6(pipeline) 의존 — D2 골격 미구현. 조용한 no-op 금지: 명시적 throw.
       case "artifact_redaction":
@@ -242,147 +212,6 @@ export class PgRuntimeWorker implements RuntimeWorker {
     return {
       kind: "completed",
       emittedEvents: outcome.emitted ? [outcome.emitted.eventId as EventId] : [],
-    };
-  }
-
-  private async handleRunClaim(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
-    const tenantId = requireString(job.tenantId, "run_claim.tenantId");
-    const runId = requireString(job.runId, "run_claim.runId");
-    const workerId = requireString(
-      this.options.workerId,
-      "PgRuntimeWorkerOptions.workerId for run_claim",
-    );
-    const leasePlanResolver = this.options.browserLeasePlanResolver;
-    if (leasePlanResolver === undefined) {
-      throw new Error("RuntimeWorker: run_claim requires an explicit BrowserLeasePlanResolver");
-    }
-    // A.1 run-drive: provider 주입 시 claim 후 run 을 구동(test_fake 는 opt-in 게이트). 미주입 → claimed 까지만(기존 동작).
-    const sessionProvider = gateBrowserSessionProvider(
-      this.options.browserSessionProvider,
-      this.options.allowTestBrowserSessionProvider === true,
-    );
-
-    // Phase A: claim 을 tx 안에서. 구동 입력은 캡처해 tx 밖(Phase B)으로 — 브라우저 작업이 DB 커넥션을 점유하지 않게.
-    const claim = await withTenantTx(
-      this.pool,
-      tenantId,
-      async (client): Promise<{ result: RuntimeJobResult; drive?: RunClaimDriveInputs }> => {
-        const run = await this.leases.loadExpectedRun(client, tenantId, runId, "queued");
-        if (run.kind !== "ok") return { result: run.result };
-
-        // §E 필수 span: run.claim(루트) ⊃ browser.lease.acquire. 공통속성은 적재된 run의 correlation_id.
-        const correlationId = job.correlationId ?? run.row.correlation_id;
-        const common: CommonSpanAttrs = { tenant_id: tenantId, run_id: runId, correlation_id: correlationId };
-        return withSpan(SPAN.runClaim, common, { worker_id: workerId }, async () => {
-          const plan = await leasePlanResolver(client, { tenantId, runId });
-          const lease = await withSpan(SPAN.browserLeaseAcquire, common, {}, async () =>
-            this.leases.acquireBrowserLease(client, { tenantId, runId, workerId, plan }),
-          );
-          if (lease.kind !== "acquired") return { result: lease };
-
-          const transition = await applyRunTransition(client, {
-            tenantId,
-            runId,
-            fromStatus: "queued",
-            event: { type: "worker.claimed" },
-            guard: { leaseAcquired: true },
-            correlationId,
-            workerId,
-            eventIdempotencyKey: `${runId}:run_claim`,
-          });
-          if (!transition.applied) {
-            throw new Error(
-              `RuntimeWorker: run_claim CAS conflict after row lock; observed=${transition.observed ?? "null"}`,
-            );
-          }
-          if (transition.pending.length > 0) {
-            throw new Error("RuntimeWorker: run_claim produced unsupported pending side effects");
-          }
-          const result: RuntimeJobResult = {
-            kind: "completed",
-            emittedEvents: transition.emitted.map((e) => e.eventId as EventId),
-          };
-          // provider 미주입(또는 plan null)이면 구동 안 함 → claimed 까지만(기존 동작).
-          if (sessionProvider === undefined || plan === null) return { result };
-          const drive = await this.loadRunDriveInputs(client, tenantId, runId, plan, lease.leaseId, correlationId);
-          return { result, drive };
-        });
-      },
-    );
-
-    // Phase B: 구동(tx 밖 — 브라우저 작업이 DB 커넥션 점유 금지). 미주입/미구동이면 claimed 결과 반환.
-    // driveClaimedRun: success→completed, fail_business/fail_system→failed_*(2a). suspend/challenge 등 그 외 terminal 은
-    // 미구현 throw 로 표면화(propagate). 세션은 어느 경로든 finally 에서 해제.
-    if (claim.drive === undefined || sessionProvider === undefined) return claim.result;
-    const d = claim.drive;
-    const siteConfig = await withTenantTx(this.pool, tenantId, (c) =>
-      loadSitePageStateConfig(c, tenantId, d.siteProfileId),
-    );
-    const bound = await sessionProvider.bind({
-      tenantId,
-      leaseId: d.leaseId,
-      siteProfileId: d.siteProfileId,
-      browserIdentityId: d.browserIdentityId,
-      networkPolicyId: d.networkPolicyId,
-      isolation: d.isolation,
-      cleanupPolicy: d.cleanupPolicy,
-    });
-    try {
-      const executor = new UtilityExecutor(bound.provider);
-      const resolver = new SitePageStateResolver(bound.provider, siteConfig);
-      await driveClaimedRun(
-        {
-          runId,
-          tenantId,
-          scenarioVersionId: d.scenarioVersionId,
-          correlationId: d.correlationId,
-          leaseId: d.leaseId,
-          siteProfileId: d.siteProfileId,
-          browserIdentityId: d.browserIdentityId,
-          networkPolicyId: d.networkPolicyId,
-          params: d.params,
-        },
-        { pool: this.pool, executor, resolver, workerId },
-      );
-    } finally {
-      await bound.release();
-    }
-    return claim.result;
-  }
-
-  // A.1 run-drive: claim tx 에서 scenario_version_id + params 적재 + plan 의 identity 3-tuple 확정(networkPolicyId 필수).
-  private async loadRunDriveInputs(
-    client: pg.PoolClient,
-    tenantId: string,
-    runId: string,
-    plan: BrowserLeasePlan,
-    leaseId: string,
-    correlationId: string,
-  ): Promise<RunClaimDriveInputs> {
-    if (plan.networkPolicyId === undefined) {
-      throw new Error(
-        "RuntimeWorker: run-drive requires BrowserLeasePlan.networkPolicyId (identity 3-tuple); plan 미공급",
-      );
-    }
-    const r = await client.query<{ scenario_version_id: string; params: unknown }>(
-      `SELECT scenario_version_id::text AS scenario_version_id, params
-         FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
-      [tenantId, runId],
-    );
-    const row = r.rows[0];
-    if (row === undefined) {
-      throw new Error("RuntimeWorker: run-drive run row not found in tenant scope");
-    }
-    return {
-      scenarioVersionId: row.scenario_version_id,
-      correlationId,
-      leaseId,
-      siteProfileId: plan.siteProfileId,
-      browserIdentityId: plan.browserIdentityId,
-      networkPolicyId: plan.networkPolicyId,
-      isolation: plan.isolation ?? "context",
-      cleanupPolicy: plan.cleanupPolicy ?? "clear_all",
-      params: normalizeRunParams(row.params),
     };
   }
 
@@ -462,257 +291,4 @@ export class PgRuntimeWorker implements RuntimeWorker {
     return { kind: "completed", emittedEvents: [] };
   }
 
-  private async handleRunResume(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
-    const tenantId = requireString(job.tenantId, "run_resume.tenantId");
-    const runId = requireString(job.runId, "run_resume.runId");
-    const workerId = requireString(
-      this.options.workerId,
-      "PgRuntimeWorkerOptions.workerId for run_resume",
-    );
-    const leasePlanResolver = this.options.browserLeasePlanResolver;
-    if (leasePlanResolver === undefined) {
-      throw new Error("RuntimeWorker: run_resume requires an explicit BrowserLeasePlanResolver");
-    }
-    const sessionRestorer = this.options.sessionRestorer;
-    if (sessionRestorer === undefined) {
-      throw new Error("RuntimeWorker: run_resume requires an explicit SessionRestorer");
-    }
-
-    const txA = await withTenantTx(this.pool, tenantId, async (client): Promise<RunResumeTxAResult> => {
-      const run = await client.query<RunResumeRow>(
-        `SELECT status, correlation_id::text, resume_token
-           FROM runs
-          WHERE tenant_id = $1::uuid AND id = $2::uuid
-          FOR UPDATE`,
-        [tenantId, runId],
-      );
-      const row = run.rows[0];
-      if (row === undefined) {
-        return { kind: "job_result", result: { kind: "failed", code: "RUN_NOT_FOUND" } };
-      }
-      if (row.status !== "resume_requested" && row.status !== "resuming") {
-        return {
-          kind: "job_result",
-          result: { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" },
-        };
-      }
-
-      const token = parseResumeTokenEnvelope(row.resume_token, runId);
-      if (token === null) {
-        return {
-          kind: "job_result",
-          result: { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" },
-        };
-      }
-
-      let lease = await this.leases.findActiveBrowserLeaseForRun(client, {
-        tenantId,
-        runId,
-        workerId,
-      });
-      if (lease === null) {
-        // §E browser.lease.acquire — resume 경로의 lease 확보도 동일 span으로 계측.
-        const resumeCommon: CommonSpanAttrs = {
-          tenant_id: tenantId,
-          run_id: runId,
-          correlation_id: job.correlationId ?? row.correlation_id,
-        };
-        const acquired = await withSpan(SPAN.browserLeaseAcquire, resumeCommon, {}, async () => {
-          const plan = await leasePlanResolver(client, { tenantId, runId });
-          return this.leases.acquireBrowserLease(client, { tenantId, runId, workerId, plan });
-        });
-        if (acquired.kind !== "acquired") return { kind: "job_result", result: acquired };
-        lease = acquired.leaseId;
-      }
-
-      if (row.status === "resume_requested") {
-        const transition = await applyRunTransition(client, {
-          tenantId,
-          runId,
-          fromStatus: "resume_requested",
-          event: { type: "worker.claimed" },
-          guard: { leaseAcquired: true },
-          correlationId: job.correlationId ?? row.correlation_id,
-          workerId,
-          eventIdempotencyKey: `${runId}:run_resume:r17`,
-        });
-
-        if (!transition.applied) {
-          throw new Error(
-            `RuntimeWorker: run_resume R17 CAS conflict after row lock; observed=${transition.observed ?? "null"}`,
-          );
-        }
-        if (!isOnlyRestoreSessionPending(transition.pending)) {
-          throw new Error("RuntimeWorker: run_resume R17 produced unsupported pending side effects");
-        }
-      }
-
-      await client.query(
-        `UPDATE runs
-            SET worker_id = $3::uuid,
-                updated_at = now()
-          WHERE tenant_id = $1::uuid
-            AND id = $2::uuid
-            AND status = 'resuming'`,
-        [tenantId, runId, workerId],
-      );
-
-      return {
-        kind: "ready",
-        intent: {
-          tenantId: tenantId as TenantId,
-          runId: runId as RunId,
-          leaseId: lease as LeaseId,
-          workerId: workerId as WorkerId,
-          correlationId: (job.correlationId ?? row.correlation_id) as CorrelationId,
-          token,
-          expectedPageStateRef: token.pageStateRef,
-          resumeNodeId: token.resumeNodeId,
-        },
-      };
-    });
-
-    if (txA.kind === "job_result") return txA.result;
-
-    // §E 필수 span: session.restore — restoreSession은 DB 트랜잭션 밖(외부 I/O)에서 실행되며 그 경계를 계측.
-    //   예외는 withSpan이 record+ERROR로 표면화 후 재던지고, 바깥 catch가 terminal_failure로 흡수(제어흐름).
-    const restoreResult = await withSpan(
-      SPAN.sessionRestore,
-      { tenant_id: txA.intent.tenantId, run_id: txA.intent.runId, correlation_id: txA.intent.correlationId },
-      {},
-      () => sessionRestorer.restoreSession(txA.intent),
-    ).catch(
-      (err): SessionRestoreResult => ({
-        kind: "terminal_failure",
-        reason: unknownToReason(err),
-      }),
-    );
-
-    return withTenantTx(this.pool, tenantId, async (client) => {
-      const run = await client.query<RunRow>(
-        `SELECT status, correlation_id::text
-           FROM runs
-          WHERE tenant_id = $1::uuid AND id = $2::uuid
-          FOR UPDATE`,
-        [tenantId, runId],
-      );
-      const row = run.rows[0];
-      if (row === undefined) {
-        return { kind: "failed", code: "RUN_NOT_FOUND" };
-      }
-      if (row.status !== "resuming") {
-        return { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" };
-      }
-
-      const next = restoreTransitionFor(restoreResult, txA.intent.expectedPageStateRef);
-      const transition = await applyRunTransition(client, {
-        tenantId,
-        runId,
-        fromStatus: "resuming",
-        event: next.event,
-        guard: next.guard,
-        correlationId: job.correlationId ?? row.correlation_id,
-        workerId,
-        eventIdempotencyKey: `${runId}:run_resume`,
-      });
-
-      if (!transition.applied) {
-        throw new Error(
-          `RuntimeWorker: run_resume ${next.event.type} CAS conflict after row lock; observed=${
-            transition.observed ?? "null"
-          }`,
-        );
-      }
-      if (transition.pending.length > 0) {
-        throw new Error("RuntimeWorker: run_resume completion produced unsupported pending side effects");
-      }
-
-      return {
-        kind: "completed",
-        emittedEvents: transition.emitted.map((e) => e.eventId as EventId),
-      };
-    });
-  }
-
-}
-
-function parseResumeTokenEnvelope(value: unknown, expectedRunId: string): ResumeTokenEnvelope | null {
-  if (!isRecord(value)) return null;
-  const runId = stringField(value, "runId");
-  const resumeNodeId = stringField(value, "resumeNodeId");
-  const pageStateRef = stringField(value, "pageStateRef");
-  const issuedAt = stringField(value, "issuedAt");
-  const expiresAt = stringField(value, "expiresAt");
-  const kid = stringField(value, "kid");
-  const hmac = stringField(value, "hmac");
-  if (
-    runId === null ||
-    runId !== expectedRunId ||
-    resumeNodeId === null ||
-    pageStateRef === null ||
-    issuedAt === null ||
-    expiresAt === null ||
-    kid === null ||
-    hmac === null
-  ) {
-    return null;
-  }
-
-  const loopContext = parseLoopContext(value.loopContext);
-  if (loopContext === false) return null;
-  return {
-    runId: runId as RunId,
-    resumeNodeId,
-    pageStateRef,
-    ...(loopContext === undefined ? {} : { loopContext }),
-    issuedAt: issuedAt as ResumeTokenEnvelope["issuedAt"],
-    expiresAt: expiresAt as ResumeTokenEnvelope["expiresAt"],
-    kid,
-    hmac,
-  };
-}
-
-function parseLoopContext(
-  value: unknown,
-): { iteration: number; pageCount: number } | undefined | false {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) return false;
-  const iteration = value.iteration;
-  const pageCount = value.pageCount;
-  if (
-    typeof iteration !== "number" ||
-    typeof pageCount !== "number" ||
-    !Number.isInteger(iteration) ||
-    !Number.isInteger(pageCount) ||
-    iteration < 0 ||
-    pageCount < 0
-  ) {
-    return false;
-  }
-  return { iteration, pageCount };
-}
-
-function restoreTransitionFor(
-  result: SessionRestoreResult,
-  expectedPageStateRef: string,
-):
-  | { event: { type: "restore_ok" }; guard: { restoreOk: true } }
-  | { event: { type: "restore_failed" }; guard: { loginBypassPossible: boolean } } {
-  if (result.kind === "restored" && result.pageStateRef === expectedPageStateRef) {
-    return { event: { type: "restore_ok" }, guard: { restoreOk: true } };
-  }
-  if (result.kind === "login_bypass") {
-    return { event: { type: "restore_failed" }, guard: { loginBypassPossible: true } };
-  }
-  if (result.kind === "page_state_mismatch") {
-    return {
-      event: { type: "restore_failed" },
-      guard: { loginBypassPossible: result.loginBypassPossible },
-    };
-  }
-  return { event: { type: "restore_failed" }, guard: { loginBypassPossible: false } };
-}
-
-function isOnlyRestoreSessionPending(pending: readonly { kind: string }[]): boolean {
-  return pending.length === 1 && pending[0]?.kind === "restoreSession";
 }
