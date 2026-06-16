@@ -526,6 +526,10 @@ export interface LLMRequest {
     schemaRef: string;
     schemaVersion: string;
     strict: boolean;
+    /** Inline JSON Schema body for structured-output validation (sourced from the IR extract node's
+     *  args.schema). schemaRef/schemaVersion remain identity/versioning; this is the body the validator
+     *  checks against. Optional for back-compat; absent ⇒ the validator fails closed. */
+    schema?: Record<string, unknown>;
   };
   images?: readonly RedactedImageRef[];
   tools?: readonly LLMToolSpec[];

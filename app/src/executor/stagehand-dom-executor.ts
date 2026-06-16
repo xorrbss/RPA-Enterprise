@@ -41,7 +41,7 @@ export type { ActionPlan, ActionPlanCache, ActionPlanCacheKey } from "./action-p
 export type DomAction =
   | { type: "act"; instruction: string; sideEffect?: SideEffectKind }
   | { type: "observe"; instruction: string }
-  | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean } };
+  | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> } };
 
 export type DomExecutorErrorCode = "EXECUTOR_CAPABILITY_MISMATCH" | "IR_SCHEMA_INVALID" | "RUN_ABORTED";
 
@@ -274,7 +274,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
 
     const responseFormat =
       a.type === "extract"
-        ? { type: "json_schema" as const, schemaRef: a.output.schemaRef, schemaVersion: a.output.schemaVersion, strict: a.output.strict }
+        ? { type: "json_schema" as const, schemaRef: a.output.schemaRef, schemaVersion: a.output.schemaVersion, strict: a.output.strict, ...(a.output.schema !== undefined ? { schema: a.output.schema } : {}) }
         : a.type === "act"
           ? ACTION_PLAN_SCHEMA
           : undefined;
@@ -317,11 +317,12 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       if (typeof out !== "object" || out === null) {
         throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.output(schema) required`);
       }
-      const o = out as { schemaRef?: unknown; schemaVersion?: unknown; strict?: unknown };
+      const o = out as { schemaRef?: unknown; schemaVersion?: unknown; strict?: unknown; schema?: unknown };
       if (typeof o.schemaRef !== "string" || typeof o.schemaVersion !== "string" || typeof o.strict !== "boolean") {
         throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.output must be {schemaRef,schemaVersion,strict}`);
       }
-      return { type, instruction, output: { schemaRef: o.schemaRef, schemaVersion: o.schemaVersion, strict: o.strict } };
+      const schema = typeof o.schema === "object" && o.schema !== null ? (o.schema as Record<string, unknown>) : undefined;
+      return { type, instruction, output: { schemaRef: o.schemaRef, schemaVersion: o.schemaVersion, strict: o.strict, ...(schema !== undefined ? { schema } : {}) } };
     }
     if (type === "act") {
       const se = (action as { sideEffect?: unknown }).sideEffect;
