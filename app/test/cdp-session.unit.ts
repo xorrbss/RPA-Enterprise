@@ -1,11 +1,12 @@
 /**
- * RQ-001 단위 테스트 — createStagehandSession CDP 기동 retry/backoff (외부 의존 없음).
+ * cdp-session 모듈 단위 테스트 (외부 의존 없음) — 실행: tsx test/cdp-session.unit.ts.
  *
- * 실 Chrome 없이 attemptInit DI로 기동 결과를 주입해 검증: 연결거부(ECONNREFUSED) 재시도 후 성공,
- * 재시도 소진 시 CDP_DISCONNECTED 분류(원 텍스트 미노출), 비-연결거부는 즉시 전파(재시도 안 함).
- * 실행: tsx test/cdp-session.unit.ts.
+ * (1) RQ-001 createStagehandSession CDP 기동 retry/backoff: attemptInit DI로 기동 결과를 주입해 검증 —
+ *     연결거부(ECONNREFUSED) 재시도 후 성공, 소진 시 CDP_DISCONNECTED 분류(원 텍스트 미노출), 비-연결거부 즉시 전파.
+ * (2) LeaseKeyedSessionProvider: leaseId 키 세션 레지스트리 — forLease 바운드 반환·미바운드 typed throw(조용한 null 금지)·
+ *     idempotent, register 중복 throw, unbind 해제.
  */
-import { createStagehandSession, type CdpSession } from "../src/executor/cdp-session";
+import { createStagehandSession, LeaseKeyedSessionProvider, type CdpSession } from "../src/executor/cdp-session";
 import { CdpDisconnectedError } from "../src/executor/raw-cdp";
 
 let failures = 0;
@@ -32,6 +33,15 @@ function connTimeout(): Error {
 async function caught(p: Promise<unknown>): Promise<unknown> {
   try {
     await p;
+    return undefined;
+  } catch (e) {
+    return e;
+  }
+}
+
+function caughtSync(fn: () => unknown): unknown {
+  try {
+    fn();
     return undefined;
   } catch (e) {
     return e;
@@ -95,11 +105,49 @@ async function main(): Promise<void> {
     check("non-conn-refused → immediate rethrow (no retry), original preserved", err === boom && n === 1, `n=${n}`);
   }
 
+  // 4) LeaseKeyedSessionProvider — leaseId 키 세션 레지스트리(SingleSessionProvider 일반화).
+  {
+    const provider = new LeaseKeyedSessionProvider();
+    const sA = { __lease: "A" } as unknown as CdpSession;
+    const sB = { __lease: "B" } as unknown as CdpSession;
+    provider.register("lease-A", sA);
+    provider.register("lease-B", sB);
+
+    check(
+      "forLease returns the bound session per leaseId (no cross-lease share)",
+      provider.forLease("lease-A") === sA && provider.forLease("lease-B") === sB,
+    );
+    check("forLease idempotent (repeat → same session)", provider.forLease("lease-A") === sA);
+
+    const unbound = caughtSync(() => provider.forLease("lease-Z"));
+    check(
+      "forLease(unbound) → CdpDisconnectedError(CDP_DISCONNECTED), no silent null",
+      unbound instanceof CdpDisconnectedError && (unbound as CdpDisconnectedError).code === "CDP_DISCONNECTED",
+      String(unbound),
+    );
+
+    const dup = caughtSync(() => provider.register("lease-A", sB));
+    check(
+      "register(duplicate leaseId) → throws (no silent overwrite/leak), existing binding intact",
+      dup instanceof Error && provider.forLease("lease-A") === sA,
+      String(dup),
+    );
+
+    const removed = provider.unbind("lease-A");
+    const afterUnbind = caughtSync(() => provider.forLease("lease-A"));
+    check(
+      "unbind removes binding (returns session for caller close; forLease then throws)",
+      removed === sA && afterUnbind instanceof CdpDisconnectedError,
+      `removed=${String(removed)}`,
+    );
+    check("unbind(absent) → undefined (idempotent)", provider.unbind("lease-A") === undefined);
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: RQ-001 cdp-session launch retry unit green");
+  console.log("\nPASS: cdp-session unit green (RQ-001 launch retry + LeaseKeyedSessionProvider)");
   process.exit(0);
 }
 
