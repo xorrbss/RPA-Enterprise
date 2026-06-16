@@ -259,11 +259,20 @@ async function createRun(deps: ApiServerDeps, request: FastifyRequest): Promise<
     scenario_version_id?: unknown;
     params?: unknown;
     workitem_id?: unknown;
+    model?: unknown;
   };
   for (const key of Object.keys(body)) {
-    if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id") {
+    if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id" && key !== "model") {
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unknown_field", field: key });
     }
+  }
+  // Gap2(B+C): optional model. 형식 검증은 예약 이전, 정책 존재/해소는 작업 tx(RLS 스코프).
+  let model: string | null = null;
+  if (body.model !== undefined && body.model !== null) {
+    if (typeof body.model !== "string" || body.model.length === 0) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_model" });
+    }
+    model = body.model;
   }
   if (typeof body.scenario_version_id !== "string" || !UUID_RE.test(body.scenario_version_id)) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_id_required" });
@@ -322,6 +331,38 @@ async function createRun(deps: ApiServerDeps, request: FastifyRequest): Promise<
       if (sv.rowCount === 0) {
         throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_not_found" });
       }
+      // Gap2(B+C): run의 model을 1회 해소·동결(runs.model — as_of 동형 결정성). RLS가 tenant 스코프.
+      //   명시 → (tenant,model) 존재확인. 미지정 → is_default(부분 UNIQUE로 ≤1) → 없으면 단일정책 1행 자동해소.
+      //   정책 0건 → NULL(utility-only run 허용; LLM 노드 도달 시 run-time fail-closed). 다정책+미지정+default없음 → loud
+      //   (GET /v1/gateway/policy 다건 규약 동형 model_required). 신규 ErrorCode 미도입(closed registry).
+      //   model↔capability(vision/domReasoning) 정합은 call-time SafeCapabilityGate(불변, 어댑터 caps 기반)가 차단한다.
+      //   ※ SafeCapabilityGate는 model 문자열 자체는 검사하지 않는다(텔레메트리 속성). resolvedModel=NULL run이 LLM/dom
+      //   노드에 도달하는 silent 경로는 현재 없다 — 라이브 드라이브가 UtilityExecutor 단독(run-claim-runner.ts)이라 dom
+      //   프리미티브는 EXECUTOR_CAPABILITY_MISMATCH로 loud 거부된다. runs.model 소비(dom executor 주입)는 PR-B0.
+      // TODO: create-time capability 정적대조(IR primitive 집합 ↔ resolved model capabilities, LLM_CAPABILITY_MISMATCH 조기 loud).
+      //   PR-B0(runs.model 소비) 시 NULL-model + LLM 노드 도달을 명시 fail-closed로 고정. mfa-dom-drive-design.md Part 5 §검증위치.
+      let resolvedModel: string | null = null;
+      if (model !== null) {
+        const m = await c.query(`SELECT 1 FROM gateway_policies WHERE model = $1`, [model]);
+        if (m.rowCount === 0) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND", { reason: "model_policy_not_found", model });
+        }
+        resolvedModel = model;
+      } else {
+        const def = await c.query<{ model: string }>(`SELECT model FROM gateway_policies WHERE is_default = true`);
+        if (def.rowCount === 1) {
+          resolvedModel = def.rows[0].model;
+        } else {
+          const all = await c.query<{ model: string }>(`SELECT model FROM gateway_policies`);
+          if (all.rowCount === 1) {
+            resolvedModel = all.rows[0].model; // 단일정책 테넌트 자동해소(KISS).
+          } else if (all.rowCount !== 0) {
+            // 다정책 + 미지정 + default 없음 → 임의선택 불가(조용한 false 금지).
+            throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "model_required", available: all.rowCount });
+          }
+          // all.rowCount === 0 → resolvedModel=null(정책 없음; utility-only run 허용).
+        }
+      }
       if (workitemId !== null) {
         // workitem 존재 확인(RLS 스코프). 부재/타테넌트 → IR_SCHEMA_INVALID(FK 위반 500 회피).
         const wi = await c.query(`SELECT 1 FROM workitems WHERE id = $1::uuid`, [workitemId]);
@@ -334,9 +375,9 @@ async function createRun(deps: ApiServerDeps, request: FastifyRequest): Promise<
         }
       }
       await c.query(
-        `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, params, as_of, correlation_id)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5::jsonb, $6::timestamptz, $7::uuid)`,
-        [runId, principal.tenantId, scenarioVersionId, workitemId, JSON.stringify(params), asOf, request.correlationId],
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, params, as_of, correlation_id, model)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5::jsonb, $6::timestamptz, $7::uuid, $8)`,
+        [runId, principal.tenantId, scenarioVersionId, workitemId, JSON.stringify(params), asOf, request.correlationId, resolvedModel],
       );
       await emitOutboxEvent(c, {
         tenantId: principal.tenantId,

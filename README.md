@@ -617,3 +617,28 @@
 | 계약(DDL) | `db/migration_core_entities.sql` runs에 `bookmark jsonb` 컬럼 신설(nullable). `startBookmark`(R4/R5 side-effect) 영속 대상. resume_token과 분리 |
 | 가드 | createHumanTask/startBookmark pending 부재 → loud throw(조용한 false 금지). bookmark UPDATE `rowCount≠1`(run 부재/테넌트 불일치) → throw |
 | 잔존 | resume-token(R11, KMS) · coordinator 경로 production 재배선 · `@human_task`(R5) IR 노드 경로 = 후속 증분. 레지스터 RQ-016 재분류(BLOCK→부분)는 별도 |
+
+## v2.19 패치 로그 (Gap2 — 자동 run의 model 출처 명시: `runs.model` + `gateway_policies.is_default`)
+
+> **검증된 내부 모순 해소**(신기능 아님). `StagehandDomExecutorConfig.model`은 DOM/LLM step 실행에 필수이고
+> (`app/src/executor/stagehand-dom-executor.ts`) `action_plan_cache` UNIQUE 캐시 키의 결정 요소이며
+> (`pg-action-plan-cache.ts`) Gateway capability 검사 입력이다(llm-gateway-adapter §1). 그러나 `gateway_policies`는
+> `UNIQUE(tenant_id, model)`로 테넌트당 다수 model 행을 허용하면서 primary/default 표지가 없고, `runs`·`scenario_versions`·
+> `ir.meta` 어디에도 model 출처가 없어 — 테넌트가 다정책을 보유할 때 자동 run이 어느 model로 시작하는지 계약에 부재했다.
+> "조용한 임의선택 금지" 규율상 silent 임의선택만이 유일한 비-차단 경로인 모순 상태였다.
+> **해소(오너 결정 2026-06-17, B+C)**: model을 run-create 시 `runs.model`로 1회 해소·동결(`as_of` 동형 결정성).
+> `POST /v1/runs`에 optional `model`, 무인 run은 테넌트 `gateway_policies.is_default`(부분 UNIQUE로 ≤1)로 해소.
+> 다정책+미지정+default 부재는 `model_required` loud 거부(GET /v1/gateway/policy 다건 규약 동형). **IR/scenario_version 무변경**
+> (model은 실행 엔진 선택이지 시나리오 명세가 아님 — 런타임 해소 결정과 정합). model↔capability 정합은 call-time
+> `SafeCapabilityGate`(불변)가 fail-closed로 최종 차단(create-time 정적 사전대조는 후속 증분, `server.ts` TODO로 표면화).
+> **신규 ErrorCode 미도입**(error-catalog closed registry) — 기존 `IR_SCHEMA_INVALID`(`model_required`)·`RESOURCE_NOT_FOUND` 재사용.
+> 설계 기록: `mfa-dom-drive-design.md` Part 5. **검증: tsc(app)·db-static-smoke green + 적대 리뷰(wf, 19 findings → confirmed: is_default ETag 버그 1·테스트갭).
+> int 테스트 작성(`api-runs-model.int.ts` 7케이스 해소매트릭스·동결 + `api-gateway.int.ts` is_default 토글/version-bump) — temp PG 실행은 CI/owner.**
+
+| 항목 | 조치 |
+|---|---|
+| 계약(DDL) | `db/migration_core_entities.sql`: `runs.model text`(nullable; FK 금지 — 자연키 복합 `(tenant,model)` + 정책 삭제 시 재현성 파괴, 느슨한 text 스냅샷). `gateway_policies.is_default boolean NOT NULL DEFAULT false` + 부분 UNIQUE `uq_gateway_policies_default`(테넌트당 ≤1, `uq_scenario_versions_prod` 동형) |
+| API(create) | `POST /v1/runs`(`server.ts`): optional `model` 화이트리스트 + tenant tx 해소(명시→존재확인/`RESOURCE_NOT_FOUND`, 미지정→is_default→단일정책→0정책 NULL, 다정책→`model_required`). runs INSERT에 model |
+| API(policy) | `PUT /v1/gateway/policy`(`gateway.ts`): `is_default` 토글 — true 지정 시 같은 tx에서 기존 default 선해제(CAS 0행 throw 시 rollback으로 선해제 취소 = 실패 시 부작용 없음). **선해제도 demote 정책의 `version`을 bump**(적대 리뷰 — 표현 변경이 ETag에 반영돼야 stale If-Match가 412; 안 그러면 missed-412 낙관적 동시성 위반). `COALESCE`로 미지정 시 현재값 유지. GET 응답(`reads.ts`)에 `is_default` 노출. RBAC `gateway_policy.edit`(admin) 그대로 — 신규 권한 없음 |
+| 가드 | 명시 model 정책 부재 → `RESOURCE_NOT_FOUND`. 다정책+미지정+default없음 → `IR_SCHEMA_INVALID`(`model_required`). 정책 0건 → `runs.model=NULL`(utility-only 허용, LLM 노드 소비는 PR-B0; 현 라이브 드라이브는 `UtilityExecutor` 단독이라 dom 노드 자체가 `EXECUTOR_CAPABILITY_MISMATCH` loud). 조용한 false 없음 |
+| 잔존 | create-time capability 정적대조(`server.ts` TODO) · `runs.model`→`StagehandDomExecutorConfig.model` 소비는 PR-B0(dom executor drive 합류) · int 테스트(`api-runs-model.int.ts`) temp PG 실행은 CI/owner |

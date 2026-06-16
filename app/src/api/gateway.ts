@@ -21,12 +21,13 @@ interface PolicyBody {
   capabilities: Record<string, unknown>;
   budget: Record<string, unknown>;
   fallbackConfig: Record<string, unknown> | null;
+  isDefault: boolean | undefined;   // Gap2(B+C): 테넌트 기본 정책 토글. 미지정 → 현재값 유지(부분 변경 아님).
   maxContextTokens: number;
   maxInputTokens: number;
   maxOutputTokens: number;
 }
 
-const TOP_LEVEL_KEYS = new Set(["model", "capabilities", "budget", "fallback_config"]);
+const TOP_LEVEL_KEYS = new Set(["model", "capabilities", "budget", "fallback_config", "is_default"]);
 
 export function registerGatewayRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   // PUT /v1/gateway/policy — 정책 갱신(api-surface §6). If-Match + Idempotency-Key + admin RBAC.
@@ -75,16 +76,29 @@ async function applyPolicyUpdate(
   body: PolicyBody,
   expectedVersion: number,
 ): Promise<CommandResponse> {
-  const updated = await client.query<{ version: number }>(
+  // Gap2(B+C): is_default=true 지정 시 기존 기본 정책을 같은 tx에서 선해제(부분 UNIQUE uq_gateway_policies_default
+  //   위반 회피). CAS가 0 rows로 throw하면 이 tx 전체 rollback되어 선해제도 취소됨(실패 시 부작용 없음).
+  if (body.isDefault === true) {
+    // 선해제는 demote된 정책의 표현(is_default)을 바꾸므로 version(ETag)도 bump해야 한다 — 안 그러면 그 정책의
+    //   stale If-Match PUT이 412 없이 CAS를 통과(낙관적 동시성 위반·조용한 false). CAS가 0행으로 throw하면
+    //   이 tx 전체 rollback되어 선해제 bump도 취소됨(실패 시 부작용 없음).
+    await client.query(
+      `UPDATE gateway_policies SET is_default = false, version = version + 1, updated_at = now()
+        WHERE tenant_id = $1::uuid AND is_default = true AND model <> $2`,
+      [tenantId, body.model],
+    );
+  }
+  const updated = await client.query<{ version: number; is_default: boolean }>(
     `UPDATE gateway_policies
         SET capabilities = $4::jsonb,
             budget = $5::jsonb,
             fallback_config = $6::jsonb,
+            is_default = COALESCE($8::boolean, is_default),
             version = version + 1,
             updated_by = $7::uuid,
             updated_at = now()
       WHERE tenant_id = $1::uuid AND model = $2 AND version = $3
-    RETURNING version`,
+    RETURNING version, is_default`,
     [
       tenantId,
       body.model,
@@ -93,6 +107,7 @@ async function applyPolicyUpdate(
       JSON.stringify(body.budget),
       body.fallbackConfig !== null ? JSON.stringify(body.fallbackConfig) : null,
       updatedBy,
+      body.isDefault ?? null,   // 미지정 → COALESCE가 현재값 유지.
     ],
   );
   if (updated.rowCount === 0) {
@@ -107,6 +122,7 @@ async function applyPolicyUpdate(
       capabilities: body.capabilities,
       budget: body.budget,
       fallback: body.fallbackConfig,
+      is_default: updated.rows[0].is_default,
     },
   };
 }
@@ -144,7 +160,14 @@ function parsePolicyBody(raw: unknown): PolicyBody {
     }
     fallbackConfig = raw.fallback_config;
   }
-  return { model, capabilities, budget, fallbackConfig, maxContextTokens, maxInputTokens, maxOutputTokens };
+  let isDefault: boolean | undefined;
+  if (raw.is_default !== undefined) {
+    if (typeof raw.is_default !== "boolean") {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "is_default_boolean_required" });
+    }
+    isDefault = raw.is_default;
+  }
+  return { model, capabilities, budget, fallbackConfig, isDefault, maxContextTokens, maxInputTokens, maxOutputTokens };
 }
 
 function positiveInt(value: unknown, field: string): number {
