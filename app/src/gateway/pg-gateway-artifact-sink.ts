@@ -26,7 +26,8 @@ type ArtifactMeta = Pick<LLMRequest["metadata"], "tenantId" | "runId" | "stepId"
 /** 바이트 저장소 경계 — object_ref 반환. 프로덕션은 S3/오브젝트 스토리지, 본 구현은 파일시스템. */
 export interface ObjectStore {
   put(content: string): Promise<ObjectRef>;
-  get(objectRef: ObjectRef): Promise<string>;
+  /** object bytes 반환. **부재 시 null**(존재하지 않는 object — 호출부가 fail-closed 처리; impl-agnostic). */
+  get(objectRef: ObjectRef): Promise<string | null>;
   delete(objectRef: ObjectRef): Promise<void>;
 }
 
@@ -42,8 +43,14 @@ export class FsObjectStore implements ObjectStore {
     return pathToFileURL(path).href as ObjectRef;
   }
 
-  async get(objectRef: ObjectRef): Promise<string> {
-    return readFileSync(this.resolveWithinDir(objectRef), "utf8");
+  async get(objectRef: ObjectRef): Promise<string | null> {
+    const target = this.resolveWithinDir(objectRef); // 경로 이탈은 throw(전파 — 무결성/공격 오류, not-found 아님).
+    try {
+      return readFileSync(target, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null; // object bytes 부재 → null
+      throw err; // 그 외(권한 등)는 전파
+    }
   }
 
   async delete(objectRef: ObjectRef): Promise<void> {
