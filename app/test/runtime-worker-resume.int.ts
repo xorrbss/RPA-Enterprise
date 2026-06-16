@@ -4,6 +4,10 @@
  * This proves PgRuntimeWorker handles R17-R20 without silently dropping the
  * R17 restoreSession side effect: DB claim/lease is committed first, restore
  * runs outside that transaction, and completion is persisted through R18/R19/R20.
+ *
+ * resume-token 검증 실패 거부 흐름(security-contracts §5)도 핀고정: restorer 가 invalid_token 을 반환하면
+ * (위변조=IR_EXPRESSION_RUNTIME / 만료=CHALLENGE_UNRESOLVED) 둘 다 R20 → failed_system(run.resumed 0, 재로그인
+ * 우회 없음). restoreTransitionFor 가 invalid_token 을 명시 처리(catch-all 흡수 아님 — 조용한 unknown 금지).
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -36,6 +40,7 @@ const RUN_FAIL = "30000000-0000-0000-0000-000000000013";
 const RUN_RESUMING = "30000000-0000-0000-0000-000000000014";
 const RUN_CONFLICT = "30000000-0000-0000-0000-000000000015";
 const RUN_HOLDER = "30000000-0000-0000-0000-000000000016";
+const RUN_TOKEN_EXPIRED = "30000000-0000-0000-0000-000000000017";
 
 const SITE_RESTORED = "40000000-0000-0000-0000-000000000011";
 const IDENTITY_RESTORED = "40000000-0000-0000-0000-000000000012";
@@ -47,6 +52,8 @@ const SITE_RESUMING = "40000000-0000-0000-0000-000000000017";
 const IDENTITY_RESUMING = "40000000-0000-0000-0000-000000000018";
 const SITE_CONFLICT = "40000000-0000-0000-0000-000000000019";
 const IDENTITY_CONFLICT = "40000000-0000-0000-0000-00000000001a";
+const SITE_EXPIRED = "40000000-0000-0000-0000-00000000001b";
+const IDENTITY_EXPIRED = "40000000-0000-0000-0000-00000000001c";
 const RESUMING_LEASE = "50000000-0000-0000-0000-000000000014";
 const CONFLICT_LEASE = "50000000-0000-0000-0000-000000000015";
 
@@ -72,6 +79,8 @@ const planResolver: BrowserLeasePlanResolver = async (_client, input) => {
       return { siteProfileId: SITE_RESUMING, browserIdentityId: IDENTITY_RESUMING };
     case RUN_CONFLICT:
       return { siteProfileId: SITE_CONFLICT, browserIdentityId: IDENTITY_CONFLICT };
+    case RUN_TOKEN_EXPIRED:
+      return { siteProfileId: SITE_EXPIRED, browserIdentityId: IDENTITY_EXPIRED };
     default:
       return null;
   }
@@ -141,7 +150,8 @@ async function seedSitesAndWorkers(pool: ReturnType<typeof createPool>): Promise
        ($3,$2,'resume-bypass','https://bypass.example/*','green',false),
        ($4,$2,'resume-fail','https://fail.example/*','green',false),
        ($5,$2,'resume-resuming','https://resuming.example/*','green',false),
-       ($6,$2,'resume-conflict','https://conflict.example/*','green',false)`,
+       ($6,$2,'resume-conflict','https://conflict.example/*','green',false),
+       ($7,$2,'resume-expired','https://expired.example/*','green',false)`,
       [
         SITE_RESTORED,
         TENANT_A,
@@ -149,6 +159,7 @@ async function seedSitesAndWorkers(pool: ReturnType<typeof createPool>): Promise
         SITE_FAIL,
         SITE_RESUMING,
         SITE_CONFLICT,
+        SITE_EXPIRED,
       ],
     );
     await c.query(
@@ -158,7 +169,8 @@ async function seedSitesAndWorkers(pool: ReturnType<typeof createPool>): Promise
        ($4,$2,$5,'bypass'),
        ($6,$2,$7,'fail'),
        ($8,$2,$9,'resuming'),
-       ($10,$2,$11,'conflict')`,
+       ($10,$2,$11,'conflict'),
+       ($12,$2,$13,'expired')`,
       [
         IDENTITY_RESTORED,
         TENANT_A,
@@ -171,6 +183,8 @@ async function seedSitesAndWorkers(pool: ReturnType<typeof createPool>): Promise
         SITE_RESUMING,
         IDENTITY_CONFLICT,
         SITE_CONFLICT,
+        IDENTITY_EXPIRED,
+        SITE_EXPIRED,
       ],
     );
   });
@@ -262,7 +276,12 @@ async function main(): Promise<void> {
         };
       }
       if (input.runId === RUN_FAIL) {
+        // 위변조(탬퍼): HMAC 불일치 → invalid(IR_EXPRESSION_RUNTIME).
         return { kind: "invalid_token", code: "IR_EXPRESSION_RUNTIME", reason: "bad token hmac" };
+      }
+      if (input.runId === RUN_TOKEN_EXPIRED) {
+        // 만료: expiresAt 경과 → expired(CHALLENGE_UNRESOLVED). 탬퍼와 다른 code 지만 동일하게 거부(R20).
+        return { kind: "invalid_token", code: "CHALLENGE_UNRESOLVED", reason: "resume token expired" };
       }
       return { kind: "restored", pageStateRef: input.expectedPageStateRef };
     },
@@ -288,6 +307,7 @@ async function main(): Promise<void> {
     await seedRun(pool, RUN_FAIL, "resume_requested", "page-state://fail");
     await seedRun(pool, RUN_RESUMING, "resuming", "page-state://resuming", WORKER);
     await seedRun(pool, RUN_CONFLICT, "resume_requested", "page-state://conflict");
+    await seedRun(pool, RUN_TOKEN_EXPIRED, "resume_requested", "page-state://expired");
     await seedRun(pool, RUN_HOLDER, "claimed", "page-state://holder", OTHER_WORKER);
     await seedExistingLeases(pool);
     console.log("seeded runtime resume fixtures");
@@ -327,9 +347,21 @@ async function main(): Promise<void> {
       runId: RUN_FAIL as RunId,
       correlationId: CORRELATION as CorrelationId,
     });
-    check("run_resume invalid token maps through R20", failed.kind === "completed", JSON.stringify(failed));
-    check("run_resume invalid token -> failed_system", (await runDetails(pool, RUN_FAIL)).status === "failed_system");
-    check("run_resume invalid token emits run.failed_system", (await eventCount(pool, RUN_FAIL, "run.failed_system")) === 1);
+    check("run_resume invalid token(탬퍼) maps through R20", failed.kind === "completed", JSON.stringify(failed));
+    check("run_resume invalid token(탬퍼) -> failed_system", (await runDetails(pool, RUN_FAIL)).status === "failed_system");
+    check("run_resume invalid token(탬퍼) emits run.failed_system", (await eventCount(pool, RUN_FAIL, "run.failed_system")) === 1);
+
+    // 만료(CHALLENGE_UNRESOLVED) invalid_token 도 거부 → failed_system(탬퍼와 동일 R20, code 만 다름).
+    const expired = await worker.handle({
+      kind: "run_resume",
+      tenantId: TENANT_A as TenantId,
+      runId: RUN_TOKEN_EXPIRED as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check("run_resume expired token maps through R20", expired.kind === "completed", JSON.stringify(expired));
+    check("run_resume expired token -> failed_system", (await runDetails(pool, RUN_TOKEN_EXPIRED)).status === "failed_system");
+    check("run_resume expired token emits run.failed_system", (await eventCount(pool, RUN_TOKEN_EXPIRED, "run.failed_system")) === 1);
+    check("run_resume expired token does NOT resume(run.resumed 0)", (await eventCount(pool, RUN_TOKEN_EXPIRED, "run.resumed")) === 0);
 
     const resumingRetry = await worker.handle({
       kind: "run_resume",
@@ -378,7 +410,7 @@ async function main(): Promise<void> {
       check("run_resume without SessionRestorer throws", String(err).includes("SessionRestorer"), String(err));
     }
 
-    check("restorer called for non-deferred resume jobs", restoreCalls.length === 4, `calls=${restoreCalls.length}`);
+    check("restorer called for non-deferred resume jobs", restoreCalls.length === 5, `calls=${restoreCalls.length}`);
   } finally {
     await pool.end();
   }
