@@ -1,10 +1,14 @@
 // 상태값 → 배지 색. state-machine/api-surface 어휘 정합(취소됨=muted, 실패=red 등).
 const GREEN = new Set(["completed", "successful", "delivered", "resolved", "approved", "closed", "green", "not_required", "redacted"]);
-const RED = new Set(["failed_system", "failed_business", "abandoned", "dead_letter", "DEAD_LETTER", "dead_lettered", "red", "open", "blocked"]);
+// "open"은 도메인별 의미가 달라 RED 미포함(아래 BLUE) — circuit open만 kind로 RED 분리(RQ-026).
+const RED = new Set(["failed_system", "failed_business", "abandoned", "dead_letter", "DEAD_LETTER", "dead_lettered", "red", "blocked"]);
 const AMBER = new Set(["retry", "suspending", "suspended", "aborting", "resume_requested", "resuming", "half_open", "amber", "escalated", "expired", "pending", "failed"]);
 const BLUE = new Set(["running", "processing", "queued", "claimed", "completing", "in_progress", "assigned", "open"]);
 
-function tone(status: string): "green" | "red" | "amber" | "blue" | "muted" {
+// kind: 같은 enum 문자열이 도메인별로 다른 tone일 때 호출부가 분리(RQ-026). 현재는 circuit만.
+function tone(status: string, kind?: "circuit"): "green" | "red" | "amber" | "blue" | "muted" {
+  // circuit_status "open" = 서킷 차단(경보) → red. 그 외 "open"(HumanTask 열림)은 BLUE(중립-활성)로 떨어진다.
+  if (kind === "circuit" && status === "open") return "red";
   if (GREEN.has(status)) return "green";
   if (RED.has(status)) return "red";
   if (AMBER.has(status)) return "amber";
@@ -34,6 +38,6 @@ const STATUS_LABELS: Record<string, string> = {
   closed: "정상", half_open: "점검 중",
 };
 
-export function StatusBadge({ status }: { status: string }): JSX.Element {
-  return <span className={`badge ${tone(status)}`}>{STATUS_LABELS[status] ?? status}</span>;
+export function StatusBadge({ status, kind }: { status: string; kind?: "circuit" }): JSX.Element {
+  return <span className={`badge ${tone(status, kind)}`}>{STATUS_LABELS[status] ?? status}</span>;
 }
