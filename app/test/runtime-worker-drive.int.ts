@@ -16,7 +16,8 @@ import type { CorrelationId, RunId, TenantId } from "../../ts/security-middlewar
 import { compileScenario } from "../src/api/compile-pipeline";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { FakeCdpSession, TestFakeBrowserSessionProvider } from "../src/executor/browser-session-provider";
-import { PgRuntimeWorker, type BrowserLeasePlanResolver } from "../src/worker/runtime-worker";
+import { UtilityExecutor } from "../src/executor/utility-executor";
+import { PgRuntimeWorker, type BrowserLeasePlanResolver, type RunExecutorContext } from "../src/worker/runtime-worker";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_runtime_drive_int";
@@ -109,9 +110,10 @@ async function main(): Promise<void> {
          VALUES ($1,$2,'ok2','https://ok2.example/*','green',true,'{"flags":{}}'::jsonb)`,
         [SITE2, TENANT],
       );
+      // IDENTITY(RUN_DRIVE 용) version=7(비기본) — executorFactory seam 이 browser_identity.version JOIN 결과를 받는지 핀고정.
       await c.query(
-        `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label)
-         VALUES ($1,$2,$3,'ok'), ($4,$2,$5,'ok2')`,
+        `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version)
+         VALUES ($1,$2,$3,'ok',7), ($4,$2,$5,'ok2',1)`,
         [IDENTITY, TENANT, SITE, IDENTITY2, SITE2],
       );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'drive')`, [SCEN, TENANT]);
@@ -137,11 +139,17 @@ async function main(): Promise<void> {
         return driveSession;
       },
     });
+    // executorFactory seam(P5b): run 단위로 (provider, run-scoped 컨텍스트)를 받는지 캡처. UtilityExecutor 반환 → 구동은 기존대로.
+    let capturedRunCtx: RunExecutorContext | null = null;
     const driving = new PgRuntimeWorker(pool, {
       workerId: WORKER,
       browserLeasePlanResolver: planResolver,
       browserSessionProvider: sessionProvider,
       allowTestBrowserSessionProvider: true,
+      executorFactory: (provider, run) => {
+        capturedRunCtx = run;
+        return new UtilityExecutor(provider);
+      },
     });
     const driven = await driving.handle({
       kind: "run_claim",
@@ -152,6 +160,10 @@ async function main(): Promise<void> {
     check("run_claim+drive → job completed", driven.kind === "completed", JSON.stringify(driven));
     check("DB runs.status = completed (driven to terminal)", (await runStatus(pool, RUN_DRIVE)) === "completed", String(await runStatus(pool, RUN_DRIVE)));
     check("세션 release(close) 호출됨", driveSession !== null && (driveSession as FakeCdpSession).closeCalls === 1, `closeCalls=${driveSession === null ? "no-session" : (driveSession as FakeCdpSession).closeCalls}`);
+
+    // executorFactory seam: run-scoped 컨텍스트 전달 핀고정(P5b) — scenarioVersionId + browser_identity.version JOIN(=7).
+    check("executorFactory 가 run-scoped 컨텍스트 수신(scenarioVersionId=SVER)", (capturedRunCtx as RunExecutorContext | null)?.scenarioVersionId === SVER, JSON.stringify(capturedRunCtx));
+    check("executorFactory 가 browser_identity.version JOIN 결과 수신(=7, 비기본)", (capturedRunCtx as RunExecutorContext | null)?.browserIdentityVersion === 7, JSON.stringify(capturedRunCtx));
 
     // 2) provider 미주입 → claimed 까지만(회귀: 기존 동작 보존, 구동 안 함).
     const claimOnly = new PgRuntimeWorker(pool, { workerId: WORKER, browserLeasePlanResolver: planResolver });
