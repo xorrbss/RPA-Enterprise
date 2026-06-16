@@ -228,6 +228,8 @@ CREATE TABLE runs (
                                           'aborting','cancelled','failed_business','failed_system')),  -- RunState 13개
   attempts            int         NOT NULL DEFAULT 0,        -- R3a 재큐 시 attempts+1
   resume_token        jsonb,                                 -- ResumeToken 봉투(runId/resumeNodeId/loopContext/pageStateRef/kid/hmac)
+  bookmark            jsonb,                                 -- suspend bookmark(startBookmark side-effect 영속, RQ-016). resume_token 과 분리:
+                                                             --   bookmark = 재개 지점 마커(stepId/attempt/reason), resume_token = 서명 봉투(kid/hmac, R11 후속).
   params              jsonb,                                 -- 실행 파라미터(params_schema로 검증)
   as_of               timestamptz,                           -- ir-expression §5: Run 생성 시 1회 고정(params.as_of)
   correlation_id      uuid        NOT NULL,                  -- 이벤트 envelope·trace span 공통 상관키
