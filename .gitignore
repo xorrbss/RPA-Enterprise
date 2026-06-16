@@ -25,3 +25,9 @@ app/exec.log
 
 # 캡처 PoC 산출물 — 라이브 세션 쿠키/시크릿 포함, 절대 커밋 금지.
 app/poc/d3-stagehand/capture-reviews-output.json
+
+# 로컬 env 파일 — 시크릿/설정. 절대 커밋 금지(어느 디렉터리든). 템플릿은 .env.example(커밋됨) 사용.
+.env
+.env.local
+.env.*.local
+!.env.example
