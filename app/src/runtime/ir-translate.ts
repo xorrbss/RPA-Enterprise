@@ -47,6 +47,10 @@ export function compiledScenarioFrom(
       flow = { kind: "terminal", terminal: raw.terminal };
     } else if (typeof raw.next === "string") {
       flow = { kind: "next", target: raw.next };
+    } else if (isRec(raw.next)) {
+      // next 가 객체 → 복귀형 예약 핸들러 호출(reservedHandlerCall {handler,input,return_node}, reserved-handlers/ir.schema target).
+      // @end_no_data 는 string const 이라 위 string 분기에 걸린다(별도 — 본 분기는 객체 핸들러 호출 전용).
+      flow = reservedHandlerFlow(id, raw.next);
     } else if (Array.isArray(raw.on)) {
       const ca = isRec(caNodes[id]) ? (caNodes[id] as Record<string, unknown>) : {};
       const onAst = Array.isArray(ca.on) ? ca.on : [];
@@ -155,8 +159,35 @@ function mapAction(
   );
 }
 
+// reservedHandlerCall({handler,input,return_node}, ir.schema target) → NodeFlow.reserved_handler. 구조 검증만(input.kind 등
+// 의미 검증은 인터프리터 dispatch 소관). 미정/오류는 조용히 흘리지 않고 IR_SCHEMA_INVALID.
+function reservedHandlerFlow(nodeId: string, raw: Record<string, unknown>): NodeFlow {
+  const handler = raw.handler;
+  if (handler !== "@challenge" && handler !== "@human_task") {
+    throw new InterpreterError(
+      "IR_SCHEMA_INVALID",
+      `compiledScenarioFrom: node '${nodeId}' reservedHandlerCall.handler '${String(handler)}' 무효(@challenge|@human_task)`,
+    );
+  }
+  if (!isRec(raw.input)) {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' reservedHandlerCall.input 객체 필요`);
+  }
+  if (typeof raw.return_node !== "string" || raw.return_node.length === 0) {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' reservedHandlerCall.return_node 필요(노드 id)`);
+  }
+  return { kind: "reserved_handler", handler, input: raw.input, returnNode: raw.return_node };
+}
+
 // compiled_ast on[] branch(when=AST, target, priority) → CompiledOnBranch.
 function toBranch(nodeId: string, b: unknown): CompiledOnBranch<string> {
+  // on[] 분기 target 이 reservedHandlerCall(@challenge/@human_task) 객체면 미지원(P3 은 next-target suspend 만) — 원인을
+  // 가린 일반 "형식 오류" 대신 명시 표면화(문제 은폐 금지). 지원 시 on-branch dispatch + selectOnBranch 비-노드 target 확장 필요.
+  if (isRec(b) && isRec(b.target) && typeof (b.target as { handler?: unknown }).handler === "string") {
+    throw new InterpreterError(
+      "IR_SCHEMA_INVALID",
+      `compiledScenarioFrom: node '${nodeId}' on[] 분기 target 이 reservedHandlerCall(@challenge/@human_task) — 미지원(next-target 사용)`,
+    );
+  }
   if (!isRec(b) || typeof b.target !== "string" || typeof b.priority !== "number" || b.when === undefined) {
     throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' compiled on[] branch 형식 오류`);
   }

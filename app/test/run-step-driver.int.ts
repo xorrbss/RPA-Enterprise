@@ -27,6 +27,9 @@ const RUN = "71000000-0000-0000-0000-0000000000d1";
 const RUN_FAIL_BIZ = "71000000-0000-0000-0000-0000000000d3";
 const RUN_FAIL_SYS = "71000000-0000-0000-0000-0000000000d4";
 const RUN_SUSPEND = "71000000-0000-0000-0000-0000000000d5";
+const RUN_HUMAN_TASK = "71000000-0000-0000-0000-0000000000d6";
+const SCEN2 = "70000000-0000-0000-0000-0000000000e1"; // @human_task(R5) 시나리오(별도 IR)
+const SVER2 = "70000000-0000-0000-0000-0000000000e2";
 const WORKER = "9a000000-0000-0000-0000-0000000000a1";
 
 let failures = 0;
@@ -138,6 +141,16 @@ const scenarioIr = {
   },
 };
 
+// @human_task(R5, 트리거 ii) 시나리오: what-less task 노드 → next=@human_task → suspend. on_timeout=escalate(비기본값 → 포트 경유 실증).
+const humanTaskIr = {
+  meta: { name: "human-task-test", version: 1 },
+  start: "task",
+  nodes: {
+    task: { what: [], next: { handler: "@human_task", input: { kind: "approval", assignee_role: "approver", on_timeout: "escalate" }, return_node: "after" } },
+    after: { terminal: "success" },
+  },
+};
+
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
   try {
@@ -156,6 +169,9 @@ async function main(): Promise<void> {
     const compiled = compileScenario(scenarioIr, {});
     check("scenario compiles (ajv→IREL→V1–V11)", compiled.ok, compiled.ok ? "" : JSON.stringify(compiled.details));
     if (!compiled.ok) throw new Error("scenario did not compile");
+    const compiledHt = compileScenario(humanTaskIr, {});
+    check("@human_task scenario compiles (reservedHandlerCall next-target)", compiledHt.ok, compiledHt.ok ? "" : JSON.stringify(compiledHt.details));
+    if (!compiledHt.ok) throw new Error("@human_task scenario did not compile");
 
     await withTenantTx(pool, TENANT, async (c) => {
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'driver')`, [SCEN, TENANT]);
@@ -163,6 +179,13 @@ async function main(): Promise<void> {
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
          VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
         [SVER, TENANT, SCEN, JSON.stringify(compiled.ir), compiled.compiledAst],
+      );
+      // @human_task(R5) 시나리오는 별도 scenario_version(SVER2, 별도 SCEN2).
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'human-task')`, [SCEN2, TENANT]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+         VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+        [SVER2, TENANT, SCEN2, JSON.stringify(compiledHt.ir), compiledHt.compiledAst],
       );
       // R1을 우회해 claimed 상태로 직접 시드(드라이버는 R2부터). correlation_id=run_id.
       for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_SUSPEND]) {
@@ -172,6 +195,11 @@ async function main(): Promise<void> {
           [rid, TENANT, SVER, WORKER],
         );
       }
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
+         VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
+        [RUN_HUMAN_TASK, TENANT, SVER2, WORKER],
+      );
     });
 
     const run: ClaimedRun = {
@@ -310,6 +338,59 @@ async function main(): Promise<void> {
       reDriveThrew = true;
     }
     check("이미 종료된 run 재구동 → CAS 충돌 표면화(throw)", reDriveThrew);
+
+    // @human_task suspend 구동(트리거 ii, R5): what-less @human_task 노드 → R5(human_task_required)+포트→resume-token+R11→suspended.
+    const htRun = await driveClaimedRun(
+      {
+        runId: RUN_HUMAN_TASK,
+        tenantId: TENANT,
+        scenarioVersionId: SVER2,
+        correlationId: RUN_HUMAN_TASK,
+        leaseId: "lease-ht",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: {},
+      },
+      { pool, executor: fakeExecutor, resolver: fakeResolver, workerId: WORKER, suspensionPort, resumeTokenCodec },
+    );
+    check("driver(@human_task) → state=suspended", htRun.state === "suspended", htRun.state);
+    check(
+      "@human_task outcome: terminal=suspend·kind=human_task·resumeNodeId=after(return_node)",
+      htRun.outcome.terminal === "suspend" && htRun.outcome.suspend?.kind === "human_task" && htRun.outcome.suspend.resumeNodeId === "after",
+      JSON.stringify(htRun.outcome.suspend),
+    );
+    const htdb = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ status: string; resume_token: { resumeNodeId?: string } | null; bookmark: { reason?: string } | null }>(
+        `SELECT status, resume_token, bookmark FROM runs WHERE id=$1::uuid`,
+        [RUN_HUMAN_TASK],
+      );
+      return r.rows[0] ?? null;
+    });
+    check("@human_task DB runs.status = suspended", htdb?.status === "suspended", String(htdb?.status));
+    check("@human_task resume_token.resumeNodeId = after(return_node)", htdb?.resume_token?.resumeNodeId === "after", JSON.stringify(htdb?.resume_token));
+    check("@human_task bookmark reason = human_task", htdb?.bookmark?.reason === "human_task", JSON.stringify(htdb?.bookmark));
+    const htTask = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ kind: string; state: string; assignee_role: string | null; on_timeout: string }>(
+        `SELECT kind, state, assignee_role, on_timeout FROM human_tasks WHERE run_id=$1::uuid`,
+        [RUN_HUMAN_TASK],
+      );
+      return r.rows;
+    });
+    check(
+      "@human_task human_tasks 1건 kind=approval·assignee_role=approver·on_timeout=escalate·state=open",
+      htTask.length === 1 &&
+        htTask[0]?.kind === "approval" &&
+        htTask[0]?.assignee_role === "approver" &&
+        htTask[0]?.on_timeout === "escalate" &&
+        htTask[0]?.state === "open",
+      JSON.stringify(htTask),
+    );
+    const htEvents = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ event_type: string }>(`SELECT event_type FROM events_outbox WHERE correlation_id=$1::uuid ORDER BY created_at`, [RUN_HUMAN_TASK]);
+      return r.rows.map((x) => x.event_type);
+    });
+    check("@human_task outbox: human_task.created + run.suspended", htEvents.includes("human_task.created") && htEvents.includes("run.suspended"), htEvents.join(","));
   } finally {
     await pool.end();
   }
@@ -318,7 +399,7 @@ async function main(): Promise<void> {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: run 실행 드라이버 — claimed→running→completing→completed (인터프리터↔DB 전이, D3 가동 1단계 증분2)");
+  console.log("\nPASS: run 실행 드라이버 — claimed→running→completing→completed + suspend(challenge R4 / @human_task R5) (인터프리터↔DB 전이, D3 가동 1단계)");
   process.exit(0);
 }
 
