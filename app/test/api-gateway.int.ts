@@ -81,7 +81,7 @@ async function main(): Promise<void> {
 
     await seedPolicy(pool, TENANT_A, "codex");
 
-    const enqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
+    const enqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),

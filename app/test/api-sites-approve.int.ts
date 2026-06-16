@@ -90,7 +90,7 @@ async function main(): Promise<void> {
     await seedSite(pool, TENANT_B, SITE_B);
     console.log("seeded red sites (tenant A + B)");
 
-    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
+    const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),

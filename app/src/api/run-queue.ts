@@ -17,11 +17,23 @@ export interface RunEnqueueInput {
   correlationId: string;
 }
 
+/** sink-DLQ replay enqueue 입력(release-decisions D8-A3). 잡 페이로드는 closed: schema_ref/natural_key는
+ *  싣지 않는다(sink_idempotency_key는 normalized_records 행에서 산출 — FIX#7, sink-delivery.ts). */
+export interface SinkDeliverEnqueueInput {
+  tenantId: string;
+  normalizedRecordId: string;
+  sinkConfigId: string;
+  correlationId: string;
+}
+
 export interface RunEnqueuer {
   /** run create 직후 run_claim 잡을 호출측 트랜잭션(client)으로 인큐(동일 tx 보장). */
   enqueueRunClaim(client: PoolClient, input: RunEnqueueInput): Promise<void>;
   /** abort state-entry 직후 run_abort 잡을 같은 트랜잭션으로 인큐한다. */
   enqueueRunAbort(client: PoolClient, input: RunEnqueueInput): Promise<void>;
+  /** sink-DLQ replay: 새 sink_deliver attempt를 호출측 트랜잭션으로 인큐(D8-A3 — 상태전이 아님,
+   *  worker가 attempt_no=MAX+1·동일 멱등키 산출). 실 재전달은 worker의 SinkDeliveryPort(egress) 의존. */
+  enqueueSinkDeliver(client: PoolClient, input: SinkDeliverEnqueueInput): Promise<void>;
 }
 
 /** 운영: graphile_worker.add_job을 호출측 트랜잭션에서 실행(상태변경+인큐 원자화). */
@@ -45,6 +57,19 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer {
       tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
+    };
+    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
+      RUNTIME_JOB_TASK,
+      JSON.stringify(job),
+    ]);
+  }
+
+  async enqueueSinkDeliver(client: PoolClient, input: SinkDeliverEnqueueInput): Promise<void> {
+    const job: RuntimeWorkerJob = {
+      kind: "sink_deliver",
+      tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
+      correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
+      sinkDelivery: { sinkConfigId: input.sinkConfigId, normalizedRecordId: input.normalizedRecordId },
     };
     await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
       RUNTIME_JOB_TASK,

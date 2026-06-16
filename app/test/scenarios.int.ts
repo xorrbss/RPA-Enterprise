@@ -131,7 +131,7 @@ async function main(): Promise<void> {
     }
     console.log("migrations applied (concurrency → core)");
 
-    const enqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {} };
+    const enqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),

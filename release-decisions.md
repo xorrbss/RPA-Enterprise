@@ -277,6 +277,14 @@ D8-A3. POST /v1/dlq/{id}/replay — sink-DLQ routing (resolves D6-3)
    re-delivery stays behind the port (test_fake local; real egress = D6-2/B3 external).
    Implementation note: add `replaySinkDeadLetter` to `OperationId`; add an
    `enqueueSinkDeliver` enqueuer method.
+   Built (RQ-011 route): control-plane routing + enqueue implemented — `POST /v1/dlq/{id}/replay?kind=sink`
+   resolves a `sink_deliveries.status='dead_letter'` row (tenant-scoped; RLS-hidden/absent/non-dead_letter ⇒ 404),
+   authorizes `sink_dlq.replay` in-handler (key-cost-free deny), and enqueues a new `sink_deliver` job in the
+   idempotent command tx (`replaySinkDeadLetter` idempotency partition), returning 202 "enqueued". The 202 is honest
+   (accepted+enqueued, NOT a delivery claim). ACTUAL re-delivery stays BLOCK on the external egress (D6-2/B3): the
+   worker surfaces `SINK_DELIVERY_FAILED` when no real port is bound. Verified: app/test/api-sink-replay.int.ts (19
+   checks: operator 202+enqueue identity, viewer 403 key-unused, cross-tenant 404, absent/delivered 404, invalid kind
+   422, missing Idempotency-Key 422, idempotent-replay enqueues once, kind=workitem regression).
 
 D8-A4. Checkout-expiry timer formula (resolves D6-4)
    Decision: the W9/W11 pause-window model is REWRITE-AT-RESUME. W1/W8 stamp
