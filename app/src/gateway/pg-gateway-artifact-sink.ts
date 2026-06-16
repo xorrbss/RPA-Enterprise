@@ -10,7 +10,7 @@
  * metadata만 만들고 redaction/retention job을 대체하지 않는다.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -26,6 +26,7 @@ type ArtifactMeta = Pick<LLMRequest["metadata"], "tenantId" | "runId" | "stepId"
 /** 바이트 저장소 경계 — object_ref 반환. 프로덕션은 S3/오브젝트 스토리지, 본 구현은 파일시스템. */
 export interface ObjectStore {
   put(content: string): Promise<ObjectRef>;
+  get(objectRef: ObjectRef): Promise<string>;
   delete(objectRef: ObjectRef): Promise<void>;
 }
 
@@ -41,13 +42,22 @@ export class FsObjectStore implements ObjectStore {
     return pathToFileURL(path).href as ObjectRef;
   }
 
+  async get(objectRef: ObjectRef): Promise<string> {
+    return readFileSync(this.resolveWithinDir(objectRef), "utf8");
+  }
+
   async delete(objectRef: ObjectRef): Promise<void> {
+    rmSync(this.resolveWithinDir(objectRef), { force: true });
+  }
+
+  /** object_ref(file://) → 구성된 디렉터리 내부 경로로 해소(경로 이탈 차단). */
+  private resolveWithinDir(objectRef: ObjectRef): string {
     const root = resolve(this.dir);
     const target = resolve(fileURLToPath(objectRef));
     if (target !== root && !target.startsWith(`${root}${sep}`)) {
       throw new PgGatewayArtifactSinkError("object_ref is outside the configured artifact directory");
     }
-    rmSync(target, { force: true });
+    return target;
   }
 }
 

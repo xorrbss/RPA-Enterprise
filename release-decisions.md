@@ -242,6 +242,19 @@ D8-A1. GET /v1/artifacts/{id} — pending-artifact disclosure
    until object I/O exists. Alternative if 409 is later required: add a SECURITY DEFINER
    metadata read path (not a second permissive RLS policy, which would broaden all
    artifact SELECTs) + RBAC-before-disclosure ordering.
+   Built (RQ-010 route): GET /v1/artifacts/{id} is implemented in-repo (app/src/api/reads.ts) —
+   artifact.read RBAC + the `artifacts_visible_isolation` RLS AS the redaction gate: only
+   redacted/not_required·non-deleted·non-quarantined rows are SELECTable by the app role, so
+   pending/failed/quarantined/deleted/cross-tenant all resolve to RESOURCE_NOT_FOUND(404) and
+   ARTIFACT_NOT_REDACTED(409) stays unexposed in v1 (no BYPASSRLS). The 200 body is read via an
+   injected narrow `ArtifactObjectReader` (`ObjectStore.get` added to FsObjectStore); the route is
+   registered ONLY when `ApiServerDeps.artifactStore` is wired. In-repo/CI uses FsObjectStore; the
+   REAL distributed object-store binding (S3, shared across API/worker processes) stays
+   deploy-time/external (B3) — same posture as the sink real egress (D6-2) and outbox real-bus
+   bridge. api-surface §5 is now amended with the v1 404 note. Operators reach the artifact-read
+   capability (original RQ-010 finding resolved). Verified: app/test/api-artifacts.int.ts (12
+   checks: redacted/not_required 200+body, viewer artifact.read 200, pending/failed/quarantined/
+   deleted/cross-tenant/absent/invalid-uuid 404).
 
 D8-A2. PUT /v1/gateway/policy — version concurrency + PUT-time coherence
    Decision: PUT validates the body shape, requires `If-Match`(current version) and

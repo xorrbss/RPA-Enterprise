@@ -580,3 +580,19 @@
 | 실행기 | `stagehand-dom-executor.ts` extract가 `output.rowCount = parsedJson.rows.length`(rows 배열 있을 때) 산출. rows 부재 → 미산출(미투영) |
 | 투영 | `ir-interpreter.ts` `projectNodeOutput(StepResult)` — extract 액션만 row_count(`output.rowCount`)·extracted_ref(`artifacts[0]`) 추가. 비-extract/rows 부재 → 미투영 → 참조 시 IREL_RUNTIME_MISSING(loud, ir-expression §2) |
 | 잔존(축소) | `tier`(fallback 미구현)·`cursor.*`/`loop.until`(loop 미구현) — **계약 미정이 아니라 feature 의존**(fallback/loop 구현 시). 실패-연속 status도 후속 |
+
+## v2.17 패치 로그 (RQ-010 — GET /v1/artifacts/{id} 라우트 빌드: D8-A1 RLS redaction-gate)
+
+> RQ-010(GET /v1/artifacts/{id} 미구현 → 전 역할 artifact 조회 capability 도달 불가)의 **라우트를 in-repo 빌드**한다.
+> 계약 결정은 이미 D8-A1(pending⇒404, existence non-disclosure; 409 미노출). 빌드 시 **api-surface §5를 v1 404 동작으로
+> amend**(D8-A1 "when built" 약속 이행). 본문은 injected `ArtifactObjectReader`(ObjectStore.get)로 read — in-repo/CI는
+> `FsObjectStore`, 실 **분산 object-store(S3) 바인딩은 deploy-time(B3)**. RQ-011(sink egress)·outbox real-bus와 동일 posture.
+> **운영자 artifact-read capability 도달 = 원 finding 해소.** 실 분산 바인딩만 BLOCK 잔존.
+> **재검증: `app/test/api-artifacts.int.ts` 12(redacted/not_required 200+본문·viewer artifact.read 200·pending/failed/quarantined/deleted/cross-tenant/absent/invalid 404) + app typecheck·contract-lint·full test:int(temp PG) green.**
+
+| 항목 | 조치 |
+|---|---|
+| 라우트 | `app/src/api/reads.ts` GET `/v1/artifacts/:id`(rbacAction `artifact.read`). RLS(`artifacts_visible_isolation`)가 redaction 게이트 — redacted/not_required·미삭제·비격리만 가시 → pending/failed/quarantined/deleted/cross-tenant ⇒ `RESOURCE_NOT_FOUND`(404, BYPASSRLS 미사용). 200 본문 = object store read |
+| read 경계 | `ObjectStore`에 `get(objectRef)` 추가(FsObjectStore=readFileSync, 경로 이탈 가드). api는 narrow `ArtifactObjectReader`(server.ts)에만 의존(단방향 의존) — `ApiServerDeps.artifactStore?` 주입; 미주입 시 라우트 미등록 |
+| 계약 정합 | api-surface §5에 v1 404 노트 추가(409는 SECURITY DEFINER 메타-read 필요 → 연기). release-decisions D8-A1에 Built 노트 |
+| 잔존 BLOCK | 실 **분산 object-store 바인딩(S3, 프로세스 간 공유, B3)** = deploy-time/external. in-repo/CI는 FsObjectStore로 완결 |

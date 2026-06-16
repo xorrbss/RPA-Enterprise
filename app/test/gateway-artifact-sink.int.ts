@@ -56,11 +56,17 @@ function filesIn(dir: string): string[] {
 
 class CountingObjectStore implements ObjectStore {
   puts = 0;
+  gets = 0;
   deletes = 0;
 
   async put(_content: string): Promise<ObjectRef> {
     this.puts += 1;
     return pathToFileURL(join(tmpdir(), "unused-gateway-artifact.bin")).href as ObjectRef;
+  }
+
+  async get(_objectRef: ObjectRef): Promise<string> {
+    this.gets += 1;
+    return ""; // 본 테스트는 read 경로 미사용(put/delete만 검증).
   }
 
   async delete(_objectRef: ObjectRef): Promise<void> {

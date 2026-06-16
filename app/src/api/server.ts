@@ -21,6 +21,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
 
 import { isApiErrorResponse, toApiError } from "../../../codegen/error-middleware";
+import type { ObjectRef } from "../../../ts/core-types";
 import type { ControlPlaneIdempotencyStore } from "../../../ts/control-plane-contract";
 import { ERROR_CATALOG, type ApiError } from "../../../ts/error-catalog";
 import type {
@@ -62,6 +63,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // 엄격 ISO-8601(date-time). Date.parse는 느슨하고 calendar-invalid 값을 보정하므로 직접 검증한다(api-surface §0.6).
 const ISO_8601_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 
+/**
+ * artifact 본문 read 경계(narrow — api는 byte-store 구현에 의존하지 않는다, 단방향 의존).
+ * `FsObjectStore`(로컬/CI) 등 ObjectStore 구현이 구조적으로 충족. 실 분산 object-store(S3) 바인딩은
+ * deploy-time(B3, release-decisions D8-A1) — 미지정 시 GET /v1/artifacts 라우트는 미등록(조회 capability 미노출).
+ */
+export interface ArtifactObjectReader {
+  get(objectRef: ObjectRef): Promise<string>;
+}
+
 export interface ApiServerDeps {
   pool: Pool;
   auth: AuthenticationBoundary;
@@ -71,6 +81,8 @@ export interface ApiServerDeps {
   signedCommandRegistry: SignedCommandRegistry;
   /** B2/B3 보안 인프라(선택). 미지정 시 베이스라인 헤더만 적용하고 CORS는 비활성(same-origin). */
   security?: SecurityConfig;
+  /** artifact 본문 read 경계(선택). 미지정 시 GET /v1/artifacts/{id} 미등록(D8-A1 — 실 object-store 바인딩 deploy-time). */
+  artifactStore?: ArtifactObjectReader;
 }
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;

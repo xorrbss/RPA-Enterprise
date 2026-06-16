@@ -128,6 +128,7 @@
 
 - 조회 허용 조건(security-contracts §8, impl-bundle §C access middleware): `redaction_status ∈ {redacted, not_required}` **AND** 호출자 역할이 해당 tenant/run의 artifact 조회 권한 보유.
 - 미들웨어 1지점에서 **순서대로**: ① redaction 게이트 — pending/failed면 `ARTIFACT_NOT_REDACTED`(409, "준비 중입니다"). ② RBAC 게이트 — 권한 부족이면 `SECRET_ACCESS_DENIED`(403).
+- **v1 구현 노트(release-decisions D8-A1 — RQ-010 라우트 빌드됨)**: 위 ① redaction 게이트는 v1에서 `artifacts_visible_isolation` RLS로 강제한다 — 앱 역할은 `redaction_status ∈ {redacted, not_required}`·미삭제(`deleted_at IS NULL`)·비격리(`quarantine=false`) 행만 SELECT 가능. 따라서 pending/failed/quarantined/deleted/cross-tenant는 모두 `RESOURCE_NOT_FOUND`(404, 존재 비노출)로 떨어지며 **`ARTIFACT_NOT_REDACTED`(409)는 v1에서 노출하지 않는다**(409를 honor하려면 BYPASSRLS 없는 SECURITY DEFINER 메타-read 필요 — D8-A1 대안, 연기). 200 본문은 redacted object를 object store에서 read해 반환한다. 실 **분산 object-store 바인딩(S3 등, 프로세스 간 공유)은 deploy-time(B3)** 이며 in-repo/단일 프로세스는 `FsObjectStore`로 동작한다(`ApiServerDeps.artifactStore` 미주입 시 라우트 미등록).
 - `sensitive=true` 입력·redaction 대상은 평문 노출 금지(security-contracts §4/§9). artifact 본문은 항상 마스킹된 `RedactedString`/redacted object만.
 - 보존/정리(retention_until·sweeper)는 데이터평면 job(impl-bundle §B `artifact_retention_sweeper`/`artifact_redaction_job`)이며 본 API는 조회만 노출(생성/삭제 API는 v1 미노출).
 

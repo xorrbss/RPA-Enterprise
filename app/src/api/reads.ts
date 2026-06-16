@@ -9,6 +9,7 @@
  */
 import type { FastifyInstance } from "fastify";
 
+import type { ObjectRef } from "../../../ts/core-types";
 import type { HumanTaskKind, HumanTaskState, RunState, WorkitemState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
@@ -94,6 +95,15 @@ interface SiteRow {
   approved: boolean;
   circuit_state: string;
   created_at: Date;
+}
+
+interface ArtifactRow {
+  id: string;
+  type: string | null;
+  sha256: string | null;
+  object_ref: string;
+  redaction_status: string;
+  retention_until: Date | null;
 }
 
 export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
@@ -445,6 +455,47 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
       reply.code(200).send(mapSite(row));
     },
   );
+
+  // GET /v1/artifacts/{id} — 산출물 본문 조회(api-surface §5; release-decisions D8-A1). artifact.read RBAC + RLS 2단 게이트.
+  // RLS(artifacts_visible_isolation)가 redacted/not_required·미삭제·비격리만 노출 → pending/failed/quarantined/deleted/
+  // cross-tenant는 미존재로 떨어져 404(D8-A1: 존재 비노출; 409 ARTIFACT_NOT_REDACTED는 v1 미노출, BYPASSRLS 미사용).
+  // 본문은 object store(redacted at rest)에서 read. artifactStore 미주입 시 미등록 — 실 분산 store 바인딩은 deploy-time(B3).
+  if (deps.artifactStore !== undefined) {
+    const artifactStore = deps.artifactStore;
+    app.get<{ Params: { id: string } }>(
+      "/v1/artifacts/:id",
+      { config: { rbacAction: "artifact.read" } },
+      async (request, reply) => {
+        const principal = requirePrincipal(request);
+        const id = request.params.id;
+        if (!UUID_RE.test(id)) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+          const result = await c.query<ArtifactRow>(
+            `SELECT id, type, sha256, object_ref, redaction_status, retention_until
+               FROM artifacts WHERE id = $1::uuid`,
+            [id],
+          );
+          return result.rows[0] ?? null;
+        });
+        if (row === null) {
+          // RLS가 비가시(pending/failed/quarantined/deleted/cross-tenant) 행을 숨김 → 404(존재 비노출, D8-A1).
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        // 본문은 redacted/not_required object(at rest 마스킹) — 평문 노출 없음(security-contracts §4/§9).
+        const content = await artifactStore.get(row.object_ref as ObjectRef);
+        reply.code(200).send({
+          artifact_id: row.id,
+          type: row.type,
+          sha256: row.sha256,
+          redaction_status: row.redaction_status,
+          retention_until: row.retention_until !== null ? row.retention_until.toISOString() : null,
+          content,
+        });
+      },
+    );
+  }
 }
 
 /** site risk 필터(green|amber|red). 무효→422. */
