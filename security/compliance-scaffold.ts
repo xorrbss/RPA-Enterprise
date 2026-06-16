@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { matchesInstructionOverride } from "./prompt-injection-patterns";
 import type {
   ArtifactRef,
   PlainSecret,
@@ -380,8 +381,8 @@ export interface DeterministicPromptInspectionInput {
   networkPolicy?: NetworkPolicyCheck["policy"];
 }
 
-const INSTRUCTION_OVERRIDE_RE =
-  /\b(ignore (all )?(previous|prior|above)|system prompt|developer message|you are now|너는 이제|이전 지시|무시하라)\b/i;
+// §3(b) instruction-override 는 single SSoT(./prompt-injection-patterns, RQ-031)로 통합 — gateway detector와 동일 사전.
+// §3(c) credential-exfil 은 detector별 전략이 의도적으로 다르므로(키워드 기반) 여기 유지(SSoT 미통합 사유는 공유 모듈 주석).
 const CREDENTIAL_EXFIL_RE =
   /\b(password|passwd|secret|token|api[-_ ]?key|otp|authorization|credential|자격증명|비밀번호|토큰|시크릿)\b/i;
 const URL_RE = /https?:\/\/[^\s"'<>]+/gi;
@@ -393,10 +394,10 @@ export function inspectPromptInjection(input: DeterministicPromptInspectionInput
   for (const run of runs) {
     const text = run.text.toString();
     const hidden = run.visibility !== "visible";
-    if (hidden && (INSTRUCTION_OVERRIDE_RE.test(text) || CREDENTIAL_EXFIL_RE.test(text))) {
+    if (hidden && (matchesInstructionOverride(text) || CREDENTIAL_EXFIL_RE.test(text))) {
       evidence.push(makeEvidence("hidden_instruction", text, run.source));
     }
-    if (INSTRUCTION_OVERRIDE_RE.test(text)) {
+    if (matchesInstructionOverride(text)) {
       evidence.push(makeEvidence("instruction_override", text, run.source));
     }
     if (CREDENTIAL_EXFIL_RE.test(text)) {
