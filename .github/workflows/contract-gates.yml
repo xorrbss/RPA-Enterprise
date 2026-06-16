@@ -341,6 +341,16 @@ jobs:
           PGADMIN_PASSWORD: postgres
         run: npm --prefix app run test:int
 
+      # 풀스택 D3 파이프라인(driver + 실 Chrome + DB) — CHROME_PATH(Locate Chrome 단계)와 비-bypass DB가
+      # 둘 다 준비된 뒤 실행. test:int(순수-DB)와 분리해 명시·격리(플레이키 시 RQ-001 규율로 rerun).
+      - name: Run full-stack D3 run-pipeline integration (driver + Chrome + DB)
+        env:
+          PGUSER: ${{ env.PGSMOKE_USER }}
+          PGPASSWORD: rpa_smoke
+        run: |
+          npm --prefix app run test:pipeline-run
+          npm --prefix app run test:pipeline-site
+
       - name: Install and build console for live e2e
         run: |
           npm ci --prefix web
