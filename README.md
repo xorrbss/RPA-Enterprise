@@ -564,3 +564,19 @@
 | 코드 인용 | `ir-interpreter.ts`: `InterpreterDeps.maxSteps` 주석 + `DEFAULT_MAX_STEPS` 위 `// ops-defaults §5` 인용(값 200 불변, 환경 오버라이드=`deps.maxSteps`). "ops-defaults 연동은 후속" 주석 제거 |
 | 결정 기록 | `release-decisions.md D8-A7`(zero-behavior-change alignment, 값 비발명 — 기존 가드를 추적가능화) |
 | 범위 한정(YAGNI) | 값 불변이라 동작 회귀 없음 → 기존 인터프리터 int 테스트가 기본 상한(200) 경로를 이미 암묵 검증. 중앙 config 모듈 신설 안 함(repo 규약=inline+인용) |
+
+## v2.16 패치 로그 (RQ-002 후속 — extract row_count/extracted_ref 투영: `{rows}` 봉투 규약 확정)
+
+> v2.14의 잔존(node.<id> 표준출력 중 status만 투영)을 풀어 **extract 데이터로 분기**(`node.<id>.row_count`)되게 한다.
+> v2.14에서 미정이던 **StepResult→node 표준출력 투영 규약을 확정**(운영자 결정): extract 출력은 LLM 구조화 출력(루트
+> object — strict json_schema는 루트 배열 불가)이므로 행 컬렉션을 표준 필드 **`rows`**로 담는다(`{rows:[...]}` 봉투).
+> `row_count = output.rows.length`, 같은 `rows`를 verify `min_rows`도 카운트(단일 규약). `extracted_ref = extract
+> StepResult 출력 아티팩트(artifacts[0])`. 계약 기록: `ir-expression.md §2`에 투영 규약 명시.
+> **재검증: `test:unit`(interpreter-scope 8: row_count 값-분기·extracted_ref·비-extract 미투영 loud; dom-executor rowCount) + 실 Chrome `test:interpreter-llm`(extract {rows:[1,2,3]}→row_count=3→분기→done) + `test:pipeline-site` 회귀.**
+
+| 항목 | 조치 |
+|---|---|
+| 계약 결정 | `ir-expression.md §2`: extract 출력 봉투 `{rows:[...]}` 표준화(루트 object 제약). `row_count`←`output.rows.length`, `extracted_ref`←extract 출력 아티팩트, `status`←StepResult.status. verify `min_rows`도 동일 `rows` 카운트(단일 규약) |
+| 실행기 | `stagehand-dom-executor.ts` extract가 `output.rowCount = parsedJson.rows.length`(rows 배열 있을 때) 산출. rows 부재 → 미산출(미투영) |
+| 투영 | `ir-interpreter.ts` `projectNodeOutput(StepResult)` — extract 액션만 row_count(`output.rowCount`)·extracted_ref(`artifacts[0]`) 추가. 비-extract/rows 부재 → 미투영 → 참조 시 IREL_RUNTIME_MISSING(loud, ir-expression §2) |
+| 잔존(축소) | `tier`(fallback 미구현)·`cursor.*`/`loop.until`(loop 미구현) — **계약 미정이 아니라 feature 의존**(fallback/loop 구현 시). 실패-연속 status도 후속 |

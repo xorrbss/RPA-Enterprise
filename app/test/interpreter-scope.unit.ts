@@ -43,10 +43,15 @@ function stepResult(status: StepStatus): StepResult {
   };
 }
 
-// fake executor: 모든 액션 success. fake resolver: 빈 flags PageState.
+// fake executor: extract 액션은 {rows} 봉투 길이를 output.rowCount로(extractRows 클로저) + 아티팩트; 그 외 success.
+let extractRows = 0;
+function extractResult(rowCount: number): StepResult {
+  return { ...stepResult("success"), action: "extract", output: { rowCount }, artifacts: ["art://out"] as StepResult["artifacts"] };
+}
 const fakeExecutor: ExecutorPlugin = {
   capabilities: () => ({ dom: false, vision: false, utility: true }),
-  execute: async () => stepResult("success"),
+  execute: async (_stepId, action) =>
+    (action as { type?: string }).type === "extract" ? extractResult(extractRows) : stepResult("success"),
   verify: async (): Promise<VerifyResult> => ({ passed: true, criteria: [] }) as unknown as VerifyResult,
 };
 const cannedPageState: PageState = {
@@ -129,27 +134,57 @@ async function main(): Promise<void> {
     missErr instanceof Error ? `${(missErr as { code?: string }).code ?? ""}: ${missErr.message}` : String(missErr),
   );
 
-  // 4) 실행된 노드의 미투영 필드(row_count) 참조 → IREL_RUNTIME_MISSING (field-absent 경로 — DEFER 준수).
+  // 4) 비-extract 노드(act)의 row_count 미투영 참조 → IREL_RUNTIME_MISSING (field-absent on populated record).
   const fieldAbsentScenario: CompiledScenario = {
     start: "grab",
     nodes: {
-      grab: { what: [{ type: "act" }], flow: { kind: "next", target: "check" } }, // grab 실행 → {status}만 기록
+      grab: { what: [{ type: "act" }], flow: { kind: "next", target: "check" } }, // act 실행 → {status}만(row_count 없음)
       check: onNode([{ when: ast("node.grab.row_count >= 1"), target: "x", priority: 1 }]),
       x: term("success"),
     },
   };
   const fieldErr = await runThrows(fieldAbsentScenario);
   check(
-    "실행된 노드의 row_count(미투영) → IREL_RUNTIME_MISSING(field-absent, DEFER 준수)",
+    "비-extract 노드 row_count 미투영 → IREL_RUNTIME_MISSING(field-absent on populated record)",
     fieldErr instanceof Error && (fieldErr as { code?: string }).code === "IREL_RUNTIME_MISSING",
     fieldErr instanceof Error ? `${(fieldErr as { code?: string }).code ?? ""}: ${fieldErr.message}` : String(fieldErr),
   );
+
+  // 6) node.<id>.row_count 분기 — extract {rows} 봉투 길이로 값-분기.
+  const rowCountScenario: CompiledScenario = {
+    start: "grab",
+    nodes: {
+      grab: { what: [{ type: "extract" }], flow: { kind: "next", target: "check" } },
+      check: onNode([
+        { when: ast("node.grab.row_count >= 1"), target: "has", priority: 2 },
+        { when: ast("node.grab.row_count == 0"), target: "empty", priority: 1 },
+      ]),
+      has: term("success"),
+      empty: term("success_empty"),
+    },
+  };
+  extractRows = 3;
+  check("extract row_count=3 → has(>=1)", (await run(rowCountScenario)) === "success");
+  extractRows = 0;
+  check("extract row_count=0 → empty", (await run(rowCountScenario)) === "success_empty");
+
+  // 7) node.<id>.extracted_ref 투영 — extract 아티팩트 참조.
+  const refScenario: CompiledScenario = {
+    start: "grab",
+    nodes: {
+      grab: { what: [{ type: "extract" }], flow: { kind: "next", target: "check" } },
+      check: onNode([{ when: ast('node.grab.extracted_ref == "art://out"'), target: "matched", priority: 1 }]),
+      matched: term("success"),
+    },
+  };
+  extractRows = 2;
+  check("node.grab.extracted_ref 투영 == 'art://out'", (await run(refScenario)) === "success");
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: 인터프리터 스코프 — params.* + node.status 분기, 부재 노드·미투영 필드는 IREL_RUNTIME_MISSING(loud) (RQ-002)");
+  console.log("\nPASS: 인터프리터 스코프 — params.*·node.status·extract row_count/extracted_ref 분기, 미투영은 IREL_RUNTIME_MISSING(loud) (RQ-002)");
   process.exit(0);
 }
 
