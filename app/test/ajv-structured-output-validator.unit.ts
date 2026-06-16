@@ -49,6 +49,14 @@ function main(): void {
   const rBad = v.validate({ schemaRef: "x", schemaVersion: "1", schema: { $ref: "#/does/not/exist" } as Record<string, unknown>, value: {} });
   check("uncompilable schema fails closed", rBad.ok === false);
 
+  // fail-closed: vacuous schema (no constraining keyword) — would otherwise accept everything (조용한 false 금지)
+  const rEmpty = v.validate({ schemaRef: "x", schemaVersion: "1", schema: {}, value: 42 });
+  check("empty {} schema fails closed (not accept-all)", rEmpty.ok === false);
+  check("empty schema reason mentions vacuous", rEmpty.ok === false && rEmpty.reason.toLowerCase().includes("vacuous"));
+  check("description-only schema fails closed", v.validate({ schemaRef: "x", schemaVersion: "1", schema: { description: "x" }, value: 42 }).ok === false);
+  // a schema constrained only by additionalProperties:false is acceptable (constraining)
+  check("additionalProperties:false alone is constraining", v.validate({ schemaRef: "x", schemaVersion: "1", schema: { additionalProperties: false }, value: {} }).ok === true);
+
   // cache: same body reused, still correct on a different value
   check("cached schema still validates", v.validate({ schemaRef: "reviews", schemaVersion: "1", schema, value: { name: "b" } }).ok === true);
   check("cached schema still rejects", v.validate({ schemaRef: "reviews", schemaVersion: "1", schema, value: {} }).ok === false);

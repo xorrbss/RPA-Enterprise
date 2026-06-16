@@ -32,6 +32,19 @@ export class AjvStructuredOutputValidator implements StructuredOutputValidator {
       return { ok: false, reason: `no JSON Schema body for ${id} (extract requires an inline schema)` };
     }
 
+    // Fail-closed on a structurally-vacuous schema (e.g. {} or {"description":"x"}): a body with no
+    // constraining keyword accepts EVERYTHING, which would silently pass any LLM output and defeat §5
+    // ("조용한 false 금지"). Require at least one constraining keyword (or additionalProperties:false).
+    const body = input.schema as Record<string, unknown>;
+    const CONSTRAINING = [
+      "type", "$ref", "enum", "const", "allOf", "anyOf", "oneOf", "not",
+      "properties", "items", "required", "patternProperties",
+    ];
+    const constrains = CONSTRAINING.some((k) => k in body) || body.additionalProperties === false;
+    if (!constrains) {
+      return { ok: false, reason: `${id}: JSON Schema body is vacuous (accepts everything) — extract requires a constraining schema` };
+    }
+
     // Cache by the body's stable identity (not ref@version, which is only a label for an inline body).
     const cacheKey = JSON.stringify(input.schema);
     let validateFn = this.cache.get(cacheKey);
