@@ -97,11 +97,11 @@ describe("D7 운영 콘솔 shell", () => {
         return { status: "cancelled" };
       },
     });
-    window.confirm = () => true; // jsdom confirm 스텁
     renderApp(client);
     location.hash = "#runTrace";
     const abortBtn = await screen.findByRole("button", { name: "취소" });
     abortBtn.click();
+    (await screen.findByRole("button", { name: "확인" })).click(); // 포커스 트랩 다이얼로그 확인
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.runId).toBe("11111111-aaaa-bbbb-cccc-000000000001");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
@@ -110,7 +110,6 @@ describe("D7 운영 콘솔 shell", () => {
 
   test("human-task 처리완료(resolve) 디스패치", async () => {
     const calls: string[] = [];
-    window.confirm = () => true;
     renderApp(
       fakeClient({
         listHumanTasks: async () => ({
@@ -126,12 +125,42 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#humanTasks";
     const btn = await screen.findByRole("button", { name: "처리완료" });
     btn.click();
+    (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toContain("ht-1"));
+  });
+
+  test("확인 다이얼로그: role=dialog + aria-modal + 포커스 이동 + Esc 취소(focus trap)", async () => {
+    const calls: string[] = [];
+    renderApp(fakeClient({ abortRun: async () => { calls.push("x"); return {}; } }));
+    location.hash = "#runTrace";
+    (await screen.findByRole("button", { name: "취소" })).click();
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog.contains(document.activeElement)).toBe(true); // 포커스가 다이얼로그 내부로 이동
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); // Esc로 닫힘
+    expect(calls).toHaveLength(0); // 취소 → mutate 안 됨(조용한 실행 금지)
+  });
+
+  test("배정 다이얼로그: assignee 입력 폼 → assignHumanTask(uuid) (native prompt 대체)", async () => {
+    const calls: Array<{ assignee: string }> = [];
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({ items: [{ human_task_id: "ht-9", state: "open", kind: "approval", assignee: null, timeout: null, run_id: null }], next_cursor: null }),
+        assignHumanTask: async (_id, assignee) => { calls.push({ assignee }); return {}; },
+      }),
+    );
+    location.hash = "#humanTasks";
+    (await screen.findByRole("button", { name: "배정" })).click();
+    expect(await screen.findByRole("button", { name: "확인" })).toBeDisabled(); // 빈 입력 → 확인 비활성(가드)
+    fireEvent.change(screen.getByLabelText("담당자 ID(uuid)"), { target: { value: "00000000-0000-0000-0000-0000000000aa" } });
+    screen.getByRole("button", { name: "확인" }).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.assignee).toBe("00000000-0000-0000-0000-0000000000aa");
   });
 
   test("scenario prod 승격 디스패치 (If-Match=version)", async () => {
     const calls: Array<{ id: string; version: number }> = [];
-    window.confirm = () => true;
     renderApp(
       fakeClient({
         listScenarios: async () => ({
@@ -147,6 +176,7 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#scenarioStudio";
     const btn = await screen.findByRole("button", { name: "prod 승격" });
     btn.click();
+    (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3 });
   });
@@ -206,7 +236,6 @@ describe("D7 운영 콘솔 shell", () => {
 
   test("운영자 명령 실패 → 코드 표면화", async () => {
     const { ApiError } = await import("../src/api/types");
-    window.confirm = () => true;
     renderApp(
       fakeClient({
         abortRun: async () => {
@@ -217,6 +246,7 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#runTrace";
     const abortBtn = await screen.findByRole("button", { name: "취소" });
     abortBtn.click();
+    (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(screen.getByText("RUN_ABORTED (409)")).toBeInTheDocument());
   });
 
@@ -296,7 +326,6 @@ describe("D7 운영 콘솔 shell", () => {
 
   test("사이트 승인(approve) 디스패치 — pending 사이트만", async () => {
     const calls: Array<{ id: string; key: string }> = [];
-    window.confirm = () => true;
     renderApp(
       fakeClient({
         listSites: async () => ({
@@ -311,6 +340,7 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#security";
     (await screen.findByRole("button", { name: "승인" })).click();
+    (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.id).toBe("site-1");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key

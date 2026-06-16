@@ -35,6 +35,18 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
     expect(results).toHaveNoViolations();
   });
 
+  test("확인 다이얼로그 열림 시 axe 위반 없음 (role=dialog)", async () => {
+    // 명령 버튼 표시를 위해 roles JWT 주입(useCan은 토큰 roles를 읽어 게이팅).
+    const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles: ["operator"] })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    localStorage.setItem("rpa.token", `e30.${payload}.sig`);
+    renderApp();
+    navigate("runTrace");
+    (await screen.findByRole("button", { name: "취소" })).click();
+    await screen.findByRole("dialog");
+    const results = await axe(document.body, AXE_OPTS);
+    expect(results).toHaveNoViolations();
+  });
+
   for (const view of ["workitems", "humanTasks", "runTrace", "security", "scenarioStudio"] as ViewKey[]) {
     test(`${view} 뷰 axe 위반 없음`, async () => {
       renderApp();
