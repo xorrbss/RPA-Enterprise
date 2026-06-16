@@ -57,10 +57,10 @@ path at deploy time (no external release/oncall team exists).
 - The 13 release decisions are resolved and tracked by
   `release-open-checklist.md` / `release-decisions.md`.
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
-  blockers split by scope: external/staging blocker categories for concrete
-  deploy target, secret provisioning, non-app producer retention policy, D5
-  Codex SSE live capability evidence, production/staging artifact object-store
-  receipts, and PR/main remote gate evidence. Repo-controlled D4.5 API P1 and
+  blockers split by scope: the two remaining external/staging blocker categories
+  are the concrete staging platform/deploy target + GitHub Environment, and the
+  SecretRef/SecretStore provisioning-evidence artifact + authorized/unauthorized
+  resolution smoke. Repo-controlled D4.5 API P1 and
   D3 runtime execution blocker rows are now resolved locally as fail-closed
   API behavior, real executor orchestration/outcome mapping, and artifact
   lifecycle port/evidence guardrails.
@@ -70,8 +70,8 @@ path at deploy time (no external release/oncall team exists).
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 23 markers, 4 actionable blockers, 13 known release decisions tracked,
-  13 release decisions checked (4 active deploy-time provisioning checklist rows;
+  output: 21 markers, 2 actionable blockers, 13 known release decisions tracked,
+  13 release decisions checked (2 active deploy-time provisioning checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -212,8 +212,8 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 23 markers, 4 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked (4 active deploy-time provisioning
+  (current output: 21 markers, 2 actionable blockers, 13 known release
+  decisions tracked, 13 release decisions checked (2 active deploy-time provisioning
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
@@ -468,10 +468,8 @@ Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 - Resolved (owner-attested live evidence): D5 Codex SSE live capability captured. Production `CodexSseAdapter`/`FetchCodexSseTransport` ran live (`npm --prefix app/poc/d5-codex-sse run poc`) against endpoint `[codex-staging-1]` / model `[model-a]` (redacted aliases; absolute HTTPS, no credential/query/fragment). **4/5 PASS** — mandatory #1 basic SSE / #2 prompt-schema safe path / #4 abort all PASS; #3 native `json_schema` PASS (jsonMode=true active); #5 model metadata GAP with documented fallback (conservative `maxContextTokens=8192` retained). No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material recorded (harness self-redaction; `CODEX_API_KEY` kept in a gitignored local `.env`). Former Required decision: run the D5 PoC and record redacted mandatory-PASS evidence.
 - Resolved repo evidence: cancelable `suspending` abort and H5/R15 `reassignAssignee` are explicit fail-closed v1 paths. Successful in-flight bookmark abort still requires a future bookmark-cancel owner or durable abort intent; successful manual escalate still requires a future routing/assignment owner. Until then the API rejects/rolls back before reporting success, preserving no silent false/unknown.
 - Resolved repo evidence: runtime executor orchestration and audit semantics now have a local path through `PgExecutorStepOrchestrator`, `ExecutorStepAttemptStore`, `PgExecutorInvocationRecorder`, and `PgExecutorCompletionCoordinator`; executor plugins run outside DB transactions, step-bound producer writes require `step.started`, system/security/challenge/uncertain outcomes map through explicit catalog-backed paths, lifecycle jobs are enqueued for artifact-producing terminal outcomes, and executor evidence does not misuse security-boundary `audit_log`.
-- TODO: [BLOCKED] Runtime artifact_redaction production/staging object I/O and redacted-output evidence is not complete.
-  Required decision: At deploy time, the project owner must provide staging or production evidence from a real `ArtifactRedactor` port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, producing a redaction-safe object/ref or explicit `not_required` decision, updating `redaction_status` by tenant-scoped CAS from `pending` under an unexpired claim, handling `redaction_attempts`/threshold/alerting, preserving legal-hold/retention metadata, persisting `sha256`/quarantine behavior, appending required `bypassrls.use` audit for the operational role, and proving no plaintext Secret/PII or internal `ObjectRef` is emitted. The local fake/test port evidence proves repo guardrails only and must not be cited as staging redaction evidence.
-- TODO: [BLOCKED] Runtime artifact_retention production/staging external object deletion evidence is not complete.
-  Required decision: At deploy time, the project owner must provide staging or production evidence from a real `ArtifactRetentionStore` delete port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, with idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal-hold/quarantine handling, evidence/audit semantics, and approved staging credential/SecretRef path before Product Open can claim external artifact purge. The local fake/test port evidence proves repo guardrails only and is not staging external object deletion evidence.
+- Resolved (owner-ratified object-I/O evidence, D8-A15): Runtime artifact_redaction object I/O is evidenced on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via the real SecretStore (Vault AppRole → `VaultSecretStore.resolve`; `S3_SECRET_ACCESS_KEY` unset). `objectstore:smoke` PASS: the production `S3ArtifactRedactor` with the injected §4 `ContentRedactionTransform` reads the source object, masks it, and writes a redacted object to a new `ObjectRef`; a planted credential+email is confirmed ABSENT from the redacted object on re-GET, the `redact` real-port receipt carries `sha256`, and the self-check confirms no plaintext Secret/PII, accessKeyId, internal `ObjectRef`, or AWS-credential-shape in the printed output or raw rows. Redacted backend alias `[s3-staging-1]`; no host/credential recorded. Masking is honest best-effort §4 (not a completeness proof for arbitrary content). Scope-split (repo-controlled, NOT claimed from this smoke): the claim-lease/finalize CAS — `redaction_status` CAS from `pending`, quarantine/deleted claim skip, and `bypassrls.use` audit — live in `runtime-worker.ts` `claimRedactionArtifact` and are proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime-execution-gates row); the `redaction_attempts < max` threshold predicate is present in code (claim + finalize retry→failed) but exercised at attempts=0 only by that test. Owner ratification of an owner-operated local real object store is recorded in release-decisions D8-A15 and the amended Deploy-Time Provisioning Blockers gate. Former Required decision: provide real object-store redaction object-I/O evidence with SecretRef-backed credentials and redacted receipts.
+- Resolved (owner-ratified object-I/O evidence, D8-A15): Runtime artifact_retention external object deletion is evidenced on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via the real SecretStore (Vault AppRole → `VaultSecretStore.resolve`). `objectstore:smoke` PASS: the production `S3ArtifactRetentionStore.deleteObject` returns `deleted` on first delete of a real test object and `not_found` on re-delete (idempotent), each with a redacted real-port `delete` receipt; transient (5xx/network) maps to `transient_failed` with no tombstone. The `not_found` path required a real-S3 fix — `S3ObjectStore.deleteDistinguishing` now HEAD-checks existence before DELETE, because real S3/MinIO DELETE returns 204 even for a missing key (merged PR #103, with a method-aware unit test). Redacted backend alias `[s3-staging-1]`; no host/credential recorded. Scope-split (repo-controlled, NOT claimed from this smoke): legal-hold/quarantine SKIP and `deleted_at`-set-under-unexpired-claim CAS live in `runtime-worker.ts` retention claim (`legal_hold = false AND quarantine = false AND deleted_at IS NULL`) and are proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime-execution-gates row). Owner ratification recorded in release-decisions D8-A15 and the amended Deploy-Time Provisioning Blockers gate. Former Required decision: provide real external object deletion evidence with SecretRef-backed credentials, delete/not-found receipts, and legal-hold/quarantine handling.
 - Resolved (remote evidence): Runtime execution staging gates now have current remote `main` CI evidence. GitHub Actions hosted-runner execution is restored (the account payment/spending-limit blocker no longer applies — `main` `Contract Gates` runs start and succeed). The Phase 7 runtime delta is merged on `main` (`executor-step-orchestrator.ts` / `executor-completion-coordinator.ts` / `executor-invocation-recorder.ts`), and `main` `Contract Gates` run `27609993667` (commit `848413ce`) is `success` with the required job URLs — `App runtime typecheck and tests` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653454), `Secret scan` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653459), `PostgreSQL 15 migration smoke` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653766). The `App runtime typecheck and tests` job runs `test:int` under a non-`SUPERUSER`/non-`BYPASSRLS` PostgreSQL 15 role, proving tenant boundary / RBAC/redaction / no `BYPASSRLS` / no silent false-unknown. Former Required decision: restore GitHub Actions hosted-runner execution, rerun `Contract Gates` on the Phase 7 `main` head, and provide the required PR/main job URLs.
 
 ### Durable Security Audit Writer Decision Packet
@@ -680,11 +678,10 @@ mandatory #1/#2/#4 PASS). The `CODEX_API_KEY` stays in a gitignored local `.env`
 ## Remaining External Evidence Notes
 
 All repo-controlled D4.5 API P1 and D3 runtime execution rows are locally
-resolved in this patch. The remaining unchecked rows require owner deploy-time
-provisioning, real SecretRef/SecretStore provisioning, production/staging
-object-store receipts, live D5 staging model output, or PR/main remote CI job
-URLs, including recovery from the current GitHub Actions account
-payment/spending-limit blocker.
+resolved in this patch. The two remaining unchecked rows require owner deploy-time
+provisioning: the concrete staging platform/deploy target + GitHub Environment
+(row 43), and the SecretRef/SecretStore provisioning-evidence artifact +
+authorized/unauthorized resolution smoke (row 48).
 
 Do not close those rows from local fixtures, temp DBs, fake object-store ports,
 hard-coded aliases, CI service-container credentials, or unredacted logs. When
