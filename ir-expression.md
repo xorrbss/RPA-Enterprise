@@ -63,7 +63,7 @@ ident        = (letter | "_") , { letter | digit | "_" } ;
 - `status` ← `StepResult.status`(실행 결과 status enum 그대로).
 - `row_count` ← **extract 액션의 출력 봉투 `{rows: [...]}`의 `rows` 배열 길이**. extract 출력은 LLM 구조화 출력(루트 object)이므로 행 컬렉션을 표준 필드 **`rows`**로 담는다(루트 배열 불가). `row_count = output.rows.length`. 같은 `rows` 배열을 verify `min_rows`도 카운트한다(단일 규약). extract가 아니거나 `rows` 배열이 없으면 `row_count` **미투영**(참조 시 `IREL_RUNTIME_MISSING` — 조용한 false 금지).
 - `extracted_ref` ← **extract 액션** StepResult의 출력 아티팩트 참조(`StepResult.artifacts[0]`). extract가 아니면 미투영.
-- `tier` ← fallback_chain 실행 시 현재 tier(미구현 — 미투영).
+- `tier` ← fallback_chain 실행 시 현재 tier(T0..T3). **구현됨(release-decisions D8-A9)** — fallback 티어 sub-traversal로 실행되는 노드의 출력에 그 티어를 부착한다(같은 티어 서브그래프 내 노드가 `node.<id>.tier`로 어느 티어인지 분기 가능). fallback 밖에서 실행된 노드는 `tier` 미투영(참조 시 `IREL_RUNTIME_MISSING`).
 
 미투영 필드/네임스페이스(`cursor.*`, loop 밖 `loop.*`) 참조는 정적검증을 통과하더라도 런타임에 `IREL_RUNTIME_MISSING`으로 표면화한다(compile-then-throw, 발명 금지).
 

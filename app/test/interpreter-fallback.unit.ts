@@ -122,6 +122,21 @@ async function main(): Promise<void> {
   };
   check("3티어 T0·T1 실패 → T2 채택", (await run(s8, new Set(["t0", "t1"]))) === "t2_done");
 
+  // 9) break-it P2: advance_when 이 실패 티어 status 참조 — t0 실패 + advance_when="node.t0.status == failed_system" →
+  //    실패 노드 status 도 투영되어 정상 advance(예전엔 IREL_RUNTIME_MISSING throw). 가장 흔한 fallback 패턴.
+  const s9: CompiledScenario = {
+    start: "F",
+    nodes: { F: fb([{ tier: "T0", entryNode: "t0", advanceWhen: ast('node.t0.status == "failed_system"') }, { tier: "T1", entryNode: "t1" }]), t0: actTerm("t0_done"), t1: actTerm("t1_done") },
+  };
+  check("실패 티어 status 투영: advance_when node.t0.status==failed_system → T1(throw 아님)", (await run(s9, new Set(["t0"]))) === "t1_done");
+
+  // 10) break-it P3: 마지막 티어 advance_when 은 평가 안 함(무의미·side-effect/spurious throw 방지) — 부재 노드 참조여도 채택.
+  const s10: CompiledScenario = {
+    start: "F",
+    nodes: { F: fb([{ tier: "T0", entryNode: "t0" }, { tier: "T1", entryNode: "t1", advanceWhen: ast('node.absent.status == "success"') }]), t0: actTerm("a"), t1: actTerm("t1_done") },
+  };
+  check("마지막 티어 advance_when 미평가(부재참조여도 throw 아님) → 채택", (await run(s10, new Set(["t0"]))) === "t1_done");
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

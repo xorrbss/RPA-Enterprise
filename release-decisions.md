@@ -428,7 +428,24 @@ D8-A9. fallback_chain interpreter execution + `tier` projection (resolves RQ-002
    author expecting a post-fallback continuation node (outside the tiers) or `tier` on the fallback
    node itself would need rework — but no contract/fixture exercises that shape. Build-condition: done
    (ir-translate fallback flow + interpreter sub-traversal + `tier` projection; tests
-   interpreter-fallback.unit 9 + ir-translate.unit fallback cases). Adversarially break-it verified.
+   interpreter-fallback.unit + ir-translate.unit fallback cases).
+   **break-it (wf_24e16f1b) corrections:** (1) **failed-tier status now projected** — a step that
+   fails is recorded in nodeScope (`status`=failed_*, +`tier`) *before* the failure terminal returns,
+   so the canonical `advance_when: node.<entry>.status == "failed_system"` works on the failure path
+   (previously threw `IREL_RUNTIME_MISSING`); aligns with ir-expression §2 "status ← StepResult.status
+   for every executed node". (2) **last tier's `advance_when` is not evaluated** (no tier to advance
+   to per §4) — avoids a wasted `resolvePageState` and a spurious throw if it references an
+   absent value. (3) the **fallback node's `status` is derived from the adopted *terminal*** (not the
+   entry-node output) so a deeper tier-node failure isn't masked as entry success (only observable via
+   nested fallback). (4) default-advance uses an **exact `fail_business`/`fail_system`/`fail_security`
+   match**, not `startsWith("fail")`, to avoid misclassifying a `failover_*`-style success terminal.
+   **Known, deferred:** non-adopted/sibling tier node outputs **persist** in the shared nodeScope
+   (not rolled back) — this is consistent with the compile scope intentionally allowing `advance_when`
+   to reference prior tiers' `entry_node`s (additionalPriorNodeIds); runtime correctness relies on the
+   compile-time forward-ref guard, not on per-tier scope isolation (which would break legitimate
+   cross-tier references). §4's "non-read_only tiers need `side_effect.idempotency_key`" is **not yet
+   statically enforced** (no V-rule; the interpreter re-runs shared tier nodes) — tracked as a separate
+   static-validation gap (register RQ-032). Adversarially break-it verified.
 
 ## Follow-Up Rule
 

@@ -130,9 +130,13 @@ function terminalToStatus(terminal: string): StepStatus {
   return "success";
 }
 
+// 실패 terminal 집합(failureTerminal 산출 + 표준 vocab fail_*). 생략 advance_when 기본 전환 판정(§4: StepResult.status=failed_*).
+// startsWith("fail") 대신 정확 매칭 — "failover_*" 류 비-실패 terminal 오분류 방지(break-it).
+const FAILURE_TERMINALS = new Set(["fail_business", "fail_system", "fail_security"]);
+
 /** fallback advance 기본(§4): 티어 결과가 실패 terminal 이면 다음 티어로 전환. */
 function isFailureTerminal(terminal: string): boolean {
-  return terminal.startsWith("fail");
+  return FAILURE_TERMINALS.has(terminal);
 }
 
 /**
@@ -167,6 +171,10 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       state.steps.push({ nodeId, action: res.action, status: res.status });
       lastResult = res;
       if (res.status === "success") continue;
+      // 실패 노드도 status 투영(ir-expression §2: failed_* 포함 모든 실행 노드의 status). fallback advance_when 이
+      //   `node.<entry>.status == "failed_system"`(실패 시 전환)처럼 실패 status 를 관측해야 하므로 terminal 반환 전 기록.
+      const failOut = projectNodeOutput(res);
+      state.nodeScope[nodeId] = currentTier !== undefined ? { ...failOut, tier: currentTier } : failOut;
       const term = failureTerminal(res.status);
       if (term !== null) return term;
       throw new InterpreterError(
@@ -221,23 +229,27 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
         // 티어 sub-traversal: currentTier=tier.tier 로 실행 → 티어 서브그래프 노드 출력에 tier 부착(node.<id>.tier 투영).
         const tierTerminal = await traverse(state, tier.entryNode, ctx, tier.tier);
         const isLast = t === tiers.length - 1;
-        let advance: boolean;
-        if (tier.advanceWhen !== undefined) {
-          // advance_when 스코프 = flags(resolve) + params + node(티어 출력 포함). loop/cursor 없음(compile scope 동형).
-          const fps = await state.deps.resolver.resolvePageState({ ...ctx, nodeId: fallbackNodeId });
-          advance = evaluateCondition(tier.advanceWhen, { flags: fps.flags, params: state.deps.params, node: nodeScopeRef(state) });
-        } else {
-          advance = isFailureTerminal(tierTerminal);
+        // 마지막 티어는 무조건 채택(§4 — 전환할 티어 없음): advance_when 을 **평가하지 않는다**(무의미한 resolvePageState
+        //   side-effect + 부재참조 spurious throw 방지). 비-마지막만 advance_when(있으면)/기본(실패 terminal)으로 판정.
+        let advance = false;
+        if (!isLast) {
+          advance = tier.advanceWhen !== undefined
+            ? evaluateCondition(tier.advanceWhen, {
+                flags: (await state.deps.resolver.resolvePageState({ ...ctx, nodeId: fallbackNodeId })).flags,
+                params: state.deps.params,
+                node: nodeScopeRef(state),
+              })
+            : isFailureTerminal(tierTerminal);
         }
-        if (!advance || isLast) {
+        if (!advance) {
           adopted = tier;
           adoptedTerminal = tierTerminal;
           break;
         }
       }
-      // §4: 노드 출력 = 채택 티어 결과(entry_node 출력 기반) + tier 투영(ir-expression §2). terminal-producing.
-      const entryOut = state.nodeScope[adopted.entryNode];
-      state.nodeScope[fallbackNodeId] = { ...(entryOut ?? { status: terminalToStatus(adoptedTerminal) }), tier: adopted.tier };
+      // §4: 노드 출력 = 채택 티어 outcome. status는 채택 terminal 파생(deeper 노드 실패가 entry success로 마스킹되지 않게,
+      //   break-it). tier 투영(ir-expression §2). terminal-producing(채택 terminal=run outcome). 티어 노드 출력은 node.<id>로 별도 참조.
+      state.nodeScope[fallbackNodeId] = { status: terminalToStatus(adoptedTerminal), tier: adopted.tier };
       return adoptedTerminal;
     }
     // on[]: PageState(flags) 산출(observe) → 분기. scope = flags + params + 누적 node.
