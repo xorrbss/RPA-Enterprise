@@ -69,13 +69,17 @@ async function main(): Promise<void> {
     await bound.release();
   }
 
-  // 2) 미지원 격리/정리(context/page·preserve_*) → loud throw(조용한 다운그레이드 금지, mkdtemp 전 가드).
+  // 2) Phase 1 격리/정리 범위: browser/context 수용(fresh-per-lease 가 만족, context=lease 기본값),
+  //    page(형제 공유)·preserve_*(상태 유지)는 loud throw(조용한 다운그레이드 금지, mkdtemp 전 가드).
   {
     const provider = new StagehandBrowserSessionProvider({ chromeExecutablePath: "/x/chrome", createSession: fakeCreateSession });
-    const e1 = await caught(provider.bind({ ...INPUT, isolation: "context" }));
-    const e2 = await caught(provider.bind({ ...INPUT, cleanupPolicy: "preserve_session" }));
-    check("unsupported isolation='context' → throws", e1 instanceof Error, String(e1));
-    check("unsupported cleanupPolicy='preserve_session' → throws", e2 instanceof Error, String(e2));
+    const ctxBound = await provider.bind({ ...INPUT, isolation: "context" });
+    check("isolation='context' accepted (acquireBrowserLease 기본값)", ctxBound.provider.forLease(INPUT.leaseId) instanceof FakeCdpSession);
+    await ctxBound.release();
+    const ePage = await caught(provider.bind({ ...INPUT, leaseId: "L-page", isolation: "page" }));
+    const ePreserve = await caught(provider.bind({ ...INPUT, leaseId: "L-pres", cleanupPolicy: "preserve_session" }));
+    check("unsupported isolation='page' → throws", ePage instanceof Error, String(ePage));
+    check("unsupported cleanupPolicy='preserve_session' → throws", ePreserve instanceof Error, String(ePreserve));
   }
 
   // 3) release: 세션 close 1회 + 이후 forLease typed throw(CDP_DISCONNECTED) + idempotent.

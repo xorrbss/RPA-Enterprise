@@ -64,6 +64,8 @@ import type { BrowserSessionProvider } from "../executor/browser-session-provide
 export interface BrowserLeasePlan {
   readonly siteProfileId: string;
   readonly browserIdentityId: string;
+  /** identity 3-tuple 의 셋째(RunContext.networkPolicyId). run-drive(A.1) 구동 시 필수 — 미공급이면 loud throw. */
+  readonly networkPolicyId?: string;
   readonly isolation?: LeaseIsolation;
   readonly cleanupPolicy?: LeaseCleanupPolicy;
   readonly ttlMs?: number;

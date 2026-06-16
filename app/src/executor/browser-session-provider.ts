@@ -70,13 +70,21 @@ export function gateBrowserSessionProvider(
   return provider;
 }
 
-// Phase 1 지원 범위 가드: fresh-per-lease(=browser 격리) + clear_all 만. 그 외는 미지원 feature → loud throw.
+// Phase 1 지원 범위 가드. lease 마다 fresh 세션(새 프로세스 = browser-level 격리)이라, serialized
+// one-active-per-identity lease 모델에서 isolation='browser'/'context' 요청을 모두 만족(per-lease 격리;
+// 'context' 는 acquireBrowserLease 기본값). 'page'(형제 페이지와 상태 공유 의도)·preserve_*(상태 유지)는
+// fresh+clear_all 이 만족하지 못함 → 조용한 다운그레이드 없이 loud throw(후속 warm-reuse 증분).
 function assertPhase1Supported(input: BrowserSessionBindInput): void {
-  if (input.isolation !== "browser" || input.cleanupPolicy !== "clear_all") {
+  if (input.isolation === "page") {
     throw new Error(
-      `BrowserSessionProvider: Phase 1 은 isolation='browser'·cleanupPolicy='clear_all' 만 지원 ` +
-        `(받음 isolation='${input.isolation}', cleanupPolicy='${input.cleanupPolicy}'). ` +
-        `context/page·preserve_* 는 후속(warm-reuse) 증분 — 조용한 다운그레이드 금지.`,
+      `BrowserSessionProvider: Phase 1 미지원 isolation='page'(형제 페이지 공유) — ` +
+        `fresh-per-lease 는 browser/context 만. 후속(warm-reuse) 증분.`,
+    );
+  }
+  if (input.cleanupPolicy !== "clear_all") {
+    throw new Error(
+      `BrowserSessionProvider: Phase 1 미지원 cleanupPolicy='${input.cleanupPolicy}'(상태 유지) — ` +
+        `clear_all(통째 폐기)만. 후속 증분.`,
     );
   }
 }
