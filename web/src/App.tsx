@@ -10,6 +10,7 @@ import { GatewayView } from "./views/Gateway";
 import { ScenariosView } from "./views/Scenarios";
 import { IrValidationView } from "./views/IrValidation";
 import { PlaygroundView } from "./views/Playground";
+import { OpenGateView } from "./views/OpenGate";
 import { PlaceholderView } from "./views/Placeholder";
 
 // 라우트 → 뷰. read 백엔드가 있는 뷰는 실 연결, 그 외는 정직한 placeholder(D7.2+ 워크플로우 대상).
@@ -32,7 +33,7 @@ function renderView(view: ViewKey): JSX.Element {
     case "playground":
       return <PlaygroundView />;
     case "openGate":
-      return <PlaceholderView title="Product-open 점검" note="release-open-checklist 기반 점검 화면은 후속 슬라이스에서 연결됩니다." />;
+      return <OpenGateView />;
     case "irValidation":
       return <IrValidationView />;
     case "idempotency":

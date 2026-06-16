@@ -70,6 +70,14 @@ describe("D7 운영 콘솔 shell", () => {
     );
   });
 
+  test("openGate: 정적 contract-doc 뷰 렌더(Placeholder 아님)", async () => {
+    renderApp();
+    location.hash = "#openGate";
+    await waitFor(() => expect(screen.getByText("Product-open gate map")).toBeInTheDocument());
+    expect(screen.getByText("RBAC 화면/액션 gate")).toBeInTheDocument(); // 계약 파생 행
+    expect(screen.queryByText("준비 중")).toBeNull(); // Placeholder 배지 미노출
+  });
+
   test("오류 상태 표면화 (조용한 빈화면 금지)", async () => {
     renderApp(
       fakeClient({
