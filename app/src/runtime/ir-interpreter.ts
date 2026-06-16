@@ -14,11 +14,12 @@
  *   - fallback_chain: 티어(T0→T3)를 순서대로 entry_node 부터 sub-traversal 실행, advance_when/기본(실패)으로 전환.
  *     채택 티어 terminal이 노드 outcome(terminal-producing), 티어 노드 출력에 tier 투영(D8-A9).
  *   - dom act/observe/extract(LLM)·vision은 실행기가 EXECUTOR_CAPABILITY_MISMATCH로 거부 → 그대로 전파(가정 금지).
- *   - 예약핸들러(@challenge/@human_task/@end_no_data)·suspend는 후속 단계. 미처리 status는 조용히 흘리지 않고
+ *   - suspend: executor step status='suspended' → "suspend" terminal + SuspendContext 산출(트리거 i, driver 가 R4+포트+R11 구동).
+ *     예약핸들러(@challenge/@human_task IR 노드)·기타 미처리 status(challenge/uncertain/skipped)는 조용히 흘리지 않고
  *     InterpreterError로 표면화한다("조용한 false/unknown 금지").
  */
 import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
-import type { ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
+import type { ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
 import { evaluateCondition, selectOnBranch, type CompiledOnBranch } from "./flow-control";
 
 /** 표준 노드 출력 필드(IREL node.<id>.*). 미투영 필드는 부재 → 참조 시 IREL_RUNTIME_MISSING(loud). */
@@ -79,10 +80,25 @@ export interface InterpreterStep {
   readonly status: StepStatus;
 }
 
+/**
+ * suspend(중단) 컨텍스트 — executor step 이 status='suspended' 반환 시 산출(트리거 i, A.1 suspend 경로).
+ * terminal === "suspend" 일 때만 ScenarioOutcome.suspend 에 존재. driver 가 R4(running→suspending)+포트+R11 에 사용.
+ * resumeNodeId = 같은 노드 재진입(오너 결정: idempotent 재실행). pageStateRef = res.pageStateAfter(재개 검증용).
+ */
+export interface SuspendContext {
+  readonly stepId: string;
+  readonly resumeNodeId: string;
+  readonly attempt: number;
+  readonly challengeKind: "captcha" | "mfa";
+  readonly pageStateRef: string;
+  readonly exception?: ClassifiedException;
+}
+
 export interface ScenarioOutcome {
-  readonly terminal: string; // success | success_empty | fail_business | fail_system
+  readonly terminal: string; // success | success_empty | fail_business | fail_system | suspend
   readonly visited: readonly string[];
   readonly steps: readonly InterpreterStep[];
+  readonly suspend?: SuspendContext; // terminal === "suspend" 일 때만(트리거 i)
 }
 
 export class InterpreterError extends Error {
@@ -116,6 +132,8 @@ interface TraversalState {
   readonly visited: string[];
   readonly steps: InterpreterStep[];
   readonly budget: { remaining: number };
+  // suspend 컨텍스트 운반 박스(budget 과 동형 가변 박스) — traverse 가 set, runScenario 가 read.
+  readonly suspendBox: { current?: SuspendContext };
 }
 
 /** IRELScope.node 캐스트(NodeOutput record → IREL 평가용). */
@@ -177,9 +195,23 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       state.nodeScope[nodeId] = currentTier !== undefined ? { ...failOut, tier: currentTier } : failOut;
       const term = failureTerminal(res.status);
       if (term !== null) return term;
+      // suspend(트리거 i): executor step 이 status='suspended' 반환 → SuspendContext 산출 후 "suspend" terminal 반환.
+      // driver 가 R4(running→suspending)+포트+R11 로 구동. challengeKind 는 captcha 기본(reserved-handlers "그 외 captcha";
+      // mfa 는 executor 신호 필요 — 후속). resumeNodeId=nodeId(같은 노드 재진입, 오너 결정). pageStateRef=res.pageStateAfter.
+      if (res.status === "suspended") {
+        state.suspendBox.current = {
+          stepId: `${nodeId}.${k}`,
+          resumeNodeId: nodeId,
+          attempt: ctx.attempt,
+          challengeKind: "captcha",
+          pageStateRef: res.pageStateAfter,
+          ...(res.exception !== undefined ? { exception: res.exception } : {}),
+        };
+        return "suspend";
+      }
       throw new InterpreterError(
         "EXECUTOR_STATUS_UNSUPPORTED",
-        `interpreter: step '${nodeId}.${k}' returned status '${res.status}' (suspend/challenge 미지원)`,
+        `interpreter: step '${nodeId}.${k}' returned status '${res.status}' (challenge/uncertain/skipped 미지원)`,
       );
     }
     if (lastResult !== undefined) {
@@ -290,7 +322,13 @@ export async function runScenario(
     visited: [],
     steps: [],
     budget: { remaining: maxSteps },
+    suspendBox: {},
   };
   const terminal = await traverse(state, scenario.start, initialCtx);
-  return { terminal, visited: state.visited, steps: state.steps };
+  return {
+    terminal,
+    visited: state.visited,
+    steps: state.steps,
+    ...(state.suspendBox.current !== undefined ? { suspend: state.suspendBox.current } : {}),
+  };
 }

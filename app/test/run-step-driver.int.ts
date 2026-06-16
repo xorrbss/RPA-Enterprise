@@ -11,10 +11,12 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { ExecutorPlugin, PageState, PageStateResolver } from "../../ts/core-types";
+import type { ExecutorPlugin, PageState, PageStateResolver, PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { driveClaimedRun, type ClaimedRun } from "../src/runtime/run-step-driver";
+import { PgChallengeSuspensionPort } from "../src/runtime/challenge-suspension-port";
+import { HmacResumeTokenCodec } from "../src/runtime/resume-token-codec";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_run_driver_int";
@@ -24,6 +26,7 @@ const SVER = "70000000-0000-0000-0000-0000000000d2";
 const RUN = "71000000-0000-0000-0000-0000000000d1";
 const RUN_FAIL_BIZ = "71000000-0000-0000-0000-0000000000d3";
 const RUN_FAIL_SYS = "71000000-0000-0000-0000-0000000000d4";
+const RUN_SUSPEND = "71000000-0000-0000-0000-0000000000d5";
 const WORKER = "9a000000-0000-0000-0000-0000000000a1";
 
 let failures = 0;
@@ -92,6 +95,33 @@ const fakeResolver: PageStateResolver = {
   },
 };
 
+// suspend 구동 검증용(트리거 i): 첫 스텝에서 status='suspended' → 인터프리터 suspend outcome → driver R4+포트+R11.
+const suspendingExecutor: ExecutorPlugin = {
+  capabilities: () => ({ dom: false, vision: false, utility: true }),
+  async execute(stepId) {
+    const now = new Date().toISOString();
+    return {
+      stepId,
+      action: "navigate",
+      status: "suspended",
+      pageStateBefore: "ref",
+      pageStateAfter: "ps_suspend_after",
+      artifacts: [],
+      cache: { mode: "bypass" },
+      timings: { startedAt: now, endedAt: now, durationMs: 0 },
+    };
+  },
+  async verify() {
+    throw new Error("verify not used in driver int");
+  },
+};
+// mock SecretStore: resume_token HMAC 서명키 {kid,key} 반환(실 Vault SecretStore 대역). 키 자료는 테스트 로컬.
+const fakeSecretStore: SecretStore = {
+  resolve: async () => JSON.stringify({ kid: "kid-test", key: "int-resume-signing-key" }) as unknown as PlainSecret,
+};
+const suspensionPort = new PgChallengeSuspensionPort();
+const resumeTokenCodec = new HmacResumeTokenCodec(fakeSecretStore, "secret://test/resume_token_hmac" as unknown as SecretRef);
+
 const scenarioIr = {
   meta: { name: "driver-test", version: 1 },
   start: "open",
@@ -135,7 +165,7 @@ async function main(): Promise<void> {
         [SVER, TENANT, SCEN, JSON.stringify(compiled.ir), compiled.compiledAst],
       );
       // R1을 우회해 claimed 상태로 직접 시드(드라이버는 R2부터). correlation_id=run_id.
-      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS]) {
+      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_SUSPEND]) {
         await c.query(
           `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
            VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
@@ -221,6 +251,55 @@ async function main(): Promise<void> {
         return r.rows.map((x) => x.event_type);
       });
       check(`outbox에 ${f.event}`, fevents.includes(f.event), fevents.join(","));
+    }
+
+    // suspend 구동(step2+3): suspended → suspending(R4)+human_task 포트 → resume-token 발행+R11 → suspended.
+    const susp = await driveClaimedRun(
+      {
+        runId: RUN_SUSPEND,
+        tenantId: TENANT,
+        scenarioVersionId: SVER,
+        correlationId: RUN_SUSPEND,
+        leaseId: "lease-s",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      { pool, executor: suspendingExecutor, resolver: fakeResolver, workerId: WORKER, suspensionPort, resumeTokenCodec },
+    );
+    check("driver(suspended) → state=suspended", susp.state === "suspended", susp.state);
+    check(
+      "outcome.terminal=suspend + suspend.resumeNodeId=open(같은 노드)",
+      susp.outcome.terminal === "suspend" && susp.outcome.suspend?.resumeNodeId === "open",
+      susp.outcome.suspend?.resumeNodeId,
+    );
+    const sdb = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ status: string; resume_token: { kid?: string; hmac?: string } | null; bookmark: { reason?: string } | null }>(
+        `SELECT status, resume_token, bookmark FROM runs WHERE id=$1::uuid`,
+        [RUN_SUSPEND],
+      );
+      return r.rows[0] ?? null;
+    });
+    check("DB runs.status = suspended", sdb?.status === "suspended", String(sdb?.status));
+    check("runs.resume_token 발행(kid+hmac)", typeof sdb?.resume_token?.kid === "string" && typeof sdb?.resume_token?.hmac === "string", JSON.stringify(sdb?.resume_token));
+    check("runs.bookmark 영속(reason=challenge)", sdb?.bookmark?.reason === "challenge", JSON.stringify(sdb?.bookmark));
+    const sht = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ kind: string; state: string }>(`SELECT kind, state FROM human_tasks WHERE run_id=$1::uuid`, [RUN_SUSPEND]);
+      return r.rows;
+    });
+    check("human_tasks 1건 kind=captcha state=open", sht.length === 1 && sht[0]?.kind === "captcha" && sht[0]?.state === "open", JSON.stringify(sht));
+    const sevs = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ event_type: string }>(`SELECT event_type FROM events_outbox WHERE correlation_id=$1::uuid ORDER BY created_at`, [RUN_SUSPEND]);
+      return r.rows.map((x) => x.event_type);
+    });
+    check("outbox: human_task.created + run.suspended", sevs.includes("human_task.created") && sevs.includes("run.suspended"), sevs.join(","));
+    // 발행·저장된 토큰이 verify 라운드트립(서명 유효) — DB 봉투 무결성 증명.
+    if (sdb?.resume_token) {
+      const v = await resumeTokenCodec.verify(sdb.resume_token as unknown as Parameters<typeof resumeTokenCodec.verify>[0]);
+      check("저장된 resume_token verify → valid(round-trip)", v.kind === "valid", v.kind);
+    } else {
+      check("저장된 resume_token verify → valid(round-trip)", false, "resume_token 부재");
     }
 
     // 멱등 재구동: 이미 completed → claimed→running CAS 0 rows → 표면화(조용한 false 금지).
