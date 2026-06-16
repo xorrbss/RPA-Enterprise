@@ -549,3 +549,18 @@
 | 필드 투영 | **status만 INCLUDE**(StepResult.status 단일출처). extracted_ref(outputRef/artifacts[0]/extracted 셋 다 가능·권위 없음)·row_count(StepResult에 필드 부재)·tier(fallback 미구현)는 **DEFER** — 미투영 필드 참조는 IREL_RUNTIME_MISSING(loud) |
 | 정직한 공개 | (1) **compile-then-throw**: `node.X.row_count` 등은 V9가 허용해 컴파일되나 런타임에 IREL_RUNTIME_MISSING — 의도된 조용한-false-금지 동작(결함 아님). (2) **graph-ancestor ≠ executed**: diamond DAG에서 분기로 건너뛴 ancestor의 node.X.status 참조는 컴파일되나 런타임 loud. (3) **status는 현재 항상 'success'**(실패/suspend는 flow 전 short-circuit) — failure-continuation 전까지 status 분기는 저효용 |
 | 연기(잔존) | node.{extracted_ref,row_count,tier}(투영 계약 미명시) · cursor.*·loop.until(loop 미구현) · 실패-연속 status. RQ-002는 **부분**(status+params) — 잔존 필드/네임스페이스는 계약 투영 결정 후 |
+
+## v2.15 패치 로그 (RQ-017 — 인터프리터 graph-step 상한의 ops-defaults 출처화)
+
+> RQ-017(인터프리터 `maxSteps` 기본 200이 하드코딩·ops-defaults 미연동)을 해소한다. **값 변경 없음**(200 동일) —
+> 계약 충실도 정정: ops-defaults.md가 "계약 본문이 비워둔 수치의 기본값 SSoT"(§intro)이므로 graph-step 상한을 그곳에
+> 정의하고, 코드는 다른 모든 ops-defaults 소비자(codex-sse-adapter·llm-gateway·outbox·sink-delivery)와 동일한
+> **inline-value + `// ops-defaults §5` 인용** 규약으로 연결한다. 결정 근거는 release-decisions.md **D8-A7**.
+> **재검증: `contract-lint`(66) + `app run typecheck` green + ops-defaults 값(200) ↔ `DEFAULT_MAX_STEPS`(200) 일치(무회귀).**
+
+| 항목 | 조치 |
+|---|---|
+| 계약(SSoT) | `ops-defaults.md §5`에 `interpreter.graph_max_steps`(기본 200) 행 추가. **`loop.max_iterations`(10000, loop body 전용)와 명시 구분** — 이건 시작→terminal 총 노드 순회 상한. 초과 시 `InterpreterError("IR_LOOP_LIMIT")`(조용한 무한루프 금지) |
+| 코드 인용 | `ir-interpreter.ts`: `InterpreterDeps.maxSteps` 주석 + `DEFAULT_MAX_STEPS` 위 `// ops-defaults §5` 인용(값 200 불변, 환경 오버라이드=`deps.maxSteps`). "ops-defaults 연동은 후속" 주석 제거 |
+| 결정 기록 | `release-decisions.md D8-A7`(zero-behavior-change alignment, 값 비발명 — 기존 가드를 추적가능화) |
+| 범위 한정(YAGNI) | 값 불변이라 동작 회귀 없음 → 기존 인터프리터 int 테스트가 기본 상한(200) 경로를 이미 암묵 검증. 중앙 config 모듈 신설 안 함(repo 규약=inline+인용) |

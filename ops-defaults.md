@@ -68,7 +68,8 @@
 | 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
 |---|---|---|---|---|
 | `node.max_self_heal` | 2 | 1 | ir.schema nodePolicy(기본 2) | 스키마 기본값 유지 |
-| `loop.max_iterations` (상한) | 10000 | 10 | ir.schema(max 10000) | 시나리오가 더 작게 지정 권장 |
+| `loop.max_iterations` (상한) | 10000 | 10 | ir.schema(max 10000) | **loop body 전용** 반복 상한(loop 노드 1회 실행 내) |
+| `interpreter.graph_max_steps` | 200 | deps.maxSteps 주입 | ir-interpreter `runScenario` / RQ-017 | **그래프 전체 노드 순회** 상한(비종료 방어). `loop.max_iterations`(loop body 전용)와 **구분** — 이건 시작→terminal까지 방문 노드 step 총수. 초과 시 `InterpreterError("IR_LOOP_LIMIT")`(조용한 무한루프 금지). 시나리오는 graph 크기에 맞게 더 작게 오버라이드 권장 |
 | `node.timeout_ms` 기본 | 30000 | 200 | nodePolicy.timeout_ms(min 1000) | 미지정 시 적용 |
 | `node.timeout_ms` 상한 | 300000 | — | — | 초과 지정 거부(저장 검증) |
 | `verify.element_visible.timeout_ms` 기본 | 10000 | 100 | verify.schema | 미지정 시 적용 |
