@@ -308,6 +308,54 @@ describe("D7 운영 콘솔 shell", () => {
     expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
   });
 
+  test("admin gateway 정책 편집: PUT If-Match(version)+Idempotency-Key 디스패치", async () => {
+    const calls: Array<{ version: number; model: string; key: string }> = [];
+    renderApp(
+      fakeClient({
+        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: { jsonMode: true }, budget: { maxInputTokens: 800 } }),
+        updateGatewayPolicy: async (version, body, key) => {
+          calls.push({ version, model: body.model, key });
+          return { model: "gpt-4o", version: version + 1 };
+        },
+      }),
+    );
+    location.hash = "#llmGateway";
+    const saveBtn = await screen.findByRole("button", { name: "정책 저장" });
+    saveBtn.click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.version).toBe(5); // If-Match=현재 version
+    expect(calls[0]?.model).toBe("gpt-4o");
+    expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
+    await waitFor(() => expect(screen.getByText("저장됨")).toBeInTheDocument());
+  });
+
+  test("RBAC UI 게이팅: gateway 편집은 admin만 — operator는 폼 숨김(읽기 전용)", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(
+      fakeClient({
+        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: { jsonMode: true } }),
+      }),
+    );
+    location.hash = "#llmGateway";
+    await waitFor(() => expect(screen.getByText("gpt-4o")).toBeInTheDocument()); // 읽기 표시
+    expect(screen.queryByRole("button", { name: "정책 저장" })).toBeNull(); // 편집 폼 미노출
+  });
+
+  test("admin gateway 편집: 버전 충돌 → POLICY_VERSION_CONFLICT 표면화", async () => {
+    const { ApiError } = await import("../src/api/types");
+    renderApp(
+      fakeClient({
+        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: {}, budget: {} }),
+        updateGatewayPolicy: async () => {
+          throw new ApiError(412, "POLICY_VERSION_CONFLICT", { code: "POLICY_VERSION_CONFLICT" });
+        },
+      }),
+    );
+    location.hash = "#llmGateway";
+    (await screen.findByRole("button", { name: "정책 저장" })).click();
+    await waitFor(() => expect(screen.getByText(/다른 사용자가 먼저 수정/)).toBeInTheDocument());
+  });
+
   test("RBAC UI 게이팅: viewer는 읽기 전용 — 명령 버튼 미표시", async () => {
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     renderApp(
