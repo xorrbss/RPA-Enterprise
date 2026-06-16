@@ -42,6 +42,7 @@ import type {
   RunAbortDrainInput,
   RunAbortDrainResult,
   RunAbortDrainer,
+  ResumeTokenCodec,
   ResumeTokenEnvelope,
   RuntimeJobResult,
   RuntimeWorker,
@@ -64,6 +65,9 @@ import { UtilityExecutor } from "../executor/utility-executor";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../executor/site-page-state-config";
 import { gateBrowserSessionProvider, type BrowserSessionProvider } from "../executor/browser-session-provider";
+import type { ExecutorChallengeSuspensionPort } from "../runtime/executor-completion-coordinator";
+import type { CdpSessionProvider } from "../executor/cdp-session";
+import type { ExecutorPlugin } from "../../../ts/core-types";
 
 export interface BrowserLeasePlan {
   readonly siteProfileId: string;
@@ -80,6 +84,11 @@ export type BrowserLeasePlanResolver = (
   client: pg.PoolClient,
   input: { tenantId: string; runId: string },
 ) => Promise<BrowserLeasePlan | null>;
+
+/** run-drive 시 bound 세션 provider 에서 ExecutorPlugin 을 만드는 seam. 기본은 UtilityExecutor(결정형). suspend-가능
+ *  executor 주입 시 worker-driven suspend 가 트리거·검증된다(실 challenge 감지는 DOM/vision executor 후행). */
+export type RunExecutorFactory = (provider: CdpSessionProvider) => ExecutorPlugin;
+const defaultExecutorFactory: RunExecutorFactory = (provider) => new UtilityExecutor(provider);
 
 export interface PgRuntimeWorkerOptions {
   readonly workerId?: string;
@@ -104,6 +113,13 @@ export interface PgRuntimeWorkerOptions {
   // test_fake 포트는 allowTestBrowserSessionProvider opt-in 필수(gateBrowserSessionProvider, sink 포트와 동형 fail-closed).
   readonly browserSessionProvider?: BrowserSessionProvider;
   readonly allowTestBrowserSessionProvider?: boolean;
+  // suspend 구동(트리거 i): worker 경유 run 이 suspend(executor status='suspended')하면 driveClaimedRun/driveResumedRun →
+  // driveSuspend 가 이 둘을 소비(R4+포트→resume-token 발행+R11→suspended). 미주입 시 suspend terminal 은 loud throw(미구성).
+  // PgChallengeSuspensionPort=stateless, codec=deploy-time(SecretStore+signingKeyRef). 실 트리거(challenge 감지)는 DOM/vision executor 후행.
+  readonly suspensionPort?: ExecutorChallengeSuspensionPort;
+  readonly resumeTokenCodec?: ResumeTokenCodec;
+  // run-drive executor seam: 기본=UtilityExecutor. suspend-가능 executor 주입 시 worker-driven suspend 가 트리거·검증된다.
+  readonly executorFactory?: RunExecutorFactory;
 }
 
 export interface BrowserLeaseRenewInput {
@@ -438,7 +454,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       cleanupPolicy: d.cleanupPolicy,
     });
     try {
-      const executor = new UtilityExecutor(bound.provider);
+      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider);
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
       await driveClaimedRun(
         {
@@ -452,7 +468,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
           networkPolicyId: d.networkPolicyId,
           params: d.params,
         },
-        { pool: this.pool, executor, resolver, workerId },
+        { pool: this.pool, executor, resolver, workerId, suspensionPort: this.options.suspensionPort, resumeTokenCodec: this.options.resumeTokenCodec },
       );
     } finally {
       await bound.release();
@@ -885,7 +901,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       cleanupPolicy: drive.cleanupPolicy,
     });
     try {
-      const executor = new UtilityExecutor(bound.provider);
+      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider);
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
       // R18 후 run 은 running — driveResumedRun 은 R2 없이 resumeNodeId 부터 재진입(success→completed / fail→failed_*).
       await driveResumedRun(
@@ -900,7 +916,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
           networkPolicyId: drive.networkPolicyId,
           params: drive.params,
         },
-        { pool: this.pool, executor, resolver, workerId },
+        { pool: this.pool, executor, resolver, workerId, suspensionPort: this.options.suspensionPort, resumeTokenCodec: this.options.resumeTokenCodec },
         txA.intent.resumeNodeId,
       );
     } finally {
