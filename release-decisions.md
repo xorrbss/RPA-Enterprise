@@ -447,6 +447,30 @@ D8-A9. fallback_chain interpreter execution + `tier` projection (resolves RQ-002
    statically enforced** (no V-rule; the interpreter re-runs shared tier nodes) — tracked as a separate
    static-validation gap (register RQ-032). Adversarially break-it verified.
 
+D8-A10. Object-store credential SecretRef purpose — dedicated `object_store`
+   (resolves the staging-decision-proposals.md B3 sub-decision /
+   product-open-candidate-report.md Artifact Object-Store Evidence Packet "purpose" row)
+   Decision: add a dedicated `"object_store"` value to `SecretAccessRequest.purpose`
+   (`ts/security-middleware-contract.ts`) rather than reusing the existing `"executor"`
+   purpose, for the credentials that artifact redaction/retention real object-store ports
+   (`ArtifactRedactor`/`ArtifactRetentionStore`, the `real_object_store` binding's
+   `credentialRef`) resolve at deploy time. Rationale: **least-privilege**. Artifact lifecycle
+   runs under dedicated operational BYPASSRLS roles (`artifact_redaction_job` /
+   `artifact_retention_sweeper`, `ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT`) intentionally
+   isolated from executor user-traffic; reusing `executor` would authorize browser/executor
+   identities to resolve object-store credentials, widening the executor blast radius beyond
+   its purpose. A distinct purpose lets the SecretStore `authorize()` boundary scope object-store
+   credential resolution to the artifact-lifecycle operational identity only (per the SecretRef
+   namespace/identity map in staging-decision-proposals.md §3). This is **not** an invented
+   external fact — it is a contract enum derived from the repo's own least-privilege /
+   dedicated-operational-role model; the concrete backend alias and credential value remain a
+   deploy-time `[EXTERNAL-FACT]` (staging-decision-proposals.md §8). Owner = project owner
+   (Contract lead); this was the sole undecided repo-side B sub-decision and is now resolved.
+   Impact if wrong (over-narrow): a future design wanting one shared executor+object credential
+   can map the same SecretRef under both purposes — additive, non-breaking. Build-condition:
+   enum landed; real-port wiring resolves with this purpose when the deploy-time object-store
+   binding is provided.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is

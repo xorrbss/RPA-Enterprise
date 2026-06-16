@@ -92,7 +92,7 @@ release-decisions #5(inline `retention_until`/`deleted_at`/`legal_hold`) + ops-d
 - retention 결과: `deleted`/`not_found`(멱등 성공)/`transient_failed`(→ `deleted_at` 설정 금지). useCase `artifact_retention_sweeper`.
 - 제안 기본값(레포 결정 가능): redaction `maxAttempts`는 `ops-defaults.md` redaction/self-heal 상한에 정합(하드코딩 금지), retention 기간은 [PROPOSED] 7 표를 따른다.
 
-> ⚠️ object-store 자격증명 SecretRef **purpose 미정**: 현재 `SecretAccessRequest.purpose`는 `executor|connector|resume_token_hmac|gateway_policy`뿐 — `object_store`가 없다. `executor` 재사용 vs 신규 `object_store` purpose 추가(코드/계약 변경)는 **미결정 (Owner: Contract lead)**. 지어내지 않고 결정 항목으로 남긴다.
+> ✅ object-store 자격증명 SecretRef **purpose 결정됨 (release-decisions D8-A10)**: `SecretAccessRequest.purpose`에 전용 `object_store` 추가(`executor` 재사용 아님). 근거=least-privilege — 아티팩트 lifecycle 전용 운영 identity(`artifact_redaction_job`/`artifact_retention_sweeper`)만 resolve, executor user-traffic와 격리. 백엔드 alias/credential 값은 여전히 배포 시 [EXTERNAL-FACT] 8(지어내지 않음).
 
 ## [PROPOSED] B4. D5 Codex SSE 라이브 capability 증거 형태 (체크리스트 row 47)
 
