@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "poc": "tsx run-poc.ts",
+    "dom-poc": "tsx run-dom-poc.ts",
     "test:redaction": "tsx evidence-redaction.test.ts",
     "test": "npm run typecheck && npm run test:redaction",
     "typecheck": "tsc --noEmit -p tsconfig.json"
