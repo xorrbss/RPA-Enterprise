@@ -26,7 +26,7 @@
     "test:runtime-claim": "tsx test/runtime-worker-claim.int.ts",
     "test:runtime-resume": "tsx test/runtime-worker-resume.int.ts",
     "test:runtime-abort": "tsx test/runtime-worker-abort-finalization.int.ts",
-    "test:executor": "tsx test/executor-dryrun.int.ts && tsx test/ir-interpreter.int.ts",
+    "test:executor": "tsx test/executor-dryrun.int.ts && tsx test/ir-interpreter.int.ts && tsx test/site-page-state.int.ts",
     "test:interpreter": "tsx test/ir-interpreter.int.ts",
     "test:pipeline-run": "tsx test/run-pipeline.int.ts",
     "test:site-resolver": "tsx test/site-page-state.int.ts",
