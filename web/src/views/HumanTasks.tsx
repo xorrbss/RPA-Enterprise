@@ -18,10 +18,11 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
       label="배정"
       action="human_task.assign"
       confirmText="담당자를 배정할까요?"
-      run={(key) => {
-        const a = window.prompt("담당자 ID(uuid)")?.trim();
-        if (a === undefined || a === "") return Promise.reject(new Error("담당자 미입력"));
-        return api.assignHumanTask(id, a, key);
+      inputLabel="담당자 ID(uuid)"
+      run={(key, assignee) => {
+        // 빈 값은 다이얼로그 확인 비활성으로 1차 차단 + 여기서도 방어(조용한 실패 금지).
+        if (assignee === undefined || assignee === "") return Promise.reject(new Error("담당자 미입력"));
+        return api.assignHumanTask(id, assignee, key);
       }}
       invalidateKeys={KEYS}
     />
