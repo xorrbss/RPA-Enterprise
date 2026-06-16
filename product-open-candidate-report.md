@@ -164,7 +164,6 @@ Passed locally:
   artifact redaction/retention jobs, executor audit semantics, and remote
   RBAC/tenant runtime gates remain unwired for real run execution.)
 - `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:int`
-- `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app run test:ci`
 - App integration now includes real `PgGraphileRunEnqueuer` commit/rollback
   evidence for `POST /v1/runs` `run_claim` enqueue, queue-driven configured
   `run_claim` consumption evidence in the Phase 7 runtime delta, and D4.4
