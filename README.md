@@ -596,3 +596,24 @@
 | read 경계 | `ObjectStore`에 `get(objectRef)` 추가(FsObjectStore=readFileSync, 경로 이탈 가드). api는 narrow `ArtifactObjectReader`(server.ts)에만 의존(단방향 의존) — `ApiServerDeps.artifactStore?` 주입; 미주입 시 라우트 미등록 |
 | 계약 정합 | api-surface §5에 v1 404 노트 추가(409는 SECURITY DEFINER 메타-read 필요 → 연기). release-decisions D8-A1에 Built 노트 |
 | 잔존 BLOCK | 실 **분산 object-store 바인딩(S3, 프로세스 간 공유, B3)** = deploy-time/external. in-repo/CI는 FsObjectStore로 완결 |
+
+## v2.18 패치 로그 (RQ-016 — challenge suspension 포트 구현 + `runs.bookmark` 컬럼 신설)
+
+> RQ-016(`ExecutorChallengeSuspensionPort` 미구현 → `human_task.created` producer 부재, 레지스터 BLOCK)의 **포트 구현체를
+> in-repo 빌드**한다. coordinator가 R4(running→suspending) 적용 후 호출하는 포트가 공급된 tenant tx 안에서 `human_tasks` row
+> 생성(kind = `createHumanTask.humanTaskKind`, 하드코딩 아님) + `human_task.created` 발행(닫힌 빈 payload) + suspend bookmark 영속.
+> **계약 변경**: `startBookmark` side-effect의 저장 대상이 없던 것을 **전용 `runs.bookmark` jsonb 컬럼** 신설로 닫는다 —
+> `resume_token`과 **분리**(bookmark = 재개지점 마커 `{stepId,attempt,reason}`, resume_token = 서명 봉투 kid/hmac). resume-token
+> 발행(R11, HMAC 서명키 = SecretStore/KMS deploy-time)은 보류(운영자 지시).
+> **도달성(은폐 금지)**: 포트가 호출되는 `PgExecutorCompletionCoordinator` 경로는 현재 production 미배선(테스트만 인스턴스화) —
+> 본 패치는 RQ-016 **포트 구현 gap**을 닫되, production run의 human_task 생성은 ①coordinator 경로 재배선 + ②resume-token이
+> 별도 후속(없으면 run 'suspending' 잔류). **두 run-완료 경로**(production `driveClaimedRun`(run-step-driver.ts) vs 휴면
+> `PgExecutorCompletionCoordinator`) reconciliation은 미결 설계 결정으로 잔존.
+> **재검증: `app/test/challenge-suspension-port.int.ts` 11(captcha/mfa kind 전파·human_task.created·runs.bookmark·음성 pending 부재 throw·tx 롤백) + `executor-invocation-recorder.int` 무회귀 + tsc·Contract Gates green(main `bec0018b`).**
+
+| 항목 | 조치 |
+|---|---|
+| 포트 | `app/src/runtime/challenge-suspension-port.ts` `PgChallengeSuspensionPort` — additive(신규 클래스, `executor-completion-coordinator.ts` 미편집·인터페이스만 import). 공급 tx에서 human_tasks INSERT + human_task.created emit + runs.bookmark UPDATE. run 재전이 안 함(R4는 호출 전 적용, coordinator 소유) |
+| 계약(DDL) | `db/migration_core_entities.sql` runs에 `bookmark jsonb` 컬럼 신설(nullable). `startBookmark`(R4/R5 side-effect) 영속 대상. resume_token과 분리 |
+| 가드 | createHumanTask/startBookmark pending 부재 → loud throw(조용한 false 금지). bookmark UPDATE `rowCount≠1`(run 부재/테넌트 불일치) → throw |
+| 잔존 | resume-token(R11, KMS) · coordinator 경로 production 재배선 · `@human_task`(R5) IR 노드 경로 = 후속 증분. 레지스터 RQ-016 재분류(BLOCK→부분)는 별도 |
