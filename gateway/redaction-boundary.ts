@@ -28,6 +28,11 @@ const CREDENTIAL_EXFILTRATION_PATTERNS: readonly RegExp[] = [
 // §3(b) instruction-override 패턴은 single SSoT(security/prompt-injection-patterns.ts)에서 가져온다(RQ-031) —
 // 자매 detector security/compliance-scaffold.ts 와 동일 사전을 참조해 §3(b) 비대칭 판정을 제거한다.
 
+// §3(a) hidden-instruction(부분): zero-width/invisible/format 문자. 페이지가 명령·자격증명 요청을 비가시 문자로
+// 가리거나(smuggling) 키워드 사이에 끼워 탐지를 회피(난독화)하는 벡터. 평탄화돼도 텍스트에 남으므로 gateway가
+// visibility 메타 없이도 검출 가능. (DOM display:none/offscreen 등 구조적 hidden은 호출자 visibility 스레딩 필요 — 별도 증분.)
+const INVISIBLE_CHARS = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/g;
+
 export class DeterministicPromptInjectionDetector implements PromptInjectionDetector {
   inspect(input: {
     tenantId: TenantId;
@@ -36,6 +41,24 @@ export class DeterministicPromptInjectionDetector implements PromptInjectionDete
     networkPolicy?: NetworkPolicy;
   }): PromptInjectionDecision {
     const text = String(input.redactedText).toLowerCase();
+
+    // §3(a): invisible/zero-width 문자가 명령·자격증명 요청을 가리거나 난독화 → hidden_instruction(보수적 차단).
+    //   제거해 드러나는 지시를 판정(가시 텍스트 분기보다 먼저 — "조용한 false 금지").
+    const deobfuscated = text.replace(INVISIBLE_CHARS, "");
+    if (
+      deobfuscated.length !== text.length &&
+      (matchesInstructionOverride(deobfuscated) || CREDENTIAL_EXFILTRATION_PATTERNS.some((pattern) => pattern.test(deobfuscated)))
+    ) {
+      return {
+        kind: "blocked",
+        code: "PROMPT_INJECTION_DETECTED",
+        evidence: [{
+          signal: "hidden_instruction",
+          excerpt: "[redacted hidden instruction]" as RedactedString,
+          source: "dom",
+        }],
+      };
+    }
 
     if (matchesInstructionOverride(text)) {
       return {
