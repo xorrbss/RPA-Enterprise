@@ -70,8 +70,8 @@ path at deploy time (no external release/oncall team exists).
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 30 markers, 11 actionable blockers, 13 known release decisions tracked,
-  13 release decisions checked (11 active deploy-time provisioning checklist rows;
+  output: 29 markers, 10 actionable blockers, 13 known release decisions tracked,
+  13 release decisions checked (10 active deploy-time provisioning checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -212,8 +212,8 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 30 markers, 11 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked (11 active deploy-time provisioning
+  (current output: 29 markers, 10 actionable blockers, 13 known release
+  decisions tracked, 13 release decisions checked (10 active deploy-time provisioning
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
@@ -300,9 +300,12 @@ Remote CI evidence:
   on commit `6ac33af251bd362a4de200d2eba956d371408cf3`. The latest non-skipped
   Phase 7 push run, the prior code-delta run `27524267891`, and the failed-job rerun did
   not start hosted runner jobs. GitHub Actions annotations report that recent
-  account payments have failed or the spending limit must be increased. This is
-  external billing/admin evidence, not a repo-code failure, and it does not
-  close the required remote job URL gate for the Phase 7 delta.
+  account payments have failed or the spending limit must be increased. **That
+  billing/admin blocker is now resolved**: hosted-runner execution is restored and
+  `main` `Contract Gates` run `27609993667` (commit `848413ce`, post-merge of #82) is
+  `success` with the required `secret-scan` / `PostgreSQL 15 migration smoke` /
+  `App runtime typecheck and tests` job URLs, closing the remote job URL gate for the
+  Phase 7 delta (now merged on `main`).
 
 Browser route smoke evidence:
 
@@ -471,8 +474,7 @@ Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
   Required decision: At deploy time, the project owner must provide staging or production evidence from a real `ArtifactRedactor` port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, producing a redaction-safe object/ref or explicit `not_required` decision, updating `redaction_status` by tenant-scoped CAS from `pending` under an unexpired claim, handling `redaction_attempts`/threshold/alerting, preserving legal-hold/retention metadata, persisting `sha256`/quarantine behavior, appending required `bypassrls.use` audit for the operational role, and proving no plaintext Secret/PII or internal `ObjectRef` is emitted. The local fake/test port evidence proves repo guardrails only and must not be cited as staging redaction evidence.
 - TODO: [BLOCKED] Runtime artifact_retention production/staging external object deletion evidence is not complete.
   Required decision: At deploy time, the project owner must provide staging or production evidence from a real `ArtifactRetentionStore` delete port bound to a SecretRef-backed object-store credential path, using the repo-defined claim lease/finalize CAS contract, with idempotent not-found behavior, retry/backoff/error mapping, when `deleted_at` may be set relative to object deletion under an unexpired claim, legal-hold/quarantine handling, evidence/audit semantics, and approved staging credential/SecretRef path before Product Open can claim external artifact purge. The local fake/test port evidence proves repo guardrails only and is not staging external object deletion evidence.
-- TODO: [BLOCKED] Runtime execution staging gates are not yet complete remote evidence.
-  Required decision: Release/runtime owners or repository billing administrators must restore GitHub Actions hosted-runner execution by resolving the account payment/spending-limit blocker, rerun `Contract Gates` on the Phase 7 `main` head, and provide PR/main evidence proving tenant boundary, RBAC/redaction, no `BYPASSRLS`, no silent false/unknown behavior, plus the required `secret-scan`, `PostgreSQL 15 migration smoke`, and `App runtime typecheck and tests` job URLs for the Phase 7 runtime delta before citing it as current staging/open evidence. Local non-bypass temp-DB evidence is recorded above but does not replace remote release evidence.
+- Resolved (remote evidence): Runtime execution staging gates now have current remote `main` CI evidence. GitHub Actions hosted-runner execution is restored (the account payment/spending-limit blocker no longer applies — `main` `Contract Gates` runs start and succeed). The Phase 7 runtime delta is merged on `main` (`executor-step-orchestrator.ts` / `executor-completion-coordinator.ts` / `executor-invocation-recorder.ts`), and `main` `Contract Gates` run `27609993667` (commit `848413ce`) is `success` with the required job URLs — `App runtime typecheck and tests` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653454), `Secret scan` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653459), `PostgreSQL 15 migration smoke` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653766). The `App runtime typecheck and tests` job runs `test:int` under a non-`SUPERUSER`/non-`BYPASSRLS` PostgreSQL 15 role, proving tenant boundary / RBAC/redaction / no `BYPASSRLS` / no silent false-unknown. Former Required decision: restore GitHub Actions hosted-runner execution, rerun `Contract Gates` on the Phase 7 `main` head, and provide the required PR/main job URLs.
 
 ### Durable Security Audit Writer Decision Packet
 
