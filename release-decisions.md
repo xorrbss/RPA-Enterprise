@@ -360,6 +360,30 @@ D8-A7. Interpreter graph-step ceiling — ops-defaults source (resolves RQ-017)
    the repo convention for ops-defaults values is inline-with-citation, not a central
    config module).
 
+D8-A8. Loop interpreter execution + `loop.page_count` semantics (resolves RQ-002 loop)
+   Decision: implement the IR `loop` flow in the interpreter as a **while-loop controlled at the
+   loop node** (`ir-interpreter.ts` `runScenario`, `ir-translate.ts`). The `body_target` subgraph
+   cycles back to the loop node (V4 permits cycles only when they contain a loop node); on each
+   arrival the interpreter resolves PageState (flags, same boundary as `on[]`), injects the
+   `loop.*` scope, and evaluates the compiled `until`. `until == true` OR `iteration >= max_iterations`
+   → `exit_target` (both graceful, per ir.schema; distinct from the whole-graph
+   `interpreter.graph_max_steps` guard which throws `IR_LOOP_LIMIT`, D8-A7). `loop.iteration` is the
+   0-base count of completed body passes (run-scoped, per loop node).
+   **`loop.page_count` is defined equal to `loop.iteration`** in the deterministic interpreter:
+   one loop body pass = one "page", so the interpreter has no page concept distinct from a body
+   pass. Rationale / 비발명: ir-expression §2 lists both `loop.iteration` and `loop.page_count` as
+   loop-scope ints but does not pin a separate increment rule for `page_count`; equating it to the
+   single observable (completed body passes) is the minimal non-inventing mapping. A finer
+   "pages that yielded data" metric, and the `cursor.*` namespace, are **collection-pipeline**
+   concerns that don't exist yet — they remain **un-projected** and surface as `IREL_RUNTIME_MISSING`
+   when referenced (ir-expression §2 line 68, "compile-then-throw, 발명 금지"; not silently false).
+   Impact if wrong: a scenario relying on `page_count` meaning "data pages only" (≠ body passes)
+   would over/under-count; revisited when the collection cursor/pipeline lands (same increment that
+   would populate `cursor.*`). `fallback_chain` + the `tier` projection are a separate later increment
+   (the tier-subgraph orchestration model needs its own decision). Build-condition: loop done
+   (ir-translate loop flow + interpreter while-loop + `loop.*` scope; tests interpreter-loop.unit
+   6 + ir-translate.unit loop cases).
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is

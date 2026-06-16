@@ -5,8 +5,9 @@
  * 캐시한다. what(액션)/next/terminal/start 는 ir에 있으므로 둘을 합쳐 변환한다.
  * 런타임 파싱 없음: on[].when 은 ir의 문자열이 아니라 compiled_ast의 AST를 사용한다("§10 단방향").
  *
- * 범위(1단계): 액션은 navigate(url_ref→url)/observe(drop, on[] resolve가 observe 역할)만, 흐름은 next/on[]/terminal만.
- * loop/fallback_chain·download/extract/act 등은 후속 — 미지원은 조용히 흘리지 않고 InterpreterError로 표면화한다.
+ * 범위: 액션은 navigate(url_ref→url)/observe(drop)/act/extract, 흐름은 next/on[]/terminal/**loop**(RQ-002).
+ * loop 는 compiled_ast.loop(until AST + body/exit/max)를 NodeFlow loop 로 변환. fallback_chain·download 등은 후속 —
+ * 미지원은 조용히 흘리지 않고 InterpreterError로 표면화한다.
  *
  * url_ref 해석: navigate.url_ref 는 run params 의 키다. resolveUrlRef(url_ref, params)로 절대 URL 을 산출해 navigate.url 로
  * 넣는다(site-match 와 동일 함수 → 드리프트 없음). 해소 실패(URL_REF_*)는 InterpreterError 로 환원해 타입 경계 유지.
@@ -59,8 +60,32 @@ export function compiledScenarioFrom(
         );
       }
       flow = { kind: "on", branches: onAst.map((b) => toBranch(id, b)) };
+    } else if (isRec(raw.loop)) {
+      // loop.until 은 on[].when 과 동형으로 compiled_ast 에 컴파일돼 있다(static-validation, allowLoopScope). body/exit/max도
+      // compiled_ast.loop 에 함께 담긴다. 부재/불완전은 캐시 드리프트(구조 결함)이지 value 무매칭이 아니다 → IR_SCHEMA_INVALID(RQ-008 동형).
+      const ca = isRec(caNodes[id]) ? (caNodes[id] as Record<string, unknown>) : {};
+      const caLoop = isRec(ca.loop) ? (ca.loop as Record<string, unknown>) : undefined;
+      if (
+        caLoop === undefined ||
+        caLoop.until === undefined ||
+        typeof caLoop.body_target !== "string" ||
+        typeof caLoop.exit_target !== "string" ||
+        typeof caLoop.max_iterations !== "number"
+      ) {
+        throw new InterpreterError(
+          "IR_SCHEMA_INVALID",
+          `compiledScenarioFrom: node '${id}' loop compiled_ast 드리프트/불완전(until AST·body/exit/max 부재)`,
+        );
+      }
+      flow = {
+        kind: "loop",
+        until: caLoop.until as IRELNode,
+        bodyTarget: caLoop.body_target,
+        exitTarget: caLoop.exit_target,
+        maxIterations: caLoop.max_iterations,
+      };
     } else {
-      throw new InterpreterError("UNSUPPORTED_FLOW", `compiledScenarioFrom: node '${id}' loop/fallback_chain 미지원(1단계)`);
+      throw new InterpreterError("UNSUPPORTED_FLOW", `compiledScenarioFrom: node '${id}' fallback_chain 미지원(loop 지원; fallback 후속 증분)`);
     }
     nodes[id] = { what, flow };
   }

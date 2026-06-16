@@ -8,13 +8,16 @@
  * 의존 방향(§10 단방향): Interpreter → {ExecutorPlugin, PageStateResolver, flow-control(codegen evaluator)}.
  * 런타임 파싱 없음 — 저장/승격 시 컴파일된 on[] AST(CompiledOnBranch)만 평가한다.
  *
- * 범위(1단계, 결정형): navigate/download/upload(UtilityExecutor) + next/on[]/terminal.
+ * 범위(결정형): navigate/download/upload(UtilityExecutor) + next/on[]/terminal/**loop**(RQ-002).
+ *   - loop: body_target 서브그래프를 until/max_iterations 까지 반복(while-loop; body가 loop 노드로 사이클백, V4).
+ *     loop.* 스코프(iteration/page_count) 주입. cursor.*·데이터-단위 page 의미는 수집 파이프라인 소관(미투영, loud).
  *   - dom act/observe/extract(LLM)·vision은 실행기가 EXECUTOR_CAPABILITY_MISMATCH로 거부 → 그대로 전파(가정 금지).
- *   - loop/fallback_chain·예약핸들러(@challenge/@human_task/@end_no_data)·suspend는 후속 단계. 미처리 status는
+ *   - fallback_chain·예약핸들러(@challenge/@human_task/@end_no_data)·suspend는 후속 단계. 미처리 status는
  *     조용히 흘리지 않고 InterpreterError로 표면화한다("조용한 false/unknown 금지").
  */
+import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
 import type { ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
-import { selectOnBranch, type CompiledOnBranch } from "./flow-control";
+import { evaluateCondition, selectOnBranch, type CompiledOnBranch } from "./flow-control";
 
 /** 표준 노드 출력 필드(IREL node.<id>.*). 미투영 필드는 부재 → 참조 시 IREL_RUNTIME_MISSING(loud). */
 interface NodeOutput {
@@ -38,7 +41,10 @@ function projectNodeOutput(res: StepResult): NodeOutput {
 export type NodeFlow =
   | { readonly kind: "terminal"; readonly terminal: string }
   | { readonly kind: "next"; readonly target: string }
-  | { readonly kind: "on"; readonly branches: readonly CompiledOnBranch<string>[] };
+  | { readonly kind: "on"; readonly branches: readonly CompiledOnBranch<string>[] }
+  // loop: body_target 서브그래프를 until=true 또는 max_iterations 도달까지 반복(둘 다 exit_target로 graceful 탈출,
+  // ir.schema/V4). body 서브그래프는 loop 노드로 사이클백(V4: 사이클은 loop 노드 포함 시만 허용). until은 컴파일 AST.
+  | { readonly kind: "loop"; readonly until: IRELNode; readonly bodyTarget: string; readonly exitTarget: string; readonly maxIterations: number };
 
 /** 인터프리터가 순회하는 노드. what 은 ExecutorPlugin.execute가 받는 액션(형 검증은 실행기 책임). */
 export interface ScenarioNode {
@@ -108,6 +114,8 @@ export async function runScenario(
   // 실행 완료 노드의 표준 출력(node.<id>.*). status(항상) + extract 노드의 row_count({rows} 봉투 길이)·extracted_ref
   // (출력 아티팩트). tier(fallback)·비-extract row_count 등 미투영 필드 참조는 IREL_RUNTIME_MISSING(loud, ir-expression §2).
   const nodeScope: Record<string, NodeOutput> = {};
+  // loop 노드별 0-base 반복 카운트(= 완료된 body pass 수, run 내 영속). exit 시 삭제(재진입 시 0부터).
+  const loopState = new Map<string, number>();
   let ctx = initialCtx;
   let nodeId = scenario.start;
 
@@ -144,6 +152,31 @@ export async function runScenario(
     }
     if (node.flow.kind === "next") {
       nodeId = node.flow.target;
+      continue;
+    }
+    if (node.flow.kind === "loop") {
+      const lf = node.flow;
+      // flags 산출(on[]과 동일 경계) — until 이 flags.* 참조 가능. loop.* 스코프는 loop 노드 내부 전용(ir-expression §2).
+      const loopPageState = await deps.resolver.resolvePageState(ctx);
+      ctx = { ...ctx, pageState: loopPageState };
+      const iteration = loopState.get(nodeId) ?? 0;
+      const loopScope: IRELScope = {
+        flags: loopPageState.flags,
+        params: deps.params,
+        node: nodeScope as unknown as Record<string, Record<string, unknown>>,
+        // page_count=iteration: 결정형 인터프리터는 "page"를 loop body pass와 구분하지 않는다(1 pass=1 page).
+        // 데이터-단위 page/cursor.* 의미는 수집 파이프라인 소관(미투영 → IREL_RUNTIME_MISSING, ir-expression §2). release-decisions D8-A?? 참조.
+        loop: { iteration, page_count: iteration },
+      };
+      // until=true 또는 max_iterations 도달 → exit_target(둘 다 graceful 탈출, ir.schema/V4 — graph_max_steps→IR_LOOP_LIMIT와 구분).
+      //   until 평가의 cursor.* 등 미투영 참조는 evaluator가 IREL_RUNTIME_MISSING(loud, 조용한 false 금지).
+      if (evaluateCondition(lf.until, loopScope) || iteration >= lf.maxIterations) {
+        loopState.delete(nodeId);
+        nodeId = lf.exitTarget;
+      } else {
+        loopState.set(nodeId, iteration + 1);
+        nodeId = lf.bodyTarget;
+      }
       continue;
     }
     // on[]: PageState(flags) 산출(observe) → 분기. scope = flags + params + 누적 node.status.
