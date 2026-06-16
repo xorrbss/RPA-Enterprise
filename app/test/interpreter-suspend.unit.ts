@@ -7,7 +7,7 @@
  * 부재/kind 오류 → IR_SCHEMA_INVALID, @challenge → RESERVED_HANDLER_UNSUPPORTED. failed_business → terminal(suspend 아님).
  * 기타 미지원 status(skipped) → EXECUTOR_STATUS_UNSUPPORTED(조용한 false/unknown 금지). 실행: tsx test/interpreter-suspend.unit.ts.
  */
-import type { ClassifiedException, ExecutorPlugin, PageState, RedactedString, RunContext, StepResult, StepStatus, VerifyResult } from "../../ts/core-types";
+import type { ChallengeSummary, ClassifiedException, ExecutorPlugin, PageState, RedactedString, RunContext, StepResult, StepStatus, VerifyResult } from "../../ts/core-types";
 import { runScenario, type CompiledScenario } from "../src/runtime/ir-interpreter";
 
 let failures = 0;
@@ -19,7 +19,11 @@ function check(label: string, cond: boolean, detail?: string): void {
   }
 }
 
-function stepResult(status: StepStatus, exception?: ClassifiedException): StepResult {
+function challenge(type: ChallengeSummary["type"]): ChallengeSummary {
+  return { type, detectedBy: "dom", confidence: 1 };
+}
+
+function stepResult(status: StepStatus, exception?: ClassifiedException, ch?: ChallengeSummary): StepResult {
   return {
     stepId: "s",
     action: "act",
@@ -30,13 +34,14 @@ function stepResult(status: StepStatus, exception?: ClassifiedException): StepRe
     cache: { mode: "bypass" },
     timings: { startedAt: "t", endedAt: "t", durationMs: 0 },
     ...(exception !== undefined ? { exception } : {}),
+    ...(ch !== undefined ? { challenge: ch } : {}),
   };
 }
 
-function executorReturning(status: StepStatus, exception?: ClassifiedException): ExecutorPlugin {
+function executorReturning(status: StepStatus, exception?: ClassifiedException, ch?: ChallengeSummary): ExecutorPlugin {
   return {
     capabilities: () => ({ dom: false, vision: false, utility: true }),
-    execute: async () => stepResult(status, exception),
+    execute: async () => stepResult(status, exception, ch),
     verify: async (): Promise<VerifyResult> => ({ passed: true, criteria: [] }) as unknown as VerifyResult,
   };
 }
@@ -65,10 +70,10 @@ const scenario: CompiledScenario = {
 };
 
 async function main(): Promise<void> {
-  // 1) suspended → suspend outcome + SuspendContext.
+  // 1) suspended(challenge=captcha) → suspend outcome + SuspendContext.challengeKind=captcha.
   {
     const exc: ClassifiedException = { class: "challenge", code: "CHALLENGE_UNRESOLVED", message: "captcha" as RedactedString };
-    const o = await runScenario(scenario, ctx(), { executor: executorReturning("suspended", exc), resolver: fakeResolver });
+    const o = await runScenario(scenario, ctx(), { executor: executorReturning("suspended", exc, challenge("captcha")), resolver: fakeResolver });
     check("terminal === 'suspend'", o.terminal === "suspend", o.terminal);
     check("suspend.resumeNodeId === 'challenge' (같은 노드 재진입)", o.suspend?.resumeNodeId === "challenge", o.suspend?.resumeNodeId);
     check("suspend.kind === 'challenge'", o.suspend?.kind === "challenge", o.suspend?.kind);
@@ -80,19 +85,50 @@ async function main(): Promise<void> {
     check("visited 에 challenge 포함", o.visited.includes("challenge"));
   }
 
-  // 2) suspended without exception → exception 부재(optional).
+  // 2) suspended(challenge=mfa) → challengeKind=mfa(하드코딩 제거 검증 — captcha 로 오라벨링 안 됨).
   {
-    const o = await runScenario(scenario, ctx(), { executor: executorReturning("suspended"), resolver: fakeResolver });
-    check("exception 없는 suspend → suspend.exception undefined", o.terminal === "suspend" && o.suspend?.exception === undefined);
+    const o = await runScenario(scenario, ctx(), { executor: executorReturning("suspended", undefined, challenge("mfa")), resolver: fakeResolver });
+    check("suspend.challengeKind === 'mfa' (executor 신호 반영)", o.terminal === "suspend" && o.suspend?.challengeKind === "mfa", o.suspend?.challengeKind);
+    check("exception 없는 suspend → suspend.exception undefined", o.suspend?.exception === undefined);
   }
 
-  // 3) failed_business → terminal(suspend 아님).
+  // 3) suspended 인데 challenge 부재 → 조용한 captcha 폴백 금지: EXECUTOR_STATUS_UNSUPPORTED throw.
+  {
+    let threw: unknown;
+    try {
+      await runScenario(scenario, ctx(), { executor: executorReturning("suspended"), resolver: fakeResolver });
+    } catch (e) {
+      threw = e;
+    }
+    check(
+      "challenge 부재 suspend → EXECUTOR_STATUS_UNSUPPORTED throw",
+      threw instanceof Error && (threw as { code?: string }).code === "EXECUTOR_STATUS_UNSUPPORTED",
+      String(threw),
+    );
+  }
+
+  // 4) suspended 인데 challenge.type 이 human-assist 아님(block_page) → throw(captcha|mfa 만 suspend).
+  {
+    let threw: unknown;
+    try {
+      await runScenario(scenario, ctx(), { executor: executorReturning("suspended", undefined, challenge("block_page")), resolver: fakeResolver });
+    } catch (e) {
+      threw = e;
+    }
+    check(
+      "challenge.type='block_page' suspend → EXECUTOR_STATUS_UNSUPPORTED throw",
+      threw instanceof Error && (threw as { code?: string }).code === "EXECUTOR_STATUS_UNSUPPORTED",
+      String(threw),
+    );
+  }
+
+  // 5) failed_business → terminal(suspend 아님).
   {
     const o = await runScenario(scenario, ctx(), { executor: executorReturning("failed_business"), resolver: fakeResolver });
     check("failed_business → terminal 'fail_business' (suspend 아님)", o.terminal === "fail_business" && o.suspend === undefined, o.terminal);
   }
 
-  // 4) 기타 미지원 status(skipped) → EXECUTOR_STATUS_UNSUPPORTED throw(조용한 false 금지).
+  // 6) 기타 미지원 status(skipped) → EXECUTOR_STATUS_UNSUPPORTED throw(조용한 false 금지).
   {
     let threw: unknown;
     try {

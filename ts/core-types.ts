@@ -94,6 +94,10 @@ export type StepResult = {
     committed: boolean;
   };
   exception?: ClassifiedException;
+  // [FIX] status='suspended'(human-assist 중단)인 step 의 challenge 종류 운반자. 인터프리터는 pageStateAfter(ref)만
+  //   쥐고 있어 PageState.challenge 를 못 읽으므로, 감지한 executor 가 ChallengeSummary 를 step 출력에 echo 한다.
+  //   이것이 challengeKind(captcha|mfa) → human_task kind → resolve.<kind> RBAC 의 유일한 상류 신호다(SuspendContext.challengeKind).
+  challenge?: ChallengeSummary;
   timings: { startedAt: string; endedAt: string; durationMs: number };
 };
 
