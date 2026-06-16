@@ -279,6 +279,36 @@ const STATIC_CASES: StaticCase[] = [
     expectWarnings: [],
   },
   {
+    name: "Static invalid: V12 non-read_only fallback 티어 entry_node 멱등키 누락",
+    data: { meta: { name: "t", version: 1 }, start: "n1", nodes: {
+      n1: { fallback_chain: [{ tier: "T0", entry_node: "submit" }, { tier: "T1", entry_node: "retry" }] },
+      submit: { side_effect: { kind: "submit", idempotency_key: "k1" }, terminal: "success" },
+      retry: { terminal: "success" },
+    } },
+    expectErrors: ["fallback_side_effect_idempotency_missing"],
+    expectWarnings: [],
+  },
+  {
+    name: "Static valid: V12 non-read_only fallback 모든 티어 entry_node 멱등키 보유",
+    data: { meta: { name: "t", version: 1 }, start: "n1", nodes: {
+      n1: { fallback_chain: [{ tier: "T0", entry_node: "submit" }, { tier: "T1", entry_node: "retry" }] },
+      submit: { side_effect: { kind: "submit", idempotency_key: "k1" }, terminal: "success" },
+      retry: { side_effect: { kind: "submit", idempotency_key: "k2" }, terminal: "success" },
+    } },
+    expectErrors: [],
+    expectWarnings: [],
+  },
+  {
+    name: "Static valid: V12 all-read_only fallback 체인은 멱등키 불요",
+    data: { meta: { name: "t", version: 1 }, start: "n1", nodes: {
+      n1: { fallback_chain: [{ tier: "T0", entry_node: "a" }, { tier: "T1", entry_node: "b" }] },
+      a: { side_effect: { kind: "read_only" }, terminal: "success" },
+      b: { terminal: "success" },
+    } },
+    expectErrors: [],
+    expectWarnings: [],
+  },
+  {
     name: "Static valid: registered shell cmd_ref",
     data: { meta: { name: "t", version: 1 }, start: "n1", nodes: { n1: { what: [{ action: "shell", cmd_ref: "signed.export_report" }], terminal: "success" } } },
     expectErrors: [],
