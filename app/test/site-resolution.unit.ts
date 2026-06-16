@@ -37,6 +37,12 @@ check("originOf 절대 URL → origin", originOf("http://127.0.0.1:8080/fixture/
 check("originOf glob 접미사 무시(경로 제거)", originOf("https://shop.example/*") === "https://shop.example");
 check("originOf full URL → origin", originOf("https://shop.example/vp/products/1?page=2") === "https://shop.example");
 check("originOf 심볼릭(절대 URL 아님) → null", originOf("orders_url") === null);
+// RQ-021/024: opaque-origin scheme(file:/javascript:/data:/blob:)은 http(s) 절대 URL 아님 → null(fail-closed).
+//   (URL.origin 이 문자열 "null"을 반환해 `===null` 가드를 무력화하던 fail-open 교정.)
+check("originOf file: → null", originOf("file:///etc/passwd") === null);
+check("originOf javascript: → null", originOf("javascript:alert(document.cookie)") === null);
+check("originOf data: → null", originOf("data:text/html,<script>x</script>") === null);
+check("originOf blob: → null", originOf("blob:http://a/x") === null);
 
 // 2) extractEntryNavigateUrlRef — 선형(start가 navigate)
 check(
@@ -96,6 +102,10 @@ throwsCode("resolveUrlRef: 키 부재 → URL_REF_PARAM_MISSING", () => resolveU
 throwsCode("resolveUrlRef: 비-문자열 → URL_REF_PARAM_NOT_STRING", () => resolveUrlRef("k", { k: 7 }), "URL_REF_PARAM_NOT_STRING");
 throwsCode("resolveUrlRef: 빈 문자열 → URL_REF_PARAM_EMPTY", () => resolveUrlRef("k", { k: "" }), "URL_REF_PARAM_EMPTY");
 throwsCode("resolveUrlRef: 비-절대URL 값 → URL_REF_VALUE_NOT_ABSOLUTE_URL", () => resolveUrlRef("k", { k: "orders_url" }), "URL_REF_VALUE_NOT_ABSOLUTE_URL");
+// RQ-021: opaque scheme 값은 절대 URL로 흡수 금지(file:/javascript:/data: navigation fail-open) → loud throw.
+throwsCode("resolveUrlRef: file: → URL_REF_VALUE_NOT_ABSOLUTE_URL", () => resolveUrlRef("k", { k: "file:///etc/passwd" }), "URL_REF_VALUE_NOT_ABSOLUTE_URL");
+throwsCode("resolveUrlRef: javascript: → URL_REF_VALUE_NOT_ABSOLUTE_URL", () => resolveUrlRef("k", { k: "javascript:alert(1)" }), "URL_REF_VALUE_NOT_ABSOLUTE_URL");
+throwsCode("resolveUrlRef: data: → URL_REF_VALUE_NOT_ABSOLUTE_URL", () => resolveUrlRef("k", { k: "data:text/html,x" }), "URL_REF_VALUE_NOT_ABSOLUTE_URL");
 
 // 9) resolveSiteProfileId 방어적 불변식 — 비-절대URL 직접 전달(해소 누락 호출측 버그)은 질의 전 loud throw.
 const neverClient = {
@@ -111,6 +121,21 @@ await (async () => {
   } catch (e) {
     check(
       "resolveSiteProfileId 방어 가드: 비-절대URL → URL_REF_SYMBOLIC_UNRESOLVED(질의 전)",
+      e instanceof SiteResolutionError && e.code === "URL_REF_SYMBOLIC_UNRESOLVED",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+})();
+
+// RQ-024: opaque-origin entryUrlRef(file: 등)도 질의 전 loud throw — 이전엔 originOf "null" 문자열로 가드가
+//   무력화돼 무관 site_profile에 오매칭(잘못된 selector/identity/network policy)될 수 있었다.
+await (async () => {
+  try {
+    await resolveSiteProfileId(neverClient, { tenantId: "t", entryUrlRef: "file:///etc/passwd" });
+    check("resolveSiteProfileId: opaque file: → URL_REF_SYMBOLIC_UNRESOLVED(질의 전)", false, "throw 기대");
+  } catch (e) {
+    check(
+      "resolveSiteProfileId: opaque file: → URL_REF_SYMBOLIC_UNRESOLVED(질의 전)",
       e instanceof SiteResolutionError && e.code === "URL_REF_SYMBOLIC_UNRESOLVED",
       e instanceof Error ? e.message : String(e),
     );

@@ -28,6 +28,7 @@ import type {
   AuthenticatedPrincipal,
   AuthenticationBoundary,
   CanonicalRequestHash,
+  DurableSecurityAuditDecisionWriter,
   IdempotencyKey,
   RbacAction,
   RbacMiddleware,
@@ -83,6 +84,12 @@ export interface ApiServerDeps {
   security?: SecurityConfig;
   /** artifact 본문 read 경계(선택). 미지정 시 GET /v1/artifacts/{id} 미등록(D8-A1 — 실 object-store 바인딩 deploy-time). */
   artifactStore?: ArtifactObjectReader;
+  /**
+   * security-contracts §10 audit boundary writer. `artifact.read`(artifact 본문 disclosure)는 본문 반환 전
+   * 이 boundary에 fail-closed append해야 한다(§10:147-148). artifactStore가 주입되면 필수 —
+   * 미주입 시 artifact read capability는 audit 없이 노출될 수 없다(fail-closed, registerReadRoutes에서 강제).
+   */
+  securityAudit?: DurableSecurityAuditDecisionWriter;
 }
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;

@@ -40,10 +40,17 @@ export class SiteResolutionError extends Error {
   }
 }
 
-/** 절대 URL의 origin(scheme://host:port). 절대 URL 아니면 null. */
+/** http(s) 절대 URL의 origin(scheme://host:port). http(s) 절대 URL 아니면 null. */
 export function originOf(raw: string): string | null {
   try {
-    return new URL(raw).origin;
+    const url = new URL(raw);
+    // opaque-origin scheme(file:/javascript:/data:/blob:/custom: 등)은 URL.origin이 **문자열 "null"**을 반환한다
+    // (WHATWG: opaque origin 직렬화). `=== null`(JS null) 가드를 무력화해 비-http(s) URL이 절대 URL로 통과하던
+    // fail-open(RQ-021/024)을 닫는다: http(s)만 유효 origin으로 인정하고 그 외는 명시 거부(조용한 false 금지).
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url.origin;
   } catch {
     return null;
   }
