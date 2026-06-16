@@ -101,7 +101,7 @@
 | `raw_items.raw_payload` | 30d | `raw_items.retention_default` | 원시 수집·재처리 창(최단). 실 collector(D6 범위 밖)가 이 source로 산출 |
 | `normalized_records.record` | 90d | `normalized_records.retention_default` | events_outbox 90d 정합. 실 normalizer가 산출 |
 | `control_plane_idempotency_keys.response_body` | = `expires_at` | D4.3 app idempotency writer | 단일 source 유지(별도 값 없음, 이미 배선) |
-| `audit_log.payload` | **컴플라이언스 오너 확정 ([EXTERNAL-FACT], 제안 ≥365d)** | 규제/감사 보존 | 임의 단축 금지 — 오너 입력 대기. writer는 `retentionUntil` 미공급 시 이미 fail-closed |
+| `audit_log.payload` | **2555d (7년) — v1 기본값, override 가능 (D8-A14)** | 규제/감사 보존 (redacted 저-PII payload) | 과소보존 회피 우선. 특정 규제 상이 시 오너 조정. writer는 `retentionUntil` 미공급 시 fail-closed |
 
 ---
 
