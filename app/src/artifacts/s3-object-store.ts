@@ -141,14 +141,24 @@ export class S3ObjectStore implements ObjectStore {
 
   /** ObjectRef → object 바이트(utf8 문자열). 부재(404/NoSuchKey)는 null(존재하지 않는 object). */
   async get(objectRef: ObjectRef): Promise<string | null> {
+    const bytes = await this.getBytes(objectRef);
+    if (bytes === null) return null;
+    return new TextDecoder().decode(bytes);
+  }
+
+  /**
+   * ObjectRef → object 의 RAW 바이트(디코드 없음). 부재(404/NoSuchKey)는 null. redaction 파이프라인이
+   * 바이너리 fail-closed 를 유지하려면 이 경로를 써야 한다(TextDecoder 의 U+FFFD 치환으로 binary 가
+   * always-valid UTF-8 텍스트로 둔갑하는 것을 차단).
+   */
+  async getBytes(objectRef: ObjectRef): Promise<Uint8Array | null> {
     const key = this.keyFromObjectRef(objectRef, "get");
     const res = await this.send("GET", key, undefined);
     if (res.status === 404) return null;
     if (!res.ok) {
       throw new S3ObjectStoreError("get", `s3 get returned HTTP ${res.status}`, key, res.status);
     }
-    const bytes = await res.bytes();
-    return new TextDecoder().decode(bytes);
+    return res.bytes();
   }
 
   /**

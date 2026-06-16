@@ -26,6 +26,7 @@ import {
   S3ArtifactRedactor,
   type ArtifactContentTransform,
 } from "../src/artifacts/s3-artifact-redactor";
+import { ContentRedactionTransform } from "../src/artifacts/content-redaction-transform";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -67,6 +68,18 @@ function ioTransport(puts: Uint8Array[]): S3HttpTransport {
 
 function bytesResponse(status: number, bytes: Uint8Array): S3HttpTransportResponse {
   return { ok: status >= 200 && status < 300, status, bytes: async () => bytes };
+}
+
+/** GET → 임의 RAW 바이트(바이너리 그대로 — TextDecoder 손상 없이), PUT → 빈 OK. 호출 기록. */
+function rawBinaryTransport(payload: Uint8Array, puts: Uint8Array[]): S3HttpTransport {
+  return async (_url, init) => {
+    if (init.method === "GET") return bytesResponse(200, payload);
+    if (init.method === "PUT") {
+      if (init.body !== undefined) puts.push(init.body);
+      return bytesResponse(200, new Uint8Array());
+    }
+    return bytesResponse(404, new Uint8Array());
+  };
 }
 
 function makeStore(transport: S3HttpTransport): S3ObjectStore {
@@ -214,6 +227,47 @@ async function main(): Promise<void> {
     const redactor = new S3ArtifactRedactor(makeStore(transport), REAL_BINDING, maskingTransform);
     const r = await redactor.redact(request(2, 1)); // 1+1=2 >= 2 → terminal
     check("get 5xx(시도 소진) → terminal_failed", r.kind === "terminal_failed", r.kind);
+  }
+
+  // (8) VULN1 — 진짜 PNG 바이너리가 RAW byte 경로(getBytes)로 transform 까지 흘러 fail-closed(terminal).
+  //     이전엔 get()의 TextDecoder(U+FFFD 치환)→re-encode round-trip 으로 binary 가 valid-UTF8 텍스트로
+  //     둔갑해 fatal-decode 가드를 우회 → not_required/redacted 로 "safe" 위장됐다. 이제 raw 바이트가
+  //     ContentRedactionTransform 의 fatal 디코드(또는 콘텐츠 기반 가드)에서 throw → redactor terminal_failed.
+  {
+    const png = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG magic
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x00, 0x00, // binary bytes (invalid UTF-8)
+    ]);
+    const puts: Uint8Array[] = [];
+    const redactor = new S3ArtifactRedactor(
+      makeStore(rawBinaryTransport(png, puts)),
+      REAL_BINDING,
+      new ContentRedactionTransform(),
+    );
+    const r = await redactor.redact(request());
+    check("VULN1: PNG binary THROUGH getBytes→redact → terminal_failed", r.kind === "terminal_failed", r.kind);
+    check("VULN1: PNG → NOT redacted/not_required (no 'safe' 위장)", r.kind !== "redacted" && r.kind !== "not_required", r.kind);
+    check("VULN1: PNG → object 기록 없음(누설 차단)", puts.length === 0, `puts=${puts.length}`);
+  }
+
+  // (9) VULN1 — NUL 포함 버퍼(유효 UTF-8 이지만 콘텐츠 기반 binary 신호)도 raw 경로로 terminal_failed.
+  {
+    // 유효 UTF-8 텍스트 사이에 실제 NUL(0x00) 바이트를 박는다 — fatal decode 는 통과하나 콘텐츠 가드가 잡음.
+    const textBytes = new TextEncoder().encode("plausible text more text");
+    const withNul = new Uint8Array(textBytes.length + 1);
+    withNul.set(textBytes.subarray(0, 8), 0);
+    withNul[8] = 0x00; // NUL
+    withNul.set(textBytes.subarray(8), 9);
+    const puts: Uint8Array[] = [];
+    const redactor = new S3ArtifactRedactor(
+      makeStore(rawBinaryTransport(withNul, puts)),
+      REAL_BINDING,
+      new ContentRedactionTransform(),
+    );
+    const r = await redactor.redact(request());
+    check("VULN1: NUL-buffer THROUGH getBytes→redact → terminal_failed", r.kind === "terminal_failed", r.kind);
+    check("VULN1: NUL-buffer → object 기록 없음", puts.length === 0, `puts=${puts.length}`);
   }
 
   console.log(`\ns3-artifact-redactor.unit: ${failures === 0 ? "ALL PASS" : `${failures} FAILED`}`);
