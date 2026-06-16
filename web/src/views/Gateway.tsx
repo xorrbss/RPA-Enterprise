@@ -9,7 +9,21 @@ import { ApiError, type GatewayPolicy } from "../api/types";
 export function GatewayView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
-  const query = useQuery({ queryKey: ["gateway-policy"], queryFn: () => api.getGatewayPolicy(), retry: false });
+  // 다중 정책 테넌트는 model 미지정 시 백엔드가 422(model_required)로 거부한다(reads.ts §gateway, 임의선택 금지).
+  // 선택한 모델을 쿼리 키에 실어 getGatewayPolicy(model)로 정책을 특정 → 다중정책 dead-end 해소(RQ-027).
+  const [model, setModel] = useState<string | undefined>(undefined);
+  const query = useQuery({
+    queryKey: ["gateway-policy", model ?? null],
+    queryFn: () => api.getGatewayPolicy(model),
+    retry: false,
+  });
+
+  const err = query.error;
+  // model 미지정 + 다건 → IR_SCHEMA_INVALID{reason:model_required}. 모델을 입력해 특정하라는 선택 UI를 띄운다.
+  const needsModel =
+    err instanceof ApiError && err.code === "IR_SCHEMA_INVALID" && err.body?.details?.reason === "model_required";
+  // 선택한 모델 정책 미존재 → 404. 조용한 빈화면 금지: 어떤 모델이 없는지 명시하고 재입력을 허용한다.
+  const modelNotFound = model !== undefined && err instanceof ApiError && err.code === "RESOURCE_NOT_FOUND";
 
   return (
     <section className="panel">
@@ -19,14 +33,17 @@ export function GatewayView(): JSX.Element {
       <div className="panel-body" style={{ padding: 16 }}>
         {query.isLoading ? (
           <Loading />
+        ) : needsModel || modelNotFound ? (
+          <ModelPicker current={model} notFound={modelNotFound ? model : undefined} onPick={setModel} />
         ) : query.isError ? (
-          query.error instanceof ApiError && query.error.code === "IR_SCHEMA_INVALID" ? (
-            <p style={{ color: "var(--muted)" }}>여러 모델 정책이 있습니다. 모델을 선택하면 상세가 표시됩니다.</p>
-          ) : (
-            <ErrorState message={messageOf(query.error)} onRetry={() => void query.refetch()} />
-          )
+          <ErrorState message={messageOf(query.error)} onRetry={() => void query.refetch()} />
         ) : query.data !== undefined ? (
           <>
+            {model !== undefined && (
+              <button className="btn" style={{ marginBottom: 12 }} onClick={() => setModel(undefined)}>
+                ← 다른 모델
+              </button>
+            )}
             <dl className="metrics" style={{ margin: 0 }}>
               <div className="metric">
                 <div className="label">모델</div>
@@ -47,6 +64,45 @@ export function GatewayView(): JSX.Element {
         ) : null}
       </div>
     </section>
+  );
+}
+
+// 다중 정책 테넌트의 모델 선택(RQ-027). 백엔드가 모델 목록을 노출하지 않으므로(422는 건수만 반환) 모델명을 입력받아
+// getGatewayPolicy(model)을 특정한다 — 가정 없는 console-only 해소. 빈 입력은 가드(조회 비활성).
+function ModelPicker({
+  current,
+  notFound,
+  onPick,
+}: {
+  current?: string;
+  notFound?: string;
+  onPick: (model: string) => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState(current ?? "");
+
+  function onSubmit(e: React.FormEvent): void {
+    e.preventDefault();
+    const next = draft.trim();
+    if (next.length > 0) onPick(next);
+  }
+
+  return (
+    <form onSubmit={onSubmit} style={{ display: "grid", gap: 8, maxWidth: 420 }}>
+      <p style={{ color: "var(--muted)", margin: 0 }}>
+        {notFound !== undefined
+          ? `‘${notFound}’ 모델 정책을 찾을 수 없습니다. 모델명을 확인하세요.`
+          : "이 테넌트에는 여러 모델 정책이 있습니다. 모델명을 입력해 정책을 조회하세요."}
+      </p>
+      <label style={{ display: "grid", gap: 4 }}>
+        <span className="label">모델명</span>
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="예: gpt-4o" />
+      </label>
+      <div>
+        <button className="btn" type="submit" disabled={draft.trim().length === 0}>
+          조회
+        </button>
+      </div>
+    </form>
   );
 }
 

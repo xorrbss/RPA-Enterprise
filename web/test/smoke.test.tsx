@@ -394,6 +394,52 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(screen.getByText(/다른 사용자가 먼저 수정/)).toBeInTheDocument());
   });
 
+  test("gateway 다중정책: model_required → 모델 입력 → getGatewayPolicy(model) 조회(dead-end 해소)", async () => {
+    const { ApiError } = await import("../src/api/types");
+    const calls: Array<string | undefined> = [];
+    renderApp(
+      fakeClient({
+        getGatewayPolicy: async (model) => {
+          calls.push(model);
+          // model 미지정 → 다건이라 422 model_required(임의선택 금지). model 지정 시 그 정책 반환.
+          if (model === undefined) {
+            throw new ApiError(422, "IR_SCHEMA_INVALID", { code: "IR_SCHEMA_INVALID", details: { reason: "model_required", available: 2 } });
+          }
+          return { model, version: 7, capabilities: { jsonMode: true }, budget: {} };
+        },
+      }),
+    );
+    location.hash = "#llmGateway";
+    // dead-end 아님: 모델 입력 폼 노출 + 빈 입력 가드(조회 비활성).
+    const input = await screen.findByLabelText("모델명");
+    expect(screen.getByRole("button", { name: "조회" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: "gpt-4o" } });
+    screen.getByRole("button", { name: "조회" }).click();
+    // model이 전달되어 재조회 → 상세 표시.
+    await waitFor(() => expect(calls).toContain("gpt-4o"));
+    await waitFor(() => expect(screen.getByText("gpt-4o")).toBeInTheDocument());
+    // admin 토큰(beforeEach ALL_ROLES) → 편집 폼 도달 가능(영구차단 해소).
+    expect(screen.getByRole("button", { name: "정책 저장" })).toBeInTheDocument();
+  });
+
+  test("gateway 모델 미존재: model 404 → 명시 메시지(조용한 빈화면 금지)", async () => {
+    const { ApiError } = await import("../src/api/types");
+    renderApp(
+      fakeClient({
+        getGatewayPolicy: async (model) => {
+          if (model === undefined) {
+            throw new ApiError(422, "IR_SCHEMA_INVALID", { code: "IR_SCHEMA_INVALID", details: { reason: "model_required", available: 2 } });
+          }
+          throw new ApiError(404, "RESOURCE_NOT_FOUND", { code: "RESOURCE_NOT_FOUND" });
+        },
+      }),
+    );
+    location.hash = "#llmGateway";
+    fireEvent.change(await screen.findByLabelText("모델명"), { target: { value: "nope" } });
+    screen.getByRole("button", { name: "조회" }).click();
+    await waitFor(() => expect(screen.getByText(/찾을 수 없습니다/)).toBeInTheDocument());
+  });
+
   test("RBAC UI 게이팅: viewer는 읽기 전용 — 명령 버튼 미표시", async () => {
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     renderApp(
