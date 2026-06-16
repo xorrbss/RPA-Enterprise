@@ -118,11 +118,16 @@ async function main(): Promise<void> {
           open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "doact" },
           doact: { what: [{ action: "act", instruction: "fill the query box" }], next: "grab" },
           grab: { what: [{ action: "extract", instruction: "get reviews", schema_ref: "reviews" }], next: "check" },
+          // extract 데이터로 분기: fake gateway가 {rows:[1,2,3]} 반환 → node.grab.row_count=3 → done(>=1).
           check: {
             what: [{ action: "observe" }],
-            on: [{ when: "flags.reviews_visible", target: "done", priority: 1 }],
+            on: [
+              { when: "node.grab.row_count >= 1", target: "done", priority: 2 },
+              { when: "node.grab.row_count == 0", target: "empty", priority: 1 },
+            ],
           },
           done: { terminal: "success" },
+          empty: { terminal: "success_empty" },
         },
       },
       {},
@@ -134,7 +139,7 @@ async function main(): Promise<void> {
     const scenario = compiledScenarioFrom(compiled.ir, JSON.parse(compiled.compiledAst) as unknown, { entry_url: `${ORIGIN}/p` });
     const outcome = await runScenario(scenario, { ...ctx, pageState: seedPageState() }, { executor: composite, resolver });
 
-    check("terminal=success (navigate→act→extract→on[]→done)", outcome.terminal === "success", outcome.terminal);
+    check("terminal=success — extract row_count>=1 분기로 done (extract 데이터 분기)", outcome.terminal === "success", outcome.terminal);
     check("visited 경로 open→doact→grab→check→done", outcome.visited.join(",") === "open,doact,grab,check,done", outcome.visited.join(","));
     check("act step success (composite→dom 라우팅)", outcome.steps.some((s) => s.action === "act" && s.status === "success"));
     check("extract step success (composite→dom 라우팅)", outcome.steps.some((s) => s.action === "extract" && s.status === "success"));

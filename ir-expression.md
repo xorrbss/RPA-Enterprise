@@ -59,6 +59,14 @@ ident        = (letter | "_") , { letter | digit | "_" } ;
 
 표준 노드 출력 필드(참조 가능): `row_count`(int), `status`(string), `extracted_ref`(string), `tier`(string, fallback 시).
 
+**StepResult → 표준 노드 출력 투영(런타임 규약).** 노드의 표준 출력은 그 노드 마지막 `what` 액션의 `StepResult`에서 도출한다(노드당 1 출력; 다중 액션 시 마지막). 매핑:
+- `status` ← `StepResult.status`(실행 결과 status enum 그대로).
+- `row_count` ← **extract 액션의 출력 봉투 `{rows: [...]}`의 `rows` 배열 길이**. extract 출력은 LLM 구조화 출력(루트 object)이므로 행 컬렉션을 표준 필드 **`rows`**로 담는다(루트 배열 불가). `row_count = output.rows.length`. 같은 `rows` 배열을 verify `min_rows`도 카운트한다(단일 규약). extract가 아니거나 `rows` 배열이 없으면 `row_count` **미투영**(참조 시 `IREL_RUNTIME_MISSING` — 조용한 false 금지).
+- `extracted_ref` ← **extract 액션** StepResult의 출력 아티팩트 참조(`StepResult.artifacts[0]`). extract가 아니면 미투영.
+- `tier` ← fallback_chain 실행 시 현재 tier(미구현 — 미투영).
+
+미투영 필드/네임스페이스(`cursor.*`, loop 밖 `loop.*`) 참조는 정적검증을 통과하더라도 런타임에 `IREL_RUNTIME_MISSING`으로 표면화한다(compile-then-throw, 발명 금지).
+
 ---
 
 ## 3. 타입 시스템 & 타입체커

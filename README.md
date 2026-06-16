@@ -549,3 +549,19 @@
 | 필드 투영 | **status만 INCLUDE**(StepResult.status 단일출처). extracted_ref(outputRef/artifacts[0]/extracted 셋 다 가능·권위 없음)·row_count(StepResult에 필드 부재)·tier(fallback 미구현)는 **DEFER** — 미투영 필드 참조는 IREL_RUNTIME_MISSING(loud) |
 | 정직한 공개 | (1) **compile-then-throw**: `node.X.row_count` 등은 V9가 허용해 컴파일되나 런타임에 IREL_RUNTIME_MISSING — 의도된 조용한-false-금지 동작(결함 아님). (2) **graph-ancestor ≠ executed**: diamond DAG에서 분기로 건너뛴 ancestor의 node.X.status 참조는 컴파일되나 런타임 loud. (3) **status는 현재 항상 'success'**(실패/suspend는 flow 전 short-circuit) — failure-continuation 전까지 status 분기는 저효용 |
 | 연기(잔존) | node.{extracted_ref,row_count,tier}(투영 계약 미명시) · cursor.*·loop.until(loop 미구현) · 실패-연속 status. RQ-002는 **부분**(status+params) — 잔존 필드/네임스페이스는 계약 투영 결정 후 |
+
+## v2.16 패치 로그 (RQ-002 후속 — extract row_count/extracted_ref 투영: `{rows}` 봉투 규약 확정)
+
+> v2.14의 잔존(node.<id> 표준출력 중 status만 투영)을 풀어 **extract 데이터로 분기**(`node.<id>.row_count`)되게 한다.
+> v2.14에서 미정이던 **StepResult→node 표준출력 투영 규약을 확정**(운영자 결정): extract 출력은 LLM 구조화 출력(루트
+> object — strict json_schema는 루트 배열 불가)이므로 행 컬렉션을 표준 필드 **`rows`**로 담는다(`{rows:[...]}` 봉투).
+> `row_count = output.rows.length`, 같은 `rows`를 verify `min_rows`도 카운트(단일 규약). `extracted_ref = extract
+> StepResult 출력 아티팩트(artifacts[0])`. 계약 기록: `ir-expression.md §2`에 투영 규약 명시.
+> **재검증: `test:unit`(interpreter-scope 8: row_count 값-분기·extracted_ref·비-extract 미투영 loud; dom-executor rowCount) + 실 Chrome `test:interpreter-llm`(extract {rows:[1,2,3]}→row_count=3→분기→done) + `test:pipeline-site` 회귀.**
+
+| 항목 | 조치 |
+|---|---|
+| 계약 결정 | `ir-expression.md §2`: extract 출력 봉투 `{rows:[...]}` 표준화(루트 object 제약). `row_count`←`output.rows.length`, `extracted_ref`←extract 출력 아티팩트, `status`←StepResult.status. verify `min_rows`도 동일 `rows` 카운트(단일 규약) |
+| 실행기 | `stagehand-dom-executor.ts` extract가 `output.rowCount = parsedJson.rows.length`(rows 배열 있을 때) 산출. rows 부재 → 미산출(미투영) |
+| 투영 | `ir-interpreter.ts` `projectNodeOutput(StepResult)` — extract 액션만 row_count(`output.rowCount`)·extracted_ref(`artifacts[0]`) 추가. 비-extract/rows 부재 → 미투영 → 참조 시 IREL_RUNTIME_MISSING(loud, ir-expression §2) |
+| 잔존(축소) | `tier`(fallback 미구현)·`cursor.*`/`loop.until`(loop 미구현) — **계약 미정이 아니라 feature 의존**(fallback/loop 구현 시). 실패-연속 status도 후속 |

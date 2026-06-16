@@ -103,11 +103,21 @@ async function main(): Promise<void> {
     return c.dom === true && c.vision === false && c.utility === false;
   })());
 
-  // extract → read-only, extracted set
+  // extract → read-only, extracted set, output.rowCount = {rows} 길이(표준 노드 출력 투영, ir-expression §2)
   {
     const ex = new StagehandDomExecutor(countingGateway({ parsedJson: { rows: [1, 2, 3] } }).gw, sess(), cfg);
     const r = await ex.execute("s1", { type: "extract", instruction: "get reviews", output: EXTRACT_OUT }, makeCtx());
-    check("extract: success + extracted + artifacts", r.status === "success" && (r.extracted as { rows: number[] }).rows.length === 3 && r.artifacts[0] === "art://out");
+    check(
+      "extract: success + extracted + artifacts + output.rowCount=3",
+      r.status === "success" && (r.extracted as { rows: number[] }).rows.length === 3 && r.artifacts[0] === "art://out" && (r.output as { rowCount?: number }).rowCount === 3,
+    );
+  }
+
+  // extract: rows 봉투 없으면 rowCount 미산출(→ node.row_count 미투영, loud).
+  {
+    const ex = new StagehandDomExecutor(countingGateway({ parsedJson: { product: "x" } }).gw, sess(), cfg);
+    const r = await ex.execute("s1b", { type: "extract", instruction: "get product", output: EXTRACT_OUT }, makeCtx());
+    check("extract: rows 부재 → output.rowCount 미산출", (r.output as { rowCount?: number }).rowCount === undefined);
   }
 
   // observe → success

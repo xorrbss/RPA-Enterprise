@@ -123,11 +123,17 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     }
 
     const endedAt = nowIso();
+    // 표준 노드 출력 row_count(ir-expression §2): extract 출력 봉투 {rows:[...]}의 rows 길이. rows 부재 시 미산출(미투영).
+    const rows =
+      a.type === "extract" && res.parsedJson !== null && typeof res.parsedJson === "object"
+        ? (res.parsedJson as { rows?: unknown }).rows
+        : undefined;
+    const rowCount = Array.isArray(rows) ? rows.length : undefined;
     return {
       stepId,
       action: a.type,
       status: "success",
-      output: { outputRef: res.outputRef, finishReason: res.finishReason },
+      output: { outputRef: res.outputRef, finishReason: res.finishReason, ...(rowCount !== undefined ? { rowCount } : {}) },
       extracted: a.type === "extract" ? res.parsedJson : undefined,
       pageStateBefore: before,
       pageStateAfter: before, // 다음 observe 노드가 PageState 갱신(UtilityExecutor 와 동일 패턴).

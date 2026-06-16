@@ -13,8 +13,27 @@
  *   - loop/fallback_chain·예약핸들러(@challenge/@human_task/@end_no_data)·suspend는 후속 단계. 미처리 status는
  *     조용히 흘리지 않고 InterpreterError로 표면화한다("조용한 false/unknown 금지").
  */
-import type { ExecutorPlugin, PageStateResolver, RunContext, StepStatus } from "../../../ts/core-types";
+import type { ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
 import { selectOnBranch, type CompiledOnBranch } from "./flow-control";
+
+/** 표준 노드 출력 필드(IREL node.<id>.*). 미투영 필드는 부재 → 참조 시 IREL_RUNTIME_MISSING(loud). */
+interface NodeOutput {
+  readonly status: StepStatus;
+  readonly row_count?: number;
+  readonly extracted_ref?: string;
+}
+
+/** StepResult → 표준 노드 출력 투영(ir-expression §2). status는 항상; row_count/extracted_ref는 extract 액션만. */
+function projectNodeOutput(res: StepResult): NodeOutput {
+  if (res.action !== "extract") return { status: res.status };
+  const rowCount = res.output !== null && typeof res.output === "object" ? (res.output as { rowCount?: unknown }).rowCount : undefined;
+  const ref = res.artifacts[0];
+  return {
+    status: res.status,
+    ...(typeof rowCount === "number" ? { row_count: rowCount } : {}),
+    ...(typeof ref === "string" ? { extracted_ref: ref } : {}),
+  };
+}
 
 export type NodeFlow =
   | { readonly kind: "terminal"; readonly terminal: string }
@@ -84,9 +103,9 @@ export async function runScenario(
   const maxSteps = deps.maxSteps ?? DEFAULT_MAX_STEPS;
   const visited: string[] = [];
   const steps: InterpreterStep[] = [];
-  // 실행 완료 노드의 표준 출력(node.<id>.*). 1단계는 status 만 충실 투영(StepResult.status); extracted_ref/row_count/
-  // tier 는 StepResult→필드 투영이 계약 미명시라 미설정(RQ-002 연기) → 해당 참조는 IREL_RUNTIME_MISSING(loud).
-  const nodeScope: Record<string, { status: StepStatus }> = {};
+  // 실행 완료 노드의 표준 출력(node.<id>.*). status(항상) + extract 노드의 row_count({rows} 봉투 길이)·extracted_ref
+  // (출력 아티팩트). tier(fallback)·비-extract row_count 등 미투영 필드 참조는 IREL_RUNTIME_MISSING(loud, ir-expression §2).
+  const nodeScope: Record<string, NodeOutput> = {};
   let ctx = initialCtx;
   let nodeId = scenario.start;
 
@@ -99,11 +118,11 @@ export async function runScenario(
     ctx = { ...ctx, nodeId };
 
     // 1) 노드의 결정형 what 액션을 순서대로 실행. 비-success는 terminal 실패로 매핑하거나 표면화.
-    let lastStatus: StepStatus | undefined;
+    let lastResult: StepResult | undefined;
     for (let k = 0; k < node.what.length; k += 1) {
       const res = await deps.executor.execute(`${nodeId}.${k}`, node.what[k], ctx);
       steps.push({ nodeId, action: res.action, status: res.status });
-      lastStatus = res.status;
+      lastResult = res;
       if (res.status === "success") continue;
       const term = failureTerminal(res.status);
       if (term !== null) return { terminal: term, visited, steps };
@@ -112,10 +131,10 @@ export async function runScenario(
         `interpreter: step '${nodeId}.${k}' returned status '${res.status}' (suspend/challenge/loop 미지원 — 1단계)`,
       );
     }
-    // what 루프 직후 무조건 기록(terminal/next/on 분기 전 공통점). 빈 what[](observe 전용) 노드는 lastStatus 미정 →
+    // what 루프 직후 무조건 기록(terminal/next/on 분기 전 공통점). 빈 what[](observe 전용) 노드는 lastResult 미정 →
     // nodeScope 미기록 → node.<id>.* 참조는 IREL_RUNTIME_MISSING(loud). 비-success는 위에서 이미 return/throw 하므로
-    // 여기 도달하면 lastStatus 는 항상 "success"(현 short-circuit 시맨틱 — 실패/suspend 연속 경로는 후속).
-    if (lastStatus !== undefined) nodeScope[nodeId] = { status: lastStatus };
+    // 여기 도달하면 status 는 항상 "success"(현 short-circuit 시맨틱 — 실패/suspend 연속 경로는 후속).
+    if (lastResult !== undefined) nodeScope[nodeId] = projectNodeOutput(lastResult);
 
     // 2) 흐름 전이.
     if (node.flow.kind === "terminal") {
@@ -130,7 +149,11 @@ export async function runScenario(
     // 런타임 도달 보장은 dominator 뿐 — diamond DAG 에서 분기로 건너뛴 ancestor 참조는 IREL_RUNTIME_MISSING(loud, 정상).
     const pageState = await deps.resolver.resolvePageState(ctx);
     ctx = { ...ctx, pageState };
-    nodeId = selectOnBranch(nodeId, node.flow.branches, { flags: pageState.flags, params: deps.params, node: nodeScope });
+    nodeId = selectOnBranch(nodeId, node.flow.branches, {
+      flags: pageState.flags,
+      params: deps.params,
+      node: nodeScope as unknown as Record<string, Record<string, unknown>>,
+    });
   }
 
   throw new InterpreterError(
