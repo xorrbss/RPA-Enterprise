@@ -110,12 +110,15 @@ CREATE TABLE gateway_policies (
   capabilities    jsonb       NOT NULL,                    -- llm-gateway-adapter.md ModelCapabilities
   budget          jsonb       NOT NULL,                    -- maxInputTokens/maxOutputTokens/maxCost 등
   fallback_config jsonb,                                   -- fallback model/transport policy
+  is_default      boolean     NOT NULL DEFAULT false,      -- Gap2(B+C): 테넌트 기본 정책 — 무인 run의 model 해소원. 부분 UNIQUE로 테넌트당 ≤1.
   updated_by      uuid,
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, model)
 );
 CREATE INDEX idx_gateway_policies_tenant ON gateway_policies (tenant_id);
+CREATE UNIQUE INDEX uq_gateway_policies_default ON gateway_policies (tenant_id)
+  WHERE is_default;                                          -- 테넌트당 기본 정책 1건(uq_scenario_versions_prod 동형)
 
 -- control_plane_idempotency_keys — api-surface.md §0.4 명령형 POST 중복 제출 보호.
 CREATE TABLE control_plane_idempotency_keys (
@@ -232,6 +235,10 @@ CREATE TABLE runs (
                                                              --   bookmark = 재개 지점 마커(stepId/attempt/reason), resume_token = 서명 봉투(kid/hmac, R11 후속).
   params              jsonb,                                 -- 실행 파라미터(params_schema로 검증)
   as_of               timestamptz,                           -- ir-expression §5: Run 생성 시 1회 고정(params.as_of)
+  model               text,                                  -- Gap2(B+C): run-create 시 1회 해소·동결한 gateway_policies.model
+                                                             --   (as_of 동형 결정성; action_plan_cache 키 일부). NULL=utility-only run 또는
+                                                             --   미해소(LLM 노드 도달 시 run-time fail-closed). gateway_policies 자연키가
+                                                             --   복합(tenant,model)이라 단일컬럼 FK 불성립 + 정책 삭제 시 재현성 파괴 → 느슨한 text 스냅샷.
   correlation_id      uuid        NOT NULL,                  -- 이벤트 envelope·trace span 공통 상관키
   -- usage 누계(R21 usage flush) — 비용/토큰 집계
   usage_input_tokens  bigint      NOT NULL DEFAULT 0,
