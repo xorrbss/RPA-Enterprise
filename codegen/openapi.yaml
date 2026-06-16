@@ -617,21 +617,23 @@ paths:
       operationId: getArtifact
       summary: 산출물 조회
       description: >
-        미들웨어 1지점에서 순서대로 게이트: ① redaction(pending/failed → ARTIFACT_NOT_REDACTED 409),
-        ② RBAC(권한 부족 → SECRET_ACCESS_DENIED 403). 본문은 항상 마스킹된 RedactedString/redacted object.
+        v1 게이트(release-decisions D8-A1): ① redaction은 RLS(artifacts_visible_isolation)로 강제 —
+        redacted/not_required·미삭제·비격리만 가시. pending/failed/quarantined/deleted/cross-tenant·미존재는
+        RESOURCE_NOT_FOUND(404, 존재 비노출)로 떨어지며 ARTIFACT_NOT_REDACTED(409)는 v1 미노출(BYPASSRLS 미사용).
+        ② RBAC(artifact.read) — 권한 부족 → SECRET_ACCESS_DENIED(403). 본문은 항상 마스킹된 redacted object.
       responses:
         '200':
-          description: artifact(또는 서명 URL). redaction → RBAC 2단 게이트 통과 시에만.
+          description: artifact 본문. v1 redaction(RLS) → RBAC 게이트 통과 시에만(D8-A1).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Artifact'
         '403':
           $ref: '#/components/responses/Error'        # SECRET_ACCESS_DENIED
-        '409':
-          $ref: '#/components/responses/Error'        # ARTIFACT_NOT_REDACTED
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND (v1 redaction-gate: pending/failed/quarantined/deleted/cross-tenant·미존재; D8-A1)
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/Error'        # 예: §10 audit append 실패 시 fail-closed
 
   # ============================================================
   # 6. Gateway Policy — api-surface §6
@@ -1243,16 +1245,19 @@ components:
     Artifact:
       type: object
       description: >
-        산출물(요지). redaction → RBAC 2단 게이트 통과 시에만 반환. 본문은 항상 마스킹(RedactedString/redacted object).
+        산출물 본문(요지). v1 redaction(RLS) → RBAC 게이트 통과 시에만 반환(D8-A1). 본문은 항상 마스킹(redacted object).
       properties:
         artifact_id: { type: string }
+        type: { type: [string, "null"] }
+        sha256: { type: [string, "null"] }
         redaction_status:
           type: string
           enum: [redacted, not_required]
-          description: 200 응답은 redaction → RBAC 2단 게이트 통과 상태만 반환한다. pending/failed는 ARTIFACT_NOT_REDACTED(409).
-        signed_url: { type: [string, "null"] }
+          description: 200 응답은 가시(RLS 통과) 상태만 반환. pending/failed/quarantined/deleted는 RESOURCE_NOT_FOUND(404, D8-A1).
+        retention_until: { type: [string, "null"], format: date-time }
         content:
-          description: 마스킹된 redacted object(평문 노출 금지).
+          type: string
+          description: 마스킹된 redacted object 본문(평문 노출 금지). object store(redacted at rest)에서 read.
 
     GatewayPolicy:
       type: object
