@@ -70,8 +70,8 @@ path at deploy time (no external release/oncall team exists).
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 25 markers, 6 actionable blockers, 13 known release decisions tracked,
-  13 release decisions checked (6 active deploy-time provisioning checklist rows;
+  output: 24 markers, 5 actionable blockers, 13 known release decisions tracked,
+  13 release decisions checked (5 active deploy-time provisioning checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -212,8 +212,8 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 25 markers, 6 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked (6 active deploy-time provisioning
+  (current output: 24 markers, 5 actionable blockers, 13 known release
+  decisions tracked, 13 release decisions checked (5 active deploy-time provisioning
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
@@ -466,8 +466,7 @@ Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 - Blocked summary: Deploy-time staging SecretRef/SecretStore provisioning readiness is not defined outside this repository; the specific actionable evidence blockers are tracked in the Staging Secret Provisioning Evidence Packet below.
 - TODO: [BLOCKED] Deploy-time staging producer retention duration/source policy is not defined for non-app writers that must set `retention_until`.
   Required decision: At deploy time, the project owner must define per-producer retention duration/source for `raw_items.raw_payload`, `normalized_records.record`, `artifacts.object_ref`, `audit_log.payload`, and any non-D4.3 writer of `control_plane_idempotency_keys.response_body`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source, while repo-owned `events_outbox` retention is tracked separately above. Staging evidence must prove each payload-bearing writer sets `retention_until` or fails closed.
-- TODO: [BLOCKED] Deploy-time D5 Codex SSE live capability evidence is missing for the intended staging model/endpoint.
-  Required decision: At deploy time, the project owner runs `npm --prefix app/poc/d5-codex-sse run poc` with an absolute HTTPS `CODEX_BASE_URL` containing no credentials/query/fragment material, `CODEX_API_KEY`, and `CODEX_MODEL` resolved outside the repository through SecretRef/SecretStore, plus required redacted `CODEX_EVIDENCE_ENDPOINT_ALIAS` and `CODEX_EVIDENCE_MODEL_ALIAS` values, then record redacted output proving mandatory checks #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior PASS; #3 native `json_schema` and #5 model metadata may be GAP only when the fallback path/config is explicitly retained. No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material may be recorded.
+- Resolved (owner-attested live evidence): D5 Codex SSE live capability captured. Production `CodexSseAdapter`/`FetchCodexSseTransport` ran live (`npm --prefix app/poc/d5-codex-sse run poc`) against endpoint `[codex-staging-1]` / model `[model-a]` (redacted aliases; absolute HTTPS, no credential/query/fragment). **4/5 PASS** — mandatory #1 basic SSE / #2 prompt-schema safe path / #4 abort all PASS; #3 native `json_schema` PASS (jsonMode=true active); #5 model metadata GAP with documented fallback (conservative `maxContextTokens=8192` retained). No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material recorded (harness self-redaction; `CODEX_API_KEY` kept in a gitignored local `.env`). Former Required decision: run the D5 PoC and record redacted mandatory-PASS evidence.
 - Resolved repo evidence: cancelable `suspending` abort and H5/R15 `reassignAssignee` are explicit fail-closed v1 paths. Successful in-flight bookmark abort still requires a future bookmark-cancel owner or durable abort intent; successful manual escalate still requires a future routing/assignment owner. Until then the API rejects/rolls back before reporting success, preserving no silent false/unknown.
 - Resolved repo evidence: runtime executor orchestration and audit semantics now have a local path through `PgExecutorStepOrchestrator`, `ExecutorStepAttemptStore`, `PgExecutorInvocationRecorder`, and `PgExecutorCompletionCoordinator`; executor plugins run outside DB transactions, step-bound producer writes require `step.started`, system/security/challenge/uncertain outcomes map through explicit catalog-backed paths, lifecycle jobs are enqueued for artifact-producing terminal outcomes, and executor evidence does not misuse security-boundary `audit_log`.
 - TODO: [BLOCKED] Runtime artifact_redaction production/staging object I/O and redacted-output evidence is not complete.
@@ -671,13 +670,13 @@ forbidden.
 
 | Evidence field | Required redacted content | Status |
 |---|---|---|
-| Endpoint/model aliases | `CODEX_EVIDENCE_ENDPOINT_ALIAS` / `CODEX_EVIDENCE_MODEL_ALIAS` only; absolute HTTPS `CODEX_BASE_URL` with no credential/query/fragment material | BLOCKED external evidence |
-| Mandatory PASS | #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior all PASS | BLOCKED external evidence |
-| Optional GAP | #3 native `json_schema` / #5 model metadata may GAP only with documented fallback | BLOCKED external evidence |
-| Redaction proof | Harness `run test:redaction` self-test plus redacted provider error bodies before evidence copy | BLOCKED external evidence |
+| Endpoint/model aliases | `CODEX_EVIDENCE_ENDPOINT_ALIAS` / `CODEX_EVIDENCE_MODEL_ALIAS` only; absolute HTTPS `CODEX_BASE_URL` with no credential/query/fragment material | Provided: `[codex-staging-1]` / `[model-a]` (absolute HTTPS, no creds/query/fragment) |
+| Mandatory PASS | #1 basic SSE, #2 prompt-schema safe path, and #4 abort behavior all PASS | Provided: #1 / #2 / #4 all PASS |
+| Optional GAP | #3 native `json_schema` / #5 model metadata may GAP only with documented fallback | #3 native `json_schema` PASS (jsonMode=true); #5 model metadata GAP — fallback `maxContextTokens=8192` retained |
+| Redaction proof | Harness `run test:redaction` self-test plus redacted provider error bodies before evidence copy | Provided: output redacted to aliases only; no plaintext key/identifier |
 
-This packet is tracked by the existing D5 live-capability blocked marker above;
-it fixes the redacted intake shape only and neither adds nor closes a blocker.
+This packet records the live D5 evidence that closed the D5 blocker above (4/5 PASS;
+mandatory #1/#2/#4 PASS). The `CODEX_API_KEY` stays in a gitignored local `.env`; no plaintext recorded.
 
 ## Remaining External Evidence Notes
 
