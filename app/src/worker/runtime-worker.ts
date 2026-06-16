@@ -59,7 +59,7 @@ import { applyRunTransition } from "../runtime/run-transition";
 import { applyWorkitemTransition } from "../runtime/workitem-transition";
 import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
-import { driveClaimedRun } from "../runtime/run-step-driver";
+import { driveClaimedRun, driveResumedRun } from "../runtime/run-step-driver";
 import { UtilityExecutor } from "../executor/utility-executor";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../executor/site-page-state-config";
@@ -807,7 +807,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       }),
     );
 
-    return withTenantTx(this.pool, tenantId, async (client) => {
+    const result: RuntimeJobResult = await withTenantTx(this.pool, tenantId, async (client) => {
       const run = await client.query<RunRow>(
         `SELECT status, correlation_id::text
            FROM runs
@@ -851,6 +851,62 @@ export class PgRuntimeWorker implements RuntimeWorker {
         emittedEvents: transition.emitted.map((e) => e.eventId as EventId),
       };
     });
+
+    // Phase C: resume 구동(tx 밖 — 브라우저 작업이 DB 커넥션 점유 금지). handleRunClaim Phase B 와 동일 패턴.
+    //   R18/R19 로 running 도달 + provider 주입 시에만 resumeNodeId 부터 재진입 구동. R20(failed_system)·provider 미주입은 전이만.
+    const sessionProvider = gateBrowserSessionProvider(
+      this.options.browserSessionProvider,
+      this.options.allowTestBrowserSessionProvider === true,
+    );
+    if (result.kind !== "completed" || sessionProvider === undefined) return result;
+    const drive = await withTenantTx(this.pool, tenantId, async (client): Promise<RunClaimDriveInputs | null> => {
+      // R18(restore_ok)·R19(login_bypass) 면 running. R20(restore 실패·bypass 불가)은 failed_system — 구동하지 않는다.
+      const cur = await client.query<{ status: string }>(
+        `SELECT status FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+        [tenantId, runId],
+      );
+      if (cur.rows[0]?.status !== "running") return null;
+      const plan = await leasePlanResolver(client, { tenantId, runId });
+      if (plan === null) return null;
+      return this.loadRunDriveInputs(client, tenantId, runId, plan, txA.intent.leaseId, txA.intent.correlationId);
+    });
+    if (drive === null) return result;
+
+    const siteConfig = await withTenantTx(this.pool, tenantId, (c) =>
+      loadSitePageStateConfig(c, tenantId, drive.siteProfileId),
+    );
+    const bound = await sessionProvider.bind({
+      tenantId,
+      leaseId: drive.leaseId,
+      siteProfileId: drive.siteProfileId,
+      browserIdentityId: drive.browserIdentityId,
+      networkPolicyId: drive.networkPolicyId,
+      isolation: drive.isolation,
+      cleanupPolicy: drive.cleanupPolicy,
+    });
+    try {
+      const executor = new UtilityExecutor(bound.provider);
+      const resolver = new SitePageStateResolver(bound.provider, siteConfig);
+      // R18 후 run 은 running — driveResumedRun 은 R2 없이 resumeNodeId 부터 재진입(success→completed / fail→failed_*).
+      await driveResumedRun(
+        {
+          runId,
+          tenantId,
+          scenarioVersionId: drive.scenarioVersionId,
+          correlationId: drive.correlationId,
+          leaseId: drive.leaseId,
+          siteProfileId: drive.siteProfileId,
+          browserIdentityId: drive.browserIdentityId,
+          networkPolicyId: drive.networkPolicyId,
+          params: drive.params,
+        },
+        { pool: this.pool, executor, resolver, workerId },
+        txA.intent.resumeNodeId,
+      );
+    } finally {
+      await bound.release();
+    }
+    return result;
   }
 
   private async handleArtifactRedaction(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
