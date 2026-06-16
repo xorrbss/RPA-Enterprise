@@ -196,14 +196,24 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       const term = failureTerminal(res.status);
       if (term !== null) return term;
       // suspend(트리거 i): executor step 이 status='suspended' 반환 → SuspendContext 산출 후 "suspend" terminal 반환.
-      // driver 가 R4(running→suspending)+포트+R11 로 구동. challengeKind 는 captcha 기본(reserved-handlers "그 외 captcha";
-      // mfa 는 executor 신호 필요 — 후속). resumeNodeId=nodeId(같은 노드 재진입, 오너 결정). pageStateRef=res.pageStateAfter.
+      // driver 가 R4(running→suspending)+포트+R11 로 구동. challengeKind 는 executor 가 감지한 res.challenge.type 에서 온다
+      //   (하드코딩 금지). human-assist 가능군은 captcha|mfa 뿐(reserved-handlers @challenge) — block_page/rate_limit/...
+      //   는 suspend 대상이 아니므로, status='suspended' 인데 challenge.type 이 그 둘이 아니면 계약 위반으로 표면화한다
+      //   (조용한 captcha 폴백 금지 — 그래야 mfa 가 resolve.mfa 가 아닌 resolve.captcha 로 오라우팅되지 않는다).
+      // resumeNodeId=nodeId(같은 노드 재진입, 오너 결정). pageStateRef=res.pageStateAfter.
       if (res.status === "suspended") {
+        const detected = res.challenge?.type;
+        if (detected !== "captcha" && detected !== "mfa") {
+          throw new InterpreterError(
+            "EXECUTOR_STATUS_UNSUPPORTED",
+            `interpreter: step '${nodeId}.${k}' status='suspended' 인데 challenge.type='${detected ?? "none"}' (human-assist=captcha|mfa 아님)`,
+          );
+        }
         state.suspendBox.current = {
           stepId: `${nodeId}.${k}`,
           resumeNodeId: nodeId,
           attempt: ctx.attempt,
-          challengeKind: "captcha",
+          challengeKind: detected,
           pageStateRef: res.pageStateAfter,
           ...(res.exception !== undefined ? { exception: res.exception } : {}),
         };

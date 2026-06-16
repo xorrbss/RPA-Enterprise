@@ -69,6 +69,16 @@ const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", sche
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 
+// TODO: [BLOCKED]
+//   violated: 가정 금지 / YAGNI — challenge 를 human-assist(captcha|mfa) suspend 와 unrecoverable failed_challenge 로
+//     가르는 감지 신호가 없다. 여기서 challenge 는 항상 failed_challenge 로만 분류되고, status='suspended' +
+//     res.challenge(ChallengeSummary) 를 내보내는 경로가 production 에 없다(suspend 배관은 인터프리터/포트까지 완비됐고
+//     본 executor 가 신호를 안 줄 뿐).
+//   reason: ChallengeSummary.type 을 captcha|mfa 로 판정하려면 어느 신호(dom|network|screenshot|vlm)로 잡을지가 미정 —
+//     RQ-016(BLOCK) 소유자=D3 executor 스트림(codex). 라이브 provider 행동 의존이라 추측 구현은 오라벨링 위험.
+//   required_change: ChallengeDetector 도입 → captcha|mfa 감지 시 status='suspended' + challenge={type,detectedBy,confidence}
+//     반환. 그러면 인터프리터(res.challenge.type)→transitions(ev.challengeKind)→port(humanTaskKind)→resolve.<kind> 가
+//     무수정으로 mfa 까지 흐른다. 동시에 RQ-016 의 coordinator→driveSuspend production 재배선 필요.
 /** error-catalog exceptionClass → StepStatus + StepResult.exception.class(4종 고정; none→system). */
 function classify(code: ErrorCode): { status: StepStatus; cls: ExceptionClass } {
   switch (ERROR_CATALOG[code].exceptionClass) {
