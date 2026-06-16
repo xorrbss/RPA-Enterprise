@@ -499,6 +499,25 @@ D8-A11. Per-producer payload retention duration/source
    the `audit_log` value + "each writer sets retention_until or fails closed" staging evidence close
    checklist row 40 at deploy time.
 
+D8-A12. SecretRef namespace convention + initial inventory (resolves checklist rows 45·46;
+   owner-confirmed access matrix)
+   Decision: adopt the repo-derived SecretRef namespace convention and initial inventory from
+   staging-decision-proposals.md §3/§4 as the v1 contract (the project owner confirmed the
+   runtime→purpose access matrix). Convention: `rpa/<env>/<runtime>/<purpose>/<name>`
+   (`<env>`=staging|prod; `<purpose>`=`SecretAccessRequest.purpose` value incl. `object_store`
+   (D8-A10) + the `signed_command` registry namespace). Least-privilege resolve matrix:
+   `api`→`signed_command`,`resume_token_hmac`(verify); `runtime-worker`→`resume_token_hmac`,`executor`;
+   `browser-worker`→`executor`; `llm-gateway`→`gateway_policy`; `artifact-lifecycle` (redaction/
+   retention BYPASSRLS operational role)→`object_store`; `connector-runtime`→`connector` (D7+ deferred).
+   Initial inventory is the namespace skeleton by identifier only (no resolved material) — see §4.
+   Rationale / 비발명: the convention is a logical naming scheme and the matrix/inventory are derived
+   from the code's `SecretAccessRequest.purpose` usage per runtime (not invented external facts); they
+   are repo-decidable naming, distinct from the real backend mount/path and credential values which
+   remain deploy-time `[EXTERNAL-FACT]` (checklist row 44) and the rotation owner handle (row 47).
+   Owner = project owner (confirmed). Build-condition: convention + inventory named (this decision +
+   §3/§4 promoted); real SecretStore backend binding, resolution smoke, and credential values are
+   filled at deploy time and close rows 44/47/48.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
