@@ -471,6 +471,34 @@ D8-A10. Object-store credential SecretRef purpose — dedicated `object_store`
    enum landed; real-port wiring resolves with this purpose when the deploy-time object-store
    binding is provided.
 
+D8-A11. Per-producer payload retention duration/source
+   (resolves staging-decision-proposals.md §7 repo-side; checklist row 40 "producer retention
+   policy" — the `audit_log` duration value and staging evidence remain a deploy-time `[EXTERNAL-FACT]`)
+   Decision: define the v1 retention duration/source for every payload-bearing table beyond the
+   already-enforced `events_outbox` (90d, NOT NULL, fail-closed in `emitOutboxEvent`) and `artifacts`
+   (`artifact.retention_default` 90d, DB CHECK `legal_hold OR retention_until IS NOT NULL`):
+   - `raw_items.raw_payload` → **30d** (`ops-defaults.md#raw_items.retention_default`). Rationale: raw
+     collection only needs a short reprocessing/replay window; shortest tier.
+   - `normalized_records.record` → **90d** (`ops-defaults.md#normalized_records.retention_default`),
+     matching the `events_outbox` 90d tier.
+   - `control_plane_idempotency_keys.response_body` → the D4.3 app idempotency writer already sources
+     retention from the same value as `expires_at` (no separate duration; single source preserved).
+   - `audit_log.payload` → **owner compliance [EXTERNAL-FACT]** (proposed ≥365d). Regulatory/audit
+     retention is a real-world legal fact that must not be invented here (가정 금지); the app
+     `PgDurableSecurityAuditDecisionWriter` already validates a supplied `retentionUntil` and fails
+     closed if absent, so the *enforcement* exists — only the *duration value* is the owner's input.
+   Source model: ops-defaults.md is the SSoT for these durations (per its §intro). The currently-built
+   `raw_items`/`normalized_records` producers (`ingestRawItem`/`normalize`) take `retentionUntil` as
+   input and have **no production caller yet** (the connector/extractor that feeds them is out of D6
+   scope); when that real writer lands it must compute `retention_until` from the ops-defaults source per
+   §6.1's "no silent unknown" contract (a NULL `retention_until` is excluded from the sweeper, which §6.1
+   already designates a producer error for a real writer). The 30d/90d operational values are
+   precedent-derived defaults (events_outbox 90d tier), not invented, and are owner-overridable; only the
+   regulatory `audit_log` value is deferred. Owner = project owner. Build-condition: durations recorded
+   (ops-defaults rows + this decision); real-writer fail-closed enforcement lands with the connector;
+   the `audit_log` value + "each writer sets retention_until or fails closed" staging evidence close
+   checklist row 40 at deploy time.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is

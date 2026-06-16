@@ -94,6 +94,14 @@
 - `legal_hold = true` blocks retention deletion. `deleted_at` records soft-delete/tombstone state; physical purge/archive workers may be added later, but the table-level columns are the authoritative v1 retention contract.
 - `events_outbox.retention_default` is the repo-owned v1 source for app/runtime outbox producers: uniform 90d for every tenant-scoped event type. `emitOutboxEvent` calculates `retention_until` from the PostgreSQL transaction timestamp (`now()`) plus this duration; supplied `occurredAt` only sets the envelope `occurred_at` and does not backdate retention. Missing, unsupported, non-finite, or non-positive policy input is a fail-closed producer error, and `events_outbox.retention_until` is `NOT NULL` so direct SQL producers cannot persist unknown retention.
 - artifact는 위 표의 `artifact.retention_default`와 sweeper 규칙을 따른다. 다른 payload-bearing 테이블은 각 row의 `retention_until`을 기준으로 하며, 값이 없으면 해당 producer 계약이 보존 기간을 아직 산출하지 못한 오류로 취급한다(조용한 unknown 금지).
+- **Per-producer retention duration/source (release-decisions D8-A11):** `events_outbox`(90d, NOT NULL)·`artifacts`(`artifact.retention_default` 90d, DB CHECK) 외 나머지 payload-bearing 테이블의 v1 보존기간/출처:
+
+| Table | retention | source | 비고 |
+|---|---|---|---|
+| `raw_items.raw_payload` | 30d | `raw_items.retention_default` | 원시 수집·재처리 창(최단). 실 collector(D6 범위 밖)가 이 source로 산출 |
+| `normalized_records.record` | 90d | `normalized_records.retention_default` | events_outbox 90d 정합. 실 normalizer가 산출 |
+| `control_plane_idempotency_keys.response_body` | = `expires_at` | D4.3 app idempotency writer | 단일 source 유지(별도 값 없음, 이미 배선) |
+| `audit_log.payload` | **컴플라이언스 오너 확정 ([EXTERNAL-FACT], 제안 ≥365d)** | 규제/감사 보존 | 임의 단축 금지 — 오너 입력 대기. writer는 `retentionUntil` 미공급 시 이미 fail-closed |
 
 ---
 
