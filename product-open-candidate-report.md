@@ -658,7 +658,7 @@ shape is fixed by `ts/runtime-contract.ts` (`ArtifactObjectIoEvidence`,
 | Redaction receipt | `artifact/object-io-evidence@1` with `operation:redact`, `redacted`/`not_required` outcome, `artifactRef`, `receiptId`, `sha256`, and no `ObjectRef` | BLOCKED external evidence |
 | Retention delete receipt | `operation:delete`, `deleted`/`not_found` idempotent outcome, legal-hold/quarantine handling, and `transient_failed` leaving `deleted_at` unset | BLOCKED external evidence |
 | Operational audit + redaction proof | `bypassrls.use` audit for `artifact_redaction_job`/`artifact_retention_sweeper` with no plaintext Secret/PII or `ObjectRef` emitted | BLOCKED external evidence |
-| Object-store credential SecretRef purpose | Open sub-decision (Contract lead): reuse `executor` or add a new `object_store` value to `SecretAccessRequest.purpose`; not inventable here | BLOCKED pending decision |
+| Object-store credential SecretRef purpose | Resolved (release-decisions D8-A10): dedicated `object_store` value added to `SecretAccessRequest.purpose` (least-privilege; not reused from `executor`). The concrete backend alias/credential value stays a deploy-time `[EXTERNAL-FACT]` (Object-store backend + credential row above). | Resolved (repo decision) |
 
 These rows are tracked by the existing artifact_redaction and artifact_retention
 object-I/O blocked markers above; this packet fixes only the redacted evidence

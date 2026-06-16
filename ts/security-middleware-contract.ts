@@ -152,7 +152,14 @@ export interface TenantSessionBinder {
 export interface SecretAccessRequest {
   principal: AuthenticatedPrincipal;
   ref: SecretRef;
-  purpose: "executor" | "connector" | "resume_token_hmac" | "gateway_policy";
+  /**
+   * Least-privilege scope of the credential. `object_store` is dedicated to artifact
+   * redaction/retention real object-store credentials, resolved only by the isolated
+   * artifact-lifecycle operational identity (ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT),
+   * kept distinct from `executor` user-traffic so executor identities are never authorized
+   * for object-store credentials — see release-decisions.md D8-A10.
+   */
+  purpose: "executor" | "connector" | "resume_token_hmac" | "gateway_policy" | "object_store";
   runId?: RunId;
   connectorId?: string;
 }
