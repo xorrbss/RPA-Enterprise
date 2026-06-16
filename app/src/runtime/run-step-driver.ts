@@ -6,8 +6,8 @@
  * 각 전이는 독립 CAS 트랜잭션(applyRunTransition: UPDATE WHERE status=<cur> + 동일 tx outbox). 인터프리터(브라우저
  * 작업)는 트랜잭션 밖에서 수행한다(긴 작업으로 커넥션 점유 금지).
  *
- * 범위(1단계): success/success_empty 종료 경로. fail_business/fail_system 등 실패 전이는 후속 증분 —
- * 미구현 경로는 조용히 흘리지 않고 throw로 표면화한다("조용한 false/unknown 금지").
+ * 범위: success/success_empty → completed(R7→R21), fail_business → failed_business(R9), fail_system → failed_system(R8).
+ * suspend/challenge 등 그 외 terminal 은 미구현 — 조용히 흘리지 않고 throw로 표면화한다("조용한 false/unknown 금지").
  */
 import type { Pool } from "pg";
 
@@ -97,9 +97,21 @@ export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise
     await transition(deps.pool, run, "completing", { type: "finalize_ok" }, { finalizeOk: true });
     return { state: "completed", outcome };
   }
+  // 실패 terminal: success(2-hop R7→R21)와 달리 단일 전이(running→failed_*). applyRunTransition 이 run.failed_* emit + ended_at 설정.
+  if (outcome.terminal === "fail_business") {
+    await transition(deps.pool, run, "running", { type: "business_exception" }, { exceptionClass: "business" });
+    return { state: "failed_business", outcome };
+  }
+  if (outcome.terminal === "fail_system") {
+    // R8 은 pending side-effect(captureFailureScreenshot·evaluateDeadLetter)도 반환하지만, 그 디스패치는 다운스트림
+    // 디스패처(impl-contracts) 소유다 — driveClaimedRun 은 전이 적용만 하고 pending 을 직접 소비하지 않는다(success 경로와 동일).
+    await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" });
+    return { state: "failed_system", outcome };
+  }
 
-  // fail_business/fail_system 등: 1단계 미구현 — 조용한 false 금지로 표면화(후속 증분에서 R-rule 전이 추가).
-  throw new Error(`driveClaimedRun: terminal '${outcome.terminal}' 종료 전이 미구현(1단계는 success 경로). 후속 증분에서 추가.`);
+  // success/success_empty/fail_business/fail_system 외(suspend/challenge 등): 미구현 — 조용히 흘리지 않고 throw로 표면화.
+  // (ScenarioOutcome.terminal 은 string 타입이라 컴파일러가 누락 케이스를 못 잡는다 → loud default 유지.)
+  throw new Error(`driveClaimedRun: terminal '${outcome.terminal}' 종료 전이 미구현(success/success_empty/fail_business/fail_system 외). 후속 증분에서 추가.`);
 }
 
 // 단일 전이를 자체 CAS 트랜잭션으로 적용. eventIdempotencyKey는 이벤트별 접미(outbox UNIQUE 충돌 방지).
