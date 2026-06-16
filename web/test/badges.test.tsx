@@ -31,6 +31,23 @@ describe("StatusBadge 한국어 라벨", () => {
     expect(el?.textContent).toBe("totally_unknown");
   });
 
+  // RQ-026: "open"이 도메인별로 다른 tone — HumanTask open(열림)=중립(blue), circuit open=경보(red).
+  // 이전엔 RED·BLUE 양쪽에 "open"이 있어 RED 우선 → HumanTask 열림이 실패색으로 오인 렌더.
+  test("HumanTask open(열림) → blue (실패색 아님)", () => {
+    const { container } = render(<StatusBadge status="open" />);
+    const el = container.querySelector("span.badge");
+    expect(el?.textContent).toBe("열림");
+    expect(el?.className).toContain("blue");
+    expect(el?.className).not.toContain("red");
+  });
+
+  test("circuit open → red (kind=circuit 경보)", () => {
+    const { container } = render(<StatusBadge status="open" kind="circuit" />);
+    const el = container.querySelector("span.badge");
+    expect(el?.textContent).toBe("열림");
+    expect(el?.className).toContain("red");
+  });
+
   // 완전성 가드: StatusBadge로 흐르는 닫힌 enum은 전부 라벨이 있어야 한다(향후 enum 추가 시 실패).
   test.each([
     ...RUN_STATES,

@@ -22,7 +22,7 @@ export function SecurityView(): JSX.Element {
         { header: "사이트", render: (r) => r.name ?? r.site_profile_id.slice(0, 8) },
         { header: "위험도", render: (r) => <StatusBadge status={r.risk} /> },
         { header: "승인", render: (r) => <StatusBadge status={r.approval_status} /> },
-        { header: "서킷", render: (r) => <StatusBadge status={r.circuit_status} /> },
+        { header: "서킷", render: (r) => <StatusBadge status={r.circuit_status} kind="circuit" /> },
         {
           header: "작업",
           render: (r) =>
