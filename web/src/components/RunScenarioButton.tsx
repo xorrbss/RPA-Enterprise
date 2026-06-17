@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { ApiError, type ApiErrorBody, type CreateRunBody, type ScenarioItem } from "../api/types";
-import { extractUrlRefKeys, extractParamDefaults } from "../api/scenario-params";
+import { extractUrlRefKeys, extractParamDefaults, urlRefLabel } from "../api/scenario-params";
+import { navigate } from "../router";
 
 // 자동화 실행 버튼 + 파라미터 입력 패널.
 // 파라미터 시나리오(navigate.url_ref 가 params 키)는 실행 전 값(URL)을 받아야 한다(런타임 v2.11). 실행 시 getScenario로
@@ -31,6 +32,16 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
   // null=모델 불필요(기본/단일정책 자동해소). non-null=createRun 이 model_required 로 거부 → 모델명 입력 필요.
   const [modelRequired, setModelRequired] = useState<{ available: number } | null>(null);
+  // 모델명 직타 검증(P0-3) — '확인'을 누른 모델 문자열. getGatewayPolicy 로 실제 존재하는 정책인지 확인한 뒤에만 실행 허용.
+  const [checkedModel, setCheckedModel] = useState("");
+  const policyCheck = useQuery({
+    queryKey: ["run-model-check", checkedModel],
+    queryFn: () => api.getGatewayPolicy(checkedModel),
+    enabled: modelRequired !== null && checkedModel.length > 0,
+    retry: false,
+  });
+  // 확인된 모델이 현재 입력과 일치하고 정책 조회가 성공해야 확정(입력을 수정하면 재확인 필요 — 맹목 직타 차단).
+  const modelConfirmed = checkedModel.length > 0 && checkedModel === model.trim() && policyCheck.isSuccess;
 
   const detail = useQuery({
     queryKey: ["scenario-detail", scenario.scenario_id],
@@ -42,8 +53,8 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
   const defaults = extractParamDefaults(detail.data?.ir);
   const valueFor = (k: string): string => values[k] ?? defaults[k] ?? "";
   const missing = keys.filter((k) => valueFor(k).trim().length === 0);
-  // model_required 거부 후엔 모델명 입력 전까지 실행 차단(가드).
-  const needModel = modelRequired !== null && model.trim().length === 0;
+  // model_required 거부 후엔 모델명을 입력·확인(getGatewayPolicy)하기 전까지 실행 차단(맹목 직타 가드).
+  const needModel = modelRequired !== null && !modelConfirmed;
 
   const run = useMutation({
     mutationFn: () => {
@@ -52,13 +63,16 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
       const m = model.trim();
       return api.createRun(m.length > 0 ? { ...base, model: m } : base, crypto.randomUUID());
     },
-    onSuccess: () => {
-      setMsg({ tone: "green", text: "실행 등록됨" });
+    onSuccess: (result) => {
+      setMsg(null);
       setOpen(false);
       setValues({});
       setModel("");
       setModelRequired(null);
+      setCheckedModel("");
       void qc.invalidateQueries({ queryKey: ["runs"] });
+      // 시작 → 관찰 직행(P0-1): 방금 만든 run 의 라이브 트레이스로 즉시 이동(수동 '실행 기록 보기'·UUID 복붙 제거).
+      navigate("runTrace", { run: result.run_id });
     },
     onError: (e) => {
       // model_required → 모델명 입력 노출(임의선택 금지). 그 외 에러는 코드 표면화. 둘 다 패널 안에 표시.
@@ -108,13 +122,14 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
               </p>
               {keys.map((k) => (
                 <label key={k} style={{ display: "block", marginBottom: 8 }}>
-                  <span style={{ display: "block", fontSize: 13, marginBottom: 2 }}>{k}</span>
+                  {/* raw url_ref 키 대신 운영자용 한국어 라벨(P0-3). 미매핑 키는 원본 폴백(조용한 공백 금지). */}
+                  <span style={{ display: "block", fontSize: 13, marginBottom: 2 }}>{urlRefLabel(k)}</span>
                   <input
                     type="text"
                     value={valueFor(k)}
                     onChange={(e) => setValues((prev) => ({ ...prev, [k]: e.target.value }))}
                     placeholder="https://… (실행 대상 URL)"
-                    aria-label={k}
+                    aria-label={urlRefLabel(k)}
                     style={{ width: "100%", fontFamily: "monospace", fontSize: 13, padding: 8, boxSizing: "border-box" }}
                   />
                 </label>
@@ -122,14 +137,31 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
               {modelRequired !== null && (
                 <label style={{ display: "block", marginBottom: 8 }}>
                   <span style={{ display: "block", fontSize: 13, marginBottom: 2 }}>AI 모델 (gateway_policies.model)</span>
-                  <input
-                    type="text"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder="예: gpt-4o-mini"
-                    aria-label="AI 모델"
-                    style={{ width: "100%", fontFamily: "monospace", fontSize: 13, padding: 8, boxSizing: "border-box" }}
-                  />
+                  <span style={{ display: "flex", gap: 6 }}>
+                    <input
+                      type="text"
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                      placeholder="예: gpt-4o-mini"
+                      aria-label="AI 모델"
+                      style={{ flex: 1, fontFamily: "monospace", fontSize: 13, padding: 8, boxSizing: "border-box" }}
+                    />
+                    {/* 직타 모델을 getGatewayPolicy 로 검증(P0-3) — 실제 정책 존재 확인 후에만 실행 허용(맹목 입력 제거). */}
+                    <button className="btn" type="button" onClick={() => setCheckedModel(model.trim())} disabled={model.trim().length === 0 || policyCheck.isFetching}>
+                      확인
+                    </button>
+                  </span>
+                  {checkedModel.length > 0 && checkedModel === model.trim() && (
+                    <span className="subtle" role="status" style={{ display: "block", marginTop: 4, fontSize: 12 }}>
+                      {policyCheck.isFetching
+                        ? "모델 정책 확인 중…"
+                        : modelConfirmed
+                          ? `확인됨 — 정책 ‘${policyCheck.data?.model ?? checkedModel}’ 사용`
+                          : policyCheck.isError
+                            ? `‘${checkedModel}’ 정책을 찾을 수 없습니다. 모델명을 확인하세요.`
+                            : ""}
+                    </span>
+                  )}
                 </label>
               )}
               {msg !== null && (

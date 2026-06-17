@@ -34,8 +34,11 @@ export function viewFromHash(hash: string): ViewKey {
   return (VIEW_KEYS as readonly string[]).includes(key) ? (key as ViewKey) : DEFAULT_VIEW;
 }
 
-export function navigate(view: ViewKey): void {
-  if (location.hash !== `#${view}`) location.hash = `#${view}`;
+export function navigate(view: ViewKey, params?: Record<string, string>): void {
+  // 뷰 전환 + 드릴다운 파라미터(예: 실행 시작 직후 그 run 상세로 직행 — `#runTrace?run=<id>`). 파라미터 없으면 기존 동작.
+  const qs = params !== undefined ? new URLSearchParams(params).toString() : "";
+  const next = `#${view}${qs ? `?${qs}` : ""}`;
+  if (location.hash !== next) location.hash = next;
 }
 
 /** 현재 라우트(해시) 구독. 잘못된 해시는 dashboard로 폴백(조용한 빈화면 금지). */

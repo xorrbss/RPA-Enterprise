@@ -3,6 +3,7 @@ import {
   ApiError,
   type ArtifactDetail,
   type CreateRunBody,
+  type CreateRunResult,
   type DecideApprovalBody,
   type DecideApprovalResult,
   type DeadLetterItem,
@@ -73,7 +74,7 @@ export interface ApiClient {
   // 둘 다 Idempotency-Key 불요(api-surface §35). 무효 IR/충돌은 ApiError로 표면화.
   createScenario(ir: unknown): Promise<ScenarioMutationResult>;
   updateScenario(scenarioId: string, ir: unknown, version: number): Promise<ScenarioMutationResult>;
-  createRun(body: CreateRunBody, idempotencyKey: string): Promise<unknown>;
+  createRun(body: CreateRunBody, idempotencyKey: string): Promise<CreateRunResult>;
   // 건별 결재(승인/반려, approver+). Idempotency-Key + body{source_run_id, doc_ref, decision, reason?}.
   //   동일 키 replay → 동일 spawned_run_id, 다른 키·동일(run,doc) → APPROVAL_ALREADY_DECIDED(409). 백엔드가 RBAC 최종 강제.
   decideApproval(body: DecideApprovalBody, idempotencyKey: string): Promise<DecideApprovalResult>;

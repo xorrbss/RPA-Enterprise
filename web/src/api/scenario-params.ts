@@ -2,6 +2,17 @@
 // navigate.url_ref 는 run params 의 키(런타임 v2.11) — 실행 전 운영자가 그 값(URL)을 공급해야 한다.
 // 목록(ScenarioItem)엔 IR이 없으므로 실행 시 getScenario(detail.ir)로 받아 추출한다.
 
+// url_ref 키(navigate 대상의 심볼릭 키) → 운영자용 한국어 라벨. 시드/위저드가 쓰는 알려진 키만 매핑하고,
+// 미매핑 키는 원본 그대로 폴백(조용한 공백 금지) — raw "entry_url" 직노출 대신 의미를 보여준다.
+const URL_REF_LABELS: Record<string, string> = {
+  entry_url: "접속 주소 (시작 URL)",
+  orders_url: "주문 페이지 주소",
+  login_url: "로그인 페이지 주소",
+};
+export function urlRefLabel(key: string): string {
+  return URL_REF_LABELS[key] ?? key;
+}
+
 /** ir.nodes 의 모든 navigate.url_ref(=params 키)를 등장 순서로 중복 없이 반환. */
 export function extractUrlRefKeys(ir: unknown): string[] {
   const keys: string[] = [];

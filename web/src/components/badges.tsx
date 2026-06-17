@@ -5,8 +5,10 @@ const RED = new Set(["failed_system", "failed_business", "abandoned", "dead_lett
 const AMBER = new Set(["retry", "suspending", "suspended", "aborting", "resume_requested", "resuming", "half_open", "amber", "escalated", "expired", "pending", "failed"]);
 const BLUE = new Set(["running", "processing", "queued", "claimed", "completing", "in_progress", "assigned", "open"]);
 
+export type Tone = "green" | "red" | "amber" | "blue" | "muted";
 // kind: 같은 enum 문자열이 도메인별로 다른 tone일 때 호출부가 분리(RQ-026). 현재는 circuit만.
-function tone(status: string, kind?: "circuit"): "green" | "red" | "amber" | "blue" | "muted" {
+// export: 색 결정 단일 출처 — ArrivalBanner 등 .badge 색을 재사용하는 호출부가 직접 복제하지 않게 한다(DRY).
+export function tone(status: string, kind?: "circuit"): Tone {
   // circuit_status "open" = 서킷 차단(경보) → red. 그 외 "open"(HumanTask 열림)은 BLUE(중립-활성)로 떨어진다.
   if (kind === "circuit" && status === "open") return "red";
   if (GREEN.has(status)) return "green";
@@ -59,6 +61,20 @@ const CACHE_LABELS: Record<string, string> = {
 };
 export function cacheLabel(mode: string): string {
   return CACHE_LABELS[mode] ?? mode;
+}
+
+// 스트림 종료 사유(stagehand_calls.stream_status = LLM finishReason) → 한국어. 출처: gateway finishReason
+// (stop/length/tool_call/content_filter) + 런타임 관측값(done=정상, error/aborted=중단). 미매핑은 raw 폴백.
+const STREAM_STATUS_LABELS: Record<string, string> = {
+  stop: "정상 완료", done: "정상 완료", tool_call: "도구 호출",
+  length: "길이 한도로 잘림", content_filter: "콘텐츠 필터 차단", error: "스트림 오류", aborted: "스트림 중단",
+};
+export function streamStatusLabel(status: string): string {
+  return STREAM_STATUS_LABELS[status] ?? status;
+}
+// 정상 종료(stop/done/tool_call)가 아닌 stream_status = 관찰된 비정상 종료 신호(잘림/필터/오류). 자동 복구 가독성에 노출.
+export function isStreamWarning(status: string | null): boolean {
+  return status !== null && status !== "stop" && status !== "done" && status !== "tool_call";
 }
 
 // 사람 확인 종류 → 한국어. 출처: filters HUMANTASK_KINDS. 미매핑은 raw 폴백.

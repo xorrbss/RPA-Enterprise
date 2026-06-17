@@ -144,7 +144,7 @@ export function PlaygroundView(): JSX.Element {
                 <div style={{ position: "relative", display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
                   {can("run.create") && <RunScenarioButton scenario={selected} />}
                   <button className="btn" type="button" onClick={() => navigate("runTrace")}>실행 기록 보기</button>
-                  {can("run.create") && <span className="subtle">실행 시작 시 실제 run이 등록됩니다 — 진행은 ‘실행 기록’에서.</span>}
+                  {can("run.create") && <span className="subtle">실행 시작 시 실제 run이 등록되고 그 실행의 진행 화면으로 바로 이동합니다.</span>}
                 </div>
               )}
               {detail.isLoading ? (

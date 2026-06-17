@@ -53,6 +53,18 @@ const SAMSUNG_PAGE_STATE_SELECTORS = {
   },
 };
 
+// Phase 1 관찰성(make-the-run-watchable) 코드범위 점검 — 데모가 자가복구/세션재사용 모먼트를 안정적으로 산출하는가.
+//   (코드는 손대지 않는다. 서버 실행/실 하이웍스 로그인/세션 캡처 reseed = 오너 영역이라 절차로만 명시.)
+// • 세션 재사용(SESS, 아래 ~L200-283): precheck observe + on[] 분기가 정상 배선 — flags.reviews_visible→collect(로그인 스킵,
+//   warm/쿠키 복원) vs flags.login_required→fill_user…submit→recheck(cold). warm 경로는 로그인 단계(fill_user/fill_pw/submit)를
+//   실행하지 않아 트레이스가 짧아진다 = 세션재사용의 '정직한 증거'(StepTrace.tsx SelfHealSummary 원칙: run-레벨 seam이라 별도 배지 안 만듦).
+// • 자가복구: 단계 status='started'(F1 현재단계)·attempt>0(재시도)·cache hit 재생·stream 비정상은 모두 관찰값으로만 집계
+//   (SelfHealSummary). 이미 정직 — 수정 불필요. F1/F2/F3는 이 관찰값 위에 표시만 얹는다(창작 0).
+// • 점검 결론(코드 정독으로 확인된 사실, 추정 아님): 시나리오 IR 구조는 자가복구/세션재사용을 안정적으로 산출할 형태를 갖췄다.
+//   실제 산출 여부는 서버 reseed + run 실행이 필요하다(아래 절차 — 오너 1회 수행).
+// 데모 재시연 절차(오너 영역 — 코드로 닫지 않음): ① dev:serve는 temp PG라 reseed 시 운영자-캡처 세션이 소실된다.
+//   ② 따라서 서버 재기동 후 실 하이웍스 '세션 등록'(headful 로그인 캡처)을 1회 다시 수행한다. ③ warm run = 로그인 스킵(짧은 트레이스),
+//   cold run = recheck 경유 자가복구가 StepTrace에서 가시화되는지 확인한다.
 export async function seedScenarios(pool: PgPool): Promise<void> {
   await withTenantTx(pool, TENANT, async (c) => {
     await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'주문 수집 자동화')`, [SCEN, TENANT]);
