@@ -26,7 +26,7 @@ export type Role =
 | `viewer` | run/workitem/human_task/대시보드·트레이스·artifact 조회만. 상태 변경 불가. | 운영 콘솔 read-only audience |
 | `operator` | run `create`/`abort`(R6), DLQ `manual_replay`(W10 `operatorAuthorized`), sink DLQ replay, human_task 인박스 assign/start. 조회 포함. | api-surface run create, state-machine W10 "운영자 재처리 권한", R6, error-catalog `DEAD_LETTER`/`SINK_DELIVERY_FAILED` operatorAction |
 | `reviewer` | human_task `resolve`(H3, kind=validation/exception/captcha/mfa) 및 manual `escalate`(H5). operator 권한 포함(assign/start). | reserved-handlers @human_task kind, state-machine H1/H2/H3/H5 |
-| `approver` | human_task `resolve`(kind=approval), `nodePolicy.requires_approval` 승인, site risk=red 승인. reviewer 권한 포함. | ir.schema `requires_approval`, error-catalog `SITE_PROFILE_BLOCKED`(risk=red), reserved-handlers kind=approval |
+| `approver` | human_task `resolve`(kind=approval), `nodePolicy.requires_approval` 승인, site risk=red 승인, 결재 인박스 건별 결재(`approval.decide`). reviewer 권한 포함. | ir.schema `requires_approval`, error-catalog `SITE_PROFILE_BLOCKED`(risk=red)·`APPROVAL_ALREADY_DECIDED`, reserved-handlers kind=approval, api-surface `POST /v1/approvals/decide` |
 | `admin` | scenario promote(prod 승격), secret 접근, connector enable, RBAC 역할 부여, network policy 편집. 전 권한 포함. | error-catalog `SECRET_ACCESS_DENIED`/`CONNECTOR_PERMISSION_DENIED`, SCENARIO_VERSION_CONFLICT(승격 경로) |
 
 규칙:
@@ -60,6 +60,7 @@ export type Role =
 | site 수정(이름 등 설정) | api-surface §7 `PATCH /v1/sites/{id}` (`site.update`; site.create 와 동일 운영자 레벨 — 온보딩한 주체가 라벨/설정 유지보수) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 사이트 세션 등록(운영자-보조 캡처) | `POST /v1/sites/{id}/session/capture` (`session.capture`). 운영자 floor — run.create/site.create 가 이미 브라우저를 띄우는 것과 동일 레벨. 캡처 세션은 재사용 인증 자료라 더 민감하나, 운영자가 실 사이트에 **직접 로그인**(자격증명은 우리 저장소 미경유)하고 결과 쿠키만 봉투암호화 저장 + red-risk 사이트는 `approved=true` 전제(`SITE_PROFILE_BLOCKED`)로 영향 한정. | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | site risk=red 승인 권한 | approver 게이트(권한 부족=일반 RBAC 거부) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 결재 인박스 건별 결재(approve/reject) | api-surface `POST /v1/approvals/decide` (`approval.decide`; approver 게이트). 이중결재=`APPROVAL_ALREADY_DECIDED`(409) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | secret 접근(SecretStore.resolve 스코프) | security-contracts §1, core-types `SecretStore` | — | — | — | — | ✓ | `SECRET_ACCESS_DENIED` |
 | connector enable/install | security-contracts §7, error-catalog `CONNECTOR_PERMISSION_DENIED` | — | — | — | — | ✓ | `CONNECTOR_PERMISSION_DENIED` |
 | gateway policy 조회 | api-surface §6 `GET /v1/gateway/policy` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |

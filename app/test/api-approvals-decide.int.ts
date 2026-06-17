@@ -37,6 +37,7 @@ const SOURCE_RUN_B = "70000000-0000-0000-0000-0000000000b3";
 
 const DOC_A = "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/984261";
 const DOC_B = "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/984262";
+const DOC_C = "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/984263";
 
 const SECRET = new TextEncoder().encode("approvals-decide-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -174,6 +175,15 @@ async function main(): Promise<void> {
       );
       check("DB: 반려 사유 영속", reasonRow.rows[0]?.reason === "예산 초과", JSON.stringify(reasonRow.rows));
 
+      // 6b) approver 의 JWT sub 가 비-UUID(실 OIDC: auth0|…) → 201. decided_by 는 text(PrincipalId 자유형)라 22P02→500 없음.
+      const oidcApprover = await mint({ sub: "auth0|opaque-subject-xyz", tenant_id: TENANT_A, roles: ["approver"] });
+      const oidc = await post(oidcApprover, "k-oidc", { source_run_id: SOURCE_RUN_A, doc_ref: DOC_C, decision: "approve" });
+      check("approver(비-UUID sub) decide → 201 (decided_by text, 22P02 없음)", oidc.statusCode === 201, oidc.body);
+      const decidedByRow = await withTenantTx(pool, TENANT_A, (c) =>
+        c.query<{ decided_by: string }>(`SELECT decided_by FROM approval_decisions WHERE doc_ref=$1`, [DOC_C]),
+      );
+      check("DB: decided_by 가 비-UUID sub 그대로 저장", decidedByRow.rows[0]?.decided_by === "auth0|opaque-subject-xyz", JSON.stringify(decidedByRow.rows));
+
       // 7) cross-tenant source_run → 404(RLS, 존재 비노출), 스폰 없음.
       const cross = await post(approver, "k-x", { source_run_id: SOURCE_RUN_B, doc_ref: DOC_A, decision: "approve" });
       check("cross-tenant source_run → 404 RESOURCE_NOT_FOUND", cross.statusCode === 404 && cross.json().code === "RESOURCE_NOT_FOUND", cross.body);
@@ -186,9 +196,9 @@ async function main(): Promise<void> {
       const noKey = await post(approver, undefined, { source_run_id: SOURCE_RUN_A, doc_ref: DOC_A, decision: "approve" });
       check("missing Idempotency-Key → 422", noKey.statusCode === 422 && noKey.json().code === "IR_SCHEMA_INVALID", noKey.body);
 
-      // 최종 불변: 결정 2 / 스폰 2 (위 거부·중복은 스폰 0).
+      // 최종 불변: 결정 3 / 스폰 3 (approve DOC_A + reject DOC_B + 비-UUID approve DOC_C; 거부·중복·404 는 스폰 0).
       const cFinal = await counts(pool);
-      check("최종: 결정 2 / DECIDE run 2 (거부·중복 스폰 0)", cFinal.decisions === 2 && cFinal.spawned === 2, JSON.stringify(cFinal));
+      check("최종: 결정 3 / DECIDE run 3 (거부·중복·404 스폰 0)", cFinal.decisions === 3 && cFinal.spawned === 3, JSON.stringify(cFinal));
     } finally {
       await app.close();
     }

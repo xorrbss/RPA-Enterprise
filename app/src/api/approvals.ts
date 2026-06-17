@@ -50,11 +50,14 @@ function parseDecideBody(raw: unknown): DecideBody {
   if (typeof sourceRunId !== "string" || !UUID_RE.test(sourceRunId)) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_source_run_id" });
   }
-  const docRef = raw.doc_ref;
-  if (typeof docRef !== "string" || originOf(docRef) === null) {
+  const docRefRaw = raw.doc_ref;
+  if (typeof docRefRaw !== "string" || originOf(docRefRaw) === null) {
     // doc_ref 는 navigate(url_ref) 가 절대 URL 로 해소해야 하므로 http(s) URL 이어야 한다(비-URL은 매칭 불가 → 선차단).
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_doc_ref" });
   }
+  // 정규화(host 소문자·default 포트·dot-segment) — UNIQUE(이중결재 방지) 가드가 host-case/포트 변형에 우회되지 않게.
+  //   저장·navigate·UNIQUE 비교에 동일 canonical 문자열을 쓴다. (경로 대소문자/trailing-slash 는 origin SSoT 범위 밖.)
+  const docRef = new URL(docRefRaw).href;
   const decision = raw.decision;
   if (decision !== "approve" && decision !== "reject") {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_decision" });
@@ -127,7 +130,8 @@ async function applyDecide(
   try {
     await client.query(
       `INSERT INTO approval_decisions (id, tenant_id, source_run_id, doc_ref, decision, reason, decided_by)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7::uuid)`,
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7)`,
+      // decided_by 는 text(PrincipalId 자유형 — OIDC sub auth0|… 등 비-UUID 허용). ::uuid 캐스트 금지(22P02→미분류 500 회피).
       [decisionId, tenantId, body.sourceRunId, body.docRef, body.decision, body.reason ?? null, decidedBy],
     );
   } catch (err) {

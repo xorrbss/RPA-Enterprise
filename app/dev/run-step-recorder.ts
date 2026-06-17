@@ -15,18 +15,21 @@ import type { Pool } from "pg";
 import type { ExecutorPlugin, RunContext, StepResult, VerifyResult } from "../../ts/core-types";
 import { withTenantTx } from "../src/db/pool";
 
-// run_steps.action CHECK(migration_core_entities §5) — 이 집합 외 type 은 기록하지 않는다(gateway 미호출=artifact 없음→FK 무관).
-const STEP_ACTIONS: ReadonlySet<string> = new Set([
-  "act",
-  "observe",
-  "extract",
-  "navigate",
-  "download",
-  "upload",
-  "api_call",
-  "file",
-  "human_task",
-  "shell",
+// gateway 아티팩트를 실제로 생성해 복합 FK 부모가 되는 도달 가능 type 만 기록한다(LLM 프리미티브 act/extract).
+//   navigate/observe 등 비-artifact type 은 FK 무관이라 기록 생략(불필요 행·오해성 트레이스 방지). observe 는 ir-translate
+//   가 drop 해 실행기 미도달, 그 외 type(download/shell 등)은 ir-translate 가 ACTION_UNSUPPORTED 로 차단해 도달 불가.
+const STEP_ACTIONS: ReadonlySet<string> = new Set(["act", "extract"]);
+
+// StepResult.status → run_steps.status(migration §5 CHECK). 둘 다 동일 enum(started 제외)이라 통과 값만 허용.
+const STEP_STATUSES: ReadonlySet<string> = new Set([
+  "success",
+  "failed_business",
+  "failed_system",
+  "failed_challenge",
+  "failed_security",
+  "uncertain",
+  "skipped",
+  "suspended",
 ]);
 
 export class RunStepRecordingExecutor implements ExecutorPlugin {
@@ -44,8 +47,10 @@ export class RunStepRecordingExecutor implements ExecutorPlugin {
   }
 
   async execute(stepId: string, action: unknown, ctx: RunContext): Promise<StepResult> {
-    await this.recordStep(stepId, action, ctx);
-    return this.inner.execute(stepId, action, ctx);
+    await this.recordStep(stepId, action, ctx); // gateway sink 의 artifact FK 가 참조할 행을 선기록('started').
+    const result = await this.inner.execute(stepId, action, ctx);
+    await this.finalizeStep(stepId, ctx, result); // 종결 상태/소요 반영(완료 run 트레이스가 영구 'started' 로 남지 않게).
+    return result;
   }
 
   /** run_steps 선행 기록(멱등). 같은 (tenant,run,step,attempt) 중복 INSERT 는 DO NOTHING(재시도/재진입 안전). */
@@ -54,13 +59,26 @@ export class RunStepRecordingExecutor implements ExecutorPlugin {
       typeof action === "object" && action !== null && typeof (action as { type?: unknown }).type === "string"
         ? (action as { type: string }).type
         : undefined;
-    if (type === undefined || !STEP_ACTIONS.has(type)) return; // 미지원 type 은 artifact 미생성 → FK 무관, 기록 생략.
+    if (type === undefined || !STEP_ACTIONS.has(type)) return; // 비-artifact type 은 FK 무관, 기록 생략.
     await withTenantTx(this.pool, ctx.tenantId, async (c) => {
       await c.query(
         `INSERT INTO run_steps (id, tenant_id, run_id, step_id, node_id, attempt, action, status, started_at)
          VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::int, $7, 'started', now())
          ON CONFLICT (tenant_id, run_id, step_id, attempt) DO NOTHING`,
         [randomUUID(), ctx.tenantId, ctx.runId, stepId, ctx.nodeId, ctx.attempt, type],
+      );
+    });
+  }
+
+  /** inner 실행 후 'started' 행을 종결 상태/소요로 갱신(멱등: status='started' 가드). 미기록 스텝(비-artifact)은 0행 영향. */
+  private async finalizeStep(stepId: string, ctx: RunContext, result: StepResult): Promise<void> {
+    if (!STEP_STATUSES.has(result.status)) return; // 미지원 상태값은 갱신 안 함(CHECK 위반 회피 — 조용히 'started' 유지보다 안전).
+    await withTenantTx(this.pool, ctx.tenantId, async (c) => {
+      await c.query(
+        `UPDATE run_steps
+            SET status = $5, ended_at = now(), duration_ms = $6::int
+          WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND step_id = $3 AND attempt = $4::int AND status = 'started'`,
+        [ctx.tenantId, ctx.runId, stepId, ctx.attempt, result.status, result.timings.durationMs],
       );
     });
   }

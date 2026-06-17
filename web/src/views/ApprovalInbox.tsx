@@ -113,8 +113,7 @@ function Body(props: {
     return <ErrorState message={e instanceof Error ? e.message : "결재 목록을 해석하지 못했습니다."} />;
   }
   if (rows.length === 0) return <EmptyState message="수집된 결재 항목이 없습니다." />;
-  if (latestRun === undefined) return <EmptyState message="수집 실행 기준을 찾을 수 없습니다." />;
-
+  // latestRun 은 위 가드(latestRun===undefined → EmptyState)에서 이미 좁혀져 여기선 항상 정의됨.
   return <Inbox rows={rows} sourceRunId={latestRun.run_id} />;
 }
 

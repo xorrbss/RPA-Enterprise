@@ -173,6 +173,14 @@
 | POST | `/v1/sites/{site_profile_id}/approve` | `Idempotency-Key`. 승인 권한 필요. body: optional `reason`/`expires_at` | 200 + 승인 반영(risk=red 사이트 실행 허용) | `AUTHZ_FORBIDDEN`(403)⁴ |
 
 - `site risk=red`는 미승인 시 실행 차단(`SITE_PROFILE_BLOCKED`, 403, error-catalog operatorAction="site risk=red 승인 워크플로우"). 본 엔드포인트가 그 승인 워크플로우의 제어평면 진입점.
+
+### 결재(approval) 명령 — 하이웍스 결재 인박스(Model A)
+
+| 메서드 | 경로 | 입력 | 출력 | 에러 |
+|---|---|---|---|---|
+| POST | `/v1/approvals/decide` | `Idempotency-Key`. 결재 권한(`approval.decide`, approver+) 필요. body: `source_run_id`(수집 run)·`doc_ref`(approval origin 절대 URL)·`decision`(`approve`\|`reject`)·`reason`(reject 필수) | 201 + `{ decision_id, source_run_id, doc_ref, decision, spawned_run_id }` | `AUTHZ_FORBIDDEN`(403), `APPROVAL_ALREADY_DECIDED`(409), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422) |
+
+- 건별 approver-게이트 결재. `approval_decisions` `UNIQUE(tenant_id, source_run_id, doc_ref)`로 이중결재 차단: 동일 `Idempotency-Key` replay→최초 응답(같은 `spawned_run_id`) 재생, 다른 키·동일 `(source_run, doc_ref)`→`APPROVAL_ALREADY_DECIDED`(409). 결정 INSERT + 내부 DECIDE 시나리오("하이웍스 결재 처리" 최신 prod) run 스폰이 **동일 tx**(부분실패 원자). `source_run_id` 부재/cross-tenant→`RESOURCE_NOT_FOUND`(RLS), `reason` 누락(reject)·`doc_ref` 비-URL→`IR_SCHEMA_INVALID`. 실 승인/반려 클릭은 스폰된 처리 run이 수행(비가역).
 - circuit 상태(`site.circuit_opened`/`site.circuit_closed` 이벤트, `SITE_CIRCUIT_OPEN` 503)는 조회로만 노출 — circuit 임계/재개는 `ops-defaults.md` 운영 정책이며, v1 API는 강제 재개를 노출하지 않는다.
 - `risk` 등급값(red/amber/green)·site_profiles 승인/서킷 컬럼은 `db/migration_core_entities.sql`가 고정한다. 본 문서는 승인 흐름과 에러코드를 함께 고정한다.
 

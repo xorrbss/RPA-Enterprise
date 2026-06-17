@@ -707,3 +707,34 @@
 | 백엔드 | `reads.ts`: `GET /v1/runs/{id}/artifacts`(artifact.read·RLS·최신순 커서, listRuns 골격 복제). SELECT 화이트리스트(content/object_ref/sha256 미선택). content read·artifactStore.get 호출 없음 → §10 audit append 불요. `app/test/api-run-artifacts.int.ts`(18 checks) |
 | web | `client.listRunArtifacts` + `RunArtifactItem` 타입 + RunTrace 상세에 artifact 목록 패널(type·상태·보존·artifact ID). ID는 기존 '산출물 조회'(#129) 입력용 |
 | 비도입 | sha256/object_ref/content 목록 노출 · `?run_id=` 쿼리형 URL · orphan(run 없는) artifact 목록 · status 필터 — 후속/오너결정 |
+
+## v2.23 패치 로그 (하이웍스 결재 인박스 Model A — 수집→요약→건별 approver-게이트 결재 run)
+
+> **첫 end-to-end 업무 시나리오**(수집 run→아티팩트→콘솔 '결재 인박스'→건별 결재 run). 신규 실행기 기능 0(기존
+> navigate/observe/act/extract·세션재사용 재사용). 계약 추가는 최소·근거 기록 원칙. 2라운드 적대 break-it(각 18에이전트)로
+> 16 confirmed findings 수정 후 확정.
+> **계약**: ErrorCode `APPROVAL_ALREADY_DECIDED`(409, none — 이중결재 거부) · RbacAction `approval.decide`(approver/admin,
+> **4곳 미러**: compliance-scaffold 권위 매트릭스 + security-middleware-contract + app rbac + web permissions) · OperationId
+> `decideApproval` · `approval_decisions` 테이블(UNIQUE(tenant,source_run_id,doc_ref) 이중결재 차단·RLS·복합 tenant FK(runs)
+> 동형 강화) · `api-surface.md` 결재 엔드포인트 행 · `auth-rbac.md` 매트릭스 행. **이벤트 payload 신설 0**(미결정 불가침).
+> **백엔드**: `server.ts` createRun 핵심을 `createRunInTx`로 추출(POST /v1/runs ↔ approval.decide 공유) · `approvals.ts`
+> `POST /v1/approvals/decide`(approver-게이트·runIdempotentCommand·source_run RLS 확인·DECIDE 시나리오 name 해소·결정
+> INSERT[23505→ALREADY_DECIDED]·createRunInTx 스폰·spawned_run_id, 동일 tx) · **reject⇒reason 엔드포인트 강제**.
+> `decided_by text`(PrincipalId 자유형 — OIDC sub 비-UUID 허용; ::uuid 캐스트 22P02→미분류 500 회피, break-it HIGH).
+> **시나리오**: '하이웍스 결재 수집'(navigate→observe[login/reviews_visible(td.docu-num)]→extract doc_ref 결정형)·'하이웍스
+> 결재 처리'(params.decision 분기·승인 클릭/반려 사유 fill+클릭·observe 판정; flags 닫힌 레지스트리만). ir-translate
+> `act.args.value_ref`→비-secret 결정형 fill value 스레드(valueRef intent — 미해소 시 LLM/캐시 무음 fill 거부 loud).
+> **dev**: 실 sink(PgGatewayArtifactSink)+redaction 승격 루프(전용 BYPASSRLS 역할·실 §4 ContentRedactionTransform)+
+> RunStepRecordingExecutor(artifacts→run_steps 복합 FK 충족). cdp-session goto 타임아웃 env(45s)+domcontentloaded.
+> **web**: 인박스 건별 [결재]/[반려(사유)] 버튼(approver만·백엔드 최종강제)·결정후 처리 run 폴링·`#runTrace?run=` 딥링크.
+> **검증**: app/codegen typecheck 0 · codegen fixtures 87/0 · db-static-smoke green(approval_decisions 등록) · 백엔드 통합
+> 22/22(temp-PG: approver/403·멱등 replay→동일 run·ALREADY_DECIDED·정확히 1 스폰·reject⇒reason·비-UUID sub·RLS·UNIQUE) ·
+> web typecheck/build 0·vitest 169/169. **⚠ 비가역 경계(휴먼게이트, 자동 미실행)**: 실 하이웍스 세션 캡처(MFA)·실 결재 클릭 검증·머지.
+
+| 항목 | 조치 |
+|---|---|
+| 계약 | `error-catalog.ts`(APPROVAL_ALREADY_DECIDED) · `security-middleware-contract.ts`(approval.decide) · `control-plane-contract.ts`(decideApproval) · `compliance-scaffold.ts` RBAC 매트릭스 · `migration_core_entities.sql`(approval_decisions+RLS+복합 FK) · `api-surface.md`·`auth-rbac.md` |
+| 백엔드 | `server.ts` createRunInTx 추출 · `approvals.ts` decide 엔드포인트 · `app/src/api/rbac.ts`(approver/admin) · `app/test/api-approvals-decide.int.ts`(22 checks) |
+| 실행기/dev | `ir-translate.ts`·`stagehand-dom-executor.ts`(valueRef intent) · `cdp-session.ts`(goto 타임아웃) · `app/dev/`(serve/run-loop 실 sink·redaction-loop·run-step-recorder·seed-hiworks-approval) |
+| web | `client.ts`/`types.ts`(decideApproval) · `views/ApprovalInbox.tsx`(건별 버튼·폴링·딥링크) · `api/permissions.ts` |
+| 비도입(휴먼게이트) | 실 세션 캡처(MFA)·실 결재 클릭(비가역)·PR 머지 — 사용자 입회. doc_ref 경로-변형 정규화·일괄(bulk) 결재 — 후속 |
