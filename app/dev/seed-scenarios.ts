@@ -24,6 +24,8 @@ import {
   HIWORKS_SVER,
   HIWORKS_COLLECT_SCEN,
   HIWORKS_COLLECT_SVER,
+  HIWORKS_DECIDE_SCEN,
+  HIWORKS_DECIDE_SVER,
   HIWORKS_APPROVAL_SITE,
   HIWORKS_APPROVAL_BID,
   HIWORKS_APPROVAL_ORIGIN,
@@ -413,6 +415,106 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
         );
       } else {
         console.error("HIWORKS COLLECT scenario compile FAILED:", JSON.stringify(collect));
+      }
+
+      // 하이웍스 결재 처리(승인/반려) — 건별 approver-게이트 결재 run 이 참조하는 단일 시나리오(params.decision 분기).
+      // navigate(doc_ref, origin=approval → 위 결재 site_profile/세션 재사용) → check observe: login_required→세션만료,
+      // 아니면 params.decision 으로 승인/반려 분기(IREL params.* 는 params_schema 로 타입). 승인=결재 버튼 클릭,
+      // 반려=사유 fill(args.value_ref:"reason" → ir-translate 가 params.reason 을 결정형 value 로 스레드, LLM 미경유)+반려 버튼.
+      // 확인 모달 클릭 후 recheck observe 로 판정(IR verify 노드는 런타임 미실행 — observe/on[]로). 클릭 노드는 side_effect:submit.
+      // ⚠ recheck 는 coarse(로그인 바운스=실패 / 그 외=성공): 문서-수준 "처리됨" witness 셀렉터는 Phase 2 실 recon(휴먼게이트)
+      //   에서 확정해 reviews_visible 등 등록 flag 로 강화한다(현재 닫힌 레지스트리엔 detail-page 처리 witness 없음 — 발명 금지).
+      //   클릭 act 는 버튼 부재 시 LLM plan 부재로 loud 실패(조용한 무성공 아님). reject⇒reason 필수성은 엔드포인트가 강제.
+      const decide = compileScenario(
+        {
+          meta: { name: "하이웍스 결재 처리", version: 1 },
+          params_schema: {
+            type: "object",
+            properties: {
+              doc_ref: { type: "string" },
+              decision: { type: "string" },
+              reason: { type: "string" },
+            },
+            required: ["doc_ref", "decision"],
+          },
+          start: "open",
+          nodes: {
+            open: { what: [{ action: "navigate", url_ref: "doc_ref" }], next: "check" },
+            check: {
+              what: [{ action: "observe" }],
+              on: [
+                { when: "flags.login_required", target: "session_expired", priority: 3 }, // 로그인 폼 = 세션 만료/미인증
+                { when: 'params.decision == "reject"', target: "do_reject_reason", priority: 2 },
+                { when: 'params.decision == "approve"', target: "do_approve", priority: 1 },
+              ],
+            },
+            do_approve: {
+              what: [
+                {
+                  action: "act",
+                  instruction:
+                    '결재 문서 상세에서 현재 사용자의 "결재"(승인) 버튼을 클릭하는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"click","selector":"<결재 버튼 CSS 셀렉터>"}',
+                },
+              ],
+              side_effect: { kind: "submit", idempotency_key: "hiworks-decide-approve" },
+              next: "confirm",
+            },
+            do_reject_reason: {
+              what: [
+                {
+                  action: "act",
+                  instruction:
+                    '반려 사유 입력칸(textarea/input)을 채우는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"fill","selector":"<사유 입력칸 CSS 셀렉터>"}',
+                  args: { value_ref: "reason" }, // params.reason → 결정형 value 스레드(LLM 미경유 fill).
+                },
+              ],
+              next: "do_reject_click",
+            },
+            do_reject_click: {
+              what: [
+                {
+                  action: "act",
+                  instruction:
+                    '결재 문서의 "반려" 버튼을 클릭하는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"click","selector":"<반려 버튼 CSS 셀렉터>"}',
+                },
+              ],
+              side_effect: { kind: "submit", idempotency_key: "hiworks-decide-reject" },
+              next: "confirm",
+            },
+            confirm: {
+              what: [
+                {
+                  action: "act",
+                  instruction:
+                    '확인(제출) 모달이 떠 있으면 확인 버튼을 클릭하는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"click","selector":"<확인 버튼 CSS 셀렉터>"}',
+                },
+              ],
+              side_effect: { kind: "submit", idempotency_key: "hiworks-decide-confirm" },
+              next: "recheck",
+            },
+            recheck: {
+              what: [{ action: "observe" }],
+              on: [
+                { when: "flags.login_required", target: "submit_failed", priority: 2 }, // 제출 후 로그인 바운스 = 실패
+                { when: "true", target: "done", priority: 1 }, // 클릭 완료 + 인증 유지 = 성공(coarse; 문서 witness 는 recon 하드닝)
+              ],
+            },
+            done: { terminal: "success" },
+            session_expired: { terminal: "fail_business" },
+            submit_failed: { terminal: "fail_business" },
+          },
+        },
+        {},
+      );
+      if (decide.ok) {
+        await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'하이웍스 결재 처리')`, [HIWORKS_DECIDE_SCEN, TENANT]);
+        await c.query(
+          `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+           VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+          [HIWORKS_DECIDE_SVER, TENANT, HIWORKS_DECIDE_SCEN, JSON.stringify(decide.ir), decide.compiledAst],
+        );
+      } else {
+        console.error("HIWORKS DECIDE scenario compile FAILED:", JSON.stringify(decide));
       }
 
       // 삼성디스플레이 공지 수집(route B 데모) — navigate(bbsHPNO.do) → observe(그리드 렌더 대기) → extract. 봇차단/로그인 없음(실측).

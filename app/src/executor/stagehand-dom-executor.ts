@@ -48,7 +48,9 @@ export type { ActionPlan, ActionPlanCache, ActionPlanCacheKey } from "./action-p
 export type DomAction =
   // secretRef: 자격증명 fill 슬롯(IR act.vars 에서 ir-translate 가 스레딩). 있으면 실행기가 ctx.assetRefs 에서
   //   SecretRef 를 SecretStore 경유로 해소해 LLM 미경유로 채운다(비밀 대상은 LLM 출력이 아니라 IR 선언 — 결정형).
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string }
+  // value: 비-secret 결정형 fill 값(IR act.args.value_ref → ir-translate 가 run params 에서 해소). secretRef 와 상호배타 —
+  //   LLM 은 selector 만 책임지고 채울 값은 IR/params 에서 온다(LLM 추측 value 무시). 평문 비밀 아님(반려 사유 등 운영자 입력).
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; value?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> } };
 
@@ -228,6 +230,17 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         );
       }
       plan = { operation: "fill", selector: plan.selector, valueRef: a.secretRef };
+    } else if (a.value !== undefined) {
+      // 비-secret 결정형 fill: 채울 값을 IR/params 선언으로 고정(LLM 출력 value 무시). secretRef 와 상호배타.
+      //   LLM 은 selector 만 책임진다. fill 이 아니면 loud(조용한 무시 금지). 캐시 hit 에도 현재 run 의 a.value 로
+      //   재고정(params 가변 — selector 만 캐시 재사용; stale value 미사용). value 는 비밀 아님(평문 경로 허용).
+      if (plan.operation !== "fill") {
+        throw new StagehandDomExecutorError(
+          "IR_SCHEMA_INVALID",
+          `step '${stepId}' value act must yield a 'fill' plan, got '${plan.operation}'`,
+        );
+      }
+      plan = { operation: "fill", selector: plan.selector, value: a.value };
     }
 
     // miss(LLM 해석)만 캐시에 저장 — 저장 plan 은 override 반영된 ref-bearing plan(평문 미저장).
@@ -414,11 +427,13 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (type === "act") {
       const se = (action as { sideEffect?: unknown }).sideEffect;
       const sr = (action as { secretRef?: unknown }).secretRef;
+      const val = (action as { value?: unknown }).value;
       return {
         type,
         instruction,
         ...(typeof se === "string" ? { sideEffect: se as SideEffectKind } : {}),
         ...(typeof sr === "string" && sr.length > 0 ? { secretRef: sr } : {}),
+        ...(typeof val === "string" ? { value: val } : {}),
       };
     }
     return { type, instruction };
