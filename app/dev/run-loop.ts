@@ -25,9 +25,9 @@ import { createStagehandSession, SingleSessionProvider } from "../src/executor/c
 import { SitePageStateResolver } from "../src/executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
 import { UtilityExecutor } from "../src/executor/utility-executor";
-import { StagehandDomExecutor } from "../src/executor/stagehand-dom-executor";
+import { StagehandDomExecutor, type LlmGatewayCaller } from "../src/executor/stagehand-dom-executor";
 import { CompositeExecutor } from "../src/runtime/composite-executor";
-import { LlmGateway, type LlmGatewayCaller } from "../src/gateway/llm-gateway";
+import { LlmGateway } from "../src/gateway/llm-gateway";
 import { CodexSseAdapter } from "../src/gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "../src/gateway/codex-sse-transport";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
@@ -76,9 +76,10 @@ function buildCodexGateway(): LlmGatewayCaller | null {
     gate: new SafeCapabilityGate(),
     validator: { validate: () => ({ ok: true }) },
     sink: {
-      // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력을 넘긴다 → extract 결과를 콘솔에 찍는다(데모 확인용).
-      put: async (text: string) => {
-        console.log("[GW-EXTRACT-OUTPUT]", typeof text === "string" ? text.slice(0, 4000) : JSON.stringify(text).slice(0, 4000));
+      // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력(extract 결과 AND act 액션플랜 둘 다)을 넘긴다 →
+      // 스텝 id 와 함께 콘솔에 찍는다(데모 확인용). 라벨에 stepId 를 넣어 어느 스텝 출력인지 구분(extract/act 혼동 방지).
+      put: async (text: string, meta) => {
+        console.log(`[GW-OUTPUT ${meta.stepId}]`, typeof text === "string" ? text.slice(0, 4000) : JSON.stringify(text).slice(0, 4000));
         return "art://dev-gateway" as ArtifactRef;
       },
     },
