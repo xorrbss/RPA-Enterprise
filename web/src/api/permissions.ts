@@ -26,6 +26,11 @@ const ROLE_ACTIONS: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
+// 역할 → 비기술 한국어(탑바 역할 칩 표시용). auth-rbac.md 역할 레지스트리(viewer/operator/reviewer/approver/admin).
+export const ROLE_LABELS: Readonly<Record<string, string>> = {
+  viewer: "뷰어", operator: "운영자", reviewer: "검토자", approver: "승인자", admin: "관리자",
+};
+
 // JWT payload(base64url)에서 roles 클레임만 읽는다(서명 검증은 백엔드 책임 — 여기선 표시 판단용).
 export function decodeRoles(token: string | null): string[] {
   if (token === null || token === "") return [];

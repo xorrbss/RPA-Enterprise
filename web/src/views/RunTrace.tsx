@@ -4,7 +4,7 @@ import { useApiClient } from "../api/context";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
-import { ArtifactLookup } from "../components/ArtifactLookup";
+import { ArtifactLookup, ArtifactRef } from "../components/ArtifactLookup";
 import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
@@ -132,7 +132,7 @@ function RunArtifactsList({ runId }: { runId: string }): JSX.Element {
             <tbody>
               {items.map((a) => (
                 <tr key={a.artifact_id}>
-                  <td><code title="위 '산출물 조회'에 입력해 본문 확인">{a.artifact_id.slice(0, 8)}</code></td>
+                  <td><ArtifactRef id={a.artifact_id} runId={runId} /></td>
                   <td>{a.type}</td>
                   <td><span className="badge muted">{a.redaction_status}</span></td>
                   <td>{a.retention_until ?? "—"}</td>
@@ -189,7 +189,13 @@ function RunStepsTrace({ runId }: { runId: string }): JSX.Element {
                     <td>{s.cache_mode}</td>
                     <td>{s.duration_ms ?? "—"}</td>
                     <td>{s.stagehand_calls.length > 0 ? <span className="subtle">{s.stagehand_calls[0]!.model} · {tok}tok</span> : "—"}</td>
-                    <td>{s.artifact_ids.length > 0 ? s.artifact_ids.map((id) => <code key={id} title="위 '산출물 조회'에 입력" style={{ marginRight: 4 }}>{id.slice(0, 8)}</code>) : "—"}</td>
+                    <td>
+                      {s.artifact_ids.length > 0 ? (
+                        <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                          {s.artifact_ids.map((id) => <ArtifactRef key={id} id={id} runId={runId} />)}
+                        </span>
+                      ) : "—"}
+                    </td>
                   </tr>
                 );
               })}

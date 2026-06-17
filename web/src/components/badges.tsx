@@ -41,3 +41,30 @@ const STATUS_LABELS: Record<string, string> = {
 export function StatusBadge({ status, kind }: { status: string; kind?: "circuit" }): JSX.Element {
   return <span className={`badge ${tone(status, kind)}`}>{STATUS_LABELS[status] ?? status}</span>;
 }
+
+// 동작(IR action verb) → 비기술 한국어. 출처: ts/core-types IRActionType(닫힌 enum). 미매핑은 raw 폴백(조용한 공백 금지).
+const ACTION_LABELS: Record<string, string> = {
+  act: "화면 조작", observe: "화면 확인", extract: "데이터 추출", navigate: "페이지 이동",
+  download: "파일 받기", upload: "파일 올리기", api_call: "API 호출", file: "파일 처리",
+  human_task: "사람 확인 요청", shell: "명령 실행",
+};
+export function actionLabel(action: string): string {
+  return ACTION_LABELS[action] ?? action;
+}
+
+// 캐시 모드 → 한국어. 출처: ts/core-types StepResult.cache.mode(닫힌 enum). ActionPlanCache 재사용/탐색을 운영자어로.
+const CACHE_LABELS: Record<string, string> = {
+  hit: "캐시 재사용", miss: "신규 탐색", bypass: "캐시 미사용",
+  suspect: "캐시 의심", stale: "캐시 만료", quarantined: "캐시 격리",
+};
+export function cacheLabel(mode: string): string {
+  return CACHE_LABELS[mode] ?? mode;
+}
+
+// 사람 확인 종류 → 한국어. 출처: filters HUMANTASK_KINDS. 미매핑은 raw 폴백.
+const KIND_LABELS: Record<string, string> = {
+  approval: "승인", validation: "검증", exception: "예외 처리", captcha: "보안문자", mfa: "추가 인증",
+};
+export function kindLabel(kind: string): string {
+  return KIND_LABELS[kind] ?? kind;
+}
