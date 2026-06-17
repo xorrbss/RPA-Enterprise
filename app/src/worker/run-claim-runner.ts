@@ -8,14 +8,20 @@ import type {
   RuntimeJobResult,
   RuntimeWorkerJob,
 } from "../../../ts/runtime-contract";
+import type { ExecutorPlugin } from "../../../ts/core-types";
 import { withTenantTx } from "../db/pool";
 import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
 import { applyRunTransition } from "../runtime/run-transition";
 import { driveClaimedRun } from "../runtime/run-step-driver";
+import { CompositeExecutor } from "../runtime/composite-executor";
 import { UtilityExecutor } from "../executor/utility-executor";
+import { StagehandDomExecutor, type StagehandDomExecutorConfig } from "../executor/stagehand-dom-executor";
+import { PgActionPlanCache } from "../executor/pg-action-plan-cache";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../executor/site-page-state-config";
 import { gateBrowserSessionProvider } from "../executor/browser-session-provider";
+import { gateLlmGatewayProvider } from "../executor/llm-gateway-provider";
+import { loadGatewayPolicyConfig, DOM_PROMPT_TEMPLATE_VERSION } from "../executor/gateway-policy-config";
 import { requireString } from "./worker-util";
 import { BrowserLeaseManager } from "./browser-lease-manager";
 import type { BrowserLeasePlan, PgRuntimeWorkerOptions } from "./runtime-worker";
@@ -31,6 +37,7 @@ interface RunClaimDriveInputs {
   readonly isolation: LeaseIsolation;
   readonly cleanupPolicy: LeaseCleanupPolicy;
   readonly params?: Record<string, unknown>;
+  readonly model: string | null; // Gap2: runs.model(해소·동결). NULL=utility-only/미해소 → dom 미구성.
 }
 
 export class RunClaimRunner {
@@ -56,12 +63,18 @@ export class RunClaimRunner {
       this.options.browserSessionProvider,
       this.options.allowTestBrowserSessionProvider === true,
     );
+    // PR-B0 dom run-drive: gateway 게이트는 browserSessionProvider 와 동형으로 claim **전**에 평가(순수·options 의존만) —
+    //   test_fake opt-in 누락 등 오구성이 claim/lease 획득 **전에** fail-closed 되게(Phase B 평가 시 run 이 'claimed' 좌초).
+    const gatewayCaller = gateLlmGatewayProvider(
+      this.options.llmGatewayProvider,
+      this.options.allowTestLlmGatewayProvider === true,
+    );
 
     // Phase A: claim 을 tx 안에서. 구동 입력은 캡처해 tx 밖(Phase B)으로 — 브라우저 작업이 DB 커넥션을 점유하지 않게.
     const claim = await withTenantTx(
       this.pool,
       tenantId,
-      async (client): Promise<{ result: RuntimeJobResult; drive?: RunClaimDriveInputs }> => {
+      async (client): Promise<{ result: RuntimeJobResult; drive?: RunClaimDriveInputs; domCfg?: StagehandDomExecutorConfig }> => {
         const run = await this.leases.loadExpectedRun(client, tenantId, runId, "queued");
         if (run.kind !== "ok") return { result: run.result };
 
@@ -100,7 +113,14 @@ export class RunClaimRunner {
           // provider 미주입(또는 plan null)이면 구동 안 함 → claimed 까지만(기존 동작).
           if (sessionProvider === undefined || plan === null) return { result };
           const drive = await this.loadRunDriveInputs(client, tenantId, runId, plan, lease.leaseId, correlationId);
-          return { result, drive };
+          // dom 실행기 설정도 claim tx 안에서 해소 — gateway_policy/identity 부재·budget 무효 시 claim+lease 가 함께
+          //   rollback 되어 run 이 'queued' 로 남는다(post-claim Phase B throw 의 'claimed' 좌초·lease 누수 방지).
+          //   gateway 미주입/model NULL → dom 미구성(utility-only, 기존 동작, 회귀0).
+          const domCfg =
+            gatewayCaller !== undefined && drive.model !== null
+              ? await this.loadDomExecutorConfig(client, tenantId, drive.model, drive)
+              : undefined;
+          return { result, drive, domCfg };
         });
       },
     );
@@ -123,8 +143,17 @@ export class RunClaimRunner {
       cleanupPolicy: d.cleanupPolicy,
     });
     try {
-      const executor = new UtilityExecutor(bound.provider);
+      const utility = new UtilityExecutor(bound.provider);
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
+      // dom 실행기는 gateway 주입 + 정책 해소(domCfg) 시에만 합류. 미주입/utility-only run → utility 단독(회귀0); dom 노드는
+      //   CompositeExecutor 가 dom 으로 라우팅하나 미구성 시 utility 의 EXECUTOR_CAPABILITY_MISMATCH 로 loud 표면화(조용한 false 아님).
+      //   detect(① ChallengeDetector)는 후속 PR에서 StagehandDomExecutor 5번째 옵셔널 인자로 주입(여기선 미주입, 회귀0).
+      let executor: ExecutorPlugin = utility;
+      if (claim.domCfg !== undefined && gatewayCaller !== undefined) {
+        // domCfg 는 claim tx 에서 해소됨(gateway 주입 + model 해소). gatewayCaller 는 claim 전 게이트 통과값.
+        const dom = new StagehandDomExecutor(gatewayCaller, bound.provider, claim.domCfg, new PgActionPlanCache(this.pool));
+        executor = new CompositeExecutor(dom, utility);
+      }
       await driveClaimedRun(
         {
           runId,
@@ -145,6 +174,31 @@ export class RunClaimRunner {
     return claim.result;
   }
 
+  // PR-B0 dom 실행기 설정 적재(claim tx 안 — 실패 시 claim+lease rollback, 좌초 방지). model 은 호출측이 non-null 보장
+  //   (runs.model 해소값). budget=gateway_policies, browserIdentityVersion=browser_identities.version(캐시 키 일부).
+  private async loadDomExecutorConfig(
+    client: pg.PoolClient,
+    tenantId: string,
+    model: string,
+    d: RunClaimDriveInputs,
+  ): Promise<StagehandDomExecutorConfig> {
+    const policy = await loadGatewayPolicyConfig(client, tenantId, model);
+    const bi = await client.query<{ version: number }>(
+      `SELECT version FROM browser_identities WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+      [tenantId, d.browserIdentityId],
+    );
+    if (bi.rows[0] === undefined) {
+      throw new Error(`RuntimeWorker: browser_identity 부재(${d.browserIdentityId}) — dom 캐시 키 불가(조용한 default 금지)`);
+    }
+    return {
+      model: policy.model,
+      promptTemplateVersion: DOM_PROMPT_TEMPLATE_VERSION,
+      budget: policy.budget,
+      scenarioVersionId: d.scenarioVersionId,
+      browserIdentityVersion: bi.rows[0].version,
+    };
+  }
+
   // A.1 run-drive: claim tx 에서 scenario_version_id + params 적재 + plan 의 identity 3-tuple 확정(networkPolicyId 필수).
   private async loadRunDriveInputs(
     client: pg.PoolClient,
@@ -159,8 +213,8 @@ export class RunClaimRunner {
         "RuntimeWorker: run-drive requires BrowserLeasePlan.networkPolicyId (identity 3-tuple); plan 미공급",
       );
     }
-    const r = await client.query<{ scenario_version_id: string; params: unknown }>(
-      `SELECT scenario_version_id::text AS scenario_version_id, params
+    const r = await client.query<{ scenario_version_id: string; params: unknown; model: string | null }>(
+      `SELECT scenario_version_id::text AS scenario_version_id, params, model
          FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
       [tenantId, runId],
     );
@@ -178,6 +232,7 @@ export class RunClaimRunner {
       isolation: plan.isolation ?? "context",
       cleanupPolicy: plan.cleanupPolicy ?? "clear_all",
       params: normalizeRunParams(row.params),
+      model: row.model,
     };
   }
 }

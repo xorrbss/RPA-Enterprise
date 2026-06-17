@@ -28,6 +28,7 @@ import { applyWorkitemTransition } from "../runtime/workitem-transition";
 import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 import { type BrowserSessionProvider } from "../executor/browser-session-provider";
+import { type LlmGatewayProvider } from "../executor/llm-gateway-provider";
 import { requireString } from "./worker-util";
 import { ArtifactRedactionRunner } from "./artifact-redaction-runner";
 import { ArtifactRetentionRunner } from "./artifact-retention-runner";
@@ -82,6 +83,10 @@ export interface PgRuntimeWorkerOptions {
   // test_fake 포트는 allowTestBrowserSessionProvider opt-in 필수(gateBrowserSessionProvider, sink 포트와 동형 fail-closed).
   readonly browserSessionProvider?: BrowserSessionProvider;
   readonly allowTestBrowserSessionProvider?: boolean;
+  // PR-B0 dom run-drive: act/observe/extract 를 production drive 에서 실행(StagehandDomExecutor 합류). 미주입 → utility 단독
+  //   (기존 동작; dom 노드는 EXECUTOR_CAPABILITY_MISMATCH loud). test_fake 는 allowTestLlmGatewayProvider opt-in 필수.
+  readonly llmGatewayProvider?: LlmGatewayProvider;
+  readonly allowTestLlmGatewayProvider?: boolean;
 }
 
 export interface BrowserLeaseRenewInput {

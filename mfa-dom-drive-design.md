@@ -11,9 +11,9 @@
 |---|---|---|
 | ②③ | MFA 신호 배관 — `StepResult.challenge` 운반 + 인터프리터 매핑 | ✅ 구현·커밋 (`7ef31a2`, 브랜치 `fl/mfa-challenge-signal`) |
 | ① | `ChallengeDetector` seam | 📐 설계 확정 (감지 휴리스틱 RQ-016/codex BLOCKED) |
-| 배선0 (PR-B0) | `StagehandDomExecutor`를 production drive에 합류 | 📐 설계 확정 |
-| Gap1 | `promptTemplateVersion` 출처 | ✅ 코드 상수 확정 (계약 무변경) |
-| Gap2 | run의 model 선택 출처 | ✅ B+C 확정 (오너 결정 2026-06-17) |
+| 배선0 (PR-B0) | `StagehandDomExecutor`를 production drive에 합류 | ✅ 구현 (아래 편차 주) |
+| Gap1 | `promptTemplateVersion` 출처 | ✅ 코드 상수 (`DOM_PROMPT_TEMPLATE_VERSION`, PR-B0에서 정의) |
+| Gap2 | run의 model 선택 출처 | ✅ 구현·커밋 (B+C, `44ab475`) |
 | 선존 결함 | `driveClaimedRun` 죽은 abortSignal | 🔍 식별 (별도 PR) |
 
 **구현 의존 순서**: Gap2 계약변경(`runs.model`+`is_default`) → PR-B0(dom drive 합류) → ①(detect seam) / deploy-PR(gateway 조립).
@@ -82,6 +82,11 @@ if (gatewayCaller !== undefined) {
 - **주입 포트**: `PgRuntimeWorkerOptions.llmGatewayProvider` + `allowTestLlmGatewayProvider` (신규 `app/src/executor/llm-gateway-provider.ts`) — `browserSessionProvider` 게이트 동형. `binding.kind`로 test_fake 차단(`instanceof` 금지 — 래핑 caller 오분류로 게이트 자신이 조용한 false 유발).
 - **fail-closed**: gateway 미주입 × dom 노드 → utility의 `EXECUTOR_CAPABILITY_MISMATCH` loud throw. dom stub 주입안은 편법·더미 금지 + 거짓 capability 보고로 기각.
 - `driveClaimedRun`/`DriveDeps` 무변경(executor 1개) → 저결합 유지.
+
+### 구현 편차 (설계 대비, 적대 리뷰 반영)
+- **게이트·config 해소를 claim tx(Phase A)로 이동** (리뷰 HIGH): `gateLlmGatewayProvider`는 `gateBrowserSessionProvider`와 동형으로 claim **전** 평가(순수). dom-config(gateway_policy budget + browser_identities.version)는 claim tx 내 `loadDomExecutorConfig`로 해소 → 정책/identity 부재·budget 무효 throw 시 claim+lease가 함께 rollback되어 run이 'queued' 잔류(Phase B throw의 'claimed' 좌초·lease 누수 방지). domCfg는 `claim.domCfg`로 Phase B에 운반(Phase B는 DB 무접근).
+- **`DOM_PROMPT_TEMPLATE_VERSION` 임시 위치**: Gap1 cohesion상 `stagehand-dom-executor.ts`(buildRequest 옆)가 SSoT지만, 그 파일이 병렬 작업(`fl/extract-schema-validator`: secretRef fill) 대상이라 충돌 회피로 `gateway-policy-config.ts`에 임시 정의(relocate TODO).
+- **회귀0 검증**: utility-only(gateway 미주입/`runs.model` NULL) 경로는 `browser_identities`/`gateway_policies` 미조회 → 기존 drive 테스트 무영향. tsc + browser-session-provider/utility-executor/graphile-runner/cdp-session 단위 green. (int는 PG/CI.)
 
 ### BLOCKED / 선존 결함
 - **deploy-time**: production `LlmGateway` 조립 부재(`app/src`에 `new LlmGateway` 0건, validator/redaction app-side 0건). `CODEX_BASE_URL`(checklist line50)·API키(line48) = owner 배포. 코드는 주입점만.
@@ -160,3 +165,5 @@ PR-B0 (gateway 주입점·게이트·CompositeExecutor 합류·browserIdentityVe
 | production LlmGateway 조립 + CODEX_BASE_URL/API키 | deploy-time | checklist line48/50 |
 | driveClaimedRun 죽은 abortSignal | 선존 결함 | `run-step-driver.ts:98` |
 | RunResumeRunner codec.verify 미사용(HMAC 미검증) | 갭 | `run-resume-runner.ts:70` |
+| credential-fill(secretRef) 시 `secrets`/`principal` 주입 | merge-time 후속 | 병렬 `fl/extract-schema-validator` 정착 후 PR-B0 `run-claim-runner` 생성부에 `StagehandDomExecutor` 5·6번째 인자 추가 |
+| `DOM_PROMPT_TEMPLATE_VERSION` relocate | 후속 | `gateway-policy-config.ts` → `stagehand-dom-executor.ts`(buildRequest 옆, Gap1 cohesion) |
