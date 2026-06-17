@@ -149,6 +149,23 @@ export interface CreateRunBody {
   readonly model?: string;
 }
 
+// POST /v1/approvals/decide body(닫힌 shape — 백엔드 parseDecideBody 정합). reject 는 reason 필수(엔드포인트 강제).
+export interface DecideApprovalBody {
+  readonly source_run_id: string; // 인박스를 노출한 수집 run
+  readonly doc_ref: string; // 결재 문서 참조(approval origin 절대 URL)
+  readonly decision: "approve" | "reject";
+  readonly reason?: string;
+}
+
+// POST /v1/approvals/decide 201 응답. spawned_run_id = 내부에서 스폰된 결재 처리 run(콘솔이 폴링·딥링크).
+export interface DecideApprovalResult {
+  readonly decision_id: string;
+  readonly source_run_id: string;
+  readonly doc_ref: string;
+  readonly decision: "approve" | "reject";
+  readonly spawned_run_id: string;
+}
+
 export interface GatewayPolicy {
   readonly model: string;
   // 낙관적 동시성 토큰(GET ETag = gateway_policies.version). PUT If-Match에 사용. ETag 부재 시 undefined → 편집 차단.

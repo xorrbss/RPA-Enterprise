@@ -1,12 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
+import { useCan } from "../api/permissions";
 import { ApiError } from "../api/types";
 import { COLLECT_SCENARIO_NAME, APPROVAL_ARTIFACT_TYPE, parseApprovalRows, summarize } from "../api/approval-inbox";
 import { StatusBadge } from "../components/badges";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
-import type { ApprovalRow } from "../api/types";
+import type { ApprovalRow, RunDetail } from "../api/types";
+
+// 결재 처리 run 의 종결 상태(폴링 중단 기준). state-machine §1.
+const RUN_TERMINAL: ReadonlySet<string> = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
 
 const POLL_MS = 10_000;
 
@@ -108,12 +113,17 @@ function Body(props: {
     return <ErrorState message={e instanceof Error ? e.message : "결재 목록을 해석하지 못했습니다."} />;
   }
   if (rows.length === 0) return <EmptyState message="수집된 결재 항목이 없습니다." />;
+  if (latestRun === undefined) return <EmptyState message="수집 실행 기준을 찾을 수 없습니다." />;
 
-  return <Inbox rows={rows} />;
+  return <Inbox rows={rows} sourceRunId={latestRun.run_id} />;
 }
 
-function Inbox({ rows }: { rows: readonly ApprovalRow[] }): JSX.Element {
+function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunId: string }): JSX.Element {
   const sum = summarize(rows);
+  const can = useCan();
+  const showActions = can("approval.decide"); // 비-approver 는 액션 열 숨김(백엔드가 최종 강제).
+  // 이번 세션에서 결재한 문서 → 스폰된 처리 run id. 결정된 행은 버튼 대신 처리 상태(폴링)를 보인다.
+  const [decided, setDecided] = useState<Record<string, string>>({});
   return (
     <>
       <section className="panel" style={{ padding: 16, marginBottom: 16 }} aria-label="결재 요약">
@@ -127,24 +137,130 @@ function Inbox({ rows }: { rows: readonly ApprovalRow[] }): JSX.Element {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>기안자</th><th>유형</th><th>제목</th><th>상태</th><th>기안일</th></tr>
+                <tr>
+                  <th>기안자</th><th>유형</th><th>제목</th><th>상태</th><th>기안일</th>
+                  {showActions && <th>결재</th>}
+                </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.approval_id ?? r.doc_ref}>
-                    <td>{r.drafter}</td>
-                    <td>{r.doc_type}</td>
-                    <td>{r.title}</td>
-                    <td><StatusBadge status={r.status} /></td>
-                    <td>{r.drafted_at ?? "—"}</td>
-                  </tr>
-                ))}
+                {rows.map((r) => {
+                  const spawnedRunId = decided[r.doc_ref];
+                  return (
+                    <tr key={r.approval_id ?? r.doc_ref}>
+                      <td>{r.drafter}</td>
+                      <td>{r.doc_type}</td>
+                      <td>{r.title}</td>
+                      <td><StatusBadge status={r.status} /></td>
+                      <td>{r.drafted_at ?? "—"}</td>
+                      {showActions && (
+                        <td>
+                          {spawnedRunId !== undefined ? (
+                            <DecidedStatus runId={spawnedRunId} />
+                          ) : (
+                            <DecideButtons
+                              sourceRunId={sourceRunId}
+                              docRef={r.doc_ref}
+                              onDecided={(runId) => setDecided((prev) => ({ ...prev, [r.doc_ref]: runId }))}
+                            />
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
       </section>
     </>
+  );
+}
+
+// 건별 결재 버튼(승인/반려). 승인은 확인 1단계, 반려는 사유 입력 1단계(비가역 가드). 결정 성공 시 onDecided(spawned_run_id).
+// 비-approver 는 부모(Inbox)가 열 자체를 숨기지만, 백엔드가 approval.decide 를 최종 강제한다.
+function DecideButtons(props: { sourceRunId: string; docRef: string; onDecided: (runId: string) => void }): JSX.Element {
+  const api = useApiClient();
+  const [mode, setMode] = useState<"idle" | "approve" | "reject">("idle");
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  const decide = useMutation({
+    mutationFn: (decision: "approve" | "reject") =>
+      api.decideApproval(
+        {
+          source_run_id: props.sourceRunId,
+          doc_ref: props.docRef,
+          decision,
+          ...(decision === "reject" ? { reason: reason.trim() } : {}),
+        },
+        crypto.randomUUID(),
+      ),
+    onSuccess: (res) => props.onDecided(res.spawned_run_id),
+    onError: (e) => {
+      // 이미 처리된 결재(다른 세션/중복)는 명시 표면화(조용한 false 금지). 그 외 코드도 표시.
+      if (e instanceof ApiError && e.code === "APPROVAL_ALREADY_DECIDED") setErr("이미 처리된 결재입니다.");
+      else setErr(e instanceof ApiError ? `${e.code} (${e.httpStatus})` : "결재 처리 실패");
+    },
+  });
+
+  if (decide.isPending) return <span className="subtle">처리 중…</span>;
+
+  if (mode === "reject") {
+    return (
+      <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="반려 사유(필수)"
+          aria-label="반려 사유"
+          style={{ fontSize: 13, padding: 6, minWidth: 160 }}
+        />
+        <button className="btn" type="button" disabled={reason.trim().length === 0} onClick={() => decide.mutate("reject")}>
+          반려 제출
+        </button>
+        <button className="btn" type="button" onClick={() => { setMode("idle"); setReason(""); }}>취소</button>
+        {err !== null && <span className="badge red">{err}</span>}
+      </span>
+    );
+  }
+
+  if (mode === "approve") {
+    return (
+      <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+        <span className="subtle">승인하시겠습니까?</span>
+        <button className="btn" type="button" onClick={() => decide.mutate("approve")}>확인</button>
+        <button className="btn" type="button" onClick={() => setMode("idle")}>취소</button>
+        {err !== null && <span className="badge red">{err}</span>}
+      </span>
+    );
+  }
+
+  return (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      <button className="btn" type="button" onClick={() => { setErr(null); setMode("approve"); }}>결재</button>
+      <button className="btn" type="button" onClick={() => { setErr(null); setMode("reject"); }}>반려</button>
+      {err !== null && <span className="badge red">{err}</span>}
+    </span>
+  );
+}
+
+// 결정 후 스폰된 처리 run 의 상태를 폴링(종결까지) + 실행 기록 딥링크. 비가역 클릭은 처리 run 이 수행(휴먼게이트 검증 대상).
+function DecidedStatus({ runId }: { runId: string }): JSX.Element {
+  const api = useApiClient();
+  const run = useQuery<RunDetail>({
+    queryKey: ["run", runId],
+    queryFn: () => api.getRun(runId),
+    refetchInterval: (q) => (q.state.data && RUN_TERMINAL.has(q.state.data.status) ? false : 3000),
+  });
+  const status = run.data?.status ?? "queued";
+  return (
+    <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+      <StatusBadge status={status} />
+      {/* 크로스-뷰 딥링크: 결재 인박스 → 실행 기록(runTrace?run=<id>). hashWith 는 현재 뷰 유지라 직접 구성. */}
+      <a href={`#runTrace?run=${runId}`} className="subtle" style={{ fontSize: 12 }}>실행 기록 보기</a>
+    </span>
   );
 }
 

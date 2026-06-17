@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
+import type { DecideApprovalBody } from "../src/api/types";
 import { COLLECT_SCENARIO_NAME, parseApprovalRows, summarize } from "../src/api/approval-inbox";
 import { fakeClient } from "./fake-client";
 
@@ -104,5 +105,77 @@ describe("결재 인박스 — 뷰", () => {
     renderApp(inboxClient(JSON.stringify({ wrong: 1 })));
     location.hash = "#approvalInbox";
     await waitFor(() => expect(screen.getByText(/형식이 아닙니다/)).toBeInTheDocument());
+  });
+});
+
+describe("결재 인박스 — 건별 결재(2c)", () => {
+  beforeEach(() => {
+    location.hash = "";
+  });
+
+  test("비-approver(operator) → 결재/반려 버튼 숨김(백엔드가 최종 강제)", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(inboxClient(JSON.stringify({ rows: ROWS })));
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+    expect(screen.queryAllByRole("button", { name: "결재" })).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { name: "반려" })).toHaveLength(0);
+  });
+
+  test("approver → 행별 [결재]/[반려] 버튼 노출", async () => {
+    localStorage.setItem("rpa.token", jwt(["approver"]));
+    renderApp(inboxClient(JSON.stringify({ rows: ROWS })));
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+    expect(screen.getAllByRole("button", { name: "결재" })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "반려" })).toHaveLength(3);
+  });
+
+  test("반려는 사유 필수 — 입력 전 '반려 제출' 비활성", async () => {
+    localStorage.setItem("rpa.token", jwt(["approver"]));
+    renderApp(inboxClient(JSON.stringify({ rows: [ROW()] })));
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "반려" }));
+    const submit = screen.getByRole("button", { name: "반려 제출" });
+    expect(submit).toBeDisabled(); // 사유 비어있음 → 비활성(미입력 반려 차단)
+    fireEvent.change(screen.getByLabelText("반려 사유"), { target: { value: "예산 초과" } });
+    expect(submit).not.toBeDisabled();
+  });
+
+  test("승인 → 확인 → decideApproval 호출(source_run_id+doc_ref+approve) → 처리 상태 + 실행 기록 링크", async () => {
+    localStorage.setItem("rpa.token", jwt(["approver"]));
+    let captured: DecideApprovalBody | null = null;
+    const client = fakeClient({
+      listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
+      listRuns: async (p) =>
+        p?.scenario_version_id === "ver-c"
+          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          : { items: [], next_cursor: null },
+      listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
+      getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: [ROW()] }) }),
+      decideApproval: async (body) => {
+        captured = body;
+        return { decision_id: "dec-1", source_run_id: body.source_run_id, doc_ref: body.doc_ref, decision: body.decision, spawned_run_id: "spawn-9" };
+      },
+      getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+    });
+    renderApp(client);
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "결재" }));
+    fireEvent.click(screen.getByRole("button", { name: "확인" })); // 비가역 가드 1단계
+
+    // 결정 후: 처리 run 딥링크가 보이고, decideApproval 이 인박스 source run + 행 doc_ref + approve 로 호출됨.
+    await waitFor(() => expect(screen.getByText("실행 기록 보기")).toBeInTheDocument());
+    expect(captured).not.toBeNull();
+    expect(captured!.source_run_id).toBe("run-c");
+    expect(captured!.doc_ref).toBe("https://dashboard.office.hiworks.com/approval/1");
+    expect(captured!.decision).toBe("approve");
+    // 결정된 행은 버튼 대신 처리 상태 — '결재' 버튼이 사라진다(결정후 비활성).
+    expect(screen.queryByRole("button", { name: "결재" })).toBeNull();
+    const link = screen.getByText("실행 기록 보기");
+    expect(link.getAttribute("href")).toBe("#runTrace?run=spawn-9");
   });
 });

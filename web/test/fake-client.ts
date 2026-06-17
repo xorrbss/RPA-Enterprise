@@ -49,6 +49,13 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     createScenario: async () => ({ scenario_id: "00000000-0000-0000-0000-0000000000c1", version: 1, promotion_status: "draft" }),
     updateScenario: async (_id, _ir, version) => ({ scenario_id: "00000000-0000-0000-0000-0000000000c1", version: version + 1, promotion_status: "draft" }),
     createRun: async () => ({ run_id: "00000000-0000-0000-0000-000000000099", status: "queued" }),
+    decideApproval: async (body) => ({
+      decision_id: "00000000-0000-0000-0000-0000000000de",
+      source_run_id: body.source_run_id,
+      doc_ref: body.doc_ref,
+      decision: body.decision,
+      spawned_run_id: "00000000-0000-0000-0000-0000000000d9",
+    }),
     ...overrides,
   };
 }
