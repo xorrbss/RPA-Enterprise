@@ -111,6 +111,18 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 /* 빈 상태 내부 CTA(첫 행동 유도) */
 .empty-action { margin-top: 4px; }
 
+/* 단계 트레이스 카드(셀프힐링 서사) */
+.step-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
+.step-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.step-card-head code { background: var(--soft); padding: 1px 6px; border-radius: 4px; }
+.heal-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--amber-soft); color: var(--amber-ink); }
+.step-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+/* 소요시간 상대 길이 바 — route-progress의 width-% 채움 기법 재사용(라이브러리 없음) */
+.dur-row { display: flex; align-items: center; gap: 8px; }
+.dur-track { flex: 1; height: 8px; background: var(--soft); border-radius: 999px; overflow: hidden; max-width: 360px; }
+.dur-fill { height: 100%; background: var(--blue); border-radius: 999px; }
+.dur-num { min-width: 56px; }
+
 /* 반응형: 좁은 화면에서 고정 사이드바가 콘텐츠를 압박/잘림 방지(목업 @media 적응 이식) */
 @media (max-width: 840px) {
   .app { grid-template-columns: 1fr; }

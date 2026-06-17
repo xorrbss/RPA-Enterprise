@@ -1,0 +1,174 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { RefreshCw } from "lucide-react";
+
+import { useApiClient } from "../api/context";
+import { StatusBadge, actionLabel, cacheLabel } from "./badges";
+import { ErrorState, Loading } from "./states";
+import { ArtifactRef } from "./ArtifactLookup";
+import type { StagehandCallSummary, StepSummary } from "../api/types";
+
+const POLL_MS = 5_000; // 라이브 = outbox tail 폴링(v1)
+
+// 단계 트레이스 — "자동화가 어떻게 판단·실행했고, 깨졌을 때 스스로 다시 시도했는지"를 보이는 서사.
+// 모든 표시는 들어오는 신호(StepSummary + StagehandCallSummary)만 사용한다 — 확신도/판단근거 같은
+// 데이터에 없는 값은 절대 지어내지 않는다(없으면 보이는 신호 조합으로만 구성).
+export function StepTrace({ runId }: { runId: string }): JSX.Element {
+  const api = useApiClient();
+  const q = useQuery({
+    queryKey: ["run-steps", runId],
+    queryFn: () => api.listRunSteps(runId, { limit: 100 }),
+    refetchInterval: POLL_MS,
+  });
+  const [view, setView] = useState<"cards" | "table">("cards");
+  const items: readonly StepSummary[] = q.data?.items ?? [];
+  // 상대 길이 바 기준 = 최대 소요시간(0 division 방지).
+  const maxDuration = Math.max(1, ...items.map((s) => s.duration_ms ?? 0));
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <strong style={{ fontSize: 13 }}>단계 트레이스</strong>
+        {items.length > 0 && (
+          <div role="group" aria-label="단계 보기 방식" style={{ display: "inline-flex", gap: 6 }}>
+            <button className="btn" type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}>카드</button>
+            <button className="btn" type="button" aria-pressed={view === "table"} onClick={() => setView("table")}>표</button>
+          </div>
+        )}
+      </div>
+      {q.isLoading ? (
+        <Loading />
+      ) : q.isError ? (
+        <ErrorState message="단계 트레이스를 불러오지 못했습니다." onRetry={() => void q.refetch()} />
+      ) : items.length === 0 ? (
+        <p className="subtle" style={{ margin: "8px 0 0" }}>아직 기록된 단계가 없습니다.</p>
+      ) : view === "cards" ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+          {items.map((s, i) => <StepCard key={`${s.step_id}:${s.attempt}`} step={s} index={i} runId={runId} maxDuration={maxDuration} />)}
+        </div>
+      ) : (
+        <StepTable items={items} runId={runId} maxDuration={maxDuration} />
+      )}
+    </div>
+  );
+}
+
+// 단계 카드(서사) — 동작/상태 + 자가복구 재시도 + AI 판단(모델·토큰·비용) + 예외 + 증빙.
+function StepCard({ step: s, index, runId, maxDuration }: { step: StepSummary; index: number; runId: string; maxDuration: number }): JSX.Element {
+  return (
+    <div className="step-card">
+      <div className="step-card-head">
+        <span className="subtle" style={{ minWidth: 22 }}>#{index + 1}</span>
+        <code>{s.node_id}</code>
+        <strong>{actionLabel(s.action)}</strong>
+        <span style={{ flex: 1 }} />
+        {s.attempt > 0 && (
+          <span className="heal-chip" title="앞선 시도가 실패해 자동으로 다시 시도했습니다(자가복구).">
+            <RefreshCw size={12} aria-hidden="true" /> 재시도 {s.attempt}회차
+          </span>
+        )}
+        <StatusBadge status={s.status} />
+      </div>
+      <DurationBar durationMs={s.duration_ms} maxDuration={maxDuration} />
+      <AiJudgment calls={s.stagehand_calls} cacheMode={s.cache_mode} />
+      {s.exception !== null && (
+        <div className="step-line">
+          <span className="subtle">예외</span>
+          <span className="badge red">{s.exception.code}</span>
+          <span className="subtle">{s.exception.class}</span>
+        </div>
+      )}
+      {s.artifact_ids.length > 0 && (
+        <div className="step-line">
+          <span className="subtle">증빙</span>
+          <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+            {s.artifact_ids.map((id) => <ArtifactRef key={id} id={id} runId={runId} />)}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// AI 판단 — stagehand 호출이 있는 단계만. 모델·토큰(입력/출력)·비용·첫응답·전송/스트림은 모두 실제 필드.
+function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary[]; cacheMode: string }): JSX.Element {
+  if (calls.length === 0) {
+    return (
+      <div className="step-line">
+        <span className="subtle">실행</span>
+        <span>규칙 기반 단계 (AI 미사용)</span>
+        <span className="badge muted">{cacheLabel(cacheMode)}</span>
+      </div>
+    );
+  }
+  const models = [...new Set(calls.map((c) => c.model))].join(", ");
+  const inTok = calls.reduce((a, c) => a + (c.input_tokens ?? 0), 0);
+  const outTok = calls.reduce((a, c) => a + (c.output_tokens ?? 0), 0);
+  const anyCost = calls.some((c) => c.cost !== null);
+  const costSum = calls.reduce((a, c) => a + (c.cost !== null ? Number(c.cost) : 0), 0);
+  const single = calls.length === 1 ? calls[0]! : null;
+  return (
+    <div className="step-line">
+      <span className="subtle">AI 판단</span>
+      <span>{models}{calls.length > 1 ? ` (${calls.length}회 호출)` : ""}</span>
+      <span className="subtle">입력 {inTok} · 출력 {outTok} 토큰</span>
+      {anyCost && <span className="subtle">${costSum.toFixed(6)}</span>}
+      {single?.ttfb_ms !== null && single?.ttfb_ms !== undefined && <span className="subtle">첫응답 {single.ttfb_ms}ms</span>}
+      <span className="badge muted">{cacheLabel(cacheMode)}</span>
+    </div>
+  );
+}
+
+// 소요시간 상대 길이 바(B2) — 바는 장식(aria-hidden), 정확한 ms는 텍스트로 함께 노출(조용한 false 금지).
+function DurationBar({ durationMs, maxDuration }: { durationMs: number | null; maxDuration: number }): JSX.Element {
+  const pct = durationMs !== null ? Math.max(2, Math.round((durationMs / maxDuration) * 100)) : 0;
+  return (
+    <div className="dur-row">
+      <div className="dur-track" aria-hidden="true">
+        {durationMs !== null && <div className="dur-fill" style={{ width: `${pct}%` }} />}
+      </div>
+      <span className="subtle dur-num">{durationMs !== null ? `${durationMs}ms` : "—"}</span>
+    </div>
+  );
+}
+
+// 표 보기(밀집 정보 선호) — 한국어 라벨 + 소요 바 + 클릭 가능한 증빙.
+function StepTable({ items, runId, maxDuration }: { items: readonly StepSummary[]; runId: string; maxDuration: number }): JSX.Element {
+  return (
+    <div className="table-wrap" style={{ marginTop: 8 }}>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>노드</th><th>동작</th><th>상태</th><th>캐시</th><th>소요</th><th>AI(모델·출력토큰)</th><th>증빙</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((s, i) => {
+            const outTok = s.stagehand_calls.reduce((a, c) => a + (c.output_tokens ?? 0), 0);
+            return (
+              <tr key={`${s.step_id}:${s.attempt}`}>
+                <td>{i + 1}{s.attempt > 0 ? <span className="subtle"> ·재{s.attempt}</span> : null}</td>
+                <td><code>{s.node_id}</code></td>
+                <td>{actionLabel(s.action)}</td>
+                <td>
+                  <StatusBadge status={s.status} />
+                  {s.exception !== null && <span className="subtle"> {s.exception.code}</span>}
+                </td>
+                <td>{cacheLabel(s.cache_mode)}</td>
+                <td style={{ minWidth: 120 }}><DurationBar durationMs={s.duration_ms} maxDuration={maxDuration} /></td>
+                <td>{s.stagehand_calls.length > 0 ? <span className="subtle">{s.stagehand_calls[0]!.model} · {outTok}tok</span> : "—"}</td>
+                <td>
+                  {s.artifact_ids.length > 0 ? (
+                    <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                      {s.artifact_ids.map((id) => <ArtifactRef key={id} id={id} runId={runId} />)}
+                    </span>
+                  ) : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
