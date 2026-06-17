@@ -98,6 +98,7 @@ interface GatewayPolicyRow {
   capabilities: unknown;
   budget: unknown;
   fallback_config: unknown;
+  is_default: boolean;
 }
 
 interface SiteRow {
@@ -398,7 +399,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<GatewayPolicyRow>(
-        `SELECT model, version, capabilities, budget, fallback_config
+        `SELECT model, version, capabilities, budget, fallback_config, is_default
            FROM gateway_policies
           WHERE tenant_id = $1::uuid AND ($2::text IS NULL OR model = $2)
           ORDER BY model ASC`,
@@ -570,6 +571,7 @@ function mapGatewayPolicy(r: GatewayPolicyRow): Record<string, unknown> {
     capabilities: r.capabilities,
     budget: r.budget,
     fallback: r.fallback_config,
+    is_default: r.is_default,
   };
 }
 

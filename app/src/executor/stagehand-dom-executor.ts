@@ -69,6 +69,13 @@ const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", sche
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 
+// ① ChallengeDetector 미구현 (RQ-016 — codex/D3 executor 스트림 소유; repo 릴리스 블로커 아님, open-issues.md 추적).
+//   현황(은폐 금지): challenge 는 여기서 항상 failed_challenge 로만 분류되고, status='suspended' + res.challenge(ChallengeSummary)
+//     를 내보내는 production 경로가 없다 — suspend 배관(인터프리터 res.challenge.type→transitions→port→resolve.<kind>)은
+//     완비됐고 본 executor 가 신호를 안 줄 뿐이다(②③ 참조).
+//   미정: ChallengeSummary.type 을 captcha|mfa 로 판정할 신호(dom|network|screenshot|vlm)가 미정 — 라이브 provider 행동
+//     의존이라 추측 구현은 오라벨링 위험. 도입 시 captcha|mfa 감지→status='suspended' + challenge={type,detectedBy,confidence}
+//     반환하면 mfa 까지 무수정으로 흐른다(+ coordinator→driveSuspend production 재배선).
 /** error-catalog exceptionClass → StepStatus + StepResult.exception.class(4종 고정; none→system). */
 function classify(code: ErrorCode): { status: StepStatus; cls: ExceptionClass } {
   switch (ERROR_CATALOG[code].exceptionClass) {

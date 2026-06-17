@@ -144,6 +144,28 @@ async function main(): Promise<void> {
         return r.rows[0]?.version ?? null;
       });
       check("tenant A policy untouched by cross-tenant attempt (version 2)", after === 2, `version=${after}`);
+
+      // Gap2: is_default 토글. codex는 현재 version 2. 두 번째 정책 seed 후 기본 정책 ≤1(부분 UNIQUE) 검증.
+      await seedPolicy(pool, TENANT_A, "codex-mini"); // version 1, is_default false
+      const setDef = await put(admin, { "if-match": "2", "idempotency-key": "gw-def-codex" }, body({ is_default: true }));
+      check("PUT codex is_default=true → 200 + is_default true", setDef.statusCode === 200 && setDef.json().is_default === true, `${setDef.statusCode} ${setDef.body}`);
+      const gotDef = await app.inject({ method: "GET", url: "/v1/gateway/policy?model=codex", headers: { authorization: `Bearer ${admin}` } });
+      check("GET codex → is_default true (응답 노출)", gotDef.json().is_default === true, gotDef.body);
+
+      // codex-mini를 기본 지정 → codex 선해제(테넌트당 기본 1개). codex-mini는 seed version 1. codex는 setDef로 version 3.
+      const setDef2 = await put(admin, { "if-match": "1", "idempotency-key": "gw-def-mini" }, body({ model: "codex-mini", is_default: true }));
+      check("PUT codex-mini is_default=true → 200", setDef2.statusCode === 200 && setDef2.json().is_default === true, `${setDef2.statusCode} ${setDef2.body}`);
+      const defaultRows = await withTenantTx(pool, TENANT_A, async (c) => {
+        const r = await c.query<{ model: string; is_default: boolean; version: number }>(
+          `SELECT model, is_default, version FROM gateway_policies ORDER BY model`,
+        );
+        return r.rows;
+      });
+      const defaults = defaultRows.filter((x) => x.is_default).map((x) => x.model);
+      check("테넌트당 기본 정책 ≤1 (codex-mini만, codex 선해제)", defaults.length === 1 && defaults[0] === "codex-mini", JSON.stringify(defaults));
+      // 선해제가 codex version을 bump(3→4)해 stale If-Match를 412로 강제(낙관적 동시성 불변식).
+      const codexRow = defaultRows.find((x) => x.model === "codex");
+      check("선해제 demote가 codex version bump(3→4, ETag 정합)", codexRow?.version === 4, `version=${codexRow?.version}`);
     } finally {
       await app.close();
     }

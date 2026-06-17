@@ -45,13 +45,18 @@
 - run create 시 `params.as_of`(ISO-8601 string)를 **서버가 1회 고정**한다: 요청에 명시되면 그 값을, 미지정이면 서버가 생성 시각으로 채워 `runs.as_of`에 영속화한다(`db/migration_core_entities.sql` `runs.as_of`).
 - 이후 재시도·replay·resume에도 동일 `as_of`를 재사용 → IREL `date_*` 결정론 보장(ir-expression §5: 런타임 `now()` 금지). 클라이언트가 매 재시도마다 다른 값을 보내지 않도록 **생성 시 1회 고정**이 규약.
 
+### 0.7 model 해소 (Gap2 — run의 LLM model 출처)
+- `gateway_policies`는 `UNIQUE(tenant_id, model)`로 테넌트당 다수 model 행을 허용한다. run의 model은 `as_of`와 동형으로 **run create 시 1회 해소·동결**되어 `runs.model`에 영속화된다(`db/migration_core_entities.sql` `runs.model`; `action_plan_cache` 캐시 키의 결정 요소).
+- 해소 규칙(RLS tenant 스코프): ① body에 `model` 명시 → `(tenant_id, model)` 정책 존재 확인(부재 시 `RESOURCE_NOT_FOUND` 404). ② 미지정 → 테넌트 기본 정책(`gateway_policies.is_default`, 부분 UNIQUE로 ≤1) → 없으면 단일 정책 1행 자동 해소 → 정책 0건이면 `runs.model=NULL`(utility-only run 허용; LLM 노드 도달 시 run-time fail-closed). ③ 다정책 + 미지정 + 기본 없음 → `IR_SCHEMA_INVALID`(422, `reason=model_required`) — 임의 선택 금지(GET /v1/gateway/policy 다건 규약 동형).
+- model↔capability 정합은 call-time `SafeCapabilityGate`(llm-gateway-adapter §1)가 fail-closed로 최종 차단한다(create-time 정적 사전대조는 후속 증분).
+
 ---
 
 ## 1. Runs (실행 제어)
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| POST | `/v1/runs` | `Idempotency-Key` 헤더. body: `scenario_version_id`, `params`(params_schema 준수), optional `params.as_of`, optional `workitem_id`. operator+ 권한 필요 | 201 + run 리소스(`run_id`, `status=queued`). `run.created` 이벤트 emit | `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422), `AUTHZ_FORBIDDEN`(403), `SITE_PROFILE_BLOCKED`(403) |
+| POST | `/v1/runs` | `Idempotency-Key` 헤더. body: `scenario_version_id`, `params`(params_schema 준수), optional `params.as_of`, optional `workitem_id`, optional `model`(§0.7). operator+ 권한 필요 | 201 + run 리소스(`run_id`, `status=queued`). `run.created` 이벤트 emit. `runs.model` 1회 해소·동결 | `IR_SCHEMA_INVALID`(422; 미해소 `model_required` 포함), `IR_EXPRESSION_COMPILE_ERROR`(422), `RESOURCE_NOT_FOUND`(404; 명시 `model` 정책 부재), `AUTHZ_FORBIDDEN`(403), `SITE_PROFILE_BLOCKED`(403) |
 | GET | `/v1/runs/{run_id}` | — | 200 + run 상세(`status` ∈ RunState, `worker_id`, `attempts`, `as_of`, 진행 노드) | `RUN_NOT_FOUND`(404) |
 | GET | `/v1/runs` | 쿼리: `?status=<RunState>&scenario_version_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` | — |
 | POST | `/v1/runs/{run_id}/abort` | `Idempotency-Key` 헤더. body: optional `reason` | 202 (abort 수락 → `aborting` 경유 `cancelled`). `run.cancelled` 이벤트 | `RUN_NOT_FOUND`(404), `RUN_ALREADY_TERMINAL`(409), `RUN_ABORTED`(409), `WORKITEM_CHECKOUT_CONFLICT`(409, `suspending` bookmark in-flight) |
@@ -138,12 +143,13 @@
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| GET | `/v1/gateway/policy` | 쿼리: optional `?model=` | 200 + 모델 정책(`model`, `capabilities`{jsonMode/vision/...}, `budget`{maxInputTokens/maxOutputTokens/maxCost}, fallback 설정) | — |
-| PUT | `/v1/gateway/policy` | `If-Match`(정책 버전) + `Idempotency-Key`. body: 정책 갱신 | 200 + 갱신 정책 | `AUTHZ_FORBIDDEN`(403), `POLICY_VERSION_CONFLICT`(412), `LLM_CAPABILITY_MISMATCH`(422)³ |
+| GET | `/v1/gateway/policy` | 쿼리: optional `?model=` | 200 + 모델 정책(`model`, `capabilities`{jsonMode/vision/...}, `budget`{maxInputTokens/maxOutputTokens/maxCost}, fallback 설정, `is_default`) | — |
+| PUT | `/v1/gateway/policy` | `If-Match`(정책 버전) + `Idempotency-Key`. body: 정책 갱신(optional `is_default` 토글) | 200 + 갱신 정책(`is_default` 포함) | `AUTHZ_FORBIDDEN`(403), `POLICY_VERSION_CONFLICT`(412), `LLM_CAPABILITY_MISMATCH`(422)³ |
 
 - `capabilities`는 llm-gateway-adapter.md `ModelCapabilities`(jsonMode 등). Gateway는 호출 전 capabilities로 primitive 적합성 검사(extract+jsonMode=false → `LLM_CAPABILITY_MISMATCH`).
 - §19 결정 반영(README v1.4): Codex/vLLM는 capabilities 게이트로 처리 — jsonMode 미지원 시 prompt-schema+strict 폴백(adapter §7), vLLM는 OpenAI 호환 adapter 재사용·`sse=false` 모델만 sync 폴백. 실제 지원범위는 구현 시 라이브 capabilities로 확정(안전 폴백 정의됨).
 - 정책의 ETag 대상은 `db/migration_core_entities.sql` `gateway_policies.version`이다. 정책 변경은 `(tenant_id, model, version)` CAS로 반영하고, 충돌 시 `POLICY_VERSION_CONFLICT`(412)로 최신 정책 재조회 후 재시도한다.
+- `is_default`(Gap2 — §0.7): 테넌트 기본 정책 토글. 부분 UNIQUE(`uq_gateway_policies_default`, 테넌트당 ≤1)로 보장하며, PUT에서 `is_default=true` 지정 시 같은 CAS tx에서 기존 기본 정책을 선해제한다(원자). 선해제도 demote된 정책의 `version`을 bump하므로(표현 변경이 ETag에 반영) 그 정책의 stale `If-Match` PUT은 412로 최신 재조회를 강제받는다. 미지정 시 현재값 유지. 무인(스케줄·워크아이템) run의 model 해소원(§0.7 ②).
 
 ³ 정책 변경이 capabilities와 모순되게 모델/jsonMode를 설정하면 거부(`LLM_CAPABILITY_MISMATCH`, 422).
 
