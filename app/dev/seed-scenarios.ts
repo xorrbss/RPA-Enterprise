@@ -24,6 +24,9 @@ import {
   HIWORKS_SVER,
   HIWORKS_COLLECT_SCEN,
   HIWORKS_COLLECT_SVER,
+  HIWORKS_APPROVAL_SITE,
+  HIWORKS_APPROVAL_BID,
+  HIWORKS_APPROVAL_ORIGIN,
   HIWORKS_LOGIN_URL,
   HIWORKS_OFFICE_ORIGIN,
   SAMSUNG_SITE,
@@ -335,11 +338,32 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
         console.error("HIWORKS scenario compile FAILED:", JSON.stringify(hw));
       }
 
+      // 하이웍스 결재(approval) 사이트 — office(dashboard)와 다른 서브도메인(approval.office.hiworks.com)이라 별도 profile.
+      // 로그인은 동일 login.office.hiworks.com(SSO) → loginUrl 동일. authenticatedWhen=.new_header 는 로그인 직후 리다이렉트되는
+      // office 홈 표지(캡처 감지용). login_required 는 로그인 폼. 결재 인박스의 안정 셀렉터(reviews_visible)는 recon 후 확정.
+      const HW_APPROVAL_SELECTORS = {
+        authenticatedWhen: { selector: ".new_header" },
+        loginUrl: HIWORKS_LOGIN_URL,
+        flags: {
+          login_required: { kind: "present", selector: "input[placeholder='로그인 ID']" },
+        },
+      };
+      await c.query(
+        `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, page_state_selectors)
+         VALUES ($1,$2,'하이웍스 결재(approval)',$3,'green',$4::jsonb)`,
+        [HIWORKS_APPROVAL_SITE, TENANT, HIWORKS_APPROVAL_ORIGIN, JSON.stringify(HW_APPROVAL_SELECTORS)],
+      );
+      await c.query(
+        `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version) VALUES ($1,$2,$3,'hiworks-approval-identity',1)`,
+        [HIWORKS_APPROVAL_BID, TENANT, HIWORKS_APPROVAL_SITE],
+      );
+
       // 하이웍스 결재 수집(= Phase 0 recon 차량 + 결재 인박스 데이터 소스). 캡처된 세션 재사용을 전제(실 하이웍스 로그인은
       // MFA라 cold 자동로그인 불가 — 운영자-보조 '세션 등록'으로 1회 캡처). 결재함 URL은 run 파라미터 entry_url 로 받는다
-      // (origin 이 HIWORKS_OFFICE_ORIGIN 과 같아야 site/세션이 해소됨 — 다른 서브도메인이면 recon 후 사이트 조정 필요).
-      // extract 결과({rows:[{drafter,doc_type,title,status,doc_ref,approval_id}]})는 GW-OUTPUT 로그로 보이며, doc_ref(상세/결재
-      // 링크의 전체 URL) 존재가 Model A(건별 결재 run)의 사활 — recon 이 이를 확인한다. HIWORKS_SITE/HIWORKS_BID 재사용.
+      // (origin = approval.office.hiworks.com → 위 결재 site_profile/세션으로 해소). extract 결과
+      // ({rows:[{drafter,doc_type,title,status,doc_ref,approval_id}]})는 GW-OUTPUT 로그로 보이며, doc_ref(상세/결재 링크 전체 URL)
+      // 존재가 Model A(건별 결재 run)의 사활 — recon 이 이를 확인한다. observe 게이트: 로그인 폼이면 session_expired, 아니면 추출
+      // (결재함 안정 셀렉터를 모르는 recon 단계라 catch-all; 확정 후 reviews_visible 게이트로 강화).
       const collect = compileScenario(
         {
           meta: { name: "하이웍스 결재 수집", version: 1 },
@@ -349,8 +373,8 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
             check: {
               what: [{ action: "observe" }],
               on: [
-                { when: "flags.reviews_visible", target: "collect", priority: 2 }, // 로그인됨(.new_header) → 수집
-                { when: "flags.login_required", target: "session_expired", priority: 1 }, // 세션 없음/만료 → 재캡처 필요
+                { when: "flags.login_required", target: "session_expired", priority: 2 }, // 로그인 폼 = 세션 없음/만료 → 재캡처 필요
+                { when: "true", target: "collect", priority: 1 }, // 그 외 = 인증 상태 → 결재 목록 추출
               ],
             },
             collect: {
