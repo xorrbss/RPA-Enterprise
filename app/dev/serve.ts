@@ -19,6 +19,11 @@
  * 세션 재사용(로그인 스킵) 모먼트는 단계 신호가 아니라 분기로만 관찰된다(짧은 트레이스 = 로그인 단계 부재). 실제로 보려면
  *   고급 설정 > 보안에서 사이트 '세션 등록'(운영자-보조 캡처)을 1회 수행한 뒤 같은 시나리오를 재실행한다. ⚠ dev:serve 는
  *   temp PG 라 재기동(=reseed)하면 캡처 세션이 소실되므로 재시연마다 재캡처가 필요하다 — 실 로그인/실 시크릿은 오너 실행 영역.
+ *
+ * Phase 2 첫-실행 온보딩(데모 절차): 실행이 한 건도 없는 빈 테넌트로 기본 라우트(dashboard)에 진입하면 상단에
+ *   OnboardingBanner 가 떠 시드 시나리오로 첫 실행(제작 > 테스트 실행)을 유도한다(권한 보유 시 CTA, viewer 는 안내문만).
+ *   첫 run 이 생기면(시드 8건 포함: 기본 5건 + 큐 데모 3건) 배너는 자동 소멸하므로, 빈-화면 상태를 보려면 reseed 직후(=서버 재기동, 오너 영역)
+ *   실행 0건 시점에 관찰한다. 코드 변경 없는 운영 절차 문서다.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import http from "node:http";
@@ -138,7 +143,7 @@ async function main(): Promise<void> {
   }
   console.log("migrations applied (concurrency → core)");
   await seed(pool);
-  console.log("seeded: 5 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
+  console.log("seeded: 8 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
 
   const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
   const signedCommandRegistry: SignedCommandRegistry = {
