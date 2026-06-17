@@ -36,6 +36,7 @@ import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-b
 import { VaultSecretStoreBoundary } from "../src/secrets/vault-secret-store-boundary";
 import { ContractDurableSecurityAuditWriter, FakeSecretStore, InMemoryImmutableAuditLog } from "../../security/compliance-scaffold";
 import { DevPlaintextSessionEncryptor, PgBrowserSessionStore } from "../src/runtime/browser-session-store";
+import { RunStepRecordingExecutor } from "./run-step-recorder";
 
 const WORKER_ID = "9a000000-0000-0000-0000-0000000000df";
 // dev 브라우저 정체성(실 UUID) — browser_sessions PK/FK 가 uuid + browser_identities 행을 요구하므로 serve.ts 가
@@ -183,10 +184,13 @@ export async function startRunLoop(pool: Pool, tenantId: string, objectStore: Ob
     claims: { runtime_identity: "runtime-worker" }, // RESOLVE_MATRIX: runtime-worker → purpose 'executor'
   };
   // gateway 있으면 dom(act/observe/extract) + utility 합성. 없으면 utility 만(act/extract 시나리오는 실패).
-  const executor: ExecutorPlugin =
+  const baseExecutor: ExecutorPlugin =
     gateway !== null
       ? new CompositeExecutor(new StagehandDomExecutor(gateway, provider, DOM_CFG, undefined, secrets, executorPrincipal), utility)
       : utility;
+  // run_steps 선행 기록 데코레이터 — 실 sink 의 artifacts→run_steps 복합 FK 충족(dev driveClaimedRun 은 run_steps 미생성).
+  // 이게 없으면 gateway 를 호출하는 첫 act/extract 스텝의 artifact INSERT 가 FK 위반으로 좌초한다.
+  const executor = new RunStepRecordingExecutor(baseExecutor, pool);
   // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
   const sessionStore = buildDevSessionStore(pool);
   console.log(
