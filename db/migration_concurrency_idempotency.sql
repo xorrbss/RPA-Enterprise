@@ -94,6 +94,24 @@ CREATE TABLE browser_leases (
   created_at          timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_browserlease_expiry ON browser_leases (expires_at) WHERE state IN ('reserved','active');
+
+-- browser_sessions — 재사용 가능한 인증 세션(쿠키 번들)의 영속처. browser_leases.cleanup_policy='preserve_session'(위)와
+-- challenge_resolution_attempts.session_generation(아래)이 참조하던 "갱신 가능한 세션"의 저장 컬럼을 제공한다(그동안 부재 — 내부모순 해소).
+-- ciphertext=봉투암호화된 쿠키 번들(평문 절대 금지), enc_kid=데이터키 id(resume-token kid 회전 패턴 대응). PK=lease 직렬화 스코프.
+CREATE TABLE browser_sessions (
+  tenant_id           uuid        NOT NULL,
+  site_profile_id     uuid        NOT NULL,
+  browser_identity_id uuid        NOT NULL,
+  identity_key        text        NOT NULL DEFAULT '',        -- 계정 판별자(기본 ''=단일 정체성 사이트)
+  ciphertext          bytea       NOT NULL,                   -- 봉투암호화 쿠키 번들; 평문 절대 금지
+  enc_kid             text        NOT NULL,                   -- KMS/SecretStore 데이터키 id(회전; resume-token kid 대응)
+  session_generation  int         NOT NULL DEFAULT 1,         -- 갱신 시 증가; challenge_resolution_attempts.session_generation과 정합
+  expires_at          timestamptz,                            -- soft TTL 힌트(NULL=없음; staleness는 flags.login_required로도 감지)
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, site_profile_id, browser_identity_id, identity_key)
+);
+CREATE INDEX idx_browser_sessions_expiry ON browser_sessions (expires_at) WHERE expires_at IS NOT NULL;
 -- renewal(CAS): 긴 step/Live Assist 중
 --   UPDATE browser_leases
 --      SET heartbeat_at=now(), expires_at=now()+ttl
