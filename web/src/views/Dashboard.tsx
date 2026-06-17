@@ -6,6 +6,7 @@ import { useCan } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
 import { StatusBadge } from "../components/badges";
+import { navigate, type ViewKey } from "../router";
 import type { RunItem } from "../api/types";
 
 // 첫-실행 안내 배너 — 권한별(RBAC) 안내문/CTA. cta 없으면 viewer 안내문만(없는 권한 동선 창작 금지).
@@ -21,10 +22,11 @@ function onboardingProps(can: (a: string) => boolean): ComponentProps<typeof Onb
 }
 
 // 지표 카드 — 클릭 시 해당 목록 화면으로 드릴다운(죽은 대시보드 → 진입점). 카드 자체가 버튼이라 키보드 포커스/Enter 동작.
-// hash로 직접 이동(상태 필터 딥링크 포함) — '실행 중'은 #runTrace?status=running으로 카운트와 목록 모집단을 일치.
-function Metric({ label, value, hash, hint }: { label: string; value: string; hash: string; hint: string }): JSX.Element {
+// 라우트는 타입드 {view, params}로 navigate에 위임(원시 해시 리터럴 제거·라우트 의도 가시화) — '실행 중'은
+// runTrace?status=running으로 카운트와 목록 모집단을 일치. params는 RunState enum 등 기존 실 필드 그대로.
+function Metric({ label, value, view, params, hint }: { label: string; value: string; view: ViewKey; params?: Record<string, string>; hint: string }): JSX.Element {
   return (
-    <button type="button" className="metric metric-link" onClick={() => { location.hash = hash; }}>
+    <button type="button" className="metric metric-link" onClick={() => navigate(view, params)}>
       <span className="label">{label}</span>
       <span className="value">{value}</span>
       <span className="metric-hint subtle">{hint} <span aria-hidden="true">→</span></span>
@@ -66,12 +68,12 @@ export function DashboardView(): JSX.Element {
     <>
       {isEmptyTenant && <OnboardingBanner {...onboardingProps(can)} />}
       <div className="metrics">
-        <Metric label="실행 중" value={pageCount(running.data)} hash="#runTrace?status=running" hint="실행 기록" />
-        <Metric label="사람 확인 대기" value={pageCount(human.data)} hash="#humanTasks" hint="사람 확인" />
-        <Metric label="업무 실패" value={pageCount(failedBiz.data)} hash="#runTrace?status=failed_business" hint="실행 기록" />
-        <Metric label="시스템 실패" value={pageCount(failedSys.data)} hash="#runTrace?status=failed_system" hint="실행 기록" />
-        <Metric label="작업항목 DLQ" value={pageCount(wiDlq.data)} hash="#workitems" hint="작업 목록" />
-        <Metric label="외부 전달 DLQ" value={pageCount(sinkDlq.data)} hash="#workitems" hint="작업 목록" />
+        <Metric label="실행 중" value={pageCount(running.data)} view="runTrace" params={{ status: "running" }} hint="실행 기록" />
+        <Metric label="사람 확인 대기" value={pageCount(human.data)} view="humanTasks" hint="사람 확인" />
+        <Metric label="업무 실패" value={pageCount(failedBiz.data)} view="runTrace" params={{ status: "failed_business" }} hint="실행 기록" />
+        <Metric label="시스템 실패" value={pageCount(failedSys.data)} view="runTrace" params={{ status: "failed_system" }} hint="실행 기록" />
+        <Metric label="작업항목 DLQ" value={pageCount(wiDlq.data)} view="workitems" hint="작업 목록" />
+        <Metric label="외부 전달 DLQ" value={pageCount(sinkDlq.data)} view="workitems" hint="작업 목록" />
       </div>
       <p className="subtle" style={{ margin: "0 2px" }}>
         각 지표는 최신 50건 기준입니다. <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
@@ -94,7 +96,7 @@ export function DashboardView(): JSX.Element {
                 className="linklike"
                 aria-label={`실행 ${r.run_id.slice(0, 8)} 상세 보기`}
                 title="실행 상세 보기"
-                onClick={() => { location.hash = `#runTrace?run=${r.run_id}`; }}
+                onClick={() => navigate("runTrace", { run: r.run_id })}
               >
                 <code>{r.run_id.slice(0, 8)}</code>
               </button>

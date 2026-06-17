@@ -78,6 +78,20 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.queryByText("준비 중")).toBeNull(); // Placeholder 배지 미노출
   });
 
+  // F1(정직): artifact 조회 거부 코드는 계약(api-surface.md:141) v1 거동과 일치해야 한다.
+  // v1은 redaction 게이트를 artifacts_visible_isolation RLS로 강제 → pending/failed/cross-tenant는 RESOURCE_NOT_FOUND(404)로
+  // 떨어지고 ARTIFACT_NOT_REDACTED(409)는 v1에서 노출하지 않는다. OpenGate는 스스로 '정적 contract-doc·추정 금지'를
+  // 표방하므로 계약과 모순되는 코드 표기는 검증된 거짓이다(error-label.test 드리프트 가드와 동형).
+  test("openGate: artifact 거부 코드 = 계약 v1 거동(RESOURCE_NOT_FOUND), ARTIFACT_NOT_REDACTED 재유입 시 실패", async () => {
+    renderApp();
+    location.hash = "#openGate";
+    await waitFor(() => expect(screen.getByText("Product-open gate map")).toBeInTheDocument());
+    // (정) 계약 v1 거동(404, 존재 비노출)이 노출됨.
+    expect(screen.getAllByText(/RESOURCE_NOT_FOUND/).length).toBeGreaterThan(0);
+    // (드리프트 가드) v1 미노출 코드가 OpenGate에 재유입되면 실패 — 계약 표방 vs 위반의 거짓 봉쇄.
+    expect(screen.queryByText(/ARTIFACT_NOT_REDACTED/)).toBeNull();
+  });
+
   test("idempotency: 정적 contract-doc 뷰 렌더(Placeholder 아님)", async () => {
     renderApp();
     location.hash = "#idempotency";

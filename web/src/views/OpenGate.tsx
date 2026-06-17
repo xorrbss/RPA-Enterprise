@@ -26,7 +26,7 @@ const GATE_MAP: readonly GateRow[] = [
   { gate: "API client contract", basis: "api-surface.md: ApiError, If-Match, Idempotency-Key, cursor paging", surface: "실행/배포/정책/사람확인 명령에서 endpoint·header 노출", status: "active", review: "요청 body에 tenant_id를 받지 않음(인증 컨텍스트에서만)" },
   { gate: "RBAC 화면/액션 gate", basis: "auth-rbac.md role registry + 액션 매트릭스", surface: "현재 역할 기준 허용/거부 badge(미허용 명령 버튼 숨김)", status: "active", review: "admin 전용 scenario promote·gateway edit은 거부 상태" },
   { gate: "Tenant/RLS/Audit", basis: "JWT tenant_id, SET LOCAL app.tenant_id, events envelope", surface: "탑바 인증 컨텍스트, RLS 스코프 조회", status: "active", review: "cross-tenant는 RESOURCE_NOT_FOUND/RLS로 존재 비노출" },
-  { gate: "Idempotency/Redaction", basis: "control_plane_idempotency_keys, sink_idempotency_key, artifact gate", surface: "실행/abort/DLQ/sink/site approve 명령", status: "active", review: "pending/failed artifact는 ARTIFACT_NOT_REDACTED" },
+  { gate: "Idempotency/Redaction", basis: "control_plane_idempotency_keys, sink_idempotency_key, artifact gate", surface: "실행/abort/DLQ/sink/site approve 명령", status: "active", review: "pending/failed/cross-tenant artifact는 v1에서 RESOURCE_NOT_FOUND(404, 존재 비노출·RLS)" },
   { gate: "Scenario validate/promote", basis: "POST validate dry-run, PUT/POST promote(If-Match + Idempotency-Key)", surface: "시나리오 검사 화면·승격 버튼(admin gate)", status: "pending", review: "현재 역할에 admin이 없으면 AUTHZ_FORBIDDEN" },
   { gate: "Human Task inbox", basis: "GET human-tasks, assign/start/resolve/escalate", surface: "사람 확인함, 처리완료·이관", status: "active", review: "validation/captcha resolve는 reviewer 또는 assignee gate" },
   { gate: "DLQ replay / sink retry", basis: "GET /v1/dlq, POST /v1/dlq/{id}/replay", surface: "작업 목록·복구 명령", status: "active", review: "operator+ · Idempotency-Key, sink는 별도 idempotency key" },
@@ -50,7 +50,7 @@ const RBAC_GATE: readonly RbacRow[] = [
   { action: "Scenario promote", endpoint: "POST /v1/scenarios/{id}/promote", role: "admin", denyCode: "AUTHZ_FORBIDDEN", status: "risk" },
   { action: "Gateway policy edit", endpoint: "PUT /v1/gateway/policy", role: "admin", denyCode: "POLICY_VERSION_CONFLICT / AUTHZ_FORBIDDEN", status: "risk" },
   { action: "Red site approve", endpoint: "POST /v1/sites/{id}/approve", role: "approver", denyCode: "AUTHZ_FORBIDDEN", status: "active" },
-  { action: "Artifact view", endpoint: "GET /v1/artifacts/{id}", role: "viewer + redaction", denyCode: "ARTIFACT_NOT_REDACTED / SECRET_ACCESS_DENIED", status: "pending" },
+  { action: "Artifact view", endpoint: "GET /v1/artifacts/{id}", role: "viewer + redaction", denyCode: "RESOURCE_NOT_FOUND(404, v1) / SECRET_ACCESS_DENIED(403)", status: "pending" },
 ];
 
 interface ApiRow {

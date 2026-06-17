@@ -7,7 +7,7 @@ import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
-import { hashWith, useHashParam } from "../router";
+import { mergeParams, navigate, useHashParam } from "../router";
 import { WORKITEM_STATES } from "./filters";
 import type { DeadLetterItem, WorkitemItem } from "../api/types";
 
@@ -24,7 +24,7 @@ export function WorkitemsView(): JSX.Element {
 
   return (
     <>
-      {sel !== null && <WorkitemDetailPanel workitemId={sel} detail={detail} onClose={() => { location.hash = hashWith({ wi: null }); }} />}
+      {sel !== null && <WorkitemDetailPanel workitemId={sel} detail={detail} onClose={() => { mergeParams({ wi: null }); }} />}
       <QueryPanel<WorkitemItem>
         title="작업 목록"
         query={wi.query}
@@ -39,7 +39,7 @@ export function WorkitemsView(): JSX.Element {
           {
             header: "작업",
             render: (r) => (
-              <button className="btn" type="button" onClick={() => { location.hash = hashWith({ wi: r.workitem_id }); }}>
+              <button className="btn" type="button" onClick={() => { mergeParams({ wi: r.workitem_id }); }}>
                 상세
               </button>
             ),
@@ -137,7 +137,7 @@ function WorkitemDetailPanel({
             <>
               <dt className="subtle">원본 실행</dt>
               <dd style={{ margin: 0 }}>
-                <button className="linklike" type="button" onClick={() => { location.hash = `#runTrace?run=${detail.data!.run_id}`; }}>
+                <button className="linklike" type="button" onClick={() => { navigate("runTrace", { run: detail.data!.run_id as string }); }}>
                   원본 실행 보기 <span aria-hidden="true">→</span>
                 </button>
               </dd>

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
-import { hashWith, useHashParam } from "../router";
+import { hashWith, mergeParams, useHashParam } from "../router";
 import { ApiError } from "../api/types";
 import { errorLabel } from "./badges";
 
@@ -12,8 +12,9 @@ import { errorLabel } from "./badges";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // 단계 트레이스/산출물 목록의 artifact_id를 클릭하면 위 '산출물 조회'가 자동 입력·조회되도록 하는 트리거.
-// 기존 드릴다운 규칙과 동일하게 해시의 artifact 파라미터에 전체 uuid를 실어 보존하되, run/status 등 기존 파라미터는
-// hashWith로 유지한다(표시는 8자리 축약이지만 핸들러는 전체 uuid 사용 — 운영자가 손으로 복붙하던 단계 제거).
+// 형제 드릴다운(run/wi/ht)과 동일하게 mergeParams 단일 진입점으로 해시의 artifact 파라미터에 전체 uuid를 실어
+// 보존한다(run/status 등 기존 파라미터 유지 + navigate와 공유하는 중복-억제 가드 일관 적용). 표시는 8자리
+// 축약이지만 핸들러는 전체 uuid 사용 — 운영자가 손으로 복붙하던 단계 제거.
 export function ArtifactRef({ id }: { id: string }): JSX.Element {
   return (
     <button
@@ -21,7 +22,7 @@ export function ArtifactRef({ id }: { id: string }): JSX.Element {
       className="linklike"
       aria-label={`산출물 ${id} 조회`}
       title="클릭하면 위 '산출물 조회'에 입력됩니다"
-      onClick={() => { location.hash = hashWith({ artifact: id }); }}
+      onClick={() => { mergeParams({ artifact: id }); }}
     >
       <code>{id.slice(0, 8)}</code>
     </button>
