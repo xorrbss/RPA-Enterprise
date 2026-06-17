@@ -1,0 +1,228 @@
+/**
+ * 단위 테스트 — StagehandDomExecutor 자격증명 fill 의 시크릿-주입 경계(누출-제로 증명).
+ *
+ * 적대 리뷰가 못 박은 주통제를 단언한다(assertNoPlainSecret 값-동등 백스톱이 아니라 "평문이 애초에 output 에 안 들어감"):
+ *  - act(secretRef) → LLM 은 selector 만 책임. 실행기가 ctx.assetRefs[key](SecretRef)를 SecretStoreBoundary(purpose:'executor')
+ *    경유로 해소해 **CDP fill 에만** 평문을 흘린다(LLM·캐시·output 에 평문 미운반).
+ *  - 직렬화된 StepResult/plan 에 평문 부재 — JSON.stringify 와 safeSerialize(taint 경계) 둘 다 통과/미포함.
+ *  - 감사로그에 secret.resolve(allow) 1건, payload={ref,purpose:'executor'} 이며 시크릿 값 미포함.
+ *  - 가드(loud): 경계/principal 미주입 또는 에셋 키 미바인딩 → IR_SCHEMA_INVALID throw(조용한 빈 fill 금지).
+ *
+ * FakeSecretStore 는 compliance-scaffold 의 실제 구현(markPlainSecretFromStore 로 taint 등록)을 써서 safeSerialize 가
+ * 누설을 실제로 잡도록 한다. 실행: tsx test/dom-executor-secret.unit.ts
+ */
+import type { ArtifactRef, PageState, RunContext, SecretRef } from "../../ts/core-types";
+import {
+  type AuthenticatedPrincipal,
+  type LLMResponse,
+  type PrincipalId,
+  type TenantId,
+} from "../../ts/security-middleware-contract";
+import {
+  ContractDurableSecurityAuditWriter,
+  FakeSecretStore,
+  InMemoryImmutableAuditLog,
+  safeSerialize,
+} from "../../security/compliance-scaffold";
+import { VaultSecretStoreBoundary } from "../src/secrets/vault-secret-store-boundary";
+import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
+import {
+  StagehandDomExecutor,
+  StagehandDomExecutorError,
+  type LlmGatewayCaller,
+} from "../src/executor/stagehand-dom-executor";
+
+let failures = 0;
+function check(label: string, cond: boolean, detail?: string): void {
+  if (cond) console.log(`  PASS  ${label}`);
+  else {
+    failures += 1;
+    console.error(`  FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+
+const SECRET = "S3cr3t-DO-NOT-LOG-9f2a";
+const VAULT_REF = "rpa/dev/runtime-worker/executor/hiworks-password";
+const ASSET_KEY = "login.password";
+const TENANT = "00000000-0000-0000-0000-0000000000d1" as TenantId;
+
+const PRINCIPAL: AuthenticatedPrincipal = {
+  subjectId: "exec-svc" as PrincipalId,
+  tenantId: TENANT,
+  roles: ["admin"],
+  source: "jwt",
+  claims: { runtime_identity: "runtime-worker" }, // RESOLVE_MATRIX: runtime-worker → purpose 'executor' 허용
+};
+
+const cfg = {
+  model: "gpt-4o-mini",
+  promptTemplateVersion: "v1",
+  budget: { maxInputTokens: 10000, maxOutputTokens: 256, maxCost: 0.5 },
+  scenarioVersionId: "sv-1",
+  browserIdentityVersion: 1,
+};
+
+function makeCtx(over: Partial<RunContext> = {}): RunContext {
+  const ps: PageState = {
+    url: { raw: "https://hw/login", canonical: "https://hw/login", pattern: "https://hw/login" },
+    dom: { structuralHash: "h1", visibleTextHash: "h2", landmarks: [], frames: [] },
+    auth: "anonymous",
+    flags: {},
+    matchedWhere: [],
+  };
+  return {
+    runId: "run-1",
+    tenantId: TENANT,
+    nodeId: "n-login-pw",
+    attempt: 0,
+    siteProfileId: "site-1",
+    browserIdentityId: "bid-1",
+    networkPolicyId: "np-1",
+    leaseId: "lease-1",
+    assetRefs: { [ASSET_KEY]: VAULT_REF as SecretRef },
+    abortSignal: new AbortController().signal,
+    pageState: ps,
+    ...over,
+  };
+}
+
+/** LLM 은 selector 만 반환(value 없음) — 실행기가 secretRef→valueRef 로 결정형 고정. */
+const planGateway: LlmGatewayCaller = {
+  call: async () =>
+    ({
+      outputRef: "art://o" as ArtifactRef,
+      usage: { inputTokens: 1, outputTokens: 1, cost: 0 },
+      finishReason: "stop",
+      parsedJson: { operation: "fill", selector: "#password" },
+    }) as unknown as LLMResponse,
+};
+
+function fakeSessions() {
+  const ops: Array<{ op: string; selector: string; value?: string }> = [];
+  const session: CdpSession = {
+    url: () => "u",
+    goto: async () => {},
+    reload: async () => {},
+    evaluate: async () => undefined as never,
+    sendCDP: async () => undefined as never,
+    click: async (s) => void ops.push({ op: "click", selector: s }),
+    fill: async (s, v) => void ops.push({ op: "fill", selector: s, value: v }),
+    selectOption: async (s, v) => void ops.push({ op: "select", selector: s, value: v }),
+    setInputFiles: async () => {},
+    downloadDir: () => "/tmp",
+    waitForDownload: async () => true,
+    close: async () => {},
+  };
+  return { provider: { forLease: () => session } as CdpSessionProvider, ops };
+}
+
+function boundaryWithLog() {
+  const log = new InMemoryImmutableAuditLog();
+  const boundary = new VaultSecretStoreBoundary({
+    store: new FakeSecretStore({ [VAULT_REF]: SECRET }),
+    audit: new ContractDurableSecurityAuditWriter(log),
+  });
+  return { boundary, log };
+}
+
+async function caught(p: Promise<unknown>): Promise<StagehandDomExecutorError | undefined> {
+  try {
+    await p;
+    return undefined;
+  } catch (e) {
+    return e instanceof StagehandDomExecutorError ? e : undefined;
+  }
+}
+
+async function main(): Promise<void> {
+  // ── 성공 경로: 평문이 CDP fill 에만 흐르고 output/감사 어디에도 안 실린다 ──
+  {
+    const s = fakeSessions();
+    const { boundary, log } = boundaryWithLog();
+    const ex = new StagehandDomExecutor(planGateway, s.provider, cfg, undefined, boundary, PRINCIPAL);
+    const result = await ex.execute(
+      "n-login-pw",
+      { type: "act", instruction: "비밀번호 입력칸에 비밀번호를 입력", secretRef: ASSET_KEY, sideEffect: "login" },
+      makeCtx(),
+    );
+
+    const fill = s.ops.find((o) => o.op === "fill");
+    check("fill 이 CDP 로 적용됨(#password)", fill?.selector === "#password");
+    check("CDP fill 에 평문이 정확히 전달됨", fill?.value === SECRET);
+    check("StepResult.status=success", result.status === "success");
+
+    const plan = (result.output as { plan?: { operation?: string; selector?: string; value?: unknown; valueRef?: unknown } }).plan;
+    check("output.plan.valueRef = 에셋 키(평문 아님)", plan?.valueRef === ASSET_KEY);
+    check("output.plan.value 부재(LLM 추측값 미운반)", plan?.value === undefined);
+
+    const serialized = JSON.stringify(result);
+    check("JSON.stringify(StepResult) 에 평문 부재", !serialized.includes(SECRET));
+    let safe = "";
+    let threw = false;
+    try {
+      safe = safeSerialize(result);
+    } catch {
+      threw = true;
+    }
+    check("safeSerialize(StepResult) 통과(taint 미도달) + 평문 부재", !threw && !safe.includes(SECRET));
+
+    const records = log.snapshot();
+    const resolveRow = records.find((r) => r.action === "secret.resolve");
+    const payload = resolveRow?.payload as { ref?: string; purpose?: string } | undefined;
+    check("감사 secret.resolve(allow) 1건 기록", resolveRow !== undefined && resolveRow.outcome === "allow");
+    check("감사 payload = {ref, purpose:'executor'}", payload?.ref === VAULT_REF && payload?.purpose === "executor");
+    check("감사 어디에도 시크릿 값 미포함", !JSON.stringify(records).includes(SECRET));
+  }
+
+  // ── 가드(loud): 경계/principal 미주입 → IR_SCHEMA_INVALID ──
+  {
+    const s = fakeSessions();
+    const ex = new StagehandDomExecutor(planGateway, s.provider, cfg); // secrets/principal 미주입
+    const err = await caught(
+      ex.execute("n2", { type: "act", instruction: "비밀번호 입력", secretRef: ASSET_KEY }, makeCtx()),
+    );
+    check("경계 미주입 → IR_SCHEMA_INVALID throw", err?.code === "IR_SCHEMA_INVALID");
+    check("미주입 시 CDP fill 미실행(조용한 빈 fill 금지)", !s.ops.some((o) => o.op === "fill"));
+  }
+
+  // ── 가드(loud): 에셋 키 미바인딩 → IR_SCHEMA_INVALID ──
+  {
+    const s = fakeSessions();
+    const { boundary } = boundaryWithLog();
+    const ex = new StagehandDomExecutor(planGateway, s.provider, cfg, undefined, boundary, PRINCIPAL);
+    const err = await caught(
+      ex.execute("n3", { type: "act", instruction: "비밀번호 입력", secretRef: "missing.key" }, makeCtx()),
+    );
+    check("에셋 키 미바인딩 → IR_SCHEMA_INVALID throw", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // ── 비-자격증명 act(secretRef 없음)는 리터럴 fill 그대로(기존 동작 보존) ──
+  {
+    const s = fakeSessions();
+    const litGateway: LlmGatewayCaller = {
+      call: async () =>
+        ({
+          outputRef: "art://o" as ArtifactRef,
+          usage: { inputTokens: 1, outputTokens: 1, cost: 0 },
+          finishReason: "stop",
+          parsedJson: { operation: "fill", selector: "#q", value: "hello" },
+        }) as unknown as LLMResponse,
+    };
+    const ex = new StagehandDomExecutor(litGateway, s.provider, cfg);
+    await ex.execute("n4", { type: "act", instruction: "검색어 입력" }, makeCtx());
+    const fill = s.ops.find((o) => o.op === "fill");
+    check("비-자격증명 fill 은 리터럴 value 보존", fill?.selector === "#q" && fill?.value === "hello");
+  }
+
+  if (failures > 0) {
+    console.error(`\nFAIL: ${failures} check(s) failed`);
+    process.exit(1);
+  }
+  console.log("\nPASS: StagehandDomExecutor 자격증명 fill 시크릿-주입 누출-제로 green");
+  process.exit(0);
+}
+
+main().catch((e) => {
+  console.error("unit fatal:", e);
+  process.exit(1);
+});

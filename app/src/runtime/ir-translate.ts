@@ -137,7 +137,16 @@ function mapAction(
       throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' act.instruction 필요`);
     }
     // sideEffect 는 node 레벨 side_effect.kind 에서(미지정 시 생략 → 실행기 기본 'update'; 기본값 single-source 는 실행기).
-    return { type: "act", instruction: a.instruction, ...(nodeSideEffect !== undefined ? { sideEffect: nodeSideEffect } : {}) };
+    // vars(Assets/credential 참조)가 있으면 첫 키를 자격증명 fill 슬롯(secretRef)으로 — 실행기가 ctx.assetRefs 에서
+    // SecretRef 를 SecretStore 경유로 해소해 LLM 미경유로 채운다. 비밀 대상은 LLM 출력이 아니라 IR 선언에서 옴(결정형).
+    // 단일 자격증명 가정(login fill 1칸 = 1키); 다중 자격증명은 YAGNI(필요 시 selector→key 맵으로 확장).
+    const secretRef = Array.isArray(a.vars) && typeof a.vars[0] === "string" && a.vars[0].length > 0 ? a.vars[0] : undefined;
+    return {
+      type: "act",
+      instruction: a.instruction,
+      ...(nodeSideEffect !== undefined ? { sideEffect: nodeSideEffect } : {}),
+      ...(secretRef !== undefined ? { secretRef } : {}),
+    };
   }
   if (a.action === "extract") {
     if (typeof a.instruction !== "string" || a.instruction.trim().length === 0) {
