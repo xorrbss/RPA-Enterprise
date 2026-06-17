@@ -1,5 +1,5 @@
 /**
- * 통합 — POST /v1/sites (api-surface §6, site_profile 신규 등록). 실 PostgreSQL.
+ * 통합 — POST /v1/sites (신규 등록) + PATCH /v1/sites/{id} (이름 수정, site.update). 실 PostgreSQL.
  *
  * 실행(temp PG15 게이트):
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/api-sites-create.int.ts
@@ -113,6 +113,14 @@ async function main(): Promise<void> {
           payload: body ?? {},
         });
 
+      const patch = (token: string, id: string, key?: string, body?: unknown) =>
+        app.inject({
+          method: "PATCH",
+          url: `/v1/sites/${id}`,
+          headers: { authorization: `Bearer ${token}`, ...(key !== undefined ? { "idempotency-key": key } : {}) },
+          payload: body ?? {},
+        });
+
       // 1) operator 생성(green + selectors) → 201 + DB 행
       const ok = await post(operator, "k-create-1", {
         name: "하이웍스",
@@ -174,6 +182,53 @@ async function main(): Promise<void> {
       check("tenant B 동일 name create → 201", okB.statusCode === 201, okB.body);
       check("tenant A '하이웍스' 여전히 1건(RLS 격리)", (await sitesOf(pool, TENANT_A)).filter((r) => r.name === "하이웍스").length === 1);
       check("tenant B '하이웍스' 1건", (await sitesOf(pool, TENANT_B)).filter((r) => r.name === "하이웍스").length === 1);
+
+      // 9) PATCH /v1/sites/{id} — 이름 수정(site.update)
+      const hiId = created.site_profile_id as string;
+      const redId = red.json().site_profile_id as string;
+
+      // 9a) operator rename → 200 + DB 반영(id 동일, name 변경)
+      const ren = await patch(operator, hiId, "k-ren-1", { name: "하이웍스-수정" });
+      check("operator rename → 200", ren.statusCode === 200, ren.body);
+      check("200 body: site_profile_id 동일·name 변경", ren.json().site_profile_id === hiId && ren.json().name === "하이웍스-수정", ren.body);
+      check("DB: name 갱신됨", (await sitesOf(pool, TENANT_A)).some((r) => r.id === hiId && r.name === "하이웍스-수정"));
+      check("DB: 옛 이름 '하이웍스' 부재", (await sitesOf(pool, TENANT_A)).every((r) => r.name !== "하이웍스"));
+
+      // 9b) 멱등 replay(동일 키·body) → 200 동일, 변경 없음
+      const renReplay = await patch(operator, hiId, "k-ren-1", { name: "하이웍스-수정" });
+      check("rename replay → 200 동일", renReplay.statusCode === 200 && renReplay.json().name === "하이웍스-수정", renReplay.body);
+
+      // 9c) 중복 name(red-site → '하이웍스-수정') → 422 site_name_already_exists, red 이름 불변
+      const renDup = await patch(operator, redId, "k-ren-dup", { name: "하이웍스-수정" });
+      check("rename to existing name → 422 IR_SCHEMA_INVALID", renDup.statusCode === 422 && renDup.json().code === "IR_SCHEMA_INVALID", renDup.body);
+      check("중복 거부: red-site 이름 불변", (await sitesOf(pool, TENANT_A)).some((r) => r.id === redId && r.name === "red-site"));
+
+      // 9d) body 형상 무효 → 422 (빈 name·예상 외 필드·name 누락)
+      const renEmpty = await patch(operator, redId, "k-ren-empty", { name: "   " });
+      check("empty name → 422", renEmpty.statusCode === 422, renEmpty.body);
+      const renExtra = await patch(operator, redId, "k-ren-extra", { name: "x", risk: "red" });
+      check("unexpected field → 422", renExtra.statusCode === 422, renExtra.body);
+      const renNoName = await patch(operator, redId, "k-ren-noname", {});
+      check("missing name → 422", renNoName.statusCode === 422, renNoName.body);
+
+      // 9e) 미존재 id → 404, 형식 무효 id → 404(존재 비노출)
+      const renMissing = await patch(operator, "70000000-0000-0000-0000-0000000000ff", "k-ren-404", { name: "ghost" });
+      check("absent site → 404", renMissing.statusCode === 404, renMissing.body);
+      const renBadId = await patch(operator, "not-a-uuid", "k-ren-badid", { name: "x" });
+      check("malformed id → 404", renBadId.statusCode === 404, renBadId.body);
+
+      // 9f) RBAC: viewer → 403 (site.update 미보유)
+      const renViewer = await patch(viewer, hiId, "k-ren-v", { name: "viewer-edit" });
+      check("viewer rename → 403 AUTHZ_FORBIDDEN", renViewer.statusCode === 403 && renViewer.json().code === "AUTHZ_FORBIDDEN", renViewer.body);
+
+      // 9g) 멱등 키 누락 → 422
+      const renNoKey = await patch(operator, hiId, undefined, { name: "nokey" });
+      check("missing Idempotency-Key → 422", renNoKey.statusCode === 422 && renNoKey.json().code === "IR_SCHEMA_INVALID", renNoKey.body);
+
+      // 9h) cross-tenant: tenant B가 tenant A 사이트 PATCH → 404(RLS, 존재 비노출), A 이름 불변
+      const renCross = await patch(operatorB, hiId, "k-ren-cross", { name: "stolen" });
+      check("cross-tenant rename → 404", renCross.statusCode === 404, renCross.body);
+      check("cross-tenant 거부: A 이름 불변", (await sitesOf(pool, TENANT_A)).some((r) => r.id === hiId && r.name === "하이웍스-수정"));
     } finally {
       await app.close();
     }

@@ -8,6 +8,10 @@
  * 매칭 불가 사이트라 생성 거부(조용한 false 방지). page_state_selectors는 parseSitePageStateConfig로 검증해 무효
  * config 사이트(런타임 PAGE_STATE_UNRESOLVED)를 선차단한다.
  *
+ * `PATCH /v1/sites/{site_profile_id}` — site_profile 설정 수정(현재 name만; 콘솔 인라인 이름 편집). operator+ 권한
+ * (auth-rbac §2, rbacAction=site.update). Idempotency-Key 멱등. UNIQUE(tenant_id, name) → 중복 name 422.
+ * 미존재/타테넌트(RLS)/형식 무효 id → 404.
+ *
  * `POST /v1/sites/{site_profile_id}/approve` — risk=red 사이트 실행 승인 워크플로우의 제어평면 진입점.
  * 승인 시 site_profiles.approved=true(SITE_PROFILE_BLOCKED 런타임 게이트 해제) + site_profile_approvals 감사 행.
  * approver+ 권한(auth-rbac §2, rbacAction=site.approve; 미보유→AUTHZ_FORBIDDEN). Idempotency-Key 멱등.
@@ -55,6 +59,27 @@ function parseApproveBody(raw: unknown): ApproveBody {
     }
   }
   return { reason, expiresAt: expiresAt as string | undefined };
+}
+
+interface UpdateBody {
+  readonly name: string;
+}
+
+/** PATCH body 선검사(키 소모 이전). name(필수 비공백)만 허용 — risk/url/selectors 등 다른 설정은 별도 라우트(YAGNI). */
+function parseUpdateBody(raw: unknown): UpdateBody {
+  if (!isRecord(raw)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "request_body_object_required" });
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "name") {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unexpected_field", field: key });
+    }
+  }
+  const name = raw.name;
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_name" });
+  }
+  return { name: name.trim() };
 }
 
 type SiteRisk = "green" | "amber" | "red";
@@ -125,6 +150,28 @@ export function registerSiteRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     },
   );
 
+  app.patch<{ Params: { id: string } }>(
+    "/v1/sites/:id",
+    { config: { rbacAction: "site.update" } },
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const id = request.params.id;
+      if (!UUID_RE.test(id)) {
+        // 형식 무효 id는 존재할 수 없다 → 404(존재 비노출).
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      requirePrincipal(request);
+      const body = parseUpdateBody(request.body); // 키 소모 이전 선검사(malformed→422)
+      const result = await runIdempotentCommand(
+        deps,
+        request,
+        "updateSite",
+        `/v1/sites/${id}`,
+        (client, tenantId) => applySiteUpdate(client, tenantId, id, body),
+      );
+      reply.code(result.status).send(result.body);
+    },
+  );
+
   app.post<{ Params: { id: string } }>(
     "/v1/sites/:id/approve",
     { config: { rbacAction: "site.approve" } },
@@ -178,6 +225,34 @@ async function applySiteApproval(
     [randomUUID(), tenantId, siteId, approvedBy, body.reason ?? null, body.expiresAt ?? null],
   );
   return { status: 200, body: { site_profile_id: siteId, approved: true, approved_by: approvedBy } };
+}
+
+async function applySiteUpdate(
+  client: PoolClient,
+  tenantId: string,
+  siteId: string,
+  body: UpdateBody,
+): Promise<CommandResponse> {
+  // 존재 확인 + 이름 갱신을 한 UPDATE…RETURNING으로(RLS 스코프). 미존재/타테넌트 → 0행 → 404(존재 비노출).
+  try {
+    const updated = await client.query<{ id: string; name: string }>(
+      `UPDATE site_profiles SET name = $1
+        WHERE id = $2::uuid AND tenant_id = $3::uuid
+        RETURNING id::text AS id, name`,
+      [body.name, siteId, tenantId],
+    );
+    const row = updated.rows[0];
+    if (row === undefined) {
+      throw new ApiResponseError("RESOURCE_NOT_FOUND");
+    }
+    return { status: 200, body: { site_profile_id: row.id, name: row.name } };
+  } catch (err) {
+    // UNIQUE(tenant_id, name) 위반 → 테넌트 내 동일 이름 사이트 존재(입력 무효 422; 조용한 500 방지).
+    if (isRecord(err) && (err as { code?: unknown }).code === "23505") {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "site_name_already_exists", name: body.name });
+    }
+    throw err;
+  }
 }
 
 async function applySiteCreate(
