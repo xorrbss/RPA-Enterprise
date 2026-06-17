@@ -75,7 +75,13 @@ function buildCodexGateway(): LlmGatewayCaller | null {
     primary: adapter,
     gate: new SafeCapabilityGate(),
     validator: { validate: () => ({ ok: true }) },
-    sink: { put: async () => "art://dev-gateway" as ArtifactRef },
+    sink: {
+      // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력을 넘긴다 → extract 결과를 콘솔에 찍는다(데모 확인용).
+      put: async (text: string) => {
+        console.log("[GW-EXTRACT-OUTPUT]", typeof text === "string" ? text.slice(0, 4000) : JSON.stringify(text).slice(0, 4000));
+        return "art://dev-gateway" as ArtifactRef;
+      },
+    },
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
     config: { retryMax: 2, fallbackAttempts: 0, repairAttempts: 1 },
   });

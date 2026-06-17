@@ -95,6 +95,12 @@ const HIWORKS_SCEN = "70000000-0000-0000-0000-00000000d502";
 const HIWORKS_SVER = "70000000-0000-0000-0000-00000000d503";
 const HIWORKS_LOGIN_URL = "https://login.office.hiworks.com/ibizsoftware.net";
 const HIWORKS_OFFICE_ORIGIN = "https://dashboard.office.hiworks.com";
+// 삼성디스플레이 게스트 공지(route B 데모, 실측 recon 기반): bbsHPNO.do 그리드(getBbsList.json), 봇차단/로그인 없음.
+const SAMSUNG_SITE = "70000000-0000-0000-0000-00000000d601";
+const SAMSUNG_SCEN = "70000000-0000-0000-0000-00000000d602";
+const SAMSUNG_SVER = "70000000-0000-0000-0000-00000000d603";
+const SAMSUNG_NOTICE_URL = "https://guest.samsungdisplay.com/bbs/bbsHPNO.do";
+const SAMSUNG_ORIGIN = "https://guest.samsungdisplay.com";
 // 데모 사이트 프로파일의 PageState 산출 규칙(마커 없는 /fixture/reviews 셀렉터 매핑) — page_state_selectors 로 영속.
 // loginUrl: 운영자-보조 캡처가 headful 로 띄울 로그인 페이지(사이트별 — resolver 는 무시, capture API 가 읽음).
 const DEMO_PAGE_STATE_SELECTORS = {
@@ -106,6 +112,12 @@ const DEMO_PAGE_STATE_SELECTORS = {
     no_next_page: { kind: "present", selector: "a.next-page.disabled" },
     login_required: { kind: "present", selector: ".login-form" },
     blocked: { kind: "present", selector: ".blocked-banner" },
+  },
+};
+// 삼성 공지 그리드 PageState(route B 데모): 행 렌더(.grid-row-rendered)=reviews_visible(데이터 가시). 로그인 없음 → flags 만.
+const SAMSUNG_PAGE_STATE_SELECTORS = {
+  flags: {
+    reviews_visible: { kind: "min_count", selector: ".grid-row-rendered", n: 1 },
   },
 };
 const ts = (i: number) => `2026-06-15T10:0${i}:00Z`;
@@ -432,6 +444,44 @@ async function seed(pool: Pool): Promise<void> {
       } else {
         console.error("HIWORKS scenario compile FAILED:", JSON.stringify(hw));
       }
+
+      // 삼성디스플레이 공지 수집(route B 데모) — navigate(bbsHPNO.do) → extract(실제 instruction). 봇차단/로그인 없음(실측).
+      const samsung = compileScenario(
+        {
+          meta: { name: "삼성디스플레이 공지 수집", version: 1 },
+          start: "open",
+          nodes: {
+            open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "collect" },
+            collect: {
+              what: [
+                {
+                  action: "extract",
+                  instruction: "공지사항 목록 그리드의 각 행에서 제목, 작성자, 작성일, 조회수를 추출하라.",
+                  schema_ref: "notice_rows",
+                },
+              ],
+              next: "done",
+            },
+            done: { terminal: "success" },
+          },
+        },
+        {},
+      );
+      if (samsung.ok) {
+        await c.query(
+          `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, page_state_selectors)
+           VALUES ($1,$2,'삼성디스플레이(게스트 공지)',$3,$4::jsonb)`,
+          [SAMSUNG_SITE, TENANT, SAMSUNG_ORIGIN, JSON.stringify(SAMSUNG_PAGE_STATE_SELECTORS)],
+        );
+        await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'삼성디스플레이 공지 수집')`, [SAMSUNG_SCEN, TENANT]);
+        await c.query(
+          `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+           VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+          [SAMSUNG_SVER, TENANT, SAMSUNG_SCEN, JSON.stringify(samsung.ir), samsung.compiledAst],
+        );
+      } else {
+        console.error("SAMSUNG scenario compile FAILED:", JSON.stringify(samsung));
+      }
     }
   });
 
@@ -466,6 +516,21 @@ async function seed(pool: Pool): Promise<void> {
         DEMO_SVER,
         JSON.stringify({ entry_url: `http://127.0.0.1:${PORT}${FIXTURE_PATH}` }),
         ts(6),
+      ],
+    ),
+  );
+
+  // 삼성 공지 수집 run(queued, route B 데모) — 부팅 시 run-loop가 실 Chrome로 navigate(bbsHPNO.do)→extract 구동.
+  await withTenantTx(pool, TENANT, (c) =>
+    c.query(
+      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, params, as_of, created_at)
+       VALUES ($1,$2,$3,'queued',$1,1,$4::jsonb,'2026-06-15T00:00:00Z',$5::timestamptz)`,
+      [
+        "71000000-0000-0000-0000-0000000000d9",
+        TENANT,
+        SAMSUNG_SVER,
+        JSON.stringify({ entry_url: SAMSUNG_NOTICE_URL }),
+        ts(9),
       ],
     ),
   );

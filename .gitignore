@@ -35,3 +35,6 @@ app/poc/d3-stagehand/capture-reviews-output.json
 .env.local
 .env.*.local
 !.env.example
+
+# PoC 캡처 산출물(커밋 제외)
+app/poc/*/capture-*-output.json
