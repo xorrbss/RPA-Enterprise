@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -10,6 +9,7 @@ import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
+import { useHashParam } from "../router";
 import type { RunDetail, RunItem } from "../api/types";
 
 const POLL_MS = 5_000; // 실시간 = outbox tail 폴링(v1)
@@ -18,13 +18,14 @@ const TERMINAL = new Set(["completed", "cancelled", "failed_business", "failed_s
 export function RunTraceView(): JSX.Element {
   const api = useApiClient();
   const lv = useListView<RunItem>(["runs"], (p) => api.listRuns(p), { refetchInterval: POLL_MS });
-  const [sel, setSel] = useState<string | null>(null);
+  // 선택 run을 해시(`#runTrace?run=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(useState 휘발 대체).
+  const sel = useHashParam("run");
   const detail = useQuery({ queryKey: ["run-detail", sel], queryFn: () => api.getRun(sel as string), enabled: sel !== null });
 
   return (
     <div>
       <ArtifactLookup />
-      {sel !== null && <RunDetailPanel runId={sel} detail={detail} onClose={() => setSel(null)} />}
+      {sel !== null && <RunDetailPanel runId={sel} detail={detail} onClose={() => { location.hash = "#runTrace"; }} />}
       <QueryPanel<RunItem>
         title="실행 기록"
         query={lv.query}
@@ -41,7 +42,7 @@ export function RunTraceView(): JSX.Element {
             header: "작업",
             render: (r) => (
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <button className="btn" type="button" onClick={() => setSel(r.run_id)}>
+                <button className="btn" type="button" onClick={() => { location.hash = `#runTrace?run=${r.run_id}`; }}>
                   상세
                 </button>
                 {!TERMINAL.has(r.status) && (

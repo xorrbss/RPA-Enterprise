@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { ApiError, type ValidationResult } from "../api/types";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { StepBuilder } from "./StepBuilder";
 import { OperatorWizard } from "./OperatorWizard";
 
@@ -76,7 +77,19 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
   const [error, setError] = useState<string | null>(null);
   // 생성은 '쉬운 만들기(운영자 마법사)' 기본. 단계 편집/IR 직접 편집은 고급. 편집은 직전 IR prefill로 'IR' 고정.
   const [editor, setEditor] = useState<"easy" | "form" | "ir">(isEdit ? "ir" : "easy");
-  const handleBuilderChange = useCallback((ir: unknown) => setText(JSON.stringify(ir, null, 2)), []);
+  // dirty = IR 텍스트를 직접 편집함(빌더 생성물과 다름). pendingEditor = 전환 확인 대기.
+  const [dirty, setDirty] = useState(false);
+  const [pendingEditor, setPendingEditor] = useState<"easy" | "form" | "ir" | null>(null);
+  const handleBuilderChange = useCallback((ir: unknown) => {
+    setText(JSON.stringify(ir, null, 2));
+    setDirty(false); // 빌더가 생성한 텍스트 = 손실 위험 없음
+  }, []);
+  // 빌더(easy/form) 모드로 전환하면 mount-effect가 IR을 새로 생성해 텍스트를 덮어쓴다. IR을 직접 편집(dirty)했다면
+  // 무음 손실이므로 ConfirmDialog로 경고(native confirm 대체). ir 모드 전환은 텍스트 보존이라 무경고.
+  const switchEditor = (target: "easy" | "form" | "ir"): void => {
+    if (target !== editor && target !== "ir" && dirty) setPendingEditor(target);
+    else setEditor(target);
+  };
 
   useEffect(() => {
     if (mode.kind !== "edit" || text !== null || detail.data === undefined) return;
@@ -152,13 +165,13 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
       </p>
       {!isEdit && (
         <div role="tablist" style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-          <button className="btn" type="button" aria-pressed={editor === "easy"} onClick={() => setEditor("easy")}>
+          <button className="btn" type="button" aria-pressed={editor === "easy"} onClick={() => switchEditor("easy")}>
             쉬운 만들기
           </button>
-          <button className="btn" type="button" aria-pressed={editor === "form"} onClick={() => setEditor("form")}>
+          <button className="btn" type="button" aria-pressed={editor === "form"} onClick={() => switchEditor("form")}>
             단계 편집(고급)
           </button>
-          <button className="btn" type="button" aria-pressed={editor === "ir"} onClick={() => setEditor("ir")}>
+          <button className="btn" type="button" aria-pressed={editor === "ir"} onClick={() => switchEditor("ir")}>
             IR 직접 편집(개발자)
           </button>
         </div>
@@ -170,7 +183,7 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
       ) : (
         <textarea
           value={text ?? ""}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => { setText(e.target.value); setDirty(true); }}
           spellCheck={false}
           aria-label="IR 문서"
           style={{ width: "100%", minHeight: 260, fontFamily: "monospace", fontSize: 13, padding: 10, boxSizing: "border-box" }}
@@ -196,6 +209,18 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
       )}
       {report !== null && !report.valid && (
         <pre style={{ marginTop: 8, fontSize: 12, maxHeight: 160, overflow: "auto" }}>{JSON.stringify(report.report, null, 2)}</pre>
+      )}
+      {pendingEditor !== null && (
+        <ConfirmDialog
+          title="IR 직접 편집 내용이 새로 생성되어 사라집니다. 계속할까요?"
+          confirmLabel="계속"
+          onCancel={() => setPendingEditor(null)}
+          onConfirm={() => {
+            setDirty(false);
+            setEditor(pendingEditor);
+            setPendingEditor(null);
+          }}
+        />
       )}
     </section>
   );
