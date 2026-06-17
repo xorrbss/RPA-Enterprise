@@ -22,6 +22,8 @@ import {
   HIWORKS_BID,
   HIWORKS_SCEN,
   HIWORKS_SVER,
+  HIWORKS_COLLECT_SCEN,
+  HIWORKS_COLLECT_SVER,
   HIWORKS_LOGIN_URL,
   HIWORKS_OFFICE_ORIGIN,
   SAMSUNG_SITE,
@@ -331,6 +333,54 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
         );
       } else {
         console.error("HIWORKS scenario compile FAILED:", JSON.stringify(hw));
+      }
+
+      // 하이웍스 결재 수집(= Phase 0 recon 차량 + 결재 인박스 데이터 소스). 캡처된 세션 재사용을 전제(실 하이웍스 로그인은
+      // MFA라 cold 자동로그인 불가 — 운영자-보조 '세션 등록'으로 1회 캡처). 결재함 URL은 run 파라미터 entry_url 로 받는다
+      // (origin 이 HIWORKS_OFFICE_ORIGIN 과 같아야 site/세션이 해소됨 — 다른 서브도메인이면 recon 후 사이트 조정 필요).
+      // extract 결과({rows:[{drafter,doc_type,title,status,doc_ref,approval_id}]})는 GW-OUTPUT 로그로 보이며, doc_ref(상세/결재
+      // 링크의 전체 URL) 존재가 Model A(건별 결재 run)의 사활 — recon 이 이를 확인한다. HIWORKS_SITE/HIWORKS_BID 재사용.
+      const collect = compileScenario(
+        {
+          meta: { name: "하이웍스 결재 수집", version: 1 },
+          start: "open",
+          nodes: {
+            open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
+            check: {
+              what: [{ action: "observe" }],
+              on: [
+                { when: "flags.reviews_visible", target: "collect", priority: 2 }, // 로그인됨(.new_header) → 수집
+                { when: "flags.login_required", target: "session_expired", priority: 1 }, // 세션 없음/만료 → 재캡처 필요
+              ],
+            },
+            collect: {
+              what: [
+                {
+                  action: "extract",
+                  instruction:
+                    '결재 대기 목록의 각 행에서 다음을 추출하라: 기안자(drafter), 문서 유형(doc_type), 제목(title), 상태(status), ' +
+                    '그리고 각 결재 문서의 상세/결재 페이지로 가는 링크의 전체 절대 URL(doc_ref), 가능하면 문서 식별자(approval_id). ' +
+                    '반드시 JSON 으로만 응답: {"rows":[{"drafter":"","doc_type":"","title":"","status":"","doc_ref":"","approval_id":""}]}',
+                  schema_ref: "approval_inbox_rows",
+                },
+              ],
+              next: "done",
+            },
+            done: { terminal: "success" },
+            session_expired: { terminal: "fail_business" },
+          },
+        },
+        {},
+      );
+      if (collect.ok) {
+        await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'하이웍스 결재 수집')`, [HIWORKS_COLLECT_SCEN, TENANT]);
+        await c.query(
+          `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+           VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+          [HIWORKS_COLLECT_SVER, TENANT, HIWORKS_COLLECT_SCEN, JSON.stringify(collect.ir), collect.compiledAst],
+        );
+      } else {
+        console.error("HIWORKS COLLECT scenario compile FAILED:", JSON.stringify(collect));
       }
 
       // 삼성디스플레이 공지 수집(route B 데모) — navigate(bbsHPNO.do) → observe(그리드 렌더 대기) → extract. 봇차단/로그인 없음(실측).
