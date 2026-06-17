@@ -107,6 +107,8 @@ const suspendingExecutor: ExecutorPlugin = {
       stepId,
       action: "navigate",
       status: "suspended",
+      // ②③: status='suspended' 는 executor 가 감지한 challenge(captcha|mfa)를 운반해야 한다(인터프리터가 challengeKind 유도).
+      challenge: { type: "captcha", detectedBy: "dom", confidence: 1 },
       pageStateBefore: "ref",
       pageStateAfter: "ps_suspend_after",
       artifacts: [],
