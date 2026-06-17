@@ -2,12 +2,15 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
+import { useCan } from "../api/permissions";
 import { EmptyState, ErrorState, Loading } from "../components/states";
+import { RunScenarioButton } from "../components/RunScenarioButton";
+import { navigate } from "../router";
 import type { ScenarioItem } from "../api/types";
 
-// 테스트 실행(playground) — 저장된 자동화의 실행 계획을 정적으로 미리본다(IR → 단계·흐름 시각화).
-// 라이브 브라우저 dry-run(executor: navigate→PageState→on[]→verify)은 worker/Chrome 연결이 필요해
-// 별도(architecture §9 D3)다. 이 화면은 실제 실행을 하지 않으며, 기존 getScenario(ir)만 읽는다.
+// 테스트 실행(playground) — 저장된 자동화의 실행 계획(IR → 단계·흐름)을 정적으로 미리본 뒤, 그대로 실제 실행을
+// 시작할 수 있다(RunScenarioButton = createRun, run.create 게이팅). 실제 브라우저 작업은 worker/Chrome가
+// 연결된 환경에서 수행되고(architecture §9 D3), 진행 상황은 '실행 기록' 뷰에서 확인한다.
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -102,16 +105,18 @@ function Plan({ ir }: { ir: unknown }): JSX.Element {
 
 export function PlaygroundView(): JSX.Element {
   const api = useApiClient();
+  const can = useCan();
   const list = useQuery({ queryKey: ["scenarios"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 10_000 });
   const [sel, setSel] = useState<string>("");
   const detail = useQuery({ queryKey: ["scenario-detail", sel], queryFn: () => api.getScenario(sel), enabled: sel !== "" });
 
   const items: readonly ScenarioItem[] = list.data?.items ?? [];
+  const selected = items.find((s) => s.scenario_id === sel);
 
   return (
     <div>
       <p className="badge" style={{ display: "block", marginBottom: 12, whiteSpace: "normal" }}>
-        정적 미리보기 — 저장된 자동화의 실행 계획(단계·흐름)을 보여줍니다. 실제 브라우저 dry-run 실행은 worker/Chrome 연결이 필요해 별도입니다.
+        실행 계획(단계·흐름)을 미리 본 뒤 그대로 실제 실행을 시작할 수 있습니다. 실제 브라우저 작업은 worker/Chrome가 연결된 환경에서 수행되며, 진행 상황은 ‘실행 기록’에서 확인합니다.
       </p>
       {list.isLoading ? (
         <Loading />
@@ -133,12 +138,23 @@ export function PlaygroundView(): JSX.Element {
           </label>
           {sel === "" ? (
             <EmptyState message="자동화를 선택하면 실행 계획이 표시됩니다." />
-          ) : detail.isLoading ? (
-            <Loading />
-          ) : detail.isError ? (
-            <ErrorState message="시나리오를 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
           ) : (
-            <Plan ir={detail.data?.ir} />
+            <>
+              {selected !== undefined && (
+                <div style={{ position: "relative", display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+                  {can("run.create") && <RunScenarioButton scenario={selected} />}
+                  <button className="btn" type="button" onClick={() => navigate("runTrace")}>실행 기록 보기</button>
+                  {can("run.create") && <span className="subtle">실행 시작 시 실제 run이 등록됩니다 — 진행은 ‘실행 기록’에서.</span>}
+                </div>
+              )}
+              {detail.isLoading ? (
+                <Loading />
+              ) : detail.isError ? (
+                <ErrorState message="시나리오를 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
+              ) : (
+                <Plan ir={detail.data?.ir} />
+              )}
+            </>
           )}
         </>
       )}
