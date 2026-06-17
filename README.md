@@ -642,3 +642,24 @@
 | API(policy) | `PUT /v1/gateway/policy`(`gateway.ts`): `is_default` 토글 — true 지정 시 같은 tx에서 기존 default 선해제(CAS 0행 throw 시 rollback으로 선해제 취소 = 실패 시 부작용 없음). **선해제도 demote 정책의 `version`을 bump**(적대 리뷰 — 표현 변경이 ETag에 반영돼야 stale If-Match가 412; 안 그러면 missed-412 낙관적 동시성 위반). `COALESCE`로 미지정 시 현재값 유지. GET 응답(`reads.ts`)에 `is_default` 노출. RBAC `gateway_policy.edit`(admin) 그대로 — 신규 권한 없음 |
 | 가드 | 명시 model 정책 부재 → `RESOURCE_NOT_FOUND`. 다정책+미지정+default없음 → `IR_SCHEMA_INVALID`(`model_required`). 정책 0건 → `runs.model=NULL`(utility-only 허용, LLM 노드 소비는 PR-B0; 현 라이브 드라이브는 `UtilityExecutor` 단독이라 dom 노드 자체가 `EXECUTOR_CAPABILITY_MISMATCH` loud). 조용한 false 없음 |
 | 잔존 | create-time capability 정적대조(`server.ts` TODO) · `runs.model`→`StagehandDomExecutorConfig.model` 소비는 PR-B0(dom executor drive 합류) · int 테스트(`api-runs-model.int.ts`) temp PG 실행은 CI/owner |
+
+## v2.20 패치 로그 (UX 감사 후속 — `human-tasks/resolve` payload 모순 교정: v1 resolve = 순수 continue 신호)
+
+> **검증된 내부 모순 해소**(신기능 아님). `api-surface.md` §4가 resolve body를 "해소 결과(kind별 payload)"라 약속했으나,
+> 나머지 계약·런타임·DB·백엔드 어디에도 그 payload를 모델링·소비하는 곳이 없었다: `reserved-handlers.md` @human_task는
+> resolve를 `{status:"resolved", next}` **순수 continue 신호**로 정의(운영자 판정 데이터 자리 없음), resume token 스키마에도
+> 결과 필드 없음, IREL `node.<id>.*`는 표준출력만(타입 문서 고정), state-machine H3/R13은 순수 전이, 백엔드
+> `requireResolveBody`는 optional `result`를 수용하되 **전이/이벤트만 확정하고 result는 미소비**(human-tasks.ts 주석으로 이미 명시).
+> 즉 api-surface 문구 하나만 실제 v1 모델과 어긋난 단일 모순이었다.
+> **해소(오너 결정 2026-06-17, A)**: api-surface §4 resolve 행을 `body: optional \`result\`(object) — v1 미소비`로 정정하고,
+> resolve가 "승인하고 계속" continue 신호임을 reserved-handlers 권위 인용과 함께 note로 고정. 운영자 판정(승인/반려·통과/실패)
+> 데이터 + IR 분기는 reserved-handler 결과 모델·resume token·IREL `node.<handler>.result` 신규 스코프·DB·런타임을 일괄
+> 바꾸는 **versioned v2 scope-out**으로 명시 분리. **신규 ErrorCode·DDL·payload 필드 미도입**(가정 금지·closed registry).
+> UX 감사가 지적한 "human-task 판정 입력 부재"는 UI 갭이 아니라 **계약 미정의**였음이 확정 — 콘솔 resolve의 bare confirm은 v1 계약상 정확.
+> **검증: contract:lint·codegen consistency·web typecheck/test/build green.**
+
+| 항목 | 조치 |
+|---|---|
+| 계약 | `api-surface.md` §4: resolve body "kind별 payload" → "optional `result`(object), v1 미소비" + reserved-handlers 인용 note(continue 신호·v2 scope-out 명시) |
+| 코드 | 백엔드 `requireResolveBody`·web client `resolveHumanTask(result?)`는 이미 v1 정합(무변경). 콘솔 resolve 확인 문구만 "승인/처리 완료로 표시하고 실행을 재개할까요?"로 명확화(continue 신호 의미 노출) |
+| 비도입 | resolve result 스키마·IREL `node.<handler>.result` 스코프·resume token 결과 필드·DB 컬럼·신규 ErrorCode — 전부 v2 versioned 결정(이번 PR 범위 밖) |
