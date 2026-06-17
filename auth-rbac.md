@@ -57,6 +57,7 @@ export type Role =
 | artifact 조회 | security-contracts §8(redaction→RBAC 게이트) | ✓ | ✓ | ✓ | ✓ | ✓ | `SECRET_ACCESS_DENIED` |
 | site 조회(risk/circuit 상태) | api-surface §7 `GET /v1/sites`·`/{id}` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | site 신규 등록(온보딩) | api-surface §7 `POST /v1/sites` (`site.create`; scenario 작성과 동일 레벨) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 사이트 세션 등록(운영자-보조 캡처) | `POST /v1/sites/{id}/session/capture` (`session.capture`). 운영자 floor — run.create/site.create 가 이미 브라우저를 띄우는 것과 동일 레벨. 캡처 세션은 재사용 인증 자료라 더 민감하나, 운영자가 실 사이트에 **직접 로그인**(자격증명은 우리 저장소 미경유)하고 결과 쿠키만 봉투암호화 저장 + red-risk 사이트는 `approved=true` 전제(`SITE_PROFILE_BLOCKED`)로 영향 한정. | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | site risk=red 승인 권한 | approver 게이트(권한 부족=일반 RBAC 거부) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | secret 접근(SecretStore.resolve 스코프) | security-contracts §1, core-types `SecretStore` | — | — | — | — | ✓ | `SECRET_ACCESS_DENIED` |
 | connector enable/install | security-contracts §7, error-catalog `CONNECTOR_PERMISSION_DENIED` | — | — | — | — | ✓ | `CONNECTOR_PERMISSION_DENIED` |

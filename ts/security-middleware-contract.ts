@@ -85,6 +85,7 @@ export type RbacAction =
   | "site.read"
   | "site.approve"
   | "site.create"
+  | "session.capture"
   | "secret.resolve"
   | "connector.enable"
   | "gateway_policy.read"

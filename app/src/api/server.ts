@@ -45,6 +45,7 @@ import { registerGatewayRoutes } from "./gateway";
 import { registerHumanTaskRoutes } from "./human-tasks";
 import { registerReadRoutes } from "./reads";
 import { registerSiteRoutes } from "./sites";
+import { registerSessionRoutes } from "./sessions";
 import type { RunEnqueuer } from "./run-queue";
 import { registerScenarioRoutes } from "./scenarios";
 import { registerSecurity, type SecurityConfig } from "./security";
@@ -223,6 +224,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerDlqRoutes(app, deps);
   registerReadRoutes(app, deps);
   registerSiteRoutes(app, deps);
+  registerSessionRoutes(app, deps);
   registerGatewayRoutes(app, deps);
 
   return app;

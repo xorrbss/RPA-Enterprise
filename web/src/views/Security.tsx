@@ -38,7 +38,15 @@ export function SecurityView(): JSX.Element {
                 invalidateKeys={[["sites"]]}
               />
             ) : (
-              "—"
+              // 운영자-보조 세션 등록: 로그인창(headful)을 띄워 운영자가 직접 로그인 → 세션 저장(이후 자동 실행이 재사용).
+              // 데모는 dev 로그인 픽스처를 로그인 URL 로 사용한다(실 사이트는 사이트별 로그인 URL 설정이 후속).
+              <ActionButton
+                label="세션 등록"
+                action="session.capture"
+                confirmText={`${r.name ?? r.site_profile_id.slice(0, 8)}에 로그인 창을 엽니다. 창에서 직접 로그인하시면 세션이 저장되어 이후 자동 실행이 재사용합니다.`}
+                run={(key) => api.captureSession(r.site_profile_id, key)}
+                invalidateKeys={[["capture-sessions", r.site_profile_id]]}
+              />
             ),
         },
       ]}

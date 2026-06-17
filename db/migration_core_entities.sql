@@ -729,6 +729,12 @@ ALTER TABLE browser_sessions
   ADD CONSTRAINT fk_browsersession_identity_tenant
   FOREIGN KEY (tenant_id, browser_identity_id) REFERENCES browser_identities(tenant_id, id);
 
+ALTER TABLE capture_sessions
+  ADD CONSTRAINT fk_capturesession_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id),
+  ADD CONSTRAINT fk_capturesession_identity_tenant
+  FOREIGN KEY (tenant_id, browser_identity_id) REFERENCES browser_identities(tenant_id, id);
+
 ALTER TABLE challenge_resolution_attempts
   ADD CONSTRAINT fk_challenge_run_tenant
   FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
@@ -752,6 +758,7 @@ BEGIN
     'credential_leases',
     'browser_leases',
     'browser_sessions',
+    'capture_sessions',
     'raw_items',
     'normalized_records',
     'sink_deliveries',

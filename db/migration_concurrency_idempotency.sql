@@ -112,6 +112,24 @@ CREATE TABLE browser_sessions (
   PRIMARY KEY (tenant_id, site_profile_id, browser_identity_id, identity_key)
 );
 CREATE INDEX idx_browser_sessions_expiry ON browser_sessions (expires_at) WHERE expires_at IS NOT NULL;
+
+-- capture_sessions — 운영자-보조 세션 캡처의 상태 레코드(폴링 대상). 운영자가 콘솔에서 '세션 등록'을 누르면 launching 행이
+-- 생기고, 캡처 드라이버가 headful 브라우저로 login_url 을 띄운다(awaiting_login). 운영자가 직접 로그인하면 authenticatedWhen
+-- 감지 후 origin-scoped 쿠키를 browser_sessions 에 저장하고 captured 로 전이한다. 모든 종료는 typed 상태(조용한 no-op 금지).
+-- 쿠키/자격증명은 여기 절대 저장하지 않는다(상태·메타만). browser_identity_id 는 browser_sessions 와 동일 키 정합.
+CREATE TABLE capture_sessions (
+  id                  uuid        PRIMARY KEY,
+  tenant_id           uuid        NOT NULL,
+  site_profile_id     uuid        NOT NULL,
+  browser_identity_id uuid        NOT NULL,
+  login_url           text        NOT NULL,                   -- headful 브라우저가 열 로그인 페이지(절대 URL)
+  status              text        NOT NULL CHECK (status IN ('launching','awaiting_login','capturing','captured','failed','expired')),
+  detail              text,                                   -- 실패/만료 사유(메타만; 쿠키/자격증명 금지)
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_capture_sessions_launching ON capture_sessions (created_at) WHERE status = 'launching';
+CREATE INDEX idx_capture_sessions_site ON capture_sessions (tenant_id, site_profile_id, created_at);
 -- renewal(CAS): 긴 step/Live Assist 중
 --   UPDATE browser_leases
 --      SET heartbeat_at=now(), expires_at=now()+ttl

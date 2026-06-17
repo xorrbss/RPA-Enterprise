@@ -11,6 +11,7 @@ import {
   RawCdpError,
   RawCdpMalformedResponseError,
   getAccessibilityTree,
+  getCookiesForOrigins,
   setDownloadBehavior,
 } from "../src/executor/raw-cdp";
 
@@ -163,6 +164,23 @@ async function main(): Promise<void> {
       && params.eventsEnabled === true,
     JSON.stringify(params),
   );
+
+  // getCookiesForOrigins — registrable-domain 스코프 캡처(over-capture 차단): 지정 origin 의 registrable domain 트리만 반환.
+  const mixedCookies = [
+    { name: "rpa_sess", value: "1", domain: "127.0.0.1" },
+    { name: "idp_sso", value: "x", domain: "idp.example.com" }, // 외부 도메인 — 제외돼야
+    { name: "hw_auth", value: "y", domain: ".hiworks.com" }, // 부모 도메인
+    { name: "hw_mail", value: "z", domain: "mail-api.office.hiworks.com" }, // 형제 서브도메인(host-only) — registrable 로 포함
+    { name: "ad", value: "t", domain: ".doubleclick.net" }, // 광고 추적 — 제외돼야
+  ];
+  const cookieSession = new FakeSession(async (m) => (m === "Storage.getCookies" ? { cookies: mixedCookies } : {}));
+  const scoped = await getCookiesForOrigins(cookieSession, ["http://127.0.0.1:8080"]);
+  check("registrable: 127.0.0.1(IP) 쿠키만(외부 제외)", scoped.length === 1 && scoped[0]?.name === "rpa_sess");
+  const hw = await getCookiesForOrigins(cookieSession, ["https://dashboard.office.hiworks.com"]);
+  const hwNames = hw.map((c) => c.name).sort();
+  check("registrable: hiworks.com 트리 전체 캡처(부모+형제 서브도메인, 광고 제외)", hwNames.length === 2 && hwNames[0] === "hw_auth" && hwNames[1] === "hw_mail");
+  const none = await getCookiesForOrigins(cookieSession, ["https://other.example"]);
+  check("registrable: 매칭 없으면 빈 배열(foreign 쿠키 미캡처)", none.length === 0);
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);

@@ -44,6 +44,9 @@ export interface ApiClient {
   approveSite(siteId: string, idempotencyKey: string, opts?: { reason?: string; expires_at?: string }): Promise<unknown>;
   // 사이트 신규 등록(operator+, api-surface §7 POST /v1/sites). Idempotency-Key + body. url_pattern은 http(s) origin.
   createSite(body: { name: string; url_pattern: string; risk?: string; page_state_selectors?: unknown }, idempotencyKey: string): Promise<unknown>;
+  // 운영자-보조 세션 등록(operator+, POST /v1/sites/{id}/session/capture). headful 로그인창을 띄워 운영자가 직접 로그인 → 세션 저장.
+  // login_url 은 사이트 설정(page_state_selectors.loginUrl)에서 해소 — 사이트별 로그인 URL.
+  captureSession(siteId: string, idempotencyKey: string): Promise<unknown>;
   // human-task 전이(api-surface §4 / app human-tasks.ts 실 shape): assign{assignee}·start(무body)·
   // resolve{result?}·escalate{reason?}. 권한/assignee 범위는 백엔드가 강제(거부 시 AUTHZ_FORBIDDEN 표면화).
   assignHumanTask(id: string, assignee: string, idempotencyKey: string): Promise<unknown>;
@@ -187,6 +190,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     replayDeadLetter: (deadLetterId, idempotencyKey, kind) => post(`/v1/dlq/${deadLetterId}/replay${queryString({ kind })}`, idempotencyKey),
     approveSite: (siteId, key, opts) => post(`/v1/sites/${siteId}/approve`, key, opts ?? {}),
     createSite: (body, key) => post(`/v1/sites`, key, body),
+    captureSession: (siteId, key) => post(`/v1/sites/${siteId}/session/capture`, key, {}),
     assignHumanTask: (id, assignee, key) => post(`/v1/human-tasks/${id}/assign`, key, { assignee }),
     startHumanTask: (id, key) => post(`/v1/human-tasks/${id}/start`, key),
     resolveHumanTask: (id, key, result) => post(`/v1/human-tasks/${id}/resolve`, key, result !== undefined ? { result } : {}),
