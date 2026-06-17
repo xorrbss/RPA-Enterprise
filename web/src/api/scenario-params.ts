@@ -23,3 +23,17 @@ export function extractUrlRefKeys(ir: unknown): string[] {
   }
   return keys;
 }
+
+// ir.params_schema.properties[key].default 를 키→기본값(string) 맵으로 반환한다.
+// '쉬운 만들기'가 입력 URL을 params 키의 default 로 실으므로, 실행 대화상자가 이 값으로 입력을 prefill한다.
+// (url_ref 는 리터럴 URL이 아니라 키 — 런타임 site-resolution 계약. default 는 string 값만 채택.)
+export function extractParamDefaults(ir: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  const props = (ir as { params_schema?: { properties?: unknown } | null } | null)?.params_schema?.properties;
+  if (props === null || typeof props !== "object") return out;
+  for (const [key, def] of Object.entries(props as Record<string, unknown>)) {
+    const d = (def as { default?: unknown } | null)?.default;
+    if (typeof d === "string" && d.length > 0) out[key] = d;
+  }
+  return out;
+}

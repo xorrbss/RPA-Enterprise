@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { ApiError, type ScenarioItem } from "../api/types";
-import { extractUrlRefKeys } from "../api/scenario-params";
+import { extractUrlRefKeys, extractParamDefaults } from "../api/scenario-params";
 
 // 자동화 실행 버튼 + 파라미터 입력 패널.
 // 파라미터 시나리오(navigate.url_ref 가 params 키)는 실행 전 값(URL)을 받아야 한다(런타임 v2.11). 실행 시 getScenario로
@@ -24,11 +24,14 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
     enabled: open,
   });
   const keys = extractUrlRefKeys(detail.data?.ir);
-  const missing = keys.filter((k) => (values[k] ?? "").trim().length === 0);
+  // params_schema default(쉬운 만들기가 실은 입력 URL)로 prefill. 사용자가 입력하면 values 가 우선.
+  const defaults = extractParamDefaults(detail.data?.ir);
+  const valueFor = (k: string): string => values[k] ?? defaults[k] ?? "";
+  const missing = keys.filter((k) => valueFor(k).trim().length === 0);
 
   const run = useMutation({
     mutationFn: () => {
-      const params = Object.fromEntries(keys.map((k) => [k, (values[k] ?? "").trim()]));
+      const params = Object.fromEntries(keys.map((k) => [k, valueFor(k).trim()]));
       return api.createRun({ scenario_version_id: scenario.latest_version_id, params }, crypto.randomUUID());
     },
     onSuccess: () => {
@@ -78,7 +81,7 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
                   <span style={{ display: "block", fontSize: 13, marginBottom: 2 }}>{k}</span>
                   <input
                     type="text"
-                    value={values[k] ?? ""}
+                    value={valueFor(k)}
                     onChange={(e) => setValues((prev) => ({ ...prev, [k]: e.target.value }))}
                     placeholder="https://… (실행 대상 URL)"
                     aria-label={k}
