@@ -114,7 +114,9 @@ const DEMO_PAGE_STATE_SELECTORS = {
     blocked: { kind: "present", selector: ".blocked-banner" },
   },
 };
-// 삼성 공지 그리드 PageState(route B 데모): 행 렌더(.grid-row-rendered)=reviews_visible(데이터 가시). 로그인 없음 → flags 만.
+// 삼성 공지 그리드 PageState(route B 데모): 행 렌더(.grid-row-rendered)=reviews_visible. observe 게이트가 이 flag 로
+// 비동기 그리드 렌더를 settle 폴링 대기한다(아래 시나리오 ready 노드). ⚠ .grid-row-rendered 는 실 그리드의 행 클래스여야
+// 한다(capture-grid-dom recon 으로 확정) — 불일치면 run 이 IR_NO_BRANCH_MATCHED 로 loud 실패(무음 빈 추출 아님). 로그인 없음 → flags 만.
 const SAMSUNG_PAGE_STATE_SELECTORS = {
   flags: {
     reviews_visible: { kind: "min_count", selector: ".grid-row-rendered", n: 1 },
@@ -162,6 +164,23 @@ function contentType(ext: string): string {
     default:
       return "application/octet-stream";
   }
+}
+
+// 큐 run 시드 — scenario_version 이 실제로 시드된 경우에만 INSERT 한다. 시나리오 compile 실패 시(위에서 console.error 로
+// 표면화) 해당 version 행이 없으므로, 무가드 INSERT 면 NOT NULL FK 위반으로 시드 전체가 크래시한다. EXISTS 가드로 그 run 만
+// no-op 으로 건너뛴다(컴파일 실패는 이미 loud 로그됨 — 은폐 아님).
+async function seedQueuedRun(
+  pool: Pool,
+  run: { id: string; sver: string; entryUrl: string; createdAt: string },
+): Promise<void> {
+  await withTenantTx(pool, TENANT, (c) =>
+    c.query(
+      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, params, as_of, created_at)
+       SELECT $1::uuid,$2::uuid,$3::uuid,'queued',$1::uuid,1,$4::jsonb,'2026-06-15T00:00:00Z',$5::timestamptz
+       WHERE EXISTS (SELECT 1 FROM scenario_versions WHERE id=$3::uuid AND tenant_id=$2::uuid)`,
+      [run.id, TENANT, run.sver, JSON.stringify({ entry_url: run.entryUrl }), run.createdAt],
+    ),
+  );
 }
 
 async function seed(pool: Pool): Promise<void> {
@@ -445,13 +464,20 @@ async function seed(pool: Pool): Promise<void> {
         console.error("HIWORKS scenario compile FAILED:", JSON.stringify(hw));
       }
 
-      // 삼성디스플레이 공지 수집(route B 데모) — navigate(bbsHPNO.do) → extract(실제 instruction). 봇차단/로그인 없음(실측).
+      // 삼성디스플레이 공지 수집(route B 데모) — navigate(bbsHPNO.do) → observe(그리드 렌더 대기) → extract. 봇차단/로그인 없음(실측).
       const samsung = compileScenario(
         {
           meta: { name: "삼성디스플레이 공지 수집", version: 1 },
           start: "open",
           nodes: {
-            open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "collect" },
+            open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "ready" },
+            // 비동기 그리드(getBbsList.json AJAX) 렌더 게이트 — observe 가 SitePageStateResolver 의 settle 폴링(≤10s)을 돌려
+            // .grid-row-rendered 가 나타날 때까지 대기한 뒤 extract 로 진행한다(navigate 직후 즉시 extract 시 빈 그리드 경합 방지).
+            // 끝까지 미렌더면 on[] 무매칭 → IR_NO_BRANCH_MATCHED 로 표면화(빈 그리드 무음 추출 금지 — "조용한 false 금지").
+            ready: {
+              what: [{ action: "observe" }],
+              on: [{ when: "flags.reviews_visible", target: "collect", priority: 1 }],
+            },
             collect: {
               what: [
                 {
@@ -506,53 +532,32 @@ async function seed(pool: Pool): Promise<void> {
 
   // 실행 가능 데모 run: queued + params.entry_url(navigate.url_ref 가 이 키로 해소) → 부팅 시 run-loop가 구동.
   // (콘솔 '실행' 버튼은 params:{} 를 보내므로 파라미터 시나리오엔 부족 — web 측 params 입력은 후속, 아래 TODO 참조)
-  await withTenantTx(pool, TENANT, (c) =>
-    c.query(
-      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, params, as_of, created_at)
-       VALUES ($1,$2,$3,'queued',$1,1,$4::jsonb,'2026-06-15T00:00:00Z',$5::timestamptz)`,
-      [
-        "71000000-0000-0000-0000-0000000000d6",
-        TENANT,
-        DEMO_SVER,
-        JSON.stringify({ entry_url: `http://127.0.0.1:${PORT}${FIXTURE_PATH}` }),
-        ts(6),
-      ],
-    ),
-  );
+  await seedQueuedRun(pool, {
+    id: "71000000-0000-0000-0000-0000000000d6",
+    sver: DEMO_SVER,
+    entryUrl: `http://127.0.0.1:${PORT}${FIXTURE_PATH}`,
+    createdAt: ts(6),
+  });
 
-  // 삼성 공지 수집 run(queued, route B 데모) — 부팅 시 run-loop가 실 Chrome로 navigate(bbsHPNO.do)→extract 구동.
-  await withTenantTx(pool, TENANT, (c) =>
-    c.query(
-      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, params, as_of, created_at)
-       VALUES ($1,$2,$3,'queued',$1,1,$4::jsonb,'2026-06-15T00:00:00Z',$5::timestamptz)`,
-      [
-        "71000000-0000-0000-0000-0000000000d9",
-        TENANT,
-        SAMSUNG_SVER,
-        JSON.stringify({ entry_url: SAMSUNG_NOTICE_URL }),
-        ts(9),
-      ],
-    ),
-  );
+  // 삼성 공지 수집 run(queued, route B 데모) — 부팅 시 run-loop가 실 Chrome로 navigate(bbsHPNO.do)→observe→extract 구동.
+  await seedQueuedRun(pool, {
+    id: "71000000-0000-0000-0000-0000000000d9",
+    sver: SAMSUNG_SVER,
+    entryUrl: SAMSUNG_NOTICE_URL,
+    createdAt: ts(9),
+  });
 
   // (LOGIN_SVER 데모 시나리오는 콘솔 참조용으로 시드돼 있으나 auto-run 하지 않는다 — SESS_SVER 와 세션 키
   //  (tenant/site/bid)를 공유해 먼저 캡처하면 아래 세션 재사용 cold 증명을 오염시키기 때문. 로그인 경로는 d8 cold 가 검증.)
 
   // 세션 재사용 cold-start run(Run 1): 저장된 세션 없음 → precheck 에서 login_required → 로그인 서브플로 → 성공 후 캡처.
   // 이후 warm run(API 생성)은 복원으로 로그인 스킵. (게이트 시나리오 SESS_SVER)
-  await withTenantTx(pool, TENANT, (c) =>
-    c.query(
-      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, params, as_of, created_at)
-       VALUES ($1,$2,$3,'queued',$1,1,$4::jsonb,'2026-06-15T00:00:00Z',$5::timestamptz)`,
-      [
-        "71000000-0000-0000-0000-0000000000d8",
-        TENANT,
-        SESS_SVER,
-        JSON.stringify({ entry_url: `http://127.0.0.1:${PORT}${LOGIN_FIXTURE_PATH}` }),
-        ts(8),
-      ],
-    ),
-  );
+  await seedQueuedRun(pool, {
+    id: "71000000-0000-0000-0000-0000000000d8",
+    sver: SESS_SVER,
+    entryUrl: `http://127.0.0.1:${PORT}${LOGIN_FIXTURE_PATH}`,
+    createdAt: ts(8),
+  });
 
   // human_tasks: open(exception) / assigned(approval) / open(approval) — assign·start·resolve·escalate 테스트용.
   const HTS: ReadonlyArray<readonly [string, string, string, string | null, number]> = [
