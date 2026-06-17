@@ -78,4 +78,14 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     await waitFor(() => expect(screen.getByText("시도 횟수")).toBeInTheDocument());
     expect(document.querySelector(".arrival-banner")).toBeNull();
   });
+
+  // reads.ts:203이 current_node를 영구 null로 못박음 → 목록의 '현재 노드' 컬럼은 production에서 항상 '—'(조용한 false).
+  // 컬럼을 제거했으므로 헤더가 부활하지 않음을 단언(항상-null 컬럼 차단). 진짜 '현재 단계'는 StepTrace가 정직하게 표시.
+  test("실행 기록 목록에 항상-null '현재 노드' 컬럼이 없다(조용한 false 제거)", async () => {
+    renderApp();
+    location.hash = "#runTrace";
+    // 목록 행(상세 버튼)이 마운트될 때까지 대기 후 헤더 부재 단언(다른 run-trace 테스트와 동일한 진입 신호).
+    await screen.findByRole("button", { name: "상세" });
+    expect(screen.queryByRole("columnheader", { name: "현재 노드" })).toBeNull();
+  });
 });

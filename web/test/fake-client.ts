@@ -5,7 +5,8 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
   const empty = async () => ({ items: [], next_cursor: null });
   return {
     listRuns: async () => ({
-      items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", current_node: "observe_reviews", as_of: "2026-06-15T00:00:00.000Z" }],
+      // current_node는 reads.ts:203이 영구 null(runs에 진행-노드 컬럼 없음) → fixture도 null(백엔드가 만들 수 없는 값 미창작).
+      items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", current_node: null, as_of: "2026-06-15T00:00:00.000Z" }],
       next_cursor: null,
     }),
     listRunSteps: async () => ({
@@ -36,8 +37,8 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     escalateHumanTask: async () => ({ status: "escalated" }),
     promoteScenario: async () => ({ version: 2, promotion_status: "prod" }),
     getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
-    getWorkitem: async (id) => ({ workitem_id: id, status: "new", unique_reference: "wi", target_id: null }),
-    getHumanTask: async (id) => ({ human_task_id: id, state: "open", kind: "approval", assignee: null, timeout: null, run_id: null }),
+    getWorkitem: async (id) => ({ workitem_id: id, status: "processing", unique_reference: "wi", attempts: 2, checked_out_by: "w-00000001", checked_out_at: "2026-06-15T00:00:00.000Z", run_id: "11111111-aaaa-bbbb-cccc-000000000001" }),
+    getHumanTask: async (id) => ({ human_task_id: id, state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null }),
     getScenario: async (id) => ({ scenario_id: id, name: "s", version: 1, promotion_status: "draft" }),
     getSite: async (id) => ({ site_profile_id: id, risk: "green", approval_status: "pending", circuit_status: "closed" }),
     getArtifact: async (id) => ({ artifact_id: id, type: "screenshot", sha256: "abc123", redaction_status: "redacted", retention_until: null, content: "redacted artifact content" }),

@@ -47,7 +47,6 @@ export function RunTraceView(): JSX.Element {
         columns={[
           { header: "실행 ID", render: (r) => <code>{r.run_id.slice(0, 8)}</code> },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
-          { header: "현재 노드", render: (r) => r.current_node ?? "—" },
           { header: "기준 시각", render: (r) => r.as_of ?? "—" },
           {
             header: "작업",

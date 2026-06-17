@@ -56,7 +56,7 @@ describe("UX quick-wins (A)", () => {
           p?.status === "running"
             ? { items: [1, 2, 3].map((n) => ({ run_id: `run-${n}`, status: "running", current_node: null, as_of: null })), next_cursor: "more" }
             : { items: [{ run_id: "run-1", status: "running", current_node: null, as_of: null }], next_cursor: null },
-        listHumanTasks: async () => ({ items: [{ human_task_id: "h1", state: "open", kind: "approval", assignee: null, timeout: null, run_id: null }], next_cursor: null }),
+        listHumanTasks: async () => ({ items: [{ human_task_id: "h1", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: null, run_id: null }], next_cursor: null }),
       }),
     );
     const running = await screen.findByRole("button", { name: /실행 중/ });
@@ -189,7 +189,7 @@ describe("UX quick-wins (A)", () => {
   test("A5: 사람 확인 '종류'가 한국어 라벨", async () => {
     renderApp(
       fakeClient({
-        listHumanTasks: async () => ({ items: [{ human_task_id: "h", state: "open", kind: "captcha", assignee: null, timeout: null, run_id: null }], next_cursor: null }),
+        listHumanTasks: async () => ({ items: [{ human_task_id: "h", state: "open", kind: "captcha", assignee: null, timeout: null, on_timeout: null, run_id: null }], next_cursor: null }),
       }),
     );
     location.hash = "#humanTasks";
