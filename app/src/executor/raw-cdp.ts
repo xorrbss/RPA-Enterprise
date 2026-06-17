@@ -158,6 +158,38 @@ export async function setCookies(session: CdpSession, cookies: readonly RawCooki
 }
 
 /**
+ * origin host 의 **registrable domain(eTLD+1 근사)** 도출. IP/단일 라벨은 그대로, 그 외는 마지막 2 라벨
+ * (예: dashboard.office.hiworks.com → hiworks.com). ⚠ccTLD 2단계(co.uk 등)는 POC 한계 — 필요 시 명시 scope/PSL 도입.
+ */
+function registrableDomain(host: string): string {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || !host.includes(".")) return host;
+  return host.split(".").slice(-2).join(".");
+}
+
+/**
+ * 운영자-보조 캡처 전용 — 지정 origin(들)의 **registrable domain 트리에 속하는 쿠키만** 스냅샷(over-capture 차단).
+ * 실 사이트(예: 하이웍스)는 인증 세션이 여러 서브도메인(*.hiworks.com)에 퍼지므로 정확 host 가 아니라 registrable
+ * domain(hiworks.com) 전체로 스코프해야 세션이 온전하다. 운영자가 캡처 중 방문한 **외부 도메인**(IdP·광고 doubleclick 등)은
+ * registrable domain 밖이라 제외된다(사람-구동 캡처는 단일 origin 가정 불가; 자동화 재사용 경로의 browser-wide
+ * getAllCookies 와 구분). 매칭: cookie.domain(선행 '.' 제거)이 reg 와 같거나 그 하위(domain.endsWith('.'+reg)).
+ * 비배열 응답은 malformed 로 실패(getAllCookies 위임).
+ */
+export async function getCookiesForOrigins(session: CdpSession, origins: readonly string[], opts: RawCdpOptions = {}): Promise<RawCookie[]> {
+  const regs = origins.map((o) => {
+    try {
+      return registrableDomain(new URL(o).hostname.toLowerCase());
+    } catch {
+      return o.toLowerCase();
+    }
+  });
+  const all = await getAllCookies(session, opts);
+  return all.filter((c) => {
+    const d = typeof c.domain === "string" ? c.domain.replace(/^\./, "").toLowerCase() : "";
+    return d.length > 0 && regs.some((r) => d === r || d.endsWith("." + r));
+  });
+}
+
+/**
  * 세션 재사용 — 현재 컨텍스트의 전체 쿠키 제거(복원 직전). 세션 상태를 저장소가 권위적으로 결정하게 하고, run/lease 간
  * 잔여 쿠키(특히 dev 단일세션 재사용·prod 풀 재할당) 누수를 막는다. 빈 컨텍스트에 호출해도 안전(no-op).
  */

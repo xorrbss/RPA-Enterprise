@@ -26,6 +26,7 @@ import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { startRunLoop, DEV_BROWSER_IDENTITY_ID, type RunLoop } from "./run-loop";
+import { startCaptureLoop, type CaptureLoop } from "./capture-loop";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -87,9 +88,18 @@ const LOGIN_SCEN = "70000000-0000-0000-0000-00000000d301";
 const LOGIN_SVER = "70000000-0000-0000-0000-00000000d302";
 const SESS_SCEN = "70000000-0000-0000-0000-00000000d401";
 const SESS_SVER = "70000000-0000-0000-0000-00000000d402";
+// 실 하이웍스(운영자-보조 캡처 데모): 로그인=login.office.hiworks.com, 로그인 후 office=dashboard.office.hiworks.com.
+const HIWORKS_SITE = "70000000-0000-0000-0000-00000000d501";
+const HIWORKS_BID = "9b000000-0000-0000-0000-0000000000b2";
+const HIWORKS_SCEN = "70000000-0000-0000-0000-00000000d502";
+const HIWORKS_SVER = "70000000-0000-0000-0000-00000000d503";
+const HIWORKS_LOGIN_URL = "https://login.office.hiworks.com/ibizsoftware.net";
+const HIWORKS_OFFICE_ORIGIN = "https://dashboard.office.hiworks.com";
 // 데모 사이트 프로파일의 PageState 산출 규칙(마커 없는 /fixture/reviews 셀렉터 매핑) — page_state_selectors 로 영속.
+// loginUrl: 운영자-보조 캡처가 headful 로 띄울 로그인 페이지(사이트별 — resolver 는 무시, capture API 가 읽음).
 const DEMO_PAGE_STATE_SELECTORS = {
   authenticatedWhen: { selector: ".user-menu" },
+  loginUrl: `http://127.0.0.1:${PORT}/fixture/login`,
   flags: {
     reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 },
     not_found: { kind: "present", selector: ".empty-results" },
@@ -371,6 +381,57 @@ async function seed(pool: Pool): Promise<void> {
       } else {
         console.error("SESSION-REUSE scenario compile FAILED:", JSON.stringify(sess));
       }
+
+      // 실 하이웍스 — 운영자-보조 캡처 데모. site_profile(office origin) + browser_identity + page_state_selectors
+      // (authenticatedWhen=.new_header 오피스홈, login_required=로그인 ID 입력칸, loginUrl=login.office.hiworks.com).
+      // '세션 등록' 버튼 → headful 로그인창 → 운영자 직접 로그인 → 세션 저장. 재사용 run 은 office 로 navigate → 인증 유지 확인.
+      const HW_SELECTORS = {
+        authenticatedWhen: { selector: ".new_header" },
+        loginUrl: HIWORKS_LOGIN_URL,
+        flags: {
+          reviews_visible: { kind: "present", selector: ".new_header" }, // 오피스홈(로그인됨) 표시
+          login_required: { kind: "present", selector: "input[placeholder='로그인 ID']" }, // 로그인 폼 표시
+        },
+      };
+      await c.query(
+        `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, page_state_selectors)
+         VALUES ($1,$2,'하이웍스(ibizsoftware.net)',$3,'green',$4::jsonb)`,
+        [HIWORKS_SITE, TENANT, HIWORKS_OFFICE_ORIGIN, JSON.stringify(HW_SELECTORS)],
+      );
+      await c.query(
+        `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version) VALUES ($1,$2,$3,'hiworks-identity',1)`,
+        [HIWORKS_BID, TENANT, HIWORKS_SITE],
+      );
+      // 재사용 검증 시나리오: office 로 navigate → observe → on[](reviews_visible=인증유지→done / login_required=세션만료→fail).
+      const hw = compileScenario(
+        {
+          meta: { name: "하이웍스 세션 재사용 확인", version: 1 },
+          start: "open",
+          nodes: {
+            open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
+            check: {
+              what: [{ action: "observe" }],
+              on: [
+                { when: "flags.reviews_visible", target: "done", priority: 2 }, // 오피스홈 보임 = 세션 재사용 성공(로그인 스킵)
+                { when: "flags.login_required", target: "session_expired", priority: 1 }, // 로그인 폼 = 세션 없음/만료
+              ],
+            },
+            done: { terminal: "success" },
+            session_expired: { terminal: "fail_business" },
+          },
+        },
+        {},
+      );
+      if (hw.ok) {
+        await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'하이웍스 세션 재사용 확인')`, [HIWORKS_SCEN, TENANT]);
+        await c.query(
+          `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+           VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+          [HIWORKS_SVER, TENANT, HIWORKS_SCEN, JSON.stringify(hw.ir), hw.compiledAst],
+        );
+      } else {
+        console.error("HIWORKS scenario compile FAILED:", JSON.stringify(hw));
+      }
     }
   });
 
@@ -647,10 +708,19 @@ async function main(): Promise<void> {
 
   // dev 런타임 루프: queued run을 claim→실행기 구동(실 Chrome). 마커 픽스처 데모 시나리오만 completed까지 간다.
   const runLoop: RunLoop | null = await startRunLoop(pool, TENANT);
+  // dev 캡처 폴러: 콘솔 '세션 등록'(capture_sessions launching)을 폴링해 별도 headful 로그인창을 띄운다(run-loop 의 공유 세션과 무관).
+  const captureLoop: CaptureLoop | null = await startCaptureLoop(pool, TENANT);
 
   const shutdown = (): void => {
     console.log("shutting down dev console…");
     void (async () => {
+      if (captureLoop !== null) {
+        try {
+          await captureLoop.stop();
+        } catch {
+          /* ignore */
+        }
+      }
       if (runLoop !== null) {
         try {
           await runLoop.stop();

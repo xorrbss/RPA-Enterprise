@@ -18,6 +18,13 @@ import { PAGESTATE_FLAG_KEYS } from "./page-state-resolver";
 
 const sha1 = (s: string): string => createHash("sha1").update(s).digest("hex").slice(0, 16);
 
+// 실 SPA 렌더 대기(settle) — navigate 직후 DOM 이 비어있다가 비동기 렌더되므로, 인식 가능한 상태(authenticatedWhen 또는
+//   어떤 flag) 가 나타날 때까지 bounded 폴링한다. 동기 렌더(픽스처)는 첫 폴에서 즉시 통과(지연 0). 끝까지 인식 불가면
+//   마지막 결과로 반환 → 상위 interpreter 가 IR_NO_BRANCH_MATCHED 로 표면화(은폐 없음, 추정 없음).
+const SETTLE_TIMEOUT_MS = 10000;
+const SETTLE_INTERVAL_MS = 400;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 const LANDMARK_ROLES = new Set([
   "banner",
   "navigation",
@@ -77,18 +84,35 @@ export class SitePageStateResolver {
 
   async resolvePageState(ctx: RunContext): Promise<PageState> {
     const session = this.sessions.forLease(ctx.leaseId);
-
-    const nodes = await getAccessibilityTree(session);
-    const landmarks: DomLandmark[] = [];
-    nodes.forEach((n, idx) => {
-      const role = n.role?.value;
-      if (typeof role !== "string" || !LANDMARK_ROLES.has(role)) return;
-      const name = typeof n.name?.value === "string" ? (n.name.value as string) : "";
-      landmarks.push({ role, name, pathHash: sha1(`${role}|${name}|${idx}`) });
-    });
-
     const probe = this.buildProbe();
-    const res = await session.evaluate<Probe>(probe);
+
+    // settle: 인식 가능한 상태(auth 또는 어떤 flag)가 나타날 때까지 bounded 폴링(실 SPA 비동기 렌더 대응). 픽스처는 즉시 통과.
+    let res = await session.evaluate<Probe>(probe);
+    const recognized = (r: Probe): boolean => r.authenticated || PAGESTATE_FLAG_KEYS.some((k) => r.flags[k] === true);
+    const settleStart = Date.now();
+    while (!recognized(res) && Date.now() - settleStart < SETTLE_TIMEOUT_MS) {
+      await sleep(SETTLE_INTERVAL_MS);
+      try {
+        res = await session.evaluate<Probe>(probe);
+      } catch {
+        // 네비게이션 중 일시 CDP 실패 — 다음 폴에서 재시도.
+      }
+    }
+
+    // landmarks: a11y 트리(무거운 raw CDP). 실 SPA 에서 느리거나 단절될 수 있어 내성 처리 — 실패 시 빈 landmarks + loud 로그
+    //   (결정 기준 flags/auth 는 probe 에서 별도 산출하므로 정확성 유지; landmarks 는 보조 — structuralHash/캐시용).
+    const landmarks: DomLandmark[] = [];
+    try {
+      const nodes = await getAccessibilityTree(session);
+      nodes.forEach((n, idx) => {
+        const role = n.role?.value;
+        if (typeof role !== "string" || !LANDMARK_ROLES.has(role)) return;
+        const name = typeof n.name?.value === "string" ? (n.name.value as string) : "";
+        landmarks.push({ role, name, pathHash: sha1(`${role}|${name}|${idx}`) });
+      });
+    } catch (e) {
+      console.error(`site-page-state-resolver: a11y 트리 실패 — landmarks 빈값으로 진행(flags/auth 는 probe 산출) — ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     // 닫힌 레지스트리 6키만, 항상 명시 set(미지정=false).
     const flags: Record<string, boolean> = {};

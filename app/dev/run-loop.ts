@@ -225,7 +225,12 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
           const entryUrl = resolveUrlRef(extractEntryNavigateUrlRef(next.ir), params);
           const siteProfileId = await resolveSiteProfileId(c, { tenantId, entryUrlRef: entryUrl });
           const config = await loadSitePageStateConfig(c, tenantId, siteProfileId);
-          return { siteProfileId, config };
+          // 사이트별 browser_identity 해소 — 세션 캡처(capture API)와 동일 키 정합(없으면 dev 기본 bid 폴백).
+          const bid = await c.query<{ id: string }>(
+            `SELECT id::text AS id FROM browser_identities WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid ORDER BY version DESC LIMIT 1`,
+            [tenantId, siteProfileId],
+          );
+          return { siteProfileId, config, browserIdentityId: bid.rows[0]?.id ?? DEV_BROWSER_IDENTITY_ID };
         });
         const resolver = new SitePageStateResolver(provider, resolved.config);
 
@@ -237,7 +242,7 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
             correlationId: next.correlation_id,
             leaseId: "dev-lease",
             siteProfileId: resolved.siteProfileId,
-            browserIdentityId: DEV_BROWSER_IDENTITY_ID,
+            browserIdentityId: resolved.browserIdentityId,
             networkPolicyId: "dev-np",
             params,
             assetRefs: deriveAssetRefs(next.ir), // meta.assets → 자격증명 fill 의 SecretRef 바인딩
