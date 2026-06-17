@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 import type { Pool } from "pg";
 
-import type { ArtifactRef, ExecutorPlugin, SecretRef } from "../../ts/core-types";
+import type { ExecutorPlugin, SecretRef } from "../../ts/core-types";
 import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../ts/security-middleware-contract";
 import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
@@ -28,6 +28,7 @@ import { UtilityExecutor } from "../src/executor/utility-executor";
 import { StagehandDomExecutor, type LlmGatewayCaller } from "../src/executor/stagehand-dom-executor";
 import { CompositeExecutor } from "../src/runtime/composite-executor";
 import { LlmGateway } from "../src/gateway/llm-gateway";
+import { PgGatewayArtifactSink, type ObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
 import { CodexSseAdapter } from "../src/gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "../src/gateway/codex-sse-transport";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
@@ -54,11 +55,15 @@ const DOM_CFG = {
  * 실 Codex 게이트웨이 조립(CODEX_* env 필수). 미설정 시 null → dom 실행기 비활성(navigate/observe 만).
  * validator 는 POC pass-through(실 ajv schemaRef 레지스트리는 후속 갭). redaction 경계가 user 메시지(DOM 포함)를 redact.
  */
-function buildCodexGateway(): LlmGatewayCaller | null {
+function buildCodexGateway(pool: Pool, objectStore: ObjectStore): LlmGatewayCaller | null {
   const apiKey = process.env.CODEX_API_KEY?.trim();
   const baseUrl = process.env.CODEX_BASE_URL?.trim();
   const model = process.env.CODEX_MODEL?.trim();
   if (!apiKey || !baseUrl || !model) return null;
+  // 실 아티팩트 sink — LLM 출력(extract 결과/act 액션플랜)을 object store + artifacts(redaction_status='pending')에
+  // 영속한다(stub 'art://dev-gateway' 교체). RLS 가 pending 을 은닉하므로 redaction-loop 가 redacted 로 승격해야
+  // 인박스가 읽는다. tenant 스코프는 sink 내부 withTenantTx(meta.tenantId)가 강제(artifacts_insert_isolation).
+  const artifactSink = new PgGatewayArtifactSink(pool, objectStore, { type: "llm_output", retentionDays: 7 });
   // 네이티브 JSON 모드(jsonMode + response_format) — provider 가 유효-JSON 강제(D5 PoC #3 가용 확정). 없으면
   // gpt-4o-mini 가 prompt 폴백에서 마크다운 펜스/산문을 섞어 Gateway JSON.parse 가 LLM_MALFORMED_OUTPUT 로 실패.
   const transport = new FetchCodexSseTransport({ baseUrl, apiKey, model, nativeStructuredOutput: true });
@@ -77,10 +82,11 @@ function buildCodexGateway(): LlmGatewayCaller | null {
     validator: { validate: () => ({ ok: true }) },
     sink: {
       // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력(extract 결과 AND act 액션플랜 둘 다)을 넘긴다 →
-      // 스텝 id 와 함께 콘솔에 찍는다(데모 확인용). 라벨에 stepId 를 넣어 어느 스텝 출력인지 구분(extract/act 혼동 방지).
+      // 스텝 id 와 함께 콘솔에 찍은 뒤(데모 확인용) 실 sink 에 위임해 artifacts(pending)로 영속한다. 라벨에 stepId 를
+      // 넣어 어느 스텝 출력인지 구분(extract/act 혼동 방지). 반환 ArtifactRef = artifacts.id(StepResult evidence 링크).
       put: async (text: string, meta) => {
         console.log(`[GW-OUTPUT ${meta.stepId}]`, typeof text === "string" ? text.slice(0, 4000) : JSON.stringify(text).slice(0, 4000));
-        return "art://dev-gateway" as ArtifactRef;
+        return artifactSink.put(text, meta);
       },
     },
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
@@ -157,7 +163,7 @@ function normalizeParams(raw: unknown): Record<string, unknown> | undefined {
  * queued run 폴링 루프 시작. Chrome 미발견 시 null(루프 비활성). tenantId 스코프(dev 단일 테넌트).
  * run별로 시나리오 entry URL→site_profile을 해소하고 그 사이트의 page_state_selectors로 resolver를 구성한다.
  */
-export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 2000): Promise<RunLoop | null> {
+export async function startRunLoop(pool: Pool, tenantId: string, objectStore: ObjectStore, intervalMs = 2000): Promise<RunLoop | null> {
   const chrome = findChrome();
   if (chrome === null) {
     console.log("run-loop: Chrome 미발견 → 실행 비활성(만든 run은 queued로 대기). CHROME_PATH 설정 시 활성화.");
@@ -167,7 +173,7 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
   const session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
   const provider = new SingleSessionProvider(session);
   const utility = new UtilityExecutor(provider);
-  const gateway = buildCodexGateway();
+  const gateway = buildCodexGateway(pool, objectStore);
   const secrets = buildDevSecretBoundary();
   const executorPrincipal: AuthenticatedPrincipal = {
     subjectId: WORKER_ID as PrincipalId,
