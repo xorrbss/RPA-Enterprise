@@ -18,7 +18,7 @@ export const VIEW_KEYS = [
 
 export type ViewKey = (typeof VIEW_KEYS)[number];
 
-// 사이드바 3그룹(제작/운영/고급 설정) — 11개 뷰를 업무 흐름으로 묶어 탐색 부담을 낮춘다.
+// 사이드바 3그룹(제작/운영/고급 설정) — 12개 뷰를 업무 흐름으로 묶어 탐색 부담을 낮춘다.
 // 모든 VIEW_KEYS가 정확히 한 그룹에 속해야 한다(router.test가 강제). nav 순서는 그룹 순서를 따른다.
 export const NAV_GROUPS: readonly { readonly label: string; readonly keys: readonly ViewKey[] }[] = [
   { label: "제작", keys: ["scenarioStudio", "playground", "irValidation"] },
