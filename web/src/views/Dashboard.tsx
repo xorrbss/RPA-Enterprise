@@ -91,7 +91,6 @@ export function DashboardView(): JSX.Element {
             ),
           },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
-          { header: "현재 노드", render: (r) => r.current_node ?? "—" },
         ]}
       />
       )}

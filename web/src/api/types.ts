@@ -12,19 +12,28 @@ export interface RunItem {
   readonly as_of: string | null;
 }
 
+// mapWorkitem(app/src/api/reads.ts) 실 투영과 1:1. attempts/checked_out_by/checked_out_at/run_id는
+// workitems 행의 실 컬럼·run 역참조(항상 키 직렬화 → required). target_id는 컬럼 부재(release-decisions #6)로
+// 영구 null이라 제거(current_node와 동형의 죽은 필드 — 창작 제거이지 은폐 아님).
 export interface WorkitemItem {
   readonly workitem_id: string;
   readonly status: string;
   readonly unique_reference: string;
-  readonly target_id: string | null;
+  readonly attempts: number;
+  readonly checked_out_by: string | null;
+  readonly checked_out_at: string | null;
+  readonly run_id: string | null;
 }
 
+// mapHumanTask 실 투영과 1:1. on_timeout=human_tasks.on_timeout 실 컬럼(타임아웃 시 동작). payload(kind별 본문)는
+// inline 저장 부재(payload_ref만)라 v1 미포함(fabrication 회피).
 export interface HumanTaskItem {
   readonly human_task_id: string;
   readonly state: string;
   readonly kind: string;
   readonly assignee: string | null;
   readonly timeout: string | null;
+  readonly on_timeout: string | null;
   readonly run_id: string | null;
 }
 
