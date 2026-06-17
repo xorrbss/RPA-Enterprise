@@ -97,6 +97,18 @@ export interface StepSummary {
   readonly exception: { class: string; code: string } | null;
 }
 
+// 하이웍스 결재 수집 행(수집 run의 extract 아티팩트 content = JSON `{ rows: ApprovalRow[] }`). 고정 계약(api-surface 기록).
+// doc_ref: 하이웍스 office origin 절대 URL(결재 run의 navigate 대상) — 필수·actionable(없으면 건별 결재 불가).
+export interface ApprovalRow {
+  readonly doc_ref: string;
+  readonly approval_id?: string;
+  readonly title: string;
+  readonly status: string;
+  readonly doc_type: string;
+  readonly drafter: string;
+  readonly drafted_at?: string;
+}
+
 // GET /v1/runs/{id}/artifacts 항목(api-surface §5 각주⁵). metadata-only — content/object_ref/sha256 미노출.
 export interface RunArtifactItem {
   readonly artifact_id: string;

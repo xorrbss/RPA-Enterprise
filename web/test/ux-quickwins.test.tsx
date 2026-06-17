@@ -162,13 +162,13 @@ describe("UX quick-wins (A)", () => {
     expect(screen.getByText("운영자")).toBeInTheDocument(); // operator
   });
 
-  test("A6: 사이드바 3그룹 헤딩 + 11 nav item 유지", async () => {
+  test("A6: 사이드바 3그룹 헤딩 + 12 nav item 유지", async () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
     expect(within(nav).getByText("제작")).toBeInTheDocument();
     expect(within(nav).getByText("운영")).toBeInTheDocument();
     expect(within(nav).getByText("고급 설정")).toBeInTheDocument();
-    expect(within(nav).getAllByRole("button")).toHaveLength(11); // 그룹화 후에도 11개 유지
+    expect(within(nav).getAllByRole("button")).toHaveLength(12); // 그룹화 후에도 전 뷰 유지
   });
 
   // A6 회귀 가드: 그룹이 11개 뷰를 정확히 한 번씩 덮어야 한다(누락/중복 시 nav에서 사라짐).

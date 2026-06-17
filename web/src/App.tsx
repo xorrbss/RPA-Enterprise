@@ -6,6 +6,7 @@ import { DashboardView } from "./views/Dashboard";
 import { RunTraceView } from "./views/RunTrace";
 import { WorkitemsView } from "./views/Workitems";
 import { HumanTasksView } from "./views/HumanTasks";
+import { ApprovalInboxView } from "./views/ApprovalInbox";
 import { SecurityView } from "./views/Security";
 import { GatewayView } from "./views/Gateway";
 import { ScenariosView } from "./views/Scenarios";
@@ -26,6 +27,8 @@ function renderView(view: ViewKey): JSX.Element {
       return <WorkitemsView />;
     case "humanTasks":
       return <HumanTasksView />;
+    case "approvalInbox":
+      return <ApprovalInboxView />;
     case "security":
       return <SecurityView />;
     case "llmGateway":

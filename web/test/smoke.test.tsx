@@ -38,10 +38,10 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.queryByRole("navigation", { name: "주 메뉴" })).toBeNull();
   });
 
-  test("사이드바 + 11 nav item 렌더", () => {
+  test("사이드바 + 12 nav item 렌더", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(within(nav).getAllByRole("button")).toHaveLength(11);
+    expect(within(nav).getAllByRole("button")).toHaveLength(12);
   });
 
   test("기본 라우트 = dashboard (지표 + 최근 실행)", async () => {

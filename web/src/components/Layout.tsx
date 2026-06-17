@@ -1,6 +1,6 @@
 import {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
-  Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow,
+  Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow, Stamp,
   type LucideIcon,
 } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
@@ -13,7 +13,7 @@ import { clearToken } from "./TokenGate";
 
 const ICONS: Record<string, LucideIcon> = {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
-  Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap,
+  Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Stamp,
 };
 
 function NavItem({ viewKey, active }: { viewKey: ViewKey; active: boolean }): JSX.Element {

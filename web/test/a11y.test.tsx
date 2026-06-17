@@ -47,7 +47,7 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
     expect(results).toHaveNoViolations();
   });
 
-  for (const view of ["workitems", "humanTasks", "runTrace", "security", "scenarioStudio", "playground"] as ViewKey[]) {
+  for (const view of ["workitems", "humanTasks", "runTrace", "security", "scenarioStudio", "playground", "approvalInbox"] as ViewKey[]) {
     test(`${view} 뷰 axe 위반 없음`, async () => {
       renderApp();
       navigate(view);
