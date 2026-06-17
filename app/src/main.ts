@@ -10,13 +10,15 @@
  * composed into a running stack before) and claims jobs. Scenario DRIVE requires production adapters that are
  * not yet implemented (test-fake only); they are deliberately left unwired and the worker LOUD-THROWS on the
  * job paths that need them ("조용한 false 금지" — never a silent no-op). The in-process LLM gateway +
- * dom/utility executorFactory ARE now assembled (D8-A16, buildExecutorFactory) but stay DORMANT until a
- * browser session provider is wired (the worker only invokes executorFactory inside driveClaimedRun, which
- * needs a session provider). Enumerated backlog (see product-open-candidate-report.md /
- * staging-deploy-runbook.md):
- *   - StagehandBrowserSessionProvider + real Chrome (activates the assembled executorFactory), SinkDeliveryPort,
- *     SessionRestorer, RunAbortDrainer, a real SecretStore-backed SignedCommandRegistry (a fail-closed deny-all
- *     placeholder is used here), a JWKS/RS256 JWT verifier (HS256 is used here), and a recurring sweeper scheduler.
+ * dom/utility executorFactory (D8-A16, buildExecutorFactory) AND the real StagehandBrowserSessionProvider
+ * (backlog item 2) are now both wired, so the worker drives claimed runs end-to-end: provider.bind() launches
+ * a real Chrome per lease at job time (CHROME_EXECUTABLE_PATH, deploy-provisioned) and the executorFactory
+ * routes dom primitives through the gateway. Live success therefore requires a real Chrome binary at that
+ * path — absent it, bind() loud-throws per run (fail-closed). Enumerated remaining backlog (see
+ * product-open-candidate-report.md / staging-deploy-runbook.md):
+ *   - SinkDeliveryPort, SessionRestorer, RunAbortDrainer, a real SecretStore-backed SignedCommandRegistry (a
+ *     fail-closed deny-all placeholder is used here), a JWKS/RS256 JWT verifier (HS256 is used here), and a
+ *     recurring sweeper scheduler.
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
 import http from "node:http";
@@ -29,7 +31,14 @@ import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
 import { buildServer } from "./api/server";
-import { loadApiConfig, loadCommonConfig, loadGatewayConfig, loadRunMode, loadWorkerConfig } from "./config/env";
+import {
+  loadApiConfig,
+  loadBrowserConfig,
+  loadCommonConfig,
+  loadGatewayConfig,
+  loadRunMode,
+  loadWorkerConfig,
+} from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
 import { SafeCapabilityGate } from "./gateway/capability-gate";
@@ -37,6 +46,7 @@ import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "./gateway/codex-sse-transport";
 import { LlmGateway } from "./gateway/llm-gateway";
 import { FsObjectStore, PgGatewayArtifactSink } from "./gateway/pg-gateway-artifact-sink";
+import { StagehandBrowserSessionProvider } from "./executor/browser-session-provider";
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
@@ -120,10 +130,10 @@ async function startApi(pool: PgPool): Promise<FastifyInstance> {
  * The returned RunExecutorFactory routes dom primitives (act/observe/extract) through the gateway and utility
  * actions deterministically.
  *
- * NOTE: this factory is DORMANT until a browserSessionProvider is wired (backlog item 2) — the worker only
- * invokes executorFactory inside driveClaimedRun, which runs only when a session provider is present. So the
- * gateway is assembled-and-ready but not yet on any live job path; the Q1 wiring precondition (extract
- * scenarios lacking args.schema → EXTRACT_SCHEMA_INVALID) does not bite until that provider lands.
+ * NOTE: with the StagehandBrowserSessionProvider now wired (backlog item 2), this factory is on the live
+ * claim-drive path — the worker invokes executorFactory inside driveClaimedRun once a lease is bound. The Q1
+ * structured-output safe-path (extract scenarios → prompt-schema injection + ajv validation) is implemented
+ * (gateway jsonMode=false path), so a real Chrome run drives end-to-end.
  */
 function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
   const gw = loadGatewayConfig();
@@ -168,15 +178,23 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
 
   // Worker ports: the real adapters whose deps exist now. browserLeasePlanResolver resolves a run's
   // {site_profile, browser_identity, network_policy} from the scenario's ir.target (Pg, RLS-scoped).
-  // executorFactory assembles the in-process LLM gateway (D8-A16) so dom primitives drive through Codex —
-  // DORMANT until a browser session provider is wired (backlog item 2; see buildExecutorFactory).
-  // Still-unwired drive-path ports (browser session provider + real Chrome, sink delivery, session restorer,
-  // abort drainer) loud-throw per job kind when needed (fail-closed), see SCOPE above.
+  // executorFactory assembles the in-process LLM gateway (D8-A16) so dom primitives drive through Codex.
+  // browserSessionProvider (real Stagehand/Chrome, backlog item 2) binds a live CDP session per lease at
+  // claim time, putting the executorFactory on the live drive path — bind() launches Chrome from
+  // CHROME_EXECUTABLE_PATH (deploy-provisioned) and loud-throws if it is absent (fail-closed, no silent
+  // claim-only). Still-unwired drive-path ports (sink delivery, session restorer, abort drainer) loud-throw
+  // per job kind when needed, see SCOPE above.
+  const browser = loadBrowserConfig();
   const workerOptions: PgRuntimeWorkerOptions = {
     suspensionPort: new PgChallengeSuspensionPort(),
     resumeTokenCodec: new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef),
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
     executorFactory: buildExecutorFactory(pool),
+    browserSessionProvider: new StagehandBrowserSessionProvider({
+      chromeExecutablePath: browser.chromeExecutablePath,
+      headless: browser.headless,
+      ...(browser.downloadRootDir !== undefined ? { downloadRootDir: browser.downloadRootDir } : {}),
+    }),
   };
 
   const runner = await run({

@@ -213,3 +213,27 @@ export function loadGatewayConfig(): GatewayConfig {
     promptTemplateVersion: opt("PROMPT_TEMPLATE_VERSION") ?? "dom-executor@1",
   };
 }
+
+/**
+ * Browser session provider config for the worker (backlog item 2 — activates the assembled executorFactory).
+ *
+ * The StagehandBrowserSessionProvider launches a fresh real Chrome per lease at bind() time, so the only
+ * deploy-varying fact is the Chrome executable path (required, fail-closed — never a silent default for a
+ * binary that must exist for any run to drive). headless + download root are operational knobs with defaults.
+ */
+export interface BrowserConfig {
+  /** Real Chrome executable path (deploy-time; bind() launches it per lease). */
+  readonly chromeExecutablePath: string;
+  readonly headless: boolean;
+  /** Per-lease download directory root (defaults to OS tmp inside the provider when unset). */
+  readonly downloadRootDir?: string;
+}
+
+export function loadBrowserConfig(): BrowserConfig {
+  const downloadRootDir = opt("BROWSER_DOWNLOAD_ROOT_DIR");
+  return {
+    chromeExecutablePath: req("CHROME_EXECUTABLE_PATH"),
+    headless: bool("BROWSER_HEADLESS", true),
+    ...(downloadRootDir !== undefined ? { downloadRootDir } : {}),
+  };
+}
