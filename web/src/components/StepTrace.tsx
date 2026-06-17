@@ -10,11 +10,11 @@ import type { StagehandCallSummary, StepSummary } from "../api/types";
 
 const POLL_MS = 5_000; // 라이브 = outbox tail 폴링(v1)
 
-// 증빙 칩 목록(카드/표 공용). 클릭 시 위 '산출물 조회' 자동 입력(A3).
-function ArtifactRefs({ ids, runId }: { ids: readonly string[]; runId: string }): JSX.Element {
+// 증빙 칩 목록(카드/표 공용). 클릭 시 위 '산출물 조회' 자동 입력(A3, 현재 해시 파라미터 보존).
+function ArtifactRefs({ ids }: { ids: readonly string[] }): JSX.Element {
   return (
     <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-      {ids.map((id) => <ArtifactRef key={id} id={id} runId={runId} />)}
+      {ids.map((id) => <ArtifactRef key={id} id={id} />)}
     </span>
   );
 }
@@ -65,17 +65,17 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
         <p className="subtle" style={{ margin: "8px 0 0" }}>아직 기록된 단계가 없습니다.</p>
       ) : view === "cards" ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-          {items.map((s, i) => <StepCard key={`${s.step_id}:${s.attempt}`} step={s} index={i} runId={runId} maxDuration={maxDuration} />)}
+          {items.map((s, i) => <StepCard key={`${s.step_id}:${s.attempt}`} step={s} index={i} maxDuration={maxDuration} />)}
         </div>
       ) : (
-        <StepTable items={items} runId={runId} maxDuration={maxDuration} />
+        <StepTable items={items} maxDuration={maxDuration} />
       )}
     </div>
   );
 }
 
-// 단계 카드(서사) — 동작/상태 + 자가복구 재시도 + AI 판단(모델·토큰·비용) + 예외 + 증빙.
-function StepCard({ step: s, index, runId, maxDuration }: { step: StepSummary; index: number; runId: string; maxDuration: number }): JSX.Element {
+// 단계 카드(서사) — 동작/상태 + 재시도 + AI 판단(모델·토큰·비용) + 예외 + 증빙.
+function StepCard({ step: s, index, maxDuration }: { step: StepSummary; index: number; maxDuration: number }): JSX.Element {
   return (
     <div className="step-card">
       <div className="step-card-head">
@@ -102,15 +102,21 @@ function StepCard({ step: s, index, runId, maxDuration }: { step: StepSummary; i
       {s.artifact_ids.length > 0 && (
         <div className="step-line">
           <span className="subtle">증빙</span>
-          <ArtifactRefs ids={s.artifact_ids} runId={runId} />
+          <ArtifactRefs ids={s.artifact_ids} />
         </div>
       )}
     </div>
   );
 }
 
-// AI 판단 — stagehand 호출이 있는 단계만. 모델·토큰·비용·첫응답은 모두 실제 필드. 누락(null)은 0으로 합산해
-// 총계처럼 보이지 않게 하고('—' 표기), 단계에 호출이 없으면 캐시 적중(=AI 계획 재생)과 그 외(=AI 호출 없음)를 구분한다.
+// AI 판단 — stagehand 호출이 있는 단계만. 모델·토큰·비용·첫응답은 모두 실제 필드. 토큰은 보고된 값만 합산하되,
+// 일부만 보고되면(다건 partial-null) 합계를 완전한 총계처럼 보이지 않게 '≥N' 하한으로, 전부 미보고면 '—'로 표기한다
+// (조용한 false/unknown 금지). 호출이 없으면 캐시 적중(=AI 계획 재생)과 그 외(=AI 호출 없음)를 구분한다.
+function tokenText(values: readonly (number | null)[]): string {
+  if (!values.some((v) => v !== null)) return "—"; // 전부 미보고
+  const sum = values.reduce<number>((a, v) => a + (v ?? 0), 0);
+  return values.every((v) => v !== null) ? String(sum) : `≥${sum}`; // 일부 미보고 → 하한
+}
 function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary[]; cacheMode: string }): JSX.Element {
   if (calls.length === 0) {
     // 캐시 hit = 이전에 AI가 도출한 plan을 LLM 호출 없이 재생(impl-contracts §D) — 'AI 미사용'으로 단정하지 않는다.
@@ -124,17 +130,14 @@ function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary
     );
   }
   const models = [...new Set(calls.map((c) => c.model))].join(", ");
-  const anyIn = calls.some((c) => c.input_tokens !== null);
-  const anyOut = calls.some((c) => c.output_tokens !== null);
-  const inTok = calls.reduce((a, c) => a + (c.input_tokens ?? 0), 0);
-  const outTok = calls.reduce((a, c) => a + (c.output_tokens ?? 0), 0);
+  const anyTok = calls.some((c) => c.input_tokens !== null || c.output_tokens !== null);
   const cost = formatCost(calls);
   const single = calls.length === 1 ? calls[0]! : null;
   return (
     <div className="step-line">
       <span className="subtle">AI 판단</span>
       <span>{models}{calls.length > 1 ? ` (${calls.length}회 호출)` : ""}</span>
-      {(anyIn || anyOut) && <span className="subtle">입력 {anyIn ? inTok : "—"} · 출력 {anyOut ? outTok : "—"} 토큰</span>}
+      {anyTok && <span className="subtle">입력 {tokenText(calls.map((c) => c.input_tokens))} · 출력 {tokenText(calls.map((c) => c.output_tokens))} 토큰</span>}
       {cost !== null && <span className="subtle">{cost}</span>}
       {single?.ttfb_ms != null && <span className="subtle">첫응답 {single.ttfb_ms}ms</span>}
       <span className="badge muted">{cacheLabel(cacheMode)}</span>
@@ -156,7 +159,7 @@ function DurationBar({ durationMs, maxDuration }: { durationMs: number | null; m
 }
 
 // 표 보기(밀집 정보 선호) — 한국어 라벨 + 소요 바 + 클릭 가능한 증빙.
-function StepTable({ items, runId, maxDuration }: { items: readonly StepSummary[]; runId: string; maxDuration: number }): JSX.Element {
+function StepTable({ items, maxDuration }: { items: readonly StepSummary[]; maxDuration: number }): JSX.Element {
   return (
     <div className="table-wrap" style={{ marginTop: 8 }}>
       <table>
@@ -168,8 +171,7 @@ function StepTable({ items, runId, maxDuration }: { items: readonly StepSummary[
         <tbody>
           {items.map((s, i) => {
             const calls = s.stagehand_calls;
-            const anyOut = calls.some((c) => c.output_tokens !== null);
-            const outTok = calls.reduce((a, c) => a + (c.output_tokens ?? 0), 0);
+            const outText = tokenText(calls.map((c) => c.output_tokens)); // '—'/'N'/'≥N'
             return (
               <tr key={`${s.step_id}:${s.attempt}`}>
                 <td>{i + 1}{s.attempt > 0 ? <span className="subtle"> ·재{s.attempt}</span> : null}</td>
@@ -181,8 +183,8 @@ function StepTable({ items, runId, maxDuration }: { items: readonly StepSummary[
                 </td>
                 <td>{cacheLabel(s.cache_mode)}</td>
                 <td style={{ minWidth: 120 }}><DurationBar durationMs={s.duration_ms} maxDuration={maxDuration} /></td>
-                <td>{calls.length > 0 ? <span className="subtle">{calls[0]!.model}{anyOut ? ` · ${outTok}tok` : ""}</span> : "—"}</td>
-                <td>{s.artifact_ids.length > 0 ? <ArtifactRefs ids={s.artifact_ids} runId={runId} /> : "—"}</td>
+                <td>{calls.length > 0 ? <span className="subtle">{calls[0]!.model}{outText !== "—" ? ` · ${outText}tok` : ""}</span> : "—"}</td>
+                <td>{s.artifact_ids.length > 0 ? <ArtifactRefs ids={s.artifact_ids} /> : "—"}</td>
               </tr>
             );
           })}

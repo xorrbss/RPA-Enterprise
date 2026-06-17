@@ -81,6 +81,21 @@ describe("UX quick-wins (A)", () => {
     });
   }
 
+  // 회귀(break-it): status 딥링크가 상세 드릴다운/산출물 조회 후에도 보존돼야 한다(hashWith 병합 — 주소창이 필터와 어긋나지 않게).
+  test("A2: status 딥링크가 상세·산출물 조회에서 보존(hashWith)", async () => {
+    renderApp();
+    location.hash = "#runTrace?status=running";
+    (await screen.findByRole("button", { name: "상세" })).click(); // run 추가, status 보존
+    await waitFor(() => expect(location.hash).toContain("status=running"));
+    expect(location.hash).toContain("run=");
+    const uuid = "72000000-0000-0000-0000-000000000001";
+    fireEvent.change(screen.getByLabelText("artifact_id"), { target: { value: uuid } });
+    screen.getByRole("button", { name: "조회" }).click(); // artifact 추가, status·run 보존
+    await waitFor(() => expect(location.hash).toContain("artifact="));
+    expect(location.hash).toContain("status=running");
+    expect(location.hash).toContain("run=");
+  });
+
   // A1/A2 일관성: '실행 중' 딥링크(#runTrace?status=running)가 RunTrace 목록 필터를 시드 → 카운트와 목록 모집단 일치.
   test("A2: '실행 중' 딥링크가 RunTrace 상태 필터를 시드", async () => {
     const calls: Array<Record<string, unknown>> = [];

@@ -78,6 +78,7 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
     await openDetail();
     await waitFor(() => expect(screen.getByText("gpt-4o-mini, gpt-4o (2회 호출)")).toBeInTheDocument());
     expect(screen.getByText("$0.0025")).toBeInTheDocument(); // 0.002 + 0.0005, 허위정밀(toFixed 6) 없이
+    expect(screen.getByText("입력 ≥500 · 출력 ≥200 토큰")).toBeInTheDocument(); // 2번째 호출 토큰 null → 합계를 총계 아닌 하한(≥)으로
     expect(screen.queryByText(/첫응답/)).toBeNull(); // 다건은 단일 ttfb 단정 안 함
   });
 

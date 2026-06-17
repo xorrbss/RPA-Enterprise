@@ -10,7 +10,7 @@ import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
-import { useHashParam } from "../router";
+import { hashWith, useHashParam } from "../router";
 import type { RunArtifactItem, RunDetail, RunItem } from "../api/types";
 
 const POLL_MS = 5_000; // 실시간 = outbox tail 폴링(v1)
@@ -29,7 +29,7 @@ export function RunTraceView(): JSX.Element {
   return (
     <div>
       <ArtifactLookup />
-      {sel !== null && <RunDetailPanel runId={sel} detail={detail} onClose={() => { location.hash = "#runTrace"; }} />}
+      {sel !== null && <RunDetailPanel runId={sel} detail={detail} onClose={() => { location.hash = hashWith({ run: null, artifact: null }); }} />}
       <QueryPanel<RunItem>
         title="실행 기록"
         query={lv.query}
@@ -46,7 +46,7 @@ export function RunTraceView(): JSX.Element {
             header: "작업",
             render: (r) => (
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <button className="btn" type="button" onClick={() => { location.hash = `#runTrace?run=${r.run_id}`; }}>
+                <button className="btn" type="button" onClick={() => { location.hash = hashWith({ run: r.run_id, artifact: null }); }}>
                   상세
                 </button>
                 {!TERMINAL.has(r.status) && (
@@ -136,7 +136,7 @@ function RunArtifactsList({ runId }: { runId: string }): JSX.Element {
             <tbody>
               {items.map((a) => (
                 <tr key={a.artifact_id}>
-                  <td><ArtifactRef id={a.artifact_id} runId={runId} /></td>
+                  <td><ArtifactRef id={a.artifact_id} /></td>
                   <td>{a.type}</td>
                   <td><span className="badge muted">{a.redaction_status}</span></td>
                   <td>{a.retention_until ?? "—"}</td>

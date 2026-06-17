@@ -55,6 +55,22 @@ export function hashParam(name: string): string | null {
   return q === undefined ? null : new URLSearchParams(q).get(name);
 }
 
+/**
+ * 현재 해시(`#view?query`)의 쿼리 파라미터에 updates를 병합한 해시 문자열을 만든다(값이 null이면 해당 키 제거).
+ * 같은 뷰의 드릴다운 파라미터(run/artifact/status 등)를 서로 떨어뜨리지 않고 보존 — 각 호출부가 해시를 처음부터
+ * 재구성하다 다른 파라미터를 잃어 주소창이 필터/선택과 어긋나던 것(조용한 false) 방지. 뷰는 현재 뷰를 유지한다.
+ */
+export function hashWith(updates: Record<string, string | null>): string {
+  const [viewPart, queryPart] = location.hash.replace(/^#/, "").split("?");
+  const params = new URLSearchParams(queryPart ?? "");
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === null) params.delete(key);
+    else params.set(key, value);
+  }
+  const qs = params.toString();
+  return `#${viewPart || DEFAULT_VIEW}${qs ? `?${qs}` : ""}`;
+}
+
 /** 해시 쿼리 파라미터를 구독(hashchange마다 갱신). 뒤로가기/딥링크로 드릴다운이 복원된다. */
 export function useHashParam(name: string): string | null {
   const [value, setValue] = useState<string | null>(() => hashParam(name));
