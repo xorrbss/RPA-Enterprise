@@ -1,9 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
+import type { ComponentProps } from "react";
 
 import { useApiClient } from "../api/context";
+import { useCan } from "../api/permissions";
+import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
 import { StatusBadge } from "../components/badges";
 import type { RunItem } from "../api/types";
+
+// 첫-실행 안내 배너 — 권한별(RBAC) 안내문/CTA. cta 없으면 viewer 안내문만(없는 권한 동선 창작 금지).
+// 입력은 부모가 실 응답으로 판정한 '진짜 빈 테넌트' 여부 + useCan뿐(데이터 미창작).
+// 분기는 2가지뿐: 현 RBAC 매트릭스(permissions.ts)상 scenario.create 보유 역할은 예외 없이 run.create도
+// 보유하므로(viewer만 둘 다 없음), run.create 유무가 곧 '명령 권한자 vs 뷰어' 경계다.
+// 문구는 시나리오 존재를 단정하지 않는다 — 부모는 listScenarios를 조회하지 않아 '준비된 자동화'가 있는지
+// 관찰한 적이 없다(데이터 미창작). CTA 라벨('자동화 화면으로 가기')은 동작 그대로의 안내문이고, 이동 대상은
+// scenarioStudio(meta.ts title='자동화 만들기')다 — 라벨은 대상 title을 그대로 쓰지 않는다.
+function onboardingProps(can: (a: string) => boolean): ComponentProps<typeof OnboardingBanner> {
+  if (can("run.create")) return { message: "첫 실행을 시작해 보세요.", cta: { label: "자동화 화면으로 가기", view: "scenarioStudio" } };
+  return { message: "아직 등록된 실행이 없습니다. 권한이 있는 담당자가 첫 실행을 시작할 수 있습니다." };
+}
 
 // 지표 카드 — 클릭 시 해당 목록 화면으로 드릴다운(죽은 대시보드 → 진입점). 카드 자체가 버튼이라 키보드 포커스/Enter 동작.
 // hash로 직접 이동(상태 필터 딥링크 포함) — '실행 중'은 #runTrace?status=running으로 카운트와 목록 모집단을 일치.
@@ -26,6 +41,7 @@ function pageCount(d: { items: readonly unknown[]; next_cursor: string | null } 
 
 export function DashboardView(): JSX.Element {
   const api = useApiClient();
+  const can = useCan();
   // '실행 중'은 서버 status 필터로 정확히 집계(이전: 전체 50건을 클라에서 status==='running' 필터 → 50건 초과 시 구조적 오집계).
   const running = useQuery({ queryKey: ["runs", "running"], queryFn: () => api.listRuns({ status: "running", limit: 50 }), refetchInterval: 5_000 });
   const recent = useQuery({ queryKey: ["runs"], queryFn: () => api.listRuns({ limit: 50 }), refetchInterval: 5_000 });
@@ -33,8 +49,14 @@ export function DashboardView(): JSX.Element {
   const wiDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 5_000 });
   const sinkDlq = useQuery({ queryKey: ["dlq", "sink"], queryFn: () => api.listDlq("sink", { limit: 50 }), refetchInterval: 5_000 });
 
+  // 첫-실행 안내 배너: '진짜 빈 테넌트'(실행 0건)일 때만. recent(무필터 listRuns)의 실 필드로만 판정.
+  // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
+  // isLoading/isError 중에는 미표시(데이터 도착 전 단정 금지). 실행이 1건이라도 생기면 자동 소멸.
+  const isEmptyTenant = recent.isSuccess && recent.data.items.length === 0 && recent.data.next_cursor === null;
+
   return (
     <>
+      {isEmptyTenant && <OnboardingBanner {...onboardingProps(can)} />}
       <div className="metrics">
         <Metric label="실행 중" value={pageCount(running.data)} hash="#runTrace?status=running" hint="실행 기록" />
         <Metric label="사람 확인 대기" value={pageCount(human.data)} hash="#humanTasks" hint="사람 확인" />
@@ -44,6 +66,10 @@ export function DashboardView(): JSX.Element {
       <p className="subtle" style={{ margin: "0 2px" }}>
         각 지표는 최신 50건 기준입니다. <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
       </p>
+      {/* 빈 테넌트(실행 0건)일 때는 위 OnboardingBanner 가 '실행 없음' + CTA 로 그 상태를 온전히 안내하므로,
+          같은 사실을 반복하는 패널 EmptyState('아직 실행이 없습니다.')는 숨긴다(중복 메시지·중복 role='status' 제거).
+          실행이 1건이라도 생기면 isEmptyTenant=false 가 되어 패널이 즉시 복귀한다(기능 손실 없음). */}
+      {!isEmptyTenant && (
       <QueryPanel<RunItem>
         title="최근 실행"
         query={recent}
@@ -68,6 +94,7 @@ export function DashboardView(): JSX.Element {
           { header: "현재 노드", render: (r) => r.current_node ?? "—" },
         ]}
       />
+      )}
     </>
   );
 }
