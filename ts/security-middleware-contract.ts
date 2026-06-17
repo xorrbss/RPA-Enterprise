@@ -84,6 +84,7 @@ export type RbacAction =
   | "artifact.read"
   | "site.read"
   | "site.approve"
+  | "site.create"
   | "secret.resolve"
   | "connector.enable"
   | "gateway_policy.read"
