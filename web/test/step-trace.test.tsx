@@ -166,6 +166,50 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
     expect(screen.queryAllByText(/재시도/)).toHaveLength(1); // attempt:0 성공 단계는 재시도 칩 없음(거짓 신호 금지)
   });
 
+  // P0-2 "한눈에": 단계 기록에서 관찰된 복구 신호(재시도·캐시 재생·비정상 응답 종료)를 상단에 집계.
+  test("P0-2: 자동 복구 요약 배너 — 다시 시도 · 캐시 계획 재생 · 비정상 응답 종료", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [
+            { step_id: "a", node_id: "n0", attempt: 0, action: "observe", status: "failed_system", cache_mode: "miss", artifact_ids: [], stagehand_calls: [{ model: "gpt-4o-mini", transport: "sse", stream_status: "error", ttfb_ms: null, input_tokens: null, output_tokens: null, cost: null }], started_at: null, ended_at: null, duration_ms: 100, exception: { class: "system", code: "GATEWAY_STREAM_ABORTED" } },
+            { step_id: "a", node_id: "n0", attempt: 1, action: "observe", status: "success", cache_mode: "miss", artifact_ids: [], stagehand_calls: [{ model: "gpt-4o-mini", transport: "sse", stream_status: "done", ttfb_ms: 100, input_tokens: 10, output_tokens: 5, cost: "0.001" }], started_at: null, ended_at: null, duration_ms: 200, exception: null },
+            { step_id: "c", node_id: "click", attempt: 0, action: "act", status: "success", cache_mode: "hit", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 20, exception: null },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() =>
+      expect(
+        screen.getByText((t) => t.includes("관찰된 자동 복구") && t.includes("다시 시도 1개 단계") && t.includes("캐시 계획 재생 1개 단계") && t.includes("비정상 응답 종료 1건")),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  // 신호가 없으면(정상 완료만) 요약 배너를 그리지 않는다(없는 복구를 있는 척하지 않음 — 조용한 false 금지).
+  test("P0-2: 복구 신호 없으면 요약 배너 미표시", async () => {
+    renderApp(); // 기본 픽스처 — 재시도 0, hit는 호출 있음(재생 아님), stream done
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument());
+    expect(screen.queryByText(/관찰된 자동 복구/)).toBeNull();
+  });
+
+  // P0-2: 비정상 응답 종료(stream_status)를 카드에 한국어 신호로 노출(정상 종료는 표기하지 않음).
+  test("P0-2: stream_status length → '응답 길이 한도로 잘림' 칩", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [{ step_id: "t", node_id: "extract", attempt: 0, action: "extract", status: "success", cache_mode: "miss", artifact_ids: [], stagehand_calls: [{ model: "gpt-4o-mini", transport: "sse", stream_status: "length", ttfb_ms: 90, input_tokens: 100, output_tokens: 512, cost: "0.002" }], started_at: null, ended_at: null, duration_ms: 300, exception: null }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("응답 길이 한도로 잘림")).toBeInTheDocument());
+  });
+
   // B4 — 카드(서사) ↔ 표(밀집) 토글.
   test("B4: 카드 기본 + 표 토글", async () => {
     renderApp();

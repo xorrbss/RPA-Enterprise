@@ -128,6 +128,13 @@ export interface ScenarioMutationResult {
   readonly promotion_status: string;
 }
 
+// POST /v1/runs 응답(server.ts: { run_id, status:"queued", as_of }). 실행 시작 직후 그 run 상세로 드릴다운하기 위해 run_id 가 필요.
+export interface CreateRunResult {
+  readonly run_id: string;
+  readonly status: string;
+  readonly as_of?: string | null;
+}
+
 export interface CreateRunBody {
   readonly scenario_version_id: string;
   readonly params?: Record<string, unknown>;

@@ -61,6 +61,20 @@ export function cacheLabel(mode: string): string {
   return CACHE_LABELS[mode] ?? mode;
 }
 
+// 스트림 종료 사유(stagehand_calls.stream_status = LLM finishReason) → 한국어. 출처: gateway finishReason
+// (stop/length/tool_call/content_filter) + 런타임 관측값(done=정상, error/aborted=중단). 미매핑은 raw 폴백.
+const STREAM_STATUS_LABELS: Record<string, string> = {
+  stop: "정상 완료", done: "정상 완료", tool_call: "도구 호출",
+  length: "길이 한도로 잘림", content_filter: "콘텐츠 필터 차단", error: "스트림 오류", aborted: "스트림 중단",
+};
+export function streamStatusLabel(status: string): string {
+  return STREAM_STATUS_LABELS[status] ?? status;
+}
+// 정상 종료(stop/done/tool_call)가 아닌 stream_status = 관찰된 비정상 종료 신호(잘림/필터/오류). 자동 복구 가독성에 노출.
+export function isStreamWarning(status: string | null): boolean {
+  return status !== null && status !== "stop" && status !== "done" && status !== "tool_call";
+}
+
 // 사람 확인 종류 → 한국어. 출처: filters HUMANTASK_KINDS. 미매핑은 raw 폴백.
 const KIND_LABELS: Record<string, string> = {
   approval: "승인", validation: "검증", exception: "예외 처리", captcha: "보안문자", mfa: "추가 인증",

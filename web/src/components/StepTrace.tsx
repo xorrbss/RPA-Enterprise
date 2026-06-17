@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
 import { useApiClient } from "../api/context";
-import { StatusBadge, actionLabel, cacheLabel } from "./badges";
+import { StatusBadge, actionLabel, cacheLabel, isStreamWarning, streamStatusLabel } from "./badges";
 import { ErrorState, Loading } from "./states";
 import { ArtifactRef } from "./ArtifactLookup";
 import type { StagehandCallSummary, StepSummary } from "../api/types";
@@ -57,6 +57,7 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
           </div>
         )}
       </div>
+      {items.length > 0 && <SelfHealSummary items={items} />}
       {q.isLoading ? (
         <Loading />
       ) : q.isError ? (
@@ -70,6 +71,27 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
       ) : (
         <StepTable items={items} maxDuration={maxDuration} />
       )}
+    </div>
+  );
+}
+
+// 자동 복구 요약(P0-2 "한눈에") — 단계 기록에서 관찰된 복구 신호만 집계한다(데이터에 없는 값 창작 금지):
+//   다시 시도(attempt>0) · 캐시된 계획 재생(hit + LLM 호출 0) · 비정상 응답 종료(stream_status 비-정상).
+// 신호가 하나도 없으면 배너를 그리지 않는다(없는 복구를 있는 척하지 않음). 범위 라벨로 출처를 명시한다.
+// 주의: 세션 재사용(로그인 스킵)은 run 레벨 seam이라 단계 신호가 없다 — 짧은 트레이스(로그인 단계 부재) 자체가 증거이며
+//   여기서 별도 배지로 단정하지 않는다(조용한 false 금지).
+function SelfHealSummary({ items }: { items: readonly StepSummary[] }): JSX.Element | null {
+  const retries = items.filter((s) => s.attempt > 0).length;
+  const cacheReplays = items.filter((s) => s.cache_mode === "hit" && s.stagehand_calls.length === 0).length;
+  const streamWarnings = items.filter((s) => s.stagehand_calls.some((c) => isStreamWarning(c.stream_status))).length;
+  const signals: string[] = [];
+  if (retries > 0) signals.push(`다시 시도 ${retries}개 단계`);
+  if (cacheReplays > 0) signals.push(`캐시 계획 재생 ${cacheReplays}개 단계`);
+  if (streamWarnings > 0) signals.push(`비정상 응답 종료 ${streamWarnings}건`);
+  if (signals.length === 0) return null;
+  return (
+    <div className="badge amber" role="status" style={{ display: "block", margin: "8px 0 0", whiteSpace: "normal" }}>
+      이 실행의 단계 기록에서 관찰된 자동 복구 — {signals.join(" · ")}
     </div>
   );
 }
@@ -133,6 +155,8 @@ function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary
   const anyTok = calls.some((c) => c.input_tokens !== null || c.output_tokens !== null);
   const cost = formatCost(calls);
   const single = calls.length === 1 ? calls[0]! : null;
+  // 비정상 응답 종료(잘림/필터/오류) — 관찰된 stream_status 만, 정상 종료는 표기하지 않는다(노이즈 방지·창작 금지).
+  const warnings = [...new Set(calls.map((c) => c.stream_status).filter((s): s is string => isStreamWarning(s)))];
   return (
     <div className="step-line">
       <span className="subtle">AI 판단</span>
@@ -140,6 +164,9 @@ function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary
       {anyTok && <span className="subtle">입력 {tokenText(calls.map((c) => c.input_tokens))} · 출력 {tokenText(calls.map((c) => c.output_tokens))} 토큰</span>}
       {cost !== null && <span className="subtle">{cost}</span>}
       {single?.ttfb_ms != null && <span className="subtle">첫응답 {single.ttfb_ms}ms</span>}
+      {warnings.map((w) => (
+        <span key={w} className="badge amber" title="응답이 정상 종료되지 않았습니다(관찰된 신호).">응답 {streamStatusLabel(w)}</span>
+      ))}
       <span className="badge muted">{cacheLabel(cacheMode)}</span>
     </div>
   );
