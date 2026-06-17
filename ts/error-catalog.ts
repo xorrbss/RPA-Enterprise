@@ -62,6 +62,8 @@ export type ErrorCode =
   | "CONTROL_PLANE_INTERNAL_ERROR"
   // --- Human Task ---
   | "HUMAN_TASK_EXPIRED"
+  // --- Approval (건별 결재 decide) ---
+  | "APPROVAL_ALREADY_DECIDED"          // (tenant, source_run, doc_ref) 이미 결재됨 → 이중결재 방지(409, 비-retryable)
   // --- Queue ---
   | "WORKITEM_CHECKOUT_CONFLICT"
   | "DEAD_LETTER";
@@ -133,6 +135,8 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   CONTROL_PLANE_INTERNAL_ERROR: { retryable: false, httpStatus: 500, exceptionClass: "system",   userMessage: "내부 오류가 발생했습니다.", operatorAction: "control-plane error log와 correlation_id 확인" },
 
   HUMAN_TASK_EXPIRED:          { retryable: false, httpStatus: 410, exceptionClass: "business", userMessage: "처리 기한 만료.", operatorAction: "재처리 또는 escalate" },
+
+  APPROVAL_ALREADY_DECIDED:    { retryable: false, httpStatus: 409, exceptionClass: "none",     userMessage: "이미 처리된 결재입니다.", operatorAction: "결재 상태 확인(이중결재 방지)" },
 
   WORKITEM_CHECKOUT_CONFLICT:  { retryable: true,  httpStatus: 409, exceptionClass: "system",   userMessage: "재시도됩니다.", operatorAction: "unique_reference 중복 확인" },
   // [note] DEAD_LETTER는 HTTP 에러 응답이 아니라 상태 통지(이벤트/operatorAction)용 코드 — httpStatus 200은 "API 오류 아님"을 뜻한다. ApiError로 반환하지 않는다.

@@ -84,6 +84,7 @@ export type OperationId =
   | "approveSite"
   | "createSite"
   | "updateSite"
+  | "decideApproval"
   | "captureSession";
 
 export interface BoundaryValidationOk<T = unknown> {

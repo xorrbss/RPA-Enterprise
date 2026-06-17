@@ -192,6 +192,7 @@ const RBAC_ALLOWED_ROLES = {
   "site.approve": ["approver", "admin"],
   "site.create": ["operator", "reviewer", "approver", "admin"],
   "site.update": ["operator", "reviewer", "approver", "admin"],
+  "approval.decide": ["approver", "admin"],
   "session.capture": ["operator", "reviewer", "approver", "admin"],
   "secret.resolve": ["admin"],
   "connector.enable": ["admin"],

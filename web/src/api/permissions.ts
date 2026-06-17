@@ -16,13 +16,13 @@ const ROLE_ACTIONS: Readonly<Record<string, readonly string[]>> = {
     "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "site.update", "session.capture", "scenario.create", "scenario.update",
     "human_task.assign", "human_task.start", "human_task.escalate",
     "human_task.resolve.validation", "human_task.resolve.exception", "human_task.resolve.captcha", "human_task.resolve.mfa", "human_task.resolve.approval",
-    "site.approve",
+    "site.approve", "approval.decide",
   ],
   admin: [
     "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "site.update", "session.capture", "scenario.create", "scenario.update", "scenario.promote",
     "human_task.assign", "human_task.start", "human_task.escalate",
     "human_task.resolve.validation", "human_task.resolve.exception", "human_task.resolve.captcha", "human_task.resolve.mfa", "human_task.resolve.approval",
-    "site.approve", "gateway_policy.edit",
+    "site.approve", "approval.decide", "gateway_policy.edit",
   ],
 };
 
