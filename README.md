@@ -685,3 +685,25 @@
 | 백엔드 | `reads.ts`: `GET /v1/runs/{id}/steps` 라우트(run.read·RLS·시간 오름차순 커서). SELECT 화이트리스트 + `stagehand_calls` LATERAL json_agg 요약. exception은 `{class,code}`만(message/evidenceRefs 미노출). `app/test/api-run-steps.int.ts`(18 checks, temp PG) |
 | web | `client.listRunSteps` + `StepSummary`/`StagehandCallSummary` 타입 + RunTrace 상세에 `RunStepsTrace` 패널(폴링, 노드/동작/상태/캐시/소요/LLM/artifact ID). artifact ID는 기존 '산출물 조회'(#129) 입력용 |
 | 비도입 | step 민감 본문 인라인 노출·redaction 게이트·DDL `redaction_status` · SSE/WS 실시간 전송 계약 · run_steps 필터(status 등) — 후속/v2 |
+
+## v2.22 패치 로그 (UX 감사 후속 — artifact 목록 read 표면 추가: `GET /v1/runs/{id}/artifacts`)
+
+> **read-surface 비대칭 해소**(데이터·RLS·RBAC 완비, 조회 표면만 부재였음). 계약 조사 wf로 확정: 다른 모든 컬렉션
+> (runs/scenarios/human-tasks/workitems/dlq/sites)은 list 행이 있는데 **artifacts만 단건 `GET /v1/artifacts/{id}`만
+> 노출**(목록 침묵 부재). 데이터 모델은 이미 준비됨 — `artifacts.run_id`(runs FK)+`idx_artifacts_run`, RLS
+> `artifacts_visible_isolation`(redacted/not_required·미삭제·비격리·동tenant FOR SELECT), `artifact.read` RBAC.
+> **결정(오너 2026-06-17, 둘 다 권고 채택)**: ① URL = run 하위 컬렉션 `GET /v1/runs/{id}/artifacts`(#133 steps 동형).
+> ② **metadata-only** — `artifact_id`/`type`/`redaction_status`/`retention_until`/`legal_hold`/`created_at`만; `content`·
+> `object_ref`·**`sha256`(원본 fingerprint, security-contracts §11)** 미노출. 본문 열람은 단건 by-id(§10 audit 게이트)로만.
+> **핵심**: 목록은 object content를 read하지 않아 disclosure 경로가 아니므로 **§10 audit boundary를 트리거하지 않음**
+> (audit는 본문 disclosure 전용; reads.ts recordDecision은 artifactStore.get 성공 후에만). RLS가 가시성 강제 →
+> 별도 redaction/audit 게이트 불요, `artifact.read`만으로 충분. **신규 추상화·DDL·payload 발명 0**(listRuns/steps 골격 복제).
+> **검증: 통합테스트 18 checks green(temp PG15 non-bypass; RLS 가시성 2가시/3비가시·민감 마커 9종 미노출·커서·cross-tenant·404)
+> + contract:lint·codegen consistency·web typecheck/test/build green.**
+
+| 항목 | 조치 |
+|---|---|
+| 계약 | `api-surface.md` §5: `GET /v1/runs/{run_id}/artifacts` 행 + 각주⁵(metadata-only shape·audit 미트리거·RLS·`artifact.read`). README v2.22 |
+| 백엔드 | `reads.ts`: `GET /v1/runs/{id}/artifacts`(artifact.read·RLS·최신순 커서, listRuns 골격 복제). SELECT 화이트리스트(content/object_ref/sha256 미선택). content read·artifactStore.get 호출 없음 → §10 audit append 불요. `app/test/api-run-artifacts.int.ts`(18 checks) |
+| web | `client.listRunArtifacts` + `RunArtifactItem` 타입 + RunTrace 상세에 artifact 목록 패널(type·상태·보존·artifact ID). ID는 기존 '산출물 조회'(#129) 입력용 |
+| 비도입 | sha256/object_ref/content 목록 노출 · `?run_id=` 쿼리형 URL · orphan(run 없는) artifact 목록 · status 필터 — 후속/오너결정 |
