@@ -6,7 +6,7 @@
   --line: #dce3ea;
   --line-strong: #c5d0dc;
   --text: #1e293b;
-  --muted: #64748b;
+  --muted: #51607a; /* a11y: soft/bg 위 WCAG AA 4.5:1+ (badge.muted·.subtle·nav·th) */
   --soft: #eef3f8;
   --blue: #2563eb;
   --blue-soft: #e8f0ff;
@@ -17,6 +17,11 @@
   --red: #c24141;
   --red-soft: #fdecec;
   --purple: #6d5bd0;
+  /* a11y: 배지 텍스트 전용 잉크 — soft 배경 위 WCAG AA(4.5:1) 충족. brand 색(--green 등)은 아이콘/도트용으로 유지 */
+  --green-ink: #0a7350;
+  --amber-ink: #875200;
+  --red-ink: #a52d2d;
+  --blue-ink: #1d4ed8;
   --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 10px 30px rgba(15, 23, 42, .05);
   --radius: 8px;
   --sidebar: 268px;
@@ -65,11 +70,17 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; }
 tbody tr:hover { background: var(--surface-2); }
 
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-.badge.green { background: var(--green-soft); color: var(--green); }
-.badge.amber { background: var(--amber-soft); color: var(--amber); }
-.badge.red { background: var(--red-soft); color: var(--red); }
-.badge.blue { background: var(--blue-soft); color: var(--blue); }
+.badge.green { background: var(--green-soft); color: var(--green-ink); }
+.badge.amber { background: var(--amber-soft); color: var(--amber-ink); }
+.badge.red { background: var(--red-soft); color: var(--red-ink); }
+.badge.blue { background: var(--blue-soft); color: var(--blue-ink); }
 .badge.muted { background: var(--soft); color: var(--muted); }
+
+/* 목업 이식: muted 라벨(.subtle 23곳 사용처 정의), 테이블 가로 스크롤, monospace */
+.subtle { color: var(--muted); font-size: 12px; }
+.table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; }
+.table-wrap table { min-width: 640px; }
+code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
 
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); cursor: pointer; font-size: 13px; }
 .btn:hover { background: var(--soft); }
@@ -81,3 +92,18 @@ tbody tr:hover { background: var(--surface-2); }
 .error-state .es-icon { background: var(--red-soft); color: var(--red); }
 .empty-state strong, .error-state strong { color: var(--text); font-size: 14px; }
 .skeleton { padding: 24px 16px; color: var(--muted); }
+
+/* 반응형: 좁은 화면에서 고정 사이드바가 콘텐츠를 압박/잘림 방지(목업 @media 적응 이식) */
+@media (max-width: 840px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; }
+  .brand { width: 100%; padding: 4px 8px 8px; }
+  .nav-item { width: auto; flex: 0 1 auto; }
+  .topbar { padding: 12px 14px; flex-wrap: wrap; }
+  .content { padding: 14px; }
+  .panel-head { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 520px) {
+  .nav-item { flex: 1 0 calc(50% - 6px); justify-content: center; }
+  .metrics { grid-template-columns: 1fr; }
+}

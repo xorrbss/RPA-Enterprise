@@ -35,24 +35,26 @@ export function QueryPanel<T>(props: {
         ) : (query.data?.items.length ?? 0) === 0 ? (
           <EmptyState message={emptyMessage} />
         ) : (
-          <table>
-            <thead>
-              <tr>
-                {columns.map((c) => (
-                  <th key={c.header}>{c.header}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(query.data?.items ?? []).map((row) => (
-                <tr key={rowKey(row)}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
                   {columns.map((c) => (
-                    <td key={c.header}>{c.render(row)}</td>
+                    <th key={c.header}>{c.header}</th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {(query.data?.items ?? []).map((row) => (
+                  <tr key={rowKey(row)}>
+                    {columns.map((c) => (
+                      <td key={c.header}>{c.render(row)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         {pager !== undefined && (pager.hasPrev || pager.hasNext) && (
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px", alignItems: "center" }}>
