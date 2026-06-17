@@ -17,7 +17,7 @@ const POLL_MS = 10_000;
 
 // 결재 인박스 — '하이웍스 결재 수집' run이 남긴 아티팩트(결재 목록)를 읽어 구조화 요약 + 목록 표시(읽기 전용).
 // 발견 경로: listScenarios(이름 매칭) → listRuns(scenario_version_id, completed) 최신 → listRunArtifacts → getArtifact.
-// 건별 승인/반려 버튼은 Phase 2에서 추가(approver-게이트 결재 run). 여기까지는 부작용 없음.
+// Phase 2c 부터 approval.decide 권한 시 행별 [결재]/[반려] 버튼 노출(DecideButtons) — 비가역 결재 처리 run 을 스폰(휴먼게이트). 백엔드가 최종 강제.
 export function ApprovalInboxView(): JSX.Element {
   const api = useApiClient();
 
@@ -52,7 +52,7 @@ export function ApprovalInboxView(): JSX.Element {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <p className="subtle" style={{ margin: 0 }}>
-          최근 수집된 하이웍스 결재 목록입니다{latestRun?.as_of ? ` · 기준 ${latestRun.as_of}` : ""}. 건별 승인/반려는 다음 단계에서 제공됩니다.
+          최근 수집된 하이웍스 결재 목록입니다{latestRun?.as_of ? ` · 기준 ${latestRun.as_of}` : ""}. 결재 권한이 있으면 행별로 승인/반려할 수 있습니다.
         </p>
         {recollect}
       </div>

@@ -121,7 +121,9 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   app.decorateRequest("correlationId", "");
   app.decorateRequest("principal", null);
 
-  // 1) correlation — 인증보다 먼저 설정되어 거부 응답에도 상관키가 실린다.
+  // 1) correlation — 인증보다 먼저 설정되어 거부 응답에도 상관키가 실린다(에러 echo 는 클라이언트 헤더를 그대로 — 추적용).
+    //   단 runs.correlation_id 저장(::uuid)은 UUID 만 가능하므로, 비-UUID 헤더의 INSERT-시 22P02→미분류 500 은 저장
+    //   시점(createRunInTx)에서 서버 UUID 로 coerce 해 막는다(echo 와 저장의 관심사 분리, review 후속 "조용한 false 금지").
   app.addHook("onRequest", async (request) => {
     const header = request.headers["x-correlation-id"];
     request.correlationId = typeof header === "string" && header.length > 0 ? header : randomUUID();
@@ -387,6 +389,9 @@ export async function createRunInTx(
 ): Promise<string> {
   const runId = input.runId ?? randomUUID();
   const workitemId = input.workitemId ?? null;
+  // correlation_id 저장 coerce — runs.correlation_id/event envelope 는 uuid(format:uuid). 비-UUID 요청 헤더(에러 echo 엔
+  //   그대로 실리되 추적용)는 저장 시점에 서버 UUID 로 대체해 ::uuid 캐스트 22P02→미분류 500 을 막는다(review 후속).
+  const correlationId = UUID_RE.test(input.correlationId) ? input.correlationId : randomUUID();
   // scenario_version 존재 확인(RLS 스코프). 부재 → IR_SCHEMA_INVALID(FK 위반 500 회피).
   const sv = await client.query(`SELECT 1 FROM scenario_versions WHERE id = $1::uuid`, [input.scenarioVersionId]);
   if (sv.rowCount === 0) {
@@ -428,17 +433,17 @@ export async function createRunInTx(
   await client.query(
     `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, params, as_of, correlation_id, model)
      VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5::jsonb, $6::timestamptz, $7::uuid, $8)`,
-    [runId, input.tenantId, input.scenarioVersionId, workitemId, JSON.stringify(input.params), input.asOf, input.correlationId, resolvedModel],
+    [runId, input.tenantId, input.scenarioVersionId, workitemId, JSON.stringify(input.params), input.asOf, correlationId, resolvedModel],
   );
   await emitOutboxEvent(client, {
     tenantId: input.tenantId,
     eventType: "run.created",
-    correlationId: input.correlationId,
+    correlationId,
     runId,
     idempotencyKey: `${runId}:run.created`,
     retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
   });
-  await enqueuer.enqueueRunClaim(client, { tenantId: input.tenantId, runId, correlationId: input.correlationId });
+  await enqueuer.enqueueRunClaim(client, { tenantId: input.tenantId, runId, correlationId });
   return runId;
 }
 

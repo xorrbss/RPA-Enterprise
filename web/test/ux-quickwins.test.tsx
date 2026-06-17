@@ -171,7 +171,7 @@ describe("UX quick-wins (A)", () => {
     expect(within(nav).getAllByRole("button")).toHaveLength(12); // 그룹화 후에도 전 뷰 유지
   });
 
-  // A6 회귀 가드: 그룹이 11개 뷰를 정확히 한 번씩 덮어야 한다(누락/중복 시 nav에서 사라짐).
+  // A6 회귀 가드: 그룹이 12개 뷰를 정확히 한 번씩 덮어야 한다(누락/중복 시 nav에서 사라짐).
   test("A6: NAV_GROUPS가 VIEW_KEYS를 정확히 분할", () => {
     const grouped = NAV_GROUPS.flatMap((g) => g.keys);
     expect([...grouped].sort()).toEqual([...VIEW_KEYS].sort());

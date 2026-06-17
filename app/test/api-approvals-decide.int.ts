@@ -38,6 +38,7 @@ const SOURCE_RUN_B = "70000000-0000-0000-0000-0000000000b3";
 const DOC_A = "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/984261";
 const DOC_B = "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/984262";
 const DOC_C = "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/984263";
+const DOC_D = "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/984264";
 
 const SECRET = new TextEncoder().encode("approvals-decide-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -196,9 +197,23 @@ async function main(): Promise<void> {
       const noKey = await post(approver, undefined, { source_run_id: SOURCE_RUN_A, doc_ref: DOC_A, decision: "approve" });
       check("missing Idempotency-Key → 422", noKey.statusCode === 422 && noKey.json().code === "IR_SCHEMA_INVALID", noKey.body);
 
-      // 최종 불변: 결정 3 / 스폰 3 (approve DOC_A + reject DOC_B + 비-UUID approve DOC_C; 거부·중복·404 는 스폰 0).
+      // 8b) approve + reason → 422(닫힌 shape — reason_not_allowed_for_approve), 스폰 없음.
+      const approveReason = await post(approver, "k-ar", { source_run_id: SOURCE_RUN_A, doc_ref: DOC_D, decision: "approve", reason: "불필요" });
+      check("approve + reason → 422 (reason_not_allowed_for_approve)", approveReason.statusCode === 422 && approveReason.json().code === "IR_SCHEMA_INVALID", approveReason.body);
+
+      // 8c) 비-UUID x-correlation-id 헤더 → 22P02 없이 201(서버 생성 UUID 폴백). createRunInTx ::uuid 캐스트 회귀 가드.
+      const badCorr = await app.inject({
+        method: "POST",
+        url: "/v1/approvals/decide",
+        headers: { authorization: `Bearer ${approver}`, "idempotency-key": "k-corr", "x-correlation-id": "not-a-uuid-header" },
+        payload: { source_run_id: SOURCE_RUN_A, doc_ref: DOC_D, decision: "approve" },
+      });
+      check("비-UUID x-correlation-id → 201 (22P02→500 없음)", badCorr.statusCode === 201 && typeof badCorr.json().spawned_run_id === "string", badCorr.body);
+
+      // 최종 불변: 결정 4 / 스폰 4 (approve DOC_A + reject DOC_B + 비-UUID approve DOC_C + bad-corr approve DOC_D;
+      //   거부(viewer/operator/approve+reason)·중복·404 는 스폰 0).
       const cFinal = await counts(pool);
-      check("최종: 결정 3 / DECIDE run 3 (거부·중복·404 스폰 0)", cFinal.decisions === 3 && cFinal.spawned === 3, JSON.stringify(cFinal));
+      check("최종: 결정 4 / DECIDE run 4 (거부·중복·404 스폰 0)", cFinal.decisions === 4 && cFinal.spawned === 4, JSON.stringify(cFinal));
     } finally {
       await app.close();
     }

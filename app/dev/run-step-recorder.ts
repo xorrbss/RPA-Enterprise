@@ -48,9 +48,18 @@ export class RunStepRecordingExecutor implements ExecutorPlugin {
 
   async execute(stepId: string, action: unknown, ctx: RunContext): Promise<StepResult> {
     await this.recordStep(stepId, action, ctx); // gateway sink 의 artifact FK 가 참조할 행을 선기록('started').
-    const result = await this.inner.execute(stepId, action, ctx);
-    await this.finalizeStep(stepId, ctx, result); // 종결 상태/소요 반영(완료 run 트레이스가 영구 'started' 로 남지 않게).
-    return result;
+    const startMs = Date.now();
+    try {
+      const result = await this.inner.execute(stepId, action, ctx);
+      await this.finalizeStep(stepId, ctx, result.status, result.timings.durationMs); // 반환 경로 종결.
+      return result;
+    } catch (e) {
+      // throw 경로(valueRef 미해소·CDP 적용 실패·RUN_ABORTED 등 — GatewayError 만 StepResult 로 환원, 나머진 전파)도
+      //   종결한다. 안 그러면 행이 영구 'started' 로 잔류(F5 의 return-only 보강 누락, review 후속). 보수적 failed_system
+      //   으로 종결 후 원 예외 재throw(전파 의미 보존). 상위(interpreter→driver→run-loop)는 throw 를 그대로 흘린다.
+      await this.finalizeStep(stepId, ctx, "failed_system", Date.now() - startMs);
+      throw e;
+    }
   }
 
   /** run_steps 선행 기록(멱등). 같은 (tenant,run,step,attempt) 중복 INSERT 는 DO NOTHING(재시도/재진입 안전). */
@@ -70,15 +79,15 @@ export class RunStepRecordingExecutor implements ExecutorPlugin {
     });
   }
 
-  /** inner 실행 후 'started' 행을 종결 상태/소요로 갱신(멱등: status='started' 가드). 미기록 스텝(비-artifact)은 0행 영향. */
-  private async finalizeStep(stepId: string, ctx: RunContext, result: StepResult): Promise<void> {
-    if (!STEP_STATUSES.has(result.status)) return; // 미지원 상태값은 갱신 안 함(CHECK 위반 회피 — 조용히 'started' 유지보다 안전).
+  /** 'started' 행을 종결 상태/소요로 갱신(멱등: status='started' 가드). 반환·throw 양쪽에서 호출. 미기록 스텝(비-artifact)은 0행 영향. */
+  private async finalizeStep(stepId: string, ctx: RunContext, status: string, durationMs: number): Promise<void> {
+    if (!STEP_STATUSES.has(status)) return; // 미지원 상태값은 갱신 안 함(CHECK 위반 회피 — 조용히 'started' 유지보다 안전).
     await withTenantTx(this.pool, ctx.tenantId, async (c) => {
       await c.query(
         `UPDATE run_steps
             SET status = $5, ended_at = now(), duration_ms = $6::int
           WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND step_id = $3 AND attempt = $4::int AND status = 'started'`,
-        [ctx.tenantId, ctx.runId, stepId, ctx.attempt, result.status, result.timings.durationMs],
+        [ctx.tenantId, ctx.runId, stepId, ctx.attempt, status, durationMs],
       );
     });
   }

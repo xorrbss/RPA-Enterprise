@@ -73,6 +73,10 @@ function parseDecideBody(raw: unknown): DecideBody {
     // 반려는 사유 필수(미입력 반려 차단 — 결재 처리 run 이 미입력/환각 사유로 제출하지 않게 엔드포인트가 강제).
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "reason_required_for_reject" });
   }
+  if (decision === "approve" && reason !== undefined) {
+    // approve 는 사유 없음(닫힌 shape — reject⇒reason 강제와 대칭; migration: approve면 reason NULL 불변식 정합).
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "reason_not_allowed_for_approve" });
+  }
   return { sourceRunId, docRef, decision, reason };
 }
 
