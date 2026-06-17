@@ -67,17 +67,14 @@ export class DevPlaintextSessionEncryptor implements SessionEncryptor {
   }
 }
 
-// TODO: [BLOCKED]
-//   violated: 가정 금지 / 편법 금지 — prod 봉투암호화 원시함수가 레포에 없다(at-rest 암호화 0; HMAC sign + SHA-256
-//     hash-chain 뿐, security-contracts.md §5). 세션 쿠키는 인증 자료라 평문 at-rest 금지.
-//   reason: ① KmsEnvelopeSessionEncryptor(kind:'kms', 데이터키 봉투암호화) 미구현. ② SecretAccessRequest.purpose
-//     (ts/security-middleware-contract.ts) 닫힌 union 에 'browser_session' 미추가 → prod decrypt 경계가 RESOLVE_MATRIX
-//     권한을 못 받음. 둘 다 계약/KMS 인프라 의존이라 추측 구현 금지.
-//   required_change: ① KmsEnvelopeSessionEncryptor 도입(ciphertext+enc_kid 는 DB, 키는 KMS/SecretStore — resume-token
-//     kid 회전 패턴). ② SecretAccessRequest.purpose 에 'browser_session' 추가 + VaultSecretStoreBoundary RESOLVE_MATRIX
-//     (runtime-worker/browser-worker) 매핑(‘executor’ 재사용 금지 — 자격증명/세션 분리) + README 패치로그. 둘이 함께
-//     land 해야 prod 세션 재사용 가능. 그 전까지 prod 는 dev-plaintext store 를 거부(아래 생성자 fail-closed) →
-//     prod 는 세션을 재사용하지 않는다(안전한 성능저하, 누출 아님).
+// PROD 전제(이번 증분 미구현 — dev 만 동작. 릴리스 블로커 아님: 아래 생성자 fail-closed 가 prod 평문 at-rest 를
+//   구조적으로 차단하므로, prod 는 두 전제가 충족되기 전까지 세션을 재사용하지 않는다 = 안전한 성능저하, 누출 아님):
+//   ① KmsEnvelopeSessionEncryptor(kind:'kms', 데이터키 봉투암호화) — 레포에 at-rest 암호화 원시함수가 없다(HMAC sign +
+//      SHA-256 hash-chain 뿐, security-contracts.md §5). 세션 쿠키는 인증 자료라 평문 at-rest 금지. ciphertext+enc_kid 는
+//      DB, 키는 KMS/SecretStore(resume-token kid 회전 패턴).
+//   ② SecretAccessRequest.purpose(ts/security-middleware-contract.ts) 닫힌 union 에 'browser_session' 추가 +
+//      VaultSecretStoreBoundary RESOLVE_MATRIX(runtime-worker/browser-worker) 매핑('executor' 재사용 금지 — 자격증명/세션
+//      분리) + README 패치로그. ①②가 함께 land 해야 prod 세션 재사용 가능.
 export interface PgBrowserSessionStoreDeps {
   pool: Pool;
   encryptor: SessionEncryptor;

@@ -133,8 +133,9 @@ export class StagehandDomExecutor implements ExecutorPlugin {
   ): Promise<StepResult> {
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
-    const domSnapshot = await this.snapshotDom(this.sessions.forLease(ctx.leaseId));
-    const req = this.buildRequest(stepId, a, ctx, domSnapshot);
+    // read-only(observe/extract)는 게이트웨이 전용 — CDP 세션(forLease) 미경유(architecture: extract 는 게이트웨이 호출).
+    //   원문 DOM 동봉은 mutation 을 적용하는 act 경로에만(executeAct, 이미 forLease 보유). dom-executor-factory 계약.
+    const req = this.buildRequest(stepId, a, ctx);
     const callIds = [String(req.idempotencyKey)];
 
     let res: LLMResponse;
