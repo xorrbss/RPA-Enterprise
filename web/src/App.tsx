@@ -1,3 +1,4 @@
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
 import { TokenGate } from "./components/TokenGate";
 import { useHashRoute, type ViewKey } from "./router";
@@ -47,7 +48,10 @@ export function App(): JSX.Element {
   const view = useHashRoute();
   return (
     <TokenGate>
-      <Layout view={view}>{renderView(view)}</Layout>
+      <Layout view={view}>
+        {/* view 단위 key: 한 화면의 렌더 예외가 셸(내비/탑바)을 백지로 만들지 않고, 화면 이동 시 초기화 */}
+        <ErrorBoundary key={view}>{renderView(view)}</ErrorBoundary>
+      </Layout>
     </TokenGate>
   );
 }
