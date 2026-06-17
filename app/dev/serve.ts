@@ -25,7 +25,7 @@ import type { RunEnqueuer } from "../src/api/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { compileScenario } from "../src/api/compile-pipeline";
-import { startRunLoop, type RunLoop } from "./run-loop";
+import { startRunLoop, DEV_BROWSER_IDENTITY_ID, type RunLoop } from "./run-loop";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -48,28 +48,27 @@ const FIXTURE_HTML = `<!doctype html><html lang="ko"><head><meta charset="utf-8"
 // .user-menu + .review-item 들을 DOM 에 주입 → 재-observe 시 authenticatedWhen/reviews_visible=true. 자격증명은 실제
 // 검증하지 않는다(픽스처) — 비어있지 않으면 로그인 성공 처리. (실 시크릿은 SecretStore→CDP fill 로만 흐른다.)
 const LOGIN_FIXTURE_PATH = "/fixture/login";
+// 쿠키 인식 픽스처(세션 재사용 방식 A). 로드 시 document.cookie 의 rpa_sess=1 유무로 분기:
+//  - 쿠키 있음(복원됨) → 인증 DOM(.user-menu + .review-item) 렌더, 로그인 폼 없음 → login_required=false, reviews_visible=true.
+//  - 쿠키 없음(cold) → 로그인 폼(.login-form) 렌더 → login_required=true. 로그인 성공 시 rpa_sess 쿠키를 set(다음 run 캡처 대상).
+// driver 가 navigate 이전에 저장된 쿠키를 CDP 로 주입하므로, warm run 은 폼 없이 인증 상태로 진입한다(로그인 스킵 증명).
 const LOGIN_FIXTURE_HTML = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>그룹웨어 로그인</title></head>
 <body>
 <header role="banner"><h1>그룹웨어</h1></header>
-<main role="main" id="app">
-<form class="login-form" id="login-form" onsubmit="return doLogin(event)">
-<label>아이디 <input id="username" name="username" type="text" autocomplete="username"></label>
-<label>비밀번호 <input id="password" name="password" type="password" autocomplete="current-password"></label>
-<button id="login-submit" type="submit">로그인</button>
-</form>
-</main>
+<main role="main" id="app"></main>
 <footer role="contentinfo"><small>©</small></footer>
 <script>
+function authedHtml(){return '<div class="user-menu">내 계정</div><section class="reviews"><article class="review-item">받은편지함 12</article><article class="review-item">결재 대기 3</article><article class="review-item">오늘 일정 5</article></section>';}
+function loginHtml(){return '<form class="login-form" id="login-form" onsubmit="return doLogin(event)"><label>아이디 <input id="username" name="username" type="text" autocomplete="username"></label><label>비밀번호 <input id="password" name="password" type="password" autocomplete="current-password"></label><button id="login-submit" type="submit">로그인</button></form>';}
+function hasSession(){return /(^|;\\s*)rpa_sess=1(;|$)/.test(document.cookie);}
+function render(){document.getElementById('app').innerHTML = hasSession() ? authedHtml() : loginHtml();}
 function doLogin(e){
   e.preventDefault();
   var u=document.getElementById('username').value, p=document.getElementById('password').value;
-  if(u && p){
-    var f=document.getElementById('login-form'); if(f&&f.parentNode){f.parentNode.removeChild(f);}
-    var app=document.getElementById('app');
-    app.innerHTML='<div class="user-menu">내 계정</div><section class="reviews"><article class="review-item">받은편지함 12</article><article class="review-item">결재 대기 3</article><article class="review-item">오늘 일정 5</article></section>';
-  }
+  if(u && p){ document.cookie='rpa_sess=1; path=/'; render(); }
   return false;
 }
+render();
 </script>
 </body></html>`;
 
@@ -86,6 +85,8 @@ const DEMO_SVER = "70000000-0000-0000-0000-00000000d202";
 const DEMO_SITE = "70000000-0000-0000-0000-00000000d203";
 const LOGIN_SCEN = "70000000-0000-0000-0000-00000000d301";
 const LOGIN_SVER = "70000000-0000-0000-0000-00000000d302";
+const SESS_SCEN = "70000000-0000-0000-0000-00000000d401";
+const SESS_SVER = "70000000-0000-0000-0000-00000000d402";
 // 데모 사이트 프로파일의 PageState 산출 규칙(마커 없는 /fixture/reviews 셀렉터 매핑) — page_state_selectors 로 영속.
 const DEMO_PAGE_STATE_SELECTORS = {
   authenticatedWhen: { selector: ".user-menu" },
@@ -196,6 +197,11 @@ async function seed(pool: Pool): Promise<void> {
          VALUES ($1,$2,'데모 사이트(리뷰)',$3,$4::jsonb)`,
         [DEMO_SITE, TENANT, `http://127.0.0.1:${PORT}`, JSON.stringify(DEMO_PAGE_STATE_SELECTORS)],
       );
+      // dev 브라우저 정체성 — 세션 재사용(browser_sessions) 의 browser_identity_id FK 대상. run-loop 가 이 id 를 ClaimedRun 에 주입.
+      await c.query(
+        `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version) VALUES ($1,$2,$3,'dev-identity',1)`,
+        [DEV_BROWSER_IDENTITY_ID, TENANT, DEMO_SITE],
+      );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'데모 — 리뷰 수집(실행 가능)')`, [DEMO_SCEN, TENANT]);
       await c.query(
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
@@ -280,6 +286,91 @@ async function seed(pool: Pool): Promise<void> {
       } else {
         console.error("LOGIN scenario compile FAILED:", JSON.stringify(login));
       }
+
+      // 세션 재사용(방식 A) 데모: 로그인 서브플로를 precheck(observe)+on[] 으로 **게이트**한다(LOGIN_SVER 는 login 노드가
+      // observe 전에 next-체인이라 스킵 증명 불가). warm(쿠키 복원)이면 precheck 에서 reviews_visible→collect 로 바로 가
+      // 로그인 노드(fill_user/fill_pw/submit)를 건너뛴다. cold 면 login_required→로그인 서브플로→recheck→collect.
+      const sess = compileScenario(
+        {
+          meta: { name: "그룹웨어 세션 재사용 데모(실행 가능)", version: 1 },
+          assets: ["login.username", "login.password"],
+          start: "open",
+          nodes: {
+            open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "precheck" },
+            precheck: {
+              what: [{ action: "observe" }],
+              on: [
+                { when: "flags.reviews_visible", target: "collect", priority: 2 }, // 이미 인증(세션 복원됨) → 로그인 스킵
+                { when: "flags.login_required", target: "fill_user", priority: 1 }, // 미인증 → 로그인 서브플로
+              ],
+            },
+            fill_user: {
+              what: [
+                {
+                  action: "act",
+                  instruction:
+                    '로그인 폼의 아이디(username) 입력 필드를 채우는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"fill","selector":"<아이디 입력칸 CSS 셀렉터>"}',
+                  vars: ["login.username"],
+                },
+              ],
+              next: "fill_pw",
+            },
+            fill_pw: {
+              what: [
+                {
+                  action: "act",
+                  instruction:
+                    '로그인 폼의 비밀번호(password) 입력 필드를 채우는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"fill","selector":"<비밀번호 입력칸 CSS 셀렉터>"}',
+                  vars: ["login.password"],
+                  sensitive: true,
+                },
+              ],
+              next: "submit",
+            },
+            submit: {
+              what: [
+                {
+                  action: "act",
+                  instruction:
+                    '로그인 제출 버튼을 클릭하는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"click","selector":"<로그인 버튼 CSS 셀렉터>"}',
+                },
+              ],
+              next: "recheck",
+            },
+            recheck: {
+              what: [{ action: "observe" }],
+              on: [
+                { when: "flags.reviews_visible", target: "collect", priority: 2 },
+                { when: "flags.login_required", target: "login_failed", priority: 1 },
+              ],
+            },
+            collect: {
+              what: [
+                {
+                  action: "extract",
+                  instruction:
+                    '로그인 후 보이는 항목들(.review-item)의 텍스트를 추출. 반드시 JSON 으로만 응답: {"rows":[{"text":"..."}]}',
+                  schema_ref: "mail_rows",
+                },
+              ],
+              next: "done",
+            },
+            done: { terminal: "success" },
+            login_failed: { terminal: "fail_business" },
+          },
+        },
+        {},
+      );
+      if (sess.ok) {
+        await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'그룹웨어 세션 재사용 데모(실행 가능)')`, [SESS_SCEN, TENANT]);
+        await c.query(
+          `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+           VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+          [SESS_SVER, TENANT, SESS_SCEN, JSON.stringify(sess.ir), sess.compiledAst],
+        );
+      } else {
+        console.error("SESSION-REUSE scenario compile FAILED:", JSON.stringify(sess));
+      }
     }
   });
 
@@ -318,18 +409,21 @@ async function seed(pool: Pool): Promise<void> {
     ),
   );
 
-  // 실행 가능 로그인 run: queued + entry_url(/fixture/login). run-loop가 Codex dom 실행기로 act(fill 자격증명)→
-  // submit→observe(authenticatedWhen)→extract 까지 구동(자격증명은 SecretStore→CDP fill 로만; LLM 미경유).
+  // (LOGIN_SVER 데모 시나리오는 콘솔 참조용으로 시드돼 있으나 auto-run 하지 않는다 — SESS_SVER 와 세션 키
+  //  (tenant/site/bid)를 공유해 먼저 캡처하면 아래 세션 재사용 cold 증명을 오염시키기 때문. 로그인 경로는 d8 cold 가 검증.)
+
+  // 세션 재사용 cold-start run(Run 1): 저장된 세션 없음 → precheck 에서 login_required → 로그인 서브플로 → 성공 후 캡처.
+  // 이후 warm run(API 생성)은 복원으로 로그인 스킵. (게이트 시나리오 SESS_SVER)
   await withTenantTx(pool, TENANT, (c) =>
     c.query(
       `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, params, as_of, created_at)
        VALUES ($1,$2,$3,'queued',$1,1,$4::jsonb,'2026-06-15T00:00:00Z',$5::timestamptz)`,
       [
-        "71000000-0000-0000-0000-0000000000d7",
+        "71000000-0000-0000-0000-0000000000d8",
         TENANT,
-        LOGIN_SVER,
+        SESS_SVER,
         JSON.stringify({ entry_url: `http://127.0.0.1:${PORT}${LOGIN_FIXTURE_PATH}` }),
-        ts(7),
+        ts(8),
       ],
     ),
   );

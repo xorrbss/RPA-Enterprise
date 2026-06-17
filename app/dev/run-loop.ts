@@ -34,8 +34,12 @@ import { SafeCapabilityGate } from "../src/gateway/capability-gate";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import { VaultSecretStoreBoundary } from "../src/secrets/vault-secret-store-boundary";
 import { ContractDurableSecurityAuditWriter, FakeSecretStore, InMemoryImmutableAuditLog } from "../../security/compliance-scaffold";
+import { DevPlaintextSessionEncryptor, PgBrowserSessionStore } from "../src/runtime/browser-session-store";
 
 const WORKER_ID = "9a000000-0000-0000-0000-0000000000df";
+// dev 브라우저 정체성(실 UUID) — browser_sessions PK/FK 가 uuid + browser_identities 행을 요구하므로 serve.ts 가
+// 이 id 로 browser_identities 를 시드한다(세션 재사용 키의 browser_identity_id). leaseId/networkPolicyId 는 DB 미조회라 리터럴 유지.
+export const DEV_BROWSER_IDENTITY_ID = "9b000000-0000-0000-0000-0000000000b1";
 
 // dom 실행기 cfg(run-loop 전역 — 캐시 미주입(bypass)이라 scenarioVersionId 는 cacheKey 전용으로 미사용; 정적 placeholder).
 const DOM_CFG = {
@@ -90,6 +94,14 @@ function buildDevSecretBoundary(): VaultSecretStoreBoundary {
     store: new FakeSecretStore(seed),
     audit: new ContractDurableSecurityAuditWriter(new InMemoryImmutableAuditLog()),
   });
+}
+
+/**
+ * dev 세션 스토어 — browser_sessions 영속(방식 A). dev-plaintext 암호화기 + 명시 allowDevPlaintext(prod 차단; 실 KMS
+ * 미구현 TODO:[BLOCKED]). 복원/캡처는 driveClaimedRun 북엔드가 sessionProvider 의 live CdpSession 으로 수행.
+ */
+function buildDevSessionStore(pool: Pool): PgBrowserSessionStore {
+  return new PgBrowserSessionStore({ pool, encryptor: new DevPlaintextSessionEncryptor() }, { allowDevPlaintext: true });
 }
 
 /** 시나리오 IR(meta) assets[] → assetRefs(에셋 키 → SecretRef). POC identity 매핑(키=ref). */
@@ -162,9 +174,11 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
     gateway !== null
       ? new CompositeExecutor(new StagehandDomExecutor(gateway, provider, DOM_CFG, undefined, secrets, executorPrincipal), utility)
       : utility;
+  // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
+  const sessionStore = buildDevSessionStore(pool);
   console.log(
     gateway !== null
-      ? "run-loop: 실 Chrome + Codex dom 실행기 활성(act/observe/extract→LLM; 자격증명 fill→SecretStore 주입)."
+      ? "run-loop: 실 Chrome + Codex dom 실행기 활성(act/observe/extract→LLM; 자격증명 fill→SecretStore 주입; 세션 재사용 활성)."
       : "run-loop: 실 Chrome utility 실행기만 활성(CODEX_* 미설정 → act/extract 시나리오 불가, navigate/observe 만).",
   );
 
@@ -223,12 +237,12 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
             correlationId: next.correlation_id,
             leaseId: "dev-lease",
             siteProfileId: resolved.siteProfileId,
-            browserIdentityId: "dev-bid",
+            browserIdentityId: DEV_BROWSER_IDENTITY_ID,
             networkPolicyId: "dev-np",
             params,
             assetRefs: deriveAssetRefs(next.ir), // meta.assets → 자격증명 fill 의 SecretRef 바인딩
           },
-          { pool, executor, resolver, workerId: WORKER_ID },
+          { pool, executor, resolver, workerId: WORKER_ID, sessionProvider: provider, sessionStore },
         );
         console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
       } catch (e) {
