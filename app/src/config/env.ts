@@ -134,3 +134,82 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
     graphilePollIntervalMs: num("GRAPHILE_POLL_INTERVAL_MS", 2000),
   };
 }
+
+/**
+ * In-process LLM Gateway config for the worker (release-decisions D8-A16, owner-ratified).
+ *
+ * Secret-sourcing (NOT Vault, mirrors the JWT_HS256_SECRET gap): the D8-A12 least-privilege matrix defines
+ * no SecretRef purpose for a raw LLM provider API key, so CODEX_* come from env. Object store = FsObjectStore
+ * (GATEWAY_ARTIFACT_DIR) because the worker identity is not authorized for the `object_store` purpose
+ * (artifact-lifecycle only). Operational knobs are ops-defaults §4/§6 fixed constants (per-tenant override is
+ * gateway_policies, not entrypoint env); only deploy-varying provider facts + the artifact dir are env.
+ */
+export interface GatewayConfig {
+  readonly codexBaseUrl: string;
+  /** LLM provider API key — secret (env-sourced per D8-A16; never logged). */
+  readonly codexApiKey: string;
+  readonly codexModel: string;
+  /** capabilities.maxContextTokens — conservative default until a live capability PoC confirms (D5 §19). */
+  readonly codexMaxContextTokens: number;
+  /** Per-1k token price (USD). 0 (default) = cost cap inactive, output-token cap still enforced (adapter §). */
+  readonly pricePer1kInputUsd: number;
+  readonly pricePer1kOutputUsd: number;
+  readonly idleTimeoutMs: number;
+  readonly wallTimeoutMs: number;
+  readonly retryMax: number;
+  readonly fallbackAttempts: number;
+  readonly repairAttempts: number;
+  /** FsObjectStore root for gateway output artifacts (D8-A16: FS, not S3, in v1). */
+  readonly artifactDir: string;
+  readonly artifactRetentionDays: number;
+  readonly budget: { readonly maxInputTokens: number; readonly maxOutputTokens: number; readonly maxCost: number };
+  readonly promptTemplateVersion: string;
+}
+
+/**
+ * HTTPS-forced URL (no localhost exception), matching the repo discipline for credentialed egress
+ * (S3ObjectStore/VaultSecretStore). The Codex API key travels as a Bearer header, so plaintext http is
+ * refused to prevent cleartext secret transmission.
+ */
+function reqHttpsUrl(name: string): string {
+  const v = req(name);
+  let parsed: URL;
+  try {
+    parsed = new URL(v);
+  } catch {
+    throw new Error(`env ${name} must be an absolute URL, got ${JSON.stringify(v)}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`env ${name} must be an https URL (no plaintext for the Bearer API key), got protocol ${JSON.stringify(parsed.protocol)}`);
+  }
+  return v;
+}
+
+export function loadGatewayConfig(): GatewayConfig {
+  const codexMaxContextTokens = num("CODEX_MAX_CONTEXT_TOKENS", 8192);
+  if (!Number.isInteger(codexMaxContextTokens) || codexMaxContextTokens <= 0) {
+    throw new Error(`CODEX_MAX_CONTEXT_TOKENS must be a positive integer, got ${codexMaxContextTokens}`);
+  }
+  return {
+    codexBaseUrl: reqHttpsUrl("CODEX_BASE_URL"),
+    codexApiKey: req("CODEX_API_KEY"),
+    codexModel: req("CODEX_MODEL"),
+    codexMaxContextTokens,
+    pricePer1kInputUsd: num("CODEX_PRICE_PER_1K_INPUT_USD", 0),
+    pricePer1kOutputUsd: num("CODEX_PRICE_PER_1K_OUTPUT_USD", 0),
+    // ops-defaults §4 — v1 fixed (override layer is gateway_policies, not entrypoint env).
+    idleTimeoutMs: 20_000,
+    wallTimeoutMs: 120_000,
+    retryMax: 2,
+    fallbackAttempts: 1,
+    repairAttempts: 1,
+    artifactDir: req("GATEWAY_ARTIFACT_DIR"),
+    artifactRetentionDays: num("GATEWAY_ARTIFACT_RETENTION_DAYS", 90), // ops-defaults §6 retention_default
+    budget: {
+      maxInputTokens: Math.floor(codexMaxContextTokens * 0.9), // ops-defaults §4: 90% of maxContextTokens
+      maxOutputTokens: 4096, // ops-defaults §4 llm.budget.max_output_tokens
+      maxCost: 0.85, // ops-defaults §4 llm.budget.max_cost_per_run
+    },
+    promptTemplateVersion: opt("PROMPT_TEMPLATE_VERSION") ?? "dom-executor@1",
+  };
+}

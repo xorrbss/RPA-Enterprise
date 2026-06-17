@@ -577,6 +577,46 @@ D8-A15. Owner ratification: an owner-operated REAL object store (real S3 protoco
    PostgreSQL `audit_log` under a non-`SUPERUSER`/non-`BYPASSRLS` role), under the same in-process-fake ban;
    the real Vault mount/path and resolved secret values remain deploy-time external facts.
 
+D8-A16. LLM Gateway deployment topology + secret-sourcing for the production composition root
+   (resolves the worker `executorFactory`/`LlmGateway` wiring blocker; backlog item 1 of the
+   adapter-wiring backlog in product-open-candidate-report.md / staging-deploy-runbook.md)
+   Decision (owner-ratified): for v1 (single-host managed-container deploy, D8-A14), the `LlmGateway`
+   is assembled **in-process inside the runtime-worker** (the `RunExecutorFactory` seam injects
+   `createDomUtilityExecutorFactory(gateway, policy)`), NOT as a separate `llm-gateway` daemon/identity.
+   Consequences, each chosen deliberately over the matrix-pure alternative (separate `RUN_MODE=gateway`
+   service + HTTP `LlmGatewayCaller` + a Codex-API-key SecretRef purpose), which is deferred as a later
+   migration:
+   - **Codex provider credentials** (`CODEX_BASE_URL` / `CODEX_API_KEY` / `CODEX_MODEL`) are sourced from
+     **env**, NOT Vault — exactly mirroring the existing `JWT_HS256_SECRET` documented gap (env.ts: "no
+     SecretRef purpose exists in the least-privilege matrix yet"). The D8-A12 `RESOLVE_MATRIX` defines NO
+     purpose for a raw LLM provider API key, and `gateway_policy` (the `llm-gateway` identity's purpose)
+     maps to the `gateway_policies` table = model/capabilities/budget **policy config**, not a credential.
+     So env-sourcing the key invents no purpose and bends no matrix. The worker process holding the LLM key
+     is an accepted least-privilege relaxation **only because the v1 deploy is single-host** (no cross-host
+     isolation lost); the separate-identity migration re-tightens it.
+   - **Gateway artifact sink object store** = `FsObjectStore` (local volume, `GATEWAY_ARTIFACT_DIR`), NOT
+     `S3ObjectStore`. The D8-A12 matrix authorizes `object_store` for the `artifact-lifecycle` identity
+     only — the runtime-worker is NOT authorized — and `LlmGateway` calls `sink.put` unconditionally.
+     Using the credential-free `FsObjectStore` for gateway output artifacts (LLM call evidence) in v1
+     avoids granting the worker `object_store` and avoids the matrix conflict. The S3-backed gateway sink
+     (with an `object_store`-authorized identity) is a later migration, consistent with D8-A14 (S3 is the
+     adopted object store) and D8-A15 (real S3/MinIO already exercised for the *artifact-lifecycle* path).
+   - **Operational knobs** are the ops-defaults §4/§6 fixed values (retry_max 2 / fallback 1 / repair 1;
+     idle 20s / wall 120s; budget max_output_tokens 4096 / max_cost_per_run $0.85 / max_input_tokens =
+     90% of `maxContextTokens`; artifact retention 90d) — assembled as constants, not new env knobs (YAGNI;
+     per-tenant override remains `gateway_policies`, not the entrypoint env). Only genuinely deploy-varying
+     provider facts (base URL / key / model / maxContextTokens / per-1k price / artifact dir) are env.
+   Rationale / 비발명: this records a verified cross-contract constraint (the D8-A12 security matrix vs. the
+   handoff's "assemble the gateway in the worker" plumbing intent) and resolves it without inventing a
+   SecretRef purpose or violating the matrix; the chosen relaxations (env key, FS sink) are scoped to the
+   single-host v1 and each has a named re-tightening migration. Note: with `browserSessionProvider` still
+   unwired (backlog item 2), the injected `executorFactory` is **dormant** (`driveClaimedRun` only runs when
+   a session provider is present), so the gateway is assembled-and-ready but not yet on any live job path;
+   the Q1 wiring precondition (existing extract scenarios lacking `args.schema` → `EXTRACT_SCHEMA_INVALID`)
+   therefore does not bite until backlog item 2 lands a provider. Owner = project owner. Build-condition:
+   topology + secret-sourcing named (this decision); the gateway assembly lands in `app/src/main.ts` +
+   `app/src/config/env.ts` (`loadGatewayConfig`).
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
