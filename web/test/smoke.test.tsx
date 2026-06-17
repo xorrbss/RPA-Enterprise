@@ -78,6 +78,16 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.queryByText("준비 중")).toBeNull(); // Placeholder 배지 미노출
   });
 
+  test("idempotency: 정적 contract-doc 뷰 렌더(Placeholder 아님)", async () => {
+    renderApp();
+    location.hash = "#idempotency";
+    await waitFor(() => expect(screen.getByText("중복 방지 메커니즘")).toBeInTheDocument());
+    expect(screen.getByText("제어평면 멱등 키 처리 흐름")).toBeInTheDocument(); // 계약 파생 패널
+    // replay(완료 재제출)는 부작용 재실행 없이 최초 응답 반환 — 핵심 계약 의미 노출
+    expect(screen.getByText("부작용 재실행 없이 최초 응답 재생 (replay)")).toBeInTheDocument();
+    expect(screen.queryByText("준비 중")).toBeNull(); // Placeholder 배지 미노출
+  });
+
   test("오류 상태 표면화 (조용한 빈화면 금지)", async () => {
     renderApp(
       fakeClient({
