@@ -41,7 +41,8 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
       )}
       {task.state === "in_progress" && (
         <>
-          <ActionButton label="처리완료" action={`human_task.resolve.${task.kind}`} confirmText="이 업무를 처리완료할까요?" run={(key) => api.resolveHumanTask(id, key)} invalidateKeys={KEYS} />
+          {/* v1: resolve는 판정-데이터 입력이 아니라 '승인하고 계속' continue 신호(reserved-handlers, api-surface §4 note). */}
+          <ActionButton label="처리완료" action={`human_task.resolve.${task.kind}`} confirmText="승인/처리 완료로 표시하고 실행을 재개할까요? (판정 데이터 입력 없이 다음 단계로 진행됩니다)" run={(key) => api.resolveHumanTask(id, key)} invalidateKeys={KEYS} />
           {escalate}
         </>
       )}
