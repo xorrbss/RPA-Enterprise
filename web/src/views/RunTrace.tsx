@@ -7,7 +7,7 @@ import { ActionButton } from "../components/ActionButton";
 import { ArtifactLookup, ArtifactRef } from "../components/ArtifactLookup";
 import { StepTrace } from "../components/StepTrace";
 import { FilterSelect } from "../components/FilterSelect";
-import { StatusBadge } from "../components/badges";
+import { StatusBadge, tone, type Tone } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
 import { hashWith, useHashParam } from "../router";
@@ -15,6 +15,13 @@ import type { RunArtifactItem, RunDetail, RunItem } from "../api/types";
 
 const POLL_MS = 5_000; // 실시간 = outbox tail 폴링(v1)
 const TERMINAL = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
+
+// F3 터미널 '도착' 톤 — 터미널 여부는 TERMINAL Set 단일 출처가 게이팅하고(비-터미널이면 null = 배너 없음),
+// 색은 badges.tone()에 위임해 도착 배너 배경과 내부 StatusBadge 색이 한 출처에서 항상 일치하게 한다(DRY·드리프트 방지).
+// (completed=green, 실패=red, cancelled=muted; 어휘 체인 abort→cancelled. 비-터미널 null = 조용한 false 금지.)
+function arrivalTone(status: string): Tone | null {
+  return TERMINAL.has(status) ? tone(status) : null;
+}
 
 export function RunTraceView(): JSX.Element {
   const api = useApiClient();
@@ -90,6 +97,8 @@ function RunDetailPanel({
       ) : detail.isError ? (
         <ErrorState message="실행을 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
       ) : detail.data !== undefined ? (
+        <>
+        <ArrivalBanner status={detail.data.status} attempts={detail.data.attempts} />
         <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", margin: 0 }}>
           <dt className="subtle">상태</dt>
           <dd style={{ margin: 0 }}>
@@ -102,10 +111,27 @@ function RunDetailPanel({
           <dt className="subtle">기준 시각(as_of)</dt>
           <dd style={{ margin: 0 }}>{detail.data.as_of ?? "—"}</dd>
         </dl>
+        </>
       ) : null}
       <StepTrace runId={runId} />
       <RunArtifactsList runId={runId} />
     </section>
+  );
+}
+
+// F3 터미널 '도착 순간' 배너 — 실행이 완료/실패/취소로 종료되었음을 분명히 알린다(구매 모먼트의 '도착').
+// 도착 판정=detail.status(실 필드)만. 시도횟수=detail.attempts(실 필드). 실패 사유(reason)는 RunDetail에 없으므로
+// 만들지 않고 단계 트레이스의 exception.code(이미 진실원천)로 유도한다. 비-터미널이면 배너 없음(조용한 false 금지).
+function ArrivalBanner({ status, attempts }: { status: string; attempts: number }): JSX.Element | null {
+  const bannerTone = arrivalTone(status); // arrivalTone이 badges.tone()에 위임(색 단일 출처)
+  if (bannerTone === null) return null;
+  const failed = bannerTone === "red";
+  return (
+    <div className={`arrival-banner badge ${bannerTone}`} role="status">
+      <StatusBadge status={status} />
+      <span>실행이 종료되었습니다{attempts > 1 ? ` · 시도 ${attempts}회` : ""}.</span>
+      {failed && <span className="subtle">자세한 원인은 아래 단계 트레이스를 확인하세요.</span>}
+    </div>
   );
 }
 

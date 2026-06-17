@@ -1,12 +1,10 @@
 import { useIsFetching } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
+import { hhmmss } from "../util/time";
+
 // 실시간 표시 + 라우트/폴링 진행 바 — rpa_enterprise_console.html Phase 5 패턴 이식.
 // react-query 활성 fetch 수로 진행 상태를 도출하고, idle 전환 시 '마지막 갱신' 시각을 기록.
-function hhmmss(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0");
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
 
 export function Freshness(): JSX.Element {
   const fetching = useIsFetching();
