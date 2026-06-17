@@ -43,6 +43,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     getArtifact: async (id) => ({ artifact_id: id, type: "screenshot", sha256: "abc123", redaction_status: "redacted", retention_until: null, content: "redacted artifact content" }),
     approveSite: async () => ({ site_profile_id: "s", approval_status: "approved" }),
     createSite: async () => ({ site_profile_id: "s", name: "n", url_pattern: "https://x.example", risk: "green", approved: false }),
+    updateSite: async (siteId: string, name: string) => ({ site_profile_id: siteId, name }),
     captureSession: async (_siteId: string, _key: string) => ({ capture_session_id: "c", site_profile_id: "s", status: "launching" }),
     validateScenario: async () => ({ valid: true, report: { errors: [], warnings: [] } }),
     createScenario: async () => ({ scenario_id: "00000000-0000-0000-0000-0000000000c1", version: 1, promotion_status: "draft" }),

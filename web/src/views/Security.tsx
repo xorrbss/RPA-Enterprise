@@ -4,6 +4,7 @@ import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { SiteCreateForm } from "../components/SiteCreateForm";
+import { SiteNameEditor } from "../components/SiteNameEditor";
 import { StatusBadge } from "../components/badges";
 import { SITE_RISKS } from "./filters";
 import type { SiteItem } from "../api/types";
@@ -22,7 +23,7 @@ export function SecurityView(): JSX.Element {
       rowKey={(r) => r.site_profile_id}
       emptyMessage="조건에 맞는 사이트 프로파일이 없습니다."
       columns={[
-        { header: "사이트", render: (r) => r.name ?? r.site_profile_id.slice(0, 8) },
+        { header: "사이트", render: (r) => <SiteNameEditor site={r} /> },
         { header: "위험도", render: (r) => <StatusBadge status={r.risk} /> },
         { header: "승인", render: (r) => <StatusBadge status={r.approval_status} /> },
         { header: "서킷", render: (r) => <StatusBadge status={r.circuit_status} kind="circuit" /> },

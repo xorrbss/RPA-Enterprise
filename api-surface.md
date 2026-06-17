@@ -169,6 +169,7 @@
 | GET | `/v1/sites` | 쿼리: `?risk=red|amber|green&limit=&cursor=` | 200 + `{ items, next_cursor }` (site_profiles 요약) | — |
 | GET | `/v1/sites/{site_profile_id}` | — | 200 + 사이트 상세(risk, 승인 상태, circuit 상태) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/sites` | `Idempotency-Key`. 생성 권한(`site.create`) 필요. body: `name`(필수)·`url_pattern`(필수, http(s) origin)·optional `risk`(green default/amber/red)·optional `page_state_selectors` | 201 + 생성된 site 요약(`site_profile_id`/`name`/`url_pattern`/`risk`/`approved`) | `AUTHZ_FORBIDDEN`(403)⁴, `IR_SCHEMA_INVALID`(422)⁵ |
+| PATCH | `/v1/sites/{site_profile_id}` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `name`(필수) | 200 + 갱신된 site 요약(`site_profile_id`/`name`) | `AUTHZ_FORBIDDEN`(403)⁴, `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; 중복 name reason=`site_name_already_exists`) |
 | POST | `/v1/sites/{site_profile_id}/approve` | `Idempotency-Key`. 승인 권한 필요. body: optional `reason`/`expires_at` | 200 + 승인 반영(risk=red 사이트 실행 허용) | `AUTHZ_FORBIDDEN`(403)⁴ |
 
 - `site risk=red`는 미승인 시 실행 차단(`SITE_PROFILE_BLOCKED`, 403, error-catalog operatorAction="site risk=red 승인 워크플로우"). 본 엔드포인트가 그 승인 워크플로우의 제어평면 진입점.
