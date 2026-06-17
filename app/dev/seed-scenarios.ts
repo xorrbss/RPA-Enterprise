@@ -341,11 +341,15 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
       // 하이웍스 결재(approval) 사이트 — office(dashboard)와 다른 서브도메인(approval.office.hiworks.com)이라 별도 profile.
       // 로그인은 동일 login.office.hiworks.com(SSO) → loginUrl 동일. authenticatedWhen=.new_header 는 로그인 직후 리다이렉트되는
       // office 홈 표지(캡처 감지용). login_required 는 로그인 폼. 결재 인박스의 안정 셀렉터(reviews_visible)는 recon 후 확정.
+      // reviews_visible(닫힌 flag 레지스트리의 범용 "대상 데이터 목록 가시")를 결재 목록 행에 재사용 — recon 확정 셀렉터
+      // td.docu-num(문서번호 셀, 행당 1개)이 최소 1개 렌더되면 목록이 settle 된 것. observe 가 이 flag 를 settle 폴링해
+      // SPA 행 렌더를 대기한 뒤 extract 로 진행한다(미완로드 빈 추출/환각 방지). 미등록 inbox_rows_visible 신설은 V8 위반이라 금지.
       const HW_APPROVAL_SELECTORS = {
         authenticatedWhen: { selector: ".new_header" },
         loginUrl: HIWORKS_LOGIN_URL,
         flags: {
           login_required: { kind: "present", selector: "input[placeholder='로그인 ID']" },
+          reviews_visible: { kind: "min_count", selector: "td.docu-num", n: 1 },
         },
       };
       await c.query(
@@ -360,10 +364,10 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
 
       // 하이웍스 결재 수집(= Phase 0 recon 차량 + 결재 인박스 데이터 소스). 캡처된 세션 재사용을 전제(실 하이웍스 로그인은
       // MFA라 cold 자동로그인 불가 — 운영자-보조 '세션 등록'으로 1회 캡처). 결재함 URL은 run 파라미터 entry_url 로 받는다
-      // (origin = approval.office.hiworks.com → 위 결재 site_profile/세션으로 해소). extract 결과
-      // ({rows:[{drafter,doc_type,title,status,doc_ref,approval_id}]})는 GW-OUTPUT 로그로 보이며, doc_ref(상세/결재 링크 전체 URL)
-      // 존재가 Model A(건별 결재 run)의 사활 — recon 이 이를 확인한다. observe 게이트: 로그인 폼이면 session_expired, 아니면 추출
-      // (결재함 안정 셀렉터를 모르는 recon 단계라 catch-all; 확정 후 reviews_visible 게이트로 강화).
+      // (origin = approval.office.hiworks.com → 위 결재 site_profile/세션으로 해소). observe 게이트: 로그인 폼이면 session_expired,
+      // 결재 목록 행(td.docu-num)이 렌더되면 추출. recon 확정 셀렉터로 게이트 강화(catch-all 제거) → 미렌더 시 IR_NO_BRANCH_MATCHED
+      // 로 loud 실패(빈 그리드 무음 추출 금지). doc_ref 는 행의 data-href(ApprovalDocument.getView('<docId>',...))에서 docId 를
+      // 읽어 결정형으로 구성(LLM attribute 추출 신뢰도↓ → 명시 지시). doc_ref 존재가 Model A(건별 결재 run)의 사활.
       const collect = compileScenario(
         {
           meta: { name: "하이웍스 결재 수집", version: 1 },
@@ -374,7 +378,7 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
               what: [{ action: "observe" }],
               on: [
                 { when: "flags.login_required", target: "session_expired", priority: 2 }, // 로그인 폼 = 세션 없음/만료 → 재캡처 필요
-                { when: "true", target: "collect", priority: 1 }, // 그 외 = 인증 상태 → 결재 목록 추출
+                { when: "flags.reviews_visible", target: "collect", priority: 1 }, // 결재 목록 행 렌더(settle 완료) → 추출
               ],
             },
             collect: {
@@ -382,9 +386,13 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
                 {
                   action: "extract",
                   instruction:
-                    '결재 대기 목록의 각 행에서 다음을 추출하라: 기안자(drafter), 문서 유형(doc_type), 제목(title), 상태(status), ' +
-                    '그리고 각 결재 문서의 상세/결재 페이지로 가는 링크의 전체 절대 URL(doc_ref), 가능하면 문서 식별자(approval_id). ' +
-                    '반드시 JSON 으로만 응답: {"rows":[{"drafter":"","doc_type":"","title":"","status":"","doc_ref":"","approval_id":""}]}',
+                    '결재 대기 목록 테이블의 각 행(tr)에서 다음을 추출하라. 문서번호(approval_id, 예 "IB-..."), 제목(title), ' +
+                    '기안자(drafter), 기안일(drafted_at, 예 "2026-06-17"), 구분(doc_type, 예 "결재"/"합의"), 상태(status). ' +
+                    "그리고 doc_ref 는 각 행의 문서번호 셀(td.docu-num)의 data-href 속성값에서 " +
+                    "ApprovalDocument.getView('<docId>', ...) 의 <docId>(숫자) 를 읽어 " +
+                    '"https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/<docId>" 형식의 절대 URL 로 구성하라. ' +
+                    "data-href 가 없거나 docId 를 못 찾은 행은 추측하지 말고 제외하라(가짜 값 금지). " +
+                    '반드시 JSON 으로만 응답: {"rows":[{"approval_id":"","title":"","drafter":"","drafted_at":"","doc_type":"","status":"","doc_ref":""}]}',
                   schema_ref: "approval_inbox_rows",
                 },
               ],
