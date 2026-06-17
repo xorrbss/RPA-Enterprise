@@ -15,6 +15,8 @@ import { join } from "node:path";
 
 import type { Pool } from "pg";
 
+import type { ArtifactRef, ExecutorPlugin, SecretRef } from "../../ts/core-types";
+import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../ts/security-middleware-contract";
 import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
@@ -23,8 +25,95 @@ import { createStagehandSession, SingleSessionProvider } from "../src/executor/c
 import { SitePageStateResolver } from "../src/executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
 import { UtilityExecutor } from "../src/executor/utility-executor";
+import { StagehandDomExecutor } from "../src/executor/stagehand-dom-executor";
+import { CompositeExecutor } from "../src/runtime/composite-executor";
+import { LlmGateway, type LlmGatewayCaller } from "../src/gateway/llm-gateway";
+import { CodexSseAdapter } from "../src/gateway/codex-sse-adapter";
+import { FetchCodexSseTransport } from "../src/gateway/codex-sse-transport";
+import { SafeCapabilityGate } from "../src/gateway/capability-gate";
+import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
+import { VaultSecretStoreBoundary } from "../src/secrets/vault-secret-store-boundary";
+import { ContractDurableSecurityAuditWriter, FakeSecretStore, InMemoryImmutableAuditLog } from "../../security/compliance-scaffold";
+import { DevPlaintextSessionEncryptor, PgBrowserSessionStore } from "../src/runtime/browser-session-store";
 
 const WORKER_ID = "9a000000-0000-0000-0000-0000000000df";
+// dev 브라우저 정체성(실 UUID) — browser_sessions PK/FK 가 uuid + browser_identities 행을 요구하므로 serve.ts 가
+// 이 id 로 browser_identities 를 시드한다(세션 재사용 키의 browser_identity_id). leaseId/networkPolicyId 는 DB 미조회라 리터럴 유지.
+export const DEV_BROWSER_IDENTITY_ID = "9b000000-0000-0000-0000-0000000000b1";
+
+// dom 실행기 cfg(run-loop 전역 — 캐시 미주입(bypass)이라 scenarioVersionId 는 cacheKey 전용으로 미사용; 정적 placeholder).
+const DOM_CFG = {
+  model: process.env.CODEX_MODEL?.trim() || "gpt-4o-mini",
+  promptTemplateVersion: "dev@1",
+  budget: { maxInputTokens: 100_000, maxOutputTokens: 512, maxCost: 1 },
+  scenarioVersionId: "dev-runloop",
+  browserIdentityVersion: 1,
+};
+
+/**
+ * 실 Codex 게이트웨이 조립(CODEX_* env 필수). 미설정 시 null → dom 실행기 비활성(navigate/observe 만).
+ * validator 는 POC pass-through(실 ajv schemaRef 레지스트리는 후속 갭). redaction 경계가 user 메시지(DOM 포함)를 redact.
+ */
+function buildCodexGateway(): LlmGatewayCaller | null {
+  const apiKey = process.env.CODEX_API_KEY?.trim();
+  const baseUrl = process.env.CODEX_BASE_URL?.trim();
+  const model = process.env.CODEX_MODEL?.trim();
+  if (!apiKey || !baseUrl || !model) return null;
+  // 네이티브 JSON 모드(jsonMode + response_format) — provider 가 유효-JSON 강제(D5 PoC #3 가용 확정). 없으면
+  // gpt-4o-mini 가 prompt 폴백에서 마크다운 펜스/산문을 섞어 Gateway JSON.parse 가 LLM_MALFORMED_OUTPUT 로 실패.
+  const transport = new FetchCodexSseTransport({ baseUrl, apiKey, model, nativeStructuredOutput: true });
+  const adapter = new CodexSseAdapter(transport, {
+    model,
+    maxContextTokens: 8192,
+    idleTimeoutMs: 20_000,
+    wallTimeoutMs: 120_000,
+    pricePer1kInputUsd: 0,
+    pricePer1kOutputUsd: 0,
+    capabilities: { jsonMode: true }, // nativeStructuredOutput 과 짝(capabilities 일치).
+  });
+  return new LlmGateway({
+    primary: adapter,
+    gate: new SafeCapabilityGate(),
+    validator: { validate: () => ({ ok: true }) },
+    sink: { put: async () => "art://dev-gateway" as ArtifactRef },
+    redactionBoundary: new DeterministicGatewayRedactionBoundary(),
+    config: { retryMax: 2, fallbackAttempts: 0, repairAttempts: 1 },
+  });
+}
+
+/**
+ * dev SecretStore 경계 — FakeSecretStore(env 시드, 비프로덕션) + 감사. 에셋 키 = SecretRef(POC identity 매핑;
+ * vault 경로 분리는 네임스페이스 SSoT 후속). 로컬 픽스처는 자격증명을 검증 안 하므로 기본값으로 충분.
+ */
+function buildDevSecretBoundary(): VaultSecretStoreBoundary {
+  const seed: Record<string, string> = {
+    "login.username": process.env.HIWORKS_USER?.trim() || "demo-user",
+    "login.password": process.env.HIWORKS_PASS?.trim() || "demo-pass",
+  };
+  return new VaultSecretStoreBoundary({
+    store: new FakeSecretStore(seed),
+    audit: new ContractDurableSecurityAuditWriter(new InMemoryImmutableAuditLog()),
+  });
+}
+
+/**
+ * dev 세션 스토어 — browser_sessions 영속(방식 A). dev-plaintext 암호화기 + 명시 allowDevPlaintext(prod 차단; 실 KMS
+ * 미구현 TODO:[BLOCKED]). 복원/캡처는 driveClaimedRun 북엔드가 sessionProvider 의 live CdpSession 으로 수행.
+ */
+function buildDevSessionStore(pool: Pool): PgBrowserSessionStore {
+  return new PgBrowserSessionStore({ pool, encryptor: new DevPlaintextSessionEncryptor() }, { allowDevPlaintext: true });
+}
+
+/** 시나리오 IR(meta) assets[] → assetRefs(에셋 키 → SecretRef). POC identity 매핑(키=ref). */
+function deriveAssetRefs(ir: unknown): Record<string, SecretRef> {
+  const doc = typeof ir === "string" ? (JSON.parse(ir) as unknown) : ir;
+  const assets = (doc as { assets?: unknown } | null)?.assets;
+  const refs: Record<string, SecretRef> = {};
+  if (Array.isArray(assets)) {
+    for (const k of assets) if (typeof k === "string" && k.length > 0) refs[k] = k as SecretRef;
+  }
+  return refs;
+}
 
 export interface RunLoop {
   stop(): Promise<void>;
@@ -70,8 +159,28 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
   const downloadDir = mkdtempSync(join(tmpdir(), "dev-runloop-"));
   const session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
   const provider = new SingleSessionProvider(session);
-  const executor = new UtilityExecutor(provider);
-  console.log("run-loop: 실 Chrome 실행기 활성 — queued run을 polling해 구동(run별 site_profile 해소 → DB 셀렉터로 completed).");
+  const utility = new UtilityExecutor(provider);
+  const gateway = buildCodexGateway();
+  const secrets = buildDevSecretBoundary();
+  const executorPrincipal: AuthenticatedPrincipal = {
+    subjectId: WORKER_ID as PrincipalId,
+    tenantId: tenantId as TenantId,
+    roles: ["admin"],
+    source: "jwt",
+    claims: { runtime_identity: "runtime-worker" }, // RESOLVE_MATRIX: runtime-worker → purpose 'executor'
+  };
+  // gateway 있으면 dom(act/observe/extract) + utility 합성. 없으면 utility 만(act/extract 시나리오는 실패).
+  const executor: ExecutorPlugin =
+    gateway !== null
+      ? new CompositeExecutor(new StagehandDomExecutor(gateway, provider, DOM_CFG, undefined, secrets, executorPrincipal), utility)
+      : utility;
+  // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
+  const sessionStore = buildDevSessionStore(pool);
+  console.log(
+    gateway !== null
+      ? "run-loop: 실 Chrome + Codex dom 실행기 활성(act/observe/extract→LLM; 자격증명 fill→SecretStore 주입; 세션 재사용 활성)."
+      : "run-loop: 실 Chrome utility 실행기만 활성(CODEX_* 미설정 → act/extract 시나리오 불가, navigate/observe 만).",
+  );
 
   let stopped = false;
   let busy = false;
@@ -128,11 +237,12 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
             correlationId: next.correlation_id,
             leaseId: "dev-lease",
             siteProfileId: resolved.siteProfileId,
-            browserIdentityId: "dev-bid",
+            browserIdentityId: DEV_BROWSER_IDENTITY_ID,
             networkPolicyId: "dev-np",
             params,
+            assetRefs: deriveAssetRefs(next.ir), // meta.assets → 자격증명 fill 의 SecretRef 바인딩
           },
-          { pool, executor, resolver, workerId: WORKER_ID },
+          { pool, executor, resolver, workerId: WORKER_ID, sessionProvider: provider, sessionStore },
         );
         console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
       } catch (e) {

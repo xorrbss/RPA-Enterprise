@@ -17,13 +17,20 @@ import { ERROR_CATALOG, type ErrorCode } from "../../../ts/error-catalog";
 import type {
   ExceptionClass,
   ExecutorPlugin,
+  PlainSecret,
   RunContext,
+  SecretRef,
   SideEffectKind,
   StepResult,
   StepStatus,
   VerifyResult,
 } from "../../../ts/core-types";
-import type { LLMRequest, LLMResponse } from "../../../ts/security-middleware-contract";
+import type {
+  AuthenticatedPrincipal,
+  LLMRequest,
+  LLMResponse,
+  SecretStoreBoundary,
+} from "../../../ts/security-middleware-contract";
 import { GatewayError } from "../gateway/llm-gateway";
 import { parseActionPlan, type ActionPlan, type ActionPlanCache, type ActionPlanCacheKey } from "./action-plan-cache";
 import type { CdpSession, CdpSessionProvider } from "./cdp-session";
@@ -39,7 +46,9 @@ export type { ActionPlan, ActionPlanCache, ActionPlanCacheKey } from "./action-p
 
 /** dom 실행기가 지원하는 LLM 프리미티브 액션(IRActionType 의 dom 부분집합). */
 export type DomAction =
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind }
+  // secretRef: 자격증명 fill 슬롯(IR act.vars 에서 ir-translate 가 스레딩). 있으면 실행기가 ctx.assetRefs 에서
+  //   SecretRef 를 SecretStore 경유로 해소해 LLM 미경유로 채운다(비밀 대상은 LLM 출력이 아니라 IR 선언 — 결정형).
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean } };
 
@@ -66,6 +75,9 @@ export interface StagehandDomExecutorConfig {
 
 const UTILITY_ACTIONS = new Set(["navigate", "download", "upload", "api_call", "file", "shell"]);
 const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", schemaVersion: "1", strict: true } as const;
+// LLM 이 셀렉터를 정하려면 원문 DOM 이 필요(PageState 파생 신호만으론 #password 등 타깃 불가). user 메시지로 실어
+// Gateway redaction(§4) 경계가 redact/injection-탐지하게 한다. 토큰 예산 보호용 상한(초과분 절단).
+const MAX_DOM_CHARS = 12000;
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 
@@ -99,6 +111,9 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     private readonly sessions: CdpSessionProvider,
     private readonly cfg: StagehandDomExecutorConfig,
     private readonly cache?: ActionPlanCache,
+    // 자격증명 fill(secretRef) 경계 — 둘 다 주입돼야 fill 의 valueRef 를 해소한다(미주입 시 loud throw, 조용한 빈 fill 금지).
+    private readonly secrets?: SecretStoreBoundary,
+    private readonly executorPrincipal?: AuthenticatedPrincipal,
   ) {}
 
   capabilities(): { dom: boolean; vision: boolean; utility: boolean } {
@@ -121,7 +136,8 @@ export class StagehandDomExecutor implements ExecutorPlugin {
   ): Promise<StepResult> {
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
-    const req = this.buildRequest(stepId, a, ctx);
+    const domSnapshot = await this.snapshotDom(this.sessions.forLease(ctx.leaseId));
+    const req = this.buildRequest(stepId, a, ctx, domSnapshot);
     const callIds = [String(req.idempotencyKey)];
 
     let res: LLMResponse;
@@ -185,9 +201,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       cacheMode = plan ? "hit" : "miss";
     }
 
+    let fromLlm = false;
     if (!plan) {
-      // miss/bypass → LLM 으로 plan 산출(Gateway 경유, action_plan 스키마 strict).
-      const req = this.buildRequest(stepId, a, ctx);
+      // miss/bypass → LLM 으로 plan 산출(Gateway 경유, action_plan 스키마 strict). 원문 DOM 동봉(셀렉터 타깃팅).
+      const req = this.buildRequest(stepId, a, ctx, await this.snapshotDom(session));
       callIds = [String(req.idempotencyKey)];
       let res: LLMResponse;
       try {
@@ -199,11 +216,27 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       const parsed = parseActionPlan(res.parsedJson);
       if (!parsed) return this.failResult(stepId, "act", before, startedAt, "LLM_MALFORMED_OUTPUT", callIds);
       plan = parsed;
-      if (this.cache) await this.cache.put(cacheKey, plan);
+      fromLlm = true;
     }
 
+    // 자격증명 fill: secretRef 선언 시 plan 의 secret 대상을 IR 선언으로 결정형 고정(LLM 출력 value 무시).
+    //   plan = {fill, selector, valueRef} — value(LLM 추측)는 버리고 ref-only 로 만들어 캐시·output 에 평문이 안 실린다.
+    //   LLM 은 selector 만 책임진다. fill 이 아니면 loud 오류(자격증명 act 는 fill 이어야 함, 조용한 무시 금지).
+    if (a.secretRef !== undefined) {
+      if (plan.operation !== "fill") {
+        throw new StagehandDomExecutorError(
+          "IR_SCHEMA_INVALID",
+          `step '${stepId}' credential act(secretRef) must yield a 'fill' plan, got '${plan.operation}'`,
+        );
+      }
+      plan = { operation: "fill", selector: plan.selector, valueRef: a.secretRef };
+    }
+
+    // miss(LLM 해석)만 캐시에 저장 — 저장 plan 은 override 반영된 ref-bearing plan(평문 미저장).
+    if (fromLlm && this.cache) await this.cache.put(cacheKey, plan);
+
     // 적용: CDP 로 실제 mutation(click/fill/select). 적용 실패는 런타임 예외로 전파(분류는 상위).
-    await this.applyPlan(plan, session);
+    await this.applyPlan(plan, session, ctx);
 
     const endedAt = nowIso();
     return {
@@ -222,18 +255,49 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     };
   }
 
-  private async applyPlan(plan: ActionPlan, session: CdpSession): Promise<void> {
+  private async applyPlan(plan: ActionPlan, session: CdpSession, ctx: RunContext): Promise<void> {
     switch (plan.operation) {
       case "click":
         await session.click(plan.selector);
         return;
-      case "fill":
+      case "fill": {
+        if (plan.valueRef !== undefined) {
+          // 자격증명 fill: SecretStore 경유 평문 해소 → CDP fill 에만 흘린다. plain 은 반환/로그/output 에 절대 미흐름(주통제).
+          const plain = await this.resolveSecretForFill(plan.valueRef, ctx);
+          await session.fill(plan.selector, plain);
+          return;
+        }
+        if (typeof plan.value !== "string") {
+          throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `fill plan for '${plan.selector}' has neither value nor valueRef`);
+        }
         await session.fill(plan.selector, plan.value);
         return;
+      }
       case "select":
         await session.selectOption(plan.selector, plan.value);
         return;
     }
+  }
+
+  /**
+   * valueRef(에셋 키) → ctx.assetRefs[key](SecretRef) → SecretStoreBoundary.resolveAuthorized(purpose:'executor') → PlainSecret.
+   * 반환 PlainSecret 의 수명은 호출측 applyPlan 의 지역변수(→ session.fill) 하나뿐 — 여기서 직렬화/로그/반환 금지.
+   * 가드(loud, 조용한 빈 fill 금지): 에셋 키 미바인딩 / 경계·principal 미주입 → throw. (런타임엔 SecretRef vs 평문 판별 불가 —
+   *   브랜드는 컴파일타임 전용 소거형. 비밀/에셋 구분은 assetRefs 주입 지점(run-loop)이 권위; resolveAuthorized 가 최종 권위.)
+   */
+  private async resolveSecretForFill(valueRef: string, ctx: RunContext): Promise<PlainSecret> {
+    const ref = ctx.assetRefs[valueRef];
+    if (ref === undefined) {
+      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `credential fill: asset key '${valueRef}' not bound in ctx.assetRefs`);
+    }
+    if (this.secrets === undefined || this.executorPrincipal === undefined) {
+      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `credential fill: SecretStoreBoundary/principal not injected (asset key '${valueRef}')`);
+    }
+    return this.secrets.resolveAuthorized({
+      principal: this.executorPrincipal,
+      ref: ref as SecretRef,
+      purpose: "executor",
+    });
   }
 
   async verify(_criteria: unknown, _ctx: RunContext): Promise<VerifyResult> {
@@ -267,16 +331,29 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     };
   }
 
-  private buildRequest(stepId: string, a: DomAction, ctx: RunContext): LLMRequest {
+  /** 원문 DOM 스냅샷(best-effort, 절단). 실패 시 undefined — 신호만으로 진행(loud 아님; 셀렉터 품질 저하 가능). */
+  private async snapshotDom(session: CdpSession): Promise<string | undefined> {
+    try {
+      const html = await session.evaluate<string>(
+        "document.body ? document.body.outerHTML : document.documentElement.outerHTML",
+      );
+      return typeof html === "string" && html.length > 0 ? html.slice(0, MAX_DOM_CHARS) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private buildRequest(stepId: string, a: DomAction, ctx: RunContext, domSnapshot?: string): LLMRequest {
     const ps = ctx.pageState;
-    // 페이지 컨텍스트는 user 역할로만(신뢰영역 분리, §2). 본 골격은 PageState 파생 신호(비민감)만 싣는다 —
-    // 원문 DOM/텍스트 + Gateway redaction(§4) 통합은 후속.
+    // 페이지 컨텍스트는 user 역할로만(신뢰영역 분리, §2). PageState 파생 신호 + 원문 DOM(절단) — Gateway redaction(§4)
+    // 경계가 user 메시지를 redact/injection-탐지한다. DOM 은 셀렉터 타깃팅에 필요(act/extract).
     const context = JSON.stringify({
       url: ps.url.pattern,
       auth: ps.auth,
       structuralHash: ps.dom.structuralHash,
       landmarks: ps.dom.landmarks,
       flags: ps.flags,
+      ...(domSnapshot !== undefined ? { dom: domSnapshot } : {}),
     });
     const key = sha(
       `${ctx.tenantId}|${ctx.runId}|${stepId}|${a.type}|${this.cfg.promptTemplateVersion}|${a.instruction}|${ps.dom.structuralHash}`,
@@ -293,7 +370,9 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       model: this.cfg.model,
       promptTemplateVersion: this.cfg.promptTemplateVersion,
       messages: [
-        { role: "system", content: `Deterministic web automation ${a.type} planner.` },
+        // system 은 redaction 비대상(Gateway 는 user 메시지만 redact) — JSON 지시를 여기 둬 native json_object 모드의
+        // "messages 에 'json' 포함" 요구를 충족하고(user 메시지가 redact 돼도), 플래너 출력 형식을 고정한다.
+        { role: "system", content: `Deterministic web automation ${a.type} planner. Respond with a single minified JSON object only.` },
         { role: "user", content: `${a.instruction}\n[page]${context}` },
       ],
       ...(responseFormat ? { responseFormat } : {}),
@@ -335,7 +414,13 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     }
     if (type === "act") {
       const se = (action as { sideEffect?: unknown }).sideEffect;
-      return { type, instruction, ...(typeof se === "string" ? { sideEffect: se as SideEffectKind } : {}) };
+      const sr = (action as { secretRef?: unknown }).secretRef;
+      return {
+        type,
+        instruction,
+        ...(typeof se === "string" ? { sideEffect: se as SideEffectKind } : {}),
+        ...(typeof sr === "string" && sr.length > 0 ? { secretRef: sr } : {}),
+      };
     }
     return { type, instruction };
   }

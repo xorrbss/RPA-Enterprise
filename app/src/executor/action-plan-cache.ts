@@ -9,11 +9,19 @@
  * Postgres 구현은 pg-action-plan-cache.ts.
  */
 
-/** act 의 결정형 동작 계획(재생 단위). */
+/**
+ * act 의 결정형 동작 계획(재생 단위).
+ * fill 은 리터럴 `value`(비민감) 또는 `valueRef`(자격증명 에셋 키 — 평문 아님, 실행기가 SecretStore 경유로 해소) 중 하나를
+ * 싣는다. valueRef 는 **에셋 키 문자열**이지 SecretRef 경로/평문이 아니므로 캐시·로그·직렬화에 안전하다.
+ */
 export type ActionPlan =
   | { operation: "click"; selector: string }
-  | { operation: "fill"; selector: string; value: string }
+  | { operation: "fill"; selector: string; value?: string; valueRef?: string }
   | { operation: "select"; selector: string; value: string };
+
+// POC 전용: 캔드/가짜 게이트웨이가 `value:"{{secret:<assetKey>}}"` 를 주면 valueRef 로 정규화(평문 미운반).
+// 프로덕션 경로는 실행기가 act.vars→secretRef 로 valueRef 를 결정형 세팅하므로 이 정규화에 의존하지 않는다.
+const SECRET_PLACEHOLDER_RE = /^\{\{secret:([A-Za-z0-9._:-]+)\}\}$/;
 
 /** 캐시 키 — action_plan_cache UNIQUE(7컬럼) + tenant. */
 export interface ActionPlanCacheKey {
@@ -39,11 +47,24 @@ export interface ActionPlanCache {
 /** 직렬화 plan(plan_ref) → ActionPlan 검증(계약 외 shape 는 undefined). */
 export function parseActionPlan(value: unknown): ActionPlan | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const v = value as { operation?: unknown; selector?: unknown; value?: unknown };
+  const v = value as { operation?: unknown; selector?: unknown; value?: unknown; valueRef?: unknown };
   if (typeof v.selector !== "string" || v.selector.length === 0) return undefined;
   if (v.operation === "click") return { operation: "click", selector: v.selector };
-  if ((v.operation === "fill" || v.operation === "select") && typeof v.value === "string") {
-    return { operation: v.operation, selector: v.selector, value: v.value };
+  if (v.operation === "select" && typeof v.value === "string") {
+    return { operation: "select", selector: v.selector, value: v.value };
+  }
+  if (v.operation === "fill") {
+    // 명시 valueRef(에셋 키) 우선 — 평문 미운반. (캐시 라운드트립/실행기 주입 plan)
+    if (typeof v.valueRef === "string" && v.valueRef.length > 0) {
+      return { operation: "fill", selector: v.selector, valueRef: v.valueRef };
+    }
+    if (typeof v.value === "string") {
+      const m = SECRET_PLACEHOLDER_RE.exec(v.value);
+      // POC 전용 placeholder → valueRef. 그 외는 리터럴 fill(비민감) 보존.
+      return m ? { operation: "fill", selector: v.selector, valueRef: m[1] } : { operation: "fill", selector: v.selector, value: v.value };
+    }
+    // value/valueRef 둘 다 부재 — 자격증명 fill(실행기가 secretRef 로 valueRef 를 주입) 경로에서만 유효.
+    return { operation: "fill", selector: v.selector };
   }
   return undefined;
 }
