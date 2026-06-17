@@ -143,8 +143,9 @@ export class LlmGateway {
         common,
         { primitive: meta.primitive, model: req.model, transport: decision.transport },
         async (span) => {
-          // §4 step2(차단 지점): adapter 전 user 메시지 redaction + injection 탐지. injection이면 여기서 throw.
-          const redactedReq = await this.redactRequest(req);
+          // §7 jsonMode=false safe-path: native json_schema 미지원 모델엔 structured-output 스키마를 prompt 로 지시(어댑터는
+          //   텍스트 스트림만). responseFormat.schema(인라인 body) → system 메시지. 그 후 §4 step2 user 메시지 redaction.
+          const redactedReq = await this.redactRequest(this.withPromptSchema(req));
           const consumed = await this.runWithRetryAndFallback(redactedReq, decision.transport, signal);
           span.setAttributes({ stream_status: consumed.finishReason, ttfb_ms: consumed.ttfbMs ?? 0 });
           const response = await this.finalize(redactedReq, consumed, decision.transport, signal);
@@ -161,6 +162,29 @@ export class LlmGateway {
       }
       throw e;
     }
+  }
+
+  /**
+   * §7 jsonMode=false safe-path(llm-gateway-adapter.md:139 "미지원 시 prompt 내 스키마 지시"): primary 가 native
+   * json_schema 미지원(jsonMode=false)이고 responseFormat.schema(인라인 body) 가 있으면, 그 스키마를 **system 메시지**
+   * (Gateway 생성 신뢰 텍스트 — redactRequest 통과)에 지시로 추가한다. jsonMode=true 면 native 경로라 미주입.
+   * 스키마 부재(또는 jsonMode=true)는 req 불변 — 기존 호출 무영향. 검증(strict/repair)은 finalize §5 소관(불변).
+   */
+  private withPromptSchema(req: LLMRequest): LLMRequest {
+    const schema = req.responseFormat?.schema;
+    if (schema === undefined || this.deps.primary.capabilities().jsonMode) return req;
+    const instruction = `Respond with ONLY a single JSON value strictly conforming to this JSON Schema. No prose, no markdown, no code fences. JSON Schema: ${JSON.stringify(schema)}`;
+    // 첫 system 메시지에 append(system-first 유지). system 부재 시 맨 앞 삽입(방어). user 메시지는 미접촉(redaction 대상).
+    let injected = false;
+    const messages = req.messages.map((m) => {
+      if (!injected && m.role === "system" && typeof m.content === "string") {
+        injected = true;
+        return { ...m, content: `${m.content}\n${instruction}` };
+      }
+      return m;
+    });
+    if (!injected) messages.unshift({ role: "system", content: instruction });
+    return { ...req, messages };
   }
 
   /**
