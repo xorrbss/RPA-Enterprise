@@ -47,6 +47,14 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.url).toBe("http://api.test/v1/dlq?limit=10&kind=sink");
   });
 
+  test("listRunSteps → GET /v1/runs/{id}/steps + Bearer (단계 트레이스 read 배선)", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listRunSteps("run-9", { limit: 100 });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/runs/run-9/steps?limit=100");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
   test("abortRun → POST .../abort + Idempotency-Key + 빈 body", async () => {
     const { calls, client } = harness({ body: { status: "cancelled" } });
     await client.abortRun("run-1", "idem-abc");

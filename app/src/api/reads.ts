@@ -118,6 +118,31 @@ interface ArtifactRow {
   retention_until: Date | null;
 }
 
+interface RunStepRow {
+  id: string;
+  step_id: string;
+  node_id: string;
+  attempt: number;
+  action: string;
+  status: string;
+  cache_mode: string;
+  artifacts: string[];
+  exception: { class?: unknown; code?: unknown } | null;
+  started_at: Date | null;
+  ended_at: Date | null;
+  duration_ms: number | null;
+  created_at: Date;
+  stagehand_calls: unknown; // LATERAL json_agg(StagehandSummary[])
+}
+
+// run_steps.exception(jsonb)에서 분류만 노출 — message(RedactedString)·evidenceRefs는 평문/증빙이라 미노출(평문 차단).
+function stepExceptionSummary(ex: { class?: unknown; code?: unknown } | null): { class: string; code: string } | null {
+  if (ex === null || typeof ex !== "object") return null;
+  const cls = typeof ex.class === "string" ? ex.class : "system";
+  const code = typeof ex.code === "string" ? ex.code : "UNKNOWN";
+  return { class: cls, code };
+}
+
 export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   // GET /v1/runs — 커서 페이지(items=Run). filter: status(RunState)·scenario_version_id. RLS 스코프.
   app.get("/v1/runs", { config: { rbacAction: "run.read" } }, async (request, reply) => {
@@ -168,6 +193,70 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
       ),
     );
   });
+
+  // GET /v1/runs/{run_id}/steps — run 하위 단계 트레이스(api-surface §1). 비민감 요약+참조만 노출(본문/증빙은
+  //   GET /v1/artifacts/{id} 게이트 경유). 민감 컬럼(output·output_ref·input_redacted_ref·exception.message·
+  //   page_state 본문)은 미노출(평문 차단). RLS 스코프 + run.read. 시간 오름차순(실행 순서) 커서 페이지.
+  app.get<{ Params: { id: string } }>(
+    "/v1/runs/:id/steps",
+    { config: { rbacAction: "run.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const runId = request.params.id;
+      if (!UUID_RE.test(runId)) {
+        // 형식 무효 run_id는 존재 불가 → 404. 보이지 않는/없는 run은 빈 트레이스로 수렴(RLS, 존재 비노출).
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const { limit, cursor } = parsePageParams(request.query as Record<string, unknown>);
+
+      const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const result = await c.query<RunStepRow>(
+          `SELECT s.id, s.step_id, s.node_id, s.attempt, s.action, s.status, s.cache_mode,
+                  s.artifacts, s.exception, s.started_at, s.ended_at, s.duration_ms, s.created_at,
+                  COALESCE(sc.calls, '[]'::json) AS stagehand_calls
+             FROM run_steps s
+             LEFT JOIN LATERAL (
+               SELECT json_agg(json_build_object(
+                        'model', c2.model, 'transport', c2.transport, 'stream_status', c2.stream_status,
+                        'ttfb_ms', c2.ttfb_ms, 'input_tokens', c2.input_tokens,
+                        'output_tokens', c2.output_tokens, 'cost', c2.cost
+                      ) ORDER BY c2.created_at) AS calls
+                 FROM stagehand_calls c2
+                WHERE c2.tenant_id = s.tenant_id AND c2.run_id = s.run_id
+                  AND c2.step_id = s.step_id AND c2.attempt = s.attempt
+             ) sc ON true
+            WHERE s.tenant_id = $1::uuid AND s.run_id = $2::uuid
+              AND ($3::timestamptz IS NULL OR (s.created_at, s.id) > ($3::timestamptz, $4::uuid))
+            ORDER BY s.created_at ASC, s.id ASC
+            LIMIT $5`,
+          [principal.tenantId, runId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+        );
+        return result.rows;
+      });
+
+      reply.code(200).send(
+        paginate(
+          rows,
+          limit,
+          (r) => ({ createdAt: r.created_at, id: r.id }),
+          (r) => ({
+            step_id: r.step_id,
+            node_id: r.node_id,
+            attempt: r.attempt,
+            action: r.action,
+            status: r.status,
+            cache_mode: r.cache_mode,
+            artifact_ids: r.artifacts,
+            stagehand_calls: r.stagehand_calls,
+            started_at: r.started_at !== null ? r.started_at.toISOString() : null,
+            ended_at: r.ended_at !== null ? r.ended_at.toISOString() : null,
+            duration_ms: r.duration_ms,
+            exception: stepExceptionSummary(r.exception),
+          }),
+        ),
+      );
+    },
+  );
 
   // GET /v1/human-tasks — 커서 페이지(items=HumanTask). filter: status·kind·assignee. RLS 스코프.
   app.get("/v1/human-tasks", { config: { rbacAction: "human_task.read" } }, async (request, reply) => {

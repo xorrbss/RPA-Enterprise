@@ -663,3 +663,25 @@
 | 계약 | `api-surface.md` §4: resolve body "kind별 payload" → "optional `result`(object), v1 미소비" + reserved-handlers 인용 note(continue 신호·v2 scope-out 명시) |
 | 코드 | 백엔드 `requireResolveBody`·web client `resolveHumanTask(result?)`는 이미 v1 정합(무변경). 콘솔 resolve 확인 문구만 "승인/처리 완료로 표시하고 실행을 재개할까요?"로 명확화(continue 신호 의미 노출) |
 | 비도입 | resolve result 스키마·IREL `node.<handler>.result` 스코프·resume token 결과 필드·DB 컬럼·신규 ErrorCode — 전부 v2 versioned 결정(이번 PR 범위 밖) |
+
+## v2.21 패치 로그 (UX 감사 후속 — RunTrace run_steps 라이브 관찰 read 표면 추가: `GET /v1/runs/{id}/steps`)
+
+> **read-surface 공백 보강**(데이터는 이미 완비, 조회 표면만 부재였음). UX 감사가 지적한 "RunTrace가 status/worker/attempts/as_of
+> 4필드로 축소돼 무슨 일이 일어났는지 관찰 불가"의 원인은 단계 트레이스를 조회하는 read 엔드포인트가 계약(api-surface §1)·구현
+> (reads.ts) 둘 다 부재한 것이었다(계약 조사 wf로 확정). `run_steps`(node/action/status/attempt/cache/timings/artifacts/
+> stagehand_call_ids/exception)·`stagehand_calls`·step.* 이벤트는 executor가 완전 적재하고 RLS·인덱스·`run.read` RBAC도 갖춰져
+> 있었다 — 즉 신규 데이터 모델이 아니라 read 한 행 + 라우트로 닫히는 갭.
+> **결정(오너 2026-06-17, 둘 다 A)**: ① **민감 본문 노출 = 요약+참조만**(redaction-by-omission) — `output`/`output_ref`/
+> `input_redacted_ref`/`exception.message`(RedactedString)/`evidenceRefs`/`page_state` 본문은 미노출, 증빙은 `artifact_ids`→
+> `GET /v1/artifacts/{id}` 기존 redaction→RBAC→audit 게이트(§5)로만. 따라서 step 본문용 신규 게이트·DDL·`redaction_status`
+> 컬럼 불요, 트레이스 요약은 `run.read`(viewer+)로 충분. ② **라이브 = 폴링**(architecture §6 outbox tail, 콘솔 동형 refetchInterval);
+> SSE/WS 스트림은 v2 미결정으로 분리. step별 판단-결과를 이벤트 payload로 운반하는 것은 금지(closed-empty) — 관찰 권위는 `run_steps` read.
+> **신규 추상화 0**: 기존 run 하위 컬렉션 + reads.ts `withTenantTx+paginate` 패턴 복제. **검증: 통합테스트 18 checks green
+> (민감 마커 8종 미노출·시간순·커서·RLS·404) + contract:lint·codegen consistency·web typecheck/test/build green.**
+
+| 항목 | 조치 |
+|---|---|
+| 계약 | `api-surface.md` §1: `GET /v1/runs/{run_id}/steps` 행 + 각주⁶(StepSummary 비민감 shape·redaction-by-omission·폴링·payload 발명 금지). `auth-rbac.md` §2: 조회 행에 run step 트레이스 명시(`run.read`) |
+| 백엔드 | `reads.ts`: `GET /v1/runs/{id}/steps` 라우트(run.read·RLS·시간 오름차순 커서). SELECT 화이트리스트 + `stagehand_calls` LATERAL json_agg 요약. exception은 `{class,code}`만(message/evidenceRefs 미노출). `app/test/api-run-steps.int.ts`(18 checks, temp PG) |
+| web | `client.listRunSteps` + `StepSummary`/`StagehandCallSummary` 타입 + RunTrace 상세에 `RunStepsTrace` 패널(폴링, 노드/동작/상태/캐시/소요/LLM/artifact ID). artifact ID는 기존 '산출물 조회'(#129) 입력용 |
+| 비도입 | step 민감 본문 인라인 노출·redaction 게이트·DDL `redaction_status` · SSE/WS 실시간 전송 계약 · run_steps 필터(status 등) — 후속/v2 |
