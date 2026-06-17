@@ -28,26 +28,35 @@ export function SecurityView(): JSX.Element {
         { header: "서킷", render: (r) => <StatusBadge status={r.circuit_status} kind="circuit" /> },
         {
           header: "작업",
-          render: (r) =>
-            r.approval_status === "pending" ? (
-              <ActionButton
-                label="승인"
-                action="site.approve"
-                confirmText={`${r.name ?? r.site_profile_id.slice(0, 8)} (위험도 ${r.risk})을(를) 실행 승인할까요? risk=red 사이트의 실행 차단(SITE_PROFILE_BLOCKED)이 해제됩니다.`}
-                run={(key) => api.approveSite(r.site_profile_id, key)}
-                invalidateKeys={[["sites"]]}
-              />
-            ) : (
-              // 운영자-보조 세션 등록: 로그인창(headful)을 띄워 운영자가 직접 로그인 → 세션 저장(이후 자동 실행이 재사용).
-              // 데모는 dev 로그인 픽스처를 로그인 URL 로 사용한다(실 사이트는 사이트별 로그인 URL 설정이 후속).
-              <ActionButton
-                label="세션 등록"
-                action="session.capture"
-                confirmText={`${r.name ?? r.site_profile_id.slice(0, 8)}에 로그인 창을 엽니다. 창에서 직접 로그인하시면 세션이 저장되어 이후 자동 실행이 재사용합니다.`}
-                run={(key) => api.captureSession(r.site_profile_id, key)}
-                invalidateKeys={[["capture-sessions", r.site_profile_id]]}
-              />
-            ),
+          // 승인(검토 대기 사이트)·세션 등록(로그인 URL 설정 사이트)은 상호배타가 아니다 — 각각 독립 노출.
+          // 검토 대기인 green 사이트도 세션 등록 가능(승인 게이트는 red 사이트 실행 차단 전용, 서버가 강제).
+          render: (r) => {
+            const label = r.name ?? r.site_profile_id.slice(0, 8);
+            return (
+              <span style={{ display: "inline-flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                {r.approval_status === "pending" && (
+                  <ActionButton
+                    label="승인"
+                    action="site.approve"
+                    confirmText={`${label} (위험도 ${r.risk})을(를) 실행 승인할까요? risk=red 사이트의 실행 차단(SITE_PROFILE_BLOCKED)이 해제됩니다.`}
+                    run={(key) => api.approveSite(r.site_profile_id, key)}
+                    invalidateKeys={[["sites"]]}
+                  />
+                )}
+                {r.login_capable === true && (
+                  // 운영자-보조 세션 등록: 로그인창(headful)을 띄워 운영자가 직접 로그인 → 세션 저장(이후 자동 실행이 재사용).
+                  // login_capable(=loginUrl 설정) 사이트만 노출 — 미설정 사이트의 412 클릭을 사전에 차단.
+                  <ActionButton
+                    label="세션 등록"
+                    action="session.capture"
+                    confirmText={`${label}에 로그인 창을 엽니다. 창에서 직접 로그인하시면 세션이 저장되어 이후 자동 실행이 재사용합니다.`}
+                    run={(key) => api.captureSession(r.site_profile_id, key)}
+                    invalidateKeys={[["capture-sessions", r.site_profile_id]]}
+                  />
+                )}
+              </span>
+            );
+          },
         },
       ]}
     />

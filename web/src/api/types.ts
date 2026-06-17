@@ -50,6 +50,8 @@ export interface SiteItem {
   readonly approval_status: string;
   readonly circuit_status: string;
   readonly name?: string;
+  // 운영자-보조 세션 캡처 가능 여부(reads.ts 투영). loginUrl 설정 사이트만 '세션 등록' 노출.
+  readonly login_capable?: boolean;
 }
 
 // GET /v1/artifacts/{id} 응답(api-surface §5; reads.ts). content는 redacted 본문(at rest 마스킹 — 평문 없음).
