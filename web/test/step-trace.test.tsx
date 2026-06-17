@@ -222,4 +222,91 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
     await waitFor(() => expect(screen.getByText("AI(모델·출력토큰)")).toBeInTheDocument()); // 표 전용 헤더
     expect(screen.getByRole("button", { name: "표" })).toHaveAttribute("aria-pressed", "true");
   });
+
+  // F1 — 현재 실행 단계 하이라이트(status='started' 파생). 비-터미널 enum은 'started' 하나뿐이므로 마지막 'started' = 현재.
+  test("F1: status='started'인 마지막 단계만 .step-card.current로 강조", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [
+            { step_id: "s1", node_id: "done_node", attempt: 0, action: "navigate", status: "success", cache_mode: "bypass", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 100, exception: null },
+            { step_id: "s2", node_id: "live_node", attempt: 0, action: "observe", status: "started", cache_mode: "miss", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: null, exception: null },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("live_node")).toBeInTheDocument());
+    const current = document.querySelectorAll<HTMLElement>(".step-card.current");
+    expect(current.length).toBe(1); // 정확히 1개
+    expect(current[0]!.textContent).toContain("live_node"); // 그것이 started 단계(s2)
+    expect(current[0]!.textContent).not.toContain("done_node"); // s1엔 .current 부재
+    expect(screen.getByText("진행 중")).toBeInTheDocument(); // '진행 중' 칩
+  });
+
+  // F1 회귀(거짓 현재단계): 같은 step_id가 재시도로 여러 행일 때, 종료된 이전 attempt 행을 '현재'로 강조하면 안 된다.
+  // attempt0=failed_system(터미널) + attempt1=started(라이브) → started 행 정확히 1개만 .current/'진행 중'.
+  test("F1: 동일 step_id 재시도 — 종료된 attempt0 아닌 started attempt1만 .current(거짓 현재단계 금지)", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [
+            { step_id: "x", node_id: "find_login", attempt: 0, action: "observe", status: "failed_system", cache_mode: "miss", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 500, exception: { class: "system", code: "DOM_ELEMENT_NOT_FOUND" } },
+            { step_id: "x", node_id: "find_login", attempt: 1, action: "observe", status: "started", cache_mode: "miss", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: null, exception: null },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("DOM_ELEMENT_NOT_FOUND")).toBeInTheDocument()); // 두 행 모두 마운트됨
+    const current = document.querySelectorAll<HTMLElement>(".step-card.current");
+    expect(current.length).toBe(1); // 정확히 1개(종료된 attempt0까지 강조하지 않음)
+    expect(current[0]!.textContent).toContain("재시도 1회차"); // 그것이 attempt1(started) 행
+    expect(current[0]!.textContent).not.toContain("DOM_ELEMENT_NOT_FOUND"); // 실패한 attempt0 카드엔 .current 부재
+    expect(screen.queryAllByText("진행 중")).toHaveLength(1); // '진행 중' 칩도 정확히 1개
+  });
+
+  // F1 핵심 가드(silent-false): 모든 단계가 종료(started 없음)면 현재단계를 만들지 않는다 — run이 running이어도.
+  test("F1: started 단계가 없으면 .current 강조 0(거짓 현재단계 금지)", async () => {
+    renderApp(); // 기본 픽스처 — 전부 status:'success'
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument());
+    expect(document.querySelectorAll(".step-card.current").length).toBe(0);
+    expect(screen.queryByText("진행 중")).toBeNull();
+  });
+
+  // F2 — 관찰된 단계 수만 표기. 총 단계수/진행%는 분모가 API에 없으므로 만들지 않는다(창작 금지 가드).
+  test("F2: '관찰된 N개 단계' 표기 + 진행%/총단계 텍스트 부재", async () => {
+    renderApp(); // 기본 픽스처 2단계
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("관찰된 2개 단계")).toBeInTheDocument());
+    expect(screen.queryByText(/진행률|%|총\s*\d+\s*단계/)).toBeNull();
+  });
+
+  // F2 절단 정직성(Dashboard.pageCount와 동일 규율): next_cursor가 남으면 페이지 길이를 총계처럼 보이지 않게 `N+`로.
+  test("F2: next_cursor 있으면 '관찰된 N+개 단계'(미공개 절단 방지)", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [{ step_id: "a", node_id: "n", attempt: 0, action: "act", status: "success", cache_mode: "miss", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 10, exception: null }],
+          next_cursor: "cur-2", // 더 있음
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("관찰된 1+개 단계")).toBeInTheDocument());
+    expect(screen.queryByText("관찰된 1개 단계")).toBeNull(); // 총계처럼 보이는 정확수 표기 아님
+  });
+
+  // F2 — 트레이스-로컬 라이브(갱신) 인디케이터가 패널에 마운트된다(폴링 사실 표시).
+  test("F2: 트레이스 패널에 freshness role=status 라이브 표시 존재", async () => {
+    renderApp();
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("관찰된 2개 단계")).toBeInTheDocument());
+    const freshness = document.querySelectorAll(".freshness[role='status']");
+    // 전역 topbar 1개 + 트레이스-로컬 1개 → 최소 2개(패널 신호가 추가로 마운트됨).
+    expect(freshness.length).toBeGreaterThanOrEqual(2);
+  });
 });
