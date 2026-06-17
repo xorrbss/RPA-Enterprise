@@ -103,9 +103,12 @@ interface GatewayPolicyRow {
 
 interface SiteRow {
   id: string;
+  name: string;
   risk: string;
   approved: boolean;
   circuit_state: string;
+  // 운영자-보조 세션 캡처 가능 여부 — page_state_selectors.loginUrl 설정 사이트만 '세션 등록' 노출(미설정 사이트의 412 클릭 회피).
+  login_capable: boolean;
   created_at: Date;
 }
 
@@ -574,7 +577,8 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<SiteRow>(
-        `SELECT id, risk, approved, circuit_state, created_at
+        `SELECT id, name, risk, approved, circuit_state,
+                (page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable, created_at
            FROM site_profiles
           WHERE tenant_id = $1::uuid
             AND ($2::text IS NULL OR risk = $2)
@@ -601,7 +605,9 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
       }
       const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<SiteRow>(
-          `SELECT id, risk, approved, circuit_state, created_at FROM site_profiles WHERE id = $1::uuid`,
+          `SELECT id, name, risk, approved, circuit_state,
+                  (page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable, created_at
+             FROM site_profiles WHERE id = $1::uuid`,
           [id],
         );
         return result.rows[0] ?? null;
@@ -724,9 +730,11 @@ function mapGatewayPolicy(r: GatewayPolicyRow): Record<string, unknown> {
 function mapSite(r: SiteRow): Record<string, unknown> {
   return {
     site_profile_id: r.id,
+    name: r.name,
     risk: r.risk,
     approval_status: r.approved ? "approved" : "pending",
     circuit_status: r.circuit_state,
+    login_capable: r.login_capable,
   };
 }
 
