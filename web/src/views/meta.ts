@@ -4,7 +4,7 @@ import type { ViewKey } from "../router";
 export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon: string }> = {
   scenarioStudio: { title: "자동화 만들기", subtitle: "업무를 한 번 보여주고 반복 실행할 자동화 시나리오로 정리", icon: "Video" },
   playground: { title: "테스트 실행", subtitle: "만든 자동화를 안전하게 시험 실행하고 실제 실행 전 결과를 확인", icon: "PlaySquare" },
-  dashboard: { title: "RPA 운영 대시보드", subtitle: "실행 상태, 사람 확인, AI 비용, 보안 상태를 통합 모니터링", icon: "LayoutDashboard" },
+  dashboard: { title: "RPA 운영 대시보드", subtitle: "실행 상태, 사람 확인, 실패, 작업항목·외부 전달 DLQ를 통합 모니터링", icon: "LayoutDashboard" },
   openGate: { title: "Product-open 점검", subtitle: "계약 기준으로 화면, 액션, 보안 gate가 검증 가능한지 확인", icon: "ClipboardCheck" },
   workitems: { title: "작업 목록", subtitle: "대기, 재시도, 실패, 외부 전달 상태를 추적", icon: "ListChecks" },
   humanTasks: { title: "사람 확인", subtitle: "보안문자, 추가 인증, 승인, 검증 업무를 담당자 기준으로 처리", icon: "Inbox" },

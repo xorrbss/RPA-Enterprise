@@ -2,7 +2,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { useApiClient } from "../api/context";
-import { ApiError, type ValidationResult } from "../api/types";
+import { type ValidationResult } from "../api/types";
+import { errorLabel } from "../components/badges";
 
 // 시나리오 검사 — POST /v1/scenarios/{id}/validate(비변이)로 V1–V11 정적검증 dry-run, ValidationReport 렌더.
 // IR 본문은 붙여넣기(에디터 전 단계). 저장/승격은 scenarioStudio.
@@ -84,11 +85,7 @@ export function IrValidationView(): JSX.Element {
             {mut.isPending ? "검사 중…" : "검사 실행"}
           </button>
         </div>
-        {mut.isError && (
-          <div className="badge red">
-            {mut.error instanceof ApiError ? `${mut.error.code} (${mut.error.httpStatus})` : (mut.error as Error).message}
-          </div>
-        )}
+        {mut.isError && <div className="badge red">{errorLabel(mut.error)}</div>}
         {mut.data !== undefined && (
           <div>
             <span className={`badge ${mut.data.valid ? "green" : "red"}`}>{mut.data.valid ? "통과 (승격 가능)" : "거부"}</span>

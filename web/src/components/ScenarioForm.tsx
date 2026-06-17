@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { ApiError, type ValidationResult } from "../api/types";
+import { errorLabel } from "./badges";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { StepBuilder } from "./StepBuilder";
 import { OperatorWizard } from "./OperatorWizard";
@@ -51,12 +52,13 @@ function bumpVersion(ir: unknown, version: number): string {
 }
 
 function describe(e: unknown): string {
+  // web-고유 행동지향 분기: 붙여넣은 IR JSON 자체가 깨진 경우는 계약 코드가 아니라 입력 수정 안내(보존).
   if (e instanceof SyntaxError) return "JSON 형식 오류 — 중괄호/쉼표를 확인하세요.";
-  if (e instanceof ApiError) {
-    const details = e.body?.details ? ` — ${JSON.stringify(e.body.details)}` : "";
-    return `${e.code} (${e.httpStatus})${details}`;
+  // 그 외(ApiError 포함)는 errorLabel(계약 userMessage 미러)로 통일하되, 검증 details는 진단용으로 부가.
+  if (e instanceof ApiError && e.body?.details) {
+    return `${errorLabel(e)} — ${JSON.stringify(e.body.details)}`;
   }
-  return e instanceof Error ? e.message : "요청 실패";
+  return errorLabel(e);
 }
 
 export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClose: () => void }): JSX.Element {

@@ -257,7 +257,8 @@ describe("D7 운영 콘솔 shell", () => {
     const abortBtn = await screen.findByRole("button", { name: "취소" });
     abortBtn.click();
     (await screen.findByRole("button", { name: "확인" })).click();
-    await waitFor(() => expect(screen.getByText("RUN_ABORTED (409)")).toBeInTheDocument());
+    // errorLabel(계약 ERROR_CATALOG[RUN_ABORTED].userMessage 미러)로 통일 — 이전 'RUN_ABORTED (409)' raw 덤프 갱신(의도된 변경).
+    await waitFor(() => expect(screen.getByText("실행이 중단되었습니다.")).toBeInTheDocument());
   });
 
   test("자동화 실행(run-start) 디스패치 — 최신 버전 createRun + Idempotency-Key", async () => {

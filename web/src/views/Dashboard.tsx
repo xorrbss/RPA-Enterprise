@@ -32,9 +32,11 @@ function Metric({ label, value, hash, hint }: { label: string; value: string; ha
   );
 }
 
+type Page = { items: readonly unknown[]; next_cursor: string | null };
+
 // 카운트 표기(조용한 false 금지): 서버 집계 엔드포인트가 없어 카운트는 '최신 50건' 페이지 기준이다.
 // next_cursor가 있으면(=더 있음) `N+`(≥N 하한)로, 없으면 정확한 N으로 표기 — 페이지 길이를 총계처럼 보이지 않게 한다.
-function pageCount(d: { items: readonly unknown[]; next_cursor: string | null } | undefined): string {
+function pageCount(d: Page | undefined): string {
   if (d === undefined) return "—";
   return d.next_cursor !== null ? `${d.items.length}+` : String(d.items.length);
 }
@@ -48,6 +50,12 @@ export function DashboardView(): JSX.Element {
   const human = useQuery({ queryKey: ["human-tasks"], queryFn: () => api.listHumanTasks({ limit: 50 }), refetchInterval: 5_000 });
   const wiDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 5_000 });
   const sinkDlq = useQuery({ queryKey: ["dlq", "sink"], queryFn: () => api.listDlq("sink", { limit: 50 }), refetchInterval: 5_000 });
+  // 실패 터미널(failed_business/failed_system)을 서버 status 필터로 각각 정확 집계(클라 필터 아님).
+  // 카드를 status별로 분리한다: 합산 단일 카드는 카운트(business+system)와 드릴다운 해시(단일 status)의 모집단이
+  // 어긋나(RunTrace는 단일 status만 시드) 실패 총량을 오표상했다. 카드별 단일-status 카운트↔단일-status 해시로
+  // '실행 중' 카드와 동일하게 카운트·목록 모집단 정합을 정확히 만족시킨다(조용한 false 인접 오표상 제거).
+  const failedBiz = useQuery({ queryKey: ["runs", "failed_business"], queryFn: () => api.listRuns({ status: "failed_business", limit: 50 }), refetchInterval: 5_000 });
+  const failedSys = useQuery({ queryKey: ["runs", "failed_system"], queryFn: () => api.listRuns({ status: "failed_system", limit: 50 }), refetchInterval: 5_000 });
 
   // 첫-실행 안내 배너: '진짜 빈 테넌트'(실행 0건)일 때만. recent(무필터 listRuns)의 실 필드로만 판정.
   // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
@@ -60,6 +68,8 @@ export function DashboardView(): JSX.Element {
       <div className="metrics">
         <Metric label="실행 중" value={pageCount(running.data)} hash="#runTrace?status=running" hint="실행 기록" />
         <Metric label="사람 확인 대기" value={pageCount(human.data)} hash="#humanTasks" hint="사람 확인" />
+        <Metric label="업무 실패" value={pageCount(failedBiz.data)} hash="#runTrace?status=failed_business" hint="실행 기록" />
+        <Metric label="시스템 실패" value={pageCount(failedSys.data)} hash="#runTrace?status=failed_system" hint="실행 기록" />
         <Metric label="작업항목 DLQ" value={pageCount(wiDlq.data)} hash="#workitems" hint="작업 목록" />
         <Metric label="외부 전달 DLQ" value={pageCount(sinkDlq.data)} hash="#workitems" hint="작업 목록" />
       </div>

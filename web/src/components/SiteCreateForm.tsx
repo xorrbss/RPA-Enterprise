@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
-import { ApiError } from "../api/types";
+import { errorLabel } from "./badges";
 
 // 사이트 신규 등록(온보딩) 폼 — api-surface §7 POST /v1/sites. site.create 권한(operator+) 없으면 숨김(백엔드 최종 강제).
 // url_pattern은 http(s) origin이어야 백엔드가 수락(런타임 resolveSiteProfileId가 URL.origin 매칭) — 1차 검증.
@@ -39,7 +39,7 @@ export function SiteCreateForm(): JSX.Element | null {
       setOpen(false);
       void qc.invalidateQueries({ queryKey: ["sites"] });
     },
-    onError: (e) => setMsg({ tone: "red", text: e instanceof ApiError ? `${e.code} (${e.httpStatus})` : "실패" }),
+    onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
   });
 
   if (!can("site.create")) return null;
