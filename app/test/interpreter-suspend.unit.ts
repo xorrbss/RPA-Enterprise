@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   // 2) suspended(challenge=mfa) → challengeKind=mfa(하드코딩 제거 검증 — captcha 로 오라벨링 안 됨).
   {
     const o = await runScenario(scenario, ctx(), { executor: executorReturning("suspended", undefined, challenge("mfa")), resolver: fakeResolver });
-    check("suspend.challengeKind === 'mfa' (executor 신호 반영)", o.terminal === "suspend" && o.suspend?.challengeKind === "mfa", o.suspend?.challengeKind);
+    check("suspend.challengeKind === 'mfa' (executor 신호 반영)", o.terminal === "suspend" && o.suspend?.kind === "challenge" && o.suspend.challengeKind === "mfa", JSON.stringify(o.suspend));
     check("exception 없는 suspend → suspend.exception undefined", o.suspend?.exception === undefined);
   }
 
