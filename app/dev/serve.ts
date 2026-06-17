@@ -537,16 +537,17 @@ async function seed(pool: Pool): Promise<void> {
     );
   }
 
-  // gateway_policies: 2 모델.
-  for (const [id, model] of [
-    ["79000000-0000-0000-0000-0000000000d1", "gpt-4o-mini"],
-    ["79000000-0000-0000-0000-0000000000d2", "claude-haiku"],
-  ]) {
+  // gateway_policies: 2 모델. gpt-4o-mini=테넌트 기본(is_default) — 콘솔 '실행'(model 미지정)이 기본 정책으로
+  // 자동 해소되게(부재 시 다정책 테넌트는 model_required 422). 실 Codex 게이트웨이가 gpt-4o-mini 라 기본 적합.
+  for (const [id, model, isDefault] of [
+    ["79000000-0000-0000-0000-0000000000d1", "gpt-4o-mini", true],
+    ["79000000-0000-0000-0000-0000000000d2", "claude-haiku", false],
+  ] as const) {
     await withTenantTx(pool, TENANT, (c) =>
       c.query(
-        `INSERT INTO gateway_policies (id, tenant_id, model, version, capabilities, budget, fallback_config)
-         VALUES ($1,$2,$3,1,'{"jsonMode":true,"vision":false}'::jsonb,'{"maxInputTokens":1000}'::jsonb,'{"model":"fallback"}'::jsonb)`,
-        [id, TENANT, model],
+        `INSERT INTO gateway_policies (id, tenant_id, model, version, is_default, capabilities, budget, fallback_config)
+         VALUES ($1,$2,$3,1,$4,'{"jsonMode":true,"vision":false}'::jsonb,'{"maxInputTokens":1000}'::jsonb,'{"model":"fallback"}'::jsonb)`,
+        [id, TENANT, model, isDefault],
       ),
     );
   }
