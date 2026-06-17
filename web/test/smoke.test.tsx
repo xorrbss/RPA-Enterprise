@@ -258,6 +258,24 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.getByText(/no branch matched/)).toBeInTheDocument();
   });
 
+  // F3 — validate 성공 표기는 '검증 통과'(dry-run이 실제 보고한 것)만 말하고 '승격 가능'을 단정하지 않는다(조용한 false 금지).
+  // 승격은 별개 명령(admin·If-Match version)이라 이 화면이 관찰하지 못한 값 → scenarioStudio로 안내만 한다(막다른 길 해소).
+  test("시나리오 검사: valid → '검증 통과'(승격 가능 단정 없음) + 자동화 만들기 안내 동선", async () => {
+    renderApp(
+      fakeClient({
+        validateScenario: async () => ({ valid: true, report: { errors: [], warnings: [] } }),
+      }),
+    );
+    location.hash = "#irValidation";
+    fireEvent.change(await screen.findByPlaceholderText(/00000000/), { target: { value: "scn-1" } });
+    screen.getByRole("button", { name: "검사 실행" }).click();
+    await waitFor(() => expect(screen.getByText("검증 통과")).toBeInTheDocument());
+    expect(screen.queryByText(/승격 가능/)).toBeNull(); // 거짓금지 회귀 가드(재유입 시 실패)
+    const goto = await screen.findByRole("button", { name: /자동화 만들기에서 진행/ });
+    goto.click();
+    await waitFor(() => expect(location.hash).toBe("#scenarioStudio")); // navigate 실배선(죽은 버튼 아님)
+  });
+
   test("운영자 명령 실패 → 코드 표면화", async () => {
     const { ApiError } = await import("../src/api/types");
     renderApp(

@@ -4,9 +4,8 @@
 // 의 "중복 방지" 설명 화면을 계약 문서에서 파생한 로컬 상수로 이식한다. 목업의 mock 수치(99.1% 등)는
 // 근거 없는 가정이라 제외하고, 각 행을 실제 계약 아티팩트에 매핑한다(가정 금지). fetch 없음.
 
-import type { ReactNode } from "react";
-
-type Tone = "green" | "amber" | "red" | "blue" | "muted";
+import { Panel } from "../components/Panel";
+import type { Tone } from "../components/badges";
 
 interface MechanismRow {
   layer: string;
@@ -109,18 +108,6 @@ const LEASES: readonly LeaseRow[] = [
     basis: "migration_concurrency_idempotency · ops-defaults §lease",
   },
 ];
-
-function Panel({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }): JSX.Element {
-  return (
-    <section className="panel" style={{ marginBottom: 16 }}>
-      <div className="panel-head">
-        <h2>{title}</h2>
-        {subtitle !== undefined && <span style={{ color: "var(--muted)", fontSize: 12 }}>{subtitle}</span>}
-      </div>
-      <div className="panel-body">{children}</div>
-    </section>
-  );
-}
 
 export function IdempotencyView(): JSX.Element {
   return (

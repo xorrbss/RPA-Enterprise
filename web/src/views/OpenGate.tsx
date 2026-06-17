@@ -3,7 +3,8 @@
 // 로컬 상수로 노출해 검토 가능하게 한다(control-plane gate/checklist 자원을 발명하지 않음 — YAGNI).
 // HTML 목업(rpa_enterprise_console.html openGate)의 3개 contract-table을 React로 이식. fetch 없음.
 
-type Tone = "green" | "amber" | "red" | "blue";
+import { Panel } from "../components/Panel";
+import type { Tone } from "../components/badges";
 
 // 목업 status(active/pending/risk/system) → badge tone.
 function toneOf(status: "active" | "pending" | "risk" | "system"): Tone {
@@ -72,18 +73,6 @@ const API_CONTRACT: readonly ApiRow[] = [
   { surface: "Gateway 정책", endpoint: "PUT /v1/gateway/policy", header: "If-Match + Idempotency-Key", response: "POLICY_VERSION_CONFLICT / LLM_CAPABILITY_MISMATCH", status: "active" },
   { surface: "사이트 승인", endpoint: "POST /v1/sites/{id}/approve", header: "Idempotency-Key", response: "risk=red 실행 차단 해소", status: "pending" },
 ];
-
-function Panel({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }): JSX.Element {
-  return (
-    <section className="panel" style={{ marginBottom: 16 }}>
-      <div className="panel-head">
-        <h2>{title}</h2>
-        {subtitle !== undefined && <span style={{ color: "var(--muted)", fontSize: 12 }}>{subtitle}</span>}
-      </div>
-      <div className="panel-body">{children}</div>
-    </section>
-  );
-}
 
 export function OpenGateView(): JSX.Element {
   return (
