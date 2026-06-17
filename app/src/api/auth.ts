@@ -10,7 +10,7 @@
  * 알고리즘은 검증기(JwtVerifier) 주입으로 분리한다 — 경계는 transport/알고리즘 무관(운영은 RS256/JWKS 검증기
  * 주입). v1 기본은 HS256 공유 시크릿. alg 화이트리스트로 alg-confusion/none을 차단한다.
  */
-import { jwtVerify, type JWTPayload } from "jose";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 import type {
   AuthBoundaryResult,
@@ -39,6 +39,33 @@ export type JwtVerifier = (token: string) => Promise<JWTPayload>;
 export function hmacJwtVerifier(secret: Uint8Array): JwtVerifier {
   return async (token) => {
     const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"], requiredClaims: ["exp"] });
+    return payload;
+  };
+}
+
+export interface JwksRs256VerifierOptions {
+  /** Absolute https URL of the IdP JWKS endpoint (RS256 public keys). */
+  readonly jwksUrl: string;
+  /** Optional expected `iss` — when set, jose rejects tokens from other issuers (token-confusion defense). */
+  readonly issuer?: string;
+  /** Optional expected `aud` — when set, jose rejects tokens minted for another audience. */
+  readonly audience?: string;
+}
+
+/**
+ * RS256/JWKS 검증기 (운영 기본). 원격 JWKS(IdP 공개키)로 서명 검증한다. alg를 RS256으로 고정해
+ * alg-confusion/`none`/HS256-혼동을 차단한다. exp를 필수로 강제(만료 없는 토큰 throw, fail-closed); issuer/audience
+ * 지정 시 함께 검증한다. JWKS 는 첫 검증 시 lazy-fetch(이 함수 호출=부팅 시점엔 네트워크 호출 없음).
+ */
+export function jwksRs256Verifier(opts: JwksRs256VerifierOptions): JwtVerifier {
+  const jwks = createRemoteJWKSet(new URL(opts.jwksUrl));
+  return async (token) => {
+    const { payload } = await jwtVerify(token, jwks, {
+      algorithms: ["RS256"],
+      requiredClaims: ["exp"],
+      ...(opts.issuer !== undefined ? { issuer: opts.issuer } : {}),
+      ...(opts.audience !== undefined ? { audience: opts.audience } : {}),
+    });
     return payload;
   };
 }
