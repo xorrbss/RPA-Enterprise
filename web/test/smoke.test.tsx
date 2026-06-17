@@ -316,6 +316,48 @@ describe("D7 운영 콘솔 shell", () => {
     expect(calls[0]?.params).toEqual({ orders_url: "https://shop.example/orders/9" });
   });
 
+  test("run-start model_required → 모델 입력 폼 노출 + 에러 패널내 표면화 + 재실행 시 model 전달", async () => {
+    const { ApiError } = await import("../src/api/types");
+    const calls: Array<{ model?: string }> = [];
+    let attempt = 0;
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000003", name: "세션 확인", version: 1, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000003" }],
+          next_cursor: null,
+        }),
+        getScenario: async (id) => ({
+          scenario_id: id,
+          name: "세션 확인",
+          version: 1,
+          promotion_status: "prod",
+          // url_ref 키 없음 → 추가 입력 없이 바로 실행(모델 해소만 검증).
+          ir: { start: "open", nodes: { open: { what: [{ action: "observe" }], next: "done" }, done: { terminal: "success" } } },
+        }),
+        createRun: async (body) => {
+          attempt += 1;
+          // 1차: 다정책+기본없음 → model_required(임의선택 금지). 2차(model 지정): 성공.
+          if (attempt === 1) {
+            throw new ApiError(422, "IR_SCHEMA_INVALID", { code: "IR_SCHEMA_INVALID", details: { reason: "model_required", available: 2 } });
+          }
+          calls.push({ model: body.model });
+          return { run_id: "run-3", status: "queued" };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    (await screen.findByRole("button", { name: "실행" })).click(); // 패널 열기
+    (await screen.findByRole("button", { name: "실행 시작" })).click(); // 1차 createRun → model_required
+    // 모델 입력 폼 + 에러 메시지가 패널 안에 노출(조용한 무반응 금지).
+    const modelField = await screen.findByLabelText("AI 모델");
+    expect(screen.getByText(/AI 모델을 지정해야 합니다/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled(); // 모델 미입력 가드
+    fireEvent.change(modelField, { target: { value: "gpt-4o-mini" } });
+    screen.getByRole("button", { name: "실행 시작" }).click(); // 2차 createRun(model)
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.model).toBe("gpt-4o-mini"); // 선택한 모델 전달
+  });
+
   test("실행 상세 drill-down — getRun 패널(워커/시도 표시)", async () => {
     const calls: string[] = [];
     renderApp(
