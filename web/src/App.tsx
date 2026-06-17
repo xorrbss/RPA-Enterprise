@@ -12,6 +12,7 @@ import { ScenariosView } from "./views/Scenarios";
 import { IrValidationView } from "./views/IrValidation";
 import { PlaygroundView } from "./views/Playground";
 import { OpenGateView } from "./views/OpenGate";
+import { IdempotencyView } from "./views/Idempotency";
 import { PlaceholderView } from "./views/Placeholder";
 
 // 라우트 → 뷰. read 백엔드가 있는 뷰는 실 연결, 그 외는 정직한 placeholder(D7.2+ 워크플로우 대상).
@@ -38,7 +39,7 @@ function renderView(view: ViewKey): JSX.Element {
     case "irValidation":
       return <IrValidationView />;
     case "idempotency":
-      return <PlaceholderView title="중복 방지" note="control_plane_idempotency_keys read 표면이 노출되면 연결됩니다." />;
+      return <IdempotencyView />;
     default:
       return <PlaceholderView title="알 수 없는 화면" note="대시보드로 이동하세요." />;
   }
