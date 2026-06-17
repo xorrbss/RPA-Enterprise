@@ -81,7 +81,8 @@ export type OperationId =
   | "updateGatewayPolicy"
   | "listSites"
   | "getSite"
-  | "approveSite";
+  | "approveSite"
+  | "createSite";
 
 export interface BoundaryValidationOk<T = unknown> {
   valid: true;

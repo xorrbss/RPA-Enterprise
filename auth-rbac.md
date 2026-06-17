@@ -56,6 +56,7 @@ export type Role =
 | scenario promote(prod 승격) | error-catalog `SCENARIO_VERSION_CONFLICT`(If-Match 412) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | artifact 조회 | security-contracts §8(redaction→RBAC 게이트) | ✓ | ✓ | ✓ | ✓ | ✓ | `SECRET_ACCESS_DENIED` |
 | site 조회(risk/circuit 상태) | api-surface §7 `GET /v1/sites`·`/{id}` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| site 신규 등록(온보딩) | api-surface §7 `POST /v1/sites` (`site.create`; scenario 작성과 동일 레벨) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | site risk=red 승인 권한 | approver 게이트(권한 부족=일반 RBAC 거부) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | secret 접근(SecretStore.resolve 스코프) | security-contracts §1, core-types `SecretStore` | — | — | — | — | ✓ | `SECRET_ACCESS_DENIED` |
 | connector enable/install | security-contracts §7, error-catalog `CONNECTOR_PERMISSION_DENIED` | — | — | — | — | ✓ | `CONNECTOR_PERMISSION_DENIED` |

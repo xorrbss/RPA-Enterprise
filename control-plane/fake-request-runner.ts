@@ -429,6 +429,7 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
   operator: [
     "run.read",
     "run.create",
+    "site.create",
     "workitem.read",
     "human_task.read",
     "artifact.read",
@@ -444,6 +445,7 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
   reviewer: [
     "run.read",
     "run.create",
+    "site.create",
     "workitem.read",
     "human_task.read",
     "artifact.read",
@@ -464,6 +466,7 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
   approver: [
     "run.read",
     "run.create",
+    "site.create",
     "workitem.read",
     "human_task.read",
     "artifact.read",
@@ -487,6 +490,7 @@ const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
   admin: [
     "run.read",
     "run.create",
+    "site.create",
     "workitem.read",
     "human_task.read",
     "artifact.read",

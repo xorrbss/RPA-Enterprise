@@ -278,6 +278,45 @@ async function main(): Promise<void> {
     check("RQ-029: repair priorText secret 마스킹([REDACTED], 원문 미노출)", serialized.includes("[REDACTED]") && !/hunter2/.test(serialized), serialized);
   }
 
+  // ── (b) jsonMode=false safe-path: responseFormat.schema → system 메시지 prompt-schema 주입(§7) ──
+  {
+    const schema = { type: "object", required: ["rows"], properties: { rows: { type: "array" } } };
+    const captureSystem = (capOver: Partial<ModelCapabilities>) => {
+      let sys: string[] = [];
+      const adapter: LLMBackendAdapter = {
+        id: "cap-ps",
+        capabilities: () => caps(capOver),
+        async *streamCall(r) {
+          sys = r.messages.filter((m) => m.role === "system").map((m) => (typeof m.content === "string" ? m.content : ""));
+          for (const e of textDone('{"rows":[]}')) yield e;
+        },
+      };
+      return { adapter, sys: () => sys.join("\n") };
+    };
+    const reqWith = (rf: Record<string, unknown> | undefined): LLMRequest =>
+      makeReq({
+        metadata: { tenantId: "t", runId: "r", stepId: "s", attempt: 0, primitive: "extract", correlationId: "c" },
+        messages: [{ role: "system", content: "Deterministic web automation extract planner." }, { role: "user", content: "get rows" }],
+        ...(rf !== undefined ? { responseFormat: rf } : {}),
+      });
+    const rf = (over: Record<string, unknown> = {}) => ({ type: "json_schema", schemaRef: "x", schemaVersion: "1", strict: false, ...over });
+
+    // jsonMode=false + schema → system 메시지에 prompt-schema 주입(스키마 JSON 포함).
+    const off = captureSystem({ jsonMode: false });
+    await gateway({ primary: off.adapter }).call(reqWith(rf({ schema })), sig());
+    check("(b) jsonMode=false + schema → system 메시지 prompt-schema 주입", /JSON Schema:/.test(off.sys()) && off.sys().includes('"rows"'), off.sys());
+
+    // jsonMode=true + schema → 미주입(native 경로).
+    const on = captureSystem({ jsonMode: true });
+    await gateway({ primary: on.adapter }).call(reqWith(rf({ schema })), sig());
+    check("(b) jsonMode=true + schema → prompt-schema 미주입(native)", !/JSON Schema:/.test(on.sys()), on.sys());
+
+    // schema 부재 → 미주입(기존 호출 무영향).
+    const none = captureSystem({ jsonMode: false });
+    await gateway({ primary: none.adapter }).call(reqWith(rf()), sig());
+    check("(b) schema 부재 → prompt-schema 미주입(무영향)", !/JSON Schema:/.test(none.sys()), none.sys());
+  }
+
   {
     const q = queueAdapter([textDone("should-not-run")]);
     const err = await caught(

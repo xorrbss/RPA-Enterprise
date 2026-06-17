@@ -161,6 +161,7 @@
 |---|---|---|---|---|
 | GET | `/v1/sites` | 쿼리: `?risk=red|amber|green&limit=&cursor=` | 200 + `{ items, next_cursor }` (site_profiles 요약) | — |
 | GET | `/v1/sites/{site_profile_id}` | — | 200 + 사이트 상세(risk, 승인 상태, circuit 상태) | `RESOURCE_NOT_FOUND`(404) |
+| POST | `/v1/sites` | `Idempotency-Key`. 생성 권한(`site.create`) 필요. body: `name`(필수)·`url_pattern`(필수, http(s) origin)·optional `risk`(green default/amber/red)·optional `page_state_selectors` | 201 + 생성된 site 요약(`site_profile_id`/`name`/`url_pattern`/`risk`/`approved`) | `AUTHZ_FORBIDDEN`(403)⁴, `IR_SCHEMA_INVALID`(422)⁵ |
 | POST | `/v1/sites/{site_profile_id}/approve` | `Idempotency-Key`. 승인 권한 필요. body: optional `reason`/`expires_at` | 200 + 승인 반영(risk=red 사이트 실행 허용) | `AUTHZ_FORBIDDEN`(403)⁴ |
 
 - `site risk=red`는 미승인 시 실행 차단(`SITE_PROFILE_BLOCKED`, 403, error-catalog operatorAction="site risk=red 승인 워크플로우"). 본 엔드포인트가 그 승인 워크플로우의 제어평면 진입점.
@@ -168,6 +169,8 @@
 - `risk` 등급값(red/amber/green)·site_profiles 승인/서킷 컬럼은 `db/migration_core_entities.sql`가 고정한다. 본 문서는 승인 흐름과 에러코드를 함께 고정한다.
 
 ⁴ 승인 권한 미보유 → `AUTHZ_FORBIDDEN`(403, security). 필요 역할은 auth-rbac.md §2(approver). (`SITE_PROFILE_BLOCKED`는 런타임 실행 차단용으로 별개.)
+
+⁵ `POST /v1/sites` 생성: `name`은 테넌트 내 유일(`site_profiles UNIQUE(tenant_id, name)`; 중복 → `IR_SCHEMA_INVALID` 422 reason=`site_name_already_exists`). `url_pattern`은 http(s) origin이어야 한다 — 런타임 `resolveSiteProfileId`가 entry navigate URL의 `URL.origin` 동일성으로 사이트를 해소하므로, 비-origin/opaque-scheme(`file:`/`data:` 등)은 매칭 불가 사이트라 생성 거부(422 `invalid_url_pattern`). `page_state_selectors`는 생성 시점에 `SitePageStateConfig`(닫힌 flag 레지스트리)로 엄격 검증되어 무효 config(런타임 `PAGE_STATE_UNRESOLVED`)를 선차단한다(422 `invalid_page_state_selectors`). `risk=green`(기본)은 즉시 실행 가능하고 `red`는 생성 후 approve 워크플로우가 필요하다(`approved=false`).
 
 ---
 

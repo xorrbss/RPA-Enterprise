@@ -190,6 +190,7 @@ const RBAC_ALLOWED_ROLES = {
   "artifact.read": ["viewer", "operator", "reviewer", "approver", "admin"],
   "site.read": ["viewer", "operator", "reviewer", "approver", "admin"],
   "site.approve": ["approver", "admin"],
+  "site.create": ["operator", "reviewer", "approver", "admin"],
   "secret.resolve": ["admin"],
   "connector.enable": ["admin"],
   "gateway_policy.read": ["viewer", "operator", "reviewer", "approver", "admin"],

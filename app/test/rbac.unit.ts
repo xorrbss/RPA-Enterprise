@@ -80,6 +80,7 @@ async function main(): Promise<void> {
   await expectAllow(["viewer"], "gateway_policy.read");
   await expectDeny(["viewer"], "run.create");
   await expectDeny(["viewer"], "site.approve");
+  await expectDeny(["viewer"], "site.create");
   await expectDeny(["viewer"], "gateway_policy.edit");
   await expectDeny(["viewer"], "run.abort");
   await expectDeny(["viewer"], "scenario.create");
@@ -94,6 +95,7 @@ async function main(): Promise<void> {
   await expectAllow(["operator"], "dlq.replay");
   await expectAllow(["operator"], "scenario.create");
   await expectAllow(["operator"], "scenario.update");
+  await expectAllow(["operator"], "site.create");
   await expectDeny(["operator"], "human_task.resolve.validation");
   await expectDeny(["operator"], "human_task.escalate");
   await expectDeny(["operator"], "scenario.promote");
