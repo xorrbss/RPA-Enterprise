@@ -8,6 +8,7 @@
 import {
   loadApiConfig,
   loadCommonConfig,
+  loadGatewayConfig,
   loadRunMode,
   loadWorkerConfig,
   type CommonConfig,
@@ -36,6 +37,9 @@ const CLEAR = [
   "PORT", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
   "VAULT_RUNTIME_WORKER_ROLE_ID", "VAULT_RUNTIME_WORKER_SECRET_ID",
   "GRAPHILE_WORKER_SCHEMA", "GRAPHILE_CONCURRENCY", "GRAPHILE_POLL_INTERVAL_MS",
+  "CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL", "CODEX_MAX_CONTEXT_TOKENS",
+  "CODEX_PRICE_PER_1K_INPUT_USD", "CODEX_PRICE_PER_1K_OUTPUT_USD",
+  "GATEWAY_ARTIFACT_DIR", "GATEWAY_ARTIFACT_RETENTION_DAYS", "PROMPT_TEMPLATE_VERSION",
 ];
 
 function withEnv(vars: Record<string, string>, fn: () => void): void {
@@ -101,6 +105,37 @@ function main(): void {
       w.resumeTokenRef,
     );
     check("worker concurrency default 1", w.graphileConcurrency === 1);
+  });
+
+  // GatewayConfig (D8-A16) — fail-closed on missing Codex provider creds / artifact dir; ops-defaults knobs.
+  const GW_REQ = {
+    CODEX_BASE_URL: "https://api.example/v1", CODEX_API_KEY: "sk-test", CODEX_MODEL: "gpt-x",
+    GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/gw-artifacts",
+  };
+  withEnv({}, () => expectThrow("gateway missing CODEX_BASE_URL throws", () => loadGatewayConfig()));
+  withEnv({ ...GW_REQ, CODEX_API_KEY: "" }, () =>
+    expectThrow("gateway blank CODEX_API_KEY throws", () => loadGatewayConfig()));
+  withEnv({ ...GW_REQ, CODEX_MODEL: "" }, () =>
+    expectThrow("gateway blank CODEX_MODEL throws", () => loadGatewayConfig()));
+  withEnv({ CODEX_BASE_URL: "https://api.example/v1", CODEX_API_KEY: "k", CODEX_MODEL: "m" }, () =>
+    expectThrow("gateway missing GATEWAY_ARTIFACT_DIR throws", () => loadGatewayConfig()));
+  withEnv({ ...GW_REQ, CODEX_BASE_URL: "not-a-url" }, () =>
+    expectThrow("gateway non-URL CODEX_BASE_URL throws", () => loadGatewayConfig()));
+  withEnv({ ...GW_REQ, CODEX_BASE_URL: "http://api.example/v1" }, () =>
+    expectThrow("gateway plaintext http CODEX_BASE_URL throws (Bearer key cleartext)", () => loadGatewayConfig()));
+  withEnv({ ...GW_REQ, CODEX_BASE_URL: "ftp://api.example" }, () =>
+    expectThrow("gateway non-https CODEX_BASE_URL throws", () => loadGatewayConfig()));
+  withEnv({ ...GW_REQ, CODEX_MAX_CONTEXT_TOKENS: "0" }, () =>
+    expectThrow("gateway non-positive CODEX_MAX_CONTEXT_TOKENS throws", () => loadGatewayConfig()));
+  withEnv(GW_REQ, () => {
+    const g = loadGatewayConfig();
+    check("gateway maxContextTokens default 8192", g.codexMaxContextTokens === 8192);
+    check("gateway price defaults 0 (cost cap inactive)", g.pricePer1kInputUsd === 0 && g.pricePer1kOutputUsd === 0);
+    check("gateway ops-defaults knobs", g.retryMax === 2 && g.idleTimeoutMs === 20_000 && g.wallTimeoutMs === 120_000);
+    check("gateway budget maxInputTokens = 90% maxContextTokens", g.budget.maxInputTokens === 7372, String(g.budget.maxInputTokens));
+    check("gateway budget output/cost ops-defaults", g.budget.maxOutputTokens === 4096 && g.budget.maxCost === 0.85);
+    check("gateway retention default 90", g.artifactRetentionDays === 90);
+    check("gateway promptTemplateVersion default", g.promptTemplateVersion === "dom-executor@1");
   });
 
   if (failures > 0) {

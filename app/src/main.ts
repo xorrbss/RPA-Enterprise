@@ -9,12 +9,14 @@
  * the real PgGraphileRunEnqueuer). The worker boots as a real graphile daemon (graphile `run()` — never
  * composed into a running stack before) and claims jobs. Scenario DRIVE requires production adapters that are
  * not yet implemented (test-fake only); they are deliberately left unwired and the worker LOUD-THROWS on the
- * job paths that need them ("조용한 false 금지" — never a silent no-op). Enumerated backlog (see
- * product-open-candidate-report.md / staging-deploy-runbook.md):
- *   - StagehandBrowserSessionProvider + real Chrome, executorFactory/LlmGateway wiring (the ajv
- *     StructuredOutputValidator now exists; needs gateway assembly), SinkDeliveryPort, SessionRestorer,
- *     RunAbortDrainer, a real SecretStore-backed SignedCommandRegistry (a fail-closed deny-all placeholder is
- *     used here), a JWKS/RS256 JWT verifier (HS256 is used here), and a recurring sweeper scheduler.
+ * job paths that need them ("조용한 false 금지" — never a silent no-op). The in-process LLM gateway +
+ * dom/utility executorFactory ARE now assembled (D8-A16, buildExecutorFactory) but stay DORMANT until a
+ * browser session provider is wired (the worker only invokes executorFactory inside driveClaimedRun, which
+ * needs a session provider). Enumerated backlog (see product-open-candidate-report.md /
+ * staging-deploy-runbook.md):
+ *   - StagehandBrowserSessionProvider + real Chrome (activates the assembled executorFactory), SinkDeliveryPort,
+ *     SessionRestorer, RunAbortDrainer, a real SecretStore-backed SignedCommandRegistry (a fail-closed deny-all
+ *     placeholder is used here), a JWKS/RS256 JWT verifier (HS256 is used here), and a recurring sweeper scheduler.
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
 import http from "node:http";
@@ -27,14 +29,22 @@ import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
 import { buildServer } from "./api/server";
-import { loadApiConfig, loadCommonConfig, loadRunMode, loadWorkerConfig } from "./config/env";
+import { loadApiConfig, loadCommonConfig, loadGatewayConfig, loadRunMode, loadWorkerConfig } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
+import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
+import { SafeCapabilityGate } from "./gateway/capability-gate";
+import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
+import { FetchCodexSseTransport } from "./gateway/codex-sse-transport";
+import { LlmGateway } from "./gateway/llm-gateway";
+import { FsObjectStore, PgGatewayArtifactSink } from "./gateway/pg-gateway-artifact-sink";
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
+import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { buildTaskList } from "./worker/graphile-runner";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
-import type { PgRuntimeWorkerOptions } from "./worker/runtime-worker";
+import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
+import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry, SignedCommandRegistryReadResult } from "../../ts/security-middleware-contract";
 
@@ -103,6 +113,47 @@ async function startApi(pool: PgPool): Promise<FastifyInstance> {
   return api;
 }
 
+/**
+ * Assemble the in-process production LLM Gateway and the dom/utility executor factory (release-decisions
+ * D8-A16). The gateway = CodexSseAdapter (env-sourced creds) + SafeCapabilityGate + AjvStructuredOutputValidator
+ * + PgGatewayArtifactSink(FsObjectStore) + DeterministicGatewayRedactionBoundary, with ops-defaults §4 knobs.
+ * The returned RunExecutorFactory routes dom primitives (act/observe/extract) through the gateway and utility
+ * actions deterministically.
+ *
+ * NOTE: this factory is DORMANT until a browserSessionProvider is wired (backlog item 2) — the worker only
+ * invokes executorFactory inside driveClaimedRun, which runs only when a session provider is present. So the
+ * gateway is assembled-and-ready but not yet on any live job path; the Q1 wiring precondition (extract
+ * scenarios lacking args.schema → EXTRACT_SCHEMA_INVALID) does not bite until that provider lands.
+ */
+function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
+  const gw = loadGatewayConfig();
+  const gateway = new LlmGateway({
+    primary: new CodexSseAdapter(
+      new FetchCodexSseTransport({ baseUrl: gw.codexBaseUrl, apiKey: gw.codexApiKey, model: gw.codexModel }),
+      {
+        model: gw.codexModel,
+        maxContextTokens: gw.codexMaxContextTokens,
+        idleTimeoutMs: gw.idleTimeoutMs,
+        wallTimeoutMs: gw.wallTimeoutMs,
+        pricePer1kInputUsd: gw.pricePer1kInputUsd,
+        pricePer1kOutputUsd: gw.pricePer1kOutputUsd,
+      },
+    ),
+    gate: new SafeCapabilityGate(),
+    validator: new AjvStructuredOutputValidator(),
+    sink: new PgGatewayArtifactSink(pool, new FsObjectStore(gw.artifactDir), {
+      retentionDays: gw.artifactRetentionDays,
+    }),
+    redactionBoundary: new DeterministicGatewayRedactionBoundary(),
+    config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
+  });
+  return createDomUtilityExecutorFactory(gateway, {
+    model: gw.codexModel,
+    promptTemplateVersion: gw.promptTemplateVersion,
+    budget: gw.budget,
+  });
+}
+
 async function startWorker(pool: PgPool, connectionString: string): Promise<Runner> {
   const cfg = loadWorkerConfig(loadCommonConfig());
   // Install/upgrade the graphile_worker schema (idempotent; fails fast if the DB role lacks rights).
@@ -117,13 +168,15 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
 
   // Worker ports: the real adapters whose deps exist now. browserLeasePlanResolver resolves a run's
   // {site_profile, browser_identity, network_policy} from the scenario's ir.target (Pg, RLS-scoped).
-  // Still-unwired drive-path ports (browser session provider + real Chrome, executor factory/validator,
-  // sink delivery, session restorer, abort drainer) loud-throw per job kind when needed (fail-closed),
-  // see SCOPE above.
+  // executorFactory assembles the in-process LLM gateway (D8-A16) so dom primitives drive through Codex —
+  // DORMANT until a browser session provider is wired (backlog item 2; see buildExecutorFactory).
+  // Still-unwired drive-path ports (browser session provider + real Chrome, sink delivery, session restorer,
+  // abort drainer) loud-throw per job kind when needed (fail-closed), see SCOPE above.
   const workerOptions: PgRuntimeWorkerOptions = {
     suspensionPort: new PgChallengeSuspensionPort(),
     resumeTokenCodec: new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef),
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
+    executorFactory: buildExecutorFactory(pool),
   };
 
   const runner = await run({
