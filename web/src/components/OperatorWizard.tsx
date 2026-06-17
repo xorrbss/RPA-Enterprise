@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 
 // 운영자용 '쉬운 만들기' — IR/flags/동작 같은 기술 용어 없이 평이한 질문 몇 개로 유효 IR을 생성한다.
 // 템플릿이 흐름(navigate→observe→extract→종료)을 고정하고, 운영자는 페이지 주소/데이터 이름만 채운다.
-// navigate는 실행기에서 "절대 URL"을 요구하므로(utility-executor) 페이지 주소는 https://… 절대 URL로 검증한다.
+// navigate.url_ref 는 리터럴 URL이 아니라 run params 의 '키'다(런타임 site-resolution: 키-only, 리터럴 흡수 금지).
+// 따라서 고정 키(entry_url)를 url_ref 로 쓰고, 입력 URL은 params_schema[entry_url].default 로 실어 실행 대화상자가
+// 그 값으로 입력을 prefill하게 한다. 페이지 주소는 default 로 쓸 절대 URL(http/https)인지 검증한다.
 // ※ 산출 IR은 '구조'다 — 실제로 그 페이지에서 데이터를 가져오려면 실행기 연결 + 사이트별 추출 설정이 필요하다.
 
 type Kind = "list" | "once";
@@ -19,18 +21,25 @@ function urlState(s: string): "empty" | "ok" | "bad" {
   }
 }
 
-function buildIr(name: string, pageUrl: string, dataName: string, kind: Kind): unknown {
+// url_ref 로 쓰는 고정 params 키. 입력 URL은 이 키의 params_schema default 로 실린다.
+const ENTRY_KEY = "entry_url";
+
+export function buildIr(name: string, pageUrl: string, dataName: string, kind: Kind): unknown {
   const meta = { name: name.trim() || "새 자동화", version: 1 };
-  // 절대 URL이면 그대로, 아니면 구조만 유효하도록 placeholder(저장은 되지만 실행은 안 됨 — 안내로 표면화).
-  const urlRef = urlState(pageUrl) === "ok" ? pageUrl.trim() : "https://example.com";
+  // url_ref = 고정 키(ENTRY_KEY). 입력 URL은 url_ref 에 박지 않고 params_schema[entry_url].default 로 싣는다
+  // (유효 http(s) URL일 때만) — 실행 대화상자가 이 default 로 prefill한다. 무효/빈값이면 default 없이 키만 선언.
+  const entryParam: Record<string, unknown> = { type: "string", description: "실행 대상 페이지 URL" };
+  if (urlState(pageUrl) === "ok") entryParam.default = pageUrl.trim();
+  const params_schema = { type: "object", properties: { [ENTRY_KEY]: entryParam }, required: [ENTRY_KEY] };
   const schemaRef = dataName.trim() || "수집데이터";
   if (kind === "list") {
     // 여러 화면 수집: 사이트 열기 → 화면 확인 → (목록 보이면) 가져오기 → 마무리.
     return {
       meta,
+      params_schema,
       start: "open",
       nodes: {
-        open: { what: [{ action: "navigate", url_ref: urlRef }], next: "check" },
+        open: { what: [{ action: "navigate", url_ref: ENTRY_KEY }], next: "check" },
         check: {
           what: [{ action: "observe" }],
           on: [
@@ -46,9 +55,10 @@ function buildIr(name: string, pageUrl: string, dataName: string, kind: Kind): u
   // 한 번만: 사이트 열기 → 가져오기 → 마무리.
   return {
     meta,
+    params_schema,
     start: "open",
     nodes: {
-      open: { what: [{ action: "navigate", url_ref: urlRef }], next: "collect" },
+      open: { what: [{ action: "navigate", url_ref: ENTRY_KEY }], next: "collect" },
       collect: { what: [{ action: "extract", schema_ref: schemaRef }], next: "done" },
       done: { terminal: "success" },
     },
