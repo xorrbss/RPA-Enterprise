@@ -8,6 +8,13 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", current_node: "observe_reviews", as_of: "2026-06-15T00:00:00.000Z" }],
       next_cursor: null,
     }),
+    listRunSteps: async () => ({
+      items: [
+        { step_id: "s1", node_id: "open", attempt: 0, action: "navigate", status: "success", cache_mode: "bypass", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 820, exception: null },
+        { step_id: "s2", node_id: "extract", attempt: 0, action: "extract", status: "success", cache_mode: "hit", artifact_ids: ["72000000-0000-0000-0000-000000000001"], stagehand_calls: [{ model: "gpt-4o-mini", transport: "sse", stream_status: "done", ttfb_ms: 120, input_tokens: 500, output_tokens: 200, cost: "0.001234" }], started_at: null, ended_at: null, duration_ms: 1200, exception: null },
+      ],
+      next_cursor: null,
+    }),
     listWorkitems: empty,
     listHumanTasks: empty,
     listDlq: empty,

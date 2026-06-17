@@ -70,6 +70,31 @@ export interface RunDetail {
   readonly as_of: string | null;
 }
 
+// GET /v1/runs/{id}/steps 항목(api-surface §1 각주⁶). 비민감 요약+참조만 — 본문/증빙은 artifact_ids→GET /v1/artifacts/{id}.
+export interface StagehandCallSummary {
+  readonly model: string;
+  readonly transport: string;
+  readonly stream_status: string | null;
+  readonly ttfb_ms: number | null;
+  readonly input_tokens: number | null;
+  readonly output_tokens: number | null;
+  readonly cost: string | null; // numeric → string
+}
+export interface StepSummary {
+  readonly step_id: string;
+  readonly node_id: string;
+  readonly attempt: number;
+  readonly action: string;
+  readonly status: string;
+  readonly cache_mode: string;
+  readonly artifact_ids: string[];
+  readonly stagehand_calls: StagehandCallSummary[];
+  readonly started_at: string | null;
+  readonly ended_at: string | null;
+  readonly duration_ms: number | null;
+  readonly exception: { class: string; code: string } | null;
+}
+
 export interface ScenarioDetail {
   readonly scenario_id: string;
   readonly name: string;

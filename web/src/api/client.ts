@@ -15,12 +15,15 @@ import {
   type ScenarioItem,
   type ScenarioMutationResult,
   type SiteItem,
+  type StepSummary,
   type ValidationResult,
   type WorkitemItem,
 } from "./types";
 
 export interface ApiClient {
   listRuns(p?: ListParams): Promise<Paginated<RunItem>>;
+  // run 하위 단계 트레이스(api-surface §1). 비민감 요약+참조만(본문은 artifact_ids→getArtifact).
+  listRunSteps(runId: string, p?: ListParams): Promise<Paginated<StepSummary>>;
   listWorkitems(p?: ListParams): Promise<Paginated<WorkitemItem>>;
   listHumanTasks(p?: ListParams): Promise<Paginated<HumanTaskItem>>;
   listDlq(kind: "workitem" | "sink", p?: ListParams): Promise<Paginated<DeadLetterItem>>;
@@ -158,6 +161,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
 
   return {
     listRuns: (p) => get(`/v1/runs${queryString(p)}`),
+    listRunSteps: (runId, p) => get(`/v1/runs/${runId}/steps${queryString(p)}`),
     listWorkitems: (p) => get(`/v1/workitems${queryString(p)}`),
     listHumanTasks: (p) => get(`/v1/human-tasks${queryString(p)}`),
     listDlq: (kind, p) => get(`/v1/dlq${queryString({ ...p, kind })}`),
