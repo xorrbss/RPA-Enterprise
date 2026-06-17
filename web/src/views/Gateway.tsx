@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { ErrorState, Loading } from "../components/states";
+import { errorLabel } from "../components/badges";
 import { useCan } from "../api/permissions";
 import { ApiError, type GatewayPolicy } from "../api/types";
 
@@ -36,7 +37,7 @@ export function GatewayView(): JSX.Element {
         ) : needsModel || modelNotFound ? (
           <ModelPicker current={model} notFound={modelNotFound ? model : undefined} onPick={setModel} />
         ) : query.isError ? (
-          <ErrorState message={messageOf(query.error)} onRetry={() => void query.refetch()} />
+          <ErrorState message={errorLabel(query.error)} onRetry={() => void query.refetch()} />
         ) : query.data !== undefined ? (
           <>
             {model !== undefined && (
@@ -173,16 +174,10 @@ function GatewayEditForm({ policy }: { policy: GatewayPolicy }): JSX.Element {
 }
 
 function errorText(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.code === "POLICY_VERSION_CONFLICT") return "다른 사용자가 먼저 수정했습니다. 새로고침 후 재시도하세요.";
-    if (err.code === "LLM_CAPABILITY_MISMATCH") return "예산(토큰)이 모델 컨텍스트 한도를 초과합니다.";
-    if (err.code === "AUTHZ_FORBIDDEN") return "권한이 없습니다.";
-    return `${err.code} (${err.httpStatus})`;
+  // web-고유 행동지향 분기 보존(계약 userMessage '모델 미지원 작업.'보다 편집 맥락이 구체적): 예산-한도 초과 안내.
+  // POLICY_VERSION_CONFLICT(이전 손작성 '다른 사용자가 먼저 수정…')·AUTHZ_FORBIDDEN은 errorLabel(계약 미러)로 통일 — 드리프트 소거.
+  if (err instanceof ApiError && err.code === "LLM_CAPABILITY_MISMATCH") {
+    return "예산(토큰)이 모델 컨텍스트 한도를 초과합니다.";
   }
-  return "저장 실패";
-}
-
-function messageOf(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code} (${err.httpStatus})`;
-  return err instanceof Error ? err.message : "오류";
+  return errorLabel(err);
 }

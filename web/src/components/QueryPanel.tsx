@@ -2,7 +2,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { EmptyState, ErrorState, Loading } from "./states";
-import { ApiError } from "../api/types";
+import { errorLabel } from "./badges";
 import type { Pager } from "../api/useListView";
 
 export interface Column<T> {
@@ -32,7 +32,7 @@ export function QueryPanel<T>(props: {
         {query.isLoading ? (
           <Loading />
         ) : query.isError ? (
-          <ErrorState message={errorMessage(query.error)} onRetry={() => void query.refetch()} />
+          <ErrorState message={errorLabel(query.error)} onRetry={() => void query.refetch()} />
         ) : (query.data?.items.length ?? 0) === 0 ? (
           <EmptyState message={emptyMessage} action={emptyAction} />
         ) : (
@@ -71,9 +71,4 @@ export function QueryPanel<T>(props: {
       </div>
     </section>
   );
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}${err.httpStatus ? ` (${err.httpStatus})` : ""}`;
-  return err instanceof Error ? err.message : "알 수 없는 오류";
 }

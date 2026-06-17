@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { hashWith, useHashParam } from "../router";
 import { ApiError } from "../api/types";
+import { errorLabel } from "./badges";
 
 // 산출물(artifact) ID 조회 — GET /v1/artifacts/{id}. 목록/생성 API가 v1 미노출이라 ID 직접 입력(운영자가 이벤트·로그·
 // run_steps에서 얻은 artifact_id). redaction→RBAC 2단 게이트 + audit boundary는 백엔드가 강제: 미존재/미redacted/
@@ -28,12 +29,12 @@ export function ArtifactRef({ id }: { id: string }): JSX.Element {
 }
 
 function errorText(err: unknown): string {
+  // web-고유 행동지향 분기 보존(계약 userMessage보다 맥락이 구체적): 미존재/미redaction·권한 안내.
   if (err instanceof ApiError) {
     if (err.code === "RESOURCE_NOT_FOUND") return "해당 산출물이 없거나 아직 준비(redaction)되지 않았습니다.";
     if (err.code === "SECRET_ACCESS_DENIED") return "이 산출물을 조회할 권한이 없습니다.";
-    return `${err.code}${err.httpStatus ? ` (${err.httpStatus})` : ""}`;
   }
-  return "조회에 실패했습니다.";
+  return errorLabel(err);
 }
 
 export function ArtifactLookup(): JSX.Element {

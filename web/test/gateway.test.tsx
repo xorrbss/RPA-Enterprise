@@ -76,7 +76,7 @@ describe("LLM 게이트웨이 정책 — 편집·RBAC·다중정책", () => {
     );
     location.hash = "#llmGateway";
     (await screen.findByRole("button", { name: "정책 저장" })).click();
-    await waitFor(() => expect(screen.getByText(/다른 사용자가 먼저 수정/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/정책 버전 충돌\. 최신 정책을 다시 불러오세요\./)).toBeInTheDocument());
   });
 
   test("gateway 다중정책: model_required → 모델 입력 → getGatewayPolicy(model) 조회(dead-end 해소)", async () => {

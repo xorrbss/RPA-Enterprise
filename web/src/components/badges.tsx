@@ -1,3 +1,5 @@
+import { ApiError } from "../api/types";
+
 // 상태값 → 배지 색. state-machine/api-surface 어휘 정합(취소됨=muted, 실패=red 등).
 const GREEN = new Set(["completed", "successful", "delivered", "resolved", "approved", "closed", "green", "not_required", "redacted"]);
 // "open"은 도메인별 의미가 달라 RED 미포함(아래 BLUE) — circuit open만 kind로 RED 분리(RQ-026).
@@ -83,4 +85,47 @@ const KIND_LABELS: Record<string, string> = {
 };
 export function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind;
+}
+
+// 에러 코드 → 비기술 한국어. 출처: 계약 ts/error-catalog.ts ERROR_CATALOG[code].userMessage(73행 주석 '외부 노출(민감정보 없음)')를
+// 글자 그대로 미러(STATUS_LABELS가 state-machine enum을 미러하는 것과 동일 정당성). web/tsconfig include는 src/test뿐이라
+// 계약 ts를 직접 import할 수 없어 손-미러 + 완전성 테스트(error-label.test.ts)가 드리프트를 막는다(badges 선례).
+// 운영자 표면화에 실제로 흐르는 4xx/표면 코드를 매핑. 미매핑 코드는 raw code로 폴백(조용한 공백 금지).
+const ERROR_LABELS: Record<string, string> = {
+  RUN_NOT_FOUND: "실행을 찾을 수 없습니다.",
+  RESOURCE_NOT_FOUND: "대상을 찾을 수 없습니다.",
+  RUN_ALREADY_TERMINAL: "이미 종료된 실행입니다.",
+  RUN_ABORTED: "실행이 중단되었습니다.",
+  SCENARIO_VERSION_CONFLICT: "버전 충돌. 최신본을 다시 불러오세요.",
+  POLICY_VERSION_CONFLICT: "정책 버전 충돌. 최신 정책을 다시 불러오세요.",
+  IR_SCHEMA_INVALID: "시나리오 정의 오류.",
+  IR_EXPRESSION_COMPILE_ERROR: "조건식 오류.",
+  SITE_PROFILE_BLOCKED: "해당 사이트는 승인이 필요합니다.",
+  SITE_CIRCUIT_OPEN: "일시적으로 수집이 중단되었습니다.",
+  SESSION_LOCKED: "잠시 후 재시도됩니다.",
+  CHALLENGE_UNRESOLVED: "추가 인증이 필요합니다.",
+  RATE_BUDGET_EXCEEDED: "요청 한도 초과. 다음 윈도우에 처리됩니다.",
+  AUTHZ_FORBIDDEN: "권한이 없습니다.",
+  UNAUTHENTICATED: "인증이 필요합니다.",
+  SECRET_ACCESS_DENIED: "권한이 없습니다.",
+  LLM_CAPABILITY_MISMATCH: "모델 미지원 작업.",
+  LLM_BUDGET_EXCEEDED: "처리 한도 초과.",
+  HUMAN_TASK_EXPIRED: "처리 기한 만료.",
+  WORKITEM_CHECKOUT_CONFLICT: "재시도됩니다.",
+  CONTROL_PLANE_INTERNAL_ERROR: "내부 오류가 발생했습니다.",
+};
+
+// 운영자 표면 에러 메시지 단일 출처(8곳 raw enum 덤프 통일). ApiError면 계약 userMessage 미러,
+// 미매핑이면 raw code 폴백(조용한 공백 금지). 비-ApiError는 아래 분기로 처리.
+// correlation_id는 실 응답 필드(types.ts ApiErrorBody)가 있을 때만 부가(없는 추적ID 창작 금지).
+export function errorLabel(err: unknown): string {
+  if (err instanceof ApiError) {
+    const base = ERROR_LABELS[err.code] ?? err.code;
+    const cid = err.body?.correlation_id;
+    return cid !== undefined ? `${base} (추적 ${cid})` : base;
+  }
+  // fetch 실패는 TypeError('Failed to fetch') — 원시 영문 대신 비기술 한국어로(운영자 레지스터).
+  // 그 외 일반 Error는 진단성 위해 message 보존(조용한 공백 금지). Error 아니면 '요청 실패'.
+  if (err instanceof TypeError) return "네트워크 연결을 확인해 주세요.";
+  return err instanceof Error ? err.message : "요청 실패";
 }

@@ -5,6 +5,7 @@ import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { ApiError, type ApiErrorBody, type CreateRunBody, type ScenarioItem } from "../api/types";
 import { extractUrlRefKeys, extractParamDefaults, urlRefLabel } from "../api/scenario-params";
+import { errorLabel } from "./badges";
 import { navigate } from "../router";
 
 // 자동화 실행 버튼 + 파라미터 입력 패널.
@@ -81,7 +82,7 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
         setModelRequired(mr);
         setMsg({ tone: "red", text: `AI 모델을 지정해야 합니다 (정책 ${mr.available}개, 기본 미지정). 모델명 입력 후 다시 실행하세요.` });
       } else {
-        setMsg({ tone: "red", text: e instanceof ApiError ? `${e.code} (${e.httpStatus})` : "실패" });
+        setMsg({ tone: "red", text: errorLabel(e) });
       }
     },
   });
