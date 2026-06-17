@@ -49,7 +49,8 @@ export function ActionButton(props: {
       >
         {mut.isPending ? "처리 중…" : props.label}
       </button>
-      {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
+      {/* 명령 성패를 SR에 전달(role=status=polite / alert=assertive) — '조용한 실패 금지'를 청각 채널에도 적용. */}
+      {msg !== null && <span className={`badge ${msg.tone}`} role={msg.tone === "green" ? "status" : "alert"}>{msg.text}</span>}
       {confirming && (
         <ConfirmDialog
           title={props.confirmText}
