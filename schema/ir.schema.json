@@ -31,6 +31,17 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/node" },
       "minProperties": 1
+    },
+    "target": {
+      "description": "실행 대상 선언(시나리오가 묶이는 사이트/아이덴티티/네트워크). 런타임 worker 의 BrowserLeasePlanResolver 가 run→scenario_version→ir.target 으로 해소한다. 미선언 시 drive 는 fail-closed(loud throw).",
+      "type": "object",
+      "required": ["site_profile_id", "browser_identity_id", "network_policy_id"],
+      "additionalProperties": false,
+      "properties": {
+        "site_profile_id": { "type": "string", "format": "uuid", "description": "site_profiles(id) 참조(tenant-scoped)" },
+        "browser_identity_id": { "type": "string", "format": "uuid", "description": "browser_identities(id) 참조(tenant-scoped)" },
+        "network_policy_id": { "type": "string", "format": "uuid", "description": "network_policies(id) 참조(tenant-scoped). RunContext.networkPolicyId 대상" }
+      }
     }
   },
   "$defs": {

@@ -36,10 +36,20 @@ export interface IRScenario {
   params_schema?: Record<string, unknown>;
   /** Assets 스토어 참조 키(값 아님) */
   assets?: string[];
+  /** 실행 대상 선언(site/identity/network). 런타임 BrowserLeasePlanResolver 가 해소. 미선언 시 drive fail-closed. */
+  target?: IRScenarioTarget;
   /** 시작 노드 id */
   start: string;
   /** 노드 맵. minProperties:1. 키는 노드 id. */
   nodes: Record<string, IRNode>;
+}
+
+/** 시나리오 실행 대상(site/identity/network) 선언. required: site_profile_id, browser_identity_id,
+ *  network_policy_id. additionalProperties:false. (tenant-scoped uuid refs — flow control용 IRTarget 와 무관) */
+export interface IRScenarioTarget {
+  site_profile_id: string;
+  browser_identity_id: string;
+  network_policy_id: string;
 }
 
 /** required: name, version. additionalProperties:false. */

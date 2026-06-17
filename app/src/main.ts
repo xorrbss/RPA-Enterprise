@@ -11,8 +11,8 @@
  * not yet implemented (test-fake only); they are deliberately left unwired and the worker LOUD-THROWS on the
  * job paths that need them ("조용한 false 금지" — never a silent no-op). Enumerated backlog (see
  * product-open-candidate-report.md / staging-deploy-runbook.md):
- *   - BrowserLeasePlanResolver (run_claim/run_resume), StagehandBrowserSessionProvider + real Chrome,
- *   - StructuredOutputValidator(ajv) → executorFactory/LlmGateway, SinkDeliveryPort, SessionRestorer,
+ *   - StagehandBrowserSessionProvider + real Chrome, executorFactory/LlmGateway wiring (the ajv
+ *     StructuredOutputValidator now exists; needs gateway assembly), SinkDeliveryPort, SessionRestorer,
  *     RunAbortDrainer, a real SecretStore-backed SignedCommandRegistry (a fail-closed deny-all placeholder is
  *     used here), a JWKS/RS256 JWT verifier (HS256 is used here), and a recurring sweeper scheduler.
  * ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -33,6 +33,7 @@ import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { buildTaskList } from "./worker/graphile-runner";
+import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions } from "./worker/runtime-worker";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry, SignedCommandRegistryReadResult } from "../../ts/security-middleware-contract";
@@ -114,12 +115,15 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
     appRole: { roleId: cfg.vaultRuntimeWorker.roleId, secretId: cfg.vaultRuntimeWorker.secretId },
   });
 
-  // Foundation worker ports: the real adapters whose deps exist now. Drive-path ports (browser lease resolver,
-  // browser session provider, executor factory, sink delivery, session restorer, abort drainer) are unwired —
-  // the worker loud-throws per job kind when they are needed (fail-closed), see SCOPE above.
+  // Worker ports: the real adapters whose deps exist now. browserLeasePlanResolver resolves a run's
+  // {site_profile, browser_identity, network_policy} from the scenario's ir.target (Pg, RLS-scoped).
+  // Still-unwired drive-path ports (browser session provider + real Chrome, executor factory/validator,
+  // sink delivery, session restorer, abort drainer) loud-throw per job kind when needed (fail-closed),
+  // see SCOPE above.
   const workerOptions: PgRuntimeWorkerOptions = {
     suspensionPort: new PgChallengeSuspensionPort(),
     resumeTokenCodec: new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef),
+    browserLeasePlanResolver: pgBrowserLeasePlanResolver,
   };
 
   const runner = await run({
