@@ -10,11 +10,16 @@ import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge, tone, type Tone } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
-import { mergeParams, useHashParam } from "../router";
+import { mergeParams, navigate, useHashParam } from "../router";
 import type { RunArtifactItem, RunDetail, RunItem } from "../api/types";
 
 const POLL_MS = 5_000; // 실시간 = outbox tail 폴링(v1)
 const TERMINAL = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
+// '사람 확인 대기'가 확실한 비-터미널 status만(state-machine). StatusBadge가 suspended를 '사람 확인 대기'로 라벨링하는 것과 정합.
+// suspending은 bookmark 저장 중 전이 상태(R11→suspended / R12→failed_system, 미정착)라 StatusBadge가 '보류 중'으로 라벨링하므로
+// 배너의 '대기 중'과 어휘가 충돌 + '대기' 단정이 한 발 앞선다 → 제외(suspended 단일 게이팅 = 배지와 동일 출처 정합).
+// resume_requested/resuming도 이미 resolve 진행 중이라 '대기' 단정이 과해 제외(보수적 게이팅).
+const SUSPENDED = new Set(["suspended"]);
 
 // F3 터미널 '도착' 톤 — 터미널 여부는 TERMINAL Set 단일 출처가 게이팅하고(비-터미널이면 null = 배너 없음),
 // 색은 badges.tone()에 위임해 도착 배너 배경과 내부 StatusBadge 색이 한 출처에서 항상 일치하게 한다(DRY·드리프트 방지).
@@ -110,6 +115,21 @@ function RunDetailPanel({
           <dt className="subtle">기준 시각(as_of)</dt>
           <dd style={{ margin: 0 }}>{detail.data.as_of ?? "—"}</dd>
         </dl>
+        {/* suspended 계열(사람 확인 대기)일 때만 인박스 교차 동선 노출 — 막다른 길 해소. 게이팅은 RunDetail.status(실 필드)뿐.
+            RunDetail에 human_task_id가 없고 GET /v1/human-tasks가 run_id 필터를 honor하지 않으므로(reads.ts:331 SELECT만)
+            정확한 human_task 자동선택은 조용한 false라 약속하지 않는다 — 인박스 처리 동선만 안내(status 재단정 없음).
+            TODO: [BLOCKED]
+              violated: KISS(run→정확한 human_task 직접 점프가 더 단순하나)
+              reason: RunDetail.human_task_id 부재 + GET /v1/human-tasks ?run_id 필터 미honor(계약/백엔드=오너 영역)
+              required_change: GET /v1/human-tasks 의 run_id 필터 추가(또는 RunDetail.human_task_id 투영) — 계약 변경 선행 */}
+        {SUSPENDED.has(detail.data.status) && (
+          <p className="badge amber" role="status" style={{ display: "block", margin: "8px 0 0", whiteSpace: "normal" }}>
+            이 실행은 사람 확인 대기 중입니다 — {" "}
+            <button className="linklike" type="button" onClick={() => navigate("humanTasks")}>
+              사람 확인 인박스에서 처리하기 <span aria-hidden="true">→</span>
+            </button>
+          </p>
+        )}
         </>
       ) : null}
       <StepTrace runId={runId} />

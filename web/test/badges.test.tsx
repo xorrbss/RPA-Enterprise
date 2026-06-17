@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { render } from "@testing-library/react";
 
-import { StatusBadge } from "../src/components/badges";
+import { StatusBadge, terminalLabel } from "../src/components/badges";
 import { RUN_STATES, WORKITEM_STATES, HUMANTASK_STATES, SITE_RISKS } from "../src/views/filters";
 
 // RQ-012: StatusBadge가 raw enum 대신 비기술 한국어 라벨을 렌더하는가(색 tone은 별도 검증).
@@ -59,5 +59,31 @@ describe("StatusBadge 한국어 라벨", () => {
     const text = container.querySelector("span.badge")?.textContent ?? "";
     expect(text).not.toBe(status); // 한국어 라벨로 치환됨
     expect(/[가-힣]/.test(text)).toBe(true);
+  });
+});
+
+// R3: IR terminal 라벨 단일 출처(StepBuilder raw enum 노출·Playground 지역맵 드리프트 제거).
+// 출처: schema/ir.schema.json terminal.enum(4값). error-label/StatusBadge 완전성-가드 패턴 복제.
+describe("terminalLabel — IR terminal 한국어 라벨", () => {
+  test.each([
+    ["success", "성공"],
+    ["success_empty", "성공(데이터 없음)"],
+    ["fail_business", "업무 실패"],
+    ["fail_system", "시스템 실패"],
+  ])("terminal=%s → %s", (t, label) => {
+    expect(terminalLabel(t)).toBe(label);
+  });
+
+  test("미매핑 값은 raw로 폴백(조용한 공백 금지)", () => {
+    expect(terminalLabel("weird")).toBe("weird");
+  });
+
+  // 완전성/드리프트 가드: StepBuilder TERMINALS(빌더 생성-목록 SSoT)의 손-미러.
+  // web tsconfig가 계약 ts/json import 불가하므로 filters enum 미러와 동일 정당성 — enum 확장 시 실패=계약-web 드리프트 차단.
+  const TERMINALS = ["success", "success_empty", "fail_business", "fail_system"] as const;
+  test.each(TERMINALS)("TERMINALS %s 라벨 존재(raw로 새지 않음)", (t) => {
+    const label = terminalLabel(t);
+    expect(label).not.toBe(t); // 한국어 라벨로 치환됨
+    expect(/[가-힣]/.test(label)).toBe(true);
   });
 });

@@ -87,6 +87,13 @@ export function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind;
 }
 
+// IR terminal 노드 종류 → 비기술 한국어. 출처: schema/ir.schema.json terminal.enum(닫힌 레지스트리). 미매핑은 raw 폴백(조용한 공백 금지).
+const TERMINAL_LABELS: Record<string, string> = {
+  success: "성공", success_empty: "성공(데이터 없음)",
+  fail_business: "업무 실패", fail_system: "시스템 실패",
+};
+export function terminalLabel(t: string): string { return TERMINAL_LABELS[t] ?? t; }
+
 // 에러 코드 → 비기술 한국어. 출처: 계약 ts/error-catalog.ts ERROR_CATALOG[code].userMessage(73행 주석 '외부 노출(민감정보 없음)')를
 // 글자 그대로 미러(STATUS_LABELS가 state-machine enum을 미러하는 것과 동일 정당성). web/tsconfig include는 src/test뿐이라
 // 계약 ts를 직접 import할 수 없어 손-미러 + 완전성 테스트(error-label.test.ts)가 드리프트를 막는다(badges 선례).

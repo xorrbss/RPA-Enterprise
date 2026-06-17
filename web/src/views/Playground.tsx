@@ -5,7 +5,7 @@ import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
-import { actionLabel } from "../components/badges";
+import { actionLabel, terminalLabel } from "../components/badges";
 import { navigate } from "../router";
 import type { ScenarioItem } from "../api/types";
 
@@ -19,12 +19,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 // IR action verb 라벨은 badges.actionLabel(계약 IRActionType 미러) 단일 출처를 쓴다 — '테스트 실행'(Plan)과
 // '실행 기록'(StepTrace)에서 같은 단계가 다른 이름으로 보이던 어휘 드리프트 제거(미매핑은 raw 폴백 동일).
-const TERMINAL_LABEL: Record<string, string> = {
-  success: "성공",
-  success_empty: "성공(데이터 없음)",
-  fail_business: "업무 실패",
-  fail_system: "시스템 실패",
-};
+// terminal 라벨도 동일하게 badges.terminalLabel(계약 terminal.enum 미러) 단일 출처를 쓴다(지역 맵 드리프트 제거).
 
 function actionText(a: unknown): string {
   if (!isRecord(a)) return "?";
@@ -35,7 +30,7 @@ function actionText(a: unknown): string {
 }
 
 function flowText(node: Record<string, unknown>): string {
-  if (typeof node.terminal === "string") return `종료: ${TERMINAL_LABEL[node.terminal] ?? node.terminal}`;
+  if (typeof node.terminal === "string") return `종료: ${terminalLabel(node.terminal)}`;
   if (typeof node.next === "string") return `다음 → ${node.next}`;
   if (Array.isArray(node.on)) {
     const rules = node.on.map((r) => (isRecord(r) ? `${String(r.when)} → ${String(r.target)}` : "?")).join(" · ");
