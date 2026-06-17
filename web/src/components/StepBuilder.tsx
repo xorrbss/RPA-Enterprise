@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { terminalLabel } from "./badges";
+
 // 단계 빌더(비주얼 스튜디오 1차 슬라이스): 단계(노드)를 양식으로 구성 → 유효 IR 생성.
 // 안전 범위: action은 추가 필수 필드 없는 act/observe(+없음)만, 흐름키는 next/terminal/on[flags]만 생성.
 // extract/navigate/shell 등 추가 필드가 필요한 액션은 'IR 직접 편집'에서 다룬다(무효 IR 미생성 원칙).
@@ -155,7 +157,7 @@ export function StepBuilder({ onChange }: { onChange: (ir: unknown) => void }): 
               >
                 {TERMINALS.map((t) => (
                   <option key={t} value={t}>
-                    {t}
+                    {terminalLabel(t)}
                   </option>
                 ))}
               </select>
