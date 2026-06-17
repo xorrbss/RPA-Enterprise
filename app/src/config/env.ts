@@ -73,25 +73,50 @@ function buildPgConnString(): string {
   return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(database)}`;
 }
 
+/**
+ * JWT verification config. `JWKS_URL` selects the production RS256/JWKS verifier (keys fetched from the IdP);
+ * absent → the v1 HS256 shared-secret default (dev/tests). Each mode is fail-closed on its own required value;
+ * the algorithm/issuer/JWKS endpoint are deploy-config (auth-rbac.md fixes only the claims, not the algorithm).
+ */
+export type ApiJwtConfig =
+  | { readonly mode: "hs256"; readonly secret: string }
+  | { readonly mode: "jwks"; readonly jwksUrl: string; readonly issuer?: string; readonly audience?: string };
+
 export interface ApiConfig {
   readonly port: number;
-  /** HS256 JWT verification secret. Resolved out-of-band (env) because no `jwt` SecretRef purpose exists in
-   *  the least-privilege matrix yet (backlog: JWKS/RS256 verifier + Vault purpose). Fail-closed required. */
-  readonly jwtHs256Secret: string;
+  readonly jwt: ApiJwtConfig;
   /** Console origin allowlist for CORS; omit for same-origin (no CORS registered). No wildcard. */
   readonly corsOrigins?: readonly string[];
   readonly hsts: boolean;
 }
 
-export function loadApiConfig(): ApiConfig {
-  const origins = opt("CORS_ORIGINS");
-  const jwtHs256Secret = req("JWT_HS256_SECRET");
-  if (jwtHs256Secret.length < 32) {
+function loadApiJwtConfig(): ApiJwtConfig {
+  const jwksUrl = opt("JWKS_URL");
+  if (jwksUrl !== undefined) {
+    // RS256/JWKS mode: https-forced (IdP keys must not be fetched over cleartext).
+    const issuer = opt("JWT_ISSUER");
+    const audience = opt("JWT_AUDIENCE");
+    return {
+      mode: "jwks",
+      jwksUrl: assertHttpsUrl("JWKS_URL", jwksUrl),
+      ...(issuer !== undefined ? { issuer } : {}),
+      ...(audience !== undefined ? { audience } : {}),
+    };
+  }
+  // HS256 shared-secret mode (v1 default). Env-sourced — no `jwt` SecretRef purpose exists in the
+  // least-privilege matrix yet (mirrors the gateway key gap, release-decisions D8-A16). Fail-closed required.
+  const secret = req("JWT_HS256_SECRET");
+  if (secret.length < 32) {
     throw new Error("JWT_HS256_SECRET must be at least 32 characters (HS256 key strength)");
   }
+  return { mode: "hs256", secret };
+}
+
+export function loadApiConfig(): ApiConfig {
+  const origins = opt("CORS_ORIGINS");
   return {
     port: num("PORT", 8080),
-    jwtHs256Secret,
+    jwt: loadApiJwtConfig(),
     corsOrigins: origins
       ? origins.split(",").map((s) => s.trim()).filter((s) => s.length > 0)
       : undefined,
@@ -171,8 +196,9 @@ export interface GatewayConfig {
  * (S3ObjectStore/VaultSecretStore). The Codex API key travels as a Bearer header, so plaintext http is
  * refused to prevent cleartext secret transmission.
  */
-function reqHttpsUrl(name: string): string {
-  const v = req(name);
+/** Validate a given value is an absolute https URL (no localhost exception) — cleartext refused for
+ *  credentialed/key-bearing endpoints (S3/Vault store discipline; Codex Bearer key; JWKS key fetch). */
+function assertHttpsUrl(name: string, v: string): string {
   let parsed: URL;
   try {
     parsed = new URL(v);
@@ -180,9 +206,13 @@ function reqHttpsUrl(name: string): string {
     throw new Error(`env ${name} must be an absolute URL, got ${JSON.stringify(v)}`);
   }
   if (parsed.protocol !== "https:") {
-    throw new Error(`env ${name} must be an https URL (no plaintext for the Bearer API key), got protocol ${JSON.stringify(parsed.protocol)}`);
+    throw new Error(`env ${name} must be an https URL (no plaintext), got protocol ${JSON.stringify(parsed.protocol)}`);
   }
   return v;
+}
+
+function reqHttpsUrl(name: string): string {
+  return assertHttpsUrl(name, req(name));
 }
 
 export function loadGatewayConfig(): GatewayConfig {

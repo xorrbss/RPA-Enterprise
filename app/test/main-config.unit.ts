@@ -40,6 +40,7 @@ const CLEAR = [
   "CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL", "CODEX_MAX_CONTEXT_TOKENS",
   "CODEX_PRICE_PER_1K_INPUT_USD", "CODEX_PRICE_PER_1K_OUTPUT_USD",
   "GATEWAY_ARTIFACT_DIR", "GATEWAY_ARTIFACT_RETENTION_DAYS", "PROMPT_TEMPLATE_VERSION",
+  "JWKS_URL", "JWT_ISSUER", "JWT_AUDIENCE",
 ];
 
 function withEnv(vars: Record<string, string>, fn: () => void): void {
@@ -80,7 +81,7 @@ function main(): void {
   withEnv({ ...FULL, DATABASE_URL: "postgresql://x@y/z" }, () =>
     check("DATABASE_URL override", loadCommonConfig().connectionString === "postgresql://x@y/z"));
 
-  // ApiConfig — fail-closed on missing/short JWT secret; CORS parse; HSTS default.
+  // ApiConfig — HS256 default mode: fail-closed on missing/short JWT secret; CORS parse; HSTS default.
   withEnv({ ...FULL, JWT_HS256_SECRET: "" }, () => expectThrow("api blank JWT throws", () => loadApiConfig()));
   withEnv({ ...FULL, JWT_HS256_SECRET: "short" }, () => expectThrow("api short JWT (<32) throws", () => loadApiConfig()));
   withEnv(FULL, () => {
@@ -88,7 +89,27 @@ function main(): void {
     check("api port", a.port === 8080);
     check("api hsts default true", a.hsts === true);
     check("api cors undefined when unset", a.corsOrigins === undefined);
+    check("api jwt mode hs256 (no JWKS_URL)", a.jwt.mode === "hs256");
+    check("api jwt hs256 secret carried", a.jwt.mode === "hs256" && a.jwt.secret.length === 40);
   });
+
+  // ApiConfig — JWKS/RS256 mode: JWKS_URL present selects jwks (HS256 secret NOT required); https-forced; iss/aud optional.
+  const JWKS = "https://idp.example/.well-known/jwks.json";
+  withEnv({ PORT: "8080", JWKS_URL: JWKS }, () => {
+    const a = loadApiConfig();
+    check("api jwt mode jwks", a.jwt.mode === "jwks");
+    check("api jwks url carried", a.jwt.mode === "jwks" && a.jwt.jwksUrl === JWKS);
+    check("api jwks iss/aud undefined when unset", a.jwt.mode === "jwks" && a.jwt.issuer === undefined && a.jwt.audience === undefined);
+  });
+  withEnv({ JWKS_URL: JWKS, JWT_ISSUER: "https://idp.example/", JWT_AUDIENCE: "rpa-control-plane" }, () => {
+    const a = loadApiConfig();
+    check("api jwks issuer carried", a.jwt.mode === "jwks" && a.jwt.issuer === "https://idp.example/");
+    check("api jwks audience carried", a.jwt.mode === "jwks" && a.jwt.audience === "rpa-control-plane");
+  });
+  withEnv({ JWKS_URL: "http://idp.example/jwks" }, () =>
+    expectThrow("api jwks plaintext http JWKS_URL throws", () => loadApiConfig()));
+  withEnv({ JWKS_URL: "not-a-url" }, () =>
+    expectThrow("api jwks non-URL JWKS_URL throws", () => loadApiConfig()));
   withEnv({ ...FULL, CORS_ORIGINS: "https://a.example, https://b.example" }, () => {
     const a = loadApiConfig();
     check("api cors parsed", a.corsOrigins?.length === 2 && a.corsOrigins[0] === "https://a.example");

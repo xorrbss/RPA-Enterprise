@@ -17,8 +17,9 @@
  * path — absent it, bind() loud-throws per run (fail-closed). Enumerated remaining backlog (see
  * product-open-candidate-report.md / staging-deploy-runbook.md):
  *   - SinkDeliveryPort, SessionRestorer, RunAbortDrainer, a real SecretStore-backed SignedCommandRegistry (a
- *     fail-closed deny-all placeholder is used here), a JWKS/RS256 JWT verifier (HS256 is used here), and a
- *     recurring sweeper scheduler.
+ *     fail-closed deny-all placeholder is used here — BLOCKED on a contract decision: no signed_command resolve
+ *     authorization for the api identity + undefined registry signature algorithm), and a recurring sweeper
+ *     scheduler. JWT verification now supports RS256 via remote JWKS (set JWKS_URL) or the HS256 default.
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
 import http from "node:http";
@@ -26,7 +27,7 @@ import http from "node:http";
 import { run, runMigrations, type Runner } from "graphile-worker";
 import type { FastifyInstance } from "fastify";
 
-import { hmacJwtVerifier, JwtAuthenticationBoundary } from "./api/auth";
+import { hmacJwtVerifier, jwksRs256Verifier, JwtAuthenticationBoundary } from "./api/auth";
 import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
@@ -38,6 +39,7 @@ import {
   loadGatewayConfig,
   loadRunMode,
   loadWorkerConfig,
+  type ApiConfig,
 } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
@@ -105,11 +107,23 @@ function startHealthServer(pool: PgPool, port: number): http.Server {
   return server;
 }
 
+/** JWT verifier per loaded mode: RS256 via remote JWKS (production) or the v1 HS256 shared secret. */
+function buildJwtVerifier(jwt: ApiConfig["jwt"]) {
+  if (jwt.mode === "jwks") {
+    return jwksRs256Verifier({
+      jwksUrl: jwt.jwksUrl,
+      ...(jwt.issuer !== undefined ? { issuer: jwt.issuer } : {}),
+      ...(jwt.audience !== undefined ? { audience: jwt.audience } : {}),
+    });
+  }
+  return hmacJwtVerifier(new TextEncoder().encode(jwt.secret));
+}
+
 async function startApi(pool: PgPool): Promise<FastifyInstance> {
   const cfg = loadApiConfig();
   const api = buildServer({
     pool,
-    auth: new JwtAuthenticationBoundary(hmacJwtVerifier(new TextEncoder().encode(cfg.jwtHs256Secret))),
+    auth: new JwtAuthenticationBoundary(buildJwtVerifier(cfg.jwt)),
     rbac: new RoleMatrixRbacMiddleware(),
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: new PgGraphileRunEnqueuer(),
@@ -119,7 +133,7 @@ async function startApi(pool: PgPool): Promise<FastifyInstance> {
     // object_store-authorized credential is provisioned for the API identity (deploy-time, see backlog).
   });
   await api.listen({ host: "0.0.0.0", port: cfg.port });
-  console.log(JSON.stringify({ at: "main", msg: "control-plane API listening", port: cfg.port }));
+  console.log(JSON.stringify({ at: "main", msg: "control-plane API listening", port: cfg.port, jwtMode: cfg.jwt.mode }));
   return api;
 }
 
