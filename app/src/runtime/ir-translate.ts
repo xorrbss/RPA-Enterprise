@@ -141,11 +141,12 @@ function mapAction(
     // SecretRef 를 SecretStore 경유로 해소해 LLM 미경유로 채운다. 비밀 대상은 LLM 출력이 아니라 IR 선언에서 옴(결정형).
     // 단일 자격증명 가정(login fill 1칸 = 1키); 다중 자격증명은 YAGNI(필요 시 selector→key 맵으로 확장).
     const secretRef = Array.isArray(a.vars) && typeof a.vars[0] === "string" && a.vars[0].length > 0 ? a.vars[0] : undefined;
-    // 비-secret 결정형 fill 값: act.args.value_ref(run params 키) → params[key] 를 DomAction.value 로 스레드(실행기가
-    //   selector 만 LLM 에 맡기고 이 값으로 채움). secretRef(자격증명)와 상호배타 — 둘 다면 IR 모순(loud).
-    //   해소는 eager 하되 미해소 시 throw 하지 않는다: 전 노드를 upfront 변환하므로(미실행 분기 포함), 안 쓰는 run 의
-    //   params 부재(예: approve run 의 reject 노드 reason)에 throw 하면 안 된다. 필수성(reject⇒reason)은 엔드포인트가
-    //   강제하고(authoritative), 실행 도달 시 값 부재면 실행기 applyPlan 이 loud(fill value/valueRef 부재) 처리한다.
+    // 비-secret 결정형 fill: act.args.value_ref(run params 키)를 DomAction 에 스레드한다. valueRef(채울 값의 출처=INTENT)
+    //   는 선언되면 **항상** 스레드하고(미해소여도), value(해소된 평문)는 params 에 있을 때만 싣는다. 실행기는 valueRef
+    //   intent 기준으로 override 해 selector 만 LLM 에 맡기고 채울 값은 IR/params 로 고정한다(LLM 추측 value 무시).
+    //   secretRef(자격증명)와 상호배타 — 둘 다면 IR 모순(loud). 해소는 eager 하되 미해소 시 throw 안 함: 전 노드를
+    //   upfront 변환하므로(미실행 분기 포함) 안 쓰는 run 의 params 부재(예: approve run 의 reject reason)에 throw 하면 안 된다.
+    //   실행 도달 시 value 가 미해소면 실행기가 valueRef intent 로 loud(LLM/캐시 값 무음 fill 금지 — "조용한 false 금지").
     const valueRef = isRec(a.args) && typeof a.args.value_ref === "string" && a.args.value_ref.length > 0 ? a.args.value_ref : undefined;
     if (valueRef !== undefined && secretRef !== undefined) {
       throw new InterpreterError(
@@ -159,6 +160,7 @@ function mapAction(
       instruction: a.instruction,
       ...(nodeSideEffect !== undefined ? { sideEffect: nodeSideEffect } : {}),
       ...(secretRef !== undefined ? { secretRef } : {}),
+      ...(valueRef !== undefined ? { valueRef } : {}),
       ...(value !== undefined ? { value } : {}),
     };
   }
