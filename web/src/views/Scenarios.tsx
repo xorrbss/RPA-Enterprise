@@ -32,6 +32,13 @@ export function ScenariosView(): JSX.Element {
         query={query}
         rowKey={(r) => r.scenario_id}
         emptyMessage="저장된 시나리오가 없습니다. ‘새 자동화 만들기’로 시작하세요."
+        emptyAction={
+          can("scenario.create") ? (
+            <button className="btn primary" type="button" onClick={() => setForm({ kind: "create" })} disabled={form?.kind === "create"}>
+              + 첫 자동화 만들기
+            </button>
+          ) : undefined
+        }
         columns={[
           { header: "이름", render: (r) => r.name },
           { header: "버전", render: (r) => `v${r.version}` },

@@ -4,7 +4,7 @@ import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
-import { StatusBadge } from "../components/badges";
+import { StatusBadge, kindLabel } from "../components/badges";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
 import type { HumanTaskItem } from "../api/types";
 
@@ -69,7 +69,7 @@ export function HumanTasksView(): JSX.Element {
       rowKey={(r) => r.human_task_id}
       emptyMessage="조건에 맞는 사람 확인 업무가 없습니다."
       columns={[
-        { header: "종류", render: (r) => r.kind },
+        { header: "종류", render: (r) => kindLabel(r.kind) },
         { header: "상태", render: (r) => <StatusBadge status={r.state} /> },
         { header: "담당자", render: (r) => (r.assignee ? <code>{r.assignee.slice(0, 8)}</code> : "미배정") },
         { header: "마감", render: (r) => r.timeout ?? "—" },

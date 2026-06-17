@@ -26,9 +26,10 @@ export interface ListView<T> {
 export function useListView<T>(
   baseKey: readonly unknown[],
   fetcher: (params: ListParams) => Promise<Paginated<T>>,
-  opts: { refetchInterval?: number; limit?: number } = {},
+  opts: { refetchInterval?: number; limit?: number; initialFilter?: ListParams } = {},
 ): ListView<T> {
-  const [filter, setFilterState] = useState<ListParams>({});
+  // initialFilter: 딥링크(예: 대시보드 '실행 중' → #runTrace?status=running)로 진입 시 첫 필터를 시드(드릴다운 모집단 일치).
+  const [filter, setFilterState] = useState<ListParams>(opts.initialFilter ?? {});
   const [stack, setStack] = useState<string[]>([]); // 커서 히스토리(top=현재 페이지)
   const cursor = stack[stack.length - 1];
   const query = useQuery({

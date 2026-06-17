@@ -17,10 +17,11 @@ export function QueryPanel<T>(props: {
   columns: readonly Column<T>[];
   rowKey: (row: T) => string;
   emptyMessage: string;
+  emptyAction?: ReactNode;
   actions?: ReactNode;
   pager?: Pager;
 }): JSX.Element {
-  const { title, query, columns, rowKey, emptyMessage, actions, pager } = props;
+  const { title, query, columns, rowKey, emptyMessage, emptyAction, actions, pager } = props;
   return (
     <section className="panel">
       <div className="panel-head">
@@ -33,7 +34,7 @@ export function QueryPanel<T>(props: {
         ) : query.isError ? (
           <ErrorState message={errorMessage(query.error)} onRetry={() => void query.refetch()} />
         ) : (query.data?.items.length ?? 0) === 0 ? (
-          <EmptyState message={emptyMessage} />
+          <EmptyState message={emptyMessage} action={emptyAction} />
         ) : (
           <div className="table-wrap">
             <table>

@@ -17,6 +17,14 @@ export const VIEW_KEYS = [
 
 export type ViewKey = (typeof VIEW_KEYS)[number];
 
+// 사이드바 3그룹(제작/운영/고급 설정) — 11개 뷰를 업무 흐름으로 묶어 탐색 부담을 낮춘다.
+// 모든 VIEW_KEYS가 정확히 한 그룹에 속해야 한다(router.test가 강제). nav 순서는 그룹 순서를 따른다.
+export const NAV_GROUPS: readonly { readonly label: string; readonly keys: readonly ViewKey[] }[] = [
+  { label: "제작", keys: ["scenarioStudio", "playground", "irValidation"] },
+  { label: "운영", keys: ["dashboard", "runTrace", "workitems", "humanTasks"] },
+  { label: "고급 설정", keys: ["llmGateway", "security", "idempotency", "openGate"] },
+];
+
 const DEFAULT_VIEW: ViewKey = "dashboard";
 
 export function viewFromHash(hash: string): ViewKey {
@@ -45,6 +53,22 @@ export function useHashRoute(): ViewKey {
 export function hashParam(name: string): string | null {
   const q = location.hash.split("?")[1];
   return q === undefined ? null : new URLSearchParams(q).get(name);
+}
+
+/**
+ * 현재 해시(`#view?query`)의 쿼리 파라미터에 updates를 병합한 해시 문자열을 만든다(값이 null이면 해당 키 제거).
+ * 같은 뷰의 드릴다운 파라미터(run/artifact/status 등)를 서로 떨어뜨리지 않고 보존 — 각 호출부가 해시를 처음부터
+ * 재구성하다 다른 파라미터를 잃어 주소창이 필터/선택과 어긋나던 것(조용한 false) 방지. 뷰는 현재 뷰를 유지한다.
+ */
+export function hashWith(updates: Record<string, string | null>): string {
+  const [viewPart, queryPart] = location.hash.replace(/^#/, "").split("?");
+  const params = new URLSearchParams(queryPart ?? "");
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === null) params.delete(key);
+    else params.set(key, value);
+  }
+  const qs = params.toString();
+  return `#${viewPart || DEFAULT_VIEW}${qs ? `?${qs}` : ""}`;
 }
 
 /** 해시 쿼리 파라미터를 구독(hashchange마다 갱신). 뒤로가기/딥링크로 드릴다운이 복원된다. */

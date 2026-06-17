@@ -4,20 +4,24 @@ import { useApiClient } from "../api/context";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
-import { ArtifactLookup } from "../components/ArtifactLookup";
+import { ArtifactLookup, ArtifactRef } from "../components/ArtifactLookup";
+import { StepTrace } from "../components/StepTrace";
 import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
-import { useHashParam } from "../router";
-import type { RunArtifactItem, RunDetail, RunItem, StepSummary } from "../api/types";
+import { hashWith, useHashParam } from "../router";
+import type { RunArtifactItem, RunDetail, RunItem } from "../api/types";
 
 const POLL_MS = 5_000; // 실시간 = outbox tail 폴링(v1)
 const TERMINAL = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
 
 export function RunTraceView(): JSX.Element {
   const api = useApiClient();
-  const lv = useListView<RunItem>(["runs"], (p) => api.listRuns(p), { refetchInterval: POLL_MS });
+  // 딥링크 `#runTrace?status=<RunState>`(예: 대시보드 '실행 중' 카드)로 진입 시 상태 필터를 시드 → 카운트와 목록 모집단 일치.
+  const statusParam = useHashParam("status");
+  const initialFilter = statusParam !== null && (RUN_STATES as readonly string[]).includes(statusParam) ? { status: statusParam } : undefined;
+  const lv = useListView<RunItem>(["runs"], (p) => api.listRuns(p), { refetchInterval: POLL_MS, initialFilter });
   // 선택 run을 해시(`#runTrace?run=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(useState 휘발 대체).
   const sel = useHashParam("run");
   const detail = useQuery({ queryKey: ["run-detail", sel], queryFn: () => api.getRun(sel as string), enabled: sel !== null });
@@ -25,7 +29,7 @@ export function RunTraceView(): JSX.Element {
   return (
     <div>
       <ArtifactLookup />
-      {sel !== null && <RunDetailPanel runId={sel} detail={detail} onClose={() => { location.hash = "#runTrace"; }} />}
+      {sel !== null && <RunDetailPanel runId={sel} detail={detail} onClose={() => { location.hash = hashWith({ run: null, artifact: null }); }} />}
       <QueryPanel<RunItem>
         title="실행 기록"
         query={lv.query}
@@ -42,7 +46,7 @@ export function RunTraceView(): JSX.Element {
             header: "작업",
             render: (r) => (
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <button className="btn" type="button" onClick={() => { location.hash = `#runTrace?run=${r.run_id}`; }}>
+                <button className="btn" type="button" onClick={() => { location.hash = hashWith({ run: r.run_id, artifact: null }); }}>
                   상세
                 </button>
                 {!TERMINAL.has(r.status) && (
@@ -99,7 +103,7 @@ function RunDetailPanel({
           <dd style={{ margin: 0 }}>{detail.data.as_of ?? "—"}</dd>
         </dl>
       ) : null}
-      <RunStepsTrace runId={runId} />
+      <StepTrace runId={runId} />
       <RunArtifactsList runId={runId} />
     </section>
   );
@@ -132,67 +136,13 @@ function RunArtifactsList({ runId }: { runId: string }): JSX.Element {
             <tbody>
               {items.map((a) => (
                 <tr key={a.artifact_id}>
-                  <td><code title="위 '산출물 조회'에 입력해 본문 확인">{a.artifact_id.slice(0, 8)}</code></td>
+                  <td><ArtifactRef id={a.artifact_id} /></td>
                   <td>{a.type}</td>
                   <td><span className="badge muted">{a.redaction_status}</span></td>
                   <td>{a.retention_until ?? "—"}</td>
                   <td>{a.legal_hold ? "예" : "—"}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// 단계 트레이스 — 비민감 요약(노드/동작/상태/캐시/소요/LLM/증빙 수). 증빙 본문은 artifact ID를 위 '산출물 조회'에 입력.
-// 라이브 = v1 폴링(architecture §6). 민감 본문은 백엔드가 미노출(api-surface §1 각주⁶).
-function RunStepsTrace({ runId }: { runId: string }): JSX.Element {
-  const api = useApiClient();
-  const q = useQuery({
-    queryKey: ["run-steps", runId],
-    queryFn: () => api.listRunSteps(runId, { limit: 100 }),
-    refetchInterval: POLL_MS,
-  });
-  const items: readonly StepSummary[] = q.data?.items ?? [];
-  return (
-    <div style={{ marginTop: 14 }}>
-      <strong style={{ fontSize: 13 }}>단계 트레이스</strong>
-      {q.isLoading ? (
-        <Loading />
-      ) : q.isError ? (
-        <ErrorState message="단계 트레이스를 불러오지 못했습니다." onRetry={() => void q.refetch()} />
-      ) : items.length === 0 ? (
-        <p className="subtle" style={{ margin: "8px 0 0" }}>아직 기록된 단계가 없습니다.</p>
-      ) : (
-        <div className="table-wrap" style={{ marginTop: 8 }}>
-          <table>
-            <thead>
-              <tr>
-                <th>#</th><th>노드</th><th>동작</th><th>상태</th><th>캐시</th><th>소요(ms)</th><th>LLM</th><th>증빙(artifact_id)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((s, i) => {
-                const tok = s.stagehand_calls.reduce((a, c) => a + (c.output_tokens ?? 0), 0);
-                return (
-                  <tr key={`${s.step_id}:${s.attempt}`}>
-                    <td>{i + 1}{s.attempt > 0 ? <span className="subtle"> ·재{s.attempt}</span> : null}</td>
-                    <td><code>{s.node_id}</code></td>
-                    <td>{s.action}</td>
-                    <td>
-                      <StatusBadge status={s.status} />
-                      {s.exception !== null && <span className="subtle"> {s.exception.code}</span>}
-                    </td>
-                    <td>{s.cache_mode}</td>
-                    <td>{s.duration_ms ?? "—"}</td>
-                    <td>{s.stagehand_calls.length > 0 ? <span className="subtle">{s.stagehand_calls[0]!.model} · {tok}tok</span> : "—"}</td>
-                    <td>{s.artifact_ids.length > 0 ? s.artifact_ids.map((id) => <code key={id} title="위 '산출물 조회'에 입력" style={{ marginRight: 4 }}>{id.slice(0, 8)}</code>) : "—"}</td>
-                  </tr>
-                );
-              })}
             </tbody>
           </table>
         </div>

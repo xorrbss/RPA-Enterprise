@@ -1,13 +1,31 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
+import { hashWith, useHashParam } from "../router";
 import { ApiError } from "../api/types";
 
 // 산출물(artifact) ID 조회 — GET /v1/artifacts/{id}. 목록/생성 API가 v1 미노출이라 ID 직접 입력(운영자가 이벤트·로그·
 // run_steps에서 얻은 artifact_id). redaction→RBAC 2단 게이트 + audit boundary는 백엔드가 강제: 미존재/미redacted/
 // 타테넌트→404, 권한없음→403. 본문은 항상 redacted(at rest 마스킹) — 평문 없음. 조회는 read라 UI RBAC 게이팅 불요.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// 단계 트레이스/산출물 목록의 artifact_id를 클릭하면 위 '산출물 조회'가 자동 입력·조회되도록 하는 트리거.
+// 기존 드릴다운 규칙과 동일하게 해시의 artifact 파라미터에 전체 uuid를 실어 보존하되, run/status 등 기존 파라미터는
+// hashWith로 유지한다(표시는 8자리 축약이지만 핸들러는 전체 uuid 사용 — 운영자가 손으로 복붙하던 단계 제거).
+export function ArtifactRef({ id }: { id: string }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="linklike"
+      aria-label={`산출물 ${id} 조회`}
+      title="클릭하면 위 '산출물 조회'에 입력됩니다"
+      onClick={() => { location.hash = hashWith({ artifact: id }); }}
+    >
+      <code>{id.slice(0, 8)}</code>
+    </button>
+  );
+}
 
 function errorText(err: unknown): string {
   if (err instanceof ApiError) {
@@ -22,12 +40,37 @@ export function ArtifactLookup(): JSX.Element {
   const api = useApiClient();
   const [input, setInput] = useState("");
   const [id, setId] = useState<string | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const q = useQuery({
     queryKey: ["artifact", id],
     queryFn: () => api.getArtifact(id as string),
     enabled: id !== null,
     retry: false,
   });
+
+  // 해시의 artifact 파라미터(ArtifactRef 클릭 → `#runTrace?run=...&artifact=<uuid>`)로 자동 입력·조회.
+  const hashArtifact = useHashParam("artifact");
+  useEffect(() => {
+    if (hashArtifact === null || !UUID_RE.test(hashArtifact)) return;
+    setInput(hashArtifact);
+    setId(hashArtifact);
+    const el = sectionRef.current;
+    if (el && typeof el.scrollIntoView === "function") {
+      try { el.scrollIntoView({ block: "nearest" }); } catch { /* jsdom 등 미구현 환경 무시 */ }
+    }
+  }, [hashArtifact]);
+
+  // 수동 조회도 해시를 갱신해 단일 진실원천 유지(ArtifactRef와 일관, run/status 등 기존 파라미터는 hashWith로 보존).
+  // 해시가 이미 동일하면 hashchange가 안 일어나므로 직접 커밋한다(조용한 무반응 금지) — 'ref Y → 수동 Z → ref Y 재클릭'에서도 Y로 복귀.
+  function commitArtifact(uuid: string): void {
+    const base = hashWith({ artifact: uuid });
+    if (location.hash === base) {
+      setInput(uuid);
+      setId(uuid);
+    } else {
+      location.hash = base;
+    }
+  }
 
   const valid = UUID_RE.test(input.trim());
 
@@ -43,7 +86,7 @@ export function ArtifactLookup(): JSX.Element {
   }
 
   return (
-    <section className="panel" style={{ marginBottom: 16, padding: 16 }} aria-label="산출물 조회">
+    <section ref={sectionRef} className="panel" style={{ marginBottom: 16, padding: 16 }} aria-label="산출물 조회">
       <header style={{ marginBottom: 8 }}>
         <strong>산출물(artifact) 조회</strong>
         <span className="subtle" style={{ marginLeft: 8 }}>실행이 남긴 증빙을 ID로 조회 (본문은 마스킹·조회 감사 기록됨)</span>
@@ -56,7 +99,7 @@ export function ArtifactLookup(): JSX.Element {
           aria-label="artifact_id"
           style={{ fontFamily: "monospace", fontSize: 13, padding: 8, minWidth: 320, maxWidth: "100%" }}
         />
-        <button className="btn primary" type="button" disabled={!valid || q.isFetching} onClick={() => setId(input.trim())}>
+        <button className="btn primary" type="button" disabled={!valid || q.isFetching} onClick={() => commitArtifact(input.trim())}>
           {q.isFetching ? "조회 중…" : "조회"}
         </button>
         {input.trim() !== "" && !valid && <span className="subtle">uuid 형식의 artifact_id를 입력하세요.</span>}
