@@ -307,7 +307,8 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#scenarioStudio";
     (await screen.findByRole("button", { name: "실행" })).click(); // 패널 열기 → getScenario → 키 도출
-    const field = await screen.findByLabelText("orders_url");
+    // P0-3: raw url_ref 키("orders_url") 대신 운영자용 한국어 라벨로 노출.
+    const field = await screen.findByLabelText("주문 페이지 주소");
     // 값 미입력 시 '실행 시작' 비활성(필수값 가드).
     expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled();
     fireEvent.change(field, { target: { value: "https://shop.example/orders/9" } });
@@ -353,9 +354,14 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.getByText(/AI 모델을 지정해야 합니다/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled(); // 모델 미입력 가드
     fireEvent.change(modelField, { target: { value: "gpt-4o-mini" } });
+    // P0-3: 직타 모델은 getGatewayPolicy로 '확인'해야 실행 허용(맹목 입력 차단). 확인 전엔 여전히 비활성.
+    const panel = screen.getByRole("region", { name: "세션 확인 실행" });
+    expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled();
+    within(panel).getByRole("button", { name: "확인" }).click();
+    await waitFor(() => expect(screen.getByRole("button", { name: "실행 시작" })).toBeEnabled());
     screen.getByRole("button", { name: "실행 시작" }).click(); // 2차 createRun(model)
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]?.model).toBe("gpt-4o-mini"); // 선택한 모델 전달
+    expect(calls[0]?.model).toBe("gpt-4o-mini"); // 검증된 모델 전달
   });
 
   test("실행 상세 drill-down — getRun 패널(워커/시도 표시)", async () => {

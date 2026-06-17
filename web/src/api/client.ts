@@ -3,6 +3,7 @@ import {
   ApiError,
   type ArtifactDetail,
   type CreateRunBody,
+  type CreateRunResult,
   type DeadLetterItem,
   type GatewayPolicy,
   type GatewayPolicyUpdate,
@@ -71,7 +72,7 @@ export interface ApiClient {
   // 둘 다 Idempotency-Key 불요(api-surface §35). 무효 IR/충돌은 ApiError로 표면화.
   createScenario(ir: unknown): Promise<ScenarioMutationResult>;
   updateScenario(scenarioId: string, ir: unknown, version: number): Promise<ScenarioMutationResult>;
-  createRun(body: CreateRunBody, idempotencyKey: string): Promise<unknown>;
+  createRun(body: CreateRunBody, idempotencyKey: string): Promise<CreateRunResult>;
 }
 
 export interface HttpApiClientOptions {

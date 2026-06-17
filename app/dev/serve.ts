@@ -11,6 +11,14 @@
  *
  * 주의: 시드/스키마는 일회용. 게이트 종료 시 temp 클러스터가 회수된다. 시크릿/RLS/RBAC 경계는 실코드 그대로다.
  * (시드 로직은 seed.ts / seed-scenarios.ts / 공용 상수는 dev-constants.ts 로 분리 — 이 파일은 서버·부트스트랩만.)
+ *
+ * Phase 0 "지켜보는 데모"(운영자 동선): 콘솔 → 제작 > 테스트 실행(playground)에서 자동화 선택 → '실행 시작'을 누르면
+ *   그 run 의 라이브 트레이스(#runTrace?run=<id>)로 자동 이동하고, 단계 트레이스에서 자동 복구 신호(재시도·캐시 계획
+ *   재생·비정상 응답 종료)가 상단 요약으로 한눈에 보인다. act/extract(LLM 경유) 모먼트는 CODEX_*(또는 OPENAI) env +
+ *   Chrome 이 있어야 실제로 구동된다(미설정 시 run 은 queued 대기 — run-loop 비활성).
+ * 세션 재사용(로그인 스킵) 모먼트는 단계 신호가 아니라 분기로만 관찰된다(짧은 트레이스 = 로그인 단계 부재). 실제로 보려면
+ *   고급 설정 > 보안에서 사이트 '세션 등록'(운영자-보조 캡처)을 1회 수행한 뒤 같은 시나리오를 재실행한다. ⚠ dev:serve 는
+ *   temp PG 라 재기동(=reseed)하면 캡처 세션이 소실되므로 재시연마다 재캡처가 필요하다 — 실 로그인/실 시크릿은 오너 실행 영역.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import http from "node:http";
