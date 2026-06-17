@@ -30,6 +30,14 @@ export interface FetchCodexSseOptions {
   nativeStructuredOutput?: boolean;
 }
 
+// 메시지 content 직렬화: string|RedactedString 은 그대로, RedactedContentBlock[](Gateway redaction 산출)은 text/json
+// 블록을 이어붙인다. 비-string 을 ""로 떨어뜨리던 기존 동작은 redact 된 user 메시지를 통째로 누락(조용한 false)시켜
+// LLM 이 빈 입력을 받게 했다. OpenAI content-parts 대신 평문 합성(현 어댑터는 텍스트 스트림 경로).
+function serializeMessageContent(content: LLMRequest["messages"][number]["content"]): string {
+  if (typeof content === "string") return content;
+  return content.map((b) => (typeof b.content === "string" ? b.content : JSON.stringify(b.content))).join("\n");
+}
+
 export class FetchCodexSseTransport implements CodexSseTransport {
   constructor(private readonly opts: FetchCodexSseOptions) {}
 
@@ -41,7 +49,7 @@ export class FetchCodexSseTransport implements CodexSseTransport {
       stream_options: { include_usage: true }, // 최종 usage 청크 수신(없으면 어댑터가 추정)
       messages: req.messages.map((m) => ({
         role: m.role,
-        content: typeof m.content === "string" ? m.content : "",
+        content: serializeMessageContent(m.content),
       })),
       // 빠른경로: responseFormat 가 있을 때만 provider 유효-JSON 강제(자유텍스트 호출엔 강제 안 함).
       ...(this.opts.nativeStructuredOutput && req.responseFormat
