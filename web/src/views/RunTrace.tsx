@@ -5,6 +5,7 @@ import { useApiClient } from "../api/context";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
+import { ArtifactLookup } from "../components/ArtifactLookup";
 import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
@@ -22,6 +23,7 @@ export function RunTraceView(): JSX.Element {
 
   return (
     <div>
+      <ArtifactLookup />
       {sel !== null && <RunDetailPanel runId={sel} detail={detail} onClose={() => setSel(null)} />}
       <QueryPanel<RunItem>
         title="실행 기록"

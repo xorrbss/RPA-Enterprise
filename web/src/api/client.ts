@@ -1,6 +1,7 @@
 // 주입형 ApiClient 포트 + HTTP 구현. 테스트는 동일 인터페이스의 fake를 주입(백엔드 무의존).
 import {
   ApiError,
+  type ArtifactDetail,
   type CreateRunBody,
   type DeadLetterItem,
   type GatewayPolicy,
@@ -51,6 +52,8 @@ export interface ApiClient {
   getHumanTask(id: string): Promise<HumanTaskItem>;
   getScenario(id: string): Promise<ScenarioDetail>;
   getSite(id: string): Promise<SiteItem>;
+  // 산출물 본문 조회(api-surface §5). redaction→RBAC 2단 게이트 + audit boundary. 미존재/미redacted/타테넌트→404, 권한없음→403.
+  getArtifact(id: string): Promise<ArtifactDetail>;
   // scenario validate(V1–V11 dry-run, 비변이 POST, body=IR). run 생성(멱등 명령).
   validateScenario(scenarioId: string, ir: unknown, idempotencyKey: string): Promise<ValidationResult>;
   // scenario 생성(POST body=IR, 컴파일 파이프라인 통과 시 draft 저장)·편집(PUT If-Match=현재 version → 새 draft version).
@@ -187,6 +190,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     getHumanTask: (id) => get(`/v1/human-tasks/${id}`),
     getScenario: (id) => get(`/v1/scenarios/${id}`),
     getSite: (id) => get(`/v1/sites/${id}`),
+    getArtifact: (id) => get(`/v1/artifacts/${id}`),
     validateScenario: (scenarioId, ir, key) => post(`/v1/scenarios/${scenarioId}/validate`, key, ir),
     createScenario: (ir) => send("POST", `/v1/scenarios`, ir),
     updateScenario: (scenarioId, ir, version) =>

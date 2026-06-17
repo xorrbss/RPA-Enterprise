@@ -114,6 +114,16 @@ describe("HttpApiClient 계약", () => {
     expect(w.calls[0]?.url).toBe("http://api.test/v1/human-tasks/ht-9");
   });
 
+  test("getArtifact → GET /v1/artifacts/{id} + Bearer (산출물 조회 배선)", async () => {
+    const { calls, client } = harness({ body: { artifact_id: "a1", type: "screenshot", sha256: "h", redaction_status: "redacted", retention_until: null, content: "redacted" } });
+    const art = await client.getArtifact("a1");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/artifacts/a1");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+    expect(art.content).toBe("redacted");
+    expect(art.redaction_status).toBe("redacted");
+  });
+
   test("validateScenario → POST .../validate + body=IR", async () => {
     const { calls, client } = harness({ body: { valid: true, report: {} } });
     const ir = { nodes: [{ id: "n1" }] };

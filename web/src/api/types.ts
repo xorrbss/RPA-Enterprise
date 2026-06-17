@@ -52,6 +52,16 @@ export interface SiteItem {
   readonly name?: string;
 }
 
+// GET /v1/artifacts/{id} 응답(api-surface §5; reads.ts). content는 redacted 본문(at rest 마스킹 — 평문 없음).
+export interface ArtifactDetail {
+  readonly artifact_id: string;
+  readonly type: string;
+  readonly sha256: string;
+  readonly redaction_status: string;
+  readonly retention_until: string | null;
+  readonly content: string;
+}
+
 export interface RunDetail {
   readonly run_id: string;
   readonly status: string;
