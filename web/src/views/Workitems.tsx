@@ -48,7 +48,7 @@ export function WorkitemsView(): JSX.Element {
                 label="재처리"
                 action="dlq.replay"
                 confirmText="이 작업항목을 재처리(W10: abandoned→new)할까요?"
-                run={(key) => api.replayDeadLetter(r.dead_letter_id, key)}
+                run={(key) => api.replayDeadLetter(r.dead_letter_id, key, "workitem")}
                 invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
               />
             ),
@@ -64,6 +64,18 @@ export function WorkitemsView(): JSX.Element {
           { header: "전달 ID", render: (r) => <code>{r.dead_letter_id.slice(0, 8)}</code> },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
           { header: "멱등키", render: (r) => <code>{r.sink_idempotency_key ?? "—"}</code> },
+          {
+            header: "작업",
+            render: (r) => (
+              <ActionButton
+                label="재처리"
+                action="sink_dlq.replay"
+                confirmText="이 외부 전달 실패를 재처리(sink delivery 재시도)할까요?"
+                run={(key) => api.replayDeadLetter(r.dead_letter_id, key, "sink")}
+                invalidateKeys={[["dlq", "sink"]]}
+              />
+            ),
+          },
         ]}
       />
     </>

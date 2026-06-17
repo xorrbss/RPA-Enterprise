@@ -131,6 +131,29 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.body).toEqual({ scenario_version_id: "sv-1" });
   });
 
+  test("replayDeadLetter(sink) → POST .../replay?kind=sink + Idempotency-Key (sink DLQ 복구 배선)", async () => {
+    const { calls, client } = harness({ body: { status: "new" } });
+    await client.replayDeadLetter("dl-1", "idem-sink", "sink");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/dlq/dl-1/replay?kind=sink");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-sink");
+  });
+
+  test("replayDeadLetter(workitem) → ?kind=workitem", async () => {
+    const { calls, client } = harness({ body: { status: "new" } });
+    await client.replayDeadLetter("dl-2", "idem-wi", "workitem");
+    expect(calls[0]?.url).toBe("http://api.test/v1/dlq/dl-2/replay?kind=workitem");
+  });
+
+  test("createSite → POST /v1/sites + body + Idempotency-Key (사이트 온보딩 배선)", async () => {
+    const { calls, client } = harness({ body: { site_profile_id: "s1" } });
+    await client.createSite({ name: "하이웍스", url_pattern: "https://login.office.hiworks.com", risk: "green" }, "idem-site");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/sites");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-site");
+    expect(calls[0]?.body).toEqual({ name: "하이웍스", url_pattern: "https://login.office.hiworks.com", risk: "green" });
+  });
+
   test("4xx 응답 → ApiError(code, httpStatus) 표면화 (조용한 실패 금지)", async () => {
     const { client } = harness({ status: 409, body: { code: "RUN_ABORTED" } });
     await expect(client.abortRun("run-x", "k")).rejects.toMatchObject({ httpStatus: 409, code: "RUN_ABORTED" });

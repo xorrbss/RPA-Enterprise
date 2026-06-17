@@ -6,20 +6,20 @@ import { useMemo } from "react";
 // 미러이므로 매트릭스가 바뀌면 함께 갱신해야 한다(누락/과허용이 보안 결함은 아니나 UX 정합을 위해).
 const ROLE_ACTIONS: Readonly<Record<string, readonly string[]>> = {
   viewer: [],
-  operator: ["run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "scenario.create", "scenario.update", "human_task.assign", "human_task.start"],
+  operator: ["run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "scenario.create", "scenario.update", "human_task.assign", "human_task.start"],
   reviewer: [
-    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "scenario.create", "scenario.update",
+    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "scenario.create", "scenario.update",
     "human_task.assign", "human_task.start", "human_task.escalate",
     "human_task.resolve.validation", "human_task.resolve.exception", "human_task.resolve.captcha", "human_task.resolve.mfa",
   ],
   approver: [
-    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "scenario.create", "scenario.update",
+    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "scenario.create", "scenario.update",
     "human_task.assign", "human_task.start", "human_task.escalate",
     "human_task.resolve.validation", "human_task.resolve.exception", "human_task.resolve.captcha", "human_task.resolve.mfa", "human_task.resolve.approval",
     "site.approve",
   ],
   admin: [
-    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "scenario.create", "scenario.update", "scenario.promote",
+    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "scenario.create", "scenario.update", "scenario.promote",
     "human_task.assign", "human_task.start", "human_task.escalate",
     "human_task.resolve.validation", "human_task.resolve.exception", "human_task.resolve.captcha", "human_task.resolve.mfa", "human_task.resolve.approval",
     "site.approve", "gateway_policy.edit",

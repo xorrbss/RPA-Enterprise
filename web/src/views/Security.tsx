@@ -3,6 +3,7 @@ import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
+import { SiteCreateForm } from "../components/SiteCreateForm";
 import { StatusBadge } from "../components/badges";
 import { SITE_RISKS } from "./filters";
 import type { SiteItem } from "../api/types";
@@ -11,6 +12,8 @@ export function SecurityView(): JSX.Element {
   const api = useApiClient();
   const lv = useListView<SiteItem>(["sites"], (p) => api.listSites(p), { refetchInterval: 10_000 });
   return (
+    <>
+    <SiteCreateForm />
     <QueryPanel<SiteItem>
       title="사이트 접근 정책"
       query={lv.query}
@@ -40,5 +43,6 @@ export function SecurityView(): JSX.Element {
         },
       ]}
     />
+    </>
   );
 }
