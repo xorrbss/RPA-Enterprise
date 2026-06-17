@@ -12,7 +12,7 @@
  */
 import type { Pool } from "pg";
 
-import type { ClassifiedException, ExecutorPlugin, PageState, PageStateRef, PageStateResolver, RedactedString, RunContext } from "../../../ts/core-types";
+import type { ClassifiedException, ExecutorPlugin, PageState, PageStateRef, PageStateResolver, RedactedString, RunContext, SecretRef } from "../../../ts/core-types";
 import type { IsoDateTime, ResumeTokenCodec, ResumeTokenEnvelope } from "../../../ts/runtime-contract";
 import type { RunId } from "../../../ts/security-middleware-contract";
 import type { RunEvent, RunGuard, RunState } from "../../../ts/state-machine-types";
@@ -36,6 +36,11 @@ export interface ClaimedRun {
   readonly networkPolicyId: string;
   /** runs.params(실행 파라미터). navigate.url_ref 가 이 params 의 키로 해소된다. */
   readonly params?: Record<string, unknown>;
+  /**
+   * 자격증명 에셋 키 → SecretRef(또는 비밀 아닌 에셋 문자열) 바인딩. 시나리오 meta.assets 에서 유도해 주입하며,
+   * 실행기 fill(secretRef) 이 ctx.assetRefs[key] 를 SecretStore 경유로 해소한다. 비밀/에셋 구분은 이 주입 지점이 권위.
+   */
+  readonly assetRefs?: Record<string, SecretRef | string>;
 }
 
 export interface DriveDeps {
@@ -106,7 +111,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     browserIdentityId: run.browserIdentityId,
     networkPolicyId: run.networkPolicyId,
     leaseId: run.leaseId,
-    assetRefs: {},
+    assetRefs: run.assetRefs ?? {},
     abortSignal: new AbortController().signal,
     pageState: seedPageState(),
   };
