@@ -115,7 +115,7 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .step-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
 .step-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .step-card-head code { background: var(--soft); padding: 1px 6px; border-radius: 4px; }
-.heal-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--amber-soft); color: var(--amber-ink); }
+.retry-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--amber-soft); color: var(--amber-ink); }
 .step-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 /* 소요시간 상대 길이 바 — route-progress의 width-% 채움 기법 재사용(라이브러리 없음) */
 .dur-row { display: flex; align-items: center; gap: 8px; }

@@ -58,4 +58,16 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
       expect(results).toHaveNoViolations();
     });
   }
+
+  // StepTrace(단계 트레이스)는 run 선택 시에만 마운트 — 카드/표 두 보기 모두 axe 스캔(가장 복잡한 신규 a11y 표면).
+  test("실행 상세 단계 트레이스(카드+표) axe 위반 없음", async () => {
+    renderApp();
+    location.hash = "#runTrace";
+    (await screen.findByRole("button", { name: "상세" })).click();
+    await screen.findByRole("button", { name: "카드" }); // 카드 보기 마운트 대기
+    expect(await axe(document.body, AXE_OPTS)).toHaveNoViolations();
+    (await screen.findByRole("button", { name: "표" })).click();
+    await waitFor(() => expect(screen.getByText("AI(모델·출력토큰)")).toBeInTheDocument());
+    expect(await axe(document.body, AXE_OPTS)).toHaveNoViolations();
+  });
 });

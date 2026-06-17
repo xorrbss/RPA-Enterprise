@@ -41,6 +41,7 @@ export function ArtifactLookup(): JSX.Element {
   const [input, setInput] = useState("");
   const [id, setId] = useState<string | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
+  const run = useHashParam("run");
   const q = useQuery({
     queryKey: ["artifact", id],
     queryFn: () => api.getArtifact(id as string),
@@ -59,6 +60,18 @@ export function ArtifactLookup(): JSX.Element {
       try { el.scrollIntoView({ block: "nearest" }); } catch { /* jsdom 등 미구현 환경 무시 */ }
     }
   }, [hashArtifact]);
+
+  // 수동 조회도 해시를 갱신해 단일 진실원천 유지(ArtifactRef와 일관). 해시가 이미 동일하면 hashchange가 안 일어나므로
+  // 직접 커밋한다(조용한 무반응 금지). 이로써 'ref Y → 수동 Z → ref Y 재클릭'에서도 Y로 정확히 복귀한다.
+  function commitArtifact(uuid: string): void {
+    const base = run !== null ? `#runTrace?run=${run}&artifact=${uuid}` : `#runTrace?artifact=${uuid}`;
+    if (location.hash === base) {
+      setInput(uuid);
+      setId(uuid);
+    } else {
+      location.hash = base;
+    }
+  }
 
   const valid = UUID_RE.test(input.trim());
 
@@ -87,7 +100,7 @@ export function ArtifactLookup(): JSX.Element {
           aria-label="artifact_id"
           style={{ fontFamily: "monospace", fontSize: 13, padding: 8, minWidth: 320, maxWidth: "100%" }}
         />
-        <button className="btn primary" type="button" disabled={!valid || q.isFetching} onClick={() => setId(input.trim())}>
+        <button className="btn primary" type="button" disabled={!valid || q.isFetching} onClick={() => commitArtifact(input.trim())}>
           {q.isFetching ? "조회 중…" : "조회"}
         </button>
         {input.trim() !== "" && !valid && <span className="subtle">uuid 형식의 artifact_id를 입력하세요.</span>}

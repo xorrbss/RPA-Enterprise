@@ -10,6 +10,27 @@ import type { StagehandCallSummary, StepSummary } from "../api/types";
 
 const POLL_MS = 5_000; // 라이브 = outbox tail 폴링(v1)
 
+// 증빙 칩 목록(카드/표 공용). 클릭 시 위 '산출물 조회' 자동 입력(A3).
+function ArtifactRefs({ ids, runId }: { ids: readonly string[]; runId: string }): JSX.Element {
+  return (
+    <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+      {ids.map((id) => <ArtifactRef key={id} id={id} runId={runId} />)}
+    </span>
+  );
+}
+
+// 비용 표기 — cost는 정밀도 보존을 위해 문자열(types). 단일 호출은 원본 문자열 그대로(가공/창작 금지),
+// 다건은 합산하되 6자리 반올림이 0이면 '<0.000001'로 표기(0이 아닌 값을 $0.000000로 거짓표기하지 않는다).
+function formatCost(calls: readonly StagehandCallSummary[]): string | null {
+  const costs = calls.map((c) => c.cost).filter((c): c is string => c !== null);
+  if (costs.length === 0) return null;
+  if (costs.length === 1) return `$${costs[0]}`;
+  const sum = costs.reduce((a, c) => a + Number(c), 0);
+  if (sum === 0) return "$0";
+  const rounded = Number(sum.toFixed(6));
+  return rounded === 0 ? "$<0.000001" : `$${rounded}`;
+}
+
 // 단계 트레이스 — "자동화가 어떻게 판단·실행했고, 깨졌을 때 스스로 다시 시도했는지"를 보이는 서사.
 // 모든 표시는 들어오는 신호(StepSummary + StagehandCallSummary)만 사용한다 — 확신도/판단근거 같은
 // 데이터에 없는 값은 절대 지어내지 않는다(없으면 보이는 신호 조합으로만 구성).
@@ -63,7 +84,7 @@ function StepCard({ step: s, index, runId, maxDuration }: { step: StepSummary; i
         <strong>{actionLabel(s.action)}</strong>
         <span style={{ flex: 1 }} />
         {s.attempt > 0 && (
-          <span className="heal-chip" title="앞선 시도가 실패해 자동으로 다시 시도했습니다(자가복구).">
+          <span className="retry-chip" title="앞선 시도가 실패해 자동으로 다시 시도했습니다.">
             <RefreshCw size={12} aria-hidden="true" /> 재시도 {s.attempt}회차
           </span>
         )}
@@ -81,39 +102,41 @@ function StepCard({ step: s, index, runId, maxDuration }: { step: StepSummary; i
       {s.artifact_ids.length > 0 && (
         <div className="step-line">
           <span className="subtle">증빙</span>
-          <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-            {s.artifact_ids.map((id) => <ArtifactRef key={id} id={id} runId={runId} />)}
-          </span>
+          <ArtifactRefs ids={s.artifact_ids} runId={runId} />
         </div>
       )}
     </div>
   );
 }
 
-// AI 판단 — stagehand 호출이 있는 단계만. 모델·토큰(입력/출력)·비용·첫응답·전송/스트림은 모두 실제 필드.
+// AI 판단 — stagehand 호출이 있는 단계만. 모델·토큰·비용·첫응답은 모두 실제 필드. 누락(null)은 0으로 합산해
+// 총계처럼 보이지 않게 하고('—' 표기), 단계에 호출이 없으면 캐시 적중(=AI 계획 재생)과 그 외(=AI 호출 없음)를 구분한다.
 function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary[]; cacheMode: string }): JSX.Element {
   if (calls.length === 0) {
+    // 캐시 hit = 이전에 AI가 도출한 plan을 LLM 호출 없이 재생(impl-contracts §D) — 'AI 미사용'으로 단정하지 않는다.
+    const text = cacheMode === "hit" ? "캐시된 계획 재생 (이번 단계 AI 호출 없음)" : "AI 호출 없음";
     return (
       <div className="step-line">
         <span className="subtle">실행</span>
-        <span>규칙 기반 단계 (AI 미사용)</span>
+        <span>{text}</span>
         <span className="badge muted">{cacheLabel(cacheMode)}</span>
       </div>
     );
   }
   const models = [...new Set(calls.map((c) => c.model))].join(", ");
+  const anyIn = calls.some((c) => c.input_tokens !== null);
+  const anyOut = calls.some((c) => c.output_tokens !== null);
   const inTok = calls.reduce((a, c) => a + (c.input_tokens ?? 0), 0);
   const outTok = calls.reduce((a, c) => a + (c.output_tokens ?? 0), 0);
-  const anyCost = calls.some((c) => c.cost !== null);
-  const costSum = calls.reduce((a, c) => a + (c.cost !== null ? Number(c.cost) : 0), 0);
+  const cost = formatCost(calls);
   const single = calls.length === 1 ? calls[0]! : null;
   return (
     <div className="step-line">
       <span className="subtle">AI 판단</span>
       <span>{models}{calls.length > 1 ? ` (${calls.length}회 호출)` : ""}</span>
-      <span className="subtle">입력 {inTok} · 출력 {outTok} 토큰</span>
-      {anyCost && <span className="subtle">${costSum.toFixed(6)}</span>}
-      {single?.ttfb_ms !== null && single?.ttfb_ms !== undefined && <span className="subtle">첫응답 {single.ttfb_ms}ms</span>}
+      {(anyIn || anyOut) && <span className="subtle">입력 {anyIn ? inTok : "—"} · 출력 {anyOut ? outTok : "—"} 토큰</span>}
+      {cost !== null && <span className="subtle">{cost}</span>}
+      {single?.ttfb_ms != null && <span className="subtle">첫응답 {single.ttfb_ms}ms</span>}
       <span className="badge muted">{cacheLabel(cacheMode)}</span>
     </div>
   );
@@ -144,7 +167,9 @@ function StepTable({ items, runId, maxDuration }: { items: readonly StepSummary[
         </thead>
         <tbody>
           {items.map((s, i) => {
-            const outTok = s.stagehand_calls.reduce((a, c) => a + (c.output_tokens ?? 0), 0);
+            const calls = s.stagehand_calls;
+            const anyOut = calls.some((c) => c.output_tokens !== null);
+            const outTok = calls.reduce((a, c) => a + (c.output_tokens ?? 0), 0);
             return (
               <tr key={`${s.step_id}:${s.attempt}`}>
                 <td>{i + 1}{s.attempt > 0 ? <span className="subtle"> ·재{s.attempt}</span> : null}</td>
@@ -156,14 +181,8 @@ function StepTable({ items, runId, maxDuration }: { items: readonly StepSummary[
                 </td>
                 <td>{cacheLabel(s.cache_mode)}</td>
                 <td style={{ minWidth: 120 }}><DurationBar durationMs={s.duration_ms} maxDuration={maxDuration} /></td>
-                <td>{s.stagehand_calls.length > 0 ? <span className="subtle">{s.stagehand_calls[0]!.model} · {outTok}tok</span> : "—"}</td>
-                <td>
-                  {s.artifact_ids.length > 0 ? (
-                    <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-                      {s.artifact_ids.map((id) => <ArtifactRef key={id} id={id} runId={runId} />)}
-                    </span>
-                  ) : "—"}
-                </td>
+                <td>{calls.length > 0 ? <span className="subtle">{calls[0]!.model}{anyOut ? ` · ${outTok}tok` : ""}</span> : "—"}</td>
+                <td>{s.artifact_ids.length > 0 ? <ArtifactRefs ids={s.artifact_ids} runId={runId} /> : "—"}</td>
               </tr>
             );
           })}

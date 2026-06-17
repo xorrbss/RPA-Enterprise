@@ -38,9 +38,95 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
     expect(screen.getByText("페이지 이동")).toBeInTheDocument(); // navigate
     expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
     expect(screen.getByText("입력 500 · 출력 200 토큰")).toBeInTheDocument();
-    expect(screen.getByText("$0.001234")).toBeInTheDocument();
+    expect(screen.getByText("$0.001234")).toBeInTheDocument(); // 원본 cost 문자열 그대로(toFixed 가공 없음)
     expect(screen.getByText("첫응답 120ms")).toBeInTheDocument();
-    expect(screen.getByText("규칙 기반 단계 (AI 미사용)")).toBeInTheDocument(); // stagehand 없는 단계
+    expect(screen.getByText("AI 호출 없음")).toBeInTheDocument(); // stagehand 없는 bypass 단계(과거 '규칙 기반' 오표기 수정)
+  });
+
+  // 캐시 hit + 호출 0 = AI가 도출한 plan 재생 → 'AI 미사용'으로 단정하지 않음(silent false 수정).
+  test("B: 캐시 hit + 호출 0 → '캐시된 계획 재생'(AI 미사용 단정 금지)", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [{ step_id: "h", node_id: "click_next", attempt: 0, action: "act", status: "success", cache_mode: "hit", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 30, exception: null }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() => expect(screen.getByText(/캐시된 계획 재생/)).toBeInTheDocument());
+    expect(screen.queryByText("AI 호출 없음")).toBeNull(); // hit 단계는 '호출 없음' 단독 표기 아님
+  });
+
+  // 토큰/비용 정직성: 다건 호출은 비용을 정밀도-보존 합산(toFixed 거짓 0/허위정밀 금지), 첫응답은 단일 호출만.
+  test("B: 다건 stagehand 호출 — 비용 합산 + 첫응답 미표기", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [{
+            step_id: "m", node_id: "extract", attempt: 0, action: "extract", status: "success", cache_mode: "miss", artifact_ids: [],
+            stagehand_calls: [
+              { model: "gpt-4o-mini", transport: "sse", stream_status: "done", ttfb_ms: 120, input_tokens: 500, output_tokens: 200, cost: "0.002" },
+              { model: "gpt-4o", transport: "sse", stream_status: "done", ttfb_ms: null, input_tokens: null, output_tokens: null, cost: "0.0005" },
+            ],
+            started_at: null, ended_at: null, duration_ms: 1500, exception: null,
+          }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("gpt-4o-mini, gpt-4o (2회 호출)")).toBeInTheDocument());
+    expect(screen.getByText("$0.0025")).toBeInTheDocument(); // 0.002 + 0.0005, 허위정밀(toFixed 6) 없이
+    expect(screen.queryByText(/첫응답/)).toBeNull(); // 다건은 단일 ttfb 단정 안 함
+  });
+
+  // 토큰 전부 null(usage 미수신) → '0 토큰'으로 거짓표기하지 않고 토큰 span 자체 생략.
+  test("B: 토큰 전부 미보고 → '0 토큰' 거짓표기 금지(span 생략)", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [{
+            step_id: "n", node_id: "observe", attempt: 0, action: "observe", status: "failed_system", cache_mode: "miss", artifact_ids: [],
+            stagehand_calls: [{ model: "gpt-4o-mini", transport: "sse", stream_status: "error", ttfb_ms: null, input_tokens: null, output_tokens: null, cost: null }],
+            started_at: null, ended_at: null, duration_ms: 200, exception: { class: "system", code: "GATEWAY_STREAM_ABORTED" },
+          }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument());
+    expect(screen.queryByText(/토큰/)).toBeNull(); // 입력/출력 모두 null → 토큰 표기 없음
+    expect(screen.queryByText(/^\$/)).toBeNull(); // cost null → 비용 칩 없음
+  });
+
+  // B2 — 바 길이는 최대 소요 대비 비례(상대), null 소요는 바 없이 '—'.
+  test("B2: 바 비례 폭 + null 소요 '—'(no fill)", async () => {
+    renderApp(); // 기본 픽스처 820ms, 1200ms (max=1200)
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("1200ms")).toBeInTheDocument());
+    const fills = document.querySelectorAll<HTMLElement>(".dur-fill");
+    expect(fills.length).toBe(2);
+    expect(fills[0]!.style.width).toBe("68%"); // 820/1200
+    expect(fills[1]!.style.width).toBe("100%"); // 최대
+  });
+
+  test("B2: null 소요 단계는 바 없이 '—'", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [
+            { step_id: "a", node_id: "n1", attempt: 0, action: "navigate", status: "success", cache_mode: "bypass", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 1000, exception: null },
+            { step_id: "b", node_id: "n2", attempt: 0, action: "navigate", status: "running", cache_mode: "bypass", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: null, exception: null },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("1000ms")).toBeInTheDocument());
+    expect(document.querySelectorAll(".dur-fill").length).toBe(1); // null 단계는 fill 없음(no silent false 분기)
   });
 
   // A5/B — 캐시 모드 한국어 라벨.
@@ -76,6 +162,7 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
     await openDetail();
     await waitFor(() => expect(screen.getByText("재시도 1회차")).toBeInTheDocument());
     expect(screen.getByText("DOM_ELEMENT_NOT_FOUND")).toBeInTheDocument(); // 실패 시도의 예외 코드
+    expect(screen.queryAllByText(/재시도/)).toHaveLength(1); // attempt:0 성공 단계는 재시도 칩 없음(거짓 신호 금지)
   });
 
   // B4 — 카드(서사) ↔ 표(밀집) 토글.

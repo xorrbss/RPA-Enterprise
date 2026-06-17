@@ -3,16 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { QueryPanel } from "../components/QueryPanel";
 import { StatusBadge } from "../components/badges";
-import { navigate, type ViewKey } from "../router";
 import type { RunItem } from "../api/types";
 
 // 지표 카드 — 클릭 시 해당 목록 화면으로 드릴다운(죽은 대시보드 → 진입점). 카드 자체가 버튼이라 키보드 포커스/Enter 동작.
-function Metric({ label, value, to, hint }: { label: string; value: string; to: ViewKey; hint: string }): JSX.Element {
+// hash로 직접 이동(상태 필터 딥링크 포함) — '실행 중'은 #runTrace?status=running으로 카운트와 목록 모집단을 일치.
+function Metric({ label, value, hash, hint }: { label: string; value: string; hash: string; hint: string }): JSX.Element {
   return (
-    <button type="button" className="metric metric-link" onClick={() => navigate(to)} title={hint}>
+    <button type="button" className="metric metric-link" onClick={() => { location.hash = hash; }}>
       <span className="label">{label}</span>
       <span className="value">{value}</span>
-      <span className="metric-hint subtle">{hint} →</span>
+      <span className="metric-hint subtle">{hint} <span aria-hidden="true">→</span></span>
     </button>
   );
 }
@@ -36,10 +36,10 @@ export function DashboardView(): JSX.Element {
   return (
     <>
       <div className="metrics">
-        <Metric label="실행 중" value={pageCount(running.data)} to="runTrace" hint="실행 기록" />
-        <Metric label="사람 확인 대기" value={pageCount(human.data)} to="humanTasks" hint="사람 확인" />
-        <Metric label="작업항목 DLQ" value={pageCount(wiDlq.data)} to="workitems" hint="작업 목록" />
-        <Metric label="외부 전달 DLQ" value={pageCount(sinkDlq.data)} to="workitems" hint="작업 목록" />
+        <Metric label="실행 중" value={pageCount(running.data)} hash="#runTrace?status=running" hint="실행 기록" />
+        <Metric label="사람 확인 대기" value={pageCount(human.data)} hash="#humanTasks" hint="사람 확인" />
+        <Metric label="작업항목 DLQ" value={pageCount(wiDlq.data)} hash="#workitems" hint="작업 목록" />
+        <Metric label="외부 전달 DLQ" value={pageCount(sinkDlq.data)} hash="#workitems" hint="작업 목록" />
       </div>
       <p className="subtle" style={{ margin: "0 2px" }}>
         각 지표는 최신 50건 기준입니다. <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
