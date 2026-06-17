@@ -143,6 +143,15 @@ function stepExceptionSummary(ex: { class?: unknown; code?: unknown } | null): {
   return { class: cls, code };
 }
 
+interface RunArtifactRow {
+  id: string;
+  type: string;
+  redaction_status: string;
+  retention_until: Date | null;
+  legal_hold: boolean;
+  created_at: Date;
+}
+
 export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   // GET /v1/runs — 커서 페이지(items=Run). filter: status(RunState)·scenario_version_id. RLS 스코프.
   app.get("/v1/runs", { config: { rbacAction: "run.read" } }, async (request, reply) => {
@@ -252,6 +261,53 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
             ended_at: r.ended_at !== null ? r.ended_at.toISOString() : null,
             duration_ms: r.duration_ms,
             exception: stepExceptionSummary(r.exception),
+          }),
+        ),
+      );
+    },
+  );
+
+  // GET /v1/runs/{run_id}/artifacts — run 하위 artifact 목록(api-surface §5). **metadata-only** — content 본문·object_ref·
+  //   sha256(원본 무결성 해시=fingerprint)은 미노출. 본문 열람은 GET /v1/artifacts/{id}(§10 audit 게이트). 목록은
+  //   content를 read하지 않아 disclosure 경로 아님 → audit 불요. RLS artifacts_visible_isolation이 가시성(redacted/
+  //   not_required·미삭제·비격리·동tenant) 강제. artifact.read RBAC(deny→SECRET_ACCESS_DENIED).
+  app.get<{ Params: { id: string } }>(
+    "/v1/runs/:id/artifacts",
+    { config: { rbacAction: "artifact.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const runId = request.params.id;
+      if (!UUID_RE.test(runId)) {
+        // 형식 무효 run_id는 존재 불가 → 404. 보이지 않는/없는 run은 빈 목록으로 수렴(RLS, 존재 비노출).
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const { limit, cursor } = parsePageParams(request.query as Record<string, unknown>);
+
+      const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const result = await c.query<RunArtifactRow>(
+          `SELECT id, type, redaction_status, retention_until, legal_hold, created_at
+             FROM artifacts
+            WHERE tenant_id = $1::uuid AND run_id = $2::uuid
+              AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
+            ORDER BY created_at DESC, id DESC
+            LIMIT $5`,
+          [principal.tenantId, runId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+        );
+        return result.rows;
+      });
+
+      reply.code(200).send(
+        paginate(
+          rows,
+          limit,
+          (r) => ({ createdAt: r.created_at, id: r.id }),
+          (r) => ({
+            artifact_id: r.id,
+            type: r.type,
+            redaction_status: r.redaction_status,
+            retention_until: r.retention_until !== null ? r.retention_until.toISOString() : null,
+            legal_hold: r.legal_hold,
+            created_at: r.created_at.toISOString(),
           }),
         ),
       );

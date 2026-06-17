@@ -10,7 +10,7 @@ import { StatusBadge } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
 import { useHashParam } from "../router";
-import type { RunDetail, RunItem, StepSummary } from "../api/types";
+import type { RunArtifactItem, RunDetail, RunItem, StepSummary } from "../api/types";
 
 const POLL_MS = 5_000; // 실시간 = outbox tail 폴링(v1)
 const TERMINAL = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
@@ -100,7 +100,50 @@ function RunDetailPanel({
         </dl>
       ) : null}
       <RunStepsTrace runId={runId} />
+      <RunArtifactsList runId={runId} />
     </section>
+  );
+}
+
+// 산출물(artifact) 목록 — metadata-only(종류/redaction/보존). 본문은 artifact_id를 위 '산출물 조회'(#129)에 입력(redaction→RBAC→audit 게이트). 라이브=폴링.
+function RunArtifactsList({ runId }: { runId: string }): JSX.Element {
+  const api = useApiClient();
+  const q = useQuery({
+    queryKey: ["run-artifacts", runId],
+    queryFn: () => api.listRunArtifacts(runId, { limit: 100 }),
+    refetchInterval: POLL_MS,
+  });
+  const items: readonly RunArtifactItem[] = q.data?.items ?? [];
+  return (
+    <div style={{ marginTop: 14 }}>
+      <strong style={{ fontSize: 13 }}>산출물(artifact)</strong>
+      {q.isLoading ? (
+        <Loading />
+      ) : q.isError ? (
+        <ErrorState message="산출물 목록을 불러오지 못했습니다." onRetry={() => void q.refetch()} />
+      ) : items.length === 0 ? (
+        <p className="subtle" style={{ margin: "8px 0 0" }}>표시할 산출물이 없습니다.</p>
+      ) : (
+        <div className="table-wrap" style={{ marginTop: 8 }}>
+          <table>
+            <thead>
+              <tr><th>artifact_id</th><th>종류</th><th>redaction</th><th>보존 만료</th><th>legal hold</th></tr>
+            </thead>
+            <tbody>
+              {items.map((a) => (
+                <tr key={a.artifact_id}>
+                  <td><code title="위 '산출물 조회'에 입력해 본문 확인">{a.artifact_id.slice(0, 8)}</code></td>
+                  <td>{a.type}</td>
+                  <td><span className="badge muted">{a.redaction_status}</span></td>
+                  <td>{a.retention_until ?? "—"}</td>
+                  <td>{a.legal_hold ? "예" : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

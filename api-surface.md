@@ -134,12 +134,15 @@
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
 | GET | `/v1/artifacts/{artifact_id}` | — | 200 + artifact(또는 서명 URL). `redaction → RBAC` 2단 게이트 통과 시에만 | `ARTIFACT_NOT_REDACTED`(409), `SECRET_ACCESS_DENIED`(403) |
+| GET | `/v1/runs/{run_id}/artifacts` | 쿼리: `?limit=&cursor=`. `artifact.read` 권한 | 200 + `{ items, next_cursor }` (run 하위 artifact **목록**, metadata-only, 최신순)⁵ | `RESOURCE_NOT_FOUND`(404; 형식 무효 run_id), `SECRET_ACCESS_DENIED`(403) |
 
 - 조회 허용 조건(security-contracts §8, impl-bundle §C access middleware): `redaction_status ∈ {redacted, not_required}` **AND** 호출자 역할이 해당 tenant/run의 artifact 조회 권한 보유.
 - 미들웨어 1지점에서 **순서대로**: ① redaction 게이트 — pending/failed면 `ARTIFACT_NOT_REDACTED`(409, "준비 중입니다"). ② RBAC 게이트 — 권한 부족이면 `SECRET_ACCESS_DENIED`(403).
 - **v1 구현 노트(release-decisions D8-A1 — RQ-010 라우트 빌드됨)**: 위 ① redaction 게이트는 v1에서 `artifacts_visible_isolation` RLS로 강제한다 — 앱 역할은 `redaction_status ∈ {redacted, not_required}`·미삭제(`deleted_at IS NULL`)·비격리(`quarantine=false`) 행만 SELECT 가능. 따라서 pending/failed/quarantined/deleted/cross-tenant는 모두 `RESOURCE_NOT_FOUND`(404, 존재 비노출)로 떨어지며 **`ARTIFACT_NOT_REDACTED`(409)는 v1에서 노출하지 않는다**(409를 honor하려면 BYPASSRLS 없는 SECURITY DEFINER 메타-read 필요 — D8-A1 대안, 연기). 200 본문은 redacted object를 object store에서 read해 반환한다. 실 **분산 object-store 바인딩(S3 등, 프로세스 간 공유)은 deploy-time(B3)** 이며 in-repo/단일 프로세스는 `FsObjectStore`로 동작한다(`ApiServerDeps.artifactStore` 미주입 시 라우트 미등록).
 - `sensitive=true` 입력·redaction 대상은 평문 노출 금지(security-contracts §4/§9). artifact 본문은 항상 마스킹된 `RedactedString`/redacted object만.
 - 보존/정리(retention_until·sweeper)는 데이터평면 job(impl-bundle §B `artifact_retention_sweeper`/`artifact_redaction_job`)이며 본 API는 조회만 노출(생성/삭제 API는 v1 미노출).
+
+⁵ `GET /v1/runs/{run_id}/artifacts` — run 하위 artifact **목록**(발견/브라우즈; 단건 by-id의 비대칭 해소). **metadata-only**: `artifact_id`·`type`·`redaction_status`·`retention_until`·`legal_hold`·`created_at`만 노출하고 **본문(`content`)·`object_ref`(내부 ObjectRef, evidence 비노출)·`sha256`(원본 무결성 해시=fingerprint, security-contracts §11)은 미노출**. 본문 열람은 단건 `GET /v1/artifacts/{id}`(§10 audit 게이트)로만. 목록은 object content를 read하지 않아 **disclosure 경로가 아니므로 §10 audit boundary를 트리거하지 않으며**(audit는 본문 disclosure 경로 전용), 가시성은 `artifacts_visible_isolation` RLS(redacted/not_required·미삭제·비격리·동tenant)가 강제 — 별도 redaction/audit 게이트 불요. RBAC는 `artifact.read`(auth-rbac §2, deny→`SECRET_ACCESS_DENIED`), 최신순(`created_at` DESC) §0.5 커서 페이지. run_id가 없는 orphan artifact는 본 목록에 미포함(retention sweeper 소관).
 
 ---
 

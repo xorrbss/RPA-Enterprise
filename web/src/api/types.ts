@@ -95,6 +95,16 @@ export interface StepSummary {
   readonly exception: { class: string; code: string } | null;
 }
 
+// GET /v1/runs/{id}/artifacts 항목(api-surface §5 각주⁵). metadata-only — content/object_ref/sha256 미노출.
+export interface RunArtifactItem {
+  readonly artifact_id: string;
+  readonly type: string;
+  readonly redaction_status: string;
+  readonly retention_until: string | null;
+  readonly legal_hold: boolean;
+  readonly created_at: string;
+}
+
 export interface ScenarioDetail {
   readonly scenario_id: string;
   readonly name: string;

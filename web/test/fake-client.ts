@@ -15,6 +15,12 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       ],
       next_cursor: null,
     }),
+    listRunArtifacts: async () => ({
+      items: [
+        { artifact_id: "72000000-0000-0000-0000-000000000001", type: "screenshot", redaction_status: "redacted", retention_until: "2026-09-01T00:00:00.000Z", legal_hold: false, created_at: "2026-06-15T00:00:02.000Z" },
+      ],
+      next_cursor: null,
+    }),
     listWorkitems: empty,
     listHumanTasks: empty,
     listDlq: empty,
