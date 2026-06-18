@@ -60,7 +60,7 @@ function countingGateway(resp: Partial<LLMResponse> = {}) {
 }
 const errGateway = (code: ErrorCode): LlmGatewayCaller => ({ call: async () => { throw new GatewayError(code, "boom"); } });
 
-function fakeSessions(dom = "<body><main>hello</main></body>") {
+function fakeSessions(dom: unknown = "<body><main>hello</main></body>") {
   const ops: string[] = [];
   const session: CdpSession = {
     url: () => "u",
@@ -120,6 +120,22 @@ async function main(): Promise<void> {
     const systemMessage = typeof systemContent === "string" ? systemContent : JSON.stringify(systemContent ?? "");
     check("extract: gateway request includes current DOM snapshot", userMessage.includes("Alice"));
     check("extract: prompt forbids plan-only output", systemMessage.includes("Do not return an extraction plan"));
+    check("extract: prompt forbids placeholder/example rows", systemMessage.includes("Never synthesize placeholder/example rows"));
+  }
+
+  // extract: visible text is prioritized over long raw HTML so rendered grid rows reach the gateway.
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ title: "Actual rendered notice" }] } });
+    const snapshot = {
+      visibleText: "Notice list\n55\tCard access\tActual rendered notice\tKim\t2026-06-05\t493",
+      html: `<body>${"x".repeat(30000)}<table><tr><td>Actual rendered notice</td></tr></table></body>`,
+    };
+    const ex = new StagehandDomExecutor(g.gw, fakeSessions(snapshot).provider, cfg);
+    await ex.execute("s1-visible", { type: "extract", instruction: "get notices", output: EXTRACT_OUT }, makeCtx());
+    const userContent = g.lastReq()?.messages.find((m) => m.role === "user")?.content;
+    const userMessage = typeof userContent === "string" ? userContent : JSON.stringify(userContent ?? "");
+    check("extract: gateway request marks visible text snapshot", userMessage.includes("[visible_text]"));
+    check("extract: visible rendered row survives long HTML snapshot", userMessage.includes("Actual rendered notice"));
   }
 
   // extract: rows 봉투 없으면 rowCount 미산출(→ node.row_count 미투영, loud).

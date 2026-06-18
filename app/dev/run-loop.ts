@@ -28,7 +28,7 @@ import { loadSitePageStateConfig } from "../src/executor/site-page-state-config"
 import { UtilityExecutor } from "../src/executor/utility-executor";
 import { StagehandDomExecutor, type LlmGatewayCaller } from "../src/executor/stagehand-dom-executor";
 import { CompositeExecutor } from "../src/runtime/composite-executor";
-import { LlmGateway } from "../src/gateway/llm-gateway";
+import { GatewayError, LlmGateway } from "../src/gateway/llm-gateway";
 import type { GatewayArtifactSink } from "../src/gateway/llm-gateway";
 import { CodexSseAdapter } from "../src/gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "../src/gateway/codex-sse-transport";
@@ -47,7 +47,7 @@ export const DEV_BROWSER_IDENTITY_ID = "9b000000-0000-0000-0000-0000000000b1";
 const DOM_CFG = {
   model: process.env.CODEX_MODEL?.trim() || "gpt-4o-mini",
   promptTemplateVersion: "dev@1",
-  budget: { maxInputTokens: 100_000, maxOutputTokens: 512, maxCost: 1 },
+  budget: { maxInputTokens: 100_000, maxOutputTokens: 4096, maxCost: 1 },
   scenarioVersionId: "dev-runloop",
   browserIdentityVersion: 1,
 };
@@ -79,7 +79,7 @@ function buildCodexGateway(artifactSink?: GatewayArtifactSink): LlmGatewayCaller
     validator: { validate: () => ({ ok: true }) },
     sink: {
       // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력(extract 결과 AND act 액션플랜 둘 다)을 넘긴다 →
-      // 스텝 id 와 함께 콘솔에 찍는다(데모 확인용). 라벨에 stepId 를 넣어 어느 스텝 출력인지 구분(extract/act 혼동 방지).
+      // 스텝 id 와 함께 콘솔에 찍고, dev:serve가 주입한 sink가 있으면 run-level artifact로 저장한다.
       put: async (text: string, meta) => {
         console.log(`[GW-OUTPUT ${meta.stepId}]`, typeof text === "string" ? text.slice(0, 4000) : JSON.stringify(text).slice(0, 4000));
         return artifactSink !== undefined ? artifactSink.put(text, meta) : "art://dev-gateway" as ArtifactRef;
@@ -175,6 +175,23 @@ export async function startRunLoop(
   const provider = new SingleSessionProvider(session);
   const utility = new UtilityExecutor(provider);
   const gateway = buildCodexGateway(artifactSink);
+  const loggedGateway: LlmGatewayCaller | null =
+    gateway === null
+      ? null
+      : {
+          call: async (req, signal) => {
+            try {
+              return await gateway.call(req, signal);
+            } catch (e) {
+              if (e instanceof GatewayError) {
+                console.error(`[GW-ERROR ${req.metadata.stepId}] ${e.code}: ${e.message}`);
+              } else {
+                console.error(`[GW-ERROR ${req.metadata.stepId}] ${e instanceof Error ? e.message : String(e)}`);
+              }
+              throw e;
+            }
+          },
+        };
   const secrets = buildDevSecretBoundary();
   const executorPrincipal: AuthenticatedPrincipal = {
     subjectId: WORKER_ID as PrincipalId,
@@ -185,13 +202,13 @@ export async function startRunLoop(
   };
   // gateway 있으면 dom(act/observe/extract) + utility 합성. 없으면 utility 만(act/extract 시나리오는 실패).
   const executor: ExecutorPlugin =
-    gateway !== null
-      ? new CompositeExecutor(new StagehandDomExecutor(gateway, provider, DOM_CFG, undefined, secrets, executorPrincipal), utility)
+    loggedGateway !== null
+      ? new CompositeExecutor(new StagehandDomExecutor(loggedGateway, provider, DOM_CFG, undefined, secrets, executorPrincipal), utility)
       : utility;
   // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
   const sessionStore = buildDevSessionStore(pool);
   console.log(
-    gateway !== null
+    loggedGateway !== null
       ? "run-loop: 실 Chrome + Codex dom 실행기 활성(act/observe/extract→LLM; 자격증명 fill→SecretStore 주입; 세션 재사용 활성)."
       : "run-loop: 실 Chrome utility 실행기만 활성(CODEX_* 미설정 → act/extract 시나리오 불가, navigate/observe 만).",
   );
