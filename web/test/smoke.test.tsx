@@ -132,6 +132,42 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(screen.getByText("완료")).toBeInTheDocument());
   });
 
+  test("자동화 운영 해제 성공은 인라인 완료 배지를 남기지 않는다", async () => {
+    const calls: Array<{ scenarioId: string; version: number; target: "prod" | "draft"; key: string }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [
+            {
+              scenario_id: "70000000-0000-0000-0000-00000000d600",
+              name: "삼성디스플레이 공지 수집",
+              version: 3,
+              latest_version_id: "70000000-0000-0000-0000-00000000d603",
+              promotion_status: "prod",
+            },
+          ],
+          next_cursor: null,
+        }),
+        setScenarioPromotion: async (scenarioId, version, target, key) => {
+          calls.push({ scenarioId, version, target, key });
+          return { version, promotion_status: target };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    const unpublish = await screen.findByRole("button", { name: "운영 해제" });
+    fireEvent.click(unpublish);
+    fireEvent.click(await screen.findByRole("button", { name: "확인" }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({
+      scenarioId: "70000000-0000-0000-0000-00000000d600",
+      version: 3,
+      target: "draft",
+    });
+    expect(screen.queryByText("완료")).toBeNull();
+  });
+
   test("human-task 처리완료(resolve) 디스패치", async () => {
     const calls: string[] = [];
     renderApp(

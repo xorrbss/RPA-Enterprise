@@ -18,6 +18,7 @@ export function ActionButton(props: {
   action?: string;
   inputLabel?: string;
   title?: string;
+  successText?: string | null;
 }): JSX.Element | null {
   const can = useCan();
   const qc = useQueryClient();
@@ -27,7 +28,7 @@ export function ActionButton(props: {
   const mut = useMutation({
     mutationFn: (value: string | undefined) => props.run(crypto.randomUUID(), value),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "완료" });
+      setMsg(props.successText === null ? null : { tone: "green", text: props.successText ?? "완료" });
       for (const key of props.invalidateKeys) void qc.invalidateQueries({ queryKey: key });
     },
     onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),

@@ -81,6 +81,7 @@ export function ScenariosView(): JSX.Element {
                   }
                   run={(key) => api.setScenarioPromotion(r.scenario_id, r.version, r.promotion_status === "prod" ? "draft" : "prod", key)}
                   invalidateKeys={[["scenarios"]]}
+                  successText={null}
                 />
                 <ActionButton
                   label="보관"
