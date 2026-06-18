@@ -38,3 +38,6 @@ app/poc/d3-stagehand/capture-reviews-output.json
 
 # PoC 캡처 산출물(커밋 제외)
 app/poc/*/capture-*-output.json
+
+# dev console local durable data (run artifacts, local scratch)
+.dev-data/

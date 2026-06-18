@@ -29,6 +29,7 @@ import { UtilityExecutor } from "../src/executor/utility-executor";
 import { StagehandDomExecutor, type LlmGatewayCaller } from "../src/executor/stagehand-dom-executor";
 import { CompositeExecutor } from "../src/runtime/composite-executor";
 import { LlmGateway } from "../src/gateway/llm-gateway";
+import type { GatewayArtifactSink } from "../src/gateway/llm-gateway";
 import { CodexSseAdapter } from "../src/gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "../src/gateway/codex-sse-transport";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
@@ -55,7 +56,7 @@ const DOM_CFG = {
  * 실 Codex 게이트웨이 조립(CODEX_* env 필수). 미설정 시 null → dom 실행기 비활성(navigate/observe 만).
  * validator 는 POC pass-through(실 ajv schemaRef 레지스트리는 후속 갭). redaction 경계가 user 메시지(DOM 포함)를 redact.
  */
-function buildCodexGateway(): LlmGatewayCaller | null {
+function buildCodexGateway(artifactSink?: GatewayArtifactSink): LlmGatewayCaller | null {
   const apiKey = process.env.CODEX_API_KEY?.trim();
   const baseUrl = process.env.CODEX_BASE_URL?.trim();
   const model = process.env.CODEX_MODEL?.trim();
@@ -81,7 +82,7 @@ function buildCodexGateway(): LlmGatewayCaller | null {
       // 스텝 id 와 함께 콘솔에 찍는다(데모 확인용). 라벨에 stepId 를 넣어 어느 스텝 출력인지 구분(extract/act 혼동 방지).
       put: async (text: string, meta) => {
         console.log(`[GW-OUTPUT ${meta.stepId}]`, typeof text === "string" ? text.slice(0, 4000) : JSON.stringify(text).slice(0, 4000));
-        return "art://dev-gateway" as ArtifactRef;
+        return artifactSink !== undefined ? artifactSink.put(text, meta) : "art://dev-gateway" as ArtifactRef;
       },
     },
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
@@ -158,7 +159,12 @@ function normalizeParams(raw: unknown): Record<string, unknown> | undefined {
  * queued run 폴링 루프 시작. Chrome 미발견 시 null(루프 비활성). tenantId 스코프(dev 단일 테넌트).
  * run별로 시나리오 entry URL→site_profile을 해소하고 그 사이트의 page_state_selectors로 resolver를 구성한다.
  */
-export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 2000): Promise<RunLoop | null> {
+export async function startRunLoop(
+  pool: Pool,
+  tenantId: string,
+  intervalMs = 2000,
+  artifactSink?: GatewayArtifactSink,
+): Promise<RunLoop | null> {
   const chrome = findChrome();
   if (chrome === null) {
     console.log("run-loop: Chrome 미발견 → 실행 비활성(만든 run은 queued로 대기). CHROME_PATH 설정 시 활성화.");
@@ -168,7 +174,7 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
   const session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
   const provider = new SingleSessionProvider(session);
   const utility = new UtilityExecutor(provider);
-  const gateway = buildCodexGateway();
+  const gateway = buildCodexGateway(artifactSink);
   const secrets = buildDevSecretBoundary();
   const executorPrincipal: AuthenticatedPrincipal = {
     subjectId: WORKER_ID as PrincipalId,

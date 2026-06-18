@@ -18,7 +18,8 @@
  *   Chrome 이 있어야 실제로 구동된다(미설정 시 run 은 queued 대기 — run-loop 비활성).
  * 세션 재사용(로그인 스킵) 모먼트는 단계 신호가 아니라 분기로만 관찰된다(짧은 트레이스 = 로그인 단계 부재). 실제로 보려면
  *   고급 설정 > 보안에서 사이트 '세션 등록'(운영자-보조 캡처)을 1회 수행한 뒤 같은 시나리오를 재실행한다. ⚠ dev:serve 는
- *   temp PG 라 재기동(=reseed)하면 캡처 세션이 소실되므로 재시연마다 재캡처가 필요하다 — 실 로그인/실 시크릿은 오너 실행 영역.
+ *   기본 재기동은 dev 스키마를 보존한다. 완전 초기화가 필요하면 RPA_DEV_RESET_DB=1 로 명시 reset한다. temp-PG 게이트
+ *   자체를 종료한 경우에는 클러스터가 회수되므로 캡처 세션/실행 이력도 함께 사라진다 — 실 로그인/실 시크릿은 오너 실행 영역.
  *
  * Phase 2 첫-실행 온보딩(데모 절차): 실행이 한 건도 없는 빈 테넌트로 기본 라우트(dashboard)에 진입하면 상단에
  *   OnboardingBanner 가 떠 시드 시나리오로 첫 실행(제작 > 테스트 실행)을 유도한다(권한 보유 시 CTA, viewer 는 안내문만).
@@ -36,10 +37,13 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
+import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer } from "../src/api/server";
-import { createPool } from "../src/db/pool";
+import { createPool, withTenantTx } from "../src/db/pool";
+import { FsObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
 import { startRunLoop, type RunLoop } from "./run-loop";
 import { startCaptureLoop, type CaptureLoop } from "./capture-loop";
+import { DevVisibleGatewayArtifactSink } from "./dev-gateway-artifact-sink";
 import { seed } from "./seed";
 import { PORT, TENANT, FIXTURE_PATH, LOGIN_FIXTURE_PATH } from "./dev-constants";
 import type { SecretRef } from "../../ts/core-types";
@@ -81,6 +85,49 @@ render();
 </body></html>`;
 // dev 전용 HMAC 시크릿(프로덕션 사용 금지 — SecretStore 경계 밖, 시드 데이터에만 적용).
 const SECRET = new TextEncoder().encode("dev-console-serve-secret-do-not-use-in-prod-0123456789");
+
+function devArtifactRetentionDays(): number {
+  const raw = process.env.GATEWAY_ARTIFACT_RETENTION_DAYS?.trim();
+  const value = raw === undefined || raw === "" ? 90 : Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`GATEWAY_ARTIFACT_RETENTION_DAYS must be a positive integer, got ${raw}`);
+  }
+  return value;
+}
+
+function shouldResetDevDb(): boolean {
+  const raw = process.env.RPA_DEV_RESET_DB?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+type DevSchemaInitMode = "created" | "reset" | "preserved";
+
+async function initializeDevSchema(pool: ReturnType<typeof createPool>): Promise<DevSchemaInitMode> {
+  const setup = await pool.connect();
+  const reset = shouldResetDevDb();
+  try {
+    const ready = reset
+      ? false
+      : ((await setup.query<{ ready: boolean }>(`SELECT to_regclass($1) IS NOT NULL AS ready`, [`${SCHEMA}.runs`])).rows[0]?.ready ?? false);
+    if (ready) return "preserved";
+
+    await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+    await setup.query(`CREATE SCHEMA ${SCHEMA}`);
+    await setup.query(`SET search_path = ${SCHEMA}, public`);
+    await setup.query(readFileSync(join(ROOT, "db", "migration_concurrency_idempotency.sql"), "utf8"));
+    await setup.query(readFileSync(join(ROOT, "db", "migration_core_entities.sql"), "utf8"));
+    return reset ? "reset" : "created";
+  } finally {
+    setup.release();
+  }
+}
+
+async function countDevRuns(pool: ReturnType<typeof createPool>): Promise<number> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const result = await c.query<{ count: string }>(`SELECT count(*)::text AS count FROM runs`);
+    return Number(result.rows[0]?.count ?? "0");
+  });
+}
 
 /**
  * dev 전용 .env 로더(레포 루트). 코드에 dotenv 의존 없이 CODEX_·HIWORKS_ 변수를 process.env 로 주입(이미 설정된 키는
@@ -130,20 +177,23 @@ async function main(): Promise<void> {
   }
 
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
+  const artifactDir = process.env.GATEWAY_ARTIFACT_DIR?.trim() || join(ROOT, ".dev-data", "gateway-artifacts");
+  const artifactStore = new FsObjectStore(artifactDir);
 
-  const setup = await pool.connect();
-  try {
-    await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-    await setup.query(`CREATE SCHEMA ${SCHEMA}`);
-    await setup.query(`SET search_path = ${SCHEMA}, public`);
-    await setup.query(readFileSync(join(ROOT, "db", "migration_concurrency_idempotency.sql"), "utf8"));
-    await setup.query(readFileSync(join(ROOT, "db", "migration_core_entities.sql"), "utf8"));
-  } finally {
-    setup.release();
+  const schemaMode = await initializeDevSchema(pool);
+  if (schemaMode === "preserved") {
+    const runCount = await countDevRuns(pool);
+    if (runCount === 0) {
+      await seed(pool);
+      console.log("dev schema preserved but empty → seeded: 8 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
+    } else {
+      console.log(`dev schema preserved: ${runCount} existing runs. Set RPA_DEV_RESET_DB=1 to reseed.`);
+    }
+  } else {
+    console.log(`migrations applied (concurrency → core)${schemaMode === "reset" ? " after RPA_DEV_RESET_DB=1" : ""}`);
+    await seed(pool);
+    console.log("seeded: 8 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
   }
-  console.log("migrations applied (concurrency → core)");
-  await seed(pool);
-  console.log("seeded: 8 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
 
   const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
   const signedCommandRegistry: SignedCommandRegistry = {
@@ -158,6 +208,8 @@ async function main(): Promise<void> {
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: noopEnqueuer,
     signedCommandRegistry,
+    artifactStore,
+    securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
   });
   await api.ready();
   await api.listen({ port: 0, host: "127.0.0.1" });
@@ -261,7 +313,12 @@ async function main(): Promise<void> {
   console.log("────────────────────────────────────────────────────────\n");
 
   // dev 런타임 루프: queued run을 claim→실행기 구동(실 Chrome). 마커 픽스처 데모 시나리오만 completed까지 간다.
-  const runLoop: RunLoop | null = await startRunLoop(pool, TENANT);
+  const runLoop: RunLoop | null = await startRunLoop(
+    pool,
+    TENANT,
+    2000,
+    new DevVisibleGatewayArtifactSink(pool, artifactStore, { type: "llm_output", retentionDays: devArtifactRetentionDays() }),
+  );
   // dev 캡처 폴러: 콘솔 '세션 등록'(capture_sessions launching)을 폴링해 별도 headful 로그인창을 띄운다(run-loop 의 공유 세션과 무관).
   const captureLoop: CaptureLoop | null = await startCaptureLoop(pool, TENANT);
 
