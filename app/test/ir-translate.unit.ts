@@ -309,6 +309,19 @@ function main(): void {
     check("extract: row_anchor.pattern 무효 정규식 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
+  // 19) act: args.click_selector → clickSelector 스레드(결정형 클릭, LLM 미경유).
+  {
+    const s = compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "결재 클릭", args: { click_selector: 'button[onclick*="getApprovalLayer"]' } }], terminal: "success" } } }, {});
+    const act = s.nodes.a?.what[0] as { type: string; clickSelector?: string } | undefined;
+    check("act: click_selector → clickSelector 스레드", act?.type === "act" && act.clickSelector === 'button[onclick*="getApprovalLayer"]', JSON.stringify(act));
+  }
+
+  // 20) act: click_selector + value_ref 동시 → IR_SCHEMA_INVALID(클릭/fill 상호배타).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "x", args: { click_selector: "#b", value_ref: "reason" } }], terminal: "success" } } }, {}));
+    check("act: click_selector + value_ref 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

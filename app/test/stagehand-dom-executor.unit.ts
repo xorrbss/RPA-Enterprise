@@ -99,6 +99,26 @@ function anchorSessions(pairs: Array<{ k: string; v: string | null }>, snapshotD
   return { provider: { forLease: () => session } as CdpSessionProvider, ops };
 }
 
+// 결정형 클릭(click_selector) 테스트용 세션 — evaluate(settle 존재 프로브)는 present(boolean) 반환, click 은 ops 기록.
+function clickSessions(present: boolean) {
+  const ops: string[] = [];
+  const session: CdpSession = {
+    url: () => "u",
+    goto: async () => {},
+    reload: async () => {},
+    evaluate: async () => present as never,
+    sendCDP: async () => undefined as never,
+    click: async (s) => void ops.push(`click:${s}`),
+    fill: async () => {},
+    selectOption: async () => {},
+    setInputFiles: async () => {},
+    downloadDir: () => "/tmp",
+    waitForDownload: async () => true,
+    close: async () => {},
+  };
+  return { provider: { forLease: () => session } as CdpSessionProvider, ops };
+}
+
 // 강화된 추출 행을 영속하는 fake typed-artifact sink(인박스 artifact). put content/meta 를 캡처.
 function fakeExtractSink() {
   const puts: Array<{ content: string; meta: unknown }> = [];
@@ -380,6 +400,24 @@ async function main(): Promise<void> {
         .execute("s5d", { type: "act", instruction: "fill reason", valueRef: "reason" }, makeCtx()),
     );
     check("act valueRef + value 미해소 → IR_SCHEMA_INVALID(LLM 환각 value 무음 fill 거부)", err?.code === "IR_SCHEMA_INVALID" && !s.ops.some((o) => o.startsWith("fill:")), `${err?.code} ops=${s.ops.join(",")}`);
+  }
+
+  // act click_selector: 결정형 클릭(LLM 전혀 미경유) — settle 통과 후 그 셀렉터 클릭, gateway 미호출.
+  {
+    const g = countingGateway({ parsedJson: { operation: "click", selector: "#never" } });
+    const s = clickSessions(true);
+    const r = await new StagehandDomExecutor(g.gw, s.provider, cfg).execute("c1", { type: "act", instruction: "결재 클릭", clickSelector: 'button[onclick*="getApprovalLayer"]' }, makeCtx());
+    check("act click_selector: 결정형 클릭(LLM 미경유, gateway 0)", r.status === "success" && g.calls() === 0 && s.ops.includes('click:button[onclick*="getApprovalLayer"]'), `calls=${g.calls()} ops=${s.ops.join(",")}`);
+  }
+
+  // act click_selector 미존재 → settle 초과 loud(IR_SCHEMA_INVALID, 클릭 0 — 조용한 무성공 금지).
+  {
+    const prev = process.env.DET_CLICK_SETTLE_MS;
+    process.env.DET_CLICK_SETTLE_MS = "60";
+    const s = clickSessions(false);
+    const err = await caught(new StagehandDomExecutor(countingGateway().gw, s.provider, cfg).execute("c2", { type: "act", instruction: "click", clickSelector: "#missing" }, makeCtx()));
+    process.env.DET_CLICK_SETTLE_MS = prev;
+    check("act click_selector 미존재 → IR_SCHEMA_INVALID(settle 초과 loud, 클릭 0)", err?.code === "IR_SCHEMA_INVALID" && s.ops.length === 0, `${err?.code} ops=${s.ops.join(",")}`);
   }
 
   // ActionPlanCache MISS → LLM 호출 + put + mode=miss

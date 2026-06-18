@@ -188,6 +188,14 @@ function mapAction(
       );
     }
     const value = valueRef !== undefined && typeof params?.[valueRef] === "string" ? (params[valueRef] as string) : undefined;
+    // 결정형 클릭: act.args.click_selector(LLM 미경유 클릭 타깃). value/secret(fill)와 상호배타 — 클릭 전용(둘 다면 IR 모순 loud).
+    const clickSelector = isRec(a.args) && typeof a.args.click_selector === "string" && a.args.click_selector.length > 0 ? a.args.click_selector : undefined;
+    if (clickSelector !== undefined && (valueRef !== undefined || secretRef !== undefined)) {
+      throw new InterpreterError(
+        "IR_SCHEMA_INVALID",
+        `compiledScenarioFrom: node '${nodeId}' act 는 click_selector(클릭)와 value_ref/vars(fill) 동시 사용 불가`,
+      );
+    }
     return {
       type: "act",
       instruction: a.instruction,
@@ -195,6 +203,7 @@ function mapAction(
       ...(secretRef !== undefined ? { secretRef } : {}),
       ...(valueRef !== undefined ? { valueRef } : {}),
       ...(value !== undefined ? { value } : {}),
+      ...(clickSelector !== undefined ? { clickSelector } : {}),
     };
   }
   if (a.action === "extract") {

@@ -55,7 +55,10 @@ export type DomAction =
   // valueRef: 비-secret 결정형 fill 의 INTENT 마커(IR act.args.value_ref = run params 키). 선언되면 실행기가 selector
   //   만 LLM 에 맡기고 value(해소된 평문)로 채운다(LLM 추측 value 무시). value 미해소면 LLM/캐시 값 무음 fill 거부 → loud.
   //   value: valueRef 가 run params 에서 해소된 평문(미해소면 부재). secretRef 와 상호배타. 평문 비밀 아님(반려 사유 등).
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string }
+  // clickSelector: 결정형 클릭 타깃(IR act.args.click_selector). 선언되면 실행기가 LLM 을 **전혀** 경유하지 않고 그 셀렉터를
+  //   settle 폴링 후 클릭한다(LLM 의 셀렉터 환각 차단 — 예 하이웍스 결재 버튼은 class/id 없는 onclick 속성 매칭). value/secret 와
+  //   상호배타(클릭 전용). 미존재면 loud(조용한 false 금지).
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> }; rowAnchor?: ExtractRowAnchor };
 
@@ -74,6 +77,11 @@ export interface StagehandDomExecutorConfig {
 
 const UTILITY_ACTIONS = new Set(["navigate", "download", "upload", "api_call", "file", "shell"]);
 const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", schemaVersion: "1", strict: true } as const;
+// 결정형 클릭(click_selector) settle — 무거운 SPA 상세/async 모달 렌더 대응. 미존재 시 deadline 까지 폴 후 loud(은폐 금지).
+// 동적 읽기(매 호출): 테스트가 DET_CLICK_SETTLE_MS 로 단축할 수 있게 함(모듈 로드 시점 고정 회피).
+const clickSettleMs = (): number => Number(process.env.DET_CLICK_SETTLE_MS ?? 15000);
+const CLICK_POLL_MS = 500;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 
@@ -189,6 +197,11 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     const session = this.sessions.forLease(ctx.leaseId);
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
+    // 결정형 클릭(click_selector): LLM 을 전혀 경유하지 않고 IR 선언 셀렉터를 settle 후 클릭(셀렉터 환각 차단).
+    // value/secret 와 상호배타(ir-translate 가 강제). 미존재 시 loud(조용한 false 금지).
+    if (a.clickSelector !== undefined) {
+      return this.executeDeterministicClick(stepId, a.clickSelector, a.sideEffect, ctx, session, before, startedAt);
+    }
     // 캐시 키 = action_plan_cache UNIQUE 7컬럼 + tenant(§D family=(url_pattern, dom_structural_hash)).
     const cacheKey: ActionPlanCacheKey = {
       tenantId: ctx.tenantId,
@@ -284,6 +297,63 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       sideEffect: { kind: a.sideEffect ?? "update", committed: true },
       timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
     };
+  }
+
+  /**
+   * 결정형 클릭 — IR 선언 셀렉터(click_selector)를 settle 폴링 후 CDP 클릭. LLM 미경유(셀렉터 환각 차단). 무거운 SPA 상세/
+   * async 모달(예 하이웍스 결재 레이어)을 위해 존재 폴링 후 클릭하고, deadline 초과·abort 시 loud(조용한 false 금지).
+   */
+  private async executeDeterministicClick(
+    stepId: string,
+    selector: string,
+    sideEffect: SideEffectKind | undefined,
+    ctx: RunContext,
+    session: CdpSession,
+    before: ReturnType<typeof pageStateRef>,
+    startedAt: string,
+  ): Promise<StepResult> {
+    await this.waitForSelectorPresent(session, selector, stepId, ctx);
+    await session.click(selector);
+    const endedAt = nowIso();
+    return {
+      stepId,
+      action: "act",
+      status: "success",
+      output: { plan: { operation: "click", selector } },
+      pageStateBefore: before,
+      pageStateAfter: before,
+      artifacts: [],
+      stagehandCallIds: [],
+      cache: { mode: "bypass" },
+      sideEffect: { kind: sideEffect ?? "update", committed: true },
+      timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
+    };
+  }
+
+  /** click_selector 존재 폴링(settle). deadline 초과/abort 시 loud throw — 조용한 미클릭 금지. */
+  private async waitForSelectorPresent(session: CdpSession, selector: string, stepId: string, ctx: RunContext): Promise<void> {
+    const settleMs = clickSettleMs();
+    const deadline = Date.now() + settleMs;
+    const probe = `document.querySelector(${JSON.stringify(selector)}) !== null`;
+    for (;;) {
+      if (ctx.abortSignal.aborted) {
+        throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted while awaiting click_selector '${selector}'`);
+      }
+      let present = false;
+      try {
+        present = await session.evaluate<boolean>(probe);
+      } catch {
+        // 네비게이션/일시 단절 — 다음 폴에서 재시도(settle 후 성공). deadline 까지 미존재면 loud.
+      }
+      if (present) return;
+      if (Date.now() >= deadline) {
+        throw new StagehandDomExecutorError(
+          "IR_SCHEMA_INVALID",
+          `step '${stepId}' act.click_selector '${selector}' 미존재(settle ${settleMs}ms 초과) — 조용한 false 금지`,
+        );
+      }
+      await sleep(CLICK_POLL_MS);
+    }
   }
 
   private async applyPlan(plan: ActionPlan, session: CdpSession, ctx: RunContext): Promise<void> {
@@ -466,6 +536,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       const sr = (action as { secretRef?: unknown }).secretRef;
       const vr = (action as { valueRef?: unknown }).valueRef;
       const val = (action as { value?: unknown }).value;
+      const cs = (action as { clickSelector?: unknown }).clickSelector;
       return {
         type,
         instruction,
@@ -473,6 +544,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         ...(typeof sr === "string" && sr.length > 0 ? { secretRef: sr } : {}),
         ...(typeof vr === "string" && vr.length > 0 ? { valueRef: vr } : {}),
         ...(typeof val === "string" ? { value: val } : {}),
+        ...(typeof cs === "string" && cs.length > 0 ? { clickSelector: cs } : {}),
       };
     }
     return { type, instruction };
