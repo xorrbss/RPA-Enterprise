@@ -110,8 +110,8 @@ export async function applyRowAnchor(
       continue;
     }
     const m = re.exec(p.v);
-    if (m === null || m[1] === undefined) {
-      unresolvableAnchors++; // pattern miss = getView 포맷 드리프트.
+    if (m === null || m[1] === undefined || m[1] === "") {
+      unresolvableAnchors++; // pattern miss(getView 포맷 드리프트) 또는 빈 캡처(id 없는 doc_ref 방지) → 해소 불가.
       continue;
     }
     const k = norm(p.k);

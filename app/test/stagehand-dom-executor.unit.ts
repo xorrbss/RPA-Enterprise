@@ -306,6 +306,15 @@ async function main(): Promise<void> {
     check("rowAnchor: LLM rows:[] + 앵커 존재 → IR_SCHEMA_INVALID(빈 인박스 은폐 금지)", err?.code === "IR_SCHEMA_INVALID");
   }
 
+  // (재검증4 보완) rowAnchor: 빈 캡처(operator 가 \d* 등 빈-매치 가능 패턴 저작) → id 없는 doc_ref 방지 → 해소 불가 → loud.
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ approval_id: "IB-A" }] } });
+    const pairs = [{ k: "IB-A", v: "view/" }]; // 캡처 그룹이 빈 매치
+    const emptyCapAnchor = { selector: "td.docu-num", matchField: "approval_id", field: "doc_ref", attribute: "data-href", pattern: "view/(\\d*)", template: "https://x/view/$1" };
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sM", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: emptyCapAnchor }, makeCtx()));
+    check("rowAnchor: 빈 캡처(id 없음) → IR_SCHEMA_INVALID(id-less doc_ref 방지)", err?.code === "IR_SCHEMA_INVALID");
+  }
+
   // (재검증 보완) rowAnchor: 부분 under-coverage(권위 앵커 2 중 1만 행에 매칭) → loud(불완전 인박스 은폐 금지).
   {
     const g = countingGateway({ parsedJson: { rows: [{ approval_id: "IB-A" }] } });
