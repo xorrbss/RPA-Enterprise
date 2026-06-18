@@ -1,7 +1,11 @@
+import { useState } from "react";
+
 import { useApiClient } from "../api/context";
+import { useCan } from "../api/permissions";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
+import { CaptureGuide } from "../components/CaptureGuide";
 import { FilterSelect } from "../components/FilterSelect";
 import { SiteCreateForm } from "../components/SiteCreateForm";
 import { SiteNameEditor } from "../components/SiteNameEditor";
@@ -11,6 +15,8 @@ import type { SiteItem } from "../api/types";
 
 export function SecurityView(): JSX.Element {
   const api = useApiClient();
+  const can = useCan();
+  const [guideSite, setGuideSite] = useState<SiteItem | null>(null);
   const lv = useListView<SiteItem>(["sites"], (p) => api.listSites(p), { refetchInterval: 10_000 });
   return (
     <>
@@ -55,12 +61,19 @@ export function SecurityView(): JSX.Element {
                     invalidateKeys={[["capture-sessions", r.site_profile_id]]}
                   />
                 )}
+                {r.login_capable === true && can("session.capture") && (
+                  // 운영(prod) 환경에선 서버가 로그인창을 띄울 수 없어 운영자 PC 에서 캡처 도구를 실행한다 — 그 명령을 안내.
+                  <button className="btn" type="button" onClick={() => setGuideSite(r)}>
+                    운영자 PC 등록
+                  </button>
+                )}
               </span>
             );
           },
         },
       ]}
     />
+    {guideSite !== null && <CaptureGuide site={guideSite} onClose={() => setGuideSite(null)} />}
     </>
   );
 }
