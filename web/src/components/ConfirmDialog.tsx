@@ -16,6 +16,9 @@ export function ConfirmDialog(props: {
   onConfirm: () => void;
   onCancel: () => void;
   children?: React.ReactNode;
+  // 정보 전용 변형 — confirm 버튼 숨김(취소 단일=닫기). cancelLabel 로 라벨 변경(기본 "취소").
+  hideConfirm?: boolean;
+  cancelLabel?: string;
 }): JSX.Element {
   const dialogRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<Element | null>(null);
@@ -92,11 +95,13 @@ export function ConfirmDialog(props: {
         {props.children}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button className="btn" type="button" onClick={props.onCancel}>
-            취소
+            {props.cancelLabel ?? "취소"}
           </button>
-          <button className="btn" type="button" onClick={props.onConfirm} disabled={props.confirmDisabled === true}>
-            {props.confirmLabel ?? "확인"}
-          </button>
+          {props.hideConfirm !== true && (
+            <button className="btn" type="button" onClick={props.onConfirm} disabled={props.confirmDisabled === true}>
+              {props.confirmLabel ?? "확인"}
+            </button>
+          )}
         </div>
       </div>
     </div>
