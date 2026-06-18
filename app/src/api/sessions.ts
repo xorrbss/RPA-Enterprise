@@ -217,22 +217,31 @@ async function applyCaptureStart(
   }
 
   // login_url 해소 — body 우선, 없으면 사이트 설정(page_state_selectors.loginUrl). 둘 다 없으면 412(사이트 로그인 URL 미설정).
-  const cfg = isRecord(row.page_state_selectors) ? (row.page_state_selectors as { loginUrl?: unknown }) : {};
+  const cfg = isRecord(row.page_state_selectors)
+    ? (row.page_state_selectors as { loginUrl?: unknown; authenticatedWhen?: unknown })
+    : {};
   const loginUrl = body.loginUrl ?? (typeof cfg.loginUrl === "string" ? cfg.loginUrl : undefined);
   if (loginUrl === undefined) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "no_login_url_configured" });
   }
   assertHttpUrl(loginUrl);
+  // auth_selector — 운영자-로컬 캡처 에이전트가 로그인 완료를 감지할 셀렉터(site 설정 authenticatedWhen.selector). 비밀 아님.
+  //   미설정이면 응답에서 생략(JSON 직렬화가 undefined 필드 제거) → 에이전트가 명시적 실패(자동 감지 불가). dev 폴러는 별도 late-fail.
+  const authSelector =
+    isRecord(cfg.authenticatedWhen) && typeof (cfg.authenticatedWhen as { selector?: unknown }).selector === "string"
+      ? (cfg.authenticatedWhen as { selector: string }).selector
+      : undefined;
 
   // 2) in-flight 가드 — 같은 (tenant,site) 비종결 캡처가 있으면 새로 launch 하지 않고 그 행 재반환(이중 headful 브라우저 방지).
-  const inflight = await client.query<{ id: string; status: string }>(
-    `SELECT id::text AS id, status FROM capture_sessions
+  const inflight = await client.query<{ id: string; status: string; login_url: string }>(
+    `SELECT id::text AS id, status, login_url FROM capture_sessions
       WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid AND status IN ('launching','awaiting_login','capturing')
       ORDER BY created_at DESC LIMIT 1`,
     [tenantId, siteId],
   );
   if (inflight.rows[0] !== undefined) {
-    return { status: 200, body: { capture_session_id: inflight.rows[0].id, site_profile_id: siteId, status: inflight.rows[0].status } };
+    const f = inflight.rows[0];
+    return { status: 200, body: { capture_session_id: f.id, site_profile_id: siteId, status: f.status, login_url: f.login_url, auth_selector: authSelector } };
   }
 
   // 3) browser_identity 해소 — 캡처/재사용 키 정합(browser_sessions 와 동일 browser_identity_id). 사이트에 미설정이면 412.
@@ -252,5 +261,5 @@ async function applyCaptureStart(
      VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'launching')`,
     [captureId, tenantId, siteId, browserIdentityId, loginUrl],
   );
-  return { status: 201, body: { capture_session_id: captureId, site_profile_id: siteId, status: "launching" } };
+  return { status: 201, body: { capture_session_id: captureId, site_profile_id: siteId, status: "launching", login_url: loginUrl, auth_selector: authSelector } };
 }
