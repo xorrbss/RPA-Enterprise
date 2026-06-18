@@ -39,6 +39,7 @@ import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
 import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer } from "../src/api/server";
+import { PgBrowserSessionStore, DevPlaintextSessionEncryptor } from "../src/runtime/browser-session-store";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { FsObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
 import { startRunLoop, type RunLoop } from "./run-loop";
@@ -210,6 +211,8 @@ async function main(): Promise<void> {
     signedCommandRegistry,
     artifactStore,
     securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
+    // 운영자-로컬 캡처 완료(POST .../session/capture/complete)용 세션 스토어. dev는 평문 봉투(허용 플래그).
+    sessionStore: new PgBrowserSessionStore({ pool, encryptor: new DevPlaintextSessionEncryptor() }, { allowDevPlaintext: true }),
   });
   await api.ready();
   await api.listen({ port: 0, host: "127.0.0.1" });

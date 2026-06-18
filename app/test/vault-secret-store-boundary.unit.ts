@@ -102,9 +102,12 @@ function makeBoundary(store: SecretStore, audit: DurableSecurityAuditDecisionWri
 // 매트릭스(D8-A12) — 테스트 기대값(SSoT 미러).
 const ALLOW_PAIRS: ReadonlyArray<[RuntimeIdentity, SecretAccessRequest["purpose"]]> = [
   ["api", "resume_token_hmac"],
+  ["api", "browser_session"],
   ["runtime-worker", "resume_token_hmac"],
   ["runtime-worker", "executor"],
+  ["runtime-worker", "browser_session"],
   ["browser-worker", "executor"],
+  ["browser-worker", "browser_session"],
   ["llm-gateway", "gateway_policy"],
   ["artifact-lifecycle", "object_store"],
   ["connector-runtime", "connector"],
@@ -114,7 +117,9 @@ const DENY_PAIRS: ReadonlyArray<[RuntimeIdentity, SecretAccessRequest["purpose"]
   ["browser-worker", "gateway_policy"],
   ["api", "executor"],
   ["llm-gateway", "object_store"],
+  ["llm-gateway", "browser_session"], // 세션키는 게이트웨이와 격리
   ["artifact-lifecycle", "executor"],
+  ["artifact-lifecycle", "browser_session"],
   ["runtime-worker", "gateway_policy"],
   ["connector-runtime", "resume_token_hmac"],
 ];

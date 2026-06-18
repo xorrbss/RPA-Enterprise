@@ -9,7 +9,7 @@
  * 보안: tenant/site/browser_identity 는 capture_sessions 행(RLS 조회)에서 도출(payload 미신뢰). 자격증명은 우리 미경유
  *   (운영자가 실 사이트에 직접 입력) — 결과 쿠키만 봉투암호화 저장. 쿠키는 단명 지역변수(로그/직렬화 금지).
  */
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,26 +18,15 @@ import type { Pool } from "pg";
 import type { RunContext } from "../../ts/core-types";
 import { withTenantTx } from "../src/db/pool";
 import { createStagehandSession, type CdpSession } from "../src/executor/cdp-session";
-import { getCookiesForOrigins } from "../src/executor/raw-cdp";
+import { awaitLoginCookies, findChrome, DEFAULT_LOGIN_DEADLINE_MS } from "../src/executor/login-capture";
 import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
 import { PgBrowserSessionStore, DevPlaintextSessionEncryptor, sessionKey, type BrowserSessionStore } from "../src/runtime/browser-session-store";
 
 // 운영자 로그인 대기 데드라인 — ops-defaults human_task.default_timeout(30m). dev 검증용 단축은 env override.
-const LOGIN_DEADLINE_MS = Number(process.env.CAPTURE_LOGIN_TIMEOUT_MS ?? 30 * 60 * 1000);
-const POLL_AUTH_MS = 1500;
+const LOGIN_DEADLINE_MS = Number(process.env.CAPTURE_LOGIN_TIMEOUT_MS ?? DEFAULT_LOGIN_DEADLINE_MS);
 
 export interface CaptureLoop {
   stop(): Promise<void>;
-}
-
-function findChrome(): string | null {
-  const env = process.env.CHROME_PATH?.trim();
-  if (env !== undefined && env.length > 0 && existsSync(env)) return env;
-  return (
-    ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"].find(
-      (c) => existsSync(c),
-    ) ?? null
-  );
 }
 
 interface LaunchingRow {
@@ -70,13 +59,10 @@ function captureCtx(tenantId: string, siteProfileId: string, browserIdentityId: 
   };
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 /**
- * 운영자 로그인 대기 → 인증 감지 시 origin-scoped 쿠키 캡처·저장. 반환='captured'|'expired'(typed). 캡처/재사용 동일 sessionKey.
- * 감지는 **가벼운 querySelector evaluate**(authSelector) — 무거운 a11y-tree raw CDP 대신. 실 사이트 로그인은 cross-origin
- * 리다이렉트(login→office)가 흔해 그 순간 CDP 타깃이 일시 단절되므로, **poll 에러는 catch 후 재시도**한다(창이 닫히면
- * deadline 까지 폴 후 expired — 조용한 no-op 아님). 별도 export — dev 검증이 폴러와 동일 코어를 호출.
+ * 운영자 로그인 대기 → 인증 감지 시 origin-scoped 쿠키 캡처·**저장**. 반환='captured'|'expired'(typed). 캡처/재사용
+ * 동일 sessionKey. 대기·캡처 코어는 awaitLoginCookies(src/executor/login-capture, agent 와 공유); 본 함수는 그 결과를
+ * store.save 로 영속하는 dev 폴러 어댑터다(expired 시 미저장 — 조용한 캡처 금지). 별도 export — 단위검증이 동일 코어를 호출.
  */
 export async function awaitLoginAndCapture(
   session: CdpSession,
@@ -86,24 +72,10 @@ export async function awaitLoginAndCapture(
   loginOrigin: string,
   deadlineMs = LOGIN_DEADLINE_MS,
 ): Promise<"captured" | "expired"> {
-  const start = Date.now();
-  const probe = `!!document.querySelector(${JSON.stringify(authSelector)})`;
-  for (;;) {
-    let authed = false;
-    try {
-      authed = await session.evaluate<boolean>(probe);
-    } catch {
-      // 네비게이션/일시 CDP 단절 — 다음 폴에서 재시도(리다이렉트 settle 후 성공). 창이 닫혔으면 deadline 까지 폴 후 expired.
-    }
-    if (authed) {
-      // origin-scoped 캡처(over-capture 차단) → 단명 지역변수로만 → 봉투암호화 저장.
-      const cookies = await getCookiesForOrigins(session, [loginOrigin]);
-      await store.save(sessionKey(ctx.tenantId, ctx.siteProfileId, ctx.browserIdentityId), { cookies });
-      return "captured";
-    }
-    if (Date.now() - start >= deadlineMs) return "expired";
-    await sleep(POLL_AUTH_MS);
-  }
+  const cookies = await awaitLoginCookies(session, authSelector, loginOrigin, deadlineMs);
+  if (cookies === null) return "expired";
+  await store.save(sessionKey(ctx.tenantId, ctx.siteProfileId, ctx.browserIdentityId), { cookies });
+  return "captured";
 }
 
 /** capture_sessions 상태 CAS 전이(조용한 no-op 금지 — detail 은 메타만, 쿠키/자격증명 금지). */

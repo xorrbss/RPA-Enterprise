@@ -34,12 +34,14 @@ import { PgGraphileRunEnqueuer } from "./api/run-queue";
 import { buildServer } from "./api/server";
 import {
   loadApiConfig,
+  loadApiSessionEncryption,
   loadBrowserConfig,
   loadCommonConfig,
   loadGatewayConfig,
   loadRunMode,
   loadWorkerConfig,
   type ApiConfig,
+  type CommonConfig,
 } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
@@ -52,6 +54,7 @@ import { StagehandBrowserSessionProvider } from "./executor/browser-session-prov
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
+import { PgBrowserSessionStore, buildKmsSessionEncryptor, type BrowserSessionStore } from "./runtime/browser-session-store";
 import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
@@ -122,8 +125,11 @@ function buildJwtVerifier(jwt: ApiConfig["jwt"]) {
   return hmacJwtVerifier(new TextEncoder().encode(jwt.secret));
 }
 
-async function startApi(pool: PgPool): Promise<FastifyInstance> {
+async function startApi(pool: PgPool, common: CommonConfig): Promise<FastifyInstance> {
   const cfg = loadApiConfig();
+  // 세션 캡처 봉투암호화 스토어 — KEK(api/browser_session) 프로비저닝 시에만 활성. 미설정 → undefined → 엔드포인트 미등록
+  //   (fail-closed, 평문 at-rest 금지). KmsEnvelopeSessionEncryptor 가 KEK 를 1회 해소(buildKmsSessionEncryptor).
+  const sessionStore = await buildApiSessionStore(pool, common);
   const api = buildServer({
     pool,
     auth: new JwtAuthenticationBoundary(buildJwtVerifier(cfg.jwt)),
@@ -134,10 +140,32 @@ async function startApi(pool: PgPool): Promise<FastifyInstance> {
     security: { corsOrigins: cfg.corsOrigins, hsts: cfg.hsts },
     // artifactStore/securityAudit intentionally unset — artifact body-read stays unregistered until an
     // object_store-authorized credential is provisioned for the API identity (deploy-time, see backlog).
+    ...(sessionStore !== undefined ? { sessionStore } : {}),
   });
   await api.listen({ host: "0.0.0.0", port: cfg.port });
-  console.log(JSON.stringify({ at: "main", msg: "control-plane API listening", port: cfg.port, jwtMode: cfg.jwt.mode }));
+  console.log(JSON.stringify({ at: "main", msg: "control-plane API listening", port: cfg.port, jwtMode: cfg.jwt.mode, sessionCapture: sessionStore !== undefined }));
   return api;
+}
+
+/**
+ * 세션 캡처 봉투암호화 스토어를 조립한다(POST .../session/capture/complete 가 이걸로 등록). KEK SecretRef
+ * (rpa/<env>/api/browser_session/active) 가 프로비저닝됐을 때만(VAULT_API_ROLE_ID 게이트) 활성 — 미설정이면 undefined →
+ * 엔드포인트 미등록(fail-closed, 평문 at-rest 금지). KEK 는 api AppRole VaultSecretStore 에서 1회 해소(resume-token 패턴).
+ */
+async function buildApiSessionStore(pool: PgPool, common: CommonConfig): Promise<BrowserSessionStore | undefined> {
+  const sessionEnc = loadApiSessionEncryption(common);
+  if (sessionEnc === undefined) {
+    console.log(JSON.stringify({ at: "main", msg: "session capture unregistered — KEK (api/browser_session) not provisioned, fail-closed" }));
+    return undefined;
+  }
+  const apiStore = new VaultSecretStore({
+    baseUrl: sessionEnc.vault.addr,
+    mount: sessionEnc.vault.mount,
+    kvApiVersion: 2,
+    appRole: { roleId: sessionEnc.vault.roleId, secretId: sessionEnc.vault.secretId },
+  });
+  const encryptor = await buildKmsSessionEncryptor(apiStore, sessionEnc.kekRef as SecretRef);
+  return new PgBrowserSessionStore({ pool, encryptor });
 }
 
 /**
@@ -263,7 +291,7 @@ async function main(): Promise<void> {
   let api: FastifyInstance | undefined;
   let runner: Runner | undefined;
 
-  if (mode === "api" || mode === "all") api = await startApi(pool);
+  if (mode === "api" || mode === "all") api = await startApi(pool, common);
   if (mode === "worker" || mode === "all") runner = await startWorker(pool, common.connectionString);
 
   let shuttingDown = false;

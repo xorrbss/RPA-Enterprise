@@ -160,6 +160,24 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
   };
 }
 
+/** API 세션 캡처 봉투암호화 설정 — api AppRole(Vault) + 활성 KEK SecretRef. */
+export interface ApiSessionEncryptionConfig {
+  readonly vault: VaultIdentityConfig;
+  readonly kekRef: string;
+}
+
+/**
+ * 세션 캡처(POST .../session/capture/complete) 봉투암호화 설정 — `VAULT_API_ROLE_ID` 가 있을 때만 활성(미설정 →
+ * undefined → 엔드포인트 미등록, fail-closed). KEK 는 api identity 의 browser_session purpose namespace 에서 1회 해소.
+ */
+export function loadApiSessionEncryption(common: CommonConfig): ApiSessionEncryptionConfig | undefined {
+  if (opt("VAULT_API_ROLE_ID") === undefined) return undefined;
+  return {
+    vault: loadVaultIdentity("API"),
+    kekRef: `rpa/${common.rpaEnv}/api/browser_session/active`,
+  };
+}
+
 /**
  * In-process LLM Gateway config for the worker (release-decisions D8-A16, owner-ratified).
  *
