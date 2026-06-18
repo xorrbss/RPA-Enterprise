@@ -10,23 +10,50 @@
  * suspend → suspended(R4→포트→resume-token 발행→R11, driveSuspend). 그 외 terminal 은 미구현 — 조용히 흘리지 않고
  * throw로 표면화한다("조용한 false/unknown 금지").
  */
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
-import type { ClassifiedException, ExecutorPlugin, PageState, PageStateRef, PageStateResolver, RedactedString, RunContext, SecretRef } from "../../../ts/core-types";
-import type { IsoDateTime, ResumeTokenCodec, ResumeTokenEnvelope } from "../../../ts/runtime-contract";
-import type { RunId } from "../../../ts/security-middleware-contract";
+import type {
+  ArtifactRef,
+  ClassifiedException,
+  ExecutorPlugin,
+  IRActionType,
+  PageState,
+  PageStateRef,
+  PageStateResolver,
+  RedactedString,
+  RunContext,
+  SecretRef,
+  StepResult,
+} from "../../../ts/core-types";
+import type {
+  IsoDateTime,
+  ExecutorInvocationArtifactMetadata,
+  ResumeTokenCodec,
+  ResumeTokenEnvelope,
+  RuntimeWorkerJob,
+  LeaseId,
+  RunVideoRecording,
+  VisualEvidenceVideoPolicy,
+  VisualEvidenceVideoRecorder,
+} from "../../../ts/runtime-contract";
+import type { CorrelationId, RunId, StepId, TenantId } from "../../../ts/security-middleware-contract";
 import type { RunEvent, RunGuard, RunState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import { clearCookies, getAllCookies, setCookies } from "../executor/raw-cdp";
 import { applyRunTransition } from "./run-transition";
 import { sessionKey, type BrowserSessionStore } from "./browser-session-store";
-import type { ExecutorChallengeSuspensionPort } from "./executor-completion-coordinator";
+import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "./executor-completion-coordinator";
+import { PgExecutorStepAttemptStore } from "./executor-step-attempt-store";
+import { PgExecutorInvocationRecorder } from "./executor-invocation-recorder";
+import { executorFailureStepResult } from "./executor-step-orchestrator";
 import { compiledScenarioFrom } from "./ir-translate";
 import { runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
+import { VisualEvidenceExecutor, type VisualEvidenceRecorder } from "./visual-evidence";
 
 // ops-defaults.md resume_token.ttl=30m(expiresAt). 코드 상수 금지 규약 — inline 인용(RQ-017 패턴).
 const RESUME_TOKEN_TTL_MS = 30 * 60 * 1000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface ClaimedRun {
   readonly runId: string;
@@ -37,6 +64,7 @@ export interface ClaimedRun {
   readonly siteProfileId: string;
   readonly browserIdentityId: string;
   readonly networkPolicyId: string;
+  readonly networkAllowedDomains?: readonly string[];
   /** runs.params(실행 파라미터). navigate.url_ref 가 이 params 의 키로 해소된다. */
   readonly params?: Record<string, unknown>;
   /**
@@ -58,6 +86,18 @@ export interface DriveDeps {
   //   (driver 가 executor 추상화 너머 두 번째 런타임 포트에 의존 — 작지만 실 결합 증가, run-lifecycle 소유자라 정당).
   readonly sessionStore?: BrowserSessionStore;
   readonly sessionProvider?: CdpSessionProvider;
+  /**
+   * Optional visual evidence capture. When present with sessionProvider, node.policy.recording controls
+   * screenshot artifact capture on the direct run-drive path. Rows are inserted as pending artifacts for
+   * the redaction lifecycle; content/body disclosure remains gated by artifact RLS.
+   */
+  readonly visualEvidenceRecorder?: VisualEvidenceRecorder;
+  /** Optional run-level video capture. Generation blocks video requests unless the deployment exposes this capability. */
+  readonly visualEvidenceVideoRecorder?: VisualEvidenceVideoRecorder;
+  /** Direct run-drive artifacts must enter the redaction/retention lifecycle before they are user-visible. */
+  readonly runtimeJobEnqueuer?: RuntimeJobEnqueuePort;
+  /** Worker direct-drive path records executor started/completed rows before/after each executor invocation. */
+  readonly recordExecutorSteps?: boolean;
 }
 
 export interface DriveResult {
@@ -108,6 +148,12 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   const irDoc = typeof sv.ir === "string" ? (JSON.parse(sv.ir) as unknown) : sv.ir;
   const compiledAst = typeof sv.compiled_ast === "string" ? (JSON.parse(sv.compiled_ast) as unknown) : sv.compiled_ast;
   const scenario = compiledScenarioFrom(irDoc, compiledAst, run.params);
+  const videoPolicy = videoPolicyFromIr(irDoc);
+  if (videoPolicy !== undefined && deps.visualEvidenceVideoRecorder === undefined) {
+    const outcome = systemFailureOutcome();
+    await failRunningRun(run, deps, outcome);
+    return { state: "failed_system", outcome };
+  }
 
   const ctx: RunContext = {
     runId: run.runId,
@@ -117,6 +163,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     siteProfileId: run.siteProfileId,
     browserIdentityId: run.browserIdentityId,
     networkPolicyId: run.networkPolicyId,
+    ...(run.networkAllowedDomains !== undefined ? { networkAllowedDomains: run.networkAllowedDomains } : {}),
     leaseId: run.leaseId,
     assetRefs: run.assetRefs ?? {},
     abortSignal: new AbortController().signal,
@@ -136,12 +183,45 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   }
 
   // startNode(resume): 인터프리터가 그 노드부터 재진입(미지정 시 scenario.start). run.params 를 스코프에 주입(on[].when params.*).
-  const outcome = await runScenario(scenario, ctx, { executor: deps.executor, resolver: deps.resolver, params: run.params, startNode });
+  let executor = deps.executor;
+  if (deps.visualEvidenceRecorder !== undefined && deps.sessionProvider !== undefined) {
+    executor = new VisualEvidenceExecutor(executor, deps.sessionProvider, deps.visualEvidenceRecorder);
+  }
+  if (deps.recordExecutorSteps === true) {
+    executor = new StepRecordingExecutor(deps.pool, executor, run);
+  }
+  let videoRecording: RunVideoRecording | undefined;
+  let outcome: ScenarioOutcome;
+  try {
+    if (videoPolicy !== undefined && deps.visualEvidenceVideoRecorder !== undefined) {
+      videoRecording = await deps.visualEvidenceVideoRecorder.startRunVideo({
+        tenantId: run.tenantId as TenantId,
+        runId: run.runId as RunId,
+        leaseId: run.leaseId as LeaseId,
+        correlationId: run.correlationId as CorrelationId,
+        policy: videoPolicy,
+      });
+    }
+    let scenarioOutcome: ScenarioOutcome;
+    try {
+      scenarioOutcome = await runScenario(scenario, ctx, { executor, resolver: deps.resolver, params: run.params, startNode });
+    } catch {
+      scenarioOutcome = systemFailureOutcome();
+    }
+    outcome = await appendRunVideoArtifact(scenarioOutcome, videoRecording, videoPolicy);
+  } catch {
+    if (videoRecording !== undefined) {
+      await videoRecording.discard({ reason: "run_drive_error" });
+    }
+    outcome = systemFailureOutcome();
+  }
 
   // terminal 결과를 DB 전이로 종료(run 은 이미 running — driveClaimedRun R2 / driveResumedRun R18).
   if (outcome.terminal === "success" || outcome.terminal === "success_empty") {
     await transition(deps.pool, run, "running", { type: "last_node_success" }, { flowTerminalReached: true });
-    await transition(deps.pool, run, "completing", { type: "finalize_ok" }, { finalizeOk: true });
+    await transition(deps.pool, run, "completing", { type: "finalize_ok" }, { finalizeOk: true }, undefined, (client) =>
+      enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome),
+    );
     // 세션 재사용 캡처 — 성공 종료 후 현재 쿠키 스냅샷 저장(다음 run 재사용). run 은 이미 completed 이므로 캡처 실패는
     //   best-effort-but-loud(조용히 흘리지 않되 완료된 run 을 실패로 만들지 않음 — 다음 run 이 재로그인).
     if (deps.sessionStore !== undefined && deps.sessionProvider !== undefined) {
@@ -156,12 +236,16 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   }
   // 실패 terminal: success(2-hop R7→R21)와 달리 단일 전이(running→failed_*). applyRunTransition 이 run.failed_* emit + ended_at 설정.
   if (outcome.terminal === "fail_business") {
-    await transition(deps.pool, run, "running", { type: "business_exception" }, { exceptionClass: "business" });
+    await transition(deps.pool, run, "running", { type: "business_exception" }, { exceptionClass: "business" }, undefined, (client) =>
+      enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome),
+    );
     return { state: "failed_business", outcome };
   }
   if (outcome.terminal === "fail_system") {
     // R8 pending(captureFailureScreenshot·evaluateDeadLetter)은 다운스트림 디스패처 소유 — driver 미소비(success 경로와 동일).
-    await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" });
+    await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" }, undefined, (client) =>
+      enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome),
+    );
     return { state: "failed_system", outcome };
   }
   // suspend(트리거 i challenge=R4 / 트리거 ii @human_task=R5; resume 중 재-suspend 포함): running→suspending+포트→resume-token+R11→suspended.
@@ -260,12 +344,299 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
     if (!r11.applied) {
       throw new Error(`driveSuspend: R11 not applied (${r11.reason}, observed=${r11.observed ?? "none"})`);
     }
+    await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
   });
 
   return { state: "suspended", outcome };
 }
 
 // 단일 전이를 자체 CAS 트랜잭션으로 적용. eventIdempotencyKey는 이벤트별 접미(outbox UNIQUE 충돌 방지).
+function videoPolicyFromIr(irDoc: unknown): VisualEvidenceVideoPolicy | undefined {
+  if (!isRecord(irDoc)) return undefined;
+  const meta = irDoc.meta;
+  if (!isRecord(meta)) return undefined;
+  const evidence = meta.evidence;
+  if (!isRecord(evidence)) return undefined;
+  const video = evidence.video;
+  if (video === "always" || video === "failure") return video;
+  return undefined;
+}
+
+function systemFailureOutcome(): ScenarioOutcome {
+  return { terminal: "fail_system", visited: [], steps: [], artifacts: [] };
+}
+
+const EXECUTOR_ACTIONS = new Set<string>(["act", "observe", "extract", "navigate", "download", "upload", "api_call", "file", "human_task", "shell"]);
+
+class StepRecordingExecutor implements ExecutorPlugin {
+  private readonly attemptStore: PgExecutorStepAttemptStore;
+  private readonly recorder: PgExecutorInvocationRecorder;
+
+  constructor(
+    private readonly pool: Pool,
+    private readonly inner: ExecutorPlugin,
+    private readonly run: ClaimedRun,
+  ) {
+    this.attemptStore = new PgExecutorStepAttemptStore(pool);
+    this.recorder = new PgExecutorInvocationRecorder(pool);
+  }
+
+  capabilities(): { dom: boolean; vision: boolean; utility: boolean } {
+    return this.inner.capabilities();
+  }
+
+  async execute(stepId: string, action: unknown, ctx: RunContext): Promise<StepResult> {
+    const actionType = actionTypeFromExecutorAction(action);
+    const startedAt = new Date().toISOString();
+    const started = await this.attemptStore.begin({
+      tenantId: this.run.tenantId as TenantId,
+      runId: this.run.runId as RunId,
+      stepId: stepId as StepId,
+      nodeId: ctx.nodeId,
+      action: actionType,
+      correlationId: this.run.correlationId as CorrelationId,
+      startedAt: startedAt as IsoDateTime,
+    });
+    const stepCtx: RunContext = {
+      ...ctx,
+      tenantId: this.run.tenantId,
+      runId: this.run.runId,
+      nodeId: ctx.nodeId,
+      attempt: started.key.attempt,
+    };
+
+    let result: StepResult;
+    try {
+      result = await this.inner.execute(stepId, action, stepCtx);
+    } catch (error) {
+      result = executorFailureStepResult({ stepId, actionType }, stepCtx, startedAt, error);
+    }
+
+    const stepArtifacts = await loadPersistedStepArtifactMetadata(this.pool, {
+      tenantId: this.run.tenantId,
+      runId: this.run.runId,
+      stepId,
+      attempt: started.key.attempt,
+      artifactRefs: result.artifacts,
+    });
+    const recordResult =
+      stepArtifacts.length === result.artifacts.length
+        ? result
+        : { ...result, artifacts: stepArtifacts.map((artifact) => artifact.artifactRef) };
+    await this.recorder.record({
+      key: started.key,
+      nodeId: ctx.nodeId,
+      correlationId: this.run.correlationId as CorrelationId,
+      result: recordResult,
+      artifacts: stepArtifacts,
+    });
+    await preserveHiddenPersistedArtifactRefs(this.pool, {
+      tenantId: this.run.tenantId,
+      runId: this.run.runId,
+      stepId,
+      attempt: started.key.attempt,
+      nodeId: ctx.nodeId,
+      action: actionType,
+      artifactRefs: result.artifacts,
+      recordedArtifactRefs: recordResult.artifacts,
+    });
+    return result;
+  }
+
+  verify(criteria: unknown, ctx: RunContext) {
+    return this.inner.verify(criteria, ctx);
+  }
+}
+
+interface HiddenPersistedArtifactRefInput {
+  readonly tenantId: string;
+  readonly runId: string;
+  readonly stepId: string;
+  readonly attempt: number;
+  readonly nodeId: string;
+  readonly action: IRActionType;
+  readonly artifactRefs: readonly ArtifactRef[];
+  readonly recordedArtifactRefs: readonly ArtifactRef[];
+}
+
+async function preserveHiddenPersistedArtifactRefs(
+  pool: Pool,
+  input: HiddenPersistedArtifactRefInput,
+): Promise<void> {
+  const refs = input.artifactRefs.filter(isUuidArtifactRef);
+  if (refs.length === 0) return;
+  const uniqueRefs = [...new Set(refs)];
+  if (sameRefs(uniqueRefs, input.recordedArtifactRefs)) return;
+
+  await withTenantTx(pool, input.tenantId, async (client) => {
+    const updated = await client.query(
+      `UPDATE run_steps
+          SET artifacts=$1::text[]
+        WHERE tenant_id=$2::uuid
+          AND run_id=$3::uuid
+          AND step_id=$4
+          AND attempt=$5::int
+          AND node_id=$6
+          AND action=$7`,
+      [uniqueRefs, input.tenantId, input.runId, input.stepId, input.attempt, input.nodeId, input.action],
+    );
+    if (updated.rowCount !== 1) {
+      throw new Error("driveScenario: failed to preserve hidden persisted artifact refs on run_steps");
+    }
+  });
+}
+
+function isUuidArtifactRef(ref: ArtifactRef): boolean {
+  return UUID_RE.test(ref);
+}
+
+function sameRefs(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+interface PersistedStepArtifactLookup {
+  readonly tenantId: string;
+  readonly runId: string;
+  readonly stepId: string;
+  readonly attempt: number;
+  readonly artifactRefs: readonly ArtifactRef[];
+}
+
+async function loadPersistedStepArtifactMetadata(
+  pool: Pool,
+  input: PersistedStepArtifactLookup,
+): Promise<readonly ExecutorInvocationArtifactMetadata[]> {
+  if (input.artifactRefs.length === 0) return [];
+  const uniqueRefs = [...new Set(input.artifactRefs)];
+  return withTenantTx(pool, input.tenantId, async (client) => {
+    const rows = await client.query<{
+      artifact_ref: string;
+      object_ref: string;
+      type: string;
+      media_type: string | null;
+      filename: string | null;
+      byte_size: string | null;
+      duration_ms: number | null;
+      redaction_status: string;
+      retention_until: Date | string | null;
+      sha256: string | null;
+      legal_hold: boolean;
+      quarantine: boolean;
+    }>(
+      `SELECT id::text AS artifact_ref, object_ref, type, media_type, filename, byte_size::text,
+              duration_ms, redaction_status, retention_until, sha256, legal_hold, quarantine
+         FROM artifacts
+        WHERE tenant_id=$1::uuid
+          AND run_id=$2::uuid
+          AND step_id=$3
+          AND attempt=$4::int
+          AND id::text = ANY($5::text[])
+        ORDER BY array_position($5::text[], id::text)`,
+      [input.tenantId, input.runId, input.stepId, input.attempt, uniqueRefs],
+    );
+    return rows.rows.map((row) => ({
+      artifactRef: row.artifact_ref as ArtifactRef,
+      objectRef: row.object_ref as ExecutorInvocationArtifactMetadata["objectRef"],
+      type: row.type,
+      ...(row.media_type !== null ? { mediaType: row.media_type } : {}),
+      ...(row.filename !== null ? { filename: row.filename } : {}),
+      ...(row.byte_size !== null ? { byteSize: Number(row.byte_size) } : {}),
+      ...(row.duration_ms !== null ? { durationMs: row.duration_ms } : {}),
+      redactionStatus: "pending",
+      retentionUntil: isoDateTime(row.retention_until, "artifact.retention_until"),
+      ...(row.sha256 !== null ? { sha256: row.sha256 } : {}),
+      legalHold: row.legal_hold,
+      quarantine: row.quarantine,
+      metadataStored: true,
+    }));
+  });
+}
+
+function actionTypeFromExecutorAction(action: unknown): IRActionType {
+  if (typeof action === "object" && action !== null && "type" in action) {
+    const type = (action as { type?: unknown }).type;
+    if (typeof type === "string" && EXECUTOR_ACTIONS.has(type)) return type as IRActionType;
+  }
+  throw new Error("driveScenario: executor action missing supported type before step recording");
+}
+
+function isoDateTime(value: Date | string | null, label: string): IsoDateTime {
+  if (value instanceof Date) return value.toISOString() as IsoDateTime;
+  if (typeof value === "string") {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString() as IsoDateTime;
+  }
+  throw new Error(`driveScenario: ${label} is required for step artifact metadata`);
+}
+
+async function failRunningRun(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioOutcome): Promise<void> {
+  await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" }, undefined, (client) =>
+    enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome),
+  );
+}
+
+async function appendRunVideoArtifact(
+  outcome: ScenarioOutcome,
+  recording: RunVideoRecording | undefined,
+  policy: VisualEvidenceVideoPolicy | undefined,
+): Promise<ScenarioOutcome> {
+  if (recording === undefined || policy === undefined) return outcome;
+  if (policy === "failure" && (outcome.terminal === "success" || outcome.terminal === "success_empty")) {
+    await recording.discard({ reason: "terminal_success" });
+    return outcome;
+  }
+  const artifactRef = await recording.stopAndPersist({ terminal: knownTerminal(outcome.terminal) });
+  if (artifactRef === undefined) return outcome;
+  return { ...outcome, artifacts: [...outcome.artifacts, artifactRef] };
+}
+
+function knownTerminal(terminal: string): "success" | "success_empty" | "fail_business" | "fail_system" | "suspend" {
+  if (
+    terminal === "success" ||
+    terminal === "success_empty" ||
+    terminal === "fail_business" ||
+    terminal === "fail_system" ||
+    terminal === "suspend"
+  ) {
+    return terminal;
+  }
+  throw new Error(`driveScenario: terminal '${terminal}' cannot finalize run video evidence`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function enqueueArtifactLifecycleJobsForOutcome(
+  client: PoolClient,
+  run: ClaimedRun,
+  deps: DriveDeps,
+  outcome: ScenarioOutcome,
+): Promise<void> {
+  const artifactRefs = [...new Set(outcome.artifacts)];
+  if (artifactRefs.length === 0) return;
+  const enqueuer = deps.runtimeJobEnqueuer;
+  if (enqueuer === undefined) {
+    throw new Error("driveScenario: artifacts produced on direct run-drive require RuntimeJobEnqueuePort for lifecycle jobs");
+  }
+  const jobs: RuntimeWorkerJob[] = [
+    {
+      kind: "artifact_redaction",
+      tenantId: run.tenantId as RuntimeWorkerJob["tenantId"],
+      runId: run.runId as RuntimeWorkerJob["runId"],
+      correlationId: run.correlationId as RuntimeWorkerJob["correlationId"],
+    },
+    {
+      kind: "artifact_retention",
+      tenantId: run.tenantId as RuntimeWorkerJob["tenantId"],
+      correlationId: run.correlationId as RuntimeWorkerJob["correlationId"],
+    },
+  ];
+  for (const job of jobs) {
+    await enqueuer.enqueueRuntimeJob(client, job);
+  }
+}
+
 async function transition(
   pool: Pool,
   run: ClaimedRun,
@@ -273,9 +644,10 @@ async function transition(
   event: RunEvent,
   guard: RunGuard,
   workerId?: string,
+  afterApplied?: (client: PoolClient) => Promise<void>,
 ): Promise<void> {
-  const outcome = await withTenantTx(pool, run.tenantId, (c) =>
-    applyRunTransition(c, {
+  await withTenantTx(pool, run.tenantId, async (c) => {
+    const outcome = await applyRunTransition(c, {
       tenantId: run.tenantId,
       runId: run.runId,
       fromStatus,
@@ -284,9 +656,10 @@ async function transition(
       correlationId: run.correlationId,
       workerId,
       eventIdempotencyKey: `${run.runId}:${event.type}`,
-    }),
-  );
-  if (!outcome.applied) {
-    throw new Error(`driveClaimedRun: transition '${event.type}' from '${fromStatus}' not applied (${outcome.reason}, observed=${outcome.observed ?? "none"})`);
-  }
+    });
+    if (!outcome.applied) {
+      throw new Error(`driveClaimedRun: transition '${event.type}' from '${fromStatus}' not applied (${outcome.reason}, observed=${outcome.observed ?? "none"})`);
+    }
+    if (afterApplied !== undefined) await afterApplied(c);
+  });
 }

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
-import { ApiError, type ApiErrorBody, type CreateRunBody, type ScenarioItem } from "../api/types";
+import { ApiError, type ApiErrorBody, type CreateRunBody, type GatewayPolicy, type Paginated, type ScenarioItem, type SiteItem } from "../api/types";
 import { extractUrlRefKeys, extractParamDefaults, urlRefLabel } from "../api/scenario-params";
 import { errorLabel } from "./badges";
 import { navigate } from "../router";
@@ -49,6 +49,24 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
     queryFn: () => api.getScenario(scenario.scenario_id),
     enabled: open,
   });
+  const policies = useQuery({
+    queryKey: ["gateway-policies", "run-readiness"],
+    queryFn: () => api.listGatewayPolicies(),
+    enabled: open,
+    retry: false,
+  });
+  const sites = useQuery({
+    queryKey: ["sites", "run-readiness"],
+    queryFn: () => api.listSites({ limit: 200 }),
+    enabled: open,
+    retry: false,
+  });
+  const validation = useQuery({
+    queryKey: ["scenario-validation", scenario.scenario_id, scenario.version],
+    queryFn: () => api.validateScenario(scenario.scenario_id, detail.data!.ir, crypto.randomUUID()),
+    enabled: open && detail.data?.ir !== undefined,
+    retry: false,
+  });
   const keys = extractUrlRefKeys(detail.data?.ir);
   // params_schema default(쉬운 만들기가 실은 입력 URL)로 prefill. 사용자가 입력하면 values 가 우선.
   const defaults = extractParamDefaults(detail.data?.ir);
@@ -73,7 +91,7 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
       setCheckedModel("");
       void qc.invalidateQueries({ queryKey: ["runs"] });
       // 시작 → 관찰 직행(P0-1): 방금 만든 run 의 라이브 트레이스로 즉시 이동(수동 '실행 기록 보기'·UUID 복붙 제거).
-      navigate("runTrace", { run: result.run_id });
+      navigate("runTrace", { run: result.run_id, focus: "artifacts" });
     },
     onError: (e) => {
       // model_required → 모델명 입력 노출(임의선택 금지). 그 외 에러는 코드 표면화. 둘 다 패널 안에 표시.
@@ -135,6 +153,17 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
                   />
                 </label>
               ))}
+              <ReadinessCard
+                hasIr={detail.data?.ir !== undefined}
+                keys={keys}
+                missing={missing}
+                policies={policies}
+                sites={sites}
+                validation={validation}
+                modelRequired={modelRequired}
+                modelConfirmed={modelConfirmed}
+                targetUrls={keys.map((k) => valueFor(k).trim()).filter((v) => v.length > 0)}
+              />
               {modelRequired !== null && (
                 <label style={{ display: "block", marginBottom: 8 }}>
                   <span style={{ display: "block", fontSize: 13, marginBottom: 2 }}>AI 모델 (gateway_policies.model)</span>
@@ -187,4 +216,137 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
       )}
     </span>
   );
+}
+
+function CheckRow({ tone, label, detail, action }: { tone: "green" | "amber" | "red" | "blue"; label: string; detail: string; action?: JSX.Element }): JSX.Element {
+  return (
+    <div className="readiness-row">
+      <span className={`badge ${tone}`}>{label}</span>
+      <span className="subtle">{detail}</span>
+      {action}
+    </div>
+  );
+}
+
+function ReadinessCard({
+  hasIr,
+  keys,
+  missing,
+  policies,
+  sites,
+  validation,
+  modelRequired,
+  modelConfirmed,
+  targetUrls,
+}: {
+  hasIr: boolean;
+  keys: readonly string[];
+  missing: readonly string[];
+  policies: ReturnType<typeof useQuery<Paginated<GatewayPolicy>>>;
+  sites: ReturnType<typeof useQuery<Paginated<SiteItem>>>;
+  validation: ReturnType<typeof useQuery<{ valid: boolean; report: unknown }>>;
+  modelRequired: { available: number } | null;
+  modelConfirmed: boolean;
+  targetUrls: readonly string[];
+}): JSX.Element {
+  const policyItems = policies.data?.items ?? [];
+  const hasDefault = policyItems.some((p) => p.is_default === true);
+  const modelTone = modelRequired !== null && !modelConfirmed
+    ? "red"
+    : policies.isError || policyItems.length === 0 || (!hasDefault && policyItems.length > 1)
+      ? "amber"
+      : "green";
+  const modelText = modelRequired !== null && !modelConfirmed
+    ? "모델명을 입력하고 확인해야 실행할 수 있습니다."
+    : policies.isLoading
+      ? "모델 정책 확인 중입니다."
+      : policies.isError
+        ? "모델 정책을 불러오지 못했습니다. 실행 시 서버가 최종 판정합니다."
+        : policyItems.length === 0
+          ? "등록된 모델 정책이 없습니다."
+          : hasDefault || policyItems.length === 1
+            ? "기본 또는 단일 모델 정책으로 실행할 수 있습니다."
+            : "기본 정책이 없어 실행 시 모델명이 필요할 수 있습니다.";
+  const validationTone = !hasIr
+    ? "amber"
+    : validation.isLoading
+      ? "blue"
+      : validation.isError
+        ? "amber"
+        : validation.data?.valid === true
+          ? "green"
+          : "red";
+  const validationText = !hasIr
+    ? "상세 IR을 받지 못해 정적 검증을 선확인할 수 없습니다."
+    : validation.isLoading
+      ? "정적 구조를 확인하는 중입니다."
+      : validation.isError
+        ? "정적 검증 호출에 실패했습니다. 저장된 계약 검증과 실행 시 서버 판정을 따릅니다."
+        : validation.data?.valid === true
+          ? "정적 구조 검증을 통과했습니다."
+          : "정적 구조 검증 오류가 있습니다. 실행 전 시나리오 검사를 권장합니다.";
+  const paramTone = missing.length === 0 ? "green" : "red";
+  const paramText = keys.length === 0
+    ? "추가 실행값 없이 실행할 수 있습니다."
+    : missing.length === 0
+      ? "필수 실행값이 모두 입력되었습니다."
+      : `필수 실행값 ${missing.map(urlRefLabel).join(", ")} 입력이 필요합니다.`;
+  const site = siteReadiness(targetUrls, sites);
+  return (
+    <section className="readiness-card" aria-label="실행 전 준비 점검">
+      <strong>실행 전 준비 점검</strong>
+      <CheckRow tone={paramTone} label="실행값" detail={paramText} />
+      <CheckRow
+        tone={validationTone}
+        label="정적 검증"
+        detail={validationText}
+        action={<button className="linklike" type="button" onClick={() => navigate("irValidation")}>검사 화면</button>}
+      />
+      <CheckRow
+        tone={modelTone}
+        label="모델 정책"
+        detail={modelText}
+        action={<button className="linklike" type="button" onClick={() => navigate("llmGateway")}>정책 보기</button>}
+      />
+      <CheckRow
+        tone={site.tone}
+        label="사이트/세션"
+        detail={site.detail}
+        action={keys.length > 0 ? <button className="linklike" type="button" onClick={() => navigate("security")}>사이트 보기</button> : undefined}
+      />
+    </section>
+  );
+}
+
+function originOf(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function siteReadiness(
+  targetUrls: readonly string[],
+  sites: ReturnType<typeof useQuery<Paginated<SiteItem>>>,
+): { tone: "green" | "amber" | "red" | "blue"; detail: string } {
+  if (targetUrls.length === 0) return { tone: "blue", detail: "사이트 이동이 없는 시나리오입니다." };
+  const origins = targetUrls.map(originOf);
+  if (origins.some((origin) => origin === null)) return { tone: "red", detail: "실행 대상 URL이 http(s) origin으로 해석되지 않습니다." };
+  if (sites.isLoading) return { tone: "blue", detail: "등록 사이트와 세션 상태를 확인하는 중입니다." };
+  if (sites.isError) return { tone: "amber", detail: "사이트 목록을 불러오지 못했습니다. 실행 시 서버가 최종 판정합니다." };
+  const siteItems = sites.data?.items ?? [];
+  const matched = origins.map((origin) => siteItems.find((site) => originOf(site.url_pattern ?? "") === origin));
+  if (matched.some((site) => site === undefined)) {
+    return { tone: "amber", detail: "등록된 사이트와 매칭되지 않는 실행 URL이 있습니다." };
+  }
+  const concrete = matched.filter((site): site is SiteItem => site !== undefined);
+  const pendingRed = concrete.find((site) => site.risk === "red" && site.approval_status !== "approved");
+  if (pendingRed !== undefined) return { tone: "red", detail: `${pendingRed.name ?? "red 사이트"} 승인 후 실행할 수 있습니다.` };
+  const openCircuit = concrete.find((site) => site.circuit_status !== "closed");
+  if (openCircuit !== undefined) return { tone: "amber", detail: `${openCircuit.name ?? "대상 사이트"} 서킷 상태가 ${openCircuit.circuit_status}입니다.` };
+  const needsSession = concrete.find((site) => site.login_capable === true && site.session_ready !== true);
+  if (needsSession !== undefined) return { tone: "amber", detail: `${needsSession.name ?? "대상 사이트"} 세션 등록이 필요합니다.` };
+  return { tone: "green", detail: "대상 사이트 승인, 서킷, 세션 상태가 준비되어 있습니다." };
 }

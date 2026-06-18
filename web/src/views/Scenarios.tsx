@@ -5,6 +5,7 @@ import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
+import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
 import type { ScenarioItem, ScenarioVersionItem } from "../api/types";
@@ -21,6 +22,7 @@ export function ScenariosView(): JSX.Element {
 
   return (
     <div>
+      {can("scenario.create") && <PromptScenarioGenerator />}
       {can("scenario.create") && (
         <div style={{ marginBottom: 12 }}>
           <button className="btn" type="button" onClick={() => setForm({ kind: "create" })} disabled={form?.kind === "create"}>

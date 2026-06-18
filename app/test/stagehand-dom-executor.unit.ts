@@ -62,11 +62,15 @@ const errGateway = (code: ErrorCode): LlmGatewayCaller => ({ call: async () => {
 
 function fakeSessions(dom: unknown = "<body><main>hello</main></body>") {
   const ops: string[] = [];
+  const evals: string[] = [];
   const session: CdpSession = {
     url: () => "u",
     goto: async () => {},
     reload: async () => {},
-    evaluate: async () => dom as never,
+    evaluate: async (expr) => {
+      evals.push(String(expr));
+      return dom as never;
+    },
     sendCDP: async () => undefined as never,
     click: async (s) => void ops.push(`click:${s}`),
     fill: async (s, v) => void ops.push(`fill:${s}=${v}`),
@@ -76,7 +80,7 @@ function fakeSessions(dom: unknown = "<body><main>hello</main></body>") {
     waitForDownload: async () => true,
     close: async () => {},
   };
-  return { provider: { forLease: () => session } as CdpSessionProvider, ops };
+  return { provider: { forLease: () => session } as CdpSessionProvider, ops, evals };
 }
 
 // extract.rowAnchor 테스트용 세션 — anchor evaluate(getAttribute 포함식)는 pairs, snapshotDom evaluate 는 dom 을 반환.
@@ -213,6 +217,27 @@ async function main(): Promise<void> {
     const userMessage = typeof userContent === "string" ? userContent : JSON.stringify(userContent ?? "");
     check("extract: gateway request marks visible text snapshot", userMessage.includes("[visible_text]"));
     check("extract: visible rendered row survives long HTML snapshot", userMessage.includes("Actual rendered notice"));
+  }
+
+  // extract: network JSON evidence is included before DOM text for API-backed/virtualized grids.
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ title: "Network notice" }] } });
+    const snapshot = {
+      networkJson: JSON.stringify({ rows: [{ title: "Network notice", author: "Lee" }] }),
+      visibleText: "grid rendered shell",
+      html: "<body><div id=\"grid\"></div></body>",
+    };
+    const s = fakeSessions(snapshot);
+    const ex = new StagehandDomExecutor(g.gw, s.provider, cfg);
+    await ex.execute("s1-network-json", { type: "extract", instruction: "get notices", output: EXTRACT_OUT }, makeCtx());
+    const userContent = g.lastReq()?.messages.find((m) => m.role === "user")?.content;
+    const systemContent = g.lastReq()?.messages.find((m) => m.role === "system")?.content;
+    const userMessage = typeof userContent === "string" ? userContent : JSON.stringify(userContent ?? "");
+    const systemMessage = typeof systemContent === "string" ? systemContent : JSON.stringify(systemContent ?? "");
+    check("extract: auto-installs network JSON capture before snapshot", s.evals[0]?.includes("__RPA_NETWORK_CAPTURE_INSTALLED__") === true && s.evals[1]?.includes("__RPA_NETWORK_JSON__") === true);
+    check("extract: gateway request marks network JSON snapshot", userMessage.includes("[network_json]"));
+    check("extract: network JSON row survives snapshot", userMessage.includes("Network notice"));
+    check("extract: prompt prefers network_json for virtualized grids", systemMessage.includes("Prefer [network_json]"));
   }
 
   // extract: rows 봉투 없으면 rowCount 미산출(→ node.row_count 미투영, loud).
@@ -373,8 +398,11 @@ async function main(): Promise<void> {
 
   // observe → success
   {
-    const r = await new StagehandDomExecutor(countingGateway().gw, sess(), cfg).execute("s2", { type: "observe", instruction: "find next" }, makeCtx());
-    check("observe: success read_only", r.status === "success" && r.sideEffect?.kind === "read_only");
+    const r = await new StagehandDomExecutor(countingGateway({ stagehandCallId: "90000000-0000-0000-0000-000000000001" }).gw, sess(), cfg).execute("s2", { type: "observe", instruction: "find next" }, makeCtx());
+    check(
+      "observe: success read_only + durable call id",
+      r.status === "success" && r.sideEffect?.kind === "read_only" && r.stagehandCallIds?.[0] === "90000000-0000-0000-0000-000000000001",
+    );
   }
 
   // act (no cache) → LLM plan → CDP click 적용
@@ -492,6 +520,7 @@ async function main(): Promise<void> {
     const c = fakeCache(CLICK_PLAN);
     const r = await new StagehandDomExecutor(g.gw, s.provider, cfg, c.cache).execute("s7", { type: "act", instruction: "click login" }, makeCtx());
     check("act cache hit: LLM NOT called, replayed click, mode=hit", g.calls() === 0 && r.cache.mode === "hit" && s.ops.includes("click:#login") && (r.cache.actionPlanCacheId?.length ?? 0) > 0);
+    check("act cache hit: auto-installs network JSON capture before replay", s.evals.some((expr) => expr.includes("__RPA_NETWORK_CAPTURE_INSTALLED__")));
   }
 
   // act malformed plan → failed_system(LLM_MALFORMED_OUTPUT)

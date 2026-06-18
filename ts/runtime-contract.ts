@@ -408,12 +408,86 @@ export interface ExecutorInvocationArtifactMetadata {
   artifactRef: ArtifactRef;
   objectRef: ObjectRef;
   type: string;
+  mediaType?: string;
+  filename?: string;
+  byteSize?: number;
+  durationMs?: number;
   redactionStatus: Extract<ExecutorArtifactRedactionStatus, "pending">;
   retentionUntil: IsoDateTime;
   sha256?: string;
   legalHold?: boolean;
   quarantine?: boolean;
+  /**
+   * The producer already inserted the artifacts row before step finalization.
+   * The recorder must verify the row instead of inserting a duplicate.
+   */
+  metadataStored?: boolean;
 }
+
+export type VisualEvidenceRecordingPolicy = "always" | "masked_on_failure" | "never";
+export type VisualEvidenceCaptureKind = "screenshot_png" | "video_webm";
+export type VisualEvidenceVideoPolicy = "always" | "failure";
+
+export interface VisualEvidenceCaptureRequest {
+  tenantId: TenantId;
+  runId: RunId;
+  stepId: StepId;
+  attempt: number;
+  nodeId: string;
+  policy: VisualEvidenceRecordingPolicy;
+  kind: VisualEvidenceCaptureKind;
+}
+
+export interface VisualEvidenceCaptureResult {
+  artifactRef: ArtifactRef;
+  metadata: ExecutorInvocationArtifactMetadata;
+}
+
+export interface VisualEvidenceVideoStartInput {
+  tenantId: TenantId;
+  runId: RunId;
+  leaseId: LeaseId;
+  correlationId: CorrelationId;
+  policy: VisualEvidenceVideoPolicy;
+}
+
+export interface VisualEvidenceVideoStopInput {
+  terminal: "success" | "success_empty" | "fail_business" | "fail_system" | "suspend";
+}
+
+export interface RunVideoRecording {
+  stopAndPersist(input: VisualEvidenceVideoStopInput): Promise<ArtifactRef | undefined>;
+  discard(input: { reason: string }): Promise<void>;
+}
+
+export interface VisualEvidenceVideoRecorder {
+  startRunVideo(input: VisualEvidenceVideoStartInput): Promise<RunVideoRecording>;
+}
+
+export const VISUAL_EVIDENCE_CAPTURE_CONTRACT = {
+  screenshot: {
+    capturePoint: "after_executor_execute",
+    cdpMethod: "Page.captureScreenshot",
+    artifactType: "screenshot_masked",
+    artifactScope: "run_level_step_hint_in_filename",
+    mediaType: "image/png",
+    redactionStatus: "pending",
+    captureMask: "dom_sensitive_fields_and_text_patterns",
+    rawUnmaskedScreenshotStored: false,
+  },
+  video: {
+    captureScope: "run",
+    captureMethod: "masked_screenshot_frame_sampling_ffmpeg",
+    artifactType: "video_masked",
+    mediaType: "video/webm",
+    redactionStatus: "pending",
+    visibilityUntilRedacted: "hidden_by_artifact_rls",
+    requiresStartStopLifecyclePort: true,
+    requiresFrameOrStreamEvents: false,
+    currentCdpSessionSendOnlyPortIsInsufficient: false,
+    rawUnmaskedVideoStored: false,
+  },
+} as const;
 
 export interface ExecutorInvocationRecordInput {
   key: StepExecutionKey;

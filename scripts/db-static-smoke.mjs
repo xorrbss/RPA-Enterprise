@@ -32,6 +32,7 @@ const expectedTables = [
   "control_plane_idempotency_keys",
   "scenarios",
   "scenario_versions",
+  "scenario_generations",
   "workitems",
   "runs",
   "run_steps",
@@ -41,6 +42,7 @@ const expectedTables = [
   "dead_letter",
   "action_plan_cache",
   "stagehand_calls",
+  "scenario_generation_llm_calls",
   "audit_log",
 ];
 
@@ -212,6 +214,8 @@ function checkIdempotencyAndCasContracts() {
   requireRegex("run abort source status positive smoke", smoke, /run abort source status should accept persisted abort source/i);
   requireRegex("run abort source status negative smoke", smoke, /run abort source status must reject unknown source/i);
   requireRegex("stagehand idempotency", allMigrations, /CREATE\s+TABLE\s+stagehand_calls\s*\([\s\S]*?idempotency_key\s+text\s+NOT\s+NULL[\s\S]*?request_hash\s+text\s+NOT\s+NULL[\s\S]*?UNIQUE\s*\(tenant_id,\s*idempotency_key\)/i);
+  requireRegex("scenario generation llm idempotency", allMigrations, /CREATE\s+TABLE\s+scenario_generation_llm_calls\s*\([\s\S]*?generation_id\s+uuid\s+NOT\s+NULL[\s\S]*?correlation_id\s+uuid\s+NOT\s+NULL[\s\S]*?idempotency_key\s+text\s+NOT\s+NULL[\s\S]*?request_hash\s+text\s+NOT\s+NULL[\s\S]*?prompt_template_version\s+text\s+NOT\s+NULL[\s\S]*?parsed_json\s+jsonb[\s\S]*?retention_until\s+timestamptz\s+NOT\s+NULL[\s\S]*?UNIQUE\s*\(tenant_id,\s*idempotency_key\)/i);
+  requireRegex("scenario generation llm stream status check", allMigrations, /chk_scenario_generation_llm_calls_stream_status[\s\S]*?stream_status\s+IS\s+NOT\s+NULL[\s\S]*?open[\s\S]*?done[\s\S]*?error[\s\S]*?aborted/i);
   requireRegex("action plan cache family", allMigrations, /UNIQUE\s*\(scenario_version_id,\s*step_id,\s*url_pattern,\s*dom_structural_hash,\s*model,\s*prompt_template_version,\s*browser_identity_version\)/i);
   requireRegex("credential lease slot PK", allMigrations, /PRIMARY\s+KEY\s*\(tenant_id,\s*credential_ref,\s*site_profile_id,\s*slot_no\)/i);
   requireRegex("credential slot trigger", allMigrations, /CREATE\s+TRIGGER\s+trg_validate_credential_lease_slot/i);

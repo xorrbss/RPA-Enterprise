@@ -95,6 +95,13 @@ async function main(): Promise<void> {
     check("stream:true 유지", cap.body().stream === true);
   }
 
+  // 5) req.model 이 있으면 전송 본문도 요청별 모델을 우선한다(정책 선택 모델 보존).
+  {
+    const cap = capturingFetch();
+    await drain(new FetchCodexSseTransport({ ...base, fetchImpl: cap.fetchImpl }), makeReq({ model: "codex-policy-selected" }));
+    check("요청별 model 우선 전송", cap.body().model === "codex-policy-selected", JSON.stringify(cap.body()));
+  }
+
   console.log(`\ncodex-sse-transport.unit: ${failures === 0 ? "ALL PASS" : `${failures} FAILED`}`);
   process.exitCode = failures === 0 ? 0 : 1;
 }

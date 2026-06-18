@@ -8,6 +8,7 @@
 import type { Pool } from "pg";
 
 import {
+  AesGcmSessionEncryptor,
   DevPlaintextSessionEncryptor,
   PgBrowserSessionStore,
   sessionKey,
@@ -68,6 +69,19 @@ async function main(): Promise<void> {
   }
 
   // 5) sessionKey — identityKey 기본 ''.
+  {
+    const enc = new AesGcmSessionEncryptor(Buffer.alloc(32, 7), "session-kid-1");
+    const plain = Buffer.from(JSON.stringify({ cookies: [{ name: "secure", value: "1" }] }), "utf8");
+    const { ciphertext, kid } = enc.encrypt(plain);
+    const back = enc.decrypt(ciphertext, kid);
+    check("AES-GCM encryptor 라운드트립 + ciphertext 비평문", kid === "session-kid-1" && back.equals(plain) && !ciphertext.equals(plain));
+    const tampered = Buffer.from(ciphertext);
+    tampered[tampered.length - 1] ^= 1;
+    const err = caught(() => { enc.decrypt(tampered, kid); });
+    check("AES-GCM tamper → decrypt throw", err !== undefined);
+  }
+
+  // 6) sessionKey — identityKey 기본 ''.
   {
     const k = sessionKey("t1", "s1", "b1");
     check("sessionKey identityKey 기본 ''", k.identityKey === "" && k.tenantId === "t1" && k.siteProfileId === "s1" && k.browserIdentityId === "b1");

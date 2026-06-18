@@ -20,6 +20,7 @@ const FINAL_RECORDED_STATUSES = new Set<StepStatus>([
   "failed_challenge",
   "failed_security",
   "uncertain",
+  "suspended",
 ]);
 
 export class PgExecutorInvocationRecordRequiredError extends Error {
@@ -212,14 +213,20 @@ async function insertArtifactMetadata(
   input: NormalizedRecordInput,
 ): Promise<void> {
   for (const artifact of input.artifacts) {
+    if (artifact.metadataStored === true) {
+      await requirePersistedArtifactMetadata(client, input, artifact.artifactRef);
+      continue;
+    }
     await client.query(
       `INSERT INTO artifacts (
          id, tenant_id, run_id, step_id, attempt, type, redaction_status,
+         media_type, filename, byte_size, duration_ms,
          sha256, object_ref, retention_until, legal_hold, quarantine
        )
        VALUES (
          $1::uuid, $2::uuid, $3::uuid, $4, $5::int, $6, 'pending',
-         $7, $8, $9::timestamptz, $10::boolean, $11::boolean
+         $7, $8, $9::bigint, $10::int,
+         $11, $12, $13::timestamptz, $14::boolean, $15::boolean
        )`,
       [
         inputArtifactId(artifact.artifactRef),
@@ -228,6 +235,10 @@ async function insertArtifactMetadata(
         input.stepId,
         input.attempt,
         artifact.type,
+        artifact.mediaType ?? null,
+        artifact.filename ?? null,
+        artifact.byteSize ?? null,
+        artifact.durationMs ?? null,
         artifact.sha256 ?? null,
         artifact.objectRef,
         artifact.retentionUntil,
@@ -277,11 +288,48 @@ function validateArtifactMetadata(
     requireString(artifact.artifactRef, "artifact.artifactRef");
     requireString(artifact.objectRef, "artifact.objectRef");
     requireString(artifact.type, "artifact.type");
+    validateOptionalString(artifact.mediaType, "artifact.mediaType");
+    validateOptionalString(artifact.filename, "artifact.filename");
+    validateOptionalNonNegativeInteger(artifact.byteSize, "artifact.byteSize");
+    validateOptionalNonNegativeInteger(artifact.durationMs, "artifact.durationMs");
     assertNoPlainSecret(artifact.sha256 ?? null, "artifact.sha256");
     parseIsoDate(artifact.retentionUntil, "artifact.retentionUntil");
     if (artifact.redactionStatus !== "pending") {
       throw new PgExecutorInvocationRecordRequiredError("executor invocation recorder may only create pending artifact metadata");
     }
+  }
+}
+
+function validateOptionalString(value: unknown, label: string): void {
+  if (value === undefined) return;
+  requireString(value, label);
+}
+
+function validateOptionalNonNegativeInteger(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new PgExecutorInvocationRecordRequiredError(`executor invocation ${label} must be a non-negative integer when present`);
+  }
+}
+
+async function requirePersistedArtifactMetadata(
+  client: pg.PoolClient,
+  input: NormalizedRecordInput,
+  artifactRef: string,
+): Promise<void> {
+  const artifactId = inputArtifactId(artifactRef);
+  const row = await client.query(
+    `SELECT 1
+       FROM artifacts
+      WHERE tenant_id=$1::uuid
+        AND run_id=$2::uuid
+        AND step_id=$3
+        AND attempt=$4::int
+        AND id=$5::uuid`,
+    [input.tenantId, input.runId, input.stepId, input.attempt, artifactId],
+  );
+  if (row.rowCount !== 1) {
+    throw new PgExecutorInvocationRecordRequiredError("executor invocation persisted artifact metadata not found for step attempt");
   }
 }
 

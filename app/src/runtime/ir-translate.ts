@@ -5,7 +5,7 @@
  * 캐시한다. what(액션)/next/terminal/start 는 ir에 있으므로 둘을 합쳐 변환한다.
  * 런타임 파싱 없음: on[].when 은 ir의 문자열이 아니라 compiled_ast의 AST를 사용한다("§10 단방향").
  *
- * 범위: 액션은 navigate(url_ref→url)/observe(drop)/act/extract, 흐름은 next/on[]/terminal/**loop·fallback_chain**(RQ-002).
+ * 범위: 액션은 navigate(url_ref→url)/observe/act/extract, 흐름은 next/on[]/terminal/**loop·fallback_chain**(RQ-002).
  * loop=compiled_ast.loop(until AST+body/exit/max), fallback=compiled_ast.fallback_chain(tier·entry_node·advance_when AST)
  * 를 NodeFlow 로 변환. download 등은 후속 — 미지원은 조용히 흘리지 않고 InterpreterError로 표면화한다.
  *
@@ -16,6 +16,7 @@ import type { IRELNode } from "../../../codegen/irel-compile";
 import type { CompiledOnBranch } from "./flow-control";
 import { resolveUrlRef, SiteResolutionError } from "./site-resolution";
 import { InterpreterError, type CompiledScenario, type NodeFlow, type ScenarioNode } from "./ir-interpreter";
+import type { VisualRecordingPolicy } from "./visual-evidence";
 
 function isRec(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -37,8 +38,9 @@ export function compiledScenarioFrom(
     // act 의 sideEffect 는 node 레벨 side_effect.kind 에서 소싱(IR엔 action-level side_effect 없음 — 가정 금지).
     const nodeSideEffect =
       isRec(raw.side_effect) && typeof raw.side_effect.kind === "string" ? (raw.side_effect.kind as string) : undefined;
+    const nodeRecording = nodeRecordingPolicy(raw.policy);
     const what = (Array.isArray(raw.what) ? raw.what : []).flatMap((a) => {
-      const mapped = mapAction(id, a, params, nodeSideEffect);
+      const mapped = mapAction(id, a, params, nodeSideEffect, nodeRecording);
       return mapped === null ? [] : [mapped];
     });
 
@@ -141,25 +143,33 @@ function parseRowAnchor(raw: unknown, nodeId: string): Record<string, string> | 
   };
 }
 
-// IR 액션 → ExecutorPlugin 액션. observe는 on[] PageState resolve가 대신하므로 drop(null).
+// IR 액션 → ExecutorPlugin 액션. instruction 없는 observe는 on[] PageState resolve 전용으로 drop(null)하고,
+// instruction이 있는 observe는 자연어 이해/관찰 증적을 남기기 위해 executor action으로 전달한다.
 // dom 프리미티브(act/extract)는 StagehandDomExecutor 가 받는 DomAction 형태로 산출(composite-executor 가 type 으로 라우팅).
 function mapAction(
   nodeId: string,
   a: unknown,
   params: Record<string, unknown> | undefined,
   nodeSideEffect: string | undefined,
+  nodeRecording: VisualRecordingPolicy | undefined,
 ): unknown | null {
   if (!isRec(a) || typeof a.action !== "string") {
     throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' action 형식 오류`);
   }
-  if (a.action === "observe") return null;
+  if (a.action === "observe") {
+    if (a.instruction === undefined || a.instruction === null) return null;
+    if (typeof a.instruction !== "string" || a.instruction.trim().length === 0) {
+      throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' observe.instruction 필요`);
+    }
+    return withRecording({ type: "observe", instruction: a.instruction }, nodeRecording);
+  }
   if (a.action === "navigate") {
     if (typeof a.url_ref !== "string") {
       throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' navigate.url_ref 누락`);
     }
     // url_ref(키) → params 의 절대 URL. URL_REF_* 해소 실패는 InterpreterError 로 환원(타입 경계 유지).
     try {
-      return { type: "navigate", url: resolveUrlRef(a.url_ref, params) };
+      return withRecording({ type: "navigate", url: resolveUrlRef(a.url_ref, params) }, nodeRecording);
     } catch (e) {
       if (e instanceof SiteResolutionError) throw new InterpreterError(e.code, `node '${nodeId}': ${e.message}`);
       throw e;
@@ -199,7 +209,7 @@ function mapAction(
         `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/assert_absent/value_ref·vars 중 하나만 사용 가능(결정형 모드 상호배타)`,
       );
     }
-    return {
+    return withRecording({
       type: "act",
       instruction: a.instruction,
       ...(nodeSideEffect !== undefined ? { sideEffect: nodeSideEffect } : {}),
@@ -208,7 +218,7 @@ function mapAction(
       ...(value !== undefined ? { value } : {}),
       ...(clickSelector !== undefined ? { clickSelector } : {}),
       ...(assertAbsent !== undefined ? { assertAbsent } : {}),
-    };
+    }, nodeRecording);
   }
   if (a.action === "extract") {
     if (typeof a.instruction !== "string" || a.instruction.trim().length === 0) {
@@ -227,17 +237,28 @@ function mapAction(
     const schema = isRec(args.schema) ? (args.schema as Record<string, unknown>) : undefined;
     // 결정형 행별 필드 추출(LLM 속성 환각 차단; act.value_ref 와 동형) — args.row_anchor(snake) → DomAction.rowAnchor(camel).
     const rowAnchor = parseRowAnchor(args.row_anchor, nodeId);
-    return {
+    return withRecording({
       type: "extract",
       instruction: a.instruction,
       output: { schemaRef: a.schema_ref, schemaVersion, strict, ...(schema !== undefined ? { schema } : {}) },
       ...(rowAnchor !== undefined ? { rowAnchor } : {}),
-    };
+    }, nodeRecording);
   }
   throw new InterpreterError(
     "ACTION_UNSUPPORTED",
     `compiledScenarioFrom: node '${nodeId}' action '${a.action}' 미지원(1단계: navigate/observe/act/extract)`,
   );
+}
+
+function nodeRecordingPolicy(value: unknown): VisualRecordingPolicy | undefined {
+  if (!isRec(value)) return undefined;
+  const recording = value.recording;
+  if (recording === "always" || recording === "masked_on_failure" || recording === "never") return recording;
+  return undefined;
+}
+
+function withRecording<T extends Record<string, unknown>>(action: T, recording: VisualRecordingPolicy | undefined): T {
+  return recording === undefined ? action : { ...action, recording };
 }
 
 // reservedHandlerCall({handler,input,return_node}, ir.schema target) → NodeFlow.reserved_handler. 구조 검증만(input.kind 등

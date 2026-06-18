@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { matchesInstructionOverride } from "./prompt-injection-patterns";
+import { RBAC_ALLOWED_ROLES } from "../ts/rbac-policy";
 import type {
   ArtifactRef,
   PlainSecret,
@@ -165,42 +166,6 @@ export function redactSensitiveText(value: string): RedactedString {
 export function redactArtifactPayload(value: unknown): RedactedString {
   return redactSensitiveText(safeSerialize(value));
 }
-
-const RBAC_ALLOWED_ROLES = {
-  "run.read": ["viewer", "operator", "reviewer", "approver", "admin"],
-  "run.create": ["operator", "reviewer", "approver", "admin"],
-  "run.abort": ["operator", "reviewer", "approver", "admin"],
-  "workitem.read": ["viewer", "operator", "reviewer", "approver", "admin"],
-  "human_task.read": ["viewer", "operator", "reviewer", "approver", "admin"],
-  "human_task.assign": ["operator", "reviewer", "approver", "admin"],
-  "human_task.escalate": ["reviewer", "approver", "admin"],
-  "human_task.start": ["operator", "reviewer", "approver", "admin"],
-  "human_task.resolve.validation": ["reviewer", "approver", "admin"],
-  "human_task.resolve.exception": ["reviewer", "approver", "admin"],
-  "human_task.resolve.captcha": ["reviewer", "approver", "admin"],
-  "human_task.resolve.mfa": ["reviewer", "approver", "admin"],
-  "human_task.resolve.approval": ["approver", "admin"],
-  "node_policy.approve": ["approver", "admin"],
-  "dlq.replay": ["operator", "reviewer", "approver", "admin"],
-  "sink_dlq.replay": ["operator", "reviewer", "approver", "admin"],
-  "scenario.read": ["viewer", "operator", "reviewer", "approver", "admin"],
-  "scenario.create": ["operator", "reviewer", "approver", "admin"],
-  "scenario.update": ["operator", "reviewer", "approver", "admin"],
-  "scenario.promote": ["admin"],
-  "artifact.read": ["viewer", "operator", "reviewer", "approver", "admin"],
-  "site.read": ["viewer", "operator", "reviewer", "approver", "admin"],
-  "site.approve": ["approver", "admin"],
-  "site.create": ["operator", "reviewer", "approver", "admin"],
-  "site.update": ["operator", "reviewer", "approver", "admin"],
-  "approval.decide": ["approver", "admin"],
-  "session.capture": ["operator", "reviewer", "approver", "admin"],
-  "secret.resolve": ["admin"],
-  "connector.enable": ["admin"],
-  "gateway_policy.read": ["viewer", "operator", "reviewer", "approver", "admin"],
-  "gateway_policy.edit": ["admin"],
-  "network_policy.edit": ["admin"],
-  "rbac.grant": ["admin"],
-} as const satisfies Record<RbacAction, readonly Role[]>;
 
 export function authorizeRbac(
   principal: AuthenticatedPrincipal,

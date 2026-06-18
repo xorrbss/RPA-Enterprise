@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,7 +64,7 @@ console.log("secret scan: no high-risk secret markers or staging/workflow/script
 
 function scanRepository(root) {
   const hits = [];
-  for (const abs of walk(root)) {
+  for (const abs of candidateFiles(root)) {
     const relPath = relative(root, abs).replaceAll("\\", "/");
     hits.push(...scanPath(relPath));
     const stat = statSync(abs);
@@ -79,6 +80,23 @@ function scanRepository(root) {
     hits.push(...scanText(text, relPath));
   }
   return hits;
+}
+
+function candidateFiles(root) {
+  const gitFiles = gitCandidateFiles(root);
+  return gitFiles ?? [...walk(root)];
+}
+
+function gitCandidateFiles(root) {
+  const result = spawnSync("git", ["-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0 || typeof result.stdout !== "string") return undefined;
+  return result.stdout
+    .split("\0")
+    .filter((relPath) => relPath.length > 0)
+    .map((relPath) => join(root, relPath));
 }
 
 function scanPath(relPath) {

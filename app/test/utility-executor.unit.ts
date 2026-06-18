@@ -28,6 +28,26 @@ const neverSessions = {
 const exec = new UtilityExecutor(neverSessions);
 // assertUtilityAction(scheme 가드)은 abort 체크(false) 직후·session 사용 이전에 실행되므로 ctx는 abortSignal만 필요.
 const ctx = { abortSignal: { aborted: false } } as unknown as RunContext;
+const policyCtx = {
+  runId: "run-1",
+  tenantId: "tenant-1",
+  nodeId: "open",
+  attempt: 0,
+  pageState: {
+    url: { raw: "about:blank", canonical: "about:blank", pattern: "about:blank" },
+    dom: { structuralHash: "seed", visibleTextHash: "seed", landmarks: [], frames: [] },
+    auth: "anonymous",
+    flags: {},
+    matchedWhere: [],
+  },
+  siteProfileId: "site-1",
+  browserIdentityId: "bid-1",
+  networkPolicyId: "np-1",
+  networkAllowedDomains: ["example.com"],
+  leaseId: "lease-1",
+  assetRefs: {},
+  abortSignal: new AbortController().signal,
+} satisfies RunContext;
 
 async function expectSchemeRejected(label: string, url: string): Promise<void> {
   try {
@@ -55,6 +75,22 @@ await (async () => {
     httpsPassedSchemeGate = !(e instanceof UtilityExecutorError && e.code === "IR_SCHEMA_INVALID");
   }
   check("navigate https: scheme 가드 통과(차단되지 않음)", httpsPassedSchemeGate);
+  const blocked = await exec.execute("s2", { type: "navigate", url: "https://evil.example/path" }, policyCtx);
+  check("navigate policy mismatch -> failed_security", blocked.status === "failed_security", blocked.status);
+  check("navigate policy mismatch code", blocked.exception?.code === "DOMAIN_POLICY_VIOLATION", JSON.stringify(blocked.exception));
+  check("navigate policy mismatch no commit", blocked.sideEffect?.committed === false, JSON.stringify(blocked.sideEffect));
+
+  let wildcardPassedPolicyGate = false;
+  try {
+    await exec.execute(
+      "s3",
+      { type: "navigate", url: "https://shop.example.com/products/1" },
+      { ...policyCtx, networkAllowedDomains: ["*.example.com"] },
+    );
+  } catch (e) {
+    wildcardPassedPolicyGate = !(e instanceof UtilityExecutorError && e.code === "DOMAIN_POLICY_VIOLATION");
+  }
+  check("navigate wildcard policy allows subdomain before session", wildcardPassedPolicyGate);
 })();
 
 if (failures > 0) {

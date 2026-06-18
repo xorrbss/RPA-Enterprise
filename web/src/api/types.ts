@@ -10,6 +10,7 @@ export interface RunItem {
   readonly status: string;
   readonly current_node: string | null;
   readonly as_of: string | null;
+  readonly updated_at?: string | null;
   readonly failure_reason?: FailureReason | null;
 }
 
@@ -61,14 +62,23 @@ export interface SiteItem {
   readonly approval_status: string;
   readonly circuit_status: string;
   readonly name?: string;
+  readonly url_pattern?: string;
   // 운영자-보조 세션 캡처 가능 여부(reads.ts 투영). loginUrl 설정 사이트만 '세션 등록' 노출.
   readonly login_capable?: boolean;
+  readonly session_ready?: boolean;
+  readonly session_expires_at?: string | null;
+  readonly default_browser_identity_id?: string | null;
+  readonly default_network_policy_id?: string | null;
 }
 
 // GET /v1/artifacts/{id} 응답(api-surface §5; reads.ts). content는 redacted 본문(at rest 마스킹 — 평문 없음).
 export interface ArtifactDetail {
   readonly artifact_id: string;
   readonly type: string;
+  readonly media_type?: string | null;
+  readonly filename?: string | null;
+  readonly byte_size?: number | null;
+  readonly duration_ms?: number | null;
   readonly sha256: string;
   readonly redaction_status: string;
   readonly retention_until: string | null;
@@ -81,6 +91,7 @@ export interface RunDetail {
   readonly worker_id: string | null;
   readonly attempts: number;
   readonly as_of: string | null;
+  readonly updated_at?: string | null;
   readonly failure_reason?: FailureReason | null;
 }
 
@@ -130,10 +141,20 @@ export interface ApprovalRow {
 export interface RunArtifactItem {
   readonly artifact_id: string;
   readonly type: string;
+  readonly media_type?: string | null;
+  readonly filename?: string | null;
+  readonly byte_size?: number | null;
+  readonly duration_ms?: number | null;
   readonly redaction_status: string;
   readonly retention_until: string | null;
   readonly legal_hold: boolean;
   readonly created_at: string;
+}
+
+export type GenerationArtifactItem = RunArtifactItem;
+
+export interface GenerationArtifactDetail extends ArtifactDetail {
+  readonly generation_id: string;
 }
 
 export interface ScenarioDetail {
@@ -181,7 +202,65 @@ export interface CreateRunBody {
   readonly model?: string;
 }
 
+export interface ScenarioGenerationTarget {
+  readonly site_profile_id: string;
+  readonly browser_identity_id: string;
+  readonly network_policy_id: string;
+}
+
+export interface ScenarioGenerationEvidence {
+  readonly screenshot?: "never" | "failure" | "each_step";
+  readonly video?: "never" | "failure" | "always";
+}
+
+export type ScenarioGenerationPlanner = "deterministic_mvp" | "llm_v1";
+
+export interface ScenarioGenerationRequest {
+  readonly prompt: string;
+  readonly name?: string;
+  readonly mode?: "draft_only" | "save" | "save_and_run";
+  readonly planner?: ScenarioGenerationPlanner;
+  readonly start_url?: string;
+  readonly target?: ScenarioGenerationTarget;
+  readonly params?: Record<string, unknown>;
+  readonly model?: string | null;
+  readonly evidence?: ScenarioGenerationEvidence;
+}
+
+export interface ScenarioGenerationResult {
+  readonly generation_id: string;
+  readonly mode: "draft_only" | "save" | "save_and_run";
+  readonly status: "drafted" | "saved" | "run_queued" | "blocked" | "failed";
+  readonly prompt_hash: string;
+  readonly prompt_redacted_ref?: string | null;
+  readonly planner: ScenarioGenerationPlanner;
+  readonly model?: string | null;
+  readonly scenario_id: string | null;
+  readonly scenario_version_id: string | null;
+  readonly run_id: string | null;
+  readonly evidence_policy?: ScenarioGenerationEvidence;
+  readonly blockers: readonly string[];
+  readonly draft_ir: unknown;
+  readonly validation_report: unknown;
+  readonly created_at?: string;
+  readonly created_by?: string;
+}
+
 // POST /v1/approvals/decide body(닫힌 shape — 백엔드 parseDecideBody 정합). reject 는 reason 필수(엔드포인트 강제).
+export interface ScenarioGenerationList {
+  readonly items: readonly ScenarioGenerationResult[];
+  readonly next_cursor: string | null;
+}
+
+export interface ScenarioGenerationListParams extends ListParams {
+  readonly status?: ScenarioGenerationResult["status"];
+}
+
+export interface ScenarioGenerationArtifactList {
+  readonly items: readonly GenerationArtifactItem[];
+  readonly next_cursor: string | null;
+}
+
 export interface DecideApprovalBody {
   readonly source_run_id: string; // 인박스를 노출한 수집 run
   readonly doc_ref: string; // 결재 문서 참조(approval origin 절대 URL)
@@ -224,6 +303,7 @@ export interface ListParams {
   kind?: string;
   risk?: string;
   assignee?: string;
+  run_id?: string;
   // query-bag: 뷰별 추가 필터(model 등)를 허용. URLSearchParams로 직렬화.
   [k: string]: string | number | undefined;
 }

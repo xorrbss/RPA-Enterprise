@@ -237,6 +237,7 @@ describe("UX quick-wins (A)", () => {
     (await screen.findAllByRole("button", { name: new RegExp(`산출물 ${Y}`) }))[0]!.click();
     await waitFor(() => expect(screen.getByText(`본문-${Y}`)).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("artifact_id"), { target: { value: Z } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "조회" })).toBeEnabled());
     screen.getByRole("button", { name: "조회" }).click();
     await waitFor(() => expect(screen.getByText(`본문-${Z}`)).toBeInTheDocument());
     (await screen.findAllByRole("button", { name: new RegExp(`산출물 ${Y}`) }))[0]!.click();

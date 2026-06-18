@@ -27,11 +27,27 @@ function IssueList({ title, items, tone }: { title: string; items: Issue[]; tone
           <li key={i} style={{ marginBottom: 4 }}>
             <span className={`badge ${tone}`}>{it.rule ?? it.code ?? "rule"}</span> {it.message ?? JSON.stringify(it)}
             {it.node_id !== undefined ? <code> @{it.node_id}</code> : null}
+            <div className="prescription">
+              <span className="subtle">{prescriptionFor(it)}</span>
+              <button className="linklike" type="button" onClick={() => navigate("scenarioStudio")}>
+                자동화 편집으로 이동 <span aria-hidden="true">→</span>
+              </button>
+            </div>
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+function prescriptionFor(issue: Issue): string {
+  const key = `${issue.rule ?? ""} ${issue.code ?? ""} ${issue.message ?? ""}`.toLowerCase();
+  if (key.includes("instruction") || key.includes("extract")) return "데이터 추출 단계에 추출/입력 규칙과 출력 스키마가 있는지 확인하세요.";
+  if (key.includes("target") || key.includes("branch") || key.includes("node")) return "조건 분기 대상과 다음 단계 ID가 실제 단계 목록에 존재하는지 확인하세요.";
+  if (key.includes("priority")) return "같은 조건 그룹에서 우선순위가 겹치지 않도록 숫자를 조정하세요.";
+  if (key.includes("loop")) return "반복 단계에는 종료 조건과 최대 반복 횟수가 필요합니다.";
+  if (key.includes("url") || key.includes("navigate")) return "페이지 이동 단계의 URL 실행값과 사이트 등록 상태를 확인하세요.";
+  return "자동화 만들기의 단계 편집 또는 IR 직접 편집에서 해당 규칙을 수정하세요.";
 }
 
 export function IrValidationView(): JSX.Element {

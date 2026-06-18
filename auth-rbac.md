@@ -123,7 +123,7 @@ artifact 예외(조회 게이트 DB 방어):
 - (참고) `action_plan_cache`는 PRD §7 본체 정의 — 동일 패턴 적용 대상(tenant_id 보유 전제).
 
 현재 core_entities 정의 테이블(tenant_id 보유, migration_core_entities.sql에서 RLS 활성화):
-- `runs`, `run_steps`, `workitems`, `human_tasks`, `scenarios`, `scenario_versions`, `artifacts`, `events_outbox`, `dead_letter`, `stagehand_calls`, `site_profiles`, `site_profile_approvals`, `browser_identities`, `network_policies`, `gateway_policies`, `control_plane_idempotency_keys`
+- `runs`, `run_steps`, `workitems`, `human_tasks`, `scenarios`, `scenario_versions`, `scenario_generations`, `artifacts`, `events_outbox`, `dead_letter`, `stagehand_calls`, `scenario_generation_llm_calls`, `site_profiles`, `site_profile_approvals`, `browser_identities`, `network_policies`, `gateway_policies`, `control_plane_idempotency_keys`
 
 **RLS 제외(인프라, 테넌트 비종속)**: `workers`(실행기 생존·서킷 레지스트리, migration_core_entities.sql) — `tenant_id` 없음, **BYPASSRLS 도메인**(운영/스케줄러 롤). 서킷 상태는 사이트=`site_profiles.circuit_state`(tenant-scoped, RLS 적용)·워커=`workers.circuit_state`(인프라)에 각각 영속.
 

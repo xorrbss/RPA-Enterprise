@@ -255,6 +255,104 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.getByDisplayValue("extracted_rows")).toBeInTheDocument();
   });
 
+  test("자연어 자동화 생성 → 저장 후 실행 대기 + 실행 기록 딥링크", async () => {
+    const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listSites: async () => ({
+          items: [
+            {
+              site_profile_id: "10000000-0000-4000-8000-0000000000a1",
+              risk: "green",
+              approval_status: "approved",
+              circuit_status: "closed",
+              name: "shop",
+              url_pattern: "https://shop.example",
+              default_browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
+              default_network_policy_id: "10000000-0000-4000-8000-0000000000a3",
+            },
+          ],
+          next_cursor: null,
+        }),
+        generateScenario: async (body) => {
+          calls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000a1",
+            mode: body.mode ?? "save_and_run",
+            status: "run_queued",
+            prompt_hash: "hash",
+            planner: body.planner ?? "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: "00000000-0000-0000-0000-000000000099",
+            evidence_policy: body.evidence,
+            blockers: [],
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 요약해줘" } });
+    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://shop.example/orders" } });
+    fireEvent.change(screen.getByLabelText("Planner"), { target: { value: "llm_v1" } });
+    fireEvent.change(screen.getByLabelText("AI 모델"), { target: { value: "gpt-4o-mini" } });
+    fireEvent.change(await screen.findByLabelText("사이트"), { target: { value: "10000000-0000-4000-8000-0000000000a1" } });
+    expect(screen.getByLabelText("브라우저 ID")).toHaveValue("10000000-0000-4000-8000-0000000000a2");
+    expect(screen.getByLabelText("네트워크 정책 ID")).toHaveValue("10000000-0000-4000-8000-0000000000a3");
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({
+      prompt: "주문 목록을 요약해줘",
+      mode: "save_and_run",
+      planner: "llm_v1",
+      model: "gpt-4o-mini",
+      start_url: "https://shop.example/orders",
+      target: {
+        site_profile_id: "10000000-0000-4000-8000-0000000000a1",
+        browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
+        network_policy_id: "10000000-0000-4000-8000-0000000000a3",
+      },
+      evidence: { screenshot: "each_step", video: "always" },
+    });
+    await waitFor(() => expect(location.hash).toBe("#runTrace?run=00000000-0000-0000-0000-000000000099&focus=artifacts"));
+  });
+
+  test("자연어 자동화 생성 차단 → blocker를 한국어로 표면화", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => ({
+          generation_id: "00000000-0000-0000-0000-0000000000a2",
+          mode: body.mode ?? "save_and_run",
+          status: "blocked",
+          prompt_hash: "hash",
+          planner: "deterministic_mvp",
+          model: body.model ?? null,
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+          run_id: null,
+          evidence_policy: body.evidence,
+          blockers: ["start_url_required_for_auto_run", "target_required_for_auto_run", "video_recording_port_not_configured"],
+          draft_ir: {},
+          validation_report: {},
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "오늘 주문을 확인해줘" } });
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    await waitFor(() => expect(screen.getByText("차단됨")).toBeInTheDocument());
+    expect(screen.getByText("시작 URL이 필요합니다.")).toBeInTheDocument();
+    expect(screen.getByText("실행 대상이 필요합니다.")).toBeInTheDocument();
+    expect(screen.getByText("서버에서 동영상 녹화가 비활성화되어 있습니다.")).toBeInTheDocument();
+  });
+
   test("scenario 편집은 저장된 studio_mode=easy로 쉬운 만들기 폼을 복원", async () => {
     renderApp(
       fakeClient({
@@ -397,6 +495,7 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.sver).toBe("33333333-aaaa-bbbb-cccc-000000000099"); // latest_version_id 전달
     expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
+    expect(location.hash).toBe("#runTrace?run=run-1&focus=artifacts");
   });
 
   test("파라미터 시나리오 실행 — url_ref 키 입력 폼 → createRun(params)", async () => {
@@ -430,6 +529,7 @@ describe("D7 운영 콘솔 shell", () => {
     screen.getByRole("button", { name: "실행 시작" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.params).toEqual({ orders_url: "https://shop.example/orders/9" });
+    expect(location.hash).toBe("#runTrace?run=run-2&focus=artifacts");
   });
 
   test("run-start model_required → 모델 입력 폼 노출 + 에러 패널내 표면화 + 재실행 시 model 전달", async () => {
@@ -465,18 +565,19 @@ describe("D7 운영 콘솔 shell", () => {
     (await screen.findByRole("button", { name: "실행" })).click(); // 패널 열기
     (await screen.findByRole("button", { name: "실행 시작" })).click(); // 1차 createRun → model_required
     // 모델 입력 폼 + 에러 메시지가 패널 안에 노출(조용한 무반응 금지).
-    const modelField = await screen.findByLabelText("AI 모델");
-    expect(screen.getByText(/AI 모델을 지정해야 합니다/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled(); // 모델 미입력 가드
+    const panel = screen.getByRole("region", { name: "세션 확인 실행" });
+    const modelField = await within(panel).findByLabelText("AI 모델");
+    expect(within(panel).getByText(/AI 모델을 지정해야 합니다/)).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "실행 시작" })).toBeDisabled(); // 모델 미입력 가드
     fireEvent.change(modelField, { target: { value: "gpt-4o-mini" } });
     // P0-3: 직타 모델은 getGatewayPolicy로 '확인'해야 실행 허용(맹목 입력 차단). 확인 전엔 여전히 비활성.
-    const panel = screen.getByRole("region", { name: "세션 확인 실행" });
-    expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled();
+    expect(within(panel).getByRole("button", { name: "실행 시작" })).toBeDisabled();
     within(panel).getByRole("button", { name: "확인" }).click();
-    await waitFor(() => expect(screen.getByRole("button", { name: "실행 시작" })).toBeEnabled());
-    screen.getByRole("button", { name: "실행 시작" }).click(); // 2차 createRun(model)
+    await waitFor(() => expect(within(panel).getByRole("button", { name: "실행 시작" })).toBeEnabled());
+    within(panel).getByRole("button", { name: "실행 시작" }).click(); // 2차 createRun(model)
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.model).toBe("gpt-4o-mini"); // 검증된 모델 전달
+    expect(location.hash).toBe("#runTrace?run=run-3&focus=artifacts");
   });
 
   test("실행 상세 drill-down — getRun 패널(워커/시도 표시)", async () => {
@@ -537,12 +638,17 @@ describe("D7 운영 콘솔 shell", () => {
     fireEvent.change(screen.getByLabelText("로그인 URL (선택)"), { target: { value: "https://login.office.hiworks.com" } });
     fireEvent.change(screen.getByLabelText("로그인 확인 selector (선택)"), { target: { value: ".user-menu" } });
     fireEvent.change(screen.getByLabelText("reviews_visible selector (선택)"), { target: { value: ".review-item" } });
+    fireEvent.click(screen.getByRole("button", { name: "+ flag" }));
+    fireEvent.change(screen.getByPlaceholderText("예: .pagination .disabled-next"), { target: { value: ".next.disabled" } });
     screen.getByRole("button", { name: "등록" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.body.page_state_selectors).toEqual({
       loginUrl: "https://login.office.hiworks.com",
       authenticatedWhen: { selector: ".user-menu" },
-      flags: { reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 } },
+      flags: {
+        reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 },
+        no_next_page: { kind: "present", selector: ".next.disabled" },
+      },
     });
     expect(calls[0]?.key.length).toBeGreaterThan(0);
   });

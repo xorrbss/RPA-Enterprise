@@ -9,6 +9,24 @@ import { errorLabel } from "./badges";
 // url_pattern은 http(s) origin이어야 백엔드가 수락(런타임 resolveSiteProfileId가 URL.origin 매칭) — 1차 검증.
 // 조용한 실패 금지: 중복 name·비-origin 등은 ApiError(IR_SCHEMA_INVALID) 코드로 표면화.
 const RISKS = ["green", "amber", "red"] as const;
+const FLAG_KEYS = [
+  "no_next_page",
+  "cursor_reached",
+  "login_required",
+  "blocked",
+  "not_found",
+  "no_review_message_visible",
+  "reviews_visible",
+] as const;
+const FLAG_KINDS = ["present", "absent", "min_count"] as const;
+
+type FlagRow = {
+  id: number;
+  key: (typeof FLAG_KEYS)[number];
+  kind: (typeof FLAG_KINDS)[number];
+  selector: string;
+  n: number;
+};
 
 function isHttpUrl(s: string): boolean {
   try {
@@ -30,17 +48,27 @@ export function SiteCreateForm(): JSX.Element | null {
   const [loginUrl, setLoginUrl] = useState("");
   const [authenticatedSelector, setAuthenticatedSelector] = useState("");
   const [reviewsSelector, setReviewsSelector] = useState("");
+  const [flagRows, setFlagRows] = useState<FlagRow[]>([]);
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
 
   function pageStateSelectors(): unknown | undefined {
     const login = loginUrl.trim();
     const auth = authenticatedSelector.trim();
     const reviews = reviewsSelector.trim();
-    if (login === "" && auth === "" && reviews === "") return undefined;
+    const flags: Record<string, unknown> = {};
+    if (reviews !== "") flags.reviews_visible = { kind: "min_count", selector: reviews, n: 1 };
+    for (const row of flagRows) {
+      const selector = row.selector.trim();
+      if (selector === "") continue;
+      flags[row.key] = row.kind === "min_count"
+        ? { kind: row.kind, selector, n: Math.max(1, Math.floor(row.n)) }
+        : { kind: row.kind, selector };
+    }
+    if (login === "" && auth === "" && Object.keys(flags).length === 0) return undefined;
     return {
       ...(login !== "" ? { loginUrl: login } : {}),
       ...(auth !== "" ? { authenticatedWhen: { selector: auth } } : {}),
-      flags: reviews !== "" ? { reviews_visible: { kind: "min_count", selector: reviews, n: 1 } } : {},
+      flags,
     };
   }
 
@@ -60,6 +88,7 @@ export function SiteCreateForm(): JSX.Element | null {
       setLoginUrl("");
       setAuthenticatedSelector("");
       setReviewsSelector("");
+      setFlagRows([]);
       setOpen(false);
       void qc.invalidateQueries({ queryKey: ["sites"] });
     },
@@ -67,6 +96,19 @@ export function SiteCreateForm(): JSX.Element | null {
   });
 
   if (!can("site.create")) return null;
+
+  const addFlagRow = () => {
+    setFlagRows((rows) => [
+      ...rows,
+      { id: Date.now(), key: "no_next_page", kind: "present", selector: "", n: 1 },
+    ]);
+  };
+  const updateFlagRow = (id: number, patch: Partial<FlagRow>) => {
+    setFlagRows((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+  const removeFlagRow = (id: number) => {
+    setFlagRows((rows) => rows.filter((row) => row.id !== id));
+  };
 
   const invalid = name.trim() === "" || !isHttpUrl(url) || (loginUrl.trim() !== "" && !isHttpUrl(loginUrl));
   return (
@@ -125,6 +167,44 @@ export function SiteCreateForm(): JSX.Element | null {
               style={{ fontFamily: "monospace" }}
             />
           </label>
+          <div className="panel" style={{ padding: 10, display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span className="subtle">추가 page-state flags</span>
+              <button className="btn" type="button" onClick={addFlagRow}>+ flag</button>
+            </div>
+            {flagRows.length === 0 ? (
+              <span className="subtle">마지막 페이지, 로그인 필요, 차단 화면 같은 실행 전/중 판정을 selector로 추가할 수 있습니다.</span>
+            ) : (
+              flagRows.map((row) => (
+                <div key={row.id} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6, alignItems: "center" }}>
+                  <select value={row.key} onChange={(e) => updateFlagRow(row.id, { key: e.target.value as FlagRow["key"] })}>
+                    {FLAG_KEYS.map((key) => (
+                      <option key={key} value={key}>{key}</option>
+                    ))}
+                  </select>
+                  <select value={row.kind} onChange={(e) => updateFlagRow(row.id, { kind: e.target.value as FlagRow["kind"] })}>
+                    {FLAG_KINDS.map((kind) => (
+                      <option key={kind} value={kind}>{kind}</option>
+                    ))}
+                  </select>
+                  <input
+                    value={row.selector}
+                    onChange={(e) => updateFlagRow(row.id, { selector: e.target.value })}
+                    placeholder="예: .pagination .disabled-next"
+                    style={{ fontFamily: "monospace", minWidth: 0 }}
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    value={row.n}
+                    disabled={row.kind !== "min_count"}
+                    onChange={(e) => updateFlagRow(row.id, { n: Number(e.target.value) })}
+                  />
+                  <button className="btn" type="button" onClick={() => removeFlagRow(row.id)}>삭제</button>
+                </div>
+              ))
+            )}
+          </div>
           <div>
             <button className="btn primary" type="button" disabled={invalid || create.isPending} onClick={() => create.mutate()}>
               {create.isPending ? "등록 중…" : "등록"}

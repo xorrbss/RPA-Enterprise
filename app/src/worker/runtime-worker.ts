@@ -47,6 +47,7 @@ import type {
   RuntimeJobResult,
   RuntimeWorker,
   RuntimeWorkerJob,
+  VisualEvidenceVideoRecorder,
   SessionRestoreInput,
   SessionRestoreResult,
   SessionRestorer,
@@ -61,11 +62,13 @@ import { applyWorkitemTransition } from "../runtime/workitem-transition";
 import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 import { driveClaimedRun, driveResumedRun } from "../runtime/run-step-driver";
+import type { BrowserSessionStore } from "../runtime/browser-session-store";
+import type { VisualEvidenceRecorder } from "../runtime/visual-evidence";
 import { UtilityExecutor } from "../executor/utility-executor";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../executor/site-page-state-config";
 import { gateBrowserSessionProvider, type BrowserSessionProvider } from "../executor/browser-session-provider";
-import type { ExecutorChallengeSuspensionPort } from "../runtime/executor-completion-coordinator";
+import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "../runtime/executor-completion-coordinator";
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import type { ExecutorPlugin } from "../../../ts/core-types";
 
@@ -92,12 +95,15 @@ export interface RunExecutorContext {
   readonly browserIdentityVersion: number;
   /** run 테넌트 — 자격증명 fill executorPrincipal per-run 주입(감사 정합). dom-executor-factory DomExecutorRunContext 와 동형. */
   readonly tenantId?: string;
+  /** Optional per-run model override frozen on runs.model by the control plane. */
+  readonly model?: string;
 }
 
 /** run-drive 시 bound 세션 provider + run-scoped 컨텍스트에서 ExecutorPlugin 을 만드는 seam. 기본은 UtilityExecutor(결정형).
  *  dom/vision executor 주입(createDomUtilityExecutorFactory) 시 LLM 액션·worker-driven suspend 가 트리거·검증된다. */
 export type RunExecutorFactory = (provider: CdpSessionProvider, run: RunExecutorContext) => ExecutorPlugin;
 const defaultExecutorFactory: RunExecutorFactory = (provider) => new UtilityExecutor(provider);
+export type RunVideoRecorderFactory = (provider: CdpSessionProvider) => VisualEvidenceVideoRecorder;
 
 export interface PgRuntimeWorkerOptions {
   readonly workerId?: string;
@@ -122,6 +128,10 @@ export interface PgRuntimeWorkerOptions {
   // test_fake 포트는 allowTestBrowserSessionProvider opt-in 필수(gateBrowserSessionProvider, sink 포트와 동형 fail-closed).
   readonly browserSessionProvider?: BrowserSessionProvider;
   readonly allowTestBrowserSessionProvider?: boolean;
+  readonly sessionStore?: BrowserSessionStore;
+  readonly visualEvidenceRecorder?: VisualEvidenceRecorder;
+  readonly visualEvidenceVideoRecorderFactory?: RunVideoRecorderFactory;
+  readonly runtimeJobEnqueuer?: RuntimeJobEnqueuePort;
   // suspend 구동(트리거 i): worker 경유 run 이 suspend(executor status='suspended')하면 driveClaimedRun/driveResumedRun →
   // driveSuspend 가 이 둘을 소비(R4+포트→resume-token 발행+R11→suspended). 미주입 시 suspend terminal 은 loud throw(미구성).
   // PgChallengeSuspensionPort=stateless, codec=deploy-time(SecretStore+signingKeyRef). 실 트리거(challenge 감지)는 DOM/vision executor 후행.
@@ -148,12 +158,14 @@ export interface BrowserLeaseDrainInput {
 // A.1 run-drive: claim tx 에서 캡처해 tx 밖(Phase B)에서 driveClaimedRun 에 넘기는 입력(브라우저 작업은 커넥션 밖).
 interface RunClaimDriveInputs {
   readonly scenarioVersionId: string;
+  readonly model?: string;
   readonly correlationId: string;
   readonly leaseId: string;
   readonly siteProfileId: string;
   readonly browserIdentityId: string;
   readonly browserIdentityVersion: number;
   readonly networkPolicyId: string;
+  readonly networkAllowedDomains: readonly string[];
   readonly isolation: LeaseIsolation;
   readonly cleanupPolicy: LeaseCleanupPolicy;
   readonly params?: Record<string, unknown>;
@@ -468,6 +480,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         scenarioVersionId: d.scenarioVersionId,
         browserIdentityVersion: d.browserIdentityVersion,
         tenantId, // 자격증명 fill executorPrincipal per-run 테넌트(감사 정합).
+        ...(d.model !== undefined ? { model: d.model } : {}),
       });
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
       await driveClaimedRun(
@@ -480,9 +493,23 @@ export class PgRuntimeWorker implements RuntimeWorker {
           siteProfileId: d.siteProfileId,
           browserIdentityId: d.browserIdentityId,
           networkPolicyId: d.networkPolicyId,
+          networkAllowedDomains: d.networkAllowedDomains,
           params: d.params,
         },
-        { pool: this.pool, executor, resolver, workerId, suspensionPort: this.options.suspensionPort, resumeTokenCodec: this.options.resumeTokenCodec },
+        {
+          pool: this.pool,
+          executor,
+          resolver,
+          workerId,
+          suspensionPort: this.options.suspensionPort,
+          resumeTokenCodec: this.options.resumeTokenCodec,
+          sessionStore: this.options.sessionStore,
+          sessionProvider: bound.provider,
+          visualEvidenceRecorder: this.options.visualEvidenceRecorder,
+          visualEvidenceVideoRecorder: this.options.visualEvidenceVideoRecorderFactory?.(bound.provider),
+          runtimeJobEnqueuer: this.options.runtimeJobEnqueuer,
+          recordExecutorSteps: true,
+        },
       );
     } finally {
       await bound.release();
@@ -505,26 +532,30 @@ export class PgRuntimeWorker implements RuntimeWorker {
       );
     }
     // browser_identity_version: dom executor ActionPlanCache 키 스코프(StagehandDomExecutorConfig). plan.browserIdentityId 로 JOIN.
-    const r = await client.query<{ scenario_version_id: string; params: unknown; browser_identity_version: number }>(
-      `SELECT r.scenario_version_id::text AS scenario_version_id, r.params,
-              bi.version AS browser_identity_version
+    const r = await client.query<{ scenario_version_id: string; model: string | null; params: unknown; browser_identity_version: number; allowed_domains: string[] }>(
+      `SELECT r.scenario_version_id::text AS scenario_version_id, r.model, r.params,
+              bi.version AS browser_identity_version,
+              np.allowed_domains
          FROM runs r
          JOIN browser_identities bi ON bi.id = $3::uuid AND bi.tenant_id = $1::uuid
+         JOIN network_policies np ON np.id = $4::uuid AND np.tenant_id = $1::uuid
         WHERE r.tenant_id = $1::uuid AND r.id = $2::uuid`,
-      [tenantId, runId, plan.browserIdentityId],
+      [tenantId, runId, plan.browserIdentityId, plan.networkPolicyId],
     );
     const row = r.rows[0];
     if (row === undefined) {
-      throw new Error("RuntimeWorker: run-drive run/browser_identity row not found in tenant scope");
+      throw new Error("RuntimeWorker: run-drive run/browser_identity/network_policy row not found in tenant scope");
     }
     return {
       scenarioVersionId: row.scenario_version_id,
+      ...(row.model !== null ? { model: row.model } : {}),
       correlationId,
       leaseId,
       siteProfileId: plan.siteProfileId,
       browserIdentityId: plan.browserIdentityId,
       browserIdentityVersion: row.browser_identity_version,
       networkPolicyId: plan.networkPolicyId,
+      networkAllowedDomains: row.allowed_domains,
       isolation: plan.isolation ?? "context",
       cleanupPolicy: plan.cleanupPolicy ?? "clear_all",
       params: normalizeRunParams(row.params),
@@ -924,6 +955,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
         scenarioVersionId: drive.scenarioVersionId,
         browserIdentityVersion: drive.browserIdentityVersion,
         tenantId, // 자격증명 fill executorPrincipal per-run 테넌트(감사 정합).
+        ...(drive.model !== undefined ? { model: drive.model } : {}),
       });
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
       // R18 후 run 은 running — driveResumedRun 은 R2 없이 resumeNodeId 부터 재진입(success→completed / fail→failed_*).
@@ -937,9 +969,23 @@ export class PgRuntimeWorker implements RuntimeWorker {
           siteProfileId: drive.siteProfileId,
           browserIdentityId: drive.browserIdentityId,
           networkPolicyId: drive.networkPolicyId,
+          networkAllowedDomains: drive.networkAllowedDomains,
           params: drive.params,
         },
-        { pool: this.pool, executor, resolver, workerId, suspensionPort: this.options.suspensionPort, resumeTokenCodec: this.options.resumeTokenCodec },
+        {
+          pool: this.pool,
+          executor,
+          resolver,
+          workerId,
+          suspensionPort: this.options.suspensionPort,
+          resumeTokenCodec: this.options.resumeTokenCodec,
+          sessionStore: this.options.sessionStore,
+          sessionProvider: bound.provider,
+          visualEvidenceRecorder: this.options.visualEvidenceRecorder,
+          visualEvidenceVideoRecorder: this.options.visualEvidenceVideoRecorderFactory?.(bound.provider),
+          runtimeJobEnqueuer: this.options.runtimeJobEnqueuer,
+          recordExecutorSteps: true,
+        },
         txA.intent.resumeNodeId,
       );
     } finally {

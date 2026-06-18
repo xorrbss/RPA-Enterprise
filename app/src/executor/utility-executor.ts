@@ -10,6 +10,8 @@
 import type {
   ArtifactRef,
   ExecutorPlugin,
+  PageStateRef,
+  RedactedString,
   RunContext,
   StepResult,
   VerifyResult,
@@ -40,6 +42,7 @@ export type UtilityErrorCode =
   | "IR_SCHEMA_INVALID"
   | "EXECUTOR_CAPABILITY_MISMATCH"
   | "ARTIFACT_RETENTION_FAILED"
+  | "DOMAIN_POLICY_VIOLATION"
   | "RUN_ABORTED";
 
 export class UtilityExecutorError extends Error {
@@ -70,6 +73,8 @@ export class UtilityExecutor implements ExecutorPlugin {
       throw new UtilityExecutorError("RUN_ABORTED", `step '${stepId}' aborted before execute`);
     }
     const a = this.assertUtilityAction(stepId, action);
+    const policyFailure = a.type === "navigate" ? this.navigationPolicyFailure(stepId, a.url, ctx) : undefined;
+    if (policyFailure !== undefined) return policyFailure;
     const session = this.sessions.forLease(ctx.leaseId);
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
@@ -273,6 +278,30 @@ export class UtilityExecutor implements ExecutorPlugin {
     }
   }
 
+  private navigationPolicyFailure(stepId: string, url: string, ctx: RunContext): StepResult | undefined {
+    const allowedDomains = ctx.networkAllowedDomains;
+    if (allowedDomains === undefined) return undefined;
+    const host = hostOf(url);
+    if (host !== null && isHostAllowed(host, allowedDomains)) return undefined;
+
+    const now = nowIso();
+    const pageRef = pageStateRef(ctx.pageState) as PageStateRef;
+    const message = `navigate host '${host ?? "invalid"}' is outside network policy '${ctx.networkPolicyId}'` as RedactedString;
+    return {
+      stepId,
+      action: "navigate",
+      status: "failed_security",
+      output: { url, allowed: false },
+      pageStateBefore: pageRef,
+      pageStateAfter: pageRef,
+      artifacts: [],
+      cache: { mode: "bypass" },
+      sideEffect: { kind: "read_only", committed: false },
+      exception: { class: "security", code: "DOMAIN_POLICY_VIOLATION", message },
+      timings: { startedAt: now, endedAt: now, durationMs: 0 },
+    };
+  }
+
   private withAbort<T>(ctx: RunContext, work: Promise<T>): Promise<T> {
     if (ctx.abortSignal.aborted) {
       throw new UtilityExecutorError("RUN_ABORTED", `run '${ctx.runId}' aborted`);
@@ -287,4 +316,27 @@ export class UtilityExecutor implements ExecutorPlugin {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function hostOf(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isHostAllowed(host: string, allowedDomains: readonly string[]): boolean {
+  const normalizedHost = host.toLowerCase();
+  return allowedDomains.some((raw) => {
+    const domain = raw.trim().toLowerCase();
+    if (domain.length === 0) return false;
+    if (domain.startsWith("*.")) {
+      const suffix = domain.slice(2);
+      return normalizedHost.length > suffix.length && normalizedHost.endsWith(`.${suffix}`);
+    }
+    return normalizedHost === domain;
+  });
 }

@@ -3,6 +3,10 @@
 > 작성일: 2026-06-18
 > 맥락: `삼성디스플레이 공지 수집2` 실행 결과가 쉬운 만들기에서 "여러 화면에서 목록 수집(페이지를 넘기며)"를 선택했음에도 현재 화면 10건만 산출한 문제.
 
+> 현재 조치(2026-06-18): UI 관련 블록은 코드에 반영됨. `OperatorWizard`의 목록 수집은 `page_loop`/`next_page` IR을 생성하고 최대 페이지 수·다음 페이지 동작·마지막 페이지 flag를 입력받는다. `SiteCreateForm`은 `no_next_page` 등 닫힌 page-state flag를 추가 등록할 수 있다. DOM 실행기 추출 프롬프트는 지원되는 `network_json` 근거를 visible text/html보다 우선한다. `RunTrace`는 run artifact 본문을 바로 열어 `rows`/`records` 요약과 샘플을 표시한다.
+>
+> 남은 런타임 후속: 브라우저 CDP에서 모든 XHR 응답 body를 자동 수집하는 배관과, 페이지별 결과를 하나의 deduped merged artifact로 생성하는 파이프라인은 별도 런타임 작업이다. 이번 조치는 UI/프롬프트/표시 경로를 닫는다.
+
 ## 확인된 사실
 
 - 시나리오: `삼성디스플레이 공지 수집2`
@@ -160,3 +164,27 @@ done
 - 전체 2페이지 수집 시 `totalCount=33` 기준 누락 없이 수집된다.
 - 결과 화면에서 최종 병합 records 수와 본문을 확인할 수 있다.
 - UI 문구가 실제 동작과 일치한다.
+
+## 2026-06-19 Runtime Update
+
+- `StagehandDomExecutor` now installs a page-side fetch/XHR JSON capture hook before DOM `act` and `extract` steps. Captured JSON is exposed through the existing `[network_json]` snapshot path and remains best-effort so blocked injection does not fake success or fail unrelated DOM execution.
+- Repeated extract results now surface in interpreter outcomes as page-level `extractPages` plus a deduped `mergedExtract`. The merge helper reads common result shapes such as `rows`, `records`, `items`, `data`, and nested `grid.data`, preserving order while deduping by natural keys such as `SEQ` or `BBSCTT_ID`.
+- Fixture coverage was added for Samsung-like 20+13 notice collection with one repeated boundary row, nested `grid.data`, network JSON prompt inclusion, automatic capture hook installation, and interpreter-level merged extract output.
+- The remaining deploy-time provisioning row is intentionally not closed by code. It requires owner-provided staging platform/deploy target, GitHub Environment approval/protection, rollback confirmation, and SecretRef/SecretStore provisioning evidence.
+
+## 2026-06-19 Natural Prompt Update
+
+- `POST /v1/scenario-generations` now recognizes natural-language pagination intent such as "모든/다음/더보기 페이지", "all/every/next page", and "load more" in the deterministic MVP planner.
+- Matching prompts generate bounded loop IR: `open_start_url -> paginate_pages -> extract_current_page -> advance_page -> paginate_pages -> done`.
+- `max_pages` is inferred from the prompt when possible, defaults to 3, and is persisted into `runs.params`; automatic execution is capped at 10 pages.
+- Requests above the cap are saved as blocked scenario generations with `pagination_page_limit_exceeded` and do not enqueue a run.
+- Integration coverage now proves natural prompt generation can save the scenario, enqueue the run, persist `max_pages`, preserve the loop IR in `scenario_versions`, and keep the over-limit path fail-closed.
+
+## LLM Planner Follow-up
+
+- The deterministic MVP planner now sits behind a `ScenarioPlanner` port and persists `plan.planner` through the existing generation ledger/response path. A future LLM planner should be added as a second implementation of that port so it shares the same compile, persistence, RBAC, target inference, evidence, and run enqueue boundary.
+- `planner="llm_v1"` is now accepted only when a matching `ScenarioPlanner` implementation is injected into the API server; otherwise it fails closed with `RESOURCE_NOT_FOUND`. Control-plane idempotency reservation happens before planner execution, so replay does not call an expensive or side-effecting planner again.
+- Planner implementations may provide one bounded `repair` pass after `compileScenario` rejects generated IR. The repair input includes the failed plan and compile error; if the repaired IR still fails, the request returns the original compile error class and no scenario/run is saved.
+- Keep prompt text out of the generation ledger. LLM planner inputs/outputs should go through the existing gateway artifact sink and redaction boundary rather than adding a second prompt storage path.
+- Keep any future planner-internal gateway calls behind the same pre-planner control-plane idempotency boundary, and add generation-scoped artifact/call storage rather than reusing run-step `stagehand_calls`.
+- Next implementation step: add generation-scoped LLM prompt/output artifacts and a real `llm_v1` planner implementation that emits contract-valid IR through this port.

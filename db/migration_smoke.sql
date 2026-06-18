@@ -41,6 +41,7 @@ DECLARE
     'workers',
     'scenarios',
     'scenario_versions',
+    'scenario_generations',
     'workitems',
     'runs',
     'run_steps',
@@ -50,6 +51,7 @@ DECLARE
     'dead_letter',
     'action_plan_cache',
     'stagehand_calls',
+    'scenario_generation_llm_calls',
     'audit_log'
   ];
   table_name text;
@@ -82,6 +84,7 @@ DECLARE
     'control_plane_idempotency_keys',
     'scenarios',
     'scenario_versions',
+    'scenario_generations',
     'workitems',
     'runs',
     'run_steps',
@@ -90,6 +93,7 @@ DECLARE
     'dead_letter',
     'action_plan_cache',
     'stagehand_calls',
+    'scenario_generation_llm_calls',
     'audit_log'
   ];
   table_name text;
@@ -1045,6 +1049,44 @@ BEGIN
     RAISE EXCEPTION 'stagehand_calls step reference must reject unknown (tenant_id, run_id, step_id, attempt)';
   EXCEPTION
     WHEN foreign_key_violation THEN
+      NULL;
+  END;
+
+  INSERT INTO scenario_generation_llm_calls (
+    id, tenant_id, generation_id, correlation_id, step_id, attempt,
+    idempotency_key, request_hash, model, prompt_template_version,
+    stream_status, output_ref, parsed_json, retention_until
+  )
+  VALUES (
+    '10000000-0000-0000-0000-000000000044', tenant_a,
+    '10000000-0000-0000-0000-00000000a777',
+    '20000000-0000-0000-0000-000000000044',
+    'scenario_generation_plan', 0,
+    'scenario-generation-llm-plan-1', 'sha256:scenario-generation-plan',
+    'gpt-smoke', 'scenario-planner@1', 'done',
+    '10000000-0000-0000-0000-000000000045',
+    '{"draft_ir":{"ok":true}}'::jsonb,
+    smoke_retention_until
+  );
+
+  BEGIN
+    INSERT INTO scenario_generation_llm_calls (
+      id, tenant_id, generation_id, correlation_id, step_id, attempt,
+      idempotency_key, request_hash, model, prompt_template_version,
+      stream_status, retention_until
+    )
+    VALUES (
+      '10000000-0000-0000-0000-000000000046', tenant_a,
+      '10000000-0000-0000-0000-00000000a777',
+      '20000000-0000-0000-0000-000000000046',
+      'scenario_generation_plan', 0,
+      'scenario-generation-llm-plan-1', 'sha256:scenario-generation-plan-mismatch',
+      'gpt-smoke', 'scenario-planner@1', 'open',
+      smoke_retention_until
+    );
+    RAISE EXCEPTION 'scenario_generation_llm_calls durable idempotency key should reject duplicate same-tenant keys';
+  EXCEPTION
+    WHEN unique_violation THEN
       NULL;
   END;
 

@@ -123,12 +123,29 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
   const showActions = can("approval.decide"); // 비-approver 는 액션 열 숨김(백엔드가 최종 강제).
   // 이번 세션에서 결재한 문서 → 스폰된 처리 run id. 결정된 행은 버튼 대신 처리 상태(폴링)를 보인다.
   const [decided, setDecided] = useState<Record<string, string>>({});
+  const [pendingOnly, setPendingOnly] = useState(false);
+  const pendingRows = rows.filter((r) => !["approved", "rejected", "completed"].includes(r.status));
+  const visibleRows = pendingOnly ? pendingRows : rows;
   return (
     <>
       <section className="panel" style={{ padding: 16, marginBottom: 16 }} aria-label="결재 요약">
         <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>결재 {sum.total}건</div>
         <Chips label="상태" entries={sum.byStatus} />
         <Chips label="유형" entries={sum.byType} />
+      </section>
+      <section className="panel queue-controls" aria-label="결재 큐 제어">
+        <div>
+          <strong>결재 큐</strong>
+          <p className="subtle">비가역 결정은 건별 확인을 유지하고, 처리 대기 항목만 빠르게 좁힙니다.</p>
+        </div>
+        <div className="quick-actions">
+          <button className="btn" type="button" aria-pressed={pendingOnly} onClick={() => setPendingOnly((v) => !v)}>
+            처리 대기만 {pendingRows.length}
+          </button>
+          <button className="btn" type="button" disabled={pendingRows.length === 0} onClick={() => setPendingOnly(true)}>
+            다음 결재 보기
+          </button>
+        </div>
       </section>
       <section className="panel" aria-label="결재 목록">
         <div className="panel-head"><h2>결재 목록</h2></div>
@@ -142,7 +159,7 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
+                {visibleRows.map((r) => {
                   const spawnedRunId = decided[r.doc_ref];
                   return (
                     <tr key={r.approval_id ?? r.doc_ref}>

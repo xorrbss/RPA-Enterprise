@@ -57,7 +57,7 @@
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
 | POST | `/v1/runs` | `Idempotency-Key` 헤더. body: `scenario_version_id`, `params`(params_schema 준수), optional `params.as_of`, optional `workitem_id`, optional `model`(§0.7). operator+ 권한 필요 | 201 + run 리소스(`run_id`, `status=queued`). `run.created` 이벤트 emit. `runs.model` 1회 해소·동결 | `IR_SCHEMA_INVALID`(422; 미해소 `model_required` 포함), `IR_EXPRESSION_COMPILE_ERROR`(422), `RESOURCE_NOT_FOUND`(404; 명시 `model` 정책 부재), `AUTHZ_FORBIDDEN`(403), `SITE_PROFILE_BLOCKED`(403) |
-| GET | `/v1/runs/{run_id}` | — | 200 + run 상세(`status` ∈ RunState, `worker_id`, `attempts`, `as_of`, 진행 노드) | `RUN_NOT_FOUND`(404) |
+| GET | `/v1/runs/{run_id}` | — | 200 + run 상세(`status` ∈ RunState, `worker_id`, `attempts`, `as_of`, `updated_at`, 진행 노드) | `RUN_NOT_FOUND`(404) |
 | GET | `/v1/runs/{run_id}/steps` | 쿼리: `?limit=&cursor=`. `run.read` 권한 | 200 + `{ items, next_cursor }` (run_steps 단계 트레이스, 실행 시간 오름차순)⁶ | `RESOURCE_NOT_FOUND`(404; 형식 무효 run_id) |
 | GET | `/v1/runs` | 쿼리: `?status=<RunState>&scenario_version_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` | — |
 | POST | `/v1/runs/{run_id}/abort` | `Idempotency-Key` 헤더. body: optional `reason` | 202 (abort 수락 → `aborting` 경유 `cancelled`). `run.cancelled` 이벤트 | `RUN_NOT_FOUND`(404), `RUN_ALREADY_TERMINAL`(409), `RUN_ABORTED`(409), `WORKITEM_CHECKOUT_CONFLICT`(409, `suspending` bookmark in-flight) |
@@ -92,11 +92,37 @@
 
 ---
 
+## 2.5 Scenario Generations (자연어 → IR 저장 · 선택 실행)
+
+| Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
+|---|---|---|---|---|
+| GET | `/v1/scenario-generations` | query: optional `limit`(1..100, default 20), optional `cursor` | 200 + `{ items, next_cursor }`. 각 item은 generation 원장(`prompt_hash`, optional `prompt_redacted_ref`, `planner`, `status`, 연결 scenario/run, redacted `draft_ir`, `validation_report`, `blockers`)이며 prompt 원문은 노출하지 않는다 | `IR_SCHEMA_INVALID`(422; invalid limit/cursor) |
+| POST | `/v1/scenario-generations` | `Idempotency-Key`. body: `prompt`(자연어), optional `name`, `mode`(`draft_only`/`save`/`save_and_run`, 기본 `save_and_run`), optional `planner`(`deterministic_mvp`/`llm_v1`, 기본 `deterministic_mvp`; `llm_v1`은 서버 구현체 주입 시에만), optional `start_url`, optional `target`(`site_profile_id`/`browser_identity_id`/`network_policy_id`), optional `params`, optional `model`, optional `evidence`(`screenshot`, `video`). `scenario.create` 권한 필요, `save_and_run`은 추가로 `run.create` 권한 필요 | 200(`draft_only`) 또는 201. `{ generation_id, status, scenario_id?, scenario_version_id?, run_id?, prompt_redacted_ref?, planner, draft_ir, validation_report, blockers }`. 조건 충족 시 scenario 저장 후 run queued까지 원자 처리 | `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422), `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404; 명시 model 정책/요청 planner 구현체 부재), `SCENARIO_VERSION_CONFLICT`(412; idempotency hash mismatch) |
+| GET | `/v1/scenario-generations/{generation_id}` | — | 200 + generation 원장(`prompt_hash`, optional `prompt_redacted_ref`, `planner`, `status`, 연결 scenario/run, redacted `draft_ir`, `validation_report`, `blockers`) | `RESOURCE_NOT_FOUND`(404) |
+| GET | `/v1/scenario-generations/{generation_id}/artifacts` | 쿼리: `?limit=&cursor=`. `artifact.read` 권한 | 200 + `{ items, next_cursor }` (generation-scoped planner/output artifact **목록**, metadata-only, 최신순). 본문은 `GET /v1/scenario-generations/{generation_id}/artifacts/{artifact_id}` 또는 `GET /v1/artifacts/{artifact_id}` 감사 게이트로만 조회 | `RESOURCE_NOT_FOUND`(404; 형식 무효 generation_id), `SECRET_ACCESS_DENIED`(403) |
+| GET | `/v1/scenario-generations/{generation_id}/artifacts/{artifact_id}` | `artifact.read` 권한 | 200 + artifact JSON body + `generation_id`. scoped generation 확인 후 전역 artifact body read와 동일한 RLS redaction gate 및 append-only audit boundary를 통과해야 반환 | `RESOURCE_NOT_FOUND`(404), `SECRET_ACCESS_DENIED`(403) |
+
+**MVP planner 규약**
+- `llm_v1` planner 호출은 `scenario_generation_llm_calls` 원장에 `(tenant_id, idempotency_key)`로 멱등 저장한다. planner output은 generation-scoped artifact로 flush된 뒤에만 재사용 가능하며, 저장/검증 실패 시 해당 generation의 buffered artifact와 LLM call 원장을 함께 폐기한다.
+- v1 MVP는 `planner="deterministic_mvp"`로 시작한다. 외부 LLM 없이 prompt+힌트로 `observe`/`extract` 중심의 read-only IR을 생성한다. 이후 LLM planner는 동일 저장/검증/실행 경계 뒤에서 교체 가능해야 한다.
+- `planner="llm_v1"`은 같은 `ScenarioPlanner` 포트의 선택 구현체다. 서버에 구현체가 주입되지 않으면 `RESOURCE_NOT_FOUND`로 닫히며, 구현체가 생성한 IR도 동일하게 `compileScenario`와 blocker/run enqueue 경계를 통과해야 한다.
+- "모든/다음/더보기 페이지", "all/every/next page", "load more" 수집 의도는 bounded pagination loop IR(`paginate_pages` → `extract_current_page` → `advance_page`)로 생성한다. 기본 `max_pages=3`, 자동 실행 상한은 10이며 초과 시 `pagination_page_limit_exceeded` blocker로 저장만 하고 run은 만들지 않는다.
+- prompt 원문은 `scenario_generations`에 저장하지 않는다. 원장에는 `prompt_hash`와 선택적 `prompt_redacted_ref`만 둔다. `scenario_generations.draft_ir`는 instruction 텍스트를 redacted form으로 저장하고, 저장/실행용 원본 IR은 `scenario_versions.ir` 계약 경계에서만 유지한다.
+- 생성된 IR은 기존 scenario save와 동일하게 `compileScenario`(AJV → IREL → V1..V11)를 통과해야만 저장/실행된다. 실패하면 저장/실행하지 않는다.
+- `save_and_run` 요청에서 `target`/`start_url`이 없거나 target row 미존재, red site 미승인, side-effect성 문구 감지 등으로 안전 실행 조건이 부족하면 scenario는 저장하되 run은 만들지 않고 `status=blocked`, `blockers[]`에 사유를 남긴다. 조용히 queued로 넘기지 않는다.
+- 명시 `target`을 제공한 `save_and_run` 요청은 `start_url` origin이 `site_profiles.url_pattern` origin과 일치해야 한다. 불일치하면 `target_start_url_site_mismatch` blocker로 차단한다.
+- evidence 요청은 현재 IR의 `node.policy.recording`으로 투영한다: `screenshot=each_step` 또는 `video=always` → `recording=always`, 둘 다 `never` → `never`, 그 외 → `masked_on_failure`.
+- planner 산출 IR이 `meta.evidence` 또는 node recording 정책을 누락/약화해도 서버가 요청 `evidence`를 최종 권위로 정규화한 뒤 compile/save/run을 진행한다.
+- `video!=never`는 runtime video recorder capability가 꺼져 있으면 `video_recording_port_not_configured` blocker로 자동 실행을 막는다. capability가 켜진 워커는 마스킹된 PNG 프레임을 WebM(`video_masked`)으로 인코딩해 pending artifact로 저장하고 redaction/retention lifecycle에 넘긴다.
+- `target`이 없고 `start_url` 또는 프롬프트 내 첫 http(s) URL이 있으면 서버가 `site_profiles.url_pattern` origin과 매칭해 최신 `browser_identity`와 기본 `network_policy`를 자동 제안한다. 매칭 실패/애매함/후보 부재는 추측하지 않고 `target_required_for_auto_run` blocker로 남긴다.
+
+---
+
 ## 3. Human Tasks (휴먼 태스크 인박스)
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| GET | `/v1/human-tasks` | 쿼리: `?status=<HumanTaskState>&kind=<HumanTaskKind>&assignee=&limit=&cursor=` | 200 + `{ items, next_cursor }` (인박스 목록) | — |
+| GET | `/v1/human-tasks` | 쿼리: `?status=<HumanTaskState>&kind=<HumanTaskKind>&assignee=&run_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` (인박스 목록; `run_id`는 suspended run→정확한 task 딥링크용) | — |
 | GET | `/v1/human-tasks/{human_task_id}` | — | 200 + 태스크 상세(`state`, `kind`, `assignee`, `timeout`, `on_timeout`, payload, run 연계) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/human-tasks/{human_task_id}/start` | `Idempotency-Key`. 배정된 담당자/역할 스코프 필요 | 200 + `in_progress`(H2) | `HUMAN_TASK_EXPIRED`(410), `AUTHZ_FORBIDDEN`(403) |
 | POST | `/v1/human-tasks/{human_task_id}/resolve` | `Idempotency-Key`. body: optional `result`(object) — v1 미소비(아래 note) | 200 + `resolved`. `human_task.resolved` 이벤트 → Run `resume_requested`(R13/H3) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
@@ -133,8 +159,10 @@
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| GET | `/v1/artifacts/{artifact_id}` | — | 200 + artifact(또는 서명 URL). `redaction → RBAC` 2단 게이트 통과 시에만 | `ARTIFACT_NOT_REDACTED`(409), `SECRET_ACCESS_DENIED`(403) |
+| GET | `/v1/artifacts/{artifact_id}` | — | 200 + artifact JSON body. `redaction → RBAC` 2단 게이트와 audit boundary 통과 시에만 | `ARTIFACT_NOT_REDACTED`(409), `SECRET_ACCESS_DENIED`(403) |
+| GET | `/v1/artifacts/{artifact_id}/blob` | — | 200 + raw bytes with `Content-Type` and `Content-Disposition`. JSON body와 같은 RLS/RBAC/audit boundary를 통과하며 `object_ref`, `sha256`, JSON `content`는 노출하지 않음 | `RESOURCE_NOT_FOUND`(404), `SECRET_ACCESS_DENIED`(403) |
 | GET | `/v1/runs/{run_id}/artifacts` | 쿼리: `?limit=&cursor=`. `artifact.read` 권한 | 200 + `{ items, next_cursor }` (run 하위 artifact **목록**, metadata-only, 최신순)⁵ | `RESOURCE_NOT_FOUND`(404; 형식 무효 run_id), `SECRET_ACCESS_DENIED`(403) |
+| GET | `/v1/scenario-generations/{generation_id}/artifacts` | 쿼리: `?limit=&cursor=`. `artifact.read` 권한 | 200 + `{ items, next_cursor }` (generation 하위 planner/output artifact **목록**, metadata-only, 최신순)⁵ | `RESOURCE_NOT_FOUND`(404; 형식 무효 generation_id), `SECRET_ACCESS_DENIED`(403) |
 
 - 조회 허용 조건(security-contracts §8, impl-bundle §C access middleware): `redaction_status ∈ {redacted, not_required}` **AND** 호출자 역할이 해당 tenant/run의 artifact 조회 권한 보유.
 - 미들웨어 1지점에서 **순서대로**: ① redaction 게이트 — pending/failed면 `ARTIFACT_NOT_REDACTED`(409, "준비 중입니다"). ② RBAC 게이트 — 권한 부족이면 `SECRET_ACCESS_DENIED`(403).
@@ -142,7 +170,9 @@
 - `sensitive=true` 입력·redaction 대상은 평문 노출 금지(security-contracts §4/§9). artifact 본문은 항상 마스킹된 `RedactedString`/redacted object만.
 - 보존/정리(retention_until·sweeper)는 데이터평면 job(impl-bundle §B `artifact_retention_sweeper`/`artifact_redaction_job`)이며 본 API는 조회만 노출(생성/삭제 API는 v1 미노출).
 
-⁵ `GET /v1/runs/{run_id}/artifacts` — run 하위 artifact **목록**(발견/브라우즈; 단건 by-id의 비대칭 해소). **metadata-only**: `artifact_id`·`type`·`redaction_status`·`retention_until`·`legal_hold`·`created_at`만 노출하고 **본문(`content`)·`object_ref`(내부 ObjectRef, evidence 비노출)·`sha256`(원본 무결성 해시=fingerprint, security-contracts §11)은 미노출**. 본문 열람은 단건 `GET /v1/artifacts/{id}`(§10 audit 게이트)로만. 목록은 object content를 read하지 않아 **disclosure 경로가 아니므로 §10 audit boundary를 트리거하지 않으며**(audit는 본문 disclosure 경로 전용), 가시성은 `artifacts_visible_isolation` RLS(redacted/not_required·미삭제·비격리·동tenant)가 강제 — 별도 redaction/audit 게이트 불요. RBAC는 `artifact.read`(auth-rbac §2, deny→`SECRET_ACCESS_DENIED`), 최신순(`created_at` DESC) §0.5 커서 페이지. run_id가 없는 orphan artifact는 본 목록에 미포함(retention sweeper 소관).
+⁵ `GET /v1/runs/{run_id}/artifacts` 및 `GET /v1/scenario-generations/{generation_id}/artifacts` — run 또는 자연어 generation 하위 artifact **목록**(발견/브라우즈; 단건 by-id의 비대칭 해소). **metadata-only**: `artifact_id`·`type`·`media_type`·`filename`·`byte_size`·`duration_ms`·`redaction_status`·`retention_until`·`legal_hold`·`created_at`만 노출하고 **본문(`content`)·`object_ref`(내부 ObjectRef, evidence 비노출)·`sha256`(원본 무결성 해시=fingerprint, security-contracts §11)은 미노출**. `media_type`/`filename`/`byte_size`/`duration_ms`는 이미지·동영상 결과의 미리보기/다운로드 UI 힌트이며 disclosure 본문이 아니다. 본문 열람은 단건 `GET /v1/artifacts/{id}` 또는 generation-scoped `GET /v1/scenario-generations/{generation_id}/artifacts/{artifact_id}`(§10 audit 게이트)로만. 목록은 object content를 read하지 않아 **disclosure 경로가 아니므로 §10 audit boundary를 트리거하지 않으며**(audit는 본문 disclosure 경로 전용), 가시성은 `artifacts_visible_isolation` RLS(redacted/not_required·미삭제·비격리·동tenant)가 강제 — 별도 redaction/audit 게이트 불요. RBAC는 `artifact.read`(auth-rbac §2, deny→`SECRET_ACCESS_DENIED`), 최신순(`created_at` DESC) §0.5 커서 페이지. 해당 scope(run_id/generation_id)가 없는 orphan artifact는 본 목록에 미포함(retention sweeper 소관).
+
+Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이 경로는 JSON body read와 동일하게 `artifact.read` RBAC, RLS redaction gate, append-only audit를 통과한 뒤 object store raw bytes를 반환하며, 내부 `object_ref`는 응답 어느 위치에도 포함하지 않는다.
 
 ---
 
@@ -166,8 +196,8 @@
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| GET | `/v1/sites` | 쿼리: `?risk=red|amber|green&limit=&cursor=` | 200 + `{ items, next_cursor }` (site_profiles 요약) | — |
-| GET | `/v1/sites/{site_profile_id}` | — | 200 + 사이트 상세(risk, 승인 상태, circuit 상태) | `RESOURCE_NOT_FOUND`(404) |
+| GET | `/v1/sites` | 쿼리: `?risk=red|amber|green&limit=&cursor=` | 200 + `{ items, next_cursor }` (site_profiles 요약: `url_pattern`, risk, 승인/circuit 상태, `session_ready`/`session_expires_at`, `default_browser_identity_id`, `default_network_policy_id`) | — |
+| GET | `/v1/sites/{site_profile_id}` | — | 200 + 사이트 상세(`url_pattern`, risk, 승인 상태, circuit 상태, 세션 준비 메타) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/sites` | `Idempotency-Key`. 생성 권한(`site.create`) 필요. body: `name`(필수)·`url_pattern`(필수, http(s) origin)·optional `risk`(green default/amber/red)·optional `page_state_selectors` | 201 + 생성된 site 요약(`site_profile_id`/`name`/`url_pattern`/`risk`/`approved`) | `AUTHZ_FORBIDDEN`(403)⁴, `IR_SCHEMA_INVALID`(422)⁵ |
 | PATCH | `/v1/sites/{site_profile_id}` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `name`(필수) | 200 + 갱신된 site 요약(`site_profile_id`/`name`) | `AUTHZ_FORBIDDEN`(403)⁴, `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; 중복 name reason=`site_name_already_exists`) |
 | POST | `/v1/sites/{site_profile_id}/approve` | `Idempotency-Key`. 승인 권한 필요. body: optional `reason`/`expires_at` | 200 + 승인 반영(risk=red 사이트 실행 허용) | `AUTHZ_FORBIDDEN`(403)⁴ |

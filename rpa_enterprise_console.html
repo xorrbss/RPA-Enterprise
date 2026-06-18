@@ -2413,7 +2413,7 @@
           ${metric("API client contract", "22 paths", "표시", "If-Match, Idempotency-Key, ApiError 상태", "network")}
           ${metric("RBAC action gate", "7 / 9", "현재 역할", "operator, approver 기준 허용/거부 표시", "shield-check", "warn")}
           ${metric("Tenant/RLS/Audit", "통과", "mock", "tenant_acme 컨텍스트와 감사 필드 연결", "fingerprint")}
-          ${metric("Open blockers", "5", "BLOCKED", "계약이 부족한 항목은 추정하지 않음", "octagon-alert", "bad")}
+          ${metric("Repo blockers", "0", "해소", "실행 UX 3개 블록 계약/API/UI 반영", "check-circle-2")}
         </div>
         <div class="readiness-grid" aria-label="계약 상태 요약">
           ${readinessCard("API surface", "명령형 POST는 Idempotency-Key, 정책 변경은 If-Match를 함께 표시", "ApiError와 상태 통지는 분리", "network", "active")}
@@ -2438,7 +2438,7 @@
             ${pipelineNode("화면 gate", "action별 허용/거부 표시", "active")}
             ${pipelineNode("데이터 경계", "tenant/RLS/redaction", "active")}
             ${pipelineNode("운영 복구", "DLQ/sink/site 승인", "system")}
-            ${pipelineNode("BLOCKED 유지", "추정 금지 항목", "risk")}
+            ${pipelineNode("외부 결정", "배포 타깃/SecretStore", "pending")}
           </div>
         </section>
         <section class="section-band" data-state-evidence="ui-smoke">
@@ -2468,7 +2468,7 @@
                 ${gateRow("Tenant/RLS/Audit", "JWT tenant_id, SET LOCAL app.tenant_id, events envelope", "topbar 인증 컨텍스트, 감사 로그 drawer, RLS 결과 행", "active", "cross-tenant는 RUN_NOT_FOUND/RLS로 존재 노출 방지")}
                 ${gateRow("Idempotency/Redaction", "control_plane_idempotency_keys, sink_idempotency_key, artifact gate", "실행/abort/DLQ/sink/site approve 모달과 증빙 drawer", "active", "pending/failed artifact는 ARTIFACT_NOT_REDACTED")}
                 ${gateRow("Scenario validate/promote", "POST validate dry-run, POST promote If-Match + Idempotency-Key", "시나리오 검사 화면과 배포 권한 drawer", "pending", "현재 역할에는 admin이 없어 AUTHZ_FORBIDDEN")}
-                ${gateRow("Human Task inbox", "GET human-tasks, assign/start/resolve/escalate", "사람 확인함, 이어하기 키, snapshot 기반 처리", "active", "validation/captcha resolve는 reviewer 또는 assignee gate 필요")}
+                ${gateRow("Human Task inbox", "GET human-tasks?run_id, assign/start/resolve/escalate", "사람 확인함, 실행 상세 ht 딥링크, snapshot 기반 처리", "active", "validation/captcha resolve는 reviewer 또는 assignee gate 필요")}
                 ${gateRow("DLQ replay / sink retry", "GET /v1/dlq, POST /v1/dlq/{id}/replay", "작업 목록과 복구 모달", "active", "operator 이상 + Idempotency-Key 표시, sink는 별도 idempotency key")}
                 ${gateRow("Gateway policy / site approve", "PUT /gateway/policy, POST /sites/{id}/approve", "AI 모델 정책 drawer, red site 승인 modal", "active", "policy version conflict, admin gate, approver gate, SITE_PROFILE_BLOCKED 분리 표시")}
               </tbody>
@@ -2508,7 +2508,7 @@
                   ${apiContractRow("실행 취소 modal", "POST /v1/runs/{id}/abort", "Idempotency-Key", "completing은 RUN_ALREADY_TERMINAL", "active")}
                   ${apiContractRow("시나리오 검사", "POST /v1/scenarios/{id}/validate", "dry-run body", "ValidationReport V1..V11", "active")}
                   ${apiContractRow("시나리오 승격", "POST /v1/scenarios/{id}/promote", "If-Match + Idempotency-Key", "SCENARIO_VERSION_CONFLICT / AUTHZ_FORBIDDEN", "pending")}
-                  ${apiContractRow("Human resolve", "POST /v1/human-tasks/{id}/resolve", "Idempotency-Key", "H3 + run.resume_requested", "pending")}
+                  ${apiContractRow("Human resolve", "GET /v1/human-tasks?run_id + POST resolve", "Idempotency-Key", "실행 상세에서 연결 태스크로 직접 이동", "active")}
                   ${apiContractRow("DLQ replay", "POST /v1/dlq/{id}/replay", "Idempotency-Key", "W10 restore to new", "pending")}
                   ${apiContractRow("Sink retry", "POST /v1/dlq/{id}/replay?kind=sink", "Idempotency-Key + sink_idempotency_key", "downstream duplicate 차단", "pending")}
                   ${apiContractRow("Site approve", "POST /v1/sites/{id}/approve", "Idempotency-Key", "risk=red 실행 차단 해소", "pending")}
@@ -2532,15 +2532,14 @@
             </div>
           </section>
           <section class="panel">
-            ${panelHeader("남은 BLOCKED 항목", "계약이 부족한 부분은 화면에서 추정하지 않음", [
-              button("file-search", "이벤트 규칙", "file-search", "payloadSchema")
+            ${panelHeader("레포 제어 블록 해소", "오래 멈춘 실행, 사이트/세션 매칭, 사람확인 점프 계약을 반영", [
+              button("file-search", "계약 확인", "file-search", "payloadSchema")
             ])}
             <div class="check-list">
-              ${checkRow("event별 closed payload body", "v1 closed-empty body · 새 필드는 versioned schema change", "active")}
-              ${checkRow("reserved handler return/input", "@challenge/@human_task handler-call object 고정", "active")}
-              ${checkRow("loop body/exit target", "body_target/exit_target/max_iterations 검증", "active")}
-              ${checkRow("payload retention class", "retention_until/deleted_at/legal_hold 적용", "active")}
-              ${checkRow("connector target FK", "(tenant_id, connector_id, target_id) 고정", "active")}
+              ${checkRow("오래 멈춘 실행 판정", "RunItem/RunDetail.updated_at 기준으로 stale 여부 표시", "active")}
+              ${checkRow("실행 전 사이트/세션 매칭", "SiteItem.url_pattern + session_ready/session_expires_at으로 준비 상태 표시", "active")}
+              ${checkRow("사람확인 업무 직접 점프", "GET /v1/human-tasks?run_id 필터 후 ht 딥링크로 이동", "active")}
+              ${checkRow("외부 배포 결정", "staging 배포 타깃과 SecretStore 프로비저닝은 release 체크리스트에서 추적", "pending")}
             </div>
           </section>
         </div>`,

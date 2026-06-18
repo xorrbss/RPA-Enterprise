@@ -16,10 +16,11 @@
  * routes dom primitives through the gateway. Live success therefore requires a real Chrome binary at that
  * path — absent it, bind() loud-throws per run (fail-closed). Enumerated remaining backlog (see
  * product-open-candidate-report.md / staging-deploy-runbook.md):
- *   - SinkDeliveryPort, SessionRestorer, RunAbortDrainer, a real SecretStore-backed SignedCommandRegistry (a
- *     fail-closed deny-all placeholder is used here — BLOCKED on a contract decision: no signed_command resolve
- *     authorization for the api identity + undefined registry signature algorithm), and a recurring sweeper
- *     scheduler. JWT verification now supports RS256 via remote JWKS (set JWKS_URL) or the HS256 default.
+ *   - SinkDeliveryPort, SessionRestorer, RunAbortDrainer, and a recurring sweeper scheduler. The API composes a
+ *     SecretStore-backed SignedCommandRegistry when SIGNED_COMMAND_REGISTRY_MODE=vault; explicit
+ *     SIGNED_COMMAND_REGISTRY_MODE=deny_all is available for fail-closed deployments. JWT verification now
+ *     supports RS256 via remote JWKS (set JWKS_URL) or the HS256 default. Browser session reuse is wired with
+ *     AES-256-GCM using the runtime-worker `browser_session` SecretRef data key.
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
 import http from "node:http";
@@ -29,9 +30,17 @@ import type { FastifyInstance } from "fastify";
 
 import { hmacJwtVerifier, jwksRs256Verifier, JwtAuthenticationBoundary } from "./api/auth";
 import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
+import { createLlmScenarioPlanner, LlmGatewayScenarioPlannerClient } from "./api/llm-scenario-planner";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
+import { BufferedScenarioGenerationArtifactSink } from "./api/scenario-generation-artifacts";
+import {
+  PgScenarioGenerationLlmCallIdempotencyStore,
+  type ScenarioGenerationLlmCallCleanup,
+} from "./api/scenario-generation-llm-call-idempotency-store";
+import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { buildServer } from "./api/server";
+import { DenyAllSignedCommandRegistry, SecretStoreSignedCommandRegistry } from "./api/signed-command-registry";
 import {
   loadApiConfig,
   loadApiSessionEncryption,
@@ -39,46 +48,41 @@ import {
   loadCommonConfig,
   loadGatewayConfig,
   loadRunMode,
+  loadScenarioGenerationLlmV1Config,
   loadWorkerConfig,
   type ApiConfig,
   type CommonConfig,
+  type ScenarioGenerationLlmV1Config,
 } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
+import { ArtifactRedactionContentTransform } from "./artifacts/artifact-redaction-content-transform";
+import { FsArtifactRedactor, FsArtifactRetentionStore } from "./artifacts/fs-artifact-lifecycle-store";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
 import { SafeCapabilityGate } from "./gateway/capability-gate";
 import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "./gateway/codex-sse-transport";
 import { LlmGateway } from "./gateway/llm-gateway";
 import { FsObjectStore, PgGatewayArtifactSink } from "./gateway/pg-gateway-artifact-sink";
+import { PgLlmCallIdempotencyStore } from "./gateway/pg-llm-call-idempotency-store";
 import { StagehandBrowserSessionProvider } from "./executor/browser-session-provider";
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
+import { PgBrowserSessionStore, buildAesGcmSessionEncryptor, type BrowserSessionStore } from "./runtime/browser-session-store";
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
-import { PgBrowserSessionStore, buildKmsSessionEncryptor, type BrowserSessionStore } from "./runtime/browser-session-store";
-import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
+import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runtime/visual-evidence";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
-import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
 import { buildTaskList } from "./worker/graphile-runner";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import type { SecretRef } from "../../ts/core-types";
-import type { AuthenticatedPrincipal, PrincipalId, SecretStoreBoundary, TenantId } from "../../ts/security-middleware-contract";
-import type { SignedCommandRegistry, SignedCommandRegistryReadResult } from "../../ts/security-middleware-contract";
-
-/**
- * Fail-closed deny-all SignedCommandRegistry placeholder. A real SecretStore-backed registry
- * (rpa/<env>/api/signed_command/registry-verify) is backlog; until then the scenario signed-command compile
- * path resolves to an EMPTY allow-list (every signed command denied) — never silently "available with unknown".
- */
-class DenyAllSignedCommandRegistry implements SignedCommandRegistry {
-  async listAllowedCommandRefs(): Promise<SignedCommandRegistryReadResult> {
-    return {
-      kind: "available",
-      snapshot: { sourceRef: "secret://unconfigured/signed-command-registry" as SecretRef, commands: [] },
-    };
-  }
-}
+import {
+  ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  type ArtifactRealObjectStorePortBinding,
+} from "../../ts/runtime-contract";
+import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
+import type { ScenarioPlanner } from "./api/scenario-generation-types";
+import type { ScenarioGenerationArtifactBuffer } from "./api/scenario-generation-artifacts";
 
 /** Unauthenticated health probe server (separate http server — bypasses the Fastify auth/RBAC chain). */
 function startHealthServer(pool: PgPool, port: number): http.Server {
@@ -125,10 +129,70 @@ function buildJwtVerifier(jwt: ApiConfig["jwt"]) {
   return hmacJwtVerifier(new TextEncoder().encode(jwt.secret));
 }
 
+function buildSignedCommandRegistry(cfg: ApiConfig["signedCommandRegistry"]): SignedCommandRegistry {
+  if (cfg.mode === "deny_all") {
+    return new DenyAllSignedCommandRegistry();
+  }
+  const store = new VaultSecretStore({
+    baseUrl: cfg.vaultApi.addr,
+    mount: cfg.vaultApi.mount,
+    kvApiVersion: 2,
+    appRole: { roleId: cfg.vaultApi.roleId, secretId: cfg.vaultApi.secretId },
+  });
+  return new SecretStoreSignedCommandRegistry(store, cfg.sourceRef as SecretRef);
+}
+
+interface ScenarioGenerationPlannerBinding {
+  readonly planner: ScenarioPlanner;
+  readonly artifacts: ScenarioGenerationArtifactBuffer;
+  readonly llmCalls: ScenarioGenerationLlmCallCleanup;
+}
+
+function buildScenarioGenerationPlannerBinding(pool: PgPool, cfg: ScenarioGenerationLlmV1Config): ScenarioGenerationPlannerBinding {
+  const gw = cfg.gateway;
+  const artifactSink = new BufferedScenarioGenerationArtifactSink(new FsObjectStore(gw.artifactDir), {
+    retentionDays: gw.artifactRetentionDays,
+  });
+  const llmCalls = new PgScenarioGenerationLlmCallIdempotencyStore(pool, {
+    retentionDays: gw.artifactRetentionDays,
+  });
+  const gateway = new LlmGateway({
+    primary: new CodexSseAdapter(
+      new FetchCodexSseTransport({ baseUrl: gw.codexBaseUrl, apiKey: gw.codexApiKey, model: gw.codexModel }),
+      {
+        model: gw.codexModel,
+        maxContextTokens: gw.codexMaxContextTokens,
+        idleTimeoutMs: gw.idleTimeoutMs,
+        wallTimeoutMs: gw.wallTimeoutMs,
+        pricePer1kInputUsd: gw.pricePer1kInputUsd,
+        pricePer1kOutputUsd: gw.pricePer1kOutputUsd,
+      },
+    ),
+    gate: new SafeCapabilityGate(),
+    validator: new AjvStructuredOutputValidator(),
+    sink: artifactSink,
+    idempotency: llmCalls,
+    redactionBoundary: new DeterministicGatewayRedactionBoundary(),
+    config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
+  });
+  return {
+    planner: createLlmScenarioPlanner(
+      new LlmGatewayScenarioPlannerClient(gateway, {
+        model: gw.codexModel,
+        promptTemplateVersion: cfg.promptTemplateVersion,
+        budget: gw.budget,
+      }),
+    ),
+    artifacts: artifactSink,
+    llmCalls,
+  };
+}
+
 async function startApi(pool: PgPool, common: CommonConfig): Promise<FastifyInstance> {
-  const cfg = loadApiConfig();
-  // 세션 캡처 봉투암호화 스토어 — KEK(api/browser_session) 프로비저닝 시에만 활성. 미설정 → undefined → 엔드포인트 미등록
-  //   (fail-closed, 평문 at-rest 금지). KmsEnvelopeSessionEncryptor 가 KEK 를 1회 해소(buildKmsSessionEncryptor).
+  const cfg = loadApiConfig(common);
+  const scenarioGenerationLlmV1 = loadScenarioGenerationLlmV1Config();
+  const scenarioPlanner = scenarioGenerationLlmV1 !== undefined ? buildScenarioGenerationPlannerBinding(pool, scenarioGenerationLlmV1) : undefined;
+  // 세션 캡처 봉투암호화 스토어 — KEK(api/browser_session) 프로비저닝 시에만 활성(미설정 → undefined → 엔드포인트 미등록, fail-closed).
   const sessionStore = await buildApiSessionStore(pool, common);
   const api = buildServer({
     pool,
@@ -136,36 +200,35 @@ async function startApi(pool: PgPool, common: CommonConfig): Promise<FastifyInst
     rbac: new RoleMatrixRbacMiddleware(),
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: new PgGraphileRunEnqueuer(),
-    signedCommandRegistry: new DenyAllSignedCommandRegistry(),
+    signedCommandRegistry: buildSignedCommandRegistry(cfg.signedCommandRegistry),
+    scenarioGenerationCapabilities: { videoRecording: cfg.videoRecordingEnabled },
+    ...(scenarioPlanner !== undefined
+      ? {
+          scenarioGenerationPlanner: scenarioPlanner.planner,
+          scenarioGenerationArtifacts: scenarioPlanner.artifacts,
+          scenarioGenerationLlmCalls: scenarioPlanner.llmCalls,
+        }
+      : {}),
     security: { corsOrigins: cfg.corsOrigins, hsts: cfg.hsts },
-    // artifactStore/securityAudit intentionally unset — artifact body-read stays unregistered until an
-    // object_store-authorized credential is provisioned for the API identity (deploy-time, see backlog).
+    ...(cfg.artifactDir !== undefined
+      ? {
+          artifactStore: new FsObjectStore(cfg.artifactDir),
+          securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
+        }
+      : {}),
     ...(sessionStore !== undefined ? { sessionStore } : {}),
   });
   await api.listen({ host: "0.0.0.0", port: cfg.port });
-  console.log(JSON.stringify({ at: "main", msg: "control-plane API listening", port: cfg.port, jwtMode: cfg.jwt.mode, sessionCapture: sessionStore !== undefined }));
+  console.log(JSON.stringify({
+    at: "main",
+    msg: "control-plane API listening",
+    port: cfg.port,
+    jwtMode: cfg.jwt.mode,
+    signedCommandRegistryMode: cfg.signedCommandRegistry.mode,
+    scenarioGenerationLlmV1Enabled: scenarioGenerationLlmV1 !== undefined,
+    sessionCapture: sessionStore !== undefined,
+  }));
   return api;
-}
-
-/**
- * 세션 캡처 봉투암호화 스토어를 조립한다(POST .../session/capture/complete 가 이걸로 등록). KEK SecretRef
- * (rpa/<env>/api/browser_session/active) 가 프로비저닝됐을 때만(VAULT_API_ROLE_ID 게이트) 활성 — 미설정이면 undefined →
- * 엔드포인트 미등록(fail-closed, 평문 at-rest 금지). KEK 는 api AppRole VaultSecretStore 에서 1회 해소(resume-token 패턴).
- */
-async function buildApiSessionStore(pool: PgPool, common: CommonConfig): Promise<BrowserSessionStore | undefined> {
-  const sessionEnc = loadApiSessionEncryption(common);
-  if (sessionEnc === undefined) {
-    console.log(JSON.stringify({ at: "main", msg: "session capture unregistered — KEK (api/browser_session) not provisioned, fail-closed" }));
-    return undefined;
-  }
-  const apiStore = new VaultSecretStore({
-    baseUrl: sessionEnc.vault.addr,
-    mount: sessionEnc.vault.mount,
-    kvApiVersion: 2,
-    appRole: { roleId: sessionEnc.vault.roleId, secretId: sessionEnc.vault.secretId },
-  });
-  const encryptor = await buildKmsSessionEncryptor(apiStore, sessionEnc.kekRef as SecretRef);
-  return new PgBrowserSessionStore({ pool, encryptor });
 }
 
 /**
@@ -180,18 +243,7 @@ async function buildApiSessionStore(pool: PgPool, common: CommonConfig): Promise
  * structured-output safe-path (extract scenarios → prompt-schema injection + ajv validation) is implemented
  * (gateway jsonMode=false path), so a real Chrome run drives end-to-end.
  */
-// runtime-worker executorPrincipal 템플릿 — 자격증명 fill 권한 매트릭스(release-decisions D8-A12: runtime_identity=
-//   runtime-worker → purpose 'executor'). tenantId 는 placeholder(nil)이며 팩토리가 run.tenantId 로 per-run override
-//   (secret.resolve 감사 row 테넌트 정합; resolve 권한 자체는 identity 매트릭스라 tenant 무관). subjectId=고정 worker 서비스-계정.
-const WORKER_EXECUTOR_PRINCIPAL: AuthenticatedPrincipal = {
-  subjectId: "9a000000-0000-0000-0000-0000000000df" as PrincipalId,
-  tenantId: "00000000-0000-0000-0000-000000000000" as TenantId,
-  roles: ["admin"],
-  source: "jwt",
-  claims: { runtime_identity: "runtime-worker" },
-};
-
-function buildExecutorFactory(pool: PgPool, secrets?: SecretStoreBoundary): RunExecutorFactory {
+function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
   const gw = loadGatewayConfig();
   const gateway = new LlmGateway({
     primary: new CodexSseAdapter(
@@ -210,27 +262,37 @@ function buildExecutorFactory(pool: PgPool, secrets?: SecretStoreBoundary): RunE
     sink: new PgGatewayArtifactSink(pool, new FsObjectStore(gw.artifactDir), {
       retentionDays: gw.artifactRetentionDays,
     }),
+    idempotency: new PgLlmCallIdempotencyStore(pool),
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
     config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
   });
-  return createDomUtilityExecutorFactory(
-    gateway,
-    { model: gw.codexModel, promptTemplateVersion: gw.promptTemplateVersion, budget: gw.budget },
-    {
-      // extract.rowAnchor 로 결정형 강화한 결재 행을 인박스용 typed artifact(approval_inbox)로 영속 → prod 인박스 소스.
-      //   (break-it 갭 종결: dev 전용이던 강화-영속을 prod 경로로). PgGatewayArtifactSink 라 pending 으로 기록되고
-      //   artifact_redaction 잡이 §4 redaction 후 readable(인박스 RBAC gate). cache(ActionPlanCache)는 비용/staleness
-      //   운영 정책이라 미주입(bypass) 유지 — 정책 확정 후 별도 주입. secrets/principal(자격증명 fill)은 per-run 테넌트
-      //   배선(P2)으로 분리(세션 재사용 경로는 fill 미사용이라 본 결재 자동화엔 불요).
-      extractArtifactSink: new PgGatewayArtifactSink(pool, new FsObjectStore(gw.artifactDir), {
-        type: "approval_inbox",
-        retentionDays: gw.artifactRetentionDays,
-      }),
-      // 자격증명 fill(secretRef → SecretStore → CDP fill, LLM 미경유): VaultSecretStoreBoundary 주입 시 활성(cold 로그인
-      //   시나리오의 비밀번호 fill). 세션 재사용 결재 경로는 fill 미사용. principal.tenantId 는 팩토리가 run 단위 override.
-      ...(secrets !== undefined ? { secrets, executorPrincipal: WORKER_EXECUTOR_PRINCIPAL } : {}),
-    },
-  );
+  return createDomUtilityExecutorFactory(gateway, {
+    model: gw.codexModel,
+    promptTemplateVersion: gw.promptTemplateVersion,
+    budget: gw.budget,
+  });
+}
+
+/**
+ * 세션 캡처 봉투암호화 스토어를 조립한다(POST .../session/capture/complete 가 이걸로 등록). KEK SecretRef
+ * (rpa/<env>/api/browser_session/active) 가 프로비저닝됐을 때만(VAULT_API_ROLE_ID 게이트) 활성 — 미설정이면 undefined →
+ * 엔드포인트 미등록(fail-closed, 평문 at-rest 금지). KEK 는 api AppRole VaultSecretStore 에서 1회 해소. **워커 복원과 동일
+ * {kid,key} 를 각자 namespace 에 seed 하면** API 가 암호화한 세션을 워커가 복호화한다(cross-identity round-trip).
+ */
+async function buildApiSessionStore(pool: PgPool, common: CommonConfig): Promise<BrowserSessionStore | undefined> {
+  const sessionEnc = loadApiSessionEncryption(common);
+  if (sessionEnc === undefined) {
+    console.log(JSON.stringify({ at: "main", msg: "session capture unregistered — KEK (api/browser_session) not provisioned, fail-closed" }));
+    return undefined;
+  }
+  const apiStore = new VaultSecretStore({
+    baseUrl: sessionEnc.vault.addr,
+    mount: sessionEnc.vault.mount,
+    kvApiVersion: 2,
+    appRole: { roleId: sessionEnc.vault.roleId, secretId: sessionEnc.vault.secretId },
+  });
+  const encryptor = await buildAesGcmSessionEncryptor(apiStore, sessionEnc.kekRef as SecretRef);
+  return new PgBrowserSessionStore({ pool, encryptor });
 }
 
 async function startWorker(pool: PgPool, connectionString: string): Promise<Runner> {
@@ -244,6 +306,8 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
     kvApiVersion: 2,
     appRole: { roleId: cfg.vaultRuntimeWorker.roleId, secretId: cfg.vaultRuntimeWorker.secretId },
   });
+  // 워커 세션 복원/캡처 암호화기 — API capture/complete 와 **동일 {kid,key} 빌더**(동일 키 seed 시 cross-identity round-trip).
+  const browserSessionEncryptor = await buildAesGcmSessionEncryptor(runtimeWorkerStore, cfg.browserSessionKeyRef as SecretRef);
 
   // Worker ports: the real adapters whose deps exist now. browserLeasePlanResolver resolves a run's
   // {site_profile, browser_identity, network_policy} from the scenario's ir.target (Pg, RLS-scoped).
@@ -253,20 +317,51 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
   // CHROME_EXECUTABLE_PATH (deploy-provisioned) and loud-throws if it is absent (fail-closed, no silent
   // claim-only). Still-unwired drive-path ports (sink delivery, session restorer, abort drainer) loud-throw
   // per job kind when needed, see SCOPE above.
-  // 자격증명 fill 경계 — runtimeWorkerStore(Vault) + durable 감사(secret.resolve failClosed). 실행기에 주입해
-  //   cold 로그인 시나리오의 비밀번호 fill(secretRef → SecretStore → CDP fill, LLM 미경유)을 prod 에서 활성화한다.
-  const executorSecrets = new VaultSecretStoreBoundary({ store: runtimeWorkerStore, audit: new PgDurableSecurityAuditDecisionWriter(pool) });
   const browser = loadBrowserConfig();
+  const gw = loadGatewayConfig();
+  const artifactStore = new FsObjectStore(gw.artifactDir);
+  const artifactObjectBinding: ArtifactRealObjectStorePortBinding = {
+    kind: "real_object_store",
+    backendAlias: cfg.artifactObjectStoreBackendAlias,
+    credentialRef: cfg.artifactObjectStoreRef as SecretRef,
+    evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  };
+  const visualEvidenceVideoRecorderFactory: PgRuntimeWorkerOptions["visualEvidenceVideoRecorderFactory"] =
+    cfg.videoRecordingEnabled
+      ? (provider) => {
+          if (cfg.videoFfmpegPath === undefined) {
+            throw new Error("VISUAL_EVIDENCE_FFMPEG_PATH is required when VISUAL_EVIDENCE_VIDEO_ENABLED is true");
+          }
+          return new PgScreenshotFrameVideoRecorder(pool, artifactStore, provider, {
+            retentionDays: gw.artifactRetentionDays,
+            ffmpegPath: cfg.videoFfmpegPath,
+            frameIntervalMs: cfg.videoFrameIntervalMs,
+            frameRate: cfg.videoFrameRate,
+          });
+        }
+      : undefined;
   const workerOptions: PgRuntimeWorkerOptions = {
     suspensionPort: new PgChallengeSuspensionPort(),
     resumeTokenCodec: new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef),
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
-    executorFactory: buildExecutorFactory(pool, executorSecrets),
+    executorFactory: buildExecutorFactory(pool),
     browserSessionProvider: new StagehandBrowserSessionProvider({
       chromeExecutablePath: browser.chromeExecutablePath,
       headless: browser.headless,
       ...(browser.downloadRootDir !== undefined ? { downloadRootDir: browser.downloadRootDir } : {}),
     }),
+    sessionStore: new PgBrowserSessionStore({ pool, encryptor: browserSessionEncryptor }),
+    visualEvidenceRecorder: new PgVisualEvidenceRecorder(pool, artifactStore, {
+      retentionDays: gw.artifactRetentionDays,
+    }),
+    ...(visualEvidenceVideoRecorderFactory !== undefined ? { visualEvidenceVideoRecorderFactory } : {}),
+    artifactRedactor: new FsArtifactRedactor(
+      artifactStore,
+      artifactObjectBinding,
+      new ArtifactRedactionContentTransform(),
+    ),
+    artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
+    runtimeJobEnqueuer: new PgGraphileRunEnqueuer(),
   };
 
   const runner = await run({

@@ -48,6 +48,10 @@ import { registerReadRoutes } from "./reads";
 import { registerSiteRoutes } from "./sites";
 import { registerSessionRoutes } from "./sessions";
 import { registerApprovalRoutes } from "./approvals";
+import type { ScenarioPlanner } from "./scenario-generation-types";
+import type { ScenarioGenerationArtifactBuffer } from "./scenario-generation-artifacts";
+import type { ScenarioGenerationLlmCallCleanup } from "./scenario-generation-llm-call-idempotency-store";
+import { registerScenarioGenerationRoutes } from "./scenario-generations";
 import type { RunEnqueuer } from "./run-queue";
 import { registerScenarioRoutes } from "./scenarios";
 import { registerSecurity, type SecurityConfig } from "./security";
@@ -75,6 +79,8 @@ const ISO_8601_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9
 export interface ArtifactObjectReader {
   /** object bytes 반환. **부재 시 null**(라우트가 fail-closed 404 처리 — 가시 metadata인데 object 부재=무결성 이슈). */
   get(objectRef: ObjectRef): Promise<string | null>;
+  /** object raw bytes. Binary artifact routes use this path to avoid lossy UTF-8 decoding. */
+  getBytes(objectRef: ObjectRef): Promise<Uint8Array | null>;
 }
 
 export interface ApiServerDeps {
@@ -88,6 +94,15 @@ export interface ApiServerDeps {
   security?: SecurityConfig;
   /** artifact 본문 read 경계(선택). 미지정 시 GET /v1/artifacts/{id} 미등록(D8-A1 — 실 object-store 바인딩 deploy-time). */
   artifactStore?: ArtifactObjectReader;
+  scenarioGenerationCapabilities?: {
+    readonly videoRecording: boolean;
+  };
+  /** Optional non-default natural-language planner implementation. deterministic_mvp remains the fail-closed default. */
+  scenarioGenerationPlanner?: ScenarioPlanner;
+  /** Optional buffer for generation-scoped planner artifacts. Flushes only after the generation ledger row exists. */
+  scenarioGenerationArtifacts?: ScenarioGenerationArtifactBuffer;
+  /** Optional generation-scoped LLM call ledger cleanup for failed planning/save attempts. */
+  scenarioGenerationLlmCalls?: ScenarioGenerationLlmCallCleanup;
   /**
    * security-contracts §10 audit boundary writer. `artifact.read`(artifact 본문 disclosure)는 본문 반환 전
    * 이 boundary에 fail-closed append해야 한다(§10:147-148). artifactStore가 주입되면 필수 —
@@ -116,6 +131,7 @@ interface RunRow {
   attempts: number;
   as_of: Date | null;
   failure_reason: unknown;
+  updated_at: Date;
 }
 
 export function buildServer(deps: ApiServerDeps): FastifyInstance {
@@ -191,7 +207,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     }
     const run = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const result = await client.query<RunRow>(
-        `SELECT id, status, worker_id, attempts, as_of, failure_reason FROM runs WHERE id = $1::uuid`,
+        `SELECT id, status, worker_id, attempts, as_of, failure_reason, updated_at FROM runs WHERE id = $1::uuid`,
         [runId],
       );
       return result.rows[0] ?? null;
@@ -207,6 +223,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       attempts: run.attempts,
       as_of: run.as_of,
       failure_reason: normalizeFailureReason(run.failure_reason),
+      updated_at: run.updated_at.toISOString(),
     };
   });
 
@@ -230,6 +247,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     },
   );
 
+  registerScenarioGenerationRoutes(app, deps);
   registerScenarioRoutes(app, deps);
   registerHumanTaskRoutes(app, deps);
   registerDlqRoutes(app, deps);

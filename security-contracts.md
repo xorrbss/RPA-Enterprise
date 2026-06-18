@@ -27,9 +27,15 @@ type SignedCommand = {
   allowed_args: Record<string, { pattern: string }>;  // placeholder별 허용 정규식(자유 인자 금지)
   signature: string;          // 명령 정의에 대한 서명(배포 키로 검증)
   kid: string;                // 서명 검증 키 식별자(§5)
+  verification_key_ref: SecretRef; // 서명 검증 키 material은 SecretStore/KMS 뒤에 둔다.
   side_effect_kind: "read_only" | "create" | "update" | "delete" | "upload";
 };
 ```
+
+운영 소스:
+- API composition root는 `SIGNED_COMMAND_REGISTRY_MODE=vault`일 때 SecretStore에서 registry JSON을 읽는다. 기본 경로는 `rpa/<env>/api/signed_command/registry`이며, 배포별 override는 `SIGNED_COMMAND_REGISTRY_REF`로만 허용한다.
+- `SIGNED_COMMAND_REGISTRY_MODE=deny_all`은 명시적인 fail-closed 모드다. 등록 명령 목록을 빈 배열로 제공하므로 shell `cmd_ref`는 모두 저장/승격에서 거부된다.
+- registry SecretStore read 실패 또는 JSON 구조 불일치는 `unavailable`로 취급한다. shell action이 필요한 IR은 `shell_cmd_registry_unavailable`로 거부되어야 하며, unknown registry를 통과로 해석하지 않는다.
 
 검증 시점(2단계):
 - **컴파일(저장)**: `cmd_ref`가 registry에 존재해야 한다. 미등록 → 저장 거부(`IR_SCHEMA_INVALID`, reason=`shell_cmd_unregistered`).
@@ -93,6 +99,8 @@ type NetworkPolicy = {
 };
 ```
 - **enforce 지점**: 브라우저 navigation + 모든 outbound request 가로채기. allowed_domains 밖 이동/요청 → 차단 + `DOMAIN_POLICY_VIOLATION`(security, 침해 의심 알림).
+- 구현 상태(2026-06-19): worker run-drive/resume 경로는 `network_policies.allowed_domains`를 `RunContext.networkAllowedDomains`로 주입하고, `UtilityExecutor.navigate`는 세션 접근 전에 허용 도메인 밖 URL을 `DOMAIN_POLICY_VIOLATION`/`failed_security`로 차단한다.
+- Deferred implementation note: 모든 outbound request 가로채기는 CDP `Fetch`/`Network` 이벤트 구독 또는 브라우저 라우팅 포트 증분에서 다룬다. 현재 `CdpSession`은 send-only 포트라 request interception 생명주기를 표현하지 못한다.
 - `@challenge`/login 우회 중에도 정책 유지. 정책은 site profile과 독립적으로 run에 바인딩(Phase 2 site_profiles와 FK 연계).
 
 ---

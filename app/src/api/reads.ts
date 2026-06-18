@@ -47,6 +47,7 @@ interface RunListRow {
   workitem_id: string | null;
   failure_reason: unknown;
   created_at: Date;
+  updated_at: Date;
 }
 
 interface HumanTaskRow {
@@ -108,14 +109,23 @@ interface SiteRow {
   risk: string;
   approved: boolean;
   circuit_state: string;
+  url_pattern: string;
   // 운영자-보조 세션 캡처 가능 여부 — page_state_selectors.loginUrl 설정 사이트만 '세션 등록' 노출(미설정 사이트의 412 클릭 회피).
   login_capable: boolean;
+  session_ready: boolean;
+  session_expires_at: Date | null;
+  default_browser_identity_id: string | null;
+  default_network_policy_id: string | null;
   created_at: Date;
 }
 
 interface ArtifactRow {
   id: string;
   type: string | null;
+  media_type: string | null;
+  filename: string | null;
+  byte_size: string | null;
+  duration_ms: number | null;
   sha256: string | null;
   object_ref: string;
   redaction_status: string;
@@ -158,6 +168,10 @@ function normalizeFailureReason(value: unknown): { code: string; message: string
 interface RunArtifactRow {
   id: string;
   type: string;
+  media_type: string | null;
+  filename: string | null;
+  byte_size: string | null;
+  duration_ms: number | null;
   redaction_status: string;
   retention_until: Date | null;
   legal_hold: boolean;
@@ -175,7 +189,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<RunListRow>(
-        `SELECT id, status, scenario_version_id, worker_id, attempts, as_of, workitem_id, failure_reason, created_at
+        `SELECT id, status, scenario_version_id, worker_id, attempts, as_of, workitem_id, failure_reason, created_at, updated_at
            FROM runs
           WHERE tenant_id = $1::uuid
             AND ($2::text IS NULL OR status = $2)
@@ -209,6 +223,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           as_of: r.as_of !== null ? r.as_of.toISOString() : null,
           workitem_id: r.workitem_id,
           failure_reason: normalizeFailureReason(r.failure_reason),
+          updated_at: r.updated_at.toISOString(),
           // runs에 진행-노드 컬럼 없음(계약 미약속) → null. 과다 렌더 금지.
           current_node: null,
         }),
@@ -298,7 +313,8 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<RunArtifactRow>(
-          `SELECT id, type, redaction_status, retention_until, legal_hold, created_at
+          `SELECT id, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
+                  redaction_status, retention_until, legal_hold, created_at
              FROM artifacts
             WHERE tenant_id = $1::uuid AND run_id = $2::uuid
               AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
@@ -317,6 +333,59 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           (r) => ({
             artifact_id: r.id,
             type: r.type,
+            media_type: r.media_type,
+            filename: r.filename,
+            byte_size: r.byte_size !== null ? Number(r.byte_size) : null,
+            duration_ms: r.duration_ms,
+            redaction_status: r.redaction_status,
+            retention_until: r.retention_until !== null ? r.retention_until.toISOString() : null,
+            legal_hold: r.legal_hold,
+            created_at: r.created_at.toISOString(),
+          }),
+        ),
+      );
+    },
+  );
+
+  // GET /v1/scenario-generations/{generation_id}/artifacts — run 생성 전 planner artifact 목록.
+  // run artifact 목록과 같은 disclosure 모델: metadata-only, 본문/blob는 /v1/artifacts/{id} 감사 게이트로 조회.
+  app.get<{ Params: { id: string } }>(
+    "/v1/scenario-generations/:id/artifacts",
+    { config: { rbacAction: "artifact.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const generationId = request.params.id;
+      if (!UUID_RE.test(generationId)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const { limit, cursor } = parsePageParams(request.query as Record<string, unknown>);
+
+      const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const result = await c.query<RunArtifactRow>(
+          `SELECT id, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
+                  redaction_status, retention_until, legal_hold, created_at
+             FROM artifacts
+            WHERE tenant_id = $1::uuid AND generation_id = $2::uuid
+              AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
+            ORDER BY created_at DESC, id DESC
+            LIMIT $5`,
+          [principal.tenantId, generationId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+        );
+        return result.rows;
+      });
+
+      reply.code(200).send(
+        paginate(
+          rows,
+          limit,
+          (r) => ({ createdAt: r.created_at, id: r.id }),
+          (r) => ({
+            artifact_id: r.id,
+            type: r.type,
+            media_type: r.media_type,
+            filename: r.filename,
+            byte_size: r.byte_size !== null ? Number(r.byte_size) : null,
+            duration_ms: r.duration_ms,
             redaction_status: r.redaction_status,
             retention_until: r.retention_until !== null ? r.retention_until.toISOString() : null,
             legal_hold: r.legal_hold,
@@ -335,6 +404,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     const status = humanTaskStateFilter(query.status);
     const kind = humanTaskKindFilter(query.kind);
     const assignee = uuidFilter(query.assignee, "invalid_assignee");
+    const runId = uuidFilter(query.run_id, "invalid_run_id");
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<HumanTaskRow>(
@@ -344,14 +414,16 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
             AND ($2::text IS NULL OR state = $2)
             AND ($3::text IS NULL OR kind = $3)
             AND ($4::uuid IS NULL OR assignee = $4::uuid)
-            AND ($5::timestamptz IS NULL OR (created_at, id) < ($5::timestamptz, $6::uuid))
+            AND ($5::uuid IS NULL OR run_id = $5::uuid)
+            AND ($6::timestamptz IS NULL OR (created_at, id) < ($6::timestamptz, $7::uuid))
           ORDER BY created_at DESC, id DESC
-          LIMIT $7`,
+          LIMIT $8`,
         [
           principal.tenantId,
           status ?? null,
           kind ?? null,
           assignee ?? null,
+          runId ?? null,
           cursor?.createdAt ?? null,
           cursor?.id ?? null,
           limit + 1,
@@ -612,13 +684,41 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<SiteRow>(
-        `SELECT id, name, risk, approved, circuit_state,
-                (page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable, created_at
-           FROM site_profiles
-          WHERE tenant_id = $1::uuid
-            AND ($2::text IS NULL OR risk = $2)
-            AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
-          ORDER BY created_at DESC, id DESC
+        `SELECT s.id, s.name, s.risk, s.approved, s.circuit_state, s.url_pattern,
+                (s.page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable,
+                EXISTS (
+                  SELECT 1 FROM browser_sessions bs
+                   WHERE bs.tenant_id = s.tenant_id
+                     AND bs.site_profile_id = s.id
+                     AND (bs.expires_at IS NULL OR bs.expires_at > now())
+                ) AS session_ready,
+                (
+                  SELECT max(bs.expires_at)
+                    FROM browser_sessions bs
+                   WHERE bs.tenant_id = s.tenant_id
+                     AND bs.site_profile_id = s.id
+                ) AS session_expires_at,
+                (
+                  SELECT bi.id::text
+                    FROM browser_identities bi
+                   WHERE bi.tenant_id = s.tenant_id
+                     AND bi.site_profile_id = s.id
+                   ORDER BY bi.version DESC, bi.created_at DESC, bi.id DESC
+                   LIMIT 1
+                ) AS default_browser_identity_id,
+                (
+                  SELECT np.id::text
+                    FROM network_policies np
+                   WHERE np.tenant_id = s.tenant_id
+                   ORDER BY np.created_at DESC, np.id DESC
+                   LIMIT 1
+                ) AS default_network_policy_id,
+                s.created_at
+           FROM site_profiles s
+          WHERE s.tenant_id = $1::uuid
+            AND ($2::text IS NULL OR s.risk = $2)
+            AND ($3::timestamptz IS NULL OR (s.created_at, s.id) < ($3::timestamptz, $4::uuid))
+          ORDER BY s.created_at DESC, s.id DESC
           LIMIT $5`,
         [principal.tenantId, risk ?? null, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
       );
@@ -640,9 +740,37 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
       }
       const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<SiteRow>(
-          `SELECT id, name, risk, approved, circuit_state,
-                  (page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable, created_at
-             FROM site_profiles WHERE id = $1::uuid`,
+          `SELECT s.id, s.name, s.risk, s.approved, s.circuit_state, s.url_pattern,
+                  (s.page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable,
+                  EXISTS (
+                    SELECT 1 FROM browser_sessions bs
+                     WHERE bs.tenant_id = s.tenant_id
+                       AND bs.site_profile_id = s.id
+                       AND (bs.expires_at IS NULL OR bs.expires_at > now())
+                  ) AS session_ready,
+                  (
+                    SELECT max(bs.expires_at)
+                      FROM browser_sessions bs
+                     WHERE bs.tenant_id = s.tenant_id
+                       AND bs.site_profile_id = s.id
+                  ) AS session_expires_at,
+                  (
+                    SELECT bi.id::text
+                      FROM browser_identities bi
+                     WHERE bi.tenant_id = s.tenant_id
+                       AND bi.site_profile_id = s.id
+                     ORDER BY bi.version DESC, bi.created_at DESC, bi.id DESC
+                     LIMIT 1
+                  ) AS default_browser_identity_id,
+                  (
+                    SELECT np.id::text
+                      FROM network_policies np
+                     WHERE np.tenant_id = s.tenant_id
+                     ORDER BY np.created_at DESC, np.id DESC
+                     LIMIT 1
+                  ) AS default_network_policy_id,
+                  s.created_at
+             FROM site_profiles s WHERE s.id = $1::uuid`,
           [id],
         );
         return result.rows[0] ?? null;
@@ -668,6 +796,77 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
         "registerReadRoutes: artifactStore requires securityAudit — security-contracts §10은 artifact.read 본문 반환 전 audit boundary append를 강제한다(fail-closed)",
       );
     }
+    app.get<{ Params: { generationId: string; artifactId: string } }>(
+      "/v1/scenario-generations/:generationId/artifacts/:artifactId",
+      { config: { rbacAction: "artifact.read" } },
+      async (request, reply) => {
+        const principal = requirePrincipal(request);
+        const { generationId, artifactId } = request.params;
+        if (!UUID_RE.test(generationId) || !UUID_RE.test(artifactId)) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+          const result = await c.query<ArtifactRow>(
+            `SELECT id, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
+                    sha256, object_ref, redaction_status, retention_until
+               FROM artifacts
+              WHERE tenant_id = $1::uuid AND generation_id = $2::uuid AND id = $3::uuid`,
+            [principal.tenantId, generationId, artifactId],
+          );
+          return result.rows[0] ?? null;
+        });
+        if (row === null) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const content = await artifactStore.get(row.object_ref as ObjectRef);
+        if (content === null) {
+          request.log.error(
+            { artifact_id: row.id, generation_id: generationId, correlation_id: request.correlationId },
+            "scenario generation artifact object bytes missing for visible row — fail-closed 404 (data integrity)",
+          );
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const occurredAt = new Date();
+        await securityAudit.recordDecision(
+          {
+            tenantId: principal.tenantId,
+            actor: { subjectId: principal.subjectId, roles: principal.roles },
+            action: "artifact.read",
+            outcome: "allow",
+            resource: { kind: "artifact", id: row.id },
+            reason: "artifact_body_disclosed",
+            correlationId: request.correlationId as CorrelationId,
+            idempotencyKey: randomUUID() as IdempotencyKey,
+            occurredAt: occurredAt.toISOString() as IsoDateTime,
+            retentionUntil: new Date(
+              occurredAt.getTime() + ARTIFACT_READ_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+            ).toISOString() as IsoDateTime,
+            payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+            failClosed: true,
+            payload: {
+              decision_kind: "artifact.read",
+              artifact_id: row.id,
+              generation_id: generationId,
+              redaction_status: row.redaction_status,
+            },
+          },
+          { artifact_id: row.id, generation_id: generationId },
+        );
+        reply.code(200).send({
+          artifact_id: row.id,
+          generation_id: generationId,
+          type: row.type,
+          media_type: row.media_type,
+          filename: row.filename,
+          byte_size: row.byte_size !== null ? Number(row.byte_size) : null,
+          duration_ms: row.duration_ms,
+          sha256: row.sha256,
+          redaction_status: row.redaction_status,
+          retention_until: row.retention_until !== null ? row.retention_until.toISOString() : null,
+          content,
+        });
+      },
+    );
     app.get<{ Params: { id: string } }>(
       "/v1/artifacts/:id",
       { config: { rbacAction: "artifact.read" } },
@@ -679,7 +878,8 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
         }
         const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
           const result = await c.query<ArtifactRow>(
-            `SELECT id, type, sha256, object_ref, redaction_status, retention_until
+            `SELECT id, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
+                    sha256, object_ref, redaction_status, retention_until
                FROM artifacts WHERE id = $1::uuid`,
             [id],
           );
@@ -733,6 +933,10 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
         reply.code(200).send({
           artifact_id: row.id,
           type: row.type,
+          media_type: row.media_type,
+          filename: row.filename,
+          byte_size: row.byte_size !== null ? Number(row.byte_size) : null,
+          duration_ms: row.duration_ms,
           sha256: row.sha256,
           redaction_status: row.redaction_status,
           retention_until: row.retention_until !== null ? row.retention_until.toISOString() : null,
@@ -740,7 +944,94 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
         });
       },
     );
+    app.get<{ Params: { id: string } }>(
+      "/v1/artifacts/:id/blob",
+      { config: { rbacAction: "artifact.read" } },
+      async (request, reply) => {
+        const principal = requirePrincipal(request);
+        const id = request.params.id;
+        if (!UUID_RE.test(id)) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+          const result = await c.query<ArtifactRow>(
+            `SELECT id, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
+                    sha256, object_ref, redaction_status, retention_until
+               FROM artifacts WHERE id = $1::uuid`,
+            [id],
+          );
+          return result.rows[0] ?? null;
+        });
+        if (row === null) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const bytes = await artifactStore.getBytes(row.object_ref as ObjectRef);
+        if (bytes === null) {
+          request.log.error(
+            { artifact_id: row.id, correlation_id: request.correlationId },
+            "artifact object raw bytes missing for visible row - fail-closed 404 (data integrity)",
+          );
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const occurredAt = new Date();
+        await securityAudit.recordDecision(
+          {
+            tenantId: principal.tenantId,
+            actor: { subjectId: principal.subjectId, roles: principal.roles },
+            action: "artifact.read",
+            outcome: "allow",
+            resource: { kind: "artifact", id: row.id },
+            reason: "artifact_blob_disclosed",
+            correlationId: request.correlationId as CorrelationId,
+            idempotencyKey: randomUUID() as IdempotencyKey,
+            occurredAt: occurredAt.toISOString() as IsoDateTime,
+            retentionUntil: new Date(
+              occurredAt.getTime() + ARTIFACT_READ_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+            ).toISOString() as IsoDateTime,
+            payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+            failClosed: true,
+            payload: {
+              decision_kind: "artifact.read",
+              delivery: "blob",
+              artifact_id: row.id,
+              redaction_status: row.redaction_status,
+            },
+          },
+          { artifact_id: row.id },
+        );
+        const body = Buffer.from(bytes);
+        reply
+          .code(200)
+          .type(safeMediaType(row.media_type))
+          .header("Cache-Control", "no-store")
+          .header("Content-Length", String(body.byteLength))
+          .header("Content-Disposition", contentDisposition(row.filename, row.id))
+          .send(body);
+      },
+    );
   }
+}
+
+function safeMediaType(value: string | null): string {
+  if (value === null) return "application/octet-stream";
+  const trimmed = value.trim();
+  if (/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=[A-Za-z0-9!#$&^_.+-]+)*$/.test(trimmed)) {
+    return trimmed;
+  }
+  return "application/octet-stream";
+}
+
+function contentDisposition(filename: string | null, artifactId: string): string {
+  const fallback = `artifact-${artifactId}.bin`;
+  const safeName = sanitizeFilename(filename) ?? fallback;
+  return `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`;
+}
+
+function sanitizeFilename(filename: string | null): string | null {
+  if (filename === null) return null;
+  const trimmed = filename.trim().replace(/[\\/:*?"<>|\x00-\x1f\x7f]+/g, "_");
+  if (trimmed.length === 0 || trimmed === "." || trimmed === "..") return null;
+  return trimmed.slice(0, 180);
 }
 
 /** site risk 필터(green|amber|red). 무효→422. */
@@ -766,10 +1057,15 @@ function mapSite(r: SiteRow): Record<string, unknown> {
   return {
     site_profile_id: r.id,
     name: r.name,
+    url_pattern: r.url_pattern,
     risk: r.risk,
     approval_status: r.approved ? "approved" : "pending",
     circuit_status: r.circuit_state,
     login_capable: r.login_capable,
+    session_ready: r.session_ready,
+    session_expires_at: r.session_expires_at !== null ? r.session_expires_at.toISOString() : null,
+    default_browser_identity_id: r.default_browser_identity_id,
+    default_network_policy_id: r.default_network_policy_id,
   };
 }
 

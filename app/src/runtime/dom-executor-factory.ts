@@ -39,6 +39,7 @@ export interface DomExecutorRunContext {
   readonly browserIdentityVersion: number;
   /** run 테넌트 — 자격증명 fill 시 executorPrincipal 에 per-run 으로 주입(secret.resolve 감사 row 테넌트 정합). */
   readonly tenantId?: string;
+  readonly model?: string;
 }
 
 /** deploy-time LLM 정책(dom 액션 LLMRequest 파라미터). run-scoped 아님(운영자/오케스트레이터 고정 값). */
@@ -69,7 +70,7 @@ export function createDomUtilityExecutorFactory(
         gateway,
         provider,
         {
-          model: policy.model,
+          model: run.model ?? policy.model,
           promptTemplateVersion: policy.promptTemplateVersion,
           budget: policy.budget,
           scenarioVersionId: run.scenarioVersionId,

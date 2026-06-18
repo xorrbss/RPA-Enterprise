@@ -9,12 +9,18 @@ import {
   type DeadLetterItem,
   type GatewayPolicy,
   type GatewayPolicyUpdate,
+  type GenerationArtifactDetail,
+  type GenerationArtifactItem,
   type HumanTaskItem,
   type ListParams,
   type Paginated,
   type RunDetail,
   type RunItem,
   type ScenarioDetail,
+  type ScenarioGenerationList,
+  type ScenarioGenerationListParams,
+  type ScenarioGenerationRequest,
+  type ScenarioGenerationResult,
   type ScenarioItem,
   type RunArtifactItem,
   type ScenarioMutationResult,
@@ -31,6 +37,7 @@ export interface ApiClient {
   listRunSteps(runId: string, p?: ListParams): Promise<Paginated<StepSummary>>;
   // run 하위 artifact 목록(api-surface §5). metadata-only(본문은 artifact_id→getArtifact).
   listRunArtifacts(runId: string, p?: ListParams): Promise<Paginated<RunArtifactItem>>;
+  listScenarioGenerationArtifacts(generationId: string, p?: ListParams): Promise<Paginated<GenerationArtifactItem>>;
   listWorkitems(p?: ListParams): Promise<Paginated<WorkitemItem>>;
   listHumanTasks(p?: ListParams): Promise<Paginated<HumanTaskItem>>;
   listDlq(kind: "workitem" | "sink", p?: ListParams): Promise<Paginated<DeadLetterItem>>;
@@ -76,12 +83,17 @@ export interface ApiClient {
   getSite(id: string): Promise<SiteItem>;
   // 산출물 본문 조회(api-surface §5). redaction→RBAC 2단 게이트 + audit boundary. 미존재/미redacted/타테넌트→404, 권한없음→403.
   getArtifact(id: string): Promise<ArtifactDetail>;
+  getArtifactBlob(id: string): Promise<Blob>;
+  getScenarioGenerationArtifact(generationId: string, artifactId: string): Promise<GenerationArtifactDetail>;
   // scenario validate(V1–V11 dry-run, 비변이 POST, body=IR). run 생성(멱등 명령).
   validateScenario(scenarioId: string, ir: unknown, idempotencyKey: string): Promise<ValidationResult>;
   // scenario 생성(POST body=IR, 컴파일 파이프라인 통과 시 draft 저장)·편집(PUT If-Match=현재 version → 새 draft version).
   // 둘 다 Idempotency-Key 불요(api-surface §35). 무효 IR/충돌은 ApiError로 표면화.
   createScenario(ir: unknown): Promise<ScenarioMutationResult>;
   updateScenario(scenarioId: string, ir: unknown, version: number): Promise<ScenarioMutationResult>;
+  generateScenario(body: ScenarioGenerationRequest, idempotencyKey: string): Promise<ScenarioGenerationResult>;
+  listScenarioGenerations(p?: ScenarioGenerationListParams): Promise<ScenarioGenerationList>;
+  getScenarioGeneration(generationId: string): Promise<ScenarioGenerationResult>;
   createRun(body: CreateRunBody, idempotencyKey: string): Promise<CreateRunResult>;
   // 건별 결재(승인/반려, approver+). Idempotency-Key + body{source_run_id, doc_ref, decision, reason?}.
   //   동일 키 replay → 동일 spawned_run_id, 다른 키·동일(run,doc) → APPROVAL_ALREADY_DECIDED(409). 백엔드가 RBAC 최종 강제.
@@ -131,6 +143,19 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       throw new ApiError(res.status, body?.code ?? `HTTP_${res.status}`, body as never);
     }
     return (await res.json()) as T;
+  }
+
+  async function parseBlobOrThrow(res: Response): Promise<Blob> {
+    if (!res.ok) {
+      let body = null;
+      try {
+        body = (await res.json()) as { code?: string; message?: string };
+      } catch {
+        body = null;
+      }
+      throw new ApiError(res.status, body?.code ?? `HTTP_${res.status}`, body as never);
+    }
+    return res.blob();
   }
 
   async function get<T>(path: string): Promise<T> {
@@ -185,6 +210,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listRuns: (p) => get(`/v1/runs${queryString(p)}`),
     listRunSteps: (runId, p) => get(`/v1/runs/${runId}/steps${queryString(p)}`),
     listRunArtifacts: (runId, p) => get(`/v1/runs/${runId}/artifacts${queryString(p)}`),
+    listScenarioGenerationArtifacts: (generationId, p) => get(`/v1/scenario-generations/${generationId}/artifacts${queryString(p)}`),
     listWorkitems: (p) => get(`/v1/workitems${queryString(p)}`),
     listHumanTasks: (p) => get(`/v1/human-tasks${queryString(p)}`),
     listDlq: (kind, p) => get(`/v1/dlq${queryString({ ...p, kind })}`),
@@ -234,10 +260,22 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     getScenario: (id) => get(`/v1/scenarios/${id}`),
     getSite: (id) => get(`/v1/sites/${id}`),
     getArtifact: (id) => get(`/v1/artifacts/${id}`),
+    getArtifactBlob: async (id) => {
+      const res = await doFetch(`${opts.baseUrl}/v1/artifacts/${id}/blob`, {
+        method: "GET",
+        headers: { Accept: "*/*", ...authHeaders() },
+      });
+      return parseBlobOrThrow(res);
+    },
+    getScenarioGenerationArtifact: (generationId, artifactId) =>
+      get(`/v1/scenario-generations/${generationId}/artifacts/${artifactId}`),
     validateScenario: (scenarioId, ir, key) => post(`/v1/scenarios/${scenarioId}/validate`, key, ir),
     createScenario: (ir) => send("POST", `/v1/scenarios`, ir),
     updateScenario: (scenarioId, ir, version) =>
       send("PUT", `/v1/scenarios/${scenarioId}`, ir, { "If-Match": String(version) }),
+    generateScenario: (body, key) => post(`/v1/scenario-generations`, key, body),
+    listScenarioGenerations: (p) => get(`/v1/scenario-generations${queryString(p)}`),
+    getScenarioGeneration: (generationId) => get(`/v1/scenario-generations/${generationId}`),
     createRun: (body, key) => post(`/v1/runs`, key, body),
     decideApproval: (body, key) => post(`/v1/approvals/decide`, key, body),
   };

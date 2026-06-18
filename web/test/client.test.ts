@@ -63,6 +63,14 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
   });
 
+  test("listScenarioGenerationArtifacts → GET /v1/scenario-generations/{id}/artifacts + Bearer", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listScenarioGenerationArtifacts("gen-9", { limit: 50 });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations/gen-9/artifacts?limit=50");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
   test("abortRun → POST .../abort + Idempotency-Key + 빈 body", async () => {
     const { calls, client } = harness({ body: { status: "cancelled" } });
     await client.abortRun("run-1", "idem-abc");
@@ -193,6 +201,36 @@ describe("HttpApiClient 계약", () => {
     expect(art.redaction_status).toBe("redacted");
   });
 
+  test("getArtifactBlob → GET /v1/artifacts/{id}/blob + Bearer", async () => {
+    const { calls, client } = harness({ body: "binary" });
+    const blob = await client.getArtifactBlob("a1");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/artifacts/a1/blob");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+    expect(calls[0]?.headers.get("accept")).toBe("*/*");
+    expect(blob).toBeInstanceOf(Blob);
+  });
+
+  test("getScenarioGenerationArtifact → scoped generation artifact body route + Bearer", async () => {
+    const { calls, client } = harness({
+      body: {
+        artifact_id: "a1",
+        generation_id: "g1",
+        type: "scenario_generation_llm_output",
+        sha256: "h",
+        redaction_status: "redacted",
+        retention_until: null,
+        content: "redacted planner output",
+      },
+    });
+    const artifact = await client.getScenarioGenerationArtifact("g1", "a1");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations/g1/artifacts/a1");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+    expect(artifact.generation_id).toBe("g1");
+    expect(artifact.content).toBe("redacted planner output");
+  });
+
   test("validateScenario → POST .../validate + body=IR", async () => {
     const { calls, client } = harness({ body: { valid: true, report: {} } });
     const ir = { nodes: [{ id: "n1" }] };
@@ -210,7 +248,43 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.body).toEqual({ scenario_version_id: "sv-1" });
   });
 
-  test("replayDeadLetter(sink) → POST .../replay?kind=sink + Idempotency-Key (sink DLQ 복구 배선)", async () => {
+  test("generateScenario → POST /v1/scenario-generations + Idempotency-Key + evidence", async () => {
+    const { calls, client } = harness({ body: { generation_id: "g1", status: "run_queued", blockers: [] } });
+    await client.generateScenario(
+      {
+        prompt: "주문 목록 확인",
+        mode: "save_and_run",
+        start_url: "https://example.test/orders",
+        evidence: { screenshot: "each_step", video: "always" },
+      },
+      "idem-generate",
+    );
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-generate");
+    expect(calls[0]?.body).toEqual({
+      prompt: "주문 목록 확인",
+      mode: "save_and_run",
+      start_url: "https://example.test/orders",
+      evidence: { screenshot: "each_step", video: "always" },
+    });
+  });
+
+  test("getScenarioGeneration → GET /v1/scenario-generations/{id}", async () => {
+    const { calls, client } = harness({ body: { generation_id: "g1", status: "saved", blockers: [] } });
+    await client.getScenarioGeneration("00000000-0000-0000-0000-0000000000a1");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations/00000000-0000-0000-0000-0000000000a1");
+  });
+
+  test("listScenarioGenerations → GET /v1/scenario-generations + query", async () => {
+    const { calls: generationCalls, client: generationClient } = harness({ body: { items: [], next_cursor: null } });
+    await generationClient.listScenarioGenerations({ limit: 10, cursor: "cursor-1", status: "blocked" });
+    expect(generationCalls[0]?.method).toBe("GET");
+    expect(generationCalls[0]?.url).toBe("http://api.test/v1/scenario-generations?limit=10&cursor=cursor-1&status=blocked");
+  });
+
+  test("replayDeadLetter(sink) -> POST .../replay?kind=sink + Idempotency-Key", async () => {
     const { calls, client } = harness({ body: { status: "new" } });
     await client.replayDeadLetter("dl-1", "idem-sink", "sink");
     expect(calls[0]?.method).toBe("POST");

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -5,16 +6,19 @@ import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { ArtifactLookup, ArtifactRef } from "../components/ArtifactLookup";
+import { ArtifactMediaPreview } from "../components/ArtifactMediaPreview";
 import { StepTrace } from "../components/StepTrace";
 import { FilterSelect } from "../components/FilterSelect";
+import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, tone, type Tone } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
 import { mergeParams, navigate, useHashParam } from "../router";
-import type { RunArtifactItem, RunDetail, RunItem } from "../api/types";
+import type { ArtifactDetail, RunArtifactItem, RunDetail, RunItem } from "../api/types";
 
 const POLL_MS = 5_000; // 실시간 = outbox tail 폴링(v1)
 const TERMINAL = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
+const HUMAN_TASK_TERMINAL = new Set(["resolved", "expired", "cancelled"]);
 // '사람 확인 대기'가 확실한 비-터미널 status만(state-machine). StatusBadge가 suspended를 '사람 확인 대기'로 라벨링하는 것과 정합.
 // suspending은 bookmark 저장 중 전이 상태(R11→suspended / R12→failed_system, 미정착)라 StatusBadge가 '보류 중'으로 라벨링하므로
 // 배너의 '대기 중'과 어휘가 충돌 + '대기' 단정이 한 발 앞선다 → 제외(suspended 단일 게이팅 = 배지와 동일 출처 정합).
@@ -36,12 +40,23 @@ export function RunTraceView(): JSX.Element {
   const lv = useListView<RunItem>(["runs"], (p) => api.listRuns(p), { refetchInterval: POLL_MS, initialFilter });
   // 선택 run을 해시(`#runTrace?run=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(useState 휘발 대체).
   const sel = useHashParam("run");
+  const focusParam = useHashParam("focus");
+  const focusArtifacts = focusParam === "artifacts";
   const detail = useQuery({ queryKey: ["run-detail", sel], queryFn: () => api.getRun(sel as string), enabled: sel !== null });
 
   return (
     <div>
       <ArtifactLookup />
-      {sel !== null && <RunDetailPanel runId={sel} detail={detail} onClose={() => { mergeParams({ run: null, artifact: null }); }} />}
+      {sel !== null && (
+        <RunDetailPanel
+          runId={sel}
+          detail={detail}
+          focusArtifacts={focusArtifacts}
+          onClose={() => {
+            mergeParams({ run: null, artifact: null, focus: null });
+          }}
+        />
+      )}
       <QueryPanel<RunItem>
         title="실행 기록"
         query={lv.query}
@@ -92,20 +107,24 @@ export function RunTraceView(): JSX.Element {
 function RunDetailPanel({
   runId,
   detail,
+  focusArtifacts,
   onClose,
 }: {
   runId: string;
   detail: UseQueryResult<RunDetail>;
+  focusArtifacts: boolean;
   onClose: () => void;
 }): JSX.Element {
+  const api = useApiClient();
+  const humanTask = useQuery({
+    queryKey: ["human-task-by-run", runId],
+    queryFn: () => api.listHumanTasks({ run_id: runId, limit: 10 }),
+    enabled: detail.data !== undefined && SUSPENDED.has(detail.data.status),
+  });
+  const pendingTask = humanTask.data?.items.find((task) => !HUMAN_TASK_TERMINAL.has(task.state));
+
   return (
-    <section className="panel" style={{ marginBottom: 16, padding: 16 }} aria-label="실행 상세">
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <strong>실행 상세 — {runId.slice(0, 8)}</strong>
-        <button className="btn" type="button" onClick={onClose}>
-          닫기
-        </button>
-      </header>
+    <SlideOver title={`실행 상세 — ${runId.slice(0, 8)}`} onClose={onClose}>
       {detail.isLoading ? (
         <Loading />
       ) : detail.isError ? (
@@ -125,26 +144,32 @@ function RunDetailPanel({
           <dt className="subtle">기준 시각(as_of)</dt>
           <dd style={{ margin: 0 }}>{detail.data.as_of ?? "—"}</dd>
         </dl>
-        {/* suspended 계열(사람 확인 대기)일 때만 인박스 교차 동선 노출 — 막다른 길 해소. 게이팅은 RunDetail.status(실 필드)뿐.
-            RunDetail에 human_task_id가 없고 GET /v1/human-tasks가 run_id 필터를 honor하지 않으므로(reads.ts:331 SELECT만)
-            정확한 human_task 자동선택은 조용한 false라 약속하지 않는다 — 인박스 처리 동선만 안내(status 재단정 없음).
-            TODO: [BLOCKED]
-              violated: KISS(run→정확한 human_task 직접 점프가 더 단순하나)
-              reason: RunDetail.human_task_id 부재 + GET /v1/human-tasks ?run_id 필터 미honor(계약/백엔드=오너 영역)
-              required_change: GET /v1/human-tasks 의 run_id 필터 추가(또는 RunDetail.human_task_id 투영) — 계약 변경 선행 */}
         {SUSPENDED.has(detail.data.status) && (
           <p className="badge amber" role="status" style={{ display: "block", margin: "8px 0 0", whiteSpace: "normal" }}>
-            이 실행은 사람 확인 대기 중입니다 — {" "}
-            <button className="linklike" type="button" onClick={() => navigate("humanTasks")}>
-              사람 확인 인박스에서 처리하기 <span aria-hidden="true">→</span>
+            이 실행은 사람 확인 대기 중입니다 —{" "}
+            <button
+              className="linklike"
+              type="button"
+              disabled={humanTask.isLoading}
+              onClick={() => {
+                if (pendingTask !== undefined) navigate("humanTasks", { ht: pendingTask.human_task_id });
+                else navigate("humanTasks", { run_id: runId });
+              }}
+            >
+              {humanTask.isLoading
+                ? "사람 확인 업무 찾는 중"
+                : pendingTask !== undefined
+                  ? "연결된 사람 확인 업무 처리하기"
+                  : "사람 확인 인박스에서 처리하기"}{" "}
+              <span aria-hidden="true">→</span>
             </button>
           </p>
         )}
         </>
       ) : null}
       <StepTrace runId={runId} />
-      <RunArtifactsList runId={runId} />
-    </section>
+      <RunArtifactsList runId={runId} focusOnMount={focusArtifacts} />
+    </SlideOver>
   );
 }
 
@@ -173,42 +198,225 @@ function ArrivalBanner({
   );
 }
 
-// 산출물(artifact) 목록 — metadata-only(종류/redaction/보존). 본문은 artifact_id를 위 '산출물 조회'(#129)에 입력(redaction→RBAC→audit 게이트). 라이브=폴링.
-function RunArtifactsList({ runId }: { runId: string }): JSX.Element {
+type JsonSummary = { label: string; count: number; keys: string[]; sample: unknown[] };
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function summarizeJsonArtifact(detail: ArtifactDetail): JsonSummary | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(detail.content);
+  } catch {
+    return null;
+  }
+  const candidates: Array<[string, unknown]> = Array.isArray(parsed)
+    ? [["records", parsed]]
+    : isRecord(parsed)
+      ? [["records", parsed.records], ["rows", parsed.rows], ["items", parsed.items], ["data", parsed.data]]
+      : [];
+  const found = candidates.find(([, value]) => Array.isArray(value));
+  if (found === undefined) return null;
+  const [label, value] = found;
+  const rows = value as unknown[];
+  const firstRecord = rows.find(isRecord);
+  return {
+    label,
+    count: rows.length,
+    keys: firstRecord !== undefined ? Object.keys(firstRecord).slice(0, 8) : [],
+    sample: rows.slice(0, 5),
+  };
+}
+
+function shortId(id: string): string {
+  return id.slice(0, 8);
+}
+
+function mediaKind(a: RunArtifactItem): "screenshot" | "video" | null {
+  const hints = `${a.type} ${a.media_type ?? ""} ${a.filename ?? ""}`.toLowerCase();
+  if (hints.includes("video")) return "video";
+  if (
+    hints.includes("screenshot") ||
+    hints.includes("screen_capture") ||
+    hints.includes("image_capture") ||
+    hints.includes("image/") ||
+    /\.(png|jpe?g|webp)\b/.test(hints)
+  ) return "screenshot";
+  return null;
+}
+
+function previewMediaType(a: RunArtifactItem | undefined): string | null {
+  if (a === undefined) return null;
+  if (typeof a.media_type === "string" && (a.media_type.startsWith("image/") || a.media_type.startsWith("video/"))) return a.media_type;
+  const kind = mediaKind(a);
+  if (kind === "video") return "video/webm";
+  if (kind === "screenshot") return "image/png";
+  return null;
+}
+
+function isPreviewableMedia(a: RunArtifactItem | undefined): boolean {
+  return previewMediaType(a) !== null;
+}
+
+function formatByteSize(bytes: number | null | undefined): string | null {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return null;
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
+}
+
+function formatDuration(ms: number | null | undefined): string | null {
+  if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return null;
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+}
+
+function mediaMetaLabels(a: RunArtifactItem): string[] {
+  return [
+    a.media_type ?? null,
+    formatByteSize(a.byte_size),
+    formatDuration(a.duration_ms),
+  ].filter((v): v is string => v !== null && v !== "");
+}
+
+function artifactSummary(items: readonly RunArtifactItem[]): { screenshots: number; videos: number; pending: number } {
+  return items.reduce(
+    (acc, item) => {
+      const kind = mediaKind(item);
+      if (kind === "screenshot") acc.screenshots += 1;
+      if (kind === "video") acc.videos += 1;
+      if (item.redaction_status === "pending") acc.pending += 1;
+      return acc;
+    },
+    { screenshots: 0, videos: 0, pending: 0 },
+  );
+}
+
+// 산출물(artifact) 목록 + 결과 미리보기 — 본문 조회는 getArtifact(redaction→RBAC→audit 게이트)를 통한다. 라이브=폴링.
+function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount: boolean }): JSX.Element {
   const api = useApiClient();
+  const artifactsRef = useRef<HTMLDivElement | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const q = useQuery({
     queryKey: ["run-artifacts", runId],
     queryFn: () => api.listRunArtifacts(runId, { limit: 100 }),
     refetchInterval: POLL_MS,
   });
   const items: readonly RunArtifactItem[] = q.data?.items ?? [];
+  const preferred =
+    items.find(isPreviewableMedia) ??
+    items.find((a) => /json|extract|output|result/i.test(a.type)) ??
+    items[0];
+  const selectedItem = items.find((a) => a.artifact_id === selectedId);
+  const selectedIsMedia = isPreviewableMedia(selectedItem);
+  const selectedMediaType = previewMediaType(selectedItem);
+  const counts = artifactSummary(items);
+  useEffect(() => {
+    if (focusOnMount) artifactsRef.current?.focus();
+  }, [focusOnMount]);
+  useEffect(() => {
+    if (selectedId === null && preferred !== undefined) setSelectedId(preferred.artifact_id);
+    if (selectedId !== null && items.length > 0 && !items.some((a) => a.artifact_id === selectedId)) setSelectedId(preferred?.artifact_id ?? null);
+  }, [items, preferred, selectedId]);
+  const detail = useQuery({
+    queryKey: ["artifact-detail", selectedId],
+    queryFn: () => api.getArtifact(selectedId as string),
+    enabled: selectedId !== null && !selectedIsMedia,
+  });
+  const summary = detail.data !== undefined ? summarizeJsonArtifact(detail.data) : null;
   return (
-    <div style={{ marginTop: 14 }}>
-      <strong style={{ fontSize: 13 }}>산출물(artifact)</strong>
+    <div ref={artifactsRef} role="region" aria-label="실행 결과·산출물" tabIndex={focusOnMount ? -1 : undefined} style={{ marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <strong style={{ fontSize: 13 }}>실행 결과·산출물</strong>
+        {items.length > 0 && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }} aria-label="artifact summary">
+            <span className="subtle">artifact {items.length}건</span>
+            <span className="badge blue">스크린샷 {counts.screenshots}</span>
+            <span className="badge amber">동영상 {counts.videos}</span>
+            {counts.pending > 0 && <span className="badge muted">redaction 대기 {counts.pending}</span>}
+          </span>
+        )}
+      </div>
       {q.isLoading ? (
         <Loading />
       ) : q.isError ? (
         <ErrorState message="산출물 목록을 불러오지 못했습니다." onRetry={() => void q.refetch()} />
       ) : items.length === 0 ? (
-        <p className="subtle" style={{ margin: "8px 0 0" }}>표시할 산출물이 없습니다.</p>
+        <p className="subtle" style={{ margin: "8px 0 0" }}>
+          표시할 산출물이 없습니다. 이미지나 동영상 증거는 redaction 처리 중일 수 있습니다.
+        </p>
       ) : (
-        <div className="table-wrap" style={{ marginTop: 8 }}>
-          <table>
-            <thead>
-              <tr><th>artifact_id</th><th>종류</th><th>redaction</th><th>보존 만료</th><th>legal hold</th></tr>
-            </thead>
-            <tbody>
-              {items.map((a) => (
-                <tr key={a.artifact_id}>
-                  <td><ArtifactRef id={a.artifact_id} /></td>
-                  <td>{a.type}</td>
-                  <td><span className="badge muted">{a.redaction_status}</span></td>
-                  <td>{a.retention_until ?? "—"}</td>
-                  <td>{a.legal_hold ? "예" : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>artifact_id</th><th>종류</th><th>파일명</th><th>미디어 메타</th><th>redaction</th><th>보존 만료</th><th>legal hold</th><th>본문 조회</th></tr>
+              </thead>
+              <tbody>
+                {items.map((a) => {
+                  const kind = mediaKind(a);
+                  const labels = mediaMetaLabels(a);
+                  return (
+                    <tr key={a.artifact_id} data-current={a.artifact_id === selectedId ? "true" : undefined}>
+                      <td><ArtifactRef id={a.artifact_id} /></td>
+                      <td>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <span>{a.type}</span>
+                          {kind !== null && <span className={`badge ${kind === "video" ? "amber" : "blue"}`}>{kind}</span>}
+                        </span>
+                      </td>
+                      <td>{a.filename ?? "—"}</td>
+                      <td>
+                        {labels.length > 0 ? (
+                          <span className="subtle">{labels.join(" · ")}</span>
+                        ) : "—"}
+                      </td>
+                      <td><span className="badge muted">{a.redaction_status}</span></td>
+                      <td>{a.retention_until ?? "—"}</td>
+                      <td>{a.legal_hold ? "예" : "—"}</td>
+                      <td>
+                        <button className="btn" type="button" onClick={() => setSelectedId(a.artifact_id)}>
+                          {a.artifact_id === selectedId ? "선택됨" : "미리보기"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {selectedId !== null && (
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <strong style={{ fontSize: 13 }}>본문 미리보기</strong>
+                <code>{shortId(selectedId)}</code>
+                {summary !== null && <span className="badge green">{summary.label} {summary.count}건</span>}
+                {summary !== null && summary.keys.length > 0 && <span className="subtle">키 {summary.keys.join(", ")}</span>}
+              </div>
+              {detail.isLoading ? (
+                <Loading />
+              ) : detail.isError ? (
+                <ErrorState message="산출물 본문을 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
+              ) : selectedItem !== undefined && selectedMediaType !== null ? (
+                <ArtifactMediaPreview artifactId={selectedItem.artifact_id} mediaType={selectedMediaType} filename={selectedItem.filename} />
+              ) : detail.data !== undefined ? (
+                summary !== null ? (
+                  <pre style={{ margin: "8px 0 0", maxHeight: 260, overflow: "auto", whiteSpace: "pre-wrap" }}>
+                    {JSON.stringify(summary.sample, null, 2)}
+                  </pre>
+                ) : (
+                  <pre style={{ margin: "8px 0 0", maxHeight: 180, overflow: "auto", whiteSpace: "pre-wrap" }}>
+                    {detail.data.content.slice(0, 2000)}
+                  </pre>
+                )
+              ) : null}
+            </div>
+          )}
         </div>
       )}
     </div>

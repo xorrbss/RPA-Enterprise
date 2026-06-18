@@ -19,6 +19,15 @@
           "type": "string",
           "enum": ["easy", "form", "ir"],
           "description": "콘솔 시나리오 스튜디오 편집 모드 보존. 편집 진입 시 같은 저코드/IR 모드로 복원한다."
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "screenshot": { "type": "string", "enum": ["never", "failure", "each_step"] },
+            "video": { "type": "string", "enum": ["never", "failure", "always"] }
+          },
+          "description": "Natural-language scenario generation evidence request. screenshot maps to node.policy.recording; video is run-level and requires a runtime video recorder port before auto-run."
         }
       }
     },

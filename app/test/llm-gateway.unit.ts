@@ -139,6 +139,20 @@ async function main(): Promise<void> {
     check("call: happy path returns outputRef+usage", res.outputRef === "art://ref" && res.finishReason === "stop" && res.usage.outputTokens === 1);
   }
 
+  // 멱등 store가 callId를 예약하면 응답에도 durable stagehand call id가 실린다.
+  {
+    let completedId: string | undefined;
+    const res = await gateway({
+      primary: queueAdapter([textDone("hello")]).adapter,
+      idempotency: {
+        reserve: async () => ({ kind: "reserved", callId: "c1", idempotencyKey: "idem" as never }),
+        complete: async (id) => { completedId = id; },
+        fail: async () => {},
+      },
+    }).call(makeReq(), sig());
+    check("call: reserved idempotency attaches stagehandCallId", res.stagehandCallId === "c1" && completedId === "c1");
+  }
+
   // ── OTel: llm_gateway.call span(§E 고정 이름·속성) ──────────────────────────
   {
     spanExporter.reset();
@@ -223,6 +237,7 @@ async function main(): Promise<void> {
     );
     check("call: BUDGET_EXCEEDED → LLM_BUDGET_EXCEEDED (no retry/fallback)", err?.code === "LLM_BUDGET_EXCEEDED");
     check("call: idempotency.fail recorded BUDGET_EXCEEDED", failedCode === "BUDGET_EXCEEDED");
+    check("call: gateway error carries stagehandCallId", err?.stagehandCallId === "c1");
   }
 
   // ── structured output(§5): strict 위반 → EXTRACT_SCHEMA_INVALID ─────────────

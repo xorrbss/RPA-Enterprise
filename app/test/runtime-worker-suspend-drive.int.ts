@@ -172,6 +172,11 @@ async function main(): Promise<void> {
          VALUES ($1,$2,$3,'ok'), ($4,$2,$5,'ok2'), ($6,$2,$7,'ok3')`,
         [IDENTITY, TENANT, SITE, IDENTITY2, SITE2, IDENTITY3, SITE3],
       );
+      await c.query(
+        `INSERT INTO network_policies (id, tenant_id, allowed_domains)
+         VALUES ($1,$2,ARRAY['ok.example','ok2.example','ok3.example'])`,
+        [NETWORK_POLICY, TENANT],
+      );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'suspend-drive')`, [SCEN, TENANT]);
       await c.query(
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)

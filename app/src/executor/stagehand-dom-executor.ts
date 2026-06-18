@@ -84,6 +84,84 @@ const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", sche
 const clickSettleMs = (): number => Number(process.env.DET_CLICK_SETTLE_MS ?? 15000);
 const CLICK_POLL_MS = 500;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+// LLM 이 셀렉터를 정하려면 원문 DOM 이 필요(PageState 파생 신호만으론 #password 등 타깃 불가). user 메시지로 실어
+// Gateway redaction(§4) 경계가 redact/injection-탐지하게 한다. 토큰 예산 보호용 상한(초과분 절단).
+const NETWORK_JSON_CAPTURE_SCRIPT = `(() => {
+  const w = window;
+  if (w.__RPA_NETWORK_CAPTURE_INSTALLED__ === true) return { installed: true, already: true };
+  w.__RPA_NETWORK_CAPTURE_INSTALLED__ = true;
+  const maxEntries = 20;
+  const maxBodyChars = 120000;
+  const ensureStore = () => {
+    if (!Array.isArray(w.__RPA_NETWORK_JSON__)) w.__RPA_NETWORK_JSON__ = [];
+    return w.__RPA_NETWORK_JSON__;
+  };
+  const looksJson = (text) => {
+    const s = String(text || "").trim();
+    return s.startsWith("{") || s.startsWith("[");
+  };
+  const pushJson = (source, url, status, body) => {
+    try {
+      const text = typeof body === "string" ? body : JSON.stringify(body);
+      if (!looksJson(text)) return;
+      const store = ensureStore();
+      store.push({
+        source,
+        url: String(url || ""),
+        status: typeof status === "number" ? status : undefined,
+        capturedAt: new Date().toISOString(),
+        body: text.length > maxBodyChars ? text.slice(0, maxBodyChars) : text
+      });
+      if (store.length > maxEntries) store.splice(0, store.length - maxEntries);
+      w.__RPA_RECENT_JSON__ = store;
+      w.__rpaNetworkJson = store;
+    } catch (_) {}
+  };
+  const shouldCapture = (contentType, text) => {
+    const ct = String(contentType || "").toLowerCase();
+    return ct.includes("json") || looksJson(text);
+  };
+  if (typeof w.fetch === "function" && w.__RPA_ORIGINAL_FETCH__ === undefined) {
+    const originalFetch = w.fetch.bind(w);
+    w.__RPA_ORIGINAL_FETCH__ = originalFetch;
+    w.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      try {
+        const clone = response.clone();
+        const url = response.url || (args[0] && (typeof args[0] === "string" ? args[0] : args[0].url));
+        clone.text().then((text) => {
+          const contentType = clone.headers && clone.headers.get ? clone.headers.get("content-type") : "";
+          if (shouldCapture(contentType, text)) pushJson("fetch", url, response.status, text);
+        }).catch(() => {});
+      } catch (_) {}
+      return response;
+    };
+  }
+  if (typeof w.XMLHttpRequest === "function" && w.XMLHttpRequest.prototype.__RPA_CAPTURE_PATCHED__ !== true) {
+    const proto = w.XMLHttpRequest.prototype;
+    const originalOpen = proto.open;
+    const originalSend = proto.send;
+    proto.__RPA_CAPTURE_PATCHED__ = true;
+    proto.open = function(method, url, ...rest) {
+      this.__rpaRequestUrl = url;
+      return originalOpen.call(this, method, url, ...rest);
+    };
+    proto.send = function(...args) {
+      try {
+        this.addEventListener("loadend", () => {
+          try {
+            const text = typeof this.responseText === "string" ? this.responseText : "";
+            const contentType = this.getResponseHeader ? this.getResponseHeader("content-type") : "";
+            if (shouldCapture(contentType, text)) pushJson("xhr", this.__rpaRequestUrl || this.responseURL, this.status, text);
+          } catch (_) {}
+        });
+      } catch (_) {}
+      return originalSend.apply(this, args);
+    };
+  }
+  ensureStore();
+  return { installed: true, already: false };
+})()`;
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 
@@ -106,6 +184,18 @@ function classify(code: ErrorCode): { status: StepStatus; cls: ExceptionClass } 
     default: // system | none → system
       return { status: "failed_system", cls: "system" };
   }
+}
+
+function stagehandCallIdsFromResponse(response: LLMResponse): string[] {
+  return typeof response.stagehandCallId === "string" && response.stagehandCallId.trim().length > 0
+    ? [response.stagehandCallId]
+    : [];
+}
+
+function stagehandCallIdsFromError(error: GatewayError): string[] {
+  return typeof error.stagehandCallId === "string" && error.stagehandCallId.trim().length > 0
+    ? [error.stagehandCallId]
+    : [];
 }
 
 export class StagehandDomExecutor implements ExecutorPlugin {
@@ -146,17 +236,23 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     const startedAt = nowIso();
     // observe는 PageState 파생 신호만으로 충분하지만, extract는 실데이터를 뽑으려면 현재 DOM 원문이 필요하다.
     // 같은 lease의 CDP 세션에서 읽기 전용 snapshot만 수행하고 mutation은 하지 않는다.
-    const domSnapshot = a.type === "extract" ? await this.snapshotDom(this.sessions.forLease(ctx.leaseId)) : undefined;
+    const session = this.sessions.forLease(ctx.leaseId);
+    if (a.type === "extract") await this.ensureNetworkJsonCapture(session);
+    const domSnapshot = a.type === "extract" ? await this.snapshotDom(session) : undefined;
     const req = this.buildRequest(stepId, a, ctx, domSnapshot);
-    const callIds = [String(req.idempotencyKey)];
+    let callIds: string[] = [];
 
     let res: LLMResponse;
     try {
       res = await this.gateway.call(req, ctx.abortSignal);
     } catch (e) {
-      if (e instanceof GatewayError) return this.failResult(stepId, a.type, before, startedAt, e.code, callIds);
+      if (e instanceof GatewayError) {
+        callIds = stagehandCallIdsFromError(e);
+        return this.failResult(stepId, a.type, before, startedAt, e.code, callIds);
+      }
       throw e; // GatewayAbortedError 등 제어 신호 전파.
     }
+    callIds = stagehandCallIdsFromResponse(res);
 
     const endedAt = nowIso();
     // extract.rowAnchor: LLM 추출 후 DOM 에서 결정형으로 특정 필드(doc_ref 등)를 권위 세팅(LLM 속성 환각 차단). 강화된
@@ -208,6 +304,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (a.assertAbsent !== undefined) {
       return this.executeAssertAbsent(stepId, a.assertAbsent, a.sideEffect, ctx, session, before, startedAt);
     }
+    await this.ensureNetworkJsonCapture(session);
     // 캐시 키 = action_plan_cache UNIQUE 7컬럼 + tenant(§D family=(url_pattern, dom_structural_hash)).
     const cacheKey: ActionPlanCacheKey = {
       tenantId: ctx.tenantId,
@@ -233,14 +330,17 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (!plan) {
       // miss/bypass → LLM 으로 plan 산출(Gateway 경유, action_plan 스키마 strict). 원문 DOM 동봉(셀렉터 타깃팅).
       const req = this.buildRequest(stepId, a, ctx, await this.snapshotDom(session));
-      callIds = [String(req.idempotencyKey)];
       let res: LLMResponse;
       try {
         res = await this.gateway.call(req, ctx.abortSignal);
       } catch (e) {
-        if (e instanceof GatewayError) return this.failResult(stepId, "act", before, startedAt, e.code, callIds);
+        if (e instanceof GatewayError) {
+          callIds = stagehandCallIdsFromError(e);
+          return this.failResult(stepId, "act", before, startedAt, e.code, callIds);
+        }
         throw e;
       }
+      callIds = stagehandCallIdsFromResponse(res);
       const parsed = parseActionPlan(res.parsedJson);
       if (!parsed) return this.failResult(stepId, "act", before, startedAt, "LLM_MALFORMED_OUTPUT", callIds);
       plan = parsed;
@@ -487,13 +587,35 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     };
   }
 
+  /** Install page-side fetch/XHR JSON capture before actions that can trigger paginated grids. */
+  private async ensureNetworkJsonCapture(session: CdpSession): Promise<void> {
+    try {
+      await session.evaluate<unknown>(NETWORK_JSON_CAPTURE_SCRIPT);
+    } catch {
+      // Capture is evidence enrichment only. Keep the DOM/PageState path alive if injection is blocked.
+    }
+  }
+
   /** 페이지 스냅샷(best-effort, 절단). 실패 시 undefined — 신호만으로 진행(loud 아님; 셀렉터 품질 저하 가능). */
   private async snapshotDom(session: CdpSession): Promise<string | undefined> {
     try {
       const snapshot = await session.evaluate<unknown>(
         `(() => {
           const root = document.body || document.documentElement;
+          const w = window;
+          const rawNetworkJson = Array.isArray(w.__RPA_NETWORK_JSON__)
+            ? w.__RPA_NETWORK_JSON__
+            : Array.isArray(w.__RPA_RECENT_JSON__)
+              ? w.__RPA_RECENT_JSON__
+              : Array.isArray(w.__rpaNetworkJson)
+                ? w.__rpaNetworkJson
+                : [];
+          const networkJson = rawNetworkJson.slice(-8).map((entry) => {
+            if (typeof entry === "string") return entry;
+            try { return JSON.stringify(entry); } catch { return ""; }
+          }).filter(Boolean).join("\\n");
           return {
+            networkJson,
             visibleText: document.body ? document.body.innerText : (root ? root.textContent : ""),
             html: root ? root.outerHTML : ""
           };
@@ -530,7 +652,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
 
     const systemContent =
       a.type === "extract"
-        ? "Deterministic web automation extract worker. Extract actual records from [page].dom and return only the requested JSON data. Use only values present in [visible_text] or [html]. If no matching records are present, return an empty collection that fits the requested schema. Never synthesize placeholder/example rows. Do not return an extraction plan, selector plan, or prose."
+        ? "Deterministic web automation extract worker. Extract actual records from [page].dom and return only the requested JSON data. Prefer [network_json] for virtualized grids or API-backed tables, then [visible_text], then [html]. Use only values present in [network_json], [visible_text], or [html]. If no matching records are present, return an empty collection that fits the requested schema. Never synthesize placeholder/example rows. Do not return an extraction plan, selector plan, or prose."
         : `Deterministic web automation ${a.type} planner. Respond with a single minified JSON object only.`;
 
     return {
@@ -607,4 +729,3 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     return { type, instruction };
   }
 }
-

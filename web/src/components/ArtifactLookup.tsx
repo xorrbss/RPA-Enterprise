@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { hashWith, mergeParams, useHashParam } from "../router";
 import { ApiError } from "../api/types";
+import { ArtifactMediaPreview } from "./ArtifactMediaPreview";
 import { errorLabel } from "./badges";
 
 // 산출물(artifact) ID 조회 — GET /v1/artifacts/{id}. 목록/생성 API가 v1 미노출이라 ID 직접 입력(운영자가 이벤트·로그·
@@ -36,6 +37,10 @@ function errorText(err: unknown): string {
     if (err.code === "SECRET_ACCESS_DENIED") return "이 산출물을 조회할 권한이 없습니다.";
   }
   return errorLabel(err);
+}
+
+function isPreviewableMedia(mediaType: string | null | undefined): boolean {
+  return mediaType?.startsWith("image/") === true || mediaType?.startsWith("video/") === true;
 }
 
 export function ArtifactLookup(): JSX.Element {
@@ -125,15 +130,21 @@ export function ArtifactLookup(): JSX.Element {
                 <dt className="subtle">보존 만료</dt>
                 <dd style={{ margin: 0 }}>{q.data.retention_until ?? "—"}</dd>
               </dl>
-              <pre
-                className="mono"
-                style={{ background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: "var(--radius)", padding: 12, margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-              >
-                {q.data.content}
-              </pre>
-              <div>
-                <button className="btn" type="button" onClick={download}>다운로드</button>
-              </div>
+              {isPreviewableMedia(q.data.media_type) ? (
+                <ArtifactMediaPreview artifactId={q.data.artifact_id} mediaType={q.data.media_type} filename={q.data.filename} />
+              ) : (
+                <>
+                  <pre
+                    className="mono"
+                    style={{ background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: "var(--radius)", padding: 12, margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+                  >
+                    {q.data.content}
+                  </pre>
+                  <div>
+                    <button className="btn" type="button" onClick={download}>다운로드</button>
+                  </div>
+                </>
+              )}
             </div>
           ) : null}
         </div>

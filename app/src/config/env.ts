@@ -37,6 +37,15 @@ function bool(name: string, dflt: boolean): boolean {
   return v.toLowerCase() !== "false";
 }
 
+function strictBool(name: string, dflt: boolean): boolean {
+  const v = opt(name);
+  if (v === undefined) return dflt;
+  const normalized = v.toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error(`env ${name} must be true|false, got ${JSON.stringify(v)}`);
+}
+
 export function loadRunMode(): RunMode {
   const m = (opt("RUN_MODE") ?? "all").toLowerCase();
   if (m !== "api" && m !== "worker" && m !== "all") {
@@ -85,9 +94,16 @@ export type ApiJwtConfig =
 export interface ApiConfig {
   readonly port: number;
   readonly jwt: ApiJwtConfig;
+  readonly signedCommandRegistry:
+    | { readonly mode: "vault"; readonly vaultApi: VaultIdentityConfig; readonly sourceRef: string }
+    | { readonly mode: "deny_all" };
   /** Console origin allowlist for CORS; omit for same-origin (no CORS registered). No wildcard. */
   readonly corsOrigins?: readonly string[];
   readonly hsts: boolean;
+  /** Optional object-store root the API may read for audited artifact body/blob disclosure. */
+  readonly artifactDir?: string;
+  /** Enables natural-language scenario generation to request run-level masked WebM capture. */
+  readonly videoRecordingEnabled: boolean;
 }
 
 function loadApiJwtConfig(): ApiJwtConfig {
@@ -112,15 +128,37 @@ function loadApiJwtConfig(): ApiJwtConfig {
   return { mode: "hs256", secret };
 }
 
-export function loadApiConfig(): ApiConfig {
+function loadSignedCommandRegistryConfig(common: CommonConfig): ApiConfig["signedCommandRegistry"] {
+  const mode = req("SIGNED_COMMAND_REGISTRY_MODE").toLowerCase();
+  if (mode === "deny_all") {
+    return { mode };
+  }
+  if (mode !== "vault") {
+    throw new Error(`SIGNED_COMMAND_REGISTRY_MODE must be one of vault|deny_all, got ${JSON.stringify(mode)}`);
+  }
+  return {
+    mode,
+    vaultApi: loadVaultIdentity("API"),
+    sourceRef: opt("SIGNED_COMMAND_REGISTRY_REF") ?? `rpa/${common.rpaEnv}/api/signed_command/registry`,
+  };
+}
+
+export function loadApiConfig(common: CommonConfig): ApiConfig {
   const origins = opt("CORS_ORIGINS");
+  const videoRecordingEnabled = bool("VISUAL_EVIDENCE_VIDEO_ENABLED", false);
+  if (videoRecordingEnabled) {
+    req("VISUAL_EVIDENCE_FFMPEG_PATH");
+  }
   return {
     port: num("PORT", 8080),
     jwt: loadApiJwtConfig(),
+    signedCommandRegistry: loadSignedCommandRegistryConfig(common),
     corsOrigins: origins
       ? origins.split(",").map((s) => s.trim()).filter((s) => s.length > 0)
       : undefined,
     hsts: bool("ENABLE_HSTS", true),
+    artifactDir: opt("API_ARTIFACT_DIR") ?? opt("GATEWAY_ARTIFACT_DIR"),
+    videoRecordingEnabled,
   };
 }
 
@@ -145,18 +183,44 @@ export interface WorkerConfig {
   readonly vaultRuntimeWorker: VaultIdentityConfig;
   /** SecretRef for the active resume-token HMAC signing key (HmacResumeTokenCodec). */
   readonly resumeTokenRef: string;
+  /** SecretRef for the active browser session AES-256-GCM data key (base64/base64url encoded 32 bytes). */
+  readonly browserSessionKeyRef: string;
+  /** SecretRef identifier for the artifact-lifecycle object_store port binding. */
+  readonly artifactObjectStoreRef: string;
+  /** Non-secret object-store backend alias used in lifecycle evidence. */
+  readonly artifactObjectStoreBackendAlias: string;
   readonly graphileSchema?: string;
   readonly graphileConcurrency: number;
   readonly graphilePollIntervalMs: number;
+  readonly videoRecordingEnabled: boolean;
+  readonly videoFfmpegPath?: string;
+  readonly videoFrameIntervalMs: number;
+  readonly videoFrameRate: number;
 }
 
 export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
+  const videoRecordingEnabled = bool("VISUAL_EVIDENCE_VIDEO_ENABLED", false);
+  const videoFrameIntervalMs = num("VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS", 1000);
+  if (!Number.isInteger(videoFrameIntervalMs) || videoFrameIntervalMs <= 0) {
+    throw new Error(`VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS must be a positive integer, got ${videoFrameIntervalMs}`);
+  }
+  const videoFrameRate = num("VISUAL_EVIDENCE_VIDEO_FPS", Math.max(1, Math.round(1000 / videoFrameIntervalMs)));
+  if (!Number.isInteger(videoFrameRate) || videoFrameRate <= 0) {
+    throw new Error(`VISUAL_EVIDENCE_VIDEO_FPS must be a positive integer, got ${videoFrameRate}`);
+  }
   return {
     vaultRuntimeWorker: loadVaultIdentity("RUNTIME_WORKER"),
     resumeTokenRef: `rpa/${common.rpaEnv}/runtime-worker/resume_token_hmac/active`,
+    browserSessionKeyRef: `rpa/${common.rpaEnv}/runtime-worker/browser_session/active`,
+    artifactObjectStoreRef: req("ARTIFACT_OBJECT_STORE_REF"),
+    artifactObjectStoreBackendAlias: opt("ARTIFACT_OBJECT_STORE_BACKEND_ALIAS") ?? "fs-local",
     graphileSchema: opt("GRAPHILE_WORKER_SCHEMA"),
     graphileConcurrency: num("GRAPHILE_CONCURRENCY", 1),
     graphilePollIntervalMs: num("GRAPHILE_POLL_INTERVAL_MS", 2000),
+    videoRecordingEnabled,
+    ...(videoRecordingEnabled ? { videoFfmpegPath: req("VISUAL_EVIDENCE_FFMPEG_PATH") } : {}),
+    videoFrameIntervalMs,
+    videoFrameRate,
   };
 }
 
@@ -207,6 +271,19 @@ export interface GatewayConfig {
   readonly artifactRetentionDays: number;
   readonly budget: { readonly maxInputTokens: number; readonly maxOutputTokens: number; readonly maxCost: number };
   readonly promptTemplateVersion: string;
+}
+
+export interface ScenarioGenerationLlmV1Config {
+  readonly gateway: GatewayConfig;
+  readonly promptTemplateVersion: string;
+}
+
+export function loadScenarioGenerationLlmV1Config(): ScenarioGenerationLlmV1Config | undefined {
+  if (!strictBool("SCENARIO_GENERATION_LLM_V1_ENABLED", false)) return undefined;
+  return {
+    gateway: loadGatewayConfig(),
+    promptTemplateVersion: opt("SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION") ?? "scenario-planner@1",
+  };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { ERROR_CATALOG, type ApiError } from "../ts/error-catalog";
+import { roleAllowsAction } from "../ts/rbac-policy";
 import type {
   BoundaryValidator,
   ControlPlaneBoundaryDependencies,
@@ -424,100 +425,7 @@ export class DefaultTenantSessionBinder implements TenantSessionBinder {
   }
 }
 
-const ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = {
-  viewer: ["run.read", "workitem.read", "human_task.read", "artifact.read", "scenario.read"],
-  operator: [
-    "run.read",
-    "run.create",
-    "site.create",
-    "workitem.read",
-    "human_task.read",
-    "artifact.read",
-    "run.abort",
-    "human_task.assign",
-    "human_task.start",
-    "dlq.replay",
-    "sink_dlq.replay",
-    "scenario.read",
-    "scenario.create",
-    "scenario.update",
-  ],
-  reviewer: [
-    "run.read",
-    "run.create",
-    "site.create",
-    "workitem.read",
-    "human_task.read",
-    "artifact.read",
-    "run.abort",
-    "human_task.assign",
-    "human_task.escalate",
-    "human_task.start",
-    "dlq.replay",
-    "sink_dlq.replay",
-    "human_task.resolve.validation",
-    "human_task.resolve.exception",
-    "human_task.resolve.captcha",
-    "human_task.resolve.mfa",
-    "scenario.read",
-    "scenario.create",
-    "scenario.update",
-  ],
-  approver: [
-    "run.read",
-    "run.create",
-    "site.create",
-    "workitem.read",
-    "human_task.read",
-    "artifact.read",
-    "run.abort",
-    "human_task.assign",
-    "human_task.escalate",
-    "human_task.start",
-    "dlq.replay",
-    "sink_dlq.replay",
-    "human_task.resolve.validation",
-    "human_task.resolve.exception",
-    "human_task.resolve.captcha",
-    "human_task.resolve.mfa",
-    "human_task.resolve.approval",
-    "node_policy.approve",
-    "site.approve",
-    "scenario.read",
-    "scenario.create",
-    "scenario.update",
-  ],
-  admin: [
-    "run.read",
-    "run.create",
-    "site.create",
-    "workitem.read",
-    "human_task.read",
-    "artifact.read",
-    "run.abort",
-    "human_task.assign",
-    "human_task.escalate",
-    "human_task.start",
-    "dlq.replay",
-    "sink_dlq.replay",
-    "human_task.resolve.validation",
-    "human_task.resolve.exception",
-    "human_task.resolve.captcha",
-    "human_task.resolve.mfa",
-    "human_task.resolve.approval",
-    "node_policy.approve",
-    "site.approve",
-    "secret.resolve",
-    "connector.enable",
-    "gateway_policy.edit",
-    "network_policy.edit",
-    "rbac.grant",
-    "scenario.read",
-    "scenario.create",
-    "scenario.update",
-    "scenario.promote",
-  ],
-};
+// auth-rbac §2 matrix data lives in ts/rbac-policy.ts.
 
 type AuthorizationDenyCode = Extract<AuthorizationDecision, { kind: "deny" }>["code"];
 
@@ -534,7 +442,7 @@ export class RoleMatrixRbacMiddleware implements RbacMiddleware {
     }
 
     for (const role of principal.roles) {
-      if (ROLE_ACTIONS[role].includes(check.action)) {
+      if (roleAllowsAction(role, check.action)) {
         const humanTaskScopeDeny = denyForHumanTaskScope(principal, check);
         if (humanTaskScopeDeny !== undefined) return humanTaskScopeDeny;
         return { kind: "allow", principal, action: check.action };

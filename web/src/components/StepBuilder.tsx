@@ -26,10 +26,12 @@ type Rule = { when: string; target: string; priority: number };
 type Flow =
   | { kind: "terminal"; terminal: string }
   | { kind: "next"; target: string }
-  | { kind: "on"; rules: Rule[] };
+  | { kind: "on"; rules: Rule[] }
+  | { kind: "loop"; bodyTarget: string; exitTarget: string; until: string; maxIterations: number };
 export interface Step {
   id: string;
   action: (typeof ACTIONS)[number];
+  instruction?: string; // observe/act 전용
   schemaRef?: string; // extract 전용
   extractInstruction?: string; // extract 전용
   urlRef?: string; // navigate 전용
@@ -49,6 +51,11 @@ function defaultExtractInstruction(schemaRef?: string): string {
   return `현재 페이지에서 ${label} 데이터를 추출하라.`;
 }
 
+function defaultActionInstruction(action: Step["action"]): string {
+  if (action === "act") return "화면의 다음 업무 단계로 진행하라.";
+  return "현재 화면 상태와 주요 업무 신호를 관찰하라.";
+}
+
 // 액션 객체 생성(ir.schema action: additionalProperties false → 허용 키만 emit, 필수 필드 포함).
 function actionObj(s: Step): Record<string, unknown> | null {
   switch (s.action) {
@@ -62,8 +69,12 @@ function actionObj(s: Step): Record<string, unknown> | null {
       };
     case "navigate":
       return { action: "navigate", url_ref: s.urlRef && s.urlRef.length > 0 ? s.urlRef : "target_url" };
-    default:
-      return { action: s.action }; // act, observe
+    case "act":
+    case "observe":
+      return {
+        action: s.action,
+        instruction: s.instruction && s.instruction.trim().length > 0 ? s.instruction.trim() : defaultActionInstruction(s.action),
+      };
   }
 }
 
@@ -75,7 +86,15 @@ function stepsToIr(name: string, steps: readonly Step[], version: number): unkno
     if (act !== null) node.what = [act];
     if (s.flow.kind === "terminal") node.terminal = s.flow.terminal;
     else if (s.flow.kind === "next") node.next = s.flow.target;
-    else node.on = s.flow.rules.map((r) => ({ when: r.when, target: r.target, priority: r.priority }));
+    else if (s.flow.kind === "on") node.on = s.flow.rules.map((r) => ({ when: r.when, target: r.target, priority: r.priority }));
+    else {
+      node.loop = {
+        body_target: s.flow.bodyTarget,
+        exit_target: s.flow.exitTarget,
+        until: s.flow.until,
+        max_iterations: Math.max(1, Math.min(10000, Math.floor(s.flow.maxIterations))),
+      };
+    }
     nodes[s.id] = node;
   }
   return { meta: { name, version, studio_mode: "form" }, start: steps[0]?.id ?? "n1", nodes };
@@ -84,7 +103,7 @@ function stepsToIr(name: string, steps: readonly Step[], version: number): unkno
 const SELECT = { padding: "4px 6px", fontSize: 13 } as const;
 
 const DEFAULT_STEPS: Step[] = [
-    { id: "n1", action: "observe", flow: { kind: "next", target: "n2" } },
+    { id: "n1", action: "observe", instruction: defaultActionInstruction("observe"), flow: { kind: "next", target: "n2" } },
     { id: "n2", action: "extract", schemaRef: "extracted_rows", extractInstruction: defaultExtractInstruction("extracted_rows"), flow: { kind: "terminal", terminal: "success" } },
 ];
 
@@ -104,6 +123,7 @@ export function stepBuilderInitialFromIr(ir: unknown): StepBuilderInitial | unde
     const action = typeof first.action === "string" && ACTIONS.includes(first.action as Step["action"])
       ? first.action as Step["action"]
       : "none";
+    const loop = isRecord(n.loop) ? n.loop : undefined;
     const flow: Flow =
       typeof n.terminal === "string"
         ? { kind: "terminal", terminal: n.terminal }
@@ -120,10 +140,19 @@ export function stepBuilderInitialFromIr(ir: unknown): StepBuilderInitial | unde
                     priority: typeof r.priority === "number" ? r.priority : 1,
                   })),
               }
+            : loop !== undefined
+              ? {
+                  kind: "loop",
+                  bodyTarget: typeof loop.body_target === "string" ? loop.body_target : id,
+                  exitTarget: typeof loop.exit_target === "string" ? loop.exit_target : id,
+                  until: typeof loop.until === "string" ? loop.until : "flags.no_next_page",
+                  maxIterations: typeof loop.max_iterations === "number" ? loop.max_iterations : 1,
+                }
             : { kind: "terminal", terminal: "success" };
     return {
       id,
       action,
+      instruction: typeof first.instruction === "string" ? first.instruction : undefined,
       schemaRef: typeof first.schema_ref === "string" ? first.schema_ref : undefined,
       extractInstruction: typeof first.instruction === "string" ? first.instruction : undefined,
       urlRef: typeof first.url_ref === "string" ? first.url_ref : undefined,
@@ -167,7 +196,9 @@ export function StepBuilder({ onChange, initial, version = 1 }: { onChange: (ir:
         ? { kind: "terminal", terminal: "success" }
         : kind === "next"
           ? { kind: "next", target: fallbackTarget }
-          : { kind: "on", rules: [{ when: "flags.not_found", target: fallbackTarget, priority: 1 }] };
+          : kind === "on"
+            ? { kind: "on", rules: [{ when: "flags.not_found", target: fallbackTarget, priority: 1 }] }
+            : { kind: "loop", bodyTarget: fallbackTarget, exitTarget: ids[i + 2] ?? fallbackTarget, until: "flags.no_next_page", maxIterations: 10 };
     update(i, { flow });
   }
 
@@ -196,6 +227,9 @@ export function StepBuilder({ onChange, initial, version = 1 }: { onChange: (ir:
                     if (s.extractInstruction === undefined || s.extractInstruction.trim().length === 0) {
                       patch.extractInstruction = defaultExtractInstruction(nextSchemaRef);
                     }
+                  }
+                  if ((action === "observe" || action === "act") && (s.instruction === undefined || s.instruction.trim().length === 0)) {
+                    patch.instruction = defaultActionInstruction(action);
                   }
                   if (action === "navigate" && (s.urlRef === undefined || s.urlRef.length === 0)) patch.urlRef = "target_url";
                   update(i, patch);
@@ -239,8 +273,21 @@ export function StepBuilder({ onChange, initial, version = 1 }: { onChange: (ir:
                 <option value="terminal">종료</option>
                 <option value="next">다음 단계로</option>
                 <option value="on">조건 분기</option>
+                <option value="loop">반복(loop)</option>
               </select>
             </label>
+            {(s.action === "observe" || s.action === "act") && (
+              <label style={{ flexBasis: "100%", flexGrow: 1 }}>
+                <span className="subtle">동작 지시문</span>
+                <textarea
+                  value={s.instruction ?? ""}
+                  onChange={(e) => update(i, { instruction: e.target.value })}
+                  placeholder={defaultActionInstruction(s.action)}
+                  rows={2}
+                  style={{ width: "100%", minHeight: 56, marginTop: 4, padding: "8px 10px", fontSize: 13, boxSizing: "border-box", resize: "vertical" }}
+                />
+              </label>
+            )}
             {s.flow.kind === "terminal" && (
               <select
                 value={s.flow.terminal}
@@ -270,6 +317,13 @@ export function StepBuilder({ onChange, initial, version = 1 }: { onChange: (ir:
                 onChange={(rules) => update(i, { flow: { kind: "on", rules } })}
               />
             )}
+            {s.flow.kind === "loop" && (
+              <LoopControls
+                flow={s.flow}
+                ids={ids}
+                onChange={(flow) => update(i, { flow })}
+              />
+            )}
             <button className="btn" type="button" onClick={() => removeStep(i)} disabled={steps.length === 1} style={{ marginLeft: "auto" }}>
               삭제
             </button>
@@ -283,6 +337,50 @@ export function StepBuilder({ onChange, initial, version = 1 }: { onChange: (ir:
         ★ = 시작 단계. 저장 시 그래프 검증(V1–V11)을 통과해야 합니다. shell·api_call 등 추가 동작은 ‘IR 직접 편집’에서 보강하세요.
       </p>
     </div>
+  );
+}
+
+function LoopControls({
+  flow,
+  ids,
+  onChange,
+}: {
+  flow: Extract<Flow, { kind: "loop" }>;
+  ids: readonly string[];
+  onChange: (flow: Extract<Flow, { kind: "loop" }>) => void;
+}): JSX.Element {
+  const set = (patch: Partial<Extract<Flow, { kind: "loop" }>>) => onChange({ ...flow, ...patch });
+  return (
+    <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+      <span className="subtle">본문</span>
+      <select value={flow.bodyTarget} onChange={(e) => set({ bodyTarget: e.target.value })} style={SELECT}>
+        {ids.map((id) => (
+          <option key={id} value={id}>{id}</option>
+        ))}
+      </select>
+      <span className="subtle">종료</span>
+      <select value={flow.exitTarget} onChange={(e) => set({ exitTarget: e.target.value })} style={SELECT}>
+        {ids.map((id) => (
+          <option key={id} value={id}>{id}</option>
+        ))}
+      </select>
+      <span className="subtle">until</span>
+      <input
+        value={flow.until}
+        onChange={(e) => set({ until: e.target.value })}
+        placeholder="flags.no_next_page"
+        style={{ ...SELECT, width: 220, fontFamily: "monospace" }}
+      />
+      <span className="subtle">max</span>
+      <input
+        type="number"
+        min={1}
+        max={10000}
+        value={flow.maxIterations}
+        onChange={(e) => set({ maxIterations: Number(e.target.value) })}
+        style={{ ...SELECT, width: 72 }}
+      />
+    </span>
   );
 }
 

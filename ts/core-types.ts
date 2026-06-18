@@ -125,6 +125,7 @@ export type RunContext = {
   siteProfileId: string;
   browserIdentityId: string;
   networkPolicyId: string;
+  networkAllowedDomains?: readonly string[];
   leaseId: string;             // BrowserLease
   // 자격증명은 ref만. resolve는 SecretStore 경유(Executor가 직접 LLM에 전달 금지).
   assetRefs: Record<string, SecretRef | string>;

@@ -64,6 +64,7 @@ export class GatewayError extends Error {
     message: string,
     /** 원 AdapterErrorCode(멱등 store.fail 기록용). */
     readonly adapterCode?: AdapterErrorCode,
+    readonly stagehandCallId?: string,
   ) {
     super(message);
     this.name = "GatewayError";
@@ -148,7 +149,8 @@ export class LlmGateway {
           const redactedReq = await this.redactRequest(this.withPromptSchema(req));
           const consumed = await this.runWithRetryAndFallback(redactedReq, decision.transport, signal);
           span.setAttributes({ stream_status: consumed.finishReason, ttfb_ms: consumed.ttfbMs ?? 0 });
-          const response = await this.finalize(redactedReq, consumed, decision.transport, signal);
+          const finalized = await this.finalize(redactedReq, consumed, decision.transport, signal);
+          const response: LLMResponse = callId !== undefined ? { ...finalized, stagehandCallId: callId } : finalized;
           // §E 필수 메트릭: llm_cost(usage.cost 누적) + llm_ttfb_ms(첫 토큰 지연). 저카디널리티 attr(tenant/model).
           recordLlmCost(response.usage.cost, { tenant_id: meta.tenantId, model: req.model });
           recordLlmTtfbMs(consumed.ttfbMs ?? 0, { tenant_id: meta.tenantId, model: req.model });
@@ -159,6 +161,9 @@ export class LlmGateway {
     } catch (e) {
       if (idem && callId && e instanceof GatewayError) {
         await idem.fail(callId, e.adapterCode ?? "BACKEND_ERROR");
+        if (e.stagehandCallId === undefined) {
+          throw new GatewayError(e.code, e.message, e.adapterCode, callId);
+        }
       }
       throw e;
     }

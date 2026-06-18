@@ -19,8 +19,9 @@
  *     InterpreterError로 표면화한다("조용한 false/unknown 금지").
  */
 import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
-import type { ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
+import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
 import { evaluateCondition, selectOnBranch, type CompiledOnBranch } from "./flow-control";
+import { mergeExtractOutputs, type ExtractResultPage, type MergedExtractResult } from "./extract-result-merge";
 
 /** 표준 노드 출력 필드(IREL node.<id>.*). 미투영 필드는 부재 → 참조 시 IREL_RUNTIME_MISSING(loud). */
 interface NodeOutput {
@@ -116,6 +117,9 @@ export interface ScenarioOutcome {
   readonly terminal: string; // success | success_empty | fail_business | fail_system | suspend
   readonly visited: readonly string[];
   readonly steps: readonly InterpreterStep[];
+  readonly artifacts: readonly ArtifactRef[];
+  readonly extractPages?: readonly ExtractResultPage[];
+  readonly mergedExtract?: MergedExtractResult;
   readonly suspend?: SuspendContext; // terminal === "suspend" 일 때만(트리거 i)
 }
 
@@ -149,6 +153,8 @@ interface TraversalState {
   readonly loopState: Map<string, number>;
   readonly visited: string[];
   readonly steps: InterpreterStep[];
+  readonly artifacts: ArtifactRef[];
+  readonly extractPages: ExtractResultPage[];
   readonly budget: { remaining: number };
   // suspend 컨텍스트 운반 박스(budget 과 동형 가변 박스) — traverse 가 set, runScenario 가 read.
   readonly suspendBox: { current?: SuspendContext };
@@ -160,6 +166,19 @@ function nodeScopeRef(state: TraversalState): Record<string, Record<string, unkn
 }
 
 /** terminal 문자열 → StepStatus(fallback 노드 출력의 status 도출 — 채택 티어 entry_node 출력 부재 시). */
+function collectExtractPage(state: TraversalState, nodeId: string, stepId: string, res: StepResult): void {
+  if (res.action !== "extract" || res.status !== "success") return;
+  const output = res.extracted ?? res.output;
+  if (output === undefined) return;
+  const artifactRef = res.artifacts[0];
+  state.extractPages.push({
+    nodeId,
+    stepId,
+    output,
+    ...(typeof artifactRef === "string" ? { artifactRef } : {}),
+  });
+}
+
 function terminalToStatus(terminal: string): StepStatus {
   if (terminal === "fail_business") return "failed_business";
   if (terminal === "fail_system" || terminal === "fail_security") return "failed_system";
@@ -239,10 +258,15 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
     // 1) 결정형 what 액션 실행. 비-success는 terminal 실패로 매핑하거나 표면화.
     let lastResult: StepResult | undefined;
     for (let k = 0; k < node.what.length; k += 1) {
-      const res = await state.deps.executor.execute(`${nodeId}.${k}`, node.what[k], ctx);
+      const stepId = `${nodeId}.${k}`;
+      const res = await state.deps.executor.execute(stepId, node.what[k], ctx);
       state.steps.push({ nodeId, action: res.action, status: res.status });
+      state.artifacts.push(...res.artifacts);
       lastResult = res;
-      if (res.status === "success") continue;
+      if (res.status === "success") {
+        collectExtractPage(state, nodeId, stepId, res);
+        continue;
+      }
       // 실패 노드도 status 투영(ir-expression §2: failed_* 포함 모든 실행 노드의 status). fallback advance_when 이
       //   `node.<entry>.status == "failed_system"`(실패 시 전환)처럼 실패 status 를 관측해야 하므로 terminal 반환 전 기록.
       const failOut = projectNodeOutput(res);
@@ -412,6 +436,8 @@ export async function runScenario(
     loopState: new Map(),
     visited: [],
     steps: [],
+    artifacts: [],
+    extractPages: [],
     budget: { remaining: maxSteps },
     suspendBox: {},
   };
@@ -421,6 +447,13 @@ export async function runScenario(
     terminal,
     visited: state.visited,
     steps: state.steps,
+    artifacts: state.artifacts,
+    ...(state.extractPages.length > 0
+      ? {
+          extractPages: state.extractPages,
+          mergedExtract: mergeExtractOutputs(state.extractPages.map((page) => page.output)),
+        }
+      : {}),
     ...(state.suspendBox.current !== undefined ? { suspend: state.suspendBox.current } : {}),
   };
 }

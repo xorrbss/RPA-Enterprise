@@ -72,14 +72,16 @@ async function seedScenarioRun(pool: Pool, tenant: string, scen: string, sver: s
 interface ArtSeed {
   id: string; type: string; redaction: string; quarantine?: boolean; deleted?: string | null;
   sha256: string; objectRef: string; createdAt: string;
+  mediaType?: string; filename?: string; byteSize?: number; durationMs?: number;
 }
 async function seedArtifact(pool: Pool, tenant: string, run: string, a: ArtSeed): Promise<void> {
   await withTenantTx(pool, tenant, (c) =>
     c.query(
-      `INSERT INTO artifacts (id, tenant_id, run_id, type, redaction_status, sha256, object_ref,
+      `INSERT INTO artifacts (id, tenant_id, run_id, type, media_type, filename, byte_size, duration_ms, redaction_status, sha256, object_ref,
                               retention_until, quarantine, deleted_at, deleted_reason, created_at)
-       VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,'2026-09-01T00:00:00Z',$8,$9::timestamptz,$10,$11::timestamptz)`,
-      [a.id, tenant, run, a.type, a.redaction, a.sha256, a.objectRef, a.quarantine ?? false,
+       VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7::bigint,$8::int,$9,$10,$11,'2026-09-01T00:00:00Z',$12,$13::timestamptz,$14,$15::timestamptz)`,
+      [a.id, tenant, run, a.type, a.mediaType ?? null, a.filename ?? null, a.byteSize ?? null, a.durationMs ?? null,
+       a.redaction, a.sha256, a.objectRef, a.quarantine ?? false,
        a.deleted ?? null, a.deleted !== undefined && a.deleted !== null ? "test" : null, a.createdAt],
     ),
   );
@@ -101,8 +103,8 @@ async function main(): Promise<void> {
 
     await seedScenarioRun(pool, TENANT_A, SCEN_A, SVER_A, RUN_A);
     // 가시 2건(redacted/not_required) + 비가시 3건(pending/quarantine/deleted)
-    await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a1", type: "screenshot", redaction: "redacted", sha256: "SHA-SECRET-A1", objectRef: "obj://SECRET-A1", createdAt: "2026-06-15T00:00:01Z" });
-    await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a2", type: "receipt", redaction: "not_required", sha256: "SHA-SECRET-A2", objectRef: "obj://SECRET-A2", createdAt: "2026-06-15T00:00:02Z" });
+    await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a1", type: "screenshot", mediaType: "image/png", filename: "step-ok.png", byteSize: 12345, redaction: "redacted", sha256: "SHA-SECRET-A1", objectRef: "obj://SECRET-A1", createdAt: "2026-06-15T00:00:01Z" });
+    await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a2", type: "video", mediaType: "video/webm", filename: "run.webm", byteSize: 67890, durationMs: 4200, redaction: "not_required", sha256: "SHA-SECRET-A2", objectRef: "obj://SECRET-A2", createdAt: "2026-06-15T00:00:02Z" });
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a3", type: "vlm_input", redaction: "pending", sha256: "SHA-SECRET-A3", objectRef: "obj://SECRET-A3", createdAt: "2026-06-15T00:00:03Z" });
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a4", type: "screenshot", redaction: "redacted", quarantine: true, sha256: "SHA-SECRET-A4", objectRef: "obj://SECRET-A4", createdAt: "2026-06-15T00:00:04Z" });
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a5", type: "screenshot", redaction: "redacted", deleted: "2026-06-16T00:00:00Z", sha256: "SHA-SECRET-A5", objectRef: "obj://SECRET-A5", createdAt: "2026-06-15T00:00:05Z" });
@@ -130,11 +132,14 @@ async function main(): Promise<void> {
       check("viewer GET artifacts → 200", res.statusCode === 200, res.body);
       const items = res.json().items as Array<Record<string, unknown>>;
       check("가시 artifact 2건만(pending/quarantine/deleted 누락)", items.length === 2, JSON.stringify(items.map((i) => i.type)));
-      check("newest-first(a2 receipt → a1 screenshot)", items[0]?.type === "receipt" && items[1]?.type === "screenshot", JSON.stringify(items.map((i) => i.type)));
+      check("newest-first(a2 video → a1 screenshot)", items[0]?.type === "video" && items[1]?.type === "screenshot", JSON.stringify(items.map((i) => i.type)));
 
       // 2) metadata 필드
       check("metadata 필드(artifact_id/type/redaction_status/retention_until/legal_hold/created_at)",
         items[0]?.artifact_id === "72000000-0000-0000-0000-0000000000a2" && items[0]?.redaction_status === "not_required" && items[0]?.legal_hold === false && typeof items[0]?.created_at === "string");
+      check("media metadata exposed for image/video results",
+        items[0]?.media_type === "video/webm" && items[0]?.filename === "run.webm" && items[0]?.byte_size === 67890 && items[0]?.duration_ms === 4200,
+        JSON.stringify(items[0]));
 
       // 3) **민감 미노출** — content/object_ref/sha256 마커 0건
       const body = res.body;

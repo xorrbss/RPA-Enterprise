@@ -335,6 +335,57 @@ function main(): void {
     check("act: assert_absent + click_selector 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
+  // 23) observe: instruction 없는 observe는 on[] PageState resolver 전용으로 drop한다.
+  {
+    const s = compiledScenarioFrom({ start: "o", nodes: { o: { what: [{ action: "observe" }], terminal: "success" } } }, {});
+    check("observe: instruction 없으면 resolver-only drop", s.nodes.o?.what.length === 0, JSON.stringify(s.nodes.o?.what));
+  }
+
+  // 24) observe: instruction 있는 observe는 executor action으로 변환한다.
+  {
+    const s = compiledScenarioFrom({ start: "o", nodes: { o: { what: [{ action: "observe", instruction: "assess the current page" }], terminal: "success" } } }, {});
+    const ob = s.nodes.o?.what[0] as { type?: string; instruction?: string } | undefined;
+    check(
+      "observe: instruction 있으면 executor action",
+      ob?.type === "observe" && ob.instruction === "assess the current page",
+      JSON.stringify(ob),
+    );
+  }
+
+  // 25) observe: blank instruction은 조용히 drop하지 않고 schema 오류로 처리한다.
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "o", nodes: { o: { what: [{ action: "observe", instruction: "   " }], terminal: "success" } } }, {}));
+    check("observe: blank instruction -> IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
+  // ── (D) node.policy.recording → executor action 스레딩 ──
+  // 26) node-level recording 정책은 executor action으로 변환된 observe/navigate/act/extract 에 전달된다.
+  {
+    const ir = {
+      start: "open",
+      nodes: {
+        open: {
+          policy: { recording: "always" },
+          what: [
+            { action: "observe", label: "resolver-only" },
+            { action: "observe", instruction: "check visible result" },
+            { action: "navigate", url_ref: "entry_url" },
+            { action: "act", instruction: "click search" },
+            { action: "extract", instruction: "read result", schema_ref: "result" },
+          ],
+          terminal: "success",
+        },
+      },
+    };
+    const s = compiledScenarioFrom(ir, {}, { entry_url: "https://example.com" });
+    const actions = s.nodes.open?.what as Array<{ type: string; recording?: string }> | undefined;
+    check(
+      "node.policy.recording -> observe/navigate/act/extract actions",
+      actions?.length === 4 && actions[0]?.type === "observe" && actions.every((a) => a.recording === "always"),
+      JSON.stringify(actions),
+    );
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

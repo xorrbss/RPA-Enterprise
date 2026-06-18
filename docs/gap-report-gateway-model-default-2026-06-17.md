@@ -5,6 +5,8 @@
 > 전달 방법: **추후 결정** (Redmine 버그 등록 등은 미정)
 > 발견 맥락: 삼성디스플레이 게스트 사이트 대상 dev 콘솔 로그인 자동화 테스트 중, 자동화 prod 승격 후 "실행" 시 발생.
 
+> 현재 조치(2026-06-18): 이 리포트는 발견 당시 기록이다. 모델 기본값 UI는 `GatewayPolicyForms`/`Gateway` 경로에서 보강됐고, 사이트 등록 UI는 `loginUrl`/`authenticatedWhen`과 닫힌 page-state flag(`reviews_visible`, `no_next_page`, `blocked` 등)를 전송할 수 있게 됐다. 아래 원문은 당시 원인 분석 보존용이다.
+
 ---
 
 ## 1. 증상

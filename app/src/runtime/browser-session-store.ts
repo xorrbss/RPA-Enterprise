@@ -6,13 +6,10 @@
  * `enc_kid`로만 영속한다. 평문 쿠키는 인증 자료 = PlainSecret 급 — load→decrypt→setCookies / getAllCookies→encrypt→save
  * 의 **단명 지역변수**로만 존재하고 로그/직렬화/이벤트/artifact/LLM/audit 에 절대 흐르지 않는다.
  *
- * 보안 fail-closed: PgBrowserSessionStore 는 **실 암호화기(KMS)** 없이는 생성 거부(생성자 throw — 첫 save 아님).
- *   prod 는 KmsEnvelopeSessionEncryptor(per-message DEK 봉투암호화, buildKmsSessionEncryptor 로 KEK 1회 해소)를 주입한다.
- *   KEK SecretRef(rpa/<env>/<identity>/browser_session/active) 가 미프로비저닝이면 빌드 실패 → 세션 미등록(안전한 성능저하,
- *   누출 아님). dev-plaintext 암호화기는 명시적 allowDevPlaintext 옵트인에서만 허용(prod 차단).
+ * 보안 fail-closed: PgBrowserSessionStore 는 **실 암호화기(KMS/SecretStore 데이터키)** 없이는 생성 거부
+ * (생성자 throw — 첫 save 아님). dev-plaintext 암호화기는 명시적 allowDevPlaintext 옵트인에서만 허용(prod 차단).
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-
 import type { Pool, PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
@@ -71,92 +68,157 @@ export class DevPlaintextSessionEncryptor implements SessionEncryptor {
   }
 }
 
-/**
- * PROD 봉투암호화 암호화기 — 세션 쿠키(인증 자료)의 at-rest 평문을 막는다(kind:'kms' → PgBrowserSessionStore fail-closed
- * 게이트 통과). **per-message 데이터키(DEK) 봉투암호화**: 메시지마다 임의 DEK 로 평문을 AES-256-GCM, DEK 자체는 KEK
- * (SecretStore 가 보유, kid 로 식별·회전)로 다시 AES-256-GCM 래핑한다. ciphertext 는 자기완결 버퍼(version|wrappedDEK|
- * encMsg), enc_kid=KEK kid(회전 추적). 키는 DB 가 아닌 SecretStore(resume-token kid 회전 패턴 미러). GCM authTag 가 위변조를
- * 탐지(복호화 시 throw = 조용한 잘못된 세션 금지). 동기 인터페이스라 KEK 는 buildKmsSessionEncryptor 가 1회 해소(빌드시)한다.
- */
-const KMS_VERSION = 0x01;
-const DEK_BYTES = 32; // AES-256
-const IV_BYTES = 12; // GCM 표준 nonce
-const TAG_BYTES = 16; // GCM auth tag
-
-export interface KmsKeyring {
-  /** 신규 암호화에 쓸 활성 KEK kid. */
-  readonly activeKid: string;
-  /** kid → 32바이트 KEK. 회전 시 폐기 kid 를 함께 담아 grace 복호화 지원(활성 외 kid 는 복호화만). */
-  readonly keys: ReadonlyMap<string, Buffer>;
-}
-
-export class KmsEnvelopeSessionEncryptor implements SessionEncryptor {
+/** SecretStore/KMS에서 해소한 256-bit 데이터키로 세션 쿠키 번들을 AES-256-GCM 암호화한다. */
+export class AesGcmSessionEncryptor implements SessionEncryptor {
   readonly kind = "kms" as const;
-  private readonly activeKid: string;
-  private readonly keys: ReadonlyMap<string, Buffer>;
+  private static readonly IV_BYTES = 12;
+  private static readonly TAG_BYTES = 16;
 
-  constructor(keyring: KmsKeyring) {
-    const active = keyring.keys.get(keyring.activeKid);
-    if (active === undefined || active.length !== DEK_BYTES) {
-      throw new Error("KmsEnvelopeSessionEncryptor: activeKid 가 keyring 에 없거나 KEK 가 32바이트가 아님");
+  constructor(private readonly key: Buffer, private readonly kid: string) {
+    if (key.length !== 32) {
+      throw new Error("AesGcmSessionEncryptor: key must be exactly 32 bytes for AES-256-GCM");
     }
-    this.activeKid = keyring.activeKid;
-    this.keys = keyring.keys;
+    if (kid.length === 0) {
+      throw new Error("AesGcmSessionEncryptor: kid is required");
+    }
   }
 
   encrypt(plaintext: Buffer): { ciphertext: Buffer; kid: string } {
-    const kek = this.keys.get(this.activeKid) as Buffer;
-    const dek = randomBytes(DEK_BYTES);
-    try {
-      const ivK = randomBytes(IV_BYTES);
-      const cK = createCipheriv("aes-256-gcm", kek, ivK);
-      const wrappedDek = Buffer.concat([cK.update(dek), cK.final()]);
-      const tagK = cK.getAuthTag();
-      const ivM = randomBytes(IV_BYTES);
-      const cM = createCipheriv("aes-256-gcm", dek, ivM);
-      const encMsg = Buffer.concat([cM.update(plaintext), cM.final()]);
-      const tagM = cM.getAuthTag();
-      const ciphertext = Buffer.concat([Buffer.from([KMS_VERSION]), ivK, tagK, wrappedDek, ivM, tagM, encMsg]);
-      return { ciphertext, kid: this.activeKid };
-    } finally {
-      dek.fill(0); // 평문 DEK 단명 — 즉시 폐기.
-    }
+    const iv = randomBytes(AesGcmSessionEncryptor.IV_BYTES);
+    const cipher = createCipheriv("aes-256-gcm", this.key, iv);
+    const body = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return { ciphertext: Buffer.concat([iv, cipher.getAuthTag(), body]), kid: this.kid };
   }
 
   decrypt(ciphertext: Buffer, kid: string): Buffer {
-    const kek = this.keys.get(kid);
-    if (kek === undefined) {
-      throw new Error(`KmsEnvelopeSessionEncryptor: 알 수 없는 enc_kid '${kid}'(회전/폐기 키 — 복호화 불가)`); // 조용한 false 금지
+    if (kid !== this.kid) {
+      throw new Error("AesGcmSessionEncryptor: enc_kid does not match configured key");
     }
-    let off = 0;
-    if (ciphertext.length < 1 + IV_BYTES + TAG_BYTES + DEK_BYTES + IV_BYTES + TAG_BYTES || ciphertext[off] !== KMS_VERSION) {
-      throw new Error("KmsEnvelopeSessionEncryptor: ciphertext 포맷/버전 불일치");
+    if (ciphertext.length < AesGcmSessionEncryptor.IV_BYTES + AesGcmSessionEncryptor.TAG_BYTES) {
+      throw new Error("AesGcmSessionEncryptor: ciphertext too short");
     }
-    off += 1;
-    const ivK = ciphertext.subarray(off, (off += IV_BYTES));
-    const tagK = ciphertext.subarray(off, (off += TAG_BYTES));
-    const wrappedDek = ciphertext.subarray(off, (off += DEK_BYTES));
-    const ivM = ciphertext.subarray(off, (off += IV_BYTES));
-    const tagM = ciphertext.subarray(off, (off += TAG_BYTES));
-    const encMsg = ciphertext.subarray(off);
-    const dK = createDecipheriv("aes-256-gcm", kek, ivK);
-    dK.setAuthTag(tagK);
-    const dek = Buffer.concat([dK.update(wrappedDek), dK.final()]); // authTag 불일치 → throw(위변조 탐지)
-    try {
-      const dM = createDecipheriv("aes-256-gcm", dek, ivM);
-      dM.setAuthTag(tagM);
-      return Buffer.concat([dM.update(encMsg), dM.final()]);
-    } finally {
-      dek.fill(0);
-    }
+    const iv = ciphertext.subarray(0, AesGcmSessionEncryptor.IV_BYTES);
+    const tag = ciphertext.subarray(AesGcmSessionEncryptor.IV_BYTES, AesGcmSessionEncryptor.IV_BYTES + AesGcmSessionEncryptor.TAG_BYTES);
+    const body = ciphertext.subarray(AesGcmSessionEncryptor.IV_BYTES + AesGcmSessionEncryptor.TAG_BYTES);
+    const decipher = createDecipheriv("aes-256-gcm", this.key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(body), decipher.final()]);
   }
 }
 
-interface ParsedKek {
-  kid: string;
-  key: string; // base64 32바이트
+export interface KmsKeyring {
+  readonly activeKid: string;
+  readonly keys: ReadonlyMap<string, Buffer>;
 }
-function isParsedKek(v: unknown): v is ParsedKek {
+
+/**
+ * per-message DEK 봉투암호화 세션 암호화기. 각 encrypt마다 256-bit DEK를 새로 만들고,
+ * active KEK(kid)로 DEK를 AES-GCM wrapping 한 뒤 본문을 DEK로 AES-GCM 암호화한다.
+ */
+export class KmsEnvelopeSessionEncryptor implements SessionEncryptor {
+  readonly kind = "kms" as const;
+  private static readonly VERSION = 1;
+  private static readonly IV_BYTES = 12;
+  private static readonly TAG_BYTES = 16;
+  private static readonly KEY_BYTES = 32;
+
+  constructor(private readonly keyring: KmsKeyring) {
+    if (keyring.activeKid.length === 0 || keyring.keys.has(keyring.activeKid) !== true) {
+      throw new Error("KmsEnvelopeSessionEncryptor: activeKid must exist in keyring");
+    }
+    for (const [kid, key] of keyring.keys.entries()) {
+      if (kid.length === 0) {
+        throw new Error("KmsEnvelopeSessionEncryptor: keyring kid is required");
+      }
+      if (key.length !== KmsEnvelopeSessionEncryptor.KEY_BYTES) {
+        throw new Error(`KmsEnvelopeSessionEncryptor: KEK '${kid}' must be exactly 32 bytes`);
+      }
+    }
+  }
+
+  encrypt(plaintext: Buffer): { ciphertext: Buffer; kid: string } {
+    const kek = this.requireKey(this.keyring.activeKid);
+    const dek = randomBytes(KmsEnvelopeSessionEncryptor.KEY_BYTES);
+    const wrappedDek = this.encryptAesGcm(kek, dek);
+    const body = this.encryptAesGcm(dek, plaintext);
+    return {
+      ciphertext: Buffer.concat([Buffer.from([KmsEnvelopeSessionEncryptor.VERSION]), wrappedDek, body]),
+      kid: this.keyring.activeKid,
+    };
+  }
+
+  decrypt(ciphertext: Buffer, kid: string): Buffer {
+    const kek = this.requireKey(kid);
+    const headerBytes = 1;
+    const sealedDekBytes =
+      KmsEnvelopeSessionEncryptor.IV_BYTES +
+      KmsEnvelopeSessionEncryptor.TAG_BYTES +
+      KmsEnvelopeSessionEncryptor.KEY_BYTES;
+    const minBytes = headerBytes + sealedDekBytes + KmsEnvelopeSessionEncryptor.IV_BYTES + KmsEnvelopeSessionEncryptor.TAG_BYTES;
+    if (ciphertext.length < minBytes) {
+      throw new Error("KmsEnvelopeSessionEncryptor: ciphertext too short");
+    }
+    if (ciphertext[0] !== KmsEnvelopeSessionEncryptor.VERSION) {
+      throw new Error("KmsEnvelopeSessionEncryptor: unsupported ciphertext version");
+    }
+    const wrappedDek = ciphertext.subarray(headerBytes, headerBytes + sealedDekBytes);
+    const body = ciphertext.subarray(headerBytes + sealedDekBytes);
+    const dek = this.decryptAesGcm(kek, wrappedDek);
+    if (dek.length !== KmsEnvelopeSessionEncryptor.KEY_BYTES) {
+      throw new Error("KmsEnvelopeSessionEncryptor: unwrapped DEK length invalid");
+    }
+    return this.decryptAesGcm(dek, body);
+  }
+
+  private requireKey(kid: string): Buffer {
+    const key = this.keyring.keys.get(kid);
+    if (key === undefined) {
+      throw new Error(`KmsEnvelopeSessionEncryptor: unknown enc_kid '${kid}'`);
+    }
+    return key;
+  }
+
+  private encryptAesGcm(key: Buffer, plaintext: Buffer): Buffer {
+    const iv = randomBytes(KmsEnvelopeSessionEncryptor.IV_BYTES);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const body = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), body]);
+  }
+
+  private decryptAesGcm(key: Buffer, sealed: Buffer): Buffer {
+    if (sealed.length < KmsEnvelopeSessionEncryptor.IV_BYTES + KmsEnvelopeSessionEncryptor.TAG_BYTES) {
+      throw new Error("KmsEnvelopeSessionEncryptor: sealed payload too short");
+    }
+    const iv = sealed.subarray(0, KmsEnvelopeSessionEncryptor.IV_BYTES);
+    const tag = sealed.subarray(
+      KmsEnvelopeSessionEncryptor.IV_BYTES,
+      KmsEnvelopeSessionEncryptor.IV_BYTES + KmsEnvelopeSessionEncryptor.TAG_BYTES,
+    );
+    const body = sealed.subarray(KmsEnvelopeSessionEncryptor.IV_BYTES + KmsEnvelopeSessionEncryptor.TAG_BYTES);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(body), decipher.final()]);
+  }
+}
+
+/** base64/base64url(접두 "base64:" 허용) 인코딩 32바이트 → AES-256 데이터키. 그 외 길이는 throw. */
+export function decodeBrowserSessionDataKey(secret: string): Buffer {
+  const raw = secret.trim();
+  const encoded = raw.startsWith("base64:") ? raw.slice("base64:".length) : raw;
+  const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.length % 4 === 0 ? normalized : normalized + "=".repeat(4 - (normalized.length % 4));
+  const key = Buffer.from(padded, "base64");
+  if (key.length !== 32) {
+    throw new Error("browser_session key must be base64/base64url encoded 32 bytes for AES-256-GCM");
+  }
+  return key;
+}
+
+interface ParsedSessionKek {
+  kid: string;
+  key: string;
+}
+function isParsedSessionKek(v: unknown): v is ParsedSessionKek {
   return (
     typeof v === "object" &&
     v !== null &&
@@ -167,10 +229,25 @@ function isParsedKek(v: unknown): v is ParsedKek {
 }
 
 /**
- * KEK 를 SecretStore 에서 1회 해소해 KmsEnvelopeSessionEncryptor 를 만든다(동기 인터페이스라 빌드시 해소). 페이로드 모델은
- * resume-token 과 동일: SecretStore.resolve(ref) → `{kid, key}` JSON(활성 KEK, well-known SecretRef). key=base64 32바이트.
- * 회전 grace(폐기 kid 복호화)는 후속 — 현재 활성 {kid,key} 단일(미러: HmacResumeTokenCodec).
+ * SecretStore 의 KEK SecretRef 를 1회 해소해 AesGcmSessionEncryptor 를 만든다(동기 인터페이스라 빌드시 해소).
+ * 페이로드 = `{kid, key}` JSON(key=base64/base64url 32바이트). **kid 는 페이로드에서** 오므로, api(capture/complete
+ * 암호화)·runtime-worker(세션 복원 복호화)가 동일 {kid,key} 를 각자 namespace 에 seed 하면 **cross-identity round-trip**
+ * 이 성립한다(enc_kid 일치). resume-token kid 회전 패턴 미러.
  */
+export async function buildAesGcmSessionEncryptor(store: SecretStore, kekRef: SecretRef): Promise<AesGcmSessionEncryptor> {
+  const raw: PlainSecret = await store.resolve(kekRef);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw as string);
+  } catch {
+    throw new Error("buildAesGcmSessionEncryptor: KEK SecretRef 페이로드가 유효한 JSON 이 아님(기대: {kid,key})");
+  }
+  if (!isParsedSessionKek(parsed)) {
+    throw new Error("buildAesGcmSessionEncryptor: KEK SecretRef 페이로드는 {kid, key} 여야 함");
+  }
+  return new AesGcmSessionEncryptor(decodeBrowserSessionDataKey(parsed.key), parsed.kid);
+}
+
 export async function buildKmsSessionEncryptor(store: SecretStore, kekRef: SecretRef): Promise<KmsEnvelopeSessionEncryptor> {
   const raw: PlainSecret = await store.resolve(kekRef);
   let parsed: unknown;
@@ -179,14 +256,11 @@ export async function buildKmsSessionEncryptor(store: SecretStore, kekRef: Secre
   } catch {
     throw new Error("buildKmsSessionEncryptor: KEK SecretRef 페이로드가 유효한 JSON 이 아님(기대: {kid,key})");
   }
-  if (!isParsedKek(parsed)) {
+  if (!isParsedSessionKek(parsed)) {
     throw new Error("buildKmsSessionEncryptor: KEK SecretRef 페이로드는 {kid, key} 여야 함");
   }
-  const key = Buffer.from(parsed.key, "base64");
-  if (key.length !== DEK_BYTES) {
-    throw new Error(`buildKmsSessionEncryptor: KEK 는 base64 인코딩된 32바이트여야 함(받은 길이 ${key.length})`);
-  }
-  return new KmsEnvelopeSessionEncryptor({ activeKid: parsed.kid, keys: new Map([[parsed.kid, key]]) });
+  const kid = parsed.kid;
+  return new KmsEnvelopeSessionEncryptor({ activeKid: kid, keys: new Map([[kid, decodeBrowserSessionDataKey(parsed.key)]]) });
 }
 
 export interface PgBrowserSessionStoreDeps {

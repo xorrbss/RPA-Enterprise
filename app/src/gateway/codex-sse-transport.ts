@@ -44,7 +44,7 @@ export class FetchCodexSseTransport implements CodexSseTransport {
   async *open(req: LLMRequest, signal: AbortSignal): AsyncIterable<OpenAiSseChunk> {
     const doFetch = this.opts.fetchImpl ?? fetch;
     const body = {
-      model: this.opts.model,
+      model: req.model || this.opts.model,
       stream: true,
       stream_options: { include_usage: true }, // 최종 usage 청크 수신(없으면 어댑터가 추정)
       messages: req.messages.map((m) => ({

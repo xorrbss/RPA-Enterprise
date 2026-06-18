@@ -5,6 +5,7 @@ import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
+import { SlideOver } from "../components/SlideOver";
 import { StatusBadge } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, navigate, useHashParam } from "../router";
@@ -108,13 +109,7 @@ function WorkitemDetailPanel({
   onClose: () => void;
 }): JSX.Element {
   return (
-    <section className="panel" style={{ marginBottom: 16, padding: 16 }} aria-label="작업항목 상세">
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <strong>작업항목 상세 — {workitemId.slice(0, 8)}</strong>
-        <button className="btn" type="button" onClick={onClose}>
-          닫기
-        </button>
-      </header>
+    <SlideOver title={`작업항목 상세 — ${workitemId.slice(0, 8)}`} onClose={onClose}>
       {detail.isLoading ? (
         <Loading />
       ) : detail.isError ? (
@@ -145,6 +140,6 @@ function WorkitemDetailPanel({
           )}
         </dl>
       ) : null}
-    </section>
+    </SlideOver>
   );
 }

@@ -33,6 +33,7 @@ const SCEN_B = "70000000-0000-0000-0000-0000000000b3";
 const SVER_B = "70000000-0000-0000-0000-0000000000b4";
 const ASSIGNEE = "70000000-0000-0000-0000-0000000000c1";
 const ABSENT = "70000000-0000-0000-0000-0000000000ff";
+const NETWORK_A = "7a200000-0000-0000-0000-000000000001";
 
 const SECRET = new TextEncoder().encode("d65-reads-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -171,6 +172,32 @@ async function seedSite(
   );
 }
 
+async function seedBrowserSession(pool: Pool, tenant: string, siteId: string, identityId: string): Promise<void> {
+  await withTenantTx(pool, tenant, async (c) => {
+    await c.query(
+      `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label)
+       VALUES ($1,$2,$3,'default')`,
+      [identityId, tenant, siteId],
+    );
+    await c.query(
+      `INSERT INTO browser_sessions (
+         tenant_id, site_profile_id, browser_identity_id, identity_key, ciphertext, enc_kid, expires_at
+       ) VALUES ($1,$2,$3,'',decode('00','hex'),'kid-test','2026-07-01T00:00:00Z')`,
+      [tenant, siteId, identityId],
+    );
+  });
+}
+
+async function seedNetworkPolicy(pool: Pool, tenant: string, id: string): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO network_policies (id, tenant_id, allowed_domains)
+       VALUES ($1,$2,ARRAY['green-site.example'])`,
+      [id, tenant],
+    ),
+  );
+}
+
 const ts = (i: number) => `2026-06-15T10:0${i}:00Z`;
 
 async function main(): Promise<void> {
@@ -275,6 +302,8 @@ async function main(): Promise<void> {
     await seedSite(pool, TENANT_A, SITE_GREEN, "green-site", "green", false, "closed", ts(1));
     await seedSite(pool, TENANT_A, SITE_AMBER, "amber-site", "amber", false, "half_open", ts(2));
     await seedSite(pool, TENANT_B, SITE_B, "b-site", "red", false, "closed", ts(0));
+    await seedNetworkPolicy(pool, TENANT_A, NETWORK_A);
+    await seedBrowserSession(pool, TENANT_A, SITE_GREEN, "7a100000-0000-0000-0000-000000000002");
     console.log("seeded runs + human tasks + workitems + dead letters + gateway + sites");
 
     const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
@@ -307,9 +336,10 @@ async function main(): Promise<void> {
         allBody.items[0].run_id === A_RUNS[4][0] && allBody.items[4].run_id === A_RUNS[0][0],
         JSON.stringify(allBody.items.map((r: { run_id: string }) => r.run_id)),
       );
-      check("listRuns item shape (run_id/status/current_node null/as_of/failure_reason)",
+      check("listRuns item shape (run_id/status/current_node null/as_of/updated_at/failure_reason)",
         allBody.items[0].status === "failed_system" && allBody.items[0].current_node === null &&
         allBody.items[0].as_of === "2026-06-15T00:00:00.000Z" &&
+        typeof allBody.items[0].updated_at === "string" &&
         allBody.items[0].failure_reason?.code === "RUN_LOOP_FAILED" &&
         allBody.items[0].failure_reason?.message === "site profile not found", JSON.stringify(allBody.items[0]));
 
@@ -367,6 +397,10 @@ async function main(): Promise<void> {
       check("filter kind=approval → 2", byKind.json().items.length === 2, "");
       const byAssignee = await get(`/v1/human-tasks?assignee=${ASSIGNEE}`);
       check("filter assignee → 1", byAssignee.json().items.length === 1 && byAssignee.json().items[0].human_task_id === HT_A2, "");
+      const byRun = await get(`/v1/human-tasks?run_id=${A_RUNS[3][0]}`);
+      check("filter run_id → 3 linked tasks", byRun.json().items.length === 3 && byRun.json().items.every((h: { run_id: string }) => h.run_id === A_RUNS[3][0]), JSON.stringify(byRun.json().items));
+      const badRun = await get("/v1/human-tasks?run_id=not-uuid");
+      check("invalid run_id → 422", badRun.statusCode === 422 && badRun.json().details?.reason === "invalid_run_id", badRun.body);
       const htPage = await get("/v1/human-tasks?limit=2");
       check("HT page limit=2 → 2 + cursor", htPage.json().items.length === 2 && typeof htPage.json().next_cursor === "string", "");
       const badKind = await get("/v1/human-tasks?kind=bogus");
@@ -470,9 +504,13 @@ async function main(): Promise<void> {
       // ===== listSites / getSite =====
       const sites = await get("/v1/sites");
       check("listSites → 200, 3 items", sites.statusCode === 200 && sites.json().items.length === 3, sites.body);
-      check("Site shape (site_profile_id/risk/approval_status/circuit_status)",
-        sites.json().items.some((s: { site_profile_id: string; risk: string; approval_status: string; circuit_status: string }) =>
-          s.site_profile_id === SITE_RED && s.risk === "red" && s.approval_status === "approved" && s.circuit_status === "open"),
+      check("Site shape (url_pattern/risk/approval_status/circuit_status/session meta)",
+        sites.json().items.some((s: { site_profile_id: string; url_pattern: string; risk: string; approval_status: string; circuit_status: string; session_ready: boolean; session_expires_at: string | null; default_browser_identity_id: string | null; default_network_policy_id: string | null }) =>
+          s.site_profile_id === SITE_GREEN && s.url_pattern === "https://green-site.example/*" &&
+          s.risk === "green" && s.approval_status === "pending" && s.circuit_status === "closed" &&
+          s.session_ready === true && s.session_expires_at === "2026-07-01T00:00:00.000Z" &&
+          s.default_browser_identity_id === "7a100000-0000-0000-0000-000000000002" &&
+          s.default_network_policy_id === NETWORK_A),
         JSON.stringify(sites.json().items));
       const sitesRed = await get("/v1/sites?risk=red");
       check("filter risk=red → 1", sitesRed.json().items.length === 1 && sitesRed.json().items[0].site_profile_id === SITE_RED, "");
@@ -480,7 +518,9 @@ async function main(): Promise<void> {
       check("invalid risk → 422", sitesBadRisk.statusCode === 422, sitesBadRisk.body);
       const siteDetail = await get(`/v1/sites/${SITE_GREEN}`);
       check("getSite → 200 (approval_status pending, circuit closed)",
-        siteDetail.statusCode === 200 && siteDetail.json().approval_status === "pending" && siteDetail.json().circuit_status === "closed", siteDetail.body);
+        siteDetail.statusCode === 200 && siteDetail.json().approval_status === "pending" && siteDetail.json().circuit_status === "closed" &&
+        siteDetail.json().default_browser_identity_id === "7a100000-0000-0000-0000-000000000002" &&
+        siteDetail.json().default_network_policy_id === NETWORK_A, siteDetail.body);
       const siteAbsent = await get(`/v1/sites/${ABSENT}`);
       check("absent site → 404", siteAbsent.statusCode === 404 && siteAbsent.json().code === "RESOURCE_NOT_FOUND", siteAbsent.body);
       const siteCross = await get(`/v1/sites/${SITE_B}`);

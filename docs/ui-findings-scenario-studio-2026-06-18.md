@@ -4,6 +4,8 @@
 > **방법**: dev 콘솔(127.0.0.1:8080) Playwright 실구동 + `dev:serve` 로그 + Postgres 실측. **모든 항목 실제 실행으로 확인**(추측 없음).
 > **이전 버전**: 시간순 작성본은 `docs/archive/ui-findings-scenario-studio-2026-06-18.chronological-v1.md`
 
+> **현재 조치 메모(2026-06-18)**: 이 문서는 당시 실측 리포트다. 이후 UI 관련 블록 중 저-코드 추출 지시문/loop 생성, 단계 편집 loop·act/observe instruction, 사이트 `page_state_selectors` 입력, 실행 상세 artifact 결과 미리보기, 추출 프롬프트의 `network_json` 근거 지원이 반영됐다. 아래 본문은 발견 당시 맥락 보존용이며 최신 상태는 코드와 테스트(`scenario-params`, `smoke`, `run-trace`, `stagehand-dom-executor`)를 기준으로 본다.
+
 ---
 
 ## TL;DR

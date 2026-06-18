@@ -9,6 +9,7 @@
 import type { PoolClient } from "pg";
 
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
+import type { RuntimeJobEnqueuePort } from "../runtime/executor-completion-coordinator";
 import { RUNTIME_JOB_TASK } from "../worker/graphile-runner";
 
 export interface RunEnqueueInput {
@@ -26,6 +27,11 @@ export interface SinkDeliverEnqueueInput {
   correlationId: string;
 }
 
+export interface ArtifactRedactionEnqueueInput {
+  tenantId: string;
+  correlationId: string;
+}
+
 export interface RunEnqueuer {
   /** run create 직후 run_claim 잡을 호출측 트랜잭션(client)으로 인큐(동일 tx 보장). */
   enqueueRunClaim(client: PoolClient, input: RunEnqueueInput): Promise<void>;
@@ -34,13 +40,22 @@ export interface RunEnqueuer {
   /** sink-DLQ replay: 새 sink_deliver attempt를 호출측 트랜잭션으로 인큐(D8-A3 — 상태전이 아님,
    *  worker가 attempt_no=MAX+1·동일 멱등키 산출). 실 재전달은 worker의 SinkDeliveryPort(egress) 의존. */
   enqueueSinkDeliver(client: PoolClient, input: SinkDeliverEnqueueInput): Promise<void>;
+  /** Run-less generation artifacts need a tenant-scoped redaction pass before they become readable. */
+  enqueueArtifactRedaction?(client: PoolClient, input: ArtifactRedactionEnqueueInput): Promise<void>;
   /** human_task resolve(R13: suspended→resume_requested) 직후 run_resume 잡을 같은 트랜잭션으로 인큐(원자).
    *  optional: 미지원 enqueuer 가 resolve(R13)에 도달하면 호출측이 loud throw(조용한 stuck 금지). */
   enqueueRunResume?(client: PoolClient, input: RunEnqueueInput): Promise<void>;
 }
 
 /** 운영: graphile_worker.add_job을 호출측 트랜잭션에서 실행(상태변경+인큐 원자화). */
-export class PgGraphileRunEnqueuer implements RunEnqueuer {
+export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort {
+  async enqueueRuntimeJob(client: PoolClient, job: RuntimeWorkerJob): Promise<void> {
+    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
+      RUNTIME_JOB_TASK,
+      JSON.stringify(job),
+    ]);
+  }
+
   async enqueueRunClaim(client: PoolClient, input: RunEnqueueInput): Promise<void> {
     const job: RuntimeWorkerJob = {
       kind: "run_claim",
@@ -48,10 +63,7 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer {
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     };
-    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
-      RUNTIME_JOB_TASK,
-      JSON.stringify(job),
-    ]);
+    await this.enqueueRuntimeJob(client, job);
   }
 
   async enqueueRunAbort(client: PoolClient, input: RunEnqueueInput): Promise<void> {
@@ -61,10 +73,7 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer {
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     };
-    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
-      RUNTIME_JOB_TASK,
-      JSON.stringify(job),
-    ]);
+    await this.enqueueRuntimeJob(client, job);
   }
 
   async enqueueSinkDeliver(client: PoolClient, input: SinkDeliverEnqueueInput): Promise<void> {
@@ -74,10 +83,16 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer {
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
       sinkDelivery: { sinkConfigId: input.sinkConfigId, normalizedRecordId: input.normalizedRecordId },
     };
-    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
-      RUNTIME_JOB_TASK,
-      JSON.stringify(job),
-    ]);
+    await this.enqueueRuntimeJob(client, job);
+  }
+
+  async enqueueArtifactRedaction(client: PoolClient, input: ArtifactRedactionEnqueueInput): Promise<void> {
+    const job: RuntimeWorkerJob = {
+      kind: "artifact_redaction",
+      tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
+      correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
+    };
+    await this.enqueueRuntimeJob(client, job);
   }
 
   async enqueueRunResume(client: PoolClient, input: RunEnqueueInput): Promise<void> {
@@ -87,9 +102,6 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer {
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     };
-    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
-      RUNTIME_JOB_TASK,
-      JSON.stringify(job),
-    ]);
+    await this.enqueueRuntimeJob(client, job);
   }
 }

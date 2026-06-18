@@ -143,6 +143,10 @@ export async function completeIdempotencyInTx(
   }
 }
 
+export function idempotencyRecordRowId(recordId: string): string {
+  return decodeRecordId(recordId).rowId;
+}
+
 function encodeRecordId(tenantId: string, rowId: string): string {
   return `${tenantId}:${rowId}`;
 }

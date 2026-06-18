@@ -1,37 +1,10 @@
 import { useMemo } from "react";
+import { RBAC_ROLE_ACTIONS, RBAC_ROLE_LABELS } from "../../../ts/rbac-policy";
 
-// 역할별 UI 게이팅. 권위는 백엔드(RoleMatrixRbacMiddleware가 최종 강제) — 여기는 viewer가 못 누를 명령 버튼을
-// 숨겨 403 클릭을 줄이는 UX 보조다. auth-rbac.md §2 / app/src/api/rbac.ts ROLE_ACTIONS의 "콘솔이 노출하는
-// 명령(쓰기) 액션" 부분집합을 그대로 미러링한다(읽기 액션은 전 역할 허용이라 게이팅하지 않는다).
-// 미러이므로 매트릭스가 바뀌면 함께 갱신해야 한다(누락/과허용이 보안 결함은 아니나 UX 정합을 위해).
-const ROLE_ACTIONS: Readonly<Record<string, readonly string[]>> = {
-  viewer: [],
-  operator: ["run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "site.update", "session.capture", "scenario.create", "scenario.update", "human_task.assign", "human_task.start"],
-  reviewer: [
-    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "site.update", "session.capture", "scenario.create", "scenario.update",
-    "human_task.assign", "human_task.start", "human_task.escalate",
-    "human_task.resolve.validation", "human_task.resolve.exception", "human_task.resolve.captcha", "human_task.resolve.mfa",
-  ],
-  approver: [
-    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "site.update", "session.capture", "scenario.create", "scenario.update",
-    "human_task.assign", "human_task.start", "human_task.escalate",
-    "human_task.resolve.validation", "human_task.resolve.exception", "human_task.resolve.captcha", "human_task.resolve.mfa", "human_task.resolve.approval",
-    "site.approve", "approval.decide",
-  ],
-  admin: [
-    "run.create", "run.abort", "dlq.replay", "sink_dlq.replay", "site.create", "site.update", "session.capture", "scenario.create", "scenario.update", "scenario.promote",
-    "human_task.assign", "human_task.start", "human_task.escalate",
-    "human_task.resolve.validation", "human_task.resolve.exception", "human_task.resolve.captcha", "human_task.resolve.mfa", "human_task.resolve.approval",
-    "site.approve", "approval.decide", "gateway_policy.edit",
-  ],
-};
+// UI gating is a convenience layer only. The backend RoleMatrixRbacMiddleware
+// is still authoritative, but the console now reads the same RBAC matrix source.
+export const ROLE_LABELS: Readonly<Record<string, string>> = RBAC_ROLE_LABELS;
 
-// 역할 → 비기술 한국어(탑바 역할 칩 표시용). auth-rbac.md 역할 레지스트리(viewer/operator/reviewer/approver/admin).
-export const ROLE_LABELS: Readonly<Record<string, string>> = {
-  viewer: "뷰어", operator: "운영자", reviewer: "검토자", approver: "승인자", admin: "관리자",
-};
-
-// JWT payload(base64url)에서 roles 클레임만 읽는다(서명 검증은 백엔드 책임 — 여기선 표시 판단용).
 export function decodeRoles(token: string | null): string[] {
   if (token === null || token === "") return [];
   const payloadPart = token.split(".")[1];
@@ -47,11 +20,33 @@ export function decodeRoles(token: string | null): string[] {
 }
 
 export function rolesCan(roles: readonly string[], action: string): boolean {
-  return roles.some((r) => (ROLE_ACTIONS[r] ?? []).includes(action));
+  const roleActions = RBAC_ROLE_ACTIONS as Readonly<Record<string, readonly string[]>>;
+  return roles.some((r) => (roleActions[r] ?? []).includes(action));
 }
 
-// 현재 토큰의 역할로 액션 허용 여부를 판단하는 함수를 반환. 로그아웃은 페이지를 reload하므로 mount 시 1회 읽기로 충분.
+export function decodeSubject(token: string | null): string | null {
+  if (token === null || token === "") return null;
+  const payloadPart = token.split(".")[1];
+  if (payloadPart === undefined) return null;
+  try {
+    const b64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64.length % 4 === 0 ? b64 : b64 + "=".repeat(4 - (b64.length % 4));
+    const payload = JSON.parse(atob(padded)) as { sub?: unknown };
+    return typeof payload.sub === "string" && payload.sub.length > 0 ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+export function useSubject(): string | null {
+  return useMemo(() => decodeSubject(localStorage.getItem("rpa.token")), []);
+}
+
+export function useRoles(): readonly string[] {
+  return useMemo(() => decodeRoles(localStorage.getItem("rpa.token")), []);
+}
+
 export function useCan(): (action: string) => boolean {
-  const roles = useMemo(() => decodeRoles(localStorage.getItem("rpa.token")), []);
+  const roles = useRoles();
   return useMemo(() => (action: string) => rolesCan(roles, action), [roles]);
 }

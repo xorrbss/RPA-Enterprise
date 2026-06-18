@@ -259,6 +259,37 @@ CREATE UNIQUE INDEX idx_runs_one_per_workitem ON runs (tenant_id, workitem_id)
 CREATE INDEX idx_runs_correlation ON runs (correlation_id);
 
 -- ============================================================
+-- 4b. scenario_generations
+--    자연어 프롬프트 → IR 초안 → 저장/실행 자동화 원장. prompt 원문은 저장하지 않고 hash/ref만 둔다.
+--    실제 실행은 기존 scenario_versions + runs 계약을 재사용한다.
+-- ============================================================
+
+CREATE TABLE scenario_generations (
+  id                  uuid        PRIMARY KEY,
+  tenant_id           uuid        NOT NULL,
+  mode                text        NOT NULL
+                        CHECK (mode IN ('draft_only','save','save_and_run')),
+  status              text        NOT NULL
+                        CHECK (status IN ('drafted','saved','run_queued','blocked','failed')),
+  prompt_hash         text        NOT NULL CHECK (length(prompt_hash) > 0),
+  prompt_redacted_ref text,                                  -- optional redacted prompt artifact/ref. 원문 저장 금지.
+  planner             text        NOT NULL DEFAULT 'deterministic_mvp',
+  model               text,                                  -- LLM planner 사용 시 모델 스냅샷. deterministic MVP는 NULL 가능.
+  draft_ir            jsonb       NOT NULL,
+  validation_report   jsonb,
+  evidence_policy     jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  blockers            jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  scenario_id         uuid        REFERENCES scenarios(id),
+  scenario_version_id uuid        REFERENCES scenario_versions(id),
+  run_id              uuid        REFERENCES runs(id),
+  created_by          text        NOT NULL,
+  created_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_scenario_generations_tenant ON scenario_generations (tenant_id, created_at DESC);
+CREATE INDEX idx_scenario_generations_run ON scenario_generations (tenant_id, run_id)
+  WHERE run_id IS NOT NULL;
+
+-- ============================================================
 -- 5. run_steps
 --    executor attempt row를 영속화. status='started'는 step.started/FK 선점용
 --    nonterminal 상태이고, 그 외 8개 값은 core-types.ts StepResult final StepStatus.
@@ -340,9 +371,14 @@ CREATE TABLE artifacts (
   id               uuid        PRIMARY KEY,
   tenant_id        uuid        NOT NULL,
   run_id           uuid        REFERENCES runs(id),         -- orphan_sweeper 대상(run 삭제/취소 후 참조 없으면 정리)
+  generation_id    uuid        REFERENCES scenario_generations(id), -- 자연어 generation 단계 artifact(run/step 없음)
   step_id          text,                                    -- 생성 step(run_steps.step_id, 느슨 참조)
   attempt          int         CHECK (attempt >= 0),        -- step attempt; with run_id+step_id forms the canonical step key
   type             text        NOT NULL,                    -- vlm_input/screenshot/receipt/evidence 등(개방형)
+  media_type       text,                                    -- image/png, video/webm, application/json 등. 미디어 미리보기/다운로드 힌트.
+  filename         text,                                    -- 사용자 표시/다운로드용 파일명(비밀·경로 아님).
+  byte_size        bigint      CHECK (byte_size IS NULL OR byte_size >= 0),
+  duration_ms      int         CHECK (duration_ms IS NULL OR duration_ms >= 0), -- video/run clip 등 시간 기반 artifact.
   redaction_status text        NOT NULL DEFAULT 'pending'
                      CHECK (redaction_status IN ('pending','redacted','failed','not_required')),  -- §B redaction job
   redaction_attempts int       NOT NULL DEFAULT 0,          -- 실패 N회 → failed + 알림(§B)
@@ -362,6 +398,7 @@ CREATE TABLE artifacts (
   deleted_by_job   text,
   created_at       timestamptz NOT NULL DEFAULT now(),
   CHECK (legal_hold OR retention_until IS NOT NULL),
+  CHECK (generation_id IS NULL OR run_id IS NULL),
   CHECK (
     (
       lifecycle_claim_id IS NULL
@@ -387,6 +424,8 @@ CREATE TABLE artifacts (
   )
 );
 CREATE INDEX idx_artifacts_run ON artifacts (run_id);
+CREATE INDEX idx_artifacts_generation ON artifacts (tenant_id, generation_id)
+  WHERE generation_id IS NOT NULL;
 CREATE INDEX idx_artifacts_step ON artifacts (tenant_id, run_id, step_id, attempt)
   WHERE step_id IS NOT NULL;
 CREATE INDEX idx_artifacts_redaction ON artifacts (redaction_status)
@@ -574,6 +613,49 @@ CREATE INDEX idx_stagehand_calls_run ON stagehand_calls (run_id);
 CREATE INDEX idx_stagehand_calls_step ON stagehand_calls (tenant_id, run_id, step_id, attempt);
 
 -- ============================================================
+-- 11b. scenario_generation_llm_calls
+--    자연어 generation planner 전용 LLM 멱등 원장.
+--    planner 호출은 scenario_generations row 생성 전 일어나므로 generation_id는 논리 키로만 둔다
+--    (FK 없음). 성공 저장 후 artifacts.generation_id가 같은 generation을 가리키며, 실패 경로는
+--    API catch에서 이 원장을 삭제해 dangling output_ref를 남기지 않는다.
+-- ============================================================
+
+CREATE TABLE scenario_generation_llm_calls (
+  id                      uuid        PRIMARY KEY,
+  tenant_id               uuid        NOT NULL,
+  generation_id           uuid        NOT NULL,
+  correlation_id          uuid        NOT NULL,
+  step_id                 text        NOT NULL,
+  attempt                 int         NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  idempotency_key         text        NOT NULL CHECK (length(idempotency_key) > 0),
+  request_hash            text        NOT NULL,
+  model                   text        NOT NULL,
+  prompt_template_version text        NOT NULL,
+  transport               text        NOT NULL DEFAULT 'sse'
+                            CHECK (transport IN ('sse','sync')),
+  stream_status           text,                             -- open/done/aborted/error/fallback 사유(adapter §3/§4)
+  ttfb_ms                 int CHECK (ttfb_ms IS NULL OR ttfb_ms >= 0),
+  input_tokens            int CHECK (input_tokens IS NULL OR input_tokens >= 0),
+  output_tokens           int CHECK (output_tokens IS NULL OR output_tokens >= 0),
+  cost                    numeric(14,6) CHECK (cost IS NULL OR cost >= 0),
+  finish_reason           text CHECK (finish_reason IS NULL OR finish_reason IN ('stop','length','tool_call','content_filter')),
+  output_ref              text,
+  parsed_json             jsonb,
+  error_code              text,
+  retention_until         timestamptz NOT NULL,
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  updated_at              timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT chk_scenario_generation_llm_calls_stream_status
+    CHECK (stream_status IS NOT NULL AND stream_status IN ('open','done','error','aborted')),
+  UNIQUE (tenant_id, idempotency_key)
+);
+CREATE INDEX idx_scenario_generation_llm_calls_generation
+  ON scenario_generation_llm_calls (tenant_id, generation_id, created_at DESC);
+CREATE INDEX idx_scenario_generation_llm_calls_status
+  ON scenario_generation_llm_calls (tenant_id, stream_status)
+  WHERE stream_status IN ('open','error','aborted');
+
+-- ============================================================
 -- 12. audit_log
 --    PostgreSQL v1 authority for immutable audit records.
 --    Hash chaining is tenant-scoped; external WORM mirroring is optional later.
@@ -667,6 +749,7 @@ ALTER TABLE scenarios           ADD CONSTRAINT uq_scenarios_tenant_id_id UNIQUE 
 ALTER TABLE scenario_versions   ADD CONSTRAINT uq_scenario_versions_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE workitems           ADD CONSTRAINT uq_workitems_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE runs                ADD CONSTRAINT uq_runs_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scenario_generations ADD CONSTRAINT uq_scenario_generations_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE raw_items           ADD CONSTRAINT uq_raw_items_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE normalized_records  ADD CONSTRAINT uq_normalized_records_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE action_plan_cache   ADD CONSTRAINT uq_action_plan_cache_tenant_id_id UNIQUE (tenant_id, id);
@@ -689,6 +772,14 @@ ALTER TABLE runs
   ADD CONSTRAINT fk_runs_workitem_tenant
   FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id);
 
+ALTER TABLE scenario_generations
+  ADD CONSTRAINT fk_scenario_generations_scenario_tenant
+  FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios(tenant_id, id),
+  ADD CONSTRAINT fk_scenario_generations_scenario_version_tenant
+  FOREIGN KEY (tenant_id, scenario_version_id) REFERENCES scenario_versions(tenant_id, id),
+  ADD CONSTRAINT fk_scenario_generations_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id);
+
 ALTER TABLE run_steps
   ADD CONSTRAINT fk_run_steps_run_tenant
   FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
@@ -702,6 +793,8 @@ ALTER TABLE human_tasks
 ALTER TABLE artifacts
   ADD CONSTRAINT fk_artifacts_run_tenant
   FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_artifacts_generation_tenant
+  FOREIGN KEY (tenant_id, generation_id) REFERENCES scenario_generations(tenant_id, id),
   ADD CONSTRAINT fk_artifacts_step_attempt_tenant
   FOREIGN KEY (tenant_id, run_id, step_id, attempt) REFERENCES run_steps(tenant_id, run_id, step_id, attempt);
 
@@ -808,12 +901,14 @@ BEGIN
     'scenario_versions',
     'workitems',
     'runs',
+    'scenario_generations',
     'run_steps',
     'human_tasks',
     'events_outbox',
     'dead_letter',
     'action_plan_cache',
     'stagehand_calls',
+    'scenario_generation_llm_calls',
     'audit_log'
   ]
   LOOP

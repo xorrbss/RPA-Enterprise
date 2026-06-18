@@ -87,6 +87,8 @@ assertEqualSet("OpenAPI RunState enum", openApiEnum("RunState"), EXPECTED_RUN_ST
 assertEqualSet("OpenAPI WorkitemState enum", openApiEnum("WorkitemState"), EXPECTED_WORKITEM_STATES);
 assertEqualSet("OpenAPI HumanTaskState enum", openApiEnum("HumanTaskState"), EXPECTED_HUMAN_TASK_STATES);
 assertEqualSet("OpenAPI HumanTaskKind enum", openApiEnum("HumanTaskKind"), EXPECTED_HUMAN_TASK_KINDS);
+assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");
+assertOpenApiPath("/scenario-generations/{generation_id}/artifacts/{artifact_id}");
 
 if (failures.length > 0) {
   console.error(`contract consistency: ${failures.length} failed`);
@@ -156,6 +158,12 @@ function openApiEnum(schemaName: string): string[] {
     if (trimmed.length > 0) break;
   }
   return values;
+}
+
+function assertOpenApiPath(path: string): void {
+  if (!text("codegen/openapi.yaml").includes(`  ${path}:\n`)) {
+    failures.push(`OpenAPI path missing: ${path}`);
+  }
 }
 
 function assertUnique(label: string, values: readonly string[]): void {

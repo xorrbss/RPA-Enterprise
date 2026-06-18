@@ -5,6 +5,7 @@
  */
 const MAX_PAGE_SNAPSHOT_CHARS = 24000;
 const MAX_VISIBLE_TEXT_CHARS = 12000;
+const MAX_NETWORK_JSON_CHARS = 12000;
 
 export function normalizePageSnapshot(snapshot: unknown): string | undefined {
   if (typeof snapshot === "string") {
@@ -13,13 +14,19 @@ export function normalizePageSnapshot(snapshot: unknown): string | undefined {
   }
   if (typeof snapshot !== "object" || snapshot === null) return undefined;
 
-  const rec = snapshot as { visibleText?: unknown; html?: unknown };
+  const rec = snapshot as { networkJson?: unknown; visibleText?: unknown; html?: unknown };
+  const networkJson = typeof rec.networkJson === "string" ? cleanSnapshotText(rec.networkJson) : "";
   const visibleText = typeof rec.visibleText === "string" ? cleanSnapshotText(rec.visibleText) : "";
   const html = typeof rec.html === "string" ? cleanSnapshotText(rec.html) : "";
   const parts: string[] = [];
-  if (visibleText.length > 0) parts.push(`[visible_text]\n${visibleText.slice(0, MAX_VISIBLE_TEXT_CHARS)}`);
+  if (networkJson.length > 0) parts.push(`[network_json]\n${networkJson.slice(0, MAX_NETWORK_JSON_CHARS)}`);
 
-  const remaining = MAX_PAGE_SNAPSHOT_CHARS - parts.join("\n\n").length;
+  let remaining = MAX_PAGE_SNAPSHOT_CHARS - parts.join("\n\n").length;
+  if (visibleText.length > 0 && remaining > 128) {
+    parts.push(`[visible_text]\n${visibleText.slice(0, Math.min(MAX_VISIBLE_TEXT_CHARS, remaining))}`);
+  }
+
+  remaining = MAX_PAGE_SNAPSHOT_CHARS - parts.join("\n\n").length;
   if (html.length > 0 && remaining > 128) parts.push(`[html]\n${html.slice(0, remaining)}`);
 
   const out = parts.join("\n\n").slice(0, MAX_PAGE_SNAPSHOT_CHARS);

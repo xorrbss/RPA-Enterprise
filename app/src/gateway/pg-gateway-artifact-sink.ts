@@ -52,6 +52,12 @@ export class FsObjectStore implements ObjectStore {
     return pathToFileURL(path).href as ObjectRef;
   }
 
+  async putBytes(content: Uint8Array): Promise<ObjectRef> {
+    const path = join(this.dir, `${randomUUID()}.bin`);
+    writeFileSync(path, content);
+    return pathToFileURL(path).href as ObjectRef;
+  }
+
   async get(objectRef: ObjectRef): Promise<string | null> {
     const target = this.resolveWithinDir(objectRef); // 경로 이탈은 throw(전파 — 무결성/공격 오류, not-found 아님).
     try {
@@ -112,8 +118,8 @@ export class PgGatewayArtifactSink implements GatewayArtifactSink {
       await withTenantTx(this.pool, normalized.tenantId, async (c) => {
         await c.query(
           `INSERT INTO artifacts
-             (id, tenant_id, run_id, step_id, attempt, type, redaction_status, sha256, object_ref, retention_until)
-           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::int, $6, 'pending', $7, $8, now() + ($9::int * interval '1 day'))`,
+             (id, tenant_id, run_id, step_id, attempt, type, media_type, byte_size, redaction_status, sha256, object_ref, retention_until)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::int, $6, $7, $8::bigint, 'pending', $9, $10, now() + ($11::int * interval '1 day'))`,
           [
             artifactId,
             normalized.tenantId,
@@ -121,6 +127,8 @@ export class PgGatewayArtifactSink implements GatewayArtifactSink {
             normalized.stepId,
             normalized.attempt,
             normalized.type,
+            "text/plain; charset=utf-8",
+            Buffer.byteLength(content, "utf8"),
             sha256,
             objectRef,
             normalized.retentionDays,

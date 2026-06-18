@@ -1,11 +1,14 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 
 import { useApiClient } from "../api/context";
+import { useCan, useSubject } from "../api/permissions";
 import type { ApiClient } from "../api/client";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
+import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, kindLabel } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, navigate, useHashParam } from "../router";
@@ -13,6 +16,11 @@ import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
 import type { HumanTaskItem } from "../api/types";
 
 const KEYS = [["human-tasks"]] as const;
+const TERMINAL = new Set(["resolved", "expired", "cancelled"]);
+
+function dueTime(task: HumanTaskItem): number {
+  return task.timeout !== null ? Date.parse(task.timeout) : Number.POSITIVE_INFINITY;
+}
 
 // 상태별 운영자 액션(state-machine H1/H2/H3/H5/H6). 권한/assignee 범위는 백엔드가 강제.
 function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }): JSX.Element {
@@ -58,16 +66,81 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
 
 export function HumanTasksView(): JSX.Element {
   const api = useApiClient();
-  const lv = useListView<HumanTaskItem>(["human-tasks"], (p) => api.listHumanTasks(p), { refetchInterval: 5_000 });
+  const can = useCan();
+  const subject = useSubject();
+  const [dueOnly, setDueOnly] = useState(false);
+  const runParam = useHashParam("run_id");
+  const lv = useListView<HumanTaskItem>(
+    ["human-tasks"],
+    (p) => api.listHumanTasks(p),
+    { refetchInterval: 5_000, initialFilter: runParam !== null ? { run_id: runParam } : undefined },
+  );
   // 선택 사람확인 업무를 해시(`#humanTasks?ht=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
   const sel = useHashParam("ht");
   const detail = useQuery({ queryKey: ["humantask-detail", sel], queryFn: () => api.getHumanTask(sel as string), enabled: sel !== null });
+  const pageItems = lv.query.data?.items ?? [];
+  const dueItems = useMemo(() => pageItems.filter((t) => !TERMINAL.has(t.state) && t.timeout !== null).sort((a, b) => dueTime(a) - dueTime(b)), [pageItems]);
+  const nextTask = useMemo(() => [...pageItems].filter((t) => !TERMINAL.has(t.state)).sort((a, b) => dueTime(a) - dueTime(b))[0], [pageItems]);
+  const visibleItems = dueOnly ? dueItems : pageItems;
+  const panelQuery: typeof lv.query = lv.query.data !== undefined
+    ? ({ ...lv.query, data: { ...lv.query.data, items: visibleItems } } as typeof lv.query)
+    : lv.query;
+  const bulkAssignable = pageItems.filter((t) => t.state === "open" || t.state === "escalated");
+  const bulkEscalatable = pageItems.filter((t) => t.state === "open" || t.state === "assigned" || t.state === "in_progress");
   return (
     <>
       {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} onClose={() => { mergeParams({ ht: null }); }} />}
+      <section className="panel queue-controls" aria-label="사람 확인 큐 제어">
+        <div>
+          <strong>큐 처리</strong>
+          <p className="subtle">현재 페이지 기준으로 담당·마감·다음 건을 빠르게 좁힙니다.</p>
+        </div>
+        <div className="quick-actions">
+          <button
+            className="btn"
+            type="button"
+            disabled={subject === null}
+            onClick={() => {
+              if (subject !== null) lv.setFilter({ ...lv.filter, assignee: lv.filter.assignee === subject ? undefined : subject });
+            }}
+          >
+            {lv.filter.assignee === subject ? "전체 담당 보기" : "내 담당만 보기"}
+          </button>
+          <button className="btn" type="button" aria-pressed={dueOnly} onClick={() => setDueOnly((v) => !v)}>
+            마감 임박 {dueItems.length}
+          </button>
+          <button className="btn" type="button" disabled={nextTask === undefined} onClick={() => { if (nextTask !== undefined) mergeParams({ ht: nextTask.human_task_id }); }}>
+            다음 건 처리
+          </button>
+          {can("human_task.assign") && bulkAssignable.length > 0 && (
+            <ActionButton
+              label={`현재 페이지 ${bulkAssignable.length}건 배정`}
+              action="human_task.assign"
+              inputLabel="담당자 ID(uuid)"
+              confirmText="현재 페이지의 미배정/이관 업무를 같은 담당자에게 배정할까요?"
+              run={async (key, assignee) => {
+                if (assignee === undefined || assignee === "") throw new Error("담당자 미입력");
+                await Promise.all(bulkAssignable.map((task) => api.assignHumanTask(task.human_task_id, assignee, `${key}:${task.human_task_id}`)));
+              }}
+              invalidateKeys={KEYS}
+            />
+          )}
+          {can("human_task.escalate") && bulkEscalatable.length > 0 && (
+            <ActionButton
+              label={`현재 페이지 ${bulkEscalatable.length}건 이관`}
+              action="human_task.escalate"
+              confirmText="현재 페이지의 미종결 업무를 에스컬레이션할까요?"
+              run={async (key) => {
+                await Promise.all(bulkEscalatable.map((task) => api.escalateHumanTask(task.human_task_id, `${key}:${task.human_task_id}`, "bulk_escalate")));
+              }}
+              invalidateKeys={KEYS}
+            />
+          )}
+        </div>
+      </section>
       <QueryPanel<HumanTaskItem>
         title="사람 확인 인박스"
-        query={lv.query}
+        query={panelQuery}
         pager={lv.pager}
         actions={
           <>
@@ -112,13 +185,7 @@ function HumanTaskDetailPanel({
   onClose: () => void;
 }): JSX.Element {
   return (
-    <section className="panel" style={{ marginBottom: 16, padding: 16 }} aria-label="사람확인 상세">
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <strong>사람확인 상세 — {humanTaskId.slice(0, 8)}</strong>
-        <button className="btn" type="button" onClick={onClose}>
-          닫기
-        </button>
-      </header>
+    <SlideOver title={`사람확인 상세 — ${humanTaskId.slice(0, 8)}`} onClose={onClose}>
       {detail.isLoading ? (
         <Loading />
       ) : detail.isError ? (
@@ -157,6 +224,6 @@ function HumanTaskDetailPanel({
           </div>
         </>
       ) : null}
-    </section>
+    </SlideOver>
   );
 }

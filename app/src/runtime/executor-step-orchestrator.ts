@@ -95,7 +95,7 @@ export class PgExecutorStepOrchestrator {
         span.setAttribute("status", r.status);
         return r;
       },
-    ).catch((error: unknown) => failureStepResult(input, context, startedAt, error));
+    ).catch((error: unknown) => executorFailureStepResult({ stepId: input.stepId, actionType: input.actionType }, context, startedAt, error));
     const artifacts = await this.artifactResolver.metadataFor({
       result,
       tenantId: input.tenantId,
@@ -144,8 +144,8 @@ function capabilityLabel(caps: { dom: boolean; vision: boolean; utility: boolean
   return active.length > 0 ? active.join("+") : "none";
 }
 
-function failureStepResult(
-  input: ExecutorStepOrchestratorInput,
+export function executorFailureStepResult(
+  input: { readonly stepId: string; readonly actionType: IRActionType },
   context: RunContext,
   startedAt: string,
   error: unknown,

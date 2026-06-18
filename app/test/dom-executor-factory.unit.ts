@@ -3,7 +3,7 @@
  * CompositeExecutor(StagehandDomExecutor(gateway), UtilityExecutor) 를 올바로 배선하는지 검증. 외부 의존 없음(fake gateway,
  * fake CDP). 실행: tsx test/dom-executor-factory.unit.ts.
  *
- * 검증: capabilities=dom+utility 합성 · extract(dom) → DOM snapshot + 게이트웨이 1회 + success(policy.model 전달 확인) · navigate(utility)
+ * 검증: capabilities=dom+utility 합성 · extract(dom) → network capture install + DOM snapshot + 게이트웨이 1회 + success(policy.model 전달 확인) · navigate(utility)
  *  → forLease(provider) 경유(게이트웨이 미호출) = composite 라우팅 분리. run-scoped 컨텍스트(scenarioVersionId/
  *  browserIdentityVersion) 의 seam 전달은 worker int(runtime-worker-drive.int)가 핀고정.
  */
@@ -97,20 +97,30 @@ async function main(): Promise<void> {
     { type: "extract", instruction: "get rows", output: { schemaRef: "reviews", schemaVersion: "1", strict: true } },
     ctx(),
   );
-  check("extract → DOM snapshot evaluate 1회", evaluateCalls === 1, String(evaluateCalls));
+  check("extract → network capture install + DOM snapshot evaluate 2회", evaluateCalls === 2, String(evaluateCalls));
   check("extract → DOM snapshot included in gateway user message", lastUserMessage.includes("Review A"));
   check("extract → dom executor → 게이트웨이 1회 호출", gatewayCalls === 1, String(gatewayCalls));
   check("extract → policy.model('codex') 게이트웨이 요청에 전달", lastModel === "codex", String(lastModel));
   check("extract → success StepResult(action=extract)", res.status === "success" && res.action === "extract", JSON.stringify({ status: res.status, action: res.action }));
 
+  lastModel = undefined;
+  const overrideExecutor: ExecutorPlugin = factory(fakeProvider, {
+    scenarioVersionId: "sv-2",
+    browserIdentityVersion: 3,
+    model: "codex-run-override",
+  });
+  await overrideExecutor.execute("n.override", { type: "observe", instruction: "inspect current page" }, ctx());
+  check("run.model override → gateway request model", lastModel === "codex-run-override", String(lastModel));
+
   // 3) navigate(utility) → composite 가 utility 로 라우팅 → UtilityExecutor 가 forLease(provider) 호출(throw) — 게이트웨이 미경유.
+  const gatewayCallsBeforeNavigate = gatewayCalls;
   let utilityRouted = false;
   try {
     await executor.execute("n.1", { type: "navigate", url: "https://x.example/" }, ctx());
   } catch (e) {
     utilityRouted = /goto-called/.test(String(e));
   }
-  check("navigate → utility 로 라우팅(goto 경유, 게이트웨이 미경유)", utilityRouted && gotoCalls === 1 && gatewayCalls === 1, `utilityRouted=${utilityRouted} gatewayCalls=${gatewayCalls} gotoCalls=${gotoCalls}`);
+  check("navigate → utility 로 라우팅(goto 경유, 게이트웨이 미경유)", utilityRouted && gotoCalls === 1 && gatewayCalls === gatewayCallsBeforeNavigate, `utilityRouted=${utilityRouted} gatewayCalls=${gatewayCalls} before=${gatewayCallsBeforeNavigate} gotoCalls=${gotoCalls}`);
 
   // 4) deps.extractArtifactSink 가 executor 로 스레드돼 extract.rowAnchor 강화 행을 typed artifact 로 영속하는가(P1 prod 배선).
   {

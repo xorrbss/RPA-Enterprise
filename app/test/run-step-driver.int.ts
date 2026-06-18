@@ -11,7 +11,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { ExecutorPlugin, PageState, PageStateResolver, PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
+import type { PoolClient } from "pg";
+import type { ArtifactRef, ExecutorPlugin, IRActionType, PageState, PageStateResolver, PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
+import type { RunVideoRecording, RuntimeWorkerJob, VisualEvidenceVideoRecorder } from "../../ts/runtime-contract";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { driveClaimedRun, type ClaimedRun } from "../src/runtime/run-step-driver";
@@ -28,8 +30,22 @@ const RUN_FAIL_BIZ = "71000000-0000-0000-0000-0000000000d3";
 const RUN_FAIL_SYS = "71000000-0000-0000-0000-0000000000d4";
 const RUN_SUSPEND = "71000000-0000-0000-0000-0000000000d5";
 const RUN_HUMAN_TASK = "71000000-0000-0000-0000-0000000000d6";
+const RUN_ARTIFACT = "71000000-0000-0000-0000-0000000000d7";
+const RUN_VIDEO_ALWAYS = "71000000-0000-0000-0000-0000000000d8";
+const RUN_VIDEO_FAILURE_SUCCESS = "71000000-0000-0000-0000-0000000000d9";
+const RUN_VIDEO_FAILURE_FAIL = "71000000-0000-0000-0000-0000000000da";
+const RUN_VIDEO_NO_RECORDER = "71000000-0000-0000-0000-0000000000db";
+const RUN_VIDEO_STOP_FAIL = "71000000-0000-0000-0000-0000000000dc";
+const RUN_VIDEO_DRIVE_THROW = "71000000-0000-0000-0000-0000000000de";
+const RUN_GENERATED_LIKE = "71000000-0000-0000-0000-0000000000dd";
 const SCEN2 = "70000000-0000-0000-0000-0000000000e1"; // @human_task(R5) 시나리오(별도 IR)
 const SVER2 = "70000000-0000-0000-0000-0000000000e2";
+const SCEN_VIDEO_ALWAYS = "70000000-0000-0000-0000-0000000000f1";
+const SVER_VIDEO_ALWAYS = "70000000-0000-0000-0000-0000000000f2";
+const SCEN_VIDEO_FAILURE = "70000000-0000-0000-0000-0000000000f3";
+const SVER_VIDEO_FAILURE = "70000000-0000-0000-0000-0000000000f4";
+const SCEN_GENERATED_LIKE = "70000000-0000-0000-0000-0000000000f5";
+const SVER_GENERATED_LIKE = "70000000-0000-0000-0000-0000000000f6";
 const WORKER = "9a000000-0000-0000-0000-0000000000a1";
 
 let failures = 0;
@@ -63,6 +79,131 @@ const fakeExecutor: ExecutorPlugin = {
 };
 
 // 실패 terminal 구동 검증용: 첫 스텝(navigate)에서 지정 StepStatus 반환 → 인터프리터가 fail_business/fail_system terminal 로 매핑.
+const artifactExecutor: ExecutorPlugin = {
+  capabilities: () => ({ dom: false, vision: false, utility: true }),
+  async execute(stepId) {
+    const now = new Date().toISOString();
+    return {
+      stepId,
+      action: "navigate",
+      status: "success",
+      pageStateBefore: "ref",
+      pageStateAfter: "ref",
+      artifacts: ["72000000-0000-0000-0000-0000000000d7" as ArtifactRef],
+      cache: { mode: "bypass" },
+      timings: { startedAt: now, endedAt: now, durationMs: 0 },
+    };
+  },
+  async verify() {
+    throw new Error("verify not used in driver int");
+  },
+};
+
+const echoActionExecutor: ExecutorPlugin = {
+  capabilities: () => ({ dom: true, vision: false, utility: true }),
+  async execute(stepId, action) {
+    const now = new Date().toISOString();
+    const actionType = executorActionType(action);
+    return {
+      stepId,
+      action: actionType,
+      status: "success",
+      output: actionType === "extract" ? { rowCount: 1 } : undefined,
+      extracted: actionType === "extract" ? { summary: "ok", rows: [{ title: "generated" }] } : undefined,
+      pageStateBefore: "ref",
+      pageStateAfter: "ref",
+      artifacts: [],
+      cache: { mode: "bypass" },
+      sideEffect: { kind: actionType === "act" ? "update" : "read_only", committed: true },
+      timings: { startedAt: now, endedAt: now, durationMs: 0 },
+    };
+  },
+  async verify() {
+    throw new Error("verify not used in driver int");
+  },
+};
+
+function executorActionType(action: unknown): IRActionType {
+  if (typeof action === "object" && action !== null && "type" in action) {
+    const type = (action as { type?: unknown }).type;
+    if (
+      type === "act" ||
+      type === "observe" ||
+      type === "extract" ||
+      type === "navigate" ||
+      type === "download" ||
+      type === "upload" ||
+      type === "api_call" ||
+      type === "file" ||
+      type === "human_task" ||
+      type === "shell"
+    ) {
+      return type;
+    }
+  }
+  return "navigate";
+}
+
+class FakeRuntimeJobEnqueuer {
+  readonly jobs: RuntimeWorkerJob[] = [];
+
+  async enqueueRuntimeJob(_client: PoolClient, job: RuntimeWorkerJob): Promise<void> {
+    this.jobs.push(job);
+  }
+}
+
+class FakeRunVideoRecording implements RunVideoRecording {
+  readonly stops: string[] = [];
+  readonly discards: string[] = [];
+
+  constructor(private readonly artifactRef: ArtifactRef | undefined) {}
+
+  async stopAndPersist(input: Parameters<RunVideoRecording["stopAndPersist"]>[0]): Promise<ArtifactRef | undefined> {
+    this.stops.push(input.terminal);
+    return this.artifactRef;
+  }
+
+  async discard(input: Parameters<RunVideoRecording["discard"]>[0]): Promise<void> {
+    this.discards.push(input.reason);
+  }
+}
+
+class FakeVideoRecorder implements VisualEvidenceVideoRecorder {
+  readonly starts: Parameters<VisualEvidenceVideoRecorder["startRunVideo"]>[0][] = [];
+  readonly recordings: FakeRunVideoRecording[] = [];
+
+  constructor(private readonly artifactRef: ArtifactRef | undefined) {}
+
+  async startRunVideo(input: Parameters<VisualEvidenceVideoRecorder["startRunVideo"]>[0]): Promise<RunVideoRecording> {
+    this.starts.push(input);
+    const recording = new FakeRunVideoRecording(this.artifactRef);
+    this.recordings.push(recording);
+    return recording;
+  }
+}
+
+class ThrowingRunVideoRecording implements RunVideoRecording {
+  readonly discards: string[] = [];
+
+  async stopAndPersist(_input: Parameters<RunVideoRecording["stopAndPersist"]>[0]): Promise<ArtifactRef | undefined> {
+    throw new Error("video persist failed");
+  }
+
+  async discard(input: Parameters<RunVideoRecording["discard"]>[0]): Promise<void> {
+    this.discards.push(input.reason);
+  }
+}
+
+class ThrowingVideoRecorder implements VisualEvidenceVideoRecorder {
+  readonly recordings: ThrowingRunVideoRecording[] = [];
+
+  async startRunVideo(_input: Parameters<VisualEvidenceVideoRecorder["startRunVideo"]>[0]): Promise<RunVideoRecording> {
+    const recording = new ThrowingRunVideoRecording();
+    this.recordings.push(recording);
+    return recording;
+  }
+}
+
 function failingExecutor(status: "failed_business" | "failed_system"): ExecutorPlugin {
   return {
     capabilities: () => ({ dom: false, vision: false, utility: true }),
@@ -85,6 +226,18 @@ function failingExecutor(status: "failed_business" | "failed_system"): ExecutorP
   };
 }
 
+function throwingExecutor(): ExecutorPlugin {
+  return {
+    capabilities: () => ({ dom: false, vision: false, utility: true }),
+    async execute(): Promise<never> {
+      throw new Error("executor exploded before step result");
+    },
+    async verify() {
+      throw new Error("verify not used in driver int");
+    },
+  };
+}
+
 // fake resolver: reviews_visible=true → on[] 분기가 done(terminal)으로 라우팅.
 const fakeResolver: PageStateResolver = {
   async resolvePageState(): Promise<PageState> {
@@ -97,6 +250,22 @@ const fakeResolver: PageStateResolver = {
     };
   },
 };
+
+async function runSteps(
+  pool: ReturnType<typeof createPool>,
+  runId: string,
+): Promise<readonly { step_id: string; node_id: string; action: string; status: string; artifacts: string[] }[]> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const rows = await c.query<{ step_id: string; node_id: string; action: string; status: string; artifacts: string[] }>(
+      `SELECT step_id, node_id, action, status, artifacts
+         FROM run_steps
+        WHERE tenant_id=$1::uuid AND run_id=$2::uuid
+        ORDER BY step_id, attempt`,
+      [TENANT, runId],
+    );
+    return rows.rows;
+  });
+}
 
 // suspend 구동 검증용(트리거 i): 첫 스텝에서 status='suspended' → 인터프리터 suspend outcome → driver R4+포트+R11.
 const suspendingExecutor: ExecutorPlugin = {
@@ -144,6 +313,72 @@ const scenarioIr = {
 };
 
 // @human_task(R5, 트리거 ii) 시나리오: what-less task 노드 → next=@human_task → suspend. on_timeout=escalate(비기본값 → 포트 경유 실증).
+const scenarioIrVideoAlways = {
+  ...scenarioIr,
+  meta: { name: "driver-video-always-test", version: 1, evidence: { screenshot: "never", video: "always" } },
+};
+const scenarioIrVideoFailure = {
+  ...scenarioIr,
+  meta: { name: "driver-video-failure-test", version: 1, evidence: { screenshot: "never", video: "failure" } },
+};
+
+const generatedLikeIr = {
+  meta: {
+    name: "generated-like-driver-test",
+    version: 1,
+    ir_version: "1.x",
+    studio_mode: "easy",
+    evidence: { screenshot: "never", video: "never" },
+  },
+  params_schema: {
+    type: "object",
+    additionalProperties: true,
+    required: ["start_url"],
+    properties: { start_url: { type: "string", format: "uri" } },
+  },
+  start: "open_start_url",
+  nodes: {
+    open_start_url: {
+      what: [{ action: "navigate", url_ref: "start_url" }],
+      next: "understand_request",
+      policy: { recording: "never" },
+      side_effect: { kind: "read_only" },
+    },
+    understand_request: {
+      what: [{ action: "observe", instruction: "Collect visible notices from the current page." }],
+      next: "extract_results",
+      policy: { recording: "never" },
+      side_effect: { kind: "read_only" },
+    },
+    extract_results: {
+      what: [
+        {
+          action: "extract",
+          instruction: "Return { summary: string, rows: object[] } for the visible notices.",
+          schema_ref: "generated/default_result@1",
+          args: {
+            schema_version: "1",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["summary", "rows"],
+              properties: {
+                summary: { type: "string" },
+                rows: { type: "array", items: { type: "object", additionalProperties: true } },
+              },
+            },
+          },
+        },
+      ],
+      next: "done",
+      policy: { recording: "never" },
+      side_effect: { kind: "read_only" },
+    },
+    done: { terminal: "success" },
+  },
+};
+
 const humanTaskIr = {
   meta: { name: "human-task-test", version: 1 },
   start: "task",
@@ -174,6 +409,15 @@ async function main(): Promise<void> {
     const compiledHt = compileScenario(humanTaskIr, {});
     check("@human_task scenario compiles (reservedHandlerCall next-target)", compiledHt.ok, compiledHt.ok ? "" : JSON.stringify(compiledHt.details));
     if (!compiledHt.ok) throw new Error("@human_task scenario did not compile");
+    const compiledVideoAlways = compileScenario(scenarioIrVideoAlways, {});
+    check("video always scenario compiles", compiledVideoAlways.ok, compiledVideoAlways.ok ? "" : JSON.stringify(compiledVideoAlways.details));
+    if (!compiledVideoAlways.ok) throw new Error("video always scenario did not compile");
+    const compiledVideoFailure = compileScenario(scenarioIrVideoFailure, {});
+    check("video failure scenario compiles", compiledVideoFailure.ok, compiledVideoFailure.ok ? "" : JSON.stringify(compiledVideoFailure.details));
+    if (!compiledVideoFailure.ok) throw new Error("video failure scenario did not compile");
+    const compiledGeneratedLike = compileScenario(generatedLikeIr, {});
+    check("generated-like scenario compiles", compiledGeneratedLike.ok, compiledGeneratedLike.ok ? "" : JSON.stringify(compiledGeneratedLike.details));
+    if (!compiledGeneratedLike.ok) throw new Error("generated-like scenario did not compile");
 
     await withTenantTx(pool, TENANT, async (c) => {
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'driver')`, [SCEN, TENANT]);
@@ -189,8 +433,26 @@ async function main(): Promise<void> {
          VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
         [SVER2, TENANT, SCEN2, JSON.stringify(compiledHt.ir), compiledHt.compiledAst],
       );
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'video-always')`, [SCEN_VIDEO_ALWAYS, TENANT]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+         VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+        [SVER_VIDEO_ALWAYS, TENANT, SCEN_VIDEO_ALWAYS, JSON.stringify(compiledVideoAlways.ir), compiledVideoAlways.compiledAst],
+      );
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'video-failure')`, [SCEN_VIDEO_FAILURE, TENANT]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+         VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+        [SVER_VIDEO_FAILURE, TENANT, SCEN_VIDEO_FAILURE, JSON.stringify(compiledVideoFailure.ir), compiledVideoFailure.compiledAst],
+      );
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'generated-like')`, [SCEN_GENERATED_LIKE, TENANT]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+         VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+        [SVER_GENERATED_LIKE, TENANT, SCEN_GENERATED_LIKE, JSON.stringify(compiledGeneratedLike.ir), compiledGeneratedLike.compiledAst],
+      );
       // R1을 우회해 claimed 상태로 직접 시드(드라이버는 R2부터). correlation_id=run_id.
-      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_SUSPEND]) {
+      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_SUSPEND, RUN_ARTIFACT]) {
         await c.query(
           `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
            VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
@@ -202,6 +464,25 @@ async function main(): Promise<void> {
          VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
         [RUN_HUMAN_TASK, TENANT, SVER2, WORKER],
       );
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of, params)
+         VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z','{"start_url":"https://example.com/generated"}'::jsonb)`,
+        [RUN_GENERATED_LIKE, TENANT, SVER_GENERATED_LIKE, WORKER],
+      );
+      for (const [rid, sver] of [
+        [RUN_VIDEO_ALWAYS, SVER_VIDEO_ALWAYS],
+        [RUN_VIDEO_FAILURE_SUCCESS, SVER_VIDEO_FAILURE],
+        [RUN_VIDEO_FAILURE_FAIL, SVER_VIDEO_FAILURE],
+        [RUN_VIDEO_NO_RECORDER, SVER_VIDEO_ALWAYS],
+        [RUN_VIDEO_STOP_FAIL, SVER_VIDEO_ALWAYS],
+        [RUN_VIDEO_DRIVE_THROW, SVER_VIDEO_ALWAYS],
+      ] as const) {
+        await c.query(
+          `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
+           VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
+          [rid, TENANT, sver, WORKER],
+        );
+      }
     });
 
     const run: ClaimedRun = {
@@ -233,6 +514,214 @@ async function main(): Promise<void> {
     check("R2 started_at 기록됨", dbStatus?.started_at !== null && dbStatus?.started_at !== undefined);
 
     // outbox 이벤트(전이별 emit) 확인.
+    const generatedLike = await driveClaimedRun(
+      {
+        runId: RUN_GENERATED_LIKE,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_GENERATED_LIKE,
+        correlationId: RUN_GENERATED_LIKE,
+        leaseId: "lease-generated",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { start_url: "https://example.com/generated" },
+      },
+      { pool, executor: echoActionExecutor, resolver: fakeResolver, workerId: WORKER, recordExecutorSteps: true },
+    );
+    check("generated-like driver returns completed", generatedLike.state === "completed", generatedLike.state);
+    check(
+      "generated-like visited open->observe->extract->done",
+      generatedLike.outcome.visited.join(",") === "open_start_url,understand_request,extract_results,done",
+      generatedLike.outcome.visited.join(","),
+    );
+    const generatedSteps = await runSteps(pool, RUN_GENERATED_LIKE);
+    check(
+      "generated-like persists observe/extract run_steps trace",
+      generatedSteps.some((s) => s.node_id === "understand_request" && s.action === "observe" && s.status === "success") &&
+        generatedSteps.some((s) => s.node_id === "extract_results" && s.action === "extract" && s.status === "success"),
+      JSON.stringify(generatedSteps),
+    );
+
+    const artifactEnqueuer = new FakeRuntimeJobEnqueuer();
+    const artifactRun = await driveClaimedRun(
+      {
+        runId: RUN_ARTIFACT,
+        tenantId: TENANT,
+        scenarioVersionId: SVER,
+        correlationId: RUN_ARTIFACT,
+        leaseId: "lease-art",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      { pool, executor: artifactExecutor, resolver: fakeResolver, workerId: WORKER, runtimeJobEnqueuer: artifactEnqueuer },
+    );
+    check("driver preserves produced artifact refs in outcome", artifactRun.outcome.artifacts.length > 0, JSON.stringify(artifactRun.outcome.artifacts));
+    check(
+      "driver enqueues artifact redaction + retention jobs",
+      artifactEnqueuer.jobs.length === 2 &&
+        artifactEnqueuer.jobs[0]?.kind === "artifact_redaction" &&
+        artifactEnqueuer.jobs[0]?.runId === RUN_ARTIFACT &&
+        artifactEnqueuer.jobs[1]?.kind === "artifact_retention",
+      JSON.stringify(artifactEnqueuer.jobs),
+    );
+
+    const videoAlwaysRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000d8" as ArtifactRef);
+    const videoAlwaysEnqueuer = new FakeRuntimeJobEnqueuer();
+    const videoAlways = await driveClaimedRun(
+      {
+        runId: RUN_VIDEO_ALWAYS,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_VIDEO_ALWAYS,
+        correlationId: RUN_VIDEO_ALWAYS,
+        leaseId: "lease-video-always",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      {
+        pool,
+        executor: fakeExecutor,
+        resolver: fakeResolver,
+        workerId: WORKER,
+        visualEvidenceVideoRecorder: videoAlwaysRecorder,
+        runtimeJobEnqueuer: videoAlwaysEnqueuer,
+      },
+    );
+    check("video always starts run-level recorder", videoAlwaysRecorder.starts[0]?.policy === "always" && videoAlwaysRecorder.starts[0]?.leaseId === "lease-video-always", JSON.stringify(videoAlwaysRecorder.starts));
+    check("video always persists artifact on success", videoAlways.outcome.artifacts.includes("72000000-0000-0000-0000-0000000000d8" as ArtifactRef) && videoAlwaysRecorder.recordings[0]?.stops[0] === "success", JSON.stringify(videoAlways.outcome.artifacts));
+    check("video always artifact triggers lifecycle jobs", videoAlwaysEnqueuer.jobs.length === 2 && videoAlwaysEnqueuer.jobs[0]?.kind === "artifact_redaction", JSON.stringify(videoAlwaysEnqueuer.jobs));
+
+    const videoFailureSuccessRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000d9" as ArtifactRef);
+    const videoFailureSuccess = await driveClaimedRun(
+      {
+        runId: RUN_VIDEO_FAILURE_SUCCESS,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_VIDEO_FAILURE,
+        correlationId: RUN_VIDEO_FAILURE_SUCCESS,
+        leaseId: "lease-video-failure-success",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      { pool, executor: fakeExecutor, resolver: fakeResolver, workerId: WORKER, visualEvidenceVideoRecorder: videoFailureSuccessRecorder },
+    );
+    check("video failure policy discards successful run recording", videoFailureSuccess.state === "completed" && videoFailureSuccessRecorder.recordings[0]?.discards[0] === "terminal_success" && videoFailureSuccess.outcome.artifacts.length === 0, JSON.stringify({ artifacts: videoFailureSuccess.outcome.artifacts, recordings: videoFailureSuccessRecorder.recordings }));
+
+    const videoFailureRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000da" as ArtifactRef);
+    const videoFailureEnqueuer = new FakeRuntimeJobEnqueuer();
+    const videoFailure = await driveClaimedRun(
+      {
+        runId: RUN_VIDEO_FAILURE_FAIL,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_VIDEO_FAILURE,
+        correlationId: RUN_VIDEO_FAILURE_FAIL,
+        leaseId: "lease-video-failure-fail",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      {
+        pool,
+        executor: failingExecutor("failed_system"),
+        resolver: fakeResolver,
+        workerId: WORKER,
+        visualEvidenceVideoRecorder: videoFailureRecorder,
+        runtimeJobEnqueuer: videoFailureEnqueuer,
+      },
+    );
+    check("video failure policy persists failed run recording", videoFailure.state === "failed_system" && videoFailure.outcome.artifacts.includes("72000000-0000-0000-0000-0000000000da" as ArtifactRef) && videoFailureRecorder.recordings[0]?.stops[0] === "fail_system", JSON.stringify(videoFailure.outcome.artifacts));
+    check("video failure artifact triggers lifecycle jobs", videoFailureEnqueuer.jobs.length === 2 && videoFailureEnqueuer.jobs[0]?.kind === "artifact_redaction", JSON.stringify(videoFailureEnqueuer.jobs));
+
+    const videoDriveThrowRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000de" as ArtifactRef);
+    const videoDriveThrowEnqueuer = new FakeRuntimeJobEnqueuer();
+    const videoDriveThrow = await driveClaimedRun(
+      {
+        runId: RUN_VIDEO_DRIVE_THROW,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_VIDEO_ALWAYS,
+        correlationId: RUN_VIDEO_DRIVE_THROW,
+        leaseId: "lease-video-drive-throw",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      {
+        pool,
+        executor: throwingExecutor(),
+        resolver: fakeResolver,
+        workerId: WORKER,
+        visualEvidenceVideoRecorder: videoDriveThrowRecorder,
+        runtimeJobEnqueuer: videoDriveThrowEnqueuer,
+      },
+    );
+    check(
+      "video always persists failed run recording when executor throws",
+      videoDriveThrow.state === "failed_system" &&
+        videoDriveThrow.outcome.artifacts.includes("72000000-0000-0000-0000-0000000000de" as ArtifactRef) &&
+        videoDriveThrowRecorder.recordings[0]?.stops[0] === "fail_system",
+      JSON.stringify({ state: videoDriveThrow.state, artifacts: videoDriveThrow.outcome.artifacts, stops: videoDriveThrowRecorder.recordings[0]?.stops }),
+    );
+    check(
+      "video drive exception artifact triggers lifecycle jobs",
+      videoDriveThrowEnqueuer.jobs.length === 2 && videoDriveThrowEnqueuer.jobs[0]?.kind === "artifact_redaction",
+      JSON.stringify(videoDriveThrowEnqueuer.jobs),
+    );
+
+    const videoNoRecorder = await driveClaimedRun(
+      {
+        runId: RUN_VIDEO_NO_RECORDER,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_VIDEO_ALWAYS,
+        correlationId: RUN_VIDEO_NO_RECORDER,
+        leaseId: "lease-video-no-recorder",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      { pool, executor: fakeExecutor, resolver: fakeResolver, workerId: WORKER },
+    );
+    const videoNoRecorderDb = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ status: string }>(`SELECT status FROM runs WHERE id=$1::uuid`, [RUN_VIDEO_NO_RECORDER]);
+      return r.rows[0] ?? null;
+    });
+    check("video policy without recorder returns failed_system", videoNoRecorder.state === "failed_system" && videoNoRecorder.outcome.terminal === "fail_system", JSON.stringify(videoNoRecorder));
+    check("video policy without recorder closes DB run", videoNoRecorderDb?.status === "failed_system", JSON.stringify(videoNoRecorderDb));
+
+    const throwingVideoRecorder = new ThrowingVideoRecorder();
+    const videoStopFail = await driveClaimedRun(
+      {
+        runId: RUN_VIDEO_STOP_FAIL,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_VIDEO_ALWAYS,
+        correlationId: RUN_VIDEO_STOP_FAIL,
+        leaseId: "lease-video-stop-fail",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      { pool, executor: fakeExecutor, resolver: fakeResolver, workerId: WORKER, visualEvidenceVideoRecorder: throwingVideoRecorder },
+    );
+    const videoStopFailDb = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ status: string }>(`SELECT status FROM runs WHERE id=$1::uuid`, [RUN_VIDEO_STOP_FAIL]);
+      return r.rows[0] ?? null;
+    });
+    check(
+      "video persist failure returns failed_system and discards recording",
+      videoStopFail.state === "failed_system" &&
+        videoStopFail.outcome.terminal === "fail_system" &&
+        throwingVideoRecorder.recordings[0]?.discards[0] === "run_drive_error",
+      JSON.stringify({ state: videoStopFail.state, outcome: videoStopFail.outcome, discards: throwingVideoRecorder.recordings[0]?.discards }),
+    );
+    check("video persist failure closes DB run", videoStopFailDb?.status === "failed_system", JSON.stringify(videoStopFailDb));
+
     const events = await withTenantTx(pool, TENANT, async (c) => {
       const r = await c.query<{ event_type: string }>(
         `SELECT event_type FROM events_outbox WHERE correlation_id=$1::uuid ORDER BY created_at`,

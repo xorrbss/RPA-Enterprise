@@ -2,12 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 
 import { useApiClient } from "../api/context";
-import { useCan } from "../api/permissions";
+import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
 import { StatusBadge } from "../components/badges";
 import { navigate, type ViewKey } from "../router";
-import type { RunItem } from "../api/types";
+import type { DeadLetterItem, HumanTaskItem, RunItem, SiteItem } from "../api/types";
 
 // 첫-실행 안내 배너 — 권한별(RBAC) 안내문/CTA. cta 없으면 viewer 안내문만(없는 권한 동선 창작 금지).
 // 입력은 부모가 실 응답으로 판정한 '진짜 빈 테넌트' 여부 + useCan뿐(데이터 미창작).
@@ -43,9 +43,171 @@ function pageCount(d: Page | undefined): string {
   return d.next_cursor !== null ? `${d.items.length}+` : String(d.items.length);
 }
 
+type ActionItem = {
+  readonly key: string;
+  readonly tone: "red" | "amber" | "blue";
+  readonly title: string;
+  readonly meta: string;
+  readonly view: ViewKey;
+  readonly params?: Record<string, string>;
+};
+
+function roleFocus(roles: readonly string[], can: (a: string) => boolean): { title: string; note: string; actions: readonly { label: string; view: ViewKey; params?: Record<string, string> }[] } {
+  const known = roles.map((r) => ROLE_LABELS[r] ?? r);
+  const roleText = known.length > 0 ? known.join(" · ") : "역할 미확인";
+  if (roles.includes("admin")) {
+    return {
+      title: `관리자 작업대 · ${roleText}`,
+      note: "정책 충돌, 사이트 승인, 모델 기본값처럼 운영 전체를 막을 수 있는 설정을 먼저 확인합니다.",
+      actions: [
+        { label: "AI 모델 정책", view: "llmGateway" },
+        { label: "사이트 접근 정책", view: "security" },
+        { label: "Product-open gate", view: "openGate" },
+      ],
+    };
+  }
+  if (roles.includes("approver")) {
+    return {
+      title: `승인자 작업대 · ${roleText}`,
+      note: "결재, red 사이트 승인, 사람 확인 대기를 먼저 처리해 자동화 재개 시간을 줄입니다.",
+      actions: [
+        { label: "결재 인박스", view: "approvalInbox" },
+        { label: "사람 확인", view: "humanTasks" },
+        { label: "사이트 승인", view: "security" },
+      ],
+    };
+  }
+  if (roles.includes("reviewer")) {
+    return {
+      title: `검토자 작업대 · ${roleText}`,
+      note: "보안문자, 추가 인증, 검증 업무를 빠르게 처리하고 원본 실행으로 되돌아갑니다.",
+      actions: [
+        { label: "사람 확인", view: "humanTasks" },
+        { label: "실행 기록", view: "runTrace" },
+      ],
+    };
+  }
+  if (can("run.create")) {
+    return {
+      title: `운영자 작업대 · ${roleText}`,
+      note: "실패, DLQ, 실행 중인 자동화를 먼저 보고 재처리 또는 취소까지 이어갑니다.",
+      actions: [
+        { label: "실패 실행", view: "runTrace", params: { status: "failed_system" } },
+        { label: "작업 목록", view: "workitems" },
+        { label: "자동화 만들기", view: "scenarioStudio" },
+      ],
+    };
+  }
+  return {
+    title: `조회 작업대 · ${roleText}`,
+    note: "읽기 권한으로 운영 상태와 증빙을 확인합니다. 명령은 권한 있는 담당자에게 요청하세요.",
+    actions: [
+      { label: "실행 기록", view: "runTrace" },
+      { label: "작업 목록", view: "workitems" },
+    ],
+  };
+}
+
+function RoleWorkbench({ roles, can }: { roles: readonly string[]; can: (a: string) => boolean }): JSX.Element {
+  const focus = roleFocus(roles, can);
+  return (
+    <section className="panel role-workbench" aria-label="역할별 작업대">
+      <div>
+        <h2>{focus.title}</h2>
+        <p className="subtle">{focus.note}</p>
+      </div>
+      <div className="quick-actions">
+        {focus.actions.map((a) => (
+          <button key={`${a.view}-${a.label}`} className="btn" type="button" onClick={() => navigate(a.view, a.params)}>
+            {a.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function bySoonestTimeout(a: HumanTaskItem, b: HumanTaskItem): number {
+  const at = a.timeout !== null ? Date.parse(a.timeout) : Number.POSITIVE_INFINITY;
+  const bt = b.timeout !== null ? Date.parse(b.timeout) : Number.POSITIVE_INFINITY;
+  return at - bt;
+}
+
+function runningFreshness(run: RunItem): { tone: "amber" | "blue"; meta: string } {
+  const updated = run.updated_at ?? run.as_of;
+  if (updated === null || updated === undefined) return { tone: "blue", meta: run.run_id.slice(0, 8) };
+  const t = Date.parse(updated);
+  if (Number.isNaN(t)) return { tone: "blue", meta: updated };
+  const minutes = Math.max(0, Math.floor((Date.now() - t) / 60_000));
+  if (minutes >= 15) return { tone: "amber", meta: `최근 진행 ${minutes}분 전` };
+  return { tone: "blue", meta: `최근 진행 ${minutes}분 전` };
+}
+
+function collectActionItems(args: {
+  failedBiz: readonly RunItem[];
+  failedSys: readonly RunItem[];
+  running: readonly RunItem[];
+  human: readonly HumanTaskItem[];
+  wiDlq: readonly DeadLetterItem[];
+  sinkDlq: readonly DeadLetterItem[];
+  redSites: readonly SiteItem[];
+}): ActionItem[] {
+  const out: ActionItem[] = [];
+  for (const r of args.failedSys.slice(0, 2)) {
+    out.push({ key: `fs-${r.run_id}`, tone: "red", title: "시스템 실패 실행", meta: r.failure_reason?.code ?? r.run_id.slice(0, 8), view: "runTrace", params: { run: r.run_id, status: "failed_system" } });
+  }
+  for (const r of args.failedBiz.slice(0, 2)) {
+    out.push({ key: `fb-${r.run_id}`, tone: "red", title: "업무 실패 실행", meta: r.failure_reason?.code ?? r.run_id.slice(0, 8), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
+  }
+  for (const h of [...args.human].sort(bySoonestTimeout).slice(0, 3)) {
+    out.push({ key: `h-${h.human_task_id}`, tone: h.timeout !== null ? "amber" : "blue", title: "사람 확인 대기", meta: h.timeout !== null ? `마감 ${h.timeout}` : h.kind, view: "humanTasks", params: { ht: h.human_task_id } });
+  }
+  for (const d of args.wiDlq.slice(0, 2)) {
+    out.push({ key: `wd-${d.dead_letter_id}`, tone: "red", title: "작업항목 DLQ", meta: d.source_id?.slice(0, 8) ?? d.dead_letter_id.slice(0, 8), view: "workitems" });
+  }
+  for (const d of args.sinkDlq.slice(0, 2)) {
+    out.push({ key: `sd-${d.dead_letter_id}`, tone: "red", title: "외부 전달 DLQ", meta: d.sink_idempotency_key ?? d.dead_letter_id.slice(0, 8), view: "workitems" });
+  }
+  for (const s of args.redSites.filter((site) => site.approval_status === "pending").slice(0, 2)) {
+    out.push({ key: `site-${s.site_profile_id}`, tone: "amber", title: "red 사이트 승인 대기", meta: s.name ?? s.site_profile_id.slice(0, 8), view: "security" });
+  }
+  for (const r of args.running.slice(0, 1)) {
+    const freshness = runningFreshness(r);
+    out.push({ key: `run-${r.run_id}`, tone: freshness.tone, title: "실행 중 상태 점검", meta: freshness.meta, view: "runTrace", params: { run: r.run_id, status: "running" } });
+  }
+  return out.slice(0, 5);
+}
+
+function ActionQueue({ items }: { items: readonly ActionItem[] }): JSX.Element {
+  return (
+    <section className="panel action-queue" aria-label="지금 처리해야 할 Top 5">
+      <div className="panel-head">
+        <h2>지금 처리해야 할 Top 5</h2>
+      </div>
+      {items.length === 0 ? (
+        <p className="subtle" style={{ margin: 0, padding: 16 }}>즉시 처리할 항목이 없습니다.</p>
+      ) : (
+        <div className="queue-list">
+          {items.map((item, index) => (
+            <button key={item.key} className="queue-item" type="button" aria-label={`Top ${index + 1} 처리 항목 ${item.meta}`} onClick={() => navigate(item.view, item.params)}>
+              <span className={`badge ${item.tone}`}>{index + 1}</span>
+              <span>
+                <strong>{item.title}</strong>
+                <span className="subtle">{item.meta}</span>
+              </span>
+              <span className="subtle" aria-hidden="true">→</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function DashboardView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
+  const roles = useRoles();
   // '실행 중'은 서버 status 필터로 정확히 집계(이전: 전체 50건을 클라에서 status==='running' 필터 → 50건 초과 시 구조적 오집계).
   const running = useQuery({ queryKey: ["runs", "running"], queryFn: () => api.listRuns({ status: "running", limit: 50 }), refetchInterval: 5_000 });
   const recent = useQuery({ queryKey: ["runs"], queryFn: () => api.listRuns({ limit: 50 }), refetchInterval: 5_000 });
@@ -58,6 +220,7 @@ export function DashboardView(): JSX.Element {
   // '실행 중' 카드와 동일하게 카운트·목록 모집단 정합을 정확히 만족시킨다(조용한 false 인접 오표상 제거).
   const failedBiz = useQuery({ queryKey: ["runs", "failed_business"], queryFn: () => api.listRuns({ status: "failed_business", limit: 50 }), refetchInterval: 5_000 });
   const failedSys = useQuery({ queryKey: ["runs", "failed_system"], queryFn: () => api.listRuns({ status: "failed_system", limit: 50 }), refetchInterval: 5_000 });
+  const redSites = useQuery({ queryKey: ["sites", "red"], queryFn: () => api.listSites({ risk: "red", limit: 50 }), refetchInterval: 10_000 });
 
   // 첫-실행 안내 배너: '진짜 빈 테넌트'(실행 0건)일 때만. recent(무필터 listRuns)의 실 필드로만 판정.
   // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
@@ -67,6 +230,7 @@ export function DashboardView(): JSX.Element {
   return (
     <>
       {isEmptyTenant && <OnboardingBanner {...onboardingProps(can)} />}
+      <RoleWorkbench roles={roles} can={can} />
       <div className="metrics">
         <Metric label="실행 중" value={pageCount(running.data)} view="runTrace" params={{ status: "running" }} hint="실행 기록" />
         <Metric label="사람 확인 대기" value={pageCount(human.data)} view="humanTasks" hint="사람 확인" />
@@ -78,6 +242,17 @@ export function DashboardView(): JSX.Element {
       <p className="subtle" style={{ margin: "0 2px" }}>
         각 지표는 최신 50건 기준입니다. <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
       </p>
+      <ActionQueue
+        items={collectActionItems({
+          failedBiz: failedBiz.data?.items ?? [],
+          failedSys: failedSys.data?.items ?? [],
+          running: running.data?.items ?? [],
+          human: human.data?.items ?? [],
+          wiDlq: wiDlq.data?.items ?? [],
+          sinkDlq: sinkDlq.data?.items ?? [],
+          redSites: redSites.data?.items ?? [],
+        })}
+      />
       {/* 빈 테넌트(실행 0건)일 때는 위 OnboardingBanner 가 '실행 없음' + CTA 로 그 상태를 온전히 안내하므로,
           같은 사실을 반복하는 패널 EmptyState('아직 실행이 없습니다.')는 숨긴다(중복 메시지·중복 role='status' 제거).
           실행이 1건이라도 생기면 isEmptyTenant=false 가 되어 패널이 즉시 복귀한다(기능 손실 없음). */}

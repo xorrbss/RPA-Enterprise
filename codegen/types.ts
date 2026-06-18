@@ -61,6 +61,11 @@ export interface IRMeta {
   ir_version?: "1.x";
   /** 콘솔 시나리오 스튜디오 편집 모드 보존. */
   studio_mode?: "easy" | "form" | "ir";
+  /** Natural-language generation evidence request; server-normalized into node recording policy, video is run-level. */
+  evidence?: {
+    screenshot?: "never" | "failure" | "each_step";
+    video?: "never" | "failure" | "always";
+  };
 }
 
 /**

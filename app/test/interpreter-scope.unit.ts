@@ -180,6 +180,35 @@ async function main(): Promise<void> {
   extractRows = 2;
   check("node.grab.extracted_ref 투영 == 'art://out'", (await run(refScenario)) === "success");
 
+  // 8) Repeated extract results surface page-level raw outputs and a deduped merged outcome.
+  {
+    const mergeExecutor: ExecutorPlugin = {
+      ...fakeExecutor,
+      execute: async (stepId, action): Promise<StepResult> => {
+        if ((action as { type?: string }).type !== "extract") return stepResult("success");
+        const rows = stepId.startsWith("first.") ? [{ SEQ: 1 }, { SEQ: 2 }] : [{ SEQ: 2 }, { SEQ: 3 }];
+        return {
+          ...stepResult("success"),
+          stepId,
+          action: "extract",
+          output: { rowCount: rows.length },
+          extracted: { rows },
+          artifacts: [`art://${stepId}`] as StepResult["artifacts"],
+        };
+      },
+    };
+    const mergeScenario: CompiledScenario = {
+      start: "first",
+      nodes: {
+        first: { what: [{ type: "extract" }], flow: { kind: "next", target: "second" } },
+        second: { what: [{ type: "extract" }], flow: { kind: "terminal", terminal: "success" } },
+      },
+    };
+    const outcome = await runScenario(mergeScenario, ctx(), { executor: mergeExecutor, resolver: fakeResolver, params: {} });
+    check("interpreter: extractPages records page-level raw outputs", outcome.extractPages?.length === 2);
+    check("interpreter: mergedExtract dedupes repeated SEQ across pages", outcome.mergedExtract?.records.length === 3 && outcome.mergedExtract.duplicateCount === 1);
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

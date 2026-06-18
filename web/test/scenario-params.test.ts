@@ -57,14 +57,41 @@ describe("OperatorWizard.buildIr — url_ref 키 모델(리터럴 금지)", () =
   test("url_ref 는 입력 URL이 아니라 심볼릭 키(entry_url); 입력 URL은 params_schema default 로", () => {
     const ir = buildIr("리뷰수집", "https://login.office.hiworks.com/x", "리뷰", "list") as {
       meta: { studio_mode: string };
-      nodes: { open: { what: { url_ref: string }[] }; collect: { what: { instruction?: string }[] } };
+      nodes: {
+        open: { what: { url_ref: string }[]; next: string };
+        collect: { what: { instruction?: string }[]; next: string };
+        page_loop: { loop: { body_target: string; exit_target: string; until: string; max_iterations: number } };
+        next_page: { what: { action: string; instruction?: string }[]; next: string };
+      };
     };
     expect(ir.nodes.open.what[0]?.url_ref).toBe("entry_url");
     expect(ir.meta.studio_mode).toBe("easy");
     expect(ir.nodes.collect.what[0]?.instruction).toContain("리뷰");
+    expect(ir.nodes.collect.next).toBe("page_loop");
+    expect(ir.nodes.page_loop.loop).toMatchObject({ body_target: "next_page", exit_target: "done", max_iterations: 2 });
+    expect(ir.nodes.page_loop.loop.until).toContain("flags.no_next_page");
+    expect(ir.nodes.next_page.what[0]).toMatchObject({ action: "act", instruction: expect.stringContaining("다음 페이지") });
     // 런타임 키-only 계약과 정합: 키는 entry_url, 입력 URL은 default 로 라운드트립(실행 대화상자 prefill).
     expect(extractUrlRefKeys(ir)).toEqual(["entry_url"]);
     expect(extractParamDefaults(ir)).toEqual({ entry_url: "https://login.office.hiworks.com/x" });
+  });
+
+  test("list pagination 옵션은 loop 반복 횟수와 마지막 페이지 flag로 컴파일된다", () => {
+    const ir = buildIr("공지", "https://example.com/notices", "공지", "list", "공지 추출", "", 1, {
+      maxPages: 5,
+      nextInstruction: "다음 버튼을 누른다.",
+      noNextFlag: "cursor_reached",
+    }) as {
+      nodes: {
+        collect: { next: string };
+        page_loop: { loop: { until: string; max_iterations: number } };
+        next_page: { what: { instruction?: string }[] };
+      };
+    };
+    expect(ir.nodes.collect.next).toBe("page_loop");
+    expect(ir.nodes.page_loop.loop.max_iterations).toBe(4); // 첫 페이지 수집 후 추가 페이지 클릭 수
+    expect(ir.nodes.page_loop.loop.until).toBe("flags.cursor_reached || loop.page_count >= 4");
+    expect(ir.nodes.next_page.what[0]?.instruction).toBe("다음 버튼을 누른다.");
   });
 
   test("무효/빈 URL이면 default 없이 키만 선언(required 유지)", () => {
@@ -86,7 +113,28 @@ describe("OperatorWizard.buildIr — url_ref 키 모델(리터럴 금지)", () =
       dataName: "리뷰",
       kind: "list",
       instruction: "리뷰 제목과 별점을 추출하라.",
+      maxPages: 3,
+      nextInstruction: "다음 페이지 버튼을 눌러 다음 목록 화면으로 이동하라.",
+      noNextFlag: "no_next_page",
     });
+  });
+
+  test("form IR loop와 observe/act 지시문은 단계 편집 초기값으로 라운드트립된다", () => {
+    const initial = stepBuilderInitialFromIr({
+      meta: { name: "페이지 반복", version: 1, studio_mode: "form" },
+      start: "loop",
+      nodes: {
+        loop: { loop: { body_target: "next", exit_target: "done", until: "flags.no_next_page", max_iterations: 3 } },
+        next: { what: [{ action: "act", instruction: "다음 페이지 클릭" }], next: "loop" },
+        done: { terminal: "success" },
+      },
+    });
+    expect(initial?.steps[0]).toMatchObject({
+      id: "loop",
+      action: "none",
+      flow: { kind: "loop", bodyTarget: "next", exitTarget: "done", until: "flags.no_next_page", maxIterations: 3 },
+    });
+    expect(initial?.steps[1]).toMatchObject({ id: "next", action: "act", instruction: "다음 페이지 클릭" });
   });
 
   test("form IR은 단계 편집 초기값으로 라운드트립된다", () => {

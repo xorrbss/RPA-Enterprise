@@ -27,6 +27,8 @@ tags:
     description: 실행 제어 (api-surface §1)
   - name: Scenarios
     description: 시나리오 CRUD · 검증 · 승격 (api-surface §2)
+  - name: ScenarioGenerations
+    description: 자연어 프롬프트 기반 시나리오 생성 · 저장 · 선택 실행 (api-surface §2.5)
   - name: HumanTasks
     description: 휴먼 태스크 인박스 (api-surface §3)
   - name: Workitems
@@ -58,7 +60,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -155,6 +157,154 @@ paths:
           $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
         '409':
           $ref: '#/components/responses/Error'        # RUN_ALREADY_TERMINAL / RUN_ABORTED / WORKITEM_CHECKOUT_CONFLICT(suspending)
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 2.5 Scenario Generations — api-surface §2.5
+  # ============================================================
+  /scenario-generations:
+    get:
+      tags: [ScenarioGenerations]
+      operationId: listScenarioGenerations
+      summary: 자연어 generation 원장 목록
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [drafted, saved, run_queued, blocked, failed]
+      responses:
+        '200':
+          description: tenant-scoped scenario generation 목록. prompt 원문은 노출하지 않는다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioGenerationList'
+        default:
+          $ref: '#/components/responses/Error'
+
+    post:
+      tags: [ScenarioGenerations]
+      operationId: generateScenario
+      summary: 자연어 프롬프트로 시나리오 생성·저장·선택 실행
+      description: >
+        기본 planner는 deterministic_mvp. 선택적 planner=llm_v1은 서버에 LLM planner 구현체가
+        주입된 경우에만 사용 가능하며, 미구성 시 RESOURCE_NOT_FOUND로 fail-closed한다.
+        prompt+힌트를 IR로 변환한 뒤 기존 scenario save 검증 파이프라인(AJV → IREL → V1..V11)을 통과한 경우에만 저장한다. mode=save_and_run은
+        run.create 권한과 target/start_url/target row 안전 조건이 모두 충족될 때만 run을 queued로 만든다.
+        planner 산출 IR이 meta.evidence 또는 node policy.recording을 누락/약화해도 서버가 요청 evidence를 최종 권위로 정규화한 뒤 compile/save/run을 진행한다.
+        명시 target의 site origin과 start_url origin이 다르면 target_start_url_site_mismatch blocker로
+        차단한다. 조건 부족 시 scenario는 저장하되 status=blocked, blockers[]에 사유를 남긴다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioGenerationRequest'
+      responses:
+        '200':
+          description: draft_only 생성 결과.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioGeneration'
+        '201':
+          description: scenario 저장 또는 run queued까지 처리된 generation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioGeneration'
+        '403':
+          $ref: '#/components/responses/Error'
+        '412':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-generations/{generation_id}:
+    parameters:
+      - $ref: '#/components/parameters/GenerationId'
+    get:
+      tags: [ScenarioGenerations]
+      operationId: getScenarioGeneration
+      summary: 자연어 생성 원장 조회
+      responses:
+        '200':
+          description: scenario generation 원장.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioGeneration'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-generations/{generation_id}/artifacts:
+    parameters:
+      - $ref: '#/components/parameters/GenerationId'
+    get:
+      tags: [ScenarioGenerations, Artifacts]
+      operationId: listScenarioGenerationArtifacts
+      summary: 자연어 생성 산출물 목록 조회
+      description: >
+        generation-scoped planner/output artifact 목록. metadata-only 응답이며 content/object_ref/sha256은 노출하지 않는다.
+        본문 조회는 scoped artifact body route 또는 전역 artifact route의 redaction/RBAC/audit 게이트를 통과해야 한다.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: generation 하위 artifact metadata 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationArtifactList'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-generations/{generation_id}/artifacts/{artifact_id}:
+    parameters:
+      - $ref: '#/components/parameters/GenerationId'
+      - $ref: '#/components/parameters/ArtifactId'
+    get:
+      tags: [ScenarioGenerations, Artifacts]
+      operationId: getScenarioGenerationArtifact
+      summary: 자연어 생성 산출물 본문 조회
+      description: >
+        artifact가 해당 generation에 속하는지 scoped 확인 후 전역 artifact body read와 같은 RLS redaction gate,
+        artifact.read RBAC, append-only audit boundary를 통과한 경우에만 마스킹된 본문을 반환한다.
+      responses:
+        '200':
+          description: scoped generation artifact 본문.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationArtifact'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
 
@@ -348,6 +498,11 @@ paths:
           in: query
           required: false
           schema: { type: string }
+        - name: run_id
+          in: query
+          required: false
+          description: suspended run 상세에서 연결된 human task로 정확히 딥링크하기 위한 필터.
+          schema: { type: string }
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
       responses:
@@ -387,8 +542,9 @@ paths:
       operationId: resolveHumanTask
       summary: 휴먼 태스크 해소
       description: >
-        해소 결과(kind별 payload). HumanTask in_progress→resolved(H3), human_task.resolved 이벤트 →
-        Run suspended→resume_requested(R13). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410, business).
+        v1 resolve는 optional result 객체를 수용하지만 전이/이벤트만 확정하고 result는 검증·영속·소비하지 않는다.
+        HumanTask in_progress→resolved(H3), human_task.resolved 이벤트 → Run suspended→resume_requested(R13).
+        만료/종결 태스크 → HUMAN_TASK_EXPIRED(410, business).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -635,6 +791,44 @@ paths:
         default:
           $ref: '#/components/responses/Error'        # 예: §10 audit append 실패 시 fail-closed
 
+  /artifacts/{artifact_id}/blob:
+    parameters:
+      - $ref: '#/components/parameters/ArtifactId'
+    get:
+      tags: [Artifacts]
+      operationId: getArtifactBlob
+      summary: 산출물 원본 바이트 조회
+      description: >
+        JSON 본문 조회와 같은 artifact.read RBAC, RLS redaction gate, audit boundary를 통과한 뒤
+        object store의 raw bytes를 반환한다. object_ref, sha256, content JSON은 노출하지 않는다.
+      responses:
+        '200':
+          description: image/png, video/webm, text/plain 등 원본 artifact 바이트.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            video/webm:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   # ============================================================
   # 6. Gateway Policy — api-surface §6
   # ============================================================
@@ -790,6 +984,11 @@ components:
       schema: { type: string }
     ScenarioId:
       name: scenario_id
+      in: path
+      required: true
+      schema: { type: string }
+    GenerationId:
+      name: generation_id
       in: path
       required: true
       schema: { type: string }
@@ -1062,6 +1261,15 @@ components:
           items: { $ref: '#/components/schemas/Site' }
         next_cursor:
           type: [string, "null"]
+    GenerationArtifactList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/GenerationArtifactItem' }
+        next_cursor:
+          type: [string, "null"]
 
     # ===== Resource shapes (요지; 상세 필드 타입은 codegen/types 참조) =====
     Run:
@@ -1079,6 +1287,10 @@ components:
           description: 서버가 생성 시 1회 고정(api-surface §0.6). 재시도/replay/resume에 재사용.
         workitem_id: { type: [string, "null"] }
         current_node: { type: [string, "null"] }
+        updated_at:
+          type: string
+          format: date-time
+          description: runs.updated_at. 콘솔이 오래 멈춘 실행을 추정하지 않고 실제 상태 갱신 시각으로 판단하는 데 사용.
 
     RunCreateRequest:
       type: object
@@ -1110,6 +1322,110 @@ components:
         latest_version_id: { type: string }
         ir:
           $ref: '#/components/schemas/IRDocument'
+
+    ScenarioGenerationRequest:
+      type: object
+      required: [prompt]
+      additionalProperties: false
+      properties:
+        prompt:
+          type: string
+          minLength: 1
+          description: 자연어 업무 요청. 원장은 prompt_hash/ref만 저장하고 원문 저장은 금지.
+        name:
+          type: string
+          description: 생성될 scenario 이름. 미지정 시 prompt hash 기반 이름.
+        mode:
+          type: string
+          enum: [draft_only, save, save_and_run]
+          default: save_and_run
+        planner:
+          type: string
+          enum: [deterministic_mvp, llm_v1]
+          default: deterministic_mvp
+          description: llm_v1은 서버에 해당 ScenarioPlanner 구현체가 주입된 경우에만 허용된다.
+        start_url:
+          type: string
+          format: uri
+          description: 첫 navigate에 주입할 URL(params.start_url).
+        target:
+          allOf:
+            - $ref: '#/components/schemas/ScenarioGenerationTarget'
+          description: 생략 시 start_url/프롬프트 URL origin으로 site profile을 찾고 기본 browser identity/network policy 후보가 있으면 서버가 자동 추론한다.
+        params:
+          type: object
+          additionalProperties: true
+        model:
+          type: [string, "null"]
+        evidence:
+          $ref: '#/components/schemas/ScenarioGenerationEvidence'
+
+    ScenarioGenerationTarget:
+      type: object
+      required: [site_profile_id, browser_identity_id, network_policy_id]
+      additionalProperties: false
+      properties:
+        site_profile_id: { type: string, format: uuid }
+        browser_identity_id: { type: string, format: uuid }
+        network_policy_id: { type: string, format: uuid }
+
+    ScenarioGenerationEvidence:
+      type: object
+      additionalProperties: false
+      properties:
+        screenshot:
+          type: string
+          enum: [never, failure, each_step]
+          default: failure
+        video:
+          type: string
+          enum: [never, failure, always]
+          default: never
+          description: WebM/video capture request. Values other than never require the runtime video recorder capability; otherwise save_and_run returns video_recording_port_not_configured. The server normalizes planner output so requested evidence is reflected in IR meta.evidence and node policy.recording.
+
+    ScenarioGeneration:
+      type: object
+      description: 자연어 프롬프트 기반 generation 원장/응답. prompt 원문은 노출하지 않는다.
+      properties:
+        generation_id: { type: string }
+        mode:
+          type: string
+          enum: [draft_only, save, save_and_run]
+        status:
+          type: string
+          enum: [drafted, saved, run_queued, blocked, failed]
+        prompt_hash: { type: string }
+        prompt_redacted_ref:
+          type: [string, "null"]
+          description: Optional artifact/ref for redacted prompt material. Prompt plaintext is never returned.
+        planner:
+          type: string
+          enum: [deterministic_mvp, llm_v1]
+        model: { type: [string, "null"] }
+        scenario_id: { type: [string, "null"] }
+        scenario_version_id: { type: [string, "null"] }
+        run_id: { type: [string, "null"] }
+        evidence_policy:
+          $ref: '#/components/schemas/ScenarioGenerationEvidence'
+        blockers:
+          type: array
+          items: { type: string }
+        draft_ir:
+          $ref: '#/components/schemas/IRDocument'
+        validation_report:
+          $ref: '#/components/schemas/ValidationReport'
+
+    ScenarioGenerationList:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScenarioGeneration'
+        next_cursor:
+          type: [string, "null"]
 
     IRDocument:
       type: object
@@ -1190,8 +1506,12 @@ components:
 
     HumanTaskResolveRequest:
       type: object
-      description: 해소 결과(kind별 payload). 상세 구조는 reserved-handlers/codegen/types 참조.
-      additionalProperties: true
+      description: v1 forward seam. optional result 객체는 수용하지만 전이/이벤트 외에는 검증·영속·소비하지 않는다.
+      properties:
+        result:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
 
     HumanTaskAssignRequest:
       type: object
@@ -1250,6 +1570,19 @@ components:
       properties:
         artifact_id: { type: string }
         type: { type: [string, "null"] }
+        media_type:
+          type: [string, "null"]
+          description: image/png, video/webm, text/plain 등 미디어/다운로드 힌트.
+        filename:
+          type: [string, "null"]
+          description: 사용자 표시/다운로드용 파일명. 내부 object path 아님.
+        byte_size:
+          type: [integer, "null"]
+          minimum: 0
+        duration_ms:
+          type: [integer, "null"]
+          minimum: 0
+          description: video/run clip 등 시간 기반 artifact 길이.
         sha256: { type: [string, "null"] }
         redaction_status:
           type: string
@@ -1259,6 +1592,42 @@ components:
         content:
           type: string
           description: 마스킹된 redacted object 본문(평문 노출 금지). object store(redacted at rest)에서 read.
+
+    GenerationArtifactItem:
+      type: object
+      description: >
+        자연어 generation 하위 artifact 목록 항목. metadata-only이며 content/object_ref/sha256은 노출하지 않는다.
+      properties:
+        artifact_id: { type: string }
+        type: { type: string }
+        media_type:
+          type: [string, "null"]
+          description: image/png, video/webm, text/plain 등 미디어/다운로드 힌트.
+        filename:
+          type: [string, "null"]
+          description: 사용자 표시/다운로드용 파일명. 내부 object path 아님.
+        byte_size:
+          type: [integer, "null"]
+          minimum: 0
+        duration_ms:
+          type: [integer, "null"]
+          minimum: 0
+        redaction_status:
+          type: string
+          enum: [redacted, not_required]
+          description: 목록은 redacted/not_required·미삭제·비격리·동tenant 가시 artifact만 반환한다.
+        retention_until: { type: [string, "null"], format: date-time }
+        legal_hold: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    GenerationArtifact:
+      allOf:
+        - $ref: '#/components/schemas/Artifact'
+        - type: object
+          properties:
+            generation_id:
+              type: string
+              description: scoped generation id. artifact가 이 generation에 속함을 확인한 뒤 반환한다.
 
     GatewayPolicy:
       type: object
@@ -1287,6 +1656,10 @@ components:
       description: site_profiles 요약/상세(요지). risk 등급값·컬럼은 Phase 2 DDL.
       properties:
         site_profile_id: { type: string }
+        name: { type: string }
+        url_pattern:
+          type: string
+          description: 런타임 site resolution과 실행 전 점검이 사용하는 http(s) origin/pattern 메타. 비밀 아님.
         risk: { $ref: '#/components/schemas/SiteRisk' }
         approval_status:
           type: string
@@ -1294,6 +1667,21 @@ components:
         circuit_status:
           type: string
           description: circuit 상태(조회로만 노출; site.circuit_opened/closed 이벤트 연계).
+        login_capable:
+          type: boolean
+          description: page_state_selectors.loginUrl 설정 여부. 세션 캡처 버튼 노출용 메타.
+        session_ready:
+          type: boolean
+          description: 만료되지 않은 browser_sessions row 존재 여부. 쿠키 본문은 노출하지 않는다.
+        session_expires_at:
+          type: [string, "null"]
+          format: date-time
+        default_browser_identity_id:
+          type: [string, "null"]
+          description: 사이트 선택 시 자연어 실행 target에 자동 제안할 최신 browser_identity id.
+        default_network_policy_id:
+          type: [string, "null"]
+          description: 자연어 실행 target에 자동 제안할 테넌트 기본 network_policy id.
 
     SiteApproveRequest:
       type: object

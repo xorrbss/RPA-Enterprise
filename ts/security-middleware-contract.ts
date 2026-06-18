@@ -576,6 +576,8 @@ export interface LLMResponse {
   usage: { inputTokens: number; outputTokens: number; cost: number; estimated?: boolean };
   finishReason: "stop" | "length" | "tool_call" | "content_filter";
   parsedJson?: unknown;
+  /** Durable stagehand_calls.id when the gateway is backed by LLMCallIdempotencyStore. */
+  stagehandCallId?: string;
 }
 
 export interface LLMBackendAdapter {
