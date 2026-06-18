@@ -291,6 +291,25 @@ async function main(): Promise<void> {
     check("rowAnchor: template $ 리터럴 치환($& 미해석)", rows[0]?.doc_ref === "https://x/view/a$&b", rows[0]?.doc_ref);
   }
 
+  // (재검증 보완) rowAnchor: LLM 이 rows:[] 인데 권위 앵커는 존재 → loud(빈 인박스로 추출 실패 은폐 금지).
+  {
+    const g = countingGateway({ parsedJson: { rows: [] } });
+    const pairs = [{ k: "IB-A", v: "javascript:ApprovalDocument.getView('111','W');" }];
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sK", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx()));
+    check("rowAnchor: LLM rows:[] + 앵커 존재 → IR_SCHEMA_INVALID(빈 인박스 은폐 금지)", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // (재검증 보완) rowAnchor: 부분 under-coverage(권위 앵커 2 중 1만 행에 매칭) → loud(불완전 인박스 은폐 금지).
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ approval_id: "IB-A" }] } });
+    const pairs = [
+      { k: "IB-A", v: "javascript:ApprovalDocument.getView('111','W');" },
+      { k: "IB-B", v: "javascript:ApprovalDocument.getView('222','W');" }, // 권위 앵커지만 LLM 누락
+    ];
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sL", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx()));
+    check("rowAnchor: 부분 under-coverage(앵커 2/1 누락) → IR_SCHEMA_INVALID(누락 은폐 금지)", err?.code === "IR_SCHEMA_INVALID");
+  }
+
   // observe → success
   {
     const r = await new StagehandDomExecutor(countingGateway().gw, sess(), cfg).execute("s2", { type: "observe", instruction: "find next" }, makeCtx());

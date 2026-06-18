@@ -100,12 +100,17 @@ export async function applyRowAnchor(
   const re = new RegExp(anchor.pattern);
   const byKey = new Map<string, string>();
   const ambiguous = new Set<string>(); // 중복 정규화 키(값 상이) — last-wins 대신 모호로 처리(WRONG doc_ref 부착 차단).
+  let emptyKeyAnchors = 0; // 유효 href 인데 textContent(키) 빈 앵커 — 빈키 교차오염 방지로 제외(degenerate; 로그 가시화).
   for (const p of pairs) {
     if (typeof p.v !== "string") continue;
-    const m = re.exec(p.v.length > MAX_ATTR_CHARS ? p.v.slice(0, MAX_ATTR_CHARS) : p.v);
+    if (p.v.length > MAX_ATTR_CHARS) continue; // 과대 속성값 = 드리프트/오염 → 절단 캡처(경계 걸친 WRONG id) 대신 skip(실 행이면 coverage 가드가 loud).
+    const m = re.exec(p.v);
     if (m === null || m[1] === undefined) continue;
     const k = norm(p.k);
-    if (k === "") continue; // 빈 앵커 키 배제(빈키 교차오염 방지).
+    if (k === "") {
+      emptyKeyAnchors++;
+      continue; // 빈 앵커 키 배제(빈키 교차오염 방지).
+    }
     const value = anchor.template.split("$1").join(m[1]); // 리터럴 치환($ 시퀀스 미해석).
     const prior = byKey.get(k);
     if (prior !== undefined && prior !== value) {
@@ -124,6 +129,7 @@ export async function applyRowAnchor(
   for (const k of ambiguous) byKey.delete(k); // 모호 키는 해소 불가 → 조인에서 제거(해당 행은 drop 된다).
 
   const kept: unknown[] = [];
+  const matchedKeys = new Set<string>(); // kept 가 실제로 커버한 권위 앵커 키(coverage 측정 — under-coverage 손실 탐지).
   let dropped = 0;
   for (const row of rows) {
     if (row === null || typeof row !== "object") {
@@ -140,17 +146,20 @@ export async function applyRowAnchor(
       dropped++; // 미매칭(환각 행/모호 키) → drop(가짜 doc_ref 노출 금지).
       continue;
     }
+    matchedKeys.add(key);
     kept.push({ ...(row as Record<string, unknown>), [anchor.field]: value });
   }
-  if (dropped > 0 || ambiguous.size > 0) {
-    // 은폐 금지 — drop/모호 카운트 가시화.
-    console.log(`[ROW-ANCHOR ${stepId}] ${anchor.field} 결정형 세팅: ${kept.length}행 유지 / ${dropped}행 drop / 모호키 ${ambiguous.size}.`);
+  if (dropped > 0 || ambiguous.size > 0 || emptyKeyAnchors > 0) {
+    // 은폐 금지 — drop/모호/빈키앵커 카운트 가시화.
+    console.log(`[ROW-ANCHOR ${stepId}] ${anchor.field} 결정형 세팅: ${kept.length}행 유지 / ${dropped}행 drop / 모호키 ${ambiguous.size} / 빈키앵커 ${emptyKeyAnchors}.`);
   }
-  // 전 행 키-조인 실패(matchField↔앵커 textContent 불일치/모호) = 포맷 드리프트 진성 결함 → loud(0건 인박스 은폐 금지).
-  if (kept.length === 0 && rows.length > 0) {
+  // 권위 앵커(byKey)는 페이지에 실재하는 결재 행이다(observe 게이트가 ≥1 앵커 settle 보장). kept 가 커버 못 한 앵커가 있으면
+  // — LLM 이 rows:[] 또는 일부만 추출, 또는 matchField↔textContent 포맷 드리프트 — 실 결재가 인박스에서 조용히 사라진다.
+  // 전면 손실(rows:[]·전 행 drop)과 부분 손실(예 15개 중 14개 누락) 모두 loud(조용한 false → 불완전 인박스 은폐 금지).
+  if (matchedKeys.size < byKey.size) {
     throw new StagehandDomExecutorError(
       "IR_SCHEMA_INVALID",
-      `step '${stepId}' extract.row_anchor: ${rows.length}행 모두 키-조인 실패(matchField '${anchor.matchField}' ↔ 앵커 textContent 불일치/모호) — 조용한 false 금지`,
+      `step '${stepId}' extract.row_anchor: 권위 앵커 ${byKey.size}개 중 ${matchedKeys.size}개만 행에 매칭(${byKey.size - matchedKeys.size}개 결재 누락; matchField '${anchor.matchField}'↔앵커 textContent 불일치/LLM 누락) — 조용한 false 금지`,
     );
   }
   return { ...parsed, rows: kept };
