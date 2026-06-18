@@ -36,6 +36,7 @@ import type {
 } from "../../../ts/security-middleware-contract";
 import type { RunState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
+import type { BrowserSessionStore } from "../runtime/browser-session-store";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "../runtime/outbox";
 import { applyRunTransition } from "../runtime/run-transition";
 import { ApiResponseError, registerErrorHandler } from "./errors";
@@ -93,6 +94,11 @@ export interface ApiServerDeps {
    * 미주입 시 artifact read capability는 audit 없이 노출될 수 없다(fail-closed, registerReadRoutes에서 강제).
    */
   securityAudit?: DurableSecurityAuditDecisionWriter;
+  /**
+   * 운영자-보조 캡처 완료 세션 스토어(선택). 미지정 시 POST /v1/sites/{id}/session/capture/complete 미등록 —
+   * 캡처된 쿠키를 받아 봉투암호화(주입된 encryptor)·browser_sessions 저장하는 prod 캡처 경로(P3, dev=DevPlaintext·prod=AesGcm).
+   */
+  sessionStore?: BrowserSessionStore;
 }
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;

@@ -134,6 +134,11 @@ async function startApi(pool: PgPool): Promise<FastifyInstance> {
     security: { corsOrigins: cfg.corsOrigins, hsts: cfg.hsts },
     // artifactStore/securityAudit intentionally unset — artifact body-read stays unregistered until an
     // object_store-authorized credential is provisioned for the API identity (deploy-time, see backlog).
+    // sessionStore intentionally unset — POST .../session/capture/complete stays UNREGISTERED in prod until the
+    //   KmsEnvelopeSessionEncryptor + SecretAccessRequest.purpose 'browser_session' prerequisites land
+    //   (browser-session-store.ts §PROD 전제 ①②). PgBrowserSessionStore is fail-closed (throws without a real KMS
+    //   encryptor), so prod cannot persist captured cookies at rest yet — the same structural blocker that keeps the
+    //   worker's session reuse unwired. Safe degradation, not a leak; dev:serve registers it via DevPlaintext.
   });
   await api.listen({ host: "0.0.0.0", port: cfg.port });
   console.log(JSON.stringify({ at: "main", msg: "control-plane API listening", port: cfg.port, jwtMode: cfg.jwt.mode }));
