@@ -108,6 +108,39 @@ export function compiledScenarioFrom(
   return { start: ir.start, nodes };
 }
 
+/**
+ * extract.args.row_anchor(결정형 행별 필드 추출) → DomAction.rowAnchor(snake→camel: match_field→matchField). 6개 필드 모두
+ * 비빈 문자열 + pattern 정규식 유효성. 미선언은 undefined(옵션). 부분/오타는 compile-time loud(조용한 false 금지 — 잘못된
+ * 결정형 추출 설정을 저장 시점에 거부). 실행기 assertDomAction(coerceRowAnchor)이 런타임 권위 경계로 재검증한다.
+ */
+function parseRowAnchor(raw: unknown, nodeId: string): Record<string, string> | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRec(raw)) {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.args.row_anchor 는 객체여야 함`);
+  }
+  const need = (irKey: string): string => {
+    const v = raw[irKey];
+    if (typeof v !== "string" || v.trim().length === 0) {
+      throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.args.row_anchor.${irKey}(비빈 문자열) 필요`);
+    }
+    return v;
+  };
+  const pattern = need("pattern");
+  try {
+    new RegExp(pattern);
+  } catch {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.args.row_anchor.pattern 정규식 무효`);
+  }
+  return {
+    selector: need("selector"),
+    matchField: need("match_field"),
+    field: need("field"),
+    attribute: need("attribute"),
+    pattern,
+    template: need("template"),
+  };
+}
+
 // IR 액션 → ExecutorPlugin 액션. observe는 on[] PageState resolve가 대신하므로 drop(null).
 // dom 프리미티브(act/extract)는 StagehandDomExecutor 가 받는 DomAction 형태로 산출(composite-executor 가 type 으로 라우팅).
 function mapAction(
@@ -179,10 +212,13 @@ function mapAction(
     // Inline JSON Schema body (args.schema, typo-safe extension slot — same pattern as schema_version/strict).
     // Threaded to the gateway responseFormat so the ajv validator can check the extract output (no registry).
     const schema = isRec(args.schema) ? (args.schema as Record<string, unknown>) : undefined;
+    // 결정형 행별 필드 추출(LLM 속성 환각 차단; act.value_ref 와 동형) — args.row_anchor(snake) → DomAction.rowAnchor(camel).
+    const rowAnchor = parseRowAnchor(args.row_anchor, nodeId);
     return {
       type: "extract",
       instruction: a.instruction,
       output: { schemaRef: a.schema_ref, schemaVersion, strict, ...(schema !== undefined ? { schema } : {}) },
+      ...(rowAnchor !== undefined ? { rowAnchor } : {}),
     };
   }
   throw new InterpreterError(

@@ -10,7 +10,7 @@ import type { ArtifactRef, PageState, RunContext, StepResult } from "../../ts/co
 import type { ErrorCode } from "../../ts/error-catalog";
 import type { LLMRequest, LLMResponse } from "../../ts/security-middleware-contract";
 import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
-import { GatewayError } from "../src/gateway/llm-gateway";
+import { GatewayError, type GatewayArtifactSink } from "../src/gateway/llm-gateway";
 import {
   StagehandDomExecutor,
   StagehandDomExecutorError,
@@ -79,6 +79,38 @@ function fakeSessions(dom: unknown = "<body><main>hello</main></body>") {
   return { provider: { forLease: () => session } as CdpSessionProvider, ops };
 }
 
+// extract.rowAnchor 테스트용 세션 — anchor evaluate(getAttribute 포함식)는 pairs, snapshotDom evaluate 는 dom 을 반환.
+function anchorSessions(pairs: Array<{ k: string; v: string | null }>, snapshotDom: unknown = "<body><table>list</table></body>") {
+  const ops: string[] = [];
+  const session: CdpSession = {
+    url: () => "u",
+    goto: async () => {},
+    reload: async () => {},
+    evaluate: async (expr: string) => (String(expr).includes("getAttribute") ? pairs : snapshotDom) as never,
+    sendCDP: async () => undefined as never,
+    click: async (s) => void ops.push(`click:${s}`),
+    fill: async (s, v) => void ops.push(`fill:${s}=${v}`),
+    selectOption: async () => {},
+    setInputFiles: async () => {},
+    downloadDir: () => "/tmp",
+    waitForDownload: async () => true,
+    close: async () => {},
+  };
+  return { provider: { forLease: () => session } as CdpSessionProvider, ops };
+}
+
+// 강화된 추출 행을 영속하는 fake typed-artifact sink(인박스 artifact). put content/meta 를 캡처.
+function fakeExtractSink() {
+  const puts: Array<{ content: string; meta: unknown }> = [];
+  const sink: GatewayArtifactSink = {
+    put: async (content, meta) => {
+      puts.push({ content, meta });
+      return `art://inbox-${puts.length}` as ArtifactRef;
+    },
+  };
+  return { sink, puts };
+}
+
 function fakeCache(seed?: ActionPlan) {
   let stored = seed;
   const calls = { get: 0, put: 0, suspect: 0 };
@@ -143,6 +175,63 @@ async function main(): Promise<void> {
     const ex = new StagehandDomExecutor(countingGateway({ parsedJson: { product: "x" } }).gw, sess(), cfg);
     const r = await ex.execute("s1b", { type: "extract", instruction: "get product", output: EXTRACT_OUT }, makeCtx());
     check("extract: rows 부재 → output.rowCount 미산출", (r.output as { rowCount?: number }).rowCount === undefined);
+  }
+
+  // extract.rowAnchor: 결정형 doc_ref — DOM 앵커(td.docu-num data-href docId)를 approval_id 키-조인으로 권위 세팅(LLM 환각 override),
+  //   강화 행을 typed artifact(인박스) 로 영속.
+  const ROW_ANCHOR = { selector: "td.docu-num", matchField: "approval_id", field: "doc_ref", attribute: "data-href", pattern: "getView\\(['\"](\\d+)['\"]", template: "https://x/view/$1" };
+  {
+    const g = countingGateway({ parsedJson: { rows: [
+      { approval_id: "IB-001", title: "A", doc_ref: "https://x/view/1234" }, // LLM 환각 doc_ref
+      { approval_id: "IB-002", title: "B" }, // LLM doc_ref 없음
+    ] } });
+    const pairs = [
+      { k: "IB-001", v: "javascript:ApprovalDocument.getView('984261', 'W');" },
+      { k: "IB-002", v: "javascript:ApprovalDocument.getView('955055', 'W');" },
+    ];
+    const sink = fakeExtractSink();
+    const ex = new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg, undefined, undefined, undefined, sink.sink);
+    const r = await ex.execute("sA", { type: "extract", instruction: "get rows", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx());
+    const rows = (r.extracted as { rows: Array<{ approval_id: string; doc_ref: string }> }).rows;
+    check("rowAnchor: doc_ref 결정형 override(환각 1234→984261)", rows[0]?.doc_ref === "https://x/view/984261", rows[0]?.doc_ref);
+    check("rowAnchor: doc_ref 없던 행도 결정형 세팅(955055)", rows[1]?.doc_ref === "https://x/view/955055", rows[1]?.doc_ref);
+    check("rowAnchor: 강화 행을 typed artifact 로 영속(sink 1회, docId 포함)", sink.puts.length === 1 && sink.puts[0]!.content.includes("984261"));
+    check("rowAnchor: 인박스 artifact ref 가 StepResult.artifacts 에 추가", r.artifacts.length === 2 && r.artifacts.includes("art://inbox-1" as ArtifactRef), r.artifacts.join(","));
+  }
+
+  // extract.rowAnchor: 매칭 없는(환각) 행 drop — DOM 에 없는 approval_id 는 제거(가짜 doc_ref 노출 금지). sink 미주입이어도 강화 동작.
+  {
+    const g = countingGateway({ parsedJson: { rows: [
+      { approval_id: "IB-REAL", title: "real" },
+      { approval_id: "IB-FAKE", title: "hallucinated whole row" }, // DOM 에 없음
+    ] } });
+    const pairs = [{ k: "IB-REAL", v: "javascript:ApprovalDocument.getView('111111','W');" }];
+    const r = await new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sB", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx());
+    const rows = (r.extracted as { rows: Array<{ approval_id: string; doc_ref: string }> }).rows;
+    check("rowAnchor: 매칭 없는 환각 행 drop(1행만 유지, doc_ref=111111)", rows.length === 1 && rows[0]?.approval_id === "IB-REAL" && rows[0]?.doc_ref === "https://x/view/111111", JSON.stringify(rows));
+  }
+
+  // extract.rowAnchor: 셀렉터 0매칭 → loud(IR_SCHEMA_INVALID; DOM 미settle/오셀렉터 — 조용한 false 금지).
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ approval_id: "IB-001" }] } });
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions([]).provider, cfg).execute("sC", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx()));
+    check("rowAnchor: 셀렉터 0매칭 → IR_SCHEMA_INVALID(loud)", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // extract.rowAnchor 검증(coerceRowAnchor): 필드 누락 → loud.
+  {
+    const g = countingGateway({ parsedJson: { rows: [] } });
+    const bad = { selector: "td.docu-num", matchField: "approval_id", attribute: "data-href", pattern: "x", template: "y" }; // field 누락
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions([{ k: "a", v: "x" }]).provider, cfg).execute("sD", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: bad as never }, makeCtx()));
+    check("rowAnchor: 필드 누락(field) → IR_SCHEMA_INVALID", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // extract.rowAnchor 검증(coerceRowAnchor): 무효 정규식 → loud.
+  {
+    const g = countingGateway({ parsedJson: { rows: [] } });
+    const bad = { selector: "td", matchField: "approval_id", field: "doc_ref", attribute: "data-href", pattern: "getView\\((", template: "y" }; // 무효 regex
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions([{ k: "a", v: "x" }]).provider, cfg).execute("sE", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: bad }, makeCtx()));
+    check("rowAnchor: 무효 정규식 → IR_SCHEMA_INVALID", err?.code === "IR_SCHEMA_INVALID");
   }
 
   // observe → success

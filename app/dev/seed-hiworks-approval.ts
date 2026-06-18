@@ -69,14 +69,24 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
             {
               action: "extract",
               instruction:
-                '결재 대기 목록 테이블의 각 행(tr)에서 다음을 추출하라. 문서번호(approval_id, 예 "IB-..."), 제목(title), ' +
-                '기안자(drafter), 기안일(drafted_at, 예 "2026-06-17"), 구분(doc_type, 예 "결재"/"합의"), 상태(status). ' +
-                "그리고 doc_ref 는 각 행의 문서번호 셀(td.docu-num)의 data-href 속성값에서 " +
-                "ApprovalDocument.getView('<docId>', ...) 의 <docId>(숫자) 를 읽어 " +
-                '"https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/<docId>" 형식의 절대 URL 로 구성하라. ' +
-                "data-href 가 없거나 docId 를 못 찾은 행은 추측하지 말고 제외하라(가짜 값 금지). " +
-                '반드시 JSON 으로만 응답: {"rows":[{"approval_id":"","title":"","drafter":"","drafted_at":"","doc_type":"","status":"","doc_ref":""}]}',
+                "결재 대기 목록 테이블의 각 행(tr)에서 다음을 **가시 텍스트로만** 추출하라. " +
+                'approval_id(문서번호 셀 td.docu-num 의 텍스트를 한 글자도 바꾸지 말고 그대로, 예 "IB-지출(거래처)-20260604-0001"), ' +
+                'title(제목), drafter(기안자), drafted_at(기안일, 예 "2026-06-17"), doc_type(구분, 예 "결재"/"합의"), status(상태). ' +
+                "doc_ref 는 만들지 말 것 — 시스템이 DOM 의 data-href 속성에서 결정형으로 채운다(LLM 의 속성값 추측은 환각이라 금지). " +
+                '반드시 JSON 으로만 응답: {"rows":[{"approval_id":"","title":"","drafter":"","drafted_at":"","doc_type":"","status":""}]}',
               schema_ref: "approval_inbox_rows",
+              args: {
+                // 결정형 doc_ref(LLM 환각 차단) — td.docu-num 의 data-href(ApprovalDocument.getView('<docId>','W'))에서 docId 를
+                // 읽어 approval_id(문서번호) 키-조인으로 각 행에 권위 세팅한다. 매칭 없는(환각) 행은 실행기가 drop(가짜 값 노출 금지).
+                row_anchor: {
+                  selector: "td.docu-num",
+                  match_field: "approval_id",
+                  field: "doc_ref",
+                  attribute: "data-href",
+                  pattern: "getView\\(['\"](\\d+)['\"]",
+                  template: "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/$1",
+                },
+              },
             },
           ],
           next: "done",

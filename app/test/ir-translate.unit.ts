@@ -283,6 +283,32 @@ function main(): void {
     check("act: instruction 누락 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
+  // 16) extract: args.row_anchor → rowAnchor(결정형 행 필드; snake→camel: match_field→matchField).
+  {
+    const rowAnchorArg = { selector: "td.docu-num", match_field: "approval_id", field: "doc_ref", attribute: "data-href", pattern: "getView\\(['\"](\\d+)['\"]", template: "https://x/view/$1" };
+    const s = compiledScenarioFrom({ start: "g", nodes: { g: { what: [{ action: "extract", instruction: "x", schema_ref: "r", args: { row_anchor: rowAnchorArg } }], terminal: "success" } } }, {});
+    const ex = s.nodes.g?.what[0] as { rowAnchor?: { selector: string; matchField: string; field: string; attribute: string; pattern: string; template: string } } | undefined;
+    check(
+      "extract: row_anchor → rowAnchor(match_field→matchField 카멜)",
+      ex?.rowAnchor?.selector === "td.docu-num" && ex.rowAnchor.matchField === "approval_id" && ex.rowAnchor.field === "doc_ref" && ex.rowAnchor.attribute === "data-href" && ex.rowAnchor.template === "https://x/view/$1",
+      JSON.stringify(ex?.rowAnchor),
+    );
+  }
+
+  // 17) extract: row_anchor 필드 누락(match_field) → IR_SCHEMA_INVALID(compile-time loud).
+  {
+    const bad = { selector: "td.docu-num", field: "doc_ref", attribute: "data-href", pattern: "x", template: "y" };
+    const err = caught(() => compiledScenarioFrom({ start: "g", nodes: { g: { what: [{ action: "extract", instruction: "x", schema_ref: "r", args: { row_anchor: bad } }], terminal: "success" } } }, {}));
+    check("extract: row_anchor.match_field 누락 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
+  // 18) extract: row_anchor 무효 정규식 → IR_SCHEMA_INVALID.
+  {
+    const bad = { selector: "td", match_field: "approval_id", field: "doc_ref", attribute: "data-href", pattern: "getView\\((", template: "y" };
+    const err = caught(() => compiledScenarioFrom({ start: "g", nodes: { g: { what: [{ action: "extract", instruction: "x", schema_ref: "r", args: { row_anchor: bad } }], terminal: "success" } } }, {}));
+    check("extract: row_anchor.pattern 무효 정규식 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

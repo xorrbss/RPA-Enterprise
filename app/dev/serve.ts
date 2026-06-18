@@ -318,6 +318,8 @@ async function main(): Promise<void> {
     TENANT,
     2000,
     new DevVisibleGatewayArtifactSink(pool, artifactStore, { type: "llm_output", retentionDays: devArtifactRetentionDays() }),
+    // extract.rowAnchor 로 결정형 강화된 결재 행을 인박스용 typed artifact 로 영속(인박스가 approval_inbox 를 우선 채택).
+    new DevVisibleGatewayArtifactSink(pool, artifactStore, { type: "approval_inbox", retentionDays: devArtifactRetentionDays() }),
   );
   // dev 캡처 폴러: 콘솔 '세션 등록'(capture_sessions launching)을 폴링해 별도 headful 로그인창을 띄운다(run-loop 의 공유 세션과 무관).
   const captureLoop: CaptureLoop | null = await startCaptureLoop(pool, TENANT);
