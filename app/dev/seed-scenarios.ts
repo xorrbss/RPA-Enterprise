@@ -5,6 +5,7 @@
 import { withTenantTx, type PgPool } from "../src/db/pool";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { DEV_BROWSER_IDENTITY_ID } from "./run-loop";
+import { seedHiworksApproval } from "./seed-hiworks-approval";
 import {
   PORT,
   TENANT,
@@ -347,6 +348,9 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
       } else {
         console.error("HIWORKS scenario compile FAILED:", JSON.stringify(hw));
       }
+
+      // 하이웍스 결재(approval) — site_profile + 수집/처리 시나리오. 의미 단위 분리(파일 500라인 규칙 #7, 선례 41c2d3a3).
+      await seedHiworksApproval(c);
 
       // 삼성디스플레이 공지 수집(route B 데모) — navigate(bbsHPNO.do) → observe(그리드 렌더 대기) → extract. 봇차단/로그인 없음(실측).
       const samsung = compileScenario(

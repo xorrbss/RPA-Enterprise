@@ -8,6 +8,7 @@ export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon:
   openGate: { title: "Product-open 점검", subtitle: "계약 기준으로 화면, 액션, 보안 gate가 검증 가능한지 확인", icon: "ClipboardCheck" },
   workitems: { title: "작업 목록", subtitle: "대기, 재시도, 실패, 외부 전달 상태를 추적", icon: "ListChecks" },
   humanTasks: { title: "사람 확인", subtitle: "보안문자, 추가 인증, 승인, 검증 업무를 담당자 기준으로 처리", icon: "Inbox" },
+  approvalInbox: { title: "결재 인박스", subtitle: "하이웍스 결재 목록을 수집·요약하고 건별로 승인/반려", icon: "Stamp" },
   runTrace: { title: "실행 기록", subtitle: "자동화가 어떤 순서로 판단하고 실행했는지 조회", icon: "Route" },
   irValidation: { title: "시나리오 검사", subtitle: "자동화 시나리오의 문법, 연결, 성공 기준을 배포 전에 검사", icon: "FileCode2" },
   llmGateway: { title: "AI 모델 설정", subtitle: "AI 실행기, 실시간 응답, 예산, 결과 형식 정책", icon: "Bot" },

@@ -48,7 +48,10 @@ export type { ActionPlan, ActionPlanCache, ActionPlanCacheKey } from "./action-p
 export type DomAction =
   // secretRef: 자격증명 fill 슬롯(IR act.vars 에서 ir-translate 가 스레딩). 있으면 실행기가 ctx.assetRefs 에서
   //   SecretRef 를 SecretStore 경유로 해소해 LLM 미경유로 채운다(비밀 대상은 LLM 출력이 아니라 IR 선언 — 결정형).
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string }
+  // valueRef: 비-secret 결정형 fill 의 INTENT 마커(IR act.args.value_ref = run params 키). 선언되면 실행기가 selector
+  //   만 LLM 에 맡기고 value(해소된 평문)로 채운다(LLM 추측 value 무시). value 미해소면 LLM/캐시 값 무음 fill 거부 → loud.
+  //   value: valueRef 가 run params 에서 해소된 평문(미해소면 부재). secretRef 와 상호배타. 평문 비밀 아님(반려 사유 등).
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> } };
 
@@ -230,10 +233,32 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         );
       }
       plan = { operation: "fill", selector: plan.selector, valueRef: a.secretRef };
+    } else if (a.valueRef !== undefined) {
+      // 비-secret 결정형 fill(intent=valueRef): 채울 값을 IR/params 의 a.value 로 고정(LLM 추측 value 무시).
+      //   LLM 은 selector 만 책임진다. fill 이 아니면 loud(조용한 무시 금지). value 미해소(run params 부재)면 LLM/캐시 값으로
+      //   무음 fill 하지 않고 loud throw — 결정형 슬롯 보장("조용한 false 금지", break-it finding). 캐시 hit 에도 현재 run 의
+      //   a.value 로 재고정(params 가변; selector 만 캐시 재사용). value 는 비밀 아님(평문 경로 허용).
+      if (plan.operation !== "fill") {
+        throw new StagehandDomExecutorError(
+          "IR_SCHEMA_INVALID",
+          `step '${stepId}' value act(valueRef='${a.valueRef}') must yield a 'fill' plan, got '${plan.operation}'`,
+        );
+      }
+      if (a.value === undefined) {
+        throw new StagehandDomExecutorError(
+          "IR_SCHEMA_INVALID",
+          `step '${stepId}' value act(valueRef='${a.valueRef}') has no resolved value from run params — refusing LLM/cache value (deterministic fill)`,
+        );
+      }
+      plan = { operation: "fill", selector: plan.selector, value: a.value };
     }
 
-    // miss(LLM 해석)만 캐시에 저장 — 저장 plan 은 override 반영된 ref-bearing plan(평문 미저장).
-    if (fromLlm && this.cache) await this.cache.put(cacheKey, plan);
+    // miss(LLM 해석)만 캐시에 저장. 평문 미저장: secretRef=ref-bearing({fill,selector,valueRef}), valueRef(비-secret)=
+    //   selector-only(value 스트립 — 매 실행 override 가 현재 run value 로 재고정하므로 캐시 value 불요; 평문 영속·stale 재생 차단).
+    if (fromLlm && this.cache) {
+      const cachePlan: ActionPlan = a.valueRef !== undefined ? { operation: "fill", selector: plan.selector } : plan;
+      await this.cache.put(cacheKey, cachePlan);
+    }
 
     // 적용: CDP 로 실제 mutation(click/fill/select). 적용 실패는 런타임 예외로 전파(분류는 상위).
     await this.applyPlan(plan, session, ctx);
@@ -427,11 +452,15 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (type === "act") {
       const se = (action as { sideEffect?: unknown }).sideEffect;
       const sr = (action as { secretRef?: unknown }).secretRef;
+      const vr = (action as { valueRef?: unknown }).valueRef;
+      const val = (action as { value?: unknown }).value;
       return {
         type,
         instruction,
         ...(typeof se === "string" ? { sideEffect: se as SideEffectKind } : {}),
         ...(typeof sr === "string" && sr.length > 0 ? { secretRef: sr } : {}),
+        ...(typeof vr === "string" && vr.length > 0 ? { valueRef: vr } : {}),
+        ...(typeof val === "string" ? { value: val } : {}),
       };
     }
     return { type, instruction };

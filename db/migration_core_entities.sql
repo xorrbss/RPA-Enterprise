@@ -399,6 +399,29 @@ CREATE INDEX idx_artifacts_lifecycle_claim_expiry ON artifacts (tenant_id, lifec
   WHERE lifecycle_claim_id IS NOT NULL;
 
 -- ============================================================
+-- 7b. approval_decisions
+--    하이웍스 결재 인박스(Model A) — 건별 approver-게이트 결재 결정의 불변 이력 + 이중결재 방지.
+--    수집 run(source_run_id)이 인박스에 노출한 문서(doc_ref)에 대한 결정(approve/reject)을 1행으로 기록하고,
+--    내부에서 스폰한 결재 처리 run(spawned_run_id)을 연결한다. UNIQUE(tenant, source_run, doc_ref) → 같은 수집본의
+--    같은 문서 이중결재 차단(23505 → APPROVAL_ALREADY_DECIDED). runs FK 는 artifacts/run_steps 동형 — inline REFERENCES(runs 선생성)
+--    + 아래 ALTER 의 복합 테넌트 FK(tenant_id, run_id)로 강화(cross-tenant 격리를 DB 불변식으로; auth-rbac §4 hardening).
+-- ============================================================
+
+CREATE TABLE approval_decisions (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  source_run_id   uuid        NOT NULL REFERENCES runs(id),   -- 결재 목록을 수집해 인박스에 노출한 run(인박스 출처)
+  doc_ref         text        NOT NULL,                       -- 결재 문서 참조(approval origin 절대 URL)
+  decision        text        NOT NULL CHECK (decision IN ('approve','reject')),
+  reason          text,                                       -- 반려 사유(approve면 NULL)
+  decided_by      text        NOT NULL,                       -- approver principal(JWT sub) — PrincipalId 는 자유형 string(UUID 보장 없음: OIDC sub auth0|… 등)
+  spawned_run_id  uuid        REFERENCES runs(id),            -- 내부에서 시작한 결재 처리(decide) run
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, source_run_id, doc_ref)                  -- 이중결재 방지(23505 → APPROVAL_ALREADY_DECIDED)
+);
+CREATE INDEX idx_approval_decisions_source ON approval_decisions (tenant_id, source_run_id, created_at DESC);
+
+-- ============================================================
 -- 8. events_outbox
 --    event-envelope.schema.json 봉투를 컬럼화. 상태 변경과 **동일 트랜잭션** INSERT(README §결정2).
 --    idempotency_key UNIQUE(소비자 중복 무시). published_at NULL = 미발행(outbox relay 대상).
@@ -682,6 +705,14 @@ ALTER TABLE artifacts
   ADD CONSTRAINT fk_artifacts_step_attempt_tenant
   FOREIGN KEY (tenant_id, run_id, step_id, attempt) REFERENCES run_steps(tenant_id, run_id, step_id, attempt);
 
+-- approval_decisions 복합 테넌트 FK(다른 runs 참조 테이블 동형) — tenant_id 가 참조 run 의 tenant 와 일치하도록 DB 강제.
+--   spawned_run_id 는 nullable(결정 INSERT 직후 NULL → createRunInTx 후 UPDATE 로 채움; NULL 행은 FK 미검사).
+ALTER TABLE approval_decisions
+  ADD CONSTRAINT fk_approval_decisions_source_run_tenant
+  FOREIGN KEY (tenant_id, source_run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_approval_decisions_spawned_run_tenant
+  FOREIGN KEY (tenant_id, spawned_run_id) REFERENCES runs(tenant_id, id);
+
 ALTER TABLE events_outbox
   ADD CONSTRAINT fk_events_outbox_run_tenant
   FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
@@ -768,6 +799,7 @@ BEGIN
     'challenge_resolution_attempts',
     'site_profiles',
     'site_profile_approvals',
+    'approval_decisions',
     'browser_identities',
     'network_policies',
     'gateway_policies',

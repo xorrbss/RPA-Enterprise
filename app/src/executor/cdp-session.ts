@@ -64,6 +64,10 @@ interface ShInstance {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// 무거운 SPA(예: 하이웍스 결재 SPA)는 기본 load 이벤트 대기로 goto 가 타임아웃된다(recon: 첫 cold nav 가 15s 로 부족).
+// domcontentloaded 까지만 대기하고 타임아웃을 env(NAV_TIMEOUT_MS, 기본 45s)로 상향한다. 0/비정상값은 기본값으로 흡수.
+const NAV_TIMEOUT_MS = Math.max(1000, Number(process.env.NAV_TIMEOUT_MS) || 45_000);
+
 /** Stagehand v3 page 를 CdpSession 으로 감싸는 어댑터. */
 export class StagehandCdpSession implements CdpSession {
   constructor(
@@ -77,7 +81,7 @@ export class StagehandCdpSession implements CdpSession {
   }
 
   async goto(url: string): Promise<void> {
-    await this.page.goto(url);
+    await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
   }
 
   async reload(): Promise<void> {

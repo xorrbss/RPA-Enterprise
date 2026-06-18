@@ -232,6 +232,31 @@ function main(): void {
     check("act: side_effect 없으면 sideEffect 생략", act?.type === "act" && act.sideEffect === undefined, JSON.stringify(act));
   }
 
+  // 11b) act: args.value_ref(params 키) → valueRef(intent) + 해소된 value 둘 다 스레드(LLM 미경유 결정형 fill).
+  {
+    const ir = { start: "a", nodes: { a: { what: [{ action: "act", instruction: "fill reason", args: { value_ref: "reason" } }], terminal: "success" } } };
+    const s = compiledScenarioFrom(ir, {}, { reason: "반려 사유 텍스트" });
+    const act = s.nodes.a?.what[0] as { type: string; valueRef?: string; value?: string; secretRef?: string } | undefined;
+    check("act: args.value_ref → valueRef(intent)+value 스레드", act?.type === "act" && act.valueRef === "reason" && act.value === "반려 사유 텍스트" && act.secretRef === undefined, JSON.stringify(act));
+  }
+
+  // 11c) act: args.value_ref 인데 params 부재 → valueRef(intent) 보존 + value 미설정(무throw). 전 노드 upfront 변환이라
+  //      미실행 분기의 부재 param 에 throw 하면 안 된다(예: approve run 의 reject 노드 reason). 실행 도달 시 실행기가
+  //      valueRef intent 로 loud(LLM/캐시 값 무음 fill 거부) — intent 가 소실되지 않아야 결정형 보장이 성립한다(break-it 후속).
+  {
+    const ir = { start: "a", nodes: { a: { what: [{ action: "act", instruction: "fill reason", args: { value_ref: "reason" } }], terminal: "success" } } };
+    const s = compiledScenarioFrom(ir, {}, { other: "x" });
+    const act = s.nodes.a?.what[0] as { type: string; valueRef?: string; value?: string } | undefined;
+    check("act: value_ref 미해소(params 부재) → valueRef(intent) 보존 + value 미설정(무throw)", act?.type === "act" && act.valueRef === "reason" && act.value === undefined, JSON.stringify(act));
+  }
+
+  // 11d) act: vars(secret) + args.value_ref(비-secret) 동시 → IR_SCHEMA_INVALID(상호배타 — 한 fill 은 비밀이거나 비-secret).
+  {
+    const ir = { start: "a", nodes: { a: { what: [{ action: "act", instruction: "x", vars: ["login.password"], args: { value_ref: "reason" } }], terminal: "success" } } };
+    const err = caught(() => compiledScenarioFrom(ir, {}, { reason: "r" }));
+    check("act: vars(secret)+args.value_ref 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
   // 12) extract: schema_ref→schemaRef + 기본 schemaVersion='1'/strict=true.
   {
     const s = compiledScenarioFrom({ start: "g", nodes: { g: { what: [{ action: "extract", instruction: "get reviews", schema_ref: "reviews" }], terminal: "success" } } }, {});

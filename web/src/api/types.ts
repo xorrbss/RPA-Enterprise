@@ -114,6 +114,18 @@ export interface StepSummary {
   readonly exception: { class: string; code: string } | null;
 }
 
+// 하이웍스 결재 수집 행(수집 run의 extract 아티팩트 content = JSON `{ rows: ApprovalRow[] }`). 고정 계약(api-surface 기록).
+// doc_ref: 하이웍스 office origin 절대 URL(결재 run의 navigate 대상) — 필수·actionable(없으면 건별 결재 불가).
+export interface ApprovalRow {
+  readonly doc_ref: string;
+  readonly approval_id?: string;
+  readonly title: string;
+  readonly status: string;
+  readonly doc_type: string;
+  readonly drafter: string;
+  readonly drafted_at?: string;
+}
+
 // GET /v1/runs/{id}/artifacts 항목(api-surface §5 각주⁵). metadata-only — content/object_ref/sha256 미노출.
 export interface RunArtifactItem {
   readonly artifact_id: string;
@@ -167,6 +179,23 @@ export interface CreateRunBody {
   // 다정책+기본없음 테넌트에서 어느 LLM 모델로 실행할지 명시(서버 createRun model 해소; 미지정 시 기본/단일정책 자동해소,
   // 다정책+기본없음이면 model_required 422). gateway_policies.model 값.
   readonly model?: string;
+}
+
+// POST /v1/approvals/decide body(닫힌 shape — 백엔드 parseDecideBody 정합). reject 는 reason 필수(엔드포인트 강제).
+export interface DecideApprovalBody {
+  readonly source_run_id: string; // 인박스를 노출한 수집 run
+  readonly doc_ref: string; // 결재 문서 참조(approval origin 절대 URL)
+  readonly decision: "approve" | "reject";
+  readonly reason?: string;
+}
+
+// POST /v1/approvals/decide 201 응답. spawned_run_id = 내부에서 스폰된 결재 처리 run(콘솔이 폴링·딥링크).
+export interface DecideApprovalResult {
+  readonly decision_id: string;
+  readonly source_run_id: string;
+  readonly doc_ref: string;
+  readonly decision: "approve" | "reject";
+  readonly spawned_run_id: string;
 }
 
 export interface GatewayPolicy {

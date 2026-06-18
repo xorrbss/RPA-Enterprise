@@ -173,6 +173,34 @@ async function main(): Promise<void> {
     check("act: applied fill via CDP", s.ops.includes("fill:#q=hello"));
   }
 
+  // act valueRef(비-secret 결정형 fill): LLM 은 selector 만, 채울 값은 IR/params 의 a.value 로 고정(LLM 추측 value 무시).
+  {
+    const s = fakeSessions();
+    // LLM 이 다른 value("llm-guess")를 줘도 valueRef intent + a.value("반려 사유")로 override 되어 fill 된다(결정형).
+    await new StagehandDomExecutor(countingGateway({ parsedJson: { operation: "fill", selector: "#reason", value: "llm-guess" } }).gw, s.provider, cfg)
+      .execute("s5b", { type: "act", instruction: "fill reason", valueRef: "reason", value: "반려 사유" }, makeCtx());
+    check("act valueRef: filled literal value (LLM value overridden)", s.ops.includes("fill:#reason=반려 사유") && !s.ops.includes("fill:#reason=llm-guess"), s.ops.join(","));
+  }
+
+  // act valueRef 인데 LLM plan 이 fill 아님(click) → IR_SCHEMA_INVALID(조용한 무시 금지, secretRef 와 대칭).
+  {
+    const err = await caught(
+      new StagehandDomExecutor(countingGateway({ parsedJson: CLICK_PLAN }).gw, sess(), cfg)
+        .execute("s5c", { type: "act", instruction: "fill reason", valueRef: "reason", value: "x" }, makeCtx()),
+    );
+    check("act valueRef: non-fill plan → IR_SCHEMA_INVALID", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // act valueRef intent 인데 value 미해소(run params 부재) + LLM 이 환각 value 를 줘도 → loud throw(무음 fill 거부, break-it 후속).
+  {
+    const s = fakeSessions();
+    const err = await caught(
+      new StagehandDomExecutor(countingGateway({ parsedJson: { operation: "fill", selector: "#reason", value: "llm-hallucinated" } }).gw, s.provider, cfg)
+        .execute("s5d", { type: "act", instruction: "fill reason", valueRef: "reason" }, makeCtx()),
+    );
+    check("act valueRef + value 미해소 → IR_SCHEMA_INVALID(LLM 환각 value 무음 fill 거부)", err?.code === "IR_SCHEMA_INVALID" && !s.ops.some((o) => o.startsWith("fill:")), `${err?.code} ops=${s.ops.join(",")}`);
+  }
+
   // ActionPlanCache MISS → LLM 호출 + put + mode=miss
   {
     const s = fakeSessions();

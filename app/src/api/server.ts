@@ -46,6 +46,7 @@ import { registerHumanTaskRoutes } from "./human-tasks";
 import { registerReadRoutes } from "./reads";
 import { registerSiteRoutes } from "./sites";
 import { registerSessionRoutes } from "./sessions";
+import { registerApprovalRoutes } from "./approvals";
 import type { RunEnqueuer } from "./run-queue";
 import { registerScenarioRoutes } from "./scenarios";
 import { registerSecurity, type SecurityConfig } from "./security";
@@ -121,7 +122,9 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   app.decorateRequest("correlationId", "");
   app.decorateRequest("principal", null);
 
-  // 1) correlation — 인증보다 먼저 설정되어 거부 응답에도 상관키가 실린다.
+  // 1) correlation — 인증보다 먼저 설정되어 거부 응답에도 상관키가 실린다(에러 echo 는 클라이언트 헤더를 그대로 — 추적용).
+    //   단 runs.correlation_id 저장(::uuid)은 UUID 만 가능하므로, 비-UUID 헤더의 INSERT-시 22P02→미분류 500 은 저장
+    //   시점(createRunInTx)에서 서버 UUID 로 coerce 해 막는다(echo 와 저장의 관심사 분리, review 후속 "조용한 false 금지").
   app.addHook("onRequest", async (request) => {
     const header = request.headers["x-correlation-id"];
     request.correlationId = typeof header === "string" && header.length > 0 ? header : randomUUID();
@@ -228,6 +231,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerSiteRoutes(app, deps);
   registerSessionRoutes(app, deps);
   registerGatewayRoutes(app, deps);
+  registerApprovalRoutes(app, deps);
 
   return app;
 }
@@ -330,77 +334,17 @@ async function createRun(deps: ApiServerDeps, request: FastifyRequest): Promise<
   const response: CommandResponse = { status: 201, body: { run_id: runId, status: "queued", as_of: asOf } };
   try {
     await withTenantTx(deps.pool, principal.tenantId, async (c) => {
-      // scenario_version 존재 확인(RLS 스코프). 부재 → IR_SCHEMA_INVALID(FK 위반 500 회피).
-      const sv = await c.query(
-        `SELECT 1
-           FROM scenario_versions sv
-           JOIN scenarios s ON s.tenant_id=sv.tenant_id AND s.id=sv.scenario_id
-          WHERE sv.id = $1::uuid AND s.archived_at IS NULL`,
-        [scenarioVersionId],
-      );
-      if (sv.rowCount === 0) {
-        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_not_found" });
-      }
-      // Gap2(B+C): run의 model을 1회 해소·동결(runs.model — as_of 동형 결정성). RLS가 tenant 스코프.
-      //   명시 → (tenant,model) 존재확인. 미지정 → is_default(부분 UNIQUE로 ≤1) → 없으면 단일정책 1행 자동해소.
-      //   정책 0건 → NULL(utility-only run 허용; LLM 노드 도달 시 run-time fail-closed). 다정책+미지정+default없음 → loud
-      //   (GET /v1/gateway/policy 다건 규약 동형 model_required). 신규 ErrorCode 미도입(closed registry).
-      //   model↔capability(vision/domReasoning) 정합은 call-time SafeCapabilityGate(불변, 어댑터 caps 기반)가 차단한다.
-      //   ※ SafeCapabilityGate는 model 문자열 자체는 검사하지 않는다(텔레메트리 속성). resolvedModel=NULL run이 LLM/dom
-      //   노드에 도달하는 silent 경로는 현재 없다 — 라이브 드라이브가 UtilityExecutor 단독(run-claim-runner.ts)이라 dom
-      //   프리미티브는 EXECUTOR_CAPABILITY_MISMATCH로 loud 거부된다. runs.model 소비(dom executor 주입)는 PR-B0.
-      // TODO: create-time capability 정적대조(IR primitive 집합 ↔ resolved model capabilities, LLM_CAPABILITY_MISMATCH 조기 loud).
-      //   PR-B0(runs.model 소비) 시 NULL-model + LLM 노드 도달을 명시 fail-closed로 고정. mfa-dom-drive-design.md Part 5 §검증위치.
-      let resolvedModel: string | null = null;
-      if (model !== null) {
-        const m = await c.query(`SELECT 1 FROM gateway_policies WHERE model = $1`, [model]);
-        if (m.rowCount === 0) {
-          throw new ApiResponseError("RESOURCE_NOT_FOUND", { reason: "model_policy_not_found", model });
-        }
-        resolvedModel = model;
-      } else {
-        const def = await c.query<{ model: string }>(`SELECT model FROM gateway_policies WHERE is_default = true`);
-        if (def.rowCount === 1) {
-          resolvedModel = def.rows[0].model;
-        } else {
-          const all = await c.query<{ model: string }>(`SELECT model FROM gateway_policies`);
-          if (all.rowCount === 1) {
-            resolvedModel = all.rows[0].model; // 단일정책 테넌트 자동해소(KISS).
-          } else if (all.rowCount !== 0) {
-            // 다정책 + 미지정 + default 없음 → 임의선택 불가(조용한 false 금지).
-            throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "model_required", available: all.rowCount });
-          }
-          // all.rowCount === 0 → resolvedModel=null(정책 없음; utility-only run 허용).
-        }
-      }
-      if (workitemId !== null) {
-        // workitem 존재 확인(RLS 스코프). 부재/타테넌트 → IR_SCHEMA_INVALID(FK 위반 500 회피).
-        const wi = await c.query(`SELECT 1 FROM workitems WHERE id = $1::uuid`, [workitemId]);
-        if (wi.rowCount === 0) {
-          throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "workitem_not_found" });
-        }
-        const existingRun = await c.query(`SELECT 1 FROM runs WHERE workitem_id = $1::uuid LIMIT 1`, [workitemId]);
-        if (existingRun.rowCount !== 0) {
-          throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", { reason: "workitem_run_exists" });
-        }
-      }
-      await c.query(
-        `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, params, as_of, correlation_id, model)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5::jsonb, $6::timestamptz, $7::uuid, $8)`,
-        [runId, principal.tenantId, scenarioVersionId, workitemId, JSON.stringify(params), asOf, request.correlationId, resolvedModel],
-      );
-      await emitOutboxEvent(c, {
-        tenantId: principal.tenantId,
-        eventType: "run.created",
-        correlationId: request.correlationId,
+      // run 생성 핵심(scenario_version 확인·model 해소·workitem 확인·INSERT·run.created outbox·run_claim enqueue)은
+      //   createRunInTx 로 공유(approval.decide 등 내부 명령이 동일 tx에서 재사용). runId 는 응답에 미리 쓰였으므로 주입.
+      await createRunInTx(c, deps.enqueuer, {
         runId,
-        idempotencyKey: `${runId}:run.created`,
-        retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
-      });
-      await deps.enqueuer.enqueueRunClaim(c, {
         tenantId: principal.tenantId,
-        runId,
+        scenarioVersionId,
+        params,
+        asOf,
         correlationId: request.correlationId,
+        workitemId,
+        model,
       });
       // 멱등 성공 기록을 동일 tx에 원자화(작업 커밋 == 'succeeded' 커밋). 별도 tx 불일치 창 제거.
       await completeIdempotencyInTx(c, recordId, response);
@@ -419,6 +363,94 @@ async function createRun(deps: ApiServerDeps, request: FastifyRequest): Promise<
     }
     throw err;
   }
+}
+
+export interface CreateRunInTxInput {
+  readonly tenantId: string;
+  readonly scenarioVersionId: string;
+  readonly params: Record<string, unknown>;
+  readonly asOf: string;
+  readonly correlationId: string;
+  readonly workitemId?: string | null;
+  /** 명시 model(미지정/null → default·단일정책 자동해소; 0건 → null). */
+  readonly model?: string | null;
+  /** 미지정 시 생성(POST /v1/runs 는 응답에 미리 쓴 runId 를 주입). */
+  readonly runId?: string;
+}
+
+/**
+ * run 생성 핵심 — scenario_version 존재 확인 · model 1회 해소·동결 · workitem 확인 · runs(queued) INSERT ·
+ * run.created outbox · run_claim enqueue 를 **주어진 tx(client)** 에서 수행하고 runId 를 반환한다.
+ * POST /v1/runs(createRun)과 내부 명령(approval.decide 의 결재 처리 run)이 공유한다(엔탱글 회피·동작 단일화).
+ * 멱등 예약/검증/응답은 호출측 책임(이 함수는 작업만). 검증 실패는 ApiResponseError(IR_SCHEMA_INVALID 등)로 throw.
+ */
+export async function createRunInTx(
+  client: PoolClient,
+  enqueuer: RunEnqueuer,
+  input: CreateRunInTxInput,
+): Promise<string> {
+  const runId = input.runId ?? randomUUID();
+  const workitemId = input.workitemId ?? null;
+  // correlation_id 저장 coerce — runs.correlation_id/event envelope 는 uuid(format:uuid). 비-UUID 요청 헤더(에러 echo 엔
+  //   그대로 실리되 추적용)는 저장 시점에 서버 UUID 로 대체해 ::uuid 캐스트 22P02→미분류 500 을 막는다(review 후속).
+  const correlationId = UUID_RE.test(input.correlationId) ? input.correlationId : randomUUID();
+  // scenario_version 존재 확인(RLS 스코프) + 아카이브된 시나리오 거부(origin 머지). 부재/archived → IR_SCHEMA_INVALID(FK 500 회피).
+  const sv = await client.query(
+    `SELECT 1 FROM scenario_versions sv JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
+      WHERE sv.id = $1::uuid AND s.archived_at IS NULL`,
+    [input.scenarioVersionId],
+  );
+  if (sv.rowCount === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_not_found" });
+  }
+  // model 1회 해소·동결(runs.model). 명시 → (tenant,model) 존재확인. 미지정 → is_default → 단일정책 자동해소 → 0건 NULL.
+  //   다정책+미지정+default없음 → model_required(조용한 false 금지). createRun 과 동일 규약(GET /v1/gateway/policy 동형).
+  let resolvedModel: string | null = null;
+  const model = input.model ?? null;
+  if (model !== null) {
+    const m = await client.query(`SELECT 1 FROM gateway_policies WHERE model = $1`, [model]);
+    if (m.rowCount === 0) {
+      throw new ApiResponseError("RESOURCE_NOT_FOUND", { reason: "model_policy_not_found", model });
+    }
+    resolvedModel = model;
+  } else {
+    const def = await client.query<{ model: string }>(`SELECT model FROM gateway_policies WHERE is_default = true`);
+    if (def.rowCount === 1) {
+      resolvedModel = def.rows[0].model;
+    } else {
+      const all = await client.query<{ model: string }>(`SELECT model FROM gateway_policies`);
+      if (all.rowCount === 1) {
+        resolvedModel = all.rows[0].model;
+      } else if (all.rowCount !== 0) {
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "model_required", available: all.rowCount });
+      }
+    }
+  }
+  if (workitemId !== null) {
+    const wi = await client.query(`SELECT 1 FROM workitems WHERE id = $1::uuid`, [workitemId]);
+    if (wi.rowCount === 0) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "workitem_not_found" });
+    }
+    const existingRun = await client.query(`SELECT 1 FROM runs WHERE workitem_id = $1::uuid LIMIT 1`, [workitemId]);
+    if (existingRun.rowCount !== 0) {
+      throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", { reason: "workitem_run_exists" });
+    }
+  }
+  await client.query(
+    `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, params, as_of, correlation_id, model)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5::jsonb, $6::timestamptz, $7::uuid, $8)`,
+    [runId, input.tenantId, input.scenarioVersionId, workitemId, JSON.stringify(input.params), input.asOf, correlationId, resolvedModel],
+  );
+  await emitOutboxEvent(client, {
+    tenantId: input.tenantId,
+    eventType: "run.created",
+    correlationId,
+    runId,
+    idempotencyKey: `${runId}:run.created`,
+    retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
+  });
+  await enqueuer.enqueueRunClaim(client, { tenantId: input.tenantId, runId, correlationId });
+  return runId;
 }
 
 /** state-machine §1: Run 종결 상태 — abort 거부(RUN_ALREADY_TERMINAL). */

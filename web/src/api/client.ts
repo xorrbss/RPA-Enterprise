@@ -4,6 +4,8 @@ import {
   type ArtifactDetail,
   type CreateRunBody,
   type CreateRunResult,
+  type DecideApprovalBody,
+  type DecideApprovalResult,
   type DeadLetterItem,
   type GatewayPolicy,
   type GatewayPolicyUpdate,
@@ -81,6 +83,9 @@ export interface ApiClient {
   createScenario(ir: unknown): Promise<ScenarioMutationResult>;
   updateScenario(scenarioId: string, ir: unknown, version: number): Promise<ScenarioMutationResult>;
   createRun(body: CreateRunBody, idempotencyKey: string): Promise<CreateRunResult>;
+  // 건별 결재(승인/반려, approver+). Idempotency-Key + body{source_run_id, doc_ref, decision, reason?}.
+  //   동일 키 replay → 동일 spawned_run_id, 다른 키·동일(run,doc) → APPROVAL_ALREADY_DECIDED(409). 백엔드가 RBAC 최종 강제.
+  decideApproval(body: DecideApprovalBody, idempotencyKey: string): Promise<DecideApprovalResult>;
 }
 
 export interface HttpApiClientOptions {
@@ -234,5 +239,6 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     updateScenario: (scenarioId, ir, version) =>
       send("PUT", `/v1/scenarios/${scenarioId}`, ir, { "If-Match": String(version) }),
     createRun: (body, key) => post(`/v1/runs`, key, body),
+    decideApproval: (body, key) => post(`/v1/approvals/decide`, key, body),
   };
 }
