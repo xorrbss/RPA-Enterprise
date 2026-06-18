@@ -14,7 +14,12 @@
       "properties": {
         "name": { "type": "string" },
         "version": { "type": "integer", "minimum": 1 },
-        "ir_version": { "type": "string", "const": "1.x" }
+        "ir_version": { "type": "string", "const": "1.x" },
+        "studio_mode": {
+          "type": "string",
+          "enum": ["easy", "form", "ir"],
+          "description": "콘솔 시나리오 스튜디오 편집 모드 보존. 편집 진입 시 같은 저코드/IR 모드로 복원한다."
+        }
       }
     },
     "params_schema": {
@@ -138,7 +143,7 @@
         },
         {
           "if": { "properties": { "action": { "const": "extract" } } },
-          "then": { "required": ["schema_ref"] }
+          "then": { "required": ["instruction", "schema_ref"] }
         },
         {
           "if": { "properties": { "action": { "const": "navigate" } } },

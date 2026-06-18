@@ -56,7 +56,7 @@ describe("UX quick-wins (A)", () => {
           p?.status === "running"
             ? { items: [1, 2, 3].map((n) => ({ run_id: `run-${n}`, status: "running", current_node: null, as_of: null })), next_cursor: "more" }
             : { items: [{ run_id: "run-1", status: "running", current_node: null, as_of: null }], next_cursor: null },
-        listHumanTasks: async () => ({ items: [{ human_task_id: "h1", state: "open", kind: "approval", assignee: null, timeout: null, run_id: null }], next_cursor: null }),
+        listHumanTasks: async () => ({ items: [{ human_task_id: "h1", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: null, run_id: null }], next_cursor: null }),
       }),
     );
     const running = await screen.findByRole("button", { name: /실행 중/ });
@@ -189,7 +189,7 @@ describe("UX quick-wins (A)", () => {
   test("A5: 사람 확인 '종류'가 한국어 라벨", async () => {
     renderApp(
       fakeClient({
-        listHumanTasks: async () => ({ items: [{ human_task_id: "h", state: "open", kind: "captcha", assignee: null, timeout: null, run_id: null }], next_cursor: null }),
+        listHumanTasks: async () => ({ items: [{ human_task_id: "h", state: "open", kind: "captcha", assignee: null, timeout: null, on_timeout: null, run_id: null }], next_cursor: null }),
       }),
     );
     location.hash = "#humanTasks";
@@ -241,5 +241,48 @@ describe("UX quick-wins (A)", () => {
     await waitFor(() => expect(screen.getByText(`본문-${Z}`)).toBeInTheDocument());
     (await screen.findAllByRole("button", { name: new RegExp(`산출물 ${Y}`) }))[0]!.click();
     await waitFor(() => expect(screen.getByText(`본문-${Y}`)).toBeInTheDocument()); // 무반응 아님(해시 동일-회귀 수정)
+  });
+});
+
+// Phase 2 온보딩 — 빈 첫 화면(실행 0건)에 첫-실행 단일 CTA 배너.
+// 판정 키 = recent(무필터 listRuns).items.length===0 && next_cursor===null(진짜 0). RBAC로 CTA 분기.
+describe("Phase 2 온보딩", () => {
+  beforeEach(() => {
+    location.hash = "";
+    localStorage.setItem("rpa.token", jwt(ALL_ROLES));
+  });
+
+  const ONBOARD_CTA = "자동화 화면으로 가기";
+
+  // (1) 빈 대시보드 + run.create 보유 → CTA 노출, 클릭 시 scenarioStudio로 이동.
+  test("빈 대시보드 + run.create → CTA 노출·클릭 시 #scenarioStudio", async () => {
+    renderApp(fakeClient({ listRuns: async () => ({ items: [], next_cursor: null }) }));
+    const cta = await screen.findByRole("button", { name: ONBOARD_CTA });
+    cta.click();
+    await waitFor(() => expect(location.hash).toBe("#scenarioStudio"));
+  });
+
+  // (2) 실행 ≥1건이면 배너 미노출(회귀 가드): 기본 fakeClient(listRuns 1건) → 배너 텍스트 없음, 지표·'최근 실행' 유지.
+  test("실행 ≥1건이면 배너 미노출(지표·최근 실행 유지)", async () => {
+    renderApp(); // 기본 fakeClient: listRuns 1건(running), next_cursor null
+    await waitFor(() => expect(screen.getByText("최근 실행")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: ONBOARD_CTA })).toBeNull();
+    expect(screen.getByRole("button", { name: /실행 중/ })).toBeInTheDocument(); // 지표 카드 유지
+  });
+
+  // (3) 절단된 0 가드(조용한 false 금지): next_cursor 있으면 '더 있음' → 진짜 0 아님 → 배너 미노출.
+  test("절단된 0(next_cursor 있음)은 빈 테넌트로 오판하지 않음", async () => {
+    renderApp(fakeClient({ listRuns: async () => ({ items: [], next_cursor: "x" }) }));
+    await waitFor(() => expect(screen.getByText("최근 실행")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: ONBOARD_CTA })).toBeNull();
+  });
+
+  // (4) viewer(권한 없음): 안내 문구는 보이되 CTA 버튼은 미생성(없는 권한 동선 창작 금지).
+  test("viewer는 안내 문구만, CTA 버튼 미노출(RBAC)", async () => {
+    localStorage.setItem("rpa.token", jwt(["viewer"]));
+    renderApp(fakeClient({ listRuns: async () => ({ items: [], next_cursor: null }) }));
+    await waitFor(() => expect(screen.getByText(/아직 등록된 실행이 없습니다/)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: ONBOARD_CTA })).toBeNull();
+    expect(screen.queryByRole("button", { name: /가기/ })).toBeNull();
   });
 });

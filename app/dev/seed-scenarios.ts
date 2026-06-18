@@ -81,7 +81,10 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
             { when: "flags.not_found", target: "n4", priority: 1 },
           ],
         },
-        n3: { what: [{ action: "extract", schema_ref: "order_rows" }], next: "n4" },
+        n3: {
+          what: [{ action: "extract", instruction: "주문 목록에서 주문번호, 고객명, 상태, 금액을 행 단위로 추출하라.", schema_ref: "order_rows" }],
+          next: "n4",
+        },
         n4: { terminal: "success" },
       },
     });

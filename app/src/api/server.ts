@@ -109,6 +109,7 @@ interface RunRow {
   worker_id: string | null;
   attempts: number;
   as_of: Date | null;
+  failure_reason: unknown;
 }
 
 export function buildServer(deps: ApiServerDeps): FastifyInstance {
@@ -184,7 +185,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     }
     const run = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const result = await client.query<RunRow>(
-        `SELECT id, status, worker_id, attempts, as_of FROM runs WHERE id = $1::uuid`,
+        `SELECT id, status, worker_id, attempts, as_of, failure_reason FROM runs WHERE id = $1::uuid`,
         [runId],
       );
       return result.rows[0] ?? null;
@@ -199,6 +200,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       worker_id: run.worker_id,
       attempts: run.attempts,
       as_of: run.as_of,
+      failure_reason: normalizeFailureReason(run.failure_reason),
     };
   });
 
@@ -392,8 +394,12 @@ export async function createRunInTx(
   // correlation_id 저장 coerce — runs.correlation_id/event envelope 는 uuid(format:uuid). 비-UUID 요청 헤더(에러 echo 엔
   //   그대로 실리되 추적용)는 저장 시점에 서버 UUID 로 대체해 ::uuid 캐스트 22P02→미분류 500 을 막는다(review 후속).
   const correlationId = UUID_RE.test(input.correlationId) ? input.correlationId : randomUUID();
-  // scenario_version 존재 확인(RLS 스코프). 부재 → IR_SCHEMA_INVALID(FK 위반 500 회피).
-  const sv = await client.query(`SELECT 1 FROM scenario_versions WHERE id = $1::uuid`, [input.scenarioVersionId]);
+  // scenario_version 존재 확인(RLS 스코프) + 아카이브된 시나리오 거부(origin 머지). 부재/archived → IR_SCHEMA_INVALID(FK 500 회피).
+  const sv = await client.query(
+    `SELECT 1 FROM scenario_versions sv JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
+      WHERE sv.id = $1::uuid AND s.archived_at IS NULL`,
+    [input.scenarioVersionId],
+  );
   if (sv.rowCount === 0) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_not_found" });
   }
@@ -819,4 +825,11 @@ function apiErrorBody(err: ApiResponseError, correlationId: string): ApiError {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeFailureReason(value: unknown): { code: string; message: string } | null {
+  if (!isRecord(value)) return null;
+  const code = typeof value.code === "string" && value.code.length > 0 ? value.code : "RUN_FAILED";
+  const message = typeof value.message === "string" && value.message.length > 0 ? value.message : code;
+  return { code, message };
 }

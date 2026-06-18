@@ -37,6 +37,20 @@ interface ScenarioVersionRow {
   ir: unknown;
 }
 
+interface ScenarioVersionListRow {
+  version_id: string;
+  version: number;
+  promotion_status: string;
+  created_at: string;
+  promoted_at: string | null;
+}
+
+interface ScenarioVersionDetailRow extends ScenarioVersionListRow {
+  scenario_id: string;
+  name: string;
+  ir: unknown;
+}
+
 export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.post("/v1/scenarios", { config: { rbacAction: "scenario.create" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
@@ -49,7 +63,7 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
     const created = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const sc = await c.query<{ id: string }>(
         `INSERT INTO scenarios (id, tenant_id, name) VALUES ($1::uuid, $2::uuid, $3)
-         ON CONFLICT (tenant_id, name) DO NOTHING RETURNING id`,
+         ON CONFLICT (tenant_id, name) WHERE archived_at IS NULL DO NOTHING RETURNING id`,
         [randomUUID(), principal.tenantId, ir.meta.name],
       );
       if (sc.rowCount === 0) {
@@ -91,8 +105,9 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
         const r = await c.query<{ id: string; name: string; version: number; promotion_status: string; ir: unknown }>(
           `SELECT s.id, s.name, sv.version, sv.promotion_status, sv.ir
              FROM scenarios s
-             JOIN scenario_versions sv ON sv.tenant_id = s.tenant_id AND sv.scenario_id = s.id
+            JOIN scenario_versions sv ON sv.tenant_id = s.tenant_id AND sv.scenario_id = s.id
             WHERE s.tenant_id = $1::uuid AND s.id = $2::uuid
+              AND s.archived_at IS NULL
             ORDER BY sv.version DESC
             LIMIT 1`,
           [principal.tenantId, id],
@@ -110,6 +125,78 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
     },
   );
 
+  app.get<{ Params: { scenarioId: string } }>(
+    "/v1/scenarios/:scenarioId/versions",
+    { config: { rbacAction: "scenario.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const scenarioId = request.params.scenarioId;
+      if (!UUID_RE.test(scenarioId)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const exists = await c.query(
+          `SELECT 1 FROM scenarios
+            WHERE tenant_id=$1::uuid AND id=$2::uuid AND archived_at IS NULL`,
+          [principal.tenantId, scenarioId],
+        );
+        if (exists.rowCount === 0) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const result = await c.query<ScenarioVersionListRow>(
+          `SELECT id AS version_id, version, promotion_status, created_at::text AS created_at, promoted_at::text AS promoted_at
+             FROM scenario_versions
+            WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid
+            ORDER BY version DESC`,
+          [principal.tenantId, scenarioId],
+        );
+        return result.rows;
+      });
+      reply.code(200).send({ items: rows, next_cursor: null });
+    },
+  );
+
+  app.get<{ Params: { scenarioId: string; version: string } }>(
+    "/v1/scenarios/:scenarioId/versions/:version",
+    { config: { rbacAction: "scenario.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const scenarioId = request.params.scenarioId;
+      const version = parseVersionParam(request.params.version);
+      if (!UUID_RE.test(scenarioId) || version === undefined) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const result = await c.query<ScenarioVersionDetailRow>(
+          `SELECT s.id AS scenario_id, s.name, sv.id AS version_id, sv.version, sv.promotion_status,
+                  sv.created_at::text AS created_at, sv.promoted_at::text AS promoted_at, sv.ir
+             FROM scenarios s
+             JOIN scenario_versions sv ON sv.tenant_id=s.tenant_id AND sv.scenario_id=s.id
+            WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid AND s.archived_at IS NULL
+              AND sv.version=$3`,
+          [principal.tenantId, scenarioId, version],
+        );
+        return result.rows[0] ?? null;
+      });
+      if (row === null) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      reply
+        .code(200)
+        .header("ETag", String(row.version))
+        .send({
+          scenario_id: row.scenario_id,
+          name: row.name,
+          version_id: row.version_id,
+          version: row.version,
+          promotion_status: row.promotion_status,
+          created_at: row.created_at,
+          promoted_at: row.promoted_at,
+          ir: row.ir,
+        });
+    },
+  );
+
   app.post<{ Params: { scenarioId: string } }>(
     "/v1/scenarios/:scenarioId/validate",
     { config: { rbacAction: "scenario.read" } },
@@ -124,6 +211,76 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
         return { valid: false, report: outcome.report };
       }
       return { valid: true, report: outcome.report };
+    },
+  );
+
+  app.post<{ Params: { scenarioId: string; version: string } }>(
+    "/v1/scenarios/:scenarioId/versions/:version/rollback",
+    { config: { rbacAction: "scenario.update" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const scenarioId = request.params.scenarioId;
+      const sourceVersion = parseVersionParam(request.params.version);
+      if (!UUID_RE.test(scenarioId) || sourceVersion === undefined) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const expectedVersion = parseIfMatch(request.headers["if-match"]);
+      if (expectedVersion === undefined) {
+        throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "missing_if_match" });
+      }
+      const signedCommandRefs = await signedCommandRefsFor(deps, principal, "scenario.save");
+      const rolledBack = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const current = await c.query<{ name: string; version: number }>(
+          `SELECT s.name, sv.version
+             FROM scenarios s
+             JOIN scenario_versions sv ON sv.tenant_id=s.tenant_id AND sv.scenario_id=s.id
+            WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid AND s.archived_at IS NULL
+            ORDER BY sv.version DESC
+            LIMIT 1`,
+          [principal.tenantId, scenarioId],
+        );
+        const currentRow = current.rows[0];
+        if (currentRow === undefined) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        if (currentRow.version !== expectedVersion) {
+          throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "if_match_mismatch", currentVersion: currentRow.version });
+        }
+        const source = await c.query<{ ir: unknown }>(
+          `SELECT ir FROM scenario_versions
+            WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND version=$3`,
+          [principal.tenantId, scenarioId, sourceVersion],
+        );
+        const sourceRow = source.rows[0];
+        if (sourceRow === undefined) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const nextVersion = currentRow.version + 1;
+        const nextIr = cloneIrWithVersion(sourceRow.ir, currentRow.name, nextVersion);
+        const outcome = compileScenario(nextIr, { signedCommandRefs });
+        if (!outcome.ok) {
+          throw new ApiResponseError(outcome.code, outcome.details);
+        }
+        await c.query(
+          `INSERT INTO scenario_versions
+             (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast, params_schema)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)`,
+          [
+            randomUUID(),
+            principal.tenantId,
+            scenarioId,
+            nextVersion,
+            JSON.stringify(outcome.ir),
+            outcome.compiledAst,
+            outcome.ir.params_schema !== undefined ? JSON.stringify(outcome.ir.params_schema) : null,
+          ],
+        );
+        return { version: nextVersion };
+      });
+      reply
+        .code(200)
+        .header("ETag", String(rolledBack.version))
+        .send({ scenario_id: scenarioId, version: rolledBack.version, promotion_status: "draft", rolled_back_from: sourceVersion });
     },
   );
 
@@ -151,9 +308,10 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
       const updated = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const current = await c.query<{ name: string; version: number }>(
           `SELECT s.name, sv.version
-             FROM scenarios s
+            FROM scenarios s
              JOIN scenario_versions sv ON sv.tenant_id = s.tenant_id AND sv.scenario_id = s.id
             WHERE s.tenant_id = $1::uuid AND s.id = $2::uuid
+              AND s.archived_at IS NULL
             ORDER BY sv.version DESC
             LIMIT 1`,
           [principal.tenantId, scenarioId],
@@ -197,6 +355,53 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
   );
 
   app.post<{ Params: { scenarioId: string } }>(
+    "/v1/scenarios/:scenarioId/archive",
+    { config: { rbacAction: "scenario.update" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const scenarioId = request.params.scenarioId;
+      if (!UUID_RE.test(scenarioId)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const expectedVersion = parseIfMatch(request.headers["if-match"]);
+      if (expectedVersion === undefined) {
+        throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "missing_if_match" });
+      }
+      const archived = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const current = await c.query<{ version: number }>(
+          `SELECT sv.version
+             FROM scenarios s
+             JOIN scenario_versions sv ON sv.tenant_id=s.tenant_id AND sv.scenario_id=s.id
+            WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid AND s.archived_at IS NULL
+            ORDER BY sv.version DESC
+            LIMIT 1`,
+          [principal.tenantId, scenarioId],
+        );
+        const row = current.rows[0];
+        if (row === undefined) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        if (row.version !== expectedVersion) {
+          throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "if_match_mismatch", currentVersion: row.version });
+        }
+        await c.query(
+          `UPDATE scenario_versions
+              SET promotion_status='draft', promoted_at=NULL
+            WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND promotion_status='prod'`,
+          [principal.tenantId, scenarioId],
+        );
+        await c.query(
+          `UPDATE scenarios SET archived_at=now()
+            WHERE tenant_id=$1::uuid AND id=$2::uuid AND archived_at IS NULL`,
+          [principal.tenantId, scenarioId],
+        );
+        return { version: row.version };
+      });
+      reply.code(200).header("ETag", String(archived.version)).send({ scenario_id: scenarioId, version: archived.version, archived: true });
+    },
+  );
+
+  app.post<{ Params: { scenarioId: string } }>(
     "/v1/scenarios/:scenarioId/promote",
     { config: { rbacAction: "scenario.promote" } },
     async (request, reply) => {
@@ -219,7 +424,10 @@ async function promoteScenario(
   if (!UUID_RE.test(scenarioId)) {
     throw new ApiResponseError("RESOURCE_NOT_FOUND");
   }
-  if (!isRecord(request.body) || request.body.target !== "prod" || Object.keys(request.body).some((key) => key !== "target")) {
+  const target = isRecord(request.body) && (request.body.target === "prod" || request.body.target === "draft")
+    ? request.body.target
+    : null;
+  if (target === null || !isRecord(request.body) || Object.keys(request.body).some((key) => key !== "target")) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_promote_request", target: request.body });
   }
 
@@ -260,6 +468,7 @@ async function promoteScenario(
            FROM scenarios s
            JOIN scenario_versions sv ON sv.tenant_id = s.tenant_id AND sv.scenario_id = s.id
           WHERE s.tenant_id = $1::uuid AND s.id = $2::uuid
+            AND s.archived_at IS NULL
           ORDER BY sv.version DESC
           LIMIT 1`,
         [principal.tenantId, scenarioId],
@@ -275,25 +484,38 @@ async function promoteScenario(
         });
       }
 
-      const outcome = compileScenario(row.ir, { promote: true, signedCommandRefs });
-      if (!outcome.ok) {
-        throw new ApiResponseError(outcome.code, outcome.details);
+      let compiledAst: string | null = null;
+      if (target === "prod") {
+        const outcome = compileScenario(row.ir, { promote: true, signedCommandRefs });
+        if (!outcome.ok) {
+          throw new ApiResponseError(outcome.code, outcome.details);
+        }
+        compiledAst = outcome.compiledAst;
       }
 
-      await c.query(
-        `UPDATE scenario_versions
-            SET promotion_status='draft', promoted_at=NULL
-          WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND id <> $3::uuid AND promotion_status='prod'`,
-        [principal.tenantId, scenarioId, row.version_id],
-      );
-      await c.query(
-        `UPDATE scenario_versions
-            SET promotion_status='prod', compiled_ast=$1, promoted_at=now()
-          WHERE tenant_id=$2::uuid AND id=$3::uuid`,
-        [outcome.compiledAst, principal.tenantId, row.version_id],
-      );
+      if (target === "prod") {
+        await c.query(
+          `UPDATE scenario_versions
+              SET promotion_status='draft', promoted_at=NULL
+            WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND id <> $3::uuid AND promotion_status='prod'`,
+          [principal.tenantId, scenarioId, row.version_id],
+        );
+        await c.query(
+          `UPDATE scenario_versions
+              SET promotion_status='prod', compiled_ast=$1, promoted_at=now()
+            WHERE tenant_id=$2::uuid AND id=$3::uuid`,
+          [compiledAst, principal.tenantId, row.version_id],
+        );
+      } else {
+        await c.query(
+          `UPDATE scenario_versions
+              SET promotion_status='draft', promoted_at=NULL
+            WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+          [principal.tenantId, row.version_id],
+        );
+      }
 
-      const body = { scenario_id: scenarioId, version: row.version, promotion_status: "prod" };
+      const body = { scenario_id: scenarioId, version: row.version, promotion_status: target };
       const commandResponse: CommandResponse = { status: 200, body };
       await completeIdempotencyInTx(c, recordId, commandResponse);
       return commandResponse;
@@ -348,6 +570,19 @@ function parseIfMatch(value: unknown): number | undefined {
   const normalized = value.replace(/^W\//, "").replace(/^"|"$/g, "");
   const parsed = Number.parseInt(normalized, 10);
   return Number.isInteger(parsed) && parsed >= 1 ? parsed : undefined;
+}
+
+function parseVersionParam(value: string): number | undefined {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed >= 1 && String(parsed) === value ? parsed : undefined;
+}
+
+function cloneIrWithVersion(value: unknown, expectedName: string, version: number): unknown {
+  const clone = JSON.parse(JSON.stringify(value)) as unknown;
+  if (!isRecord(clone)) return clone;
+  const meta = isRecord(clone.meta) ? clone.meta : {};
+  clone.meta = { ...meta, name: expectedName, version };
+  return clone;
 }
 
 function apiErrorBody(err: ApiResponseError, correlationId: string): ApiError {

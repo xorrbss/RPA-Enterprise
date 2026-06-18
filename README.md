@@ -27,7 +27,7 @@
 | `auth-rbac.md` | (인증·인가·테넌시) | RBAC 역할(viewer/operator/reviewer/approver/admin)·권한 매트릭스·tenant_id 출처·RLS 정책 — v1.5 |
 | `api-surface.md` | (제어평면 API) | REST 엔드포인트 인벤토리·If-Match·Idempotency-Key·as_of(D1 OpenAPI 입력) — v1.5 |
 | `ops-defaults.md` | (운영 기본값) | 전이 임계·lease TTL·서킷·LLM retry/budget·artifact retention·sweeper 주기 + 테스트 픽스처값 — v1.6 |
-| `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·static-validation.ts·event-payload-registry.ts·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·fixtures. tsc strict 통과·전이 fixtures 84/84 PASS·validators 42/42 PASS·static validation 33/33 PASS — v2.4 |
+| `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·static-validation.ts·event-payload-registry.ts·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·fixtures. tsc strict 통과·전이 fixtures 84/84 PASS·validators 44/44 PASS·static validation 36/36 PASS — v2.4 |
 | `architecture.md` | (구현 설계, 계약 아님) | 스택·실행기(**Stagehand v3 CDP, Playwright 제거**)·컴포넌트↔계약 매핑·배포·빌드순서·§10 IREL — v2.0 |
 | `build-prompt.md` | (개발 착수 프롬프트) | 코딩 에이전트용 프로덕션 빌드 마스터 프롬프트(D2–D7 단계별 DoD·검증 게이트·품질 바) — v2.4 |
 
@@ -708,7 +708,22 @@
 | web | `client.listRunArtifacts` + `RunArtifactItem` 타입 + RunTrace 상세에 artifact 목록 패널(type·상태·보존·artifact ID). ID는 기존 '산출물 조회'(#129) 입력용 |
 | 비도입 | sha256/object_ref/content 목록 노출 · `?run_id=` 쿼리형 URL · orphan(run 없는) artifact 목록 · status 필터 — 후속/오너결정 |
 
-## v2.23 패치 로그 (하이웍스 결재 인박스 Model A — 수집→요약→건별 approver-게이트 결재 run)
+## v2.23 패치 로그 (시나리오 스튜디오 PRD P0 — extract.instruction 계약 정합)
+
+> **검증된 내부 모순 해소**. `schema/ir.schema.json`은 extract action에서 `schema_ref`만 required로 보았지만,
+> 런타임 `ir-translate.ts`와 dom executor 경계는 `extract.instruction`을 필수 작업 지시로 요구했다. 그 결과 저장/검증은
+> 통과하고 실행만 `IR_SCHEMA_INVALID(extract.instruction 필요)`로 실패하는 "저장됨 ≠ 실행 가능" 상태가 생겼다.
+> PRD `prd-scenario-studio-2026-06-18.md` FR-4의 권고 옵션①을 채택해 계약을 런타임에 맞춘다.
+
+| 항목 | 조치 |
+|---|---|
+| 계약 | `schema/ir.schema.json`: `action=="extract"`이면 `instruction` + `schema_ref`를 required로 고정. 조용한 통과 후 런타임 실패 금지 |
+| codegen | `validators.fixtures.ts`: instruction 없는 extract 거부 fixture 추가. `types.ts`: `IRExtractAction` 식별 유니언으로 `instruction`/`schema_ref` 필수화 |
+| web | 쉬운 만들기/단계 편집이 extract instruction 입력을 받고 IR에 직렬화. 빈 instruction은 스키마 검증에서 거부됨을 UI에 노출 |
+| dev seed | raw 주문수집 seed extract에도 instruction을 부여해 새 계약과 정합 |
+| 후속 | 검증 결과 보장범위 문구(C-FR5)와 run-loop failed_* 전이(C-FR3)는 별도 PRD 태스크로 남김 |
+
+## v2.24 패치 로그 (하이웍스 결재 인박스 Model A — 수집→요약→건별 approver-게이트 결재 run)
 
 > **첫 end-to-end 업무 시나리오**(수집 run→아티팩트→콘솔 '결재 인박스'→건별 결재 run). 신규 실행기 기능 0(기존
 > navigate/observe/act/extract·세션재사용 재사용). 계약 추가는 최소·근거 기록 원칙. 2라운드 적대 break-it(각 18에이전트)로
@@ -724,17 +739,18 @@
 > **시나리오**: '하이웍스 결재 수집'(navigate→observe[login/reviews_visible(td.docu-num)]→extract doc_ref 결정형)·'하이웍스
 > 결재 처리'(params.decision 분기·승인 클릭/반려 사유 fill+클릭·observe 판정; flags 닫힌 레지스트리만). ir-translate
 > `act.args.value_ref`→비-secret 결정형 fill value 스레드(valueRef intent — 미해소 시 LLM/캐시 무음 fill 거부 loud).
-> **dev**: 실 sink(PgGatewayArtifactSink)+redaction 승격 루프(전용 BYPASSRLS 역할·실 §4 ContentRedactionTransform)+
-> RunStepRecordingExecutor(artifacts→run_steps 복합 FK 충족). cdp-session goto 타임아웃 env(45s)+domcontentloaded.
+> **dev**: 인박스가 읽는 수집 아티팩트 가시화는 origin v2.23 병렬 작업의 `DevVisibleGatewayArtifactSink`(run-level artifact·
+> `redaction_status='not_required'`·step_id NULL — **dev 전용**, 운영 entrypoint 미사용)를 재사용(중복 redaction-loop/
+> bypass-role/run-step-recorder 폐기). cdp-session goto 타임아웃 env(45s)+domcontentloaded.
 > **web**: 인박스 건별 [결재]/[반려(사유)] 버튼(approver만·백엔드 최종강제)·결정후 처리 run 폴링·`#runTrace?run=` 딥링크.
-> **검증**: app/codegen typecheck 0 · codegen fixtures 87/0 · db-static-smoke green(approval_decisions 등록) · 백엔드 통합
+> **검증**: app/codegen typecheck 0 · codegen fixtures green(approval_decisions 등록) · db-static-smoke green · 백엔드 통합
 > 22/22(temp-PG: approver/403·멱등 replay→동일 run·ALREADY_DECIDED·정확히 1 스폰·reject⇒reason·비-UUID sub·RLS·UNIQUE) ·
-> web typecheck/build 0·vitest 169/169. **⚠ 비가역 경계(휴먼게이트, 자동 미실행)**: 실 하이웍스 세션 캡처(MFA)·실 결재 클릭 검증·머지.
+> web typecheck/build 0. **⚠ 비가역 경계(휴먼게이트, 자동 미실행)**: 실 하이웍스 세션 캡처(MFA)·실 결재 클릭 검증·머지.
 
 | 항목 | 조치 |
 |---|---|
 | 계약 | `error-catalog.ts`(APPROVAL_ALREADY_DECIDED) · `security-middleware-contract.ts`(approval.decide) · `control-plane-contract.ts`(decideApproval) · `compliance-scaffold.ts` RBAC 매트릭스 · `migration_core_entities.sql`(approval_decisions+RLS+복합 FK) · `api-surface.md`·`auth-rbac.md` |
 | 백엔드 | `server.ts` createRunInTx 추출 · `approvals.ts` decide 엔드포인트 · `app/src/api/rbac.ts`(approver/admin) · `app/test/api-approvals-decide.int.ts`(22 checks) |
-| 실행기/dev | `ir-translate.ts`·`stagehand-dom-executor.ts`(valueRef intent) · `cdp-session.ts`(goto 타임아웃) · `app/dev/`(serve/run-loop 실 sink·redaction-loop·run-step-recorder·seed-hiworks-approval) |
+| 실행기/dev | `ir-translate.ts`·`stagehand-dom-executor.ts`(valueRef intent) · `cdp-session.ts`(goto 타임아웃) · `app/dev/seed-hiworks-approval.ts`(수집/처리 시나리오 시드; 아티팩트 가시화는 origin `DevVisibleGatewayArtifactSink` 재사용) |
 | web | `client.ts`/`types.ts`(decideApproval) · `views/ApprovalInbox.tsx`(건별 버튼·폴링·딥링크) · `api/permissions.ts` |
 | 비도입(휴먼게이트) | 실 세션 캡처(MFA)·실 결재 클릭(비가역)·PR 머지 — 사용자 입회. doc_ref 경로-변형 정규화·일괄(bulk) 결재 — 후속 |

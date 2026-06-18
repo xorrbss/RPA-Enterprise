@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { ApiError } from "../api/types";
 import { useCan } from "../api/permissions";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { errorLabel } from "./badges";
 
 // 운영자 명령 버튼: 클릭 → 포커스 트랩 확인 다이얼로그 → mutate(Idempotency-Key 1회 생성) → 관련 쿼리
 // invalidate → 결과/오류 인라인. 조용한 실패 금지: 오류는 ApiError 코드로 표면화. action 지정 시 역할이
@@ -17,6 +17,8 @@ export function ActionButton(props: {
   disabled?: boolean;
   action?: string;
   inputLabel?: string;
+  title?: string;
+  successText?: string | null;
 }): JSX.Element | null {
   const can = useCan();
   const qc = useQueryClient();
@@ -26,11 +28,10 @@ export function ActionButton(props: {
   const mut = useMutation({
     mutationFn: (value: string | undefined) => props.run(crypto.randomUUID(), value),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "완료" });
+      setMsg(props.successText === null ? null : { tone: "green", text: props.successText ?? "완료" });
       for (const key of props.invalidateKeys) void qc.invalidateQueries({ queryKey: key });
     },
-    onError: (e) =>
-      setMsg({ tone: "red", text: e instanceof ApiError ? `${e.code} (${e.httpStatus})` : "실패" }),
+    onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
   });
   // 권한 없는 명령은 표시하지 않는다(viewer 등 읽기 전용). 백엔드가 최종 강제하므로 보안 경계는 아니다.
   if (props.action !== undefined && !can(props.action)) return null;
@@ -41,6 +42,7 @@ export function ActionButton(props: {
       <button
         className="btn"
         type="button"
+        title={props.title}
         disabled={props.disabled === true || mut.isPending}
         onClick={() => {
           setInput("");

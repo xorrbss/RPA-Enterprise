@@ -5,14 +5,15 @@ import { axe } from "vitest-axe";
 
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
+import type { ApiClient } from "../src/api/client";
 import { navigate, type ViewKey } from "../src/router";
 import { fakeClient } from "./fake-client";
 
-function renderApp(): void {
+function renderApp(client: ApiClient = fakeClient()): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <ApiClientProvider client={fakeClient()}>
+      <ApiClientProvider client={client}>
         <App />
       </ApiClientProvider>
     </QueryClientProvider>,
@@ -31,6 +32,16 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
   test("대시보드 axe 위반 없음", async () => {
     renderApp();
     await waitFor(() => expect(screen.getByText("최근 실행")).toBeInTheDocument());
+    const results = await axe(document.body, AXE_OPTS);
+    expect(results).toHaveNoViolations();
+  });
+
+  // 빈 테넌트(실행 0건) → OnboardingBanner 마운트 상태에서 axe 스캔(신규 role='status'/CTA 표면).
+  test("빈 테넌트 대시보드(온보딩 배너) axe 위반 없음", async () => {
+    const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles: ["operator"] })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    localStorage.setItem("rpa.token", `e30.${payload}.sig`);
+    renderApp(fakeClient({ listRuns: async () => ({ items: [], next_cursor: null }) }));
+    await waitFor(() => expect(screen.getByText("첫 실행을 시작해 보세요.")).toBeInTheDocument());
     const results = await axe(document.body, AXE_OPTS);
     expect(results).toHaveNoViolations();
   });

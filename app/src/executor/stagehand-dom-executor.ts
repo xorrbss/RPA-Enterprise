@@ -80,7 +80,8 @@ const UTILITY_ACTIONS = new Set(["navigate", "download", "upload", "api_call", "
 const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", schemaVersion: "1", strict: true } as const;
 // LLM 이 셀렉터를 정하려면 원문 DOM 이 필요(PageState 파생 신호만으론 #password 등 타깃 불가). user 메시지로 실어
 // Gateway redaction(§4) 경계가 redact/injection-탐지하게 한다. 토큰 예산 보호용 상한(초과분 절단).
-const MAX_DOM_CHARS = 12000;
+const MAX_PAGE_SNAPSHOT_CHARS = 24000;
+const MAX_VISIBLE_TEXT_CHARS = 12000;
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 
@@ -128,7 +129,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     return a.type === "act" ? this.executeAct(stepId, a, ctx) : this.executeReadOnly(stepId, a, ctx);
   }
 
-  /** observe/extract — read-only LLM 호출(mutation 없음). */
+  /** observe/extract — read-only LLM 호출(mutation 없음). extract는 같은 lease의 DOM을 읽어 실제 데이터 추출 근거로 동봉한다. */
   private async executeReadOnly(
     stepId: string,
     a: Extract<DomAction, { type: "observe" | "extract" }>,
@@ -136,9 +137,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
   ): Promise<StepResult> {
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
-    // read-only(observe/extract)는 게이트웨이 전용 — CDP 세션(forLease) 미경유(architecture: extract 는 게이트웨이 호출).
-    //   원문 DOM 동봉은 mutation 을 적용하는 act 경로에만(executeAct, 이미 forLease 보유). dom-executor-factory 계약.
-    const req = this.buildRequest(stepId, a, ctx);
+    // observe는 PageState 파생 신호만으로 충분하지만, extract는 실데이터를 뽑으려면 현재 DOM 원문이 필요하다.
+    // 같은 lease의 CDP 세션에서 읽기 전용 snapshot만 수행하고 mutation은 하지 않는다.
+    const domSnapshot = a.type === "extract" ? await this.snapshotDom(this.sessions.forLease(ctx.leaseId)) : undefined;
+    const req = this.buildRequest(stepId, a, ctx, domSnapshot);
     const callIds = [String(req.idempotencyKey)];
 
     let res: LLMResponse;
@@ -354,13 +356,19 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     };
   }
 
-  /** 원문 DOM 스냅샷(best-effort, 절단). 실패 시 undefined — 신호만으로 진행(loud 아님; 셀렉터 품질 저하 가능). */
+  /** 페이지 스냅샷(best-effort, 절단). 실패 시 undefined — 신호만으로 진행(loud 아님; 셀렉터 품질 저하 가능). */
   private async snapshotDom(session: CdpSession): Promise<string | undefined> {
     try {
-      const html = await session.evaluate<string>(
-        "document.body ? document.body.outerHTML : document.documentElement.outerHTML",
+      const snapshot = await session.evaluate<unknown>(
+        `(() => {
+          const root = document.body || document.documentElement;
+          return {
+            visibleText: document.body ? document.body.innerText : (root ? root.textContent : ""),
+            html: root ? root.outerHTML : ""
+          };
+        })()`,
       );
-      return typeof html === "string" && html.length > 0 ? html.slice(0, MAX_DOM_CHARS) : undefined;
+      return normalizePageSnapshot(snapshot);
     } catch {
       return undefined;
     }
@@ -389,13 +397,18 @@ export class StagehandDomExecutor implements ExecutorPlugin {
           ? ACTION_PLAN_SCHEMA
           : undefined;
 
+    const systemContent =
+      a.type === "extract"
+        ? "Deterministic web automation extract worker. Extract actual records from [page].dom and return only the requested JSON data. Use only values present in [visible_text] or [html]. If no matching records are present, return an empty collection that fits the requested schema. Never synthesize placeholder/example rows. Do not return an extraction plan, selector plan, or prose."
+        : `Deterministic web automation ${a.type} planner. Respond with a single minified JSON object only.`;
+
     return {
       model: this.cfg.model,
       promptTemplateVersion: this.cfg.promptTemplateVersion,
       messages: [
         // system 은 redaction 비대상(Gateway 는 user 메시지만 redact) — JSON 지시를 여기 둬 native json_object 모드의
         // "messages 에 'json' 포함" 요구를 충족하고(user 메시지가 redact 돼도), 플래너 출력 형식을 고정한다.
-        { role: "system", content: `Deterministic web automation ${a.type} planner. Respond with a single minified JSON object only.` },
+        { role: "system", content: systemContent },
         { role: "user", content: `${a.instruction}\n[page]${context}` },
       ],
       ...(responseFormat ? { responseFormat } : {}),
@@ -452,4 +465,32 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     }
     return { type, instruction };
   }
+}
+
+function normalizePageSnapshot(snapshot: unknown): string | undefined {
+  if (typeof snapshot === "string") {
+    const text = cleanSnapshotText(snapshot);
+    return text.length > 0 ? text.slice(0, MAX_PAGE_SNAPSHOT_CHARS) : undefined;
+  }
+  if (typeof snapshot !== "object" || snapshot === null) return undefined;
+
+  const rec = snapshot as { visibleText?: unknown; html?: unknown };
+  const visibleText = typeof rec.visibleText === "string" ? cleanSnapshotText(rec.visibleText) : "";
+  const html = typeof rec.html === "string" ? cleanSnapshotText(rec.html) : "";
+  const parts: string[] = [];
+  if (visibleText.length > 0) parts.push(`[visible_text]\n${visibleText.slice(0, MAX_VISIBLE_TEXT_CHARS)}`);
+
+  const remaining = MAX_PAGE_SNAPSHOT_CHARS - parts.join("\n\n").length;
+  if (html.length > 0 && remaining > 128) parts.push(`[html]\n${html.slice(0, remaining)}`);
+
+  const out = parts.join("\n\n").slice(0, MAX_PAGE_SNAPSHOT_CHARS);
+  return out.length > 0 ? out : undefined;
+}
+
+function cleanSnapshotText(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
 }

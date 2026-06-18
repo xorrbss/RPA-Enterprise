@@ -41,6 +41,18 @@ export function navigate(view: ViewKey, params?: Record<string, string>): void {
   if (location.hash !== next) location.hash = next;
 }
 
+/**
+ * 현재 뷰를 유지한 채 해시 쿼리 파라미터에 updates를 병합해 이동한다(값이 null이면 해당 키 제거).
+ * hashWith(병합·테스트됨)와 navigate의 중복-억제 가드를 한데 묶은 단일 진입점 — 뷰가 location.hash를
+ * 직접 대입하던 같은-뷰 드릴다운(run/wi/ht)을 여기로 모아 다른 파라미터를 잃지 않게 한다(단방향 의존).
+ * artifact 드릴다운은 '동일-해시 재커밋'(ref Y→수동 Z→ref Y 재클릭 복귀, ux-quickwins A3)을 위해 ArtifactLookup이
+ * hashWith+직접 setState로 따로 처리한다 — mergeParams는 동일-해시면 조용히 no-op이라 그 경로엔 부적합.
+ */
+export function mergeParams(updates: Record<string, string | null>): void {
+  const next = hashWith(updates);
+  if (location.hash !== next) location.hash = next;
+}
+
 /** 현재 라우트(해시) 구독. 잘못된 해시는 dashboard로 폴백(조용한 빈화면 금지). */
 export function useHashRoute(): ViewKey {
   const [view, setView] = useState<ViewKey>(() => viewFromHash(location.hash));

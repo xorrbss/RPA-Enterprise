@@ -210,6 +210,14 @@ async function main(): Promise<void> {
           promotedReplay.json().promotion_status === promoted.json().promotion_status,
         promotedReplay.body,
       );
+      const unpromoted = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/promote`,
+        headers: { authorization: `Bearer ${admin}`, "if-match": "1", "idempotency-key": "scenario-unpromote-a" },
+        payload: { target: "draft" },
+      });
+      check("unpromote latest prod → 200", unpromoted.statusCode === 200, unpromoted.body);
+      check("unpromote status=draft + ETag", unpromoted.json().promotion_status === "draft" && unpromoted.headers.etag === "1", unpromoted.body);
       const promoteConflict = await app.inject({
         method: "POST",
         url: `/v1/scenarios/${scenarioId}/promote`,
@@ -327,6 +335,35 @@ async function main(): Promise<void> {
       check("viewer edit → 403 AUTHZ_FORBIDDEN", editViewer.statusCode === 403 && editViewer.json().code === "AUTHZ_FORBIDDEN", editViewer.body);
       const editAbsent = await app.inject({ method: "PUT", url: "/v1/scenarios/10000000-0000-0000-0000-0000000000ff", headers: { authorization: auth(operator), "if-match": "1" }, payload: irV("ghost", 2) });
       check("edit absent scenario → 404 RESOURCE_NOT_FOUND", editAbsent.statusCode === 404 && editAbsent.json().code === "RESOURCE_NOT_FOUND", editAbsent.body);
+
+      // 8) 버전 목록/롤백/보관: 과거 버전을 최신+1 draft로 복제하고, 보관 후 active 목록/상세/실행 생성 동선에서 제외.
+      const versions = await app.inject({ method: "GET", url: `/v1/scenarios/${scenarioId}/versions`, headers: { authorization: auth(viewer) } });
+      check("versions list → 200, v2 then v1", versions.statusCode === 200 && versions.json().items[0]?.version === 2 && versions.json().items[1]?.version === 1, versions.body);
+      const versionOne = await app.inject({ method: "GET", url: `/v1/scenarios/${scenarioId}/versions/1`, headers: { authorization: auth(viewer) } });
+      check("version detail v1 → ir body", versionOne.statusCode === 200 && versionOne.json().ir?.meta?.version === 1, versionOne.body);
+      const rollback = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/versions/1/rollback`,
+        headers: { authorization: auth(operator), "if-match": "2", "idempotency-key": "scenario-rollback-a" },
+        payload: {},
+      });
+      check("rollback v1 → v3 draft", rollback.statusCode === 200 && rollback.json().version === 3 && rollback.json().promotion_status === "draft", rollback.body);
+      const archive = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/archive`,
+        headers: { authorization: auth(operator), "if-match": "3", "idempotency-key": "scenario-archive-a" },
+        payload: {},
+      });
+      check("archive active scenario → 200", archive.statusCode === 200 && archive.json().archived === true, archive.body);
+      const archivedGet = await app.inject({ method: "GET", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(viewer) } });
+      check("archived scenario detail hidden → 404", archivedGet.statusCode === 404, archivedGet.body);
+      const recreateName = await app.inject({
+        method: "POST",
+        url: "/v1/scenarios",
+        headers: { authorization: auth(operator) },
+        payload: validIr("scenario-a"),
+      });
+      check("archived scenario name can be reused → 201", recreateName.statusCode === 201, recreateName.body);
     } finally {
       await app.close();
     }

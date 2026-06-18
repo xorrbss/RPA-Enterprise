@@ -18,11 +18,16 @@
  *   Chrome 이 있어야 실제로 구동된다(미설정 시 run 은 queued 대기 — run-loop 비활성).
  * 세션 재사용(로그인 스킵) 모먼트는 단계 신호가 아니라 분기로만 관찰된다(짧은 트레이스 = 로그인 단계 부재). 실제로 보려면
  *   고급 설정 > 보안에서 사이트 '세션 등록'(운영자-보조 캡처)을 1회 수행한 뒤 같은 시나리오를 재실행한다. ⚠ dev:serve 는
- *   temp PG 라 재기동(=reseed)하면 캡처 세션이 소실되므로 재시연마다 재캡처가 필요하다 — 실 로그인/실 시크릿은 오너 실행 영역.
+ *   기본 재기동은 dev 스키마를 보존한다. 완전 초기화가 필요하면 RPA_DEV_RESET_DB=1 로 명시 reset한다. temp-PG 게이트
+ *   자체를 종료한 경우에는 클러스터가 회수되므로 캡처 세션/실행 이력도 함께 사라진다 — 실 로그인/실 시크릿은 오너 실행 영역.
+ *
+ * Phase 2 첫-실행 온보딩(데모 절차): 실행이 한 건도 없는 빈 테넌트로 기본 라우트(dashboard)에 진입하면 상단에
+ *   OnboardingBanner 가 떠 시드 시나리오로 첫 실행(제작 > 테스트 실행)을 유도한다(권한 보유 시 CTA, viewer 는 안내문만).
+ *   첫 run 이 생기면(시드 8건 포함: 기본 5건 + 큐 데모 3건) 배너는 자동 소멸하므로, 빈-화면 상태를 보려면 reseed 직후(=서버 재기동, 오너 영역)
+ *   실행 0건 시점에 관찰한다. 코드 변경 없는 운영 절차 문서다.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import http from "node:http";
-import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,15 +37,15 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
+import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer } from "../src/api/server";
-import { createPool } from "../src/db/pool";
+import { createPool, withTenantTx } from "../src/db/pool";
 import { FsObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
 import { startRunLoop, type RunLoop } from "./run-loop";
 import { startCaptureLoop, type CaptureLoop } from "./capture-loop";
-import { startRedactionLoop, type RedactionLoop } from "./redaction-loop";
+import { DevVisibleGatewayArtifactSink } from "./dev-gateway-artifact-sink";
 import { seed } from "./seed";
 import { PORT, TENANT, FIXTURE_PATH, LOGIN_FIXTURE_PATH } from "./dev-constants";
-import { ContractDurableSecurityAuditWriter, InMemoryImmutableAuditLog } from "../../security/compliance-scaffold";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -81,33 +86,47 @@ render();
 // dev 전용 HMAC 시크릿(프로덕션 사용 금지 — SecretStore 경계 밖, 시드 데이터에만 적용).
 const SECRET = new TextEncoder().encode("dev-console-serve-secret-do-not-use-in-prod-0123456789");
 
-// 전용 BYPASSRLS 역할(비-superuser) — redaction 승격 루프 전용(프로덕션 lifecycle 운영 역할 경계 미러, auth-rbac §4).
-// pending/failed 아티팩트는 RLS(artifacts_visible_isolation)가 은닉 → 이 역할로만 읽어 redacted 로 승격한다
-// (앱 역할 rpa_smoke 로는 UPDATE/SELECT 불가). 프로비저닝은 admin(postgres, trust) 연결로 1회(테스트 패턴 미러).
-const LIFECYCLE_BYPASS_ROLE = "rpa_dev_lifecycle_bypass";
-const LIFECYCLE_BYPASS_PASSWORD = "rpa_dev_lifecycle_bypass"; // CI 비밀번호 인증용; 로컬 temp-PG(trust)는 무시.
-
-/** 전용 BYPASSRLS 역할 프로비저닝(admin=postgres). 마이그레이션 이후 1회 — GRANT 는 그 시점 테이블 스냅샷. */
-async function createLifecycleBypassRole(): Promise<void> {
-  const admin = createPool({
-    host: process.env.PGHOST,
-    port: process.env.PGPORT === undefined ? undefined : Number(process.env.PGPORT),
-    database: process.env.PGDATABASE,
-    user: "postgres",
-    password: process.env.PGADMIN_PASSWORD, // 로컬 temp-PG(trust)는 무시.
-    options: `-c search_path=${SCHEMA},public`,
-  });
-  try {
-    await admin.query(`DROP ROLE IF EXISTS ${LIFECYCLE_BYPASS_ROLE}`);
-    await admin.query(
-      `CREATE ROLE ${LIFECYCLE_BYPASS_ROLE} LOGIN PASSWORD '${LIFECYCLE_BYPASS_PASSWORD}'
-         NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS`,
-    );
-    await admin.query(`GRANT USAGE ON SCHEMA ${SCHEMA} TO ${LIFECYCLE_BYPASS_ROLE}`);
-    await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${SCHEMA} TO ${LIFECYCLE_BYPASS_ROLE}`);
-  } finally {
-    await admin.end();
+function devArtifactRetentionDays(): number {
+  const raw = process.env.GATEWAY_ARTIFACT_RETENTION_DAYS?.trim();
+  const value = raw === undefined || raw === "" ? 90 : Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`GATEWAY_ARTIFACT_RETENTION_DAYS must be a positive integer, got ${raw}`);
   }
+  return value;
+}
+
+function shouldResetDevDb(): boolean {
+  const raw = process.env.RPA_DEV_RESET_DB?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+type DevSchemaInitMode = "created" | "reset" | "preserved";
+
+async function initializeDevSchema(pool: ReturnType<typeof createPool>): Promise<DevSchemaInitMode> {
+  const setup = await pool.connect();
+  const reset = shouldResetDevDb();
+  try {
+    const ready = reset
+      ? false
+      : ((await setup.query<{ ready: boolean }>(`SELECT to_regclass($1) IS NOT NULL AS ready`, [`${SCHEMA}.runs`])).rows[0]?.ready ?? false);
+    if (ready) return "preserved";
+
+    await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+    await setup.query(`CREATE SCHEMA ${SCHEMA}`);
+    await setup.query(`SET search_path = ${SCHEMA}, public`);
+    await setup.query(readFileSync(join(ROOT, "db", "migration_concurrency_idempotency.sql"), "utf8"));
+    await setup.query(readFileSync(join(ROOT, "db", "migration_core_entities.sql"), "utf8"));
+    return reset ? "reset" : "created";
+  } finally {
+    setup.release();
+  }
+}
+
+async function countDevRuns(pool: ReturnType<typeof createPool>): Promise<number> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const result = await c.query<{ count: string }>(`SELECT count(*)::text AS count FROM runs`);
+    return Number(result.rows[0]?.count ?? "0");
+  });
 }
 
 /**
@@ -158,28 +177,23 @@ async function main(): Promise<void> {
   }
 
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
+  const artifactDir = process.env.GATEWAY_ARTIFACT_DIR?.trim() || join(ROOT, ".dev-data", "gateway-artifacts");
+  const artifactStore = new FsObjectStore(artifactDir);
 
-  const setup = await pool.connect();
-  try {
-    await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-    await setup.query(`CREATE SCHEMA ${SCHEMA}`);
-    await setup.query(`SET search_path = ${SCHEMA}, public`);
-    await setup.query(readFileSync(join(ROOT, "db", "migration_concurrency_idempotency.sql"), "utf8"));
-    await setup.query(readFileSync(join(ROOT, "db", "migration_core_entities.sql"), "utf8"));
-  } finally {
-    setup.release();
+  const schemaMode = await initializeDevSchema(pool);
+  if (schemaMode === "preserved") {
+    const runCount = await countDevRuns(pool);
+    if (runCount === 0) {
+      await seed(pool);
+      console.log("dev schema preserved but empty → seeded: 8 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
+    } else {
+      console.log(`dev schema preserved: ${runCount} existing runs. Set RPA_DEV_RESET_DB=1 to reseed.`);
+    }
+  } else {
+    console.log(`migrations applied (concurrency → core)${schemaMode === "reset" ? " after RPA_DEV_RESET_DB=1" : ""}`);
+    await seed(pool);
+    console.log("seeded: 8 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
   }
-  console.log("migrations applied (concurrency → core)");
-  await createLifecycleBypassRole(); // redaction 승격 루프 전용 BYPASSRLS 역할(테이블 존재 후).
-  await seed(pool);
-  console.log("seeded: 5 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
-
-  // 아티팩트 object store(FS) — run-loop 의 실 sink(LLM 출력 영속)와 GET /v1/artifacts/{id} read 와 redaction
-  // 승격 루프가 동일 디렉터리를 공유한다. securityAudit 는 artifact.read 본문 disclosure 의 fail-closed audit 경계
-  // (security-contracts §10; artifactStore 와 짝 — 미주입 시 read 라우트 미등록). dev 는 in-memory audit 로 충분.
-  const artifactDir = mkdtempSync(join(tmpdir(), "dev-artifacts-"));
-  const objectStore = new FsObjectStore(artifactDir);
-  const securityAudit = new ContractDurableSecurityAuditWriter(new InMemoryImmutableAuditLog());
 
   const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
   const signedCommandRegistry: SignedCommandRegistry = {
@@ -194,8 +208,8 @@ async function main(): Promise<void> {
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: noopEnqueuer,
     signedCommandRegistry,
-    artifactStore: objectStore, // GET /v1/artifacts/{id} 등록(인박스가 수집 아티팩트 본문을 읽음).
-    securityAudit,
+    artifactStore,
+    securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
   });
   await api.ready();
   await api.listen({ port: 0, host: "127.0.0.1" });
@@ -299,34 +313,18 @@ async function main(): Promise<void> {
   console.log("────────────────────────────────────────────────────────\n");
 
   // dev 런타임 루프: queued run을 claim→실행기 구동(실 Chrome). 마커 픽스처 데모 시나리오만 completed까지 간다.
-  // objectStore 공유 → 실 sink 가 LLM 출력을 이 디렉터리에 영속(redaction-loop 가 동일 store 로 읽어 승격).
-  const runLoop: RunLoop | null = await startRunLoop(pool, TENANT, objectStore);
+  const runLoop: RunLoop | null = await startRunLoop(
+    pool,
+    TENANT,
+    2000,
+    new DevVisibleGatewayArtifactSink(pool, artifactStore, { type: "llm_output", retentionDays: devArtifactRetentionDays() }),
+  );
   // dev 캡처 폴러: 콘솔 '세션 등록'(capture_sessions launching)을 폴링해 별도 headful 로그인창을 띄운다(run-loop 의 공유 세션과 무관).
   const captureLoop: CaptureLoop | null = await startCaptureLoop(pool, TENANT);
-  // dev redaction 승격 루프: 전용 BYPASSRLS 역할로 pending 아티팩트를 실 §4 변환 후 redacted 로 승격(RLS 노출).
-  const bypassPool = createPool({
-    host: process.env.PGHOST,
-    port: process.env.PGPORT === undefined ? undefined : Number(process.env.PGPORT),
-    database: process.env.PGDATABASE,
-    user: LIFECYCLE_BYPASS_ROLE,
-    password: LIFECYCLE_BYPASS_PASSWORD,
-    options: `-c search_path=${SCHEMA},public`,
-  });
-  const redactionLoop: RedactionLoop = startRedactionLoop(bypassPool, objectStore, TENANT);
 
   const shutdown = (): void => {
     console.log("shutting down dev console…");
     void (async () => {
-      try {
-        await redactionLoop.stop();
-      } catch {
-        /* ignore */
-      }
-      try {
-        await bypassPool.end();
-      } catch {
-        /* ignore */
-      }
       if (captureLoop !== null) {
         try {
           await captureLoop.stop();
@@ -341,7 +339,6 @@ async function main(): Promise<void> {
           /* ignore */
         }
       }
-      rmSync(artifactDir, { recursive: true, force: true });
       server.close(() => {
         void api.close().then(() => pool.end()).then(() => process.exit(0));
       });

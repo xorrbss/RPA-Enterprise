@@ -3,7 +3,7 @@ import { useState } from "react";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
-import { ApiError } from "../api/types";
+import { errorLabel } from "./badges";
 import type { SiteItem } from "../api/types";
 
 // 사이트명 인라인 편집: 이름 클릭 → 입력칸(현재 이름 prefill) → 저장(PATCH /v1/sites/{id}, Idempotency-Key 1회 생성)
@@ -24,7 +24,7 @@ export function SiteNameEditor(props: { site: SiteItem }): JSX.Element {
       setEditing(false);
       void qc.invalidateQueries({ queryKey: ["sites"] });
     },
-    onError: (e) => setMsg({ tone: "red", text: e instanceof ApiError ? `${e.code} (${e.httpStatus})` : "실패" }),
+    onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
   });
 
   // 권한 없으면 평문(읽기 전용 역할은 편집 트리거를 노출하지 않는다).

@@ -48,6 +48,7 @@ export type ControlPlanePath =
   | "/v1/dlq/{dead_letter_id}/replay"
   | "/v1/artifacts/{artifact_id}"
   | "/v1/gateway/policy"
+  | "/v1/gateway/policies"
   | "/v1/sites"
   | "/v1/sites/{site_profile_id}"
   | "/v1/sites/{site_profile_id}/approve";
@@ -78,7 +79,10 @@ export type OperationId =
   | "replaySinkDeadLetter"
   | "getArtifact"
   | "getGatewayPolicy"
+  | "listGatewayPolicies"
+  | "createGatewayPolicy"
   | "updateGatewayPolicy"
+  | "deleteGatewayPolicy"
   | "listSites"
   | "getSite"
   | "approveSite"

@@ -15,8 +15,9 @@ import { join } from "node:path";
 
 import type { Pool } from "pg";
 
-import type { ExecutorPlugin, SecretRef } from "../../ts/core-types";
+import type { ArtifactRef, ExecutorPlugin, SecretRef } from "../../ts/core-types";
 import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../ts/security-middleware-contract";
+import type { RunState } from "../../ts/state-machine-types";
 import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
@@ -27,8 +28,8 @@ import { loadSitePageStateConfig } from "../src/executor/site-page-state-config"
 import { UtilityExecutor } from "../src/executor/utility-executor";
 import { StagehandDomExecutor, type LlmGatewayCaller } from "../src/executor/stagehand-dom-executor";
 import { CompositeExecutor } from "../src/runtime/composite-executor";
-import { LlmGateway } from "../src/gateway/llm-gateway";
-import { PgGatewayArtifactSink, type ObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
+import { GatewayError, LlmGateway } from "../src/gateway/llm-gateway";
+import type { GatewayArtifactSink } from "../src/gateway/llm-gateway";
 import { CodexSseAdapter } from "../src/gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "../src/gateway/codex-sse-transport";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
@@ -36,7 +37,6 @@ import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-b
 import { VaultSecretStoreBoundary } from "../src/secrets/vault-secret-store-boundary";
 import { ContractDurableSecurityAuditWriter, FakeSecretStore, InMemoryImmutableAuditLog } from "../../security/compliance-scaffold";
 import { DevPlaintextSessionEncryptor, PgBrowserSessionStore } from "../src/runtime/browser-session-store";
-import { RunStepRecordingExecutor } from "./run-step-recorder";
 
 const WORKER_ID = "9a000000-0000-0000-0000-0000000000df";
 // dev 브라우저 정체성(실 UUID) — browser_sessions PK/FK 가 uuid + browser_identities 행을 요구하므로 serve.ts 가
@@ -47,7 +47,7 @@ export const DEV_BROWSER_IDENTITY_ID = "9b000000-0000-0000-0000-0000000000b1";
 const DOM_CFG = {
   model: process.env.CODEX_MODEL?.trim() || "gpt-4o-mini",
   promptTemplateVersion: "dev@1",
-  budget: { maxInputTokens: 100_000, maxOutputTokens: 512, maxCost: 1 },
+  budget: { maxInputTokens: 100_000, maxOutputTokens: 4096, maxCost: 1 },
   scenarioVersionId: "dev-runloop",
   browserIdentityVersion: 1,
 };
@@ -56,15 +56,11 @@ const DOM_CFG = {
  * 실 Codex 게이트웨이 조립(CODEX_* env 필수). 미설정 시 null → dom 실행기 비활성(navigate/observe 만).
  * validator 는 POC pass-through(실 ajv schemaRef 레지스트리는 후속 갭). redaction 경계가 user 메시지(DOM 포함)를 redact.
  */
-function buildCodexGateway(pool: Pool, objectStore: ObjectStore): LlmGatewayCaller | null {
+function buildCodexGateway(artifactSink?: GatewayArtifactSink): LlmGatewayCaller | null {
   const apiKey = process.env.CODEX_API_KEY?.trim();
   const baseUrl = process.env.CODEX_BASE_URL?.trim();
   const model = process.env.CODEX_MODEL?.trim();
   if (!apiKey || !baseUrl || !model) return null;
-  // 실 아티팩트 sink — LLM 출력(extract 결과/act 액션플랜)을 object store + artifacts(redaction_status='pending')에
-  // 영속한다(stub 'art://dev-gateway' 교체). RLS 가 pending 을 은닉하므로 redaction-loop 가 redacted 로 승격해야
-  // 인박스가 읽는다. tenant 스코프는 sink 내부 withTenantTx(meta.tenantId)가 강제(artifacts_insert_isolation).
-  const artifactSink = new PgGatewayArtifactSink(pool, objectStore, { type: "llm_output", retentionDays: 7 });
   // 네이티브 JSON 모드(jsonMode + response_format) — provider 가 유효-JSON 강제(D5 PoC #3 가용 확정). 없으면
   // gpt-4o-mini 가 prompt 폴백에서 마크다운 펜스/산문을 섞어 Gateway JSON.parse 가 LLM_MALFORMED_OUTPUT 로 실패.
   const transport = new FetchCodexSseTransport({ baseUrl, apiKey, model, nativeStructuredOutput: true });
@@ -83,11 +79,10 @@ function buildCodexGateway(pool: Pool, objectStore: ObjectStore): LlmGatewayCall
     validator: { validate: () => ({ ok: true }) },
     sink: {
       // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력(extract 결과 AND act 액션플랜 둘 다)을 넘긴다 →
-      // 스텝 id 와 함께 콘솔에 찍은 뒤(데모 확인용) 실 sink 에 위임해 artifacts(pending)로 영속한다. 라벨에 stepId 를
-      // 넣어 어느 스텝 출력인지 구분(extract/act 혼동 방지). 반환 ArtifactRef = artifacts.id(StepResult evidence 링크).
+      // 스텝 id 와 함께 콘솔에 찍고, dev:serve가 주입한 sink가 있으면 run-level artifact로 저장한다.
       put: async (text: string, meta) => {
         console.log(`[GW-OUTPUT ${meta.stepId}]`, typeof text === "string" ? text.slice(0, 4000) : JSON.stringify(text).slice(0, 4000));
-        return artifactSink.put(text, meta);
+        return artifactSink !== undefined ? artifactSink.put(text, meta) : "art://dev-gateway" as ArtifactRef;
       },
     },
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
@@ -164,7 +159,12 @@ function normalizeParams(raw: unknown): Record<string, unknown> | undefined {
  * queued run 폴링 루프 시작. Chrome 미발견 시 null(루프 비활성). tenantId 스코프(dev 단일 테넌트).
  * run별로 시나리오 entry URL→site_profile을 해소하고 그 사이트의 page_state_selectors로 resolver를 구성한다.
  */
-export async function startRunLoop(pool: Pool, tenantId: string, objectStore: ObjectStore, intervalMs = 2000): Promise<RunLoop | null> {
+export async function startRunLoop(
+  pool: Pool,
+  tenantId: string,
+  intervalMs = 2000,
+  artifactSink?: GatewayArtifactSink,
+): Promise<RunLoop | null> {
   const chrome = findChrome();
   if (chrome === null) {
     console.log("run-loop: Chrome 미발견 → 실행 비활성(만든 run은 queued로 대기). CHROME_PATH 설정 시 활성화.");
@@ -174,7 +174,24 @@ export async function startRunLoop(pool: Pool, tenantId: string, objectStore: Ob
   const session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
   const provider = new SingleSessionProvider(session);
   const utility = new UtilityExecutor(provider);
-  const gateway = buildCodexGateway(pool, objectStore);
+  const gateway = buildCodexGateway(artifactSink);
+  const loggedGateway: LlmGatewayCaller | null =
+    gateway === null
+      ? null
+      : {
+          call: async (req, signal) => {
+            try {
+              return await gateway.call(req, signal);
+            } catch (e) {
+              if (e instanceof GatewayError) {
+                console.error(`[GW-ERROR ${req.metadata.stepId}] ${e.code}: ${e.message}`);
+              } else {
+                console.error(`[GW-ERROR ${req.metadata.stepId}] ${e instanceof Error ? e.message : String(e)}`);
+              }
+              throw e;
+            }
+          },
+        };
   const secrets = buildDevSecretBoundary();
   const executorPrincipal: AuthenticatedPrincipal = {
     subjectId: WORKER_ID as PrincipalId,
@@ -184,17 +201,14 @@ export async function startRunLoop(pool: Pool, tenantId: string, objectStore: Ob
     claims: { runtime_identity: "runtime-worker" }, // RESOLVE_MATRIX: runtime-worker → purpose 'executor'
   };
   // gateway 있으면 dom(act/observe/extract) + utility 합성. 없으면 utility 만(act/extract 시나리오는 실패).
-  const baseExecutor: ExecutorPlugin =
-    gateway !== null
-      ? new CompositeExecutor(new StagehandDomExecutor(gateway, provider, DOM_CFG, undefined, secrets, executorPrincipal), utility)
+  const executor: ExecutorPlugin =
+    loggedGateway !== null
+      ? new CompositeExecutor(new StagehandDomExecutor(loggedGateway, provider, DOM_CFG, undefined, secrets, executorPrincipal), utility)
       : utility;
-  // run_steps 선행 기록 데코레이터 — 실 sink 의 artifacts→run_steps 복합 FK 충족(dev driveClaimedRun 은 run_steps 미생성).
-  // 이게 없으면 gateway 를 호출하는 첫 act/extract 스텝의 artifact INSERT 가 FK 위반으로 좌초한다.
-  const executor = new RunStepRecordingExecutor(baseExecutor, pool);
   // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
   const sessionStore = buildDevSessionStore(pool);
   console.log(
-    gateway !== null
+    loggedGateway !== null
       ? "run-loop: 실 Chrome + Codex dom 실행기 활성(act/observe/extract→LLM; 자격증명 fill→SecretStore 주입; 세션 재사용 활성)."
       : "run-loop: 실 Chrome utility 실행기만 활성(CODEX_* 미설정 → act/extract 시나리오 불가, navigate/observe 만).",
   );
@@ -269,7 +283,9 @@ export async function startRunLoop(pool: Pool, tenantId: string, objectStore: Ob
         console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
       } catch (e) {
         // 해소 실패(url_ref params 누락·0-match·ambiguous·셀렉터 미설정) 또는 구동 실패는 표면화(은폐 금지). run은 claimed에서 멈춤.
-        console.error(`run-loop: ${next.id.slice(0, 8)} 해소/구동 실패 — ${e instanceof Error ? e.message : String(e)}`);
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(`run-loop: ${next.id.slice(0, 8)} 해소/구동 실패 — ${message}`);
+        await markRunFailedSystem(pool, tenantId, next.id, next.correlation_id, message);
       }
     } catch (e) {
       console.error("run-loop tick error:", e instanceof Error ? e.message : String(e));
@@ -291,4 +307,69 @@ export async function startRunLoop(pool: Pool, tenantId: string, objectStore: Ob
       rmSync(downloadDir, { recursive: true, force: true });
     },
   };
+}
+
+async function markRunFailedSystem(
+  pool: Pool,
+  tenantId: string,
+  runId: string,
+  correlationId: string,
+  message: string,
+): Promise<void> {
+  const reason = { code: "RUN_LOOP_FAILED", message };
+  await withTenantTx(pool, tenantId, async (c) => {
+    const statusRow = await c.query<{ status: RunState }>(
+      `SELECT status FROM runs WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+      [tenantId, runId],
+    );
+    const status = statusRow.rows[0]?.status;
+    if (status === undefined || isTerminal(status)) return;
+
+    const transitionInput = failedTransitionFor(status);
+    if (transitionInput === null) {
+      await c.query(
+        `UPDATE runs
+            SET failure_reason=$3::jsonb, updated_at=now()
+          WHERE tenant_id=$1::uuid AND id=$2::uuid AND status=$4`,
+        [tenantId, runId, JSON.stringify(reason), status],
+      );
+      return;
+    }
+
+    const transitioned = await applyRunTransition(c, {
+      tenantId,
+      runId,
+      fromStatus: status,
+      event: transitionInput.event,
+      guard: transitionInput.guard,
+      correlationId,
+      eventIdempotencyKey: `${runId}:run-loop-failed`,
+    });
+    if (!transitioned.applied) return;
+    await c.query(
+      `UPDATE runs
+          SET failure_reason=$3::jsonb, updated_at=now()
+        WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+      [tenantId, runId, JSON.stringify(reason)],
+    );
+  });
+}
+
+function isTerminal(status: RunState): boolean {
+  return status === "completed" || status === "cancelled" || status === "failed_business" || status === "failed_system";
+}
+
+function failedTransitionFor(status: RunState):
+  | { event: { type: "init_failed" }; guard: { initFailBelowThreshold: false } }
+  | { event: { type: "unrecoverable_exception" }; guard: { exceptionClass: "system" } }
+  | { event: { type: "bookmark_failed" }; guard: Record<string, never> }
+  | { event: { type: "restore_failed" }; guard: { loginBypassPossible: false } }
+  | { event: { type: "finalize_failed" }; guard: Record<string, never> }
+  | null {
+  if (status === "claimed") return { event: { type: "init_failed" }, guard: { initFailBelowThreshold: false } };
+  if (status === "running") return { event: { type: "unrecoverable_exception" }, guard: { exceptionClass: "system" } };
+  if (status === "suspending") return { event: { type: "bookmark_failed" }, guard: {} };
+  if (status === "resuming") return { event: { type: "restore_failed" }, guard: { loginBypassPossible: false } };
+  if (status === "completing") return { event: { type: "finalize_failed" }, guard: {} };
+  return null;
 }

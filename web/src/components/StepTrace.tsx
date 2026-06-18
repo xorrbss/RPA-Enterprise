@@ -76,7 +76,9 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
       ) : q.isError ? (
         <ErrorState message="단계 트레이스를 불러오지 못했습니다." onRetry={() => void q.refetch()} />
       ) : items.length === 0 ? (
-        <p className="subtle" style={{ margin: "8px 0 0" }}>아직 기록된 단계가 없습니다.</p>
+        <p className="subtle" style={{ margin: "8px 0 0" }}>
+          기록된 단계가 없습니다. dev 실행이나 초기 worker 경로에서는 run_steps가 영속되지 않아 상세 트레이스가 비어 있을 수 있습니다.
+        </p>
       ) : view === "cards" ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
           {items.map((s, i) => <StepCard key={`${s.step_id}:${s.attempt}`} step={s} index={i} maxDuration={maxDuration} isCurrent={`${s.step_id}:${s.attempt}` === currentKey} />)}
