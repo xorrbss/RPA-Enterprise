@@ -171,11 +171,21 @@ function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
     config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
   });
-  return createDomUtilityExecutorFactory(gateway, {
-    model: gw.codexModel,
-    promptTemplateVersion: gw.promptTemplateVersion,
-    budget: gw.budget,
-  });
+  return createDomUtilityExecutorFactory(
+    gateway,
+    { model: gw.codexModel, promptTemplateVersion: gw.promptTemplateVersion, budget: gw.budget },
+    {
+      // extract.rowAnchor 로 결정형 강화한 결재 행을 인박스용 typed artifact(approval_inbox)로 영속 → prod 인박스 소스.
+      //   (break-it 갭 종결: dev 전용이던 강화-영속을 prod 경로로). PgGatewayArtifactSink 라 pending 으로 기록되고
+      //   artifact_redaction 잡이 §4 redaction 후 readable(인박스 RBAC gate). cache(ActionPlanCache)는 비용/staleness
+      //   운영 정책이라 미주입(bypass) 유지 — 정책 확정 후 별도 주입. secrets/principal(자격증명 fill)은 per-run 테넌트
+      //   배선(P2)으로 분리(세션 재사용 경로는 fill 미사용이라 본 결재 자동화엔 불요).
+      extractArtifactSink: new PgGatewayArtifactSink(pool, new FsObjectStore(gw.artifactDir), {
+        type: "approval_inbox",
+        retentionDays: gw.artifactRetentionDays,
+      }),
+    },
+  );
 }
 
 async function startWorker(pool: PgPool, connectionString: string): Promise<Runner> {

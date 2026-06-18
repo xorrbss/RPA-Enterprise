@@ -11,15 +11,27 @@
  * 본 팩토리 주입으로 production LLM 액션이 가동된다. 라이브 게이트웨이 검증은 별도 env-gated 경로(CI 밖).
  */
 import type { ExecutorPlugin } from "../../../ts/core-types";
-import type { LLMRequest } from "../../../ts/security-middleware-contract";
+import type { AuthenticatedPrincipal, LLMRequest, SecretStoreBoundary } from "../../../ts/security-middleware-contract";
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import {
   StagehandDomExecutor,
   type ActionPlanCache,
   type LlmGatewayCaller,
 } from "../executor/stagehand-dom-executor";
+import type { GatewayArtifactSink } from "../gateway/llm-gateway";
 import { UtilityExecutor } from "../executor/utility-executor";
 import { CompositeExecutor } from "./composite-executor";
+
+/**
+ * deploy-time 주입 의존(클로저 캡처). cache=ActionPlanCache(plan 재생), secrets/executorPrincipal=자격증명 fill 경계,
+ * extractArtifactSink=extract.rowAnchor 로 결정형 강화한 행을 typed artifact(approval_inbox 등)로 영속(인박스 소스).
+ */
+export interface DomExecutorFactoryDeps {
+  readonly cache?: ActionPlanCache;
+  readonly secrets?: SecretStoreBoundary;
+  readonly executorPrincipal?: AuthenticatedPrincipal;
+  readonly extractArtifactSink?: GatewayArtifactSink;
+}
 
 /** worker run-drive 컨텍스트(executorFactory seam): dom config 의 run-scoped ActionPlanCache 키 필드. */
 export interface DomExecutorRunContext {
@@ -35,13 +47,13 @@ export interface DomExecutorLlmPolicy {
 }
 
 /**
- * gateway + LLM 정책(+선택 ActionPlanCache)을 캡처해, run 단위로 호출되는 run-executor 팩토리를 만든다.
- * 호출 시 bound provider + run-scoped 컨텍스트로 dom/utility CompositeExecutor 를 생성한다.
+ * gateway + LLM 정책(+선택 deps: cache/secrets/principal/extractArtifactSink)을 캡처해, run 단위로 호출되는 run-executor
+ * 팩토리를 만든다. 호출 시 bound provider + run-scoped 컨텍스트로 dom/utility CompositeExecutor 를 생성한다.
  */
 export function createDomUtilityExecutorFactory(
   gateway: LlmGatewayCaller,
   policy: DomExecutorLlmPolicy,
-  cache?: ActionPlanCache,
+  deps: DomExecutorFactoryDeps = {},
 ): (provider: CdpSessionProvider, run: DomExecutorRunContext) => ExecutorPlugin {
   return (provider, run) =>
     new CompositeExecutor(
@@ -55,7 +67,10 @@ export function createDomUtilityExecutorFactory(
           scenarioVersionId: run.scenarioVersionId,
           browserIdentityVersion: run.browserIdentityVersion,
         },
-        cache,
+        deps.cache,
+        deps.secrets,
+        deps.executorPrincipal,
+        deps.extractArtifactSink,
       ),
       new UtilityExecutor(provider),
     );

@@ -112,6 +112,22 @@ async function main(): Promise<void> {
   }
   check("navigate → utility 로 라우팅(goto 경유, 게이트웨이 미경유)", utilityRouted && gotoCalls === 1 && gatewayCalls === 1, `utilityRouted=${utilityRouted} gatewayCalls=${gatewayCalls} gotoCalls=${gotoCalls}`);
 
+  // 4) deps.extractArtifactSink 가 executor 로 스레드돼 extract.rowAnchor 강화 행을 typed artifact 로 영속하는가(P1 prod 배선).
+  {
+    const puts: string[] = [];
+    const sink = { put: async (content: string) => { puts.push(content); return "art://inbox" as never; } };
+    const gw: LlmGatewayCaller = {
+      call: async () => ({ outputRef: "art://o", usage: { inputTokens: 1, outputTokens: 1, cost: 0 }, finishReason: "stop", parsedJson: { rows: [{ approval_id: "IB-1" }] } }) as unknown as LLMResponse,
+    };
+    const sess: CdpSession = { ...fakeSession, evaluate: async (expr: string) => (String(expr).includes("getAttribute") ? [{ k: "IB-1", v: "ApprovalDocument.getView('999')" }] : "<body>x</body>") as never };
+    const prov = { forLease: () => sess } as unknown as CdpSessionProvider;
+    const ex2 = createDomUtilityExecutorFactory(gw, policy, { extractArtifactSink: sink })(prov, { scenarioVersionId: "sv", browserIdentityVersion: 1 });
+    const anchor = { selector: "td.docu-num", matchField: "approval_id", field: "doc_ref", attribute: "data-href", pattern: "getView\\('(\\d+)'", template: "https://x/view/$1" };
+    const r2 = await ex2.execute("n.2", { type: "extract", instruction: "x", output: { schemaRef: "approval_inbox_rows", schemaVersion: "1", strict: true }, rowAnchor: anchor }, ctx());
+    const enriched = (r2.extracted as { rows: Array<{ doc_ref: string }> }).rows;
+    check("deps.extractArtifactSink: rowAnchor 강화행 영속(sink put 1회·docId 999)", puts.length === 1 && puts[0]!.includes("999") && enriched[0]?.doc_ref === "https://x/view/999", `puts=${puts.length} ref=${enriched[0]?.doc_ref}`);
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
