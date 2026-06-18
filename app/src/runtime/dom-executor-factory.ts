@@ -11,20 +11,34 @@
  * 본 팩토리 주입으로 production LLM 액션이 가동된다. 라이브 게이트웨이 검증은 별도 env-gated 경로(CI 밖).
  */
 import type { ExecutorPlugin } from "../../../ts/core-types";
-import type { LLMRequest } from "../../../ts/security-middleware-contract";
+import type { AuthenticatedPrincipal, LLMRequest, SecretStoreBoundary } from "../../../ts/security-middleware-contract";
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import {
   StagehandDomExecutor,
   type ActionPlanCache,
   type LlmGatewayCaller,
 } from "../executor/stagehand-dom-executor";
+import type { GatewayArtifactSink } from "../gateway/llm-gateway";
 import { UtilityExecutor } from "../executor/utility-executor";
 import { CompositeExecutor } from "./composite-executor";
 
-/** worker run-drive 컨텍스트(executorFactory seam): dom config 의 run-scoped ActionPlanCache 키 필드. */
+/**
+ * deploy-time 주입 의존(클로저 캡처). cache=ActionPlanCache(plan 재생), secrets/executorPrincipal=자격증명 fill 경계,
+ * extractArtifactSink=extract.rowAnchor 로 결정형 강화한 행을 typed artifact(approval_inbox 등)로 영속(인박스 소스).
+ */
+export interface DomExecutorFactoryDeps {
+  readonly cache?: ActionPlanCache;
+  readonly secrets?: SecretStoreBoundary;
+  readonly executorPrincipal?: AuthenticatedPrincipal;
+  readonly extractArtifactSink?: GatewayArtifactSink;
+}
+
+/** worker run-drive 컨텍스트(executorFactory seam): dom config 의 run-scoped ActionPlanCache 키 필드 + 자격증명 fill 감사용 tenant. */
 export interface DomExecutorRunContext {
   readonly scenarioVersionId: string;
   readonly browserIdentityVersion: number;
+  /** run 테넌트 — 자격증명 fill 시 executorPrincipal 에 per-run 으로 주입(secret.resolve 감사 row 테넌트 정합). */
+  readonly tenantId?: string;
 }
 
 /** deploy-time LLM 정책(dom 액션 LLMRequest 파라미터). run-scoped 아님(운영자/오케스트레이터 고정 값). */
@@ -35,16 +49,22 @@ export interface DomExecutorLlmPolicy {
 }
 
 /**
- * gateway + LLM 정책(+선택 ActionPlanCache)을 캡처해, run 단위로 호출되는 run-executor 팩토리를 만든다.
- * 호출 시 bound provider + run-scoped 컨텍스트로 dom/utility CompositeExecutor 를 생성한다.
+ * gateway + LLM 정책(+선택 deps: cache/secrets/principal/extractArtifactSink)을 캡처해, run 단위로 호출되는 run-executor
+ * 팩토리를 만든다. 호출 시 bound provider + run-scoped 컨텍스트로 dom/utility CompositeExecutor 를 생성한다.
  */
 export function createDomUtilityExecutorFactory(
   gateway: LlmGatewayCaller,
   policy: DomExecutorLlmPolicy,
-  cache?: ActionPlanCache,
+  deps: DomExecutorFactoryDeps = {},
 ): (provider: CdpSessionProvider, run: DomExecutorRunContext) => ExecutorPlugin {
-  return (provider, run) =>
-    new CompositeExecutor(
+  return (provider, run) => {
+    // 자격증명 fill 경계: secrets+executorPrincipal 주입 시 principal.tenantId 를 run 테넌트로 per-run 고정한다
+    //   (secret.resolve 감사 row 의 테넌트 정합 — resolve 권한은 runtime_identity 매트릭스 기반이라 tenant 무관, 감사만 정합용).
+    const principal =
+      deps.executorPrincipal !== undefined && run.tenantId !== undefined
+        ? { ...deps.executorPrincipal, tenantId: run.tenantId as (typeof deps.executorPrincipal)["tenantId"] }
+        : deps.executorPrincipal;
+    return new CompositeExecutor(
       new StagehandDomExecutor(
         gateway,
         provider,
@@ -55,8 +75,12 @@ export function createDomUtilityExecutorFactory(
           scenarioVersionId: run.scenarioVersionId,
           browserIdentityVersion: run.browserIdentityVersion,
         },
-        cache,
+        deps.cache,
+        deps.secrets,
+        principal,
+        deps.extractArtifactSink,
       ),
       new UtilityExecutor(provider),
     );
+  };
 }

@@ -90,6 +90,8 @@ export type BrowserLeasePlanResolver = (
 export interface RunExecutorContext {
   readonly scenarioVersionId: string;
   readonly browserIdentityVersion: number;
+  /** run 테넌트 — 자격증명 fill executorPrincipal per-run 주입(감사 정합). dom-executor-factory DomExecutorRunContext 와 동형. */
+  readonly tenantId?: string;
 }
 
 /** run-drive 시 bound 세션 provider + run-scoped 컨텍스트에서 ExecutorPlugin 을 만드는 seam. 기본은 UtilityExecutor(결정형).
@@ -465,6 +467,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider, {
         scenarioVersionId: d.scenarioVersionId,
         browserIdentityVersion: d.browserIdentityVersion,
+        tenantId, // 자격증명 fill executorPrincipal per-run 테넌트(감사 정합).
       });
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
       await driveClaimedRun(
@@ -920,6 +923,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider, {
         scenarioVersionId: drive.scenarioVersionId,
         browserIdentityVersion: drive.browserIdentityVersion,
+        tenantId, // 자격증명 fill executorPrincipal per-run 테넌트(감사 정합).
       });
       const resolver = new SitePageStateResolver(bound.provider, siteConfig);
       // R18 후 run 은 running — driveResumedRun 은 R2 없이 resumeNodeId 부터 재진입(success→completed / fail→failed_*).

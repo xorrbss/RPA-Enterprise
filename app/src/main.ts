@@ -52,12 +52,15 @@ import { StagehandBrowserSessionProvider } from "./executor/browser-session-prov
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
+import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
+import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
 import { buildTaskList } from "./worker/graphile-runner";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import type { SecretRef } from "../../ts/core-types";
+import type { AuthenticatedPrincipal, PrincipalId, SecretStoreBoundary, TenantId } from "../../ts/security-middleware-contract";
 import type { SignedCommandRegistry, SignedCommandRegistryReadResult } from "../../ts/security-middleware-contract";
 
 /**
@@ -149,7 +152,18 @@ async function startApi(pool: PgPool): Promise<FastifyInstance> {
  * structured-output safe-path (extract scenarios → prompt-schema injection + ajv validation) is implemented
  * (gateway jsonMode=false path), so a real Chrome run drives end-to-end.
  */
-function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
+// runtime-worker executorPrincipal 템플릿 — 자격증명 fill 권한 매트릭스(release-decisions D8-A12: runtime_identity=
+//   runtime-worker → purpose 'executor'). tenantId 는 placeholder(nil)이며 팩토리가 run.tenantId 로 per-run override
+//   (secret.resolve 감사 row 테넌트 정합; resolve 권한 자체는 identity 매트릭스라 tenant 무관). subjectId=고정 worker 서비스-계정.
+const WORKER_EXECUTOR_PRINCIPAL: AuthenticatedPrincipal = {
+  subjectId: "9a000000-0000-0000-0000-0000000000df" as PrincipalId,
+  tenantId: "00000000-0000-0000-0000-000000000000" as TenantId,
+  roles: ["admin"],
+  source: "jwt",
+  claims: { runtime_identity: "runtime-worker" },
+};
+
+function buildExecutorFactory(pool: PgPool, secrets?: SecretStoreBoundary): RunExecutorFactory {
   const gw = loadGatewayConfig();
   const gateway = new LlmGateway({
     primary: new CodexSseAdapter(
@@ -171,11 +185,24 @@ function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
     config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
   });
-  return createDomUtilityExecutorFactory(gateway, {
-    model: gw.codexModel,
-    promptTemplateVersion: gw.promptTemplateVersion,
-    budget: gw.budget,
-  });
+  return createDomUtilityExecutorFactory(
+    gateway,
+    { model: gw.codexModel, promptTemplateVersion: gw.promptTemplateVersion, budget: gw.budget },
+    {
+      // extract.rowAnchor 로 결정형 강화한 결재 행을 인박스용 typed artifact(approval_inbox)로 영속 → prod 인박스 소스.
+      //   (break-it 갭 종결: dev 전용이던 강화-영속을 prod 경로로). PgGatewayArtifactSink 라 pending 으로 기록되고
+      //   artifact_redaction 잡이 §4 redaction 후 readable(인박스 RBAC gate). cache(ActionPlanCache)는 비용/staleness
+      //   운영 정책이라 미주입(bypass) 유지 — 정책 확정 후 별도 주입. secrets/principal(자격증명 fill)은 per-run 테넌트
+      //   배선(P2)으로 분리(세션 재사용 경로는 fill 미사용이라 본 결재 자동화엔 불요).
+      extractArtifactSink: new PgGatewayArtifactSink(pool, new FsObjectStore(gw.artifactDir), {
+        type: "approval_inbox",
+        retentionDays: gw.artifactRetentionDays,
+      }),
+      // 자격증명 fill(secretRef → SecretStore → CDP fill, LLM 미경유): VaultSecretStoreBoundary 주입 시 활성(cold 로그인
+      //   시나리오의 비밀번호 fill). 세션 재사용 결재 경로는 fill 미사용. principal.tenantId 는 팩토리가 run 단위 override.
+      ...(secrets !== undefined ? { secrets, executorPrincipal: WORKER_EXECUTOR_PRINCIPAL } : {}),
+    },
+  );
 }
 
 async function startWorker(pool: PgPool, connectionString: string): Promise<Runner> {
@@ -198,12 +225,15 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
   // CHROME_EXECUTABLE_PATH (deploy-provisioned) and loud-throws if it is absent (fail-closed, no silent
   // claim-only). Still-unwired drive-path ports (sink delivery, session restorer, abort drainer) loud-throw
   // per job kind when needed, see SCOPE above.
+  // 자격증명 fill 경계 — runtimeWorkerStore(Vault) + durable 감사(secret.resolve failClosed). 실행기에 주입해
+  //   cold 로그인 시나리오의 비밀번호 fill(secretRef → SecretStore → CDP fill, LLM 미경유)을 prod 에서 활성화한다.
+  const executorSecrets = new VaultSecretStoreBoundary({ store: runtimeWorkerStore, audit: new PgDurableSecurityAuditDecisionWriter(pool) });
   const browser = loadBrowserConfig();
   const workerOptions: PgRuntimeWorkerOptions = {
     suspensionPort: new PgChallengeSuspensionPort(),
     resumeTokenCodec: new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef),
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
-    executorFactory: buildExecutorFactory(pool),
+    executorFactory: buildExecutorFactory(pool, executorSecrets),
     browserSessionProvider: new StagehandBrowserSessionProvider({
       chromeExecutablePath: browser.chromeExecutablePath,
       headless: browser.headless,

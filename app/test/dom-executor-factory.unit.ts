@@ -8,7 +8,7 @@
  *  browserIdentityVersion) 의 seam 전달은 worker int(runtime-worker-drive.int)가 핀고정.
  */
 import type { ExecutorPlugin, PageState, RunContext } from "../../ts/core-types";
-import type { LLMRequest, LLMResponse } from "../../ts/security-middleware-contract";
+import type { AuthenticatedPrincipal, LLMRequest, LLMResponse, SecretStoreBoundary } from "../../ts/security-middleware-contract";
 import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
 import type { LlmGatewayCaller } from "../src/executor/stagehand-dom-executor";
 import { createDomUtilityExecutorFactory } from "../src/runtime/dom-executor-factory";
@@ -111,6 +111,36 @@ async function main(): Promise<void> {
     utilityRouted = /goto-called/.test(String(e));
   }
   check("navigate → utility 로 라우팅(goto 경유, 게이트웨이 미경유)", utilityRouted && gotoCalls === 1 && gatewayCalls === 1, `utilityRouted=${utilityRouted} gatewayCalls=${gatewayCalls} gotoCalls=${gotoCalls}`);
+
+  // 4) deps.extractArtifactSink 가 executor 로 스레드돼 extract.rowAnchor 강화 행을 typed artifact 로 영속하는가(P1 prod 배선).
+  {
+    const puts: string[] = [];
+    const sink = { put: async (content: string) => { puts.push(content); return "art://inbox" as never; } };
+    const gw: LlmGatewayCaller = {
+      call: async () => ({ outputRef: "art://o", usage: { inputTokens: 1, outputTokens: 1, cost: 0 }, finishReason: "stop", parsedJson: { rows: [{ approval_id: "IB-1" }] } }) as unknown as LLMResponse,
+    };
+    const sess: CdpSession = { ...fakeSession, evaluate: async (expr: string) => (String(expr).includes("getAttribute") ? [{ k: "IB-1", v: "ApprovalDocument.getView('999')" }] : "<body>x</body>") as never };
+    const prov = { forLease: () => sess } as unknown as CdpSessionProvider;
+    const ex2 = createDomUtilityExecutorFactory(gw, policy, { extractArtifactSink: sink })(prov, { scenarioVersionId: "sv", browserIdentityVersion: 1 });
+    const anchor = { selector: "td.docu-num", matchField: "approval_id", field: "doc_ref", attribute: "data-href", pattern: "getView\\('(\\d+)'", template: "https://x/view/$1" };
+    const r2 = await ex2.execute("n.2", { type: "extract", instruction: "x", output: { schemaRef: "approval_inbox_rows", schemaVersion: "1", strict: true }, rowAnchor: anchor }, ctx());
+    const enriched = (r2.extracted as { rows: Array<{ doc_ref: string }> }).rows;
+    check("deps.extractArtifactSink: rowAnchor 강화행 영속(sink put 1회·docId 999)", puts.length === 1 && puts[0]!.includes("999") && enriched[0]?.doc_ref === "https://x/view/999", `puts=${puts.length} ref=${enriched[0]?.doc_ref}`);
+  }
+
+  // 5) deps.secrets+executorPrincipal 주입 시 자격증명 fill 의 principal.tenantId 가 run 테넌트로 per-run override(P2 prod 배선).
+  {
+    let capturedTenant: string | undefined;
+    const fakeSecrets = { resolveAuthorized: async (req: { principal: { tenantId: string } }) => { capturedTenant = req.principal.tenantId; return "pw-plain" as never; } } as unknown as SecretStoreBoundary;
+    const principalTemplate = { subjectId: "w", tenantId: "PLACEHOLDER", roles: ["admin"], source: "jwt", claims: { runtime_identity: "runtime-worker" } } as unknown as AuthenticatedPrincipal;
+    const gw: LlmGatewayCaller = { call: async () => ({ outputRef: "o", usage: { inputTokens: 1, outputTokens: 1, cost: 0 }, finishReason: "stop", parsedJson: { operation: "fill", selector: "#pw" } }) as unknown as LLMResponse };
+    let filled = "";
+    const sess: CdpSession = { ...fakeSession, evaluate: async () => "<body>x</body>" as never, fill: async (_s: string, v: string) => void (filled = v) };
+    const ex5 = createDomUtilityExecutorFactory(gw, policy, { secrets: fakeSecrets, executorPrincipal: principalTemplate })({ forLease: () => sess } as unknown as CdpSessionProvider, { scenarioVersionId: "sv", browserIdentityVersion: 1, tenantId: "RUN-TENANT" });
+    const c: RunContext = { ...ctx(), assetRefs: { "login.password": "ref://pw" as never } };
+    await ex5.execute("n.3", { type: "act", instruction: "fill pw", secretRef: "login.password" }, c);
+    check("deps.secrets+principal: 자격증명 fill principal.tenantId=run 테넌트(per-run override)·평문 fill", capturedTenant === "RUN-TENANT" && filled === "pw-plain", `tenant=${capturedTenant} filled=${filled}`);
+  }
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
