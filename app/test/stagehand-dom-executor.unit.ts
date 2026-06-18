@@ -234,22 +234,30 @@ async function main(): Promise<void> {
     check("rowAnchor: 무효 정규식 → IR_SCHEMA_INVALID", err?.code === "IR_SCHEMA_INVALID");
   }
 
-  // (break-it 보완) rowAnchor: 빈키 오조인 차단 — 빈/누락 approval_id 행은 빈-키 앵커와 합쳐지지 않고 drop(WRONG doc_ref 방지).
+  // (재검증3 보완) rowAnchor: 행 측 빈/누락 approval_id(LLM 잡음)는 drop·오조인 안 함. 앵커가 깨끗하면 throw 없음(실 손실 아님).
   {
     const g = countingGateway({ parsedJson: { rows: [
-      { approval_id: "", title: "blank id" },
       { approval_id: "IB-001", title: "ok" },
+      { approval_id: "", title: "llm junk no id" },
     ] } });
-    const pairs = [
-      { k: "", v: "javascript:ApprovalDocument.getView('777777','W');" }, // 빈 textContent 앵커
-      { k: "IB-001", v: "javascript:ApprovalDocument.getView('111111','W');" },
-    ];
+    const pairs = [{ k: "IB-001", v: "javascript:ApprovalDocument.getView('111111','W');" }];
     const r = await new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sF", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx());
     const rows = (r.extracted as { rows: Array<{ approval_id: string; doc_ref: string }> }).rows;
-    check("rowAnchor: 빈키 행 drop(777777 오조인 차단)", rows.length === 1 && rows[0]?.approval_id === "IB-001" && rows[0]?.doc_ref.endsWith("111111") && !rows.some((x) => x.doc_ref.includes("777777")), JSON.stringify(rows));
+    check("rowAnchor: 행 측 빈 approval_id drop(앵커 클린→throw 없음, 오조인 없음)", rows.length === 1 && rows[0]?.approval_id === "IB-001" && rows[0]?.doc_ref.endsWith("111111"), JSON.stringify(rows));
   }
 
-  // (break-it 보완) rowAnchor: 중복 문서번호키 → 모호로 처리·drop(Map last-wins WRONG doc_ref 방지).
+  // (재검증3 보완) rowAnchor: 빈 textContent 앵커(유효 href=실 문서) 배제 → 손실 → loud(coverage 가드 우회 차단).
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ approval_id: "IB-001", title: "ok" }] } });
+    const pairs = [
+      { k: "", v: "javascript:ApprovalDocument.getView('777777','W');" }, // 빈키 앵커(실 문서)
+      { k: "IB-001", v: "javascript:ApprovalDocument.getView('111111','W');" },
+    ];
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sFa", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx()));
+    check("rowAnchor: 빈키 앵커(실 문서) 손실 → IR_SCHEMA_INVALID(조용한 누락 금지)", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // (재검증3 보완) rowAnchor: 중복 문서번호키(같은 키 다른 docId=둘 다 실 문서) 모호 배제 → 손실 → loud(WRONG doc_ref·조용한 누락 둘 다 금지).
   {
     const g = countingGateway({ parsedJson: { rows: [
       { approval_id: "IB-DUP", title: "dup" },
@@ -257,12 +265,11 @@ async function main(): Promise<void> {
     ] } });
     const pairs = [
       { k: "IB-DUP", v: "javascript:ApprovalDocument.getView('111','W');" },
-      { k: "IB-DUP", v: "javascript:ApprovalDocument.getView('222','W');" }, // 같은 키 다른 값 → 모호
+      { k: "IB-DUP", v: "javascript:ApprovalDocument.getView('222','W');" }, // 같은 키 다른 docId → 모호(둘 다 실 문서)
       { k: "IB-OK", v: "javascript:ApprovalDocument.getView('333','W');" },
     ];
-    const r = await new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sG", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx());
-    const rows = (r.extracted as { rows: Array<{ approval_id: string; doc_ref: string }> }).rows;
-    check("rowAnchor: 중복키 모호→drop(IB-OK만, last-wins 오조인 차단)", rows.length === 1 && rows[0]?.approval_id === "IB-OK" && rows[0]?.doc_ref.endsWith("333"), JSON.stringify(rows));
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sG", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx()));
+    check("rowAnchor: 중복키 모호(실 문서 2건) 손실 → IR_SCHEMA_INVALID", err?.code === "IR_SCHEMA_INVALID");
   }
 
   // (break-it 보완) rowAnchor: 전 행 키-조인 실패(포맷 드리프트) → loud(빈 인박스로 진성 결함 은폐 금지).

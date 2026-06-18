@@ -100,21 +100,29 @@ export async function applyRowAnchor(
   const re = new RegExp(anchor.pattern);
   const byKey = new Map<string, string>();
   const ambiguous = new Set<string>(); // 중복 정규화 키(값 상이) — last-wins 대신 모호로 처리(WRONG doc_ref 부착 차단).
-  let emptyKeyAnchors = 0; // 유효 href 인데 textContent(키) 빈 앵커 — 빈키 교차오염 방지로 제외(degenerate; 로그 가시화).
+  // 셀렉터에 매칭된 앵커(td.docu-num — recon상 전부 실 결재 행)인데 단일 결정형 doc_ref 로 **해소 못 한** 수. 모든 배제 경로를
+  // 한 군데로 모아 손실 invariant 가 빠짐없이 loud 하게 한다(이 카운트가 0 보다 크면 실 문서가 인박스에서 사라질 위험):
+  //  · href 부재(getAttribute null) · 과대(>MAX, ReDoS 차단 skip) · pattern miss(getView 포맷 드리프트) · 빈 조인키(textContent 빔).
+  let unresolvableAnchors = 0;
   for (const p of pairs) {
-    if (typeof p.v !== "string") continue;
-    if (p.v.length > MAX_ATTR_CHARS) continue; // 과대 속성값 = 드리프트/오염 → 절단 캡처(경계 걸친 WRONG id) 대신 skip(실 행이면 coverage 가드가 loud).
+    if (typeof p.v !== "string" || p.v.length > MAX_ATTR_CHARS) {
+      unresolvableAnchors++; // href 없음 / 과대(드리프트·오염; 절단 캡처로 WRONG id 만들지 않고 손실로 계상).
+      continue;
+    }
     const m = re.exec(p.v);
-    if (m === null || m[1] === undefined) continue;
+    if (m === null || m[1] === undefined) {
+      unresolvableAnchors++; // pattern miss = getView 포맷 드리프트.
+      continue;
+    }
     const k = norm(p.k);
     if (k === "") {
-      emptyKeyAnchors++;
-      continue; // 빈 앵커 키 배제(빈키 교차오염 방지).
+      unresolvableAnchors++; // 빈 조인키 — 빈키 교차오염 방지로 배제(유효 href=실 문서이므로 손실).
+      continue;
     }
     const value = anchor.template.split("$1").join(m[1]); // 리터럴 치환($ 시퀀스 미해석).
     const prior = byKey.get(k);
     if (prior !== undefined && prior !== value) {
-      ambiguous.add(k);
+      ambiguous.add(k); // 같은 키 다른 docId(둘 다 실 문서) — 모호로 배제(아래 byKey.delete).
       continue;
     }
     byKey.set(k, value);
@@ -149,17 +157,22 @@ export async function applyRowAnchor(
     matchedKeys.add(key);
     kept.push({ ...(row as Record<string, unknown>), [anchor.field]: value });
   }
-  if (dropped > 0 || ambiguous.size > 0 || emptyKeyAnchors > 0) {
-    // 은폐 금지 — drop/모호/빈키앵커 카운트 가시화.
-    console.log(`[ROW-ANCHOR ${stepId}] ${anchor.field} 결정형 세팅: ${kept.length}행 유지 / ${dropped}행 drop / 모호키 ${ambiguous.size} / 빈키앵커 ${emptyKeyAnchors}.`);
+  if (dropped > 0 || ambiguous.size > 0 || unresolvableAnchors > 0) {
+    // 은폐 금지 — drop/모호/미해소 앵커 카운트 가시화.
+    console.log(`[ROW-ANCHOR ${stepId}] ${anchor.field} 결정형 세팅: ${kept.length}행 유지 / ${dropped}행 drop / 모호키 ${ambiguous.size} / 미해소앵커 ${unresolvableAnchors}.`);
   }
-  // 권위 앵커(byKey)는 페이지에 실재하는 결재 행이다(observe 게이트가 ≥1 앵커 settle 보장). kept 가 커버 못 한 앵커가 있으면
-  // — LLM 이 rows:[] 또는 일부만 추출, 또는 matchField↔textContent 포맷 드리프트 — 실 결재가 인박스에서 조용히 사라진다.
-  // 전면 손실(rows:[]·전 행 drop)과 부분 손실(예 15개 중 14개 누락) 모두 loud(조용한 false → 불완전 인박스 은폐 금지).
-  if (matchedKeys.size < byKey.size) {
+  // 권위 앵커(td.docu-num — recon상 전부 실 결재 행)의 **모든** 손실을 loud. observe 게이트가 ≥1 앵커 settle 을 보장하므로
+  // 어떤 손실도 진성 결함이고, 비가역 결재 도메인에서 불완전 인박스를 조용히 보이는 것은 설계 금기('조용한 false 금지')다.
+  // 손실 3종(전부 페이지에 실재하는 문서를 잃음 — byKey 잔존분만 보던 coverage 가드의 우회를 빠짐없이 닫는다):
+  //  · LLM 미커버(uncovered): byKey 앵커를 매칭한 행 없음(rows:[]·부분 누락·matchField↔textContent 포맷 드리프트).
+  //  · 모호키(ambiguous): 같은 문서번호 다른 docId(둘 다 실 문서) — last-wins WRONG 대신 둘 다 배제 → 손실.
+  //  · 미해소앵커(unresolvableAnchors): href 부재/과대/pattern miss/빈 조인키로 doc_ref 산출 불가 → 배제 → 손실.
+  const uncovered = byKey.size - matchedKeys.size;
+  const lostAnchors = uncovered + ambiguous.size + unresolvableAnchors;
+  if (lostAnchors > 0) {
     throw new StagehandDomExecutorError(
       "IR_SCHEMA_INVALID",
-      `step '${stepId}' extract.row_anchor: 권위 앵커 ${byKey.size}개 중 ${matchedKeys.size}개만 행에 매칭(${byKey.size - matchedKeys.size}개 결재 누락; matchField '${anchor.matchField}'↔앵커 textContent 불일치/LLM 누락) — 조용한 false 금지`,
+      `step '${stepId}' extract.row_anchor: 권위 앵커 손실 ${lostAnchors}건(LLM 미커버 ${uncovered} / 모호키 ${ambiguous.size} / 미해소앵커 ${unresolvableAnchors}) — 실 결재 조용한 누락 금지`,
     );
   }
   return { ...parsed, rows: kept };
