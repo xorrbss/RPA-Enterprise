@@ -36,6 +36,9 @@ import { GatewayError, type GatewayArtifactSink } from "../gateway/llm-gateway";
 import { parseActionPlan, type ActionPlan, type ActionPlanCache, type ActionPlanCacheKey } from "./action-plan-cache";
 import type { CdpSession, CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
+import { normalizePageSnapshot } from "./page-snapshot";
+import { StagehandDomExecutorError, type DomExecutorErrorCode } from "./dom-executor-error";
+import { applyRowAnchor, coerceRowAnchor, type ExtractRowAnchor } from "./extract-row-anchor";
 
 /** Gateway 호출 경계(LlmGateway 가 구조적으로 충족). Executor 는 adapter 가 아니라 이 포트만 본다. */
 export interface LlmGatewayCaller {
@@ -56,38 +59,9 @@ export type DomAction =
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> }; rowAnchor?: ExtractRowAnchor };
 
-/**
- * extract 행별 **결정형 앵커** — LLM 이 신뢰성 있게 못 읽는 필드(특히 속성값 파생; 예 SPA 의 data-href docId)를 DOM 에서
- * 결정형으로 채운다. LLM 은 가시 텍스트(제목 등)만 추출하고, 이 필드는 DOM querySelector 로 권위 세팅한다(act.valueRef 와
- * 동형 — "LLM 추측 금지, 결정형 우선"). 조인: 앵커 요소의 textContent(공백 정규화) == 각 행의 matchField. 미매칭 행은 drop
- * (환각 행/포맷 불일치 — 가짜 값 노출 금지). 셀렉터 0매칭은 loud(조용한 false 금지).
- */
-export interface ExtractRowAnchor {
-  /** 행별 앵커 요소 셀렉터(예 "td.docu-num"). textContent 가 조인 키. */
-  selector: string;
-  /** 각 LLM 행에서 앵커 textContent 와 매칭할 필드명(예 "approval_id"). */
-  matchField: string;
-  /** 결정형으로 세팅할 행 필드명(예 "doc_ref"). */
-  field: string;
-  /** 앵커 요소에서 읽을 속성(예 "data-href"). */
-  attribute: string;
-  /** 속성값에서 id 를 뽑는 정규식(캡처 그룹 1 = id). */
-  pattern: string;
-  /** field 값 템플릿 — "$1" 가 캡처 id 로 치환. */
-  template: string;
-}
-
-export type DomExecutorErrorCode = "EXECUTOR_CAPABILITY_MISMATCH" | "IR_SCHEMA_INVALID" | "RUN_ABORTED";
-
-export class StagehandDomExecutorError extends Error {
-  constructor(
-    readonly code: DomExecutorErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = "StagehandDomExecutorError";
-  }
-}
+// 결정형 행별 필드 추출(LLM 속성 환각 차단)은 extract-row-anchor.ts(의미 단위 분리, CLAUDE.md #7) — 타입/에러 재export(호환).
+export { StagehandDomExecutorError, type DomExecutorErrorCode };
+export type { ExtractRowAnchor };
 
 export interface StagehandDomExecutorConfig {
   model: string;
@@ -100,10 +74,6 @@ export interface StagehandDomExecutorConfig {
 
 const UTILITY_ACTIONS = new Set(["navigate", "download", "upload", "api_call", "file", "shell"]);
 const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", schemaVersion: "1", strict: true } as const;
-// LLM 이 셀렉터를 정하려면 원문 DOM 이 필요(PageState 파생 신호만으론 #password 등 타깃 불가). user 메시지로 실어
-// Gateway redaction(§4) 경계가 redact/injection-탐지하게 한다. 토큰 예산 보호용 상한(초과분 절단).
-const MAX_PAGE_SNAPSHOT_CHARS = 24000;
-const MAX_VISIBLE_TEXT_CHARS = 12000;
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 
@@ -137,8 +107,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     // 자격증명 fill(secretRef) 경계 — 둘 다 주입돼야 fill 의 valueRef 를 해소한다(미주입 시 loud throw, 조용한 빈 fill 금지).
     private readonly secrets?: SecretStoreBoundary,
     private readonly executorPrincipal?: AuthenticatedPrincipal,
-    // extract.rowAnchor 로 결정형 강화한 행을 인박스용 typed artifact 로 영속하는 옵션 sink(dev:serve 주입). 미주입 시
-    // 강화는 StepResult.extracted 에만 반영(prod 파이프라인이 영속). approval_inbox 등 type 은 sink cfg 가 결정.
+    // extract.rowAnchor 로 결정형 강화한 행을 인박스용 typed artifact(type=approval_inbox 등 sink cfg)로 영속하는 옵션 sink.
+    // 현재 dev:serve(run-loop)만 주입한다. **미주입 시 강화는 StepResult.extracted(휘발)에만 반영되고 어떤 artifact 로도
+    // 영속되지 않는다** — 영속 artifact(artifacts[0]=gateway outputRef)는 강화 전 LLM 원문이다. prod 인박스용 강화-영속
+    // 배선은 후속(TODO: prod executor 팩토리에 동일 sink seam 또는 enriched outputRef 재기록).
     private readonly extractArtifactSink?: GatewayArtifactSink,
   ) {}
 
@@ -182,7 +154,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     let extracted: unknown = a.type === "extract" ? res.parsedJson : undefined;
     const artifacts: ArtifactRef[] = [res.outputRef];
     if (a.type === "extract" && a.rowAnchor !== undefined && res.parsedJson !== null && typeof res.parsedJson === "object") {
-      extracted = await this.applyRowAnchor(stepId, a.rowAnchor, res.parsedJson, this.sessions.forLease(ctx.leaseId));
+      extracted = await applyRowAnchor(stepId, a.rowAnchor, res.parsedJson, this.sessions.forLease(ctx.leaseId));
       if (this.extractArtifactSink !== undefined) {
         // meta 브랜드 타입(TenantId/RunId/StepId)은 buildRequest 와 동일 캐스트 패턴 — RunContext 는 평문 string 으로 보유.
         const meta = { tenantId: ctx.tenantId, runId: ctx.runId, stepId, attempt: ctx.attempt } as unknown as Parameters<GatewayArtifactSink["put"]>[1];
@@ -206,61 +178,6 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       sideEffect: { kind: "read_only", committed: true },
       timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
     };
-  }
-
-  /**
-   * extract.rowAnchor 적용 — DOM 앵커 요소를 querySelectorAll 로 결정형 읽어(textContent=조인키, attribute=원천),
-   * 각 LLM 행의 matchField 와 키-조인해 field(예 doc_ref)를 권위 세팅한다. 매칭 없는 행은 drop(가짜 값 노출 금지).
-   * 셀렉터 0매칭은 loud 실패(observe 게이트가 목록 settle 을 보장하므로 0 은 진성 결함 — 조용한 false 금지).
-   */
-  private async applyRowAnchor(
-    stepId: string,
-    anchor: ExtractRowAnchor,
-    parsed: object,
-    session: CdpSession,
-  ): Promise<object> {
-    const rows = (parsed as { rows?: unknown }).rows;
-    if (!Array.isArray(rows)) {
-      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.row_anchor: 출력 봉투에 rows 배열 없음`);
-    }
-    // 결정형 DOM 읽기: 앵커 요소별 {k:textContent(공백정규화), v:attribute}. 동일 lease 세션, read-only.
-    const expr =
-      `[...document.querySelectorAll(${JSON.stringify(anchor.selector)})]` +
-      `.map(function(e){return {k:(e.textContent||"").replace(/\\s+/g," ").trim(), v:e.getAttribute(${JSON.stringify(anchor.attribute)})};})`;
-    const pairs = await session.evaluate<Array<{ k: string; v: string | null }>>(expr);
-    if (!Array.isArray(pairs) || pairs.length === 0) {
-      throw new StagehandDomExecutorError(
-        "IR_SCHEMA_INVALID",
-        `step '${stepId}' extract.row_anchor: 셀렉터 '${anchor.selector}' 0개 매칭(DOM 미settle/오셀렉터) — 조용한 false 금지`,
-      );
-    }
-    const re = new RegExp(anchor.pattern);
-    const norm = (v: unknown): string => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
-    const byKey = new Map<string, string>();
-    for (const p of pairs) {
-      if (typeof p.v !== "string") continue;
-      const m = re.exec(p.v);
-      if (m !== null && m[1] !== undefined) byKey.set(norm(p.k), anchor.template.replace("$1", m[1]));
-    }
-    const kept: unknown[] = [];
-    let dropped = 0;
-    for (const row of rows) {
-      if (row === null || typeof row !== "object") {
-        dropped++;
-        continue;
-      }
-      const value = byKey.get(norm((row as Record<string, unknown>)[anchor.matchField]));
-      if (value === undefined) {
-        dropped++;
-        continue;
-      }
-      kept.push({ ...(row as Record<string, unknown>), [anchor.field]: value });
-    }
-    if (dropped > 0) {
-      // 은폐 금지 — drop 카운트 가시화(매칭 키 부재 = LLM 환각 행/포맷 불일치).
-      console.log(`[ROW-ANCHOR ${stepId}] ${anchor.field} 결정형 세팅: ${kept.length}행 유지 / ${dropped}행 drop(${anchor.matchField} 미매칭).`);
-    }
-    return { ...parsed, rows: kept };
   }
 
   /** act — LLM ActionPlan(또는 캐시 재생) → CDP 로 실제 mutation 적용. */
@@ -562,63 +479,3 @@ export class StagehandDomExecutor implements ExecutorPlugin {
   }
 }
 
-/**
- * extract.rowAnchor 런타임 검증(권위 경계 — output 검증과 동일 패턴). 6개 필드 모두 비빈 문자열 + pattern 정규식 유효성.
- * 미선언(undefined)은 통과(옵션). 부분/오타 선언은 loud(조용한 false 금지 — 잘못된 결정형 추출 설정을 묵인하지 않음).
- */
-function coerceRowAnchor(raw: unknown, stepId: string): ExtractRowAnchor | undefined {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "object" || raw === null) {
-    throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.rowAnchor must be an object`);
-  }
-  const r = raw as Record<string, unknown>;
-  const need = (k: keyof ExtractRowAnchor): string => {
-    const v = r[k];
-    if (typeof v !== "string" || v.trim().length === 0) {
-      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.rowAnchor.${String(k)} must be a non-empty string`);
-    }
-    return v;
-  };
-  const pattern = need("pattern");
-  try {
-    new RegExp(pattern);
-  } catch {
-    throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.rowAnchor.pattern is not a valid RegExp`);
-  }
-  return {
-    selector: need("selector"),
-    matchField: need("matchField"),
-    field: need("field"),
-    attribute: need("attribute"),
-    pattern,
-    template: need("template"),
-  };
-}
-
-function normalizePageSnapshot(snapshot: unknown): string | undefined {
-  if (typeof snapshot === "string") {
-    const text = cleanSnapshotText(snapshot);
-    return text.length > 0 ? text.slice(0, MAX_PAGE_SNAPSHOT_CHARS) : undefined;
-  }
-  if (typeof snapshot !== "object" || snapshot === null) return undefined;
-
-  const rec = snapshot as { visibleText?: unknown; html?: unknown };
-  const visibleText = typeof rec.visibleText === "string" ? cleanSnapshotText(rec.visibleText) : "";
-  const html = typeof rec.html === "string" ? cleanSnapshotText(rec.html) : "";
-  const parts: string[] = [];
-  if (visibleText.length > 0) parts.push(`[visible_text]\n${visibleText.slice(0, MAX_VISIBLE_TEXT_CHARS)}`);
-
-  const remaining = MAX_PAGE_SNAPSHOT_CHARS - parts.join("\n\n").length;
-  if (html.length > 0 && remaining > 128) parts.push(`[html]\n${html.slice(0, remaining)}`);
-
-  const out = parts.join("\n\n").slice(0, MAX_PAGE_SNAPSHOT_CHARS);
-  return out.length > 0 ? out : undefined;
-}
-
-function cleanSnapshotText(value: string): string {
-  return value
-    .replace(/\r\n?/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{4,}/g, "\n\n\n")
-    .trim();
-}

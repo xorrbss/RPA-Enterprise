@@ -50,7 +50,10 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
   // (origin = approval.office.hiworks.com → 위 결재 site_profile/세션으로 해소). observe 게이트: 로그인 폼이면 session_expired,
   // 결재 목록 행(td.docu-num)이 렌더되면 추출. recon 확정 셀렉터로 게이트 강화(catch-all 제거) → 미렌더 시 IR_NO_BRANCH_MATCHED
   // 로 loud 실패(빈 그리드 무음 추출 금지). doc_ref 는 행의 data-href(ApprovalDocument.getView('<docId>',...))에서 docId 를
-  // 읽어 결정형으로 구성(LLM attribute 추출 신뢰도↓ → 명시 지시). doc_ref 존재가 Model A(건별 결재 run)의 사활.
+  // 읽어 결정형으로 구성(extract.args.row_anchor — LLM 속성 환각 차단, 실행기가 권위 세팅). doc_ref 존재가 Model A(건별 결재 run)의 사활.
+  // ⚠ **현 한계(명시): 현재 보이는 1페이지만 수집한다**(open→check→collect→done; 페이지 순회 루프 없음). 라이브 결재함은
+  //   페이지네이션되므로(예 172건 중 1페이지) 인박스는 1페이지분만 담는다 — '전체 결재'가 아니다. 전 페이지 수집은 닫힌 flag
+  //   no_next_page 로 check→collect→(no_next_page?done:next_page act→collect) 순회 루프를 구성하는 후속 작업(YAGNI 까지 보류).
   const collect = compileScenario(
     {
       meta: { name: "하이웍스 결재 수집", version: 1 },

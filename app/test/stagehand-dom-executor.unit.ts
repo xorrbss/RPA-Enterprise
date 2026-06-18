@@ -234,6 +234,63 @@ async function main(): Promise<void> {
     check("rowAnchor: 무효 정규식 → IR_SCHEMA_INVALID", err?.code === "IR_SCHEMA_INVALID");
   }
 
+  // (break-it 보완) rowAnchor: 빈키 오조인 차단 — 빈/누락 approval_id 행은 빈-키 앵커와 합쳐지지 않고 drop(WRONG doc_ref 방지).
+  {
+    const g = countingGateway({ parsedJson: { rows: [
+      { approval_id: "", title: "blank id" },
+      { approval_id: "IB-001", title: "ok" },
+    ] } });
+    const pairs = [
+      { k: "", v: "javascript:ApprovalDocument.getView('777777','W');" }, // 빈 textContent 앵커
+      { k: "IB-001", v: "javascript:ApprovalDocument.getView('111111','W');" },
+    ];
+    const r = await new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sF", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx());
+    const rows = (r.extracted as { rows: Array<{ approval_id: string; doc_ref: string }> }).rows;
+    check("rowAnchor: 빈키 행 drop(777777 오조인 차단)", rows.length === 1 && rows[0]?.approval_id === "IB-001" && rows[0]?.doc_ref.endsWith("111111") && !rows.some((x) => x.doc_ref.includes("777777")), JSON.stringify(rows));
+  }
+
+  // (break-it 보완) rowAnchor: 중복 문서번호키 → 모호로 처리·drop(Map last-wins WRONG doc_ref 방지).
+  {
+    const g = countingGateway({ parsedJson: { rows: [
+      { approval_id: "IB-DUP", title: "dup" },
+      { approval_id: "IB-OK", title: "ok" },
+    ] } });
+    const pairs = [
+      { k: "IB-DUP", v: "javascript:ApprovalDocument.getView('111','W');" },
+      { k: "IB-DUP", v: "javascript:ApprovalDocument.getView('222','W');" }, // 같은 키 다른 값 → 모호
+      { k: "IB-OK", v: "javascript:ApprovalDocument.getView('333','W');" },
+    ];
+    const r = await new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sG", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx());
+    const rows = (r.extracted as { rows: Array<{ approval_id: string; doc_ref: string }> }).rows;
+    check("rowAnchor: 중복키 모호→drop(IB-OK만, last-wins 오조인 차단)", rows.length === 1 && rows[0]?.approval_id === "IB-OK" && rows[0]?.doc_ref.endsWith("333"), JSON.stringify(rows));
+  }
+
+  // (break-it 보완) rowAnchor: 전 행 키-조인 실패(포맷 드리프트) → loud(빈 인박스로 진성 결함 은폐 금지).
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ approval_id: "IB-ZZZ" }] } });
+    const pairs = [{ k: "IB-AAA", v: "javascript:ApprovalDocument.getView('111','W');" }];
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sH", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx()));
+    check("rowAnchor: 전 행 키-조인 실패 → IR_SCHEMA_INVALID(loud)", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // (break-it 보완) rowAnchor: attribute/pattern 전면 실패(byKey 0) → loud(드리프트 은폐 금지).
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ approval_id: "IB-A" }] } });
+    const pairs = [{ k: "IB-A", v: null }]; // attribute null(데이터 href 드리프트)
+    const err = await caught(new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sI", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: ROW_ANCHOR }, makeCtx()));
+    check("rowAnchor: attribute 전면 null(byKey 0) → IR_SCHEMA_INVALID(loud)", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // (break-it 보완) rowAnchor: template 의 $ 시퀀스 리터럴 치환($& 미해석 — 결정형 값 보존).
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ approval_id: "IB-A" }] } });
+    const pairs = [{ k: "IB-A", v: "ref=a$&b" }];
+    const dollarAnchor = { selector: "td.docu-num", matchField: "approval_id", field: "doc_ref", attribute: "data-href", pattern: "ref=(.+)", template: "https://x/view/$1" };
+    const r = await new StagehandDomExecutor(g.gw, anchorSessions(pairs).provider, cfg).execute("sJ", { type: "extract", instruction: "x", output: EXTRACT_OUT, rowAnchor: dollarAnchor }, makeCtx());
+    const rows = (r.extracted as { rows: Array<{ doc_ref: string }> }).rows;
+    check("rowAnchor: template $ 리터럴 치환($& 미해석)", rows[0]?.doc_ref === "https://x/view/a$&b", rows[0]?.doc_ref);
+  }
+
   // observe → success
   {
     const r = await new StagehandDomExecutor(countingGateway().gw, sess(), cfg).execute("s2", { type: "observe", instruction: "find next" }, makeCtx());
