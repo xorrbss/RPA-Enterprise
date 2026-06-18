@@ -162,8 +162,11 @@ export interface SecretAccessRequest {
    * artifact-lifecycle operational identity (ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT),
    * kept distinct from `executor` user-traffic so executor identities are never authorized
    * for object-store credentials — see release-decisions.md D8-A10.
+   * `browser_session` is the at-rest envelope-encryption KEK for reused login sessions
+   * (browser_sessions.ciphertext), kept distinct from `executor` credential-fill so a
+   * session-key compromise is isolated from live credential traffic — see browser-session-store.ts.
    */
-  purpose: "executor" | "connector" | "resume_token_hmac" | "gateway_policy" | "object_store";
+  purpose: "executor" | "connector" | "resume_token_hmac" | "gateway_policy" | "object_store" | "browser_session";
   runId?: RunId;
   connectorId?: string;
 }

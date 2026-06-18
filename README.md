@@ -754,3 +754,33 @@
 | 실행기/dev | `ir-translate.ts`·`stagehand-dom-executor.ts`(valueRef intent) · `cdp-session.ts`(goto 타임아웃) · `app/dev/seed-hiworks-approval.ts`(수집/처리 시나리오 시드; 아티팩트 가시화는 origin `DevVisibleGatewayArtifactSink` 재사용) |
 | web | `client.ts`/`types.ts`(decideApproval) · `views/ApprovalInbox.tsx`(건별 버튼·폴링·딥링크) · `api/permissions.ts` |
 | 비도입(휴먼게이트) | 실 세션 캡처(MFA)·실 결재 클릭(비가역)·PR 머지 — 사용자 입회. doc_ref 경로-변형 정규화·일괄(bulk) 결재 — 후속 |
+
+## v2.25 패치 로그 (운영 세션 캡처 — 운영자-로컬 캡처 + 중앙 API 봉투암호화: `browser_session` purpose 신설)
+
+> dev 세션 캡처는 서버 headful(dev 폴러)이라 prod(헤드리스)에서 미동작. **운영자-로컬 캡처**(Option B): 최소권한
+> 에이전트가 운영자 PC 에서 캡처(자격증명 미경유), **중앙 API 가 신뢰경계에서 봉투암호화** 저장. 세션 쿠키는 인증
+> 자료라 at-rest 평문 금지 — KMS 봉투암호화 land 로 prod 세션 재사용의 구조적 fail-closed 블로커를 해소한다.
+> **계약**: `security-middleware-contract.ts` `SecretAccessRequest.purpose` 닫힌 union 에 **`browser_session` 추가**
+> (at-rest 세션 KEK; `executor` 자격증명-fill 과 분리해 세션키 유출을 라이브 자격증명 트래픽과 격리) +
+> `VaultSecretStoreBoundary` RESOLVE_MATRIX 매핑(`api`=capture/complete 암호화, `runtime-worker`/`browser-worker`=세션
+> 복원 복호화). OperationId `captureSessionComplete`. **이벤트 payload·스키마 신설 0**.
+> **암호화기**: `KmsEnvelopeSessionEncryptor`(per-message DEK 봉투암호화 — 메시지별 임의 DEK 로 AES-256-GCM, DEK 는 KEK
+> 로 재래핑; ciphertext=자기완결 버퍼 version|wrappedDEK|encMsg, enc_kid=KEK kid 회전 추적). KEK 는 SecretStore 에서
+> `{kid,key}` 1회 해소(resume-token kid 회전 패턴 미러, 동기 인터페이스 대응). GCM authTag 가 위변조·cross-message
+> 스플라이싱·dev↔prod 혼동(unknown kid)을 throw 로 탐지(조용한 잘못된 세션 금지).
+> **백엔드**: `POST /v1/sites/{id}/session/capture/complete`(operator+·멱등·RLS; 재사용키는 capture_sessions 행에서
+> 도출=바디 불신; 쿠키 평문은 store.save[암호화기]로만·멱등 저장소는 SHA-256 requestHash 단방향만 영속) · capture-start
+> 응답에 login_url+auth_selector(비밀 아님) 추가 · 운영자-로컬 CLI `src/agent/capture-agent.ts`(DB/키 무접근·토큰 env·
+> https 강제·쿠키 단명) · 캡처 코어 `src/executor/login-capture.ts` 추출(dev 폴러·에이전트 공유). prod `startApi` 는
+> KEK(`rpa/<env>/api/browser_session/active`) 프로비저닝 시에만 등록(`VAULT_API_ROLE_ID` 게이트, 미설정=미등록 fail-closed).
+> **검증**: app/codegen typecheck 0 · codegen consistency green · KMS 단위 18/18(roundtrip·위변조·kid 회전·빌더 검증·
+> fail-closed) · boundary 매트릭스 단위(browser_session ALLOW api/worker·DENY gateway/lifecycle) · capture-complete 통합
+> 11/11 · capture-agent 통합 9/9(실 listen+temp-PG). **⚠ 배포 항목(오너)**: api AppRole + KEK 프로비저닝(미설정 시 안전한 성능저하).
+
+| 항목 | 조치 |
+|---|---|
+| 계약 | `security-middleware-contract.ts`(`browser_session` purpose) · `control-plane-contract.ts`(captureSessionComplete) |
+| 암호화기/보안 | `browser-session-store.ts`(KmsEnvelopeSessionEncryptor+buildKmsSessionEncryptor) · `vault-secret-store-boundary.ts`(RESOLVE_MATRIX browser_session) |
+| 백엔드 | `api/sessions.ts`(capture/complete+start login_url/auth_selector) · `agent/capture-agent.ts` · `executor/login-capture.ts` · `config/env.ts`(loadApiSessionEncryption) · `main.ts`(buildApiSessionStore 게이트 배선) · `dev/serve.ts`(DevPlaintext 등록) |
+| 테스트 | `test/session-encryptor-kms.unit.ts`(18) · `test/api-sessions-capture-complete.int.ts`(11) · `test/capture-agent.int.ts`(9) · `test/vault-secret-store-boundary.unit.ts`(browser_session 쌍) |
+| 비도입(오너/후속) | api AppRole+KEK 프로비저닝(배포) · 회전 grace 다중-kid 자동로드 · 워커 세션복원 prod 배선 |
