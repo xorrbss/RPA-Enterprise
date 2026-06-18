@@ -112,13 +112,20 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
   }
 
   // 하이웍스 결재 처리(승인/반려) — 건별 approver-게이트 결재 run 이 참조하는 단일 시나리오(params.decision 분기).
-  // navigate(doc_ref, origin=approval → 위 결재 site_profile/세션 재사용) → check observe: login_required→세션만료,
-  // 아니면 params.decision 으로 승인/반려 분기(IREL params.* 는 params_schema 로 타입). 승인=결재 버튼 클릭,
-  // 반려=사유 fill(args.value_ref:"reason" → ir-translate 가 params.reason 을 결정형 value 로 스레드, LLM 미경유)+반려 버튼.
-  // 확인 모달 클릭 후 recheck observe 로 판정(IR verify 노드는 런타임 미실행 — observe/on[]로). 클릭 노드는 side_effect:submit.
-  // ⚠ recheck 는 coarse(로그인 바운스=실패 / 그 외=성공): 문서-수준 "처리됨" witness 셀렉터는 Phase 2 실 recon(휴먼게이트)
-  //   에서 확정해 reviews_visible 등 등록 flag 로 강화한다(현재 닫힌 레지스트리엔 detail-page 처리 witness 없음 — 발명 금지).
-  //   클릭 act 는 버튼 부재 시 LLM plan 부재로 loud 실패(조용한 무성공 아님). reject⇒reason 필수성은 엔드포인트가 강제.
+  // navigate(doc_ref → 결재 site_profile/세션 재사용) → check observe(login? 세션만료) → open_layer(결재 버튼 클릭=승인 레이어
+  //   열기) → route observe(params.decision 분기) → 승인/반려 라디오 선택 → [반려: 의견 fill] → confirm(확인=커밋) → recheck.
+  // **결정형 클릭(act.args.click_selector)**: 실 recon(2026-06-18)으로 확정한 onclick/속성 셀렉터로 LLM 미경유 클릭한다 —
+  //   결재 버튼은 class/id 가 없어 LLM 이 button.approval-btn 으로 환각했었다(라이브 실패). 결정형 셀렉터:
+  //   결재(레이어 열기)=button[onclick*=getApprovalLayer], 승인 라디오=input[name=approval_value][value=2](기본이지만 명시),
+  //   반려 라디오=[value=4], 확인(커밋)=button[onclick*=approvalAction(false)](approvalAction(true)=다음문서·hidePopup 과 구분).
+  // 커밋(비가역)은 confirm 의 확인 클릭뿐(결재/라디오/의견은 미커밋). click_selector 미존재 시 settle 초과로 loud(조용한 무성공 금지).
+  // 비가역 안전(적대 break-it 보완): 라디오 클릭 후 실행기가 checked read-back(무효 클릭→loud), confirm 후 recheck→verify_committed
+  //   (assert_absent: 결재 버튼 소멸=실제 커밋 witness; 잔존 시 loud)로 '거짓 성공-보고'를 닫는다. settle 직전 abort 재확인(TOCTOU).
+  // ✅ 승인 경로 라이브 검증됨(2026-06-18 IB-품의-20260416-0003/929581 실제 승인 — 결재 버튼 소멸+승인 타임스탬프 확인).
+  // ⚠ **반려 경로=휴먼게이트(라이브 미검증)**: 클릭은 결정형이나 의견 fill selector 가 아직 LLM(환각 시 틀린 필드 fill 위험) —
+  //   prod 반려 사용 전 의견칸(textarea#approvalReasonMessage)을 fill_selector 로 결정형화 + 폐기가능 문서로 라이브 검증 필요.
+  const APPROVAL_BTN = 'button[onclick*="getApprovalLayer"]'; // 결재 = 승인 레이어 열기.
+  const CONFIRM_BTN = 'button[onclick*="approvalAction(false)"]'; // 확인 = 커밋(승인/반려 공통, 선택된 approval_value 반영).
   const decide = compileScenario(
     {
       meta: { name: "하이웍스 결재 처리", version: 1 },
@@ -137,52 +144,42 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
         check: {
           what: [{ action: "observe" }],
           on: [
-            { when: "flags.login_required", target: "session_expired", priority: 3 }, // 로그인 폼 = 세션 만료/미인증
-            { when: 'params.decision == "reject"', target: "do_reject_reason", priority: 2 },
-            { when: 'params.decision == "approve"', target: "do_approve", priority: 1 },
+            { when: "flags.login_required", target: "session_expired", priority: 2 }, // 로그인 폼 = 세션 만료/미인증
+            { when: "true", target: "open_layer", priority: 1 }, // 인증 유지 → 결재 레이어 열기(분기는 route 에서)
           ],
         },
-        do_approve: {
-          what: [
-            {
-              action: "act",
-              instruction:
-                '결재 문서 상세에서 현재 사용자의 "결재"(승인) 버튼을 클릭하는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"click","selector":"<결재 버튼 CSS 셀렉터>"}',
-            },
+        // 결재 버튼 클릭 = 승인 레이어 열기(미커밋). settle 폴링이 무거운 SPA 상세 렌더를 대기한다.
+        open_layer: { what: [{ action: "act", instruction: "결재(승인 레이어 열기) 버튼 클릭", args: { click_selector: APPROVAL_BTN } }], next: "route" },
+        route: {
+          what: [{ action: "observe" }],
+          on: [
+            { when: 'params.decision == "reject"', target: "reject_select", priority: 2 },
+            { when: 'params.decision == "approve"', target: "approve_select", priority: 1 },
           ],
-          side_effect: { kind: "submit", idempotency_key: "hiworks-decide-approve" },
+        },
+        // 승인: 승인 라디오(value=2, 기본이지만 명시 선택=결정형 보장) → 확인(커밋).
+        approve_select: {
+          what: [{ action: "act", instruction: "승인 라디오 선택", args: { click_selector: 'input[name="approval_value"][value="2"]' } }],
           next: "confirm",
         },
-        do_reject_reason: {
-          what: [
-            {
-              action: "act",
-              instruction:
-                '반려 사유 입력칸(textarea/input)을 채우는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"fill","selector":"<사유 입력칸 CSS 셀렉터>"}',
-              args: { value_ref: "reason" }, // params.reason → 결정형 value 스레드(LLM 미경유 fill).
-            },
-          ],
-          next: "do_reject_click",
+        // 반려: 반려 라디오(value=4) → 의견 fill(value_ref:reason; selector 는 현재 LLM — 후속 fill_selector) → 확인(커밋).
+        reject_select: {
+          what: [{ action: "act", instruction: "반려 라디오 선택", args: { click_selector: 'input[name="approval_value"][value="4"]' } }],
+          next: "reject_reason",
         },
-        do_reject_click: {
+        reject_reason: {
           what: [
             {
               action: "act",
-              instruction:
-                '결재 문서의 "반려" 버튼을 클릭하는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"click","selector":"<반려 버튼 CSS 셀렉터>"}',
+              instruction: '반려 의견 입력칸(textarea#approvalReasonMessage 등 "의견을 입력하세요")을 채운다. JSON 한 줄: {"operation":"fill","selector":"<의견칸 CSS 셀렉터>"}',
+              args: { value_ref: "reason" }, // params.reason → 결정형 value 스레드(LLM 미경유 fill value).
             },
           ],
-          side_effect: { kind: "submit", idempotency_key: "hiworks-decide-reject" },
           next: "confirm",
         },
+        // 확인 = 커밋(비가역). 선택된 approval_value(승인2/반려4)와 의견이 함께 제출된다.
         confirm: {
-          what: [
-            {
-              action: "act",
-              instruction:
-                '확인(제출) 모달이 떠 있으면 확인 버튼을 클릭하는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"click","selector":"<확인 버튼 CSS 셀렉터>"}',
-            },
-          ],
+          what: [{ action: "act", instruction: "확인(제출) 버튼 클릭 — 결재 커밋", args: { click_selector: CONFIRM_BTN } }],
           side_effect: { kind: "submit", idempotency_key: "hiworks-decide-confirm" },
           next: "recheck",
         },
@@ -190,8 +187,15 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
           what: [{ action: "observe" }],
           on: [
             { when: "flags.login_required", target: "submit_failed", priority: 2 }, // 제출 후 로그인 바운스 = 실패
-            { when: "true", target: "done", priority: 1 }, // 클릭 완료 + 인증 유지 = 성공(coarse; 문서 witness 는 recon 하드닝)
+            { when: "true", target: "verify_committed", priority: 1 }, // 비-바운스 → 커밋 효과 witness 검증
           ],
+        },
+        // 커밋 효과 witness(결정형 assert_absent): 확인 클릭 후 이 사용자의 결재 버튼(getApprovalLayer)이 사라져야 실제
+        //   커밋된 것(recon 확정 — 승인 후 결재 버튼 소멸). 잔존 시 loud(서버 거부/no-op 커밋을 success 로 은폐 금지).
+        //   이로써 비가역 결재의 '바운스 아니면 무조건 성공'(거짓 성공-보고)을 닫는다.
+        verify_committed: {
+          what: [{ action: "act", instruction: "결재 커밋 witness — 결재 버튼 소멸 확인", args: { assert_absent: APPROVAL_BTN } }],
+          next: "done",
         },
         done: { terminal: "success" },
         session_expired: { terminal: "fail_business" },

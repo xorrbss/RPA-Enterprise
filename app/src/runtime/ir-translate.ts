@@ -188,6 +188,17 @@ function mapAction(
       );
     }
     const value = valueRef !== undefined && typeof params?.[valueRef] === "string" ? (params[valueRef] as string) : undefined;
+    // 결정형 클릭: act.args.click_selector(LLM 미경유 클릭 타깃). assert_absent: 결정형 부재 단언(커밋 효과 witness).
+    // 셋(클릭/부재단언/fill)은 상호배타 — 각자 단일 결정형 모드(둘 이상 선언 시 IR 모순 loud).
+    const clickSelector = isRec(a.args) && typeof a.args.click_selector === "string" && a.args.click_selector.length > 0 ? a.args.click_selector : undefined;
+    const assertAbsent = isRec(a.args) && typeof a.args.assert_absent === "string" && a.args.assert_absent.length > 0 ? a.args.assert_absent : undefined;
+    const detModes = [clickSelector, assertAbsent, valueRef, secretRef].filter((x) => x !== undefined).length;
+    if (detModes > 1) {
+      throw new InterpreterError(
+        "IR_SCHEMA_INVALID",
+        `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/assert_absent/value_ref·vars 중 하나만 사용 가능(결정형 모드 상호배타)`,
+      );
+    }
     return {
       type: "act",
       instruction: a.instruction,
@@ -195,6 +206,8 @@ function mapAction(
       ...(secretRef !== undefined ? { secretRef } : {}),
       ...(valueRef !== undefined ? { valueRef } : {}),
       ...(value !== undefined ? { value } : {}),
+      ...(clickSelector !== undefined ? { clickSelector } : {}),
+      ...(assertAbsent !== undefined ? { assertAbsent } : {}),
     };
   }
   if (a.action === "extract") {
