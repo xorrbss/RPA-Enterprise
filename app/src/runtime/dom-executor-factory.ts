@@ -33,10 +33,12 @@ export interface DomExecutorFactoryDeps {
   readonly extractArtifactSink?: GatewayArtifactSink;
 }
 
-/** worker run-drive 컨텍스트(executorFactory seam): dom config 의 run-scoped ActionPlanCache 키 필드. */
+/** worker run-drive 컨텍스트(executorFactory seam): dom config 의 run-scoped ActionPlanCache 키 필드 + 자격증명 fill 감사용 tenant. */
 export interface DomExecutorRunContext {
   readonly scenarioVersionId: string;
   readonly browserIdentityVersion: number;
+  /** run 테넌트 — 자격증명 fill 시 executorPrincipal 에 per-run 으로 주입(secret.resolve 감사 row 테넌트 정합). */
+  readonly tenantId?: string;
 }
 
 /** deploy-time LLM 정책(dom 액션 LLMRequest 파라미터). run-scoped 아님(운영자/오케스트레이터 고정 값). */
@@ -55,8 +57,14 @@ export function createDomUtilityExecutorFactory(
   policy: DomExecutorLlmPolicy,
   deps: DomExecutorFactoryDeps = {},
 ): (provider: CdpSessionProvider, run: DomExecutorRunContext) => ExecutorPlugin {
-  return (provider, run) =>
-    new CompositeExecutor(
+  return (provider, run) => {
+    // 자격증명 fill 경계: secrets+executorPrincipal 주입 시 principal.tenantId 를 run 테넌트로 per-run 고정한다
+    //   (secret.resolve 감사 row 의 테넌트 정합 — resolve 권한은 runtime_identity 매트릭스 기반이라 tenant 무관, 감사만 정합용).
+    const principal =
+      deps.executorPrincipal !== undefined && run.tenantId !== undefined
+        ? { ...deps.executorPrincipal, tenantId: run.tenantId as (typeof deps.executorPrincipal)["tenantId"] }
+        : deps.executorPrincipal;
+    return new CompositeExecutor(
       new StagehandDomExecutor(
         gateway,
         provider,
@@ -69,9 +77,10 @@ export function createDomUtilityExecutorFactory(
         },
         deps.cache,
         deps.secrets,
-        deps.executorPrincipal,
+        principal,
         deps.extractArtifactSink,
       ),
       new UtilityExecutor(provider),
     );
+  };
 }
