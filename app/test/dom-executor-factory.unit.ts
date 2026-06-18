@@ -1,15 +1,15 @@
 /**
  * 단위 — createDomUtilityExecutorFactory(P5b). worker executorFactory seam 용 production 팩토리 빌더가
  * CompositeExecutor(StagehandDomExecutor(gateway), UtilityExecutor) 를 올바로 배선하는지 검증. 외부 의존 없음(fake gateway,
- * CDP 미사용 — extract 는 게이트웨이 전용). 실행: tsx test/dom-executor-factory.unit.ts.
+ * fake CDP). 실행: tsx test/dom-executor-factory.unit.ts.
  *
- * 검증: capabilities=dom+utility 합성 · extract(dom) → 게이트웨이 1회 + success(policy.model 전달 확인) · navigate(utility)
+ * 검증: capabilities=dom+utility 합성 · extract(dom) → DOM snapshot + 게이트웨이 1회 + success(policy.model 전달 확인) · navigate(utility)
  *  → forLease(provider) 경유(게이트웨이 미호출) = composite 라우팅 분리. run-scoped 컨텍스트(scenarioVersionId/
  *  browserIdentityVersion) 의 seam 전달은 worker int(runtime-worker-drive.int)가 핀고정.
  */
 import type { ExecutorPlugin, PageState, RunContext } from "../../ts/core-types";
 import type { LLMRequest, LLMResponse } from "../../ts/security-middleware-contract";
-import type { CdpSessionProvider } from "../src/executor/cdp-session";
+import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
 import type { LlmGatewayCaller } from "../src/executor/stagehand-dom-executor";
 import { createDomUtilityExecutorFactory } from "../src/runtime/dom-executor-factory";
 
@@ -24,10 +24,13 @@ function check(label: string, cond: boolean, detail?: string): void {
 
 let gatewayCalls = 0;
 let lastModel: string | undefined;
+let lastUserMessage = "";
 const fakeGateway: LlmGatewayCaller = {
   call: async (req: LLMRequest): Promise<LLMResponse> => {
     gatewayCalls += 1;
     lastModel = (req as { model?: string }).model;
+    const content = req.messages.find((m) => m.role === "user")?.content;
+    lastUserMessage = typeof content === "string" ? content : JSON.stringify(content ?? "");
     return {
       outputRef: "art://out",
       usage: { inputTokens: 1, outputTokens: 1, cost: 0 },
@@ -39,11 +42,30 @@ const fakeGateway: LlmGatewayCaller = {
 
 const policy = { model: "codex", promptTemplateVersion: "v1", budget: { maxInputTokens: 10000, maxOutputTokens: 4096, maxCost: 0.85 } };
 
-// extract(read-only)는 forLease 미사용 → throwing provider 로 "CDP 미경유" 보장. navigate(utility)는 forLease 호출 → throw 로 라우팅 증명.
-const throwingProvider = {
-  forLease: () => {
-    throw new Error("forLease-called");
+let evaluateCalls = 0;
+let gotoCalls = 0;
+const fakeSession: CdpSession = {
+  url: () => "https://x.example/",
+  goto: async () => {
+    gotoCalls += 1;
+    throw new Error("goto-called");
   },
+  reload: async () => {},
+  evaluate: async () => {
+    evaluateCalls += 1;
+    return "<body><table><tr><td>Review A</td></tr></table></body>" as never;
+  },
+  sendCDP: async () => undefined as never,
+  click: async () => {},
+  fill: async () => {},
+  selectOption: async () => {},
+  setInputFiles: async () => {},
+  downloadDir: () => "/tmp",
+  waitForDownload: async () => true,
+  close: async () => {},
+};
+const fakeProvider = {
+  forLease: () => fakeSession,
 } as unknown as CdpSessionProvider;
 
 const cannedPageState: PageState = {
@@ -63,7 +85,7 @@ function ctx(): RunContext {
 
 async function main(): Promise<void> {
   const factory = createDomUtilityExecutorFactory(fakeGateway, policy);
-  const executor: ExecutorPlugin = factory(throwingProvider, { scenarioVersionId: "sv-1", browserIdentityVersion: 3 });
+  const executor: ExecutorPlugin = factory(fakeProvider, { scenarioVersionId: "sv-1", browserIdentityVersion: 3 });
 
   // 1) capabilities = dom(StagehandDom) + utility(Utility) 합성.
   const caps = executor.capabilities();
@@ -75,6 +97,8 @@ async function main(): Promise<void> {
     { type: "extract", instruction: "get rows", output: { schemaRef: "reviews", schemaVersion: "1", strict: true } },
     ctx(),
   );
+  check("extract → DOM snapshot evaluate 1회", evaluateCalls === 1, String(evaluateCalls));
+  check("extract → DOM snapshot included in gateway user message", lastUserMessage.includes("Review A"));
   check("extract → dom executor → 게이트웨이 1회 호출", gatewayCalls === 1, String(gatewayCalls));
   check("extract → policy.model('codex') 게이트웨이 요청에 전달", lastModel === "codex", String(lastModel));
   check("extract → success StepResult(action=extract)", res.status === "success" && res.action === "extract", JSON.stringify({ status: res.status, action: res.action }));
@@ -84,9 +108,9 @@ async function main(): Promise<void> {
   try {
     await executor.execute("n.1", { type: "navigate", url: "https://x.example/" }, ctx());
   } catch (e) {
-    utilityRouted = /forLease-called/.test(String(e));
+    utilityRouted = /goto-called/.test(String(e));
   }
-  check("navigate → utility 로 라우팅(forLease 경유, 게이트웨이 미경유)", utilityRouted && gatewayCalls === 1, `utilityRouted=${utilityRouted} gatewayCalls=${gatewayCalls}`);
+  check("navigate → utility 로 라우팅(goto 경유, 게이트웨이 미경유)", utilityRouted && gotoCalls === 1 && gatewayCalls === 1, `utilityRouted=${utilityRouted} gatewayCalls=${gatewayCalls} gotoCalls=${gotoCalls}`);
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);

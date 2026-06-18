@@ -8,7 +8,7 @@
  */
 import type { ArtifactRef, PageState, RunContext, StepResult } from "../../ts/core-types";
 import type { ErrorCode } from "../../ts/error-catalog";
-import type { LLMResponse } from "../../ts/security-middleware-contract";
+import type { LLMRequest, LLMResponse } from "../../ts/security-middleware-contract";
 import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
 import { GatewayError } from "../src/gateway/llm-gateway";
 import {
@@ -48,23 +48,25 @@ const cfg = { model: "codex", promptTemplateVersion: "v1", budget: { maxInputTok
 
 function countingGateway(resp: Partial<LLMResponse> = {}) {
   let n = 0;
+  let lastReq: LLMRequest | undefined;
   const gw: LlmGatewayCaller = {
-    call: async () => {
+    call: async (req) => {
       n += 1;
+      lastReq = req;
       return { outputRef: "art://out" as ArtifactRef, usage: { inputTokens: 1, outputTokens: 1, cost: 0 }, finishReason: "stop", ...resp };
     },
   };
-  return { gw, calls: () => n };
+  return { gw, calls: () => n, lastReq: () => lastReq };
 }
 const errGateway = (code: ErrorCode): LlmGatewayCaller => ({ call: async () => { throw new GatewayError(code, "boom"); } });
 
-function fakeSessions() {
+function fakeSessions(dom = "<body><main>hello</main></body>") {
   const ops: string[] = [];
   const session: CdpSession = {
     url: () => "u",
     goto: async () => {},
     reload: async () => {},
-    evaluate: async () => undefined as never,
+    evaluate: async () => dom as never,
     sendCDP: async () => undefined as never,
     click: async (s) => void ops.push(`click:${s}`),
     fill: async (s, v) => void ops.push(`fill:${s}=${v}`),
@@ -105,12 +107,19 @@ async function main(): Promise<void> {
 
   // extract → read-only, extracted set, output.rowCount = {rows} 길이(표준 노드 출력 투영, ir-expression §2)
   {
-    const ex = new StagehandDomExecutor(countingGateway({ parsedJson: { rows: [1, 2, 3] } }).gw, sess(), cfg);
+    const g = countingGateway({ parsedJson: { rows: [1, 2, 3] } });
+    const ex = new StagehandDomExecutor(g.gw, fakeSessions("<body><table><tr><td>Alice</td></tr></table></body>").provider, cfg);
     const r = await ex.execute("s1", { type: "extract", instruction: "get reviews", output: EXTRACT_OUT }, makeCtx());
     check(
       "extract: success + extracted + artifacts + output.rowCount=3",
       r.status === "success" && (r.extracted as { rows: number[] }).rows.length === 3 && r.artifacts[0] === "art://out" && (r.output as { rowCount?: number }).rowCount === 3,
     );
+    const userContent = g.lastReq()?.messages.find((m) => m.role === "user")?.content;
+    const systemContent = g.lastReq()?.messages.find((m) => m.role === "system")?.content;
+    const userMessage = typeof userContent === "string" ? userContent : JSON.stringify(userContent ?? "");
+    const systemMessage = typeof systemContent === "string" ? systemContent : JSON.stringify(systemContent ?? "");
+    check("extract: gateway request includes current DOM snapshot", userMessage.includes("Alice"));
+    check("extract: prompt forbids plan-only output", systemMessage.includes("Do not return an extraction plan"));
   }
 
   // extract: rows 봉투 없으면 rowCount 미산출(→ node.row_count 미투영, loud).

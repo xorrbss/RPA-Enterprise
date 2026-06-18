@@ -70,6 +70,27 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(banner.textContent).toContain("단계 트레이스"); // 구체 사유 대신 유도(reason 창작 금지)
   });
 
+  test("failed_system + failure_reason → 코드와 메시지를 상세 배너에 표시", async () => {
+    renderApp(fakeClient({
+      getRun: async (id) => ({
+        run_id: id,
+        status: "failed_system",
+        worker_id: "w1",
+        attempts: 1,
+        as_of: null,
+        failure_reason: { code: "RUN_LOOP_FAILED", message: "site profile not found" },
+      }),
+    }));
+    await openDetail();
+    const banner = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(".arrival-banner");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(banner.textContent).toContain("RUN_LOOP_FAILED");
+    expect(banner.textContent).toContain("site profile not found");
+  });
+
   // 비-터미널(running)은 도착하지 않았으므로 배너를 그리지 않는다(조용한 false 금지 가드).
   test("running → 도착 배너 미표시", async () => {
     renderApp(); // 기본 픽스처 getRun = running

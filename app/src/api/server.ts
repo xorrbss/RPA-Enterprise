@@ -108,6 +108,7 @@ interface RunRow {
   worker_id: string | null;
   attempts: number;
   as_of: Date | null;
+  failure_reason: unknown;
 }
 
 export function buildServer(deps: ApiServerDeps): FastifyInstance {
@@ -181,7 +182,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     }
     const run = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const result = await client.query<RunRow>(
-        `SELECT id, status, worker_id, attempts, as_of FROM runs WHERE id = $1::uuid`,
+        `SELECT id, status, worker_id, attempts, as_of, failure_reason FROM runs WHERE id = $1::uuid`,
         [runId],
       );
       return result.rows[0] ?? null;
@@ -196,6 +197,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       worker_id: run.worker_id,
       attempts: run.attempts,
       as_of: run.as_of,
+      failure_reason: normalizeFailureReason(run.failure_reason),
     };
   });
 
@@ -329,7 +331,13 @@ async function createRun(deps: ApiServerDeps, request: FastifyRequest): Promise<
   try {
     await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       // scenario_version 존재 확인(RLS 스코프). 부재 → IR_SCHEMA_INVALID(FK 위반 500 회피).
-      const sv = await c.query(`SELECT 1 FROM scenario_versions WHERE id = $1::uuid`, [scenarioVersionId]);
+      const sv = await c.query(
+        `SELECT 1
+           FROM scenario_versions sv
+           JOIN scenarios s ON s.tenant_id=sv.tenant_id AND s.id=sv.scenario_id
+          WHERE sv.id = $1::uuid AND s.archived_at IS NULL`,
+        [scenarioVersionId],
+      );
       if (sv.rowCount === 0) {
         throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_not_found" });
       }
@@ -785,4 +793,11 @@ function apiErrorBody(err: ApiResponseError, correlationId: string): ApiError {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeFailureReason(value: unknown): { code: string; message: string } | null {
+  if (!isRecord(value)) return null;
+  const code = typeof value.code === "string" && value.code.length > 0 ? value.code : "RUN_FAILED";
+  const message = typeof value.message === "string" && value.message.length > 0 ? value.message : code;
+  return { code, message };
 }

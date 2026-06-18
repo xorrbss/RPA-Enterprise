@@ -6,7 +6,7 @@ import { type ValidationResult } from "../api/types";
 import { errorLabel } from "../components/badges";
 import { navigate } from "../router";
 
-// 시나리오 검사 — POST /v1/scenarios/{id}/validate(비변이)로 V1–V11 정적검증 dry-run, ValidationReport 렌더.
+// 시나리오 검증 — POST /v1/scenarios/{id}/validate(비변이)로 V1–V11 정적검증 dry-run, ValidationReport 렌더.
 // IR 본문은 붙여넣기(에디터 전 단계). 저장/승격은 scenarioStudio.
 interface Issue {
   rule?: string;
@@ -54,7 +54,7 @@ export function IrValidationView(): JSX.Element {
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>시나리오 정적검사 (V1–V11)</h2>
+        <h2>시나리오 정적검증 (V1–V11)</h2>
       </div>
       <div className="panel-body" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
         <label style={{ fontSize: 12, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 4 }}>
@@ -83,7 +83,7 @@ export function IrValidationView(): JSX.Element {
             disabled={scenarioId.trim() === "" || mut.isPending}
             onClick={() => mut.mutate()}
           >
-            {mut.isPending ? "검사 중…" : "검사 실행"}
+            {mut.isPending ? "검증 중…" : "검증 실행"}
           </button>
         </div>
         {mut.isError && <div className="badge red">{errorLabel(mut.error)}</div>}
@@ -92,10 +92,10 @@ export function IrValidationView(): JSX.Element {
         {/* api-surface §2(validate=dry-run, line 91)·저장X, promote만 승격). 승격은 scenarioStudio 별도 명령으로 안내만 한다. */}
         {mut.data !== undefined && (
           <div>
-            <span className={`badge ${mut.data.valid ? "green" : "red"}`}>{mut.data.valid ? "검증 통과" : "거부"}</span>
+            <span className={`badge ${mut.data.valid ? "green" : "red"}`}>{mut.data.valid ? "정적 구조 검증 통과" : "검증 실패"}</span>
             {mut.data.valid && (
               <p className="subtle" style={{ marginTop: 8 }}>
-                이 화면은 정적검증(V1–V11)만 확인합니다. prod 승격은 별도 명령(관리자 권한·버전 일치 필요)으로,{" "}
+                이 결과는 IR 문서 구조, IREL 식, 그래프 규칙만 확인합니다. 사이트 로그인 상태, 셀렉터 존재, 실제 추출 가능성은 실행으로 별도 확인해야 합니다. prod 승격은 별도 명령(관리자 권한·버전 일치 필요)으로,{" "}
                 <button className="linklike" type="button" onClick={() => navigate("scenarioStudio")}>
                   자동화 만들기에서 진행 <span aria-hidden="true">→</span>
                 </button>

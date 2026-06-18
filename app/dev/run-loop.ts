@@ -17,6 +17,7 @@ import type { Pool } from "pg";
 
 import type { ArtifactRef, ExecutorPlugin, SecretRef } from "../../ts/core-types";
 import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../ts/security-middleware-contract";
+import type { RunState } from "../../ts/state-machine-types";
 import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
@@ -259,7 +260,9 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
         console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
       } catch (e) {
         // 해소 실패(url_ref params 누락·0-match·ambiguous·셀렉터 미설정) 또는 구동 실패는 표면화(은폐 금지). run은 claimed에서 멈춤.
-        console.error(`run-loop: ${next.id.slice(0, 8)} 해소/구동 실패 — ${e instanceof Error ? e.message : String(e)}`);
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(`run-loop: ${next.id.slice(0, 8)} 해소/구동 실패 — ${message}`);
+        await markRunFailedSystem(pool, tenantId, next.id, next.correlation_id, message);
       }
     } catch (e) {
       console.error("run-loop tick error:", e instanceof Error ? e.message : String(e));
@@ -281,4 +284,69 @@ export async function startRunLoop(pool: Pool, tenantId: string, intervalMs = 20
       rmSync(downloadDir, { recursive: true, force: true });
     },
   };
+}
+
+async function markRunFailedSystem(
+  pool: Pool,
+  tenantId: string,
+  runId: string,
+  correlationId: string,
+  message: string,
+): Promise<void> {
+  const reason = { code: "RUN_LOOP_FAILED", message };
+  await withTenantTx(pool, tenantId, async (c) => {
+    const statusRow = await c.query<{ status: RunState }>(
+      `SELECT status FROM runs WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+      [tenantId, runId],
+    );
+    const status = statusRow.rows[0]?.status;
+    if (status === undefined || isTerminal(status)) return;
+
+    const transitionInput = failedTransitionFor(status);
+    if (transitionInput === null) {
+      await c.query(
+        `UPDATE runs
+            SET failure_reason=$3::jsonb, updated_at=now()
+          WHERE tenant_id=$1::uuid AND id=$2::uuid AND status=$4`,
+        [tenantId, runId, JSON.stringify(reason), status],
+      );
+      return;
+    }
+
+    const transitioned = await applyRunTransition(c, {
+      tenantId,
+      runId,
+      fromStatus: status,
+      event: transitionInput.event,
+      guard: transitionInput.guard,
+      correlationId,
+      eventIdempotencyKey: `${runId}:run-loop-failed`,
+    });
+    if (!transitioned.applied) return;
+    await c.query(
+      `UPDATE runs
+          SET failure_reason=$3::jsonb, updated_at=now()
+        WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+      [tenantId, runId, JSON.stringify(reason)],
+    );
+  });
+}
+
+function isTerminal(status: RunState): boolean {
+  return status === "completed" || status === "cancelled" || status === "failed_business" || status === "failed_system";
+}
+
+function failedTransitionFor(status: RunState):
+  | { event: { type: "init_failed" }; guard: { initFailBelowThreshold: false } }
+  | { event: { type: "unrecoverable_exception" }; guard: { exceptionClass: "system" } }
+  | { event: { type: "bookmark_failed" }; guard: Record<string, never> }
+  | { event: { type: "restore_failed" }; guard: { loginBypassPossible: false } }
+  | { event: { type: "finalize_failed" }; guard: Record<string, never> }
+  | null {
+  if (status === "claimed") return { event: { type: "init_failed" }, guard: { initFailBelowThreshold: false } };
+  if (status === "running") return { event: { type: "unrecoverable_exception" }, guard: { exceptionClass: "system" } };
+  if (status === "suspending") return { event: { type: "bookmark_failed" }, guard: {} };
+  if (status === "resuming") return { event: { type: "restore_failed" }, guard: { loginBypassPossible: false } };
+  if (status === "completing") return { event: { type: "finalize_failed" }, guard: {} };
+  return null;
 }

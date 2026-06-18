@@ -27,7 +27,7 @@
 | `auth-rbac.md` | (인증·인가·테넌시) | RBAC 역할(viewer/operator/reviewer/approver/admin)·권한 매트릭스·tenant_id 출처·RLS 정책 — v1.5 |
 | `api-surface.md` | (제어평면 API) | REST 엔드포인트 인벤토리·If-Match·Idempotency-Key·as_of(D1 OpenAPI 입력) — v1.5 |
 | `ops-defaults.md` | (운영 기본값) | 전이 임계·lease TTL·서킷·LLM retry/budget·artifact retention·sweeper 주기 + 테스트 픽스처값 — v1.6 |
-| `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·static-validation.ts·event-payload-registry.ts·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·fixtures. tsc strict 통과·전이 fixtures 84/84 PASS·validators 42/42 PASS·static validation 33/33 PASS — v2.4 |
+| `codegen/` | (D1 생성물) | 계약→실행코드: types.ts·validators.ts(ajv)·static-validation.ts·event-payload-registry.ts·transitions.ts·error-middleware.ts·openapi.yaml·asyncapi.yaml·fixtures. tsc strict 통과·전이 fixtures 84/84 PASS·validators 44/44 PASS·static validation 36/36 PASS — v2.4 |
 | `architecture.md` | (구현 설계, 계약 아님) | 스택·실행기(**Stagehand v3 CDP, Playwright 제거**)·컴포넌트↔계약 매핑·배포·빌드순서·§10 IREL — v2.0 |
 | `build-prompt.md` | (개발 착수 프롬프트) | 코딩 에이전트용 프로덕션 빌드 마스터 프롬프트(D2–D7 단계별 DoD·검증 게이트·품질 바) — v2.4 |
 
@@ -707,3 +707,18 @@
 | 백엔드 | `reads.ts`: `GET /v1/runs/{id}/artifacts`(artifact.read·RLS·최신순 커서, listRuns 골격 복제). SELECT 화이트리스트(content/object_ref/sha256 미선택). content read·artifactStore.get 호출 없음 → §10 audit append 불요. `app/test/api-run-artifacts.int.ts`(18 checks) |
 | web | `client.listRunArtifacts` + `RunArtifactItem` 타입 + RunTrace 상세에 artifact 목록 패널(type·상태·보존·artifact ID). ID는 기존 '산출물 조회'(#129) 입력용 |
 | 비도입 | sha256/object_ref/content 목록 노출 · `?run_id=` 쿼리형 URL · orphan(run 없는) artifact 목록 · status 필터 — 후속/오너결정 |
+
+## v2.23 패치 로그 (시나리오 스튜디오 PRD P0 — extract.instruction 계약 정합)
+
+> **검증된 내부 모순 해소**. `schema/ir.schema.json`은 extract action에서 `schema_ref`만 required로 보았지만,
+> 런타임 `ir-translate.ts`와 dom executor 경계는 `extract.instruction`을 필수 작업 지시로 요구했다. 그 결과 저장/검증은
+> 통과하고 실행만 `IR_SCHEMA_INVALID(extract.instruction 필요)`로 실패하는 "저장됨 ≠ 실행 가능" 상태가 생겼다.
+> PRD `prd-scenario-studio-2026-06-18.md` FR-4의 권고 옵션①을 채택해 계약을 런타임에 맞춘다.
+
+| 항목 | 조치 |
+|---|---|
+| 계약 | `schema/ir.schema.json`: `action=="extract"`이면 `instruction` + `schema_ref`를 required로 고정. 조용한 통과 후 런타임 실패 금지 |
+| codegen | `validators.fixtures.ts`: instruction 없는 extract 거부 fixture 추가. `types.ts`: `IRExtractAction` 식별 유니언으로 `instruction`/`schema_ref` 필수화 |
+| web | 쉬운 만들기/단계 편집이 extract instruction 입력을 받고 IR에 직렬화. 빈 instruction은 스키마 검증에서 거부됨을 UI에 노출 |
+| dev seed | raw 주문수집 seed extract에도 instruction을 부여해 새 계약과 정합 |
+| 후속 | 검증 결과 보장범위 문구(C-FR5)와 run-loop failed_* 전이(C-FR3)는 별도 PRD 태스크로 남김 |

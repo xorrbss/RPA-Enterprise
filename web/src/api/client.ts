@@ -16,6 +16,7 @@ import {
   type ScenarioItem,
   type RunArtifactItem,
   type ScenarioMutationResult,
+  type ScenarioVersionItem,
   type SiteItem,
   type StepSummary,
   type ValidationResult,
@@ -33,10 +34,13 @@ export interface ApiClient {
   listDlq(kind: "workitem" | "sink", p?: ListParams): Promise<Paginated<DeadLetterItem>>;
   listScenarios(p?: ListParams): Promise<Paginated<ScenarioItem>>;
   listSites(p?: ListParams): Promise<Paginated<SiteItem>>;
+  listGatewayPolicies(): Promise<Paginated<GatewayPolicy>>;
   getGatewayPolicy(model?: string): Promise<GatewayPolicy>;
+  createGatewayPolicy(body: GatewayPolicyUpdate, idempotencyKey: string): Promise<GatewayPolicy>;
   // admin gateway policy 갱신: PUT If-Match(현재 version) + Idempotency-Key + body. 충돌→POLICY_VERSION_CONFLICT(412),
   // 예산>컨텍스트→LLM_CAPABILITY_MISMATCH(422), 권한 없음→AUTHZ_FORBIDDEN(403) 표면화.
   updateGatewayPolicy(version: number, body: GatewayPolicyUpdate, idempotencyKey: string): Promise<unknown>;
+  deleteGatewayPolicy(model: string, version: number, idempotencyKey: string): Promise<unknown>;
   // 운영자 명령(POST + Idempotency-Key). 어휘체인 abort→cancelled, W10 replay.
   abortRun(runId: string, idempotencyKey: string): Promise<unknown>;
   // DLQ 재처리(W10). kind로 workitem/sink 분기(백엔드 `?kind=` — sink는 별도 OperationId 멱등 네임스페이스).
@@ -58,6 +62,10 @@ export interface ApiClient {
   escalateHumanTask(id: string, idempotencyKey: string, reason?: string): Promise<unknown>;
   // scenario 승격: If-Match(현재 version) + body{target:"prod"} + Idempotency-Key. 충돌→SCENARIO_VERSION_CONFLICT 표면화.
   promoteScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
+  setScenarioPromotion(scenarioId: string, version: number, target: "prod" | "draft", idempotencyKey: string): Promise<unknown>;
+  archiveScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
+  listScenarioVersions(scenarioId: string): Promise<Paginated<ScenarioVersionItem>>;
+  rollbackScenario(scenarioId: string, sourceVersion: number, latestVersion: number, idempotencyKey: string): Promise<ScenarioMutationResult>;
   // 상세 GET-by-id(RLS 스코프, 미존재/타테넌트→404). drill-down 뷰의 선행.
   getRun(runId: string): Promise<RunDetail>;
   getWorkitem(id: string): Promise<WorkitemItem>;
@@ -177,6 +185,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listDlq: (kind, p) => get(`/v1/dlq${queryString({ ...p, kind })}`),
     listScenarios: (p) => get(`/v1/scenarios${queryString(p)}`),
     listSites: (p) => get(`/v1/sites${queryString(p)}`),
+    listGatewayPolicies: () => get(`/v1/gateway/policies`),
     getGatewayPolicy: async (model) => {
       // GET은 ETag(=version) 헤더로 동시성 토큰을 노출 → PUT If-Match의 선행 read. body shape는 불변.
       const res = await doFetch(`${opts.baseUrl}/v1/gateway/policy${queryString(model ? { model } : undefined)}`, {
@@ -187,8 +196,14 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       const version = parseEtagVersion(res.headers.get("etag"));
       return version !== undefined ? { ...body, version } : body;
     },
+    createGatewayPolicy: (body, key) => post(`/v1/gateway/policy`, key, body),
     updateGatewayPolicy: (version, body, key) =>
       send("PUT", `/v1/gateway/policy`, body, { "If-Match": String(version), "Idempotency-Key": key }),
+    deleteGatewayPolicy: (model, version, key) =>
+      send("DELETE", `/v1/gateway/policy${queryString({ model })}`, undefined, {
+        "If-Match": String(version),
+        "Idempotency-Key": key,
+      }),
     abortRun: (runId, idempotencyKey) => post(`/v1/runs/${runId}/abort`, idempotencyKey),
     replayDeadLetter: (deadLetterId, idempotencyKey, kind) => post(`/v1/dlq/${deadLetterId}/replay${queryString({ kind })}`, idempotencyKey),
     approveSite: (siteId, key, opts) => post(`/v1/sites/${siteId}/approve`, key, opts ?? {}),
@@ -201,6 +216,13 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     escalateHumanTask: (id, key, reason) => post(`/v1/human-tasks/${id}/escalate`, key, reason !== undefined ? { reason } : {}),
     promoteScenario: (scenarioId, version, key) =>
       post(`/v1/scenarios/${scenarioId}/promote`, key, { target: "prod" }, { "If-Match": String(version) }),
+    setScenarioPromotion: (scenarioId, version, target, key) =>
+      post(`/v1/scenarios/${scenarioId}/promote`, key, { target }, { "If-Match": String(version) }),
+    archiveScenario: (scenarioId, version, key) =>
+      post(`/v1/scenarios/${scenarioId}/archive`, key, {}, { "If-Match": String(version) }),
+    listScenarioVersions: (scenarioId) => get(`/v1/scenarios/${scenarioId}/versions`),
+    rollbackScenario: (scenarioId, sourceVersion, latestVersion, key) =>
+      post(`/v1/scenarios/${scenarioId}/versions/${sourceVersion}/rollback`, key, {}, { "If-Match": String(latestVersion) }),
     getRun: (id) => get(`/v1/runs/${id}`),
     getWorkitem: (id) => get(`/v1/workitems/${id}`),
     getHumanTask: (id) => get(`/v1/human-tasks/${id}`),

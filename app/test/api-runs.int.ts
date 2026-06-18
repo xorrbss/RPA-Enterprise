@@ -37,8 +37,10 @@ const TENANT_B = "00000000-0000-0000-0000-0000000000b2";
 const SCENARIO_A = "10000000-0000-0000-0000-0000000000a3";
 const SVER_A = "10000000-0000-0000-0000-0000000000a4";
 const RUN_A = "10000000-0000-0000-0000-0000000000a7";
+const RUN_FAILED_A = "10000000-0000-0000-0000-0000000000af";
 const WORKITEM_A = "10000000-0000-0000-0000-0000000000a5";
 const CORR_A = "20000000-0000-0000-0000-0000000000a1";
+const CORR_FAILED_A = "20000000-0000-0000-0000-0000000000af";
 const SCENARIO_B = "10000000-0000-0000-0000-0000000000b3";
 const SVER_B = "10000000-0000-0000-0000-0000000000b4";
 const RUN_B = "10000000-0000-0000-0000-0000000000b7";
@@ -120,6 +122,13 @@ async function main(): Promise<void> {
     console.log("migrations applied (concurrency → core)");
 
     await seedTenantRun(pool, TENANT_A, SCENARIO_A, SVER_A, RUN_A, CORR_A);
+    await withTenantTx(pool, TENANT_A, (c) =>
+      c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of, failure_reason)
+         VALUES ($1,$2,$3,'failed_system',$4,3,'2026-06-14T00:00:00Z',$5::jsonb)`,
+        [RUN_FAILED_A, TENANT_A, SVER_A, CORR_FAILED_A, JSON.stringify({ code: "RUN_LOOP_FAILED", message: "site profile not found" })],
+      ),
+    );
     await seedTenantRun(pool, TENANT_B, SCENARIO_B, SVER_B, RUN_B, CORR_B);
     await withTenantTx(pool, TENANT_A, (c) =>
       c.query(`INSERT INTO workitems (id, tenant_id, connector_id, unique_reference) VALUES ($1,$2,'d43','wi-a')`, [WORKITEM_A, TENANT_A]),
@@ -199,7 +208,20 @@ async function main(): Promise<void> {
       check("own run body.status", runBody.status === "running", JSON.stringify(runBody));
       check("own run body.attempts", runBody.attempts === 2, JSON.stringify(runBody));
       check("own run body.worker_id null", runBody.worker_id === null, JSON.stringify(runBody));
+      check("own run body.failure_reason null", runBody.failure_reason === null, JSON.stringify(runBody));
       check("own run body.as_of round-trips", typeof runBody.as_of === "string" && new Date(runBody.as_of).toISOString() === "2026-06-14T00:00:00.000Z", JSON.stringify(runBody));
+
+      // 3a) failed_* run은 비민감 failure_reason을 상세 응답에 노출한다(C-FR3 운영 가시성).
+      const failedRun = await app.inject({
+        method: "GET",
+        url: `/v1/runs/${RUN_FAILED_A}`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      });
+      check("failed run detail → 200", failedRun.statusCode === 200, failedRun.body);
+      check("failed run failure_reason code",
+        failedRun.json().failure_reason?.code === "RUN_LOOP_FAILED", failedRun.body);
+      check("failed run failure_reason message",
+        failedRun.json().failure_reason?.message === "site profile not found", failedRun.body);
 
       // 3b) RBAC 허용: viewer 역할도 run.read 허용 → 200(auth-rbac §2).
       const viewerRead = await app.inject({

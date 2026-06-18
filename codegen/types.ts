@@ -59,6 +59,8 @@ export interface IRMeta {
   version: number;
   /** const "1.x" */
   ir_version?: "1.x";
+  /** 콘솔 시나리오 스튜디오 편집 모드 보존. */
+  studio_mode?: "easy" | "form" | "ir";
 }
 
 /**
@@ -139,13 +141,27 @@ export interface IRWhere {
 
 /**
  * 액션. required: action. additionalProperties:false → 최상위 오타 금지.
- * action==="shell" 이면 cmd_ref 필수(allOf if/then) — 타입에서는 식별 union 으로 강제한다.
+ * action별 required 필드는 ir.schema.json allOf(if/then)와 맞춰 식별 union 으로 강제한다.
  */
-export type IRAction = IRShellAction | IRNonShellAction;
+export type IRAction = IRShellAction | IRExtractAction | IRNavigateAction | IRGenericAction;
 
-/** action !== "shell" 인 액션. (cmd_ref 는 shell 전용이므로 비-shell 에서는 의미 없음/미사용) */
-export interface IRNonShellAction extends IRActionFields {
-  action: Exclude<IRActionType, "shell">;
+/** schema-level 필수 확장이 없는 액션. */
+export interface IRGenericAction extends IRActionFields {
+  action: Exclude<IRActionType, "shell" | "extract" | "navigate">;
+}
+
+/** action === "extract". instruction + schema_ref 필수. */
+export interface IRExtractAction extends IRActionFields {
+  action: "extract";
+  instruction: string;
+  /** extract 출력 스키마 */
+  schema_ref: string;
+}
+
+/** action === "navigate". url_ref 필수. */
+export interface IRNavigateAction extends IRActionFields {
+  action: "navigate";
+  url_ref: string;
 }
 
 /** action === "shell". cmd_ref 필수(signed command registry 키). */

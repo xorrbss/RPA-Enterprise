@@ -17,6 +17,7 @@ export function ActionButton(props: {
   disabled?: boolean;
   action?: string;
   inputLabel?: string;
+  title?: string;
 }): JSX.Element | null {
   const can = useCan();
   const qc = useQueryClient();
@@ -40,6 +41,7 @@ export function ActionButton(props: {
       <button
         className="btn"
         type="button"
+        title={props.title}
         disabled={props.disabled === true || mut.isPending}
         onClick={() => {
           setInput("");

@@ -45,6 +45,7 @@ interface RunListRow {
   attempts: number;
   as_of: Date | null;
   workitem_id: string | null;
+  failure_reason: unknown;
   created_at: Date;
 }
 
@@ -146,6 +147,14 @@ function stepExceptionSummary(ex: { class?: unknown; code?: unknown } | null): {
   return { class: cls, code };
 }
 
+function normalizeFailureReason(value: unknown): { code: string; message: string } | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const code = typeof record.code === "string" && record.code.length > 0 ? record.code : "RUN_FAILED";
+  const message = typeof record.message === "string" && record.message.length > 0 ? record.message : code;
+  return { code, message };
+}
+
 interface RunArtifactRow {
   id: string;
   type: string;
@@ -166,7 +175,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<RunListRow>(
-        `SELECT id, status, scenario_version_id, worker_id, attempts, as_of, workitem_id, created_at
+        `SELECT id, status, scenario_version_id, worker_id, attempts, as_of, workitem_id, failure_reason, created_at
            FROM runs
           WHERE tenant_id = $1::uuid
             AND ($2::text IS NULL OR status = $2)
@@ -199,6 +208,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           attempts: r.attempts,
           as_of: r.as_of !== null ? r.as_of.toISOString() : null,
           workitem_id: r.workitem_id,
+          failure_reason: normalizeFailureReason(r.failure_reason),
           // runs에 진행-노드 컬럼 없음(계약 미약속) → null. 과다 렌더 금지.
           current_node: null,
         }),
@@ -513,8 +523,9 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
              SELECT id, version, promotion_status FROM scenario_versions v
               WHERE v.tenant_id = s.tenant_id AND v.scenario_id = s.id
               ORDER BY v.version DESC LIMIT 1
-           ) sv ON true
+          ) sv ON true
           WHERE s.tenant_id = $1::uuid
+            AND s.archived_at IS NULL
             AND ($2::timestamptz IS NULL OR (s.created_at, s.id) < ($2::timestamptz, $3::uuid))
           ORDER BY s.created_at DESC, s.id DESC
           LIMIT $4`,
@@ -534,9 +545,25 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     );
   });
 
+  // GET /v1/gateway/policies — 모델 정책 목록. 기본 정책과 version을 함께 노출해 콘솔 CRUD의 기준 목록으로 쓴다.
+  app.get("/v1/gateway/policies", { config: { rbacAction: "gateway_policy.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+      const result = await c.query<GatewayPolicyRow>(
+        `SELECT model, version, capabilities, budget, fallback_config, is_default
+           FROM gateway_policies
+          WHERE tenant_id = $1::uuid
+          ORDER BY is_default DESC, model ASC`,
+        [principal.tenantId],
+      );
+      return result.rows;
+    });
+    reply.code(200).send({ items: rows.map((r) => ({ ...mapGatewayPolicy(r), version: r.version })), next_cursor: null });
+  });
+
   // GET /v1/gateway/policy — 모델 정책(model/capabilities/budget/fallback). RLS 스코프.
-  //   ?model= 지정 시 그 모델(부재 404). 미지정 시: 단일 정책이면 반환, 0건 404, 다건이면 model 필수(422).
-  //   (계약상 model optional + 응답 단수 → 모호성을 명시적으로 해소; 조용한 임의선택 금지.)
+  //   ?model= 지정 시 그 모델(부재 404). 미지정 시: 단일 정책이면 반환, 다건이면 기본 정책 우선, 기본 없으면 model 필수(422).
+  //   (기본 정책이 있는 테넌트는 run 생성 해소 규칙과 콘솔 조회 규칙을 맞춘다.)
   app.get("/v1/gateway/policy", { config: { rbacAction: "gateway_policy.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
     const query = request.query as Record<string, unknown>;
@@ -559,13 +586,21 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     if (rows.length === 0) {
       throw new ApiResponseError("RESOURCE_NOT_FOUND");
     }
-    if (rows.length > 1) {
-      // model 미지정 + 다건 → 단수 응답으로 임의 선택 불가(가정 금지).
+    let selected = rows[0];
+    if (model === undefined && rows.length > 1) {
+      const defaults = rows.filter((r) => r.is_default);
+      if (defaults.length === 1) {
+        selected = defaults[0];
+      } else {
+        // model 미지정 + 다건 + 기본 없음 → 단수 응답으로 임의 선택 불가(가정 금지).
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "model_required", available: rows.length });
+      }
+    } else if (rows.length > 1) {
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "model_required", available: rows.length });
     }
     // ETag = gateway_policies.version(api-surface §6/§0.3, PUT와 동일 ETag 대상). PUT If-Match의 선행 read.
-    reply.header("ETag", String(rows[0].version));
-    reply.code(200).send(mapGatewayPolicy(rows[0]));
+    reply.header("ETag", String(selected.version));
+    reply.code(200).send(mapGatewayPolicy(selected));
   });
 
   // GET /v1/sites — 커서 페이지(items=Site). filter: risk(green|amber|red). RLS 스코프.

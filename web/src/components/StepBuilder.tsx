@@ -31,8 +31,22 @@ export interface Step {
   id: string;
   action: (typeof ACTIONS)[number];
   schemaRef?: string; // extract 전용
+  extractInstruction?: string; // extract 전용
   urlRef?: string; // navigate 전용
   flow: Flow;
+}
+export interface StepBuilderInitial {
+  readonly name: string;
+  readonly steps: readonly Step[];
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function defaultExtractInstruction(schemaRef?: string): string {
+  const label = schemaRef !== undefined && schemaRef.trim().length > 0 ? schemaRef.trim() : "extracted_rows";
+  return `현재 페이지에서 ${label} 데이터를 추출하라.`;
 }
 
 // 액션 객체 생성(ir.schema action: additionalProperties false → 허용 키만 emit, 필수 필드 포함).
@@ -41,7 +55,11 @@ function actionObj(s: Step): Record<string, unknown> | null {
     case "none":
       return null;
     case "extract":
-      return { action: "extract", schema_ref: s.schemaRef && s.schemaRef.length > 0 ? s.schemaRef : "extracted_rows" };
+      return {
+        action: "extract",
+        instruction: s.extractInstruction && s.extractInstruction.trim().length > 0 ? s.extractInstruction.trim() : defaultExtractInstruction(s.schemaRef),
+        schema_ref: s.schemaRef && s.schemaRef.length > 0 ? s.schemaRef : "extracted_rows",
+      };
     case "navigate":
       return { action: "navigate", url_ref: s.urlRef && s.urlRef.length > 0 ? s.urlRef : "target_url" };
     default:
@@ -49,7 +67,7 @@ function actionObj(s: Step): Record<string, unknown> | null {
   }
 }
 
-function stepsToIr(name: string, steps: readonly Step[]): unknown {
+function stepsToIr(name: string, steps: readonly Step[], version: number): unknown {
   const nodes: Record<string, Record<string, unknown>> = {};
   for (const s of steps) {
     const node: Record<string, unknown> = {};
@@ -60,23 +78,79 @@ function stepsToIr(name: string, steps: readonly Step[]): unknown {
     else node.on = s.flow.rules.map((r) => ({ when: r.when, target: r.target, priority: r.priority }));
     nodes[s.id] = node;
   }
-  return { meta: { name, version: 1 }, start: steps[0]?.id ?? "n1", nodes };
+  return { meta: { name, version, studio_mode: "form" }, start: steps[0]?.id ?? "n1", nodes };
 }
 
 const SELECT = { padding: "4px 6px", fontSize: 13 } as const;
 
-export function StepBuilder({ onChange }: { onChange: (ir: unknown) => void }): JSX.Element {
-  const counter = useRef(2);
-  const [name, setName] = useState("새 자동화");
-  const [steps, setSteps] = useState<Step[]>([
+const DEFAULT_STEPS: Step[] = [
     { id: "n1", action: "observe", flow: { kind: "on", rules: [{ when: "flags.not_found", target: "n2", priority: 1 }] } },
     { id: "n2", action: "none", flow: { kind: "terminal", terminal: "success" } },
-  ]);
+];
+
+export function stepBuilderInitialFromIr(ir: unknown): StepBuilderInitial | undefined {
+  if (!isRecord(ir) || !isRecord(ir.nodes)) return undefined;
+  const meta = isRecord(ir.meta) ? ir.meta : {};
+  const name = typeof meta.name === "string" ? meta.name : "새 자동화";
+  const start = typeof ir.start === "string" ? ir.start : undefined;
+  const entries = Object.entries(ir.nodes);
+  const ordered = start !== undefined
+    ? [...entries.filter(([id]) => id === start), ...entries.filter(([id]) => id !== start)]
+    : entries;
+  const steps = ordered.map(([id, node]): Step => {
+    const n = isRecord(node) ? node : {};
+    const what = Array.isArray(n.what) ? n.what : [];
+    const first = isRecord(what[0]) ? what[0] : {};
+    const action = typeof first.action === "string" && ACTIONS.includes(first.action as Step["action"])
+      ? first.action as Step["action"]
+      : "none";
+    const flow: Flow =
+      typeof n.terminal === "string"
+        ? { kind: "terminal", terminal: n.terminal }
+        : typeof n.next === "string"
+          ? { kind: "next", target: n.next }
+          : Array.isArray(n.on)
+            ? {
+                kind: "on",
+                rules: n.on
+                  .filter(isRecord)
+                  .map((r): Rule => ({
+                    when: typeof r.when === "string" ? r.when : "flags.not_found",
+                    target: typeof r.target === "string" ? r.target : id,
+                    priority: typeof r.priority === "number" ? r.priority : 1,
+                  })),
+              }
+            : { kind: "terminal", terminal: "success" };
+    return {
+      id,
+      action,
+      schemaRef: typeof first.schema_ref === "string" ? first.schema_ref : undefined,
+      extractInstruction: typeof first.instruction === "string" ? first.instruction : undefined,
+      urlRef: typeof first.url_ref === "string" ? first.url_ref : undefined,
+      flow: flow.kind === "on" && flow.rules.length === 0 ? { kind: "terminal", terminal: "success" } : flow,
+    };
+  });
+  return { name, steps: steps.length > 0 ? steps : DEFAULT_STEPS };
+}
+
+function initialCounter(steps: readonly Step[]): number {
+  const max = steps.reduce((acc, step) => {
+    const match = /^n(\d+)$/.exec(step.id);
+    return match === null ? acc : Math.max(acc, Number(match[1]));
+  }, 0);
+  return Math.max(2, max);
+}
+
+export function StepBuilder({ onChange, initial, version = 1 }: { onChange: (ir: unknown) => void; initial?: StepBuilderInitial; version?: number }): JSX.Element {
+  const seedSteps = initial?.steps ?? DEFAULT_STEPS;
+  const counter = useRef(initialCounter(seedSteps));
+  const [name, setName] = useState(initial?.name ?? "새 자동화");
+  const [steps, setSteps] = useState<Step[]>(seedSteps.map((s) => ({ ...s, flow: s.flow.kind === "on" ? { ...s.flow, rules: [...s.flow.rules] } : { ...s.flow } })));
 
   // 단계/이름 변경 시 IR을 재생성해 상위(폼)로 전달 → 저장은 동일 파이프라인.
   useEffect(() => {
-    onChange(stepsToIr(name, steps));
-  }, [name, steps, onChange]);
+    onChange(stepsToIr(name, steps, version));
+  }, [name, steps, version, onChange]);
 
   const ids = steps.map((s) => s.id);
   const update = (i: number, patch: Partial<Step>) => setSteps((p) => p.map((s, j) => (j === i ? { ...s, ...patch } : s)));
@@ -116,7 +190,13 @@ export function StepBuilder({ onChange }: { onChange: (ir: unknown) => void }): 
                   const action = e.target.value as Step["action"];
                   const patch: Partial<Step> = { action };
                   // 필수 ref를 비우지 않도록 전환 시 기본값 채움(유효 IR 유지).
-                  if (action === "extract" && (s.schemaRef === undefined || s.schemaRef.length === 0)) patch.schemaRef = "extracted_rows";
+                  if (action === "extract") {
+                    const nextSchemaRef = s.schemaRef === undefined || s.schemaRef.length === 0 ? "extracted_rows" : s.schemaRef;
+                    patch.schemaRef = nextSchemaRef;
+                    if (s.extractInstruction === undefined || s.extractInstruction.trim().length === 0) {
+                      patch.extractInstruction = defaultExtractInstruction(nextSchemaRef);
+                    }
+                  }
                   if (action === "navigate" && (s.urlRef === undefined || s.urlRef.length === 0)) patch.urlRef = "target_url";
                   update(i, patch);
                 }}
@@ -130,10 +210,21 @@ export function StepBuilder({ onChange }: { onChange: (ir: unknown) => void }): 
               </select>
             </label>
             {s.action === "extract" && (
-              <label>
-                <span className="subtle">출력 스키마(schema_ref)</span>{" "}
-                <input value={s.schemaRef ?? ""} onChange={(e) => update(i, { schemaRef: e.target.value })} style={{ ...SELECT, width: 150 }} />
-              </label>
+              <>
+                <label>
+                  <span className="subtle">출력 스키마(schema_ref)</span>{" "}
+                  <input value={s.schemaRef ?? ""} onChange={(e) => update(i, { schemaRef: e.target.value })} style={{ ...SELECT, width: 150 }} />
+                </label>
+                <label style={{ flexBasis: 360, flexGrow: 1 }}>
+                  <span className="subtle">추출 규칙</span>{" "}
+                  <input
+                    value={s.extractInstruction ?? ""}
+                    onChange={(e) => update(i, { extractInstruction: e.target.value })}
+                    placeholder={defaultExtractInstruction(s.schemaRef)}
+                    style={{ ...SELECT, width: "min(100%, 360px)" }}
+                  />
+                </label>
+              </>
             )}
             {s.action === "navigate" && (
               <label>

@@ -6,7 +6,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
     listRuns: async () => ({
       // current_node는 reads.ts:203이 영구 null(runs에 진행-노드 컬럼 없음) → fixture도 null(백엔드가 만들 수 없는 값 미창작).
-      items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", current_node: null, as_of: "2026-06-15T00:00:00.000Z" }],
+      items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", current_node: null, as_of: "2026-06-15T00:00:00.000Z", failure_reason: null }],
       next_cursor: null,
     }),
     listRunSteps: async () => ({
@@ -27,8 +27,16 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     listDlq: empty,
     listScenarios: empty,
     listSites: empty,
+    listGatewayPolicies: async () => ({
+      items: [
+        { model: "gpt-4o-mini", version: 1, capabilities: { jsonMode: true }, budget: { maxInputTokens: 1000 }, is_default: true },
+      ],
+      next_cursor: null,
+    }),
     getGatewayPolicy: async () => ({ model: "gpt-4o-mini", version: 1, capabilities: { jsonMode: true }, budget: { maxInputTokens: 1000 } }),
+    createGatewayPolicy: async (body) => ({ model: body.model, version: 1, capabilities: body.capabilities, budget: body.budget, fallback: body.fallback_config ?? null, is_default: body.is_default ?? false }),
     updateGatewayPolicy: async (version) => ({ model: "gpt-4o-mini", version: version + 1 }),
+    deleteGatewayPolicy: async (model) => ({ model, deleted: true }),
     abortRun: async () => ({ status: "cancelled" }),
     replayDeadLetter: async () => ({ status: "new" }),
     assignHumanTask: async () => ({ status: "assigned" }),
@@ -36,7 +44,15 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     resolveHumanTask: async () => ({ status: "resolved" }),
     escalateHumanTask: async () => ({ status: "escalated" }),
     promoteScenario: async () => ({ version: 2, promotion_status: "prod" }),
-    getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+    setScenarioPromotion: async (_scenarioId, version, target) => ({ version, promotion_status: target }),
+    archiveScenario: async () => ({ archived: true }),
+    listScenarioVersions: async () => ({ items: [], next_cursor: null }),
+    rollbackScenario: async (_scenarioId, _sourceVersion, latestVersion) => ({
+      scenario_id: "00000000-0000-0000-0000-0000000000c1",
+      version: latestVersion + 1,
+      promotion_status: "draft",
+    }),
+    getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null, failure_reason: null }),
     getWorkitem: async (id) => ({ workitem_id: id, status: "processing", unique_reference: "wi", attempts: 2, checked_out_by: "w-00000001", checked_out_at: "2026-06-15T00:00:00.000Z", run_id: "11111111-aaaa-bbbb-cccc-000000000001" }),
     getHumanTask: async (id) => ({ human_task_id: id, state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null }),
     getScenario: async (id) => ({ scenario_id: id, name: "s", version: 1, promotion_status: "draft" }),

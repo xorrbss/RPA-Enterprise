@@ -51,7 +51,17 @@ export function RunTraceView(): JSX.Element {
         emptyMessage="조건에 맞는 실행 기록이 없습니다."
         columns={[
           { header: "실행 ID", render: (r) => <code>{r.run_id.slice(0, 8)}</code> },
-          { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
+          {
+            header: "상태",
+            render: (r) => (
+              <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <StatusBadge status={r.status} />
+                {r.failure_reason !== null && r.failure_reason !== undefined && (
+                  <span className="badge red">{r.failure_reason.code}</span>
+                )}
+              </span>
+            ),
+          },
           { header: "기준 시각", render: (r) => r.as_of ?? "—" },
           {
             header: "작업",
@@ -102,7 +112,7 @@ function RunDetailPanel({
         <ErrorState message="실행을 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
       ) : detail.data !== undefined ? (
         <>
-        <ArrivalBanner status={detail.data.status} attempts={detail.data.attempts} />
+        <ArrivalBanner status={detail.data.status} attempts={detail.data.attempts} reason={detail.data.failure_reason ?? null} />
         <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", margin: 0 }}>
           <dt className="subtle">상태</dt>
           <dd style={{ margin: 0 }}>
@@ -141,7 +151,15 @@ function RunDetailPanel({
 // F3 터미널 '도착 순간' 배너 — 실행이 완료/실패/취소로 종료되었음을 분명히 알린다(구매 모먼트의 '도착').
 // 도착 판정=detail.status(실 필드)만. 시도횟수=detail.attempts(실 필드). 실패 사유(reason)는 RunDetail에 없으므로
 // 만들지 않고 단계 트레이스의 exception.code(이미 진실원천)로 유도한다. 비-터미널이면 배너 없음(조용한 false 금지).
-function ArrivalBanner({ status, attempts }: { status: string; attempts: number }): JSX.Element | null {
+function ArrivalBanner({
+  status,
+  attempts,
+  reason,
+}: {
+  status: string;
+  attempts: number;
+  reason: { code: string; message: string } | null;
+}): JSX.Element | null {
   const bannerTone = arrivalTone(status); // arrivalTone이 badges.tone()에 위임(색 단일 출처)
   if (bannerTone === null) return null;
   const failed = bannerTone === "red";
@@ -149,7 +167,8 @@ function ArrivalBanner({ status, attempts }: { status: string; attempts: number 
     <div className={`arrival-banner badge ${bannerTone}`} role="status">
       <StatusBadge status={status} />
       <span>실행이 종료되었습니다{attempts > 1 ? ` · 시도 ${attempts}회` : ""}.</span>
-      {failed && <span className="subtle">자세한 원인은 아래 단계 트레이스를 확인하세요.</span>}
+      {failed && reason !== null && <span>{reason.code}: {reason.message}</span>}
+      {failed && reason === null && <span className="subtle">자세한 원인은 아래 단계 트레이스를 확인하세요.</span>}
     </div>
   );
 }

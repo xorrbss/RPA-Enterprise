@@ -5,10 +5,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
+import type { GatewayPolicyUpdate } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
-// LLM 게이트웨이 정책 뷰 — 편집(If-Match)·RBAC 게이팅·다중정책 dead-end 해소·404. smoke.test.tsx(500라인 한도)에서
-// 의미 단위로 분리(CLAUDE.md #7). 헬퍼는 다른 test 파일 패턴대로 파일 내 정의.
 function renderApp(client: ApiClient = fakeClient()): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -19,26 +18,44 @@ function renderApp(client: ApiClient = fakeClient()): void {
     </QueryClientProvider>,
   );
 }
+
 function jwt(roles: readonly string[]): string {
   const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `e30.${payload}.sig`;
 }
-const ALL_ROLES = ["viewer", "operator", "reviewer", "approver", "admin"];
 
-describe("LLM 게이트웨이 정책 — 편집·RBAC·다중정책", () => {
+const ALL_ROLES = ["viewer", "operator", "reviewer", "approver", "admin"];
+const POLICIES = [
+  {
+    model: "gpt-4o",
+    version: 5,
+    capabilities: { maxContextTokens: 8000, jsonMode: true },
+    budget: { maxInputTokens: 800, maxOutputTokens: 400, maxCost: 1 },
+    is_default: true,
+  },
+  {
+    model: "gpt-4o-mini",
+    version: 2,
+    capabilities: { maxContextTokens: 4000, jsonMode: true },
+    budget: { maxInputTokens: 400, maxOutputTokens: 200, maxCost: 0.5 },
+    is_default: false,
+  },
+];
+
+describe("LLM 게이트웨이 정책 — 목록·기본·CRUD", () => {
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", jwt(ALL_ROLES));
   });
 
-  test("admin gateway 정책 편집: PUT If-Match(version)+Idempotency-Key 디스패치", async () => {
-    const calls: Array<{ version: number; model: string; key: string }> = [];
+  test("admin gateway 정책 편집: 목록 선택 정책을 PUT If-Match(version)+Idempotency-Key로 저장", async () => {
+    const calls: Array<{ version: number; body: GatewayPolicyUpdate; key: string }> = [];
     renderApp(
       fakeClient({
-        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: { jsonMode: true }, budget: { maxInputTokens: 800 } }),
+        listGatewayPolicies: async () => ({ items: POLICIES, next_cursor: null }),
         updateGatewayPolicy: async (version, body, key) => {
-          calls.push({ version, model: body.model, key });
-          return { model: "gpt-4o", version: version + 1 };
+          calls.push({ version, body, key });
+          return { model: body.model, version: version + 1 };
         },
       }),
     );
@@ -46,29 +63,28 @@ describe("LLM 게이트웨이 정책 — 편집·RBAC·다중정책", () => {
     const saveBtn = await screen.findByRole("button", { name: "정책 저장" });
     saveBtn.click();
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]?.version).toBe(5); // If-Match=현재 version
-    expect(calls[0]?.model).toBe("gpt-4o");
-    expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
+    expect(calls[0]?.version).toBe(5);
+    expect(calls[0]?.body.model).toBe("gpt-4o");
+    expect(calls[0]?.body.is_default).toBe(true);
+    expect(calls[0]?.key.length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.getByText("저장됨")).toBeInTheDocument());
   });
 
-  test("RBAC UI 게이팅: gateway 편집은 admin만 — operator는 폼 숨김(읽기 전용)", async () => {
+  test("RBAC UI 게이팅: gateway 편집은 admin만 — operator는 목록만 표시", async () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
-    renderApp(
-      fakeClient({
-        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: { jsonMode: true } }),
-      }),
-    );
+    renderApp(fakeClient({ listGatewayPolicies: async () => ({ items: POLICIES, next_cursor: null }) }));
     location.hash = "#llmGateway";
-    await waitFor(() => expect(screen.getByText("gpt-4o")).toBeInTheDocument()); // 읽기 표시
-    expect(screen.queryByRole("button", { name: "정책 저장" })).toBeNull(); // 편집 폼 미노출
+    await waitFor(() => expect(screen.getAllByText("gpt-4o").length).toBeGreaterThan(0));
+    expect(screen.getAllByText("기본 정책").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "정책 저장" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "정책 생성" })).toBeNull();
   });
 
   test("admin gateway 편집: 버전 충돌 → POLICY_VERSION_CONFLICT 표면화", async () => {
     const { ApiError } = await import("../src/api/types");
     renderApp(
       fakeClient({
-        getGatewayPolicy: async () => ({ model: "gpt-4o", version: 5, capabilities: {}, budget: {} }),
+        listGatewayPolicies: async () => ({ items: POLICIES, next_cursor: null }),
         updateGatewayPolicy: async () => {
           throw new ApiError(412, "POLICY_VERSION_CONFLICT", { code: "POLICY_VERSION_CONFLICT" });
         },
@@ -79,49 +95,51 @@ describe("LLM 게이트웨이 정책 — 편집·RBAC·다중정책", () => {
     await waitFor(() => expect(screen.getByText(/정책 버전 충돌\. 최신 정책을 다시 불러오세요\./)).toBeInTheDocument());
   });
 
-  test("gateway 다중정책: model_required → 모델 입력 → getGatewayPolicy(model) 조회(dead-end 해소)", async () => {
-    const { ApiError } = await import("../src/api/types");
-    const calls: Array<string | undefined> = [];
+  test("목록에서 모델 선택 → 해당 version으로 삭제", async () => {
+    const calls: Array<{ model: string; version: number; key: string }> = [];
     renderApp(
       fakeClient({
-        getGatewayPolicy: async (model) => {
-          calls.push(model);
-          // model 미지정 → 다건이라 422 model_required(임의선택 금지). model 지정 시 그 정책 반환.
-          if (model === undefined) {
-            throw new ApiError(422, "IR_SCHEMA_INVALID", { code: "IR_SCHEMA_INVALID", details: { reason: "model_required", available: 2 } });
-          }
-          return { model, version: 7, capabilities: { jsonMode: true }, budget: {} };
+        listGatewayPolicies: async () => ({ items: POLICIES, next_cursor: null }),
+        deleteGatewayPolicy: async (model, version, key) => {
+          calls.push({ model, version, key });
+          return { model, deleted: true };
         },
       }),
     );
     location.hash = "#llmGateway";
-    // dead-end 아님: 모델 입력 폼 노출 + 빈 입력 가드(조회 비활성).
-    const input = await screen.findByLabelText("모델명");
-    expect(screen.getByRole("button", { name: "조회" })).toBeDisabled();
-    fireEvent.change(input, { target: { value: "gpt-4o" } });
-    screen.getByRole("button", { name: "조회" }).click();
-    // model이 전달되어 재조회 → 상세 표시.
-    await waitFor(() => expect(calls).toContain("gpt-4o"));
-    await waitFor(() => expect(screen.getByText("gpt-4o")).toBeInTheDocument());
-    // admin 토큰(beforeEach ALL_ROLES) → 편집 폼 도달 가능(영구차단 해소).
-    expect(screen.getByRole("button", { name: "정책 저장" })).toBeInTheDocument();
+    const selectButtons = await screen.findAllByRole("button", { name: "선택" });
+    const selectMini = selectButtons[0];
+    if (selectMini === undefined) throw new Error("expected selectable secondary policy");
+    selectMini.click();
+    await waitFor(() => expect(screen.getByText(/모델 gpt-4o-mini · v2/)).toBeInTheDocument());
+    screen.getByRole("button", { name: "정책 삭제" }).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.model).toBe("gpt-4o-mini");
+    expect(calls[0]?.version).toBe(2);
+    expect(calls[0]?.key.length).toBeGreaterThan(0);
   });
 
-  test("gateway 모델 미존재: model 404 → 명시 메시지(조용한 빈화면 금지)", async () => {
-    const { ApiError } = await import("../src/api/types");
+  test("새 정책 생성: JSON body + 기본 정책 플래그 전송", async () => {
+    const calls: Array<{ body: GatewayPolicyUpdate; key: string }> = [];
     renderApp(
       fakeClient({
-        getGatewayPolicy: async (model) => {
-          if (model === undefined) {
-            throw new ApiError(422, "IR_SCHEMA_INVALID", { code: "IR_SCHEMA_INVALID", details: { reason: "model_required", available: 2 } });
-          }
-          throw new ApiError(404, "RESOURCE_NOT_FOUND", { code: "RESOURCE_NOT_FOUND" });
+        listGatewayPolicies: async () => ({ items: POLICIES.slice(0, 1), next_cursor: null }),
+        createGatewayPolicy: async (body, key) => {
+          calls.push({ body, key });
+          return { model: body.model, version: 1 };
         },
       }),
     );
     location.hash = "#llmGateway";
-    fireEvent.change(await screen.findByLabelText("모델명"), { target: { value: "nope" } });
-    screen.getByRole("button", { name: "조회" }).click();
-    await waitFor(() => expect(screen.getByText(/찾을 수 없습니다/)).toBeInTheDocument());
+    fireEvent.change(await screen.findByLabelText("모델명"), { target: { value: "gpt-4.1-mini" } });
+    fireEvent.click(screen.getByLabelText("기본 정책으로 생성"));
+    screen.getByRole("button", { name: "정책 생성" }).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.body.model).toBe("gpt-4.1-mini");
+    expect(calls[0]?.body.capabilities.maxContextTokens).toBe(8000);
+    expect(calls[0]?.body.budget.maxInputTokens).toBe(1000);
+    expect(calls[0]?.body.fallback_config).toBeNull();
+    expect(calls[0]?.body.is_default).toBe(true);
+    expect(calls[0]?.key.length).toBeGreaterThan(0);
   });
 });

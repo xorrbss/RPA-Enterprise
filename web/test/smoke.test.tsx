@@ -183,26 +183,60 @@ describe("D7 운영 콘솔 shell", () => {
     expect(calls[0]?.assignee).toBe("00000000-0000-0000-0000-0000000000aa");
   });
 
-  test("scenario prod 승격 디스패치 (If-Match=version)", async () => {
-    const calls: Array<{ id: string; version: number }> = [];
+  test("scenario 운영 지정 디스패치 (If-Match=version)", async () => {
+    const calls: Array<{ id: string; version: number; target: string }> = [];
     renderApp(
       fakeClient({
         listScenarios: async () => ({
-          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000001", name: "리뷰 수집", version: 3, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000001" }],
+          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000001", name: "리뷰 수집", version: 3, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000001", promotion_status: "draft" }],
           next_cursor: null,
         }),
-        promoteScenario: async (id, version) => {
-          calls.push({ id, version });
-          return { version, promotion_status: "prod" };
+        setScenarioPromotion: async (id, version, target) => {
+          calls.push({ id, version, target });
+          return { version, promotion_status: target };
         },
       }),
     );
     location.hash = "#scenarioStudio";
-    const btn = await screen.findByRole("button", { name: "prod 승격" });
+    const btn = await screen.findByRole("button", { name: "운영 지정" });
+    expect(btn).toHaveAttribute("title", expect.stringContaining("실행 전제가 아니라"));
     btn.click();
+    expect(await screen.findByText(/실행 전제는 아니며/)).toBeInTheDocument();
     (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3 });
+    expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3, target: "prod" });
+  });
+
+  test("scenario 편집은 저장된 studio_mode=easy로 쉬운 만들기 폼을 복원", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000010", name: "리뷰 수집", version: 1, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000010", promotion_status: "draft" }],
+          next_cursor: null,
+        }),
+        getScenario: async (id) => ({
+          scenario_id: id,
+          name: "리뷰 수집",
+          version: 1,
+          promotion_status: "draft",
+          ir: {
+            meta: { name: "리뷰 수집", version: 1, studio_mode: "easy" },
+            params_schema: { type: "object", properties: { entry_url: { type: "string", default: "https://shop.example/reviews" } }, required: ["entry_url"] },
+            start: "open",
+            nodes: {
+              open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "collect" },
+              collect: { what: [{ action: "extract", instruction: "리뷰 제목과 별점을 추출하라.", schema_ref: "리뷰" }], next: "done" },
+              done: { terminal: "success" },
+            },
+          },
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    (await screen.findByRole("button", { name: "편집" })).click();
+    await screen.findByDisplayValue("리뷰 제목과 별점을 추출하라.");
+    expect(screen.getByRole("button", { name: "쉬운 만들기" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByDisplayValue("https://shop.example/reviews")).toBeInTheDocument();
   });
 
   test("페이지네이션: next_cursor 있으면 '다음' 클릭 시 cursor 전달", async () => {
@@ -252,15 +286,15 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#irValidation";
     const idInput = await screen.findByPlaceholderText(/00000000/);
     fireEvent.change(idInput, { target: { value: "scn-1" } });
-    screen.getByRole("button", { name: "검사 실행" }).click();
+    screen.getByRole("button", { name: "검증 실행" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
-    await waitFor(() => expect(screen.getByText("거부")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("검증 실패")).toBeInTheDocument());
     expect(screen.getByText(/no branch matched/)).toBeInTheDocument();
   });
 
-  // F3 — validate 성공 표기는 '검증 통과'(dry-run이 실제 보고한 것)만 말하고 '승격 가능'을 단정하지 않는다(조용한 false 금지).
+  // F3 — validate 성공 표기는 정적 구조 검증(dry-run이 실제 보고한 것)만 말하고 '승격 가능'을 단정하지 않는다(조용한 false 금지).
   // 승격은 별개 명령(admin·If-Match version)이라 이 화면이 관찰하지 못한 값 → scenarioStudio로 안내만 한다(막다른 길 해소).
-  test("시나리오 검사: valid → '검증 통과'(승격 가능 단정 없음) + 자동화 만들기 안내 동선", async () => {
+  test("시나리오 검사: valid → 정적 구조 검증 통과(승격 가능 단정 없음) + 자동화 만들기 안내 동선", async () => {
     renderApp(
       fakeClient({
         validateScenario: async () => ({ valid: true, report: { errors: [], warnings: [] } }),
@@ -268,8 +302,8 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#irValidation";
     fireEvent.change(await screen.findByPlaceholderText(/00000000/), { target: { value: "scn-1" } });
-    screen.getByRole("button", { name: "검사 실행" }).click();
-    await waitFor(() => expect(screen.getByText("검증 통과")).toBeInTheDocument());
+    screen.getByRole("button", { name: "검증 실행" }).click();
+    await waitFor(() => expect(screen.getByText("정적 구조 검증 통과")).toBeInTheDocument());
     expect(screen.queryByText(/승격 가능/)).toBeNull(); // 거짓금지 회귀 가드(재유입 시 실패)
     const goto = await screen.findByRole("button", { name: /자동화 만들기에서 진행/ });
     goto.click();
@@ -437,6 +471,34 @@ describe("D7 운영 콘솔 shell", () => {
     expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
   });
 
+  test("사이트 등록 폼 → page_state_selectors 입력 전송", async () => {
+    const calls: Array<{ body: Parameters<ApiClient["createSite"]>[0]; key: string }> = [];
+    renderApp(
+      fakeClient({
+        listSites: async () => ({ items: [], next_cursor: null }),
+        createSite: async (body, key) => {
+          calls.push({ body, key });
+          return { site_profile_id: "site-new" };
+        },
+      }),
+    );
+    location.hash = "#security";
+    (await screen.findByRole("button", { name: "새 사이트" })).click();
+    fireEvent.change(await screen.findByLabelText("이름"), { target: { value: "하이웍스" } });
+    fireEvent.change(screen.getByLabelText("URL 패턴 (http/https origin)"), { target: { value: "https://login.office.hiworks.com" } });
+    fireEvent.change(screen.getByLabelText("로그인 URL (선택)"), { target: { value: "https://login.office.hiworks.com" } });
+    fireEvent.change(screen.getByLabelText("로그인 확인 selector (선택)"), { target: { value: ".user-menu" } });
+    fireEvent.change(screen.getByLabelText("reviews_visible selector (선택)"), { target: { value: ".review-item" } });
+    screen.getByRole("button", { name: "등록" }).click();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.body.page_state_selectors).toEqual({
+      loginUrl: "https://login.office.hiworks.com",
+      authenticatedWhen: { selector: ".user-menu" },
+      flags: { reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 } },
+    });
+    expect(calls[0]?.key.length).toBeGreaterThan(0);
+  });
+
   test("RBAC UI 게이팅: viewer는 읽기 전용 — 명령 버튼 미표시", async () => {
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     renderApp(
@@ -462,6 +524,6 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#scenarioStudio";
     await waitFor(() => expect(screen.getByRole("button", { name: "실행" })).toBeInTheDocument()); // run.create: operator 보유
     expect(screen.getByRole("button", { name: "편집" })).toBeInTheDocument(); // scenario.update: operator 보유
-    expect(screen.queryByRole("button", { name: "prod 승격" })).toBeNull(); // scenario.promote: admin만
+    expect(screen.queryByRole("button", { name: "운영 지정" })).toBeNull(); // scenario.promote: admin만
   });
 });

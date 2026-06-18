@@ -70,12 +70,20 @@ async function seedScenario(pool: Pool, tenant: string, scen: string, svers: str
 }
 
 // created_at을 명시해 정렬/커서를 결정적으로 만든다.
-async function seedRun(pool: Pool, tenant: string, sver: string, id: string, status: string, createdAt: string): Promise<void> {
+async function seedRun(
+  pool: Pool,
+  tenant: string,
+  sver: string,
+  id: string,
+  status: string,
+  createdAt: string,
+  failureReason: { code: string; message: string } | null = null,
+): Promise<void> {
   await withTenantTx(pool, tenant, (c) =>
     c.query(
-      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of, created_at)
-       VALUES ($1,$2,$3,$4,$1,1,'2026-06-15T00:00:00Z',$5::timestamptz)`,
-      [id, tenant, sver, status, createdAt],
+      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of, created_at, failure_reason)
+       VALUES ($1,$2,$3,$4,$1,1,'2026-06-15T00:00:00Z',$5::timestamptz,$6::jsonb)`,
+      [id, tenant, sver, status, createdAt, failureReason === null ? null : JSON.stringify(failureReason)],
     ),
   );
 }
@@ -141,12 +149,12 @@ async function seedSinkDelivery(
   });
 }
 
-async function seedGatewayPolicy(pool: Pool, tenant: string, id: string, model: string): Promise<void> {
+async function seedGatewayPolicy(pool: Pool, tenant: string, id: string, model: string, isDefault = false): Promise<void> {
   await withTenantTx(pool, tenant, (c) =>
     c.query(
-      `INSERT INTO gateway_policies (id, tenant_id, model, version, capabilities, budget, fallback_config)
-       VALUES ($1,$2,$3,1,'{"jsonMode":true,"vision":false}'::jsonb,'{"maxInputTokens":1000}'::jsonb,'{"model":"fallback"}'::jsonb)`,
-      [id, tenant, model],
+      `INSERT INTO gateway_policies (id, tenant_id, model, version, capabilities, budget, fallback_config, is_default)
+       VALUES ($1,$2,$3,1,'{"jsonMode":true,"vision":false}'::jsonb,'{"maxInputTokens":1000}'::jsonb,'{"model":"fallback"}'::jsonb,$4)`,
+      [id, tenant, model, isDefault],
     ),
   );
 }
@@ -191,9 +199,19 @@ async function main(): Promise<void> {
       ["71000000-0000-0000-0000-000000000002", "running", SVER_A, ts(1)],
       ["71000000-0000-0000-0000-000000000003", "completed", SVER_A2, ts(2)],
       ["71000000-0000-0000-0000-000000000004", "suspended", SVER_A, ts(3)],
-      ["71000000-0000-0000-0000-000000000005", "running", SVER_A2, ts(4)],
+      ["71000000-0000-0000-0000-000000000005", "failed_system", SVER_A2, ts(4)],
     ] as const;
-    for (const [id, st, sv, t] of A_RUNS) await seedRun(pool, TENANT_A, sv, id, st, t);
+    for (const [id, st, sv, t] of A_RUNS) {
+      await seedRun(
+        pool,
+        TENANT_A,
+        sv,
+        id,
+        st,
+        t,
+        st === "failed_system" ? { code: "RUN_LOOP_FAILED", message: "site profile not found" } : null,
+      );
+    }
     await seedRun(pool, TENANT_B, SVER_B, "72000000-0000-0000-0000-000000000001", "running", ts(2));
 
     // human tasks: tenant A 3건 + tenant B 1건.
@@ -243,10 +261,10 @@ async function main(): Promise<void> {
     await seedSinkDelivery(pool, TENANT_A, SINK_DELIVERED, "snk-a3", "delivered", ts(2));
     await seedSinkDelivery(pool, TENANT_B, SINK_DL_B, "snk-b1", "dead_letter", ts(0));
 
-    // gateway_policies: tenant A 2 모델(model 미지정 모호성), tenant B 1 모델(단일).
-    await seedGatewayPolicy(pool, TENANT_A, "79000000-0000-0000-0000-000000000001", "gpt-4o-mini");
+    // gateway_policies: tenant A 2 모델(기본 1), tenant B 1 모델(단일).
+    await seedGatewayPolicy(pool, TENANT_A, "79000000-0000-0000-0000-000000000001", "gpt-4o-mini", true);
     await seedGatewayPolicy(pool, TENANT_A, "79000000-0000-0000-0000-000000000002", "claude-haiku");
-    await seedGatewayPolicy(pool, TENANT_B, "79000000-0000-0000-0000-0000000000b1", "gpt-4o-mini");
+    await seedGatewayPolicy(pool, TENANT_B, "79000000-0000-0000-0000-0000000000b1", "gpt-4o-mini", true);
 
     // site_profiles: tenant A 3건(risk 혼합/승인 혼합/circuit 혼합), tenant B 1건.
     const SITE_RED = "7a000000-0000-0000-0000-000000000001";
@@ -278,7 +296,7 @@ async function main(): Promise<void> {
         app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
 
       // ===== listRuns =====
-      // 1) 전체: 5건, created_at DESC(최신=run5..run1), current_node=null, as_of round-trip.
+      // 1) 전체: 5건, created_at DESC(최신=run5..run1), current_node=null, as_of/failure_reason round-trip.
       const all = await get("/v1/runs");
       check("listRuns → 200", all.statusCode === 200, all.body);
       const allBody = all.json();
@@ -289,9 +307,11 @@ async function main(): Promise<void> {
         allBody.items[0].run_id === A_RUNS[4][0] && allBody.items[4].run_id === A_RUNS[0][0],
         JSON.stringify(allBody.items.map((r: { run_id: string }) => r.run_id)),
       );
-      check("listRuns item shape (run_id/status/current_node null/as_of)",
-        allBody.items[0].status === "running" && allBody.items[0].current_node === null &&
-        allBody.items[0].as_of === "2026-06-15T00:00:00.000Z", JSON.stringify(allBody.items[0]));
+      check("listRuns item shape (run_id/status/current_node null/as_of/failure_reason)",
+        allBody.items[0].status === "failed_system" && allBody.items[0].current_node === null &&
+        allBody.items[0].as_of === "2026-06-15T00:00:00.000Z" &&
+        allBody.items[0].failure_reason?.code === "RUN_LOOP_FAILED" &&
+        allBody.items[0].failure_reason?.message === "site profile not found", JSON.stringify(allBody.items[0]));
 
       // 2) 커서 페이지네이션: limit=2 → 2건 + next_cursor, 이어서 소진.
       const p1 = await get("/v1/runs?limit=2");
@@ -307,7 +327,7 @@ async function main(): Promise<void> {
 
       // 3) status 필터.
       const running = await get("/v1/runs?status=running");
-      check("filter status=running → 3", running.json().items.length === 3, JSON.stringify(running.json().items.length));
+      check("filter status=running → 2", running.json().items.length === 2, JSON.stringify(running.json().items.length));
       const suspended = await get("/v1/runs?status=suspended");
       check("filter status=suspended → 1", suspended.json().items.length === 1, "");
 
@@ -425,15 +445,22 @@ async function main(): Promise<void> {
       const scenB = await get("/v1/scenarios", viewerB);
       check("tenant B scenario isolation (1, version=1)", scenB.json().items.length === 1 && scenB.json().items[0].version === 1, JSON.stringify(scenB.json().items));
 
-      // ===== getGatewayPolicy (model-optional 모호성 해소) =====
-      // tenant A는 2 모델 → model 미지정이면 422 model_required.
-      const gwAmbiguous = await get("/v1/gateway/policy");
-      check("gateway no model + 2 policies → 422 model_required", gwAmbiguous.statusCode === 422 && gwAmbiguous.json().details?.reason === "model_required", gwAmbiguous.body);
+      // ===== gateway policy list/read (default 해소) =====
+      const gwList = await get("/v1/gateway/policies");
+      check("gateway policies list → 200, 2 items + default first",
+        gwList.statusCode === 200 && gwList.json().items.length === 2 &&
+        gwList.json().items[0].model === "gpt-4o-mini" && gwList.json().items[0].version === 1 &&
+        gwList.json().items[0].is_default === true,
+        gwList.body);
+      // tenant A는 2 모델이지만 기본 정책이 있어 model 미지정 단수 조회도 기본을 반환.
+      const gwDefault = await get("/v1/gateway/policy");
+      check("gateway no model + default policy → 200 default", gwDefault.statusCode === 200 && gwDefault.json().model === "gpt-4o-mini", gwDefault.body);
       const gwModel = await get("/v1/gateway/policy?model=gpt-4o-mini");
       check("gateway ?model= → 200", gwModel.statusCode === 200, gwModel.body);
       check("GatewayPolicy shape (model/capabilities/budget/fallback)",
         gwModel.json().model === "gpt-4o-mini" && gwModel.json().capabilities?.jsonMode === true &&
-        gwModel.json().budget?.maxInputTokens === 1000 && gwModel.json().fallback?.model === "fallback", JSON.stringify(gwModel.json()));
+        gwModel.json().budget?.maxInputTokens === 1000 && gwModel.json().fallback?.model === "fallback" &&
+        gwModel.json().is_default === true, JSON.stringify(gwModel.json()));
       const gwAbsent = await get("/v1/gateway/policy?model=nonexistent");
       check("gateway model absent → 404", gwAbsent.statusCode === 404 && gwAbsent.json().code === "RESOURCE_NOT_FOUND", gwAbsent.body);
       // tenant B는 1 모델 → model 미지정도 200(단일).

@@ -11,6 +11,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
+import { randomUUID } from "node:crypto";
 
 import { runIdempotentCommand, isRecord, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
@@ -30,6 +31,30 @@ interface PolicyBody {
 const TOP_LEVEL_KEYS = new Set(["model", "capabilities", "budget", "fallback_config", "is_default"]);
 
 export function registerGatewayRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
+  // POST /v1/gateway/policy — 정책 생성. Idempotency-Key + admin RBAC.
+  app.post("/v1/gateway/policy", { config: { rbacAction: "gateway_policy.edit" } }, async (request, reply) => {
+    const body = parsePolicyBody(request.body);
+    if (body.maxInputTokens > body.maxContextTokens || body.maxOutputTokens > body.maxContextTokens) {
+      throw new ApiResponseError("LLM_CAPABILITY_MISMATCH", {
+        reason: "budget_exceeds_max_context_tokens",
+        maxContextTokens: body.maxContextTokens,
+      });
+    }
+    const principal = requirePrincipal(request);
+    const result = await runIdempotentCommand(
+      deps,
+      request,
+      "createGatewayPolicy",
+      "/v1/gateway/policy",
+      (client, tenantId) => applyPolicyCreate(client, tenantId, principal.subjectId, body),
+    );
+    reply.code(result.status);
+    if (isRecord(result.body) && typeof result.body.version === "number") {
+      reply.header("ETag", String(result.body.version));
+    }
+    reply.send(result.body);
+  });
+
   // PUT /v1/gateway/policy — 정책 갱신(api-surface §6). If-Match + Idempotency-Key + admin RBAC.
   app.put("/v1/gateway/policy", { config: { rbacAction: "gateway_policy.edit" } }, async (request, reply) => {
     // (1) body 형상 선검사(멱등 키 소모 이전 — malformed는 키를 쓰지 않는다).
@@ -62,6 +87,23 @@ export function registerGatewayRoutes(app: FastifyInstance, deps: ApiServerDeps)
       reply.header("ETag", String(result.body.version));
     }
     reply.send(result.body);
+  });
+
+  // DELETE /v1/gateway/policy?model=... — 정책 삭제. If-Match + Idempotency-Key + admin RBAC.
+  app.delete("/v1/gateway/policy", { config: { rbacAction: "gateway_policy.edit" } }, async (request, reply) => {
+    const model = parseModelQuery(request.query);
+    const expectedVersion = parseIfMatch(request.headers["if-match"]);
+    if (expectedVersion === undefined) {
+      throw new ApiResponseError("POLICY_VERSION_CONFLICT", { reason: "missing_if_match" });
+    }
+    const result = await runIdempotentCommand(
+      deps,
+      request,
+      "deleteGatewayPolicy",
+      `/v1/gateway/policy?model=${model}`,
+      (client, tenantId) => applyPolicyDelete(client, tenantId, model, expectedVersion),
+    );
+    reply.code(result.status).send(result.body);
   });
 }
 
@@ -127,6 +169,72 @@ async function applyPolicyUpdate(
   };
 }
 
+/** 신규 정책 생성. is_default=true면 기존 기본 정책은 같은 tx에서 선해제하며 version을 bump한다. */
+async function applyPolicyCreate(
+  client: PoolClient,
+  tenantId: string,
+  createdBy: string,
+  body: PolicyBody,
+): Promise<CommandResponse> {
+  if (body.isDefault === true) {
+    await client.query(
+      `UPDATE gateway_policies SET is_default = false, version = version + 1, updated_at = now()
+        WHERE tenant_id = $1::uuid AND is_default = true`,
+      [tenantId],
+    );
+  }
+  const inserted = await client.query<{ version: number; is_default: boolean }>(
+    `INSERT INTO gateway_policies
+       (id, tenant_id, model, version, capabilities, budget, fallback_config, is_default, updated_by)
+     VALUES ($8::uuid, $1::uuid, $2, 1, $3::jsonb, $4::jsonb, $5::jsonb, COALESCE($6::boolean, false), $7::uuid)
+     ON CONFLICT (tenant_id, model) DO NOTHING
+     RETURNING version, is_default`,
+    [
+      tenantId,
+      body.model,
+      JSON.stringify(body.capabilities),
+      JSON.stringify(body.budget),
+      body.fallbackConfig !== null ? JSON.stringify(body.fallbackConfig) : null,
+      body.isDefault ?? null,
+      createdBy,
+      randomUUID(),
+    ],
+  );
+  if (inserted.rowCount === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "policy_model_in_use", model: body.model });
+  }
+  return {
+    status: 201,
+    body: {
+      model: body.model,
+      version: inserted.rows[0].version,
+      capabilities: body.capabilities,
+      budget: body.budget,
+      fallback: body.fallbackConfig,
+      is_default: inserted.rows[0].is_default,
+    },
+  };
+}
+
+/** 정책 삭제. version CAS로 stale 삭제를 막고, 기본 정책 삭제 시에도 조용히 다른 기본을 고르지 않는다. */
+async function applyPolicyDelete(
+  client: PoolClient,
+  tenantId: string,
+  model: string,
+  expectedVersion: number,
+): Promise<CommandResponse> {
+  const deleted = await client.query<{ model: string }>(
+    `DELETE FROM gateway_policies
+      WHERE tenant_id = $1::uuid AND model = $2 AND version = $3
+      RETURNING model`,
+    [tenantId, model, expectedVersion],
+  );
+  if (deleted.rowCount === 0) {
+    throw new ApiResponseError("POLICY_VERSION_CONFLICT", { reason: "if_match_mismatch_or_absent", expectedVersion });
+  }
+  return { status: 200, body: { model, deleted: true } };
+}
+
 /** 닫힌 shape 검증 + coherence에 필요한 수치 추출. 무효 → IR_SCHEMA_INVALID(422, 키 소모 이전). */
 function parsePolicyBody(raw: unknown): PolicyBody {
   if (!isRecord(raw)) {
@@ -190,4 +298,15 @@ function parseIfMatch(value: unknown): number | undefined {
   const normalized = value.replace(/^W\//, "").replace(/^"|"$/g, "");
   const parsed = Number.parseInt(normalized, 10);
   return Number.isInteger(parsed) && parsed >= 1 ? parsed : undefined;
+}
+
+function parseModelQuery(raw: unknown): string {
+  if (!isRecord(raw)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "model_required" });
+  }
+  const model = raw.model;
+  if (typeof model !== "string" || model.length === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "model_required" });
+  }
+  return model;
 }

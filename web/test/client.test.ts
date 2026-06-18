@@ -82,6 +82,26 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.body).toEqual({ target: "prod" });
   });
 
+  test("scenario lifecycle → 운영 해제·보관·버전 목록·롤백 경로", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.setScenarioPromotion("scn-1", 3, "draft", "idem-draft");
+    await client.archiveScenario("scn-1", 3, "idem-archive");
+    await client.listScenarioVersions("scn-1");
+    await client.rollbackScenario("scn-1", 1, 3, "idem-rollback");
+
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenarios/scn-1/promote");
+    expect(calls[0]?.headers.get("if-match")).toBe("3");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-draft");
+    expect(calls[0]?.body).toEqual({ target: "draft" });
+    expect(calls[1]?.url).toBe("http://api.test/v1/scenarios/scn-1/archive");
+    expect(calls[1]?.headers.get("if-match")).toBe("3");
+    expect(calls[2]?.method).toBe("GET");
+    expect(calls[2]?.url).toBe("http://api.test/v1/scenarios/scn-1/versions");
+    expect(calls[3]?.url).toBe("http://api.test/v1/scenarios/scn-1/versions/1/rollback");
+    expect(calls[3]?.headers.get("if-match")).toBe("3");
+    expect(calls[3]?.headers.get("idempotency-key")).toBe("idem-rollback");
+  });
+
   test("getGatewayPolicy → ETag(version) 헤더를 body.version으로 병합", async () => {
     const { calls, client } = harness({ body: { model: "gpt-4o", capabilities: {} }, headers: { ETag: "7" } });
     const policy = await client.getGatewayPolicy("gpt-4o");
@@ -89,6 +109,39 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.url).toBe("http://api.test/v1/gateway/policy?model=gpt-4o");
     expect(policy.version).toBe(7);
     expect(policy.model).toBe("gpt-4o");
+  });
+
+  test("gateway policy CRUD 경로 → list/create/delete + 기본 정책 플래그", async () => {
+    const { calls, client } = harness({ body: { items: [{ model: "gpt-4o", version: 1, is_default: true }], next_cursor: null } });
+    await client.listGatewayPolicies();
+    await client.createGatewayPolicy(
+      {
+        model: "gpt-4.1-mini",
+        capabilities: { maxContextTokens: 8000 },
+        budget: { maxInputTokens: 100, maxOutputTokens: 100, maxCost: 1 },
+        fallback_config: null,
+        is_default: true,
+      },
+      "idem-create-gw",
+    );
+    await client.deleteGatewayPolicy("gpt-4.1-mini", 3, "idem-delete-gw");
+
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/gateway/policies");
+    expect(calls[1]?.method).toBe("POST");
+    expect(calls[1]?.url).toBe("http://api.test/v1/gateway/policy");
+    expect(calls[1]?.headers.get("idempotency-key")).toBe("idem-create-gw");
+    expect(calls[1]?.body).toEqual({
+      model: "gpt-4.1-mini",
+      capabilities: { maxContextTokens: 8000 },
+      budget: { maxInputTokens: 100, maxOutputTokens: 100, maxCost: 1 },
+      fallback_config: null,
+      is_default: true,
+    });
+    expect(calls[2]?.method).toBe("DELETE");
+    expect(calls[2]?.url).toBe("http://api.test/v1/gateway/policy?model=gpt-4.1-mini");
+    expect(calls[2]?.headers.get("if-match")).toBe("3");
+    expect(calls[2]?.headers.get("idempotency-key")).toBe("idem-delete-gw");
   });
 
   test("getGatewayPolicy → ETag 부재 시 version undefined(편집 차단 가드)", async () => {
@@ -173,11 +226,16 @@ describe("HttpApiClient 계약", () => {
 
   test("createSite → POST /v1/sites + body + Idempotency-Key (사이트 온보딩 배선)", async () => {
     const { calls, client } = harness({ body: { site_profile_id: "s1" } });
-    await client.createSite({ name: "하이웍스", url_pattern: "https://login.office.hiworks.com", risk: "green" }, "idem-site");
+    const selectors = {
+      loginUrl: "https://login.office.hiworks.com",
+      authenticatedWhen: { selector: ".user-menu" },
+      flags: { reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 } },
+    };
+    await client.createSite({ name: "하이웍스", url_pattern: "https://login.office.hiworks.com", risk: "green", page_state_selectors: selectors }, "idem-site");
     expect(calls[0]?.method).toBe("POST");
     expect(calls[0]?.url).toBe("http://api.test/v1/sites");
     expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-site");
-    expect(calls[0]?.body).toEqual({ name: "하이웍스", url_pattern: "https://login.office.hiworks.com", risk: "green" });
+    expect(calls[0]?.body).toEqual({ name: "하이웍스", url_pattern: "https://login.office.hiworks.com", risk: "green", page_state_selectors: selectors });
   });
 
   test("4xx 응답 → ApiError(code, httpStatus) 표면화 (조용한 실패 금지)", async () => {

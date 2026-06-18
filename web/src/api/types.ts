@@ -10,6 +10,7 @@ export interface RunItem {
   readonly status: string;
   readonly current_node: string | null;
   readonly as_of: string | null;
+  readonly failure_reason?: FailureReason | null;
 }
 
 // mapWorkitem(app/src/api/reads.ts) 실 투영과 1:1. attempts/checked_out_by/checked_out_at/run_id는
@@ -51,6 +52,7 @@ export interface ScenarioItem {
   readonly name: string;
   readonly version: number;
   readonly latest_version_id: string;
+  readonly promotion_status?: string;
 }
 
 export interface SiteItem {
@@ -79,6 +81,12 @@ export interface RunDetail {
   readonly worker_id: string | null;
   readonly attempts: number;
   readonly as_of: string | null;
+  readonly failure_reason?: FailureReason | null;
+}
+
+export interface FailureReason {
+  readonly code: string;
+  readonly message: string;
 }
 
 // GET /v1/runs/{id}/steps 항목(api-surface §1 각주⁶). 비민감 요약+참조만 — 본문/증빙은 artifact_ids→GET /v1/artifacts/{id}.
@@ -125,6 +133,14 @@ export interface ScenarioDetail {
   readonly ir?: unknown;
 }
 
+export interface ScenarioVersionItem {
+  readonly version_id: string;
+  readonly version: number;
+  readonly promotion_status: string;
+  readonly created_at: string;
+  readonly promoted_at: string | null;
+}
+
 export interface ValidationResult {
   readonly valid: boolean;
   readonly report: unknown;
@@ -159,7 +175,8 @@ export interface GatewayPolicy {
   readonly version?: number;
   readonly capabilities?: Record<string, unknown>;
   readonly budget?: Record<string, unknown>;
-  readonly fallback?: Record<string, unknown>;
+  readonly fallback?: Record<string, unknown> | null;
+  readonly is_default?: boolean;
 }
 
 // PUT /v1/gateway/policy body(닫힌 shape — 백엔드 parsePolicyBody와 정합). model이 갱신 대상 정책 키.
@@ -168,6 +185,7 @@ export interface GatewayPolicyUpdate {
   readonly capabilities: Record<string, unknown>;
   readonly budget: Record<string, unknown>;
   readonly fallback_config?: Record<string, unknown> | null;
+  readonly is_default?: boolean;
 }
 
 export interface ListParams {

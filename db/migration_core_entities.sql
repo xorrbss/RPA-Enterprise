@@ -157,9 +157,11 @@ CREATE TABLE scenarios (
   tenant_id   uuid        NOT NULL,
   name        text        NOT NULL,
   created_at  timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, name)
+  archived_at timestamptz
 );
 CREATE INDEX idx_scenarios_tenant ON scenarios (tenant_id);
+CREATE UNIQUE INDEX uq_scenarios_active_name ON scenarios (tenant_id, name)
+  WHERE archived_at IS NULL;                                -- 보관된 시나리오 이름은 재사용 가능, active 이름만 유일
 
 CREATE TABLE scenario_versions (
   id                uuid        PRIMARY KEY,
@@ -240,6 +242,7 @@ CREATE TABLE runs (
                                                              --   미해소(LLM 노드 도달 시 run-time fail-closed). gateway_policies 자연키가
                                                              --   복합(tenant,model)이라 단일컬럼 FK 불성립 + 정책 삭제 시 재현성 파괴 → 느슨한 text 스냅샷.
   correlation_id      uuid        NOT NULL,                  -- 이벤트 envelope·trace span 공통 상관키
+  failure_reason      jsonb,                                 -- failed_* 진입 사유 요약 {code,message}; UI 표시용 비민감 진단
   -- usage 누계(R21 usage flush) — 비용/토큰 집계
   usage_input_tokens  bigint      NOT NULL DEFAULT 0,
   usage_output_tokens bigint      NOT NULL DEFAULT 0,
