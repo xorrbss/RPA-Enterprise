@@ -207,6 +207,18 @@ describe("D7 운영 콘솔 shell", () => {
     expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3, target: "prod" });
   });
 
+  test("scenario 새 자동화 단계 편집은 추출 규칙 입력 영역을 바로 노출", async () => {
+    renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
+    location.hash = "#scenarioStudio";
+    fireEvent.click(await screen.findByRole("button", { name: "+ 새 자동화 만들기" }));
+    fireEvent.click(await screen.findByRole("button", { name: "단계 편집(고급)" }));
+
+    const rule = screen.getByRole("textbox", { name: "추출 규칙" });
+    expect(rule.tagName).toBe("TEXTAREA");
+    expect(rule).toHaveValue("현재 페이지에서 extracted_rows 데이터를 추출하라.");
+    expect(screen.getByDisplayValue("extracted_rows")).toBeInTheDocument();
+  });
+
   test("scenario 편집은 저장된 studio_mode=easy로 쉬운 만들기 폼을 복원", async () => {
     renderApp(
       fakeClient({

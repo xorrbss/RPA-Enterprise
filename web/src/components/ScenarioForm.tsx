@@ -29,13 +29,13 @@ function template(name: string, version: number): string {
       start: "n1",
       nodes: {
         n1: {
-          on: [
-            { when: "flags.blocked", target: "n2", priority: 1 },
-            { when: "flags.not_found", target: "n3", priority: 0 },
-          ],
+          what: [{ action: "observe" }],
+          next: "n2",
         },
-        n2: { terminal: "success" },
-        n3: { terminal: "success" },
+        n2: {
+          what: [{ action: "extract", instruction: "현재 페이지에서 extracted_rows 데이터를 추출하라.", schema_ref: "extracted_rows" }],
+          terminal: "success",
+        },
       },
     },
     null,

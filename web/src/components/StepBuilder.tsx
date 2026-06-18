@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { terminalLabel } from "./badges";
 
 // 단계 빌더(비주얼 스튜디오 1차 슬라이스): 단계(노드)를 양식으로 구성 → 유효 IR 생성.
-// 안전 범위: action은 추가 필수 필드 없는 act/observe(+없음)만, 흐름키는 next/terminal/on[flags]만 생성.
-// extract/navigate/shell 등 추가 필드가 필요한 액션은 'IR 직접 편집'에서 다룬다(무효 IR 미생성 원칙).
+// 안전 범위: action은 act/observe/none과 필수 필드를 폼으로 채울 수 있는 extract/navigate를 생성한다.
+// shell/api_call처럼 별도 레지스트리나 비밀 경계가 필요한 액션은 'IR 직접 편집'에서 다룬다(무효 IR 미생성 원칙).
 // 산출 IR은 그대로 컴파일 파이프라인(ajv→IREL→V1–V11)이 저장 시 재검증한다.
 
 // IREL flags 닫힌 레지스트리(ir-static-validation §2 / architecture §9.2). when = "flags.<flag>".
@@ -84,8 +84,8 @@ function stepsToIr(name: string, steps: readonly Step[], version: number): unkno
 const SELECT = { padding: "4px 6px", fontSize: 13 } as const;
 
 const DEFAULT_STEPS: Step[] = [
-    { id: "n1", action: "observe", flow: { kind: "on", rules: [{ when: "flags.not_found", target: "n2", priority: 1 }] } },
-    { id: "n2", action: "none", flow: { kind: "terminal", terminal: "success" } },
+    { id: "n1", action: "observe", flow: { kind: "next", target: "n2" } },
+    { id: "n2", action: "extract", schemaRef: "extracted_rows", extractInstruction: defaultExtractInstruction("extracted_rows"), flow: { kind: "terminal", terminal: "success" } },
 ];
 
 export function stepBuilderInitialFromIr(ir: unknown): StepBuilderInitial | undefined {
@@ -215,13 +215,14 @@ export function StepBuilder({ onChange, initial, version = 1 }: { onChange: (ir:
                   <span className="subtle">출력 스키마(schema_ref)</span>{" "}
                   <input value={s.schemaRef ?? ""} onChange={(e) => update(i, { schemaRef: e.target.value })} style={{ ...SELECT, width: 150 }} />
                 </label>
-                <label style={{ flexBasis: 360, flexGrow: 1 }}>
-                  <span className="subtle">추출 규칙</span>{" "}
-                  <input
+                <label style={{ flexBasis: "100%", flexGrow: 1 }}>
+                  <span className="subtle">추출 규칙</span>
+                  <textarea
                     value={s.extractInstruction ?? ""}
                     onChange={(e) => update(i, { extractInstruction: e.target.value })}
                     placeholder={defaultExtractInstruction(s.schemaRef)}
-                    style={{ ...SELECT, width: "min(100%, 360px)" }}
+                    rows={3}
+                    style={{ width: "100%", minHeight: 76, marginTop: 4, padding: "8px 10px", fontSize: 13, boxSizing: "border-box", resize: "vertical" }}
                   />
                 </label>
               </>
