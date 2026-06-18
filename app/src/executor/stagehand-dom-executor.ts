@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 
 import { ERROR_CATALOG, type ErrorCode } from "../../../ts/error-catalog";
 import type {
+  ArtifactRef,
   ExceptionClass,
   ExecutorPlugin,
   PlainSecret,
@@ -31,10 +32,13 @@ import type {
   LLMResponse,
   SecretStoreBoundary,
 } from "../../../ts/security-middleware-contract";
-import { GatewayError } from "../gateway/llm-gateway";
+import { GatewayError, type GatewayArtifactSink } from "../gateway/llm-gateway";
 import { parseActionPlan, type ActionPlan, type ActionPlanCache, type ActionPlanCacheKey } from "./action-plan-cache";
 import type { CdpSession, CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
+import { normalizePageSnapshot } from "./page-snapshot";
+import { StagehandDomExecutorError, type DomExecutorErrorCode } from "./dom-executor-error";
+import { applyRowAnchor, coerceRowAnchor, type ExtractRowAnchor } from "./extract-row-anchor";
 
 /** Gateway 호출 경계(LlmGateway 가 구조적으로 충족). Executor 는 adapter 가 아니라 이 포트만 본다. */
 export interface LlmGatewayCaller {
@@ -53,19 +57,11 @@ export type DomAction =
   //   value: valueRef 가 run params 에서 해소된 평문(미해소면 부재). secretRef 와 상호배타. 평문 비밀 아님(반려 사유 등).
   | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string }
   | { type: "observe"; instruction: string }
-  | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> } };
+  | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> }; rowAnchor?: ExtractRowAnchor };
 
-export type DomExecutorErrorCode = "EXECUTOR_CAPABILITY_MISMATCH" | "IR_SCHEMA_INVALID" | "RUN_ABORTED";
-
-export class StagehandDomExecutorError extends Error {
-  constructor(
-    readonly code: DomExecutorErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = "StagehandDomExecutorError";
-  }
-}
+// 결정형 행별 필드 추출(LLM 속성 환각 차단)은 extract-row-anchor.ts(의미 단위 분리, CLAUDE.md #7) — 타입/에러 재export(호환).
+export { StagehandDomExecutorError, type DomExecutorErrorCode };
+export type { ExtractRowAnchor };
 
 export interface StagehandDomExecutorConfig {
   model: string;
@@ -78,10 +74,6 @@ export interface StagehandDomExecutorConfig {
 
 const UTILITY_ACTIONS = new Set(["navigate", "download", "upload", "api_call", "file", "shell"]);
 const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", schemaVersion: "1", strict: true } as const;
-// LLM 이 셀렉터를 정하려면 원문 DOM 이 필요(PageState 파생 신호만으론 #password 등 타깃 불가). user 메시지로 실어
-// Gateway redaction(§4) 경계가 redact/injection-탐지하게 한다. 토큰 예산 보호용 상한(초과분 절단).
-const MAX_PAGE_SNAPSHOT_CHARS = 24000;
-const MAX_VISIBLE_TEXT_CHARS = 12000;
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 
@@ -115,6 +107,11 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     // 자격증명 fill(secretRef) 경계 — 둘 다 주입돼야 fill 의 valueRef 를 해소한다(미주입 시 loud throw, 조용한 빈 fill 금지).
     private readonly secrets?: SecretStoreBoundary,
     private readonly executorPrincipal?: AuthenticatedPrincipal,
+    // extract.rowAnchor 로 결정형 강화한 행을 인박스용 typed artifact(type=approval_inbox 등 sink cfg)로 영속하는 옵션 sink.
+    // 현재 dev:serve(run-loop)만 주입한다. **미주입 시 강화는 StepResult.extracted(휘발)에만 반영되고 어떤 artifact 로도
+    // 영속되지 않는다** — 영속 artifact(artifacts[0]=gateway outputRef)는 강화 전 LLM 원문이다. prod 인박스용 강화-영속
+    // 배선은 후속(TODO: prod executor 팩토리에 동일 sink seam 또는 enriched outputRef 재기록).
+    private readonly extractArtifactSink?: GatewayArtifactSink,
   ) {}
 
   capabilities(): { dom: boolean; vision: boolean; utility: boolean } {
@@ -152,21 +149,30 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     }
 
     const endedAt = nowIso();
+    // extract.rowAnchor: LLM 추출 후 DOM 에서 결정형으로 특정 필드(doc_ref 등)를 권위 세팅(LLM 속성 환각 차단). 강화된
+    // 봉투를 StepResult.extracted 로 쓰고, sink 주입 시 인박스용 typed artifact 로도 영속한다. rowAnchor 미선언 시 기존 경로.
+    let extracted: unknown = a.type === "extract" ? res.parsedJson : undefined;
+    const artifacts: ArtifactRef[] = [res.outputRef];
+    if (a.type === "extract" && a.rowAnchor !== undefined && res.parsedJson !== null && typeof res.parsedJson === "object") {
+      extracted = await applyRowAnchor(stepId, a.rowAnchor, res.parsedJson, this.sessions.forLease(ctx.leaseId));
+      if (this.extractArtifactSink !== undefined) {
+        // meta 브랜드 타입(TenantId/RunId/StepId)은 buildRequest 와 동일 캐스트 패턴 — RunContext 는 평문 string 으로 보유.
+        const meta = { tenantId: ctx.tenantId, runId: ctx.runId, stepId, attempt: ctx.attempt } as unknown as Parameters<GatewayArtifactSink["put"]>[1];
+        artifacts.push(await this.extractArtifactSink.put(JSON.stringify(extracted), meta));
+      }
+    }
     // 표준 노드 출력 row_count(ir-expression §2): extract 출력 봉투 {rows:[...]}의 rows 길이. rows 부재 시 미산출(미투영).
-    const rows =
-      a.type === "extract" && res.parsedJson !== null && typeof res.parsedJson === "object"
-        ? (res.parsedJson as { rows?: unknown }).rows
-        : undefined;
+    const rows = extracted !== null && typeof extracted === "object" ? (extracted as { rows?: unknown }).rows : undefined;
     const rowCount = Array.isArray(rows) ? rows.length : undefined;
     return {
       stepId,
       action: a.type,
       status: "success",
       output: { outputRef: res.outputRef, finishReason: res.finishReason, ...(rowCount !== undefined ? { rowCount } : {}) },
-      extracted: a.type === "extract" ? res.parsedJson : undefined,
+      extracted,
       pageStateBefore: before,
       pageStateAfter: before, // 다음 observe 노드가 PageState 갱신(UtilityExecutor 와 동일 패턴).
-      artifacts: [res.outputRef],
+      artifacts,
       stagehandCallIds: callIds,
       cache: { mode: "bypass" },
       sideEffect: { kind: "read_only", committed: true },
@@ -447,7 +453,13 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.output must be {schemaRef,schemaVersion,strict}`);
       }
       const schema = typeof o.schema === "object" && o.schema !== null ? (o.schema as Record<string, unknown>) : undefined;
-      return { type, instruction, output: { schemaRef: o.schemaRef, schemaVersion: o.schemaVersion, strict: o.strict, ...(schema !== undefined ? { schema } : {}) } };
+      const rowAnchor = coerceRowAnchor((action as { rowAnchor?: unknown }).rowAnchor, stepId);
+      return {
+        type,
+        instruction,
+        output: { schemaRef: o.schemaRef, schemaVersion: o.schemaVersion, strict: o.strict, ...(schema !== undefined ? { schema } : {}) },
+        ...(rowAnchor !== undefined ? { rowAnchor } : {}),
+      };
     }
     if (type === "act") {
       const se = (action as { sideEffect?: unknown }).sideEffect;
@@ -467,30 +479,3 @@ export class StagehandDomExecutor implements ExecutorPlugin {
   }
 }
 
-function normalizePageSnapshot(snapshot: unknown): string | undefined {
-  if (typeof snapshot === "string") {
-    const text = cleanSnapshotText(snapshot);
-    return text.length > 0 ? text.slice(0, MAX_PAGE_SNAPSHOT_CHARS) : undefined;
-  }
-  if (typeof snapshot !== "object" || snapshot === null) return undefined;
-
-  const rec = snapshot as { visibleText?: unknown; html?: unknown };
-  const visibleText = typeof rec.visibleText === "string" ? cleanSnapshotText(rec.visibleText) : "";
-  const html = typeof rec.html === "string" ? cleanSnapshotText(rec.html) : "";
-  const parts: string[] = [];
-  if (visibleText.length > 0) parts.push(`[visible_text]\n${visibleText.slice(0, MAX_VISIBLE_TEXT_CHARS)}`);
-
-  const remaining = MAX_PAGE_SNAPSHOT_CHARS - parts.join("\n\n").length;
-  if (html.length > 0 && remaining > 128) parts.push(`[html]\n${html.slice(0, remaining)}`);
-
-  const out = parts.join("\n\n").slice(0, MAX_PAGE_SNAPSHOT_CHARS);
-  return out.length > 0 ? out : undefined;
-}
-
-function cleanSnapshotText(value: string): string {
-  return value
-    .replace(/\r\n?/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{4,}/g, "\n\n\n")
-    .trim();
-}

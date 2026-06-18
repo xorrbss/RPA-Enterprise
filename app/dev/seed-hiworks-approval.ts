@@ -50,7 +50,10 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
   // (origin = approval.office.hiworks.com → 위 결재 site_profile/세션으로 해소). observe 게이트: 로그인 폼이면 session_expired,
   // 결재 목록 행(td.docu-num)이 렌더되면 추출. recon 확정 셀렉터로 게이트 강화(catch-all 제거) → 미렌더 시 IR_NO_BRANCH_MATCHED
   // 로 loud 실패(빈 그리드 무음 추출 금지). doc_ref 는 행의 data-href(ApprovalDocument.getView('<docId>',...))에서 docId 를
-  // 읽어 결정형으로 구성(LLM attribute 추출 신뢰도↓ → 명시 지시). doc_ref 존재가 Model A(건별 결재 run)의 사활.
+  // 읽어 결정형으로 구성(extract.args.row_anchor — LLM 속성 환각 차단, 실행기가 권위 세팅). doc_ref 존재가 Model A(건별 결재 run)의 사활.
+  // ⚠ **현 한계(명시): 현재 보이는 1페이지만 수집한다**(open→check→collect→done; 페이지 순회 루프 없음). 라이브 결재함은
+  //   페이지네이션되므로(예 172건 중 1페이지) 인박스는 1페이지분만 담는다 — '전체 결재'가 아니다. 전 페이지 수집은 닫힌 flag
+  //   no_next_page 로 check→collect→(no_next_page?done:next_page act→collect) 순회 루프를 구성하는 후속 작업(YAGNI 까지 보류).
   const collect = compileScenario(
     {
       meta: { name: "하이웍스 결재 수집", version: 1 },
@@ -69,14 +72,24 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
             {
               action: "extract",
               instruction:
-                '결재 대기 목록 테이블의 각 행(tr)에서 다음을 추출하라. 문서번호(approval_id, 예 "IB-..."), 제목(title), ' +
-                '기안자(drafter), 기안일(drafted_at, 예 "2026-06-17"), 구분(doc_type, 예 "결재"/"합의"), 상태(status). ' +
-                "그리고 doc_ref 는 각 행의 문서번호 셀(td.docu-num)의 data-href 속성값에서 " +
-                "ApprovalDocument.getView('<docId>', ...) 의 <docId>(숫자) 를 읽어 " +
-                '"https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/<docId>" 형식의 절대 URL 로 구성하라. ' +
-                "data-href 가 없거나 docId 를 못 찾은 행은 추측하지 말고 제외하라(가짜 값 금지). " +
-                '반드시 JSON 으로만 응답: {"rows":[{"approval_id":"","title":"","drafter":"","drafted_at":"","doc_type":"","status":"","doc_ref":""}]}',
+                "결재 대기 목록 테이블의 각 행(tr)에서 다음을 **가시 텍스트로만** 추출하라. " +
+                'approval_id(문서번호 셀 td.docu-num 의 텍스트를 한 글자도 바꾸지 말고 그대로, 예 "IB-지출(거래처)-20260604-0001"), ' +
+                'title(제목), drafter(기안자), drafted_at(기안일, 예 "2026-06-17"), doc_type(구분, 예 "결재"/"합의"), status(상태). ' +
+                "doc_ref 는 만들지 말 것 — 시스템이 DOM 의 data-href 속성에서 결정형으로 채운다(LLM 의 속성값 추측은 환각이라 금지). " +
+                '반드시 JSON 으로만 응답: {"rows":[{"approval_id":"","title":"","drafter":"","drafted_at":"","doc_type":"","status":""}]}',
               schema_ref: "approval_inbox_rows",
+              args: {
+                // 결정형 doc_ref(LLM 환각 차단) — td.docu-num 의 data-href(ApprovalDocument.getView('<docId>','W'))에서 docId 를
+                // 읽어 approval_id(문서번호) 키-조인으로 각 행에 권위 세팅한다. 매칭 없는(환각) 행은 실행기가 drop(가짜 값 노출 금지).
+                row_anchor: {
+                  selector: "td.docu-num",
+                  match_field: "approval_id",
+                  field: "doc_ref",
+                  attribute: "data-href",
+                  pattern: "getView\\(['\"](\\d+)['\"]",
+                  template: "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/$1",
+                },
+              },
             },
           ],
           next: "done",

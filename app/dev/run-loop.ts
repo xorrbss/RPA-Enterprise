@@ -164,6 +164,8 @@ export async function startRunLoop(
   tenantId: string,
   intervalMs = 2000,
   artifactSink?: GatewayArtifactSink,
+  // extract.rowAnchor 로 결정형 강화한 행을 인박스용 typed artifact(approval_inbox)로 영속하는 sink(dom 실행기에 주입).
+  extractArtifactSink?: GatewayArtifactSink,
 ): Promise<RunLoop | null> {
   const chrome = findChrome();
   if (chrome === null) {
@@ -203,7 +205,7 @@ export async function startRunLoop(
   // gateway 있으면 dom(act/observe/extract) + utility 합성. 없으면 utility 만(act/extract 시나리오는 실패).
   const executor: ExecutorPlugin =
     loggedGateway !== null
-      ? new CompositeExecutor(new StagehandDomExecutor(loggedGateway, provider, DOM_CFG, undefined, secrets, executorPrincipal), utility)
+      ? new CompositeExecutor(new StagehandDomExecutor(loggedGateway, provider, DOM_CFG, undefined, secrets, executorPrincipal, extractArtifactSink), utility)
       : utility;
   // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
   const sessionStore = buildDevSessionStore(pool);
