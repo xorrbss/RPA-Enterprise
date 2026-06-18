@@ -119,6 +119,31 @@ function clickSessions(present: boolean) {
   return { provider: { forLease: () => session } as CdpSessionProvider, ops };
 }
 
+// 결정형 클릭/부재단언 — expr 별 응답 분기(존재 !==null / 부재 ===null / radio checked read-back).
+function detSessions(opts: { present?: boolean; absent?: boolean; checkState?: string }) {
+  const ops: string[] = [];
+  const session: CdpSession = {
+    url: () => "u",
+    goto: async () => {},
+    reload: async () => {},
+    evaluate: async (expr: string) => {
+      const s = String(expr);
+      if (s.includes('"radio"') || s.includes(".checked")) return (opts.checkState ?? "na") as never;
+      if (s.includes("=== null")) return (opts.absent ?? true) as never;
+      return (opts.present ?? true) as never;
+    },
+    sendCDP: async () => undefined as never,
+    click: async (sel) => void ops.push(`click:${sel}`),
+    fill: async () => {},
+    selectOption: async () => {},
+    setInputFiles: async () => {},
+    downloadDir: () => "/tmp",
+    waitForDownload: async () => true,
+    close: async () => {},
+  };
+  return { provider: { forLease: () => session } as CdpSessionProvider, ops };
+}
+
 // 강화된 추출 행을 영속하는 fake typed-artifact sink(인박스 artifact). put content/meta 를 캡처.
 function fakeExtractSink() {
   const puts: Array<{ content: string; meta: unknown }> = [];
@@ -418,6 +443,37 @@ async function main(): Promise<void> {
     const err = await caught(new StagehandDomExecutor(countingGateway().gw, s.provider, cfg).execute("c2", { type: "act", instruction: "click", clickSelector: "#missing" }, makeCtx()));
     process.env.DET_CLICK_SETTLE_MS = prev;
     check("act click_selector 미존재 → IR_SCHEMA_INVALID(settle 초과 loud, 클릭 0)", err?.code === "IR_SCHEMA_INVALID" && s.ops.length === 0, `${err?.code} ops=${s.ops.join(",")}`);
+  }
+
+  // (break-it 보완) click_selector(radio): 클릭 후 checked → 성공.
+  {
+    const s = detSessions({ present: true, checkState: "checked" });
+    const r = await new StagehandDomExecutor(countingGateway().gw, s.provider, cfg).execute("c3", { type: "act", instruction: "승인 라디오", clickSelector: 'input[name="approval_value"][value="2"]' }, makeCtx());
+    check("click_selector radio: 클릭 후 checked → success", r.status === "success" && s.ops.includes('click:input[name="approval_value"][value="2"]'), s.ops.join(","));
+  }
+
+  // (break-it 보완) click_selector(radio): 클릭 후 미선택(unchecked, 무효 클릭) → loud(잘못된 값 커밋 방지).
+  {
+    const s = detSessions({ present: true, checkState: "unchecked" });
+    const err = await caught(new StagehandDomExecutor(countingGateway().gw, s.provider, cfg).execute("c4", { type: "act", instruction: "승인 라디오", clickSelector: 'input[name="approval_value"][value="2"]' }, makeCtx()));
+    check("click_selector radio 미선택 → IR_SCHEMA_INVALID(무효 클릭 loud)", err?.code === "IR_SCHEMA_INVALID");
+  }
+
+  // (break-it 보완) assert_absent: 셀렉터 부재 → 성공(커밋 witness 충족).
+  {
+    const s = detSessions({ absent: true });
+    const r = await new StagehandDomExecutor(countingGateway().gw, s.provider, cfg).execute("c5", { type: "act", instruction: "커밋 witness", assertAbsent: 'button[onclick*="getApprovalLayer"]' }, makeCtx());
+    check("assert_absent: 셀렉터 부재 → success(커밋됨)", r.status === "success" && s.ops.length === 0, s.ops.join(","));
+  }
+
+  // (break-it 보완) assert_absent: 셀렉터 잔존 → settle 초과 loud(효과 미반영=커밋 실패를 success 로 은폐 금지).
+  {
+    const prev = process.env.DET_CLICK_SETTLE_MS;
+    process.env.DET_CLICK_SETTLE_MS = "60";
+    const s = detSessions({ absent: false });
+    const err = await caught(new StagehandDomExecutor(countingGateway().gw, s.provider, cfg).execute("c6", { type: "act", instruction: "커밋 witness", assertAbsent: "button.x" }, makeCtx()));
+    process.env.DET_CLICK_SETTLE_MS = prev;
+    check("assert_absent 잔존 → IR_SCHEMA_INVALID(거짓 성공 차단)", err?.code === "IR_SCHEMA_INVALID");
   }
 
   // ActionPlanCache MISS → LLM 호출 + put + mode=miss

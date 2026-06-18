@@ -118,9 +118,12 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
   //   결재 버튼은 class/id 가 없어 LLM 이 button.approval-btn 으로 환각했었다(라이브 실패). 결정형 셀렉터:
   //   결재(레이어 열기)=button[onclick*=getApprovalLayer], 승인 라디오=input[name=approval_value][value=2](기본이지만 명시),
   //   반려 라디오=[value=4], 확인(커밋)=button[onclick*=approvalAction(false)](approvalAction(true)=다음문서·hidePopup 과 구분).
-  // 커밋(비가역)은 confirm 의 확인 클릭뿐(결재/라디오/의견은 미커밋). click_selector 미존재 시 settle 초과로 loud(조용한 무성공
-  //   금지). ⚠ 승인 경로는 라이브 검증; 반려 경로는 동일 레이어 recon 기반이나 라이브 미검증(의견 fill selector 는 LLM — 후속에
-  //   fill_selector 로 결정형화). recheck 는 coarse(로그인 바운스=실패 / 그 외=성공); 문서-수준 "처리됨" witness 는 후속 하드닝.
+  // 커밋(비가역)은 confirm 의 확인 클릭뿐(결재/라디오/의견은 미커밋). click_selector 미존재 시 settle 초과로 loud(조용한 무성공 금지).
+  // 비가역 안전(적대 break-it 보완): 라디오 클릭 후 실행기가 checked read-back(무효 클릭→loud), confirm 후 recheck→verify_committed
+  //   (assert_absent: 결재 버튼 소멸=실제 커밋 witness; 잔존 시 loud)로 '거짓 성공-보고'를 닫는다. settle 직전 abort 재확인(TOCTOU).
+  // ✅ 승인 경로 라이브 검증됨(2026-06-18 IB-품의-20260416-0003/929581 실제 승인 — 결재 버튼 소멸+승인 타임스탬프 확인).
+  // ⚠ **반려 경로=휴먼게이트(라이브 미검증)**: 클릭은 결정형이나 의견 fill selector 가 아직 LLM(환각 시 틀린 필드 fill 위험) —
+  //   prod 반려 사용 전 의견칸(textarea#approvalReasonMessage)을 fill_selector 로 결정형화 + 폐기가능 문서로 라이브 검증 필요.
   const APPROVAL_BTN = 'button[onclick*="getApprovalLayer"]'; // 결재 = 승인 레이어 열기.
   const CONFIRM_BTN = 'button[onclick*="approvalAction(false)"]'; // 확인 = 커밋(승인/반려 공통, 선택된 approval_value 반영).
   const decide = compileScenario(
@@ -184,8 +187,15 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
           what: [{ action: "observe" }],
           on: [
             { when: "flags.login_required", target: "submit_failed", priority: 2 }, // 제출 후 로그인 바운스 = 실패
-            { when: "true", target: "done", priority: 1 }, // 클릭 완료 + 인증 유지 = 성공(coarse; 문서 witness 는 후속 하드닝)
+            { when: "true", target: "verify_committed", priority: 1 }, // 비-바운스 → 커밋 효과 witness 검증
           ],
+        },
+        // 커밋 효과 witness(결정형 assert_absent): 확인 클릭 후 이 사용자의 결재 버튼(getApprovalLayer)이 사라져야 실제
+        //   커밋된 것(recon 확정 — 승인 후 결재 버튼 소멸). 잔존 시 loud(서버 거부/no-op 커밋을 success 로 은폐 금지).
+        //   이로써 비가역 결재의 '바운스 아니면 무조건 성공'(거짓 성공-보고)을 닫는다.
+        verify_committed: {
+          what: [{ action: "act", instruction: "결재 커밋 witness — 결재 버튼 소멸 확인", args: { assert_absent: APPROVAL_BTN } }],
+          next: "done",
         },
         done: { terminal: "success" },
         session_expired: { terminal: "fail_business" },

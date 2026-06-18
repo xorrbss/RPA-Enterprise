@@ -322,6 +322,19 @@ function main(): void {
     check("act: click_selector + value_ref 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
+  // 21) act: args.assert_absent → assertAbsent 스레드(커밋 효과 witness).
+  {
+    const s = compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "witness", args: { assert_absent: 'button[onclick*="getApprovalLayer"]' } }], terminal: "success" } } }, {});
+    const act = s.nodes.a?.what[0] as { type: string; assertAbsent?: string } | undefined;
+    check("act: assert_absent → assertAbsent 스레드", act?.type === "act" && act.assertAbsent === 'button[onclick*="getApprovalLayer"]', JSON.stringify(act));
+  }
+
+  // 22) act: assert_absent + click_selector 동시 → IR_SCHEMA_INVALID(결정형 모드 상호배타).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "x", args: { assert_absent: "#b", click_selector: "#c" } }], terminal: "success" } } }, {}));
+    check("act: assert_absent + click_selector 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

@@ -58,7 +58,9 @@ export type DomAction =
   // clickSelector: 결정형 클릭 타깃(IR act.args.click_selector). 선언되면 실행기가 LLM 을 **전혀** 경유하지 않고 그 셀렉터를
   //   settle 폴링 후 클릭한다(LLM 의 셀렉터 환각 차단 — 예 하이웍스 결재 버튼은 class/id 없는 onclick 속성 매칭). value/secret 와
   //   상호배타(클릭 전용). 미존재면 loud(조용한 false 금지).
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string }
+  // assertAbsent: 결정형 부재 단언(IR act.args.assert_absent). 셀렉터가 사라질 때까지 settle 폴링 — 비가역 커밋의 효과
+  //   witness(예 확인 클릭 후 결재 버튼 소멸=실제 커밋). deadline 까지 잔존 시 loud. click/fill 과 상호배타(검증 전용).
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string; assertAbsent?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> }; rowAnchor?: ExtractRowAnchor };
 
@@ -202,6 +204,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (a.clickSelector !== undefined) {
       return this.executeDeterministicClick(stepId, a.clickSelector, a.sideEffect, ctx, session, before, startedAt);
     }
+    // 결정형 부재 단언(assert_absent): 셀렉터 소멸까지 settle — 비가역 커밋 효과 witness(잔존 시 loud).
+    if (a.assertAbsent !== undefined) {
+      return this.executeAssertAbsent(stepId, a.assertAbsent, a.sideEffect, ctx, session, before, startedAt);
+    }
     // 캐시 키 = action_plan_cache UNIQUE 7컬럼 + tenant(§D family=(url_pattern, dom_structural_hash)).
     const cacheKey: ActionPlanCacheKey = {
       tenantId: ctx.tenantId,
@@ -301,7 +307,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
 
   /**
    * 결정형 클릭 — IR 선언 셀렉터(click_selector)를 settle 폴링 후 CDP 클릭. LLM 미경유(셀렉터 환각 차단). 무거운 SPA 상세/
-   * async 모달(예 하이웍스 결재 레이어)을 위해 존재 폴링 후 클릭하고, deadline 초과·abort 시 loud(조용한 false 금지).
+   * async 모달(예 하이웍스 결재 레이어)을 위해 존재 폴링 후 클릭한다. 비가역 결재 안전:
+   *  - settle 직후~클릭 직전 abort 재확인(TOCTOU — 취소된 run 이 비가역 커밋을 발사하지 않게).
+   *  - radio/checkbox 타깃이면 클릭 후 checked read-back(무효 클릭/페이지 JS 재설정으로 의도와 다른 값 커밋 방지).
+   *  - click 자체는 Playwright actionability(visible/enabled/stable)를 검사해 비액셔너블 시 throw(=loud).
    */
   private async executeDeterministicClick(
     stepId: string,
@@ -312,8 +321,21 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     before: ReturnType<typeof pageStateRef>,
     startedAt: string,
   ): Promise<StepResult> {
-    await this.waitForSelectorPresent(session, selector, stepId, ctx);
+    await this.waitForSelectorState(session, selector, stepId, ctx, true);
+    if (ctx.abortSignal.aborted) {
+      throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted before deterministic click '${selector}'`);
+    }
     await session.click(selector);
+    // radio/checkbox 클릭 후 실제 선택(checked) read-back — 무효 클릭이면 loud(비가역 커밋 전 의도된 값 보장).
+    const checkState = await session.evaluate<string>(
+      `(function(){var e=document.querySelector(${JSON.stringify(selector)});if(!e||(e.type!=="radio"&&e.type!=="checkbox"))return "na";return e.checked?"checked":"unchecked";})()`,
+    );
+    if (checkState === "unchecked") {
+      throw new StagehandDomExecutorError(
+        "IR_SCHEMA_INVALID",
+        `step '${stepId}' click_selector '${selector}'(radio/checkbox) 클릭 후 미선택(checked=false) — 무효 클릭, 조용한 false 금지`,
+      );
+    }
     const endedAt = nowIso();
     return {
       stepId,
@@ -330,26 +352,59 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     };
   }
 
-  /** click_selector 존재 폴링(settle). deadline 초과/abort 시 loud throw — 조용한 미클릭 금지. */
-  private async waitForSelectorPresent(session: CdpSession, selector: string, stepId: string, ctx: RunContext): Promise<void> {
+  /**
+   * 결정형 부재 단언(assert_absent) — 셀렉터가 사라질 때까지 settle 폴링. 비가역 커밋의 **효과 witness**(예 확인 클릭 후
+   * 결재 버튼 소멸 = 실제 커밋됨)로 쓴다. deadline 까지 잔존하면 loud(효과 미반영=커밋 실패를 success 로 은폐 금지).
+   */
+  private async executeAssertAbsent(
+    stepId: string,
+    selector: string,
+    sideEffect: SideEffectKind | undefined,
+    ctx: RunContext,
+    session: CdpSession,
+    before: ReturnType<typeof pageStateRef>,
+    startedAt: string,
+  ): Promise<StepResult> {
+    await this.waitForSelectorState(session, selector, stepId, ctx, false);
+    const endedAt = nowIso();
+    return {
+      stepId,
+      action: "act",
+      status: "success",
+      output: { plan: { operation: "assert_absent", selector } },
+      pageStateBefore: before,
+      pageStateAfter: before,
+      artifacts: [],
+      stagehandCallIds: [],
+      cache: { mode: "bypass" },
+      sideEffect: { kind: sideEffect ?? "read_only", committed: true },
+      timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
+    };
+  }
+
+  /**
+   * 셀렉터 존재(wantPresent=true)/부재(false) settle 폴링. 매 폴 abort 재확인, deadline 초과 시 loud throw(조용한 미클릭/
+   * 미검증 금지). 존재 판정은 querySelector!==null(액셔너빌리티는 click 이 별도 검사); 부재는 ===null.
+   */
+  private async waitForSelectorState(session: CdpSession, selector: string, stepId: string, ctx: RunContext, wantPresent: boolean): Promise<void> {
     const settleMs = clickSettleMs();
     const deadline = Date.now() + settleMs;
-    const probe = `document.querySelector(${JSON.stringify(selector)}) !== null`;
+    const probe = `document.querySelector(${JSON.stringify(selector)}) ${wantPresent ? "!==" : "==="} null`;
     for (;;) {
       if (ctx.abortSignal.aborted) {
-        throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted while awaiting click_selector '${selector}'`);
+        throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted while awaiting selector '${selector}' (${wantPresent ? "present" : "absent"})`);
       }
-      let present = false;
+      let ok = false;
       try {
-        present = await session.evaluate<boolean>(probe);
+        ok = await session.evaluate<boolean>(probe);
       } catch {
-        // 네비게이션/일시 단절 — 다음 폴에서 재시도(settle 후 성공). deadline 까지 미존재면 loud.
+        // 네비게이션/일시 단절 — 다음 폴에서 재시도. deadline 까지 미충족이면 loud.
       }
-      if (present) return;
+      if (ok) return;
       if (Date.now() >= deadline) {
         throw new StagehandDomExecutorError(
           "IR_SCHEMA_INVALID",
-          `step '${stepId}' act.click_selector '${selector}' 미존재(settle ${settleMs}ms 초과) — 조용한 false 금지`,
+          `step '${stepId}' selector '${selector}' ${wantPresent ? "미존재" : "잔존"}(settle ${settleMs}ms 초과) — 조용한 false 금지`,
         );
       }
       await sleep(CLICK_POLL_MS);
@@ -537,6 +592,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       const vr = (action as { valueRef?: unknown }).valueRef;
       const val = (action as { value?: unknown }).value;
       const cs = (action as { clickSelector?: unknown }).clickSelector;
+      const aa = (action as { assertAbsent?: unknown }).assertAbsent;
       return {
         type,
         instruction,
@@ -545,6 +601,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         ...(typeof vr === "string" && vr.length > 0 ? { valueRef: vr } : {}),
         ...(typeof val === "string" ? { value: val } : {}),
         ...(typeof cs === "string" && cs.length > 0 ? { clickSelector: cs } : {}),
+        ...(typeof aa === "string" && aa.length > 0 ? { assertAbsent: aa } : {}),
       };
     }
     return { type, instruction };
