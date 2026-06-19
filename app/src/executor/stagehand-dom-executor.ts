@@ -16,9 +16,11 @@ import { createHash } from "node:crypto";
 import { ERROR_CATALOG, type ErrorCode } from "../../../ts/error-catalog";
 import type {
   ArtifactRef,
+  ChallengeSummary,
   ExceptionClass,
   ExecutorPlugin,
   PlainSecret,
+  RedactedString,
   RunContext,
   SecretRef,
   SideEffectKind,
@@ -162,16 +164,81 @@ const NETWORK_JSON_CAPTURE_SCRIPT = `(() => {
   ensureStore();
   return { installed: true, already: false };
 })()`;
+const CHALLENGE_DETECTION_SCRIPT = `(() => {
+  const marker = "rpa_challenge_detector_v1";
+  const visible = (el) => {
+    if (!el || !(el instanceof Element)) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    if (el instanceof HTMLInputElement && el.type === "hidden") return false;
+    const rect = el.getBoundingClientRect();
+    return (rect.width > 0 && rect.height > 0) || el.getClientRects().length > 0;
+  };
+  const visibleMatches = (selector) => Array.from(document.querySelectorAll(selector)).some(visible);
+  const visibleInputs = () => Array.from(document.querySelectorAll("input, textarea")).filter(visible);
+  const text = ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").trim();
+  const attrText = (el) => [
+    el.id,
+    el.getAttribute("name"),
+    el.getAttribute("autocomplete"),
+    el.getAttribute("placeholder"),
+    el.getAttribute("aria-label"),
+    el.getAttribute("title"),
+  ].filter(Boolean).join(" ");
+  const iframeChallenge = Array.from(document.querySelectorAll("iframe")).some((el) => {
+    if (!visible(el)) return false;
+    const s = [
+      el.getAttribute("src"),
+      el.getAttribute("title"),
+      el.getAttribute("name"),
+      el.id,
+      el.className,
+    ].filter(Boolean).join(" ");
+    return /recaptcha|hcaptcha|captcha/i.test(s);
+  });
+  const mfaInput = visibleInputs().some((el) => /one-time-code|otp|mfa|2fa|two-factor|verification|인증번호|2단계|보안코드/i.test(attrText(el)));
+  const captchaWidget = visibleMatches(".g-recaptcha, .h-captcha, [data-sitekey], [data-captcha], [id*='captcha'], [class*='captcha'], [id*='Captcha'], [class*='Captcha']");
+  if (mfaInput || /\\b(otp|mfa|2fa)\\b|one[- ]?time code|two[- ]?factor|인증번호|2단계 인증|보안코드/i.test(text)) {
+    return { type: "mfa", detectedBy: "dom", confidence: 0.93, marker };
+  }
+  if (captchaWidget || iframeChallenge || /captcha challenge|complete (the )?captcha|로봇이 아닙니다|자동 입력 방지|보안문자/i.test(text)) {
+    return { type: "captcha", detectedBy: "dom", confidence: 0.93, marker };
+  }
+  return null;
+})()`;
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
+type HumanAssistChallenge = ChallengeSummary & { type: "captcha" | "mfa" };
 
-// ① ChallengeDetector 미구현 (RQ-016 — codex/D3 executor 스트림 소유; repo 릴리스 블로커 아님, open-issues.md 추적).
-//   현황(은폐 금지): challenge 는 여기서 항상 failed_challenge 로만 분류되고, status='suspended' + res.challenge(ChallengeSummary)
-//     를 내보내는 production 경로가 없다 — suspend 배관(인터프리터 res.challenge.type→transitions→port→resolve.<kind>)은
-//     완비됐고 본 executor 가 신호를 안 줄 뿐이다(②③ 참조).
-//   미정: ChallengeSummary.type 을 captcha|mfa 로 판정할 신호(dom|network|screenshot|vlm)가 미정 — 라이브 provider 행동
-//     의존이라 추측 구현은 오라벨링 위험. 도입 시 captcha|mfa 감지→status='suspended' + challenge={type,detectedBy,confidence}
-//     반환하면 mfa 까지 무수정으로 흐른다(+ coordinator→driveSuspend production 재배선).
+function humanAssistChallenge(challenge: ChallengeSummary | undefined): HumanAssistChallenge | undefined {
+  if (challenge?.type === "captcha" || challenge?.type === "mfa") return challenge as HumanAssistChallenge;
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseHumanAssistChallenge(value: unknown): HumanAssistChallenge | undefined {
+  if (!isRecord(value)) return undefined;
+  const type = value.type;
+  const detectedBy = value.detectedBy;
+  const confidence = value.confidence;
+  if ((type !== "captcha" && type !== "mfa") || detectedBy !== "dom" || typeof confidence !== "number") {
+    return undefined;
+  }
+  return {
+    type,
+    detectedBy,
+    confidence: Math.max(0, Math.min(1, confidence)),
+  };
+}
+
+// ChallengeDetector v1: captcha/mfa only. Those are the only challenge classes
+// the interpreter/driver can route to human assist without guessing policy.
+// block_page/rate_limit/login_loop/access_denied/session_expired remain explicit
+// failure/branch signals until their resolution policies exist.
 /** error-catalog exceptionClass → StepStatus + StepResult.exception.class(4종 고정; none→system). */
 function classify(code: ErrorCode): { status: StepStatus; cls: ExceptionClass } {
   switch (ERROR_CATALOG[code].exceptionClass) {
@@ -223,6 +290,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted before execute`);
     }
     const a = this.assertDomAction(stepId, action);
+    const challenge = humanAssistChallenge(ctx.pageState.challenge);
+    if (challenge !== undefined) {
+      return this.suspendForChallenge(stepId, a.type, ctx, challenge);
+    }
     return a.type === "act" ? this.executeAct(stepId, a, ctx) : this.executeReadOnly(stepId, a, ctx);
   }
 
@@ -239,6 +310,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     const session = this.sessions.forLease(ctx.leaseId);
     if (a.type === "extract") await this.ensureNetworkJsonCapture(session);
     const domSnapshot = a.type === "extract" ? await this.snapshotDom(session) : undefined;
+    const challenge = await this.detectDomChallenge(session);
+    if (challenge !== undefined) {
+      return this.suspendForChallenge(stepId, a.type, ctx, challenge);
+    }
     const req = this.buildRequest(stepId, a, ctx, domSnapshot);
     let callIds: string[] = [];
 
@@ -295,6 +370,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     const session = this.sessions.forLease(ctx.leaseId);
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
+    const preChallenge = await this.detectDomChallenge(session);
+    if (preChallenge !== undefined) {
+      return this.suspendForChallenge(stepId, "act", ctx, preChallenge);
+    }
     // 결정형 클릭(click_selector): LLM 을 전혀 경유하지 않고 IR 선언 셀렉터를 settle 후 클릭(셀렉터 환각 차단).
     // value/secret 와 상호배타(ir-translate 가 강제). 미존재 시 loud(조용한 false 금지).
     if (a.clickSelector !== undefined) {
@@ -387,6 +466,14 @@ export class StagehandDomExecutor implements ExecutorPlugin {
 
     // 적용: CDP 로 실제 mutation(click/fill/select). 적용 실패는 런타임 예외로 전파(분류는 상위).
     await this.applyPlan(plan, session, ctx);
+    const postChallenge = await this.detectDomChallenge(session);
+    if (postChallenge !== undefined) {
+      return this.suspendForChallenge(stepId, "act", ctx, postChallenge, {
+        stagehandCallIds: callIds,
+        cache: { mode: cacheMode, ...(this.cache ? { actionPlanCacheId: cacheKey.domStructuralHash } : {}) },
+        sideEffect: { kind: a.sideEffect ?? "update", committed: true },
+      });
+    }
 
     const endedAt = nowIso();
     return {
@@ -435,6 +522,12 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         "IR_SCHEMA_INVALID",
         `step '${stepId}' click_selector '${selector}'(radio/checkbox) 클릭 후 미선택(checked=false) — 무효 클릭, 조용한 false 금지`,
       );
+    }
+    const postChallenge = await this.detectDomChallenge(session);
+    if (postChallenge !== undefined) {
+      return this.suspendForChallenge(stepId, "act", ctx, postChallenge, {
+        sideEffect: { kind: sideEffect ?? "update", committed: true },
+      });
     }
     const endedAt = nowIso();
     return {
@@ -585,6 +678,49 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       exception: { class: cls, code, message: `dom executor ${action} failed: ${code}` as never },
       timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
     };
+  }
+
+  private suspendForChallenge(
+    stepId: string,
+    action: DomAction["type"],
+    ctx: RunContext,
+    challenge: HumanAssistChallenge,
+    observed?: {
+      readonly stagehandCallIds?: readonly string[];
+      readonly cache?: StepResult["cache"];
+      readonly sideEffect?: StepResult["sideEffect"];
+    },
+  ): StepResult {
+    const startedAt = nowIso();
+    const endedAt = nowIso();
+    const pageState = pageStateRef(ctx.pageState);
+    return {
+      stepId,
+      action,
+      status: "suspended",
+      output: { challenge },
+      pageStateBefore: pageState,
+      pageStateAfter: pageState,
+      artifacts: [],
+      stagehandCallIds: [...(observed?.stagehandCallIds ?? [])],
+      cache: observed?.cache ?? { mode: "bypass" },
+      ...(observed?.sideEffect !== undefined ? { sideEffect: observed.sideEffect } : {}),
+      challenge,
+      exception: {
+        class: "challenge",
+        code: "CHALLENGE_UNRESOLVED",
+        message: `dom executor ${action} suspended for ${challenge.type}` as RedactedString,
+      },
+      timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
+    };
+  }
+
+  private async detectDomChallenge(session: CdpSession): Promise<HumanAssistChallenge | undefined> {
+    try {
+      return parseHumanAssistChallenge(await session.evaluate<unknown>(CHALLENGE_DETECTION_SCRIPT));
+    } catch {
+      return undefined;
+    }
   }
 
   /** Install page-side fetch/XHR JSON capture before actions that can trigger paginated grids. */

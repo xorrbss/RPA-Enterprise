@@ -178,6 +178,43 @@ async function caught(p: Promise<unknown>): Promise<StagehandDomExecutorError | 
   try { await p; return undefined; } catch (e) { return e instanceof StagehandDomExecutorError ? e : undefined; }
 }
 
+function humanChallenge(type: "captcha" | "mfa") {
+  return { type, detectedBy: "dom" as const, confidence: 0.93 };
+}
+
+function challengeSessions(opts: { pre?: "captcha" | "mfa"; post?: "captcha" | "mfa" }) {
+  const ops: string[] = [];
+  const evals: string[] = [];
+  let challengeProbeCount = 0;
+  const session: CdpSession = {
+    url: () => "u",
+    goto: async () => {},
+    reload: async () => {},
+    evaluate: async (expr: string) => {
+      const s = String(expr);
+      evals.push(s);
+      if (s.includes("rpa_challenge_detector_v1")) {
+        challengeProbeCount += 1;
+        const kind = challengeProbeCount === 1 ? opts.pre : opts.post;
+        return (kind !== undefined ? humanChallenge(kind) : null) as never;
+      }
+      if (s.includes('"radio"') || s.includes(".checked")) return "na" as never;
+      if (s.includes("document.querySelector")) return true as never;
+      if (s.includes("__RPA_NETWORK_CAPTURE_INSTALLED__")) return { installed: true } as never;
+      return "<body><main>challenge test</main></body>" as never;
+    },
+    sendCDP: async () => undefined as never,
+    click: async (s) => void ops.push(`click:${s}`),
+    fill: async (s, v) => void ops.push(`fill:${s}=${v}`),
+    selectOption: async (s, v) => void ops.push(`select:${s}=${v}`),
+    setInputFiles: async () => {},
+    downloadDir: () => "/tmp",
+    waitForDownload: async () => true,
+    close: async () => {},
+  };
+  return { provider: { forLease: () => session } as CdpSessionProvider, ops, evals };
+}
+
 async function main(): Promise<void> {
   const sess = () => fakeSessions().provider;
 
@@ -185,6 +222,62 @@ async function main(): Promise<void> {
     const c = new StagehandDomExecutor(countingGateway().gw, sess(), cfg).capabilities();
     return c.dom === true && c.vision === false && c.utility === false;
   })());
+
+  {
+    const g = countingGateway();
+    const s = fakeSessions();
+    const base = makeCtx();
+    const r = await new StagehandDomExecutor(g.gw, s.provider, cfg).execute(
+      "s0-challenge-state",
+      { type: "act", instruction: "continue after auth" },
+      makeCtx({ pageState: { ...base.pageState, challenge: humanChallenge("mfa") } }),
+    );
+    check(
+      "challenge: PageState.challenge(mfa) -> suspended without gateway/session probe",
+      r.status === "suspended" &&
+        r.challenge?.type === "mfa" &&
+        r.exception?.class === "challenge" &&
+        r.exception.code === "CHALLENGE_UNRESOLVED" &&
+        g.calls() === 0 &&
+        s.evals.length === 0,
+      JSON.stringify(r),
+    );
+  }
+
+  {
+    const g = countingGateway({ parsedJson: { rows: [] } });
+    const s = challengeSessions({ pre: "captcha" });
+    const r = await new StagehandDomExecutor(g.gw, s.provider, cfg).execute(
+      "s0-captcha-dom",
+      { type: "extract", instruction: "get rows", output: EXTRACT_OUT },
+      makeCtx(),
+    );
+    check(
+      "challenge: DOM captcha before extract -> suspended and gateway skipped",
+      r.status === "suspended" && r.challenge?.type === "captcha" && g.calls() === 0,
+      JSON.stringify(r),
+    );
+  }
+
+  {
+    const g = countingGateway();
+    const s = challengeSessions({ post: "mfa" });
+    const r = await new StagehandDomExecutor(g.gw, s.provider, cfg).execute(
+      "s0-post-click-mfa",
+      { type: "act", instruction: "click login", clickSelector: "#login", sideEffect: "login" },
+      makeCtx(),
+    );
+    check(
+      "challenge: post-click MFA -> suspended after committed deterministic click",
+      r.status === "suspended" &&
+        r.challenge?.type === "mfa" &&
+        s.ops.includes("click:#login") &&
+        g.calls() === 0 &&
+        r.sideEffect?.kind === "login" &&
+        r.sideEffect.committed === true,
+      JSON.stringify(r),
+    );
+  }
 
   // extract → read-only, extracted set, output.rowCount = {rows} 길이(표준 노드 출력 투영, ir-expression §2)
   {

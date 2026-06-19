@@ -3,7 +3,7 @@
  * CompositeExecutor(StagehandDomExecutor(gateway), UtilityExecutor) 를 올바로 배선하는지 검증. 외부 의존 없음(fake gateway,
  * fake CDP). 실행: tsx test/dom-executor-factory.unit.ts.
  *
- * 검증: capabilities=dom+utility 합성 · extract(dom) → network capture install + DOM snapshot + 게이트웨이 1회 + success(policy.model 전달 확인) · navigate(utility)
+ * 검증: capabilities=dom+utility 합성 · extract(dom) → network capture install + DOM snapshot + challenge probe + 게이트웨이 1회 + success(policy.model 전달 확인) · navigate(utility)
  *  → forLease(provider) 경유(게이트웨이 미호출) = composite 라우팅 분리. run-scoped 컨텍스트(scenarioVersionId/
  *  browserIdentityVersion) 의 seam 전달은 worker int(runtime-worker-drive.int)가 핀고정.
  */
@@ -97,7 +97,7 @@ async function main(): Promise<void> {
     { type: "extract", instruction: "get rows", output: { schemaRef: "reviews", schemaVersion: "1", strict: true } },
     ctx(),
   );
-  check("extract → network capture install + DOM snapshot evaluate 2회", evaluateCalls === 2, String(evaluateCalls));
+  check("extract → network capture install + DOM snapshot + challenge probe evaluate 3회", evaluateCalls === 3, String(evaluateCalls));
   check("extract → DOM snapshot included in gateway user message", lastUserMessage.includes("Review A"));
   check("extract → dom executor → 게이트웨이 1회 호출", gatewayCalls === 1, String(gatewayCalls));
   check("extract → policy.model('codex') 게이트웨이 요청에 전달", lastModel === "codex", String(lastModel));
