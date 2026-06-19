@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -23,6 +23,18 @@ function jwt(roles: readonly string[]): string {
   const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `e30.${payload}.sig`;
 }
+
+function installObjectUrlMock(): void {
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:test-preview"),
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn(),
+  });
+}
+
 const ALL_ROLES = ["viewer", "operator", "reviewer", "approver", "admin"];
 
 describe("D7 운영 콘솔 shell", () => {
@@ -536,6 +548,95 @@ describe("D7 운영 콘솔 shell", () => {
     expect(await screen.findByLabelText("generation artifacts")).toBeInTheDocument();
     expect(await screen.findByText("scenario_generation_planner_output")).toBeInTheDocument();
     expect(await screen.findByText(/target missing/)).toBeInTheDocument();
+  });
+
+  test("자연어 생성 산출물: 이미지·동영상은 generation-scoped JSON 본문 대신 blob 미리보기로 표시", async () => {
+    installObjectUrlMock();
+    const blobCalls: string[] = [];
+    let scopedDetailCalls = 0;
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => ({
+          generation_id: "00000000-0000-0000-0000-0000000000f1",
+          mode: body.mode ?? "save_and_run",
+          status: "saved",
+          prompt_hash: "hash",
+          planner: body.planner ?? "deterministic_mvp",
+          model: body.model ?? null,
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+          run_id: null,
+          evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+          blockers: [],
+          created_at: "2026-06-15T00:00:00.000Z",
+          created_by: "operator",
+          draft_ir: {},
+          validation_report: {},
+        }),
+        listScenarioGenerationArtifacts: async () => ({
+          items: [
+            {
+              artifact_id: "91000000-0000-0000-0000-000000000101",
+              type: "screen_capture",
+              media_type: "image/png",
+              filename: "generation.png",
+              byte_size: 512,
+              duration_ms: null,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:01.000Z",
+            },
+            {
+              artifact_id: "91000000-0000-0000-0000-000000000102",
+              type: "video_masked",
+              media_type: null,
+              filename: "generation.webm",
+              byte_size: 4096,
+              duration_ms: 1200,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:02.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+        getScenarioGenerationArtifact: async (generationId, artifactId) => {
+          scopedDetailCalls += 1;
+          return {
+            artifact_id: artifactId,
+            generation_id: generationId,
+            type: "scenario_generation_planner_output",
+            sha256: "abc123",
+            redaction_status: "redacted",
+            retention_until: null,
+            content: '{"should_not_render":"media"}',
+          };
+        },
+        getArtifactBlob: async (artifactId) => {
+          blobCalls.push(artifactId);
+          return new Blob([new Uint8Array([1, 2, 3])], { type: artifactId.endsWith("102") ? "video/webm" : "image/png" });
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "결과 이미지를 저장해줘" } });
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    const image = await screen.findByRole("img", { name: "generation.png" });
+    expect(image).toHaveAttribute("src", "blob:test-preview");
+    expect(blobCalls).toContain("91000000-0000-0000-0000-000000000101");
+    expect(scopedDetailCalls).toBe(0);
+    const videoButton = screen.getByText("video_masked").closest("button");
+    expect(videoButton).not.toBeNull();
+    fireEvent.click(videoButton as HTMLButtonElement);
+    await waitFor(() => expect(document.querySelector("video")).toHaveAttribute("src", "blob:test-preview"));
+    expect(blobCalls).toContain("91000000-0000-0000-0000-000000000102");
+    expect(scopedDetailCalls).toBe(0);
+    expect(screen.queryByText(/should_not_render/)).toBeNull();
   });
 
   test("최근 생성: saved/no-run 항목은 실행 딥링크로 연결한 척하지 않는다", async () => {

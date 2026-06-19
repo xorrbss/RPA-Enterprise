@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { FileVideo, Image, Play, WandSparkles } from "lucide-react";
 
 import { useApiClient } from "../api/context";
+import { ArtifactMediaPreview } from "./ArtifactMediaPreview";
 import { errorLabel, StatusBadge } from "./badges";
 import { navigate } from "../router";
 import type {
@@ -85,6 +86,19 @@ function artifactMetaLabel(item: GenerationArtifactItem): string {
     formatArtifactBytes(item.byte_size),
     item.redaction_status,
   ].filter((value): value is string => value !== null && value.length > 0).join(" · ");
+}
+
+function previewGenerationArtifactMediaType(item: GenerationArtifactItem | undefined): string | null {
+  if (item === undefined) return null;
+  if (typeof item.media_type === "string" && (item.media_type.startsWith("image/") || item.media_type.startsWith("video/"))) {
+    return item.media_type;
+  }
+  const hints = `${item.type} ${item.filename ?? ""}`.toLowerCase();
+  if (hints.includes("video")) return "video/webm";
+  if (hints.includes("screenshot") || hints.includes("screen_capture") || hints.includes("image") || /\.(png|jpe?g|webp)\b/.test(hints)) {
+    return "image/png";
+  }
+  return null;
 }
 
 function blockerSummary(blockers: readonly string[]): string | null {
@@ -477,10 +491,11 @@ function GenerationArtifactsPanel({ generationId }: { generationId: string }): J
     }
   }, [items, selectedId]);
   const selected = items.find((item) => item.artifact_id === selectedId);
+  const selectedMediaType = previewGenerationArtifactMediaType(selected);
   const detail = useQuery({
     queryKey: ["scenario-generation-artifact", generationId, selectedId],
     queryFn: () => api.getScenarioGenerationArtifact(generationId, selectedId as string),
-    enabled: selectedId !== null,
+    enabled: selectedId !== null && selectedMediaType === null,
   });
 
   return (
@@ -522,7 +537,9 @@ function GenerationArtifactsPanel({ generationId }: { generationId: string }): J
                 <span className="subtle">{selected.type}</span>
               </div>
             )}
-            {detail.isLoading ? (
+            {selected !== undefined && selectedMediaType !== null ? (
+              <ArtifactMediaPreview artifactId={selected.artifact_id} mediaType={selectedMediaType} filename={selected.filename} />
+            ) : detail.isLoading ? (
               <p className="muted">본문 불러오는 중</p>
             ) : detail.isError ? (
               <p className="form-alert red">{errorLabel(detail.error)}</p>
