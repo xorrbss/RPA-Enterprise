@@ -208,6 +208,7 @@ async function main(): Promise<void> {
       check("own run body.status", runBody.status === "running", JSON.stringify(runBody));
       check("own run body.attempts", runBody.attempts === 2, JSON.stringify(runBody));
       check("own run body.worker_id null", runBody.worker_id === null, JSON.stringify(runBody));
+      check("own run body.current_node null", runBody.current_node === null, JSON.stringify(runBody));
       check("own run body.failure_reason null", runBody.failure_reason === null, JSON.stringify(runBody));
       check("own run body.as_of round-trips", typeof runBody.as_of === "string" && new Date(runBody.as_of).toISOString() === "2026-06-14T00:00:00.000Z", JSON.stringify(runBody));
 
@@ -218,10 +219,18 @@ async function main(): Promise<void> {
         headers: { authorization: `Bearer ${tokenA}` },
       });
       check("failed run detail → 200", failedRun.statusCode === 200, failedRun.body);
+      const failedRunBody = failedRun.json();
+      check("failed run current_node null", failedRunBody.current_node === null, failedRun.body);
+      check(
+        "failed run failure_reason shape",
+        JSON.stringify(failedRunBody.failure_reason) ===
+          JSON.stringify({ code: "RUN_LOOP_FAILED", message: "site profile not found" }),
+        failedRun.body,
+      );
       check("failed run failure_reason code",
-        failedRun.json().failure_reason?.code === "RUN_LOOP_FAILED", failedRun.body);
+        failedRunBody.failure_reason?.code === "RUN_LOOP_FAILED", failedRun.body);
       check("failed run failure_reason message",
-        failedRun.json().failure_reason?.message === "site profile not found", failedRun.body);
+        failedRunBody.failure_reason?.message === "site profile not found", failedRun.body);
 
       // 3b) RBAC 허용: viewer 역할도 run.read 허용 → 200(auth-rbac §2).
       const viewerRead = await app.inject({

@@ -71,7 +71,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Run'
+                $ref: '#/components/schemas/RunCommandResponse'
         '403':
           $ref: '#/components/responses/Error'        # SITE_PROFILE_BLOCKED
         '422':
@@ -114,7 +114,7 @@ paths:
       summary: 실행 상세
       responses:
         '200':
-          description: run 상세(status ∈ RunState, worker_id, attempts, as_of, 진행 노드).
+          description: run 상세(status ∈ RunState, worker_id, attempts, as_of, current_node, failure_reason).
           content:
             application/json:
               schema:
@@ -207,7 +207,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Run'
+                $ref: '#/components/schemas/RunCommandResponse'
         '404':
           $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
         '409':
@@ -1629,7 +1629,16 @@ components:
     # ===== Resource shapes (요지; 상세 필드 타입은 codegen/types 참조) =====
     Run:
       type: object
-      description: 실행 리소스(요지). 상세 진행 노드/타이밍 필드는 codegen/types 참조.
+      description: 실행 리소스(요지). Read responses always include current_node and failure_reason; unknown node and absent failure are explicit nulls.
+      required:
+        - run_id
+        - status
+        - worker_id
+        - attempts
+        - as_of
+        - current_node
+        - failure_reason
+        - updated_at
       properties:
         run_id: { type: string }
         status: { $ref: '#/components/schemas/RunState' }
@@ -1637,15 +1646,37 @@ components:
         worker_id: { type: [string, "null"] }
         attempts: { type: integer }
         as_of:
-          type: string
+          type: [string, "null"]
           format: date-time
           description: 서버가 생성 시 1회 고정(api-surface §0.6). 재시도/replay/resume에 재사용.
         workitem_id: { type: [string, "null"] }
-        current_node: { type: [string, "null"] }
+        current_node:
+          type: [string, "null"]
+          description: Current executing IR node id when known; null when the runtime has no authoritative node.
+        failure_reason:
+          type: [object, "null"]
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
         updated_at:
           type: string
           format: date-time
           description: runs.updated_at. 콘솔이 오래 멈춘 실행을 추정하지 않고 실제 상태 갱신 시각으로 판단하는 데 사용.
+
+    RunCommandResponse:
+      type: object
+      description: Minimal acknowledgement for run side-effect commands. Read shape is components.schemas.Run.
+      additionalProperties: false
+      required: [run_id, status]
+      properties:
+        run_id: { type: string }
+        status: { $ref: '#/components/schemas/RunState' }
+        as_of:
+          type: [string, "null"]
+          format: date-time
+          description: Present on createRun responses; omitted on abort responses.
 
     RunCreateRequest:
       type: object

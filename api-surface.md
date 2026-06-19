@@ -57,9 +57,9 @@
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
 | POST | `/v1/runs` | `Idempotency-Key` 헤더. body: `scenario_version_id`, `params`(params_schema 준수), optional `params.as_of`, optional `workitem_id`, optional `model`(§0.7). operator+ 권한 필요 | 201 + run 리소스(`run_id`, `status=queued`). `run.created` 이벤트 emit. `runs.model` 1회 해소·동결 | `IR_SCHEMA_INVALID`(422; 미해소 `model_required` 포함), `IR_EXPRESSION_COMPILE_ERROR`(422), `RESOURCE_NOT_FOUND`(404; 명시 `model` 정책 부재), `AUTHZ_FORBIDDEN`(403), `SITE_PROFILE_BLOCKED`(403) |
-| GET | `/v1/runs/{run_id}` | — | 200 + run 상세(`status` ∈ RunState, `worker_id`, `attempts`, `as_of`, `updated_at`, 진행 노드) | `RUN_NOT_FOUND`(404) |
+| GET | `/v1/runs/{run_id}` | — | 200 + run 상세(`run_id`, `status` ∈ RunState, `worker_id`, `attempts`, `as_of`, `current_node`, `failure_reason`, `updated_at`). 실제 진행 노드를 모르면 `current_node=null`, 실패 사유가 없으면 `failure_reason=null` | `RUN_NOT_FOUND`(404) |
 | GET | `/v1/runs/{run_id}/steps` | 쿼리: `?limit=&cursor=`. `run.read` 권한 | 200 + `{ items, next_cursor }` (run_steps 단계 트레이스, 실행 시간 오름차순)⁶ | `RESOURCE_NOT_FOUND`(404; 형식 무효 run_id) |
-| GET | `/v1/runs` | 쿼리: `?status=<RunState>&scenario_version_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` | — |
+| GET | `/v1/runs` | 쿼리: `?status=<RunState>&scenario_version_id=&limit=&cursor=` | 200 + `{ items, next_cursor }`, 각 item은 run 상세 요지(`current_node`, `failure_reason` 포함; 모름/없음은 null) | — |
 | POST | `/v1/runs/{run_id}/abort` | `Idempotency-Key` 헤더. body: optional `reason` | 202 (abort 수락 → `aborting` 경유 `cancelled`). `run.cancelled` 이벤트 | `RUN_NOT_FOUND`(404), `RUN_ALREADY_TERMINAL`(409), `RUN_ABORTED`(409), `WORKITEM_CHECKOUT_CONFLICT`(409, `suspending` bookmark in-flight) |
 
 **어휘 정합(필수)**: API 명령은 `abort` → Run 상태는 `aborting`→`cancelled`(state-machine R6/R10/R16/R23/R24/R26/R27/R28) → 이벤트는 `run.cancelled`(event-envelope) → UI 문구는 "취소됨". 엔드포인트명은 `abort`를 유지한다.

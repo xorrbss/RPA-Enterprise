@@ -440,6 +440,7 @@ function RunArtifactsList({
   const api = useApiClient();
   const artifactsRef = useRef<HTMLDivElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const hashArtifactId = useHashParam("artifact");
   const q = useQuery({
     queryKey: ["run-artifacts", runId],
     queryFn: () => api.listRunArtifacts(runId, { limit: 100 }),
@@ -450,14 +451,25 @@ function RunArtifactsList({
     items.find(isPreviewableMedia) ??
     items.find((a) => /json|extract|output|result/i.test(a.type)) ??
     items[0];
-  const effectiveSelectedId =
+  const hashSelectedId =
+    hashArtifactId !== null && items.some((a) => a.artifact_id === hashArtifactId)
+      ? hashArtifactId
+      : null;
+  const stateSelectedId =
     selectedId !== null && items.some((a) => a.artifact_id === selectedId)
       ? selectedId
-      : preferred?.artifact_id ?? null;
+      : null;
+  const effectiveSelectedId =
+    hashSelectedId ?? stateSelectedId ?? preferred?.artifact_id ?? null;
   const selectedItem = items.find((a) => a.artifact_id === effectiveSelectedId);
   const selectedIsMedia = isPreviewableMedia(selectedItem);
   const selectedMediaType = previewMediaType(selectedItem);
   const counts = artifactSummary(items);
+  useEffect(() => {
+    if (hashSelectedId !== null && selectedId !== hashSelectedId) {
+      setSelectedId(hashSelectedId);
+    }
+  }, [hashSelectedId, selectedId]);
   useEffect(() => {
     if (focusOnMount) artifactsRef.current?.focus();
   }, [focusOnMount]);
@@ -532,7 +544,14 @@ function RunArtifactsList({
                       <td>{a.retention_until ?? "—"}</td>
                       <td>{a.legal_hold ? "예" : "—"}</td>
                       <td>
-                        <button className="btn" type="button" onClick={() => setSelectedId(a.artifact_id)}>
+                        <button
+                          className="btn"
+                          type="button"
+                          onClick={() => {
+                            setSelectedId(a.artifact_id);
+                            mergeParams({ artifact: a.artifact_id });
+                          }}
+                        >
                           {a.artifact_id === effectiveSelectedId ? "선택됨" : "미리보기"}
                         </button>
                       </td>

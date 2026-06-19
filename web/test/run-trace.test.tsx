@@ -309,6 +309,86 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     });
   });
 
+  test("실행 상세 산출물: StepTrace 증빙 클릭은 실행 산출물 미리보기도 같은 artifact로 맞춘다", async () => {
+    installObjectUrlMock();
+    renderApp(fakeClient({
+      listRunSteps: async () => ({
+        items: [
+          { step_id: "capture_page", node_id: "capture_page", attempt: 0, action: "navigate", status: "success", cache_mode: "bypass", artifact_ids: ["art-video-1"], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 100, exception: null },
+        ],
+        next_cursor: null,
+      }),
+      listRunArtifacts: async () => ({
+        items: [
+          {
+            artifact_id: "art-shot-1",
+            step_id: "capture_page",
+            attempt: 0,
+            type: "screen_capture",
+            media_type: "image/png",
+            filename: "initial.png",
+            byte_size: 1000,
+            duration_ms: null,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:00.000Z",
+          },
+          {
+            artifact_id: "art-video-1",
+            step_id: "capture_page",
+            attempt: 0,
+            type: "run_video",
+            media_type: "video/webm",
+            filename: "trace.webm",
+            byte_size: 2000,
+            duration_ms: 1200,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:01.000Z",
+          },
+        ],
+        next_cursor: null,
+      }),
+      getArtifactBlob: async (artifactId) => (
+        new Blob([new Uint8Array([1, 2, 3])], { type: artifactId === "art-video-1" ? "video/webm" : "image/png" })
+      ),
+    }));
+
+    await openDetail();
+    const initialImage = await screen.findByRole("img", { name: "initial.png" });
+    expect(initialImage).toHaveAttribute("src", "blob:test-preview");
+    const initialVideoRow = screen.getByText("trace.webm").closest("tr");
+    expect(initialVideoRow).not.toBeNull();
+    expect(initialVideoRow).not.toHaveAttribute("data-current", "true");
+
+    const stepCard = (await screen.findByText("capture_page")).closest(".step-card");
+    expect(stepCard).not.toBeNull();
+    within(stepCard as HTMLElement).getByRole("button", { name: "산출물 art-video-1 조회" }).click();
+
+    await waitFor(() => expect(location.hash).toContain("artifact=art-video-1"));
+    await waitFor(() => {
+      const selectedVideoRow = screen.getByText("trace.webm").closest("tr");
+      expect(selectedVideoRow).not.toBeNull();
+      expect(selectedVideoRow).toHaveAttribute("data-current", "true");
+      const videoEl = document.querySelector("video");
+      expect(videoEl).not.toBeNull();
+      expect(videoEl).toHaveAttribute("aria-label", "trace.webm");
+      expect(videoEl).toHaveAttribute("src", "blob:test-preview");
+    });
+    expect(screen.queryByRole("img", { name: "initial.png" })).toBeNull();
+
+    const imageRow = screen.getByText("initial.png").closest("tr");
+    expect(imageRow).not.toBeNull();
+    within(imageRow as HTMLElement).getByRole("button", { name: "미리보기" }).click();
+    await waitFor(() => expect(location.hash).toContain("artifact=art-shot-1"));
+    await waitFor(() => {
+      expect(screen.getByText("initial.png").closest("tr")).toHaveAttribute("data-current", "true");
+      expect(screen.getByRole("img", { name: "initial.png" })).toHaveAttribute("src", "blob:test-preview");
+    });
+  });
+
   test("실행 상세 산출물: media_type 없는 video_masked도 영상 미리보기로 처리한다", async () => {
     installObjectUrlMock();
     renderApp(fakeClient({

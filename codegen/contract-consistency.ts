@@ -92,6 +92,10 @@ assertOpenApiContains(
   "      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/RunCreateRequest'",
 );
 assertOpenApiSchemaContains("RunCreateRequest", "        model:\n          type: string");
+assertOpenApiSchemaContains("Run", "        - current_node");
+assertOpenApiSchemaContains("Run", "        - failure_reason");
+assertOpenApiSchemaContains("Run", "        current_node:\n          type: [string, \"null\"]");
+assertOpenApiSchemaContains("Run", "        failure_reason:\n          type: [object, \"null\"]");
 assertOpenApiSchemaContains("ScenarioGeneration", "        - params_context");
 assertOpenApiSchemaContains("ScenarioGeneration", "        params_context:\n          type: object");
 assertOpenApiPath("/runs/{run_id}/steps");

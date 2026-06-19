@@ -222,8 +222,9 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       status: run.status,
       worker_id: run.worker_id,
       attempts: run.attempts,
-      as_of: run.as_of,
+      as_of: run.as_of !== null ? run.as_of.toISOString() : null,
       failure_reason: normalizeFailureReason(run.failure_reason),
+      current_node: null,
       updated_at: run.updated_at.toISOString(),
     };
   });
