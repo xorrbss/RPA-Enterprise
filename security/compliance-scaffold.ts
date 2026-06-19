@@ -34,6 +34,7 @@ import {
   type NetworkPolicyCheck,
   type NetworkPolicyDecision,
   type PlainSecretSerializationBoundary,
+  type PromptInspectionTextRun,
   type PromptInjectionDecision,
   type PromptInjectionDetector,
   type PromptInjectionEvidence,
@@ -336,14 +337,6 @@ export const connectorManifestPermissionChecker: ConnectorManifestPermissionChec
   check: checkConnectorManifestPermissions,
 };
 
-export type PromptTextVisibility = "visible" | "hidden" | "offscreen" | "zero_opacity";
-
-export interface PromptInspectionTextRun {
-  text: RedactedString;
-  visibility: PromptTextVisibility;
-  source: PromptInjectionEvidence["source"];
-}
-
 export interface DeterministicPromptInspectionInput {
   redactedText: RedactedString;
   textRuns?: readonly PromptInspectionTextRun[];
@@ -354,6 +347,8 @@ export interface DeterministicPromptInspectionInput {
 // §3(c) credential-exfil 은 detector별 전략이 의도적으로 다르므로(키워드 기반) 여기 유지(SSoT 미통합 사유는 공유 모듈 주석).
 const CREDENTIAL_EXFIL_RE =
   /\b(password|passwd|secret|token|api[-_ ]?key|otp|authorization|credential|자격증명|비밀번호|토큰|시크릿)\b/i;
+const HIDDEN_CREDENTIAL_EXFIL_RE =
+  /\b(?:send|exfiltrate|forward)\s+(?:the\s+)?(?:password|passwd|secret|token|api[-_ ]?key|otp|authorization|credential|credentials)\b|\b(?:password|passwd|secret|token|api[-_ ]?key|otp|authorization|credential|credentials)\s+(?:to|into)\s+https?:\/\//i;
 const URL_RE = /https?:\/\/[^\s"'<>]+/gi;
 
 export function inspectPromptInjection(input: DeterministicPromptInspectionInput): PromptInjectionDecision {
@@ -363,7 +358,7 @@ export function inspectPromptInjection(input: DeterministicPromptInspectionInput
   for (const run of runs) {
     const text = run.text.toString();
     const hidden = run.visibility !== "visible";
-    if (hidden && (matchesInstructionOverride(text) || CREDENTIAL_EXFIL_RE.test(text))) {
+    if (hidden && (matchesInstructionOverride(text) || HIDDEN_CREDENTIAL_EXFIL_RE.test(text))) {
       evidence.push(makeEvidence("hidden_instruction", text, run.source));
     }
     if (matchesInstructionOverride(text)) {
@@ -393,7 +388,7 @@ export function inspectPromptInjection(input: DeterministicPromptInspectionInput
 }
 
 export const deterministicPromptInjectionDetector: PromptInjectionDetector = {
-  inspect: (input) => inspectPromptInjection({ redactedText: input.redactedText, networkPolicy: input.networkPolicy }),
+  inspect: (input) => inspectPromptInjection({ redactedText: input.redactedText, textRuns: input.textRuns, networkPolicy: input.networkPolicy }),
 };
 
 function makeEvidence(

@@ -32,6 +32,7 @@ import type {
   AuthenticatedPrincipal,
   LLMRequest,
   LLMResponse,
+  PromptInspectionTextRun,
   SecretStoreBoundary,
 } from "../../../ts/security-middleware-contract";
 import { GatewayError, type GatewayArtifactSink } from "../gateway/llm-gateway";
@@ -210,6 +211,7 @@ const CHALLENGE_DETECTION_SCRIPT = `(() => {
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const nowIso = (): string => new Date().toISOString();
 type HumanAssistChallenge = ChallengeSummary & { type: "captcha" | "mfa" };
+type NormalizedDomSnapshot = { text?: string; textRuns?: readonly PromptInspectionTextRun[] };
 
 function humanAssistChallenge(challenge: ChallengeSummary | undefined): HumanAssistChallenge | undefined {
   if (challenge?.type === "captcha" || challenge?.type === "mfa") return challenge as HumanAssistChallenge;
@@ -263,6 +265,23 @@ function stagehandCallIdsFromError(error: GatewayError): string[] {
   return typeof error.stagehandCallId === "string" && error.stagehandCallId.trim().length > 0
     ? [error.stagehandCallId]
     : [];
+}
+
+function promptInspectionTextRuns(snapshot: unknown): readonly PromptInspectionTextRun[] {
+  if (!isRecord(snapshot) || !Array.isArray(snapshot.textRuns)) return [];
+  const runs: PromptInspectionTextRun[] = [];
+  for (const item of snapshot.textRuns) {
+    if (!isRecord(item)) continue;
+    const text = item.text;
+    const visibility = item.visibility;
+    const source = item.source;
+    if (typeof text !== "string" || text.trim().length === 0) continue;
+    if (visibility !== "hidden" && visibility !== "offscreen" && visibility !== "zero_opacity") continue;
+    if (source !== "dom" && source !== "network" && source !== "screenshot" && source !== "artifact") continue;
+    runs.push({ text: text.slice(0, 2000) as RedactedString, visibility, source });
+    if (runs.length >= 120) break;
+  }
+  return runs;
 }
 
 export class StagehandDomExecutor implements ExecutorPlugin {
@@ -733,7 +752,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
   }
 
   /** 페이지 스냅샷(best-effort, 절단). 실패 시 undefined — 신호만으로 진행(loud 아님; 셀렉터 품질 저하 가능). */
-  private async snapshotDom(session: CdpSession): Promise<string | undefined> {
+  private async snapshotDom(session: CdpSession): Promise<NormalizedDomSnapshot | undefined> {
     try {
       const snapshot = await session.evaluate<unknown>(
         `(() => {
@@ -750,20 +769,83 @@ export class StagehandDomExecutor implements ExecutorPlugin {
             if (typeof entry === "string") return entry;
             try { return JSON.stringify(entry); } catch { return ""; }
           }).filter(Boolean).join("\\n");
+          const textForHiddenElement = (el) => {
+            const out = [];
+            const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
+            if (text) out.push(text);
+            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+              const value = String(el.value || "").trim();
+              if (value) out.push(value);
+            }
+            for (const field of Array.from(el.querySelectorAll("input, textarea, select"))) {
+              if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
+                const value = String(field.value || "").trim();
+                if (value) out.push(value);
+              }
+            }
+            return out.join(" ").replace(/\\s+/g, " ").trim();
+          };
+          const hiddenReason = (el) => {
+            if (!(el instanceof Element)) return "";
+            if (el.getAttribute("aria-hidden") === "true") return "aria-hidden";
+            if (el instanceof HTMLInputElement && el.type === "hidden") return "input-hidden";
+            const style = window.getComputedStyle(el);
+            if (style.display === "none") return "display-none";
+            if (style.visibility === "hidden" || style.visibility === "collapse") return "visibility-hidden";
+            const opacity = Number(style.opacity);
+            if (Number.isFinite(opacity) && opacity <= 0.001) return "zero-opacity";
+            const rect = el.getBoundingClientRect();
+            const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+            const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+            if (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              (rect.right < -32 || rect.bottom < -32 || rect.left > vw + 2048 || rect.top > vh + 2048)
+            ) {
+              return "offscreen";
+            }
+            return "";
+          };
+          const collectHiddenTextRuns = (start) => {
+            if (!start) return [];
+            const runs = [];
+            const visit = (el, ancestorHidden) => {
+              if (!(el instanceof Element) || runs.length >= 120) return;
+              const reason = ancestorHidden || hiddenReason(el);
+              if (reason) {
+                if (!ancestorHidden) {
+                  const text = textForHiddenElement(el);
+                  const visibility = reason === "offscreen" ? "offscreen" : reason === "zero-opacity" ? "zero_opacity" : "hidden";
+                  if (text) runs.push({ text, visibility, source: "dom" });
+                }
+                return;
+              }
+              for (const child of Array.from(el.children)) visit(child, "");
+            };
+            visit(start, "");
+            return runs;
+          };
           return {
             networkJson,
             visibleText: document.body ? document.body.innerText : (root ? root.textContent : ""),
+            textRuns: collectHiddenTextRuns(root),
             html: root ? root.outerHTML : ""
           };
         })()`,
       );
-      return normalizePageSnapshot(snapshot);
+      const text = normalizePageSnapshot(snapshot);
+      const textRuns = promptInspectionTextRuns(snapshot);
+      if (text === undefined && textRuns.length === 0) return undefined;
+      return {
+        ...(text !== undefined ? { text } : {}),
+        ...(textRuns.length > 0 ? { textRuns } : {}),
+      };
     } catch {
       return undefined;
     }
   }
 
-  private buildRequest(stepId: string, a: DomAction, ctx: RunContext, domSnapshot?: string): LLMRequest {
+  private buildRequest(stepId: string, a: DomAction, ctx: RunContext, domSnapshot?: NormalizedDomSnapshot): LLMRequest {
     const ps = ctx.pageState;
     // 페이지 컨텍스트는 user 역할로만(신뢰영역 분리, §2). PageState 파생 신호 + 원문 DOM(절단) — Gateway redaction(§4)
     // 경계가 user 메시지를 redact/injection-탐지한다. DOM 은 셀렉터 타깃팅에 필요(act/extract).
@@ -773,7 +855,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       structuralHash: ps.dom.structuralHash,
       landmarks: ps.dom.landmarks,
       flags: ps.flags,
-      ...(domSnapshot !== undefined ? { dom: domSnapshot } : {}),
+      ...(domSnapshot?.text !== undefined ? { dom: domSnapshot.text } : {}),
     });
     const key = sha(
       `${ctx.tenantId}|${ctx.runId}|${stepId}|${a.type}|${this.cfg.promptTemplateVersion}|${a.instruction}|${ps.dom.structuralHash}`,
@@ -791,7 +873,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         ? "Deterministic web automation extract worker. Extract actual records from [page].dom and return only the requested JSON data. Prefer [network_json] for virtualized grids or API-backed tables, then [visible_text], then [html]. Use only values present in [network_json], [visible_text], or [html]. If no matching records are present, return an empty collection that fits the requested schema. Never synthesize placeholder/example rows. Do not return an extraction plan, selector plan, or prose."
         : `Deterministic web automation ${a.type} planner. Respond with a single minified JSON object only.`;
 
-    return {
+    const request = {
       model: this.cfg.model,
       promptTemplateVersion: this.cfg.promptTemplateVersion,
       messages: [
@@ -806,6 +888,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       idempotencyKey: key,
       requestHash: key,
     } as unknown as LLMRequest;
+    return domSnapshot?.textRuns !== undefined ? { ...request, promptInspection: { textRuns: domSnapshot.textRuns } } : request;
   }
 
   private assertDomAction(stepId: string, action: unknown): DomAction {

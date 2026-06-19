@@ -208,6 +208,7 @@ export class LlmGateway {
         tenantId: req.metadata.tenantId,
         runId: req.metadata.runId,
         rawTextOrObject: m.content,
+        textRuns: req.promptInspection?.textRuns,
       });
       if (result.kind === "blocked") {
         const signals = result.evidence.map((e) => e.signal).join(",");
@@ -215,7 +216,8 @@ export class LlmGateway {
       }
       out.push({ role: "user", content: result.content });
     }
-    return { ...req, messages: out };
+    const { promptInspection: _promptInspection, ...adapterRequest } = req;
+    return { ...adapterRequest, messages: out };
   }
 
   private async runWithRetryAndFallback(

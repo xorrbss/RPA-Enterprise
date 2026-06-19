@@ -333,6 +333,26 @@ async function main(): Promise<void> {
     check("extract: prompt prefers network_json for virtualized grids", systemMessage.includes("Prefer [network_json]"));
   }
 
+  // extract: hidden DOM text is carried as promptInspection side-channel without changing the prompt sections.
+  {
+    const g = countingGateway({ parsedJson: { rows: [{ title: "Visible notice" }] } });
+    const snapshot = {
+      visibleText: "Notice list\nVisible notice",
+      textRuns: [
+        { text: "Collapsed help drawer copy", visibility: "hidden", source: "dom" },
+        { text: "Screen-reader shortcut hint", visibility: "offscreen", source: "dom" },
+      ],
+      html: "<body><main>Visible notice</main><aside style=\"display:none\">Collapsed help drawer copy</aside></body>",
+    };
+    const ex = new StagehandDomExecutor(g.gw, fakeSessions(snapshot).provider, cfg);
+    await ex.execute("s1-hidden-text", { type: "extract", instruction: "get notices", output: EXTRACT_OUT }, makeCtx());
+    const userContent = g.lastReq()?.messages.find((m) => m.role === "user")?.content;
+    const userMessage = typeof userContent === "string" ? userContent : JSON.stringify(userContent ?? "");
+    const textRuns = g.lastReq()?.promptInspection?.textRuns ?? [];
+    check("extract: prompt keeps existing visible/html sections only", userMessage.includes("[visible_text]") && !userMessage.includes("[hidden_text]"));
+    check("extract: hidden textRuns are attached for gateway inspection", textRuns.length === 2 && textRuns[0]?.visibility === "hidden" && textRuns[1]?.visibility === "offscreen");
+  }
+
   // extract: rows 봉투 없으면 rowCount 미산출(→ node.row_count 미투영, loud).
   {
     const ex = new StagehandDomExecutor(countingGateway({ parsedJson: { product: "x" } }).gw, sess(), cfg);

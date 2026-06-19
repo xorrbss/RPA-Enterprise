@@ -327,6 +327,14 @@ export interface PromptInjectionEvidence {
   source: "dom" | "network" | "screenshot" | "artifact";
 }
 
+export type PromptTextVisibility = "visible" | "hidden" | "offscreen" | "zero_opacity";
+
+export interface PromptInspectionTextRun {
+  text: RedactedString;
+  visibility: PromptTextVisibility;
+  source: PromptInjectionEvidence["source"];
+}
+
 export type PromptInjectionDecision =
   | { kind: "clean" }
   | {
@@ -340,6 +348,7 @@ export interface PromptInjectionDetector {
     tenantId: TenantId;
     runId?: RunId;
     redactedText: RedactedString;
+    textRuns?: readonly PromptInspectionTextRun[];
     networkPolicy?: NetworkPolicy;
   }): PromptInjectionDecision;
 }
@@ -364,6 +373,7 @@ export interface GatewayRedactionBoundary {
     tenantId: TenantId;
     runId?: RunId;
     rawTextOrObject: unknown;
+    textRuns?: readonly PromptInspectionTextRun[];
     images?: readonly RedactedImageRef[];
     networkPolicy?: NetworkPolicy;
   }): Promise<
@@ -528,6 +538,9 @@ export interface LLMRequest {
   model: string;
   promptTemplateVersion: string;
   messages: readonly LLMMessage[];
+  promptInspection?: {
+    textRuns?: readonly PromptInspectionTextRun[];
+  };
   responseFormat?: {
     type: "json_schema";
     schemaRef: string;

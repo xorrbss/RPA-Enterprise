@@ -1,6 +1,7 @@
 import type {
   GatewayRedactionBoundary,
   NetworkPolicy,
+  PromptInspectionTextRun,
   PromptInjectionDecision,
   PromptInjectionDetector,
   RedactedContentBlock,
@@ -28,9 +29,8 @@ const CREDENTIAL_EXFILTRATION_PATTERNS: readonly RegExp[] = [
 // §3(b) instruction-override 패턴은 single SSoT(security/prompt-injection-patterns.ts)에서 가져온다(RQ-031) —
 // 자매 detector security/compliance-scaffold.ts 와 동일 사전을 참조해 §3(b) 비대칭 판정을 제거한다.
 
-// §3(a) hidden-instruction(부분): zero-width/invisible/format 문자. 페이지가 명령·자격증명 요청을 비가시 문자로
-// 가리거나(smuggling) 키워드 사이에 끼워 탐지를 회피(난독화)하는 벡터. 평탄화돼도 텍스트에 남으므로 gateway가
-// visibility 메타 없이도 검출 가능. (DOM display:none/offscreen 등 구조적 hidden은 호출자 visibility 스레딩 필요 — 별도 증분.)
+// §3(a) hidden-instruction: DOM visibility side-channel(textRuns)과 zero-width/invisible/format 문자 난독화를 모두
+// Gateway redaction 단계에서 차단한다. textRuns는 adapter로 전달하지 않는 검사 메타이며, 모델 입력 포맷과 분리된다.
 const INVISIBLE_CHARS = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/g;
 
 export class DeterministicPromptInjectionDetector implements PromptInjectionDetector {
@@ -38,17 +38,25 @@ export class DeterministicPromptInjectionDetector implements PromptInjectionDete
     tenantId: TenantId;
     runId?: RunId;
     redactedText: RedactedString;
+    textRuns?: readonly PromptInspectionTextRun[];
     networkPolicy?: NetworkPolicy;
   }): PromptInjectionDecision {
-    const text = String(input.redactedText).toLowerCase();
+    const rawText = String(input.redactedText);
+    const text = rawText.toLowerCase();
+
+    const hiddenEvidence = hiddenInstructionEvidence(input.textRuns ?? []);
+    if (hiddenEvidence.length > 0) {
+      return {
+        kind: "blocked",
+        code: "PROMPT_INJECTION_DETECTED",
+        evidence: hiddenEvidence,
+      };
+    }
 
     // §3(a): invisible/zero-width 문자가 명령·자격증명 요청을 가리거나 난독화 → hidden_instruction(보수적 차단).
     //   제거해 드러나는 지시를 판정(가시 텍스트 분기보다 먼저 — "조용한 false 금지").
     const deobfuscated = text.replace(INVISIBLE_CHARS, "");
-    if (
-      deobfuscated.length !== text.length &&
-      (matchesInstructionOverride(deobfuscated) || CREDENTIAL_EXFILTRATION_PATTERNS.some((pattern) => pattern.test(deobfuscated)))
-    ) {
+    if (deobfuscated.length !== text.length && hasHiddenInstructionSignal(text)) {
       return {
         kind: "blocked",
         code: "PROMPT_INJECTION_DETECTED",
@@ -104,6 +112,29 @@ export class DeterministicPromptInjectionDetector implements PromptInjectionDete
   }
 }
 
+function hiddenInstructionEvidence(textRuns: readonly PromptInspectionTextRun[]): Array<{
+  signal: "hidden_instruction";
+  excerpt: RedactedString;
+  source: PromptInspectionTextRun["source"];
+}> {
+  for (const run of textRuns) {
+    if (run.visibility === "visible") continue;
+    if (hasHiddenInstructionSignal(String(run.text))) {
+      return [{
+        signal: "hidden_instruction",
+        excerpt: "[redacted hidden instruction]" as RedactedString,
+        source: run.source,
+      }];
+    }
+  }
+  return [];
+}
+
+function hasHiddenInstructionSignal(value: string): boolean {
+  const deobfuscated = value.toLowerCase().replace(INVISIBLE_CHARS, "");
+  return matchesInstructionOverride(deobfuscated) || CREDENTIAL_EXFILTRATION_PATTERNS.some((pattern) => pattern.test(deobfuscated));
+}
+
 export class DeterministicGatewayRedactionBoundary implements GatewayRedactionBoundary {
   constructor(private readonly detector: PromptInjectionDetector = new DeterministicPromptInjectionDetector()) {}
 
@@ -111,6 +142,7 @@ export class DeterministicGatewayRedactionBoundary implements GatewayRedactionBo
     tenantId: TenantId;
     runId?: RunId;
     rawTextOrObject: unknown;
+    textRuns?: readonly PromptInspectionTextRun[];
     images?: readonly RedactedImageRef[];
     networkPolicy?: NetworkPolicy;
   }): ReturnType<GatewayRedactionBoundary["redactForGateway"]> {
@@ -119,6 +151,7 @@ export class DeterministicGatewayRedactionBoundary implements GatewayRedactionBo
       tenantId: input.tenantId,
       runId: input.runId,
       redactedText: rawText as RedactedString,
+      textRuns: input.textRuns,
       networkPolicy: input.networkPolicy,
     });
 
