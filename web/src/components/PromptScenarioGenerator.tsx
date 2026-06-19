@@ -51,6 +51,8 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
 type ScreenshotPolicy = "never" | "failure" | "each_step";
 type VideoPolicy = "never" | "failure" | "always";
 const DEFAULT_AVAILABLE_PLANNERS: readonly ScenarioGenerationPlanner[] = ["deterministic_mvp"];
+const FALLBACK_SCREENSHOT_POLICIES: readonly ScreenshotPolicy[] = ["never", "failure", "each_step"];
+const FALLBACK_VIDEO_POLICIES: readonly VideoPolicy[] = ["never", "failure", "always"];
 
 function plannerLabel(value: ScenarioGenerationPlanner): string {
   return value === "llm_v1" ? "LLM Planner" : "MVP Planner";
@@ -90,6 +92,11 @@ function videoPolicyLabel(value: ScenarioGenerationEvidence["video"]): string {
   if (value === "always") return "전체 영상";
   if (value === "failure") return "실패 영상";
   return "영상 없음";
+}
+
+function firstAllowedPolicy<T extends string>(policies: readonly T[], preferred: T, fallback: T): T {
+  if (policies.includes(preferred)) return preferred;
+  return policies[0] ?? fallback;
 }
 
 function blockerSummary(blockers: readonly string[]): string | null {
@@ -250,16 +257,24 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [paramsText, setParamsText] = useState("");
   const [planner, setPlanner] = useState<ScenarioGenerationPlanner>("deterministic_mvp");
   const [screenshot, setScreenshot] = useState<ScreenshotPolicy>("each_step");
+  const [screenshotTouched, setScreenshotTouched] = useState(false);
   const [video, setVideo] = useState<VideoPolicy>("never");
   const [videoTouched, setVideoTouched] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
+  const screenshotCapability = capabilities.data?.visual_evidence.screenshot;
+  const screenshotRecordingEnabled = screenshotCapability?.enabled === true;
+  const screenshotPolicies = useMemo<readonly ScreenshotPolicy[]>(
+    () => (screenshotCapability?.policies.length ? screenshotCapability.policies : FALLBACK_SCREENSHOT_POLICIES),
+    [screenshotCapability?.policies],
+  );
+  const screenshotDefaultPolicy = screenshotCapability?.default_policy ?? (screenshotRecordingEnabled ? "each_step" : "never");
   const videoCapability = capabilities.data?.visual_evidence.video;
   const videoRecordingEnabled = videoCapability?.enabled === true;
   const videoPolicies = useMemo<readonly VideoPolicy[]>(
-    () => (videoCapability?.policies.length ? videoCapability.policies : ["never", "failure", "always"]),
+    () => (videoCapability?.policies.length ? videoCapability.policies : FALLBACK_VIDEO_POLICIES),
     [videoCapability?.policies],
   );
   const videoDefaultPolicy = videoCapability?.default_policy ?? (videoRecordingEnabled ? "always" : "never");
@@ -301,17 +316,36 @@ export function PromptScenarioGenerator(): JSX.Element {
   }
 
   useEffect(() => {
+    if (screenshotCapability === undefined) return;
+    if (!screenshotCapability.enabled) {
+      const next = firstAllowedPolicy(screenshotPolicies, "never", "never");
+      if (screenshot !== next) setScreenshot(next);
+      return;
+    }
+    if (!screenshotPolicies.includes(screenshot)) {
+      setScreenshot(firstAllowedPolicy(screenshotPolicies, screenshotDefaultPolicy, "never"));
+      return;
+    }
+    if (!screenshotTouched && screenshot !== screenshotDefaultPolicy && screenshotPolicies.includes(screenshotDefaultPolicy)) {
+      setScreenshot(screenshotDefaultPolicy);
+    }
+  }, [screenshot, screenshotCapability, screenshotDefaultPolicy, screenshotPolicies, screenshotTouched]);
+
+  useEffect(() => {
     if (videoCapability === undefined) return;
     if (!videoCapability.enabled) {
-      if (!videoCapability.policies.includes(video)) {
-        setVideo("never");
-      }
+      const next = firstAllowedPolicy(videoPolicies, "never", "never");
+      if (video !== next) setVideo(next);
+      return;
+    }
+    if (!videoPolicies.includes(video)) {
+      setVideo(firstAllowedPolicy(videoPolicies, videoDefaultPolicy, "never"));
       return;
     }
     if (!videoTouched && video === "never" && videoCapability.policies.includes(videoDefaultPolicy)) {
       setVideo(videoDefaultPolicy);
     }
-  }, [video, videoCapability, videoDefaultPolicy, videoTouched]);
+  }, [video, videoCapability, videoDefaultPolicy, videoPolicies, videoTouched]);
 
   useEffect(() => {
     if (!availablePlanners.includes(planner)) {
@@ -465,6 +499,7 @@ export function PromptScenarioGenerator(): JSX.Element {
     setResult(item);
     setModel(item.model ?? "");
     setScreenshot(item.evidence_policy.screenshot ?? "each_step");
+    setScreenshotTouched(true);
     setVideo(item.evidence_policy.video ?? "never");
     setVideoTouched(true);
     setParamsText(paramsInputTextFromDraftIr(item.draft_ir, item.params_context));
@@ -583,11 +618,20 @@ export function PromptScenarioGenerator(): JSX.Element {
           </label>
           <label className="field">
             <span>스크린샷</span>
-            <select value={screenshot} onChange={(event) => setScreenshot(event.target.value as ScreenshotPolicy)}>
-              <option value="each_step">매 단계</option>
-              <option value="failure">실패 시</option>
-              <option value="never">저장 안 함</option>
+            <select
+              value={screenshot}
+              onChange={(event) => {
+                setScreenshotTouched(true);
+                setScreenshot(event.target.value as ScreenshotPolicy);
+              }}
+            >
+              {screenshotPolicies.map((policy) => (
+                <option key={policy} value={policy}>
+                  {policy === "never" ? "저장 안 함" : policy === "each_step" ? "매 단계" : "실패 시"}
+                </option>
+              ))}
             </select>
+            {screenshotCapability !== undefined && !screenshotRecordingEnabled && <span className="muted">스크린샷 비활성</span>}
           </label>
           <label className="field">
             <span>동영상</span>
