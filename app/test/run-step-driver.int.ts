@@ -41,6 +41,7 @@ const RUN_VIDEO_STOP_FAIL = "71000000-0000-0000-0000-0000000000dc";
 const RUN_VIDEO_DRIVE_THROW = "71000000-0000-0000-0000-0000000000de";
 const RUN_VISUAL_NO_ENQUEUER = "71000000-0000-0000-0000-0000000000df";
 const RUN_VIDEO_NO_ENQUEUER = "71000000-0000-0000-0000-0000000000e0";
+const RUN_VISUAL_DRIVE_THROW = "71000000-0000-0000-0000-0000000000e1";
 const RUN_GENERATED_LIKE = "71000000-0000-0000-0000-0000000000dd";
 const SCEN2 = "70000000-0000-0000-0000-0000000000e1"; // @human_task(R5) 시나리오(별도 IR)
 const SVER2 = "70000000-0000-0000-0000-0000000000e2";
@@ -50,6 +51,8 @@ const SCEN_VIDEO_FAILURE = "70000000-0000-0000-0000-0000000000f3";
 const SVER_VIDEO_FAILURE = "70000000-0000-0000-0000-0000000000f4";
 const SCEN_GENERATED_LIKE = "70000000-0000-0000-0000-0000000000f5";
 const SVER_GENERATED_LIKE = "70000000-0000-0000-0000-0000000000f6";
+const SCEN_VISUAL_FAILURE = "70000000-0000-0000-0000-0000000000f7";
+const SVER_VISUAL_FAILURE = "70000000-0000-0000-0000-0000000000f8";
 const WORKER = "9a000000-0000-0000-0000-0000000000a1";
 
 let failures = 0;
@@ -186,9 +189,11 @@ class CountingSuccessExecutor implements ExecutorPlugin {
 class FakeVisualEvidenceRecorder implements VisualEvidenceRecorder {
   readonly captures: Parameters<VisualEvidenceRecorder["captureStepScreenshot"]>[0][] = [];
 
+  constructor(private readonly artifactRef: ArtifactRef = "72000000-0000-0000-0000-0000000000df" as ArtifactRef) {}
+
   async captureStepScreenshot(input: Parameters<VisualEvidenceRecorder["captureStepScreenshot"]>[0]): Promise<ArtifactRef> {
     this.captures.push(input);
-    return "72000000-0000-0000-0000-0000000000df" as ArtifactRef;
+    return this.artifactRef;
   }
 }
 
@@ -403,6 +408,19 @@ const scenarioIrVideoFailure = {
   ...scenarioIr,
   meta: { name: "driver-video-failure-test", version: 1, evidence: { screenshot: "never", video: "failure" } },
 };
+const scenarioIrVisualFailure = {
+  meta: { name: "driver-visual-failure-test", version: 1, evidence: { screenshot: "failure", video: "never" } },
+  start: "open",
+  nodes: {
+    open: {
+      policy: { recording: "masked_on_failure" },
+      what: [{ action: "navigate", url_ref: "entry_url" }],
+      next: "check",
+    },
+    check: scenarioIr.nodes.check,
+    done: { terminal: "success" },
+  },
+};
 
 const generatedLikeIr = {
   meta: {
@@ -497,6 +515,9 @@ async function main(): Promise<void> {
     const compiledVideoFailure = compileScenario(scenarioIrVideoFailure, {});
     check("video failure scenario compiles", compiledVideoFailure.ok, compiledVideoFailure.ok ? "" : JSON.stringify(compiledVideoFailure.details));
     if (!compiledVideoFailure.ok) throw new Error("video failure scenario did not compile");
+    const compiledVisualFailure = compileScenario(scenarioIrVisualFailure, {});
+    check("visual failure scenario compiles", compiledVisualFailure.ok, compiledVisualFailure.ok ? "" : JSON.stringify(compiledVisualFailure.details));
+    if (!compiledVisualFailure.ok) throw new Error("visual failure scenario did not compile");
     const compiledGeneratedLike = compileScenario(generatedLikeIr, {});
     check("generated-like scenario compiles", compiledGeneratedLike.ok, compiledGeneratedLike.ok ? "" : JSON.stringify(compiledGeneratedLike.details));
     if (!compiledGeneratedLike.ok) throw new Error("generated-like scenario did not compile");
@@ -533,6 +554,12 @@ async function main(): Promise<void> {
          VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
         [SVER_GENERATED_LIKE, TENANT, SCEN_GENERATED_LIKE, JSON.stringify(compiledGeneratedLike.ir), compiledGeneratedLike.compiledAst],
       );
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'visual-failure')`, [SCEN_VISUAL_FAILURE, TENANT]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+         VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+        [SVER_VISUAL_FAILURE, TENANT, SCEN_VISUAL_FAILURE, JSON.stringify(compiledVisualFailure.ir), compiledVisualFailure.compiledAst],
+      );
       // R1을 우회해 claimed 상태로 직접 시드(드라이버는 R2부터). correlation_id=run_id.
       for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_SUSPEND, RUN_ARTIFACT, RUN_VISUAL_NO_ENQUEUER]) {
         await c.query(
@@ -566,6 +593,11 @@ async function main(): Promise<void> {
           [rid, TENANT, sver, WORKER],
         );
       }
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
+         VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
+        [RUN_VISUAL_DRIVE_THROW, TENANT, SVER_VISUAL_FAILURE, WORKER],
+      );
     });
 
     const run: ClaimedRun = {
@@ -849,6 +881,69 @@ async function main(): Promise<void> {
         videoDriveThrowEnqueuer.jobs[0]?.kind === "artifact_redaction" &&
         videoDriveThrowEnqueuer.jobs[0]?.artifactId === "72000000-0000-0000-0000-0000000000de",
       JSON.stringify(videoDriveThrowEnqueuer.jobs),
+    );
+
+    const visualDriveThrowArtifact = "72000000-0000-4000-8000-0000000000e1" as ArtifactRef;
+    const visualDriveThrowRecorder = new FakeVisualEvidenceRecorder(visualDriveThrowArtifact);
+    const visualDriveThrowSessions = new CountingSessionProvider();
+    const visualDriveThrowEnqueuer = new FakeRuntimeJobEnqueuer();
+    const visualDriveThrow = await driveClaimedRun(
+      {
+        runId: RUN_VISUAL_DRIVE_THROW,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_VISUAL_FAILURE,
+        correlationId: RUN_VISUAL_DRIVE_THROW,
+        leaseId: "lease-visual-drive-throw",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      {
+        pool,
+        executor: throwingExecutor(),
+        resolver: fakeResolver,
+        workerId: WORKER,
+        sessionProvider: visualDriveThrowSessions,
+        visualEvidenceRecorder: visualDriveThrowRecorder,
+        runtimeJobEnqueuer: visualDriveThrowEnqueuer,
+        recordExecutorSteps: true,
+      },
+    );
+    check(
+      "visual failure policy captures screenshot when executor throws",
+      visualDriveThrow.state === "failed_system" &&
+        visualDriveThrow.outcome.artifacts.includes(visualDriveThrowArtifact) &&
+        visualDriveThrowRecorder.captures.length === 1 &&
+        visualDriveThrowRecorder.captures[0]?.result.status === "failed_system" &&
+        visualDriveThrowRecorder.captures[0]?.attempt === 0 &&
+        visualDriveThrowSessions.leaseIds[0] === "lease-visual-drive-throw",
+      JSON.stringify({
+        state: visualDriveThrow.state,
+        artifacts: visualDriveThrow.outcome.artifacts,
+        captures: visualDriveThrowRecorder.captures,
+        sessions: visualDriveThrowSessions.leaseIds,
+      }),
+    );
+    const visualThrowSteps = await runSteps(pool, RUN_VISUAL_DRIVE_THROW);
+    check(
+      "visual throw screenshot ref is preserved on run_steps",
+      visualThrowSteps.some(
+        (s) =>
+          s.step_id === "open.0" &&
+          s.node_id === "open" &&
+          s.action === "navigate" &&
+          s.status === "failed_system" &&
+          s.artifacts.includes(visualDriveThrowArtifact),
+      ),
+      JSON.stringify(visualThrowSteps),
+    );
+    check(
+      "visual throw artifact triggers lifecycle jobs",
+      visualDriveThrowEnqueuer.jobs.length === 2 &&
+        visualDriveThrowEnqueuer.jobs[0]?.kind === "artifact_redaction" &&
+        visualDriveThrowEnqueuer.jobs[0]?.artifactId === visualDriveThrowArtifact,
+      JSON.stringify(visualDriveThrowEnqueuer.jobs),
     );
 
     const videoNoRecorder = await driveClaimedRun(

@@ -38,6 +38,11 @@ export interface VisualEvidenceRecorder {
   }): Promise<ArtifactRef>;
 }
 
+export interface VisualEvidenceCaptureDeps {
+  readonly sessions: CdpSessionProvider;
+  readonly recorder: VisualEvidenceRecorder;
+}
+
 export interface PgVisualEvidenceRecorderConfig {
   retentionDays: number;
 }
@@ -325,18 +330,7 @@ export class VisualEvidenceExecutor implements ExecutorPlugin {
 
   async execute(stepId: string, action: unknown, ctx: RunContext): Promise<StepResult> {
     const result = await this.inner.execute(stepId, action, ctx);
-    const policy = recordingPolicyFromAction(action);
-    if (!shouldCapture(policy, result)) return result;
-    const artifactRef = await this.recorder.captureStepScreenshot({
-      session: this.sessions.forLease(ctx.leaseId),
-      tenantId: ctx.tenantId,
-      runId: ctx.runId,
-      nodeId: ctx.nodeId,
-      stepId,
-      attempt: ctx.attempt,
-      result,
-    });
-    return { ...result, artifacts: [...result.artifacts, artifactRef] };
+    return appendVisualEvidenceArtifact({ action, result, ctx, sessions: this.sessions, recorder: this.recorder });
   }
 
   verify(criteria: unknown, ctx: RunContext): Promise<VerifyResult> {
@@ -349,6 +343,27 @@ export class VisualEvidenceError extends Error {
     super(cause instanceof Error ? `${message}: ${cause.message}` : message);
     this.name = "VisualEvidenceError";
   }
+}
+
+export async function appendVisualEvidenceArtifact(input: {
+  readonly action: unknown;
+  readonly result: StepResult;
+  readonly ctx: RunContext;
+  readonly sessions: CdpSessionProvider;
+  readonly recorder: VisualEvidenceRecorder;
+}): Promise<StepResult> {
+  const policy = recordingPolicyFromAction(input.action);
+  if (!shouldCapture(policy, input.result)) return input.result;
+  const artifactRef = await input.recorder.captureStepScreenshot({
+    session: input.sessions.forLease(input.ctx.leaseId),
+    tenantId: input.ctx.tenantId,
+    runId: input.ctx.runId,
+    nodeId: input.ctx.nodeId,
+    stepId: input.result.stepId,
+    attempt: input.ctx.attempt,
+    result: input.result,
+  });
+  return { ...input.result, artifacts: [...input.result.artifacts, artifactRef] };
 }
 
 function normalizeCaptureInput(

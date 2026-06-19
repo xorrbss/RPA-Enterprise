@@ -49,7 +49,12 @@ import { PgExecutorInvocationRecorder } from "./executor-invocation-recorder";
 import { executorFailureStepResult } from "./executor-step-orchestrator";
 import { compiledScenarioFrom } from "./ir-translate";
 import { runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
-import { VisualEvidenceExecutor, type VisualEvidenceRecorder } from "./visual-evidence";
+import {
+  appendVisualEvidenceArtifact,
+  VisualEvidenceExecutor,
+  type VisualEvidenceCaptureDeps,
+  type VisualEvidenceRecorder,
+} from "./visual-evidence";
 
 // ops-defaults.md resume_token.ttl=30m(expiresAt). 코드 상수 금지 규약 — inline 인용(RQ-017 패턴).
 const RESUME_TOKEN_TTL_MS = 30 * 60 * 1000;
@@ -190,11 +195,14 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
 
   // startNode(resume): 인터프리터가 그 노드부터 재진입(미지정 시 scenario.start). run.params 를 스코프에 주입(on[].when params.*).
   let executor = deps.executor;
-  if (deps.visualEvidenceRecorder !== undefined && deps.sessionProvider !== undefined) {
-    executor = new VisualEvidenceExecutor(executor, deps.sessionProvider, deps.visualEvidenceRecorder);
-  }
+  const visualEvidence =
+    deps.visualEvidenceRecorder !== undefined && deps.sessionProvider !== undefined
+      ? { sessions: deps.sessionProvider, recorder: deps.visualEvidenceRecorder }
+      : undefined;
   if (deps.recordExecutorSteps === true) {
-    executor = new StepRecordingExecutor(deps.pool, executor, run);
+    executor = new StepRecordingExecutor(deps.pool, executor, run, visualEvidence);
+  } else if (visualEvidence !== undefined) {
+    executor = new VisualEvidenceExecutor(executor, visualEvidence.sessions, visualEvidence.recorder);
   }
   let videoRecording: RunVideoRecording | undefined;
   let outcome: ScenarioOutcome;
@@ -386,6 +394,7 @@ class StepRecordingExecutor implements ExecutorPlugin {
     private readonly pool: Pool,
     private readonly inner: ExecutorPlugin,
     private readonly run: ClaimedRun,
+    private readonly visualEvidence?: VisualEvidenceCaptureDeps,
   ) {
     this.attemptStore = new PgExecutorStepAttemptStore(pool);
     this.recorder = new PgExecutorInvocationRecorder(pool);
@@ -420,6 +429,9 @@ class StepRecordingExecutor implements ExecutorPlugin {
       result = await this.inner.execute(stepId, action, stepCtx);
     } catch (error) {
       result = executorFailureStepResult({ stepId, actionType }, stepCtx, startedAt, error);
+    }
+    if (this.visualEvidence !== undefined) {
+      result = await appendVisualEvidenceArtifact({ action, result, ctx: stepCtx, ...this.visualEvidence });
     }
 
     const stepArtifacts = await loadPersistedStepArtifactMetadata(this.pool, {
