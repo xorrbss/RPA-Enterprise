@@ -65,6 +65,7 @@ const VIDEO_IDENTITY = "10000000-0000-4000-8000-0000000000a6";
 const OTHER_SITE = "10000000-0000-4000-8000-0000000000b1";
 const OTHER_IDENTITY = "10000000-0000-4000-8000-0000000000b2";
 const OTHER_NETWORK = "10000000-0000-4000-8000-0000000000b3";
+const AMBIGUOUS_NETWORK = "10000000-0000-4000-8000-0000000000c1";
 const LIFECYCLE_BYPASS_ROLE = "rpa_generation_lifecycle_bypass";
 const LIFECYCLE_BYPASS_PASSWORD = "rpa_generation_lifecycle_bypass";
 const SECRET = new TextEncoder().encode("scenario-generation-int-secret-do-not-use-0123456789");
@@ -848,6 +849,36 @@ async function main(): Promise<void> {
         inferredTarget.body,
       );
       check("inferred target enqueues third run", enqueuedRuns.length === 3 && enqueuedRuns[2]?.runId === inferredBody.run_id, JSON.stringify(enqueuedRuns));
+
+      await withTenantTx(pool, TENANT, async (client) => {
+        await client.query(
+          `INSERT INTO network_policies (id, tenant_id, allowed_domains)
+           VALUES ($1::uuid, $2::uuid, ARRAY['example.com'])`,
+          [AMBIGUOUS_NETWORK, TENANT],
+        );
+      });
+      const ambiguousNetworkTarget = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-ambiguous-network-target-1" },
+        payload: {
+          prompt: "https://example.com 에서 최근 공지 제목과 링크를 수집해줘",
+          name: "generated-ambiguous-network-target",
+          start_url: "https://example.com/notices",
+          evidence: { screenshot: "each_step", video: "never" },
+        },
+      });
+      check("ambiguous network policy target inference saves blocked generation -> 201", ambiguousNetworkTarget.statusCode === 201, ambiguousNetworkTarget.body);
+      const ambiguousNetworkBody = ambiguousNetworkTarget.json();
+      check(
+        "ambiguous network policy does not guess target",
+        ambiguousNetworkBody.status === "blocked" &&
+          ambiguousNetworkBody.run_id === null &&
+          Array.isArray(ambiguousNetworkBody.blockers) &&
+          ambiguousNetworkBody.blockers.includes("target_required_for_auto_run"),
+        ambiguousNetworkTarget.body,
+      );
+      check("ambiguous network policy does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
 
       const paginationLimit = await app.inject({
         method: "POST",

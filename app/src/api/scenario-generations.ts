@@ -577,7 +577,9 @@ async function inferRuntimeTargetForRequest(
       LIMIT 50`,
     [tenantId],
   );
-  const networkPolicyId = network.rows.find((row) => isHostAllowed(startHost, row.allowed_domains))?.id;
+  const matchingNetworkPolicies = network.rows.filter((row) => isHostAllowed(startHost, row.allowed_domains));
+  if (matchingNetworkPolicies.length !== 1) return request;
+  const networkPolicyId = matchingNetworkPolicies[0]?.id;
   if (networkPolicyId === undefined) return request;
 
   return {
