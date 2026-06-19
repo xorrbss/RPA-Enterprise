@@ -92,6 +92,8 @@ assertOpenApiContains(
   "      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/RunCreateRequest'",
 );
 assertOpenApiSchemaContains("RunCreateRequest", "        model:\n          type: string");
+assertOpenApiSchemaContains("ScenarioGeneration", "        - params_context");
+assertOpenApiSchemaContains("ScenarioGeneration", "        params_context:\n          type: object");
 assertOpenApiPath("/runs/{run_id}/steps");
 assertOpenApiPath("/runs/{run_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");

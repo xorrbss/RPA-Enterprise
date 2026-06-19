@@ -1416,6 +1416,48 @@ async function main(): Promise<void> {
             JSON.stringify({ row: row.rows[0], mutatingPlannerCalls }),
           );
         });
+        const failedMutationList = await mutatingPlannerApp.inject({
+          method: "GET",
+          url: "/v1/scenario-generations?status=failed&limit=50",
+          headers: { authorization: `Bearer ${viewer}` },
+        });
+        check("viewer can list failed generation ledgers -> 200", failedMutationList.statusCode === 200, failedMutationList.body);
+        const failedMutationListBody = failedMutationList.json();
+        const failedMutationItems = isRecord(failedMutationListBody) && Array.isArray(failedMutationListBody.items)
+          ? failedMutationListBody.items
+          : [];
+        const failedMutationLedger = failedMutationItems.find(
+          (item: unknown) => isRecord(item) && item.prompt_hash === "fake-llm-mutating-mode-hash",
+        );
+        check(
+          "failed status filter exposes planner mutation ledger without prompt plaintext",
+          isRecord(failedMutationLedger) &&
+            failedMutationLedger.status === "failed" &&
+            failedMutationLedger.scenario_id === null &&
+            failedMutationLedger.run_id === null &&
+            Array.isArray(failedMutationLedger.blockers) &&
+            failedMutationLedger.blockers.includes("planner_request_mutation_forbidden") &&
+            !JSON.stringify(failedMutationLedger).includes("Use the LLM planner for save-only generation"),
+          JSON.stringify(failedMutationListBody),
+        );
+        const failedMutationGenerationId = isRecord(failedMutationLedger) && typeof failedMutationLedger.generation_id === "string"
+          ? failedMutationLedger.generation_id
+          : "";
+        const failedMutationDetail = await mutatingPlannerApp.inject({
+          method: "GET",
+          url: `/v1/scenario-generations/${failedMutationGenerationId}`,
+          headers: { authorization: `Bearer ${viewer}` },
+        });
+        check("viewer can read failed planner mutation ledger detail -> 200", failedMutationDetail.statusCode === 200, failedMutationDetail.body);
+        check(
+          "failed planner mutation detail preserves blocker and redaction",
+          failedMutationDetail.json().status === "failed" &&
+            failedMutationDetail.json().prompt_hash === "fake-llm-mutating-mode-hash" &&
+            Array.isArray(failedMutationDetail.json().blockers) &&
+            failedMutationDetail.json().blockers.includes("planner_request_mutation_forbidden") &&
+            !failedMutationDetail.body.includes("Use the LLM planner for save-only generation"),
+          failedMutationDetail.body,
+        );
       } finally {
         await mutatingPlannerApp.close();
       }
@@ -1768,6 +1810,48 @@ async function main(): Promise<void> {
             JSON.stringify(row.rows[0]),
           );
         });
+        const failedRepairList = await failingRepairPlannerApp.inject({
+          method: "GET",
+          url: "/v1/scenario-generations?status=failed&limit=50",
+          headers: { authorization: `Bearer ${viewer}` },
+        });
+        check("viewer can list failed repair generation ledgers -> 200", failedRepairList.statusCode === 200, failedRepairList.body);
+        const failedRepairListBody = failedRepairList.json();
+        const failedRepairItems = isRecord(failedRepairListBody) && Array.isArray(failedRepairListBody.items)
+          ? failedRepairListBody.items
+          : [];
+        const failedRepairLedger = failedRepairItems.find(
+          (item: unknown) => isRecord(item) && item.prompt_hash === "fake-llm-repair-fail-hash",
+        );
+        check(
+          "failed status filter exposes repair failure ledger without prompt plaintext",
+          isRecord(failedRepairLedger) &&
+            failedRepairLedger.status === "failed" &&
+            failedRepairLedger.scenario_id === null &&
+            failedRepairLedger.run_id === null &&
+            Array.isArray(failedRepairLedger.blockers) &&
+            failedRepairLedger.blockers.includes("compile_failed") &&
+            !JSON.stringify(failedRepairLedger).includes("Use the LLM planner and fail repair for invalid IR"),
+          JSON.stringify(failedRepairListBody),
+        );
+        const failedRepairGenerationId = isRecord(failedRepairLedger) && typeof failedRepairLedger.generation_id === "string"
+          ? failedRepairLedger.generation_id
+          : "";
+        const failedRepairDetail = await failingRepairPlannerApp.inject({
+          method: "GET",
+          url: `/v1/scenario-generations/${failedRepairGenerationId}`,
+          headers: { authorization: `Bearer ${viewer}` },
+        });
+        check("viewer can read failed repair ledger detail -> 200", failedRepairDetail.statusCode === 200, failedRepairDetail.body);
+        check(
+          "failed repair detail preserves blocker and redaction",
+          failedRepairDetail.json().status === "failed" &&
+            failedRepairDetail.json().prompt_hash === "fake-llm-repair-fail-hash" &&
+            Array.isArray(failedRepairDetail.json().blockers) &&
+            failedRepairDetail.json().blockers.includes("compile_failed") &&
+            !failedRepairDetail.body.includes("Use the LLM planner and fail repair for invalid IR"),
+          failedRepairDetail.body,
+        );
         const failedRepairReplay = await failingRepairPlannerApp.inject({
           method: "POST",
           url: "/v1/scenario-generations",

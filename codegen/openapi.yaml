@@ -1852,6 +1852,7 @@ components:
         - prompt_hash
         - planner
         - model
+        - params_context
         - scenario_id
         - scenario_version_id
         - run_id
@@ -1877,6 +1878,10 @@ components:
           type: string
           enum: [deterministic_mvp, llm_v1]
         model: { type: [string, "null"] }
+        params_context:
+          type: object
+          additionalProperties: true
+          description: Server-confirmed non-secret params context for later correction runs. Sensitive values are replaced with redacted markers.
         scenario_id: { type: [string, "null"] }
         scenario_version_id: { type: [string, "null"] }
         run_id: { type: [string, "null"] }

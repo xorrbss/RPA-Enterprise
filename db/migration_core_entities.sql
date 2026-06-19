@@ -365,7 +365,8 @@ CREATE INDEX idx_human_tasks_expiry ON human_tasks (expires_at)
 -- ============================================================
 -- 7. artifacts
 --    impl-contracts-bundle.md §B/§C + security-contracts §8.
---    redaction_status 게이트(redacted/not_required 아니면 조회 차단 → ARTIFACT_NOT_REDACTED).
+--    redaction_status 추상 게이트는 ARTIFACT_NOT_REDACTED로 모델링하지만,
+--    v1 HTTP read는 RLS visibility로 pending/failed/quarantined/deleted/cross-tenant를 404 존재 비노출 처리.
 -- ============================================================
 
 CREATE TABLE artifacts (
