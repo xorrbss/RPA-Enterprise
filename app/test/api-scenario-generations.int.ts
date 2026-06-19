@@ -1390,15 +1390,29 @@ async function main(): Promise<void> {
         );
         check("llm_v1 planner mutation does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
         await withTenantTx(pool, TENANT, async (client) => {
-          const row = await client.query<{ scenario_count: string; generation_count: string }>(
+          const row = await client.query<{
+            scenario_count: string;
+            generation_count: string;
+            generation_status: string | null;
+            generation_blockers: string | null;
+            generation_row: string | null;
+          }>(
             `SELECT
                 (SELECT count(*)::text FROM scenarios WHERE tenant_id=$1::uuid AND name=$2) AS scenario_count,
-                (SELECT count(*)::text FROM scenario_generations WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-mutating-mode-hash') AS generation_count`,
+                (SELECT count(*)::text FROM scenario_generations WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-mutating-mode-hash') AS generation_count,
+                (SELECT status FROM scenario_generations WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-mutating-mode-hash' LIMIT 1) AS generation_status,
+                (SELECT blockers::text FROM scenario_generations WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-mutating-mode-hash' LIMIT 1) AS generation_blockers,
+                (SELECT g::text FROM scenario_generations g WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-mutating-mode-hash' LIMIT 1) AS generation_row`,
             [TENANT, "generated-llm-mutating-mode"],
           );
           check(
-            "llm_v1 planner mutation does not save scenario or generation ledger",
-            row.rows[0]?.scenario_count === "0" && row.rows[0]?.generation_count === "0" && mutatingPlannerCalls === 1,
+            "llm_v1 planner mutation does not save scenario but writes failed ledger",
+            row.rows[0]?.scenario_count === "0" &&
+              row.rows[0]?.generation_count === "1" &&
+              row.rows[0]?.generation_status === "failed" &&
+              row.rows[0]?.generation_blockers?.includes("planner_request_mutation_forbidden") === true &&
+              row.rows[0]?.generation_row?.includes("Use the LLM planner for save-only generation") === false &&
+              mutatingPlannerCalls === 1,
             JSON.stringify({ row: row.rows[0], mutatingPlannerCalls }),
           );
         });
@@ -1729,15 +1743,28 @@ async function main(): Promise<void> {
           JSON.stringify({ body: failedRepair.json(), failingRepairPlanCalls, failingRepairCalls }),
         );
         await withTenantTx(pool, TENANT, async (client) => {
-          const row = await client.query<{ scenario_count: string; generation_count: string }>(
+          const row = await client.query<{
+            scenario_count: string;
+            generation_count: string;
+            generation_status: string | null;
+            generation_blockers: string | null;
+            generation_row: string | null;
+          }>(
             `SELECT
                 (SELECT count(*)::text FROM scenarios WHERE tenant_id=$1::uuid AND name=$2) AS scenario_count,
-                (SELECT count(*)::text FROM scenario_generations WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-repair-fail-hash') AS generation_count`,
+                (SELECT count(*)::text FROM scenario_generations WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-repair-fail-hash') AS generation_count,
+                (SELECT status FROM scenario_generations WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-repair-fail-hash' LIMIT 1) AS generation_status,
+                (SELECT blockers::text FROM scenario_generations WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-repair-fail-hash' LIMIT 1) AS generation_blockers,
+                (SELECT g::text FROM scenario_generations g WHERE tenant_id=$1::uuid AND prompt_hash='fake-llm-repair-fail-hash' LIMIT 1) AS generation_row`,
             [TENANT, "generated-llm-repair-fail"],
           );
           check(
-            "llm_v1 failed repair does not save scenario or generation ledger",
-            row.rows[0]?.scenario_count === "0" && row.rows[0]?.generation_count === "0",
+            "llm_v1 failed repair does not save scenario but writes failed ledger",
+            row.rows[0]?.scenario_count === "0" &&
+              row.rows[0]?.generation_count === "1" &&
+              row.rows[0]?.generation_status === "failed" &&
+              row.rows[0]?.generation_blockers?.includes("compile_failed") === true &&
+              row.rows[0]?.generation_row?.includes("Use the LLM planner and fail repair for invalid IR") === false,
             JSON.stringify(row.rows[0]),
           );
         });

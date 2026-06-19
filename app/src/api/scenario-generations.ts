@@ -19,7 +19,7 @@ import type {
   SignedCommandRegistryPurpose,
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
-import { compileScenario } from "./compile-pipeline";
+import { compileScenario, type CompileOutcome } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx, idempotencyRecordRowId } from "./idempotency";
 import { apiErrorBody, isRecord } from "./command";
@@ -86,6 +86,17 @@ interface CommandResponse {
 interface PlannedCompileResult {
   plan: GenerationPlan;
   compiled: Extract<ReturnType<typeof compileScenario>, { ok: true }>;
+}
+
+class ScenarioGenerationPlanningError extends Error {
+  constructor(
+    readonly apiError: ApiResponseError,
+    readonly failedPlan?: GenerationPlan,
+    readonly failedCompile?: CompileOutcome,
+  ) {
+    super(apiError.message);
+    this.name = "ScenarioGenerationPlanningError";
+  }
 }
 
 interface GenerationRunRequest {
@@ -272,16 +283,18 @@ async function generateScenario(deps: ApiServerDeps, request: FastifyRequest): P
 
   const recordId = reservation.recordId;
   const generationId = idempotencyRecordRowId(recordId);
+  let planned: PlannedCompileResult | undefined;
   try {
     const inferred = await withTenantTx(deps.pool, principal.tenantId, (client) =>
       inferRuntimeTargetForRequest(client, principal.tenantId, parsed),
     );
     const signedCommandRefs = await signedCommandRefsFor(deps, principal, "scenario.save");
-    const { plan, compiled } = await planAndCompileScenario(deps, inferred, signedCommandRefs, {
+    planned = await planAndCompileScenario(deps, inferred, signedCommandRefs, {
       tenantId: principal.tenantId,
       correlationId: request.correlationId,
       generationId,
     });
+    const { plan, compiled } = planned;
 
     return await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const response = await persistGeneration(client, deps, principal, request.correlationId, generationId, plan, compiled);
@@ -294,10 +307,22 @@ async function generateScenario(deps: ApiServerDeps, request: FastifyRequest): P
       tenantId: principal.tenantId,
       generationId,
     });
-    if (err instanceof ApiResponseError && !ERROR_CATALOG[err.code].retryable) {
-      await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+    const planningError = err instanceof ScenarioGenerationPlanningError ? err : undefined;
+    const apiError = planningError?.apiError ?? (err instanceof ApiResponseError ? err : undefined);
+    if (apiError !== undefined && !ERROR_CATALOG[apiError.code].retryable) {
+      await withTenantTx(deps.pool, principal.tenantId, (client) =>
+        upsertFailedGenerationLedger(client, {
+          generationId,
+          principal,
+          request: parsed,
+          apiError,
+          failedPlan: planningError?.failedPlan ?? planned?.plan,
+          failedCompile: planningError?.failedCompile ?? planned?.compiled,
+        }),
+      );
+      await deps.idempotency.saveFailure(recordId, apiErrorBody(apiError, request.correlationId));
     }
-    throw err;
+    throw apiError ?? err;
   }
 }
 
@@ -542,8 +567,13 @@ async function planAndCompileScenario(
   const planner = scenarioPlannerFor(deps, request.planner);
   const capabilities = scenarioGenerationCapabilities(deps);
   let plan = await planner.plan(request, capabilities, context);
-  assertPlannerResult(planner, request, plan);
-  plan = finalizePlannerEvidence(plan, request, capabilities);
+  try {
+    assertPlannerResult(planner, request, plan);
+    plan = finalizePlannerEvidence(plan, request, capabilities);
+  } catch (err) {
+    if (err instanceof ApiResponseError) throw new ScenarioGenerationPlanningError(err, plan);
+    throw err;
+  }
 
   for (let repairAttempt = 0; ; repairAttempt += 1) {
     const compiled = compileScenario(plan.draftIr, { signedCommandRefs });
@@ -551,7 +581,7 @@ async function planAndCompileScenario(
       return { plan, compiled };
     }
     if (planner.repair === undefined || repairAttempt >= MAX_PLANNER_REPAIR_ATTEMPTS) {
-      throw new ApiResponseError(compiled.code, compiled.details);
+      throw new ScenarioGenerationPlanningError(new ApiResponseError(compiled.code, compiled.details), plan, compiled);
     }
     plan = await planner.repair({
       request,
@@ -561,8 +591,13 @@ async function planAndCompileScenario(
       compileError: compiled,
       attempt: repairAttempt + 1,
     });
-    assertPlannerResult(planner, request, plan);
-    plan = finalizePlannerEvidence(plan, request, capabilities);
+    try {
+      assertPlannerResult(planner, request, plan);
+      plan = finalizePlannerEvidence(plan, request, capabilities);
+    } catch (err) {
+      if (err instanceof ApiResponseError) throw new ScenarioGenerationPlanningError(err, plan, compiled);
+      throw err;
+    }
   }
 }
 
@@ -797,6 +832,136 @@ async function persistGeneration(
       draft_ir: ledgerDraftIr,
     },
   };
+}
+
+async function upsertFailedGenerationLedger(
+  client: PoolClient,
+  input: {
+    generationId: string;
+    principal: AuthenticatedPrincipal;
+    request: GenerationRequest;
+    apiError: ApiResponseError;
+    failedPlan?: GenerationPlan;
+    failedCompile?: CompileOutcome;
+  },
+): Promise<void> {
+  const request = input.failedPlan?.request ?? input.request;
+  const promptHash = input.failedPlan?.promptHash ?? createHash("sha256").update(input.request.prompt).digest("hex");
+  const planner = input.failedPlan?.planner ?? input.request.planner ?? "deterministic_mvp";
+  const draftIr = input.failedPlan !== undefined
+    ? redactGenerationDraftIr(input.failedPlan.draftIr)
+    : failedGenerationPlaceholderIr(input.request, promptHash);
+  const validationReport = failedGenerationValidationReport(input.apiError, input.failedCompile, input.request);
+  const blockers = failedGenerationBlockers(input.apiError, input.failedCompile, input.failedPlan);
+  const upserted = await client.query<{ id: string }>(
+    `INSERT INTO scenario_generations
+       (id, tenant_id, mode, status, prompt_hash, planner, model, params_context, draft_ir, validation_report,
+        evidence_policy, blockers, scenario_id, scenario_version_id, run_id, created_by)
+     VALUES ($1::uuid, $2::uuid, $3, 'failed', $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb,
+             $10::jsonb, $11::jsonb, NULL, NULL, NULL, $12)
+     ON CONFLICT (id) DO UPDATE
+       SET status='failed',
+           planner=EXCLUDED.planner,
+           model=EXCLUDED.model,
+           params_context=EXCLUDED.params_context,
+           draft_ir=EXCLUDED.draft_ir,
+           validation_report=EXCLUDED.validation_report,
+           evidence_policy=EXCLUDED.evidence_policy,
+           blockers=EXCLUDED.blockers
+      WHERE scenario_generations.tenant_id=$2::uuid
+      RETURNING id::text`,
+    [
+      input.generationId,
+      input.principal.tenantId,
+      request.mode,
+      promptHash,
+      planner,
+      request.model ?? null,
+      JSON.stringify(redactParamsContext(request.params)),
+      JSON.stringify(draftIr),
+      JSON.stringify(validationReport),
+      JSON.stringify(request.evidence),
+      JSON.stringify(blockers),
+      input.principal.subjectId,
+    ],
+  );
+  if (upserted.rows[0]?.id !== input.generationId) {
+    throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", { reason: "scenario_generation_failed_ledger_upsert_missing_returning_row" });
+  }
+}
+
+function failedGenerationPlaceholderIr(request: GenerationRequest, promptHash: string): Record<string, unknown> {
+  return {
+    meta: {
+      name: request.name ?? `failed-prompt-${promptHash.slice(0, 12)}`,
+      version: 1,
+      ir_version: "1.x",
+      studio_mode: "easy",
+      evidence: request.evidence,
+    },
+    params_schema: { type: "object", additionalProperties: true },
+    ...(request.target !== undefined ? { target: request.target } : {}),
+    start: "failed",
+    nodes: {
+      failed: { terminal: "fail_system" },
+    },
+  };
+}
+
+function failedGenerationValidationReport(
+  apiError: ApiResponseError,
+  compile: CompileOutcome | undefined,
+  request: GenerationRequest,
+): Record<string, unknown> {
+  if (compile?.report !== undefined) return compile.report as unknown as Record<string, unknown>;
+  return {
+    errors: [
+      {
+        code: apiError.code,
+        reason: failedGenerationReason(apiError, compile),
+        details: redactGenerationFailureDetails(apiError.details, request.prompt),
+      },
+    ],
+    warnings: [],
+  };
+}
+
+function failedGenerationBlockers(
+  apiError: ApiResponseError,
+  compile: CompileOutcome | undefined,
+  plan: GenerationPlan | undefined,
+): string[] {
+  const blockers = [...(plan?.blockers ?? []), "scenario_generation_failed"];
+  if (compile !== undefined && !compile.ok) blockers.push("compile_failed");
+  const reason = apiErrorDetailsReason(apiError.details);
+  if (reason !== undefined) blockers.push(reason);
+  return uniqueStrings(blockers);
+}
+
+function failedGenerationReason(apiError: ApiResponseError, compile: CompileOutcome | undefined): string {
+  const reason = apiErrorDetailsReason(apiError.details);
+  if (reason !== undefined) return reason;
+  if (compile !== undefined && !compile.ok) return "compile_failed";
+  return "scenario_generation_failed";
+}
+
+function apiErrorDetailsReason(details: unknown): string | undefined {
+  return isRecord(details) && typeof details.reason === "string" && details.reason.length > 0 ? details.reason : undefined;
+}
+
+function redactGenerationFailureDetails(value: unknown, prompt: string): unknown {
+  if (typeof value === "string") {
+    return value.includes(prompt) ? value.replaceAll(prompt, "[REDACTED:scenario_generation_prompt]") : value;
+  }
+  if (Array.isArray(value)) return value.map((item) => redactGenerationFailureDetails(item, prompt));
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    out[key] = key === "prompt" || key === "instruction"
+      ? "[REDACTED:scenario_generation_error_detail]"
+      : redactGenerationFailureDetails(child, prompt);
+  }
+  return out;
 }
 
 async function runtimeTargetBlocker(
