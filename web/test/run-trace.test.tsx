@@ -360,6 +360,32 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
         draft_ir: {},
         validation_report: {},
       }),
+      listScenarioGenerationArtifacts: async () => ({
+        items: [
+          {
+            artifact_id: "gen-art-planner-1",
+            type: "scenario_generation_planner_output",
+            media_type: "application/json",
+            filename: "planner.json",
+            byte_size: 80,
+            duration_ms: null,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:00.500Z",
+          },
+        ],
+        next_cursor: null,
+      }),
+      getScenarioGenerationArtifact: async (id, artifactId) => ({
+        generation_id: id,
+        artifact_id: artifactId,
+        type: "scenario_generation_planner_output",
+        sha256: "planner-sha",
+        redaction_status: "redacted",
+        retention_until: null,
+        content: '{"planner":"ready"}',
+      }),
       listRunArtifacts: async () => ({
         items: [
           {
@@ -398,6 +424,9 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(readout).toHaveTextContent("요청 동영상: 전체 실행");
     expect(readout).toHaveTextContent("저장 이미지 1");
     expect(readout).toHaveTextContent("저장 동영상 1");
+    expect(await screen.findByText("자연어 생성 산출물")).toBeInTheDocument();
+    expect((await screen.findAllByText("scenario_generation_planner_output")).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/ready/)).toBeInTheDocument();
   });
 
   test("mismatched generation deep link is called out and does not drive evidence storage", async () => {

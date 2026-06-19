@@ -7,6 +7,7 @@ import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { ArtifactLookup, ArtifactRef } from "../components/ArtifactLookup";
 import { ArtifactMediaPreview } from "../components/ArtifactMediaPreview";
+import { GenerationArtifactsPanel } from "../components/GenerationArtifactsPanel";
 import { StepTrace } from "../components/StepTrace";
 import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
@@ -63,6 +64,7 @@ export function RunTraceView(): JSX.Element {
       {sel !== null && (
         <RunDetailPanel
           runId={sel}
+          generationId={generationParam}
           detail={detail}
           generation={generation}
           focusArtifacts={focusArtifacts}
@@ -120,12 +122,14 @@ export function RunTraceView(): JSX.Element {
 // 실행 상세 — getRun(RLS 스코프) + run_steps 단계 트레이스(GET /v1/runs/{id}/steps, api-surface §1).
 function RunDetailPanel({
   runId,
+  generationId,
   detail,
   generation,
   focusArtifacts,
   onClose,
 }: {
   runId: string;
+  generationId: string | null;
   detail: UseQueryResult<RunDetail>;
   generation: UseQueryResult<ScenarioGenerationResult>;
   focusArtifacts: boolean;
@@ -184,6 +188,7 @@ function RunDetailPanel({
         )}
         </>
       ) : null}
+      {generationId !== null && <GenerationArtifactsPanel generationId={generationId} title="자연어 생성 산출물" />}
       <StepTrace runId={runId} />
       <RunArtifactsList
         runId={runId}
