@@ -2,7 +2,7 @@
  * 통합 테스트 — GET /v1/artifacts/{id} 산출물 조회 라우트(api-surface §5, release-decisions D8-A1).
  *   redaction → RBAC 2단 게이트. v1은 RLS(artifacts_visible_isolation)를 redaction 게이트로 사용:
  *   redacted/not_required·미삭제·비격리만 노출 → pending/failed/quarantined/deleted/cross-tenant는 404(존재 비노출).
- *   본문은 object store(redacted at rest)에서 read. 실 분산 object-store 바인딩은 deploy-time(B3) — 본 테스트는 FsObjectStore.
+ *   본문은 object store(redacted at rest)에서 read. S3 scheme router는 unit/main-config에서 검증하고 본 테스트는 FsObjectStore.
  *
  * 실행(temp PG15 게이트):
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec -- tsx app/test/api-artifacts.int.ts

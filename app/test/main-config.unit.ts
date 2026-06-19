@@ -134,6 +134,43 @@ function main(): void {
     expectThrow("api artifactDir rejects API/GATEWAY drift", () => loadApiConfig(API_COMMON)));
   withEnv({
     ...FULL,
+    ARTIFACT_OBJECT_STORE_KIND: "s3",
+    ARTIFACT_OBJECT_STORE_REF: "rpa/staging/artifact-lifecycle/object_store/s3",
+    S3_ENDPOINT: "https://s3.example",
+    S3_REGION: "ap-northeast-2",
+    S3_BUCKET: "rpa-artifacts",
+    S3_ACCESS_KEY_ID: "s3-access-id",
+  }, () =>
+    expectThrow("api artifact s3 reader requires API Vault AppRole", () => loadApiConfig(API_COMMON)));
+  withEnv({
+    ...FULL,
+    ARTIFACT_OBJECT_STORE_KIND: "s3",
+    ARTIFACT_OBJECT_STORE_REF: "rpa/staging/artifact-lifecycle/object_store/s3",
+    VAULT_API_ROLE_ID: "api-role",
+    VAULT_API_SECRET_ID: "api-secret",
+    S3_ENDPOINT: "https://s3.example",
+    S3_REGION: "ap-northeast-2",
+    S3_BUCKET: "rpa-artifacts",
+    S3_ACCESS_KEY_ID: "s3-access-id",
+    S3_FORCE_PATH_STYLE: "false",
+  }, () => {
+    const a = loadApiConfig(API_COMMON);
+    check("api artifact s3 reader config present", a.artifactObjectStore?.objectStore.kind === "s3");
+    check(
+      "api artifact s3 reader config carried",
+      a.artifactObjectStore?.objectStore.kind === "s3" &&
+        a.artifactObjectStore.objectStore.endpoint === "https://s3.example" &&
+        a.artifactObjectStore.objectStore.region === "ap-northeast-2" &&
+        a.artifactObjectStore.objectStore.bucket === "rpa-artifacts" &&
+        a.artifactObjectStore.objectStore.accessKeyId === "s3-access-id" &&
+        a.artifactObjectStore.objectStore.forcePathStyle === false &&
+        a.artifactObjectStore.objectStoreRef === "rpa/staging/artifact-lifecycle/object_store/s3",
+      JSON.stringify(a.artifactObjectStore),
+    );
+    check("api artifact s3 reader vault identity carried", a.artifactObjectStore?.vaultApi.roleId === "api-role");
+  });
+  withEnv({
+    ...FULL,
     SIGNED_COMMAND_REGISTRY_MODE: "vault",
     VAULT_API_ROLE_ID: "api-role",
     VAULT_API_SECRET_ID: "api-secret",

@@ -23,9 +23,11 @@ API만 띄워 초안 저장을 검증할 때도 아래 값은 fail-closed로 필
 | DB | `DATABASE_URL` 또는 `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` |
 | Auth | `JWKS_URL` plus optional `JWT_ISSUER`, `JWT_AUDIENCE`, 또는 v1 `JWT_HS256_SECRET` |
 | signed command registry | `SIGNED_COMMAND_REGISTRY_MODE=deny_all` 또는 `vault` plus `VAULT_ADDR`, `VAULT_MOUNT`, `VAULT_API_ROLE_ID`, `VAULT_API_SECRET_ID`, optional `SIGNED_COMMAND_REGISTRY_REF` |
+| artifact read store | FS: optional `API_ARTIFACT_DIR` 또는 shared `GATEWAY_ARTIFACT_DIR`; S3: `ARTIFACT_OBJECT_STORE_KIND=s3`, `ARTIFACT_OBJECT_STORE_REF`, `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, optional `S3_FORCE_PATH_STYLE`, plus `VAULT_API_ROLE_ID`, `VAULT_API_SECRET_ID` |
 
-Artifact 본문/blob 조회 라우트를 운영 smoke에 포함하려면 API에 `API_ARTIFACT_DIR` 또는 shared `GATEWAY_ARTIFACT_DIR`를 추가한다.
+Artifact 본문/blob 조회 라우트를 운영 smoke에 포함하려면 object_ref scheme에 맞춰 API read store를 설정한다. `file://` artifact는 API에 `API_ARTIFACT_DIR` 또는 shared `GATEWAY_ARTIFACT_DIR`를 추가한다.
 `API_ARTIFACT_DIR`와 `GATEWAY_ARTIFACT_DIR`를 함께 설정하는 경우 두 값은 같은 filesystem root로 resolve되어야 한다. 다르면 API가 worker/gateway가 저장한 redacted artifact blob을 읽을 수 없으므로 production config가 fail-closed로 시작을 거부한다.
+`s3://<bucket>/...` runtime visual evidence는 API도 SecretRef-backed S3 reader를 켜야 한다. API는 configured bucket과 일치하지 않는 S3 ref 또는 알 수 없는 scheme을 404 fail-closed로 처리한다.
 
 `save_and_run`까지 staging에서 확인하려면 worker도 필요하다.
 

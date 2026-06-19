@@ -73,8 +73,9 @@ const ISO_8601_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9
 
 /**
  * artifact 본문 read 경계(narrow — api는 byte-store 구현에 의존하지 않는다, 단방향 의존).
- * `FsObjectStore`(로컬/CI) 등 ObjectStore 구현이 구조적으로 충족. 실 분산 object-store(S3) 바인딩은
- * deploy-time(B3, release-decisions D8-A1) — 미지정 시 GET /v1/artifacts 라우트는 미등록(조회 capability 미노출).
+ * `FsObjectStore`(로컬/CI)와 SecretRef-backed S3 reader 등 ObjectStore 구현이 구조적으로 충족.
+ * composition root는 `file://`/configured `s3://bucket/` scheme router를 주입한다. 미지정 시
+ * GET /v1/artifacts 라우트는 미등록(조회 capability 미노출).
  */
 export interface ArtifactObjectReader {
   /** object bytes 반환. **부재 시 null**(라우트가 fail-closed 404 처리 — 가시 metadata인데 object 부재=무결성 이슈). */
@@ -92,7 +93,7 @@ export interface ApiServerDeps {
   signedCommandRegistry: SignedCommandRegistry;
   /** B2/B3 보안 인프라(선택). 미지정 시 베이스라인 헤더만 적용하고 CORS는 비활성(same-origin). */
   security?: SecurityConfig;
-  /** artifact 본문 read 경계(선택). 미지정 시 GET /v1/artifacts/{id} 미등록(D8-A1 — 실 object-store 바인딩 deploy-time). */
+  /** artifact 본문 read 경계(선택). 미지정 시 GET /v1/artifacts/{id} 미등록(D8-A1 fail-closed). */
   artifactStore?: ArtifactObjectReader;
   scenarioGenerationCapabilities?: {
     readonly videoRecording: boolean;

@@ -111,8 +111,16 @@ export interface ApiConfig {
   readonly hsts: boolean;
   /** Optional object-store root the API may read for audited artifact body/blob disclosure. */
   readonly artifactDir?: string;
+  /** Optional S3 object-store reader for runtime visual evidence stored outside the local FS. */
+  readonly artifactObjectStore?: ApiArtifactObjectStoreConfig;
   /** Enables natural-language scenario generation to request run-level masked WebM capture. */
   readonly videoRecordingEnabled: boolean;
+}
+
+export interface ApiArtifactObjectStoreConfig {
+  readonly objectStoreRef: string;
+  readonly objectStore: Extract<ArtifactObjectStoreConfig, { readonly kind: "s3" }>;
+  readonly vaultApi: VaultIdentityConfig;
 }
 
 function loadApiJwtConfig(): ApiJwtConfig {
@@ -155,6 +163,7 @@ function loadSignedCommandRegistryConfig(common: CommonConfig): ApiConfig["signe
 export function loadApiConfig(common: CommonConfig, options: { readonly runMode?: RunMode } = {}): ApiConfig {
   const origins = opt("CORS_ORIGINS");
   const videoRecordingEnabled = strictBool("VISUAL_EVIDENCE_VIDEO_ENABLED", false);
+  const artifactObjectStore = loadApiArtifactObjectStoreConfig();
   if (videoRecordingEnabled) {
     req("VISUAL_EVIDENCE_FFMPEG_PATH");
     if (options.runMode === "api" && !strictBool("VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED", false)) {
@@ -170,7 +179,26 @@ export function loadApiConfig(common: CommonConfig, options: { readonly runMode?
       : undefined,
     hsts: bool("ENABLE_HSTS", true),
     artifactDir: resolveApiArtifactDir(),
+    ...(artifactObjectStore !== undefined ? { artifactObjectStore } : {}),
     videoRecordingEnabled,
+  };
+}
+
+function loadApiArtifactObjectStoreConfig(): ApiArtifactObjectStoreConfig | undefined {
+  const rawKind = opt("ARTIFACT_OBJECT_STORE_KIND");
+  const kind = (rawKind ?? "fs").toLowerCase();
+  if (kind === "fs") return undefined;
+  if (kind !== "s3") {
+    throw new Error(`ARTIFACT_OBJECT_STORE_KIND must be one of fs|s3, got ${JSON.stringify(kind)}`);
+  }
+  const objectStore = loadArtifactObjectStoreConfig();
+  if (objectStore.kind !== "s3") {
+    throw new Error("API artifact object-store expected s3 config");
+  }
+  return {
+    objectStoreRef: req("ARTIFACT_OBJECT_STORE_REF"),
+    objectStore,
+    vaultApi: loadVaultIdentity("API"),
   };
 }
 

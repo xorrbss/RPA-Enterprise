@@ -785,7 +785,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
   // GET /v1/artifacts/{id} — 산출물 본문 조회(api-surface §5; release-decisions D8-A1). artifact.read RBAC + RLS 2단 게이트.
   // RLS(artifacts_visible_isolation)가 redacted/not_required·미삭제·비격리만 노출 → pending/failed/quarantined/deleted/
   // cross-tenant는 미존재로 떨어져 404(D8-A1: 존재 비노출; 409 ARTIFACT_NOT_REDACTED는 v1 미노출, BYPASSRLS 미사용).
-  // 본문은 object store(redacted at rest)에서 read. artifactStore 미주입 시 미등록 — 실 분산 store 바인딩은 deploy-time(B3).
+  // 본문은 object store(redacted at rest)에서 read. artifactStore 미주입 시 미등록; scheme/bucket 불일치는 404 fail-closed.
   if (deps.artifactStore !== undefined) {
     const artifactStore = deps.artifactStore;
     // security-contracts §10: artifact.read 본문 disclosure는 audit boundary 없이 노출 불가(fail-closed).

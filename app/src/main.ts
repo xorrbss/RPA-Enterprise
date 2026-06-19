@@ -31,6 +31,7 @@ import { run, runMigrations, type Runner } from "graphile-worker";
 import type { FastifyInstance } from "fastify";
 
 import { hmacJwtVerifier, jwksRs256Verifier, JwtAuthenticationBoundary } from "./api/auth";
+import { buildApiArtifactObjectReader } from "./api/artifact-object-reader-binding";
 import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
 import { createLlmScenarioPlanner, LlmGatewayScenarioPlannerClient } from "./api/llm-scenario-planner";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
@@ -195,6 +196,7 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
   const cfg = loadApiConfig(common, { runMode });
   const scenarioGenerationLlmV1 = loadScenarioGenerationLlmV1Config();
   const scenarioPlanner = scenarioGenerationLlmV1 !== undefined ? buildScenarioGenerationPlannerBinding(pool, scenarioGenerationLlmV1) : undefined;
+  const artifactObjectReader = await buildApiArtifactObjectReader(cfg);
   // 세션 캡처 봉투암호화 스토어 — KEK(api/browser_session) 프로비저닝 시에만 활성(미설정 → undefined → 엔드포인트 미등록, fail-closed).
   const sessionStore = await buildApiSessionStore(pool, common);
   const api = buildServer({
@@ -213,9 +215,9 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
         }
       : {}),
     security: { corsOrigins: cfg.corsOrigins, hsts: cfg.hsts },
-    ...(cfg.artifactDir !== undefined
+    ...(artifactObjectReader !== undefined
       ? {
-          artifactStore: new FsObjectStore(cfg.artifactDir),
+          artifactStore: artifactObjectReader,
           securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
         }
       : {}),

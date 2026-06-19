@@ -586,16 +586,16 @@
 > RQ-010(GET /v1/artifacts/{id} 미구현 → 전 역할 artifact 조회 capability 도달 불가)의 **라우트를 in-repo 빌드**한다.
 > 계약 결정은 이미 D8-A1(pending⇒404, existence non-disclosure; 409 미노출). 빌드 시 **api-surface §5를 v1 404 동작으로
 > amend**(D8-A1 "when built" 약속 이행). 본문은 injected `ArtifactObjectReader`(ObjectStore.get)로 read — in-repo/CI는
-> `FsObjectStore`, 실 **분산 object-store(S3) 바인딩은 deploy-time(B3)**. RQ-011(sink egress)·outbox real-bus와 동일 posture.
-> **운영자 artifact-read capability 도달 = 원 finding 해소.** 실 분산 바인딩만 BLOCK 잔존.
+> `FsObjectStore`, runtime visual evidence는 API composition root의 SecretRef-backed S3 reader가 configured `s3://<bucket>/...`만 scheme-route.
+> **운영자 artifact-read capability 도달 = 원 finding 해소.** 실 S3 서비스/SecretRef 프로비저닝은 deploy-time 의존.
 > **재검증: `app/test/api-artifacts.int.ts` 12(redacted/not_required 200+본문·viewer artifact.read 200·pending/failed/quarantined/deleted/cross-tenant/absent/invalid 404) + app typecheck·contract-lint·full test:int(temp PG) green.**
 
 | 항목 | 조치 |
 |---|---|
 | 라우트 | `app/src/api/reads.ts` GET `/v1/artifacts/:id`(rbacAction `artifact.read`). RLS(`artifacts_visible_isolation`)가 redaction 게이트 — redacted/not_required·미삭제·비격리만 가시 → pending/failed/quarantined/deleted/cross-tenant ⇒ `RESOURCE_NOT_FOUND`(404, BYPASSRLS 미사용). 200 본문 = object store read |
-| read 경계 | `ObjectStore`에 `get(objectRef)` 추가(FsObjectStore=readFileSync, 경로 이탈 가드). api는 narrow `ArtifactObjectReader`(server.ts)에만 의존(단방향 의존) — `ApiServerDeps.artifactStore?` 주입; 미주입 시 라우트 미등록 |
+| read 경계 | `ObjectStore`에 `get(objectRef)` 추가(FsObjectStore=readFileSync, 경로 이탈 가드). api는 narrow `ArtifactObjectReader`(server.ts)에만 의존(단방향 의존) — `ApiServerDeps.artifactStore?` 주입; 미주입 시 라우트 미등록. API composition root는 `file://`/configured `s3://bucket/` scheme router를 주입 |
 | 계약 정합 | api-surface §5에 v1 404 노트 추가(409는 SECURITY DEFINER 메타-read 필요 → 연기). release-decisions D8-A1에 Built 노트 |
-| 잔존 BLOCK | 실 **분산 object-store 바인딩(S3, 프로세스 간 공유, B3)** = deploy-time/external. in-repo/CI는 FsObjectStore로 완결 |
+| 운영 의존 | 실 S3 서비스/SecretRef 프로비저닝은 deploy-time/external smoke 대상. in-repo/CI는 FsObjectStore와 mock S3 단위 테스트로 완결 |
 
 ## v2.18 패치 로그 (RQ-016 — challenge suspension 포트 구현 + `runs.bookmark` 컬럼 신설)
 
