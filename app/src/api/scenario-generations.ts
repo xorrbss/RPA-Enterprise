@@ -66,6 +66,7 @@ interface ScenarioGenerationRow {
   prompt_redacted_ref: string | null;
   planner: string;
   model: string | null;
+  params_context: unknown;
   draft_ir: unknown;
   validation_report: unknown;
   evidence_policy: unknown;
@@ -91,6 +92,7 @@ interface GenerationRunRequest {
   target?: NonNullable<GenerationRequest["target"]>;
   startUrl?: string;
   params: Record<string, unknown>;
+  paramsProvided: boolean;
   model?: string | null;
   evidence?: EvidencePolicy;
 }
@@ -152,7 +154,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
       const runId = parseRunIdFilter(request.query.run_id);
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
         const result = await client.query<ScenarioGenerationRow>(
-          `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, draft_ir, validation_report,
+          `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, params_context, draft_ir, validation_report,
                   evidence_policy, blockers, scenario_id, scenario_version_id, run_id,
                   created_by, created_at::text AS created_at
             FROM scenario_generations
@@ -204,7 +206,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
       }
       const row = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
         const result = await client.query<ScenarioGenerationRow>(
-          `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, draft_ir, validation_report,
+          `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, params_context, draft_ir, validation_report,
                   evidence_policy, blockers, scenario_id, scenario_version_id, run_id,
                   created_by, created_at::text AS created_at
              FROM scenario_generations
@@ -346,7 +348,7 @@ async function runScenarioGeneration(
 
 async function loadGenerationForRun(client: PoolClient, generationId: string): Promise<ScenarioGenerationRow> {
   const result = await client.query<ScenarioGenerationRow>(
-    `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, draft_ir, validation_report,
+    `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, params_context, draft_ir, validation_report,
             evidence_policy, blockers, scenario_id, scenario_version_id, run_id,
             created_by, created_at::text AS created_at
        FROM scenario_generations
@@ -405,8 +407,10 @@ async function persistGenerationRun(
   const blockers = existingBlockers.filter((blocker) => !RUN_REPAIRABLE_BLOCKERS.has(blocker));
   const evidence = request.evidence ?? parseEvidencePolicy(generation.evidence_policy);
   const recording = recordingPolicy(evidence);
+  const storedParamsContext = parseParamsContext(generation.params_context);
+  const effectiveRequestParams = request.paramsProvided ? request.params : storedParamsContext;
   const target = request.target ?? parseTarget(baseIr.target);
-  const startUrl = request.startUrl ?? startUrlFromParams(request.params);
+  const startUrl = request.startUrl ?? startUrlFromParams(effectiveRequestParams);
   const model = request.model !== undefined ? request.model : generation.model;
 
   if (target === undefined) blockers.push("target_required_for_auto_run");
@@ -444,9 +448,18 @@ async function persistGenerationRun(
   const uniqueBlockers = uniqueStrings(blockers);
   let runId: string | null = null;
   let nextStatus: GenerationStatus = "blocked";
+  let nextParamsContext = redactParamsContext({
+    ...effectiveRequestParams,
+    ...(startUrl !== undefined ? { start_url: startUrl } : {}),
+  });
   if (uniqueBlockers.length === 0 && startUrl !== undefined) {
-    const asOf = typeof request.params.as_of === "string" ? request.params.as_of : new Date().toISOString();
-    const params = { ...request.params, start_url: startUrl, as_of: asOf };
+    const asOf = typeof effectiveRequestParams.as_of === "string" ? effectiveRequestParams.as_of : new Date().toISOString();
+    const params = { ...effectiveRequestParams, start_url: startUrl, as_of: asOf };
+    nextParamsContext = redactParamsContext({
+      ...effectiveRequestParams,
+      start_url: startUrl,
+      ...(typeof effectiveRequestParams.as_of === "string" ? { as_of: effectiveRequestParams.as_of } : {}),
+    });
     runId = randomUUID();
     await createRunInTx(client, deps.enqueuer, {
       runId,
@@ -469,10 +482,11 @@ async function persistGenerationRun(
             validation_report=$6::jsonb,
             evidence_policy=$7::jsonb,
             blockers=$8::jsonb,
-            run_id=$9::uuid
+            run_id=$9::uuid,
+            params_context=$10::jsonb
       WHERE id=$1::uuid
         AND tenant_id=$2::uuid
-      RETURNING id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, draft_ir, validation_report,
+      RETURNING id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, params_context, draft_ir, validation_report,
                 evidence_policy, blockers, scenario_id, scenario_version_id, run_id,
                 created_by, created_at::text AS created_at`,
     [
@@ -485,6 +499,7 @@ async function persistGenerationRun(
       JSON.stringify(evidence),
       JSON.stringify(uniqueBlockers),
       runId,
+      JSON.stringify(nextParamsContext),
     ],
   );
   const row = updated.rows[0];
@@ -689,12 +704,13 @@ async function persistGeneration(
   }
 
   const ledgerDraftIr = redactGenerationDraftIr(compiled.ir);
+  const paramsContext = redactParamsContext(plan.request.params);
   const inserted = await client.query<Pick<ScenarioGenerationRow, "created_by" | "created_at">>(
     `INSERT INTO scenario_generations
-       (id, tenant_id, mode, status, prompt_hash, planner, model, draft_ir, validation_report,
+       (id, tenant_id, mode, status, prompt_hash, planner, model, params_context, draft_ir, validation_report,
         evidence_policy, blockers, scenario_id, scenario_version_id, run_id, created_by)
-     VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb,
-             $10::jsonb, $11::jsonb, $12::uuid, $13::uuid, $14::uuid, $15)
+     VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb,
+             $11::jsonb, $12::jsonb, $13::uuid, $14::uuid, $15::uuid, $16)
      RETURNING created_by, created_at::text AS created_at`,
     [
       generationId,
@@ -704,6 +720,7 @@ async function persistGeneration(
       plan.promptHash,
       plan.planner,
       plan.request.model ?? null,
+      JSON.stringify(paramsContext),
       JSON.stringify(ledgerDraftIr),
       JSON.stringify(compiled.report),
       JSON.stringify(plan.request.evidence),
@@ -748,6 +765,7 @@ async function persistGeneration(
       prompt_hash: plan.promptHash,
       planner: plan.planner,
       model: plan.request.model ?? null,
+      params_context: paramsContext,
       evidence_policy: plan.request.evidence,
       blockers,
       created_by: created.created_by,
@@ -962,6 +980,7 @@ function parseGenerationRunRequest(body: unknown): GenerationRunRequest {
     target: parseTarget(requestBody.target),
     ...(startUrl !== undefined ? { startUrl } : {}),
     params: params as Record<string, unknown>,
+    paramsProvided: requestBody.params !== undefined,
     ...(model !== undefined ? { model } : {}),
     ...(requestBody.evidence !== undefined ? { evidence: parseEvidencePolicy(requestBody.evidence) } : {}),
   };
@@ -1456,6 +1475,7 @@ function mapGenerationRow(row: ScenarioGenerationRow): Record<string, unknown> {
     prompt_redacted_ref: row.prompt_redacted_ref,
     planner: row.planner,
     model: row.model,
+    params_context: parseParamsContext(row.params_context),
     draft_ir: row.draft_ir,
     validation_report: row.validation_report,
     evidence_policy: row.evidence_policy,
@@ -1466,6 +1486,34 @@ function mapGenerationRow(row: ScenarioGenerationRow): Record<string, unknown> {
     created_by: row.created_by,
     created_at: row.created_at,
   };
+}
+
+function parseParamsContext(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function redactParamsContext(value: Record<string, unknown>): Record<string, unknown> {
+  return redactParamsContextRecord(value);
+}
+
+function redactParamsContextRecord(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    out[key] = redactParamsContextValue(key, child);
+  }
+  return out;
+}
+
+function redactParamsContextValue(key: string, value: unknown): unknown {
+  if (isSensitiveParamKey(key)) return "[REDACTED:scenario_generation_param]";
+  if (Array.isArray(value)) return value.map((item) => redactParamsContextValue(key, item));
+  if (isRecord(value)) return redactParamsContextRecord(value);
+  if (typeof value === "string" && value.includes("PlainSecret")) return "[REDACTED:scenario_generation_param]";
+  return value;
+}
+
+function isSensitiveParamKey(key: string): boolean {
+  return /(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|credential)/i.test(key);
 }
 
 function redactGenerationDraftIr(value: unknown): unknown {

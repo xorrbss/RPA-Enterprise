@@ -269,6 +269,7 @@ export interface ScenarioGenerationResult {
   readonly run_id: string | null;
   readonly evidence_policy: ScenarioGenerationEvidence;
   readonly blockers: readonly string[];
+  readonly params_context?: Record<string, unknown>;
   readonly draft_ir: unknown;
   readonly validation_report: unknown;
   readonly created_at: string;

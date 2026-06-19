@@ -552,14 +552,63 @@ async function main(): Promise<void> {
         runStartUrlSchema.default === "https://example.com/notices",
         runnable.body,
       );
+      check(
+        "generation response exposes params_context for history correction",
+        isRecord(runBody.params_context) && runBody.params_context.start_url === "https://example.com/notices",
+        runnable.body,
+      );
       await withTenantTx(pool, TENANT, async (client) => {
-        const rows = await client.query<{ run_count: string; generation_count: string }>(
+        const rows = await client.query<{ run_count: string; generation_count: string; params_context: Record<string, unknown> }>(
           `SELECT
              (SELECT count(*)::text FROM runs WHERE id=$1::uuid) AS run_count,
-             (SELECT count(*)::text FROM scenario_generations WHERE id=$2::uuid AND run_id=$1::uuid) AS generation_count`,
+             (SELECT count(*)::text FROM scenario_generations WHERE id=$2::uuid AND run_id=$1::uuid) AS generation_count,
+             (SELECT params_context FROM scenario_generations WHERE id=$2::uuid) AS params_context`,
           [runBody.run_id, runBody.generation_id],
         );
         check("run + generation rows persisted", rows.rows[0]?.run_count === "1" && rows.rows[0]?.generation_count === "1", JSON.stringify(rows.rows[0]));
+        check(
+          "generation params_context persisted",
+          rows.rows[0]?.params_context.start_url === "https://example.com/notices",
+          JSON.stringify(rows.rows[0]),
+        );
+      });
+      const paramsContextDraft = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-params-context-draft-1" },
+        payload: {
+          prompt: "https://example.com/notices 에서 공지 제목을 수집해줘",
+          name: "generated-params-context",
+          mode: "draft_only",
+          params: {
+            entry_url: "https://example.com/notices",
+            max_pages: 2,
+            api_key: "plain-secret-value",
+          },
+          evidence: { screenshot: "failure", video: "never" },
+        },
+      });
+      check("generation params_context draft -> 200", paramsContextDraft.statusCode === 200, paramsContextDraft.body);
+      const paramsContextBody = paramsContextDraft.json();
+      check(
+        "generation params_context exposes redacted request params",
+        isRecord(paramsContextBody.params_context) &&
+          paramsContextBody.params_context.entry_url === "https://example.com/notices" &&
+          paramsContextBody.params_context.max_pages === 2 &&
+          paramsContextBody.params_context.start_url === "https://example.com/notices" &&
+          paramsContextBody.params_context.api_key === "[REDACTED:scenario_generation_param]",
+        paramsContextDraft.body,
+      );
+      await withTenantTx(pool, TENANT, async (client) => {
+        const rows = await client.query<{ params_context: Record<string, unknown> }>(
+          `SELECT params_context FROM scenario_generations WHERE id=$1::uuid`,
+          [paramsContextBody.generation_id],
+        );
+        check(
+          "generation params_context redaction persists in DB",
+          rows.rows[0]?.params_context.api_key === "[REDACTED:scenario_generation_param]",
+          JSON.stringify(rows.rows[0]),
+        );
       });
       const byRun = await app.inject({
         method: "GET",
@@ -2077,11 +2126,25 @@ async function main(): Promise<void> {
           continuedRunBody.draft_ir.nodes.open_start_url.policy.recording === "always",
         continuedRun.body,
       );
+      check(
+        "blocked generation correction returns updated params_context",
+        isRecord(continuedRunBody.params_context) &&
+          continuedRunBody.params_context.start_url === "https://example.com/notices" &&
+          continuedRunBody.params_context.as_of === "2026-06-15T00:00:00.000Z",
+        continuedRun.body,
+      );
       await withTenantTx(pool, TENANT, async (client) => {
-        const rows = await client.query<{ run_params: Record<string, unknown>; run_model: string | null; version_ir: Record<string, unknown>; required: string[] | null }>(
+        const rows = await client.query<{
+          run_params: Record<string, unknown>;
+          run_model: string | null;
+          version_ir: Record<string, unknown>;
+          generation_params_context: Record<string, unknown>;
+          required: string[] | null;
+        }>(
           `SELECT r.params AS run_params,
                   r.model AS run_model,
                   sv.ir AS version_ir,
+                  g.params_context AS generation_params_context,
                   ARRAY(SELECT jsonb_array_elements_text(sv.params_schema->'required')) AS required
              FROM scenario_generations g
              JOIN runs r ON r.tenant_id = g.tenant_id AND r.id = g.run_id
@@ -2097,7 +2160,9 @@ async function main(): Promise<void> {
           "blocked generation correction persists run params/model",
           row?.run_params.start_url === "https://example.com/notices" &&
             row.run_params.as_of === "2026-06-15T00:00:00.000Z" &&
-            row.run_model === "codex-gen",
+            row.run_model === "codex-gen" &&
+            row.generation_params_context.start_url === "https://example.com/notices" &&
+            row.generation_params_context.as_of === "2026-06-15T00:00:00.000Z",
           JSON.stringify(row),
         );
         check(
@@ -2148,6 +2213,54 @@ async function main(): Promise<void> {
         },
       });
       check("blocked generation cannot attach a second run", continuedAgain.statusCode === 412 && continuedAgain.json().code === "SCENARIO_VERSION_CONFLICT", continuedAgain.body);
+
+      const savedForContextRun = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-context-fallback-save-1" },
+        payload: {
+          ...runnablePayload,
+          mode: "save",
+          name: "generated-context-fallback",
+          params: {
+            entry_url: "https://example.com/notices",
+            as_of: "2026-06-15T00:00:00.000Z",
+          },
+        },
+      });
+      check("saved generation stores params_context for later run -> 201", savedForContextRun.statusCode === 201, savedForContextRun.body);
+      const savedForContextRunBody = savedForContextRun.json();
+      check(
+        "saved generation params_context includes start_url",
+        savedForContextRunBody.status === "saved" &&
+          savedForContextRunBody.run_id === null &&
+          isRecord(savedForContextRunBody.params_context) &&
+          savedForContextRunBody.params_context.start_url === "https://example.com/notices",
+        savedForContextRun.body,
+      );
+      const contextFallbackRun = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${savedForContextRunBody.generation_id}/run`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-context-fallback-run-1" },
+      });
+      check("saved generation run reuses params_context without params body -> 201", contextFallbackRun.statusCode === 201, contextFallbackRun.body);
+      const contextFallbackRunBody = contextFallbackRun.json();
+      await withTenantTx(pool, TENANT, async (client) => {
+        const rows = await client.query<{ run_params: Record<string, unknown> }>(
+          `SELECT r.params AS run_params
+             FROM scenario_generations g
+             JOIN runs r ON r.tenant_id = g.tenant_id AND r.id = g.run_id
+            WHERE g.id=$1::uuid`,
+          [contextFallbackRunBody.generation_id],
+        );
+        check(
+          "params_context fallback persists on created run",
+          rows.rows[0]?.run_params.entry_url === "https://example.com/notices" &&
+            rows.rows[0]?.run_params.start_url === "https://example.com/notices" &&
+            rows.rows[0]?.run_params.as_of === "2026-06-15T00:00:00.000Z",
+          JSON.stringify(rows.rows[0]),
+        );
+      });
 
       const denied = await app.inject({
         method: "POST",

@@ -145,6 +145,7 @@ describe("PromptScenarioGenerator correction run", () => {
       run_id: null,
       evidence_policy: { screenshot: "failure", video: "never" },
       blockers: ["start_url_required_for_auto_run"],
+      params_context: { entry_url: "https://context.example/orders", max_pages: 7 },
       created_at: "2026-06-15T00:00:00.000Z",
       created_by: "operator",
       draft_ir: {
@@ -158,7 +159,7 @@ describe("PromptScenarioGenerator correction run", () => {
         params_schema: {
           type: "object",
           properties: {
-            entry_url: { type: "string", default: "https://wrong.example" },
+            entry_url: { type: "string", default: "https://schema-default.example" },
             max_pages: { type: "number", default: 1 },
           },
         },
@@ -193,7 +194,7 @@ describe("PromptScenarioGenerator correction run", () => {
       generationId: "00000000-0000-0000-0000-0000000000b5",
       body: {
         start_url: "https://shop.example/orders",
-        params: { entry_url: "https://shop.example/orders", max_pages: 3 },
+        params: { entry_url: "https://context.example/orders", max_pages: 7 },
         target: {
           site_profile_id: "10000000-0000-4000-8000-0000000000a1",
           browser_identity_id: "10000000-0000-4000-8000-0000000000a2",

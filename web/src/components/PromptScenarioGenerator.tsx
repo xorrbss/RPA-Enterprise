@@ -147,9 +147,13 @@ function parseParamsText(value: string): Record<string, unknown> | undefined {
   return parsed;
 }
 
-function paramsInputTextFromDraftIr(draftIr: unknown): string {
-  const params = recordField(draftIr, "params") ?? paramsDefaultsFromDraftIr(draftIr);
+function paramsInputTextFromDraftIr(draftIr: unknown, paramsContext?: Record<string, unknown>): string {
+  const params = nonEmptyRecord(paramsContext) ?? recordField(draftIr, "params") ?? paramsDefaultsFromDraftIr(draftIr);
   return params === null ? "" : JSON.stringify(params, null, 2);
+}
+
+function nonEmptyRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) && Object.keys(value).length > 0 ? value : null;
 }
 
 function paramsDefaultsFromDraftIr(draftIr: unknown): Record<string, unknown> | null {
@@ -405,7 +409,7 @@ export function PromptScenarioGenerator(): JSX.Element {
     setScreenshot(item.evidence_policy.screenshot ?? "each_step");
     setVideo(item.evidence_policy.video ?? "never");
     setVideoTouched(true);
-    setParamsText(paramsInputTextFromDraftIr(item.draft_ir));
+    setParamsText(paramsInputTextFromDraftIr(item.draft_ir, item.params_context));
     setStartUrl(draftStartUrl(item.draft_ir) ?? "");
     const target = draftTarget(item.draft_ir);
     setSiteProfileId(target?.site_profile_id ?? "");

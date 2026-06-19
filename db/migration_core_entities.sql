@@ -275,6 +275,7 @@ CREATE TABLE scenario_generations (
   prompt_redacted_ref text,                                  -- optional redacted prompt artifact/ref. 원문 저장 금지.
   planner             text        NOT NULL DEFAULT 'deterministic_mvp',
   model               text,                                  -- LLM planner 사용 시 모델 스냅샷. deterministic MVP는 NULL 가능.
+  params_context      jsonb       NOT NULL DEFAULT '{}'::jsonb,
   draft_ir            jsonb       NOT NULL,
   validation_report   jsonb,
   evidence_policy     jsonb       NOT NULL DEFAULT '{}'::jsonb,
