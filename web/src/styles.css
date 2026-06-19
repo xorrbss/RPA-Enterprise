@@ -141,6 +141,17 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 }
 .field textarea { resize: vertical; min-height: 94px; }
 .field-wide { grid-column: 1 / -1; }
+.site-create-inline {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px;
+}
+.site-create-flags {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
 .inline-facts, .generator-actions, .generation-result-head {
   display: flex;
   align-items: center;

@@ -28,6 +28,22 @@ type FlagRow = {
   n: number;
 };
 
+export interface CreatedSite {
+  readonly site_profile_id: string;
+  readonly name?: string;
+  readonly url_pattern?: string;
+  readonly risk?: string;
+  readonly approved?: boolean;
+}
+
+interface SiteCreateFormProps {
+  readonly title?: string;
+  readonly triggerLabel?: string;
+  readonly initialUrl?: string;
+  readonly embedded?: boolean;
+  readonly onCreated?: (site: CreatedSite) => void;
+}
+
 function isHttpUrl(s: string): boolean {
   try {
     const u = new URL(s.trim());
@@ -37,7 +53,37 @@ function isHttpUrl(s: string): boolean {
   }
 }
 
-export function SiteCreateForm(): JSX.Element | null {
+function httpOrigin(value: string | undefined): string {
+  if (value === undefined || value.trim() === "") return "";
+  try {
+    const u = new URL(value.trim());
+    return u.protocol === "http:" || u.protocol === "https:" ? u.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function createdSiteFromResponse(value: unknown): CreatedSite | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return typeof record.site_profile_id === "string" && record.site_profile_id.trim() !== ""
+    ? {
+        site_profile_id: record.site_profile_id,
+        ...(typeof record.name === "string" ? { name: record.name } : {}),
+        ...(typeof record.url_pattern === "string" ? { url_pattern: record.url_pattern } : {}),
+        ...(typeof record.risk === "string" ? { risk: record.risk } : {}),
+        ...(typeof record.approved === "boolean" ? { approved: record.approved } : {}),
+      }
+    : null;
+}
+
+export function SiteCreateForm({
+  title = "사이트 등록",
+  triggerLabel = "새 사이트",
+  initialUrl,
+  embedded = false,
+  onCreated,
+}: SiteCreateFormProps = {}): JSX.Element | null {
   const api = useApiClient();
   const can = useCan();
   const qc = useQueryClient();
@@ -80,7 +126,9 @@ export function SiteCreateForm(): JSX.Element | null {
         crypto.randomUUID(),
       );
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
+      const createdSite = createdSiteFromResponse(created);
+      if (createdSite !== null) onCreated?.(createdSite);
       setMsg({ tone: "green", text: "사이트 등록됨" });
       setName("");
       setUrl("");
@@ -109,16 +157,27 @@ export function SiteCreateForm(): JSX.Element | null {
   const removeFlagRow = (id: number) => {
     setFlagRows((rows) => rows.filter((row) => row.id !== id));
   };
+  const toggleOpen = () => {
+    setMsg(null);
+    setOpen((current) => {
+      const next = !current;
+      if (next && url.trim() === "") {
+        const seeded = httpOrigin(initialUrl);
+        if (seeded !== "") setUrl(seeded);
+      }
+      return next;
+    });
+  };
 
   const invalid = name.trim() === "" || !isHttpUrl(url) || (loginUrl.trim() !== "" && !isHttpUrl(loginUrl));
   return (
-    <section className="panel" style={{ padding: 12 }}>
+    <section className={embedded ? "site-create-inline" : "panel"} style={{ padding: embedded ? undefined : 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <strong>사이트 등록</strong>
+        <strong>{title}</strong>
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
-          <button className="btn" type="button" onClick={() => { setMsg(null); setOpen((v) => !v); }}>
-            {open ? "닫기" : "새 사이트"}
+          <button className="btn" type="button" onClick={toggleOpen}>
+            {open ? "닫기" : triggerLabel}
           </button>
         </span>
       </div>
@@ -167,7 +226,7 @@ export function SiteCreateForm(): JSX.Element | null {
               style={{ fontFamily: "monospace" }}
             />
           </label>
-          <div className="panel" style={{ padding: 10, display: "grid", gap: 8 }}>
+          <div className={embedded ? "site-create-flags" : "panel"} style={{ padding: 10, display: "grid", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
               <span className="subtle">추가 page-state flags</span>
               <button className="btn" type="button" onClick={addFlagRow}>+ flag</button>

@@ -340,6 +340,97 @@ describe("D7 운영 콘솔 shell", () => {
     );
   });
 
+  test("자연어 자동화 생성: 새 사이트를 화면 안에서 등록하고 바로 선택한다", async () => {
+    const createdSiteId = "10000000-0000-4000-8000-0000000000f1";
+    const createCalls: Array<Parameters<ApiClient["createSite"]>[0]> = [];
+    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    const siteItems = new Map<string, {
+      site_profile_id: string;
+      risk: string;
+      approval_status: string;
+      circuit_status: string;
+      name: string;
+      url_pattern: string;
+      default_browser_identity_id: string | null;
+      default_network_policy_id: string | null;
+    }>();
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listSites: async () => ({ items: [...siteItems.values()], next_cursor: null }),
+        createSite: async (body) => {
+          createCalls.push(body);
+          siteItems.set(createdSiteId, {
+            site_profile_id: createdSiteId,
+            risk: body.risk ?? "green",
+            approval_status: "pending",
+            circuit_status: "closed",
+            name: body.name,
+            url_pattern: body.url_pattern,
+            default_browser_identity_id: null,
+            default_network_policy_id: null,
+          });
+          return { site_profile_id: createdSiteId, name: body.name, url_pattern: body.url_pattern, risk: body.risk ?? "green", approved: false };
+        },
+        generateScenario: async (body) => {
+          generateCalls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000f1",
+            mode: body.mode ?? "save_and_run",
+            status: "run_queued",
+            prompt_hash: "hash",
+            planner: body.planner ?? "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: "00000000-0000-0000-0000-000000000099",
+            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            blockers: [],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "새 포털에서 주문 목록을 요약해줘" } });
+    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://new.example/orders" } });
+
+    const onboarding = screen.getByText("새 사이트 온보딩").closest("section") as HTMLElement;
+    fireEvent.click(within(onboarding).getByRole("button", { name: "등록" }));
+    expect(within(onboarding).getByLabelText("URL 패턴 (http/https origin)")).toHaveValue("https://new.example");
+    fireEvent.change(within(onboarding).getByLabelText("이름"), { target: { value: "새 포털" } });
+    fireEvent.click(within(onboarding).getByRole("button", { name: "등록" }));
+
+    await waitFor(() => expect(createCalls).toHaveLength(1));
+    expect(createCalls[0]).toMatchObject({
+      name: "새 포털",
+      url_pattern: "https://new.example",
+      risk: "green",
+    });
+    await waitFor(() => expect(screen.getByLabelText("사이트")).toHaveValue(createdSiteId));
+    expect(screen.getByLabelText("사이트 ID")).toHaveValue(createdSiteId);
+
+    fireEvent.change(screen.getByLabelText("브라우저 ID"), { target: { value: "10000000-0000-4000-8000-0000000000f2" } });
+    fireEvent.change(screen.getByLabelText("네트워크 정책 ID"), { target: { value: "10000000-0000-4000-8000-0000000000f3" } });
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    await waitFor(() => expect(generateCalls).toHaveLength(1));
+    expect(generateCalls[0]).toMatchObject({
+      prompt: "새 포털에서 주문 목록을 요약해줘",
+      mode: "save_and_run",
+      start_url: "https://new.example/orders",
+      target: {
+        site_profile_id: createdSiteId,
+        browser_identity_id: "10000000-0000-4000-8000-0000000000f2",
+        network_policy_id: "10000000-0000-4000-8000-0000000000f3",
+      },
+    });
+  });
+
   test("prompt generator hides llm planner when capability is unavailable", async () => {
     renderApp(
       fakeClient({

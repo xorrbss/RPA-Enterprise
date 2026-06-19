@@ -4,11 +4,13 @@ import { FileVideo, Image, Play, WandSparkles } from "lucide-react";
 
 import { useApiClient } from "../api/context";
 import { GenerationArtifactsPanel } from "./GenerationArtifactsPanel";
+import { SiteCreateForm, type CreatedSite } from "./SiteCreateForm";
 import { errorLabel, StatusBadge } from "./badges";
 import { navigate } from "../router";
 import {
   ApiError,
   type ApiErrorBody,
+  type Paginated,
   type ScenarioGenerationEvidence,
   type ScenarioGenerationPlanner,
   type ScenarioGenerationRequest,
@@ -133,6 +135,19 @@ function modelRequiredOf(body: ApiErrorBody | null): { available: number } | nul
 function siteLabel(site: SiteItem): string {
   const name = site.name ?? site.site_profile_id.slice(0, 8);
   return site.url_pattern !== undefined ? `${name} (${site.url_pattern})` : name;
+}
+
+function createdSiteToItem(site: CreatedSite): SiteItem {
+  return {
+    site_profile_id: site.site_profile_id,
+    name: site.name,
+    url_pattern: site.url_pattern,
+    risk: site.risk ?? "green",
+    approval_status: site.approved === true ? "approved" : "pending",
+    circuit_status: "closed",
+    default_browser_identity_id: null,
+    default_network_policy_id: null,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -312,6 +327,23 @@ export function PromptScenarioGenerator(): JSX.Element {
       setNetworkPolicyId(site.default_network_policy_id);
     }
     if (startUrl.trim().length === 0 && site?.url_pattern !== undefined) {
+      setStartUrl(site.url_pattern);
+    }
+  }
+
+  function handleInlineSiteCreated(created: CreatedSite): void {
+    const site = createdSiteToItem(created);
+    qc.setQueryData<Paginated<SiteItem> | undefined>(["sites", "scenario-generator"], (current) => {
+      const items = current?.items ?? [];
+      const nextItems = items.some((item) => item.site_profile_id === site.site_profile_id)
+        ? items.map((item) => (item.site_profile_id === site.site_profile_id ? { ...item, ...site } : item))
+        : [site, ...items];
+      return { items: nextItems, next_cursor: current?.next_cursor ?? null };
+    });
+    setSiteProfileId(site.site_profile_id);
+    setBrowserIdentityId(site.default_browser_identity_id ?? "");
+    setNetworkPolicyId(site.default_network_policy_id ?? "");
+    if (startUrl.trim().length === 0 && site.url_pattern !== undefined) {
       setStartUrl(site.url_pattern);
     }
   }
@@ -609,6 +641,15 @@ export function PromptScenarioGenerator(): JSX.Element {
               ))}
             </select>
           </label>
+          <div className="field field-wide">
+            <SiteCreateForm
+              embedded
+              title="새 사이트 온보딩"
+              triggerLabel="등록"
+              initialUrl={startUrl}
+              onCreated={handleInlineSiteCreated}
+            />
+          </div>
           <label className="field">
             <span>사이트 ID</span>
             <input value={siteProfileId} onChange={(event) => setSiteProfileId(event.target.value)} placeholder="site_profile_id" />
