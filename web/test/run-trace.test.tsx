@@ -192,6 +192,8 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     installObjectUrlMock();
     const screenshot = {
       artifact_id: "art-shot-1",
+      step_id: "checkout_submit",
+      attempt: 1,
       type: "screen_capture",
       media_type: "image/png",
       filename: "checkout.png",
@@ -207,6 +209,8 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     } as unknown as RunArtifactItem;
     const video = {
       artifact_id: "art-video-1",
+      step_id: null,
+      attempt: null,
       type: "run_video",
       media_type: "video/webm",
       filename: "checkout.webm",
@@ -239,6 +243,8 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(screen.getByText("동영상 1")).toBeInTheDocument();
     expect(screen.getByText("image/png · 1.2 MB")).toBeInTheDocument();
     expect(screen.getByText("video/webm · 2.0 MB · 3.5 s")).toBeInTheDocument();
+    expect(screen.getByText("checkout_submit · 시도 1")).toBeInTheDocument();
+    expect(screen.getByText("run 전체")).toBeInTheDocument();
     expect(screen.getByText("screenshot")).toBeInTheDocument();
     expect(screen.getByText("video")).toBeInTheDocument();
     expect(screen.queryByText("LIST_CONTENT_SHOULD_NOT_RENDER")).toBeNull();

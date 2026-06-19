@@ -357,6 +357,13 @@ function mediaMetaLabels(a: RunArtifactItem): string[] {
   ].filter((v): v is string => v !== null && v !== "");
 }
 
+function artifactProvenanceLabel(a: RunArtifactItem): string {
+  if (typeof a.step_id === "string" && a.step_id.length > 0) {
+    return typeof a.attempt === "number" ? `${a.step_id} · 시도 ${a.attempt}` : a.step_id;
+  }
+  return "run 전체";
+}
+
 function artifactSummary(items: readonly RunArtifactItem[]): { screenshots: number; videos: number; pending: number } {
   return items.reduce(
     (acc, item) => {
@@ -483,7 +490,7 @@ function RunArtifactsList({
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>artifact_id</th><th>종류</th><th>파일명</th><th>미디어 메타</th><th>redaction</th><th>보존 만료</th><th>legal hold</th><th>본문 조회</th></tr>
+                <tr><th>artifact_id</th><th>단계/시도</th><th>종류</th><th>파일명</th><th>미디어 메타</th><th>redaction</th><th>보존 만료</th><th>legal hold</th><th>본문 조회</th></tr>
               </thead>
               <tbody>
                 {items.map((a) => {
@@ -492,6 +499,7 @@ function RunArtifactsList({
                   return (
                     <tr key={a.artifact_id} data-current={a.artifact_id === effectiveSelectedId ? "true" : undefined}>
                       <td><ArtifactRef id={a.artifact_id} /></td>
+                      <td><span className="subtle">{artifactProvenanceLabel(a)}</span></td>
                       <td>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           <span>{a.type}</span>
