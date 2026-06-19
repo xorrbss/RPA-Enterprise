@@ -2060,6 +2060,7 @@ async function main(): Promise<void> {
         );
       });
 
+      const videoApiArtifactDir = mkdtempSync(join(tmpdir(), "rpa-generation-video-api-artifacts-"));
       const videoEnabledApp = buildServer({
         pool,
         auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
@@ -2068,6 +2069,8 @@ async function main(): Promise<void> {
         enqueuer,
         signedCommandRegistry,
         scenarioGenerationCapabilities: { videoRecording: true },
+        artifactStore: new FsObjectStore(videoApiArtifactDir),
+        securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
       });
       await videoEnabledApp.ready();
       try {
@@ -2265,6 +2268,7 @@ async function main(): Promise<void> {
         }
       } finally {
         await videoEnabledApp.close();
+        rmSync(videoApiArtifactDir, { recursive: true, force: true });
       }
 
       await withTenantTx(pool, TENANT, async (client) => {
@@ -2284,6 +2288,7 @@ async function main(): Promise<void> {
         async enqueueSinkDeliver(_client, _input: SinkDeliverEnqueueInput) {},
         async enqueueArtifactRedaction() {},
       };
+      const videoNoScreenshotApiArtifactDir = mkdtempSync(join(tmpdir(), "rpa-generation-video-only-api-artifacts-"));
       const videoNoScreenshotApp = buildServer({
         pool,
         auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
@@ -2292,6 +2297,8 @@ async function main(): Promise<void> {
         enqueuer: videoNoScreenshotEnqueuer,
         signedCommandRegistry,
         scenarioGenerationCapabilities: { videoRecording: true },
+        artifactStore: new FsObjectStore(videoNoScreenshotApiArtifactDir),
+        securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
       });
       await videoNoScreenshotApp.ready();
       try {
@@ -2441,6 +2448,7 @@ async function main(): Promise<void> {
         }
       } finally {
         await videoNoScreenshotApp.close();
+        rmSync(videoNoScreenshotApiArtifactDir, { recursive: true, force: true });
       }
 
       const continuedRun = await app.inject({

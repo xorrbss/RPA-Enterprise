@@ -15,10 +15,11 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
+import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer, type ApiServerDeps } from "../src/api/server";
 import type { SecurityConfig } from "../src/api/security";
 import { createPool } from "../src/db/pool";
-import type { SecretRef } from "../../ts/core-types";
+import type { ObjectRef, SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
 const ALLOWED_ORIGIN = "http://localhost:5173";
@@ -26,6 +27,14 @@ const SECRET = new TextEncoder().encode("d7-security-int-secret-do-not-use-in-pr
 const signedCommandRegistry: SignedCommandRegistry = {
   async listAllowedCommandRefs() {
     return { kind: "available", snapshot: { sourceRef: "secret://staging/registry" as SecretRef, commands: [] } };
+  },
+};
+const noopArtifactReader = {
+  async get(_objectRef: ObjectRef) {
+    return null;
+  },
+  async getBytes(_objectRef: ObjectRef) {
+    return null;
   },
 };
 
@@ -126,7 +135,7 @@ async function main(): Promise<void> {
       await capsDefault.close();
     }
 
-    const capsVideo = buildServer({
+    const capsVideoWithoutReader = buildServer({
       pool,
       auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
       rbac: new RoleMatrixRbacMiddleware(),
@@ -135,18 +144,43 @@ async function main(): Promise<void> {
       signedCommandRegistry,
       scenarioGenerationCapabilities: { videoRecording: true },
     });
-    await capsVideo.ready();
+    await capsVideoWithoutReader.ready();
     try {
-      const res = await capsVideo.inject({
+      const res = await capsVideoWithoutReader.inject({
         method: "GET",
         url: "/v1/scenario-generations/capabilities",
         headers: { authorization: `Bearer ${viewer}` },
       });
-      check("capabilities video enabled → 200", res.statusCode === 200, res.body);
-      check("capabilities video enabled policies", res.json().visual_evidence?.video?.enabled === true && res.body.includes("\"always\""), res.body);
-      check("capabilities video enabled default_policy always", res.json().visual_evidence?.video?.default_policy === "always", res.body);
+      check("capabilities video recorder without artifact reader -> 200", res.statusCode === 200, res.body);
+      check("capabilities video recorder without artifact reader stays disabled", res.json().visual_evidence?.video?.enabled === false, res.body);
+      check("capabilities video recorder without artifact reader policies only never", JSON.stringify(res.json().visual_evidence?.video?.policies) === JSON.stringify(["never"]), res.body);
     } finally {
-      await capsVideo.close();
+      await capsVideoWithoutReader.close();
+    }
+
+    const capsVideoWithReader = buildServer({
+      pool,
+      auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+      rbac: new RoleMatrixRbacMiddleware(),
+      idempotency: new PgControlPlaneIdempotencyStore(pool),
+      enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} } as RunEnqueuer,
+      signedCommandRegistry,
+      scenarioGenerationCapabilities: { videoRecording: true },
+      artifactStore: noopArtifactReader,
+      securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
+    });
+    await capsVideoWithReader.ready();
+    try {
+      const res = await capsVideoWithReader.inject({
+        method: "GET",
+        url: "/v1/scenario-generations/capabilities",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("capabilities video enabled with artifact reader -> 200", res.statusCode === 200, res.body);
+      check("capabilities video enabled with artifact reader policies", res.json().visual_evidence?.video?.enabled === true && res.body.includes("\"always\""), res.body);
+      check("capabilities video enabled with artifact reader default_policy always", res.json().visual_evidence?.video?.default_policy === "always", res.body);
+    } finally {
+      await capsVideoWithReader.close();
     }
   } finally {
     await pool.end();

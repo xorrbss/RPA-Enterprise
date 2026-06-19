@@ -125,7 +125,10 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
 const REDACTED_SCENARIO_GENERATION_PARAM = "[REDACTED:scenario_generation_param]";
 
 function scenarioGenerationCapabilities(deps: ApiServerDeps): GenerationCapabilities {
-  return deps.scenarioGenerationCapabilities ?? { videoRecording: false };
+  return {
+    // API capability means an operator can request video and later retrieve the saved WebM artifact.
+    videoRecording: deps.scenarioGenerationCapabilities?.videoRecording === true && deps.artifactStore !== undefined,
+  };
 }
 
 function defaultEvidencePolicy(capabilities: GenerationCapabilities): EvidencePolicy {
@@ -140,7 +143,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
     "/v1/scenario-generations/capabilities",
     { config: { rbacAction: "scenario.read" } },
     async () => {
-      const videoRecording = deps.scenarioGenerationCapabilities?.videoRecording === true;
+      const { videoRecording } = scenarioGenerationCapabilities(deps);
       const planners: ScenarioPlannerId[] = [
         "deterministic_mvp",
         ...(deps.scenarioGenerationPlanner !== undefined ? [deps.scenarioGenerationPlanner.id] : []),
@@ -463,7 +466,7 @@ async function persistGenerationRun(
   if (containsRedactedParamsMarker(effectiveRequestParams)) blockers.push("params_context_redacted_value_required");
   if (target === undefined) blockers.push("target_required_for_auto_run");
   if (startUrl === undefined) blockers.push("start_url_required_for_auto_run");
-  if (evidence.video !== "never" && deps.scenarioGenerationCapabilities?.videoRecording !== true) {
+  if (evidence.video !== "never" && !scenarioGenerationCapabilities(deps).videoRecording) {
     blockers.push("video_recording_port_not_configured");
   }
   if (target !== undefined) {
