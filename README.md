@@ -785,3 +785,15 @@
 | 백엔드 | `api/sessions.ts`(capture/complete+start login_url/auth_selector) · `agent/capture-agent.ts` · `executor/login-capture.ts` · `config/env.ts`(loadApiSessionEncryption) · `main.ts`(buildApiSessionStore 게이트 배선) · `dev/serve.ts`(DevPlaintext 등록) |
 | 테스트 | `test/session-encryptor-kms.unit.ts`(18) · `test/api-sessions-capture-complete.int.ts`(11) · `test/capture-agent.int.ts`(9) · `test/vault-secret-store-boundary.unit.ts`(browser_session 쌍) |
 | 비도입(오너/후속) | api AppRole+KEK 프로비저닝(배포) · 회전 grace 다중-kid 자동로드 · 워커 세션복원 prod 배선 |
+
+## v2.26 패치 로그 (자연어 generation 보정 실행 — start_url 단독 target 추론)
+
+> blocked/saved generation의 `/run` 보정에서도 최초 생성과 동일한 target 추론을 재사용한다. 운영자가 start_url만 보정하면
+> site_profile·browser_identity·network_policy가 단일 매칭일 때 자동으로 run을 queued하고, 0건/다건이면 추측하지 않고
+> blocker를 유지한다. 명시 target이나 저장된 target이 있으면 그것을 우선한다.
+
+| 항목 | 조치 |
+|---|---|
+| 백엔드 | `scenario-generations.ts` target inference를 `inferRuntimeTargetForStartUrl`로 추출해 생성·보정 실행 양쪽에서 재사용 |
+| 계약 | `api-surface.md` `/v1/scenario-generations/{generation_id}/run` 설명에 start_url-only 추론 규칙 추가 |
+| 검증 | `api-scenario-generations.int.ts` start_url-only correction → inferred target run_queued 회귀 추가 |

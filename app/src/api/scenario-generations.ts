@@ -412,8 +412,13 @@ async function persistGenerationRun(
   const recording = recordingPolicy(evidence);
   const storedParamsContext = parseParamsContext(generation.params_context);
   const effectiveRequestParams = request.paramsProvided ? request.params : storedParamsContext;
-  const target = request.target ?? parseTarget(baseIr.target);
   const startUrl = request.startUrl ?? startUrlFromParams(effectiveRequestParams);
+  const explicitOrStoredTarget = request.target ?? parseTarget(baseIr.target);
+  const target = explicitOrStoredTarget ?? (
+    startUrl !== undefined
+      ? await inferRuntimeTargetForStartUrl(client, principal.tenantId, startUrl)
+      : undefined
+  );
   const model = request.model !== undefined ? request.model : generation.model;
 
   if (containsRedactedParamsMarker(effectiveRequestParams)) blockers.push("params_context_redacted_value_required");
@@ -825,11 +830,26 @@ async function inferRuntimeTargetForRequest(
   const startUrl = request.startUrl ?? extractFirstHttpUrl(request.prompt);
   if (startUrl === undefined) return request;
 
+  const target = await inferRuntimeTargetForStartUrl(client, tenantId, startUrl);
+  if (target === undefined) return request;
+
+  return {
+    ...request,
+    ...(request.startUrl !== undefined ? {} : { startUrl }),
+    target,
+  };
+}
+
+async function inferRuntimeTargetForStartUrl(
+  client: PoolClient,
+  tenantId: string,
+  startUrl: string,
+): Promise<GenerationRequest["target"]> {
   const siteProfileId = await resolveSiteProfileId(client, { tenantId, entryUrlRef: startUrl }).catch((error: unknown) => {
     if (error instanceof SiteResolutionError && isInferenceMiss(error.code)) return null;
     throw error;
   });
-  if (siteProfileId === null) return request;
+  if (siteProfileId === null) return undefined;
 
   const identity = await client.query<{ id: string }>(
     `SELECT id::text AS id
@@ -840,10 +860,10 @@ async function inferRuntimeTargetForRequest(
     [tenantId, siteProfileId],
   );
   const identityId = identity.rows[0]?.id;
-  if (identityId === undefined) return request;
+  if (identityId === undefined) return undefined;
 
   const startHost = hostOfHttpUrl(startUrl);
-  if (startHost === null) return request;
+  if (startHost === null) return undefined;
   const network = await client.query<{ id: string; allowed_domains: string[] }>(
     `SELECT id::text AS id, allowed_domains
        FROM network_policies
@@ -853,18 +873,14 @@ async function inferRuntimeTargetForRequest(
     [tenantId],
   );
   const matchingNetworkPolicies = network.rows.filter((row) => isHostAllowed(startHost, row.allowed_domains));
-  if (matchingNetworkPolicies.length !== 1) return request;
+  if (matchingNetworkPolicies.length !== 1) return undefined;
   const networkPolicyId = matchingNetworkPolicies[0]?.id;
-  if (networkPolicyId === undefined) return request;
+  if (networkPolicyId === undefined) return undefined;
 
   return {
-    ...request,
-    ...(request.startUrl !== undefined ? {} : { startUrl }),
-    target: {
-      site_profile_id: siteProfileId,
-      browser_identity_id: identityId,
-      network_policy_id: networkPolicyId,
-    },
+    site_profile_id: siteProfileId,
+    browser_identity_id: identityId,
+    network_policy_id: networkPolicyId,
   };
 }
 

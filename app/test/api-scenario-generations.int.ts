@@ -2214,6 +2214,69 @@ async function main(): Promise<void> {
       });
       check("blocked generation cannot attach a second run", continuedAgain.statusCode === 412 && continuedAgain.json().code === "SCENARIO_VERSION_CONFLICT", continuedAgain.body);
 
+      const inferableCorrectionSeed = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-start-url-only-correction-seed-1" },
+        payload: {
+          prompt: "공지사항에서 최근 게시글 제목을 수집해줘",
+          name: "generated-start-url-only-correction",
+          evidence: { screenshot: "each_step", video: "never" },
+        },
+      });
+      check("start_url-only correction seed saves blocked generation -> 201", inferableCorrectionSeed.statusCode === 201, inferableCorrectionSeed.body);
+      const inferableCorrectionSeedBody = inferableCorrectionSeed.json();
+      const beforeStartUrlOnlyCorrectionEnqueues = enqueuedRuns.length;
+      const startUrlOnlyCorrection = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${inferableCorrectionSeedBody.generation_id}/run`,
+        headers: {
+          authorization: `Bearer ${operator}`,
+          "idempotency-key": "gen-start-url-only-correction-run-1",
+          "x-correlation-id": "20000000-0000-4000-8000-0000000000a6",
+        },
+        payload: {
+          start_url: "https://other.example/notices",
+          evidence: { screenshot: "each_step", video: "never" },
+        },
+      });
+      check("blocked generation correction infers target from start_url only -> 201", startUrlOnlyCorrection.statusCode === 201, startUrlOnlyCorrection.body);
+      const startUrlOnlyCorrectionBody = startUrlOnlyCorrection.json();
+      check(
+        "start_url-only correction returns run_queued without unresolved target blocker",
+        startUrlOnlyCorrectionBody.status === "run_queued" &&
+          typeof startUrlOnlyCorrectionBody.run_id === "string" &&
+          Array.isArray(startUrlOnlyCorrectionBody.blockers) &&
+          startUrlOnlyCorrectionBody.blockers.length === 0,
+        startUrlOnlyCorrection.body,
+      );
+      check(
+        "start_url-only correction enqueues one inferred-target run",
+        enqueuedRuns.length === beforeStartUrlOnlyCorrectionEnqueues + 1 &&
+          enqueuedRuns[enqueuedRuns.length - 1]?.runId === startUrlOnlyCorrectionBody.run_id,
+        JSON.stringify(enqueuedRuns),
+      );
+      await withTenantTx(pool, TENANT, async (client) => {
+        const rows = await client.query<{ version_ir: Record<string, unknown>; run_params: Record<string, unknown> }>(
+          `SELECT sv.ir AS version_ir,
+                  r.params AS run_params
+             FROM scenario_generations g
+             JOIN scenario_versions sv ON sv.tenant_id = g.tenant_id AND sv.id = g.scenario_version_id
+             JOIN runs r ON r.tenant_id = g.tenant_id AND r.id = g.run_id
+            WHERE g.id=$1::uuid`,
+          [inferableCorrectionSeedBody.generation_id],
+        );
+        check(
+          "start_url-only correction persists inferred target into IR",
+          isRecord(rows.rows[0]?.version_ir.target) &&
+            rows.rows[0].version_ir.target.site_profile_id === OTHER_SITE &&
+            rows.rows[0].version_ir.target.browser_identity_id === OTHER_IDENTITY &&
+            rows.rows[0].version_ir.target.network_policy_id === OTHER_NETWORK &&
+            rows.rows[0].run_params.start_url === "https://other.example/notices",
+          JSON.stringify(rows.rows[0]),
+        );
+      });
+
       const savedForContextRun = await app.inject({
         method: "POST",
         url: "/v1/scenario-generations",
