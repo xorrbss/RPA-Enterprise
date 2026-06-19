@@ -11,20 +11,52 @@ import type pg from "pg";
 import type { RuntimeJobResult, RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import { PgRuntimeWorker, type PgRuntimeWorkerOptions } from "./runtime-worker";
 
-/** 모든 RuntimeWorkerJob을 처리하는 단일 task 식별자. */
-export const RUNTIME_JOB_TASK = "process_runtime_job";
+/** 일반 런타임 작업(task) 식별자: tenant RLS 아래에서 run/outbox/sink 계열만 처리한다. */
+export const RUNTIME_CONTROL_JOB_TASK = "process_runtime_job";
+/** Artifact lifecycle 전용 task 식별자: BYPASSRLS 운영 role로만 실행해야 한다. */
+export const RUNTIME_LIFECYCLE_JOB_TASK = "process_artifact_lifecycle_job";
+/** Backward-compatible alias for older tests/call sites. */
+export const RUNTIME_JOB_TASK = RUNTIME_CONTROL_JOB_TASK;
 
-export function buildTaskList(pool: pg.Pool, workerOptions: PgRuntimeWorkerOptions = {}): TaskList {
+export type RuntimeTaskScope = "control" | "artifact_lifecycle" | "all";
+
+export function isArtifactLifecycleRuntimeJob(job: Pick<RuntimeWorkerJob, "kind">): boolean {
+  return job.kind === "artifact_redaction" || job.kind === "artifact_retention";
+}
+
+export function runtimeJobTaskIdentifier(job: Pick<RuntimeWorkerJob, "kind">): string {
+  return isArtifactLifecycleRuntimeJob(job) ? RUNTIME_LIFECYCLE_JOB_TASK : RUNTIME_CONTROL_JOB_TASK;
+}
+
+export function buildTaskList(
+  pool: pg.Pool,
+  workerOptions: PgRuntimeWorkerOptions = {},
+  scope: RuntimeTaskScope = "control",
+): TaskList {
   const worker = new PgRuntimeWorker(pool, workerOptions);
-  const task: Task = async (payload) => {
+  const taskList: TaskList = {};
+  if (scope === "control" || scope === "all") {
+    taskList[RUNTIME_CONTROL_JOB_TASK] = buildTask(worker, RUNTIME_CONTROL_JOB_TASK);
+  }
+  if (scope === "artifact_lifecycle" || scope === "all") {
+    taskList[RUNTIME_LIFECYCLE_JOB_TASK] = buildTask(worker, RUNTIME_LIFECYCLE_JOB_TASK);
+  }
+  return taskList;
+}
+
+function buildTask(worker: PgRuntimeWorker, taskIdentifier: string): Task {
+  return async (payload) => {
     // graphile는 jsonb로 페이로드를 전달 — RuntimeWorkerJob로 신뢰 경계 검증.
     const job = payload as RuntimeWorkerJob;
     if (job === null || typeof job !== "object" || typeof job.kind !== "string") {
-      throw new Error(`process_runtime_job: invalid job payload ${JSON.stringify(payload)}`);
+      throw new Error(`${taskIdentifier}: invalid job payload ${JSON.stringify(payload)}`);
+    }
+    const routedTask = runtimeJobTaskIdentifier(job);
+    if (routedTask !== taskIdentifier) {
+      throw new Error(`${taskIdentifier}: refused ${job.kind} payload routed for ${routedTask}`);
     }
     assertRuntimeJobCompleted(job, await worker.handle(job));
   };
-  return { [RUNTIME_JOB_TASK]: task };
 }
 
 export function assertRuntimeJobCompleted(job: RuntimeWorkerJob, result: RuntimeJobResult): void {
@@ -42,6 +74,7 @@ export async function runOnceRuntimeWorker(
   connectionString: string,
   pool: pg.Pool,
   workerOptions: PgRuntimeWorkerOptions = {},
+  scope: RuntimeTaskScope = "control",
 ): Promise<void> {
-  await runOnce({ connectionString, taskList: buildTaskList(pool, workerOptions) });
+  await runOnce({ connectionString, taskList: buildTaskList(pool, workerOptions, scope) });
 }

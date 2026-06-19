@@ -10,7 +10,7 @@ import type { PoolClient } from "pg";
 
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import type { RuntimeJobEnqueuePort } from "../runtime/executor-completion-coordinator";
-import { RUNTIME_JOB_TASK } from "../worker/graphile-runner";
+import { runtimeJobTaskIdentifier } from "../worker/graphile-runner";
 
 export interface RunEnqueueInput {
   tenantId: string;
@@ -51,7 +51,7 @@ export interface RunEnqueuer {
 export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort {
   async enqueueRuntimeJob(client: PoolClient, job: RuntimeWorkerJob): Promise<void> {
     await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
-      RUNTIME_JOB_TASK,
+      runtimeJobTaskIdentifier(job),
       JSON.stringify(job),
     ]);
   }

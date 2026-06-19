@@ -8,7 +8,7 @@
  * This is the only place app code reads process.env for the production entrypoint (dev/serve.ts is dev-only).
  */
 
-export type RunMode = "api" | "worker" | "all";
+export type RunMode = "api" | "worker" | "lifecycle-worker" | "all";
 
 function req(name: string): string {
   const v = process.env[name];
@@ -48,8 +48,8 @@ function strictBool(name: string, dflt: boolean): boolean {
 
 export function loadRunMode(): RunMode {
   const m = (opt("RUN_MODE") ?? "all").toLowerCase();
-  if (m !== "api" && m !== "worker" && m !== "all") {
-    throw new Error(`RUN_MODE must be one of api|worker|all, got ${JSON.stringify(m)}`);
+  if (m !== "api" && m !== "worker" && m !== "lifecycle-worker" && m !== "all") {
+    throw new Error(`RUN_MODE must be one of api|worker|lifecycle-worker|all, got ${JSON.stringify(m)}`);
   }
   return m;
 }
@@ -179,6 +179,8 @@ function loadVaultIdentity(prefix: string): VaultIdentityConfig {
 }
 
 export interface WorkerConfig {
+  /** Stable workers.id for run_claim/run_resume/lease ownership. Must already exist in the infra workers table. */
+  readonly workerId: string;
   /** AppRole identity for the runtime-worker (least-privilege: resume_token_hmac, executor). */
   readonly vaultRuntimeWorker: VaultIdentityConfig;
   /** SecretRef for the active resume-token HMAC signing key (HmacResumeTokenCodec). */
@@ -209,6 +211,7 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
     throw new Error(`VISUAL_EVIDENCE_VIDEO_FPS must be a positive integer, got ${videoFrameRate}`);
   }
   return {
+    workerId: req("WORKER_ID"),
     vaultRuntimeWorker: loadVaultIdentity("RUNTIME_WORKER"),
     resumeTokenRef: `rpa/${common.rpaEnv}/runtime-worker/resume_token_hmac/active`,
     browserSessionKeyRef: `rpa/${common.rpaEnv}/runtime-worker/browser_session/active`,
@@ -221,6 +224,37 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
     ...(videoRecordingEnabled ? { videoFfmpegPath: req("VISUAL_EVIDENCE_FFMPEG_PATH") } : {}),
     videoFrameIntervalMs,
     videoFrameRate,
+  };
+}
+
+export interface ArtifactLifecycleWorkerConfig {
+  /** Dedicated BYPASSRLS operational connection string. Do not reuse API/runtime-worker credentials here. */
+  readonly connectionString: string;
+  /** Stable workers.id for artifact lifecycle CAS claim ownership. Should be a sweeper worker row. */
+  readonly workerId: string;
+  /** SecretRef identifier for the artifact-lifecycle object_store port binding. */
+  readonly artifactObjectStoreRef: string;
+  /** Non-secret object-store backend alias used in lifecycle evidence. */
+  readonly artifactObjectStoreBackendAlias: string;
+  /** Shared artifact object root used by the producer and lifecycle worker. */
+  readonly artifactDir: string;
+  readonly artifactRetentionDays: number;
+  readonly graphileSchema?: string;
+  readonly graphileConcurrency: number;
+  readonly graphilePollIntervalMs: number;
+}
+
+export function loadArtifactLifecycleWorkerConfig(): ArtifactLifecycleWorkerConfig {
+  return {
+    connectionString: req("ARTIFACT_LIFECYCLE_DATABASE_URL"),
+    workerId: req("ARTIFACT_LIFECYCLE_WORKER_ID"),
+    artifactObjectStoreRef: req("ARTIFACT_OBJECT_STORE_REF"),
+    artifactObjectStoreBackendAlias: opt("ARTIFACT_OBJECT_STORE_BACKEND_ALIAS") ?? "fs-local",
+    artifactDir: req("GATEWAY_ARTIFACT_DIR"),
+    artifactRetentionDays: num("GATEWAY_ARTIFACT_RETENTION_DAYS", 90),
+    graphileSchema: opt("GRAPHILE_WORKER_SCHEMA"),
+    graphileConcurrency: num("ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY", num("GRAPHILE_CONCURRENCY", 1)),
+    graphilePollIntervalMs: num("ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS", num("GRAPHILE_POLL_INTERVAL_MS", 2000)),
   };
 }
 

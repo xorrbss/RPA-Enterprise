@@ -7,6 +7,7 @@
  */
 import {
   loadApiConfig,
+  loadArtifactLifecycleWorkerConfig,
   loadCommonConfig,
   loadGatewayConfig,
   loadRunMode,
@@ -35,6 +36,8 @@ function expectThrow(label: string, fn: () => unknown): void {
 
 const CLEAR = [
   "RPA_ENV", "RUN_MODE", "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "DATABASE_URL",
+  "WORKER_ID", "ARTIFACT_LIFECYCLE_DATABASE_URL", "ARTIFACT_LIFECYCLE_WORKER_ID",
+  "ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY", "ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS",
   "PORT", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
   "VAULT_RUNTIME_WORKER_ROLE_ID", "VAULT_RUNTIME_WORKER_SECRET_ID", "VAULT_API_ROLE_ID", "VAULT_API_SECRET_ID",
   "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF",
@@ -66,6 +69,7 @@ function withEnv(vars: Record<string, string>, fn: () => void): void {
 
 const FULL: Record<string, string> = {
   RPA_ENV: "staging", PGHOST: "h", PGPORT: "5432", PGUSER: "u", PGPASSWORD: "p", PGDATABASE: "d",
+  WORKER_ID: "10000000-0000-4000-8000-0000000000aa",
   PORT: "8080", JWT_HS256_SECRET: "x".repeat(40), VAULT_ADDR: "https://v:8200",
   VAULT_RUNTIME_WORKER_ROLE_ID: "r", VAULT_RUNTIME_WORKER_SECRET_ID: "s",
   ARTIFACT_OBJECT_STORE_REF: "rpa/staging/artifact-lifecycle/object_store/fs",
@@ -77,6 +81,7 @@ function main(): void {
   // RUN_MODE
   withEnv({}, () => check("RUN_MODE default all", loadRunMode() === "all"));
   withEnv({ RUN_MODE: "api" }, () => check("RUN_MODE api", loadRunMode() === "api"));
+  withEnv({ RUN_MODE: "lifecycle-worker" }, () => check("RUN_MODE lifecycle-worker", loadRunMode() === "lifecycle-worker"));
   withEnv({ RUN_MODE: "bogus" }, () => expectThrow("RUN_MODE invalid throws", () => loadRunMode()));
 
   // CommonConfig — fail-closed on missing PG; conn string built + encoded; DATABASE_URL override.
@@ -177,10 +182,13 @@ function main(): void {
   // WorkerConfig — fail-closed on missing Vault AppRole; resumeTokenRef templated from rpaEnv.
   const common: CommonConfig = { rpaEnv: "staging", connectionString: "x", healthPort: 8081 };
   withEnv({}, () => expectThrow("worker missing Vault AppRole throws", () => loadWorkerConfig(common)));
+  withEnv({ ...FULL, WORKER_ID: "" }, () =>
+    expectThrow("worker missing stable WORKER_ID throws", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_REF: "" }, () =>
     expectThrow("worker missing artifact object-store SecretRef throws", () => loadWorkerConfig(common)));
   withEnv(FULL, () => {
     const w = loadWorkerConfig(common);
+    check("worker stable workerId carried", w.workerId === "10000000-0000-4000-8000-0000000000aa");
     check(
       "worker resumeTokenRef templated",
       w.resumeTokenRef === "rpa/staging/runtime-worker/resume_token_hmac/active",
@@ -215,6 +223,37 @@ function main(): void {
   });
   withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: "fs-staging-a" }, () =>
     check("worker artifact backend alias override", loadWorkerConfig(common).artifactObjectStoreBackendAlias === "fs-staging-a"));
+
+  withEnv(FULL, () =>
+    expectThrow("artifact lifecycle worker missing BYPASSRLS database URL throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({ ...FULL, ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa" }, () =>
+    expectThrow("artifact lifecycle worker missing stable worker id throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/gw-artifacts",
+  }, () => {
+    const l = loadArtifactLifecycleWorkerConfig();
+    check("artifact lifecycle database URL carried", l.connectionString === "postgresql://lifecycle@db/rpa");
+    check("artifact lifecycle worker id carried", l.workerId === "20000000-0000-4000-8000-0000000000aa");
+    check("artifact lifecycle artifact dir carried", l.artifactDir === "/var/lib/rpa/gw-artifacts");
+    check("artifact lifecycle retention default 90", l.artifactRetentionDays === 90);
+    check("artifact lifecycle graphile defaults reuse worker defaults", l.graphileConcurrency === 1 && l.graphilePollIntervalMs === 2000);
+  });
+  withEnv({
+    ...FULL,
+    GRAPHILE_CONCURRENCY: "3",
+    GRAPHILE_POLL_INTERVAL_MS: "4000",
+    ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY: "2",
+    ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS: "1500",
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/gw-artifacts",
+  }, () => {
+    const l = loadArtifactLifecycleWorkerConfig();
+    check("artifact lifecycle graphile overrides carried", l.graphileConcurrency === 2 && l.graphilePollIntervalMs === 1500);
+  });
 
   // GatewayConfig (D8-A16) — fail-closed on missing Codex provider creds / artifact dir; ops-defaults knobs.
   const GW_REQ = {

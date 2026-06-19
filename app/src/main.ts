@@ -44,12 +44,14 @@ import { DenyAllSignedCommandRegistry, SecretStoreSignedCommandRegistry } from "
 import {
   loadApiConfig,
   loadApiSessionEncryption,
+  loadArtifactLifecycleWorkerConfig,
   loadBrowserConfig,
   loadCommonConfig,
   loadGatewayConfig,
   loadRunMode,
   loadScenarioGenerationLlmV1Config,
   loadWorkerConfig,
+  type ArtifactLifecycleWorkerConfig,
   type ApiConfig,
   type CommonConfig,
   type ScenarioGenerationLlmV1Config,
@@ -297,10 +299,10 @@ async function buildApiSessionStore(pool: PgPool, common: CommonConfig): Promise
   return new PgBrowserSessionStore({ pool, encryptor });
 }
 
-async function startWorker(pool: PgPool, connectionString: string): Promise<Runner> {
-  const cfg = loadWorkerConfig(loadCommonConfig());
+async function startWorker(pool: PgPool, common: CommonConfig): Promise<Runner> {
+  const cfg = loadWorkerConfig(common);
   // Install/upgrade the graphile_worker schema (idempotent; fails fast if the DB role lacks rights).
-  await runMigrations({ connectionString });
+  await runMigrations({ connectionString: common.connectionString });
 
   const runtimeWorkerStore = new VaultSecretStore({
     baseUrl: cfg.vaultRuntimeWorker.addr,
@@ -343,6 +345,7 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
         }
       : undefined;
   const workerOptions: PgRuntimeWorkerOptions = {
+    workerId: cfg.workerId,
     suspensionPort: new PgChallengeSuspensionPort(),
     resumeTokenCodec: new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef),
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
@@ -367,14 +370,64 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
   };
 
   const runner = await run({
-    connectionString,
-    taskList: buildTaskList(pool, workerOptions),
+    connectionString: common.connectionString,
+    taskList: buildTaskList(pool, workerOptions, "control"),
     concurrency: cfg.graphileConcurrency,
     pollInterval: cfg.graphilePollIntervalMs,
     ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
   });
   console.log(JSON.stringify({ at: "main", msg: "worker daemon running", concurrency: cfg.graphileConcurrency }));
   return runner;
+}
+
+interface ArtifactLifecycleRunner {
+  readonly pool: PgPool;
+  readonly runner: Runner;
+}
+
+function buildArtifactLifecycleWorkerOptions(
+  cfg: ArtifactLifecycleWorkerConfig,
+): PgRuntimeWorkerOptions {
+  const artifactStore = new FsObjectStore(cfg.artifactDir);
+  const artifactObjectBinding: ArtifactRealObjectStorePortBinding = {
+    kind: "real_object_store",
+    backendAlias: cfg.artifactObjectStoreBackendAlias,
+    credentialRef: cfg.artifactObjectStoreRef as SecretRef,
+    evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  };
+  return {
+    workerId: cfg.workerId,
+    artifactRedactor: new FsArtifactRedactor(
+      artifactStore,
+      artifactObjectBinding,
+      new ArtifactRedactionContentTransform(),
+    ),
+    artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
+  };
+}
+
+async function startArtifactLifecycleWorker(): Promise<ArtifactLifecycleRunner> {
+  const cfg = loadArtifactLifecycleWorkerConfig();
+  const pool = createPool({ connectionString: cfg.connectionString });
+  try {
+    await pool.query("SELECT 1");
+    const runner = await run({
+      connectionString: cfg.connectionString,
+      taskList: buildTaskList(pool, buildArtifactLifecycleWorkerOptions(cfg), "artifact_lifecycle"),
+      concurrency: cfg.graphileConcurrency,
+      pollInterval: cfg.graphilePollIntervalMs,
+      ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
+    });
+    console.log(JSON.stringify({
+      at: "main",
+      msg: "artifact lifecycle worker daemon running",
+      concurrency: cfg.graphileConcurrency,
+    }));
+    return { pool, runner };
+  } catch (err) {
+    await pool.end().catch(() => undefined);
+    throw err;
+  }
 }
 
 async function main(): Promise<void> {
@@ -387,9 +440,11 @@ async function main(): Promise<void> {
   const health = startHealthServer(pool, common.healthPort);
   let api: FastifyInstance | undefined;
   let runner: Runner | undefined;
+  let lifecycleRunner: ArtifactLifecycleRunner | undefined;
 
   if (mode === "api" || mode === "all") api = await startApi(pool, common);
-  if (mode === "worker" || mode === "all") runner = await startWorker(pool, common.connectionString);
+  if (mode === "worker" || mode === "all") runner = await startWorker(pool, common);
+  if (mode === "lifecycle-worker" || mode === "all") lifecycleRunner = await startArtifactLifecycleWorker();
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
@@ -402,7 +457,9 @@ async function main(): Promise<void> {
         // Stop accepting new requests/enqueues first, then drain in-flight worker jobs, then close the pool.
         if (api !== undefined) await api.close();
         if (runner !== undefined) await runner.stop();
+        if (lifecycleRunner !== undefined) await lifecycleRunner.runner.stop();
       } finally {
+        if (lifecycleRunner !== undefined) await lifecycleRunner.pool.end().catch(() => undefined);
         await pool.end().catch(() => undefined);
       }
       process.exit(0);
