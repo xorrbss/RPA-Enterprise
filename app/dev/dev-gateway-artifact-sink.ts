@@ -2,8 +2,9 @@
  * DevVisibleGatewayArtifactSink — dev:serve 전용 LLM 출력 저장소.
  *
  * 프로덕션 PgGatewayArtifactSink는 canonical run_steps 행을 전제로 pending artifact를 만들고 redaction job이 뒤따른다.
- * dev run-loop는 아직 run_steps를 기록하지 않으므로, 데모/로컬 검증에서는 run-level artifact로 저장하고
- * redaction_status='not_required'로 즉시 조회 가능하게 둔다. 운영 entrypoint에서는 사용하지 않는다.
+ * dev run-loop는 run_steps를 기록하더라도, 데모/로컬 검증 LLM 출력은 run-level artifact로 저장하고
+ * redaction_status='not_required'로 즉시 조회 가능하게 둔다. 기록된 step은 반환된 UUID artifact ref만 보존한다.
+ * 운영 entrypoint에서는 사용하지 않는다.
  */
 import { createHash, randomUUID } from "node:crypto";
 

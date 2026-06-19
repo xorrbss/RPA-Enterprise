@@ -1,8 +1,8 @@
 /**
  * Dev 통합 — dev:serve run-loop용 visible artifact sink.
  *
- * dev run-loop는 아직 run_steps를 기록하지 않으므로, LLM 출력이 run-level artifact로 저장되어야 콘솔에서 결과를
- * 확인할 수 있다. 이 테스트는 run_steps 없이 put → artifacts SELECT 가 not_required로 보이는지 검증한다.
+ * dev run-loop는 단계 트레이스를 기록하더라도, LLM 출력 자체는 run-level artifact로 저장되어야 콘솔에서 결과를
+ * 즉시 확인할 수 있다. 이 테스트는 put → artifacts SELECT 가 step FK 없이 not_required로 보이는지 검증한다.
  *
  * 실행(temp 게이트):
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/dev-gateway-artifact-sink.int.ts
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
     check("put returns visible artifact row", row !== null, String(ref));
     check("artifact is linked to run", row?.run_id === RUN, JSON.stringify(row));
     check("artifact is immediately readable by RLS", row?.redaction_status === "not_required", JSON.stringify(row));
-    check("dev artifact avoids missing run_steps FK", row?.step_id === null && row?.attempt === null, JSON.stringify(row));
+    check("dev artifact remains run-level while steps can retain returned refs", row?.step_id === null && row?.attempt === null, JSON.stringify(row));
     check("object content matches original", row !== null && (await store.get(row.object_ref as ObjectRef)) === content);
 
     if (await currentRoleBypassesRls(pool)) {

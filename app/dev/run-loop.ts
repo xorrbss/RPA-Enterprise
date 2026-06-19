@@ -78,8 +78,8 @@ function buildCodexGateway(artifactSink?: GatewayArtifactSink): LlmGatewayCaller
     gate: new SafeCapabilityGate(),
     validator: { validate: () => ({ ok: true }) },
     sink: {
-      // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력(extract 결과 AND act 액션플랜 둘 다)을 넘긴다 →
-      // 스텝 id 와 함께 콘솔에 찍고, dev:serve가 주입한 sink가 있으면 run-level artifact로 저장한다.
+      // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력(extract 결과 AND act 액션플랜 둘 다)을 넘긴다.
+      // dev sink는 즉시 조회를 위해 run-level artifact로 저장하고, StepRecordingExecutor가 반환된 UUID ref를 run_steps에 보존한다.
       put: async (text: string, meta) => {
         console.log(`[GW-OUTPUT ${meta.stepId}]`, typeof text === "string" ? text.slice(0, 4000) : JSON.stringify(text).slice(0, 4000));
         return artifactSink !== undefined ? artifactSink.put(text, meta) : "art://dev-gateway" as ArtifactRef;
@@ -280,7 +280,15 @@ export async function startRunLoop(
             params,
             assetRefs: deriveAssetRefs(next.ir), // meta.assets → 자격증명 fill 의 SecretRef 바인딩
           },
-          { pool, executor, resolver, workerId: WORKER_ID, sessionProvider: provider, sessionStore },
+          {
+            pool,
+            executor,
+            resolver,
+            workerId: WORKER_ID,
+            sessionProvider: provider,
+            sessionStore,
+            recordExecutorSteps: true,
+          },
         );
         console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
       } catch (e) {

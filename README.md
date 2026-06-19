@@ -740,8 +740,9 @@
 > 결재 처리'(params.decision 분기·승인 클릭/반려 사유 fill+클릭·observe 판정; flags 닫힌 레지스트리만). ir-translate
 > `act.args.value_ref`→비-secret 결정형 fill value 스레드(valueRef intent — 미해소 시 LLM/캐시 무음 fill 거부 loud).
 > **dev**: 인박스가 읽는 수집 아티팩트 가시화는 origin v2.23 병렬 작업의 `DevVisibleGatewayArtifactSink`(run-level artifact·
-> `redaction_status='not_required'`·step_id NULL — **dev 전용**, 운영 entrypoint 미사용)를 재사용(중복 redaction-loop/
-> bypass-role/run-step-recorder 폐기). cdp-session goto 타임아웃 env(45s)+domcontentloaded.
+> `redaction_status='not_required'`·step_id NULL — **dev 전용**, 운영 entrypoint 미사용)를 재사용한다. dev run-loop는
+> `run_steps`를 기록하고 반환된 UUID artifact ref를 단계에 보존하되, LLM 출력 본문은 즉시 조회 가능한 run-level artifact로 둔다
+> (중복 redaction-loop/bypass-role 폐기). cdp-session goto 타임아웃 env(45s)+domcontentloaded.
 > **web**: 인박스 건별 [결재]/[반려(사유)] 버튼(approver만·백엔드 최종강제)·결정후 처리 run 폴링·`#runTrace?run=` 딥링크.
 > **검증**: app/codegen typecheck 0 · codegen fixtures green(approval_decisions 등록) · db-static-smoke green · 백엔드 통합
 > 22/22(temp-PG: approver/403·멱등 replay→동일 run·ALREADY_DECIDED·정확히 1 스폰·reject⇒reason·비-UUID sub·RLS·UNIQUE) ·

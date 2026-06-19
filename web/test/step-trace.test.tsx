@@ -30,10 +30,10 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
     localStorage.setItem("rpa.token", "test-token");
   });
 
-  test("FR-13: 단계가 없으면 dev 미영속 가능성을 명시", async () => {
+  test("FR-13: 단계가 없으면 기록 부재 가능성을 명시", async () => {
     renderApp(fakeClient({ listRunSteps: async () => ({ items: [], next_cursor: null }) }));
     await openDetail();
-    await waitFor(() => expect(screen.getByText(/dev 실행이나 초기 worker 경로에서는 run_steps가 영속되지 않아/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/실행이 아직 시작 전이거나 단계 기록이 없는 외부\/초기 경로/)).toBeInTheDocument());
   });
 
   // B1/B3 — 보이는 신호로 'AI가 무엇을·어떤 모델로' 구성(데이터에 없는 값 미창작).
