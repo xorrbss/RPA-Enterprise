@@ -4,6 +4,7 @@ import { FileVideo, Image, Play, WandSparkles } from "lucide-react";
 
 import { useApiClient } from "../api/context";
 import { errorLabel, StatusBadge } from "./badges";
+import { useCan } from "../api/permissions";
 import { navigate, useHashParam } from "../router";
 import type {
   GenerationArtifactItem,
@@ -28,6 +29,18 @@ const BLOCKER_LABELS: Record<string, string> = {
   video_recording_port_not_configured: "서버에서 동영상 녹화가 비활성화되어 있습니다.",
   pagination_page_limit_exceeded: "자동 반복 페이지 상한을 넘었습니다. max_pages를 10 이하로 줄여 주세요.",
 };
+
+const TARGET_CORRECTION_BLOCKERS = new Set([
+  "target_start_url_site_mismatch",
+  "target_required_for_auto_run",
+  "start_url_required_for_auto_run",
+  "site_profile_not_found",
+  "browser_identity_not_found",
+  "browser_identity_site_mismatch",
+  "network_policy_not_found",
+  "network_policy_domain_mismatch",
+  "site_profile_blocked",
+]);
 
 type ScreenshotPolicy = "never" | "failure" | "each_step";
 type VideoPolicy = "never" | "failure" | "always";
@@ -100,6 +113,12 @@ function siteLabel(site: SiteItem): string {
   return site.url_pattern !== undefined ? `${name} (${site.url_pattern})` : name;
 }
 
+function hasTargetCorrectionBlocker(blockers: readonly string[]): boolean {
+  return blockers.some(
+    (blocker) => TARGET_CORRECTION_BLOCKERS.has(blocker) || blocker.startsWith("target_") || blocker.startsWith("start_url_"),
+  );
+}
+
 export function PromptScenarioGenerator(): JSX.Element {
   const api = useApiClient();
   const qc = useQueryClient();
@@ -133,6 +152,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   const prefillBrowserIdentityId = useHashParam("browser_identity");
   const prefillNetworkPolicyId = useHashParam("network_policy");
   const appliedPrefill = useRef<string | null>(null);
+  const startUrlInputRef = useRef<HTMLInputElement | null>(null);
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
 
@@ -254,6 +274,12 @@ export function PromptScenarioGenerator(): JSX.Element {
     }
   }
 
+  function returnToTargetForm(): void {
+    setResult(null);
+    setLocalError(null);
+    startUrlInputRef.current?.focus();
+  }
+
   return (
     <section className="panel scenario-generator">
       <div className="panel-head">
@@ -280,7 +306,7 @@ export function PromptScenarioGenerator(): JSX.Element {
           </label>
           <label className="field">
             <span>시작 URL</span>
-            <input value={startUrl} onChange={(event) => setStartUrl(event.target.value)} placeholder="https://..." />
+            <input ref={startUrlInputRef} value={startUrl} onChange={(event) => setStartUrl(event.target.value)} placeholder="https://..." />
           </label>
           <label className="field">
             <span>처리 방식</span>
@@ -380,7 +406,14 @@ export function PromptScenarioGenerator(): JSX.Element {
             {localError}
           </div>
         )}
-        {result !== null && <GenerationResult result={result} retrying={mutation.isPending} onRetryWithoutVideo={retryWithoutVideo} />}
+        {result !== null && (
+          <GenerationResult
+            result={result}
+            retrying={mutation.isPending}
+            onRetryWithoutVideo={retryWithoutVideo}
+            onReturnToTargetForm={returnToTargetForm}
+          />
+        )}
         <GenerationHistory
           items={history.data?.items ?? []}
           loading={history.isLoading}
@@ -388,6 +421,10 @@ export function PromptScenarioGenerator(): JSX.Element {
           onRefresh={() => void history.refetch()}
           blockedOnly={historyStatus === "blocked"}
           onBlockedOnlyChange={(next) => setHistoryStatus(next ? "blocked" : undefined)}
+          onOpen={(item) => {
+            setLocalError(null);
+            setResult(item);
+          }}
         />
       </div>
     </section>
@@ -398,16 +435,52 @@ function GenerationResult({
   result,
   retrying,
   onRetryWithoutVideo,
+  onReturnToTargetForm,
 }: {
   result: ScenarioGenerationResult;
   retrying: boolean;
   onRetryWithoutVideo: () => void;
+  onReturnToTargetForm: () => void;
 }): JSX.Element {
+  const api = useApiClient();
+  const can = useCan();
+  const qc = useQueryClient();
+  const runStartInFlight = useRef(false);
+  const [startRunError, setStartRunError] = useState<string | null>(null);
   const canRetryWithoutVideo =
     result.status === "blocked" &&
     result.blockers.includes("video_recording_port_not_configured") &&
     result.evidence_policy?.video !== undefined &&
     result.evidence_policy.video !== "never";
+  const needsTargetCorrection = result.run_id === null && hasTargetCorrectionBlocker(result.blockers);
+  const canStartSavedRun = result.run_id === null && result.blockers.length === 0 && result.scenario_version_id !== null && can("run.create");
+  const startRun = useMutation({
+    mutationFn: () => {
+      if (result.scenario_version_id === null) {
+        throw new Error("저장된 시나리오 버전이 없어 실행을 시작할 수 없습니다.");
+      }
+      return api.createRun({ scenario_version_id: result.scenario_version_id }, crypto.randomUUID());
+    },
+    onSuccess: (created) => {
+      setStartRunError(null);
+      void qc.invalidateQueries({ queryKey: ["runs"] });
+      navigate("runTrace", { run: created.run_id, focus: "artifacts" });
+    },
+    onError: (error) => {
+      setStartRunError(errorLabel(error));
+    },
+    onSettled: () => {
+      runStartInFlight.current = false;
+    },
+  });
+
+  function startSavedRun(): void {
+    if (runStartInFlight.current || startRun.isPending) return;
+    runStartInFlight.current = true;
+    setStartRunError(null);
+    startRun.mutate();
+  }
+
   return (
     <div className="generation-result" role="status">
       <div className="generation-result-head">
@@ -451,6 +524,27 @@ function GenerationResult({
             <Play size={15} aria-hidden="true" />
             동영상 없이 다시 실행
           </button>
+        </div>
+      )}
+      {needsTargetCorrection && (
+        <div className="generator-actions">
+          <button className="btn" type="button" onClick={onReturnToTargetForm}>
+            <Play size={15} aria-hidden="true" />
+            타깃 수정 후 다시 실행
+          </button>
+        </div>
+      )}
+      {canStartSavedRun && (
+        <div className="generator-actions">
+          <button className="btn" type="button" onClick={startSavedRun} disabled={startRun.isPending || runStartInFlight.current}>
+            <Play size={15} aria-hidden="true" />
+            {startRun.isPending || runStartInFlight.current ? "실행 시작 중…" : "실행 시작"}
+          </button>
+        </div>
+      )}
+      {startRunError !== null && (
+        <div className="form-alert red" role="alert">
+          {startRunError}
         </div>
       )}
       <GenerationArtifactsPanel generationId={result.generation_id} />
@@ -546,6 +640,7 @@ function GenerationHistory({
   onRefresh,
   blockedOnly,
   onBlockedOnlyChange,
+  onOpen,
 }: {
   items: readonly ScenarioGenerationResult[];
   loading: boolean;
@@ -553,6 +648,7 @@ function GenerationHistory({
   onRefresh: () => void;
   blockedOnly: boolean;
   onBlockedOnlyChange: (next: boolean) => void;
+  onOpen: (item: ScenarioGenerationResult) => void;
 }): JSX.Element {
   return (
     <div className="generation-history">
@@ -586,6 +682,11 @@ function GenerationHistory({
               {item.run_id !== null && (
                 <button className="linklike" type="button" onClick={() => navigate("runTrace", { run: item.run_id!, focus: "artifacts" })}>
                   실행 보기
+                </button>
+              )}
+              {item.run_id === null && (
+                <button className="linklike" type="button" onClick={() => onOpen(item)}>
+                  복구 열기
                 </button>
               )}
             </div>

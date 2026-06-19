@@ -24,6 +24,7 @@
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
 import http from "node:http";
+import { pathToFileURL } from "node:url";
 
 import { run, runMigrations, type Runner } from "graphile-worker";
 import type { FastifyInstance } from "fastify";
@@ -59,6 +60,9 @@ import {
 import { createPool, type PgPool } from "./db/pool";
 import { ArtifactRedactionContentTransform } from "./artifacts/artifact-redaction-content-transform";
 import { FsArtifactRedactor, FsArtifactRetentionStore } from "./artifacts/fs-artifact-lifecycle-store";
+import { S3ArtifactRedactor } from "./artifacts/s3-artifact-redactor";
+import { S3ArtifactRetentionStore } from "./artifacts/s3-artifact-retention-store";
+import { S3ObjectStore, type S3HttpTransport } from "./artifacts/s3-object-store";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
 import { SafeCapabilityGate } from "./gateway/capability-gate";
 import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
@@ -77,7 +81,7 @@ import { buildTaskList } from "./worker/graphile-runner";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
-import type { SecretRef } from "../../ts/core-types";
+import type { SecretRef, SecretStore } from "../../ts/core-types";
 import {
   ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
   type ArtifactRealObjectStorePortBinding,
@@ -324,12 +328,6 @@ async function startWorker(pool: PgPool, common: CommonConfig): Promise<Runner> 
   const browser = loadBrowserConfig();
   const gw = loadGatewayConfig();
   const artifactStore = new FsObjectStore(gw.artifactDir);
-  const artifactObjectBinding: ArtifactRealObjectStorePortBinding = {
-    kind: "real_object_store",
-    backendAlias: cfg.artifactObjectStoreBackendAlias,
-    credentialRef: cfg.artifactObjectStoreRef as SecretRef,
-    evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
-  };
   const visualEvidenceVideoRecorderFactory: PgRuntimeWorkerOptions["visualEvidenceVideoRecorderFactory"] =
     cfg.videoRecordingEnabled
       ? (provider) => {
@@ -360,12 +358,6 @@ async function startWorker(pool: PgPool, common: CommonConfig): Promise<Runner> 
       retentionDays: gw.artifactRetentionDays,
     }),
     ...(visualEvidenceVideoRecorderFactory !== undefined ? { visualEvidenceVideoRecorderFactory } : {}),
-    artifactRedactor: new FsArtifactRedactor(
-      artifactStore,
-      artifactObjectBinding,
-      new ArtifactRedactionContentTransform(),
-    ),
-    artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
     runtimeJobEnqueuer: new PgGraphileRunEnqueuer(),
   };
 
@@ -385,25 +377,88 @@ interface ArtifactLifecycleRunner {
   readonly runner: Runner;
 }
 
-function buildArtifactLifecycleWorkerOptions(
+export interface ArtifactLifecycleWorkerOptionDeps {
+  readonly secretStore?: SecretStore;
+  readonly s3Transport?: S3HttpTransport;
+}
+
+export async function buildArtifactLifecycleWorkerOptions(
   cfg: ArtifactLifecycleWorkerConfig,
-): PgRuntimeWorkerOptions {
-  const artifactStore = new FsObjectStore(cfg.artifactDir);
-  const artifactObjectBinding: ArtifactRealObjectStorePortBinding = {
-    kind: "real_object_store",
-    backendAlias: cfg.artifactObjectStoreBackendAlias,
-    credentialRef: cfg.artifactObjectStoreRef as SecretRef,
-    evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
-  };
+  deps: ArtifactLifecycleWorkerOptionDeps = {},
+): Promise<PgRuntimeWorkerOptions> {
+  if (cfg.objectStore.mode === "local_fs") {
+    const artifactStore = new FsObjectStore(cfg.objectStore.artifactDir);
+    const artifactObjectBinding = artifactLifecycleObjectBinding(
+      cfg.objectStore.backendAlias,
+      cfg.objectStore.credentialRef,
+    );
+    return {
+      workerId: cfg.workerId,
+      artifactLifecycleAuditRetentionDays: cfg.artifactRetentionDays,
+      artifactRedactor: new FsArtifactRedactor(
+        artifactStore,
+        artifactObjectBinding,
+        new ArtifactRedactionContentTransform(),
+      ),
+      artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
+    };
+  }
+
+  const secretStore = deps.secretStore;
+  if (secretStore === undefined) {
+    throw new Error("artifact lifecycle S3 object store requires a SecretStore for ARTIFACT_OBJECT_STORE_REF");
+  }
+  const secretAccessKey = await secretStore.resolve(cfg.objectStore.secretAccessKeyRef as SecretRef);
+  const artifactStore = new S3ObjectStore({
+    endpoint: cfg.objectStore.endpoint,
+    region: cfg.objectStore.region,
+    bucket: cfg.objectStore.bucket,
+    accessKeyId: cfg.objectStore.accessKeyId,
+    secretAccessKey,
+    forcePathStyle: cfg.objectStore.forcePathStyle,
+    ...(deps.s3Transport !== undefined ? { transport: deps.s3Transport } : {}),
+  });
+  const artifactObjectBinding = artifactLifecycleObjectBinding(
+    cfg.objectStore.backendAlias,
+    cfg.objectStore.secretAccessKeyRef,
+  );
   return {
     workerId: cfg.workerId,
-    artifactRedactor: new FsArtifactRedactor(
+    artifactLifecycleAuditRetentionDays: cfg.artifactRetentionDays,
+    artifactRedactor: new S3ArtifactRedactor(
       artifactStore,
       artifactObjectBinding,
       new ArtifactRedactionContentTransform(),
     ),
-    artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
+    artifactRetentionStore: new S3ArtifactRetentionStore(artifactStore, artifactObjectBinding),
   };
+}
+
+function artifactLifecycleObjectBinding(
+  backendAlias: string,
+  credentialRef: string,
+): ArtifactRealObjectStorePortBinding {
+  const artifactObjectBinding: ArtifactRealObjectStorePortBinding = {
+    kind: "real_object_store",
+    backendAlias,
+    credentialRef: credentialRef as SecretRef,
+    evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  };
+  return artifactObjectBinding;
+}
+
+function buildArtifactLifecycleSecretStore(cfg: ArtifactLifecycleWorkerConfig): SecretStore | undefined {
+  if (cfg.objectStore.mode !== "s3") return undefined;
+  const vault = cfg.vaultArtifactLifecycle;
+  if (vault === undefined) {
+    throw new Error("artifact lifecycle S3 object store requires VAULT_ARTIFACT_LIFECYCLE_* AppRole config");
+  }
+  return new VaultSecretStore({
+    baseUrl: vault.addr,
+    mount: vault.mount,
+    kvApiVersion: 2,
+    appRole: { roleId: vault.roleId, secretId: vault.secretId },
+  });
 }
 
 async function startArtifactLifecycleWorker(): Promise<ArtifactLifecycleRunner> {
@@ -411,9 +466,14 @@ async function startArtifactLifecycleWorker(): Promise<ArtifactLifecycleRunner> 
   const pool = createPool({ connectionString: cfg.connectionString });
   try {
     await pool.query("SELECT 1");
+    const secretStore = buildArtifactLifecycleSecretStore(cfg);
+    const workerOptions = await buildArtifactLifecycleWorkerOptions(
+      cfg,
+      secretStore !== undefined ? { secretStore } : {},
+    );
     const runner = await run({
       connectionString: cfg.connectionString,
-      taskList: buildTaskList(pool, buildArtifactLifecycleWorkerOptions(cfg), "artifact_lifecycle"),
+      taskList: buildTaskList(pool, workerOptions, "artifact_lifecycle"),
       concurrency: cfg.graphileConcurrency,
       pollInterval: cfg.graphilePollIntervalMs,
       ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
@@ -469,8 +529,15 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
-void main().catch((e) => {
-  const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  console.error(JSON.stringify({ at: "main", fatal: text }));
-  process.exit(1);
-});
+function isDirectEntrypoint(): boolean {
+  const entrypoint = process.argv[1];
+  return entrypoint !== undefined && import.meta.url === pathToFileURL(entrypoint).href;
+}
+
+if (isDirectEntrypoint()) {
+  void main().catch((e) => {
+    const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.error(JSON.stringify({ at: "main", fatal: text }));
+    process.exit(1);
+  });
+}

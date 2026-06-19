@@ -202,11 +202,13 @@ async function generateScenario(deps: ApiServerDeps, request: FastifyRequest): P
       generationId,
     });
 
-    return await withTenantTx(deps.pool, principal.tenantId, async (client) => {
+    const response = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const response = await persistGeneration(client, deps, principal, request.correlationId, generationId, plan, compiled);
       await completeIdempotencyInTx(client, recordId, response);
       return response;
     });
+    await deps.scenarioGenerationArtifacts?.commitGenerationArtifacts(generationId);
+    return response;
   } catch (err) {
     await deps.scenarioGenerationArtifacts?.discardGenerationArtifacts(generationId);
     await deps.scenarioGenerationLlmCalls?.discardGenerationLlmCalls({

@@ -353,6 +353,163 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.getByText("서버에서 동영상 녹화가 비활성화되어 있습니다.")).toBeInTheDocument();
   });
 
+  test("자연어 생성 run_id null + target/start blocker → 타깃 수정 CTA, 입력 보존, createRun 미호출", async () => {
+    const runCalls: Array<{ sver: string; key: string }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => ({
+          generation_id: "00000000-0000-0000-0000-0000000000a3",
+          mode: body.mode ?? "save_and_run",
+          status: "blocked",
+          prompt_hash: "hash",
+          planner: body.planner ?? "deterministic_mvp",
+          model: body.model ?? null,
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+          run_id: null,
+          evidence_policy: body.evidence,
+          blockers: ["target_start_url_site_mismatch"],
+          draft_ir: {},
+          validation_report: {},
+        }),
+        createRun: async (body, key) => {
+          runCalls.push({ sver: body.scenario_version_id, key });
+          return { run_id: "run-should-not-start", status: "queued" };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "오늘 주문을 확인해줘" } });
+    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://wrong.example/orders" } });
+    fireEvent.change(screen.getByLabelText("사이트 ID"), { target: { value: "site-1" } });
+    fireEvent.change(screen.getByLabelText("브라우저 ID"), { target: { value: "browser-1" } });
+    fireEvent.change(screen.getByLabelText("네트워크 정책 ID"), { target: { value: "network-1" } });
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    const recover = await screen.findByRole("button", { name: "타깃 수정 후 다시 실행" });
+    recover.click();
+
+    expect(runCalls).toHaveLength(0);
+    expect(screen.getByLabelText("자연어 요청")).toHaveValue("오늘 주문을 확인해줘");
+    expect(screen.getByLabelText("시작 URL")).toHaveValue("https://wrong.example/orders");
+    expect(screen.getByLabelText("사이트 ID")).toHaveValue("site-1");
+    await waitFor(() => expect(screen.queryByText("차단됨")).toBeNull());
+  });
+
+  test("자연어 생성 run_id null + blockers 없음 + version 있음 → 실행 시작 CTA가 createRun 후 runTrace로 이동", async () => {
+    const runCalls: Array<{ sver: string; key: string }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => ({
+          generation_id: "00000000-0000-0000-0000-0000000000a4",
+          mode: body.mode ?? "save_and_run",
+          status: "saved",
+          prompt_hash: "hash",
+          planner: body.planner ?? "deterministic_mvp",
+          model: body.model ?? null,
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c4",
+          run_id: null,
+          evidence_policy: body.evidence,
+          blockers: [],
+          draft_ir: {},
+          validation_report: {},
+        }),
+        createRun: async (body, key) => {
+          runCalls.push({ sver: body.scenario_version_id, key });
+          return { run_id: "run-from-generation", status: "queued" };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "저장된 자동화를 실행해줘" } });
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    const start = await screen.findByRole("button", { name: "실행 시작" });
+    start.click();
+    start.click();
+
+    await waitFor(() => expect(runCalls).toHaveLength(1));
+    expect(runCalls[0]?.sver).toBe("00000000-0000-0000-0000-0000000000c4");
+    expect(runCalls[0]?.key.length).toBeGreaterThan(0);
+    await waitFor(() => expect(location.hash).toBe("#runTrace?run=run-from-generation&focus=artifacts"));
+  });
+
+  test("자연어 생성 복구 실행 createRun 실패 → 오류를 사용자에게 표면화", async () => {
+    const { ApiError } = await import("../src/api/types");
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => ({
+          generation_id: "00000000-0000-0000-0000-0000000000a5",
+          mode: body.mode ?? "save_and_run",
+          status: "saved",
+          prompt_hash: "hash",
+          planner: body.planner ?? "deterministic_mvp",
+          model: body.model ?? null,
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c5",
+          run_id: null,
+          evidence_policy: body.evidence,
+          blockers: [],
+          draft_ir: {},
+          validation_report: {},
+        }),
+        createRun: async () => {
+          throw new ApiError(403, "AUTHZ_FORBIDDEN", { code: "AUTHZ_FORBIDDEN" });
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "저장된 자동화를 실행해줘" } });
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+    (await screen.findByRole("button", { name: "실행 시작" })).click();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("권한이 없습니다.");
+  });
+
+  test("GenerationHistory run_id null 행을 다시 열면 동일한 실행 시작 복구 액션을 노출", async () => {
+    const runCalls: Array<{ sver: string; key: string }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listScenarioGenerations: async () => ({
+          items: [
+            {
+              generation_id: "00000000-0000-0000-0000-0000000000a6",
+              mode: "save_and_run",
+              status: "saved",
+              prompt_hash: "hash",
+              planner: "deterministic_mvp",
+              model: "gpt-4o-mini",
+              scenario_id: "00000000-0000-0000-0000-0000000000c1",
+              scenario_version_id: "00000000-0000-0000-0000-0000000000c6",
+              run_id: null,
+              blockers: [],
+              draft_ir: {},
+              validation_report: {},
+            },
+          ],
+          next_cursor: null,
+        }),
+        createRun: async (body, key) => {
+          runCalls.push({ sver: body.scenario_version_id, key });
+          return { run_id: "run-from-history", status: "queued" };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    (await screen.findByRole("button", { name: "복구 열기" })).click();
+    (await screen.findByRole("button", { name: "실행 시작" })).click();
+
+    await waitFor(() => expect(runCalls).toHaveLength(1));
+    expect(runCalls[0]?.sver).toBe("00000000-0000-0000-0000-0000000000c6");
+    await waitFor(() => expect(location.hash).toBe("#runTrace?run=run-from-history&focus=artifacts"));
+  });
+
   test("동영상 capability 차단은 같은 요청을 동영상 없이 재실행할 수 있다", async () => {
     const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
     renderApp(
