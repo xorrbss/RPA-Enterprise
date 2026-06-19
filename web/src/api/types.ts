@@ -218,10 +218,12 @@ export interface ScenarioGenerationCapabilities {
     readonly screenshot: {
       readonly enabled: boolean;
       readonly policies: ReadonlyArray<"never" | "failure" | "each_step">;
+      readonly default_policy: "never" | "failure" | "each_step";
     };
     readonly video: {
       readonly enabled: boolean;
       readonly policies: ReadonlyArray<"never" | "failure" | "always">;
+      readonly default_policy: "never" | "failure" | "always";
       readonly artifact_type: "video_masked";
       readonly media_type: "video/webm";
     };

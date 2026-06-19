@@ -134,6 +134,7 @@ export function PromptScenarioGenerator(): JSX.Element {
     () => (videoCapability?.policies.length ? videoCapability.policies : ["never", "failure", "always"]),
     [videoCapability?.policies],
   );
+  const videoDefaultPolicy = videoCapability?.default_policy ?? (videoRecordingEnabled ? "always" : "never");
 
   const selectedSite = useMemo(
     () => (sites.data?.items ?? []).find((s) => s.site_profile_id === siteProfileId) ?? null,
@@ -167,10 +168,10 @@ export function PromptScenarioGenerator(): JSX.Element {
       }
       return;
     }
-    if (!videoTouched && video === "never" && videoCapability.policies.includes("always")) {
-      setVideo("always");
+    if (!videoTouched && video === "never" && videoCapability.policies.includes(videoDefaultPolicy)) {
+      setVideo(videoDefaultPolicy);
     }
-  }, [video, videoCapability, videoTouched]);
+  }, [video, videoCapability, videoDefaultPolicy, videoTouched]);
 
   const mutation = useMutation({
     mutationFn: async () => {

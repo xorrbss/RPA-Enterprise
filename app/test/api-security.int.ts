@@ -120,6 +120,8 @@ async function main(): Promise<void> {
       check("capabilities default → 200", res.statusCode === 200, res.body);
       check("capabilities default video disabled", res.json().visual_evidence?.video?.enabled === false, res.body);
       check("capabilities default video policies only never", JSON.stringify(res.json().visual_evidence?.video?.policies) === JSON.stringify(["never"]), res.body);
+      check("capabilities default video default_policy never", res.json().visual_evidence?.video?.default_policy === "never", res.body);
+      check("capabilities default screenshot default_policy each_step", res.json().visual_evidence?.screenshot?.default_policy === "each_step", res.body);
     } finally {
       await capsDefault.close();
     }
@@ -142,6 +144,7 @@ async function main(): Promise<void> {
       });
       check("capabilities video enabled → 200", res.statusCode === 200, res.body);
       check("capabilities video enabled policies", res.json().visual_evidence?.video?.enabled === true && res.body.includes("\"always\""), res.body);
+      check("capabilities video enabled default_policy always", res.json().visual_evidence?.video?.default_policy === "always", res.body);
     } finally {
       await capsVideo.close();
     }

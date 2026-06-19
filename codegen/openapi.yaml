@@ -1452,7 +1452,7 @@ components:
             screenshot:
               type: object
               additionalProperties: false
-              required: [enabled, policies]
+              required: [enabled, policies, default_policy]
               properties:
                 enabled: { type: boolean }
                 policies:
@@ -1460,10 +1460,13 @@ components:
                   items:
                     type: string
                     enum: [never, failure, each_step]
+                default_policy:
+                  type: string
+                  enum: [never, failure, each_step]
             video:
               type: object
               additionalProperties: false
-              required: [enabled, policies, artifact_type, media_type]
+              required: [enabled, policies, default_policy, artifact_type, media_type]
               properties:
                 enabled: { type: boolean }
                 policies:
@@ -1471,6 +1474,9 @@ components:
                   items:
                     type: string
                     enum: [never, failure, always]
+                default_policy:
+                  type: string
+                  enum: [never, failure, always]
                 artifact_type:
                   type: string
                   enum: [video_masked]

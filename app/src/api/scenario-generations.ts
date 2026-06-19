@@ -98,10 +98,12 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
           screenshot: {
             enabled: true,
             policies: ["never", "failure", "each_step"],
+            default_policy: "each_step",
           },
           video: {
             enabled: videoRecording,
             policies: videoRecording ? ["never", "failure", "always"] : ["never"],
+            default_policy: videoRecording ? "always" : "never",
             artifact_type: "video_masked",
             media_type: "video/webm",
           },
