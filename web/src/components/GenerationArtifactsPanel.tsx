@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import type { GenerationArtifactItem } from "../api/types";
@@ -54,6 +54,17 @@ function artifactSummary(items: readonly GenerationArtifactItem[]): { images: nu
   );
 }
 
+function dedupeArtifacts(items: readonly GenerationArtifactItem[]): readonly GenerationArtifactItem[] {
+  const seen = new Set<string>();
+  const deduped: GenerationArtifactItem[] = [];
+  for (const item of items) {
+    if (seen.has(item.artifact_id)) continue;
+    seen.add(item.artifact_id);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
 function previewText(content: string): string {
   try {
     return JSON.stringify(JSON.parse(content), null, 2).slice(0, 3000);
@@ -71,12 +82,21 @@ export function GenerationArtifactsPanel({
 }): JSX.Element {
   const api = useApiClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const list = useQuery({
+  const list = useInfiniteQuery({
     queryKey: ["scenario-generation-artifacts", generationId],
-    queryFn: () => api.listScenarioGenerationArtifacts(generationId, { limit: 20 }),
+    queryFn: ({ pageParam }) =>
+      api.listScenarioGenerationArtifacts(generationId, {
+        limit: 20,
+        ...(typeof pageParam === "string" ? { cursor: pageParam } : {}),
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor,
     refetchInterval: 10_000,
   });
-  const items = list.data?.items ?? [];
+  const pages = list.data?.pages ?? [];
+  const lastPage = pages.length > 0 ? pages[pages.length - 1] : undefined;
+  const hasMore = (lastPage?.next_cursor ?? null) !== null;
+  const items = useMemo(() => dedupeArtifacts(pages.flatMap((page) => page.items)), [pages]);
   const preferred = items.find((item) => previewGenerationArtifactMediaType(item) !== null) ?? items[0];
   const summary = artifactSummary(items);
   const effectiveSelectedId =
@@ -104,9 +124,15 @@ export function GenerationArtifactsPanel({
     <div className="generation-artifacts" aria-label="generation artifacts">
       <div className="generation-artifacts-head">
         <strong>{title}</strong>
-        {items.length > 0 && <span className="badge muted">{items.length}건</span>}
+        {items.length > 0 && <span className="badge muted">{items.length}{hasMore ? "+" : ""}건</span>}
+        {hasMore && <span className="badge amber">더 있음</span>}
         {summary.images > 0 && <span className="badge blue">image {summary.images}</span>}
         {summary.videos > 0 && <span className="badge amber">video {summary.videos}</span>}
+        {hasMore && (
+          <button className="linklike" type="button" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
+            {list.isFetchingNextPage ? "더 불러오는 중" : "더 보기"}
+          </button>
+        )}
         <button className="linklike" type="button" onClick={() => void list.refetch()}>
           새로고침
         </button>
@@ -115,23 +141,27 @@ export function GenerationArtifactsPanel({
         <p className="muted">산출물 확인 중</p>
       ) : list.isError ? (
         <p className="form-alert red">{errorLabel(list.error)}</p>
-      ) : items.length === 0 ? (
+      ) : items.length === 0 && !hasMore ? (
         <p className="muted">표시할 planner 산출물이 없습니다. redaction 처리 중일 수 있습니다.</p>
       ) : (
         <div className="generation-artifact-grid">
           <div className="generation-artifact-list">
-            {items.map((item) => (
-              <button
-                key={item.artifact_id}
-                className={item.artifact_id === effectiveSelectedId ? "active" : ""}
-                type="button"
-                onClick={() => setSelectedId(item.artifact_id)}
-              >
-                <code>{item.artifact_id.slice(0, 8)}</code>
-                <span>{item.type}</span>
-                <small>{artifactMetaLabel(item)}</small>
-              </button>
-            ))}
+            {items.length === 0 && hasMore ? (
+              <p className="muted">다음 페이지에 산출물이 더 있습니다.</p>
+            ) : (
+              items.map((item) => (
+                <button
+                  key={item.artifact_id}
+                  className={item.artifact_id === effectiveSelectedId ? "active" : ""}
+                  type="button"
+                  onClick={() => setSelectedId(item.artifact_id)}
+                >
+                  <code>{item.artifact_id.slice(0, 8)}</code>
+                  <span>{item.type}</span>
+                  <small>{artifactMetaLabel(item)}</small>
+                </button>
+              ))
+            )}
           </div>
           <div className="generation-artifact-preview">
             {selected !== undefined && (

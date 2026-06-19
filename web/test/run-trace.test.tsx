@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -186,6 +186,63 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(await screen.findByText("rows 2건")).toBeInTheDocument();
     expect(screen.getByText(/키 title, author/)).toBeInTheDocument();
     expect(screen.getByText(/공지 A/)).toBeInTheDocument();
+  });
+
+  test("실행 상세 산출물: next_cursor가 있으면 더 보기로 다음 페이지를 append한다", async () => {
+    const artifactCalls: unknown[] = [];
+    const firstArtifact: RunArtifactItem = {
+      artifact_id: "art-page-1",
+      type: "extract_result_json",
+      media_type: "application/json",
+      filename: "first-page.json",
+      byte_size: 100,
+      duration_ms: null,
+      redaction_status: "redacted",
+      retention_until: null,
+      legal_hold: false,
+      created_at: "2026-06-18T00:00:00.000Z",
+    };
+    const secondArtifact: RunArtifactItem = {
+      artifact_id: "art-page-2",
+      type: "extract_result_json",
+      media_type: "application/json",
+      filename: "second-page.json",
+      byte_size: 200,
+      duration_ms: null,
+      redaction_status: "redacted",
+      retention_until: null,
+      legal_hold: false,
+      created_at: "2026-06-18T00:00:01.000Z",
+    };
+
+    renderApp(fakeClient({
+      listRunArtifacts: async (_runId, params) => {
+        artifactCalls.push(params);
+        if (params?.cursor === "cursor-page-2") {
+          return { items: [firstArtifact, secondArtifact], next_cursor: null };
+        }
+        return { items: [firstArtifact], next_cursor: "cursor-page-2" };
+      },
+      getArtifact: async (id) => ({
+        artifact_id: id,
+        type: "extract_result_json",
+        sha256: "sha",
+        redaction_status: "redacted",
+        retention_until: null,
+        content: JSON.stringify({ rows: [] }),
+      }),
+    }));
+
+    await openDetail();
+
+    expect(await screen.findByText("first-page.json")).toBeInTheDocument();
+    expect(await screen.findByLabelText("artifact summary")).toHaveTextContent("artifact 1+건");
+    fireEvent.click(screen.getByRole("button", { name: "더 보기" }));
+
+    expect(await screen.findByText("second-page.json")).toBeInTheDocument();
+    await waitFor(() => expect(artifactCalls).toContainEqual({ limit: 100, cursor: "cursor-page-2" }));
+    expect(screen.getAllByText("first-page.json")).toHaveLength(1);
+    expect(screen.getByLabelText("artifact summary")).toHaveTextContent("artifact 2건");
   });
 
   test("실행 상세 산출물: media 메타데이터와 screenshot/video 배지를 표시하고 목록 민감 필드는 숨긴다", async () => {

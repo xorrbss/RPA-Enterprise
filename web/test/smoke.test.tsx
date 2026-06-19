@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
+import { GenerationArtifactsPanel } from "../src/components/GenerationArtifactsPanel";
 import { fakeClient } from "./fake-client";
 
 function renderApp(client: ApiClient = fakeClient()): void {
@@ -13,6 +14,17 @@ function renderApp(client: ApiClient = fakeClient()): void {
     <QueryClientProvider client={qc}>
       <ApiClientProvider client={client}>
         <App />
+      </ApiClientProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function renderGenerationArtifactsPanel(client: ApiClient): void {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <ApiClientProvider client={client}>
+        <GenerationArtifactsPanel generationId="gen-page" />
       </ApiClientProvider>
     </QueryClientProvider>,
   );
@@ -998,6 +1010,59 @@ describe("D7 운영 콘솔 shell", () => {
     expect(blobCalls).toContain("91000000-0000-0000-0000-000000000102");
     expect(scopedDetailCalls).toBe(0);
     expect(screen.queryByText(/should_not_render/)).toBeNull();
+  });
+
+  test("자연어 생성 산출물: 더 보기는 next_cursor로 다음 페이지를 이어 붙인다", async () => {
+    const artifactCalls: Array<{ generationId: string; cursor: string | undefined }> = [];
+    const firstArtifact = {
+      artifact_id: "aa000000-0000-0000-0000-000000000001",
+      type: "scenario_generation_planner_output",
+      media_type: "application/json",
+      filename: "planner.json",
+      byte_size: 128,
+      duration_ms: null,
+      redaction_status: "redacted",
+      retention_until: null,
+      legal_hold: false,
+      created_at: "2026-06-15T00:00:00.000Z",
+    };
+    const nextArtifact = {
+      artifact_id: "bb000000-0000-0000-0000-000000000002",
+      type: "scenario_generation_validation_report",
+      media_type: "application/json",
+      filename: "validation.json",
+      byte_size: 256,
+      duration_ms: null,
+      redaction_status: "redacted",
+      retention_until: null,
+      legal_hold: false,
+      created_at: "2026-06-15T00:00:01.000Z",
+    };
+
+    renderGenerationArtifactsPanel(
+      fakeClient({
+        listScenarioGenerationArtifacts: async (generationId, params) => {
+          artifactCalls.push({ generationId, cursor: params?.cursor });
+          if (params?.cursor === "cursor-2") {
+            return { items: [firstArtifact, nextArtifact], next_cursor: null };
+          }
+          return { items: [firstArtifact], next_cursor: "cursor-2" };
+        },
+      }),
+    );
+
+    expect(await screen.findByText("scenario_generation_planner_output")).toBeInTheDocument();
+    expect(screen.getByText("1+건")).toBeInTheDocument();
+    expect(screen.getByText("더 있음")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "더 보기" }));
+
+    await waitFor(() => expect(artifactCalls).toContainEqual({ generationId: "gen-page", cursor: "cursor-2" }));
+    expect(await screen.findByText("scenario_generation_validation_report")).toBeInTheDocument();
+    expect(screen.getByText("2건")).toBeInTheDocument();
+    const artifactList = document.querySelector(".generation-artifact-list");
+    expect(artifactList).not.toBeNull();
+    expect(within(artifactList as HTMLElement).getAllByRole("button")).toHaveLength(2);
   });
 
   test("최근 생성: saved/no-run 항목은 실행 딥링크로 연결한 척하지 않는다", async () => {

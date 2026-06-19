@@ -381,6 +381,24 @@ function artifactSummary(items: readonly RunArtifactItem[]): { screenshots: numb
   );
 }
 
+function uniqueArtifactItems(items: readonly RunArtifactItem[]): readonly RunArtifactItem[] {
+  const seen = new Set<string>();
+  const unique: RunArtifactItem[] = [];
+  for (const item of items) {
+    if (seen.has(item.artifact_id)) continue;
+    seen.add(item.artifact_id);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function mergeArtifactPages(
+  firstPageItems: readonly RunArtifactItem[],
+  extraItems: readonly RunArtifactItem[],
+): readonly RunArtifactItem[] {
+  return uniqueArtifactItems([...firstPageItems, ...extraItems]);
+}
+
 function screenshotRequestLabel(value: ScenarioGenerationEvidence["screenshot"] | undefined): string {
   if (value === "each_step") return "매 단계";
   if (value === "failure") return "실패 시";
@@ -448,13 +466,36 @@ function RunArtifactsList({
   const api = useApiClient();
   const artifactsRef = useRef<HTMLDivElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pagination, setPagination] = useState<{
+    runId: string;
+    firstPageCursor: string | null;
+    nextCursor: string | null;
+    extraItems: readonly RunArtifactItem[];
+    loadingMore: boolean;
+    loadMoreError: string | null;
+  }>({
+    runId,
+    firstPageCursor: null,
+    nextCursor: null,
+    extraItems: [],
+    loadingMore: false,
+    loadMoreError: null,
+  });
   const hashArtifactId = useHashParam("artifact");
   const q = useQuery({
     queryKey: ["run-artifacts", runId],
     queryFn: () => api.listRunArtifacts(runId, { limit: 100 }),
     refetchInterval: POLL_MS,
   });
-  const items: readonly RunArtifactItem[] = q.data?.items ?? [];
+  const firstPageItems: readonly RunArtifactItem[] = q.data?.items ?? [];
+  const firstPageCursor = q.data?.next_cursor ?? null;
+  const paginationMatchesFirstPage = pagination.runId === runId && pagination.firstPageCursor === firstPageCursor;
+  const extraItems = paginationMatchesFirstPage ? pagination.extraItems : [];
+  const nextCursor = paginationMatchesFirstPage ? pagination.nextCursor : firstPageCursor;
+  const loadingMore = paginationMatchesFirstPage ? pagination.loadingMore : false;
+  const loadMoreError = paginationMatchesFirstPage ? pagination.loadMoreError : null;
+  const items: readonly RunArtifactItem[] = mergeArtifactPages(firstPageItems, extraItems);
+  const hasMoreArtifacts = nextCursor !== null;
   const preferred =
     items.find(isPreviewableMedia) ??
     items.find((a) => /json|extract|output|result/i.test(a.type)) ??
@@ -474,6 +515,19 @@ function RunArtifactsList({
   const selectedMediaType = previewMediaType(selectedItem);
   const counts = artifactSummary(items);
   useEffect(() => {
+    setPagination((current) => {
+      if (current.runId === runId && current.firstPageCursor === firstPageCursor) return current;
+      return {
+        runId,
+        firstPageCursor,
+        nextCursor: firstPageCursor,
+        extraItems: [],
+        loadingMore: false,
+        loadMoreError: null,
+      };
+    });
+  }, [firstPageCursor, runId]);
+  useEffect(() => {
     if (hashSelectedId !== null && selectedId !== hashSelectedId) {
       setSelectedId(hashSelectedId);
     }
@@ -487,15 +541,56 @@ function RunArtifactsList({
     enabled: effectiveSelectedId !== null && !selectedIsMedia,
   });
   const summary = detail.data !== undefined ? summarizeJsonArtifact(detail.data) : null;
+  async function loadMoreArtifacts(): Promise<void> {
+    if (nextCursor === null || loadingMore) return;
+    const cursor = nextCursor;
+    setPagination((current) => {
+      if (current.runId === runId && current.firstPageCursor === firstPageCursor) {
+        return { ...current, loadingMore: true, loadMoreError: null };
+      }
+      return {
+        runId,
+        firstPageCursor,
+        nextCursor: cursor,
+        extraItems: [],
+        loadingMore: true,
+        loadMoreError: null,
+      };
+    });
+    try {
+      const page = await api.listRunArtifacts(runId, { limit: 100, cursor });
+      setPagination((current) => {
+        if (current.runId !== runId || current.firstPageCursor !== firstPageCursor) return current;
+        const firstPageIds = new Set(firstPageItems.map((item) => item.artifact_id));
+        const nextExtraItems = uniqueArtifactItems([...current.extraItems, ...page.items])
+          .filter((item) => !firstPageIds.has(item.artifact_id));
+        return {
+          ...current,
+          nextCursor: page.next_cursor,
+          extraItems: nextExtraItems,
+          loadingMore: false,
+          loadMoreError: null,
+        };
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      setPagination((current) => (
+        current.runId === runId && current.firstPageCursor === firstPageCursor
+          ? { ...current, loadingMore: false, loadMoreError: message }
+          : current
+      ));
+    }
+  }
   return (
     <div ref={artifactsRef} role="region" aria-label="실행 결과·산출물" tabIndex={focusOnMount ? -1 : undefined} style={{ marginTop: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <strong style={{ fontSize: 13 }}>실행 결과·산출물</strong>
         {items.length > 0 && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }} aria-label="artifact summary">
-            <span className="subtle">artifact {items.length}건</span>
+            <span className="subtle">artifact {items.length}{hasMoreArtifacts ? "+건" : "건"}</span>
             <span className="badge blue">스크린샷 {counts.screenshots}</span>
             <span className="badge amber">동영상 {counts.videos}</span>
+            {hasMoreArtifacts && <span className="badge muted">더 있음</span>}
             {counts.pending > 0 && <span className="badge muted">redaction 대기 {counts.pending}</span>}
           </span>
         )}
@@ -569,6 +664,24 @@ function RunArtifactsList({
               </tbody>
             </table>
           </div>
+          {(hasMoreArtifacts || loadingMore || loadMoreError !== null) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="btn"
+                type="button"
+                disabled={loadingMore || nextCursor === null}
+                onClick={() => void loadMoreArtifacts()}
+              >
+                {loadingMore ? "불러오는 중" : "더 보기"}
+              </button>
+              {hasMoreArtifacts && <span className="subtle">다음 산출물이 더 있습니다.</span>}
+              {loadMoreError !== null && (
+                <span className="badge amber" role="status">
+                  다음 페이지 로드 실패: {loadMoreError}
+                </span>
+              )}
+            </div>
+          )}
           {effectiveSelectedId !== null && (
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
