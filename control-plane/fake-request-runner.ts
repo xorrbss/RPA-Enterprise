@@ -600,6 +600,7 @@ function resourceForOperation(
 ): AuthorizationCheck["resource"] | undefined {
   switch (operation.operationId) {
     case "getRun":
+    case "listRunSteps":
     case "listRunArtifacts":
     case "abortRun":
       return { kind: "run", id: ctx.params.run_id };

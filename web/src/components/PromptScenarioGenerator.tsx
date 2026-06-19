@@ -12,6 +12,7 @@ import type {
   ScenarioGenerationRequest,
   ScenarioGenerationRunRequest,
   ScenarioGenerationResult,
+  ScenarioItem,
   SiteItem,
 } from "../api/types";
 
@@ -209,10 +210,23 @@ export function PromptScenarioGenerator(): JSX.Element {
     retry: false,
   });
   const [historyStatus, setHistoryStatus] = useState<ScenarioGenerationResult["status"] | undefined>(undefined);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyCursorStack, setHistoryCursorStack] = useState<string[]>([]);
+  const historyCursor = historyCursorStack[historyCursorStack.length - 1];
   const history = useQuery({
-    queryKey: ["scenario-generations", "recent", historyStatus ?? "all"],
-    queryFn: () => api.listScenarioGenerations({ limit: 8, ...(historyStatus !== undefined ? { status: historyStatus } : {}) }),
+    queryKey: ["scenario-generations", "recent", historyStatus ?? "all", historyCursor ?? "p0"],
+    queryFn: () =>
+      api.listScenarioGenerations({
+        limit: 8,
+        ...(historyStatus !== undefined ? { status: historyStatus } : {}),
+        ...(historyCursor !== undefined ? { cursor: historyCursor } : {}),
+      }),
     refetchInterval: 15_000,
+  });
+  const scenariosForHistory = useQuery({
+    queryKey: ["scenarios"],
+    queryFn: () => api.listScenarios({ limit: 50 }),
+    refetchInterval: 10_000,
   });
   const [prompt, setPrompt] = useState("");
   const [name, setName] = useState("");
@@ -246,6 +260,7 @@ export function PromptScenarioGenerator(): JSX.Element {
     () => (sites.data?.items ?? []).find((s) => s.site_profile_id === siteProfileId) ?? null,
     [sites.data?.items, siteProfileId],
   );
+  const scenarioNameById = useMemo(() => scenarioNameMap(scenariosForHistory.data?.items ?? []), [scenariosForHistory.data?.items]);
 
   function selectSite(nextSiteId: string): void {
     setSiteProfileId(nextSiteId);
@@ -582,7 +597,24 @@ export function PromptScenarioGenerator(): JSX.Element {
           error={history.error === null ? null : errorLabel(history.error)}
           onRefresh={() => void history.refetch()}
           blockedOnly={historyStatus === "blocked"}
-          onBlockedOnlyChange={(next) => setHistoryStatus(next ? "blocked" : undefined)}
+          onBlockedOnlyChange={(next) => {
+            setHistoryStatus(next ? "blocked" : undefined);
+            setHistoryCursorStack([]);
+          }}
+          search={historySearch}
+          onSearchChange={(next) => {
+            setHistorySearch(next);
+            setHistoryCursorStack([]);
+          }}
+          scenarioNameById={scenarioNameById}
+          hasPrev={historyCursorStack.length > 0}
+          hasNext={(history.data?.next_cursor ?? null) !== null}
+          pageIndex={historyCursorStack.length}
+          onPrev={() => setHistoryCursorStack((stack) => stack.slice(0, -1))}
+          onNext={() => {
+            const nextCursor = history.data?.next_cursor ?? null;
+            if (nextCursor !== null) setHistoryCursorStack((stack) => [...stack, nextCursor]);
+          }}
           selectedGenerationId={result?.generation_id ?? null}
           onSelect={(item) => {
             selectGeneration(item);
@@ -656,6 +688,10 @@ function GenerationResult({
   );
 }
 
+function scenarioNameMap(items: readonly ScenarioItem[]): ReadonlyMap<string, string> {
+  return new Map(items.map((item) => [item.scenario_id, item.name]));
+}
+
 function GenerationHistory({
   items,
   loading,
@@ -663,6 +699,14 @@ function GenerationHistory({
   onRefresh,
   blockedOnly,
   onBlockedOnlyChange,
+  search,
+  onSearchChange,
+  scenarioNameById,
+  hasPrev,
+  hasNext,
+  pageIndex,
+  onPrev,
+  onNext,
   selectedGenerationId,
   onSelect,
 }: {
@@ -672,9 +716,18 @@ function GenerationHistory({
   onRefresh: () => void;
   blockedOnly: boolean;
   onBlockedOnlyChange: (next: boolean) => void;
+  search: string;
+  onSearchChange: (next: string) => void;
+  scenarioNameById: ReadonlyMap<string, string>;
+  hasPrev: boolean;
+  hasNext: boolean;
+  pageIndex: number;
+  onPrev: () => void;
+  onNext: () => void;
   selectedGenerationId: string | null;
   onSelect: (item: ScenarioGenerationResult) => void;
 }): JSX.Element {
+  const filteredItems = items.filter((item) => historyMatchesSearch(item, search, scenarioNameById));
   return (
     <div className="generation-history">
       <div className="generation-history-head">
@@ -687,6 +740,15 @@ function GenerationHistory({
             차단
           </button>
         </div>
+        <label className="generation-history-search">
+          <input
+            aria-label="생성 검색"
+            value={search}
+            onChange={(event) => onSearchChange(event.currentTarget.value)}
+            placeholder="이름·ID·모델 검색"
+            type="search"
+          />
+        </label>
         <button className="linklike" type="button" onClick={onRefresh}>
           새로고침
         </button>
@@ -694,15 +756,26 @@ function GenerationHistory({
       {loading && <p className="muted">불러오는 중</p>}
       {error !== null && <p className="form-alert red">{error}</p>}
       {!loading && items.length === 0 && <p className="muted">최근 생성이 없습니다.</p>}
-      {items.length > 0 && (
+      {!loading && items.length > 0 && filteredItems.length === 0 && <p className="muted">현재 페이지에서 일치하는 생성이 없습니다.</p>}
+      {filteredItems.length > 0 && (
         <div className="generation-history-list">
-          {items.map((item) => {
+          {filteredItems.map((item) => {
             const diagnostic = blockerSummary(item.blockers);
             const isSelected = item.generation_id === selectedGenerationId;
             const runId = item.run_id;
+            const scenarioName = item.scenario_id === null ? undefined : scenarioNameById.get(item.scenario_id);
             return (
               <div className="generation-history-row" key={item.generation_id} aria-current={isSelected ? "true" : undefined}>
                 <span className={`badge ${generationStatusTone(item.status)}`}>{generationStatusLabel(item.status)}</span>
+                {scenarioName !== undefined ? (
+                  <span className="subtle" title={item.scenario_id ?? undefined}>
+                    시나리오: {scenarioName}
+                  </span>
+                ) : (
+                  <span className="subtle" title={item.prompt_redacted_ref ?? item.prompt_hash}>
+                    prompt: {item.prompt_redacted_ref ?? item.prompt_hash.slice(0, 12)}
+                  </span>
+                )}
                 <code>{item.generation_id.slice(0, 8)}</code>
                 <span className="subtle">{formatGenerationTime(item.created_at)}</span>
                 <span className="subtle">{plannerLabel(item.planner)}</span>
@@ -728,8 +801,41 @@ function GenerationHistory({
           })}
         </div>
       )}
+      {(hasPrev || hasNext) && (
+        <div className="generation-history-pager">
+          <button className="btn" type="button" onClick={onPrev} disabled={!hasPrev}>
+            이전
+          </button>
+          <span className="subtle">{pageIndex + 1} 페이지</span>
+          <button className="btn" type="button" onClick={onNext} disabled={!hasNext}>
+            다음
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+function historyMatchesSearch(item: ScenarioGenerationResult, search: string, scenarioNameById: ReadonlyMap<string, string>): boolean {
+  const query = search.trim().toLocaleLowerCase();
+  if (query.length === 0) return true;
+  const scenarioName = item.scenario_id === null ? undefined : scenarioNameById.get(item.scenario_id);
+  return [
+    scenarioName,
+    item.generation_id,
+    item.scenario_id,
+    item.scenario_version_id,
+    item.run_id,
+    item.model,
+    item.planner,
+    item.status,
+    item.prompt_hash,
+    item.prompt_redacted_ref,
+    item.created_by,
+    ...item.blockers,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .some((value) => value.toLocaleLowerCase().includes(query));
 }
 
 function formatGenerationTime(value: string | undefined): string {

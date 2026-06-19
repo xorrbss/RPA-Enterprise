@@ -31,6 +31,7 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 export type ControlPlanePath =
   | "/v1/runs"
   | "/v1/runs/{run_id}"
+  | "/v1/runs/{run_id}/steps"
   | "/v1/runs/{run_id}/artifacts"
   | "/v1/runs/{run_id}/abort"
   | "/v1/scenario-generations"
@@ -68,6 +69,7 @@ export type ControlPlanePath =
 export type OperationId =
   | "createRun"
   | "getRun"
+  | "listRunSteps"
   | "listRunArtifacts"
   | "listRuns"
   | "abortRun"

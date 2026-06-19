@@ -92,14 +92,17 @@ assertOpenApiContains(
   "      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/RunCreateRequest'",
 );
 assertOpenApiSchemaContains("RunCreateRequest", "        model:\n          type: string");
+assertOpenApiPath("/runs/{run_id}/steps");
 assertOpenApiPath("/runs/{run_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts/{artifact_id}");
 assertOpenApiPath("/scenario-generations/capabilities");
+assertControlPlanePath("/v1/runs/{run_id}/steps");
 assertControlPlanePath("/v1/runs/{run_id}/artifacts");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts/{artifact_id}");
 assertControlPlanePath("/v1/scenario-generations/capabilities");
+assertOperationId("listRunSteps");
 assertOperationId("listRunArtifacts");
 assertOperationId("getScenarioGenerationCapabilities");
 assertOperationId("listScenarioGenerationArtifacts");

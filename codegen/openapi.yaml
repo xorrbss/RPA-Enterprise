@@ -152,6 +152,32 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /runs/{run_id}/steps:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Runs]
+      operationId: listRunSteps
+      summary: run step trace summary
+      description: >
+        Run-scoped execution step trace. The response is a non-sensitive summary only:
+        output/input bodies, page state, evidence bodies, and exception messages are omitted.
+        Evidence is exposed only as artifact_ids and must be read through artifact gates.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: run step summaries ordered by execution time.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStepList'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   /runs/{run_id}/abort:
     parameters:
       - $ref: '#/components/parameters/RunId'
@@ -1588,6 +1614,15 @@ components:
           items: { $ref: '#/components/schemas/RunArtifactItem' }
         next_cursor:
           type: [string, "null"]
+    RunStepList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RunStep' }
+        next_cursor:
+          type: [string, "null"]
 
     # ===== Resource shapes (요지; 상세 필드 타입은 codegen/types 참조) =====
     Run:
@@ -2072,6 +2107,79 @@ components:
       allOf:
         - $ref: '#/components/schemas/GenerationArtifactItem'
       description: run-scoped artifact list item. Metadata-only; content, object_ref, and sha256 are excluded.
+
+    RunStep:
+      type: object
+      description: >
+        run_steps 단계 트레이스 요약. 민감 입력/출력 본문, page_state, exception.message, evidence body는 노출하지 않는다.
+      required:
+        - step_id
+        - node_id
+        - action
+        - status
+        - attempt
+        - cache_mode
+        - artifact_ids
+        - stagehand_calls
+        - started_at
+        - ended_at
+        - duration_ms
+        - exception
+      properties:
+        step_id: { type: string }
+        node_id: { type: string }
+        action: { type: string }
+        status:
+          type: string
+          enum: [started, success, failed_business, failed_system, failed_challenge, failed_security, uncertain, skipped, suspended]
+        attempt:
+          type: integer
+          minimum: 0
+        cache_mode:
+          type: string
+        started_at:
+          type: [string, "null"]
+          format: date-time
+        ended_at:
+          type: [string, "null"]
+          format: date-time
+        duration_ms:
+          type: [integer, "null"]
+          minimum: 0
+        artifact_ids:
+          type: array
+          items: { type: string }
+          description: ArtifactRef[] only. Artifact bodies must be read through GET /v1/artifacts/{artifact_id}.
+        stagehand_calls:
+          type: array
+          items: { $ref: '#/components/schemas/StagehandCallSummary' }
+        exception:
+          anyOf:
+            - type: "null"
+            - $ref: '#/components/schemas/StepExceptionSummary'
+
+    StagehandCallSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        model: { type: [string, "null"] }
+        transport: { type: [string, "null"] }
+        stream_status: { type: [string, "null"] }
+        ttfb_ms: { type: [integer, "null"], minimum: 0 }
+        input_tokens: { type: [integer, "null"], minimum: 0 }
+        output_tokens: { type: [integer, "null"], minimum: 0 }
+        cost: { type: [string, "null"] }
+
+    StepExceptionSummary:
+      type: object
+      additionalProperties: false
+      required: [class, code]
+      properties:
+        class:
+          type: string
+          enum: [business, system, security, challenge]
+        code:
+          type: string
 
     GenerationArtifact:
       allOf:

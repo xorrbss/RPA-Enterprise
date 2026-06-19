@@ -18,6 +18,7 @@ export type SupportedControlPlaneOperationId = Extract<
   OperationId,
   | "createRun"
   | "getRun"
+  | "listRunSteps"
   | "listRunArtifacts"
   | "listRuns"
   | "abortRun"
@@ -98,6 +99,14 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     path: "/v1/runs/{run_id}",
     paramsSchemaRef: "#/components/schemas/RunPathParams",
     responseSchemaRef: "#/components/schemas/Run",
+    rbacAction: "run.read",
+  }),
+  operation({
+    operationId: "listRunSteps",
+    method: "GET",
+    path: "/v1/runs/{run_id}/steps",
+    paramsSchemaRef: "#/components/schemas/RunPathParams",
+    responseSchemaRef: "#/components/schemas/RunStepList",
     rbacAction: "run.read",
   }),
   operation({
@@ -444,6 +453,7 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
 
 const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<OperationId, BoundaryValidator>([
   ["getRun", requireParams("#/components/schemas/RunPathParams", ["run_id"])],
+  ["listRunSteps", requireParams("#/components/schemas/RunPathParams", ["run_id"])],
   ["listRunArtifacts", requireParams("#/components/schemas/RunPathParams", ["run_id"])],
   ["abortRun", requireParams("#/components/schemas/RunPathParams", ["run_id"])],
   ["validateScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],

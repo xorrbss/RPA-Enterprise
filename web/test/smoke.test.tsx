@@ -547,6 +547,98 @@ describe("D7 운영 콘솔 shell", () => {
     );
   });
 
+  test("최근 생성: 시나리오 이름 검색과 커서 페이지로 저장된 생성 이력을 찾는다", async () => {
+    const calls: Array<{ cursor?: string; status?: string }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [
+            {
+              scenario_id: "00000000-0000-0000-0000-0000000000c1",
+              name: "월간 정산 수집",
+              version: 1,
+              latest_version_id: "00000000-0000-0000-0000-0000000000c2",
+              promotion_status: "draft",
+            },
+            {
+              scenario_id: "00000000-0000-0000-0000-0000000000d1",
+              name: "결제 승인 점검",
+              version: 1,
+              latest_version_id: "00000000-0000-0000-0000-0000000000d2",
+              promotion_status: "draft",
+            },
+          ],
+          next_cursor: null,
+        }),
+        listScenarioGenerations: async (params) => {
+          calls.push({ cursor: params?.cursor, status: params?.status });
+          if (params?.cursor === "cursor-2") {
+            return {
+              items: [
+                {
+                  generation_id: "00000000-0000-0000-0000-0000000000e1",
+                  mode: "save",
+                  status: "saved",
+                  prompt_hash: "page-two-hash",
+                  planner: "deterministic_mvp",
+                  model: null,
+                  scenario_id: "00000000-0000-0000-0000-0000000000d1",
+                  scenario_version_id: "00000000-0000-0000-0000-0000000000d2",
+                  run_id: null,
+                  evidence_policy: { screenshot: "failure", video: "never" },
+                  blockers: [],
+                  draft_ir: {},
+                  validation_report: {},
+                  created_at: "2026-06-15T00:02:00.000Z",
+                  created_by: "operator",
+                },
+              ],
+              next_cursor: null,
+            };
+          }
+          return {
+            items: [
+              {
+                generation_id: "00000000-0000-0000-0000-0000000000c9",
+                mode: "save_and_run",
+                status: "run_queued",
+                prompt_hash: "monthly-hash",
+                planner: "llm_v1",
+                model: "gpt-4o-mini",
+                scenario_id: "00000000-0000-0000-0000-0000000000c1",
+                scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+                run_id: "00000000-0000-0000-0000-000000000099",
+                evidence_policy: { screenshot: "each_step", video: "always" },
+                blockers: [],
+                draft_ir: {},
+                validation_report: {},
+                created_at: "2026-06-15T00:01:00.000Z",
+                created_by: "operator",
+              },
+            ],
+            next_cursor: "cursor-2",
+          };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    const search = await screen.findByLabelText("생성 검색");
+    const history = search.closest(".generation-history") as HTMLElement;
+    expect(await within(history).findByText(/월간 정산 수집/)).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "월간" } });
+    expect(await within(history).findByText(/월간 정산 수집/)).toBeInTheDocument();
+    expect(within(history).queryByText(/현재 페이지에서 일치하는 생성이 없습니다/)).toBeNull();
+
+    fireEvent.change(search, { target: { value: "" } });
+    fireEvent.click(await within(history).findByRole("button", { name: "다음" }));
+
+    await waitFor(() => expect(calls.some((call) => call.cursor === "cursor-2")).toBe(true));
+    expect(await within(history).findByText(/결제 승인 점검/)).toBeInTheDocument();
+    expect(within(history).getByText("2 페이지")).toBeInTheDocument();
+  });
+
   test("최근 생성: blocked 항목은 진단 요약과 planner 산출물을 선택 표시", async () => {
     renderApp(
       fakeClient({

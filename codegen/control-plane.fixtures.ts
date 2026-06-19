@@ -166,6 +166,29 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
     ref: "artifact://quarantined",
     body: { quarantined: true },
   }],
+  runSteps: [{
+    step_id: "step-1",
+    tenant_id: tenantId,
+    run_id: "run-existing",
+    node_id: "extract_results",
+    action: "extract",
+    status: "success",
+    attempt: 1,
+    cache_mode: "miss",
+    started_at: "2026-06-13T00:00:00.000Z",
+    ended_at: "2026-06-13T00:00:01.000Z",
+    duration_ms: 1000,
+    artifact_ids: ["artifact-redacted"],
+    stagehand_calls: [{
+      model: "gpt-4o-mini",
+      transport: "sse",
+      stream_status: "done",
+      input_tokens: 128,
+      output_tokens: 32,
+      cost: "0.001",
+    }],
+    exception: null,
+  }],
   gatewayPolicies: [{
     id: "gp-default",
     tenant_id: tenantId,
@@ -191,6 +214,7 @@ const operationIds = CONTROL_PLANE_OPERATION_BINDINGS.map((binding) => binding.o
 for (const operationId of [
   "createRun",
   "getRun",
+  "listRunSteps",
   "listRunArtifacts",
   "listRuns",
   "abortRun",
@@ -233,6 +257,7 @@ assert.equal(registry.getOperation("deleteGatewayPolicy").ifMatch?.entity, "gate
 assert.equal(registry.getOperation("deleteGatewayPolicy").requiresIdempotencyKey, true);
 assert.equal(staticRbacAction("createRun"), "run.create");
 assert.equal(staticRbacAction("abortRun"), "run.abort");
+assert.equal(staticRbacAction("listRunSteps"), "run.read");
 assert.equal(staticRbacAction("listRunArtifacts"), "artifact.read");
 assert.equal(staticRbacAction("validateScenario"), "scenario.read");
 assert.equal(staticRbacAction("promoteScenario"), "scenario.promote");
@@ -262,6 +287,7 @@ assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ model:
 assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({}).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({ run_id: "run-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("listRunSteps")?.validate({ run_id: "run-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("listRunArtifacts")?.validate({ run_id: "run-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("assignHumanTask")?.validate({ human_task_id: "task-open" }).valid, true);
 assert.equal(registry.getQueryValidator("listRuns")?.validate(undefined).valid, false);
@@ -366,6 +392,19 @@ const artifact = await handlers.getArtifact!(ctx("getArtifact", {
 }));
 assert.equal(artifact.status, 200);
 assert.equal((artifact.body as { ref: string }).ref, "artifact://redacted");
+
+const stepList = await handlers.listRunSteps!(ctx("listRunSteps", {
+  method: "GET",
+  path: "/v1/runs/{run_id}/steps",
+  params: { run_id: "run-existing" },
+}));
+assert.equal(stepList.status, 200);
+const stepItems = (stepList.body as { items: Array<Record<string, unknown>> }).items;
+assert.equal(stepItems.length, 1);
+assert.equal(stepItems[0]?.step_id, "step-1");
+assert.deepEqual(stepItems[0]?.artifact_ids, ["artifact-redacted"]);
+assert.equal(Object.prototype.hasOwnProperty.call(stepItems[0], "output"), false);
+assert.equal(Object.prototype.hasOwnProperty.call(stepItems[0], "page_state_before"), false);
 
 const artifactList = await handlers.listRunArtifacts!(ctx("listRunArtifacts", {
   method: "GET",

@@ -73,6 +73,23 @@ export interface MinimalArtifact {
   body: unknown;
 }
 
+export interface MinimalRunStep {
+  step_id: string;
+  tenant_id: string;
+  run_id: string;
+  node_id: string;
+  action: string;
+  status: string;
+  attempt?: number;
+  cache_mode?: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_ms?: number | null;
+  artifact_ids?: readonly string[];
+  stagehand_calls?: readonly Record<string, unknown>[];
+  exception?: { class?: string; code?: string } | null;
+}
+
 export interface MinimalGatewayPolicy {
   id: string;
   tenant_id: string;
@@ -99,6 +116,7 @@ export interface MinimalControlPlaneSeed {
   humanTasks?: readonly MinimalHumanTask[];
   workitems?: readonly MinimalWorkitem[];
   artifacts?: readonly MinimalArtifact[];
+  runSteps?: readonly MinimalRunStep[];
   gatewayPolicies?: readonly MinimalGatewayPolicy[];
   sites?: readonly MinimalSite[];
 }
@@ -107,6 +125,7 @@ export interface MinimalControlPlaneServices {
   createRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listRuns(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listRunSteps(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listRunArtifacts(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   abortRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   validateScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -138,6 +157,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private readonly humanTasks = new Map<string, MinimalHumanTask>();
   private readonly workitems = new Map<string, MinimalWorkitem>();
   private readonly artifacts = new Map<string, MinimalArtifact>();
+  private readonly runSteps: MinimalRunStep[] = [];
   private readonly gatewayPolicies = new Map<string, MinimalGatewayPolicy>();
   private readonly sites = new Map<string, MinimalSite>();
   private readonly artifactGate: ArtifactAccessGate;
@@ -152,6 +172,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     for (const artifact of seed.artifacts ?? []) {
       this.artifacts.set(key(artifact.tenant_id, artifact.artifact_id), { ...artifact });
     }
+    this.runSteps.push(...(seed.runSteps ?? []).map((step) => ({ ...step })));
     for (const policy of seed.gatewayPolicies ?? []) {
       this.gatewayPolicies.set(key(policy.tenant_id, policy.model), { ...policy });
     }
@@ -193,6 +214,33 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
         (status === undefined || run.status === status) &&
         (scenarioVersionId === undefined || run.scenario_version_id === scenarioVersionId),
     );
+    return page(items);
+  }
+
+  async listRunSteps(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const runId = requireParam(ctx, "run_id");
+    const items = this.runSteps
+      .filter((step) => step.tenant_id === tenant(ctx) && step.run_id === runId)
+      .map((step) => ({
+        step_id: step.step_id,
+        node_id: step.node_id,
+        action: step.action,
+        status: step.status,
+        attempt: step.attempt ?? 0,
+        cache_mode: step.cache_mode ?? "bypass",
+        started_at: step.started_at ?? null,
+        ended_at: step.ended_at ?? null,
+        duration_ms: step.duration_ms ?? null,
+        artifact_ids: step.artifact_ids ?? [],
+        stagehand_calls: step.stagehand_calls ?? [],
+        exception:
+          step.exception === undefined || step.exception === null
+            ? null
+            : {
+                class: step.exception.class ?? "system",
+                code: step.exception.code ?? "UNKNOWN",
+              },
+      }));
     return page(items);
   }
 
@@ -545,6 +593,7 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     createRun: bind(services.createRun),
     getRun: bind(services.getRun),
     listRuns: bind(services.listRuns),
+    listRunSteps: bind(services.listRunSteps),
     listRunArtifacts: bind(services.listRunArtifacts),
     abortRun: bind(services.abortRun),
     validateScenario: bind(services.validateScenario),
