@@ -1,5 +1,4 @@
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
-import { useSyncExternalStore } from "react";
 
 import { hhmmss } from "../util/time";
 
@@ -20,13 +19,9 @@ function maxSuccessAt(qc: ReturnType<typeof useQueryClient>): number {
 export function Freshness(): JSX.Element {
   const fetching = useIsFetching();
   const qc = useQueryClient();
-  // query cache 구독은 useSyncExternalStore로 — getSnapshot이 원시값(number, 단조 증가)을 반환하므로
-  // 다른 컴포넌트 렌더 중 cache 이벤트가 와도 렌더 중 setState 없이 안전하게 최신값을 읽는다.
-  // (직접 subscribe+setState는 '다른 컴포넌트 렌더 중 setState' React 경고를 유발.)
-  const lastSuccessAt = useSyncExternalStore(
-    (onChange) => qc.getQueryCache().subscribe(onChange),
-    () => maxSuccessAt(qc),
-  );
+  // useIsFetching가 fetch 시작/완료 시 rerender를 보장하므로, query cache 직접 구독 없이 성공 시각만 읽는다.
+  // 직접 구독은 다른 컴포넌트 렌더 중 cache 알림이 들어올 때 React 경고를 만들 수 있다.
+  const lastSuccessAt = maxSuccessAt(qc);
   return (
     <>
       <div className={`route-progress${fetching > 0 ? " active" : ""}`} aria-hidden="true" />

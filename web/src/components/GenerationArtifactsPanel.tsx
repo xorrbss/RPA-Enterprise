@@ -57,21 +57,27 @@ export function GenerationArtifactsPanel({
     refetchInterval: 10_000,
   });
   const items = list.data?.items ?? [];
-
+  const effectiveSelectedId =
+    selectedId !== null && items.some((item) => item.artifact_id === selectedId)
+      ? selectedId
+      : items[0]?.artifact_id ?? null;
   useEffect(() => {
-    if (selectedId === null && items[0] !== undefined) {
-      setSelectedId(items[0].artifact_id);
-    } else if (selectedId !== null && items.length > 0 && !items.some((item) => item.artifact_id === selectedId)) {
+    if (items.length === 0) {
+      if (selectedId !== null) setSelectedId(null);
+      return;
+    }
+    if (selectedId === null || !items.some((item) => item.artifact_id === selectedId)) {
       setSelectedId(items[0]?.artifact_id ?? null);
     }
   }, [items, selectedId]);
-
-  const selected = items.find((item) => item.artifact_id === selectedId);
+  const selected = items.find((item) => item.artifact_id === effectiveSelectedId);
   const selectedMediaType = previewGenerationArtifactMediaType(selected);
+  const detailSelected = items.find((item) => item.artifact_id === selectedId);
+  const detailMediaType = previewGenerationArtifactMediaType(detailSelected);
   const detail = useQuery({
     queryKey: ["scenario-generation-artifact", generationId, selectedId],
     queryFn: () => api.getScenarioGenerationArtifact(generationId, selectedId as string),
-    enabled: selectedId !== null && selectedMediaType === null,
+    enabled: selectedId !== null && detailMediaType === null,
   });
 
   return (
@@ -95,7 +101,7 @@ export function GenerationArtifactsPanel({
             {items.map((item) => (
               <button
                 key={item.artifact_id}
-                className={item.artifact_id === selectedId ? "active" : ""}
+                className={item.artifact_id === effectiveSelectedId ? "active" : ""}
                 type="button"
                 onClick={() => setSelectedId(item.artifact_id)}
               >
@@ -110,7 +116,7 @@ export function GenerationArtifactsPanel({
               <div className="inline-facts">
                 <span className="subtle">선택</span>
                 <code>{selected.artifact_id.slice(0, 8)}</code>
-                <span className="subtle">{selected.type}</span>
+                <span className="subtle">유형 {selected.type}</span>
               </div>
             )}
             {selected !== undefined && selectedMediaType !== null ? (

@@ -424,21 +424,21 @@ function RunArtifactsList({
     items.find(isPreviewableMedia) ??
     items.find((a) => /json|extract|output|result/i.test(a.type)) ??
     items[0];
-  const selectedItem = items.find((a) => a.artifact_id === selectedId);
+  const effectiveSelectedId =
+    selectedId !== null && items.some((a) => a.artifact_id === selectedId)
+      ? selectedId
+      : preferred?.artifact_id ?? null;
+  const selectedItem = items.find((a) => a.artifact_id === effectiveSelectedId);
   const selectedIsMedia = isPreviewableMedia(selectedItem);
   const selectedMediaType = previewMediaType(selectedItem);
   const counts = artifactSummary(items);
   useEffect(() => {
     if (focusOnMount) artifactsRef.current?.focus();
   }, [focusOnMount]);
-  useEffect(() => {
-    if (selectedId === null && preferred !== undefined) setSelectedId(preferred.artifact_id);
-    if (selectedId !== null && items.length > 0 && !items.some((a) => a.artifact_id === selectedId)) setSelectedId(preferred?.artifact_id ?? null);
-  }, [items, preferred, selectedId]);
   const detail = useQuery({
-    queryKey: ["artifact-detail", selectedId],
-    queryFn: () => api.getArtifact(selectedId as string),
-    enabled: selectedId !== null && !selectedIsMedia,
+    queryKey: ["artifact-detail", effectiveSelectedId],
+    queryFn: () => api.getArtifact(effectiveSelectedId as string),
+    enabled: effectiveSelectedId !== null && !selectedIsMedia,
   });
   const summary = detail.data !== undefined ? summarizeJsonArtifact(detail.data) : null;
   return (
@@ -475,7 +475,7 @@ function RunArtifactsList({
                   const kind = mediaKind(a);
                   const labels = mediaMetaLabels(a);
                   return (
-                    <tr key={a.artifact_id} data-current={a.artifact_id === selectedId ? "true" : undefined}>
+                    <tr key={a.artifact_id} data-current={a.artifact_id === effectiveSelectedId ? "true" : undefined}>
                       <td><ArtifactRef id={a.artifact_id} /></td>
                       <td>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -494,7 +494,7 @@ function RunArtifactsList({
                       <td>{a.legal_hold ? "예" : "—"}</td>
                       <td>
                         <button className="btn" type="button" onClick={() => setSelectedId(a.artifact_id)}>
-                          {a.artifact_id === selectedId ? "선택됨" : "미리보기"}
+                          {a.artifact_id === effectiveSelectedId ? "선택됨" : "미리보기"}
                         </button>
                       </td>
                     </tr>
@@ -503,11 +503,11 @@ function RunArtifactsList({
               </tbody>
             </table>
           </div>
-          {selectedId !== null && (
+          {effectiveSelectedId !== null && (
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <strong style={{ fontSize: 13 }}>본문 미리보기</strong>
-                <code>{shortId(selectedId)}</code>
+                <code>{shortId(effectiveSelectedId)}</code>
                 {summary !== null && <span className="badge green">{summary.label} {summary.count}건</span>}
                 {summary !== null && summary.keys.length > 0 && <span className="subtle">키 {summary.keys.join(", ")}</span>}
               </div>
