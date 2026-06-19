@@ -356,7 +356,7 @@ async function main(): Promise<void> {
         genItems.length === 2 &&
           genItems[0]?.artifact_id === genVisible.id &&
           genItems[1]?.artifact_id === genNotRequired.id &&
-          genItems.every((item) => item.type === "scenario_generation_llm_output"),
+          genItems.every((item) => item.type === "scenario_generation_llm_output" && item.step_id === null && item.attempt === null),
         JSON.stringify(genItems),
       );
       for (const secret of ["pending planner body", "redacted planner body", genVisible.sha256, "object_ref", "sha256", "content"]) {

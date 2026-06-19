@@ -133,8 +133,9 @@ paths:
       summary: run artifact list
       description: >
         Run-scoped image/video/result artifact list. The response is metadata-only and never exposes
-        content, object_ref, sha256, or secret material. Body/blob reads must still pass the artifact
-        redaction, RBAC, and audit gates.
+        content, object_ref, sha256, or secret material. Step-scoped artifacts include nullable
+        step_id/attempt provenance so review UIs can group screenshots and outputs by executor attempt.
+        Body/blob reads must still pass the artifact redaction, RBAC, and audit gates.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -388,7 +389,8 @@ paths:
       summary: 자연어 생성 산출물 목록 조회
       description: >
         generation-scoped planner/output artifact 목록. metadata-only 응답이며 content/object_ref/sha256은 노출하지 않는다.
-        본문 조회는 scoped artifact body route 또는 전역 artifact route의 redaction/RBAC/audit 게이트를 통과해야 한다.
+        generation artifact는 run/step 이전 산출물이므로 step_id/attempt provenance는 null이다. 본문 조회는 scoped artifact
+        body route 또는 전역 artifact route의 redaction/RBAC/audit 게이트를 통과해야 한다.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -2080,8 +2082,16 @@ components:
       type: object
       description: >
         자연어 generation 하위 artifact 목록 항목. metadata-only이며 content/object_ref/sha256은 노출하지 않는다.
+        run/step 이전 generation artifact에서는 step_id/attempt가 null이다.
       properties:
         artifact_id: { type: string }
+        step_id:
+          type: [string, "null"]
+          description: 생성 step id provenance. run-level 또는 generation-level artifact는 null.
+        attempt:
+          type: [integer, "null"]
+          minimum: 0
+          description: step attempt provenance. run-level 또는 generation-level artifact는 null.
         type: { type: string }
         media_type:
           type: [string, "null"]
@@ -2106,7 +2116,9 @@ components:
     RunArtifactItem:
       allOf:
         - $ref: '#/components/schemas/GenerationArtifactItem'
-      description: run-scoped artifact list item. Metadata-only; content, object_ref, and sha256 are excluded.
+      description: >
+        run-scoped artifact list item. Metadata-only; content, object_ref, and sha256 are excluded.
+        step_id/attempt are populated for step-scoped artifacts and null for run-level artifacts.
 
     RunStep:
       type: object

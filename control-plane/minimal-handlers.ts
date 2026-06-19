@@ -58,6 +58,8 @@ export interface MinimalArtifact {
   artifact_id: string;
   tenant_id: string;
   run_id?: string;
+  step_id?: string | null;
+  attempt?: number | null;
   type?: string;
   media_type?: string | null;
   filename?: string | null;
@@ -257,6 +259,8 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       )
       .map((artifact) => ({
         artifact_id: artifact.artifact_id,
+        step_id: artifact.step_id ?? null,
+        attempt: artifact.attempt ?? null,
         type: artifact.type ?? "artifact",
         media_type: artifact.media_type ?? null,
         filename: artifact.filename ?? null,

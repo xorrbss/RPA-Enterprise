@@ -3,7 +3,7 @@
  *
  * 실행(temp PG15 게이트):
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/api-run-artifacts.int.ts
- * 검증: metadata-only(artifact_id/type/redaction_status/retention_until/legal_hold/created_at)·**민감 미노출**
+ * 검증: metadata-only(artifact_id/step_id/attempt/type/redaction_status/retention_until/legal_hold/created_at)·**민감 미노출**
  *       (content/object_ref/sha256)·RLS 가시성(pending/quarantine/deleted 누락)·newest-first 커서·cross-tenant 격리·
  *       artifact.read RBAC·404(malformed run_id).
  */
@@ -31,6 +31,7 @@ const SCEN_B = "70000000-0000-0000-0000-0000000000b3";
 const SVER_B = "70000000-0000-0000-0000-0000000000b4";
 const RUN_A = "71000000-0000-0000-0000-0000000000a1";
 const RUN_B = "71000000-0000-0000-0000-0000000000b1";
+const STEP_ARTIFACT_ID = "capture_start";
 
 const SECRET = new TextEncoder().encode("run-artifacts-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -69,18 +70,30 @@ async function seedScenarioRun(pool: Pool, tenant: string, scen: string, sver: s
   });
 }
 
+async function seedRunStep(pool: Pool, tenant: string, run: string, stepId: string, attempt: number): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO run_steps (id, tenant_id, run_id, step_id, node_id, attempt, action, status, artifacts, started_at, ended_at, duration_ms)
+       VALUES ('73000000-0000-0000-0000-0000000000a1'::uuid,$1::uuid,$2::uuid,$3,$3,$4,'observe','success',
+               ARRAY['72000000-0000-0000-0000-0000000000a1'], '2026-06-15T00:00:00Z', '2026-06-15T00:00:01Z', 1000)`,
+      [tenant, run, stepId, attempt],
+    ),
+  );
+}
+
 interface ArtSeed {
   id: string; type: string; redaction: string; quarantine?: boolean; deleted?: string | null;
   sha256: string; objectRef: string; createdAt: string;
+  stepId?: string | null; attempt?: number | null;
   mediaType?: string; filename?: string; byteSize?: number; durationMs?: number;
 }
 async function seedArtifact(pool: Pool, tenant: string, run: string, a: ArtSeed): Promise<void> {
   await withTenantTx(pool, tenant, (c) =>
     c.query(
-      `INSERT INTO artifacts (id, tenant_id, run_id, type, media_type, filename, byte_size, duration_ms, redaction_status, sha256, object_ref,
+      `INSERT INTO artifacts (id, tenant_id, run_id, step_id, attempt, type, media_type, filename, byte_size, duration_ms, redaction_status, sha256, object_ref,
                               retention_until, quarantine, deleted_at, deleted_reason, created_at)
-       VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7::bigint,$8::int,$9,$10,$11,'2026-09-01T00:00:00Z',$12,$13::timestamptz,$14,$15::timestamptz)`,
-      [a.id, tenant, run, a.type, a.mediaType ?? null, a.filename ?? null, a.byteSize ?? null, a.durationMs ?? null,
+       VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::int,$6,$7,$8,$9::bigint,$10::int,$11,$12,$13,'2026-09-01T00:00:00Z',$14,$15::timestamptz,$16,$17::timestamptz)`,
+      [a.id, tenant, run, a.stepId ?? null, a.attempt ?? null, a.type, a.mediaType ?? null, a.filename ?? null, a.byteSize ?? null, a.durationMs ?? null,
        a.redaction, a.sha256, a.objectRef, a.quarantine ?? false,
        a.deleted ?? null, a.deleted !== undefined && a.deleted !== null ? "test" : null, a.createdAt],
     ),
@@ -102,8 +115,9 @@ async function main(): Promise<void> {
     }
 
     await seedScenarioRun(pool, TENANT_A, SCEN_A, SVER_A, RUN_A);
+    await seedRunStep(pool, TENANT_A, RUN_A, STEP_ARTIFACT_ID, 2);
     // 가시 2건(redacted/not_required) + 비가시 3건(pending/quarantine/deleted)
-    await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a1", type: "screenshot", mediaType: "image/png", filename: "step-ok.png", byteSize: 12345, redaction: "redacted", sha256: "SHA-SECRET-A1", objectRef: "obj://SECRET-A1", createdAt: "2026-06-15T00:00:01Z" });
+    await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a1", stepId: STEP_ARTIFACT_ID, attempt: 2, type: "screenshot", mediaType: "image/png", filename: "step-ok.png", byteSize: 12345, redaction: "redacted", sha256: "SHA-SECRET-A1", objectRef: "obj://SECRET-A1", createdAt: "2026-06-15T00:00:01Z" });
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a2", type: "video", mediaType: "video/webm", filename: "run.webm", byteSize: 67890, durationMs: 4200, redaction: "not_required", sha256: "SHA-SECRET-A2", objectRef: "obj://SECRET-A2", createdAt: "2026-06-15T00:00:02Z" });
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a3", type: "vlm_input", redaction: "pending", sha256: "SHA-SECRET-A3", objectRef: "obj://SECRET-A3", createdAt: "2026-06-15T00:00:03Z" });
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a4", type: "screenshot", redaction: "redacted", quarantine: true, sha256: "SHA-SECRET-A4", objectRef: "obj://SECRET-A4", createdAt: "2026-06-15T00:00:04Z" });
@@ -135,8 +149,14 @@ async function main(): Promise<void> {
       check("newest-first(a2 video → a1 screenshot)", items[0]?.type === "video" && items[1]?.type === "screenshot", JSON.stringify(items.map((i) => i.type)));
 
       // 2) metadata 필드
-      check("metadata 필드(artifact_id/type/redaction_status/retention_until/legal_hold/created_at)",
+      check("metadata 필드(artifact_id/step_id/attempt/type/redaction_status/retention_until/legal_hold/created_at)",
         items[0]?.artifact_id === "72000000-0000-0000-0000-0000000000a2" && items[0]?.redaction_status === "not_required" && items[0]?.legal_hold === false && typeof items[0]?.created_at === "string");
+      check("run-level video provenance is null",
+        items[0]?.step_id === null && items[0]?.attempt === null,
+        JSON.stringify(items[0]));
+      check("step screenshot exposes provenance metadata",
+        items[1]?.step_id === STEP_ARTIFACT_ID && items[1]?.attempt === 2,
+        JSON.stringify(items[1]));
       check("media metadata exposed for image/video results",
         items[0]?.media_type === "video/webm" && items[0]?.filename === "run.webm" && items[0]?.byte_size === 67890 && items[0]?.duration_ms === 4200,
         JSON.stringify(items[0]));

@@ -167,6 +167,8 @@ function normalizeFailureReason(value: unknown): { code: string; message: string
 
 interface RunArtifactRow {
   id: string;
+  step_id: string | null;
+  attempt: number | null;
   type: string;
   media_type: string | null;
   filename: string | null;
@@ -295,8 +297,8 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     },
   );
 
-  // GET /v1/runs/{run_id}/artifacts — run 하위 artifact 목록(api-surface §5). **metadata-only** — content 본문·object_ref·
-  //   sha256(원본 무결성 해시=fingerprint)은 미노출. 본문 열람은 GET /v1/artifacts/{id}(§10 audit 게이트). 목록은
+  // GET /v1/runs/{run_id}/artifacts — run 하위 artifact 목록(api-surface §5). **metadata-only** — step provenance와
+  //   media hints만 노출하고 content 본문·object_ref·sha256(원본 무결성 해시=fingerprint)은 미노출. 본문 열람은 GET /v1/artifacts/{id}(§10 audit 게이트). 목록은
   //   content를 read하지 않아 disclosure 경로 아님 → audit 불요. RLS artifacts_visible_isolation이 가시성(redacted/
   //   not_required·미삭제·비격리·동tenant) 강제. artifact.read RBAC(deny→SECRET_ACCESS_DENIED).
   app.get<{ Params: { id: string } }>(
@@ -313,7 +315,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<RunArtifactRow>(
-          `SELECT id, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
+          `SELECT id, step_id, attempt, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
                   redaction_status, retention_until, legal_hold, created_at
              FROM artifacts
             WHERE tenant_id = $1::uuid AND run_id = $2::uuid
@@ -332,6 +334,8 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           (r) => ({ createdAt: r.created_at, id: r.id }),
           (r) => ({
             artifact_id: r.id,
+            step_id: r.step_id,
+            attempt: r.attempt,
             type: r.type,
             media_type: r.media_type,
             filename: r.filename,
@@ -362,7 +366,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<RunArtifactRow>(
-          `SELECT id, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
+          `SELECT id, step_id, attempt, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
                   redaction_status, retention_until, legal_hold, created_at
              FROM artifacts
             WHERE tenant_id = $1::uuid AND generation_id = $2::uuid
@@ -381,6 +385,8 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           (r) => ({ createdAt: r.created_at, id: r.id }),
           (r) => ({
             artifact_id: r.id,
+            step_id: r.step_id,
+            attempt: r.attempt,
             type: r.type,
             media_type: r.media_type,
             filename: r.filename,

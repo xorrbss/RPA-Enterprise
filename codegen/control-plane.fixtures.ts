@@ -138,6 +138,8 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
     artifact_id: "artifact-redacted",
     tenant_id: tenantId,
     run_id: "run-existing",
+    step_id: "step-1",
+    attempt: 1,
     type: "video",
     media_type: "video/webm",
     filename: "run-recording.webm",
@@ -415,6 +417,8 @@ assert.equal(artifactList.status, 200);
 const artifactItems = (artifactList.body as { items: Array<Record<string, unknown>> }).items;
 assert.equal(artifactItems.length, 1);
 assert.equal(artifactItems[0]?.artifact_id, "artifact-redacted");
+assert.equal(artifactItems[0]?.step_id, "step-1");
+assert.equal(artifactItems[0]?.attempt, 1);
 assert.equal(artifactItems[0]?.media_type, "video/webm");
 assert.equal(artifactItems[0]?.duration_ms, 1200);
 assert.equal(Object.prototype.hasOwnProperty.call(artifactItems[0], "ref"), false);
