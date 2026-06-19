@@ -448,9 +448,9 @@ function EvidenceStorageReadout({
         <span className="badge muted">{policy.screenshot === "failure" ? "실패 시 이미지 저장 대기" : "이미지 저장 대기"}</span>
       )}
       {waitingVideo && <span className="badge muted">{policy.video === "failure" ? "실패 시 동영상 저장 대기" : "동영상 저장 대기"}</span>}
-      {missingFailureScreenshot && <span className="badge amber">실패 스크린샷 미저장</span>}
-      {missingScreenshot && <span className="badge amber">요청 이미지 미저장</span>}
-      {missingVideo && <span className="badge amber">요청 동영상 미저장</span>}
+      {missingFailureScreenshot && <span className="badge amber">실패 스크린샷 미표시(처리 중 가능)</span>}
+      {missingScreenshot && <span className="badge amber">요청 이미지 미표시(처리 중 가능)</span>}
+      {missingVideo && <span className="badge amber">요청 동영상 미표시(처리 중 가능)</span>}
     </div>
   );
 }

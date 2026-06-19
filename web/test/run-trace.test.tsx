@@ -689,9 +689,46 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     const readout = await screen.findByLabelText("evidence storage");
     expect(readout).toHaveTextContent("요청 이미지: 실패 시");
     expect(readout).toHaveTextContent("저장 이미지 0");
-    expect(readout).toHaveTextContent("실패 스크린샷 미저장");
-    expect(readout).not.toHaveTextContent("요청 이미지 미저장");
+    expect(readout).toHaveTextContent("실패 스크린샷 미표시(처리 중 가능)");
+    expect(readout).not.toHaveTextContent("요청 이미지 미표시");
     expect(readout).not.toHaveTextContent("저장 대기");
+    expect(readout).not.toHaveTextContent("미저장");
+  });
+
+  test("completed prompt-created run treats hidden evidence artifacts as redaction-aware unavailable", async () => {
+    const runId = "11111111-aaaa-bbbb-cccc-000000000001";
+    const generationId = "00000000-0000-0000-0000-0000000000a1";
+    renderApp(fakeClient({
+      getRun: async (id) => ({ run_id: id, status: "completed", worker_id: "w1", attempts: 1, as_of: null }),
+      getScenarioGeneration: async (id) => ({
+        generation_id: id,
+        mode: "save_and_run",
+        status: "run_queued",
+        prompt_hash: "hash",
+        planner: "llm_v1",
+        model: "gpt-4o-mini",
+        scenario_id: "00000000-0000-0000-0000-0000000000c1",
+        scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+        run_id: runId,
+        evidence_policy: { screenshot: "each_step", video: "always" },
+        blockers: [],
+        created_at: "2026-06-18T00:00:00.000Z",
+        created_by: "operator",
+        draft_ir: {},
+        validation_report: {},
+      }),
+      listRunArtifacts: async () => ({ items: [], next_cursor: null }),
+    }));
+    location.hash = `#runTrace?run=${runId}&generation=${generationId}&focus=artifacts`;
+
+    const readout = await screen.findByLabelText("evidence storage");
+    expect(readout).toHaveTextContent("요청 이미지: 매 단계");
+    expect(readout).toHaveTextContent("요청 동영상: 전체 실행");
+    expect(readout).toHaveTextContent("저장 이미지 0");
+    expect(readout).toHaveTextContent("저장 동영상 0");
+    expect(readout).toHaveTextContent("요청 이미지 미표시(처리 중 가능)");
+    expect(readout).toHaveTextContent("요청 동영상 미표시(처리 중 가능)");
+    expect(readout).not.toHaveTextContent("미저장");
   });
 
   test("run detail polling stays active until terminal status", () => {

@@ -3,9 +3,10 @@
 This report records the repository evidence for a Product Open Candidate state.
 It is a contract-first candidate report, not an external release approval or
 deployment authorization. The tagged Product Open Candidate baseline has green
-repo-controlled evidence on `main`; the current merged D4.4
-staging-readiness evidence is PR #8 plus post-merge `main` `Contract Gates`
-run `27499599708` on merge `276bae845c74c5d40f218dec661fdcdc255afac6`.
+repo-controlled evidence on `main`; the current merged repo-controlled
+evidence is the latest `main` `Contract Gates` run `27846709729` on merge
+`b46864550e4af70c7fc13ebbbf5b451b0a654c06`, superseding the earlier D4.4
+and Phase 7 remote evidence packets for current-main release judgment.
 This current merged delta names and evidences the durable security audit writer
 boundary, including PostgreSQL append evidence; any remaining active blocker is listed in
 `release-open-checklist.md` and the packets below. Product
@@ -287,13 +288,20 @@ Remote CI evidence:
   `https://github.com/xorrbss/RPA-Enterprise/pull/8`
 - PR #8 head `Contract Gates` run:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499567251`
-- `main` after PR #8:
+- Historical `main` after PR #8:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708`
   (`Contract Gates` success on merge `276bae845c74c5d40f218dec661fdcdc255afac6`).
-- Post-merge `main` required current-D4.4 job URLs:
+- Historical D4.4 post-merge required job URLs:
   `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945156`
   `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945033`
   `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945101`
+- Current `main` merged repo-controlled evidence:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27846709729`
+  (`Contract Gates` success on merge `b46864550e4af70c7fc13ebbbf5b451b0a654c06`).
+- Current `main` required job URLs:
+  `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27846709729/job/82417322634`
+  `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27846709729/job/82417322714`
+  `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27846709729/job/82417322609`
 - Phase 7 `main` runtime-delta `Contract Gates` attempt:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27525226281`
   on commit `6ac33af251bd362a4de200d2eba956d371408cf3`. The latest non-skipped
@@ -301,10 +309,12 @@ Remote CI evidence:
   not start hosted runner jobs. GitHub Actions annotations report that recent
   account payments have failed or the spending limit must be increased. **That
   billing/admin blocker is now resolved**: hosted-runner execution is restored and
-  `main` `Contract Gates` run `27609993667` (commit `848413ce`, post-merge of #82) is
-  `success` with the required `secret-scan` / `PostgreSQL 15 migration smoke` /
+  `main` `Contract Gates` run `27609993667` (commit `848413ce`, post-merge of #82)
+  first restored hosted-runner evidence, and the latest `main` `Contract Gates` run
+  `27846709729` (merge `b46864550e4af70c7fc13ebbbf5b451b0a654c06`) is the
+  current success with the required `secret-scan` / `PostgreSQL 15 migration smoke` /
   `App runtime typecheck and tests` job URLs, closing the remote job URL gate for the
-  Phase 7 delta (now merged on `main`).
+  Phase 7 delta as currently merged on `main`.
 
 Browser route smoke evidence:
 
@@ -340,9 +350,9 @@ Environment note:
 ## Remaining Gap to Product Open
 
 - Repo-controlled Product Open Candidate gap: none remain for the tagged
-  repo-controlled Product Open Candidate baseline. Current merged D4.4
-  staging-readiness remote evidence is represented by PR #8 and post-merge
-  `main` `Contract Gates` run `27499599708`; this closes only the
+  repo-controlled Product Open Candidate baseline. Current merged repo-controlled
+  remote evidence is represented by latest `main` `Contract Gates` run
+  `27846709729` on merge `b46864550e4af70c7fc13ebbbf5b451b0a654c06`; this closes only the
   repo-controlled D4.4 remote evidence pointer and does not close external
   staging/open approval or active external blockers.
 - Current D4.4 repo-controlled contract/runtime evidence includes
@@ -469,7 +479,7 @@ Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 - Resolved repo evidence: runtime executor orchestration and audit semantics now have a local path through `PgExecutorStepOrchestrator`, `ExecutorStepAttemptStore`, `PgExecutorInvocationRecorder`, and `PgExecutorCompletionCoordinator`; executor plugins run outside DB transactions, step-bound producer writes require `step.started`, system/security/challenge/uncertain outcomes map through explicit catalog-backed paths, lifecycle jobs are enqueued for artifact-producing terminal outcomes, and executor evidence does not misuse security-boundary `audit_log`.
 - Resolved (owner-ratified object-I/O evidence, D8-A15): Runtime artifact_redaction object I/O is evidenced on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via the real SecretStore (Vault AppRole → `VaultSecretStore.resolve`; `S3_SECRET_ACCESS_KEY` unset). `objectstore:smoke` PASS: the production `S3ArtifactRedactor` with the injected §4 `ContentRedactionTransform` reads the source object, masks it, and writes a redacted object to a new `ObjectRef`; a planted credential+email is confirmed ABSENT from the redacted object on re-GET, the `redact` real-port receipt carries `sha256`, and the self-check confirms no plaintext Secret/PII, accessKeyId, internal `ObjectRef`, or AWS-credential-shape in the printed output or raw rows. Redacted backend alias `[s3-staging-1]`; no host/credential recorded. Masking is honest best-effort §4 (not a completeness proof for arbitrary content). Scope-split (repo-controlled, NOT claimed from this smoke): the claim-lease/finalize CAS — `redaction_status` CAS from `pending`, quarantine/deleted claim skip, and `bypassrls.use` audit — live in `runtime-worker.ts` `claimRedactionArtifact` and are proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime-execution-gates row); the `redaction_attempts < max` threshold predicate is present in code (claim + finalize retry→failed) but exercised at attempts=0 only by that test. Owner ratification of an owner-operated local real object store is recorded in release-decisions D8-A15 and the amended Deploy-Time Provisioning Blockers gate. Former Required decision: provide real object-store redaction object-I/O evidence with SecretRef-backed credentials and redacted receipts.
 - Resolved (owner-ratified object-I/O evidence, D8-A15): Runtime artifact_retention external object deletion is evidenced on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via the real SecretStore (Vault AppRole → `VaultSecretStore.resolve`). `objectstore:smoke` PASS: the production `S3ArtifactRetentionStore.deleteObject` returns `deleted` on first delete of a real test object and `not_found` on re-delete (idempotent), each with a redacted real-port `delete` receipt; transient (5xx/network) maps to `transient_failed` with no tombstone. The `not_found` path required a real-S3 fix — `S3ObjectStore.deleteDistinguishing` now HEAD-checks existence before DELETE, because real S3/MinIO DELETE returns 204 even for a missing key (merged PR #103, with a method-aware unit test). Redacted backend alias `[s3-staging-1]`; no host/credential recorded. Scope-split (repo-controlled, NOT claimed from this smoke): legal-hold/quarantine SKIP and `deleted_at`-set-under-unexpired-claim CAS live in `runtime-worker.ts` retention claim (`legal_hold = false AND quarantine = false AND deleted_at IS NULL`) and are proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime-execution-gates row). Owner ratification recorded in release-decisions D8-A15 and the amended Deploy-Time Provisioning Blockers gate. Former Required decision: provide real external object deletion evidence with SecretRef-backed credentials, delete/not-found receipts, and legal-hold/quarantine handling.
-- Resolved (remote evidence): Runtime execution staging gates now have current remote `main` CI evidence. GitHub Actions hosted-runner execution is restored (the account payment/spending-limit blocker no longer applies — `main` `Contract Gates` runs start and succeed). The Phase 7 runtime delta is merged on `main` (`executor-step-orchestrator.ts` / `executor-completion-coordinator.ts` / `executor-invocation-recorder.ts`), and `main` `Contract Gates` run `27609993667` (commit `848413ce`) is `success` with the required job URLs — `App runtime typecheck and tests` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653454), `Secret scan` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653459), `PostgreSQL 15 migration smoke` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27609993667/job/81631653766). The `App runtime typecheck and tests` job runs `test:int` under a non-`SUPERUSER`/non-`BYPASSRLS` PostgreSQL 15 role, proving tenant boundary / RBAC/redaction / no `BYPASSRLS` / no silent false-unknown. Former Required decision: restore GitHub Actions hosted-runner execution, rerun `Contract Gates` on the Phase 7 `main` head, and provide the required PR/main job URLs.
+- Resolved (remote evidence): Runtime execution staging gates now have current remote `main` CI evidence. GitHub Actions hosted-runner execution is restored (the account payment/spending-limit blocker no longer applies — `main` `Contract Gates` runs start and succeed). The Phase 7 runtime delta is merged on `main` (`executor-step-orchestrator.ts` / `executor-completion-coordinator.ts` / `executor-invocation-recorder.ts`), and the latest `main` `Contract Gates` run `27846709729` (merge `b46864550e4af70c7fc13ebbbf5b451b0a654c06`) is `success` with the required job URLs — `App runtime typecheck and tests` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27846709729/job/82417322609), `Secret scan` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27846709729/job/82417322634), `PostgreSQL 15 migration smoke` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27846709729/job/82417322714). The `App runtime typecheck and tests` job runs `test:int` under a non-`SUPERUSER`/non-`BYPASSRLS` PostgreSQL 15 role, proving tenant boundary / RBAC/redaction / no `BYPASSRLS` / no silent false-unknown. Former Required decision: restore GitHub Actions hosted-runner execution, rerun `Contract Gates` on the Phase 7 `main` head, and provide the required PR/main job URLs.
 
 ### Durable Security Audit Writer Decision Packet
 
