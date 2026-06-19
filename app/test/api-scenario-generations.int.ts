@@ -544,6 +544,14 @@ async function main(): Promise<void> {
           runBody.draft_ir.meta.evidence.video === "never",
         runnable.body,
       );
+      const runParamsSchema: Record<string, unknown> = isRecord(runBody.draft_ir.params_schema) ? runBody.draft_ir.params_schema : {};
+      const runParamProperties: Record<string, unknown> = isRecord(runParamsSchema.properties) ? runParamsSchema.properties : {};
+      const runStartUrlSchema: Record<string, unknown> = isRecord(runParamProperties.start_url) ? runParamProperties.start_url : {};
+      check(
+        "generated IR preserves start_url default for later correction runs",
+        runStartUrlSchema.default === "https://example.com/notices",
+        runnable.body,
+      );
       await withTenantTx(pool, TENANT, async (client) => {
         const rows = await client.query<{ run_count: string; generation_count: string }>(
           `SELECT
@@ -803,10 +811,10 @@ async function main(): Promise<void> {
       const maxPagesSchema: Record<string, unknown> = isRecord(paginationParamProperties.max_pages) ? paginationParamProperties.max_pages : {};
       check(
         "pagination params schema bounds max_pages",
-        maxPagesSchema.type === "integer" &&
+          maxPagesSchema.type === "integer" &&
           maxPagesSchema.minimum === 1 &&
           maxPagesSchema.maximum === 10 &&
-          maxPagesSchema.default === 3 &&
+          maxPagesSchema.default === 4 &&
           Array.isArray(paginationParamsSchema.required) &&
           paginationParamsSchema.required.includes("max_pages"),
         paginationRun.body,
@@ -2082,6 +2090,9 @@ async function main(): Promise<void> {
           [blockedBody.generation_id],
         );
         const row = rows.rows[0];
+        const correctedParamsSchema: Record<string, unknown> = isRecord(row?.version_ir.params_schema) ? row.version_ir.params_schema : {};
+        const correctedParamProperties: Record<string, unknown> = isRecord(correctedParamsSchema.properties) ? correctedParamsSchema.properties : {};
+        const correctedStartUrlSchema: Record<string, unknown> = isRecord(correctedParamProperties.start_url) ? correctedParamProperties.start_url : {};
         check(
           "blocked generation correction persists run params/model",
           row?.run_params.start_url === "https://example.com/notices" &&
@@ -2095,7 +2106,8 @@ async function main(): Promise<void> {
             isRecord(row.version_ir.target) &&
             row.version_ir.target.site_profile_id === SITE &&
             Array.isArray(row.required) &&
-            row.required.includes("start_url"),
+            row.required.includes("start_url") &&
+            correctedStartUrlSchema.default === "https://example.com/notices",
           JSON.stringify(row),
         );
       });

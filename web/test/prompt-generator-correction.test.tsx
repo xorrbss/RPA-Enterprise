@@ -5,6 +5,7 @@ import { describe, expect, test, beforeEach } from "vitest";
 import { App } from "../src/App";
 import type { ApiClient } from "../src/api/client";
 import { ApiClientProvider } from "../src/api/context";
+import type { ScenarioGenerationResult } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 const CORRECTION_BUTTON_NAME = "보정값으로 실행";
@@ -128,6 +129,150 @@ describe("PromptScenarioGenerator correction run", () => {
         "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000b3&focus=artifacts",
       ),
     );
+  });
+
+  test("history selection carries model, evidence, and params into correction run", async () => {
+    const runCalls: Array<{ generationId: string; body: Parameters<ApiClient["runScenarioGeneration"]>[1] }> = [];
+    const selectedGeneration: ScenarioGenerationResult = {
+      generation_id: "00000000-0000-0000-0000-0000000000b5",
+      mode: "save_and_run",
+      status: "blocked",
+      prompt_hash: "hash",
+      planner: "deterministic_mvp",
+      model: "gpt-4.1-mini",
+      scenario_id: "00000000-0000-0000-0000-0000000000c1",
+      scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+      run_id: null,
+      evidence_policy: { screenshot: "failure", video: "never" },
+      blockers: ["start_url_required_for_auto_run"],
+      created_at: "2026-06-15T00:00:00.000Z",
+      created_by: "operator",
+      draft_ir: {
+        start_url: "https://shop.example/orders",
+        target: {
+          site_profile_id: "10000000-0000-4000-8000-0000000000a1",
+          browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
+          network_policy_id: "10000000-0000-4000-8000-0000000000a3",
+        },
+        params: { entry_url: "https://shop.example/orders", max_pages: 3 },
+        params_schema: {
+          type: "object",
+          properties: {
+            entry_url: { type: "string", default: "https://wrong.example" },
+            max_pages: { type: "number", default: 1 },
+          },
+        },
+      },
+      validation_report: {},
+    };
+    location.hash = "#scenarioStudio";
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listScenarioGenerations: async () => ({ items: [selectedGeneration], next_cursor: null }),
+        runScenarioGeneration: async (generationId, body) => {
+          runCalls.push({ generationId, body });
+          return {
+            ...selectedGeneration,
+            generation_id: generationId,
+            status: "run_queued",
+            model: body.model ?? null,
+            run_id: "00000000-0000-0000-0000-000000000098",
+            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            blockers: [],
+          };
+        },
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "진단·산출물 보기" }));
+    fireEvent.click(await screen.findByRole("button", { name: CORRECTION_BUTTON_NAME }));
+
+    await waitFor(() => expect(runCalls).toHaveLength(1));
+    expect(runCalls[0]).toEqual({
+      generationId: "00000000-0000-0000-0000-0000000000b5",
+      body: {
+        start_url: "https://shop.example/orders",
+        params: { entry_url: "https://shop.example/orders", max_pages: 3 },
+        target: {
+          site_profile_id: "10000000-0000-4000-8000-0000000000a1",
+          browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
+          network_policy_id: "10000000-0000-4000-8000-0000000000a3",
+        },
+        model: "gpt-4.1-mini",
+        evidence: { screenshot: "failure", video: "never" },
+      },
+    });
+  });
+
+  test.each([
+    ["malformed", "{"],
+    ["array", "[]"],
+    ["scalar", "\"entry_url\""],
+  ])("invalid params JSON blocks generate request: %s", async (_caseName, paramsInput) => {
+    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    location.hash = "#scenarioStudio";
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => {
+          generateCalls.push(body);
+          throw new Error("invalid params must not call /generate");
+        },
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "Summarize today's orders" } });
+    fireEvent.change(screen.getByLabelText("생성/실행 params JSON"), { target: { value: paramsInput } });
+    fireEvent.click(screen.getByRole("button", { name: "저장 후 실행" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/params JSON/));
+    expect(generateCalls).toHaveLength(0);
+  });
+
+  test("invalid params JSON blocks correction run request", async () => {
+    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    const runCalls: Array<{ generationId: string; body: Parameters<ApiClient["runScenarioGeneration"]>[1] }> = [];
+    location.hash = "#scenarioStudio";
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => {
+          generateCalls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000b6",
+            mode: body.mode ?? "save_and_run",
+            status: "saved",
+            prompt_hash: "hash",
+            planner: body.planner ?? "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: null,
+            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            blockers: [],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+        runScenarioGeneration: async (generationId, body) => {
+          runCalls.push({ generationId, body });
+          throw new Error("invalid params must not call /run");
+        },
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "Summarize today's orders" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장 후 실행" }));
+    await waitFor(() => expect(generateCalls).toHaveLength(1));
+
+    fireEvent.change(screen.getByLabelText("생성/실행 params JSON"), { target: { value: "42" } });
+    fireEvent.click(await screen.findByRole("button", { name: CORRECTION_BUTTON_NAME }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/params JSON/));
+    expect(runCalls).toHaveLength(0);
   });
 
   test.each([

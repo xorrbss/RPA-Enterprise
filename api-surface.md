@@ -116,6 +116,7 @@
 - capability 조회는 콘솔의 기본 evidence 선택을 돕는 read-only 힌트다. 서버는 여전히 `save_and_run`마다 `scenarioGenerationCapabilities.videoRecording`을 최종 권위로 재검증하며, `video!=never`와 capability mismatch는 `video_recording_port_not_configured` blocker로 닫는다.
 - "모든/다음/더보기 페이지", "all/every/next page", "load more" 수집 의도는 bounded pagination loop IR(`paginate_pages` → `extract_current_page` → `advance_page`)로 생성한다. 기본 `max_pages=3`, 자동 실행 상한은 10이며 초과 시 `pagination_page_limit_exceeded` blocker로 저장만 하고 run은 만들지 않는다.
 - prompt 원문은 `scenario_generations`에 저장하지 않는다. 원장에는 `prompt_hash`와 선택적 `prompt_redacted_ref`만 둔다. `scenario_generations.draft_ir`는 instruction 텍스트를 redacted form으로 저장하고, 저장/실행용 원본 IR은 `scenario_versions.ir` 계약 경계에서만 유지한다.
+- 생성/보정 실행에서 서버가 확정한 비밀 아님 실행 기본값(`start_url`, 자동 페이지네이션 `max_pages`)은 히스토리 재실행 보정을 위해 `draft_ir.params_schema.properties.*.default`에 남길 수 있다. 임의 사용자 `params` 전체나 prompt 원문을 원장에 복제하지 않는다.
 - 생성된 IR은 기존 scenario save와 동일하게 `compileScenario`(AJV → IREL → V1..V11)를 통과해야만 저장/실행된다. 실패하면 저장/실행하지 않는다.
 - `save_and_run` 요청에서 `target`/`start_url`이 없거나 target row 미존재, red site 미승인, side-effect성 문구 감지 등으로 안전 실행 조건이 부족하면 scenario는 저장하되 run은 만들지 않고 `status=blocked`, `blockers[]`에 사유를 남긴다. 조용히 queued로 넘기지 않는다.
 - 명시 `target`을 제공한 `save_and_run` 요청은 `start_url` origin이 `site_profiles.url_pattern` origin과 일치해야 한다. 불일치하면 `target_start_url_site_mismatch` blocker로 차단한다.

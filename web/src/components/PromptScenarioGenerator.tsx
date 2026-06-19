@@ -116,6 +116,78 @@ function siteLabel(site: SiteItem): string {
   return site.url_pattern !== undefined ? `${name} (${site.url_pattern})` : name;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function recordField(value: unknown, key: string): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const next = value[key];
+  return isRecord(next) ? next : null;
+}
+
+function nonEmptyStringField(value: unknown, key: string): string | null {
+  if (!isRecord(value)) return null;
+  const next = value[key];
+  return typeof next === "string" && next.trim().length > 0 ? next.trim() : null;
+}
+
+function parseParamsText(value: string): Record<string, unknown> | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error("params JSON 형식이 올바르지 않습니다.");
+  }
+  if (!isRecord(parsed)) {
+    throw new Error("params JSON은 객체여야 합니다.");
+  }
+  return parsed;
+}
+
+function paramsInputTextFromDraftIr(draftIr: unknown): string {
+  const params = recordField(draftIr, "params") ?? paramsDefaultsFromDraftIr(draftIr);
+  return params === null ? "" : JSON.stringify(params, null, 2);
+}
+
+function paramsDefaultsFromDraftIr(draftIr: unknown): Record<string, unknown> | null {
+  const paramsSchema = recordField(draftIr, "params_schema");
+  const properties = recordField(paramsSchema, "properties");
+  if (properties === null) return null;
+  const defaults: Record<string, unknown> = {};
+  for (const [key, property] of Object.entries(properties)) {
+    if (!isRecord(property) || !Object.prototype.hasOwnProperty.call(property, "default")) continue;
+    defaults[key] = property.default;
+  }
+  return Object.keys(defaults).length > 0 ? defaults : null;
+}
+
+function draftStartUrl(draftIr: unknown): string | null {
+  const params = recordField(draftIr, "params") ?? paramsDefaultsFromDraftIr(draftIr);
+  const paramsStartUrl = nonEmptyStringField(params, "start_url");
+  return (
+    nonEmptyStringField(draftIr, "start_url") ??
+    nonEmptyStringField(recordField(draftIr, "meta"), "start_url") ??
+    nonEmptyStringField(recordField(draftIr, "request"), "start_url") ??
+    paramsStartUrl
+  );
+}
+
+function draftTarget(draftIr: unknown): ScenarioGenerationRequest["target"] | null {
+  const target = recordField(draftIr, "target") ?? recordField(recordField(draftIr, "request"), "target");
+  const siteProfileId = nonEmptyStringField(target, "site_profile_id");
+  const browserIdentityId = nonEmptyStringField(target, "browser_identity_id");
+  const networkPolicyId = nonEmptyStringField(target, "network_policy_id");
+  if (siteProfileId === null || browserIdentityId === null || networkPolicyId === null) return null;
+  return {
+    site_profile_id: siteProfileId,
+    browser_identity_id: browserIdentityId,
+    network_policy_id: networkPolicyId,
+  };
+}
+
 export function PromptScenarioGenerator(): JSX.Element {
   const api = useApiClient();
   const qc = useQueryClient();
@@ -144,6 +216,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [browserIdentityId, setBrowserIdentityId] = useState("");
   const [networkPolicyId, setNetworkPolicyId] = useState("");
   const [model, setModel] = useState("");
+  const [paramsText, setParamsText] = useState("");
   const [planner, setPlanner] = useState<ScenarioGenerationPlanner>("deterministic_mvp");
   const [screenshot, setScreenshot] = useState<ScreenshotPolicy>("each_step");
   const [video, setVideo] = useState<VideoPolicy>("never");
@@ -207,8 +280,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   }, [availablePlanners, defaultPlanner, planner]);
 
   const mutation = useMutation({
-    mutationFn: async () => {
-      const body = buildRequest();
+    mutationFn: async (body: ScenarioGenerationRequest) => {
       return api.generateScenario(body, crypto.randomUUID());
     },
     onSuccess: (next) => {
@@ -228,8 +300,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   });
 
   const runMutation = useMutation({
-    mutationFn: async (generation: ScenarioGenerationResult) => {
-      const body = buildRunRequest();
+    mutationFn: async ({ generation, body }: { generation: ScenarioGenerationResult; body: ScenarioGenerationRunRequest }) => {
       return api.runScenarioGeneration(generation.generation_id, body, crypto.randomUUID());
     },
     onSuccess: (next) => {
@@ -260,6 +331,7 @@ export function PromptScenarioGenerator(): JSX.Element {
       throw new Error("사이트, 브라우저 ID, 네트워크 정책 ID를 모두 입력하세요.");
     }
     const [site, identity, network] = targetValues as [string, string, string];
+    const params = parseParamsText(paramsText);
     return {
       prompt: trimmedPrompt,
       ...(name.trim().length > 0 ? { name: name.trim() } : {}),
@@ -267,6 +339,7 @@ export function PromptScenarioGenerator(): JSX.Element {
       planner,
       ...(model.trim().length > 0 ? { model: model.trim() } : {}),
       ...(startUrl.trim().length > 0 ? { start_url: startUrl.trim() } : {}),
+      ...(params !== undefined ? { params } : {}),
       ...(hasFullTarget
         ? {
             target: {
@@ -288,8 +361,10 @@ export function PromptScenarioGenerator(): JSX.Element {
       throw new Error("사이트, 브라우저 ID, 네트워크 정책 ID를 모두 입력하세요.");
     }
     const [site, identity, network] = targetValues as [string, string, string];
+    const params = parseParamsText(paramsText);
     return {
       ...(startUrl.trim().length > 0 ? { start_url: startUrl.trim() } : {}),
+      ...(params !== undefined ? { params } : {}),
       ...(hasFullTarget
         ? {
             target: {
@@ -307,7 +382,8 @@ export function PromptScenarioGenerator(): JSX.Element {
   function submit(): void {
     setLocalError(null);
     try {
-      mutation.mutate();
+      const body = buildRequest();
+      mutation.mutate(body);
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : "요청 실패");
     }
@@ -316,10 +392,26 @@ export function PromptScenarioGenerator(): JSX.Element {
   function runWithCorrections(generation: ScenarioGenerationResult): void {
     setLocalError(null);
     try {
-      runMutation.mutate(generation);
+      const body = buildRunRequest();
+      runMutation.mutate({ generation, body });
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : "요청 실패");
     }
+  }
+
+  function selectGeneration(item: ScenarioGenerationResult): void {
+    setResult(item);
+    setModel(item.model ?? "");
+    setScreenshot(item.evidence_policy.screenshot ?? "each_step");
+    setVideo(item.evidence_policy.video ?? "never");
+    setVideoTouched(true);
+    setParamsText(paramsInputTextFromDraftIr(item.draft_ir));
+    setStartUrl(draftStartUrl(item.draft_ir) ?? "");
+    const target = draftTarget(item.draft_ir);
+    setSiteProfileId(target?.site_profile_id ?? "");
+    setBrowserIdentityId(target?.browser_identity_id ?? "");
+    setNetworkPolicyId(target?.network_policy_id ?? "");
+    qc.setQueryData(["scenario-generation", item.generation_id], item);
   }
 
   return (
@@ -432,6 +524,16 @@ export function PromptScenarioGenerator(): JSX.Element {
             {!videoRecordingEnabled && <span className="muted">영상 녹화 비활성</span>}
           </label>
         </div>
+        <label className="field field-wide">
+          <span>생성/실행 params JSON</span>
+          <textarea
+            value={paramsText}
+            onChange={(event) => setParamsText(event.target.value)}
+            rows={4}
+            spellCheck={false}
+            placeholder='{"entry_url":"https://example.com"}'
+          />
+        </label>
         {selectedSite !== null && (
           <div className="inline-facts" role="status">
             <span className="subtle">위험도</span>
@@ -477,8 +579,7 @@ export function PromptScenarioGenerator(): JSX.Element {
           onBlockedOnlyChange={(next) => setHistoryStatus(next ? "blocked" : undefined)}
           selectedGenerationId={result?.generation_id ?? null}
           onSelect={(item) => {
-            setResult(item);
-            qc.setQueryData(["scenario-generation", item.generation_id], item);
+            selectGeneration(item);
           }}
         />
       </div>

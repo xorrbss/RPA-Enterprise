@@ -1047,7 +1047,12 @@ function buildDeterministicMvpGenerationPlan(request: GenerationRequest, capabil
       studio_mode: "easy",
       evidence,
     },
-    params_schema: paramsSchema({ hasStartUrl: startUrl !== undefined, pagination: pagination.enabled }),
+    params_schema: paramsSchema({
+      hasStartUrl: startUrl !== undefined,
+      pagination: pagination.enabled,
+      startUrl,
+      maxPages: pagination.maxPages,
+    }),
     ...(target !== undefined ? { target } : {}),
     start: startUrl !== undefined ? "open_start_url" : pagination.enabled ? "paginate_pages" : "understand_request",
     nodes,
@@ -1121,7 +1126,7 @@ function parseScenarioPlannerId(value: unknown): ScenarioPlannerId | undefined {
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_scenario_planner" });
 }
 
-function paramsSchema(options: { hasStartUrl: boolean; pagination: boolean }): Record<string, unknown> {
+function paramsSchema(options: { hasStartUrl: boolean; pagination: boolean; startUrl?: string; maxPages?: number }): Record<string, unknown> {
   const required: string[] = [];
   if (options.hasStartUrl) required.push("start_url");
   if (options.pagination) required.push("max_pages");
@@ -1130,14 +1135,22 @@ function paramsSchema(options: { hasStartUrl: boolean; pagination: boolean }): R
     additionalProperties: true,
     properties: {
       as_of: { type: "string" },
-      ...(options.hasStartUrl ? { start_url: { type: "string", format: "uri" } } : {}),
+      ...(options.hasStartUrl
+        ? {
+            start_url: {
+              type: "string",
+              format: "uri",
+              ...(options.startUrl !== undefined ? { default: options.startUrl } : {}),
+            },
+          }
+        : {}),
       ...(options.pagination
         ? {
             max_pages: {
               type: "integer",
               minimum: 1,
               maximum: MAX_AUTO_PAGINATION_PAGES,
-              default: DEFAULT_PAGINATION_MAX_PAGES,
+              default: options.maxPages ?? DEFAULT_PAGINATION_MAX_PAGES,
             },
           }
         : {}),
@@ -1160,12 +1173,12 @@ function prepareGenerationRunIr(
     next = { ...next, target: input.target };
   }
   if (input.startUrl !== undefined) {
-    next = ensureStartUrlNavigation(next, input.recording);
+    next = ensureStartUrlNavigation(next, input.recording, input.startUrl);
   }
   return next;
 }
 
-function ensureStartUrlNavigation(ir: Record<string, unknown>, recording: RecordingPolicy): Record<string, unknown> {
+function ensureStartUrlNavigation(ir: Record<string, unknown>, recording: RecordingPolicy, startUrl?: string): Record<string, unknown> {
   const nodes = isRecord(ir.nodes) ? { ...ir.nodes } : {};
   const currentStart = typeof ir.start === "string" ? ir.start : undefined;
   const openStart = nodes.open_start_url;
@@ -1182,7 +1195,7 @@ function ensureStartUrlNavigation(ir: Record<string, unknown>, recording: Record
 
   return {
     ...ir,
-    params_schema: ensureStartUrlParamSchema(ir.params_schema),
+    params_schema: ensureStartUrlParamSchema(ir.params_schema, startUrl),
     start: "open_start_url",
     nodes,
   };
@@ -1201,9 +1214,10 @@ function startAfterOpenStart(nodes: Record<string, unknown>, currentStart: strin
   return first ?? "done";
 }
 
-function ensureStartUrlParamSchema(value: unknown): Record<string, unknown> {
+function ensureStartUrlParamSchema(value: unknown, startUrl?: string): Record<string, unknown> {
   const schema = isRecord(value) ? value : { type: "object", additionalProperties: true };
   const properties = isRecord(schema.properties) ? schema.properties : {};
+  const existingStartUrl = isRecord(properties.start_url) ? properties.start_url : {};
   const required = Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : [];
   return {
     ...schema,
@@ -1211,7 +1225,12 @@ function ensureStartUrlParamSchema(value: unknown): Record<string, unknown> {
     additionalProperties: schema.additionalProperties ?? true,
     properties: {
       ...properties,
-      start_url: { type: "string", format: "uri" },
+      start_url: {
+        ...existingStartUrl,
+        type: "string",
+        format: "uri",
+        ...(startUrl !== undefined ? { default: startUrl } : {}),
+      },
     },
     required: uniqueStrings([...required, "start_url"]),
   };
