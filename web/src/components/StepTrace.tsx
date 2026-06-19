@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
@@ -7,6 +7,7 @@ import { StatusBadge, actionLabel, cacheLabel, isStreamWarning, streamStatusLabe
 import { ErrorState, Loading } from "./states";
 import { ArtifactRef } from "./ArtifactLookup";
 import { hhmmss } from "../util/time";
+import { useHashParam } from "../router";
 import type { StagehandCallSummary, StepSummary } from "../api/types";
 
 const POLL_MS = 5_000; // 라이브 = outbox tail 폴링(v1)
@@ -44,6 +45,10 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
   });
   const [view, setView] = useState<"cards" | "table">("cards");
   const items: readonly StepSummary[] = q.data?.items ?? [];
+  const focusStep = useHashParam("step");
+  const focusAttemptParam = useHashParam("attempt");
+  const focusAttempt =
+    focusAttemptParam !== null && /^\d+$/.test(focusAttemptParam) ? Number(focusAttemptParam) : null;
   // 절단 정직성(Dashboard.pageCount와 동일 규율): limit:100 페치라 100단계 초과 run은 next_cursor가 남는다.
   // 이때 페이지 길이를 총계처럼 보이지 않게 `N+` 하한으로 표기한다(조용한 false 금지). 비절단이면 정확한 N.
   const truncated = (q.data?.next_cursor ?? null) !== null;
@@ -55,6 +60,21 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
   // status==='started'인 마지막 행의 복합키, 없으면 null(전부 종료됨 → 거짓 현재단계를 만들지 않음, 조용한 false 금지).
   const live = items.filter((s) => s.status === "started").at(-1);
   const currentKey = live ? `${live.step_id}:${live.attempt}` : null;
+  const focusedStep = focusStep === null
+    ? undefined
+    : focusAttempt !== null
+      ? items.find((s) => s.step_id === focusStep && s.attempt === focusAttempt)
+      : items.find((s) => s.step_id === focusStep);
+  const focusedKey = focusedStep !== undefined ? `${focusedStep.step_id}:${focusedStep.attempt}` : null;
+
+  useEffect(() => {
+    if (focusedKey === null) return;
+    const el = document.getElementById(stepElementId(focusedKey, view));
+    if (el instanceof HTMLElement) {
+      if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
+      el.focus({ preventScroll: true });
+    }
+  }, [focusedKey, view, items.length]);
 
   return (
     <div style={{ marginTop: 14 }}>
@@ -81,13 +101,20 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
         </p>
       ) : view === "cards" ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-          {items.map((s, i) => <StepCard key={`${s.step_id}:${s.attempt}`} step={s} index={i} maxDuration={maxDuration} isCurrent={`${s.step_id}:${s.attempt}` === currentKey} />)}
+          {items.map((s, i) => {
+            const key = `${s.step_id}:${s.attempt}`;
+            return <StepCard key={key} step={s} index={i} maxDuration={maxDuration} isCurrent={key === currentKey} isFocused={key === focusedKey} />;
+          })}
         </div>
       ) : (
-        <StepTable items={items} maxDuration={maxDuration} currentKey={currentKey} />
+        <StepTable items={items} maxDuration={maxDuration} currentKey={currentKey} focusedKey={focusedKey} />
       )}
     </div>
   );
+}
+
+function stepElementId(key: string, view: "cards" | "table"): string {
+  return `step-${view}-${encodeURIComponent(key)}`;
 }
 
 // 트레이스-로컬 갱신 인디케이터(F2) — 전역 Freshness를 복제하지 않고 이 패널의 폴링 사실만 표시한다.
@@ -129,13 +156,27 @@ function SelfHealSummary({ items }: { items: readonly StepSummary[] }): JSX.Elem
 
 // 단계 카드(서사) — 동작/상태 + 재시도 + AI 판단(모델·토큰·비용) + 예외 + 증빙.
 // isCurrent: status==='started'로 도출된 '지금 실행 중'(F1) — 테두리 강조 + '진행 중' 칩.
-function StepCard({ step: s, index, maxDuration, isCurrent }: { step: StepSummary; index: number; maxDuration: number; isCurrent: boolean }): JSX.Element {
+function StepCard({
+  step: s,
+  index,
+  maxDuration,
+  isCurrent,
+  isFocused,
+}: {
+  step: StepSummary;
+  index: number;
+  maxDuration: number;
+  isCurrent: boolean;
+  isFocused: boolean;
+}): JSX.Element {
+  const key = `${s.step_id}:${s.attempt}`;
   return (
-    <div className={`step-card${isCurrent ? " current" : ""}`}>
+    <div id={stepElementId(key, "cards")} className={`step-card${isCurrent ? " current" : ""}${isFocused ? " focused" : ""}`} tabIndex={isFocused ? -1 : undefined}>
       <div className="step-card-head">
         <span className="subtle" style={{ minWidth: 22 }}>#{index + 1}</span>
         <code>{s.node_id}</code>
         <strong>{actionLabel(s.action)}</strong>
+        {isFocused && <span className="badge amber">산출물 선택 단계</span>}
         {isCurrent && (
           <span className="now-chip" title="이 단계가 지금 실행 중입니다.">
             <span className="now-dot" aria-hidden="true" /> 진행 중
@@ -223,7 +264,17 @@ function DurationBar({ durationMs, maxDuration }: { durationMs: number | null; m
 }
 
 // 표 보기(밀집 정보 선호) — 한국어 라벨 + 소요 바 + 클릭 가능한 증빙. currentKey(행-고유 복합키) 행만 data-current(td 배경 강조, F1).
-function StepTable({ items, maxDuration, currentKey }: { items: readonly StepSummary[]; maxDuration: number; currentKey: string | null }): JSX.Element {
+function StepTable({
+  items,
+  maxDuration,
+  currentKey,
+  focusedKey,
+}: {
+  items: readonly StepSummary[];
+  maxDuration: number;
+  currentKey: string | null;
+  focusedKey: string | null;
+}): JSX.Element {
   return (
     <div className="table-wrap" style={{ marginTop: 8 }}>
       <table>
@@ -236,8 +287,15 @@ function StepTable({ items, maxDuration, currentKey }: { items: readonly StepSum
           {items.map((s, i) => {
             const calls = s.stagehand_calls;
             const outText = tokenText(calls.map((c) => c.output_tokens)); // '—'/'N'/'≥N'
+            const key = `${s.step_id}:${s.attempt}`;
             return (
-              <tr key={`${s.step_id}:${s.attempt}`} data-current={`${s.step_id}:${s.attempt}` === currentKey ? "true" : undefined}>
+              <tr
+                id={stepElementId(key, "table")}
+                key={key}
+                data-current={key === currentKey ? "true" : undefined}
+                data-focus={key === focusedKey ? "true" : undefined}
+                tabIndex={key === focusedKey ? -1 : undefined}
+              >
                 <td>{i + 1}{s.attempt > 0 ? <span className="subtle"> ·재{s.attempt}</span> : null}</td>
                 <td><code>{s.node_id}</code></td>
                 <td>{actionLabel(s.action)}</td>

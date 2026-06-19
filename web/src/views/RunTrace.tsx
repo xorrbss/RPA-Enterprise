@@ -82,7 +82,7 @@ export function RunTraceView(): JSX.Element {
           generation={generation}
           focusArtifacts={focusArtifacts}
           onClose={() => {
-            mergeParams({ run: null, artifact: null, focus: null, generation: null });
+            mergeParams({ run: null, artifact: null, focus: null, generation: null, step: null, attempt: null });
           }}
         />
       )}
@@ -111,7 +111,7 @@ export function RunTraceView(): JSX.Element {
             header: "작업",
             render: (r) => (
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <button className="btn" type="button" onClick={() => { mergeParams({ run: r.run_id, artifact: null, generation: null }); }}>
+                <button className="btn" type="button" onClick={() => { mergeParams({ run: r.run_id, artifact: null, generation: null, step: null, attempt: null }); }}>
                   상세
                 </button>
                 {!TERMINAL.has(r.status) && (
@@ -364,6 +364,10 @@ function artifactProvenanceLabel(a: RunArtifactItem): string {
   return "run 전체";
 }
 
+function hasStepProvenance(a: RunArtifactItem): a is RunArtifactItem & { readonly step_id: string } {
+  return typeof a.step_id === "string" && a.step_id.length > 0;
+}
+
 function artifactSummary(items: readonly RunArtifactItem[]): { screenshots: number; videos: number; pending: number } {
   return items.reduce(
     (acc, item) => {
@@ -499,7 +503,19 @@ function RunArtifactsList({
                   return (
                     <tr key={a.artifact_id} data-current={a.artifact_id === effectiveSelectedId ? "true" : undefined}>
                       <td><ArtifactRef id={a.artifact_id} /></td>
-                      <td><span className="subtle">{artifactProvenanceLabel(a)}</span></td>
+                      <td>
+                        {hasStepProvenance(a) ? (
+                          <button
+                            className="linklike"
+                            type="button"
+                            onClick={() => mergeParams({ step: a.step_id, attempt: typeof a.attempt === "number" ? String(a.attempt) : null })}
+                          >
+                            {artifactProvenanceLabel(a)}
+                          </button>
+                        ) : (
+                          <span className="subtle">{artifactProvenanceLabel(a)}</span>
+                        )}
+                      </td>
                       <td>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           <span>{a.type}</span>

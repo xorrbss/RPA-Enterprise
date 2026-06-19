@@ -265,6 +265,50 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     });
   });
 
+  test("실행 상세 산출물: step provenance 클릭 → 해당 단계/시도 강조", async () => {
+    renderApp(fakeClient({
+      listRunSteps: async () => ({
+        items: [
+          { step_id: "open_page", node_id: "open_page", attempt: 0, action: "navigate", status: "success", cache_mode: "bypass", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 100, exception: null },
+          { step_id: "checkout_submit", node_id: "checkout_submit", attempt: 1, action: "act", status: "success", cache_mode: "miss", artifact_ids: ["art-shot-1"], stagehand_calls: [], started_at: null, ended_at: null, duration_ms: 250, exception: null },
+        ],
+        next_cursor: null,
+      }),
+      listRunArtifacts: async () => ({
+        items: [{
+          artifact_id: "art-shot-1",
+          step_id: "checkout_submit",
+          attempt: 1,
+          type: "screen_capture",
+          media_type: "image/png",
+          filename: "checkout.png",
+          byte_size: 1000,
+          duration_ms: null,
+          redaction_status: "redacted",
+          retention_until: null,
+          legal_hold: false,
+          created_at: "2026-06-18T00:00:00.000Z",
+        }],
+        next_cursor: null,
+      }),
+    }));
+
+    await openDetail();
+    (await screen.findByRole("button", { name: "checkout_submit · 시도 1" })).click();
+    await waitFor(() => expect(location.hash).toContain("step=checkout_submit"));
+    expect(location.hash).toContain("attempt=1");
+    const focused = document.querySelector<HTMLElement>(".step-card.focused");
+    expect(focused).not.toBeNull();
+    expect(focused!.textContent).toContain("checkout_submit");
+    expect(focused!.textContent).toContain("산출물 선택 단계");
+    screen.getByRole("button", { name: "표" }).click();
+    await waitFor(() => {
+      const focusedRow = document.querySelector<HTMLElement>("tr[data-focus='true']");
+      expect(focusedRow).not.toBeNull();
+      expect(focusedRow!.textContent).toContain("checkout_submit");
+    });
+  });
+
   test("실행 상세 산출물: media_type 없는 video_masked도 영상 미리보기로 처리한다", async () => {
     installObjectUrlMock();
     renderApp(fakeClient({
