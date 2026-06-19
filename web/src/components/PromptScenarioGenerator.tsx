@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FileVideo, Image, Play, WandSparkles } from "lucide-react";
 
 import { useApiClient } from "../api/context";
 import { errorLabel, StatusBadge } from "./badges";
-import { navigate } from "../router";
+import { navigate, useHashParam } from "../router";
 import type {
   GenerationArtifactItem,
   ScenarioGenerationEvidence,
@@ -125,9 +125,14 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [model, setModel] = useState("");
   const [planner, setPlanner] = useState<ScenarioGenerationPlanner>("deterministic_mvp");
   const [screenshot, setScreenshot] = useState<ScreenshotPolicy>("each_step");
-  const [video, setVideo] = useState<VideoPolicy>("always");
+  const [video, setVideo] = useState<VideoPolicy>("never");
   const [localError, setLocalError] = useState<string | null>(null);
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
+  const prefillSiteId = useHashParam("site");
+  const prefillStartUrl = useHashParam("start_url");
+  const prefillBrowserIdentityId = useHashParam("browser_identity");
+  const prefillNetworkPolicyId = useHashParam("network_policy");
+  const appliedPrefill = useRef<string | null>(null);
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
 
@@ -154,6 +159,28 @@ export function PromptScenarioGenerator(): JSX.Element {
       setStartUrl(site.url_pattern);
     }
   }
+
+  useEffect(() => {
+    if (prefillSiteId === null && prefillStartUrl === null && prefillBrowserIdentityId === null && prefillNetworkPolicyId === null) return;
+    const hasDirectTarget = prefillBrowserIdentityId !== null && prefillNetworkPolicyId !== null;
+    if (prefillSiteId !== null && sites.data === undefined && !hasDirectTarget) return;
+    const key = `${prefillSiteId ?? ""}|${prefillStartUrl ?? ""}|${prefillBrowserIdentityId ?? ""}|${prefillNetworkPolicyId ?? ""}`;
+    if (appliedPrefill.current === key) return;
+    appliedPrefill.current = key;
+    const site = prefillSiteId !== null
+      ? (sites.data?.items ?? []).find((item) => item.site_profile_id === prefillSiteId)
+      : undefined;
+    if (prefillSiteId !== null) {
+      setSiteProfileId(prefillSiteId);
+      setBrowserIdentityId(prefillBrowserIdentityId ?? site?.default_browser_identity_id ?? "");
+      setNetworkPolicyId(prefillNetworkPolicyId ?? site?.default_network_policy_id ?? "");
+    }
+    if (prefillStartUrl !== null && prefillStartUrl.trim().length > 0) {
+      setStartUrl(prefillStartUrl);
+    } else if (site?.url_pattern !== undefined) {
+      setStartUrl(site.url_pattern);
+    }
+  }, [prefillSiteId, prefillStartUrl, prefillBrowserIdentityId, prefillNetworkPolicyId, sites.data]);
 
   const mutation = useMutation({
     mutationFn: async () => {

@@ -317,7 +317,7 @@ describe("D7 운영 콘솔 shell", () => {
         browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
         network_policy_id: "10000000-0000-4000-8000-0000000000a3",
       },
-      evidence: { screenshot: "each_step", video: "always" },
+      evidence: { screenshot: "each_step", video: "never" },
     });
     await waitFor(() => expect(location.hash).toBe("#runTrace?run=00000000-0000-0000-0000-000000000099&focus=artifacts"));
   });
@@ -627,7 +627,15 @@ describe("D7 운영 콘솔 shell", () => {
         listSites: async () => ({ items: [], next_cursor: null }),
         createSite: async (body, key) => {
           calls.push({ body, key });
-          return { site_profile_id: "site-new" };
+          return {
+            site_profile_id: "site-new",
+            name: String(body.name),
+            url_pattern: String(body.url_pattern),
+            risk: body.risk ?? "green",
+            approved: false,
+            default_browser_identity_id: "browser-new",
+            default_network_policy_id: "network-new",
+          };
         },
       }),
     );

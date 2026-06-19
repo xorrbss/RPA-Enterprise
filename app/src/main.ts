@@ -155,6 +155,7 @@ function buildScenarioGenerationPlannerBinding(pool: PgPool, cfg: ScenarioGenera
   });
   const llmCalls = new PgScenarioGenerationLlmCallIdempotencyStore(pool, {
     retentionDays: gw.artifactRetentionDays,
+    staleOpenReclaimMs: gw.wallTimeoutMs,
   });
   const gateway = new LlmGateway({
     primary: new CodexSseAdapter(

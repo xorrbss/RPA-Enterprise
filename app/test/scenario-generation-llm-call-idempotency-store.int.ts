@@ -105,6 +105,17 @@ async function visibleCallCount(pool: Pool, tenantId: string): Promise<number> {
   });
 }
 
+async function ageCallUpdatedAt(pool: Pool, callId: string, ageMs: number): Promise<void> {
+  await withTenantTx(pool, TENANT, async (client) => {
+    await client.query(
+      `UPDATE scenario_generation_llm_calls
+          SET updated_at = now() - ($3::int * interval '1 millisecond')
+        WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+      [TENANT, callId, ageMs],
+    );
+  });
+}
+
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
   try {
@@ -126,6 +137,18 @@ async function main(): Promise<void> {
     check("reserve: creates generation llm call row", reserved.kind === "reserved" && /^[0-9a-f-]{36}$/.test(reserved.callId), JSON.stringify(reserved));
     if (reserved.kind !== "reserved") throw new Error("reserve did not return reserved");
     check("reserve: duplicate open row reports in-flight", (await store.reserve(makeReq())).kind === "in_flight");
+
+    const staleOpenReq = makeReq({ idempotencyKey: "scenario-generation-plan-stale-open", requestHash: "sha256:stale-open" } as Partial<LLMRequest>);
+    const staleOpenStore = new PgScenarioGenerationLlmCallIdempotencyStore(pool, { retentionDays: 30, staleOpenReclaimMs: 1 });
+    const staleOpenReservation = await staleOpenStore.reserve(staleOpenReq);
+    if (staleOpenReservation.kind !== "reserved") throw new Error("stale open reserve did not return reserved");
+    await ageCallUpdatedAt(pool, staleOpenReservation.callId, 10_000);
+    const staleOpenRerun = await staleOpenStore.reserve(staleOpenReq);
+    check(
+      "reserve: stale open row is reclaimed",
+      staleOpenRerun.kind === "reserved" && staleOpenRerun.callId === staleOpenReservation.callId,
+      JSON.stringify(staleOpenRerun),
+    );
 
     const parsedJson = { draft_ir: { meta: { name: "generated", version: 1 }, nodes: {} }, blockers: [], params: {} };
     const response: LLMResponse = {

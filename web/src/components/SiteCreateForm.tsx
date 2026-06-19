@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { errorLabel } from "./badges";
+import { navigate } from "../router";
 
 // 사이트 신규 등록(온보딩) 폼 — api-surface §7 POST /v1/sites. site.create 권한(operator+) 없으면 숨김(백엔드 최종 강제).
 // url_pattern은 http(s) origin이어야 백엔드가 수락(런타임 resolveSiteProfileId가 URL.origin 매칭) — 1차 검증.
@@ -80,7 +81,7 @@ export function SiteCreateForm(): JSX.Element | null {
         crypto.randomUUID(),
       );
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       setMsg({ tone: "green", text: "사이트 등록됨" });
       setName("");
       setUrl("");
@@ -91,6 +92,12 @@ export function SiteCreateForm(): JSX.Element | null {
       setFlagRows([]);
       setOpen(false);
       void qc.invalidateQueries({ queryKey: ["sites"] });
+      navigate("scenarioStudio", {
+        site: created.site_profile_id,
+        start_url: created.url_pattern,
+        browser_identity: created.default_browser_identity_id,
+        network_policy: created.default_network_policy_id,
+      });
     },
     onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
   });
