@@ -1961,6 +1961,7 @@ async function main(): Promise<void> {
               promptTemplateVersion: "prompt-run-int-v1",
               budget: { maxInputTokens: 1000, maxOutputTokens: 1000, maxCost: 1 },
             }),
+            visualEvidenceRecorder: new PgVisualEvidenceRecorder(pool, videoStore, { retentionDays: 90 }),
             visualEvidenceVideoRecorderFactory: (provider) =>
               new PgScreenshotFrameVideoRecorder(pool, videoStore, provider, {
                 ffmpegPath: "unused-in-test",
@@ -1991,32 +1992,37 @@ async function main(): Promise<void> {
             JSON.stringify(videoTrace.calls),
           );
           check(
-            "video capability run stores LLM outputs plus masked WebM bytes",
-            readdirSync(videoArtifactDir).filter((name) => name.endsWith(".bin")).length === 3,
+            "video capability run stores LLM outputs plus screenshot PNGs and masked WebM bytes",
+            readdirSync(videoArtifactDir).filter((name) => name.endsWith(".bin")).length === 6,
             JSON.stringify(readdirSync(videoArtifactDir)),
           );
           check("video capability pending artifacts remain hidden by RLS", videoTrace.artifacts.length === 0, JSON.stringify(videoTrace.artifacts));
           check(
             "video capability run enqueues redaction per artifact",
-            videoLifecycleJobs.length === 4 &&
-              videoLifecycleJobs.filter((job) => job.kind === "artifact_redaction" && job.runId === videoRunnableBody.run_id).length === 3 &&
+            videoLifecycleJobs.length === 7 &&
+              videoLifecycleJobs.filter((job) => job.kind === "artifact_redaction" && job.runId === videoRunnableBody.run_id).length === 6 &&
               videoLifecycleJobs[videoLifecycleJobs.length - 1]?.kind === "artifact_retention",
             JSON.stringify(videoLifecycleJobs),
           );
           await redactPendingRunArtifacts({
             runId: videoRunnableBody.run_id,
             artifactDir: videoArtifactDir,
-            expectedPasses: 3,
+            expectedPasses: 6,
           });
           const videoRedactedTrace = await generatedRunTrace(pool, videoRunnableBody.run_id);
           const visibleVideoArtifacts = videoRedactedTrace.artifacts.filter((artifact) => artifact.type === "video_masked");
           const visibleVideoLlmArtifacts = videoRedactedTrace.artifacts.filter((artifact) => artifact.type === "llm_output");
+          const visibleVideoScreenshotArtifacts = videoRedactedTrace.artifacts.filter((artifact) => artifact.type === "screenshot_masked");
           check(
-            "video capability redaction exposes LLM outputs and masked WebM metadata",
-            videoRedactedTrace.artifacts.length === 3 &&
+            "video capability redaction exposes LLM outputs, screenshots, and masked WebM metadata",
+            videoRedactedTrace.artifacts.length === 6 &&
               visibleVideoLlmArtifacts.length === 2 &&
               visibleVideoLlmArtifacts.every(
                 (artifact) => artifact.media_type === "text/plain; charset=utf-8" && artifact.redaction_status === "redacted",
+              ) &&
+              visibleVideoScreenshotArtifacts.length === 3 &&
+              visibleVideoScreenshotArtifacts.every(
+                (artifact) => artifact.media_type === "image/png" && artifact.redaction_status === "redacted",
               ) &&
               visibleVideoArtifacts.length === 1 &&
               visibleVideoArtifacts[0]?.media_type === "video/webm" &&
@@ -2025,7 +2031,7 @@ async function main(): Promise<void> {
           );
           check(
             "video capability redaction preserves redacted object copies",
-            readdirSync(videoArtifactDir).filter((name) => name.endsWith(".bin")).length >= 6,
+            readdirSync(videoArtifactDir).filter((name) => name.endsWith(".bin")).length >= 12,
             JSON.stringify(readdirSync(videoArtifactDir)),
           );
 
@@ -2048,6 +2054,13 @@ async function main(): Promise<void> {
             });
             check("viewer can list redacted video-run artifacts -> 200", videoArtifactList.statusCode === 200, videoArtifactList.body);
             const videoArtifactItems = Array.isArray(videoArtifactList.json().items) ? videoArtifactList.json().items : [];
+            const videoScreenshotArtifactCount = videoArtifactItems.filter(
+              (item: unknown) =>
+                isRecord(item) &&
+                item.type === "screenshot_masked" &&
+                item.redaction_status === "redacted" &&
+                item.media_type === "image/png",
+            ).length;
             const videoArtifactId = videoArtifactItems.find(
               (item: unknown): item is { artifact_id: string; media_type: string } =>
                 isRecord(item) &&
@@ -2057,6 +2070,7 @@ async function main(): Promise<void> {
                 typeof item.artifact_id === "string",
             )?.artifact_id;
             check("video artifact list includes redacted WebM metadata", typeof videoArtifactId === "string", videoArtifactList.body);
+            check("video artifact list includes redacted screenshot metadata", videoScreenshotArtifactCount === 3, videoArtifactList.body);
             if (typeof videoArtifactId === "string") {
               const videoBlob = await videoArtifactReadApp.inject({
                 method: "GET",
