@@ -240,12 +240,12 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.body).toEqual(ir);
   });
 
-  test("createRun → POST /v1/runs + body{scenario_version_id} + Idempotency-Key", async () => {
+  test("createRun → POST /v1/runs + body{scenario_version_id, params} + Idempotency-Key", async () => {
     const { calls, client } = harness({ body: { run_id: "x" } });
-    await client.createRun({ scenario_version_id: "sv-1" }, "idem-run");
+    await client.createRun({ scenario_version_id: "sv-1", params: {} }, "idem-run");
     expect(calls[0]?.url).toBe("http://api.test/v1/runs");
     expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-run");
-    expect(calls[0]?.body).toEqual({ scenario_version_id: "sv-1" });
+    expect(calls[0]?.body).toEqual({ scenario_version_id: "sv-1", params: {} });
   });
 
   test("generateScenario → POST /v1/scenario-generations + Idempotency-Key + evidence", async () => {

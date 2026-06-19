@@ -87,6 +87,11 @@ assertEqualSet("OpenAPI RunState enum", openApiEnum("RunState"), EXPECTED_RUN_ST
 assertEqualSet("OpenAPI WorkitemState enum", openApiEnum("WorkitemState"), EXPECTED_WORKITEM_STATES);
 assertEqualSet("OpenAPI HumanTaskState enum", openApiEnum("HumanTaskState"), EXPECTED_HUMAN_TASK_STATES);
 assertEqualSet("OpenAPI HumanTaskKind enum", openApiEnum("HumanTaskKind"), EXPECTED_HUMAN_TASK_KINDS);
+assertOpenApiContains(
+  "createRun requestBody required",
+  "      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/RunCreateRequest'",
+);
+assertOpenApiSchemaContains("RunCreateRequest", "        model:\n          type: string");
 assertOpenApiPath("/runs/{run_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts/{artifact_id}");
@@ -170,6 +175,31 @@ function openApiEnum(schemaName: string): string[] {
 function assertOpenApiPath(path: string): void {
   if (!text("codegen/openapi.yaml").includes(`  ${path}:\n`)) {
     failures.push(`OpenAPI path missing: ${path}`);
+  }
+}
+
+function assertOpenApiContains(label: string, expected: string): void {
+  if (!text("codegen/openapi.yaml").includes(expected)) {
+    failures.push(`OpenAPI drift: ${label}`);
+  }
+}
+
+function assertOpenApiSchemaContains(schemaName: string, expected: string): void {
+  const body = text("codegen/openapi.yaml");
+  const lines = body.split(/\r?\n/);
+  const anchorIndex = lines.findIndex((line) => line.trim() === `${schemaName}:`);
+  if (anchorIndex < 0) {
+    failures.push(`OpenAPI schema ${schemaName} not found`);
+    return;
+  }
+
+  const blockLines: string[] = [];
+  for (const line of lines.slice(anchorIndex)) {
+    if (blockLines.length > 0 && /^    [A-Za-z0-9]+:/.test(line)) break;
+    blockLines.push(line);
+  }
+  if (!blockLines.join("\n").includes(expected)) {
+    failures.push(`OpenAPI schema ${schemaName} missing expected contract: ${expected.trim()}`);
   }
 }
 

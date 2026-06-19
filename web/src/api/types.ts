@@ -195,7 +195,7 @@ export interface CreateRunResult {
 
 export interface CreateRunBody {
   readonly scenario_version_id: string;
-  readonly params?: Record<string, unknown>;
+  readonly params: Record<string, unknown>;
   readonly workitem_id?: string;
   // 다정책+기본없음 테넌트에서 어느 LLM 모델로 실행할지 명시(서버 createRun model 해소; 미지정 시 기본/단일정책 자동해소,
   // 다정책+기본없음이면 model_required 422). gateway_policies.model 값.

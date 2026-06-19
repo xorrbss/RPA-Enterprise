@@ -230,7 +230,9 @@ assert.throws(() => registry.getOperation("unknownOperation" as OperationId), /N
 assert.equal(registry.getBodyValidator("createRun")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1" }).valid, false);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {} }).valid, true);
+assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini" }).valid, true);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, tenant_id: "t1" }).valid, false);
+assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini", tenant_id: "t1" }).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({ assignee: "reviewer-1" }).valid, true);
 assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);

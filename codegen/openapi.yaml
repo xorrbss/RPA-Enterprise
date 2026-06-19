@@ -60,7 +60,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
@@ -1340,6 +1340,9 @@ components:
         workitem_id:
           type: string
           description: optional. 작업항목 연계 시.
+        model:
+          type: string
+          description: optional. gateway_policies.model override resolved and frozen on run create.
       additionalProperties: false
 
     AbortRequest:
