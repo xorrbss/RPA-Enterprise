@@ -16,7 +16,7 @@
  * routes dom primitives through the gateway. Live success therefore requires a real Chrome binary at that
  * path — absent it, bind() loud-throws per run (fail-closed). Enumerated remaining backlog (see
  * product-open-candidate-report.md / staging-deploy-runbook.md):
- *   - SinkDeliveryPort, RunAbortDrainer, and a recurring sweeper scheduler. The API composes a
+ *   - SinkDeliveryPort and a recurring sweeper scheduler. The API composes a
  *     SecretStore-backed SignedCommandRegistry when SIGNED_COMMAND_REGISTRY_MODE=vault; explicit
  *     SIGNED_COMMAND_REGISTRY_MODE=deny_all is available for fail-closed deployments. JWT verification now
  *     supports RS256 via remote JWKS (set JWKS_URL) or the HS256 default. Browser session reuse is wired with
@@ -325,11 +325,16 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
   // browserSessionProvider (real Stagehand/Chrome, backlog item 2) binds a live CDP session per lease at
   // claim time, putting the executorFactory on the live drive path — bind() launches Chrome from
   // CHROME_EXECUTABLE_PATH (deploy-provisioned) and loud-throws if it is absent (fail-closed, no silent
-  // claim-only). Still-unwired drive-path ports (sink delivery, abort drainer) loud-throw
+  // claim-only). Still-unwired drive-path ports (sink delivery) loud-throw
   // per job kind when needed, see SCOPE above.
   const browser = loadBrowserConfig();
   const gw = loadGatewayConfig();
   const artifactStore = new FsObjectStore(gw.artifactDir);
+  const browserSessionProvider = new StagehandBrowserSessionProvider({
+    chromeExecutablePath: browser.chromeExecutablePath,
+    headless: browser.headless,
+    ...(browser.downloadRootDir !== undefined ? { downloadRootDir: browser.downloadRootDir } : {}),
+  });
   const artifactObjectBinding: ArtifactRealObjectStorePortBinding = {
     kind: "real_object_store",
     backendAlias: cfg.artifactObjectStoreBackendAlias,
@@ -354,13 +359,10 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
     suspensionPort: new PgChallengeSuspensionPort(),
     resumeTokenCodec,
     sessionRestorer: new PgSessionRestorer({ pool, resumeTokenCodec, sessionStore }),
+    runAbortDrainer: browserSessionProvider,
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
     executorFactory: buildExecutorFactory(pool),
-    browserSessionProvider: new StagehandBrowserSessionProvider({
-      chromeExecutablePath: browser.chromeExecutablePath,
-      headless: browser.headless,
-      ...(browser.downloadRootDir !== undefined ? { downloadRootDir: browser.downloadRootDir } : {}),
-    }),
+    browserSessionProvider,
     sessionStore,
     visualEvidenceRecorder: new PgVisualEvidenceRecorder(pool, artifactStore, {
       retentionDays: gw.artifactRetentionDays,

@@ -12,7 +12,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { LeaseCleanupPolicy, LeaseIsolation } from "../../../ts/runtime-contract";
+import type {
+  LeaseCleanupPolicy,
+  LeaseIsolation,
+  RunAbortDrainInput,
+  RunAbortDrainResult,
+  RunAbortDrainer,
+} from "../../../ts/runtime-contract";
 import {
   LeaseKeyedSessionProvider,
   createStagehandSession,
@@ -91,11 +97,7 @@ function assertPhase1Supported(input: BrowserSessionBindInput): void {
 
 // pool 에서 leaseId 를 해제하고 다운로드 디렉토리를 제거하는 공통 release(양 provider 공유, idempotent).
 // rmSync force 는 이미 삭제된 디렉토리에 무해 → 중복 release 안전. 세션 close 는 미바운드면 skip.
-function boundSession(
-  pool: LeaseKeyedSessionProvider,
-  leaseId: string,
-  downloadDir: string,
-): BoundBrowserSession {
+function boundSession(pool: LeaseKeyedSessionProvider, leaseId: string, downloadDir: string): BoundBrowserSession {
   return {
     provider: pool,
     release: async () => {
@@ -104,6 +106,31 @@ function boundSession(
       rmSync(downloadDir, { recursive: true, force: true });
     },
   };
+}
+
+interface ActiveBoundSession {
+  readonly session: CdpSession;
+  readonly downloadDir: string;
+}
+
+function closeWithTimeout(session: CdpSession, timeoutMs: number): Promise<"drained" | "timeout" | { kind: "error"; reason: string }> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), timeoutMs);
+  });
+  const close = session.close().then(
+    () => "drained" as const,
+    (error: unknown) => ({ kind: "error" as const, reason: unknownReason(error) }),
+  );
+  return Promise.race([close, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+function unknownReason(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) return error.message;
+  if (typeof error === "string" && error.trim().length > 0) return error;
+  return "browser session close failed";
 }
 
 export interface StagehandBrowserSessionProviderOptions {
@@ -124,10 +151,11 @@ export interface StagehandBrowserSessionProviderOptions {
  * 실 Stagehand 백엔드 BrowserSessionProvider (Phase 1: lease 마다 fresh Chrome + clear_all).
  * lease 당 createStagehandSession(새 프로세스) + 격리 다운로드 디렉토리. release 는 close + 디렉토리 제거.
  */
-export class StagehandBrowserSessionProvider implements BrowserSessionProvider {
+export class StagehandBrowserSessionProvider implements BrowserSessionProvider, RunAbortDrainer {
   readonly binding = { kind: "real" } as const;
   private readonly pool = new LeaseKeyedSessionProvider();
   private readonly createSession: NonNullable<StagehandBrowserSessionProviderOptions["createSession"]>;
+  private readonly active = new Map<string, ActiveBoundSession>();
 
   constructor(private readonly options: StagehandBrowserSessionProviderOptions) {
     this.createSession = options.createSession ?? createStagehandSession;
@@ -149,7 +177,42 @@ export class StagehandBrowserSessionProvider implements BrowserSessionProvider {
       throw e; // CDP_DISCONNECTED 등 표면화 — 조용한 null 세션 금지
     }
     this.pool.register(input.leaseId, session);
-    return boundSession(this.pool, input.leaseId, downloadDir);
+    this.active.set(input.leaseId, { session, downloadDir });
+    return {
+      provider: this.pool,
+      release: async () => {
+        const entry = this.active.get(input.leaseId);
+        if (entry !== undefined) {
+          this.active.delete(input.leaseId);
+          this.pool.unbind(input.leaseId);
+          await entry.session.close();
+          rmSync(entry.downloadDir, { recursive: true, force: true });
+          return;
+        }
+        const stale = this.pool.unbind(input.leaseId);
+        if (stale !== undefined) await stale.close();
+        rmSync(downloadDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  async drainAbort(input: RunAbortDrainInput): Promise<RunAbortDrainResult> {
+    const entry = this.active.get(input.leaseId);
+    if (entry === undefined) {
+      return {
+        kind: "transient_failed",
+        retryAfterMs: Math.min(1_000, Math.max(1, Math.floor(input.timeoutMs / 2))),
+        reason: "browser session is not bound to this worker process",
+      };
+    }
+    const result = await closeWithTimeout(entry.session, input.timeoutMs);
+    if (result === "drained" || result === "timeout") {
+      this.active.delete(input.leaseId);
+      this.pool.unbind(input.leaseId);
+      rmSync(entry.downloadDir, { recursive: true, force: true });
+      return result === "drained" ? { kind: "drained" } : { kind: "timeout" };
+    }
+    return { kind: "transient_failed", retryAfterMs: 1_000, reason: result.reason };
   }
 }
 

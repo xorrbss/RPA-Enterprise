@@ -15,6 +15,8 @@ import {
 } from "../src/executor/browser-session-provider";
 import type { CdpSession } from "../src/executor/cdp-session";
 import { CdpDisconnectedError } from "../src/executor/raw-cdp";
+import type { LeaseId, RunAbortDrainInput, WorkerId } from "../../ts/runtime-contract";
+import type { CorrelationId, RunId, TenantId } from "../../ts/security-middleware-contract";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -56,6 +58,36 @@ const INPUT: BrowserSessionBindInput = {
 // createStagehandSession 자리에 주입할 fake 팩토리(실 Chrome 미기동) — 매 호출 새 FakeCdpSession.
 function fakeCreateSession(opts: { downloadDir: string }): Promise<CdpSession> {
   return Promise.resolve(new FakeCdpSession(opts.downloadDir));
+}
+
+function abortInput(leaseId = INPUT.leaseId, timeoutMs = 50): RunAbortDrainInput {
+  return {
+    tenantId: INPUT.tenantId as TenantId,
+    runId: "run-1" as RunId,
+    leaseId: leaseId as LeaseId,
+    workerId: "worker-1" as WorkerId,
+    correlationId: "corr-1" as CorrelationId,
+    timeoutMs,
+  };
+}
+
+class HangingCloseSession extends FakeCdpSession {
+  async close(): Promise<void> {
+    this.closeCalls += 1;
+    return new Promise(() => undefined);
+  }
+}
+
+class FailingOnceSession extends FakeCdpSession {
+  closeAttempts = 0;
+
+  async close(): Promise<void> {
+    this.closeAttempts += 1;
+    if (this.closeAttempts === 1) {
+      throw new Error("close still in progress");
+    }
+    await super.close();
+  }
 }
 
 async function main(): Promise<void> {
@@ -114,6 +146,64 @@ async function main(): Promise<void> {
   }
 
   // 5) 동시 다수 lease: 공유 pool, 각자 자기 세션(cross-lease 공유 없음).
+  {
+    const provider = new StagehandBrowserSessionProvider({ chromeExecutablePath: "/x/chrome", createSession: fakeCreateSession });
+    const bound = await provider.bind(INPUT);
+    const session = bound.provider.forLease(INPUT.leaseId) as FakeCdpSession;
+    const drained = await provider.drainAbort(abortInput());
+    check("run_abort drain closes bound lease", drained.kind === "drained" && session.closeCalls === 1, JSON.stringify(drained));
+    const afterDrain = caughtSync(() => bound.provider.forLease(INPUT.leaseId));
+    check("run_abort drain unbinds lease", afterDrain instanceof CdpDisconnectedError, String(afterDrain));
+    await bound.release();
+    check("release after abort drain is idempotent", session.closeCalls === 1, `closeCalls=${session.closeCalls}`);
+  }
+
+  {
+    const provider = new StagehandBrowserSessionProvider({ chromeExecutablePath: "/x/chrome", createSession: fakeCreateSession });
+    const missing = await provider.drainAbort(abortInput("missing-lease"));
+    check(
+      "run_abort drain missing local lease -> transient_failed",
+      missing.kind === "transient_failed" && missing.reason.includes("not bound"),
+      JSON.stringify(missing),
+    );
+  }
+
+  {
+    let session: HangingCloseSession | undefined;
+    const provider = new StagehandBrowserSessionProvider({
+      chromeExecutablePath: "/x/chrome",
+      createSession: (opts) => {
+        session = new HangingCloseSession(opts.downloadDir);
+        return Promise.resolve(session);
+      },
+    });
+    const bound = await provider.bind({ ...INPUT, leaseId: "timeout-lease" });
+    const timedOut = await provider.drainAbort(abortInput("timeout-lease", 1));
+    check("run_abort drain close timeout -> timeout", timedOut.kind === "timeout", JSON.stringify(timedOut));
+    check("run_abort drain timeout attempted close once", session?.closeCalls === 1, `closeCalls=${session?.closeCalls}`);
+    const afterTimeout = caughtSync(() => bound.provider.forLease("timeout-lease"));
+    check("run_abort drain timeout unbinds lease", afterTimeout instanceof CdpDisconnectedError, String(afterTimeout));
+    await bound.release();
+  }
+
+  {
+    let session: FailingOnceSession | undefined;
+    const provider = new StagehandBrowserSessionProvider({
+      chromeExecutablePath: "/x/chrome",
+      createSession: (opts) => {
+        session = new FailingOnceSession(opts.downloadDir);
+        return Promise.resolve(session);
+      },
+    });
+    const bound = await provider.bind({ ...INPUT, leaseId: "retry-lease" });
+    const first = await provider.drainAbort(abortInput("retry-lease"));
+    check("run_abort drain close failure -> transient_failed", first.kind === "transient_failed", JSON.stringify(first));
+    check("run_abort drain close failure keeps lease bound", bound.provider.forLease("retry-lease") === session);
+    const second = await provider.drainAbort(abortInput("retry-lease"));
+    check("run_abort drain retry can close same lease", second.kind === "drained" && session?.closeCalls === 1, JSON.stringify(second));
+    await bound.release();
+  }
+
   {
     const provider = new StagehandBrowserSessionProvider({ chromeExecutablePath: "/x/chrome", createSession: fakeCreateSession });
     const b1 = await provider.bind({ ...INPUT, leaseId: "L1" });
