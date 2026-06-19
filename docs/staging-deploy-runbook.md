@@ -68,6 +68,7 @@ Video recorder env는 API와 worker가 분리 배포된 경우 양쪽에 맞춰 
 ```powershell
 $env:VISUAL_EVIDENCE_VIDEO_ENABLED="true"
 $env:VISUAL_EVIDENCE_FFMPEG_PATH="C:\tools\ffmpeg.exe"
+$env:VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED="true" # API-only deployment: operator confirms the worker fleet also has video enabled
 $env:VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS="1000" # optional
 $env:VISUAL_EVIDENCE_VIDEO_FPS="1"                  # optional
 ```

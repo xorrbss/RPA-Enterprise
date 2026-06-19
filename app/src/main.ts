@@ -188,8 +188,8 @@ function buildScenarioGenerationPlannerBinding(pool: PgPool, cfg: ScenarioGenera
   };
 }
 
-async function startApi(pool: PgPool, common: CommonConfig): Promise<FastifyInstance> {
-  const cfg = loadApiConfig(common);
+async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMode()): Promise<FastifyInstance> {
+  const cfg = loadApiConfig(common, { runMode });
   const scenarioGenerationLlmV1 = loadScenarioGenerationLlmV1Config();
   const scenarioPlanner = scenarioGenerationLlmV1 !== undefined ? buildScenarioGenerationPlannerBinding(pool, scenarioGenerationLlmV1) : undefined;
   // 세션 캡처 봉투암호화 스토어 — KEK(api/browser_session) 프로비저닝 시에만 활성(미설정 → undefined → 엔드포인트 미등록, fail-closed).
@@ -386,7 +386,7 @@ async function main(): Promise<void> {
   let api: FastifyInstance | undefined;
   let runner: Runner | undefined;
 
-  if (mode === "api" || mode === "all") api = await startApi(pool, common);
+  if (mode === "api" || mode === "all") api = await startApi(pool, common, mode);
   if (mode === "worker" || mode === "all") runner = await startWorker(pool, common.connectionString);
 
   let shuttingDown = false;

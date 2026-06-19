@@ -143,11 +143,14 @@ function loadSignedCommandRegistryConfig(common: CommonConfig): ApiConfig["signe
   };
 }
 
-export function loadApiConfig(common: CommonConfig): ApiConfig {
+export function loadApiConfig(common: CommonConfig, options: { readonly runMode?: RunMode } = {}): ApiConfig {
   const origins = opt("CORS_ORIGINS");
-  const videoRecordingEnabled = bool("VISUAL_EVIDENCE_VIDEO_ENABLED", false);
+  const videoRecordingEnabled = strictBool("VISUAL_EVIDENCE_VIDEO_ENABLED", false);
   if (videoRecordingEnabled) {
     req("VISUAL_EVIDENCE_FFMPEG_PATH");
+    if (options.runMode === "api" && !strictBool("VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED", false)) {
+      throw new Error("VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED must be true when API-only mode advertises video recording");
+    }
   }
   return {
     port: num("PORT", 8080),
@@ -199,7 +202,7 @@ export interface WorkerConfig {
 }
 
 export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
-  const videoRecordingEnabled = bool("VISUAL_EVIDENCE_VIDEO_ENABLED", false);
+  const videoRecordingEnabled = strictBool("VISUAL_EVIDENCE_VIDEO_ENABLED", false);
   const videoFrameIntervalMs = num("VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS", 1000);
   if (!Number.isInteger(videoFrameIntervalMs) || videoFrameIntervalMs <= 0) {
     throw new Error(`VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS must be a positive integer, got ${videoFrameIntervalMs}`);

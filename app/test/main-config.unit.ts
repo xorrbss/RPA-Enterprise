@@ -45,7 +45,7 @@ const CLEAR = [
   "API_ARTIFACT_DIR", "GATEWAY_ARTIFACT_DIR", "GATEWAY_ARTIFACT_RETENTION_DAYS", "PROMPT_TEMPLATE_VERSION",
   "SCENARIO_GENERATION_LLM_V1_ENABLED", "SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION",
   "JWKS_URL", "JWT_ISSUER", "JWT_AUDIENCE",
-  "VISUAL_EVIDENCE_VIDEO_ENABLED", "VISUAL_EVIDENCE_FFMPEG_PATH",
+  "VISUAL_EVIDENCE_VIDEO_ENABLED", "VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED", "VISUAL_EVIDENCE_FFMPEG_PATH",
   "VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS", "VISUAL_EVIDENCE_VIDEO_FPS",
 ];
 
@@ -110,8 +110,18 @@ function main(): void {
   });
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true" }, () =>
     expectThrow("api video enabled without ffmpeg path throws", () => loadApiConfig(API_COMMON)));
+  withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "maybe" }, () =>
+    expectThrow("api video enabled flag must be true|false", () => loadApiConfig(API_COMMON)));
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true", VISUAL_EVIDENCE_FFMPEG_PATH: "C:\\tools\\ffmpeg.exe" }, () =>
     check("api video recording capability enabled with ffmpeg path", loadApiConfig(API_COMMON).videoRecordingEnabled === true));
+  withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true", VISUAL_EVIDENCE_FFMPEG_PATH: "C:\\tools\\ffmpeg.exe" }, () =>
+    expectThrow("api-only video enabled without worker confirmation throws", () => loadApiConfig(API_COMMON, { runMode: "api" })));
+  withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true", VISUAL_EVIDENCE_FFMPEG_PATH: "C:\\tools\\ffmpeg.exe", VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED: "false" }, () =>
+    expectThrow("api-only video enabled with false worker confirmation throws", () => loadApiConfig(API_COMMON, { runMode: "api" })));
+  withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true", VISUAL_EVIDENCE_FFMPEG_PATH: "C:\\tools\\ffmpeg.exe", VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED: "maybe" }, () =>
+    expectThrow("api-only video worker confirmation must be true|false", () => loadApiConfig(API_COMMON, { runMode: "api" })));
+  withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true", VISUAL_EVIDENCE_FFMPEG_PATH: "C:\\tools\\ffmpeg.exe", VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED: "true" }, () =>
+    check("api-only video enabled with worker confirmation", loadApiConfig(API_COMMON, { runMode: "api" }).videoRecordingEnabled === true));
   withEnv({ ...FULL, API_ARTIFACT_DIR: "/var/lib/rpa/api-artifacts" }, () =>
     check("api artifactDir uses API_ARTIFACT_DIR", loadApiConfig(API_COMMON).artifactDir === "/var/lib/rpa/api-artifacts"));
   withEnv({ ...FULL, GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/gw-artifacts" }, () =>
@@ -198,6 +208,8 @@ function main(): void {
   });
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true" }, () =>
     expectThrow("worker video enabled without ffmpeg path throws", () => loadWorkerConfig(common)));
+  withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "maybe" }, () =>
+    expectThrow("worker video enabled flag must be true|false", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS: "0" }, () =>
     expectThrow("worker video non-positive frame interval throws", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_FPS: "0" }, () =>
