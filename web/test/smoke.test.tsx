@@ -357,6 +357,143 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.getByText("서버에서 동영상 녹화가 비활성화되어 있습니다.")).toBeInTheDocument();
   });
 
+  test("최근 생성: run 연결 항목은 결과·산출물 보기로 RunTrace artifact focus 딥링크", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listScenarioGenerations: async () => ({
+          items: [
+            {
+              generation_id: "00000000-0000-0000-0000-0000000000a1",
+              mode: "save_and_run",
+              status: "run_queued",
+              prompt_hash: "hash",
+              planner: "deterministic_mvp",
+              model: "gpt-4o-mini",
+              scenario_id: "00000000-0000-0000-0000-0000000000c1",
+              scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+              run_id: "00000000-0000-0000-0000-000000000099",
+              blockers: [],
+              draft_ir: {},
+              validation_report: {},
+              created_at: "2026-06-15T00:00:00.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    fireEvent.click(await screen.findByRole("button", { name: "결과·산출물 보기" }));
+
+    await waitFor(() =>
+      expect(location.hash).toBe(
+        "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000a1&focus=artifacts",
+      ),
+    );
+  });
+
+  test("최근 생성: blocked 항목은 진단 요약과 planner 산출물을 선택 표시", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listScenarioGenerations: async () => ({
+          items: [
+            {
+              generation_id: "00000000-0000-0000-0000-0000000000b1",
+              mode: "save_and_run",
+              status: "blocked",
+              prompt_hash: "hash",
+              planner: "llm_v1",
+              model: "gpt-4o-mini",
+              scenario_id: null,
+              scenario_version_id: null,
+              run_id: null,
+              blockers: ["start_url_required_for_auto_run", "target_required_for_auto_run", "video_recording_port_not_configured"],
+              draft_ir: {},
+              validation_report: {},
+              created_at: "2026-06-15T00:00:00.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+        listScenarioGenerationArtifacts: async () => ({
+          items: [
+            {
+              artifact_id: "91000000-0000-0000-0000-000000000001",
+              type: "scenario_generation_planner_output",
+              media_type: "application/json",
+              filename: "planner.json",
+              byte_size: 64,
+              duration_ms: null,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:01.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+        getScenarioGenerationArtifact: async (generationId, artifactId) => ({
+          artifact_id: artifactId,
+          generation_id: generationId,
+          type: "scenario_generation_planner_output",
+          sha256: "abc123",
+          redaction_status: "redacted",
+          retention_until: null,
+          content: '{"diagnostic":"target missing"}',
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    expect(await screen.findByText(/진단: 시작 URL이 필요합니다/)).toHaveTextContent("외 1건");
+    fireEvent.click(screen.getByRole("button", { name: "진단·산출물 보기" }));
+
+    expect(location.hash).toBe("#scenarioStudio");
+    expect(await screen.findByLabelText("generation artifacts")).toBeInTheDocument();
+    expect(await screen.findByText("scenario_generation_planner_output")).toBeInTheDocument();
+    expect(await screen.findByText(/target missing/)).toBeInTheDocument();
+  });
+
+  test("최근 생성: saved/no-run 항목은 실행 딥링크로 연결한 척하지 않는다", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listScenarioGenerations: async () => ({
+          items: [
+            {
+              generation_id: "00000000-0000-0000-0000-0000000000b2",
+              mode: "save",
+              status: "saved",
+              prompt_hash: "hash",
+              planner: "deterministic_mvp",
+              model: null,
+              scenario_id: "00000000-0000-0000-0000-0000000000c1",
+              scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+              run_id: null,
+              blockers: [],
+              draft_ir: {},
+              validation_report: {},
+              created_at: "2026-06-15T00:00:00.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    expect(await screen.findByText("실행 연결 없음")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "결과·산출물 보기" })).toBeNull();
+    expect(screen.queryByLabelText("generation artifacts")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "저장본 확인" }));
+
+    expect(location.hash).toBe("#scenarioStudio");
+    expect(await screen.findByLabelText("generation artifacts")).toBeInTheDocument();
+  });
+
   test("scenario 편집은 저장된 studio_mode=easy로 쉬운 만들기 폼을 복원", async () => {
     renderApp(
       fakeClient({

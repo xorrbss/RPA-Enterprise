@@ -216,7 +216,9 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .generation-history-head h3 { margin: 0; font-size: 14px; }
 .generation-history-list { display: grid; gap: 6px; }
 .generation-history-row { min-height: 34px; padding: 6px 0; border-top: 1px solid var(--line); }
-.generation-history-row code { overflow-wrap: anywhere; }
+.generation-history-row > * { min-width: 0; }
+.generation-history-row code,
+.generation-history-row .subtle { overflow-wrap: anywhere; }
 .segmented.small { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .segmented.small button { border: 0; background: var(--surface); color: var(--muted); padding: 4px 8px; font: inherit; cursor: pointer; }
 .segmented.small button.active { background: var(--blue-soft); color: var(--blue); }

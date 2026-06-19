@@ -87,6 +87,21 @@ function artifactMetaLabel(item: GenerationArtifactItem): string {
   ].filter((value): value is string => value !== null && value.length > 0).join(" · ");
 }
 
+function blockerSummary(blockers: readonly string[]): string | null {
+  if (blockers.length === 0) return null;
+  const visible = blockers.slice(0, 2).map((blocker) => BLOCKER_LABELS[blocker] ?? blocker);
+  const suffix = blockers.length > visible.length ? ` 외 ${blockers.length - visible.length}건` : "";
+  return `${visible.join(" · ")}${suffix}`;
+}
+
+function historyActionLabel(item: ScenarioGenerationResult): string {
+  if (item.run_id !== null) return "결과·산출물 보기";
+  if (item.status === "blocked") return "진단·산출물 보기";
+  if (item.status === "saved") return "저장본 확인";
+  if (item.status === "drafted") return "초안 확인";
+  return "진단 보기";
+}
+
 function previewText(content: string): string {
   try {
     return JSON.stringify(JSON.parse(content), null, 2).slice(0, 3000);
@@ -351,6 +366,11 @@ export function PromptScenarioGenerator(): JSX.Element {
           onRefresh={() => void history.refetch()}
           blockedOnly={historyStatus === "blocked"}
           onBlockedOnlyChange={(next) => setHistoryStatus(next ? "blocked" : undefined)}
+          selectedGenerationId={result?.generation_id ?? null}
+          onSelect={(item) => {
+            setResult(item);
+            qc.setQueryData(["scenario-generation", item.generation_id], item);
+          }}
         />
       </div>
     </section>
@@ -488,6 +508,8 @@ function GenerationHistory({
   onRefresh,
   blockedOnly,
   onBlockedOnlyChange,
+  selectedGenerationId,
+  onSelect,
 }: {
   items: readonly ScenarioGenerationResult[];
   loading: boolean;
@@ -495,11 +517,13 @@ function GenerationHistory({
   onRefresh: () => void;
   blockedOnly: boolean;
   onBlockedOnlyChange: (next: boolean) => void;
+  selectedGenerationId: string | null;
+  onSelect: (item: ScenarioGenerationResult) => void;
 }): JSX.Element {
   return (
     <div className="generation-history">
       <div className="generation-history-head">
-        <h3>최근 생성</h3>
+        <h3>최근 생성 · 다음 액션</h3>
         <div className="segmented small" role="group" aria-label="generation filter">
           <button className={!blockedOnly ? "active" : ""} type="button" onClick={() => onBlockedOnlyChange(false)}>
             전체
@@ -517,21 +541,36 @@ function GenerationHistory({
       {!loading && items.length === 0 && <p className="muted">최근 생성이 없습니다.</p>}
       {items.length > 0 && (
         <div className="generation-history-list">
-          {items.map((item) => (
-            <div className="generation-history-row" key={item.generation_id}>
-              <span className={`badge ${generationStatusTone(item.status)}`}>{generationStatusLabel(item.status)}</span>
-              <code>{item.generation_id.slice(0, 8)}</code>
-              <span className="subtle">{formatGenerationTime(item.created_at)}</span>
-              <span className="subtle">{plannerLabel(item.planner)}</span>
-              {item.model !== undefined && item.model !== null && <span className="subtle">{item.model}</span>}
-              {item.blockers.length > 0 && <span className="subtle">{item.blockers.length} blockers</span>}
-              {item.run_id !== null && (
-                <button className="linklike" type="button" onClick={() => navigate("runTrace", { run: item.run_id!, generation: item.generation_id, focus: "artifacts" })}>
-                  실행 보기
-                </button>
-              )}
-            </div>
-          ))}
+          {items.map((item) => {
+            const diagnostic = blockerSummary(item.blockers);
+            const isSelected = item.generation_id === selectedGenerationId;
+            const runId = item.run_id;
+            return (
+              <div className="generation-history-row" key={item.generation_id} aria-current={isSelected ? "true" : undefined}>
+                <span className={`badge ${generationStatusTone(item.status)}`}>{generationStatusLabel(item.status)}</span>
+                <code>{item.generation_id.slice(0, 8)}</code>
+                <span className="subtle">{formatGenerationTime(item.created_at)}</span>
+                <span className="subtle">{plannerLabel(item.planner)}</span>
+                {item.model !== undefined && item.model !== null && <span className="subtle">{item.model}</span>}
+                {diagnostic !== null && (
+                  <span className="subtle" title={item.blockers.join(", ")}>
+                    진단: {diagnostic}
+                  </span>
+                )}
+                {item.status === "saved" && item.run_id === null && <span className="subtle">실행 연결 없음</span>}
+                <span className="subtle">다음</span>
+                {runId !== null ? (
+                  <button className="linklike" type="button" onClick={() => navigate("runTrace", { run: runId, generation: item.generation_id, focus: "artifacts" })}>
+                    {historyActionLabel(item)}
+                  </button>
+                ) : (
+                  <button className="linklike" type="button" onClick={() => onSelect(item)}>
+                    {historyActionLabel(item)}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
