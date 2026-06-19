@@ -245,6 +245,11 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
  */
 function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
   const gw = loadGatewayConfig();
+  const artifactStore = new FsObjectStore(gw.artifactDir);
+  const approvalInboxArtifactSink = new PgGatewayArtifactSink(pool, artifactStore, {
+    type: "approval_inbox",
+    retentionDays: gw.artifactRetentionDays,
+  });
   const gateway = new LlmGateway({
     primary: new CodexSseAdapter(
       new FetchCodexSseTransport({ baseUrl: gw.codexBaseUrl, apiKey: gw.codexApiKey, model: gw.codexModel }),
@@ -259,7 +264,7 @@ function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
     ),
     gate: new SafeCapabilityGate(),
     validator: new AjvStructuredOutputValidator(),
-    sink: new PgGatewayArtifactSink(pool, new FsObjectStore(gw.artifactDir), {
+    sink: new PgGatewayArtifactSink(pool, artifactStore, {
       retentionDays: gw.artifactRetentionDays,
     }),
     idempotency: new PgLlmCallIdempotencyStore(pool),
@@ -270,6 +275,8 @@ function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
     model: gw.codexModel,
     promptTemplateVersion: gw.promptTemplateVersion,
     budget: gw.budget,
+  }, {
+    extractArtifactSink: approvalInboxArtifactSink,
   });
 }
 
