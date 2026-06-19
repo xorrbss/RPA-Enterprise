@@ -6,14 +6,16 @@ import { useApiClient } from "../api/context";
 import { GenerationArtifactsPanel } from "./GenerationArtifactsPanel";
 import { errorLabel, StatusBadge } from "./badges";
 import { navigate } from "../router";
-import type {
-  ScenarioGenerationEvidence,
-  ScenarioGenerationPlanner,
-  ScenarioGenerationRequest,
-  ScenarioGenerationRunRequest,
-  ScenarioGenerationResult,
-  ScenarioItem,
-  SiteItem,
+import {
+  ApiError,
+  type ApiErrorBody,
+  type ScenarioGenerationEvidence,
+  type ScenarioGenerationPlanner,
+  type ScenarioGenerationRequest,
+  type ScenarioGenerationRunRequest,
+  type ScenarioGenerationResult,
+  type ScenarioItem,
+  type SiteItem,
 } from "../api/types";
 
 const BLOCKER_LABELS: Record<string, string> = {
@@ -112,6 +114,13 @@ function canRunGenerationWithCorrections(result: ScenarioGenerationResult): bool
     (result.status === "blocked" || result.status === "saved") &&
     result.blockers.every((blocker) => RUN_REPAIRABLE_BLOCKERS.has(blocker))
   );
+}
+
+function modelRequiredOf(body: ApiErrorBody | null): { available: number } | null {
+  const details = body?.details;
+  if (details === undefined || details.reason !== "model_required") return null;
+  const available = typeof details.available === "number" ? details.available : 0;
+  return { available };
 }
 
 function siteLabel(site: SiteItem): string {
@@ -236,6 +245,8 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [browserIdentityId, setBrowserIdentityId] = useState("");
   const [networkPolicyId, setNetworkPolicyId] = useState("");
   const [model, setModel] = useState("");
+  const [modelRequired, setModelRequired] = useState<{ available: number } | null>(null);
+  const [checkedModel, setCheckedModel] = useState("");
   const [paramsText, setParamsText] = useState("");
   const [planner, setPlanner] = useState<ScenarioGenerationPlanner>("deterministic_mvp");
   const [screenshot, setScreenshot] = useState<ScreenshotPolicy>("each_step");
@@ -255,6 +266,14 @@ export function PromptScenarioGenerator(): JSX.Element {
   const plannerCapability = capabilities.data?.planner;
   const availablePlanners = plannerCapability?.available ?? DEFAULT_AVAILABLE_PLANNERS;
   const defaultPlanner = plannerCapability?.default_planner ?? "deterministic_mvp";
+  const policyCheck = useQuery({
+    queryKey: ["scenario-generator-model-check", checkedModel],
+    queryFn: () => api.getGatewayPolicy(checkedModel),
+    enabled: modelRequired !== null && checkedModel.length > 0,
+    retry: false,
+  });
+  const modelConfirmed = checkedModel.length > 0 && checkedModel === model.trim() && policyCheck.isSuccess;
+  const needModel = modelRequired !== null && !modelConfirmed;
 
   const selectedSite = useMemo(
     () => (sites.data?.items ?? []).find((s) => s.site_profile_id === siteProfileId) ?? null,
@@ -307,6 +326,8 @@ export function PromptScenarioGenerator(): JSX.Element {
     onSuccess: (next) => {
       setResult(next);
       setLocalError(null);
+      setModelRequired(null);
+      setCheckedModel("");
       void qc.invalidateQueries({ queryKey: ["scenarios"] });
       void qc.invalidateQueries({ queryKey: ["scenario-generations"] });
       qc.setQueryData(["scenario-generation", next.generation_id], next);
@@ -316,7 +337,7 @@ export function PromptScenarioGenerator(): JSX.Element {
       }
     },
     onError: (error) => {
-      setLocalError(errorLabel(error));
+      handleMutationError(error);
     },
   });
 
@@ -327,6 +348,8 @@ export function PromptScenarioGenerator(): JSX.Element {
     onSuccess: (next) => {
       setResult(next);
       setLocalError(null);
+      setModelRequired(null);
+      setCheckedModel("");
       void qc.invalidateQueries({ queryKey: ["scenarios"] });
       void qc.invalidateQueries({ queryKey: ["scenario-generations"] });
       qc.setQueryData(["scenario-generation", next.generation_id], next);
@@ -336,9 +359,19 @@ export function PromptScenarioGenerator(): JSX.Element {
       }
     },
     onError: (error) => {
-      setLocalError(errorLabel(error));
+      handleMutationError(error);
     },
   });
+
+  function handleMutationError(error: unknown): void {
+    const mr = error instanceof ApiError && error.code === "IR_SCHEMA_INVALID" ? modelRequiredOf(error.body) : null;
+    if (mr !== null) {
+      setModelRequired(mr);
+      setLocalError(`AI 모델을 지정해야 합니다 (정책 ${mr.available}개, 기본 미지정). 모델명 입력 후 확인하고 다시 실행하세요.`);
+      return;
+    }
+    setLocalError(errorLabel(error));
+  }
 
   function buildRequest(): ScenarioGenerationRequest {
     const trimmedPrompt = prompt.trim();
@@ -402,6 +435,10 @@ export function PromptScenarioGenerator(): JSX.Element {
 
   function submit(): void {
     setLocalError(null);
+    if (needModel) {
+      setLocalError("AI 모델을 입력하고 정책 확인을 완료한 뒤 다시 실행하세요.");
+      return;
+    }
     try {
       const body = buildRequest();
       mutation.mutate(body);
@@ -412,6 +449,10 @@ export function PromptScenarioGenerator(): JSX.Element {
 
   function runWithCorrections(generation: ScenarioGenerationResult): void {
     setLocalError(null);
+    if (needModel) {
+      setLocalError("AI 모델을 입력하고 정책 확인을 완료한 뒤 다시 실행하세요.");
+      return;
+    }
     try {
       const body = buildRunRequest();
       runMutation.mutate({ generation, body });
@@ -486,6 +527,7 @@ export function PromptScenarioGenerator(): JSX.Element {
             <input
               value={model}
               onChange={(event) => setModel(event.target.value)}
+              aria-label="AI 모델"
               list="scenario-generator-models"
               placeholder="기본 정책 사용"
             />
@@ -494,6 +536,27 @@ export function PromptScenarioGenerator(): JSX.Element {
                 <option key={policy.model} value={policy.model} />
               ))}
             </datalist>
+            {modelRequired !== null && (
+              <span style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => setCheckedModel(model.trim())}
+                  disabled={model.trim().length === 0 || policyCheck.isFetching}
+                >
+                  확인
+                </button>
+                <span className="subtle" role="status">
+                  {policyCheck.isFetching
+                    ? "모델 정책 확인 중..."
+                    : modelConfirmed
+                      ? `확인됨 - 정책 '${policyCheck.data?.model ?? checkedModel}' 사용`
+                      : checkedModel.length > 0 && checkedModel === model.trim() && policyCheck.isError
+                        ? `'${checkedModel}' 정책을 찾을 수 없습니다. 모델명을 확인하세요.`
+                        : "모델명을 입력하고 정책 확인 후 다시 실행하세요."}
+                </span>
+              </span>
+            )}
           </label>
           <label className="field">
             <span>사이트</span>
@@ -566,7 +629,7 @@ export function PromptScenarioGenerator(): JSX.Element {
           </div>
         )}
         <div className="generator-actions">
-          <button className="btn primary" type="button" onClick={submit} disabled={mutation.isPending}>
+          <button className="btn primary" type="button" onClick={submit} disabled={mutation.isPending || needModel}>
             <Play size={15} aria-hidden="true" />
             {mutation.isPending ? "생성 중…" : actionLabel}
           </button>
@@ -588,6 +651,7 @@ export function PromptScenarioGenerator(): JSX.Element {
           <GenerationResult
             result={result}
             runPending={runMutation.isPending}
+            modelConfirmationRequired={needModel}
             onRunWithCorrections={runWithCorrections}
           />
         )}
@@ -628,10 +692,12 @@ export function PromptScenarioGenerator(): JSX.Element {
 function GenerationResult({
   result,
   runPending,
+  modelConfirmationRequired,
   onRunWithCorrections,
 }: {
   result: ScenarioGenerationResult;
   runPending: boolean;
+  modelConfirmationRequired: boolean;
   onRunWithCorrections: (generation: ScenarioGenerationResult) => void;
 }): JSX.Element {
   const canRunWithCorrections = canRunGenerationWithCorrections(result);
@@ -674,10 +740,18 @@ function GenerationResult({
       )}
       <GenerationArtifactsPanel generationId={result.generation_id} />
       {canRunWithCorrections && (
-        <button className="btn primary" type="button" onClick={() => onRunWithCorrections(result)} disabled={runPending}>
-          <Play size={15} aria-hidden="true" />
-          {runPending ? "실행 보정 중" : "보정값으로 실행"}
-        </button>
+        <>
+          <button
+            className="btn primary"
+            type="button"
+            onClick={() => onRunWithCorrections(result)}
+            disabled={runPending || modelConfirmationRequired}
+          >
+            <Play size={15} aria-hidden="true" />
+            {runPending ? "실행 보정 중" : "보정값으로 실행"}
+          </button>
+          {modelConfirmationRequired && <span className="subtle">AI 모델 확인 후 실행할 수 있습니다.</span>}
+        </>
       )}
       {result.run_id !== null && (
         <button className="btn" type="button" onClick={() => navigate("runTrace", { run: result.run_id!, generation: result.generation_id, focus: "artifacts" })}>

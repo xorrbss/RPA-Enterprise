@@ -5,7 +5,7 @@ import { describe, expect, test, beforeEach } from "vitest";
 import { App } from "../src/App";
 import type { ApiClient } from "../src/api/client";
 import { ApiClientProvider } from "../src/api/context";
-import type { ScenarioGenerationResult } from "../src/api/types";
+import { ApiError, type ScenarioGenerationResult } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 const CORRECTION_BUTTON_NAME = "보정값으로 실행";
@@ -30,6 +30,75 @@ describe("PromptScenarioGenerator correction run", () => {
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
+  });
+
+  test("generate model_required requires policy confirmation before retry", async () => {
+    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    const policyChecks: string[] = [];
+    location.hash = "#scenarioStudio";
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        getGatewayPolicy: async (model) => {
+          policyChecks.push(model ?? "");
+          if (model !== "gpt-4o-mini") {
+            throw new ApiError(404, "RESOURCE_NOT_FOUND", { code: "RESOURCE_NOT_FOUND" });
+          }
+          return { model, version: 1, capabilities: { jsonMode: true }, budget: { maxInputTokens: 1000 } };
+        },
+        generateScenario: async (body) => {
+          generateCalls.push(body);
+          if (generateCalls.length === 1) {
+            throw new ApiError(422, "IR_SCHEMA_INVALID", {
+              code: "IR_SCHEMA_INVALID",
+              details: { reason: "model_required", available: 2 },
+            });
+          }
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000b7",
+            mode: body.mode ?? "save_and_run",
+            status: "run_queued",
+            prompt_hash: "hash",
+            planner: body.planner ?? "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: "00000000-0000-0000-0000-000000000099",
+            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            blockers: [],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "Summarize today's orders" } });
+    const submitButton = screen.getByRole("button", { name: "저장 후 실행" });
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(generateCalls).toHaveLength(1));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/AI 모델을 지정해야 합니다/);
+    expect(submitButton).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("AI 모델"), { target: { value: "gpt-4o-mini" } });
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+
+    await waitFor(() => expect(policyChecks).toContain("gpt-4o-mini"));
+    expect(await screen.findByText(/확인됨/)).toBeInTheDocument();
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(generateCalls).toHaveLength(2));
+    expect(generateCalls[1]?.model).toBe("gpt-4o-mini");
+    await waitFor(() =>
+      expect(location.hash).toBe(
+        "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000b7&focus=artifacts",
+      ),
+    );
   });
 
   test("blocked generation can run after target and start URL correction", async () => {
