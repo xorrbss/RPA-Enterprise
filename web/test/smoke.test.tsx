@@ -319,7 +319,11 @@ describe("D7 운영 콘솔 shell", () => {
       },
       evidence: { screenshot: "each_step", video: "always" },
     });
-    await waitFor(() => expect(location.hash).toBe("#runTrace?run=00000000-0000-0000-0000-000000000099&focus=artifacts"));
+    await waitFor(() =>
+      expect(location.hash).toBe(
+        "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000a1&focus=artifacts",
+      ),
+    );
   });
 
   test("자연어 자동화 생성 차단 → blocker를 한국어로 표면화", async () => {

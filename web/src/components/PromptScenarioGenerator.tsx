@@ -165,9 +165,10 @@ export function PromptScenarioGenerator(): JSX.Element {
       setLocalError(null);
       void qc.invalidateQueries({ queryKey: ["scenarios"] });
       void qc.invalidateQueries({ queryKey: ["scenario-generations"] });
+      qc.setQueryData(["scenario-generation", next.generation_id], next);
       if (next.run_id !== null) {
         void qc.invalidateQueries({ queryKey: ["runs"] });
-        navigate("runTrace", { run: next.run_id, focus: "artifacts" });
+        navigate("runTrace", { run: next.run_id, generation: next.generation_id, focus: "artifacts" });
       }
     },
     onError: (error) => {
@@ -396,7 +397,7 @@ function GenerationResult({ result }: { result: ScenarioGenerationResult }): JSX
       )}
       <GenerationArtifactsPanel generationId={result.generation_id} />
       {result.run_id !== null && (
-        <button className="btn" type="button" onClick={() => navigate("runTrace", { run: result.run_id!, focus: "artifacts" })}>
+        <button className="btn" type="button" onClick={() => navigate("runTrace", { run: result.run_id!, generation: result.generation_id, focus: "artifacts" })}>
           실행 결과·산출물 보기
         </button>
       )}
@@ -525,7 +526,7 @@ function GenerationHistory({
               {item.model !== undefined && item.model !== null && <span className="subtle">{item.model}</span>}
               {item.blockers.length > 0 && <span className="subtle">{item.blockers.length} blockers</span>}
               {item.run_id !== null && (
-                <button className="linklike" type="button" onClick={() => navigate("runTrace", { run: item.run_id!, focus: "artifacts" })}>
+                <button className="linklike" type="button" onClick={() => navigate("runTrace", { run: item.run_id!, generation: item.generation_id, focus: "artifacts" })}>
                   실행 보기
                 </button>
               )}

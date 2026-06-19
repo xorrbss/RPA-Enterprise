@@ -89,6 +89,10 @@ assertEqualSet("OpenAPI HumanTaskState enum", openApiEnum("HumanTaskState"), EXP
 assertEqualSet("OpenAPI HumanTaskKind enum", openApiEnum("HumanTaskKind"), EXPECTED_HUMAN_TASK_KINDS);
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts/{artifact_id}");
+assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts");
+assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts/{artifact_id}");
+assertOperationId("listScenarioGenerationArtifacts");
+assertOperationId("getScenarioGenerationArtifact");
 
 if (failures.length > 0) {
   console.error(`contract consistency: ${failures.length} failed`);
@@ -163,6 +167,18 @@ function openApiEnum(schemaName: string): string[] {
 function assertOpenApiPath(path: string): void {
   if (!text("codegen/openapi.yaml").includes(`  ${path}:\n`)) {
     failures.push(`OpenAPI path missing: ${path}`);
+  }
+}
+
+function assertControlPlanePath(path: string): void {
+  if (!text("ts/control-plane-contract.ts").includes(`| "${path}"`)) {
+    failures.push(`ControlPlanePath missing: ${path}`);
+  }
+}
+
+function assertOperationId(operationId: string): void {
+  if (!text("ts/control-plane-contract.ts").includes(`| "${operationId}"`)) {
+    failures.push(`OperationId missing: ${operationId}`);
   }
 }
 

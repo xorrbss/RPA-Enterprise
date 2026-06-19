@@ -14,7 +14,14 @@ import { StatusBadge, tone, type Tone } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
 import { mergeParams, navigate, useHashParam } from "../router";
-import type { ArtifactDetail, RunArtifactItem, RunDetail, RunItem } from "../api/types";
+import type {
+  ArtifactDetail,
+  RunArtifactItem,
+  RunDetail,
+  RunItem,
+  ScenarioGenerationEvidence,
+  ScenarioGenerationResult,
+} from "../api/types";
 
 const POLL_MS = 5_000; // 실시간 = outbox tail 폴링(v1)
 const TERMINAL = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
@@ -41,8 +48,14 @@ export function RunTraceView(): JSX.Element {
   // 선택 run을 해시(`#runTrace?run=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(useState 휘발 대체).
   const sel = useHashParam("run");
   const focusParam = useHashParam("focus");
+  const generationParam = useHashParam("generation");
   const focusArtifacts = focusParam === "artifacts";
   const detail = useQuery({ queryKey: ["run-detail", sel], queryFn: () => api.getRun(sel as string), enabled: sel !== null });
+  const generation = useQuery({
+    queryKey: ["scenario-generation", generationParam],
+    queryFn: () => api.getScenarioGeneration(generationParam as string),
+    enabled: generationParam !== null,
+  });
 
   return (
     <div>
@@ -51,9 +64,10 @@ export function RunTraceView(): JSX.Element {
         <RunDetailPanel
           runId={sel}
           detail={detail}
+          generation={generation}
           focusArtifacts={focusArtifacts}
           onClose={() => {
-            mergeParams({ run: null, artifact: null, focus: null });
+            mergeParams({ run: null, artifact: null, focus: null, generation: null });
           }}
         />
       )}
@@ -82,7 +96,7 @@ export function RunTraceView(): JSX.Element {
             header: "작업",
             render: (r) => (
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <button className="btn" type="button" onClick={() => { mergeParams({ run: r.run_id, artifact: null }); }}>
+                <button className="btn" type="button" onClick={() => { mergeParams({ run: r.run_id, artifact: null, generation: null }); }}>
                   상세
                 </button>
                 {!TERMINAL.has(r.status) && (
@@ -107,11 +121,13 @@ export function RunTraceView(): JSX.Element {
 function RunDetailPanel({
   runId,
   detail,
+  generation,
   focusArtifacts,
   onClose,
 }: {
   runId: string;
   detail: UseQueryResult<RunDetail>;
+  generation: UseQueryResult<ScenarioGenerationResult>;
   focusArtifacts: boolean;
   onClose: () => void;
 }): JSX.Element {
@@ -132,6 +148,7 @@ function RunDetailPanel({
       ) : detail.data !== undefined ? (
         <>
         <ArrivalBanner status={detail.data.status} attempts={detail.data.attempts} reason={detail.data.failure_reason ?? null} />
+        <GenerationRunContext runId={runId} generation={generation} />
         <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", margin: 0 }}>
           <dt className="subtle">상태</dt>
           <dd style={{ margin: 0 }}>
@@ -168,7 +185,12 @@ function RunDetailPanel({
         </>
       ) : null}
       <StepTrace runId={runId} />
-      <RunArtifactsList runId={runId} focusOnMount={focusArtifacts} />
+      <RunArtifactsList
+        runId={runId}
+        focusOnMount={focusArtifacts}
+        runStatus={detail.data?.status}
+        evidencePolicy={generation.data?.run_id === runId ? generation.data.evidence_policy : undefined}
+      />
     </SlideOver>
   );
 }
@@ -194,6 +216,40 @@ function ArrivalBanner({
       <span>실행이 종료되었습니다{attempts > 1 ? ` · 시도 ${attempts}회` : ""}.</span>
       {failed && reason !== null && <span>{reason.code}: {reason.message}</span>}
       {failed && reason === null && <span className="subtle">자세한 원인은 아래 단계 트레이스를 확인하세요.</span>}
+    </div>
+  );
+}
+
+function GenerationRunContext({
+  runId,
+  generation,
+}: {
+  runId: string;
+  generation: UseQueryResult<ScenarioGenerationResult>;
+}): JSX.Element | null {
+  if (generation.isLoading) {
+    return (
+      <div className="badge muted" role="status" aria-label="generation context">
+        자연어 생성 컨텍스트 확인 중
+      </div>
+    );
+  }
+  if (generation.isError) {
+    return (
+      <div className="badge amber" role="status" aria-label="generation context">
+        자연어 생성 컨텍스트를 불러오지 못했습니다
+      </div>
+    );
+  }
+  if (generation.data === undefined) return null;
+
+  const linked = generation.data.run_id === runId;
+  return (
+    <div className={`badge ${linked ? "blue" : "amber"}`} role="status" aria-label="generation context">
+      <span>자연어 생성 {generation.data.generation_id.slice(0, 8)}</span>
+      <span>{generation.data.status}</span>
+      {generation.data.model !== undefined && generation.data.model !== null && <span>{generation.data.model}</span>}
+      {!linked && <span>run 연결 불일치</span>}
     </div>
   );
 }
@@ -297,8 +353,59 @@ function artifactSummary(items: readonly RunArtifactItem[]): { screenshots: numb
   );
 }
 
+function screenshotRequestLabel(value: ScenarioGenerationEvidence["screenshot"] | undefined): string {
+  if (value === "each_step") return "매 단계";
+  if (value === "failure") return "실패 시";
+  return "요청 없음";
+}
+
+function videoRequestLabel(value: ScenarioGenerationEvidence["video"] | undefined): string {
+  if (value === "always") return "전체 실행";
+  if (value === "failure") return "실패 시";
+  return "요청 없음";
+}
+
+function EvidenceStorageReadout({
+  policy,
+  counts,
+  runStatus,
+  loaded,
+}: {
+  policy: ScenarioGenerationEvidence | undefined;
+  counts: { screenshots: number; videos: number; pending: number };
+  runStatus: string | undefined;
+  loaded: boolean;
+}): JSX.Element | null {
+  if (policy === undefined) return null;
+  const terminal = runStatus !== undefined && TERMINAL.has(runStatus);
+  const missingScreenshot = loaded && terminal && policy.screenshot === "each_step" && counts.screenshots === 0;
+  const missingVideo = loaded && terminal && policy.video === "always" && counts.videos === 0;
+
+  return (
+    <div className="inline-facts" role="status" aria-label="evidence storage" style={{ marginTop: 8 }}>
+      <span className="subtle">요청 이미지: {screenshotRequestLabel(policy.screenshot)}</span>
+      <span className="subtle">요청 동영상: {videoRequestLabel(policy.video)}</span>
+      <span className="badge blue">저장 이미지 {counts.screenshots}</span>
+      <span className="badge amber">저장 동영상 {counts.videos}</span>
+      {counts.pending > 0 && <span className="badge muted">redaction 대기 {counts.pending}</span>}
+      {missingScreenshot && <span className="badge amber">요청 이미지 미저장</span>}
+      {missingVideo && <span className="badge amber">요청 동영상 미저장</span>}
+    </div>
+  );
+}
+
 // 산출물(artifact) 목록 + 결과 미리보기 — 본문 조회는 getArtifact(redaction→RBAC→audit 게이트)를 통한다. 라이브=폴링.
-function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount: boolean }): JSX.Element {
+function RunArtifactsList({
+  runId,
+  focusOnMount,
+  runStatus,
+  evidencePolicy,
+}: {
+  runId: string;
+  focusOnMount: boolean;
+  runStatus: string | undefined;
+  evidencePolicy: ScenarioGenerationEvidence | undefined;
+}): JSX.Element {
   const api = useApiClient();
   const artifactsRef = useRef<HTMLDivElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -342,6 +449,7 @@ function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount
           </span>
         )}
       </div>
+      <EvidenceStorageReadout policy={evidencePolicy} counts={counts} runStatus={runStatus} loaded={!q.isLoading && !q.isError} />
       {q.isLoading ? (
         <Loading />
       ) : q.isError ? (

@@ -336,4 +336,93 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(image).toHaveAttribute("src", "blob:test-preview");
     expect(screen.queryByText(/should not be initial preview/)).toBeNull();
   });
+
+  test("prompt-created run shows requested evidence policy with stored artifact counts", async () => {
+    installObjectUrlMock();
+    const runId = "11111111-aaaa-bbbb-cccc-000000000001";
+    const generationId = "00000000-0000-0000-0000-0000000000a1";
+    renderApp(fakeClient({
+      getRun: async (id) => ({ run_id: id, status: "completed", worker_id: "w1", attempts: 1, as_of: null }),
+      getScenarioGeneration: async (id) => ({
+        generation_id: id,
+        mode: "save_and_run",
+        status: "run_queued",
+        prompt_hash: "hash",
+        planner: "llm_v1",
+        model: "gpt-4o-mini",
+        scenario_id: "00000000-0000-0000-0000-0000000000c1",
+        scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+        run_id: runId,
+        evidence_policy: { screenshot: "each_step", video: "always" },
+        blockers: [],
+        draft_ir: {},
+        validation_report: {},
+      }),
+      listRunArtifacts: async () => ({
+        items: [
+          {
+            artifact_id: "art-screen-1",
+            type: "screen_capture",
+            media_type: "image/png",
+            filename: "step.png",
+            byte_size: 1024,
+            duration_ms: null,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:01.000Z",
+          },
+          {
+            artifact_id: "art-video-1",
+            type: "run_video",
+            media_type: "video/webm",
+            filename: "run.webm",
+            byte_size: 2048,
+            duration_ms: 2000,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:02.000Z",
+          },
+        ],
+        next_cursor: null,
+      }),
+      getArtifactBlob: async () => new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }),
+    }));
+    location.hash = `#runTrace?run=${runId}&generation=${generationId}&focus=artifacts`;
+
+    const readout = await screen.findByLabelText("evidence storage");
+    expect(readout).toHaveTextContent("요청 이미지: 매 단계");
+    expect(readout).toHaveTextContent("요청 동영상: 전체 실행");
+    expect(readout).toHaveTextContent("저장 이미지 1");
+    expect(readout).toHaveTextContent("저장 동영상 1");
+  });
+
+  test("mismatched generation deep link is called out and does not drive evidence storage", async () => {
+    const runId = "11111111-aaaa-bbbb-cccc-000000000001";
+    const generationId = "00000000-0000-0000-0000-0000000000a1";
+    renderApp(fakeClient({
+      getRun: async (id) => ({ run_id: id, status: "completed", worker_id: "w1", attempts: 1, as_of: null }),
+      getScenarioGeneration: async (id) => ({
+        generation_id: id,
+        mode: "save_and_run",
+        status: "run_queued",
+        prompt_hash: "hash",
+        planner: "deterministic_mvp",
+        model: null,
+        scenario_id: "00000000-0000-0000-0000-0000000000c1",
+        scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+        run_id: "22222222-aaaa-bbbb-cccc-000000000002",
+        evidence_policy: { screenshot: "each_step", video: "always" },
+        blockers: [],
+        draft_ir: {},
+        validation_report: {},
+      }),
+      listRunArtifacts: async () => ({ items: [], next_cursor: null }),
+    }));
+    location.hash = `#runTrace?run=${runId}&generation=${generationId}&focus=artifacts`;
+
+    await waitFor(() => expect(screen.getByLabelText("generation context")).toHaveTextContent("run 연결 불일치"));
+    expect(screen.queryByLabelText("evidence storage")).toBeNull();
+  });
 });
