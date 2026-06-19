@@ -340,6 +340,25 @@ describe("D7 운영 콘솔 shell", () => {
     );
   });
 
+  test("prompt generator hides llm planner when capability is unavailable", async () => {
+    renderApp(
+      fakeClient({
+        getScenarioGenerationCapabilities: async () => ({
+          planner: { default_planner: "deterministic_mvp", available: ["deterministic_mvp"] },
+          visual_evidence: {
+            screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
+            video: { enabled: false, policies: ["never"], default_policy: "never", artifact_type: "video_masked", media_type: "video/webm" },
+          },
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    const plannerSelect = await screen.findByLabelText("Planner");
+    expect(plannerSelect).toHaveValue("deterministic_mvp");
+    expect(within(plannerSelect).getByRole("option", { name: "MVP Planner" })).toBeInTheDocument();
+    expect(within(plannerSelect).queryByRole("option", { name: "LLM Planner" })).not.toBeInTheDocument();
+  });
+
   test("자연어 자동화 생성: 서버 영상 capability가 있으면 기본 동영상 증거를 요청", async () => {
     const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
     renderApp(

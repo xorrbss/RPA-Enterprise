@@ -999,6 +999,21 @@ async function main(): Promise<void> {
       });
       check("llm_v1 planner request fails closed when not configured -> 404", unconfiguredLlmPlanner.statusCode === 404, unconfiguredLlmPlanner.body);
       check("llm_v1 unconfigured error code", unconfiguredLlmPlanner.json().code === "RESOURCE_NOT_FOUND", unconfiguredLlmPlanner.body);
+      const defaultCapabilities = await app.inject({
+        method: "GET",
+        url: "/v1/scenario-generations/capabilities",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("scenario generation capabilities default planner -> 200", defaultCapabilities.statusCode === 200, defaultCapabilities.body);
+      check(
+        "scenario generation capabilities hides unconfigured llm_v1",
+        isRecord(defaultCapabilities.json().planner) &&
+          defaultCapabilities.json().planner.default_planner === "deterministic_mvp" &&
+          Array.isArray(defaultCapabilities.json().planner.available) &&
+          defaultCapabilities.json().planner.available.length === 1 &&
+          defaultCapabilities.json().planner.available[0] === "deterministic_mvp",
+        defaultCapabilities.body,
+      );
 
       const fakeLlmDraftIr = (name: string, evidence: unknown, options?: { omitEvidence?: boolean }): Record<string, unknown> => ({
         meta: {
@@ -1065,6 +1080,20 @@ async function main(): Promise<void> {
       });
       await llmPlannerApp.ready();
       try {
+        const llmPlannerCapabilities = await llmPlannerApp.inject({
+          method: "GET",
+          url: "/v1/scenario-generations/capabilities",
+          headers: { authorization: `Bearer ${viewer}` },
+        });
+        check("configured llm_v1 capabilities -> 200", llmPlannerCapabilities.statusCode === 200, llmPlannerCapabilities.body);
+        check(
+          "configured llm_v1 capabilities advertise planner",
+          isRecord(llmPlannerCapabilities.json().planner) &&
+            Array.isArray(llmPlannerCapabilities.json().planner.available) &&
+            llmPlannerCapabilities.json().planner.available.includes("deterministic_mvp") &&
+            llmPlannerCapabilities.json().planner.available.includes("llm_v1"),
+          llmPlannerCapabilities.body,
+        );
         const llmPlanned = await llmPlannerApp.inject({
           method: "POST",
           url: "/v1/scenario-generations",

@@ -1675,8 +1675,22 @@ components:
     ScenarioGenerationCapabilities:
       type: object
       additionalProperties: false
-      required: [visual_evidence]
+      required: [planner, visual_evidence]
       properties:
+        planner:
+          type: object
+          additionalProperties: false
+          required: [default_planner, available]
+          properties:
+            default_planner:
+              type: string
+              enum: [deterministic_mvp]
+            available:
+              type: array
+              minItems: 1
+              items:
+                type: string
+                enum: [deterministic_mvp, llm_v1]
         visual_evidence:
           type: object
           additionalProperties: false

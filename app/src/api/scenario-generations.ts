@@ -93,7 +93,15 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
     { config: { rbacAction: "scenario.read" } },
     async () => {
       const videoRecording = deps.scenarioGenerationCapabilities?.videoRecording === true;
+      const planners: ScenarioPlannerId[] = [
+        "deterministic_mvp",
+        ...(deps.scenarioGenerationPlanner !== undefined ? [deps.scenarioGenerationPlanner.id] : []),
+      ];
       return {
+        planner: {
+          default_planner: "deterministic_mvp",
+          available: [...new Set(planners)],
+        },
         visual_evidence: {
           screenshot: {
             enabled: true,

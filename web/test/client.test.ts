@@ -273,6 +273,7 @@ describe("HttpApiClient 계약", () => {
   test("getScenarioGenerationCapabilities → GET /v1/scenario-generations/capabilities", async () => {
     const { calls, client } = harness({
       body: {
+        planner: { default_planner: "deterministic_mvp", available: ["deterministic_mvp"] },
         visual_evidence: {
           screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
           video: { enabled: false, policies: ["never"], default_policy: "never", artifact_type: "video_masked", media_type: "video/webm" },

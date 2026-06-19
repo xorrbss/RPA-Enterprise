@@ -31,6 +31,7 @@ const BLOCKER_LABELS: Record<string, string> = {
 
 type ScreenshotPolicy = "never" | "failure" | "each_step";
 type VideoPolicy = "never" | "failure" | "always";
+const DEFAULT_AVAILABLE_PLANNERS: readonly ScenarioGenerationPlanner[] = ["deterministic_mvp"];
 
 function plannerLabel(value: ScenarioGenerationPlanner): string {
   return value === "llm_v1" ? "LLM Planner" : "MVP Planner";
@@ -135,6 +136,9 @@ export function PromptScenarioGenerator(): JSX.Element {
     [videoCapability?.policies],
   );
   const videoDefaultPolicy = videoCapability?.default_policy ?? (videoRecordingEnabled ? "always" : "never");
+  const plannerCapability = capabilities.data?.planner;
+  const availablePlanners = plannerCapability?.available ?? DEFAULT_AVAILABLE_PLANNERS;
+  const defaultPlanner = plannerCapability?.default_planner ?? "deterministic_mvp";
 
   const selectedSite = useMemo(
     () => (sites.data?.items ?? []).find((s) => s.site_profile_id === siteProfileId) ?? null,
@@ -172,6 +176,12 @@ export function PromptScenarioGenerator(): JSX.Element {
       setVideo(videoDefaultPolicy);
     }
   }, [video, videoCapability, videoDefaultPolicy, videoTouched]);
+
+  useEffect(() => {
+    if (!availablePlanners.includes(planner)) {
+      setPlanner(defaultPlanner);
+    }
+  }, [availablePlanners, defaultPlanner, planner]);
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -274,8 +284,11 @@ export function PromptScenarioGenerator(): JSX.Element {
           <label className="field">
             <span>Planner</span>
             <select value={planner} onChange={(event) => setPlanner(event.target.value as ScenarioGenerationPlanner)}>
-              <option value="deterministic_mvp">MVP Planner</option>
-              <option value="llm_v1">LLM Planner</option>
+              {availablePlanners.map((option) => (
+                <option key={option} value={option}>
+                  {plannerLabel(option)}
+                </option>
+              ))}
             </select>
           </label>
           <label className="field">

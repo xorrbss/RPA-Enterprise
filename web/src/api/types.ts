@@ -214,6 +214,10 @@ export interface ScenarioGenerationEvidence {
 }
 
 export interface ScenarioGenerationCapabilities {
+  readonly planner?: {
+    readonly default_planner: ScenarioGenerationPlanner;
+    readonly available: ReadonlyArray<ScenarioGenerationPlanner>;
+  };
   readonly visual_evidence: {
     readonly screenshot: {
       readonly enabled: boolean;

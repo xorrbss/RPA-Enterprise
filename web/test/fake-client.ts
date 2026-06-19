@@ -77,6 +77,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     createScenario: async () => ({ scenario_id: "00000000-0000-0000-0000-0000000000c1", version: 1, promotion_status: "draft" }),
     updateScenario: async (_id, _ir, version) => ({ scenario_id: "00000000-0000-0000-0000-0000000000c1", version: version + 1, promotion_status: "draft" }),
     getScenarioGenerationCapabilities: async () => ({
+      planner: { default_planner: "deterministic_mvp", available: ["deterministic_mvp", "llm_v1"] },
       visual_evidence: {
         screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
         video: { enabled: false, policies: ["never"], default_policy: "never", artifact_type: "video_masked", media_type: "video/webm" },
