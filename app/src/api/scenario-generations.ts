@@ -141,7 +141,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
     },
   );
 
-  app.get<{ Querystring: { limit?: string; cursor?: string; status?: string } }>(
+  app.get<{ Querystring: { limit?: string; cursor?: string; status?: string; run_id?: string } }>(
     "/v1/scenario-generations",
     { config: { rbacAction: "scenario.read" } },
     async (request, reply) => {
@@ -149,14 +149,16 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
       const limit = parseListLimit(request.query.limit);
       const cursor = parseListCursor(request.query.cursor);
       const status = parseGenerationStatusFilter(request.query.status);
+      const runId = parseRunIdFilter(request.query.run_id);
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
         const result = await client.query<ScenarioGenerationRow>(
           `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, draft_ir, validation_report,
                   evidence_policy, blockers, scenario_id, scenario_version_id, run_id,
                   created_by, created_at::text AS created_at
-             FROM scenario_generations
+            FROM scenario_generations
             WHERE tenant_id=$1::uuid
               AND ($4::text IS NULL OR status=$4)
+              AND ($6::uuid IS NULL OR run_id=$6::uuid)
               AND (
                 $2::timestamptz IS NULL
                 OR created_at < $2::timestamptz
@@ -164,7 +166,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
               )
             ORDER BY created_at DESC, id DESC
             LIMIT $5::int`,
-          [principal.tenantId, cursor?.createdAt ?? null, cursor?.id ?? null, status ?? null, limit + 1],
+          [principal.tenantId, cursor?.createdAt ?? null, cursor?.id ?? null, status ?? null, limit + 1, runId ?? null],
         );
         return result.rows;
       });
@@ -1496,6 +1498,12 @@ function parseGenerationStatusFilter(value: string | undefined): GenerationStatu
     return value;
   }
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_generation_status" });
+}
+
+function parseRunIdFilter(value: string | undefined): string | undefined {
+  if (value === undefined || value.length === 0) return undefined;
+  if (UUID_RE.test(value)) return value;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_run_id" });
 }
 
 function encodeListCursor(row: ScenarioGenerationRow): string {

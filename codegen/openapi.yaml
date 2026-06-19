@@ -229,6 +229,12 @@ paths:
           schema:
             type: string
             enum: [drafted, saved, run_queued, blocked, failed]
+        - in: query
+          name: run_id
+          description: Linked run id reverse lookup for RunTrace recovery when generation hash is absent.
+          schema:
+            type: string
+            format: uuid
       responses:
         '200':
           description: tenant-scoped scenario generation 목록. prompt 원문은 노출하지 않는다.

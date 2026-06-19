@@ -283,6 +283,7 @@ export interface ScenarioGenerationList {
 
 export interface ScenarioGenerationListParams extends ListParams {
   readonly status?: ScenarioGenerationResult["status"];
+  readonly run_id?: string;
 }
 
 export interface ScenarioGenerationArtifactList {

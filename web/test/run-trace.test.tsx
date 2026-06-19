@@ -429,6 +429,108 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(await screen.findByText(/ready/)).toBeInTheDocument();
   });
 
+  test("prompt-created run recovers linked generation from run_id when generation hash is absent", async () => {
+    installObjectUrlMock();
+    const runId = "11111111-aaaa-bbbb-cccc-000000000001";
+    const generationId = "00000000-0000-0000-0000-0000000000a1";
+    const lookupParams: unknown[] = [];
+    let getByIdCalls = 0;
+    renderApp(fakeClient({
+      getRun: async (id) => ({ run_id: id, status: "completed", worker_id: "w1", attempts: 1, as_of: null }),
+      getScenarioGeneration: async () => {
+        getByIdCalls += 1;
+        throw new Error("generation hash lookup should not run");
+      },
+      listScenarioGenerations: async (params) => {
+        lookupParams.push(params);
+        return {
+          items: [{
+            generation_id: generationId,
+            mode: "save_and_run",
+            status: "run_queued",
+            prompt_hash: "hash",
+            planner: "llm_v1",
+            model: "gpt-4o-mini",
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: runId,
+            evidence_policy: { screenshot: "each_step", video: "always" },
+            blockers: [],
+            created_at: "2026-06-18T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          }],
+          next_cursor: null,
+        };
+      },
+      listScenarioGenerationArtifacts: async () => ({
+        items: [{
+          artifact_id: "gen-art-planner-1",
+          type: "scenario_generation_planner_output",
+          media_type: "application/json",
+          filename: "planner.json",
+          byte_size: 80,
+          duration_ms: null,
+          redaction_status: "redacted",
+          retention_until: null,
+          legal_hold: false,
+          created_at: "2026-06-18T00:00:00.500Z",
+        }],
+        next_cursor: null,
+      }),
+      getScenarioGenerationArtifact: async (id, artifactId) => ({
+        generation_id: id,
+        artifact_id: artifactId,
+        type: "scenario_generation_planner_output",
+        sha256: "planner-sha",
+        redaction_status: "redacted",
+        retention_until: null,
+        content: '{"planner":"ready"}',
+      }),
+      listRunArtifacts: async () => ({
+        items: [
+          {
+            artifact_id: "art-screen-1",
+            type: "screen_capture",
+            media_type: "image/png",
+            filename: "step.png",
+            byte_size: 1024,
+            duration_ms: null,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:01.000Z",
+          },
+          {
+            artifact_id: "art-video-1",
+            type: "run_video",
+            media_type: "video/webm",
+            filename: "run.webm",
+            byte_size: 2048,
+            duration_ms: 2000,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:02.000Z",
+          },
+        ],
+        next_cursor: null,
+      }),
+      getArtifactBlob: async () => new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }),
+    }));
+    location.hash = `#runTrace?run=${runId}&focus=artifacts`;
+
+    expect(await screen.findByLabelText("generation context")).toHaveTextContent(generationId.slice(0, 8));
+    const readout = await screen.findByLabelText("evidence storage");
+    expect(lookupParams[0]).toEqual({ run_id: runId, limit: 1 });
+    expect(getByIdCalls).toBe(0);
+    expect(readout).toHaveTextContent("저장 이미지 1");
+    expect(readout).toHaveTextContent("저장 동영상 1");
+    expect((await screen.findAllByText("scenario_generation_planner_output")).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/ready/)).toBeInTheDocument();
+  });
+
   test("mismatched generation deep link is called out and does not drive evidence storage", async () => {
     const runId = "11111111-aaaa-bbbb-cccc-000000000001";
     const generationId = "00000000-0000-0000-0000-0000000000a1";

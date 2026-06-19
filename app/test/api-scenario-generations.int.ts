@@ -553,6 +553,26 @@ async function main(): Promise<void> {
         );
         check("run + generation rows persisted", rows.rows[0]?.run_count === "1" && rows.rows[0]?.generation_count === "1", JSON.stringify(rows.rows[0]));
       });
+      const byRun = await app.inject({
+        method: "GET",
+        url: `/v1/scenario-generations?run_id=${encodeURIComponent(runBody.run_id)}&limit=1`,
+        headers: { authorization: `Bearer ${operator}` },
+      });
+      const byRunBody = byRun.json();
+      check("generation list supports run_id reverse lookup", byRun.statusCode === 200, byRun.body);
+      check(
+        "run_id reverse lookup returns linked generation ledger",
+        byRunBody.items?.length === 1 &&
+          byRunBody.items[0]?.generation_id === runBody.generation_id &&
+          byRunBody.items[0]?.run_id === runBody.run_id,
+        byRun.body,
+      );
+      const invalidRunFilter = await app.inject({
+        method: "GET",
+        url: "/v1/scenario-generations?run_id=not-a-run",
+        headers: { authorization: `Bearer ${operator}` },
+      });
+      check("generation list rejects invalid run_id filter", invalidRunFilter.statusCode === 422, invalidRunFilter.body);
 
       const artifactDir = mkdtempSync(join(tmpdir(), "rpa-generation-artifacts-"));
       try {

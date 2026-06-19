@@ -52,10 +52,15 @@ export function RunTraceView(): JSX.Element {
   const generationParam = useHashParam("generation");
   const focusArtifacts = focusParam === "artifacts";
   const detail = useQuery({ queryKey: ["run-detail", sel], queryFn: () => api.getRun(sel as string), enabled: sel !== null });
-  const generation = useQuery({
-    queryKey: ["scenario-generation", generationParam],
-    queryFn: () => api.getScenarioGeneration(generationParam as string),
-    enabled: generationParam !== null,
+  const generation = useQuery<ScenarioGenerationResult | null>({
+    queryKey: ["scenario-generation-for-run", sel, generationParam],
+    queryFn: async () => {
+      if (generationParam !== null) return api.getScenarioGeneration(generationParam);
+      if (sel === null) return null;
+      const linked = await api.listScenarioGenerations({ run_id: sel, limit: 1 });
+      return linked.items.find((item) => item.run_id === sel) ?? null;
+    },
+    enabled: sel !== null,
   });
 
   return (
@@ -64,7 +69,6 @@ export function RunTraceView(): JSX.Element {
       {sel !== null && (
         <RunDetailPanel
           runId={sel}
-          generationId={generationParam}
           detail={detail}
           generation={generation}
           focusArtifacts={focusArtifacts}
@@ -122,16 +126,14 @@ export function RunTraceView(): JSX.Element {
 // 실행 상세 — getRun(RLS 스코프) + run_steps 단계 트레이스(GET /v1/runs/{id}/steps, api-surface §1).
 function RunDetailPanel({
   runId,
-  generationId,
   detail,
   generation,
   focusArtifacts,
   onClose,
 }: {
   runId: string;
-  generationId: string | null;
   detail: UseQueryResult<RunDetail>;
-  generation: UseQueryResult<ScenarioGenerationResult>;
+  generation: UseQueryResult<ScenarioGenerationResult | null>;
   focusArtifacts: boolean;
   onClose: () => void;
 }): JSX.Element {
@@ -142,6 +144,7 @@ function RunDetailPanel({
     enabled: detail.data !== undefined && SUSPENDED.has(detail.data.status),
   });
   const pendingTask = humanTask.data?.items.find((task) => !HUMAN_TASK_TERMINAL.has(task.state));
+  const linkedGenerationId = generation.data?.run_id === runId ? generation.data.generation_id : null;
 
   return (
     <SlideOver title={`실행 상세 — ${runId.slice(0, 8)}`} onClose={onClose}>
@@ -188,7 +191,7 @@ function RunDetailPanel({
         )}
         </>
       ) : null}
-      {generationId !== null && <GenerationArtifactsPanel generationId={generationId} title="자연어 생성 산출물" />}
+      {linkedGenerationId !== null && <GenerationArtifactsPanel generationId={linkedGenerationId} title="자연어 생성 산출물" />}
       <StepTrace runId={runId} />
       <RunArtifactsList
         runId={runId}
@@ -230,7 +233,7 @@ function GenerationRunContext({
   generation,
 }: {
   runId: string;
-  generation: UseQueryResult<ScenarioGenerationResult>;
+  generation: UseQueryResult<ScenarioGenerationResult | null>;
 }): JSX.Element | null {
   if (generation.isLoading) {
     return (
@@ -246,7 +249,7 @@ function GenerationRunContext({
       </div>
     );
   }
-  if (generation.data === undefined) return null;
+  if (generation.data === undefined || generation.data === null) return null;
 
   const linked = generation.data.run_id === runId;
   return (

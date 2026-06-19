@@ -327,9 +327,9 @@ describe("HttpApiClient 계약", () => {
 
   test("listScenarioGenerations → GET /v1/scenario-generations + query", async () => {
     const { calls: generationCalls, client: generationClient } = harness({ body: { items: [], next_cursor: null } });
-    await generationClient.listScenarioGenerations({ limit: 10, cursor: "cursor-1", status: "blocked" });
+    await generationClient.listScenarioGenerations({ limit: 10, cursor: "cursor-1", status: "blocked", run_id: "run-1" });
     expect(generationCalls[0]?.method).toBe("GET");
-    expect(generationCalls[0]?.url).toBe("http://api.test/v1/scenario-generations?limit=10&cursor=cursor-1&status=blocked");
+    expect(generationCalls[0]?.url).toBe("http://api.test/v1/scenario-generations?limit=10&cursor=cursor-1&status=blocked&run_id=run-1");
   });
 
   test("replayDeadLetter(sink) -> POST .../replay?kind=sink + Idempotency-Key", async () => {

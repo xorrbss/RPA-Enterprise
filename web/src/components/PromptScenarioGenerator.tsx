@@ -30,6 +30,19 @@ const BLOCKER_LABELS: Record<string, string> = {
   pagination_page_limit_exceeded: "자동 반복 페이지 상한을 넘었습니다. max_pages를 10 이하로 줄여 주세요.",
 };
 
+const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
+  "target_required_for_auto_run",
+  "start_url_required_for_auto_run",
+  "target_start_url_site_mismatch",
+  "site_profile_not_found",
+  "site_profile_blocked",
+  "browser_identity_not_found",
+  "browser_identity_site_mismatch",
+  "network_policy_not_found",
+  "network_policy_domain_mismatch",
+  "video_recording_port_not_configured",
+]);
+
 type ScreenshotPolicy = "never" | "failure" | "each_step";
 type VideoPolicy = "never" | "failure" | "always";
 const DEFAULT_AVAILABLE_PLANNERS: readonly ScenarioGenerationPlanner[] = ["deterministic_mvp"];
@@ -87,6 +100,15 @@ function historyActionLabel(item: ScenarioGenerationResult): string {
   if (item.status === "saved") return "저장본 확인";
   if (item.status === "drafted") return "초안 확인";
   return "진단 보기";
+}
+
+function canRunGenerationWithCorrections(result: ScenarioGenerationResult): boolean {
+  return (
+    result.run_id === null &&
+    result.scenario_version_id !== null &&
+    (result.status === "blocked" || result.status === "saved") &&
+    result.blockers.every((blocker) => RUN_REPAIRABLE_BLOCKERS.has(blocker))
+  );
 }
 
 function siteLabel(site: SiteItem): string {
@@ -473,7 +495,7 @@ function GenerationResult({
   runPending: boolean;
   onRunWithCorrections: (generation: ScenarioGenerationResult) => void;
 }): JSX.Element {
-  const canRunWithCorrections = result.run_id === null && result.scenario_version_id !== null && (result.status === "blocked" || result.status === "saved");
+  const canRunWithCorrections = canRunGenerationWithCorrections(result);
   return (
     <div className="generation-result" role="status">
       <div className="generation-result-head">

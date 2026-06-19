@@ -7,6 +7,8 @@ import type { ApiClient } from "../src/api/client";
 import { ApiClientProvider } from "../src/api/context";
 import { fakeClient } from "./fake-client";
 
+const CORRECTION_BUTTON_NAME = "보정값으로 실행";
+
 function jwt(roles: readonly string[]): string {
   const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `e30.${payload}.sig`;
@@ -101,7 +103,7 @@ describe("PromptScenarioGenerator correction run", () => {
     fireEvent.click(submitButton);
     await waitFor(() => expect(generateCalls).toHaveLength(1));
 
-    const correctionButton = await screen.findByRole("button", { name: "보정값으로 실행" });
+    const correctionButton = await screen.findByRole("button", { name: CORRECTION_BUTTON_NAME });
     const inputs = view.container.querySelectorAll("input");
     const selects = view.container.querySelectorAll("select");
     fireEvent.change(inputs[1] as HTMLInputElement, { target: { value: "https://shop.example/orders" } });
@@ -126,5 +128,53 @@ describe("PromptScenarioGenerator correction run", () => {
         "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000b3&focus=artifacts",
       ),
     );
+  });
+
+  test.each([
+    ["side_effect_prompt_requires_review"],
+    ["pagination_page_limit_exceeded"],
+  ])("non-repairable blocker %s does not expose correction run", async (blocker) => {
+    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    const runCalls: Array<{ generationId: string; body: Parameters<ApiClient["runScenarioGeneration"]>[1] }> = [];
+    const view = renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => {
+          generateCalls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000b4",
+            mode: body.mode ?? "save_and_run",
+            status: "blocked",
+            prompt_hash: "hash",
+            planner: body.planner ?? "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: null,
+            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            blockers: [blocker],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+        runScenarioGeneration: async (generationId, body) => {
+          runCalls.push({ generationId, body });
+          throw new Error("non-repairable blocker must not call /run");
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    await waitFor(() => expect(view.container.querySelector("textarea")).not.toBeNull());
+    const promptBox = view.container.querySelector("textarea") as HTMLTextAreaElement;
+    fireEvent.change(promptBox, { target: { value: "Post a refund for today's orders" } });
+    const submitButton = view.container.querySelector(".generator-actions button") as HTMLButtonElement;
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(generateCalls).toHaveLength(1));
+    expect(screen.queryByRole("button", { name: CORRECTION_BUTTON_NAME })).toBeNull();
+    expect(runCalls).toHaveLength(0);
   });
 });
