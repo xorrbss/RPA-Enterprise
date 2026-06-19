@@ -78,6 +78,11 @@ function parseAuthSignature(auth: string | undefined): string | undefined {
   return m?.[1];
 }
 
+function sameBytes(a: Uint8Array | undefined, b: Uint8Array): boolean {
+  if (a === undefined || a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
+
 async function main(): Promise<void> {
   // === (0) 알고리즘 기준: 공개 AWS example vector 재현 (본 모듈과 동일한 primitive). ===
   {
@@ -129,6 +134,23 @@ async function main(): Promise<void> {
     check(
       "put x-amz-content-sha256 = 실제 페이로드 해시",
       c?.headers["x-amz-content-sha256"] === createHash("sha256").update("payload-bytes").digest("hex"),
+      c?.headers["x-amz-content-sha256"],
+    );
+  }
+
+  // === (2b) putBytes preserves arbitrary binary body and hashes the exact bytes. ===
+  {
+    const calls: Call[] = [];
+    const store = makeStore(recordingTransport(calls, () => okBytes(200, new Uint8Array())), true);
+    const raw = new Uint8Array([0x00, 0xff, 0x80, 0x41, 0x0a]);
+    const ref = await store.putBytes(raw);
+    check("putBytes -> s3 ObjectRef(bucket prefix)", String(ref).startsWith("s3://examplebucket/"), String(ref));
+    const c = calls[0];
+    check("putBytes method = PUT", c?.method === "PUT", c?.method);
+    check("putBytes body preserves raw bytes", sameBytes(c?.body, raw));
+    check(
+      "putBytes x-amz-content-sha256 = raw payload hash",
+      c?.headers["x-amz-content-sha256"] === createHash("sha256").update(raw).digest("hex"),
       c?.headers["x-amz-content-sha256"],
     );
   }

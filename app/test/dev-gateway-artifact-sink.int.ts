@@ -53,6 +53,11 @@ class CountingObjectStore implements ObjectStore {
     return "file:///tmp/dev-visible-unused.bin" as ObjectRef;
   }
 
+  async putBytes(_content: Uint8Array): Promise<ObjectRef> {
+    this.puts += 1;
+    return "file:///tmp/dev-visible-unused.bin" as ObjectRef;
+  }
+
   async get(_objectRef: ObjectRef): Promise<string | null> {
     return null;
   }

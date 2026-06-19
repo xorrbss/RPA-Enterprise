@@ -64,6 +64,11 @@ class CountingObjectStore implements ObjectStore {
     return pathToFileURL(join(tmpdir(), "unused-gateway-artifact.bin")).href as ObjectRef;
   }
 
+  async putBytes(_content: Uint8Array): Promise<ObjectRef> {
+    this.puts += 1;
+    return pathToFileURL(join(tmpdir(), "unused-gateway-artifact.bin")).href as ObjectRef;
+  }
+
   async get(_objectRef: ObjectRef): Promise<string> {
     this.gets += 1;
     return ""; // 본 테스트는 read 경로 미사용(put/delete만 검증).

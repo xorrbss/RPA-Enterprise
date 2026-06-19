@@ -139,10 +139,7 @@ export class S3ArtifactRedactor implements ArtifactRedactor {
     // (4) 마스킹된 바이트를 새 ObjectRef 로 기록 + sha256 산출.
     let redactedObjectRef: ObjectRef;
     try {
-      // transform.bytes 는 변환이 산출한 **마스킹된 텍스트**(항상 valid UTF-8) — source binary 가 아니다.
-      // (source 의 binary fail-closed 는 transform 안에서 이미 throw 로 끝났다.) 따라서 여기 디코드는 무손실.
-      const redactedContent = new TextDecoder().decode(transformed.bytes);
-      redactedObjectRef = await this.objectStore.put(redactedContent);
+      redactedObjectRef = await this.objectStore.putBytes(transformed.bytes);
     } catch (err) {
       return this.mapIoFailure(err, input.artifact, input.policy.maxAttempts);
     }

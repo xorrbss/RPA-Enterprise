@@ -26,6 +26,7 @@ type ArtifactMeta = Pick<LLMRequest["metadata"], "tenantId" | "runId" | "stepId"
 /** 바이트 저장소 경계 — object_ref 반환. 프로덕션은 S3/오브젝트 스토리지, 본 구현은 파일시스템. */
 export interface ObjectStore {
   put(content: string): Promise<ObjectRef>;
+  putBytes(content: Uint8Array): Promise<ObjectRef>;
   /**
    * object 를 **UTF-8 텍스트**로 반환(텍스트 read 경로 — artifact read route 등). 부재 시 null.
    * 비-UTF8 바이트는 lossy 디코드될 수 있으므로 redaction/무결성 경로는 `getBytes()`(raw)를 써야 한다.

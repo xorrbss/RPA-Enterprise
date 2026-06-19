@@ -130,8 +130,13 @@ export class S3ObjectStore implements ObjectStore {
 
   /** content 를 새 무작위 key 에 PUT → ObjectRef(s3://bucket/key) 반환. */
   async put(content: string): Promise<ObjectRef> {
+    return this.putBytes(new TextEncoder().encode(content));
+  }
+
+  /** RAW bytes PUT. Redaction and visual evidence must not round-trip through UTF-8 text. */
+  async putBytes(content: Uint8Array): Promise<ObjectRef> {
     const key = `${randomUUID()}.bin`;
-    const body = new TextEncoder().encode(content);
+    const body = new Uint8Array(content);
     const res = await this.send("PUT", key, body);
     if (!res.ok) {
       throw new S3ObjectStoreError("put", `s3 put returned HTTP ${res.status}`, key, res.status);

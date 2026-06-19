@@ -37,6 +37,11 @@ function check(label: string, cond: boolean, detail?: string): void {
   }
 }
 
+function sameBytes(a: Uint8Array | undefined, b: Uint8Array): boolean {
+  if (a === undefined || a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
+
 const SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" as PlainSecret;
 const SOURCE_KEY = "internal-source-locator-DO-NOT-LEAK";
 const SOURCE_REF = `s3://examplebucket/${SOURCE_KEY}` as ObjectRef;
@@ -46,6 +51,7 @@ const CORRELATION_ID = "corr-51" as CorrelationId;
 const TENANT_ID = "tenant-1" as TenantId;
 const SOURCE_CONTENT = "name: 홍길동, ssn: 900101-1234567";
 const REDACTED_CONTENT = "name: [REDACTED], ssn: [REDACTED]";
+const REDACTED_BINARY = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0x80]);
 
 const REAL_BINDING: ArtifactRealObjectStorePortBinding = {
   kind: "real_object_store",
@@ -132,6 +138,12 @@ const maskingTransform: ArtifactContentTransform = {
   },
 };
 
+const binaryMaskingTransform: ArtifactContentTransform = {
+  async transform() {
+    return { kind: "redacted", bytes: REDACTED_BINARY };
+  },
+};
+
 const notRequiredTransform: ArtifactContentTransform = {
   async transform() {
     return { kind: "not_required", reason: "no sensitive content" };
@@ -171,6 +183,21 @@ async function main(): Promise<void> {
       check("evidence.operation = redact", r.evidence.operation === "redact");
       check("evidence.sha256 동반", r.evidence.sha256 === expectedSha);
       assertNoForbidden("redacted", r.evidence);
+    }
+  }
+
+  // (1b) transform redacted binary output: PUT and sha256 must use exact bytes, not UTF-8 text round-trip.
+  {
+    const puts: Uint8Array[] = [];
+    const redactor = new S3ArtifactRedactor(makeStore(ioTransport(puts)), REAL_BINDING, binaryMaskingTransform);
+    const r = await redactor.redact(request());
+    check("binary redacted 결정", r.kind === "redacted", r.kind);
+    if (r.kind === "redacted") {
+      const expectedSha = createHash("sha256").update(REDACTED_BINARY).digest("hex");
+      check("binary PUT preserves exact transformed bytes", puts.length === 1 && sameBytes(puts[0], REDACTED_BINARY));
+      check("binary sha256 = exact transformed bytes", r.sha256 === expectedSha, r.sha256);
+      check("binary evidence.sha256 동반", r.evidence.sha256 === expectedSha);
+      assertNoForbidden("binary-redacted", r.evidence);
     }
   }
 
