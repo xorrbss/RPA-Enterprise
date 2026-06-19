@@ -936,7 +936,7 @@ function paginationPlan(prompt: string, params: Record<string, unknown>): Pagina
 }
 
 function looksLikePaginationPrompt(prompt: string): boolean {
-  return /(?:모든|전체|여러|다음|끝까지|페이지마다|페이지네이션|더보기|전체\s*페이지|all\s+pages|every\s+page|next\s+page|pagination|load\s+more)/i.test(prompt);
+  return /(?:모든\s*페이지|전체\s*페이지|여러\s*페이지|다음\s*페이지|페이지마다|페이지네이션|더\s*보기|더보기|끝까지\s*(?:페이지|목록|결과)|(?:페이지|목록|결과)\s*끝까지|all\s+pages|every\s+page|next\s+page|pagination|load\s+more)/i.test(prompt);
 }
 
 function promptMaxPages(prompt: string): number | undefined {

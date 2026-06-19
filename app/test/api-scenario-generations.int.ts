@@ -798,6 +798,32 @@ async function main(): Promise<void> {
         check("pagination scenario version persists loop IR", savedLoop.max_iterations === 4, JSON.stringify(savedLoop));
       });
 
+      const nextWeekNotices = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-next-week-notices-1" },
+        payload: {
+          ...runnablePayload,
+          mode: "draft_only",
+          prompt: "다음 주 공지 제목을 https://example.com/notices에서 수집해줘",
+          name: "generated-next-week-notices",
+        },
+      });
+      check("next-week prompt drafts without pagination -> 200", nextWeekNotices.statusCode === 200, nextWeekNotices.body);
+      const nextWeekBody = nextWeekNotices.json();
+      const nextWeekIr: Record<string, unknown> = isRecord(nextWeekBody.draft_ir) ? nextWeekBody.draft_ir : {};
+      const nextWeekNodes: Record<string, unknown> = isRecord(nextWeekIr.nodes) ? nextWeekIr.nodes : {};
+      const nextWeekParamsSchema: Record<string, unknown> = isRecord(nextWeekIr.params_schema) ? nextWeekIr.params_schema : {};
+      const nextWeekParamProperties: Record<string, unknown> = isRecord(nextWeekParamsSchema.properties) ? nextWeekParamsSchema.properties : {};
+      check(
+        "next-week prompt does not create bounded pagination loop",
+        nextWeekBody.status === "drafted" &&
+          !Object.prototype.hasOwnProperty.call(nextWeekNodes, "paginate_pages") &&
+          !Object.prototype.hasOwnProperty.call(nextWeekParamProperties, "max_pages"),
+        nextWeekNotices.body,
+      );
+      check("next-week prompt does not enqueue run", enqueuedRuns.length === 2, JSON.stringify(enqueuedRuns));
+
       const inferredTarget = await app.inject({
         method: "POST",
         url: "/v1/scenario-generations",
