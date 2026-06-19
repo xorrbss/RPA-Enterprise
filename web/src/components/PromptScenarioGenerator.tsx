@@ -10,6 +10,7 @@ import type {
   ScenarioGenerationEvidence,
   ScenarioGenerationPlanner,
   ScenarioGenerationRequest,
+  ScenarioGenerationRunRequest,
   ScenarioGenerationResult,
   SiteItem,
 } from "../api/types";
@@ -204,6 +205,27 @@ export function PromptScenarioGenerator(): JSX.Element {
     },
   });
 
+  const runMutation = useMutation({
+    mutationFn: async (generation: ScenarioGenerationResult) => {
+      const body = buildRunRequest();
+      return api.runScenarioGeneration(generation.generation_id, body, crypto.randomUUID());
+    },
+    onSuccess: (next) => {
+      setResult(next);
+      setLocalError(null);
+      void qc.invalidateQueries({ queryKey: ["scenarios"] });
+      void qc.invalidateQueries({ queryKey: ["scenario-generations"] });
+      qc.setQueryData(["scenario-generation", next.generation_id], next);
+      if (next.run_id !== null) {
+        void qc.invalidateQueries({ queryKey: ["runs"] });
+        navigate("runTrace", { run: next.run_id, generation: next.generation_id, focus: "artifacts" });
+      }
+    },
+    onError: (error) => {
+      setLocalError(errorLabel(error));
+    },
+  });
+
   function buildRequest(): ScenarioGenerationRequest {
     const trimmedPrompt = prompt.trim();
     if (trimmedPrompt.length === 0) {
@@ -236,10 +258,43 @@ export function PromptScenarioGenerator(): JSX.Element {
     };
   }
 
+  function buildRunRequest(): ScenarioGenerationRunRequest {
+    const targetValues = [siteProfileId.trim(), browserIdentityId.trim(), networkPolicyId.trim()];
+    const hasAnyTarget = targetValues.some((v) => v.length > 0);
+    const hasFullTarget = targetValues.every((v) => v.length > 0);
+    if (hasAnyTarget && !hasFullTarget) {
+      throw new Error("사이트, 브라우저 ID, 네트워크 정책 ID를 모두 입력하세요.");
+    }
+    const [site, identity, network] = targetValues as [string, string, string];
+    return {
+      ...(startUrl.trim().length > 0 ? { start_url: startUrl.trim() } : {}),
+      ...(hasFullTarget
+        ? {
+            target: {
+              site_profile_id: site,
+              browser_identity_id: identity,
+              network_policy_id: network,
+            },
+          }
+        : {}),
+      ...(model.trim().length > 0 ? { model: model.trim() } : {}),
+      evidence: { screenshot, video },
+    };
+  }
+
   function submit(): void {
     setLocalError(null);
     try {
       mutation.mutate();
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : "요청 실패");
+    }
+  }
+
+  function runWithCorrections(generation: ScenarioGenerationResult): void {
+    setLocalError(null);
+    try {
+      runMutation.mutate(generation);
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : "요청 실패");
     }
@@ -384,7 +439,13 @@ export function PromptScenarioGenerator(): JSX.Element {
             {localError}
           </div>
         )}
-        {result !== null && <GenerationResult result={result} />}
+        {result !== null && (
+          <GenerationResult
+            result={result}
+            runPending={runMutation.isPending}
+            onRunWithCorrections={runWithCorrections}
+          />
+        )}
         <GenerationHistory
           items={history.data?.items ?? []}
           loading={history.isLoading}
@@ -403,7 +464,16 @@ export function PromptScenarioGenerator(): JSX.Element {
   );
 }
 
-function GenerationResult({ result }: { result: ScenarioGenerationResult }): JSX.Element {
+function GenerationResult({
+  result,
+  runPending,
+  onRunWithCorrections,
+}: {
+  result: ScenarioGenerationResult;
+  runPending: boolean;
+  onRunWithCorrections: (generation: ScenarioGenerationResult) => void;
+}): JSX.Element {
+  const canRunWithCorrections = result.run_id === null && result.scenario_version_id !== null && (result.status === "blocked" || result.status === "saved");
   return (
     <div className="generation-result" role="status">
       <div className="generation-result-head">
@@ -442,6 +512,12 @@ function GenerationResult({ result }: { result: ScenarioGenerationResult }): JSX
         </ul>
       )}
       <GenerationArtifactsPanel generationId={result.generation_id} />
+      {canRunWithCorrections && (
+        <button className="btn primary" type="button" onClick={() => onRunWithCorrections(result)} disabled={runPending}>
+          <Play size={15} aria-hidden="true" />
+          {runPending ? "실행 보정 중" : "보정값으로 실행"}
+        </button>
+      )}
       {result.run_id !== null && (
         <button className="btn" type="button" onClick={() => navigate("runTrace", { run: result.run_id!, generation: result.generation_id, focus: "artifacts" })}>
           실행 결과·산출물 보기
