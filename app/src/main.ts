@@ -16,7 +16,7 @@
  * routes dom primitives through the gateway. Live success therefore requires a real Chrome binary at that
  * path — absent it, bind() loud-throws per run (fail-closed). Enumerated remaining backlog (see
  * product-open-candidate-report.md / staging-deploy-runbook.md):
- *   - SinkDeliveryPort, SessionRestorer, RunAbortDrainer, and a recurring sweeper scheduler. The API composes a
+ *   - SinkDeliveryPort, RunAbortDrainer, and a recurring sweeper scheduler. The API composes a
  *     SecretStore-backed SignedCommandRegistry when SIGNED_COMMAND_REGISTRY_MODE=vault; explicit
  *     SIGNED_COMMAND_REGISTRY_MODE=deny_all is available for fail-closed deployments. JWT verification now
  *     supports RS256 via remote JWKS (set JWKS_URL) or the HS256 default. Browser session reuse is wired with
@@ -69,6 +69,7 @@ import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
 import { PgBrowserSessionStore, buildAesGcmSessionEncryptor, type BrowserSessionStore } from "./runtime/browser-session-store";
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
+import { PgSessionRestorer } from "./runtime/session-restorer";
 import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runtime/visual-evidence";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { buildTaskList } from "./worker/graphile-runner";
@@ -315,6 +316,8 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
   });
   // 워커 세션 복원/캡처 암호화기 — API capture/complete 와 **동일 {kid,key} 빌더**(동일 키 seed 시 cross-identity round-trip).
   const browserSessionEncryptor = await buildAesGcmSessionEncryptor(runtimeWorkerStore, cfg.browserSessionKeyRef as SecretRef);
+  const resumeTokenCodec = new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef);
+  const sessionStore = new PgBrowserSessionStore({ pool, encryptor: browserSessionEncryptor });
 
   // Worker ports: the real adapters whose deps exist now. browserLeasePlanResolver resolves a run's
   // {site_profile, browser_identity, network_policy} from the scenario's ir.target (Pg, RLS-scoped).
@@ -322,7 +325,7 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
   // browserSessionProvider (real Stagehand/Chrome, backlog item 2) binds a live CDP session per lease at
   // claim time, putting the executorFactory on the live drive path — bind() launches Chrome from
   // CHROME_EXECUTABLE_PATH (deploy-provisioned) and loud-throws if it is absent (fail-closed, no silent
-  // claim-only). Still-unwired drive-path ports (sink delivery, session restorer, abort drainer) loud-throw
+  // claim-only). Still-unwired drive-path ports (sink delivery, abort drainer) loud-throw
   // per job kind when needed, see SCOPE above.
   const browser = loadBrowserConfig();
   const gw = loadGatewayConfig();
@@ -349,7 +352,8 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
       : undefined;
   const workerOptions: PgRuntimeWorkerOptions = {
     suspensionPort: new PgChallengeSuspensionPort(),
-    resumeTokenCodec: new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef),
+    resumeTokenCodec,
+    sessionRestorer: new PgSessionRestorer({ pool, resumeTokenCodec, sessionStore }),
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
     executorFactory: buildExecutorFactory(pool),
     browserSessionProvider: new StagehandBrowserSessionProvider({
@@ -357,7 +361,7 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
       headless: browser.headless,
       ...(browser.downloadRootDir !== undefined ? { downloadRootDir: browser.downloadRootDir } : {}),
     }),
-    sessionStore: new PgBrowserSessionStore({ pool, encryptor: browserSessionEncryptor }),
+    sessionStore,
     visualEvidenceRecorder: new PgVisualEvidenceRecorder(pool, artifactStore, {
       retentionDays: gw.artifactRetentionDays,
     }),
