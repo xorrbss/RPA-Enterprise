@@ -126,8 +126,10 @@ function main(): void {
     check("api artifactDir uses API_ARTIFACT_DIR", loadApiConfig(API_COMMON).artifactDir === "/var/lib/rpa/api-artifacts"));
   withEnv({ ...FULL, GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/gw-artifacts" }, () =>
     check("api artifactDir falls back to GATEWAY_ARTIFACT_DIR", loadApiConfig(API_COMMON).artifactDir === "/var/lib/rpa/gw-artifacts"));
+  withEnv({ ...FULL, API_ARTIFACT_DIR: "/var/lib/rpa/artifacts", GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/artifacts" }, () =>
+    check("api artifactDir accepts shared API/GATEWAY root", loadApiConfig(API_COMMON).artifactDir === "/var/lib/rpa/artifacts"));
   withEnv({ ...FULL, API_ARTIFACT_DIR: "/api", GATEWAY_ARTIFACT_DIR: "/gateway" }, () =>
-    check("api artifactDir prefers API_ARTIFACT_DIR", loadApiConfig(API_COMMON).artifactDir === "/api"));
+    expectThrow("api artifactDir rejects API/GATEWAY drift", () => loadApiConfig(API_COMMON)));
   withEnv({
     ...FULL,
     SIGNED_COMMAND_REGISTRY_MODE: "vault",

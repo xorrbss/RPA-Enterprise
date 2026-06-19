@@ -7,6 +7,7 @@
  *
  * This is the only place app code reads process.env for the production entrypoint (dev/serve.ts is dev-only).
  */
+import { resolve } from "node:path";
 
 export type RunMode = "api" | "worker" | "all";
 
@@ -160,9 +161,22 @@ export function loadApiConfig(common: CommonConfig, options: { readonly runMode?
       ? origins.split(",").map((s) => s.trim()).filter((s) => s.length > 0)
       : undefined,
     hsts: bool("ENABLE_HSTS", true),
-    artifactDir: opt("API_ARTIFACT_DIR") ?? opt("GATEWAY_ARTIFACT_DIR"),
+    artifactDir: resolveApiArtifactDir(),
     videoRecordingEnabled,
   };
+}
+
+function resolveApiArtifactDir(): string | undefined {
+  const apiArtifactDir = opt("API_ARTIFACT_DIR");
+  const gatewayArtifactDir = opt("GATEWAY_ARTIFACT_DIR");
+  if (
+    apiArtifactDir !== undefined &&
+    gatewayArtifactDir !== undefined &&
+    resolve(apiArtifactDir) !== resolve(gatewayArtifactDir)
+  ) {
+    throw new Error("API_ARTIFACT_DIR must match GATEWAY_ARTIFACT_DIR when both are set (shared artifact store required)");
+  }
+  return apiArtifactDir ?? gatewayArtifactDir;
 }
 
 export interface VaultIdentityConfig {
