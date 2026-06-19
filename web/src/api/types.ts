@@ -71,6 +71,17 @@ export interface SiteItem {
   readonly default_network_policy_id?: string | null;
 }
 
+// POST /v1/sites response. New sites include default run target IDs for generation prefill.
+export interface SiteCreateResult {
+  readonly site_profile_id: string;
+  readonly name: string;
+  readonly url_pattern: string;
+  readonly risk: string;
+  readonly approved: boolean;
+  readonly default_browser_identity_id: string;
+  readonly default_network_policy_id: string;
+}
+
 // GET /v1/artifacts/{id} 응답(api-surface §5; reads.ts). content는 redacted 본문(at rest 마스킹 — 평문 없음).
 export interface ArtifactDetail {
   readonly artifact_id: string;

@@ -20,6 +20,8 @@ import { withTenantTx, type PgClient, type PgPool } from "../db/pool";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_RETENTION_DAYS = 90;
+// Match ops-defaults §4 llm.stream_wall_timeout. The gateway will have timed out by then.
+const DEFAULT_STALE_OPEN_RECLAIM_MS = 120_000;
 
 export interface ScenarioGenerationLlmCallCleanup {
   discardGenerationLlmCalls(input: { readonly tenantId: string; readonly generationId: string }): Promise<void>;
@@ -27,6 +29,7 @@ export interface ScenarioGenerationLlmCallCleanup {
 
 export interface PgScenarioGenerationLlmCallIdempotencyStoreConfig {
   readonly retentionDays?: number;
+  readonly staleOpenReclaimMs?: number;
 }
 
 interface ScenarioGenerationLlmCallRow {
@@ -45,12 +48,14 @@ interface ScenarioGenerationLlmCallRow {
 export class PgScenarioGenerationLlmCallIdempotencyStore implements LLMCallIdempotencyStore, ScenarioGenerationLlmCallCleanup {
   private readonly tenantsByCallId = new Map<string, string>();
   private readonly retentionDays: number;
+  private readonly staleOpenReclaimMs: number;
 
   constructor(
     private readonly pool: PgPool,
     cfg: PgScenarioGenerationLlmCallIdempotencyStoreConfig = {},
   ) {
     this.retentionDays = normalizeRetentionDays(cfg.retentionDays);
+    this.staleOpenReclaimMs = normalizeStaleOpenReclaimMs(cfg.staleOpenReclaimMs);
   }
 
   async reserve(req: LLMRequest): Promise<LLMIdempotencyReservation> {
@@ -116,6 +121,12 @@ export class PgScenarioGenerationLlmCallIdempotencyStore implements LLMCallIdemp
       if (row.stream_status === "error" || row.stream_status === "aborted") {
         await reopenCall(client, req, row.id, this.retentionDays);
         return { kind: "reserved", callId: row.id, idempotencyKey: req.idempotencyKey };
+      }
+      if (row.stream_status === "open") {
+        const reclaimed = await reopenStaleOpenCall(client, req, row.id, this.retentionDays, this.staleOpenReclaimMs);
+        if (reclaimed) {
+          return { kind: "reserved", callId: row.id, idempotencyKey: req.idempotencyKey };
+        }
       }
       return { kind: "in_flight", callId: row.id };
     });
@@ -217,6 +228,45 @@ async function reopenCall(
   );
 }
 
+async function reopenStaleOpenCall(
+  client: PgClient,
+  req: LLMRequest,
+  callId: string,
+  retentionDays: number,
+  staleOpenReclaimMs: number,
+): Promise<boolean> {
+  const updated = await client.query(
+    `UPDATE scenario_generation_llm_calls
+        SET model=$3,
+            prompt_template_version=$4,
+            correlation_id=$5::uuid,
+            output_ref=NULL,
+            input_tokens=NULL,
+            output_tokens=NULL,
+            cost=NULL,
+            finish_reason=NULL,
+            parsed_json=NULL,
+            error_code=NULL,
+            updated_at=now(),
+            retention_until=now() + ($6::int * interval '1 day')
+      WHERE tenant_id=$1::uuid
+        AND id=$2::uuid
+        AND stream_status='open'
+        AND updated_at <= now() - ($7::int * interval '1 millisecond')
+      RETURNING id`,
+    [
+      req.metadata.tenantId,
+      callId,
+      req.model,
+      req.promptTemplateVersion,
+      req.metadata.correlationId,
+      retentionDays,
+      staleOpenReclaimMs,
+    ],
+  );
+  return updated.rowCount === 1;
+}
+
 async function durableGenerationArtifactExists(
   client: PgClient,
   tenantId: string,
@@ -256,4 +306,12 @@ function normalizeRetentionDays(value: number | undefined): number {
     throw new Error("scenario generation llm call retentionDays must be a positive integer");
   }
   return days;
+}
+
+function normalizeStaleOpenReclaimMs(value: number | undefined): number {
+  const ms = value ?? DEFAULT_STALE_OPEN_RECLAIM_MS;
+  if (!Number.isInteger(ms) || ms <= 0) {
+    throw new Error("scenario generation llm call staleOpenReclaimMs must be a positive integer");
+  }
+  return ms;
 }

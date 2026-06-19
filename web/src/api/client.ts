@@ -27,6 +27,7 @@ import {
   type RunArtifactItem,
   type ScenarioMutationResult,
   type ScenarioVersionItem,
+  type SiteCreateResult,
   type SiteItem,
   type StepSummary,
   type ValidationResult,
@@ -59,7 +60,7 @@ export interface ApiClient {
   // 사이트 risk 승인(approver). Idempotency-Key + body{reason?,expires_at?} → approval_status=approved.
   approveSite(siteId: string, idempotencyKey: string, opts?: { reason?: string; expires_at?: string }): Promise<unknown>;
   // 사이트 신규 등록(operator+, api-surface §7 POST /v1/sites). Idempotency-Key + body. url_pattern은 http(s) origin.
-  createSite(body: { name: string; url_pattern: string; risk?: string; page_state_selectors?: unknown }, idempotencyKey: string): Promise<unknown>;
+  createSite(body: { name: string; url_pattern: string; risk?: string; page_state_selectors?: unknown }, idempotencyKey: string): Promise<SiteCreateResult>;
   // 사이트 이름 수정(operator+, api-surface §7 PATCH /v1/sites/{id}). Idempotency-Key + body{name}. 중복 name→422.
   updateSite(siteId: string, name: string, idempotencyKey: string): Promise<unknown>;
   // 운영자-보조 세션 등록(operator+, POST /v1/sites/{id}/session/capture). headful 로그인창을 띄워 운영자가 직접 로그인 → 세션 저장.

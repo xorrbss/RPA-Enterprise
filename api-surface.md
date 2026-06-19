@@ -212,7 +212,7 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 |---|---|---|---|---|
 | GET | `/v1/sites` | 쿼리: `?risk=red|amber|green&limit=&cursor=` | 200 + `{ items, next_cursor }` (site_profiles 요약: `url_pattern`, risk, 승인/circuit 상태, `session_ready`/`session_expires_at`, `default_browser_identity_id`, `default_network_policy_id`) | — |
 | GET | `/v1/sites/{site_profile_id}` | — | 200 + 사이트 상세(`url_pattern`, risk, 승인 상태, circuit 상태, 세션 준비 메타) | `RESOURCE_NOT_FOUND`(404) |
-| POST | `/v1/sites` | `Idempotency-Key`. 생성 권한(`site.create`) 필요. body: `name`(필수)·`url_pattern`(필수, http(s) origin)·optional `risk`(green default/amber/red)·optional `page_state_selectors` | 201 + 생성된 site 요약(`site_profile_id`/`name`/`url_pattern`/`risk`/`approved`) | `AUTHZ_FORBIDDEN`(403)⁴, `IR_SCHEMA_INVALID`(422)⁵ |
+| POST | `/v1/sites` | `Idempotency-Key`. 생성 권한(`site.create`) 필요. body: `name`(필수)·`url_pattern`(필수, http(s) origin)·optional `risk`(green default/amber/red)·optional `page_state_selectors` | 201 + 생성된 site 요약(`site_profile_id`/`name`/`url_pattern`/`risk`/`approved`/`default_browser_identity_id`/`default_network_policy_id`). 서버는 생성 tx 안에서 기본 `browser_identity`(site scoped)와 origin-host `network_policy`를 같이 만들어 자연어 생성 target 자동 채움에 사용한다. | `AUTHZ_FORBIDDEN`(403)⁴, `IR_SCHEMA_INVALID`(422)⁵ |
 | PATCH | `/v1/sites/{site_profile_id}` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `name`(필수) | 200 + 갱신된 site 요약(`site_profile_id`/`name`) | `AUTHZ_FORBIDDEN`(403)⁴, `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; 중복 name reason=`site_name_already_exists`) |
 | POST | `/v1/sites/{site_profile_id}/approve` | `Idempotency-Key`. 승인 권한 필요. body: optional `reason`/`expires_at` | 200 + 승인 반영(risk=red 사이트 실행 허용) | `AUTHZ_FORBIDDEN`(403)⁴ |
 
@@ -230,7 +230,7 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 
 ⁴ 승인 권한 미보유 → `AUTHZ_FORBIDDEN`(403, security). 필요 역할은 auth-rbac.md §2(approver). (`SITE_PROFILE_BLOCKED`는 런타임 실행 차단용으로 별개.)
 
-⁵ `POST /v1/sites` 생성: `name`은 테넌트 내 유일(`site_profiles UNIQUE(tenant_id, name)`; 중복 → `IR_SCHEMA_INVALID` 422 reason=`site_name_already_exists`). `url_pattern`은 http(s) origin이어야 한다 — 런타임 `resolveSiteProfileId`가 entry navigate URL의 `URL.origin` 동일성으로 사이트를 해소하므로, 비-origin/opaque-scheme(`file:`/`data:` 등)은 매칭 불가 사이트라 생성 거부(422 `invalid_url_pattern`). `page_state_selectors`는 생성 시점에 `SitePageStateConfig`(닫힌 flag 레지스트리)로 엄격 검증되어 무효 config(런타임 `PAGE_STATE_UNRESOLVED`)를 선차단한다(422 `invalid_page_state_selectors`). `risk=green`(기본)은 즉시 실행 가능하고 `red`는 생성 후 approve 워크플로우가 필요하다(`approved=false`).
+⁵ `POST /v1/sites` 생성: `name`은 테넌트 내 유일(`site_profiles UNIQUE(tenant_id, name)`; 중복 → `IR_SCHEMA_INVALID` 422 reason=`site_name_already_exists`). `url_pattern`은 http(s) origin이어야 한다 — 런타임 `resolveSiteProfileId`가 entry navigate URL의 `URL.origin` 동일성으로 사이트를 해소하므로, 비-origin/opaque-scheme(`file:`/`data:` 등)은 매칭 불가 사이트라 생성 거부(422 `invalid_url_pattern`). `page_state_selectors`는 생성 시점에 `SitePageStateConfig`(닫힌 flag 레지스트리)로 엄격 검증되어 무효 config(런타임 `PAGE_STATE_UNRESOLVED`)를 선차단한다(422 `invalid_page_state_selectors`). `risk=green`(기본)은 즉시 실행 가능하고 `red`는 생성 후 approve 워크플로우가 필요하다(`approved=false`). 생성 tx는 기본 `browser_identities` 행과 `url_pattern` origin host만 허용하는 기본 `network_policies` 행도 함께 만든다. 따라서 `GET /v1/sites`의 `default_browser_identity_id`/`default_network_policy_id`가 즉시 채워지고, 자연어 생성 UI와 target inference가 새 사이트를 곧바로 실행 대상으로 사용할 수 있다.
 
 ---
 

@@ -296,11 +296,13 @@ async function generateScenario(deps: ApiServerDeps, request: FastifyRequest): P
     });
     const { plan, compiled } = planned;
 
-    return await withTenantTx(deps.pool, principal.tenantId, async (client) => {
+    const response = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const response = await persistGeneration(client, deps, principal, request.correlationId, generationId, plan, compiled);
       await completeIdempotencyInTx(client, recordId, response);
       return response;
     });
+    await deps.scenarioGenerationArtifacts?.commitGenerationArtifacts(generationId);
+    return response;
   } catch (err) {
     await deps.scenarioGenerationArtifacts?.discardGenerationArtifacts(generationId);
     await deps.scenarioGenerationLlmCalls?.discardGenerationLlmCalls({
@@ -801,14 +803,11 @@ async function persistGeneration(
         reason: "scenario_generation_artifact_redaction_queue_not_configured",
       });
     }
-    for (const artifactId of generationArtifactRefs) {
-      await deps.enqueuer.enqueueArtifactRedaction(client, {
-        tenantId: principal.tenantId,
-        correlationId,
-        artifactId,
-        generationId,
-      });
-    }
+    await deps.enqueuer.enqueueArtifactRedaction(client, {
+      tenantId: principal.tenantId,
+      generationId,
+      correlationId,
+    });
   }
 
   return {

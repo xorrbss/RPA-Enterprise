@@ -64,6 +64,12 @@ interface SiteRow {
   page_state_selectors: unknown;
 }
 
+interface DefaultTargetRows {
+  browser_identity_count: string;
+  network_policy_count: string;
+  allowed_domains: string[] | null;
+}
+
 async function sitesOf(pool: Pool, tenant: string): Promise<SiteRow[]> {
   return withTenantTx(pool, tenant, async (c) => {
     const r = await c.query<SiteRow>(
@@ -71,6 +77,31 @@ async function sitesOf(pool: Pool, tenant: string): Promise<SiteRow[]> {
          FROM site_profiles ORDER BY name`,
     );
     return r.rows;
+  });
+}
+
+async function defaultTargetsOf(
+  pool: Pool,
+  tenant: string,
+  siteId: string,
+  browserIdentityId: string,
+  networkPolicyId: string,
+): Promise<DefaultTargetRows> {
+  return withTenantTx(pool, tenant, async (c) => {
+    const r = await c.query<DefaultTargetRows>(
+      `SELECT
+         (SELECT count(*)::text
+            FROM browser_identities
+           WHERE tenant_id=$1::uuid AND id=$3::uuid AND site_profile_id=$2::uuid AND version=1) AS browser_identity_count,
+         (SELECT count(*)::text
+            FROM network_policies
+           WHERE tenant_id=$1::uuid AND id=$4::uuid) AS network_policy_count,
+         (SELECT allowed_domains
+            FROM network_policies
+           WHERE tenant_id=$1::uuid AND id=$4::uuid) AS allowed_domains`,
+      [tenant, siteId, browserIdentityId, networkPolicyId],
+    );
+    return r.rows[0] ?? { browser_identity_count: "0", network_policy_count: "0", allowed_domains: null };
   });
 }
 
@@ -135,6 +166,24 @@ async function main(): Promise<void> {
       check("DB: 행 생성, url_pattern·risk 기록", hi !== undefined && hi.url_pattern === "https://login.office.hiworks.com" && hi.risk === "green");
       check("DB: page_state_selectors 영속 + parse 가능", hi !== undefined && hi.page_state_selectors !== null && parseSitePageStateConfig(hi.page_state_selectors).flags.reviews_visible?.kind === "min_count");
       check("DB: id 일치", hi?.id === created.site_profile_id);
+      check("201 body: 기본 실행 타깃 ID 포함", typeof created.default_browser_identity_id === "string" && typeof created.default_network_policy_id === "string", ok.body);
+      const defaults = await defaultTargetsOf(
+        pool,
+        TENANT_A,
+        created.site_profile_id,
+        created.default_browser_identity_id,
+        created.default_network_policy_id,
+      );
+      check(
+        "DB: 기본 browser_identity 생성 및 site 연결",
+        defaults.browser_identity_count === "1",
+        JSON.stringify(defaults),
+      );
+      check(
+        "DB: 기본 network_policy 생성 및 origin host 허용",
+        defaults.network_policy_count === "1" && defaults.allowed_domains?.includes("login.office.hiworks.com") === true,
+        JSON.stringify(defaults),
+      );
 
       // 2) 멱등 replay(동일 키·동일 body) → 동일 201, 행 추가 없음
       const replay = await post(operator, "k-create-1", {

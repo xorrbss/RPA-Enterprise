@@ -54,6 +54,7 @@ export type WorkerId = string & { readonly __brand: "WorkerId" };
 export type LeaseId = string & { readonly __brand: "LeaseId" };
 export type EventId = string & { readonly __brand: "EventId" };
 export type IsoDateTime = string & { readonly __brand: "IsoDateTime" };
+export type ScenarioGenerationId = string & { readonly __brand: "ScenarioGenerationId" };
 
 export type RuntimeEntityKind = "run" | "workitem" | "human_task";
 
@@ -650,6 +651,7 @@ export interface ArtifactLifecycleTarget {
   artifactRef: ArtifactRef;
   objectRef: ObjectRef;
   runId?: RunId;
+  generationId?: ScenarioGenerationId;
   stepId?: StepId;
   attempt?: number;
   type: string;
@@ -919,7 +921,7 @@ export interface RuntimeWorkerJob {
   tenantId?: TenantId;
   runId?: RunId;
   artifactId?: ArtifactRef;
-  generationId?: string;
+  generationId?: ScenarioGenerationId;
   workitemId?: WorkitemId;
   deadLetterId?: string;
   correlationId?: CorrelationId;

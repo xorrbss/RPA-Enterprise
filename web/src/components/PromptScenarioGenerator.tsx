@@ -6,7 +6,7 @@ import { useApiClient } from "../api/context";
 import { GenerationArtifactsPanel } from "./GenerationArtifactsPanel";
 import { SiteCreateForm, type CreatedSite } from "./SiteCreateForm";
 import { errorLabel, StatusBadge } from "./badges";
-import { navigate } from "../router";
+import { navigate, useHashParam } from "../router";
 import {
   ApiError,
   type ApiErrorBody,
@@ -333,6 +333,10 @@ function draftTarget(draftIr: unknown): ScenarioGenerationRequest["target"] | nu
 export function PromptScenarioGenerator(): JSX.Element {
   const api = useApiClient();
   const qc = useQueryClient();
+  const prefillSiteId = useHashParam("site");
+  const prefillStartUrl = useHashParam("start_url");
+  const prefillBrowserIdentityId = useHashParam("browser_identity");
+  const prefillNetworkPolicyId = useHashParam("network_policy");
   const sites = useQuery({ queryKey: ["sites", "scenario-generator"], queryFn: () => api.listSites({ limit: 100 }) });
   const policies = useQuery({
     queryKey: ["gateway-policies", "scenario-generator"],
@@ -383,6 +387,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
   const autoStartUrlRef = useRef<string | null>(null);
   const targetManuallyEditedRef = useRef(false);
+  const hashPrefillKeyRef = useRef<string | null>(null);
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
   const evidenceSettingsLoading = capabilities.isLoading;
@@ -481,6 +486,29 @@ export function PromptScenarioGenerator(): JSX.Element {
       setStartUrl(site.url_pattern);
     }
   }
+
+  useEffect(() => {
+    const key = JSON.stringify([prefillSiteId, prefillStartUrl, prefillBrowserIdentityId, prefillNetworkPolicyId]);
+    if (hashPrefillKeyRef.current === key) return;
+    hashPrefillKeyRef.current = key;
+    if (
+      prefillSiteId === null &&
+      prefillStartUrl === null &&
+      prefillBrowserIdentityId === null &&
+      prefillNetworkPolicyId === null
+    ) {
+      return;
+    }
+
+    targetManuallyEditedRef.current = true;
+    if (prefillSiteId !== null) setSiteProfileId(prefillSiteId);
+    if (prefillStartUrl !== null) {
+      setStartUrl(prefillStartUrl);
+      autoStartUrlRef.current = prefillStartUrl;
+    }
+    if (prefillBrowserIdentityId !== null) setBrowserIdentityId(prefillBrowserIdentityId);
+    if (prefillNetworkPolicyId !== null) setNetworkPolicyId(prefillNetworkPolicyId);
+  }, [prefillBrowserIdentityId, prefillNetworkPolicyId, prefillSiteId, prefillStartUrl]);
 
   useEffect(() => {
     const detectedUrl = extractFirstHttpUrl(prompt);

@@ -29,6 +29,7 @@ export interface ScenarioGenerationArtifactBuffer {
     client: PoolClient,
     input: { readonly tenantId: string; readonly generationId: string },
   ): Promise<readonly ArtifactRef[]>;
+  commitGenerationArtifacts(generationId: string): Promise<void>;
   discardGenerationArtifacts(generationId: string): Promise<void>;
 }
 
@@ -71,8 +72,14 @@ interface BufferedScenarioGenerationArtifact {
   readonly normalized: NormalizedScenarioGenerationArtifactInput;
 }
 
+interface FlushedScenarioGenerationArtifact {
+  readonly artifactId: ArtifactId;
+  readonly objectRef: Awaited<ReturnType<ObjectStore["put"]>>;
+}
+
 export class BufferedScenarioGenerationArtifactSink implements GatewayArtifactSink, ScenarioGenerationArtifactBuffer {
   private readonly pending = new Map<string, BufferedScenarioGenerationArtifact[]>();
+  private readonly flushed = new Map<string, FlushedScenarioGenerationArtifact[]>();
 
   constructor(
     private readonly objectStore: ObjectStore,
@@ -122,11 +129,21 @@ export class BufferedScenarioGenerationArtifactSink implements GatewayArtifactSi
     }
 
     this.pending.delete(input.generationId);
+    this.flushed.set(input.generationId, [...(this.flushed.get(input.generationId) ?? []), ...objectRefs]);
     return buffered.map((item) => item.artifactId);
+  }
+
+  async commitGenerationArtifacts(generationId: string): Promise<void> {
+    this.flushed.delete(generationId);
   }
 
   async discardGenerationArtifacts(generationId: string): Promise<void> {
     this.pending.delete(generationId);
+    const flushed = this.flushed.get(generationId) ?? [];
+    this.flushed.delete(generationId);
+    for (const item of flushed) {
+      await this.objectStore.delete(item.objectRef);
+    }
   }
 }
 

@@ -7,6 +7,7 @@
  */
 import {
   loadApiConfig,
+  loadArtifactLifecycleWorkerConfig,
   loadCommonConfig,
   loadGatewayConfig,
   loadRunMode,
@@ -35,11 +36,16 @@ function expectThrow(label: string, fn: () => unknown): void {
 
 const CLEAR = [
   "RPA_ENV", "RUN_MODE", "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "DATABASE_URL",
+  "WORKER_ID", "ARTIFACT_LIFECYCLE_DATABASE_URL", "ARTIFACT_LIFECYCLE_WORKER_ID",
+  "ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY", "ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS",
   "PORT", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
   "VAULT_RUNTIME_WORKER_ROLE_ID", "VAULT_RUNTIME_WORKER_SECRET_ID", "VAULT_API_ROLE_ID", "VAULT_API_SECRET_ID",
   "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF",
   "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_KIND", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
   "S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_FORCE_PATH_STYLE",
+  "ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE",
+  "ARTIFACT_OBJECT_STORE_S3_ENDPOINT", "ARTIFACT_OBJECT_STORE_S3_REGION", "ARTIFACT_OBJECT_STORE_S3_BUCKET",
+  "ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID", "ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE",
   "GRAPHILE_WORKER_SCHEMA", "GRAPHILE_CONCURRENCY", "GRAPHILE_POLL_INTERVAL_MS", "MAINTENANCE_TENANT_IDS",
   "SINK_DELIVERY_MAX_ATTEMPTS", "SINK_DELIVERY_RETRY_AFTER_MS",
   "CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL", "CODEX_MAX_CONTEXT_TOKENS",
@@ -49,6 +55,7 @@ const CLEAR = [
   "JWKS_URL", "JWT_ISSUER", "JWT_AUDIENCE",
   "VISUAL_EVIDENCE_VIDEO_ENABLED", "VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED", "VISUAL_EVIDENCE_FFMPEG_PATH",
   "VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS", "VISUAL_EVIDENCE_VIDEO_FPS",
+  "VAULT_ARTIFACT_LIFECYCLE_ROLE_ID", "VAULT_ARTIFACT_LIFECYCLE_SECRET_ID",
 ];
 
 function withEnv(vars: Record<string, string>, fn: () => void): void {
@@ -68,9 +75,15 @@ function withEnv(vars: Record<string, string>, fn: () => void): void {
 
 const FULL: Record<string, string> = {
   RPA_ENV: "staging", PGHOST: "h", PGPORT: "5432", PGUSER: "u", PGPASSWORD: "p", PGDATABASE: "d",
+  WORKER_ID: "10000000-0000-4000-8000-0000000000aa",
   PORT: "8080", JWT_HS256_SECRET: "x".repeat(40), VAULT_ADDR: "https://v:8200",
   VAULT_RUNTIME_WORKER_ROLE_ID: "r", VAULT_RUNTIME_WORKER_SECRET_ID: "s",
-  ARTIFACT_OBJECT_STORE_REF: "rpa/staging/artifact-lifecycle/object_store/fs",
+  VAULT_ARTIFACT_LIFECYCLE_ROLE_ID: "artifact-role", VAULT_ARTIFACT_LIFECYCLE_SECRET_ID: "artifact-secret",
+  ARTIFACT_OBJECT_STORE_REF: "rpa/staging/artifact-lifecycle/object_store/s3",
+  ARTIFACT_OBJECT_STORE_S3_ENDPOINT: "https://s3.example.internal",
+  ARTIFACT_OBJECT_STORE_S3_REGION: "ap-northeast-2",
+  ARTIFACT_OBJECT_STORE_S3_BUCKET: "rpa-artifacts",
+  ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID: "rpa-lifecycle-access-key-id",
   SIGNED_COMMAND_REGISTRY_MODE: "deny_all",
 };
 const API_COMMON: CommonConfig = { rpaEnv: "staging", connectionString: "x", healthPort: 8081 };
@@ -79,6 +92,7 @@ function main(): void {
   // RUN_MODE
   withEnv({}, () => check("RUN_MODE default all", loadRunMode() === "all"));
   withEnv({ RUN_MODE: "api" }, () => check("RUN_MODE api", loadRunMode() === "api"));
+  withEnv({ RUN_MODE: "lifecycle-worker" }, () => check("RUN_MODE lifecycle-worker", loadRunMode() === "lifecycle-worker"));
   withEnv({ RUN_MODE: "bogus" }, () => expectThrow("RUN_MODE invalid throws", () => loadRunMode()));
 
   // CommonConfig — fail-closed on missing PG; conn string built + encoded; DATABASE_URL override.
@@ -228,22 +242,19 @@ function main(): void {
   // WorkerConfig — fail-closed on missing Vault AppRole; resumeTokenRef templated from rpaEnv.
   const common: CommonConfig = { rpaEnv: "staging", connectionString: "x", healthPort: 8081 };
   withEnv({}, () => expectThrow("worker missing Vault AppRole throws", () => loadWorkerConfig(common)));
+  withEnv({ ...FULL, WORKER_ID: "" }, () =>
+    expectThrow("worker missing stable WORKER_ID throws", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_REF: "" }, () =>
-    expectThrow("worker missing artifact object-store SecretRef throws", () => loadWorkerConfig(common)));
+    check("control worker does not require lifecycle object-store SecretRef", loadWorkerConfig(common).workerId === FULL.WORKER_ID));
   withEnv(FULL, () => {
     const w = loadWorkerConfig(common);
+    check("worker stable workerId carried", w.workerId === "10000000-0000-4000-8000-0000000000aa");
     check(
       "worker resumeTokenRef templated",
       w.resumeTokenRef === "rpa/staging/runtime-worker/resume_token_hmac/active",
       w.resumeTokenRef,
     );
-    check(
-      "worker artifact object-store SecretRef carried",
-      w.artifactObjectStoreRef === "rpa/staging/artifact-lifecycle/object_store/fs",
-      w.artifactObjectStoreRef,
-    );
-    check("worker artifact object-store default kind fs", w.artifactObjectStore.kind === "fs", w.artifactObjectStore.kind);
-    check("worker artifact backend alias default", w.artifactObjectStoreBackendAlias === "fs-local");
+    check("worker has no lifecycle artifact SecretRef config", !("artifactObjectStoreRef" in w));
     check("worker concurrency default 1", w.graphileConcurrency === 1);
     check("worker maintenance tenant list default empty", w.maintenanceTenantIds.length === 0);
     check("worker sink delivery policy defaults", w.sinkDeliveryMaxAttempts === 3 && w.sinkDeliveryRetryAfterMs === 5000);
@@ -293,49 +304,127 @@ function main(): void {
     check("worker video enabled carries ffmpeg path", w.videoRecordingEnabled === true && w.videoFfmpegPath === "C:\\tools\\ffmpeg.exe");
     check("worker video cadence overrides carried", w.videoFrameIntervalMs === 500 && w.videoFrameRate === 2);
   });
-  withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: "fs-staging-a" }, () =>
-    check("worker artifact backend alias override", loadWorkerConfig(common).artifactObjectStoreBackendAlias === "fs-staging-a"));
-  withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_KIND: "bogus" }, () =>
-    expectThrow("worker artifact object-store invalid kind throws", () => loadWorkerConfig(common)));
-  withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_KIND: "s3" }, () =>
-    expectThrow("worker artifact s3 missing endpoint throws", () => loadWorkerConfig(common)));
-  withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_KIND: "s3", S3_ENDPOINT: "http://s3.example" }, () =>
-    expectThrow("worker artifact s3 plaintext endpoint throws", () => loadWorkerConfig(common)));
+  withEnv(FULL, () =>
+    expectThrow("artifact lifecycle worker missing BYPASSRLS database URL throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({ ...FULL, ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa" }, () =>
+    expectThrow("artifact lifecycle worker missing stable worker id throws", () => loadArtifactLifecycleWorkerConfig()));
   withEnv({
     ...FULL,
-    ARTIFACT_OBJECT_STORE_KIND: "s3",
-    ARTIFACT_OBJECT_STORE_REF: "rpa/staging/artifact-lifecycle/object_store/s3",
-    ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: "s3-staging-a",
-    S3_ENDPOINT: "https://s3.example",
-    S3_REGION: "ap-northeast-2",
-    S3_BUCKET: "rpa-artifacts",
-    S3_ACCESS_KEY_ID: "s3-access-id",
-    S3_FORCE_PATH_STYLE: "false",
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: "bogus",
+  }, () => expectThrow("artifact lifecycle invalid object-store mode throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_OBJECT_STORE_REF: "rpa/staging/runtime-worker/object_store/s3",
+  }, () => expectThrow("artifact lifecycle wrong object-store SecretRef boundary throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_OBJECT_STORE_S3_ENDPOINT: "",
+  }, () => expectThrow("artifact lifecycle s3 missing endpoint throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_OBJECT_STORE_S3_ENDPOINT: "http://s3.example.internal",
+  }, () => expectThrow("artifact lifecycle s3 plaintext endpoint throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_OBJECT_STORE_S3_REGION: "",
+  }, () => expectThrow("artifact lifecycle s3 missing region throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_OBJECT_STORE_S3_BUCKET: "",
+  }, () => expectThrow("artifact lifecycle s3 missing bucket throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID: "",
+  }, () => expectThrow("artifact lifecycle s3 missing access key id throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    VAULT_ARTIFACT_LIFECYCLE_ROLE_ID: "",
+  }, () => expectThrow("artifact lifecycle s3 missing Vault AppRole throws", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    ...FULL,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
   }, () => {
-    const w = loadWorkerConfig(common);
-    check("worker artifact s3 kind carried", w.artifactObjectStore.kind === "s3", w.artifactObjectStore.kind);
+    const l = loadArtifactLifecycleWorkerConfig();
+    check("artifact lifecycle database URL carried", l.connectionString === "postgresql://lifecycle@db/rpa");
+    check("artifact lifecycle worker id carried", l.workerId === "20000000-0000-4000-8000-0000000000aa");
+    check("artifact lifecycle object-store default mode is s3", l.objectStore.mode === "s3");
     check(
-      "worker artifact s3 config carried",
-      w.artifactObjectStore.kind === "s3" &&
-        w.artifactObjectStore.endpoint === "https://s3.example" &&
-        w.artifactObjectStore.region === "ap-northeast-2" &&
-        w.artifactObjectStore.bucket === "rpa-artifacts" &&
-        w.artifactObjectStore.accessKeyId === "s3-access-id" &&
-        w.artifactObjectStore.forcePathStyle === false,
-      JSON.stringify(w.artifactObjectStore),
+      "artifact lifecycle s3 endpoint carried",
+      l.objectStore.mode === "s3" && l.objectStore.endpoint === "https://s3.example.internal",
+      l.objectStore.mode === "s3" ? l.objectStore.endpoint : l.objectStore.mode,
     );
-    check("worker artifact s3 backend alias carried", w.artifactObjectStoreBackendAlias === "s3-staging-a");
+    check("artifact lifecycle s3 region/bucket carried", l.objectStore.mode === "s3" && l.objectStore.region === "ap-northeast-2" && l.objectStore.bucket === "rpa-artifacts");
+    check("artifact lifecycle s3 access key id carried", l.objectStore.mode === "s3" && l.objectStore.accessKeyId === "rpa-lifecycle-access-key-id");
+    check("artifact lifecycle s3 SecretRef carried, not value", l.objectStore.mode === "s3" && l.objectStore.secretAccessKeyRef === FULL.ARTIFACT_OBJECT_STORE_REF);
+    check("artifact lifecycle s3 backend alias default", l.objectStore.mode === "s3" && l.objectStore.backendAlias === "s3-compatible");
+    check("artifact lifecycle s3 forcePathStyle default true", l.objectStore.mode === "s3" && l.objectStore.forcePathStyle === true);
+    check("artifact lifecycle Vault identity carried for s3", l.vaultArtifactLifecycle?.roleId === "artifact-role");
+    check("artifact lifecycle retention default 90", l.artifactRetentionDays === 90);
+    check("artifact lifecycle graphile defaults reuse worker defaults", l.graphileConcurrency === 1 && l.graphilePollIntervalMs === 2000);
   });
   withEnv({
     ...FULL,
-    ARTIFACT_OBJECT_STORE_KIND: "s3",
-    S3_ENDPOINT: "https://s3.example",
-    S3_REGION: "ap-northeast-2",
-    S3_BUCKET: "rpa-artifacts",
-    S3_ACCESS_KEY_ID: "s3-access-id",
-    S3_FORCE_PATH_STYLE: "maybe",
-  }, () =>
-    expectThrow("worker artifact s3 force path style must be true|false", () => loadWorkerConfig(common)));
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: "minio-prod-a",
+    ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE: "false",
+  }, () => {
+    const l = loadArtifactLifecycleWorkerConfig();
+    check("artifact lifecycle s3 backend alias override", l.objectStore.mode === "s3" && l.objectStore.backendAlias === "minio-prod-a");
+    check("artifact lifecycle s3 forcePathStyle override false", l.objectStore.mode === "s3" && l.objectStore.forcePathStyle === false);
+  });
+  withEnv({
+    ...FULL,
+    RPA_ENV: "staging",
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: "local_fs",
+    GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/gw-artifacts",
+  }, () => expectThrow("artifact lifecycle local_fs rejected outside dev/local RPA_ENV", () => loadArtifactLifecycleWorkerConfig()));
+  withEnv({
+    RPA_ENV: "local",
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: "local_fs",
+    ARTIFACT_OBJECT_STORE_REF: "rpa/local/artifact-lifecycle/object_store/fs",
+    GATEWAY_ARTIFACT_DIR: "/tmp/rpa-artifacts",
+  }, () => {
+    const l = loadArtifactLifecycleWorkerConfig();
+    check("artifact lifecycle local_fs explicit mode carried", l.objectStore.mode === "local_fs");
+    check("artifact lifecycle local_fs artifact dir carried", l.objectStore.mode === "local_fs" && l.objectStore.artifactDir === "/tmp/rpa-artifacts");
+    check("artifact lifecycle local_fs SecretRef carried", l.objectStore.mode === "local_fs" && l.objectStore.credentialRef === "rpa/local/artifact-lifecycle/object_store/fs");
+    check("artifact lifecycle local_fs backend alias default", l.objectStore.mode === "local_fs" && l.objectStore.backendAlias === "fs-local");
+    check("artifact lifecycle local_fs does not require Vault identity", l.vaultArtifactLifecycle === undefined);
+  });
+  withEnv({
+    ...FULL,
+    GRAPHILE_CONCURRENCY: "3",
+    GRAPHILE_POLL_INTERVAL_MS: "4000",
+    ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY: "2",
+    ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS: "1500",
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+  }, () => {
+    const l = loadArtifactLifecycleWorkerConfig();
+    check("artifact lifecycle graphile overrides carried", l.graphileConcurrency === 2 && l.graphilePollIntervalMs === 1500);
+  });
 
   // GatewayConfig (D8-A16) — fail-closed on missing Codex provider creds / artifact dir; ops-defaults knobs.
   const GW_REQ = {

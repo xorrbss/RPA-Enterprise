@@ -3,7 +3,7 @@ import { FsArtifactRedactor, FsArtifactRetentionStore } from "../artifacts/fs-ar
 import { S3ArtifactRedactor } from "../artifacts/s3-artifact-redactor";
 import { S3ArtifactRetentionStore } from "../artifacts/s3-artifact-retention-store";
 import { S3ObjectStore } from "../artifacts/s3-object-store";
-import type { GatewayConfig, WorkerConfig } from "../config/env";
+import type { ArtifactLifecycleWorkerConfig } from "../config/env";
 import { FsObjectStore, type ObjectStore } from "../gateway/pg-gateway-artifact-sink";
 import type { PgRuntimeWorkerOptions } from "./runtime-worker";
 import type { SecretRef, SecretStore } from "../../../ts/core-types";
@@ -16,13 +16,12 @@ export interface RuntimeArtifactObjectStoreBinding extends ArtifactLifecyclePort
 }
 
 export async function buildRuntimeArtifactObjectStoreBinding(input: {
-  readonly cfg: WorkerConfig;
-  readonly gw: GatewayConfig;
+  readonly cfg: ArtifactLifecycleWorkerConfig;
   readonly secretStore: SecretStore;
   readonly binding: ArtifactRealObjectStorePortBinding;
 }): Promise<RuntimeArtifactObjectStoreBinding> {
-  if (input.cfg.artifactObjectStore.kind === "fs") {
-    const store = new FsObjectStore(input.gw.artifactDir);
+  if (input.cfg.objectStore.mode === "local_fs") {
+    const store = new FsObjectStore(input.cfg.objectStore.artifactDir);
     return {
       artifactStore: store,
       artifactRedactor: new FsArtifactRedactor(
@@ -34,14 +33,14 @@ export async function buildRuntimeArtifactObjectStoreBinding(input: {
     };
   }
 
-  const secretAccessKey = await input.secretStore.resolve(input.cfg.artifactObjectStoreRef as SecretRef);
+  const secretAccessKey = await input.secretStore.resolve(input.cfg.objectStore.secretAccessKeyRef as SecretRef);
   const store = new S3ObjectStore({
-    endpoint: input.cfg.artifactObjectStore.endpoint,
-    region: input.cfg.artifactObjectStore.region,
-    bucket: input.cfg.artifactObjectStore.bucket,
-    accessKeyId: input.cfg.artifactObjectStore.accessKeyId,
+    endpoint: input.cfg.objectStore.endpoint,
+    region: input.cfg.objectStore.region,
+    bucket: input.cfg.objectStore.bucket,
+    accessKeyId: input.cfg.objectStore.accessKeyId,
     secretAccessKey,
-    forcePathStyle: input.cfg.artifactObjectStore.forcePathStyle,
+    forcePathStyle: input.cfg.objectStore.forcePathStyle,
   });
   return {
     artifactStore: store,

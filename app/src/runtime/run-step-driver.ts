@@ -49,6 +49,7 @@ import { PgExecutorInvocationRecorder } from "./executor-invocation-recorder";
 import { executorFailureStepResult } from "./executor-step-orchestrator";
 import { compiledScenarioFrom } from "./ir-translate";
 import { runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
+import type { MergedExtractArtifactSink } from "./merged-extract-artifact";
 import {
   appendVisualEvidenceArtifact,
   VisualEvidenceExecutor,
@@ -99,6 +100,8 @@ export interface DriveDeps {
   readonly visualEvidenceRecorder?: VisualEvidenceRecorder;
   /** Optional run-level video capture. Generation blocks video requests unless the deployment exposes this capability. */
   readonly visualEvidenceVideoRecorder?: VisualEvidenceVideoRecorder;
+  /** Optional run-level final extract artifact capture for merged repeated/single extract results. */
+  readonly mergedExtractArtifactSink?: MergedExtractArtifactSink;
   /** Direct run-drive artifacts must enter the redaction/retention lifecycle before they are user-visible. */
   readonly runtimeJobEnqueuer?: RuntimeJobEnqueuePort;
   /** Worker direct-drive path records executor started/completed rows before/after each executor invocation. */
@@ -222,6 +225,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     } catch {
       scenarioOutcome = systemFailureOutcome();
     }
+    scenarioOutcome = await appendMergedExtractArtifact(scenarioOutcome, deps.mergedExtractArtifactSink, run);
     outcome = await appendRunVideoArtifact(scenarioOutcome, videoRecording, videoPolicy);
   } catch {
     if (videoRecording !== undefined) {
@@ -609,6 +613,22 @@ async function appendRunVideoArtifact(
   }
   const artifactRef = await recording.stopAndPersist({ terminal: knownTerminal(outcome.terminal) });
   if (artifactRef === undefined) return outcome;
+  return { ...outcome, artifacts: [...outcome.artifacts, artifactRef] };
+}
+
+async function appendMergedExtractArtifact(
+  outcome: ScenarioOutcome,
+  sink: MergedExtractArtifactSink | undefined,
+  run: ClaimedRun,
+): Promise<ScenarioOutcome> {
+  if (sink === undefined || outcome.mergedExtract === undefined) return outcome;
+  const artifactRef = await sink.put({
+    tenantId: run.tenantId,
+    runId: run.runId,
+    correlationId: run.correlationId,
+    extractPages: outcome.extractPages ?? [],
+    mergedExtract: outcome.mergedExtract,
+  });
   return { ...outcome, artifacts: [...outcome.artifacts, artifactRef] };
 }
 

@@ -26,6 +26,7 @@
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
 import http from "node:http";
+import { pathToFileURL } from "node:url";
 
 import { run, runMigrations, type Runner } from "graphile-worker";
 import type { FastifyInstance } from "fastify";
@@ -47,17 +48,24 @@ import { DenyAllSignedCommandRegistry, SecretStoreSignedCommandRegistry } from "
 import {
   loadApiConfig,
   loadApiSessionEncryption,
+  loadArtifactLifecycleWorkerConfig,
   loadBrowserConfig,
   loadCommonConfig,
   loadGatewayConfig,
   loadRunMode,
   loadScenarioGenerationLlmV1Config,
   loadWorkerConfig,
+  type ArtifactLifecycleWorkerConfig,
   type ApiConfig,
   type CommonConfig,
   type ScenarioGenerationLlmV1Config,
 } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
+import { ArtifactRedactionContentTransform } from "./artifacts/artifact-redaction-content-transform";
+import { FsArtifactRedactor, FsArtifactRetentionStore } from "./artifacts/fs-artifact-lifecycle-store";
+import { S3ArtifactRedactor } from "./artifacts/s3-artifact-redactor";
+import { S3ArtifactRetentionStore } from "./artifacts/s3-artifact-retention-store";
+import { S3ObjectStore, type S3HttpTransport } from "./artifacts/s3-object-store";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
 import { SafeCapabilityGate } from "./gateway/capability-gate";
 import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
@@ -69,17 +77,17 @@ import { StagehandBrowserSessionProvider } from "./executor/browser-session-prov
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
 import { PgBrowserSessionStore, buildAesGcmSessionEncryptor, type BrowserSessionStore } from "./runtime/browser-session-store";
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
+import { PgMergedExtractArtifactSink } from "./runtime/merged-extract-artifact";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
 import { PgSessionRestorer } from "./runtime/session-restorer";
 import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runtime/visual-evidence";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
-import { buildRuntimeArtifactObjectStoreBinding } from "./worker/artifact-object-store-binding";
 import { buildTaskList } from "./worker/graphile-runner";
 import { startMaintenanceScheduler, type MaintenanceScheduler } from "./worker/maintenance-scheduler";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
-import type { SecretRef } from "../../ts/core-types";
+import type { SecretRef, SecretStore } from "../../ts/core-types";
 import {
   ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
   type ArtifactRealObjectStorePortBinding,
@@ -159,6 +167,7 @@ function buildScenarioGenerationPlannerBinding(pool: PgPool, cfg: ScenarioGenera
   });
   const llmCalls = new PgScenarioGenerationLlmCallIdempotencyStore(pool, {
     retentionDays: gw.artifactRetentionDays,
+    staleOpenReclaimMs: gw.wallTimeoutMs,
   });
   const gateway = new LlmGateway({
     primary: new CodexSseAdapter(
@@ -251,6 +260,9 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
 function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
   const gw = loadGatewayConfig();
   const artifactStore = new FsObjectStore(gw.artifactDir);
+  const gatewayArtifactSink = new PgGatewayArtifactSink(pool, artifactStore, {
+    retentionDays: gw.artifactRetentionDays,
+  });
   const approvalInboxArtifactSink = new PgGatewayArtifactSink(pool, artifactStore, {
     type: "approval_inbox",
     retentionDays: gw.artifactRetentionDays,
@@ -269,9 +281,7 @@ function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
     ),
     gate: new SafeCapabilityGate(),
     validator: new AjvStructuredOutputValidator(),
-    sink: new PgGatewayArtifactSink(pool, artifactStore, {
-      retentionDays: gw.artifactRetentionDays,
-    }),
+    sink: gatewayArtifactSink,
     idempotency: new PgLlmCallIdempotencyStore(pool),
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
     config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
@@ -312,10 +322,9 @@ interface StartedWorker {
   readonly maintenance?: MaintenanceScheduler;
 }
 
-async function startWorker(pool: PgPool, connectionString: string): Promise<StartedWorker> {
-  const cfg = loadWorkerConfig(loadCommonConfig());
-  // Install/upgrade the graphile_worker schema (idempotent; fails fast if the DB role lacks rights).
-  await runMigrations({ connectionString });
+async function startWorker(pool: PgPool, common: CommonConfig): Promise<StartedWorker> {
+  const cfg = loadWorkerConfig(common);
+  await runMigrations({ connectionString: common.connectionString });
 
   const runtimeWorkerStore = new VaultSecretStore({
     baseUrl: cfg.vaultRuntimeWorker.addr,
@@ -323,19 +332,10 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Star
     kvApiVersion: 2,
     appRole: { roleId: cfg.vaultRuntimeWorker.roleId, secretId: cfg.vaultRuntimeWorker.secretId },
   });
-  // 워커 세션 복원/캡처 암호화기 — API capture/complete 와 **동일 {kid,key} 빌더**(동일 키 seed 시 cross-identity round-trip).
   const browserSessionEncryptor = await buildAesGcmSessionEncryptor(runtimeWorkerStore, cfg.browserSessionKeyRef as SecretRef);
   const resumeTokenCodec = new HmacResumeTokenCodec(runtimeWorkerStore, cfg.resumeTokenRef as SecretRef);
   const sessionStore = new PgBrowserSessionStore({ pool, encryptor: browserSessionEncryptor });
 
-  // Worker ports: the real adapters whose deps exist now. browserLeasePlanResolver resolves a run's
-  // {site_profile, browser_identity, network_policy} from the scenario's ir.target (Pg, RLS-scoped).
-  // executorFactory assembles the in-process LLM gateway (D8-A16) so dom primitives drive through Codex.
-  // browserSessionProvider (real Stagehand/Chrome, backlog item 2) binds a live CDP session per lease at
-  // claim time, putting the executorFactory on the live drive path — bind() launches Chrome from
-  // CHROME_EXECUTABLE_PATH (deploy-provisioned) and loud-throws if it is absent (fail-closed, no silent
-  // claim-only). Still-unwired drive-path ports (sink delivery) loud-throw
-  // per job kind when needed, see SCOPE above.
   const browser = loadBrowserConfig();
   const gw = loadGatewayConfig();
   const browserSessionProvider = new StagehandBrowserSessionProvider({
@@ -343,19 +343,7 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Star
     headless: browser.headless,
     ...(browser.downloadRootDir !== undefined ? { downloadRootDir: browser.downloadRootDir } : {}),
   });
-  const artifactObjectBinding: ArtifactRealObjectStorePortBinding = {
-    kind: "real_object_store",
-    backendAlias: cfg.artifactObjectStoreBackendAlias,
-    credentialRef: cfg.artifactObjectStoreRef as SecretRef,
-    evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
-  };
-  const artifactObjectStoreBinding = await buildRuntimeArtifactObjectStoreBinding({
-    cfg,
-    gw,
-    secretStore: runtimeWorkerStore,
-    binding: artifactObjectBinding,
-  });
-  const artifactStore = artifactObjectStoreBinding.artifactStore;
+  const artifactStore = new FsObjectStore(gw.artifactDir);
   const visualEvidenceVideoRecorderFactory: PgRuntimeWorkerOptions["visualEvidenceVideoRecorderFactory"] =
     cfg.videoRecordingEnabled
       ? (provider) => {
@@ -370,7 +358,9 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Star
           });
         }
       : undefined;
+
   const workerOptions: PgRuntimeWorkerOptions = {
+    workerId: cfg.workerId,
     suspensionPort: new PgChallengeSuspensionPort(),
     resumeTokenCodec,
     sessionRestorer: new PgSessionRestorer({ pool, resumeTokenCodec, sessionStore }),
@@ -383,16 +373,17 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Star
       retentionDays: gw.artifactRetentionDays,
     }),
     ...(visualEvidenceVideoRecorderFactory !== undefined ? { visualEvidenceVideoRecorderFactory } : {}),
-    artifactRedactor: artifactObjectStoreBinding.artifactRedactor,
-    artifactRetentionStore: artifactObjectStoreBinding.artifactRetentionStore,
+    mergedExtractArtifactSink: new PgMergedExtractArtifactSink(pool, artifactStore, {
+      retentionDays: gw.artifactRetentionDays,
+    }),
     sinkDeliveryMaxAttempts: cfg.sinkDeliveryMaxAttempts,
     sinkDeliveryRetryAfterMs: cfg.sinkDeliveryRetryAfterMs,
     runtimeJobEnqueuer: new PgGraphileRunEnqueuer(),
   };
 
   const runner = await run({
-    connectionString,
-    taskList: buildTaskList(pool, workerOptions),
+    connectionString: common.connectionString,
+    taskList: buildTaskList(pool, workerOptions, "control"),
     concurrency: cfg.graphileConcurrency,
     pollInterval: cfg.graphilePollIntervalMs,
     ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
@@ -407,6 +398,123 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Star
   return { runner, ...(maintenance !== undefined ? { maintenance } : {}) };
 }
 
+interface ArtifactLifecycleRunner {
+  readonly pool: PgPool;
+  readonly runner: Runner;
+}
+
+export interface ArtifactLifecycleWorkerOptionDeps {
+  readonly secretStore?: SecretStore;
+  readonly s3Transport?: S3HttpTransport;
+}
+
+export async function buildArtifactLifecycleWorkerOptions(
+  cfg: ArtifactLifecycleWorkerConfig,
+  deps: ArtifactLifecycleWorkerOptionDeps = {},
+): Promise<PgRuntimeWorkerOptions> {
+  if (cfg.objectStore.mode === "local_fs") {
+    const artifactStore = new FsObjectStore(cfg.objectStore.artifactDir);
+    const artifactObjectBinding = artifactLifecycleObjectBinding(
+      cfg.objectStore.backendAlias,
+      cfg.objectStore.credentialRef,
+    );
+    return {
+      workerId: cfg.workerId,
+      artifactLifecycleAuditRetentionDays: cfg.artifactRetentionDays,
+      artifactRedactor: new FsArtifactRedactor(
+        artifactStore,
+        artifactObjectBinding,
+        new ArtifactRedactionContentTransform(),
+      ),
+      artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
+    };
+  }
+
+  const secretStore = deps.secretStore;
+  if (secretStore === undefined) {
+    throw new Error("artifact lifecycle S3 object store requires a SecretStore for ARTIFACT_OBJECT_STORE_REF");
+  }
+  const secretAccessKey = await secretStore.resolve(cfg.objectStore.secretAccessKeyRef as SecretRef);
+  const artifactStore = new S3ObjectStore({
+    endpoint: cfg.objectStore.endpoint,
+    region: cfg.objectStore.region,
+    bucket: cfg.objectStore.bucket,
+    accessKeyId: cfg.objectStore.accessKeyId,
+    secretAccessKey,
+    forcePathStyle: cfg.objectStore.forcePathStyle,
+    ...(deps.s3Transport !== undefined ? { transport: deps.s3Transport } : {}),
+  });
+  const artifactObjectBinding = artifactLifecycleObjectBinding(
+    cfg.objectStore.backendAlias,
+    cfg.objectStore.secretAccessKeyRef,
+  );
+  return {
+    workerId: cfg.workerId,
+    artifactLifecycleAuditRetentionDays: cfg.artifactRetentionDays,
+    artifactRedactor: new S3ArtifactRedactor(
+      artifactStore,
+      artifactObjectBinding,
+      new ArtifactRedactionContentTransform(),
+    ),
+    artifactRetentionStore: new S3ArtifactRetentionStore(artifactStore, artifactObjectBinding),
+  };
+}
+
+function artifactLifecycleObjectBinding(
+  backendAlias: string,
+  credentialRef: string,
+): ArtifactRealObjectStorePortBinding {
+  return {
+    kind: "real_object_store",
+    backendAlias,
+    credentialRef: credentialRef as SecretRef,
+    evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  };
+}
+
+function buildArtifactLifecycleSecretStore(cfg: ArtifactLifecycleWorkerConfig): SecretStore | undefined {
+  if (cfg.objectStore.mode !== "s3") return undefined;
+  const vault = cfg.vaultArtifactLifecycle;
+  if (vault === undefined) {
+    throw new Error("artifact lifecycle S3 object store requires VAULT_ARTIFACT_LIFECYCLE_* AppRole config");
+  }
+  return new VaultSecretStore({
+    baseUrl: vault.addr,
+    mount: vault.mount,
+    kvApiVersion: 2,
+    appRole: { roleId: vault.roleId, secretId: vault.secretId },
+  });
+}
+
+async function startArtifactLifecycleWorker(): Promise<ArtifactLifecycleRunner> {
+  const cfg = loadArtifactLifecycleWorkerConfig();
+  const pool = createPool({ connectionString: cfg.connectionString });
+  try {
+    await pool.query("SELECT 1");
+    const secretStore = buildArtifactLifecycleSecretStore(cfg);
+    const workerOptions = await buildArtifactLifecycleWorkerOptions(
+      cfg,
+      secretStore !== undefined ? { secretStore } : {},
+    );
+    const runner = await run({
+      connectionString: cfg.connectionString,
+      taskList: buildTaskList(pool, workerOptions, "artifact_lifecycle"),
+      concurrency: cfg.graphileConcurrency,
+      pollInterval: cfg.graphilePollIntervalMs,
+      ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
+    });
+    console.log(JSON.stringify({
+      at: "main",
+      msg: "artifact lifecycle worker daemon running",
+      concurrency: cfg.graphileConcurrency,
+    }));
+    return { pool, runner };
+  } catch (err) {
+    await pool.end().catch(() => undefined);
+    throw err;
+  }
+}
+
 async function main(): Promise<void> {
   const mode = loadRunMode();
   const common = loadCommonConfig();
@@ -417,9 +525,11 @@ async function main(): Promise<void> {
   const health = startHealthServer(pool, common.healthPort);
   let api: FastifyInstance | undefined;
   let worker: StartedWorker | undefined;
+  let lifecycleRunner: ArtifactLifecycleRunner | undefined;
 
   if (mode === "api" || mode === "all") api = await startApi(pool, common, mode);
-  if (mode === "worker" || mode === "all") worker = await startWorker(pool, common.connectionString);
+  if (mode === "worker" || mode === "all") worker = await startWorker(pool, common);
+  if (mode === "lifecycle-worker" || mode === "all") lifecycleRunner = await startArtifactLifecycleWorker();
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
@@ -435,7 +545,9 @@ async function main(): Promise<void> {
           worker.maintenance?.stop();
           await worker.runner.stop();
         }
+        if (lifecycleRunner !== undefined) await lifecycleRunner.runner.stop();
       } finally {
+        if (lifecycleRunner !== undefined) await lifecycleRunner.pool.end().catch(() => undefined);
         await pool.end().catch(() => undefined);
       }
       process.exit(0);
@@ -445,8 +557,15 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
-void main().catch((e) => {
-  const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  console.error(JSON.stringify({ at: "main", fatal: text }));
-  process.exit(1);
-});
+function isDirectEntrypoint(): boolean {
+  const entrypoint = process.argv[1];
+  return entrypoint !== undefined && import.meta.url === pathToFileURL(entrypoint).href;
+}
+
+if (isDirectEntrypoint()) {
+  void main().catch((e) => {
+    const text = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.error(JSON.stringify({ at: "main", fatal: text }));
+    process.exit(1);
+  });
+}

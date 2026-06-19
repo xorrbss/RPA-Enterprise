@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { PgGraphileRunEnqueuer } from "../src/api/run-queue";
+import { RUNTIME_LIFECYCLE_JOB_TASK } from "../src/worker/graphile-runner";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -32,7 +33,7 @@ await enqueuer.enqueueArtifactRedaction(client, {
   generationId: GENERATION,
 });
 const scopedPayload = JSON.parse(String(calls[0]?.params[1])) as Record<string, unknown>;
-check("artifact redaction enqueue uses runtime task", calls[0]?.params[0] === "process_runtime_job");
+check("artifact redaction enqueue uses lifecycle task", calls[0]?.params[0] === RUNTIME_LIFECYCLE_JOB_TASK);
 check(
   "artifact redaction enqueue preserves scoped artifact and generation ids",
   scopedPayload.kind === "artifact_redaction" &&

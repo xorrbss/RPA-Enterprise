@@ -8,7 +8,7 @@ import { S3ArtifactRetentionStore } from "../src/artifacts/s3-artifact-retention
 import { S3ObjectStore } from "../src/artifacts/s3-object-store";
 import { FsObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
 import { buildRuntimeArtifactObjectStoreBinding } from "../src/worker/artifact-object-store-binding";
-import type { GatewayConfig, WorkerConfig } from "../src/config/env";
+import type { ArtifactLifecycleWorkerConfig } from "../src/config/env";
 import type { PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
 import {
   ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
@@ -33,49 +33,26 @@ const BINDING: ArtifactRealObjectStorePortBinding = {
   evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
 };
 
-const gw = (artifactDir: string): GatewayConfig => ({
-  artifactDir,
-  artifactRetentionDays: 90,
-  codexBaseUrl: "http://127.0.0.1:1",
-  codexApiKey: "test",
-  codexModel: "test-model",
-  codexMaxContextTokens: 1000,
-  pricePer1kInputUsd: 0,
-  pricePer1kOutputUsd: 0,
-  idleTimeoutMs: 1000,
-  wallTimeoutMs: 2000,
-  retryMax: 0,
-  fallbackAttempts: 0,
-  repairAttempts: 0,
-  promptTemplateVersion: "test",
-  budget: { maxInputTokens: 1000, maxOutputTokens: 1000, maxCost: 0 },
-});
-
-function workerConfig(kind: "fs" | "s3"): WorkerConfig {
+function lifecycleConfig(kind: "local_fs" | "s3", artifactDir: string): ArtifactLifecycleWorkerConfig {
   return {
-    vaultRuntimeWorker: { addr: "https://vault.local", mount: "secret", roleId: "role", secretId: "secret" },
-    resumeTokenRef: "rpa/staging/runtime-worker/resume_token_hmac/active",
-    browserSessionKeyRef: "rpa/staging/runtime-worker/browser_session/active",
-    artifactObjectStoreRef: SECRET_REF,
-    artifactObjectStore: kind === "fs"
-      ? { kind: "fs" }
+    connectionString: "postgresql://artifact-lifecycle@db/rpa",
+    workerId: "20000000-0000-4000-8000-0000000000aa",
+    vaultArtifactLifecycle: kind === "s3" ? { addr: "https://vault.local", mount: "secret", roleId: "role", secretId: "secret" } : undefined,
+    objectStore: kind === "local_fs"
+      ? { mode: "local_fs", artifactDir, credentialRef: SECRET_REF, backendAlias: "fs-local" }
       : {
-          kind: "s3",
+          mode: "s3",
           endpoint: "https://s3.us-east-1.amazonaws.com",
           region: "us-east-1",
           bucket: "examplebucket",
-          accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+          accessKeyId: "test-s3-access-key-id",
+          secretAccessKeyRef: SECRET_REF,
+          backendAlias: "s3-staging",
           forcePathStyle: true,
         },
-    artifactObjectStoreBackendAlias: kind === "fs" ? "fs-local" : "s3-staging",
+    artifactRetentionDays: 90,
     graphileConcurrency: 1,
     graphilePollIntervalMs: 2000,
-    maintenanceTenantIds: [],
-    sinkDeliveryMaxAttempts: 3,
-    sinkDeliveryRetryAfterMs: 5000,
-    videoRecordingEnabled: false,
-    videoFrameIntervalMs: 1000,
-    videoFrameRate: 1,
   };
 }
 
@@ -92,8 +69,7 @@ const fsDir = mkdtempSync(join(tmpdir(), "rpa-runtime-artifact-store-"));
 try {
   const fsSecrets = new RecordingSecretStore();
   const fsBinding = await buildRuntimeArtifactObjectStoreBinding({
-    cfg: workerConfig("fs"),
-    gw: gw(fsDir),
+    cfg: lifecycleConfig("local_fs", fsDir),
     secretStore: fsSecrets,
     binding: BINDING,
   });
@@ -109,8 +85,7 @@ try {
 
 const s3Secrets = new RecordingSecretStore();
 const s3Binding = await buildRuntimeArtifactObjectStoreBinding({
-  cfg: workerConfig("s3"),
-  gw: gw(fsDir),
+  cfg: lifecycleConfig("s3", fsDir),
   secretStore: s3Secrets,
   binding: BINDING,
 });

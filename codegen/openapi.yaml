@@ -174,6 +174,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RunStepList'
+        '403':
+          $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
         default:
@@ -1222,6 +1224,34 @@ paths:
                 $ref: '#/components/schemas/SitePage'
         default:
           $ref: '#/components/responses/Error'
+    post:
+      tags: [Sites]
+      operationId: createSite
+      summary: 사이트 등록
+      description: >
+        site_profile 생성과 함께 기본 browser_identity 및 origin-host network_policy를 같은 tx에서 생성한다.
+        응답의 default_* id는 자연어 시나리오 생성 target 자동 채움에 사용된다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteCreateRequest'
+      responses:
+        '201':
+          description: 사이트 및 기본 실행 타깃 생성 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteCreateResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
 
   /sites/{site_profile_id}:
     parameters:
@@ -1240,6 +1270,34 @@ paths:
                 $ref: '#/components/schemas/Site'
         '404':
           $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Sites]
+      operationId: updateSite
+      summary: 사이트 이름 수정
+      description: 사이트 표시 이름만 갱신한다. target 자동 채움용 기본 browser_identity/network_policy는 유지한다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteUpdateRequest'
+      responses:
+        '200':
+          description: 사이트 이름 수정 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteUpdateResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
         default:
           $ref: '#/components/responses/Error'
 
@@ -1535,6 +1593,15 @@ components:
           items: { $ref: '#/components/schemas/Run' }
         next_cursor:
           type: [string, "null"]
+    StepPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/StepSummary' }
+        next_cursor:
+          type: [string, "null"]
     ScenarioPage:
       type: object
       required: [items, next_cursor]
@@ -1677,6 +1744,31 @@ components:
           type: [string, "null"]
           format: date-time
           description: Present on createRun responses; omitted on abort responses.
+    StepSummary:
+      type: object
+      description: run_steps metadata-only step trace. Sensitive input/output bodies are not exposed.
+      properties:
+        step_id: { type: string }
+        node_id: { type: string }
+        attempt: { type: integer }
+        action: { type: string }
+        status: { type: string }
+        cache_mode: { type: string }
+        artifact_ids:
+          type: array
+          items: { type: string }
+        stagehand_calls:
+          type: array
+          items: { $ref: '#/components/schemas/StagehandCallSummary' }
+        started_at: { type: [string, "null"], format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        duration_ms: { type: [integer, "null"], minimum: 0 }
+        exception:
+          type: [object, "null"]
+          properties:
+            class: { type: string }
+            code: { type: string }
+          additionalProperties: false
 
     RunCreateRequest:
       type: object
@@ -2305,6 +2397,76 @@ components:
         default_network_policy_id:
           type: [string, "null"]
           description: 자연어 실행 target에 자동 제안할 테넌트 기본 network_policy id.
+
+    SiteCreateRequest:
+      type: object
+      required: [name, url_pattern]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        url_pattern:
+          type: string
+          description: http(s) origin/pattern. Opaque schemes are rejected.
+        risk:
+          $ref: '#/components/schemas/SiteRisk'
+        page_state_selectors:
+          type: object
+          description: SitePageStateConfig JSON. The server validates its closed flag registry.
+          additionalProperties: true
+      additionalProperties: false
+
+    SiteCreateResponse:
+      type: object
+      required:
+        - site_profile_id
+        - name
+        - url_pattern
+        - risk
+        - approved
+        - default_browser_identity_id
+        - default_network_policy_id
+      properties:
+        site_profile_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        url_pattern:
+          type: string
+        risk:
+          $ref: '#/components/schemas/SiteRisk'
+        approved:
+          type: boolean
+        default_browser_identity_id:
+          type: string
+          format: uuid
+          description: Default browser_identity created with the site for natural-language run targets.
+        default_network_policy_id:
+          type: string
+          format: uuid
+          description: Default origin-host network_policy created with the site for natural-language run targets.
+      additionalProperties: false
+
+    SiteUpdateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+      additionalProperties: false
+
+    SiteUpdateResponse:
+      type: object
+      required: [site_profile_id, name]
+      properties:
+        site_profile_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+      additionalProperties: false
 
     SiteApproveRequest:
       type: object

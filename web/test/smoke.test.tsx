@@ -409,7 +409,15 @@ describe("D7 운영 콘솔 shell", () => {
             default_browser_identity_id: null,
             default_network_policy_id: null,
           });
-          return { site_profile_id: createdSiteId, name: body.name, url_pattern: body.url_pattern, risk: body.risk ?? "green", approved: false };
+          return {
+            site_profile_id: createdSiteId,
+            name: body.name,
+            url_pattern: body.url_pattern,
+            risk: body.risk ?? "green",
+            approved: false,
+            default_browser_identity_id: "browser-created",
+            default_network_policy_id: "network-created",
+          };
         },
         generateScenario: async (body) => {
           generateCalls.push(body);
@@ -1446,7 +1454,15 @@ describe("D7 운영 콘솔 shell", () => {
         listSites: async () => ({ items: [], next_cursor: null }),
         createSite: async (body, key) => {
           calls.push({ body, key });
-          return { site_profile_id: "site-new" };
+          return {
+            site_profile_id: "site-new",
+            name: body.name,
+            url_pattern: body.url_pattern,
+            risk: body.risk ?? "green",
+            approved: false,
+            default_browser_identity_id: "browser-new",
+            default_network_policy_id: "network-new",
+          };
         },
       }),
     );

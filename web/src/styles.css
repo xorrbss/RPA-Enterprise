@@ -177,6 +177,14 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .result-grid { display: grid; grid-template-columns: repeat(4, auto minmax(0, 1fr)); gap: 6px 10px; align-items: center; }
 .result-grid code { overflow-wrap: anywhere; }
 .blocker-list { margin: 0; padding-left: 18px; color: var(--red-ink); display: grid; gap: 4px; }
+.generation-summary { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 8px; }
+.generation-summary strong { font-size: 13px; }
+.generation-summary-grid { display: grid; grid-template-columns: repeat(4, auto minmax(0, 1fr)); gap: 6px 10px; align-items: center; }
+.generation-summary-grid span, .generation-summary-grid code { overflow-wrap: anywhere; }
+.validation-issue-group { display: grid; gap: 6px; }
+.validation-issue-list { margin: 0; padding-left: 18px; display: grid; gap: 5px; }
+.validation-issue-list li { overflow-wrap: anywhere; }
+.validation-issue-list li code { margin-left: 4px; }
 .generation-artifacts { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 8px; }
 .generation-artifacts-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .generation-artifacts-head strong { font-size: 13px; }

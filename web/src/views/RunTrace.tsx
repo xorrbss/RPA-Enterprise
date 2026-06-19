@@ -74,7 +74,7 @@ export function RunTraceView(): JSX.Element {
 
   return (
     <div>
-      <ArtifactLookup />
+      <ArtifactLookup consumeHashParam={sel === null || !focusArtifacts} />
       {sel !== null && (
         <RunDetailPanel
           runId={sel}
@@ -332,6 +332,10 @@ function isPreviewableMedia(a: RunArtifactItem | undefined): boolean {
   return previewMediaType(a) !== null;
 }
 
+function isArtifactRedacted(a: RunArtifactItem | undefined): boolean {
+  return a?.redaction_status === "redacted";
+}
+
 function formatByteSize(bytes: number | null | undefined): string | null {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return null;
   const units = ["B", "KB", "MB", "GB"];
@@ -497,8 +501,9 @@ function RunArtifactsList({
   const items: readonly RunArtifactItem[] = mergeArtifactPages(firstPageItems, extraItems);
   const hasMoreArtifacts = nextCursor !== null;
   const preferred =
-    items.find(isPreviewableMedia) ??
-    items.find((a) => /json|extract|output|result/i.test(a.type)) ??
+    items.find((a) => isArtifactRedacted(a) && isPreviewableMedia(a)) ??
+    items.find((a) => isArtifactRedacted(a) && /json|extract|output|result/i.test(a.type)) ??
+    items.find(isArtifactRedacted) ??
     items[0];
   const hashSelectedId =
     hashArtifactId !== null && items.some((a) => a.artifact_id === hashArtifactId)
@@ -511,6 +516,7 @@ function RunArtifactsList({
   const effectiveSelectedId =
     hashSelectedId ?? stateSelectedId ?? preferred?.artifact_id ?? null;
   const selectedItem = items.find((a) => a.artifact_id === effectiveSelectedId);
+  const selectedIsRedacted = isArtifactRedacted(selectedItem);
   const selectedIsMedia = isPreviewableMedia(selectedItem);
   const selectedMediaType = previewMediaType(selectedItem);
   const counts = artifactSummary(items);
@@ -538,7 +544,7 @@ function RunArtifactsList({
   const detail = useQuery({
     queryKey: ["artifact-detail", effectiveSelectedId],
     queryFn: () => api.getArtifact(effectiveSelectedId as string),
-    enabled: effectiveSelectedId !== null && !selectedIsMedia,
+    enabled: effectiveSelectedId !== null && selectedIsRedacted && !selectedIsMedia,
   });
   const summary = detail.data !== undefined ? summarizeJsonArtifact(detail.data) : null;
   async function loadMoreArtifacts(): Promise<void> {
@@ -615,6 +621,7 @@ function RunArtifactsList({
                 {items.map((a) => {
                   const kind = mediaKind(a);
                   const labels = mediaMetaLabels(a);
+                  const isRedacted = isArtifactRedacted(a);
                   return (
                     <tr key={a.artifact_id} data-current={a.artifact_id === effectiveSelectedId ? "true" : undefined}>
                       <td><ArtifactRef id={a.artifact_id} /></td>
@@ -643,16 +650,23 @@ function RunArtifactsList({
                           <span className="subtle">{labels.join(" · ")}</span>
                         ) : "—"}
                       </td>
-                      <td><span className="badge muted">{a.redaction_status}</span></td>
+                      <td>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <span className={`badge ${isRedacted ? "green" : "amber"}`}>{a.redaction_status}</span>
+                          {!isRedacted && <span className="subtle">redaction pending</span>}
+                        </span>
+                      </td>
                       <td>{a.retention_until ?? "—"}</td>
                       <td>{a.legal_hold ? "예" : "—"}</td>
                       <td>
                         <button
                           className="btn"
                           type="button"
+                          disabled={!isRedacted}
+                          title={!isRedacted ? "Preview is available after redaction completes." : undefined}
                           onClick={() => {
                             setSelectedId(a.artifact_id);
-                            mergeParams({ artifact: a.artifact_id });
+                            mergeParams({ artifact: a.artifact_id, focus: "artifacts" });
                           }}
                         >
                           {a.artifact_id === effectiveSelectedId ? "선택됨" : "미리보기"}
@@ -690,7 +704,11 @@ function RunArtifactsList({
                 {summary !== null && <span className="badge green">{summary.label} {summary.count}건</span>}
                 {summary !== null && summary.keys.length > 0 && <span className="subtle">키 {summary.keys.join(", ")}</span>}
               </div>
-              {detail.isLoading ? (
+              {selectedItem !== undefined && !selectedIsRedacted ? (
+                <p className="subtle" role="status" style={{ margin: "8px 0 0" }}>
+                  Preview is available after redaction completes.
+                </p>
+              ) : detail.isLoading ? (
                 <Loading />
               ) : detail.isError ? (
                 <ErrorState message="산출물 본문을 불러오지 못했습니다." onRetry={() => void detail.refetch()} />

@@ -99,6 +99,12 @@ const ARTIFACT_RETENTION_LEGAL_HOLD = "60000000-0000-0000-0000-000000000014";
 const ARTIFACT_RETENTION_QUARANTINE = "60000000-0000-0000-0000-000000000015";
 const ARTIFACT_RETENTION_UNEXPIRED = "60000000-0000-0000-0000-000000000016";
 const ARTIFACT_RETENTION_ALREADY_DELETED = "60000000-0000-0000-0000-000000000017";
+const GENERATION_SCOPE_A = "30000000-0000-0000-0000-000000000201";
+const GENERATION_SCOPE_B = "30000000-0000-0000-0000-000000000202";
+const ARTIFACT_GENERATION_REDACTION_MATCH = "60000000-0000-0000-0000-000000000021";
+const ARTIFACT_GENERATION_REDACTION_OTHER = "60000000-0000-0000-0000-000000000022";
+const ARTIFACT_GENERATION_RETENTION_MATCH = "60000000-0000-0000-0000-000000000023";
+const ARTIFACT_GENERATION_RETENTION_OTHER = "60000000-0000-0000-0000-000000000024";
 const ACTIVE_REDACTION_CLAIM = "70000000-0000-0000-0000-000000000001";
 const GENERATION_TARGET = "80000000-0000-0000-0000-000000000001";
 const GENERATION_UNRELATED = "80000000-0000-0000-0000-000000000002";
@@ -174,11 +180,18 @@ const fakeArtifactRedactor: ArtifactRedactor = {
   binding: localTestPortBinding,
   redact: async (input) => {
     redactionCalls.push(input);
-    if (input.artifact.artifactRef === ARTIFACT_REDACTION_PENDING) {
-      const sha256 = "sha256:redacted-safe";
+    if (
+      input.artifact.artifactRef === ARTIFACT_REDACTION_PENDING ||
+      input.artifact.artifactRef === ARTIFACT_GENERATION_REDACTION_MATCH
+    ) {
+      const sha256 = input.artifact.artifactRef === ARTIFACT_REDACTION_PENDING
+        ? "sha256:redacted-safe"
+        : "sha256:generation-redacted-safe";
       return {
         kind: "redacted",
-        redactedObjectRef: "object://runtime-worker/redacted-safe" as ObjectRef,
+        redactedObjectRef: (input.artifact.artifactRef === ARTIFACT_REDACTION_PENDING
+          ? "object://runtime-worker/redacted-safe"
+          : "object://runtime-worker/generation-redacted-safe") as ObjectRef,
         sha256,
         evidence: localTestEvidence(input, "redact", "local-redaction-receipt", sha256),
       };
@@ -207,7 +220,10 @@ const fakeArtifactRetentionStore: ArtifactRetentionStore = {
   binding: localTestPortBinding,
   deleteObject: async (input) => {
     retentionCalls.push(input);
-    if (input.artifact.artifactRef === ARTIFACT_RETENTION_DELETE) {
+    if (
+      input.artifact.artifactRef === ARTIFACT_RETENTION_DELETE ||
+      input.artifact.artifactRef === ARTIFACT_GENERATION_RETENTION_MATCH
+    ) {
       return {
         kind: "deleted",
         evidence: localTestEvidence(input, "delete", "local-retention-delete-receipt"),
@@ -320,6 +336,46 @@ async function seedLifecycleArtifacts(pool: ReturnType<typeof createPool>): Prom
         GENERATION_TARGET,
         ARTIFACT_REDACTION_GENERATION_UNRELATED,
         GENERATION_UNRELATED,
+      ],
+    );
+  });
+}
+
+async function seedGenerationLifecycleArtifacts(pool: ReturnType<typeof createPool>): Promise<void> {
+  await withTenantTx(pool, TENANT_A, async (c) => {
+    await c.query(
+      `INSERT INTO scenario_generations
+         (id, tenant_id, mode, status, prompt_hash, planner, draft_ir, validation_report,
+          evidence_policy, blockers, created_by)
+       VALUES
+         ($1::uuid,$3::uuid,'save','saved','hash-generation-scope-a','llm_v1','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'[]'::jsonb,'claim-test'),
+         ($2::uuid,$3::uuid,'save','saved','hash-generation-scope-b','llm_v1','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'[]'::jsonb,'claim-test')`,
+      [GENERATION_SCOPE_A, GENERATION_SCOPE_B, TENANT_A],
+    );
+    await c.query(
+      `INSERT INTO artifacts (
+         id, tenant_id, generation_id, type, redaction_status, redaction_attempts, object_ref,
+         retention_until, legal_hold, quarantine, deleted_at, deleted_reason, deleted_by_job,
+         lifecycle_claim_id, lifecycle_claim_kind, lifecycle_claim_worker_id,
+         lifecycle_claim_correlation_id, lifecycle_claimed_at, lifecycle_claim_expires_at
+       )
+       VALUES
+         ($1,$5,$6,'scenario_generation_llm_output','pending',0,'object://runtime-worker/generation-redaction-match',
+          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+         ($2,$5,$7,'scenario_generation_llm_output','pending',0,'object://runtime-worker/generation-redaction-other',
+          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+         ($3,$5,$6,'scenario_generation_llm_output','not_required',0,'object://runtime-worker/generation-retention-match',
+          now() - interval '1 day',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+         ($4,$5,$7,'scenario_generation_llm_output','not_required',0,'object://runtime-worker/generation-retention-other',
+          now() - interval '1 day',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`,
+      [
+        ARTIFACT_GENERATION_REDACTION_MATCH,
+        ARTIFACT_GENERATION_REDACTION_OTHER,
+        ARTIFACT_GENERATION_RETENTION_MATCH,
+        ARTIFACT_GENERATION_RETENTION_OTHER,
+        TENANT_A,
+        GENERATION_SCOPE_A,
+        GENERATION_SCOPE_B,
       ],
     );
   });
@@ -1243,7 +1299,7 @@ async function main(): Promise<void> {
         kind: "artifact_redaction",
         tenantId: TENANT_A as TenantId,
         artifactId: ARTIFACT_REDACTION_GENERATION_TARGET as RuntimeWorkerJob["artifactId"],
-        generationId: GENERATION_TARGET,
+        generationId: GENERATION_TARGET as RuntimeWorkerJob["generationId"],
         correlationId: CORRELATION as CorrelationId,
       });
       check(
@@ -1360,6 +1416,79 @@ async function main(): Promise<void> {
           ),
         JSON.stringify(retentionCalls.map((call) => call.artifact.artifactRef)),
       );
+
+      await seedGenerationLifecycleArtifacts(lifecycleBypassPool);
+      const redactionCallsBeforeGenerationScope = redactionCalls.length;
+      const generationRedaction = await bypassWorker.handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        generationId: GENERATION_SCOPE_A as RuntimeWorkerJob["generationId"],
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_redaction generation-scoped job completes", generationRedaction.kind === "completed", JSON.stringify(generationRedaction));
+      const generationRedacted = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_GENERATION_REDACTION_MATCH);
+      const otherGenerationPending = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_GENERATION_REDACTION_OTHER);
+      check(
+        "artifact_redaction generationId scope only redacts matching generation artifact",
+        redactionCalls.length === redactionCallsBeforeGenerationScope + 1 &&
+          redactionCalls[redactionCalls.length - 1]?.artifact.artifactRef === ARTIFACT_GENERATION_REDACTION_MATCH &&
+          redactionCalls[redactionCalls.length - 1]?.artifact.generationId === GENERATION_SCOPE_A &&
+          redactionCalls[redactionCalls.length - 1]?.artifact.runId === undefined &&
+          generationRedacted.redactionStatus === "redacted" &&
+          generationRedacted.objectRef === "object://runtime-worker/generation-redacted-safe" &&
+          otherGenerationPending.redactionStatus === "pending",
+        JSON.stringify({
+          calls: redactionCalls.map((call) => call.artifact.artifactRef),
+          generationRedacted,
+          otherGenerationPending,
+        }),
+      );
+
+      const retentionCallsBeforeGenerationScope = retentionCalls.length;
+      const generationRetention = await bypassWorker.handle({
+        kind: "artifact_retention",
+        tenantId: TENANT_A as TenantId,
+        generationId: GENERATION_SCOPE_A as RuntimeWorkerJob["generationId"],
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_retention generation-scoped job completes", generationRetention.kind === "completed", JSON.stringify(generationRetention));
+      const generationDeleted = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_GENERATION_RETENTION_MATCH);
+      const otherGenerationRetained = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_GENERATION_RETENTION_OTHER);
+      const runTransientStillDue = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_RETENTION_TRANSIENT);
+      check(
+        "artifact_retention generationId scope only deletes matching generation artifact",
+        retentionCalls.length === retentionCallsBeforeGenerationScope + 1 &&
+          retentionCalls[retentionCalls.length - 1]?.artifact.artifactRef === ARTIFACT_GENERATION_RETENTION_MATCH &&
+          retentionCalls[retentionCalls.length - 1]?.artifact.generationId === GENERATION_SCOPE_A &&
+          retentionCalls[retentionCalls.length - 1]?.artifact.runId === undefined &&
+          generationDeleted.deletedAtSet === true &&
+          generationDeleted.deletedReason === "retention_expired" &&
+          otherGenerationRetained.deletedAtSet === false &&
+          runTransientStillDue.deletedAtSet === false,
+        JSON.stringify({
+          calls: retentionCalls.map((call) => call.artifact.artifactRef),
+          generationDeleted,
+          otherGenerationRetained,
+          runTransientStillDue,
+        }),
+      );
+
+      try {
+        await bypassWorker.handle({
+          kind: "artifact_redaction",
+          tenantId: TENANT_A as TenantId,
+          runId: RUN_HOLDER as RunId,
+          generationId: GENERATION_SCOPE_A as RuntimeWorkerJob["generationId"],
+          correlationId: CORRELATION as CorrelationId,
+        });
+        check("artifact_redaction rejects mixed runId/generationId scope", false, "expected throw");
+      } catch (err) {
+        check(
+          "artifact_redaction rejects mixed runId/generationId scope",
+          String(err).includes("cannot set both runId and generationId"),
+          String(err),
+        );
+      }
 
       const lifecycleAudit = await artifactLifecycleAuditSummary(pool);
       check("artifact lifecycle appends claim/finalize audits", lifecycleAudit.count >= 8, JSON.stringify(lifecycleAudit));

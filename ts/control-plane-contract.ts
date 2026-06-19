@@ -26,7 +26,7 @@ import type {
   TenantSessionBinder,
 } from "./security-middleware-contract";
 
-export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type ControlPlanePath =
   | "/v1/runs"
@@ -72,6 +72,8 @@ export type OperationId =
   | "listRunSteps"
   | "listRunArtifacts"
   | "listRuns"
+  | "listRunSteps"
+  | "listRunArtifacts"
   | "abortRun"
   | "generateScenario"
   | "getScenarioGenerationCapabilities"

@@ -10,7 +10,7 @@ import type { PoolClient } from "pg";
 
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import type { RuntimeJobEnqueuePort } from "../runtime/executor-completion-coordinator";
-import { RUNTIME_JOB_TASK } from "../worker/graphile-runner";
+import { runtimeJobTaskIdentifier } from "../worker/graphile-runner";
 
 export interface RunEnqueueInput {
   tenantId: string;
@@ -29,9 +29,10 @@ export interface SinkDeliverEnqueueInput {
 
 export interface ArtifactRedactionEnqueueInput {
   tenantId: string;
+  runId?: string;
+  generationId?: string;
   correlationId: string;
   artifactId?: string;
-  generationId?: string;
 }
 
 export interface RunEnqueuer {
@@ -42,7 +43,7 @@ export interface RunEnqueuer {
   /** sink-DLQ replay: 새 sink_deliver attempt를 호출측 트랜잭션으로 인큐(D8-A3 — 상태전이 아님,
    *  worker가 attempt_no=MAX+1·동일 멱등키 산출). 실 재전달은 worker의 SinkDeliveryPort(egress) 의존. */
   enqueueSinkDeliver(client: PoolClient, input: SinkDeliverEnqueueInput): Promise<void>;
-  /** Run-less generation artifacts enqueue scoped redaction jobs; maintenance may still enqueue tenant-wide sweeps. */
+  /** Artifacts need scoped redaction before they become readable; run-less generation artifacts use generationId/artifactId scope. */
   enqueueArtifactRedaction?(client: PoolClient, input: ArtifactRedactionEnqueueInput): Promise<void>;
   /** human_task resolve(R13: suspended→resume_requested) 직후 run_resume 잡을 같은 트랜잭션으로 인큐(원자).
    *  optional: 미지원 enqueuer 가 resolve(R13)에 도달하면 호출측이 loud throw(조용한 stuck 금지). */
@@ -53,7 +54,7 @@ export interface RunEnqueuer {
 export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort {
   async enqueueRuntimeJob(client: PoolClient, job: RuntimeWorkerJob): Promise<void> {
     await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
-      RUNTIME_JOB_TASK,
+      runtimeJobTaskIdentifier(job),
       JSON.stringify(job),
     ]);
   }
@@ -89,12 +90,16 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
   }
 
   async enqueueArtifactRedaction(client: PoolClient, input: ArtifactRedactionEnqueueInput): Promise<void> {
+    if (input.runId !== undefined && input.generationId !== undefined) {
+      throw new Error("artifact_redaction enqueue cannot set both runId and generationId");
+    }
     const job: RuntimeWorkerJob = {
       kind: "artifact_redaction",
       tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
+      ...(input.runId === undefined ? {} : { runId: input.runId as RuntimeWorkerJob["runId"] }),
+      ...(input.generationId === undefined ? {} : { generationId: input.generationId as RuntimeWorkerJob["generationId"] }),
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
       ...(input.artifactId !== undefined ? { artifactId: input.artifactId as RuntimeWorkerJob["artifactId"] } : {}),
-      ...(input.generationId !== undefined ? { generationId: input.generationId } : {}),
     };
     await this.enqueueRuntimeJob(client, job);
   }
