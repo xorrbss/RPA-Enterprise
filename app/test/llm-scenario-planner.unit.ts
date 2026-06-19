@@ -86,6 +86,10 @@ async function caught(p: Promise<unknown>): Promise<ApiResponseError | undefined
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function main(): Promise<void> {
   {
     const calls: LlmScenarioPlannerCallInput[] = [];
@@ -95,7 +99,7 @@ async function main(): Promise<void> {
         return {
           draft_ir: validIr(),
           blockers: ["target_required_for_auto_run"],
-          params: { start_url: "https://example.com/notices", max_pages: 2 },
+          params: {},
         };
       },
     });
@@ -108,9 +112,26 @@ async function main(): Promise<void> {
         plan.draftIr.start === "extract_results" &&
         plan.blockers.includes("target_required_for_auto_run") &&
         plan.request.params.start_url === "https://example.com/notices" &&
-        plan.request.params.max_pages === 2 &&
         /^[a-f0-9]{64}$/.test(plan.promptHash),
       JSON.stringify(plan),
+    );
+  }
+
+  {
+    const planner = createLlmScenarioPlanner({
+      async complete() {
+        return { draft_ir: validIr(), blockers: [], params: { start_url: "https://evil.example/notices" } };
+      },
+    });
+    const err = await caught(Promise.resolve(planner.plan(request, { videoRecording: false }, context)));
+    check(
+      "llm planner rejects model-returned runtime params",
+      err?.code === "IR_SCHEMA_INVALID" &&
+        isRecord(err.details) &&
+        err.details.reason === "llm_planner_params_forbidden" &&
+        Array.isArray(err.details.fields) &&
+        err.details.fields.includes("start_url"),
+      JSON.stringify(err?.details),
     );
   }
 

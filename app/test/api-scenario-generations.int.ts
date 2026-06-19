@@ -1293,10 +1293,12 @@ async function main(): Promise<void> {
           capabilities: gatewayCaps,
           async *streamCall(req) {
             gatewayPlannerCalls.push(req);
+            const mutatesRuntimeParams = gatewayPlannerCalls.length > 1;
+            const draftName = mutatesRuntimeParams ? "generated-llm-gateway-param-mutation" : "generated-llm-gateway-planner";
             const parsedJson = {
-              draft_ir: fakeLlmDraftIr("generated-llm-gateway-planner", { screenshot: "failure", video: "never" }),
+              draft_ir: fakeLlmDraftIr(draftName, { screenshot: "failure", video: "never" }),
               blockers: [],
-              params: {},
+              params: mutatesRuntimeParams ? { start_url: "https://evil.example/notices" } : {},
             };
             for (const event of textDone(JSON.stringify(parsedJson))) yield event;
           },
@@ -1427,6 +1429,28 @@ async function main(): Promise<void> {
         } finally {
           await replayLifecyclePool.end();
         }
+        const beforeParamMutationRuns = enqueuedRuns.length;
+        const gatewayParamMutation = await gatewayBackedPlannerApp.inject({
+          method: "POST",
+          url: "/v1/scenario-generations",
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-llm-gateway-param-mutation-1" },
+          payload: {
+            ...runnablePayload,
+            prompt: "Use the real llm_v1 planner bridge and mutate runtime params",
+            planner: "llm_v1",
+            mode: "save_and_run",
+            name: "generated-llm-gateway-param-mutation",
+          },
+        });
+        check("gateway-backed llm_v1 planner params mutation -> 422", gatewayParamMutation.statusCode === 422, gatewayParamMutation.body);
+        check(
+          "gateway-backed llm_v1 params mutation is explicit and blocks start_url override",
+          gatewayParamMutation.json().code === "IR_SCHEMA_INVALID" &&
+            gatewayParamMutation.body.includes("llm_planner_params_forbidden") &&
+            gatewayParamMutation.body.includes("start_url"),
+          gatewayParamMutation.body,
+        );
+        check("gateway-backed llm_v1 params mutation does not enqueue run", enqueuedRuns.length === beforeParamMutationRuns, JSON.stringify(enqueuedRuns));
       } finally {
         await gatewayBackedPlannerApp.close();
         rmSync(plannerArtifactDir, { recursive: true, force: true });

@@ -80,6 +80,7 @@ const SYSTEM_PROMPT = [
   "Return only JSON that matches the provided schema.",
   "Create a conservative, read-only IR draft unless the user explicitly provides enough approved target context.",
   "Do not invent secrets, credentials, selectors, records, or execution results.",
+  "Do not return runtime params; the server supplies trusted params such as start_url and as_of.",
   "When a request is unsafe or underspecified, still return contract-shaped IR and add a machine-readable blocker.",
   "The server will compile and validate your IR before saving or running it.",
 ].join("\n");
@@ -218,12 +219,19 @@ function planFromLlmOutput(request: GenerationRequest, output: unknown): Generat
   }
   const blockers = parseBlockers(output.blockers);
   const params = parseParams(output.params);
+  const paramKeys = Object.keys(params);
+  if (paramKeys.length > 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", {
+      reason: "llm_planner_params_forbidden",
+      fields: paramKeys.sort(),
+    });
+  }
   const promptHash = createHash("sha256").update(request.prompt).digest("hex");
   return {
     planner: "llm_v1",
     request: {
       ...request,
-      params: { ...request.params, ...params },
+      params: trustedRequestParams(request),
     },
     promptHash,
     draftIr,
@@ -245,6 +253,14 @@ function parseParams(value: unknown): Record<string, unknown> {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "llm_planner_invalid_params" });
   }
   return value;
+}
+
+function trustedRequestParams(request: GenerationRequest): Record<string, unknown> {
+  const params = { ...request.params };
+  if (request.startUrl !== undefined) {
+    params.start_url = request.startUrl;
+  }
+  return params;
 }
 
 function publicRequestPayload(request: GenerationRequest): Record<string, unknown> {
