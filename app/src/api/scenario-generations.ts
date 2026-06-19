@@ -1624,7 +1624,79 @@ function stripBenignPaginationControls(prompt: string): string {
 function extractFirstHttpUrl(text: string): string | undefined {
   const match = text.match(/https?:\/\/[^\s"'<>]+/i);
   const candidate = match?.[0];
-  return candidate !== undefined && isHttpUrl(candidate) ? candidate : undefined;
+  if (candidate === undefined) return undefined;
+  const trimmed = trimUrlProseSuffix(candidate);
+  return isHttpUrl(trimmed) ? trimmed : undefined;
+}
+
+const URL_TRAILING_PROSE_PUNCTUATION = new Set([
+  ".",
+  ",",
+  ";",
+  ":",
+  "!",
+  "?",
+  "。",
+  "．",
+  "，",
+  "、",
+  "；",
+  "：",
+  "！",
+  "？",
+  "…",
+]);
+
+const URL_TRAILING_CLOSERS = new Map([
+  [")", "("],
+  ["]", "["],
+  ["}", "{"],
+  ["）", "（"],
+  ["】", "【"],
+  ["」", "「"],
+  ["』", "『"],
+  ["》", "《"],
+  ["〉", "〈"],
+  ["”", "“"],
+  ["’", "‘"],
+]);
+
+function trimUrlProseSuffix(value: string): string {
+  let trimmed = value;
+  while (trimmed.length > 0) {
+    const char = lastChar(trimmed);
+    if (char === undefined) break;
+    if (URL_TRAILING_PROSE_PUNCTUATION.has(char)) {
+      trimmed = trimLastChar(trimmed, char);
+      continue;
+    }
+    const opener = URL_TRAILING_CLOSERS.get(char);
+    if (opener !== undefined && hasUnmatchedClosingDelimiter(trimmed, opener, char)) {
+      trimmed = trimLastChar(trimmed, char);
+      continue;
+    }
+    break;
+  }
+  return trimmed;
+}
+
+function hasUnmatchedClosingDelimiter(value: string, opener: string, closer: string): boolean {
+  let opens = 0;
+  let closes = 0;
+  for (const char of value) {
+    if (char === opener) opens += 1;
+    if (char === closer) closes += 1;
+  }
+  return closes > opens;
+}
+
+function lastChar(value: string): string | undefined {
+  const chars = Array.from(value);
+  return chars[chars.length - 1];
+}
+
+function trimLastChar(value: string, char: string): string {
+  return value.slice(0, value.length - char.length);
 }
 
 function isHttpUrl(value: string): boolean {

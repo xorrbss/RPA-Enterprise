@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FileVideo, Image, Play, WandSparkles } from "lucide-react";
 
 import { useApiClient } from "../api/context";
@@ -173,6 +173,74 @@ function siteLabel(site: SiteItem): string {
   return site.url_pattern !== undefined ? `${name} (${site.url_pattern})` : name;
 }
 
+const HTTP_URL_TOKEN_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
+const TRAILING_URL_PUNCTUATION_PATTERN = /[.,!?;:\u3002\uff0e\u3001\uff0c\uff01\uff1f\uff1b\uff1a\u2026]+$/u;
+const TRAILING_URL_QUOTES_PATTERN = /["'\u201d\u2019]+$/u;
+const CLOSING_URL_BRACKETS: Readonly<Record<string, string>> = {
+  ")": "(",
+  "]": "[",
+  "}": "{",
+  ">": "<",
+  "\uff09": "\uff08",
+  "\u3009": "\u3008",
+  "\u300b": "\u300a",
+  "\u300d": "\u300c",
+  "\u300f": "\u300e",
+  "\u3011": "\u3010",
+};
+
+function countCharacter(value: string, character: string): number {
+  let count = 0;
+  for (const next of value) {
+    if (next === character) count += 1;
+  }
+  return count;
+}
+
+function trimUnmatchedClosingUrlBracket(value: string): string {
+  const last = value[value.length - 1];
+  if (last === undefined) return value;
+  const opening = CLOSING_URL_BRACKETS[last];
+  if (opening === undefined) return value;
+  return countCharacter(value, last) > countCharacter(value, opening) ? value.slice(0, -1) : value;
+}
+
+function trimTrailingUrlToken(value: string): string {
+  let next = value;
+  for (;;) {
+    const previous = next;
+    next = trimUnmatchedClosingUrlBracket(next.replace(TRAILING_URL_PUNCTUATION_PATTERN, "").replace(TRAILING_URL_QUOTES_PATTERN, ""));
+    if (next === previous) return next;
+  }
+}
+
+function httpOrigin(value: string): string | null {
+  const trimmed = trimTrailingUrlToken(value.trim());
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractFirstHttpUrl(value: string): string | null {
+  HTTP_URL_TOKEN_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTTP_URL_TOKEN_PATTERN.exec(value)) !== null) {
+    const candidate = trimTrailingUrlToken(match[0]);
+    if (candidate.length > 0 && httpOrigin(candidate) !== null) return candidate;
+  }
+  return null;
+}
+
+function singleMatchingSiteForUrl(url: string, sites: readonly SiteItem[]): SiteItem | null {
+  const origin = httpOrigin(url);
+  if (origin === null) return null;
+  const matches = sites.filter((site) => site.url_pattern !== undefined && httpOrigin(site.url_pattern) === origin);
+  return matches.length === 1 ? (matches[0] ?? null) : null;
+}
+
 function createdSiteToItem(site: CreatedSite): SiteItem {
   return {
     site_profile_id: site.site_profile_id,
@@ -313,6 +381,8 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [videoTouched, setVideoTouched] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
+  const autoStartUrlRef = useRef<string | null>(null);
+  const targetManuallyEditedRef = useRef(false);
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
   const evidenceSettingsLoading = capabilities.isLoading;
@@ -348,7 +418,39 @@ export function PromptScenarioGenerator(): JSX.Element {
   );
   const scenarioNameById = useMemo(() => scenarioNameMap(scenariosForHistory.data?.items ?? []), [scenariosForHistory.data?.items]);
 
+  function applySiteDefaults(site: SiteItem): void {
+    setBrowserIdentityId(site.default_browser_identity_id ?? "");
+    setNetworkPolicyId(site.default_network_policy_id ?? "");
+  }
+
+  function markTargetManuallyEdited(): void {
+    targetManuallyEditedRef.current = true;
+  }
+
+  function handleStartUrlChange(nextStartUrl: string): void {
+    if (nextStartUrl !== autoStartUrlRef.current) {
+      autoStartUrlRef.current = null;
+    }
+    setStartUrl(nextStartUrl);
+  }
+
+  function handleSiteProfileIdChange(nextSiteProfileId: string): void {
+    markTargetManuallyEdited();
+    setSiteProfileId(nextSiteProfileId);
+  }
+
+  function handleBrowserIdentityIdChange(nextBrowserIdentityId: string): void {
+    markTargetManuallyEdited();
+    setBrowserIdentityId(nextBrowserIdentityId);
+  }
+
+  function handleNetworkPolicyIdChange(nextNetworkPolicyId: string): void {
+    markTargetManuallyEdited();
+    setNetworkPolicyId(nextNetworkPolicyId);
+  }
+
   function selectSite(nextSiteId: string): void {
+    markTargetManuallyEdited();
     setSiteProfileId(nextSiteId);
     if (nextSiteId.length === 0) {
       setBrowserIdentityId("");
@@ -356,18 +458,14 @@ export function PromptScenarioGenerator(): JSX.Element {
       return;
     }
     const site = (sites.data?.items ?? []).find((s) => s.site_profile_id === nextSiteId);
-    if (site?.default_browser_identity_id !== undefined && site.default_browser_identity_id !== null) {
-      setBrowserIdentityId(site.default_browser_identity_id);
-    }
-    if (site?.default_network_policy_id !== undefined && site.default_network_policy_id !== null) {
-      setNetworkPolicyId(site.default_network_policy_id);
-    }
+    if (site !== undefined) applySiteDefaults(site);
     if (startUrl.trim().length === 0 && site?.url_pattern !== undefined) {
       setStartUrl(site.url_pattern);
     }
   }
 
   function handleInlineSiteCreated(created: CreatedSite): void {
+    markTargetManuallyEdited();
     const site = createdSiteToItem(created);
     qc.setQueryData<Paginated<SiteItem> | undefined>(["sites", "scenario-generator"], (current) => {
       const items = current?.items ?? [];
@@ -383,6 +481,26 @@ export function PromptScenarioGenerator(): JSX.Element {
       setStartUrl(site.url_pattern);
     }
   }
+
+  useEffect(() => {
+    const detectedUrl = extractFirstHttpUrl(prompt);
+    if (detectedUrl === null) return;
+
+    const currentStartUrl = startUrl.trim();
+    if (currentStartUrl.length > 0 && currentStartUrl !== autoStartUrlRef.current) return;
+
+    autoStartUrlRef.current = detectedUrl;
+    if (currentStartUrl !== detectedUrl) {
+      setStartUrl(detectedUrl);
+    }
+
+    if (targetManuallyEditedRef.current) return;
+    const matchedSite = singleMatchingSiteForUrl(detectedUrl, sites.data?.items ?? []);
+    if (matchedSite === null) return;
+
+    setSiteProfileId(matchedSite.site_profile_id);
+    applySiteDefaults(matchedSite);
+  }, [prompt, sites.data?.items, startUrl]);
 
   useEffect(() => {
     if (screenshotCapability === undefined) return;
@@ -576,6 +694,8 @@ export function PromptScenarioGenerator(): JSX.Element {
     setVideo(item.evidence_policy.video ?? "never");
     setVideoTouched(true);
     setParamsText(paramsInputTextFromDraftIr(item.draft_ir, item.params_context));
+    autoStartUrlRef.current = null;
+    targetManuallyEditedRef.current = true;
     setStartUrl(draftStartUrl(item.draft_ir) ?? "");
     const target = draftTarget(item.draft_ir);
     setSiteProfileId(target?.site_profile_id ?? "");
@@ -610,7 +730,7 @@ export function PromptScenarioGenerator(): JSX.Element {
           </label>
           <label className="field">
             <span>시작 URL</span>
-            <input value={startUrl} onChange={(event) => setStartUrl(event.target.value)} placeholder="https://..." />
+            <input value={startUrl} onChange={(event) => handleStartUrlChange(event.target.value)} placeholder="https://..." />
           </label>
           <label className="field">
             <span>처리 방식</span>
@@ -688,15 +808,15 @@ export function PromptScenarioGenerator(): JSX.Element {
           </div>
           <label className="field">
             <span>사이트 ID</span>
-            <input value={siteProfileId} onChange={(event) => setSiteProfileId(event.target.value)} placeholder="site_profile_id" />
+            <input value={siteProfileId} onChange={(event) => handleSiteProfileIdChange(event.target.value)} placeholder="site_profile_id" />
           </label>
           <label className="field">
             <span>브라우저 ID</span>
-            <input value={browserIdentityId} onChange={(event) => setBrowserIdentityId(event.target.value)} placeholder="browser_identity_id" />
+            <input value={browserIdentityId} onChange={(event) => handleBrowserIdentityIdChange(event.target.value)} placeholder="browser_identity_id" />
           </label>
           <label className="field">
             <span>네트워크 정책 ID</span>
-            <input value={networkPolicyId} onChange={(event) => setNetworkPolicyId(event.target.value)} placeholder="network_policy_id" />
+            <input value={networkPolicyId} onChange={(event) => handleNetworkPolicyIdChange(event.target.value)} placeholder="network_policy_id" />
           </label>
           <label className="field">
             <span>스크린샷</span>

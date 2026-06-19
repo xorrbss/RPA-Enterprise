@@ -334,18 +334,18 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 요약해줘" } });
-    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://shop.example/orders" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "https://shop.example/orders. 주문 목록을 요약해줘" } });
+    await waitFor(() => expect(screen.getByLabelText("시작 URL")).toHaveValue("https://shop.example/orders"));
+    await waitFor(() => expect(screen.getByLabelText("사이트")).toHaveValue("10000000-0000-4000-8000-0000000000a1"));
     fireEvent.change(screen.getByLabelText("Planner"), { target: { value: "llm_v1" } });
     fireEvent.change(screen.getByLabelText("AI 모델"), { target: { value: "gpt-4o-mini" } });
-    fireEvent.change(await screen.findByLabelText("사이트"), { target: { value: "10000000-0000-4000-8000-0000000000a1" } });
     expect(screen.getByLabelText("브라우저 ID")).toHaveValue("10000000-0000-4000-8000-0000000000a2");
     expect(screen.getByLabelText("네트워크 정책 ID")).toHaveValue("10000000-0000-4000-8000-0000000000a3");
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]).toMatchObject({
-      prompt: "주문 목록을 요약해줘",
+      prompt: "https://shop.example/orders. 주문 목록을 요약해줘",
       mode: "save_and_run",
       planner: "llm_v1",
       model: "gpt-4o-mini",
@@ -362,6 +362,21 @@ describe("D7 운영 콘솔 shell", () => {
         "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000a1&focus=artifacts",
       ),
     );
+  });
+
+  test("자연어 자동화 생성: 사용자가 수정한 시작 URL은 prompt 변경으로 덮지 않는다", async () => {
+    renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
+    location.hash = "#scenarioStudio";
+
+    const promptBox = await screen.findByLabelText("자연어 요청");
+    fireEvent.change(promptBox, { target: { value: "https://shop.example/orders. 주문 목록을 요약해줘" } });
+    await waitFor(() => expect(screen.getByLabelText("시작 URL")).toHaveValue("https://shop.example/orders"));
+
+    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://manual.example/dashboard" } });
+    fireEvent.change(promptBox, { target: { value: "https://new.example/orders. 새 주문을 확인해줘" } });
+
+    await waitFor(() => expect(promptBox).toHaveValue("https://new.example/orders. 새 주문을 확인해줘"));
+    expect(screen.getByLabelText("시작 URL")).toHaveValue("https://manual.example/dashboard");
   });
 
   test("자연어 자동화 생성: 새 사이트를 화면 안에서 등록하고 바로 선택한다", async () => {

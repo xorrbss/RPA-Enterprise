@@ -573,6 +573,46 @@ async function main(): Promise<void> {
           JSON.stringify(rows.rows[0]),
         );
       });
+      const promptUrlPunctuation = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-prompt-url-punctuation-1" },
+        payload: {
+          prompt: "Collect notice titles from (https://example.com/notices.)， then summarize links",
+          name: "generated-prompt-url-punctuation",
+          mode: "draft_only",
+          evidence: { screenshot: "failure", video: "never" },
+        },
+      });
+      check("prompt URL trailing punctuation drafts cleanly -> 200", promptUrlPunctuation.statusCode === 200, promptUrlPunctuation.body);
+      const promptUrlPunctuationBody = promptUrlPunctuation.json();
+      const promptUrlPunctuationIr: Record<string, unknown> = isRecord(promptUrlPunctuationBody.draft_ir) ? promptUrlPunctuationBody.draft_ir : {};
+      const promptUrlPunctuationParamsSchema: Record<string, unknown> = isRecord(promptUrlPunctuationIr.params_schema) ? promptUrlPunctuationIr.params_schema : {};
+      const promptUrlPunctuationParamProperties: Record<string, unknown> = isRecord(promptUrlPunctuationParamsSchema.properties)
+        ? promptUrlPunctuationParamsSchema.properties
+        : {};
+      const promptUrlPunctuationStartUrlSchema: Record<string, unknown> = isRecord(promptUrlPunctuationParamProperties.start_url)
+        ? promptUrlPunctuationParamProperties.start_url
+        : {};
+      check(
+        "prompt URL trailing punctuation is trimmed in params_context",
+        isRecord(promptUrlPunctuationBody.params_context) &&
+          promptUrlPunctuationBody.params_context.start_url === "https://example.com/notices",
+        promptUrlPunctuation.body,
+      );
+      check(
+        "prompt URL trailing punctuation is trimmed in draft IR default",
+        promptUrlPunctuationStartUrlSchema.default === "https://example.com/notices",
+        promptUrlPunctuation.body,
+      );
+      check(
+        "trimmed prompt URL still supports target inference",
+        isRecord(promptUrlPunctuationIr.target) &&
+          promptUrlPunctuationIr.target.site_profile_id === SITE &&
+          promptUrlPunctuationIr.target.browser_identity_id === IDENTITY &&
+          promptUrlPunctuationIr.target.network_policy_id === NETWORK,
+        promptUrlPunctuation.body,
+      );
       const paramsContextDraft = await app.inject({
         method: "POST",
         url: "/v1/scenario-generations",
