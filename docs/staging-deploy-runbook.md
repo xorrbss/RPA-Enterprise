@@ -25,6 +25,7 @@ API만 띄워 초안 저장을 검증할 때도 아래 값은 fail-closed로 필
 | signed command registry | `SIGNED_COMMAND_REGISTRY_MODE=deny_all` 또는 `vault` plus `VAULT_ADDR`, `VAULT_MOUNT`, `VAULT_API_ROLE_ID`, `VAULT_API_SECRET_ID`, optional `SIGNED_COMMAND_REGISTRY_REF` |
 
 Artifact 본문/blob 조회 라우트를 운영 smoke에 포함하려면 API에 `API_ARTIFACT_DIR` 또는 shared `GATEWAY_ARTIFACT_DIR`를 추가한다.
+`API_ARTIFACT_DIR`와 `GATEWAY_ARTIFACT_DIR`를 함께 설정하는 경우 두 값은 같은 filesystem root로 resolve되어야 한다. 다르면 API가 worker/gateway가 저장한 redacted artifact blob을 읽을 수 없으므로 production config가 fail-closed로 시작을 거부한다.
 
 `save_and_run`까지 staging에서 확인하려면 worker도 필요하다.
 
@@ -54,7 +55,7 @@ API 프로세스에 아래 값을 추가한다.
 
 ### 4. Evidence screenshot/video behavior
 
-- 기본 evidence는 `{ screenshot: "failure", video: "never" }`다.
+- evidence 생략 시 서버 기본값은 `screenshot="each_step"`이고, video recorder capability가 켜져 있으면 `video="always"`, 꺼져 있으면 `video="never"`다. 콘솔은 `/v1/scenario-generations/capabilities`의 같은 기본값을 따라 표시한다.
 - `screenshot="each_step"` 또는 `video="always"`는 IR `node.policy.recording="always"`로 투영된다.
 - 둘 다 `never`면 `recording="never"`다. 그 외는 `masked_on_failure`다.
 - screenshot은 step 후 마스킹된 PNG artifact(`screenshot_masked`, `image/png`)로 저장된다. `masked_on_failure`에서는 실패 step만 캡처한다.
