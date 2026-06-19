@@ -261,6 +261,9 @@ async function applySiteCreate(
   body: CreateBody,
 ): Promise<CommandResponse> {
   const id = randomUUID();
+  const browserIdentityId = randomUUID();
+  const networkPolicyId = randomUUID();
+  const allowedDomain = hostOfUrlPattern(body.urlPattern);
   try {
     await client.query(
       `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, page_state_selectors)
@@ -274,6 +277,16 @@ async function applySiteCreate(
         body.pageStateSelectors !== undefined ? JSON.stringify(body.pageStateSelectors) : null,
       ],
     );
+    await client.query(
+      `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 1)`,
+      [browserIdentityId, tenantId, id, `${body.name} default`],
+    );
+    await client.query(
+      `INSERT INTO network_policies (id, tenant_id, allowed_domains)
+       VALUES ($1::uuid, $2::uuid, $3::text[])`,
+      [networkPolicyId, tenantId, [allowedDomain]],
+    );
   } catch (err) {
     // UNIQUE(tenant_id, name) 위반 → 테넌트 내 동일 이름 사이트 존재(입력 무효 422; 조용한 500 방지).
     if (isRecord(err) && (err as { code?: unknown }).code === "23505") {
@@ -284,6 +297,22 @@ async function applySiteCreate(
   // risk=green은 즉시 실행 가능(approved=false; SITE_PROFILE_BLOCKED는 red 미승인에만 적용).
   return {
     status: 201,
-    body: { site_profile_id: id, name: body.name, url_pattern: body.urlPattern, risk: body.risk, approved: false },
+    body: {
+      site_profile_id: id,
+      name: body.name,
+      url_pattern: body.urlPattern,
+      risk: body.risk,
+      approved: false,
+      default_browser_identity_id: browserIdentityId,
+      default_network_policy_id: networkPolicyId,
+    },
   };
+}
+
+function hostOfUrlPattern(value: string): string {
+  const origin = originOf(value);
+  if (origin === null) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_url_pattern" });
+  }
+  return new URL(origin).hostname.toLowerCase();
 }

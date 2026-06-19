@@ -208,9 +208,8 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     private readonly secrets?: SecretStoreBoundary,
     private readonly executorPrincipal?: AuthenticatedPrincipal,
     // extract.rowAnchor 로 결정형 강화한 행을 인박스용 typed artifact(type=approval_inbox 등 sink cfg)로 영속하는 옵션 sink.
-    // 현재 dev:serve(run-loop)만 주입한다. **미주입 시 강화는 StepResult.extracted(휘발)에만 반영되고 어떤 artifact 로도
-    // 영속되지 않는다** — 영속 artifact(artifacts[0]=gateway outputRef)는 강화 전 LLM 원문이다. prod 인박스용 강화-영속
-    // 배선은 후속(TODO: prod executor 팩토리에 동일 sink seam 또는 enriched outputRef 재기록).
+    // prod/dev composition root가 동일 sink seam을 주입하면 강화된 StepResult.extracted 본문도 별도 typed artifact로
+    // 영속한다. 미주입 시에는 기존 gateway outputRef(강화 전 LLM 원문)만 artifacts[0]에 남는다.
     private readonly extractArtifactSink?: GatewayArtifactSink,
   ) {}
 

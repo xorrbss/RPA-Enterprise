@@ -124,6 +124,60 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /runs/{run_id}/steps:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Runs]
+      operationId: listRunSteps
+      summary: 실행 단계 트레이스 조회
+      description: >
+        run 하위 step trace를 시간 오름차순으로 조회한다. 본문과 민감 증빙은 노출하지 않고 요약,
+        artifact 참조, Stagehand 호출 메타데이터만 반환한다.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: run 하위 step trace metadata 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StepPage'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/{run_id}/artifacts:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Runs, Artifacts]
+      operationId: listRunArtifacts
+      summary: 실행 산출물 목록 조회
+      description: >
+        run 하위 screenshot, video, typed artifact 목록을 metadata-only로 조회한다. content/object_ref/sha256은
+        노출하지 않으며 본문 또는 blob은 artifact read 게이트를 통과한 별도 경로로 조회한다.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: run 하위 artifact metadata 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunArtifactList'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   /runs/{run_id}/abort:
     parameters:
       - $ref: '#/components/parameters/RunId'
@@ -910,6 +964,34 @@ paths:
                 $ref: '#/components/schemas/SitePage'
         default:
           $ref: '#/components/responses/Error'
+    post:
+      tags: [Sites]
+      operationId: createSite
+      summary: 사이트 등록
+      description: >
+        site_profile 생성과 함께 기본 browser_identity 및 origin-host network_policy를 같은 tx에서 생성한다.
+        응답의 default_* id는 자연어 시나리오 생성 target 자동 채움에 사용된다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteCreateRequest'
+      responses:
+        '201':
+          description: 사이트 및 기본 실행 타깃 생성 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteCreateResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
 
   /sites/{site_profile_id}:
     parameters:
@@ -928,6 +1010,34 @@ paths:
                 $ref: '#/components/schemas/Site'
         '404':
           $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Sites]
+      operationId: updateSite
+      summary: 사이트 이름 수정
+      description: 사이트 표시 이름만 갱신한다. target 자동 채움용 기본 browser_identity/network_policy는 유지한다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteUpdateRequest'
+      responses:
+        '200':
+          description: 사이트 이름 수정 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteUpdateResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
         default:
           $ref: '#/components/responses/Error'
 
@@ -1216,6 +1326,24 @@ components:
           items: { $ref: '#/components/schemas/Run' }
         next_cursor:
           type: [string, "null"]
+    StepPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/StepSummary' }
+        next_cursor:
+          type: [string, "null"]
+    RunArtifactList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RunArtifactItem' }
+        next_cursor:
+          type: [string, "null"]
     ScenarioPage:
       type: object
       required: [items, next_cursor]
@@ -1291,6 +1419,43 @@ components:
           type: string
           format: date-time
           description: runs.updated_at. 콘솔이 오래 멈춘 실행을 추정하지 않고 실제 상태 갱신 시각으로 판단하는 데 사용.
+
+    StagehandCallSummary:
+      type: object
+      properties:
+        model: { type: [string, "null"] }
+        transport: { type: [string, "null"] }
+        stream_status: { type: [string, "null"] }
+        ttfb_ms: { type: [integer, "null"] }
+        input_tokens: { type: [integer, "null"] }
+        output_tokens: { type: [integer, "null"] }
+        cost: { type: [string, "null"] }
+
+    StepSummary:
+      type: object
+      description: run_steps metadata-only step trace. Sensitive input/output bodies are not exposed.
+      properties:
+        step_id: { type: string }
+        node_id: { type: string }
+        attempt: { type: integer }
+        action: { type: string }
+        status: { type: string }
+        cache_mode: { type: string }
+        artifact_ids:
+          type: array
+          items: { type: string }
+        stagehand_calls:
+          type: array
+          items: { $ref: '#/components/schemas/StagehandCallSummary' }
+        started_at: { type: [string, "null"], format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        duration_ms: { type: [integer, "null"], minimum: 0 }
+        exception:
+          type: [object, "null"]
+          properties:
+            class: { type: string }
+            code: { type: string }
+          additionalProperties: false
 
     RunCreateRequest:
       type: object
@@ -1593,6 +1758,10 @@ components:
           type: string
           description: 마스킹된 redacted object 본문(평문 노출 금지). object store(redacted at rest)에서 read.
 
+    RunArtifactItem:
+      allOf:
+        - $ref: '#/components/schemas/GenerationArtifactItem'
+
     GenerationArtifactItem:
       type: object
       description: >
@@ -1682,6 +1851,76 @@ components:
         default_network_policy_id:
           type: [string, "null"]
           description: 자연어 실행 target에 자동 제안할 테넌트 기본 network_policy id.
+
+    SiteCreateRequest:
+      type: object
+      required: [name, url_pattern]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        url_pattern:
+          type: string
+          description: http(s) origin/pattern. Opaque schemes are rejected.
+        risk:
+          $ref: '#/components/schemas/SiteRisk'
+        page_state_selectors:
+          type: object
+          description: SitePageStateConfig JSON. The server validates its closed flag registry.
+          additionalProperties: true
+      additionalProperties: false
+
+    SiteCreateResponse:
+      type: object
+      required:
+        - site_profile_id
+        - name
+        - url_pattern
+        - risk
+        - approved
+        - default_browser_identity_id
+        - default_network_policy_id
+      properties:
+        site_profile_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        url_pattern:
+          type: string
+        risk:
+          $ref: '#/components/schemas/SiteRisk'
+        approved:
+          type: boolean
+        default_browser_identity_id:
+          type: string
+          format: uuid
+          description: Default browser_identity created with the site for natural-language run targets.
+        default_network_policy_id:
+          type: string
+          format: uuid
+          description: Default origin-host network_policy created with the site for natural-language run targets.
+      additionalProperties: false
+
+    SiteUpdateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+      additionalProperties: false
+
+    SiteUpdateResponse:
+      type: object
+      required: [site_profile_id, name]
+      properties:
+        site_profile_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+      additionalProperties: false
 
     SiteApproveRequest:
       type: object

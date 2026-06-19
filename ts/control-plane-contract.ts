@@ -26,14 +26,18 @@ import type {
   TenantSessionBinder,
 } from "./security-middleware-contract";
 
-export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type ControlPlanePath =
   | "/v1/runs"
   | "/v1/runs/{run_id}"
+  | "/v1/runs/{run_id}/steps"
+  | "/v1/runs/{run_id}/artifacts"
   | "/v1/runs/{run_id}/abort"
   | "/v1/scenario-generations"
   | "/v1/scenario-generations/{generation_id}"
+  | "/v1/scenario-generations/{generation_id}/artifacts"
+  | "/v1/scenario-generations/{generation_id}/artifacts/{artifact_id}"
   | "/v1/scenarios"
   | "/v1/scenarios/{scenario_id}"
   | "/v1/scenarios/{scenario_id}/validate"
@@ -60,10 +64,14 @@ export type OperationId =
   | "createRun"
   | "getRun"
   | "listRuns"
+  | "listRunSteps"
+  | "listRunArtifacts"
   | "abortRun"
   | "generateScenario"
   | "listScenarioGenerations"
   | "getScenarioGeneration"
+  | "listScenarioGenerationArtifacts"
+  | "getScenarioGenerationArtifact"
   | "createScenario"
   | "getScenario"
   | "listScenarios"
