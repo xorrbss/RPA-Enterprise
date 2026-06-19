@@ -32,7 +32,7 @@
 - 적용 대상이 아닌 read(GET)·생성(POST create)에는 `If-Match`를 요구하지 않는다.
 
 ### 0.4 멱등 — Idempotency-Key (명령 중복 제출 보호)
-- **부작용이 있는 명령형 POST**(run create/abort, scenario promote/rollback/archive, human-task assign/start/resolve/escalate, workitem replay, sites approve, gateway policy update)에 `Idempotency-Key` 헤더 규약 적용.
+- **부작용이 있는 제어평면 명령**(run create/abort, scenario promote/rollback/archive, human-task assign/start/resolve/escalate, workitem replay, sites approve, gateway policy create/update/delete)에 `Idempotency-Key` 헤더 규약 적용.
 - 서버는 `(tenant_id, endpoint, Idempotency-Key)`로 최초 처리 결과를 보관하고, 동일 키 재제출 시 **부작용 재실행 없이** 최초 응답을 반환(at-least-once 클라이언트 재시도 보호).
 - 이 헤더는 **`sink_idempotency_key`(migration SQL: 외부 sink 다운스트림 중복 방지, 값=`tenant_id:sink_config_id:schema_ref:natural_key`)와 구분된다.** Idempotency-Key는 *제어평면 인입 명령*의 중복 제출 보호이고, sink_idempotency_key는 *데이터평면 외부 전달*의 멱등키다 — 서로 다른 계층·다른 값.
 
@@ -187,8 +187,11 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
+| GET | `/v1/gateway/policies` | — | 200 + `{ items: [정책 + version], next_cursor: null }` | — |
 | GET | `/v1/gateway/policy` | 쿼리: optional `?model=` | 200 + 모델 정책(`model`, `capabilities`{jsonMode/vision/...}, `budget`{maxInputTokens/maxOutputTokens/maxCost}, fallback 설정, `is_default`) | — |
+| POST | `/v1/gateway/policy` | `Idempotency-Key`. body: 신규 정책(`model`, `capabilities`, `budget`, optional fallback/`is_default`) | 201 + 생성 정책, `ETag`=정책 버전 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422; `policy_model_in_use`), `LLM_CAPABILITY_MISMATCH`(422)³ |
 | PUT | `/v1/gateway/policy` | `If-Match`(정책 버전) + `Idempotency-Key`. body: 정책 갱신(optional `is_default` 토글) | 200 + 갱신 정책(`is_default` 포함) | `AUTHZ_FORBIDDEN`(403), `POLICY_VERSION_CONFLICT`(412), `LLM_CAPABILITY_MISMATCH`(422)³ |
+| DELETE | `/v1/gateway/policy` | 쿼리: required `?model=`. `If-Match`(정책 버전) + `Idempotency-Key` | 200 + `{ model, deleted: true }` | `AUTHZ_FORBIDDEN`(403), `POLICY_VERSION_CONFLICT`(412), `RESOURCE_NOT_FOUND`(404) |
 
 - `capabilities`는 llm-gateway-adapter.md `ModelCapabilities`(jsonMode 등). Gateway는 호출 전 capabilities로 primitive 적합성 검사(extract+jsonMode=false → `LLM_CAPABILITY_MISMATCH`).
 - §19 결정 반영(README v1.4): Codex/vLLM는 capabilities 게이트로 처리 — jsonMode 미지원 시 prompt-schema+strict 폴백(adapter §7), vLLM는 OpenAI 호환 adapter 재사용·`sse=false` 모델만 sync 폴백. 실제 지원범위는 구현 시 라이브 capabilities로 확정(안전 폴백 정의됨).

@@ -35,8 +35,11 @@ export type SupportedControlPlaneOperationId = Extract<
   | "listWorkitems"
   | "replayDeadLetter"
   | "getArtifact"
+  | "listGatewayPolicies"
   | "getGatewayPolicy"
+  | "createGatewayPolicy"
   | "updateGatewayPolicy"
+  | "deleteGatewayPolicy"
   | "listSites"
   | "approveSite"
 >;
@@ -252,11 +255,29 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     responseSchemaRef: "#/components/schemas/Artifact",
   }),
   operation({
+    operationId: "listGatewayPolicies",
+    method: "GET",
+    path: "/v1/gateway/policies",
+    responseSchemaRef: "#/components/schemas/GatewayPolicyList",
+    rbacAction: "gateway_policy.read",
+  }),
+  operation({
     operationId: "getGatewayPolicy",
     method: "GET",
     path: "/v1/gateway/policy",
     querySchemaRef: "#/components/schemas/GatewayPolicyQuery",
     responseSchemaRef: "#/components/schemas/GatewayPolicy",
+    rbacAction: "gateway_policy.read",
+  }),
+  operation({
+    operationId: "createGatewayPolicy",
+    method: "POST",
+    path: "/v1/gateway/policy",
+    requestBodySchemaRef: "#/components/schemas/GatewayPolicy",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/GatewayPolicy",
+    rbacAction: "gateway_policy.edit",
+    requiresIdempotencyKey: true,
   }),
   operation({
     operationId: "updateGatewayPolicy",
@@ -265,6 +286,16 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     requestBodySchemaRef: "#/components/schemas/GatewayPolicy",
     requestBodyRequired: true,
     responseSchemaRef: "#/components/schemas/GatewayPolicy",
+    rbacAction: "gateway_policy.edit",
+    requiresIdempotencyKey: true,
+    ifMatch: gatewayPolicyIfMatch,
+  }),
+  operation({
+    operationId: "deleteGatewayPolicy",
+    method: "DELETE",
+    path: "/v1/gateway/policy",
+    querySchemaRef: "#/components/schemas/GatewayPolicyQuery",
+    responseSchemaRef: "#/components/schemas/GatewayPolicyDeleteResponse",
     rbacAction: "gateway_policy.edit",
     requiresIdempotencyKey: true,
     ifMatch: gatewayPolicyIfMatch,
@@ -352,6 +383,23 @@ const passQuery = (schemaRef: string): BoundaryValidator => ({
   },
 });
 
+const requireQuery = (schemaRef: string, keys: readonly string[]): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_query_object" });
+    }
+
+    for (const key of keys) {
+      if (typeof input[key] !== "string" || input[key].length === 0) {
+        return validationFailure({ schemaRef, reason: "missing_query_param", key });
+      }
+    }
+
+    return { valid: true, value: input };
+  },
+});
+
 const requireRunCreateBody = (schemaRef: string): BoundaryValidator => ({
   schemaRef,
   validate(input: unknown): BoundaryValidationResult {
@@ -389,6 +437,7 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
   ["resolveHumanTask", requireObject("#/components/schemas/HumanTaskResolveRequest")],
   ["assignHumanTask", requireObject("#/components/schemas/HumanTaskAssignRequest", ["assignee"])],
   ["escalateHumanTask", requireObject("#/components/schemas/HumanTaskEscalateRequest", [], true)],
+  ["createGatewayPolicy", requireObject("#/components/schemas/GatewayPolicy", ["model"])],
   ["updateGatewayPolicy", requireObject("#/components/schemas/GatewayPolicy", ["model"])],
   ["approveSite", requireObject("#/components/schemas/SiteApproveRequest", [], true)],
 ]);
@@ -417,6 +466,7 @@ const queryValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Ope
   ["listHumanTasks", passQuery("#/components/schemas/HumanTaskListQuery")],
   ["listWorkitems", passQuery("#/components/schemas/WorkitemListQuery")],
   ["getGatewayPolicy", passQuery("#/components/schemas/GatewayPolicyQuery")],
+  ["deleteGatewayPolicy", requireQuery("#/components/schemas/GatewayPolicyQuery", ["model"])],
   ["listSites", passQuery("#/components/schemas/SiteListQuery")],
 ]);
 

@@ -81,6 +81,7 @@ export interface MinimalGatewayPolicy {
   capabilities: Readonly<Record<string, unknown>>;
   budget: Readonly<Record<string, unknown>>;
   fallback_config?: unknown;
+  is_default?: boolean;
 }
 
 export interface MinimalSite {
@@ -122,8 +123,11 @@ export interface MinimalControlPlaneServices {
   listWorkitems(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   replayDeadLetter(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getArtifact(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listGatewayPolicies(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getGatewayPolicy(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  createGatewayPolicy(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   updateGatewayPolicy(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  deleteGatewayPolicy(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listSites(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   approveSite(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
 }
@@ -418,9 +422,37 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     };
   }
 
+  async listGatewayPolicies(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const items = [...this.gatewayPolicies.values()]
+      .filter((policy) => policy.tenant_id === tenant(ctx))
+      .sort((left, right) => Number(right.is_default === true) - Number(left.is_default === true) || left.model.localeCompare(right.model));
+    return page(items);
+  }
+
   async getGatewayPolicy(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
     const model = optionalQueryString(ctx, "model") ?? "default";
     return { status: 200, body: this.gatewayPolicy(ctx.principal.tenantId, model) };
+  }
+
+  async createGatewayPolicy(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const model = requireString(body, "model");
+    const mapKey = key(tenant(ctx), model);
+    if (this.gatewayPolicies.has(mapKey)) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "policy_model_in_use", model });
+    }
+    const policy: MinimalGatewayPolicy = {
+      id: `gateway-policy:${model}`,
+      tenant_id: tenant(ctx),
+      model,
+      version: 1,
+      capabilities: requireRecord(body, "capabilities"),
+      budget: requireRecord(body, "budget"),
+      fallback_config: body.fallback_config ?? body.fallback,
+      is_default: body.is_default === true,
+    };
+    this.gatewayPolicies.set(mapKey, policy);
+    return { status: 201, headers: { ETag: "1" }, body: policy };
   }
 
   async updateGatewayPolicy(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -434,10 +466,23 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       version: nextVersion,
       capabilities: requireRecord(body, "capabilities"),
       budget: requireRecord(body, "budget"),
-      fallback_config: body.fallback_config,
+      fallback_config: body.fallback_config ?? body.fallback,
+      is_default: body.is_default === true,
     };
     this.gatewayPolicies.set(key(policy.tenant_id, policy.model), policy);
     return { status: 200, headers: { ETag: String(nextVersion) }, body: policy };
+  }
+
+  async deleteGatewayPolicy(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    if (ctx.ifMatch?.kind !== "match") {
+      throw new ApiResponseException("POLICY_VERSION_CONFLICT");
+    }
+    const model = requireQueryString(ctx, "model");
+    const mapKey = key(tenant(ctx), model);
+    if (!this.gatewayPolicies.delete(mapKey)) {
+      throw new ApiResponseException("RESOURCE_NOT_FOUND");
+    }
+    return { status: 200, body: { model, deleted: true } };
   }
 
   async listSites(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -516,8 +561,11 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     listWorkitems: bind(services.listWorkitems),
     replayDeadLetter: bind(services.replayDeadLetter),
     getArtifact: bind(services.getArtifact),
+    listGatewayPolicies: bind(services.listGatewayPolicies),
     getGatewayPolicy: bind(services.getGatewayPolicy),
+    createGatewayPolicy: bind(services.createGatewayPolicy),
     updateGatewayPolicy: bind(services.updateGatewayPolicy),
+    deleteGatewayPolicy: bind(services.deleteGatewayPolicy),
     listSites: bind(services.listSites),
     approveSite: bind(services.approveSite),
   };
@@ -553,6 +601,14 @@ function optionalQueryString(ctx: ControlPlaneRequestContext, name: string): str
   const value = ctx.query[name];
   if (Array.isArray(value)) return value[0];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function requireQueryString(ctx: ControlPlaneRequestContext, name: string): string {
+  const value = optionalQueryString(ctx, name);
+  if (value === undefined) {
+    throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "missing_query_param", name });
+  }
+  return value;
 }
 
 function requireBody(ctx: ControlPlaneRequestContext): Record<string, unknown> {

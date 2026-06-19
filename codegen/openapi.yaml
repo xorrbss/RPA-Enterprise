@@ -992,6 +992,22 @@ paths:
   # ============================================================
   # 6. Gateway Policy — api-surface §6
   # ============================================================
+  /gateway/policies:
+    get:
+      tags: [GatewayPolicy]
+      operationId: listGatewayPolicies
+      summary: LLM 게이트웨이 정책 목록
+      description: 콘솔 CRUD 기준 목록. items에는 version과 is_default를 포함한다.
+      responses:
+        '200':
+          description: 모델 정책 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayPolicyList'
+        default:
+          $ref: '#/components/responses/Error'
+
   /gateway/policy:
     get:
       tags: [GatewayPolicy]
@@ -1010,6 +1026,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GatewayPolicy'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [GatewayPolicy]
+      operationId: createGatewayPolicy
+      summary: LLM 게이트웨이 정책 생성
+      description: >
+        신규 모델 정책을 생성한다. Idempotency-Key로 중복 제출을 보호하며,
+        이미 존재하는 model은 IR_SCHEMA_INVALID(policy_model_in_use)로 거절한다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayPolicy'
+      responses:
+        '201':
+          description: 생성 정책.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayPolicy'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / LLM_CAPABILITY_MISMATCH
         default:
           $ref: '#/components/responses/Error'
     put:
@@ -1042,6 +1089,34 @@ paths:
           $ref: '#/components/responses/Error'        # POLICY_VERSION_CONFLICT
         '422':
           $ref: '#/components/responses/Error'        # LLM_CAPABILITY_MISMATCH
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [GatewayPolicy]
+      operationId: deleteGatewayPolicy
+      summary: LLM 게이트웨이 정책 삭제
+      description: >
+        model 쿼리로 지정한 정책을 If-Match CAS와 Idempotency-Key 보호 아래 삭제한다.
+      parameters:
+        - name: model
+          in: query
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IfMatchPolicy'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 삭제 결과.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayPolicyDeleteResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '412':
+          $ref: '#/components/responses/Error'        # POLICY_VERSION_CONFLICT
         default:
           $ref: '#/components/responses/Error'
 
@@ -1426,6 +1501,15 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/DeadLetter' }
+        next_cursor:
+          type: [string, "null"]
+    GatewayPolicyList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/GatewayPolicy' }
         next_cursor:
           type: [string, "null"]
     SitePage:
@@ -1921,6 +2005,12 @@ components:
       description: LLM 게이트웨이 정책(요지). capabilities는 llm-gateway-adapter.md ModelCapabilities.
       properties:
         model: { type: string }
+        version:
+          type: integer
+          minimum: 1
+          description: Mutation responses and list items include gateway_policies.version. Single policy GET exposes it as ETag only.
+        is_default:
+          type: boolean
         capabilities:
           type: object
           description: jsonMode/vision 등(llm-gateway-adapter.md ModelCapabilities).
@@ -1937,6 +2027,14 @@ components:
           additionalProperties: true
         fallback:
           description: fallback 모델/폴백 설정(adapter §7).
+
+    GatewayPolicyDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [model, deleted]
+      properties:
+        model: { type: string }
+        deleted: { type: boolean, const: true }
 
     Site:
       type: object

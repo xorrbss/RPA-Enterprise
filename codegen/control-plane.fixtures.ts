@@ -208,8 +208,11 @@ for (const operationId of [
   "listWorkitems",
   "replayDeadLetter",
   "getArtifact",
+  "listGatewayPolicies",
   "getGatewayPolicy",
+  "createGatewayPolicy",
   "updateGatewayPolicy",
+  "deleteGatewayPolicy",
   "listSites",
   "approveSite",
 ] satisfies OperationId[]) {
@@ -224,7 +227,10 @@ assert.equal(registry.getOperation("archiveScenario").ifMatch?.entity, "scenario
 assert.equal(registry.getOperation("rollbackScenario").ifMatch?.entity, "scenario_version");
 assert.equal(registry.getOperation("archiveScenario").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("rollbackScenario").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("createGatewayPolicy").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("updateGatewayPolicy").ifMatch?.entity, "gateway_policy");
+assert.equal(registry.getOperation("deleteGatewayPolicy").ifMatch?.entity, "gateway_policy");
+assert.equal(registry.getOperation("deleteGatewayPolicy").requiresIdempotencyKey, true);
 assert.equal(staticRbacAction("createRun"), "run.create");
 assert.equal(staticRbacAction("abortRun"), "run.abort");
 assert.equal(staticRbacAction("listRunArtifacts"), "artifact.read");
@@ -236,7 +242,11 @@ assert.equal(staticRbacAction("getScenarioVersion"), "scenario.read");
 assert.equal(staticRbacAction("rollbackScenario"), "scenario.update");
 assert.equal(staticRbacAction("assignHumanTask"), "human_task.assign");
 assert.equal(staticRbacAction("escalateHumanTask"), "human_task.escalate");
+assert.equal(staticRbacAction("listGatewayPolicies"), "gateway_policy.read");
+assert.equal(staticRbacAction("getGatewayPolicy"), "gateway_policy.read");
+assert.equal(staticRbacAction("createGatewayPolicy"), "gateway_policy.edit");
 assert.equal(staticRbacAction("updateGatewayPolicy"), "gateway_policy.edit");
+assert.equal(staticRbacAction("deleteGatewayPolicy"), "gateway_policy.edit");
 assert.throws(() => registry.getOperation("unknownOperation" as OperationId), /No control-plane operation binding/);
 
 assert.equal(registry.getBodyValidator("createRun")?.validate({}).valid, false);
@@ -247,12 +257,16 @@ assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini", tenant_id: "t1" }).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({ assignee: "reviewer-1" }).valid, true);
+assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
+assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ model: "codex", capabilities: {}, budget: {} }).valid, true);
 assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({}).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({ run_id: "run-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("listRunArtifacts")?.validate({ run_id: "run-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("assignHumanTask")?.validate({ human_task_id: "task-open" }).valid, true);
 assert.equal(registry.getQueryValidator("listRuns")?.validate(undefined).valid, false);
+assert.equal(registry.getQueryValidator("deleteGatewayPolicy")?.validate({}).valid, false);
+assert.equal(registry.getQueryValidator("deleteGatewayPolicy")?.validate({ model: "codex" }).valid, true);
 
 const runRoute = binder.bind("createRun");
 assert.equal(runRoute.method, "POST");
@@ -406,6 +420,29 @@ const archived = await handlers.archiveScenario!(ctx("archiveScenario", {
 }));
 assert.equal(archived.headers?.ETag, "3");
 
+const listedPolicies = await handlers.listGatewayPolicies!(ctx("listGatewayPolicies", {
+  method: "GET",
+  path: "/v1/gateway/policies",
+}));
+assert.equal((listedPolicies.body as { items: unknown[] }).items.length, 1);
+
+const createdPolicy = await handlers.createGatewayPolicy!(ctx("createGatewayPolicy", {
+  method: "POST",
+  path: "/v1/gateway/policy",
+  body: { model: "codex-new", capabilities: { jsonMode: true }, budget: { maxCost: 2 }, is_default: true },
+}));
+assert.equal(createdPolicy.status, 201);
+assert.equal(createdPolicy.headers?.ETag, "1");
+assert.equal((createdPolicy.body as { is_default: boolean }).is_default, true);
+await assertApiError(
+  () => handlers.createGatewayPolicy!(ctx("createGatewayPolicy", {
+    method: "POST",
+    path: "/v1/gateway/policy",
+    body: { model: "codex-new", capabilities: {}, budget: {} },
+  })),
+  "IR_SCHEMA_INVALID",
+);
+
 const policy = await handlers.updateGatewayPolicy!(ctx("updateGatewayPolicy", {
   method: "PUT",
   path: "/v1/gateway/policy",
@@ -413,6 +450,23 @@ const policy = await handlers.updateGatewayPolicy!(ctx("updateGatewayPolicy", {
   ifMatch: { kind: "match", currentVersion: 1, nextVersion: 2 },
 }));
 assert.equal(policy.headers?.ETag, "2");
+
+const deletedPolicy = await handlers.deleteGatewayPolicy!(ctx("deleteGatewayPolicy", {
+  method: "DELETE",
+  path: "/v1/gateway/policy",
+  query: { model: "codex-new" },
+  ifMatch: { kind: "match", currentVersion: 1, nextVersion: 2 },
+}));
+assert.equal((deletedPolicy.body as { deleted: boolean }).deleted, true);
+await assertApiError(
+  () => handlers.deleteGatewayPolicy!(ctx("deleteGatewayPolicy", {
+    method: "DELETE",
+    path: "/v1/gateway/policy",
+    query: { model: "missing-policy" },
+    ifMatch: { kind: "match", currentVersion: 1, nextVersion: 2 },
+  })),
+  "RESOURCE_NOT_FOUND",
+);
 
 const site = await handlers.approveSite!(ctx("approveSite", {
   method: "POST",
@@ -504,6 +558,20 @@ const viewerPromoteScenario = await scaffold.runner.inject({
 });
 assert.equal(viewerPromoteScenario.status, 403);
 assert.equal((viewerPromoteScenario.body as { code: string }).code, "AUTHZ_FORBIDDEN");
+const gatewayPolicyFromRunner = await scaffold.runner.inject({
+  method: "POST",
+  url: "/v1/gateway/policy",
+  headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "gateway-create-1" },
+  body: { model: "scaffold-gw", capabilities: { jsonMode: true }, budget: { maxCost: 1 } },
+});
+assert.equal(gatewayPolicyFromRunner.status, 201);
+const deletedGatewayPolicyFromRunner = await scaffold.runner.inject({
+  method: "DELETE",
+  url: "/v1/gateway/policy?model=scaffold-gw",
+  headers: { ...baseHeaders, "x-roles": "admin", "idempotency-key": "gateway-delete-1", "if-match": "1" },
+});
+assert.equal(deletedGatewayPolicyFromRunner.status, 200);
+assert.equal((deletedGatewayPolicyFromRunner.body as { deleted: boolean }).deleted, true);
 const invalidRoleClaim = await scaffold.runner.inject({
   method: "GET",
   url: "/v1/runs/run-existing",
@@ -608,7 +676,7 @@ const matchingAssigneeResolve = await scaffold.runner.inject({
 assert.equal(matchingAssigneeResolve.status, 200);
 assert.equal((matchingAssigneeResolve.body as { state: string }).state, "resolved");
 
-console.log("api smoke: control-plane route registry, validators, auth/tenant/RBAC, idempotency replay/mismatch/in-flight, If-Match, unmatched route, and redaction-gated artifact access covered");
+console.log("api smoke: control-plane route registry, validators, auth/tenant/RBAC, idempotency replay/mismatch/in-flight, If-Match, gateway policy CRUD, unmatched route, and redaction-gated artifact access covered");
 console.log("control-plane fixtures: ALL PASS");
 
 function ctx(operationId: OperationId, overrides: {

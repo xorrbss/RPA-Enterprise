@@ -255,7 +255,9 @@ export type CommandEndpoint =
       | "escalateHumanTask"
       | "replayDeadLetter"
       | "replaySinkDeadLetter"
+      | "createGatewayPolicy"
       | "updateGatewayPolicy"
+      | "deleteGatewayPolicy"
       | "approveSite"
     >;
 

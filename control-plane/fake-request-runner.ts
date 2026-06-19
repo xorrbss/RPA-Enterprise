@@ -616,8 +616,11 @@ function resourceForOperation(
     case "getScenarioVersion":
     case "rollbackScenario":
       return { kind: "scenario", id: ctx.params.scenario_id };
+    case "createGatewayPolicy":
     case "updateGatewayPolicy":
       return { kind: "gateway_policy", id: modelFromBody(ctx.body) };
+    case "deleteGatewayPolicy":
+      return { kind: "gateway_policy", id: modelFromQuery(ctx.query) };
     case "approveSite":
       return { kind: "site", id: ctx.params.site_profile_id };
     default:
@@ -656,7 +659,9 @@ function validateBoundary<T>(
 
 function ifMatchResourceId(operation: OpenApiOperationBinding, ctx: ControlPlaneRequestContext): string {
   if (operation.ifMatch?.entity === "scenario_version") return ctx.params.scenario_id;
-  if (operation.ifMatch?.entity === "gateway_policy") return modelFromBody(ctx.body);
+  if (operation.ifMatch?.entity === "gateway_policy") {
+    return operation.operationId === "deleteGatewayPolicy" ? modelFromQuery(ctx.query) : modelFromBody(ctx.body);
+  }
   throw new Error(`Unsupported If-Match entity for ${operation.operationId}`);
 }
 
@@ -664,6 +669,13 @@ function modelFromBody(body: unknown): string {
   if (isRecord(body) && typeof body.model === "string" && body.model.length > 0) {
     return body.model;
   }
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "missing_gateway_policy_model" });
+}
+
+function modelFromQuery(query: Readonly<Record<string, string | readonly string[] | undefined>>): string {
+  const value = query.model;
+  const model = Array.isArray(value) ? value[0] : value;
+  if (typeof model === "string" && model.length > 0) return model;
   throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "missing_gateway_policy_model" });
 }
 
