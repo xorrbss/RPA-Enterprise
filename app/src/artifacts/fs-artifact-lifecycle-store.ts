@@ -41,6 +41,9 @@ export class FsArtifactRedactor implements ArtifactRedactor {
     if (binding.kind !== "real_object_store") {
       throw new FsArtifactLifecycleStoreError("FsArtifactRedactor requires a real_object_store port binding");
     }
+    if (binding.mayBeUsedAsStagingEvidence !== false) {
+      throw new FsArtifactLifecycleStoreError("FsArtifactRedactor local_fs evidence must not be marked as staging evidence");
+    }
     this.binding = binding;
     this.real = binding;
   }
@@ -129,7 +132,7 @@ export class FsArtifactRedactor implements ArtifactRedactor {
       correlationId,
       receiptId: randomUUID(),
       objectRefInternalOnly: true,
-      mayBeUsedAsStagingEvidence: true,
+      mayBeUsedAsStagingEvidence: this.real.mayBeUsedAsStagingEvidence,
     };
   }
 }
@@ -144,6 +147,9 @@ export class FsArtifactRetentionStore implements ArtifactRetentionStore {
   ) {
     if (binding.kind !== "real_object_store") {
       throw new FsArtifactLifecycleStoreError("FsArtifactRetentionStore requires a real_object_store port binding");
+    }
+    if (binding.mayBeUsedAsStagingEvidence !== false) {
+      throw new FsArtifactLifecycleStoreError("FsArtifactRetentionStore local_fs evidence must not be marked as staging evidence");
     }
     this.binding = binding;
     this.real = binding;
@@ -183,7 +189,7 @@ export class FsArtifactRetentionStore implements ArtifactRetentionStore {
       correlationId,
       receiptId: randomUUID(),
       objectRefInternalOnly: true,
-      mayBeUsedAsStagingEvidence: true,
+      mayBeUsedAsStagingEvidence: this.real.mayBeUsedAsStagingEvidence,
     };
   }
 }

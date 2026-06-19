@@ -38,6 +38,7 @@ const REAL_BINDING: ArtifactRealObjectStorePortBinding = {
   backendAlias: BACKEND_ALIAS,
   credentialRef: CREDENTIAL_REF,
   evidenceSchemaRef: "artifact/object-io-evidence@1",
+  mayBeUsedAsStagingEvidence: false,
 };
 
 function redactionAudit(): ArtifactLifecycleOperationalAudit & { useCase: "artifact_redaction_job" } {
@@ -127,6 +128,22 @@ async function main(): Promise<void> {
     const store = new FsObjectStore(dir);
     const redactor = new FsArtifactRedactor(store, REAL_BINDING, new ArtifactRedactionContentTransform());
     const retention = new FsArtifactRetentionStore(store, REAL_BINDING);
+    try {
+      new FsArtifactRedactor(
+        store,
+        { ...REAL_BINDING, mayBeUsedAsStagingEvidence: true },
+        new ArtifactRedactionContentTransform(),
+      );
+      check("local_fs redactor rejects staging-qualified binding", false, "expected constructor failure");
+    } catch (err) {
+      check("local_fs redactor rejects staging-qualified binding", String(err).includes("staging evidence"), String(err));
+    }
+    try {
+      new FsArtifactRetentionStore(store, { ...REAL_BINDING, mayBeUsedAsStagingEvidence: true });
+      check("local_fs retention rejects staging-qualified binding", false, "expected constructor failure");
+    } catch (err) {
+      check("local_fs retention rejects staging-qualified binding", String(err).includes("staging evidence"), String(err));
+    }
 
     {
       const sourcePng = new Uint8Array([
@@ -150,6 +167,7 @@ async function main(): Promise<void> {
           "screenshot redaction does not copy raw source bytes",
           redactedBytes !== null && Buffer.compare(Buffer.from(redactedBytes), Buffer.from(sourcePng)) !== 0,
         );
+        check("screenshot redaction evidence is not staging-qualified", result.evidence.mayBeUsedAsStagingEvidence === false);
         assertNoForbidden("screenshot redaction", result.evidence, [String(sourceRef), CREDENTIAL_REF.replace("/fs", "/raw")]);
       }
     }
@@ -236,11 +254,17 @@ async function main(): Promise<void> {
       const deleted = await retention.deleteObject(retentionRequest({ artifactRef, objectRef: sourceRef }));
       check("retention existing object returns deleted", deleted.kind === "deleted", deleted.kind);
       check("retention existing object removes bytes", (await store.getBytes(sourceRef)) === null);
-      if (deleted.kind === "deleted") assertNoForbidden("retention deleted", deleted.evidence, [String(sourceRef)]);
+      if (deleted.kind === "deleted") {
+        check("retention deleted evidence is not staging-qualified", deleted.evidence.mayBeUsedAsStagingEvidence === false);
+        assertNoForbidden("retention deleted", deleted.evidence, [String(sourceRef)]);
+      }
 
       const notFound = await retention.deleteObject(retentionRequest({ artifactRef, objectRef: sourceRef }));
       check("retention missing object returns not_found", notFound.kind === "not_found", notFound.kind);
-      if (notFound.kind === "not_found") assertNoForbidden("retention not_found", notFound.evidence, [String(sourceRef)]);
+      if (notFound.kind === "not_found") {
+        check("retention not_found evidence is not staging-qualified", notFound.evidence.mayBeUsedAsStagingEvidence === false);
+        assertNoForbidden("retention not_found", notFound.evidence, [String(sourceRef)]);
+      }
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

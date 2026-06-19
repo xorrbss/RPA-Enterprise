@@ -606,6 +606,8 @@ export interface ArtifactRealObjectStorePortBinding {
   backendAlias: string;
   credentialRef: SecretRef;
   evidenceSchemaRef: typeof ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF;
+  /** true only for SecretRef-backed external object-store evidence that may be cited for staging/open. */
+  mayBeUsedAsStagingEvidence: boolean;
 }
 
 export interface ArtifactLocalTestPortBinding {
@@ -630,7 +632,7 @@ export type ArtifactObjectIoEvidence =
       correlationId: CorrelationId;
       receiptId: string;
       objectRefInternalOnly: true;
-      mayBeUsedAsStagingEvidence: true;
+      mayBeUsedAsStagingEvidence: boolean;
       sha256?: string;
     }
   | {
@@ -785,6 +787,8 @@ export const ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT = {
     realSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
     localTestSchemaRef: ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
     realPortRequiresSecretRef: true,
+    realPortStagingEvidenceMustBeExplicit: true,
+    localFilesystemMayBeUsedAsStagingEvidence: false,
     localTestPortMayBeUsedAsStagingEvidence: false,
     successEvidenceRequiredBeforeFinalize: true,
     evidenceMayContainObjectRef: false,

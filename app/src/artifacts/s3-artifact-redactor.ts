@@ -84,6 +84,11 @@ export class S3ArtifactRedactor implements ArtifactRedactor {
         "S3ArtifactRedactor requires a real_object_store port binding",
       );
     }
+    if (binding.mayBeUsedAsStagingEvidence !== true) {
+      throw new S3ArtifactRedactorError(
+        "S3ArtifactRedactor requires staging-qualified real object-store evidence",
+      );
+    }
     this.binding = binding;
     this.real = binding;
   }
@@ -185,7 +190,7 @@ export class S3ArtifactRedactor implements ArtifactRedactor {
       correlationId: input.correlationId,
       receiptId: randomUUID(),
       objectRefInternalOnly: true,
-      mayBeUsedAsStagingEvidence: true,
+      mayBeUsedAsStagingEvidence: this.real.mayBeUsedAsStagingEvidence,
     };
   }
 }

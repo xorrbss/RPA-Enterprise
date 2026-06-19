@@ -84,15 +84,17 @@ assert(
   "artifact lifecycle contract must keep ObjectRef internal, expose ArtifactRef only, and keep ObjectRef out of logs",
 );
 assert(
-  artifactLifecycleContract.objectIoEvidence.realSchemaRef === ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF &&
+    artifactLifecycleContract.objectIoEvidence.realSchemaRef === ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF &&
     artifactLifecycleContract.objectIoEvidence.localTestSchemaRef === ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF &&
     artifactLifecycleContract.objectIoEvidence.realPortRequiresSecretRef === true &&
+    artifactLifecycleContract.objectIoEvidence.realPortStagingEvidenceMustBeExplicit === true &&
+    artifactLifecycleContract.objectIoEvidence.localFilesystemMayBeUsedAsStagingEvidence === false &&
     artifactLifecycleContract.objectIoEvidence.localTestPortMayBeUsedAsStagingEvidence === false &&
     artifactLifecycleContract.objectIoEvidence.successEvidenceRequiredBeforeFinalize === true &&
     artifactLifecycleContract.objectIoEvidence.evidenceMayContainObjectRef === false &&
     artifactLifecycleContract.objectIoEvidence.evidenceMayContainSecretRefIdentifier === true &&
     artifactLifecycleContract.objectIoEvidence.evidenceMayContainPlainSecret === false,
-  "artifact lifecycle object I/O evidence must require real SecretRef-backed ports and keep local fake evidence non-staging",
+  "artifact lifecycle object I/O evidence must require explicit staging qualification and keep local evidence non-staging",
 );
 assert(
   artifactLifecycleContract.claimLease.requiredBeforeObjectIo === true &&

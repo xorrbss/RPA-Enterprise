@@ -24,6 +24,7 @@ import type {
 import { S3ObjectStore, type S3HttpTransport, type S3HttpTransportResponse } from "../src/artifacts/s3-object-store";
 import {
   S3ArtifactRedactor,
+  S3ArtifactRedactorError,
   type ArtifactContentTransform,
 } from "../src/artifacts/s3-artifact-redactor";
 import { ContentRedactionTransform } from "../src/artifacts/content-redaction-transform";
@@ -58,6 +59,7 @@ const REAL_BINDING: ArtifactRealObjectStorePortBinding = {
   backendAlias: "s3-staging",
   credentialRef: CREDENTIAL_REF,
   evidenceSchemaRef: "artifact/object-io-evidence@1",
+  mayBeUsedAsStagingEvidence: true,
 };
 
 /** GET → source 바이트, PUT → 빈 OK(기록 수락). 호출 기록. */
@@ -168,6 +170,19 @@ function assertNoForbidden(label: string, value: unknown): void {
 }
 
 async function main(): Promise<void> {
+  {
+    try {
+      new S3ArtifactRedactor(
+        makeStore(ioTransport([])),
+        { ...REAL_BINDING, mayBeUsedAsStagingEvidence: false },
+        maskingTransform,
+      );
+      check("S3 redactor rejects non-staging-qualified binding", false, "expected constructor failure");
+    } catch (err) {
+      check("S3 redactor rejects non-staging-qualified binding", err instanceof S3ArtifactRedactorError, String(err));
+    }
+  }
+
   // (1) transform 주입 → redacted: 새 ObjectRef + sha256 + evidence.
   {
     const puts: Uint8Array[] = [];

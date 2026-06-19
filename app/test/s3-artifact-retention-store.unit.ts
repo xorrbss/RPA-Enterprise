@@ -78,6 +78,7 @@ const REAL_BINDING: ArtifactRealObjectStorePortBinding = {
   backendAlias: BACKEND_ALIAS,
   credentialRef: CREDENTIAL_REF,
   evidenceSchemaRef: "artifact/object-io-evidence@1",
+  mayBeUsedAsStagingEvidence: true,
 };
 
 function target(): ArtifactLifecycleTarget {
@@ -128,6 +129,15 @@ function assertNoForbidden(label: string, value: unknown): void {
 }
 
 async function main(): Promise<void> {
+  {
+    try {
+      new S3ArtifactRetentionStore(makeStore(204), { ...REAL_BINDING, mayBeUsedAsStagingEvidence: false });
+      check("S3 retention rejects non-staging-qualified binding", false, "expected constructor failure");
+    } catch (err) {
+      check("S3 retention rejects non-staging-qualified binding", err instanceof S3ArtifactRetentionStoreError, String(err));
+    }
+  }
+
   // (1) 204 → deleted + evidence(ObjectRef/secret 부재, credentialRef/artifactRef 포함).
   {
     const store = new S3ArtifactRetentionStore(makeStore(204), REAL_BINDING);

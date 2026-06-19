@@ -95,6 +95,7 @@ const REAL_BINDING: ArtifactRealObjectStorePortBinding = {
   backendAlias: BACKEND_ALIAS,
   credentialRef: CREDENTIAL_REF,
   evidenceSchemaRef: "artifact/object-io-evidence@1",
+  mayBeUsedAsStagingEvidence: true,
 };
 
 interface ReceiptRow {

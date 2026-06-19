@@ -2082,18 +2082,21 @@ function requireArtifactObjectIoPortBinding(
   if (kind === "real_object_store") {
     const backendAlias = stringField(value, "backendAlias");
     const credentialRef = stringField(value, "credentialRef");
+    const mayBeUsedAsStagingEvidence = value.mayBeUsedAsStagingEvidence;
     if (
       backendAlias === null ||
       credentialRef === null ||
-      value.evidenceSchemaRef !== ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF
+      value.evidenceSchemaRef !== ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF ||
+      typeof mayBeUsedAsStagingEvidence !== "boolean"
     ) {
-      throw new Error(`RuntimeWorker: ${jobKind} real object-store port binding requires backendAlias, SecretRef, and artifact/object-io-evidence@1`);
+      throw new Error(`RuntimeWorker: ${jobKind} real object-store port binding requires backendAlias, SecretRef, artifact/object-io-evidence@1, and explicit staging evidence flag`);
     }
     return {
       kind,
       backendAlias,
       credentialRef: credentialRef as SecretRef,
       evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+      mayBeUsedAsStagingEvidence,
     };
   }
   if (kind === "test_fake") {
@@ -2224,9 +2227,9 @@ function validateArtifactObjectIoEvidence(
       evidence.portKind !== "real_object_store" ||
       evidence.backendAlias !== expected.portBinding.backendAlias ||
       evidence.credentialRef !== expected.portBinding.credentialRef ||
-      evidence.mayBeUsedAsStagingEvidence !== true
+      evidence.mayBeUsedAsStagingEvidence !== expected.portBinding.mayBeUsedAsStagingEvidence
     ) {
-      throw new Error("RuntimeWorker: real object-store evidence must match the SecretRef-backed port binding");
+      throw new Error("RuntimeWorker: real object-store evidence must match the SecretRef-backed port binding and staging evidence flag");
     }
     return;
   }

@@ -299,6 +299,7 @@ const artifactObjectBinding: ArtifactRealObjectStorePortBinding = {
   backendAlias: "local-fs-int",
   credentialRef: "secret://test/artifact-object-store" as SecretRef,
   evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  mayBeUsedAsStagingEvidence: false,
 };
 
 async function redactPendingRunArtifacts(input: {

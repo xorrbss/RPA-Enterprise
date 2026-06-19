@@ -26,11 +26,19 @@ function check(label: string, cond: boolean, detail?: string): void {
 
 const SECRET_REF = "rpa/staging/artifact-lifecycle/object_store/s3" as SecretRef;
 const SECRET_VALUE = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" as PlainSecret;
-const BINDING: ArtifactRealObjectStorePortBinding = {
+const FS_BINDING: ArtifactRealObjectStorePortBinding = {
+  kind: "real_object_store",
+  backendAlias: "fs-local",
+  credentialRef: SECRET_REF,
+  evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  mayBeUsedAsStagingEvidence: false,
+};
+const S3_BINDING: ArtifactRealObjectStorePortBinding = {
   kind: "real_object_store",
   backendAlias: "artifact-store",
   credentialRef: SECRET_REF,
   evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+  mayBeUsedAsStagingEvidence: true,
 };
 
 function lifecycleConfig(kind: "local_fs" | "s3", artifactDir: string): ArtifactLifecycleWorkerConfig {
@@ -71,12 +79,13 @@ try {
   const fsBinding = await buildRuntimeArtifactObjectStoreBinding({
     cfg: lifecycleConfig("local_fs", fsDir),
     secretStore: fsSecrets,
-    binding: BINDING,
+    binding: FS_BINDING,
   });
   check("fs binding exposes the same FsObjectStore to producers", fsBinding.artifactStore instanceof FsObjectStore);
   check("fs binding wires FsArtifactRedactor", fsBinding.artifactRedactor instanceof FsArtifactRedactor);
   check("fs binding wires FsArtifactRetentionStore", fsBinding.artifactRetentionStore instanceof FsArtifactRetentionStore);
   check("fs binding does not resolve object-store secret", fsSecrets.refs.length === 0, fsSecrets.refs.join(","));
+  check("fs binding evidence is not staging-qualified", fsBinding.artifactRedactor.binding.kind === "real_object_store" && fsBinding.artifactRedactor.binding.mayBeUsedAsStagingEvidence === false);
   const fsRef = await fsBinding.artifactStore.putBytes(new Uint8Array([1, 2, 3]));
   check("fs producer store writes file refs", fsRef.startsWith("file://"), String(fsRef));
 } finally {
@@ -87,7 +96,7 @@ const s3Secrets = new RecordingSecretStore();
 const s3Binding = await buildRuntimeArtifactObjectStoreBinding({
   cfg: lifecycleConfig("s3", fsDir),
   secretStore: s3Secrets,
-  binding: BINDING,
+  binding: S3_BINDING,
 });
 check("s3 binding exposes S3ObjectStore to producers", s3Binding.artifactStore instanceof S3ObjectStore);
 check("s3 binding wires S3ArtifactRedactor", s3Binding.artifactRedactor instanceof S3ArtifactRedactor);
@@ -97,6 +106,7 @@ check(
   s3Secrets.refs.length === 1 && s3Secrets.refs[0] === SECRET_REF,
   s3Secrets.refs.join(","),
 );
+check("s3 binding evidence is staging-qualified", s3Binding.artifactRedactor.binding.kind === "real_object_store" && s3Binding.artifactRedactor.binding.mayBeUsedAsStagingEvidence === true);
 
 if (failures > 0) {
   console.error(`\nFAIL: ${failures} check(s) failed`);

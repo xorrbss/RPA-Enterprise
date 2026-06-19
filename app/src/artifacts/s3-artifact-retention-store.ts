@@ -52,6 +52,11 @@ export class S3ArtifactRetentionStore implements ArtifactRetentionStore {
         "S3ArtifactRetentionStore requires a real_object_store port binding",
       );
     }
+    if (binding.mayBeUsedAsStagingEvidence !== true) {
+      throw new S3ArtifactRetentionStoreError(
+        "S3ArtifactRetentionStore requires staging-qualified real object-store evidence",
+      );
+    }
     this.binding = binding;
     this.real = binding;
   }
@@ -89,7 +94,7 @@ export class S3ArtifactRetentionStore implements ArtifactRetentionStore {
       correlationId: input.correlationId,
       receiptId: randomUUID(),
       objectRefInternalOnly: true,
-      mayBeUsedAsStagingEvidence: true,
+      mayBeUsedAsStagingEvidence: this.real.mayBeUsedAsStagingEvidence,
     };
   }
 }

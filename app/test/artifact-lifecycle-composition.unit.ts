@@ -109,6 +109,7 @@ async function main(): Promise<void> {
     check("s3 composition performs no object-store network I/O", transportCalls === 0, String(transportCalls));
     check("s3 evidence binding uses SecretRef identifier", options.artifactRedactor?.binding.kind === "real_object_store" && options.artifactRedactor.binding.credentialRef === S3_SECRET_REF);
     check("s3 evidence binding uses backend alias", options.artifactRetentionStore?.binding.kind === "real_object_store" && options.artifactRetentionStore.binding.backendAlias === "s3-compatible");
+    check("s3 evidence binding is staging-qualified", options.artifactRedactor?.binding.kind === "real_object_store" && options.artifactRedactor.binding.mayBeUsedAsStagingEvidence === true);
     check("s3 env/config shape has no secret value", !JSON.stringify(cfg).includes("resolved-s3-secret-access-key"));
   }
 
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
       check("local retention store composed", options.artifactRetentionStore instanceof FsArtifactRetentionStore);
       check("local evidence binding uses explicit SecretRef", options.artifactRedactor?.binding.kind === "real_object_store" && options.artifactRedactor.binding.credentialRef === "rpa/local/artifact-lifecycle/object_store/fs");
       check("local evidence binding uses fs alias", options.artifactRetentionStore?.binding.kind === "real_object_store" && options.artifactRetentionStore.binding.backendAlias === "fs-local");
+      check("local evidence binding is not staging-qualified", options.artifactRedactor?.binding.kind === "real_object_store" && options.artifactRedactor.binding.mayBeUsedAsStagingEvidence === false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

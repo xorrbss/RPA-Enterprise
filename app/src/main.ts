@@ -417,6 +417,7 @@ export async function buildArtifactLifecycleWorkerOptions(
     const artifactObjectBinding = artifactLifecycleObjectBinding(
       cfg.objectStore.backendAlias,
       cfg.objectStore.credentialRef,
+      false,
     );
     return {
       workerId: cfg.workerId,
@@ -447,6 +448,7 @@ export async function buildArtifactLifecycleWorkerOptions(
   const artifactObjectBinding = artifactLifecycleObjectBinding(
     cfg.objectStore.backendAlias,
     cfg.objectStore.secretAccessKeyRef,
+    true,
   );
   return {
     workerId: cfg.workerId,
@@ -463,12 +465,14 @@ export async function buildArtifactLifecycleWorkerOptions(
 function artifactLifecycleObjectBinding(
   backendAlias: string,
   credentialRef: string,
+  mayBeUsedAsStagingEvidence: boolean,
 ): ArtifactRealObjectStorePortBinding {
   return {
     kind: "real_object_store",
     backendAlias,
     credentialRef: credentialRef as SecretRef,
     evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
+    mayBeUsedAsStagingEvidence,
   };
 }
 
