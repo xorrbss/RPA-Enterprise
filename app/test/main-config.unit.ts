@@ -6,6 +6,7 @@
  * regression of the fail-closed config (adversarial-review recommendation).
  */
 import {
+  assertInProcessArtifactStoreCompatibility,
   loadApiConfig,
   loadArtifactLifecycleWorkerConfig,
   loadCommonConfig,
@@ -431,6 +432,24 @@ function main(): void {
     CODEX_BASE_URL: "https://api.example/v1", CODEX_API_KEY: "sk-test", CODEX_MODEL: "gpt-x",
     GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/gw-artifacts",
   };
+  withEnv({
+    ...FULL,
+    ...GW_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+  }, () =>
+    expectThrow("RUN_MODE=all rejects fs producers with s3 lifecycle store", () => assertInProcessArtifactStoreCompatibility("all")));
+  withEnv({
+    RPA_ENV: "local",
+    ...GW_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: "local_fs",
+    ARTIFACT_OBJECT_STORE_REF: "rpa/local/artifact-lifecycle/object_store/fs",
+  }, () => {
+    assertInProcessArtifactStoreCompatibility("all");
+    check("RUN_MODE=all accepts shared local_fs lifecycle store in local env", true);
+  });
   withEnv({}, () => expectThrow("gateway missing CODEX_BASE_URL throws", () => loadGatewayConfig()));
   withEnv({ ...GW_REQ, CODEX_API_KEY: "" }, () =>
     expectThrow("gateway blank CODEX_API_KEY throws", () => loadGatewayConfig()));

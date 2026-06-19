@@ -389,6 +389,21 @@ export function loadArtifactLifecycleWorkerConfig(): ArtifactLifecycleWorkerConf
   };
 }
 
+export function assertInProcessArtifactStoreCompatibility(runMode: RunMode): void {
+  if (runMode !== "all") return;
+
+  const gateway = loadGatewayConfig();
+  const lifecycle = loadArtifactLifecycleWorkerConfig();
+  if (lifecycle.objectStore.mode !== "local_fs") {
+    throw new Error(
+      "RUN_MODE=all cannot combine D8-A16 FsObjectStore artifact producers with ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE=s3",
+    );
+  }
+  if (resolve(gateway.artifactDir) !== resolve(lifecycle.objectStore.artifactDir)) {
+    throw new Error("RUN_MODE=all requires runtime artifact producers and local artifact lifecycle worker to share GATEWAY_ARTIFACT_DIR");
+  }
+}
+
 function loadArtifactLifecycleObjectStoreConfig(): ArtifactLifecycleObjectStoreConfig {
   const mode = artifactLifecycleObjectStoreMode();
   const credentialRef = reqArtifactObjectStoreRef("ARTIFACT_OBJECT_STORE_REF");
