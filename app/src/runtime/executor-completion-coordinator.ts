@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type pg from "pg";
 
-import type { ClassifiedException } from "../../../ts/core-types";
+import type { ArtifactRef, ClassifiedException } from "../../../ts/core-types";
 import { ERROR_CATALOG, type ErrorCode } from "../../../ts/error-catalog";
 import type {
   EventId,
@@ -272,7 +272,7 @@ export class PgExecutorCompletionCoordinator {
         tenantId: input.key.tenantId,
         runId: input.key.runId,
         correlationId: input.correlationId,
-        artifactCount: input.artifacts.length,
+        artifactRefs: input.artifacts.map((artifact) => artifact.artifactRef),
         enqueuer: this.runtimeJobEnqueuer,
       });
 
@@ -379,7 +379,7 @@ export class PgExecutorCompletionCoordinator {
         tenantId: input.key.tenantId,
         runId: input.key.runId,
         correlationId: input.correlationId,
-        artifactCount: input.artifacts.length,
+        artifactRefs: input.artifacts.map((artifact) => artifact.artifactRef),
         enqueuer: this.runtimeJobEnqueuer,
       });
 
@@ -487,7 +487,7 @@ export class PgExecutorCompletionCoordinator {
         tenantId: input.key.tenantId,
         runId: input.key.runId,
         correlationId: input.correlationId,
-        artifactCount: input.artifacts.length,
+        artifactRefs: input.artifacts.map((artifact) => artifact.artifactRef),
         enqueuer: this.runtimeJobEnqueuer,
       });
 
@@ -587,7 +587,7 @@ export class PgExecutorCompletionCoordinator {
         tenantId: input.key.tenantId,
         runId: input.key.runId,
         correlationId: input.correlationId,
-        artifactCount: input.artifacts.length,
+        artifactRefs: input.artifacts.map((artifact) => artifact.artifactRef),
         enqueuer,
       });
 
@@ -657,7 +657,7 @@ export class PgExecutorCompletionCoordinator {
         tenantId: input.key.tenantId,
         runId: input.key.runId,
         correlationId: input.correlationId,
-        artifactCount: input.artifacts.length,
+        artifactRefs: input.artifacts.map((artifact) => artifact.artifactRef),
         enqueuer: this.runtimeJobEnqueuer,
       });
 
@@ -719,21 +719,23 @@ async function enqueueArtifactLifecycleJobs(
     tenantId: string;
     runId: string;
     correlationId: string;
-    artifactCount: number;
+    artifactRefs: readonly ArtifactRef[];
     enqueuer: RuntimeJobEnqueuePort | undefined;
   },
 ): Promise<RuntimeWorkerJob[]> {
-  if (input.artifactCount === 0) return [];
+  const artifactRefs = [...new Set(input.artifactRefs)];
+  if (artifactRefs.length === 0) return [];
   if (input.enqueuer === undefined) {
     throw new PgExecutorCompletionRequiredError(
       "executor completion with artifacts requires a RuntimeJobEnqueuePort for lifecycle jobs",
     );
   }
   const jobs: RuntimeWorkerJob[] = [
-    ...Array.from({ length: input.artifactCount }, (): RuntimeWorkerJob => ({
+    ...artifactRefs.map((artifactRef): RuntimeWorkerJob => ({
       kind: "artifact_redaction",
       tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
       runId: input.runId as RuntimeWorkerJob["runId"],
+      artifactId: artifactRef as RuntimeWorkerJob["artifactId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     })),
     {

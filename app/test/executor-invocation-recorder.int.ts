@@ -581,6 +581,7 @@ async function main(): Promise<void> {
       "executor completion enqueues lifecycle jobs for artifacts",
       enqueuedRuntimeJobs.length === 2 &&
         enqueuedRuntimeJobs[0]?.kind === "artifact_redaction" &&
+        enqueuedRuntimeJobs[0]?.artifactId === terminalResult.artifacts[0] &&
         enqueuedRuntimeJobs[1]?.kind === "artifact_retention" &&
         enqueuedRuntimeJobs.every((job) => job.tenantId === TENANT_A && job.correlationId === CORRELATION),
       JSON.stringify(enqueuedRuntimeJobs),
@@ -740,6 +741,7 @@ async function main(): Promise<void> {
       "executor business failure enqueues lifecycle jobs for artifacts",
       enqueuedRuntimeJobs.length === 4 &&
         enqueuedRuntimeJobs[2]?.kind === "artifact_redaction" &&
+        enqueuedRuntimeJobs[2]?.artifactId === businessResult.artifacts[0] &&
         enqueuedRuntimeJobs[3]?.kind === "artifact_retention" &&
         enqueuedRuntimeJobs.slice(2).every((job) => job.tenantId === TENANT_A && job.correlationId === CORRELATION),
       JSON.stringify(enqueuedRuntimeJobs),
@@ -867,6 +869,7 @@ async function main(): Promise<void> {
       systemRetry.emittedEvents.length === 2 &&
         systemRetry.enqueuedRuntimeJobs.length === 2 &&
         systemRetry.enqueuedRuntimeJobs[0]?.kind === "artifact_redaction" &&
+        systemRetry.enqueuedRuntimeJobs[0]?.artifactId === systemRetryResult.artifacts[0] &&
         systemRetry.enqueuedRuntimeJobs[1]?.kind === "artifact_retention",
       JSON.stringify(systemRetry),
     );

@@ -28,9 +28,14 @@ check(
     pollJobs[1]?.kind === "artifact_redaction" &&
     pollJobs[1]?.tenantId === TENANT_A &&
     pollJobs[1]?.correlationId === "20000000-0000-4000-8000-000000000001" &&
+    pollJobs[1]?.runId === undefined &&
+    pollJobs[1]?.artifactId === undefined &&
+    pollJobs[1]?.generationId === undefined &&
     pollJobs[2]?.kind === "lease_sweeper" &&
     pollJobs[3]?.kind === "artifact_redaction" &&
-    pollJobs[3]?.tenantId === TENANT_B,
+    pollJobs[3]?.tenantId === TENANT_B &&
+    pollJobs[3]?.artifactId === undefined &&
+    pollJobs[3]?.generationId === undefined,
   JSON.stringify(pollJobs),
 );
 

@@ -1020,6 +1020,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
       return this.claimRedactionArtifact(client, {
         tenantId,
         runId: job.runId,
+        artifactId: job.artifactId,
+        generationId: job.generationId,
         workerId,
         correlationId,
         claimTtlMs: this.lifecycleClaimTtlMs(),
@@ -1447,6 +1449,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
     input: {
       tenantId: string;
       runId: RunId | undefined;
+      artifactId: string | undefined;
+      generationId: string | undefined;
       workerId: string;
       correlationId: string;
       claimTtlMs: number;
@@ -1460,15 +1464,17 @@ export class PgRuntimeWorker implements RuntimeWorker {
         WHERE tenant_id = $1::uuid
           AND redaction_status = 'pending'
           AND redaction_attempts < $3::int
-          AND deleted_at IS NULL
-          AND quarantine = false
-          AND ($2::uuid IS NULL OR run_id = $2::uuid)
-          AND lifecycle_claim_id IS NOT NULL
-          AND lifecycle_claim_expires_at > now()
+           AND deleted_at IS NULL
+           AND quarantine = false
+           AND ($2::uuid IS NULL OR run_id = $2::uuid)
+           AND ($4::uuid IS NULL OR id = $4::uuid)
+           AND ($5::uuid IS NULL OR generation_id = $5::uuid)
+           AND lifecycle_claim_id IS NOT NULL
+           AND lifecycle_claim_expires_at > now()
         ORDER BY lifecycle_claim_expires_at ASC
         LIMIT 1
         FOR UPDATE`,
-      [input.tenantId, input.runId ?? null, input.maxAttempts],
+      [input.tenantId, input.runId ?? null, input.maxAttempts, input.artifactId ?? null, input.generationId ?? null],
     );
     const activeRow = active.rows[0];
     if (activeRow !== undefined) {
@@ -1484,14 +1490,16 @@ export class PgRuntimeWorker implements RuntimeWorker {
         WHERE tenant_id = $1::uuid
           AND redaction_status = 'pending'
           AND redaction_attempts < $3::int
-          AND deleted_at IS NULL
-          AND quarantine = false
-          AND ($2::uuid IS NULL OR run_id = $2::uuid)
-          AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= now())
+           AND deleted_at IS NULL
+           AND quarantine = false
+           AND ($2::uuid IS NULL OR run_id = $2::uuid)
+           AND ($4::uuid IS NULL OR id = $4::uuid)
+           AND ($5::uuid IS NULL OR generation_id = $5::uuid)
+           AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= now())
         ORDER BY created_at ASC, id ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED`,
-      [input.tenantId, input.runId ?? null, input.maxAttempts],
+      [input.tenantId, input.runId ?? null, input.maxAttempts, input.artifactId ?? null, input.generationId ?? null],
     );
     const row = artifact.rows[0];
     if (row === undefined) {
@@ -1524,11 +1532,23 @@ export class PgRuntimeWorker implements RuntimeWorker {
         WHERE tenant_id = $1::uuid
           AND id = $2::uuid
           AND redaction_status = 'pending'
-          AND redaction_attempts < $7::int
-          AND deleted_at IS NULL
-          AND quarantine = false
-          AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= now())`,
-      [input.tenantId, row.id, claimId, input.workerId, input.correlationId, input.claimTtlMs, input.maxAttempts],
+           AND redaction_attempts < $7::int
+           AND deleted_at IS NULL
+           AND quarantine = false
+           AND ($8::uuid IS NULL OR id = $8::uuid)
+           AND ($9::uuid IS NULL OR generation_id = $9::uuid)
+           AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= now())`,
+      [
+        input.tenantId,
+        row.id,
+        claimId,
+        input.workerId,
+        input.correlationId,
+        input.claimTtlMs,
+        input.maxAttempts,
+        input.artifactId ?? null,
+        input.generationId ?? null,
+      ],
     );
     if (claimed.rowCount !== 1) {
       throw new Error("RuntimeWorker: artifact_redaction claim CAS conflict");

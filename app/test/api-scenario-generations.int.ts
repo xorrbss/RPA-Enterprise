@@ -396,7 +396,7 @@ async function main(): Promise<void> {
     console.log("seeded target rows");
 
     const enqueuedRuns: RunEnqueueInput[] = [];
-    const enqueuedArtifactRedactions: Array<{ tenantId: string; correlationId: string }> = [];
+    const enqueuedArtifactRedactions: Array<{ tenantId: string; correlationId: string; artifactId?: string; generationId?: string }> = [];
     const enqueuer: RunEnqueuer = {
       async enqueueRunClaim(_client, input) {
         enqueuedRuns.push(input);
@@ -1479,15 +1479,17 @@ async function main(): Promise<void> {
         );
         const lifecyclePool = createLifecycleBypassPool();
         try {
-          const artifacts = await lifecyclePool.query<{ artifact_count: string; run_count: string; type: string | null }>(
+          const artifacts = await lifecyclePool.query<{ artifact_count: string; run_count: string; type: string | null; artifact_ids: string[] }>(
             `SELECT
                 count(*)::text AS artifact_count,
                 count(run_id)::text AS run_count,
-                max(type) AS type
+                max(type) AS type,
+                coalesce(array_agg(id::text ORDER BY id), ARRAY[]::text[]) AS artifact_ids
                FROM artifacts
               WHERE tenant_id=$1::uuid AND generation_id=$2::uuid`,
             [TENANT, gatewayPlannedBody.generation_id],
           );
+          const gatewayPlannerArtifactIds = artifacts.rows[0]?.artifact_ids ?? [];
           check(
             "gateway-backed llm_v1 planner flushes generation-scoped planner artifact",
             artifacts.rows[0]?.artifact_count === "1" &&
@@ -1496,11 +1498,13 @@ async function main(): Promise<void> {
             JSON.stringify(artifacts.rows[0]),
           );
           check(
-            "gateway-backed llm_v1 planner enqueues tenant-scoped artifact redaction",
+            "gateway-backed llm_v1 planner enqueues generation-scoped artifact redaction",
             enqueuedArtifactRedactions.length === 1 &&
               enqueuedArtifactRedactions[0]?.tenantId === TENANT &&
-              enqueuedArtifactRedactions[0]?.correlationId.length === 36,
-            JSON.stringify(enqueuedArtifactRedactions),
+              enqueuedArtifactRedactions[0]?.correlationId.length === 36 &&
+              enqueuedArtifactRedactions[0]?.generationId === gatewayPlannedBody.generation_id &&
+              enqueuedArtifactRedactions[0]?.artifactId === gatewayPlannerArtifactIds[0],
+            JSON.stringify({ enqueuedArtifactRedactions, gatewayPlannerArtifactIds }),
           );
           const llmCalls = await lifecyclePool.query<{ call_count: string; done_count: string; output_ref_count: string; parsed_count: string }>(
             `SELECT

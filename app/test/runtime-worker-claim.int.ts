@@ -20,6 +20,7 @@ import type {
   ArtifactObjectIoPortBinding,
   ArtifactRedactor,
   ArtifactRetentionStore,
+  RuntimeWorkerJob,
   WorkitemId,
 } from "../../ts/runtime-contract";
 
@@ -89,6 +90,8 @@ const ARTIFACT_REDACTION_DELETED = "60000000-0000-0000-0000-000000000003";
 const ARTIFACT_REDACTION_ALREADY = "60000000-0000-0000-0000-000000000004";
 const ARTIFACT_REDACTION_ACTIVE_CLAIM = "60000000-0000-0000-0000-000000000005";
 const ARTIFACT_REDACTION_RETRYABLE = "60000000-0000-0000-0000-000000000006";
+const ARTIFACT_REDACTION_GENERATION_TARGET = "60000000-0000-0000-0000-000000000007";
+const ARTIFACT_REDACTION_GENERATION_UNRELATED = "60000000-0000-0000-0000-000000000008";
 const ARTIFACT_RETENTION_DELETE = "60000000-0000-0000-0000-000000000011";
 const ARTIFACT_RETENTION_NOT_FOUND = "60000000-0000-0000-0000-000000000012";
 const ARTIFACT_RETENTION_TRANSIENT = "60000000-0000-0000-0000-000000000013";
@@ -97,6 +100,8 @@ const ARTIFACT_RETENTION_QUARANTINE = "60000000-0000-0000-0000-000000000015";
 const ARTIFACT_RETENTION_UNEXPIRED = "60000000-0000-0000-0000-000000000016";
 const ARTIFACT_RETENTION_ALREADY_DELETED = "60000000-0000-0000-0000-000000000017";
 const ACTIVE_REDACTION_CLAIM = "70000000-0000-0000-0000-000000000001";
+const GENERATION_TARGET = "80000000-0000-0000-0000-000000000001";
+const GENERATION_UNRELATED = "80000000-0000-0000-0000-000000000002";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -178,6 +183,15 @@ const fakeArtifactRedactor: ArtifactRedactor = {
         evidence: localTestEvidence(input, "redact", "local-redaction-receipt", sha256),
       };
     }
+    if (input.artifact.artifactRef === ARTIFACT_REDACTION_GENERATION_TARGET) {
+      const sha256 = "sha256:generation-redacted-safe";
+      return {
+        kind: "redacted",
+        redactedObjectRef: "object://runtime-worker/generation-redacted-safe" as ObjectRef,
+        sha256,
+        evidence: localTestEvidence(input, "redact", "local-generation-redaction-receipt", sha256),
+      };
+    }
     if (input.artifact.artifactRef === ARTIFACT_REDACTION_RETRYABLE) {
       return {
         kind: "retryable_failed",
@@ -240,39 +254,51 @@ async function seedRun(pool: ReturnType<typeof createPool>, runId: string, statu
 async function seedLifecycleArtifacts(pool: ReturnType<typeof createPool>): Promise<void> {
   await withTenantTx(pool, TENANT_A, async (c) => {
     await c.query(
+      `INSERT INTO scenario_generations
+         (id, tenant_id, mode, status, prompt_hash, draft_ir, created_by)
+       VALUES
+         ($1::uuid, $3::uuid, 'draft_only', 'drafted', 'hash-generation-target', '{"nodes":[]}'::jsonb, 'runtime-worker-test'),
+         ($2::uuid, $3::uuid, 'draft_only', 'drafted', 'hash-generation-unrelated', '{"nodes":[]}'::jsonb, 'runtime-worker-test')`,
+      [GENERATION_TARGET, GENERATION_UNRELATED, TENANT_A],
+    );
+    await c.query(
       `INSERT INTO artifacts (
-         id, tenant_id, run_id, type, redaction_status, redaction_attempts, object_ref,
+         id, tenant_id, run_id, generation_id, type, redaction_status, redaction_attempts, object_ref,
          retention_until, legal_hold, quarantine, deleted_at, deleted_reason, deleted_by_job,
          lifecycle_claim_id, lifecycle_claim_kind, lifecycle_claim_worker_id,
          lifecycle_claim_correlation_id, lifecycle_claimed_at, lifecycle_claim_expires_at
-       )
-       VALUES
-         ($1,$2,$3,'screenshot','pending',0,'object://runtime-worker/redaction-pending',
-          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($4,$2,$3,'screenshot','pending',0,'object://runtime-worker/redaction-quarantine',
-          now() + interval '90 days',false,true,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($5,$2,$3,'screenshot','pending',0,'object://runtime-worker/redaction-deleted',
-          now() + interval '90 days',false,false,now(),'test_deleted',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($6,$2,$3,'screenshot','redacted',1,'object://runtime-worker/redaction-already',
-          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($7,$2,$8,'screenshot','pending',0,'object://runtime-worker/redaction-active-claim',
-          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($16,$2,$3,'screenshot','pending',1,'object://runtime-worker/redaction-retryable',
-          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($9,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-delete',
-          now() - interval '3 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($10,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-not-found',
-          now() - interval '2 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($11,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-transient',
-          now() - interval '1 day',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($12,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-legal-hold',
-          now() - interval '1 day',true,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($13,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-quarantine',
-          now() - interval '1 day',false,true,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($14,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-unexpired',
-          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-         ($15,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-already-deleted',
-          now() - interval '1 day',false,false,now(),'retention_expired','previous-job',NULL,NULL,NULL,NULL,NULL,NULL)`,
+        )
+        VALUES
+          ($1,$2,$3,NULL,'screenshot','pending',0,'object://runtime-worker/redaction-pending',
+           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($4,$2,$3,NULL,'screenshot','pending',0,'object://runtime-worker/redaction-quarantine',
+           now() + interval '90 days',false,true,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($5,$2,$3,NULL,'screenshot','pending',0,'object://runtime-worker/redaction-deleted',
+           now() + interval '90 days',false,false,now(),'test_deleted',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($6,$2,$3,NULL,'screenshot','redacted',1,'object://runtime-worker/redaction-already',
+           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($7,$2,$8,NULL,'screenshot','pending',0,'object://runtime-worker/redaction-active-claim',
+           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($16,$2,$3,NULL,'screenshot','pending',1,'object://runtime-worker/redaction-retryable',
+           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($17,$2,NULL,$18,'scenario_generation_llm_output','pending',0,'object://runtime-worker/generation-target',
+           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($19,$2,NULL,$20,'scenario_generation_llm_output','pending',0,'object://runtime-worker/generation-unrelated',
+           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($9,$2,$3,NULL,'receipt','not_required',0,'object://runtime-worker/retention-delete',
+           now() - interval '3 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($10,$2,$3,NULL,'receipt','not_required',0,'object://runtime-worker/retention-not-found',
+           now() - interval '2 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($11,$2,$3,NULL,'receipt','not_required',0,'object://runtime-worker/retention-transient',
+           now() - interval '1 day',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($12,$2,$3,NULL,'receipt','not_required',0,'object://runtime-worker/retention-legal-hold',
+           now() - interval '1 day',true,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($13,$2,$3,NULL,'receipt','not_required',0,'object://runtime-worker/retention-quarantine',
+           now() - interval '1 day',false,true,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($14,$2,$3,NULL,'receipt','not_required',0,'object://runtime-worker/retention-unexpired',
+           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+          ($15,$2,$3,NULL,'receipt','not_required',0,'object://runtime-worker/retention-already-deleted',
+           now() - interval '1 day',false,false,now(),'retention_expired','previous-job',NULL,NULL,NULL,NULL,NULL,NULL)`,
       [
         ARTIFACT_REDACTION_PENDING,
         TENANT_A,
@@ -290,6 +316,10 @@ async function seedLifecycleArtifacts(pool: ReturnType<typeof createPool>): Prom
         ARTIFACT_RETENTION_UNEXPIRED,
         ARTIFACT_RETENTION_ALREADY_DELETED,
         ARTIFACT_REDACTION_RETRYABLE,
+        ARTIFACT_REDACTION_GENERATION_TARGET,
+        GENERATION_TARGET,
+        ARTIFACT_REDACTION_GENERATION_UNRELATED,
+        GENERATION_UNRELATED,
       ],
     );
   });
@@ -1207,6 +1237,58 @@ async function main(): Promise<void> {
         "artifact_redaction retry threshold calls retryable fixture twice",
         redactionCalls.filter((call) => call.artifact.artifactRef === ARTIFACT_REDACTION_RETRYABLE).length === 2,
         JSON.stringify(redactionCalls.map((call) => call.artifact.artifactRef)),
+      );
+
+      const scopedGenerationRedaction = await bypassWorker.handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        artifactId: ARTIFACT_REDACTION_GENERATION_TARGET as RuntimeWorkerJob["artifactId"],
+        generationId: GENERATION_TARGET,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check(
+        "artifact_redaction generation-scoped job ignores unrelated active tenant claim",
+        scopedGenerationRedaction.kind === "completed",
+        JSON.stringify(scopedGenerationRedaction),
+      );
+      const generationTarget = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_GENERATION_TARGET);
+      const generationUnrelated = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_GENERATION_UNRELATED);
+      check(
+        "artifact_redaction generation-scoped job only redacts requested artifact",
+        generationTarget.redactionStatus === "redacted" &&
+          generationTarget.objectRef === "object://runtime-worker/generation-redacted-safe" &&
+          generationUnrelated.redactionStatus === "pending",
+        JSON.stringify({ generationTarget, generationUnrelated }),
+      );
+      check(
+        "artifact_redaction generation-scoped job calls redactor for target only",
+        redactionCalls.filter((call) => call.artifact.artifactRef === ARTIFACT_REDACTION_GENERATION_TARGET).length === 1 &&
+          !redactionCalls.some((call) => call.artifact.artifactRef === ARTIFACT_REDACTION_GENERATION_UNRELATED),
+        JSON.stringify(redactionCalls.map((call) => call.artifact.artifactRef)),
+      );
+
+      await withTenantTx(lifecycleBypassPool, TENANT_A, async (c) => {
+        await c.query(
+          `UPDATE artifacts
+              SET lifecycle_claim_expires_at = now() - interval '1 minute'
+                , lifecycle_claimed_at = now() - interval '2 minutes'
+            WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+          [TENANT_A, ARTIFACT_REDACTION_ACTIVE_CLAIM],
+        );
+      });
+      const tenantWideRedaction = await bypassWorker.handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_redaction tenant-wide maintenance sweep still claims eligible rows", tenantWideRedaction.kind === "completed", JSON.stringify(tenantWideRedaction));
+      const tenantWideClaimed = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_ACTIVE_CLAIM);
+      check(
+        "artifact_redaction tenant-wide maintenance sweep is not forced to generation scope",
+        redactionCalls.some((call) => call.artifact.artifactRef === ARTIFACT_REDACTION_ACTIVE_CLAIM) &&
+          tenantWideClaimed.redactionStatus === "failed" &&
+          tenantWideClaimed.lifecycleClaimSet === false,
+        JSON.stringify({ calls: redactionCalls.map((call) => call.artifact.artifactRef), tenantWideClaimed }),
       );
 
       const retentionDelete = await bypassWorker.handle({

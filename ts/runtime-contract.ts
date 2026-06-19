@@ -918,6 +918,8 @@ export interface RuntimeWorkerJob {
     | "sink_deliver";
   tenantId?: TenantId;
   runId?: RunId;
+  artifactId?: ArtifactRef;
+  generationId?: string;
   workitemId?: WorkitemId;
   deadLetterId?: string;
   correlationId?: CorrelationId;

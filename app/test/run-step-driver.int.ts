@@ -646,6 +646,7 @@ async function main(): Promise<void> {
       artifactEnqueuer.jobs.length === 2 &&
         artifactEnqueuer.jobs[0]?.kind === "artifact_redaction" &&
         artifactEnqueuer.jobs[0]?.runId === RUN_ARTIFACT &&
+        artifactEnqueuer.jobs[0]?.artifactId === artifactRun.outcome.artifacts[0] &&
         artifactEnqueuer.jobs[1]?.kind === "artifact_retention",
       JSON.stringify(artifactEnqueuer.jobs),
     );
@@ -747,7 +748,13 @@ async function main(): Promise<void> {
     );
     check("video always starts run-level recorder", videoAlwaysRecorder.starts[0]?.policy === "always" && videoAlwaysRecorder.starts[0]?.leaseId === "lease-video-always", JSON.stringify(videoAlwaysRecorder.starts));
     check("video always persists artifact on success", videoAlways.outcome.artifacts.includes("72000000-0000-0000-0000-0000000000d8" as ArtifactRef) && videoAlwaysRecorder.recordings[0]?.stops[0] === "success", JSON.stringify(videoAlways.outcome.artifacts));
-    check("video always artifact triggers lifecycle jobs", videoAlwaysEnqueuer.jobs.length === 2 && videoAlwaysEnqueuer.jobs[0]?.kind === "artifact_redaction", JSON.stringify(videoAlwaysEnqueuer.jobs));
+    check(
+      "video always artifact triggers targeted lifecycle jobs",
+      videoAlwaysEnqueuer.jobs.length === 2 &&
+        videoAlwaysEnqueuer.jobs[0]?.kind === "artifact_redaction" &&
+        videoAlwaysEnqueuer.jobs[0]?.artifactId === "72000000-0000-0000-0000-0000000000d8",
+      JSON.stringify(videoAlwaysEnqueuer.jobs),
+    );
 
     const videoFailureSuccessRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000d9" as ArtifactRef);
     const videoFailureSuccessEnqueuer = new FakeRuntimeJobEnqueuer();
@@ -798,7 +805,13 @@ async function main(): Promise<void> {
       },
     );
     check("video failure policy persists failed run recording", videoFailure.state === "failed_system" && videoFailure.outcome.artifacts.includes("72000000-0000-0000-0000-0000000000da" as ArtifactRef) && videoFailureRecorder.recordings[0]?.stops[0] === "fail_system", JSON.stringify(videoFailure.outcome.artifacts));
-    check("video failure artifact triggers lifecycle jobs", videoFailureEnqueuer.jobs.length === 2 && videoFailureEnqueuer.jobs[0]?.kind === "artifact_redaction", JSON.stringify(videoFailureEnqueuer.jobs));
+    check(
+      "video failure artifact triggers targeted lifecycle jobs",
+      videoFailureEnqueuer.jobs.length === 2 &&
+        videoFailureEnqueuer.jobs[0]?.kind === "artifact_redaction" &&
+        videoFailureEnqueuer.jobs[0]?.artifactId === "72000000-0000-0000-0000-0000000000da",
+      JSON.stringify(videoFailureEnqueuer.jobs),
+    );
 
     const videoDriveThrowRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000de" as ArtifactRef);
     const videoDriveThrowEnqueuer = new FakeRuntimeJobEnqueuer();
@@ -832,7 +845,9 @@ async function main(): Promise<void> {
     );
     check(
       "video drive exception artifact triggers lifecycle jobs",
-      videoDriveThrowEnqueuer.jobs.length === 2 && videoDriveThrowEnqueuer.jobs[0]?.kind === "artifact_redaction",
+      videoDriveThrowEnqueuer.jobs.length === 2 &&
+        videoDriveThrowEnqueuer.jobs[0]?.kind === "artifact_redaction" &&
+        videoDriveThrowEnqueuer.jobs[0]?.artifactId === "72000000-0000-0000-0000-0000000000de",
       JSON.stringify(videoDriveThrowEnqueuer.jobs),
     );
 

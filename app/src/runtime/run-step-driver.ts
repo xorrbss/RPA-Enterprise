@@ -630,10 +630,11 @@ async function enqueueArtifactLifecycleJobsForOutcome(
     throw new Error("driveScenario: artifacts produced on direct run-drive require RuntimeJobEnqueuePort for lifecycle jobs");
   }
   const jobs: RuntimeWorkerJob[] = [
-    ...artifactRefs.map((): RuntimeWorkerJob => ({
+    ...artifactRefs.map((artifactRef): RuntimeWorkerJob => ({
       kind: "artifact_redaction",
       tenantId: run.tenantId as RuntimeWorkerJob["tenantId"],
       runId: run.runId as RuntimeWorkerJob["runId"],
+      artifactId: artifactRef as RuntimeWorkerJob["artifactId"],
       correlationId: run.correlationId as RuntimeWorkerJob["correlationId"],
     })),
     {

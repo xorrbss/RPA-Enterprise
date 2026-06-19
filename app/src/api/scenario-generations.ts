@@ -766,10 +766,12 @@ async function persistGeneration(
         reason: "scenario_generation_artifact_redaction_queue_not_configured",
       });
     }
-    for (let index = 0; index < generationArtifactRefs.length; index += 1) {
+    for (const artifactId of generationArtifactRefs) {
       await deps.enqueuer.enqueueArtifactRedaction(client, {
         tenantId: principal.tenantId,
         correlationId,
+        artifactId,
+        generationId,
       });
     }
   }
