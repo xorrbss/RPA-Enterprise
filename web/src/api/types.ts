@@ -238,12 +238,12 @@ export interface ScenarioGenerationResult {
   readonly scenario_id: string | null;
   readonly scenario_version_id: string | null;
   readonly run_id: string | null;
-  readonly evidence_policy?: ScenarioGenerationEvidence;
+  readonly evidence_policy: ScenarioGenerationEvidence;
   readonly blockers: readonly string[];
   readonly draft_ir: unknown;
   readonly validation_report: unknown;
-  readonly created_at?: string;
-  readonly created_by?: string;
+  readonly created_at: string;
+  readonly created_by: string;
 }
 
 // POST /v1/approvals/decide body(닫힌 shape — 백엔드 parseDecideBody 정합). reject 는 reason 필수(엔드포인트 강제).

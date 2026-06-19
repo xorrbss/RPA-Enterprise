@@ -1426,6 +1426,23 @@ components:
     ScenarioGeneration:
       type: object
       description: 자연어 프롬프트 기반 generation 원장/응답. prompt 원문은 노출하지 않는다.
+      additionalProperties: false
+      required:
+        - generation_id
+        - mode
+        - status
+        - prompt_hash
+        - planner
+        - model
+        - scenario_id
+        - scenario_version_id
+        - run_id
+        - evidence_policy
+        - blockers
+        - created_by
+        - created_at
+        - draft_ir
+        - validation_report
       properties:
         generation_id: { type: string }
         mode:
@@ -1450,6 +1467,12 @@ components:
         blockers:
           type: array
           items: { type: string }
+        created_by:
+          type: string
+          description: Authenticated principal subject that created the generation ledger row.
+        created_at:
+          type: string
+          format: date-time
         draft_ir:
           $ref: '#/components/schemas/IRDocument'
         validation_report:

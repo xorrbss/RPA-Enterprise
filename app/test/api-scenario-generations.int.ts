@@ -433,6 +433,13 @@ async function main(): Promise<void> {
       check("blocked status", blockedBody.status === "blocked", blocked.body);
       check("blocked has no run", blockedBody.run_id === null, blocked.body);
       check(
+        "blocked generation command response includes ledger metadata",
+        blockedBody.created_by === "operator-a" &&
+          typeof blockedBody.created_at === "string" &&
+          Number.isFinite(Date.parse(blockedBody.created_at)),
+        blocked.body,
+      );
+      check(
         "blocked explains missing target/start_url",
         Array.isArray(blockedBody.blockers) &&
           blockedBody.blockers.includes("target_required_for_auto_run") &&
@@ -448,6 +455,11 @@ async function main(): Promise<void> {
       });
       check("viewer can read generation → 200", gotBlocked.statusCode === 200, gotBlocked.body);
       check("read generation preserves prompt hash", gotBlocked.json().prompt_hash === blockedBody.prompt_hash, gotBlocked.body);
+      check(
+        "read generation preserves command ledger metadata",
+        gotBlocked.json().created_by === blockedBody.created_by && gotBlocked.json().created_at === blockedBody.created_at,
+        gotBlocked.body,
+      );
       check("read generation redacts prompt instructions", !gotBlocked.body.includes("공지사항에서 최근 게시글 제목"), gotBlocked.body);
       await withTenantTx(pool, TENANT, async (client) => {
         const row = await client.query<{ generation_row: string; scenario_version_ir: string }>(
@@ -889,6 +901,25 @@ async function main(): Promise<void> {
           listedBlocked.json().items.every((item: unknown) => isRecord(item) && item.status === "blocked"),
         listedBlocked.body,
       );
+      check(
+        "list rows include generation ledger metadata",
+        Array.isArray(listedBlocked.json().items) &&
+          listedBlocked.json().items.every(
+            (item: unknown) =>
+              isRecord(item) &&
+              item.created_by === "operator-a" &&
+              typeof item.created_at === "string" &&
+              Number.isFinite(Date.parse(item.created_at)),
+          ),
+        listedBlocked.body,
+      );
+      const invalidStatus = await app.inject({
+        method: "GET",
+        url: "/v1/scenario-generations?status=running",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("invalid generation status filter -> 422", invalidStatus.statusCode === 422, invalidStatus.body);
+      check("invalid generation status reason", invalidStatus.body.includes("invalid_generation_status"), invalidStatus.body);
       const nextCursor = typeof listedBody.next_cursor === "string" ? listedBody.next_cursor : "";
       const listedNext = await app.inject({
         method: "GET",

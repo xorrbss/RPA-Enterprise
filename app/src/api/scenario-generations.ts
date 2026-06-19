@@ -412,12 +412,13 @@ async function persistGeneration(
   }
 
   const ledgerDraftIr = redactGenerationDraftIr(compiled.ir);
-  await client.query(
+  const inserted = await client.query<Pick<ScenarioGenerationRow, "created_by" | "created_at">>(
     `INSERT INTO scenario_generations
        (id, tenant_id, mode, status, prompt_hash, planner, model, draft_ir, validation_report,
         evidence_policy, blockers, scenario_id, scenario_version_id, run_id, created_by)
      VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb,
-             $10::jsonb, $11::jsonb, $12::uuid, $13::uuid, $14::uuid, $15)`,
+             $10::jsonb, $11::jsonb, $12::uuid, $13::uuid, $14::uuid, $15)
+     RETURNING created_by, created_at::text AS created_at`,
     [
       generationId,
       principal.tenantId,
@@ -436,6 +437,10 @@ async function persistGeneration(
       principal.subjectId,
     ],
   );
+  const created = inserted.rows[0];
+  if (created === undefined) {
+    throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", { reason: "scenario_generation_insert_missing_returning_row" });
+  }
   const generationArtifactRefs = await deps.scenarioGenerationArtifacts?.flushGenerationArtifacts(client, {
     tenantId: principal.tenantId,
     generationId,
@@ -468,6 +473,8 @@ async function persistGeneration(
       model: plan.request.model ?? null,
       evidence_policy: plan.request.evidence,
       blockers,
+      created_by: created.created_by,
+      created_at: created.created_at,
       validation_report: compiled.report,
       draft_ir: ledgerDraftIr,
     },
