@@ -183,8 +183,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   }, [prefillSiteId, prefillStartUrl, prefillBrowserIdentityId, prefillNetworkPolicyId, sites.data]);
 
   const mutation = useMutation({
-    mutationFn: async () => {
-      const body = buildRequest();
+    mutationFn: async (body: ScenarioGenerationRequest) => {
       return api.generateScenario(body, crypto.randomUUID());
     },
     onSuccess: (next) => {
@@ -237,7 +236,19 @@ export function PromptScenarioGenerator(): JSX.Element {
   function submit(): void {
     setLocalError(null);
     try {
-      mutation.mutate();
+      mutation.mutate(buildRequest());
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : "요청 실패");
+    }
+  }
+
+  function retryWithoutVideo(): void {
+    setLocalError(null);
+    try {
+      const body = buildRequest();
+      const nextEvidence = { ...(body.evidence ?? {}), video: "never" as const };
+      setVideo("never");
+      mutation.mutate({ ...body, evidence: nextEvidence });
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : "요청 실패");
     }
@@ -369,7 +380,7 @@ export function PromptScenarioGenerator(): JSX.Element {
             {localError}
           </div>
         )}
-        {result !== null && <GenerationResult result={result} />}
+        {result !== null && <GenerationResult result={result} retrying={mutation.isPending} onRetryWithoutVideo={retryWithoutVideo} />}
         <GenerationHistory
           items={history.data?.items ?? []}
           loading={history.isLoading}
@@ -383,7 +394,20 @@ export function PromptScenarioGenerator(): JSX.Element {
   );
 }
 
-function GenerationResult({ result }: { result: ScenarioGenerationResult }): JSX.Element {
+function GenerationResult({
+  result,
+  retrying,
+  onRetryWithoutVideo,
+}: {
+  result: ScenarioGenerationResult;
+  retrying: boolean;
+  onRetryWithoutVideo: () => void;
+}): JSX.Element {
+  const canRetryWithoutVideo =
+    result.status === "blocked" &&
+    result.blockers.includes("video_recording_port_not_configured") &&
+    result.evidence_policy?.video !== undefined &&
+    result.evidence_policy.video !== "never";
   return (
     <div className="generation-result" role="status">
       <div className="generation-result-head">
@@ -420,6 +444,14 @@ function GenerationResult({ result }: { result: ScenarioGenerationResult }): JSX
             <li key={blocker}>{BLOCKER_LABELS[blocker] ?? blocker}</li>
           ))}
         </ul>
+      )}
+      {canRetryWithoutVideo && (
+        <div className="generator-actions">
+          <button className="btn" type="button" onClick={onRetryWithoutVideo} disabled={retrying}>
+            <Play size={15} aria-hidden="true" />
+            동영상 없이 다시 실행
+          </button>
+        </div>
       )}
       <GenerationArtifactsPanel generationId={result.generation_id} />
       {result.run_id !== null && (

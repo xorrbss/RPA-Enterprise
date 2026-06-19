@@ -353,6 +353,55 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.getByText("서버에서 동영상 녹화가 비활성화되어 있습니다.")).toBeInTheDocument();
   });
 
+  test("동영상 capability 차단은 같은 요청을 동영상 없이 재실행할 수 있다", async () => {
+    const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    renderApp(
+      fakeClient({
+        generateScenario: async (body) => {
+          calls.push(body);
+          const video = body.evidence?.video ?? "never";
+          return {
+            generation_id: `00000000-0000-0000-0000-0000000000b${calls.length}`,
+            mode: body.mode ?? "save_and_run",
+            status: video === "never" ? "run_queued" : "blocked",
+            prompt_hash: "hash",
+            planner: body.planner ?? "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: video === "never" ? "00000000-0000-0000-0000-0000000000d1" : null,
+            evidence_policy: body.evidence,
+            blockers: video === "never" ? [] : ["video_recording_port_not_configured"],
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "오늘 주문을 확인해줘" } });
+    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://shop.example/orders" } });
+    fireEvent.change(screen.getByLabelText("사이트 ID"), { target: { value: "site-1" } });
+    fireEvent.change(screen.getByLabelText("브라우저 ID"), { target: { value: "browser-1" } });
+    fireEvent.change(screen.getByLabelText("네트워크 정책 ID"), { target: { value: "network-1" } });
+    fireEvent.change(screen.getByLabelText("동영상"), { target: { value: "always" } });
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "동영상 없이 다시 실행" })).toBeInTheDocument());
+    screen.getByRole("button", { name: "동영상 없이 다시 실행" }).click();
+
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0]?.evidence).toMatchObject({ screenshot: "each_step", video: "always" });
+    expect(calls[1]?.evidence).toMatchObject({ screenshot: "each_step", video: "never" });
+    expect(calls[1]?.target).toMatchObject({
+      site_profile_id: "site-1",
+      browser_identity_id: "browser-1",
+      network_policy_id: "network-1",
+    });
+    await waitFor(() => expect(location.hash).toBe("#runTrace?run=00000000-0000-0000-0000-0000000000d1&focus=artifacts"));
+  });
+
   test("scenario 편집은 저장된 studio_mode=easy로 쉬운 만들기 폼을 복원", async () => {
     renderApp(
       fakeClient({
