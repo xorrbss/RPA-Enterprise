@@ -96,6 +96,42 @@ function videoPolicyLabel(value: ScenarioGenerationEvidence["video"]): string {
   return "영상 없음";
 }
 
+function hasRequestedImageEvidence(policy: ScenarioGenerationEvidence): boolean {
+  return policy.screenshot !== "never";
+}
+
+function hasRequestedVideoEvidence(policy: ScenarioGenerationEvidence): boolean {
+  return policy.video !== "never";
+}
+
+function evidenceStorageStatusLabel(policy: ScenarioGenerationEvidence): string {
+  const image = hasRequestedImageEvidence(policy);
+  const video = hasRequestedVideoEvidence(policy);
+  if (image && video) return "이미지·동영상 저장 요청됨";
+  if (image) return "이미지 저장 요청됨";
+  if (video) return "동영상 저장 요청됨";
+  return "이미지·동영상 저장 안 함";
+}
+
+function evidenceReviewActionLabel(policy: ScenarioGenerationEvidence): string {
+  const image = hasRequestedImageEvidence(policy);
+  const video = hasRequestedVideoEvidence(policy);
+  if (image && video) return "이미지·동영상 결과 확인";
+  if (image) return "이미지 결과 확인";
+  if (video) return "동영상 결과 확인";
+  return "실행 결과 확인";
+}
+
+function EvidenceStorageChip({ policy }: { policy: ScenarioGenerationEvidence }): JSX.Element {
+  return (
+    <span className="evidence-chip" aria-label={`증거 저장 상태: ${evidenceStorageStatusLabel(policy)}`}>
+      {hasRequestedImageEvidence(policy) && <Image size={14} aria-hidden="true" />}
+      {hasRequestedVideoEvidence(policy) && <FileVideo size={14} aria-hidden="true" />}
+      {evidenceStorageStatusLabel(policy)}
+    </span>
+  );
+}
+
 function firstAllowedPolicy<T extends string>(policies: readonly T[], preferred: T, fallback: T): T {
   if (policies.includes(preferred)) return preferred;
   return policies[0] ?? fallback;
@@ -109,7 +145,7 @@ function blockerSummary(blockers: readonly string[]): string | null {
 }
 
 function historyActionLabel(item: ScenarioGenerationResult): string {
-  if (item.run_id !== null) return "결과·산출물 보기";
+  if (item.run_id !== null) return evidenceReviewActionLabel(item.evidence_policy);
   if (item.status === "blocked") return "진단·산출물 보기";
   if (item.status === "saved") return "저장본 확인";
   if (item.status === "drafted") return "초안 확인";
@@ -791,6 +827,7 @@ function GenerationResult({
   onRunWithCorrections: (generation: ScenarioGenerationResult) => void;
 }): JSX.Element {
   const canRunWithCorrections = canRunGenerationWithCorrections(result);
+  const resultActionLabel = evidenceReviewActionLabel(result.evidence_policy);
   return (
     <div className="generation-result" role="status">
       <div className="generation-result-head">
@@ -821,6 +858,13 @@ function GenerationResult({
           </span>
         </div>
       )}
+      {result.run_id !== null && (
+        <div className="inline-facts" aria-label="evidence handoff">
+          <span className="badge blue">실행 기록 연결</span>
+          <EvidenceStorageChip policy={result.evidence_policy} />
+          <span className="subtle">실행 기록 산출물에서 확인</span>
+        </div>
+      )}
       {result.blockers.length > 0 && (
         <ul className="blocker-list">
           {result.blockers.map((blocker) => (
@@ -845,7 +889,10 @@ function GenerationResult({
       )}
       {result.run_id !== null && (
         <button className="btn" type="button" onClick={() => navigate("runTrace", { run: result.run_id!, generation: result.generation_id, focus: "artifacts" })}>
-          실행 결과·산출물 보기
+          {hasRequestedImageEvidence(result.evidence_policy) && <Image size={15} aria-hidden="true" />}
+          {hasRequestedVideoEvidence(result.evidence_policy) && <FileVideo size={15} aria-hidden="true" />}
+          {!hasRequestedImageEvidence(result.evidence_policy) && !hasRequestedVideoEvidence(result.evidence_policy) && <Play size={15} aria-hidden="true" />}
+          {resultActionLabel}
         </button>
       )}
     </div>
@@ -950,10 +997,11 @@ function GenerationHistory({
                   </span>
                 )}
                 {item.status === "saved" && item.run_id === null && <span className="subtle">실행 연결 없음</span>}
+                {runId !== null && <EvidenceStorageChip policy={item.evidence_policy} />}
                 <span className="subtle">다음</span>
                 {runId !== null ? (
                   <button className="linklike" type="button" onClick={() => navigate("runTrace", { run: runId, generation: item.generation_id, focus: "artifacts" })}>
-                    {historyActionLabel(item)}
+                    {evidenceReviewActionLabel(item.evidence_policy)}
                   </button>
                 ) : (
                   <button className="linklike" type="button" onClick={() => onSelect(item)}>
@@ -993,6 +1041,8 @@ function historyMatchesSearch(item: ScenarioGenerationResult, search: string, sc
     item.model,
     item.planner,
     item.status,
+    evidenceStorageStatusLabel(item.evidence_policy),
+    evidenceReviewActionLabel(item.evidence_policy),
     item.prompt_hash,
     item.prompt_redacted_ref,
     item.created_by,

@@ -136,6 +136,7 @@ async function main(): Promise<void> {
     const r2 = await ex2.execute("n.2", { type: "extract", instruction: "x", output: { schemaRef: "approval_inbox_rows", schemaVersion: "1", strict: true }, rowAnchor: anchor }, ctx());
     const enriched = (r2.extracted as { rows: Array<{ doc_ref: string }> }).rows;
     check("deps.extractArtifactSink: rowAnchor 강화행 영속(sink put 1회·docId 999)", puts.length === 1 && puts[0]!.includes("999") && enriched[0]?.doc_ref === "https://x/view/999", `puts=${puts.length} ref=${enriched[0]?.doc_ref}`);
+    check("deps.extractArtifactSink: artifacts 에 gateway 원문 ref + 강화본 sink ref 보존", r2.artifacts.length === 2 && r2.artifacts[0] === "art://o" && r2.artifacts[1] === "art://inbox", JSON.stringify(r2.artifacts));
   }
 
   // 5) deps.secrets+executorPrincipal 주입 시 자격증명 fill 의 principal.tenantId 가 run 테넌트로 per-run override(P2 prod 배선).

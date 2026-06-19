@@ -1073,6 +1073,20 @@ async function main(): Promise<void> {
       });
       check("invalid generation status filter -> 422", invalidStatus.statusCode === 422, invalidStatus.body);
       check("invalid generation status reason", invalidStatus.body.includes("invalid_generation_status"), invalidStatus.body);
+      const invalidListLimit = await app.inject({
+        method: "GET",
+        url: "/v1/scenario-generations?limit=0",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("generation list rejects invalid limit -> 422", invalidListLimit.statusCode === 422, invalidListLimit.body);
+      check("generation list invalid limit reason", invalidListLimit.body.includes("invalid_limit"), invalidListLimit.body);
+      const invalidListCursor = await app.inject({
+        method: "GET",
+        url: "/v1/scenario-generations?cursor=not-a-cursor",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("generation list rejects invalid cursor -> 422", invalidListCursor.statusCode === 422, invalidListCursor.body);
+      check("generation list invalid cursor reason", invalidListCursor.body.includes("invalid_cursor"), invalidListCursor.body);
       const nextCursor = typeof listedBody.next_cursor === "string" ? listedBody.next_cursor : "";
       const listedNext = await app.inject({
         method: "GET",

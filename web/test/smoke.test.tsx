@@ -6,6 +6,7 @@ import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
 import { GenerationArtifactsPanel } from "../src/components/GenerationArtifactsPanel";
+import { PromptScenarioGenerator } from "../src/components/PromptScenarioGenerator";
 import { fakeClient } from "./fake-client";
 
 function renderApp(client: ApiClient = fakeClient()): void {
@@ -25,6 +26,17 @@ function renderGenerationArtifactsPanel(client: ApiClient): void {
     <QueryClientProvider client={qc}>
       <ApiClientProvider client={client}>
         <GenerationArtifactsPanel generationId="gen-page" />
+      </ApiClientProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function renderPromptScenarioGenerator(client: ApiClient): void {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <ApiClientProvider client={client}>
+        <PromptScenarioGenerator />
       </ApiClientProvider>
     </QueryClientProvider>,
   );
@@ -711,7 +723,7 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.getByText("서버에서 동영상 녹화가 비활성화되어 있습니다.")).toBeInTheDocument();
   });
 
-  test("최근 생성: run 연결 항목은 결과·산출물 보기로 RunTrace artifact focus 딥링크", async () => {
+  test("최근 생성: run 연결 항목은 증거 저장 상태와 RunTrace artifact focus 딥링크를 보여준다", async () => {
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -727,7 +739,7 @@ describe("D7 운영 콘솔 shell", () => {
               scenario_id: "00000000-0000-0000-0000-0000000000c1",
               scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
               run_id: "00000000-0000-0000-0000-000000000099",
-              evidence_policy: { screenshot: "each_step", video: "never" },
+              evidence_policy: { screenshot: "each_step", video: "always" },
               blockers: [],
               draft_ir: {},
               validation_report: {},
@@ -741,8 +753,49 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#scenarioStudio";
 
-    fireEvent.click(await screen.findByRole("button", { name: "결과·산출물 보기" }));
+    expect(await screen.findByText("이미지·동영상 저장 요청됨")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "이미지·동영상 결과 확인" }));
 
+    await waitFor(() =>
+      expect(location.hash).toBe(
+        "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000a1&focus=artifacts",
+      ),
+    );
+  });
+
+  test("생성 결과: run 연결 후 이미지·동영상 확인 CTA와 저장 요청 상태를 보여준다", async () => {
+    renderPromptScenarioGenerator(
+      fakeClient({
+        generateScenario: async (body) => ({
+          generation_id: "00000000-0000-0000-0000-0000000000a1",
+          mode: body.mode ?? "save_and_run",
+          status: "run_queued",
+          prompt_hash: "hash",
+          planner: body.planner ?? "deterministic_mvp",
+          model: body.model ?? null,
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+          run_id: "00000000-0000-0000-0000-000000000099",
+          evidence_policy: { screenshot: "each_step", video: "always" },
+          blockers: [],
+          draft_ir: {},
+          validation_report: {},
+          created_at: "2026-06-15T00:00:00.000Z",
+          created_by: "operator",
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 결과 증거를 확인해줘" } });
+    const submitButton = await screen.findByRole("button", { name: "저장 후 실행" });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    fireEvent.click(submitButton);
+
+    expect(await screen.findByText("실행 기록 연결")).toBeInTheDocument();
+    expect(screen.getByText("이미지·동영상 저장 요청됨")).toBeInTheDocument();
+    expect(screen.getByText("실행 기록 산출물에서 확인")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "이미지·동영상 결과 확인" })).toBeInTheDocument();
     await waitFor(() =>
       expect(location.hash).toBe(
         "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000a1&focus=artifacts",
@@ -1096,7 +1149,7 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#scenarioStudio";
 
     expect(await screen.findByText("실행 연결 없음")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "결과·산출물 보기" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "이미지 결과 확인" })).toBeNull();
     expect(screen.queryByLabelText("generation artifacts")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "저장본 확인" }));
 
