@@ -1212,16 +1212,16 @@ async function main(): Promise<void> {
           llmPlanned.body,
         );
         check(
-          "configured llm_v1 planner output is server-normalized with requested evidence",
+          "configured llm_v1 planner output is server-normalized with default evidence",
           isRecord(llmPlannedBody.draft_ir) &&
             isRecord(llmPlannedBody.draft_ir.meta) &&
             isRecord(llmPlannedBody.draft_ir.meta.evidence) &&
-            llmPlannedBody.draft_ir.meta.evidence.screenshot === "failure" &&
+            llmPlannedBody.draft_ir.meta.evidence.screenshot === "each_step" &&
             llmPlannedBody.draft_ir.meta.evidence.video === "never" &&
             isRecord(llmPlannedBody.draft_ir.nodes) &&
             isRecord(llmPlannedBody.draft_ir.nodes.extract_results) &&
             isRecord(llmPlannedBody.draft_ir.nodes.extract_results.policy) &&
-            llmPlannedBody.draft_ir.nodes.extract_results.policy.recording === "masked_on_failure",
+            llmPlannedBody.draft_ir.nodes.extract_results.policy.recording === "always",
           llmPlanned.body,
         );
         check("configured llm_v1 planner does not enqueue run in save mode", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
@@ -1904,14 +1904,15 @@ async function main(): Promise<void> {
           url: "/v1/scenario-generations",
           headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-video-runnable-1" },
           payload: {
-            ...runnablePayload,
+            prompt: runnablePayload.prompt,
             name: "generated-video-runnable",
+            model: runnablePayload.model,
+            start_url: runnablePayload.start_url,
             target: {
               site_profile_id: SITE,
               browser_identity_id: VIDEO_IDENTITY,
               network_policy_id: NETWORK,
             },
-            evidence: { screenshot: "each_step", video: "always" },
           },
         });
         check("video evidence request queues when recorder capability is enabled ??201", videoRunnable.statusCode === 201, videoRunnable.body);
@@ -1925,10 +1926,11 @@ async function main(): Promise<void> {
           videoRunnable.body,
         );
         check(
-          "video capability draft IR preserves evidence policy",
+          "video capability draft IR applies default evidence policy",
           isRecord(videoRunnableBody.draft_ir) &&
             isRecord(videoRunnableBody.draft_ir.meta) &&
             isRecord(videoRunnableBody.draft_ir.meta.evidence) &&
+            videoRunnableBody.draft_ir.meta.evidence.screenshot === "each_step" &&
             videoRunnableBody.draft_ir.meta.evidence.video === "always",
           videoRunnable.body,
         );

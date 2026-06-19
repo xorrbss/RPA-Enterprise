@@ -113,6 +113,17 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
 
 const REDACTED_SCENARIO_GENERATION_PARAM = "[REDACTED:scenario_generation_param]";
 
+function scenarioGenerationCapabilities(deps: ApiServerDeps): GenerationCapabilities {
+  return deps.scenarioGenerationCapabilities ?? { videoRecording: false };
+}
+
+function defaultEvidencePolicy(capabilities: GenerationCapabilities): EvidencePolicy {
+  return {
+    screenshot: "each_step",
+    video: capabilities.videoRecording ? "always" : "never",
+  };
+}
+
 export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get(
     "/v1/scenario-generations/capabilities",
@@ -228,7 +239,8 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
 
 async function generateScenario(deps: ApiServerDeps, request: FastifyRequest): Promise<CommandResponse> {
   const principal = requirePrincipal(request);
-  const parsed = parseGenerationRequest(request.body);
+  const capabilities = scenarioGenerationCapabilities(deps);
+  const parsed = parseGenerationRequest(request.body, defaultEvidencePolicy(capabilities));
   if (parsed.mode === "save_and_run") {
     const decision = await deps.rbac.authorize(principal, { action: "run.create", tenantId: principal.tenantId });
     if (decision.kind === "deny") {
@@ -528,7 +540,7 @@ async function planAndCompileScenario(
   context: ScenarioPlannerContext,
 ): Promise<PlannedCompileResult> {
   const planner = scenarioPlannerFor(deps, request.planner);
-  const capabilities = deps.scenarioGenerationCapabilities ?? { videoRecording: false };
+  const capabilities = scenarioGenerationCapabilities(deps);
   let plan = await planner.plan(request, capabilities, context);
   assertPlannerResult(planner, request, plan);
   plan = finalizePlannerEvidence(plan, request, capabilities);
@@ -888,7 +900,7 @@ function isInferenceMiss(code: SiteResolutionCode): boolean {
   return code === "SITE_PROFILE_UNRESOLVED" || code === "SITE_PROFILE_AMBIGUOUS";
 }
 
-function parseGenerationRequest(body: unknown): GenerationRequest {
+function parseGenerationRequest(body: unknown, defaultEvidence: EvidencePolicy): GenerationRequest {
   if (!isRecord(body)) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "request_body_object_required" });
   }
@@ -945,7 +957,7 @@ function parseGenerationRequest(body: unknown): GenerationRequest {
     target: parseTarget(body.target),
     params: params as Record<string, unknown>,
     ...(model !== undefined ? { model } : {}),
-    evidence: parseEvidencePolicy(body.evidence),
+    evidence: parseEvidencePolicy(body.evidence, defaultEvidence),
   };
 }
 
@@ -1136,9 +1148,9 @@ function parseTarget(value: unknown): GenerationRequest["target"] {
   return { site_profile_id: site, browser_identity_id: identity, network_policy_id: network };
 }
 
-function parseEvidencePolicy(value: unknown): EvidencePolicy {
+function parseEvidencePolicy(value: unknown, defaultEvidence: EvidencePolicy = { screenshot: "failure", video: "never" }): EvidencePolicy {
   if (value === undefined || value === null) {
-    return { screenshot: "failure", video: "never" };
+    return defaultEvidence;
   }
   if (!isRecord(value)) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "evidence_object_required" });
@@ -1148,8 +1160,8 @@ function parseEvidencePolicy(value: unknown): EvidencePolicy {
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unknown_evidence_field", field: key });
     }
   }
-  const screenshot = value.screenshot ?? "failure";
-  const video = value.video ?? "never";
+  const screenshot = value.screenshot ?? defaultEvidence.screenshot;
+  const video = value.video ?? defaultEvidence.video;
   if (screenshot !== "never" && screenshot !== "failure" && screenshot !== "each_step") {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_evidence_screenshot" });
   }
