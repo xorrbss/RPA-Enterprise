@@ -47,6 +47,7 @@ import type {
   RuntimeJobResult,
   RuntimeWorker,
   RuntimeWorkerJob,
+  ScenarioGenerationId,
   VisualEvidenceVideoRecorder,
   SessionRestoreInput,
   SessionRestoreResult,
@@ -201,6 +202,7 @@ type ArtifactLifecycleRow = {
   id: string;
   tenant_id: string;
   run_id: string | null;
+  generation_id: string | null;
   step_id: string | null;
   attempt: number | null;
   type: string;
@@ -228,6 +230,10 @@ type ArtifactLifecycleClaimResult =
   | { readonly kind: "claimed"; readonly claim: ArtifactLifecycleClaim }
   | { readonly kind: "deferred"; readonly retryAfterMs: number }
   | { readonly kind: "empty" };
+type ArtifactLifecycleJobScope = {
+  readonly runId: RunId | undefined;
+  readonly generationId: ScenarioGenerationId | undefined;
+};
 type LifecycleAuditAppendInput = {
   readonly tenantId: string;
   readonly correlationId: string;
@@ -1018,12 +1024,14 @@ export class PgRuntimeWorker implements RuntimeWorker {
     if (!Number.isInteger(maxAttempts) || maxAttempts <= 0) {
       throw new Error("RuntimeWorker: artifact_redaction maxAttempts must be a positive integer");
     }
+    const scope = artifactLifecycleJobScope(job, "artifact_redaction");
 
     const claim = await withTenantTx(this.pool, tenantId, async (client) => {
       await assertLifecycleBypassUse(client, "artifact_redaction_job", "artifact_lifecycle.redaction.claim");
       return this.claimRedactionArtifact(client, {
         tenantId,
-        runId: job.runId,
+        runId: scope.runId,
+        generationId: scope.generationId,
         workerId,
         correlationId,
         claimTtlMs: this.lifecycleClaimTtlMs(),
@@ -1076,6 +1084,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
     if (retentionStore === undefined) {
       throw new Error("RuntimeWorker: artifact_retention requires an explicit ArtifactRetentionStore");
     }
+    const scope = artifactLifecycleJobScope(job, "artifact_retention");
     const portBinding = requireArtifactObjectIoPortBinding(
       retentionStore.binding,
       "artifact_retention",
@@ -1086,6 +1095,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
       await assertLifecycleBypassUse(client, "artifact_retention_sweeper", "artifact_lifecycle.retention.claim");
       return this.claimRetentionArtifact(client, {
         tenantId,
+        runId: scope.runId,
+        generationId: scope.generationId,
         workerId,
         correlationId,
         claimTtlMs: this.lifecycleClaimTtlMs(),
@@ -1451,6 +1462,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
     input: {
       tenantId: string;
       runId: RunId | undefined;
+      generationId: ScenarioGenerationId | undefined;
       workerId: string;
       correlationId: string;
       claimTtlMs: number;
@@ -1466,13 +1478,17 @@ export class PgRuntimeWorker implements RuntimeWorker {
           AND redaction_attempts < $3::int
           AND deleted_at IS NULL
           AND quarantine = false
-          AND ($2::uuid IS NULL OR run_id = $2::uuid)
+          AND (
+            ($2::uuid IS NULL AND $4::uuid IS NULL)
+            OR ($2::uuid IS NOT NULL AND run_id = $2::uuid)
+            OR ($4::uuid IS NOT NULL AND generation_id = $4::uuid)
+          )
           AND lifecycle_claim_id IS NOT NULL
           AND lifecycle_claim_expires_at > now()
         ORDER BY lifecycle_claim_expires_at ASC
         LIMIT 1
         FOR UPDATE`,
-      [input.tenantId, input.runId ?? null, input.maxAttempts],
+      [input.tenantId, input.runId ?? null, input.maxAttempts, input.generationId ?? null],
     );
     const activeRow = active.rows[0];
     if (activeRow !== undefined) {
@@ -1480,7 +1496,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
     }
 
     const artifact = await client.query<ArtifactLifecycleRow>(
-      `SELECT id::text, tenant_id::text, run_id::text, step_id, attempt, type,
+      `SELECT id::text, tenant_id::text, run_id::text, generation_id::text, step_id, attempt, type,
               redaction_status, redaction_attempts, sha256, object_ref,
               retention_until::text, legal_hold, quarantine, deleted_at::text,
               deleted_reason, deleted_by_job
@@ -1490,12 +1506,16 @@ export class PgRuntimeWorker implements RuntimeWorker {
           AND redaction_attempts < $3::int
           AND deleted_at IS NULL
           AND quarantine = false
-          AND ($2::uuid IS NULL OR run_id = $2::uuid)
+          AND (
+            ($2::uuid IS NULL AND $4::uuid IS NULL)
+            OR ($2::uuid IS NOT NULL AND run_id = $2::uuid)
+            OR ($4::uuid IS NOT NULL AND generation_id = $4::uuid)
+          )
           AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= now())
         ORDER BY created_at ASC, id ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED`,
-      [input.tenantId, input.runId ?? null, input.maxAttempts],
+      [input.tenantId, input.runId ?? null, input.maxAttempts, input.generationId ?? null],
     );
     const row = artifact.rows[0];
     if (row === undefined) {
@@ -1554,6 +1574,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
     client: pg.PoolClient,
     input: {
       tenantId: string;
+      runId: RunId | undefined;
+      generationId: ScenarioGenerationId | undefined;
       workerId: string;
       correlationId: string;
       claimTtlMs: number;
@@ -1569,12 +1591,17 @@ export class PgRuntimeWorker implements RuntimeWorker {
           AND quarantine = false
           AND retention_until IS NOT NULL
           AND retention_until <= now()
+          AND (
+            ($2::uuid IS NULL AND $3::uuid IS NULL)
+            OR ($2::uuid IS NOT NULL AND run_id = $2::uuid)
+            OR ($3::uuid IS NOT NULL AND generation_id = $3::uuid)
+          )
           AND lifecycle_claim_id IS NOT NULL
           AND lifecycle_claim_expires_at > now()
         ORDER BY lifecycle_claim_expires_at ASC
         LIMIT 1
         FOR UPDATE`,
-      [input.tenantId],
+      [input.tenantId, input.runId ?? null, input.generationId ?? null],
     );
     const activeRow = active.rows[0];
     if (activeRow !== undefined) {
@@ -1582,7 +1609,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
     }
 
     const artifact = await client.query<ArtifactLifecycleRow>(
-      `SELECT id::text, tenant_id::text, run_id::text, step_id, attempt, type,
+      `SELECT id::text, tenant_id::text, run_id::text, generation_id::text, step_id, attempt, type,
               redaction_status, redaction_attempts, sha256, object_ref,
               retention_until::text, legal_hold, quarantine, deleted_at::text,
               deleted_reason, deleted_by_job
@@ -1593,11 +1620,16 @@ export class PgRuntimeWorker implements RuntimeWorker {
           AND quarantine = false
           AND retention_until IS NOT NULL
           AND retention_until <= now()
+          AND (
+            ($2::uuid IS NULL AND $3::uuid IS NULL)
+            OR ($2::uuid IS NOT NULL AND run_id = $2::uuid)
+            OR ($3::uuid IS NOT NULL AND generation_id = $3::uuid)
+          )
           AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= now())
         ORDER BY retention_until ASC, created_at ASC, id ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED`,
-      [input.tenantId],
+      [input.tenantId, input.runId ?? null, input.generationId ?? null],
     );
     const row = artifact.rows[0];
     if (row === undefined) {
@@ -1971,12 +2003,28 @@ function unknownToReason(value: unknown): string {
   return "session restore failed";
 }
 
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  throw new Error(`RuntimeWorker: ${label} must be a non-empty string when provided`);
+}
+
+function artifactLifecycleJobScope(job: RuntimeWorkerJob, kind: ArtifactLifecycleClaimKind): ArtifactLifecycleJobScope {
+  const runId = optionalString(job.runId, `${kind}.runId`) as RunId | undefined;
+  const generationId = optionalString(job.generationId, `${kind}.generationId`) as ScenarioGenerationId | undefined;
+  if (runId !== undefined && generationId !== undefined) {
+    throw new Error(`RuntimeWorker: ${kind} job cannot set both runId and generationId`);
+  }
+  return { runId, generationId };
+}
+
 function artifactTargetFromRow(row: ArtifactLifecycleRow): ArtifactLifecycleTarget {
   return {
     tenantId: row.tenant_id as TenantId,
     artifactRef: row.id as ArtifactRef,
     objectRef: row.object_ref as ObjectRef,
     ...(row.run_id === null ? {} : { runId: row.run_id as RunId }),
+    ...(row.generation_id === null ? {} : { generationId: row.generation_id as ScenarioGenerationId }),
     ...(row.step_id === null ? {} : { stepId: row.step_id as StepId }),
     ...(row.attempt === null ? {} : { attempt: row.attempt }),
     type: row.type,

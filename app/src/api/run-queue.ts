@@ -29,6 +29,8 @@ export interface SinkDeliverEnqueueInput {
 
 export interface ArtifactRedactionEnqueueInput {
   tenantId: string;
+  runId?: string;
+  generationId?: string;
   correlationId: string;
 }
 
@@ -40,7 +42,7 @@ export interface RunEnqueuer {
   /** sink-DLQ replay: 새 sink_deliver attempt를 호출측 트랜잭션으로 인큐(D8-A3 — 상태전이 아님,
    *  worker가 attempt_no=MAX+1·동일 멱등키 산출). 실 재전달은 worker의 SinkDeliveryPort(egress) 의존. */
   enqueueSinkDeliver(client: PoolClient, input: SinkDeliverEnqueueInput): Promise<void>;
-  /** Run-less generation artifacts need a tenant-scoped redaction pass before they become readable. */
+  /** Artifacts need a scoped redaction pass before they become readable. */
   enqueueArtifactRedaction?(client: PoolClient, input: ArtifactRedactionEnqueueInput): Promise<void>;
   /** human_task resolve(R13: suspended→resume_requested) 직후 run_resume 잡을 같은 트랜잭션으로 인큐(원자).
    *  optional: 미지원 enqueuer 가 resolve(R13)에 도달하면 호출측이 loud throw(조용한 stuck 금지). */
@@ -87,9 +89,14 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
   }
 
   async enqueueArtifactRedaction(client: PoolClient, input: ArtifactRedactionEnqueueInput): Promise<void> {
+    if (input.runId !== undefined && input.generationId !== undefined) {
+      throw new Error("artifact_redaction enqueue cannot set both runId and generationId");
+    }
     const job: RuntimeWorkerJob = {
       kind: "artifact_redaction",
       tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
+      ...(input.runId === undefined ? {} : { runId: input.runId as RuntimeWorkerJob["runId"] }),
+      ...(input.generationId === undefined ? {} : { generationId: input.generationId as RuntimeWorkerJob["generationId"] }),
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     };
     await this.enqueueRuntimeJob(client, job);

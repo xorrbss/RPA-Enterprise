@@ -45,6 +45,20 @@ const TARGET_CORRECTION_BLOCKERS = new Set([
 type ScreenshotPolicy = "never" | "failure" | "each_step";
 type VideoPolicy = "never" | "failure" | "always";
 
+interface DraftIrSummary {
+  readonly name: string;
+  readonly start: string;
+  readonly nodeCount: string;
+  readonly actionKinds: string;
+}
+
+interface ValidationIssueGroup {
+  readonly title: string;
+  readonly tone: "red" | "amber";
+  readonly issues: readonly unknown[];
+  readonly invalidShape: boolean;
+}
+
 function plannerLabel(value: ScenarioGenerationPlanner): string {
   return value === "llm_v1" ? "LLM Planner" : "MVP Planner";
 }
@@ -117,6 +131,96 @@ function hasTargetCorrectionBlocker(blockers: readonly string[]): boolean {
   return blockers.some(
     (blocker) => TARGET_CORRECTION_BLOCKERS.has(blocker) || blocker.startsWith("target_") || blocker.startsWith("start_url_"),
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function summarizeDraftIr(value: unknown): DraftIrSummary | null {
+  if (value === null || value === undefined) return null;
+  const ir = isRecord(value) ? value : {};
+  const meta = isRecord(ir.meta) ? ir.meta : {};
+  const nodes = isRecord(ir.nodes) ? ir.nodes : null;
+  const actionKinds = new Set<string>();
+
+  if (nodes !== null) {
+    for (const node of Object.values(nodes)) {
+      if (!isRecord(node) || !Array.isArray(node.what)) continue;
+      for (const action of node.what) {
+        if (!isRecord(action)) continue;
+        const kind = readableString(action.action);
+        if (kind !== null) actionKinds.add(kind);
+      }
+    }
+  }
+
+  return {
+    name: readableString(meta.name) ?? "확인 불가",
+    start: readableString(ir.start) ?? "확인 불가",
+    nodeCount: nodes !== null ? `${Object.keys(nodes).length}개` : "확인 불가",
+    actionKinds: nodes === null ? "확인 불가" : actionKinds.size > 0 ? Array.from(actionKinds).join(", ") : "확인된 action 없음",
+  };
+}
+
+function validationIssueGroups(value: unknown): readonly ValidationIssueGroup[] {
+  if (!isRecord(value)) return [];
+  return [
+    issueGroup("오류", "red", value.errors),
+    issueGroup("경고", "amber", value.warnings),
+  ].filter((group) => group.invalidShape || group.issues.length > 0);
+}
+
+function issueGroup(title: string, tone: "red" | "amber", value: unknown): ValidationIssueGroup {
+  if (value === undefined || value === null) return { title, tone, issues: [], invalidShape: false };
+  if (Array.isArray(value)) return { title, tone, issues: value, invalidShape: false };
+  return { title, tone, issues: [], invalidShape: true };
+}
+
+function stringifyUnknown(value: unknown): string {
+  try {
+    const text = JSON.stringify(value);
+    return text ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function firstReadableField(record: Record<string, unknown>, fields: readonly string[]): string | null {
+  for (const field of fields) {
+    const value = readableString(record[field]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function issueKey(issue: unknown, index: number): string {
+  if (!isRecord(issue)) return `${index}:${String(issue)}`;
+  return [
+    index,
+    firstReadableField(issue, ["rule", "code", "reason"]) ?? "issue",
+    firstReadableField(issue, ["node_id", "nodeId"]) ?? index,
+    firstReadableField(issue, ["message", "detail"]) ?? index,
+  ].join(":");
+}
+
+function issueBadge(issue: unknown): string {
+  if (!isRecord(issue)) return "issue";
+  return firstReadableField(issue, ["rule", "code", "reason"]) ?? "issue";
+}
+
+function issueMessage(issue: unknown): string {
+  if (typeof issue === "string") return issue;
+  if (isRecord(issue)) return firstReadableField(issue, ["message", "detail"]) ?? stringifyUnknown(issue);
+  return stringifyUnknown(issue);
+}
+
+function issueNode(issue: unknown): string | null {
+  return isRecord(issue) ? firstReadableField(issue, ["node_id", "nodeId"]) : null;
 }
 
 export function PromptScenarioGenerator(): JSX.Element {
@@ -447,6 +551,8 @@ function GenerationResult({
   const qc = useQueryClient();
   const runStartInFlight = useRef(false);
   const [startRunError, setStartRunError] = useState<string | null>(null);
+  const draftSummary = summarizeDraftIr(result.draft_ir);
+  const validationGroups = validationIssueGroups(result.validation_report);
   const canRetryWithoutVideo =
     result.status === "blocked" &&
     result.blockers.includes("video_recording_port_not_configured") &&
@@ -511,6 +617,8 @@ function GenerationResult({
           </span>
         </div>
       )}
+      {draftSummary !== null && <DraftIrSummaryPanel summary={draftSummary} />}
+      {validationGroups.length > 0 && <ValidationReportSummary groups={validationGroups} />}
       {result.blockers.length > 0 && (
         <ul className="blocker-list">
           {result.blockers.map((blocker) => (
@@ -553,6 +661,56 @@ function GenerationResult({
           실행 결과·산출물 보기
         </button>
       )}
+    </div>
+  );
+}
+
+function DraftIrSummaryPanel({ summary }: { summary: DraftIrSummary }): JSX.Element {
+  return (
+    <div className="generation-summary" aria-label="draft IR summary">
+      <strong>Draft IR 요약</strong>
+      <div className="generation-summary-grid">
+        <span className="subtle">이름</span>
+        <span>{summary.name}</span>
+        <span className="subtle">start</span>
+        <code>{summary.start}</code>
+        <span className="subtle">노드</span>
+        <span>{summary.nodeCount}</span>
+        <span className="subtle">action</span>
+        <span>{summary.actionKinds}</span>
+      </div>
+    </div>
+  );
+}
+
+function ValidationReportSummary({ groups }: { groups: readonly ValidationIssueGroup[] }): JSX.Element {
+  return (
+    <div className="generation-summary" aria-label="validation report summary">
+      <strong>Validation report</strong>
+      {groups.map((group) => (
+        <div className="validation-issue-group" key={group.title}>
+          <span className={`badge ${group.tone}`}>
+            {group.title}
+            {!group.invalidShape ? ` ${group.issues.length}` : ""}
+          </span>
+          {group.invalidShape ? (
+            <p className="subtle">{group.title} 항목 형식을 확인할 수 없습니다.</p>
+          ) : (
+            <ul className="validation-issue-list">
+              {group.issues.map((issue, index) => {
+                const node = issueNode(issue);
+                return (
+                  <li key={issueKey(issue, index)}>
+                    <span className={`badge ${group.tone}`}>{issueBadge(issue)}</span>
+                    <span>{issueMessage(issue)}</span>
+                    {node !== null && <code>@{node}</code>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

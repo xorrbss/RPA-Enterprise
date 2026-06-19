@@ -438,6 +438,7 @@ async function persistGeneration(
     }
     await deps.enqueuer.enqueueArtifactRedaction(client, {
       tenantId: principal.tenantId,
+      generationId,
       correlationId,
     });
   }

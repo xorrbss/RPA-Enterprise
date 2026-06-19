@@ -15,7 +15,7 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { LlmGatewayScenarioPlannerClient, createLlmScenarioPlanner } from "../src/api/llm-scenario-planner";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueueInput, RunEnqueuer, SinkDeliverEnqueueInput } from "../src/api/run-queue";
+import type { ArtifactRedactionEnqueueInput, RunEnqueueInput, RunEnqueuer, SinkDeliverEnqueueInput } from "../src/api/run-queue";
 import { BufferedScenarioGenerationArtifactSink } from "../src/api/scenario-generation-artifacts";
 import { PgScenarioGenerationLlmCallIdempotencyStore } from "../src/api/scenario-generation-llm-call-idempotency-store";
 import type { ScenarioPlanner } from "../src/api/scenario-generation-types";
@@ -394,7 +394,7 @@ async function main(): Promise<void> {
     console.log("seeded target rows");
 
     const enqueuedRuns: RunEnqueueInput[] = [];
-    const enqueuedArtifactRedactions: Array<{ tenantId: string; correlationId: string }> = [];
+    const enqueuedArtifactRedactions: ArtifactRedactionEnqueueInput[] = [];
     const enqueuer: RunEnqueuer = {
       async enqueueRunClaim(_client, input) {
         enqueuedRuns.push(input);
@@ -1233,9 +1233,11 @@ async function main(): Promise<void> {
             JSON.stringify(artifacts.rows[0]),
           );
           check(
-            "gateway-backed llm_v1 planner enqueues tenant-scoped artifact redaction",
+            "gateway-backed llm_v1 planner enqueues generation-scoped artifact redaction",
             enqueuedArtifactRedactions.length === 1 &&
               enqueuedArtifactRedactions[0]?.tenantId === TENANT &&
+              enqueuedArtifactRedactions[0]?.generationId === gatewayPlannedBody.generation_id &&
+              enqueuedArtifactRedactions[0]?.runId === undefined &&
               enqueuedArtifactRedactions[0]?.correlationId.length === 36,
             JSON.stringify(enqueuedArtifactRedactions),
           );

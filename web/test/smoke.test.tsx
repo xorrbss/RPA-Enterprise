@@ -322,6 +322,91 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(location.hash).toBe("#runTrace?run=00000000-0000-0000-0000-000000000099&focus=artifacts"));
   });
 
+  test("자연어 생성 결과는 draft_ir 요약과 validation_report 경고·오류를 표시", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => ({
+          generation_id: "00000000-0000-0000-0000-0000000000b1",
+          mode: body.mode ?? "save_and_run",
+          status: "saved",
+          prompt_hash: "hash",
+          planner: body.planner ?? "deterministic_mvp",
+          model: body.model ?? null,
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+          run_id: null,
+          evidence_policy: body.evidence,
+          blockers: [],
+          draft_ir: {
+            meta: { name: "주문 확인", version: 1 },
+            start: "open",
+            nodes: {
+              open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "collect" },
+              collect: { what: [{ action: "extract", instruction: "주문 행을 추출" }], next: "done" },
+              done: { terminal: "success" },
+            },
+          },
+          validation_report: {
+            errors: [{ rule: "V3", message: "no branch matched", node_id: "collect" }],
+            warnings: [{ rule: "V5", detail: "node 'unused' is not reachable from start", nodeId: "unused" }],
+          },
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 확인해줘" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장 후 실행" }));
+
+    const draftSummary = await screen.findByLabelText("draft IR summary");
+    expect(within(draftSummary).getByText("주문 확인")).toBeInTheDocument();
+    expect(within(draftSummary).getByText("open")).toBeInTheDocument();
+    expect(within(draftSummary).getByText("3개")).toBeInTheDocument();
+    expect(within(draftSummary).getByText("navigate, extract")).toBeInTheDocument();
+
+    const validationSummary = screen.getByLabelText("validation report summary");
+    expect(within(validationSummary).getByText(/^오류\s+1$/)).toBeInTheDocument();
+    expect(within(validationSummary).getByText(/^경고\s+1$/)).toBeInTheDocument();
+    expect(within(validationSummary).getByText("no branch matched")).toBeInTheDocument();
+    expect(within(validationSummary).getByText("node 'unused' is not reachable from start")).toBeInTheDocument();
+    expect(within(validationSummary).getByText("@collect")).toBeInTheDocument();
+    expect(within(validationSummary).getByText("@unused")).toBeInTheDocument();
+  });
+
+  test("자연어 생성 결과 요약은 알 수 없는 draft/report shape를 단정하지 않는다", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => ({
+          generation_id: "00000000-0000-0000-0000-0000000000b2",
+          mode: body.mode ?? "save_and_run",
+          status: "saved",
+          prompt_hash: "hash",
+          planner: body.planner ?? "deterministic_mvp",
+          model: body.model ?? null,
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+          run_id: null,
+          evidence_policy: body.evidence,
+          blockers: [],
+          draft_ir: { meta: {}, start: 7, nodes: "redacted" },
+          validation_report: { errors: "redacted", warnings: [] },
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 확인해줘" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장 후 실행" }));
+
+    const draftSummary = await screen.findByLabelText("draft IR summary");
+    expect(within(draftSummary).getAllByText("확인 불가").length).toBeGreaterThanOrEqual(3);
+    const validationSummary = screen.getByLabelText("validation report summary");
+    expect(within(validationSummary).getByText("오류 항목 형식을 확인할 수 없습니다.")).toBeInTheDocument();
+    expect(within(validationSummary).queryByText(/^오류\s+0$/)).toBeNull();
+  });
+
   test("자연어 자동화 생성 차단 → blocker를 한국어로 표면화", async () => {
     renderApp(
       fakeClient({
