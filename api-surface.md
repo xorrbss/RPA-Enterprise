@@ -130,13 +130,14 @@
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
 | GET | `/v1/human-tasks` | 쿼리: `?status=<HumanTaskState>&kind=<HumanTaskKind>&assignee=&run_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` (인박스 목록; `run_id`는 suspended run→정확한 task 딥링크용) | — |
-| GET | `/v1/human-tasks/{human_task_id}` | — | 200 + 태스크 상세(`state`, `kind`, `assignee`, `timeout`, `on_timeout`, payload, run 연계) | `RESOURCE_NOT_FOUND`(404) |
+| GET | `/v1/human-tasks/{human_task_id}` | — | 200 + 태스크 상세(`state`, `kind`, `assignee`, `timeout`, `on_timeout`, run 연계; payload 본문 미노출) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/human-tasks/{human_task_id}/start` | `Idempotency-Key`. 배정된 담당자/역할 스코프 필요 | 200 + `in_progress`(H2) | `HUMAN_TASK_EXPIRED`(410), `AUTHZ_FORBIDDEN`(403) |
 | POST | `/v1/human-tasks/{human_task_id}/resolve` | `Idempotency-Key`. body: optional `result`(object) — v1 미소비(아래 note) | 200 + `resolved`. `human_task.resolved` 이벤트 → Run `resume_requested`(R13/H3) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
 | POST | `/v1/human-tasks/{human_task_id}/assign` | `Idempotency-Key`. body: `assignee` | 200 + `assigned`(H1/H6) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
 | POST | `/v1/human-tasks/{human_task_id}/escalate` | `Idempotency-Key`. body: optional `reason` | 200 + `escalated`(H5)는 명시 routing/assignment owner가 `reassignAssignee`를 처리할 때만 가능. 현재 Fastify 경로는 미정의 routing이면 fail-closed. | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410), `CONTROL_PLANE_INTERNAL_ERROR`(500, unsupported `reassignAssignee`) |
 
 - 상태값은 `HumanTaskState`(`open`/`assigned`/`in_progress`/`resolved`/`expired`/`cancelled`/`escalated`)·`HumanTaskKind`(`approval`/`validation`/`exception`/`captcha`/`mfa`)와 정확히 일치(state-machine-types.ts).
+- HumanTask 응답은 v1에서 kind별 `payload` 본문을 노출하지 않는다. 현재 영속 모델은 inline payload가 아니라 payload_ref 계열 확장 여지만 두므로, API가 본문을 조합하거나 추측해 반환하지 않는다.
 - 만료/종결 태스크에 resolve/assign/escalate 시도 → `HUMAN_TASK_EXPIRED`(410, business). timeout 정책 분기(fail→expired H4a / escalate→escalated H4b)는 태스크 생성 시 `on_timeout`(reserved-handlers @human_task 입력, 기본 `fail`)로 일원화되며 API가 재판정하지 않는다.
 - **resolve `result` payload는 v1에서 미정의·미소비다(이전 "kind별 payload" 문구를 실제 v1 모델로 정정).** `reserved-handlers.md` @human_task는 resolve를 `{status:"resolved", next}` **순수 continue 신호**로 모델링한다 — 운영자 판정(승인/반려·통과/실패)을 담을 자리가 reserved-handler 결과·resume token·IREL `node.<id>.*`(타입 고정) 어디에도 없다. 백엔드 `requireResolveBody`는 optional `result`(object)를 **수용하되 전이/이벤트만 확정하고 result는 검증·영속·소비하지 않는다**(forward seam). 따라서 콘솔의 resolve는 판정-데이터 입력이 아니라 "승인하고 계속(continue)" 신호다. kind별 result 스키마 정의 + run 재개 컨텍스트(IREL `node.<handler>.result` 신규 스코프)로의 분기는 **versioned 스키마 변경이 필요한 v2 scope-out**이다(reserved-handlers 결과 모델·resume token·state-machine·DB·런타임 일괄 — verify.schema/reserved-handlers 기반 result 저장 결정 선행).
 - 재에스컬레이션 후에도 미해소 → H8(escalated→timeout→expired, 무한 대기 방지). escalate API는 H5(수동) 진입만 담당하고 timeout 기반 H4b/H8은 타이머 주도(API 비주도).
@@ -149,12 +150,13 @@
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| GET | `/v1/workitems` | 쿼리: `?status=<WorkitemState>&target_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` | — |
+| GET | `/v1/workitems` | 쿼리: `?status=<WorkitemState>&limit=&cursor=`. `target_id` 필터는 v1 미지원(제공 시 422) | 200 + `{ items, next_cursor }` | `IR_SCHEMA_INVALID`(422, `target_id_filter_unsupported`) |
 | GET | `/v1/workitems/{workitem_id}` | — | 200 + 상세(`status` ∈ WorkitemState, `attempts`, `unique_reference`, `checked_out_by/at`, 연계 run) | `RESOURCE_NOT_FOUND`(404) |
 | GET | `/v1/dlq` | 쿼리: `?kind=workitem|sink&limit=&cursor=` | 200 + `{ items, next_cursor }`. 항목은 `DEAD_LETTER` 상태 통지(ApiError 아님) | — |
 | POST | `/v1/dlq/{dead_letter_id}/replay` | 쿼리: `?kind=workitem\|sink`(기본 workitem). `Idempotency-Key`. 운영자 재처리 권한 필요 | `kind=workitem`: 202 + workitem `new`로 복원(W10: attempts 리셋, DLQ에서 복원), `workitem.dead_lettered` 역방향 복원. `kind=sink`: 202 + 새 `sink_deliver` attempt **인큐**(상태전이 아님; 실 재전달은 worker egress 의존) | `WORKITEM_CHECKOUT_CONFLICT`(409), `AUTHZ_FORBIDDEN`(403)², `IR_SCHEMA_INVALID`(422, kind 무효) |
 
 - workitem DLQ: W5/W7에서 `dead_letter` 생성, W10 `manual_replay`로 복원(state-machine §2). 운영자 재처리 권한(`operatorAuthorized` guard, W10) 미보유 → 인가 실패.
+- workitems 응답의 `target_id`는 connector target 테이블이 도입되지 않은 v1에서 `null`로 고정된다. 필터는 조용히 무시하지 않고 `IR_SCHEMA_INVALID(target_id_filter_unsupported)`로 거부한다.
 - sink DLQ는 데이터평면(`sink_deliveries.status='dead_letter'`)으로, 본 엔드포인트의 `kind=sink` 목록/replay는 sink 재전달을 트리거한다(release-decisions D8-A3 — 새 attempt_no·동일 `sink_idempotency_key`를 enqueue). `kind=sink` RBAC은 `sink_dlq.replay`(in-handler, 역할집합은 `dlq.replay`와 동일). 실 재전달은 worker `SinkDeliveryPort`(외부 egress, D6-2)에 의존하며 egress 미바인딩 시 worker가 `SINK_DELIVERY_FAILED`로 표면화한다(라우트는 전달 성공을 가장하지 않는다). raw/normalized 멱등은 migration SQL이 보장(재정의 안 함).
 - `DEAD_LETTER`(httpStatus 200)는 오류가 아닌 상태 통지이므로 목록/상세 본문의 상태 필드로만 나타나며 `ApiError`로 반환하지 않는다(§0.2).
 

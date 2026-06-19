@@ -684,7 +684,7 @@ paths:
       summary: 휴먼 태스크 상세
       responses:
         '200':
-          description: 태스크 상세(state, kind, assignee, timeout, on_timeout, payload, run 연계).
+          description: 태스크 상세(state, kind, assignee, timeout, on_timeout, run 연계). v1은 kind별 payload 본문을 노출하지 않는다.
           content:
             application/json:
               schema:
@@ -834,10 +834,6 @@ paths:
           required: false
           schema:
             $ref: '#/components/schemas/WorkitemState'
-        - name: target_id
-          in: query
-          required: false
-          schema: { type: string }
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
       responses:
@@ -1854,7 +1850,7 @@ components:
 
     HumanTask:
       type: object
-      description: 휴먼 태스크 상세(요지). payload는 kind별 구조(codegen/types 참조).
+      description: 휴먼 태스크 상세(요지). v1은 inline payload 본문을 조합하거나 노출하지 않는다.
       properties:
         human_task_id: { type: string }
         state: { $ref: '#/components/schemas/HumanTaskState' }
@@ -1866,9 +1862,6 @@ components:
           enum: [fail, escalate]
           description: reserved-handlers @human_task 입력(기본 fail). HumanTaskGuard.onTimeout과 정합.
         run_id: { type: [string, "null"] }
-        payload:
-          type: object
-          description: kind별 본문(approval/validation/exception/captcha/mfa).
 
     HumanTaskResolveRequest:
       type: object
@@ -1900,7 +1893,9 @@ components:
         status: { $ref: '#/components/schemas/WorkitemState' }
         attempts: { type: integer }
         unique_reference: { type: [string, "null"] }
-        target_id: { type: [string, "null"] }
+        target_id:
+          type: [string, "null"]
+          description: v1 has no connector target authority table; responses return null and target_id filtering is rejected.
         checked_out_by: { type: [string, "null"] }
         checked_out_at: { type: [string, "null"], format: date-time }
         run_id: { type: [string, "null"] }
