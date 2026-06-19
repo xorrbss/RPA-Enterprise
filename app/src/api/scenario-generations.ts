@@ -88,6 +88,28 @@ interface PlannedCompileResult {
 }
 
 export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
+  app.get(
+    "/v1/scenario-generations/capabilities",
+    { config: { rbacAction: "scenario.read" } },
+    async () => {
+      const videoRecording = deps.scenarioGenerationCapabilities?.videoRecording === true;
+      return {
+        visual_evidence: {
+          screenshot: {
+            enabled: true,
+            policies: ["never", "failure", "each_step"],
+          },
+          video: {
+            enabled: videoRecording,
+            policies: videoRecording ? ["never", "failure", "always"] : ["never"],
+            artifact_type: "video_masked",
+            media_type: "video/webm",
+          },
+        },
+      };
+    },
+  );
+
   app.get<{ Querystring: { limit?: string; cursor?: string; status?: string } }>(
     "/v1/scenario-generations",
     { config: { rbacAction: "scenario.read" } },

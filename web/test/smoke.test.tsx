@@ -328,10 +328,76 @@ describe("D7 운영 콘솔 shell", () => {
     );
   });
 
+  test("자연어 자동화 생성: 서버 영상 capability가 있으면 기본 동영상 증거를 요청", async () => {
+    const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    renderApp(
+      fakeClient({
+        getScenarioGenerationCapabilities: async () => ({
+          visual_evidence: {
+            screenshot: { enabled: true, policies: ["never", "failure", "each_step"] },
+            video: { enabled: true, policies: ["never", "failure", "always"], artifact_type: "video_masked", media_type: "video/webm" },
+          },
+        }),
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listSites: async () => ({
+          items: [
+            {
+              site_profile_id: "10000000-0000-4000-8000-0000000000a1",
+              risk: "green",
+              approval_status: "approved",
+              circuit_status: "closed",
+              name: "shop",
+              url_pattern: "https://shop.example",
+              default_browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
+              default_network_policy_id: "10000000-0000-4000-8000-0000000000a3",
+            },
+          ],
+          next_cursor: null,
+        }),
+        generateScenario: async (body) => {
+          calls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000a3",
+            mode: body.mode ?? "save_and_run",
+            status: "run_queued",
+            prompt_hash: "hash",
+            planner: "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: "00000000-0000-0000-0000-000000000099",
+            evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
+            blockers: [],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 요약해줘" } });
+    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://shop.example/orders" } });
+    fireEvent.change(await screen.findByLabelText("사이트"), { target: { value: "10000000-0000-4000-8000-0000000000a1" } });
+
+    await waitFor(() => expect(screen.getByLabelText("동영상")).toHaveValue("always"));
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({ evidence: { screenshot: "each_step", video: "always" } });
+  });
+
   test("자연어 자동화 생성 차단 → blocker를 한국어로 표면화", async () => {
     const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
     renderApp(
       fakeClient({
+        getScenarioGenerationCapabilities: async () => ({
+          visual_evidence: {
+            screenshot: { enabled: true, policies: ["never", "failure", "each_step"] },
+            video: { enabled: true, policies: ["never", "failure", "always"], artifact_type: "video_masked", media_type: "video/webm" },
+          },
+        }),
         listScenarios: async () => ({ items: [], next_cursor: null }),
         generateScenario: async (body) => {
           calls.push(body);

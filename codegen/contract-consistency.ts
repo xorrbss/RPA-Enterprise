@@ -95,10 +95,13 @@ assertOpenApiSchemaContains("RunCreateRequest", "        model:\n          type:
 assertOpenApiPath("/runs/{run_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts/{artifact_id}");
+assertOpenApiPath("/scenario-generations/capabilities");
 assertControlPlanePath("/v1/runs/{run_id}/artifacts");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts/{artifact_id}");
+assertControlPlanePath("/v1/scenario-generations/capabilities");
 assertOperationId("listRunArtifacts");
+assertOperationId("getScenarioGenerationCapabilities");
 assertOperationId("listScenarioGenerationArtifacts");
 assertOperationId("getScenarioGenerationArtifact");
 

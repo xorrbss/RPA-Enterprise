@@ -270,6 +270,20 @@ describe("HttpApiClient 계약", () => {
     });
   });
 
+  test("getScenarioGenerationCapabilities → GET /v1/scenario-generations/capabilities", async () => {
+    const { calls, client } = harness({
+      body: {
+        visual_evidence: {
+          screenshot: { enabled: true, policies: ["never", "failure", "each_step"] },
+          video: { enabled: false, policies: ["never"], artifact_type: "video_masked", media_type: "video/webm" },
+        },
+      },
+    });
+    await client.getScenarioGenerationCapabilities();
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations/capabilities");
+  });
+
   test("getScenarioGeneration → GET /v1/scenario-generations/{id}", async () => {
     const { calls, client } = harness({ body: { generation_id: "g1", status: "saved", blockers: [] } });
     await client.getScenarioGeneration("00000000-0000-0000-0000-0000000000a1");

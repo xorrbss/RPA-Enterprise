@@ -19,6 +19,7 @@ import {
   type ScenarioDetail,
   type ScenarioGenerationList,
   type ScenarioGenerationListParams,
+  type ScenarioGenerationCapabilities,
   type ScenarioGenerationRequest,
   type ScenarioGenerationResult,
   type ScenarioItem,
@@ -92,6 +93,7 @@ export interface ApiClient {
   createScenario(ir: unknown): Promise<ScenarioMutationResult>;
   updateScenario(scenarioId: string, ir: unknown, version: number): Promise<ScenarioMutationResult>;
   generateScenario(body: ScenarioGenerationRequest, idempotencyKey: string): Promise<ScenarioGenerationResult>;
+  getScenarioGenerationCapabilities(): Promise<ScenarioGenerationCapabilities>;
   listScenarioGenerations(p?: ScenarioGenerationListParams): Promise<ScenarioGenerationList>;
   getScenarioGeneration(generationId: string): Promise<ScenarioGenerationResult>;
   createRun(body: CreateRunBody, idempotencyKey: string): Promise<CreateRunResult>;
@@ -274,6 +276,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     updateScenario: (scenarioId, ir, version) =>
       send("PUT", `/v1/scenarios/${scenarioId}`, ir, { "If-Match": String(version) }),
     generateScenario: (body, key) => post(`/v1/scenario-generations`, key, body),
+    getScenarioGenerationCapabilities: () => get(`/v1/scenario-generations/capabilities`),
     listScenarioGenerations: (p) => get(`/v1/scenario-generations${queryString(p)}`),
     getScenarioGeneration: (generationId) => get(`/v1/scenario-generations/${generationId}`),
     createRun: (body, key) => post(`/v1/runs`, key, body),

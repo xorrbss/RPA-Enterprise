@@ -191,6 +191,22 @@ paths:
   # ============================================================
   # 2.5 Scenario Generations — api-surface §2.5
   # ============================================================
+  /scenario-generations/capabilities:
+    get:
+      tags: [ScenarioGenerations]
+      operationId: getScenarioGenerationCapabilities
+      summary: 자연어 generation runtime capability 조회
+      description: 콘솔 기본 evidence 선택을 위한 read-only runtime capability 힌트. 서버는 save_and_run마다 capability를 재검증한다.
+      responses:
+        '200':
+          description: Runtime visual evidence capability.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioGenerationCapabilities'
+        default:
+          $ref: '#/components/responses/Error'
+
   /scenario-generations:
     get:
       tags: [ScenarioGenerations]
@@ -1422,6 +1438,45 @@ components:
           enum: [never, failure, always]
           default: never
           description: WebM/video capture request. Values other than never require the runtime video recorder capability; otherwise save_and_run returns video_recording_port_not_configured. The server normalizes planner output so requested evidence is reflected in IR meta.evidence and node policy.recording.
+
+    ScenarioGenerationCapabilities:
+      type: object
+      additionalProperties: false
+      required: [visual_evidence]
+      properties:
+        visual_evidence:
+          type: object
+          additionalProperties: false
+          required: [screenshot, video]
+          properties:
+            screenshot:
+              type: object
+              additionalProperties: false
+              required: [enabled, policies]
+              properties:
+                enabled: { type: boolean }
+                policies:
+                  type: array
+                  items:
+                    type: string
+                    enum: [never, failure, each_step]
+            video:
+              type: object
+              additionalProperties: false
+              required: [enabled, policies, artifact_type, media_type]
+              properties:
+                enabled: { type: boolean }
+                policies:
+                  type: array
+                  items:
+                    type: string
+                    enum: [never, failure, always]
+                artifact_type:
+                  type: string
+                  enum: [video_masked]
+                media_type:
+                  type: string
+                  enum: [video/webm]
 
     ScenarioGeneration:
       type: object

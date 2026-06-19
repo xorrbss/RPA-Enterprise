@@ -124,6 +124,11 @@ export function PromptScenarioGenerator(): JSX.Element {
     queryFn: () => api.listGatewayPolicies(),
     retry: false,
   });
+  const capabilities = useQuery({
+    queryKey: ["scenario-generation-capabilities"],
+    queryFn: () => api.getScenarioGenerationCapabilities(),
+    retry: false,
+  });
   const [historyStatus, setHistoryStatus] = useState<ScenarioGenerationResult["status"] | undefined>(undefined);
   const history = useQuery({
     queryKey: ["scenario-generations", "recent", historyStatus ?? "all"],
@@ -141,10 +146,17 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [planner, setPlanner] = useState<ScenarioGenerationPlanner>("deterministic_mvp");
   const [screenshot, setScreenshot] = useState<ScreenshotPolicy>("each_step");
   const [video, setVideo] = useState<VideoPolicy>("never");
+  const [videoTouched, setVideoTouched] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
+  const videoCapability = capabilities.data?.visual_evidence.video;
+  const videoRecordingEnabled = videoCapability?.enabled === true;
+  const videoPolicies = useMemo<readonly VideoPolicy[]>(
+    () => (videoCapability?.policies.length ? videoCapability.policies : ["never", "failure", "always"]),
+    [videoCapability?.policies],
+  );
 
   const selectedSite = useMemo(
     () => (sites.data?.items ?? []).find((s) => s.site_profile_id === siteProfileId) ?? null,
@@ -169,6 +181,19 @@ export function PromptScenarioGenerator(): JSX.Element {
       setStartUrl(site.url_pattern);
     }
   }
+
+  useEffect(() => {
+    if (videoCapability === undefined) return;
+    if (!videoCapability.enabled) {
+      if (!videoCapability.policies.includes(video)) {
+        setVideo("never");
+      }
+      return;
+    }
+    if (!videoTouched && video === "never" && videoCapability.policies.includes("always")) {
+      setVideo("always");
+    }
+  }, [video, videoCapability, videoTouched]);
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -322,11 +347,21 @@ export function PromptScenarioGenerator(): JSX.Element {
           </label>
           <label className="field">
             <span>동영상</span>
-            <select value={video} onChange={(event) => setVideo(event.target.value as VideoPolicy)}>
-              <option value="never">저장 안 함</option>
-              <option value="always">전체 실행</option>
-              <option value="failure">실패 시</option>
+            <select
+              aria-label="동영상"
+              value={video}
+              onChange={(event) => {
+                setVideoTouched(true);
+                setVideo(event.target.value as VideoPolicy);
+              }}
+            >
+              {videoPolicies.map((policy) => (
+                <option key={policy} value={policy}>
+                  {policy === "never" ? "저장 안 함" : policy === "always" ? "전체 실행" : "실패 시"}
+                </option>
+              ))}
             </select>
+            {!videoRecordingEnabled && <span className="muted">영상 녹화 비활성</span>}
           </label>
         </div>
         {selectedSite !== null && (

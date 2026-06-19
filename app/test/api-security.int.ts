@@ -51,6 +51,10 @@ function buildWith(pool: ReturnType<typeof createPool>, security?: SecurityConfi
   return buildServer(deps);
 }
 
+function mint(claims: Record<string, unknown>): Promise<string> {
+  return new SignJWT(claims).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("5m").sign(SECRET);
+}
+
 async function main(): Promise<void> {
   const pool = createPool();
   try {
@@ -101,6 +105,45 @@ async function main(): Promise<void> {
       check("default: CORS disabled → no ACAO", preflight.headers["access-control-allow-origin"] === undefined, JSON.stringify(preflight.headers["access-control-allow-origin"]));
     } finally {
       await plain.close();
+    }
+
+    // 3) Runtime capability read surface: authenticated + scenario.read, video defaults false unless explicitly configured.
+    const viewer = await mint({ sub: "viewer-a", tenant_id: "00000000-0000-4000-8000-0000000000a1", roles: ["viewer"] });
+    const capsDefault = buildWith(pool, undefined);
+    await capsDefault.ready();
+    try {
+      const res = await capsDefault.inject({
+        method: "GET",
+        url: "/v1/scenario-generations/capabilities",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("capabilities default → 200", res.statusCode === 200, res.body);
+      check("capabilities default video disabled", res.json().visual_evidence?.video?.enabled === false, res.body);
+      check("capabilities default video policies only never", JSON.stringify(res.json().visual_evidence?.video?.policies) === JSON.stringify(["never"]), res.body);
+    } finally {
+      await capsDefault.close();
+    }
+
+    const capsVideo = buildServer({
+      pool,
+      auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+      rbac: new RoleMatrixRbacMiddleware(),
+      idempotency: new PgControlPlaneIdempotencyStore(pool),
+      enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} } as RunEnqueuer,
+      signedCommandRegistry,
+      scenarioGenerationCapabilities: { videoRecording: true },
+    });
+    await capsVideo.ready();
+    try {
+      const res = await capsVideo.inject({
+        method: "GET",
+        url: "/v1/scenario-generations/capabilities",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("capabilities video enabled → 200", res.statusCode === 200, res.body);
+      check("capabilities video enabled policies", res.json().visual_evidence?.video?.enabled === true && res.body.includes("\"always\""), res.body);
+    } finally {
+      await capsVideo.close();
     }
   } finally {
     await pool.end();

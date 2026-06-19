@@ -213,6 +213,21 @@ export interface ScenarioGenerationEvidence {
   readonly video?: "never" | "failure" | "always";
 }
 
+export interface ScenarioGenerationCapabilities {
+  readonly visual_evidence: {
+    readonly screenshot: {
+      readonly enabled: boolean;
+      readonly policies: ReadonlyArray<"never" | "failure" | "each_step">;
+    };
+    readonly video: {
+      readonly enabled: boolean;
+      readonly policies: ReadonlyArray<"never" | "failure" | "always">;
+      readonly artifact_type: "video_masked";
+      readonly media_type: "video/webm";
+    };
+  };
+}
+
 export type ScenarioGenerationPlanner = "deterministic_mvp" | "llm_v1";
 
 export interface ScenarioGenerationRequest {
