@@ -100,6 +100,23 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       draft_ir: { meta: { name: body.name ?? "prompt-hash" } },
       validation_report: { errors: [], warnings: [] },
     }),
+    runScenarioGeneration: async (generationId, body) => ({
+      generation_id: generationId,
+      mode: "save_and_run",
+      status: "run_queued",
+      prompt_hash: "hash",
+      planner: "deterministic_mvp",
+      model: body.model ?? null,
+      scenario_id: "00000000-0000-0000-0000-0000000000c1",
+      scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+      run_id: "00000000-0000-0000-0000-000000000099",
+      evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
+      blockers: [],
+      created_at: "2026-06-15T00:00:00.000Z",
+      created_by: "operator",
+      draft_ir: {},
+      validation_report: {},
+    }),
     listScenarioGenerations: async () => ({
       items: [
         {

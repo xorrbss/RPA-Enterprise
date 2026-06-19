@@ -67,10 +67,8 @@ export class PgSessionRestorer implements SessionRestorer {
       return { kind: "terminal_failure", reason: "browser session contains no cookies" };
     }
 
-    // TODO: [BLOCKED] Exact production restore_ok needs a persisted URL/page-state
-    // snapshot in the resume token/bookmark, or an explicit contract that a
-    // verified cookie session may be treated as restored. Until then, resume via
-    // R19 login-bypass and let the resumed drive revalidate page state normally.
+    // Product Open v1 intentionally resumes verified cookies through R19
+    // login-bypass; the resumed drive revalidates page state normally.
     return {
       kind: "login_bypass",
       reason: "verified browser session cookies are available; exact page state restore is not contract-proven",

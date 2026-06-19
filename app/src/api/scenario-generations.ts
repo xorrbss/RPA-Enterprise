@@ -87,6 +87,27 @@ interface PlannedCompileResult {
   compiled: Extract<ReturnType<typeof compileScenario>, { ok: true }>;
 }
 
+interface GenerationRunRequest {
+  target?: NonNullable<GenerationRequest["target"]>;
+  startUrl?: string;
+  params: Record<string, unknown>;
+  model?: string | null;
+  evidence?: EvidencePolicy;
+}
+
+const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
+  "target_required_for_auto_run",
+  "start_url_required_for_auto_run",
+  "target_start_url_site_mismatch",
+  "site_profile_not_found",
+  "site_profile_blocked",
+  "browser_identity_not_found",
+  "browser_identity_site_mismatch",
+  "network_policy_not_found",
+  "network_policy_domain_mismatch",
+  "video_recording_port_not_configured",
+]);
+
 export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get(
     "/v1/scenario-generations/capabilities",
@@ -160,6 +181,15 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
     const result = await generateScenario(deps, request);
     reply.code(result.status).send(result.body);
   });
+
+  app.post<{ Params: { generationId: string } }>(
+    "/v1/scenario-generations/:generationId/run",
+    { config: { rbacAction: "run.create" } },
+    async (request, reply) => {
+      const result = await runScenarioGeneration(deps, request.params.generationId, request);
+      reply.code(result.status).send(result.body);
+    },
+  );
 
   app.get<{ Params: { generationId: string } }>(
     "/v1/scenario-generations/:generationId",
@@ -250,6 +280,219 @@ async function generateScenario(deps: ApiServerDeps, request: FastifyRequest): P
     }
     throw err;
   }
+}
+
+async function runScenarioGeneration(
+  deps: ApiServerDeps,
+  generationId: string,
+  request: FastifyRequest,
+): Promise<CommandResponse> {
+  const principal = requirePrincipal(request);
+  if (!UUID_RE.test(generationId)) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  }
+  const parsed = parseGenerationRunRequest(request.body);
+  const idempotencyKey = request.headers["idempotency-key"];
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "missing_idempotency_key", header: "Idempotency-Key" });
+  }
+
+  const requestHash = canonicalRequestHash("POST", `/v1/scenario-generations/${generationId}/run`, request.body ?? null);
+  const reservation = await deps.idempotency.reserve({
+    tenantId: principal.tenantId,
+    endpoint: "runScenarioGeneration",
+    key: idempotencyKey as IdempotencyKey,
+    requestHash: requestHash as CanonicalRequestHash,
+    expiresAt: new Date(Date.now() + IDEMPOTENCY_TTL_MS).toISOString(),
+  });
+  if (reservation.kind === "replay") {
+    return { status: reservation.response.status, body: reservation.response.body };
+  }
+  if (reservation.kind === "in_flight") {
+    throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", { reason: "idempotency_in_flight" });
+  }
+  if (reservation.kind === "blocked") {
+    throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "idempotency_request_hash_mismatch" });
+  }
+
+  const recordId = reservation.recordId;
+  try {
+    const signedCommandRefs = await signedCommandRefsFor(deps, principal, "scenario.save");
+    return await withTenantTx(deps.pool, principal.tenantId, async (client) => {
+      const generation = await loadGenerationForRun(client, generationId);
+      const baseIr = await loadScenarioVersionIrForRun(client, generation);
+      const response = await persistGenerationRun(
+        client,
+        deps,
+        principal,
+        request.correlationId,
+        generation,
+        baseIr,
+        parsed,
+        signedCommandRefs,
+      );
+      await completeIdempotencyInTx(client, recordId, response);
+      return response;
+    });
+  } catch (err) {
+    if (err instanceof ApiResponseError && !ERROR_CATALOG[err.code].retryable) {
+      await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+    }
+    throw err;
+  }
+}
+
+async function loadGenerationForRun(client: PoolClient, generationId: string): Promise<ScenarioGenerationRow> {
+  const result = await client.query<ScenarioGenerationRow>(
+    `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, draft_ir, validation_report,
+            evidence_policy, blockers, scenario_id, scenario_version_id, run_id,
+            created_by, created_at::text AS created_at
+       FROM scenario_generations
+      WHERE id=$1::uuid
+      FOR UPDATE`,
+    [generationId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  }
+  if (row.run_id !== null) {
+    throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", {
+      reason: "scenario_generation_already_run",
+      run_id: row.run_id,
+    });
+  }
+  if (row.scenario_id === null || row.scenario_version_id === null) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_generation_not_saved" });
+  }
+  return row;
+}
+
+async function loadScenarioVersionIrForRun(client: PoolClient, generation: ScenarioGenerationRow): Promise<Record<string, unknown>> {
+  if (generation.scenario_version_id === null) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_generation_not_saved" });
+  }
+  const result = await client.query<{ ir: unknown }>(
+    `SELECT ir
+       FROM scenario_versions
+      WHERE id=$1::uuid
+      FOR UPDATE`,
+    [generation.scenario_version_id],
+  );
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_not_found" });
+  }
+  return cloneJsonRecord(row.ir, "scenario_version_ir_invalid");
+}
+
+async function persistGenerationRun(
+  client: PoolClient,
+  deps: ApiServerDeps,
+  principal: AuthenticatedPrincipal,
+  correlationId: string,
+  generation: ScenarioGenerationRow,
+  baseIr: Record<string, unknown>,
+  request: GenerationRunRequest,
+  signedCommandRefs: readonly string[] | undefined,
+): Promise<CommandResponse> {
+  if (generation.scenario_version_id === null) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_generation_not_saved" });
+  }
+  const existingBlockers = parseGenerationBlockers(generation.blockers);
+  const blockers = existingBlockers.filter((blocker) => !RUN_REPAIRABLE_BLOCKERS.has(blocker));
+  const evidence = request.evidence ?? parseEvidencePolicy(generation.evidence_policy);
+  const recording = recordingPolicy(evidence);
+  const target = request.target ?? parseTarget(baseIr.target);
+  const startUrl = request.startUrl ?? startUrlFromParams(request.params);
+  const model = request.model !== undefined ? request.model : generation.model;
+
+  if (target === undefined) blockers.push("target_required_for_auto_run");
+  if (startUrl === undefined) blockers.push("start_url_required_for_auto_run");
+  if (evidence.video !== "never" && deps.scenarioGenerationCapabilities?.videoRecording !== true) {
+    blockers.push("video_recording_port_not_configured");
+  }
+  if (target !== undefined) {
+    const targetBlocker = await runtimeTargetBlocker(client, principal.tenantId, target, startUrl);
+    if (targetBlocker !== undefined) blockers.push(targetBlocker);
+  }
+
+  const runIr = prepareGenerationRunIr(baseIr, { target, startUrl, evidence, recording });
+  const compiled = compileScenario(runIr, { signedCommandRefs });
+  if (!compiled.ok) {
+    throw new ApiResponseError(compiled.code, compiled.details);
+  }
+
+  await client.query(
+    `UPDATE scenario_versions
+        SET ir=$3::jsonb,
+            compiled_ast=$4,
+            params_schema=$5::jsonb
+      WHERE id=$1::uuid
+        AND tenant_id=$2::uuid`,
+    [
+      generation.scenario_version_id,
+      principal.tenantId,
+      JSON.stringify(compiled.ir),
+      compiled.compiledAst,
+      compiled.ir.params_schema !== undefined ? JSON.stringify(compiled.ir.params_schema) : null,
+    ],
+  );
+
+  const uniqueBlockers = uniqueStrings(blockers);
+  let runId: string | null = null;
+  let nextStatus: GenerationStatus = "blocked";
+  if (uniqueBlockers.length === 0 && startUrl !== undefined) {
+    const asOf = typeof request.params.as_of === "string" ? request.params.as_of : new Date().toISOString();
+    const params = { ...request.params, start_url: startUrl, as_of: asOf };
+    runId = randomUUID();
+    await createRunInTx(client, deps.enqueuer, {
+      runId,
+      tenantId: principal.tenantId,
+      scenarioVersionId: generation.scenario_version_id,
+      params,
+      asOf,
+      correlationId,
+      model,
+    });
+    nextStatus = "run_queued";
+  }
+
+  const ledgerDraftIr = redactGenerationDraftIr(compiled.ir);
+  const updated = await client.query<ScenarioGenerationRow>(
+    `UPDATE scenario_generations
+        SET status=$3,
+            model=$4,
+            draft_ir=$5::jsonb,
+            validation_report=$6::jsonb,
+            evidence_policy=$7::jsonb,
+            blockers=$8::jsonb,
+            run_id=$9::uuid
+      WHERE id=$1::uuid
+        AND tenant_id=$2::uuid
+      RETURNING id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, draft_ir, validation_report,
+                evidence_policy, blockers, scenario_id, scenario_version_id, run_id,
+                created_by, created_at::text AS created_at`,
+    [
+      generation.id,
+      principal.tenantId,
+      nextStatus,
+      model,
+      JSON.stringify(ledgerDraftIr),
+      JSON.stringify(compiled.report),
+      JSON.stringify(evidence),
+      JSON.stringify(uniqueBlockers),
+      runId,
+    ],
+  );
+  const row = updated.rows[0];
+  if (row === undefined) {
+    throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", { reason: "scenario_generation_update_missing_returning_row" });
+  }
+  return {
+    status: runId === null ? 200 : 201,
+    body: mapGenerationRow(row),
+  };
 }
 
 async function planAndCompileScenario(
@@ -666,6 +909,62 @@ function parseGenerationRequest(body: unknown): GenerationRequest {
   };
 }
 
+function parseGenerationRunRequest(body: unknown): GenerationRunRequest {
+  const requestBody = body === undefined || body === null ? {} : body;
+  if (!isRecord(requestBody)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "request_body_object_required" });
+  }
+  const allowed = new Set(["target", "start_url", "params", "model", "evidence"]);
+  for (const key of Object.keys(requestBody)) {
+    if (!allowed.has(key)) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unknown_field", field: key });
+    }
+  }
+
+  const params = requestBody.params === undefined ? {} : requestBody.params;
+  if (!isRecord(params)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "params_object_required" });
+  }
+  if (params.as_of !== undefined && (typeof params.as_of !== "string" || !isStrictIsoDateTime(params.as_of))) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_as_of" });
+  }
+
+  let startUrl: string | undefined;
+  if (requestBody.start_url !== undefined) {
+    if (typeof requestBody.start_url !== "string" || !isHttpUrl(requestBody.start_url)) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_start_url" });
+    }
+    startUrl = requestBody.start_url;
+  }
+  if (params.start_url !== undefined) {
+    if (typeof params.start_url !== "string" || !isHttpUrl(params.start_url)) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_start_url" });
+    }
+    if (startUrl !== undefined && params.start_url !== startUrl) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "start_url_param_mismatch" });
+    }
+    startUrl = params.start_url;
+  }
+
+  let model: string | null | undefined;
+  if (requestBody.model !== undefined && requestBody.model !== null) {
+    if (typeof requestBody.model !== "string" || requestBody.model.length === 0) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_model" });
+    }
+    model = requestBody.model;
+  } else if (requestBody.model === null) {
+    model = null;
+  }
+
+  return {
+    target: parseTarget(requestBody.target),
+    ...(startUrl !== undefined ? { startUrl } : {}),
+    params: params as Record<string, unknown>,
+    ...(model !== undefined ? { model } : {}),
+    ...(requestBody.evidence !== undefined ? { evidence: parseEvidencePolicy(requestBody.evidence) } : {}),
+  };
+}
+
 function buildDeterministicMvpGenerationPlan(request: GenerationRequest, capabilities: GenerationCapabilities): GenerationPlan {
   const promptHash = createHash("sha256").update(request.prompt).digest("hex");
   const startUrl = request.startUrl ?? extractFirstHttpUrl(request.prompt);
@@ -843,6 +1142,107 @@ function paramsSchema(options: { hasStartUrl: boolean; pagination: boolean }): R
     },
     ...(required.length > 0 ? { required } : {}),
   };
+}
+
+function prepareGenerationRunIr(
+  baseIr: Record<string, unknown>,
+  input: {
+    target?: NonNullable<GenerationRequest["target"]>;
+    startUrl?: string;
+    evidence: EvidencePolicy;
+    recording: RecordingPolicy;
+  },
+): Record<string, unknown> {
+  let next = finalizeDraftIrEvidence(baseIr, input.evidence, input.recording);
+  if (input.target !== undefined) {
+    next = { ...next, target: input.target };
+  }
+  if (input.startUrl !== undefined) {
+    next = ensureStartUrlNavigation(next, input.recording);
+  }
+  return next;
+}
+
+function ensureStartUrlNavigation(ir: Record<string, unknown>, recording: RecordingPolicy): Record<string, unknown> {
+  const nodes = isRecord(ir.nodes) ? { ...ir.nodes } : {};
+  const currentStart = typeof ir.start === "string" ? ir.start : undefined;
+  const openStart = nodes.open_start_url;
+  if (!isStartUrlNavigationNode(openStart)) {
+    nodes.open_start_url = {
+      what: [{ action: "navigate", url_ref: "start_url" }],
+      next: startAfterOpenStart(nodes, currentStart),
+      policy: { recording },
+      side_effect: { kind: "read_only" },
+    };
+  } else {
+    nodes.open_start_url = finalizeNodeRecordingPolicy(openStart, recording);
+  }
+
+  return {
+    ...ir,
+    params_schema: ensureStartUrlParamSchema(ir.params_schema),
+    start: "open_start_url",
+    nodes,
+  };
+}
+
+function isStartUrlNavigationNode(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.what)) return false;
+  return value.what.some((step) => isRecord(step) && step.action === "navigate" && step.url_ref === "start_url");
+}
+
+function startAfterOpenStart(nodes: Record<string, unknown>, currentStart: string | undefined): string {
+  if (currentStart !== undefined && currentStart !== "open_start_url") return currentStart;
+  if (isRecord(nodes.paginate_pages)) return "paginate_pages";
+  if (isRecord(nodes.understand_request)) return "understand_request";
+  const first = Object.keys(nodes).find((nodeId) => nodeId !== "open_start_url" && nodeId !== "done");
+  return first ?? "done";
+}
+
+function ensureStartUrlParamSchema(value: unknown): Record<string, unknown> {
+  const schema = isRecord(value) ? value : { type: "object", additionalProperties: true };
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : [];
+  return {
+    ...schema,
+    type: "object",
+    additionalProperties: schema.additionalProperties ?? true,
+    properties: {
+      ...properties,
+      start_url: { type: "string", format: "uri" },
+    },
+    required: uniqueStrings([...required, "start_url"]),
+  };
+}
+
+function parseGenerationBlockers(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "generation_blockers_invalid" });
+  }
+  const blockers: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || item.length === 0) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "generation_blocker_invalid" });
+    }
+    blockers.push(item);
+  }
+  return blockers;
+}
+
+function cloneJsonRecord(value: unknown, reason: string): Record<string, unknown> {
+  const cloned = JSON.parse(JSON.stringify(value)) as unknown;
+  if (!isRecord(cloned)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason });
+  }
+  return cloned;
+}
+
+function startUrlFromParams(params: Record<string, unknown>): string | undefined {
+  return typeof params.start_url === "string" && isHttpUrl(params.start_url) ? params.start_url : undefined;
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
 }
 
 function extractNode(input: {

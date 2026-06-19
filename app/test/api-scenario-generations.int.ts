@@ -484,6 +484,24 @@ async function main(): Promise<void> {
         );
       });
 
+      const stillBlockedRun = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${blockedBody.generation_id}/run`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-blocked-run-still-blocked-1" },
+      });
+      check("blocked generation run without corrections stays blocked -> 200", stillBlockedRun.statusCode === 200, stillBlockedRun.body);
+      const stillBlockedRunBody = stillBlockedRun.json();
+      check("blocked generation run keeps same ledger id", stillBlockedRunBody.generation_id === blockedBody.generation_id, stillBlockedRun.body);
+      check("blocked generation run still has no run", stillBlockedRunBody.status === "blocked" && stillBlockedRunBody.run_id === null, stillBlockedRun.body);
+      check(
+        "blocked generation run explains unresolved target/start_url",
+        Array.isArray(stillBlockedRunBody.blockers) &&
+          stillBlockedRunBody.blockers.includes("target_required_for_auto_run") &&
+          stillBlockedRunBody.blockers.includes("start_url_required_for_auto_run"),
+        stillBlockedRun.body,
+      );
+      check("blocked generation run does not enqueue", enqueuedRuns.length === 0, JSON.stringify(enqueuedRuns));
+
       const runnablePayload = {
         prompt: "https://example.com 에서 최근 공지 제목과 링크를 수집해줘",
         name: "generated-runnable",
@@ -1983,6 +2001,121 @@ async function main(): Promise<void> {
       } finally {
         await videoEnabledApp.close();
       }
+
+      const continuedRun = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${blockedBody.generation_id}/run`,
+        headers: {
+          authorization: `Bearer ${operator}`,
+          "idempotency-key": "gen-blocked-run-continue-1",
+          "x-correlation-id": "20000000-0000-4000-8000-0000000000a5",
+        },
+        payload: {
+          target: {
+            site_profile_id: SITE,
+            browser_identity_id: IDENTITY,
+            network_policy_id: NETWORK,
+          },
+          start_url: "https://example.com/notices",
+          params: { as_of: "2026-06-15T00:00:00.000Z" },
+          model: "codex-gen",
+          evidence: { screenshot: "each_step", video: "never" },
+        },
+      });
+      check("blocked generation correction queues run -> 201", continuedRun.statusCode === 201, continuedRun.body);
+      const continuedRunBody = continuedRun.json();
+      check(
+        "blocked generation correction reuses same ledger",
+        continuedRunBody.generation_id === blockedBody.generation_id &&
+          continuedRunBody.scenario_id === blockedBody.scenario_id &&
+          continuedRunBody.scenario_version_id === blockedBody.scenario_version_id,
+        continuedRun.body,
+      );
+      check(
+        "blocked generation correction returns run_queued",
+        continuedRunBody.status === "run_queued" &&
+          typeof continuedRunBody.run_id === "string" &&
+          Array.isArray(continuedRunBody.blockers) &&
+          continuedRunBody.blockers.length === 0,
+        continuedRun.body,
+      );
+      check("blocked generation correction enqueues sixth run", enqueuedRuns.length === 6 && enqueuedRuns[5]?.runId === continuedRunBody.run_id, JSON.stringify(enqueuedRuns));
+      check(
+        "blocked generation correction applies every-step evidence",
+        isRecord(continuedRunBody.draft_ir) &&
+          isRecord(continuedRunBody.draft_ir.nodes) &&
+          isRecord(continuedRunBody.draft_ir.nodes.open_start_url) &&
+          isRecord(continuedRunBody.draft_ir.nodes.open_start_url.policy) &&
+          continuedRunBody.draft_ir.nodes.open_start_url.policy.recording === "always",
+        continuedRun.body,
+      );
+      await withTenantTx(pool, TENANT, async (client) => {
+        const rows = await client.query<{ run_params: Record<string, unknown>; run_model: string | null; version_ir: Record<string, unknown>; required: string[] | null }>(
+          `SELECT r.params AS run_params,
+                  r.model AS run_model,
+                  sv.ir AS version_ir,
+                  ARRAY(SELECT jsonb_array_elements_text(sv.params_schema->'required')) AS required
+             FROM scenario_generations g
+             JOIN runs r ON r.tenant_id = g.tenant_id AND r.id = g.run_id
+             JOIN scenario_versions sv ON sv.tenant_id = g.tenant_id AND sv.id = g.scenario_version_id
+            WHERE g.id=$1::uuid`,
+          [blockedBody.generation_id],
+        );
+        const row = rows.rows[0];
+        check(
+          "blocked generation correction persists run params/model",
+          row?.run_params.start_url === "https://example.com/notices" &&
+            row.run_params.as_of === "2026-06-15T00:00:00.000Z" &&
+            row.run_model === "codex-gen",
+          JSON.stringify(row),
+        );
+        check(
+          "blocked generation correction rewrites scenario version IR",
+          isRecord(row?.version_ir) &&
+            isRecord(row.version_ir.target) &&
+            row.version_ir.target.site_profile_id === SITE &&
+            Array.isArray(row.required) &&
+            row.required.includes("start_url"),
+          JSON.stringify(row),
+        );
+      });
+      const continuedReplay = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${blockedBody.generation_id}/run`,
+        headers: {
+          authorization: `Bearer ${operator}`,
+          "idempotency-key": "gen-blocked-run-continue-1",
+          "x-correlation-id": "20000000-0000-4000-8000-0000000000a5",
+        },
+        payload: {
+          target: {
+            site_profile_id: SITE,
+            browser_identity_id: IDENTITY,
+            network_policy_id: NETWORK,
+          },
+          start_url: "https://example.com/notices",
+          params: { as_of: "2026-06-15T00:00:00.000Z" },
+          model: "codex-gen",
+          evidence: { screenshot: "each_step", video: "never" },
+        },
+      });
+      check("blocked generation correction idempotency replays", continuedReplay.statusCode === 201 && continuedReplay.json().run_id === continuedRunBody.run_id, continuedReplay.body);
+      check("blocked generation correction replay does not enqueue again", enqueuedRuns.length === 6, JSON.stringify(enqueuedRuns));
+      const continuedAgain = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${blockedBody.generation_id}/run`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-blocked-run-continue-2" },
+        payload: {
+          target: {
+            site_profile_id: SITE,
+            browser_identity_id: IDENTITY,
+            network_policy_id: NETWORK,
+          },
+          start_url: "https://example.com/notices",
+          evidence: { screenshot: "each_step", video: "never" },
+        },
+      });
+      check("blocked generation cannot attach a second run", continuedAgain.statusCode === 412 && continuedAgain.json().code === "SCENARIO_VERSION_CONFLICT", continuedAgain.body);
 
       const denied = await app.inject({
         method: "POST",

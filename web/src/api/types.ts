@@ -248,6 +248,14 @@ export interface ScenarioGenerationRequest {
   readonly evidence?: ScenarioGenerationEvidence;
 }
 
+export interface ScenarioGenerationRunRequest {
+  readonly target?: ScenarioGenerationTarget;
+  readonly start_url?: string;
+  readonly params?: Record<string, unknown>;
+  readonly model?: string | null;
+  readonly evidence?: ScenarioGenerationEvidence;
+}
+
 export interface ScenarioGenerationResult {
   readonly generation_id: string;
   readonly mode: "draft_only" | "save" | "save_and_run";

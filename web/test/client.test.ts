@@ -270,6 +270,39 @@ describe("HttpApiClient 계약", () => {
     });
   });
 
+  test("runScenarioGeneration → POST /v1/scenario-generations/{id}/run + 보정 body + Idempotency-Key", async () => {
+    const { calls, client } = harness({ status: 201, body: { generation_id: "g1", status: "run_queued", run_id: "r1", blockers: [] } });
+    await client.runScenarioGeneration(
+      "00000000-0000-0000-0000-0000000000a1",
+      {
+        target: {
+          site_profile_id: "00000000-0000-0000-0000-000000000001",
+          browser_identity_id: "00000000-0000-0000-0000-000000000002",
+          network_policy_id: "00000000-0000-0000-0000-000000000003",
+        },
+        start_url: "https://example.test/orders",
+        params: { page: 1 },
+        model: null,
+        evidence: { screenshot: "failure", video: "never" },
+      },
+      "idem-generation-run",
+    );
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations/00000000-0000-0000-0000-0000000000a1/run");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-generation-run");
+    expect(calls[0]?.body).toEqual({
+      target: {
+        site_profile_id: "00000000-0000-0000-0000-000000000001",
+        browser_identity_id: "00000000-0000-0000-0000-000000000002",
+        network_policy_id: "00000000-0000-0000-0000-000000000003",
+      },
+      start_url: "https://example.test/orders",
+      params: { page: 1 },
+      model: null,
+      evidence: { screenshot: "failure", video: "never" },
+    });
+  });
+
   test("getScenarioGenerationCapabilities → GET /v1/scenario-generations/capabilities", async () => {
     const { calls, client } = harness({
       body: {

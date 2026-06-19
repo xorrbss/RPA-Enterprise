@@ -300,6 +300,53 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /scenario-generations/{generation_id}/run:
+    parameters:
+      - $ref: '#/components/parameters/GenerationId'
+    post:
+      tags: [ScenarioGenerations]
+      operationId: runScenarioGeneration
+      summary: blocked generation 보정 후 run 생성
+      description: >
+        blocked/saved scenario generation 원장에 target/start_url/evidence/params/model 보정값을 붙여
+        같은 generation 원장에 run 생성을 재시도한다. 새 generation을 만들지 않으며 run.create 권한이 필요하다.
+        보정 후에도 blockers가 남으면 run을 만들지 않고 status=blocked, run_id=null인 generation을 200으로 반환한다.
+        실행 조건이 충족되면 run을 queued로 만들고 status=run_queued, run_id가 포함된 generation을 201로 반환한다.
+        동일 Idempotency-Key 재시도는 같은 결과를 재생하며, hash mismatch 또는 이미 run이 연결된 원장은
+        SCENARIO_VERSION_CONFLICT로 닫는다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioGenerationRunRequest'
+      responses:
+        '200':
+          description: 아직 blockers가 남아 run을 만들지 않은 generation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioGeneration'
+        '201':
+          description: run queued까지 처리된 generation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioGeneration'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # WORKITEM_CHECKOUT_CONFLICT (idempotency in-flight)
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT (idempotency hash mismatch / already_run)
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
   /scenario-generations/{generation_id}/artifacts:
     parameters:
       - $ref: '#/components/parameters/GenerationId'
@@ -1641,6 +1688,26 @@ components:
           allOf:
             - $ref: '#/components/schemas/ScenarioGenerationTarget'
           description: 생략 시 start_url/프롬프트 URL origin으로 site profile을 찾고 기본 browser identity/network policy 후보가 있으면 서버가 자동 추론한다.
+        params:
+          type: object
+          additionalProperties: true
+        model:
+          type: [string, "null"]
+        evidence:
+          $ref: '#/components/schemas/ScenarioGenerationEvidence'
+
+    ScenarioGenerationRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        target:
+          allOf:
+            - $ref: '#/components/schemas/ScenarioGenerationTarget'
+          description: 기존 blocked generation에 보정 적용할 실행 target.
+        start_url:
+          type: string
+          format: uri
+          description: 보정 적용할 첫 navigate URL(params.start_url).
         params:
           type: object
           additionalProperties: true
