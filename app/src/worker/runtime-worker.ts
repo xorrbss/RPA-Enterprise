@@ -63,6 +63,7 @@ import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 import { driveClaimedRun, driveResumedRun } from "../runtime/run-step-driver";
 import type { BrowserSessionStore } from "../runtime/browser-session-store";
+import type { MergedExtractArtifactSink } from "../runtime/merged-extract-artifact";
 import type { VisualEvidenceRecorder } from "../runtime/visual-evidence";
 import { UtilityExecutor } from "../executor/utility-executor";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
@@ -131,6 +132,7 @@ export interface PgRuntimeWorkerOptions {
   readonly sessionStore?: BrowserSessionStore;
   readonly visualEvidenceRecorder?: VisualEvidenceRecorder;
   readonly visualEvidenceVideoRecorderFactory?: RunVideoRecorderFactory;
+  readonly mergedExtractArtifactSink?: MergedExtractArtifactSink;
   readonly runtimeJobEnqueuer?: RuntimeJobEnqueuePort;
   // suspend 구동(트리거 i): worker 경유 run 이 suspend(executor status='suspended')하면 driveClaimedRun/driveResumedRun →
   // driveSuspend 가 이 둘을 소비(R4+포트→resume-token 발행+R11→suspended). 미주입 시 suspend terminal 은 loud throw(미구성).
@@ -507,6 +509,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
           sessionProvider: bound.provider,
           visualEvidenceRecorder: this.options.visualEvidenceRecorder,
           visualEvidenceVideoRecorder: this.options.visualEvidenceVideoRecorderFactory?.(bound.provider),
+          mergedExtractArtifactSink: this.options.mergedExtractArtifactSink,
           runtimeJobEnqueuer: this.options.runtimeJobEnqueuer,
           recordExecutorSteps: true,
         },
@@ -983,6 +986,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
           sessionProvider: bound.provider,
           visualEvidenceRecorder: this.options.visualEvidenceRecorder,
           visualEvidenceVideoRecorder: this.options.visualEvidenceVideoRecorderFactory?.(bound.provider),
+          mergedExtractArtifactSink: this.options.mergedExtractArtifactSink,
           runtimeJobEnqueuer: this.options.runtimeJobEnqueuer,
           recordExecutorSteps: true,
         },

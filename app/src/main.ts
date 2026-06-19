@@ -74,6 +74,7 @@ import { StagehandBrowserSessionProvider } from "./executor/browser-session-prov
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
 import { PgBrowserSessionStore, buildAesGcmSessionEncryptor, type BrowserSessionStore } from "./runtime/browser-session-store";
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
+import { PgMergedExtractArtifactSink } from "./runtime/merged-extract-artifact";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
 import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runtime/visual-evidence";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
@@ -358,6 +359,9 @@ async function startWorker(pool: PgPool, common: CommonConfig): Promise<Runner> 
       retentionDays: gw.artifactRetentionDays,
     }),
     ...(visualEvidenceVideoRecorderFactory !== undefined ? { visualEvidenceVideoRecorderFactory } : {}),
+    mergedExtractArtifactSink: new PgMergedExtractArtifactSink(pool, artifactStore, {
+      retentionDays: gw.artifactRetentionDays,
+    }),
     runtimeJobEnqueuer: new PgGraphileRunEnqueuer(),
   };
 

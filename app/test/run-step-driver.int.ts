@@ -12,13 +12,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import type { PoolClient } from "pg";
-import type { ArtifactRef, ExecutorPlugin, IRActionType, PageState, PageStateResolver, PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
+import type { ArtifactRef, ExecutorPlugin, IRActionType, ObjectRef, PageState, PageStateResolver, PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
 import type { RunVideoRecording, RuntimeWorkerJob, VisualEvidenceVideoRecorder } from "../../ts/runtime-contract";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { driveClaimedRun, type ClaimedRun } from "../src/runtime/run-step-driver";
 import { PgChallengeSuspensionPort } from "../src/runtime/challenge-suspension-port";
+import { PgMergedExtractArtifactSink } from "../src/runtime/merged-extract-artifact";
 import { HmacResumeTokenCodec } from "../src/runtime/resume-token-codec";
+import type { ObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_run_driver_int";
@@ -149,6 +151,30 @@ class FakeRuntimeJobEnqueuer {
 
   async enqueueRuntimeJob(_client: PoolClient, job: RuntimeWorkerJob): Promise<void> {
     this.jobs.push(job);
+  }
+}
+
+class FakeObjectStore implements ObjectStore {
+  readonly puts: { ref: ObjectRef; content: string }[] = [];
+  readonly deletes: ObjectRef[] = [];
+
+  async put(content: string): Promise<ObjectRef> {
+    const ref = `object://merged-extract-${this.puts.length + 1}` as ObjectRef;
+    this.puts.push({ ref, content });
+    return ref;
+  }
+
+  async get(objectRef: ObjectRef): Promise<string | null> {
+    return this.puts.find((put) => put.ref === objectRef)?.content ?? null;
+  }
+
+  async getBytes(objectRef: ObjectRef): Promise<Uint8Array | null> {
+    const content = await this.get(objectRef);
+    return content === null ? null : new TextEncoder().encode(content);
+  }
+
+  async delete(objectRef: ObjectRef): Promise<void> {
+    this.deletes.push(objectRef);
   }
 }
 
@@ -514,6 +540,8 @@ async function main(): Promise<void> {
     check("R2 started_at 기록됨", dbStatus?.started_at !== null && dbStatus?.started_at !== undefined);
 
     // outbox 이벤트(전이별 emit) 확인.
+    const generatedLikeStore = new FakeObjectStore();
+    const generatedLikeEnqueuer = new FakeRuntimeJobEnqueuer();
     const generatedLike = await driveClaimedRun(
       {
         runId: RUN_GENERATED_LIKE,
@@ -526,7 +554,15 @@ async function main(): Promise<void> {
         networkPolicyId: "np-1",
         params: { start_url: "https://example.com/generated" },
       },
-      { pool, executor: echoActionExecutor, resolver: fakeResolver, workerId: WORKER, recordExecutorSteps: true },
+      {
+        pool,
+        executor: echoActionExecutor,
+        resolver: fakeResolver,
+        workerId: WORKER,
+        recordExecutorSteps: true,
+        mergedExtractArtifactSink: new PgMergedExtractArtifactSink(pool, generatedLikeStore, { retentionDays: 90 }),
+        runtimeJobEnqueuer: generatedLikeEnqueuer,
+      },
     );
     check("generated-like driver returns completed", generatedLike.state === "completed", generatedLike.state);
     check(
@@ -540,6 +576,26 @@ async function main(): Promise<void> {
       generatedSteps.some((s) => s.node_id === "understand_request" && s.action === "observe" && s.status === "success") &&
         generatedSteps.some((s) => s.node_id === "extract_results" && s.action === "extract" && s.status === "success"),
       JSON.stringify(generatedSteps),
+    );
+    check(
+      "generated-like outcome includes merged extract artifact ref",
+      generatedLike.outcome.artifacts.length === 1 && generatedLike.outcome.mergedExtract?.records.length === 1,
+      JSON.stringify(generatedLike.outcome),
+    );
+    check(
+      "generated-like merged extract artifact content is final run-level JSON",
+      generatedLikeStore.puts.length === 1 &&
+        JSON.parse(generatedLikeStore.puts[0]?.content ?? "{}").kind === "merged_extract_result" &&
+        JSON.parse(generatedLikeStore.puts[0]?.content ?? "{}").records?.[0]?.title === "generated",
+      generatedLikeStore.puts[0]?.content,
+    );
+    check(
+      "generated-like merged extract artifact triggers lifecycle jobs",
+      generatedLikeEnqueuer.jobs.length === 2 &&
+        generatedLikeEnqueuer.jobs[0]?.kind === "artifact_redaction" &&
+        generatedLikeEnqueuer.jobs[0]?.runId === RUN_GENERATED_LIKE &&
+        generatedLikeEnqueuer.jobs[1]?.kind === "artifact_retention",
+      JSON.stringify(generatedLikeEnqueuer.jobs),
     );
 
     const artifactEnqueuer = new FakeRuntimeJobEnqueuer();

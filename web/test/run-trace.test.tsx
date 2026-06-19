@@ -336,4 +336,148 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(image).toHaveAttribute("src", "blob:test-preview");
     expect(screen.queryByText(/should not be initial preview/)).toBeNull();
   });
+
+  test("artifact 딥링크가 video 산출물을 바로 선택해 미리보기한다", async () => {
+    installObjectUrlMock();
+    const fetchedBlobs: string[] = [];
+    const runId = "11111111-aaaa-bbbb-cccc-000000000001";
+    const screenshotId = "22222222-aaaa-bbbb-cccc-000000000002";
+    const videoId = "33333333-aaaa-bbbb-cccc-000000000003";
+    location.hash = `#runTrace?run=${runId}&artifact=${videoId}&focus=artifacts`;
+    renderApp(fakeClient({
+      listRunArtifacts: async () => ({
+        items: [
+          {
+            artifact_id: screenshotId,
+            type: "screen_capture",
+            media_type: "image/png",
+            filename: "checkout.png",
+            byte_size: 1024,
+            duration_ms: null,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:00.000Z",
+          },
+          {
+            artifact_id: videoId,
+            type: "run_video",
+            media_type: "video/webm",
+            filename: "checkout.webm",
+            byte_size: 2048,
+            duration_ms: 1500,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:01.000Z",
+          },
+        ],
+        next_cursor: null,
+      }),
+      getArtifactBlob: async (id) => {
+        fetchedBlobs.push(id);
+        return new Blob([new Uint8Array([1, 2, 3])], { type: "video/webm" });
+      },
+    }));
+
+    const videoEl = await waitFor(() => {
+      const el = document.querySelector("video");
+      expect(el).not.toBeNull();
+      return el as HTMLVideoElement;
+    });
+    expect(videoEl).toHaveAttribute("aria-label", "checkout.webm");
+    expect(videoEl).toHaveAttribute("src", "blob:test-preview");
+    expect(fetchedBlobs).toContain(videoId);
+    expect(fetchedBlobs).not.toContain(screenshotId);
+    expect(screen.queryByRole("img", { name: "checkout.png" })).toBeNull();
+  });
+
+  test("산출물 미리보기 클릭이 artifact와 focus hash를 갱신하고 run을 보존한다", async () => {
+    installObjectUrlMock();
+    const runId = "11111111-aaaa-bbbb-cccc-000000000001";
+    const videoId = "33333333-aaaa-bbbb-cccc-000000000003";
+    location.hash = `#runTrace?run=${runId}`;
+    renderApp(fakeClient({
+      listRunArtifacts: async () => ({
+        items: [
+          {
+            artifact_id: "art-shot-1",
+            type: "screen_capture",
+            media_type: "image/png",
+            filename: "checkout.png",
+            byte_size: 1024,
+            duration_ms: null,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:00.000Z",
+          },
+          {
+            artifact_id: videoId,
+            type: "run_video",
+            media_type: "video/webm",
+            filename: "checkout.webm",
+            byte_size: 2048,
+            duration_ms: 1500,
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-18T00:00:01.000Z",
+          },
+        ],
+        next_cursor: null,
+      }),
+      getArtifactBlob: async () => new Blob([new Uint8Array([1, 2, 3])], { type: "video/webm" }),
+    }));
+
+    const videoRow = (await screen.findByText("checkout.webm")).closest("tr");
+    expect(videoRow).not.toBeNull();
+    within(videoRow as HTMLElement).getByRole("button", { name: "미리보기" }).click();
+    await waitFor(() => {
+      expect(location.hash).toContain(`run=${runId}`);
+      expect(location.hash).toContain(`artifact=${videoId}`);
+      expect(location.hash).toContain("focus=artifacts");
+    });
+  });
+
+  test("pending media는 getArtifactBlob을 호출하지 않고 준비 중 상태로 표시한다", async () => {
+    const getArtifact = vi.fn(async (id: string) => ({
+      artifact_id: id,
+      type: "run_video",
+      sha256: "sha",
+      redaction_status: "redacted",
+      retention_until: null,
+      content: "SHOULD_NOT_LOAD",
+    }));
+    const getArtifactBlob = vi.fn(async () => new Blob([new Uint8Array([1, 2, 3])], { type: "video/webm" }));
+    const runId = "11111111-aaaa-bbbb-cccc-000000000001";
+    const pendingId = "44444444-aaaa-bbbb-cccc-000000000004";
+    location.hash = `#runTrace?run=${runId}&artifact=${pendingId}&focus=artifacts`;
+    renderApp(fakeClient({
+      listRunArtifacts: async () => ({
+        items: [{
+          artifact_id: pendingId,
+          type: "run_video",
+          media_type: "video/webm",
+          filename: "pending.webm",
+          byte_size: 2048,
+          duration_ms: 1500,
+          redaction_status: "pending",
+          retention_until: null,
+          legal_hold: false,
+          created_at: "2026-06-18T00:00:01.000Z",
+        }],
+        next_cursor: null,
+      }),
+      getArtifact,
+      getArtifactBlob,
+    }));
+
+    const row = (await screen.findByText("pending.webm")).closest("tr");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByRole("button", { name: "준비 중" })).toBeDisabled();
+    expect(await screen.findByText(/redaction 처리 중인 산출물입니다/)).toBeInTheDocument();
+    expect(getArtifactBlob).not.toHaveBeenCalled();
+    expect(getArtifact).not.toHaveBeenCalled();
+  });
 });

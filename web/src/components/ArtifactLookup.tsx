@@ -90,7 +90,7 @@ function ArtifactLookupResult({ artifact, onDownload }: { artifact: ArtifactDeta
   );
 }
 
-export function ArtifactLookup(): JSX.Element {
+export function ArtifactLookup({ consumeHashParam = true }: { consumeHashParam?: boolean } = {}): JSX.Element {
   const api = useApiClient();
   const [input, setInput] = useState("");
   const [id, setId] = useState<string | null>(null);
@@ -105,6 +105,7 @@ export function ArtifactLookup(): JSX.Element {
   // 해시의 artifact 파라미터(ArtifactRef 클릭 → `#runTrace?run=...&artifact=<uuid>`)로 자동 입력·조회.
   const hashArtifact = useHashParam("artifact");
   useEffect(() => {
+    if (!consumeHashParam) return;
     if (hashArtifact === null || !UUID_RE.test(hashArtifact)) return;
     setInput(hashArtifact);
     setId(hashArtifact);
@@ -112,7 +113,7 @@ export function ArtifactLookup(): JSX.Element {
     if (el && typeof el.scrollIntoView === "function") {
       try { el.scrollIntoView({ block: "nearest" }); } catch { /* jsdom 등 미구현 환경 무시 */ }
     }
-  }, [hashArtifact]);
+  }, [consumeHashParam, hashArtifact]);
 
   // 수동 조회도 해시를 갱신해 단일 진실원천 유지(ArtifactRef와 일관, run/status 등 기존 파라미터는 hashWith로 보존).
   // 해시가 이미 동일하면 hashchange가 안 일어나므로 직접 커밋한다(조용한 무반응 금지) — 'ref Y → 수동 Z → ref Y 재클릭'에서도 Y로 복귀.

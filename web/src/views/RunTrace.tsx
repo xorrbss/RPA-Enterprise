@@ -46,7 +46,7 @@ export function RunTraceView(): JSX.Element {
 
   return (
     <div>
-      <ArtifactLookup />
+      <ArtifactLookup consumeHashParam={sel === null || !focusArtifacts} />
       {sel !== null && (
         <RunDetailPanel
           runId={sel}
@@ -259,6 +259,10 @@ function isPreviewableMedia(a: RunArtifactItem | undefined): boolean {
   return previewMediaType(a) !== null;
 }
 
+function isArtifactRedacted(a: RunArtifactItem | undefined): boolean {
+  return a?.redaction_status === "redacted";
+}
+
 function formatByteSize(bytes: number | null | undefined): string | null {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return null;
   const units = ["B", "KB", "MB", "GB"];
@@ -290,7 +294,7 @@ function artifactSummary(items: readonly RunArtifactItem[]): { screenshots: numb
       const kind = mediaKind(item);
       if (kind === "screenshot") acc.screenshots += 1;
       if (kind === "video") acc.videos += 1;
-      if (item.redaction_status === "pending") acc.pending += 1;
+      if (!isArtifactRedacted(item)) acc.pending += 1;
       return acc;
     },
     { screenshots: 0, videos: 0, pending: 0 },
@@ -300,6 +304,7 @@ function artifactSummary(items: readonly RunArtifactItem[]): { screenshots: numb
 // 산출물(artifact) 목록 + 결과 미리보기 — 본문 조회는 getArtifact(redaction→RBAC→audit 게이트)를 통한다. 라이브=폴링.
 function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount: boolean }): JSX.Element {
   const api = useApiClient();
+  const artifactParam = useHashParam("artifact");
   const artifactsRef = useRef<HTMLDivElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const q = useQuery({
@@ -309,10 +314,12 @@ function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount
   });
   const items: readonly RunArtifactItem[] = q.data?.items ?? [];
   const preferred =
-    items.find(isPreviewableMedia) ??
-    items.find((a) => /json|extract|output|result/i.test(a.type)) ??
+    items.find((a) => isArtifactRedacted(a) && isPreviewableMedia(a)) ??
+    items.find((a) => isArtifactRedacted(a) && /json|extract|output|result/i.test(a.type)) ??
+    items.find(isArtifactRedacted) ??
     items[0];
   const selectedItem = items.find((a) => a.artifact_id === selectedId);
+  const selectedIsRedacted = isArtifactRedacted(selectedItem);
   const selectedIsMedia = isPreviewableMedia(selectedItem);
   const selectedMediaType = previewMediaType(selectedItem);
   const counts = artifactSummary(items);
@@ -320,13 +327,18 @@ function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount
     if (focusOnMount) artifactsRef.current?.focus();
   }, [focusOnMount]);
   useEffect(() => {
+    const linked = artifactParam !== null ? items.find((a) => a.artifact_id === artifactParam) : undefined;
+    if (linked !== undefined && selectedId !== linked.artifact_id) {
+      setSelectedId(linked.artifact_id);
+      return;
+    }
     if (selectedId === null && preferred !== undefined) setSelectedId(preferred.artifact_id);
-    if (selectedId !== null && items.length > 0 && !items.some((a) => a.artifact_id === selectedId)) setSelectedId(preferred?.artifact_id ?? null);
-  }, [items, preferred, selectedId]);
+    if (selectedId !== null && items.length > 0 && !items.some((a) => a.artifact_id === selectedId)) setSelectedId(linked?.artifact_id ?? preferred?.artifact_id ?? null);
+  }, [artifactParam, items, preferred, selectedId]);
   const detail = useQuery({
     queryKey: ["artifact-detail", selectedId],
     queryFn: () => api.getArtifact(selectedId as string),
-    enabled: selectedId !== null && !selectedIsMedia,
+    enabled: selectedItem !== undefined && selectedIsRedacted && !selectedIsMedia,
   });
   const summary = detail.data !== undefined ? summarizeJsonArtifact(detail.data) : null;
   return (
@@ -361,6 +373,7 @@ function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount
                 {items.map((a) => {
                   const kind = mediaKind(a);
                   const labels = mediaMetaLabels(a);
+                  const isRedacted = isArtifactRedacted(a);
                   return (
                     <tr key={a.artifact_id} data-current={a.artifact_id === selectedId ? "true" : undefined}>
                       <td><ArtifactRef id={a.artifact_id} /></td>
@@ -376,12 +389,23 @@ function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount
                           <span className="subtle">{labels.join(" · ")}</span>
                         ) : "—"}
                       </td>
-                      <td><span className="badge muted">{a.redaction_status}</span></td>
+                      <td>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <span className={`badge ${isRedacted ? "green" : "amber"}`}>{a.redaction_status}</span>
+                          {!isRedacted && <span className="subtle">준비 중</span>}
+                        </span>
+                      </td>
                       <td>{a.retention_until ?? "—"}</td>
                       <td>{a.legal_hold ? "예" : "—"}</td>
                       <td>
-                        <button className="btn" type="button" onClick={() => setSelectedId(a.artifact_id)}>
-                          {a.artifact_id === selectedId ? "선택됨" : "미리보기"}
+                        <button
+                          className="btn"
+                          type="button"
+                          disabled={!isRedacted}
+                          title={!isRedacted ? "redaction 완료 후 미리보기를 사용할 수 있습니다." : undefined}
+                          onClick={() => mergeParams({ artifact: a.artifact_id, focus: "artifacts" })}
+                        >
+                          {!isRedacted ? "준비 중" : a.artifact_id === selectedId ? "선택됨" : "미리보기"}
                         </button>
                       </td>
                     </tr>
@@ -398,7 +422,11 @@ function RunArtifactsList({ runId, focusOnMount }: { runId: string; focusOnMount
                 {summary !== null && <span className="badge green">{summary.label} {summary.count}건</span>}
                 {summary !== null && summary.keys.length > 0 && <span className="subtle">키 {summary.keys.join(", ")}</span>}
               </div>
-              {detail.isLoading ? (
+              {selectedItem !== undefined && !selectedIsRedacted ? (
+                <p className="badge amber" role="status" style={{ display: "block", margin: "8px 0 0", whiteSpace: "normal" }}>
+                  redaction 처리 중인 산출물입니다. 완료 후 본문/미디어 미리보기가 표시됩니다.
+                </p>
+              ) : detail.isLoading ? (
                 <Loading />
               ) : detail.isError ? (
                 <ErrorState message="산출물 본문을 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
