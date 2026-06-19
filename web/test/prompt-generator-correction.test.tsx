@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, test, beforeEach } from "vitest";
+import { describe, expect, test, beforeEach, vi } from "vitest";
 
 import { App } from "../src/App";
 import type { ApiClient } from "../src/api/client";
@@ -9,6 +9,11 @@ import { ApiError, type ScenarioGenerationResult } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 const CORRECTION_BUTTON_NAME = "보정값으로 실행";
+
+function installObjectUrlMock(): void {
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:test-preview") });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+}
 
 function jwt(roles: readonly string[]): string {
   const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -32,13 +37,16 @@ describe("PromptScenarioGenerator correction run", () => {
     localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
   });
 
-  test("generate model_required requires policy confirmation before retry", async () => {
+  test("generate model_required recovery lands on runTrace artifacts with evidence counts", async () => {
+    installObjectUrlMock();
     const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
     const policyChecks: string[] = [];
+    const blobCalls: string[] = [];
     location.hash = "#scenarioStudio";
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
+        getRun: async (id) => ({ run_id: id, status: "completed", worker_id: "w1", attempts: 1, as_of: null }),
         getGatewayPolicy: async (model) => {
           policyChecks.push(model ?? "");
           if (model !== "gpt-4o-mini") {
@@ -46,6 +54,13 @@ describe("PromptScenarioGenerator correction run", () => {
           }
           return { model, version: 1, capabilities: { jsonMode: true }, budget: { maxInputTokens: 1000 } };
         },
+        getScenarioGenerationCapabilities: async () => ({
+          planner: { default_planner: "deterministic_mvp", available: ["deterministic_mvp", "llm_v1"] },
+          visual_evidence: {
+            screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
+            video: { enabled: true, policies: ["never", "failure", "always"], default_policy: "always", artifact_type: "video_masked", media_type: "video/webm" },
+          },
+        }),
         generateScenario: async (body) => {
           generateCalls.push(body);
           if (generateCalls.length === 1) {
@@ -72,10 +87,90 @@ describe("PromptScenarioGenerator correction run", () => {
             validation_report: {},
           };
         },
+        getScenarioGeneration: async (id) => ({
+          generation_id: id,
+          mode: "save_and_run",
+          status: "run_queued",
+          prompt_hash: "hash",
+          planner: "deterministic_mvp",
+          model: "gpt-4o-mini",
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+          run_id: "00000000-0000-0000-0000-000000000099",
+          evidence_policy: { screenshot: "each_step", video: "always" },
+          blockers: [],
+          created_at: "2026-06-15T00:00:00.000Z",
+          created_by: "operator",
+          draft_ir: {},
+          validation_report: {},
+        }),
+        listScenarioGenerationArtifacts: async () => ({
+          items: [
+            {
+              artifact_id: "91000000-0000-0000-0000-000000000101",
+              type: "screen_capture",
+              media_type: "image/png",
+              filename: "generation.png",
+              byte_size: 512,
+              duration_ms: null,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:01.000Z",
+            },
+            {
+              artifact_id: "91000000-0000-0000-0000-000000000102",
+              type: "video_masked",
+              media_type: "video/webm",
+              filename: "generation.webm",
+              byte_size: 4096,
+              duration_ms: 1200,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:02.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+        listRunArtifacts: async () => ({
+          items: [
+            {
+              artifact_id: "92000000-0000-0000-0000-000000000101",
+              type: "screen_capture",
+              media_type: "image/png",
+              filename: "run-step.png",
+              byte_size: 1024,
+              duration_ms: null,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:03.000Z",
+            },
+            {
+              artifact_id: "92000000-0000-0000-0000-000000000102",
+              type: "run_video",
+              media_type: "video/webm",
+              filename: "run.webm",
+              byte_size: 4096,
+              duration_ms: 1500,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:04.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+        getArtifactBlob: async (artifactId) => {
+          blobCalls.push(artifactId);
+          return new Blob([new Uint8Array([1, 2, 3])], { type: artifactId.endsWith("102") ? "video/webm" : "image/png" });
+        },
       }),
     );
 
     fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "Summarize today's orders" } });
+    fireEvent.change(screen.getByLabelText("동영상"), { target: { value: "always" } });
     const submitButton = screen.getByRole("button", { name: "저장 후 실행" });
     fireEvent.click(submitButton);
 
@@ -94,11 +189,23 @@ describe("PromptScenarioGenerator correction run", () => {
 
     await waitFor(() => expect(generateCalls).toHaveLength(2));
     expect(generateCalls[1]?.model).toBe("gpt-4o-mini");
+    expect(generateCalls[1]?.evidence).toEqual({ screenshot: "each_step", video: "always" });
     await waitFor(() =>
       expect(location.hash).toBe(
         "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000b7&focus=artifacts",
       ),
     );
+    const readout = await screen.findByLabelText("evidence storage");
+    expect(readout).toHaveTextContent("요청 이미지: 매 단계");
+    expect(readout).toHaveTextContent("요청 동영상: 전체 실행");
+    expect(readout).toHaveTextContent("저장 이미지 1");
+    expect(readout).toHaveTextContent("저장 동영상 1");
+    expect(await screen.findByRole("img", { name: "run-step.png" })).toHaveAttribute("src", "blob:test-preview");
+    expect(await screen.findByText("자연어 생성 산출물")).toBeInTheDocument();
+    expect(screen.getByText("image 1")).toBeInTheDocument();
+    expect(screen.getByText("video 1")).toBeInTheDocument();
+    expect(blobCalls).toContain("91000000-0000-0000-0000-000000000101");
+    expect(blobCalls).toContain("92000000-0000-0000-0000-000000000101");
   });
 
   test("blocked generation can run after target and start URL correction", async () => {
