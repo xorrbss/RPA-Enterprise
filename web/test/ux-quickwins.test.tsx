@@ -25,6 +25,11 @@ function jwt(roles: readonly string[]): string {
 }
 const ALL_ROLES = ["viewer", "operator", "reviewer", "approver", "admin"];
 
+function installObjectUrlMock(): void {
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: () => "blob:test-preview" });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: () => undefined });
+}
+
 describe("UX quick-wins (A)", () => {
   beforeEach(() => {
     location.hash = "";
@@ -229,7 +234,7 @@ describe("UX quick-wins (A)", () => {
     const Z = "99999999-0000-0000-0000-000000000009";
     renderApp(
       fakeClient({
-        getArtifact: async (id) => ({ artifact_id: id, type: "screenshot", sha256: id, redaction_status: "redacted", retention_until: null, content: `본문-${id}` }),
+        getArtifact: async (id) => ({ artifact_id: id, type: "extract_result_json", sha256: id, redaction_status: "redacted", retention_until: null, content: `본문-${id}` }),
       }),
     );
     location.hash = "#runTrace";
@@ -242,6 +247,34 @@ describe("UX quick-wins (A)", () => {
     await waitFor(() => expect(screen.getByText(`본문-${Z}`)).toBeInTheDocument());
     (await screen.findAllByRole("button", { name: new RegExp(`산출물 ${Y}`) }))[0]!.click();
     await waitFor(() => expect(screen.getByText(`본문-${Y}`)).toBeInTheDocument()); // 무반응 아님(해시 동일-회귀 수정)
+  });
+  test("A3: media artifact lookup previews video when media_type is missing", async () => {
+    installObjectUrlMock();
+    const fetchedBlobs: string[] = [];
+    const uuid = "72000000-0000-0000-0000-000000000001";
+    renderApp(
+      fakeClient({
+        getArtifact: async (id) => ({
+          artifact_id: id,
+          type: "video_masked",
+          media_type: null,
+          filename: "run.webm",
+          sha256: id,
+          redaction_status: "redacted",
+          retention_until: null,
+          content: "TEXT_SHOULD_NOT_RENDER_FOR_MEDIA",
+        }),
+        getArtifactBlob: async (id) => {
+          fetchedBlobs.push(id);
+          return new Blob([new Uint8Array([1, 2, 3])], { type: "video/webm" });
+        },
+      }),
+    );
+    location.hash = `#runTrace?artifact=${uuid}`;
+    const video = await screen.findByLabelText("run.webm");
+    expect(video).toHaveAttribute("src", "blob:test-preview");
+    expect(fetchedBlobs).toContain(uuid);
+    expect(screen.queryByText("TEXT_SHOULD_NOT_RENDER_FOR_MEDIA")).toBeNull();
   });
 });
 

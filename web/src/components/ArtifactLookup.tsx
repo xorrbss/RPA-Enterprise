@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { hashWith, mergeParams, useHashParam } from "../router";
-import { ApiError } from "../api/types";
+import { ApiError, type ArtifactDetail } from "../api/types";
 import { ArtifactMediaPreview } from "./ArtifactMediaPreview";
 import { errorLabel } from "./badges";
 
@@ -39,8 +39,55 @@ function errorText(err: unknown): string {
   return errorLabel(err);
 }
 
-function isPreviewableMedia(mediaType: string | null | undefined): boolean {
-  return mediaType?.startsWith("image/") === true || mediaType?.startsWith("video/") === true;
+function previewMediaType(artifact: { type: string; media_type?: string | null; filename?: string | null }): string | null {
+  if (artifact.media_type?.startsWith("image/") === true || artifact.media_type?.startsWith("video/") === true) {
+    return artifact.media_type;
+  }
+  const hints = `${artifact.type} ${artifact.filename ?? ""}`.toLowerCase();
+  if (hints.includes("video")) return "video/webm";
+  if (
+    hints.includes("screenshot") ||
+    hints.includes("screen_capture") ||
+    hints.includes("image_capture") ||
+    /\.(png|jpe?g|webp)\b/.test(hints)
+  ) {
+    return "image/png";
+  }
+  return null;
+}
+
+function ArtifactLookupResult({ artifact, onDownload }: { artifact: ArtifactDetail; onDownload: () => void }): JSX.Element {
+  const mediaType = previewMediaType(artifact);
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      {mediaType !== null && (
+        <ArtifactMediaPreview artifactId={artifact.artifact_id} mediaType={mediaType} filename={artifact.filename} />
+      )}
+      <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 16px", margin: 0 }}>
+        <dt className="subtle">종류</dt>
+        <dd style={{ margin: 0 }}>{artifact.type}</dd>
+        <dt className="subtle">sha256</dt>
+        <dd style={{ margin: 0 }}><code>{artifact.sha256}</code></dd>
+        <dt className="subtle">redaction</dt>
+        <dd style={{ margin: 0 }}><span className="badge muted">{artifact.redaction_status}</span></dd>
+        <dt className="subtle">보존 만료</dt>
+        <dd style={{ margin: 0 }}>{artifact.retention_until ?? "—"}</dd>
+      </dl>
+      {mediaType === null && (
+        <>
+          <pre
+            className="mono"
+            style={{ background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: "var(--radius)", padding: 12, margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          >
+            {artifact.content}
+          </pre>
+          <div>
+            <button className="btn" type="button" onClick={onDownload}>다운로드</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 export function ArtifactLookup(): JSX.Element {
@@ -119,33 +166,7 @@ export function ArtifactLookup(): JSX.Element {
           ) : q.isError ? (
             <p className="badge red" role="alert" style={{ display: "inline-block", margin: 0 }}>{errorText(q.error)}</p>
           ) : q.data !== undefined ? (
-            <div style={{ display: "grid", gap: 8 }}>
-              <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 16px", margin: 0 }}>
-                <dt className="subtle">종류</dt>
-                <dd style={{ margin: 0 }}>{q.data.type}</dd>
-                <dt className="subtle">sha256</dt>
-                <dd style={{ margin: 0 }}><code>{q.data.sha256}</code></dd>
-                <dt className="subtle">redaction</dt>
-                <dd style={{ margin: 0 }}><span className="badge muted">{q.data.redaction_status}</span></dd>
-                <dt className="subtle">보존 만료</dt>
-                <dd style={{ margin: 0 }}>{q.data.retention_until ?? "—"}</dd>
-              </dl>
-              {isPreviewableMedia(q.data.media_type) ? (
-                <ArtifactMediaPreview artifactId={q.data.artifact_id} mediaType={q.data.media_type} filename={q.data.filename} />
-              ) : (
-                <>
-                  <pre
-                    className="mono"
-                    style={{ background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: "var(--radius)", padding: 12, margin: 0, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-                  >
-                    {q.data.content}
-                  </pre>
-                  <div>
-                    <button className="btn" type="button" onClick={download}>다운로드</button>
-                  </div>
-                </>
-              )}
-            </div>
+            <ArtifactLookupResult artifact={q.data} onDownload={download} />
           ) : null}
         </div>
       )}
