@@ -52,11 +52,16 @@ import {
   loadWorkerConfig,
   type ApiConfig,
   type CommonConfig,
+  type GatewayConfig,
   type ScenarioGenerationLlmV1Config,
+  type WorkerConfig,
 } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
 import { ArtifactRedactionContentTransform } from "./artifacts/artifact-redaction-content-transform";
 import { FsArtifactRedactor, FsArtifactRetentionStore } from "./artifacts/fs-artifact-lifecycle-store";
+import { S3ArtifactRedactor } from "./artifacts/s3-artifact-redactor";
+import { S3ArtifactRetentionStore } from "./artifacts/s3-artifact-retention-store";
+import { S3ObjectStore } from "./artifacts/s3-object-store";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
 import { SafeCapabilityGate } from "./gateway/capability-gate";
 import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
@@ -76,7 +81,7 @@ import { buildTaskList } from "./worker/graphile-runner";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
-import type { SecretRef } from "../../ts/core-types";
+import type { SecretRef, SecretStore } from "../../ts/core-types";
 import {
   ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
   type ArtifactRealObjectStorePortBinding,
@@ -303,6 +308,45 @@ async function buildApiSessionStore(pool: PgPool, common: CommonConfig): Promise
   return new PgBrowserSessionStore({ pool, encryptor });
 }
 
+type ArtifactLifecyclePorts = Required<Pick<PgRuntimeWorkerOptions, "artifactRedactor" | "artifactRetentionStore">>;
+
+async function buildArtifactLifecyclePorts(input: {
+  readonly cfg: WorkerConfig;
+  readonly gw: GatewayConfig;
+  readonly secretStore: SecretStore;
+  readonly binding: ArtifactRealObjectStorePortBinding;
+}): Promise<ArtifactLifecyclePorts> {
+  if (input.cfg.artifactObjectStore.kind === "fs") {
+    const store = new FsObjectStore(input.gw.artifactDir);
+    return {
+      artifactRedactor: new FsArtifactRedactor(
+        store,
+        input.binding,
+        new ArtifactRedactionContentTransform(),
+      ),
+      artifactRetentionStore: new FsArtifactRetentionStore(store, input.binding),
+    };
+  }
+
+  const secretAccessKey = await input.secretStore.resolve(input.cfg.artifactObjectStoreRef as SecretRef);
+  const store = new S3ObjectStore({
+    endpoint: input.cfg.artifactObjectStore.endpoint,
+    region: input.cfg.artifactObjectStore.region,
+    bucket: input.cfg.artifactObjectStore.bucket,
+    accessKeyId: input.cfg.artifactObjectStore.accessKeyId,
+    secretAccessKey,
+    forcePathStyle: input.cfg.artifactObjectStore.forcePathStyle,
+  });
+  return {
+    artifactRedactor: new S3ArtifactRedactor(
+      store,
+      input.binding,
+      new ArtifactRedactionContentTransform(),
+    ),
+    artifactRetentionStore: new S3ArtifactRetentionStore(store, input.binding),
+  };
+}
+
 async function startWorker(pool: PgPool, connectionString: string): Promise<Runner> {
   const cfg = loadWorkerConfig(loadCommonConfig());
   // Install/upgrade the graphile_worker schema (idempotent; fails fast if the DB role lacks rights).
@@ -341,6 +385,12 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
     credentialRef: cfg.artifactObjectStoreRef as SecretRef,
     evidenceSchemaRef: ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
   };
+  const artifactLifecyclePorts = await buildArtifactLifecyclePorts({
+    cfg,
+    gw,
+    secretStore: runtimeWorkerStore,
+    binding: artifactObjectBinding,
+  });
   const visualEvidenceVideoRecorderFactory: PgRuntimeWorkerOptions["visualEvidenceVideoRecorderFactory"] =
     cfg.videoRecordingEnabled
       ? (provider) => {
@@ -368,12 +418,8 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
       retentionDays: gw.artifactRetentionDays,
     }),
     ...(visualEvidenceVideoRecorderFactory !== undefined ? { visualEvidenceVideoRecorderFactory } : {}),
-    artifactRedactor: new FsArtifactRedactor(
-      artifactStore,
-      artifactObjectBinding,
-      new ArtifactRedactionContentTransform(),
-    ),
-    artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
+    artifactRedactor: artifactLifecyclePorts.artifactRedactor,
+    artifactRetentionStore: artifactLifecyclePorts.artifactRetentionStore,
     runtimeJobEnqueuer: new PgGraphileRunEnqueuer(),
   };
 

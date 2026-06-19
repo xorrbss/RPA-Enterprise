@@ -38,7 +38,8 @@ const CLEAR = [
   "PORT", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
   "VAULT_RUNTIME_WORKER_ROLE_ID", "VAULT_RUNTIME_WORKER_SECRET_ID", "VAULT_API_ROLE_ID", "VAULT_API_SECRET_ID",
   "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF",
-  "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
+  "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_KIND", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
+  "S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_FORCE_PATH_STYLE",
   "GRAPHILE_WORKER_SCHEMA", "GRAPHILE_CONCURRENCY", "GRAPHILE_POLL_INTERVAL_MS",
   "CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL", "CODEX_MAX_CONTEXT_TOKENS",
   "CODEX_PRICE_PER_1K_INPUT_USD", "CODEX_PRICE_PER_1K_OUTPUT_USD",
@@ -203,6 +204,7 @@ function main(): void {
       w.artifactObjectStoreRef === "rpa/staging/artifact-lifecycle/object_store/fs",
       w.artifactObjectStoreRef,
     );
+    check("worker artifact object-store default kind fs", w.artifactObjectStore.kind === "fs", w.artifactObjectStore.kind);
     check("worker artifact backend alias default", w.artifactObjectStoreBackendAlias === "fs-local");
     check("worker concurrency default 1", w.graphileConcurrency === 1);
     check("worker video recording default false", w.videoRecordingEnabled === false);
@@ -229,6 +231,47 @@ function main(): void {
   });
   withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: "fs-staging-a" }, () =>
     check("worker artifact backend alias override", loadWorkerConfig(common).artifactObjectStoreBackendAlias === "fs-staging-a"));
+  withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_KIND: "bogus" }, () =>
+    expectThrow("worker artifact object-store invalid kind throws", () => loadWorkerConfig(common)));
+  withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_KIND: "s3" }, () =>
+    expectThrow("worker artifact s3 missing endpoint throws", () => loadWorkerConfig(common)));
+  withEnv({ ...FULL, ARTIFACT_OBJECT_STORE_KIND: "s3", S3_ENDPOINT: "http://s3.example" }, () =>
+    expectThrow("worker artifact s3 plaintext endpoint throws", () => loadWorkerConfig(common)));
+  withEnv({
+    ...FULL,
+    ARTIFACT_OBJECT_STORE_KIND: "s3",
+    ARTIFACT_OBJECT_STORE_REF: "rpa/staging/artifact-lifecycle/object_store/s3",
+    ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: "s3-staging-a",
+    S3_ENDPOINT: "https://s3.example",
+    S3_REGION: "ap-northeast-2",
+    S3_BUCKET: "rpa-artifacts",
+    S3_ACCESS_KEY_ID: "s3-access-id",
+    S3_FORCE_PATH_STYLE: "false",
+  }, () => {
+    const w = loadWorkerConfig(common);
+    check("worker artifact s3 kind carried", w.artifactObjectStore.kind === "s3", w.artifactObjectStore.kind);
+    check(
+      "worker artifact s3 config carried",
+      w.artifactObjectStore.kind === "s3" &&
+        w.artifactObjectStore.endpoint === "https://s3.example" &&
+        w.artifactObjectStore.region === "ap-northeast-2" &&
+        w.artifactObjectStore.bucket === "rpa-artifacts" &&
+        w.artifactObjectStore.accessKeyId === "s3-access-id" &&
+        w.artifactObjectStore.forcePathStyle === false,
+      JSON.stringify(w.artifactObjectStore),
+    );
+    check("worker artifact s3 backend alias carried", w.artifactObjectStoreBackendAlias === "s3-staging-a");
+  });
+  withEnv({
+    ...FULL,
+    ARTIFACT_OBJECT_STORE_KIND: "s3",
+    S3_ENDPOINT: "https://s3.example",
+    S3_REGION: "ap-northeast-2",
+    S3_BUCKET: "rpa-artifacts",
+    S3_ACCESS_KEY_ID: "s3-access-id",
+    S3_FORCE_PATH_STYLE: "maybe",
+  }, () =>
+    expectThrow("worker artifact s3 force path style must be true|false", () => loadWorkerConfig(common)));
 
   // GatewayConfig (D8-A16) — fail-closed on missing Codex provider creds / artifact dir; ops-defaults knobs.
   const GW_REQ = {

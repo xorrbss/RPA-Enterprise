@@ -195,6 +195,17 @@ function loadVaultIdentity(prefix: string): VaultIdentityConfig {
   };
 }
 
+export type ArtifactObjectStoreConfig =
+  | { readonly kind: "fs" }
+  | {
+      readonly kind: "s3";
+      readonly endpoint: string;
+      readonly region: string;
+      readonly bucket: string;
+      readonly accessKeyId: string;
+      readonly forcePathStyle: boolean;
+    };
+
 export interface WorkerConfig {
   /** AppRole identity for the runtime-worker (least-privilege: resume_token_hmac, executor). */
   readonly vaultRuntimeWorker: VaultIdentityConfig;
@@ -204,6 +215,8 @@ export interface WorkerConfig {
   readonly browserSessionKeyRef: string;
   /** SecretRef identifier for the artifact-lifecycle object_store port binding. */
   readonly artifactObjectStoreRef: string;
+  /** Artifact lifecycle object I/O backend. Gateway LLM artifacts remain FS-only per D8-A16. */
+  readonly artifactObjectStore: ArtifactObjectStoreConfig;
   /** Non-secret object-store backend alias used in lifecycle evidence. */
   readonly artifactObjectStoreBackendAlias: string;
   readonly graphileSchema?: string;
@@ -230,6 +243,7 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
     resumeTokenRef: `rpa/${common.rpaEnv}/runtime-worker/resume_token_hmac/active`,
     browserSessionKeyRef: `rpa/${common.rpaEnv}/runtime-worker/browser_session/active`,
     artifactObjectStoreRef: req("ARTIFACT_OBJECT_STORE_REF"),
+    artifactObjectStore: loadArtifactObjectStoreConfig(),
     artifactObjectStoreBackendAlias: opt("ARTIFACT_OBJECT_STORE_BACKEND_ALIAS") ?? "fs-local",
     graphileSchema: opt("GRAPHILE_WORKER_SCHEMA"),
     graphileConcurrency: num("GRAPHILE_CONCURRENCY", 1),
@@ -238,6 +252,22 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
     ...(videoRecordingEnabled ? { videoFfmpegPath: req("VISUAL_EVIDENCE_FFMPEG_PATH") } : {}),
     videoFrameIntervalMs,
     videoFrameRate,
+  };
+}
+
+function loadArtifactObjectStoreConfig(): ArtifactObjectStoreConfig {
+  const kind = (opt("ARTIFACT_OBJECT_STORE_KIND") ?? "fs").toLowerCase();
+  if (kind === "fs") return { kind };
+  if (kind !== "s3") {
+    throw new Error(`ARTIFACT_OBJECT_STORE_KIND must be one of fs|s3, got ${JSON.stringify(kind)}`);
+  }
+  return {
+    kind,
+    endpoint: reqHttpsUrl("S3_ENDPOINT"),
+    region: req("S3_REGION"),
+    bucket: req("S3_BUCKET"),
+    accessKeyId: req("S3_ACCESS_KEY_ID"),
+    forcePathStyle: strictBool("S3_FORCE_PATH_STYLE", true),
   };
 }
 
