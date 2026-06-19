@@ -2262,6 +2262,78 @@ async function main(): Promise<void> {
         );
       });
 
+      const savedWithRedactedContext = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-context-redacted-save-1" },
+        payload: {
+          ...runnablePayload,
+          mode: "save",
+          name: "generated-context-redacted",
+          params: {
+            entry_url: "https://example.com/notices",
+            api_key: { secret_ref: "secret://scenario-generation/api-key" },
+          },
+        },
+      });
+      check("saved generation redacts sensitive params_context -> 201", savedWithRedactedContext.statusCode === 201, savedWithRedactedContext.body);
+      const savedWithRedactedContextBody = savedWithRedactedContext.json();
+      check(
+        "saved generation params_context contains redacted marker",
+        isRecord(savedWithRedactedContextBody.params_context) &&
+          savedWithRedactedContextBody.params_context.api_key === "[REDACTED:scenario_generation_param]",
+        savedWithRedactedContext.body,
+      );
+      const redactedContextFallback = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${savedWithRedactedContextBody.generation_id}/run`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-context-redacted-run-1" },
+      });
+      check("redacted params_context fallback is blocked -> 200", redactedContextFallback.statusCode === 200, redactedContextFallback.body);
+      const redactedContextFallbackBody = redactedContextFallback.json();
+      check(
+        "redacted params_context fallback requires re-entry",
+        redactedContextFallbackBody.run_id === null &&
+          redactedContextFallbackBody.status === "blocked" &&
+          Array.isArray(redactedContextFallbackBody.blockers) &&
+          redactedContextFallbackBody.blockers.includes("params_context_redacted_value_required"),
+        redactedContextFallback.body,
+      );
+      const redactedContextReentry = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${savedWithRedactedContextBody.generation_id}/run`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-context-redacted-run-2" },
+        payload: {
+          start_url: "https://example.com/notices",
+          params: {
+            entry_url: "https://example.com/notices",
+            start_url: "https://example.com/notices",
+            api_key: { secret_ref: "secret://scenario-generation/api-key" },
+          },
+          evidence: { screenshot: "each_step", video: "never" },
+        },
+      });
+      check("redacted params_context can run after params re-entry -> 201", redactedContextReentry.statusCode === 201, redactedContextReentry.body);
+      const redactedContextReentryBody = redactedContextReentry.json();
+      await withTenantTx(pool, TENANT, async (client) => {
+        const rows = await client.query<{ run_params: Record<string, unknown>; generation_params_context: Record<string, unknown> }>(
+          `SELECT r.params AS run_params,
+                  g.params_context AS generation_params_context
+             FROM scenario_generations g
+             JOIN runs r ON r.tenant_id = g.tenant_id AND r.id = g.run_id
+            WHERE g.id=$1::uuid`,
+          [redactedContextReentryBody.generation_id],
+        );
+        const apiKey = rows.rows[0]?.run_params.api_key;
+        check(
+          "redacted marker is not promoted into run params",
+          isRecord(apiKey) &&
+            apiKey.secret_ref === "secret://scenario-generation/api-key" &&
+            rows.rows[0]?.generation_params_context.api_key === "[REDACTED:scenario_generation_param]",
+          JSON.stringify(rows.rows[0]),
+        );
+      });
+
       const denied = await app.inject({
         method: "POST",
         url: "/v1/scenario-generations",

@@ -6,6 +6,7 @@ import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
 import type { RunArtifactItem } from "../src/api/types";
+import { runDetailRefetchInterval } from "../src/views/RunTrace";
 import { fakeClient } from "./fake-client";
 
 function renderApp(client: ApiClient = fakeClient()): void {
@@ -427,6 +428,16 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(await screen.findByText("자연어 생성 산출물")).toBeInTheDocument();
     expect((await screen.findAllByText("scenario_generation_planner_output")).length).toBeGreaterThan(0);
     expect(await screen.findByText(/ready/)).toBeInTheDocument();
+  });
+
+  test("run detail polling stays active until terminal status", () => {
+    expect(runDetailRefetchInterval(undefined)).toBe(5_000);
+    expect(runDetailRefetchInterval("queued")).toBe(5_000);
+    expect(runDetailRefetchInterval("running")).toBe(5_000);
+    expect(runDetailRefetchInterval("completed")).toBe(false);
+    expect(runDetailRefetchInterval("failed_system")).toBe(false);
+    expect(runDetailRefetchInterval("failed_business")).toBe(false);
+    expect(runDetailRefetchInterval("cancelled")).toBe(false);
   });
 
   test("prompt-created run recovers linked generation from run_id when generation hash is absent", async () => {

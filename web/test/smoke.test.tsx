@@ -639,6 +639,18 @@ describe("D7 운영 콘솔 shell", () => {
         listScenarioGenerationArtifacts: async () => ({
           items: [
             {
+              artifact_id: "91000000-0000-0000-0000-000000000100",
+              type: "scenario_generation_planner_output",
+              media_type: "application/json",
+              filename: "planner.json",
+              byte_size: 128,
+              duration_ms: null,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:00.000Z",
+            },
+            {
               artifact_id: "91000000-0000-0000-0000-000000000101",
               type: "screen_capture",
               media_type: "image/png",
@@ -690,8 +702,12 @@ describe("D7 운영 콘솔 shell", () => {
 
     const image = await screen.findByRole("img", { name: "generation.png" });
     expect(image).toHaveAttribute("src", "blob:test-preview");
+    expect(screen.getByText("image 1")).toBeInTheDocument();
+    expect(screen.getByText("video 1")).toBeInTheDocument();
     expect(blobCalls).toContain("91000000-0000-0000-0000-000000000101");
     expect(scopedDetailCalls).toBe(0);
+    screen.getByRole("button", { name: /91000000-0000-0000-0000-000000000101/ }).click();
+    await waitFor(() => expect(location.hash).toContain("artifact=91000000-0000-0000-0000-000000000101"));
     const videoButton = screen.getByText("video_masked").closest("button");
     expect(videoButton).not.toBeNull();
     fireEvent.click(videoButton as HTMLButtonElement);

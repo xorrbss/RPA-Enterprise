@@ -33,6 +33,10 @@ const HUMAN_TASK_TERMINAL = new Set(["resolved", "expired", "cancelled"]);
 // resume_requested/resuming도 이미 resolve 진행 중이라 '대기' 단정이 과해 제외(보수적 게이팅).
 const SUSPENDED = new Set(["suspended"]);
 
+export function runDetailRefetchInterval(status: string | undefined): number | false {
+  return status !== undefined && TERMINAL.has(status) ? false : POLL_MS;
+}
+
 // F3 터미널 '도착' 톤 — 터미널 여부는 TERMINAL Set 단일 출처가 게이팅하고(비-터미널이면 null = 배너 없음),
 // 색은 badges.tone()에 위임해 도착 배너 배경과 내부 StatusBadge 색이 한 출처에서 항상 일치하게 한다(DRY·드리프트 방지).
 // (completed=green, 실패=red, cancelled=muted; 어휘 체인 abort→cancelled. 비-터미널 null = 조용한 false 금지.)
@@ -51,7 +55,12 @@ export function RunTraceView(): JSX.Element {
   const focusParam = useHashParam("focus");
   const generationParam = useHashParam("generation");
   const focusArtifacts = focusParam === "artifacts";
-  const detail = useQuery({ queryKey: ["run-detail", sel], queryFn: () => api.getRun(sel as string), enabled: sel !== null });
+  const detail = useQuery({
+    queryKey: ["run-detail", sel],
+    queryFn: () => api.getRun(sel as string),
+    enabled: sel !== null,
+    refetchInterval: (q) => runDetailRefetchInterval(q.state.data?.status),
+  });
   const generation = useQuery<ScenarioGenerationResult | null>({
     queryKey: ["scenario-generation-for-run", sel, generationParam],
     queryFn: async () => {

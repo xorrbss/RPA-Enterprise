@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import type { GenerationArtifactItem } from "../api/types";
+import { ArtifactRef } from "./ArtifactLookup";
 import { ArtifactMediaPreview } from "./ArtifactMediaPreview";
 import { errorLabel } from "./badges";
 
@@ -34,6 +35,25 @@ function previewGenerationArtifactMediaType(item: GenerationArtifactItem | undef
   return null;
 }
 
+function artifactMediaKind(item: GenerationArtifactItem): "image" | "video" | null {
+  const mediaType = previewGenerationArtifactMediaType(item);
+  if (mediaType?.startsWith("image/")) return "image";
+  if (mediaType?.startsWith("video/")) return "video";
+  return null;
+}
+
+function artifactSummary(items: readonly GenerationArtifactItem[]): { images: number; videos: number } {
+  return items.reduce(
+    (acc, item) => {
+      const kind = artifactMediaKind(item);
+      if (kind === "image") acc.images += 1;
+      if (kind === "video") acc.videos += 1;
+      return acc;
+    },
+    { images: 0, videos: 0 },
+  );
+}
+
 function previewText(content: string): string {
   try {
     return JSON.stringify(JSON.parse(content), null, 2).slice(0, 3000);
@@ -57,27 +77,27 @@ export function GenerationArtifactsPanel({
     refetchInterval: 10_000,
   });
   const items = list.data?.items ?? [];
+  const preferred = items.find((item) => previewGenerationArtifactMediaType(item) !== null) ?? items[0];
+  const summary = artifactSummary(items);
   const effectiveSelectedId =
     selectedId !== null && items.some((item) => item.artifact_id === selectedId)
       ? selectedId
-      : items[0]?.artifact_id ?? null;
+      : preferred?.artifact_id ?? null;
   useEffect(() => {
     if (items.length === 0) {
       if (selectedId !== null) setSelectedId(null);
       return;
     }
     if (selectedId === null || !items.some((item) => item.artifact_id === selectedId)) {
-      setSelectedId(items[0]?.artifact_id ?? null);
+      setSelectedId(preferred?.artifact_id ?? null);
     }
-  }, [items, selectedId]);
+  }, [items, preferred?.artifact_id, selectedId]);
   const selected = items.find((item) => item.artifact_id === effectiveSelectedId);
   const selectedMediaType = previewGenerationArtifactMediaType(selected);
-  const detailSelected = items.find((item) => item.artifact_id === selectedId);
-  const detailMediaType = previewGenerationArtifactMediaType(detailSelected);
   const detail = useQuery({
-    queryKey: ["scenario-generation-artifact", generationId, selectedId],
-    queryFn: () => api.getScenarioGenerationArtifact(generationId, selectedId as string),
-    enabled: selectedId !== null && detailMediaType === null,
+    queryKey: ["scenario-generation-artifact", generationId, effectiveSelectedId],
+    queryFn: () => api.getScenarioGenerationArtifact(generationId, effectiveSelectedId as string),
+    enabled: effectiveSelectedId !== null && selectedMediaType === null,
   });
 
   return (
@@ -85,6 +105,8 @@ export function GenerationArtifactsPanel({
       <div className="generation-artifacts-head">
         <strong>{title}</strong>
         {items.length > 0 && <span className="badge muted">{items.length}건</span>}
+        {summary.images > 0 && <span className="badge blue">image {summary.images}</span>}
+        {summary.videos > 0 && <span className="badge amber">video {summary.videos}</span>}
         <button className="linklike" type="button" onClick={() => void list.refetch()}>
           새로고침
         </button>
@@ -115,7 +137,7 @@ export function GenerationArtifactsPanel({
             {selected !== undefined && (
               <div className="inline-facts">
                 <span className="subtle">선택</span>
-                <code>{selected.artifact_id.slice(0, 8)}</code>
+                <ArtifactRef id={selected.artifact_id} />
                 <span className="subtle">유형 {selected.type}</span>
               </div>
             )}

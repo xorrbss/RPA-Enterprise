@@ -27,6 +27,7 @@ const BLOCKER_LABELS: Record<string, string> = {
   network_policy_domain_mismatch: "네트워크 정책이 사이트 도메인을 허용하지 않습니다.",
   site_profile_blocked: "사이트 승인이 필요합니다.",
   video_recording_port_not_configured: "서버에서 동영상 녹화가 비활성화되어 있습니다.",
+  params_context_redacted_value_required: "마스킹된 실행 params가 있어 값을 다시 입력해야 합니다.",
   pagination_page_limit_exceeded: "자동 반복 페이지 상한을 넘었습니다. max_pages를 10 이하로 줄여 주세요.",
 };
 
@@ -41,6 +42,7 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
   "network_policy_not_found",
   "network_policy_domain_mismatch",
   "video_recording_port_not_configured",
+  "params_context_redacted_value_required",
 ]);
 
 type ScreenshotPolicy = "never" | "failure" | "each_step";

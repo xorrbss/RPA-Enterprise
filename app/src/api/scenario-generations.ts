@@ -108,7 +108,10 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
   "network_policy_not_found",
   "network_policy_domain_mismatch",
   "video_recording_port_not_configured",
+  "params_context_redacted_value_required",
 ]);
+
+const REDACTED_SCENARIO_GENERATION_PARAM = "[REDACTED:scenario_generation_param]";
 
 export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get(
@@ -413,6 +416,7 @@ async function persistGenerationRun(
   const startUrl = request.startUrl ?? startUrlFromParams(effectiveRequestParams);
   const model = request.model !== undefined ? request.model : generation.model;
 
+  if (containsRedactedParamsMarker(effectiveRequestParams)) blockers.push("params_context_redacted_value_required");
   if (target === undefined) blockers.push("target_required_for_auto_run");
   if (startUrl === undefined) blockers.push("start_url_required_for_auto_run");
   if (evidence.video !== "never" && deps.scenarioGenerationCapabilities?.videoRecording !== true) {
@@ -1505,15 +1509,22 @@ function redactParamsContextRecord(value: Record<string, unknown>): Record<strin
 }
 
 function redactParamsContextValue(key: string, value: unknown): unknown {
-  if (isSensitiveParamKey(key)) return "[REDACTED:scenario_generation_param]";
+  if (isSensitiveParamKey(key)) return REDACTED_SCENARIO_GENERATION_PARAM;
   if (Array.isArray(value)) return value.map((item) => redactParamsContextValue(key, item));
   if (isRecord(value)) return redactParamsContextRecord(value);
-  if (typeof value === "string" && value.includes("PlainSecret")) return "[REDACTED:scenario_generation_param]";
+  if (typeof value === "string" && value.includes("PlainSecret")) return REDACTED_SCENARIO_GENERATION_PARAM;
   return value;
 }
 
 function isSensitiveParamKey(key: string): boolean {
   return /(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|credential)/i.test(key);
+}
+
+function containsRedactedParamsMarker(value: unknown): boolean {
+  if (value === REDACTED_SCENARIO_GENERATION_PARAM) return true;
+  if (Array.isArray(value)) return value.some((item) => containsRedactedParamsMarker(item));
+  if (isRecord(value)) return Object.values(value).some((item) => containsRedactedParamsMarker(item));
+  return false;
 }
 
 function redactGenerationDraftIr(value: unknown): unknown {
