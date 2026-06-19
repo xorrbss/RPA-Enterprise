@@ -256,6 +256,18 @@ async function planAndCompileScenario(
 function finalizePlannerEvidence(plan: GenerationPlan, trustedRequest: GenerationRequest, capabilities: GenerationCapabilities): GenerationPlan {
   const recording = recordingPolicy(trustedRequest.evidence);
   const blockers = new Set(plan.blockers);
+  const startUrl = trustedRequest.startUrl ?? extractFirstHttpUrl(trustedRequest.prompt);
+  const pagination = paginationPlan(trustedRequest.prompt, { ...trustedRequest.params });
+  if (trustedRequest.mode === "save_and_run") {
+    if (trustedRequest.target === undefined) blockers.add("target_required_for_auto_run");
+    if (startUrl === undefined) blockers.add("start_url_required_for_auto_run");
+  }
+  if (looksLikeSideEffectPrompt(trustedRequest.prompt, { allowPaginationControls: pagination.enabled })) {
+    blockers.add("side_effect_prompt_requires_review");
+  }
+  if (pagination.blocker !== undefined) {
+    blockers.add(pagination.blocker);
+  }
   if (trustedRequest.evidence.video !== "never" && !capabilities.videoRecording) {
     blockers.add("video_recording_port_not_configured");
   }
@@ -434,10 +446,12 @@ async function persistGeneration(
         reason: "scenario_generation_artifact_redaction_queue_not_configured",
       });
     }
-    await deps.enqueuer.enqueueArtifactRedaction(client, {
-      tenantId: principal.tenantId,
-      correlationId,
-    });
+    for (let index = 0; index < generationArtifactRefs.length; index += 1) {
+      await deps.enqueuer.enqueueArtifactRedaction(client, {
+        tenantId: principal.tenantId,
+        correlationId,
+      });
+    }
   }
 
   return {

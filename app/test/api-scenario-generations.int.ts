@@ -613,8 +613,10 @@ async function main(): Promise<void> {
           JSON.stringify(gatewayCalls.map((call) => ({ model: call.model, primitive: call.metadata.primitive }))),
         );
         check(
-          "artifact lifecycle jobs are enqueued for prompt-created run",
-          lifecycleJobs.map((job) => job.kind).join(",") === "artifact_redaction,artifact_retention",
+          "artifact lifecycle redaction jobs are enqueued per prompt-created artifact",
+          lifecycleJobs.length === 6 &&
+            lifecycleJobs.filter((job) => job.kind === "artifact_redaction" && job.runId === runBody.run_id).length === 5 &&
+            lifecycleJobs[lifecycleJobs.length - 1]?.kind === "artifact_retention",
           JSON.stringify(lifecycleJobs),
         );
         await redactPendingRunArtifacts({
@@ -1043,6 +1045,52 @@ async function main(): Promise<void> {
           llmPlannedReplay.json().generation_id === llmPlannedBody.generation_id && fakeLlmPlannerCalls === 1,
           JSON.stringify({ replay: llmPlannedReplay.json(), fakeLlmPlannerCalls }),
         );
+        const llmMissingTarget = await llmPlannerApp.inject({
+          method: "POST",
+          url: "/v1/scenario-generations",
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-llm-missing-target-1" },
+          payload: {
+            prompt: "Use the LLM planner to summarize latest notices",
+            planner: "llm_v1",
+            mode: "save_and_run",
+            name: "generated-llm-missing-target",
+          },
+        });
+        check("llm_v1 save_and_run without target/start_url is server-blocked -> 201", llmMissingTarget.statusCode === 201, llmMissingTarget.body);
+        const llmMissingTargetBody = llmMissingTarget.json();
+        check(
+          "llm_v1 server adds missing execution target blockers",
+          llmMissingTargetBody.status === "blocked" &&
+            llmMissingTargetBody.run_id === null &&
+            Array.isArray(llmMissingTargetBody.blockers) &&
+            llmMissingTargetBody.blockers.includes("target_required_for_auto_run") &&
+            llmMissingTargetBody.blockers.includes("start_url_required_for_auto_run"),
+          llmMissingTarget.body,
+        );
+        check("llm_v1 missing target does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+        const llmSideEffectBlocked = await llmPlannerApp.inject({
+          method: "POST",
+          url: "/v1/scenario-generations",
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-llm-side-effect-blocked-1" },
+          payload: {
+            ...runnablePayload,
+            prompt: "Delete old notices from https://example.com/notices",
+            planner: "llm_v1",
+            mode: "save_and_run",
+            name: "generated-llm-side-effect-blocked",
+          },
+        });
+        check("llm_v1 side-effect prompt is server-blocked -> 201", llmSideEffectBlocked.statusCode === 201, llmSideEffectBlocked.body);
+        const llmSideEffectBlockedBody = llmSideEffectBlocked.json();
+        check(
+          "llm_v1 server adds side-effect blocker",
+          llmSideEffectBlockedBody.status === "blocked" &&
+            llmSideEffectBlockedBody.run_id === null &&
+            Array.isArray(llmSideEffectBlockedBody.blockers) &&
+            llmSideEffectBlockedBody.blockers.includes("side_effect_prompt_requires_review"),
+          llmSideEffectBlocked.body,
+        );
+        check("llm_v1 side-effect blocker does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
         const llmVideoBlocked = await llmPlannerApp.inject({
           method: "POST",
           url: "/v1/scenario-generations",
@@ -1711,8 +1759,10 @@ async function main(): Promise<void> {
           );
           check("video capability pending artifacts remain hidden by RLS", videoTrace.artifacts.length === 0, JSON.stringify(videoTrace.artifacts));
           check(
-            "video capability run enqueues artifact lifecycle once",
-            videoLifecycleJobs.map((job) => job.kind).join(",") === "artifact_redaction,artifact_retention",
+            "video capability run enqueues redaction per artifact",
+            videoLifecycleJobs.length === 4 &&
+              videoLifecycleJobs.filter((job) => job.kind === "artifact_redaction" && job.runId === videoRunnableBody.run_id).length === 3 &&
+              videoLifecycleJobs[videoLifecycleJobs.length - 1]?.kind === "artifact_retention",
             JSON.stringify(videoLifecycleJobs),
           );
           await redactPendingRunArtifacts({

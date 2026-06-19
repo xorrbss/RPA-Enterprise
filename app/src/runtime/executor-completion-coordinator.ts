@@ -730,12 +730,12 @@ async function enqueueArtifactLifecycleJobs(
     );
   }
   const jobs: RuntimeWorkerJob[] = [
-    {
+    ...Array.from({ length: input.artifactCount }, (): RuntimeWorkerJob => ({
       kind: "artifact_redaction",
       tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
-    },
+    })),
     {
       kind: "artifact_retention",
       tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
