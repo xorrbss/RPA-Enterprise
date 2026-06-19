@@ -1435,8 +1435,9 @@ function promptMaxPages(prompt: string): number | undefined {
 }
 
 function recordingPolicy(evidence: EvidencePolicy): RecordingPolicy {
-  if (evidence.video === "always" || evidence.screenshot === "each_step") return "always";
-  if (evidence.video === "never" && evidence.screenshot === "never") return "never";
+  // Action-level recording controls step screenshot capture only; run video is driven by meta.evidence.video.
+  if (evidence.screenshot === "each_step") return "always";
+  if (evidence.screenshot === "never") return "never";
   return "masked_on_failure";
 }
 

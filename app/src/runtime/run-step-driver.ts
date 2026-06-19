@@ -154,6 +154,12 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     await failRunningRun(run, deps, outcome);
     return { state: "failed_system", outcome };
   }
+  // Injected visual recorders can create pending artifact bytes; require lifecycle enqueue before session/executor access.
+  if (visualEvidenceLifecycleEnqueuerRequired(deps) && deps.runtimeJobEnqueuer === undefined) {
+    const outcome = systemFailureOutcome();
+    await failRunningRun(run, deps, outcome);
+    return { state: "failed_system", outcome };
+  }
 
   const ctx: RunContext = {
     runId: run.runId,
@@ -364,6 +370,10 @@ function videoPolicyFromIr(irDoc: unknown): VisualEvidenceVideoPolicy | undefine
 
 function systemFailureOutcome(): ScenarioOutcome {
   return { terminal: "fail_system", visited: [], steps: [], artifacts: [] };
+}
+
+function visualEvidenceLifecycleEnqueuerRequired(deps: DriveDeps): boolean {
+  return deps.visualEvidenceRecorder !== undefined || deps.visualEvidenceVideoRecorder !== undefined;
 }
 
 const EXECUTOR_ACTIONS = new Set<string>(["act", "observe", "extract", "navigate", "download", "upload", "api_call", "file", "human_task", "shell"]);

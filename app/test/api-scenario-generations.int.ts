@@ -62,6 +62,7 @@ const NETWORK = "10000000-0000-4000-8000-0000000000a3";
 const MODEL_POLICY = "10000000-0000-4000-8000-0000000000a4";
 const WORKER = "10000000-0000-4000-8000-0000000000a5";
 const VIDEO_IDENTITY = "10000000-0000-4000-8000-0000000000a6";
+const VIDEO_ONLY_IDENTITY = "10000000-0000-4000-8000-0000000000a7";
 const OTHER_SITE = "10000000-0000-4000-8000-0000000000b1";
 const OTHER_IDENTITY = "10000000-0000-4000-8000-0000000000b2";
 const OTHER_NETWORK = "10000000-0000-4000-8000-0000000000b3";
@@ -1422,7 +1423,7 @@ async function main(): Promise<void> {
             const parsedJson = {
               draft_ir: fakeLlmDraftIr(draftName, { screenshot: "failure", video: "never" }),
               blockers: [],
-              params: mutatesRuntimeParams ? { start_url: "https://evil.example/notices" } : {},
+              ...(mutatesRuntimeParams ? { params: { start_url: "https://evil.example/notices" } } : {}),
             };
             for (const event of textDone(JSON.stringify(parsedJson))) yield event;
           },
@@ -2093,6 +2094,182 @@ async function main(): Promise<void> {
         }
       } finally {
         await videoEnabledApp.close();
+      }
+
+      await withTenantTx(pool, TENANT, async (client) => {
+        await client.query(
+          `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, 'video-only')`,
+          [VIDEO_ONLY_IDENTITY, TENANT, SITE],
+        );
+      });
+
+      const videoNoScreenshotEnqueuedRuns: RunEnqueueInput[] = [];
+      const videoNoScreenshotEnqueuer: RunEnqueuer = {
+        async enqueueRunClaim(_client, input) {
+          videoNoScreenshotEnqueuedRuns.push(input);
+        },
+        async enqueueRunAbort() {},
+        async enqueueSinkDeliver(_client, _input: SinkDeliverEnqueueInput) {},
+        async enqueueArtifactRedaction() {},
+      };
+      const videoNoScreenshotApp = buildServer({
+        pool,
+        auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+        rbac: new RoleMatrixRbacMiddleware(),
+        idempotency: new PgControlPlaneIdempotencyStore(pool),
+        enqueuer: videoNoScreenshotEnqueuer,
+        signedCommandRegistry,
+        scenarioGenerationCapabilities: { videoRecording: true },
+      });
+      await videoNoScreenshotApp.ready();
+      try {
+        const videoNoScreenshot = await videoNoScreenshotApp.inject({
+          method: "POST",
+          url: "/v1/scenario-generations",
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-video-no-screenshot-1" },
+          payload: {
+            prompt: runnablePayload.prompt,
+            name: "generated-video-no-screenshot",
+            model: runnablePayload.model,
+            start_url: runnablePayload.start_url,
+            target: {
+              site_profile_id: SITE,
+              browser_identity_id: VIDEO_ONLY_IDENTITY,
+              network_policy_id: NETWORK,
+            },
+            evidence: { screenshot: "never", video: "always" },
+          },
+        });
+        check("video-only evidence request queues when recorder capability is enabled -> 201", videoNoScreenshot.statusCode === 201, videoNoScreenshot.body);
+        const videoNoScreenshotBody = videoNoScreenshot.json();
+        check(
+          "video-only capability run queued",
+          videoNoScreenshotBody.status === "run_queued" &&
+            typeof videoNoScreenshotBody.run_id === "string" &&
+            Array.isArray(videoNoScreenshotBody.blockers) &&
+            videoNoScreenshotBody.blockers.length === 0,
+          videoNoScreenshot.body,
+        );
+        check(
+          "video-only evidence enqueues one local run",
+          videoNoScreenshotEnqueuedRuns.length === 1 && videoNoScreenshotEnqueuedRuns[0]?.runId === videoNoScreenshotBody.run_id,
+          JSON.stringify(videoNoScreenshotEnqueuedRuns),
+        );
+        check(
+          "video-only draft IR keeps screenshots disabled while video stays enabled",
+          isRecord(videoNoScreenshotBody.draft_ir) &&
+            isRecord(videoNoScreenshotBody.draft_ir.meta) &&
+            isRecord(videoNoScreenshotBody.draft_ir.meta.evidence) &&
+            videoNoScreenshotBody.draft_ir.meta.evidence.screenshot === "never" &&
+            videoNoScreenshotBody.draft_ir.meta.evidence.video === "always" &&
+            isRecord(videoNoScreenshotBody.draft_ir.nodes) &&
+            isRecord(videoNoScreenshotBody.draft_ir.nodes.open_start_url) &&
+            isRecord(videoNoScreenshotBody.draft_ir.nodes.open_start_url.policy) &&
+            videoNoScreenshotBody.draft_ir.nodes.open_start_url.policy.recording === "never",
+          videoNoScreenshot.body,
+        );
+
+        const videoNoScreenshotArtifactDir = mkdtempSync(join(tmpdir(), "rpa-generation-video-only-artifacts-"));
+        try {
+          const videoNoScreenshotGatewayCalls: LLMRequest[] = [];
+          const videoNoScreenshotLifecycleJobs: RuntimeWorkerJob[] = [];
+          const videoNoScreenshotStore = new FsObjectStore(videoNoScreenshotArtifactDir);
+          const videoNoScreenshotGateway = new LlmGateway({
+            primary: promptRunGatewayAdapter(videoNoScreenshotGatewayCalls),
+            gate: new SafeCapabilityGate(),
+            validator: new AjvStructuredOutputValidator(),
+            sink: new PgGatewayArtifactSink(pool, videoNoScreenshotStore, { retentionDays: 90 }),
+            idempotency: new PgLlmCallIdempotencyStore(pool),
+            redactionBoundary: new DeterministicGatewayRedactionBoundary(),
+            config: { retryMax: 0, fallbackAttempts: 0, repairAttempts: 0 },
+          });
+          const videoNoScreenshotWorker = new PgRuntimeWorker(pool, {
+            workerId: WORKER,
+            browserLeasePlanResolver: pgBrowserLeasePlanResolver,
+            browserSessionProvider: new TestFakeBrowserSessionProvider({
+              makeSession: () => new PromptRunFakeCdpSession(),
+            }),
+            allowTestBrowserSessionProvider: true,
+            executorFactory: createDomUtilityExecutorFactory(videoNoScreenshotGateway, {
+              model: "codex-fallback",
+              promptTemplateVersion: "prompt-run-int-v1",
+              budget: { maxInputTokens: 1000, maxOutputTokens: 1000, maxCost: 1 },
+            }),
+            visualEvidenceRecorder: new PgVisualEvidenceRecorder(pool, videoNoScreenshotStore, { retentionDays: 90 }),
+            visualEvidenceVideoRecorderFactory: (provider) =>
+              new PgScreenshotFrameVideoRecorder(pool, videoNoScreenshotStore, provider, {
+                ffmpegPath: "unused-in-test",
+                encoder: fakeVideoEncoder(),
+                retentionDays: 90,
+                frameIntervalMs: 60_000,
+                frameRate: 1,
+                tempRootDir: videoNoScreenshotArtifactDir,
+              }),
+            runtimeJobEnqueuer: {
+              async enqueueRuntimeJob(_client, job) {
+                videoNoScreenshotLifecycleJobs.push(job);
+              },
+            },
+          });
+          const videoNoScreenshotDriven = await videoNoScreenshotWorker.handle({
+            kind: "run_claim",
+            tenantId: TENANT as TenantId,
+            runId: videoNoScreenshotBody.run_id as RunId,
+            correlationId: "20000000-0000-4000-8000-0000000000b2" as CorrelationId,
+          });
+          check(
+            "video-only prompt-created run drives through worker",
+            videoNoScreenshotDriven.kind === "completed",
+            JSON.stringify(videoNoScreenshotDriven),
+          );
+          const videoNoScreenshotTrace = await generatedRunTrace(pool, videoNoScreenshotBody.run_id);
+          check("video-only prompt-created run status completed", videoNoScreenshotTrace.status === "completed", JSON.stringify(videoNoScreenshotTrace));
+          check(
+            "video-only run records observe/extract stagehand calls",
+            videoNoScreenshotTrace.calls.length === 2 && videoNoScreenshotTrace.calls.every((call) => call.stream_status === "done"),
+            JSON.stringify(videoNoScreenshotTrace.calls),
+          );
+          check(
+            "video-only run stores LLM outputs and masked WebM bytes without screenshot PNGs",
+            readdirSync(videoNoScreenshotArtifactDir).filter((name) => name.endsWith(".bin")).length === 3,
+            JSON.stringify(readdirSync(videoNoScreenshotArtifactDir)),
+          );
+          check("video-only pending artifacts remain hidden by RLS", videoNoScreenshotTrace.artifacts.length === 0, JSON.stringify(videoNoScreenshotTrace.artifacts));
+          check(
+            "video-only run enqueues redaction per non-screenshot artifact",
+            videoNoScreenshotLifecycleJobs.length === 4 &&
+              videoNoScreenshotLifecycleJobs.filter((job) => job.kind === "artifact_redaction" && job.runId === videoNoScreenshotBody.run_id).length === 3 &&
+              videoNoScreenshotLifecycleJobs[videoNoScreenshotLifecycleJobs.length - 1]?.kind === "artifact_retention",
+            JSON.stringify(videoNoScreenshotLifecycleJobs),
+          );
+          await redactPendingRunArtifacts({
+            runId: videoNoScreenshotBody.run_id,
+            artifactDir: videoNoScreenshotArtifactDir,
+            expectedPasses: 3,
+          });
+          const videoNoScreenshotRedactedTrace = await generatedRunTrace(pool, videoNoScreenshotBody.run_id);
+          const videoOnlyArtifacts = videoNoScreenshotRedactedTrace.artifacts.filter((artifact) => artifact.type === "video_masked");
+          const videoOnlyLlmArtifacts = videoNoScreenshotRedactedTrace.artifacts.filter((artifact) => artifact.type === "llm_output");
+          const videoOnlyScreenshotArtifacts = videoNoScreenshotRedactedTrace.artifacts.filter((artifact) => artifact.type === "screenshot_masked");
+          check(
+            "video-only redaction exposes LLM outputs and masked WebM metadata without screenshots",
+            videoNoScreenshotRedactedTrace.artifacts.length === 3 &&
+              videoOnlyLlmArtifacts.length === 2 &&
+              videoOnlyLlmArtifacts.every(
+                (artifact) => artifact.media_type === "text/plain; charset=utf-8" && artifact.redaction_status === "redacted",
+              ) &&
+              videoOnlyScreenshotArtifacts.length === 0 &&
+              videoOnlyArtifacts.length === 1 &&
+              videoOnlyArtifacts[0]?.media_type === "video/webm" &&
+              videoOnlyArtifacts[0]?.redaction_status === "redacted",
+            JSON.stringify(videoNoScreenshotRedactedTrace.artifacts),
+          );
+        } finally {
+          rmSync(videoNoScreenshotArtifactDir, { recursive: true, force: true });
+        }
+      } finally {
+        await videoNoScreenshotApp.close();
       }
 
       const continuedRun = await app.inject({

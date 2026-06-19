@@ -67,6 +67,9 @@ const SCENARIO_PLANNER_OUTPUT_SCHEMA = {
       items: { type: "string", minLength: 1 },
       default: [],
     },
+    // Forbidden by validatePlannerOutputTopLevel; present here so the API can return
+    // the explicit llm_planner_params_forbidden contract error instead of a generic gateway schema failure.
+    params: {},
   },
 } as const;
 const SCENARIO_PLANNER_OUTPUT_FIELDS = new Set(["draft_ir", "blockers"]);

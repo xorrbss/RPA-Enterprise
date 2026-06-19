@@ -12,13 +12,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import type { PoolClient } from "pg";
-import type { ArtifactRef, ExecutorPlugin, IRActionType, PageState, PageStateResolver, PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
+import type { ArtifactRef, ExecutorPlugin, IRActionType, PageState, PageStateResolver, PlainSecret, SecretRef, SecretStore, StepResult, VerifyResult } from "../../ts/core-types";
 import type { RunVideoRecording, RuntimeWorkerJob, VisualEvidenceVideoRecorder } from "../../ts/runtime-contract";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { createPool, withTenantTx } from "../src/db/pool";
+import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
 import { driveClaimedRun, type ClaimedRun } from "../src/runtime/run-step-driver";
 import { PgChallengeSuspensionPort } from "../src/runtime/challenge-suspension-port";
 import { HmacResumeTokenCodec } from "../src/runtime/resume-token-codec";
+import type { VisualEvidenceRecorder } from "../src/runtime/visual-evidence";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_run_driver_int";
@@ -37,6 +39,8 @@ const RUN_VIDEO_FAILURE_FAIL = "71000000-0000-0000-0000-0000000000da";
 const RUN_VIDEO_NO_RECORDER = "71000000-0000-0000-0000-0000000000db";
 const RUN_VIDEO_STOP_FAIL = "71000000-0000-0000-0000-0000000000dc";
 const RUN_VIDEO_DRIVE_THROW = "71000000-0000-0000-0000-0000000000de";
+const RUN_VISUAL_NO_ENQUEUER = "71000000-0000-0000-0000-0000000000df";
+const RUN_VIDEO_NO_ENQUEUER = "71000000-0000-0000-0000-0000000000e0";
 const RUN_GENERATED_LIKE = "71000000-0000-0000-0000-0000000000dd";
 const SCEN2 = "70000000-0000-0000-0000-0000000000e1"; // @human_task(R5) 시나리오(별도 IR)
 const SVER2 = "70000000-0000-0000-0000-0000000000e2";
@@ -149,6 +153,72 @@ class FakeRuntimeJobEnqueuer {
 
   async enqueueRuntimeJob(_client: PoolClient, job: RuntimeWorkerJob): Promise<void> {
     this.jobs.push(job);
+  }
+}
+
+class CountingSuccessExecutor implements ExecutorPlugin {
+  readonly calls: string[] = [];
+
+  capabilities(): { dom: boolean; vision: boolean; utility: boolean } {
+    return { dom: false, vision: false, utility: true };
+  }
+
+  async execute(stepId: string): Promise<StepResult> {
+    this.calls.push(stepId);
+    const now = new Date().toISOString();
+    return {
+      stepId,
+      action: "navigate",
+      status: "success",
+      pageStateBefore: "ref",
+      pageStateAfter: "ref",
+      artifacts: [],
+      cache: { mode: "bypass" },
+      timings: { startedAt: now, endedAt: now, durationMs: 0 },
+    };
+  }
+
+  async verify(): Promise<VerifyResult> {
+    throw new Error("verify not used in driver int");
+  }
+}
+
+class FakeVisualEvidenceRecorder implements VisualEvidenceRecorder {
+  readonly captures: Parameters<VisualEvidenceRecorder["captureStepScreenshot"]>[0][] = [];
+
+  async captureStepScreenshot(input: Parameters<VisualEvidenceRecorder["captureStepScreenshot"]>[0]): Promise<ArtifactRef> {
+    this.captures.push(input);
+    return "72000000-0000-0000-0000-0000000000df" as ArtifactRef;
+  }
+}
+
+const fakeCdpSession: CdpSession = {
+  url: () => "about:blank",
+  async goto() {},
+  async reload() {},
+  async evaluate<R = unknown>(_expression: string): Promise<R> {
+    return undefined as R;
+  },
+  async sendCDP<T = unknown>(_method: string, _params?: object): Promise<T> {
+    return {} as T;
+  },
+  async click() {},
+  async fill() {},
+  async selectOption() {},
+  async setInputFiles() {},
+  downloadDir: () => "",
+  async waitForDownload() {
+    return false;
+  },
+  async close() {},
+};
+
+class CountingSessionProvider implements CdpSessionProvider {
+  readonly leaseIds: string[] = [];
+
+  forLease(leaseId: string): CdpSession {
+    this.leaseIds.push(leaseId);
+    return fakeCdpSession;
   }
 }
 
@@ -268,6 +338,18 @@ async function runSteps(
 }
 
 // suspend 구동 검증용(트리거 i): 첫 스텝에서 status='suspended' → 인터프리터 suspend outcome → driver R4+포트+R11.
+async function artifactCount(pool: ReturnType<typeof createPool>, runId: string): Promise<number> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const rows = await c.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+         FROM artifacts
+        WHERE tenant_id=$1::uuid AND run_id=$2::uuid`,
+      [TENANT, runId],
+    );
+    return rows.rows[0]?.count ?? 0;
+  });
+}
+
 const suspendingExecutor: ExecutorPlugin = {
   capabilities: () => ({ dom: false, vision: false, utility: true }),
   async execute(stepId) {
@@ -452,7 +534,7 @@ async function main(): Promise<void> {
         [SVER_GENERATED_LIKE, TENANT, SCEN_GENERATED_LIKE, JSON.stringify(compiledGeneratedLike.ir), compiledGeneratedLike.compiledAst],
       );
       // R1을 우회해 claimed 상태로 직접 시드(드라이버는 R2부터). correlation_id=run_id.
-      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_SUSPEND, RUN_ARTIFACT]) {
+      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_SUSPEND, RUN_ARTIFACT, RUN_VISUAL_NO_ENQUEUER]) {
         await c.query(
           `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
            VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
@@ -476,6 +558,7 @@ async function main(): Promise<void> {
         [RUN_VIDEO_NO_RECORDER, SVER_VIDEO_ALWAYS],
         [RUN_VIDEO_STOP_FAIL, SVER_VIDEO_ALWAYS],
         [RUN_VIDEO_DRIVE_THROW, SVER_VIDEO_ALWAYS],
+        [RUN_VIDEO_NO_ENQUEUER, SVER_VIDEO_ALWAYS],
       ] as const) {
         await c.query(
           `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
@@ -567,6 +650,78 @@ async function main(): Promise<void> {
       JSON.stringify(artifactEnqueuer.jobs),
     );
 
+    const visualNoEnqueuerExecutor = new CountingSuccessExecutor();
+    const visualNoEnqueuerRecorder = new FakeVisualEvidenceRecorder();
+    const visualNoEnqueuerSessions = new CountingSessionProvider();
+    const visualNoEnqueuer = await driveClaimedRun(
+      {
+        runId: RUN_VISUAL_NO_ENQUEUER,
+        tenantId: TENANT,
+        scenarioVersionId: SVER,
+        correlationId: RUN_VISUAL_NO_ENQUEUER,
+        leaseId: "lease-visual-no-enqueuer",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      {
+        pool,
+        executor: visualNoEnqueuerExecutor,
+        resolver: fakeResolver,
+        workerId: WORKER,
+        sessionProvider: visualNoEnqueuerSessions,
+        visualEvidenceRecorder: visualNoEnqueuerRecorder,
+      },
+    );
+    check(
+      "visual recorder without lifecycle enqueuer fails before executor/session/recorder",
+      visualNoEnqueuer.state === "failed_system" &&
+        visualNoEnqueuer.outcome.terminal === "fail_system" &&
+        visualNoEnqueuerExecutor.calls.length === 0 &&
+        visualNoEnqueuerSessions.leaseIds.length === 0 &&
+        visualNoEnqueuerRecorder.captures.length === 0,
+      JSON.stringify({
+        state: visualNoEnqueuer.state,
+        calls: visualNoEnqueuerExecutor.calls,
+        sessions: visualNoEnqueuerSessions.leaseIds,
+        captures: visualNoEnqueuerRecorder.captures.length,
+      }),
+    );
+    check("visual recorder without lifecycle enqueuer creates no artifact rows", (await artifactCount(pool, RUN_VISUAL_NO_ENQUEUER)) === 0);
+
+    const videoNoEnqueuerExecutor = new CountingSuccessExecutor();
+    const videoNoEnqueuerRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000e0" as ArtifactRef);
+    const videoNoEnqueuer = await driveClaimedRun(
+      {
+        runId: RUN_VIDEO_NO_ENQUEUER,
+        tenantId: TENANT,
+        scenarioVersionId: SVER_VIDEO_ALWAYS,
+        correlationId: RUN_VIDEO_NO_ENQUEUER,
+        leaseId: "lease-video-no-enqueuer",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      {
+        pool,
+        executor: videoNoEnqueuerExecutor,
+        resolver: fakeResolver,
+        workerId: WORKER,
+        visualEvidenceVideoRecorder: videoNoEnqueuerRecorder,
+      },
+    );
+    check(
+      "video recorder without lifecycle enqueuer fails before executor/recorder",
+      videoNoEnqueuer.state === "failed_system" &&
+        videoNoEnqueuer.outcome.terminal === "fail_system" &&
+        videoNoEnqueuerExecutor.calls.length === 0 &&
+        videoNoEnqueuerRecorder.starts.length === 0,
+      JSON.stringify({ state: videoNoEnqueuer.state, calls: videoNoEnqueuerExecutor.calls, starts: videoNoEnqueuerRecorder.starts }),
+    );
+    check("video recorder without lifecycle enqueuer creates no artifact rows", (await artifactCount(pool, RUN_VIDEO_NO_ENQUEUER)) === 0);
+
     const videoAlwaysRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000d8" as ArtifactRef);
     const videoAlwaysEnqueuer = new FakeRuntimeJobEnqueuer();
     const videoAlways = await driveClaimedRun(
@@ -595,6 +750,7 @@ async function main(): Promise<void> {
     check("video always artifact triggers lifecycle jobs", videoAlwaysEnqueuer.jobs.length === 2 && videoAlwaysEnqueuer.jobs[0]?.kind === "artifact_redaction", JSON.stringify(videoAlwaysEnqueuer.jobs));
 
     const videoFailureSuccessRecorder = new FakeVideoRecorder("72000000-0000-0000-0000-0000000000d9" as ArtifactRef);
+    const videoFailureSuccessEnqueuer = new FakeRuntimeJobEnqueuer();
     const videoFailureSuccess = await driveClaimedRun(
       {
         runId: RUN_VIDEO_FAILURE_SUCCESS,
@@ -607,7 +763,14 @@ async function main(): Promise<void> {
         networkPolicyId: "np-1",
         params: { entry_url: "https://example.com" },
       },
-      { pool, executor: fakeExecutor, resolver: fakeResolver, workerId: WORKER, visualEvidenceVideoRecorder: videoFailureSuccessRecorder },
+      {
+        pool,
+        executor: fakeExecutor,
+        resolver: fakeResolver,
+        workerId: WORKER,
+        visualEvidenceVideoRecorder: videoFailureSuccessRecorder,
+        runtimeJobEnqueuer: videoFailureSuccessEnqueuer,
+      },
     );
     check("video failure policy discards successful run recording", videoFailureSuccess.state === "completed" && videoFailureSuccessRecorder.recordings[0]?.discards[0] === "terminal_success" && videoFailureSuccess.outcome.artifacts.length === 0, JSON.stringify({ artifacts: videoFailureSuccess.outcome.artifacts, recordings: videoFailureSuccessRecorder.recordings }));
 
@@ -695,6 +858,7 @@ async function main(): Promise<void> {
     check("video policy without recorder closes DB run", videoNoRecorderDb?.status === "failed_system", JSON.stringify(videoNoRecorderDb));
 
     const throwingVideoRecorder = new ThrowingVideoRecorder();
+    const videoStopFailEnqueuer = new FakeRuntimeJobEnqueuer();
     const videoStopFail = await driveClaimedRun(
       {
         runId: RUN_VIDEO_STOP_FAIL,
@@ -707,7 +871,14 @@ async function main(): Promise<void> {
         networkPolicyId: "np-1",
         params: { entry_url: "https://example.com" },
       },
-      { pool, executor: fakeExecutor, resolver: fakeResolver, workerId: WORKER, visualEvidenceVideoRecorder: throwingVideoRecorder },
+      {
+        pool,
+        executor: fakeExecutor,
+        resolver: fakeResolver,
+        workerId: WORKER,
+        visualEvidenceVideoRecorder: throwingVideoRecorder,
+        runtimeJobEnqueuer: videoStopFailEnqueuer,
+      },
     );
     const videoStopFailDb = await withTenantTx(pool, TENANT, async (c) => {
       const r = await c.query<{ status: string }>(`SELECT status FROM runs WHERE id=$1::uuid`, [RUN_VIDEO_STOP_FAIL]);
