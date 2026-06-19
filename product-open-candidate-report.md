@@ -130,6 +130,7 @@ New repo-local support artifacts:
 - `scripts/html-http-smoke.mjs`
 - `scripts/run-local-gates.mjs`
 - `scripts/secret-scan.mjs`
+- `scripts/validate-staging-release-packet.mjs`
 - `scripts/yaml-parse.py`
 - `codegen/contract-consistency.ts`
 - `codegen/control-plane.fixtures.ts`

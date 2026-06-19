@@ -18,6 +18,8 @@
     "spectral": "spectral lint openapi.yaml asyncapi.yaml --ruleset .spectral.yaml --fail-severity error",
     "secret:scan-fixtures": "node ../scripts/secret-scan.mjs --self-test",
     "secret:scan": "node ../scripts/secret-scan.mjs",
+    "release-packet:fixtures": "node ../scripts/validate-staging-release-packet.mjs --self-test",
+    "release-packet:validate": "node ../scripts/validate-staging-release-packet.mjs",
     "html:smoke": "node ../scripts/html-smoke.mjs",
     "html:http-smoke": "node ../scripts/html-http-smoke.mjs",
     "db:static-smoke": "node ../scripts/db-static-smoke.mjs",

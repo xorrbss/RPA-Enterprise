@@ -33,6 +33,7 @@ const steps = [
   ["DB static smoke", "node", ["scripts/db-static-smoke.mjs"]],
   ["Workflow/OpenAPI/AsyncAPI YAML parse", "python", ["scripts/yaml-parse.py"]],
   ["Secret scan fixtures", "node", ["scripts/secret-scan.mjs", "--self-test"]],
+  ["Staging release packet validator fixtures", "node", ["scripts/validate-staging-release-packet.mjs", "--self-test"]],
   ["Secret scan", "node", ["scripts/secret-scan.mjs"]],
   ["App install", "npm", ["ci", "--prefix", "app"]],
   ["App runtime typecheck", "npm", ["--prefix", "app", "run", "typecheck"]],
