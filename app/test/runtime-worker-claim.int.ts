@@ -88,6 +88,7 @@ const ARTIFACT_REDACTION_QUARANTINED = "60000000-0000-0000-0000-000000000002";
 const ARTIFACT_REDACTION_DELETED = "60000000-0000-0000-0000-000000000003";
 const ARTIFACT_REDACTION_ALREADY = "60000000-0000-0000-0000-000000000004";
 const ARTIFACT_REDACTION_ACTIVE_CLAIM = "60000000-0000-0000-0000-000000000005";
+const ARTIFACT_REDACTION_RETRYABLE = "60000000-0000-0000-0000-000000000006";
 const ARTIFACT_RETENTION_DELETE = "60000000-0000-0000-0000-000000000011";
 const ARTIFACT_RETENTION_NOT_FOUND = "60000000-0000-0000-0000-000000000012";
 const ARTIFACT_RETENTION_TRANSIENT = "60000000-0000-0000-0000-000000000013";
@@ -177,6 +178,13 @@ const fakeArtifactRedactor: ArtifactRedactor = {
         evidence: localTestEvidence(input, "redact", "local-redaction-receipt", sha256),
       };
     }
+    if (input.artifact.artifactRef === ARTIFACT_REDACTION_RETRYABLE) {
+      return {
+        kind: "retryable_failed",
+        reason: "redaction backend unavailable",
+        evidence: localTestEvidence(input, "redact", "local-redaction-retryable-receipt"),
+      };
+    }
     return { kind: "terminal_failed", reason: `unexpected redaction fixture ${input.artifact.artifactRef}` };
   },
 };
@@ -249,6 +257,8 @@ async function seedLifecycleArtifacts(pool: ReturnType<typeof createPool>): Prom
           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
          ($7,$2,$8,'screenshot','pending',0,'object://runtime-worker/redaction-active-claim',
           now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+         ($16,$2,$3,'screenshot','pending',1,'object://runtime-worker/redaction-retryable',
+          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
          ($9,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-delete',
           now() - interval '3 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
          ($10,$2,$3,'receipt','not_required',0,'object://runtime-worker/retention-not-found',
@@ -279,6 +289,7 @@ async function seedLifecycleArtifacts(pool: ReturnType<typeof createPool>): Prom
         ARTIFACT_RETENTION_QUARANTINE,
         ARTIFACT_RETENTION_UNEXPIRED,
         ARTIFACT_RETENTION_ALREADY_DELETED,
+        ARTIFACT_REDACTION_RETRYABLE,
       ],
     );
   });
@@ -1151,6 +1162,51 @@ async function main(): Promise<void> {
         (await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_QUARANTINED)).redactionStatus === "pending" &&
           (await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_DELETED)).deletedAtSet === true &&
           (await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_ALREADY)).redactionStatus === "redacted",
+      );
+
+      const redactionRetryPending = await bypassWorker.handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        runId: RUN_HOLDER as RunId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check(
+        "artifact_redaction retryable result below max keeps row pending",
+        redactionRetryPending.kind === "completed",
+        JSON.stringify(redactionRetryPending),
+      );
+      const retryablePending = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_RETRYABLE);
+      check(
+        "artifact_redaction retryable below max increments attempts without marking failed",
+        retryablePending.redactionStatus === "pending" &&
+          retryablePending.redactionAttempts === 2 &&
+          retryablePending.lifecycleClaimSet === false,
+        JSON.stringify(retryablePending),
+      );
+
+      const redactionRetryExhausted = await bypassWorker.handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        runId: RUN_HOLDER as RunId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check(
+        "artifact_redaction retryable result at max completes finalization",
+        redactionRetryExhausted.kind === "completed",
+        JSON.stringify(redactionRetryExhausted),
+      );
+      const retryableFailed = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_RETRYABLE);
+      check(
+        "artifact_redaction retryable at max marks failed and clears claim",
+        retryableFailed.redactionStatus === "failed" &&
+          retryableFailed.redactionAttempts === 3 &&
+          retryableFailed.lifecycleClaimSet === false,
+        JSON.stringify(retryableFailed),
+      );
+      check(
+        "artifact_redaction retry threshold calls retryable fixture twice",
+        redactionCalls.filter((call) => call.artifact.artifactRef === ARTIFACT_REDACTION_RETRYABLE).length === 2,
+        JSON.stringify(redactionCalls.map((call) => call.artifact.artifactRef)),
       );
 
       const retentionDelete = await bypassWorker.handle({
