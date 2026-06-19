@@ -8,6 +8,7 @@ import { ActionButton } from "../components/ActionButton";
 import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
+import { navigate } from "../router";
 import type { ScenarioItem, ScenarioVersionItem } from "../api/types";
 
 // 자동화 만들기(시나리오 스튜디오): 작성/편집 폼 + 목록 + 운영 기준 지정.
@@ -60,6 +61,9 @@ export function ScenariosView(): JSX.Element {
             render: (r) => (
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                 <RunScenarioButton scenario={r} />
+                <button className="btn" type="button" onClick={() => navigate("playground", { scenario: r.scenario_id })}>
+                  계획 확인
+                </button>
                 {can("scenario.update") && (
                   <button
                     className="btn"

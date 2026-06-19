@@ -264,6 +264,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
+  const evidenceSettingsLoading = capabilities.isLoading;
   const screenshotCapability = capabilities.data?.visual_evidence.screenshot;
   const screenshotRecordingEnabled = screenshotCapability?.enabled === true;
   const screenshotPolicies = useMemo<readonly ScreenshotPolicy[]>(
@@ -473,6 +474,10 @@ export function PromptScenarioGenerator(): JSX.Element {
       setLocalError("AI 모델을 입력하고 정책 확인을 완료한 뒤 다시 실행하세요.");
       return;
     }
+    if (evidenceSettingsLoading) {
+      setLocalError("증거 저장 설정을 확인한 뒤 다시 실행하세요.");
+      return;
+    }
     try {
       const body = buildRequest();
       mutation.mutate(body);
@@ -673,9 +678,9 @@ export function PromptScenarioGenerator(): JSX.Element {
           </div>
         )}
         <div className="generator-actions">
-          <button className="btn primary" type="button" onClick={submit} disabled={mutation.isPending || needModel}>
+          <button className="btn primary" type="button" onClick={submit} disabled={mutation.isPending || needModel || evidenceSettingsLoading}>
             <Play size={15} aria-hidden="true" />
-            {mutation.isPending ? "생성 중…" : actionLabel}
+            {mutation.isPending ? "생성 중…" : evidenceSettingsLoading ? "증거 설정 확인 중…" : actionLabel}
           </button>
           <span className="evidence-chip">
             <Image size={14} aria-hidden="true" />

@@ -419,6 +419,61 @@ describe("D7 운영 콘솔 shell", () => {
     expect(calls[0]).toMatchObject({ evidence: { screenshot: "each_step", video: "always" } });
   });
 
+  test("자연어 자동화 생성: 증거 capability 확인 전에는 제출하지 않는다", async () => {
+    type Capabilities = Awaited<ReturnType<ApiClient["getScenarioGenerationCapabilities"]>>;
+    let resolveCapabilities!: (value: Capabilities) => void;
+    const capabilities = new Promise<Capabilities>((resolve) => {
+      resolveCapabilities = resolve;
+    });
+    const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    renderApp(
+      fakeClient({
+        getScenarioGenerationCapabilities: async () => capabilities,
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => {
+          calls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000a4",
+            mode: body.mode ?? "save_and_run",
+            status: "saved",
+            prompt_hash: "hash",
+            planner: "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: null,
+            evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
+            blockers: [],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 요약해줘" } });
+
+    const pendingButton = await screen.findByRole("button", { name: "증거 설정 확인 중…" });
+    expect(pendingButton).toBeDisabled();
+    fireEvent.click(pendingButton);
+    expect(calls).toHaveLength(0);
+
+    resolveCapabilities({
+      visual_evidence: {
+        screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
+        video: { enabled: true, policies: ["never", "failure", "always"], default_policy: "always", artifact_type: "video_masked", media_type: "video/webm" },
+      },
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("동영상")).toHaveValue("always"));
+    screen.getByRole("button", { name: "저장 후 실행" }).click();
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({ evidence: { screenshot: "each_step", video: "always" } });
+  });
+
   test("자연어 자동화 생성: 서버 영상 default_policy가 failure이면 기본값을 실패 시 녹화로 둔다", async () => {
     const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
     renderApp(

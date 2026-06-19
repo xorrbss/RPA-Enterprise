@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -6,7 +6,7 @@ import { useCan } from "../api/permissions";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { actionLabel, terminalLabel } from "../components/badges";
-import { navigate } from "../router";
+import { mergeParams, navigate, useHashParam } from "../router";
 import type { ScenarioItem } from "../api/types";
 
 // 테스트 실행(playground) — 저장된 자동화의 실행 계획(IR → 단계·흐름)을 정적으로 미리본 뒤, 그대로 실제 실행을
@@ -92,18 +92,36 @@ function Plan({ ir }: { ir: unknown }): JSX.Element {
 export function PlaygroundView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
+  const scenarioParam = useHashParam("scenario");
   const list = useQuery({ queryKey: ["scenarios"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 10_000 });
-  const [sel, setSel] = useState<string>("");
+  const [sel, setSel] = useState<string>(() => scenarioParam ?? "");
   const detail = useQuery({ queryKey: ["scenario-detail", sel], queryFn: () => api.getScenario(sel), enabled: sel !== "" });
 
   const items: readonly ScenarioItem[] = list.data?.items ?? [];
   const selected = items.find((s) => s.scenario_id === sel);
+
+  useEffect(() => {
+    if (scenarioParam !== null && scenarioParam !== sel) setSel(scenarioParam);
+  }, [scenarioParam, sel]);
+
+  function selectScenario(next: string): void {
+    setSel(next);
+    mergeParams({ scenario: next.length > 0 ? next : null });
+  }
 
   return (
     <div>
       <p className="badge" style={{ display: "block", marginBottom: 12, whiteSpace: "normal" }}>
         실행 계획(단계·흐름)을 미리 본 뒤 그대로 실제 실행을 시작할 수 있습니다. 실제 브라우저 작업은 worker/Chrome가 연결된 환경에서 수행되며, 진행 상황은 ‘실행 기록’에서 확인합니다.
       </p>
+      {can("scenario.create") && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+          <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>
+            자연어로 자동화 만들기
+          </button>
+          <span className="subtle">저장 후 실행까지 이어지는 자동화 생성 화면으로 이동합니다.</span>
+        </div>
+      )}
       {list.isLoading ? (
         <Loading />
       ) : list.isError ? (
@@ -113,7 +131,7 @@ export function PlaygroundView(): JSX.Element {
           <label style={{ display: "block", marginBottom: 12 }}>
             <span className="subtle">자동화 선택</span>
             <br />
-            <select value={sel} onChange={(e) => setSel(e.target.value)} style={{ padding: "6px 8px", fontSize: 14, minWidth: 280 }}>
+            <select value={sel} onChange={(e) => selectScenario(e.target.value)} style={{ padding: "6px 8px", fontSize: 14, minWidth: 280 }}>
               <option value="">— 자동화를 선택하세요 —</option>
               {items.map((s) => (
                 <option key={s.scenario_id} value={s.scenario_id}>
