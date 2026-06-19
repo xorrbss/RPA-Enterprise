@@ -112,6 +112,7 @@ row 43 이 닫힌다(closure-boundary "Deploy-time provisioning" may-close 컬�
 - namespace / identity map          : D8-A12 (staging-decision-proposals §3) 참조
 - SecretRef inventory               : D8-A12 (staging-decision-proposals §4) 참조 (식별자만)
 - runtime artifact object-store env : `ARTIFACT_OBJECT_STORE_REF=<SecretRef identifier>`, optional `ARTIFACT_OBJECT_STORE_BACKEND_ALIAS=<alias>`
+- artifact store topology preflight  : run `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle` with the final deploy env bundle; PASS is required before starting separate worker/lifecycle processes.
 - retention policy                  : D8-A11/A14 / ops-defaults §6.1 참조
 - live D5 evidence                  : row 50 packet 참조 ([codex-staging-1]/[model-a])
 - secret.resolve audit sample       : seq#/hash (material 없음)

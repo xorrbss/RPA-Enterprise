@@ -6,6 +6,7 @@
  * regression of the fail-closed config (adversarial-review recommendation).
  */
 import {
+  assertArtifactStoreTopologyCompatibility,
   assertInProcessArtifactStoreCompatibility,
   loadApiConfig,
   loadArtifactLifecycleWorkerConfig,
@@ -440,6 +441,13 @@ function main(): void {
   }, () =>
     expectThrow("RUN_MODE=all rejects fs producers with s3 lifecycle store", () => assertInProcessArtifactStoreCompatibility("all")));
   withEnv({
+    ...FULL,
+    ...GW_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+  }, () =>
+    expectThrow("split worker/lifecycle topology rejects fs producers with s3 lifecycle store", () => assertArtifactStoreTopologyCompatibility("split_worker_lifecycle")));
+  withEnv({
     RPA_ENV: "local",
     ...GW_REQ,
     ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
@@ -449,6 +457,17 @@ function main(): void {
   }, () => {
     assertInProcessArtifactStoreCompatibility("all");
     check("RUN_MODE=all accepts shared local_fs lifecycle store in local env", true);
+  });
+  withEnv({
+    RPA_ENV: "local",
+    ...GW_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: "local_fs",
+    ARTIFACT_OBJECT_STORE_REF: "rpa/local/artifact-lifecycle/object_store/fs",
+  }, () => {
+    assertArtifactStoreTopologyCompatibility("split_worker_lifecycle");
+    check("split worker/lifecycle topology accepts shared local_fs lifecycle store in local env", true);
   });
   withEnv({}, () => expectThrow("gateway missing CODEX_BASE_URL throws", () => loadGatewayConfig()));
   withEnv({ ...GW_REQ, CODEX_API_KEY: "" }, () =>

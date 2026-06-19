@@ -389,19 +389,25 @@ export function loadArtifactLifecycleWorkerConfig(): ArtifactLifecycleWorkerConf
   };
 }
 
-export function assertInProcessArtifactStoreCompatibility(runMode: RunMode): void {
-  if (runMode !== "all") return;
+export type ArtifactStoreTopology = "in_process" | "split_worker_lifecycle";
 
+export function assertArtifactStoreTopologyCompatibility(topology: ArtifactStoreTopology): void {
   const gateway = loadGatewayConfig();
   const lifecycle = loadArtifactLifecycleWorkerConfig();
+  const label = topology === "in_process" ? "RUN_MODE=all" : "split worker/lifecycle deployment";
   if (lifecycle.objectStore.mode !== "local_fs") {
     throw new Error(
-      "RUN_MODE=all cannot combine D8-A16 FsObjectStore artifact producers with ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE=s3",
+      `${label} cannot combine D8-A16 FsObjectStore artifact producers with ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE=s3`,
     );
   }
   if (resolve(gateway.artifactDir) !== resolve(lifecycle.objectStore.artifactDir)) {
-    throw new Error("RUN_MODE=all requires runtime artifact producers and local artifact lifecycle worker to share GATEWAY_ARTIFACT_DIR");
+    throw new Error(`${label} requires runtime artifact producers and local artifact lifecycle worker to share GATEWAY_ARTIFACT_DIR`);
   }
+}
+
+export function assertInProcessArtifactStoreCompatibility(runMode: RunMode): void {
+  if (runMode !== "all") return;
+  assertArtifactStoreTopologyCompatibility("in_process");
 }
 
 function loadArtifactLifecycleObjectStoreConfig(): ArtifactLifecycleObjectStoreConfig {
