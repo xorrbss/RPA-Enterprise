@@ -270,8 +270,12 @@ async function main(): Promise<void> {
         app.inject({ method: "GET", url: `/v1/artifacts/${id}`, headers: { authorization: `Bearer ${token}` } });
       const getBlob = (id: string, token = op) =>
         app.inject({ method: "GET", url: `/v1/artifacts/${id}/blob`, headers: { authorization: `Bearer ${token}` } });
-      const listGenerationArtifacts = (generationId: string, token = op) =>
-        app.inject({ method: "GET", url: `/v1/scenario-generations/${generationId}/artifacts`, headers: { authorization: `Bearer ${token}` } });
+      const listGenerationArtifacts = (generationId: string, token = op, query = "") =>
+        app.inject({
+          method: "GET",
+          url: `/v1/scenario-generations/${generationId}/artifacts${query.length > 0 ? `?${query}` : ""}`,
+          headers: { authorization: `Bearer ${token}` },
+        });
       const getGenerationArtifact = (generationId: string, artifactId: string, token = op) =>
         app.inject({
           method: "GET",
@@ -359,10 +363,66 @@ async function main(): Promise<void> {
           genItems.every((item) => item.type === "scenario_generation_llm_output" && item.step_id === null && item.attempt === null),
         JSON.stringify(genItems),
       );
+      check(
+        "generation artifact list is metadata-only",
+        genItems.every((item) => !("content" in item) && !("object_ref" in item) && !("sha256" in item)),
+        JSON.stringify(genItems),
+      );
       for (const secret of ["pending planner body", "redacted planner body", genVisible.sha256, "object_ref", "sha256", "content"]) {
         check(`generation artifact list hides '${secret}'`, !genList.body.includes(secret), secret);
       }
       check("generation artifact list does not add disclosure audit", (await artifactReadAuditCount(pool, TENANT_A)) === 4);
+
+      const genPage1 = await listGenerationArtifacts(GEN_A, viewer, "limit=1");
+      check("generation artifact page1 limit=1 -> 200", genPage1.statusCode === 200, genPage1.body);
+      const genPage1Body = genPage1.json() as { items: Array<Record<string, unknown>>; next_cursor: unknown };
+      check(
+        "generation artifact page1 returns newest visible row",
+        genPage1Body.items.length === 1 && genPage1Body.items[0]?.artifact_id === genVisible.id,
+        JSON.stringify(genPage1Body),
+      );
+      const genPage1Cursor = genPage1Body.next_cursor;
+      check(
+        "generation artifact page1 returns next_cursor string",
+        typeof genPage1Cursor === "string" && genPage1Cursor.length > 0,
+        JSON.stringify(genPage1Body),
+      );
+
+      const genPage2 = await listGenerationArtifacts(GEN_A, viewer, `limit=1&cursor=${encodeURIComponent(String(genPage1Cursor))}`);
+      check("generation artifact page2 cursor -> 200", genPage2.statusCode === 200, genPage2.body);
+      const genPage2Body = genPage2.json() as { items: Array<Record<string, unknown>>; next_cursor: unknown };
+      check(
+        "generation artifact page2 returns last visible row",
+        genPage2Body.items.length === 1 && genPage2Body.items[0]?.artifact_id === genNotRequired.id,
+        JSON.stringify(genPage2Body),
+      );
+      check("generation artifact last page next_cursor null", genPage2Body.next_cursor === null, JSON.stringify(genPage2Body));
+
+      const genFullPage = await listGenerationArtifacts(GEN_A, viewer, `limit=${genItems.length}`);
+      check("generation artifact visible-count limit -> 200", genFullPage.statusCode === 200, genFullPage.body);
+      const genFullPageBody = genFullPage.json() as { items: Array<Record<string, unknown>>; next_cursor: unknown };
+      check(
+        "generation artifact visible-count limit returns all visible rows with next_cursor null",
+        genFullPageBody.items.length === genItems.length && genFullPageBody.next_cursor === null,
+        JSON.stringify(genFullPageBody),
+      );
+
+      const badGenerationCursor = await listGenerationArtifacts(GEN_A, viewer, "cursor=not-a-cursor");
+      check(
+        "generation artifact list invalid cursor -> 422 IR_SCHEMA_INVALID(invalid_cursor)",
+        badGenerationCursor.statusCode === 422 &&
+          badGenerationCursor.json().code === "IR_SCHEMA_INVALID" &&
+          badGenerationCursor.json().details?.reason === "invalid_cursor",
+        badGenerationCursor.body,
+      );
+      const badGenerationLimit = await listGenerationArtifacts(GEN_A, viewer, "limit=0");
+      check(
+        "generation artifact list invalid limit -> 422 IR_SCHEMA_INVALID(invalid_limit)",
+        badGenerationLimit.statusCode === 422 &&
+          badGenerationLimit.json().code === "IR_SCHEMA_INVALID" &&
+          badGenerationLimit.json().details?.reason === "invalid_limit",
+        badGenerationLimit.body,
+      );
 
       const scopedBody = await getGenerationArtifact(GEN_A, genVisible.id, viewer);
       check("generation artifact scoped body -> 200", scopedBody.statusCode === 200, scopedBody.body);

@@ -169,11 +169,31 @@ async function main(): Promise<void> {
 
       // 4) 커서 페이지(limit=1 → 1 + next_cursor → 다음 1)
       const p1 = await get(`/v1/runs/${RUN_A}/artifacts?limit=1`, viewer);
-      const next = p1.json().next_cursor as string | null;
-      check("limit=1 → 1 item + next_cursor", (p1.json().items as unknown[]).length === 1 && typeof next === "string");
+      const p1body = p1.json() as { items: unknown[]; next_cursor: string | null };
+      const next = p1body.next_cursor;
+      check("limit=1 → 1 item + next_cursor", p1body.items.length === 1 && typeof next === "string", p1.body);
       const p2 = await get(`/v1/runs/${RUN_A}/artifacts?limit=1&cursor=${encodeURIComponent(next ?? "")}`, viewer);
-      const p2items = p2.json().items as Array<Record<string, unknown>>;
+      const p2body = p2.json() as { items: Array<Record<string, unknown>>; next_cursor: string | null };
+      const p2items = p2body.items;
       check("page2 → a1 screenshot", p2items.length === 1 && p2items[0]?.type === "screenshot", JSON.stringify(p2items.map((i) => i.type)));
+      check("page2가 마지막 visible artifact면 next_cursor=null", p2items.length === 1 && p2body.next_cursor === null, p2.body);
+
+      // 4b) visible 전체 개수 limit → 더 줄 것이 없으므로 next_cursor=null
+      const full = await get(`/v1/runs/${RUN_A}/artifacts?limit=${items.length}`, viewer);
+      const fullBody = full.json() as { items: unknown[]; next_cursor: string | null };
+      check("visible artifact 수와 같은 limit → next_cursor=null",
+        full.statusCode === 200 && fullBody.items.length === items.length && fullBody.next_cursor === null,
+        full.body);
+
+      // 4c) 무효 cursor/limit은 조용한 빈 결과가 아니라 422 + IR_SCHEMA_INVALID(reason)로 거부
+      const badCursor = await get(`/v1/runs/${RUN_A}/artifacts?cursor=not-a-json-cursor`, viewer);
+      check("invalid cursor → 422 IR_SCHEMA_INVALID(invalid_cursor)",
+        badCursor.statusCode === 422 && badCursor.json().code === "IR_SCHEMA_INVALID" && badCursor.json().details?.reason === "invalid_cursor",
+        badCursor.body);
+      const badLimit = await get(`/v1/runs/${RUN_A}/artifacts?limit=0`, viewer);
+      check("invalid limit=0 → 422 IR_SCHEMA_INVALID(invalid_limit)",
+        badLimit.statusCode === 422 && badLimit.json().code === "IR_SCHEMA_INVALID" && badLimit.json().details?.reason === "invalid_limit",
+        badLimit.body);
 
       // 5) cross-tenant: A가 B run → 빈 목록(RLS)
       const cross = await get(`/v1/runs/${RUN_B}/artifacts`, viewer);
