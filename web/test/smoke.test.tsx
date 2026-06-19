@@ -317,7 +317,7 @@ describe("D7 운영 콘솔 shell", () => {
         browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
         network_policy_id: "10000000-0000-4000-8000-0000000000a3",
       },
-      evidence: { screenshot: "each_step", video: "always" },
+      evidence: { screenshot: "each_step", video: "never" },
     });
     await waitFor(() =>
       expect(location.hash).toBe(
@@ -327,30 +327,37 @@ describe("D7 운영 콘솔 shell", () => {
   });
 
   test("자연어 자동화 생성 차단 → blocker를 한국어로 표면화", async () => {
+    const calls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
-        generateScenario: async (body) => ({
-          generation_id: "00000000-0000-0000-0000-0000000000a2",
-          mode: body.mode ?? "save_and_run",
-          status: "blocked",
-          prompt_hash: "hash",
-          planner: "deterministic_mvp",
-          model: body.model ?? null,
-          scenario_id: "00000000-0000-0000-0000-0000000000c1",
-          scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
-          run_id: null,
-          evidence_policy: body.evidence,
-          blockers: ["start_url_required_for_auto_run", "target_required_for_auto_run", "video_recording_port_not_configured"],
-          draft_ir: {},
-          validation_report: {},
-        }),
+        generateScenario: async (body) => {
+          calls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000a2",
+            mode: body.mode ?? "save_and_run",
+            status: "blocked",
+            prompt_hash: "hash",
+            planner: "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: null,
+            evidence_policy: body.evidence,
+            blockers: ["start_url_required_for_auto_run", "target_required_for_auto_run", "video_recording_port_not_configured"],
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
       }),
     );
     location.hash = "#scenarioStudio";
     fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "오늘 주문을 확인해줘" } });
+    fireEvent.change(screen.getByLabelText("동영상"), { target: { value: "always" } });
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({ evidence: { video: "always" } });
     await waitFor(() => expect(screen.getByText("차단됨")).toBeInTheDocument());
     expect(screen.getByText("시작 URL이 필요합니다.")).toBeInTheDocument();
     expect(screen.getByText("실행 대상이 필요합니다.")).toBeInTheDocument();

@@ -140,7 +140,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [model, setModel] = useState("");
   const [planner, setPlanner] = useState<ScenarioGenerationPlanner>("deterministic_mvp");
   const [screenshot, setScreenshot] = useState<ScreenshotPolicy>("each_step");
-  const [video, setVideo] = useState<VideoPolicy>("always");
+  const [video, setVideo] = useState<VideoPolicy>("never");
   const [localError, setLocalError] = useState<string | null>(null);
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
 
