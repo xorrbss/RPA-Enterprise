@@ -395,6 +395,8 @@ function EvidenceStorageReadout({
 }): JSX.Element | null {
   if (policy === undefined) return null;
   const terminal = runStatus !== undefined && TERMINAL.has(runStatus);
+  const failed = runStatus === "failed_business" || runStatus === "failed_system";
+  const missingFailureScreenshot = loaded && failed && policy.screenshot === "failure" && counts.screenshots === 0;
   const missingScreenshot = loaded && terminal && policy.screenshot === "each_step" && counts.screenshots === 0;
   const missingVideo = loaded && terminal && policy.video === "always" && counts.videos === 0;
 
@@ -405,6 +407,7 @@ function EvidenceStorageReadout({
       <span className="badge blue">저장 이미지 {counts.screenshots}</span>
       <span className="badge amber">저장 동영상 {counts.videos}</span>
       {counts.pending > 0 && <span className="badge muted">redaction 대기 {counts.pending}</span>}
+      {missingFailureScreenshot && <span className="badge amber">실패 스크린샷 미저장</span>}
       {missingScreenshot && <span className="badge amber">요청 이미지 미저장</span>}
       {missingVideo && <span className="badge amber">요청 동영상 미저장</span>}
     </div>
