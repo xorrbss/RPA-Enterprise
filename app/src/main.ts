@@ -16,7 +16,8 @@
  * routes dom primitives through the gateway. Live success therefore requires a real Chrome binary at that
  * path — absent it, bind() loud-throws per run (fail-closed). Enumerated remaining backlog (see
  * product-open-candidate-report.md / staging-deploy-runbook.md):
- *   - SinkDeliveryPort and a recurring sweeper scheduler. The API composes a
+ *   - SinkDeliveryPort. Recurring maintenance fanout is wired for explicit
+ *     MAINTENANCE_TENANT_IDS (lease sweeper, artifact redaction, retention). The API composes a
  *     SecretStore-backed SignedCommandRegistry when SIGNED_COMMAND_REGISTRY_MODE=vault; explicit
  *     SIGNED_COMMAND_REGISTRY_MODE=deny_all is available for fail-closed deployments. JWT verification now
  *     supports RS256 via remote JWKS (set JWKS_URL) or the HS256 default. Browser session reuse is wired with
@@ -78,6 +79,7 @@ import { PgSessionRestorer } from "./runtime/session-restorer";
 import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runtime/visual-evidence";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { buildTaskList } from "./worker/graphile-runner";
+import { startMaintenanceScheduler, type MaintenanceScheduler } from "./worker/maintenance-scheduler";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
@@ -310,6 +312,11 @@ async function buildApiSessionStore(pool: PgPool, common: CommonConfig): Promise
 
 type ArtifactLifecyclePorts = Required<Pick<PgRuntimeWorkerOptions, "artifactRedactor" | "artifactRetentionStore">>;
 
+interface StartedWorker {
+  readonly runner: Runner;
+  readonly maintenance?: MaintenanceScheduler;
+}
+
 async function buildArtifactLifecyclePorts(input: {
   readonly cfg: WorkerConfig;
   readonly gw: GatewayConfig;
@@ -347,7 +354,7 @@ async function buildArtifactLifecyclePorts(input: {
   };
 }
 
-async function startWorker(pool: PgPool, connectionString: string): Promise<Runner> {
+async function startWorker(pool: PgPool, connectionString: string): Promise<StartedWorker> {
   const cfg = loadWorkerConfig(loadCommonConfig());
   // Install/upgrade the graphile_worker schema (idempotent; fails fast if the DB role lacks rights).
   await runMigrations({ connectionString });
@@ -430,8 +437,14 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Runn
     pollInterval: cfg.graphilePollIntervalMs,
     ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
   });
-  console.log(JSON.stringify({ at: "main", msg: "worker daemon running", concurrency: cfg.graphileConcurrency }));
-  return runner;
+  const maintenance = startMaintenanceScheduler(pool, { tenantIds: cfg.maintenanceTenantIds });
+  console.log(JSON.stringify({
+    at: "main",
+    msg: "worker daemon running",
+    concurrency: cfg.graphileConcurrency,
+    maintenanceTenantCount: cfg.maintenanceTenantIds.length,
+  }));
+  return { runner, ...(maintenance !== undefined ? { maintenance } : {}) };
 }
 
 async function main(): Promise<void> {
@@ -443,10 +456,10 @@ async function main(): Promise<void> {
 
   const health = startHealthServer(pool, common.healthPort);
   let api: FastifyInstance | undefined;
-  let runner: Runner | undefined;
+  let worker: StartedWorker | undefined;
 
   if (mode === "api" || mode === "all") api = await startApi(pool, common, mode);
-  if (mode === "worker" || mode === "all") runner = await startWorker(pool, common.connectionString);
+  if (mode === "worker" || mode === "all") worker = await startWorker(pool, common.connectionString);
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
@@ -458,7 +471,10 @@ async function main(): Promise<void> {
       try {
         // Stop accepting new requests/enqueues first, then drain in-flight worker jobs, then close the pool.
         if (api !== undefined) await api.close();
-        if (runner !== undefined) await runner.stop();
+        if (worker !== undefined) {
+          worker.maintenance?.stop();
+          await worker.runner.stop();
+        }
       } finally {
         await pool.end().catch(() => undefined);
       }

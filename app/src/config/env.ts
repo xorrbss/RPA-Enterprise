@@ -222,6 +222,7 @@ export interface WorkerConfig {
   readonly graphileSchema?: string;
   readonly graphileConcurrency: number;
   readonly graphilePollIntervalMs: number;
+  readonly maintenanceTenantIds: readonly string[];
   readonly videoRecordingEnabled: boolean;
   readonly videoFfmpegPath?: string;
   readonly videoFrameIntervalMs: number;
@@ -248,6 +249,7 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
     graphileSchema: opt("GRAPHILE_WORKER_SCHEMA"),
     graphileConcurrency: num("GRAPHILE_CONCURRENCY", 1),
     graphilePollIntervalMs: num("GRAPHILE_POLL_INTERVAL_MS", 2000),
+    maintenanceTenantIds: csvUuidList("MAINTENANCE_TENANT_IDS"),
     videoRecordingEnabled,
     ...(videoRecordingEnabled ? { videoFfmpegPath: req("VISUAL_EVIDENCE_FFMPEG_PATH") } : {}),
     videoFrameIntervalMs,
@@ -269,6 +271,27 @@ function loadArtifactObjectStoreConfig(): ArtifactObjectStoreConfig {
     accessKeyId: req("S3_ACCESS_KEY_ID"),
     forcePathStyle: strictBool("S3_FORCE_PATH_STYLE", true),
   };
+}
+
+function csvUuidList(name: string): string[] {
+  const raw = opt(name);
+  if (raw === undefined) return [];
+  const values = raw.split(",").map((part) => part.trim());
+  if (values.length === 0 || values.some((value) => value.length === 0)) {
+    throw new Error(`env ${name} must be a comma-separated list of UUIDs without empty entries`);
+  }
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+      throw new Error(`env ${name} contains non-UUID value ${JSON.stringify(value)}`);
+    }
+    const normalized = value.toLowerCase();
+    if (seen.has(normalized)) {
+      throw new Error(`env ${name} contains duplicate tenant id ${JSON.stringify(value)}`);
+    }
+    seen.add(normalized);
+  }
+  return values;
 }
 
 /** API 세션 캡처 봉투암호화 설정 — api AppRole(Vault) + 활성 KEK SecretRef. */

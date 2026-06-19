@@ -40,7 +40,7 @@ const CLEAR = [
   "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF",
   "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_KIND", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
   "S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_FORCE_PATH_STYLE",
-  "GRAPHILE_WORKER_SCHEMA", "GRAPHILE_CONCURRENCY", "GRAPHILE_POLL_INTERVAL_MS",
+  "GRAPHILE_WORKER_SCHEMA", "GRAPHILE_CONCURRENCY", "GRAPHILE_POLL_INTERVAL_MS", "MAINTENANCE_TENANT_IDS",
   "CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL", "CODEX_MAX_CONTEXT_TOKENS",
   "CODEX_PRICE_PER_1K_INPUT_USD", "CODEX_PRICE_PER_1K_OUTPUT_USD",
   "API_ARTIFACT_DIR", "GATEWAY_ARTIFACT_DIR", "GATEWAY_ARTIFACT_RETENTION_DAYS", "PROMPT_TEMPLATE_VERSION",
@@ -207,9 +207,26 @@ function main(): void {
     check("worker artifact object-store default kind fs", w.artifactObjectStore.kind === "fs", w.artifactObjectStore.kind);
     check("worker artifact backend alias default", w.artifactObjectStoreBackendAlias === "fs-local");
     check("worker concurrency default 1", w.graphileConcurrency === 1);
+    check("worker maintenance tenant list default empty", w.maintenanceTenantIds.length === 0);
     check("worker video recording default false", w.videoRecordingEnabled === false);
     check("worker video frame defaults", w.videoFrameIntervalMs === 1000 && w.videoFrameRate === 1);
   });
+  withEnv({ ...FULL, MAINTENANCE_TENANT_IDS: "00000000-0000-4000-8000-0000000000a1, 00000000-0000-4000-8000-0000000000a2" }, () => {
+    const w = loadWorkerConfig(common);
+    check(
+      "worker maintenance tenant list parsed",
+      w.maintenanceTenantIds.length === 2 && w.maintenanceTenantIds[1] === "00000000-0000-4000-8000-0000000000a2",
+      JSON.stringify(w.maintenanceTenantIds),
+    );
+  });
+  withEnv({ ...FULL, MAINTENANCE_TENANT_IDS: "not-a-uuid" }, () =>
+    expectThrow("worker maintenance tenant list rejects non-UUID", () => loadWorkerConfig(common)));
+  withEnv({ ...FULL, MAINTENANCE_TENANT_IDS: "00000000-0000-4000-8000-0000000000a1," }, () =>
+    expectThrow("worker maintenance tenant list rejects empty entries", () => loadWorkerConfig(common)));
+  withEnv({
+    ...FULL,
+    MAINTENANCE_TENANT_IDS: "00000000-0000-4000-8000-0000000000a1,00000000-0000-4000-8000-0000000000A1",
+  }, () => expectThrow("worker maintenance tenant list rejects duplicates", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true" }, () =>
     expectThrow("worker video enabled without ffmpeg path throws", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "maybe" }, () =>
