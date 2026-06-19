@@ -71,6 +71,8 @@ function workerConfig(kind: "fs" | "s3"): WorkerConfig {
     graphileConcurrency: 1,
     graphilePollIntervalMs: 2000,
     maintenanceTenantIds: [],
+    sinkDeliveryMaxAttempts: 3,
+    sinkDeliveryRetryAfterMs: 5000,
     videoRecordingEnabled: false,
     videoFrameIntervalMs: 1000,
     videoFrameRate: 1,

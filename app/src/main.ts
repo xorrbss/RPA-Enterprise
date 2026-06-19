@@ -16,7 +16,8 @@
  * routes dom primitives through the gateway. Live success therefore requires a real Chrome binary at that
  * path — absent it, bind() loud-throws per run (fail-closed). Enumerated remaining backlog (see
  * product-open-candidate-report.md / staging-deploy-runbook.md):
- *   - SinkDeliveryPort. Recurring maintenance fanout is wired for explicit
+ *   - SinkDeliveryPort real egress. Sink delivery ops policy is wired, while the actual downstream
+ *     network adapter remains an injected deploy-time port. Recurring maintenance fanout is wired for explicit
  *     MAINTENANCE_TENANT_IDS (lease sweeper, artifact redaction, retention). The API composes a
  *     SecretStore-backed SignedCommandRegistry when SIGNED_COMMAND_REGISTRY_MODE=vault; explicit
  *     SIGNED_COMMAND_REGISTRY_MODE=deny_all is available for fail-closed deployments. JWT verification now
@@ -382,6 +383,8 @@ async function startWorker(pool: PgPool, connectionString: string): Promise<Star
     ...(visualEvidenceVideoRecorderFactory !== undefined ? { visualEvidenceVideoRecorderFactory } : {}),
     artifactRedactor: artifactObjectStoreBinding.artifactRedactor,
     artifactRetentionStore: artifactObjectStoreBinding.artifactRetentionStore,
+    sinkDeliveryMaxAttempts: cfg.sinkDeliveryMaxAttempts,
+    sinkDeliveryRetryAfterMs: cfg.sinkDeliveryRetryAfterMs,
     runtimeJobEnqueuer: new PgGraphileRunEnqueuer(),
   };
 

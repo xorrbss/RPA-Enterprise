@@ -32,6 +32,14 @@ function num(name: string, dflt: number): number {
   return n;
 }
 
+function positiveInt(name: string, dflt: number): number {
+  const value = num(name, dflt);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`env ${name} must be a positive integer, got ${value}`);
+  }
+  return value;
+}
+
 function bool(name: string, dflt: boolean): boolean {
   const v = opt(name);
   if (v === undefined) return dflt;
@@ -223,6 +231,8 @@ export interface WorkerConfig {
   readonly graphileConcurrency: number;
   readonly graphilePollIntervalMs: number;
   readonly maintenanceTenantIds: readonly string[];
+  readonly sinkDeliveryMaxAttempts: number;
+  readonly sinkDeliveryRetryAfterMs: number;
   readonly videoRecordingEnabled: boolean;
   readonly videoFfmpegPath?: string;
   readonly videoFrameIntervalMs: number;
@@ -250,6 +260,8 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
     graphileConcurrency: num("GRAPHILE_CONCURRENCY", 1),
     graphilePollIntervalMs: num("GRAPHILE_POLL_INTERVAL_MS", 2000),
     maintenanceTenantIds: csvUuidList("MAINTENANCE_TENANT_IDS"),
+    sinkDeliveryMaxAttempts: positiveInt("SINK_DELIVERY_MAX_ATTEMPTS", 3),
+    sinkDeliveryRetryAfterMs: positiveInt("SINK_DELIVERY_RETRY_AFTER_MS", 5_000),
     videoRecordingEnabled,
     ...(videoRecordingEnabled ? { videoFfmpegPath: req("VISUAL_EVIDENCE_FFMPEG_PATH") } : {}),
     videoFrameIntervalMs,

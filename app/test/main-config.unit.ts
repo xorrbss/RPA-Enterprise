@@ -41,6 +41,7 @@ const CLEAR = [
   "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_KIND", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
   "S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_FORCE_PATH_STYLE",
   "GRAPHILE_WORKER_SCHEMA", "GRAPHILE_CONCURRENCY", "GRAPHILE_POLL_INTERVAL_MS", "MAINTENANCE_TENANT_IDS",
+  "SINK_DELIVERY_MAX_ATTEMPTS", "SINK_DELIVERY_RETRY_AFTER_MS",
   "CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL", "CODEX_MAX_CONTEXT_TOKENS",
   "CODEX_PRICE_PER_1K_INPUT_USD", "CODEX_PRICE_PER_1K_OUTPUT_USD",
   "API_ARTIFACT_DIR", "GATEWAY_ARTIFACT_DIR", "GATEWAY_ARTIFACT_RETENTION_DAYS", "PROMPT_TEMPLATE_VERSION",
@@ -208,9 +209,18 @@ function main(): void {
     check("worker artifact backend alias default", w.artifactObjectStoreBackendAlias === "fs-local");
     check("worker concurrency default 1", w.graphileConcurrency === 1);
     check("worker maintenance tenant list default empty", w.maintenanceTenantIds.length === 0);
+    check("worker sink delivery policy defaults", w.sinkDeliveryMaxAttempts === 3 && w.sinkDeliveryRetryAfterMs === 5000);
     check("worker video recording default false", w.videoRecordingEnabled === false);
     check("worker video frame defaults", w.videoFrameIntervalMs === 1000 && w.videoFrameRate === 1);
   });
+  withEnv({ ...FULL, SINK_DELIVERY_MAX_ATTEMPTS: "5", SINK_DELIVERY_RETRY_AFTER_MS: "2500" }, () => {
+    const w = loadWorkerConfig(common);
+    check("worker sink delivery policy overrides carried", w.sinkDeliveryMaxAttempts === 5 && w.sinkDeliveryRetryAfterMs === 2500);
+  });
+  withEnv({ ...FULL, SINK_DELIVERY_MAX_ATTEMPTS: "0" }, () =>
+    expectThrow("worker sink delivery max attempts rejects non-positive", () => loadWorkerConfig(common)));
+  withEnv({ ...FULL, SINK_DELIVERY_RETRY_AFTER_MS: "1.5" }, () =>
+    expectThrow("worker sink delivery retry-after rejects fractional", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, MAINTENANCE_TENANT_IDS: "00000000-0000-4000-8000-0000000000a1, 00000000-0000-4000-8000-0000000000a2" }, () => {
     const w = loadWorkerConfig(common);
     check(
