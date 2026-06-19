@@ -67,13 +67,9 @@ const SCENARIO_PLANNER_OUTPUT_SCHEMA = {
       items: { type: "string", minLength: 1 },
       default: [],
     },
-    params: {
-      type: "object",
-      additionalProperties: true,
-      default: {},
-    },
   },
 } as const;
+const SCENARIO_PLANNER_OUTPUT_FIELDS = new Set(["draft_ir", "blockers"]);
 
 const SYSTEM_PROMPT = [
   "You are the RPA scenario planner for a contract-first enterprise automation platform.",
@@ -205,27 +201,18 @@ export class LlmGatewayScenarioPlannerClient implements LlmScenarioPlannerClient
         output_ref: response.outputRef as ArtifactRef,
       });
     }
+    validatePlannerOutputTopLevel(response.parsedJson);
     return response.parsedJson;
   }
 }
 
 function planFromLlmOutput(request: GenerationRequest, output: unknown): GenerationPlan {
-  if (!isRecord(output)) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "llm_planner_output_object_required" });
-  }
+  validatePlannerOutputTopLevel(output);
   const draftIr = output.draft_ir;
   if (!isRecord(draftIr)) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "llm_planner_draft_ir_required" });
   }
   const blockers = parseBlockers(output.blockers);
-  const params = parseParams(output.params);
-  const paramKeys = Object.keys(params);
-  if (paramKeys.length > 0) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", {
-      reason: "llm_planner_params_forbidden",
-      fields: paramKeys.sort(),
-    });
-  }
   const promptHash = createHash("sha256").update(request.prompt).digest("hex");
   return {
     planner: "llm_v1",
@@ -239,20 +226,32 @@ function planFromLlmOutput(request: GenerationRequest, output: unknown): Generat
   };
 }
 
+function validatePlannerOutputTopLevel(output: unknown): asserts output is Record<string, unknown> {
+  if (!isRecord(output)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "llm_planner_output_object_required" });
+  }
+  if (Object.prototype.hasOwnProperty.call(output, "params")) {
+    const fields = isRecord(output.params) ? Object.keys(output.params).sort() : ["params"];
+    throw new ApiResponseError("IR_SCHEMA_INVALID", {
+      reason: "llm_planner_params_forbidden",
+      fields,
+    });
+  }
+  const unknownFields = Object.keys(output).filter((field) => !SCENARIO_PLANNER_OUTPUT_FIELDS.has(field)).sort();
+  if (unknownFields.length > 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", {
+      reason: "llm_planner_unknown_output_fields",
+      fields: unknownFields,
+    });
+  }
+}
+
 function parseBlockers(value: unknown): readonly string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.trim().length > 0)) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "llm_planner_invalid_blockers" });
   }
   return value.map((item) => item.trim());
-}
-
-function parseParams(value: unknown): Record<string, unknown> {
-  if (value === undefined) return {};
-  if (!isRecord(value)) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "llm_planner_invalid_params" });
-  }
-  return value;
 }
 
 function trustedRequestParams(request: GenerationRequest): Record<string, unknown> {

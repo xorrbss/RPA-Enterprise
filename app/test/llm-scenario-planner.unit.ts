@@ -99,7 +99,6 @@ async function main(): Promise<void> {
         return {
           draft_ir: validIr(),
           blockers: ["target_required_for_auto_run"],
-          params: {},
         };
       },
     });
@@ -189,7 +188,7 @@ async function main(): Promise<void> {
           outputRef: "artifact://planner-output" as LLMResponse["outputRef"],
           usage: { inputTokens: 10, outputTokens: 20, cost: 0.01 },
           finishReason: "stop",
-          parsedJson: { draft_ir: validIr(), blockers: [], params: { start_url: "https://example.com/notices" } },
+          parsedJson: { draft_ir: validIr(), blockers: [] },
         };
       },
     };
@@ -207,6 +206,7 @@ async function main(): Promise<void> {
       userPayload: { task: "draft_scenario_ir" },
       attempt: 0,
     });
+    const schema = captured?.responseFormat?.schema as { properties?: Record<string, unknown> } | undefined;
     check("gateway planner client returns parsed JSON", typeof output === "object" && output !== null);
     check(
       "gateway planner client builds structured LLM request",
@@ -219,8 +219,46 @@ async function main(): Promise<void> {
         captured.metadata.stepId === "scenario_generation_plan" &&
         captured.metadata.primitive === "extract" &&
         captured.budget.maxOutputTokens === 800 &&
-        captured.idempotencyKey.startsWith(`scenario-generation:${context.generationId}:plan:0:`),
+        captured.idempotencyKey.startsWith(`scenario-generation:${context.generationId}:plan:0:`) &&
+        schema?.properties !== undefined &&
+        !Object.prototype.hasOwnProperty.call(schema.properties, "params"),
       JSON.stringify(captured),
+    );
+  }
+
+  {
+    const gateway: ScenarioPlannerGateway = {
+      async call() {
+        return {
+          outputRef: "artifact://planner-output" as LLMResponse["outputRef"],
+          usage: { inputTokens: 10, outputTokens: 20, cost: 0.01 },
+          finishReason: "stop",
+          parsedJson: { draft_ir: validIr(), blockers: [], notes: "do not trust model extras" },
+        };
+      },
+    };
+    const client = new LlmGatewayScenarioPlannerClient(gateway, {
+      model: "default-planner-model",
+      promptTemplateVersion: "scenario-planner@1",
+      budget: { maxInputTokens: 1000, maxOutputTokens: 800, maxCost: 1 },
+    });
+    const err = await caught(
+      client.complete({
+        kind: "plan",
+        request,
+        capabilities: { videoRecording: false },
+        context,
+        systemPrompt: "system prompt",
+        userPayload: { task: "draft_scenario_ir" },
+        attempt: 0,
+      }),
+    );
+    check(
+      "gateway planner client rejects unknown top-level parsed fields",
+      err?.code === "IR_SCHEMA_INVALID" &&
+        isRecord(err.details) &&
+        err.details.reason === "llm_planner_unknown_output_fields",
+      JSON.stringify(err?.details),
     );
   }
 
