@@ -31,6 +31,9 @@ const SCEN_B = "70000000-0000-0000-0000-0000000000b3";
 const SVER_B = "70000000-0000-0000-0000-0000000000b4";
 const RUN_A = "71000000-0000-0000-0000-0000000000a1";
 const RUN_B = "71000000-0000-0000-0000-0000000000b1";
+const GEN_LINKED = "71500000-0000-0000-0000-0000000000a1";
+const GEN_UNLINKED = "71500000-0000-0000-0000-0000000000a2";
+const GEN_B = "71500000-0000-0000-0000-0000000000b1";
 const STEP_ARTIFACT_ID = "capture_start";
 
 const SECRET = new TextEncoder().encode("run-artifacts-int-secret-do-not-use-in-prod-0123456789");
@@ -70,6 +73,17 @@ async function seedScenarioRun(pool: Pool, tenant: string, scen: string, sver: s
   });
 }
 
+async function seedScenarioGeneration(pool: Pool, tenant: string, generation: string, run: string | null): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO scenario_generations
+         (id, tenant_id, mode, status, prompt_hash, planner, draft_ir, evidence_policy, blockers, run_id, created_by)
+       VALUES ($1::uuid,$2::uuid,'save_and_run',$3,$4,'deterministic_mvp','{}'::jsonb,'{}'::jsonb,'[]'::jsonb,$5::uuid,'test')`,
+      [generation, tenant, run === null ? "saved" : "run_queued", `hash-${generation}`, run],
+    ),
+  );
+}
+
 async function seedRunStep(pool: Pool, tenant: string, run: string, stepId: string, attempt: number): Promise<void> {
   await withTenantTx(pool, tenant, (c) =>
     c.query(
@@ -100,6 +114,20 @@ async function seedArtifact(pool: Pool, tenant: string, run: string, a: ArtSeed)
   );
 }
 
+async function seedGenerationPlannerArtifact(pool: Pool, tenant: string, generation: string): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO artifacts
+         (id, tenant_id, generation_id, type, media_type, byte_size, redaction_status, sha256, object_ref,
+          retention_until, created_at)
+       VALUES ('71600000-0000-0000-0000-0000000000a1'::uuid,$1::uuid,$2::uuid,
+               'scenario_generation_llm_output','text/plain; charset=utf-8',42,'redacted',
+               'SHA-SECRET-GEN','obj://SECRET-GEN','2026-09-01T00:00:00Z','2026-06-15T00:00:06Z')`,
+      [tenant, generation],
+    ),
+  );
+}
+
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
   try {
@@ -115,6 +143,8 @@ async function main(): Promise<void> {
     }
 
     await seedScenarioRun(pool, TENANT_A, SCEN_A, SVER_A, RUN_A);
+    await seedScenarioGeneration(pool, TENANT_A, GEN_LINKED, RUN_A);
+    await seedScenarioGeneration(pool, TENANT_A, GEN_UNLINKED, null);
     await seedRunStep(pool, TENANT_A, RUN_A, STEP_ARTIFACT_ID, 2);
     // 가시 2건(redacted/not_required) + 비가시 3건(pending/quarantine/deleted)
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a1", stepId: STEP_ARTIFACT_ID, attempt: 2, type: "screenshot", mediaType: "image/png", filename: "step-ok.png", byteSize: 12345, redaction: "redacted", sha256: "SHA-SECRET-A1", objectRef: "obj://SECRET-A1", createdAt: "2026-06-15T00:00:01Z" });
@@ -122,8 +152,10 @@ async function main(): Promise<void> {
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a3", type: "vlm_input", redaction: "pending", sha256: "SHA-SECRET-A3", objectRef: "obj://SECRET-A3", createdAt: "2026-06-15T00:00:03Z" });
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a4", type: "screenshot", redaction: "redacted", quarantine: true, sha256: "SHA-SECRET-A4", objectRef: "obj://SECRET-A4", createdAt: "2026-06-15T00:00:04Z" });
     await seedArtifact(pool, TENANT_A, RUN_A, { id: "72000000-0000-0000-0000-0000000000a5", type: "screenshot", redaction: "redacted", deleted: "2026-06-16T00:00:00Z", sha256: "SHA-SECRET-A5", objectRef: "obj://SECRET-A5", createdAt: "2026-06-15T00:00:05Z" });
+    await seedGenerationPlannerArtifact(pool, TENANT_A, GEN_LINKED);
     // cross-tenant
     await seedScenarioRun(pool, TENANT_B, SCEN_B, SVER_B, RUN_B);
+    await seedScenarioGeneration(pool, TENANT_B, GEN_B, RUN_B);
     await seedArtifact(pool, TENANT_B, RUN_B, { id: "72000000-0000-0000-0000-0000000000b1", type: "screenshot", redaction: "redacted", sha256: "SHA-SECRET-B1", objectRef: "obj://SECRET-B1", createdAt: "2026-06-15T00:00:01Z" });
     console.log("seeded: tenant A run(2 visible + 3 hidden artifacts) · tenant B run(1)");
 
@@ -201,6 +233,84 @@ async function main(): Promise<void> {
 
       // 6) malformed run_id → 404
       const mal = await get(`/v1/runs/not-a-uuid/artifacts`, viewer);
+      const genResults = await get(`/v1/scenario-generations/${GEN_LINKED}/result-artifacts`, viewer);
+      check("linked generation result-artifacts -> 200", genResults.statusCode === 200, genResults.body);
+      const genResultItems = genResults.json().items as Array<Record<string, unknown>>;
+      check(
+        "linked generation result-artifacts reuses visible run artifacts",
+        genResultItems.length === 2 &&
+          genResultItems[0]?.artifact_id === "72000000-0000-0000-0000-0000000000a2" &&
+          genResultItems[1]?.artifact_id === "72000000-0000-0000-0000-0000000000a1",
+        JSON.stringify(genResultItems),
+      );
+      check(
+        "linked generation result-artifacts includes image/video metadata",
+        genResultItems[0]?.media_type === "video/webm" &&
+          genResultItems[0]?.filename === "run.webm" &&
+          genResultItems[0]?.duration_ms === 4200 &&
+          genResultItems[1]?.media_type === "image/png",
+        JSON.stringify(genResultItems),
+      );
+      check(
+        "linked generation result-artifacts excludes planner artifact scope",
+        genResultItems.every((item) => item.type !== "scenario_generation_llm_output") &&
+          !genResults.body.includes("SECRET-GEN") &&
+          !genResults.body.includes("71600000-0000-0000-0000-0000000000a1"),
+        genResults.body,
+      );
+      for (const secret of ["SECRET-A1", "SECRET-A2", "SHA-SECRET", "object_ref", "sha256", "content"]) {
+        check(`generation result-artifacts metadata-only hides '${secret}'`, !genResults.body.includes(secret), secret);
+      }
+
+      const genResultPage1 = await get(`/v1/scenario-generations/${GEN_LINKED}/result-artifacts?limit=1`, viewer);
+      const genResultPage1Body = genResultPage1.json() as { items: unknown[]; next_cursor: string | null };
+      check(
+        "generation result-artifacts limit=1 -> next_cursor",
+        genResultPage1.statusCode === 200 && genResultPage1Body.items.length === 1 && typeof genResultPage1Body.next_cursor === "string",
+        genResultPage1.body,
+      );
+      const genResultPage2 = await get(
+        `/v1/scenario-generations/${GEN_LINKED}/result-artifacts?limit=1&cursor=${encodeURIComponent(genResultPage1Body.next_cursor ?? "")}`,
+        viewer,
+      );
+      const genResultPage2Body = genResultPage2.json() as { items: Array<Record<string, unknown>>; next_cursor: string | null };
+      check(
+        "generation result-artifacts cursor page2 -> remaining screenshot and null cursor",
+        genResultPage2.statusCode === 200 &&
+          genResultPage2Body.items.length === 1 &&
+          genResultPage2Body.items[0]?.artifact_id === "72000000-0000-0000-0000-0000000000a1" &&
+          genResultPage2Body.next_cursor === null,
+        genResultPage2.body,
+      );
+
+      const unlinkedGeneration = await get(`/v1/scenario-generations/${GEN_UNLINKED}/result-artifacts`, viewer);
+      check(
+        "unlinked generation result-artifacts -> 200 empty",
+        unlinkedGeneration.statusCode === 200 &&
+          (unlinkedGeneration.json().items as unknown[]).length === 0 &&
+          unlinkedGeneration.json().next_cursor === null,
+        unlinkedGeneration.body,
+      );
+      const crossGeneration = await get(`/v1/scenario-generations/${GEN_B}/result-artifacts`, viewer);
+      check(
+        "cross-tenant generation result-artifacts -> 404 RESOURCE_NOT_FOUND",
+        crossGeneration.statusCode === 404 && crossGeneration.json().code === "RESOURCE_NOT_FOUND",
+        crossGeneration.body,
+      );
+      const badGenerationCursor = await get(`/v1/scenario-generations/${GEN_LINKED}/result-artifacts?cursor=not-a-json-cursor`, viewer);
+      check(
+        "generation result-artifacts invalid cursor -> 422 IR_SCHEMA_INVALID(invalid_cursor)",
+        badGenerationCursor.statusCode === 422 &&
+          badGenerationCursor.json().code === "IR_SCHEMA_INVALID" &&
+          badGenerationCursor.json().details?.reason === "invalid_cursor",
+        badGenerationCursor.body,
+      );
+      const badGenerationId = await get(`/v1/scenario-generations/not-a-uuid/result-artifacts`, viewer);
+      check(
+        "generation result-artifacts malformed generation_id -> 404 RESOURCE_NOT_FOUND",
+        badGenerationId.statusCode === 404 && badGenerationId.json().code === "RESOURCE_NOT_FOUND",
+        badGenerationId.body,
+      );
       check("malformed run_id → 404 RESOURCE_NOT_FOUND", mal.statusCode === 404 && mal.json().code === "RESOURCE_NOT_FOUND", mal.body);
     } finally {
       await app.close();

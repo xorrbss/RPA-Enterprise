@@ -180,6 +180,28 @@ interface RunArtifactRow {
   created_at: Date;
 }
 
+function artifactListPage(rows: readonly RunArtifactRow[], limit: number) {
+  return paginate(
+    rows,
+    limit,
+    (r) => ({ createdAt: r.created_at, id: r.id }),
+    (r) => ({
+      artifact_id: r.id,
+      step_id: r.step_id,
+      attempt: r.attempt,
+      type: r.type,
+      media_type: r.media_type,
+      filename: r.filename,
+      byte_size: r.byte_size !== null ? Number(r.byte_size) : null,
+      duration_ms: r.duration_ms,
+      redaction_status: r.redaction_status,
+      retention_until: r.retention_until !== null ? r.retention_until.toISOString() : null,
+      legal_hold: r.legal_hold,
+      created_at: r.created_at.toISOString(),
+    }),
+  );
+}
+
 export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   // GET /v1/runs — 커서 페이지(items=Run). filter: status(RunState)·scenario_version_id. RLS 스코프.
   app.get("/v1/runs", { config: { rbacAction: "run.read" } }, async (request, reply) => {
@@ -327,27 +349,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
         return result.rows;
       });
 
-      reply.code(200).send(
-        paginate(
-          rows,
-          limit,
-          (r) => ({ createdAt: r.created_at, id: r.id }),
-          (r) => ({
-            artifact_id: r.id,
-            step_id: r.step_id,
-            attempt: r.attempt,
-            type: r.type,
-            media_type: r.media_type,
-            filename: r.filename,
-            byte_size: r.byte_size !== null ? Number(r.byte_size) : null,
-            duration_ms: r.duration_ms,
-            redaction_status: r.redaction_status,
-            retention_until: r.retention_until !== null ? r.retention_until.toISOString() : null,
-            legal_hold: r.legal_hold,
-            created_at: r.created_at.toISOString(),
-          }),
-        ),
-      );
+      reply.code(200).send(artifactListPage(rows, limit));
     },
   );
 
@@ -378,27 +380,52 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
         return result.rows;
       });
 
-      reply.code(200).send(
-        paginate(
-          rows,
-          limit,
-          (r) => ({ createdAt: r.created_at, id: r.id }),
-          (r) => ({
-            artifact_id: r.id,
-            step_id: r.step_id,
-            attempt: r.attempt,
-            type: r.type,
-            media_type: r.media_type,
-            filename: r.filename,
-            byte_size: r.byte_size !== null ? Number(r.byte_size) : null,
-            duration_ms: r.duration_ms,
-            redaction_status: r.redaction_status,
-            retention_until: r.retention_until !== null ? r.retention_until.toISOString() : null,
-            legal_hold: r.legal_hold,
-            created_at: r.created_at.toISOString(),
-          }),
-        ),
-      );
+      reply.code(200).send(artifactListPage(rows, limit));
+    },
+  );
+
+  // GET /v1/scenario-generations/{generation_id}/result-artifacts -- generation에 연결된 run 실행 결과 artifact 목록.
+  // planner/output artifact와 분리해 자연어 생성 원장에서 screenshot/video 실행 결과를 바로 찾는다. metadata-only 목록이며
+  // 본문/blob는 /v1/artifacts/{id} 감사 게이트로만 조회한다.
+  app.get<{ Params: { id: string } }>(
+    "/v1/scenario-generations/:id/result-artifacts",
+    { config: { rbacAction: "artifact.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const generationId = request.params.id;
+      if (!UUID_RE.test(generationId)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const { limit, cursor } = parsePageParams(request.query as Record<string, unknown>);
+
+      const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const generation = await c.query<{ run_id: string | null }>(
+          `SELECT run_id
+             FROM scenario_generations
+            WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+          [principal.tenantId, generationId],
+        );
+        if (generation.rows.length === 0) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const runId = generation.rows[0].run_id;
+        if (runId === null) {
+          return [];
+        }
+        const result = await c.query<RunArtifactRow>(
+          `SELECT id, step_id, attempt, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
+                  redaction_status, retention_until, legal_hold, created_at
+             FROM artifacts
+            WHERE tenant_id = $1::uuid AND run_id = $2::uuid
+              AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
+            ORDER BY created_at DESC, id DESC
+            LIMIT $5`,
+          [principal.tenantId, runId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+        );
+        return result.rows;
+      });
+
+      reply.code(200).send(artifactListPage(rows, limit));
     },
   );
 
