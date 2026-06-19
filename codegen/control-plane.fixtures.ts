@@ -196,6 +196,10 @@ for (const operationId of [
   "abortRun",
   "validateScenario",
   "promoteScenario",
+  "archiveScenario",
+  "listScenarioVersions",
+  "getScenarioVersion",
+  "rollbackScenario",
   "listHumanTasks",
   "startHumanTask",
   "resolveHumanTask",
@@ -216,12 +220,20 @@ assert.equal(registry.getOperation("createRun").requiresAuth, true);
 assert.equal(registry.getOperation("createRun").requiresTenantBinding, true);
 assert.equal(registry.getOperation("createRun").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("promoteScenario").ifMatch?.entity, "scenario_version");
+assert.equal(registry.getOperation("archiveScenario").ifMatch?.entity, "scenario_version");
+assert.equal(registry.getOperation("rollbackScenario").ifMatch?.entity, "scenario_version");
+assert.equal(registry.getOperation("archiveScenario").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("rollbackScenario").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("updateGatewayPolicy").ifMatch?.entity, "gateway_policy");
 assert.equal(staticRbacAction("createRun"), "run.create");
 assert.equal(staticRbacAction("abortRun"), "run.abort");
 assert.equal(staticRbacAction("listRunArtifacts"), "artifact.read");
 assert.equal(staticRbacAction("validateScenario"), "scenario.read");
 assert.equal(staticRbacAction("promoteScenario"), "scenario.promote");
+assert.equal(staticRbacAction("archiveScenario"), "scenario.update");
+assert.equal(staticRbacAction("listScenarioVersions"), "scenario.read");
+assert.equal(staticRbacAction("getScenarioVersion"), "scenario.read");
+assert.equal(staticRbacAction("rollbackScenario"), "scenario.update");
 assert.equal(staticRbacAction("assignHumanTask"), "human_task.assign");
 assert.equal(staticRbacAction("escalateHumanTask"), "human_task.escalate");
 assert.equal(staticRbacAction("updateGatewayPolicy"), "gateway_policy.edit");
@@ -363,6 +375,36 @@ const promoted = await handlers.promoteScenario!(ctx("promoteScenario", {
   ifMatch: { kind: "match", currentVersion: 1, nextVersion: 2 },
 }));
 assert.equal(promoted.headers?.ETag, "2");
+
+const scenarioVersions = await handlers.listScenarioVersions!(ctx("listScenarioVersions", {
+  method: "GET",
+  path: "/v1/scenarios/{scenario_id}/versions",
+  params: { scenario_id: "scenario-1" },
+}));
+assert.equal((scenarioVersions.body as { items: unknown[] }).items.length, 1);
+
+const scenarioVersion = await handlers.getScenarioVersion!(ctx("getScenarioVersion", {
+  method: "GET",
+  path: "/v1/scenarios/{scenario_id}/versions/{version}",
+  params: { scenario_id: "scenario-1", version: "1" },
+}));
+assert.equal(scenarioVersion.headers?.ETag, "1");
+
+const rolledBack = await handlers.rollbackScenario!(ctx("rollbackScenario", {
+  method: "POST",
+  path: "/v1/scenarios/{scenario_id}/versions/{version}/rollback",
+  params: { scenario_id: "scenario-1", version: "1" },
+  ifMatch: { kind: "match", currentVersion: 2, nextVersion: 3 },
+}));
+assert.equal(rolledBack.headers?.ETag, "3");
+
+const archived = await handlers.archiveScenario!(ctx("archiveScenario", {
+  method: "POST",
+  path: "/v1/scenarios/{scenario_id}/archive",
+  params: { scenario_id: "scenario-1" },
+  ifMatch: { kind: "match", currentVersion: 3, nextVersion: 4 },
+}));
+assert.equal(archived.headers?.ETag, "3");
 
 const policy = await handlers.updateGatewayPolicy!(ctx("updateGatewayPolicy", {
   method: "PUT",

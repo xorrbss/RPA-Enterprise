@@ -609,7 +609,12 @@ function resourceForOperation(
       return { kind: "human_task", id: ctx.params.human_task_id };
     case "replayDeadLetter":
       return { kind: "workitem", id: ctx.params.dead_letter_id };
+    case "validateScenario":
     case "promoteScenario":
+    case "archiveScenario":
+    case "listScenarioVersions":
+    case "getScenarioVersion":
+    case "rollbackScenario":
       return { kind: "scenario", id: ctx.params.scenario_id };
     case "updateGatewayPolicy":
       return { kind: "gateway_policy", id: modelFromBody(ctx.body) };

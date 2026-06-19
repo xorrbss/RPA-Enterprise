@@ -142,7 +142,8 @@ export function buildIr(
   if (urlState(pageUrl) === "ok") entryParam.default = pageUrl.trim();
   const params_schema = { type: "object", properties: { [ENTRY_KEY]: entryParam }, required: [ENTRY_KEY] };
   const schemaRef = dataName.trim() || "수집데이터";
-  const extractInstruction = composeInstruction(instruction, successCriteria);
+  const baseInstruction = instruction.trim().length > 0 ? instruction : defaultInstruction(dataName, kind);
+  const extractInstruction = composeInstruction(baseInstruction, successCriteria);
   if (kind === "list") {
     const maxPages = clampMaxPages(pagination.maxPages);
     const maxAdditionalPages = Math.max(0, maxPages - 1);

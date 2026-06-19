@@ -110,6 +110,10 @@ export interface MinimalControlPlaneServices {
   abortRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   validateScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   promoteScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  archiveScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listScenarioVersions(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  getScenarioVersion(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  rollbackScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listHumanTasks(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   startHumanTask(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   resolveHumanTask(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -253,6 +257,61 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       tenant_id: tenant(ctx),
       version: nextVersion,
       promoted_target: requireString(body, "target"),
+    };
+    return { status: 200, headers: { ETag: String(nextVersion) }, body: response };
+  }
+
+  async archiveScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    if (ctx.ifMatch?.kind !== "match") {
+      throw new ApiResponseException("SCENARIO_VERSION_CONFLICT");
+    }
+    const scenarioId = requireParam(ctx, "scenario_id");
+    const response = {
+      scenario_id: scenarioId,
+      tenant_id: tenant(ctx),
+      version: ctx.ifMatch.currentVersion,
+      archived: true,
+    };
+    return { status: 200, headers: { ETag: String(ctx.ifMatch.currentVersion) }, body: response };
+  }
+
+  async listScenarioVersions(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const scenarioId = requireParam(ctx, "scenario_id");
+    return page([{
+      scenario_id: scenarioId,
+      version_id: `${scenarioId}:v1`,
+      version: 1,
+      promotion_status: "draft",
+    }]);
+  }
+
+  async getScenarioVersion(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const scenarioId = requireParam(ctx, "scenario_id");
+    const version = Number(requireParam(ctx, "version"));
+    const safeVersion = Number.isFinite(version) && version > 0 ? version : 1;
+    return {
+      status: 200,
+      headers: { ETag: String(safeVersion) },
+      body: {
+        scenario_id: scenarioId,
+        version_id: `${scenarioId}:v${safeVersion}`,
+        version: safeVersion,
+        promotion_status: "draft",
+        ir: { meta: { name: scenarioId, version: safeVersion }, start: "done", nodes: { done: { terminal: "success" } } },
+      },
+    };
+  }
+
+  async rollbackScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const nextVersion = requireIfMatchNextVersion(ctx, "SCENARIO_VERSION_CONFLICT");
+    const scenarioId = requireParam(ctx, "scenario_id");
+    const sourceVersion = Number(requireParam(ctx, "version"));
+    const response = {
+      scenario_id: scenarioId,
+      tenant_id: tenant(ctx),
+      version: nextVersion,
+      promotion_status: "draft",
+      rolled_back_from: Number.isFinite(sourceVersion) ? sourceVersion : ctx.params.version,
     };
     return { status: 200, headers: { ETag: String(nextVersion) }, body: response };
   }
@@ -445,6 +504,10 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     abortRun: bind(services.abortRun),
     validateScenario: bind(services.validateScenario),
     promoteScenario: bind(services.promoteScenario),
+    archiveScenario: bind(services.archiveScenario),
+    listScenarioVersions: bind(services.listScenarioVersions),
+    getScenarioVersion: bind(services.getScenarioVersion),
+    rollbackScenario: bind(services.rollbackScenario),
     listHumanTasks: bind(services.listHumanTasks),
     startHumanTask: bind(services.startHumanTask),
     resolveHumanTask: bind(services.resolveHumanTask),

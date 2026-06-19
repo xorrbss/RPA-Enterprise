@@ -94,6 +94,16 @@ describe("OperatorWizard.buildIr — url_ref 키 모델(리터럴 금지)", () =
     expect(ir.nodes.next_page.what[0]?.instruction).toBe("다음 버튼을 누른다.");
   });
 
+  test("blank extract instruction falls back to a default instruction", () => {
+    const ir = buildIr("주문수집", "https://example.com/orders", "주문", "once", "", "") as {
+      nodes: { collect: { what: { instruction?: string; schema_ref?: string }[] } };
+    };
+    const extract = ir.nodes.collect.what[0];
+    expect(extract?.schema_ref).toBe("주문");
+    expect(extract?.instruction).toContain("주문");
+    expect(extract?.instruction?.trim().length).toBeGreaterThan(0);
+  });
+
   test("무효/빈 URL이면 default 없이 키만 선언(required 유지)", () => {
     const ir = buildIr("x", "not-a-url", "d", "once") as {
       nodes: { open: { what: { url_ref: string }[] } };

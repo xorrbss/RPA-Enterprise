@@ -348,6 +348,29 @@ async function main(): Promise<void> {
         payload: {},
       });
       check("rollback v1 → v3 draft", rollback.statusCode === 200 && rollback.json().version === 3 && rollback.json().promotion_status === "draft", rollback.body);
+      const rollbackReplay = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/versions/1/rollback`,
+        headers: { authorization: auth(operator), "if-match": "2", "idempotency-key": "scenario-rollback-a" },
+        payload: {},
+      });
+      check(
+        "rollback replay → 200 same v3 without duplicate",
+        rollbackReplay.statusCode === 200 &&
+          rollbackReplay.json().version === 3 &&
+          rollbackReplay.json().rolled_back_from === 1 &&
+          rollbackReplay.headers.etag === "3",
+        rollbackReplay.body,
+      );
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const r = await c.query<{ max_version: string; version_count: string }>(
+          `SELECT max(version)::text AS max_version, count(*)::text AS version_count
+             FROM scenario_versions
+            WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid`,
+          [TENANT_A, scenarioId],
+        );
+        check("rollback replay keeps max version at v3", r.rows[0]?.max_version === "3" && r.rows[0]?.version_count === "3", JSON.stringify(r.rows[0]));
+      });
       const archive = await app.inject({
         method: "POST",
         url: `/v1/scenarios/${scenarioId}/archive`,
@@ -355,6 +378,20 @@ async function main(): Promise<void> {
         payload: {},
       });
       check("archive active scenario → 200", archive.statusCode === 200 && archive.json().archived === true, archive.body);
+      const archiveReplay = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/archive`,
+        headers: { authorization: auth(operator), "if-match": "3", "idempotency-key": "scenario-archive-a" },
+        payload: {},
+      });
+      check(
+        "archive replay → 200 same body",
+        archiveReplay.statusCode === 200 &&
+          archiveReplay.json().version === 3 &&
+          archiveReplay.json().archived === true &&
+          archiveReplay.headers.etag === "3",
+        archiveReplay.body,
+      );
       const archivedGet = await app.inject({ method: "GET", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(viewer) } });
       check("archived scenario detail hidden → 404", archivedGet.statusCode === 404, archivedGet.body);
       const recreateName = await app.inject({

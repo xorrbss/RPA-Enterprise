@@ -23,6 +23,10 @@ export type SupportedControlPlaneOperationId = Extract<
   | "abortRun"
   | "validateScenario"
   | "promoteScenario"
+  | "archiveScenario"
+  | "listScenarioVersions"
+  | "getScenarioVersion"
+  | "rollbackScenario"
   | "listHumanTasks"
   | "startHumanTask"
   | "resolveHumanTask"
@@ -131,6 +135,46 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     requestBodyRequired: true,
     responseSchemaRef: "#/components/schemas/Scenario",
     rbacAction: "scenario.promote",
+    requiresIdempotencyKey: true,
+    ifMatch: scenarioIfMatch,
+  }),
+  operation({
+    operationId: "archiveScenario",
+    method: "POST",
+    path: "/v1/scenarios/{scenario_id}/archive",
+    paramsSchemaRef: "#/components/schemas/ScenarioPathParams",
+    requestBodySchemaRef: "#/components/schemas/ScenarioCommandRequest",
+    requestBodyRequired: false,
+    responseSchemaRef: "#/components/schemas/Scenario",
+    rbacAction: "scenario.update",
+    requiresIdempotencyKey: true,
+    ifMatch: scenarioIfMatch,
+  }),
+  operation({
+    operationId: "listScenarioVersions",
+    method: "GET",
+    path: "/v1/scenarios/{scenario_id}/versions",
+    paramsSchemaRef: "#/components/schemas/ScenarioPathParams",
+    responseSchemaRef: "#/components/schemas/ScenarioVersionPage",
+    rbacAction: "scenario.read",
+  }),
+  operation({
+    operationId: "getScenarioVersion",
+    method: "GET",
+    path: "/v1/scenarios/{scenario_id}/versions/{version}",
+    paramsSchemaRef: "#/components/schemas/ScenarioVersionPathParams",
+    responseSchemaRef: "#/components/schemas/ScenarioVersion",
+    rbacAction: "scenario.read",
+  }),
+  operation({
+    operationId: "rollbackScenario",
+    method: "POST",
+    path: "/v1/scenarios/{scenario_id}/versions/{version}/rollback",
+    paramsSchemaRef: "#/components/schemas/ScenarioVersionPathParams",
+    requestBodySchemaRef: "#/components/schemas/ScenarioCommandRequest",
+    requestBodyRequired: false,
+    responseSchemaRef: "#/components/schemas/Scenario",
+    rbacAction: "scenario.update",
     requiresIdempotencyKey: true,
     ifMatch: scenarioIfMatch,
   }),
@@ -340,6 +384,8 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
   ["abortRun", requireObject("#/components/schemas/AbortRequest", [], true)],
   ["validateScenario", requireObject("#/components/schemas/ValidateRequest")],
   ["promoteScenario", requireObject("#/components/schemas/PromoteRequest", ["target"])],
+  ["archiveScenario", requireObject("#/components/schemas/ScenarioCommandRequest", [], true)],
+  ["rollbackScenario", requireObject("#/components/schemas/ScenarioCommandRequest", [], true)],
   ["resolveHumanTask", requireObject("#/components/schemas/HumanTaskResolveRequest")],
   ["assignHumanTask", requireObject("#/components/schemas/HumanTaskAssignRequest", ["assignee"])],
   ["escalateHumanTask", requireObject("#/components/schemas/HumanTaskEscalateRequest", [], true)],
@@ -353,6 +399,10 @@ const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Op
   ["abortRun", requireParams("#/components/schemas/RunPathParams", ["run_id"])],
   ["validateScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
   ["promoteScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
+  ["archiveScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
+  ["listScenarioVersions", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
+  ["getScenarioVersion", requireParams("#/components/schemas/ScenarioVersionPathParams", ["scenario_id", "version"])],
+  ["rollbackScenario", requireParams("#/components/schemas/ScenarioVersionPathParams", ["scenario_id", "version"])],
   ["startHumanTask", requireParams("#/components/schemas/HumanTaskPathParams", ["human_task_id"])],
   ["resolveHumanTask", requireParams("#/components/schemas/HumanTaskPathParams", ["human_task_id"])],
   ["assignHumanTask", requireParams("#/components/schemas/HumanTaskPathParams", ["human_task_id"])],

@@ -32,7 +32,7 @@
 - 적용 대상이 아닌 read(GET)·생성(POST create)에는 `If-Match`를 요구하지 않는다.
 
 ### 0.4 멱등 — Idempotency-Key (명령 중복 제출 보호)
-- **부작용이 있는 명령형 POST**(run create/abort, scenario promote, human-task assign/start/resolve/escalate, workitem replay, sites approve, gateway policy update)에 `Idempotency-Key` 헤더 규약 적용.
+- **부작용이 있는 명령형 POST**(run create/abort, scenario promote/rollback/archive, human-task assign/start/resolve/escalate, workitem replay, sites approve, gateway policy update)에 `Idempotency-Key` 헤더 규약 적용.
 - 서버는 `(tenant_id, endpoint, Idempotency-Key)`로 최초 처리 결과를 보관하고, 동일 키 재제출 시 **부작용 재실행 없이** 최초 응답을 반환(at-least-once 클라이언트 재시도 보호).
 - 이 헤더는 **`sink_idempotency_key`(migration SQL: 외부 sink 다운스트림 중복 방지, 값=`tenant_id:sink_config_id:schema_ref:natural_key`)와 구분된다.** Idempotency-Key는 *제어평면 인입 명령*의 중복 제출 보호이고, sink_idempotency_key는 *데이터평면 외부 전달*의 멱등키다 — 서로 다른 계층·다른 값.
 
@@ -82,6 +82,10 @@
 | PUT | `/v1/scenarios/{scenario_id}` | `If-Match: <version>` 필수. body: 갱신 IR | 200 + 새 version. `ETag` 갱신 | `SCENARIO_VERSION_CONFLICT`(412), `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422) |
 | POST | `/v1/scenarios/{scenario_id}/validate` | body: 검증할 IR(저장 안 함) 또는 기존 version 참조 | 200 + ValidationReport(ir-static-validation.md V1..V11) | `IR_SCHEMA_INVALID`(422, reason), `IR_EXPRESSION_COMPILE_ERROR`(422) |
 | POST | `/v1/scenarios/{scenario_id}/promote` | `If-Match: <version>` + `Idempotency-Key`. body: `target`(예: prod) | 200 + 승격된 version(AST 캐시 빌드) | `SCENARIO_VERSION_CONFLICT`(412), `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422) |
+| GET | `/v1/scenarios/{scenario_id}/versions` | - | 200 + `{ items, next_cursor }` 최신 version 우선 | `RESOURCE_NOT_FOUND`(404) |
+| GET | `/v1/scenarios/{scenario_id}/versions/{version}` | - | 200 + 지정 version의 IR + `ETag: <version>` | `RESOURCE_NOT_FOUND`(404) |
+| POST | `/v1/scenarios/{scenario_id}/versions/{version}/rollback` | `If-Match: <latest_version>` + `Idempotency-Key`. body `{}` optional | 200 + 과거 IR을 최신+1 draft로 복제. 같은 키 재시도는 중복 version 없이 최초 응답 재생 | `SCENARIO_VERSION_CONFLICT`(412), `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422), `RESOURCE_NOT_FOUND`(404) |
+| POST | `/v1/scenarios/{scenario_id}/archive` | `If-Match: <latest_version>` + `Idempotency-Key`. body `{}` optional | 200 + scenario 보관, prod promotion 해제. 같은 키 재시도는 최초 응답 재생 | `SCENARIO_VERSION_CONFLICT`(412), `RESOURCE_NOT_FOUND`(404) |
 
 ¹ run 외 엔티티(scenario/human-task/workitem/site) 미존재 → `RESOURCE_NOT_FOUND`(404, v1.5 신설). run은 `RUN_NOT_FOUND` 유지.
 
@@ -233,6 +237,8 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 | `POST /human-tasks/{id}/escalate` | H5/R15 `reassignAssignee` 처리 owner가 있을 때만 HumanTask `*`→`escalated`, Run R15(suspended 유지). 미지원이면 fail-closed rollback | `human_task.escalated`(성공 시) | "관리자 이관" |
 | `POST /dlq/{id}/replay` | Workitem `abandoned`→`new`(W10) | (workitem 재인입) | "재처리" |
 | `POST /scenarios/{id}/promote` | (version 승격 + AST 캐시 빌드) | — | "승격됨" |
+| `POST /scenarios/{id}/versions/{version}/rollback` | (과거 version을 최신+1 draft로 복제) | — | "롤백됨" |
+| `POST /scenarios/{id}/archive` | (active scenario 보관 + promotion 해제) | — | "보관됨" |
 
 ---
 

@@ -519,6 +519,122 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /scenarios/{scenario_id}/archive:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    post:
+      tags: [Scenarios]
+      operationId: archiveScenario
+      summary: 시나리오 보관
+      description: >
+        active scenario를 archived 상태로 전환하고 prod promotion을 draft로 내린다. If-Match(version) +
+        Idempotency-Key 필수. 동일 키 재시도는 최초 성공 응답을 재생한다.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioCommandRequest'
+      responses:
+        '200':
+          description: 보관된 scenario version 요약.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    get:
+      tags: [Scenarios]
+      operationId: listScenarioVersions
+      summary: 시나리오 버전 목록
+      description: scenario_versions를 최신 version부터 페이지 형태로 반환한다.
+      responses:
+        '200':
+          description: scenario version page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioVersionPage'
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/versions/{version}:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+      - $ref: '#/components/parameters/Version'
+    get:
+      tags: [Scenarios]
+      operationId: getScenarioVersion
+      summary: 시나리오 버전 상세
+      description: 지정 version의 IR과 version metadata를 반환한다.
+      responses:
+        '200':
+          description: scenario version detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioVersion'
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/versions/{version}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+      - $ref: '#/components/parameters/Version'
+    post:
+      tags: [Scenarios]
+      operationId: rollbackScenario
+      summary: 시나리오 버전 롤백
+      description: >
+        선택한 과거 version의 IR을 최신+1 draft로 복제한다. If-Match는 현재 최신 version과 비교하며,
+        Idempotency-Key 재시도는 새 version을 중복 생성하지 않고 최초 응답을 재생한다.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioCommandRequest'
+      responses:
+        '200':
+          description: 롤백으로 생성된 draft version 요약.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+
   # ============================================================
   # 3. Human Tasks — api-surface §3
   # ============================================================
@@ -1031,6 +1147,13 @@ components:
       in: path
       required: true
       schema: { type: string }
+    Version:
+      name: version
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
     GenerationId:
       name: generation_id
       in: path
@@ -1269,6 +1392,15 @@ components:
           items: { $ref: '#/components/schemas/Scenario' }
         next_cursor:
           type: [string, "null"]
+    ScenarioVersionPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScenarioVersion' }
+        next_cursor:
+          type: [string, "null"]
     HumanTaskPage:
       type: object
       required: [items, next_cursor]
@@ -1376,6 +1508,27 @@ components:
           type: integer
           description: 최신 version(ir.schema meta.version). ETag 값.
         latest_version_id: { type: string }
+        ir:
+          $ref: '#/components/schemas/IRDocument'
+
+    ScenarioVersion:
+      type: object
+      description: scenario_versions row 요약. 상세 조회는 ir을 포함한다.
+      properties:
+        scenario_id: { type: string }
+        version_id: { type: string }
+        version:
+          type: integer
+          minimum: 1
+        promotion_status:
+          type: string
+          enum: [draft, prod]
+        created_at:
+          type: string
+          format: date-time
+        promoted_at:
+          type: [string, "null"]
+          format: date-time
         ir:
           $ref: '#/components/schemas/IRDocument'
 
@@ -1608,6 +1761,11 @@ components:
         target:
           type: string
           description: 승격 대상 환경(예 prod).
+      additionalProperties: false
+
+    ScenarioCommandRequest:
+      type: object
+      description: Empty object for side-effect scenario commands such as archive and rollback.
       additionalProperties: false
 
     HumanTask:
