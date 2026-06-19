@@ -58,7 +58,15 @@ export interface MinimalArtifact {
   artifact_id: string;
   tenant_id: string;
   run_id?: string;
+  type?: string;
+  media_type?: string | null;
+  filename?: string | null;
+  byte_size?: number | null;
+  duration_ms?: number | null;
   redaction_status: ArtifactRedactionStatus;
+  retention_until?: string | null;
+  legal_hold?: boolean;
+  created_at?: string;
   deleted_at?: string;
   quarantine?: boolean;
   ref: string;
@@ -98,6 +106,7 @@ export interface MinimalControlPlaneServices {
   createRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listRuns(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listRunArtifacts(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   abortRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   validateScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   promoteScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -176,6 +185,32 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
         (status === undefined || run.status === status) &&
         (scenarioVersionId === undefined || run.scenario_version_id === scenarioVersionId),
     );
+    return page(items);
+  }
+
+  async listRunArtifacts(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const runId = requireParam(ctx, "run_id");
+    const items = [...this.artifacts.values()]
+      .filter(
+        (artifact) =>
+          artifact.tenant_id === tenant(ctx) &&
+          artifact.run_id === runId &&
+          artifact.deleted_at === undefined &&
+          artifact.quarantine !== true &&
+          (artifact.redaction_status === "redacted" || artifact.redaction_status === "not_required"),
+      )
+      .map((artifact) => ({
+        artifact_id: artifact.artifact_id,
+        type: artifact.type ?? "artifact",
+        media_type: artifact.media_type ?? null,
+        filename: artifact.filename ?? null,
+        byte_size: artifact.byte_size ?? null,
+        duration_ms: artifact.duration_ms ?? null,
+        redaction_status: artifact.redaction_status,
+        retention_until: artifact.retention_until ?? null,
+        legal_hold: artifact.legal_hold ?? false,
+        created_at: artifact.created_at ?? "1970-01-01T00:00:00.000Z",
+      }));
     return page(items);
   }
 
@@ -406,6 +441,7 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     createRun: bind(services.createRun),
     getRun: bind(services.getRun),
     listRuns: bind(services.listRuns),
+    listRunArtifacts: bind(services.listRunArtifacts),
     abortRun: bind(services.abortRun),
     validateScenario: bind(services.validateScenario),
     promoteScenario: bind(services.promoteScenario),

@@ -124,6 +124,34 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /runs/{run_id}/artifacts:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Runs, Artifacts]
+      operationId: listRunArtifacts
+      summary: run artifact list
+      description: >
+        Run-scoped image/video/result artifact list. The response is metadata-only and never exposes
+        content, object_ref, sha256, or secret material. Body/blob reads must still pass the artifact
+        redaction, RBAC, and audit gates.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: run-scoped artifact metadata list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunArtifactList'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   /runs/{run_id}/abort:
     parameters:
       - $ref: '#/components/parameters/RunId'
@@ -1270,6 +1298,15 @@ components:
           items: { $ref: '#/components/schemas/GenerationArtifactItem' }
         next_cursor:
           type: [string, "null"]
+    RunArtifactList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RunArtifactItem' }
+        next_cursor:
+          type: [string, "null"]
 
     # ===== Resource shapes (요지; 상세 필드 타입은 codegen/types 참조) =====
     Run:
@@ -1619,6 +1656,11 @@ components:
         retention_until: { type: [string, "null"], format: date-time }
         legal_hold: { type: boolean }
         created_at: { type: string, format: date-time }
+
+    RunArtifactItem:
+      allOf:
+        - $ref: '#/components/schemas/GenerationArtifactItem'
+      description: run-scoped artifact list item. Metadata-only; content, object_ref, and sha256 are excluded.
 
     GenerationArtifact:
       allOf:

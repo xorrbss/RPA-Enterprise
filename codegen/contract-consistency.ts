@@ -87,10 +87,13 @@ assertEqualSet("OpenAPI RunState enum", openApiEnum("RunState"), EXPECTED_RUN_ST
 assertEqualSet("OpenAPI WorkitemState enum", openApiEnum("WorkitemState"), EXPECTED_WORKITEM_STATES);
 assertEqualSet("OpenAPI HumanTaskState enum", openApiEnum("HumanTaskState"), EXPECTED_HUMAN_TASK_STATES);
 assertEqualSet("OpenAPI HumanTaskKind enum", openApiEnum("HumanTaskKind"), EXPECTED_HUMAN_TASK_KINDS);
+assertOpenApiPath("/runs/{run_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts/{artifact_id}");
+assertControlPlanePath("/v1/runs/{run_id}/artifacts");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts/{artifact_id}");
+assertOperationId("listRunArtifacts");
 assertOperationId("listScenarioGenerationArtifacts");
 assertOperationId("getScenarioGenerationArtifact");
 

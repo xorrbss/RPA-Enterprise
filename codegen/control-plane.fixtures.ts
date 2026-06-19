@@ -122,19 +122,46 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
   artifacts: [{
     artifact_id: "artifact-pending",
     tenant_id: tenantId,
+    run_id: "run-existing",
+    type: "screenshot",
+    media_type: "image/png",
+    filename: "pending.png",
+    byte_size: 512,
+    duration_ms: null,
     redaction_status: "pending",
+    retention_until: null,
+    legal_hold: false,
+    created_at: "2026-06-13T00:00:00.000Z",
     ref: "artifact://pending",
     body: { secret: "[redacted]" },
   }, {
     artifact_id: "artifact-redacted",
     tenant_id: tenantId,
+    run_id: "run-existing",
+    type: "video",
+    media_type: "video/webm",
+    filename: "run-recording.webm",
+    byte_size: 4096,
+    duration_ms: 1200,
     redaction_status: "redacted",
+    retention_until: null,
+    legal_hold: false,
+    created_at: "2026-06-13T00:00:01.000Z",
     ref: "artifact://redacted",
     body: { ok: true },
   }, {
     artifact_id: "artifact-quarantined",
     tenant_id: tenantId,
+    run_id: "run-existing",
+    type: "screenshot",
+    media_type: "image/png",
+    filename: "quarantined.png",
+    byte_size: 2048,
+    duration_ms: null,
     redaction_status: "redacted",
+    retention_until: null,
+    legal_hold: false,
+    created_at: "2026-06-13T00:00:02.000Z",
     quarantine: true,
     ref: "artifact://quarantined",
     body: { quarantined: true },
@@ -164,6 +191,7 @@ const operationIds = CONTROL_PLANE_OPERATION_BINDINGS.map((binding) => binding.o
 for (const operationId of [
   "createRun",
   "getRun",
+  "listRunArtifacts",
   "listRuns",
   "abortRun",
   "validateScenario",
@@ -191,6 +219,7 @@ assert.equal(registry.getOperation("promoteScenario").ifMatch?.entity, "scenario
 assert.equal(registry.getOperation("updateGatewayPolicy").ifMatch?.entity, "gateway_policy");
 assert.equal(staticRbacAction("createRun"), "run.create");
 assert.equal(staticRbacAction("abortRun"), "run.abort");
+assert.equal(staticRbacAction("listRunArtifacts"), "artifact.read");
 assert.equal(staticRbacAction("validateScenario"), "scenario.read");
 assert.equal(staticRbacAction("promoteScenario"), "scenario.promote");
 assert.equal(staticRbacAction("assignHumanTask"), "human_task.assign");
@@ -207,6 +236,7 @@ assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({ assignee: 
 assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({}).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({ run_id: "run-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("listRunArtifacts")?.validate({ run_id: "run-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("assignHumanTask")?.validate({ human_task_id: "task-open" }).valid, true);
 assert.equal(registry.getQueryValidator("listRuns")?.validate(undefined).valid, false);
 
@@ -308,6 +338,20 @@ const artifact = await handlers.getArtifact!(ctx("getArtifact", {
 }));
 assert.equal(artifact.status, 200);
 assert.equal((artifact.body as { ref: string }).ref, "artifact://redacted");
+
+const artifactList = await handlers.listRunArtifacts!(ctx("listRunArtifacts", {
+  method: "GET",
+  path: "/v1/runs/{run_id}/artifacts",
+  params: { run_id: "run-existing" },
+}));
+assert.equal(artifactList.status, 200);
+const artifactItems = (artifactList.body as { items: Array<Record<string, unknown>> }).items;
+assert.equal(artifactItems.length, 1);
+assert.equal(artifactItems[0]?.artifact_id, "artifact-redacted");
+assert.equal(artifactItems[0]?.media_type, "video/webm");
+assert.equal(artifactItems[0]?.duration_ms, 1200);
+assert.equal(Object.prototype.hasOwnProperty.call(artifactItems[0], "ref"), false);
+assert.equal(Object.prototype.hasOwnProperty.call(artifactItems[0], "body"), false);
 
 const promoted = await handlers.promoteScenario!(ctx("promoteScenario", {
   method: "POST",

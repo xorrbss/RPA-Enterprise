@@ -18,6 +18,7 @@ export type SupportedControlPlaneOperationId = Extract<
   OperationId,
   | "createRun"
   | "getRun"
+  | "listRunArtifacts"
   | "listRuns"
   | "abortRun"
   | "validateScenario"
@@ -91,6 +92,14 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     paramsSchemaRef: "#/components/schemas/RunPathParams",
     responseSchemaRef: "#/components/schemas/Run",
     rbacAction: "run.read",
+  }),
+  operation({
+    operationId: "listRunArtifacts",
+    method: "GET",
+    path: "/v1/runs/{run_id}/artifacts",
+    paramsSchemaRef: "#/components/schemas/RunPathParams",
+    responseSchemaRef: "#/components/schemas/RunArtifactList",
+    rbacAction: "artifact.read",
   }),
   operation({
     operationId: "abortRun",
@@ -337,6 +346,7 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
 
 const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<OperationId, BoundaryValidator>([
   ["getRun", requireParams("#/components/schemas/RunPathParams", ["run_id"])],
+  ["listRunArtifacts", requireParams("#/components/schemas/RunPathParams", ["run_id"])],
   ["abortRun", requireParams("#/components/schemas/RunPathParams", ["run_id"])],
   ["validateScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
   ["promoteScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
