@@ -116,6 +116,9 @@ assertOperationId("runScenarioGeneration");
 assertOperationId("getScenarioGenerationCapabilities");
 assertOperationId("listScenarioGenerationArtifacts");
 assertOperationId("getScenarioGenerationArtifact");
+assertOpenApiPath("/principals");
+assertControlPlanePath("/v1/principals");
+assertOperationId("listPrincipals");
 
 if (failures.length > 0) {
   console.error(`contract consistency: ${failures.length} failed`);

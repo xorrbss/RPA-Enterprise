@@ -474,7 +474,7 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#humanTasks";
     (await screen.findByRole("button", { name: "배정" })).click();
     expect(await screen.findByRole("button", { name: "확인" })).toBeDisabled(); // 빈 입력 → 확인 비활성(가드)
-    fireEvent.change(screen.getByLabelText("담당자 ID(uuid)"), { target: { value: "00000000-0000-0000-0000-0000000000aa" } });
+    fireEvent.change(screen.getByLabelText("담당자(목록에서 선택 또는 ID 직접 입력)"), { target: { value: "00000000-0000-0000-0000-0000000000aa" } });
     screen.getByRole("button", { name: "확인" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.assignee).toBe("00000000-0000-0000-0000-0000000000aa");

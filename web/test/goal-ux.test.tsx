@@ -202,7 +202,7 @@ describe("goal UX improvements", () => {
     expect(within(screen.getByRole("table")).queryByText("승인")).toBeNull();
 
     fireEvent.click(within(controls).getByRole("button", { name: "현재 페이지 2건 배정" }));
-    fireEvent.change(await screen.findByLabelText("담당자 ID(uuid)"), { target: { value: "u-assign" } });
+    fireEvent.change(await screen.findByLabelText("담당자(목록에서 선택 또는 ID 직접 입력)"), { target: { value: "u-assign" } });
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
     await waitFor(() => expect(assigned).toHaveLength(2));
     expect(assigned.map((c) => c.id).sort()).toEqual(["ht-due", "ht-later"]);

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { useCan } from "../api/permissions";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -9,6 +9,7 @@ import { errorLabel } from "./badges";
 // invalidate → 결과/오류 인라인. 조용한 실패 금지: 오류는 ApiError 코드로 표면화. action 지정 시 역할이
 // 없으면 숨김(RBAC UI 게이팅; 최종 강제는 백엔드). inputLabel 지정 시 다이얼로그에 텍스트 입력(예: 담당자
 // uuid)을 받아 run의 2번째 인자로 전달(빈 값이면 확인 비활성 — native prompt 대체).
+// inputOptions 지정 시 datalist 제안(예: principals 목록)을 붙인다 — 입력은 여전히 자유형이라 목록 밖 값도 허용(폴백 유지).
 export function ActionButton(props: {
   label: string;
   confirmText: string;
@@ -17,10 +18,12 @@ export function ActionButton(props: {
   disabled?: boolean;
   action?: string;
   inputLabel?: string;
+  inputOptions?: readonly string[];
   title?: string;
   successText?: string | null;
 }): JSX.Element | null {
   const can = useCan();
+  const listId = useId();
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const [input, setInput] = useState("");
@@ -67,7 +70,19 @@ export function ActionButton(props: {
           {needsInput && (
             <label style={{ display: "grid", gap: 4 }}>
               <span className="label">{props.inputLabel}</span>
-              <input value={input} onChange={(e) => setInput(e.target.value)} autoFocus />
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                list={props.inputOptions !== undefined ? listId : undefined}
+                autoFocus
+              />
+              {props.inputOptions !== undefined && (
+                <datalist id={listId}>
+                  {props.inputOptions.map((opt) => (
+                    <option key={opt} value={opt} />
+                  ))}
+                </datalist>
+              )}
             </label>
           )}
         </ConfirmDialog>
