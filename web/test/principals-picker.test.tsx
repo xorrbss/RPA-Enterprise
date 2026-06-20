@@ -7,9 +7,9 @@ import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
 import { fakeClient } from "./fake-client";
 
-// 사람확인 담당자 '배정' picker — /v1/principals 제안 목록을 datalist로 노출(자유 입력 폴백 유지).
-// 표시명 소스가 없어 식별자(principal_id)만 제안한다(날조 금지). 백엔드 reads.ts가 distinct union을 투영.
-const LABEL = "담당자(목록에서 선택 또는 ID 직접 입력)";
+// 사람확인 담당자 '배정' picker — /v1/principals 담당자 디렉터리를 datalist로 노출(자유 입력 폴백 유지).
+// 디렉터리 항목은 이름(display_name)으로 보이고 배정값은 sub. 디렉터리 밖 값도 자유 입력 가능(폴백).
+const LABEL = "담당자(이름으로 선택 또는 ID 직접 입력)";
 
 function renderApp(client: ApiClient): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -34,11 +34,17 @@ describe("담당자 배정 picker(/v1/principals datalist)", () => {
   });
 
   // 제안 목록이 datalist option으로 렌더되고, 입력은 자유형(list 연결) — 목록 밖 값도 허용(폴백).
-  test("배정 다이얼로그 — principals가 datalist 제안으로 렌더", async () => {
+  test("배정 다이얼로그 — 담당자 디렉터리가 이름(label)+sub(value)로 datalist 렌더", async () => {
     renderApp(
       fakeClient({
         listHumanTasks: async () => ({ items: [OPEN_TASK], next_cursor: null }),
-        listPrincipals: async () => ({ items: [{ principal_id: "70000000-0000-0000-0000-0000000000c1" }, { principal_id: "auth0|jane" }], next_cursor: null }),
+        listPrincipals: async () => ({
+          items: [
+            { principal_id: "a1000000-0000-0000-0000-000000000001", sub: "70000000-0000-0000-0000-0000000000c1", display_name: "홍길동", email: null, source: "manual" },
+            { principal_id: "a1000000-0000-0000-0000-000000000002", sub: "auth0|jane", display_name: "제인", email: "jane@ex.com", source: "jwt" },
+          ],
+          next_cursor: null,
+        }),
       }),
     );
     location.hash = "#humanTasks";
@@ -46,8 +52,13 @@ describe("담당자 배정 picker(/v1/principals datalist)", () => {
     const input = await screen.findByLabelText(LABEL);
     expect(input).toHaveAttribute("list"); // 자유 입력 + 제안 연결
     await waitFor(() => {
-      expect(document.querySelector('option[value="70000000-0000-0000-0000-0000000000c1"]')).not.toBeNull();
-      expect(document.querySelector('option[value="auth0|jane"]')).not.toBeNull();
+      // 배정값은 sub(value), 표시는 이름(label).
+      const opt1 = document.querySelector<HTMLOptionElement>('option[value="70000000-0000-0000-0000-0000000000c1"]');
+      const opt2 = document.querySelector<HTMLOptionElement>('option[value="auth0|jane"]');
+      expect(opt1).not.toBeNull();
+      expect(opt1?.label).toBe("홍길동");
+      expect(opt2).not.toBeNull();
+      expect(opt2?.label).toBe("제인");
     });
   });
 

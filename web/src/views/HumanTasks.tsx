@@ -23,8 +23,8 @@ function dueTime(task: HumanTaskItem): number {
 }
 
 // 상태별 운영자 액션(state-machine H1/H2/H3/H5/H6). 권한/assignee 범위는 백엔드가 강제.
-// principalOptions = /v1/principals 제안 목록(테넌트에 이미 등장한 PrincipalId distinct). '배정' 입력의 datalist로만 쓰며 자유 입력 폴백은 유지.
-function HumanTaskActions({ api, task, principalOptions }: { api: ApiClient; task: HumanTaskItem; principalOptions: readonly string[] }): JSX.Element {
+// principalOptions = /v1/principals 담당자 디렉터리(value=배정값 sub, label=표시이름). '배정' 입력의 datalist로만 쓰며 자유 입력 폴백은 유지.
+function HumanTaskActions({ api, task, principalOptions }: { api: ApiClient; task: HumanTaskItem; principalOptions: readonly { value: string; label?: string }[] }): JSX.Element {
   const id = task.human_task_id;
   const subject = useSubject();
   // '내게 배정' 단축 — 현재 토큰 sub로 self-assign(직접입력 없이 가장 흔한 케이스). 검증은 백엔드가 최종 강제.
@@ -40,14 +40,14 @@ function HumanTaskActions({ api, task, principalOptions }: { api: ApiClient; tas
       invalidateKeys={KEYS}
     />
   ) : null;
-  // 타인 배정: /v1/principals 제안 목록(datalist) + 자유 입력. assignee는 PrincipalId(JWT sub) 자유형 string이라
-  //   목록 밖 값도 허용(폴백). 표시명 소스가 계약에 없어 식별자만 노출(없는 표시명 미발명).
+  // 타인 배정: /v1/principals 담당자 디렉터리(datalist, 이름 표시) + 자유 입력. assignee는 PrincipalId(JWT sub) 자유형
+  //   string이라 디렉터리 밖 값도 허용(폴백). 디렉터리 항목은 이름(display_name)으로 보이고 배정값은 sub.
   const assign = (
     <ActionButton
       label="배정"
       action="human_task.assign"
       confirmText="담당자를 배정할까요?"
-      inputLabel="담당자(목록에서 선택 또는 ID 직접 입력)"
+      inputLabel="담당자(이름으로 선택 또는 ID 직접 입력)"
       inputOptions={principalOptions}
       run={(key, assignee) => {
         // 빈 값은 다이얼로그 확인 비활성으로 1차 차단 + 여기서도 방어(조용한 실패 금지).
@@ -88,14 +88,17 @@ export function HumanTasksView(): JSX.Element {
   const subject = useSubject();
   const [dueOnly, setDueOnly] = useState(false);
   // 담당자 picker 제안 목록 — 배정 권한이 있을 때만 조회(viewer는 picker 미노출 → 불필요 쿼리 회피).
-  //   /v1/principals = 테넌트에 이미 등장한 PrincipalId distinct(디렉터리 아님). 자유 입력 폴백이 있어 목록이 비어도 배정 가능.
+  //   /v1/principals = 테넌트 담당자 디렉터리. 배정값은 sub, 표시는 display_name. 자유 입력 폴백이 있어 목록이 비어도 배정 가능.
   const principalsQuery = useQuery({
     queryKey: ["principals"],
     queryFn: () => api.listPrincipals({ limit: 200 }),
     enabled: can("human_task.assign"),
     refetchInterval: 30_000,
   });
-  const principalOptions = useMemo(() => (principalsQuery.data?.items ?? []).map((p) => p.principal_id), [principalsQuery.data]);
+  const principalOptions = useMemo(
+    () => (principalsQuery.data?.items ?? []).map((p) => ({ value: p.sub, label: p.display_name })),
+    [principalsQuery.data],
+  );
   const runParam = useHashParam("run_id");
   const lv = useListView<HumanTaskItem>(
     ["human-tasks"],
@@ -144,7 +147,7 @@ export function HumanTasksView(): JSX.Element {
             <ActionButton
               label={`현재 페이지 ${bulkAssignable.length}건 배정`}
               action="human_task.assign"
-              inputLabel="담당자(목록에서 선택 또는 ID 직접 입력)"
+              inputLabel="담당자(이름으로 선택 또는 ID 직접 입력)"
               inputOptions={principalOptions}
               confirmText="현재 페이지의 미배정/이관 업무를 같은 담당자에게 배정할까요?"
               run={async (key, assignee) => {
@@ -212,7 +215,7 @@ function HumanTaskDetailPanel({
   api: ApiClient;
   humanTaskId: string;
   detail: UseQueryResult<HumanTaskItem>;
-  principalOptions: readonly string[];
+  principalOptions: readonly { value: string; label?: string }[];
   onClose: () => void;
 }): JSX.Element {
   return (

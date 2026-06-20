@@ -363,6 +363,27 @@ CREATE INDEX idx_human_tasks_expiry ON human_tasks (expires_at)
   WHERE state IN ('open','assigned','in_progress','escalated');  -- timeout sweeper(H4/H8)
 
 -- ============================================================
+-- 6b. principals — 테넌트 주체 디렉터리(name-picker)
+--    PrincipalId(JWT sub) ↔ display_name 매핑. sub 는 human_tasks.assignee / approval_decisions.decided_by 와
+--    동형 자유형 text(UUID 보장 없음: OIDC sub auth0|… 등). 쓰기 경로 2개:
+--    ① JWT optional `name` 클레임 자동 upsert(source='jwt') ② admin 수동 등록(source='manual').
+--    human_tasks.assignee → principals FK 없음(의도적): 디렉터리 미등록 sub 배정도 허용(자유형 정책 보존).
+-- ============================================================
+CREATE TABLE principals (
+  id           uuid        PRIMARY KEY,                     -- surrogate(다른 엔티티·커서 keyset과 동형)
+  tenant_id    uuid        NOT NULL,
+  sub          text        NOT NULL,                       -- PrincipalId(JWT sub) — 자유형 string
+  display_name text        NOT NULL,
+  email        text,                                       -- optional(OIDC email 클레임 등)
+  source       text        NOT NULL DEFAULT 'manual'
+                 CHECK (source IN ('jwt','manual')),        -- 쓰기 경로: jwt(로그인 upsert)/manual(admin 등록)
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, sub)                                  -- sub = 테넌트 내 자연키(upsert ON CONFLICT 타깃)
+);
+CREATE INDEX idx_principals_tenant_name ON principals (tenant_id, display_name);  -- picker 이름 정렬/검색
+
+-- ============================================================
 -- 7. artifacts
 --    impl-contracts-bundle.md §B/§C + security-contracts §8.
 --    redaction_status 추상 게이트는 ARTIFACT_NOT_REDACTED로 모델링하지만,
@@ -907,6 +928,7 @@ BEGIN
     'scenario_generations',
     'run_steps',
     'human_tasks',
+    'principals',
     'events_outbox',
     'dead_letter',
     'action_plan_cache',

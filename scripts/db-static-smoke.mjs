@@ -37,6 +37,7 @@ const expectedTables = [
   "runs",
   "run_steps",
   "human_tasks",
+  "principals",
   "artifacts",
   "events_outbox",
   "dead_letter",
