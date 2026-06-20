@@ -18,7 +18,7 @@ import { cloneJsonRecord, parseEvidencePolicy, parseGenerationBlockers, parsePar
 import { recordingPolicy } from "./scenario-generation-policy";
 import { prepareGenerationRunIr, startUrlFromParams, uniqueStrings } from "./scenario-generation-planner";
 import { containsRedactedParamsMarker, redactGenerationDraftIr, redactGenerationFailureDetails, redactParamsContext } from "./scenario-generation-redaction";
-import { inferRuntimeTargetForStartUrl, runtimeTargetBlocker } from "./scenario-generation-target";
+import { inferRuntimeTargetForStartUrl, type RuntimeTargetInference, runtimeTargetBlocker } from "./scenario-generation-target";
 import type {
   GenerationMode,
   GenerationPlan,
@@ -59,6 +59,12 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
   "browser_identity_site_mismatch",
   "network_policy_not_found",
   "network_policy_domain_mismatch",
+  // start_url 기반 추론 단계의 fine-grained 사유(보정 후 /run 재시도 시 stale 제거 대상).
+  "site_profile_unresolved_for_start_url",
+  "site_profile_ambiguous_for_start_url",
+  "browser_identity_unresolved_for_start_url",
+  "network_policy_unresolved_for_start_url",
+  "network_policy_ambiguous_for_start_url",
   "video_recording_port_not_configured",
   "params_context_redacted_value_required",
 ]);
@@ -129,15 +135,20 @@ export async function persistGenerationRun(
   const effectiveRequestParams = request.paramsProvided ? request.params : storedParamsContext;
   const startUrl = request.startUrl ?? startUrlFromParams(effectiveRequestParams);
   const explicitOrStoredTarget = request.target ?? parseTarget(baseIr.target);
-  const target = explicitOrStoredTarget ?? (
-    startUrl !== undefined
-      ? await inferRuntimeTargetForStartUrl(client, principal.tenantId, startUrl)
-      : undefined
-  );
+  const inference: RuntimeTargetInference | undefined =
+    explicitOrStoredTarget !== undefined
+      ? { target: explicitOrStoredTarget }
+      : startUrl !== undefined
+        ? await inferRuntimeTargetForStartUrl(client, principal.tenantId, startUrl)
+        : undefined;
+  const target = inference?.target;
   const model = request.model !== undefined ? request.model : generation.model;
 
   if (containsRedactedParamsMarker(effectiveRequestParams)) blockers.push("params_context_redacted_value_required");
-  if (target === undefined) blockers.push("target_required_for_auto_run");
+  if (target === undefined) {
+    blockers.push("target_required_for_auto_run");
+    if (inference?.blocker !== undefined) blockers.push(inference.blocker);
+  }
   if (startUrl === undefined) blockers.push("start_url_required_for_auto_run");
   if (evidence.video !== "never" && !videoRecording) {
     blockers.push("video_recording_port_not_configured");

@@ -11,6 +11,18 @@ export interface EvidencePolicy {
   video: "never" | "failure" | "always";
 }
 
+/**
+ * start_url 기반 런타임 target 추론이 단일 후보로 좁히지 못한 구체 사유.
+ * 명시 target 검증(runtimeTargetBlocker)의 `*_not_found`/`*_mismatch` 와는 별개 경로다(추론 vs 명시).
+ * "조용한 false/unknown 금지": 0건/다건/후보부재를 generic blocker로 뭉개지 않고 사유를 보존한다.
+ */
+export type RuntimeTargetInferenceBlocker =
+  | "site_profile_unresolved_for_start_url"
+  | "site_profile_ambiguous_for_start_url"
+  | "browser_identity_unresolved_for_start_url"
+  | "network_policy_unresolved_for_start_url"
+  | "network_policy_ambiguous_for_start_url";
+
 export interface GenerationRequest {
   prompt: string;
   name?: string;
@@ -25,6 +37,11 @@ export interface GenerationRequest {
   params: Record<string, unknown>;
   model?: string | null;
   evidence: EvidencePolicy;
+  /**
+   * 추론이 실패했을 때(target 미확정) 그 구체 사유. inferRuntimeTargetForRequest 가 채우고
+   * finalizePlannerEvidence 가 blocker 로 방출한다. target 이 확정되면 설정되지 않는다(상호 배타).
+   */
+  inferenceBlocker?: RuntimeTargetInferenceBlocker;
 }
 
 export interface GenerationRunRequest {
