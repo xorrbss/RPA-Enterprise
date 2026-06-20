@@ -683,4 +683,55 @@ describe("PromptScenarioGenerator correction run", () => {
       expect(within(blockerList).queryByText(raw)).toBeNull();
     }
   });
+
+  test.each([
+    ["site_profile_unresolved_for_start_url", "이 시작 URL에 매칭되는 사이트가 없습니다. 사이트를 새로 등록하세요."],
+    ["site_profile_ambiguous_for_start_url", "이 시작 URL에 매칭되는 사이트가 여러 개입니다. 실행 대상을 직접 선택하세요."],
+    ["browser_identity_unresolved_for_start_url", "이 사이트에 사용할 브라우저 ID가 없습니다. 사이트를 등록하면 함께 생성됩니다."],
+    ["network_policy_unresolved_for_start_url", "이 시작 URL을 허용하는 네트워크 정책이 없습니다. 사이트를 등록하면 함께 생성됩니다."],
+    ["network_policy_ambiguous_for_start_url", "이 시작 URL을 허용하는 네트워크 정책이 여러 개입니다. 실행 대상을 직접 선택하세요."],
+  ])("inference blocker %s is repairable and shows Korean label (emit-both)", async (blocker, label) => {
+    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    const view = renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        generateScenario: async (body) => {
+          generateCalls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000b5",
+            mode: body.mode ?? "save_and_run",
+            status: "blocked",
+            prompt_hash: "hash",
+            planner: body.planner ?? "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: null,
+            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            // emit-both: 백엔드가 generic target_required 와 함께 구체 추론 사유를 방출한다.
+            blockers: ["target_required_for_auto_run", blocker],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    await waitFor(() => expect(view.container.querySelector("textarea")).not.toBeNull());
+    const promptBox = view.container.querySelector("textarea") as HTMLTextAreaElement;
+    fireEvent.change(promptBox, { target: { value: "https://shop.example/orders 에서 주문을 수집해줘" } });
+    const submitButton = view.container.querySelector(".generator-actions button") as HTMLButtonElement;
+    fireEvent.click(submitButton);
+    await waitFor(() => expect(generateCalls).toHaveLength(1));
+
+    // 회귀 가드: fine-grained 코드가 RUN_REPAIRABLE 에 포함되어 emit-both 에서도 복구 흐름이 유지된다.
+    expect(await screen.findByRole("button", { name: CORRECTION_BUTTON_NAME })).toBeDisabled();
+    expect(screen.getByLabelText("blocked generation recovery guide")).not.toBeNull();
+    // 구체 한국어 라벨 표시, raw 영문 코드 누출 없음.
+    expect(screen.getByText(label)).not.toBeNull();
+    expect(screen.queryByText(blocker)).toBeNull();
+  });
 });

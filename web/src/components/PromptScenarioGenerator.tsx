@@ -37,6 +37,11 @@ const BLOCKER_LABELS: Record<string, string> = {
   pagination_page_limit_exceeded: "자동 반복 페이지 상한을 넘었습니다. max_pages를 10 이하로 줄여 주세요.",
   compile_failed: "자동 생성한 IR 컴파일에 실패했습니다. 운영자 검토가 필요합니다.",
   scenario_generation_failed: "시나리오 자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.",
+  site_profile_unresolved_for_start_url: "이 시작 URL에 매칭되는 사이트가 없습니다. 사이트를 새로 등록하세요.",
+  site_profile_ambiguous_for_start_url: "이 시작 URL에 매칭되는 사이트가 여러 개입니다. 실행 대상을 직접 선택하세요.",
+  browser_identity_unresolved_for_start_url: "이 사이트에 사용할 브라우저 ID가 없습니다. 사이트를 등록하면 함께 생성됩니다.",
+  network_policy_unresolved_for_start_url: "이 시작 URL을 허용하는 네트워크 정책이 없습니다. 사이트를 등록하면 함께 생성됩니다.",
+  network_policy_ambiguous_for_start_url: "이 시작 URL을 허용하는 네트워크 정책이 여러 개입니다. 실행 대상을 직접 선택하세요.",
 };
 
 const GENERIC_BLOCKER_LABEL = "자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.";
@@ -60,6 +65,11 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
   "browser_identity_site_mismatch",
   "network_policy_not_found",
   "network_policy_domain_mismatch",
+  "site_profile_unresolved_for_start_url",
+  "site_profile_ambiguous_for_start_url",
+  "browser_identity_unresolved_for_start_url",
+  "network_policy_unresolved_for_start_url",
+  "network_policy_ambiguous_for_start_url",
   "video_recording_port_not_configured",
   "params_context_redacted_value_required",
 ]);
@@ -74,6 +84,11 @@ const TARGET_REPAIR_BLOCKERS: ReadonlySet<string> = new Set([
   "browser_identity_site_mismatch",
   "network_policy_not_found",
   "network_policy_domain_mismatch",
+  "site_profile_unresolved_for_start_url",
+  "site_profile_ambiguous_for_start_url",
+  "browser_identity_unresolved_for_start_url",
+  "network_policy_unresolved_for_start_url",
+  "network_policy_ambiguous_for_start_url",
 ]);
 
 interface CorrectionGuideState {
