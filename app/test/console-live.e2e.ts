@@ -99,7 +99,7 @@ async function main(): Promise<void> {
     await withTenantTx(pool, TENANT, async (c) => {
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'live-e2e')`, [SCEN, TENANT]);
       await c.query(
-        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'prod','{"nodes":[]}'::jsonb)`,
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'prod','{"nodes":[],"target":{"site_profile_id":"00000000-0000-4000-8000-0000000000a1","browser_identity_id":"00000000-0000-4000-8000-0000000000a2","network_policy_id":"00000000-0000-4000-8000-0000000000a3"}}'::jsonb)`,
         [SVER, TENANT, SCEN],
       );
       await c.query(
