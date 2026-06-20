@@ -26,6 +26,7 @@ interface StagehandCallRow {
   input_tokens: number | null;
   output_tokens: number | null;
   cost: string | null;
+  parsed_json: unknown;
 }
 
 export class PgLlmCallIdempotencyStore implements LLMCallIdempotencyStore {
@@ -62,7 +63,7 @@ export class PgLlmCallIdempotencyStore implements LLMCallIdempotencyStore {
       }
 
       const existing = await client.query<StagehandCallRow>(
-        `SELECT id, request_hash, stream_status, output_ref, input_tokens, output_tokens, cost
+        `SELECT id, request_hash, stream_status, output_ref, input_tokens, output_tokens, cost, parsed_json
            FROM stagehand_calls
           WHERE tenant_id=$1::uuid AND idempotency_key=$2`,
         [req.metadata.tenantId, req.idempotencyKey],
@@ -83,6 +84,7 @@ export class PgLlmCallIdempotencyStore implements LLMCallIdempotencyStore {
           `UPDATE stagehand_calls
               SET stream_status='open',
                   output_ref=NULL,
+                  parsed_json=NULL,
                   input_tokens=NULL,
                   output_tokens=NULL,
                   cost=NULL,
@@ -106,7 +108,8 @@ export class PgLlmCallIdempotencyStore implements LLMCallIdempotencyStore {
                 input_tokens=$3::int,
                 output_tokens=$4::int,
                 cost=$5::numeric,
-                output_ref=$6
+                output_ref=$6,
+                parsed_json=$7::jsonb
           WHERE tenant_id=$1::uuid AND id=$2::uuid
           RETURNING id`,
         [
@@ -116,6 +119,7 @@ export class PgLlmCallIdempotencyStore implements LLMCallIdempotencyStore {
           response.usage.outputTokens,
           response.usage.cost,
           response.outputRef,
+          response.parsedJson === undefined ? null : JSON.stringify(response.parsedJson),
         ],
       );
       if (updated.rowCount !== 1) {
@@ -158,6 +162,8 @@ function responseFromRow(row: StagehandCallRow): LLMResponse {
       cost: row.cost === null ? 0 : Number(row.cost),
     },
     finishReason: "stop",
+    // structured output 복원(멱등 replay 가 act ActionPlan/extract 결과를 잃지 않도록). 미영속 done 행은 omit.
+    ...(row.parsed_json !== null && row.parsed_json !== undefined ? { parsedJson: row.parsed_json } : {}),
     stagehandCallId: row.id,
   };
 }

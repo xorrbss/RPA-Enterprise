@@ -106,6 +106,8 @@ async function main(): Promise<void> {
       outputRef: "13000000-0000-0000-0000-00000000aa11" as ArtifactRef,
       usage: { inputTokens: 10, outputTokens: 5, cost: 0.0123 },
       finishReason: "stop",
+      // structured output(act ActionPlan/extract 결과) — replay 가 이를 보존해야 함(#5 비대칭 회귀 가드).
+      parsedJson: { operation: "fill", selector: "#q", value: "x" },
       stagehandCallId: reserved.callId,
     };
     await store.complete(reserved.callId, response);
@@ -117,6 +119,16 @@ async function main(): Promise<void> {
       "reserve: same request replays completed response",
       replay.kind === "replay" && replay.response.outputRef === response.outputRef && replay.response.stagehandCallId === reserved.callId,
       JSON.stringify(replay),
+    );
+    // jsonb 는 키 순서를 보존하지 않으므로 필드별 비교(순서 무관).
+    const replayedParsed = replay.kind === "replay" ? (replay.response.parsedJson as Record<string, unknown> | undefined) : undefined;
+    check(
+      "reserve: replay preserves parsedJson (structured output, #5)",
+      replayedParsed !== undefined &&
+        replayedParsed.operation === "fill" &&
+        replayedParsed.selector === "#q" &&
+        replayedParsed.value === "x",
+      JSON.stringify(replayedParsed),
     );
 
     const blocked = await store.reserve(makeReq({ requestHash: "sha256:different" } as Partial<LLMRequest>));
