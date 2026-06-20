@@ -641,4 +641,46 @@ describe("PromptScenarioGenerator correction run", () => {
     expect(screen.queryByRole("button", { name: CORRECTION_BUTTON_NAME })).toBeNull();
     expect(runCalls).toHaveLength(0);
   });
+
+  test("failed generation history surfaces Korean blocker labels (no raw codes)", async () => {
+    location.hash = "#scenarioStudio";
+    const failedGeneration: ScenarioGenerationResult = {
+      generation_id: "00000000-0000-0000-0000-0000000000f1",
+      mode: "save_and_run",
+      status: "failed",
+      prompt_hash: "hash",
+      planner: "deterministic_mvp",
+      model: null,
+      scenario_id: null,
+      scenario_version_id: null,
+      run_id: null,
+      evidence_policy: { screenshot: "each_step", video: "never" },
+      blockers: ["scenario_generation_failed", "compile_failed", "IR_EXPRESSION_COMPILE_ERROR", "weird_internal_reason"],
+      created_at: "2026-06-15T00:00:00.000Z",
+      created_by: "operator",
+      draft_ir: {},
+      validation_report: {},
+    };
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listScenarioGenerations: async () => ({ items: [failedGeneration], next_cursor: null }),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "진단 보기" }));
+
+    const blockerList = (await screen.findByText("시나리오 자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.")).closest("ul") as HTMLElement;
+    expect(blockerList).not.toBeNull();
+    const items = within(blockerList).getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toEqual([
+      "시나리오 자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.",
+      "자동 생성한 IR 컴파일에 실패했습니다. 운영자 검토가 필요합니다.",
+      "조건식 오류.",
+      "자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.",
+    ]);
+    for (const raw of ["scenario_generation_failed", "compile_failed", "IR_EXPRESSION_COMPILE_ERROR", "weird_internal_reason"]) {
+      expect(within(blockerList).queryByText(raw)).toBeNull();
+    }
+  });
 });

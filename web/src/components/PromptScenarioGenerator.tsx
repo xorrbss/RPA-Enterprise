@@ -6,7 +6,7 @@ import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { GenerationArtifactsPanel } from "./GenerationArtifactsPanel";
 import { SiteCreateForm, type CreatedSite } from "./SiteCreateForm";
-import { errorLabel, StatusBadge } from "./badges";
+import { errorCodeLabel, errorLabel, StatusBadge } from "./badges";
 import { navigate, useHashParam } from "../router";
 import {
   ApiError,
@@ -35,7 +35,20 @@ const BLOCKER_LABELS: Record<string, string> = {
   video_recording_port_not_configured: "서버에서 동영상 녹화가 비활성화되어 있습니다.",
   params_context_redacted_value_required: "마스킹된 실행 params가 있어 값을 다시 입력해야 합니다.",
   pagination_page_limit_exceeded: "자동 반복 페이지 상한을 넘었습니다. max_pages를 10 이하로 줄여 주세요.",
+  compile_failed: "자동 생성한 IR 컴파일에 실패했습니다. 운영자 검토가 필요합니다.",
+  scenario_generation_failed: "시나리오 자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.",
 };
+
+const GENERIC_BLOCKER_LABEL = "자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.";
+
+// 운영자 표면: 매핑된 blocker 라벨 → ErrorCode 한글(reason이 ErrorCode일 때) → generic 한글 폴백.
+// raw 영문 코드 노출 금지(비기술 운영자 레지스터), 진단정보 최대 보존(조용한 공백 금지).
+function blockerLabel(blocker: string): string {
+  const mapped = BLOCKER_LABELS[blocker];
+  if (mapped !== undefined) return mapped;
+  const fromErrorCode = errorCodeLabel(blocker);
+  return fromErrorCode !== blocker ? fromErrorCode : GENERIC_BLOCKER_LABEL;
+}
 
 const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
   "target_required_for_auto_run",
@@ -167,7 +180,7 @@ function firstAllowedPolicy<T extends string>(policies: readonly T[], preferred:
 
 function blockerSummary(blockers: readonly string[]): string | null {
   if (blockers.length === 0) return null;
-  const visible = blockers.slice(0, 2).map((blocker) => BLOCKER_LABELS[blocker] ?? blocker);
+  const visible = blockers.slice(0, 2).map((blocker) => blockerLabel(blocker));
   const suffix = blockers.length > visible.length ? ` 외 ${blockers.length - visible.length}건` : "";
   return `${visible.join(" · ")}${suffix}`;
 }
@@ -1266,7 +1279,7 @@ function GenerationResult({
       {result.blockers.length > 0 && (
         <ul className="blocker-list">
           {result.blockers.map((blocker) => (
-            <li key={blocker}>{BLOCKER_LABELS[blocker] ?? blocker}</li>
+            <li key={blocker}>{blockerLabel(blocker)}</li>
           ))}
         </ul>
       )}
