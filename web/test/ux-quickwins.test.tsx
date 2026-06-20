@@ -186,7 +186,7 @@ describe("UX quick-wins (A)", () => {
   test("A6: roles 없는 토큰 → '역할 미확인'(빈 폴백)", async () => {
     localStorage.setItem("rpa.token", "no-dot-token"); // decodeRoles → []
     renderApp();
-    expect(await screen.findByText("역할 미확인")).toBeInTheDocument();
+    expect(await screen.findByText("역할 미확인 · 읽기 전용")).toBeInTheDocument();
     expect(screen.queryByText("관리자")).toBeNull();
   });
 
