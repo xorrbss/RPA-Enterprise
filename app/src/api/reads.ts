@@ -272,23 +272,43 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
   //   "조용한 false 금지"). cancelled(사용자 취소)는 분모 제외(telemetry run_success_rate 와 동형).
   app.get("/v1/runs/summary", { config: { rbacAction: "run.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
-    const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
-      const result = await c.query<{ status: string; n: string }>(
+    const { statusRows, cacheRows } = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+      const statuses = await c.query<{ status: string; n: string }>(
         `SELECT status, count(*)::text AS n FROM runs WHERE tenant_id = $1::uuid GROUP BY status`,
         [principal.tenantId],
       );
-      return result.rows;
+      const caches = await c.query<{ cache_mode: string; n: string }>(
+        `SELECT cache_mode, count(*)::text AS n FROM run_steps WHERE tenant_id = $1::uuid GROUP BY cache_mode`,
+        [principal.tenantId],
+      );
+      return { statusRows: statuses.rows, cacheRows: caches.rows };
     });
     const byStatus: Record<string, number> = {};
     let total = 0;
-    for (const row of rows) {
+    for (const row of statusRows) {
       const n = Number(row.n);
       byStatus[row.status] = n;
       total += n;
     }
     const rated = (byStatus.completed ?? 0) + (byStatus.failed_business ?? 0) + (byStatus.failed_system ?? 0);
     const successRate = rated > 0 ? (byStatus.completed ?? 0) / rated : null;
-    reply.code(200).send({ by_status: byStatus, success_rate: successRate, total });
+    // cache_hit_rate(§E) — ActionPlanCache 조회 적중률. 분모=조회한 스텝(cache_mode != 'bypass'); bypass 는
+    //   캐시 미조회(기본값/비대상 스텝)라 제외. hit/조회수, 조회 0이면 null(0/0 단정 금지). suspect/stale/
+    //   quarantined 는 조회했으나 재사용 불가 → 분모 포함·비적중(telemetry recordCacheLookup 과 동형).
+    const byMode: Record<string, number> = {};
+    let consulted = 0;
+    for (const row of cacheRows) {
+      const n = Number(row.n);
+      byMode[row.cache_mode] = n;
+      if (row.cache_mode !== "bypass") consulted += n;
+    }
+    const hitRate = consulted > 0 ? (byMode.hit ?? 0) / consulted : null;
+    reply.code(200).send({
+      by_status: byStatus,
+      success_rate: successRate,
+      total,
+      cache: { by_mode: byMode, hit_rate: hitRate },
+    });
   });
 
   // GET /v1/runs/{run_id}/steps — run 하위 단계 트레이스(api-surface §1). 비민감 요약+참조만 노출(본문/증빙은

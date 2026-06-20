@@ -11,6 +11,9 @@ export interface RunSummary {
   readonly by_status: Record<string, number>;
   readonly success_rate: number | null;
   readonly total: number;
+  // cache_hit_rate(§E): ActionPlanCache 조회 적중률. by_mode=run_steps.cache_mode별 카운트,
+  // hit_rate=hit/(조회=non-bypass), 조회 0이면 null. (bypass=캐시 미조회 → 분모 제외)
+  readonly cache: { readonly by_mode: Record<string, number>; readonly hit_rate: number | null };
 }
 
 export interface RunItem {

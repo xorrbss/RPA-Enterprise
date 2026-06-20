@@ -56,6 +56,12 @@ function successRateLabel(s: RunSummary | undefined): string {
   return `${Math.round(s.success_rate * 100)}%`;
 }
 
+// cache_hit_rate(§E) — ActionPlanCache 조회 적중률(서버 집계). 조회 0(분모 0) → null → '—'(0/0 단정 금지).
+function cacheHitRateLabel(s: RunSummary | undefined): string {
+  if (s === undefined || s.cache === undefined || typeof s.cache.hit_rate !== "number") return "—";
+  return `${Math.round(s.cache.hit_rate * 100)}%`;
+}
+
 type ActionItem = {
   readonly key: string;
   readonly tone: "red" | "amber" | "blue";
@@ -248,6 +254,7 @@ export function DashboardView(): JSX.Element {
       <RoleWorkbench roles={roles} can={can} />
       <div className="metrics">
         <Metric label="실행 성공률" value={successRateLabel(summary.data)} view="runTrace" params={{ status: "completed" }} hint="완료 실행" />
+        <Metric label="캐시 재사용률" value={cacheHitRateLabel(summary.data)} view="runTrace" hint="실행 기록" />
         <Metric label="실행 중" value={exactCount(summary.data, "running")} view="runTrace" params={{ status: "running" }} hint="실행 기록" />
         <Metric label="사람 확인 대기" value={pageCount(human.data)} view="humanTasks" hint="사람 확인" />
         <Metric label="업무 실패" value={exactCount(summary.data, "failed_business")} view="runTrace" params={{ status: "failed_business" }} hint="실행 기록" />
@@ -256,7 +263,7 @@ export function DashboardView(): JSX.Element {
         <Metric label="외부 전달 DLQ" value={pageCount(sinkDlq.data)} view="workitems" hint="작업 목록" />
       </div>
       <p className="subtle" style={{ margin: "0 2px" }}>
-        실행 성공률·실행 중·업무 실패·시스템 실패는 전체 기간 정확 집계입니다. 사람 확인·DLQ는 최신 50건 기준이며 <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
+        실행 성공률·캐시 재사용률·실행 중·업무 실패·시스템 실패는 전체 기간 정확 집계입니다. 사람 확인·DLQ는 최신 50건 기준이며 <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
       </p>
       <ActionQueue
         items={collectActionItems({

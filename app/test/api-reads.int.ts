@@ -242,6 +242,17 @@ async function main(): Promise<void> {
       );
     }
     await seedRun(pool, TENANT_B, SVER_B, "72000000-0000-0000-0000-000000000001", "running", ts(2));
+    // run_steps(cache_mode) — cache_hit_rate 집계용(tenant A): hit×2·miss×1·stale×1·bypass×1.
+    await withTenantTx(pool, TENANT_A, async (c) => {
+      const modes = ["hit", "hit", "miss", "stale", "bypass"];
+      for (let i = 0; i < modes.length; i++) {
+        await c.query(
+          `INSERT INTO run_steps (id, run_id, tenant_id, step_id, node_id, action, status, cache_mode)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'extract', 'success', $6)`,
+          [`78000000-0000-0000-0000-00000000000${i + 1}`, A_RUNS[0][0], TENANT_A, `st-${i}`, `node-${i}`, modes[i]],
+        );
+      }
+    });
 
     // human tasks: tenant A 3건 + tenant B 1건.
     const HT_A1 = "73000000-0000-0000-0000-000000000001";
@@ -403,10 +414,15 @@ async function main(): Promise<void> {
       check("summary total=5", sumBody.total === 5, JSON.stringify(sumBody));
       // success_rate = completed/(completed+failed_business+failed_system) = 1/(1+0+1) = 0.5.
       check("summary success_rate=0.5", sumBody.success_rate === 0.5, JSON.stringify(sumBody));
+      check("summary cache by_mode hit=2", sumBody.cache?.by_mode?.hit === 2, JSON.stringify(sumBody.cache));
+      check("summary cache by_mode bypass=1", sumBody.cache?.by_mode?.bypass === 1, JSON.stringify(sumBody.cache));
+      // hit_rate = hit / non-bypass(hit2+miss1+stale1=4) = 2/4 = 0.5 (bypass 제외).
+      check("summary cache hit_rate=0.5", sumBody.cache?.hit_rate === 0.5, JSON.stringify(sumBody.cache));
       // RLS: tenant B viewer 는 자기 1건(running)만 — 종결 run 0 → success_rate null(0/0 단정 금지).
       const summaryB = await get("/v1/runs/summary", viewerB);
       check("tenant B summary total=1 (RLS)", summaryB.json().total === 1, summaryB.body);
       check("tenant B summary success_rate null (종결 0 → 0/0 단정 금지)", summaryB.json().success_rate === null, summaryB.body);
+      check("tenant B cache hit_rate null (run_steps 0 → 조회 0)", summaryB.json().cache?.hit_rate === null, summaryB.body);
       // RBAC: 역할 없음 → 403.
       const noRoleSummary = await get("/v1/runs/summary", noRole);
       check("no-role summary → 403", noRoleSummary.statusCode === 403, noRoleSummary.body);
