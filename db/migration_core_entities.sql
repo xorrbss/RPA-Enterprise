@@ -347,7 +347,7 @@ CREATE TABLE human_tasks (
   state         text        NOT NULL DEFAULT 'open'
                   CHECK (state IN ('open','assigned','in_progress','resolved',
                                    'expired','cancelled','escalated')),  -- HumanTaskState 7개
-  assignee      uuid,                                       -- H1 assignee set
+  assignee      text,                                       -- H1 assignee set; PrincipalId(JWT sub) — 자유형 string(UUID 보장 없음: OIDC sub auth0|… 등). decided_by와 동형.
   assignee_role text,                                       -- RBAC 역할(Phase 2 역할 레지스트리)
   on_timeout    text        NOT NULL DEFAULT 'fail'
                   CHECK (on_timeout IN ('fail','escalate')),  -- H4a(fail→expired)/H4b(escalate→escalated)

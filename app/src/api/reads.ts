@@ -26,6 +26,7 @@ import {
   humanTaskStateFilter,
   paginate,
   parsePageParams,
+  principalIdFilter,
   runStateFilter,
   uuidFilter,
   workitemStateFilter,
@@ -437,7 +438,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     const { limit, cursor } = parsePageParams(query);
     const status = humanTaskStateFilter(query.status);
     const kind = humanTaskKindFilter(query.kind);
-    const assignee = uuidFilter(query.assignee, "invalid_assignee");
+    const assignee = principalIdFilter(query.assignee, "invalid_assignee");
     const runId = uuidFilter(query.run_id, "invalid_run_id");
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
@@ -447,7 +448,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
           WHERE tenant_id = $1::uuid
             AND ($2::text IS NULL OR state = $2)
             AND ($3::text IS NULL OR kind = $3)
-            AND ($4::uuid IS NULL OR assignee = $4::uuid)
+            AND ($4::text IS NULL OR assignee = $4::text)
             AND ($5::uuid IS NULL OR run_id = $5::uuid)
             AND ($6::timestamptz IS NULL OR (created_at, id) < ($6::timestamptz, $7::uuid))
           ORDER BY created_at DESC, id DESC

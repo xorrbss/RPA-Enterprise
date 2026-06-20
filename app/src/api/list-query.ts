@@ -133,9 +133,20 @@ export function workitemStateFilter(raw: unknown): WorkitemState | undefined {
   return requireEnumFilter<WorkitemState>(raw, WORKITEM_STATE_SET, "invalid_status");
 }
 
-/** optional uuid 필터(scenario_version_id, assignee 등). 무효 형식→422. */
+/** optional uuid 필터(scenario_version_id, run_id 등). 무효 형식→422. */
 export function uuidFilter(raw: unknown, reason: string): string | undefined {
   if (raw === undefined) return undefined;
   if (typeof raw === "string" && UUID_RE.test(raw)) return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason });
+}
+
+/**
+ * optional PrincipalId 필터(human_tasks.assignee 등). PrincipalId(JWT sub)는 자유형 string(UUID 보장 없음:
+ * OIDC sub auth0|… 등)이라 uuid 형식을 강제하지 않는다. 비-빈 string 만 허용(빈 값→422). 파라미터 바인딩
+ * text 비교라 주입 경로 없음.
+ */
+export function principalIdFilter(raw: unknown, reason: string): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw === "string" && raw.length > 0) return raw;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason });
 }
