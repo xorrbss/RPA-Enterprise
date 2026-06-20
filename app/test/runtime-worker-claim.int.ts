@@ -30,10 +30,9 @@ import { createPool, withTenantTx } from "../src/db/pool";
 import { bootstrapTracing } from "../src/observability/bootstrap";
 import {
   PgRuntimeWorker,
-  drainBrowserLease,
-  renewBrowserLease,
   type BrowserLeasePlanResolver,
 } from "../src/worker/runtime-worker";
+import { drainBrowserLease, renewBrowserLease } from "../src/worker/runtime-worker-browser-lease";
 
 // §E run.claim/browser.lease.acquire span 발행 검증용 in-memory exporter(외부 의존 없음).
 const spanExporter = new InMemorySpanExporter();

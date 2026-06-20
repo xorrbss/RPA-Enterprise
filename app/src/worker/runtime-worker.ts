@@ -22,6 +22,7 @@ import {
   ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
   ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF,
 } from "../../../ts/runtime-contract";
+import { deleteInitReservedBrowserLease } from "./runtime-worker-browser-lease";
 import type {
   ArtifactLifecycleOperationalAudit,
   ArtifactLifecycleOperationalUseCase,
@@ -154,20 +155,6 @@ export interface PgRuntimeWorkerOptions {
   readonly executorFactory?: RunExecutorFactory;
 }
 
-export interface BrowserLeaseRenewInput {
-  readonly tenantId: string;
-  readonly leaseId: string;
-  readonly workerId: string;
-  readonly ttlMs: number;
-}
-
-export interface BrowserLeaseDrainInput {
-  readonly tenantId: string;
-  readonly leaseId: string;
-  readonly workerId: string;
-  readonly reason: "run_cancelled" | "run_completed" | "run_suspended" | "sweeper";
-}
-
 // A.1 run-drive: claim tx 에서 캡처해 tx 밖(Phase B)에서 driveClaimedRun 에 넘기는 입력(브라우저 작업은 커넥션 밖).
 interface RunClaimDriveInputs {
   readonly scenarioVersionId: string;
@@ -270,68 +257,6 @@ const WORKITEM_CHECKOUT_TIMEOUT_MS = 10 * 60 * 1000;
 // ops-defaults.md §3 worker.circuit: consecutive_failures=5(임계) / open_duration=1m(cooldown). 코드 상수 금지 규약 — inline 인용.
 const DEFAULT_WORKER_CIRCUIT_THRESHOLD = 5;
 const DEFAULT_WORKER_CIRCUIT_OPEN_MS = 60_000;
-
-export async function renewBrowserLease(
-  client: pg.PoolClient,
-  input: BrowserLeaseRenewInput,
-): Promise<LeaseRenewResult> {
-  if (!Number.isInteger(input.ttlMs) || input.ttlMs <= 0) {
-    throw new Error("renewBrowserLease: ttlMs must be a positive integer");
-  }
-  const renewed = await client.query<{ expires_at: string }>(
-    `UPDATE browser_leases
-        SET heartbeat_at = now(),
-            expires_at = now() + ($4::int * interval '1 millisecond')
-      WHERE tenant_id = $1::uuid
-        AND id = $2::uuid
-        AND owner_worker_id = $3::uuid
-        AND state IN ('reserved','active')
-        AND expires_at >= now()
-      RETURNING expires_at::text`,
-    [input.tenantId, input.leaseId, input.workerId, input.ttlMs],
-  );
-  const row = renewed.rows[0];
-  if (row !== undefined) return { kind: "renewed", expiresAt: row.expires_at as IsoDateTime };
-  return {
-    kind: "lost",
-    code: "BROWSER_LEASE_EXPIRED",
-    reason: "lease missing, owned by another worker, drained, cross-tenant, or expired",
-  };
-}
-
-export async function drainBrowserLease(
-  client: pg.PoolClient,
-  input: BrowserLeaseDrainInput,
-): Promise<void> {
-  await client.query(
-    `UPDATE browser_leases
-        SET state = CASE WHEN $4 = 'sweeper' THEN 'expired' ELSE 'draining' END,
-            expires_at = now()
-      WHERE tenant_id = $1::uuid
-        AND id = $2::uuid
-        AND owner_worker_id = $3::uuid
-        AND state IN ('reserved','active')`,
-    [input.tenantId, input.leaseId, input.workerId, input.reason],
-  );
-}
-
-/**
- * INIT 실패(R3a/R3b) 시 Phase A 에서 예약(active)만 된 browser lease 행을 **삭제**한다. INIT 실패는 bind 가 throw 한
- * 경우라 라이브 세션이 열린 적이 없어 teardown 이 불요하고, drain('draining' 잔류)은 종결자가 없어 누적된다(행 누수).
- * 더 중요한 건 재-claim 이 신규 lease 를 INSERT 해 run 당 lease 가 2행이 되면 abort 의 claimAbortBrowserLeaseForRun
- * (run_id 별 LIMIT 2)이 'multiple'→CONTROL_PLANE_INTERNAL_ERROR 로 wedge 되는 것(적대리뷰 B1) — 행을 삭제해
- * 'run 당 활성 lease ≤1' 불변식을 복원한다. owner 가드(다른 워커 lease 미삭제).
- */
-export async function deleteInitReservedBrowserLease(
-  client: pg.PoolClient,
-  input: { readonly tenantId: string; readonly leaseId: string; readonly workerId: string },
-): Promise<void> {
-  await client.query(
-    `DELETE FROM browser_leases
-      WHERE tenant_id = $1::uuid AND id = $2::uuid AND owner_worker_id = $3::uuid`,
-    [input.tenantId, input.leaseId, input.workerId],
-  );
-}
 
 export class PgRuntimeWorker implements RuntimeWorker {
   constructor(
