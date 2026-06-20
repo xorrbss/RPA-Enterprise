@@ -43,8 +43,8 @@
 | `site.circuit.window` | 5m · min_samples 20 | 1s · 4 | site.circuit_opened | 표본 부족 시 미발동 |
 | `site.circuit.open_duration` | 15m | 1s | site.circuit_closed | cooldown 후 half-open 프로브 |
 | `challenge.block_rate_threshold` | 30% | 50% | reserved-handlers SITE_CIRCUIT_OPEN | provider는 risk=red면 skip |
-| `worker.circuit.consecutive_failures` | 5 | 3 | worker.circuit_opened | 워커 격리 |
-| `worker.circuit.open_duration` | 1m | 200ms | worker.circuit_closed | |
+| `worker.circuit.consecutive_failures` | 5 | 3 | worker.circuit_opened | 워커 격리. 카운터 = `workers.consecutive_init_failures`(per-worker 연속 INIT 실패; R3b openCircuit 트리거 — state-machine §1). INIT 성공 시 0 reset |
+| `worker.circuit.open_duration` | 1m | 200ms | worker.circuit_closed | cooldown. **v1 회복 = INIT 성공 시 즉시 closed(streak 종료) 또는 `circuit_until` 경과 후 다음 claim 의 lazy auto-close**(`acquireBrowserLease`: open+`circuit_until`≤now → closed+reset). half-open 프로브·close-성공 임계는 v1 미사용(후속 versioned). worker 서킷은 infra → tenant `events_outbox` 미발행 |
 
 ---
 

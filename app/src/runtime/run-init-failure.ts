@@ -140,14 +140,10 @@ export async function handleClaimedInitFailure(
       eventIdempotencyKey: `${input.runId}:workitem-system`,
     });
 
-    if (t.pending.some((p) => p.kind === "openCircuit")) {
-      // R3b openCircuit 미실행 — 대상 엔티티(worker|site) 바인딩과 회복(open→half_open→closed) 경로가 계약 미결정이라
-      //   별도 versioned 결정 대상이다(state-machine.md §1 INIT 규칙 — "R3b 서킷 오픈 미결정", ops-defaults §3 site/worker
-      //   circuit 어느 행도 R3a/R3b 미참조). 조용한 false 금지: 버리지 않고 loud 로그로 표면화. failed_system+DLQ 정산은 적용됨.
-      console.warn(
-        `run-init-failure: R3b openCircuit 보류(run ${input.runId.slice(0, 8)}) — openCircuit entity 미결정(TODO[BLOCKED], state-machine §1 INIT 규칙). failed_system+DLQ 정산은 적용.`,
-      );
-    }
+    // R3b openCircuit(per-run 신호)은 **worker 서킷**으로 결정됨(state-machine §1 INIT 규칙). 단 per-run 직결은 과잉격리라
+    //   여기서 직접 열지 않고, 워커가 모든 INIT 실패(R3a/R3b 공통)를 per-worker 누적(worker.circuit.consecutive_failures)으로
+    //   집계해 임계 도달 시 회로를 연다(runtime-worker.recordWorkerInitFailure). 즉 openCircuit 의도는 워커 계층에서 실현되며,
+    //   본 핸들러(run 계층)는 failed_system+DLQ 종결만 책임진다 — 조용한 false 아님(설계상 분리, 계약 명문화).
     return "failed_system";
   });
 }
