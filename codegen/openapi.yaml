@@ -2167,6 +2167,15 @@ components:
         source_id:
           type: string
           description: 원본 workitem_id 또는 sink delivery id.
+        reason_code:
+          type: string
+          description: >
+            실패 사유(error-catalog ErrorCode). workitem DLQ(dead_letter.reason_code) 한정.
+            sink DLQ는 reason_code 컬럼이 없어 미제공(의도된 부재 — api-surface §4).
+        created_at:
+          type: string
+          format: date-time
+          description: 데드레터 발생 시각. workitem DLQ 한정(sink는 미제공).
 
     ReplayResult:
       type: object

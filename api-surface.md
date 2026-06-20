@@ -155,10 +155,10 @@
 |---|---|---|---|---|
 | GET | `/v1/workitems` | 쿼리: `?status=<WorkitemState>&limit=&cursor=`. `target_id` 필터는 v1 미지원(제공 시 422) | 200 + `{ items, next_cursor }` | `IR_SCHEMA_INVALID`(422, `target_id_filter_unsupported`) |
 | GET | `/v1/workitems/{workitem_id}` | — | 200 + 상세(`status` ∈ WorkitemState, `attempts`, `unique_reference`, `checked_out_by/at`, 연계 run) | `RESOURCE_NOT_FOUND`(404) |
-| GET | `/v1/dlq` | 쿼리: `?kind=workitem|sink&limit=&cursor=` | 200 + `{ items, next_cursor }`. 항목은 `DEAD_LETTER` 상태 통지(ApiError 아님) | — |
+| GET | `/v1/dlq` | 쿼리: `?kind=workitem|sink&limit=&cursor=` | 200 + `{ items, next_cursor }`. 항목은 `DEAD_LETTER` 상태 통지(ApiError 아님). `DeadLetter`는 `reason_code`(error-catalog `ErrorCode` — **workitem 한정**, `dead_letter.reason_code`)·`created_at`을 포함한다 | — |
 | POST | `/v1/dlq/{dead_letter_id}/replay` | 쿼리: `?kind=workitem\|sink`(기본 workitem). `Idempotency-Key`. 운영자 재처리 권한 필요 | `kind=workitem`: 202 + workitem `new`로 복원(W10: attempts 리셋, DLQ에서 복원), `workitem.dead_lettered` 역방향 복원. `kind=sink`: 202 + 새 `sink_deliver` attempt **인큐**(상태전이 아님; 실 재전달은 worker egress 의존) | `WORKITEM_CHECKOUT_CONFLICT`(409), `AUTHZ_FORBIDDEN`(403)², `IR_SCHEMA_INVALID`(422, kind 무효) |
 
-- workitem DLQ: W5/W7에서 `dead_letter` 생성, W10 `manual_replay`로 복원(state-machine §2). 운영자 재처리 권한(`operatorAuthorized` guard, W10) 미보유 → 인가 실패.
+- workitem DLQ: W5/W7에서 `dead_letter` 생성, W10 `manual_replay`로 복원(state-machine §2). 운영자 재처리 권한(`operatorAuthorized` guard, W10) 미보유 → 인가 실패. 목록 항목은 `reason_code`(실패 사유 = error-catalog `ErrorCode`)·`created_at`(발생 시각)을 함께 노출한다 — 운영자가 "왜/언제 죽었나"를 판별. **sink DLQ에는 `reason_code` 컬럼이 없어(`sink_deliveries`) 의도적으로 미제공(undefined)이다 — 조용한 누락이 아니라 데이터 부재; 없는 동형 필드를 발명하지 않는다.**
 - workitems 응답의 `target_id`는 connector target 테이블이 도입되지 않은 v1에서 `null`로 고정된다. 필터는 조용히 무시하지 않고 `IR_SCHEMA_INVALID(target_id_filter_unsupported)`로 거부한다.
 - sink DLQ는 데이터평면(`sink_deliveries.status='dead_letter'`)으로, 본 엔드포인트의 `kind=sink` 목록/replay는 sink 재전달을 트리거한다(release-decisions D8-A3 — 새 attempt_no·동일 `sink_idempotency_key`를 enqueue). `kind=sink` RBAC은 `sink_dlq.replay`(in-handler, 역할집합은 `dlq.replay`와 동일). 실 재전달은 worker `SinkDeliveryPort`(외부 egress, D6-2)에 의존하며 egress 미바인딩 시 worker가 `SINK_DELIVERY_FAILED`로 표면화한다(라우트는 전달 성공을 가장하지 않는다). raw/normalized 멱등은 migration SQL이 보장(재정의 안 함).
 - `DEAD_LETTER`(httpStatus 200)는 오류가 아닌 상태 통지이므로 목록/상세 본문의 상태 필드로만 나타나며 `ApiError`로 반환하지 않는다(§0.2).

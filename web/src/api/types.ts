@@ -46,6 +46,10 @@ export interface DeadLetterItem {
   readonly status: string;
   readonly source_id: string | null;
   readonly sink_idempotency_key?: string;
+  // reason_code(error-catalog ErrorCode)·created_at은 workitem DLQ만 투영(sink는 부재 — api-surface §4).
+  // sink_idempotency_key와 동일한 kind별 비대칭 optional.
+  readonly reason_code?: string;
+  readonly created_at?: string;
 }
 
 export interface ScenarioItem {
