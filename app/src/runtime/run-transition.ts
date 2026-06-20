@@ -20,6 +20,7 @@ import type { PoolClient } from "pg";
 import { transitionRun } from "../../../codegen/transitions";
 import type { RunState, RunEvent, RunGuard, SideEffectCmd } from "../../../ts/state-machine-types";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent, type EmittedEvent } from "./outbox";
+import { recordRunTerminal } from "../observability/telemetry";
 
 /** state-machine.md §1: Run 종결 상태 — 진입 시 ended_at 확정. */
 const TERMINAL_RUN_STATES: ReadonlySet<RunState> = new Set<RunState>([
@@ -156,6 +157,11 @@ export async function applyRunTransition(
         retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
       }),
     );
+  }
+
+  // §E run_success_rate: 종결 진입을 outcome 별로 카운트(백엔드가 성공률 산출). bootstrap 전이면 no-op meter라 무비용.
+  if (enteringTerminal) {
+    recordRunTerminal(next, { tenant_id: ctx.tenantId });
   }
 
   return { applied: true, next, emitted, pending };

@@ -30,6 +30,8 @@ import { pathToFileURL } from "node:url";
 
 import { run, runMigrations, type Runner } from "graphile-worker";
 import type { FastifyInstance } from "fastify";
+import { ConsoleMetricExporter, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
+import { ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 
 import { hmacJwtVerifier, jwksRs256Verifier, JwtAuthenticationBoundary } from "./api/auth";
 import { buildApiArtifactObjectReader } from "./api/artifact-object-reader-binding";
@@ -62,6 +64,8 @@ import {
   type ScenarioGenerationLlmV1Config,
 } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
+import { bootstrapMetrics, bootstrapTracing } from "./observability/bootstrap";
+import { registerQueueDepthGauge } from "./observability/queue-depth-gauge";
 import { ArtifactRedactionContentTransform } from "./artifacts/artifact-redaction-content-transform";
 import { FsArtifactRedactor, FsArtifactRetentionStore } from "./artifacts/fs-artifact-lifecycle-store";
 import { S3ArtifactRedactor } from "./artifacts/s3-artifact-redactor";
@@ -398,6 +402,7 @@ async function startWorker(pool: PgPool, common: CommonConfig): Promise<StartedW
     pollInterval: cfg.graphilePollIntervalMs,
     ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
   });
+  registerQueueDepthGauge(pool);
   const maintenance = startMaintenanceScheduler(pool, { tenantIds: cfg.maintenanceTenantIds });
   console.log(JSON.stringify({
     at: "main",
@@ -529,9 +534,26 @@ async function startArtifactLifecycleWorker(): Promise<ArtifactLifecycleRunner> 
   }
 }
 
+/**
+ * C4: 전역 OTel Provider 등록(부트스트랩). 미호출 시 getTracer()/getMeter() 가 no-op → 계측된 span/metric 전량
+ * 폐기된다. exporter 선택은 env(OTEL_EXPORTER)에 위임(bootstrap.ts §): console=내장 exporter 로 stdout 표면화,
+ * none=전역 Provider 미등록(no-op, 명시적 opt-out). OTLP(prod 수집 백엔드)는 후속 — 별도 exporter 패키지를 이
+ * 선택지에 추가한다.
+ */
+function bootstrapObservability(common: CommonConfig): void {
+  if (common.telemetryExporter === "none") {
+    console.log(JSON.stringify({ at: "main", msg: "observability disabled (OTEL_EXPORTER=none)" }));
+    return;
+  }
+  bootstrapTracing(new ConsoleSpanExporter());
+  bootstrapMetrics(new PeriodicExportingMetricReader({ exporter: new ConsoleMetricExporter() }));
+  console.log(JSON.stringify({ at: "main", msg: "observability bootstrapped", exporter: common.telemetryExporter }));
+}
+
 async function main(): Promise<void> {
   const mode = loadRunMode();
   const common = loadCommonConfig();
+  bootstrapObservability(common);
   assertInProcessArtifactStoreCompatibility(mode);
   const pool = createPool();
   // Fail fast on DB connectivity before binding anything.

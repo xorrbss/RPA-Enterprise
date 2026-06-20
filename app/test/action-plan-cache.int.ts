@@ -10,9 +10,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { AggregationTemporality, InMemoryMetricExporter, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
+
 import { createPool, withTenantTx } from "../src/db/pool";
 import { PgActionPlanCache } from "../src/executor/pg-action-plan-cache";
 import type { ActionPlan, ActionPlanCacheKey } from "../src/executor/action-plan-cache";
+import { bootstrapMetrics } from "../src/observability/bootstrap";
+import { METRIC } from "../src/observability/telemetry";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_runtime_int";
@@ -82,6 +86,11 @@ async function main(): Promise<void> {
     });
     console.log("seeded scenario/version");
 
+    // §E cache_hit_rate: 아래 get() 들이 hit/miss 를 기록하는지 검증하기 위해 전역 meter 부트스트랩(테스트 프로세스 격리).
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const metricReader = new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 3_600_000 });
+    bootstrapMetrics(metricReader);
+
     const cache = new PgActionPlanCache(pool);
 
     // 1) miss → undefined
@@ -116,6 +125,19 @@ async function main(): Promise<void> {
 
     // 7) tenant 스코프: 다른 tenant 로 get → undefined
     check("cross-tenant get → undefined", (await cache.get({ ...baseKey, tenantId: OTHER_TENANT })) === undefined);
+
+    // 8) §E cache_hit_rate: 위 get() 들이 hit(재생)·miss 를 모두 계측했는지(배선) 검증.
+    await metricReader.forceFlush();
+    const hitRate = metricExporter
+      .getMetrics()
+      .flatMap((rm) => rm.scopeMetrics)
+      .flatMap((sm) => sm.metrics)
+      .find((m) => m.descriptor.name === METRIC.cacheHitRate);
+    const hitPoint = hitRate?.dataPoints.find((d) => (d.attributes as { result?: string }).result === "hit");
+    const missPoint = hitRate?.dataPoints.find((d) => (d.attributes as { result?: string }).result === "miss");
+    check("cache_hit_rate records hit", typeof hitPoint?.value === "number" && (hitPoint.value as number) >= 1, JSON.stringify(hitPoint?.value));
+    check("cache_hit_rate records miss", typeof missPoint?.value === "number" && (missPoint.value as number) >= 1, JSON.stringify(missPoint?.value));
+    await metricReader.shutdown();
   } finally {
     await pool.end();
   }

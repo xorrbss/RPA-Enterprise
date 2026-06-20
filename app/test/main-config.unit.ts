@@ -14,6 +14,7 @@ import {
   loadGatewayConfig,
   loadRunMode,
   loadScenarioGenerationLlmV1Config,
+  loadTelemetryExporter,
   loadWorkerConfig,
   type CommonConfig,
 } from "../src/config/env";
@@ -42,7 +43,7 @@ const CLEAR = [
   "ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY", "ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS",
   "PORT", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
   "VAULT_RUNTIME_WORKER_ROLE_ID", "VAULT_RUNTIME_WORKER_SECRET_ID", "VAULT_API_ROLE_ID", "VAULT_API_SECRET_ID",
-  "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF",
+  "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF", "OTEL_EXPORTER",
   "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_KIND", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
   "S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_FORCE_PATH_STYLE",
   "ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE",
@@ -88,7 +89,7 @@ const FULL: Record<string, string> = {
   ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID: "rpa-lifecycle-access-key-id",
   SIGNED_COMMAND_REGISTRY_MODE: "deny_all",
 };
-const API_COMMON: CommonConfig = { rpaEnv: "staging", connectionString: "x", healthPort: 8081 };
+const API_COMMON: CommonConfig = { rpaEnv: "staging", connectionString: "x", healthPort: 8081, telemetryExporter: "none" };
 
 function main(): void {
   // RUN_MODE
@@ -104,9 +105,18 @@ function main(): void {
     check("common rpaEnv", c.rpaEnv === "staging");
     check("common conn string from PG*", c.connectionString === "postgresql://u:p@h:5432/d", c.connectionString);
     check("common healthPort default 8081", c.healthPort === 8081);
+    check("common telemetryExporter default none", c.telemetryExporter === "none");
   });
   withEnv({ ...FULL, DATABASE_URL: "postgresql://x@y/z" }, () =>
     check("DATABASE_URL override", loadCommonConfig().connectionString === "postgresql://x@y/z"));
+  withEnv({ ...FULL, OTEL_EXPORTER: "console" }, () =>
+    check("common telemetryExporter from OTEL_EXPORTER", loadCommonConfig().telemetryExporter === "console"));
+
+  // OTEL_EXPORTER (C4 부트스트랩 exporter 선택) — default none, console, 대소문자 무관, 미정의 값 fail-closed.
+  withEnv({}, () => check("OTEL_EXPORTER default none", loadTelemetryExporter() === "none"));
+  withEnv({ OTEL_EXPORTER: "console" }, () => check("OTEL_EXPORTER console", loadTelemetryExporter() === "console"));
+  withEnv({ OTEL_EXPORTER: "CONSOLE" }, () => check("OTEL_EXPORTER case-insensitive", loadTelemetryExporter() === "console"));
+  withEnv({ OTEL_EXPORTER: "otlp" }, () => expectThrow("OTEL_EXPORTER invalid throws", () => loadTelemetryExporter()));
 
   // ApiConfig — HS256 default mode: fail-closed on missing/short JWT secret; CORS parse; HSTS default.
   withEnv({ ...FULL, SIGNED_COMMAND_REGISTRY_MODE: "" }, () =>
@@ -242,7 +252,7 @@ function main(): void {
   });
 
   // WorkerConfig — fail-closed on missing Vault AppRole; resumeTokenRef templated from rpaEnv.
-  const common: CommonConfig = { rpaEnv: "staging", connectionString: "x", healthPort: 8081 };
+  const common: CommonConfig = { rpaEnv: "staging", connectionString: "x", healthPort: 8081, telemetryExporter: "none" };
   withEnv({}, () => expectThrow("worker missing Vault AppRole throws", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, WORKER_ID: "" }, () =>
     expectThrow("worker missing stable WORKER_ID throws", () => loadWorkerConfig(common)));

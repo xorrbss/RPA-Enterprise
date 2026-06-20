@@ -70,6 +70,9 @@ export function getMeter(): Meter {
 // §E 필수 메트릭 — lazy 생성(전역 MeterProvider 등록 후 첫 record 시 바인딩). 속성은 저카디널리티만.
 let llmCostCounter: Counter | undefined;
 let llmTtfbHistogram: Histogram | undefined;
+let runTerminalCounter: Counter | undefined;
+let cacheLookupCounter: Counter | undefined;
+let challengeCounter: Counter | undefined;
 
 /** llm_cost(USD 누적) 기록. attrs는 저카디널리티(tenant_id/model)만 — run_id 등 고카디널리티 금지. */
 export function recordLlmCost(cost: number, attrs: { tenant_id: string; model: string }): void {
@@ -85,6 +88,42 @@ export function recordLlmTtfbMs(ms: number, attrs: { tenant_id: string; model: s
     llmTtfbHistogram = getMeter().createHistogram(METRIC.llmTtfbMs, { description: "LLM 첫 토큰까지 지연(ms)", unit: "ms" });
   }
   llmTtfbHistogram.record(ms, attrs);
+}
+
+/**
+ * run_success_rate(§E) — Run 종결을 outcome(completed/failed_business/failed_system/cancelled)별로 카운트한다.
+ * 수집 백엔드가 completed/total 로 성공률을 산출(여기서 rate 계산 안 함). attrs는 저카디널리티(tenant_id/outcome)만 — run_id 금지.
+ */
+export function recordRunTerminal(outcome: string, attrs: { tenant_id: string }): void {
+  if (runTerminalCounter === undefined) {
+    runTerminalCounter = getMeter().createCounter(METRIC.runSuccessRate, {
+      description: "Run 종결 수(outcome 별 — 백엔드가 성공률 산출)",
+    });
+  }
+  runTerminalCounter.add(1, { tenant_id: attrs.tenant_id, outcome });
+}
+
+/**
+ * cache_hit_rate(§E) — ActionPlanCache 조회를 hit/miss(result attr)로 카운트한다(백엔드가 hit/total 로 적중률 산출).
+ * attrs는 저카디널리티(tenant_id/result)만 — step/url 등 고카디널리티 키 금지.
+ */
+export function recordCacheLookup(hit: boolean, attrs: { tenant_id: string }): void {
+  if (cacheLookupCounter === undefined) {
+    cacheLookupCounter = getMeter().createCounter(METRIC.cacheHitRate, {
+      description: "ActionPlanCache 조회 수(hit/miss — 백엔드가 적중률 산출)",
+    });
+  }
+  cacheLookupCounter.add(1, { tenant_id: attrs.tenant_id, result: hit ? "hit" : "miss" });
+}
+
+/** challenge_rate(§E) — challenge 자동 감지(suspend) 수를 카운트한다(백엔드가 challenge/run 으로 발생률 산출). */
+export function recordChallenge(attrs: { tenant_id: string }): void {
+  if (challengeCounter === undefined) {
+    challengeCounter = getMeter().createCounter(METRIC.challengeRate, {
+      description: "challenge 자동 감지 수(백엔드가 발생률 산출)",
+    });
+  }
+  challengeCounter.add(1, { tenant_id: attrs.tenant_id });
 }
 
 function commonToAttributes(c: CommonSpanAttrs): Attributes {
