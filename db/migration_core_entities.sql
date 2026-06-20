@@ -231,7 +231,11 @@ CREATE TABLE runs (
                         CHECK (status IN ('queued','claimed','running','suspending','suspended',
                                           'resume_requested','resuming','completing','completed',
                                           'aborting','cancelled','failed_business','failed_system')),  -- RunState 13개
-  attempts            int         NOT NULL DEFAULT 0,        -- R3a 재큐 시 attempts+1
+  attempts            int         NOT NULL DEFAULT 0,        -- R3a 재큐 시 attempts+1 (누적 requeue 카운터)
+  consecutive_init_failures int   NOT NULL DEFAULT 0,        -- R3a/R3b 분기 입력: 연속 INIT(claimed→running 셋업) 실패 횟수.
+                                                             --   R3a 재큐 시 +1, R2(=running 진입=INIT 성공) 시 0 으로 reset. attempts(누적)와 분리 —
+                                                             --   계약 단어가 '연속(consecutive)'이라 누적 attempts 로 대체 불가. ops-defaults run.init_fail_threshold
+                                                             --   분기(< 임계 → R3a 재큐, ≥ 임계 → R3b failed_system)의 카운터 출처(state-machine §1 R3a/R3b).
   resume_token        jsonb,                                 -- ResumeToken 봉투(runId/resumeNodeId/loopContext/pageStateRef/kid/hmac)
   bookmark            jsonb,                                 -- suspend bookmark(startBookmark side-effect 영속, RQ-016). resume_token 과 분리:
                                                              --   bookmark = 재개 지점 마커(stepId/attempt/reason), resume_token = 서명 봉투(kid/hmac, R11 후속).

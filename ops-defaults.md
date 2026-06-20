@@ -9,7 +9,7 @@
 
 | 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
 |---|---|---|---|---|
-| `run.init_fail_threshold` | 3 | 2 | R3a/R3b | 연속 INIT 실패 < 임계 → 재큐(R3a), ≥ 임계 → `failed_system`+서킷(R3b) |
+| `run.init_fail_threshold` | 3 | 2 | R3a/R3b | 연속 INIT 실패 < 임계 → 재큐(R3a), ≥ 임계 → `failed_system`+서킷(R3b). 카운터 = `runs.consecutive_init_failures`(R3a 시 +1, R2 INIT 성공 시 reset; 누적 `attempts`와 분리 — state-machine §1 INIT 규칙) |
 | `run.init_backoff` | base 2s · factor 2 · max 60s · jitter ±20% | base 10ms · max 50ms | R3a "백오프" | 지수 백오프 |
 | `workitem.max_attempts` | 3 | 2 | W4/W5/W6/W7 | attempts < max → retry, ≥ max → abandoned(dead_letter) |
 | `workitem.retry_backoff` | base 5s · factor 2 · max 5m | base 10ms · max 50ms | W4 "백오프" | W8 재checkout 시 step/loop 카운터 리셋·cursor 보존 |
