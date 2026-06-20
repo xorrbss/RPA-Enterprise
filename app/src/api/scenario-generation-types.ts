@@ -27,6 +27,15 @@ export interface GenerationRequest {
   evidence: EvidencePolicy;
 }
 
+export interface GenerationRunRequest {
+  target?: NonNullable<GenerationRequest["target"]>;
+  startUrl?: string;
+  params: Record<string, unknown>;
+  paramsProvided: boolean;
+  model?: string | null;
+  evidence?: EvidencePolicy;
+}
+
 export interface GenerationPlan {
   planner: ScenarioPlannerId;
   request: GenerationRequest;
