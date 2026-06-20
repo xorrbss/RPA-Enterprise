@@ -1,3 +1,4 @@
+import type { AuthenticatedPrincipal } from "../../../ts/security-middleware-contract";
 import type { CompileOutcome } from "./compile-pipeline";
 
 export type ScenarioPlannerId = "deterministic_mvp" | "llm_v1";
@@ -42,6 +43,7 @@ export interface ScenarioPlannerContext {
   readonly tenantId: string;
   readonly correlationId: string;
   readonly generationId: string;
+  readonly principal?: Pick<AuthenticatedPrincipal, "subjectId" | "roles">;
 }
 
 export interface ScenarioPlanner {

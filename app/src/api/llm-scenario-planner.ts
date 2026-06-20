@@ -179,6 +179,9 @@ export class LlmGatewayScenarioPlannerClient implements LlmScenarioPlannerClient
         attempt: input.attempt,
         primitive: "extract",
         correlationId: input.context.correlationId as CorrelationId,
+        ...(input.context.principal !== undefined
+          ? { auditActor: { subjectId: input.context.principal.subjectId, roles: input.context.principal.roles } }
+          : {}),
       },
       budget: this.cfg.budget,
       idempotencyKey: `scenario-generation:${input.context.generationId}:${input.kind}:${input.attempt}:${requestHash.slice(0, 16)}` as LLMCallIdempotencyKey,

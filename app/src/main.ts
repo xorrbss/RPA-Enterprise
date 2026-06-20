@@ -161,7 +161,11 @@ interface ScenarioGenerationPlannerBinding {
   readonly llmCalls: ScenarioGenerationLlmCallCleanup;
 }
 
-function buildScenarioGenerationPlannerBinding(pool: PgPool, cfg: ScenarioGenerationLlmV1Config): ScenarioGenerationPlannerBinding {
+function buildScenarioGenerationPlannerBinding(
+  pool: PgPool,
+  cfg: ScenarioGenerationLlmV1Config,
+  securityAudit: PgDurableSecurityAuditDecisionWriter,
+): ScenarioGenerationPlannerBinding {
   const gw = cfg.gateway;
   const artifactSink = new BufferedScenarioGenerationArtifactSink(new FsObjectStore(gw.artifactDir), {
     retentionDays: gw.artifactRetentionDays,
@@ -186,6 +190,7 @@ function buildScenarioGenerationPlannerBinding(pool: PgPool, cfg: ScenarioGenera
     validator: new AjvStructuredOutputValidator(),
     sink: artifactSink,
     idempotency: llmCalls,
+    securityAudit,
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
     config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
   });
@@ -205,7 +210,10 @@ function buildScenarioGenerationPlannerBinding(pool: PgPool, cfg: ScenarioGenera
 async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMode()): Promise<FastifyInstance> {
   const cfg = loadApiConfig(common, { runMode });
   const scenarioGenerationLlmV1 = loadScenarioGenerationLlmV1Config();
-  const scenarioPlanner = scenarioGenerationLlmV1 !== undefined ? buildScenarioGenerationPlannerBinding(pool, scenarioGenerationLlmV1) : undefined;
+  const securityAudit = new PgDurableSecurityAuditDecisionWriter(pool);
+  const scenarioPlanner = scenarioGenerationLlmV1 !== undefined
+    ? buildScenarioGenerationPlannerBinding(pool, scenarioGenerationLlmV1, securityAudit)
+    : undefined;
   const artifactObjectReader = await buildApiArtifactObjectReader(cfg);
   // 세션 캡처 봉투암호화 스토어 — KEK(api/browser_session) 프로비저닝 시에만 활성(미설정 → undefined → 엔드포인트 미등록, fail-closed).
   const sessionStore = await buildApiSessionStore(pool, common);
@@ -228,7 +236,7 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
     ...(artifactObjectReader !== undefined
       ? {
           artifactStore: artifactObjectReader,
-          securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
+          securityAudit,
         }
       : {}),
     ...(sessionStore !== undefined ? { sessionStore } : {}),
@@ -284,6 +292,7 @@ function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
     validator: new AjvStructuredOutputValidator(),
     sink: gatewayArtifactSink,
     idempotency: new PgLlmCallIdempotencyStore(pool),
+    securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
     config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
   });

@@ -524,6 +524,15 @@ export interface LLMRequestMetadata {
   attempt: number;
   primitive: LLMPrimitive;
   correlationId: CorrelationId;
+  /**
+   * Actor to record for `prompt.inspect` security-boundary audit rows. API
+   * planner calls should provide the requesting principal; runtime executor
+   * calls may omit it and use the gateway's explicit runtime fallback actor.
+   */
+  auditActor?: {
+    subjectId: PrincipalId;
+    roles: readonly Role[];
+  };
 }
 
 export interface LLMBudget {

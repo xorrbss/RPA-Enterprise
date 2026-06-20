@@ -684,6 +684,7 @@ async function main(): Promise<void> {
           validator: new AjvStructuredOutputValidator(),
           sink: new PgGatewayArtifactSink(pool, artifactStore, { retentionDays: 90 }),
           idempotency: new PgLlmCallIdempotencyStore(pool),
+          securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
           redactionBoundary: new DeterministicGatewayRedactionBoundary(),
           config: { retryMax: 0, fallbackAttempts: 0, repairAttempts: 0 },
         });
@@ -1575,6 +1576,7 @@ async function main(): Promise<void> {
         validator: new AjvStructuredOutputValidator(),
         sink: gatewayPlannerArtifactSink,
         idempotency: gatewayPlannerLlmCalls,
+        securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
         redactionBoundary: new DeterministicGatewayRedactionBoundary(),
         config: { retryMax: 0, fallbackAttempts: 0, repairAttempts: 0 },
       });
@@ -1667,6 +1669,26 @@ async function main(): Promise<void> {
               llmCalls.rows[0]?.output_ref_count === "1" &&
               llmCalls.rows[0]?.parsed_count === "1",
             JSON.stringify(llmCalls.rows[0]),
+          );
+          const promptAudit = await lifecyclePool.query<{ audit_count: string; allow_count: string; subject_id: string | null; decision_kind: string | null }>(
+            `SELECT
+                count(*)::text AS audit_count,
+                count(*) FILTER (WHERE outcome='allow')::text AS allow_count,
+                max(actor->>'subjectId') AS subject_id,
+                max(payload->>'decision_kind') AS decision_kind
+               FROM audit_log
+              WHERE tenant_id=$1::uuid
+                AND action='prompt.inspect'
+                AND correlation_id=$2::uuid`,
+            [TENANT, gatewayPlannerCalls[0]?.metadata.correlationId],
+          );
+          check(
+            "gateway-backed llm_v1 planner records prompt.inspect audit before planner adapter",
+            promptAudit.rows[0]?.audit_count === "1" &&
+              promptAudit.rows[0]?.allow_count === "1" &&
+              promptAudit.rows[0]?.subject_id === "operator-a" &&
+              promptAudit.rows[0]?.decision_kind === "prompt.inspect",
+            JSON.stringify(promptAudit.rows[0]),
           );
         } finally {
           await lifecyclePool.end();
@@ -2153,6 +2175,7 @@ async function main(): Promise<void> {
             validator: new AjvStructuredOutputValidator(),
             sink: new PgGatewayArtifactSink(pool, videoStore, { retentionDays: 90 }),
             idempotency: new PgLlmCallIdempotencyStore(pool),
+            securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
             redactionBoundary: new DeterministicGatewayRedactionBoundary(),
             config: { retryMax: 0, fallbackAttempts: 0, repairAttempts: 0 },
           });
@@ -2416,6 +2439,7 @@ async function main(): Promise<void> {
             validator: new AjvStructuredOutputValidator(),
             sink: new PgGatewayArtifactSink(pool, videoNoScreenshotStore, { retentionDays: 90 }),
             idempotency: new PgLlmCallIdempotencyStore(pool),
+            securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
             redactionBoundary: new DeterministicGatewayRedactionBoundary(),
             config: { retryMax: 0, fallbackAttempts: 0, repairAttempts: 0 },
           });

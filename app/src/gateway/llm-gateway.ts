@@ -8,6 +8,7 @@
  * 모든 외부 의존(adapter·gate·멱등 store·schema validator·artifact sink)은 주입형 포트라 키/DB 없이
  * 오프라인 검증 가능하다. retry/repair/fallback 횟수는 ops-defaults §4(retry_max 2·fallback 1·repair 1).
  */
+import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 
 import type { ArtifactRef } from "../../../ts/core-types";
@@ -16,16 +17,24 @@ import { SPAN, recordLlmCost, recordLlmTtfbMs, withSpan, type CommonSpanAttrs } 
 import type {
   AdapterErrorCode,
   CapabilityGate,
+  CorrelationId,
+  DurableSecurityAuditDecisionWriter,
   GatewayRedactionBoundary,
+  IdempotencyKey,
+  IsoDateTime,
   LLMBackendAdapter,
   LLMCallIdempotencyStore,
   LLMRequest,
   LLMResponse,
+  PrincipalId,
+  Role,
 } from "../../../ts/security-middleware-contract";
+import { SECURITY_AUDIT_PAYLOAD_SCHEMA_REF } from "../../../ts/security-middleware-contract";
 
 type Transport = "sse" | "sync";
 type Usage = LLMResponse["usage"];
 type FinishReason = LLMResponse["finishReason"];
+const PROMPT_INSPECT_AUDIT_RETENTION_DAYS = 90;
 
 /** §5 structured output 검증 포트(ajv 등 실제 검증기 주입 — 재구현 금지). */
 export interface StructuredOutputValidator {
@@ -52,6 +61,7 @@ export interface LlmGatewayDeps {
   validator: StructuredOutputValidator;
   sink: GatewayArtifactSink;
   idempotency?: LLMCallIdempotencyStore;
+  securityAudit: DurableSecurityAuditDecisionWriter;
   /** security-contracts §4 step2(차단 지점, Gateway 소유): adapter 호출 전 user 메시지 redaction + §3 injection 탐지. */
   redactionBoundary: GatewayRedactionBoundary;
   config: LlmGatewayConfig;
@@ -210,6 +220,7 @@ export class LlmGateway {
         rawTextOrObject: m.content,
         textRuns: req.promptInspection?.textRuns,
       });
+      await this.recordPromptInspectDecision(req, result, { phase: "initial", messageIndex: out.length });
       if (result.kind === "blocked") {
         const signals = result.evidence.map((e) => e.signal).join(",");
         throw new GatewayError(result.code, `prompt injection blocked at gateway (${signals})`);
@@ -350,6 +361,7 @@ export class LlmGateway {
       runId: req.metadata.runId,
       rawTextOrObject: `Previous output was invalid (${reason}). Return only corrected JSON.\n${priorText}`,
     });
+    await this.recordPromptInspectDecision(req, redacted, { phase: "repair", messageIndex: req.messages.length });
     if (redacted.kind === "blocked") {
       const signals = redacted.evidence.map((e) => e.signal).join(",");
       throw new GatewayError(redacted.code, `prompt injection blocked at gateway repair (${signals})`);
@@ -363,4 +375,52 @@ export class LlmGateway {
     if (r.kind === "aborted") throw new GatewayAbortedError();
     throw new GatewayError(mapTerminal(r.code), `repair failed: ${r.code}`, r.code);
   }
+
+  private async recordPromptInspectDecision(
+    req: LLMRequest,
+    result: Awaited<ReturnType<GatewayRedactionBoundary["redactForGateway"]>>,
+    input: { phase: "initial" | "repair"; messageIndex: number },
+  ): Promise<void> {
+    const occurredAt = new Date();
+    const actor = req.metadata.auditActor ?? runtimePromptInspectActor();
+    const outcome = result.kind === "blocked" ? "blocked" : "allow";
+    try {
+      await this.deps.securityAudit.recordDecision(
+        {
+          tenantId: req.metadata.tenantId,
+          actor,
+          action: "prompt.inspect",
+          outcome,
+          resource: { kind: "run", id: req.metadata.runId },
+          reason: result.kind === "blocked" ? "prompt_injection_detected" : "prompt_inspection_clean",
+          correlationId: req.metadata.correlationId as CorrelationId,
+          idempotencyKey: randomUUID() as IdempotencyKey,
+          occurredAt: occurredAt.toISOString() as IsoDateTime,
+          retentionUntil: new Date(
+            occurredAt.getTime() + PROMPT_INSPECT_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+          ).toISOString() as IsoDateTime,
+          payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+          failClosed: true,
+          payload: {
+            decision_kind: "prompt.inspect",
+            phase: input.phase,
+            message_index: input.messageIndex,
+            primitive: req.metadata.primitive,
+            step_id: req.metadata.stepId,
+            attempt: req.metadata.attempt,
+            prompt_template_version: req.promptTemplateVersion,
+            model: req.model,
+            evidence_signals: result.kind === "blocked" ? result.evidence.map((e) => e.signal) : [],
+          },
+        },
+        { prompt_inspection: outcome, phase: input.phase },
+      );
+    } catch {
+      throw new GatewayError("CONTROL_PLANE_INTERNAL_ERROR", "prompt inspect audit append failed closed");
+    }
+  }
+}
+
+function runtimePromptInspectActor(): { subjectId: PrincipalId; roles: readonly Role[] } {
+  return { subjectId: "runtime-worker" as PrincipalId, roles: ["operator"] };
 }

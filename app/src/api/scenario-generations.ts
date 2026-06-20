@@ -296,6 +296,7 @@ async function generateScenario(deps: ApiServerDeps, request: FastifyRequest): P
       tenantId: principal.tenantId,
       correlationId: request.correlationId,
       generationId,
+      principal: { subjectId: principal.subjectId, roles: principal.roles },
     });
     const { plan, compiled } = planned;
 
