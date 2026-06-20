@@ -65,7 +65,7 @@ export async function applyHumanTaskTransition(
     `UPDATE human_tasks
         SET state       = $1,
             updated_at  = now(),
-            assignee    = CASE WHEN $2::boolean THEN $3::uuid ELSE assignee END,
+            assignee    = CASE WHEN $2::boolean THEN $3::text ELSE assignee END,
             resolved_at = CASE WHEN $4::boolean THEN now() ELSE resolved_at END
       WHERE id = $5::uuid AND tenant_id = $6::uuid AND state = $7
     RETURNING state`,

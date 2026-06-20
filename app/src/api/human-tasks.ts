@@ -351,13 +351,17 @@ function requireTaskId(id: string): string {
   return id;
 }
 
-/** assign body: { assignee: uuid }만 허용(닫힌 shape). 키 소모 이전 선검사. */
+/**
+ * assign body: { assignee: PrincipalId } 만 허용(닫힌 shape). 키 소모 이전 선검사.
+ * assignee = JWT sub(PrincipalId) 로 자유형 string(UUID 보장 없음: OIDC sub auth0|… 등) — decided_by/created_by 와
+ * 동일 정책(비-빈 string). 빈 값/비-string 은 여전히 거부.
+ */
 function requireAssignee(request: FastifyRequest): string {
   if (!isRecord(request.body) || Object.keys(request.body).some((k) => k !== "assignee")) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_assign_request" });
   }
   const assignee = request.body.assignee;
-  if (typeof assignee !== "string" || !UUID_RE.test(assignee)) {
+  if (typeof assignee !== "string" || assignee.length === 0) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_assignee" });
   }
   return assignee;

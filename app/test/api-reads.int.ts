@@ -96,7 +96,7 @@ async function seedHumanTask(
   await withTenantTx(pool, tenant, (c) =>
     c.query(
       `INSERT INTO human_tasks (id, tenant_id, run_id, kind, state, assignee, expires_at, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6::uuid,'2026-07-01T00:00:00Z',$7::timestamptz)`,
+       VALUES ($1,$2,$3,$4,$5,$6::text,'2026-07-01T00:00:00Z',$7::timestamptz)`,
       [id, tenant, run, kind, state, assignee, createdAt],
     ),
   );
@@ -397,6 +397,11 @@ async function main(): Promise<void> {
       check("filter kind=approval → 2", byKind.json().items.length === 2, "");
       const byAssignee = await get(`/v1/human-tasks?assignee=${ASSIGNEE}`);
       check("filter assignee → 1", byAssignee.json().items.length === 1 && byAssignee.json().items[0].human_task_id === HT_A2, "");
+      // assignee=PrincipalId(자유형 string)이므로 비-UUID sub 필터도 422가 아니라 200(매칭 0). uuid 강제 폐지 회귀.
+      const byOidcAssignee = await get("/v1/human-tasks?assignee=auth0%7Cabc123");
+      check("filter non-uuid assignee → 200 (0 matches, not 422)", byOidcAssignee.statusCode === 200 && byOidcAssignee.json().items.length === 0, byOidcAssignee.body);
+      const emptyAssignee = await get("/v1/human-tasks?assignee=");
+      check("filter empty assignee → 422", emptyAssignee.statusCode === 422 && emptyAssignee.json().details?.reason === "invalid_assignee", emptyAssignee.body);
       const byRun = await get(`/v1/human-tasks?run_id=${A_RUNS[3][0]}`);
       check("filter run_id → 3 linked tasks", byRun.json().items.length === 3 && byRun.json().items.every((h: { run_id: string }) => h.run_id === A_RUNS[3][0]), JSON.stringify(byRun.json().items));
       const badRun = await get("/v1/human-tasks?run_id=not-uuid");

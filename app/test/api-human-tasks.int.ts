@@ -45,6 +45,7 @@ const HT_ESCALATED = "41000000-0000-0000-0000-000000000006";
 const HT_RESOLVED = "41000000-0000-0000-0000-000000000007";
 const HT_IDEM = "41000000-0000-0000-0000-000000000008";
 const HT_VIEWER = "41000000-0000-0000-0000-000000000009";
+const HT_OIDC = "41000000-0000-0000-0000-00000000000a"; // 비-UUID OIDC sub 배정 검증용(open).
 const HT_B = "42000000-0000-0000-0000-000000000001";
 
 // resolve/escalate 교차 전이용 전용 run + task(각 run 상태를 독립 검증).
@@ -125,7 +126,7 @@ async function seedTask(
   await withTenantTx(pool, tenant, (c) =>
     c.query(
       `INSERT INTO human_tasks (id, tenant_id, run_id, kind, state, assignee, assignee_role)
-       VALUES ($1,$2,$3,$4,$5,$6::uuid,$7)`,
+       VALUES ($1,$2,$3,$4,$5,$6::text,$7)`,
       [id, tenant, run, kind, state, scope.assignee ?? null, scope.assigneeRole ?? null],
     ),
   );
@@ -197,10 +198,11 @@ async function main(): Promise<void> {
       [HT_RESOLVED, "resolved"],
       [HT_IDEM, "open"],
       [HT_VIEWER, "open"],
+      [HT_OIDC, "open"],
     ];
     for (const [id, state] of seeds) await seedTask(pool, TENANT_A, RUN_A, id, state);
     await withTenantTx(pool, TENANT_A, (c) =>
-      c.query(`UPDATE human_tasks SET assignee=$1::uuid, assignee_role='reviewer' WHERE id=$2::uuid`, [
+      c.query(`UPDATE human_tasks SET assignee=$1::text, assignee_role='reviewer' WHERE id=$2::uuid`, [
         ASSIGNEE,
         HT_RESOLVED,
       ]),
@@ -307,12 +309,20 @@ async function main(): Promise<void> {
       check("assign resolved → 410", a4.statusCode === 410, a4.body);
       check("assign resolved → HUMAN_TASK_EXPIRED", a4.json().code === "HUMAN_TASK_EXPIRED", a4.body);
 
-      // 5) 본문 선검사: assignee 누락/무효 → 422(키 미소모).
+      // 5) 본문 선검사: assignee 누락/빈 값/비-string → 422(키 미소모). assignee=PrincipalId(JWT sub) 자유형 string이라
+      //    uuid 형식은 강제하지 않으며(decided_by/created_by와 동형 text), 빈 값/비-string만 거부한다.
       const a5 = await assign(HT_OPEN2, "assign-noassignee", op, {});
       check("assign missing assignee → 422", a5.statusCode === 422, a5.body);
       check("assign missing assignee key unused", (await idemRowCount(pool, TENANT_A, "assignHumanTask", "assign-noassignee")) === 0);
-      const a5b = await assign(HT_OPEN2, "assign-badassignee", op, { assignee: "not-a-uuid" });
-      check("assign invalid assignee → 422", a5b.statusCode === 422 && a5b.json().details?.reason === "invalid_assignee", a5b.body);
+      const a5b = await assign(HT_OPEN2, "assign-emptyassignee", op, { assignee: "" });
+      check("assign empty assignee → 422", a5b.statusCode === 422 && a5b.json().details?.reason === "invalid_assignee", a5b.body);
+      const a5c = await assign(HT_OPEN2, "assign-nonstringassignee", op, { assignee: 123 });
+      check("assign non-string assignee → 422", a5c.statusCode === 422 && a5c.json().details?.reason === "invalid_assignee", a5c.body);
+      // 5b) 비-UUID OIDC sub(PrincipalId) 배정 → 200 assigned + DB에 text 그대로 영속(uuid 강제 폐지).
+      const a5d = await assign(HT_OIDC, "assign-oidcsub", op, { assignee: "auth0|abc123" });
+      check("assign non-uuid OIDC sub → 200 assigned", a5d.statusCode === 200 && a5d.json().state === "assigned", a5d.body);
+      const a5drow = await taskRow(pool, TENANT_A, HT_OIDC);
+      check("assign non-uuid sub → DB assignee text 보존", a5drow?.state === "assigned" && a5drow?.assignee === "auth0|abc123", JSON.stringify(a5drow));
 
       // 6) 부재 → 404, cross-tenant → 404(RLS).
       const a6 = await assign(ABSENT, "assign-absent");

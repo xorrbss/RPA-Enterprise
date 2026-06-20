@@ -97,7 +97,7 @@ export async function seed(pool: PgPool): Promise<void> {
     await withTenantTx(pool, TENANT, (c) =>
       c.query(
         `INSERT INTO human_tasks (id, tenant_id, run_id, kind, state, assignee, expires_at, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6::uuid,'2026-07-01T00:00:00Z',$7::timestamptz)`,
+         VALUES ($1,$2,$3,$4,$5,$6::text,'2026-07-01T00:00:00Z',$7::timestamptz)`,
         [id, TENANT, SUSPENDED_RUN, kind, state, assignee, ts(i)],
       ),
     );
