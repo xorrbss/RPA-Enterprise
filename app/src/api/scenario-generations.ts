@@ -24,6 +24,7 @@ import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx, idempotencyRecordRowId } from "./idempotency";
 import { apiErrorBody, isRecord } from "./command";
 import { extractFirstHttpUrl, hostOfHttpUrl, isHostAllowed, isHttpUrl } from "./scenario-generation-url";
+import { containsRedactedParamsMarker, redactGenerationDraftIr, redactGenerationFailureDetails, redactParamsContext } from "./scenario-generation-redaction";
 import { createRunInTx, requirePrincipal, type ApiServerDeps } from "./server";
 import type {
   EvidencePolicy,
@@ -127,8 +128,6 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
   "video_recording_port_not_configured",
   "params_context_redacted_value_required",
 ]);
-
-const REDACTED_SCENARIO_GENERATION_PARAM = "[REDACTED:scenario_generation_param]";
 
 function scenarioGenerationCapabilities(deps: ApiServerDeps): GenerationCapabilities {
   return {
@@ -958,21 +957,6 @@ function apiErrorDetailsReason(details: unknown): string | undefined {
   return isRecord(details) && typeof details.reason === "string" && details.reason.length > 0 ? details.reason : undefined;
 }
 
-function redactGenerationFailureDetails(value: unknown, prompt: string): unknown {
-  if (typeof value === "string") {
-    return value.includes(prompt) ? value.replaceAll(prompt, "[REDACTED:scenario_generation_prompt]") : value;
-  }
-  if (Array.isArray(value)) return value.map((item) => redactGenerationFailureDetails(item, prompt));
-  if (!isRecord(value)) return value;
-  const out: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    out[key] = key === "prompt" || key === "instruction"
-      ? "[REDACTED:scenario_generation_error_detail]"
-      : redactGenerationFailureDetails(child, prompt);
-  }
-  return out;
-}
-
 async function runtimeTargetBlocker(
   client: PoolClient,
   tenantId: string,
@@ -1779,49 +1763,6 @@ function mapGenerationRow(row: ScenarioGenerationRow): Record<string, unknown> {
 
 function parseParamsContext(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
-}
-
-function redactParamsContext(value: Record<string, unknown>): Record<string, unknown> {
-  return redactParamsContextRecord(value);
-}
-
-function redactParamsContextRecord(value: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    out[key] = redactParamsContextValue(key, child);
-  }
-  return out;
-}
-
-function redactParamsContextValue(key: string, value: unknown): unknown {
-  if (isSensitiveParamKey(key)) return REDACTED_SCENARIO_GENERATION_PARAM;
-  if (Array.isArray(value)) return value.map((item) => redactParamsContextValue(key, item));
-  if (isRecord(value)) return redactParamsContextRecord(value);
-  if (typeof value === "string" && value.includes("PlainSecret")) return REDACTED_SCENARIO_GENERATION_PARAM;
-  return value;
-}
-
-function isSensitiveParamKey(key: string): boolean {
-  return /(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|credential)/i.test(key);
-}
-
-function containsRedactedParamsMarker(value: unknown): boolean {
-  if (value === REDACTED_SCENARIO_GENERATION_PARAM) return true;
-  if (Array.isArray(value)) return value.some((item) => containsRedactedParamsMarker(item));
-  if (isRecord(value)) return Object.values(value).some((item) => containsRedactedParamsMarker(item));
-  return false;
-}
-
-function redactGenerationDraftIr(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => redactGenerationDraftIr(item));
-  if (!isRecord(value)) return value;
-  const redacted: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    redacted[key] = key === "instruction" && typeof child === "string"
-      ? "[REDACTED:scenario_generation_instruction]"
-      : redactGenerationDraftIr(child);
-  }
-  return redacted;
 }
 
 function parseListLimit(value: string | undefined): number {
