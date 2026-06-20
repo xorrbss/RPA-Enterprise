@@ -145,6 +145,7 @@ export interface PgRuntimeWorkerOptions {
   // worker 서킷(ops-defaults §3 worker.circuit): per-worker 연속 INIT 실패 임계/cooldown. 미주입 시 기본(5 / 1m). 테스트 sim 오버라이드.
   readonly workerCircuitThreshold?: number;
   readonly workerCircuitOpenMs?: number;
+  readonly workerCircuitCloseThreshold?: number; // half_open 연속 프로브 성공 N회 → closed(ops-defaults half_open_close_threshold)
   // suspend 구동(트리거 i): worker 경유 run 이 suspend(executor status='suspended')하면 driveClaimedRun/driveResumedRun →
   // driveSuspend 가 이 둘을 소비(R4+포트→resume-token 발행+R11→suspended). 미주입 시 suspend terminal 은 loud throw(미구성).
   // PgChallengeSuspensionPort=stateless, codec=deploy-time(SecretStore+signingKeyRef). 실 트리거(challenge 감지)는 DOM/vision executor 후행.
@@ -267,9 +268,10 @@ const DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS = 90;
 const DEFAULT_RUN_ABORT_TIMEOUT_MS = 30_000;
 // ops-defaults.md #workitem.checkout_timeout=10m. W1 checkout 시 checkout_expires_at 설정, W6/W7 sweeper 가 만료 판정. 코드 상수 금지 규약 — inline 인용.
 const WORKITEM_CHECKOUT_TIMEOUT_MS = 10 * 60 * 1000;
-// ops-defaults.md §3 worker.circuit: consecutive_failures=5(임계) / open_duration=1m(cooldown). 코드 상수 금지 규약 — inline 인용.
+// ops-defaults.md §3 worker.circuit: consecutive_failures=5(임계) / open_duration=1m(cooldown) / half_open_close_threshold=2. 코드 상수 금지 규약 — inline 인용.
 const DEFAULT_WORKER_CIRCUIT_THRESHOLD = 5;
 const DEFAULT_WORKER_CIRCUIT_OPEN_MS = 60_000;
+const DEFAULT_WORKER_CIRCUIT_CLOSE_THRESHOLD = 2;
 
 export async function renewBrowserLease(
   client: pg.PoolClient,
@@ -1336,66 +1338,80 @@ export class PgRuntimeWorker implements RuntimeWorker {
   }
 
   /**
-   * worker 서킷(ops-defaults §3 worker.circuit) — per-worker 연속 INIT(claimed→running 셋업) 실패 누적.
-   * INIT 실패 시 +1, 임계(consecutive_failures, 기본 5) 도달 시 circuit_state='open' + circuit_until=now()+open_duration
-   * (워커 격리: acquireBrowserLease 가 open 이면 lease 거부). 단일 atomic UPDATE 라 동시 INIT 실패 경합에 안전.
-   * R3b per-run 트리거(=runs.consecutive_init_failures, 임계 3)를 직접 회로에 쓰지 않고 per-worker 로 분리 — 한 run 의
-   * 실패로 워커 전체(모든 테넌트/사이트 run)를 차단하는 과잉격리를 피한다(state-machine §1 INIT 규칙·circuit 결정).
-   * workers 는 non-tenant infra 라 RLS 미적용(tenant 바인딩 불요).
+   * worker 서킷(ops-defaults §3 worker.circuit) — INIT **프로브 실패** 기록(상태 전이는 전부 여기서, 게이트는 read-only).
+   *  - closed: per-worker 연속 실패 +1, 임계(consecutive_failures, 기본 5) 도달 시 open + cooldown(circuit_until).
+   *  - open(=cooldown 경과 후 프로브)/half_open: **프로브 실패 → open 유지/재진입**(시험 중 한 번만 실패해도 재격리) + 새
+   *    cooldown + half_open_successes reset. (게이트가 전이를 안 하므로 프로브 실패 시점에도 circuit_state 는 open/half_open.)
+   * 단일 atomic UPDATE(Postgres 행잠금이 동시 프로브를 직렬화 — 두 번째 UPDATE 가 첫 commit 후 값 재평가). R3b per-run
+   * 트리거(runs.*)를 직접 회로에 안 쓰고 per-worker 로 분리(과잉격리 회피, state-machine §1). workers 는 non-tenant infra.
+   * ⚠ best-effort: record* 는 게이트(claim tx)와 다른 autocommit connection이라, 임계만큼의 동시 프로브 성공이 close 한
+   *   '직후' 도착한 stale 프로브 실패는 closed +1 로 흡수될 수 있다(희귀·과소격리 방향, 임계 누적이 결국 재open — 수용).
    */
   private async recordWorkerInitFailure(workerId: string): Promise<void> {
     const threshold = this.options.workerCircuitThreshold ?? DEFAULT_WORKER_CIRCUIT_THRESHOLD;
     const openMs = this.options.workerCircuitOpenMs ?? DEFAULT_WORKER_CIRCUIT_OPEN_MS;
     await this.pool.query(
       `UPDATE workers
-          SET consecutive_init_failures = consecutive_init_failures + 1,
-              circuit_state = CASE WHEN consecutive_init_failures + 1 >= $2::int THEN 'open' ELSE circuit_state END,
-              circuit_until = CASE WHEN consecutive_init_failures + 1 >= $2::int
-                                   THEN now() + ($3::int * interval '1 millisecond') ELSE circuit_until END
-        WHERE id = $1::uuid AND circuit_state <> 'open'`,
+          SET consecutive_init_failures = CASE WHEN circuit_state = 'closed' THEN consecutive_init_failures + 1 ELSE 0 END,
+              half_open_successes = 0,
+              circuit_state = CASE
+                WHEN circuit_state IN ('open','half_open') THEN 'open'
+                WHEN consecutive_init_failures + 1 >= $2::int THEN 'open'
+                ELSE 'closed' END,
+              circuit_until = CASE
+                WHEN circuit_state IN ('open','half_open') OR consecutive_init_failures + 1 >= $2::int
+                THEN now() + ($3::int * interval '1 millisecond') ELSE circuit_until END
+        WHERE id = $1::uuid`,
       [workerId, threshold, openMs],
     );
   }
 
   /**
-   * INIT 성공 시 per-worker 연속 실패 카운터 reset(0) + 회로 닫힘(건강 증명). 적대리뷰 B3: 카운터만 reset 하면 동시
-   * 경합으로 (circuit_state='open', cif=0, circuit_until=미래) 모순 상태가 남아 방금 성공한 워커가 cooldown 동안 stuck-open
-   * 된다 — 성공은 '연속 실패' streak 종료이므로 회로를 closed 로 일관화한다(v1 lazy auto-close 와 정합). closed·0 이면 무비용.
+   * INIT **프로브 성공** 기록(상태 전이는 전부 여기서).
+   *  - closed: 연속 실패 streak 종료 → consecutive_init_failures = 0(상태 유지).
+   *  - open(=cooldown 경과 후 첫 프로브)/half_open: 프로브 성공 → half_open_successes +1; close 임계
+   *    (half_open_close_threshold, 기본 2) 도달 시 closed(회복 확정·카운터/cooldown reset), 미달 시 half_open(첫 성공은
+   *    open→half_open 진입). 단일 atomic UPDATE(행잠금 직렬화 — 동시 프로브 성공 누적 정확).
+   * WHERE 가드: closed·실패0·half_open_successes0 이면 무비용.
    */
   private async recordWorkerInitSuccess(workerId: string): Promise<void> {
+    const closeThreshold = this.options.workerCircuitCloseThreshold ?? DEFAULT_WORKER_CIRCUIT_CLOSE_THRESHOLD;
     await this.pool.query(
       `UPDATE workers
-          SET consecutive_init_failures = 0, circuit_state = 'closed', circuit_until = NULL
+          SET consecutive_init_failures = 0,
+              half_open_successes = CASE
+                WHEN circuit_state IN ('open','half_open') AND half_open_successes + 1 < $2::int THEN half_open_successes + 1
+                ELSE 0 END,
+              circuit_state = CASE
+                WHEN circuit_state IN ('open','half_open') AND half_open_successes + 1 >= $2::int THEN 'closed'
+                WHEN circuit_state = 'open' THEN 'half_open'
+                ELSE circuit_state END,
+              circuit_until = CASE
+                WHEN circuit_state IN ('open','half_open') AND half_open_successes + 1 >= $2::int THEN NULL
+                WHEN circuit_state = 'open' THEN NULL
+                ELSE circuit_until END
         WHERE id = $1::uuid AND (consecutive_init_failures > 0 OR circuit_state <> 'closed')`,
-      [workerId],
+      [workerId, closeThreshold],
     );
   }
 
   /**
-   * worker 서킷 게이트 + lazy 회복. true=진행 허용, false=거부(격리). circuit open + cooldown 중이면 거부, cooldown
-   * (circuit_until) 경과면 auto-close(closed+카운터 reset) 후 허용, closed 면 허용. 신규 claim(acquireBrowserLease)과
-   * resume lease 재사용(적대리뷰 B4) 양쪽에서 호출 — 'worker 단위 격리'가 resume 경로에서도 유지된다. client tx 안
-   * FOR UPDATE 로 동시 claim 의 auto-close 경합을 직렬화. worker 행 부재면 false(상위가 not-found/internal 처리).
+   * worker 서킷 게이트 — **read-only 판정**(상태 전이 없음). true=진행 허용(프로브 포함), false=거부(격리).
+   *  - open + cooldown(circuit_until 미설정 OR 아직 미래) → 거부(격리 유지). circuit_until=NULL(레거시/수동 open) 도 거부.
+   *  - 그 외(closed · half_open · open+cooldown 경과) → 허용. open+cooldown 경과 claim 이 실제 프로브이며, 그 INIT 결과를
+   *    recordWorkerInitSuccess/Failure 가 받아 open→half_open→closed / open 재진입을 **원자적으로** 처리한다.
+   * 게이트에서 전이를 하지 않으므로, 프로브가 실제로 안 일어나는 경로(SESSION_LOCKED 등 조기반환·resume lease 재사용)는
+   *   회로를 half_open limbo 로 남기지 않는다(적대리뷰: 전이↔프로브 정산 분리 결함 해소). worker 행 부재면 false.
    */
   private async checkWorkerCircuit(client: pg.PoolClient, workerId: string): Promise<boolean> {
-    // cooldown_active: open 인데 (circuit_until 미설정 OR 아직 미래)면 격리 유지. circuit_until=NULL(레거시/수동 open,
-    //   cooldown 미지정)은 auto-close 대상이 아니라 fail-closed 유지 — auto-close 는 '명시적 cooldown(circuit_until) 만료'에만.
-    const w = await client.query<{ circuit_state: string; cooldown_active: boolean }>(
-      `SELECT circuit_state,
-              (circuit_state = 'open' AND (circuit_until IS NULL OR circuit_until > now())) AS cooldown_active
-         FROM workers WHERE id = $1::uuid FOR UPDATE`,
+    const w = await client.query<{ blocked: boolean }>(
+      `SELECT (circuit_state = 'open' AND (circuit_until IS NULL OR circuit_until > now())) AS blocked
+         FROM workers WHERE id = $1::uuid`,
       [workerId],
     );
     const row = w.rows[0];
     if (row === undefined) return false;
-    if (row.circuit_state !== "open") return true;
-    if (row.cooldown_active) return false; // 격리 유지(cooldown 중 또는 cooldown 미지정 open)
-    // cooldown(circuit_until) 명시적 만료 → auto-close(재시도 기회). 또 INIT 실패 누적이 임계 도달 시 재open.
-    await client.query(
-      `UPDATE workers SET circuit_state = 'closed', circuit_until = NULL, consecutive_init_failures = 0 WHERE id = $1::uuid`,
-      [workerId],
-    );
-    return true;
+    return !row.blocked;
   }
 
   private async acquireBrowserLease(
