@@ -63,6 +63,24 @@ export function getTracer(): Tracer {
   return trace.getTracer(TRACER_NAME);
 }
 
+/**
+ * RunContext(또는 동형) → CommonSpanAttrs. correlation_id 는 ctx.correlationId(driver 가 run.correlation_id 주입),
+ * 미주입(테스트/엣지)이면 run_id 로 폴백해 §E 필수 공통속성을 항상 채운다.
+ */
+export function spanCommonFromContext(ctx: {
+  tenantId: string;
+  runId: string;
+  workitemId?: string;
+  correlationId?: string;
+}): CommonSpanAttrs {
+  return {
+    tenant_id: ctx.tenantId,
+    correlation_id: ctx.correlationId ?? ctx.runId,
+    run_id: ctx.runId,
+    ...(ctx.workitemId !== undefined ? { workitem_id: ctx.workitemId } : {}),
+  };
+}
+
 export function getMeter(): Meter {
   return metrics.getMeter(METER_NAME);
 }

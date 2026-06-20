@@ -16,6 +16,7 @@ import type { DomLandmark, FrameSummary, PageState, RunContext } from "../../../
 import { IREL_ALLOWED_FLAGS } from "../../../codegen/irel-compile";
 import type { CdpSessionProvider } from "./cdp-session";
 import { getAccessibilityTree } from "./raw-cdp";
+import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 
 const sha1 = (s: string): string => createHash("sha1").update(s).digest("hex").slice(0, 16);
 export const PAGESTATE_CONTRACT_MARKER = "d3-dryrun-v1";
@@ -135,6 +136,10 @@ export class CdpPageStateResolver {
   constructor(private readonly sessions: CdpSessionProvider) {}
 
   async resolvePageState(ctx: RunContext): Promise<PageState> {
+    return withSpan(SPAN.pageStateResolve, spanCommonFromContext(ctx), {}, () => this.resolvePageStateInner(ctx));
+  }
+
+  private async resolvePageStateInner(ctx: RunContext): Promise<PageState> {
     const session = this.sessions.forLease(ctx.leaseId);
 
     const nodes = await getAccessibilityTree(session); // raw CDP 보완(§9.2 #2/#3) + 빈응답 정규화

@@ -15,6 +15,7 @@ import type {
   VisualEvidenceVideoStopInput,
 } from "../../../ts/runtime-contract";
 import { withTenantTx } from "../db/pool";
+import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 import type { CdpSession, CdpSessionProvider } from "../executor/cdp-session";
 
 const execFileAsync = promisify(execFile);
@@ -354,16 +355,18 @@ export async function appendVisualEvidenceArtifact(input: {
 }): Promise<StepResult> {
   const policy = recordingPolicyFromAction(input.action);
   if (!shouldCapture(policy, input.result)) return input.result;
-  const artifactRef = await input.recorder.captureStepScreenshot({
-    session: input.sessions.forLease(input.ctx.leaseId),
-    tenantId: input.ctx.tenantId,
-    runId: input.ctx.runId,
-    nodeId: input.ctx.nodeId,
-    stepId: input.result.stepId,
-    attempt: input.ctx.attempt,
-    result: input.result,
+  return withSpan(SPAN.artifactCapture, spanCommonFromContext(input.ctx), {}, async () => {
+    const artifactRef = await input.recorder.captureStepScreenshot({
+      session: input.sessions.forLease(input.ctx.leaseId),
+      tenantId: input.ctx.tenantId,
+      runId: input.ctx.runId,
+      nodeId: input.ctx.nodeId,
+      stepId: input.result.stepId,
+      attempt: input.ctx.attempt,
+      result: input.result,
+    });
+    return { ...input.result, artifacts: [...input.result.artifacts, artifactRef] };
   });
-  return { ...input.result, artifacts: [...input.result.artifacts, artifactRef] };
 }
 
 function normalizeCaptureInput(

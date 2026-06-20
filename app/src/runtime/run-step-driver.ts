@@ -50,7 +50,7 @@ import { executorFailureStepResult } from "./executor-step-orchestrator";
 import { compiledScenarioFrom } from "./ir-translate";
 import { runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
 import { settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
-import { recordChallenge } from "../observability/telemetry";
+import { recordChallenge, SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 import type { MergedExtractArtifactSink } from "./merged-extract-artifact";
 import {
   appendVisualEvidenceArtifact,
@@ -230,6 +230,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
 
   const ctx: RunContext = {
     runId: run.runId,
+    correlationId: run.correlationId,
     tenantId: run.tenantId,
     nodeId: startNode ?? scenario.start,
     attempt: 0,
@@ -539,7 +540,7 @@ class StepRecordingExecutor implements ExecutorPlugin {
   }
 
   verify(criteria: unknown, ctx: RunContext) {
-    return this.inner.verify(criteria, ctx);
+    return withSpan(SPAN.verifyRun, spanCommonFromContext(ctx), {}, () => this.inner.verify(criteria, ctx));
   }
 }
 
