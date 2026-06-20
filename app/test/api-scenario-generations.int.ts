@@ -549,9 +549,24 @@ async function main(): Promise<void> {
       const runParamsSchema: Record<string, unknown> = isRecord(runBody.draft_ir.params_schema) ? runBody.draft_ir.params_schema : {};
       const runParamProperties: Record<string, unknown> = isRecord(runParamsSchema.properties) ? runParamsSchema.properties : {};
       const runStartUrlSchema: Record<string, unknown> = isRecord(runParamProperties.start_url) ? runParamProperties.start_url : {};
+      const runNodes: Record<string, unknown> = isRecord(runBody.draft_ir.nodes) ? runBody.draft_ir.nodes : {};
+      const runExtractNode: Record<string, unknown> = isRecord(runNodes.extract_results) ? runNodes.extract_results : {};
+      const runExtractWhat = Array.isArray(runExtractNode.what) ? runExtractNode.what : [];
+      const runExtractAction: Record<string, unknown> = isRecord(runExtractWhat[0]) ? runExtractWhat[0] : {};
+      const runExtractArgs: Record<string, unknown> = isRecord(runExtractAction.args) ? runExtractAction.args : {};
+      const runExtractSchema: Record<string, unknown> = isRecord(runExtractArgs.schema) ? runExtractArgs.schema : {};
+      const runExtractSchemaProperties: Record<string, unknown> = isRecord(runExtractSchema.properties) ? runExtractSchema.properties : {};
+      const runRowsSchema: Record<string, unknown> = isRecord(runExtractSchemaProperties.rows) ? runExtractSchemaProperties.rows : {};
+      const runRowItemsSchema: Record<string, unknown> = isRecord(runRowsSchema.items) ? runRowsSchema.items : {};
+      const runRowProperties: Record<string, unknown> = isRecord(runRowItemsSchema.properties) ? runRowItemsSchema.properties : {};
       check(
         "generated IR preserves start_url default for later correction runs",
         runStartUrlSchema.default === "https://example.com/notices",
+        runnable.body,
+      );
+      check(
+        "generated extraction schema reflects prompt-requested title/link fields",
+        isRecord(runRowProperties.title) && isRecord(runRowProperties.url),
         runnable.body,
       );
       check(
@@ -560,17 +575,33 @@ async function main(): Promise<void> {
         runnable.body,
       );
       await withTenantTx(pool, TENANT, async (client) => {
-        const rows = await client.query<{ run_count: string; generation_count: string; params_context: Record<string, unknown> }>(
+        const rows = await client.query<{ run_count: string; generation_count: string; params_context: Record<string, unknown>; saved_ir: unknown }>(
           `SELECT
              (SELECT count(*)::text FROM runs WHERE id=$1::uuid) AS run_count,
              (SELECT count(*)::text FROM scenario_generations WHERE id=$2::uuid AND run_id=$1::uuid) AS generation_count,
-             (SELECT params_context FROM scenario_generations WHERE id=$2::uuid) AS params_context`,
+             (SELECT params_context FROM scenario_generations WHERE id=$2::uuid) AS params_context,
+             (SELECT sv.ir
+                FROM scenario_versions sv
+                JOIN scenario_generations g ON g.tenant_id=sv.tenant_id AND g.scenario_version_id=sv.id
+               WHERE g.id=$2::uuid) AS saved_ir`,
           [runBody.run_id, runBody.generation_id],
         );
         check("run + generation rows persisted", rows.rows[0]?.run_count === "1" && rows.rows[0]?.generation_count === "1", JSON.stringify(rows.rows[0]));
         check(
           "generation params_context persisted",
           rows.rows[0]?.params_context.start_url === "https://example.com/notices",
+          JSON.stringify(rows.rows[0]),
+        );
+        const savedIr: Record<string, unknown> = isRecord(rows.rows[0]?.saved_ir) ? rows.rows[0].saved_ir : {};
+        const savedNodes: Record<string, unknown> = isRecord(savedIr.nodes) ? savedIr.nodes : {};
+        const savedExtractNode: Record<string, unknown> = isRecord(savedNodes.extract_results) ? savedNodes.extract_results : {};
+        const savedExtractWhat = Array.isArray(savedExtractNode.what) ? savedExtractNode.what : [];
+        const savedExtractAction: Record<string, unknown> = isRecord(savedExtractWhat[0]) ? savedExtractWhat[0] : {};
+        check(
+          "saved scenario version keeps prompt-field extraction instruction",
+          typeof savedExtractAction.instruction === "string" &&
+            savedExtractAction.instruction.includes("title, url") &&
+            savedExtractAction.instruction.includes("추측하지 말고"),
           JSON.stringify(rows.rows[0]),
         );
       });
@@ -918,6 +949,16 @@ async function main(): Promise<void> {
       const paginationLoop: Record<string, unknown> = isRecord(paginationLoopNodeBody.loop) ? paginationLoopNodeBody.loop : {};
       const paginationExtract: Record<string, unknown> = isRecord(paginationNodes.extract_current_page) ? paginationNodes.extract_current_page : {};
       const paginationAdvance: Record<string, unknown> = isRecord(paginationNodes.advance_page) ? paginationNodes.advance_page : {};
+      const paginationExtractWhat = Array.isArray(paginationExtract.what) ? paginationExtract.what : [];
+      const paginationExtractAction: Record<string, unknown> = isRecord(paginationExtractWhat[0]) ? paginationExtractWhat[0] : {};
+      const paginationExtractArgs: Record<string, unknown> = isRecord(paginationExtractAction.args) ? paginationExtractAction.args : {};
+      const paginationExtractSchema: Record<string, unknown> = isRecord(paginationExtractArgs.schema) ? paginationExtractArgs.schema : {};
+      const paginationExtractSchemaProperties: Record<string, unknown> = isRecord(paginationExtractSchema.properties)
+        ? paginationExtractSchema.properties
+        : {};
+      const paginationRowsSchema: Record<string, unknown> = isRecord(paginationExtractSchemaProperties.rows) ? paginationExtractSchemaProperties.rows : {};
+      const paginationRowItemsSchema: Record<string, unknown> = isRecord(paginationRowsSchema.items) ? paginationRowsSchema.items : {};
+      const paginationRowProperties: Record<string, unknown> = isRecord(paginationRowItemsSchema.properties) ? paginationRowItemsSchema.properties : {};
       check(
         "pagination prompt creates bounded loop IR",
         paginationIr.start === "open_start_url" &&
@@ -928,6 +969,13 @@ async function main(): Promise<void> {
           paginationLoop.max_iterations === 4 &&
           paginationExtract.next === "advance_page" &&
           paginationAdvance.next === "paginate_pages",
+        paginationRun.body,
+      );
+      check(
+        "pagination extraction schema preserves prompt fields per page",
+        isRecord(paginationRowProperties.title) &&
+          isRecord(paginationRowProperties.url) &&
+          paginationExtractAction.schema_ref === "generated/paginated_result@1",
         paginationRun.body,
       );
       const paginationParamsSchema: Record<string, unknown> = isRecord(paginationIr.params_schema) ? paginationIr.params_schema : {};
@@ -961,12 +1009,20 @@ async function main(): Promise<void> {
         const savedNodes: Record<string, unknown> = isRecord(savedIr) && isRecord(savedIr.nodes) ? savedIr.nodes : {};
         const savedLoopNodeBody: Record<string, unknown> = isRecord(savedNodes.paginate_pages) ? savedNodes.paginate_pages : {};
         const savedLoop: Record<string, unknown> = isRecord(savedLoopNodeBody.loop) ? savedLoopNodeBody.loop : {};
+        const savedPaginationExtract: Record<string, unknown> = isRecord(savedNodes.extract_current_page) ? savedNodes.extract_current_page : {};
+        const savedPaginationWhat = Array.isArray(savedPaginationExtract.what) ? savedPaginationExtract.what : [];
+        const savedPaginationAction: Record<string, unknown> = isRecord(savedPaginationWhat[0]) ? savedPaginationWhat[0] : {};
         check(
           "pagination run params persist prompt-inferred max_pages",
           isRecord(runParams) && runParams.max_pages === 4 && runParams.start_url === "https://example.com/notices",
           JSON.stringify(runParams),
         );
         check("pagination scenario version persists loop IR", savedLoop.max_iterations === 4, JSON.stringify(savedLoop));
+        check(
+          "pagination scenario version keeps prompt-field extraction instruction",
+          typeof savedPaginationAction.instruction === "string" && savedPaginationAction.instruction.includes("title, url"),
+          JSON.stringify(savedPaginationAction),
+        );
       });
 
       const nextWeekNotices = await app.inject({
