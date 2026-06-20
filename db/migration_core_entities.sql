@@ -607,6 +607,7 @@ CREATE TABLE stagehand_calls (
   cost                    numeric(14,6),
   prompt_template_version text,                             -- 캐시 키·기록(LLMRequest.promptTemplateVersion)
   output_ref              text,                             -- 누적 결과 참조(adapter §6)
+  parsed_json             jsonb,                            -- structured output(LLMResponse.parsedJson) 영속 — 멱등 replay 시 복원. 미영속이면 replay 가 parsedJson 손실(act parseActionPlan/extract 결과 깨짐). scenario_generation 멱등 store 와 대칭.
   input_redacted_ref      text,                             -- 기본 hash만(adapter §6, redacted prompt)
   created_at              timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, idempotency_key)
