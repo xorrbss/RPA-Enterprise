@@ -117,6 +117,72 @@ describe("D7 운영 콘솔 shell", () => {
     expect(bodyCalls).toEqual(["cc000000-0000-0000-0000-000000000003"]);
   });
 
+  test("generation result media artifacts use result list and blob preview", async () => {
+    installObjectUrlMock();
+    const resultListCalls: string[] = [];
+    const blobCalls: string[] = [];
+    renderGenerationArtifactsPanel(
+      fakeClient({
+        listScenarioGenerationArtifacts: async () => {
+          throw new Error("planner artifact route should not be used for result media");
+        },
+        listScenarioGenerationResultArtifacts: async (generationId) => {
+          resultListCalls.push(generationId);
+          return {
+            items: [
+              {
+                artifact_id: "dd000000-0000-0000-0000-000000000004",
+                type: "screen_capture",
+                media_type: "image/png",
+                filename: "result.png",
+                byte_size: 512,
+                duration_ms: null,
+                redaction_status: "redacted",
+                retention_until: null,
+                legal_hold: false,
+                created_at: "2026-06-15T00:00:02.000Z",
+              },
+              {
+                artifact_id: "ee000000-0000-0000-0000-000000000005",
+                type: "run_video",
+                media_type: "video/webm",
+                filename: "result.webm",
+                byte_size: 4096,
+                duration_ms: 1200,
+                redaction_status: "redacted",
+                retention_until: null,
+                legal_hold: false,
+                created_at: "2026-06-15T00:00:03.000Z",
+              },
+            ],
+            next_cursor: null,
+          };
+        },
+        getScenarioGenerationArtifact: async () => {
+          throw new Error("generation-scoped body route should not be used for result media");
+        },
+        getArtifact: async () => {
+          throw new Error("artifact body route should not be used for result media preview");
+        },
+        getArtifactBlob: async (artifactId) => {
+          blobCalls.push(artifactId);
+          return new Blob([new Uint8Array([1, 2, 3])], { type: artifactId.startsWith("ee") ? "video/webm" : "image/png" });
+        },
+      }),
+      "result",
+    );
+
+    const image = await screen.findByRole("img", { name: "result.png" });
+    expect(image).toHaveAttribute("src", "blob:test-preview");
+    expect(screen.getByText("image 1")).toBeInTheDocument();
+    expect(screen.getByText("video 1")).toBeInTheDocument();
+    expect(resultListCalls).toEqual(["gen-page"]);
+    expect(blobCalls).toContain("dd000000-0000-0000-0000-000000000004");
+    fireEvent.click(screen.getByText("run_video").closest("button") as HTMLButtonElement);
+    await waitFor(() => expect(document.querySelector("video")).toHaveAttribute("src", "blob:test-preview"));
+    expect(blobCalls).toContain("ee000000-0000-0000-0000-000000000005");
+  });
+
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", jwt(ALL_ROLES)); // 전 역할 — 명령 버튼 표시 + TokenGate 통과
