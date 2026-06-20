@@ -56,7 +56,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       promotion_status: "draft",
     }),
     getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null, failure_reason: null }),
-    getRunSummary: async () => ({ by_status: {}, success_rate: null, total: 0 }),
+    getRunSummary: async () => ({ by_status: {}, success_rate: null, total: 0, cache: { by_mode: {}, hit_rate: null } }),
     getWorkitem: async (id) => ({ workitem_id: id, status: "processing", unique_reference: "wi", attempts: 2, checked_out_by: "w-00000001", checked_out_at: "2026-06-15T00:00:00.000Z", run_id: "11111111-aaaa-bbbb-cccc-000000000001" }),
     getHumanTask: async (id) => ({ human_task_id: id, state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null }),
     getScenario: async (id) => ({ scenario_id: id, name: "s", version: 1, promotion_status: "draft" }),

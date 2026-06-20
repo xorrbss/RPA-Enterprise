@@ -41,7 +41,7 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
   test("run-status 카드는 getRunSummary by_status 정확 카운트", async () => {
     renderApp(
       fakeClient({
-        getRunSummary: async () => ({ by_status: { failed_business: 2, failed_system: 1, running: 3, completed: 9 }, success_rate: 0.9, total: 15 }),
+        getRunSummary: async () => ({ by_status: { failed_business: 2, failed_system: 1, running: 3, completed: 9 }, success_rate: 0.9, total: 15, cache: { by_mode: {}, hit_rate: null } }),
       }),
     );
     const bizCard = await screen.findByRole("button", { name: /업무 실패/ });
@@ -54,21 +54,23 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
   });
 
   // (a2) 실행 성공률: success_rate(0~1)를 정수 %로 표기.
-  test("실행 성공률 카드는 success_rate를 % 로 표기", async () => {
+  test("실행 성공률·캐시 재사용률 카드는 rate를 % 로 표기", async () => {
     renderApp(
       fakeClient({
-        getRunSummary: async () => ({ by_status: { completed: 9, failed_system: 1 }, success_rate: 0.9, total: 10 }),
+        getRunSummary: async () => ({ by_status: { completed: 9, failed_system: 1 }, success_rate: 0.9, total: 10, cache: { by_mode: { hit: 4, miss: 1 }, hit_rate: 0.8 } }),
       }),
     );
     const rateCard = await screen.findByRole("button", { name: /실행 성공률/ });
     await waitFor(() => expect(rateCard).toHaveTextContent("90%"));
+    const cacheCard = await screen.findByRole("button", { name: /캐시 재사용률/ });
+    await waitFor(() => expect(cacheCard).toHaveTextContent("80%")); // hit 4/(hit4+miss1)=80%
   });
 
   // (a3) 분모 0(종결 run 없음) → success_rate=null → '—'(0/0을 100%/0%로 단정하지 않음).
   test("성공률 분모 0이면 '—'(0/0 단정 금지)", async () => {
     renderApp(
       fakeClient({
-        getRunSummary: async () => ({ by_status: { running: 2 }, success_rate: null, total: 2 }),
+        getRunSummary: async () => ({ by_status: { running: 2 }, success_rate: null, total: 2, cache: { by_mode: {}, hit_rate: null } }),
       }),
     );
     const rateCard = await screen.findByRole("button", { name: /실행 성공률/ });
