@@ -57,9 +57,10 @@ import type {
 } from "../../../ts/runtime-contract";
 import type { CorrelationId, RunId, StepId, TenantId } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
-import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
+import { SPAN, withSpan, recordSiteBlock, type CommonSpanAttrs } from "../observability/telemetry";
 import { applyRunTransition } from "../runtime/run-transition";
 import { applyWorkitemTransition } from "../runtime/workitem-transition";
+import { insertWorkitemDeadLetter, WORKITEM_MAX_ATTEMPTS } from "../runtime/workitem-settlement";
 import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 import { driveClaimedRun, driveResumedRun } from "../runtime/run-step-driver";
@@ -255,6 +256,8 @@ const DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS = 5_000;
 const DEFAULT_ARTIFACT_LIFECYCLE_RETRY_AFTER_MS = 60_000;
 const DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS = 90;
 const DEFAULT_RUN_ABORT_TIMEOUT_MS = 30_000;
+// ops-defaults.md #workitem.checkout_timeout=10m. W1 checkout 시 checkout_expires_at 설정, W6/W7 sweeper 가 만료 판정. 코드 상수 금지 규약 — inline 인용.
+const WORKITEM_CHECKOUT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export async function renewBrowserLease(
   client: pg.PoolClient,
@@ -324,6 +327,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
       case "lease_sweeper":
         return this.handleLeaseSweeper(job);
+
+      case "workitem_checkout_sweeper":
+        return this.handleWorkitemCheckoutSweeper(job);
 
       case "workitem_checkout":
         return this.handleWorkitemCheckout(job);
@@ -726,6 +732,14 @@ export class PgRuntimeWorker implements RuntimeWorker {
         throw new Error("RuntimeWorker: workitem_checkout produced unsupported pending side effects");
       }
 
+      // W1 checkout TTL 확정: checkout_expires_at = now() + ops-defaults #workitem.checkout_timeout(10m).
+      //   checkout-expiry sweeper(W6/W7)가 이 값으로 만료를 판정한다(이전엔 미설정이라 회수 불가 = C2 결함).
+      await client.query(
+        `UPDATE workitems SET checkout_expires_at = now() + ($3::bigint * interval '1 millisecond')
+          WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+        [tenantId, workitemId, WORKITEM_CHECKOUT_TIMEOUT_MS],
+      );
+
       return {
         kind: "completed",
         emittedEvents: transition.emitted.map((e) => e.eventId as EventId),
@@ -752,6 +766,54 @@ export class PgRuntimeWorker implements RuntimeWorker {
             AND locked_until < now()`,
         [tenantId],
       );
+    });
+    return { kind: "completed", emittedEvents: [] };
+  }
+
+  /**
+   * checkout-expiry sweeper(C2 — state-machine.md W6/W7). 만료된 processing workitem(checkout_expires_at < now())을
+   * 회수한다: attempts<max → W6 retry(백오프 후 재checkout 대상), attempts>=max → W7 abandoned + dead_letter.
+   * W9 pause 중(checkout_paused_at IS NOT NULL)인 suspend workitem 은 제외(만료 오발 방지). 워커 크래시로 끊긴 checkout
+   * 의 유일한 자동 회수 안전망 — 이게 없으면 끊긴 작업은 영구 정지(운영자 수동 개입 필요).
+   */
+  private async handleWorkitemCheckoutSweeper(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
+    const tenantId = requireString(job.tenantId, "workitem_checkout_sweeper.tenantId");
+    const correlationId = requireString(job.correlationId, "workitem_checkout_sweeper.correlationId");
+    await withTenantTx(this.pool, tenantId, async (client) => {
+      const expired = await client.query<{ id: string; attempts: number; run_id: string | null }>(
+        `SELECT w.id::text AS id, w.attempts, r.id::text AS run_id
+           FROM workitems w
+           LEFT JOIN runs r ON r.tenant_id = w.tenant_id AND r.workitem_id = w.id
+          WHERE w.tenant_id = $1::uuid
+            AND w.status = 'processing'
+            AND w.checkout_paused_at IS NULL
+            AND w.checkout_expires_at IS NOT NULL
+            AND w.checkout_expires_at < now()
+          FOR UPDATE OF w SKIP LOCKED`,
+        [tenantId],
+      );
+      for (const w of expired.rows) {
+        const t = await applyWorkitemTransition(client, {
+          tenantId,
+          workitemId: w.id,
+          fromStatus: "processing",
+          event: { type: "checkout_expired" },
+          guard: { attemptsBelowMax: w.attempts + 1 < WORKITEM_MAX_ATTEMPTS },
+          correlationId,
+          ...(w.run_id !== null ? { runId: w.run_id } : {}),
+          eventIdempotencyKey: `${w.id}:checkout_expired:${w.attempts}`,
+        });
+        if (!t.applied) continue; // 동시 변경(다른 워커가 이미 정산) — 흡수.
+        if (t.next === "abandoned") {
+          // W7: dead_letter 생성. run 연관은 runs.workitem_id(있으면) 로, 없으면 null.
+          await insertWorkitemDeadLetter(client, {
+            tenantId,
+            workitemId: w.id,
+            runId: w.run_id,
+            reasonCode: "DEAD_LETTER",
+          });
+        }
+      }
     });
     return { kind: "completed", emittedEvents: [] };
   }
@@ -1212,6 +1274,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
       return { kind: "failed", code: "RESOURCE_NOT_FOUND" };
     }
     if (site.risk === "red" && !site.approved) {
+      recordSiteBlock({ tenant_id: input.tenantId }); // §E site_block_rate. bootstrap 전이면 no-op meter.
       return { kind: "failed", code: "SITE_PROFILE_BLOCKED" };
     }
 

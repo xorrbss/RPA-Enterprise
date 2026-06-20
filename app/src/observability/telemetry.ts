@@ -73,6 +73,7 @@ let llmTtfbHistogram: Histogram | undefined;
 let runTerminalCounter: Counter | undefined;
 let cacheLookupCounter: Counter | undefined;
 let challengeCounter: Counter | undefined;
+let siteBlockCounter: Counter | undefined;
 
 /** llm_cost(USD 누적) 기록. attrs는 저카디널리티(tenant_id/model)만 — run_id 등 고카디널리티 금지. */
 export function recordLlmCost(cost: number, attrs: { tenant_id: string; model: string }): void {
@@ -124,6 +125,16 @@ export function recordChallenge(attrs: { tenant_id: string }): void {
     });
   }
   challengeCounter.add(1, { tenant_id: attrs.tenant_id });
+}
+
+/** site_block_rate(§E) — SITE_PROFILE_BLOCKED(red 미승인) 런타임 거부 수를 카운트한다(백엔드가 발생률 산출). */
+export function recordSiteBlock(attrs: { tenant_id: string }): void {
+  if (siteBlockCounter === undefined) {
+    siteBlockCounter = getMeter().createCounter(METRIC.siteBlockRate, {
+      description: "SITE_PROFILE_BLOCKED 런타임 거부 수(백엔드가 발생률 산출)",
+    });
+  }
+  siteBlockCounter.add(1, { tenant_id: attrs.tenant_id });
 }
 
 function commonToAttributes(c: CommonSpanAttrs): Attributes {

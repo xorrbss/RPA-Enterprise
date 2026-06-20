@@ -160,9 +160,13 @@ function assertExactPendingKinds(
   }
 }
 
-async function insertWorkitemDeadLetter(
+/**
+ * workitem 차원 dead_letter INSERT (W5 run-system-failure / W7 checkout-expired 공용). run_id 는 nullable —
+ * checkout_expired(W7)는 run 연관이 runs.workitem_id 로만 존재해 미연결(null)일 수 있다(dead_letter.run_id 는 nullable FK).
+ */
+export async function insertWorkitemDeadLetter(
   client: PoolClient,
-  input: { tenantId: string; workitemId: string; runId: string; reasonCode: ErrorCode; evidenceRef?: string },
+  input: { tenantId: string; workitemId: string; runId: string | null; reasonCode: ErrorCode; evidenceRef?: string },
 ): Promise<void> {
   await client.query(
     `INSERT INTO dead_letter (id, tenant_id, workitem_id, run_id, reason_code, evidence_ref, replayable)
