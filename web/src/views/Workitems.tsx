@@ -6,7 +6,7 @@ import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
-import { StatusBadge, statusLabel } from "../components/badges";
+import { StatusBadge, statusLabel, errorCodeLabel } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, navigate, useHashParam } from "../router";
 import { WORKITEM_STATES } from "./filters";
@@ -22,10 +22,6 @@ export function WorkitemsView(): JSX.Element {
   const sinkDlq = useListView<DeadLetterItem>(["dlq", "sink"], (p) => api.listDlq("sink", p), { refetchInterval: POLL_MS });
   const wiDlqItems = wiDlq.query.data?.items ?? [];
   const sinkDlqItems = sinkDlq.query.data?.items ?? [];
-  // TODO: [BLOCKED] DLQ 실패 사유(reason_code)·발생시각 컬럼
-  //   violated: 조용한 false/가정 금지 — 응답에 없는 값을 표에 채우지 않는다
-  //   reason: reason_code(migration_core_entities)·created_at 컬럼은 DB에 있으나 GET /v1/dlq 응답(reads.ts)에 미투영 → DeadLetterItem 타입에 없음
-  //   required_change: reads.ts SELECT/projection + api/types.ts DeadLetterItem에 reason_code/created_at 추가(백엔드) → 그 후 web 표 컬럼 추가
   // TODO: [BLOCKED] sink DLQ 재처리 후 행 소거
   //   violated: 구조 무결성 — workitem은 replayed_at 마킹으로 목록에서 빠지나 sink는 동등 표식이 없어 재처리 후 행이 잔류
   //   reason: applySinkDeadLetterReplay가 dead_letter 행 status를 안 바꾸고 새 attempt만 인큐(app/src/api/dlq.ts), GET /v1/dlq?kind=sink가 잔류 행 반환
@@ -91,6 +87,9 @@ export function WorkitemsView(): JSX.Element {
           { header: "DLQ ID", render: (r) => <code>{r.dead_letter_id.slice(0, 8)}</code> },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
           { header: "원본", render: (r) => (r.source_id ? <code>{r.source_id.slice(0, 8)}</code> : "—") },
+          // reason_code(error-catalog ErrorCode)는 한국어 라벨로, 미매핑은 raw 폴백(errorCodeLabel). 부재 시 "—"(조용한 공백 금지).
+          { header: "사유", render: (r) => (r.reason_code ? errorCodeLabel(r.reason_code) : "—") },
+          { header: "발생", render: (r) => (r.created_at ? new Date(r.created_at).toLocaleString() : "—") },
           {
             header: "작업",
             render: (r) => (

@@ -456,6 +456,11 @@ async function main(): Promise<void> {
         dlq.json().items.every((d: { kind: string; status: string; source_id: string }) => d.kind === "workitem" && d.status === "DEAD_LETTER") &&
         dlq.json().items.some((d: { dead_letter_id: string; source_id: string }) => d.dead_letter_id === DL1 && d.source_id === WI3),
         JSON.stringify(dlq.json().items));
+      // reason_code(error-catalog ErrorCode)·created_at 투영(workitem 한정). seedDeadLetter는 reason_code='WORKITEM_CHECKOUT_CONFLICT'.
+      check("workitem DLQ projects reason_code + created_at(ISO)",
+        dlq.json().items.every((d: { reason_code: string; created_at: string }) =>
+          d.reason_code === "WORKITEM_CHECKOUT_CONFLICT" && typeof d.created_at === "string" && !Number.isNaN(Date.parse(d.created_at))),
+        JSON.stringify(dlq.json().items));
       // sink DLQ(데이터평면): tenant A 2 dead_letter, delivered 1건 제외, kind=sink/status=DEAD_LETTER.
       const dlqSink = await get("/v1/dlq?kind=sink");
       check("dlq kind=sink → 2 dead_letter (delivered excluded)", dlqSink.statusCode === 200 && dlqSink.json().items.length === 2, dlqSink.body);
@@ -463,6 +468,10 @@ async function main(): Promise<void> {
         dlqSink.json().items.every((d: { kind: string; status: string }) => d.kind === "sink" && d.status === "DEAD_LETTER") &&
         dlqSink.json().items.some((d: { dead_letter_id: string; source_id: string; sink_idempotency_key: string }) =>
           d.dead_letter_id === SINK_DL2 && typeof d.source_id === "string" && d.sink_idempotency_key.includes("snk-a2")),
+        JSON.stringify(dlqSink.json().items));
+      // 날조 금지: sink_deliveries엔 reason_code 컬럼이 없어 sink DLQ 항목은 reason_code 미제공(undefined).
+      check("sink DLQ omits reason_code (의도된 부재)",
+        dlqSink.json().items.every((d: { reason_code?: string }) => d.reason_code === undefined),
         JSON.stringify(dlqSink.json().items));
       const dlqSinkB = await get("/v1/dlq?kind=sink", viewerB);
       check("tenant B sink DLQ isolation (1)", dlqSinkB.json().items.length === 1, JSON.stringify(dlqSinkB.json().items));

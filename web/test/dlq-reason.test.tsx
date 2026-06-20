@@ -1,0 +1,66 @@
+import { beforeEach, describe, expect, test } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+import { App } from "../src/App";
+import { ApiClientProvider } from "../src/api/context";
+import type { ApiClient } from "../src/api/client";
+import { fakeClient } from "./fake-client";
+
+// workitem DLQ 표의 '사유'(reason_code → errorCodeLabel)·'발생'(created_at) 컬럼.
+// reads.ts가 workitem DLQ만 두 필드를 투영(sink는 부재) — 표는 응답에 있는 값만 그린다(날조 금지).
+function renderApp(client: ApiClient): void {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <ApiClientProvider client={client}>
+        <App />
+      </ApiClientProvider>
+    </QueryClientProvider>,
+  );
+}
+function jwt(roles: readonly string[]): string {
+  const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `e30.${payload}.sig`;
+}
+
+describe("workitem DLQ — 사유·발생 컬럼", () => {
+  beforeEach(() => {
+    location.hash = "";
+    localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
+  });
+
+  // 매핑된 reason_code → 한국어 라벨 + created_at 로컬 포맷.
+  test("reason_code 매핑 라벨 + created_at 표시", async () => {
+    const createdAt = "2026-06-16T03:04:05.000Z";
+    renderApp(
+      fakeClient({
+        listDlq: async (kind) =>
+          kind === "workitem"
+            ? { items: [{ dead_letter_id: "dl-aaaa1111", kind: "workitem", status: "DEAD_LETTER", source_id: "wi-bbbb2222", reason_code: "WORKITEM_CHECKOUT_CONFLICT", created_at: createdAt }], next_cursor: null }
+            : { items: [], next_cursor: null },
+      }),
+    );
+    location.hash = "#workitems";
+    const cell = await screen.findByText("dl-aaaa1111".slice(0, 8));
+    const row = cell.closest("tr") as HTMLElement;
+    expect(within(row).getByText("재시도됩니다.")).toBeInTheDocument(); // errorCodeLabel(WORKITEM_CHECKOUT_CONFLICT)
+    expect(within(row).getByText(new Date(createdAt).toLocaleString())).toBeInTheDocument();
+  });
+
+  // 미매핑 reason_code → raw 코드 폴백(조용한 공백 금지).
+  test("미매핑 reason_code는 raw 폴백", async () => {
+    renderApp(
+      fakeClient({
+        listDlq: async (kind) =>
+          kind === "workitem"
+            ? { items: [{ dead_letter_id: "dl-cccc3333", kind: "workitem", status: "DEAD_LETTER", source_id: null, reason_code: "VERIFY_FAILED", created_at: "2026-06-16T00:00:00.000Z" }], next_cursor: null }
+            : { items: [], next_cursor: null },
+      }),
+    );
+    location.hash = "#workitems";
+    const cell = await screen.findByText("dl-cccc3333".slice(0, 8));
+    const row = cell.closest("tr") as HTMLElement;
+    expect(within(row).getByText("VERIFY_FAILED")).toBeInTheDocument(); // raw 폴백(ERROR_LABELS 미매핑 코드)
+  });
+});

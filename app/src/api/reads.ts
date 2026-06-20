@@ -75,6 +75,7 @@ interface WorkitemRow {
 interface DeadLetterRow {
   id: string;
   workitem_id: string | null;
+  reason_code: string;
   created_at: Date;
 }
 
@@ -591,7 +592,7 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<DeadLetterRow>(
-        `SELECT id, workitem_id, created_at
+        `SELECT id, workitem_id, reason_code, created_at
            FROM dead_letter
           WHERE tenant_id = $1::uuid
             AND replayed_at IS NULL
@@ -609,6 +610,9 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
         kind: "workitem",
         status: "DEAD_LETTER",
         source_id: r.workitem_id,
+        // reason_code(error-catalog ErrorCode)·created_at은 workitem DLQ만 투영(sink는 부재 — api-surface §4).
+        reason_code: r.reason_code,
+        created_at: r.created_at.toISOString(),
       })),
     );
   });
