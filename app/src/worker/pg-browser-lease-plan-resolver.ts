@@ -5,10 +5,12 @@
  *   run → scenario_version → ir.target (the scenario-declared {site_profile_id, browser_identity_id,
  *   network_policy_id}; see schema/ir.schema.json `target`).
  *
- * Returns null when the scenario declares no (or a malformed) target → the worker LOUD-THROWS (fail-closed;
- * "조용한 false 금지" — a scenario must declare its target to be driven). The query is tenant-scoped and runs
- * inside the worker's tenant transaction (RLS-enforced); the actual existence/approval/identity-tuple checks
- * happen at lease acquisition (FK + SITE_PROFILE_BLOCKED gate) downstream.
+ * Returns null when the scenario declares no (or a malformed) target. PRIMARY guard is at run-create
+ * (createRunInTx rejects a missing/malformed ir.target with IR_SCHEMA_INVALID/run_target_unresolved BEFORE
+ * queuing), so a queued run normally carries a well-formed target; this resolver is the runtime mirror /
+ * defense-in-depth — on null the worker fails closed (acquireBrowserLease→failed→loud throw; "조용한 false
+ * 금지"). The query is tenant-scoped and runs inside the worker's tenant transaction (RLS-enforced); the
+ * actual existence/approval/identity-tuple checks happen at lease acquisition (FK + SITE_PROFILE_BLOCKED) downstream.
  */
 import type { BrowserLeasePlan, BrowserLeasePlanResolver } from "./runtime-worker";
 

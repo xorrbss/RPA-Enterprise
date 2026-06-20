@@ -66,7 +66,7 @@ async function seedScenario(pool: ReturnType<typeof createPool>, tenant: string,
     await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1::uuid,$2::uuid,'gap2')`, [scenario, tenant]);
     await c.query(
       `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir)
-       VALUES ($1::uuid,$2::uuid,$3::uuid,1,'draft','{"nodes":[]}'::jsonb)`,
+       VALUES ($1::uuid,$2::uuid,$3::uuid,1,'draft','{"nodes":[],"target":{"site_profile_id":"00000000-0000-4000-8000-0000000000a1","browser_identity_id":"00000000-0000-4000-8000-0000000000a2","network_policy_id":"00000000-0000-4000-8000-0000000000a3"}}'::jsonb)`,
       [sver, tenant, scenario],
     );
   });

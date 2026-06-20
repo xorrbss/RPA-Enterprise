@@ -66,15 +66,15 @@ async function seed(pool: Pool): Promise<void> {
   // tenant A: 수집 시나리오 + 완료 run(source) + DECIDE 시나리오(prod).
   await withTenantTx(pool, TENANT_A, async (c) => {
     await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'하이웍스 결재 수집')`, [SCEN_A, TENANT_A]);
-    await c.query(`INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'prod','{}'::jsonb)`, [SVER_A, TENANT_A, SCEN_A]);
+    await c.query(`INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'prod','{"target":{"site_profile_id":"00000000-0000-4000-8000-0000000000a1","browser_identity_id":"00000000-0000-4000-8000-0000000000a2","network_policy_id":"00000000-0000-4000-8000-0000000000a3"}}'::jsonb)`, [SVER_A, TENANT_A, SCEN_A]);
     await c.query(`INSERT INTO runs (id, tenant_id, scenario_version_id, correlation_id, status) VALUES ($1,$2,$3,$4,'completed')`, [SOURCE_RUN_A, TENANT_A, SVER_A, SOURCE_RUN_A]);
     await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'하이웍스 결재 처리')`, [DECIDE_SCEN_A, TENANT_A]);
-    await c.query(`INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'prod','{}'::jsonb)`, [DECIDE_SVER_A, TENANT_A, DECIDE_SCEN_A]);
+    await c.query(`INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'prod','{"target":{"site_profile_id":"00000000-0000-4000-8000-0000000000a1","browser_identity_id":"00000000-0000-4000-8000-0000000000a2","network_policy_id":"00000000-0000-4000-8000-0000000000a3"}}'::jsonb)`, [DECIDE_SVER_A, TENANT_A, DECIDE_SCEN_A]);
   });
   // tenant B: 수집 + source run(cross-tenant 격리 테스트용).
   await withTenantTx(pool, TENANT_B, async (c) => {
     await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'하이웍스 결재 수집')`, [SCEN_B, TENANT_B]);
-    await c.query(`INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'prod','{}'::jsonb)`, [SVER_B, TENANT_B, SCEN_B]);
+    await c.query(`INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'prod','{"target":{"site_profile_id":"00000000-0000-4000-8000-0000000000a1","browser_identity_id":"00000000-0000-4000-8000-0000000000a2","network_policy_id":"00000000-0000-4000-8000-0000000000a3"}}'::jsonb)`, [SVER_B, TENANT_B, SCEN_B]);
     await c.query(`INSERT INTO runs (id, tenant_id, scenario_version_id, correlation_id, status) VALUES ($1,$2,$3,$4,'completed')`, [SOURCE_RUN_B, TENANT_B, SVER_B, SOURCE_RUN_B]);
   });
 }

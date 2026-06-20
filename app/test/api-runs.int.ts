@@ -92,7 +92,7 @@ async function seedTenantRun(
     await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'d41')`, [scenario, tenant]);
     await c.query(
       `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir)
-       VALUES ($1,$2,$3,1,'draft','{"nodes":[]}'::jsonb)`,
+       VALUES ($1,$2,$3,1,'draft','{"nodes":[],"target":{"site_profile_id":"00000000-0000-4000-8000-0000000000a1","browser_identity_id":"00000000-0000-4000-8000-0000000000a2","network_policy_id":"00000000-0000-4000-8000-0000000000a3"}}'::jsonb)`,
       [sver, tenant, scenario],
     );
     await c.query(
@@ -785,6 +785,38 @@ async function main(): Promise<void> {
       });
       check("nonexistent workitem_id → 422", badWi.statusCode === 422, badWi.body);
       check("nonexistent workitem → IR_SCHEMA_INVALID", badWi.json().code === "IR_SCHEMA_INVALID", badWi.body);
+
+      // 6l) ir.target 누락/형식오류 → 생성 시점 거부(IR_SCHEMA_INVALID/run_target_unresolved).
+      //   조용한 queued 잔류 + 워커 재시도 폭주 방지(워커 BrowserLeasePlanResolver→null fail-closed 의 생성-시점 미러).
+      const SVER_NO_TARGET = "10000000-0000-0000-0000-0000000000ac";
+      const SVER_BAD_TARGET = "10000000-0000-0000-0000-0000000000ad";
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        await c.query(
+          `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir)
+           VALUES ($1,$2,$3,2,'draft','{"nodes":[]}'::jsonb),
+                  ($4,$2,$3,3,'draft','{"nodes":[],"target":{"site_profile_id":"s","browser_identity_id":"b"}}'::jsonb)`,
+          [SVER_NO_TARGET, TENANT_A, SCENARIO_A, SVER_BAD_TARGET],
+        );
+      });
+      const enqueuedBefore6l = enqueued.length;
+      const noTarget = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-notarget" },
+        payload: { scenario_version_id: SVER_NO_TARGET, params: {} },
+      });
+      check("missing ir.target → 422", noTarget.statusCode === 422, noTarget.body);
+      check("missing ir.target → IR_SCHEMA_INVALID", noTarget.json().code === "IR_SCHEMA_INVALID", noTarget.body);
+      check("missing ir.target → run_target_unresolved", noTarget.json().details?.reason === "run_target_unresolved", noTarget.body);
+      const badTarget = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-badtarget" },
+        payload: { scenario_version_id: SVER_BAD_TARGET, params: {} },
+      });
+      check("malformed ir.target → 422", badTarget.statusCode === 422, badTarget.body);
+      check("malformed ir.target → run_target_unresolved", badTarget.json().details?.reason === "run_target_unresolved", badTarget.body);
+      check("rejected target creates enqueue nothing", enqueued.length === enqueuedBefore6l, `delta=${enqueued.length - enqueuedBefore6l}`);
     } finally {
       await app.close();
     }
