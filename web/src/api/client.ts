@@ -41,6 +41,7 @@ export interface ApiClient {
   // run 하위 artifact 목록(api-surface §5). metadata-only(본문은 artifact_id→getArtifact).
   listRunArtifacts(runId: string, p?: ListParams): Promise<Paginated<RunArtifactItem>>;
   listScenarioGenerationArtifacts(generationId: string, p?: ListParams): Promise<Paginated<GenerationArtifactItem>>;
+  listScenarioGenerationResultArtifacts(generationId: string, p?: ListParams): Promise<Paginated<GenerationArtifactItem>>;
   listWorkitems(p?: ListParams): Promise<Paginated<WorkitemItem>>;
   listHumanTasks(p?: ListParams): Promise<Paginated<HumanTaskItem>>;
   listDlq(kind: "workitem" | "sink", p?: ListParams): Promise<Paginated<DeadLetterItem>>;
@@ -216,6 +217,8 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listRunSteps: (runId, p) => get(`/v1/runs/${runId}/steps${queryString(p)}`),
     listRunArtifacts: (runId, p) => get(`/v1/runs/${runId}/artifacts${queryString(p)}`),
     listScenarioGenerationArtifacts: (generationId, p) => get(`/v1/scenario-generations/${generationId}/artifacts${queryString(p)}`),
+    listScenarioGenerationResultArtifacts: (generationId, p) =>
+      get(`/v1/scenario-generations/${generationId}/result-artifacts${queryString(p)}`),
     listWorkitems: (p) => get(`/v1/workitems${queryString(p)}`),
     listHumanTasks: (p) => get(`/v1/human-tasks${queryString(p)}`),
     listDlq: (kind, p) => get(`/v1/dlq${queryString({ ...p, kind })}`),

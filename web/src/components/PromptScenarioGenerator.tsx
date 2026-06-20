@@ -1021,6 +1021,9 @@ function GenerationResult({
         </ul>
       )}
       <GenerationArtifactsPanel generationId={result.generation_id} />
+      {result.run_id !== null && (
+        <GenerationArtifactsPanel generationId={result.generation_id} source="result" title="실행 결과 산출물" />
+      )}
       {canRunWithCorrections && (
         <>
           <button

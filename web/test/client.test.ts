@@ -71,6 +71,14 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
   });
 
+  test("listScenarioGenerationResultArtifacts → GET /v1/scenario-generations/{id}/result-artifacts + Bearer", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listScenarioGenerationResultArtifacts("gen-9", { limit: 50 });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations/gen-9/result-artifacts?limit=50");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
   test("abortRun → POST .../abort + Idempotency-Key + 빈 body", async () => {
     const { calls, client } = harness({ body: { status: "cancelled" } });
     await client.abortRun("run-1", "idem-abc");

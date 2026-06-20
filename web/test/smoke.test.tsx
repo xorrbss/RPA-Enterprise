@@ -20,12 +20,12 @@ function renderApp(client: ApiClient = fakeClient()): void {
   );
 }
 
-function renderGenerationArtifactsPanel(client: ApiClient): void {
+function renderGenerationArtifactsPanel(client: ApiClient, source: "planner" | "result" = "planner"): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
       <ApiClientProvider client={client}>
-        <GenerationArtifactsPanel generationId="gen-page" />
+        <GenerationArtifactsPanel generationId="gen-page" source={source} />
       </ApiClientProvider>
     </QueryClientProvider>,
   );
@@ -62,6 +62,61 @@ function installObjectUrlMock(): void {
 const ALL_ROLES = ["viewer", "operator", "reviewer", "approver", "admin"];
 
 describe("D7 운영 콘솔 shell", () => {
+  test("generation result artifacts use the linked-run result route and global artifact body gate", async () => {
+    const resultListCalls: Array<{ generationId: string; cursor: string | undefined }> = [];
+    const bodyCalls: string[] = [];
+    renderGenerationArtifactsPanel(
+      fakeClient({
+        listScenarioGenerationArtifacts: async () => {
+          throw new Error("planner artifact route should not be used for result source");
+        },
+        listScenarioGenerationResultArtifacts: async (generationId, params) => {
+          resultListCalls.push({ generationId, cursor: params?.cursor });
+          return {
+            items: [{
+              artifact_id: "cc000000-0000-0000-0000-000000000003",
+              type: "extract_result_json",
+              media_type: "application/json",
+              filename: "result.json",
+              byte_size: 128,
+              duration_ms: null,
+              redaction_status: "redacted",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:02.000Z",
+            }],
+            next_cursor: null,
+          };
+        },
+        getScenarioGenerationArtifact: async () => {
+          throw new Error("generation-scoped body route should not be used for result source");
+        },
+        getArtifact: async (artifactId) => {
+          bodyCalls.push(artifactId);
+          return {
+            artifact_id: artifactId,
+            type: "extract_result_json",
+            media_type: "application/json",
+            filename: "result.json",
+            byte_size: 128,
+            duration_ms: null,
+            sha256: "result-sha",
+            redaction_status: "redacted",
+            retention_until: null,
+            content: '{"rows":[{"total":3}]}',
+          };
+        },
+      }),
+      "result",
+    );
+
+    expect(await screen.findByText("실행 결과 산출물")).toBeInTheDocument();
+    expect(await screen.findByText("extract_result_json")).toBeInTheDocument();
+    expect(await screen.findByText(/total/)).toBeInTheDocument();
+    expect(resultListCalls).toEqual([{ generationId: "gen-page", cursor: undefined }]);
+    expect(bodyCalls).toEqual(["cc000000-0000-0000-0000-000000000003"]);
+  });
+
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", jwt(ALL_ROLES)); // 전 역할 — 명령 버튼 표시 + TokenGate 통과

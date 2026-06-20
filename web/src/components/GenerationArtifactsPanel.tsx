@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
-import type { GenerationArtifactItem } from "../api/types";
+import type { ArtifactDetail, GenerationArtifactItem } from "../api/types";
 import { ArtifactRef } from "./ArtifactLookup";
 import { ArtifactMediaPreview } from "./ArtifactMediaPreview";
 import { errorLabel } from "./badges";
+
+type GenerationArtifactSource = "planner" | "result";
 
 function formatArtifactBytes(bytes: number | null | undefined): string | null {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return null;
@@ -73,19 +75,32 @@ function previewText(content: string): string {
   }
 }
 
+function defaultTitle(source: GenerationArtifactSource): string {
+  return source === "result" ? "실행 결과 산출물" : "Planner 산출물";
+}
+
+function emptyMessage(source: GenerationArtifactSource): string {
+  return source === "result"
+    ? "표시할 실행 결과 산출물이 없습니다. 이미지나 동영상 증거는 redaction 처리 중일 수 있습니다."
+    : "표시할 planner 산출물이 없습니다. redaction 처리 중일 수 있습니다.";
+}
+
 export function GenerationArtifactsPanel({
   generationId,
-  title = "Planner 산출물",
+  source = "planner",
+  title,
 }: {
   generationId: string;
+  source?: GenerationArtifactSource;
   title?: string;
 }): JSX.Element {
   const api = useApiClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const panelTitle = title ?? defaultTitle(source);
   const list = useInfiniteQuery({
-    queryKey: ["scenario-generation-artifacts", generationId],
+    queryKey: ["scenario-generation-artifacts", source, generationId],
     queryFn: ({ pageParam }) =>
-      api.listScenarioGenerationArtifacts(generationId, {
+      (source === "result" ? api.listScenarioGenerationResultArtifacts : api.listScenarioGenerationArtifacts)(generationId, {
         limit: 20,
         ...(typeof pageParam === "string" ? { cursor: pageParam } : {}),
       }),
@@ -114,23 +129,27 @@ export function GenerationArtifactsPanel({
   }, [items, preferred?.artifact_id, selectedId]);
   const selected = items.find((item) => item.artifact_id === effectiveSelectedId);
   const selectedMediaType = previewGenerationArtifactMediaType(selected);
-  const detail = useQuery({
-    queryKey: ["scenario-generation-artifact", generationId, effectiveSelectedId],
-    queryFn: () => api.getScenarioGenerationArtifact(generationId, effectiveSelectedId as string),
+  const detail = useQuery<ArtifactDetail>({
+    queryKey: ["scenario-generation-artifact", source, generationId, effectiveSelectedId],
+    queryFn: () => (
+      source === "result"
+        ? api.getArtifact(effectiveSelectedId as string)
+        : api.getScenarioGenerationArtifact(generationId, effectiveSelectedId as string)
+    ),
     enabled: effectiveSelectedId !== null && selectedMediaType === null,
   });
 
   return (
     <div className="generation-artifacts" aria-label="generation artifacts">
       <div className="generation-artifacts-head">
-        <strong>{title}</strong>
+        <strong>{panelTitle}</strong>
         {items.length > 0 && <span className="badge muted">{items.length}{hasMore ? "+" : ""}건</span>}
         {hasMore && <span className="badge amber">더 있음</span>}
         {summary.images > 0 && <span className="badge blue">image {summary.images}</span>}
         {summary.videos > 0 && <span className="badge amber">video {summary.videos}</span>}
         {hasMore && (
           <button className="linklike" type="button" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
-            {list.isFetchingNextPage ? "더 불러오는 중" : "더 보기"}
+            {list.isFetchingNextPage ? "불러오는 중" : "더 보기"}
           </button>
         )}
         <button className="linklike" type="button" onClick={() => void list.refetch()}>
@@ -142,7 +161,7 @@ export function GenerationArtifactsPanel({
       ) : list.isError ? (
         <p className="form-alert red">{errorLabel(list.error)}</p>
       ) : items.length === 0 && !hasMore ? (
-        <p className="muted">표시할 planner 산출물이 없습니다. redaction 처리 중일 수 있습니다.</p>
+        <p className="muted">{emptyMessage(source)}</p>
       ) : (
         <div className="generation-artifact-grid">
           <div className="generation-artifact-list">
