@@ -51,6 +51,7 @@ import {
   assertInProcessArtifactStoreCompatibility,
   loadApiConfig,
   loadApiSessionEncryption,
+  loadArtifactLifecycleConsumer,
   loadArtifactLifecycleWorkerConfig,
   loadBrowserConfig,
   loadCommonConfig,
@@ -564,9 +565,14 @@ async function main(): Promise<void> {
   let worker: StartedWorker | undefined;
   let lifecycleRunner: ArtifactLifecycleRunner | undefined;
 
+  // N1 fail-closed: RUN_MODE=worker 는 run-drive 가 artifact lifecycle job 을 인큐하므로 소비자 토폴로지를 명시 선언해야
+  //   한다(미선언이면 loadArtifactLifecycleConsumer 가 throw — startWorker 전에 fail-fast). self → lifecycle-worker 인-프로세스 동반.
+  const workerLifecycleConsumer = mode === "worker" ? loadArtifactLifecycleConsumer() : undefined;
+
   if (mode === "api" || mode === "all") api = await startApi(pool, common, mode);
   if (mode === "worker" || mode === "all") worker = await startWorker(pool, common);
-  if (mode === "lifecycle-worker" || mode === "all") lifecycleRunner = await startArtifactLifecycleWorker();
+  if (mode === "lifecycle-worker" || mode === "all" || workerLifecycleConsumer === "self")
+    lifecycleRunner = await startArtifactLifecycleWorker();
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
