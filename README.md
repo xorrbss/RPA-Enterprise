@@ -797,3 +797,25 @@
 | 백엔드 | `scenario-generations.ts` target inference를 `inferRuntimeTargetForStartUrl`로 추출해 생성·보정 실행 양쪽에서 재사용 |
 | 계약 | `api-surface.md` `/v1/scenario-generations/{generation_id}/run` 설명에 start_url-only 추론 규칙 추가 |
 | 검증 | `api-scenario-generations.int.ts` start_url-only correction → inferred target run_queued 회귀 추가 |
+
+## v2.27 패치 로그 (담당자 name-picker 기반 — `principals` 디렉터리 엔티티 신설)
+
+> human_tasks.assignee(= JWT sub, PrincipalId)를 사람이 **이름으로** 배정할 수 있도록 테넌트별 주체 디렉터리를 신설한다.
+> assignee의 자유형 text 정합(선행 수정)에 이어 이름↔sub 매핑의 데이터 소스를 계약으로 고정했다. 쓰기 경로 2개:
+> JWT optional `name` 클레임 자동 upsert(source='jwt') + admin 수동 등록(source='manual', 후속 슬라이스). human_tasks.assignee →
+> principals FK는 **의도적으로 두지 않는다**(디렉터리 미등록 sub 배정도 허용 — 자유형 정책 보존). 표시이름(name 클레임)이
+> 없으면 디렉터리에 동기화하지 않는다(이름 없는 항목 금지).
+>
+> **통합 비고**: 병렬로 머지된 식별자-only picker(`GET /v1/principals` = `human_tasks.assignee ∪ approval_decisions.decided_by`
+> distinct 합집합, 표시명 없음)를 본 디렉터리 기반(표시명 포함)으로 **업그레이드**했다. 엔드포인트의 합집합 쿼리·전용
+> text 커서는 제거하고 `principals` 테이블 조회+공유 keyset으로 교체하며, web datalist를 `value=sub`·`label=display_name`
+> 으로 바꿔 **이름으로 고르는** picker를 완성했다(자유 입력 폴백 유지).
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| principals 테이블 | `db/migration_core_entities.sql` | `id(PK)·tenant_id·sub(text)·display_name·email·source('jwt'\|'manual')·created_at·updated_at`, UNIQUE(tenant_id, sub). RLS tenant_isolation 루프 + db smoke 3곳(`migration_smoke.sql`·`db-static-smoke.mjs`) 동기화 |
+| RBAC | `ts/security-middleware-contract.ts`·`ts/rbac-policy.ts`·`auth-rbac.md §2` | `principal.read`(viewer+) 추가(디렉터리 조회). admin 수동 CRUD용 `principal.manage`는 후속 |
+| GET 엔드포인트 | `api-surface.md §3`·`ts/control-plane-contract.ts`·`app/src/api/reads.ts`·`codegen/openapi.yaml` | `GET /v1/principals`를 식별자-only 합집합→`principals` 테이블 조회(표시명 포함)로 교체. 커서 페이지(item: `principal_id`/`sub`/`display_name`/`email`/`source`) |
+| JWT upsert | `app/src/api/principal-directory.ts`·`app/src/api/server.ts` | 인증 성공 시 `name` 클레임 best-effort upsert(인증과 무관한 부수효과·실패 시 요청 진행 + log.warn). 기존 행 갱신 시 source 보존(manual 비파괴), name/email 길이 캡 |
+| web picker | `web/src/views/HumanTasks.tsx`·`web/src/components/ActionButton.tsx`·`web/src/api/types.ts` | datalist를 `value=sub`(배정값)·`label=display_name`(표시이름)으로 업그레이드 — 이름으로 선택, 자유 입력 폴백 유지 |
+| 검증 | `app/test/api-principals.int.ts`·`web/test/principals-picker.test.tsx` | 목록·RLS 격리·RBAC(viewer+/403/401)·JWT upsert(생성/멱등/갱신/source 보존)·name 부재 미동기화·cross-tenant·길이 truncate; web picker 이름 라벨 렌더 |

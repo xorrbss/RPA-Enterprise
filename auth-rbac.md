@@ -42,6 +42,7 @@ export type Role =
 | 액션 | API/계약 근거 | viewer | operator | reviewer | approver | admin | 거부 시 ErrorCode |
 |---|---|:--:|:--:|:--:|:--:|:--:|---|
 | run/workitem/human_task 조회 + run step 트레이스(`GET /v1/runs/{id}/steps`) | 콘솔 read | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| principal 디렉터리 조회(담당자 name-picker) | api-surface §3 `GET /v1/principals` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run `create` | api-surface `POST /v1/runs` | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run `abort` (R6 → cancelled) | error-catalog `RUN_ABORTED` 어휘체인 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | human_task `assign`/`start` (H1/H2) | state-machine H1·H2 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |

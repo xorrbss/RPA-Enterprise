@@ -32,10 +32,6 @@ const SVER_A2 = "70000000-0000-0000-0000-0000000000a5";
 const SCEN_B = "70000000-0000-0000-0000-0000000000b3";
 const SVER_B = "70000000-0000-0000-0000-0000000000b4";
 const ASSIGNEE = "70000000-0000-0000-0000-0000000000c1";
-// 비-UUID 자유형 PrincipalId(approval_decisions.decided_by) — /v1/principals UNION·정렬 검증용.
-//   정렬(ASC, text): "70000000…"('7'=0x37) < "auth0|approver-a"('a'=0x61) → ASSIGNEE 먼저.
-const APPROVER_A = "auth0|approver-a";
-const APPROVER_B = "approver-b";
 const ABSENT = "70000000-0000-0000-0000-0000000000ff";
 const NETWORK_A = "7a200000-0000-0000-0000-000000000001";
 
@@ -102,19 +98,6 @@ async function seedHumanTask(
       `INSERT INTO human_tasks (id, tenant_id, run_id, kind, state, assignee, expires_at, created_at)
        VALUES ($1,$2,$3,$4,$5,$6::text,'2026-07-01T00:00:00Z',$7::timestamptz)`,
       [id, tenant, run, kind, state, assignee, createdAt],
-    ),
-  );
-}
-
-// approval_decisions 시드(GET /v1/principals UNION 소스). decided_by = PrincipalId(자유형 string).
-async function seedApprovalDecision(
-  pool: Pool, tenant: string, id: string, sourceRun: string, docRef: string, decidedBy: string,
-): Promise<void> {
-  await withTenantTx(pool, tenant, (c) =>
-    c.query(
-      `INSERT INTO approval_decisions (id, tenant_id, source_run_id, doc_ref, decision, decided_by)
-       VALUES ($1,$2,$3,$4,'approve',$5::text)`,
-      [id, tenant, sourceRun, docRef, decidedBy],
     ),
   );
 }
@@ -269,10 +252,6 @@ async function main(): Promise<void> {
     await seedHumanTask(pool, TENANT_A, A_RUNS[3][0], HT_A2, "assigned", "approval", ASSIGNEE, ts(1));
     await seedHumanTask(pool, TENANT_A, A_RUNS[3][0], HT_A3, "open", "approval", null, ts(2));
     await seedHumanTask(pool, TENANT_B, "72000000-0000-0000-0000-000000000001", HT_B, "open", "exception", null, ts(0));
-
-    // approval_decisions(GET /v1/principals UNION 소스): A는 비-UUID 자유형 decided_by, B는 격리 검증용.
-    await seedApprovalDecision(pool, TENANT_A, "75000000-0000-0000-0000-0000000000a1", A_RUNS[0][0], "doc-a-1", APPROVER_A);
-    await seedApprovalDecision(pool, TENANT_B, "75000000-0000-0000-0000-0000000000b1", "72000000-0000-0000-0000-000000000001", "doc-b-1", APPROVER_B);
 
     // workitems: tenant A 4건(new/processing/abandoned + run 연계), tenant B 1건.
     const WI1 = "75000000-0000-0000-0000-000000000001";
@@ -439,32 +418,8 @@ async function main(): Promise<void> {
       const htB = await get("/v1/human-tasks", viewerB);
       check("tenant B HT isolation (1)", htB.json().items.length === 1, "");
 
-      // ===== listPrincipals (담당자 picker 소스 — human_tasks.assignee ∪ approval_decisions.decided_by, distinct) =====
-      const prin = await get("/v1/principals");
-      const prinIds = prin.json().items.map((p: { principal_id: string }) => p.principal_id);
-      check("listPrincipals → 200", prin.statusCode === 200, prin.body);
-      // tenant A: ASSIGNEE(human_tasks) + APPROVER_A(approval_decisions) 합집합, distinct, principal_id ASC.
-      check("principals union(assignee ∪ decided_by), sorted ASC",
-        JSON.stringify(prinIds) === JSON.stringify([ASSIGNEE, APPROVER_A].sort()), JSON.stringify(prinIds));
-      check("principals are distinct (no dup)", new Set(prinIds).size === prinIds.length, JSON.stringify(prinIds));
-      // 비-UUID PrincipalId(APPROVER_A=auth0|…)도 그대로 노출(자유형 string — 발명/필터 없음).
-      check("principals include non-uuid PrincipalId", prinIds.includes(APPROVER_A), JSON.stringify(prinIds));
-      // 커서: limit=1 → 1건 + cursor → 다음 1건(나머지) → 수렴(next_cursor null).
-      const prinP1 = await get("/v1/principals?limit=1");
-      check("principals page1 limit=1 → 1 + cursor", prinP1.json().items.length === 1 && typeof prinP1.json().next_cursor === "string", prinP1.body);
-      const prinP2 = await get(`/v1/principals?limit=1&cursor=${encodeURIComponent(prinP1.json().next_cursor)}`);
-      check("principals page2 → next 1, distinct from page1",
-        prinP2.json().items.length === 1 && prinP2.json().items[0].principal_id !== prinP1.json().items[0].principal_id, prinP2.body);
-      const prinBad = await get("/v1/principals?cursor=not-base64-json");
-      check("principals invalid cursor → 422", prinBad.statusCode === 422 && prinBad.json().details?.reason === "invalid_cursor", prinBad.body);
-      // tenant B 격리: B의 decided_by(APPROVER_B)만, A의 principal 미포함(RLS).
-      const prinB = await get("/v1/principals", viewerB);
-      const prinBIds = prinB.json().items.map((p: { principal_id: string }) => p.principal_id);
-      check("tenant B principals isolation (only B's, no A leak)",
-        prinBIds.includes(APPROVER_B) && !prinBIds.includes(ASSIGNEE) && !prinBIds.includes(APPROVER_A), JSON.stringify(prinBIds));
-      // no-role(read 권한 없음) → 403(human_task.read 게이트).
-      const prinNoRole = await get("/v1/principals", noRole);
-      check("no-role listPrincipals → 403", prinNoRole.statusCode === 403, prinNoRole.body);
+      // listPrincipals(테넌트 디렉터리 — principals 테이블)은 별도 통합테스트(api-principals.int.ts)에서 전수 검증한다
+      // (목록·RLS·RBAC principal.read·JWT name upsert·cursor). 본 파일은 listRuns/HumanTasks 조회에 집중한다.
 
       // ===== getHumanTask =====
       const detail = await get(`/v1/human-tasks/${HT_A2}`);

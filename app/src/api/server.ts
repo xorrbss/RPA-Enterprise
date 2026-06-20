@@ -45,6 +45,7 @@ import { registerDlqRoutes } from "./dlq";
 import { registerGatewayRoutes } from "./gateway";
 import { registerHumanTaskRoutes } from "./human-tasks";
 import { registerReadRoutes } from "./reads";
+import type { PrincipalDirectoryWriter } from "./principal-directory";
 import { registerSiteRoutes } from "./sites";
 import { registerSessionRoutes } from "./sessions";
 import { registerApprovalRoutes } from "./approvals";
@@ -115,6 +116,11 @@ export interface ApiServerDeps {
    * 캡처된 쿠키를 받아 봉투암호화(주입된 encryptor)·browser_sessions 저장하는 prod 캡처 경로(P3, dev=DevPlaintext·prod=AesGcm).
    */
   sessionStore?: BrowserSessionStore;
+  /**
+   * Principal 디렉터리 쓰기(선택, name-picker). 주입 시 인증 성공마다 JWT `name` 클레임을 best-effort upsert해
+   * 담당자 디렉터리를 동기화한다. 미주입 시 JWT 자동 동기화는 비활성(GET /v1/principals는 그대로 동작).
+   */
+  principalDirectory?: PrincipalDirectoryWriter;
 }
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -166,6 +172,23 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       throw new ApiResponseError(result.code);
     }
     request.principal = result.principal;
+
+    // 디렉터리 동기화(name-picker): JWT `name` 클레임이 있으면 best-effort upsert. 인증/인가와 무관한 부수효과라
+    // 실패해도 요청은 진행하되 조용히 삼키지 않고 log.warn 한다(가정/은폐 금지). directory 미주입 시 no-op.
+    if (deps.principalDirectory !== undefined) {
+      try {
+        await deps.principalDirectory.upsertFromClaims(
+          result.principal.tenantId,
+          result.principal.subjectId,
+          result.principal.claims,
+        );
+      } catch (err) {
+        request.log.warn(
+          { err, correlation_id: request.correlationId },
+          "principal directory upsert failed (request continues)",
+        );
+      }
+    }
   });
 
   // 5) authorize(RBAC) — auth 다음(미들웨어 순서 …→rbac→handler). 라우트 선언 rbacAction을 §2 매트릭스로 평가.

@@ -37,6 +37,7 @@ import { hmacJwtVerifier, jwksRs256Verifier, JwtAuthenticationBoundary } from ".
 import { buildApiArtifactObjectReader } from "./api/artifact-object-reader-binding";
 import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
 import { createLlmScenarioPlanner, LlmGatewayScenarioPlannerClient } from "./api/llm-scenario-planner";
+import { PgPrincipalDirectory } from "./api/principal-directory";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
 import { BufferedScenarioGenerationArtifactSink } from "./api/scenario-generation-artifacts";
@@ -228,6 +229,7 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
     rbac: new RoleMatrixRbacMiddleware(),
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: new PgGraphileRunEnqueuer(),
+    principalDirectory: new PgPrincipalDirectory(pool),
     signedCommandRegistry: buildSignedCommandRegistry(cfg.signedCommandRegistry),
     scenarioGenerationCapabilities: { videoRecording: cfg.videoRecordingEnabled },
     ...(scenarioPlanner !== undefined

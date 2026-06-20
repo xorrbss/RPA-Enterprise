@@ -35,6 +35,7 @@ import { SignJWT } from "jose";
 
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
+import { PgPrincipalDirectory } from "../src/api/principal-directory";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
 import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
@@ -208,6 +209,7 @@ async function main(): Promise<void> {
     rbac: new RoleMatrixRbacMiddleware(),
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: noopEnqueuer,
+    principalDirectory: new PgPrincipalDirectory(pool),
     signedCommandRegistry,
     artifactStore,
     securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),

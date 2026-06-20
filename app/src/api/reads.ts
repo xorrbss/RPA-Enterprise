@@ -25,7 +25,6 @@ import {
   humanTaskKindFilter,
   humanTaskStateFilter,
   paginate,
-  parseLimit,
   parsePageParams,
   principalIdFilter,
   runStateFilter,
@@ -38,30 +37,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // artifact.read audit 보존일수 — worker artifact-lifecycle audit(DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS=90)과
 // 동일(비발명, 기존 artifact audit 보존 정책 재사용). 전용 ops-defaults 행 도입 시 그 값으로 대체.
 const ARTIFACT_READ_AUDIT_RETENTION_DAYS = 90;
-
-// GET /v1/principals 전용 keyset 커서(불투명 base64url {p: principal_id}). 공유 list-query 커서는 id=UUID를
-// 강제해 free-form PrincipalId(JWT sub)에 맞지 않으므로, principal_id 단일 text 키 전용으로 분리한다(드리프트 차단).
-function decodePrincipalCursor(raw: unknown): string | null {
-  if (raw === undefined) return null;
-  if (typeof raw !== "string" || raw.length === 0) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_cursor" });
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
-  } catch {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_cursor" });
-  }
-  const p = (parsed as { p?: unknown } | null)?.p;
-  if (typeof p !== "string" || p.length === 0) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_cursor" });
-  }
-  return p;
-}
-
-function encodePrincipalCursor(principalId: string): string {
-  return Buffer.from(JSON.stringify({ p: principalId }), "utf8").toString("base64url");
-}
 
 interface RunListRow {
   id: string;
@@ -84,6 +59,15 @@ interface HumanTaskRow {
   expires_at: Date | null;
   on_timeout: string;
   run_id: string;
+  created_at: Date;
+}
+
+interface PrincipalRow {
+  id: string;
+  sub: string;
+  display_name: string;
+  email: string | null;
+  source: string;
   created_at: Date;
 }
 
@@ -495,6 +479,28 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.created_at, id: r.id }), mapHumanTask));
   });
 
+  // GET /v1/principals — 테넌트 담당자 디렉터리 커서 페이지(name-picker용). RLS 스코프. principal.read(viewer+).
+  app.get("/v1/principals", { config: { rbacAction: "principal.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const query = request.query as Record<string, unknown>;
+    const { limit, cursor } = parsePageParams(query);
+
+    const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+      const result = await c.query<PrincipalRow>(
+        `SELECT id, sub, display_name, email, source, created_at
+           FROM principals
+          WHERE tenant_id = $1::uuid
+            AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+          ORDER BY created_at DESC, id DESC
+          LIMIT $4`,
+        [principal.tenantId, cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+      );
+      return result.rows;
+    });
+
+    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.created_at, id: r.id }), mapPrincipal));
+  });
+
   // GET /v1/human-tasks/{id} — 상세. 부재/cross-tenant → RESOURCE_NOT_FOUND(404).
   app.get<{ Params: { id: string } }>(
     "/v1/human-tasks/:id",
@@ -520,43 +526,6 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
       reply.code(200).send(mapHumanTask(row));
     },
   );
-
-  // GET /v1/principals — 배정 가능한 PrincipalId 목록(담당자 picker 제안 소스). **사용자 디렉터리가 아니다.**
-  //   테넌트 데이터에 이미 등장한 principal의 distinct 합집합: human_tasks.assignee ∪ approval_decisions.decided_by.
-  //   표시명 소스가 계약에 없어 식별자(PrincipalId)만 반환(없는 표시명 미발명 — 조용한 false 금지). 자유 입력 폴백이
-  //   있어 신규 미등장자도 직접 배정 가능. RBAC: human_task.read(배정 후보 조회 — 신규 액션 미추가, 실 배정은
-  //   human_task.assign이 강제). RLS 스코프(두 소스 모두 tenant-scoped + withTenantTx). 커서: principal_id text keyset
-  //   (공유 PageCursor는 id=UUID를 강제해 free-form PrincipalId에 부적합 → 단일 text 키 전용 불투명 커서).
-  app.get("/v1/principals", { config: { rbacAction: "human_task.read" } }, async (request, reply) => {
-    const principal = requirePrincipal(request);
-    const query = request.query as Record<string, unknown>;
-    const limit = parseLimit(query.limit);
-    const cursor = decodePrincipalCursor(query.cursor);
-
-    const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
-      const result = await c.query<{ principal_id: string }>(
-        `SELECT principal_id FROM (
-           SELECT assignee AS principal_id FROM human_tasks
-            WHERE tenant_id = $1::uuid AND assignee IS NOT NULL
-           UNION
-           SELECT decided_by AS principal_id FROM approval_decisions
-            WHERE tenant_id = $1::uuid
-         ) p
-          WHERE ($2::text IS NULL OR principal_id > $2::text)
-          ORDER BY principal_id ASC
-          LIMIT $3`,
-        [principal.tenantId, cursor, limit + 1],
-      );
-      return result.rows;
-    });
-
-    const hasMore = rows.length > limit;
-    const pageRows = hasMore ? rows.slice(0, limit) : rows;
-    reply.code(200).send({
-      items: pageRows.map((r) => ({ principal_id: r.principal_id })),
-      next_cursor: hasMore && pageRows.length > 0 ? encodePrincipalCursor(pageRows[pageRows.length - 1].principal_id) : null,
-    });
-  });
 
   // GET /v1/workitems — 커서 페이지(items=Workitem). filter: status(WorkitemState). RLS 스코프.
   //   target_id 필터/필드는 workitems에 컬럼 부재(connector target 테이블 미도입, release-decisions #6) →
@@ -1202,5 +1171,16 @@ function mapHumanTask(r: HumanTaskRow): Record<string, unknown> {
     timeout: r.expires_at !== null ? r.expires_at.toISOString() : null,
     on_timeout: r.on_timeout,
     run_id: r.run_id,
+  };
+}
+
+/** Principal 행 → 계약 Principal 응답(디렉터리 항목; name-picker용 메타데이터만). */
+function mapPrincipal(r: PrincipalRow): Record<string, unknown> {
+  return {
+    principal_id: r.id,
+    sub: r.sub,
+    display_name: r.display_name,
+    email: r.email,
+    source: r.source,
   };
 }

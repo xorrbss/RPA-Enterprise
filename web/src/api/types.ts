@@ -40,12 +40,16 @@ export interface HumanTaskItem {
 }
 
 /**
- * 배정 가능 principal 후보. **사용자 디렉터리가 아니라** 테넌트 데이터에 이미 등장한 PrincipalId(JWT sub)의
- * distinct 합집합(human_tasks.assignee ∪ approval_decisions.decided_by). 표시명 소스가 계약에 없어 식별자만
- * 제공(없는 표시명 미발명) — 담당자 picker의 제안 목록. 자유 입력 폴백은 유지.
+ * 테넌트 담당자 디렉터리 항목(principals 테이블). 배정값은 `sub`(PrincipalId=JWT sub, 자유형)이고 `display_name`은
+ * picker 표시이름. `principal_id`는 surrogate uuid(커서/식별), `source`는 쓰기 경로(jwt|manual). 자유 입력 폴백은 유지
+ * (디렉터리 미등록 sub도 직접 배정 가능).
  */
 export interface PrincipalItem {
   readonly principal_id: string;
+  readonly sub: string;
+  readonly display_name: string;
+  readonly email: string | null;
+  readonly source: "jwt" | "manual";
 }
 
 /** workitem DLQ(dead_letter) + sink DLQ(sink_deliveries) 공용. status는 DEAD_LETTER 통지(ApiError 아님). */
