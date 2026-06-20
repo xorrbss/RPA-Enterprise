@@ -39,6 +39,15 @@ export interface HumanTaskItem {
   readonly run_id: string | null;
 }
 
+/**
+ * 배정 가능 principal 후보. **사용자 디렉터리가 아니라** 테넌트 데이터에 이미 등장한 PrincipalId(JWT sub)의
+ * distinct 합집합(human_tasks.assignee ∪ approval_decisions.decided_by). 표시명 소스가 계약에 없어 식별자만
+ * 제공(없는 표시명 미발명) — 담당자 picker의 제안 목록. 자유 입력 폴백은 유지.
+ */
+export interface PrincipalItem {
+  readonly principal_id: string;
+}
+
 /** workitem DLQ(dead_letter) + sink DLQ(sink_deliveries) 공용. status는 DEAD_LETTER 통지(ApiError 아님). */
 export interface DeadLetterItem {
   readonly dead_letter_id: string;

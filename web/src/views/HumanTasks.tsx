@@ -23,12 +23,14 @@ function dueTime(task: HumanTaskItem): number {
 }
 
 // 상태별 운영자 액션(state-machine H1/H2/H3/H5/H6). 권한/assignee 범위는 백엔드가 강제.
-function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }): JSX.Element {
+// principalOptions = /v1/principals 제안 목록(테넌트에 이미 등장한 PrincipalId distinct). '배정' 입력의 datalist로만 쓰며 자유 입력 폴백은 유지.
+function HumanTaskActions({ api, task, principalOptions }: { api: ApiClient; task: HumanTaskItem; principalOptions: readonly string[] }): JSX.Element {
   const id = task.human_task_id;
   const subject = useSubject();
-  // '내게 배정' 단축 — 현재 토큰 sub로 self-assign(uuid 직접입력 없이 가장 흔한 케이스). 검증은 백엔드가 최종 강제.
-  // ⚠ sub는 비-UUID OIDC 식별자(auth0|…·이메일)일 수 있고 백엔드 assignee는 uuid만 허용(422) → sub가 UUID일 때만 렌더(isUuid).
-  //   비-UUID/부재면 미렌더(조용한 false 금지) + uuid 직접입력 '배정' 폴백만. 이름 picker는 principals read 부재로 별도 TODO[BLOCKED].
+  // '내게 배정' 단축 — 현재 토큰 sub로 self-assign(직접입력 없이 가장 흔한 케이스). 검증은 백엔드가 최종 강제.
+  // ⚠ sub는 비-UUID OIDC 식별자(auth0|…·이메일)일 수 있다. 현재는 보수적으로 sub가 UUID일 때만 렌더(isUuid) —
+  //   비-UUID sub의 self-assign 허용은 selfAssign 한정 별개 변경이라 본 PR(담당자 picker) 범위 밖. 비-UUID/부재면
+  //   '배정'(아래)에서 picker/직접입력으로 처리(조용한 false 금지).
   const selfAssign = isUuid(subject) ? (
     <ActionButton
       label="내게 배정"
@@ -38,17 +40,15 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
       invalidateKeys={KEYS}
     />
   ) : null;
-  // 타인 배정은 uuid 직접입력(아래 '배정')을 유지. 이름 검색 picker는 백엔드 선행이 필요:
-  // TODO: [BLOCKED]
-  //   violated: 가정 금지 — 없는 데이터로 UI를 채우지 않는다
-  //   reason: 배정 가능한 사용자 목록 read 엔드포인트가 계약(api-surface)·라우트에 전무 → 이름↔uuid 매핑 소스 없음
-  //   required_change: /v1/users(또는 principals) 목록 + 표시명 투영(versioned 계약) → 그 후 uuid 입력을 이름 picker로 대체
+  // 타인 배정: /v1/principals 제안 목록(datalist) + 자유 입력. assignee는 PrincipalId(JWT sub) 자유형 string이라
+  //   목록 밖 값도 허용(폴백). 표시명 소스가 계약에 없어 식별자만 노출(없는 표시명 미발명).
   const assign = (
     <ActionButton
       label="배정"
       action="human_task.assign"
       confirmText="담당자를 배정할까요?"
-      inputLabel="담당자 ID(uuid)"
+      inputLabel="담당자(목록에서 선택 또는 ID 직접 입력)"
+      inputOptions={principalOptions}
       run={(key, assignee) => {
         // 빈 값은 다이얼로그 확인 비활성으로 1차 차단 + 여기서도 방어(조용한 실패 금지).
         if (assignee === undefined || assignee === "") return Promise.reject(new Error("담당자 미입력"));
@@ -87,6 +87,15 @@ export function HumanTasksView(): JSX.Element {
   const can = useCan();
   const subject = useSubject();
   const [dueOnly, setDueOnly] = useState(false);
+  // 담당자 picker 제안 목록 — 배정 권한이 있을 때만 조회(viewer는 picker 미노출 → 불필요 쿼리 회피).
+  //   /v1/principals = 테넌트에 이미 등장한 PrincipalId distinct(디렉터리 아님). 자유 입력 폴백이 있어 목록이 비어도 배정 가능.
+  const principalsQuery = useQuery({
+    queryKey: ["principals"],
+    queryFn: () => api.listPrincipals({ limit: 200 }),
+    enabled: can("human_task.assign"),
+    refetchInterval: 30_000,
+  });
+  const principalOptions = useMemo(() => (principalsQuery.data?.items ?? []).map((p) => p.principal_id), [principalsQuery.data]);
   const runParam = useHashParam("run_id");
   const lv = useListView<HumanTaskItem>(
     ["human-tasks"],
@@ -107,7 +116,7 @@ export function HumanTasksView(): JSX.Element {
   const bulkEscalatable = pageItems.filter((t) => t.state === "open" || t.state === "assigned" || t.state === "in_progress");
   return (
     <>
-      {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} onClose={() => { mergeParams({ ht: null }); }} />}
+      {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} principalOptions={principalOptions} onClose={() => { mergeParams({ ht: null }); }} />}
       <section className="panel queue-controls" aria-label="사람 확인 큐 제어">
         <div>
           <strong>큐 처리</strong>
@@ -135,7 +144,8 @@ export function HumanTasksView(): JSX.Element {
             <ActionButton
               label={`현재 페이지 ${bulkAssignable.length}건 배정`}
               action="human_task.assign"
-              inputLabel="담당자 ID(uuid)"
+              inputLabel="담당자(목록에서 선택 또는 ID 직접 입력)"
+              inputOptions={principalOptions}
               confirmText="현재 페이지의 미배정/이관 업무를 같은 담당자에게 배정할까요?"
               run={async (key, assignee) => {
                 if (assignee === undefined || assignee === "") throw new Error("담당자 미입력");
@@ -182,7 +192,7 @@ export function HumanTasksView(): JSX.Element {
               </button>
             ),
           },
-          { header: "작업", render: (r) => <HumanTaskActions api={api} task={r} /> },
+          { header: "작업", render: (r) => <HumanTaskActions api={api} task={r} principalOptions={principalOptions} /> },
         ]}
       />
     </>
@@ -196,11 +206,13 @@ function HumanTaskDetailPanel({
   api,
   humanTaskId,
   detail,
+  principalOptions,
   onClose,
 }: {
   api: ApiClient;
   humanTaskId: string;
   detail: UseQueryResult<HumanTaskItem>;
+  principalOptions: readonly string[];
   onClose: () => void;
 }): JSX.Element {
   return (
@@ -238,7 +250,7 @@ function HumanTaskDetailPanel({
           <div style={{ marginTop: 14 }}>
             <strong style={{ fontSize: 13 }}>작업</strong>
             <div style={{ marginTop: 8 }}>
-              <HumanTaskActions api={api} task={detail.data} />
+              <HumanTaskActions api={api} task={detail.data} principalOptions={principalOptions} />
             </div>
           </div>
         </>

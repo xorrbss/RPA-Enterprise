@@ -26,6 +26,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     listScenarioGenerationResultArtifacts: empty,
     listWorkitems: empty,
     listHumanTasks: empty,
+    listPrincipals: empty,
     listDlq: empty,
     listScenarios: empty,
     listSites: empty,

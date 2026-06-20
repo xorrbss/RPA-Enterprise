@@ -133,6 +133,7 @@
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
 | GET | `/v1/human-tasks` | 쿼리: `?status=<HumanTaskState>&kind=<HumanTaskKind>&assignee=&run_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` (인박스 목록; `run_id`는 suspended run→정확한 task 딥링크용) | — |
+| GET | `/v1/principals` | 쿼리: `?limit=&cursor=` | 200 + `{ items, next_cursor }`(items=Principal: `principal_id`만; 표시명 부재) — 담당자 picker 제안 소스 | — |
 | GET | `/v1/human-tasks/{human_task_id}` | — | 200 + 태스크 상세(`state`, `kind`, `assignee`, `timeout`, `on_timeout`, run 연계; payload 본문 미노출) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/human-tasks/{human_task_id}/start` | `Idempotency-Key`. 배정된 담당자/역할 스코프 필요 | 200 + `in_progress`(H2) | `HUMAN_TASK_EXPIRED`(410), `AUTHZ_FORBIDDEN`(403) |
 | POST | `/v1/human-tasks/{human_task_id}/resolve` | `Idempotency-Key`. body: optional `result`(object) — v1 미소비(아래 note) | 200 + `resolved`. `human_task.resolved` 이벤트 → Run `resume_requested`(R13/H3) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
@@ -145,6 +146,7 @@
 - **resolve `result` payload는 v1에서 미정의·미소비다(이전 "kind별 payload" 문구를 실제 v1 모델로 정정).** `reserved-handlers.md` @human_task는 resolve를 `{status:"resolved", next}` **순수 continue 신호**로 모델링한다 — 운영자 판정(승인/반려·통과/실패)을 담을 자리가 reserved-handler 결과·resume token·IREL `node.<id>.*`(타입 고정) 어디에도 없다. 백엔드 `requireResolveBody`는 optional `result`(object)를 **수용하되 전이/이벤트만 확정하고 result는 검증·영속·소비하지 않는다**(forward seam). 따라서 콘솔의 resolve는 판정-데이터 입력이 아니라 "승인하고 계속(continue)" 신호다. kind별 result 스키마 정의 + run 재개 컨텍스트(IREL `node.<handler>.result` 신규 스코프)로의 분기는 **versioned 스키마 변경이 필요한 v2 scope-out**이다(reserved-handlers 결과 모델·resume token·state-machine·DB·런타임 일괄 — verify.schema/reserved-handlers 기반 result 저장 결정 선행).
 - 재에스컬레이션 후에도 미해소 → H8(escalated→timeout→expired, 무한 대기 방지). escalate API는 H5(수동) 진입만 담당하고 timeout 기반 H4b/H8은 타이머 주도(API 비주도).
 - assignment/routing 계약: `assignee`는 명시 담당자 PrincipalId(JWT sub, 자유형 string — UUID 보장 없음; `human_tasks.assignee`는 `approval_decisions.decided_by`와 동형 text), `assignee_role`은 @human_task 입력에서 온 역할 스코프이며 API가 임의로 "admin queue"로 재해석하지 않는다. `reassignAssignee` side effect는 반드시 호출측이 명시적으로 소비해야 한다. 현재 성공 가능한 소비자는 H6 `assign`뿐이며, 요청 body의 `assignee`로 `human_tasks.assignee`를 설정한다. H5 수동 escalate와 R15 coupling에서 발생하는 `reassignAssignee`는 durable routing port/assignee policy가 없으면 미지원 pending side effect로 보고 동일 트랜잭션을 rollback한 뒤 `CONTROL_PLANE_INTERNAL_ERROR`로 fail-closed해야 한다(`human_task.escalated` 이벤트 emit 금지, run 상태 유지).
+- 담당자 picker 소스(`GET /v1/principals`): **사용자 디렉터리가 아니라** 테넌트 데이터에 이미 등장한 PrincipalId의 distinct 합집합(`human_tasks.assignee` ∪ `approval_decisions.decided_by`). 표시명 소스가 계약에 없어 식별자만 노출(없는 표시명 미발명 — 조용한 false 금지). 자유 입력 폴백이 있어 신규 미등장자도 직접 배정 가능. RBAC=`human_task.read`(후보 조회; 실 배정은 `human_task.assign`이 강제). 커서는 `principal_id` text keyset.
 - `cancel`(H7)은 별도 엔드포인트를 두지 않는다 — Run abort(§1) 연동으로만 발생(R16). 직접 API 노출은 Phase 2 결정.
 
 ---

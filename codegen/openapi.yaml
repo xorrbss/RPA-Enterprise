@@ -758,6 +758,29 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /principals:
+    get:
+      tags: [HumanTasks]
+      operationId: listPrincipals
+      summary: 배정 가능 principal 목록(담당자 picker 제안 소스)
+      description: >
+        사용자 디렉터리가 아니다. 테넌트 데이터에 이미 등장한 PrincipalId(JWT sub)의 distinct 합집합
+        (human_tasks.assignee ∪ approval_decisions.decided_by). 표시명 소스가 계약에 없어 식별자만 반환한다
+        (없는 표시명 미발명). 담당자 배정 picker의 제안 목록으로 쓰며 자유 입력 폴백은 유지된다.
+        RBAC는 human_task.read(배정 후보 조회 — 실 배정은 human_task.assign이 강제).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 커서 페이지(items=Principal; principal_id text keyset).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrincipalPage'
+        default:
+          $ref: '#/components/responses/Error'
+
   /human-tasks/{human_task_id}:
     parameters:
       - $ref: '#/components/parameters/HumanTaskId'
@@ -1627,6 +1650,22 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/HumanTask' }
+        next_cursor:
+          type: [string, "null"]
+    Principal:
+      type: object
+      required: [principal_id]
+      description: >
+        배정 후보 PrincipalId(JWT sub). 디렉터리 항목이 아니라 테넌트 데이터에 등장한 식별자. 표시명 없음(소스 부재).
+      properties:
+        principal_id: { type: string }
+    PrincipalPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Principal' }
         next_cursor:
           type: [string, "null"]
     WorkitemPage:

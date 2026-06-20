@@ -14,6 +14,7 @@ import {
   type HumanTaskItem,
   type ListParams,
   type Paginated,
+  type PrincipalItem,
   type RunDetail,
   type RunItem,
   type ScenarioDetail,
@@ -44,6 +45,7 @@ export interface ApiClient {
   listScenarioGenerationResultArtifacts(generationId: string, p?: ListParams): Promise<Paginated<GenerationArtifactItem>>;
   listWorkitems(p?: ListParams): Promise<Paginated<WorkitemItem>>;
   listHumanTasks(p?: ListParams): Promise<Paginated<HumanTaskItem>>;
+  listPrincipals(p?: ListParams): Promise<Paginated<PrincipalItem>>;
   listDlq(kind: "workitem" | "sink", p?: ListParams): Promise<Paginated<DeadLetterItem>>;
   listScenarios(p?: ListParams): Promise<Paginated<ScenarioItem>>;
   listSites(p?: ListParams): Promise<Paginated<SiteItem>>;
@@ -221,6 +223,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       get(`/v1/scenario-generations/${generationId}/result-artifacts${queryString(p)}`),
     listWorkitems: (p) => get(`/v1/workitems${queryString(p)}`),
     listHumanTasks: (p) => get(`/v1/human-tasks${queryString(p)}`),
+    listPrincipals: (p) => get(`/v1/principals${queryString(p)}`),
     listDlq: (kind, p) => get(`/v1/dlq${queryString({ ...p, kind })}`),
     listScenarios: (p) => get(`/v1/scenarios${queryString(p)}`),
     listSites: (p) => get(`/v1/sites${queryString(p)}`),
