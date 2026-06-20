@@ -35,7 +35,15 @@ function NavItem({ viewKey, active }: { viewKey: ViewKey; active: boolean }): JS
 // 테넌트 칩은 의도적으로 제외 — JWT tenant_id를 프론트가 디코드/검증하지 않으므로 과대표시를 피한다.
 function RolesChip(): JSX.Element {
   const roles = useMemo(() => decodeRoles(localStorage.getItem("rpa.token")), []);
-  if (roles.length === 0) return <span className="subtle">역할 미확인</span>;
+  if (roles.length === 0)
+    return (
+      <span
+        className="subtle"
+        title="토큰에 역할(roles) 정보가 없어 읽기 전용으로 동작합니다. 관리자에게 역할이 포함된 토큰을 요청하세요."
+      >
+        역할 미확인 · 읽기 전용
+      </span>
+    );
   return (
     <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }} aria-label="현재 역할">
       {roles.map((r) => (
