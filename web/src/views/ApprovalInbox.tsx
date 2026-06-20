@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { ApiError } from "../api/types";
-import { COLLECT_SCENARIO_NAME, APPROVAL_ARTIFACT_TYPE, parseApprovalRows, summarize } from "../api/approval-inbox";
+import { COLLECT_SCENARIO_NAME, APPROVAL_ARTIFACT_TYPE, isHttpUrl, parseApprovalRows, summarize } from "../api/approval-inbox";
 import { StatusBadge, errorLabel } from "../components/badges";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
@@ -154,7 +154,7 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
             <table>
               <thead>
                 <tr>
-                  <th>기안자</th><th>유형</th><th>제목</th><th>상태</th><th>기안일</th>
+                  <th>기안자</th><th>유형</th><th>제목</th><th>상태</th><th>기안일</th><th>원문</th>
                   {showActions && <th>결재</th>}
                 </tr>
               </thead>
@@ -168,6 +168,7 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
                       <td>{r.title}</td>
                       <td><StatusBadge status={r.status} /></td>
                       <td>{r.drafted_at ?? "—"}</td>
+                      <td><DocRefLink docRef={r.doc_ref} /></td>
                       {showActions && (
                         <td>
                           {spawnedRunId !== undefined ? (
@@ -225,6 +226,7 @@ function DecideButtons(props: { sourceRunId: string; docRef: string; onDecided: 
   if (mode === "reject") {
     return (
       <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <DocRefLink docRef={props.docRef} />
         <input
           type="text"
           value={reason}
@@ -246,6 +248,7 @@ function DecideButtons(props: { sourceRunId: string; docRef: string; onDecided: 
     return (
       <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
         <span className="subtle">승인하시겠습니까?</span>
+        <DocRefLink docRef={props.docRef} />
         <button className="btn" type="button" onClick={() => decide.mutate("approve")}>확인</button>
         <button className="btn" type="button" onClick={() => setMode("idle")}>취소</button>
         {err !== null && <span className="badge red">{err}</span>}
@@ -277,6 +280,18 @@ function DecidedStatus({ runId }: { runId: string }): JSX.Element {
       {/* 크로스-뷰 딥링크: 결재 인박스 → 실행 기록(runTrace?run=<id>). hashWith 는 현재 뷰 유지라 직접 구성. */}
       <a href={`#runTrace?run=${runId}`} className="subtle" style={{ fontSize: 12 }}>실행 기록 보기</a>
     </span>
+  );
+}
+
+// 결재 원문 링크 — 비가역 결정 전 원문 확인 동선(승인/반려 단계·행에 노출). http(s) scheme만 새 탭 링크로
+// (javascript:/data: XSS 가드); 그 외 scheme면 링크 대신 비활성 안내(조용한 false 금지). doc_ref scheme는 parser가
+// 강제하지 않으므로 여기서 판정. rel=noopener noreferrer로 reverse-tabnabbing·Referer 누수 차단.
+function DocRefLink({ docRef }: { docRef: string }): JSX.Element {
+  if (!isHttpUrl(docRef)) return <span className="subtle" style={{ fontSize: 12 }}>원문 링크 불가</span>;
+  return (
+    <a href={docRef} target="_blank" rel="noopener noreferrer" className="subtle" style={{ fontSize: 12 }}>
+      원문 보기 ↗
+    </a>
   );
 }
 

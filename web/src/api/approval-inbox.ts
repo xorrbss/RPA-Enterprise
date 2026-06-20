@@ -40,6 +40,17 @@ export function parseApprovalRows(content: string): ApprovalRow[] {
   });
 }
 
+/** doc_ref를 외부 링크로 안전하게 노출할 수 있는지 — http/https scheme만 허용(javascript:/data: 등 XSS 차단).
+ *  parseApprovalRows는 doc_ref를 비-빈 문자열로만 검증하므로, 링크화 직전 실제 scheme를 파싱해 화이트리스트한다(가정 금지). */
+export function isHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /** 상태/유형별 카운트(내림차순). LLM 미사용 — 수집된 행 그대로 집계. */
 export function summarize(rows: readonly ApprovalRow[]): ApprovalSummary {
   const countBy = (key: (r: ApprovalRow) => string): Array<[string, number]> => {
