@@ -45,14 +45,14 @@ function pageCount(d: Page | undefined): string {
 
 // 서버 집계(전체 기간)라 절단 '+' 없는 정확 카운트. 로딩 전이면 '—'(데이터 도착 전 단정 금지).
 function exactCount(s: RunSummary | undefined, status: string): string {
-  if (s === undefined) return "—";
+  if (s === undefined || s.by_status === undefined) return "—";
   return String(s.by_status[status] ?? 0);
 }
 
 // run_success_rate(§E) — completed/(completed+failed_business+failed_system). 분모 0이면 success_rate=null →
 // '—'(0/0을 100%/0%로 단정하지 않음, "조용한 false 금지"). 정수 %로 표기.
 function successRateLabel(s: RunSummary | undefined): string {
-  if (s === undefined || s.success_rate === null) return "—";
+  if (s === undefined || typeof s.success_rate !== "number") return "—";
   return `${Math.round(s.success_rate * 100)}%`;
 }
 

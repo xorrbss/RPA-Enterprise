@@ -58,6 +58,9 @@ function apiFixture(pathname: string): unknown {
   if (pathname === "/api/v1/gateway/policy") {
     return { model: "gpt-4o-mini", capabilities: { jsonMode: true } };
   }
+  if (pathname === "/api/v1/runs/summary") {
+    return { by_status: { running: 1 }, success_rate: null, total: 1 };
+  }
   // human-tasks / dlq / sites / scenarios 등 → 빈 페이지(정직)
   return { items: [], next_cursor: null };
 }
