@@ -8,6 +8,7 @@ import { ActionButton } from "../components/ActionButton";
 import { CaptureGuide } from "../components/CaptureGuide";
 import { FilterSelect } from "../components/FilterSelect";
 import { PrincipalDirectory } from "../components/PrincipalDirectory";
+import { SiteCircuitNotice } from "../components/SiteCircuitNotice";
 import { SiteCreateForm } from "../components/SiteCreateForm";
 import { SiteNameEditor } from "../components/SiteNameEditor";
 import { StatusBadge, statusLabel } from "../components/badges";
@@ -19,9 +20,12 @@ export function SecurityView(): JSX.Element {
   const can = useCan();
   const [guideSite, setGuideSite] = useState<SiteItem | null>(null);
   const lv = useListView<SiteItem>(["sites"], (p) => api.listSites(p), { refetchInterval: 10_000 });
+  // 사이트 서킷 차단 안내: 로드된 목록에서 circuit_status='open'(차단) 건수만 센다(실 필드 기반, 데이터 창작 금지).
+  const circuitOpenCount = (lv.query.data?.items ?? []).filter((s) => s.circuit_status === "open").length;
   return (
     <>
     <PrincipalDirectory />
+    <SiteCircuitNotice openCount={circuitOpenCount} />
     <SiteCreateForm />
     <QueryPanel<SiteItem>
       title="사이트 접근 정책"

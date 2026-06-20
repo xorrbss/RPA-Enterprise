@@ -41,11 +41,22 @@ describe("StatusBadge 한국어 라벨", () => {
     expect(el?.className).not.toContain("red");
   });
 
-  test("circuit open → red (kind=circuit 경보)", () => {
+  // circuit "open"은 회로 '차단'(열림 아님) — HumanTask "open"(열림)과 라벨도 분리(RQ-026 연장).
+  test("circuit open → '차단' + red (kind=circuit 경보)", () => {
     const { container } = render(<StatusBadge status="open" kind="circuit" />);
     const el = container.querySelector("span.badge");
-    expect(el?.textContent).toBe("열림");
+    expect(el?.textContent).toBe("차단");
     expect(el?.className).toContain("red");
+  });
+
+  test.each([
+    ["closed", "정상", "green"],
+    ["half_open", "점검 중", "amber"],
+  ])("circuit %s → '%s' + %s", (status, label, toneClass) => {
+    const { container } = render(<StatusBadge status={status} kind="circuit" />);
+    const el = container.querySelector("span.badge");
+    expect(el?.textContent).toBe(label);
+    expect(el?.className).toContain(toneClass);
   });
 
   // 완전성 가드: StatusBadge로 흐르는 닫힌 enum은 전부 라벨이 있어야 한다(향후 enum 추가 시 실패).
