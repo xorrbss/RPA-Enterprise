@@ -380,7 +380,10 @@ function finalizePlannerEvidence(plan: GenerationPlan, trustedRequest: Generatio
   const startUrl = trustedRequest.startUrl ?? extractFirstHttpUrl(trustedRequest.prompt);
   const pagination = paginationPlan(trustedRequest.prompt, { ...trustedRequest.params });
   if (trustedRequest.mode === "save_and_run") {
-    if (trustedRequest.target === undefined) blockers.add("target_required_for_auto_run");
+    if (trustedRequest.target === undefined) {
+      blockers.add("target_required_for_auto_run");
+      if (trustedRequest.inferenceBlocker !== undefined) blockers.add(trustedRequest.inferenceBlocker);
+    }
     if (startUrl === undefined) blockers.add("start_url_required_for_auto_run");
   }
   if (looksLikeSideEffectPrompt(trustedRequest.prompt, { allowPaginationControls: pagination.enabled })) {

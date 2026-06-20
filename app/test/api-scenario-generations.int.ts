@@ -67,6 +67,12 @@ const OTHER_SITE = "10000000-0000-4000-8000-0000000000b1";
 const OTHER_IDENTITY = "10000000-0000-4000-8000-0000000000b2";
 const OTHER_NETWORK = "10000000-0000-4000-8000-0000000000b3";
 const AMBIGUOUS_NETWORK = "10000000-0000-4000-8000-0000000000c1";
+// fine-grained 추론 blocker 케이스용 신선 origin 픽스처(example.com/other.example 와 비충돌).
+const NOIDENT_SITE = "10000000-0000-4000-8000-0000000000d1";
+const NONET_SITE = "10000000-0000-4000-8000-0000000000d2";
+const NONET_IDENTITY = "10000000-0000-4000-8000-0000000000d3";
+const DUP_SITE_A = "10000000-0000-4000-8000-0000000000d4";
+const DUP_SITE_B = "10000000-0000-4000-8000-0000000000d5";
 const LIFECYCLE_BYPASS_ROLE = "rpa_generation_lifecycle_bypass";
 const LIFECYCLE_BYPASS_PASSWORD = "rpa_generation_lifecycle_bypass";
 const SECRET = new TextEncoder().encode("scenario-generation-int-secret-do-not-use-0123456789");
@@ -1106,10 +1112,92 @@ async function main(): Promise<void> {
         ambiguousNetworkBody.status === "blocked" &&
           ambiguousNetworkBody.run_id === null &&
           Array.isArray(ambiguousNetworkBody.blockers) &&
-          ambiguousNetworkBody.blockers.includes("target_required_for_auto_run"),
+          ambiguousNetworkBody.blockers.includes("target_required_for_auto_run") &&
+          ambiguousNetworkBody.blockers.includes("network_policy_ambiguous_for_start_url"),
         ambiguousNetworkTarget.body,
       );
       check("ambiguous network policy does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+
+      // fine-grained 추론 blocker — 신선 origin 으로 site/identity/network 각 실패 모드를 분리 검증.
+      await withTenantTx(pool, TENANT, async (client) => {
+        await client.query(
+          `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
+           VALUES ($1::uuid, $2::uuid, 'noident', 'https://noident.example.test', 'green', false, '{"flags":{}}'::jsonb)`,
+          [NOIDENT_SITE, TENANT],
+        );
+        await client.query(
+          `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
+           VALUES ($1::uuid, $2::uuid, 'nonet', 'https://nonet.example.test', 'green', false, '{"flags":{}}'::jsonb)`,
+          [NONET_SITE, TENANT],
+        );
+        await client.query(
+          `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, 'nonet-default')`,
+          [NONET_IDENTITY, TENANT, NONET_SITE],
+        );
+        await client.query(
+          `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
+           VALUES ($1::uuid, $2::uuid, 'dup-a', 'https://dup.example.test', 'green', false, '{"flags":{}}'::jsonb)`,
+          [DUP_SITE_A, TENANT],
+        );
+        await client.query(
+          `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
+           VALUES ($1::uuid, $2::uuid, 'dup-b', 'https://dup.example.test', 'green', false, '{"flags":{}}'::jsonb)`,
+          [DUP_SITE_B, TENANT],
+        );
+      });
+
+      const inferenceBlockerCases: Array<{ key: string; name: string; startUrl: string; blocker: string }> = [
+        {
+          key: "site-unresolved",
+          name: "generated-infer-site-unresolved",
+          startUrl: "https://unresolved.example.test/page",
+          blocker: "site_profile_unresolved_for_start_url",
+        },
+        {
+          key: "site-ambiguous",
+          name: "generated-infer-site-ambiguous",
+          startUrl: "https://dup.example.test/page",
+          blocker: "site_profile_ambiguous_for_start_url",
+        },
+        {
+          key: "identity-unresolved",
+          name: "generated-infer-identity-unresolved",
+          startUrl: "https://noident.example.test/page",
+          blocker: "browser_identity_unresolved_for_start_url",
+        },
+        {
+          key: "network-unresolved",
+          name: "generated-infer-network-unresolved",
+          startUrl: "https://nonet.example.test/page",
+          blocker: "network_policy_unresolved_for_start_url",
+        },
+      ];
+      for (const c of inferenceBlockerCases) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/v1/scenario-generations",
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": `gen-infer-${c.key}-1` },
+          payload: {
+            prompt: `${c.startUrl} 에서 최근 공지 제목과 링크를 수집해줘`,
+            name: c.name,
+            start_url: c.startUrl,
+            evidence: { screenshot: "each_step", video: "never" },
+          },
+        });
+        check(`inference ${c.key} saves blocked generation -> 201`, res.statusCode === 201, res.body);
+        const body = res.json();
+        check(
+          `inference ${c.key} emits fine-grained blocker ${c.blocker}`,
+          body.status === "blocked" &&
+            body.run_id === null &&
+            Array.isArray(body.blockers) &&
+            body.blockers.includes("target_required_for_auto_run") &&
+            body.blockers.includes(c.blocker),
+          res.body,
+        );
+      }
+      check("fine-grained inference blockers do not enqueue runs", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
 
       const paginationLimit = await app.inject({
         method: "POST",
