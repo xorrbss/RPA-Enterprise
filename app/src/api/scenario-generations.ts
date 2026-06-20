@@ -25,6 +25,7 @@ import { canonicalRequestHash, completeIdempotencyInTx, idempotencyRecordRowId }
 import { apiErrorBody, isRecord } from "./command";
 import { extractFirstHttpUrl, hostOfHttpUrl, isHostAllowed, isHttpUrl } from "./scenario-generation-url";
 import { containsRedactedParamsMarker, redactGenerationDraftIr, redactGenerationFailureDetails, redactParamsContext } from "./scenario-generation-redaction";
+import { parseGenerationStatusFilter, parseListCursor, parseListLimit, parseParamsContext, parseRunIdFilter, UUID_RE } from "./scenario-generation-parse";
 import { createRunInTx, requirePrincipal, type ApiServerDeps } from "./server";
 import type {
   EvidencePolicy,
@@ -40,7 +41,6 @@ import type {
 import type { RunEnqueuer } from "./run-queue";
 import { originOf, resolveSiteProfileId, type SiteResolutionCode, SiteResolutionError } from "../runtime/site-resolution";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_8601_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_PAGINATION_MAX_PAGES = 3;
@@ -1759,55 +1759,6 @@ function mapGenerationRow(row: ScenarioGenerationRow): Record<string, unknown> {
     created_by: row.created_by,
     created_at: row.created_at,
   };
-}
-
-function parseParamsContext(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
-
-function parseListLimit(value: string | undefined): number {
-  if (value === undefined) return 20;
-  if (!/^\d+$/.test(value)) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_limit" });
-  }
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1 || n > 100) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_limit", min: 1, max: 100 });
-  }
-  return n;
-}
-
-function parseListCursor(value: string | undefined): { createdAt: string; id: string } | undefined {
-  if (value === undefined || value.length === 0) return undefined;
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
-    if (
-      isRecord(parsed) &&
-      typeof parsed.created_at === "string" &&
-      Number.isFinite(Date.parse(parsed.created_at)) &&
-      typeof parsed.id === "string" &&
-      UUID_RE.test(parsed.id)
-    ) {
-      return { createdAt: parsed.created_at, id: parsed.id };
-    }
-  } catch {
-    // fall through to uniform API error
-  }
-  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_cursor" });
-}
-
-function parseGenerationStatusFilter(value: string | undefined): GenerationStatus | undefined {
-  if (value === undefined || value.length === 0) return undefined;
-  if (value === "drafted" || value === "saved" || value === "run_queued" || value === "blocked" || value === "failed") {
-    return value;
-  }
-  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_generation_status" });
-}
-
-function parseRunIdFilter(value: string | undefined): string | undefined {
-  if (value === undefined || value.length === 0) return undefined;
-  if (UUID_RE.test(value)) return value;
-  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_run_id" });
 }
 
 function encodeListCursor(row: ScenarioGenerationRow): string {
