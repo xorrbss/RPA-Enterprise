@@ -42,13 +42,18 @@ const STATUS_LABELS: Record<string, string> = {
   closed: "정상", half_open: "점검 중",
 };
 
-// enum → 비기술 한국어 라벨(StatusBadge·필터 드롭다운 공용 접근자). 미매핑은 raw 폴백(조용한 공백 금지).
-export function statusLabel(status: string): string {
+// circuit_status는 enum 문자열("open")을 HumanTask 등과 공유하지만 의미가 정반대다 — 서킷 "open"은 회로 '차단'
+// (열림 아님). tone과 동일하게 kind로 라벨을 분리(RQ-026 연장): circuit open=차단. closed/half_open(정상/점검 중)은
+// STATUS_LABELS 공유.
+const CIRCUIT_LABELS: Record<string, string> = { open: "차단" };
+// enum → 비기술 한국어 라벨(StatusBadge·필터 드롭다운 공용 접근자). kind 지정 시 도메인별 라벨 우선. 미매핑은 raw 폴백.
+export function statusLabel(status: string, kind?: "circuit"): string {
+  if (kind === "circuit") return CIRCUIT_LABELS[status] ?? STATUS_LABELS[status] ?? status;
   return STATUS_LABELS[status] ?? status;
 }
 
 export function StatusBadge({ status, kind }: { status: string; kind?: "circuit" }): JSX.Element {
-  return <span className={`badge ${tone(status, kind)}`}>{statusLabel(status)}</span>;
+  return <span className={`badge ${tone(status, kind)}`}>{statusLabel(status, kind)}</span>;
 }
 
 // 동작(IR action verb) → 비기술 한국어. 출처: ts/core-types IRActionType(닫힌 enum). 미매핑은 raw 폴백(조용한 공백 금지).
