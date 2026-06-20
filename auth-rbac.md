@@ -43,6 +43,7 @@ export type Role =
 |---|---|:--:|:--:|:--:|:--:|:--:|---|
 | run/workitem/human_task 조회 + run step 트레이스(`GET /v1/runs/{id}/steps`) | 콘솔 read | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | principal 디렉터리 조회(담당자 name-picker) | api-surface §3 `GET /v1/principals` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| principal 디렉터리 관리(수동 등록/수정/삭제) | api-surface §3 `POST`/`PATCH`/`DELETE /v1/principals` (admin 디렉터리 CRUD) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | run `create` | api-surface `POST /v1/runs` | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run `abort` (R6 → cancelled) | error-catalog `RUN_ABORTED` 어휘체인 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | human_task `assign`/`start` (H1/H2) | state-machine H1·H2 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |

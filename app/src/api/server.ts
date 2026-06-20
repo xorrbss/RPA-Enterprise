@@ -46,6 +46,7 @@ import { registerGatewayRoutes } from "./gateway";
 import { registerHumanTaskRoutes } from "./human-tasks";
 import { registerReadRoutes } from "./reads";
 import type { PrincipalDirectoryWriter } from "./principal-directory";
+import { registerPrincipalRoutes } from "./principals";
 import { registerSiteRoutes } from "./sites";
 import { registerSessionRoutes } from "./sessions";
 import { registerApprovalRoutes } from "./approvals";
@@ -277,6 +278,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerHumanTaskRoutes(app, deps);
   registerDlqRoutes(app, deps);
   registerReadRoutes(app, deps);
+  registerPrincipalRoutes(app, deps);
   registerSiteRoutes(app, deps);
   registerSessionRoutes(app, deps);
   registerGatewayRoutes(app, deps);

@@ -32,7 +32,7 @@
 - 적용 대상이 아닌 read(GET)·생성(POST create)에는 `If-Match`를 요구하지 않는다.
 
 ### 0.4 멱등 — Idempotency-Key (명령 중복 제출 보호)
-- **부작용이 있는 제어평면 명령**(run create/abort, scenario promote/rollback/archive, human-task assign/start/resolve/escalate, workitem replay, sites approve, gateway policy create/update/delete)에 `Idempotency-Key` 헤더 규약 적용.
+- **부작용이 있는 제어평면 명령**(run create/abort, scenario promote/rollback/archive, human-task assign/start/resolve/escalate, workitem replay, sites approve, gateway policy create/update/delete, principal create/update/delete)에 `Idempotency-Key` 헤더 규약 적용.
 - 서버는 `(tenant_id, endpoint, Idempotency-Key)`로 최초 처리 결과를 보관하고, 동일 키 재제출 시 **부작용 재실행 없이** 최초 응답을 반환(at-least-once 클라이언트 재시도 보호).
 - 이 헤더는 **`sink_idempotency_key`(migration SQL: 외부 sink 다운스트림 중복 방지, 값=`tenant_id:sink_config_id:schema_ref:natural_key`)와 구분된다.** Idempotency-Key는 *제어평면 인입 명령*의 중복 제출 보호이고, sink_idempotency_key는 *데이터평면 외부 전달*의 멱등키다 — 서로 다른 계층·다른 값.
 
@@ -134,6 +134,9 @@
 |---|---|---|---|---|
 | GET | `/v1/human-tasks` | 쿼리: `?status=<HumanTaskState>&kind=<HumanTaskKind>&assignee=&run_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` (인박스 목록; `run_id`는 suspended run→정확한 task 딥링크용) | — |
 | GET | `/v1/principals` | 쿼리: `?limit=&cursor=` | 200 + `{ items, next_cursor }` (담당자 디렉터리; 각 item `principal_id`/`sub`/`display_name`/`email`/`source` — name-picker용) | — |
+| POST | `/v1/principals` | `Idempotency-Key`. body: `sub`·`display_name`(필수)·optional `email`. admin 권한 | 201 + principal(`principal_id`/`sub`/`display_name`/`email`/`source=manual`) | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422; 중복 `sub`) |
+| PATCH | `/v1/principals/{principal_id}` | `Idempotency-Key`. body: optional `display_name`·`email`(`null`=제거) 최소 1개. admin 권한. sub 불변 | 200 + principal 갱신 | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
+| DELETE | `/v1/principals/{principal_id}` | `Idempotency-Key`. admin 권한 | 200 + `{ principal_id, deleted: true }`(human_tasks.assignee FK 없어 기존 배정 불변) | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
 | GET | `/v1/human-tasks/{human_task_id}` | — | 200 + 태스크 상세(`state`, `kind`, `assignee`, `timeout`, `on_timeout`, run 연계; payload 본문 미노출) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/human-tasks/{human_task_id}/start` | `Idempotency-Key`. 배정된 담당자/역할 스코프 필요 | 200 + `in_progress`(H2) | `HUMAN_TASK_EXPIRED`(410), `AUTHZ_FORBIDDEN`(403) |
 | POST | `/v1/human-tasks/{human_task_id}/resolve` | `Idempotency-Key`. body: optional `result`(object) — v1 미소비(아래 note) | 200 + `resolved`. `human_task.resolved` 이벤트 → Run `resume_requested`(R13/H3) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |

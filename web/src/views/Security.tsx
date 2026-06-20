@@ -7,6 +7,7 @@ import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { CaptureGuide } from "../components/CaptureGuide";
 import { FilterSelect } from "../components/FilterSelect";
+import { PrincipalDirectory } from "../components/PrincipalDirectory";
 import { SiteCreateForm } from "../components/SiteCreateForm";
 import { SiteNameEditor } from "../components/SiteNameEditor";
 import { StatusBadge, statusLabel } from "../components/badges";
@@ -20,6 +21,7 @@ export function SecurityView(): JSX.Element {
   const lv = useListView<SiteItem>(["sites"], (p) => api.listSites(p), { refetchInterval: 10_000 });
   return (
     <>
+    <PrincipalDirectory />
     <SiteCreateForm />
     <QueryPanel<SiteItem>
       title="사이트 접근 정책"
