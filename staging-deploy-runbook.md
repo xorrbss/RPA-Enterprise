@@ -91,6 +91,13 @@ SecretRef **경로/식별자** 목록(값 없음).
    - Runtime worker env에는 `ARTIFACT_OBJECT_STORE_REF=<SecretRef identifier>`를 반드시 넣는다
      (예: `rpa/staging/artifact-lifecycle/object_store/fs` 또는 S3 SecretRef). 필요하면
      `ARTIFACT_OBJECT_STORE_BACKEND_ALIAS=<redacted backend alias>`를 함께 넣는다. object-store 비밀값은 env에 넣지 않는다.
+   - **`RUN_MODE=worker` 단독 배포 시 `ARTIFACT_LIFECYCLE_CONSUMER` 필수(N1 fail-closed)**: run-drive 가
+     `artifact_redaction`/`artifact_retention` job 을 인큐하므로 소비자가 없으면 artifact 가 영구 적체된다(아티팩트 비노출).
+     - `ARTIFACT_LIFECYCLE_CONSUMER=external` — **별도 `RUN_MODE=lifecycle-worker` 프로세스를 함께 배포**한다는 운영자 단언
+       (control 워커는 object-store cred 불필요, 자격증명 분리 유지). lifecycle-worker 미배포 시 적체는 운영자 책임.
+     - `ARTIFACT_LIFECYCLE_CONSUMER=self` — 이 워커 프로세스가 lifecycle-worker 를 인-프로세스로 함께 기동
+       (전용 BYPASSRLS `ARTIFACT_LIFECYCLE_DATABASE_URL` + 전체 `ARTIFACT_LIFECYCLE_*` config 필요).
+     - 미설정이면 기동 거부(fail-closed). `RUN_MODE=all` 은 lifecycle 를 인-프로세스로 이미 포함하므로 이 env 불요.
 
 기록(패킷 §6): 배포 실행 참조(redacted run/deployment URL) + 승인/롤백 절차 확인.
 

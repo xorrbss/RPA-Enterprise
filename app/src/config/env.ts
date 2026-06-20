@@ -63,6 +63,26 @@ export function loadRunMode(): RunMode {
   return m;
 }
 
+export type ArtifactLifecycleConsumer = "external" | "self";
+
+/**
+ * N1 fail-closed: RUN_MODE=worker 는 run-drive 가 artifact_redaction/artifact_retention job 을 인큐하지만 그 자체로는
+ * 소비자가 없다(control task만 등록). 소비자 토폴로지를 명시 선언하게 강제한다 — `external`=별도 lifecycle-worker
+ * (RUN_MODE=lifecycle-worker)가 배포됨(운영자 단언), `self`=이 프로세스가 lifecycle-worker 를 인-프로세스로 함께 기동
+ * (전용 BYPASSRLS pool/ARTIFACT_LIFECYCLE_* config 필요). 미선언/오값은 throw(조용한 artifact 적체 금지).
+ */
+export function loadArtifactLifecycleConsumer(): ArtifactLifecycleConsumer {
+  const v = (opt("ARTIFACT_LIFECYCLE_CONSUMER") ?? "").toLowerCase();
+  if (v !== "external" && v !== "self") {
+    throw new Error(
+      `RUN_MODE=worker requires ARTIFACT_LIFECYCLE_CONSUMER=external|self — run-drive enqueues artifact_redaction/artifact_retention ` +
+        `jobs that need a consumer; 'external'=a separate lifecycle-worker (RUN_MODE=lifecycle-worker) is deployed, ` +
+        `'self'=this process also starts the lifecycle worker (requires ARTIFACT_LIFECYCLE_* config). got ${JSON.stringify(v || "(unset)")}`,
+    );
+  }
+  return v;
+}
+
 export interface CommonConfig {
   /** RPA_ENV (e.g. staging|prod) ??templates every SecretRef path rpa/<env>/<runtime>/<purpose>/<name>. */
   readonly rpaEnv: string;

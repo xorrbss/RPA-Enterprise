@@ -9,6 +9,7 @@ import {
   assertArtifactStoreTopologyCompatibility,
   assertInProcessArtifactStoreCompatibility,
   loadApiConfig,
+  loadArtifactLifecycleConsumer,
   loadArtifactLifecycleWorkerConfig,
   loadCommonConfig,
   loadGatewayConfig,
@@ -43,7 +44,7 @@ const CLEAR = [
   "ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY", "ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS",
   "PORT", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
   "VAULT_RUNTIME_WORKER_ROLE_ID", "VAULT_RUNTIME_WORKER_SECRET_ID", "VAULT_API_ROLE_ID", "VAULT_API_SECRET_ID",
-  "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF", "OTEL_EXPORTER",
+  "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF", "OTEL_EXPORTER", "ARTIFACT_LIFECYCLE_CONSUMER",
   "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_KIND", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
   "S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_FORCE_PATH_STYLE",
   "ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE",
@@ -117,6 +118,13 @@ function main(): void {
   withEnv({ OTEL_EXPORTER: "console" }, () => check("OTEL_EXPORTER console", loadTelemetryExporter() === "console"));
   withEnv({ OTEL_EXPORTER: "CONSOLE" }, () => check("OTEL_EXPORTER case-insensitive", loadTelemetryExporter() === "console"));
   withEnv({ OTEL_EXPORTER: "otlp" }, () => expectThrow("OTEL_EXPORTER invalid throws", () => loadTelemetryExporter()));
+
+  // ARTIFACT_LIFECYCLE_CONSUMER (N1 fail-closed topology) — unset/invalid throws, external|self, 대소문자 무관.
+  withEnv({}, () => expectThrow("ARTIFACT_LIFECYCLE_CONSUMER unset throws (N1 fail-closed)", () => loadArtifactLifecycleConsumer()));
+  withEnv({ ARTIFACT_LIFECYCLE_CONSUMER: "external" }, () => check("ARTIFACT_LIFECYCLE_CONSUMER external", loadArtifactLifecycleConsumer() === "external"));
+  withEnv({ ARTIFACT_LIFECYCLE_CONSUMER: "self" }, () => check("ARTIFACT_LIFECYCLE_CONSUMER self", loadArtifactLifecycleConsumer() === "self"));
+  withEnv({ ARTIFACT_LIFECYCLE_CONSUMER: "SELF" }, () => check("ARTIFACT_LIFECYCLE_CONSUMER case-insensitive", loadArtifactLifecycleConsumer() === "self"));
+  withEnv({ ARTIFACT_LIFECYCLE_CONSUMER: "bogus" }, () => expectThrow("ARTIFACT_LIFECYCLE_CONSUMER invalid throws", () => loadArtifactLifecycleConsumer()));
 
   // ApiConfig — HS256 default mode: fail-closed on missing/short JWT secret; CORS parse; HSTS default.
   withEnv({ ...FULL, SIGNED_COMMAND_REGISTRY_MODE: "" }, () =>
