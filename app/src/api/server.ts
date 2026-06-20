@@ -444,13 +444,30 @@ export async function createRunInTx(
   //   그대로 실리되 추적용)는 저장 시점에 서버 UUID 로 대체해 ::uuid 캐스트 22P02→미분류 500 을 막는다(review 후속).
   const correlationId = UUID_RE.test(input.correlationId) ? input.correlationId : randomUUID();
   // scenario_version 존재 확인(RLS 스코프) + 아카이브된 시나리오 거부(origin 머지). 부재/archived → IR_SCHEMA_INVALID(FK 500 회피).
-  const sv = await client.query(
-    `SELECT 1 FROM scenario_versions sv JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
+  const sv = await client.query<{ target: unknown }>(
+    `SELECT sv.ir -> 'target' AS target FROM scenario_versions sv JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
       WHERE sv.id = $1::uuid AND s.archived_at IS NULL`,
     [input.scenarioVersionId],
   );
   if (sv.rowCount === 0) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_not_found" });
+  }
+  // run-create 게이트: 시나리오는 구동 가능한 target 을 선언해야 한다. ir.target 은 schema 상 선택적이나
+  //   (ir.schema.json target.required=[site_profile_id,browser_identity_id,network_policy_id]) 미설정/형식오류면
+  //   워커가 구동 불가 → run 이 queued 에 영구 잔류(BrowserLeasePlanResolver→null→lease 실패→재시도 소진).
+  //   drive-time fail-closed(loud throw) 대신 생성 시점에 거부해 운영자에게 즉시 표면화(조용한 false 금지).
+  //   shape 검사는 pgBrowserLeasePlanResolver 와 동형(런타임 미러). 존재성/승인은 lease 단계에서 확인.
+  const declaredTarget = sv.rows[0]?.target;
+  if (declaredTarget === null || declaredTarget === undefined || typeof declaredTarget !== "object") {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "run_target_unresolved" });
+  }
+  const targetIds = declaredTarget as { site_profile_id?: unknown; browser_identity_id?: unknown; network_policy_id?: unknown };
+  if (
+    typeof targetIds.site_profile_id !== "string" ||
+    typeof targetIds.browser_identity_id !== "string" ||
+    typeof targetIds.network_policy_id !== "string"
+  ) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "run_target_unresolved" });
   }
   // model 1회 해소·동결(runs.model). 명시 → (tenant,model) 존재확인. 미지정 → is_default → 단일정책 자동해소 → 0건 NULL.
   //   다정책+미지정+default없음 → model_required(조용한 false 금지). createRun 과 동일 규약(GET /v1/gateway/policy 동형).

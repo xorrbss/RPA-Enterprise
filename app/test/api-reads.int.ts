@@ -63,7 +63,7 @@ async function seedScenario(pool: Pool, tenant: string, scen: string, svers: str
     for (const sv of svers) {
       await c.query(
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir)
-         VALUES ($1,$2,$3,$4,'draft','{"nodes":[]}'::jsonb)`,
+         VALUES ($1,$2,$3,$4,'draft','{"nodes":[],"target":{"site_profile_id":"00000000-0000-4000-8000-0000000000a1","browser_identity_id":"00000000-0000-4000-8000-0000000000a2","network_policy_id":"00000000-0000-4000-8000-0000000000a3"}}'::jsonb)`,
         [sv, tenant, scen, svers.indexOf(sv) + 1],
       );
     }
