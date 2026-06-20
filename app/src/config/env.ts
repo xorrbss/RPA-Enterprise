@@ -447,6 +447,7 @@ function artifactLifecycleObjectStoreMode(): ArtifactLifecycleObjectStoreMode {
 function reqArtifactObjectStoreRef(name: string): string {
   const ref = req(name);
   const parts = ref.split("/");
+  const rpaEnv = req("RPA_ENV").toLowerCase();
   if (
     parts.length < 5 ||
     parts.some((part) => part.length === 0) ||
@@ -456,6 +457,11 @@ function reqArtifactObjectStoreRef(name: string): string {
   ) {
     throw new Error(
       `env ${name} must be a SecretRef under rpa/<env>/artifact-lifecycle/object_store/<name>, got ${JSON.stringify(ref)}`,
+    );
+  }
+  if (parts[1] !== rpaEnv) {
+    throw new Error(
+      `env ${name} SecretRef env segment must match RPA_ENV=${JSON.stringify(rpaEnv)}, got ${JSON.stringify(parts[1])}`,
     );
   }
   return ref;
