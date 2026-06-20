@@ -569,7 +569,7 @@ export function loadScenarioGenerationLlmV1Config(): ScenarioGenerationLlmV1Conf
   if (!strictBool("SCENARIO_GENERATION_LLM_V1_ENABLED", false)) return undefined;
   return {
     gateway: loadGatewayConfig(),
-    promptTemplateVersion: opt("SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION") ?? "scenario-planner@1",
+    promptTemplateVersion: opt("SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION") ?? "scenario-planner@2",
   };
 }
 

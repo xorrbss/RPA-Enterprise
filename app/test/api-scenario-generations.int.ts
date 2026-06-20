@@ -505,7 +505,7 @@ async function main(): Promise<void> {
       check("blocked generation run does not enqueue", enqueuedRuns.length === 0, JSON.stringify(enqueuedRuns));
 
       const runnablePayload = {
-        prompt: "https://example.com 에서 최근 공지 제목과 링크를 수집해줘",
+        prompt: "https://example.com 에서 최근 공지 제목과 링크, 수량을 수집해줘",
         name: "generated-runnable",
         model: "codex-gen",
         start_url: "https://example.com/notices",
@@ -567,6 +567,11 @@ async function main(): Promise<void> {
       check(
         "generated extraction schema reflects prompt-requested title/link fields",
         isRecord(runRowProperties.title) && isRecord(runRowProperties.url),
+        runnable.body,
+      );
+      check(
+        "generated extraction schema reflects new quantity candidate field",
+        isRecord(runRowProperties.quantity),
         runnable.body,
       );
       check(

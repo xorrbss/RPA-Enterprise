@@ -1616,6 +1616,31 @@ const EXTRACTION_FIELD_CANDIDATES: readonly {
     description: "문서번호, 결재번호, 문서 ID 또는 문서를 식별하는 번호",
     patterns: [/(?:문서\s*번호|결재\s*번호|문서\s*ID|\bdocument\s*(?:id|number|no\.?)\b)/i],
   },
+  {
+    name: "quantity",
+    description: "수량, 개수, 건수를 화면 원문에 가깝게 보존한 값",
+    patterns: [/(?:수량|개수|건수|\bquantity\b|\bqty\b|\bcount\b)/i],
+  },
+  {
+    name: "category",
+    description: "분류, 구분, 유형 또는 카테고리",
+    patterns: [/(?:분류|구분|유형|카테고리|\bcategory\b)/i],
+  },
+  {
+    name: "department",
+    description: "부서, 소속 또는 담당 조직",
+    patterns: [/(?:부서|소속|\bdepartment\b|\bteam\b)/i],
+  },
+  {
+    name: "phone",
+    description: "전화번호, 연락처 또는 휴대폰 번호",
+    patterns: [/(?:전화\s*번호|연락처|휴대폰|\bphone\b|\btel\b)/i],
+  },
+  {
+    name: "email",
+    description: "이메일 주소 또는 메일 주소",
+    patterns: [/(?:이메일|메일\s*주소|\bemail\b|\be-mail\b)/i],
+  },
 ];
 
 function extractionFieldPlan(prompt: string): readonly ExtractionFieldPlan[] {

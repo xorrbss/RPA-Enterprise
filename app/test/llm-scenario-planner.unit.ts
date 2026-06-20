@@ -114,6 +114,13 @@ async function main(): Promise<void> {
         /^[a-f0-9]{64}$/.test(plan.promptHash),
       JSON.stringify(plan),
     );
+    check(
+      "llm planner system prompt coaches extract/pagination/target conventions",
+      calls[0]?.systemPrompt.includes("{ summary: string, rows: object[] }") &&
+        calls[0].systemPrompt.includes("max_pages") &&
+        calls[0].systemPrompt.includes("site_profile_id, browser_identity_id, network_policy_id"),
+      calls[0]?.systemPrompt,
+    );
   }
 
   {
@@ -221,7 +228,7 @@ async function main(): Promise<void> {
         captured.budget.maxOutputTokens === 800 &&
         captured.idempotencyKey.startsWith(`scenario-generation:${context.generationId}:plan:0:`) &&
         schema?.properties !== undefined &&
-        !Object.prototype.hasOwnProperty.call(schema.properties, "params"),
+        Object.prototype.hasOwnProperty.call(schema.properties, "params"),
       JSON.stringify(captured),
     );
   }
