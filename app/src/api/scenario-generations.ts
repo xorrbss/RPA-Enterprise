@@ -26,6 +26,7 @@ import { apiErrorBody, isRecord } from "./command";
 import { extractFirstHttpUrl, hostOfHttpUrl, isHostAllowed, isHttpUrl } from "./scenario-generation-url";
 import { containsRedactedParamsMarker, redactGenerationDraftIr, redactGenerationFailureDetails, redactParamsContext } from "./scenario-generation-redaction";
 import { parseGenerationStatusFilter, parseListCursor, parseListLimit, parseParamsContext, parseRunIdFilter, UUID_RE } from "./scenario-generation-parse";
+import { DEFAULT_PAGINATION_MAX_PAGES, MAX_AUTO_PAGINATION_PAGES, recordingPolicy, type RecordingPolicy } from "./scenario-generation-policy";
 import { createRunInTx, requirePrincipal, type ApiServerDeps } from "./server";
 import type {
   EvidencePolicy,
@@ -43,11 +44,7 @@ import { originOf, resolveSiteProfileId, type SiteResolutionCode, SiteResolution
 
 const ISO_8601_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_PAGINATION_MAX_PAGES = 3;
-const MAX_AUTO_PAGINATION_PAGES = 10;
 const MAX_PLANNER_REPAIR_ATTEMPTS = 1;
-
-type RecordingPolicy = "always" | "masked_on_failure" | "never";
 
 interface PaginationPlan {
   enabled: boolean;
@@ -1710,13 +1707,6 @@ function promptMaxPages(prompt: string): number | undefined {
     if (match?.[1] !== undefined) return Number(match[1]);
   }
   return undefined;
-}
-
-function recordingPolicy(evidence: EvidencePolicy): RecordingPolicy {
-  // Action-level recording controls step screenshot capture only; run video is driven by meta.evidence.video.
-  if (evidence.screenshot === "each_step") return "always";
-  if (evidence.screenshot === "never") return "never";
-  return "masked_on_failure";
 }
 
 function looksLikeSideEffectPrompt(prompt: string, options: { allowPaginationControls?: boolean } = {}): boolean {
