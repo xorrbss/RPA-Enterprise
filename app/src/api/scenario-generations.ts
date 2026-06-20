@@ -23,6 +23,7 @@ import { compileScenario, type CompileOutcome } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx, idempotencyRecordRowId } from "./idempotency";
 import { apiErrorBody, isRecord } from "./command";
+import { extractFirstHttpUrl, hostOfHttpUrl, isHostAllowed, isHttpUrl } from "./scenario-generation-url";
 import { createRunInTx, requirePrincipal, type ApiServerDeps } from "./server";
 import type {
   EvidencePolicy,
@@ -1745,116 +1746,6 @@ function stripBenignPaginationControls(prompt: string): string {
     .replace(/\b(?:next(?:\s+page)?|load\s+more|more)\s+(?:button|link)\s+click\b/gi, " ")
     .replace(/(?:다음\s*(?:페이지)?|더보기)\s*(?:버튼|링크)?(?:을|를)?\s*(?:클릭|눌러|선택)/g, " ")
     .replace(/(?:클릭|눌러|선택)\s*(?:해서|하여)?\s*(?:다음\s*(?:페이지)?|더보기)/g, " ");
-}
-
-function extractFirstHttpUrl(text: string): string | undefined {
-  const match = text.match(/https?:\/\/[^\s"'<>]+/i);
-  const candidate = match?.[0];
-  if (candidate === undefined) return undefined;
-  const trimmed = trimUrlProseSuffix(candidate);
-  return isHttpUrl(trimmed) ? trimmed : undefined;
-}
-
-const URL_TRAILING_PROSE_PUNCTUATION = new Set([
-  ".",
-  ",",
-  ";",
-  ":",
-  "!",
-  "?",
-  "。",
-  "．",
-  "，",
-  "、",
-  "；",
-  "：",
-  "！",
-  "？",
-  "…",
-]);
-
-const URL_TRAILING_CLOSERS = new Map([
-  [")", "("],
-  ["]", "["],
-  ["}", "{"],
-  ["）", "（"],
-  ["】", "【"],
-  ["」", "「"],
-  ["』", "『"],
-  ["》", "《"],
-  ["〉", "〈"],
-  ["”", "“"],
-  ["’", "‘"],
-]);
-
-function trimUrlProseSuffix(value: string): string {
-  let trimmed = value;
-  while (trimmed.length > 0) {
-    const char = lastChar(trimmed);
-    if (char === undefined) break;
-    if (URL_TRAILING_PROSE_PUNCTUATION.has(char)) {
-      trimmed = trimLastChar(trimmed, char);
-      continue;
-    }
-    const opener = URL_TRAILING_CLOSERS.get(char);
-    if (opener !== undefined && hasUnmatchedClosingDelimiter(trimmed, opener, char)) {
-      trimmed = trimLastChar(trimmed, char);
-      continue;
-    }
-    break;
-  }
-  return trimmed;
-}
-
-function hasUnmatchedClosingDelimiter(value: string, opener: string, closer: string): boolean {
-  let opens = 0;
-  let closes = 0;
-  for (const char of value) {
-    if (char === opener) opens += 1;
-    if (char === closer) closes += 1;
-  }
-  return closes > opens;
-}
-
-function lastChar(value: string): string | undefined {
-  const chars = Array.from(value);
-  return chars[chars.length - 1];
-}
-
-function trimLastChar(value: string, char: string): string {
-  return value.slice(0, value.length - char.length);
-}
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function hostOfHttpUrl(value: string): string | null {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-    return parsed.hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-function isHostAllowed(host: string, allowedDomains: readonly string[]): boolean {
-  const normalizedHost = host.toLowerCase();
-  return allowedDomains.some((raw) => {
-    const domain = raw.trim().toLowerCase();
-    if (domain.length === 0) return false;
-    if (domain.startsWith("*.")) {
-      const suffix = domain.slice(2);
-      return normalizedHost.length > suffix.length && normalizedHost.endsWith(`.${suffix}`);
-    }
-    return normalizedHost === domain;
-  });
 }
 
 function isStrictIsoDateTime(value: string): boolean {
