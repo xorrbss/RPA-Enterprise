@@ -58,6 +58,22 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
     expect(results).toHaveNoViolations();
   });
 
+  // 비모달 사이드 드로어(SlideOver) 열림 상태 — role=region + tabIndex=-1(포커스 진입용) aria 회귀 없음 확인.
+  test("작업항목 상세 드로어(SlideOver) 열림 시 axe 위반 없음", async () => {
+    renderApp(
+      fakeClient({
+        listWorkitems: async () => ({
+          items: [{ workitem_id: "wi-abc12345", status: "processing", unique_reference: "ref", attempts: 1, checked_out_by: null, checked_out_at: null, run_id: null }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    navigate("workitems");
+    (await screen.findByRole("button", { name: "상세" })).click();
+    await screen.findByRole("region", { name: "작업항목 상세" });
+    expect(await axe(document.body, AXE_OPTS)).toHaveNoViolations();
+  });
+
   for (const view of ["workitems", "humanTasks", "runTrace", "security", "scenarioStudio", "playground", "approvalInbox"] as ViewKey[]) {
     test(`${view} 뷰 axe 위반 없음`, async () => {
       renderApp();
