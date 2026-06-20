@@ -4,11 +4,13 @@ export function FilterSelect({
   value,
   options,
   onChange,
+  labelFor,
 }: {
   label: string;
   value: string | undefined;
   options: readonly string[];
   onChange: (v: string | undefined) => void;
+  labelFor?: (value: string) => string;
 }): JSX.Element {
   return (
     <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, color: "var(--muted)" }}>
@@ -21,7 +23,7 @@ export function FilterSelect({
         <option value="">전체</option>
         {options.map((o) => (
           <option key={o} value={o}>
-            {o}
+            {labelFor ? labelFor(o) : o}
           </option>
         ))}
       </select>

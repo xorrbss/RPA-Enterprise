@@ -390,7 +390,7 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.runId).toBe("11111111-aaaa-bbbb-cccc-000000000001");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
-    await waitFor(() => expect(screen.getByText("완료")).toBeInTheDocument());
+    expect(await screen.findByText("완료", { selector: "span.badge" })).toBeInTheDocument();
   });
 
   test("자동화 운영 해제 성공은 인라인 완료 배지를 남기지 않는다", async () => {

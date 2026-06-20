@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { render } from "@testing-library/react";
 
-import { StatusBadge, terminalLabel } from "../src/components/badges";
-import { RUN_STATES, WORKITEM_STATES, HUMANTASK_STATES, SITE_RISKS } from "../src/views/filters";
+import { StatusBadge, statusLabel, kindLabel, terminalLabel } from "../src/components/badges";
+import { RUN_STATES, WORKITEM_STATES, HUMANTASK_STATES, HUMANTASK_KINDS, SITE_RISKS } from "../src/views/filters";
 
 // RQ-012: StatusBadge가 raw enum 대신 비기술 한국어 라벨을 렌더하는가(색 tone은 별도 검증).
 describe("StatusBadge 한국어 라벨", () => {
@@ -59,6 +59,38 @@ describe("StatusBadge 한국어 라벨", () => {
     const text = container.querySelector("span.badge")?.textContent ?? "";
     expect(text).not.toBe(status); // 한국어 라벨로 치환됨
     expect(/[가-힣]/.test(text)).toBe(true);
+  });
+});
+
+// 필터 드롭다운이 raw enum 대신 쓰는 공용 접근자(StatusBadge와 동일 STATUS_LABELS 출처) — 라벨 배선 가드.
+describe("statusLabel / kindLabel — 필터 드롭다운 한국어 라벨", () => {
+  test.each([
+    ["queued", "대기"],
+    ["failed_system", "시스템 실패"],
+    ["abandoned", "포기"],
+    ["green", "낮음"],
+    ["red", "높음"],
+  ])("statusLabel(%s) → %s", (s, label) => {
+    expect(statusLabel(s)).toBe(label);
+  });
+
+  test("statusLabel 미매핑 값은 raw로 폴백(조용한 공백 금지)", () => {
+    expect(statusLabel("totally_unknown")).toBe("totally_unknown");
+  });
+
+  // 완전성: 상태/위험도 필터 enum 전부 한국어로 치환(raw로 새지 않음).
+  test.each([...RUN_STATES, ...WORKITEM_STATES, ...HUMANTASK_STATES, ...SITE_RISKS])(
+    "statusLabel 필터 enum %s 라벨 존재",
+    (v) => {
+      expect(statusLabel(v)).not.toBe(v);
+      expect(/[가-힣]/.test(statusLabel(v))).toBe(true);
+    },
+  );
+
+  // 완전성: 사람 확인 '종류' 필터 enum은 kindLabel이 담당 — 전부 한국어.
+  test.each([...HUMANTASK_KINDS])("kindLabel 필터 enum %s 라벨 존재", (k) => {
+    expect(kindLabel(k)).not.toBe(k);
+    expect(/[가-힣]/.test(kindLabel(k))).toBe(true);
   });
 });
 

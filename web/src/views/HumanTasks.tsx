@@ -9,7 +9,7 @@ import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
-import { StatusBadge, kindLabel } from "../components/badges";
+import { StatusBadge, kindLabel, statusLabel } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, navigate, useHashParam } from "../router";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
@@ -144,8 +144,8 @@ export function HumanTasksView(): JSX.Element {
         pager={lv.pager}
         actions={
           <>
-            <FilterSelect label="상태" value={lv.filter.status} options={HUMANTASK_STATES} onChange={(v) => lv.setFilter({ ...lv.filter, status: v })} />
-            <FilterSelect label="종류" value={lv.filter.kind} options={HUMANTASK_KINDS} onChange={(v) => lv.setFilter({ ...lv.filter, kind: v })} />
+            <FilterSelect label="상태" value={lv.filter.status} options={HUMANTASK_STATES} labelFor={statusLabel} onChange={(v) => lv.setFilter({ ...lv.filter, status: v })} />
+            <FilterSelect label="종류" value={lv.filter.kind} options={HUMANTASK_KINDS} labelFor={kindLabel} onChange={(v) => lv.setFilter({ ...lv.filter, kind: v })} />
           </>
         }
         rowKey={(r) => r.human_task_id}

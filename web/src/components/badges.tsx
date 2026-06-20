@@ -42,8 +42,13 @@ const STATUS_LABELS: Record<string, string> = {
   closed: "정상", half_open: "점검 중",
 };
 
+// enum → 비기술 한국어 라벨(StatusBadge·필터 드롭다운 공용 접근자). 미매핑은 raw 폴백(조용한 공백 금지).
+export function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status;
+}
+
 export function StatusBadge({ status, kind }: { status: string; kind?: "circuit" }): JSX.Element {
-  return <span className={`badge ${tone(status, kind)}`}>{STATUS_LABELS[status] ?? status}</span>;
+  return <span className={`badge ${tone(status, kind)}`}>{statusLabel(status)}</span>;
 }
 
 // 동작(IR action verb) → 비기술 한국어. 출처: ts/core-types IRActionType(닫힌 enum). 미매핑은 raw 폴백(조용한 공백 금지).
@@ -122,12 +127,18 @@ const ERROR_LABELS: Record<string, string> = {
   CONTROL_PLANE_INTERNAL_ERROR: "내부 오류가 발생했습니다.",
 };
 
+// 에러 코드 문자열 → 비기술 한국어(ApiError가 아닌 bare code 호출부용: failure_reason.code / exception.code).
+// 미매핑은 raw code 폴백(조용한 공백 금지) — errorLabel의 ApiError 분기와 동일 규칙·동일 ERROR_LABELS 출처.
+export function errorCodeLabel(code: string): string {
+  return ERROR_LABELS[code] ?? code;
+}
+
 // 운영자 표면 에러 메시지 단일 출처(8곳 raw enum 덤프 통일). ApiError면 계약 userMessage 미러,
 // 미매핑이면 raw code 폴백(조용한 공백 금지). 비-ApiError는 아래 분기로 처리.
 // correlation_id는 실 응답 필드(types.ts ApiErrorBody)가 있을 때만 부가(없는 추적ID 창작 금지).
 export function errorLabel(err: unknown): string {
   if (err instanceof ApiError) {
-    const base = ERROR_LABELS[err.code] ?? err.code;
+    const base = errorCodeLabel(err.code);
     const cid = err.body?.correlation_id;
     return cid !== undefined ? `${base} (추적 ${cid})` : base;
   }

@@ -9,7 +9,7 @@ import { CaptureGuide } from "../components/CaptureGuide";
 import { FilterSelect } from "../components/FilterSelect";
 import { SiteCreateForm } from "../components/SiteCreateForm";
 import { SiteNameEditor } from "../components/SiteNameEditor";
-import { StatusBadge } from "../components/badges";
+import { StatusBadge, statusLabel } from "../components/badges";
 import { SITE_RISKS } from "./filters";
 import type { SiteItem } from "../api/types";
 
@@ -25,7 +25,7 @@ export function SecurityView(): JSX.Element {
       title="사이트 접근 정책"
       query={lv.query}
       pager={lv.pager}
-      actions={<FilterSelect label="위험도" value={lv.filter.risk} options={SITE_RISKS} onChange={(v) => lv.setFilter({ risk: v })} />}
+      actions={<FilterSelect label="위험도" value={lv.filter.risk} options={SITE_RISKS} labelFor={statusLabel} onChange={(v) => lv.setFilter({ risk: v })} />}
       rowKey={(r) => r.site_profile_id}
       emptyMessage="조건에 맞는 사이트 프로파일이 없습니다."
       columns={[

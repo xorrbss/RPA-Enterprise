@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
 import { useApiClient } from "../api/context";
-import { StatusBadge, actionLabel, cacheLabel, isStreamWarning, streamStatusLabel } from "./badges";
+import { StatusBadge, actionLabel, cacheLabel, errorCodeLabel, isStreamWarning, streamStatusLabel } from "./badges";
 import { ErrorState, Loading } from "./states";
 import { ArtifactRef } from "./ArtifactLookup";
 import { hhmmss } from "../util/time";
@@ -195,7 +195,7 @@ function StepCard({
       {s.exception !== null && (
         <div className="step-line">
           <span className="subtle">예외</span>
-          <span className="badge red">{s.exception.code}</span>
+          <span className="badge red">{errorCodeLabel(s.exception.code)}</span>
           <span className="subtle">{s.exception.class}</span>
         </div>
       )}
@@ -301,7 +301,7 @@ function StepTable({
                 <td>{actionLabel(s.action)}</td>
                 <td>
                   <StatusBadge status={s.status} />
-                  {s.exception !== null && <span className="subtle"> {s.exception.code}</span>}
+                  {s.exception !== null && <span className="subtle"> {errorCodeLabel(s.exception.code)}</span>}
                 </td>
                 <td>{cacheLabel(s.cache_mode)}</td>
                 <td style={{ minWidth: 120 }}><DurationBar durationMs={s.duration_ms} maxDuration={maxDuration} /></td>
