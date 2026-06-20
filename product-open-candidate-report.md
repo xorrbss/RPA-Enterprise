@@ -4,14 +4,15 @@ This report records the repository evidence for a Product Open Candidate state.
 It is a contract-first candidate report, not an external release approval or
 deployment authorization. The tagged Product Open Candidate baseline has green
 repo-controlled evidence on `main`; the current merged repo-controlled product-code
-evidence is `main` `Contract Gates` run `27856343239` on commit
-`3f238912b65b6626ee86d9dbe91e858cefb92bfd`, superseding the earlier D4.4
+evidence is `main` `Contract Gates` run `27856806637` on commit
+`613c8cbb267536eb4c8fd0159df3c1409c1e7be8`, superseding the earlier D4.4
 and Phase 7 remote evidence packets for current-main release judgment.
 This current merged delta connects natural-language generation result artifacts
 to the React console and hardens artifact lifecycle object-store SecretRef
 configuration: planner/output artifacts stay scoped to the generation,
 linked-run result artifacts use the `/result-artifacts` list, result bodies
-still pass through the global artifact audit gate, and
+still pass through the global artifact audit gate, result previews wait for
+`redaction_status = redacted`, and
 `ARTIFACT_OBJECT_STORE_REF` must match `RPA_ENV`; any remaining active blocker is listed in
 `release-open-checklist.md` and the packets below. Product
 Open still requires the project owner to approve and operate the deployment
@@ -301,13 +302,13 @@ Remote CI evidence:
   `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945033`
   `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945101`
 - Current `main` merged repo-controlled product-code evidence:
-  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856343239`
-  (`Contract Gates` success on commit `3f238912b65b6626ee86d9dbe91e858cefb92bfd`).
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856806637`
+  (`Contract Gates` success on commit `613c8cbb267536eb4c8fd0159df3c1409c1e7be8`).
 - Current `main` required job URLs:
-  `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856343239/job/82444456894`
-  `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856343239/job/82444456885`
-  `Operations console (web) typecheck, tests, build`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856343239/job/82444456880`
-  `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856343239/job/82444456878`
+  `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856806637/job/82445718296`
+  `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856806637/job/82445718290`
+  `Operations console (web) typecheck, tests, build`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856806637/job/82445718324`
+  `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27856806637/job/82445718311`
 - Phase 7 `main` runtime-delta `Contract Gates` attempt:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27525226281`
   on commit `6ac33af251bd362a4de200d2eba956d371408cf3`. The latest non-skipped
@@ -317,7 +318,7 @@ Remote CI evidence:
   billing/admin blocker is now resolved**: hosted-runner execution is restored and
   `main` `Contract Gates` run `27609993667` (commit `848413ce`, post-merge of #82)
   first restored hosted-runner evidence, and the latest `main` `Contract Gates` run
-  `27856343239` (commit `3f238912b65b6626ee86d9dbe91e858cefb92bfd`) is the
+  `27856806637` (commit `613c8cbb267536eb4c8fd0159df3c1409c1e7be8`) is the
   current success with the required `secret-scan` / `PostgreSQL 15 migration smoke` /
   `Operations console (web)` / `App runtime typecheck and tests` job URLs, closing the remote job URL gate for the
   Phase 7 delta as currently merged on `main`.
@@ -358,7 +359,7 @@ Environment note:
 - Repo-controlled Product Open Candidate gap: none remain for the tagged
   repo-controlled Product Open Candidate baseline. Current merged repo-controlled
   remote evidence is represented by latest `main` `Contract Gates` run
-  `27856343239` on commit `3f238912b65b6626ee86d9dbe91e858cefb92bfd`; this closes only the
+  `27856806637` on commit `613c8cbb267536eb4c8fd0159df3c1409c1e7be8`; this closes only the
   repo-controlled D4.4 remote evidence pointer and does not close external
   staging/open approval or active external blockers.
 - Current D4.4 repo-controlled contract/runtime evidence includes
