@@ -39,9 +39,9 @@
 
 | 파라미터 | 기본값 | 테스트 픽스처 | 계약 참조 | 비고 |
 |---|---|---|---|---|
-| `site.circuit.block_rate_threshold` | 30% | 50% | `SITE_CIRCUIT_OPEN` | rolling window 내 차단율 |
-| `site.circuit.window` | 5m · min_samples 20 | 1s · 4 | site.circuit_opened | 표본 부족 시 미발동 |
-| `site.circuit.open_duration` | 15m | 1s | site.circuit_closed | cooldown 후 half-open 프로브 |
+| `site.circuit.block_rate_threshold` | 30% | 50% | `SITE_CIRCUIT_OPEN` | rolling window 내 차단율(blocks/total). 표본=`site_block_samples`(drive 1회=1행). blocked=challenge 자동감지(driveSuspend kind<>human_task = 사이트가 봇을 차단; SITE_PROFILE_BLOCKED 승인게이트는 제외). 평가·전이=`recordSiteCircuitOutcome`(drive 후 best-effort tenant tx) |
+| `site.circuit.window` | 5m · min_samples 20 | 1s · 4 | site.circuit_opened | 표본 부족(window 내 total<min_samples) 시 미발동. 삽입 시 window 밖 표본 lazy prune. closed→open CAS 시 `events_outbox` 에 site.circuit_opened(closed-empty, correlation=트리거 run) |
+| `site.circuit.open_duration` | 15m | 1s | site.circuit_closed | open cooldown(`circuit_until`). **경과 후 다음 drive=프로브**(게이트 `acquireBrowserLease`=read-only: open+cooldown 이면 `SITE_CIRCUIT_OPEN` deferred=cooldown 만큼 재큐, run 은 queued 유지). **회복=lazy auto-close**(신규 컬럼 없음): 프로브 비차단→open→closed+site.circuit_closed, 프로브 차단→재open+새 cooldown. 전이는 전부 record* 에서(게이트 미전이→프로브 없는 경로 limbo 회피). 사이트 서킷=tenant-scoped → worker 와 달리 events_outbox 발행 |
 | `challenge.block_rate_threshold` | 30% | 50% | reserved-handlers SITE_CIRCUIT_OPEN | provider는 risk=red면 skip |
 | `worker.circuit.consecutive_failures` | 5 | 3 | worker.circuit_opened | 워커 격리. 카운터 = `workers.consecutive_init_failures`(per-worker 연속 INIT 실패; R3b openCircuit 트리거 — state-machine §1). INIT 성공 시 0 reset |
 | `worker.circuit.open_duration` | 1m | 200ms | worker.circuit_opened→half_open | cooldown. **`circuit_until` 경과 후 claim 은 프로브로 허용**(게이트 `checkWorkerCircuit`=read-only). 프로브 성공이 `open`→`half_open`→`closed`, 프로브 실패가 `open` 재진입을 **`recordWorkerInit*`에서 원자적으로** 처리(게이트 미전이 → SESSION_LOCKED/resume 조기반환이 limbo 안 만듦). cooldown 중·`circuit_until` 미설정(레거시/수동 open)은 fail-closed. worker 서킷은 infra → tenant `events_outbox` 미발행 |

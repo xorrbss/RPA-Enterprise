@@ -3,7 +3,7 @@
 -- 대상: runs, run_steps, workitems, human_tasks, scenarios,
 --       scenario_versions, artifacts, events_outbox, dead_letter,
 --       stagehand_calls, action_plan_cache, site_profiles,
---       site_profile_approvals, browser_identities, network_policies,
+--       site_profile_approvals, site_block_samples, browser_identities, network_policies,
 --       gateway_policies, control_plane_idempotency_keys, workers
 -- 범위: 상태머신·job·캐시·이벤트가 의존하는 영속 컬럼/제약의 단일 진실원천.
 --   migration_concurrency_idempotency.sql(동시성·idempotency 보강)과 **별개 파일**이며
@@ -58,6 +58,20 @@ CREATE TABLE site_profile_approvals (
   created_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_site_profile_approvals_site ON site_profile_approvals (tenant_id, site_profile_id, created_at DESC);
+
+-- site_block_samples — 사이트 서킷(ops-defaults §3 site.circuit) block_rate 표본 저장소. drive 1회=표본 1행.
+--   blocked=true: challenge 자동감지(driveSuspend s.kind<>'human_task' = 사이트가 봇을 차단). blocked=false: 정상 시도(분모).
+--   rolling window(site.circuit.window) 내 blocks/total 이 block_rate_threshold 이상·min_samples 충족 시 circuit open.
+--   site_profiles.circuit_state 가 상태 보유처; 이 표본은 rate 계산 분모/분자 원천(계약은 분모 미보유 — 이 테이블이 보충).
+--   삽입 시 window 밖 행은 lazy prune(무한 성장 방지). SITE_PROFILE_BLOCKED(승인게이트·영구)는 표본 아님(transient 차단만).
+CREATE TABLE site_block_samples (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  site_profile_id uuid        NOT NULL,
+  blocked         boolean     NOT NULL,                     -- true=차단(challenge 자동감지), false=정상 시도
+  occurred_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_site_block_samples_window ON site_block_samples (tenant_id, site_profile_id, occurred_at);
 
 -- ------------------------------------------------------------
 -- workers — 실행기 생존(heartbeat) + 워커 서킷 상태 레지스트리.
@@ -791,6 +805,10 @@ ALTER TABLE site_profile_approvals
   ADD CONSTRAINT fk_site_profile_approvals_site_tenant
   FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
 
+ALTER TABLE site_block_samples
+  ADD CONSTRAINT fk_site_block_samples_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id) ON DELETE CASCADE;
+
 ALTER TABLE browser_identities
   ADD CONSTRAINT fk_browser_identities_site_tenant
   FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
@@ -925,6 +943,7 @@ BEGIN
     'challenge_resolution_attempts',
     'site_profiles',
     'site_profile_approvals',
+    'site_block_samples',
     'approval_decisions',
     'browser_identities',
     'network_policies',
