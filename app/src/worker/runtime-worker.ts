@@ -78,6 +78,7 @@ import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 import { driveClaimedRun, driveResumedRun } from "../runtime/run-step-driver";
 import { handleClaimedInitFailure, type InitBackoffConfig } from "../runtime/run-init-failure";
+import { recordSiteCircuitOutcome, DEFAULT_SITE_CIRCUIT, type SiteCircuitConfig } from "../runtime/site-circuit";
 import type { BrowserSessionStore } from "../runtime/browser-session-store";
 import type { MergedExtractArtifactSink } from "../runtime/merged-extract-artifact";
 import type { VisualEvidenceRecorder } from "../runtime/visual-evidence";
@@ -159,6 +160,8 @@ export interface PgRuntimeWorkerOptions {
   readonly workerCircuitThreshold?: number;
   readonly workerCircuitOpenMs?: number;
   readonly workerCircuitCloseThreshold?: number; // half_open 연속 프로브 성공 N회 → closed(ops-defaults half_open_close_threshold)
+  // 사이트 서킷(ops-defaults §3 site.circuit): block_rate(blocks/total) over window. 미주입 시 기본(30% / 5m·min20 / 15m). 테스트 sim 오버라이드.
+  readonly siteCircuit?: SiteCircuitConfig;
   // suspend 구동(트리거 i): worker 경유 run 이 suspend(executor status='suspended')하면 driveClaimedRun/driveResumedRun →
   // driveSuspend 가 이 둘을 소비(R4+포트→resume-token 발행+R11→suspended). 미주입 시 suspend terminal 은 loud throw(미구성).
   // PgChallengeSuspensionPort=stateless, codec=deploy-time(SecretStore+signingKeyRef). 실 트리거(challenge 감지)는 DOM/vision executor 후행.
@@ -513,8 +516,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
     await this.recordWorkerInitSuccess(workerId);
 
     // DRIVE phase(R2→running, driveScenario failsafe). setup(bound/executor/resolver) 보장. 세션은 어느 경로든 finally 에서 해제.
+    let driveResult: Awaited<ReturnType<typeof driveClaimedRun>> | undefined;
     try {
-      await driveClaimedRun(
+      driveResult = await driveClaimedRun(
         {
           runId,
           tenantId,
@@ -545,6 +549,23 @@ export class PgRuntimeWorker implements RuntimeWorker {
       );
     } finally {
       await setup.bound.release();
+    }
+    // 사이트 서킷 표본(ops-defaults §3 site.circuit): drive 1회=표본 1행. blocked=challenge 자동감지(suspended +
+    //   suspend.kind<>'human_task' = 사이트가 봇을 차단). @human_task suspend·완료·실패는 정상 시도(분모). best-effort
+    //   기록(별도 tenant tx)이라 실패는 잡을 깨지 않게 흡수(loud). throw 로 끝난 drive(driveResult undefined)는 표본 제외.
+    if (driveResult !== undefined) {
+      const blocked =
+        driveResult.state === "suspended" &&
+        driveResult.outcome.suspend !== undefined &&
+        driveResult.outcome.suspend.kind !== "human_task";
+      await recordSiteCircuitOutcome(this.pool, this.options.siteCircuit ?? DEFAULT_SITE_CIRCUIT, {
+        tenantId,
+        siteProfileId: d.siteProfileId,
+        correlationId: d.correlationId,
+        blocked,
+      }).catch((e) =>
+        console.error(`runtime-worker: 사이트 서킷 표본기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+      );
     }
     return claim.result;
   }
@@ -1360,8 +1381,13 @@ export class PgRuntimeWorker implements RuntimeWorker {
       return { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" };
     }
 
-    const identity = await client.query<{ risk: string; approved: boolean }>(
-      `SELECT sp.risk, sp.approved
+    // 사이트 서킷 게이트(ops-defaults §3 site.circuit)는 기존 site_profiles 판독에 접어 넣는다(별도 쿼리 회피). read-only 판정:
+    //   circuit_blocked = open + cooldown(circuit_until 미설정 OR 미래). 전이는 전부 recordSiteCircuitOutcome(drive 후)에서.
+    const siteOpenMs = this.options.siteCircuit?.openMs ?? DEFAULT_SITE_CIRCUIT.openMs;
+    const identity = await client.query<{ risk: string; approved: boolean; circuit_blocked: boolean; retry_after_ms: number }>(
+      `SELECT sp.risk, sp.approved,
+              (sp.circuit_state = 'open' AND (sp.circuit_until IS NULL OR sp.circuit_until > now())) AS circuit_blocked,
+              GREATEST(1, CEIL(EXTRACT(EPOCH FROM (COALESCE(sp.circuit_until, now() + ($4::bigint * interval '1 millisecond')) - now())) * 1000))::int AS retry_after_ms
          FROM browser_identities bi
          JOIN site_profiles sp
            ON sp.tenant_id = bi.tenant_id
@@ -1370,7 +1396,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
           AND bi.id = $2::uuid
           AND sp.id = $3::uuid
         FOR UPDATE OF bi`,
-      [input.tenantId, input.plan.browserIdentityId, input.plan.siteProfileId],
+      [input.tenantId, input.plan.browserIdentityId, input.plan.siteProfileId, siteOpenMs],
     );
     const site = identity.rows[0];
     if (site === undefined) {
@@ -1379,6 +1405,11 @@ export class PgRuntimeWorker implements RuntimeWorker {
     if (site.risk === "red" && !site.approved) {
       recordSiteBlock({ tenant_id: input.tenantId }); // §E site_block_rate. bootstrap 전이면 no-op meter.
       return { kind: "failed", code: "SITE_PROFILE_BLOCKED" };
+    }
+    // SITE_CIRCUIT_OPEN(503·retryable): 영구 승인게이트(SITE_PROFILE_BLOCKED) 통과 후 transient 차단 검사. 새 run state 없이
+    //   deferred(=SESSION_LOCKED 와 동형)로 cooldown 남은 만큼 뒤 재시도 → run 은 queued 유지(R3a-류 재큐, 전이 무변).
+    if (site.circuit_blocked) {
+      return { kind: "deferred", code: "SITE_CIRCUIT_OPEN", retryAfterMs: site.retry_after_ms };
     }
 
     await client.query(

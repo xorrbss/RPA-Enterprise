@@ -24,6 +24,7 @@ const expectedTables = [
   "challenge_resolution_attempts",
   "site_profiles",
   "site_profile_approvals",
+  "site_block_samples",
   "approval_decisions",
   "workers",
   "browser_identities",
@@ -152,6 +153,7 @@ function checkNetworkPolicyFailClosed() {
 function checkTenantForeignKeys() {
   const compositeFkTables = [
     "site_profile_approvals",
+    "site_block_samples",
     "approval_decisions",
     "browser_identities",
     "scenario_versions",
