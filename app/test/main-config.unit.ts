@@ -529,15 +529,15 @@ function main(): void {
   withEnv({ ...GW_REQ, SCENARIO_GENERATION_LLM_V1_ENABLED: "true" }, () => {
     const c = loadScenarioGenerationLlmV1Config();
     check("scenario generation llm_v1 true loads gateway config", c?.gateway.codexModel === "gpt-x");
-    check("scenario generation llm_v1 prompt version default", c?.promptTemplateVersion === "scenario-planner@1");
+    check("scenario generation llm_v1 prompt version default", c?.promptTemplateVersion === "scenario-planner@2");
   });
   withEnv({
     ...GW_REQ,
     SCENARIO_GENERATION_LLM_V1_ENABLED: "true",
-    SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION: "scenario-planner@2",
+    SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION: "scenario-planner@custom",
   }, () => {
     const c = loadScenarioGenerationLlmV1Config();
-    check("scenario generation llm_v1 prompt version override", c?.promptTemplateVersion === "scenario-planner@2");
+    check("scenario generation llm_v1 prompt version override", c?.promptTemplateVersion === "scenario-planner@custom");
   });
 
   if (failures > 0) {
