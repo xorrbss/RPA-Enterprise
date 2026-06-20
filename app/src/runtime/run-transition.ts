@@ -112,6 +112,11 @@ export async function applyRunTransition(
             updated_at = now(),
             worker_id  = CASE WHEN $2::boolean THEN $3::uuid ELSE worker_id END,
             attempts   = attempts + CASE WHEN $4::boolean THEN 1 ELSE 0 END,
+            -- R3a(requeue=$4)면 연속 INIT 실패 +1, R2(=running 진입=$5)면 0 reset, 그 외 유지(state-machine §1 INIT 규칙).
+            consecutive_init_failures = CASE
+              WHEN $5::boolean THEN 0
+              WHEN $4::boolean THEN consecutive_init_failures + 1
+              ELSE consecutive_init_failures END,
             started_at = CASE WHEN $5::boolean THEN now() ELSE started_at END,
             ended_at   = CASE WHEN $6::boolean THEN now() ELSE ended_at END
       WHERE id = $7::uuid AND tenant_id = $8::uuid AND status = $9

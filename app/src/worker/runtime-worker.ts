@@ -64,6 +64,7 @@ import { insertWorkitemDeadLetter, WORKITEM_MAX_ATTEMPTS } from "../runtime/work
 import { relayOutbox } from "../runtime/outbox-relay";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 import { driveClaimedRun, driveResumedRun } from "../runtime/run-step-driver";
+import { handleClaimedInitFailure, type InitBackoffConfig } from "../runtime/run-init-failure";
 import type { BrowserSessionStore } from "../runtime/browser-session-store";
 import type { MergedExtractArtifactSink } from "../runtime/merged-extract-artifact";
 import type { VisualEvidenceRecorder } from "../runtime/visual-evidence";
@@ -136,6 +137,11 @@ export interface PgRuntimeWorkerOptions {
   readonly visualEvidenceVideoRecorderFactory?: RunVideoRecorderFactory;
   readonly mergedExtractArtifactSink?: MergedExtractArtifactSink;
   readonly runtimeJobEnqueuer?: RuntimeJobEnqueuePort;
+  // INIT R3a/R3b(state-machine §1): claimed→running 셋업 실패 분기 임계/백오프. 미주입 시 ops-defaults 기본(3 / base 2s·factor 2·max 60s).
+  //   테스트 sim 오버라이드(작은 값·고정 jitter). 코드 상수 금지 규약 — 기본값은 run-init-failure.ts 가 ops-defaults 인용.
+  readonly initFailThreshold?: number;
+  readonly initBackoff?: InitBackoffConfig;
+  readonly initBackoffJitter?: () => number;
   // suspend 구동(트리거 i): worker 경유 run 이 suspend(executor status='suspended')하면 driveClaimedRun/driveResumedRun →
   // driveSuspend 가 이 둘을 소비(R4+포트→resume-token 발행+R11→suspended). 미주입 시 suspend terminal 은 loud throw(미구성).
   // PgChallengeSuspensionPort=stateless, codec=deploy-time(SecretStore+signingKeyRef). 실 트리거(challenge 감지)는 DOM/vision executor 후행.
@@ -300,6 +306,24 @@ export async function drainBrowserLease(
         AND owner_worker_id = $3::uuid
         AND state IN ('reserved','active')`,
     [input.tenantId, input.leaseId, input.workerId, input.reason],
+  );
+}
+
+/**
+ * INIT 실패(R3a/R3b) 시 Phase A 에서 예약(active)만 된 browser lease 행을 **삭제**한다. INIT 실패는 bind 가 throw 한
+ * 경우라 라이브 세션이 열린 적이 없어 teardown 이 불요하고, drain('draining' 잔류)은 종결자가 없어 누적된다(행 누수).
+ * 더 중요한 건 재-claim 이 신규 lease 를 INSERT 해 run 당 lease 가 2행이 되면 abort 의 claimAbortBrowserLeaseForRun
+ * (run_id 별 LIMIT 2)이 'multiple'→CONTROL_PLANE_INTERNAL_ERROR 로 wedge 되는 것(적대리뷰 B1) — 행을 삭제해
+ * 'run 당 활성 lease ≤1' 불변식을 복원한다. owner 가드(다른 워커 lease 미삭제).
+ */
+export async function deleteInitReservedBrowserLease(
+  client: pg.PoolClient,
+  input: { readonly tenantId: string; readonly leaseId: string; readonly workerId: string },
+): Promise<void> {
+  await client.query(
+    `DELETE FROM browser_leases
+      WHERE tenant_id = $1::uuid AND id = $2::uuid AND owner_worker_id = $3::uuid`,
+    [input.tenantId, input.leaseId, input.workerId],
   );
 }
 
@@ -477,26 +501,76 @@ export class PgRuntimeWorker implements RuntimeWorker {
     // 미구현 throw 로 표면화(propagate). 세션은 어느 경로든 finally 에서 해제.
     if (claim.drive === undefined || sessionProvider === undefined) return claim.result;
     const d = claim.drive;
-    const siteConfig = await withTenantTx(this.pool, tenantId, (c) =>
-      loadSitePageStateConfig(c, tenantId, d.siteProfileId),
-    );
-    const bound = await sessionProvider.bind({
-      tenantId,
-      leaseId: d.leaseId,
-      siteProfileId: d.siteProfileId,
-      browserIdentityId: d.browserIdentityId,
-      networkPolicyId: d.networkPolicyId,
-      isolation: d.isolation,
-      cleanupPolicy: d.cleanupPolicy,
-    });
+
+    // INIT phase(status='claimed'): site page-state config 적재 + 세션 bind(브라우저 I/O). 이 셋업이 throw 하면 좀비
+    //   claimed 잔류 대신 init_failed(R3a 재큐 / R3b 종결)로 처리한다(state-machine §1 INIT 규칙). bind 성공 후엔 즉시
+    //   setup 확정이라 init-catch 에 leaked 세션 없음 — Phase A 브라우저 lease 는 handleClaimedInitFailure 가 drainLease 로 해제.
+    let setup: {
+      bound: Awaited<ReturnType<typeof sessionProvider.bind>>;
+      siteConfig: Awaited<ReturnType<typeof loadSitePageStateConfig>>;
+    };
     try {
-      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider, {
+      const siteConfig = await withTenantTx(this.pool, tenantId, (c) =>
+        loadSitePageStateConfig(c, tenantId, d.siteProfileId),
+      );
+      const bound = await sessionProvider.bind({
+        tenantId,
+        leaseId: d.leaseId,
+        siteProfileId: d.siteProfileId,
+        browserIdentityId: d.browserIdentityId,
+        networkPolicyId: d.networkPolicyId,
+        isolation: d.isolation,
+        cleanupPolicy: d.cleanupPolicy,
+      });
+      setup = { bound, siteConfig };
+    } catch (initErr) {
+      console.error(
+        `runtime-worker: INIT 셋업 실패(run ${runId.slice(0, 8)}) — ${initErr instanceof Error ? initErr.message : String(initErr)}`,
+      );
+      const enqueuer = this.options.runtimeJobEnqueuer;
+      const outcome = await handleClaimedInitFailure(
+        {
+          pool: this.pool,
+          initFailThreshold: this.options.initFailThreshold,
+          initBackoff: this.options.initBackoff,
+          jitter: this.options.initBackoffJitter,
+        },
+        {
+          tenantId,
+          runId,
+          correlationId: d.correlationId,
+          // INIT 실패 lease 는 행 삭제(라이브 세션 미오픈)로 'run 당 lease ≤1' 불변식 복원 — drain('draining' 누적)
+          //   금지(적대리뷰 B1: 누적 행이 abort claimAbortBrowserLeaseForRun 'multiple' wedge·행 누수 유발).
+          drainLease: (c) => deleteInitReservedBrowserLease(c, { tenantId, leaseId: d.leaseId, workerId }),
+          // 재큐 enqueuer 부재면 R3a 불가 → 좀비 claimed 대신 R3b 단말 정산으로 강등(canRequeue=false, 적대리뷰 B2).
+          //   tx 안 throw 가 전이+drain 을 롤백해 좀비를 만드는 것을 원천 차단(throw 경로 제거).
+          canRequeue: enqueuer !== undefined,
+          reenqueueRunClaim: async (c, delayMs) => {
+            // canRequeue=true 일 때만 R3a 도달 → 여기서 enqueuer 는 항상 정의됨. 방어적 단정.
+            if (enqueuer === undefined) {
+              throw new Error("runtime-worker: INIT R3a requeue reached without enqueuer (canRequeue invariant violated)");
+            }
+            await enqueuer.enqueueRuntimeJob(
+              c,
+              { kind: "run_claim", tenantId, runId, correlationId: d.correlationId } as RuntimeWorkerJob,
+              delayMs,
+            );
+          },
+        },
+      );
+      console.warn(`runtime-worker: INIT 실패 처리(run ${runId.slice(0, 8)}) → ${outcome ?? "미적용(비-claimed/경합)"}`);
+      return claim.result;
+    }
+
+    // DRIVE phase(R2→running, driveScenario failsafe). bound + siteConfig 보장. 세션은 어느 경로든 finally 에서 해제.
+    try {
+      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(setup.bound.provider, {
         scenarioVersionId: d.scenarioVersionId,
         browserIdentityVersion: d.browserIdentityVersion,
         tenantId, // 자격증명 fill executorPrincipal per-run 테넌트(감사 정합).
         ...(d.model !== undefined ? { model: d.model } : {}),
       });
-      const resolver = new SitePageStateResolver(bound.provider, siteConfig);
+      const resolver = new SitePageStateResolver(setup.bound.provider, setup.siteConfig);
       await driveClaimedRun(
         {
           runId,
@@ -518,16 +592,16 @@ export class PgRuntimeWorker implements RuntimeWorker {
           suspensionPort: this.options.suspensionPort,
           resumeTokenCodec: this.options.resumeTokenCodec,
           sessionStore: this.options.sessionStore,
-          sessionProvider: bound.provider,
+          sessionProvider: setup.bound.provider,
           visualEvidenceRecorder: this.options.visualEvidenceRecorder,
-          visualEvidenceVideoRecorder: this.options.visualEvidenceVideoRecorderFactory?.(bound.provider),
+          visualEvidenceVideoRecorder: this.options.visualEvidenceVideoRecorderFactory?.(setup.bound.provider),
           mergedExtractArtifactSink: this.options.mergedExtractArtifactSink,
           runtimeJobEnqueuer: this.options.runtimeJobEnqueuer,
           recordExecutorSteps: true,
         },
       );
     } finally {
-      await bound.release();
+      await setup.bound.release();
     }
     return claim.result;
   }

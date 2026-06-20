@@ -52,7 +52,15 @@ export interface RunEnqueuer {
 
 /** 운영: graphile_worker.add_job을 호출측 트랜잭션에서 실행(상태변경+인큐 원자화). */
 export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort {
-  async enqueueRuntimeJob(client: PoolClient, job: RuntimeWorkerJob): Promise<void> {
+  async enqueueRuntimeJob(client: PoolClient, job: RuntimeWorkerJob, delayMs?: number): Promise<void> {
+    // delayMs 지정 시 run_at=now()+delay(R3a INIT 재큐 백오프). 음수/비정수는 즉시(now()) — 조용한 무시 아님, 0 하한.
+    if (delayMs !== undefined && Number.isFinite(delayMs) && delayMs > 0) {
+      await client.query(
+        `SELECT graphile_worker.add_job($1, payload := $2::json, run_at := now() + ($3::double precision * interval '1 millisecond'))`,
+        [runtimeJobTaskIdentifier(job), JSON.stringify(job), delayMs],
+      );
+      return;
+    }
     await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
       runtimeJobTaskIdentifier(job),
       JSON.stringify(job),

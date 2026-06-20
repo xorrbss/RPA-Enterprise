@@ -51,6 +51,11 @@ IR terminal `success_empty`는 RunState를 새로 만들지 않고 `completed` +
 
 **R26 fail-closed 규칙**: `suspending`은 bookmark 저장 중인 전이 상태라 API가 `bookmarkCancelable=true`를 추정하면 안 된다. bookmark-cancel port 또는 durable abort intent가 연결된 런타임만 R26을 즉시 적용할 수 있다. Product Open v1 제어평면은 그 소유권이 없으므로 `suspending` abort를 멱등 예약 전에 `WORKITEM_CHECKOUT_CONFLICT`(`run_bookmark_in_progress`)로 거부하고, R11로 `suspended`에 도달한 뒤 R16으로 재시도하게 한다. 이는 성공 응답으로 알 수 없는 bookmark side effect를 숨기는 것을 금지하기 위한 계약이다.
 
+**INIT 규칙(R2/R3a/R3b — `init_failed` 발생 경계)**: **INIT = `claimed`→`running` 셋업 구간**이다. 워커는 claim(R1, `queued`→`claimed`) 직후 run을 구동하기 위한 셋업을 수행한다 — drive-input 적재 + 브라우저 세션 bind + site page-state config 적재 + executor/resolver 구성(런타임 Phase B). 이 셋업이 성공하면 R2(`run.started`, `initOk`)로 `running`에 진입하고, **실패하면 `status='claimed'`에서 `init_failed` 이벤트를 발생**시켜 R3a/R3b로 분기한다. 셋업 실패가 현재 `claimed`에 영구 잔류(좀비)하지 않도록 하는 것이 본 전이의 목적이다.
+  - **적격/부적격**: 브라우저 lease 확보(Phase A)는 claim **CAS 이전**에 일어나 그 시점 run 상태는 여전히 `queued`이므로 lease 실패는 `init_failed` 대상이 **아니다**(`queued`+`init_failed`는 정의되지 않은 전이=`IllegalTransition`). lease 실패는 큐/claim 재시도(dispatcher)로 처리한다. `init_failed`는 `claimed` 이후 Phase B 셋업 실패에만 한정한다.
+  - **연속 실패 카운터**: R3a/R3b 분기의 '연속 실패'는 누적 `runs.attempts`가 아니라 **`runs.consecutive_init_failures`**다(누적과 의미 분리 — 계약 단어가 '연속(consecutive)'). **R3a 재큐 시 +1, R2(=INIT 성공, `running` 진입) 시 0으로 reset**. guard `연속 실패 임계 미만` = 이번 실패 포함 연속 실패 수 < `run.init_fail_threshold`(ops-defaults §1, 기본 3) → R3a, 그 이상 → R3b. 즉 임계 3이면 2회 재큐 후 3회째에 R3b로 종결한다.
+  - **R3b `서킷 오픈` 미결정**: R3b의 `openCircuit` side effect가 여는 서킷의 **대상 엔티티(worker vs site)와 회복(open→half_open→closed) 경로는 미결정**이다(SideEffectCmd `openCircuit`에 entity 파라미터 없음, ops-defaults §3 site/worker circuit 어느 행도 R3a/R3b를 참조하지 않음). 따라서 런타임은 R3b의 `failed_system`+DLQ 종결은 수행하되 `openCircuit`은 **소비하지 않고 loud 로그로 보류**한다(조용한 false 금지 — 버리지 않고 표면화). 엔티티 바인딩+회복 경로는 별도 versioned 결정 대상(아래 §미결정 참조 가능).
+
 ---
 
 ## 2. Workitem 상태

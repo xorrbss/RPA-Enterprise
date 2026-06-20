@@ -15,7 +15,8 @@ import { settleLinkedWorkitemForRunTerminal } from "./workitem-settlement";
 import { recordExecutorInvocationInTx } from "./executor-invocation-recorder";
 
 export interface RuntimeJobEnqueuePort {
-  enqueueRuntimeJob(client: pg.PoolClient, job: RuntimeWorkerJob): Promise<void>;
+  /** delayMs 지정 시 graphile run_at=now()+delay 로 지연 인큐(R3a INIT 재큐 백오프). 미지정=즉시. */
+  enqueueRuntimeJob(client: pg.PoolClient, job: RuntimeWorkerJob, delayMs?: number): Promise<void>;
 }
 
 export interface ExecutorSecurityNotificationPort {
