@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { errorLabel } from "../src/components/badges";
+import { errorLabel, errorCodeLabel } from "../src/components/badges";
 import { ApiError } from "../src/api/types";
 
 // errorLabel: 8곳 raw enum 덤프 통일. 라벨은 계약 ts/error-catalog.ts ERROR_CATALOG[code].userMessage를 글자 그대로
@@ -59,5 +59,21 @@ describe("errorLabel — 계약 userMessage 미러 + raw 폴백", () => {
     const out = errorLabel(new ApiError(400, code, null));
     expect(out).not.toBe(code); // 한국어 라벨로 치환됨
     expect(/[가-힣]/.test(out)).toBe(true);
+  });
+});
+
+// errorCodeLabel: bare 에러 코드 문자열(failure_reason.code / exception.code 배지) → 한국어.
+// errorLabel ApiError 분기와 동일 ERROR_LABELS 출처·동일 raw 폴백 규칙(실행 기록·단계 트레이스·대시보드 배지 배선).
+describe("errorCodeLabel — bare 코드 문자열 라벨 + raw 폴백", () => {
+  test.each([
+    ["LLM_BUDGET_EXCEEDED", "처리 한도 초과."],
+    ["SITE_CIRCUIT_OPEN", "일시적으로 수집이 중단되었습니다."],
+    ["AUTHZ_FORBIDDEN", "권한이 없습니다."],
+  ])("code=%s → %s", (code, label) => {
+    expect(errorCodeLabel(code)).toBe(label);
+  });
+
+  test("미매핑 코드는 raw로 폴백(조용한 공백 금지)", () => {
+    expect(errorCodeLabel("TOTALLY_UNKNOWN")).toBe("TOTALLY_UNKNOWN");
   });
 });

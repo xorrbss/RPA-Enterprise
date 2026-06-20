@@ -5,7 +5,7 @@ import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
-import { StatusBadge } from "../components/badges";
+import { StatusBadge, errorCodeLabel } from "../components/badges";
 import { navigate, type ViewKey } from "../router";
 import type { DeadLetterItem, HumanTaskItem, RunItem, SiteItem } from "../api/types";
 
@@ -154,10 +154,10 @@ function collectActionItems(args: {
 }): ActionItem[] {
   const out: ActionItem[] = [];
   for (const r of args.failedSys.slice(0, 2)) {
-    out.push({ key: `fs-${r.run_id}`, tone: "red", title: "시스템 실패 실행", meta: r.failure_reason?.code ?? r.run_id.slice(0, 8), view: "runTrace", params: { run: r.run_id, status: "failed_system" } });
+    out.push({ key: `fs-${r.run_id}`, tone: "red", title: "시스템 실패 실행", meta: r.failure_reason ? errorCodeLabel(r.failure_reason.code) : r.run_id.slice(0, 8), view: "runTrace", params: { run: r.run_id, status: "failed_system" } });
   }
   for (const r of args.failedBiz.slice(0, 2)) {
-    out.push({ key: `fb-${r.run_id}`, tone: "red", title: "업무 실패 실행", meta: r.failure_reason?.code ?? r.run_id.slice(0, 8), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
+    out.push({ key: `fb-${r.run_id}`, tone: "red", title: "업무 실패 실행", meta: r.failure_reason ? errorCodeLabel(r.failure_reason.code) : r.run_id.slice(0, 8), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
   }
   for (const h of [...args.human].sort(bySoonestTimeout).slice(0, 3)) {
     out.push({ key: `h-${h.human_task_id}`, tone: h.timeout !== null ? "amber" : "blue", title: "사람 확인 대기", meta: h.timeout !== null ? `마감 ${h.timeout}` : h.kind, view: "humanTasks", params: { ht: h.human_task_id } });

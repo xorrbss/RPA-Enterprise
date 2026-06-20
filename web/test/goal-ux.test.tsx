@@ -190,15 +190,16 @@ describe("goal UX improvements", () => {
     );
     location.hash = "#humanTasks";
 
-    expect(await screen.findByText("보안문자")).toBeInTheDocument();
+    // 종류 필터 드롭다운에도 '보안문자/승인' 옵션이 있으므로, 작업 표시 여부 검증은 작업 표(table)로 좁힌다.
+    expect(within(await screen.findByRole("table")).getByText("보안문자")).toBeInTheDocument();
     const controls = await screen.findByRole("region", { name: "사람 확인 큐 제어" });
     fireEvent.click(within(controls).getByRole("button", { name: "다음 건 처리" }));
     await waitFor(() => expect(location.hash).toContain("ht=ht-due"));
     fireEvent.click(within(await screen.findByRole("region", { name: "사람확인 상세" })).getByRole("button", { name: "닫기" }));
 
     fireEvent.click(within(controls).getByRole("button", { name: "마감 임박 1" }));
-    await waitFor(() => expect(screen.getByText("보안문자")).toBeInTheDocument());
-    expect(screen.queryByText("승인")).toBeNull();
+    await waitFor(() => expect(within(screen.getByRole("table")).getByText("보안문자")).toBeInTheDocument());
+    expect(within(screen.getByRole("table")).queryByText("승인")).toBeNull();
 
     fireEvent.click(within(controls).getByRole("button", { name: "현재 페이지 2건 배정" }));
     fireEvent.change(await screen.findByLabelText("담당자 ID(uuid)"), { target: { value: "u-assign" } });

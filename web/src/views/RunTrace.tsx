@@ -11,7 +11,7 @@ import { GenerationArtifactsPanel } from "../components/GenerationArtifactsPanel
 import { StepTrace } from "../components/StepTrace";
 import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
-import { StatusBadge, tone, type Tone } from "../components/badges";
+import { StatusBadge, statusLabel, errorCodeLabel, tone, type Tone } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
 import { mergeParams, navigate, useHashParam } from "../router";
@@ -90,7 +90,7 @@ export function RunTraceView(): JSX.Element {
         title="실행 기록"
         query={lv.query}
         pager={lv.pager}
-        actions={<FilterSelect label="상태" value={lv.filter.status} options={RUN_STATES} onChange={(v) => lv.setFilter({ status: v })} />}
+        actions={<FilterSelect label="상태" value={lv.filter.status} options={RUN_STATES} labelFor={statusLabel} onChange={(v) => lv.setFilter({ status: v })} />}
         rowKey={(r) => r.run_id}
         emptyMessage="조건에 맞는 실행 기록이 없습니다."
         columns={[
@@ -101,7 +101,7 @@ export function RunTraceView(): JSX.Element {
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                 <StatusBadge status={r.status} />
                 {r.failure_reason !== null && r.failure_reason !== undefined && (
-                  <span className="badge red">{r.failure_reason.code}</span>
+                  <span className="badge red">{errorCodeLabel(r.failure_reason.code)}</span>
                 )}
               </span>
             ),
@@ -118,7 +118,7 @@ export function RunTraceView(): JSX.Element {
                   <ActionButton
                     label="취소"
                     action="run.abort"
-                    confirmText={`실행 ${r.run_id.slice(0, 8)}을(를) 취소할까요? (abort→cancelled)`}
+                    confirmText={`실행 ${r.run_id.slice(0, 8)}을(를) 취소할까요? 취소하면 다시 시작할 수 없습니다.`}
                     run={(key) => api.abortRun(r.run_id, key)}
                     invalidateKeys={[["runs"]]}
                   />
@@ -231,7 +231,7 @@ function ArrivalBanner({
     <div className={`arrival-banner badge ${bannerTone}`} role="status">
       <StatusBadge status={status} />
       <span>실행이 종료되었습니다{attempts > 1 ? ` · 시도 ${attempts}회` : ""}.</span>
-      {failed && reason !== null && <span>{reason.code}: {reason.message}</span>}
+      {failed && reason !== null && <span>{errorCodeLabel(reason.code)}{reason.message !== "" && <span className="subtle"> · {reason.message}</span>}</span>}
       {failed && reason === null && <span className="subtle">자세한 원인은 아래 단계 트레이스를 확인하세요.</span>}
     </div>
   );

@@ -5,7 +5,7 @@ import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
 import { ApiError } from "../api/types";
 import { COLLECT_SCENARIO_NAME, APPROVAL_ARTIFACT_TYPE, parseApprovalRows, summarize } from "../api/approval-inbox";
-import { StatusBadge } from "../components/badges";
+import { StatusBadge, errorLabel } from "../components/badges";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import type { ApprovalRow, RunDetail } from "../api/types";
@@ -216,7 +216,7 @@ function DecideButtons(props: { sourceRunId: string; docRef: string; onDecided: 
     onError: (e) => {
       // 이미 처리된 결재(다른 세션/중복)는 명시 표면화(조용한 false 금지). 그 외 코드도 표시.
       if (e instanceof ApiError && e.code === "APPROVAL_ALREADY_DECIDED") setErr("이미 처리된 결재입니다.");
-      else setErr(e instanceof ApiError ? `${e.code} (${e.httpStatus})` : "결재 처리 실패");
+      else setErr(e instanceof ApiError ? errorLabel(e) : "결재 처리 실패");
     },
   });
 

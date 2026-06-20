@@ -6,7 +6,7 @@ import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
-import { StatusBadge } from "../components/badges";
+import { StatusBadge, statusLabel } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, navigate, useHashParam } from "../router";
 import { WORKITEM_STATES } from "./filters";
@@ -30,7 +30,7 @@ export function WorkitemsView(): JSX.Element {
         title="작업 목록"
         query={wi.query}
         pager={wi.pager}
-        actions={<FilterSelect label="상태" value={wi.filter.status} options={WORKITEM_STATES} onChange={(v) => wi.setFilter({ status: v })} />}
+        actions={<FilterSelect label="상태" value={wi.filter.status} options={WORKITEM_STATES} labelFor={statusLabel} onChange={(v) => wi.setFilter({ status: v })} />}
         rowKey={(r) => r.workitem_id}
         emptyMessage="조건에 맞는 작업 항목이 없습니다."
         columns={[
@@ -62,7 +62,7 @@ export function WorkitemsView(): JSX.Element {
               <ActionButton
                 label="재처리"
                 action="dlq.replay"
-                confirmText="이 작업항목을 재처리(W10: abandoned→new)할까요?"
+                confirmText="이 작업을 다시 처리 대기로 되돌릴까요?"
                 run={(key) => api.replayDeadLetter(r.dead_letter_id, key, "workitem")}
                 invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
               />
