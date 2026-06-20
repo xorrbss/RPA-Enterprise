@@ -780,6 +780,86 @@ paths:
                 $ref: '#/components/schemas/PrincipalPage'
         default:
           $ref: '#/components/responses/Error'
+    post:
+      tags: [HumanTasks]
+      operationId: createPrincipal
+      summary: 담당자 디렉터리 수동 등록(admin)
+      description: >
+        admin이 미로그인 담당자를 사전 등록한다(source=manual). UNIQUE(tenant_id, sub) 위반(이미 등록) → 422.
+        RBAC는 principal.manage(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrincipalCreateRequest'
+      responses:
+        '201':
+          description: 등록된 디렉터리 항목.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Principal'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID(중복 sub)
+        default:
+          $ref: '#/components/responses/Error'
+
+  /principals/{principal_id}:
+    parameters:
+      - $ref: '#/components/parameters/PrincipalId'
+    patch:
+      tags: [HumanTasks]
+      operationId: updatePrincipal
+      summary: 담당자 디렉터리 수정(admin)
+      description: 표시이름/이메일 부분 갱신(email=null=제거, 최소 1개). sub는 자연키라 불변. RBAC는 principal.manage.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrincipalUpdateRequest'
+      responses:
+        '200':
+          description: 수정된 디렉터리 항목.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Principal'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [HumanTasks]
+      operationId: deletePrincipal
+      summary: 담당자 디렉터리 삭제(admin)
+      description: 디렉터리 항목 제거. human_tasks.assignee는 FK 없는 자유형 text라 기존 배정에 영향 없음. RBAC는 principal.manage.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 삭제 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrincipalDeleteResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
 
   /human-tasks/{human_task_id}:
     parameters:
@@ -1417,6 +1497,11 @@ components:
       in: path
       required: true
       schema: { type: string }
+    PrincipalId:
+      name: principal_id
+      in: path
+      required: true
+      schema: { type: string }
     Limit:
       name: limit
       in: query
@@ -1673,6 +1758,29 @@ components:
           items: { $ref: '#/components/schemas/Principal' }
         next_cursor:
           type: [string, "null"]
+    PrincipalCreateRequest:
+      type: object
+      required: [sub, display_name]
+      description: admin 수동 등록(source=manual). sub=PrincipalId(JWT sub, 자유형), display_name=표시이름.
+      properties:
+        sub: { type: string, minLength: 1 }
+        display_name: { type: string, minLength: 1 }
+        email: { type: [string, "null"] }
+      additionalProperties: false
+    PrincipalUpdateRequest:
+      type: object
+      description: 표시이름/이메일 부분 갱신(둘 중 최소 1개; email=null=제거). sub 불변.
+      properties:
+        display_name: { type: string, minLength: 1 }
+        email: { type: [string, "null"] }
+      additionalProperties: false
+    PrincipalDeleteResponse:
+      type: object
+      required: [principal_id, deleted]
+      properties:
+        principal_id: { type: string }
+        deleted: { type: boolean }
+      additionalProperties: false
     WorkitemPage:
       type: object
       required: [items, next_cursor]

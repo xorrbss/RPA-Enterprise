@@ -126,6 +126,7 @@ export const RBAC_ROLE_ACTIONS: Readonly<Record<Role, readonly RbacAction[]>> = 
     "connector.enable",
     "gateway_policy.edit",
     "network_policy.edit",
+    "principal.manage",
     "rbac.grant",
     "scenario.read",
     "scenario.create",
@@ -168,6 +169,7 @@ export const ALL_RBAC_ACTIONS = [
   "gateway_policy.read",
   "gateway_policy.edit",
   "network_policy.edit",
+  "principal.manage",
   "rbac.grant",
 ] as const satisfies readonly RbacAction[];
 

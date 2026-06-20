@@ -67,6 +67,7 @@ export type RbacAction =
   | "workitem.read"
   | "human_task.read"
   | "principal.read"
+  | "principal.manage"
   | "human_task.assign"
   | "human_task.escalate"
   | "human_task.start"

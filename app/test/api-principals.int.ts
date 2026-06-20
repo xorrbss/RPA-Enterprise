@@ -137,9 +137,12 @@ async function main(): Promise<void> {
       const viewerNoName = await mint({ sub: "svc|viewer", tenant_id: TENANT_A, roles: ["viewer"] });
       const noRole = await mint({ sub: "svc|norole", tenant_id: TENANT_A, roles: [] });
       const operatorB = await mint({ sub: "svc|opB", tenant_id: TENANT_B, roles: ["operator"] });
+      const admin = await mint({ sub: "svc|admin", tenant_id: TENANT_A, roles: ["admin"] });
 
       const get = (url: string, token = operatorNoName) =>
         app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
+      const send = (method: "POST" | "PATCH" | "DELETE", url: string, key: string, token: string, payload?: unknown) =>
+        app.inject({ method, url, headers: { authorization: `Bearer ${token}`, "idempotency-key": key }, payload: payload as object | undefined });
 
       // ===== 목록(GET /v1/principals) =====
       // 1) 전체: tenant A 수동 3건만(name 없는 operator 토큰이라 upsert no-op). created_at DESC.
@@ -235,6 +238,66 @@ async function main(): Promise<void> {
       await get("/v1/principals", overlong);
       const graceRow = await principalBySub(pool, TENANT_A, "auth0|grace");
       check("overlong name truncated to 256", graceRow !== null && graceRow.display_name.length === 256, String(graceRow?.display_name.length));
+
+      // ===== admin CRUD (POST/PATCH/DELETE — principal.manage) =====
+      // 9) create(admin): 미로그인 담당자 수동 등록 → 201 source='manual'.
+      const c1 = await send("POST", "/v1/principals", "p-create-1", admin, { sub: "auth0|frodo", display_name: "프로도", email: "frodo@ex.com" });
+      check("create → 201", c1.statusCode === 201 && c1.json().source === "manual" && c1.json().sub === "auth0|frodo", c1.body);
+      const frodo = await principalBySub(pool, TENANT_A, "auth0|frodo");
+      check("create → DB row manual", frodo?.display_name === "프로도" && frodo?.email === "frodo@ex.com" && frodo?.source === "manual", JSON.stringify(frodo));
+      const createdId = c1.json().principal_id as string;
+
+      // 10) create 중복 sub → 422(전용 conflict 코드 미발명, sites 동형).
+      const c2 = await send("POST", "/v1/principals", "p-create-dup", admin, { sub: "auth0|frodo", display_name: "중복" });
+      check("create dup sub → 422 principal_already_exists", c2.statusCode === 422 && c2.json().details?.reason === "principal_already_exists", c2.body);
+
+      // 11) create RBAC: operator(principal.manage 미보유) → 403.
+      const c3 = await send("POST", "/v1/principals", "p-create-op", operatorNoName, { sub: "auth0|sam", display_name: "샘" });
+      check("create by operator → 403", c3.statusCode === 403 && c3.json().code === "AUTHZ_FORBIDDEN", c3.body);
+      check("create operator deny → not inserted", (await principalBySub(pool, TENANT_A, "auth0|sam")) === null);
+
+      // 12) create 형상 무효: sub/display_name 누락 → 422.
+      const c4 = await send("POST", "/v1/principals", "p-create-bad1", admin, { display_name: "노섭" });
+      check("create missing sub → 422", c4.statusCode === 422 && c4.json().details?.reason === "invalid_sub", c4.body);
+      const c5 = await send("POST", "/v1/principals", "p-create-bad2", admin, { sub: "auth0|x", display_name: "  " });
+      check("create blank display_name → 422", c5.statusCode === 422 && c5.json().details?.reason === "invalid_display_name", c5.body);
+
+      // 13) patch(admin): display_name 갱신(source 보존).
+      const u1 = await send("PATCH", `/v1/principals/${createdId}`, "p-patch-1", admin, { display_name: "프로도 배긴스" });
+      check("patch display_name → 200", u1.statusCode === 200 && u1.json().display_name === "프로도 배긴스", u1.body);
+      const frodo2 = await principalBySub(pool, TENANT_A, "auth0|frodo");
+      check("patch → DB updated + source preserved", frodo2?.display_name === "프로도 배긴스" && frodo2?.source === "manual", JSON.stringify(frodo2));
+
+      // 14) patch email=null → 이메일 제거.
+      const u2 = await send("PATCH", `/v1/principals/${createdId}`, "p-patch-2", admin, { email: null });
+      check("patch email=null → 200 email cleared", u2.statusCode === 200 && u2.json().email === null, u2.body);
+
+      // 15) patch 빈 본문 → 422(empty_update). 미존재 id → 404. operator → 403.
+      const u3 = await send("PATCH", `/v1/principals/${createdId}`, "p-patch-empty", admin, {});
+      check("patch empty → 422 empty_update", u3.statusCode === 422 && u3.json().details?.reason === "empty_update", u3.body);
+      const u4 = await send("PATCH", "/v1/principals/a1000000-0000-0000-0000-0000000000ff", "p-patch-404", admin, { display_name: "x" });
+      check("patch absent → 404", u4.statusCode === 404 && u4.json().code === "RESOURCE_NOT_FOUND", u4.body);
+      const u5 = await send("PATCH", `/v1/principals/${createdId}`, "p-patch-op", operatorNoName, { display_name: "x" });
+      check("patch by operator → 403", u5.statusCode === 403, u5.body);
+
+      // 16) idempotent replay: 동일 키 재요청 → 동일 응답(부작용 1회).
+      const c1replay = await send("POST", "/v1/principals", "p-create-1", admin, { sub: "auth0|frodo", display_name: "프로도", email: "frodo@ex.com" });
+      check("create idempotent replay → 201 replayed", c1replay.statusCode === 201 && c1replay.json().principal_id === createdId, c1replay.body);
+
+      // 17) delete(admin): 디렉터리 항목 제거 → 200, DB 행 소거.
+      const d1 = await send("DELETE", `/v1/principals/${createdId}`, "p-del-1", admin);
+      check("delete → 200 deleted", d1.statusCode === 200 && d1.json().deleted === true, d1.body);
+      check("delete → DB row gone", (await principalBySub(pool, TENANT_A, "auth0|frodo")) === null);
+      const d2 = await send("DELETE", `/v1/principals/${createdId}`, "p-del-404", admin);
+      check("delete already-gone → 404", d2.statusCode === 404, d2.body);
+      const d3 = await send("DELETE", "/v1/principals/a1000000-0000-0000-0000-000000000001", "p-del-op", operatorNoName);
+      check("delete by operator → 403", d3.statusCode === 403, d3.body);
+
+      // 18) cross-tenant: admin A가 B의 principal_id 삭제 시도 → 404(RLS 존재 비노출).
+      const bId = "b1000000-0000-0000-0000-000000000001";
+      const d4 = await send("DELETE", `/v1/principals/${bId}`, "p-del-cross", admin);
+      check("delete cross-tenant → 404", d4.statusCode === 404, d4.body);
+      check("tenant B principal untouched", (await principalBySub(pool, TENANT_B, "auth0|dave")) !== null);
     } finally {
       await app.close();
     }

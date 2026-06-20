@@ -819,3 +819,17 @@
 | JWT upsert | `app/src/api/principal-directory.ts`·`app/src/api/server.ts` | 인증 성공 시 `name` 클레임 best-effort upsert(인증과 무관한 부수효과·실패 시 요청 진행 + log.warn). 기존 행 갱신 시 source 보존(manual 비파괴), name/email 길이 캡 |
 | web picker | `web/src/views/HumanTasks.tsx`·`web/src/components/ActionButton.tsx`·`web/src/api/types.ts` | datalist를 `value=sub`(배정값)·`label=display_name`(표시이름)으로 업그레이드 — 이름으로 선택, 자유 입력 폴백 유지 |
 | 검증 | `app/test/api-principals.int.ts`·`web/test/principals-picker.test.tsx` | 목록·RLS 격리·RBAC(viewer+/403/401)·JWT upsert(생성/멱등/갱신/source 보존)·name 부재 미동기화·cross-tenant·길이 truncate; web picker 이름 라벨 렌더 |
+
+## v2.28 패치 로그 (담당자 디렉터리 admin 수동 CRUD — `principal.manage`)
+
+> name-picker 디렉터리([[v2.27]])의 두 번째 쓰기 경로. admin이 **미로그인 담당자를 사전 등록**하거나 표시이름을
+> 교정/삭제할 수 있다(source='manual'). JWT 자동 upsert(source='jwt')와 공존하며, JWT 갱신은 manual 행의 source를
+> 보존한다. human_tasks.assignee→principals FK가 없어 삭제는 기존 배정에 영향을 주지 않는다(picker 후보에서만 제거).
+> 테이블/마이그레이션 변경 없음(v2.27의 `principals`·`source CHECK('jwt'|'manual')` 재사용).
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| RBAC | `ts/security-middleware-contract.ts`·`ts/rbac-policy.ts`·`auth-rbac.md §2` | `principal.manage`(admin 전용) 추가 |
+| CRUD 엔드포인트 | `app/src/api/principals.ts`(신규)·`server.ts`·`api-surface.md §3`·`ts/control-plane-contract.ts`·`codegen/openapi.yaml` | `POST`(201, 중복 sub→422)·`PATCH /{principal_id}`(부분 갱신, email=null=제거, 미존재→404)·`DELETE /{principal_id}`(200). 전부 admin + Idempotency-Key 멱등(sites 동형, 전용 conflict 코드 미발명) |
+| web 관리 UI | `web/src/components/PrincipalDirectory.tsx`(신규)·`web/src/views/Security.tsx`·`web/src/api/client.ts` | Security 뷰에 담당자 디렉터리 패널(목록+등록 폼+인라인 수정+삭제). `principal.manage` 없으면 패널 숨김 |
+| 검증 | `app/test/api-principals.int.ts`(CRUD 18케이스)·`web/test/principals-admin.test.tsx` | create(201/중복 422/RBAC 403/형상 422)·patch(갱신/email 제거/empty 422/404/403)·멱등 재생·delete(200/404/403/cross-tenant)·web admin 패널 노출/등록 + 적대 break-it |

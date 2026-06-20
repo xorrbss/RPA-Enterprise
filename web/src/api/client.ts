@@ -66,6 +66,10 @@ export interface ApiClient {
   createSite(body: { name: string; url_pattern: string; risk?: string; page_state_selectors?: unknown }, idempotencyKey: string): Promise<SiteCreateResult>;
   // 사이트 이름 수정(operator+, api-surface §7 PATCH /v1/sites/{id}). Idempotency-Key + body{name}. 중복 name→422.
   updateSite(siteId: string, name: string, idempotencyKey: string): Promise<unknown>;
+  // 담당자 디렉터리 수동 등록/수정/삭제(admin=principal.manage, api-surface §3). 중복 sub→422, 미존재→404.
+  createPrincipal(body: { sub: string; display_name: string; email?: string | null }, idempotencyKey: string): Promise<PrincipalItem>;
+  updatePrincipal(principalId: string, body: { display_name?: string; email?: string | null }, idempotencyKey: string): Promise<PrincipalItem>;
+  deletePrincipal(principalId: string, idempotencyKey: string): Promise<unknown>;
   // 운영자-보조 세션 등록(operator+, POST /v1/sites/{id}/session/capture). headful 로그인창을 띄워 운영자가 직접 로그인 → 세션 저장.
   // login_url 은 사이트 설정(page_state_selectors.loginUrl)에서 해소 — 사이트별 로그인 URL.
   captureSession(siteId: string, idempotencyKey: string): Promise<unknown>;
@@ -251,6 +255,9 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     approveSite: (siteId, key, opts) => post(`/v1/sites/${siteId}/approve`, key, opts ?? {}),
     createSite: (body, key) => post(`/v1/sites`, key, body),
     updateSite: (siteId, name, key) => send("PATCH", `/v1/sites/${siteId}`, { name }, { "Idempotency-Key": key }),
+    createPrincipal: (body, key) => post(`/v1/principals`, key, body),
+    updatePrincipal: (principalId, body, key) => send("PATCH", `/v1/principals/${principalId}`, body, { "Idempotency-Key": key }),
+    deletePrincipal: (principalId, key) => send("DELETE", `/v1/principals/${principalId}`, undefined, { "Idempotency-Key": key }),
     captureSession: (siteId, key) => post(`/v1/sites/${siteId}/session/capture`, key, {}),
     assignHumanTask: (id, assignee, key) => post(`/v1/human-tasks/${id}/assign`, key, { assignee }),
     startHumanTask: (id, key) => post(`/v1/human-tasks/${id}/start`, key),
