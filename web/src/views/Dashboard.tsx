@@ -7,7 +7,7 @@ import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
 import { StatusBadge, errorCodeLabel } from "../components/badges";
 import { navigate, type ViewKey } from "../router";
-import type { DeadLetterItem, HumanTaskItem, RunItem, SiteItem } from "../api/types";
+import type { DeadLetterItem, HumanTaskItem, RunItem, RunSummary, SiteItem } from "../api/types";
 
 // 첫-실행 안내 배너 — 권한별(RBAC) 안내문/CTA. cta 없으면 viewer 안내문만(없는 권한 동선 창작 금지).
 // 입력은 부모가 실 응답으로 판정한 '진짜 빈 테넌트' 여부 + useCan뿐(데이터 미창작).
@@ -41,6 +41,19 @@ type Page = { items: readonly unknown[]; next_cursor: string | null };
 function pageCount(d: Page | undefined): string {
   if (d === undefined) return "—";
   return d.next_cursor !== null ? `${d.items.length}+` : String(d.items.length);
+}
+
+// 서버 집계(전체 기간)라 절단 '+' 없는 정확 카운트. 로딩 전이면 '—'(데이터 도착 전 단정 금지).
+function exactCount(s: RunSummary | undefined, status: string): string {
+  if (s === undefined) return "—";
+  return String(s.by_status[status] ?? 0);
+}
+
+// run_success_rate(§E) — completed/(completed+failed_business+failed_system). 분모 0이면 success_rate=null →
+// '—'(0/0을 100%/0%로 단정하지 않음, "조용한 false 금지"). 정수 %로 표기.
+function successRateLabel(s: RunSummary | undefined): string {
+  if (s === undefined || s.success_rate === null) return "—";
+  return `${Math.round(s.success_rate * 100)}%`;
 }
 
 type ActionItem = {
@@ -221,6 +234,8 @@ export function DashboardView(): JSX.Element {
   const failedBiz = useQuery({ queryKey: ["runs", "failed_business"], queryFn: () => api.listRuns({ status: "failed_business", limit: 50 }), refetchInterval: 5_000 });
   const failedSys = useQuery({ queryKey: ["runs", "failed_system"], queryFn: () => api.listRuns({ status: "failed_system", limit: 50 }), refetchInterval: 5_000 });
   const redSites = useQuery({ queryKey: ["sites", "red"], queryFn: () => api.listSites({ risk: "red", limit: 50 }), refetchInterval: 10_000 });
+  // 관찰성 집계(§E run_success_rate + status별 정확 카운트). 서버 GROUP BY 라 카드가 '50+' 근사 대신 정확 총계.
+  const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
 
   // 첫-실행 안내 배너: '진짜 빈 테넌트'(실행 0건)일 때만. recent(무필터 listRuns)의 실 필드로만 판정.
   // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
@@ -232,15 +247,16 @@ export function DashboardView(): JSX.Element {
       {isEmptyTenant && <OnboardingBanner {...onboardingProps(can)} />}
       <RoleWorkbench roles={roles} can={can} />
       <div className="metrics">
-        <Metric label="실행 중" value={pageCount(running.data)} view="runTrace" params={{ status: "running" }} hint="실행 기록" />
+        <Metric label="실행 성공률" value={successRateLabel(summary.data)} view="runTrace" params={{ status: "completed" }} hint="완료 실행" />
+        <Metric label="실행 중" value={exactCount(summary.data, "running")} view="runTrace" params={{ status: "running" }} hint="실행 기록" />
         <Metric label="사람 확인 대기" value={pageCount(human.data)} view="humanTasks" hint="사람 확인" />
-        <Metric label="업무 실패" value={pageCount(failedBiz.data)} view="runTrace" params={{ status: "failed_business" }} hint="실행 기록" />
-        <Metric label="시스템 실패" value={pageCount(failedSys.data)} view="runTrace" params={{ status: "failed_system" }} hint="실행 기록" />
+        <Metric label="업무 실패" value={exactCount(summary.data, "failed_business")} view="runTrace" params={{ status: "failed_business" }} hint="실행 기록" />
+        <Metric label="시스템 실패" value={exactCount(summary.data, "failed_system")} view="runTrace" params={{ status: "failed_system" }} hint="실행 기록" />
         <Metric label="작업항목 DLQ" value={pageCount(wiDlq.data)} view="workitems" hint="작업 목록" />
         <Metric label="외부 전달 DLQ" value={pageCount(sinkDlq.data)} view="workitems" hint="작업 목록" />
       </div>
       <p className="subtle" style={{ margin: "0 2px" }}>
-        각 지표는 최신 50건 기준입니다. <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
+        실행 성공률·실행 중·업무 실패·시스템 실패는 전체 기간 정확 집계입니다. 사람 확인·DLQ는 최신 50건 기준이며 <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
       </p>
       <ActionQueue
         items={collectActionItems({

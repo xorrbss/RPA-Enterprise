@@ -390,6 +390,27 @@ async function main(): Promise<void> {
       const noRoleRuns = await get("/v1/runs", noRole);
       check("no-role listRuns → 403", noRoleRuns.statusCode === 403 && noRoleRuns.json().code === "AUTHZ_FORBIDDEN", noRoleRuns.body);
 
+      // ===== runs summary(관찰성 집계) =====
+      // tenant A 시드: running×2·completed×1·suspended×1·failed_system×1 → by_status 정확 카운트 + 성공률.
+      // (정적 라우트 /v1/runs/summary 가 파라메트릭 /v1/runs/:run_id 에 가려지지 않음을 200/집계가 증명.)
+      const summary = await get("/v1/runs/summary");
+      check("runs summary → 200", summary.statusCode === 200, summary.body);
+      const sumBody = summary.json();
+      check("summary by_status running=2", sumBody.by_status?.running === 2, JSON.stringify(sumBody));
+      check("summary by_status completed=1", sumBody.by_status?.completed === 1, JSON.stringify(sumBody));
+      check("summary by_status suspended=1", sumBody.by_status?.suspended === 1, JSON.stringify(sumBody));
+      check("summary by_status failed_system=1", sumBody.by_status?.failed_system === 1, JSON.stringify(sumBody));
+      check("summary total=5", sumBody.total === 5, JSON.stringify(sumBody));
+      // success_rate = completed/(completed+failed_business+failed_system) = 1/(1+0+1) = 0.5.
+      check("summary success_rate=0.5", sumBody.success_rate === 0.5, JSON.stringify(sumBody));
+      // RLS: tenant B viewer 는 자기 1건(running)만 — 종결 run 0 → success_rate null(0/0 단정 금지).
+      const summaryB = await get("/v1/runs/summary", viewerB);
+      check("tenant B summary total=1 (RLS)", summaryB.json().total === 1, summaryB.body);
+      check("tenant B summary success_rate null (종결 0 → 0/0 단정 금지)", summaryB.json().success_rate === null, summaryB.body);
+      // RBAC: 역할 없음 → 403.
+      const noRoleSummary = await get("/v1/runs/summary", noRole);
+      check("no-role summary → 403", noRoleSummary.statusCode === 403, noRoleSummary.body);
+
       // ===== listHumanTasks =====
       const allHt = await get("/v1/human-tasks");
       check("listHumanTasks → 200, 3 items", allHt.statusCode === 200 && allHt.json().items.length === 3, allHt.body);
