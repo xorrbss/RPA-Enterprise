@@ -125,8 +125,10 @@ async function seedDeadLetter(
 }
 
 // sink DLQ(데이터평면): raw_item → normalized_record → sink_deliveries(status). FK 체인이 필요해 3단 시드.
+// requeuedAt!=null이면 replay로 소거된 행(GET /v1/dlq?kind=sink에서 제외) — workitem replayed_at와 동형.
 async function seedSinkDelivery(
   pool: Pool, tenant: string, sinkDeliveryId: string, naturalKey: string, status: string, attemptedAt: string,
+  requeuedAt: string | null = null,
 ): Promise<void> {
   const rawId = `7c00${sinkDeliveryId.slice(4)}`;
   const normId = `7d00${sinkDeliveryId.slice(4)}`;
@@ -143,9 +145,9 @@ async function seedSinkDelivery(
       [normId, tenant, rawId, naturalKey],
     );
     await c.query(
-      `INSERT INTO sink_deliveries (id, tenant_id, normalized_record_id, sink_config_id, attempt_no, sink_idempotency_key, status, attempted_at)
-       VALUES ($1,$2,$3,$4,1,$5,$6,$7::timestamptz)`,
-      [sinkDeliveryId, tenant, normId, sinkConfig, `${tenant}:${sinkConfig}:schemas/review@1:${naturalKey}`, status, attemptedAt],
+      `INSERT INTO sink_deliveries (id, tenant_id, normalized_record_id, sink_config_id, attempt_no, sink_idempotency_key, status, attempted_at, requeued_at)
+       VALUES ($1,$2,$3,$4,1,$5,$6,$7::timestamptz,$8::timestamptz)`,
+      [sinkDeliveryId, tenant, normId, sinkConfig, `${tenant}:${sinkConfig}:schemas/review@1:${naturalKey}`, status, attemptedAt, requeuedAt],
     );
   });
 }
@@ -278,14 +280,17 @@ async function main(): Promise<void> {
     await seedDeadLetter(pool, TENANT_A, DL_REPLAYED, WI2, ts(2), true);
     await seedDeadLetter(pool, TENANT_B, DL_B, WI_B, ts(0), false);
 
-    // sink DLQ(데이터평면): tenant A 2 dead_letter + 1 delivered(목록 제외), tenant B 1 dead_letter.
+    // sink DLQ(데이터평면): tenant A 2 dead_letter + 1 delivered(목록 제외) + 1 requeued(replay 소거, 목록 제외), tenant B 1 dead_letter.
     const SINK_DL1 = "7e000000-0000-0000-0000-000000000001";
     const SINK_DL2 = "7e000000-0000-0000-0000-000000000002";
     const SINK_DELIVERED = "7e000000-0000-0000-0000-000000000003";
+    const SINK_REQUEUED = "7e000000-0000-0000-0000-000000000004";
     const SINK_DL_B = "7f000000-0000-0000-0000-0000000000b1";
     await seedSinkDelivery(pool, TENANT_A, SINK_DL1, "snk-a1", "dead_letter", ts(0));
     await seedSinkDelivery(pool, TENANT_A, SINK_DL2, "snk-a2", "dead_letter", ts(1));
     await seedSinkDelivery(pool, TENANT_A, SINK_DELIVERED, "snk-a3", "delivered", ts(2));
+    // replay로 소거된 dead_letter(requeued_at 마킹) — 목록에서 제외돼야(workitem replayed_at와 동형).
+    await seedSinkDelivery(pool, TENANT_A, SINK_REQUEUED, "snk-a4", "dead_letter", ts(3), ts(4));
     await seedSinkDelivery(pool, TENANT_B, SINK_DL_B, "snk-b1", "dead_letter", ts(0));
 
     // gateway_policies: tenant A 2 모델(기본 1), tenant B 1 모델(단일).
@@ -466,9 +471,13 @@ async function main(): Promise<void> {
         dlq.json().items.every((d: { reason_code: string; created_at: string }) =>
           d.reason_code === "WORKITEM_CHECKOUT_CONFLICT" && typeof d.created_at === "string" && !Number.isNaN(Date.parse(d.created_at))),
         JSON.stringify(dlq.json().items));
-      // sink DLQ(데이터평면): tenant A 2 dead_letter, delivered 1건 제외, kind=sink/status=DEAD_LETTER.
+      // sink DLQ(데이터평면): tenant A 2 dead_letter, delivered 1건·requeued 1건 제외, kind=sink/status=DEAD_LETTER.
       const dlqSink = await get("/v1/dlq?kind=sink");
-      check("dlq kind=sink → 2 dead_letter (delivered excluded)", dlqSink.statusCode === 200 && dlqSink.json().items.length === 2, dlqSink.body);
+      check("dlq kind=sink → 2 dead_letter (delivered + requeued excluded)", dlqSink.statusCode === 200 && dlqSink.json().items.length === 2, dlqSink.body);
+      // replay 소거 행(requeued_at NOT NULL)은 목록에 없어야(중복 인큐 방지의 목록측 반영).
+      check("requeued sink row excluded from list",
+        dlqSink.json().items.every((d: { dead_letter_id: string }) => d.dead_letter_id !== SINK_REQUEUED),
+        JSON.stringify(dlqSink.json().items));
       check("sink DLQ shape (kind=sink/status=DEAD_LETTER/idempotency key)",
         dlqSink.json().items.every((d: { kind: string; status: string }) => d.kind === "sink" && d.status === "DEAD_LETTER") &&
         dlqSink.json().items.some((d: { dead_letter_id: string; source_id: string; sink_idempotency_key: string }) =>
