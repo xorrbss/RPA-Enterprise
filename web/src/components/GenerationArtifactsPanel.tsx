@@ -158,7 +158,7 @@ export function GenerationArtifactsPanel({
         {hasMore && <span className="badge amber">더 있음</span>}
         {summary.images > 0 && <span className="badge blue">image {summary.images}</span>}
         {summary.videos > 0 && <span className="badge amber">video {summary.videos}</span>}
-        {summary.pending > 0 && <span className="badge muted">redaction pending {summary.pending}</span>}
+        {summary.pending > 0 && <span className="badge muted">redaction 대기 {summary.pending}</span>}
         {hasMore && (
           <button className="linklike" type="button" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
             {list.isFetchingNextPage ? "불러오는 중" : "더 보기"}

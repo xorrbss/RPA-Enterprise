@@ -655,7 +655,7 @@ function RunArtifactsList({
                       <td>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           <span className={`badge ${isReadable ? "green" : "amber"}`}>{a.redaction_status}</span>
-                          {!isReadable && <span className="subtle">redaction pending</span>}
+                          {!isReadable && <span className="subtle">redaction 대기</span>}
                         </span>
                       </td>
                       <td>{a.retention_until ?? "—"}</td>
