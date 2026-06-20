@@ -22,10 +22,6 @@ export function WorkitemsView(): JSX.Element {
   const sinkDlq = useListView<DeadLetterItem>(["dlq", "sink"], (p) => api.listDlq("sink", p), { refetchInterval: POLL_MS });
   const wiDlqItems = wiDlq.query.data?.items ?? [];
   const sinkDlqItems = sinkDlq.query.data?.items ?? [];
-  // TODO: [BLOCKED] sink DLQ 재처리 후 행 소거
-  //   violated: 구조 무결성 — workitem은 replayed_at 마킹으로 목록에서 빠지나 sink는 동등 표식이 없어 재처리 후 행이 잔류
-  //   reason: applySinkDeadLetterReplay가 dead_letter 행 status를 안 바꾸고 새 attempt만 인큐(app/src/api/dlq.ts), GET /v1/dlq?kind=sink가 잔류 행 반환
-  //   required_change: sink replay 시 'requeued' 등 중간 상태 마킹 + reads 필터(백엔드). web은 임시로 결정형 멱등키로 재클릭 중복 인큐만 차단
   // 선택 작업항목을 해시(`#workitems?wi=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
   const sel = useHashParam("wi");
   const detail = useQuery({ queryKey: ["workitem-detail", sel], queryFn: () => api.getWorkitem(sel as string), enabled: sel !== null });
@@ -115,8 +111,8 @@ export function WorkitemsView(): JSX.Element {
               action="sink_dlq.replay"
               confirmText={`이 페이지의 외부 전달 실패 ${sinkDlqItems.length}건을 모두 재시도할까요?`}
               run={async () => {
-                // sink는 replay 후에도 dead_letter 행이 남으므로(아래 TODO[BLOCKED]) 결정형 멱등키가 특히 중요 —
-                // 재클릭/폴링 재렌더 시 같은 키 재생으로 중복 인큐를 차단한다(적대리뷰 correctness-1).
+                // replay가 원본 행을 requeued_at 마킹으로 소거하므로 2차 replay는 백엔드에서 404 — 다만 폴링 재렌더와
+                // 마킹 반영 사이 창에서의 재클릭 대비, 결정형 멱등키(dead_letter_id)로 중복 인큐를 한 번 더 차단한다.
                 const failed: string[] = [];
                 for (const it of sinkDlqItems) {
                   try {

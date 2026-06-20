@@ -89,9 +89,10 @@ export function registerDlqRoutes(app: FastifyInstance, deps: ApiServerDeps): vo
 }
 
 /**
- * sink-DLQ replay 적용(작업 tx). sink_deliveries.status='dead_letter' 행을 tenant-scope 조회 →
- * 새 sink_deliver attempt를 같은 tx로 인큐(상태전이 아님 — D8-A3). 인큐와 멱등 'succeeded' 기록을 원자화한다.
- * 행 미존재(또는 RLS 은닉 cross-tenant) → RESOURCE_NOT_FOUND(존재 비노출). 실 재전달은 worker egress 의존.
+ * sink-DLQ replay 적용(작업 tx). sink_deliveries.status='dead_letter' AND requeued_at IS NULL 행을 tenant-scope
+ * 조회 → 새 sink_deliver attempt를 같은 tx로 인큐(상태전이 아님 — D8-A3) → 원본 행 requeued_at=now() 마킹.
+ * 인큐·마킹·멱등 'succeeded' 기록을 한 tx로 원자화(부분실패 시 함께 롤백 → 재잔류). 행 미존재/RLS 은닉/이미 재처리
+ * (requeued_at NOT NULL) → RESOURCE_NOT_FOUND(존재 비노출, 2차 replay 차단). 실 재전달은 worker egress 의존.
  */
 async function applySinkDeadLetterReplay(
   deps: ApiServerDeps,
@@ -102,12 +103,14 @@ async function applySinkDeadLetterReplay(
 ): Promise<CommandResponse> {
   const dlq = await client.query<{ normalized_record_id: string; sink_config_id: string }>(
     `SELECT normalized_record_id::text AS normalized_record_id, sink_config_id::text AS sink_config_id
-       FROM sink_deliveries WHERE id=$1::uuid AND tenant_id=$2::uuid AND status='dead_letter'`,
+       FROM sink_deliveries
+      WHERE id=$1::uuid AND tenant_id=$2::uuid AND status='dead_letter' AND requeued_at IS NULL`,
     [sinkDeadLetterId, tenantId],
   );
   const row = dlq.rows[0] ?? null;
   if (row === null) {
-    // dead_letter 아님/미존재/타테넌트(RLS 은닉) 모두 동일하게 not-found(존재 비노출).
+    // dead_letter 아님/미존재/타테넌트(RLS 은닉)/이미 재처리(requeued_at NOT NULL) 모두 동일하게 not-found.
+    // 2차 replay는 여기서 404 — workitem replayed_at 가드와 동형(존재/처리상태 비노출).
     throw new ApiResponseError("RESOURCE_NOT_FOUND");
   }
   const input: SinkDeliverEnqueueInput = {
@@ -118,6 +121,13 @@ async function applySinkDeadLetterReplay(
   };
   // D8-A3: 새 attempt 인큐(상태전이 아님). worker가 attempt_no=MAX+1·동일 멱등키 산출, 실 전달은 egress 의존.
   await deps.enqueuer.enqueueSinkDeliver(client, input);
+  // 원본 dead_letter 행 소거 마킹(requeued_at IS NULL CAS — 동시 replay 중복 인큐/이중 마킹 방지). 인큐와 같은
+  //   작업 tx라 부분실패(인큐 후 미마킹) 시 함께 롤백 → 재잔류. reads의 sink 목록 필터가 이 행을 제외한다.
+  await client.query(
+    `UPDATE sink_deliveries SET requeued_at=now()
+      WHERE id=$1::uuid AND tenant_id=$2::uuid AND status='dead_letter' AND requeued_at IS NULL`,
+    [sinkDeadLetterId, tenantId],
+  );
   return { status: 202, body: { dead_letter_id: sinkDeadLetterId, kind: "sink", status: "enqueued" } };
 }
 

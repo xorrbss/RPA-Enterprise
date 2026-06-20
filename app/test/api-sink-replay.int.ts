@@ -237,6 +237,21 @@ async function main(): Promise<void> {
         JSON.stringify(sinkEnqueued[0]),
       );
 
+      // 1b) 행 소거 검증: replay된 dlOk 행에 requeued_at 마킹 → 2차 replay(새 키)는 404(중복 인큐 차단).
+      //   workitem replayed_at 가드와 동형. reads의 sink 목록 필터(requeued_at IS NULL)가 이 행을 제외한다.
+      const requeuedAt = await withTenantTx(pool, TENANT_A, async (c) => {
+        const r = await c.query<{ requeued_at: Date | null }>(
+          `SELECT requeued_at FROM sink_deliveries WHERE id=$1::uuid AND tenant_id=$2::uuid`,
+          [dlOk.id, TENANT_A],
+        );
+        return r.rows[0]?.requeued_at ?? null;
+      });
+      check("replay marks requeued_at (행 소거)", requeuedAt !== null, String(requeuedAt));
+      const enqAfterFirst = sinkEnqueued.length;
+      const r1b = await sinkReplay(dlOk.id, "sink-ok-2");
+      check("2차 replay (already requeued) → 404", r1b.statusCode === 404 && r1b.json().code === "RESOURCE_NOT_FOUND", r1b.body);
+      check("2차 replay did not enqueue", sinkEnqueued.length === enqAfterFirst, JSON.stringify(sinkEnqueued));
+
       // 2) viewer → 403 AUTHZ_FORBIDDEN(키 미소모·미인큐).
       const r2 = await sinkReplay(dlViewer.id, "sink-viewer", viewer);
       check("viewer sink replay → 403 AUTHZ_FORBIDDEN", r2.statusCode === 403 && r2.json().code === "AUTHZ_FORBIDDEN", r2.body);

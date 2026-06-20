@@ -224,9 +224,15 @@ CREATE TABLE sink_deliveries (
                         CHECK (status IN ('pending','delivered','failed','dead_letter')),
   response_ref        text,
   attempted_at        timestamptz NOT NULL DEFAULT now(),
+  -- sink DLQ replay 후 행 소거 마킹(NULL=미재처리). workitem dead_letter.replayed_at와 동형 — replay는
+  --   상태전이가 아니므로(D8-A3) status enum을 확장하지 않고 별도 컬럼으로 표식한다. 2차 replay는 이 컬럼으로 404.
+  requeued_at         timestamptz,
   UNIQUE (normalized_record_id, sink_config_id, attempt_no)   -- 내부 attempt 이력 멱등
 );
 CREATE INDEX idx_sink_deliveries_idem ON sink_deliveries (sink_idempotency_key);
+-- sink DLQ 인박스(GET /v1/dlq?kind=sink) — dead_letter 중 미재처리만. dead_letter.replayed_at 부분 인덱스와 동형.
+CREATE INDEX idx_sink_deliveries_dlq ON sink_deliveries (tenant_id, attempted_at DESC)
+  WHERE status = 'dead_letter' AND requeued_at IS NULL;
 
 -- ------------------------------------------------------------
 -- #4 ActionPlanCache insert-race — 동시 miss 해석 시 unique conflict 처리
