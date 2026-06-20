@@ -49,7 +49,7 @@ import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { buildServer } from "./api/server";
 import { DenyAllSignedCommandRegistry, SecretStoreSignedCommandRegistry } from "./api/signed-command-registry";
 import {
-  assertInProcessArtifactStoreCompatibility,
+  assertArtifactStoreStartupCompatibility,
   loadApiConfig,
   loadApiSessionEncryption,
   loadArtifactLifecycleConsumer,
@@ -557,7 +557,7 @@ async function main(): Promise<void> {
   const mode = loadRunMode();
   const common = loadCommonConfig();
   bootstrapObservability(common);
-  assertInProcessArtifactStoreCompatibility(mode);
+  assertArtifactStoreStartupCompatibility(mode, mode === "worker" ? loadArtifactLifecycleConsumer() : undefined);
   const pool = createPool();
   // Fail fast on DB connectivity before binding anything.
   await pool.query("SELECT 1");

@@ -443,8 +443,22 @@ export function assertArtifactStoreTopologyCompatibility(topology: ArtifactStore
   }
 }
 
-export function assertInProcessArtifactStoreCompatibility(runMode: RunMode): void {
-  if (runMode !== "all") return;
+/**
+ * Boot 시점 artifact store topology fail-closed 가드. FS artifact producer 와 artifact lifecycle worker 가
+ * 같은 프로세스에 공존하는 모드만 in_process 정합을 강제한다:
+ *  - RUN_MODE=all: API+worker+lifecycle 단일 프로세스(항상 공존).
+ *  - RUN_MODE=worker + consumer=self: lifecycle worker 를 인-프로세스로 동반(main 의 startArtifactLifecycleWorker).
+ * worker + external / lifecycle-worker / api 는 이 프로세스에 co-resident lifecycle 이 없다 — split 토폴로지는
+ * 이 프로세스에 lifecycle 설정이 없어 startup 가드가 false-positive 이므로 deploy 시 preflight:artifact-store CLI 가 검증한다.
+ * 공존 모드에서 정합이 깨지면(FS producer + s3 lifecycle, 또는 비공유 artifactDir) artifact 가 조용히 redaction_status='pending'
+ * 으로 영구잔류하므로 boot 에서 throw 한다(조용한 false 금지).
+ */
+export function assertArtifactStoreStartupCompatibility(
+  runMode: RunMode,
+  workerLifecycleConsumer: ArtifactLifecycleConsumer | undefined,
+): void {
+  const lifecycleCoResident = runMode === "all" || (runMode === "worker" && workerLifecycleConsumer === "self");
+  if (!lifecycleCoResident) return;
   assertArtifactStoreTopologyCompatibility("in_process");
 }
 

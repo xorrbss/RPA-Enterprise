@@ -7,7 +7,7 @@
  */
 import {
   assertArtifactStoreTopologyCompatibility,
-  assertInProcessArtifactStoreCompatibility,
+  assertArtifactStoreStartupCompatibility,
   loadApiConfig,
   loadArtifactLifecycleConsumer,
   loadArtifactLifecycleWorkerConfig,
@@ -463,7 +463,7 @@ function main(): void {
     ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
     ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
   }, () =>
-    expectThrow("RUN_MODE=all rejects fs producers with s3 lifecycle store", () => assertInProcessArtifactStoreCompatibility("all")));
+    expectThrow("RUN_MODE=all rejects fs producers with s3 lifecycle store", () => assertArtifactStoreStartupCompatibility("all", undefined)));
   withEnv({
     ...FULL,
     ...GW_REQ,
@@ -479,7 +479,7 @@ function main(): void {
     ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: "local_fs",
     ARTIFACT_OBJECT_STORE_REF: "rpa/local/artifact-lifecycle/object_store/fs",
   }, () => {
-    assertInProcessArtifactStoreCompatibility("all");
+    assertArtifactStoreStartupCompatibility("all", undefined);
     check("RUN_MODE=all accepts shared local_fs lifecycle store in local env", true);
   });
   withEnv({
@@ -492,6 +492,36 @@ function main(): void {
   }, () => {
     assertArtifactStoreTopologyCompatibility("split_worker_lifecycle");
     check("split worker/lifecycle topology accepts shared local_fs lifecycle store in local env", true);
+  });
+  // RUN_MODE=worker + consumer=self 는 lifecycle worker 가 인-프로세스 동반 → in_process 정합을 boot 에서 강제.
+  withEnv({
+    ...FULL,
+    ...GW_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+  }, () =>
+    expectThrow("RUN_MODE=worker+self rejects fs producers with s3 lifecycle store", () => assertArtifactStoreStartupCompatibility("worker", "self")));
+  // RUN_MODE=worker + consumer=external 는 lifecycle 이 별도 프로세스 → 이 프로세스엔 lifecycle 설정이 없어 startup 가드를
+  // 건너뛴다(split 토폴로지는 preflight:artifact-store CLI 가 검증). 같은 s3 env 에서도 throw 하지 않아야 false-positive 가 없다.
+  withEnv({
+    ...FULL,
+    ...GW_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+  }, () => {
+    assertArtifactStoreStartupCompatibility("worker", "external");
+    check("RUN_MODE=worker+external skips in-process topology guard (split handled by preflight CLI)", true);
+  });
+  withEnv({
+    RPA_ENV: "local",
+    ...GW_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+    ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: "local_fs",
+    ARTIFACT_OBJECT_STORE_REF: "rpa/local/artifact-lifecycle/object_store/fs",
+  }, () => {
+    assertArtifactStoreStartupCompatibility("worker", "self");
+    check("RUN_MODE=worker+self accepts shared local_fs lifecycle store in local env", true);
   });
   withEnv({}, () => expectThrow("gateway missing CODEX_BASE_URL throws", () => loadGatewayConfig()));
   withEnv({ ...GW_REQ, CODEX_API_KEY: "" }, () =>
