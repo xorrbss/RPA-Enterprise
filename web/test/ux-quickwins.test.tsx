@@ -53,22 +53,20 @@ describe("UX quick-wins (A)", () => {
     expect(calls.some((c) => c.status === undefined)).toBe(true);
   });
 
-  // A1 — 절단 정직성: next_cursor 있으면 'N+'(하한), 없으면 정확한 N. 페이지 길이를 총계처럼 보이지 않게.
+  // A1 — 절단 정직성: 여전히 근사(최신 50건)인 카드(사람 확인·DLQ)는 next_cursor 있으면 'N+'(하한), 없으면 정확한 N.
+  // (run-status 카드는 getRunSummary 서버 집계로 전환돼 절단이 없다 — 정직성 가드는 근사 카드로 검증.)
   test("A1: 더 있으면 'N+', 없으면 정확한 수(조용한 false 금지)", async () => {
     renderApp(
       fakeClient({
-        listRuns: async (p) =>
-          p?.status === "running"
-            ? { items: [1, 2, 3].map((n) => ({ run_id: `run-${n}`, status: "running", current_node: null, as_of: null })), next_cursor: "more" }
-            : { items: [{ run_id: "run-1", status: "running", current_node: null, as_of: null }], next_cursor: null },
-        listHumanTasks: async () => ({ items: [{ human_task_id: "h1", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: null, run_id: null }], next_cursor: null }),
+        listHumanTasks: async () => ({ items: [1, 2, 3].map((n) => ({ human_task_id: `h${n}`, state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: null, run_id: null })), next_cursor: "more" }),
+        listDlq: async () => ({ items: [{ dead_letter_id: "d1", kind: "workitem", status: "DEAD_LETTER", source_id: null }], next_cursor: null }),
       }),
     );
-    const running = await screen.findByRole("button", { name: /실행 중/ });
-    await waitFor(() => expect(running).toHaveTextContent("3+")); // 3건 + 더 있음 → 하한 표기
-    const human = screen.getByRole("button", { name: /사람 확인 대기/ });
-    expect(human).toHaveTextContent("1"); // next_cursor 없음 → 정확한 수
-    expect(human).not.toHaveTextContent("1+");
+    const human = await screen.findByRole("button", { name: /사람 확인 대기/ });
+    await waitFor(() => expect(human).toHaveTextContent("3+")); // 3건 + 더 있음 → 하한 표기
+    const dlq = screen.getByRole("button", { name: /작업항목 DLQ/ });
+    expect(dlq).toHaveTextContent("1"); // next_cursor 없음 → 정확한 수
+    expect(dlq).not.toHaveTextContent("1+");
   });
 
   // A2 — 죽은 대시보드 → 진입점: 4개 카드 각각의 드릴다운 대상 검증(손수 적은 to/hash 오타 가드).

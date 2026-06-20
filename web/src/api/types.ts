@@ -5,6 +5,14 @@ export interface Paginated<T> {
   readonly next_cursor: string | null;
 }
 
+// run outcome 집계(api-surface §1 GET /v1/runs/summary). by_status=runs.status별 정확 카운트(부재 status는 키 생략).
+// success_rate=completed/(completed+failed_business+failed_system), 분모 0이면 null(0/0 단정 금지).
+export interface RunSummary {
+  readonly by_status: Record<string, number>;
+  readonly success_rate: number | null;
+  readonly total: number;
+}
+
 export interface RunItem {
   readonly run_id: string;
   readonly status: string;

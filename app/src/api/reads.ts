@@ -266,6 +266,31 @@ export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     );
   });
 
+  // GET /v1/runs/summary — 테넌트-스코프 run outcome 집계(관찰성 §E run_success_rate 의 DB 원천 재집계;
+  //   OTel 메트릭은 백엔드 부재로 쿼리 불가). status별 정확 카운트 + 성공률. RLS 스코프, run.read.
+  //   성공률 = completed / (completed+failed_business+failed_system) — 분모 0이면 null(0/0 단정 금지,
+  //   "조용한 false 금지"). cancelled(사용자 취소)는 분모 제외(telemetry run_success_rate 와 동형).
+  app.get("/v1/runs/summary", { config: { rbacAction: "run.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+      const result = await c.query<{ status: string; n: string }>(
+        `SELECT status, count(*)::text AS n FROM runs WHERE tenant_id = $1::uuid GROUP BY status`,
+        [principal.tenantId],
+      );
+      return result.rows;
+    });
+    const byStatus: Record<string, number> = {};
+    let total = 0;
+    for (const row of rows) {
+      const n = Number(row.n);
+      byStatus[row.status] = n;
+      total += n;
+    }
+    const rated = (byStatus.completed ?? 0) + (byStatus.failed_business ?? 0) + (byStatus.failed_system ?? 0);
+    const successRate = rated > 0 ? (byStatus.completed ?? 0) / rated : null;
+    reply.code(200).send({ by_status: byStatus, success_rate: successRate, total });
+  });
+
   // GET /v1/runs/{run_id}/steps — run 하위 단계 트레이스(api-surface §1). 비민감 요약+참조만 노출(본문/증빙은
   //   GET /v1/artifacts/{id} 게이트 경유). 민감 컬럼(output·output_ref·input_redacted_ref·exception.message·
   //   page_state 본문)은 미노출(평문 차단). RLS 스코프 + run.read. 시간 오름차순(실행 순서) 커서 페이지.

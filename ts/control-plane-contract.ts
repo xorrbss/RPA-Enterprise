@@ -30,6 +30,7 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type ControlPlanePath =
   | "/v1/runs"
+  | "/v1/runs/summary"
   | "/v1/runs/{run_id}"
   | "/v1/runs/{run_id}/steps"
   | "/v1/runs/{run_id}/artifacts"
