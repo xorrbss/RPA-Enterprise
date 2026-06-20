@@ -816,6 +816,38 @@ async function main(): Promise<void> {
           check("viewer can list redacted prompt-created artifacts -> 200", listedArtifacts.statusCode === 200, listedArtifacts.body);
           const listedArtifactsBody = listedArtifacts.json();
           const listedItems = Array.isArray(listedArtifactsBody.items) ? listedArtifactsBody.items : [];
+          const listedItemIds = listedItems
+            .filter((item: unknown): item is { artifact_id: string } => isRecord(item) && typeof item.artifact_id === "string")
+            .map((item: { artifact_id: string }) => item.artifact_id);
+          const listedResultArtifacts = await artifactReadApp.inject({
+            method: "GET",
+            url: `/v1/scenario-generations/${runBody.generation_id}/result-artifacts`,
+            headers: { authorization: `Bearer ${viewer}` },
+          });
+          check(
+            "viewer can list prompt-created generation result-artifacts -> 200",
+            listedResultArtifacts.statusCode === 200,
+            listedResultArtifacts.body,
+          );
+          const listedResultBody = listedResultArtifacts.json();
+          const listedResultItems = Array.isArray(listedResultBody.items) ? listedResultBody.items : [];
+          const listedResultItemIds = listedResultItems
+            .filter((item: unknown): item is { artifact_id: string } => isRecord(item) && typeof item.artifact_id === "string")
+            .map((item: { artifact_id: string }) => item.artifact_id);
+          check(
+            "generation result-artifacts mirrors linked run visible metadata",
+            listedResultItems.length === listedItems.length &&
+              JSON.stringify(listedResultItemIds) === JSON.stringify(listedItemIds) &&
+              listedResultItems.every(
+                (item: unknown) =>
+                  isRecord(item) &&
+                  (item.type === "llm_output" || item.type === "screenshot_masked") &&
+                  item.redaction_status === "redacted" &&
+                  !("content" in item) &&
+                  !("object_ref" in item),
+              ),
+            listedResultArtifacts.body,
+          );
           const listedLlmItems = listedItems.filter((item: unknown) => isRecord(item) && item.type === "llm_output");
           const listedScreenshotItems = listedItems.filter((item: unknown) => isRecord(item) && item.type === "screenshot_masked");
           check(
@@ -2229,6 +2261,31 @@ async function main(): Promise<void> {
             });
             check("viewer can list redacted video-run artifacts -> 200", videoArtifactList.statusCode === 200, videoArtifactList.body);
             const videoArtifactItems = Array.isArray(videoArtifactList.json().items) ? videoArtifactList.json().items : [];
+            const videoArtifactItemIds = videoArtifactItems
+              .filter((item: unknown): item is { artifact_id: string } => isRecord(item) && typeof item.artifact_id === "string")
+              .map((item: { artifact_id: string }) => item.artifact_id);
+            const videoGenerationResultList = await videoArtifactReadApp.inject({
+              method: "GET",
+              url: `/v1/scenario-generations/${videoRunnableBody.generation_id}/result-artifacts`,
+              headers: { authorization: `Bearer ${viewer}` },
+            });
+            check(
+              "viewer can list video generation result-artifacts -> 200",
+              videoGenerationResultList.statusCode === 200,
+              videoGenerationResultList.body,
+            );
+            const videoGenerationResultItems = Array.isArray(videoGenerationResultList.json().items) ? videoGenerationResultList.json().items : [];
+            const videoGenerationResultItemIds = videoGenerationResultItems
+              .filter((item: unknown): item is { artifact_id: string } => isRecord(item) && typeof item.artifact_id === "string")
+              .map((item: { artifact_id: string }) => item.artifact_id);
+            check(
+              "video generation result-artifacts mirrors linked run visible metadata",
+              videoGenerationResultItems.length === videoArtifactItems.length &&
+                JSON.stringify(videoGenerationResultItemIds) === JSON.stringify(videoArtifactItemIds) &&
+                videoGenerationResultItems.some((item: unknown) => isRecord(item) && item.type === "video_masked" && item.media_type === "video/webm") &&
+                videoGenerationResultItems.every((item: unknown) => isRecord(item) && !("content" in item) && !("object_ref" in item)),
+              videoGenerationResultList.body,
+            );
             const videoScreenshotArtifactCount = videoArtifactItems.filter(
               (item: unknown) =>
                 isRecord(item) &&

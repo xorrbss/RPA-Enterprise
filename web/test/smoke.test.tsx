@@ -183,6 +183,72 @@ describe("D7 운영 콘솔 shell", () => {
     expect(blobCalls).toContain("ee000000-0000-0000-0000-000000000005");
   });
 
+  test("generation result artifacts wait for redaction before body or blob preview", async () => {
+    const bodyCalls: string[] = [];
+    const scopedBodyCalls: string[] = [];
+    const blobCalls: string[] = [];
+    renderGenerationArtifactsPanel(
+      fakeClient({
+        listScenarioGenerationResultArtifacts: async () => ({
+          items: [
+            {
+              artifact_id: "ff000000-0000-0000-0000-000000000006",
+              type: "screen_capture",
+              media_type: "image/png",
+              filename: "pending.png",
+              byte_size: 512,
+              duration_ms: null,
+              redaction_status: "pending",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:02.000Z",
+            },
+            {
+              artifact_id: "aa100000-0000-0000-0000-000000000007",
+              type: "extract_result_json",
+              media_type: "application/json",
+              filename: "pending.json",
+              byte_size: 128,
+              duration_ms: null,
+              redaction_status: "pending",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:01.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+        getArtifact: async (artifactId) => {
+          bodyCalls.push(artifactId);
+          throw new Error("pending result artifact body must not be requested");
+        },
+        getScenarioGenerationArtifact: async (_generationId, artifactId) => {
+          scopedBodyCalls.push(artifactId);
+          throw new Error("pending generation artifact body must not be requested");
+        },
+        getArtifactBlob: async (artifactId) => {
+          blobCalls.push(artifactId);
+          throw new Error("pending result artifact blob must not be requested");
+        },
+      }),
+      "result",
+    );
+
+    expect(await screen.findByText("screen_capture")).toBeInTheDocument();
+    expect(screen.getByText("Preview is available after redaction completes.")).toBeInTheDocument();
+    expect(blobCalls).toEqual([]);
+    expect(bodyCalls).toEqual([]);
+    expect(scopedBodyCalls).toEqual([]);
+
+    const jsonButton = screen.getByText("extract_result_json").closest("button");
+    expect(jsonButton).not.toBeNull();
+    fireEvent.click(jsonButton as HTMLButtonElement);
+    expect(screen.getByText("Preview is available after redaction completes.")).toBeInTheDocument();
+    expect(blobCalls).toEqual([]);
+    expect(bodyCalls).toEqual([]);
+    expect(scopedBodyCalls).toEqual([]);
+  });
+
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", jwt(ALL_ROLES)); // 전 역할 — 명령 버튼 표시 + TokenGate 통과

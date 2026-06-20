@@ -44,6 +44,10 @@ function artifactMediaKind(item: GenerationArtifactItem): "image" | "video" | nu
   return null;
 }
 
+function isArtifactRedacted(item: GenerationArtifactItem | undefined): boolean {
+  return item?.redaction_status === "redacted";
+}
+
 function artifactSummary(items: readonly GenerationArtifactItem[]): { images: number; videos: number } {
   return items.reduce(
     (acc, item) => {
@@ -112,7 +116,10 @@ export function GenerationArtifactsPanel({
   const lastPage = pages.length > 0 ? pages[pages.length - 1] : undefined;
   const hasMore = (lastPage?.next_cursor ?? null) !== null;
   const items = useMemo(() => dedupeArtifacts(pages.flatMap((page) => page.items)), [pages]);
-  const preferred = items.find((item) => previewGenerationArtifactMediaType(item) !== null) ?? items[0];
+  const preferred =
+    items.find((item) => isArtifactRedacted(item) && previewGenerationArtifactMediaType(item) !== null) ??
+    items.find(isArtifactRedacted) ??
+    items[0];
   const summary = artifactSummary(items);
   const effectiveSelectedId =
     selectedId !== null && items.some((item) => item.artifact_id === selectedId)
@@ -128,6 +135,7 @@ export function GenerationArtifactsPanel({
     }
   }, [items, preferred?.artifact_id, selectedId]);
   const selected = items.find((item) => item.artifact_id === effectiveSelectedId);
+  const selectedIsRedacted = isArtifactRedacted(selected);
   const selectedMediaType = previewGenerationArtifactMediaType(selected);
   const detail = useQuery<ArtifactDetail>({
     queryKey: ["scenario-generation-artifact", source, generationId, effectiveSelectedId],
@@ -136,7 +144,7 @@ export function GenerationArtifactsPanel({
         ? api.getArtifact(effectiveSelectedId as string)
         : api.getScenarioGenerationArtifact(generationId, effectiveSelectedId as string)
     ),
-    enabled: effectiveSelectedId !== null && selectedMediaType === null,
+    enabled: effectiveSelectedId !== null && selectedIsRedacted && selectedMediaType === null,
   });
 
   return (
@@ -190,7 +198,9 @@ export function GenerationArtifactsPanel({
                 <span className="subtle">유형 {selected.type}</span>
               </div>
             )}
-            {selected !== undefined && selectedMediaType !== null ? (
+            {selected !== undefined && !selectedIsRedacted ? (
+              <p className="muted" role="status">Preview is available after redaction completes.</p>
+            ) : selected !== undefined && selectedMediaType !== null ? (
               <ArtifactMediaPreview artifactId={selected.artifact_id} mediaType={selectedMediaType} filename={selected.filename} />
             ) : detail.isLoading ? (
               <p className="muted">본문 불러오는 중</p>
