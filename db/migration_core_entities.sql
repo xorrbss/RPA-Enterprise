@@ -72,7 +72,10 @@ CREATE TABLE workers (
   heartbeat_at    timestamptz NOT NULL DEFAULT now(),       -- 생존 신호. 만료 시 dead 판정 → lease sweeper 회수(ops-defaults §2)
   circuit_state   text        NOT NULL DEFAULT 'closed'
                     CHECK (circuit_state IN ('closed','open','half_open')),  -- worker 서킷(ops-defaults §3 worker.circuit.*)
-  circuit_until   timestamptz,
+  circuit_until   timestamptz,                              -- open 진입 cooldown 만료(now()+worker.circuit.open_duration). 경과 시 다음 claim 이 auto-close.
+  consecutive_init_failures int NOT NULL DEFAULT 0,         -- per-worker 연속 INIT(claimed→running 셋업) 실패 누적. 임계(worker.circuit.consecutive_failures)
+                                                            --   도달 시 circuit open(워커 격리). INIT 성공 시 0 reset. runs.consecutive_init_failures(per-run R3a/R3b)와
+                                                            --   분리 — 이건 per-worker 회로 트리거(R3b per-run 직결 과잉격리 회피, state-machine §1 INIT 규칙).
   created_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_workers_heartbeat ON workers (heartbeat_at) WHERE status = 'active';

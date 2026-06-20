@@ -142,6 +142,9 @@ export interface PgRuntimeWorkerOptions {
   readonly initFailThreshold?: number;
   readonly initBackoff?: InitBackoffConfig;
   readonly initBackoffJitter?: () => number;
+  // worker 서킷(ops-defaults §3 worker.circuit): per-worker 연속 INIT 실패 임계/cooldown. 미주입 시 기본(5 / 1m). 테스트 sim 오버라이드.
+  readonly workerCircuitThreshold?: number;
+  readonly workerCircuitOpenMs?: number;
   // suspend 구동(트리거 i): worker 경유 run 이 suspend(executor status='suspended')하면 driveClaimedRun/driveResumedRun →
   // driveSuspend 가 이 둘을 소비(R4+포트→resume-token 발행+R11→suspended). 미주입 시 suspend terminal 은 loud throw(미구성).
   // PgChallengeSuspensionPort=stateless, codec=deploy-time(SecretStore+signingKeyRef). 실 트리거(challenge 감지)는 DOM/vision executor 후행.
@@ -264,6 +267,9 @@ const DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS = 90;
 const DEFAULT_RUN_ABORT_TIMEOUT_MS = 30_000;
 // ops-defaults.md #workitem.checkout_timeout=10m. W1 checkout 시 checkout_expires_at 설정, W6/W7 sweeper 가 만료 판정. 코드 상수 금지 규약 — inline 인용.
 const WORKITEM_CHECKOUT_TIMEOUT_MS = 10 * 60 * 1000;
+// ops-defaults.md §3 worker.circuit: consecutive_failures=5(임계) / open_duration=1m(cooldown). 코드 상수 금지 규약 — inline 인용.
+const DEFAULT_WORKER_CIRCUIT_THRESHOLD = 5;
+const DEFAULT_WORKER_CIRCUIT_OPEN_MS = 60_000;
 
 export async function renewBrowserLease(
   client: pg.PoolClient,
@@ -502,18 +508,21 @@ export class PgRuntimeWorker implements RuntimeWorker {
     if (claim.drive === undefined || sessionProvider === undefined) return claim.result;
     const d = claim.drive;
 
-    // INIT phase(status='claimed'): site page-state config 적재 + 세션 bind(브라우저 I/O). 이 셋업이 throw 하면 좀비
-    //   claimed 잔류 대신 init_failed(R3a 재큐 / R3b 종결)로 처리한다(state-machine §1 INIT 규칙). bind 성공 후엔 즉시
-    //   setup 확정이라 init-catch 에 leaked 세션 없음 — Phase A 브라우저 lease 는 handleClaimedInitFailure 가 drainLease 로 해제.
+    // INIT phase(status='claimed', state-machine §1 INIT 정의 = drive-input 적재 + 세션 bind + executor/resolver 구성).
+    //   이 셋업이 throw 하면 좀비 claimed 잔류 대신 init_failed(R3a 재큐 / R3b 종결)로 처리한다. bind 후 executor/resolver
+    //   구성이 throw 하면(주입형 dom/vision factory 셋업, 적대리뷰 B2) 그 bound 세션을 init-catch 가 해제한다(누수 방지).
+    //   Phase A 브라우저 lease 는 handleClaimedInitFailure 가 drainLease 로 해제.
     let setup: {
       bound: Awaited<ReturnType<typeof sessionProvider.bind>>;
-      siteConfig: Awaited<ReturnType<typeof loadSitePageStateConfig>>;
+      executor: ExecutorPlugin;
+      resolver: SitePageStateResolver;
     };
+    let boundForInitCleanup: Awaited<ReturnType<typeof sessionProvider.bind>> | undefined;
     try {
       const siteConfig = await withTenantTx(this.pool, tenantId, (c) =>
         loadSitePageStateConfig(c, tenantId, d.siteProfileId),
       );
-      const bound = await sessionProvider.bind({
+      boundForInitCleanup = await sessionProvider.bind({
         tenantId,
         leaseId: d.leaseId,
         siteProfileId: d.siteProfileId,
@@ -522,8 +531,23 @@ export class PgRuntimeWorker implements RuntimeWorker {
         isolation: d.isolation,
         cleanupPolicy: d.cleanupPolicy,
       });
-      setup = { bound, siteConfig };
+      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(boundForInitCleanup.provider, {
+        scenarioVersionId: d.scenarioVersionId,
+        browserIdentityVersion: d.browserIdentityVersion,
+        tenantId, // 자격증명 fill executorPrincipal per-run 테넌트(감사 정합).
+        ...(d.model !== undefined ? { model: d.model } : {}),
+      });
+      const resolver = new SitePageStateResolver(boundForInitCleanup.provider, siteConfig);
+      setup = { bound: boundForInitCleanup, executor, resolver };
     } catch (initErr) {
+      // bind 후 executor/resolver 구성이 throw 했으면 bound 세션 해제(적대리뷰 B2). bind 자체 실패면 boundForInitCleanup=undefined.
+      if (boundForInitCleanup !== undefined) {
+        try {
+          await boundForInitCleanup.release();
+        } catch (relErr) {
+          console.error(`runtime-worker: INIT 실패 후 세션 해제 실패(run ${runId.slice(0, 8)}) — ${relErr instanceof Error ? relErr.message : String(relErr)}`);
+        }
+      }
       console.error(
         `runtime-worker: INIT 셋업 실패(run ${runId.slice(0, 8)}) — ${initErr instanceof Error ? initErr.message : String(initErr)}`,
       );
@@ -559,18 +583,22 @@ export class PgRuntimeWorker implements RuntimeWorker {
         },
       );
       console.warn(`runtime-worker: INIT 실패 처리(run ${runId.slice(0, 8)}) → ${outcome ?? "미적용(비-claimed/경합)"}`);
+      // worker 서킷: per-worker 연속 INIT 실패 누적(+1, 임계 도달 시 open) — R3b openCircuit 의 worker-격리를 per-worker
+      //   누적으로 실현(per-run 직결 과잉격리 회피). **적대리뷰 B1**: outcome=null(run 부재·비-claimed·CAS 경합 =
+      //   init_failed 미적용; 취소·경합 패배는 이 워커의 INIT 실패 아님)은 카운터 미증가 → spurious open 방지. best-effort
+      //   기록(별도 tx)이라 실패는 잡을 깨지 않게 흡수(loud).
+      if (outcome !== null) {
+        await this.recordWorkerInitFailure(workerId).catch((e) =>
+          console.error(`runtime-worker: worker 서킷 실패기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+        );
+      }
       return claim.result;
     }
+    // INIT 전체(config+bind+executor+resolver) 성공 → per-worker 연속 실패 카운터 reset + (open 이었으면)회로 닫힘(건강 증명).
+    await this.recordWorkerInitSuccess(workerId);
 
-    // DRIVE phase(R2→running, driveScenario failsafe). bound + siteConfig 보장. 세션은 어느 경로든 finally 에서 해제.
+    // DRIVE phase(R2→running, driveScenario failsafe). setup(bound/executor/resolver) 보장. 세션은 어느 경로든 finally 에서 해제.
     try {
-      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(setup.bound.provider, {
-        scenarioVersionId: d.scenarioVersionId,
-        browserIdentityVersion: d.browserIdentityVersion,
-        tenantId, // 자격증명 fill executorPrincipal per-run 테넌트(감사 정합).
-        ...(d.model !== undefined ? { model: d.model } : {}),
-      });
-      const resolver = new SitePageStateResolver(setup.bound.provider, setup.siteConfig);
       await driveClaimedRun(
         {
           runId,
@@ -586,8 +614,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
         },
         {
           pool: this.pool,
-          executor,
-          resolver,
+          executor: setup.executor,
+          resolver: setup.resolver,
           workerId,
           suspensionPort: this.options.suspensionPort,
           resumeTokenCodec: this.options.resumeTokenCodec,
@@ -940,6 +968,11 @@ export class PgRuntimeWorker implements RuntimeWorker {
         runId,
         workerId,
       });
+      // 적대리뷰 B4: lease 재사용 분기는 acquireBrowserLease(유일한 서킷 게이트)를 건너뛴다 — resume 도 worker 서킷
+      //   격리를 적용한다(open+cooldown 이면 거부). null 분기는 아래 acquireBrowserLease 가 동일 게이트를 수행.
+      if (lease !== null && !(await this.checkWorkerCircuit(client, workerId))) {
+        return { kind: "job_result", result: { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" } };
+      }
       if (lease === null) {
         // §E browser.lease.acquire — resume 경로의 lease 확보도 동일 span으로 계측.
         const resumeCommon: CommonSpanAttrs = {
@@ -1302,6 +1335,69 @@ export class PgRuntimeWorker implements RuntimeWorker {
     return { kind: "ok", row };
   }
 
+  /**
+   * worker 서킷(ops-defaults §3 worker.circuit) — per-worker 연속 INIT(claimed→running 셋업) 실패 누적.
+   * INIT 실패 시 +1, 임계(consecutive_failures, 기본 5) 도달 시 circuit_state='open' + circuit_until=now()+open_duration
+   * (워커 격리: acquireBrowserLease 가 open 이면 lease 거부). 단일 atomic UPDATE 라 동시 INIT 실패 경합에 안전.
+   * R3b per-run 트리거(=runs.consecutive_init_failures, 임계 3)를 직접 회로에 쓰지 않고 per-worker 로 분리 — 한 run 의
+   * 실패로 워커 전체(모든 테넌트/사이트 run)를 차단하는 과잉격리를 피한다(state-machine §1 INIT 규칙·circuit 결정).
+   * workers 는 non-tenant infra 라 RLS 미적용(tenant 바인딩 불요).
+   */
+  private async recordWorkerInitFailure(workerId: string): Promise<void> {
+    const threshold = this.options.workerCircuitThreshold ?? DEFAULT_WORKER_CIRCUIT_THRESHOLD;
+    const openMs = this.options.workerCircuitOpenMs ?? DEFAULT_WORKER_CIRCUIT_OPEN_MS;
+    await this.pool.query(
+      `UPDATE workers
+          SET consecutive_init_failures = consecutive_init_failures + 1,
+              circuit_state = CASE WHEN consecutive_init_failures + 1 >= $2::int THEN 'open' ELSE circuit_state END,
+              circuit_until = CASE WHEN consecutive_init_failures + 1 >= $2::int
+                                   THEN now() + ($3::int * interval '1 millisecond') ELSE circuit_until END
+        WHERE id = $1::uuid AND circuit_state <> 'open'`,
+      [workerId, threshold, openMs],
+    );
+  }
+
+  /**
+   * INIT 성공 시 per-worker 연속 실패 카운터 reset(0) + 회로 닫힘(건강 증명). 적대리뷰 B3: 카운터만 reset 하면 동시
+   * 경합으로 (circuit_state='open', cif=0, circuit_until=미래) 모순 상태가 남아 방금 성공한 워커가 cooldown 동안 stuck-open
+   * 된다 — 성공은 '연속 실패' streak 종료이므로 회로를 closed 로 일관화한다(v1 lazy auto-close 와 정합). closed·0 이면 무비용.
+   */
+  private async recordWorkerInitSuccess(workerId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE workers
+          SET consecutive_init_failures = 0, circuit_state = 'closed', circuit_until = NULL
+        WHERE id = $1::uuid AND (consecutive_init_failures > 0 OR circuit_state <> 'closed')`,
+      [workerId],
+    );
+  }
+
+  /**
+   * worker 서킷 게이트 + lazy 회복. true=진행 허용, false=거부(격리). circuit open + cooldown 중이면 거부, cooldown
+   * (circuit_until) 경과면 auto-close(closed+카운터 reset) 후 허용, closed 면 허용. 신규 claim(acquireBrowserLease)과
+   * resume lease 재사용(적대리뷰 B4) 양쪽에서 호출 — 'worker 단위 격리'가 resume 경로에서도 유지된다. client tx 안
+   * FOR UPDATE 로 동시 claim 의 auto-close 경합을 직렬화. worker 행 부재면 false(상위가 not-found/internal 처리).
+   */
+  private async checkWorkerCircuit(client: pg.PoolClient, workerId: string): Promise<boolean> {
+    // cooldown_active: open 인데 (circuit_until 미설정 OR 아직 미래)면 격리 유지. circuit_until=NULL(레거시/수동 open,
+    //   cooldown 미지정)은 auto-close 대상이 아니라 fail-closed 유지 — auto-close 는 '명시적 cooldown(circuit_until) 만료'에만.
+    const w = await client.query<{ circuit_state: string; cooldown_active: boolean }>(
+      `SELECT circuit_state,
+              (circuit_state = 'open' AND (circuit_until IS NULL OR circuit_until > now())) AS cooldown_active
+         FROM workers WHERE id = $1::uuid FOR UPDATE`,
+      [workerId],
+    );
+    const row = w.rows[0];
+    if (row === undefined) return false;
+    if (row.circuit_state !== "open") return true;
+    if (row.cooldown_active) return false; // 격리 유지(cooldown 중 또는 cooldown 미지정 open)
+    // cooldown(circuit_until) 명시적 만료 → auto-close(재시도 기회). 또 INIT 실패 누적이 임계 도달 시 재open.
+    await client.query(
+      `UPDATE workers SET circuit_state = 'closed', circuit_until = NULL, consecutive_init_failures = 0 WHERE id = $1::uuid`,
+      [workerId],
+    );
+    return true;
+  }
+
   private async acquireBrowserLease(
     client: pg.PoolClient,
     input: {
@@ -1322,12 +1418,16 @@ export class PgRuntimeWorker implements RuntimeWorker {
     const isolation = input.plan.isolation ?? "context";
     const cleanupPolicy = input.plan.cleanupPolicy ?? "clear_all";
 
-    const worker = await client.query<{ kind: string; status: string; circuit_state: string }>(
-      `SELECT kind, status, circuit_state FROM workers WHERE id = $1::uuid`,
+    const worker = await client.query<{ kind: string; status: string }>(
+      `SELECT kind, status FROM workers WHERE id = $1::uuid`,
       [input.workerId],
     );
     const workerRow = worker.rows[0];
-    if (workerRow?.kind !== "browser" || workerRow.status !== "active" || workerRow.circuit_state === "open") {
+    if (workerRow?.kind !== "browser" || workerRow.status !== "active") {
+      return { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" };
+    }
+    // worker 서킷(ops-defaults §3 worker.circuit): open+cooldown 이면 lease 거부(격리), cooldown 경과면 auto-close 후 진행.
+    if (!(await this.checkWorkerCircuit(client, input.workerId))) {
       return { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" };
     }
 
