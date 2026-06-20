@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -35,12 +35,15 @@ export interface CreatedSite {
   readonly url_pattern?: string;
   readonly risk?: string;
   readonly approved?: boolean;
+  readonly default_browser_identity_id?: string | null;
+  readonly default_network_policy_id?: string | null;
 }
 
 interface SiteCreateFormProps {
   readonly title?: string;
   readonly triggerLabel?: string;
   readonly initialUrl?: string;
+  readonly openSignal?: number;
   readonly embedded?: boolean;
   readonly onCreated?: (site: CreatedSite) => void;
 }
@@ -74,6 +77,12 @@ function createdSiteFromResponse(value: unknown): CreatedSite | null {
         ...(typeof record.url_pattern === "string" ? { url_pattern: record.url_pattern } : {}),
         ...(typeof record.risk === "string" ? { risk: record.risk } : {}),
         ...(typeof record.approved === "boolean" ? { approved: record.approved } : {}),
+        ...(typeof record.default_browser_identity_id === "string" || record.default_browser_identity_id === null
+          ? { default_browser_identity_id: record.default_browser_identity_id }
+          : {}),
+        ...(typeof record.default_network_policy_id === "string" || record.default_network_policy_id === null
+          ? { default_network_policy_id: record.default_network_policy_id }
+          : {}),
       }
     : null;
 }
@@ -82,6 +91,7 @@ export function SiteCreateForm({
   title = "사이트 등록",
   triggerLabel = "새 사이트",
   initialUrl,
+  openSignal,
   embedded = false,
   onCreated,
 }: SiteCreateFormProps = {}): JSX.Element | null {
@@ -152,8 +162,6 @@ export function SiteCreateForm({
     onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
   });
 
-  if (!can("site.create")) return null;
-
   const addFlagRow = () => {
     setFlagRows((rows) => [
       ...rows,
@@ -166,6 +174,19 @@ export function SiteCreateForm({
   const removeFlagRow = (id: number) => {
     setFlagRows((rows) => rows.filter((row) => row.id !== id));
   };
+
+  useEffect(() => {
+    if (openSignal === undefined || openSignal <= 0) return;
+    setMsg(null);
+    setOpen(true);
+    const seeded = httpOrigin(initialUrl);
+    if (seeded !== "") {
+      setUrl((current) => (current.trim() === "" ? seeded : current));
+    }
+  }, [initialUrl, openSignal]);
+
+  if (!can("site.create")) return null;
+
   const toggleOpen = () => {
     setMsg(null);
     setOpen((current) => {

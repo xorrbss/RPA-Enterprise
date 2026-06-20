@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, test, beforeEach, vi } from "vitest";
 
 import { App } from "../src/App";
@@ -281,10 +281,17 @@ describe("PromptScenarioGenerator correction run", () => {
     await waitFor(() => expect(generateCalls).toHaveLength(1));
 
     const correctionButton = await screen.findByRole("button", { name: CORRECTION_BUTTON_NAME });
-    const inputs = view.container.querySelectorAll("input");
-    const selects = view.container.querySelectorAll("select");
-    fireEvent.change(inputs[1] as HTMLInputElement, { target: { value: "https://shop.example/orders" } });
-    fireEvent.change(selects[2] as HTMLSelectElement, { target: { value: "10000000-0000-4000-8000-0000000000a1" } });
+    expect(correctionButton).toBeDisabled();
+    const guide = screen.getByLabelText("blocked generation recovery guide");
+    expect(guide).toHaveTextContent("시작 URL");
+    expect(guide).toHaveTextContent("실행 대상");
+    fireEvent.click(within(guide).getByRole("button", { name: "시작 URL 입력" }));
+    expect(screen.getByLabelText("시작 URL")).toHaveFocus();
+    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://shop.example/orders" } });
+    fireEvent.click(within(guide).getByRole("button", { name: "사이트 선택" }));
+    expect(screen.getByLabelText("사이트")).toHaveFocus();
+    fireEvent.change(screen.getByLabelText("사이트"), { target: { value: "10000000-0000-4000-8000-0000000000a1" } });
+    await waitFor(() => expect(correctionButton).not.toBeDisabled());
     fireEvent.click(correctionButton);
 
     await waitFor(() => expect(runCalls).toHaveLength(1));
@@ -303,6 +310,141 @@ describe("PromptScenarioGenerator correction run", () => {
     await waitFor(() =>
       expect(location.hash).toBe(
         "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000b3&focus=artifacts",
+      ),
+    );
+  });
+
+  test("blocked generation can create a site from the recovery guide and queue a correction run", async () => {
+    const createdSiteId = "10000000-0000-4000-8000-0000000000d1";
+    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
+    const createCalls: Array<Parameters<ApiClient["createSite"]>[0]> = [];
+    const runCalls: Array<{ generationId: string; body: Parameters<ApiClient["runScenarioGeneration"]>[1] }> = [];
+    const siteItems = new Map<string, {
+      site_profile_id: string;
+      risk: string;
+      approval_status: string;
+      circuit_status: string;
+      name: string;
+      url_pattern: string;
+      default_browser_identity_id: string | null;
+      default_network_policy_id: string | null;
+    }>();
+    location.hash = "#scenarioStudio";
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listSites: async () => ({ items: [...siteItems.values()], next_cursor: null }),
+        generateScenario: async (body) => {
+          generateCalls.push(body);
+          return {
+            generation_id: "00000000-0000-0000-0000-0000000000d3",
+            mode: body.mode ?? "save_and_run",
+            status: "blocked",
+            prompt_hash: "hash",
+            planner: body.planner ?? "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: null,
+            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            blockers: ["start_url_required_for_auto_run", "target_required_for_auto_run"],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+        createSite: async (body) => {
+          createCalls.push(body);
+          siteItems.set(createdSiteId, {
+            site_profile_id: createdSiteId,
+            risk: body.risk ?? "green",
+            approval_status: "pending",
+            circuit_status: "closed",
+            name: body.name,
+            url_pattern: body.url_pattern,
+            default_browser_identity_id: "browser-guided",
+            default_network_policy_id: "network-guided",
+          });
+          return {
+            site_profile_id: createdSiteId,
+            name: body.name,
+            url_pattern: body.url_pattern,
+            risk: body.risk ?? "green",
+            approved: false,
+            default_browser_identity_id: "browser-guided",
+            default_network_policy_id: "network-guided",
+          };
+        },
+        runScenarioGeneration: async (generationId, body) => {
+          runCalls.push({ generationId, body });
+          return {
+            generation_id: generationId,
+            mode: "save_and_run",
+            status: "run_queued",
+            prompt_hash: "hash",
+            planner: "deterministic_mvp",
+            model: body.model ?? null,
+            scenario_id: "00000000-0000-0000-0000-0000000000c1",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+            run_id: "00000000-0000-0000-0000-000000000097",
+            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            blockers: [],
+            created_at: "2026-06-15T00:00:00.000Z",
+            created_by: "operator",
+            draft_ir: {},
+            validation_report: {},
+          };
+        },
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "새 포털 주문을 실행해줘" } });
+    fireEvent.click(screen.getByRole("button", { name: "저장 후 실행" }));
+    await waitFor(() => expect(generateCalls).toHaveLength(1));
+
+    const correctionButton = await screen.findByRole("button", { name: CORRECTION_BUTTON_NAME });
+    expect(correctionButton).toBeDisabled();
+    const guide = screen.getByLabelText("blocked generation recovery guide");
+    fireEvent.click(within(guide).getByRole("button", { name: "시작 URL 입력" }));
+    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://guided.example/orders" } });
+    fireEvent.click(within(guide).getByRole("button", { name: "새 사이트 등록" }));
+
+    const onboarding = screen.getByText("새 사이트 온보딩").closest("section");
+    expect(onboarding).not.toBeNull();
+    await waitFor(() => expect(within(onboarding as HTMLElement).getByLabelText("URL 패턴 (http/https origin)")).toHaveValue("https://guided.example"));
+    fireEvent.change(within(onboarding as HTMLElement).getByLabelText("이름"), { target: { value: "guided shop" } });
+    fireEvent.click(within(onboarding as HTMLElement).getByRole("button", { name: "등록" }));
+
+    await waitFor(() => expect(createCalls).toHaveLength(1));
+    expect(createCalls[0]).toMatchObject({
+      name: "guided shop",
+      url_pattern: "https://guided.example",
+      risk: "green",
+    });
+    await waitFor(() => expect(screen.getByLabelText("사이트 ID")).toHaveValue(createdSiteId));
+    expect(screen.getByLabelText("브라우저 ID")).toHaveValue("browser-guided");
+    expect(screen.getByLabelText("네트워크 정책 ID")).toHaveValue("network-guided");
+
+    await waitFor(() => expect(correctionButton).not.toBeDisabled());
+    fireEvent.click(correctionButton);
+
+    await waitFor(() => expect(runCalls).toHaveLength(1));
+    expect(runCalls[0]).toEqual({
+      generationId: "00000000-0000-0000-0000-0000000000d3",
+      body: {
+        start_url: "https://guided.example/orders",
+        target: {
+          site_profile_id: createdSiteId,
+          browser_identity_id: "browser-guided",
+          network_policy_id: "network-guided",
+        },
+        evidence: { screenshot: "each_step", video: "never" },
+      },
+    });
+    await waitFor(() =>
+      expect(location.hash).toBe(
+        "#runTrace?run=00000000-0000-0000-0000-000000000097&generation=00000000-0000-0000-0000-0000000000d3&focus=artifacts",
       ),
     );
   });

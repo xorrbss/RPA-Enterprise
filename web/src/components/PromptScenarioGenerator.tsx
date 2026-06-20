@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FileVideo, Image, Play, WandSparkles } from "lucide-react";
 
 import { useApiClient } from "../api/context";
+import { useCan } from "../api/permissions";
 import { GenerationArtifactsPanel } from "./GenerationArtifactsPanel";
 import { SiteCreateForm, type CreatedSite } from "./SiteCreateForm";
 import { errorLabel, StatusBadge } from "./badges";
@@ -49,6 +50,33 @@ const RUN_REPAIRABLE_BLOCKERS: ReadonlySet<string> = new Set([
   "video_recording_port_not_configured",
   "params_context_redacted_value_required",
 ]);
+
+const START_URL_REPAIR_BLOCKERS: ReadonlySet<string> = new Set(["start_url_required_for_auto_run", "target_start_url_site_mismatch"]);
+const TARGET_REPAIR_BLOCKERS: ReadonlySet<string> = new Set([
+  "target_required_for_auto_run",
+  "target_start_url_site_mismatch",
+  "site_profile_not_found",
+  "site_profile_blocked",
+  "browser_identity_not_found",
+  "browser_identity_site_mismatch",
+  "network_policy_not_found",
+  "network_policy_domain_mismatch",
+]);
+
+interface CorrectionGuideState {
+  readonly needsStartUrl: boolean;
+  readonly needsTarget: boolean;
+  readonly needsVideoPolicy: boolean;
+  readonly needsParams: boolean;
+  readonly startUrlReady: boolean;
+  readonly targetReady: boolean;
+  readonly targetPartial: boolean;
+  readonly targetStartUrlMatches: boolean;
+  readonly videoPolicyReady: boolean;
+  readonly paramsReady: boolean;
+  readonly hasSelectableSites: boolean;
+  readonly canCreateSite: boolean;
+}
 
 type ScreenshotPolicy = "never" | "failure" | "each_step";
 type VideoPolicy = "never" | "failure" | "always";
@@ -161,6 +189,30 @@ function canRunGenerationWithCorrections(result: ScenarioGenerationResult): bool
   );
 }
 
+function hasAnyBlocker(blockers: readonly string[], repairSet: ReadonlySet<string>): boolean {
+  return blockers.some((blocker) => repairSet.has(blocker));
+}
+
+function correctionGuideReady(guide: CorrectionGuideState): boolean {
+  return (
+    (!guide.needsStartUrl || guide.startUrlReady) &&
+    (!guide.needsTarget || guide.targetReady) &&
+    guide.targetStartUrlMatches &&
+    (!guide.needsVideoPolicy || guide.videoPolicyReady) &&
+    (!guide.needsParams || guide.paramsReady)
+  );
+}
+
+function correctionGuideError(guide: CorrectionGuideState): string | null {
+  if (guide.needsStartUrl && !guide.startUrlReady) return "시작 URL을 입력한 뒤 다시 실행하세요.";
+  if (guide.needsTarget && guide.targetPartial) return "사이트, 브라우저 ID, 네트워크 정책 ID를 모두 입력하세요.";
+  if (guide.needsTarget && !guide.targetReady) return "기존 사이트를 선택하거나 새 사이트를 등록해 실행 대상을 채우세요.";
+  if (!guide.targetStartUrlMatches) return "시작 URL과 선택한 사이트의 origin을 맞춘 뒤 다시 실행하세요.";
+  if (guide.needsVideoPolicy && !guide.videoPolicyReady) return "동영상 녹화를 끄고 다시 실행하세요.";
+  if (guide.needsParams && !guide.paramsReady) return "마스킹된 params 값을 다시 입력한 뒤 실행하세요.";
+  return null;
+}
+
 function modelRequiredOf(body: ApiErrorBody | null): { available: number } | null {
   const details = body?.details;
   if (details === undefined || details.reason !== "model_required") return null;
@@ -249,8 +301,8 @@ function createdSiteToItem(site: CreatedSite): SiteItem {
     risk: site.risk ?? "green",
     approval_status: site.approved === true ? "approved" : "pending",
     circuit_status: "closed",
-    default_browser_identity_id: null,
-    default_network_policy_id: null,
+    default_browser_identity_id: site.default_browser_identity_id ?? null,
+    default_network_policy_id: site.default_network_policy_id ?? null,
   };
 }
 
@@ -332,6 +384,7 @@ function draftTarget(draftIr: unknown): ScenarioGenerationRequest["target"] | nu
 
 export function PromptScenarioGenerator(): JSX.Element {
   const api = useApiClient();
+  const can = useCan();
   const qc = useQueryClient();
   const prefillSiteId = useHashParam("site");
   const prefillStartUrl = useHashParam("start_url");
@@ -385,9 +438,15 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [videoTouched, setVideoTouched] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
+  const [siteCreateOpenSignal, setSiteCreateOpenSignal] = useState(0);
+  const startUrlInputRef = useRef<HTMLInputElement | null>(null);
+  const siteSelectRef = useRef<HTMLSelectElement | null>(null);
+  const paramsInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const siteCreateRef = useRef<HTMLDivElement | null>(null);
   const autoStartUrlRef = useRef<string | null>(null);
   const targetManuallyEditedRef = useRef(false);
   const hashPrefillKeyRef = useRef<string | null>(null);
+  const canCreateSite = can("site.create");
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
   const evidenceSettingsLoading = capabilities.isLoading;
@@ -430,6 +489,21 @@ export function PromptScenarioGenerator(): JSX.Element {
 
   function markTargetManuallyEdited(): void {
     targetManuallyEditedRef.current = true;
+  }
+
+  function focusField(element: HTMLElement | null): void {
+    element?.focus();
+    element?.scrollIntoView?.({ block: "center" });
+  }
+
+  function openInlineSiteCreate(): void {
+    setSiteCreateOpenSignal((value) => value + 1);
+    const reveal = () => siteCreateRef.current?.scrollIntoView?.({ block: "center" });
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(reveal);
+      return;
+    }
+    window.setTimeout(reveal, 0);
   }
 
   function handleStartUrlChange(nextStartUrl: string): void {
@@ -485,6 +559,34 @@ export function PromptScenarioGenerator(): JSX.Element {
     if (startUrl.trim().length === 0 && site.url_pattern !== undefined) {
       setStartUrl(site.url_pattern);
     }
+  }
+
+  function currentCorrectionGuide(generation: ScenarioGenerationResult): CorrectionGuideState {
+    const targetValues = [siteProfileId.trim(), browserIdentityId.trim(), networkPolicyId.trim()];
+    const targetPartial = targetValues.some((value) => value.length > 0) && targetValues.some((value) => value.length === 0);
+    const startOrigin = httpOrigin(startUrl);
+    const selectedSiteOrigin = selectedSite?.url_pattern === undefined ? null : httpOrigin(selectedSite.url_pattern);
+    const needsStartUrl = hasAnyBlocker(generation.blockers, START_URL_REPAIR_BLOCKERS);
+    const needsTarget = hasAnyBlocker(generation.blockers, TARGET_REPAIR_BLOCKERS);
+    const targetStartUrlMatches =
+      !generation.blockers.includes("target_start_url_site_mismatch") ||
+      selectedSiteOrigin === null ||
+      startOrigin === null ||
+      selectedSiteOrigin === startOrigin;
+    return {
+      needsStartUrl,
+      needsTarget,
+      needsVideoPolicy: generation.blockers.includes("video_recording_port_not_configured"),
+      needsParams: generation.blockers.includes("params_context_redacted_value_required"),
+      startUrlReady: startUrl.trim().length > 0,
+      targetReady: targetValues.every((value) => value.length > 0),
+      targetPartial,
+      targetStartUrlMatches,
+      videoPolicyReady: video === "never",
+      paramsReady: paramsText.trim().length > 0,
+      hasSelectableSites: (sites.data?.items ?? []).length > 0,
+      canCreateSite,
+    };
   }
 
   useEffect(() => {
@@ -702,8 +804,18 @@ export function PromptScenarioGenerator(): JSX.Element {
 
   function runWithCorrections(generation: ScenarioGenerationResult): void {
     setLocalError(null);
+    if (!canRunGenerationWithCorrections(generation)) {
+      setLocalError("이 생성 결과는 보정 실행을 시작할 수 없습니다.");
+      return;
+    }
     if (needModel) {
       setLocalError("AI 모델을 입력하고 정책 확인을 완료한 뒤 다시 실행하세요.");
+      return;
+    }
+    const guide = currentCorrectionGuide(generation);
+    const guideError = correctionGuideError(guide);
+    if (guideError !== null) {
+      setLocalError(guideError);
       return;
     }
     try {
@@ -732,6 +844,8 @@ export function PromptScenarioGenerator(): JSX.Element {
     qc.setQueryData(["scenario-generation", item.generation_id], item);
   }
 
+  const correctionGuide = result === null ? null : currentCorrectionGuide(result);
+
   return (
     <section className="panel scenario-generator">
       <div className="panel-head">
@@ -758,7 +872,7 @@ export function PromptScenarioGenerator(): JSX.Element {
           </label>
           <label className="field">
             <span>시작 URL</span>
-            <input value={startUrl} onChange={(event) => handleStartUrlChange(event.target.value)} placeholder="https://..." />
+            <input ref={startUrlInputRef} value={startUrl} onChange={(event) => handleStartUrlChange(event.target.value)} placeholder="https://..." />
           </label>
           <label className="field">
             <span>처리 방식</span>
@@ -816,7 +930,7 @@ export function PromptScenarioGenerator(): JSX.Element {
           </label>
           <label className="field">
             <span>사이트</span>
-            <select value={siteProfileId} onChange={(event) => selectSite(event.target.value)}>
+            <select ref={siteSelectRef} value={siteProfileId} onChange={(event) => selectSite(event.target.value)}>
               <option value="">직접 입력 또는 생략</option>
               {(sites.data?.items ?? []).map((site) => (
                 <option key={site.site_profile_id} value={site.site_profile_id}>
@@ -825,12 +939,13 @@ export function PromptScenarioGenerator(): JSX.Element {
               ))}
             </select>
           </label>
-          <div className="field field-wide">
+          <div className="field field-wide" ref={siteCreateRef}>
             <SiteCreateForm
               embedded
               title="새 사이트 온보딩"
               triggerLabel="등록"
               initialUrl={startUrl}
+              openSignal={siteCreateOpenSignal}
               onCreated={handleInlineSiteCreated}
             />
           </div>
@@ -885,6 +1000,7 @@ export function PromptScenarioGenerator(): JSX.Element {
         <label className="field field-wide">
           <span>생성/실행 params JSON</span>
           <textarea
+            ref={paramsInputRef}
             value={paramsText}
             onChange={(event) => setParamsText(event.target.value)}
             rows={4}
@@ -924,9 +1040,18 @@ export function PromptScenarioGenerator(): JSX.Element {
         {result !== null && (
           <GenerationResult
             result={result}
+            correctionGuide={correctionGuide}
             runPending={runMutation.isPending}
             modelConfirmationRequired={needModel}
             onRunWithCorrections={runWithCorrections}
+            onFocusStartUrl={() => focusField(startUrlInputRef.current)}
+            onFocusTarget={() => focusField(siteSelectRef.current)}
+            onOpenSiteCreate={openInlineSiteCreate}
+            onFocusParams={() => focusField(paramsInputRef.current)}
+            onDisableVideoEvidence={() => {
+              setVideoTouched(true);
+              setVideo("never");
+            }}
           />
         )}
         <GenerationHistory
@@ -963,18 +1088,143 @@ export function PromptScenarioGenerator(): JSX.Element {
   );
 }
 
+function hasVisibleCorrectionSteps(guide: CorrectionGuideState): boolean {
+  return guide.needsStartUrl || guide.needsTarget || guide.needsVideoPolicy || guide.needsParams || !guide.targetStartUrlMatches;
+}
+
+function ReadinessBadge({ ready }: { ready: boolean }): JSX.Element {
+  return <span className={`badge ${ready ? "green" : "amber"}`}>{ready ? "준비됨" : "필요"}</span>;
+}
+
+function BlockedCorrectionGuide({
+  guide,
+  onFocusStartUrl,
+  onFocusTarget,
+  onOpenSiteCreate,
+  onFocusParams,
+  onDisableVideoEvidence,
+}: {
+  guide: CorrectionGuideState;
+  onFocusStartUrl: () => void;
+  onFocusTarget: () => void;
+  onOpenSiteCreate: () => void;
+  onFocusParams: () => void;
+  onDisableVideoEvidence: () => void;
+}): JSX.Element {
+  return (
+    <div className="site-create-inline recovery-guide" aria-label="blocked generation recovery guide">
+      <strong>실행 전 보정</strong>
+      <ul className="recovery-guide-list">
+        {guide.needsStartUrl && (
+          <li className="recovery-guide-row">
+            <span className="inline-facts recovery-guide-main">
+              <ReadinessBadge ready={guide.startUrlReady} />
+              <span>시작 URL</span>
+              <span className="subtle">{guide.startUrlReady ? "입력됨" : "자동 실행에 필요한 첫 페이지 URL을 입력하세요."}</span>
+            </span>
+            <button className="linklike" type="button" onClick={onFocusStartUrl}>
+              시작 URL 입력
+            </button>
+          </li>
+        )}
+        {guide.needsTarget && (
+          <li className="recovery-guide-row">
+            <span className="inline-facts recovery-guide-main">
+              <ReadinessBadge ready={guide.targetReady} />
+              <span>실행 대상</span>
+              <span className="subtle">
+                {guide.targetReady
+                  ? "사이트·브라우저·네트워크 정책 ID가 준비됐습니다."
+                  : guide.targetPartial
+                    ? "대상 ID 3개를 모두 채우세요."
+                    : "기존 사이트를 선택하거나 새 사이트를 등록하세요."}
+              </span>
+            </span>
+            <span className="inline-facts recovery-guide-actions">
+              {guide.hasSelectableSites && (
+                <button className="linklike" type="button" onClick={onFocusTarget}>
+                  사이트 선택
+                </button>
+              )}
+              {guide.canCreateSite && (
+                <button className="linklike" type="button" onClick={onOpenSiteCreate}>
+                  새 사이트 등록
+                </button>
+              )}
+            </span>
+          </li>
+        )}
+        {!guide.targetStartUrlMatches && (
+          <li className="recovery-guide-row">
+            <span className="inline-facts recovery-guide-main">
+              <ReadinessBadge ready={false} />
+              <span>origin 일치</span>
+              <span className="subtle">시작 URL과 선택한 사이트의 origin을 맞추세요.</span>
+            </span>
+            <span className="inline-facts recovery-guide-actions">
+              <button className="linklike" type="button" onClick={onFocusStartUrl}>
+                시작 URL 확인
+              </button>
+              <button className="linklike" type="button" onClick={onFocusTarget}>
+                사이트 확인
+              </button>
+            </span>
+          </li>
+        )}
+        {guide.needsVideoPolicy && (
+          <li className="recovery-guide-row">
+            <span className="inline-facts recovery-guide-main">
+              <ReadinessBadge ready={guide.videoPolicyReady} />
+              <span>동영상 증거</span>
+              <span className="subtle">{guide.videoPolicyReady ? "동영상 저장 안 함" : "녹화 포트가 없으면 동영상을 끄고 실행하세요."}</span>
+            </span>
+            <button className="linklike" type="button" onClick={onDisableVideoEvidence}>
+              동영상 끄기
+            </button>
+          </li>
+        )}
+        {guide.needsParams && (
+          <li className="recovery-guide-row">
+            <span className="inline-facts recovery-guide-main">
+              <ReadinessBadge ready={guide.paramsReady} />
+              <span>params JSON</span>
+              <span className="subtle">{guide.paramsReady ? "입력됨" : "마스킹된 값을 다시 입력하세요."}</span>
+            </span>
+            <button className="linklike" type="button" onClick={onFocusParams}>
+              params 입력
+            </button>
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 function GenerationResult({
   result,
+  correctionGuide,
   runPending,
   modelConfirmationRequired,
   onRunWithCorrections,
+  onFocusStartUrl,
+  onFocusTarget,
+  onOpenSiteCreate,
+  onFocusParams,
+  onDisableVideoEvidence,
 }: {
   result: ScenarioGenerationResult;
+  correctionGuide: CorrectionGuideState | null;
   runPending: boolean;
   modelConfirmationRequired: boolean;
   onRunWithCorrections: (generation: ScenarioGenerationResult) => void;
+  onFocusStartUrl: () => void;
+  onFocusTarget: () => void;
+  onOpenSiteCreate: () => void;
+  onFocusParams: () => void;
+  onDisableVideoEvidence: () => void;
 }): JSX.Element {
   const canRunWithCorrections = canRunGenerationWithCorrections(result);
+  const correctionReady = correctionGuide === null || correctionGuideReady(correctionGuide);
   const resultActionLabel = evidenceReviewActionLabel(result.evidence_policy);
   return (
     <div className="generation-result" role="status">
@@ -1020,6 +1270,16 @@ function GenerationResult({
           ))}
         </ul>
       )}
+      {canRunWithCorrections && correctionGuide !== null && hasVisibleCorrectionSteps(correctionGuide) && (
+        <BlockedCorrectionGuide
+          guide={correctionGuide}
+          onFocusStartUrl={onFocusStartUrl}
+          onFocusTarget={onFocusTarget}
+          onOpenSiteCreate={onOpenSiteCreate}
+          onFocusParams={onFocusParams}
+          onDisableVideoEvidence={onDisableVideoEvidence}
+        />
+      )}
       <GenerationArtifactsPanel generationId={result.generation_id} />
       {result.run_id !== null && (
         <GenerationArtifactsPanel generationId={result.generation_id} source="result" title="실행 결과 산출물" />
@@ -1030,7 +1290,7 @@ function GenerationResult({
             className="btn primary"
             type="button"
             onClick={() => onRunWithCorrections(result)}
-            disabled={runPending || modelConfirmationRequired}
+            disabled={runPending || modelConfirmationRequired || !correctionReady}
           >
             <Play size={15} aria-hidden="true" />
             {runPending ? "실행 보정 중" : "보정값으로 실행"}

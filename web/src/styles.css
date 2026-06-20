@@ -158,6 +158,12 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
   gap: 8px;
   flex-wrap: wrap;
 }
+.recovery-guide { display: grid; gap: 8px; }
+.recovery-guide-list { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.recovery-guide-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.recovery-guide-main { min-width: min(100%, 260px); }
+.recovery-guide-main .subtle { overflow-wrap: anywhere; }
+.recovery-guide-actions { justify-content: flex-end; }
 .generator-actions { justify-content: flex-start; }
 .evidence-chip {
   display: inline-flex;
