@@ -44,19 +44,22 @@ function artifactMediaKind(item: GenerationArtifactItem): "image" | "video" | nu
   return null;
 }
 
-function isArtifactRedacted(item: GenerationArtifactItem | undefined): boolean {
-  return item?.redaction_status === "redacted";
+function isArtifactReadable(item: GenerationArtifactItem | undefined): boolean {
+  return item?.redaction_status === "redacted" || item?.redaction_status === "not_required";
 }
 
-function artifactSummary(items: readonly GenerationArtifactItem[]): { images: number; videos: number } {
+function artifactSummary(items: readonly GenerationArtifactItem[]): { images: number; videos: number; pending: number } {
   return items.reduce(
     (acc, item) => {
       const kind = artifactMediaKind(item);
-      if (kind === "image") acc.images += 1;
-      if (kind === "video") acc.videos += 1;
+      if (isArtifactReadable(item)) {
+        if (kind === "image") acc.images += 1;
+        if (kind === "video") acc.videos += 1;
+      }
+      if (item.redaction_status === "pending") acc.pending += 1;
       return acc;
     },
-    { images: 0, videos: 0 },
+    { images: 0, videos: 0, pending: 0 },
   );
 }
 
@@ -117,8 +120,8 @@ export function GenerationArtifactsPanel({
   const hasMore = (lastPage?.next_cursor ?? null) !== null;
   const items = useMemo(() => dedupeArtifacts(pages.flatMap((page) => page.items)), [pages]);
   const preferred =
-    items.find((item) => isArtifactRedacted(item) && previewGenerationArtifactMediaType(item) !== null) ??
-    items.find(isArtifactRedacted) ??
+    items.find((item) => isArtifactReadable(item) && previewGenerationArtifactMediaType(item) !== null) ??
+    items.find(isArtifactReadable) ??
     items[0];
   const summary = artifactSummary(items);
   const effectiveSelectedId =
@@ -135,7 +138,7 @@ export function GenerationArtifactsPanel({
     }
   }, [items, preferred?.artifact_id, selectedId]);
   const selected = items.find((item) => item.artifact_id === effectiveSelectedId);
-  const selectedIsRedacted = isArtifactRedacted(selected);
+  const selectedIsReadable = isArtifactReadable(selected);
   const selectedMediaType = previewGenerationArtifactMediaType(selected);
   const detail = useQuery<ArtifactDetail>({
     queryKey: ["scenario-generation-artifact", source, generationId, effectiveSelectedId],
@@ -144,7 +147,7 @@ export function GenerationArtifactsPanel({
         ? api.getArtifact(effectiveSelectedId as string)
         : api.getScenarioGenerationArtifact(generationId, effectiveSelectedId as string)
     ),
-    enabled: effectiveSelectedId !== null && selectedIsRedacted && selectedMediaType === null,
+    enabled: effectiveSelectedId !== null && selectedIsReadable && selectedMediaType === null,
   });
 
   return (
@@ -155,6 +158,7 @@ export function GenerationArtifactsPanel({
         {hasMore && <span className="badge amber">더 있음</span>}
         {summary.images > 0 && <span className="badge blue">image {summary.images}</span>}
         {summary.videos > 0 && <span className="badge amber">video {summary.videos}</span>}
+        {summary.pending > 0 && <span className="badge muted">redaction pending {summary.pending}</span>}
         {hasMore && (
           <button className="linklike" type="button" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
             {list.isFetchingNextPage ? "불러오는 중" : "더 보기"}
@@ -198,7 +202,7 @@ export function GenerationArtifactsPanel({
                 <span className="subtle">유형 {selected.type}</span>
               </div>
             )}
-            {selected !== undefined && !selectedIsRedacted ? (
+            {selected !== undefined && !selectedIsReadable ? (
               <p className="muted" role="status">Preview is available after redaction completes.</p>
             ) : selected !== undefined && selectedMediaType !== null ? (
               <ArtifactMediaPreview artifactId={selected.artifact_id} mediaType={selectedMediaType} filename={selected.filename} />

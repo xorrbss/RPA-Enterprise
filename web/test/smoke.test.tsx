@@ -183,6 +183,44 @@ describe("D7 운영 콘솔 shell", () => {
     expect(blobCalls).toContain("ee000000-0000-0000-0000-000000000005");
   });
 
+  test("generation result artifacts treat not_required media as previewable", async () => {
+    installObjectUrlMock();
+    const blobCalls: string[] = [];
+    renderGenerationArtifactsPanel(
+      fakeClient({
+        listScenarioGenerationResultArtifacts: async () => ({
+          items: [{
+            artifact_id: "bb200000-0000-0000-0000-000000000008",
+            type: "screen_capture",
+            media_type: "image/png",
+            filename: "not-required.png",
+            byte_size: 512,
+            duration_ms: null,
+            redaction_status: "not_required",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-15T00:00:02.000Z",
+          }],
+          next_cursor: null,
+        }),
+        getArtifact: async () => {
+          throw new Error("not_required media preview must use blob route, not body route");
+        },
+        getArtifactBlob: async (artifactId) => {
+          blobCalls.push(artifactId);
+          return new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+        },
+      }),
+      "result",
+    );
+
+    const image = await screen.findByRole("img", { name: "not-required.png" });
+    expect(image).toHaveAttribute("src", "blob:test-preview");
+    expect(screen.getByText("image 1")).toBeInTheDocument();
+    expect(screen.queryByText("Preview is available after redaction completes.")).toBeNull();
+    expect(blobCalls).toEqual(["bb200000-0000-0000-0000-000000000008"]);
+  });
+
   test("generation result artifacts wait for redaction before body or blob preview", async () => {
     const bodyCalls: string[] = [];
     const scopedBodyCalls: string[] = [];

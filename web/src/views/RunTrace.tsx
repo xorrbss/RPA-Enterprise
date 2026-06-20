@@ -332,8 +332,8 @@ function isPreviewableMedia(a: RunArtifactItem | undefined): boolean {
   return previewMediaType(a) !== null;
 }
 
-function isArtifactRedacted(a: RunArtifactItem | undefined): boolean {
-  return a?.redaction_status === "redacted";
+function isArtifactReadable(a: RunArtifactItem | undefined): boolean {
+  return a?.redaction_status === "redacted" || a?.redaction_status === "not_required";
 }
 
 function formatByteSize(bytes: number | null | undefined): string | null {
@@ -376,8 +376,10 @@ function artifactSummary(items: readonly RunArtifactItem[]): { screenshots: numb
   return items.reduce(
     (acc, item) => {
       const kind = mediaKind(item);
-      if (kind === "screenshot") acc.screenshots += 1;
-      if (kind === "video") acc.videos += 1;
+      if (isArtifactReadable(item)) {
+        if (kind === "screenshot") acc.screenshots += 1;
+        if (kind === "video") acc.videos += 1;
+      }
       if (item.redaction_status === "pending") acc.pending += 1;
       return acc;
     },
@@ -501,9 +503,9 @@ function RunArtifactsList({
   const items: readonly RunArtifactItem[] = mergeArtifactPages(firstPageItems, extraItems);
   const hasMoreArtifacts = nextCursor !== null;
   const preferred =
-    items.find((a) => isArtifactRedacted(a) && isPreviewableMedia(a)) ??
-    items.find((a) => isArtifactRedacted(a) && /json|extract|output|result/i.test(a.type)) ??
-    items.find(isArtifactRedacted) ??
+    items.find((a) => isArtifactReadable(a) && isPreviewableMedia(a)) ??
+    items.find((a) => isArtifactReadable(a) && /json|extract|output|result/i.test(a.type)) ??
+    items.find(isArtifactReadable) ??
     items[0];
   const hashSelectedId =
     hashArtifactId !== null && items.some((a) => a.artifact_id === hashArtifactId)
@@ -516,7 +518,7 @@ function RunArtifactsList({
   const effectiveSelectedId =
     hashSelectedId ?? stateSelectedId ?? preferred?.artifact_id ?? null;
   const selectedItem = items.find((a) => a.artifact_id === effectiveSelectedId);
-  const selectedIsRedacted = isArtifactRedacted(selectedItem);
+  const selectedIsReadable = isArtifactReadable(selectedItem);
   const selectedIsMedia = isPreviewableMedia(selectedItem);
   const selectedMediaType = previewMediaType(selectedItem);
   const counts = artifactSummary(items);
@@ -544,7 +546,7 @@ function RunArtifactsList({
   const detail = useQuery({
     queryKey: ["artifact-detail", effectiveSelectedId],
     queryFn: () => api.getArtifact(effectiveSelectedId as string),
-    enabled: effectiveSelectedId !== null && selectedIsRedacted && !selectedIsMedia,
+    enabled: effectiveSelectedId !== null && selectedIsReadable && !selectedIsMedia,
   });
   const summary = detail.data !== undefined ? summarizeJsonArtifact(detail.data) : null;
   async function loadMoreArtifacts(): Promise<void> {
@@ -621,7 +623,7 @@ function RunArtifactsList({
                 {items.map((a) => {
                   const kind = mediaKind(a);
                   const labels = mediaMetaLabels(a);
-                  const isRedacted = isArtifactRedacted(a);
+                  const isReadable = isArtifactReadable(a);
                   return (
                     <tr key={a.artifact_id} data-current={a.artifact_id === effectiveSelectedId ? "true" : undefined}>
                       <td><ArtifactRef id={a.artifact_id} /></td>
@@ -652,8 +654,8 @@ function RunArtifactsList({
                       </td>
                       <td>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                          <span className={`badge ${isRedacted ? "green" : "amber"}`}>{a.redaction_status}</span>
-                          {!isRedacted && <span className="subtle">redaction pending</span>}
+                          <span className={`badge ${isReadable ? "green" : "amber"}`}>{a.redaction_status}</span>
+                          {!isReadable && <span className="subtle">redaction pending</span>}
                         </span>
                       </td>
                       <td>{a.retention_until ?? "—"}</td>
@@ -662,8 +664,8 @@ function RunArtifactsList({
                         <button
                           className="btn"
                           type="button"
-                          disabled={!isRedacted}
-                          title={!isRedacted ? "Preview is available after redaction completes." : undefined}
+                          disabled={!isReadable}
+                          title={!isReadable ? "Preview is available after redaction completes." : undefined}
                           onClick={() => {
                             setSelectedId(a.artifact_id);
                             mergeParams({ artifact: a.artifact_id, focus: "artifacts" });
@@ -704,7 +706,7 @@ function RunArtifactsList({
                 {summary !== null && <span className="badge green">{summary.label} {summary.count}건</span>}
                 {summary !== null && summary.keys.length > 0 && <span className="subtle">키 {summary.keys.join(", ")}</span>}
               </div>
-              {selectedItem !== undefined && !selectedIsRedacted ? (
+              {selectedItem !== undefined && !selectedIsReadable ? (
                 <p className="subtle" role="status" style={{ margin: "8px 0 0" }}>
                   Preview is available after redaction completes.
                 </p>

@@ -479,6 +479,48 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(videoEl).toHaveAttribute("src", "blob:test-preview");
   });
 
+  test("실행 상세 산출물: not_required 미디어도 redaction 완료 산출물처럼 미리보기한다", async () => {
+    installObjectUrlMock();
+    const blobCalls: string[] = [];
+    renderApp(fakeClient({
+      listRunArtifacts: async () => ({
+        items: [{
+          artifact_id: "art-not-required-video-1",
+          type: "video_masked",
+          media_type: "video/webm",
+          filename: "not-required.webm",
+          byte_size: 4096,
+          duration_ms: 1200,
+          redaction_status: "not_required",
+          retention_until: null,
+          legal_hold: false,
+          created_at: "2026-06-18T00:00:01.000Z",
+        }],
+        next_cursor: null,
+      }),
+      getArtifact: async () => {
+        throw new Error("not_required media preview must use blob route, not body route");
+      },
+      getArtifactBlob: async (artifactId) => {
+        blobCalls.push(artifactId);
+        return new Blob([new Uint8Array([1, 2, 3])], { type: "video/webm" });
+      },
+    }));
+
+    await openDetail();
+    expect(await screen.findByText("not_required")).toBeInTheDocument();
+    expect(screen.getByText("not-required.webm")).toBeInTheDocument();
+    const notRequiredVideoEl = await waitFor(() => {
+      const el = document.querySelector("video");
+      expect(el).not.toBeNull();
+      return el as HTMLVideoElement;
+    });
+    expect(notRequiredVideoEl).toHaveAttribute("aria-label", "not-required.webm");
+    expect(notRequiredVideoEl).toHaveAttribute("src", "blob:test-preview");
+    expect(screen.queryByText("Preview is available after redaction completes.")).toBeNull();
+    expect(blobCalls).toEqual(["art-not-required-video-1"]);
+  });
+
   test("실행 상세 산출물: JSON보다 스크린샷 증거를 먼저 미리보기로 선택한다", async () => {
     installObjectUrlMock();
     renderApp(fakeClient({
