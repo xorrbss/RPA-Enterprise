@@ -209,6 +209,82 @@ describe("goal UX improvements", () => {
     expect(assigned.every((c) => c.assignee === "u-assign" && c.key.includes(c.id))).toBe(true);
   });
 
+  test("human task '내게 배정' self-assigns with current token sub (UUID, no uuid typing)", async () => {
+    const SUB = "11111111-1111-4111-8111-111111111111";
+    localStorage.setItem("rpa.token", jwt(["operator"], SUB));
+    const assigned: Array<{ id: string; assignee: string }> = [];
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({
+          items: [{ human_task_id: "ht-self", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: null, run_id: null }],
+          next_cursor: null,
+        }),
+        assignHumanTask: async (id, assignee) => {
+          assigned.push({ id, assignee });
+          return { status: "assigned" };
+        },
+      }),
+    );
+    location.hash = "#humanTasks";
+    const table = await screen.findByRole("table");
+    fireEvent.click(within(table).getByRole("button", { name: "내게 배정" }));
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(assigned).toHaveLength(1));
+    expect(assigned[0]).toEqual({ id: "ht-self", assignee: SUB });
+  });
+
+  test("'내게 배정'·'내 담당만 보기' off when sub is non-UUID (OIDC auth0|…) — 가정 금지, uuid 배정 폴백 유지", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"], "auth0|abc")); // 비-UUID sub: assignee(uuid)로 못 씀 → 백엔드 422
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({
+          items: [{ human_task_id: "ht-x", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: null, run_id: null }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#humanTasks";
+    const table = await screen.findByRole("table");
+    expect(within(table).queryByRole("button", { name: "내게 배정" })).toBeNull(); // 자가배정 숨김(비-UUID는 백엔드 422)
+    expect(within(table).getByRole("button", { name: "배정" })).toBeInTheDocument(); // uuid 직접입력 폴백 유지
+    expect(screen.getByRole("button", { name: "내 담당만 보기" })).toBeDisabled(); // 자가필터도 비활성(목록 422 방지)
+  });
+
+  test("DLQ panel gains a pager and 'page bulk replay' (sequential, per-item idempotency key)", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"], "u"));
+    const replayed: string[] = [];
+    const keys = new Set<string>();
+    renderApp(
+      fakeClient({
+        listDlq: async (kind, p) => {
+          if (kind !== "workitem") return { items: [], next_cursor: null };
+          return {
+            items: [
+              { dead_letter_id: "dl-1", kind, status: "DEAD_LETTER", source_id: "wi-1" },
+              { dead_letter_id: "dl-2", kind, status: "DEAD_LETTER", source_id: "wi-2" },
+            ],
+            next_cursor: p?.cursor === undefined ? "CUR2" : null,
+          };
+        },
+        replayDeadLetter: async (id, key) => {
+          replayed.push(id);
+          keys.add(key);
+          return {};
+        },
+      }),
+    );
+    location.hash = "#workitems";
+    // 일괄 버튼·페이저 모두 로드된 items에 의존 → 일괄 버튼(데이터 로드 신호)을 먼저 await
+    const bulkBtn = await screen.findByRole("button", { name: "이 페이지 2건 재처리" });
+    // next_cursor 있으니 '다음' 페이저 노출(51건째부터 조용한 누락 해소)
+    expect(screen.getAllByRole("button", { name: "다음" }).length).toBeGreaterThan(0);
+    // 일괄 재처리: 페이지 2건을 각자 고유 멱등키로 순차 재처리
+    fireEvent.click(bulkBtn);
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await waitFor(() => expect([...replayed].sort()).toEqual(["dl-1", "dl-2"]));
+    expect(keys.size).toBe(2);
+  });
+
   test("approval inbox can focus pending rows without adding unsafe bulk decisions", async () => {
     renderApp(
       inboxClient([

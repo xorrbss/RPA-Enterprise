@@ -2,7 +2,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useApiClient } from "../api/context";
-import { useCan, useSubject } from "../api/permissions";
+import { isUuid, useCan, useSubject } from "../api/permissions";
 import type { ApiClient } from "../api/client";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
@@ -25,6 +25,24 @@ function dueTime(task: HumanTaskItem): number {
 // 상태별 운영자 액션(state-machine H1/H2/H3/H5/H6). 권한/assignee 범위는 백엔드가 강제.
 function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }): JSX.Element {
   const id = task.human_task_id;
+  const subject = useSubject();
+  // '내게 배정' 단축 — 현재 토큰 sub로 self-assign(uuid 직접입력 없이 가장 흔한 케이스). 검증은 백엔드가 최종 강제.
+  // ⚠ sub는 비-UUID OIDC 식별자(auth0|…·이메일)일 수 있고 백엔드 assignee는 uuid만 허용(422) → sub가 UUID일 때만 렌더(isUuid).
+  //   비-UUID/부재면 미렌더(조용한 false 금지) + uuid 직접입력 '배정' 폴백만. 이름 picker는 principals read 부재로 별도 TODO[BLOCKED].
+  const selfAssign = isUuid(subject) ? (
+    <ActionButton
+      label="내게 배정"
+      action="human_task.assign"
+      confirmText="이 업무를 내게 배정할까요?"
+      run={(key) => api.assignHumanTask(id, subject, key)}
+      invalidateKeys={KEYS}
+    />
+  ) : null;
+  // 타인 배정은 uuid 직접입력(아래 '배정')을 유지. 이름 검색 picker는 백엔드 선행이 필요:
+  // TODO: [BLOCKED]
+  //   violated: 가정 금지 — 없는 데이터로 UI를 채우지 않는다
+  //   reason: 배정 가능한 사용자 목록 read 엔드포인트가 계약(api-surface)·라우트에 전무 → 이름↔uuid 매핑 소스 없음
+  //   required_change: /v1/users(또는 principals) 목록 + 표시명 투영(versioned 계약) → 그 후 uuid 입력을 이름 picker로 대체
   const assign = (
     <ActionButton
       label="배정"
@@ -44,7 +62,7 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
   );
   return (
     <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-      {task.state === "open" && (<>{assign}{escalate}</>)}
+      {task.state === "open" && (<>{selfAssign}{assign}{escalate}</>)}
       {task.state === "assigned" && (
         <>
           <ActionButton label="시작" action="human_task.start" confirmText="이 업무를 시작할까요?" run={(key) => api.startHumanTask(id, key)} invalidateKeys={KEYS} />
@@ -58,7 +76,7 @@ function HumanTaskActions({ api, task }: { api: ApiClient; task: HumanTaskItem }
           {escalate}
         </>
       )}
-      {task.state === "escalated" && assign}
+      {task.state === "escalated" && (<>{selfAssign}{assign}</>)}
       {["resolved", "expired", "cancelled"].includes(task.state) && "—"}
     </span>
   );
@@ -99,9 +117,10 @@ export function HumanTasksView(): JSX.Element {
           <button
             className="btn"
             type="button"
-            disabled={subject === null}
+            disabled={!isUuid(subject)}
             onClick={() => {
-              if (subject !== null) lv.setFilter({ ...lv.filter, assignee: lv.filter.assignee === subject ? undefined : subject });
+              // sub가 UUID일 때만(버튼 disabled 가드와 동치) — 비-UUID sub를 assignee 필터로 보내면 백엔드 uuidFilter가 422로 목록을 깨뜨린다.
+              if (isUuid(subject)) lv.setFilter({ ...lv.filter, assignee: lv.filter.assignee === subject ? undefined : subject });
             }}
           >
             {lv.filter.assignee === subject ? "전체 담당 보기" : "내 담당만 보기"}

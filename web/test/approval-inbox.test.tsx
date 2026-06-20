@@ -6,7 +6,7 @@ import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
 import type { DecideApprovalBody } from "../src/api/types";
-import { COLLECT_SCENARIO_NAME, parseApprovalRows, summarize } from "../src/api/approval-inbox";
+import { COLLECT_SCENARIO_NAME, isHttpUrl, parseApprovalRows, summarize } from "../src/api/approval-inbox";
 import { fakeClient } from "./fake-client";
 
 function renderApp(client: ApiClient): void {
@@ -66,6 +66,14 @@ describe("결재 인박스 — 순수 로직", () => {
     expect(s.byStatus).toEqual([["대기", 3]]);
     expect(s.byType[0]).toEqual(["지출", 2]); // 최다 유형이 먼저
   });
+  test("isHttpUrl: http(s)만 링크 허용 — javascript:/data: 등 차단(XSS 가드)", () => {
+    expect(isHttpUrl("https://approval.office.hiworks.com/x")).toBe(true);
+    expect(isHttpUrl("http://x/y")).toBe(true);
+    expect(isHttpUrl("javascript:alert(1)")).toBe(false);
+    expect(isHttpUrl("data:text/html,x")).toBe(false);
+    expect(isHttpUrl("not a url")).toBe(false);
+    expect(isHttpUrl("")).toBe(false);
+  });
 });
 
 describe("결재 인박스 — 뷰", () => {
@@ -82,6 +90,24 @@ describe("결재 인박스 — 뷰", () => {
     expect(screen.getByText("출장비 정산")).toBeInTheDocument();
     expect(screen.getByText("지출 2")).toBeInTheDocument(); // 유형 집계 칩
     expect(screen.getByText("홍길동")).toBeInTheDocument();
+  });
+
+  test("행에 '원문 보기' 새 탭 링크(doc_ref) — http(s) + noopener", async () => {
+    renderApp(inboxClient(JSON.stringify({ rows: [ROW()] })));
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+    const link = screen.getByRole("link", { name: /원문 보기/ });
+    expect(link.getAttribute("href")).toBe("https://dashboard.office.hiworks.com/approval/1");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  test("doc_ref가 비-http scheme면 링크 대신 '원문 링크 불가'(XSS 차단)", async () => {
+    renderApp(inboxClient(JSON.stringify({ rows: [ROW({ doc_ref: "javascript:alert(1)" })] })));
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+    expect(screen.getByText("원문 링크 불가")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /원문 보기/ })).toBeNull();
   });
 
   test("수집 시나리오 없음 → 안내 빈 상태", async () => {

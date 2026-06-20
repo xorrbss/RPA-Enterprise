@@ -17,8 +17,19 @@ const POLL_MS = 5_000;
 export function WorkitemsView(): JSX.Element {
   const api = useApiClient();
   const wi = useListView<WorkitemItem>(["workitems"], (p) => api.listWorkitems(p), { refetchInterval: POLL_MS });
-  const wiDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: POLL_MS });
-  const sinkDlq = useQuery({ queryKey: ["dlq", "sink"], queryFn: () => api.listDlq("sink", { limit: 50 }), refetchInterval: POLL_MS });
+  // DLQ 두 소스도 작업항목 표와 동일하게 페이저 부착(useListView) — 51건째부터 조용히 누락되던 것 해소(백엔드 keyset 커서 재사용).
+  const wiDlq = useListView<DeadLetterItem>(["dlq", "workitem"], (p) => api.listDlq("workitem", p), { refetchInterval: POLL_MS });
+  const sinkDlq = useListView<DeadLetterItem>(["dlq", "sink"], (p) => api.listDlq("sink", p), { refetchInterval: POLL_MS });
+  const wiDlqItems = wiDlq.query.data?.items ?? [];
+  const sinkDlqItems = sinkDlq.query.data?.items ?? [];
+  // TODO: [BLOCKED] DLQ 실패 사유(reason_code)·발생시각 컬럼
+  //   violated: 조용한 false/가정 금지 — 응답에 없는 값을 표에 채우지 않는다
+  //   reason: reason_code(migration_core_entities)·created_at 컬럼은 DB에 있으나 GET /v1/dlq 응답(reads.ts)에 미투영 → DeadLetterItem 타입에 없음
+  //   required_change: reads.ts SELECT/projection + api/types.ts DeadLetterItem에 reason_code/created_at 추가(백엔드) → 그 후 web 표 컬럼 추가
+  // TODO: [BLOCKED] sink DLQ 재처리 후 행 소거
+  //   violated: 구조 무결성 — workitem은 replayed_at 마킹으로 목록에서 빠지나 sink는 동등 표식이 없어 재처리 후 행이 잔류
+  //   reason: applySinkDeadLetterReplay가 dead_letter 행 status를 안 바꾸고 새 attempt만 인큐(app/src/api/dlq.ts), GET /v1/dlq?kind=sink가 잔류 행 반환
+  //   required_change: sink replay 시 'requeued' 등 중간 상태 마킹 + reads 필터(백엔드). web은 임시로 결정형 멱등키로 재클릭 중복 인큐만 차단
   // 선택 작업항목을 해시(`#workitems?wi=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
   const sel = useHashParam("wi");
   const detail = useQuery({ queryKey: ["workitem-detail", sel], queryFn: () => api.getWorkitem(sel as string), enabled: sel !== null });
@@ -49,7 +60,31 @@ export function WorkitemsView(): JSX.Element {
       />
       <QueryPanel<DeadLetterItem>
         title="데드레터 — 작업항목(W5/W7)"
-        query={wiDlq}
+        query={wiDlq.query}
+        pager={wiDlq.pager}
+        actions={
+          wiDlqItems.length > 0 ? (
+            <ActionButton
+              label={`이 페이지 ${wiDlqItems.length}건 재처리`}
+              action="dlq.replay"
+              confirmText={`이 페이지의 작업항목 데드레터 ${wiDlqItems.length}건을 모두 다시 처리 대기로 되돌릴까요?`}
+              run={async () => {
+                // 순차 재처리(동시성 충돌 회피). 멱등키를 dead_letter_id로 결정형 고정 → 재클릭/폴링 재렌더 시에도 같은 키가
+                // 재생(replay)되어 sink 중복 인큐·부분실패 후 재클릭 409를 막는다(적대리뷰 correctness-1/3). 실패는 집계해 표면화(조용한 실패 금지).
+                const failed: string[] = [];
+                for (const it of wiDlqItems) {
+                  try {
+                    await api.replayDeadLetter(it.dead_letter_id, `replay:${it.dead_letter_id}`, "workitem");
+                  } catch {
+                    failed.push(it.dead_letter_id.slice(0, 8));
+                  }
+                }
+                if (failed.length > 0) throw new Error(`${failed.length}/${wiDlqItems.length}건 재처리 실패(${failed.join(", ")}) — 나머지는 처리됨`);
+              }}
+              invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
+            />
+          ) : undefined
+        }
         rowKey={(r) => r.dead_letter_id}
         emptyMessage="작업항목 데드레터가 없습니다."
         columns={[
@@ -72,7 +107,31 @@ export function WorkitemsView(): JSX.Element {
       />
       <QueryPanel<DeadLetterItem>
         title="데드레터 — 외부 전달(sink)"
-        query={sinkDlq}
+        query={sinkDlq.query}
+        pager={sinkDlq.pager}
+        actions={
+          sinkDlqItems.length > 0 ? (
+            <ActionButton
+              label={`이 페이지 ${sinkDlqItems.length}건 재처리`}
+              action="sink_dlq.replay"
+              confirmText={`이 페이지의 외부 전달 실패 ${sinkDlqItems.length}건을 모두 재시도할까요?`}
+              run={async () => {
+                // sink는 replay 후에도 dead_letter 행이 남으므로(아래 TODO[BLOCKED]) 결정형 멱등키가 특히 중요 —
+                // 재클릭/폴링 재렌더 시 같은 키 재생으로 중복 인큐를 차단한다(적대리뷰 correctness-1).
+                const failed: string[] = [];
+                for (const it of sinkDlqItems) {
+                  try {
+                    await api.replayDeadLetter(it.dead_letter_id, `replay:${it.dead_letter_id}`, "sink");
+                  } catch {
+                    failed.push(it.dead_letter_id.slice(0, 8));
+                  }
+                }
+                if (failed.length > 0) throw new Error(`${failed.length}/${sinkDlqItems.length}건 재처리 실패(${failed.join(", ")}) — 나머지는 처리됨`);
+              }}
+              invalidateKeys={[["dlq", "sink"]]}
+            />
+          ) : undefined
+        }
         rowKey={(r) => r.dead_letter_id}
         emptyMessage="외부 전달 데드레터가 없습니다."
         columns={[

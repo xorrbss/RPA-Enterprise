@@ -38,6 +38,14 @@ export function decodeSubject(token: string | null): string | null {
   }
 }
 
+// principal sub가 assignee(human_tasks.assignee = uuid 컬럼)로 쓸 수 있는 UUID 형식인지. 백엔드 UUID_RE(auth.ts·dlq.ts) 미러.
+// sub는 비-UUID OIDC 식별자(auth0|…·이메일)일 수 있고(auth.ts가 sub를 UUID로 강제하지 않음) 백엔드 assignee는 uuid만 허용하므로,
+// self-assign/self-filter 같은 'sub==assignee' 가정 동선은 이 가드를 통과할 때만 노출해야 한다(가정 금지).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isUuid(value: string | null): value is string {
+  return value !== null && UUID_RE.test(value);
+}
+
 export function useSubject(): string | null {
   return useMemo(() => decodeSubject(localStorage.getItem("rpa.token")), []);
 }
