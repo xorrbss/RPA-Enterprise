@@ -28,6 +28,7 @@ import { containsRedactedParamsMarker, redactGenerationDraftIr, redactGeneration
 import { cloneJsonRecord, parseEvidencePolicy, parseGenerationBlockers, parseGenerationRequest, parseGenerationRunRequest, parseGenerationStatusFilter, parseListCursor, parseListLimit, parseParamsContext, parseRunIdFilter, parseTarget, UUID_RE } from "./scenario-generation-parse";
 import { DEFAULT_PAGINATION_MAX_PAGES, MAX_AUTO_PAGINATION_PAGES, recordingPolicy, type RecordingPolicy } from "./scenario-generation-policy";
 import { finalizeDraftIrEvidence, looksLikeSideEffectPrompt, paginationPlan, prepareGenerationRunIr, scenarioPlannerFor, startUrlFromParams, uniqueStrings } from "./scenario-generation-planner";
+import { inferRuntimeTargetForRequest, inferRuntimeTargetForStartUrl, runtimeTargetBlocker } from "./scenario-generation-target";
 import { createRunInTx, requirePrincipal, type ApiServerDeps } from "./server";
 import type {
   EvidencePolicy,
@@ -42,7 +43,6 @@ import type {
   ScenarioPlannerId,
 } from "./scenario-generation-types";
 import type { RunEnqueuer } from "./run-queue";
-import { originOf, resolveSiteProfileId, type SiteResolutionCode, SiteResolutionError } from "../runtime/site-resolution";
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PLANNER_REPAIR_ATTEMPTS = 1;
@@ -904,109 +904,6 @@ function failedGenerationReason(apiError: ApiResponseError, compile: CompileOutc
 
 function apiErrorDetailsReason(details: unknown): string | undefined {
   return isRecord(details) && typeof details.reason === "string" && details.reason.length > 0 ? details.reason : undefined;
-}
-
-async function runtimeTargetBlocker(
-  client: PoolClient,
-  tenantId: string,
-  target: NonNullable<GenerationRequest["target"]>,
-  startUrl?: string,
-): Promise<string | undefined> {
-  const site = await client.query<{ risk: string; approved: boolean; url_pattern: string }>(
-    `SELECT risk, approved, url_pattern FROM site_profiles WHERE tenant_id=$1::uuid AND id=$2::uuid`,
-    [tenantId, target.site_profile_id],
-  );
-  const siteRow = site.rows[0];
-  if (siteRow === undefined) return "site_profile_not_found";
-  if (siteRow.risk === "red" && siteRow.approved !== true) return "site_profile_blocked";
-  if (startUrl !== undefined && originOf(siteRow.url_pattern) !== originOf(startUrl)) {
-    return "target_start_url_site_mismatch";
-  }
-  const identity = await client.query<{ site_profile_id: string | null }>(
-    `SELECT site_profile_id::text AS site_profile_id FROM browser_identities WHERE tenant_id=$1::uuid AND id=$2::uuid`,
-    [tenantId, target.browser_identity_id],
-  );
-  const identityRow = identity.rows[0];
-  if (identityRow === undefined) return "browser_identity_not_found";
-  if (identityRow.site_profile_id !== target.site_profile_id) return "browser_identity_site_mismatch";
-  const network = await client.query<{ allowed_domains: string[] }>(
-    `SELECT allowed_domains FROM network_policies WHERE tenant_id=$1::uuid AND id=$2::uuid`,
-    [tenantId, target.network_policy_id],
-  );
-  const networkRow = network.rows[0];
-  if (networkRow === undefined) return "network_policy_not_found";
-  const siteHost = hostOfHttpUrl(siteRow.url_pattern);
-  if (siteHost === null || !isHostAllowed(siteHost, networkRow.allowed_domains)) {
-    return "network_policy_domain_mismatch";
-  }
-  return undefined;
-}
-
-async function inferRuntimeTargetForRequest(
-  client: PoolClient,
-  tenantId: string,
-  request: GenerationRequest,
-): Promise<GenerationRequest> {
-  if (request.target !== undefined) return request;
-  const startUrl = request.startUrl ?? extractFirstHttpUrl(request.prompt);
-  if (startUrl === undefined) return request;
-
-  const target = await inferRuntimeTargetForStartUrl(client, tenantId, startUrl);
-  if (target === undefined) return request;
-
-  return {
-    ...request,
-    ...(request.startUrl !== undefined ? {} : { startUrl }),
-    target,
-  };
-}
-
-async function inferRuntimeTargetForStartUrl(
-  client: PoolClient,
-  tenantId: string,
-  startUrl: string,
-): Promise<GenerationRequest["target"]> {
-  const siteProfileId = await resolveSiteProfileId(client, { tenantId, entryUrlRef: startUrl }).catch((error: unknown) => {
-    if (error instanceof SiteResolutionError && isInferenceMiss(error.code)) return null;
-    throw error;
-  });
-  if (siteProfileId === null) return undefined;
-
-  const identity = await client.query<{ id: string }>(
-    `SELECT id::text AS id
-       FROM browser_identities
-      WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid
-      ORDER BY version DESC, created_at DESC, id DESC
-      LIMIT 1`,
-    [tenantId, siteProfileId],
-  );
-  const identityId = identity.rows[0]?.id;
-  if (identityId === undefined) return undefined;
-
-  const startHost = hostOfHttpUrl(startUrl);
-  if (startHost === null) return undefined;
-  const network = await client.query<{ id: string; allowed_domains: string[] }>(
-    `SELECT id::text AS id, allowed_domains
-       FROM network_policies
-      WHERE tenant_id=$1::uuid
-      ORDER BY created_at DESC, id DESC
-      LIMIT 50`,
-    [tenantId],
-  );
-  const matchingNetworkPolicies = network.rows.filter((row) => isHostAllowed(startHost, row.allowed_domains));
-  if (matchingNetworkPolicies.length !== 1) return undefined;
-  const networkPolicyId = matchingNetworkPolicies[0]?.id;
-  if (networkPolicyId === undefined) return undefined;
-
-  return {
-    site_profile_id: siteProfileId,
-    browser_identity_id: identityId,
-    network_policy_id: networkPolicyId,
-  };
-}
-
-function isInferenceMiss(code: SiteResolutionCode): boolean {
-  return code === "SITE_PROFILE_UNRESOLVED" || code === "SITE_PROFILE_AMBIGUOUS";
 }
 
 function mapGenerationRow(row: ScenarioGenerationRow): Record<string, unknown> {
