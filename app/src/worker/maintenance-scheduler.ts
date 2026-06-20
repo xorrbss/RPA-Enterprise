@@ -32,6 +32,11 @@ export function buildMaintenancePollJobs(
   return tenantIds.flatMap((tenantId) => [
     { kind: "lease_sweeper", tenantId: tenantId as TenantId },
     {
+      kind: "workitem_checkout_sweeper",
+      tenantId: tenantId as TenantId,
+      correlationId: correlationId() as CorrelationId,
+    },
+    {
       kind: "artifact_redaction",
       tenantId: tenantId as TenantId,
       correlationId: correlationId() as CorrelationId,

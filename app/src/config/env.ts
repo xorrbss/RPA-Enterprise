@@ -70,6 +70,8 @@ export interface CommonConfig {
   readonly connectionString: string;
   /** Unauthenticated health probe port (separate http server ??bypasses the Fastify auth/RBAC chain). */
   readonly healthPort: number;
+  /** OTel exporter 선택(부트스트랩 호출측 위임, observability/bootstrap.ts §). console=stdout 표면화, none=미등록(no-op). */
+  readonly telemetryExporter: TelemetryExporter;
 }
 
 export function loadCommonConfig(): CommonConfig {
@@ -79,7 +81,23 @@ export function loadCommonConfig(): CommonConfig {
     rpaEnv: req("RPA_ENV"),
     connectionString,
     healthPort: num("HEALTH_PORT", 8081),
+    telemetryExporter: loadTelemetryExporter(),
   };
+}
+
+export type TelemetryExporter = "console" | "none";
+
+/**
+ * OTel exporter 선택(부트스트랩 호출측 위임, bootstrap.ts §). `console`=내장 exporter 로 stdout 표면화(수집 백엔드 무의존),
+ * `none`(기본)=전역 Provider 미등록(span/metric no-op, 명시적 opt-out). OTLP(prod 수집)는 후속 — 별도 exporter 패키지로
+ * 이 선택지를 확장한다. 미정의 값은 fail-closed throw("조용한 false/unknown 금지").
+ */
+export function loadTelemetryExporter(): TelemetryExporter {
+  const e = (opt("OTEL_EXPORTER") ?? "none").toLowerCase();
+  if (e !== "console" && e !== "none") {
+    throw new Error(`OTEL_EXPORTER must be one of console|none, got ${JSON.stringify(e)}`);
+  }
+  return e;
 }
 
 function buildPgConnString(): string {

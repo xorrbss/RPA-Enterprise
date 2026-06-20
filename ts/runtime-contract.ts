@@ -918,6 +918,7 @@ export interface RuntimeWorkerJob {
     | "workitem_checkout"
     | "outbox_relay"
     | "lease_sweeper"
+    | "workitem_checkout_sweeper"
     | "artifact_redaction"
     | "artifact_retention"
     | "dlq_replay"

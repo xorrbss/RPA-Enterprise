@@ -118,6 +118,8 @@ export type VerifyResult = {
 export type RunContext = {
   runId: string;
   workitemId?: string;
+  /** trace↔event↔log 상관키(§E correlation_id). driver 가 run.correlation_id 로 주입; 미주입 시 span 은 run_id 로 폴백. */
+  correlationId?: string;
   tenantId: string;
   nodeId: string;
   attempt: number;

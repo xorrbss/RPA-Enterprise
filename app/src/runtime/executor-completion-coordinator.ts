@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import type pg from "pg";
 
 import type { ArtifactRef, ClassifiedException } from "../../../ts/core-types";
@@ -10,10 +8,10 @@ import type {
   ExecutorInvocationRecordResult,
   RuntimeWorkerJob,
 } from "../../../ts/runtime-contract";
-import type { SideEffectCmd, WorkitemState } from "../../../ts/state-machine-types";
+import type { SideEffectCmd } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import { applyRunTransition } from "./run-transition";
-import { applyWorkitemTransition } from "./workitem-transition";
+import { settleLinkedWorkitemForRunTerminal } from "./workitem-settlement";
 import { recordExecutorInvocationInTx } from "./executor-invocation-recorder";
 
 export interface RuntimeJobEnqueuePort {
@@ -232,42 +230,16 @@ export class PgExecutorCompletionCoordinator {
       }
 
       const satisfiedSideEffects = assertSatisfiedFinalizationSideEffects([...r7.pending, ...r21.pending]);
-      const workitemEvents: EventId[] = [];
-      if (runRow.workitem_id !== null) {
-        const workitem = await client.query<{ status: WorkitemState }>(
-          `SELECT status
-             FROM workitems
-            WHERE tenant_id=$1::uuid AND id=$2::uuid
-            FOR UPDATE`,
-          [input.key.tenantId, runRow.workitem_id],
-        );
-        const workitemStatus = workitem.rows[0]?.status;
-        if (workitemStatus !== "processing") {
-          throw new PgExecutorCompletionRequiredError(
-            `executor completion requires linked workitem status processing; got ${workitemStatus ?? "missing"}`,
-          );
-        }
-        const w2 = await applyWorkitemTransition(client, {
-          tenantId: input.key.tenantId,
-          workitemId: runRow.workitem_id,
-          fromStatus: "processing",
-          event: { type: "run_succeeded" },
-          guard: { sinkPolicyMet: true },
-          correlationId: input.correlationId,
-          runId: input.key.runId,
-          eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:workitem-success`,
-          occurredAt: new Date(input.result.timings.endedAt),
-        });
-        if (!w2.applied) {
-          throw new PgExecutorCompletionRequiredError(
-            `executor completion W2 CAS conflict; observed=${w2.observed ?? "null"}`,
-          );
-        }
-        if (w2.pending.length > 0) {
-          throw new PgExecutorCompletionRequiredError("executor completion W2 produced unsupported pending side effects");
-        }
-        workitemEvents.push(...w2.emitted.map((event) => event.eventId as EventId));
-      }
+      const w2 = await settleLinkedWorkitemForRunTerminal(client, runRow.workitem_id, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        correlationId: input.correlationId,
+        terminal: "success",
+        eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:workitem-success`,
+        occurredAt: new Date(input.result.timings.endedAt),
+        maxAttempts: this.workitemMaxAttempts(),
+      });
+      const workitemEvents: EventId[] = w2.emitted.map((event) => event.eventId as EventId);
       const enqueuedRuntimeJobs = await enqueueArtifactLifecycleJobs(client, {
         tenantId: input.key.tenantId,
         runId: input.key.runId,
@@ -340,40 +312,15 @@ export class PgExecutorCompletionCoordinator {
         throw new PgExecutorCompletionRequiredError("executor business failure R9 produced unsupported pending side effects");
       }
 
-      if (runRow.workitem_id !== null) {
-        const workitem = await client.query<{ status: WorkitemState }>(
-          `SELECT status
-             FROM workitems
-            WHERE tenant_id=$1::uuid AND id=$2::uuid
-            FOR UPDATE`,
-          [input.key.tenantId, runRow.workitem_id],
-        );
-        const workitemStatus = workitem.rows[0]?.status;
-        if (workitemStatus !== "processing") {
-          throw new PgExecutorCompletionRequiredError(
-            `executor business failure requires linked workitem status processing; got ${workitemStatus ?? "missing"}`,
-          );
-        }
-        const w3 = await applyWorkitemTransition(client, {
-          tenantId: input.key.tenantId,
-          workitemId: runRow.workitem_id,
-          fromStatus: "processing",
-          event: { type: "business_exception" },
-          guard: {},
-          correlationId: input.correlationId,
-          runId: input.key.runId,
-          eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:workitem-business-failure`,
-          occurredAt: new Date(input.result.timings.endedAt),
-        });
-        if (!w3.applied) {
-          throw new PgExecutorCompletionRequiredError(
-            `executor business failure W3 CAS conflict; observed=${w3.observed ?? "null"}`,
-          );
-        }
-        if (w3.pending.length > 0) {
-          throw new PgExecutorCompletionRequiredError("executor business failure W3 produced unsupported pending side effects");
-        }
-      }
+      await settleLinkedWorkitemForRunTerminal(client, runRow.workitem_id, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        correlationId: input.correlationId,
+        terminal: "business",
+        eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:workitem-business-failure`,
+        occurredAt: new Date(input.result.timings.endedAt),
+        maxAttempts: this.workitemMaxAttempts(),
+      });
 
       const enqueuedRuntimeJobs = await enqueueArtifactLifecycleJobs(client, {
         tenantId: input.key.tenantId,
@@ -435,53 +382,20 @@ export class PgExecutorCompletionCoordinator {
       }
       assertOnlyPendingKinds(r8.pending, ["captureFailureScreenshot", "evaluateDeadLetter"], "executor system failure R8");
 
-      const workitemEvents: EventId[] = [];
       const satisfiedSideEffects: SideEffectCmd[] = [...r8.pending];
-      if (runRow.workitem_id !== null) {
-        const workitem = await client.query<{ status: WorkitemState; attempts: number }>(
-          `SELECT status, attempts
-             FROM workitems
-            WHERE tenant_id=$1::uuid AND id=$2::uuid
-            FOR UPDATE`,
-          [input.key.tenantId, runRow.workitem_id],
-        );
-        const workitemRow = workitem.rows[0];
-        if (workitemRow?.status !== "processing") {
-          throw new PgExecutorCompletionRequiredError(
-            `executor system failure requires linked workitem status processing; got ${workitemRow?.status ?? "missing"}`,
-          );
-        }
-        const w = await applyWorkitemTransition(client, {
-          tenantId: input.key.tenantId,
-          workitemId: runRow.workitem_id,
-          fromStatus: "processing",
-          event: { type: "system_exception" },
-          guard: { attemptsBelowMax: workitemRow.attempts + 1 < this.workitemMaxAttempts() },
-          correlationId: input.correlationId,
-          runId: input.key.runId,
-          eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:workitem-system-failure`,
-          occurredAt: new Date(input.result.timings.endedAt),
-        });
-        if (!w.applied) {
-          throw new PgExecutorCompletionRequiredError(
-            `executor system failure workitem CAS conflict; observed=${w.observed ?? "null"}`,
-          );
-        }
-        if (w.next === "abandoned") {
-          assertOnlyPendingKinds(w.pending, ["createDeadLetter"], "executor system failure W5");
-          await insertDeadLetterForExecutorFailure(client, {
-            tenantId: input.key.tenantId,
-            workitemId: runRow.workitem_id,
-            runId: input.key.runId,
-            reasonCode: exception.code as ErrorCode,
-            evidenceRef: exception.evidenceRefs?.[0],
-          });
-          satisfiedSideEffects.push(...w.pending);
-        } else {
-          assertOnlyPendingKinds(w.pending, [], "executor system failure W4");
-        }
-        workitemEvents.push(...w.emitted.map((event) => event.eventId as EventId));
-      }
+      const wi = await settleLinkedWorkitemForRunTerminal(client, runRow.workitem_id, {
+        tenantId: input.key.tenantId,
+        runId: input.key.runId,
+        correlationId: input.correlationId,
+        terminal: "system",
+        eventIdempotencyKey: `${input.key.runId}:${input.key.stepId}:${input.key.attempt}:workitem-system-failure`,
+        occurredAt: new Date(input.result.timings.endedAt),
+        maxAttempts: this.workitemMaxAttempts(),
+        systemReasonCode: exception.code as ErrorCode,
+        ...(exception.evidenceRefs?.[0] !== undefined ? { systemEvidenceRef: exception.evidenceRefs[0] } : {}),
+      });
+      satisfiedSideEffects.push(...wi.satisfiedPending);
+      const workitemEvents: EventId[] = wi.emitted.map((event) => event.eventId as EventId);
 
       const enqueuedRuntimeJobs = await enqueueArtifactLifecycleJobs(client, {
         tenantId: input.key.tenantId,
@@ -793,28 +707,4 @@ function assertOnlyPendingKinds(
       throw new PgExecutorCompletionRequiredError(`${label} missing pending side effect ${kind}`);
     }
   }
-}
-
-async function insertDeadLetterForExecutorFailure(
-  client: pg.PoolClient,
-  input: {
-    tenantId: string;
-    workitemId: string;
-    runId: string;
-    reasonCode: ErrorCode;
-    evidenceRef?: string;
-  },
-): Promise<void> {
-  await client.query(
-    `INSERT INTO dead_letter (id, tenant_id, workitem_id, run_id, reason_code, evidence_ref, replayable)
-     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, true)`,
-    [
-      randomUUID(),
-      input.tenantId,
-      input.workitemId,
-      input.runId,
-      input.reasonCode,
-      input.evidenceRef ?? null,
-    ],
-  );
 }

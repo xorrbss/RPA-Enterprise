@@ -9,6 +9,7 @@
  */
 import type { PgPool } from "../db/pool";
 import { withTenantTx } from "../db/pool";
+import { recordCacheLookup } from "../observability/telemetry";
 import {
   parseActionPlan,
   type ActionPlan,
@@ -37,7 +38,7 @@ export class PgActionPlanCache implements ActionPlanCache {
   constructor(private readonly pool: PgPool) {}
 
   async get(key: ActionPlanCacheKey): Promise<ActionPlan | undefined> {
-    return withTenantTx(this.pool, key.tenantId, async (c) => {
+    const plan = await withTenantTx(this.pool, key.tenantId, async (c) => {
       const r = await c.query<{ plan_ref: string | null; status: string }>(
         `SELECT plan_ref, status FROM action_plan_cache WHERE ${KEY_WHERE}`,
         keyParams(key),
@@ -51,6 +52,9 @@ export class PgActionPlanCache implements ActionPlanCache {
         return undefined; // 손상된 plan_ref → 조용한 재생 금지(miss 로 재해석).
       }
     });
+    // §E cache_hit_rate: 재생 가능(active+유효) 여부로 hit/miss. bootstrap 전이면 no-op meter.
+    recordCacheLookup(plan !== undefined, { tenant_id: key.tenantId });
+    return plan;
   }
 
   async put(key: ActionPlanCacheKey, plan: ActionPlan): Promise<void> {

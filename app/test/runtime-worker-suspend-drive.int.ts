@@ -7,7 +7,7 @@
  * suspend 를 트리거·검증하려면 executor 주입 seam(executorFactory)이 필수다 — 여기서 fake suspend executor 를 주입.
  * 실 challenge 감지(프로덕션 트리거)는 DOM/vision executor 후행(별개).
  *
- * 또한 suspend deps 미주입 시 driveSuspend 가 loud throw(조용한 실패 금지) — deps 가 필수임을 회귀로 증명.
+ * 또한 suspend deps 미주입 시 driveSuspend throw 를 C3 system-failure 폴백이 failed_system 으로 종결(좀비 run 방지) — 회귀로 증명.
  *
  * 실행(temp PG15 게이트):
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec -- tsx app/test/runtime-worker-suspend-drive.int.ts
@@ -281,7 +281,8 @@ async function main(): Promise<void> {
     });
     check("resume 재-suspend human_tasks 1건 state=open (포트)", reHt.length === 1 && reHt[0]?.state === "open", JSON.stringify(reHt));
 
-    // 2) suspend deps 미주입(executorFactory 만, suspensionPort/codec 없음) → driveSuspend loud throw(조용한 실패 금지).
+    // 2) suspend deps 미주입(executorFactory 만, suspensionPort/codec 없음): driveSuspend 가 R2(running) 이후 throw 하지만
+    //    C3 system-failure 폴백이 이를 failed_system 으로 종결한다 — run 이 running 에 영구 잔류(좀비)하지 않음(원 예외는 로그로 표면화).
     const noDeps = new PgRuntimeWorker(pool, {
       workerId: WORKER,
       browserLeasePlanResolver: planResolver,
@@ -292,10 +293,11 @@ async function main(): Promise<void> {
     const err = await caught(
       noDeps.handle({ kind: "run_claim", tenantId: TENANT as TenantId, runId: RUN_NODEPS as RunId, correlationId: CORRELATION as CorrelationId }),
     );
+    check("suspend deps 미주입 → 폴백이 throw 흡수(job 정상 종료)", err === undefined, String(err));
     check(
-      "suspend deps 미주입 → loud throw(suspensionPort+resumeTokenCodec 필요)",
-      err instanceof Error && String(err).includes("suspensionPort + resumeTokenCodec"),
-      String(err),
+      "suspend deps 미주입 → run failed_system 종결(running 잔류=좀비 아님)",
+      (await runStatus(pool, RUN_NODEPS)) === "failed_system",
+      String(await runStatus(pool, RUN_NODEPS)),
     );
   } finally {
     await pool.end();

@@ -34,6 +34,12 @@ const SITE2 = "40000000-0000-0000-0000-0000000000e4";
 const IDENTITY2 = "40000000-0000-0000-0000-0000000000e5";
 const SITE3 = "40000000-0000-0000-0000-0000000000e6";
 const IDENTITY3 = "40000000-0000-0000-0000-0000000000e7";
+// workitem-연결 drive run(W2 정산 검증) — 별도 site/identity 로 lease 충돌 방지.
+const SITE4 = "40000000-0000-0000-0000-0000000000e8";
+const IDENTITY4 = "40000000-0000-0000-0000-0000000000e9";
+// C3 좀비-run 폴백 검증 run — 별도 site/identity.
+const SITE5 = "40000000-0000-0000-0000-0000000000ea";
+const IDENTITY5 = "40000000-0000-0000-0000-0000000000eb";
 const SCEN = "70000000-0000-0000-0000-0000000000e1";
 const SVER = "70000000-0000-0000-0000-0000000000e2";
 const SCEN_VIDEO = "70000000-0000-0000-0000-0000000000e3";
@@ -41,6 +47,12 @@ const SVER_VIDEO = "70000000-0000-0000-0000-0000000000e4";
 const RUN_DRIVE = "71000000-0000-0000-0000-0000000000e1";
 const RUN_NODRIVE = "71000000-0000-0000-0000-0000000000e2";
 const RUN_VIDEO = "71000000-0000-0000-0000-0000000000e3";
+const RUN_WORKITEM = "71000000-0000-0000-0000-0000000000e4";
+const RUN_ZOMBIE = "71000000-0000-0000-0000-0000000000e5";
+const WORKITEM_OK = "72000000-0000-0000-0000-0000000000e1";
+const WORKITEM_FAIL = "72000000-0000-0000-0000-0000000000e2";
+// 유효 FK·유효 ir, 그러나 compiled_ast 가 비-JSON → driveScenario 가 R2(running) 이후 throw(좀비 트리거).
+const SVER_BAD = "70000000-0000-0000-0000-0000000000e5";
 const CORRELATION = "20000000-0000-0000-0000-0000000000e1";
 
 let failures = 0;
@@ -57,6 +69,10 @@ const planResolver: BrowserLeasePlanResolver = async (_client, input) =>
     ? { siteProfileId: SITE2, browserIdentityId: IDENTITY2, networkPolicyId: NETWORK_POLICY }
     : input.runId === RUN_VIDEO
       ? { siteProfileId: SITE3, browserIdentityId: IDENTITY3, networkPolicyId: NETWORK_POLICY }
+      : input.runId === RUN_WORKITEM
+        ? { siteProfileId: SITE4, browserIdentityId: IDENTITY4, networkPolicyId: NETWORK_POLICY }
+        : input.runId === RUN_ZOMBIE
+          ? { siteProfileId: SITE5, browserIdentityId: IDENTITY5, networkPolicyId: NETWORK_POLICY }
     : { siteProfileId: SITE, browserIdentityId: IDENTITY, networkPolicyId: NETWORK_POLICY };
 
 // navigate → next → terminal success. on[]/observe 없음 → pageState 해소 불요(FakeCdpSession no-op goto 로 충분).
@@ -91,6 +107,30 @@ async function runSteps(pool: ReturnType<typeof createPool>, runId: string): Pro
       [TENANT, runId],
     );
     return r.rows;
+  });
+}
+
+async function workitemStatus(pool: ReturnType<typeof createPool>, workitemId: string): Promise<string | null> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const r = await c.query<{ status: string }>(`SELECT status FROM workitems WHERE id=$1::uuid`, [workitemId]);
+    return r.rows[0]?.status ?? null;
+  });
+}
+
+async function deadLetterCount(pool: ReturnType<typeof createPool>, workitemId: string): Promise<number> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const r = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM dead_letter WHERE workitem_id=$1::uuid`, [workitemId]);
+    return r.rows[0]?.n ?? 0;
+  });
+}
+
+async function workitemEventTypes(pool: ReturnType<typeof createPool>, workitemId: string): Promise<readonly string[]> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const r = await c.query<{ event_type: string }>(
+      `SELECT event_type FROM events_outbox WHERE workitem_id=$1::uuid ORDER BY event_type`,
+      [workitemId],
+    );
+    return r.rows.map((row) => row.event_type);
   });
 }
 
@@ -145,15 +185,25 @@ async function main(): Promise<void> {
          VALUES ($1,$2,'ok3','https://ok3.example/*','green',true,'{"flags":{}}'::jsonb)`,
         [SITE3, TENANT],
       );
+      await c.query(
+        `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
+         VALUES ($1,$2,'ok4','https://ok4.example/*','green',true,'{"flags":{}}'::jsonb)`,
+        [SITE4, TENANT],
+      );
+      await c.query(
+        `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
+         VALUES ($1,$2,'ok5','https://ok5.example/*','green',true,'{"flags":{}}'::jsonb)`,
+        [SITE5, TENANT],
+      );
       // IDENTITY(RUN_DRIVE 용) version=7(비기본) — executorFactory seam 이 browser_identity.version JOIN 결과를 받는지 핀고정.
       await c.query(
         `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version)
-         VALUES ($1,$2,$3,'ok',7), ($4,$2,$5,'ok2',1), ($6,$2,$7,'ok3',1)`,
-        [IDENTITY, TENANT, SITE, IDENTITY2, SITE2, IDENTITY3, SITE3],
+         VALUES ($1,$2,$3,'ok',7), ($4,$2,$5,'ok2',1), ($6,$2,$7,'ok3',1), ($8,$2,$9,'ok4',1), ($10,$2,$11,'ok5',1)`,
+        [IDENTITY, TENANT, SITE, IDENTITY2, SITE2, IDENTITY3, SITE3, IDENTITY4, SITE4, IDENTITY5, SITE5],
       );
       await c.query(
         `INSERT INTO network_policies (id, tenant_id, allowed_domains)
-         VALUES ($1,$2,ARRAY['ok.example','ok2.example','ok3.example'])`,
+         VALUES ($1,$2,ARRAY['ok.example','ok2.example','ok3.example','ok4.example','ok5.example'])`,
         [NETWORK_POLICY, TENANT],
       );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'drive')`, [SCEN, TENANT]);
@@ -180,6 +230,34 @@ async function main(): Promise<void> {
         `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, params)
          VALUES ($1,$2,$3,'queued',$4,'{"entry_url":"https://ok3.example/landing"}'::jsonb)`,
         [RUN_VIDEO, TENANT, SVER_VIDEO, CORRELATION],
+      );
+      // workitem-연결 drive run: checkout(W1)으로 processing 인 workitem 에 run 을 연결 → driveClaimedRun 종결 시 W2 정산 검증.
+      await c.query(
+        `INSERT INTO workitems (id, tenant_id, connector_id, unique_reference, status, attempts)
+         VALUES ($1,$2,'drive-connector','wi-ok-1','processing',0)`,
+        [WORKITEM_OK, TENANT],
+      );
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, correlation_id, params)
+         VALUES ($1,$2,$3,$4,'queued',$5,'{"entry_url":"https://ok4.example/landing"}'::jsonb)`,
+        [RUN_WORKITEM, TENANT, SVER, WORKITEM_OK, CORRELATION],
+      );
+      // C3: compiled_ast 가 비-JSON 인 scenario_version → driveScenario 가 R2(running) 이후 JSON.parse throw → 폴백 검증.
+      //     workitem attempts=2(max 3) → system 정산 시 W5(abandoned + dead_letter).
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+         VALUES ($1,$2,$3,2,'draft',$4::jsonb,$5)`,
+        [SVER_BAD, TENANT, SCEN, JSON.stringify(compiled.ir), "NOT-VALID-JSON{"],
+      );
+      await c.query(
+        `INSERT INTO workitems (id, tenant_id, connector_id, unique_reference, status, attempts)
+         VALUES ($1,$2,'drive-connector','wi-fail-1','processing',2)`,
+        [WORKITEM_FAIL, TENANT],
+      );
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, correlation_id, params)
+         VALUES ($1,$2,$3,$4,'queued',$5,'{"entry_url":"https://ok5.example/landing"}'::jsonb)`,
+        [RUN_ZOMBIE, TENANT, SVER_BAD, WORKITEM_FAIL, CORRELATION],
       );
     });
 
@@ -225,6 +303,56 @@ async function main(): Promise<void> {
     check("executorFactory 가 run-scoped 컨텍스트 수신(scenarioVersionId=SVER)", (capturedRunCtx as RunExecutorContext | null)?.scenarioVersionId === SVER, JSON.stringify(capturedRunCtx));
     check("executorFactory 가 browser_identity.version JOIN 결과 수신(=7, 비기본)", (capturedRunCtx as RunExecutorContext | null)?.browserIdentityVersion === 7, JSON.stringify(capturedRunCtx));
     check("executorFactory 가 runs.model override 수신", (capturedRunCtx as RunExecutorContext | null)?.model === "codex-run-override", JSON.stringify(capturedRunCtx));
+
+    // 1b) workitem-연결 run drive → completed 시 연결 Workitem W2(successful) 정산 + workitem.completed 이벤트, dead_letter 없음.
+    //     (프로덕션 driveClaimedRun 경로가 Workitem 을 단말 정산하는지 직접 검증 — 두 완료 경로 단절 회귀 가드.)
+    const workitemProvider = new TestFakeBrowserSessionProvider({ makeSession: (downloadDir) => new FakeCdpSession(downloadDir) });
+    const drivingWorkitem = new PgRuntimeWorker(pool, {
+      workerId: WORKER,
+      browserLeasePlanResolver: planResolver,
+      browserSessionProvider: workitemProvider,
+      allowTestBrowserSessionProvider: true,
+      executorFactory: (provider) => new UtilityExecutor(provider),
+    });
+    const drivenWorkitem = await drivingWorkitem.handle({
+      kind: "run_claim",
+      tenantId: TENANT as TenantId,
+      runId: RUN_WORKITEM as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check("workitem-연결 run_claim+drive → job completed", drivenWorkitem.kind === "completed", JSON.stringify(drivenWorkitem));
+    check("DB runs.status = completed (workitem run)", (await runStatus(pool, RUN_WORKITEM)) === "completed", String(await runStatus(pool, RUN_WORKITEM)));
+    check("연결 Workitem W2 정산: status=successful", (await workitemStatus(pool, WORKITEM_OK)) === "successful", String(await workitemStatus(pool, WORKITEM_OK)));
+    check("Workitem 단말정산 후 dead_letter 없음", (await deadLetterCount(pool, WORKITEM_OK)) === 0, String(await deadLetterCount(pool, WORKITEM_OK)));
+    {
+      const events = await workitemEventTypes(pool, WORKITEM_OK);
+      check("workitem.completed 이벤트 발행", events.includes("workitem.completed"), JSON.stringify(events));
+    }
+
+    // 1c) C3 좀비-run 폴백: R2(running) 이후 drive 본문 throw(compiled_ast 비-JSON) → 폴백이 failed_system 으로 종결.
+    //     run 이 running 에 영구 잔류(좀비)하지 않고, 연결 Workitem 은 system 정산(W5 abandoned + dead_letter)됨.
+    const zombieProvider = new TestFakeBrowserSessionProvider({ makeSession: (downloadDir) => new FakeCdpSession(downloadDir) });
+    const drivingZombie = new PgRuntimeWorker(pool, {
+      workerId: WORKER,
+      browserLeasePlanResolver: planResolver,
+      browserSessionProvider: zombieProvider,
+      allowTestBrowserSessionProvider: true,
+      executorFactory: (provider) => new UtilityExecutor(provider),
+    });
+    const drivenZombie = await drivingZombie.handle({
+      kind: "run_claim",
+      tenantId: TENANT as TenantId,
+      runId: RUN_ZOMBIE as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check("좀비 폴백: job 이 throw 없이 completed 반환", drivenZombie.kind === "completed", JSON.stringify(drivenZombie));
+    check("좀비 폴백: run 이 running 잔류 아니라 failed_system 종결", (await runStatus(pool, RUN_ZOMBIE)) === "failed_system", String(await runStatus(pool, RUN_ZOMBIE)));
+    check("좀비 폴백: 연결 Workitem W5 abandoned 정산", (await workitemStatus(pool, WORKITEM_FAIL)) === "abandoned", String(await workitemStatus(pool, WORKITEM_FAIL)));
+    check("좀비 폴백: dead_letter 1건 생성", (await deadLetterCount(pool, WORKITEM_FAIL)) === 1, String(await deadLetterCount(pool, WORKITEM_FAIL)));
+    {
+      const events = await workitemEventTypes(pool, WORKITEM_FAIL);
+      check("좀비 폴백: workitem.dead_lettered 이벤트 발행", events.includes("workitem.dead_lettered"), JSON.stringify(events));
+    }
 
     // 2) provider 미주입 → claimed 까지만(회귀: 기존 동작 보존, 구동 안 함).
     let videoSession: FakeCdpSession | null = null;

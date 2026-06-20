@@ -42,6 +42,7 @@ import { pageStateRef } from "./page-state-resolver";
 import { normalizePageSnapshot } from "./page-snapshot";
 import { StagehandDomExecutorError, type DomExecutorErrorCode } from "./dom-executor-error";
 import { applyRowAnchor, coerceRowAnchor, type ExtractRowAnchor } from "./extract-row-anchor";
+import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 
 /** Gateway 호출 경계(LlmGateway 가 구조적으로 충족). Executor 는 adapter 가 아니라 이 포트만 본다. */
 export interface LlmGatewayCaller {
@@ -419,7 +420,8 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     let callIds: string[] = [];
 
     if (this.cache) {
-      plan = await this.cache.get(cacheKey);
+      const cache = this.cache;
+      plan = await withSpan(SPAN.actionPlanCacheLookup, spanCommonFromContext(ctx), {}, () => cache.get(cacheKey));
       cacheMode = plan ? "hit" : "miss";
     }
 

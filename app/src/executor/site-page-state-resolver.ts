@@ -15,6 +15,7 @@ import type { DomLandmark, FrameSummary, PageState, RunContext } from "../../../
 import type { CdpSessionProvider } from "./cdp-session";
 import { getAccessibilityTree } from "./raw-cdp";
 import { PAGESTATE_FLAG_KEYS } from "./page-state-resolver";
+import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 
 const sha1 = (s: string): string => createHash("sha1").update(s).digest("hex").slice(0, 16);
 
@@ -83,6 +84,10 @@ export class SitePageStateResolver {
   ) {}
 
   async resolvePageState(ctx: RunContext): Promise<PageState> {
+    return withSpan(SPAN.pageStateResolve, spanCommonFromContext(ctx), {}, () => this.resolvePageStateInner(ctx));
+  }
+
+  private async resolvePageStateInner(ctx: RunContext): Promise<PageState> {
     const session = this.sessions.forLease(ctx.leaseId);
     const probe = this.buildProbe();
 

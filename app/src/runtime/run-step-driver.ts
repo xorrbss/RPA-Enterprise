@@ -49,6 +49,8 @@ import { PgExecutorInvocationRecorder } from "./executor-invocation-recorder";
 import { executorFailureStepResult } from "./executor-step-orchestrator";
 import { compiledScenarioFrom } from "./ir-translate";
 import { runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
+import { settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
+import { recordChallenge, SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 import type { MergedExtractArtifactSink } from "./merged-extract-artifact";
 import {
   appendVisualEvidenceArtifact,
@@ -126,7 +128,7 @@ function seedPageState(): PageState {
 export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise<DriveResult> {
   // claimed → running (R2, started_at). 이후 인터프리터 구동·terminal 매핑은 공유 driveScenario(scenario.start 부터).
   await transition(deps.pool, run, "claimed", { type: "run.started" }, { initOk: true }, deps.workerId);
-  return driveScenario(run, deps);
+  return driveScenarioWithSystemFailsafe(run, deps);
 }
 
 /**
@@ -134,7 +136,64 @@ export async function driveClaimedRun(run: ClaimedRun, deps: DriveDeps): Promise
  * 재진입해 terminal 까지 구동한다. success/fail/suspend(재-suspend) 모두 driveScenario 의 terminal 매핑 재사용.
  */
 export async function driveResumedRun(run: ClaimedRun, deps: DriveDeps, resumeNodeId: string): Promise<DriveResult> {
-  return driveScenario(run, deps, resumeNodeId);
+  return driveScenarioWithSystemFailsafe(run, deps, resumeNodeId);
+}
+
+/**
+ * driveScenario 를 system-failure 폴백으로 감싼다(C3 좀비 run 방지). R2/R18 로 running 진입 후 본문이 throw 하면
+ * (scenario_version 부재·suspend 포트 미구성·미구현 terminal·전이 CAS 실패 등) run 이 running/completing 에 영구
+ * 잔류한다. 이를 막기 위해 throw 를 failed_system 종결로 변환하고(연결 Workitem 도 system 정산) 원 예외는 진단
+ * 로그로 표면화한다 — 미분류 예외를 system 으로 흡수("조용한 false/unknown 금지": system 이 loud 채널). 변환 불가
+ * 상태(이미 종결/suspended 등)면 원 예외를 재던진다.
+ */
+async function driveScenarioWithSystemFailsafe(run: ClaimedRun, deps: DriveDeps, startNode?: string): Promise<DriveResult> {
+  try {
+    return await driveScenario(run, deps, startNode);
+  } catch (err) {
+    const terminalized = await terminalizeStuckRunAsSystemFailure(run, deps);
+    if (!terminalized) throw err;
+    console.error(
+      `run-step-driver: drive 예외를 failed_system 으로 종결(run ${run.runId.slice(0, 8)}) — ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { state: "failed_system", outcome: systemFailureOutcome() };
+  }
+}
+
+/**
+ * 좀비 방지(C3): 현재 상태를 재read(FOR UPDATE)해 running→failed_system(R8) / completing→failed_system(R22) 로
+ * 종결하고 연결 Workitem 을 system 정산한다. 폴백이라 throw 금지 — 변환 불가(이미 종결/동시 CAS 변경/정산 실패)면
+ * false 를 반환해 호출부가 원 예외를 재던지게 한다.
+ */
+async function terminalizeStuckRunAsSystemFailure(run: ClaimedRun, deps: DriveDeps): Promise<boolean> {
+  try {
+    return await withTenantTx(deps.pool, run.tenantId, async (client) => {
+      const r = await client.query<{ status: RunState }>(
+        `SELECT status FROM runs WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE`,
+        [run.tenantId, run.runId],
+      );
+      const status = r.rows[0]?.status;
+      if (status !== "running" && status !== "completing") return false;
+      const event: RunEvent = status === "running" ? { type: "unrecoverable_exception" } : { type: "finalize_failed" };
+      const guard: RunGuard = status === "running" ? { exceptionClass: "system" } : {};
+      const t = await applyRunTransition(client, {
+        tenantId: run.tenantId,
+        runId: run.runId,
+        fromStatus: status,
+        event,
+        guard,
+        correlationId: run.correlationId,
+        eventIdempotencyKey: `${run.runId}:${event.type}`,
+      });
+      if (!t.applied) return false;
+      await settleLinkedWorkitemFromRun(client, run, "system");
+      return true;
+    });
+  } catch (e) {
+    console.error(
+      `run-step-driver: failed_system 폴백 종결 실패(run ${run.runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`,
+    );
+    return false;
+  }
 }
 
 /**
@@ -171,6 +230,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
 
   const ctx: RunContext = {
     runId: run.runId,
+    correlationId: run.correlationId,
     tenantId: run.tenantId,
     nodeId: startNode ?? scenario.start,
     attempt: 0,
@@ -237,9 +297,11 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   // terminal 결과를 DB 전이로 종료(run 은 이미 running — driveClaimedRun R2 / driveResumedRun R18).
   if (outcome.terminal === "success" || outcome.terminal === "success_empty") {
     await transition(deps.pool, run, "running", { type: "last_node_success" }, { flowTerminalReached: true });
-    await transition(deps.pool, run, "completing", { type: "finalize_ok" }, { finalizeOk: true }, undefined, (client) =>
-      enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome),
-    );
+    // R21(completing→completed) 과 동일 tx 에서 연결 Workitem 을 W2(successful)로 정산("1 Workitem = 1 Run", state-machine.md:76).
+    await transition(deps.pool, run, "completing", { type: "finalize_ok" }, { finalizeOk: true }, undefined, async (client) => {
+      await settleLinkedWorkitemFromRun(client, run, "success");
+      await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
+    });
     // 세션 재사용 캡처 — 성공 종료 후 현재 쿠키 스냅샷 저장(다음 run 재사용). run 은 이미 completed 이므로 캡처 실패는
     //   best-effort-but-loud(조용히 흘리지 않되 완료된 run 을 실패로 만들지 않음 — 다음 run 이 재로그인).
     if (deps.sessionStore !== undefined && deps.sessionProvider !== undefined) {
@@ -254,16 +316,19 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   }
   // 실패 terminal: success(2-hop R7→R21)와 달리 단일 전이(running→failed_*). applyRunTransition 이 run.failed_* emit + ended_at 설정.
   if (outcome.terminal === "fail_business") {
-    await transition(deps.pool, run, "running", { type: "business_exception" }, { exceptionClass: "business" }, undefined, (client) =>
-      enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome),
-    );
+    // R9(running→failed_business) 과 동일 tx 에서 연결 Workitem 을 W3(failed_business)로 정산.
+    await transition(deps.pool, run, "running", { type: "business_exception" }, { exceptionClass: "business" }, undefined, async (client) => {
+      await settleLinkedWorkitemFromRun(client, run, "business");
+      await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
+    });
     return { state: "failed_business", outcome };
   }
   if (outcome.terminal === "fail_system") {
-    // R8 pending(captureFailureScreenshot·evaluateDeadLetter)은 다운스트림 디스패처 소유 — driver 미소비(success 경로와 동일).
-    await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" }, undefined, (client) =>
-      enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome),
-    );
+    // R8(running→failed_system) 과 동일 tx 에서 연결 Workitem 을 W4(retry)/W5(abandoned+dead_letter)로 정산.
+    await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" }, undefined, async (client) => {
+      await settleLinkedWorkitemFromRun(client, run, "system");
+      await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
+    });
     return { state: "failed_system", outcome };
   }
   // suspend(트리거 i challenge=R4 / 트리거 ii @human_task=R5; resume 중 재-suspend 포함): running→suspending+포트→resume-token+R11→suspended.
@@ -289,6 +354,11 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
   const codec = deps.resumeTokenCodec;
   if (port === undefined || codec === undefined) {
     throw new Error("driveSuspend: suspend 경로는 suspensionPort + resumeTokenCodec 주입 필요(미구성)");
+  }
+
+  // §E challenge_rate: challenge 자동 감지(인간개입 @human_task 트리거 제외) 카운트. bootstrap 전이면 no-op meter.
+  if (s.kind !== "human_task") {
+    recordChallenge({ tenant_id: run.tenantId });
   }
 
   // 1) R4(challenge)/R5(@human_task)(running→suspending) + 포트(human_task INSERT + human_task.created + bookmark) — 한 tenant tx.
@@ -470,7 +540,7 @@ class StepRecordingExecutor implements ExecutorPlugin {
   }
 
   verify(criteria: unknown, ctx: RunContext) {
-    return this.inner.verify(criteria, ctx);
+    return withSpan(SPAN.verifyRun, spanCommonFromContext(ctx), {}, () => this.inner.verify(criteria, ctx));
   }
 }
 
@@ -596,9 +666,29 @@ function isoDateTime(value: Date | string | null, label: string): IsoDateTime {
 }
 
 async function failRunningRun(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioOutcome): Promise<void> {
-  await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" }, undefined, (client) =>
-    enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome),
+  await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" }, undefined, async (client) => {
+    await settleLinkedWorkitemFromRun(client, run, "system");
+    await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
+  });
+}
+
+/**
+ * Run 종결 전이와 동일 tx 에서 연결 Workitem 을 단말 정산한다(W2/W3/W4/W5 + dead_letter). runs.workitem_id 를 이 tx 에서
+ * 해소해 공유 정산 함수에 전달 — workitem 미연결(ad-hoc run) 이면 no-op. driveClaimedRun(production) 의 두 완료 경로
+ * 단절(workitem processing 영구잔류·DLQ 미발화)을 닫는다. coordinator 와 정산 로직을 공유한다(단일 진실원천).
+ */
+async function settleLinkedWorkitemFromRun(client: PoolClient, run: ClaimedRun, terminal: RunTerminalKind): Promise<void> {
+  const r = await client.query<{ workitem_id: string | null }>(
+    `SELECT workitem_id::text FROM runs WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+    [run.tenantId, run.runId],
   );
+  await settleLinkedWorkitemForRunTerminal(client, r.rows[0]?.workitem_id ?? null, {
+    tenantId: run.tenantId,
+    runId: run.runId,
+    correlationId: run.correlationId,
+    terminal,
+    eventIdempotencyKey: `${run.runId}:workitem-${terminal}`,
+  });
 }
 
 async function appendRunVideoArtifact(
