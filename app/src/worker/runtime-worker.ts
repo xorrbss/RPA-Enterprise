@@ -201,6 +201,14 @@ const DEFAULT_WORKER_CIRCUIT_THRESHOLD = 5;
 const DEFAULT_WORKER_CIRCUIT_OPEN_MS = 60_000;
 const DEFAULT_WORKER_CIRCUIT_CLOSE_THRESHOLD = 2;
 
+// NOTE(god-class 분해 보류 — CLAUDE.md #7, 현재 1189줄): 잔여는 run-claim/run-resume 코어가 browser-lease
+//   획득·worker-circuit·run-state 전이를 동일 tx 안에서 엮은 라이브 엔진 핵심이다. 의존은 실측상 DAG
+//   (run-lifecycle → lease/circuit/init leaf, 역호출 없음)이라 협력객체 분리 자체는 가능하나, 215/252줄짜리
+//   handleRunClaim/handleRunResume 를 deps-threading 협력객체로 옮기는 것은 동작보존 sibling 추출 범위를 넘는
+//   아키텍처 리팩터이며 claim/resume 회귀 위험이 최고다(Phase1/2 PR #190~#202로 2690→1189 안전 축소 완료).
+//   향후: run-drive 협력객체(handleRunClaim/Resume/Abort) + worker-run-support 협력객체(acquireBrowserLease/
+//   checkWorkerCircuit/loadExpectedRun/recordWorkerInit*) 2단 분리 — 전용 세션 적대검증 + 전체 runtime-worker
+//   int 스위트(claim/resume/resume-drive/abort/drive/circuit)로 회귀 차단 후 진행.
 export class PgRuntimeWorker implements RuntimeWorker {
   private readonly artifactRedaction: ArtifactRedactionProcessor;
   private readonly artifactRetention: ArtifactRetentionProcessor;
