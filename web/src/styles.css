@@ -319,3 +319,9 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   .metrics { grid-template-columns: 1fr; }
   .readiness-row { grid-template-columns: 1fr; }
 }
+
+/* 말로 설명해 만들기 — 고급 설정(점진적 노출) */
+.advanced-settings { border-top: 1px solid var(--line); padding-top: 10px; }
+.advanced-settings > summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; user-select: none; }
+.advanced-settings > summary:hover { color: var(--text); }
+.advanced-settings > .form-grid { margin-top: 10px; }
