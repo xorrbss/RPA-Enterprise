@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileVideo, Image, Play, WandSparkles } from "lucide-react";
+import { FileVideo, Image, Play } from "lucide-react";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
@@ -467,6 +467,8 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [localError, setLocalError] = useState<string | null>(null);
   const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
   const [siteCreateOpenSignal, setSiteCreateOpenSignal] = useState(0);
+  // 고급 설정(<details>) 펼침 상태 — 모델 지정 필요·params 보정 시 자동으로 펼쳐 묻힘(무음 no-op) 방지.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const startUrlInputRef = useRef<HTMLInputElement | null>(null);
   const siteSelectRef = useRef<HTMLSelectElement | null>(null);
   const paramsInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -522,6 +524,16 @@ export function PromptScenarioGenerator(): JSX.Element {
   function focusField(element: HTMLElement | null): void {
     element?.focus();
     element?.scrollIntoView?.({ block: "center" });
+  }
+
+  // 고급 설정을 펼친 뒤(리렌더 후) 대상에 포커스 — 닫힌 <details> 안은 display:none 이라 즉시 focus()가 no-op.
+  function openAdvancedThen(focus: () => void): void {
+    setAdvancedOpen(true);
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(focus);
+      return;
+    }
+    window.setTimeout(focus, 0);
   }
 
   function openInlineSiteCreate(): void {
@@ -697,6 +709,11 @@ export function PromptScenarioGenerator(): JSX.Element {
       setPlanner(defaultPlanner);
     }
   }, [availablePlanners, defaultPlanner, planner]);
+
+  // 모델 지정이 필요해지면(modelRequired) 고급 설정을 자동으로 펼친다 — 확인 버튼/AI 모델이 닫힌 고급에 묻히지 않게.
+  useEffect(() => {
+    if (modelRequired !== null) setAdvancedOpen(true);
+  }, [modelRequired]);
 
   const mutation = useMutation({
     mutationFn: async (body: ScenarioGenerationRequest) => {
@@ -877,11 +894,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   return (
     <section className="panel scenario-generator">
       <div className="panel-head">
-        <h2>자연어 자동화</h2>
-        <span className="badge blue">
-          <WandSparkles size={14} aria-hidden="true" />
-          {plannerLabel(planner)}
-        </span>
+        <h2>말로 설명해 만들기</h2>
       </div>
       <div className="scenario-generator-body">
         <label className="field field-wide">
@@ -911,52 +924,6 @@ export function PromptScenarioGenerator(): JSX.Element {
             </select>
           </label>
           <label className="field">
-            <span>Planner</span>
-            <select value={planner} onChange={(event) => setPlanner(event.target.value as ScenarioGenerationPlanner)}>
-              {availablePlanners.map((option) => (
-                <option key={option} value={option}>
-                  {plannerLabel(option)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>AI 모델</span>
-            <input
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              aria-label="AI 모델"
-              list="scenario-generator-models"
-              placeholder="기본 정책 사용"
-            />
-            <datalist id="scenario-generator-models">
-              {(policies.data?.items ?? []).map((policy) => (
-                <option key={policy.model} value={policy.model} />
-              ))}
-            </datalist>
-            {modelRequired !== null && (
-              <span style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                <button
-                  className="btn"
-                  type="button"
-                  onClick={() => setCheckedModel(model.trim())}
-                  disabled={model.trim().length === 0 || policyCheck.isFetching}
-                >
-                  확인
-                </button>
-                <span className="subtle" role="status">
-                  {policyCheck.isFetching
-                    ? "모델 정책 확인 중..."
-                    : modelConfirmed
-                      ? `확인됨 - 정책 '${policyCheck.data?.model ?? checkedModel}' 사용`
-                      : checkedModel.length > 0 && checkedModel === model.trim() && policyCheck.isError
-                        ? `'${checkedModel}' 정책을 찾을 수 없습니다. 모델명을 확인하세요.`
-                        : "모델명을 입력하고 정책 확인 후 다시 실행하세요."}
-                </span>
-              </span>
-            )}
-          </label>
-          <label className="field">
             <span>사이트</span>
             <select ref={siteSelectRef} value={siteProfileId} onChange={(event) => selectSite(event.target.value)}>
               <option value="">직접 입력 또는 생략</option>
@@ -977,65 +944,116 @@ export function PromptScenarioGenerator(): JSX.Element {
               onCreated={handleInlineSiteCreated}
             />
           </div>
-          <label className="field">
-            <span>사이트 ID</span>
-            <input value={siteProfileId} onChange={(event) => handleSiteProfileIdChange(event.target.value)} placeholder="site_profile_id" />
-          </label>
-          <label className="field">
-            <span>브라우저 ID</span>
-            <input value={browserIdentityId} onChange={(event) => handleBrowserIdentityIdChange(event.target.value)} placeholder="browser_identity_id" />
-          </label>
-          <label className="field">
-            <span>네트워크 정책 ID</span>
-            <input value={networkPolicyId} onChange={(event) => handleNetworkPolicyIdChange(event.target.value)} placeholder="network_policy_id" />
-          </label>
-          <label className="field">
-            <span>스크린샷</span>
-            <select
-              value={screenshot}
-              onChange={(event) => {
-                setScreenshotTouched(true);
-                setScreenshot(event.target.value as ScreenshotPolicy);
-              }}
-            >
-              {screenshotPolicies.map((policy) => (
-                <option key={policy} value={policy}>
-                  {policy === "never" ? "저장 안 함" : policy === "each_step" ? "매 단계" : "실패 시"}
-                </option>
-              ))}
-            </select>
-            {screenshotCapability !== undefined && !screenshotRecordingEnabled && <span className="muted">스크린샷 비활성</span>}
-          </label>
-          <label className="field">
-            <span>동영상</span>
-            <select
-              aria-label="동영상"
-              value={video}
-              onChange={(event) => {
-                setVideoTouched(true);
-                setVideo(event.target.value as VideoPolicy);
-              }}
-            >
-              {videoPolicies.map((policy) => (
-                <option key={policy} value={policy}>
-                  {policy === "never" ? "저장 안 함" : policy === "always" ? "전체 실행" : "실패 시"}
-                </option>
-              ))}
-            </select>
-            {!videoRecordingEnabled && <span className="muted">영상 녹화 비활성</span>}
-          </label>
         </div>
-        <label className="field field-wide">
-          <span>생성/실행 params JSON</span>
-          <textarea
-            ref={paramsInputRef}
-            value={paramsText}
-            onChange={(event) => setParamsText(event.target.value)}
-            rows={4}
-            spellCheck={false}
-            placeholder='{"entry_url":"https://example.com"}'
-          />
-        </label>
+        <details className="advanced-settings" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.currentTarget as HTMLDetailsElement).open)}>
+          <summary>고급 설정 (AI 모델·실행 대상 ID·증거 저장·세부 params) — 대부분 비워두면 기본값으로 동작합니다</summary>
+          <div className="form-grid">
+            <label className="field">
+              <span>Planner</span>
+              <select value={planner} onChange={(event) => setPlanner(event.target.value as ScenarioGenerationPlanner)}>
+                {availablePlanners.map((option) => (
+                  <option key={option} value={option}>
+                    {plannerLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>AI 모델</span>
+              <input
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                aria-label="AI 모델"
+                list="scenario-generator-models"
+                placeholder="기본 정책 사용"
+              />
+              <datalist id="scenario-generator-models">
+                {(policies.data?.items ?? []).map((policy) => (
+                  <option key={policy.model} value={policy.model} />
+                ))}
+              </datalist>
+              {modelRequired !== null && (
+                <span style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => setCheckedModel(model.trim())}
+                    disabled={model.trim().length === 0 || policyCheck.isFetching}
+                  >
+                    확인
+                  </button>
+                  <span className="subtle" role="status">
+                    {policyCheck.isFetching
+                      ? "모델 정책 확인 중..."
+                      : modelConfirmed
+                        ? `확인됨 - 정책 '${policyCheck.data?.model ?? checkedModel}' 사용`
+                        : checkedModel.length > 0 && checkedModel === model.trim() && policyCheck.isError
+                          ? `'${checkedModel}' 정책을 찾을 수 없습니다. 모델명을 확인하세요.`
+                          : "모델명을 입력하고 정책 확인 후 다시 실행하세요."}
+                  </span>
+                </span>
+              )}
+            </label>
+            <label className="field">
+              <span>사이트 ID</span>
+              <input value={siteProfileId} onChange={(event) => handleSiteProfileIdChange(event.target.value)} placeholder="site_profile_id" />
+            </label>
+            <label className="field">
+              <span>브라우저 ID</span>
+              <input value={browserIdentityId} onChange={(event) => handleBrowserIdentityIdChange(event.target.value)} placeholder="browser_identity_id" />
+            </label>
+            <label className="field">
+              <span>네트워크 정책 ID</span>
+              <input value={networkPolicyId} onChange={(event) => handleNetworkPolicyIdChange(event.target.value)} placeholder="network_policy_id" />
+            </label>
+            <label className="field">
+              <span>스크린샷</span>
+              <select
+                value={screenshot}
+                onChange={(event) => {
+                  setScreenshotTouched(true);
+                  setScreenshot(event.target.value as ScreenshotPolicy);
+                }}
+              >
+                {screenshotPolicies.map((policy) => (
+                  <option key={policy} value={policy}>
+                    {policy === "never" ? "저장 안 함" : policy === "each_step" ? "매 단계" : "실패 시"}
+                  </option>
+                ))}
+              </select>
+              {screenshotCapability !== undefined && !screenshotRecordingEnabled && <span className="muted">스크린샷 비활성</span>}
+            </label>
+            <label className="field">
+              <span>동영상</span>
+              <select
+                aria-label="동영상"
+                value={video}
+                onChange={(event) => {
+                  setVideoTouched(true);
+                  setVideo(event.target.value as VideoPolicy);
+                }}
+              >
+                {videoPolicies.map((policy) => (
+                  <option key={policy} value={policy}>
+                    {policy === "never" ? "저장 안 함" : policy === "always" ? "전체 실행" : "실패 시"}
+                  </option>
+                ))}
+              </select>
+              {!videoRecordingEnabled && <span className="muted">영상 녹화 비활성</span>}
+            </label>
+          </div>
+          <label className="field field-wide">
+            <span>생성/실행 params JSON</span>
+            <textarea
+              ref={paramsInputRef}
+              value={paramsText}
+              onChange={(event) => setParamsText(event.target.value)}
+              rows={4}
+              spellCheck={false}
+              placeholder='{"entry_url":"https://example.com"}'
+            />
+          </label>
+        </details>
         {selectedSite !== null && (
           <div className="inline-facts" role="status">
             <span className="subtle">위험도</span>
@@ -1075,7 +1093,7 @@ export function PromptScenarioGenerator(): JSX.Element {
             onFocusStartUrl={() => focusField(startUrlInputRef.current)}
             onFocusTarget={() => focusField(siteSelectRef.current)}
             onOpenSiteCreate={openInlineSiteCreate}
-            onFocusParams={() => focusField(paramsInputRef.current)}
+            onFocusParams={() => openAdvancedThen(() => focusField(paramsInputRef.current))}
             onDisableVideoEvidence={() => {
               setVideoTouched(true);
               setVideo("never");
@@ -1261,15 +1279,15 @@ function GenerationResult({
         <code>{result.generation_id.slice(0, 8)}</code>
       </div>
       <div className="result-grid">
-        <span className="subtle">scenario</span>
+        <span className="subtle">자동화</span>
         <code>{compactId(result.scenario_id)}</code>
-        <span className="subtle">version</span>
+        <span className="subtle">버전</span>
         <code>{compactId(result.scenario_version_id)}</code>
-        <span className="subtle">run</span>
+        <span className="subtle">실행</span>
         <code>{compactId(result.run_id)}</code>
-        <span className="subtle">model</span>
+        <span className="subtle">모델</span>
         <code>{result.model ?? "-"}</code>
-        <span className="subtle">planner</span>
+        <span className="subtle">AI 방식</span>
         <code>{plannerLabel(result.planner)}</code>
       </div>
       {result.evidence_policy !== undefined && (

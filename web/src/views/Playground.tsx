@@ -116,7 +116,7 @@ export function PlaygroundView(): JSX.Element {
       </p>
       {can("scenario.create") && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-          <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>
+          <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio", { creator: "ai" })}>
             자연어로 자동화 만들기
           </button>
           <span className="subtle">저장 후 실행까지 이어지는 자동화 생성 화면으로 이동합니다.</span>

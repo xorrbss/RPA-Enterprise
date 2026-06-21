@@ -319,3 +319,18 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   .metrics { grid-template-columns: 1fr; }
   .readiness-row { grid-template-columns: 1fr; }
 }
+
+/* 말로 설명해 만들기 — 고급 설정(점진적 노출) */
+.advanced-settings { border-top: 1px solid var(--line); padding-top: 10px; }
+.advanced-settings > summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; user-select: none; }
+.advanced-settings > summary:hover { color: var(--text); }
+.advanced-settings > .form-grid { margin-top: 10px; }
+
+/* 자동화 만들기 — 개발자 편집 모드(점진적 노출) */
+.advanced-editors > summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; user-select: none; }
+.advanced-editors > summary:hover { color: var(--text); }
+
+/* 자동화 만들기 — 'AI로 설명해서 만들기' 접기(점진적 노출) */
+.ai-creator > summary { cursor: pointer; font-weight: 600; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); user-select: none; display: inline-block; margin-bottom: 12px; }
+.ai-creator > summary:hover { background: var(--soft); }
+.ai-creator[open] > summary { margin-bottom: 8px; }

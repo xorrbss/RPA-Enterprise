@@ -496,9 +496,9 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#scenarioStudio";
     const btn = await screen.findByRole("button", { name: "운영 지정" });
-    expect(btn).toHaveAttribute("title", expect.stringContaining("실행 전제가 아니라"));
+    expect(btn).toHaveAttribute("title", expect.stringContaining("실행에 꼭 필요한"));
     btn.click();
-    expect(await screen.findByText(/실행 전제는 아니며/)).toBeInTheDocument();
+    expect(await screen.findByText(/실행에 꼭 필요한 단계는 아니며/)).toBeInTheDocument();
     (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3, target: "prod" });
@@ -508,7 +508,7 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
     location.hash = "#scenarioStudio";
     fireEvent.click(await screen.findByRole("button", { name: "+ 새 자동화 만들기" }));
-    fireEvent.click(await screen.findByRole("button", { name: "단계 편집(고급)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "단계 편집" }));
 
     const rule = screen.getByRole("textbox", { name: "추출 규칙" });
     expect(rule.tagName).toBe("TEXTAREA");
