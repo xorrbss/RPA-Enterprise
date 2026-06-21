@@ -307,7 +307,12 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     }
     scenarioOutcome = await appendMergedExtractArtifact(scenarioOutcome, deps.mergedExtractArtifactSink, run);
     outcome = await appendRunVideoArtifact(scenarioOutcome, videoRecording, videoPolicy);
-  } catch {
+  } catch (driveErr) {
+    // video 시작·아티팩트 append 실패를 system 으로 흡수하되 조용히 묻지 않는다(조용한 false 금지 — system 은 loud
+    //   채널). 안쪽 인터프리터 예외(runScenario)는 위 catch 가 이미 로그하므로 이 외곽 catch 만 무로그였다.
+    console.error(
+      `run-step-driver: drive 외곽(video/artifact) 실패를 failed_system 으로 흡수(run ${run.runId.slice(0, 8)}) — ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`,
+    );
     if (videoRecording !== undefined) {
       await videoRecording.discard({ reason: "run_drive_error" });
     }

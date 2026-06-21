@@ -148,6 +148,12 @@ async function main(): Promise<void> {
       return r.rows[0]?.consecutive_init_failures ?? -1;
     });
     check("resume INIT 실패 → worker-circuit consecutive_init_failures 증가 (#6)", wc === 1, `consecutive_init_failures=${wc}`);
+    // break-it 재검증 #6: resume INIT 실패 시 acquire 된 browser lease 행을 해제(claim 대칭) — 미해제면 TTL 만료까지 누수.
+    const leaseCount = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ n: string }>(`SELECT count(*) AS n FROM browser_leases WHERE run_id=$1::uuid AND owner_worker_id=$2::uuid`, [RUN_BF, WORKER]);
+      return Number(r.rows[0]?.n ?? "-1");
+    });
+    check("resume INIT 실패 → browser lease 행 해제됨(누수 아님, break-it #6)", leaseCount === 0, `lease rows=${leaseCount}`);
   } finally {
     await pool.end();
   }
