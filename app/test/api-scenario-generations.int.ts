@@ -1048,6 +1048,18 @@ async function main(): Promise<void> {
           JSON.stringify(runParams),
         );
         check("pagination scenario version persists loop IR", savedLoop.max_iterations === 4, JSON.stringify(savedLoop));
+        const savedOpenStart: Record<string, unknown> = isRecord(savedNodes.open_start_url) ? savedNodes.open_start_url : {};
+        const savedOpenStartVerify: Record<string, unknown> = isRecord(savedOpenStart.verify) ? savedOpenStart.verify : {};
+        const savedVerifyCriteria = Array.isArray(savedOpenStartVerify.criteria) ? savedOpenStartVerify.criteria : [];
+        const savedVerifyCriterion: Record<string, unknown> = isRecord(savedVerifyCriteria[0]) ? savedVerifyCriteria[0] : {};
+        check(
+          "generated open_start_url persists url_matches landing verify surviving compile (P0b self-heal 연결)",
+          savedVerifyCriterion.type === "url_matches" &&
+            typeof savedVerifyCriterion.pattern === "string" &&
+            new RegExp(savedVerifyCriterion.pattern as string).test("https://example.com/notices") &&
+            !new RegExp(savedVerifyCriterion.pattern as string).test("https://login.idp.com/sso"),
+          JSON.stringify(savedOpenStart),
+        );
         check(
           "pagination scenario version keeps prompt-field extraction instruction",
           typeof savedPaginationAction.instruction === "string" && savedPaginationAction.instruction.includes("title, url"),

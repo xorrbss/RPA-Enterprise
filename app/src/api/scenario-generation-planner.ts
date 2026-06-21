@@ -26,7 +26,7 @@ import type {
   ScenarioPlanner,
   ScenarioPlannerId,
 } from "./scenario-generation-types";
-import { extractFirstHttpUrl, isHttpUrl } from "./scenario-generation-url";
+import { extractFirstHttpUrl, hostOfHttpUrl, isHttpUrl } from "./scenario-generation-url";
 
 export interface PaginationPlan {
   enabled: boolean;
@@ -68,6 +68,21 @@ function finalizeNodeRecordingPolicy(node: unknown, recording: RecordingPolicy):
   return { ...node, policy: { ...policy, recording } };
 }
 
+/**
+ * navigate(open_start_url) 결정형 verify — 현재 URL 이 start_url 과 동일 host(서브도메인·www·http↔https 허용)에
+ * 머무는지 검사한다. off-host 리다이렉트(로그인 벽·에러·차단·도메인 파킹)를 조용한 false 대신 loud fail_business 로
+ * 전환하고(생성 시나리오를 P0b self-heal 에 연결: navigate 는 read-only — 일시적 적재 실패는 재navigate 로 자가복구),
+ * host 파싱 불가 시 verify 를 방출하지 않는다(없는 근거로 잘못된 false 를 만들지 않는다).
+ */
+export function startUrlLandingVerify(startUrl: string): Record<string, unknown> | undefined {
+  const host = hostOfHttpUrl(startUrl);
+  if (host === null || host.length === 0) return undefined;
+  const baseHost = host.replace(/^www\./, "");
+  const escaped = baseHost.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = `^https?://(?:[^/]*\\.)?${escaped}(?:[:/?#]|$)`;
+  return { criteria: [{ type: "url_matches", pattern }] };
+}
+
 function buildDeterministicMvpGenerationPlan(request: GenerationRequest, capabilities: GenerationCapabilities): GenerationPlan {
   const promptHash = createHash("sha256").update(request.prompt).digest("hex");
   const startUrl = request.startUrl ?? extractFirstHttpUrl(request.prompt);
@@ -103,11 +118,13 @@ function buildDeterministicMvpGenerationPlan(request: GenerationRequest, capabil
     side_effect: { kind: "read_only" },
   };
   if (startUrl !== undefined) {
+    const landingVerify = startUrlLandingVerify(startUrl);
     nodes.open_start_url = {
       what: [{ action: "navigate", url_ref: "start_url" }],
       next: pagination.enabled ? "paginate_pages" : "understand_request",
       policy: { recording },
       side_effect: { kind: "read_only" },
+      ...(landingVerify !== undefined ? { verify: landingVerify } : {}),
     };
     if (!pagination.enabled) {
       nodes.understand_request = observeNode;
@@ -238,11 +255,13 @@ function ensureStartUrlNavigation(ir: Record<string, unknown>, recording: Record
   const currentStart = typeof ir.start === "string" ? ir.start : undefined;
   const openStart = nodes.open_start_url;
   if (!isStartUrlNavigationNode(openStart)) {
+    const landingVerify = startUrl !== undefined ? startUrlLandingVerify(startUrl) : undefined;
     nodes.open_start_url = {
       what: [{ action: "navigate", url_ref: "start_url" }],
       next: startAfterOpenStart(nodes, currentStart),
       policy: { recording },
       side_effect: { kind: "read_only" },
+      ...(landingVerify !== undefined ? { verify: landingVerify } : {}),
     };
   } else {
     nodes.open_start_url = finalizeNodeRecordingPolicy(openStart, recording);
