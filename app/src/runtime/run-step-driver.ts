@@ -381,6 +381,9 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
     recordChallenge({ tenant_id: run.tenantId });
   }
 
+  // 멱등 키 per-cycle 스코프 해소(같은 노드 재suspend 시 키 충돌 방지 — resolveSuspendKeyAttempt 참조).
+  const keyAttempt = await resolveSuspendKeyAttempt(deps.pool, run, s.stepId, s.attempt);
+
   // 1) R4(challenge)/R5(@human_task)(running→suspending) + 포트(human_task INSERT + human_task.created + bookmark) — 한 tenant tx.
   //    두 트리거 모두 pending=[createHumanTask(kind), startBookmark] → 같은 포트가 소비. event/idem 키만 kind 로 분기.
   await withTenantTx(deps.pool, run.tenantId, async (client) => {
@@ -397,7 +400,7 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
       event,
       guard: {},
       correlationId: run.correlationId,
-      eventIdempotencyKey: `${run.runId}:${s.stepId}:${s.attempt}:${idemSuffix}`,
+      eventIdempotencyKey: `${run.runId}:${s.stepId}:${keyAttempt}:${idemSuffix}`,
     });
     if (!t.applied) {
       throw new Error(`driveSuspend: ${rule} not applied (${t.reason}, observed=${t.observed ?? "none"})`);
@@ -409,7 +412,7 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
       tenantId: run.tenantId,
       runId: run.runId,
       stepId: s.stepId,
-      attempt: s.attempt,
+      attempt: keyAttempt,
       correlationId: run.correlationId,
       exception,
       pendingSideEffects: t.pending,
@@ -449,7 +452,7 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
       event: { type: "bookmark_saved" },
       guard: { resumeTokenIssued: true },
       correlationId: run.correlationId,
-      eventIdempotencyKey: `${run.runId}:${s.stepId}:${s.attempt}:bookmark_saved`,
+      eventIdempotencyKey: `${run.runId}:${s.stepId}:${keyAttempt}:bookmark_saved`,
     });
     if (!r11.applied) {
       throw new Error(`driveSuspend: R11 not applied (${r11.reason}, observed=${r11.observed ?? "none"})`);
@@ -458,6 +461,22 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
   });
 
   return { state: "suspended", outcome };
+}
+
+/**
+ * suspend-side outbox 멱등 키(R4/R5·human_task.created·R11)의 per-suspend-cycle 스코프. 인터프리터 ctx.attempt 은 매
+ * 드라이브 0 에서 시작해 같은 노드 재suspend(resume 후 재진입) 시 키가 충돌(events_outbox UNIQUE)한다. 기록 executor 가
+ * run_steps 에 (run,step)별 단조 증가 attempt(MAX+1)를 영속하므로 그 최댓값을 키 스코프로 쓴다 — per-cycle 고유 +
+ * 재시도 안정(영속). 기록 미사용(ad-hoc) run 은 run_steps 부재 → fallback(s.attempt, 단일 사이클).
+ */
+async function resolveSuspendKeyAttempt(pool: Pool, run: RunTerminalRef, stepId: string, fallback: number): Promise<number> {
+  return withTenantTx(pool, run.tenantId, async (client) => {
+    const r = await client.query<{ attempt: number }>(
+      `SELECT COALESCE(MAX(attempt), $3::int) AS attempt FROM run_steps WHERE tenant_id=$1::uuid AND run_id=$2::uuid AND step_id=$4`,
+      [run.tenantId, run.runId, fallback, stepId],
+    );
+    return r.rows[0]?.attempt ?? fallback;
+  });
 }
 
 // 단일 전이를 자체 CAS 트랜잭션으로 적용. eventIdempotencyKey는 이벤트별 접미(outbox UNIQUE 충돌 방지).
