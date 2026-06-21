@@ -325,3 +325,7 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
 .advanced-settings > summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; user-select: none; }
 .advanced-settings > summary:hover { color: var(--text); }
 .advanced-settings > .form-grid { margin-top: 10px; }
+
+/* 자동화 만들기 — 개발자 편집 모드(점진적 노출) */
+.advanced-editors > summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; user-select: none; }
+.advanced-editors > summary:hover { color: var(--text); }

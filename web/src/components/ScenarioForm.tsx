@@ -96,6 +96,8 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
   // dirty = IR 텍스트를 직접 편집함(빌더 생성물과 다름). pendingEditor = 전환 확인 대기.
   const [dirty, setDirty] = useState(false);
   const [pendingEditor, setPendingEditor] = useState<EditorMode | null>(null);
+  // 개발자 편집 모드(<details>) 펼침 — 운영자 기본은 '쉬운 만들기', 단계/IR 편집은 접어 둔다. editor 전환 시 동기화.
+  const [devEditorsOpen, setDevEditorsOpen] = useState(editor !== "easy");
   const handleBuilderChange = useCallback((ir: unknown) => {
     setText(JSON.stringify(ir, null, 2));
     setDirty(false); // 빌더가 생성한 텍스트 = 손실 위험 없음
@@ -106,6 +108,11 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
     if (target !== editor && target !== "ir" && dirty) setPendingEditor(target);
     else setEditor(target);
   };
+
+  // editor 모드와 개발자 편집 details 펼침 동기화(easy=접힘, 단계/IR=펼침). 사용자 수동 토글은 onToggle로 유지.
+  useEffect(() => {
+    setDevEditorsOpen(editor !== "easy");
+  }, [editor]);
 
   useEffect(() => {
     setReport(null);
@@ -207,16 +214,25 @@ export function ScenarioForm({ mode, onClose }: { mode: ScenarioFormMode; onClos
           : "자동화 시나리오를 IR 문서로 작성합니다. 저장 시 문법(ajv)·조건식(IREL)·그래프(V1–V11) 검증을 통과해야 합니다."}
         {isEdit ? " 편집은 새 버전(draft)으로 저장되며 이름은 바꿀 수 없습니다." : ""}
       </p>
-      <div role="tablist" style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+      <div className="editor-switch" style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
         <button className="btn" type="button" aria-pressed={editor === "easy"} onClick={() => switchEditor("easy")}>
           쉬운 만들기
         </button>
-        <button className="btn" type="button" aria-pressed={editor === "form"} onClick={() => switchEditor("form")}>
-          단계 편집(고급)
-        </button>
-        <button className="btn" type="button" aria-pressed={editor === "ir"} onClick={() => switchEditor("ir")}>
-          IR 직접 편집(개발자)
-        </button>
+        <details
+          className="advanced-editors"
+          open={devEditorsOpen}
+          onToggle={(event) => setDevEditorsOpen((event.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary>개발자 편집 모드</summary>
+          <div role="group" aria-label="개발자 편집 방식" style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+            <button className="btn" type="button" aria-pressed={editor === "form"} onClick={() => switchEditor("form")}>
+              단계 편집
+            </button>
+            <button className="btn" type="button" aria-pressed={editor === "ir"} onClick={() => switchEditor("ir")}>
+              IR 직접 편집
+            </button>
+          </div>
+        </details>
       </div>
       {editor === "easy" ? (
         <OperatorWizard key={`easy-${editId ?? "new"}`} onChange={handleBuilderChange} initial={wizardInitial} version={currentVersion} />

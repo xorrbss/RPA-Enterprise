@@ -508,7 +508,7 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
     location.hash = "#scenarioStudio";
     fireEvent.click(await screen.findByRole("button", { name: "+ 새 자동화 만들기" }));
-    fireEvent.click(await screen.findByRole("button", { name: "단계 편집(고급)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "단계 편집" }));
 
     const rule = screen.getByRole("textbox", { name: "추출 규칙" });
     expect(rule.tagName).toBe("TEXTAREA");
