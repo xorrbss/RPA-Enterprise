@@ -88,8 +88,14 @@ export class UtilityExecutor implements ExecutorPlugin {
     switch (a.type) {
       case "navigate": {
         await this.withAbort(ctx, session.goto(a.url));
+        // NPA-02: session.goto 는 서버측 30x 리다이렉트를 추종한다. security-contracts §6("allowed_domains 밖 이동 →
+        //   차단")는 요청 URL 뿐 아니라 **착지 결과**에도 적용된다 — 착지 URL(session.url())을 정책에 재검증한다.
+        //   미재검증 시 allowlist 내 호스트의 redirect 로 정책 밖(메타데이터/사내) 착지 후 후속 extract 가 그 콘텐츠를 유출.
+        const landed = session.url();
+        const landedFailure = this.navigationPolicyFailure(stepId, landed, ctx);
+        if (landedFailure !== undefined) return landedFailure;
         sideEffectKind = { kind: "read_only", committed: true };
-        output = { url: session.url() };
+        output = { url: landed };
         break;
       }
       case "download": {

@@ -34,6 +34,12 @@ function mockSessions(opts: { evalResult?: unknown; url?: string }): CdpSessionP
   return { forLease: () => session } as unknown as CdpSessionProvider;
 }
 
+// NPA-02 용: goto 는 no-op, url() 은 **착지 URL**(30x redirect 후 결과)을 반환하는 세션(요청≠착지 모사).
+function redirectSessions(landedUrl: string): CdpSessionProvider {
+  const session = { goto: async () => {}, url: () => landedUrl };
+  return { forLease: () => session } as unknown as CdpSessionProvider;
+}
+
 const exec = new UtilityExecutor(neverSessions);
 // assertUtilityAction(scheme 가드)은 abort 체크(false) 직후·session 사용 이전에 실행되므로 ctx는 abortSignal만 필요.
 const ctx = { abortSignal: { aborted: false } } as unknown as RunContext;
@@ -100,6 +106,22 @@ await (async () => {
     wildcardPassedPolicyGate = !(e instanceof UtilityExecutorError && e.code === "DOMAIN_POLICY_VIOLATION");
   }
   check("navigate wildcard policy allows subdomain before session", wildcardPassedPolicyGate);
+
+  // ── NPA-02: navigate 착지 URL(30x redirect 후) 정책 재검증 (요청 URL 만 검사하면 redirect 로 우회) ──
+  {
+    // 요청은 allowlist 내(example.com)→pre-check 통과→goto 가 정책 밖(169.254.169.254=메타데이터 IMDS)으로 착지→재검증 차단.
+    const redirected = await new UtilityExecutor(redirectSessions("https://169.254.169.254/latest/meta-data/")).execute(
+      "s4", { type: "navigate", url: "https://example.com/start" }, policyCtx,
+    );
+    check("NPA-02 redirect 정책밖 착지 → failed_security", redirected.status === "failed_security", redirected.status);
+    check("NPA-02 redirect 착지 DOMAIN_POLICY_VIOLATION", redirected.exception?.code === "DOMAIN_POLICY_VIOLATION", JSON.stringify(redirected.exception));
+    check("NPA-02 redirect 착지 no commit", redirected.sideEffect?.committed === false, JSON.stringify(redirected.sideEffect));
+    // 대조: allowlist 내 착지(같은 호스트 redirect)는 차단되지 않는다(false positive 아님).
+    const okLanded = await new UtilityExecutor(redirectSessions("https://example.com/after-redirect")).execute(
+      "s5", { type: "navigate", url: "https://example.com/start" }, policyCtx,
+    );
+    check("NPA-02 allowlist 내 착지 → 차단 안 됨", okLanded.status !== "failed_security", JSON.stringify(okLanded));
+  }
 
   // ── 슬라이스3: 결정형 verify criteria 확장 (element_absent/text_includes/url_matches) ──
   {
