@@ -219,6 +219,12 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       browserIdentityVersion: this.cfg.browserIdentityVersion,
     };
 
+    // P0b self-heal 재시도(ctx.selfHealRetry): 인터프리터가 verify 실패로 같은 노드를 재실행할 때 직전 의심 plan 을 강등.
+    //   markSuspect(active→suspect) → 아래 cache.get 이 miss → LLM 재해소. best-effort(강등 실패해도 재해소는 진행).
+    if (this.cache && ctx.selfHealRetry === true) {
+      await this.cache.markSuspect(cacheKey).catch(() => undefined);
+    }
+
     let plan: ActionPlan | undefined;
     let cacheMode: StepResult["cache"]["mode"] = "bypass";
     let callIds: string[] = [];

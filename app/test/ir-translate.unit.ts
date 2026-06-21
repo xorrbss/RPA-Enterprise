@@ -83,11 +83,22 @@ function main(): void {
     check("next/terminal 변환", s.nodes.a?.flow.kind === "next" && s.nodes.b?.flow.kind === "terminal");
   }
 
-  // 4b) P0b: node.verify 투영 — criteria[] 가 ScenarioNode.verify 로 운반(criterion shape 미검증, executor 권위).
+  // 4b) P0b: node.verify 투영 — criteria[] 운반(criterion shape 미검증, executor 권위) + on_fail/max_self_heal 기본값(self_heal/2).
   {
     const ir = { start: "a", nodes: { a: { what: [], verify: { criteria: [{ type: "element_visible", target: { selector: "#ok" } }] }, next: "b" }, b: { terminal: "success" } } };
     const s = compiledScenarioFrom(ir, {});
-    check("node.verify 투영 → ScenarioNode.verify.criteria 1", s.nodes.a?.verify?.criteria.length === 1, JSON.stringify(s.nodes.a?.verify));
+    check(
+      "node.verify 투영 → criteria1·on_fail기본 self_heal·max_self_heal기본 2",
+      s.nodes.a?.verify?.criteria.length === 1 && s.nodes.a.verify.onFail === "self_heal" && s.nodes.a.verify.maxSelfHeal === 2,
+      JSON.stringify(s.nodes.a?.verify),
+    );
+  }
+
+  // 4b2) on_fail 명시 + policy.max_self_heal 투영(스키마 default 미실체화 → ir-translate 가 적용).
+  {
+    const ir = { start: "a", nodes: { a: { what: [], policy: { max_self_heal: 0 }, verify: { criteria: [{ type: "min_rows", n: 1 }], on_fail: "abort_security" }, next: "b" }, b: { terminal: "success" } } };
+    const s = compiledScenarioFrom(ir, {});
+    check("node.verify on_fail/max_self_heal 투영(abort_security·0)", s.nodes.a?.verify?.onFail === "abort_security" && s.nodes.a.verify.maxSelfHeal === 0, JSON.stringify(s.nodes.a?.verify));
   }
 
   // 4c) verify 미지정 → ScenarioNode.verify undefined(기존 동작 보존).

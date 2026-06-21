@@ -654,6 +654,21 @@ async function main(): Promise<void> {
     check("act cache hit apply-fail: markSuspect demote + no silent success + LLM not called", c.calls.suspect === 1 && failed && g.calls() === 0);
   }
 
+  // P0b self-heal 재시도: ctx.selfHealRetry → executeAct 가 markSuspect 강등(실 캐시면 다음 get 이 miss → 재해소).
+  {
+    const s = fakeSessions();
+    const c = fakeCache(CLICK_PLAN);
+    await new StagehandDomExecutor(countingGateway({ parsedJson: CLICK_PLAN }).gw, s.provider, cfg, c.cache).execute("s7c", { type: "act", instruction: "click login" }, makeCtx({ selfHealRetry: true }));
+    check("act selfHealRetry: markSuspect 강등 호출", c.calls.suspect === 1);
+  }
+  // 회귀: 정상(비-재시도) hit 은 markSuspect 호출 안 함(강등은 selfHealRetry 시에만).
+  {
+    const s = fakeSessions();
+    const c = fakeCache(CLICK_PLAN);
+    await new StagehandDomExecutor(countingGateway({ parsedJson: CLICK_PLAN }).gw, s.provider, cfg, c.cache).execute("s7d", { type: "act", instruction: "click login" }, makeCtx());
+    check("act 정상 hit: markSuspect 미호출", c.calls.suspect === 0);
+  }
+
   // act malformed plan → failed_system(LLM_MALFORMED_OUTPUT)
   {
     const r = await new StagehandDomExecutor(countingGateway({ parsedJson: { nope: true } }).gw, sess(), cfg).execute("s8", { type: "act", instruction: "x" }, makeCtx());

@@ -132,6 +132,9 @@ export type RunContext = {
   // 자격증명은 ref만. resolve는 SecretStore 경유(Executor가 직접 LLM에 전달 금지).
   assetRefs: Record<string, SecretRef | string>;
   abortSignal: AbortSignal;    // run abort → SSE close 전파
+  // P0b self-heal: 인터프리터가 verify 실패로 같은 노드를 재실행할 때 true. 실행기(executeAct)는 직전 의심 ActionPlan 을
+  //   markSuspect 강등 후 재해소(cache miss). 정상 실행/최초 진입에는 미설정(undefined=false).
+  selfHealRetry?: boolean;
 };
 
 // ===== PageState 생산자 계약 =====
