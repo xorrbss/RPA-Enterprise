@@ -34,6 +34,7 @@ import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry
 import { applyRunTransition } from "../runtime/run-transition";
 import { driveResumedRun, terminalizeStuckRunAsSystemFailure } from "../runtime/run-step-driver";
 import { recordSiteCircuitOutcome, DEFAULT_SITE_CIRCUIT } from "../runtime/site-circuit";
+import { resumeLinkedWorkitemCheckout } from "../runtime/workitem-settlement";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../executor/site-page-state-config";
 import { gateBrowserSessionProvider } from "../executor/browser-session-provider";
@@ -227,6 +228,15 @@ export class WorkerRunResume {
       }
       if (transition.pending.length > 0) {
         throw new Error("RuntimeWorker: run_resume completion produced unsupported pending side effects");
+      }
+
+      // W11: R18/R19 로 running 도달 시 연결 workitem 의 checkout timer resume(잔여 TTL 부터). R20(failed_system)은 제외.
+      const resumed = await client.query<{ status: string }>(
+        `SELECT status FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+        [tenantId, runId],
+      );
+      if (resumed.rows[0]?.status === "running") {
+        await resumeLinkedWorkitemCheckout(client, { tenantId, runId, correlationId: job.correlationId ?? row.correlation_id });
       }
 
       return {
