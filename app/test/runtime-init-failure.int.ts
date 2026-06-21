@@ -18,7 +18,7 @@ import { createPool, withTenantTx } from "../src/db/pool";
 import type { BrowserSessionProvider } from "../src/executor/browser-session-provider";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { handleClaimedInitFailure } from "../src/runtime/run-init-failure";
-import type { RuntimeJobEnqueuePort } from "../src/runtime/executor-completion-coordinator";
+import type { RuntimeJobEnqueuePort } from "../src/runtime/executor-ports";
 import { PgRuntimeWorker, type BrowserLeasePlanResolver } from "../src/worker/runtime-worker";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));

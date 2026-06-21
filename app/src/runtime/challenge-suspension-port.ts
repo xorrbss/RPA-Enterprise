@@ -1,11 +1,12 @@
 /**
- * ExecutorChallengeSuspensionPort 구현 (RQ-016). challenge 에서 coordinator 가 R4(running→suspending)를 적용한
- * 직후 호출 — 공급된 tenant tx 안에서 human_tasks row 생성 + human_task.created 발행 + suspend bookmark 영속.
- * run 을 재전이하지 않는다(R4 는 호출 전 적용됨). R11(suspending→suspended)·resume-token 발행은 후속 증분(미구현).
+ * ExecutorChallengeSuspensionPort 구현 (RQ-016). challenge 에서 driver(run-step-driver driveSuspend)가
+ * R4(running→suspending)를 적용한 직후 호출 — 공급된 tenant tx 안에서 human_tasks row 생성 + human_task.created
+ * 발행 + suspend bookmark 영속. run 을 재전이하지 않는다(R4 는 호출 전 적용됨). R11(suspending→suspended)·
+ * resume-token 발행은 driveSuspend 의 후속 단계가 수행한다(이 포트 책임 밖).
  *
- * 도달성 주(은폐 금지): 이 포트가 호출되는 PgExecutorCompletionCoordinator 경로는 현재 production 미배선(테스트만
- * 인스턴스화)이다. 본 구현은 RQ-016 의 "suspendForChallenge 미구현 포트 gap" 을 닫는다. production run-drive 가
- * 이 경로를 거치게 하는 재배선 + resume-token(R11)은 별도 후속(없으면 run 이 'suspending' 잔류).
+ * 도달성: production run-drive(driveClaimedRun/driveResumedRun → driveSuspend)가 이 포트를 거친다(테스트 전용
+ * 휴면 경로였던 PgExecutorCompletionCoordinator 는 제거됨). RQ-016 의 "suspendForChallenge 미구현 포트 gap" 은 닫혀
+ * production 도달한다.
  */
 import { randomUUID } from "node:crypto";
 
@@ -14,7 +15,7 @@ import type { PoolClient } from "pg";
 import type { ClassifiedException } from "../../../ts/core-types";
 import type { EventId } from "../../../ts/runtime-contract";
 import type { SideEffectCmd } from "../../../ts/state-machine-types";
-import type { ExecutorChallengeSuspensionPort } from "./executor-completion-coordinator";
+import type { ExecutorChallengeSuspensionPort } from "./executor-ports";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "./outbox";
 
 export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPort {
