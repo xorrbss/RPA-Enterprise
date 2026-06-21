@@ -348,8 +348,15 @@ export class ContentRedactionTransform implements ArtifactContentTransform {
    * 그 외 string 값엔 self-delimiting PATTERN 마스크 적용. 숫자/불리언도 민감 키면 라벨 문자열로 치환.
    */
   private maskJsonValue(value: unknown, keyName: string | undefined): unknown {
+    // 민감 KEY(부모 property)면 **값 전체**(스칼라/객체/배열 무관)를 라벨로 치환 — 객체/배열로 내려가기 **전에** 검사한다.
+    //   (RED-01) 종전엔 이 검사가 스칼라 leaf 에서만 실행돼, {"credential":{"value":"비밀"}} 처럼 민감 키 값이 객체/
+    //   array-of-objects 면 내부의 비-민감 키(value)로 walk 내려가 패턴 미매칭 비밀이 그대로 누출됐다(under-mask).
+    if (keyName !== undefined) {
+      if (this.credentialKeyName.test(keyName)) return LABEL.credential;
+      if (this.piiKeyName.test(keyName)) return piiKeyLabel(keyName);
+    }
     if (Array.isArray(value)) {
-      // 배열 원소는 부모 키를 상속한다(예: "tokens": ["a","b"] 의 각 원소도 token 값).
+      // 비민감 키 배열: 원소는 부모 키를 상속(원소 내부의 중첩 민감 키/패턴은 원소 walk 에서 처리).
       return value.map((el) => this.maskJsonValue(el, keyName));
     }
     if (value !== null && typeof value === "object") {
@@ -359,11 +366,7 @@ export class ContentRedactionTransform implements ArtifactContentTransform {
       }
       return out;
     }
-    // 스칼라(string/number/boolean/null).
-    if (keyName !== undefined) {
-      if (this.credentialKeyName.test(keyName)) return LABEL.credential;
-      if (this.piiKeyName.test(keyName)) return piiKeyLabel(keyName);
-    }
+    // 스칼라(string/number/boolean/null) — 비민감 키.
     if (typeof value === "string") {
       return this.applyPatternRules(value);
     }
