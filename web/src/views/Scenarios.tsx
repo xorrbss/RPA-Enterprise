@@ -62,7 +62,7 @@ export function ScenariosView(): JSX.Element {
               <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                 <RunScenarioButton scenario={r} />
                 <button className="btn" type="button" onClick={() => navigate("playground", { scenario: r.scenario_id })}>
-                  계획 확인
+                  미리보기
                 </button>
                 {can("scenario.update") && (
                   <button
@@ -79,11 +79,11 @@ export function ScenariosView(): JSX.Element {
                 <ActionButton
                   label={r.promotion_status === "prod" ? "운영 해제" : "운영 지정"}
                   action="scenario.promote"
-                  title="운영 지정은 실행 전제가 아니라 운영 기준 표시와 AST 캐시 빌드를 위한 보조 액션입니다."
+                  title="운영 지정은 실행에 꼭 필요한 단계가 아니라 운영 기준 표시를 위한 보조 작업입니다."
                   confirmText={
                     r.promotion_status === "prod"
                       ? `${r.name} v${r.version}을(를) 운영 기준에서 내릴까요? 실행 이력은 보존됩니다.`
-                      : `${r.name} v${r.version}을(를) 운영 기준으로 지정할까요? 실행 전제는 아니며, canonical 표시와 AST 캐시 빌드를 위한 보조 액션입니다. 정적검증 V1–V11 통과가 필요하며 실제 실행 가능 여부는 사이트 승인·세션 상태에 따릅니다.`
+                      : `${r.name} v${r.version}을(를) 운영 기준으로 지정할까요? 실행에 꼭 필요한 단계는 아니며, 운영 기준 표시를 위한 보조 작업입니다. 시나리오 검사를 통과하고 사이트 승인·세션이 준비되어야 실제로 실행됩니다.`
                   }
                   run={(key) => api.setScenarioPromotion(r.scenario_id, r.version, r.promotion_status === "prod" ? "draft" : "prod", key)}
                   invalidateKeys={[["scenarios"]]}
