@@ -23,6 +23,11 @@ import {
   type VisualEvidenceObjectStore,
   type VisualEvidenceRecorder,
 } from "../src/runtime/visual-evidence";
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+import { bootstrapTracing } from "../src/observability/bootstrap";
+
+const spanExporter = new InMemorySpanExporter();
+bootstrapTracing(spanExporter);
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -232,6 +237,12 @@ async function testExecutorPolicies(): Promise<void> {
   check("always policy captures successful step", alwaysRecorder.captures.length === 1);
   check("always policy appends screenshot artifact after existing refs", alwaysResult.artifacts.join(",") === "existing-artifact,screenshot-ref");
   check("capture input carries run/step/attempt", alwaysRecorder.captures[0]?.attempt === 2 && alwaysRecorder.captures[0]?.stepId === "open.0");
+  const captureSpan = spanExporter.getFinishedSpans().find((sp) => sp.name === "artifact.capture");
+  check(
+    "§E artifact.capture span attr type=screenshot_masked + redaction_status=pending (#9)",
+    captureSpan?.attributes.type === "screenshot_masked" && captureSpan?.attributes.redaction_status === "pending",
+    JSON.stringify(captureSpan?.attributes),
+  );
 
   const maskedSuccessRecorder = new FakeRecorder();
   const maskedSuccess = new VisualEvidenceExecutor(new FakeExecutor(baseResult("success")), sessions, maskedSuccessRecorder);

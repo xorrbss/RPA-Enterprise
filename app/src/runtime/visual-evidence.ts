@@ -352,7 +352,7 @@ export async function appendVisualEvidenceArtifact(input: {
 }): Promise<StepResult> {
   const policy = recordingPolicyFromAction(input.action);
   if (!shouldCapture(policy, input.result)) return input.result;
-  return withSpan(SPAN.artifactCapture, spanCommonFromContext(input.ctx), {}, async () => {
+  return withSpan(SPAN.artifactCapture, spanCommonFromContext(input.ctx), { type: "screenshot_masked", redaction_status: "pending" }, async () => {
     const artifactRef = await input.recorder.captureStepScreenshot({
       session: input.sessions.forLease(input.ctx.leaseId),
       tenantId: input.ctx.tenantId,
