@@ -165,4 +165,45 @@ export async function seed(pool: PgPool): Promise<void> {
       ),
     );
   }
+
+  // 모든 site 도메인 허용 network_policy 백필 — seed 가 site/identity 만 만들고 network_policy 를 안 만들어
+  //   런타임 target 추론(inferRuntimeTargetForStartUrl)이 network_policy_unresolved 로 막혀, 쉬운 만들기/일반
+  //   저장 시나리오 실행이 run_target_unresolved 였던 버그 수정. POST /v1/sites(applySiteCreate)와 동형.
+  await backfillSiteNetworkPolicies(pool, TENANT);
+}
+
+/**
+ * site host 허용 network_policy 백필(idempotent). POST /v1/sites 가 site 등록 시 net policy 를 만드는 것과 동형으로,
+ * seed 사이트도 실행 가능 상태(추론 가능)가 되도록 누락된 network_policy 를 채운다. 이미 host 를 허용하는 정책이
+ * 있으면 건너뛴다. url_pattern 의 `/*` 글롭은 제거 후 hostname 추출(파싱 불가 시 skip — 조용한 통과 아님: skip 카운트 외부 미반영이나 added 로 동작 확인).
+ */
+export async function backfillSiteNetworkPolicies(pool: PgPool, tenantId: string): Promise<number> {
+  return withTenantTx(pool, tenantId, async (c) => {
+    const sites = await c.query<{ url_pattern: string }>(
+      `SELECT url_pattern FROM site_profiles WHERE tenant_id=$1::uuid`,
+      [tenantId],
+    );
+    let added = 0;
+    for (const { url_pattern } of sites.rows) {
+      let host: string | null = null;
+      try {
+        host = new URL(url_pattern.replace("/*", "")).hostname || null;
+      } catch {
+        host = null;
+      }
+      if (host === null) continue;
+      const exists = await c.query(
+        `SELECT 1 FROM network_policies WHERE tenant_id=$1::uuid AND $2 = ANY(allowed_domains)`,
+        [tenantId, host],
+      );
+      if (exists.rowCount === 0) {
+        await c.query(
+          `INSERT INTO network_policies (id, tenant_id, allowed_domains) VALUES (gen_random_uuid(), $1::uuid, ARRAY[$2])`,
+          [tenantId, host],
+        );
+        added += 1;
+      }
+    }
+    return added;
+  });
 }
