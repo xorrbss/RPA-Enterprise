@@ -60,7 +60,7 @@ function countingGateway(resp: Partial<LLMResponse> = {}) {
 }
 const errGateway = (code: ErrorCode): LlmGatewayCaller => ({ call: async () => { throw new GatewayError(code, "boom"); } });
 
-function fakeSessions(dom: unknown = "<body><main>hello</main></body>") {
+function fakeSessions(dom: unknown = "<body><main>hello</main></body>", opts?: { clickThrows?: boolean }) {
   const ops: string[] = [];
   const evals: string[] = [];
   const session: CdpSession = {
@@ -72,7 +72,10 @@ function fakeSessions(dom: unknown = "<body><main>hello</main></body>") {
       return dom as never;
     },
     sendCDP: async () => undefined as never,
-    click: async (s) => void ops.push(`click:${s}`),
+    click: async (s) => {
+      ops.push(`click:${s}`);
+      if (opts?.clickThrows) throw new Error(`click drift: ${s} no longer matches`);
+    },
     fill: async (s, v) => void ops.push(`fill:${s}=${v}`),
     selectOption: async (s, v) => void ops.push(`select:${s}=${v}`),
     setInputFiles: async () => {},
@@ -632,8 +635,23 @@ async function main(): Promise<void> {
     const g = countingGateway({ parsedJson: { operation: "fill", selector: "#never", value: "x" } }); // 호출되면 안 됨
     const c = fakeCache(CLICK_PLAN);
     const r = await new StagehandDomExecutor(g.gw, s.provider, cfg, c.cache).execute("s7", { type: "act", instruction: "click login" }, makeCtx());
-    check("act cache hit: LLM NOT called, replayed click, mode=hit", g.calls() === 0 && r.cache.mode === "hit" && s.ops.includes("click:#login") && (r.cache.actionPlanCacheId?.length ?? 0) > 0);
+    check("act cache hit: LLM NOT called, replayed click, mode=hit", g.calls() === 0 && r.cache.mode === "hit" && s.ops.includes("click:#login") && r.cache.actionPlanCacheId === undefined);
     check("act cache hit: auto-installs network JSON capture before replay", s.evals.some((expr) => expr.includes("__RPA_NETWORK_CAPTURE_INSTALLED__")));
+  }
+
+  // P0a+ self-heal: 캐시 HIT plan 적용 실패 → markSuspect 강등 + 조용한 성공 금지(원 예외 전파, 다음 run 재해석)
+  {
+    const s = fakeSessions("<body><main>hello</main></body>", { clickThrows: true });
+    const g = countingGateway({ parsedJson: { operation: "fill", selector: "#never", value: "x" } }); // 호출되면 안 됨
+    const c = fakeCache(CLICK_PLAN); // hit
+    let failed = false;
+    try {
+      const r = await new StagehandDomExecutor(g.gw, s.provider, cfg, c.cache).execute("s7b", { type: "act", instruction: "click login" }, makeCtx());
+      failed = r.status !== "success";
+    } catch {
+      failed = true;
+    }
+    check("act cache hit apply-fail: markSuspect demote + no silent success + LLM not called", c.calls.suspect === 1 && failed && g.calls() === 0);
   }
 
   // act malformed plan → failed_system(LLM_MALFORMED_OUTPUT)
