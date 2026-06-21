@@ -20,8 +20,15 @@
  */
 import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
 import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
+import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 import { evaluateCondition, selectOnBranch, type CompiledOnBranch } from "./flow-control";
 import { mergeExtractOutputs, type ExtractResultPage, type MergedExtractResult } from "./extract-result-merge";
+
+/** §E executor.execute span 의 `executor` 속성 — 플러그인 활성 capability 라벨(dom/vision/utility). 미활성=none. */
+function executorCapabilityLabel(caps: { dom: boolean; vision: boolean; utility: boolean }): string {
+  const active = (["dom", "vision", "utility"] as const).filter((kind) => caps[kind]);
+  return active.length > 0 ? active.join("+") : "none";
+}
 
 /** 표준 노드 출력 필드(IREL node.<id>.*). 미투영 필드는 부재 → 참조 시 IREL_RUNTIME_MISSING(loud). */
 interface NodeOutput {
@@ -259,7 +266,19 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
     let lastResult: StepResult | undefined;
     for (let k = 0; k < node.what.length; k += 1) {
       const stepId = `${nodeId}.${k}`;
-      const res = await state.deps.executor.execute(stepId, node.what[k], ctx);
+      // §E 필수 span: executor.execute(attr node_id/action/executor). 플러그인 실행을 래핑 — 예외는 withSpan 이
+      //   record+ERROR 로 표면화 후 재던져, 바깥 driveScenario(run-step-driver) 시스템-failsafe 가 흡수한다(throw 전파 보존).
+      const res = await withSpan(
+        SPAN.executorExecute,
+        spanCommonFromContext(ctx),
+        { node_id: nodeId, executor: executorCapabilityLabel(state.deps.executor.capabilities()) },
+        async (span) => {
+          const r = await state.deps.executor.execute(stepId, node.what[k], ctx);
+          span.setAttribute("action", r.action);
+          span.setAttribute("status", r.status);
+          return r;
+        },
+      );
       state.steps.push({ nodeId, action: res.action, status: res.status });
       state.artifacts.push(...res.artifacts);
       lastResult = res;
