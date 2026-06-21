@@ -933,6 +933,25 @@ async function main(): Promise<void> {
               artifactBody.body,
             );
           }
+          const screenshotArtifactId = listedItems.find(
+            (item: unknown): item is { artifact_id: string } =>
+              isRecord(item) && item.type === "screenshot_masked" && typeof item.artifact_id === "string",
+          )?.artifact_id;
+          check("redacted screenshot artifact id present", typeof screenshotArtifactId === "string", listedArtifacts.body);
+          if (typeof screenshotArtifactId === "string") {
+            const screenshotBlob = await artifactReadApp.inject({
+              method: "GET",
+              url: `/v1/artifacts/${screenshotArtifactId}/blob`,
+              headers: { authorization: `Bearer ${viewer}`, "x-correlation-id": "20000000-0000-4000-8000-0000000000a5" },
+            });
+            check("viewer can download redacted screenshot blob -> 200", screenshotBlob.statusCode === 200, screenshotBlob.body);
+            check("redacted screenshot blob keeps image/png content-type", screenshotBlob.headers["content-type"] === "image/png", String(screenshotBlob.headers["content-type"]));
+            check(
+              "redacted screenshot blob preserves PNG signature bytes",
+              Buffer.from(screenshotBlob.rawPayload).subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+              Buffer.from(screenshotBlob.rawPayload).subarray(0, 8).toString("hex"),
+            );
+          }
         } finally {
           await artifactReadApp.close();
         }
