@@ -83,6 +83,26 @@ function main(): void {
     check("next/terminal 변환", s.nodes.a?.flow.kind === "next" && s.nodes.b?.flow.kind === "terminal");
   }
 
+  // 4b) P0b: node.verify 투영 — criteria[] 가 ScenarioNode.verify 로 운반(criterion shape 미검증, executor 권위).
+  {
+    const ir = { start: "a", nodes: { a: { what: [], verify: { criteria: [{ type: "element_visible", target: { selector: "#ok" } }] }, next: "b" }, b: { terminal: "success" } } };
+    const s = compiledScenarioFrom(ir, {});
+    check("node.verify 투영 → ScenarioNode.verify.criteria 1", s.nodes.a?.verify?.criteria.length === 1, JSON.stringify(s.nodes.a?.verify));
+  }
+
+  // 4c) verify 미지정 → ScenarioNode.verify undefined(기존 동작 보존).
+  {
+    const ir = { start: "a", nodes: { a: { what: [], next: "b" }, b: { terminal: "success" } } };
+    const s = compiledScenarioFrom(ir, {});
+    check("verify 미지정 → ScenarioNode.verify undefined", s.nodes.a?.verify === undefined);
+  }
+
+  // 4d) verify.criteria 빈 배열/형식 오류 → IR_SCHEMA_INVALID(조용한 false 금지).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [], verify: { criteria: [] }, terminal: "success" } } }, {}));
+    check("verify.criteria 빈 배열 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
   // 5) loop 변환(RQ-002): ir loop + compiled_ast.loop(until AST + body/exit/max) → NodeFlow loop.
   {
     const irLoop = { start: "L", nodes: { L: { loop: { body_target: "B", exit_target: "done", until: "flags.no_next_page", max_iterations: 5 } }, B: { next: "L" }, done: { terminal: "success" } } };

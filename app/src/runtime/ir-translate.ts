@@ -22,6 +22,18 @@ function isRec(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/**
+ * P0b: raw.verify(verify.schema) → ScenarioNode.verify. criteria[] 가 비-빈 배열인지만 검증(criterion shape 은
+ * executor.verify 권위 — unknown 통과, what 과 동일). 부재 시 undefined(verify 미실행, 기존 동작). 형식 오류는 loud.
+ */
+function projectVerify(id: string, rawVerify: unknown): { criteria: readonly unknown[] } | undefined {
+  if (rawVerify === undefined) return undefined;
+  if (!isRec(rawVerify) || !Array.isArray(rawVerify.criteria) || rawVerify.criteria.length === 0) {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${id}' verify.criteria 누락/빈 배열`);
+  }
+  return { criteria: rawVerify.criteria };
+}
+
 export function compiledScenarioFrom(
   ir: unknown,
   compiledAst: unknown,
@@ -105,7 +117,8 @@ export function compiledScenarioFrom(
     } else {
       throw new InterpreterError("UNSUPPORTED_FLOW", `compiledScenarioFrom: node '${id}' 미지원 흐름(next/on/loop/fallback_chain/terminal 중 하나 필요)`);
     }
-    nodes[id] = { what, flow };
+    const verify = projectVerify(id, raw.verify);
+    nodes[id] = verify !== undefined ? { what, flow, verify } : { what, flow };
   }
   return { start: ir.start, nodes };
 }

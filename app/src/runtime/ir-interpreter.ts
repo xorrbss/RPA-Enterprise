@@ -19,7 +19,7 @@
  *     InterpreterError로 표면화한다("조용한 false/unknown 금지").
  */
 import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
-import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus } from "../../../ts/core-types";
+import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus, VerifyResult } from "../../../ts/core-types";
 import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 import { evaluateCondition, selectOnBranch, type CompiledOnBranch } from "./flow-control";
 import { mergeExtractOutputs, type ExtractResultPage, type MergedExtractResult } from "./extract-result-merge";
@@ -66,9 +66,16 @@ export type NodeFlow =
   | { readonly kind: "reserved_handler"; readonly handler: "@challenge" | "@human_task"; readonly input: Record<string, unknown>; readonly returnNode: string };
 
 /** 인터프리터가 순회하는 노드. what 은 ExecutorPlugin.execute가 받는 액션(형 검증은 실행기 책임). */
+export interface NodeVerify {
+  /** verify.schema criteria[]. executor.verify 가 criterion 타입 권위(unknown 통과 — what 과 동일 패턴). */
+  readonly criteria: readonly unknown[];
+}
+
 export interface ScenarioNode {
   readonly what: readonly unknown[];
   readonly flow: NodeFlow;
+  /** P0b: node.verify 투영. 미지정 시 verify 미실행(기존 동작 보존). 실패 시 loud fail terminal(self-heal 재시도는 후속 슬라이스). */
+  readonly verify?: NodeVerify;
 }
 
 export interface CompiledScenario {
@@ -241,6 +248,28 @@ function parseHumanTaskInput(
  * startNode 부터 terminal 까지 순회하며 terminal 문자열을 반환한다(가변 state 공유, ctx 원본 불변).
  * fallback 티어는 본 함수를 재귀 호출(sub-traversal)해 같은 state(nodeScope/loopState/budget) 위에서 실행한다.
  */
+async function runNodeVerify(state: TraversalState, criteria: readonly unknown[], ctx: RunContext): Promise<VerifyResult> {
+  // P0b: node.verify criteria[] 를 결정형 executor.verify 로 평가. 첫 non-pass 의 VerifyResult 반환, 전부 pass 면 pass.
+  //   각 호출은 §E verify.run span 으로 래핑. 미지원 criterion 은 executor.verify 가 loud throw(조용한 통과 금지).
+  let last: VerifyResult = { status: "pass", confidence: 1, failedCriteria: [], evidenceRefs: [], recommendation: "continue" };
+  for (const criterion of criteria) {
+    const vr = await withSpan(
+      SPAN.verifyRun,
+      spanCommonFromContext(ctx),
+      { node_id: ctx.nodeId },
+      async (span) => {
+        const r = await state.deps.executor.verify(criterion, ctx);
+        span.setAttribute("status", r.status);
+        span.setAttribute("recommendation", r.recommendation);
+        return r;
+      },
+    );
+    if (vr.status !== "pass") return vr;
+    last = vr;
+  }
+  return last;
+}
+
 async function traverse(state: TraversalState, startNode: string, initialCtx: RunContext, currentTier?: string): Promise<string> {
   // currentTier: 이 순회가 fallback 티어 sub-traversal 일 때 그 티어(T0..T3). 실행 노드 출력에 tier 부착(ir-expression §2,
   // node.<id>.tier 참조 가능 — 같은 티어 서브그래프 내 노드가 어느 티어로 실행 중인지 분기 가능). 최상위(non-fallback)는 undefined.
@@ -326,6 +355,13 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       const out = projectNodeOutput(lastResult);
       // fallback 티어 sub-traversal(currentTier 있음)이면 노드 출력에 tier 부착(ir-expression §2 tier 투영).
       state.nodeScope[nodeId] = currentTier !== undefined ? { ...out, tier: currentTier } : out;
+    }
+
+    // 1b) P0b: node.verify 결정형 검증(what 성공 후, 흐름 전 — verify-every-iteration). 미지정 노드는 스킵(기존 동작 보존).
+    //   실패 → loud fail_business terminal(조용한 통과 금지). self-heal(markSuspect+재시도)은 후속 슬라이스.
+    if (node.verify !== undefined) {
+      const verdict = await runNodeVerify(state, node.verify.criteria, ctx);
+      if (verdict.status !== "pass") return "fail_business";
     }
 
     // 2) 흐름 전이.
