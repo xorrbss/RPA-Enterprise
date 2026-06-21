@@ -27,7 +27,8 @@ import { parseGenerationRequest, parseGenerationRunRequest, parseGenerationStatu
 import { DEFAULT_PAGINATION_MAX_PAGES, MAX_AUTO_PAGINATION_PAGES, recordingPolicy, type RecordingPolicy } from "./scenario-generation-policy";
 import { finalizeDraftIrEvidence, looksLikeSideEffectPrompt, paginationPlan, scenarioPlannerFor } from "./scenario-generation-planner";
 import { inferRuntimeTargetForRequest } from "./scenario-generation-target";
-import { encodeListCursor, loadGenerationForRun, loadScenarioVersionIrForRun, mapGenerationRow, persistGeneration, persistGenerationRun, type ScenarioGenerationRow, upsertFailedGenerationLedger } from "./scenario-generation-store";
+import { encodeListCursor, loadGenerationForRun, loadScenarioVersionIrForRun, mapGenerationRow, persistGeneration, persistGenerationRun, type ScenarioGenerationRow } from "./scenario-generation-store";
+import { upsertFailedGenerationLedger } from "./scenario-generation-failed-ledger";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 import type {
   EvidencePolicy,
