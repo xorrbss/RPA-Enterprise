@@ -67,7 +67,7 @@ import { UtilityExecutor } from "../executor/utility-executor";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../executor/site-page-state-config";
 import { gateBrowserSessionProvider, type BrowserSessionProvider } from "../executor/browser-session-provider";
-import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "../runtime/executor-completion-coordinator";
+import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "../runtime/executor-ports";
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import type { ExecutorPlugin } from "../../../ts/core-types";
 

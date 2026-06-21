@@ -833,3 +833,24 @@
 | CRUD 엔드포인트 | `app/src/api/principals.ts`(신규)·`server.ts`·`api-surface.md §3`·`ts/control-plane-contract.ts`·`codegen/openapi.yaml` | `POST`(201, 중복 sub→422)·`PATCH /{principal_id}`(부분 갱신, email=null=제거, 미존재→404)·`DELETE /{principal_id}`(200). 전부 admin + Idempotency-Key 멱등(sites 동형, 전용 conflict 코드 미발명) |
 | web 관리 UI | `web/src/components/PrincipalDirectory.tsx`(신규)·`web/src/views/Security.tsx`·`web/src/api/client.ts` | Security 뷰에 담당자 디렉터리 패널(목록+등록 폼+인라인 수정+삭제). `principal.manage` 없으면 패널 숨김 |
 | 검증 | `app/test/api-principals.int.ts`(CRUD 18케이스)·`web/test/principals-admin.test.tsx` | create(201/중복 422/RBAC 403/형상 422)·patch(갱신/email 제거/empty 422/404/403)·멱등 재생·delete(200/404/403/cross-tenant)·web admin 패널 노출/등록 + 적대 break-it |
+
+## v2.29 패치 로그 (휴면 완료엔진 제거 — `executor-completion-coordinator`/`executor-step-orchestrator` 삭제)
+
+> [[v2.18]]이 "**두 run-완료 경로**(production `driveClaimedRun`(run-step-driver.ts) vs 휴면 `PgExecutorCompletionCoordinator`)
+> reconciliation은 미결 설계 결정으로 잔존"으로 남겼던 항목을 **휴면 경로 삭제로 종결**한다. `PgExecutorCompletionCoordinator`
+> (711줄)와 `PgExecutorStepOrchestrator`는 `new` 가 **테스트에서만** 일어나던 휴면 중복 완료엔진이었고(production 미배선),
+> run 완료 로직은 이미 `driveClaimedRun`/`driveScenario`(run-step-driver) + `workitem-settlement.ts`로 단일화돼 있었다.
+> **단순 삭제가 아니라 split**: 두 파일이 함께 보유하던 **production이 실제로 의존하는** 심볼만 분리·존치한다 —
+> 포트 `RuntimeJobEnqueuePort`/`ExecutorChallengeSuspensionPort`(run-step-driver·worker·run-queue·challenge-suspension-port가
+> 사용) → 신규 `executor-ports.ts`(인터페이스-only), 실패 StepResult 빌더 `executorFailureStepResult`(run-step-driver가 사용)
+> → 신규 `executor-failure-result.ts`. **관찰성 주(은폐 금지)**: `executor.execute` §E span 은 **삭제된 휴면 orchestrator만**
+> 발행하던 것으로, production step 실행(`ir-interpreter.ts`)은 span 래핑 없이 `executor.execute`를 호출한다 — 즉 이 span은
+> 애초에 production 미발행이었고(잠복 관찰성 갭, 이 제거가 **드러냄**·도입 아님), 별도 후속에서 ir-interpreter에 배선해야 한다.
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| 삭제 | `app/src/runtime/executor-completion-coordinator.ts`·`executor-step-orchestrator.ts` | 휴면 클래스(`PgExecutorCompletionCoordinator`/`PgExecutorStepOrchestrator`) + 그 전용 타입/헬퍼 제거(테스트 전용 `new`, production 미배선) |
+| 포트 분리 | `app/src/runtime/executor-ports.ts`(신규) | `RuntimeJobEnqueuePort`·`ExecutorChallengeSuspensionPort`(인터페이스-only). 임포터 재배선: run-step-driver·worker/runtime-worker·api/run-queue·challenge-suspension-port |
+| 헬퍼 분리 | `app/src/runtime/executor-failure-result.ts`(신규) | `executorFailureStepResult`(executor 플러그인 throw→분류→실패 StepResult). run-step-driver가 사용 |
+| 테스트 split | `app/test/executor-invocation-recorder.int.ts` | 휴면 coordinator/orchestrator 단언 제거, **live** `PgExecutorStepAttemptStore`·`PgExecutorInvocationRecorder` 단언(begin/record·RLS·dedup·secret-taint)만 존치 — 유일한 직접 recorder 커버리지 보존 |
+| 무회귀 | run-step-driver·runtime-worker-drive·suspend-drive·circuit·init-failure int + tsc·Contract Gates | production 완료 경로(driveClaimedRun) 커버리지는 6개 live int가 이미 보유 — 삭제로 손실 0 |

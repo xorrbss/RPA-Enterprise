@@ -9,7 +9,7 @@
 import type { PoolClient } from "pg";
 
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
-import type { RuntimeJobEnqueuePort } from "../runtime/executor-completion-coordinator";
+import type { RuntimeJobEnqueuePort } from "../runtime/executor-ports";
 import { runtimeJobTaskIdentifier } from "../worker/graphile-runner";
 
 export interface RunEnqueueInput {
