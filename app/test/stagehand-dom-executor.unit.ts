@@ -18,6 +18,11 @@ import {
   type ActionPlanCache,
   type LlmGatewayCaller,
 } from "../src/executor/stagehand-dom-executor";
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+import { bootstrapTracing } from "../src/observability/bootstrap";
+
+const spanExporter = new InMemorySpanExporter();
+bootstrapTracing(spanExporter);
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -637,6 +642,11 @@ async function main(): Promise<void> {
     const r = await new StagehandDomExecutor(g.gw, s.provider, cfg, c.cache).execute("s7", { type: "act", instruction: "click login" }, makeCtx());
     check("act cache hit: LLM NOT called, replayed click, mode=hit", g.calls() === 0 && r.cache.mode === "hit" && s.ops.includes("click:#login") && r.cache.actionPlanCacheId === undefined);
     check("act cache hit: auto-installs network JSON capture before replay", s.evals.some((expr) => expr.includes("__RPA_NETWORK_CAPTURE_INSTALLED__")));
+    const lookupModes = spanExporter
+      .getFinishedSpans()
+      .filter((sp) => sp.name === "action_plan_cache.lookup")
+      .map((sp) => sp.attributes["cache.mode"]);
+    check("§E action_plan_cache.lookup span attr cache.mode 기록(miss+hit, #8)", lookupModes.includes("miss") && lookupModes.includes("hit"), JSON.stringify(lookupModes));
   }
 
   // P0a+ self-heal: 캐시 HIT plan 적용 실패 → markSuspect 강등 + 조용한 성공 금지(원 예외 전파, 다음 run 재해석)

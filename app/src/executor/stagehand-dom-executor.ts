@@ -231,8 +231,13 @@ export class StagehandDomExecutor implements ExecutorPlugin {
 
     if (this.cache) {
       const cache = this.cache;
-      plan = await withSpan(SPAN.actionPlanCacheLookup, spanCommonFromContext(ctx), {}, () => cache.get(cacheKey));
-      cacheMode = plan ? "hit" : "miss";
+      plan = await withSpan(SPAN.actionPlanCacheLookup, spanCommonFromContext(ctx), {}, async (span) => {
+        const found = await cache.get(cacheKey);
+        // §E 필수 속성 cache.mode(hit/miss) — span 에 기록(impl-contracts-bundle.md §E action_plan_cache.lookup).
+        cacheMode = found ? "hit" : "miss";
+        span.setAttribute("cache.mode", cacheMode);
+        return found;
+      });
     }
 
     let fromLlm = false;
