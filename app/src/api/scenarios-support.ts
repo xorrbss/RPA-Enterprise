@@ -3,6 +3,8 @@
  * If-Match/version 파싱·IR 클론·에러 본문·레코드 가드. registerScenarioRoutes(scenarios.ts)가 소비한다.
  * (api-surface §2 / 분해 전 scenarios.ts 내부 헬퍼를 sibling 로 추출 — CLAUDE.md #7.)
  */
+import { randomUUID } from "node:crypto";
+
 import type { FastifyRequest } from "fastify";
 
 import { isApiErrorResponse, toApiError } from "../../../codegen/error-middleware";
@@ -18,6 +20,8 @@ import { compileScenario } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { requirePrincipal, type ApiServerDeps } from "./server";
+import { promoteActsToDeterministic } from "./scenario-promotion";
+import { loadRunActionPlans } from "./scenario-promotion-store";
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -150,6 +154,139 @@ export async function promoteScenario(
 
       const body = { scenario_id: scenarioId, version: row.version, promotion_status: target };
       const commandResponse: CommandResponse = { status: 200, body };
+      await completeIdempotencyInTx(c, recordId, commandResponse);
+      return commandResponse;
+    });
+    return response;
+  } catch (err) {
+    if (err instanceof ApiResponseError && !ERROR_CATALOG[err.code].retryable) {
+      await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+    }
+    throw err;
+  }
+}
+
+/**
+ * PbD 승격 ③ — 성공 run 의 결정형 ActionPlan 을 시나리오의 새 draft 버전으로 승격한다(slice1 transform + slice2 read 결합).
+ * 흐름: run(completed, 이 시나리오 소속) 검증 → source 버전 IR + loadRunActionPlans(run) → promoteActsToDeterministic
+ * (click→act.args.click_selector) → cloneIrWithVersion(meta) → compileScenario → scenario_versions(draft, 다음 버전) INSERT.
+ * 승격할 click plan 이 0 이면 no-op 버전을 만들지 않고 loud 거부("조용한 false 금지"). 멱등(Idempotency-Key), RBAC scenario.promote.
+ */
+export async function promoteScenarioFromRun(
+  deps: ApiServerDeps,
+  scenarioId: string,
+  request: FastifyRequest,
+): Promise<CommandResponse> {
+  const principal = requirePrincipal(request);
+  if (!UUID_RE.test(scenarioId)) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  }
+  // body: { run_id } closed shape.
+  const body = isRecord(request.body) ? request.body : undefined;
+  const runId = body !== undefined && typeof body.run_id === "string" ? body.run_id : undefined;
+  if (body === undefined || runId === undefined || !UUID_RE.test(runId) || Object.keys(body).some((k) => k !== "run_id")) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_promote_from_run_request" });
+  }
+  const idempotencyKey = request.headers["idempotency-key"];
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "missing_idempotency_key", header: "Idempotency-Key" });
+  }
+  const signedCommandRefs = await signedCommandRefsFor(deps, principal, "scenario.promote");
+
+  const requestHash = canonicalRequestHash("POST", `/v1/scenarios/${scenarioId}/promote-from-run`, request.body ?? null);
+  const reservation = await deps.idempotency.reserve({
+    tenantId: principal.tenantId,
+    endpoint: "promoteScenarioFromRun",
+    key: idempotencyKey as IdempotencyKey,
+    requestHash: requestHash as CanonicalRequestHash,
+    expiresAt: new Date(Date.now() + IDEMPOTENCY_TTL_MS).toISOString(),
+  });
+  if (reservation.kind === "replay") {
+    return { status: reservation.response.status, body: reservation.response.body };
+  }
+  if (reservation.kind === "in_flight") {
+    throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", { reason: "idempotency_in_flight" });
+  }
+  if (reservation.kind === "blocked") {
+    throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "idempotency_request_hash_mismatch" });
+  }
+
+  const recordId = reservation.recordId;
+  try {
+    const response = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+      // 1) run 로드 — 완료 + 이 시나리오 소속 검증(RLS 스코프). 부재/타시나리오/미완료는 loud 거부.
+      const runResult = await c.query<{ scenario_version_id: string; status: string; scenario_id: string; name: string }>(
+        `SELECT r.scenario_version_id, r.status, sv.scenario_id, s.name
+           FROM runs r
+           JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
+           JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
+          WHERE r.id = $1::uuid AND s.archived_at IS NULL`,
+        [runId],
+      );
+      const runRow = runResult.rows[0];
+      if (runRow === undefined) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      if (runRow.scenario_id !== scenarioId) {
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "run_not_for_scenario" });
+      }
+      if (runRow.status !== "completed") {
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "run_not_completed", status: runRow.status });
+      }
+      // 2) source 버전 IR.
+      const sourceResult = await c.query<{ ir: unknown }>(
+        `SELECT ir FROM scenario_versions WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+        [principal.tenantId, runRow.scenario_version_id],
+      );
+      const sourceRow = sourceResult.rows[0];
+      if (sourceRow === undefined || !isRecord(sourceRow.ir)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      // 3) 캡처 plan → 결정형 transform(click-only).
+      const plans = await loadRunActionPlans(c, runId);
+      const promotion = promoteActsToDeterministic(sourceRow.ir, plans);
+      if (promotion.promotedNodeIds.length === 0) {
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "no_click_plans_to_promote" });
+      }
+      // 4) 다음 버전 번호 + meta(name/version) 세팅.
+      const currentVersion = await c.query<{ version: number }>(
+        `SELECT version FROM scenario_versions WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid ORDER BY version DESC LIMIT 1`,
+        [principal.tenantId, scenarioId],
+      );
+      const nextVersion = (currentVersion.rows[0]?.version ?? 0) + 1;
+      const versionedIr = cloneIrWithVersion(promotion.ir, runRow.name, nextVersion);
+      // 5) compile 검증(저장 전).
+      const outcome = compileScenario(versionedIr, { signedCommandRefs });
+      if (!outcome.ok) {
+        throw new ApiResponseError(outcome.code, outcome.details);
+      }
+      // 6) 새 draft 버전 INSERT(자동 prod 승격 아님 — 운영자가 별도 promote).
+      const newVersionId = randomUUID();
+      await c.query(
+        `INSERT INTO scenario_versions
+           (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast, params_schema)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)`,
+        [
+          newVersionId,
+          principal.tenantId,
+          scenarioId,
+          nextVersion,
+          JSON.stringify(outcome.ir),
+          outcome.compiledAst,
+          outcome.ir.params_schema !== undefined ? JSON.stringify(outcome.ir.params_schema) : null,
+        ],
+      );
+      const commandResponse: CommandResponse = {
+        status: 201,
+        body: {
+          scenario_id: scenarioId,
+          version: nextVersion,
+          scenario_version_id: newVersionId,
+          promotion_status: "draft",
+          promoted_node_ids: promotion.promotedNodeIds,
+          skipped: promotion.skipped,
+        },
+      };
       await completeIdempotencyInTx(c, recordId, commandResponse);
       return commandResponse;
     });
