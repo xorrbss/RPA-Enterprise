@@ -617,6 +617,52 @@ D8-A16. LLM Gateway deployment topology + secret-sourcing for the production com
    topology + secret-sourcing named (this decision); the gateway assembly lands in `app/src/main.ts` +
    `app/src/config/env.ts` (`loadGatewayConfig`).
 
+## Audit Decisions (2026-06-22, concurrency / lease adversarial audit)
+
+These record the two confirmed findings of the concurrency/lease/idempotency cluster
+adversarial audit (18 candidates → 2 confirmed / 16 refuted; the 16 were correctly
+latent — their consumers, the D6 sink/raw-ingest pipeline, are not production-wired).
+They are repo-controlled scope/deferral decisions, not external-fact claims.
+
+AUD-1. Credential concurrency cap (credential_leases acquire + max_concurrency) deferred
+   Decision: the contract defines credential-slot leasing
+   (`credential_concurrency_policies.max_concurrency`, `credential_leases.slot_no`, the
+   conditional-upsert acquire pattern commented in `migration_concurrency_idempotency.sql`
+   #6) but the runtime only **expires** stale credential leases via the sweeper; **acquire +
+   SESSION_LOCKED defer is not built**. It is deferred — not built as a no-op — because its
+   protected resource (credential `fill`) is **not production-wired**: `ctx.assetRefs` is
+   injected only by the dev entrypoint (`app/dev/run-loop.ts` `deriveAssetRefs(meta.assets)`),
+   never by the production worker (`main-worker.ts` → `PgRuntimeWorker`; `loadRunDriveInputs`
+   leaves `assetRefs` empty). A production run that hits a `secretRef` fill therefore throws
+   `IR_SCHEMA_INVALID "asset key not bound"` at `stagehand-dom-executor.resolveSecretForFill`
+   — no concurrent real-credential usage exists to cap. This is consistent with prod
+   credential fill being gated on Vault/SecretStore prod provisioning (owner task). Rationale:
+   leasing the run's SecretRefs would acquire **zero** leases while `assetRefs` is empty —
+   building the cap now is YAGNI ahead of an unwired consumer (the same posture as D6-2).
+   Build-condition (paired): (1) wire production `assetRefs` injection into `PgRuntimeWorker`
+   (reuse `deriveAssetRefs`), (2) Vault prod provisioning so `fill` actually runs; then add
+   credential-lease acquire at the claim gate (after browser-lease acquire), keyed
+   `(SecretRef, site_profile_id)`, with SESSION_LOCKED defer (browser-lease-isomorphic) and
+   release at terminal settlement. Owner = project owner. Impact if wrong: none for v1 (no
+   prod credential fill executes); the cap lands with the fill wiring.
+
+AUD-2. Lease sweeper teardown scope: own-worker sessions (cross-worker = container reclaim)
+   Decision (implemented): `handleLeaseSweeper` now honors the `migration #7` sweeper
+   contract's "RETURNING → process kill + cleanup (idempotent)" by collecting expired
+   `browser_leases` (RETURNING) and, outside the DB tx, tearing down the live session
+   (`drainAbort`: Chrome close + isolated download-dir removal) for leases **this worker
+   bound** (run-linked `active`, `owner_worker_id == workerId`). `drainAbort` no-ops
+   (`transient_failed`) for leases not in this worker's in-process registry. Scope clarified:
+   a sweeping worker can only kill processes it can reach (its own host); a **dead other
+   worker's** Chrome is on a different host and is reclaimed by **that worker's container
+   teardown**, not the sweeper — the sweeper still DB-expires those rows (slot accounting
+   freed). Rationale: the migration comment's "kill process" is single-host/own-worker
+   reachable; multi-host OS reclamation is a deployment-model (container) responsibility, not
+   a cross-host RPC the sweeper can perform. Impact if wrong: a long-lived worker that lapses
+   its own lease (failed renewal while alive) previously leaked a Chrome process + download
+   dir until restart — now reclaimed at sweep; cross-worker behavior unchanged (was, and
+   remains, container-reclaimed).
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is

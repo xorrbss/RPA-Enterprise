@@ -22,6 +22,7 @@ import type {
   LeaseCleanupPolicy,
   LeaseIsolation,
   RunAbortDrainer,
+  RunAbortDrainInput,
   ResumeTokenCodec,
   RuntimeJobResult,
   RuntimeWorker,
@@ -42,6 +43,9 @@ import type { BrowserSessionProvider } from "../executor/browser-session-provide
 import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "../runtime/executor-ports";
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import type { ExecutorPlugin } from "../../../ts/core-types";
+
+/** 만료 lease 세션 teardown 대기(ops-defaults run.abort_timeout 30s 동형 — close 미완 시 timeout 처리). */
+const DEFAULT_LEASE_SWEEP_TEARDOWN_TIMEOUT_MS = 30_000;
 
 export interface BrowserLeasePlan {
   readonly siteProfileId: string;
@@ -242,15 +246,19 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
   private async handleLeaseSweeper(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
     const tenantId = requireString(job.tenantId, "lease_sweeper.tenantId");
-    await withTenantTx(this.pool, tenantId, async (client) => {
-      await client.query(
+    const expiredBrowser = await withTenantTx(this.pool, tenantId, async (client) => {
+      // migration #7 sweeper 계약: UPDATE ... RETURNING * → 반환 row 의 프로세스 kill + cleanup(idempotent). RETURNING 으로
+      //   만료된 browser_lease 를 수집해 tx 밖에서 세션 teardown 한다(아래).
+      const r = await client.query<{ id: string; run_id: string | null; owner_worker_id: string }>(
         `UPDATE browser_leases
             SET state = 'expired'
           WHERE tenant_id = $1::uuid
             AND state IN ('reserved','active')
-            AND expires_at < now()`,
+            AND expires_at < now()
+        RETURNING id::text AS id, run_id::text AS run_id, owner_worker_id::text AS owner_worker_id`,
         [tenantId],
       );
+      // credential_leases 는 OS 자원 없는 DB slot — 만료만(teardown 불요).
       await client.query(
         `UPDATE credential_leases
             SET status = 'expired'
@@ -259,7 +267,37 @@ export class PgRuntimeWorker implements RuntimeWorker {
             AND locked_until < now()`,
         [tenantId],
       );
+      return r.rows;
     });
+
+    // XRT-1: 만료 browser_lease 의 라이브 세션 teardown(프로세스 close + 격리 다운로드 디렉토리 제거) — migration #7 sweeper
+    //   계약의 'kill + cleanup'. drainAbort 는 leaseId 로 **이 워커가 bind 한 세션만** teardown 하고, 미바운드(타 워커 소유·
+    //   이미 release)면 no-op(transient_failed). 따라서 OS 자원 회수는 자기 워커가 연 세션으로 한정되며, 죽은 타 워커의
+    //   프로세스는 다른 호스트라 sweeper 가 직접 kill 불가 → 그 워커의 컨테이너 teardown 이 회수한다(DB 만료는 위에서 완료).
+    //   DB tx 밖에서 수행(브라우저 I/O 가 DB 커넥션 점유 금지). best-effort·idempotent — 실패는 잡을 깨지 않게 흡수(loud).
+    const drainer = this.options.runAbortDrainer;
+    const workerId = this.options.workerId;
+    if (drainer !== undefined && workerId !== undefined) {
+      const timeoutMs = this.options.runAbortTimeoutMs ?? DEFAULT_LEASE_SWEEP_TEARDOWN_TIMEOUT_MS;
+      for (const lease of expiredBrowser) {
+        // 자기 워커 + run 연결(active) lease 만 — reserved(run_id NULL)는 bind 전이라 세션 없음.
+        if (lease.owner_worker_id !== workerId || lease.run_id === null) continue;
+        await drainer
+          .drainAbort({
+            tenantId,
+            runId: lease.run_id,
+            leaseId: lease.id,
+            workerId,
+            correlationId: job.correlationId ?? tenantId,
+            timeoutMs,
+          } as RunAbortDrainInput)
+          .catch((e: unknown) =>
+            console.error(
+              `runtime-worker: lease_sweeper 세션 teardown 실패(lease ${lease.id.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`,
+            ),
+          );
+      }
+    }
     return { kind: "completed", emittedEvents: [] };
   }
 
