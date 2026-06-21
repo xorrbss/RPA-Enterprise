@@ -16,6 +16,7 @@ import type {
 } from "../../../ts/runtime-contract";
 import { withTenantTx } from "../db/pool";
 import { applyRunTransition } from "../runtime/run-transition";
+import { unpauseLinkedWorkitemForRunAbort } from "../runtime/workitem-settlement";
 import { isOnlyAbortLeasePending } from "./runtime-worker-parse";
 
 export interface BrowserLeaseRenewInput {
@@ -240,6 +241,10 @@ export async function finalizeRunAbort(
     if (!isOnlyAbortLeasePending(transition.pending, input.event)) {
       throw new Error("RuntimeWorker: run_abort finalization produced unsupported pending side effects");
     }
+
+    // #7 회귀 보수: suspended/resume_requested/resuming → abort 면 W9-paused workitem 이 W11 없이 영구 paused 잔류
+    //   → checkout sweeper 영영 스킵(누수). abort 종결 tx 에서 un-pause + 즉시만료로 sweeper(W6/W7) 자가회수에 위임.
+    await unpauseLinkedWorkitemForRunAbort(client, { tenantId, runId });
 
     if (input.leaseId !== undefined && input.workerId !== undefined) {
       await expireAbortBrowserLease(client, {

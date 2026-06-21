@@ -317,11 +317,15 @@ export class WorkerRunResume {
         `runtime-worker: resume INIT 셋업 실패(run ${runId.slice(0, 8)}) — ${initErr instanceof Error ? initErr.message : String(initErr)}`,
       );
       // run 은 R18로 이미 running — 좌초 방지로 R8(running→failed_system) 종결 + 연결 workitem system 정산.
-      await terminalizeStuckRunAsSystemFailure(driveRun, this.pool);
-      // worker 서킷: per-worker 연속 INIT 실패 누적(claim 과 대칭). best-effort(별도 tx)라 실패는 흡수(loud).
-      await this.runSupport.recordWorkerInitFailure(workerId).catch((e) =>
-        console.error(`runtime-worker: resume worker 서킷 실패기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
-      );
+      const terminalized = await terminalizeStuckRunAsSystemFailure(driveRun, this.pool);
+      // worker 서킷: per-worker 연속 INIT 실패 누적(claim 과 대칭). **B1**: terminalize=false(run 이 이미 aborting/
+      //   cancelled 등 — 취소·경합 패배는 이 워커의 INIT 실패 아님)면 카운터 미증가 → spurious open(과잉격리) 방지.
+      //   best-effort(별도 tx)라 기록 실패는 잡을 깨지 않게 흡수(loud).
+      if (terminalized) {
+        await this.runSupport.recordWorkerInitFailure(workerId).catch((e) =>
+          console.error(`runtime-worker: resume worker 서킷 실패기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+        );
+      }
       return result;
     }
     // INIT 성공 → per-worker 연속 실패 카운터 reset + (open 이었으면)회로 닫힘(claim 과 대칭).
