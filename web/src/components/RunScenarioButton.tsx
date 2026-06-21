@@ -109,7 +109,7 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
 
   return (
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-      <button className="btn" type="button" onClick={() => { setMsg(null); setOpen((v) => !v); }} disabled={run.isPending}>
+      <button className="btn primary" type="button" onClick={() => { setMsg(null); setOpen((v) => !v); }} disabled={run.isPending}>
         실행
       </button>
       {/* 패널 닫힌 뒤(성공) 보이는 배지. 에러 시엔 패널이 열린 채라 아래(패널 안)에서 표시한다. */}
