@@ -9,51 +9,30 @@
  */
 import { resolve } from "node:path";
 
+import {
+  assertHttpsUrl,
+  bool,
+  loadVaultIdentity,
+  num,
+  opt,
+  positiveInt,
+  req,
+  reqHttpsUrl,
+  strictBool,
+  type VaultIdentityConfig,
+} from "./env-primitives";
+import { loadArtifactLifecycleWorkerConfig } from "./env-artifact-lifecycle";
+
+export { loadArtifactLifecycleWorkerConfig };
+export type {
+  ArtifactLifecycleLocalObjectStoreConfig,
+  ArtifactLifecycleObjectStoreConfig,
+  ArtifactLifecycleObjectStoreMode,
+  ArtifactLifecycleS3ObjectStoreConfig,
+  ArtifactLifecycleWorkerConfig,
+} from "./env-artifact-lifecycle";
+
 export type RunMode = "api" | "worker" | "lifecycle-worker" | "all";
-
-function req(name: string): string {
-  const v = process.env[name];
-  if (v === undefined || v.trim() === "") {
-    throw new Error(`missing required env ${name} (fail-closed config ??refusing to start)`);
-  }
-  return v.trim();
-}
-
-function opt(name: string): string | undefined {
-  const v = process.env[name];
-  return v === undefined || v.trim() === "" ? undefined : v.trim();
-}
-
-function num(name: string, dflt: number): number {
-  const v = opt(name);
-  if (v === undefined) return dflt;
-  const n = Number(v);
-  if (!Number.isFinite(n)) throw new Error(`env ${name} must be a finite number, got ${JSON.stringify(v)}`);
-  return n;
-}
-
-function positiveInt(name: string, dflt: number): number {
-  const value = num(name, dflt);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`env ${name} must be a positive integer, got ${value}`);
-  }
-  return value;
-}
-
-function bool(name: string, dflt: boolean): boolean {
-  const v = opt(name);
-  if (v === undefined) return dflt;
-  return v.toLowerCase() !== "false";
-}
-
-function strictBool(name: string, dflt: boolean): boolean {
-  const v = opt(name);
-  if (v === undefined) return dflt;
-  const normalized = v.toLowerCase();
-  if (normalized === "true") return true;
-  if (normalized === "false") return false;
-  throw new Error(`env ${name} must be true|false, got ${JSON.stringify(v)}`);
-}
 
 export function loadRunMode(): RunMode {
   const m = (opt("RUN_MODE") ?? "all").toLowerCase();
@@ -253,22 +232,6 @@ function resolveApiArtifactDir(): string | undefined {
   return apiArtifactDir ?? gatewayArtifactDir;
 }
 
-export interface VaultIdentityConfig {
-  readonly addr: string;
-  readonly mount: string;
-  readonly roleId: string;
-  readonly secretId: string;
-}
-
-function loadVaultIdentity(prefix: string): VaultIdentityConfig {
-  return {
-    addr: req("VAULT_ADDR"),
-    mount: opt("VAULT_MOUNT") ?? "secret",
-    roleId: req(`VAULT_${prefix}_ROLE_ID`),
-    secretId: req(`VAULT_${prefix}_SECRET_ID`),
-  };
-}
-
 export type ArtifactObjectStoreConfig =
   | { readonly kind: "fs" }
   | {
@@ -366,67 +329,6 @@ function csvUuidList(name: string): string[] {
   return values;
 }
 
-export type ArtifactLifecycleObjectStoreMode = "s3" | "local_fs";
-
-export interface ArtifactLifecycleS3ObjectStoreConfig {
-  readonly mode: "s3";
-  readonly endpoint: string;
-  readonly region: string;
-  readonly bucket: string;
-  readonly accessKeyId: string;
-  /** SecretRef for the S3-compatible secret access key. The PlainSecret value is resolved only in main.ts. */
-  readonly secretAccessKeyRef: string;
-  /** Non-secret object-store backend alias used in lifecycle evidence. */
-  readonly backendAlias: string;
-  readonly forcePathStyle: boolean;
-}
-
-export interface ArtifactLifecycleLocalObjectStoreConfig {
-  readonly mode: "local_fs";
-  /** Shared artifact object root used by the producer and local lifecycle worker. */
-  readonly artifactDir: string;
-  /** SecretRef identifier for the local artifact-lifecycle object_store port binding evidence. */
-  readonly credentialRef: string;
-  /** Non-secret object-store backend alias used in lifecycle evidence. */
-  readonly backendAlias: string;
-}
-
-export type ArtifactLifecycleObjectStoreConfig =
-  | ArtifactLifecycleS3ObjectStoreConfig
-  | ArtifactLifecycleLocalObjectStoreConfig;
-
-export interface ArtifactLifecycleWorkerConfig {
-  /** Dedicated BYPASSRLS operational connection string. Do not reuse API/runtime-worker credentials here. */
-  readonly connectionString: string;
-  /** Stable workers.id for artifact lifecycle CAS claim ownership. Should be a sweeper worker row. */
-  readonly workerId: string;
-  /** AppRole identity for artifact-lifecycle object_store SecretRef resolution. Required for S3-compatible mode. */
-  readonly vaultArtifactLifecycle?: VaultIdentityConfig;
-  readonly objectStore: ArtifactLifecycleObjectStoreConfig;
-  readonly artifactRetentionDays: number;
-  readonly graphileSchema?: string;
-  readonly graphileConcurrency: number;
-  readonly graphilePollIntervalMs: number;
-}
-
-export function loadArtifactLifecycleWorkerConfig(): ArtifactLifecycleWorkerConfig {
-  const objectStore = loadArtifactLifecycleObjectStoreConfig();
-  const artifactRetentionDays = num("GATEWAY_ARTIFACT_RETENTION_DAYS", 90);
-  if (!Number.isInteger(artifactRetentionDays) || artifactRetentionDays <= 0) {
-    throw new Error(`GATEWAY_ARTIFACT_RETENTION_DAYS must be a positive integer, got ${artifactRetentionDays}`);
-  }
-  return {
-    connectionString: req("ARTIFACT_LIFECYCLE_DATABASE_URL"),
-    workerId: req("ARTIFACT_LIFECYCLE_WORKER_ID"),
-    ...(objectStore.mode === "s3" ? { vaultArtifactLifecycle: loadVaultIdentity("ARTIFACT_LIFECYCLE") } : {}),
-    objectStore,
-    artifactRetentionDays,
-    graphileSchema: opt("GRAPHILE_WORKER_SCHEMA"),
-    graphileConcurrency: num("ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY", num("GRAPHILE_CONCURRENCY", 1)),
-    graphilePollIntervalMs: num("ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS", num("GRAPHILE_POLL_INTERVAL_MS", 2000)),
-  };
-}
-
 export type ArtifactStoreTopology = "in_process" | "split_worker_lifecycle";
 
 export function assertArtifactStoreTopologyCompatibility(topology: ArtifactStoreTopology): void {
@@ -462,69 +364,6 @@ export function assertArtifactStoreStartupCompatibility(
   assertArtifactStoreTopologyCompatibility("in_process");
 }
 
-function loadArtifactLifecycleObjectStoreConfig(): ArtifactLifecycleObjectStoreConfig {
-  const mode = artifactLifecycleObjectStoreMode();
-  const credentialRef = reqArtifactObjectStoreRef("ARTIFACT_OBJECT_STORE_REF");
-  if (mode === "local_fs") {
-    assertArtifactLifecycleLocalModeAllowed();
-    return {
-      mode,
-      artifactDir: req("GATEWAY_ARTIFACT_DIR"),
-      credentialRef,
-      backendAlias: opt("ARTIFACT_OBJECT_STORE_BACKEND_ALIAS") ?? "fs-local",
-    };
-  }
-  return {
-    mode,
-    endpoint: reqHttpsUrl("ARTIFACT_OBJECT_STORE_S3_ENDPOINT"),
-    region: req("ARTIFACT_OBJECT_STORE_S3_REGION"),
-    bucket: req("ARTIFACT_OBJECT_STORE_S3_BUCKET"),
-    accessKeyId: req("ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID"),
-    secretAccessKeyRef: credentialRef,
-    backendAlias: opt("ARTIFACT_OBJECT_STORE_BACKEND_ALIAS") ?? "s3-compatible",
-    forcePathStyle: strictBool("ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE", true),
-  };
-}
-
-function artifactLifecycleObjectStoreMode(): ArtifactLifecycleObjectStoreMode {
-  const raw = opt("ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE") ?? "s3";
-  const normalized = raw.toLowerCase().replace(/-/g, "_");
-  if (normalized === "s3" || normalized === "s3_compatible") return "s3";
-  if (normalized === "local_fs") return "local_fs";
-  throw new Error(
-    `ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE must be one of s3|s3-compatible|local_fs, got ${JSON.stringify(raw)}`,
-  );
-}
-
-function reqArtifactObjectStoreRef(name: string): string {
-  const ref = req(name);
-  const parts = ref.split("/");
-  const rpaEnv = req("RPA_ENV").toLowerCase();
-  if (
-    parts.length < 5 ||
-    parts.some((part) => part.length === 0) ||
-    parts[0] !== "rpa" ||
-    parts[2] !== "artifact-lifecycle" ||
-    parts[3] !== "object_store"
-  ) {
-    throw new Error(
-      `env ${name} must be a SecretRef under rpa/<env>/artifact-lifecycle/object_store/<name>, got ${JSON.stringify(ref)}`,
-    );
-  }
-  if (parts[1] !== rpaEnv) {
-    throw new Error(
-      `env ${name} SecretRef env segment must match RPA_ENV=${JSON.stringify(rpaEnv)}, got ${JSON.stringify(parts[1])}`,
-    );
-  }
-  return ref;
-}
-
-function assertArtifactLifecycleLocalModeAllowed(): void {
-  const rpaEnv = req("RPA_ENV").toLowerCase();
-  if (rpaEnv !== "dev" && rpaEnv !== "local") {
-    throw new Error("ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE=local_fs is allowed only when RPA_ENV is dev|local");
-  }
-}
 
 /** API ?몄뀡 罹≪쿂 遊됲닾?뷀샇???ㅼ젙 ??api AppRole(Vault) + ?쒖꽦 KEK SecretRef. */
 export interface ApiSessionEncryptionConfig {
@@ -592,25 +431,6 @@ export function loadScenarioGenerationLlmV1Config(): ScenarioGenerationLlmV1Conf
  * (S3ObjectStore/VaultSecretStore). The Codex API key travels as a Bearer header, so plaintext http is
  * refused to prevent cleartext secret transmission.
  */
-/** Validate a given value is an absolute https URL (no localhost exception) ??cleartext refused for
- *  credentialed/key-bearing endpoints (S3/Vault store discipline; Codex Bearer key; JWKS key fetch). */
-function assertHttpsUrl(name: string, v: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(v);
-  } catch {
-    throw new Error(`env ${name} must be an absolute URL, got ${JSON.stringify(v)}`);
-  }
-  if (parsed.protocol !== "https:") {
-    throw new Error(`env ${name} must be an https URL (no plaintext), got protocol ${JSON.stringify(parsed.protocol)}`);
-  }
-  return v;
-}
-
-function reqHttpsUrl(name: string): string {
-  return assertHttpsUrl(name, req(name));
-}
-
 export function loadGatewayConfig(): GatewayConfig {
   const codexMaxContextTokens = num("CODEX_MAX_CONTEXT_TOKENS", 8192);
   if (!Number.isInteger(codexMaxContextTokens) || codexMaxContextTokens <= 0) {
