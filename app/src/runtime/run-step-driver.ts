@@ -48,7 +48,7 @@ import {
   visualEvidenceLifecycleEnqueuerRequired,
 } from "./run-step-driver-artifacts";
 import { compiledScenarioFrom } from "./ir-translate";
-import { runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
+import { InterpreterError, runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
 import { settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
 import { recordChallenge } from "../observability/telemetry";
 import type { MergedExtractArtifactSink } from "./merged-extract-artifact";
@@ -280,7 +280,13 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     let scenarioOutcome: ScenarioOutcome;
     try {
       scenarioOutcome = await runScenario(scenario, ctx, { executor, resolver: deps.resolver, params: run.params, startNode });
-    } catch {
+    } catch (scenarioErr) {
+      // 인터프리터 예외를 system 으로 흡수하되 조용히 묻지 않는다(조용한 false/unknown 금지 — system 은 loud 채널).
+      //   InterpreterError 면 code 도 표면화(터미널 분류·디버깅 신호 보존). 종결(running→failed_system)은 driveScenario 가 처리.
+      const code = scenarioErr instanceof InterpreterError ? `[${scenarioErr.code}] ` : "";
+      console.error(
+        `run-step-driver: 인터프리터 예외를 failed_system 으로 흡수(run ${run.runId.slice(0, 8)}) — ${code}${scenarioErr instanceof Error ? scenarioErr.message : String(scenarioErr)}`,
+      );
       scenarioOutcome = systemFailureOutcome();
     }
     scenarioOutcome = await appendMergedExtractArtifact(scenarioOutcome, deps.mergedExtractArtifactSink, run);
