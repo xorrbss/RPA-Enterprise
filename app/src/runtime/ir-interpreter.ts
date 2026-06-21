@@ -69,6 +69,10 @@ export type NodeFlow =
 export interface NodeVerify {
   /** verify.schema criteria[]. executor.verify 가 criterion 타입 권위(unknown 통과 — what 과 동일 패턴). */
   readonly criteria: readonly unknown[];
+  /** verify 실패 시 라우팅(verify.schema on_fail, 기본 self_heal). self_heal: markSuspect+노드 재실행(read-only 한정). */
+  readonly onFail: string;
+  /** self-heal 재실행 상한(nodePolicy.max_self_heal, 기본 2). 소진 시 loud fail. */
+  readonly maxSelfHeal: number;
 }
 
 export interface ScenarioNode {
@@ -291,77 +295,91 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
     state.visited.push(nodeId);
     ctx = { ...ctx, nodeId };
 
-    // 1) 결정형 what 액션 실행. 비-success는 terminal 실패로 매핑하거나 표면화.
+    // 1) 결정형 what 액션 실행 + (있으면) node.verify 검증. verify 실패 시 self-heal(markSuspect+노드 재실행) 또는 loud fail.
+    //    self-heal 은 read-only 노드만(쓰기 커밋 노드 재실행=double-commit 금지) + max_self_heal 한도 + budget 소비.
     let lastResult: StepResult | undefined;
-    for (let k = 0; k < node.what.length; k += 1) {
-      const stepId = `${nodeId}.${k}`;
-      // §E 필수 span: executor.execute(attr node_id/action/executor). 플러그인 실행을 래핑 — 예외는 withSpan 이
-      //   record+ERROR 로 표면화 후 재던져, 바깥 driveScenario(run-step-driver) 시스템-failsafe 가 흡수한다(throw 전파 보존).
-      const res = await withSpan(
-        SPAN.executorExecute,
-        spanCommonFromContext(ctx),
-        { node_id: nodeId, executor: executorCapabilityLabel(state.deps.executor.capabilities()) },
-        async (span) => {
-          const r = await state.deps.executor.execute(stepId, node.what[k], ctx);
-          span.setAttribute("action", r.action);
-          span.setAttribute("status", r.status);
-          return r;
-        },
-      );
-      state.steps.push({ nodeId, action: res.action, status: res.status });
-      state.artifacts.push(...res.artifacts);
-      lastResult = res;
-      if (res.status === "success") {
-        collectExtractPage(state, nodeId, stepId, res);
+    let selfHealCount = 0;
+    let execCtx = ctx; // 재시도 시 selfHealRetry=true + attempt bump(run_steps UNIQUE 충돌 회피); flow 는 원본 ctx 사용.
+    for (;;) {
+      lastResult = undefined;
+      let nodeCommittedSideEffect = false;
+      for (let k = 0; k < node.what.length; k += 1) {
+        const stepId = `${nodeId}.${k}`;
+        // §E 필수 span: executor.execute. 예외는 withSpan 이 record+ERROR 후 재던져 driveScenario system-failsafe 가 흡수.
+        const res = await withSpan(
+          SPAN.executorExecute,
+          spanCommonFromContext(execCtx),
+          { node_id: nodeId, executor: executorCapabilityLabel(state.deps.executor.capabilities()) },
+          async (span) => {
+            const r = await state.deps.executor.execute(stepId, node.what[k], execCtx);
+            span.setAttribute("action", r.action);
+            span.setAttribute("status", r.status);
+            return r;
+          },
+        );
+        state.steps.push({ nodeId, action: res.action, status: res.status });
+        state.artifacts.push(...res.artifacts);
+        lastResult = res;
+        if (res.status === "success") {
+          collectExtractPage(state, nodeId, stepId, res);
+          // 쓰기 커밋 추적 — self-heal 재실행 금지 판정(double-commit 안전): 비-read_only 커밋 노드는 재시도하지 않는다.
+          if (res.sideEffect?.committed === true && res.sideEffect.kind !== "read_only") nodeCommittedSideEffect = true;
+          continue;
+        }
+        // 실패 노드도 status 투영(ir-expression §2). fallback advance_when 이 실패 status 를 관측하므로 terminal 반환 전 기록.
+        const failOut = projectNodeOutput(res);
+        state.nodeScope[nodeId] = currentTier !== undefined ? { ...failOut, tier: currentTier } : failOut;
+        const term = failureTerminal(res.status);
+        if (term !== null) return term;
+        // suspend(트리거 i): status='suspended' → SuspendContext + "suspend" terminal. challengeKind 는 executor 신호(하드코딩 금지),
+        //   human-assist 가능군은 captcha|mfa 뿐 — 그 외는 계약 위반으로 표면화(조용한 captcha 폴백 금지).
+        if (res.status === "suspended") {
+          const detected = res.challenge?.type;
+          if (detected !== "captcha" && detected !== "mfa") {
+            throw new InterpreterError(
+              "EXECUTOR_STATUS_UNSUPPORTED",
+              `interpreter: step '${nodeId}.${k}' status='suspended' 인데 challenge.type='${detected ?? "none"}' (human-assist=captcha|mfa 아님)`,
+            );
+          }
+          state.suspendBox.current = {
+            kind: "challenge",
+            stepId: `${nodeId}.${k}`,
+            resumeNodeId: nodeId,
+            attempt: execCtx.attempt,
+            challengeKind: detected,
+            pageStateRef: res.pageStateAfter,
+            ...(res.exception !== undefined ? { exception: res.exception } : {}),
+          };
+          return "suspend";
+        }
+        throw new InterpreterError(
+          "EXECUTOR_STATUS_UNSUPPORTED",
+          `interpreter: step '${nodeId}.${k}' returned status '${res.status}' (challenge/uncertain/skipped 미지원)`,
+        );
+      }
+      if (lastResult !== undefined) {
+        const out = projectNodeOutput(lastResult);
+        state.nodeScope[nodeId] = currentTier !== undefined ? { ...out, tier: currentTier } : out;
+      }
+
+      // 1b) P0b: node.verify 결정형 검증(what 성공 후, 흐름 전 — verify-every-iteration). 미지정 노드는 스킵(기존 동작 보존).
+      if (node.verify === undefined) break;
+      const verdict = await runNodeVerify(state, node.verify.criteria, execCtx);
+      if (verdict.status === "pass") break;
+      // 검증 실패 → self-heal(on_fail=self_heal·read-only·budget·한도 내): markSuspect+노드 재실행(=cache miss→재해소).
+      //   쓰기 커밋 노드/한도 소진/비-self_heal → loud fail_business(조용한 통과 금지).
+      if (
+        node.verify.onFail === "self_heal" &&
+        !nodeCommittedSideEffect &&
+        selfHealCount < node.verify.maxSelfHeal &&
+        state.budget.remaining > 0
+      ) {
+        selfHealCount += 1;
+        state.budget.remaining -= 1;
+        execCtx = { ...ctx, selfHealRetry: true, attempt: ctx.attempt + selfHealCount };
         continue;
       }
-      // 실패 노드도 status 투영(ir-expression §2: failed_* 포함 모든 실행 노드의 status). fallback advance_when 이
-      //   `node.<entry>.status == "failed_system"`(실패 시 전환)처럼 실패 status 를 관측해야 하므로 terminal 반환 전 기록.
-      const failOut = projectNodeOutput(res);
-      state.nodeScope[nodeId] = currentTier !== undefined ? { ...failOut, tier: currentTier } : failOut;
-      const term = failureTerminal(res.status);
-      if (term !== null) return term;
-      // suspend(트리거 i): executor step 이 status='suspended' 반환 → SuspendContext 산출 후 "suspend" terminal 반환.
-      // driver 가 R4(running→suspending)+포트+R11 로 구동. challengeKind 는 executor 가 감지한 res.challenge.type 에서 온다
-      //   (하드코딩 금지). human-assist 가능군은 captcha|mfa 뿐(reserved-handlers @challenge) — block_page/rate_limit/...
-      //   는 suspend 대상이 아니므로, status='suspended' 인데 challenge.type 이 그 둘이 아니면 계약 위반으로 표면화한다
-      //   (조용한 captcha 폴백 금지 — 그래야 mfa 가 resolve.mfa 가 아닌 resolve.captcha 로 오라우팅되지 않는다).
-      // resumeNodeId=nodeId(같은 노드 재진입, 오너 결정). pageStateRef=res.pageStateAfter.
-      if (res.status === "suspended") {
-        const detected = res.challenge?.type;
-        if (detected !== "captcha" && detected !== "mfa") {
-          throw new InterpreterError(
-            "EXECUTOR_STATUS_UNSUPPORTED",
-            `interpreter: step '${nodeId}.${k}' status='suspended' 인데 challenge.type='${detected ?? "none"}' (human-assist=captcha|mfa 아님)`,
-          );
-        }
-        state.suspendBox.current = {
-          kind: "challenge",
-          stepId: `${nodeId}.${k}`,
-          resumeNodeId: nodeId,
-          attempt: ctx.attempt,
-          challengeKind: detected,
-          pageStateRef: res.pageStateAfter,
-          ...(res.exception !== undefined ? { exception: res.exception } : {}),
-        };
-        return "suspend";
-      }
-      throw new InterpreterError(
-        "EXECUTOR_STATUS_UNSUPPORTED",
-        `interpreter: step '${nodeId}.${k}' returned status '${res.status}' (challenge/uncertain/skipped 미지원)`,
-      );
-    }
-    if (lastResult !== undefined) {
-      const out = projectNodeOutput(lastResult);
-      // fallback 티어 sub-traversal(currentTier 있음)이면 노드 출력에 tier 부착(ir-expression §2 tier 투영).
-      state.nodeScope[nodeId] = currentTier !== undefined ? { ...out, tier: currentTier } : out;
-    }
-
-    // 1b) P0b: node.verify 결정형 검증(what 성공 후, 흐름 전 — verify-every-iteration). 미지정 노드는 스킵(기존 동작 보존).
-    //   실패 → loud fail_business terminal(조용한 통과 금지). self-heal(markSuspect+재시도)은 후속 슬라이스.
-    if (node.verify !== undefined) {
-      const verdict = await runNodeVerify(state, node.verify.criteria, ctx);
-      if (verdict.status !== "pass") return "fail_business";
+      return "fail_business";
     }
 
     // 2) 흐름 전이.

@@ -1,12 +1,16 @@
 /**
- * 단위 — P0b 슬라이스1: node.verify 결정형 실행 + fail-loud 라우팅 (인터프리터). 외부 의존 없음.
+ * 단위 — P0b: node.verify 결정형 실행 + self-heal 재시도 라우팅 (인터프리터). 외부 의존 없음.
  *
- * 검증: verify 전부 pass → 흐름 진행(terminal success); 첫 criterion fail_det → loud "fail_business"(조용한 통과 금지);
- * node.verify 미지정 → executor.verify 미호출(기존 동작 보존); criteria 다수면 첫 실패에서 중단(나머지 미평가).
- * self-heal(markSuspect+재시도)은 후속 슬라이스라 본 슬라이스는 재시도 없이 loud fail 만 검증. 실행: tsx test/interpreter-verify.unit.ts.
+ * 검증:
+ *  - verify 전부 pass → 흐름 진행(success), 재시도 없음.
+ *  - on_fail=self_heal + read-only + budget·max_self_heal 내: verify 실패 → 노드 재실행(execute 에 selfHealRetry 전파,
+ *    executeAct 가 markSuspect+재해소) → 재시도서 pass 면 success(자가복구); max_self_heal 소진 시 loud fail_business.
+ *  - ⚠쓰기 커밋(비-read_only sideEffect) 노드는 verify 실패해도 재실행 금지(double-commit 안전) → loud fail_business.
+ *  - on_fail≠self_heal(예 abort_security) → 재시도 없이 loud fail_business.
+ *  - node.verify 미지정 → executor.verify 미호출(기존 동작 보존). 실행: tsx test/interpreter-verify.unit.ts.
  */
 import type { ExecutorPlugin, PageState, RunContext, StepResult, VerifyResult } from "../../ts/core-types";
-import { runScenario, type CompiledScenario } from "../src/runtime/ir-interpreter";
+import { runScenario, type CompiledScenario, type NodeVerify } from "../src/runtime/ir-interpreter";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -34,7 +38,7 @@ function ctx(): RunContext {
   };
 }
 
-function stepResult(): StepResult {
+function baseStep(): StepResult {
   return {
     stepId: "s", action: "act", status: "success",
     pageStateBefore: "ps_before", pageStateAfter: "ps_after",
@@ -43,15 +47,19 @@ function stepResult(): StepResult {
 }
 
 const PASS: VerifyResult = { status: "pass", confidence: 1, failedCriteria: [], evidenceRefs: [], recommendation: "continue" };
-const FAIL: VerifyResult = { status: "fail_det", confidence: 1, failedCriteria: ["element_visible"], evidenceRefs: [], recommendation: "retry_same" };
+const FAIL: VerifyResult = { status: "fail_det", confidence: 1, failedCriteria: ["element_visible"], evidenceRefs: [], recommendation: "self_heal" };
 
-function executorWithVerify(verdicts: readonly VerifyResult[]) {
-  const calls = { verify: 0, execute: 0 };
+function mockExec(opts: { verdicts: readonly VerifyResult[]; sideEffect?: StepResult["sideEffect"] }) {
+  const calls = { execute: 0, verify: 0, retryExecutes: 0 };
   const exec: ExecutorPlugin = {
     capabilities: () => ({ dom: false, vision: false, utility: true }),
-    execute: async () => { calls.execute += 1; return stepResult(); },
+    execute: async (_stepId: string, _action: unknown, c: RunContext): Promise<StepResult> => {
+      calls.execute += 1;
+      if (c.selfHealRetry === true) calls.retryExecutes += 1;
+      return opts.sideEffect ? { ...baseStep(), sideEffect: opts.sideEffect } : baseStep();
+    },
     verify: async (): Promise<VerifyResult> => {
-      const v = verdicts[Math.min(calls.verify, verdicts.length - 1)] ?? PASS;
+      const v = opts.verdicts[Math.min(calls.verify, opts.verdicts.length - 1)] ?? PASS;
       calls.verify += 1;
       return v;
     },
@@ -59,7 +67,11 @@ function executorWithVerify(verdicts: readonly VerifyResult[]) {
   return { exec, calls };
 }
 
-function scenario(verify?: { criteria: readonly unknown[] }): CompiledScenario {
+function nv(onFail: string, maxSelfHeal: number): NodeVerify {
+  return { criteria: [{ type: "element_visible", target: { selector: "#ok" } }], onFail, maxSelfHeal };
+}
+
+function scenario(verify?: NodeVerify): CompiledScenario {
   return {
     start: "a",
     nodes: {
@@ -69,40 +81,49 @@ function scenario(verify?: { criteria: readonly unknown[] }): CompiledScenario {
   };
 }
 
-const oneCriterion = { criteria: [{ type: "element_visible", target: { selector: "#ok" } }] };
-const twoCriteria = { criteria: [{ type: "element_visible", target: { selector: "#a" } }, { type: "min_rows", selector: "#b", n: 1 }] };
-
 async function main(): Promise<void> {
-  // 1) verify pass → 흐름 진행(success), verify 1회 호출
+  // 1) verify pass → success, 재시도 없음
   {
-    const { exec, calls } = executorWithVerify([PASS]);
-    const o = await runScenario(scenario(oneCriterion), ctx(), { executor: exec, resolver: fakeResolver });
-    check("verify pass → terminal success", o.terminal === "success" && calls.verify === 1, JSON.stringify({ t: o.terminal, v: calls.verify }));
+    const { exec, calls } = mockExec({ verdicts: [PASS] });
+    const o = await runScenario(scenario(nv("self_heal", 2)), ctx(), { executor: exec, resolver: fakeResolver });
+    check("verify pass → success(재시도 없음)", o.terminal === "success" && calls.execute === 1 && calls.retryExecutes === 0, JSON.stringify({ t: o.terminal, ...calls }));
   }
-  // 2) verify fail_det → loud fail_business (재시도 없음)
+  // 2) fail→self_heal 재실행→pass→success (read-only 자가복구)
   {
-    const { exec, calls } = executorWithVerify([FAIL]);
-    const o = await runScenario(scenario(oneCriterion), ctx(), { executor: exec, resolver: fakeResolver });
-    check("verify fail_det → loud fail_business", o.terminal === "fail_business" && calls.verify === 1, JSON.stringify({ t: o.terminal, v: calls.verify }));
+    const { exec, calls } = mockExec({ verdicts: [FAIL, PASS] });
+    const o = await runScenario(scenario(nv("self_heal", 2)), ctx(), { executor: exec, resolver: fakeResolver });
+    check("verify fail→self_heal 재실행(selfHealRetry 전파)→pass→success", o.terminal === "success" && calls.execute === 2 && calls.retryExecutes === 1 && calls.verify === 2, JSON.stringify({ t: o.terminal, ...calls }));
   }
-  // 3) node.verify 미지정 → executor.verify 미호출(기존 동작 보존)
+  // 3) 계속 실패 + max_self_heal=1 → 소진 → loud fail_business
   {
-    const { exec, calls } = executorWithVerify([FAIL]);
+    const { exec, calls } = mockExec({ verdicts: [FAIL] });
+    const o = await runScenario(scenario(nv("self_heal", 1)), ctx(), { executor: exec, resolver: fakeResolver });
+    check("verify 계속 실패→max_self_heal(1) 소진→fail_business", o.terminal === "fail_business" && calls.execute === 2 && calls.retryExecutes === 1, JSON.stringify({ t: o.terminal, ...calls }));
+  }
+  // 4) ⚠쓰기 커밋 노드 → 재실행 금지(double-commit 안전) → fail_business
+  {
+    const { exec, calls } = mockExec({ verdicts: [FAIL, PASS], sideEffect: { kind: "submit", committed: true } });
+    const o = await runScenario(scenario(nv("self_heal", 2)), ctx(), { executor: exec, resolver: fakeResolver });
+    check("쓰기 커밋 노드 verify 실패→재실행 금지→fail_business", o.terminal === "fail_business" && calls.execute === 1 && calls.retryExecutes === 0, JSON.stringify({ t: o.terminal, ...calls }));
+  }
+  // 5) on_fail≠self_heal → 재시도 없이 fail_business
+  {
+    const { exec, calls } = mockExec({ verdicts: [FAIL, PASS] });
+    const o = await runScenario(scenario(nv("abort_security", 2)), ctx(), { executor: exec, resolver: fakeResolver });
+    check("on_fail=abort_security verify 실패→재시도 없이 fail_business", o.terminal === "fail_business" && calls.execute === 1 && calls.retryExecutes === 0, JSON.stringify({ t: o.terminal, ...calls }));
+  }
+  // 6) node.verify 미지정 → verify 미호출(기존 동작 보존)
+  {
+    const { exec, calls } = mockExec({ verdicts: [FAIL] });
     const o = await runScenario(scenario(undefined), ctx(), { executor: exec, resolver: fakeResolver });
-    check("no node.verify → verify 미호출, success", o.terminal === "success" && calls.verify === 0, JSON.stringify({ t: o.terminal, v: calls.verify }));
-  }
-  // 4) criteria 다수 — 첫 실패에서 중단(둘째 미평가)
-  {
-    const { exec, calls } = executorWithVerify([FAIL, PASS]);
-    const o = await runScenario(scenario(twoCriteria), ctx(), { executor: exec, resolver: fakeResolver });
-    check("multi-criteria 첫 실패에서 중단", o.terminal === "fail_business" && calls.verify === 1, JSON.stringify({ t: o.terminal, v: calls.verify }));
+    check("no node.verify → verify 미호출, success", o.terminal === "success" && calls.verify === 0 && calls.execute === 1, JSON.stringify({ t: o.terminal, ...calls }));
   }
 
   if (failures > 0) {
     console.error(`\n${failures} FAIL`);
     process.exitCode = 1;
   } else {
-    console.log("\nPASS: P0b 슬라이스1 interpreter verify(결정형 실행 + fail-loud) green");
+    console.log("\nPASS: P0b interpreter verify + self-heal 재시도 green");
   }
 }
 

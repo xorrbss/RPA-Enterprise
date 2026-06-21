@@ -15,7 +15,7 @@
 import type { IRELNode } from "../../../codegen/irel-compile";
 import type { CompiledOnBranch } from "./flow-control";
 import { resolveUrlRef, SiteResolutionError } from "./site-resolution";
-import { InterpreterError, type CompiledScenario, type NodeFlow, type ScenarioNode } from "./ir-interpreter";
+import { InterpreterError, type CompiledScenario, type NodeFlow, type NodeVerify, type ScenarioNode } from "./ir-interpreter";
 import type { VisualRecordingPolicy } from "./visual-evidence";
 
 function isRec(v: unknown): v is Record<string, unknown> {
@@ -24,14 +24,18 @@ function isRec(v: unknown): v is Record<string, unknown> {
 
 /**
  * P0b: raw.verify(verify.schema) → ScenarioNode.verify. criteria[] 가 비-빈 배열인지만 검증(criterion shape 은
- * executor.verify 권위 — unknown 통과, what 과 동일). 부재 시 undefined(verify 미실행, 기존 동작). 형식 오류는 loud.
+ * executor.verify 권위 — unknown 통과, what 과 동일). on_fail(기본 self_heal)·max_self_heal(nodePolicy, 기본 2)을 투영
+ * (raw column 엔 스키마 default 미실체화 — 인터프리터가 raw 를 소비하므로 여기서 적용). 부재 시 undefined(미실행). 형식 오류 loud.
  */
-function projectVerify(id: string, rawVerify: unknown): { criteria: readonly unknown[] } | undefined {
+function projectVerify(id: string, rawVerify: unknown, rawPolicy: unknown): NodeVerify | undefined {
   if (rawVerify === undefined) return undefined;
   if (!isRec(rawVerify) || !Array.isArray(rawVerify.criteria) || rawVerify.criteria.length === 0) {
     throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${id}' verify.criteria 누락/빈 배열`);
   }
-  return { criteria: rawVerify.criteria };
+  const onFail = typeof rawVerify.on_fail === "string" ? rawVerify.on_fail : "self_heal";
+  const rawMax = isRec(rawPolicy) ? rawPolicy.max_self_heal : undefined;
+  const maxSelfHeal = Number.isInteger(rawMax) && (rawMax as number) >= 0 ? (rawMax as number) : 2;
+  return { criteria: rawVerify.criteria, onFail, maxSelfHeal };
 }
 
 export function compiledScenarioFrom(
@@ -117,7 +121,7 @@ export function compiledScenarioFrom(
     } else {
       throw new InterpreterError("UNSUPPORTED_FLOW", `compiledScenarioFrom: node '${id}' 미지원 흐름(next/on/loop/fallback_chain/terminal 중 하나 필요)`);
     }
-    const verify = projectVerify(id, raw.verify);
+    const verify = projectVerify(id, raw.verify, raw.policy);
     nodes[id] = verify !== undefined ? { what, flow, verify } : { what, flow };
   }
   return { start: ir.start, nodes };
