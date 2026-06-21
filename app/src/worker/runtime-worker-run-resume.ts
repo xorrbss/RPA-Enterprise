@@ -32,10 +32,12 @@ import type { CorrelationId, RunId, TenantId } from "../../../ts/security-middle
 import { withTenantTx } from "../db/pool";
 import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
 import { applyRunTransition } from "../runtime/run-transition";
-import { driveResumedRun } from "../runtime/run-step-driver";
+import { driveResumedRun, terminalizeStuckRunAsSystemFailure } from "../runtime/run-step-driver";
+import { recordSiteCircuitOutcome, DEFAULT_SITE_CIRCUIT } from "../runtime/site-circuit";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../executor/site-page-state-config";
 import { gateBrowserSessionProvider } from "../executor/browser-session-provider";
+import type { ExecutorPlugin } from "../../../ts/core-types";
 import type { PgRuntimeWorkerOptions } from "./runtime-worker";
 
 type RunResumeRow = RunRow & { resume_token: unknown };
@@ -253,51 +255,84 @@ export class WorkerRunResume {
     });
     if (drive === null) return result;
 
-    const siteConfig = await withTenantTx(this.pool, tenantId, (c) =>
-      loadSitePageStateConfig(c, tenantId, drive.siteProfileId),
-    );
-    const bound = await sessionProvider.bind({
+    // R18 후 run 은 running — driveResumedRun 재진입용 ClaimedRun(INIT 실패 종결·구동에 공유).
+    const driveRun = {
+      runId,
       tenantId,
+      scenarioVersionId: drive.scenarioVersionId,
+      correlationId: drive.correlationId,
       leaseId: drive.leaseId,
       siteProfileId: drive.siteProfileId,
       browserIdentityId: drive.browserIdentityId,
       networkPolicyId: drive.networkPolicyId,
-      isolation: drive.isolation,
-      cleanupPolicy: drive.cleanupPolicy,
-    });
+      networkAllowedDomains: drive.networkAllowedDomains,
+      params: drive.params,
+    };
+
+    // INIT phase(siteConfig 적재 + 세션 bind + executor/resolver 구성). claim Phase B 와 대칭: 이 셋업이 throw 하면
+    //   run 은 이미 running(R18)이라 좌초한다 — terminalizeStuckRunAsSystemFailure(R8: running→failed_system)로 종결하고
+    //   bound 세션을 해제한다(누수 방지). worker 서킷도 claim 과 동일하게 INIT 성공/실패를 per-worker 기록.
+    let setup: { bound: Awaited<ReturnType<typeof sessionProvider.bind>>; executor: ExecutorPlugin; resolver: SitePageStateResolver };
+    let boundForInitCleanup: Awaited<ReturnType<typeof sessionProvider.bind>> | undefined;
     try {
-      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(bound.provider, {
+      const siteConfig = await withTenantTx(this.pool, tenantId, (c) =>
+        loadSitePageStateConfig(c, tenantId, drive.siteProfileId),
+      );
+      boundForInitCleanup = await sessionProvider.bind({
+        tenantId,
+        leaseId: drive.leaseId,
+        siteProfileId: drive.siteProfileId,
+        browserIdentityId: drive.browserIdentityId,
+        networkPolicyId: drive.networkPolicyId,
+        isolation: drive.isolation,
+        cleanupPolicy: drive.cleanupPolicy,
+      });
+      const executor = (this.options.executorFactory ?? defaultExecutorFactory)(boundForInitCleanup.provider, {
         scenarioVersionId: drive.scenarioVersionId,
         browserIdentityVersion: drive.browserIdentityVersion,
         tenantId, // 자격증명 fill executorPrincipal per-run 테넌트(감사 정합).
         ...(drive.model !== undefined ? { model: drive.model } : {}),
       });
-      const resolver = new SitePageStateResolver(bound.provider, siteConfig);
-      // R18 후 run 은 running — driveResumedRun 은 R2 없이 resumeNodeId 부터 재진입(success→completed / fail→failed_*).
-      await driveResumedRun(
-        {
-          runId,
-          tenantId,
-          scenarioVersionId: drive.scenarioVersionId,
-          correlationId: drive.correlationId,
-          leaseId: drive.leaseId,
-          siteProfileId: drive.siteProfileId,
-          browserIdentityId: drive.browserIdentityId,
-          networkPolicyId: drive.networkPolicyId,
-          networkAllowedDomains: drive.networkAllowedDomains,
-          params: drive.params,
-        },
+      const resolver = new SitePageStateResolver(boundForInitCleanup.provider, siteConfig);
+      setup = { bound: boundForInitCleanup, executor, resolver };
+    } catch (initErr) {
+      if (boundForInitCleanup !== undefined) {
+        try {
+          await boundForInitCleanup.release();
+        } catch (relErr) {
+          console.error(`runtime-worker: resume INIT 실패 후 세션 해제 실패(run ${runId.slice(0, 8)}) — ${relErr instanceof Error ? relErr.message : String(relErr)}`);
+        }
+      }
+      console.error(
+        `runtime-worker: resume INIT 셋업 실패(run ${runId.slice(0, 8)}) — ${initErr instanceof Error ? initErr.message : String(initErr)}`,
+      );
+      // run 은 R18로 이미 running — 좌초 방지로 R8(running→failed_system) 종결 + 연결 workitem system 정산.
+      await terminalizeStuckRunAsSystemFailure(driveRun, this.pool);
+      // worker 서킷: per-worker 연속 INIT 실패 누적(claim 과 대칭). best-effort(별도 tx)라 실패는 흡수(loud).
+      await this.runSupport.recordWorkerInitFailure(workerId).catch((e) =>
+        console.error(`runtime-worker: resume worker 서킷 실패기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+      );
+      return result;
+    }
+    // INIT 성공 → per-worker 연속 실패 카운터 reset + (open 이었으면)회로 닫힘(claim 과 대칭).
+    await this.runSupport.recordWorkerInitSuccess(workerId);
+
+    // DRIVE phase. driveResumedRun 은 R2 없이 resumeNodeId 부터 재진입(success→completed / fail→failed_*). 세션은 finally 에서 해제.
+    let driveResult: Awaited<ReturnType<typeof driveResumedRun>> | undefined;
+    try {
+      driveResult = await driveResumedRun(
+        driveRun,
         {
           pool: this.pool,
-          executor,
-          resolver,
+          executor: setup.executor,
+          resolver: setup.resolver,
           workerId,
           suspensionPort: this.options.suspensionPort,
           resumeTokenCodec: this.options.resumeTokenCodec,
           sessionStore: this.options.sessionStore,
-          sessionProvider: bound.provider,
+          sessionProvider: setup.bound.provider,
           visualEvidenceRecorder: this.options.visualEvidenceRecorder,
-          visualEvidenceVideoRecorder: this.options.visualEvidenceVideoRecorderFactory?.(bound.provider),
+          visualEvidenceVideoRecorder: this.options.visualEvidenceVideoRecorderFactory?.(setup.bound.provider),
           mergedExtractArtifactSink: this.options.mergedExtractArtifactSink,
           runtimeJobEnqueuer: this.options.runtimeJobEnqueuer,
           recordExecutorSteps: true,
@@ -305,7 +340,23 @@ export class WorkerRunResume {
         txA.intent.resumeNodeId,
       );
     } finally {
-      await bound.release();
+      await setup.bound.release();
+    }
+    // 사이트 서킷 표본(claim 과 대칭): drive 1회=표본 1행. blocked=challenge 자동감지(suspended + suspend.kind<>'human_task').
+    //   best-effort 기록(별도 tenant tx)이라 실패는 흡수(loud). throw 로 끝난 drive(driveResult undefined)는 표본 제외.
+    if (driveResult !== undefined) {
+      const blocked =
+        driveResult.state === "suspended" &&
+        driveResult.outcome.suspend !== undefined &&
+        driveResult.outcome.suspend.kind !== "human_task";
+      await recordSiteCircuitOutcome(this.pool, this.options.siteCircuit ?? DEFAULT_SITE_CIRCUIT, {
+        tenantId,
+        siteProfileId: drive.siteProfileId,
+        correlationId: drive.correlationId,
+        blocked,
+      }).catch((e) =>
+        console.error(`runtime-worker: resume 사이트 서킷 표본기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+      );
     }
     return result;
   }

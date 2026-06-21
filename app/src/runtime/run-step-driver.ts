@@ -147,7 +147,7 @@ async function driveScenarioWithSystemFailsafe(run: ClaimedRun, deps: DriveDeps,
   try {
     return await driveScenario(run, deps, startNode);
   } catch (err) {
-    const terminalized = await terminalizeStuckRunAsSystemFailure(run, deps);
+    const terminalized = await terminalizeStuckRunAsSystemFailure(run, deps.pool);
     if (!terminalized) throw err;
     console.error(
       `run-step-driver: drive 예외를 failed_system 으로 종결(run ${run.runId.slice(0, 8)}) — ${err instanceof Error ? err.message : String(err)}`,
@@ -162,9 +162,9 @@ async function driveScenarioWithSystemFailsafe(run: ClaimedRun, deps: DriveDeps,
  * R4/R5 commit 후 resume-token 발행·저장이 tx 밖 외부 I/O라 부분 실패 윈도우 — R12 '일관성 복구'로 종결). 폴백이라
  * throw 금지 — 변환 불가(이미 종결/동시 CAS 변경/정산 실패)면 false 를 반환해 호출부가 원 예외를 재던지게 한다.
  */
-async function terminalizeStuckRunAsSystemFailure(run: ClaimedRun, deps: DriveDeps): Promise<boolean> {
+export async function terminalizeStuckRunAsSystemFailure(run: ClaimedRun, pool: Pool): Promise<boolean> {
   try {
-    return await withTenantTx(deps.pool, run.tenantId, async (client) => {
+    return await withTenantTx(pool, run.tenantId, async (client) => {
       const r = await client.query<{ status: RunState }>(
         `SELECT status FROM runs WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE`,
         [run.tenantId, run.runId],
