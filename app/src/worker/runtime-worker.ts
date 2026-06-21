@@ -28,6 +28,14 @@ import {
   unknownToReason,
 } from "./runtime-worker-parse";
 import { handleWorkitemCheckout, handleWorkitemCheckoutSweeper } from "./runtime-worker-workitem-checkout";
+import {
+  DEFAULT_BROWSER_LEASE_TTL_MS,
+  DEFAULT_WORKER_CIRCUIT_CLOSE_THRESHOLD,
+  DEFAULT_WORKER_CIRCUIT_OPEN_MS,
+  DEFAULT_WORKER_CIRCUIT_THRESHOLD,
+  normalizeRunParams,
+} from "./runtime-worker-run-context";
+import type { RunClaimDriveInputs, RunRow } from "./runtime-worker-run-context";
 import { ArtifactRedactionProcessor } from "./artifact-redaction-processor";
 import { ArtifactRetentionProcessor } from "./artifact-retention-processor";
 import type {
@@ -152,29 +160,6 @@ export interface PgRuntimeWorkerOptions {
   readonly executorFactory?: RunExecutorFactory;
 }
 
-// A.1 run-drive: claim tx 에서 캡처해 tx 밖(Phase B)에서 driveClaimedRun 에 넘기는 입력(브라우저 작업은 커넥션 밖).
-interface RunClaimDriveInputs {
-  readonly scenarioVersionId: string;
-  readonly model?: string;
-  readonly correlationId: string;
-  readonly leaseId: string;
-  readonly siteProfileId: string;
-  readonly browserIdentityId: string;
-  readonly browserIdentityVersion: number;
-  readonly networkPolicyId: string;
-  readonly networkAllowedDomains: readonly string[];
-  readonly isolation: LeaseIsolation;
-  readonly cleanupPolicy: LeaseCleanupPolicy;
-  readonly params?: Record<string, unknown>;
-}
-
-// runs.params(jsonb) 정규화: 문자열이면 파싱, null/부재면 undefined(빈 {} 와 구분 — navigate 키 해소가 loud 실패). run-loop 와 동형.
-function normalizeRunParams(raw: unknown): Record<string, unknown> | undefined {
-  const v = typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
-  return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
-}
-
-type RunRow = { status: RunState; correlation_id: string };
 type RunResumeRow = RunRow & { resume_token: unknown };
 type RunResumeIntent = SessionRestoreInput;
 type RunResumeTxAResult =
@@ -191,15 +176,9 @@ type RunAbortTxAResult =
       workerId?: string;
     }
   | { kind: "job_result"; result: RuntimeJobResult };
-const DEFAULT_BROWSER_LEASE_TTL_MS = 300_000;
 // sink failed(상한 미달) 재전달 backoff 기본(ops-defaults #sink.delivery.retry_backoff base 5s).
 const DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS = 5_000;
 const DEFAULT_RUN_ABORT_TIMEOUT_MS = 30_000;
-// ops-defaults.md #workitem.checkout_timeout=10m. W1 checkout 시 checkout_expires_at 설정, W6/W7 sweeper 가 만료 판정. 코드 상수 금지 규약 — inline 인용.
-// ops-defaults.md §3 worker.circuit: consecutive_failures=5(임계) / open_duration=1m(cooldown) / half_open_close_threshold=2. 코드 상수 금지 규약 — inline 인용.
-const DEFAULT_WORKER_CIRCUIT_THRESHOLD = 5;
-const DEFAULT_WORKER_CIRCUIT_OPEN_MS = 60_000;
-const DEFAULT_WORKER_CIRCUIT_CLOSE_THRESHOLD = 2;
 
 // NOTE(god-class 분해 보류 — CLAUDE.md #7, 현재 1189줄): 잔여는 run-claim/run-resume 코어가 browser-lease
 //   획득·worker-circuit·run-state 전이를 동일 tx 안에서 엮은 라이브 엔진 핵심이다. 의존은 실측상 DAG
