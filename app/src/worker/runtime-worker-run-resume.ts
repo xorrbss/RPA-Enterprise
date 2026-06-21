@@ -8,7 +8,7 @@
  */
 import type pg from "pg";
 
-import { findActiveBrowserLeaseForRun } from "./runtime-worker-browser-lease";
+import { deleteInitReservedBrowserLease, findActiveBrowserLeaseForRun } from "./runtime-worker-browser-lease";
 import {
   isOnlyRestoreSessionPending,
   parseResumeTokenEnvelope,
@@ -339,6 +339,15 @@ export class WorkerRunResume {
       //   cancelled 등 — 취소·경합 패배는 이 워커의 INIT 실패 아님)면 카운터 미증가 → spurious open(과잉격리) 방지.
       //   best-effort(별도 tx)라 기록 실패는 잡을 깨지 않게 흡수(loud).
       if (terminalized) {
+        // #6 누수 방지(claim 대칭): 종결된 resume 의 browser lease 행 해제. terminalize=true(이 워커가 R8 종결)일
+        //   때만 — false(abort 경합)면 abort drain 이 lease 를 소유하므로 건드리지 않는다(과잉해제 방지). bind 가
+        //   throw 한 INIT 실패라 라이브 세션 미오픈 → 행 삭제로 동시성 슬롯 즉시 회수(미삭제 시 TTL 만료까지 누수).
+        //   best-effort(별도 tx)라 실패는 잡을 깨지 않게 흡수(loud) — 잔류 행은 lease sweeper 가 TTL 에 회수.
+        await withTenantTx(this.pool, tenantId, (c) =>
+          deleteInitReservedBrowserLease(c, { tenantId, leaseId: drive.leaseId, workerId }),
+        ).catch((e) =>
+          console.error(`runtime-worker: resume INIT 실패 browser lease 해제 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+        );
         await this.runSupport.recordWorkerInitFailure(workerId).catch((e) =>
           console.error(`runtime-worker: resume worker 서킷 실패기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
         );
