@@ -50,6 +50,7 @@ import {
 import { compiledScenarioFrom } from "./ir-translate";
 import { InterpreterError, runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
 import { pauseLinkedWorkitemCheckout, settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
+import { cancelLinkedHumanTasksForRunTerminal } from "./human-task-transition";
 import { recordChallenge } from "../observability/telemetry";
 import type { MergedExtractArtifactSink } from "./merged-extract-artifact";
 import {
@@ -184,6 +185,8 @@ export async function terminalizeStuckRunAsSystemFailure(run: ClaimedRun, pool: 
       });
       if (!t.applied) return false;
       await settleLinkedWorkitemFromRun(client, run, "system");
+      // H7: run 종결(failed_system) 시 연결된 비종결 human_task 를 cancel — 인박스 orphan + resolve silent-false 차단.
+      await cancelLinkedHumanTasksForRunTerminal(client, { tenantId: run.tenantId, runId: run.runId, correlationId: run.correlationId });
       return true;
     });
   } catch (e) {

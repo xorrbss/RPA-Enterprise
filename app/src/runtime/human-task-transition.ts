@@ -98,3 +98,39 @@ export async function applyHumanTaskTransition(
 
   return { applied: true, next, emitted, pending };
 }
+
+/**
+ * run 종결(failed_system via terminalize / cancelled via abort) 시 연결된 비종결 human_task 를 H7(cancel→cancelled)로
+ * 정리한다(state-machine.md H7 "run abort 연동, R16"). 종전엔 run 이 종결돼도 'open' human_task 가 인박스에 actionable 로
+ * 남아(reads 가 run.status 미조인) 운영자 resolve→coupled R13 가 silent no-op(조용한 false: 운영자는 처리했다고 오인하나
+ * run 은 이미 종결). H7 cancel 후엔 resolve 가 IllegalTransition 으로 거부된다. 호출자는 run 종결 전이와 동일 tx 에서
+ * 호출(원자). 비종결 task 없으면 no-op. H7 은 side-effect 0(emitEvent/pending 없음, codegen r("cancelled",[])).
+ */
+export async function cancelLinkedHumanTasksForRunTerminal(
+  client: PoolClient,
+  input: { tenantId: string; runId: string; correlationId: string },
+): Promise<void> {
+  const tasks = await client.query<{ id: string; state: HumanTaskState }>(
+    `SELECT id::text AS id, state FROM human_tasks
+      WHERE tenant_id = $1::uuid AND run_id = $2::uuid
+        AND state IN ('open','assigned','in_progress','escalated')
+      FOR UPDATE`,
+    [input.tenantId, input.runId],
+  );
+  for (const t of tasks.rows) {
+    const out = await applyHumanTaskTransition(client, {
+      tenantId: input.tenantId,
+      humanTaskId: t.id,
+      runId: input.runId,
+      fromState: t.state,
+      event: { type: "cancel" },
+      guard: {},
+      correlationId: input.correlationId,
+      eventIdempotencyKey: `${t.id}:run_terminal_cancel`,
+    });
+    // 동시 변경(operator 가 막 resolve/escalate)면 CAS 실패 — 흡수(이미 다른 단말 도달).
+    if (out.applied && out.pending.length > 0) {
+      throw new Error(`cancelLinkedHumanTasksForRunTerminal: unexpected H7 pending: ${out.pending.map((p) => p.kind).join(",")}`);
+    }
+  }
+}

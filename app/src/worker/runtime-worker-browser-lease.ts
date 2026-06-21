@@ -17,6 +17,7 @@ import type {
 import { withTenantTx } from "../db/pool";
 import { applyRunTransition } from "../runtime/run-transition";
 import { unpauseLinkedWorkitemForRunAbort } from "../runtime/workitem-settlement";
+import { cancelLinkedHumanTasksForRunTerminal } from "../runtime/human-task-transition";
 import { isOnlyAbortLeasePending } from "./runtime-worker-parse";
 
 export interface BrowserLeaseRenewInput {
@@ -245,6 +246,9 @@ export async function finalizeRunAbort(
     // #7 회귀 보수: suspended/resume_requested/resuming → abort 면 W9-paused workitem 이 W11 없이 영구 paused 잔류
     //   → checkout sweeper 영영 스킵(누수). abort 종결 tx 에서 un-pause + 즉시만료로 sweeper(W6/W7) 자가회수에 위임.
     await unpauseLinkedWorkitemForRunAbort(client, { tenantId, runId });
+    // H7: run abort(→cancelled) 시 연결된 비종결 human_task 를 cancel(state-machine.md H7 "run abort 연동, R16").
+    //   suspend 중 abort 면 'open' human_task 가 orphan 으로 남아 운영자 resolve→coupled R13 silent no-op 되는 것을 차단.
+    await cancelLinkedHumanTasksForRunTerminal(client, { tenantId, runId, correlationId: input.correlationId });
 
     if (input.leaseId !== undefined && input.workerId !== undefined) {
       await expireAbortBrowserLease(client, {
