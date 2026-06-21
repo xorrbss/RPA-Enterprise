@@ -908,20 +908,8 @@ export function PromptScenarioGenerator(): JSX.Element {
         </label>
         <div className="form-grid">
           <label className="field">
-            <span>시나리오 이름</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="비워두면 자동 생성" />
-          </label>
-          <label className="field">
             <span>시작 URL</span>
             <input ref={startUrlInputRef} value={startUrl} onChange={(event) => handleStartUrlChange(event.target.value)} placeholder="https://..." />
-          </label>
-          <label className="field">
-            <span>처리 방식</span>
-            <select value={mode} onChange={(event) => setMode(event.target.value as ScenarioGenerationRequest["mode"])}>
-              <option value="save_and_run">저장 후 실행</option>
-              <option value="save">저장만</option>
-              <option value="draft_only">초안만</option>
-            </select>
           </label>
           <label className="field">
             <span>사이트</span>
@@ -946,8 +934,20 @@ export function PromptScenarioGenerator(): JSX.Element {
           </div>
         </div>
         <details className="advanced-settings" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.currentTarget as HTMLDetailsElement).open)}>
-          <summary>고급 설정 (AI 모델·실행 대상 ID·증거 저장·세부 params) — 대부분 비워두면 기본값으로 동작합니다</summary>
+          <summary>고급 설정 (이름·처리 방식·AI 모델·대상 ID·증거·params) — 대부분 비워두면 기본값으로 동작합니다</summary>
           <div className="form-grid">
+            <label className="field">
+              <span>시나리오 이름</span>
+              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="비워두면 자동 생성" />
+            </label>
+            <label className="field">
+              <span>처리 방식</span>
+              <select value={mode} onChange={(event) => setMode(event.target.value as ScenarioGenerationRequest["mode"])}>
+                <option value="save_and_run">저장 후 실행</option>
+                <option value="save">저장만</option>
+                <option value="draft_only">초안만</option>
+              </select>
+            </label>
             <label className="field">
               <span>Planner</span>
               <select value={planner} onChange={(event) => setPlanner(event.target.value as ScenarioGenerationPlanner)}>

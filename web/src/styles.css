@@ -334,3 +334,7 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
 .ai-creator > summary { cursor: pointer; font-weight: 600; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); user-select: none; display: inline-block; margin-bottom: 12px; }
 .ai-creator > summary:hover { background: var(--soft); }
 .ai-creator[open] > summary { margin-bottom: 8px; }
+
+/* 쉬운 만들기 — 세부 조정 접기(점진적 노출) */
+.wizard-advanced > summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; user-select: none; margin: 4px 0 8px; }
+.wizard-advanced > summary:hover { color: var(--text); }

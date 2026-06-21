@@ -263,6 +263,8 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
   const [nextInstruction, setNextInstruction] = useState(initial?.nextInstruction ?? DEFAULT_NEXT_INSTRUCTION);
   const [noNextFlag, setNoNextFlag] = useState(initial?.noNextFlag ?? DEFAULT_NO_NEXT_FLAG);
   const [instructionTouched, setInstructionTouched] = useState(initial !== undefined);
+  // 세부 조정(<details>) 펼침 — 신규 작성은 접힘(업무 템플릿 기본값으로 충분), 편집(initial)은 기존 값이 보이게 펼침.
+  const [detailsOpen, setDetailsOpen] = useState(initial !== undefined);
 
   useEffect(() => {
     if (!instructionTouched) setInstruction(TEMPLATES[templateKey].instruction);
@@ -321,6 +323,8 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
           ) : undefined
         }
       />
+      <details className="wizard-advanced" open={detailsOpen} onToggle={(event) => setDetailsOpen((event.currentTarget as HTMLDetailsElement).open)}>
+        <summary>세부 조정 (선택) — 비워두면 업무 템플릿 기본값으로 동작합니다</summary>
       <Field label="③ 가져올 데이터 이름(라벨)" value={dataName} onChange={setDataName} placeholder="예: 리뷰목록" />
       <Field
         label="④ 추출/입력 규칙"
@@ -387,6 +391,7 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
           <span className="subtle">사이트 설정에서 이 flag selector를 등록하면 마지막 페이지에서 반복이 멈춥니다.</span>
         </div>
       )}
+      </details>
       <p className="badge" style={{ display: "block", margin: "10px 0 0", whiteSpace: "normal" }}>
         ⚠ 지금은 자동화의 <b>흐름(구조)</b>만 만들어 저장합니다. 실제로 이 페이지에서 데이터를 가져오는 동작은
         실행기(브라우저 워커) 연결과 사이트별 추출 설정이 있어야 합니다.
