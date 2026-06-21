@@ -305,3 +305,35 @@ export function evidenceFromRetentionDeleteResult(result: ArtifactRetentionDelet
       return undefined;
   }
 }
+
+const DEFAULT_ARTIFACT_LIFECYCLE_CLAIM_TTL_MS = 300_000;
+const DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS = 90;
+
+export type ArtifactLifecycleClaim = {
+  readonly claimId: string;
+  readonly kind: ArtifactLifecycleClaimKind;
+  readonly tenantId: string;
+  readonly workerId: string;
+  readonly correlationId: string;
+  readonly artifact: ArtifactLifecycleTarget;
+};
+export type ArtifactLifecycleClaimResult =
+  | { readonly kind: "claimed"; readonly claim: ArtifactLifecycleClaim }
+  | { readonly kind: "deferred"; readonly retryAfterMs: number }
+  | { readonly kind: "empty" };
+
+export function lifecycleClaimTtlMs(configured: number | undefined): number {
+  const claimTtlMs = configured ?? DEFAULT_ARTIFACT_LIFECYCLE_CLAIM_TTL_MS;
+  if (!Number.isInteger(claimTtlMs) || claimTtlMs <= 0) {
+    throw new Error("RuntimeWorker: artifact lifecycle claimTtlMs must be a positive integer");
+  }
+  return claimTtlMs;
+}
+
+export function lifecycleAuditRetentionDays(configured: number | undefined): number {
+  const days = configured ?? DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS;
+  if (!Number.isInteger(days) || days <= 0) {
+    throw new Error("RuntimeWorker: artifact lifecycle audit retention days must be a positive integer");
+  }
+  return days;
+}
