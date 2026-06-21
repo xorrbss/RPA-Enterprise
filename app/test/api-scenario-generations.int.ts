@@ -1267,17 +1267,32 @@ async function main(): Promise<void> {
           name: "generated-pagination-mutating-click",
         },
       });
-      check("pagination mutating click saves blocked generation -> 201", paginationMutatingClick.statusCode === 201, paginationMutatingClick.body);
+      check("pagination mutating click generation saved -> 201", paginationMutatingClick.statusCode === 201, paginationMutatingClick.body);
       const paginationMutatingClickBody = paginationMutatingClick.json();
+      // item5: side-effect 프롬프트는 하드블록 대신 @human_task(approval) 게이트로 라우팅(deterministic 플래너).
+      //   blocker 없이 runnable — read-only 조사 후 승인 게이트에서 suspend, LLM 비가역 행동 미방출(A.2 회피).
       check(
-        "pagination mutating click keeps side-effect blocker",
-        paginationMutatingClickBody.status === "blocked" &&
-          paginationMutatingClickBody.run_id === null &&
+        "pagination mutating click routes to @human_task gate (no blocker)",
+        paginationMutatingClickBody.status === "run_queued" &&
           Array.isArray(paginationMutatingClickBody.blockers) &&
-          paginationMutatingClickBody.blockers.includes("side_effect_prompt_requires_review"),
+          paginationMutatingClickBody.blockers.length === 0,
         paginationMutatingClick.body,
       );
-      check("pagination mutating click does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+      const mutatingClickIr: Record<string, unknown> = isRecord(paginationMutatingClickBody.draft_ir) ? paginationMutatingClickBody.draft_ir : {};
+      const mutatingClickNodes: Record<string, unknown> = isRecord(mutatingClickIr.nodes) ? mutatingClickIr.nodes : {};
+      const mutatingClickReview: Record<string, unknown> = isRecord(mutatingClickNodes.review_before_action) ? mutatingClickNodes.review_before_action : {};
+      const mutatingClickGate: Record<string, unknown> = isRecord(mutatingClickReview.next) ? mutatingClickReview.next : {};
+      const mutatingClickGateInput: Record<string, unknown> = isRecord(mutatingClickGate.input) ? mutatingClickGate.input : {};
+      check(
+        "side-effect generated IR gates on @human_task approval (read-only review, no LLM write)",
+        mutatingClickGate.handler === "@human_task" &&
+          mutatingClickGateInput.kind === "approval" &&
+          mutatingClickGateInput.assignee_role === "approver" &&
+          mutatingClickGate.return_node === "done" &&
+          (isRecord(mutatingClickReview.side_effect) ? (mutatingClickReview.side_effect as { kind?: unknown }).kind : undefined) === "read_only",
+        JSON.stringify(mutatingClickNodes),
+      );
+      check("pagination mutating click enqueues gated run (suspends at approval)", enqueuedRuns.length === 4 && enqueuedRuns[3]?.runId === paginationMutatingClickBody.run_id, JSON.stringify(enqueuedRuns));
 
       const listed = await app.inject({
         method: "GET",
@@ -1493,7 +1508,7 @@ async function main(): Promise<void> {
             llmPlannedBody.draft_ir.nodes.extract_results.policy.recording === "always",
           llmPlanned.body,
         );
-        check("configured llm_v1 planner does not enqueue run in save mode", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+        check("configured llm_v1 planner does not enqueue run in save mode", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
         await withTenantTx(pool, TENANT, async (client) => {
           const row = await client.query<{ planner: string; version_count: string }>(
             `SELECT g.planner, count(sv.id)::text AS version_count
@@ -1548,7 +1563,7 @@ async function main(): Promise<void> {
             llmMissingTargetBody.blockers.includes("start_url_required_for_auto_run"),
           llmMissingTarget.body,
         );
-        check("llm_v1 missing target does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+        check("llm_v1 missing target does not enqueue run", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
         const llmSideEffectBlocked = await llmPlannerApp.inject({
           method: "POST",
           url: "/v1/scenario-generations",
@@ -1571,7 +1586,7 @@ async function main(): Promise<void> {
             llmSideEffectBlockedBody.blockers.includes("side_effect_prompt_requires_review"),
           llmSideEffectBlocked.body,
         );
-        check("llm_v1 side-effect blocker does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+        check("llm_v1 side-effect blocker does not enqueue run", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
         const llmVideoBlocked = await llmPlannerApp.inject({
           method: "POST",
           url: "/v1/scenario-generations",
@@ -1607,7 +1622,7 @@ async function main(): Promise<void> {
             llmVideoBlockedBody.draft_ir.nodes.extract_results.policy.recording === "always",
           llmVideoBlocked.body,
         );
-        check("llm_v1 video blocker does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+        check("llm_v1 video blocker does not enqueue run", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
       } finally {
         await llmPlannerApp.close();
       }
@@ -1656,7 +1671,7 @@ async function main(): Promise<void> {
             mutatingPlannerResult.body.includes("mode"),
           mutatingPlannerResult.body,
         );
-        check("llm_v1 planner mutation does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+        check("llm_v1 planner mutation does not enqueue run", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
         await withTenantTx(pool, TENANT, async (client) => {
           const row = await client.query<{
             scenario_count: string;
@@ -2222,7 +2237,7 @@ async function main(): Promise<void> {
           wrongNetwork.json().blockers.includes("network_policy_domain_mismatch"),
         wrongNetwork.body,
       );
-      check("invalid target blockers do not enqueue runs", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+      check("invalid target blockers do not enqueue runs", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
 
       const videoRequested = await app.inject({
         method: "POST",
@@ -2242,7 +2257,7 @@ async function main(): Promise<void> {
         Array.isArray(videoBody.blockers) && videoBody.blockers.includes("video_recording_port_not_configured"),
         videoRequested.body,
       );
-      check("video blocker does not enqueue run", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+      check("video blocker does not enqueue run", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
 
       const replay = await app.inject({
         method: "POST",
@@ -2252,7 +2267,7 @@ async function main(): Promise<void> {
       });
       check("generation idempotency replay → 201", replay.statusCode === 201, replay.body);
       check("replay returns same generation/run", replay.json().generation_id === runBody.generation_id && replay.json().run_id === runBody.run_id, replay.body);
-      check("replay does not enqueue again", enqueuedRuns.length === 3, JSON.stringify(enqueuedRuns));
+      check("replay does not enqueue again", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
 
       const explicitModel = await app.inject({
         method: "POST",
@@ -2271,7 +2286,7 @@ async function main(): Promise<void> {
         explicitModelBody.status === "run_queued" && explicitModelBody.model === "codex-gen" && typeof explicitModelBody.run_id === "string",
         explicitModel.body,
       );
-      check("explicit model enqueues fourth run", enqueuedRuns.length === 4 && enqueuedRuns[3]?.runId === explicitModelBody.run_id, JSON.stringify(enqueuedRuns));
+      check("explicit model enqueues fifth run", enqueuedRuns.length === 5 && enqueuedRuns[4]?.runId === explicitModelBody.run_id, JSON.stringify(enqueuedRuns));
       await withTenantTx(pool, TENANT, async (client) => {
         const rows = await client.query<{ run_model: string | null; generation_model: string | null }>(
           `SELECT
@@ -2343,7 +2358,7 @@ async function main(): Promise<void> {
             videoRunnableBody.draft_ir.meta.evidence.video === "always",
           videoRunnable.body,
         );
-        check("video capability enqueues run", enqueuedRuns.length === 5, JSON.stringify(enqueuedRuns));
+        check("video capability enqueues run", enqueuedRuns.length === 6, JSON.stringify(enqueuedRuns));
         const videoArtifactDir = mkdtempSync(join(tmpdir(), "rpa-generation-video-artifacts-"));
         try {
           const videoGatewayCalls: LLMRequest[] = [];
@@ -2749,7 +2764,7 @@ async function main(): Promise<void> {
           continuedRunBody.blockers.length === 0,
         continuedRun.body,
       );
-      check("blocked generation correction enqueues sixth run", enqueuedRuns.length === 6 && enqueuedRuns[5]?.runId === continuedRunBody.run_id, JSON.stringify(enqueuedRuns));
+      check("blocked generation correction enqueues seventh run", enqueuedRuns.length === 7 && enqueuedRuns[6]?.runId === continuedRunBody.run_id, JSON.stringify(enqueuedRuns));
       check(
         "blocked generation correction applies every-step evidence",
         isRecord(continuedRunBody.draft_ir) &&
@@ -2830,7 +2845,7 @@ async function main(): Promise<void> {
         },
       });
       check("blocked generation correction idempotency replays", continuedReplay.statusCode === 201 && continuedReplay.json().run_id === continuedRunBody.run_id, continuedReplay.body);
-      check("blocked generation correction replay does not enqueue again", enqueuedRuns.length === 6, JSON.stringify(enqueuedRuns));
+      check("blocked generation correction replay does not enqueue again", enqueuedRuns.length === 7, JSON.stringify(enqueuedRuns));
       const continuedAgain = await app.inject({
         method: "POST",
         url: `/v1/scenario-generations/${blockedBody.generation_id}/run`,

@@ -102,9 +102,11 @@ function buildDeterministicMvpGenerationPlan(request: GenerationRequest, capabil
     if (target === undefined) blockers.push("target_required_for_auto_run");
     if (startUrl === undefined) blockers.push("start_url_required_for_auto_run");
   }
-  if (looksLikeSideEffectPrompt(request.prompt, { allowPaginationControls: pagination.enabled })) {
-    blockers.push("side_effect_prompt_requires_review");
-  }
+  // side-effect 프롬프트(제출·삭제·결제 등 비가역): 하드블록 대신 read-only 조사 + @human_task(approval) 게이트로
+  //   라우팅한다(item⑤ 안전형). LLM 이 비가역 행동을 수행하지 않으므로 A.2(승인 후 LLM 오대상)를 회피한다 —
+  //   운영자 승인 게이트만 둔다. orchestration(scenario-generations)은 deterministic 플래너엔 side_effect 블록을
+  //   추가하지 않고(여기서 게이트 처리), LLM 플래너는 IR 임의성 때문에 블록을 유지한다.
+  const sideEffect = looksLikeSideEffectPrompt(request.prompt, { allowPaginationControls: pagination.enabled });
   if (evidence.video !== "never" && !capabilities.videoRecording) {
     blockers.push("video_recording_port_not_configured");
   }
@@ -113,52 +115,84 @@ function buildDeterministicMvpGenerationPlan(request: GenerationRequest, capabil
   }
 
   const nodes: Record<string, unknown> = {};
-  const observeNode = {
-    what: [{ action: "observe", instruction: request.prompt }],
-    next: "extract_results",
-    policy: { recording },
-    side_effect: { kind: "read_only" },
-  };
-  if (startUrl !== undefined) {
-    const landingVerify = startUrlLandingVerify(startUrl);
-    nodes.open_start_url = {
-      what: [{ action: "navigate", url_ref: "start_url" }],
-      next: pagination.enabled ? "paginate_pages" : "understand_request",
-      policy: { recording },
-      side_effect: { kind: "read_only" },
-      ...(landingVerify !== undefined ? { verify: landingVerify } : {}),
-    };
-    if (!pagination.enabled) {
-      nodes.understand_request = observeNode;
-    }
-  } else {
-    if (!pagination.enabled) {
-      nodes.understand_request = observeNode;
-    }
-  }
-  if (pagination.enabled) {
-    nodes.paginate_pages = paginateLoopNode(pagination, recording);
-    nodes.extract_current_page = extractNode({
-      instruction: paginatedExtractionInstruction(request.prompt, extractionFields),
-      next: "advance_page",
-      recording,
-      schemaRef: "generated/paginated_result@1",
-      fields: extractionFields,
-    });
-    nodes.advance_page = {
-      what: [{ action: "act", instruction: advancePageInstruction(request.prompt) }],
-      next: "paginate_pages",
+  let start: string;
+  if (sideEffect) {
+    // read-only 조사(navigate→observe) 후 @human_task(approval) 게이트로 suspend. 비가역 행동은 운영자 승인
+    //   이후 별도/PbD 로 수행한다(LLM act 미방출 = A.2 회피). approver 역할 게이트, on_timeout=fail(reserved-handlers).
+    const reviewNode = {
+      what: [{ action: "observe", instruction: request.prompt }],
+      next: {
+        handler: "@human_task",
+        input: { kind: "approval", assignee_role: "approver", on_timeout: "fail" },
+        return_node: "done",
+      },
       policy: { recording },
       side_effect: { kind: "read_only" },
     };
+    if (startUrl !== undefined) {
+      const landingVerify = startUrlLandingVerify(startUrl);
+      nodes.open_start_url = {
+        what: [{ action: "navigate", url_ref: "start_url" }],
+        next: "review_before_action",
+        policy: { recording },
+        side_effect: { kind: "read_only" },
+        ...(landingVerify !== undefined ? { verify: landingVerify } : {}),
+      };
+      nodes.review_before_action = reviewNode;
+      start = "open_start_url";
+    } else {
+      nodes.review_before_action = reviewNode;
+      start = "review_before_action";
+    }
   } else {
-    nodes.extract_results = extractNode({
-      instruction: extractionInstruction(request.prompt, extractionFields),
-      next: "done",
-      recording,
-      schemaRef: "generated/default_result@1",
-      fields: extractionFields,
-    });
+    const observeNode = {
+      what: [{ action: "observe", instruction: request.prompt }],
+      next: "extract_results",
+      policy: { recording },
+      side_effect: { kind: "read_only" },
+    };
+    if (startUrl !== undefined) {
+      const landingVerify = startUrlLandingVerify(startUrl);
+      nodes.open_start_url = {
+        what: [{ action: "navigate", url_ref: "start_url" }],
+        next: pagination.enabled ? "paginate_pages" : "understand_request",
+        policy: { recording },
+        side_effect: { kind: "read_only" },
+        ...(landingVerify !== undefined ? { verify: landingVerify } : {}),
+      };
+      if (!pagination.enabled) {
+        nodes.understand_request = observeNode;
+      }
+    } else {
+      if (!pagination.enabled) {
+        nodes.understand_request = observeNode;
+      }
+    }
+    if (pagination.enabled) {
+      nodes.paginate_pages = paginateLoopNode(pagination, recording);
+      nodes.extract_current_page = extractNode({
+        instruction: paginatedExtractionInstruction(request.prompt, extractionFields),
+        next: "advance_page",
+        recording,
+        schemaRef: "generated/paginated_result@1",
+        fields: extractionFields,
+      });
+      nodes.advance_page = {
+        what: [{ action: "act", instruction: advancePageInstruction(request.prompt) }],
+        next: "paginate_pages",
+        policy: { recording },
+        side_effect: { kind: "read_only" },
+      };
+    } else {
+      nodes.extract_results = extractNode({
+        instruction: extractionInstruction(request.prompt, extractionFields),
+        next: "done",
+        recording,
+        schemaRef: "generated/default_result@1",
+        fields: extractionFields,
+      });
+    }
+    start = startUrl !== undefined ? "open_start_url" : pagination.enabled ? "paginate_pages" : "understand_request";
   }
   nodes.done = { terminal: "success" };
 
@@ -172,12 +206,12 @@ function buildDeterministicMvpGenerationPlan(request: GenerationRequest, capabil
     },
     params_schema: paramsSchema({
       hasStartUrl: startUrl !== undefined,
-      pagination: pagination.enabled,
+      pagination: !sideEffect && pagination.enabled,
       startUrl,
-      maxPages: pagination.maxPages,
+      maxPages: sideEffect ? undefined : pagination.maxPages,
     }),
     ...(target !== undefined ? { target } : {}),
-    start: startUrl !== undefined ? "open_start_url" : pagination.enabled ? "paginate_pages" : "understand_request",
+    start,
     nodes,
   };
 
