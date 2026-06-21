@@ -11,13 +11,10 @@
  * capability = {dom:true, vision:false, utility:false}. utility/비브라우저 액션은 명시적 throw(조용한 no-op 금지).
  * GatewayError 종결 실패는 error-catalog exceptionClass 로 분류해 실패 StepResult 로 환원(조용한 흡수 금지).
  */
-import { createHash } from "node:crypto";
 
-import { ERROR_CATALOG, type ErrorCode } from "../../../ts/error-catalog";
+import { type ErrorCode } from "../../../ts/error-catalog";
 import type {
   ArtifactRef,
-  ChallengeSummary,
-  ExceptionClass,
   ExecutorPlugin,
   PlainSecret,
   RedactedString,
@@ -25,14 +22,12 @@ import type {
   SecretRef,
   SideEffectKind,
   StepResult,
-  StepStatus,
   VerifyResult,
 } from "../../../ts/core-types";
 import type {
   AuthenticatedPrincipal,
   LLMRequest,
   LLMResponse,
-  PromptInspectionTextRun,
   SecretStoreBoundary,
 } from "../../../ts/security-middleware-contract";
 import { GatewayError, type GatewayArtifactSink } from "../gateway/llm-gateway";
@@ -41,6 +36,25 @@ import type { CdpSession, CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
 import { normalizePageSnapshot } from "./page-snapshot";
 import { StagehandDomExecutorError, type DomExecutorErrorCode } from "./dom-executor-error";
+import {
+  ACTION_PLAN_SCHEMA,
+  CHALLENGE_DETECTION_SCRIPT,
+  CLICK_POLL_MS,
+  NETWORK_JSON_CAPTURE_SCRIPT,
+  UTILITY_ACTIONS,
+  classify,
+  clickSettleMs,
+  humanAssistChallenge,
+  nowIso,
+  parseHumanAssistChallenge,
+  promptInspectionTextRuns,
+  sha,
+  sleep,
+  stagehandCallIdsFromError,
+  stagehandCallIdsFromResponse,
+  type HumanAssistChallenge,
+  type NormalizedDomSnapshot,
+} from "./stagehand-dom-executor-support";
 import { applyRowAnchor, coerceRowAnchor, type ExtractRowAnchor } from "./extract-row-anchor";
 import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 
@@ -79,210 +93,6 @@ export interface StagehandDomExecutorConfig {
   // ActionPlanCache 키 스코프(run-scoped — 오케스트레이터가 run 단위로 주입). url_pattern/structuralHash 는 ctx.pageState 에서.
   scenarioVersionId: string;
   browserIdentityVersion: number;
-}
-
-const UTILITY_ACTIONS = new Set(["navigate", "download", "upload", "api_call", "file", "shell"]);
-const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", schemaVersion: "1", strict: true } as const;
-// 결정형 클릭(click_selector) settle — 무거운 SPA 상세/async 모달 렌더 대응. 미존재 시 deadline 까지 폴 후 loud(은폐 금지).
-// 동적 읽기(매 호출): 테스트가 DET_CLICK_SETTLE_MS 로 단축할 수 있게 함(모듈 로드 시점 고정 회피).
-const clickSettleMs = (): number => Number(process.env.DET_CLICK_SETTLE_MS ?? 15000);
-const CLICK_POLL_MS = 500;
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-// LLM 이 셀렉터를 정하려면 원문 DOM 이 필요(PageState 파생 신호만으론 #password 등 타깃 불가). user 메시지로 실어
-// Gateway redaction(§4) 경계가 redact/injection-탐지하게 한다. 토큰 예산 보호용 상한(초과분 절단).
-const NETWORK_JSON_CAPTURE_SCRIPT = `(() => {
-  const w = window;
-  if (w.__RPA_NETWORK_CAPTURE_INSTALLED__ === true) return { installed: true, already: true };
-  w.__RPA_NETWORK_CAPTURE_INSTALLED__ = true;
-  const maxEntries = 20;
-  const maxBodyChars = 120000;
-  const ensureStore = () => {
-    if (!Array.isArray(w.__RPA_NETWORK_JSON__)) w.__RPA_NETWORK_JSON__ = [];
-    return w.__RPA_NETWORK_JSON__;
-  };
-  const looksJson = (text) => {
-    const s = String(text || "").trim();
-    return s.startsWith("{") || s.startsWith("[");
-  };
-  const pushJson = (source, url, status, body) => {
-    try {
-      const text = typeof body === "string" ? body : JSON.stringify(body);
-      if (!looksJson(text)) return;
-      const store = ensureStore();
-      store.push({
-        source,
-        url: String(url || ""),
-        status: typeof status === "number" ? status : undefined,
-        capturedAt: new Date().toISOString(),
-        body: text.length > maxBodyChars ? text.slice(0, maxBodyChars) : text
-      });
-      if (store.length > maxEntries) store.splice(0, store.length - maxEntries);
-      w.__RPA_RECENT_JSON__ = store;
-      w.__rpaNetworkJson = store;
-    } catch (_) {}
-  };
-  const shouldCapture = (contentType, text) => {
-    const ct = String(contentType || "").toLowerCase();
-    return ct.includes("json") || looksJson(text);
-  };
-  if (typeof w.fetch === "function" && w.__RPA_ORIGINAL_FETCH__ === undefined) {
-    const originalFetch = w.fetch.bind(w);
-    w.__RPA_ORIGINAL_FETCH__ = originalFetch;
-    w.fetch = async (...args) => {
-      const response = await originalFetch(...args);
-      try {
-        const clone = response.clone();
-        const url = response.url || (args[0] && (typeof args[0] === "string" ? args[0] : args[0].url));
-        clone.text().then((text) => {
-          const contentType = clone.headers && clone.headers.get ? clone.headers.get("content-type") : "";
-          if (shouldCapture(contentType, text)) pushJson("fetch", url, response.status, text);
-        }).catch(() => {});
-      } catch (_) {}
-      return response;
-    };
-  }
-  if (typeof w.XMLHttpRequest === "function" && w.XMLHttpRequest.prototype.__RPA_CAPTURE_PATCHED__ !== true) {
-    const proto = w.XMLHttpRequest.prototype;
-    const originalOpen = proto.open;
-    const originalSend = proto.send;
-    proto.__RPA_CAPTURE_PATCHED__ = true;
-    proto.open = function(method, url, ...rest) {
-      this.__rpaRequestUrl = url;
-      return originalOpen.call(this, method, url, ...rest);
-    };
-    proto.send = function(...args) {
-      try {
-        this.addEventListener("loadend", () => {
-          try {
-            const text = typeof this.responseText === "string" ? this.responseText : "";
-            const contentType = this.getResponseHeader ? this.getResponseHeader("content-type") : "";
-            if (shouldCapture(contentType, text)) pushJson("xhr", this.__rpaRequestUrl || this.responseURL, this.status, text);
-          } catch (_) {}
-        });
-      } catch (_) {}
-      return originalSend.apply(this, args);
-    };
-  }
-  ensureStore();
-  return { installed: true, already: false };
-})()`;
-const CHALLENGE_DETECTION_SCRIPT = `(() => {
-  const marker = "rpa_challenge_detector_v1";
-  const visible = (el) => {
-    if (!el || !(el instanceof Element)) return false;
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
-    if (el.getAttribute("aria-hidden") === "true") return false;
-    if (el instanceof HTMLInputElement && el.type === "hidden") return false;
-    const rect = el.getBoundingClientRect();
-    return (rect.width > 0 && rect.height > 0) || el.getClientRects().length > 0;
-  };
-  const visibleMatches = (selector) => Array.from(document.querySelectorAll(selector)).some(visible);
-  const visibleInputs = () => Array.from(document.querySelectorAll("input, textarea")).filter(visible);
-  const text = ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").trim();
-  const attrText = (el) => [
-    el.id,
-    el.getAttribute("name"),
-    el.getAttribute("autocomplete"),
-    el.getAttribute("placeholder"),
-    el.getAttribute("aria-label"),
-    el.getAttribute("title"),
-  ].filter(Boolean).join(" ");
-  const iframeChallenge = Array.from(document.querySelectorAll("iframe")).some((el) => {
-    if (!visible(el)) return false;
-    const s = [
-      el.getAttribute("src"),
-      el.getAttribute("title"),
-      el.getAttribute("name"),
-      el.id,
-      el.className,
-    ].filter(Boolean).join(" ");
-    return /recaptcha|hcaptcha|captcha/i.test(s);
-  });
-  const mfaInput = visibleInputs().some((el) => /one-time-code|otp|mfa|2fa|two-factor|verification|인증번호|2단계|보안코드/i.test(attrText(el)));
-  const captchaWidget = visibleMatches(".g-recaptcha, .h-captcha, [data-sitekey], [data-captcha], [id*='captcha'], [class*='captcha'], [id*='Captcha'], [class*='Captcha']");
-  if (mfaInput || /\\b(otp|mfa|2fa)\\b|one[- ]?time code|two[- ]?factor|인증번호|2단계 인증|보안코드/i.test(text)) {
-    return { type: "mfa", detectedBy: "dom", confidence: 0.93, marker };
-  }
-  if (captchaWidget || iframeChallenge || /captcha challenge|complete (the )?captcha|로봇이 아닙니다|자동 입력 방지|보안문자/i.test(text)) {
-    return { type: "captcha", detectedBy: "dom", confidence: 0.93, marker };
-  }
-  return null;
-})()`;
-const sha = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 32);
-const nowIso = (): string => new Date().toISOString();
-type HumanAssistChallenge = ChallengeSummary & { type: "captcha" | "mfa" };
-type NormalizedDomSnapshot = { text?: string; textRuns?: readonly PromptInspectionTextRun[] };
-
-function humanAssistChallenge(challenge: ChallengeSummary | undefined): HumanAssistChallenge | undefined {
-  if (challenge?.type === "captcha" || challenge?.type === "mfa") return challenge as HumanAssistChallenge;
-  return undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseHumanAssistChallenge(value: unknown): HumanAssistChallenge | undefined {
-  if (!isRecord(value)) return undefined;
-  const type = value.type;
-  const detectedBy = value.detectedBy;
-  const confidence = value.confidence;
-  if ((type !== "captcha" && type !== "mfa") || detectedBy !== "dom" || typeof confidence !== "number") {
-    return undefined;
-  }
-  return {
-    type,
-    detectedBy,
-    confidence: Math.max(0, Math.min(1, confidence)),
-  };
-}
-
-// ChallengeDetector v1: captcha/mfa only. Those are the only challenge classes
-// the interpreter/driver can route to human assist without guessing policy.
-// block_page/rate_limit/login_loop/access_denied/session_expired remain explicit
-// failure/branch signals until their resolution policies exist.
-/** error-catalog exceptionClass → StepStatus + StepResult.exception.class(4종 고정; none→system). */
-function classify(code: ErrorCode): { status: StepStatus; cls: ExceptionClass } {
-  switch (ERROR_CATALOG[code].exceptionClass) {
-    case "business":
-      return { status: "failed_business", cls: "business" };
-    case "challenge":
-      return { status: "failed_challenge", cls: "challenge" };
-    case "security":
-      return { status: "failed_security", cls: "security" };
-    default: // system | none → system
-      return { status: "failed_system", cls: "system" };
-  }
-}
-
-function stagehandCallIdsFromResponse(response: LLMResponse): string[] {
-  return typeof response.stagehandCallId === "string" && response.stagehandCallId.trim().length > 0
-    ? [response.stagehandCallId]
-    : [];
-}
-
-function stagehandCallIdsFromError(error: GatewayError): string[] {
-  return typeof error.stagehandCallId === "string" && error.stagehandCallId.trim().length > 0
-    ? [error.stagehandCallId]
-    : [];
-}
-
-function promptInspectionTextRuns(snapshot: unknown): readonly PromptInspectionTextRun[] {
-  if (!isRecord(snapshot) || !Array.isArray(snapshot.textRuns)) return [];
-  const runs: PromptInspectionTextRun[] = [];
-  for (const item of snapshot.textRuns) {
-    if (!isRecord(item)) continue;
-    const text = item.text;
-    const visibility = item.visibility;
-    const source = item.source;
-    if (typeof text !== "string" || text.trim().length === 0) continue;
-    if (visibility !== "hidden" && visibility !== "offscreen" && visibility !== "zero_opacity") continue;
-    if (source !== "dom" && source !== "network" && source !== "screenshot" && source !== "artifact") continue;
-    runs.push({ text: text.slice(0, 2000) as RedactedString, visibility, source });
-    if (runs.length >= 120) break;
-  }
-  return runs;
 }
 
 export class StagehandDomExecutor implements ExecutorPlugin {
