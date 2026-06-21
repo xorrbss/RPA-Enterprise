@@ -49,7 +49,7 @@ import {
 } from "./run-step-driver-artifacts";
 import { compiledScenarioFrom } from "./ir-translate";
 import { InterpreterError, runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
-import { settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
+import { pauseLinkedWorkitemCheckout, settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
 import { recordChallenge } from "../observability/telemetry";
 import type { MergedExtractArtifactSink } from "./merged-extract-artifact";
 import {
@@ -402,6 +402,8 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
         ? { assigneeRole: s.assigneeRole, onTimeout: s.onTimeout, reason: "human_task" }
         : {}),
     });
+    // W9: suspend 시 연결 workitem 의 checkout timer pause(suspend 중 checkout 10m 만료로 회수/abandon 오발 방지).
+    await pauseLinkedWorkitemCheckout(client, { tenantId: run.tenantId, runId: run.runId, correlationId: run.correlationId });
   });
 
   // 2) resume-token 발행(SecretStore.resolve — tx 밖). canonical bytes 로 로컬 HMAC 서명.

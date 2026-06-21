@@ -174,3 +174,75 @@ export async function insertWorkitemDeadLetter(
     [randomUUID(), input.tenantId, input.workitemId, input.runId, input.reasonCode, input.evidenceRef ?? null],
   );
 }
+
+/**
+ * W9: run suspend 시 연결 workitem 의 checkout timer pause(state-machine.md W9 — 상태 유지, checkout_paused_at 설정).
+ * suspend 중에는 W6/W7 만료 sweeper 가 paused workitem 을 건너뛰어(checkout_paused_at IS NULL 가드), run 이 합법적으로
+ * suspend(human_task ≤30m)된 동안 checkout(10m)이 만료돼 회수/abandon 되는 오발을 막는다. 단말 정산과 달리 'processing'
+ * 강제 안 함 — workitem 미연결(ad-hoc)·미체크아웃이면 조용한 no-op(정상). 호출자는 run suspend 전이와 동일 tx 에서 호출.
+ */
+export async function pauseLinkedWorkitemCheckout(
+  client: PoolClient,
+  input: { tenantId: string; runId: string; correlationId: string },
+): Promise<void> {
+  const workitemId = await resolveLinkedWorkitemId(client, input.tenantId, input.runId);
+  if (workitemId === null) return;
+  const t = await applyWorkitemTransition(client, {
+    tenantId: input.tenantId,
+    workitemId,
+    fromStatus: "processing",
+    event: { type: "run_suspended" },
+    guard: {},
+    correlationId: input.correlationId,
+    runId: input.runId,
+    eventIdempotencyKey: `${workitemId}:run_suspended`,
+  });
+  if (!t.applied) return; // workitem 이 'processing' 아님(미체크아웃/이미 정산) — pause 대상 없음.
+  assertExactPendingKinds(t.pending, ["pauseCheckoutTimer"], "W9");
+  // W9 pauseCheckoutTimer: 이미 pause(checkout_paused_at NOT NULL)면 멱등 no-op(재진입 안전).
+  await client.query(
+    `UPDATE workitems SET checkout_paused_at = now()
+      WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'processing' AND checkout_paused_at IS NULL`,
+    [input.tenantId, workitemId],
+  );
+}
+
+/**
+ * W11: run resume(→running) 시 연결 workitem 의 checkout timer resume(state-machine.md W11 — 상태 유지). pause 구간만큼
+ * checkout_expires_at 을 연장하고 checkout_paused_at 을 해제해 '잔여 TTL 부터 재개'한다(suspend 동안 흘러간 시간 보정).
+ * 미체크아웃/un-paused 면 조용한 no-op. 호출자는 run 이 running(R18/R19)에 도달한 동일 tx 에서 호출(R20 failed_system 제외).
+ */
+export async function resumeLinkedWorkitemCheckout(
+  client: PoolClient,
+  input: { tenantId: string; runId: string; correlationId: string },
+): Promise<void> {
+  const workitemId = await resolveLinkedWorkitemId(client, input.tenantId, input.runId);
+  if (workitemId === null) return;
+  const t = await applyWorkitemTransition(client, {
+    tenantId: input.tenantId,
+    workitemId,
+    fromStatus: "processing",
+    event: { type: "run_resumed" },
+    guard: {},
+    correlationId: input.correlationId,
+    runId: input.runId,
+    eventIdempotencyKey: `${workitemId}:run_resumed`,
+  });
+  if (!t.applied) return;
+  assertExactPendingKinds(t.pending, ["resumeCheckoutTimer"], "W11");
+  // W11 resumeCheckoutTimer: pause 구간(now - checkout_paused_at)만큼 만료 연장 + un-pause. un-paused 면 no-op.
+  await client.query(
+    `UPDATE workitems
+        SET checkout_expires_at = checkout_expires_at + (now() - checkout_paused_at), checkout_paused_at = NULL
+      WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'processing' AND checkout_paused_at IS NOT NULL`,
+    [input.tenantId, workitemId],
+  );
+}
+
+async function resolveLinkedWorkitemId(client: PoolClient, tenantId: string, runId: string): Promise<string | null> {
+  const r = await client.query<{ workitem_id: string | null }>(
+    `SELECT workitem_id::text AS workitem_id FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+    [tenantId, runId],
+  );
+  return r.rows[0]?.workitem_id ?? null;
+}
