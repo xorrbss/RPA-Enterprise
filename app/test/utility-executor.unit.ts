@@ -25,6 +25,15 @@ const neverSessions = {
   },
 } as unknown as CdpSessionProvider;
 
+// verify(criteria) 용 세션 스텁: evaluate 는 고정 결과, url() 은 고정 URL(슬라이스3 결정형 criteria 평가용).
+function mockSessions(opts: { evalResult?: unknown; url?: string }): CdpSessionProvider {
+  const session = {
+    url: () => opts.url ?? "about:blank",
+    evaluate: async () => opts.evalResult,
+  };
+  return { forLease: () => session } as unknown as CdpSessionProvider;
+}
+
 const exec = new UtilityExecutor(neverSessions);
 // assertUtilityAction(scheme 가드)은 abort 체크(false) 직후·session 사용 이전에 실행되므로 ctx는 abortSignal만 필요.
 const ctx = { abortSignal: { aborted: false } } as unknown as RunContext;
@@ -91,6 +100,51 @@ await (async () => {
     wildcardPassedPolicyGate = !(e instanceof UtilityExecutorError && e.code === "DOMAIN_POLICY_VIOLATION");
   }
   check("navigate wildcard policy allows subdomain before session", wildcardPassedPolicyGate);
+
+  // ── 슬라이스3: 결정형 verify criteria 확장 (element_absent/text_includes/url_matches) ──
+  {
+    const r = await new UtilityExecutor(mockSessions({ evalResult: true })).verify({ type: "element_absent", target: { selector: ".spinner" } }, policyCtx);
+    check("verify element_absent 부재→pass", r.status === "pass", JSON.stringify(r));
+  }
+  {
+    const r = await new UtilityExecutor(mockSessions({ evalResult: false })).verify({ type: "element_absent", target: { selector: ".spinner" } }, policyCtx);
+    check("verify element_absent 잔존→fail_det", r.status === "fail_det" && r.failedCriteria.includes("element_absent"), JSON.stringify(r));
+  }
+  {
+    const r = await new UtilityExecutor(mockSessions({ evalResult: true })).verify({ type: "text_includes", texts: ["완료", "성공"] }, policyCtx);
+    check("verify text_includes 포함→pass", r.status === "pass", JSON.stringify(r));
+  }
+  {
+    const r = await new UtilityExecutor(mockSessions({ evalResult: false })).verify({ type: "text_includes", texts: ["없는문구"] }, policyCtx);
+    check("verify text_includes 미포함→fail_det", r.status === "fail_det", JSON.stringify(r));
+  }
+  {
+    const r = await new UtilityExecutor(mockSessions({ url: "https://shop.example/orders/done" })).verify({ type: "url_matches", pattern: "/orders/done$" }, policyCtx);
+    check("verify url_matches 일치→pass", r.status === "pass", JSON.stringify(r));
+  }
+  {
+    const r = await new UtilityExecutor(mockSessions({ url: "https://shop.example/cart" })).verify({ type: "url_matches", pattern: "/orders/done$" }, policyCtx);
+    check("verify url_matches 불일치→fail_det", r.status === "fail_det", JSON.stringify(r));
+  }
+  {
+    // 기존 지원(회귀): element_visible 유지
+    const r = await new UtilityExecutor(mockSessions({ evalResult: true })).verify({ type: "element_visible", target: { selector: "#ok" } }, policyCtx);
+    check("verify element_visible(기존) pass", r.status === "pass");
+  }
+  {
+    // parse 오류 loud (조용한 false 금지)
+    try { await new UtilityExecutor(mockSessions({})).verify({ type: "text_includes", texts: [] }, policyCtx); check("text_includes 빈배열→throw", false); }
+    catch (e) { check("text_includes 빈배열→IR_SCHEMA_INVALID", e instanceof UtilityExecutorError && e.code === "IR_SCHEMA_INVALID", String(e)); }
+  }
+  {
+    try { await new UtilityExecutor(mockSessions({})).verify({ type: "url_matches", pattern: "[invalid(regex" }, policyCtx); check("url_matches 잘못된 regex→throw", false); }
+    catch (e) { check("url_matches 잘못된 regex→IR_SCHEMA_INVALID", e instanceof UtilityExecutorError && e.code === "IR_SCHEMA_INVALID", String(e)); }
+  }
+  {
+    // 미지원 criterion 은 여전히 loud (value_match → vision 실행기)
+    try { await new UtilityExecutor(mockSessions({})).verify({ type: "value_match", path: "x", equals: 1 }, policyCtx); check("value_match→throw", false); }
+    catch (e) { check("value_match 미지원→EXECUTOR_CAPABILITY_MISMATCH", e instanceof UtilityExecutorError && e.code === "EXECUTOR_CAPABILITY_MISMATCH", String(e)); }
+  }
 })();
 
 if (failures > 0) {
