@@ -21,6 +21,7 @@ import {
   parseVersionParam,
   promoteScenario,
   promoteScenarioFromRun,
+  resolveRunTargetForIr,
   signedCommandRefsFor,
   UUID_RE,
   type ScenarioVersionDetailRow,
@@ -37,6 +38,9 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
     }
     const ir = outcome.ir;
     const created = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+      // 실행 대상(ir.target) 미설정 시 시작 URL로 사이트 자동 추론·주입 — 쉬운 만들기 산출 IR이 그대로 실행되도록.
+      const inferredTarget = await resolveRunTargetForIr(c, principal.tenantId, ir);
+      const irToStore = inferredTarget !== undefined ? { ...ir, target: inferredTarget } : ir;
       const sc = await c.query<{ id: string }>(
         `INSERT INTO scenarios (id, tenant_id, name) VALUES ($1::uuid, $2::uuid, $3)
          ON CONFLICT (tenant_id, name) WHERE archived_at IS NULL DO NOTHING RETURNING id`,
@@ -55,7 +59,7 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
           principal.tenantId,
           scenarioId,
           ir.meta.version,
-          JSON.stringify(ir),
+          JSON.stringify(irToStore),
           outcome.compiledAst,
           ir.params_schema !== undefined ? JSON.stringify(ir.params_schema) : null,
         ],
@@ -294,6 +298,8 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
       }
       const ir = outcome.ir;
       const updated = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const inferredTarget = await resolveRunTargetForIr(c, principal.tenantId, ir);
+        const irToStore = inferredTarget !== undefined ? { ...ir, target: inferredTarget } : ir;
         const current = await c.query<{ name: string; version: number }>(
           `SELECT s.name, sv.version
             FROM scenarios s
@@ -328,7 +334,7 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
             principal.tenantId,
             scenarioId,
             ir.meta.version,
-            JSON.stringify(ir),
+            JSON.stringify(irToStore),
             outcome.compiledAst,
             ir.params_schema !== undefined ? JSON.stringify(ir.params_schema) : null,
           ],
