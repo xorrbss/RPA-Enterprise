@@ -15,7 +15,7 @@ import { S3ArtifactRedactor } from "../src/artifacts/s3-artifact-redactor";
 import { S3ArtifactRetentionStore } from "../src/artifacts/s3-artifact-retention-store";
 import type { S3HttpTransport } from "../src/artifacts/s3-object-store";
 import type { ArtifactLifecycleWorkerConfig } from "../src/config/env";
-import { buildArtifactLifecycleWorkerOptions } from "../src/main";
+import { buildArtifactLifecycleWorkerOptions } from "../src/main-worker";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
