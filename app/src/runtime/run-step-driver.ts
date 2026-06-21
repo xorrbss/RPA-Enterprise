@@ -425,7 +425,7 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
       event: { type: "bookmark_saved" },
       guard: { resumeTokenIssued: true },
       correlationId: run.correlationId,
-      eventIdempotencyKey: `${run.runId}:bookmark_saved`,
+      eventIdempotencyKey: `${run.runId}:${s.stepId}:${s.attempt}:bookmark_saved`,
     });
     if (!r11.applied) {
       throw new Error(`driveSuspend: R11 not applied (${r11.reason}, observed=${r11.observed ?? "none"})`);

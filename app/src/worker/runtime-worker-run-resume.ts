@@ -131,7 +131,9 @@ export class WorkerRunResume {
           guard: { leaseAcquired: true },
           correlationId: job.correlationId ?? row.correlation_id,
           workerId,
-          eventIdempotencyKey: `${runId}:run_resume:r17`,
+          // 멱등 앵커는 resume 사이클별 고유해야 한다(run 이 suspend→resume 를 반복하면 동일 키가 events_outbox
+          //   UNIQUE 충돌). 재개 대상 토큰의 issuedAt 은 suspend 사이클당 1회 발행이라 per-cycle 결정형 식별자다.
+          eventIdempotencyKey: `${runId}:run_resume:r17:${token.issuedAt}`,
         });
 
         if (!transition.applied) {
@@ -210,7 +212,8 @@ export class WorkerRunResume {
         guard: next.guard,
         correlationId: job.correlationId ?? row.correlation_id,
         workerId,
-        eventIdempotencyKey: `${runId}:run_resume`,
+        // R17 과 동일하게 resume 사이클별 토큰 issuedAt 으로 스코프(반복 resume 의 run.resumed outbox 키 충돌 방지).
+        eventIdempotencyKey: `${runId}:run_resume:${txA.intent.token.issuedAt}`,
       });
 
       if (!transition.applied) {
