@@ -485,12 +485,22 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     }
 
     // 적용: CDP 로 실제 mutation(click/fill/select). 적용 실패는 런타임 예외로 전파(분류는 상위).
-    await this.applyPlan(plan, session, ctx);
+    // P0a+ self-heal: 캐시된 plan(hit, 또는 이번 run 에 put 된 miss) 적용이 실패하면 드리프트 의심 →
+    //   markSuspect 로 강등(active→suspect)해 다음 run 이 같은 깨진 셀렉터를 재생하지 않고 재해석하게 한다
+    //   (§7.2 failed plan never active, 조용한 false 금지). 강등은 best-effort — 원 적용 예외를 보존해 상위 분류로 전파.
+    try {
+      await this.applyPlan(plan, session, ctx);
+    } catch (applyError) {
+      if (this.cache) {
+        await this.cache.markSuspect(cacheKey).catch(() => undefined);
+      }
+      throw applyError;
+    }
     const postChallenge = await this.detectDomChallenge(session);
     if (postChallenge !== undefined) {
       return this.suspendForChallenge(stepId, "act", ctx, postChallenge, {
         stagehandCallIds: callIds,
-        cache: { mode: cacheMode, ...(this.cache ? { actionPlanCacheId: cacheKey.domStructuralHash } : {}) },
+        cache: { mode: cacheMode },
         sideEffect: { kind: a.sideEffect ?? "update", committed: true },
       });
     }
@@ -505,7 +515,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       pageStateAfter: before,
       artifacts: [],
       stagehandCallIds: callIds,
-      cache: { mode: cacheMode, ...(this.cache ? { actionPlanCacheId: cacheKey.domStructuralHash } : {}) },
+      cache: { mode: cacheMode },
       // act 는 페이지를 바꾼다 — sideEffect.kind 는 시나리오(IR)가 선언(submit/login 등); 미지정 시 update.
       sideEffect: { kind: a.sideEffect ?? "update", committed: true },
       timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },

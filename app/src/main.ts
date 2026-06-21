@@ -84,6 +84,7 @@ import { StagehandBrowserSessionProvider } from "./executor/browser-session-prov
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
 import { PgBrowserSessionStore, buildAesGcmSessionEncryptor, type BrowserSessionStore } from "./runtime/browser-session-store";
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
+import { PgActionPlanCache } from "./executor/pg-action-plan-cache";
 import { PgMergedExtractArtifactSink } from "./runtime/merged-extract-artifact";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
 import { PgSessionRestorer } from "./runtime/session-restorer";
@@ -308,6 +309,7 @@ function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
     promptTemplateVersion: gw.promptTemplateVersion,
     budget: gw.budget,
   }, {
+    cache: new PgActionPlanCache(pool),
     extractArtifactSink: approvalInboxArtifactSink,
   });
 }
