@@ -58,6 +58,23 @@ async function main(): Promise<void> {
     check("credential(JSON): 비밀 아닌 값(user) 보존", out.includes("alice"));
   }
 
+  // (1b) RED-01 회귀 — 민감 KEY 의 값이 **객체/array-of-객체** 일 때도 값 전체 마스킹(스칼라 leaf 만 검사하던 under-mask 누출).
+  //      패턴 미매칭(이메일/카드 등 자기구분 시그니처 없는 고엔트로피 비밀)이 객체 안에 있으면 종전엔 그대로 누출됐다.
+  {
+    const obj = await redactText(t, '{"credential":{"value":"raw-supersecret-AAA111"},"user":"alice"}');
+    check("RED-01 객체값 credential: 비밀 누출 없음", !obj.includes("raw-supersecret-AAA111"), obj);
+    check("RED-01 객체값 credential: 라벨 삽입", obj.includes("[REDACTED:credential]"), obj);
+    check("RED-01 객체값 credential: 비밀 아닌 값(user) 보존", obj.includes("alice"), obj);
+
+    const arr = await redactText(t, '{"token":[{"access":"raw-token-CCC333"}]}');
+    check("RED-01 array-of-objects token: 비밀 누출 없음", !arr.includes("raw-token-CCC333"), arr);
+
+    // 비민감 키 배열 안의 중첩 민감 키도 여전히 마스킹(over-mask 회피: 비밀 아닌 값은 보존).
+    const nested = await redactText(t, '{"data":[{"password":"raw-inner-EEE555"}],"user":"bob"}');
+    check("RED-01 중첩 민감 키: 비밀 누출 없음", !nested.includes("raw-inner-EEE555"), nested);
+    check("RED-01 중첩: 비밀 아닌 값(user) 보존(over-mask 아님)", nested.includes("bob"), nested);
+  }
+
   // (2) 자격증명 — key=value / key: value 형태.
   {
     const out = await redactText(t, "api_key=fakekey_abc123\ntoken: faketoken_xyz789");
