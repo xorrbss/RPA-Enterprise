@@ -190,7 +190,9 @@ export class WorkerRunResume {
       }),
     );
 
-    const result: RuntimeJobResult = await withTenantTx(this.pool, tenantId, async (client) => {
+    let result: RuntimeJobResult;
+    try {
+    result = await withTenantTx(this.pool, tenantId, async (client) => {
       const run = await client.query<RunRow>(
         `SELECT status, correlation_id::text
            FROM runs
@@ -244,6 +246,21 @@ export class WorkerRunResume {
         emittedEvents: transition.emitted.map((e) => e.eventId as EventId),
       };
     });
+    } catch (completionErr) {
+      // resume 완료 전이(R18/R19/R20) tx 가 영속 인프라 오류로 throw 하면 run 은 txA 가 커밋한 'resuming' 에서
+      //   좌초한다(graphile 재시도도 같은 오류면 무한 — 좀비). suspend 측 R12 와 대칭으로
+      //   terminalizeStuckRunAsSystemFailure 가 resuming→R20(failed_system)으로 종결하고 연결 workitem 을 system 정산한다.
+      //   terminalize 가 false(동시 abort 등으로 더는 'resuming' 아님)면 원 예외를 재던져 graphile 에 위임한다.
+      console.error(
+        `runtime-worker: resume 완료 tx 좌초(run ${runId.slice(0, 8)}) — R20 종결 시도: ${completionErr instanceof Error ? completionErr.message : String(completionErr)}`,
+      );
+      const terminalized = await terminalizeStuckRunAsSystemFailure(
+        { tenantId, runId, correlationId: txA.intent.correlationId },
+        this.pool,
+      );
+      if (!terminalized) throw completionErr;
+      return { kind: "completed", emittedEvents: [] };
+    }
 
     // Phase C: resume 구동(tx 밖 — 브라우저 작업이 DB 커넥션 점유 금지). handleRunClaim Phase B 와 동일 패턴.
     //   R18/R19 로 running 도달 + provider 주입 시에만 resumeNodeId 부터 재진입 구동. R20(failed_system)·provider 미주입은 전이만.

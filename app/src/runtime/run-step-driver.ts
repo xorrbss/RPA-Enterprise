@@ -80,6 +80,12 @@ export interface ClaimedRun {
   readonly assetRefs?: Record<string, SecretRef | string>;
 }
 
+/**
+ * terminalize/정산이 실제로 쓰는 run 식별 최소 형태. ClaimedRun 은 구조적으로 이에 할당 가능하며, resume 완료 tx 가
+ * 좌초(영속 인프라 throw)해 전체 ClaimedRun 을 구성하지 못하는 실패 윈도우에서도 동일 종결 경로를 호출할 수 있다.
+ */
+export type RunTerminalRef = Pick<ClaimedRun, "tenantId" | "runId" | "correlationId">;
+
 export interface DriveDeps {
   readonly pool: Pool;
   readonly executor: ExecutorPlugin;
@@ -158,12 +164,12 @@ async function driveScenarioWithSystemFailsafe(run: ClaimedRun, deps: DriveDeps,
 }
 
 /**
- * 좀비 방지(C3): 현재 상태를 재read(FOR UPDATE)해 running→failed_system(R8) / completing→failed_system(R22) /
+ * 좀비 방지(C3): 현재 상태를 재read(FOR UPDATE)해 running→failed_system(R8) / completing→failed_system(R22) / resuming→failed_system(R20) /
  * suspending→failed_system(R12) 로 종결하고 연결 Workitem 을 system 정산한다(suspending 은 bookmark 저장 중
  * R4/R5 commit 후 resume-token 발행·저장이 tx 밖 외부 I/O라 부분 실패 윈도우 — R12 '일관성 복구'로 종결). 폴백이라
  * throw 금지 — 변환 불가(이미 종결/동시 CAS 변경/정산 실패)면 false 를 반환해 호출부가 원 예외를 재던지게 한다.
  */
-export async function terminalizeStuckRunAsSystemFailure(run: ClaimedRun, pool: Pool): Promise<boolean> {
+export async function terminalizeStuckRunAsSystemFailure(run: RunTerminalRef, pool: Pool): Promise<boolean> {
   try {
     return await withTenantTx(pool, run.tenantId, async (client) => {
       const r = await client.query<{ status: RunState }>(
@@ -171,9 +177,16 @@ export async function terminalizeStuckRunAsSystemFailure(run: ClaimedRun, pool: 
         [run.tenantId, run.runId],
       );
       const status = r.rows[0]?.status;
-      if (status !== "running" && status !== "completing" && status !== "suspending") return false;
-      const event: RunEvent = status === "running" ? { type: "unrecoverable_exception" } : status === "completing" ? { type: "finalize_failed" } : { type: "bookmark_failed" };
-      const guard: RunGuard = status === "running" ? { exceptionClass: "system" } : {};
+      if (status !== "running" && status !== "completing" && status !== "suspending" && status !== "resuming") return false;
+      const event: RunEvent =
+        status === "running" ? { type: "unrecoverable_exception" }
+          : status === "completing" ? { type: "finalize_failed" }
+          : status === "suspending" ? { type: "bookmark_failed" }
+          : { type: "restore_failed" }; // resuming → R20(완료 전이 tx 자체가 좌초)
+      const guard: RunGuard =
+        status === "running" ? { exceptionClass: "system" }
+          : status === "resuming" ? { loginBypassPossible: false } // R20: 재로그인 우회 불가 종결
+          : {};
       const t = await applyRunTransition(client, {
         tenantId: run.tenantId,
         runId: run.runId,
@@ -460,7 +473,7 @@ async function failRunningRun(run: ClaimedRun, deps: DriveDeps, outcome: Scenari
  * 해소해 공유 정산 함수에 전달 — workitem 미연결(ad-hoc run) 이면 no-op. driveClaimedRun(production) 의 두 완료 경로
  * 단절(workitem processing 영구잔류·DLQ 미발화)을 닫는다. coordinator 와 정산 로직을 공유한다(단일 진실원천).
  */
-async function settleLinkedWorkitemFromRun(client: PoolClient, run: ClaimedRun, terminal: RunTerminalKind): Promise<void> {
+async function settleLinkedWorkitemFromRun(client: PoolClient, run: RunTerminalRef, terminal: RunTerminalKind): Promise<void> {
   const r = await client.query<{ workitem_id: string | null }>(
     `SELECT workitem_id::text FROM runs WHERE tenant_id=$1::uuid AND id=$2::uuid`,
     [run.tenantId, run.runId],
