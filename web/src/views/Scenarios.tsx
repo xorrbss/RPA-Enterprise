@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -8,7 +8,7 @@ import { ActionButton } from "../components/ActionButton";
 import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
-import { navigate } from "../router";
+import { navigate, useHashParam } from "../router";
 import type { ScenarioItem, ScenarioVersionItem } from "../api/types";
 
 // 자동화 만들기(시나리오 스튜디오): 작성/편집 폼 + 목록 + 운영 기준 지정.
@@ -20,10 +20,28 @@ export function ScenariosView(): JSX.Element {
   const query = useQuery({ queryKey: ["scenarios"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 10_000 });
   const [form, setForm] = useState<ScenarioFormMode | null>(null);
   const [versionsFor, setVersionsFor] = useState<ScenarioItem | null>(null);
+  // 'AI로 설명해서 만들기'(자연어 생성기) 펼침 — 기본 진입은 '+ 새 자동화 만들기'(쉬운 만들기), AI 생성기는 접어 둔다.
+  // 단 사이트 등록→생성 prefill·Playground 'AI로 만들기' 딥링크로 들어오면 자동 펼침(접힌 채면 prefill이 묻혀 dead-end).
+  const prefillSite = useHashParam("site");
+  const prefillStartUrl = useHashParam("start_url");
+  const prefillBrowser = useHashParam("browser_identity");
+  const prefillNetwork = useHashParam("network_policy");
+  const prefillCreator = useHashParam("creator");
+  const aiDeepLinked =
+    prefillSite !== null || prefillStartUrl !== null || prefillBrowser !== null || prefillNetwork !== null || prefillCreator === "ai";
+  const [aiOpen, setAiOpen] = useState(aiDeepLinked);
+  useEffect(() => {
+    if (aiDeepLinked) setAiOpen(true);
+  }, [aiDeepLinked]);
 
   return (
     <div>
-      {can("scenario.create") && <PromptScenarioGenerator />}
+      {can("scenario.create") && (
+        <details className="ai-creator" open={aiOpen} onToggle={(event) => setAiOpen((event.currentTarget as HTMLDetailsElement).open)}>
+          <summary>AI로 설명해서 만들기 — 하고 싶은 일을 문장으로 적으면 자동으로 만들어 줍니다</summary>
+          <PromptScenarioGenerator />
+        </details>
+      )}
       {can("scenario.create") && (
         <div style={{ marginBottom: 12 }}>
           <button className="btn" type="button" onClick={() => setForm({ kind: "create" })} disabled={form?.kind === "create"}>
