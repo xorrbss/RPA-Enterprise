@@ -12,12 +12,10 @@
  * GatewayError 종결 실패는 error-catalog exceptionClass 로 분류해 실패 StepResult 로 환원(조용한 흡수 금지).
  */
 
-import { type ErrorCode } from "../../../ts/error-catalog";
 import type {
   ArtifactRef,
   ExecutorPlugin,
   PlainSecret,
-  RedactedString,
   RunContext,
   SecretRef,
   SideEffectKind,
@@ -34,28 +32,24 @@ import { GatewayError, type GatewayArtifactSink } from "../gateway/llm-gateway";
 import { parseActionPlan, type ActionPlan, type ActionPlanCache, type ActionPlanCacheKey } from "./action-plan-cache";
 import type { CdpSession, CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
-import { normalizePageSnapshot } from "./page-snapshot";
 import { StagehandDomExecutorError, type DomExecutorErrorCode } from "./dom-executor-error";
 import {
-  ACTION_PLAN_SCHEMA,
-  CHALLENGE_DETECTION_SCRIPT,
-  CLICK_POLL_MS,
-  NETWORK_JSON_CAPTURE_SCRIPT,
-  UTILITY_ACTIONS,
-  classify,
-  clickSettleMs,
   humanAssistChallenge,
   nowIso,
-  parseHumanAssistChallenge,
-  promptInspectionTextRuns,
-  sha,
-  sleep,
   stagehandCallIdsFromError,
   stagehandCallIdsFromResponse,
-  type HumanAssistChallenge,
-  type NormalizedDomSnapshot,
 } from "./stagehand-dom-executor-support";
-import { applyRowAnchor, coerceRowAnchor, type ExtractRowAnchor } from "./extract-row-anchor";
+import {
+  assertDomAction,
+  buildRequest,
+  detectDomChallenge,
+  ensureNetworkJsonCapture,
+  failResult,
+  snapshotDom,
+  suspendForChallenge,
+  waitForSelectorState,
+} from "./stagehand-dom-executor-dom";
+import { applyRowAnchor, type ExtractRowAnchor } from "./extract-row-anchor";
 import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 
 /** Gateway 호출 경계(LlmGateway 가 구조적으로 충족). Executor 는 adapter 가 아니라 이 포트만 본다. */
@@ -118,10 +112,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (ctx.abortSignal.aborted) {
       throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted before execute`);
     }
-    const a = this.assertDomAction(stepId, action);
+    const a = assertDomAction(stepId, action);
     const challenge = humanAssistChallenge(ctx.pageState.challenge);
     if (challenge !== undefined) {
-      return this.suspendForChallenge(stepId, a.type, ctx, challenge);
+      return suspendForChallenge(stepId, a.type, ctx, challenge);
     }
     return a.type === "act" ? this.executeAct(stepId, a, ctx) : this.executeReadOnly(stepId, a, ctx);
   }
@@ -137,13 +131,13 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     // observe는 PageState 파생 신호만으로 충분하지만, extract는 실데이터를 뽑으려면 현재 DOM 원문이 필요하다.
     // 같은 lease의 CDP 세션에서 읽기 전용 snapshot만 수행하고 mutation은 하지 않는다.
     const session = this.sessions.forLease(ctx.leaseId);
-    if (a.type === "extract") await this.ensureNetworkJsonCapture(session);
-    const domSnapshot = a.type === "extract" ? await this.snapshotDom(session) : undefined;
-    const challenge = await this.detectDomChallenge(session);
+    if (a.type === "extract") await ensureNetworkJsonCapture(session);
+    const domSnapshot = a.type === "extract" ? await snapshotDom(session) : undefined;
+    const challenge = await detectDomChallenge(session);
     if (challenge !== undefined) {
-      return this.suspendForChallenge(stepId, a.type, ctx, challenge);
+      return suspendForChallenge(stepId, a.type, ctx, challenge);
     }
-    const req = this.buildRequest(stepId, a, ctx, domSnapshot);
+    const req = buildRequest(this.cfg, stepId, a, ctx, domSnapshot);
     let callIds: string[] = [];
 
     let res: LLMResponse;
@@ -152,7 +146,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     } catch (e) {
       if (e instanceof GatewayError) {
         callIds = stagehandCallIdsFromError(e);
-        return this.failResult(stepId, a.type, before, startedAt, e.code, callIds);
+        return failResult(stepId, a.type, before, startedAt, e.code, callIds);
       }
       throw e; // GatewayAbortedError 등 제어 신호 전파.
     }
@@ -199,9 +193,9 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     const session = this.sessions.forLease(ctx.leaseId);
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
-    const preChallenge = await this.detectDomChallenge(session);
+    const preChallenge = await detectDomChallenge(session);
     if (preChallenge !== undefined) {
-      return this.suspendForChallenge(stepId, "act", ctx, preChallenge);
+      return suspendForChallenge(stepId, "act", ctx, preChallenge);
     }
     // 결정형 클릭(click_selector): LLM 을 전혀 경유하지 않고 IR 선언 셀렉터를 settle 후 클릭(셀렉터 환각 차단).
     // value/secret 와 상호배타(ir-translate 가 강제). 미존재 시 loud(조용한 false 금지).
@@ -212,7 +206,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (a.assertAbsent !== undefined) {
       return this.executeAssertAbsent(stepId, a.assertAbsent, a.sideEffect, ctx, session, before, startedAt);
     }
-    await this.ensureNetworkJsonCapture(session);
+    await ensureNetworkJsonCapture(session);
     // 캐시 키 = action_plan_cache UNIQUE 7컬럼 + tenant(§D family=(url_pattern, dom_structural_hash)).
     const cacheKey: ActionPlanCacheKey = {
       tenantId: ctx.tenantId,
@@ -238,20 +232,20 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     let fromLlm = false;
     if (!plan) {
       // miss/bypass → LLM 으로 plan 산출(Gateway 경유, action_plan 스키마 strict). 원문 DOM 동봉(셀렉터 타깃팅).
-      const req = this.buildRequest(stepId, a, ctx, await this.snapshotDom(session));
+      const req = buildRequest(this.cfg, stepId, a, ctx, await snapshotDom(session));
       let res: LLMResponse;
       try {
         res = await this.gateway.call(req, ctx.abortSignal);
       } catch (e) {
         if (e instanceof GatewayError) {
           callIds = stagehandCallIdsFromError(e);
-          return this.failResult(stepId, "act", before, startedAt, e.code, callIds);
+          return failResult(stepId, "act", before, startedAt, e.code, callIds);
         }
         throw e;
       }
       callIds = stagehandCallIdsFromResponse(res);
       const parsed = parseActionPlan(res.parsedJson);
-      if (!parsed) return this.failResult(stepId, "act", before, startedAt, "LLM_MALFORMED_OUTPUT", callIds);
+      if (!parsed) return failResult(stepId, "act", before, startedAt, "LLM_MALFORMED_OUTPUT", callIds);
       plan = parsed;
       fromLlm = true;
     }
@@ -306,9 +300,9 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       }
       throw applyError;
     }
-    const postChallenge = await this.detectDomChallenge(session);
+    const postChallenge = await detectDomChallenge(session);
     if (postChallenge !== undefined) {
-      return this.suspendForChallenge(stepId, "act", ctx, postChallenge, {
+      return suspendForChallenge(stepId, "act", ctx, postChallenge, {
         stagehandCallIds: callIds,
         cache: { mode: cacheMode },
         sideEffect: { kind: a.sideEffect ?? "update", committed: true },
@@ -348,7 +342,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     before: ReturnType<typeof pageStateRef>,
     startedAt: string,
   ): Promise<StepResult> {
-    await this.waitForSelectorState(session, selector, stepId, ctx, true);
+    await waitForSelectorState(session, selector, stepId, ctx, true);
     if (ctx.abortSignal.aborted) {
       throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted before deterministic click '${selector}'`);
     }
@@ -363,9 +357,9 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         `step '${stepId}' click_selector '${selector}'(radio/checkbox) 클릭 후 미선택(checked=false) — 무효 클릭, 조용한 false 금지`,
       );
     }
-    const postChallenge = await this.detectDomChallenge(session);
+    const postChallenge = await detectDomChallenge(session);
     if (postChallenge !== undefined) {
-      return this.suspendForChallenge(stepId, "act", ctx, postChallenge, {
+      return suspendForChallenge(stepId, "act", ctx, postChallenge, {
         sideEffect: { kind: sideEffect ?? "update", committed: true },
       });
     }
@@ -398,7 +392,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     before: ReturnType<typeof pageStateRef>,
     startedAt: string,
   ): Promise<StepResult> {
-    await this.waitForSelectorState(session, selector, stepId, ctx, false);
+    await waitForSelectorState(session, selector, stepId, ctx, false);
     const endedAt = nowIso();
     return {
       stepId,
@@ -419,31 +413,6 @@ export class StagehandDomExecutor implements ExecutorPlugin {
    * 셀렉터 존재(wantPresent=true)/부재(false) settle 폴링. 매 폴 abort 재확인, deadline 초과 시 loud throw(조용한 미클릭/
    * 미검증 금지). 존재 판정은 querySelector!==null(액셔너빌리티는 click 이 별도 검사); 부재는 ===null.
    */
-  private async waitForSelectorState(session: CdpSession, selector: string, stepId: string, ctx: RunContext, wantPresent: boolean): Promise<void> {
-    const settleMs = clickSettleMs();
-    const deadline = Date.now() + settleMs;
-    const probe = `document.querySelector(${JSON.stringify(selector)}) ${wantPresent ? "!==" : "==="} null`;
-    for (;;) {
-      if (ctx.abortSignal.aborted) {
-        throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted while awaiting selector '${selector}' (${wantPresent ? "present" : "absent"})`);
-      }
-      let ok = false;
-      try {
-        ok = await session.evaluate<boolean>(probe);
-      } catch {
-        // 네비게이션/일시 단절 — 다음 폴에서 재시도. deadline 까지 미충족이면 loud.
-      }
-      if (ok) return;
-      if (Date.now() >= deadline) {
-        throw new StagehandDomExecutorError(
-          "IR_SCHEMA_INVALID",
-          `step '${stepId}' selector '${selector}' ${wantPresent ? "미존재" : "잔존"}(settle ${settleMs}ms 초과) — 조용한 false 금지`,
-        );
-      }
-      await sleep(CLICK_POLL_MS);
-    }
-  }
-
   private async applyPlan(plan: ActionPlan, session: CdpSession, ctx: RunContext): Promise<void> {
     switch (plan.operation) {
       case "click":
@@ -496,276 +465,4 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     );
   }
 
-  private failResult(
-    stepId: string,
-    action: DomAction["type"],
-    before: string,
-    startedAt: string,
-    code: ErrorCode,
-    stagehandCallIds: string[],
-  ): StepResult {
-    const { status, cls } = classify(code);
-    const endedAt = nowIso();
-    return {
-      stepId,
-      action,
-      status,
-      pageStateBefore: before,
-      pageStateAfter: before,
-      artifacts: [],
-      stagehandCallIds,
-      cache: { mode: "bypass" },
-      exception: { class: cls, code, message: `dom executor ${action} failed: ${code}` as never },
-      timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
-    };
-  }
-
-  private suspendForChallenge(
-    stepId: string,
-    action: DomAction["type"],
-    ctx: RunContext,
-    challenge: HumanAssistChallenge,
-    observed?: {
-      readonly stagehandCallIds?: readonly string[];
-      readonly cache?: StepResult["cache"];
-      readonly sideEffect?: StepResult["sideEffect"];
-    },
-  ): StepResult {
-    const startedAt = nowIso();
-    const endedAt = nowIso();
-    const pageState = pageStateRef(ctx.pageState);
-    return {
-      stepId,
-      action,
-      status: "suspended",
-      output: { challenge },
-      pageStateBefore: pageState,
-      pageStateAfter: pageState,
-      artifacts: [],
-      stagehandCallIds: [...(observed?.stagehandCallIds ?? [])],
-      cache: observed?.cache ?? { mode: "bypass" },
-      ...(observed?.sideEffect !== undefined ? { sideEffect: observed.sideEffect } : {}),
-      challenge,
-      exception: {
-        class: "challenge",
-        code: "CHALLENGE_UNRESOLVED",
-        message: `dom executor ${action} suspended for ${challenge.type}` as RedactedString,
-      },
-      timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
-    };
-  }
-
-  private async detectDomChallenge(session: CdpSession): Promise<HumanAssistChallenge | undefined> {
-    try {
-      return parseHumanAssistChallenge(await session.evaluate<unknown>(CHALLENGE_DETECTION_SCRIPT));
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** Install page-side fetch/XHR JSON capture before actions that can trigger paginated grids. */
-  private async ensureNetworkJsonCapture(session: CdpSession): Promise<void> {
-    try {
-      await session.evaluate<unknown>(NETWORK_JSON_CAPTURE_SCRIPT);
-    } catch {
-      // Capture is evidence enrichment only. Keep the DOM/PageState path alive if injection is blocked.
-    }
-  }
-
-  /** 페이지 스냅샷(best-effort, 절단). 실패 시 undefined — 신호만으로 진행(loud 아님; 셀렉터 품질 저하 가능). */
-  private async snapshotDom(session: CdpSession): Promise<NormalizedDomSnapshot | undefined> {
-    try {
-      const snapshot = await session.evaluate<unknown>(
-        `(() => {
-          const root = document.body || document.documentElement;
-          const w = window;
-          const rawNetworkJson = Array.isArray(w.__RPA_NETWORK_JSON__)
-            ? w.__RPA_NETWORK_JSON__
-            : Array.isArray(w.__RPA_RECENT_JSON__)
-              ? w.__RPA_RECENT_JSON__
-              : Array.isArray(w.__rpaNetworkJson)
-                ? w.__rpaNetworkJson
-                : [];
-          const networkJson = rawNetworkJson.slice(-8).map((entry) => {
-            if (typeof entry === "string") return entry;
-            try { return JSON.stringify(entry); } catch { return ""; }
-          }).filter(Boolean).join("\\n");
-          const textForHiddenElement = (el) => {
-            const out = [];
-            const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
-            if (text) out.push(text);
-            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-              const value = String(el.value || "").trim();
-              if (value) out.push(value);
-            }
-            for (const field of Array.from(el.querySelectorAll("input, textarea, select"))) {
-              if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
-                const value = String(field.value || "").trim();
-                if (value) out.push(value);
-              }
-            }
-            return out.join(" ").replace(/\\s+/g, " ").trim();
-          };
-          const hiddenReason = (el) => {
-            if (!(el instanceof Element)) return "";
-            if (el.getAttribute("aria-hidden") === "true") return "aria-hidden";
-            if (el instanceof HTMLInputElement && el.type === "hidden") return "input-hidden";
-            const style = window.getComputedStyle(el);
-            if (style.display === "none") return "display-none";
-            if (style.visibility === "hidden" || style.visibility === "collapse") return "visibility-hidden";
-            const opacity = Number(style.opacity);
-            if (Number.isFinite(opacity) && opacity <= 0.001) return "zero-opacity";
-            const rect = el.getBoundingClientRect();
-            const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-            const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
-            if (
-              rect.width > 0 &&
-              rect.height > 0 &&
-              (rect.right < -32 || rect.bottom < -32 || rect.left > vw + 2048 || rect.top > vh + 2048)
-            ) {
-              return "offscreen";
-            }
-            return "";
-          };
-          const collectHiddenTextRuns = (start) => {
-            if (!start) return [];
-            const runs = [];
-            const visit = (el, ancestorHidden) => {
-              if (!(el instanceof Element) || runs.length >= 120) return;
-              const reason = ancestorHidden || hiddenReason(el);
-              if (reason) {
-                if (!ancestorHidden) {
-                  const text = textForHiddenElement(el);
-                  const visibility = reason === "offscreen" ? "offscreen" : reason === "zero-opacity" ? "zero_opacity" : "hidden";
-                  if (text) runs.push({ text, visibility, source: "dom" });
-                }
-                return;
-              }
-              for (const child of Array.from(el.children)) visit(child, "");
-            };
-            visit(start, "");
-            return runs;
-          };
-          return {
-            networkJson,
-            visibleText: document.body ? document.body.innerText : (root ? root.textContent : ""),
-            textRuns: collectHiddenTextRuns(root),
-            html: root ? root.outerHTML : ""
-          };
-        })()`,
-      );
-      const text = normalizePageSnapshot(snapshot);
-      const textRuns = promptInspectionTextRuns(snapshot);
-      if (text === undefined && textRuns.length === 0) return undefined;
-      return {
-        ...(text !== undefined ? { text } : {}),
-        ...(textRuns.length > 0 ? { textRuns } : {}),
-      };
-    } catch {
-      return undefined;
-    }
-  }
-
-  private buildRequest(stepId: string, a: DomAction, ctx: RunContext, domSnapshot?: NormalizedDomSnapshot): LLMRequest {
-    const ps = ctx.pageState;
-    // 페이지 컨텍스트는 user 역할로만(신뢰영역 분리, §2). PageState 파생 신호 + 원문 DOM(절단) — Gateway redaction(§4)
-    // 경계가 user 메시지를 redact/injection-탐지한다. DOM 은 셀렉터 타깃팅에 필요(act/extract).
-    const context = JSON.stringify({
-      url: ps.url.pattern,
-      auth: ps.auth,
-      structuralHash: ps.dom.structuralHash,
-      landmarks: ps.dom.landmarks,
-      flags: ps.flags,
-      ...(domSnapshot?.text !== undefined ? { dom: domSnapshot.text } : {}),
-    });
-    const key = sha(
-      `${ctx.tenantId}|${ctx.runId}|${stepId}|${a.type}|${this.cfg.promptTemplateVersion}|${a.instruction}|${ps.dom.structuralHash}`,
-    );
-
-    const responseFormat =
-      a.type === "extract"
-        ? { type: "json_schema" as const, schemaRef: a.output.schemaRef, schemaVersion: a.output.schemaVersion, strict: a.output.strict, ...(a.output.schema !== undefined ? { schema: a.output.schema } : {}) }
-        : a.type === "act"
-          ? ACTION_PLAN_SCHEMA
-          : undefined;
-
-    const systemContent =
-      a.type === "extract"
-        ? "Deterministic web automation extract worker. Extract actual records from [page].dom and return only the requested JSON data. Prefer [network_json] for virtualized grids or API-backed tables, then [visible_text], then [html]. Use only values present in [network_json], [visible_text], or [html]. If no matching records are present, return an empty collection that fits the requested schema. Never synthesize placeholder/example rows. Do not return an extraction plan, selector plan, or prose."
-        : `Deterministic web automation ${a.type} planner. Respond with a single minified JSON object only.`;
-
-    const request = {
-      model: this.cfg.model,
-      promptTemplateVersion: this.cfg.promptTemplateVersion,
-      messages: [
-        // system 은 redaction 비대상(Gateway 는 user 메시지만 redact) — JSON 지시를 여기 둬 native json_object 모드의
-        // "messages 에 'json' 포함" 요구를 충족하고(user 메시지가 redact 돼도), 플래너 출력 형식을 고정한다.
-        { role: "system", content: systemContent },
-        { role: "user", content: `${a.instruction}\n[page]${context}` },
-      ],
-      ...(responseFormat ? { responseFormat } : {}),
-      metadata: { tenantId: ctx.tenantId, runId: ctx.runId, stepId, attempt: ctx.attempt, primitive: a.type, correlationId: ctx.runId },
-      budget: this.cfg.budget,
-      idempotencyKey: key,
-      requestHash: key,
-    } as unknown as LLMRequest;
-    return domSnapshot?.textRuns !== undefined ? { ...request, promptInspection: { textRuns: domSnapshot.textRuns } } : request;
-  }
-
-  private assertDomAction(stepId: string, action: unknown): DomAction {
-    if (typeof action !== "object" || action === null || !("type" in action)) {
-      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' action missing 'type'`);
-    }
-    const type = (action as { type: unknown }).type;
-    if (typeof type === "string" && UTILITY_ACTIONS.has(type)) {
-      throw new StagehandDomExecutorError(
-        "EXECUTOR_CAPABILITY_MISMATCH",
-        `step '${stepId}' action '${type}' is utility/non-browser — not a dom primitive`,
-      );
-    }
-    if (type !== "act" && type !== "observe" && type !== "extract") {
-      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' unknown dom action '${String(type)}'`);
-    }
-    const instruction = (action as { instruction?: unknown }).instruction;
-    if (typeof instruction !== "string" || instruction.trim().length === 0) {
-      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' ${type}.instruction must be a non-empty string`);
-    }
-    if (type === "extract") {
-      const out = (action as { output?: unknown }).output;
-      if (typeof out !== "object" || out === null) {
-        throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.output(schema) required`);
-      }
-      const o = out as { schemaRef?: unknown; schemaVersion?: unknown; strict?: unknown; schema?: unknown };
-      if (typeof o.schemaRef !== "string" || typeof o.schemaVersion !== "string" || typeof o.strict !== "boolean") {
-        throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.output must be {schemaRef,schemaVersion,strict}`);
-      }
-      const schema = typeof o.schema === "object" && o.schema !== null ? (o.schema as Record<string, unknown>) : undefined;
-      const rowAnchor = coerceRowAnchor((action as { rowAnchor?: unknown }).rowAnchor, stepId);
-      return {
-        type,
-        instruction,
-        output: { schemaRef: o.schemaRef, schemaVersion: o.schemaVersion, strict: o.strict, ...(schema !== undefined ? { schema } : {}) },
-        ...(rowAnchor !== undefined ? { rowAnchor } : {}),
-      };
-    }
-    if (type === "act") {
-      const se = (action as { sideEffect?: unknown }).sideEffect;
-      const sr = (action as { secretRef?: unknown }).secretRef;
-      const vr = (action as { valueRef?: unknown }).valueRef;
-      const val = (action as { value?: unknown }).value;
-      const cs = (action as { clickSelector?: unknown }).clickSelector;
-      const aa = (action as { assertAbsent?: unknown }).assertAbsent;
-      return {
-        type,
-        instruction,
-        ...(typeof se === "string" ? { sideEffect: se as SideEffectKind } : {}),
-        ...(typeof sr === "string" && sr.length > 0 ? { secretRef: sr } : {}),
-        ...(typeof vr === "string" && vr.length > 0 ? { valueRef: vr } : {}),
-        ...(typeof val === "string" ? { value: val } : {}),
-        ...(typeof cs === "string" && cs.length > 0 ? { clickSelector: cs } : {}),
-        ...(typeof aa === "string" && aa.length > 0 ? { assertAbsent: aa } : {}),
-      };
-    }
-    return { type, instruction };
-  }
 }
