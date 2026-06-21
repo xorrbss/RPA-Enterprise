@@ -30,6 +30,9 @@ export type UtilityAction =
 export type DeterministicCriteria =
   | { type: "element_present"; selector: string }
   | { type: "element_visible"; target: { selector: string } }
+  | { type: "element_absent"; target: { selector: string } }
+  | { type: "text_includes"; texts: readonly string[] }
+  | { type: "url_matches"; pattern: string }
   | { type: "min_rows"; selector: string; n: number };
 
 /**
@@ -141,6 +144,19 @@ export class UtilityExecutor implements ExecutorPlugin {
       pass = await session.evaluate<boolean>(
         `!!document.querySelector(${JSON.stringify(c.target.selector)})`,
       );
+    } else if (c.type === "element_absent") {
+      // 결정형 부재: 셀렉터 미존재 → pass(비가역 커밋 witness·로딩완료 등). element_present/visible 의 역.
+      pass = await session.evaluate<boolean>(
+        `!document.querySelector(${JSON.stringify(c.target.selector)})`,
+      );
+    } else if (c.type === "text_includes") {
+      // 결정형 텍스트 포함: 모든 texts 가 body.innerText 에 존재해야 pass(AND). body 부재면 빈 문자열.
+      pass = await session.evaluate<boolean>(
+        `(() => { const t = document.body ? document.body.innerText : ""; return ${JSON.stringify(c.texts)}.every((s) => t.includes(s)); })()`,
+      );
+    } else if (c.type === "url_matches") {
+      // 결정형 URL 정규식: 현재 URL 이 pattern 에 매칭(Node 측 — session.url()). pattern 유효성은 parse 단계에서 검증.
+      pass = new RegExp(c.pattern).test(session.url());
     } else {
       const count = await session.evaluate<number>(
         `document.querySelectorAll(${JSON.stringify(c.selector)}).length`,
@@ -268,6 +284,35 @@ export class UtilityExecutor implements ExecutorPlugin {
         throw new UtilityExecutorError("IR_SCHEMA_INVALID", "min_rows.n must be an integer >= 1");
       }
       return { type, selector, n: n as number };
+    }
+    if (type === "element_absent") {
+      const target = (criteria as { target?: unknown }).target;
+      const selector = typeof target === "object" && target !== null
+        ? nonEmptyString((target as { selector?: unknown }).selector)
+        : undefined;
+      if (selector === undefined) {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "element_absent.target.selector must be a non-empty string");
+      }
+      return { type, target: { selector } };
+    }
+    if (type === "text_includes") {
+      const texts = (criteria as { texts?: unknown }).texts;
+      if (!Array.isArray(texts) || texts.length === 0 || !texts.every((t) => nonEmptyString(t) !== undefined)) {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "text_includes.texts must be a non-empty array of non-empty strings");
+      }
+      return { type, texts: texts as string[] };
+    }
+    if (type === "url_matches") {
+      const pattern = nonEmptyString((criteria as { pattern?: unknown }).pattern);
+      if (pattern === undefined) {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "url_matches.pattern must be a non-empty string");
+      }
+      try {
+        new RegExp(pattern);
+      } catch {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `url_matches.pattern is not a valid regex: ${pattern}`);
+      }
+      return { type, pattern };
     }
     {
       // VLM/스크린샷 기준 등은 vision 실행기 소관(후행, §9.1) — 조용히 통과시키지 않는다.
