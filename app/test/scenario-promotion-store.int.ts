@@ -1,0 +1,136 @@
+/**
+ * 통합 — loadRunActionPlans (PbD 승격 ② DB read). 실 PostgreSQL.
+ *
+ * 실행(temp PG15 게이트):
+ *   node scripts/db-temp-postgres-gate.mjs -- npx tsx app/test/scenario-promotion-store.int.ts
+ * 검증: 성공 act step ⋈ done stagehand 의 parsed_json→ActionPlan(node_id 키); 비-act(observe)·비-success·비-done·
+ *       비-act-plan(extract json) 제외; RLS cross-tenant 격리.
+ */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { loadRunActionPlans } from "../src/api/scenario-promotion-store";
+import { createPool, withTenantTx } from "../src/db/pool";
+
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const SCHEMA = "rpa_promotion_store_int";
+const TENANT_A = "00000000-0000-0000-0000-0000000000a1";
+const TENANT_B = "00000000-0000-0000-0000-0000000000b2";
+const SCEN_A = "70000000-0000-0000-0000-0000000000a3";
+const SVER_A = "70000000-0000-0000-0000-0000000000a4";
+const RUN_A = "71000000-0000-0000-0000-0000000000a1";
+const SCEN_B = "70000000-0000-0000-0000-0000000000b3";
+const SVER_B = "70000000-0000-0000-0000-0000000000b4";
+const RUN_B = "71000000-0000-0000-0000-0000000000b1";
+
+let failures = 0;
+function check(label: string, cond: boolean, detail?: string): void {
+  if (cond) console.log(`  PASS  ${label}`);
+  else {
+    failures += 1;
+    console.error(`  FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+
+type Pool = ReturnType<typeof createPool>;
+
+async function seedRun(pool: Pool, tenant: string, scen: string, sver: string, run: string): Promise<void> {
+  await withTenantTx(pool, tenant, async (c) => {
+    await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'promo')`, [scen, tenant]);
+    await c.query(
+      `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir)
+       VALUES ($1,$2,$3,1,'draft','{"nodes":[]}'::jsonb)`,
+      [sver, tenant, scen],
+    );
+    await c.query(
+      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of, created_at)
+       VALUES ($1,$2,$3,'completed',$1,1,'2026-06-15T00:00:00Z','2026-06-15T00:00:00Z')`,
+      [run, tenant, sver],
+    );
+  });
+}
+
+async function seedStep(pool: Pool, tenant: string, run: string, stepId: string, nodeId: string, action: string, status: string): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO run_steps (id, run_id, tenant_id, step_id, node_id, attempt, action, status, cache_mode, created_at)
+       VALUES (gen_random_uuid(), $1,$2,$3,$4,0,$5,$6,'miss','2026-06-15T00:00:01Z')`,
+      [run, tenant, stepId, nodeId, action, status],
+    ),
+  );
+}
+
+async function seedStagehand(pool: Pool, tenant: string, run: string, stepId: string, parsedJson: unknown, streamStatus: string, createdAt: string): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO stagehand_calls (id, tenant_id, run_id, step_id, attempt, idempotency_key, request_hash, model,
+                                    transport, stream_status, parsed_json, created_at)
+       VALUES (gen_random_uuid(), $1,$2,$3,0,$4,'rh','gpt-4o-mini','sse',$5,$6::jsonb,$7::timestamptz)`,
+      [tenant, run, stepId, `${run}:${stepId}:0`, streamStatus, JSON.stringify(parsedJson), createdAt],
+    ),
+  );
+}
+
+async function main(): Promise<void> {
+  const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
+  try {
+    const setup = await pool.connect();
+    try {
+      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+      await setup.query(`CREATE SCHEMA ${SCHEMA}`);
+      await setup.query(`SET search_path = ${SCHEMA}, public`);
+      await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));
+      await setup.query(readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8"));
+    } finally {
+      setup.release();
+    }
+
+    await seedRun(pool, TENANT_A, SCEN_A, SVER_A, RUN_A);
+    // n1: act success + done click → 포함
+    await seedStep(pool, TENANT_A, RUN_A, "s1", "n1", "act", "success");
+    await seedStagehand(pool, TENANT_A, RUN_A, "s1", { operation: "click", selector: "#submit" }, "done", "2026-06-15T00:00:01Z");
+    // n2: act success + done fill → 포함(fill plan)
+    await seedStep(pool, TENANT_A, RUN_A, "s2", "n2", "act", "success");
+    await seedStagehand(pool, TENANT_A, RUN_A, "s2", { operation: "fill", selector: "#name", value: "v" }, "done", "2026-06-15T00:00:02Z");
+    // n3: observe success + done extract-json → 제외(action != act)
+    await seedStep(pool, TENANT_A, RUN_A, "s3", "n3", "observe", "success");
+    await seedStagehand(pool, TENANT_A, RUN_A, "s3", { summary: "ok", rows: [] }, "done", "2026-06-15T00:00:03Z");
+    // n4: act failed_system + done click → 제외(status != success)
+    await seedStep(pool, TENANT_A, RUN_A, "s4", "n4", "act", "failed_system");
+    await seedStagehand(pool, TENANT_A, RUN_A, "s4", { operation: "click", selector: "#bad" }, "done", "2026-06-15T00:00:04Z");
+    // n5: act success + error stagehand → 제외(stream_status != done)
+    await seedStep(pool, TENANT_A, RUN_A, "s5", "n5", "act", "success");
+    await seedStagehand(pool, TENANT_A, RUN_A, "s5", { operation: "click", selector: "#err" }, "error", "2026-06-15T00:00:05Z");
+
+    // cross-tenant: tenant B act success + done → A 조회 시 비가시
+    await seedRun(pool, TENANT_B, SCEN_B, SVER_B, RUN_B);
+    await seedStep(pool, TENANT_B, RUN_B, "sb", "nb", "act", "success");
+    await seedStagehand(pool, TENANT_B, RUN_B, "sb", { operation: "click", selector: "#b" }, "done", "2026-06-15T00:00:01Z");
+
+    const plans = await withTenantTx(pool, TENANT_A, (c) => loadRunActionPlans(c, RUN_A));
+    check("loads only act+success+done act-plans", Object.keys(plans).sort().join(",") === "n1,n2", JSON.stringify(plans));
+    check("n1 click selector", plans.n1?.operation === "click" && plans.n1.selector === "#submit", JSON.stringify(plans.n1));
+    check("n2 fill selector", plans.n2?.operation === "fill" && plans.n2.selector === "#name", JSON.stringify(plans.n2));
+    check("observe(n3) excluded", plans.n3 === undefined);
+    check("failed act(n4) excluded", plans.n4 === undefined);
+    check("non-done stagehand(n5) excluded", plans.n5 === undefined);
+
+    const crossA = await withTenantTx(pool, TENANT_A, (c) => loadRunActionPlans(c, RUN_B));
+    check("cross-tenant run → empty (RLS)", Object.keys(crossA).length === 0, JSON.stringify(crossA));
+    const ownB = await withTenantTx(pool, TENANT_B, (c) => loadRunActionPlans(c, RUN_B));
+    check("tenant B sees own run plan", ownB.nb?.operation === "click" && ownB.nb.selector === "#b", JSON.stringify(ownB));
+
+    if (failures > 0) {
+      console.error(`\nFAIL: scenario-promotion-store.int (${failures})`);
+      process.exit(1);
+    }
+    console.log("\nPASS: scenario-promotion-store.int");
+  } finally {
+    await pool.end();
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
