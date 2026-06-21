@@ -26,6 +26,9 @@ import type {
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_scenarios_int";
 const TENANT_A = "00000000-0000-0000-0000-0000000000a1";
+const SITE_A = "a0000000-0000-4000-8000-000000000001";
+const IDENTITY_A = "a0000000-0000-4000-8000-000000000002";
+const NETWORK_A = "a0000000-0000-4000-8000-000000000003";
 const SECRET = new TextEncoder().encode("d44-int-test-secret-do-not-use-in-prod-0123456789");
 
 let failures = 0;
@@ -401,6 +404,69 @@ async function main(): Promise<void> {
         payload: validIr("scenario-a"),
       });
       check("archived scenario name can be reused → 201", recreateName.statusCode === 201, recreateName.body);
+
+      // [run target 자동 추론] 쉬운 만들기/일반 저장 IR은 ir.target 미설정 → 저장 시 시작 URL로 사이트 자동 추론·주입
+      //   (없으면 createRun 이 run_target_unresolved 로 거부). 명시 target 보존·추론 실패 시 미주입(후방호환) 검증.
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        await c.query(
+          `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
+           VALUES ($1::uuid,$2::uuid,'auto-site','https://auto.example','green',true,'{"flags":{}}'::jsonb)`,
+          [SITE_A, TENANT_A],
+        );
+        await c.query(
+          `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label) VALUES ($1::uuid,$2::uuid,$3::uuid,'default')`,
+          [IDENTITY_A, TENANT_A, SITE_A],
+        );
+        await c.query(
+          `INSERT INTO network_policies (id, tenant_id, allowed_domains) VALUES ($1::uuid,$2::uuid,ARRAY['auto.example'])`,
+          [NETWORK_A, TENANT_A],
+        );
+      });
+      const easyIrAt = (name: string, url: string, mode = "easy") => ({
+        meta: { name, version: 1, studio_mode: mode },
+        params_schema: { type: "object", properties: { entry_url: { type: "string", default: url } }, required: ["entry_url"] },
+        start: "open",
+        nodes: {
+          open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "collect" },
+          collect: { what: [{ action: "extract", instruction: "현재 페이지에서 데이터를 추출하라.", schema_ref: "data" }], next: "done" },
+          done: { terminal: "success" },
+        },
+      });
+      const targetOf = (scenarioId: string): Promise<unknown> =>
+        withTenantTx(pool, TENANT_A, async (c) => {
+          const r = await c.query<{ target: unknown }>(
+            `SELECT sv.ir->'target' AS target FROM scenarios s JOIN scenario_versions sv ON sv.tenant_id=s.tenant_id AND sv.scenario_id=s.id WHERE s.id=$1::uuid`,
+            [scenarioId],
+          );
+          return r.rows[0]?.target ?? null;
+        });
+      const autoCreate = await app.inject({
+        method: "POST", url: "/v1/scenarios",
+        headers: { authorization: `Bearer ${operator}` },
+        payload: easyIrAt("auto-target-easy", "https://auto.example/list"),
+      });
+      check("easy IR(타깃 없음) 저장 → 201", autoCreate.statusCode === 201, autoCreate.body);
+      const autoTarget = await targetOf(autoCreate.json().scenario_id);
+      check(
+        "저장 IR에 target 자동 주입(site/browser/network)",
+        isRecord(autoTarget) && autoTarget.site_profile_id === SITE_A && typeof autoTarget.browser_identity_id === "string" && typeof autoTarget.network_policy_id === "string",
+        JSON.stringify(autoTarget),
+      );
+      const noSite = await app.inject({
+        method: "POST", url: "/v1/scenarios",
+        headers: { authorization: `Bearer ${operator}` },
+        payload: easyIrAt("auto-target-nosite", "https://unregistered.example/x"),
+      });
+      check("미등록 URL 저장 → 201", noSite.statusCode === 201, noSite.body);
+      check("미등록 URL은 target 미주입(후방호환)", (await targetOf(noSite.json().scenario_id)) === null, "expected null target");
+      const explicit = await app.inject({
+        method: "POST", url: "/v1/scenarios",
+        headers: { authorization: `Bearer ${operator}` },
+        payload: { ...easyIrAt("auto-target-explicit", "https://auto.example/keep", "ir"), target: { site_profile_id: SITE_A, browser_identity_id: IDENTITY_A, network_policy_id: NETWORK_A } },
+      });
+      check("명시 target IR 저장 → 201", explicit.statusCode === 201, explicit.body);
+      const explicitTarget = await targetOf(explicit.json().scenario_id);
+      check("명시 target 보존(추론이 덮어쓰지 않음)", isRecord(explicitTarget) && explicitTarget.network_policy_id === NETWORK_A, JSON.stringify(explicitTarget));
     } finally {
       await app.close();
     }

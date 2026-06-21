@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { FastifyRequest } from "fastify";
+import type { PoolClient } from "pg";
 
 import { isApiErrorResponse, toApiError } from "../../../codegen/error-middleware";
 import { ERROR_CATALOG, type ApiError } from "../../../ts/error-catalog";
@@ -19,6 +20,7 @@ import { withTenantTx } from "../db/pool";
 import { compileScenario } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
+import { inferRuntimeTargetForStartUrl } from "./scenario-generation-target";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 import { promoteActsToDeterministic } from "./scenario-promotion";
 import { loadRunActionPlans } from "./scenario-promotion-store";
@@ -365,4 +367,55 @@ function apiErrorBody(err: ApiResponseError, correlationId: string): ApiError {
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 실행 대상(ir.target) 자동 해소 — 쉬운 만들기/일반 저장 IR은 ir.target(site/browser/network)을 만들지 않아
+ * createRun 시 run_target_unresolved 로 거부된다(server-create-run). IR의 navigate url_ref 가 가리키는 params 기본값
+ * (시작 URL)으로 사이트를 자동 추론(자연어 생성과 동일 inferRuntimeTargetForStartUrl)해 주입할 target 을 돌려준다.
+ *  - 이미 명시 target 이 있으면 undefined(호출측이 원본 IR 보존).
+ *  - 시작 URL 부재·추론 실패(미등록/모호 사이트)도 undefined(후방호환: target 없이 저장 = 기존 동작).
+ */
+export async function resolveRunTargetForIr(
+  client: PoolClient,
+  tenantId: string,
+  ir: unknown,
+): Promise<{ site_profile_id: string; browser_identity_id: string; network_policy_id: string } | undefined> {
+  if (!isRecord(ir) || isRecord(ir.target)) return undefined;
+  const startUrl = startUrlFromIr(ir);
+  if (startUrl === undefined) return undefined;
+  const inference = await inferRuntimeTargetForStartUrl(client, tenantId, startUrl);
+  return inference.target;
+}
+
+/** IR 의 navigate 액션 url_ref 가 가리키는 params_schema 기본값 중 첫 http(s) 절대 URL(시작 URL). */
+function startUrlFromIr(ir: Record<string, unknown>): string | undefined {
+  const nodes = isRecord(ir.nodes) ? ir.nodes : {};
+  const urlRefKeys = new Set<string>();
+  for (const node of Object.values(nodes)) {
+    if (!isRecord(node) || !Array.isArray(node.what)) continue;
+    for (const step of node.what) {
+      if (isRecord(step) && step.action === "navigate" && typeof step.url_ref === "string") {
+        urlRefKeys.add(step.url_ref);
+      }
+    }
+  }
+  const schema = isRecord(ir.params_schema) ? ir.params_schema : {};
+  const props = isRecord(schema.properties) ? schema.properties : {};
+  for (const key of urlRefKeys) {
+    const prop = props[key];
+    if (isRecord(prop) && typeof prop.default === "string" && isHttpUrl(prop.default)) {
+      return prop.default;
+    }
+  }
+  return undefined;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
