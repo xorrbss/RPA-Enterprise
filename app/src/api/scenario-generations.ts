@@ -387,7 +387,9 @@ function finalizePlannerEvidence(plan: GenerationPlan, trustedRequest: Generatio
     }
     if (startUrl === undefined) blockers.add("start_url_required_for_auto_run");
   }
-  if (looksLikeSideEffectPrompt(trustedRequest.prompt, { allowPaginationControls: pagination.enabled })) {
+  // deterministic 플래너는 side-effect 를 @human_task(approval) 게이트로 처리하므로 블록하지 않는다(item⑤).
+  //   LLM 플래너는 IR 임의성 때문에 블록을 유지한다.
+  if (plan.planner !== "deterministic_mvp" && looksLikeSideEffectPrompt(trustedRequest.prompt, { allowPaginationControls: pagination.enabled })) {
     blockers.add("side_effect_prompt_requires_review");
   }
   if (pagination.blocker !== undefined) {
