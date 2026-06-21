@@ -97,6 +97,8 @@ export async function appendLifecycleAuditWithClient(client: pg.PoolClient, inpu
   const payloadJson = safeSerialize(payload);
   const idempotencyKey = `${input.useCase}:${input.artifact.artifactRef}:${input.jobId}`;
 
+  // 동일 테넌트 audit 체인 선형화 — 동시 append 직렬화(tx advisory lock; FOR UPDATE LIMIT1 만으론 sequence 경합).
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1::text))", [input.tenantId]);
   const previous = await client.query<{ sequence_no: string; hash: string }>(
     `SELECT sequence_no, hash
          FROM audit_log

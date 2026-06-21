@@ -204,6 +204,17 @@ async function main(): Promise<void> {
       const rows = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM audit_log WHERE tenant_id=$1::uuid`, [TENANT]);
       check("failed audit attempts insert no rows", rows.rows[0]?.n === 2, `n=${rows.rows[0]?.n}`);
     });
+
+    // 동시성 회귀(2026-06-21): 같은 테넌트 audit 체인에 동시 append → advisory lock(tx) 직렬화로 전부 성공.
+    // 수정 전엔 `SELECT ... ORDER BY sequence_no DESC LIMIT 1 FOR UPDATE` 만으론 동시 INSERT 가 sequence_no UNIQUE 경합(genesis 경합)으로 일부 실패했다.
+    const CONCURRENT_TENANT = "00000000-0000-0000-0000-0000000000ac" as TenantId;
+    const concurrentResults = await Promise.allSettled(
+      Array.from({ length: 6 }, (_, i) =>
+        writer.recordDecision(auditInput(`audit-concurrent-${i}`, { tenantId: CONCURRENT_TENANT }), { kind: "blocked" }),
+      ),
+    );
+    const concurrentOk = concurrentResults.filter((r) => r.status === "fulfilled").length;
+    check("concurrent same-tenant audit appends all serialize (no sequence race)", concurrentOk === 6, `${concurrentOk}/6 succeeded`);
   } finally {
     await pool.end();
   }

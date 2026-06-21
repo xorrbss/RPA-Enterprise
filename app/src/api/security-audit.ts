@@ -39,6 +39,8 @@ export class PgDurableSecurityAuditDecisionWriter implements DurableSecurityAudi
       assertAuditInput(input);
       const payloadJson = safeSerialize(input.payload ?? null);
       const auditRecord = await withTenantTx(this.pool, input.tenantId, async (client) => {
+        // 동일 테넌트 audit 체인은 선형(sequence_no/hash) — 동시 append 직렬화(tx advisory lock). FOR UPDATE LIMIT1 만으론 동시 INSERT 경합(UNIQUE 위반) 발생.
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1::text))", [input.tenantId]);
         const previous = await client.query<{ sequence_no: string; hash: string }>(
           `SELECT sequence_no, hash
              FROM audit_log
