@@ -26,10 +26,8 @@ import type {
   IsoDateTime,
   ResumeTokenCodec,
   ResumeTokenEnvelope,
-  RuntimeWorkerJob,
   LeaseId,
   RunVideoRecording,
-  VisualEvidenceVideoPolicy,
   VisualEvidenceVideoRecorder,
 } from "../../../ts/runtime-contract";
 import type { CorrelationId, RunId, TenantId } from "../../../ts/security-middleware-contract";
@@ -41,6 +39,14 @@ import { applyRunTransition } from "./run-transition";
 import { sessionKey, type BrowserSessionStore } from "./browser-session-store";
 import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "./executor-ports";
 import { StepRecordingExecutor } from "./run-step-driver-recording";
+import {
+  appendMergedExtractArtifact,
+  appendRunVideoArtifact,
+  enqueueArtifactLifecycleJobsForOutcome,
+  systemFailureOutcome,
+  videoPolicyFromIr,
+  visualEvidenceLifecycleEnqueuerRequired,
+} from "./run-step-driver-artifacts";
 import { compiledScenarioFrom } from "./ir-translate";
 import { runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
 import { settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
@@ -430,25 +436,6 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
 }
 
 // 단일 전이를 자체 CAS 트랜잭션으로 적용. eventIdempotencyKey는 이벤트별 접미(outbox UNIQUE 충돌 방지).
-function videoPolicyFromIr(irDoc: unknown): VisualEvidenceVideoPolicy | undefined {
-  if (!isRecord(irDoc)) return undefined;
-  const meta = irDoc.meta;
-  if (!isRecord(meta)) return undefined;
-  const evidence = meta.evidence;
-  if (!isRecord(evidence)) return undefined;
-  const video = evidence.video;
-  if (video === "always" || video === "failure") return video;
-  return undefined;
-}
-
-function systemFailureOutcome(): ScenarioOutcome {
-  return { terminal: "fail_system", visited: [], steps: [], artifacts: [] };
-}
-
-function visualEvidenceLifecycleEnqueuerRequired(deps: DriveDeps): boolean {
-  return deps.visualEvidenceRecorder !== undefined || deps.visualEvidenceVideoRecorder !== undefined;
-}
-
 async function failRunningRun(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioOutcome): Promise<void> {
   await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" }, undefined, async (client) => {
     await settleLinkedWorkitemFromRun(client, run, "system");
@@ -473,85 +460,6 @@ async function settleLinkedWorkitemFromRun(client: PoolClient, run: ClaimedRun, 
     terminal,
     eventIdempotencyKey: `${run.runId}:workitem-${terminal}`,
   });
-}
-
-async function appendRunVideoArtifact(
-  outcome: ScenarioOutcome,
-  recording: RunVideoRecording | undefined,
-  policy: VisualEvidenceVideoPolicy | undefined,
-): Promise<ScenarioOutcome> {
-  if (recording === undefined || policy === undefined) return outcome;
-  if (policy === "failure" && (outcome.terminal === "success" || outcome.terminal === "success_empty")) {
-    await recording.discard({ reason: "terminal_success" });
-    return outcome;
-  }
-  const artifactRef = await recording.stopAndPersist({ terminal: knownTerminal(outcome.terminal) });
-  if (artifactRef === undefined) return outcome;
-  return { ...outcome, artifacts: [...outcome.artifacts, artifactRef] };
-}
-
-async function appendMergedExtractArtifact(
-  outcome: ScenarioOutcome,
-  sink: MergedExtractArtifactSink | undefined,
-  run: ClaimedRun,
-): Promise<ScenarioOutcome> {
-  if (sink === undefined || outcome.mergedExtract === undefined) return outcome;
-  const artifactRef = await sink.put({
-    tenantId: run.tenantId,
-    runId: run.runId,
-    correlationId: run.correlationId,
-    extractPages: outcome.extractPages ?? [],
-    mergedExtract: outcome.mergedExtract,
-  });
-  return { ...outcome, artifacts: [...outcome.artifacts, artifactRef] };
-}
-
-function knownTerminal(terminal: string): "success" | "success_empty" | "fail_business" | "fail_system" | "suspend" {
-  if (
-    terminal === "success" ||
-    terminal === "success_empty" ||
-    terminal === "fail_business" ||
-    terminal === "fail_system" ||
-    terminal === "suspend"
-  ) {
-    return terminal;
-  }
-  throw new Error(`driveScenario: terminal '${terminal}' cannot finalize run video evidence`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function enqueueArtifactLifecycleJobsForOutcome(
-  client: PoolClient,
-  run: ClaimedRun,
-  deps: DriveDeps,
-  outcome: ScenarioOutcome,
-): Promise<void> {
-  const artifactRefs = [...new Set(outcome.artifacts)];
-  if (artifactRefs.length === 0) return;
-  const enqueuer = deps.runtimeJobEnqueuer;
-  if (enqueuer === undefined) {
-    throw new Error("driveScenario: artifacts produced on direct run-drive require RuntimeJobEnqueuePort for lifecycle jobs");
-  }
-  const jobs: RuntimeWorkerJob[] = [
-    ...artifactRefs.map((artifactRef): RuntimeWorkerJob => ({
-      kind: "artifact_redaction",
-      tenantId: run.tenantId as RuntimeWorkerJob["tenantId"],
-      runId: run.runId as RuntimeWorkerJob["runId"],
-      artifactId: artifactRef as RuntimeWorkerJob["artifactId"],
-      correlationId: run.correlationId as RuntimeWorkerJob["correlationId"],
-    })),
-    {
-      kind: "artifact_retention",
-      tenantId: run.tenantId as RuntimeWorkerJob["tenantId"],
-      correlationId: run.correlationId as RuntimeWorkerJob["correlationId"],
-    },
-  ];
-  for (const job of jobs) {
-    await enqueuer.enqueueRuntimeJob(client, job);
-  }
 }
 
 async function transition(
