@@ -20,6 +20,7 @@ import {
   parseIfMatch,
   parseVersionParam,
   promoteScenario,
+  promoteScenarioFromRun,
   signedCommandRefsFor,
   UUID_RE,
   type ScenarioVersionDetailRow,
@@ -408,6 +409,16 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
         reply.header("ETag", String(result.body.version));
       }
       reply.send(result.body);
+    },
+  );
+
+  // PbD 승격: 성공 run 의 결정형 ActionPlan(click) 을 새 draft 버전으로 베이킹(scenario-promotion ①+②).
+  app.post<{ Params: { scenarioId: string } }>(
+    "/v1/scenarios/:scenarioId/promote-from-run",
+    { config: { rbacAction: "scenario.promote" } },
+    async (request, reply) => {
+      const result = await promoteScenarioFromRun(deps, request.params.scenarioId, request);
+      reply.code(result.status).send(result.body);
     },
   );
 }
