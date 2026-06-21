@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import type { CorrelationId, RunId, TenantId } from "../../ts/security-middleware-contract";
 import type { ExecutorPlugin, PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
-import type { ResumeTokenEnvelope, SessionRestoreResult, SessionRestorer } from "../../ts/runtime-contract";
+import type { ResumeTokenCodec, ResumeTokenEnvelope, SessionRestoreResult, SessionRestorer } from "../../ts/runtime-contract";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { FakeCdpSession, TestFakeBrowserSessionProvider } from "../src/executor/browser-session-provider";
@@ -38,13 +38,18 @@ const IDENTITY2 = "40000000-0000-0000-0000-000000000d05";
 // resume 재-suspend run 전용 site/identity(lease 충돌 회피).
 const SITE3 = "40000000-0000-0000-0000-000000000d06";
 const IDENTITY3 = "40000000-0000-0000-0000-000000000d07";
+// 토큰-발행-실패 run 전용 site/identity(lease 충돌 회피).
+const SITE4 = "40000000-0000-0000-0000-000000000d08";
+const IDENTITY4 = "40000000-0000-0000-0000-000000000d09";
 const SCEN = "70000000-0000-0000-0000-000000000d01";
 const SVER = "70000000-0000-0000-0000-000000000d02";
 const RUN_SUSPEND = "71000000-0000-0000-0000-000000000d01";
 const RUN_NODEPS = "71000000-0000-0000-0000-000000000d02";
 const RUN_RESUSPEND = "71000000-0000-0000-0000-000000000d03";
+const RUN_TOKENFAIL = "71000000-0000-0000-0000-000000000d04";
 const CORRELATION = "20000000-0000-0000-0000-000000000d01";
 const CORRELATION2 = "20000000-0000-0000-0000-000000000d02";
+const CORRELATION3 = "20000000-0000-0000-0000-000000000d03";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -67,6 +72,7 @@ async function caught(p: Promise<unknown>): Promise<unknown> {
 const planResolver: BrowserLeasePlanResolver = async (_client, input) => {
   if (input.runId === RUN_NODEPS) return { siteProfileId: SITE2, browserIdentityId: IDENTITY2, networkPolicyId: NETWORK_POLICY };
   if (input.runId === RUN_RESUSPEND) return { siteProfileId: SITE3, browserIdentityId: IDENTITY3, networkPolicyId: NETWORK_POLICY };
+  if (input.runId === RUN_TOKENFAIL) return { siteProfileId: SITE4, browserIdentityId: IDENTITY4, networkPolicyId: NETWORK_POLICY };
   return { siteProfileId: SITE, browserIdentityId: IDENTITY, networkPolicyId: NETWORK_POLICY };
 };
 
@@ -100,6 +106,16 @@ const fakeSecretStore: SecretStore = {
 };
 const suspensionPort = new PgChallengeSuspensionPort();
 const resumeTokenCodec = new HmacResumeTokenCodec(fakeSecretStore, "secret://test/resume_token_hmac" as unknown as SecretRef);
+// 토큰 발행 실패(SecretStore/KMS/network) 모사 — issue 가 throw. step1(R4/R5+human_task) commit 후 발행 실패로
+// run 이 'suspending' 에 좌초하는지(C3 폴백 R12) 검증용.
+const throwingResumeTokenCodec: ResumeTokenCodec = {
+  async issue() {
+    throw new Error("simulated resume-token issue failure (SecretStore/KMS/network)");
+  },
+  async verify() {
+    throw new Error("throwingResumeTokenCodec.verify not used");
+  },
+};
 
 // resume 재-suspend 케이스용: run_resume 가 R17→restore→R18 후 driveResumedRun 으로 resumeNodeId 재진입 → 같은 suspend
 // executor 가 다시 suspend → driveSuspend(handleRunResume Phase C 리터럴의 suspend-deps 주입을 핀고정).
@@ -164,17 +180,18 @@ async function main(): Promise<void> {
         `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
          VALUES ($1,$2,'ok','https://ok.example/*','green',true,'{"flags":{}}'::jsonb),
                 ($3,$2,'ok2','https://ok2.example/*','green',true,'{"flags":{}}'::jsonb),
-                ($4,$2,'ok3','https://ok3.example/*','green',true,'{"flags":{}}'::jsonb)`,
-        [SITE, TENANT, SITE2, SITE3],
+                ($4,$2,'ok3','https://ok3.example/*','green',true,'{"flags":{}}'::jsonb),
+                ($5,$2,'ok4','https://ok4.example/*','green',true,'{"flags":{}}'::jsonb)`,
+        [SITE, TENANT, SITE2, SITE3, SITE4],
       );
       await c.query(
         `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label)
-         VALUES ($1,$2,$3,'ok'), ($4,$2,$5,'ok2'), ($6,$2,$7,'ok3')`,
-        [IDENTITY, TENANT, SITE, IDENTITY2, SITE2, IDENTITY3, SITE3],
+         VALUES ($1,$2,$3,'ok'), ($4,$2,$5,'ok2'), ($6,$2,$7,'ok3'), ($8,$2,$9,'ok4')`,
+        [IDENTITY, TENANT, SITE, IDENTITY2, SITE2, IDENTITY3, SITE3, IDENTITY4, SITE4],
       );
       await c.query(
         `INSERT INTO network_policies (id, tenant_id, allowed_domains)
-         VALUES ($1,$2,ARRAY['ok.example','ok2.example','ok3.example'])`,
+         VALUES ($1,$2,ARRAY['ok.example','ok2.example','ok3.example','ok4.example'])`,
         [NETWORK_POLICY, TENANT],
       );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'suspend-drive')`, [SCEN, TENANT]);
@@ -195,6 +212,12 @@ async function main(): Promise<void> {
         `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, resume_token, params)
          VALUES ($1,$2,$3,'resume_requested',$4,$5::jsonb,'{"entry_url":"https://ok3.example/landing"}'::jsonb)`,
         [RUN_RESUSPEND, TENANT, SVER, CORRELATION2, JSON.stringify(token(RUN_RESUSPEND, "page-state://resuspend", "open"))],
+      );
+      // 토큰-발행-실패 run: queued. 구동 시 첫 스텝 suspend → R4/R5+포트 commit → 토큰 발행 throw → R12 폴백.
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, params)
+         VALUES ($1,$2,$3,'queued',$4,'{"entry_url":"https://ok4.example/landing"}'::jsonb)`,
+        [RUN_TOKENFAIL, TENANT, SVER, CORRELATION3],
       );
     });
 
@@ -299,6 +322,33 @@ async function main(): Promise<void> {
       (await runStatus(pool, RUN_NODEPS)) === "failed_system",
       String(await runStatus(pool, RUN_NODEPS)),
     );
+
+    // 4) suspend deps 주입됐으나 resume-token 발행 실패(codec.issue throw): step1(R4/R5+human_task) commit 후
+    //    토큰 발행이 throw → run 은 'suspending'. C3 폴백 terminalizeStuckRunAsSystemFailure 가 R12(suspending→
+    //    failed_system)로 종결한다. 회귀: 종전엔 running/completing 만 처리해 run 이 'suspending' 에 영구 좌초했다.
+    const tokenFail = new PgRuntimeWorker(pool, {
+      workerId: WORKER,
+      browserLeasePlanResolver: planResolver,
+      browserSessionProvider: new TestFakeBrowserSessionProvider(),
+      allowTestBrowserSessionProvider: true,
+      executorFactory: () => suspendingExecutor,
+      suspensionPort,
+      resumeTokenCodec: throwingResumeTokenCodec,
+    });
+    const tfErr = await caught(
+      tokenFail.handle({ kind: "run_claim", tenantId: TENANT as TenantId, runId: RUN_TOKENFAIL as RunId, correlationId: CORRELATION3 as CorrelationId }),
+    );
+    check("token 발행 실패 → C3 폴백이 throw 흡수(job 정상 종료)", tfErr === undefined, String(tfErr));
+    check(
+      "token 발행 실패 → run failed_system 종결(suspending 좌초=좀비 아님, R12)",
+      (await runStatus(pool, RUN_TOKENFAIL)) === "failed_system",
+      String(await runStatus(pool, RUN_TOKENFAIL)),
+    );
+    const tfHt = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ state: string }>(`SELECT state FROM human_tasks WHERE run_id=$1::uuid`, [RUN_TOKENFAIL]);
+      return r.rows;
+    });
+    check("token 발행 실패 → human_task 는 step1 에서 이미 생성됨(R12 후 orphan open)", tfHt.length === 1, JSON.stringify(tfHt));
   } finally {
     await pool.end();
   }
