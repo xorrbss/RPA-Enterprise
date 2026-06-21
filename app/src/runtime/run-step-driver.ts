@@ -157,9 +157,10 @@ async function driveScenarioWithSystemFailsafe(run: ClaimedRun, deps: DriveDeps,
 }
 
 /**
- * 좀비 방지(C3): 현재 상태를 재read(FOR UPDATE)해 running→failed_system(R8) / completing→failed_system(R22) 로
- * 종결하고 연결 Workitem 을 system 정산한다. 폴백이라 throw 금지 — 변환 불가(이미 종결/동시 CAS 변경/정산 실패)면
- * false 를 반환해 호출부가 원 예외를 재던지게 한다.
+ * 좀비 방지(C3): 현재 상태를 재read(FOR UPDATE)해 running→failed_system(R8) / completing→failed_system(R22) /
+ * suspending→failed_system(R12) 로 종결하고 연결 Workitem 을 system 정산한다(suspending 은 bookmark 저장 중
+ * R4/R5 commit 후 resume-token 발행·저장이 tx 밖 외부 I/O라 부분 실패 윈도우 — R12 '일관성 복구'로 종결). 폴백이라
+ * throw 금지 — 변환 불가(이미 종결/동시 CAS 변경/정산 실패)면 false 를 반환해 호출부가 원 예외를 재던지게 한다.
  */
 async function terminalizeStuckRunAsSystemFailure(run: ClaimedRun, deps: DriveDeps): Promise<boolean> {
   try {
@@ -169,8 +170,8 @@ async function terminalizeStuckRunAsSystemFailure(run: ClaimedRun, deps: DriveDe
         [run.tenantId, run.runId],
       );
       const status = r.rows[0]?.status;
-      if (status !== "running" && status !== "completing") return false;
-      const event: RunEvent = status === "running" ? { type: "unrecoverable_exception" } : { type: "finalize_failed" };
+      if (status !== "running" && status !== "completing" && status !== "suspending") return false;
+      const event: RunEvent = status === "running" ? { type: "unrecoverable_exception" } : status === "completing" ? { type: "finalize_failed" } : { type: "bookmark_failed" };
       const guard: RunGuard = status === "running" ? { exceptionClass: "system" } : {};
       const t = await applyRunTransition(client, {
         tenantId: run.tenantId,
