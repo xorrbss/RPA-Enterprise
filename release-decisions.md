@@ -663,6 +663,47 @@ AUD-2. Lease sweeper teardown scope: own-worker sessions (cross-worker = contain
    dir until restart — now reclaimed at sweep; cross-worker behavior unchanged (was, and
    remains, container-reclaimed).
 
+## Audit Decisions (2026-06-22, security-boundary adversarial audit)
+
+Security-boundary cluster adversarial audit (16 candidates → 4 confirmed / 12 refuted).
+RED-01 (JSON redaction under-mask, P1) and NPA-02 (navigate landed-URL re-check after
+redirect, P2) were fixed as contract-aligned defects. The two below are recorded decisions.
+
+AUD-3. Internal-host denylist on site-create / navigate gate (SSRF defense-in-depth) — deferred to a policy decision
+   Finding (NPA-03, P2): `POST /v1/sites` (`applySiteCreate` → `hostOfUrlPattern`) and the
+   runtime navigate gate (`utility-executor.navigationPolicyFailure` / `isHostAllowed`) have
+   no denylist for private/internal hosts, so an `operator` (who holds `site.create`) can
+   register a metadata/RFC1918 host (e.g. `169.254.169.254`, `10.x`) into `allowed_domains`
+   and a scenario can then navigate to it. Decision: NOT implemented as a blanket private-IP
+   denylist, because (1) it is **not contract-required** — security-contracts §6 mandates only
+   "block movement/requests OUTSIDE allowed_domains", not "block internal hosts that ARE in the
+   allowlist"; and (2) a blanket RFC1918 denylist would **break legitimate internal-app RPA**
+   (enterprises commonly automate intranet/internal tools on 10.x/192.168.x), so which ranges to
+   block is a deployment-specific policy the owner must set. The exploit also requires a trusted
+   `operator` role to deliberately register the bad host (a malicious operator can already exfil
+   via allowlisted public sites), making this defense-in-depth, not a privilege boundary. Note:
+   the **NPA-02 landed-URL re-check (this audit, fixed) already blocks the scariest variant** —
+   a *redirect* from an allowlisted public site to `169.254.169.254` now fails
+   `DOMAIN_POLICY_VIOLATION` because the metadata host is not in the allowlist. Build-condition:
+   owner decides the denied-range policy (recommended safe default: deny loopback `127.0.0.0/8`
+   + link-local `169.254.0.0/16` — never legitimate cross-host RPA targets — while preserving
+   RFC1918 for internal automation). Owner = project owner. Impact if wrong: a compromised/
+   careless operator can register an internal host; mitigated by operator-trust + NPA-02 for the
+   redirect path; DNS-rebinding would bypass any create-time literal-IP denylist regardless.
+
+AUD-4. Credential-fill selector is LLM-chosen (SSB-01, P1) — verify reachability before fixing
+   Finding: in the credential `fill` path the secret VALUE is deterministic (SecretRef, never
+   LLM), but the DOM SELECTOR it is typed into comes from the LLM plan; a hallucinated/injected
+   selector could type a plaintext password into a non-password field (then leaked via
+   non-type-based screenshot masking + re-extraction). Decision: pending reachability
+   verification — credential `fill` requires `ctx.assetRefs`, which (per the 2026-06-22
+   concurrency audit, AUD-1) is injected only by the **dev** entrypoint (`app/dev/run-loop.ts`),
+   not the production worker. If fill is dev-only today, the production severity is bounded by
+   the same Vault/assetRefs wiring gate as AUD-1, and the fix (deterministic `secret_selector`
+   IR mode, or CDP read-back that the resolved element is `input[type=password]`) should land
+   WITH that wiring. To be verified file:line before building (the audit's verify pass can miss
+   the assetRefs-not-prod-plumbed detail, as it did for AUD-1). Owner = project owner.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
