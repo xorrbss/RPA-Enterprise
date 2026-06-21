@@ -239,6 +239,26 @@ export async function resumeLinkedWorkitemCheckout(
   );
 }
 
+/**
+ * run abort(→cancelled) 시 연결 workitem 의 checkout pause 해제 + 즉시 만료 → checkout sweeper(W6/W7)가 회수. W9
+ * pause(suspend 중)는 W11(resume→running)에서만 해제되는데, suspended/resume_requested/resuming run 이 abort 되면
+ * W11 이 안 와 workitem 이 영구 paused(processing) 잔류—sweeper 의 paused 가드(checkout_paused_at IS NULL)가 영영
+ * 스킵 = 누수(#7 회귀). abort 종결 tx 에서 un-pause 해 orphan workitem 을 sweeper 자가회수에 위임한다(run-cancelled
+ * workitem 정산 전이는 계약 부재). 미연결/미-paused 면 조용한 no-op.
+ */
+export async function unpauseLinkedWorkitemForRunAbort(
+  client: PoolClient,
+  input: { tenantId: string; runId: string },
+): Promise<void> {
+  const workitemId = await resolveLinkedWorkitemId(client, input.tenantId, input.runId);
+  if (workitemId === null) return;
+  await client.query(
+    `UPDATE workitems SET checkout_paused_at = NULL, checkout_expires_at = now()
+      WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'processing' AND checkout_paused_at IS NOT NULL`,
+    [input.tenantId, workitemId],
+  );
+}
+
 async function resolveLinkedWorkitemId(client: PoolClient, tenantId: string, runId: string): Promise<string | null> {
   const r = await client.query<{ workitem_id: string | null }>(
     `SELECT workitem_id::text AS workitem_id FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
