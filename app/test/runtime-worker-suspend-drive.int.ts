@@ -348,7 +348,7 @@ async function main(): Promise<void> {
       const r = await c.query<{ state: string }>(`SELECT state FROM human_tasks WHERE run_id=$1::uuid`, [RUN_TOKENFAIL]);
       return r.rows;
     });
-    check("token 발행 실패 → human_task 는 step1 에서 이미 생성됨(R12 후 orphan open)", tfHt.length === 1, JSON.stringify(tfHt));
+    check("token 발행 실패 → step1 human_task 가 R12 종결 시 cancel 됨(orphan open 아님, #1 보수)", tfHt.length === 1 && tfHt[0]?.state === "cancelled", JSON.stringify(tfHt));
   } finally {
     await pool.end();
   }

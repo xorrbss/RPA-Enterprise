@@ -117,6 +117,8 @@ async function main(): Promise<void> {
     const aborted = await worker.handle({ kind: "run_abort", tenantId: TENANT as TenantId, runId: RUN_AB as RunId, correlationId: CORRELATION as CorrelationId });
     check("run_abort → completed", aborted.kind === "completed", JSON.stringify(aborted));
     check("run cancelled", await runStatus(pool) === "cancelled", String(await runStatus(pool)));
+    const abHt = await withTenantTx(pool, TENANT, async (c) => (await c.query<{ state: string }>(`SELECT state FROM human_tasks WHERE run_id=$1::uuid`, [RUN_AB])).rows);
+    check("abort: 연결 human_task 가 cancel 됨(orphan open 아님, #1 보수)", abHt.length === 1 && abHt[0]?.state === "cancelled", JSON.stringify(abHt));
     let w = await wi(pool);
     check("abort: workitem checkout_paused_at 해제됨(누수 아님, #7 보수)", w.paused === null, JSON.stringify(w));
     check(
