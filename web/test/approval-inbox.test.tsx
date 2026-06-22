@@ -204,4 +204,46 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
     const link = screen.getByText("실행 기록 보기");
     expect(link.getAttribute("href")).toBe("#runTrace?run=spawn-9");
   });
+
+  test("approver → 2건 선택 → 일괄 승인 → 배치 확인 → decideApproval 2회(approve) → 두 행 처리 상태", async () => {
+    localStorage.setItem("rpa.token", jwt(["approver"]));
+    const calls: DecideApprovalBody[] = [];
+    let n = 0;
+    const client = fakeClient({
+      listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
+      listRuns: async (p) =>
+        p?.scenario_version_id === "ver-c"
+          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          : { items: [], next_cursor: null },
+      listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
+      getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
+      decideApproval: async (body) => {
+        calls.push(body);
+        n += 1;
+        return { decision_id: `dec-${n}`, source_run_id: body.source_run_id, doc_ref: body.doc_ref, decision: body.decision, spawned_run_id: `spawn-${n}` };
+      },
+      getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+    });
+    renderApp(client);
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+
+    // 2건 선택 → '선택 2건 일괄 승인' → 배치 단일 확인(비가역 가드) → 확인.
+    fireEvent.click(screen.getByLabelText("연차 신청 일괄 승인 선택"));
+    fireEvent.click(screen.getByLabelText("출장비 정산 일괄 승인 선택"));
+    fireEvent.click(screen.getByRole("button", { name: "선택 2건 일괄 승인" }));
+    fireEvent.click(screen.getByRole("button", { name: "일괄 승인 확인" }));
+
+    // 두 선택 행이 처리 상태(딥링크)로, decideApproval 이 선택 2건만 approve 로 호출됨.
+    await waitFor(() => expect(screen.getAllByText("실행 기록 보기")).toHaveLength(2));
+    expect(calls).toHaveLength(2);
+    expect(calls.every((c) => c.decision === "approve" && c.source_run_id === "run-c")).toBe(true);
+    expect(calls.map((c) => c.doc_ref).sort()).toEqual([
+      "https://dashboard.office.hiworks.com/approval/1",
+      "https://dashboard.office.hiworks.com/approval/2",
+    ]);
+    // 미선택 3번째 행(비품 구매)은 일괄 대상 아님 — 여전히 건별 [결재] 버튼 보유.
+    expect(screen.getByText("비품 구매")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "결재" }).length).toBeGreaterThanOrEqual(1);
+  });
 });

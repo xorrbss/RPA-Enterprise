@@ -118,14 +118,51 @@ function Body(props: {
 }
 
 function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunId: string }): JSX.Element {
+  const api = useApiClient();
   const sum = summarize(rows);
   const can = useCan();
   const showActions = can("approval.decide"); // 비-approver 는 액션 열 숨김(백엔드가 최종 강제).
   // 이번 세션에서 결재한 문서 → 스폰된 처리 run id. 결정된 행은 버튼 대신 처리 상태(폴링)를 보인다.
   const [decided, setDecided] = useState<Record<string, string>>({});
   const [pendingOnly, setPendingOnly] = useState(false);
+  // 일괄 승인(다중선택 + 배치 단일 확인). 비가역이라 per-row 자동승인이 아니라 운영자가 행을 선택→1회 확인한다.
+  //   반려는 건별 유지(사유 필수). 실패한 건은 행별로 표면화(조용한 false 금지).
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState(false);
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
   const pendingRows = rows.filter((r) => !["approved", "rejected", "completed"].includes(r.status));
   const visibleRows = pendingOnly ? pendingRows : rows;
+  // 선택 가능: approver + 미결정 + 처리대기 행만(이미 결정/완료된 건은 일괄 대상 아님).
+  const isSelectable = (r: ApprovalRow): boolean =>
+    showActions && decided[r.doc_ref] === undefined && !["approved", "rejected", "completed"].includes(r.status);
+  const toggle = (docRef: string): void =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(docRef)) next.delete(docRef);
+      else next.add(docRef);
+      return next;
+    });
+  // 배치 승인: 선택 스냅샷을 순차 처리(건별 멱등키). 성공=decided 로 처리상태 전환, 실패=bulkErrors 로 행에 표면화.
+  async function runBulkApprove(): Promise<void> {
+    setBulkConfirm(false);
+    setBulkRunning(true);
+    for (const docRef of selected) {
+      try {
+        const res = await api.decideApproval({ source_run_id: sourceRunId, doc_ref: docRef, decision: "approve" }, crypto.randomUUID());
+        setDecided((prev) => ({ ...prev, [docRef]: res.spawned_run_id }));
+        setBulkErrors((prev) => {
+          const next = { ...prev };
+          delete next[docRef];
+          return next;
+        });
+      } catch (e) {
+        setBulkErrors((prev) => ({ ...prev, [docRef]: e instanceof ApiError ? errorLabel(e) : "결재 처리 실패" }));
+      }
+    }
+    setSelected(new Set());
+    setBulkRunning(false);
+  }
   return (
     <>
       <section className="panel" style={{ padding: 16, marginBottom: 16 }} aria-label="결재 요약">
@@ -145,6 +182,20 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
           <button className="btn" type="button" disabled={pendingRows.length === 0} onClick={() => setPendingOnly(true)}>
             다음 결재 보기
           </button>
+          {/* 일괄 승인: 선택 N건을 1회 배치 확인 후 순차 승인(비가역 가드는 건별→배치 단위로 유지). 반려는 건별. */}
+          {showActions && bulkRunning && <span className="subtle" role="status">일괄 승인 처리 중…</span>}
+          {showActions && !bulkRunning && !bulkConfirm && selected.size > 0 && (
+            <button className="btn" type="button" onClick={() => setBulkConfirm(true)}>
+              선택 {selected.size}건 일괄 승인
+            </button>
+          )}
+          {showActions && bulkConfirm && (
+            <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="badge red">선택 {selected.size}건을 일괄 승인합니다 — 비가역(처리 run {selected.size}건 스폰).</span>
+              <button className="btn" type="button" onClick={() => void runBulkApprove()}>일괄 승인 확인</button>
+              <button className="btn" type="button" onClick={() => setBulkConfirm(false)}>취소</button>
+            </span>
+          )}
         </div>
       </section>
       <section className="panel" aria-label="결재 목록">
@@ -154,6 +205,7 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
             <table>
               <thead>
                 <tr>
+                  {showActions && <th>선택</th>}
                   <th>기안자</th><th>유형</th><th>제목</th><th>상태</th><th>기안일</th><th>원문</th>
                   {showActions && <th>결재</th>}
                 </tr>
@@ -163,6 +215,19 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
                   const spawnedRunId = decided[r.doc_ref];
                   return (
                     <tr key={r.approval_id ?? r.doc_ref}>
+                      {showActions && (
+                        <td>
+                          {isSelectable(r) ? (
+                            <input
+                              type="checkbox"
+                              checked={selected.has(r.doc_ref)}
+                              disabled={bulkRunning}
+                              onChange={() => toggle(r.doc_ref)}
+                              aria-label={`${r.title} 일괄 승인 선택`}
+                            />
+                          ) : null}
+                        </td>
+                      )}
                       <td>{r.drafter}</td>
                       <td>{r.doc_type}</td>
                       <td>{r.title}</td>
@@ -174,11 +239,14 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
                           {spawnedRunId !== undefined ? (
                             <DecidedStatus runId={spawnedRunId} />
                           ) : (
-                            <DecideButtons
-                              sourceRunId={sourceRunId}
-                              docRef={r.doc_ref}
-                              onDecided={(runId) => setDecided((prev) => ({ ...prev, [r.doc_ref]: runId }))}
-                            />
+                            <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                              <DecideButtons
+                                sourceRunId={sourceRunId}
+                                docRef={r.doc_ref}
+                                onDecided={(runId) => setDecided((prev) => ({ ...prev, [r.doc_ref]: runId }))}
+                              />
+                              {bulkErrors[r.doc_ref] !== undefined && <span className="badge red">{bulkErrors[r.doc_ref]}</span>}
+                            </span>
                           )}
                         </td>
                       )}
