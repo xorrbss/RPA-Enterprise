@@ -737,6 +737,15 @@ AUD-6. §3(d) off-allowlist-URL prompt-injection signal not threaded to the wire
    through is a small change but adds one detector of marginal value; deferred unless the owner wants the
    full §3 signal set active. Owner = project owner. Impact if wrong: a prompt that references an off-allowlist
    URL is not flagged by this specific detector (other detectors + the navigate gate still apply).
+   ⚠ UPDATE (2026-06-22, mop-up): naively threading `networkPolicy` is UNSAFE and was NOT done. The off_allowlist_url
+   check (`redaction-boundary.ts` extractDomains) scans the ENTIRE prompt — which for act/observe/extract is
+   `${instruction}\n[page]${DOM-json}` (stagehand-dom-executor-dom.ts:264) — for ANY `https?://` URL and blocks the
+   LLM call if a domain isn't in `allowedDomains`. Real pages reference many off-allowlist domains (CDNs, fonts,
+   analytics, outbound links), none of which are in the site's `allowedDomains`, so activation would block ~every
+   LLM-planned step on real pages (rampant false positives → broken automation). The dead signal is SAFER than naive
+   activation. Proper fix requires SCOPING the signal to exfil-instruction context (e.g. URLs in the model's
+   *output*/instruction, or a sanctioned-domain allowlist distinct from the navigation policy) — a signal redesign,
+   not a thread-through. Recommend leaving dead until the scope is designed. Owner = project owner.
 
 ## Audit Decisions (2026-06-22, API surface / control-plane RBAC adversarial audit)
 
