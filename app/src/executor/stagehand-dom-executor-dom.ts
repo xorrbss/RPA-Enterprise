@@ -234,9 +234,13 @@ export function buildRequest(cfg: StagehandDomExecutorConfig, stepId: string, a:
     flags: ps.flags,
     ...(domSnapshot?.text !== undefined ? { dom: domSnapshot.text } : {}),
   });
-  const key = sha(
-    `${ctx.tenantId}|${ctx.runId}|${stepId}|${a.type}|${cfg.promptTemplateVersion}|${a.instruction}|${ps.dom.structuralHash}`,
-  );
+  // 멱등키는 worker-retry dedup 용으로 안정적이어야 한다(죽은 워커 재시도가 같은 LLM 호출을 재청구/재실행하지 않게 replay).
+  //   그러나 self-heal 재해소(ctx.selfHealRetry)는 verify 실패한 stale 플랜의 replay 가 아니라 **fresh LLM 호출**이어야
+  //   한다 — 같은 페이지(structuralHash 불변)에서 self-heal 이 동일 키로 단락되면 gateway 멱등 store 가 직전 stale
+  //   parsed_json 을 replay 해 자가복구가 영원히 무력화된다(GW-SSE-02). self-heal 세대(attempt 는 self-heal 마다 증가)만
+  //   키에 섞어 self-heal 만 새 reservation 이 되게 하고, 일반/worker-retry 경로의 안정 키(dedup)는 보존한다.
+  const baseKey = `${ctx.tenantId}|${ctx.runId}|${stepId}|${a.type}|${cfg.promptTemplateVersion}|${a.instruction}|${ps.dom.structuralHash}`;
+  const key = sha(ctx.selfHealRetry === true ? `${baseKey}|self_heal:${ctx.attempt}` : baseKey);
 
   const responseFormat =
     a.type === "extract"
