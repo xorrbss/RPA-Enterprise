@@ -120,6 +120,8 @@ const ERROR_LABELS: Record<string, string> = {
   SITE_PROFILE_BLOCKED: "해당 사이트는 승인이 필요합니다.",
   SITE_CIRCUIT_OPEN: "일시적으로 수집이 중단되었습니다.",
   SESSION_LOCKED: "잠시 후 재시도됩니다.",
+  SESSION_REGISTRATION_REQUIRED: "로그인 세션 등록이 필요합니다.",
+  IR_NO_BRANCH_MATCHED: "페이지 상태에 맞는 다음 단계를 찾지 못했습니다.",
   CHALLENGE_UNRESOLVED: "추가 인증이 필요합니다.",
   RATE_BUDGET_EXCEEDED: "요청 한도 초과. 다음 윈도우에 처리됩니다.",
   AUTHZ_FORBIDDEN: "권한이 없습니다.",

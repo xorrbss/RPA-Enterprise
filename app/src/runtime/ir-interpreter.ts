@@ -21,7 +21,7 @@
 import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
 import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus, VerifyResult } from "../../../ts/core-types";
 import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
-import { evaluateCondition, selectOnBranch, type CompiledOnBranch } from "./flow-control";
+import { evaluateCondition, selectOnBranch, NoBranchMatchedError, SessionRegistrationRequiredError, type CompiledOnBranch } from "./flow-control";
 import { mergeExtractOutputs, type ExtractResultPage, type MergedExtractResult } from "./extract-result-merge";
 import type {
   CompiledScenario,
@@ -408,11 +408,20 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
     // diamond DAG 에서 분기로 건너뛴 ancestor 참조는 IREL_RUNTIME_MISSING(loud, 정상).
     const pageState = await state.deps.resolver.resolvePageState(ctx);
     ctx = { ...ctx, pageState };
-    nodeId = selectOnBranch(nodeId, node.flow.branches, {
-      flags: pageState.flags,
-      params: state.deps.params,
-      node: nodeScopeRef(state),
-    });
+    try {
+      nodeId = selectOnBranch(nodeId, node.flow.branches, {
+        flags: pageState.flags,
+        params: state.deps.params,
+        node: nodeScopeRef(state),
+      });
+    } catch (e) {
+      // login_required 페이지인데 그것을 받는 분기가 없으면, 모호한 IR_NO_BRANCH_MATCHED 대신 세션 등록 필요로 분류한다.
+      //   (self-login 시나리오는 login_required 분기가 매칭돼 여기 도달 안 함 → 오탐 0. 조용한 false 금지: loud throw.)
+      if (e instanceof NoBranchMatchedError && pageState.flags.login_required === true) {
+        throw new SessionRegistrationRequiredError(nodeId);
+      }
+      throw e;
+    }
   }
 }
 
