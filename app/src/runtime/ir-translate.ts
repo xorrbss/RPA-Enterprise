@@ -216,17 +216,35 @@ function mapAction(
     }
     const value = valueRef !== undefined && typeof params?.[valueRef] === "string" ? (params[valueRef] as string) : undefined;
     // 결정형 클릭: act.args.click_selector(LLM 미경유 클릭 타깃). assert_absent: 결정형 부재 단언(커밋 효과 witness).
-    // 셋(클릭/부재단언/fill)은 상호배타 — 각자 단일 결정형 모드(둘 이상 선언 시 IR 모순 loud).
     const clickSelector = isRec(a.args) && typeof a.args.click_selector === "string" && a.args.click_selector.length > 0 ? a.args.click_selector : undefined;
     // 결정형 텍스트 클릭: act.args.click_text(보이는 텍스트를 포함한 첫 상호작용 요소를 LLM 없이 클릭). CSS 셀렉터 불필요
-    //   (CSS 는 텍스트 매칭 불가) — 실행기가 브라우저 JS 로 해소. click_selector/assert_absent/value·secret 와 상호배타.
+    //   (CSS 는 텍스트 매칭 불가) — 실행기가 브라우저 JS 로 해소.
     const clickText = isRec(a.args) && typeof a.args.click_text === "string" && a.args.click_text.length > 0 ? a.args.click_text : undefined;
     const assertAbsent = isRec(a.args) && typeof a.args.assert_absent === "string" && a.args.assert_absent.length > 0 ? a.args.assert_absent : undefined;
-    const detModes = [clickSelector, clickText, assertAbsent, valueRef, secretRef].filter((x) => x !== undefined).length;
-    if (detModes > 1) {
+    // 결정형 fill 타깃: act.args.fill_selector(LLM 미경유 fill). click 모드와 달리 값 출처(value_ref/vars)와 **결합**한다
+    //   (셀렉터·값 둘 다 결정형). 클릭/부재단언 모드와는 상호배타. PbD 승격이 성공 run 셀렉터를 여기에 베이킹한다.
+    const fillSelector = isRec(a.args) && typeof a.args.fill_selector === "string" && a.args.fill_selector.length > 0 ? a.args.fill_selector : undefined;
+    // 클릭/부재단언 모드(각자 단일)는 서로 상호배타.
+    const clickModes = [clickSelector, clickText, assertAbsent].filter((x) => x !== undefined).length;
+    if (clickModes > 1) {
       throw new InterpreterError(
         "IR_SCHEMA_INVALID",
-        `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/click_text/assert_absent/value_ref·vars 중 하나만 사용 가능(결정형 모드 상호배타)`,
+        `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/click_text/assert_absent 중 하나만 사용 가능(결정형 모드 상호배타)`,
+      );
+    }
+    const hasFillValue = valueRef !== undefined || secretRef !== undefined;
+    // 클릭/부재단언 모드와 fill(value_ref/vars/fill_selector)은 상호배타(한 노드는 클릭 OR fill).
+    if (clickModes > 0 && (hasFillValue || fillSelector !== undefined)) {
+      throw new InterpreterError(
+        "IR_SCHEMA_INVALID",
+        `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/click_text/assert_absent 와 fill(value_ref/vars/fill_selector)을 함께 쓸 수 없음(결정형 모드 상호배타)`,
+      );
+    }
+    // fill_selector(결정형 셀렉터)는 채울 값 출처(value_ref 또는 vars[secret])가 반드시 있어야 한다(빈 fill 금지, 조용한 false 금지).
+    if (fillSelector !== undefined && !hasFillValue) {
+      throw new InterpreterError(
+        "IR_SCHEMA_INVALID",
+        `compiledScenarioFrom: node '${nodeId}' act.args.fill_selector 는 채울 값 출처(args.value_ref 또는 vars[secret])가 필요`,
       );
     }
     return withRecording({
@@ -239,6 +257,7 @@ function mapAction(
       ...(clickSelector !== undefined ? { clickSelector } : {}),
       ...(clickText !== undefined ? { clickText } : {}),
       ...(assertAbsent !== undefined ? { assertAbsent } : {}),
+      ...(fillSelector !== undefined ? { fillSelector } : {}),
     }, nodeRecording);
   }
   if (a.action === "extract") {
