@@ -35,6 +35,8 @@ export function normalizeRunParams(raw: unknown): Record<string, unknown> | unde
 }
 
 export const DEFAULT_BROWSER_LEASE_TTL_MS = 300_000;
+/** browser_lease heartbeat 주기(ops-defaults §2 browser_lease.heartbeat_interval=30s). drive 중 lease 만료 방지 갱신. */
+export const DEFAULT_BROWSER_LEASE_HEARTBEAT_MS = 30_000;
 // ops-defaults.md §3 worker.circuit: consecutive_failures=5(임계) / open_duration=1m(cooldown) / half_open_close_threshold=2. 코드 상수 금지 규약 — inline 인용.
 export const DEFAULT_WORKER_CIRCUIT_THRESHOLD = 5;
 export const DEFAULT_WORKER_CIRCUIT_OPEN_MS = 60_000;
