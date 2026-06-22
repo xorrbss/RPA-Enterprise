@@ -738,6 +738,39 @@ AUD-6. §3(d) off-allowlist-URL prompt-injection signal not threaded to the wire
    full §3 signal set active. Owner = project owner. Impact if wrong: a prompt that references an off-allowlist
    URL is not flagged by this specific detector (other detectors + the navigate gate still apply).
 
+## Audit Decisions (2026-06-22, API surface / control-plane RBAC adversarial audit)
+
+API/control-plane cluster adversarial audit (12 candidates → 3 confirmed / 9 refuted). HEADLINE ASSURANCE:
+**zero RBAC-bypass / tenant-isolation / info-leak defects confirmed** — the per-route `rbacAction` + fail-closed
+`authorize` preHandler + RLS + 404-not-403 disclosure held under adversarial probing (TI-1/TI-2 RLS-only,
+INFOLEAK-01/02 enumeration, RBAC-archive were all refuted as defense-in-depth / contract-compliant). The 3
+confirmed are P2 correctness issues; PAG-01 (cursor microsecond precision → silent row skip) was FIXED (this PR).
+The two below are recorded.
+
+AUD-7. Stale If-Match/version conflict (412) persists to the idempotency record → permanent retry lock (IFM-1, P2)
+   Finding: `runIdempotentCommand`/`promoteScenario`* persist a non-retryable `ApiResponseError` via `saveFailure`;
+   `SCENARIO_VERSION_CONFLICT`/`POLICY_VERSION_CONFLICT` (412, retryable=false in error-catalog) are thrown by the
+   If-Match check INSIDE the reserved work callback, so a stale-If-Match 412 is stored. Because the canonical
+   request hash excludes the If-Match header and the body is unchanged (rollback/archive `{}`, PUT policy value), a
+   client that correctly re-reads the latest version and retries with the SAME Idempotency-Key + corrected If-Match
+   hits `reserve()` → `replay` → the stored stale 412 forever. api-surface §0.3 promises "If-Match 재시도" must be
+   able to succeed; this locks the key (24h TTL). A same-tenant writer bumping the version at the victim's moment is
+   an availability nuisance. Decision (recipe, not yet fixed): do NOT persist optimistic-concurrency conflicts to
+   the idempotency record — either exclude `SCENARIO_VERSION_CONFLICT`/`POLICY_VERSION_CONFLICT` from the
+   `saveFailure` guard and release the reservation (TTL/DELETE → fresh reserve on retry), OR lift the If-Match check
+   BEFORE `reserve()` (pre-reservation rejection, like `server-abort-run.ts:63-85`). Owner = project owner.
+
+AUD-8. If-Match version check is SELECT-then-INSERT (non-atomic) → concurrent writers get 500 not 412 (IFM-2, P2)
+   Finding: PUT/rollback/promote-from-run read the current version then INSERT `scenario_versions` with no row
+   lock/CAS; two concurrent writers computing the same `version` both INSERT → the loser hits UNIQUE
+   `(tenant_id, scenario_id, version)` (23505), a raw PG error that escapes the `instanceof ApiResponseError` guard
+   and is mapped to `CONTROL_PLANE_INTERNAL_ERROR` (500) instead of the contractual `SCENARIO_VERSION_CONFLICT`
+   (412). Reachable by console double-click / concurrent edit. Decision (recipe, not yet fixed): classify the
+   23505 unique_violation on the version constraint → `SCENARIO_VERSION_CONFLICT` (412), mirroring `createRun`'s
+   `idx_runs_one_per_workitem` 23505 handling (`server-create-run.ts:255-265`); or `INSERT ... ON CONFLICT
+   (tenant_id, scenario_id, version) DO NOTHING RETURNING id` → 412 on 0 rows; or `FOR UPDATE`/advisory-lock the
+   scenario row. Owner = project owner. Impact: confusing 500 (not data corruption — UNIQUE preserves integrity).
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
