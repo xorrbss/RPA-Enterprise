@@ -28,6 +28,8 @@ import type {
 import { bootstrapMetrics, bootstrapTracing } from "../src/observability/bootstrap";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
+import { AjvStructuredOutputValidator } from "../src/gateway/ajv-structured-output-validator";
+import { ACTION_PLAN_SCHEMA } from "../src/executor/stagehand-dom-executor-support";
 import {
   GatewayError,
   LlmGateway,
@@ -282,6 +284,24 @@ async function main(): Promise<void> {
     const q = queueAdapter([textDone('{"a":1}'), textDone('{"a":2}')]);
     const res = await gateway({ primary: q.adapter, validator }).call(req, sig());
     check("call: non-strict repair once → success", res.parsedJson !== undefined && (res.parsedJson as { a: number }).a === 2 && q.calls() === 2);
+  }
+
+  // ── DAH-01/SO-1: act 의 action_plan(inline schema 없음)이 **실제 ajv validator** 로도 통과해야 한다 ──────────
+  //    종전 finalize §5 가 schema-없는 action_plan 에 extract-스키마 검증을 적용→valid plan 을 LLM_MALFORMED_OUTPUT
+  //    으로 거부(LLM-plan act 전면 불능). 기존 테스트는 act 경로에 okValidator 만 써서 이 결함을 마스킹했다.
+  {
+    const realValidator = new AjvStructuredOutputValidator();
+    const actReq = makeReq({ responseFormat: ACTION_PLAN_SCHEMA }); // makeReq 기본 primitive:"act"
+    const res = await gateway({ primary: queueAdapter([textDone('{"operation":"click","selector":"#submit"}')]).adapter, validator: realValidator }).call(actReq, sig());
+    check("DAH-01: act action_plan + 실 validator → 성공(parsedJson 반환)", res.parsedJson !== undefined && (res.parsedJson as { operation: string }).operation === "click", JSON.stringify(res.parsedJson));
+
+    // 회귀: 실 validator 의 extract 검증은 보존(invalid → throw).
+    const exReq = makeReq({
+      metadata: { tenantId: "t", runId: "r", stepId: "s", attempt: 0, primitive: "extract", correlationId: "c" },
+      responseFormat: { type: "json_schema", schemaRef: "rows", schemaVersion: "1", strict: true, schema: { type: "object", required: ["rows"], properties: { rows: { type: "array" } }, additionalProperties: false } },
+    });
+    const exErr = await caught(gateway({ primary: queueAdapter([textDone('{"wrong":1}')]).adapter, validator: realValidator }).call(exReq, sig()));
+    check("DAH-01: extract invalid + 실 validator → 여전히 EXTRACT_SCHEMA_INVALID(검증 보존)", exErr?.code === "EXTRACT_SCHEMA_INVALID", String(exErr?.code));
   }
 
   // ── RQ-029: repair user 메시지(prior LLM 출력)도 §4 step2 redaction/injection 경계 통과 ──────────
