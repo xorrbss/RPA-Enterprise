@@ -704,6 +704,40 @@ AUD-4. Credential-fill selector is LLM-chosen (SSB-01, P1) — verify reachabili
    WITH that wiring. To be verified file:line before building (the audit's verify pass can miss
    the assetRefs-not-prod-plumbed detail, as it did for AUD-1). Owner = project owner.
 
+## Audit Decisions (2026-06-22, LLM gateway + executor adversarial audit)
+
+LLM gateway+executor cluster adversarial audit (22 candidates → 5 confirmed / 17 refuted). DAH-01/SO-1
+(act action_plan structured-output fail-closed, P0; PR #252) and GW-SSE-02 (self-heal LLM idempotency
+replay short-circuit, P1; PR #253) were fixed as contract-aligned defects. The two below are recorded.
+
+AUD-5. Run abort does not cancel the in-flight LLM gateway call (SHF-1, P1) — cross-process design needed
+   Finding: `driveScenario` (run-step-driver.ts:257) builds the production `RunContext` with
+   `abortSignal: new AbortController().signal` — a signal that is NEVER aborted. The cooperative-abort
+   guard is fully wired (executors check `ctx.abortSignal.aborted`; the dom executor threads it into
+   `gateway.call(req, ctx.abortSignal)`; the Codex SSE adapter aborts the stream on a live signal), but the
+   signal is dead, so a run abort never cancels an in-flight LLM SSE call (act/observe/extract planning).
+   The call runs to the gateway wall/idle timeout, wasting tokens/budget for an already-cancelled run.
+   Decision: NOT fixed with an in-process AbortController bridge, because `handleRunAbort` is a SEPARATE
+   graphile job that may run in a DIFFERENT worker process than the drive (graphile worker pool — true even
+   single-host), so `controller.abort()` from the abort job can't reach the driving process's controller.
+   The robust fix is cooperative DB-status polling in the drive loop (between nodes, re-read run status →
+   self-abort the controller if `aborting`) — a drive-loop change that is a design decision (polling cadence
+   vs a dedicated cancellation channel). Harm is BOUNDED: correctness is protected by the existing CDP
+   session teardown (`drainAbort` closes the session → the next CDP op throws → the drive errors and the LLM
+   result is discarded); the leak is only wasted LLM budget bounded by one wall/idle timeout. Build-condition:
+   owner picks the abort-propagation mechanism (status-poll in drive loop, recommended). Owner = project owner.
+
+AUD-6. §3(d) off-allowlist-URL prompt-injection signal not threaded to the wired gateway (GRI-2, P2) — defense-in-depth
+   Finding: `redaction-boundary` computes a §3(d) `off_allowlist_url` injection signal only when
+   `input.networkPolicy` is supplied, but the wired gateway callers (`llm-gateway.redactRequest`/`repairOnce`)
+   and `buildRequest` do not thread `ctx.networkAllowedDomains` into the request, so that one injection signal
+   is effectively dead. Decision: low-priority defense-in-depth (identical to the security audit's INJ-01,
+   refuted there) — it is ONE signal among several injection detectors, and the broader navigate domain gate
+   (NPA-02 landed-URL re-check, fixed) already blocks off-allowlist navigation. Threading `networkPolicy`
+   through is a small change but adds one detector of marginal value; deferred unless the owner wants the
+   full §3 signal set active. Owner = project owner. Impact if wrong: a prompt that references an off-allowlist
+   URL is not flagged by this specific detector (other detectors + the navigate gate still apply).
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
