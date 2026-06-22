@@ -264,7 +264,7 @@ async function applyHumanTaskCommand(
     // 교차 전이(R13/R15): human_task 전이 직후 동일 tx에서 연관 run 전이 적용.
     assertHumanTaskPendingHandled(event, assignee, outcome.pending);
     if (runCoupling !== undefined) {
-      await applyCoupledRunTransition(client, tenantId, row.run_id, correlationId, runCoupling, enqueuer);
+      await applyCoupledRunTransition(client, tenantId, row.run_id, humanTaskId, correlationId, runCoupling, enqueuer);
     }
     return { status: 200, body: { human_task_id: humanTaskId, state: outcome.next } };
   }
@@ -305,6 +305,7 @@ async function applyCoupledRunTransition(
   client: PoolClient,
   tenantId: string,
   runId: string,
+  humanTaskId: string,
   fallbackCorrelationId: string,
   coupling: RunCoupling,
   enqueuer?: RunEnqueuer,
@@ -324,6 +325,10 @@ async function applyCoupledRunTransition(
     event: coupling.event,
     guard: coupling.guard,
     correlationId: run.correlation_id ?? fallbackCorrelationId,
+    // R13/R15 run 이벤트(run.resume_requested 등) outbox 멱등키를 per-suspend-cycle 로 스코프 — humanTaskId 는 사이클별 고유
+    //   (R11 suspend·R17/R18 resume 의 per-cycle 키와 대칭). per-run 고정이면 다중 suspend/resume 2회차 R13 이
+    //   events_outbox UNIQUE(tenant,idempotency_key) 충돌→resolve tx 롤백→이벤트 유실+run suspended 영구 stuck(감사 EPL-01).
+    eventIdempotencyKey: `${runId}:${humanTaskId}`,
   });
   if (!outcome.applied) {
     throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", { reason: "human_task_run_coupling_cas_contention" });

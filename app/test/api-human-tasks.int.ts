@@ -57,6 +57,7 @@ const RUN_SUSP_SCOPE_OK = "40000000-0000-0000-0000-000000000014";
 const RUN_SUSP_SCOPE_DENY = "40000000-0000-0000-0000-000000000015";
 const RUN_SUSP_ROLE_SCOPE = "40000000-0000-0000-0000-000000000016";
 const HT_RESOLVE_OK = "41000000-0000-0000-0000-000000000010";
+const HT_RESOLVE_OK_CYCLE2 = "41000000-0000-0000-0000-000000000020"; // EPL-01: 같은 run 2번째 suspend 사이클 task
 const HT_RESOLVE_NOCOUPLE = "41000000-0000-0000-0000-000000000011";
 const HT_RESOLVE_ASSIGNED = "41000000-0000-0000-0000-000000000012";
 const HT_APPROVAL = "41000000-0000-0000-0000-000000000013";
@@ -380,6 +381,21 @@ async function main(): Promise<void> {
       check("resolve emits human_task.resolved", (await outboxCount(pool, TENANT_A, RUN_SUSP_RESOLVE, "human_task.resolved")) === 1);
       check("resolve emits run.resume_requested", (await outboxCount(pool, TENANT_A, RUN_SUSP_RESOLVE, "run.resume_requested")) === 1);
       check("resolve(R13) → run_resume 잡 인큐(같은 tx)", resumeEnqueued.includes(RUN_SUSP_RESOLVE), resumeEnqueued.join(","));
+
+      // 14b) 다중 suspend/resume 사이클(이벤트 파이프라인 감사 EPL-01): 같은 run 을 다시 suspended 로 되돌리고 2번째
+      //   human_task 를 resolve → R13 outbox 멱등키가 per-cycle(humanTaskId)이라 events_outbox UNIQUE 충돌 없이 성공해야.
+      //   per-run 고정 키였다면 2회차 R13 이 ${runId}:run.resume_requested 재충돌→tx 롤백→500+run suspended 영구 stuck+이벤트 1건.
+      await withTenantTx(pool, TENANT_A, (c) =>
+        c.query(`UPDATE runs SET status='suspended' WHERE id=$1::uuid AND tenant_id=$2::uuid`, [RUN_SUSP_RESOLVE, TENANT_A]),
+      );
+      await seedTask(pool, TENANT_A, RUN_SUSP_RESOLVE, HT_RESOLVE_OK_CYCLE2, "in_progress", "exception", {
+        assignee: ASSIGNEE,
+        assigneeRole: "reviewer",
+      });
+      const r1b = await resolve(HT_RESOLVE_OK_CYCLE2, "resolve-ok-cycle2");
+      check("2회차 resolve(R13) → 200(per-cycle 키, UNIQUE 충돌 없음)", r1b.statusCode === 200 && r1b.json().state === "resolved", r1b.body);
+      check("2회차 resolve → run resume_requested(stuck 아님)", (await runStatus(pool, TENANT_A, RUN_SUSP_RESOLVE)) === "resume_requested");
+      check("2회차 resolve → run.resume_requested 이벤트 2건(유실 없음)", (await outboxCount(pool, TENANT_A, RUN_SUSP_RESOLVE, "run.resume_requested")) === 2);
 
       // 15) run이 suspended가 아니면(running) 교차 전이 건너뜀 — task는 resolved, run 불변.
       const r2 = await resolve(HT_RESOLVE_NOCOUPLE, "resolve-nocouple");
