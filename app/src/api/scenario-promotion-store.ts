@@ -9,6 +9,11 @@
  * 캐시-hit step 복구(PR-2): cache hit 는 LLM 미호출이라 stagehand_call 이 없지만, run_steps.action_plan_cache_id
  * (PR-1 배선)로 action_plan_cache.plan_ref(직렬화 ActionPlan)에서 plan 을 복구한다 → warm run 도 완전 승격.
  * 단 **active 한 캐시 entry 만** 복구한다(suspect/stale = 드리프트 플래그 → 알려진-나쁜 셀렉터 베이킹 금지).
+ * 또한 **run 이 그 step 을 실행한 후 캐시가 덮어써진(cross-run 재해소) plan 은 제외**한다(CHP-01): plan_ref 는 가변이라
+ * (put 이 ON CONFLICT DO UPDATE 로 같은 행의 plan_ref·last_success_at=now() 갱신) run R 이 hit 한 셀렉터가, 무관한
+ * 후속 run 의 재해소로 덮어써질 수 있다. 그 경우 현재 plan_ref 는 R 이 실행한 적 없는 셀렉터이므로 PbD 소운드니스
+ * (데모한 동작만 굳힘)에 위배된다 → `apc.last_success_at <= rs.created_at`(put 시각 ≤ R 의 step 기록 시각, get 은
+ * read-only 라 last_success_at 미갱신)로 덮어쓰기된 plan 을 제외(n7 stale 과 동형의 안전 제외 — false 가 아니라 부재).
  * RLS 스코프 client(현재 테넌트만). 순수 transform 은 scenario-promotion.ts.
  *
  * 다중-act 노드 모호성(plan→act 귀속): 인터프리터는 한 노드의 what[k] 를 distinct step_id(`${nodeId}.${k}`)로
@@ -39,6 +44,7 @@ export async function loadRunActionPlans(client: PoolClient, runId: string): Pro
         AND sc.stream_status = 'done' AND sc.parsed_json IS NOT NULL
        LEFT JOIN action_plan_cache apc
          ON apc.id = rs.action_plan_cache_id AND apc.tenant_id = rs.tenant_id AND apc.status = 'active'
+        AND apc.last_success_at <= rs.created_at
       WHERE rs.run_id = $1::uuid
         AND rs.action = 'act'
         AND rs.status = 'success'
