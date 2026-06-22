@@ -662,6 +662,7 @@ const inFlightDeps: typeof inFlightScaffold.deps = {
     },
     async saveResult() {},
     async saveFailure() {},
+    async release() {},
   },
 };
 const inFlightRunner = new FakeControlPlaneRunner({
