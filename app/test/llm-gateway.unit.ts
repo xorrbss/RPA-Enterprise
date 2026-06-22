@@ -301,6 +301,12 @@ async function main(): Promise<void> {
     const badErr = await caught(gateway({ primary: queueAdapter([textDone('{"action":"click","target":"제목","criteria":"present"}')]).adapter, validator: realValidator }).call(makeReq({ responseFormat: ACTION_PLAN_SCHEMA }), sig()));
     check("DAH-01: act action_plan + 모호 plan → LLM_MALFORMED_OUTPUT(ajv 거부)", badErr?.code === "LLM_MALFORMED_OUTPUT", String(badErr?.code));
 
+    // Phase 2A 적대리뷰 confirmed P1 회귀 가드: valid plan 에 LLM 이 흔히 붙이는 부가 필드(reason/confidence)가 있어도
+    //   통과해야 한다(parseActionPlan 이 무관 키를 무시하므로). additionalProperties:false 였다면 strict(no-repair) 로
+    //   하드 거부돼 머지 전 통과되던 plan 이 좌초했다. 형상 거부는 required+enum 이 담당(위 모호 plan 은 여전히 거부).
+    const annotated = await gateway({ primary: queueAdapter([textDone('{"operation":"click","selector":"#submit","reason":"login button","confidence":0.9}')]).adapter, validator: realValidator }).call(makeReq({ responseFormat: ACTION_PLAN_SCHEMA }), sig());
+    check("Phase 2A 회귀가드: 부가 필드(reason/confidence) 있는 valid plan → 통과(거부 아님)", annotated.parsedJson !== undefined && (annotated.parsedJson as { operation: string }).operation === "click", JSON.stringify(annotated.parsedJson));
+
     // 회귀: 실 validator 의 extract 검증은 보존(invalid → throw).
     const exReq = makeReq({
       metadata: { tenantId: "t", runId: "r", stepId: "s", attempt: 0, primitive: "extract", correlationId: "c" },
