@@ -14,6 +14,7 @@ interface ScenarioRow {
   version_id: string;
   promotion_status: string;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서(PAG-01)
 }
 
 interface GatewayPolicyRow {
@@ -39,6 +40,7 @@ interface SiteRow {
   default_browser_identity_id: string | null;
   default_network_policy_id: string | null;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서(PAG-01)
 }
 
 function siteRiskFilter(raw: unknown): "green" | "amber" | "red" | undefined {
@@ -87,7 +89,7 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<ScenarioRow>(
-        `SELECT s.id, s.name, s.created_at, sv.version, sv.id AS version_id, sv.promotion_status
+        `SELECT s.id, s.name, s.created_at, s.created_at::text AS cursor_at, sv.version, sv.id AS version_id, sv.promotion_status
            FROM scenarios s
            JOIN LATERAL (
              SELECT id, version, promotion_status FROM scenario_versions v
@@ -105,7 +107,7 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
     });
 
     reply.code(200).send(
-      paginate(rows, limit, (r) => ({ createdAt: r.created_at, id: r.id }), (r) => ({
+      paginate(rows, limit, (r) => ({ createdAt: r.cursor_at, id: r.id }), (r) => ({
         scenario_id: r.id,
         name: r.name,
         version: r.version,
@@ -211,7 +213,7 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
                    ORDER BY np.created_at DESC, np.id DESC
                    LIMIT 1
                 ) AS default_network_policy_id,
-                s.created_at
+                s.created_at, s.created_at::text AS cursor_at
            FROM site_profiles s
           WHERE s.tenant_id = $1::uuid
             AND ($2::text IS NULL OR s.risk = $2)
@@ -223,7 +225,7 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
       return result.rows;
     });
 
-    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.created_at, id: r.id }), mapSite));
+    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.cursor_at, id: r.id }), mapSite));
   });
 
   // GET /v1/sites/{id} — 상세. 부재/cross-tenant → RESOURCE_NOT_FOUND(404).
@@ -267,7 +269,7 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
                      ORDER BY np.created_at DESC, np.id DESC
                      LIMIT 1
                   ) AS default_network_policy_id,
-                  s.created_at
+                  s.created_at, s.created_at::text AS cursor_at
              FROM site_profiles s WHERE s.id = $1::uuid`,
           [id],
         );

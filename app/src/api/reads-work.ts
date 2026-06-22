@@ -17,6 +17,7 @@ interface WorkitemRow {
   checked_out_at: Date | null;
   run_id: string | null;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서 전용(PAG-01)
 }
 
 interface DeadLetterRow {
@@ -24,6 +25,7 @@ interface DeadLetterRow {
   workitem_id: string | null;
   reason_code: string;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서 전용(PAG-01)
 }
 
 interface SinkDlqRow {
@@ -31,6 +33,7 @@ interface SinkDlqRow {
   normalized_record_id: string;
   sink_idempotency_key: string;
   attempted_at: Date;
+  cursor_at: string; // attempted_at::text(전정밀도) — keyset 커서 전용(PAG-01)
 }
 
 
@@ -71,7 +74,7 @@ export function registerWorkReadRoutes(app: FastifyInstance, deps: ApiServerDeps
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<WorkitemRow>(
-        `SELECT w.id, w.status, w.attempts, w.unique_reference, w.checked_out_by, w.checked_out_at, w.created_at,
+        `SELECT w.id, w.status, w.attempts, w.unique_reference, w.checked_out_by, w.checked_out_at, w.created_at, w.created_at::text AS cursor_at,
                 (SELECT r.id FROM runs r WHERE r.tenant_id = w.tenant_id AND r.workitem_id = w.id LIMIT 1) AS run_id
            FROM workitems w
           WHERE w.tenant_id = $1::uuid
@@ -84,7 +87,7 @@ export function registerWorkReadRoutes(app: FastifyInstance, deps: ApiServerDeps
       return result.rows;
     });
 
-    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.created_at, id: r.id }), mapWorkitem));
+    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.cursor_at, id: r.id }), mapWorkitem));
   });
 
   // GET /v1/workitems/{id} — 상세. 부재/cross-tenant → RESOURCE_NOT_FOUND(404).
@@ -99,7 +102,7 @@ export function registerWorkReadRoutes(app: FastifyInstance, deps: ApiServerDeps
       }
       const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<WorkitemRow>(
-          `SELECT w.id, w.status, w.attempts, w.unique_reference, w.checked_out_by, w.checked_out_at, w.created_at,
+          `SELECT w.id, w.status, w.attempts, w.unique_reference, w.checked_out_by, w.checked_out_at, w.created_at, w.created_at::text AS cursor_at,
                   (SELECT r.id FROM runs r WHERE r.tenant_id = w.tenant_id AND r.workitem_id = w.id LIMIT 1) AS run_id
              FROM workitems w WHERE w.id = $1::uuid`,
           [id],
@@ -130,7 +133,7 @@ export function registerWorkReadRoutes(app: FastifyInstance, deps: ApiServerDeps
       // 소스(api-surface §4, 병합 안 함). replay가 requeued_at을 마킹하면 다음 폴링부터 목록에서 빠진다.
       const sinkRows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<SinkDlqRow>(
-          `SELECT id, normalized_record_id, sink_idempotency_key, attempted_at
+          `SELECT id, normalized_record_id, sink_idempotency_key, attempted_at, attempted_at::text AS cursor_at
              FROM sink_deliveries
             WHERE tenant_id = $1::uuid
               AND status = 'dead_letter'
@@ -143,7 +146,7 @@ export function registerWorkReadRoutes(app: FastifyInstance, deps: ApiServerDeps
         return result.rows;
       });
       reply.code(200).send(
-        paginate(sinkRows, limit, (r) => ({ createdAt: r.attempted_at, id: r.id }), (r) => ({
+        paginate(sinkRows, limit, (r) => ({ createdAt: r.cursor_at, id: r.id }), (r) => ({
           dead_letter_id: r.id,
           kind: "sink",
           status: "DEAD_LETTER",
@@ -156,7 +159,7 @@ export function registerWorkReadRoutes(app: FastifyInstance, deps: ApiServerDeps
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<DeadLetterRow>(
-        `SELECT id, workitem_id, reason_code, created_at
+        `SELECT id, workitem_id, reason_code, created_at, created_at::text AS cursor_at
            FROM dead_letter
           WHERE tenant_id = $1::uuid
             AND replayed_at IS NULL
@@ -169,7 +172,7 @@ export function registerWorkReadRoutes(app: FastifyInstance, deps: ApiServerDeps
     });
 
     reply.code(200).send(
-      paginate(rows, limit, (r) => ({ createdAt: r.created_at, id: r.id }), (r) => ({
+      paginate(rows, limit, (r) => ({ createdAt: r.cursor_at, id: r.id }), (r) => ({
         dead_letter_id: r.id,
         kind: "workitem",
         status: "DEAD_LETTER",

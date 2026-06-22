@@ -24,6 +24,7 @@ interface HumanTaskRow {
   on_timeout: string;
   run_id: string;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서(PAG-01)
 }
 
 interface PrincipalRow {
@@ -33,6 +34,7 @@ interface PrincipalRow {
   email: string | null;
   source: string;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서(PAG-01)
 }
 
 
@@ -72,7 +74,7 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<HumanTaskRow>(
-        `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id, created_at
+        `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id, created_at, created_at::text AS cursor_at
            FROM human_tasks
           WHERE tenant_id = $1::uuid
             AND ($2::text IS NULL OR state = $2)
@@ -96,7 +98,7 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
       return result.rows;
     });
 
-    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.created_at, id: r.id }), mapHumanTask));
+    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.cursor_at, id: r.id }), mapHumanTask));
   });
 
   // GET /v1/principals — 테넌트 담당자 디렉터리 커서 페이지(name-picker용). RLS 스코프. principal.read(viewer+).
@@ -107,7 +109,7 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<PrincipalRow>(
-        `SELECT id, sub, display_name, email, source, created_at
+        `SELECT id, sub, display_name, email, source, created_at, created_at::text AS cursor_at
            FROM principals
           WHERE tenant_id = $1::uuid
             AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
@@ -118,7 +120,7 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
       return result.rows;
     });
 
-    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.created_at, id: r.id }), mapPrincipal));
+    reply.code(200).send(paginate(rows, limit, (r) => ({ createdAt: r.cursor_at, id: r.id }), mapPrincipal));
   });
 
   // GET /v1/human-tasks/{id} — 상세. 부재/cross-tenant → RESOURCE_NOT_FOUND(404).
@@ -133,7 +135,7 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
       }
       const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<HumanTaskRow>(
-          `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id, created_at
+          `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id, created_at, created_at::text AS cursor_at
              FROM human_tasks WHERE id = $1::uuid`,
           [id],
         );

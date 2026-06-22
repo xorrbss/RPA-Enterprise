@@ -59,8 +59,15 @@ export function decodeCursor(raw: unknown): PageCursor | null {
   return { createdAt: c, id: i };
 }
 
-export function encodeCursor(createdAt: Date, id: string): string {
-  return Buffer.from(JSON.stringify({ c: createdAt.toISOString(), i: id }), "utf8").toString("base64url");
+// createdAt 는 DB `<ts>::text`(마이크로초 전정밀도 문자열)여야 한다 — JS Date 경유 시 pg 가 timestamptz 를 밀리초
+// Date 로 파싱해 마이크로초가 소실되고, 절단된 커서가 마이크로초 컬럼과 비교돼 동일-밀리초 경계 행이 keyset
+// 페이지네이션에서 조용히 누락된다(PAG-01). 커서는 전정밀도 문자열을 그대로 싣고, 비교 시 호출부가 ::timestamptz 로 재파싱.
+export function encodeCursor(createdAt: string, id: string): string {
+  // fail-loud: 호출부가 `<ts>::text AS cursor_at`(전정밀도 문자열) 대신 누락/Date 를 넘기면 조용한 잘못된 커서 대신 throw.
+  if (typeof createdAt !== "string" || createdAt.length === 0) {
+    throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", { reason: "cursor_source_not_text" });
+  }
+  return Buffer.from(JSON.stringify({ c: createdAt, i: id }), "utf8").toString("base64url");
 }
 
 export function parsePageParams(query: Record<string, unknown>): PageParams {
@@ -74,7 +81,7 @@ export function parsePageParams(query: Record<string, unknown>): PageParams {
 export function paginate<Row, Item>(
   rows: readonly Row[],
   limit: number,
-  cursorOf: (row: Row) => { createdAt: Date; id: string },
+  cursorOf: (row: Row) => { createdAt: string; id: string },
   map: (row: Row) => Item,
 ): { items: Item[]; next_cursor: string | null } {
   const hasMore = rows.length > limit;

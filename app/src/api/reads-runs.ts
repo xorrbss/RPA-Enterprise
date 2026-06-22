@@ -18,6 +18,7 @@ interface RunListRow {
   workitem_id: string | null;
   failure_reason: unknown;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서 전용(PAG-01)
   updated_at: Date;
 }
 
@@ -35,6 +36,7 @@ interface RunStepRow {
   ended_at: Date | null;
   duration_ms: number | null;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서 전용(PAG-01)
   stagehand_calls: unknown; // LATERAL json_agg(StagehandSummary[])
 }
 
@@ -67,13 +69,14 @@ interface RunArtifactRow {
   retention_until: Date | null;
   legal_hold: boolean;
   created_at: Date;
+  cursor_at: string; // created_at::text(전정밀도) — keyset 커서 전용(PAG-01)
 }
 
 function artifactListPage(rows: readonly RunArtifactRow[], limit: number) {
   return paginate(
     rows,
     limit,
-    (r) => ({ createdAt: r.created_at, id: r.id }),
+    (r) => ({ createdAt: r.cursor_at, id: r.id }),
     (r) => ({
       artifact_id: r.id,
       step_id: r.step_id,
@@ -102,7 +105,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<RunListRow>(
-        `SELECT id, status, scenario_version_id, worker_id, attempts, as_of, workitem_id, failure_reason, created_at, updated_at
+        `SELECT id, status, scenario_version_id, worker_id, attempts, as_of, workitem_id, failure_reason, created_at, created_at::text AS cursor_at, updated_at
            FROM runs
           WHERE tenant_id = $1::uuid
             AND ($2::text IS NULL OR status = $2)
@@ -126,7 +129,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
       paginate(
         rows,
         limit,
-        (r) => ({ createdAt: r.created_at, id: r.id }),
+        (r) => ({ createdAt: r.cursor_at, id: r.id }),
         (r) => ({
           run_id: r.id,
           status: r.status,
@@ -207,7 +210,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<RunStepRow>(
           `SELECT s.id, s.step_id, s.node_id, s.attempt, s.action, s.status, s.cache_mode,
-                  s.artifacts, s.exception, s.started_at, s.ended_at, s.duration_ms, s.created_at,
+                  s.artifacts, s.exception, s.started_at, s.ended_at, s.duration_ms, s.created_at, s.created_at::text AS cursor_at,
                   COALESCE(sc.calls, '[]'::json) AS stagehand_calls
              FROM run_steps s
              LEFT JOIN LATERAL (
@@ -233,7 +236,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
         paginate(
           rows,
           limit,
-          (r) => ({ createdAt: r.created_at, id: r.id }),
+          (r) => ({ createdAt: r.cursor_at, id: r.id }),
           (r) => ({
             step_id: r.step_id,
             node_id: r.node_id,
@@ -272,7 +275,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<RunArtifactRow>(
           `SELECT id, step_id, attempt, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
-                  redaction_status, retention_until, legal_hold, created_at
+                  redaction_status, retention_until, legal_hold, created_at, created_at::text AS cursor_at
              FROM artifacts
             WHERE tenant_id = $1::uuid AND run_id = $2::uuid
               AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
@@ -303,7 +306,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<RunArtifactRow>(
           `SELECT id, step_id, attempt, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
-                  redaction_status, retention_until, legal_hold, created_at
+                  redaction_status, retention_until, legal_hold, created_at, created_at::text AS cursor_at
              FROM artifacts
             WHERE tenant_id = $1::uuid AND generation_id = $2::uuid
               AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
@@ -348,7 +351,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
         }
         const result = await c.query<RunArtifactRow>(
           `SELECT id, step_id, attempt, type, media_type, filename, byte_size::text AS byte_size, duration_ms,
-                  redaction_status, retention_until, legal_hold, created_at
+                  redaction_status, retention_until, legal_hold, created_at, created_at::text AS cursor_at
              FROM artifacts
             WHERE tenant_id = $1::uuid AND run_id = $2::uuid
               AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
