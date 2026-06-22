@@ -6,7 +6,7 @@ import { useCan } from "../api/permissions";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { actionLabel, terminalLabel } from "../components/badges";
-import { mergeParams, navigate, useHashParam } from "../router";
+import { mergeParams, navigate, useHashIdParam } from "../router";
 import type { ScenarioItem } from "../api/types";
 
 // 테스트 실행(playground) — 저장된 자동화의 실행 계획(IR → 단계·흐름)을 정적으로 미리본 뒤, 그대로 실제 실행을
@@ -92,7 +92,7 @@ function Plan({ ir }: { ir: unknown }): JSX.Element {
 export function PlaygroundView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
-  const scenarioParam = useHashParam("scenario");
+  const scenarioParam = useHashIdParam("scenario");
   const list = useQuery({ queryKey: ["scenarios"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 10_000 });
   const [sel, setSel] = useState<string>(() => scenarioParam ?? "");
   const detail = useQuery({ queryKey: ["scenario-detail", sel], queryFn: () => api.getScenario(sel), enabled: sel !== "" });
