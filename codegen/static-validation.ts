@@ -21,6 +21,8 @@ const RETURNING_RESERVED_HANDLERS = new Set(["@challenge", "@human_task"]);
 const MAX_LOOP_ITERATIONS = 10000;
 const TIER_ORDER: Record<string, number> = { T0: 0, T1: 1, T2: 2, T3: 3 };
 const VALUE_PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+// value_match.path 평가 대상 루트(ir-static-validation §3): 직전 노드의 extracted 또는 node.<id>.*.
+const VALUE_PATH_ROOTS = new Set<string>(["extracted", "node"]);
 
 export interface StaticValidationOptions {
   readonly signedCommandRefs?: ReadonlySet<string> | readonly string[];
@@ -60,7 +62,6 @@ export interface CompiledFallbackTierAst {
 }
 
 export interface CompiledVerifyAst {
-  readonly vlm_fallback_when?: IRELNode;
   readonly empty_result_allowed?: readonly IRELNode[];
 }
 
@@ -151,6 +152,7 @@ export function compileScenarioStatic(
 
   for (const [nodeId, node] of Object.entries(ir.nodes)) {
     validateTargets(nodeId, node, nodeIds, errors);
+    validateOnBranchReservedHandler(nodeId, node, errors);
     validateOnPriorities(nodeId, node, errors);
     validateEndNoDataWitness(nodeId, node, warnings);
     validateFallbackChain(nodeId, node, errors);
@@ -210,6 +212,23 @@ function validateTargets(
     }
     if (isNodeEdge(ref) && (ref.target === undefined || !nodeIds.has(ref.target))) {
       errors.push(issue("V1", "target_not_found", "IR_SCHEMA_INVALID", `${ref.label} '${ref.target ?? "<missing>"}' does not exist`, nodeId));
+    }
+  }
+}
+
+// on[].target = reservedHandlerCall(@challenge/@human_task) 은 스키마/그래프상 수용되나 인터프리터(ir-translate.toBranch)는
+// next-target 핸들러콜만 지원하고 on-branch 핸들러콜은 IR_SCHEMA_INVALID 로 거부한다. compile-accept/runtime-reject
+// 비대칭을 저장 시점(정적검증)에 제거한다(AUD-12 e). next= 핸들러콜은 계속 허용된다.
+function validateOnBranchReservedHandler(nodeId: string, node: IRNode, errors: ValidationIssue[]): void {
+  for (const branch of onBranchesOf(node)) {
+    if (isRecord(branch.target)) {
+      errors.push(issue(
+        "V1",
+        "on_branch_reserved_handler_unsupported",
+        "IR_SCHEMA_INVALID",
+        "on[].target reservedHandlerCall(@challenge/@human_task) is unsupported on an on[] branch; use 'next' for a returning handler call or a node-id/@end_no_data string target",
+        nodeId,
+      ));
     }
   }
 }
@@ -297,8 +316,16 @@ function validateFallbackIdempotency(
 
 function validateValuePaths(nodeId: string, node: IRNode, errors: ValidationIssue[]): void {
   for (const criterion of node.verify?.criteria ?? []) {
-    if (criterion.type === "value_match" && !VALUE_PATH_RE.test(criterion.path)) {
+    if (criterion.type !== "value_match") continue;
+    if (!VALUE_PATH_RE.test(criterion.path)) {
       errors.push(issue("V10", "invalid_value_path", "IR_SCHEMA_INVALID", `invalid value_match.path '${criterion.path}'`, nodeId));
+      continue;
+    }
+    // §3: 평가 대상 루트는 직전 노드의 extracted(extract 결과) 또는 node.<id>.* 표준 출력이어야 한다.
+    // 그 외 루트는 평가 대상 부재 → V10 위반(문법만 통과시키던 false-accept 제거; AUD-12 c).
+    const root = criterion.path.split(".")[0] ?? "";
+    if (!VALUE_PATH_ROOTS.has(root)) {
+      errors.push(issue("V10", "invalid_value_path", "IR_SCHEMA_INVALID", `value_match.path '${criterion.path}' root '${root}' must be 'extracted' or 'node.<id>'`, nodeId));
     }
   }
 }
@@ -366,14 +393,11 @@ function validateExpressions(
   }
   if (fallbackChain.length > 0) compiled.fallback_chain = fallbackChain;
 
+  // verify.vlm_fallback.when 은 verify-engine 상태 조건(기본 'criteria_uncertain', verify.schema.json §vlm_fallback)이며
+  // IREL scope 가 아니다. IREL 로 컴파일/타입체크하지 않는다(문서화 기본값 false-reject 금지; AUD-12 a).
   const verify: {
-    vlm_fallback_when?: IRELNode;
     empty_result_allowed?: IRELNode[];
   } = {};
-  if (typeof node.verify?.vlm_fallback?.when === "string") {
-    const vlmFallbackWhen = compileBooleanExpression(nodeId, node.verify.vlm_fallback.when, ir, nodeIds, graph, errors);
-    if (vlmFallbackWhen !== undefined) verify.vlm_fallback_when = vlmFallbackWhen;
-  }
   const emptyResultAllowed: IRELNode[] = [];
   for (const criterion of node.verify?.criteria ?? []) {
     if (criterion.type !== "empty_result_allowed") continue;
@@ -381,7 +405,7 @@ function validateExpressions(
     if (witness !== undefined) emptyResultAllowed.push(witness);
   }
   if (emptyResultAllowed.length > 0) verify.empty_result_allowed = emptyResultAllowed;
-  if (verify.vlm_fallback_when !== undefined || verify.empty_result_allowed !== undefined) compiled.verify = verify;
+  if (verify.empty_result_allowed !== undefined) compiled.verify = verify;
 
   return Object.keys(compiled).length > 0 ? compiled : undefined;
 }
@@ -492,9 +516,7 @@ function expressionsOf(node: IRNode): ExpressionRef[] {
       }
     }
   }
-  if (node.verify?.vlm_fallback?.when) {
-    expressions.push({ expression: node.verify.vlm_fallback.when });
-  }
+  // verify.vlm_fallback.when 은 IREL scope 가 아니므로 IREL 식으로 수집하지 않는다(AUD-12 a).
   for (const criterion of node.verify?.criteria ?? []) {
     if (criterion.type === "empty_result_allowed") expressions.push({ expression: criterion.when });
   }

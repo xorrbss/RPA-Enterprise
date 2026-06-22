@@ -187,9 +187,9 @@ const STATIC_CASES: StaticCase[] = [
     expectWarnings: [],
   },
   {
-    name: "Static invalid: vlm_fallback.when unknown flag",
-    data: { meta: { name: "t", version: 1 }, start: "n1", nodes: { n1: { verify: { criteria: [{ type: "min_rows", n: 1 }], vlm_fallback: { prompt: "check", when: "flags.no_such_flag" } }, terminal: "success" } } },
-    expectErrors: ["unknown_flag"],
+    name: "Static valid: vlm_fallback.when is a verify-engine state condition (not IREL)",
+    data: { meta: { name: "t", version: 1 }, start: "n1", nodes: { n1: { verify: { criteria: [{ type: "min_rows", n: 1 }], vlm_fallback: { prompt: "check", when: "criteria_uncertain" } }, terminal: "success" } } },
+    expectErrors: [],
     expectWarnings: [],
   },
   {
