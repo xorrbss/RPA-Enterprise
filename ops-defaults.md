@@ -116,6 +116,8 @@
 | `resume_token.key_rotation_grace` | 7d | — | security-contracts §5 | 폐기 키 검증 유예 |
 | `human_task.default_timeout` | 30m | 2s | @human_task `timeout` | kind별 시나리오 오버라이드 |
 
+> **resume_token.ttl 보강(상태머신 감사 클러스터 C)**: TTL 은 **resume 개시→restore** 구간을 경계한다. `resume_requested` 도달은 R13(`human_task.resolved`, RBAC 인증 resolve)로만 가능하므로, 워커는 resume 시작 시 진본(hmac/kid 일치)·만료 토큰을 fresh TTL 로 **재발행** 후 restore 한다(tamper=hmac/kid 불일치는 재발행하지 않아 R20 으로 거부 — 보안 경계 유지). 인간 승인 대기의 경계는 토큰 TTL 이 아니라 **human_task 생명주기**(R13 resolve / R14 timeout)다. 근거: 고정 `resume_token.ttl`(30m) vs 오버라이드 가능·미강제(H4/H8 timeout sweeper 미구현) `human_task.default_timeout` 의 내부 모순 — 토큰이 인간 대기를 경계하면 정당한 장기 승인(야간/주말)이 `failed_system` 으로 좌초한다. "만료 시 resume 거부"는 재발행 후의 restore-verify(=resume 개시 후 짧은 창)에 적용된다.
+
 ---
 
 ## 8. Sink delivery (D6 — db sink_deliveries, 데이터평면 외부 전달)

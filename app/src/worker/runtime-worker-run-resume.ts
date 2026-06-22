@@ -27,7 +27,9 @@ import { WorkerRunSupport } from "./runtime-worker-run-support";
 import { defaultExecutorFactory } from "./runtime-worker-run-drive";
 import type {
   EventId,
+  IsoDateTime,
   LeaseId,
+  ResumeTokenEnvelope,
   RuntimeJobResult,
   RuntimeWorkerJob,
   SessionRestoreInput,
@@ -38,7 +40,7 @@ import type { CorrelationId, RunId, TenantId } from "../../../ts/security-middle
 import { withTenantTx } from "../db/pool";
 import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
 import { applyRunTransition } from "../runtime/run-transition";
-import { driveResumedRun, terminalizeStuckRunAsSystemFailure } from "../runtime/run-step-driver";
+import { driveResumedRun, RESUME_TOKEN_TTL_MS, terminalizeStuckRunAsSystemFailure } from "../runtime/run-step-driver";
 import { recordSiteCircuitOutcome, DEFAULT_SITE_CIRCUIT } from "../runtime/site-circuit";
 import { resumeLinkedWorkitemCheckout } from "../runtime/workitem-settlement";
 import { SitePageStateResolver } from "../executor/site-page-state-resolver";
@@ -182,13 +184,20 @@ export class WorkerRunResume {
 
     if (txA.kind === "job_result") return txA.result;
 
+    // 클러스터 C(resume_token reissue): suspend 시 발행한 토큰이 인간 승인 대기(>ttl) 동안 만료됐어도, resume_requested 도달은
+    //   R13(human_task.resolved, RBAC 인증 resolve)로만 가능하므로 진본(hmac-valid)·만료 토큰을 fresh TTL 로 재발행해 restore 를
+    //   통과시킨다(tamper=hmac 불일치는 재발행 안 함 → restore 가 R20 거부). 인간 대기의 경계는 토큰이 아니라 human_task 생명주기(R13/R14).
+    const restoreToken = await this.reissueAuthenticExpiredResumeToken(tenantId, runId, txA.intent.token);
+    const restoreInput: SessionRestoreInput =
+      restoreToken === txA.intent.token ? txA.intent : { ...txA.intent, token: restoreToken };
+
     // §E 필수 span: session.restore — restoreSession은 DB 트랜잭션 밖(외부 I/O)에서 실행되며 그 경계를 계측.
     //   예외는 withSpan이 record+ERROR로 표면화 후 재던지고, 바깥 catch가 terminal_failure로 흡수(제어흐름).
     const restoreResult = await withSpan(
       SPAN.sessionRestore,
       { tenant_id: txA.intent.tenantId, run_id: txA.intent.runId, correlation_id: txA.intent.correlationId },
       {},
-      () => sessionRestorer.restoreSession(txA.intent),
+      () => sessionRestorer.restoreSession(restoreInput),
     ).catch(
       (err): SessionRestoreResult => ({
         kind: "terminal_failure",
@@ -417,5 +426,40 @@ export class WorkerRunResume {
       );
     }
     return result;
+  }
+
+  /**
+   * 진본(hmac-valid)·만료 resume 토큰을 fresh TTL 로 재발행(payload 보존)·영속한다. resume_requested 도달은 R13(RBAC
+   * 인증 resolve)로만 가능하므로 인간 승인 대기로 만료된 토큰의 재개를 허용한다 — 단 tamper(hmac/kid 불일치=invalid)는
+   * 재발행하지 않아 restore 가 R20 으로 거부한다(보안 경계 유지). 토큰 TTL 은 이제 resume-개시→restore 를 경계하며,
+   * 인간 대기의 경계는 토큰이 아니라 human_task 생명주기(R13 resolve / R14 timeout)다(감사 클러스터 C, ops-defaults §115 보강).
+   * codec 미주입(테스트)·verify 가 valid/invalid·verify 오류면 토큰을 그대로 반환(기존 동작 — restore 가 처리).
+   */
+  private async reissueAuthenticExpiredResumeToken(
+    tenantId: string,
+    runId: string,
+    token: ResumeTokenEnvelope,
+  ): Promise<ResumeTokenEnvelope> {
+    const codec = this.options.resumeTokenCodec;
+    if (codec === undefined) return token;
+    const verified = await codec.verify(token).catch(() => undefined);
+    if (verified === undefined || verified.kind !== "expired") return token;
+    const now = Date.now();
+    const fresh = await codec.issue({
+      runId: token.runId,
+      resumeNodeId: token.resumeNodeId,
+      pageStateRef: token.pageStateRef,
+      ...(token.loopContext !== undefined ? { loopContext: token.loopContext } : {}),
+      issuedAt: new Date(now).toISOString() as IsoDateTime,
+      expiresAt: new Date(now + RESUME_TOKEN_TTL_MS).toISOString() as IsoDateTime,
+    });
+    await withTenantTx(this.pool, tenantId, (c) =>
+      c.query(
+        `UPDATE runs SET resume_token = $3::jsonb, updated_at = now()
+          WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'resuming'`,
+        [tenantId, runId, JSON.stringify(fresh)],
+      ),
+    );
+    return fresh;
   }
 }
