@@ -50,7 +50,9 @@ function contentType(ext: string): string {
 
 function apiFixture(pathname: string): unknown {
   if (pathname === "/api/v1/runs") {
-    return { items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", current_node: "observe_reviews", as_of: null }], next_cursor: null };
+    // current_node 는 백엔드(reads-runs)가 계약 미약속으로 영구 null 을 반환한다 — fixture 도 null(백엔드가 못 만드는
+    //   값을 e2e 에서 창작하지 않는다; api-reads.int·web/fake-client 와 동형 fabrication-guard).
+    return { items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", current_node: null, as_of: null }], next_cursor: null };
   }
   if (pathname === "/api/v1/workitems") {
     return { items: [{ workitem_id: "55550000-aaaa-bbbb-cccc-000000000001", status: "new", unique_reference: "wi-e2e", target_id: null }], next_cursor: null };
