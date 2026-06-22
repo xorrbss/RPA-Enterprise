@@ -756,7 +756,13 @@ INFOLEAK-01/02 enumeration, RBAC-archive were all refuted as defense-in-depth / 
 confirmed are P2 correctness issues; PAG-01 (cursor microsecond precision → silent row skip) was FIXED (this PR).
 The two below are recorded.
 
-AUD-7. Stale If-Match/version conflict (412) persists to the idempotency record → permanent retry lock (IFM-1, P2)
+AUD-7. Stale If-Match/version conflict (412) persists to the idempotency record → permanent retry lock (IFM-1, P2) — ✅ RESOLVED (PR #256)
+   Resolution: fixed. `runIdempotentCommand` (`command.ts`) and `updateScenario`/`promoteScenarioFromRun`
+   (`scenarios-support.ts`) no longer `saveFailure` an optimistic-concurrency conflict — `isReleasableVersionConflict`
+   (`SCENARIO_VERSION_CONFLICT`/`POLICY_VERSION_CONFLICT`) takes the `idempotency.release(recordId)` branch instead, so a
+   client that re-reads the latest version and retries with the same Idempotency-Key + corrected If-Match gets a fresh
+   `reserve()` and can succeed (api-surface §0.3 "If-Match 재시도"). All other non-retryable errors still persist via
+   `saveFailure` (replay-on-retry preserved). Original finding below for the record.
    Finding: `runIdempotentCommand`/`promoteScenario`* persist a non-retryable `ApiResponseError` via `saveFailure`;
    `SCENARIO_VERSION_CONFLICT`/`POLICY_VERSION_CONFLICT` (412, retryable=false in error-catalog) are thrown by the
    If-Match check INSIDE the reserved work callback, so a stale-If-Match 412 is stored. Because the canonical
@@ -769,7 +775,13 @@ AUD-7. Stale If-Match/version conflict (412) persists to the idempotency record 
    `saveFailure` guard and release the reservation (TTL/DELETE → fresh reserve on retry), OR lift the If-Match check
    BEFORE `reserve()` (pre-reservation rejection, like `server-abort-run.ts:63-85`). Owner = project owner.
 
-AUD-8. If-Match version check is SELECT-then-INSERT (non-atomic) → concurrent writers get 500 not 412 (IFM-2, P2)
+AUD-8. If-Match version check is SELECT-then-INSERT (non-atomic) → concurrent writers get 500 not 412 (IFM-2, P2) — ✅ RESOLVED (PR #257)
+   Resolution: fixed via the recipe's `ON CONFLICT ... DO NOTHING RETURNING id` option. The `scenario_versions`
+   INSERT (`scenarios-support.ts` `promoteScenarioFromRun`, and the sibling version-insert paths) now uses
+   `INSERT ... ON CONFLICT (tenant_id, scenario_id, version) DO NOTHING RETURNING id`; a `rowCount !== 1` (the
+   concurrent-writer loser) maps to `SCENARIO_VERSION_CONFLICT` (412, `reason: "concurrent_version_insert"`)
+   instead of letting the raw 23505 escape to `CONTROL_PLANE_INTERNAL_ERROR` (500). UNIQUE still preserves
+   integrity; the loser now gets the contractual 412. Original finding below for the record.
    Finding: PUT/rollback/promote-from-run read the current version then INSERT `scenario_versions` with no row
    lock/CAS; two concurrent writers computing the same `version` both INSERT → the loser hits UNIQUE
    `(tenant_id, scenario_id, version)` (23505), a raw PG error that escapes the `instanceof ApiResponseError` guard
