@@ -366,6 +366,29 @@ async function main(): Promise<void> {
       check("pending artifact metadata is hidden by redaction RLS", visibleArtifacts.rows[0]?.n === 0, `n=${visibleArtifacts.rows[0]?.n}`);
     });
 
+    // PbD 캐시-hit 배선(PR-1): cache hit StepResult(cache.actionPlanCacheId) → run_steps.action_plan_cache_id 영속(체인 증명).
+    //   action_plan_cache_id 는 action_plan_cache(id) 로 FK — 실제 cache 행을 먼저 시드(cache hit 가 참조하는 entry).
+    const HIT_CACHE_ID = "50000000-0000-4000-8000-000000000077";
+    await withTenantTx(pool, TENANT_A, async (c) => {
+      await c.query(
+        `INSERT INTO action_plan_cache (id, tenant_id, scenario_version_id, step_id, url_pattern, dom_structural_hash,
+            model, prompt_template_version, browser_identity_version, plan_ref, status)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'step-cachehit','u','h','codex','v1',1,$4,'active')`,
+        [HIT_CACHE_ID, TENANT_A, SCENARIO_VERSION_A, JSON.stringify({ operation: "click", selector: "#x" })],
+      );
+    });
+    const hitResult = stepResult("step-cachehit", { action: "act", artifacts: [], cache: { mode: "hit", actionPlanCacheId: HIT_CACHE_ID } });
+    const hitStarted = await beginStarted(RUN_A, "step-cachehit", hitResult.action, "node-hit");
+    await recorder.record({ key: hitStarted.key, nodeId: "node-hit", correlationId: CORRELATION as CorrelationId, result: hitResult, artifacts: [] });
+    await withTenantTx(pool, TENANT_A, async (c) => {
+      const row = await c.query<{ cache_mode: string; action_plan_cache_id: string | null }>(
+        `SELECT cache_mode, action_plan_cache_id::text AS action_plan_cache_id FROM run_steps WHERE run_id=$1::uuid AND step_id='step-cachehit' AND attempt=0`,
+        [RUN_A],
+      );
+      check("run_steps cache_mode=hit persisted", row.rows[0]?.cache_mode === "hit", JSON.stringify(row.rows[0]));
+      check("run_steps action_plan_cache_id persisted from StepResult.cache.actionPlanCacheId", row.rows[0]?.action_plan_cache_id === HIT_CACHE_ID, JSON.stringify(row.rows[0]));
+    });
+
     await expectReject(
       "duplicate step attempt fails closed",
       () =>

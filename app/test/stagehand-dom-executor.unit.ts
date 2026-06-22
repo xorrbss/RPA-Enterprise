@@ -172,7 +172,7 @@ function fakeCache(seed?: ActionPlan) {
   let stored = seed;
   const calls = { get: 0, put: 0, suspect: 0 };
   const cache: ActionPlanCache = {
-    get: async () => { calls.get += 1; return stored; },
+    get: async () => { calls.get += 1; return stored === undefined ? undefined : { plan: stored, cacheId: "apc-fake-1" }; },
     put: async (_key, plan) => { calls.put += 1; stored = plan; },
     markSuspect: async () => { calls.suspect += 1; },
   };
@@ -691,7 +691,7 @@ async function main(): Promise<void> {
     const g = countingGateway({ parsedJson: { operation: "fill", selector: "#never", value: "x" } }); // 호출되면 안 됨
     const c = fakeCache(CLICK_PLAN);
     const r = await new StagehandDomExecutor(g.gw, s.provider, cfg, c.cache).execute("s7", { type: "act", instruction: "click login" }, makeCtx());
-    check("act cache hit: LLM NOT called, replayed click, mode=hit", g.calls() === 0 && r.cache.mode === "hit" && s.ops.includes("click:#login") && r.cache.actionPlanCacheId === undefined);
+    check("act cache hit: LLM NOT called, replayed click, mode=hit, records actionPlanCacheId(run_steps 링크)", g.calls() === 0 && r.cache.mode === "hit" && s.ops.includes("click:#login") && r.cache.actionPlanCacheId === "apc-fake-1");
     check("act cache hit: auto-installs network JSON capture before replay", s.evals.some((expr) => expr.includes("__RPA_NETWORK_CAPTURE_INSTALLED__")));
     const lookupModes = spanExporter
       .getFinishedSpans()

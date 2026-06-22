@@ -226,6 +226,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     let callIds: string[] = [];
     let fromLlm = false;
     let cacheKey: ActionPlanCacheKey | undefined;
+    let actionPlanCacheId: string | undefined; // cache hit 시 set → StepResult.cache.actionPlanCacheId(레코더가 영속).
 
     if (a.fillSelector !== undefined) {
       // 결정형 fill(fill_selector): LLM 도 캐시도 경유하지 않는다(셀렉터 환각 차단). 셀렉터는 IR 선언이고, 채울 값은
@@ -261,13 +262,18 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       if (this.cache) {
         const cache = this.cache;
         const key = cacheKey;
-        plan = await withSpan(SPAN.actionPlanCacheLookup, spanCommonFromContext(ctx), {}, async (span) => {
-          const found = await cache.get(key);
+        const found = await withSpan(SPAN.actionPlanCacheLookup, spanCommonFromContext(ctx), {}, async (span) => {
+          const hit = await cache.get(key);
           // §E 필수 속성 cache.mode(hit/miss) — span 에 기록(impl-contracts-bundle.md §E action_plan_cache.lookup).
-          cacheMode = found ? "hit" : "miss";
+          cacheMode = hit ? "hit" : "miss";
           span.setAttribute("cache.mode", cacheMode);
-          return found;
+          return hit;
         });
+        if (found !== undefined) {
+          plan = found.plan;
+          // cache-hit step 의 결정형 plan 역추적 링크 — run_steps.action_plan_cache_id 로 영속(레코더). PbD warm-run 승격 기반.
+          actionPlanCacheId = found.cacheId;
+        }
       }
 
       if (!plan) {
@@ -345,7 +351,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (postChallenge !== undefined) {
       return suspendForChallenge(stepId, "act", ctx, postChallenge, {
         stagehandCallIds: callIds,
-        cache: { mode: cacheMode },
+        cache: { mode: cacheMode, ...(actionPlanCacheId !== undefined ? { actionPlanCacheId } : {}) },
         sideEffect: { kind: a.sideEffect ?? "update", committed: true },
       });
     }
@@ -360,7 +366,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       pageStateAfter: before,
       artifacts: [],
       stagehandCallIds: callIds,
-      cache: { mode: cacheMode },
+      cache: { mode: cacheMode, ...(actionPlanCacheId !== undefined ? { actionPlanCacheId } : {}) },
       // act 는 페이지를 바꾼다 — sideEffect.kind 는 시나리오(IR)가 선언(submit/login 등); 미지정 시 update.
       sideEffect: { kind: a.sideEffect ?? "update", committed: true },
       timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },

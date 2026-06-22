@@ -99,14 +99,15 @@ async function main(): Promise<void> {
     // 2) put(active) → get 재생
     await cache.put(baseKey, PLAN);
     const got = await cache.get(baseKey);
-    check("put → get replays plan", JSON.stringify(got) === JSON.stringify(PLAN), JSON.stringify(got));
+    check("put → get replays plan", JSON.stringify(got?.plan) === JSON.stringify(PLAN), JSON.stringify(got));
+    check("get hit → cacheId(action_plan_cache.id) 동반", typeof got?.cacheId === "string" && got.cacheId.length > 0, JSON.stringify(got));
     check("put → status=active, success_count=1", (await statusOf(pool, baseKey)).status === "active" && (await statusOf(pool, baseKey)).success === 1);
 
     // 3) ON CONFLICT 재put → success_count+1
     await cache.put(baseKey, { operation: "fill", selector: "#q", value: "x" });
     const s = await statusOf(pool, baseKey);
     check("re-put → ON CONFLICT success_count=2", s.success === 2);
-    check("re-put → plan updated (fill)", (await cache.get(baseKey))?.operation === "fill");
+    check("re-put → plan updated (fill)", (await cache.get(baseKey))?.plan.operation === "fill");
 
     // 4) markSuspect: active→suspect(재생 차단)
     await cache.markSuspect(baseKey);
