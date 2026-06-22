@@ -68,6 +68,20 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // domcontentloaded 까지만 대기하고 타임아웃을 env(NAV_TIMEOUT_MS, 기본 45s)로 상향한다. 0/비정상값은 기본값으로 흡수.
 const NAV_TIMEOUT_MS = Math.max(1000, Number(process.env.NAV_TIMEOUT_MS) || 45_000);
 
+/**
+ * navigate(page.goto) 가 시간 내 미완(워치독/Playwright 타임아웃·wedge). error-catalog `NAVIGATION_TIMEOUT`
+ * (retryable/system) 매핑 — generic CONTROL_PLANE_INTERNAL_ERROR(비-retryable "내부 오류")로 흡수되어 운영자가
+ * 사이트/세션 대신 control-plane 을 보게 되는 오진을 막는다("조용한 unknown 금지"). 원 예외 텍스트는 싣지 않는다.
+ */
+export class NavigationTimeoutError extends Error {
+  readonly code = "NAVIGATION_TIMEOUT" as const;
+
+  constructor(detail: string) {
+    super(`navigate timed out: ${detail}`);
+    this.name = "NavigationTimeoutError";
+  }
+}
+
 /** Stagehand v3 page 를 CdpSession 으로 감싸는 어댑터. */
 export class StagehandCdpSession implements CdpSession {
   constructor(
@@ -87,10 +101,21 @@ export class StagehandCdpSession implements CdpSession {
     const nav = this.page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const watchdog = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`navigate watchdog: page.goto exceeded ${NAV_TIMEOUT_MS + 5_000}ms`)), NAV_TIMEOUT_MS + 5_000);
+      timer = setTimeout(() => reject(new NavigationTimeoutError(`watchdog: page.goto exceeded ${NAV_TIMEOUT_MS + 5_000}ms`)), NAV_TIMEOUT_MS + 5_000);
     });
     try {
       await Promise.race([nav, watchdog]);
+    } catch (cause) {
+      // navigate 실패를 타입 분류(은폐 금지): 타임아웃/wedge → NAVIGATION_TIMEOUT, page/browser 단절 → CDP_DISCONNECTED
+      //   (둘 다 retryable/system). 그 외(net::ERR 등 미상)는 원 예외 그대로 전파(generic 분류 유지 — 모르는 걸 timeout 으로
+      //   날조하지 않는다). 분류 키워드만 검사하고 원 텍스트는 typed 에러에 싣지 않는다(redaction 경계 보존).
+      if (cause instanceof NavigationTimeoutError) throw cause;
+      const text = cause instanceof Error ? `${cause.name} ${cause.message}` : String(cause);
+      if (/timeout|timed out|exceeded/i.test(text)) throw new NavigationTimeoutError("page.goto timed out");
+      if (/closed|disconnect|detached|target closed|session closed|browser has disconnected|crash/i.test(text)) {
+        throw new CdpDisconnectedError("goto", "disconnected");
+      }
+      throw cause;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       void Promise.resolve(nav).catch(() => undefined); // 댕글링 navigation 거부 흡수(unhandledRejection 방지)
