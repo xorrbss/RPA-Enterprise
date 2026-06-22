@@ -15,8 +15,11 @@ import {
   finalizeRunAbort,
   hasOpenAbortBrowserLeaseForRun,
   releaseAbortBrowserDrainClaim,
+  renewBrowserLease,
+  startBrowserLeaseHeartbeat,
 } from "./runtime-worker-browser-lease";
 import { requireString, unknownToReason } from "./runtime-worker-parse";
+import { DEFAULT_BROWSER_LEASE_HEARTBEAT_MS, DEFAULT_BROWSER_LEASE_TTL_MS } from "./runtime-worker-run-context";
 import type { RunClaimDriveInputs, RunRow } from "./runtime-worker-run-context";
 import { WorkerRunSupport } from "./runtime-worker-run-support";
 import type {
@@ -228,6 +231,17 @@ export class WorkerRunDrive {
     await this.runSupport.recordWorkerInitSuccess(workerId);
 
     // DRIVE phase(R2→running, driveScenario failsafe). setup(bound/executor/resolver) 보장. 세션은 어느 경로든 finally 에서 해제.
+    // browser_lease heartbeat: drive 동안 주기 갱신해 ttl 만료→lease_sweeper drain(감사 클러스터 A) 방지. finally 에서 정지.
+    const leaseTtlMs = this.options.defaultBrowserLeaseTtlMs ?? DEFAULT_BROWSER_LEASE_TTL_MS;
+    const heartbeat = startBrowserLeaseHeartbeat({
+      intervalMs: DEFAULT_BROWSER_LEASE_HEARTBEAT_MS,
+      renew: () =>
+        withTenantTx(this.pool, tenantId, (c) =>
+          renewBrowserLease(c, { tenantId, leaseId: d.leaseId, workerId, ttlMs: leaseTtlMs }),
+        ),
+      onLost: (reason) =>
+        console.error(`runtime-worker: browser-lease heartbeat lost (run ${runId.slice(0, 8)}) — ${reason}`),
+    });
     let driveResult: Awaited<ReturnType<typeof driveClaimedRun>> | undefined;
     try {
       driveResult = await driveClaimedRun(
@@ -260,6 +274,7 @@ export class WorkerRunDrive {
         },
       );
     } finally {
+      heartbeat.stop();
       await setup.bound.release();
     }
     // 사이트 서킷 표본(ops-defaults §3 site.circuit): drive 1회=표본 1행. blocked=challenge 자동감지(suspended +

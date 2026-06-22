@@ -62,6 +62,55 @@ export async function renewBrowserLease(
   };
 }
 
+export interface BrowserLeaseHeartbeatHandle {
+  /** drive 종료(finally)에서 호출 — 진행 중 비트는 자연 종료, 이후 재예약 없음. */
+  stop(): void;
+}
+
+/**
+ * browser_lease heartbeat 루프(ops-defaults §2 browser_lease.heartbeat_interval=30s). drive(Phase B/C, tx 밖)
+ * 동안 주기적으로 renew 를 호출해 lease 가 ttl 내 만료돼 lease_sweeper 에 회수/drain 되는 것을 막는다 — 상태머신
+ * R23/R24 의 lease 회수는 abort 시점이지 running 중 회수가 아니므로, heartbeat 미배선 시 5분(DEFAULT_BROWSER_LEASE_TTL_MS)
+ * 초과 run 의 라이브 세션이 sweeper 에 drain 되어 failed_system 으로 좌초한다(감사 클러스터 A). renew 가 lost(만료/drain/
+ * 타워커 소유)면 sweeper/drain 이 이긴 것이라 재예약 없이 정지한다(세션은 곧/이미 teardown — 재생성 금지). 일시 오류는
+ * 다음 비트에 재시도(loud log). renew 는 호출측이 특정 lease 에 바인딩(예: withTenantTx + renewBrowserLease).
+ */
+export function startBrowserLeaseHeartbeat(input: {
+  readonly renew: () => Promise<LeaseRenewResult>;
+  readonly intervalMs: number;
+  readonly onLost?: (reason: string) => void;
+}): BrowserLeaseHeartbeatHandle {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const schedule = (): void => {
+    timer = setTimeout(() => void beat(), input.intervalMs);
+    timer.unref?.();
+  };
+  const beat = async (): Promise<void> => {
+    if (stopped) return;
+    try {
+      const result = await input.renew();
+      if (stopped) return;
+      if (result.kind === "lost") {
+        stopped = true;
+        input.onLost?.(result.reason);
+        return;
+      }
+    } catch (err) {
+      // best-effort: 일시 DB 오류는 lease 가 아직 유효할 수 있으므로 다음 비트에 재시도(loud).
+      console.error(`browser-lease heartbeat 갱신 오류 — ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!stopped) schedule();
+  };
+  schedule();
+  return {
+    stop(): void {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+    },
+  };
+}
+
 export async function drainBrowserLease(
   client: pg.PoolClient,
   input: BrowserLeaseDrainInput,

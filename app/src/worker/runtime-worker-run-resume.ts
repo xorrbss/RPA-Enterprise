@@ -8,7 +8,12 @@
  */
 import type pg from "pg";
 
-import { deleteInitReservedBrowserLease, findActiveBrowserLeaseForRun } from "./runtime-worker-browser-lease";
+import {
+  deleteInitReservedBrowserLease,
+  findActiveBrowserLeaseForRun,
+  renewBrowserLease,
+  startBrowserLeaseHeartbeat,
+} from "./runtime-worker-browser-lease";
 import {
   isOnlyRestoreSessionPending,
   parseResumeTokenEnvelope,
@@ -16,6 +21,7 @@ import {
   restoreTransitionFor,
   unknownToReason,
 } from "./runtime-worker-parse";
+import { DEFAULT_BROWSER_LEASE_HEARTBEAT_MS, DEFAULT_BROWSER_LEASE_TTL_MS } from "./runtime-worker-run-context";
 import type { RunClaimDriveInputs, RunRow } from "./runtime-worker-run-context";
 import { WorkerRunSupport } from "./runtime-worker-run-support";
 import { defaultExecutorFactory } from "./runtime-worker-run-drive";
@@ -358,6 +364,17 @@ export class WorkerRunResume {
     await this.runSupport.recordWorkerInitSuccess(workerId);
 
     // DRIVE phase. driveResumedRun 은 R2 없이 resumeNodeId 부터 재진입(success→completed / fail→failed_*). 세션은 finally 에서 해제.
+    // browser_lease heartbeat: resume drive 동안 주기 갱신(claim 과 대칭) — ttl 만료→lease_sweeper drain 방지. finally 정지.
+    const leaseTtlMs = this.options.defaultBrowserLeaseTtlMs ?? DEFAULT_BROWSER_LEASE_TTL_MS;
+    const heartbeat = startBrowserLeaseHeartbeat({
+      intervalMs: DEFAULT_BROWSER_LEASE_HEARTBEAT_MS,
+      renew: () =>
+        withTenantTx(this.pool, tenantId, (c) =>
+          renewBrowserLease(c, { tenantId, leaseId: drive.leaseId, workerId, ttlMs: leaseTtlMs }),
+        ),
+      onLost: (reason) =>
+        console.error(`runtime-worker: resume browser-lease heartbeat lost (run ${runId.slice(0, 8)}) — ${reason}`),
+    });
     let driveResult: Awaited<ReturnType<typeof driveResumedRun>> | undefined;
     try {
       driveResult = await driveResumedRun(
@@ -380,6 +397,7 @@ export class WorkerRunResume {
         txA.intent.resumeNodeId,
       );
     } finally {
+      heartbeat.stop();
       await setup.bound.release();
     }
     // 사이트 서킷 표본(claim 과 대칭): drive 1회=표본 1행. blocked=challenge 자동감지(suspended + suspend.kind<>'human_task').
