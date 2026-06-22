@@ -32,6 +32,9 @@ const RUN_NOPLAN = "71000000-0000-0000-0000-0000000000a3";
 const SCEN_FILL = "70000000-0000-0000-0000-0000000000d3";
 const SV_FILL = "70000000-0000-0000-0000-0000000000d4";
 const RUN_FILL = "71000000-0000-0000-0000-0000000000d1";
+const SCEN_SELECT = "70000000-0000-0000-0000-0000000000e3";
+const SV_SELECT = "70000000-0000-0000-0000-0000000000e4";
+const RUN_SELECT = "71000000-0000-0000-0000-0000000000e1";
 
 const SECRET = new TextEncoder().encode("promote-from-run-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -73,6 +76,16 @@ const SOURCE_IR_FILL = {
   params_schema: { type: "object", properties: { reason: { type: "string" } } },
   nodes: {
     f1: { what: [{ action: "act", instruction: "사유를 입력", args: { value_ref: "reason" } }], next: "done", side_effect: { kind: "read_only" } },
+    done: { terminal: "success" },
+  },
+};
+
+// slice 2c: select 노드 — 성공 run 의 select ActionPlan(selector+value)이 select_selector+select_value 로 베이킹돼야.
+const SOURCE_IR_SELECT = {
+  meta: { name: "promo-select", version: 1 },
+  start: "g1",
+  nodes: {
+    g1: { what: [{ action: "act", instruction: "연도를 선택" }], next: "done", side_effect: { kind: "read_only" } },
     done: { terminal: "success" },
   },
 };
@@ -146,6 +159,16 @@ async function main(): Promise<void> {
     });
     await seedRun(pool, RUN_FILL, SV_FILL, "completed");
     await seedActStep(pool, RUN_FILL, "s1", "f1", "act", "success", { operation: "fill", selector: "textarea#reason", valueRef: "reason" }, "done");
+    // slice 2c select 승격: select 노드 시나리오 + 성공 run 의 select ActionPlan.
+    await withTenantTx(pool, TENANT, async (c) => {
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,$3)`, [SCEN_SELECT, TENANT, "promo-select"]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'draft',$4::jsonb)`,
+        [SV_SELECT, TENANT, SCEN_SELECT, JSON.stringify(SOURCE_IR_SELECT)],
+      );
+    });
+    await seedRun(pool, RUN_SELECT, SV_SELECT, "completed");
+    await seedActStep(pool, RUN_SELECT, "s1", "g1", "act", "success", { operation: "select", selector: "select#year", value: "2026" }, "done");
 
     const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
@@ -205,6 +228,19 @@ async function main(): Promise<void> {
       const f1what = Array.isArray(f1.what) ? (f1.what as Array<Record<string, unknown>>) : [];
       const f1args = isRecord(f1what[0]?.args) ? (f1what[0].args as Record<string, unknown>) : {};
       check("fill new version IR f1.act has deterministic fill_selector + preserved value_ref", f1args.fill_selector === "textarea#reason" && f1args.value_ref === "reason", JSON.stringify(f1what));
+
+      // 4c) select 승격(slice 2c): select 노드 → act.args.select_selector + select_value 베이킹.
+      const selRes = await post(SCEN_SELECT, { run_id: RUN_SELECT }, "promote-select-1");
+      check("select promote-from-run → 201", selRes.statusCode === 201, selRes.body);
+      check("select promoted_node_ids = [g1]", selRes.json().promoted_node_ids?.[0] === "g1" && selRes.json().promoted_node_ids?.length === 1, selRes.body);
+      const selVer = await withTenantTx(pool, TENANT, (c) =>
+        c.query<{ ir: unknown }>(`SELECT ir FROM scenario_versions WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND version=2`, [TENANT, SCEN_SELECT]),
+      );
+      const selIr = selVer.rows[0]?.ir;
+      const g1 = isRecord(selIr) && isRecord((selIr.nodes as Record<string, unknown>)?.g1) ? ((selIr.nodes as Record<string, Record<string, unknown>>).g1) : {};
+      const g1what = Array.isArray(g1.what) ? (g1.what as Array<Record<string, unknown>>) : [];
+      const g1args = isRecord(g1what[0]?.args) ? (g1what[0].args as Record<string, unknown>) : {};
+      check("select new version IR g1.act has deterministic select_selector + select_value", g1args.select_selector === "select#year" && g1args.select_value === "2026", JSON.stringify(g1what));
 
       // 5) run 이 다른 시나리오 소속 → run_not_for_scenario.
       const wrongScenario = await post(SCEN2, { run_id: RUN_OK }, "promote-wrong-1");

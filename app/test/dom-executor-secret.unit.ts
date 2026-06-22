@@ -262,6 +262,23 @@ async function main(): Promise<void> {
     check("결정형 value fill 은 IR 셀렉터·params 값으로 적용", fill?.selector === "textarea#reason" && fill?.value === "반려 사유 텍스트");
   }
 
+  // ── 결정형 select(select_selector+select_value): LLM 미경유로 드롭다운 셀렉터·옵션 결정형 선택 ──
+  {
+    const s = fakeSessions();
+    let llmCalls = 0;
+    const trackingGateway: LlmGatewayCaller = {
+      call: async () => {
+        llmCalls += 1;
+        return { outputRef: "art://o" as ArtifactRef, usage: { inputTokens: 1, outputTokens: 1, cost: 0 }, finishReason: "stop", parsedJson: { operation: "select", selector: "#hallucinated", value: "wrong" } } as unknown as LLMResponse;
+      },
+    };
+    const ex = new StagehandDomExecutor(trackingGateway, s.provider, cfg);
+    await ex.execute("n-det-sel", { type: "act", instruction: "연도 선택", selectSelector: "select#year", selectValue: "2026" }, makeCtx());
+    check("결정형 select 는 LLM 미호출", llmCalls === 0);
+    const sel = s.ops.find((o) => o.op === "select");
+    check("결정형 select 는 IR 셀렉터·값으로 selectOption(LLM 환각 미사용)", sel?.selector === "select#year" && sel?.value === "2026");
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

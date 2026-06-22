@@ -86,11 +86,19 @@ function main(): void {
     check("fill plan(값 출처 없음) skipped fill_no_value_source", r.skipped.length === 1 && r.skipped[0].reason === "fill_no_value_source", JSON.stringify(r.skipped));
   }
 
-  // 4. select plan → skipped(결정형 셀렉터 arg 부재).
+  // 4. select plan → select_selector + select_value 베이킹(slice 2c). 드롭다운 셀렉터·옵션 둘 다 결정형.
   {
-    const ir = baseIr({ n1: actNode("select option") });
-    const r = promoteActsToDeterministic(ir, { n1: { operation: "select", selector: "#sel", value: "v" } });
-    check("select plan skipped", r.promotedNodeIds.length === 0 && r.skipped[0]?.reason === "select_not_deterministic", JSON.stringify(r.skipped));
+    const ir = baseIr({ n1: actNode("연도 선택") });
+    const r = promoteActsToDeterministic(ir, { n1: { operation: "select", selector: "select#year", value: "2026" } });
+    check("select plan bakes select_selector+select_value", argsOf(r, "n1")?.select_selector === "select#year" && argsOf(r, "n1")?.select_value === "2026" && r.promotedNodeIds[0] === "n1", JSON.stringify(r));
+    check("select plan no skips", r.skipped.length === 0, JSON.stringify(r.skipped));
+  }
+
+  // 4b. select plan 인데 act 가 이미 결정형(select_selector) → no_promotable_act.
+  {
+    const ir = baseIr({ n1: actNode("연도 선택", { select_selector: "select#existing", select_value: "2025" }) });
+    const r = promoteActsToDeterministic(ir, { n1: { operation: "select", selector: "select#year", value: "2026" } });
+    check("select already-deterministic → no_promotable_act", r.promotedNodeIds.length === 0 && r.skipped[0]?.reason === "no_promotable_act", JSON.stringify(r.skipped));
   }
 
   // 5. captured plan for unknown node → node_not_found.

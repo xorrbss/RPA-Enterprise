@@ -6,9 +6,10 @@
  * settle 후 클릭한다(stagehand-dom-executor). 이로써 item⑤ 승인 게이트 뒤의 비가역 click 을 결정형화해
  * A.2(승인 후 LLM 오대상)를 근원 차단한다.
  *
- * 범위(slice 2b): click → act.args.click_selector, **fill → act.args.fill_selector**(값 출처 vars/value_ref 보유 노드만 —
- * 실행기 fill_selector 가 값 출처를 요구, slice 2a). 값 출처 없는 LLM 리터럴 fill·select 는 결정형 셀렉터 arg 가 없어
- * 승격 대상이 아니다 — `skipped` 로 명시 보고한다(조용히 흘리지 않는다, "조용한 false 금지").
+ * 범위(slice 2c): click → act.args.click_selector, fill → act.args.fill_selector(값 출처 vars/value_ref 보유 노드만 —
+ * 실행기 fill_selector 가 값 출처를 요구, slice 2a), **select → act.args.select_selector + select_value**(드롭다운
+ * 셀렉터·옵션 둘 다 베이킹, slice 2c). 값 출처 없는 LLM 리터럴 fill 은 셀렉터를 앵커할 값이 없어 미승격 — `skipped`
+ * 로 명시 보고한다(조용히 흘리지 않는다, "조용한 false 금지").
  *
  * 본 모듈은 순수 변환(DB/IO 없음)이다. 캡처 plan 의 DB 조회(run→{node_id→ActionPlan})와 승격 시나리오 버전
  * 저장은 후속 슬라이스(②/③)에서 본 함수를 호출한다.
@@ -53,6 +54,15 @@ function firstActWithFillValueSource(what: readonly unknown[]): number {
     const args = isRecord(step.args) ? step.args : undefined;
     const hasValueRef = args !== undefined && typeof args.value_ref === "string" && args.value_ref.length > 0;
     return hasVars || hasValueRef;
+  });
+}
+
+/** node.what 에서 기존 select_selector 가 없는 첫 act 의 인덱스(= 결정형 select 베이킹 대상). 없으면 -1. */
+function firstPromotableSelectActIndex(what: readonly unknown[]): number {
+  return what.findIndex((step) => {
+    if (!isRecord(step) || step.action !== "act") return false;
+    const args = isRecord(step.args) ? step.args : undefined;
+    return args === undefined || typeof args.select_selector !== "string";
   });
 }
 
@@ -109,9 +119,24 @@ export function promoteActsToDeterministic(
       }
       step.args = { ...args, fill_selector: plan.selector };
       promotedNodeIds.push(nodeId);
+    } else if (plan.operation === "select") {
+      // select 결정형 승격(slice 2c): 드롭다운 셀렉터+옵션 값 둘 다 act.args(select_selector/select_value)에 베이킹한다.
+      //   select 옵션은 보통 고정 선택(데모한 값)이라 fill 의 동적 값과 달리 값 출처 메커니즘이 불필요(plan 이 value 보유).
+      //   ⚠ 데이터-의존 select(예: "이번 달")는 고정값 베이킹이 부적절 — 승격은 draft 를 만들고 운영자 검토 게이트가 거른다.
+      const actIndex = firstPromotableSelectActIndex(what);
+      if (actIndex === -1) {
+        skipped.push({ nodeId, reason: "no_promotable_act" });
+        continue;
+      }
+      const step = what[actIndex] as Record<string, unknown>;
+      const args = isRecord(step.args) ? step.args : {};
+      step.args = { ...args, select_selector: plan.selector, select_value: plan.value };
+      promotedNodeIds.push(nodeId);
     } else {
-      // select 등: 실행기에 결정형 셀렉터 arg 가 없어 미승격(LLM 셀렉터 해소 유지). 명시 보고.
-      skipped.push({ nodeId, reason: `${plan.operation}_not_deterministic` });
+      // ActionPlan union 은 click|fill|select 로 닫혀 있다(exhaustive). 미래 operation 추가 시 컴파일 타임에 여기서 잡힌다.
+      const exhaustive: never = plan;
+      void exhaustive;
+      skipped.push({ nodeId, reason: "unsupported_operation" });
     }
   }
 

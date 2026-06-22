@@ -322,6 +322,8 @@ export function assertDomAction(stepId: string, action: unknown): DomAction {
     const ct = (action as { clickText?: unknown }).clickText;
     const aa = (action as { assertAbsent?: unknown }).assertAbsent;
     const fs = (action as { fillSelector?: unknown }).fillSelector;
+    const ss = (action as { selectSelector?: unknown }).selectSelector;
+    const sv = (action as { selectValue?: unknown }).selectValue;
     return {
       type,
       instruction,
@@ -333,6 +335,8 @@ export function assertDomAction(stepId: string, action: unknown): DomAction {
       ...(typeof ct === "string" && ct.length > 0 ? { clickText: ct } : {}),
       ...(typeof aa === "string" && aa.length > 0 ? { assertAbsent: aa } : {}),
       ...(typeof fs === "string" && fs.length > 0 ? { fillSelector: fs } : {}),
+      ...(typeof ss === "string" && ss.length > 0 ? { selectSelector: ss } : {}),
+      ...(typeof sv === "string" ? { selectValue: sv } : {}),
     };
   }
   return { type, instruction };

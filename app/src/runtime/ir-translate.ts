@@ -224,6 +224,10 @@ function mapAction(
     // 결정형 fill 타깃: act.args.fill_selector(LLM 미경유 fill). click 모드와 달리 값 출처(value_ref/vars)와 **결합**한다
     //   (셀렉터·값 둘 다 결정형). 클릭/부재단언 모드와는 상호배타. PbD 승격이 성공 run 셀렉터를 여기에 베이킹한다.
     const fillSelector = isRec(a.args) && typeof a.args.fill_selector === "string" && a.args.fill_selector.length > 0 ? a.args.fill_selector : undefined;
+    // 결정형 select: act.args.select_selector + select_value(드롭다운 셀렉터·옵션 모두 LLM 미경유로 고정). 둘 다 필수.
+    //   PbD 승격이 성공 run 의 select ActionPlan(selector+value)을 여기에 베이킹한다. select_value 는 빈 옵션("") 허용.
+    const selectSelector = isRec(a.args) && typeof a.args.select_selector === "string" && a.args.select_selector.length > 0 ? a.args.select_selector : undefined;
+    const selectValue = isRec(a.args) && typeof a.args.select_value === "string" ? a.args.select_value : undefined;
     // 클릭/부재단언 모드(각자 단일)는 서로 상호배타.
     const clickModes = [clickSelector, clickText, assertAbsent].filter((x) => x !== undefined).length;
     if (clickModes > 1) {
@@ -232,19 +236,28 @@ function mapAction(
         `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/click_text/assert_absent 중 하나만 사용 가능(결정형 모드 상호배타)`,
       );
     }
-    const hasFillValue = valueRef !== undefined || secretRef !== undefined;
-    // 클릭/부재단언 모드와 fill(value_ref/vars/fill_selector)은 상호배타(한 노드는 클릭 OR fill).
-    if (clickModes > 0 && (hasFillValue || fillSelector !== undefined)) {
+    const hasFill = valueRef !== undefined || secretRef !== undefined || fillSelector !== undefined;
+    const hasSelect = selectSelector !== undefined || selectValue !== undefined;
+    // click / fill / select 은 서로 다른 결정형 모드 그룹 — 한 노드는 하나의 그룹만 쓸 수 있다(상호배타).
+    const modeGroups = [clickModes > 0, hasFill, hasSelect].filter((x) => x).length;
+    if (modeGroups > 1) {
       throw new InterpreterError(
         "IR_SCHEMA_INVALID",
-        `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/click_text/assert_absent 와 fill(value_ref/vars/fill_selector)을 함께 쓸 수 없음(결정형 모드 상호배타)`,
+        `compiledScenarioFrom: node '${nodeId}' act 는 click/fill/select 결정형 모드를 함께 쓸 수 없음(상호배타)`,
       );
     }
     // fill_selector(결정형 셀렉터)는 채울 값 출처(value_ref 또는 vars[secret])가 반드시 있어야 한다(빈 fill 금지, 조용한 false 금지).
-    if (fillSelector !== undefined && !hasFillValue) {
+    if (fillSelector !== undefined && valueRef === undefined && secretRef === undefined) {
       throw new InterpreterError(
         "IR_SCHEMA_INVALID",
         `compiledScenarioFrom: node '${nodeId}' act.args.fill_selector 는 채울 값 출처(args.value_ref 또는 vars[secret])가 필요`,
+      );
+    }
+    // select 는 select_selector 와 select_value 가 둘 다 있어야 한다(드롭다운 옵션 결정형 — 한쪽만은 모순).
+    if (hasSelect && (selectSelector === undefined || selectValue === undefined)) {
+      throw new InterpreterError(
+        "IR_SCHEMA_INVALID",
+        `compiledScenarioFrom: node '${nodeId}' act.args.select_selector 와 select_value 는 둘 다 필요`,
       );
     }
     return withRecording({
@@ -258,6 +271,8 @@ function mapAction(
       ...(clickText !== undefined ? { clickText } : {}),
       ...(assertAbsent !== undefined ? { assertAbsent } : {}),
       ...(fillSelector !== undefined ? { fillSelector } : {}),
+      ...(selectSelector !== undefined ? { selectSelector } : {}),
+      ...(selectValue !== undefined ? { selectValue } : {}),
     }, nodeRecording);
   }
   if (a.action === "extract") {
