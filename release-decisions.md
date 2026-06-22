@@ -934,6 +934,48 @@ AUD-PBD-3. click_text 부분문자열 매칭이 모호 요소를 클릭 가능 (
    우선 + 부분문자열 폴백, 또는 다중 가시 매칭 시 loud(모호성 거부). Owner = project owner. Impact: 현 비가역 prod
    경로(PR #156)는 고유 onclick click_selector + assert_absent 를 써 미해당 — 저작 가이던스 개선 여지.
 
+## Audit Decisions (2026-06-23, web 콘솔 적대 감사)
+
+web 운영 콘솔 adversarial audit (wf_69027d68, 6 finder → 2-lens: XSS·토큰경계·클라권한·비가역가드·해시라우터·
+날조금지). **🟢 헤드라인 안심 신호: confirmed P0/P1 = 0.** 토큰 경계(JWT localStorage, URL/로그/외부요청 누출
+0, 401 단일-funnel 폐기·폴링정지), 클라 권한(useCan = UI 편의 게이팅뿐, 데이터 leak 없음·백엔드 RBAC+RLS 가 진짜
+게이트), XSS(doc_ref 는 javascript:/data: 가드, dangerouslySetInnerHTML 미사용), 인증 디코드(서명 미검증이나
+UI-only) 가 모두 refuted-as-sound 로 확인됐다. **MERGED (deferred 아님):** DL-01 딥링크 id path-traversal
+(useHashIdParam source 검증, PR #299); IRR-03 일괄승인 silent-swallow + IRR-01 bulk 이중제출 가드 (PR #300).
+아래는 confirmed-but-deferred / by-design (AUD-1..12·AUD-PBD 동일 규율).
+
+AUD-WEB-1. ActionButton(per-item 명령)의 멱등키가 매 호출 새로 생성 — 같은 틱 연타 시 다른 키 (IRR-01 잔여, P3) — bounded
+   Finding: `ActionButton` 의 `mutationFn` 이 `crypto.randomUUID()` 를 호출마다 새로 생성하고, 더블클릭 가드는
+   `mut.isPending`(다음 렌더에야 true)에만 의존한다. 같은 틱 연타로 확인 버튼이 두 번 발화하면 서로 다른 멱등키 2건이
+   백엔드로 가 멱등 dedup 이 무력화된다(human_task assign/start/resolve/escalate·approveSite·captureSession·
+   abortRun 등). Decision (bounded, deferred): 데이터 무결성은 **백엔드 CAS 전이/유일성**이 보호한다 — 두 번째 명령은
+   이미 전이된 상태를 만나 IllegalTransition/이미-결정 으로 loud 거부되므로 이중 실행·손상은 없다(멱등키는 2차 방어).
+   해악은 "연타 시 혼동되는 오류 표시" 로 bounded. 일괄 경로는 PR #300 에서 동기 ref 가드를 받았으나, 널리 쓰이는
+   `ActionButton` 에 동기 가드를 넣는 것은 회귀면이 넓어(전 명령 버튼) 즉시 적용 대신 deferred. Build-condition: 원하면
+   `ActionButton` 에 동기 `submitting` ref 가드 추가(onConfirm 직후 set, onSettled 해제) + 멱등키를 확인-시점 1회
+   생성해 retry 에 재사용(동일 키 replay = 동일 응답). Owner = project owner. Impact: 백엔드 CAS 가 무결성 보장 — bounded.
+
+AUD-WEB-2. Dashboard '실행 성공률' 드릴다운 모집단이 지표 정의와 불일치 (FAB-01, P3) — UX 폴리시
+   Finding: '실행 성공률'(=completed/(completed+failed_*) 비율) 카드 클릭 드릴다운이 `status=completed`(분자만) 필터
+   목록으로 이동해, 운영자가 분모(실패 실행)를 볼 동선이 끊긴다. 값 자체는 서버 집계라 정확(날조 아님)하나 드릴다운이
+   지표 의미를 부분만 비춘다. Decision (UX 폴리시, deferred): 데이터 정합/보안 문제가 아닌 드릴다운 UX 일관성. Build-
+   condition: 비율 카드는 단일-status 시드 대신 전체 실행 목록으로 이동하거나 hint 를 '실행 기록'으로. Owner = project owner.
+
+AUD-WEB-3. 미디어 휴리스틱 오분류 시 비-미디어 artifact 본문 미표시 (FAB-02, P3 — latent) — 조용한 미표시 방지 권고
+   Finding: `previewMediaType`/`mediaKind` 가 `media_type` 부재 시 type/filename 의 'image'/'screenshot' 부분일치로
+   미디어를 추정 → type='image_capture_metadata' 같은 비-미디어 JSON artifact 가 이미지로 오분류돼 깨진 `<img>` 만
+   뜨고 JSON 본문이 안 보일 수 있다("조용한 미표시"). Decision (latent, deferred): 현재 producer 는 스크린샷에 media_type
+   을 설정하고 JSON artifact(approval_inbox 등)는 'image'/'screenshot' 류 type/filename 을 갖지 않아 트리거 미발생
+   (latent). Build-condition: media 판정을 media_type 우선 + 휴리스틱은 확장자 같은 강신호로 한정, 또는 img/video
+   onError 시 JSON·텍스트 본문 경로로 폴백(조용한 미표시 금지). Owner = project owner.
+
+AUD-WEB-4. EvidenceStorageReadout terminal+pending==0 의 '처리 중 가능' 완곡 표기 (FAB-03, P3) — 문구 정직화 권고
+   Finding: terminal run + redaction pending 0 인데 요청 증빙(each_step 이미지 등)이 0건이면 '요청 이미지 미표시
+   (처리 중 가능)' 배지를 보이는데, pending==0 이면 '처리 중'이 아니라 '끝내 미생성'에 가깝다. 단정 회피('가능')라 거짓은
+   아니나 미생성을 일시 지연처럼 완화한다. Decision (문구, deferred): 사실 오류 아님(헤지된 표현). Build-condition:
+   missingScreenshot/missingVideo 에 `counts.pending===0` 을 결합해 terminal && pending==0 이면 '요청 증빙 미생성
+   (원인 확인 필요)', pending>0 일 때만 '처리 중 가능'. Owner = project owner.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
