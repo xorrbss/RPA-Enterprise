@@ -77,7 +77,10 @@ export type DomAction =
   //   witness(예 확인 클릭 후 결재 버튼 소멸=실제 커밋). deadline 까지 잔존 시 loud. click/fill 과 상호배타(검증 전용).
   // clickText: 결정형 텍스트 클릭(IR act.args.click_text). 보이는 텍스트를 포함한 첫 상호작용 요소를 브라우저 JS 로 찾아
   //   클릭(LLM·CSS 미경유 — CSS 는 텍스트 매칭 불가). 매 실행 재해소라 동적 목록(예 결재 docId 변동)에 강함. 미발견 시 loud.
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string; clickText?: string; assertAbsent?: string }
+  // fillSelector: 결정형 fill 타깃(IR act.args.fill_selector). 선언되면 실행기가 LLM 을 **전혀** 경유하지 않고 그 셀렉터에
+  //   값(secretRef/valueRef 출처)을 채운다 — fill 셀렉터 환각 차단(credential/데이터 입력의 최대 위험: 비밀번호가 엉뚱한
+  //   필드로). click 의 clickSelector 와 동형(셀렉터 결정형)이되 값 출처(secretRef XOR valueRef)가 필수다(ir-translate 강제).
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string; clickText?: string; assertAbsent?: string; fillSelector?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> }; rowAnchor?: ExtractRowAnchor };
 
@@ -215,59 +218,68 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (a.assertAbsent !== undefined) {
       return this.executeAssertAbsent(stepId, a.assertAbsent, a.sideEffect, ctx, session, before, startedAt);
     }
-    await ensureNetworkJsonCapture(session);
-    // 캐시 키 = action_plan_cache UNIQUE 7컬럼 + tenant(§D family=(url_pattern, dom_structural_hash)).
-    const cacheKey: ActionPlanCacheKey = {
-      tenantId: ctx.tenantId,
-      scenarioVersionId: this.cfg.scenarioVersionId,
-      stepId,
-      urlPattern: ctx.pageState.url.pattern,
-      domStructuralHash: ctx.pageState.dom.structuralHash,
-      model: this.cfg.model,
-      promptTemplateVersion: this.cfg.promptTemplateVersion,
-      browserIdentityVersion: this.cfg.browserIdentityVersion,
-    };
-
-    // P0b self-heal 재시도(ctx.selfHealRetry): 인터프리터가 verify 실패로 같은 노드를 재실행할 때 직전 의심 plan 을 강등.
-    //   markSuspect(active→suspect) → 아래 cache.get 이 miss → LLM 재해소. best-effort(강등 실패해도 재해소는 진행).
-    if (this.cache && ctx.selfHealRetry === true) {
-      await this.cache.markSuspect(cacheKey).catch(() => undefined);
-    }
-
     let plan: ActionPlan | undefined;
     let cacheMode: StepResult["cache"]["mode"] = "bypass";
     let callIds: string[] = [];
-
-    if (this.cache) {
-      const cache = this.cache;
-      plan = await withSpan(SPAN.actionPlanCacheLookup, spanCommonFromContext(ctx), {}, async (span) => {
-        const found = await cache.get(cacheKey);
-        // §E 필수 속성 cache.mode(hit/miss) — span 에 기록(impl-contracts-bundle.md §E action_plan_cache.lookup).
-        cacheMode = found ? "hit" : "miss";
-        span.setAttribute("cache.mode", cacheMode);
-        return found;
-      });
-    }
-
     let fromLlm = false;
-    if (!plan) {
-      // miss/bypass → LLM 으로 plan 산출(Gateway 경유, action_plan 스키마 strict). 원문 DOM 동봉(셀렉터 타깃팅).
-      const req = buildRequest(this.cfg, stepId, a, ctx, await snapshotDom(session));
-      let res: LLMResponse;
-      try {
-        res = await this.gateway.call(req, ctx.abortSignal);
-      } catch (e) {
-        if (e instanceof GatewayError) {
-          callIds = stagehandCallIdsFromError(e);
-          return failResult(stepId, "act", before, startedAt, e.code, callIds);
-        }
-        throw e;
+    let cacheKey: ActionPlanCacheKey | undefined;
+
+    if (a.fillSelector !== undefined) {
+      // 결정형 fill(fill_selector): LLM 도 캐시도 경유하지 않는다(셀렉터 환각 차단). 셀렉터는 IR 선언이고, 채울 값은
+      //   아래 secretRef/valueRef override 가 결정형 고정한다(값 출처는 ir-translate 가 필수로 강제). clickSelector 와
+      //   동형 — 결정형 모드라 cache.put 하지 않는다(fromLlm=false).
+      plan = { operation: "fill", selector: a.fillSelector };
+    } else {
+      await ensureNetworkJsonCapture(session);
+      // 캐시 키 = action_plan_cache UNIQUE 7컬럼 + tenant(§D family=(url_pattern, dom_structural_hash)).
+      cacheKey = {
+        tenantId: ctx.tenantId,
+        scenarioVersionId: this.cfg.scenarioVersionId,
+        stepId,
+        urlPattern: ctx.pageState.url.pattern,
+        domStructuralHash: ctx.pageState.dom.structuralHash,
+        model: this.cfg.model,
+        promptTemplateVersion: this.cfg.promptTemplateVersion,
+        browserIdentityVersion: this.cfg.browserIdentityVersion,
+      };
+
+      // P0b self-heal 재시도(ctx.selfHealRetry): 인터프리터가 verify 실패로 같은 노드를 재실행할 때 직전 의심 plan 을 강등.
+      //   markSuspect(active→suspect) → 아래 cache.get 이 miss → LLM 재해소. best-effort(강등 실패해도 재해소는 진행).
+      if (this.cache && ctx.selfHealRetry === true) {
+        await this.cache.markSuspect(cacheKey).catch(() => undefined);
       }
-      callIds = stagehandCallIdsFromResponse(res);
-      const parsed = parseActionPlan(res.parsedJson);
-      if (!parsed) return failResult(stepId, "act", before, startedAt, "LLM_MALFORMED_OUTPUT", callIds);
-      plan = parsed;
-      fromLlm = true;
+
+      if (this.cache) {
+        const cache = this.cache;
+        const key = cacheKey;
+        plan = await withSpan(SPAN.actionPlanCacheLookup, spanCommonFromContext(ctx), {}, async (span) => {
+          const found = await cache.get(key);
+          // §E 필수 속성 cache.mode(hit/miss) — span 에 기록(impl-contracts-bundle.md §E action_plan_cache.lookup).
+          cacheMode = found ? "hit" : "miss";
+          span.setAttribute("cache.mode", cacheMode);
+          return found;
+        });
+      }
+
+      if (!plan) {
+        // miss/bypass → LLM 으로 plan 산출(Gateway 경유, action_plan 스키마 strict). 원문 DOM 동봉(셀렉터 타깃팅).
+        const req = buildRequest(this.cfg, stepId, a, ctx, await snapshotDom(session));
+        let res: LLMResponse;
+        try {
+          res = await this.gateway.call(req, ctx.abortSignal);
+        } catch (e) {
+          if (e instanceof GatewayError) {
+            callIds = stagehandCallIdsFromError(e);
+            return failResult(stepId, "act", before, startedAt, e.code, callIds);
+          }
+          throw e;
+        }
+        callIds = stagehandCallIdsFromResponse(res);
+        const parsed = parseActionPlan(res.parsedJson);
+        if (!parsed) return failResult(stepId, "act", before, startedAt, "LLM_MALFORMED_OUTPUT", callIds);
+        plan = parsed;
+        fromLlm = true;
+      }
     }
 
     // 자격증명 fill: secretRef 선언 시 plan 의 secret 대상을 IR 선언으로 결정형 고정(LLM 출력 value 무시).
@@ -303,7 +315,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
 
     // miss(LLM 해석)만 캐시에 저장. 평문 미저장: secretRef=ref-bearing({fill,selector,valueRef}), valueRef(비-secret)=
     //   selector-only(value 스트립 — 매 실행 override 가 현재 run value 로 재고정하므로 캐시 value 불요; 평문 영속·stale 재생 차단).
-    if (fromLlm && this.cache) {
+    if (fromLlm && this.cache && cacheKey !== undefined) {
       const cachePlan: ActionPlan = a.valueRef !== undefined ? { operation: "fill", selector: plan.selector } : plan;
       await this.cache.put(cacheKey, cachePlan);
     }
@@ -315,7 +327,7 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     try {
       await this.applyPlan(plan, session, ctx);
     } catch (applyError) {
-      if (this.cache) {
+      if (this.cache && cacheKey !== undefined) {
         await this.cache.markSuspect(cacheKey).catch(() => undefined);
       }
       throw applyError;

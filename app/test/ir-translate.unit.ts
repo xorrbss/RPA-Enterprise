@@ -366,6 +366,32 @@ function main(): void {
     check("act: assert_absent + click_selector 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
+  // 22a) act: args.fill_selector + value_ref → fillSelector+valueRef 스레드(결정형 fill, 셀렉터·값 둘 다 결정형).
+  {
+    const s = compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "사유 입력", args: { fill_selector: "textarea#reason", value_ref: "reason" } }], terminal: "success" } } }, {}, { reason: "반려 사유" });
+    const act = s.nodes.a?.what[0] as { type: string; fillSelector?: string; valueRef?: string; value?: string } | undefined;
+    check("act: fill_selector + value_ref → fillSelector+valueRef 스레드", act?.type === "act" && act.fillSelector === "textarea#reason" && act.valueRef === "reason" && act.value === "반려 사유", JSON.stringify(act));
+  }
+
+  // 22b) act: args.fill_selector + vars(secret) → fillSelector+secretRef 스레드(결정형 자격증명 fill).
+  {
+    const s = compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "비밀번호 입력", vars: ["login.password"], args: { fill_selector: "input#pw" } }], terminal: "success" } } }, {});
+    const act = s.nodes.a?.what[0] as { type: string; fillSelector?: string; secretRef?: string } | undefined;
+    check("act: fill_selector + vars(secret) → fillSelector+secretRef 스레드", act?.type === "act" && act.fillSelector === "input#pw" && act.secretRef === "login.password", JSON.stringify(act));
+  }
+
+  // 22c) act: fill_selector 인데 값 출처 없음 → IR_SCHEMA_INVALID(빈 fill 금지).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "x", args: { fill_selector: "input#pw" } }], terminal: "success" } } }, {}));
+    check("act: fill_selector 값 출처 없음 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
+  // 22d) act: fill_selector + click_selector 동시 → IR_SCHEMA_INVALID(클릭 vs fill 모드 상호배타).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "x", vars: ["login.password"], args: { fill_selector: "input#pw", click_selector: "#b" } }], terminal: "success" } } }, {}));
+    check("act: fill_selector + click_selector 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
   // 23) observe: instruction 없는 observe는 on[] PageState resolver 전용으로 drop한다.
   {
     const s = compiledScenarioFrom({ start: "o", nodes: { o: { what: [{ action: "observe" }], terminal: "success" } } }, {});

@@ -214,6 +214,54 @@ async function main(): Promise<void> {
     check("비-자격증명 fill 은 리터럴 value 보존", fill?.selector === "#q" && fill?.value === "hello");
   }
 
+  // ── 결정형 fill(fill_selector) + secretRef: LLM 을 전혀 경유하지 않고 IR 선언 셀렉터에 시크릿을 채운다(셀렉터 환각 차단) ──
+  {
+    const s = fakeSessions();
+    const { boundary } = boundaryWithLog();
+    let llmCalls = 0;
+    const trackingGateway: LlmGatewayCaller = {
+      call: async () => {
+        llmCalls += 1;
+        // 만약 결정형 경로가 잘못 LLM 을 부르면 다른(환각) 셀렉터를 줘서 테스트가 실패하도록.
+        return { outputRef: "art://o" as ArtifactRef, usage: { inputTokens: 1, outputTokens: 1, cost: 0 }, finishReason: "stop", parsedJson: { operation: "fill", selector: "#hallucinated" } } as unknown as LLMResponse;
+      },
+    };
+    const ex = new StagehandDomExecutor(trackingGateway, s.provider, cfg, undefined, boundary, PRINCIPAL);
+    const result = await ex.execute(
+      "n-det-pw",
+      { type: "act", instruction: "비밀번호 입력", secretRef: ASSET_KEY, fillSelector: "#det-password", sideEffect: "login" },
+      makeCtx(),
+    );
+    check("결정형 fill 은 LLM 을 전혀 호출하지 않음", llmCalls === 0);
+    const fill = s.ops.find((o) => o.op === "fill");
+    check("결정형 fill 은 IR 선언 셀렉터(#det-password)에 적용(LLM 환각 #hallucinated 미사용)", fill?.selector === "#det-password");
+    check("결정형 fill 에 시크릿 평문이 정확히 전달됨", fill?.value === SECRET);
+    check("결정형 fill StepResult.status=success", result.status === "success");
+    const plan = (result.output as { plan?: { valueRef?: unknown; value?: unknown } }).plan;
+    check("결정형 fill output.plan 은 ref-bearing(평문 미운반)", plan?.valueRef === ASSET_KEY && plan?.value === undefined);
+  }
+
+  // ── 결정형 fill(fill_selector) + value_ref(비-secret): LLM 미경유로 IR 셀렉터에 params 값 fill ──
+  {
+    const s = fakeSessions();
+    let llmCalls = 0;
+    const trackingGateway: LlmGatewayCaller = {
+      call: async () => {
+        llmCalls += 1;
+        return { outputRef: "art://o" as ArtifactRef, usage: { inputTokens: 1, outputTokens: 1, cost: 0 }, finishReason: "stop", parsedJson: { operation: "fill", selector: "#hallucinated" } } as unknown as LLMResponse;
+      },
+    };
+    const ex = new StagehandDomExecutor(trackingGateway, s.provider, cfg);
+    await ex.execute(
+      "n-det-val",
+      { type: "act", instruction: "사유 입력", valueRef: "reason", value: "반려 사유 텍스트", fillSelector: "textarea#reason" },
+      makeCtx(),
+    );
+    check("결정형 value fill 은 LLM 미호출", llmCalls === 0);
+    const fill = s.ops.find((o) => o.op === "fill");
+    check("결정형 value fill 은 IR 셀렉터·params 값으로 적용", fill?.selector === "textarea#reason" && fill?.value === "반려 사유 텍스트");
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
