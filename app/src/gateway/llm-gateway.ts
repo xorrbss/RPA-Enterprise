@@ -314,6 +314,14 @@ export class LlmGateway {
     for (let repair = 0; ; repair += 1) {
       const parsed = this.tryParse(text);
       if (parsed.ok) {
+        // action_plan(act primitive)은 inline JSON Schema 없이 다운스트림 parseActionPlan(실행기)이 검증한다 — §5 ajv
+        //   검증은 extract 출력 스키마용(llm-gateway-adapter §5). gateway 가 extract-스키마 검증을 schema-없는 action_plan
+        //   에 잘못 적용해 valid plan 을 LLM_MALFORMED_OUTPUT 으로 거부하던 결함(LLM-plan act 전면 불능) 수정 — JSON
+        //   parse 성공만 강제하고 parsedJson 반환(extract 는 inline schema 동반이라 아래 ajv 경로 유지; no-schema extract 는 fail-closed).
+        if (rf.schemaRef === "action_plan" && rf.schema === undefined) {
+          const outputRef = await this.deps.sink.put(text, meta);
+          return { outputRef, usage, finishReason: consumed.finishReason, parsedJson: parsed.value };
+        }
         const v = this.deps.validator.validate({ schemaRef: rf.schemaRef, schemaVersion: rf.schemaVersion, schema: rf.schema, value: parsed.value });
         if (v.ok) {
           const outputRef = await this.deps.sink.put(text, meta);
