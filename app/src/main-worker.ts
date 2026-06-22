@@ -34,12 +34,14 @@ import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
 import { PgSessionRestorer } from "./runtime/session-restorer";
 import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runtime/visual-evidence";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
+import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
 import { buildTaskList } from "./worker/graphile-runner";
 import { startMaintenanceScheduler, type MaintenanceScheduler } from "./worker/maintenance-scheduler";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import type { SecretRef, SecretStore } from "../../ts/core-types";
+import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../ts/security-middleware-contract";
 import {
   ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF,
   type ArtifactRealObjectStorePortBinding,
@@ -57,7 +59,7 @@ import {
  * structured-output safe-path (extract scenarios → prompt-schema injection + ajv validation) is implemented
  * (gateway jsonMode=false path), so a real Chrome run drives end-to-end.
  */
-function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
+function buildExecutorFactory(pool: PgPool, credentialStore: SecretStore, executorPrincipal: AuthenticatedPrincipal): RunExecutorFactory {
   const gw = loadGatewayConfig();
   const artifactStore = new FsObjectStore(gw.artifactDir);
   const gatewayArtifactSink = new PgGatewayArtifactSink(pool, artifactStore, {
@@ -94,6 +96,10 @@ function buildExecutorFactory(pool: PgPool): RunExecutorFactory {
   }, {
     cache: new PgActionPlanCache(pool),
     extractArtifactSink: approvalInboxArtifactSink,
+    // AUD-1: 자격증명 fill 경계 — act.vars(secretRef)를 SecretStore 경유 해소(LLM 미경유). runtime-worker identity 가
+    //   executor purpose 를 RESOLVE_MATRIX(D8-A12)로 인가하고, secret.resolve 는 fail-closed 감사된다. dev 와 동형(secrets+principal).
+    secrets: new VaultSecretStoreBoundary({ store: credentialStore, audit: new PgDurableSecurityAuditDecisionWriter(pool) }),
+    executorPrincipal,
   });
 }
 
@@ -161,6 +167,16 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
         }
       : undefined;
 
+  // AUD-1: dom 실행기 자격증명 fill 용 서비스-계정 principal(runtime_identity=runtime-worker → executor purpose 인가).
+  //   tenantId 는 placeholder — factory 가 run.tenantId 로 per-run 덮어쓴다(감사 row 테넌트 정합). roles 는 boundary 미사용.
+  const executorPrincipal: AuthenticatedPrincipal = {
+    subjectId: cfg.workerId as PrincipalId,
+    tenantId: "00000000-0000-0000-0000-000000000000" as TenantId,
+    roles: ["admin"],
+    source: "jwt",
+    claims: { runtime_identity: "runtime-worker" },
+  };
+
   const workerOptions: PgRuntimeWorkerOptions = {
     workerId: cfg.workerId,
     suspensionPort: new PgChallengeSuspensionPort(),
@@ -168,7 +184,7 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
     sessionRestorer: new PgSessionRestorer({ pool, resumeTokenCodec, sessionStore }),
     runAbortDrainer: browserSessionProvider,
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
-    executorFactory: buildExecutorFactory(pool),
+    executorFactory: buildExecutorFactory(pool, runtimeWorkerStore, executorPrincipal),
     browserSessionProvider,
     sessionStore,
     visualEvidenceRecorder: new PgVisualEvidenceRecorder(pool, artifactStore, {
