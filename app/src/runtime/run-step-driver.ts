@@ -251,6 +251,8 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     return { state: "failed_system", outcome };
   }
 
+  // AUD-5: 실 AbortController — 아래 startRunAbortWatcher 폴러가 run abort 감지 시 발화 → ctx.abortSignal 로 in-flight LLM 호출 취소.
+  const abortController = new AbortController();
   const ctx: RunContext = {
     runId: run.runId,
     correlationId: run.correlationId,
@@ -263,7 +265,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     ...(run.networkAllowedDomains !== undefined ? { networkAllowedDomains: run.networkAllowedDomains } : {}),
     leaseId: run.leaseId,
     assetRefs: run.assetRefs ?? {},
-    abortSignal: new AbortController().signal,
+    abortSignal: abortController.signal,
     pageState: seedPageState(),
   };
   // 세션 재사용(방식 A) 복원 — navigate 이전 유일 seam(driver). 저장된 쿠키가 있으면 주입 → 인증 상태로 진입(login 서브플로
@@ -294,6 +296,14 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   let outcome: ScenarioOutcome;
   // in-band 실패 사유 — runScenario throw(인터프리터 예외)·외곽 throw 를 흡수하는 catch 에서 분류 코드를 담는다.
   let throwReason: { code: string; message: string } | undefined;
+  // AUD-5: abort 폴러 — drive 동안 runs.status='aborting/cancelled' 감지 시 controller.abort()(종전 throwaway signal 이라 LLM 완주·비용 낭비). cross-process bridge.
+  const stopAbortWatcher = startRunAbortWatcher(
+    () =>
+      withTenantTx(deps.pool, run.tenantId, (c) =>
+        c.query<{ status: RunState }>(`SELECT status FROM runs WHERE tenant_id=$1::uuid AND id=$2::uuid`, [run.tenantId, run.runId]),
+      ).then((r) => r.rows[0]?.status),
+    abortController,
+  );
   try {
     if (videoPolicy !== undefined && deps.visualEvidenceVideoRecorder !== undefined) {
       videoRecording = await deps.visualEvidenceVideoRecorder.startRunVideo({
@@ -333,6 +343,8 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   }
 
   // failed_* 사유: throw 흡수분 우선, 없으면 인터프리터가 운반한 in-band step 사유. driver 가 transition tx 로 기록.
+  // AUD-5: drive 종료 → abort 폴러 정지(이하 terminalization DB 전이는 abort 신호 불요). drive try/catch 가 모든 throw 흡수해 항상 도달.
+  stopAbortWatcher();
   const failureReason = throwReason ?? outcome.failureReason;
   // terminal 결과를 DB 전이로 종료(run 은 이미 running — driveClaimedRun R2 / driveResumedRun R18).
   if (outcome.terminal === "success" || outcome.terminal === "success_empty") {
@@ -565,4 +577,33 @@ function classifiedFailureReason(err: unknown): { code: string; message: string 
     return { code: (err as { code: string }).code, message: "" };
   }
   return { code: "CONTROL_PLANE_INTERNAL_ERROR", message: "" };
+}
+
+// run abort 전파(AUD-5) — abort 는 API 프로세스가 runs.status='aborting'으로만 바꾸고, driveScenario(워커 프로세스)는 그 신호를
+//   직접 못 받는다. 폴러가 runs.status 를 주기 재조회해 abort 시 AbortController 발화 → ctx.abortSignal 이 실행기/
+//   게이트웨이(gateway.call(req,signal))로 in-flight LLM 호출을 취소(종전 throwaway signal=LLM 완주, 비용 낭비).
+//   terminalization CAS(WHERE status='running')는 aborting run 에 no-op 이라 run_abort 가 cancelled 종결 소유(레이스 없음).
+const RUN_ABORT_POLL_MS = Math.max(250, Number(process.env.RUN_ABORT_POLL_MS) || 2000);
+
+export function startRunAbortWatcher(
+  readStatus: () => Promise<RunState | undefined>,
+  controller: AbortController,
+  pollMs: number = RUN_ABORT_POLL_MS,
+): () => void {
+  let stopped = false;
+  const tick = async (): Promise<void> => {
+    if (stopped || controller.signal.aborted) return;
+    try {
+      const status = await readStatus();
+      if (!stopped && (status === "aborting" || status === "cancelled")) controller.abort();
+    } catch {
+      // best-effort 폴 — DB 일시 오류는 다음 tick 재시도(미발화 시 기존 동작=세션 teardown 종결로 폴백).
+    }
+  };
+  const timer = setInterval(() => void tick(), pollMs);
+  (timer as { unref?: () => void }).unref?.(); // 폴러가 프로세스 종료를 막지 않게(keepalive 방지).
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
