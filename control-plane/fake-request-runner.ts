@@ -356,6 +356,16 @@ export class InMemoryControlPlaneIdempotencyStore {
     };
   }
 
+  async release(recordId: string): Promise<void> {
+    // 실 PgControlPlaneIdempotencyStore.release 와 동형: processing 행만 삭제(멱등, 0행 no-op).
+    for (const [mapKey, row] of this.rows) {
+      if (row.recordId === recordId && row.status === "processing") {
+        this.rows.delete(mapKey);
+        return;
+      }
+    }
+  }
+
   private findByRecordId(recordId: string): IdempotencyRow {
     for (const row of this.rows.values()) {
       if (row.recordId === recordId) return row;
