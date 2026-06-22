@@ -59,7 +59,7 @@ import {
 } from "./visual-evidence";
 
 // ops-defaults.md resume_token.ttl=30m(expiresAt). 코드 상수 금지 규약 — inline 인용(RQ-017 패턴).
-const RESUME_TOKEN_TTL_MS = 30 * 60 * 1000;
+export const RESUME_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 export interface ClaimedRun {
   readonly runId: string;
