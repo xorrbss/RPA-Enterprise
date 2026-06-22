@@ -312,7 +312,17 @@ function ReadinessCard({
         tone={site.tone}
         label="사이트/세션"
         detail={site.detail}
-        action={keys.length > 0 ? <button className="linklike" type="button" onClick={() => navigate("security")}>사이트 보기</button> : undefined}
+        action={
+          site.sessionSiteId !== undefined ? (
+            <button className="linklike" type="button" onClick={() => navigate("security", { site: site.sessionSiteId as string })}>
+              세션 등록하러 가기
+            </button>
+          ) : keys.length > 0 ? (
+            <button className="linklike" type="button" onClick={() => navigate("security")}>
+              사이트 보기
+            </button>
+          ) : undefined
+        }
       />
     </section>
   );
@@ -330,7 +340,7 @@ function originOf(value: string): string | null {
 function siteReadiness(
   targetUrls: readonly string[],
   sites: ReturnType<typeof useQuery<Paginated<SiteItem>>>,
-): { tone: "green" | "amber" | "red" | "blue"; detail: string } {
+): { tone: "green" | "amber" | "red" | "blue"; detail: string; sessionSiteId?: string } {
   if (targetUrls.length === 0) return { tone: "blue", detail: "사이트 이동이 없는 시나리오입니다." };
   const origins = targetUrls.map(originOf);
   if (origins.some((origin) => origin === null)) return { tone: "red", detail: "실행 대상 URL이 http(s) origin으로 해석되지 않습니다." };
@@ -347,6 +357,12 @@ function siteReadiness(
   const openCircuit = concrete.find((site) => site.circuit_status !== "closed");
   if (openCircuit !== undefined) return { tone: "amber", detail: `${openCircuit.name ?? "대상 사이트"} 서킷 상태가 ${openCircuit.circuit_status}입니다.` };
   const needsSession = concrete.find((site) => site.login_capable === true && site.session_ready !== true);
-  if (needsSession !== undefined) return { tone: "amber", detail: `${needsSession.name ?? "대상 사이트"} 세션 등록이 필요합니다.` };
+  if (needsSession !== undefined) {
+    return {
+      tone: "amber",
+      detail: `${needsSession.name ?? "대상 사이트"}는 로그인이 필요합니다. 세션을 등록하세요.`,
+      sessionSiteId: needsSession.site_profile_id,
+    };
+  }
   return { tone: "green", detail: "대상 사이트 승인, 서킷, 세션 상태가 준비되어 있습니다." };
 }
