@@ -104,6 +104,8 @@ const ARTIFACT_GENERATION_REDACTION_MATCH = "60000000-0000-0000-0000-00000000002
 const ARTIFACT_GENERATION_REDACTION_OTHER = "60000000-0000-0000-0000-000000000022";
 const ARTIFACT_GENERATION_RETENTION_MATCH = "60000000-0000-0000-0000-000000000023";
 const ARTIFACT_GENERATION_RETENTION_OTHER = "60000000-0000-0000-0000-000000000024";
+const ARTIFACT_RETENTION_TOCTOU = "60000000-0000-0000-0000-000000000025";
+const GENERATION_TOCTOU = "30000000-0000-0000-0000-000000000203";
 const ACTIVE_REDACTION_CLAIM = "70000000-0000-0000-0000-000000000001";
 const GENERATION_TARGET = "80000000-0000-0000-0000-000000000001";
 const GENERATION_UNRELATED = "80000000-0000-0000-0000-000000000002";
@@ -145,6 +147,9 @@ const planResolver: BrowserLeasePlanResolver = async (_client, input) => {
 
 const redactionCalls: Array<Parameters<ArtifactRedactor["redact"]>[0]> = [];
 const retentionCalls: Array<Parameters<ArtifactRetentionStore["deleteObject"]>[0]> = [];
+// AUD-11 legal_hold TOCTOU 테스트 훅: deleteObject 진행 중(=fix 가 행 락 보유 중) 동시 legal_hold 쓰기를 주입한다.
+// run() 안에서 bypass pool 이 만들어진 뒤 배선된다(모듈 const fake 가 함수-로컬 pool 을 참조하기 위함).
+let toctouConcurrentHold: ((artifactId: string) => Promise<void>) | undefined;
 
 const localTestPortBinding = {
   kind: "test_fake",
@@ -236,6 +241,15 @@ const fakeArtifactRetentionStore: ArtifactRetentionStore = {
     }
     if (input.artifact.artifactRef === ARTIFACT_RETENTION_TRANSIENT) {
       return { kind: "transient_failed", reason: "object store unavailable" };
+    }
+    if (input.artifact.artifactRef === ARTIFACT_RETENTION_TOCTOU) {
+      // 물리 삭제 도중 운영자가 legal_hold=true 를 설정하는 상황을 주입. fix(행 락 보유) 경로에서는 이 쓰기가
+      // 락에 막혀 삭제 커밋 이후로 직렬화되므로 tombstone 은 일관되게 기록된다.
+      if (toctouConcurrentHold !== undefined) await toctouConcurrentHold(input.artifact.artifactRef);
+      return {
+        kind: "deleted",
+        evidence: localTestEvidence(input, "delete", "local-retention-toctou-receipt"),
+      };
     }
     return { kind: "transient_failed", reason: `unexpected retention fixture ${input.artifact.artifactRef}` };
   },
@@ -1482,6 +1496,65 @@ async function main(): Promise<void> {
           otherGenerationRetained,
           runTransientStillDue,
         }),
+      );
+
+      // AUD-11 legal_hold TOCTOU: claim 커밋과 물리 삭제 사이 윈도우에 legal_hold 가 켜져도 삭제·tombstone 이
+      // 원자적으로 유지되어 "바이트 삭제됨 + deleted_at NULL"(보존대상 비가역 손실) 불일치가 생기지 않아야 한다.
+      // 전용 generation 스코프로 다른 due 행과 격리.
+      await withTenantTx(lifecycleBypassPool, TENANT_A, async (c) => {
+        await c.query(
+          `INSERT INTO scenario_generations
+             (id, tenant_id, mode, status, prompt_hash, planner, draft_ir, validation_report,
+              evidence_policy, blockers, created_by)
+           VALUES ($1::uuid,$2::uuid,'save','saved','hash-generation-toctou','llm_v1','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'[]'::jsonb,'aud11-test')`,
+          [GENERATION_TOCTOU, TENANT_A],
+        );
+        await c.query(
+          `INSERT INTO artifacts (
+             id, tenant_id, generation_id, type, redaction_status, redaction_attempts, object_ref,
+             retention_until, legal_hold, quarantine, deleted_at, deleted_reason, deleted_by_job,
+             lifecycle_claim_id, lifecycle_claim_kind, lifecycle_claim_worker_id,
+             lifecycle_claim_correlation_id, lifecycle_claimed_at, lifecycle_claim_expires_at
+           )
+           VALUES ($1,$2,$3,'scenario_generation_llm_output','not_required',0,'object://runtime-worker/retention-toctou',
+              now() - interval '1 day',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`,
+          [ARTIFACT_RETENTION_TOCTOU, TENANT_A, GENERATION_TOCTOU],
+        );
+      });
+
+      toctouConcurrentHold = async (artifactId) => {
+        // deleteObject 진행 중 별도 커넥션에서 legal_hold=true 를 시도. fix(re-check 가 행을 FOR UPDATE 로 잠금) 경로에서는
+        // 이 쓰기가 락 대기 → statement_timeout 으로 취소(처리기 tx 가 deleteObject 완료를 기다리므로 PG 자동 데드락 감지
+        // 불가 → 타임아웃이 교착을 끊음). no-fix 경로에서는 락이 없어 즉시 커밋 → finalize CAS(legal_hold=false)가 깨진다.
+        const holdClient = await lifecycleBypassPool.connect();
+        try {
+          await holdClient.query("SET statement_timeout = 1500");
+          await holdClient.query("UPDATE artifacts SET legal_hold = true WHERE id = $1::uuid", [artifactId]);
+        } catch {
+          /* fix 경로: 행 락에 막혀 statement_timeout 으로 취소됨(기대된 차단) */
+        } finally {
+          holdClient.release();
+        }
+      };
+      let toctouOutcome: string;
+      try {
+        const toctouResult = await bypassWorker.handle({
+          kind: "artifact_retention",
+          tenantId: TENANT_A as TenantId,
+          generationId: GENERATION_TOCTOU as RuntimeWorkerJob["generationId"],
+          correlationId: CORRELATION as CorrelationId,
+        });
+        toctouOutcome = toctouResult.kind;
+      } catch (err) {
+        toctouOutcome = `threw:${String(err)}`;
+      } finally {
+        toctouConcurrentHold = undefined;
+      }
+      const toctouState = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_RETENTION_TOCTOU);
+      check(
+        "artifact_retention legal_hold TOCTOU: delete+tombstone stays atomic under concurrent legal_hold write (AUD-11)",
+        toctouOutcome === "completed" && toctouState.deletedAtSet === true && toctouState.lifecycleClaimSet === false,
+        JSON.stringify({ toctouOutcome, toctouState }),
       );
 
       try {

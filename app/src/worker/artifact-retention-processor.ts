@@ -86,24 +86,35 @@ export class ArtifactRetentionProcessor {
       correlationId,
       reasonCode: "artifact_lifecycle.retention.object_delete",
     });
-    const deleteResult = await retentionStore.deleteObject({
-      tenantId: tenantId as TenantId,
-      correlationId: correlationId as CorrelationId,
-      artifact: claim.claim.artifact,
-      jobId: claim.claim.claimId,
-      policy: { deleteReason: "retention_expired" },
-      portBinding,
-      audit,
-    }).catch(() => ({ kind: "transient_failed", reason: "retention_store_exception" }) as const);
-    validateArtifactRetentionDeleteResult(deleteResult, {
-      operation: "delete",
-      artifactRef: claim.claim.artifact.artifactRef,
-      correlationId,
-      portBinding,
-    });
 
+    // CAS-before-delete(AUD-11 legal_hold TOCTOU): claim 커밋과 물리 삭제 사이 윈도우에 legal_hold/deleted_at/
+    // retention_until 이 바뀌면(운영자 직접 DB 쓰기 등) 비가역 객체 삭제 후 finalize CAS 가 실패해 deleted_at 이 NULL
+    // 로 남고 보존대상(legal_hold) 바이트가 영구 손실된다. 재검사·물리 삭제·tombstone 을 단일 tx 의 FOR UPDATE 락
+    // 하에 묶어 윈도우를 제거한다(동시 legal_hold 쓰기는 행 락에 블록돼 삭제 커밋 이후로 직렬화). deleteObject 는
+    // PG 에 접근하지 않으므로(객체스토어 I/O) 락 보유 중 호출이 데드락을 만들지 않는다. 부적격이면 삭제하지 않고
+    // claim 을 해제한다(조용한 false 아님 — 삭제를 의도적으로 건너뜀).
     await withTenantTx(this.pool, tenantId, async (client) => {
       await assertLifecycleBypassUse(client, "artifact_retention_sweeper", "artifact_lifecycle.retention.finalize");
+      const deletable = await this.lockClaimedDeletable(client, claim.claim);
+      if (!deletable) {
+        await this.releaseRetentionClaim(client, claim.claim);
+        return;
+      }
+      const deleteResult = await retentionStore.deleteObject({
+        tenantId: tenantId as TenantId,
+        correlationId: correlationId as CorrelationId,
+        artifact: claim.claim.artifact,
+        jobId: claim.claim.claimId,
+        policy: { deleteReason: "retention_expired" },
+        portBinding,
+        audit,
+      }).catch(() => ({ kind: "transient_failed", reason: "retention_store_exception" }) as const);
+      validateArtifactRetentionDeleteResult(deleteResult, {
+        operation: "delete",
+        artifactRef: claim.claim.artifact.artifactRef,
+        correlationId,
+        portBinding,
+      });
       await this.finalizeRetentionDecision(client, { claim: claim.claim, deleteResult, portBinding });
     });
     return { kind: "completed", emittedEvents: [] };
@@ -224,6 +235,47 @@ export class ArtifactRetentionProcessor {
     };
   }
 
+
+  // 물리 삭제 직전 claim 한 행을 FOR UPDATE 로 잠그고 삭제 적격(미삭제·legal_hold/quarantine false·만료 보존기간·내
+  // claim 유효)을 재확인한다. 적격이면 true(행 락 보유 — 동시 legal_hold 쓰기 차단). 그 외엔 false.
+  private async lockClaimedDeletable(client: pg.PoolClient, claim: ArtifactLifecycleClaim): Promise<boolean> {
+    const locked = await client.query(
+      `SELECT id
+         FROM artifacts
+        WHERE tenant_id = $1::uuid
+          AND id = $2::uuid
+          AND lifecycle_claim_id = $3::uuid
+          AND lifecycle_claim_kind = 'artifact_retention'
+          AND lifecycle_claim_expires_at > now()
+          AND deleted_at IS NULL
+          AND legal_hold = false
+          AND quarantine = false
+          AND retention_until IS NOT NULL
+          AND retention_until <= now()
+        FOR UPDATE`,
+      [claim.tenantId, claim.artifact.artifactRef, claim.claimId],
+    );
+    return locked.rowCount === 1;
+  }
+
+  // 삭제 부적격으로 판명된 claim 을 해제(claim id 기준 CAS). legal_hold=true 등으로 더는 retention 대상이 아니므로
+  // 다른 워커가 재claim 하지 않는다(claim SELECT 의 legal_hold=false 필터). TTL 만료를 기다리지 않고 즉시 반납한다.
+  private async releaseRetentionClaim(client: pg.PoolClient, claim: ArtifactLifecycleClaim): Promise<void> {
+    await client.query(
+      `UPDATE artifacts
+          SET lifecycle_claim_id = NULL,
+              lifecycle_claim_kind = NULL,
+              lifecycle_claim_worker_id = NULL,
+              lifecycle_claim_correlation_id = NULL,
+              lifecycle_claimed_at = NULL,
+              lifecycle_claim_expires_at = NULL
+        WHERE tenant_id = $1::uuid
+          AND id = $2::uuid
+          AND lifecycle_claim_id = $3::uuid
+          AND lifecycle_claim_kind = 'artifact_retention'`,
+      [claim.tenantId, claim.artifact.artifactRef, claim.claimId],
+    );
+  }
 
   private async finalizeRetentionDecision(
     client: pg.PoolClient,
