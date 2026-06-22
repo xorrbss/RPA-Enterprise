@@ -94,21 +94,25 @@ async function seedStagehandAttempt(pool: Pool, tenant: string, run: string, ste
 }
 
 // cache-hit step: stagehand_call 없이 action_plan_cache(plan_ref)+run_steps(cache_mode='hit', action_plan_cache_id) 시드.
+//   lastSuccessAt = 캐시 put/덮어쓰기 시각, stepCreatedAt = run 이 그 step 을 기록한 시각. CHP-01 가드는
+//   lastSuccessAt > stepCreatedAt(run 실행 후 cross-run 재해소로 덮어써짐)이면 plan 을 제외한다. 기본값은 정당 hit
+//   (put 이 step 전) — put 시각 ≤ step 기록 시각.
 async function seedHitStep(
   pool: Pool, tenant: string, run: string, sver: string, stepId: string, nodeId: string,
   cacheId: string, planRef: unknown, status: string,
+  lastSuccessAt = "2026-06-15T00:00:05Z", stepCreatedAt = "2026-06-15T00:00:06Z",
 ): Promise<void> {
   await withTenantTx(pool, tenant, async (c) => {
     await c.query(
       `INSERT INTO action_plan_cache (id, tenant_id, scenario_version_id, step_id, url_pattern, dom_structural_hash,
-          model, prompt_template_version, browser_identity_version, plan_ref, status)
-       VALUES ($1::uuid,$2::uuid,$3::uuid,$4,'u-'||$4,'h-'||$4,'codex','v1',1,$5,$6)`,
-      [cacheId, tenant, sver, stepId, JSON.stringify(planRef), status],
+          model, prompt_template_version, browser_identity_version, plan_ref, status, last_success_at)
+       VALUES ($1::uuid,$2::uuid,$3::uuid,$4,'u-'||$4,'h-'||$4,'codex','v1',1,$5,$6,$7::timestamptz)`,
+      [cacheId, tenant, sver, stepId, JSON.stringify(planRef), status, lastSuccessAt],
     );
     await c.query(
       `INSERT INTO run_steps (id, run_id, tenant_id, step_id, node_id, attempt, action, status, cache_mode, action_plan_cache_id, created_at)
-       VALUES (gen_random_uuid(), $1,$2,$3,$4,0,'act','success','hit',$5::uuid,'2026-06-15T00:00:06Z')`,
-      [run, tenant, stepId, nodeId, cacheId],
+       VALUES (gen_random_uuid(), $1,$2,$3,$4,0,'act','success','hit',$5::uuid,$6::timestamptz)`,
+      [run, tenant, stepId, nodeId, cacheId, stepCreatedAt],
     );
   });
 }
@@ -158,6 +162,12 @@ async function main(): Promise<void> {
     await seedStagehandAttempt(pool, TENANT_A, RUN_A, "s9", { operation: "click", selector: "#iter0" }, "done", 0, "2026-06-15T00:00:09Z");
     await seedStepAttempt(pool, TENANT_A, RUN_A, "s9", "n9", "act", "success", 1, "2026-06-15T00:00:10Z");
     await seedStagehandAttempt(pool, TENANT_A, RUN_A, "s9", { operation: "click", selector: "#iter1" }, "done", 1, "2026-06-15T00:00:10Z");
+    // n10: cache-hit step 인데 캐시가 run 의 step 실행(stepCreatedAt 00:11) 후 cross-run 재해소로 덮어써짐
+    //   (lastSuccessAt 00:30 > stepCreatedAt 00:11) → 현재 plan_ref 는 run 이 실행한 셀렉터가 아님(CHP-01) → 제외.
+    await seedHitStep(
+      pool, TENANT_A, RUN_A, SVER_A, "s10", "n10", "50000000-0000-4000-8000-000000000101",
+      { operation: "click", selector: "#overwritten" }, "active", "2026-06-15T00:00:30Z", "2026-06-15T00:00:11Z",
+    );
 
     // cross-tenant: tenant B act success + done → A 조회 시 비가시
     await seedRun(pool, TENANT_B, SCEN_B, SVER_B, RUN_B);
@@ -179,6 +189,8 @@ async function main(): Promise<void> {
     check("multi-act node(n8) reported in ambiguousNodeIds", ambiguousNodeIds.includes("n8"), JSON.stringify(ambiguousNodeIds));
     // loop 재해소(n9): 같은 step_id 다중 attempt 는 distinct step_id 1 개 → 모호 아님, last-write-wins(attempt 1, #iter1).
     check("loop node(n9) not ambiguous, last-write-wins", plans.n9?.operation === "click" && plans.n9.selector === "#iter1" && !ambiguousNodeIds.includes("n9"), JSON.stringify({ n9: plans.n9, ambiguousNodeIds }));
+    // CHP-01 (n10): run 실행 후 캐시가 cross-run 재해소로 덮어써진 hit plan 은 제외(run 이 실행 안 한 셀렉터 베이킹 금지).
+    check("cache-hit overwritten after run(n10) excluded (last_success_at > step.created_at)", plans.n10 === undefined, JSON.stringify(plans.n10));
 
     const crossA = await withTenantTx(pool, TENANT_A, (c) => loadRunActionPlans(c, RUN_B));
     check("cross-tenant run → empty (RLS)", Object.keys(crossA.plans).length === 0, JSON.stringify(crossA));
