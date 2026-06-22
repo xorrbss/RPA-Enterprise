@@ -249,8 +249,9 @@ export async function promoteScenarioFromRun(
         throw new ApiResponseError("RESOURCE_NOT_FOUND");
       }
       // 3) 캡처 plan → 결정형 transform(click → click_selector, fill → fill_selector[값 출처 보유 노드]).
-      const plans = await loadRunActionPlans(c, runId);
-      const promotion = promoteActsToDeterministic(sourceRow.ir, plans);
+      //    다중-act 노드(ambiguousNodeIds)는 plan→act 귀속 불가 → transform 이 multi_act_node_ambiguous 로 loud skip.
+      const { plans, ambiguousNodeIds } = await loadRunActionPlans(c, runId);
+      const promotion = promoteActsToDeterministic(sourceRow.ir, plans, ambiguousNodeIds);
       if (promotion.promotedNodeIds.length === 0) {
         throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "no_plans_to_promote" });
       }

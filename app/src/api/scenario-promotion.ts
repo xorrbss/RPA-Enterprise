@@ -70,15 +70,23 @@ function firstPromotableSelectActIndex(what: readonly unknown[]): number {
  * click ActionPlan 을 시나리오 IR 의 LLM act 노드에 결정형 act.args.click_selector 로 베이킹한다.
  * @param ir 시나리오 IR(nodes 맵 포함). 변형하지 않는다(깊은 복제 반환).
  * @param capturedPlans node_id → 성공 run 에서 해소된 ActionPlan.
+ * @param ambiguousNodeIds 한 노드에 act 스텝이 둘 이상이라 plan→act 귀속이 모호한 노드(loadRunActionPlans 가 식별).
+ *   조용한 오귀속 대신 'multi_act_node_ambiguous' 로 명시 skip 한다(조용한 false 금지).
  */
 export function promoteActsToDeterministic(
   ir: Record<string, unknown>,
   capturedPlans: Readonly<Record<string, ActionPlan>>,
+  ambiguousNodeIds: readonly string[] = [],
 ): PromotionResult {
   const clone = JSON.parse(JSON.stringify(ir)) as Record<string, unknown>;
   const promotedNodeIds: string[] = [];
   const skipped: PromotionSkip[] = [];
   const nodes = isRecord(clone.nodes) ? clone.nodes : undefined;
+
+  // 다중-act 노드(plan→act 귀속 모호)는 베이킹하지 않고 loud skip 으로 보고 — 조용한 오귀속(엉뚱한 act 에 셀렉터) 금지.
+  for (const nodeId of ambiguousNodeIds) {
+    skipped.push({ nodeId, reason: "multi_act_node_ambiguous" });
+  }
 
   for (const [nodeId, plan] of Object.entries(capturedPlans)) {
     if (nodes === undefined || !isRecord(nodes[nodeId])) {
