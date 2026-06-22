@@ -788,7 +788,13 @@ AUD-8. If-Match version check is SELECT-then-INSERT (non-atomic) → concurrent 
 > (JSON embedded-credential mask + fail-threshold #270). The items below are the **confirmed-but-deferred**
 > findings (recipe + impact + build-condition + owner), same discipline as AUD-1..8.
 
-AUD-9. Redacted-at-rest violation: original plaintext object not deleted after redaction (artifact audit P1)
+AUD-9. Redacted-at-rest violation: original plaintext object not deleted after redaction (artifact audit P1) — ✅ RESOLVED (PR #272)
+   Resolution: fixed in PR #272. A minimal `SupersededObjectStore` (`ObjectStore.delete`, satisfied
+   structurally by S3ObjectStore/FsObjectStore) is injected into the redaction processor, which idempotently
+   deletes the original object right after the finalize CAS commits a `redacted` decision with a new ref (row
+   points to redacted before delete; delete failure is loud-logged, read stays safe). Chose `ObjectStore.delete`
+   injection over the recipe's `ArtifactRetentionStore.deleteObject`+reason-union extension — simpler and
+   app-internal (no ts/ contract change → no codegen-fake ripple). Original finding below for the record.
    Finding: `artifact-redaction-processor.finalizeRedactionDecision` swaps `artifacts.object_ref` to the new
    redacted object (`COALESCE($redacted, object_ref)`) but never deletes the **original pending plaintext
    object** (merged-extract records / gateway llm_output etc., may contain PII/credentials). The retention
