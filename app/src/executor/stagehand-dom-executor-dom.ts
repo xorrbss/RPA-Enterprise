@@ -314,6 +314,7 @@ export function assertDomAction(stepId: string, action: unknown): DomAction {
     const vr = (action as { valueRef?: unknown }).valueRef;
     const val = (action as { value?: unknown }).value;
     const cs = (action as { clickSelector?: unknown }).clickSelector;
+    const ct = (action as { clickText?: unknown }).clickText;
     const aa = (action as { assertAbsent?: unknown }).assertAbsent;
     return {
       type,
@@ -323,6 +324,7 @@ export function assertDomAction(stepId: string, action: unknown): DomAction {
       ...(typeof vr === "string" && vr.length > 0 ? { valueRef: vr } : {}),
       ...(typeof val === "string" ? { value: val } : {}),
       ...(typeof cs === "string" && cs.length > 0 ? { clickSelector: cs } : {}),
+      ...(typeof ct === "string" && ct.length > 0 ? { clickText: ct } : {}),
       ...(typeof aa === "string" && aa.length > 0 ? { assertAbsent: aa } : {}),
     };
   }

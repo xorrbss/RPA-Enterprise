@@ -218,12 +218,15 @@ function mapAction(
     // 결정형 클릭: act.args.click_selector(LLM 미경유 클릭 타깃). assert_absent: 결정형 부재 단언(커밋 효과 witness).
     // 셋(클릭/부재단언/fill)은 상호배타 — 각자 단일 결정형 모드(둘 이상 선언 시 IR 모순 loud).
     const clickSelector = isRec(a.args) && typeof a.args.click_selector === "string" && a.args.click_selector.length > 0 ? a.args.click_selector : undefined;
+    // 결정형 텍스트 클릭: act.args.click_text(보이는 텍스트를 포함한 첫 상호작용 요소를 LLM 없이 클릭). CSS 셀렉터 불필요
+    //   (CSS 는 텍스트 매칭 불가) — 실행기가 브라우저 JS 로 해소. click_selector/assert_absent/value·secret 와 상호배타.
+    const clickText = isRec(a.args) && typeof a.args.click_text === "string" && a.args.click_text.length > 0 ? a.args.click_text : undefined;
     const assertAbsent = isRec(a.args) && typeof a.args.assert_absent === "string" && a.args.assert_absent.length > 0 ? a.args.assert_absent : undefined;
-    const detModes = [clickSelector, assertAbsent, valueRef, secretRef].filter((x) => x !== undefined).length;
+    const detModes = [clickSelector, clickText, assertAbsent, valueRef, secretRef].filter((x) => x !== undefined).length;
     if (detModes > 1) {
       throw new InterpreterError(
         "IR_SCHEMA_INVALID",
-        `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/assert_absent/value_ref·vars 중 하나만 사용 가능(결정형 모드 상호배타)`,
+        `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/click_text/assert_absent/value_ref·vars 중 하나만 사용 가능(결정형 모드 상호배타)`,
       );
     }
     return withRecording({
@@ -234,6 +237,7 @@ function mapAction(
       ...(valueRef !== undefined ? { valueRef } : {}),
       ...(value !== undefined ? { value } : {}),
       ...(clickSelector !== undefined ? { clickSelector } : {}),
+      ...(clickText !== undefined ? { clickText } : {}),
       ...(assertAbsent !== undefined ? { assertAbsent } : {}),
     }, nodeRecording);
   }

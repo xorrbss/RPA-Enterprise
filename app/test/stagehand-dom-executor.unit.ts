@@ -287,6 +287,49 @@ async function main(): Promise<void> {
     );
   }
 
+  // 결정형 텍스트 클릭(click_text): 텍스트 포함 요소 stamp 후 [data-rpa-ct] 클릭. LLM 미경유(g.calls()===0). 환각 차단.
+  {
+    const g = countingGateway();
+    const s = challengeSessions({}); // pre/post 챌린지 없음; stamp 프로브(querySelector 포함)→true=발견
+    const r = await new StagehandDomExecutor(g.gw, s.provider, cfg).execute(
+      "s-clicktext",
+      { type: "act", instruction: "click 베리드", clickText: "베리드", sideEffect: "update" },
+      makeCtx(),
+    );
+    check(
+      "click_text: 발견 → [data-rpa-ct] 결정형 클릭, LLM 미경유",
+      r.status === "success" && s.ops.includes("click:[data-rpa-ct]") && g.calls() === 0,
+      JSON.stringify(r) + " ops=" + JSON.stringify(s.ops),
+    );
+  }
+
+  // click_text 미발견 → settle deadline 후 loud(조용한 false 금지), LLM 미경유.
+  {
+    const prev = process.env.DET_CLICK_SETTLE_MS;
+    process.env.DET_CLICK_SETTLE_MS = "40";
+    const g = countingGateway();
+    const ops: string[] = [];
+    const missSession: CdpSession = {
+      url: () => "u", goto: async () => {}, reload: async () => {},
+      evaluate: async (expr: string) => (String(expr).includes("rpa_challenge_detector_v1") ? null : false) as never,
+      sendCDP: async () => undefined as never,
+      click: async (sel) => void ops.push(`click:${sel}`),
+      fill: async () => {}, selectOption: async () => {}, setInputFiles: async () => {},
+      downloadDir: () => "/tmp", waitForDownload: async () => true, close: async () => {},
+    };
+    const err = await caught(new StagehandDomExecutor(g.gw, { forLease: () => missSession } as CdpSessionProvider, cfg).execute(
+      "s-clicktext-miss",
+      { type: "act", instruction: "click 없음", clickText: "없는텍스트XYZ", sideEffect: "update" },
+      makeCtx(),
+    ));
+    process.env.DET_CLICK_SETTLE_MS = prev;
+    check(
+      "click_text: 미발견 → loud(조용한 false 금지), 클릭/LLM 미발사",
+      err instanceof Error && /click_text/.test((err as Error).message) && ops.length === 0 && g.calls() === 0,
+      String(err),
+    );
+  }
+
   // extract → read-only, extracted set, output.rowCount = {rows} 길이(표준 노드 출력 투영, ir-expression §2)
   {
     const g = countingGateway({ parsedJson: { rows: [1, 2, 3] } });
