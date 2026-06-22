@@ -75,6 +75,21 @@ async function main(): Promise<void> {
     check("RED-01 중첩: 비밀 아닌 값(user) 보존(over-mask 아님)", nested.includes("bob"), nested);
   }
 
+  // (1c) ART(아티팩트 감사) — **비민감 키**의 string 값 안에 임베드된 키워드형 자격증명(password=…/Authorization: Bearer …)도
+  //      텍스트 경로와 대칭으로 마스킹. 종전엔 비민감 키 스칼라에 self-delimiting PATTERN(applyPatternRules)만 적용돼
+  //      키워드형 임베드 자격증명이 redacted 산출물(운영자 조회 본문)로 그대로 누출됐다(JSON↔텍스트 비대칭 under-mask).
+  {
+    const embedded = "hunter2embeddedsecret";
+    const out = await redactText(t, `{"log": "login user=alice password=${embedded} done", "user": "bob"}`);
+    check("ART JSON 임베드 자격증명: password= 값 누출 없음", !out.includes(embedded), out);
+    check("ART JSON 임베드 자격증명: 라벨 삽입", out.includes("[REDACTED:credential]"), out);
+    check("ART JSON 임베드 자격증명: 비밀 아닌 값(bob) 보존(over-mask 아님)", out.includes("bob"), out);
+
+    const bearer = "sk-bearersecret9988aa";
+    const out2 = await redactText(t, `{"note": "header Authorization: Bearer ${bearer}"}`);
+    check("ART JSON 임베드 Bearer: 토큰 누출 없음", !out2.includes(bearer), out2);
+  }
+
   // (2) 자격증명 — key=value / key: value 형태.
   {
     const out = await redactText(t, "api_key=fakekey_abc123\ntoken: faketoken_xyz789");

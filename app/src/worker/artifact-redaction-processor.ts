@@ -31,7 +31,8 @@ import {
 } from "./runtime-worker-artifact-lifecycle";
 import { appendLifecycleAuditWithClient, assertLifecycleBypassUse } from "./runtime-worker-lifecycle-audit";
 
-const DEFAULT_ARTIFACT_REDACTION_MAX_ATTEMPTS = 3;
+// ops-defaults.md §6 artifact.redaction_fail_threshold = 5(초과 시 failed+알림·조회차단). 종전 3 은 계약 미달.
+const DEFAULT_ARTIFACT_REDACTION_MAX_ATTEMPTS = 5;
 
 export interface ArtifactRedactionProcessorDeps {
   readonly workerId?: string;
