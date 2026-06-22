@@ -71,6 +71,26 @@ async function seedStagehand(pool: Pool, tenant: string, run: string, stepId: st
   );
 }
 
+// cache-hit step: stagehand_call 없이 action_plan_cache(plan_ref)+run_steps(cache_mode='hit', action_plan_cache_id) 시드.
+async function seedHitStep(
+  pool: Pool, tenant: string, run: string, sver: string, stepId: string, nodeId: string,
+  cacheId: string, planRef: unknown, status: string,
+): Promise<void> {
+  await withTenantTx(pool, tenant, async (c) => {
+    await c.query(
+      `INSERT INTO action_plan_cache (id, tenant_id, scenario_version_id, step_id, url_pattern, dom_structural_hash,
+          model, prompt_template_version, browser_identity_version, plan_ref, status)
+       VALUES ($1::uuid,$2::uuid,$3::uuid,$4,'u-'||$4,'h-'||$4,'codex','v1',1,$5,$6)`,
+      [cacheId, tenant, sver, stepId, JSON.stringify(planRef), status],
+    );
+    await c.query(
+      `INSERT INTO run_steps (id, run_id, tenant_id, step_id, node_id, attempt, action, status, cache_mode, action_plan_cache_id, created_at)
+       VALUES (gen_random_uuid(), $1,$2,$3,$4,0,'act','success','hit',$5::uuid,'2026-06-15T00:00:06Z')`,
+      [run, tenant, stepId, nodeId, cacheId],
+    );
+  });
+}
+
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
   try {
@@ -101,6 +121,10 @@ async function main(): Promise<void> {
     // n5: act success + error stagehand → 제외(stream_status != done)
     await seedStep(pool, TENANT_A, RUN_A, "s5", "n5", "act", "success");
     await seedStagehand(pool, TENANT_A, RUN_A, "s5", { operation: "click", selector: "#err" }, "error", "2026-06-15T00:00:05Z");
+    // n6: cache-hit step(stagehand 없음) → active 한 action_plan_cache.plan_ref 에서 복구(PR-2).
+    await seedHitStep(pool, TENANT_A, RUN_A, SVER_A, "s6", "n6", "50000000-0000-4000-8000-000000000061", { operation: "click", selector: "#cached" }, "active");
+    // n7: cache-hit step 인데 캐시 entry 가 stale(드리프트) → 복구 제외(active-only — 알려진-나쁜 셀렉터 베이킹 금지).
+    await seedHitStep(pool, TENANT_A, RUN_A, SVER_A, "s7", "n7", "50000000-0000-4000-8000-000000000071", { operation: "click", selector: "#stale" }, "stale");
 
     // cross-tenant: tenant B act success + done → A 조회 시 비가시
     await seedRun(pool, TENANT_B, SCEN_B, SVER_B, RUN_B);
@@ -108,12 +132,14 @@ async function main(): Promise<void> {
     await seedStagehand(pool, TENANT_B, RUN_B, "sb", { operation: "click", selector: "#b" }, "done", "2026-06-15T00:00:01Z");
 
     const plans = await withTenantTx(pool, TENANT_A, (c) => loadRunActionPlans(c, RUN_A));
-    check("loads only act+success+done act-plans", Object.keys(plans).sort().join(",") === "n1,n2", JSON.stringify(plans));
+    check("loads act+success plans from stagehand(miss) and active cache(hit)", Object.keys(plans).sort().join(",") === "n1,n2,n6", JSON.stringify(plans));
     check("n1 click selector", plans.n1?.operation === "click" && plans.n1.selector === "#submit", JSON.stringify(plans.n1));
     check("n2 fill selector", plans.n2?.operation === "fill" && plans.n2.selector === "#name", JSON.stringify(plans.n2));
     check("observe(n3) excluded", plans.n3 === undefined);
     check("failed act(n4) excluded", plans.n4 === undefined);
     check("non-done stagehand(n5) excluded", plans.n5 === undefined);
+    check("cache-hit(n6) recovered from active action_plan_cache.plan_ref", plans.n6?.operation === "click" && plans.n6.selector === "#cached", JSON.stringify(plans.n6));
+    check("cache-hit with stale cache entry(n7) excluded (active-only)", plans.n7 === undefined, JSON.stringify(plans.n7));
 
     const crossA = await withTenantTx(pool, TENANT_A, (c) => loadRunActionPlans(c, RUN_B));
     check("cross-tenant run → empty (RLS)", Object.keys(crossA).length === 0, JSON.stringify(crossA));
