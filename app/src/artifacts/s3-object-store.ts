@@ -19,7 +19,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 
 import type { ObjectRef, PlainSecret } from "../../../ts/core-types";
-import type { ObjectStore } from "../gateway/pg-gateway-artifact-sink";
+import type { ObjectInventoryEntry, ObjectStore } from "../gateway/pg-gateway-artifact-sink";
 
 /** 주입 가능한 최소 HTTP 표면(테스트 mock 경계). global `fetch` 의 부분집합. */
 export type S3HttpTransport = (
@@ -201,6 +201,34 @@ export class S3ObjectStore implements ObjectStore {
     throw new S3ObjectStoreError("delete", `s3 delete returned HTTP ${res.status}`, key, res.status);
   }
 
+  /**
+   * orphan sweeper 용 인벤토리: ListObjectsV2 로 버킷의 모든 object 를 ObjectRef + LastModified(ms) 로 열거.
+   * 페이지네이션(IsTruncated/NextContinuationToken) 전부 소진. 5xx/네트워크는 자격 누설 없이 throw.
+   */
+  async list(): Promise<readonly ObjectInventoryEntry[]> {
+    const entries: ObjectInventoryEntry[] = [];
+    let continuationToken: string | undefined;
+    do {
+      const { url, headers } = this.signListRequest(continuationToken);
+      let res: S3HttpTransportResponse;
+      try {
+        res = await this.transport(url, { method: "GET", headers, body: undefined });
+      } catch {
+        throw new S3ObjectStoreError("get", "s3 list failed (network)");
+      }
+      if (!res.ok) {
+        throw new S3ObjectStoreError("get", `s3 list returned HTTP ${res.status}`, undefined, res.status);
+      }
+      const xml = new TextDecoder().decode(await res.bytes());
+      const page = parseListObjectsV2(xml);
+      for (const obj of page.objects) {
+        entries.push({ ref: this.toObjectRef(obj.key), lastModifiedMs: obj.lastModifiedMs });
+      }
+      continuationToken = page.nextContinuationToken;
+    } while (continuationToken !== undefined);
+    return entries;
+  }
+
   /** key → ObjectRef(s3://bucket/key) — 내부 locator. */
   private toObjectRef(key: string): ObjectRef {
     return `s3://${this.bucket}/${key}` as ObjectRef;
@@ -302,6 +330,46 @@ export class S3ObjectStore implements ObjectStore {
     return hmac(kService, "aws4_request");
   }
 
+  /**
+   * ListObjectsV2 SigV4 서명. canonical query(list-type=2[, continuation-token]) 는 키 정렬·AWS 인코딩하고,
+   * 보낸 URL 의 query 와 정확히 일치시킨다(서명 일치). canonicalUri 는 버킷 루트(resolveTarget("")).
+   */
+  private signListRequest(continuationToken: string | undefined): { url: string; headers: Record<string, string> } {
+    const now = this.clock();
+    const amzDate = toAmzDate(now);
+    const dateStamp = amzDate.slice(0, 8);
+    const { host, canonicalUri, url: baseUrl } = this.resolveTarget("");
+    const payloadHash = EMPTY_PAYLOAD_SHA256;
+
+    const params: Array<[string, string]> = [["list-type", "2"]];
+    if (continuationToken !== undefined) params.push(["continuation-token", continuationToken]);
+    params.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const canonicalQuery = params.map(([k, v]) => `${awsUriEncode(k)}=${awsUriEncode(v)}`).join("&");
+
+    const canonicalHeaders =
+      `host:${host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
+    const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+    const canonicalRequest = ["GET", canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join("\n");
+
+    const scope = `${dateStamp}/${this.region}/${this.service}/aws4_request`;
+    const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      amzDate,
+      scope,
+      sha256hex(new TextEncoder().encode(canonicalRequest)),
+    ].join("\n");
+    const signingKey = this.deriveSigningKey(dateStamp);
+    const signature = hmacHex(signingKey, stringToSign);
+    const authorization =
+      `AWS4-HMAC-SHA256 Credential=${this.accessKeyId}/${scope}, ` +
+      `SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    return {
+      url: `${baseUrl}?${canonicalQuery}`,
+      headers: { host, "x-amz-date": amzDate, "x-amz-content-sha256": payloadHash, authorization },
+    };
+  }
+
   /** path-style vs virtual-hosted-style 주소 + canonical URI(키 세그먼트 인코딩) 산출. */
   private resolveTarget(key: string): { host: string; canonicalUri: string; url: string } {
     const encodedKey = encodeS3Key(key);
@@ -333,6 +401,57 @@ function sha256hex(data: Uint8Array): string {
 /** Date → AWS basic ISO8601 (YYYYMMDDTHHMMSSZ). */
 function toAmzDate(date: Date): string {
   return date.toISOString().replace(/[:-]/g, "").replace(/\.\d{3}/, "");
+}
+
+/** AWS SigV4 query/value 인코딩(RFC 3986 + !'()* 추가). "/" 도 인코딩(query 값 — 키 path 아님). */
+function awsUriEncode(value: string): string {
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+interface ListObjectsV2Page {
+  readonly objects: ReadonlyArray<{ key: string; lastModifiedMs: number }>;
+  readonly nextContinuationToken: string | undefined;
+}
+
+/**
+ * ListObjectsV2 XML 파서(의존 없음). S3 응답은 well-formed·예측 가능한 형식이라 <Contents> 블록별로
+ * <Key>/<LastModified> 를 추출한다. IsTruncated=true 면 <NextContinuationToken> 으로 다음 페이지를 잇는다.
+ */
+function parseListObjectsV2(xml: string): ListObjectsV2Page {
+  const objects: Array<{ key: string; lastModifiedMs: number }> = [];
+  const contentsRe = /<Contents>([\s\S]*?)<\/Contents>/g;
+  let m: RegExpExecArray | null;
+  while ((m = contentsRe.exec(xml)) !== null) {
+    const block = m[1] ?? "";
+    const key = xmlTag(block, "Key");
+    const lastModified = xmlTag(block, "LastModified");
+    if (key === undefined) continue;
+    const lastModifiedMs = lastModified !== undefined ? Date.parse(lastModified) : Number.NaN;
+    objects.push({ key: decodeXmlEntities(key), lastModifiedMs: Number.isFinite(lastModifiedMs) ? lastModifiedMs : 0 });
+  }
+  const truncated = (xmlTag(xml, "IsTruncated") ?? "false").trim() === "true";
+  const token = xmlTag(xml, "NextContinuationToken");
+  return {
+    objects,
+    nextContinuationToken: truncated && token !== undefined ? decodeXmlEntities(token) : undefined,
+  };
+}
+
+function xmlTag(source: string, tag: string): string | undefined {
+  const m = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(source);
+  return m === null ? undefined : (m[1] ?? "");
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 /**

@@ -67,7 +67,13 @@ export function buildIntegritySweeperJobs(
   }));
 }
 
-// 일배치 묶음(retention + integrity). 동일 cadence·idempotent.
+// impl-contracts §B artifact_orphan_sweeper(일배치): 참조 없는 object 회수. **전역**(전 테넌트) 단일 job —
+// object-store 는 테넌트 분할이 아니므로 per-tenant fanout 이 아니라 1회 전역 스캔(BYPASSRLS)으로 처리한다.
+export function buildOrphanSweeperJob(correlationId: () => string = randomUUID): RuntimeWorkerJob {
+  return { kind: "artifact_orphan", correlationId: correlationId() as CorrelationId };
+}
+
+// 일배치 묶음(retention + integrity per-tenant + orphan 전역 1건). 동일 cadence·idempotent.
 export function buildDailySweeperJobs(
   tenantIds: readonly string[],
   correlationId: () => string = randomUUID,
@@ -75,6 +81,7 @@ export function buildDailySweeperJobs(
   return [
     ...buildRetentionSweeperJobs(tenantIds, correlationId),
     ...buildIntegritySweeperJobs(tenantIds, correlationId),
+    buildOrphanSweeperJob(correlationId),
   ];
 }
 

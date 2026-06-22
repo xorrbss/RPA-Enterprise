@@ -118,6 +118,12 @@ const INTEGRITY_OK_BYTES = new TextEncoder().encode("integrity-ok-bytes");
 const INTEGRITY_TAMPERED_ACTUAL = new TextEncoder().encode("integrity-tampered-actual-bytes");
 const INTEGRITY_PENDING_ACTUAL = new TextEncoder().encode("integrity-pending-actual-bytes");
 const sha256hex = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+// AUD-10 orphan sweeper: 전용 테넌트. 참조 행 1개 + 인벤토리 3건(referenced/dangling/recent).
+const TENANT_ORPHAN = "00000000-0000-0000-0000-0000000000c4";
+const ARTIFACT_ORPHAN_REFERENCED = "60000000-0000-0000-0000-000000000041";
+const ORPHAN_REF_REFERENCED = "object://runtime-worker/orphan-referenced";
+const ORPHAN_REF_DANGLING = "object://runtime-worker/orphan-dangling";
+const ORPHAN_REF_RECENT = "object://runtime-worker/orphan-recent";
 const ACTIVE_REDACTION_CLAIM = "70000000-0000-0000-0000-000000000001";
 const GENERATION_TARGET = "80000000-0000-0000-0000-000000000001";
 const GENERATION_UNRELATED = "80000000-0000-0000-0000-000000000002";
@@ -280,6 +286,40 @@ const fakeIntegrityObjectStore = {
     throw new Error(`unexpected integrity fixture ${ref}`);
   },
 };
+
+// AUD-10 orphan sweeper fake: 인벤토리 3건(referenced=artifacts 행 존재, dangling=행 없음, recent=grace 보호).
+// lastModifiedMs 는 call 시점 기준(referenced/dangling=10분 전 → 후보, recent=지금 → grace 제외).
+const orphanDeletes: string[] = [];
+const fakeOrphanInventoryStore = {
+  list: async (): Promise<readonly { ref: ObjectRef; lastModifiedMs: number }[]> => {
+    const nowMs = Date.now();
+    return [
+      { ref: ORPHAN_REF_REFERENCED as ObjectRef, lastModifiedMs: nowMs - 600_000 },
+      { ref: ORPHAN_REF_DANGLING as ObjectRef, lastModifiedMs: nowMs - 600_000 },
+      { ref: ORPHAN_REF_RECENT as ObjectRef, lastModifiedMs: nowMs },
+    ];
+  },
+  delete: async (objectRef: ObjectRef): Promise<void> => {
+    orphanDeletes.push(String(objectRef));
+  },
+};
+
+async function seedOrphanReferencedArtifact(pool: ReturnType<typeof createPool>): Promise<void> {
+  // referenced ref 를 가진 artifacts 행 1개(전 테넌트 전역 조회로 발견 → orphan 아님). run/generation 없이도 유효.
+  await withTenantTx(pool, TENANT_ORPHAN, async (c) => {
+    await c.query(
+      `INSERT INTO artifacts (
+         id, tenant_id, run_id, generation_id, type, redaction_status, redaction_attempts, object_ref,
+         retention_until, legal_hold, quarantine, deleted_at, deleted_reason, deleted_by_job,
+         lifecycle_claim_id, lifecycle_claim_kind, lifecycle_claim_worker_id,
+         lifecycle_claim_correlation_id, lifecycle_claimed_at, lifecycle_claim_expires_at
+       )
+       VALUES ($1,$2,NULL,NULL,'receipt','not_required',0,$3,
+          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`,
+      [ARTIFACT_ORPHAN_REFERENCED, TENANT_ORPHAN, ORPHAN_REF_REFERENCED],
+    );
+  });
+}
 
 async function seedIntegrityArtifacts(pool: ReturnType<typeof createPool>): Promise<void> {
   await withTenantTx(pool, TENANT_INTEGRITY, async (c) => {
@@ -1288,6 +1328,8 @@ async function main(): Promise<void> {
         artifactRetentionStore: fakeArtifactRetentionStore,
         artifactSupersededObjectStore: { delete: async (ref) => { supersededDeletes.push(String(ref)); } },
         artifactIntegrityObjectStore: fakeIntegrityObjectStore,
+        artifactOrphanInventoryStore: fakeOrphanInventoryStore,
+        artifactOrphanGraceMs: 60_000,
         allowTestArtifactLifecyclePorts: true,
       });
       const activeClaim = await bypassWorker.handle({
@@ -1690,6 +1732,26 @@ async function main(): Promise<void> {
           !integrityGetBytesCalls.includes("object://runtime-worker/integrity-pending") &&
           !integrityGetBytesCalls.includes("object://runtime-worker/integrity-already-q"),
         JSON.stringify({ pendingAfter, quarantinedAfter, calls: integrityGetBytesCalls }),
+      );
+
+      // AUD-10 artifact_orphan_sweeper: 전역 BYPASSRLS 스캔 — artifacts.object_ref 가 참조하지 않는 object 만 삭제.
+      // referenced(행 존재)=보존, dangling(행 없음)=삭제, recent(grace 내)=후보 제외(삭제 안 함).
+      await seedOrphanReferencedArtifact(lifecycleBypassPool);
+      orphanDeletes.length = 0;
+      const orphan = await bypassWorker.handle({
+        kind: "artifact_orphan",
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_orphan job completes", orphan.kind === "completed", JSON.stringify(orphan));
+      check(
+        "artifact_orphan deletes only the unreferenced (dangling) object",
+        orphanDeletes.length === 1 && orphanDeletes[0] === ORPHAN_REF_DANGLING,
+        JSON.stringify(orphanDeletes),
+      );
+      check(
+        "artifact_orphan spares referenced object (global object_ref index) and grace-recent object",
+        !orphanDeletes.includes(ORPHAN_REF_REFERENCED) && !orphanDeletes.includes(ORPHAN_REF_RECENT),
+        JSON.stringify(orphanDeletes),
       );
     } finally {
       await lifecycleBypassPool.end();

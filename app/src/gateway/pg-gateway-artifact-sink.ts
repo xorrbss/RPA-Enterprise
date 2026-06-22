@@ -10,7 +10,7 @@
  * metadata만 만들고 redaction/retention job을 대체하지 않는다.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -22,6 +22,12 @@ import { withTenantTx } from "../db/pool";
 import type { GatewayArtifactSink } from "./llm-gateway";
 
 type ArtifactMeta = Pick<LLMRequest["metadata"], "tenantId" | "runId" | "stepId" | "attempt">;
+
+/** object-store 인벤토리 1건(orphan sweeper 용): ObjectRef + 최종수정 시각(ms). lastModified 는 grace 판정에 쓴다. */
+export interface ObjectInventoryEntry {
+  readonly ref: ObjectRef;
+  readonly lastModifiedMs: number;
+}
 
 /** 바이트 저장소 경계 — object_ref 반환. 프로덕션은 S3/오브젝트 스토리지, 본 구현은 파일시스템. */
 export interface ObjectStore {
@@ -82,6 +88,18 @@ export class FsObjectStore implements ObjectStore {
 
   async delete(objectRef: ObjectRef): Promise<void> {
     rmSync(this.resolveWithinDir(objectRef), { force: true });
+  }
+
+  /** orphan sweeper 용 인벤토리: 디렉터리의 모든 object 를 ObjectRef + mtime 으로 열거. */
+  async list(): Promise<readonly ObjectInventoryEntry[]> {
+    const entries: ObjectInventoryEntry[] = [];
+    for (const name of readdirSync(this.dir)) {
+      const full = join(this.dir, name);
+      const stat = statSync(full);
+      if (!stat.isFile()) continue;
+      entries.push({ ref: pathToFileURL(full).href as ObjectRef, lastModifiedMs: stat.mtimeMs });
+    }
+    return entries;
   }
 
   /** object_ref(file://) → 구성된 디렉터리 내부 경로로 해소(경로 이탈 차단). */

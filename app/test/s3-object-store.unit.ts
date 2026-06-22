@@ -265,6 +265,53 @@ async function main(): Promise<void> {
     check("빈 secret 거부", configRejects({ secretAccessKey: "" as PlainSecret }));
   }
 
+  // === (9) list (ListObjectsV2) — orphan sweeper 인벤토리: 페이지네이션 + ref/mtime 파싱 + 서명/쿼리 형태. ===
+  {
+    const page1 =
+      '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>' +
+      "<IsTruncated>true</IsTruncated>" +
+      "<Contents><Key>aaa.bin</Key><LastModified>2026-06-20T10:00:00.000Z</LastModified><Size>10</Size></Contents>" +
+      "<NextContinuationToken>TOK/EN+abc</NextContinuationToken>" +
+      "</ListBucketResult>";
+    const page2 =
+      '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>' +
+      "<IsTruncated>false</IsTruncated>" +
+      "<Contents><Key>bbb.bin</Key><LastModified>2026-06-21T10:00:00.000Z</LastModified><Size>20</Size></Contents>" +
+      "</ListBucketResult>";
+    const calls: Call[] = [];
+    const store = makeStore(
+      recordingTransport(calls, (c) =>
+        okBytes(200, new TextEncoder().encode(c.url.includes("continuation-token=") ? page2 : page1)),
+      ),
+      true,
+    );
+    const entries = await store.list();
+    check("list paginates to all objects", entries.length === 2, JSON.stringify(entries));
+    check(
+      "list maps key → s3 ObjectRef",
+      entries[0]?.ref === "s3://examplebucket/aaa.bin" && entries[1]?.ref === "s3://examplebucket/bbb.bin",
+      JSON.stringify(entries.map((e) => e.ref)),
+    );
+    check(
+      "list parses LastModified → ms",
+      entries[0]?.lastModifiedMs === Date.parse("2026-06-20T10:00:00.000Z") &&
+        entries[1]?.lastModifiedMs === Date.parse("2026-06-21T10:00:00.000Z"),
+      JSON.stringify(entries.map((e) => e.lastModifiedMs)),
+    );
+    check(
+      "list page1 is signed GET on bucket root with list-type=2 (no token)",
+      calls[0]?.method === "GET" &&
+        calls[0]?.url === "https://s3.us-east-1.amazonaws.com/examplebucket/?list-type=2" &&
+        parseAuthSignature(calls[0]?.headers.authorization) !== undefined,
+      calls[0]?.url,
+    );
+    check(
+      "list page2 carries AWS-encoded continuation-token (sorted before list-type)",
+      calls[1]?.url === "https://s3.us-east-1.amazonaws.com/examplebucket/?continuation-token=TOK%2FEN%2Babc&list-type=2",
+      calls[1]?.url,
+    );
+  }
+
   console.log(`\ns3-object-store.unit: ${failures === 0 ? "ALL PASS" : `${failures} FAILED`}`);
   process.exitCode = failures === 0 ? 0 : 1;
 }

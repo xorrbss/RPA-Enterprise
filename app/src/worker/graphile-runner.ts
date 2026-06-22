@@ -26,7 +26,8 @@ export function isArtifactLifecycleRuntimeJob(job: Pick<RuntimeWorkerJob, "kind"
   return (
     job.kind === "artifact_redaction" ||
     job.kind === "artifact_retention" ||
-    job.kind === "artifact_integrity"
+    job.kind === "artifact_integrity" ||
+    job.kind === "artifact_orphan"
   );
 }
 
