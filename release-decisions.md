@@ -809,7 +809,20 @@ AUD-9. Redacted-at-rest violation: original plaintext object not deleted after r
    AUD-10 orphan sweeper if that is built first. Owner = project owner. Impact: at-rest plaintext retention
    (confidentiality regression), not API exposure.
 
-AUD-10. Artifact lifecycle hardening sweepers unimplemented: integrity-checker + orphan-sweeper (artifact audit P1/P2)
+AUD-10. Artifact lifecycle hardening sweepers unimplemented: integrity-checker + orphan-sweeper (artifact audit P1/P2) — ⚠️ PARTIAL (integrity ✅ RESOLVED PR #276; orphan ⏸ DEFERRED)
+   Resolution (integrity): `artifact_integrity_checker` built — `ArtifactIntegrityProcessor` daily-batch tenant scan
+   (redacted/not_required, non-deleted/non-quarantined, sha256 present) → `getBytes`(raw) → sha256 compare →
+   `quarantine=true` on hash_mismatch or object_missing (read-only + idempotent → no claim lease). `artifact_integrity`
+   added to `RuntimeWorkerJob.kind`; worker switch + graphile lifecycle routing (BYPASSRLS) + maintenance-scheduler
+   daily tick wired; main-worker injects the object store.
+   Deferred (orphan): `artifact_orphan_sweeper` stays unbuilt — verify-before-build found the premise collapsed:
+   (1) its trigger ("run delete/cancel → unreferenced object") is absent (no run hard-delete path; `artifacts.run_id`
+   has no ON DELETE CASCADE; cancellation retains rows → retention sweeper's domain); (2) `ObjectStore` has no
+   enumeration and there is no superseded-ref tracking, so unreferenced objects are not findable DB-driven (every
+   object_ref has a row; AUD-9 deletes redaction-superseded originals immediately); (3) a per-tenant store-listing
+   diff is cross-tenant-unsafe under RLS (could delete other tenants' objects). Building it needs new infra
+   (`ObjectStore.list` + S3/Fs impls + global BYPASSRLS diff, or an orphan-tracking table). Owner = project owner;
+   apply when a run hard-delete path or enumeration/tracking is introduced.
    Finding: `impl-contracts-bundle.md §B` specifies daily `artifact_integrity_checker` (sha256↔object compare →
    quarantine on mismatch) and `artifact_orphan_sweeper` (reclaim unreferenced objects), but neither exists in
    `app/src` (no job kind, no processor, no schedule). Effect: at-rest tampering/corruption of a
@@ -819,7 +832,14 @@ AUD-10. Artifact lifecycle hardening sweepers unimplemented: integrity-checker +
    the processors, and wire daily ticks into the maintenance scheduler (sibling to retention). Owner = project
    owner. Impact: missing at-rest integrity/GC hygiene; no active data corruption.
 
-AUD-11. legal_hold TOCTOU during retention claim window (artifact audit P2 — latent)
+AUD-11. legal_hold TOCTOU during retention claim window (artifact audit P2 — latent) — ✅ RESOLVED (PR #275)
+   Resolution: re-check + object delete + tombstone are now folded into a single tx that holds `FOR UPDATE` on the
+   claimed row across the object delete (`lockClaimedDeletable` → `deleteObject` → `finalizeRetentionDecision`),
+   eliminating the claim→finalize window: a concurrent `legal_hold=true` write blocks on the row lock and serializes
+   after the delete commit, so the "bytes deleted + deleted_at NULL" inconsistency can no longer occur. Ineligible
+   at re-check → delete skipped + claim released. Still **latent** (no in-product legal_hold write path); applied
+   now as a preventive guard per owner request. Integration test injects a concurrent legal_hold write during
+   deleteObject (statement_timeout breaks the lock standoff); negative control reproduces the pre-fix throw.
    Finding: the retention processor commits the claim (legal_hold=false), deletes the object out-of-tx, then a
    separate finalize tx re-checks legal_hold; if legal_hold flips to true within the ~5m claim window the object
    is already deleted but finalize CAS fails, leaving `deleted_at` NULL — a hold-protected artifact's bytes are
@@ -829,7 +849,13 @@ AUD-11. legal_hold TOCTOU during retention claim window (artifact audit P2 — l
    same tx as (or immediately before) the object delete, skip delete on mismatch (CAS-before-delete). Owner =
    project owner. Apply when a legal_hold write path is introduced.
 
-AUD-12. IREL spec'd-but-generator-unused corner gaps (IREL audit, 5 × P2/P3 — reachable only via hand-authored IR)
+AUD-12. IREL spec'd-but-generator-unused corner gaps (IREL audit, 5 × P2/P3 — reachable only via hand-authored IR) — ✅ RESOLVED (PR #274; 4/5 fixed, cursor_reached BLOCKED)
+   Resolution: (a)/(b)/(c)/(e) fixed in `codegen/static-validation.ts`+`irel-compile.ts`(+fixtures) and the
+   interpreter — vlm_fallback.when no longer IREL-compiled; date_* reject offset-less datetime (loud, deterministic);
+   V10 value_match.path root existence checked; on[].target=reservedHandlerCall rejected at static validation
+   (asymmetry removed). (d) `flags.cursor_reached` stays **BLOCKED**: the §2 registry assigns it source=interpreter
+   but no producer exists (collection-cursor pipeline unbuilt); a fabricated producer would violate 편법 금지, and
+   the current `IREL_RUNTIME_MISSING` is loud (not a silent false). Apply when the collection-cursor pipeline is built.
    Finding: 5 confirmed IREL/static-validation gaps, all in IR constructs that **no auto-generator
    (deterministic_mvp/llm_v1) emits** — reachable only via hand-authored IR-studio (`studio_mode:"ir"`)
    scenarios: (a) `verify.vlm_fallback.when` compiled as IREL though `verify.schema.json` declares it a
