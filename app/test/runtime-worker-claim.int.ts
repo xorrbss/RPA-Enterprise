@@ -1199,10 +1199,12 @@ async function main(): Promise<void> {
     });
     try {
       await seedActiveRedactionClaim(lifecycleBypassPool);
+      const supersededDeletes: string[] = []; // AUD-9: redaction 후 삭제된 원본 객체 ref 기록.
       const bypassWorker = new PgRuntimeWorker(lifecycleBypassPool, {
         workerId: WORKER,
         artifactRedactor: fakeArtifactRedactor,
         artifactRetentionStore: fakeArtifactRetentionStore,
+        artifactSupersededObjectStore: { delete: async (ref) => { supersededDeletes.push(String(ref)); } },
         allowTestArtifactLifecyclePorts: true,
       });
       const activeClaim = await bypassWorker.handle({
@@ -1241,6 +1243,16 @@ async function main(): Promise<void> {
           redactionCalls[0]?.policy.maxAttempts === 5 &&
           redactionCalls[0]?.portBinding.kind === "test_fake",
         JSON.stringify(redactionCalls[0]),
+      );
+      check(
+        "artifact_redaction AUD-9: redacted 후 원본 평문 객체 삭제(redacted-at-rest)",
+        supersededDeletes.includes("object://runtime-worker/redaction-pending"),
+        supersededDeletes.join(","),
+      );
+      check(
+        "artifact_redaction AUD-9: redacted 객체는 삭제하지 않음",
+        !supersededDeletes.includes("object://runtime-worker/redacted-safe"),
+        supersededDeletes.join(","),
       );
       check(
         "artifact_redaction skips quarantined/deleted/already redacted rows",

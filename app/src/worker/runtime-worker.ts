@@ -13,7 +13,7 @@ import { requireString } from "./runtime-worker-parse";
 import { handleWorkitemCheckout, handleWorkitemCheckoutSweeper } from "./runtime-worker-workitem-checkout";
 import { WorkerRunDrive } from "./runtime-worker-run-drive";
 import { WorkerRunResume } from "./runtime-worker-run-resume";
-import { ArtifactRedactionProcessor } from "./artifact-redaction-processor";
+import { ArtifactRedactionProcessor, type SupersededObjectStore } from "./artifact-redaction-processor";
 import { ArtifactRetentionProcessor } from "./artifact-retention-processor";
 import type {
   ArtifactRedactor,
@@ -87,6 +87,8 @@ export interface PgRuntimeWorkerOptions {
   readonly runAbortDrainer?: RunAbortDrainer;
   readonly artifactRedactor?: ArtifactRedactor;
   readonly artifactRetentionStore?: ArtifactRetentionStore;
+  /** AUD-9: redaction 후 대체된 원본 평문 객체 삭제용(redacted-at-rest). */
+  readonly artifactSupersededObjectStore?: SupersededObjectStore;
   readonly allowTestArtifactLifecyclePorts?: boolean;
   readonly defaultBrowserLeaseTtlMs?: number;
   readonly artifactRedactionMaxAttempts?: number;
