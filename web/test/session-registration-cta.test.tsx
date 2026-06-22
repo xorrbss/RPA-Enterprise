@@ -80,4 +80,28 @@ describe("로그인 세션 등록 안내/진입", () => {
     fireEvent.click(cta);
     await waitFor(() => expect(location.hash).toBe(`#security?site=${LOGIN_SITE.site_profile_id}`));
   });
+
+  test("실행 상세 — navigate 단계 실패 시 세션 재등록 힌트 + 보안으로 이동", async () => {
+    const RUN_ID = "11111111-aaaa-bbbb-cccc-000000000099";
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({ run_id: id, status: "failed_system", worker_id: "w1", attempts: 0, as_of: null, failure_reason: null }),
+        listRunSteps: async () => ({
+          items: [
+            {
+              step_id: "s1", node_id: "open", attempt: 0, action: "navigate", status: "failed_system",
+              cache_mode: "bypass", artifact_ids: [], stagehand_calls: [], started_at: null, ended_at: null,
+              duration_ms: 50018, exception: { code: "CONTROL_PLANE_INTERNAL_ERROR", class: "system" },
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = `#runTrace?run=${RUN_ID}`;
+    const banner = await screen.findByRole("status", { name: "세션 등록 안내" });
+    expect(within(banner).getByText(/세션이 만료됐을 수 있어요/)).toBeInTheDocument();
+    fireEvent.click(within(banner).getByRole("button", { name: /세션 등록하러 가기/ }));
+    await waitFor(() => expect(location.hash).toBe("#security"));
+  });
 });

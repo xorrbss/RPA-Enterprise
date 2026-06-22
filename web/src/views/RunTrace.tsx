@@ -164,6 +164,7 @@ function RunDetailPanel({
       ) : detail.data !== undefined ? (
         <>
         <ArrivalBanner status={detail.data.status} attempts={detail.data.attempts} reason={detail.data.failure_reason ?? null} />
+        <SessionHintBanner runId={runId} status={detail.data.status} />
         <GenerationRunContext runId={runId} generation={generation} />
         <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", margin: 0 }}>
           <dt className="subtle">상태</dt>
@@ -233,6 +234,34 @@ function ArrivalBanner({
       <span>실행이 종료되었습니다{attempts > 1 ? ` · 시도 ${attempts}회` : ""}.</span>
       {failed && reason !== null && <span>{errorCodeLabel(reason.code)}{reason.message !== "" && <span className="subtle"> · {reason.message}</span>}</span>}
       {failed && reason === null && <span className="subtle">자세한 원인은 아래 단계 트레이스를 확인하세요.</span>}
+    </div>
+  );
+}
+
+// 세션 재등록 유도 힌트 — 로그인 필요 사이트의 세션 만료로 보이는 실패에 한해 안내(단정 금지: '…만료됐을 수 있어요').
+// 신호: 터미널 실패 + '페이지 이동(navigate)' 단계 실패(= 보호된 페이지에 못 들어간 증상). URL/사이트는 RunDetail에
+// 없으므로(웹 한계) 조건부 문구로 안내하고 보안·개인정보로 유도한다(사이트별 딥링크는 backend precheck 후속에서).
+// run-steps 쿼리키는 StepTrace와 동일 → react-query가 캐시를 공유(중복 페치 없음).
+function SessionHintBanner({ runId, status }: { runId: string; status: string }): JSX.Element | null {
+  const api = useApiClient();
+  const failed = status === "failed_system" || status === "failed_business";
+  const q = useQuery({
+    queryKey: ["run-steps", runId],
+    queryFn: () => api.listRunSteps(runId, { limit: 100 }),
+    enabled: failed,
+  });
+  if (!failed) return null;
+  const navFailed = (q.data?.items ?? []).some(
+    (s) => s.action === "navigate" && (s.status === "failed_system" || s.exception !== null),
+  );
+  if (!navFailed) return null;
+  return (
+    <div className="badge amber" role="status" aria-label="세션 등록 안내" style={{ display: "block", margin: "8px 0 0", whiteSpace: "normal" }}>
+      <strong>페이지 열기 단계에서 멈춰 실패했습니다.</strong>{" "}
+      로그인이 필요한 사이트라면 등록된 세션이 만료됐을 수 있어요 — 세션을 다시 등록한 뒤 다시 실행해 보세요.{" "}
+      <button className="linklike" type="button" onClick={() => navigate("security")}>
+        세션 등록하러 가기 <span aria-hidden="true">→</span>
+      </button>
     </div>
   );
 }
