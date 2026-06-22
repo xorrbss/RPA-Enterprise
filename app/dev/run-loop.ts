@@ -15,7 +15,8 @@ import { join } from "node:path";
 
 import type { Pool } from "pg";
 
-import type { ArtifactRef, ExecutorPlugin, SecretRef } from "../../ts/core-types";
+import type { ArtifactRef, ExecutorPlugin } from "../../ts/core-types";
+import { deriveAssetRefs } from "../src/runtime/asset-refs";
 import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../ts/security-middleware-contract";
 import type { RunState } from "../../ts/state-machine-types";
 import { withTenantTx } from "../src/db/pool";
@@ -122,17 +123,6 @@ function buildDevSecretBoundary(): VaultSecretStoreBoundary {
  */
 function buildDevSessionStore(pool: Pool): PgBrowserSessionStore {
   return new PgBrowserSessionStore({ pool, encryptor: new DevPlaintextSessionEncryptor() }, { allowDevPlaintext: true });
-}
-
-/** 시나리오 IR(meta) assets[] → assetRefs(에셋 키 → SecretRef). POC identity 매핑(키=ref). */
-function deriveAssetRefs(ir: unknown): Record<string, SecretRef> {
-  const doc = typeof ir === "string" ? (JSON.parse(ir) as unknown) : ir;
-  const assets = (doc as { assets?: unknown } | null)?.assets;
-  const refs: Record<string, SecretRef> = {};
-  if (Array.isArray(assets)) {
-    for (const k of assets) if (typeof k === "string" && k.length > 0) refs[k] = k as SecretRef;
-  }
-  return refs;
 }
 
 export interface RunLoop {

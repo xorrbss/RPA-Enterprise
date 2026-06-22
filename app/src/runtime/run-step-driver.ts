@@ -37,6 +37,7 @@ import type { CdpSessionProvider } from "../executor/cdp-session";
 import { clearCookies, getAllCookies, setCookies } from "../executor/raw-cdp";
 import { applyRunTransition } from "./run-transition";
 import { sessionKey, type BrowserSessionStore } from "./browser-session-store";
+import { deriveAssetRefs } from "./asset-refs";
 import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "./executor-ports";
 import { StepRecordingExecutor } from "./run-step-driver-recording";
 import {
@@ -264,7 +265,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     networkPolicyId: run.networkPolicyId,
     ...(run.networkAllowedDomains !== undefined ? { networkAllowedDomains: run.networkAllowedDomains } : {}),
     leaseId: run.leaseId,
-    assetRefs: run.assetRefs ?? {},
+    assetRefs: run.assetRefs ?? deriveAssetRefs(irDoc), // AUD-1: prod 는 IR meta.assets 에서 도출(dev 는 run.assetRefs 주입)
     abortSignal: abortController.signal,
     pageState: seedPageState(),
   };
