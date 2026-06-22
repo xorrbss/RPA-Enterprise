@@ -152,6 +152,7 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
                   instruction:
                     '로그인 폼의 아이디(username) 입력 필드를 채우는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"fill","selector":"<아이디 입력칸 CSS 셀렉터>"}',
                   vars: ["login.username"],
+                  args: { allow_llm_secret_selector: true }, // AUD-4: 미지-사이트 데모 — LLM 셀렉터 명시 opt-in
                 },
               ],
               next: "fill_pw",
@@ -163,6 +164,7 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
                   instruction:
                     '로그인 폼의 비밀번호(password) 입력 필드를 채우는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"fill","selector":"<비밀번호 입력칸 CSS 셀렉터>"}',
                   vars: ["login.password"],
+                  args: { allow_llm_secret_selector: true }, // AUD-4: 미지-사이트 데모 — LLM 셀렉터 명시 opt-in
                   sensitive: true,
                 },
               ],
@@ -237,6 +239,7 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
                   instruction:
                     '로그인 폼의 아이디(username) 입력 필드를 채우는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"fill","selector":"<아이디 입력칸 CSS 셀렉터>"}',
                   vars: ["login.username"],
+                  args: { allow_llm_secret_selector: true }, // AUD-4: 미지-사이트 데모 — LLM 셀렉터 명시 opt-in
                 },
               ],
               next: "fill_pw",
@@ -248,6 +251,7 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
                   instruction:
                     '로그인 폼의 비밀번호(password) 입력 필드를 채우는 동작. 반드시 JSON 한 줄로만 응답: {"operation":"fill","selector":"<비밀번호 입력칸 CSS 셀렉터>"}',
                   vars: ["login.password"],
+                  args: { allow_llm_secret_selector: true }, // AUD-4: 미지-사이트 데모 — LLM 셀렉터 명시 opt-in
                   sensitive: true,
                 },
               ],
