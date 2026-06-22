@@ -4,7 +4,7 @@
  * self-login 시나리오(login_required 분기 보유)는 분기가 매칭돼 분류되지 않는다(오탐 0). login_required 가 아니면
  * 기존 NoBranchMatchedError 를 유지(과분류 금지). 외부 의존 없음(fake executor+resolver). 실행: tsx test/interpreter-session-required.unit.ts.
  */
-import type { ExecutorPlugin, PageState, PageStateResolver, RunContext, StepResult, StepStatus, VerifyResult } from "../../ts/core-types";
+import type { ExecutorPlugin, PageState, PageStateResolver, RedactedString, RunContext, StepResult, StepStatus, VerifyResult } from "../../ts/core-types";
 import { parseIrelExpression, type IRELNode } from "../../codegen/irel-compile";
 import type { CompiledOnBranch } from "../src/runtime/flow-control";
 import { NoBranchMatchedError, SessionRegistrationRequiredError } from "../src/runtime/flow-control";
@@ -102,6 +102,18 @@ async function main(): Promise<void> {
     e3 instanceof NoBranchMatchedError && !(e3 instanceof SessionRegistrationRequiredError),
     String(e3),
   );
+
+  // 4) in-band 실행기 step 실패(exception 보유) → throw 아니라 runScenario 가 outcome.failureReason 로 사유 코드 운반.
+  //    (driver 가 이 사유를 runs.failure_reason 으로 기록 — navigate wedge 등 흔한 실패의 사유 표면화 경로.)
+  const failExec: ExecutorPlugin = {
+    capabilities: () => ({ dom: false, vision: false, utility: true }),
+    execute: async (): Promise<StepResult> => ({ ...stepResult("failed_system"), exception: { code: "CDP_DISCONNECTED", class: "system", message: "disconnected" as RedactedString } }),
+    verify: async (): Promise<VerifyResult> => ({ passed: true, criteria: [] }) as unknown as VerifyResult,
+  };
+  const sFail: CompiledScenario = { start: "go", nodes: { go: actTerm("never") } };
+  const oFail = await runScenario(sFail, ctx(), { executor: failExec, resolver: resolver({}), params: {} });
+  check("in-band 실행기 실패 → terminal fail_system", oFail.terminal === "fail_system", oFail.terminal);
+  check("in-band 실패 → outcome.failureReason.code = step exception", oFail.failureReason?.code === "CDP_DISCONNECTED", JSON.stringify(oFail.failureReason));
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
