@@ -392,6 +392,25 @@ function main(): void {
     check("act: fill_selector + click_selector 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
+  // 22e) act: select_selector + select_value → selectSelector+selectValue 스레드(결정형 select).
+  {
+    const s = compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "연도 선택", args: { select_selector: "select#year", select_value: "2026" } }], terminal: "success" } } }, {});
+    const act = s.nodes.a?.what[0] as { type: string; selectSelector?: string; selectValue?: string } | undefined;
+    check("act: select_selector + select_value → 스레드", act?.type === "act" && act.selectSelector === "select#year" && act.selectValue === "2026", JSON.stringify(act));
+  }
+
+  // 22f) act: select_selector 만(select_value 없음) → IR_SCHEMA_INVALID(둘 다 필요).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "x", args: { select_selector: "select#year" } }], terminal: "success" } } }, {}));
+    check("act: select_selector 만 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
+  // 22g) act: select + click_selector 동시 → IR_SCHEMA_INVALID(select vs click 모드 그룹 상호배타).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "x", args: { select_selector: "select#y", select_value: "v", click_selector: "#b" } }], terminal: "success" } } }, {}));
+    check("act: select + click_selector 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+
   // 23) observe: instruction 없는 observe는 on[] PageState resolver 전용으로 drop한다.
   {
     const s = compiledScenarioFrom({ start: "o", nodes: { o: { what: [{ action: "observe" }], terminal: "success" } } }, {});

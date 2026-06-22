@@ -80,7 +80,10 @@ export type DomAction =
   // fillSelector: 결정형 fill 타깃(IR act.args.fill_selector). 선언되면 실행기가 LLM 을 **전혀** 경유하지 않고 그 셀렉터에
   //   값(secretRef/valueRef 출처)을 채운다 — fill 셀렉터 환각 차단(credential/데이터 입력의 최대 위험: 비밀번호가 엉뚱한
   //   필드로). click 의 clickSelector 와 동형(셀렉터 결정형)이되 값 출처(secretRef XOR valueRef)가 필수다(ir-translate 강제).
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string; clickText?: string; assertAbsent?: string; fillSelector?: string }
+  // selectSelector+selectValue: 결정형 select(IR act.args.select_selector + select_value). 선언되면 LLM 을 **전혀** 경유하지
+  //   않고 그 셀렉터의 옵션을 그 값으로 고른다(드롭다운 셀렉터·옵션 환각 차단). select 옵션은 보통 고정 선택(데모한 값)이라
+  //   selector·value 둘 다 IR 에 베이킹한다(fill 의 동적 값과 달리 값 출처 메커니즘 불필요). 둘 다 필수(ir-translate 강제).
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string; clickText?: string; assertAbsent?: string; fillSelector?: string; selectSelector?: string; selectValue?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> }; rowAnchor?: ExtractRowAnchor };
 
@@ -229,6 +232,12 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       //   아래 secretRef/valueRef override 가 결정형 고정한다(값 출처는 ir-translate 가 필수로 강제). clickSelector 와
       //   동형 — 결정형 모드라 cache.put 하지 않는다(fromLlm=false).
       plan = { operation: "fill", selector: a.fillSelector };
+    } else if (a.selectSelector !== undefined) {
+      // 결정형 select(select_selector+select_value): LLM/캐시 미경유. 셀렉터·옵션 값 둘 다 IR 선언(ir-translate 가 둘 다 강제).
+      if (a.selectValue === undefined) {
+        throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' select_selector requires select_value`);
+      }
+      plan = { operation: "select", selector: a.selectSelector, value: a.selectValue };
     } else {
       await ensureNetworkJsonCapture(session);
       // 캐시 키 = action_plan_cache UNIQUE 7컬럼 + tenant(§D family=(url_pattern, dom_structural_hash)).
