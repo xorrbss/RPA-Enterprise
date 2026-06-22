@@ -80,11 +80,23 @@ export async function runIdempotentCommand(
       return response;
     });
   } catch (err) {
-    if (err instanceof ApiResponseError && !ERROR_CATALOG[err.code].retryable) {
-      await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+    if (err instanceof ApiResponseError) {
+      if (isReleasableVersionConflict(err.code)) {
+        // IFM-1: 일시적 낙관적-동시성 충돌(If-Match 선반영·동시 버전 INSERT)은 멱등 레코드에 영속(replay 잠금)하지
+        //   말고 예약을 회수한다 — 클라가 최신본 재조회 후 같은 Idempotency-Key 로 재시도하면 새 reserve 가 돼 성공
+        //   가능(api-surface §0.3 'If-Match 재시도'). 영속하면 stale 충돌이 TTL 동안 영구 재생됐다.
+        await deps.idempotency.release(recordId);
+      } else if (!ERROR_CATALOG[err.code].retryable) {
+        await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+      }
     }
     throw err;
   }
+}
+
+/** 일시적 낙관적-동시성 충돌(멱등 영속 금지·예약 회수 대상, IFM-1). version CAS 충돌은 재조회 후 재시도로 성공 가능. */
+export function isReleasableVersionConflict(code: string): boolean {
+  return code === "SCENARIO_VERSION_CONFLICT" || code === "POLICY_VERSION_CONFLICT";
 }
 
 /** 분류된 실패(ApiResponseError)를 멱등 레코드에 저장할 ApiError 본문으로 변환. */
