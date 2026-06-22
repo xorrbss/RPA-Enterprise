@@ -35,9 +35,16 @@ export interface ActionPlanCacheKey {
   browserIdentityVersion: number;
 }
 
+/** cache hit 결과 — plan + cacheId(action_plan_cache.id). cacheId 는 run_steps.action_plan_cache_id 로 영속돼
+ *  cache-hit step 의 결정형 plan 을 역추적(PbD 승격이 warm run 의 cache-hit 노드도 복구)하는 링크다. */
+export interface ActionPlanCacheHit {
+  readonly plan: ActionPlan;
+  readonly cacheId: string;
+}
+
 export interface ActionPlanCache {
-  /** active 한 family 의 plan 만 반환(suspect/stale/quarantined → undefined = miss → 재해석). */
-  get(key: ActionPlanCacheKey): Promise<ActionPlan | undefined>;
+  /** active 한 family 의 plan(+cacheId) 만 반환(suspect/stale/quarantined → undefined = miss → 재해석). */
+  get(key: ActionPlanCacheKey): Promise<ActionPlanCacheHit | undefined>;
   /** 성공 해석을 active 로 저장(ON CONFLICT success_count+1). */
   put(key: ActionPlanCacheKey, plan: ActionPlan): Promise<void>;
   /** verify 실패 → 재생 차단(active→suspect→stale; 미존재 시 suspect 1회 기록, §D failed plan). */

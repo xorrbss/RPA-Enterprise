@@ -14,6 +14,7 @@ import {
   parseActionPlan,
   type ActionPlan,
   type ActionPlanCache,
+  type ActionPlanCacheHit,
   type ActionPlanCacheKey,
 } from "./action-plan-cache";
 
@@ -37,24 +38,25 @@ const KEY_WHERE = `tenant_id=$1 AND scenario_version_id=$2 AND step_id=$3 AND ur
 export class PgActionPlanCache implements ActionPlanCache {
   constructor(private readonly pool: PgPool) {}
 
-  async get(key: ActionPlanCacheKey): Promise<ActionPlan | undefined> {
-    const plan = await withTenantTx(this.pool, key.tenantId, async (c) => {
-      const r = await c.query<{ plan_ref: string | null; status: string }>(
-        `SELECT plan_ref, status FROM action_plan_cache WHERE ${KEY_WHERE}`,
+  async get(key: ActionPlanCacheKey): Promise<ActionPlanCacheHit | undefined> {
+    const hit = await withTenantTx(this.pool, key.tenantId, async (c) => {
+      const r = await c.query<{ id: string; plan_ref: string | null; status: string }>(
+        `SELECT id::text, plan_ref, status FROM action_plan_cache WHERE ${KEY_WHERE}`,
         keyParams(key),
       );
       const row = r.rows[0];
       // active 만 재생(suspect/stale/quarantined → miss → 재해석). plan_ref 부재도 miss.
       if (!row || row.status !== "active" || row.plan_ref === null) return undefined;
       try {
-        return parseActionPlan(JSON.parse(row.plan_ref));
+        const plan = parseActionPlan(JSON.parse(row.plan_ref));
+        return plan === undefined ? undefined : { plan, cacheId: row.id }; // cacheId=run_steps.action_plan_cache_id 링크
       } catch {
         return undefined; // 손상된 plan_ref → 조용한 재생 금지(miss 로 재해석).
       }
     });
     // §E cache_hit_rate: 재생 가능(active+유효) 여부로 hit/miss. bootstrap 전이면 no-op meter.
-    recordCacheLookup(plan !== undefined, { tenant_id: key.tenantId });
-    return plan;
+    recordCacheLookup(hit !== undefined, { tenant_id: key.tenantId });
+    return hit;
   }
 
   async put(key: ActionPlanCacheKey, plan: ActionPlan): Promise<void> {
