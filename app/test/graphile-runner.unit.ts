@@ -73,6 +73,10 @@ check(
   "artifact_integrity routes to lifecycle task (BYPASSRLS quarantine UPDATE)",
   runtimeJobTaskIdentifier({ kind: "artifact_integrity" } as never) === RUNTIME_LIFECYCLE_JOB_TASK,
 );
+check(
+  "artifact_orphan routes to lifecycle task (BYPASSRLS global object_ref scan)",
+  runtimeJobTaskIdentifier({ kind: "artifact_orphan" } as never) === RUNTIME_LIFECYCLE_JOB_TASK,
+);
 
 const controlTasks = buildTaskList({} as never);
 check(

@@ -594,7 +594,7 @@ export const EXECUTOR_AUDIT_EVIDENCE_CONTRACT = {
 export type ArtifactLifecycleJobKind = "artifact_redaction" | "artifact_retention";
 export type ArtifactLifecycleOperationalUseCase = Extract<
   BypassRlsUseCase,
-  "artifact_redaction_job" | "artifact_retention_sweeper"
+  "artifact_redaction_job" | "artifact_retention_sweeper" | "artifact_orphan_sweeper"
 >;
 export const ARTIFACT_OBJECT_IO_EVIDENCE_SCHEMA_REF = "artifact/object-io-evidence@1" as const;
 export const ARTIFACT_OBJECT_IO_LOCAL_TEST_SCHEMA_REF = "artifact/object-io-local-test@1" as const;
@@ -772,6 +772,7 @@ export const ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT = {
   requiresDedicatedBypassRlsUseCases: [
     "artifact_redaction_job",
     "artifact_retention_sweeper",
+    "artifact_orphan_sweeper",
   ],
   requiresAuditBeforeMutation: true,
   auditAction: "bypassrls.use",
@@ -922,6 +923,7 @@ export interface RuntimeWorkerJob {
     | "artifact_redaction"
     | "artifact_retention"
     | "artifact_integrity"
+    | "artifact_orphan"
     | "dlq_replay"
     | "sink_deliver";
   tenantId?: TenantId;

@@ -2,6 +2,7 @@ import {
   buildDailySweeperJobs,
   buildIntegritySweeperJobs,
   buildMaintenancePollJobs,
+  buildOrphanSweeperJob,
   buildRetentionSweeperJobs,
   millisecondsUntilNextKstHour,
 } from "../src/worker/maintenance-scheduler";
@@ -70,12 +71,20 @@ check(
   JSON.stringify(integrityJobs),
 );
 
+const orphanJob = buildOrphanSweeperJob();
+check(
+  "orphan fanout is a single global job (no tenantId — store is not tenant-partitioned)",
+  orphanJob.kind === "artifact_orphan" && orphanJob.tenantId === undefined,
+  JSON.stringify(orphanJob),
+);
+
 const dailyJobs = buildDailySweeperJobs([TENANT_A, TENANT_B]);
 check(
-  "daily sweeper batch includes both retention and integrity for every tenant",
-  dailyJobs.length === 4 &&
+  "daily sweeper batch includes per-tenant retention+integrity and one global orphan",
+  dailyJobs.length === 5 &&
     dailyJobs.filter((j) => j.kind === "artifact_retention").length === 2 &&
-    dailyJobs.filter((j) => j.kind === "artifact_integrity").length === 2,
+    dailyJobs.filter((j) => j.kind === "artifact_integrity").length === 2 &&
+    dailyJobs.filter((j) => j.kind === "artifact_orphan").length === 1,
   JSON.stringify(dailyJobs),
 );
 

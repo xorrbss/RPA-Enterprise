@@ -87,7 +87,8 @@
 | `artifact.redaction_fail_threshold` | 5 | 2 | §B "실패 N회 → failed+알림" | 초과 시 `failed`+알림, 조회 차단(ARTIFACT_NOT_REDACTED) |
 | `artifact_retention_sweeper` | daily 02:00 KST | tick | §B "일배치" | retention_until < now() 삭제+soft-delete |
 | `artifact_integrity_checker` | daily | tick | §B | sha256 불일치 → quarantine+알림 |
-| `artifact_orphan_sweeper` | daily | tick | §B | 참조 없는 object 정리 |
+| `artifact_orphan_sweeper` | daily | tick | §B | 참조 없는 object 정리(전역 BYPASSRLS 스캔) |
+| `artifact.orphan_grace_default` | 24h | — | §B orphan_sweeper | 최근 생성 object 보호 유예(artifacts INSERT in-flight 오판 방지). now-mtime < grace 면 삭제 제외 |
 
 ### 6.1 DB payload retention 계약
 

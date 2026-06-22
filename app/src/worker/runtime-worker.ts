@@ -16,6 +16,7 @@ import { WorkerRunResume } from "./runtime-worker-run-resume";
 import { ArtifactRedactionProcessor, type SupersededObjectStore } from "./artifact-redaction-processor";
 import { ArtifactRetentionProcessor } from "./artifact-retention-processor";
 import { ArtifactIntegrityProcessor, type IntegrityObjectStore, type IntegrityMismatch } from "./artifact-integrity-processor";
+import { ArtifactOrphanProcessor, type OrphanInventoryStore } from "./artifact-orphan-processor";
 import type {
   ArtifactRedactor,
   ArtifactRetentionStore,
@@ -94,6 +95,11 @@ export interface PgRuntimeWorkerOptions {
   readonly artifactIntegrityObjectStore?: IntegrityObjectStore;
   readonly artifactIntegrityBatchLimit?: number;
   readonly onIntegrityMismatch?: (info: IntegrityMismatch) => void;
+  /** AUD-10 impl-contracts §B artifact_orphan_sweeper: object-store 인벤토리 열거+삭제(참조 없는 object 회수). */
+  readonly artifactOrphanInventoryStore?: OrphanInventoryStore;
+  readonly artifactOrphanGraceMs?: number;
+  readonly artifactOrphanBatchLimit?: number;
+  readonly artifactOrphanMaxDeletesPerTick?: number;
   readonly allowTestArtifactLifecyclePorts?: boolean;
   readonly defaultBrowserLeaseTtlMs?: number;
   readonly artifactRedactionMaxAttempts?: number;
@@ -142,6 +148,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
   private readonly artifactRedaction: ArtifactRedactionProcessor;
   private readonly artifactRetention: ArtifactRetentionProcessor;
   private readonly artifactIntegrity: ArtifactIntegrityProcessor;
+  private readonly artifactOrphan: ArtifactOrphanProcessor;
   private readonly runDrive: WorkerRunDrive;
   private readonly runResume: WorkerRunResume;
 
@@ -152,6 +159,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
     this.artifactRedaction = new ArtifactRedactionProcessor(pool, options);
     this.artifactRetention = new ArtifactRetentionProcessor(pool, options);
     this.artifactIntegrity = new ArtifactIntegrityProcessor(pool, options);
+    this.artifactOrphan = new ArtifactOrphanProcessor(pool, options);
     this.runDrive = new WorkerRunDrive(pool, options);
     this.runResume = new WorkerRunResume(pool, options);
   }
@@ -193,6 +201,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
       case "artifact_integrity":
         return this.artifactIntegrity.handle(job);
+
+      case "artifact_orphan":
+        return this.artifactOrphan.handle(job);
 
       case "sink_deliver":
         return this.handleSinkDeliver(job);
