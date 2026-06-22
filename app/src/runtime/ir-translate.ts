@@ -253,6 +253,17 @@ function mapAction(
         `compiledScenarioFrom: node '${nodeId}' act.args.fill_selector 는 채울 값 출처(args.value_ref 또는 vars[secret])가 필요`,
       );
     }
+    // AUD-4/SSB-01: 자격증명 fill(secretRef)은 셀렉터가 **기본 결정형 필수** — LLM-선택 셀렉터면 환각 시 비밀번호가
+    //   엉뚱한 필드(가시·로그·제출 대상)로 채워질 수 있다(AUD-1 으로 prod fill 배선 후 도달 가능). 알려진 사이트는
+    //   fill_selector 로 위치 고정. 파라미터화된 미지-사이트 로그인(셀렉터 사전 미상)만 args.allow_llm_secret_selector=true
+    //   로 **명시 opt-in**(위험 의식적 수용 — 조용한 LLM-셀렉터 금지). 둘 다 없으면 loud reject(보안 기본값).
+    const allowLlmSecretSelector = isRec(a.args) && a.args.allow_llm_secret_selector === true;
+    if (secretRef !== undefined && fillSelector === undefined && !allowLlmSecretSelector) {
+      throw new InterpreterError(
+        "IR_SCHEMA_INVALID",
+        `compiledScenarioFrom: node '${nodeId}' 자격증명 fill(vars[secret])은 args.fill_selector(결정형 셀렉터) 또는 명시 args.allow_llm_secret_selector=true 필요 — LLM 셀렉터 환각으로 비밀이 엉뚱한 필드에 채워지는 것 방지(SSB-01)`,
+      );
+    }
     // select 는 select_selector 와 select_value 가 둘 다 있어야 한다(드롭다운 옵션 결정형 — 한쪽만은 모순).
     if (hasSelect && (selectSelector === undefined || selectValue === undefined)) {
       throw new InterpreterError(

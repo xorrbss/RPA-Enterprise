@@ -411,6 +411,22 @@ function main(): void {
     check("act: select + click_selector 동시 → IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
   }
 
+  // 22h) AUD-4/SSB-01: 자격증명 fill(secretRef)은 fill_selector(결정형) 또는 allow_llm_secret_selector opt-in 필요(보안 기본값).
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "fill pw", vars: ["login.password"] }], terminal: "success" } } }, {}));
+    check(
+      "act: secretRef without fill_selector/opt-in → IR_SCHEMA_INVALID(SSB-01)",
+      err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID" && /allow_llm_secret_selector|SSB-01/.test((err as Error).message),
+      String(err),
+    );
+    const s1 = compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "fill pw", vars: ["login.password"], args: { fill_selector: "input#pw" } }], terminal: "success" } } }, {});
+    const a1 = s1.nodes.a?.what[0] as { type: string; secretRef?: string; fillSelector?: string } | undefined;
+    check("act: secretRef + fill_selector → ok(결정형 셀렉터)", a1?.type === "act" && a1.secretRef === "login.password" && a1.fillSelector === "input#pw", JSON.stringify(a1));
+    const s2 = compiledScenarioFrom({ start: "a", nodes: { a: { what: [{ action: "act", instruction: "fill pw", vars: ["login.password"], args: { allow_llm_secret_selector: true } }], terminal: "success" } } }, {});
+    const a2 = s2.nodes.a?.what[0] as { type: string; secretRef?: string; fillSelector?: string } | undefined;
+    check("act: secretRef + allow_llm_secret_selector:true → ok(명시 opt-in)", a2?.type === "act" && a2.secretRef === "login.password" && a2.fillSelector === undefined, JSON.stringify(a2));
+  }
+
   // 23) observe: instruction 없는 observe는 on[] PageState resolver 전용으로 drop한다.
   {
     const s = compiledScenarioFrom({ start: "o", nodes: { o: { what: [{ action: "observe" }], terminal: "success" } } }, {});
