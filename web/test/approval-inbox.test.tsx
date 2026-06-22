@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -245,5 +245,53 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
     // 미선택 3번째 행(비품 구매)은 일괄 대상 아님 — 여전히 건별 [결재] 버튼 보유.
     expect(screen.getByText("비품 구매")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "결재" }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // IRR-03: 일괄 선택 후 그 중 한 건을 건별 승인하면 selected 에서 제거돼, 일괄 경로가 그 건을 재제출하지 않는다
+  //   (재제출 시 APPROVAL_ALREADY_DECIDED(409)가 행 DecidedStatus 분기에서 조용히 묻혔음 — 조용한 false 금지).
+  test("일괄 선택 + 건별 승인 → 결정된 건은 일괄에서 제외(재제출/묻힘 없음)", async () => {
+    localStorage.setItem("rpa.token", jwt(["approver"]));
+    const calls: DecideApprovalBody[] = [];
+    let n = 0;
+    const client = fakeClient({
+      listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
+      listRuns: async (p) =>
+        p?.scenario_version_id === "ver-c"
+          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          : { items: [], next_cursor: null },
+      listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
+      getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
+      decideApproval: async (body) => {
+        calls.push(body);
+        n += 1;
+        return { decision_id: `dec-${n}`, source_run_id: body.source_run_id, doc_ref: body.doc_ref, decision: body.decision, spawned_run_id: `spawn-${n}` };
+      },
+      getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+    });
+    renderApp(client);
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+
+    // doc1(연차 신청) + doc2(출장비 정산) 선택.
+    fireEvent.click(screen.getByLabelText("연차 신청 일괄 승인 선택"));
+    fireEvent.click(screen.getByLabelText("출장비 정산 일괄 승인 선택"));
+    expect(screen.getByRole("button", { name: "선택 2건 일괄 승인" })).toBeInTheDocument();
+
+    // doc1 을 건별 승인 → markDecided 가 selected 에서 doc1 제거 → 일괄 버튼이 '선택 1건'으로 줄어듦.
+    const row1 = screen.getByText("연차 신청").closest("tr") as HTMLElement;
+    fireEvent.click(within(row1).getByRole("button", { name: "결재" }));
+    fireEvent.click(within(row1).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "선택 1건 일괄 승인" })).toBeInTheDocument());
+
+    // 일괄 승인 확인 → doc2 만 추가 제출(doc1 은 이미 결정 → 재제출 안 함).
+    fireEvent.click(screen.getByRole("button", { name: "선택 1건 일괄 승인" }));
+    fireEvent.click(screen.getByRole("button", { name: "일괄 승인 확인" }));
+    await waitFor(() => expect(screen.getAllByText("실행 기록 보기")).toHaveLength(2));
+
+    // decideApproval 총 2회(doc1 건별 1 + doc2 일괄 1), doc1 doc_ref 는 정확히 1회(재제출 없음).
+    expect(calls).toHaveLength(2);
+    const doc1Calls = calls.filter((c) => c.doc_ref === "https://dashboard.office.hiworks.com/approval/1");
+    expect(doc1Calls).toHaveLength(1);
+    expect(calls.filter((c) => c.doc_ref === "https://dashboard.office.hiworks.com/approval/2")).toHaveLength(1);
   });
 });

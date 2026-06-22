@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -131,6 +131,8 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
   const [bulkConfirm, setBulkConfirm] = useState(false);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
+  // 동기 이중제출 가드: bulkRunning(state)은 다음 렌더에야 true 라 같은 틱 연타를 못 막는다 → ref 로 즉시 차단.
+  const bulkSubmitting = useRef(false);
   const pendingRows = rows.filter((r) => !["approved", "rejected", "completed"].includes(r.status));
   const visibleRows = pendingOnly ? pendingRows : rows;
   // 선택 가능: approver + 미결정 + 처리대기 행만(이미 결정/완료된 건은 일괄 대상 아님).
@@ -143,25 +145,43 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
       else next.add(docRef);
       return next;
     });
+  // 결정된 문서 = decided 기록 + selected 에서 제거(IRR-03): 이미 건별 결정된 건이 일괄 경로로 재제출돼
+  //   APPROVAL_ALREADY_DECIDED(409)가 행(DecidedStatus 분기)에서 조용히 묻히는 것 방지 + 선택 카운트 정확 유지.
+  const markDecided = (docRef: string, runId: string): void => {
+    setDecided((prev) => ({ ...prev, [docRef]: runId }));
+    setSelected((prev) => {
+      if (!prev.has(docRef)) return prev;
+      const next = new Set(prev);
+      next.delete(docRef);
+      return next;
+    });
+  };
   // 배치 승인: 선택 스냅샷을 순차 처리(건별 멱등키). 성공=decided 로 처리상태 전환, 실패=bulkErrors 로 행에 표면화.
   async function runBulkApprove(): Promise<void> {
+    if (bulkSubmitting.current) return; // 동기 이중제출 가드(연타·Enter 반복 → 한 번만 실행)
+    bulkSubmitting.current = true;
     setBulkConfirm(false);
     setBulkRunning(true);
-    for (const docRef of selected) {
-      try {
-        const res = await api.decideApproval({ source_run_id: sourceRunId, doc_ref: docRef, decision: "approve" }, crypto.randomUUID());
-        setDecided((prev) => ({ ...prev, [docRef]: res.spawned_run_id }));
-        setBulkErrors((prev) => {
-          const next = { ...prev };
-          delete next[docRef];
-          return next;
-        });
-      } catch (e) {
-        setBulkErrors((prev) => ({ ...prev, [docRef]: e instanceof ApiError ? errorLabel(e) : "결재 처리 실패" }));
+    try {
+      for (const docRef of selected) {
+        if (decided[docRef] !== undefined) continue; // 이미 결정된 건은 재제출 안 함(409 묻힘 방지, IRR-03)
+        try {
+          const res = await api.decideApproval({ source_run_id: sourceRunId, doc_ref: docRef, decision: "approve" }, crypto.randomUUID());
+          markDecided(docRef, res.spawned_run_id);
+          setBulkErrors((prev) => {
+            const next = { ...prev };
+            delete next[docRef];
+            return next;
+          });
+        } catch (e) {
+          setBulkErrors((prev) => ({ ...prev, [docRef]: e instanceof ApiError ? errorLabel(e) : "결재 처리 실패" }));
+        }
       }
+      setSelected(new Set());
+    } finally {
+      setBulkRunning(false);
+      bulkSubmitting.current = false;
     }
-    setSelected(new Set());
-    setBulkRunning(false);
   }
   return (
     <>
@@ -243,7 +263,7 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
                               <DecideButtons
                                 sourceRunId={sourceRunId}
                                 docRef={r.doc_ref}
-                                onDecided={(runId) => setDecided((prev) => ({ ...prev, [r.doc_ref]: runId }))}
+                                onDecided={(runId) => markDecided(r.doc_ref, runId)}
                               />
                               {bulkErrors[r.doc_ref] !== undefined && <span className="badge red">{bulkErrors[r.doc_ref]}</span>}
                             </span>
