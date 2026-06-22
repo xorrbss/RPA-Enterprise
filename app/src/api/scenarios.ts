@@ -246,10 +246,12 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
           if (!outcome.ok) {
             throw new ApiResponseError(outcome.code, outcome.details);
           }
-          await c.query(
+          const insertedVersion = await c.query(
             `INSERT INTO scenario_versions
                (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast, params_schema)
-             VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)`,
+             VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)
+             ON CONFLICT (tenant_id, scenario_id, version) DO NOTHING
+             RETURNING id`,
             [
               randomUUID(),
               tenantId,
@@ -260,6 +262,11 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
               outcome.ir.params_schema !== undefined ? JSON.stringify(outcome.ir.params_schema) : null,
             ],
           );
+          if (insertedVersion.rowCount !== 1) {
+            // IFM-2: 동시 작성자가 같은 version 을 선점(UNIQUE 경합) — raw 23505→500 대신 계약 코드 412(SCENARIO_VERSION_CONFLICT)로
+            //   환원해 If-Match 재시도(§0.3)·멱등 회수(IFM-1) 경로로 보낸다. tx 롤백이라 부분상태 없음.
+            throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "concurrent_version_insert", version: nextVersion });
+          }
           return {
             status: 200,
             body: { scenario_id: scenarioId, version: nextVersion, promotion_status: "draft", rolled_back_from: sourceVersion },
@@ -325,10 +332,12 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
         if (ir.meta.version !== row.version + 1) {
           throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "version_must_increment", expected: row.version + 1 });
         }
-        await c.query(
+        const insertedVersion = await c.query(
           `INSERT INTO scenario_versions
              (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast, params_schema)
-           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)`,
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)
+           ON CONFLICT (tenant_id, scenario_id, version) DO NOTHING
+           RETURNING id`,
           [
             randomUUID(),
             principal.tenantId,
@@ -339,6 +348,10 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
             ir.params_schema !== undefined ? JSON.stringify(ir.params_schema) : null,
           ],
         );
+        if (insertedVersion.rowCount !== 1) {
+          // IFM-2: 동시 작성자 version 선점(UNIQUE 경합) → 412 환원(raw 23505→500 회피). tx 롤백이라 부분상태 없음.
+          throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "concurrent_version_insert", version: ir.meta.version });
+        }
         return { version: ir.meta.version };
       });
       reply

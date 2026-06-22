@@ -161,8 +161,12 @@ export async function promoteScenario(
     });
     return response;
   } catch (err) {
-    if (err instanceof ApiResponseError && !ERROR_CATALOG[err.code].retryable) {
-      await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+    if (err instanceof ApiResponseError) {
+      if (isReleasableVersionConflict(err.code)) {
+        await deps.idempotency.release(recordId); // IFM-1: 일시적 version 충돌은 멱등 영속 말고 예약 회수(§0.3 재시도 가능)
+      } else if (!ERROR_CATALOG[err.code].retryable) {
+        await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+      }
     }
     throw err;
   }
@@ -264,10 +268,12 @@ export async function promoteScenarioFromRun(
       }
       // 6) 새 draft 버전 INSERT(자동 prod 승격 아님 — 운영자가 별도 promote).
       const newVersionId = randomUUID();
-      await c.query(
+      const insertedVersion = await c.query(
         `INSERT INTO scenario_versions
            (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast, params_schema)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)`,
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)
+         ON CONFLICT (tenant_id, scenario_id, version) DO NOTHING
+         RETURNING id`,
         [
           newVersionId,
           principal.tenantId,
@@ -278,6 +284,10 @@ export async function promoteScenarioFromRun(
           outcome.ir.params_schema !== undefined ? JSON.stringify(outcome.ir.params_schema) : null,
         ],
       );
+      if (insertedVersion.rowCount !== 1) {
+        // IFM-2: 동시 작성자 version 선점(UNIQUE 경합) → 412 환원(raw 23505→500 회피).
+        throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "concurrent_version_insert", version: nextVersion });
+      }
       const commandResponse: CommandResponse = {
         status: 201,
         body: {
@@ -294,8 +304,12 @@ export async function promoteScenarioFromRun(
     });
     return response;
   } catch (err) {
-    if (err instanceof ApiResponseError && !ERROR_CATALOG[err.code].retryable) {
-      await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+    if (err instanceof ApiResponseError) {
+      if (isReleasableVersionConflict(err.code)) {
+        await deps.idempotency.release(recordId); // IFM-1: 일시적 version 충돌은 멱등 영속 말고 예약 회수(§0.3 재시도 가능)
+      } else if (!ERROR_CATALOG[err.code].retryable) {
+        await deps.idempotency.saveFailure(recordId, apiErrorBody(err, request.correlationId));
+      }
     }
     throw err;
   }
@@ -355,6 +369,11 @@ export function cloneIrWithVersion(value: unknown, expectedName: string, version
   const meta = isRecord(clone.meta) ? clone.meta : {};
   clone.meta = { ...meta, name: expectedName, version };
   return clone;
+}
+
+// IFM-1: 일시적 낙관적-동시성 충돌(예약 회수 대상). command.ts 와 동일 규약(순환의존 회피로 로컬 정의).
+function isReleasableVersionConflict(code: string): boolean {
+  return code === "SCENARIO_VERSION_CONFLICT" || code === "POLICY_VERSION_CONFLICT";
 }
 
 function apiErrorBody(err: ApiResponseError, correlationId: string): ApiError {

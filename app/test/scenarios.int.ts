@@ -467,6 +467,20 @@ async function main(): Promise<void> {
       check("명시 target IR 저장 → 201", explicit.statusCode === 201, explicit.body);
       const explicitTarget = await targetOf(explicit.json().scenario_id);
       check("명시 target 보존(추론이 덮어쓰지 않음)", isRecord(explicitTarget) && explicitTarget.network_policy_id === NETWORK_A, JSON.stringify(explicitTarget));
+
+      // IFM-1(감사): version 충돌(412)은 멱등 키를 영구 잠그지 않는다 — stale If-Match→412(키 K 소비) 후, 같은 키 K +
+      //   올바른 If-Match 재시도가 성공해야 한다(예약 회수). 수정 전엔 412 가 멱등 레코드에 영속돼 K 가 24h 동안 stale
+      //   412 를 영구 replay(§0.3 'If-Match 재시도' 불가).
+      {
+        const c1 = await app.inject({ method: "POST", url: "/v1/scenarios", headers: { authorization: `Bearer ${operator}` }, payload: validIr("ifm1-release") });
+        check("IFM-1: 시나리오 생성 → 201", c1.statusCode === 201, c1.body);
+        const sid = c1.json().scenario_id as string;
+        const key = "ifm1-rollback-key";
+        const stale = await app.inject({ method: "POST", url: `/v1/scenarios/${sid}/versions/1/rollback`, headers: { authorization: `Bearer ${operator}`, "if-match": "999", "idempotency-key": key }, payload: {} });
+        check("IFM-1: stale If-Match rollback → 412 SCENARIO_VERSION_CONFLICT(키 소비)", stale.statusCode === 412 && stale.json().code === "SCENARIO_VERSION_CONFLICT", stale.body);
+        const retry = await app.inject({ method: "POST", url: `/v1/scenarios/${sid}/versions/1/rollback`, headers: { authorization: `Bearer ${operator}`, "if-match": "1", "idempotency-key": key }, payload: {} });
+        check("IFM-1: 같은 키 + 올바른 If-Match 재시도 → 성공(412 영구잠금/replay 아님)", retry.statusCode !== 412 && retry.statusCode < 300, `status=${retry.statusCode} body=${retry.body}`);
+      }
     } finally {
       await app.close();
     }

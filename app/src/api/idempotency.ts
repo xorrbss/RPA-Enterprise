@@ -118,6 +118,17 @@ export class PgControlPlaneIdempotencyStore implements ControlPlaneIdempotencySt
       }
     });
   }
+
+  // 일시적 버전 충돌(IFM-1)로 끝난 예약 회수 — processing 행만 삭제(이미 succeeded/failed 면 보존). 멱등(0행 무해).
+  async release(recordId: string): Promise<void> {
+    const { tenantId, rowId } = decodeRecordId(recordId);
+    await withTenantTx(this.pool, tenantId, async (c) => {
+      await c.query(
+        `DELETE FROM control_plane_idempotency_keys WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='processing'`,
+        [tenantId, rowId],
+      );
+    });
+  }
 }
 
 /**

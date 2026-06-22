@@ -311,6 +311,12 @@ export interface ControlPlaneIdempotencyStore {
   reserve(req: IdempotencyReservationRequest): Promise<IdempotencyReservation>;
   saveResult(recordId: string, response: StoredIdempotentResponse): Promise<void>;
   saveFailure(recordId: string, error: ApiError): Promise<void>;
+  /**
+   * 일시적 낙관적-동시성 충돌(If-Match 선반영·동시 버전 INSERT)로 끝난 예약을 회수한다(processing 행 삭제).
+   * 실패를 영속(replay)하면 동일 키 재시도가 stale 충돌을 영구 재생해 api-surface §0.3 'If-Match 재시도 후 성공'이
+   * 구조적으로 불가해진다 — 영속 대신 회수해 재시도가 새 reserve 가 되게 한다. 멱등(이미 종결/부재면 no-op).
+   */
+  release(recordId: string): Promise<void>;
 }
 
 export type IfMatchEntity = "scenario_version" | "gateway_policy";
