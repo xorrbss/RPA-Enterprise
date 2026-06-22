@@ -107,6 +107,8 @@ interface TraversalState {
   readonly budget: { remaining: number };
   // suspend 컨텍스트 운반 박스(budget 과 동형 가변 박스) — traverse 가 set, runScenario 가 read.
   readonly suspendBox: { current?: SuspendContext };
+  // 실패 운반 박스 — 실행기 step 실패가 fail terminal 로 반환될 때 그 exception 을 담아 runScenario 가 outcome.failureReason 으로 노출.
+  readonly failureBox: { current?: ClassifiedException };
 }
 
 /** IRELScope.node 캐스트(NodeOutput record → IREL 평가용). */
@@ -261,7 +263,11 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
         const failOut = projectNodeOutput(res);
         state.nodeScope[nodeId] = currentTier !== undefined ? { ...failOut, tier: currentTier } : failOut;
         const term = failureTerminal(res.status);
-        if (term !== null) return term;
+        if (term !== null) {
+          // 실패 사유(step exception)를 outcome 으로 운반 — driver 가 runs.failure_reason 으로 기록(조용한 사유유실 금지).
+          if (res.exception !== undefined) state.failureBox.current = res.exception;
+          return term;
+        }
         // suspend(트리거 i): status='suspended' → SuspendContext + "suspend" terminal. challengeKind 는 executor 신호(하드코딩 금지),
         //   human-assist 가능군은 captcha|mfa 뿐 — 그 외는 계약 위반으로 표면화(조용한 captcha 폴백 금지).
         if (res.status === "suspended") {
@@ -453,6 +459,7 @@ export async function runScenario(
     extractPages: [],
     budget: { remaining: maxSteps },
     suspendBox: {},
+    failureBox: {},
   };
   // resume: deps.startNode(ResumeToken.resumeNodeId)부터 재진입. 미지정 시 scenario.start(정상 시작). traverse 는 임의 노드 시작 지원(fallback sub-traversal과 동일).
   const terminal = await traverse(state, deps.startNode ?? scenario.start, initialCtx);
@@ -468,5 +475,6 @@ export async function runScenario(
         }
       : {}),
     ...(state.suspendBox.current !== undefined ? { suspend: state.suspendBox.current } : {}),
+    ...(state.failureBox.current !== undefined ? { failureReason: { code: state.failureBox.current.code, message: "" } } : {}),
   };
 }

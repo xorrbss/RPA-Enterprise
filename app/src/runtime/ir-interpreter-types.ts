@@ -95,4 +95,7 @@ export interface ScenarioOutcome {
   readonly extractPages?: readonly ExtractResultPage[];
   readonly mergedExtract?: MergedExtractResult;
   readonly suspend?: SuspendContext; // terminal === "suspend" 일 때만(트리거 i)
+  // fail_* terminal 의 사유 코드 — in-band 실패(실행기 step 실패가 fail terminal 로 반환) 시 마지막 실패 step 의
+  //   exception.code 를 운반한다. driver 가 runs.failure_reason 으로 기록(UI 표시). 미설정이면 driver 가 throw 경로 사유로 폴백.
+  readonly failureReason?: { readonly code: string; readonly message: string };
 }

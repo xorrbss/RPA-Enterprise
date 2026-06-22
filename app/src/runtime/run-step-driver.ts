@@ -292,6 +292,8 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   }
   let videoRecording: RunVideoRecording | undefined;
   let outcome: ScenarioOutcome;
+  // in-band 실패 사유 — runScenario throw(인터프리터 예외)·외곽 throw 를 흡수하는 catch 에서 분류 코드를 담는다.
+  let throwReason: { code: string; message: string } | undefined;
   try {
     if (videoPolicy !== undefined && deps.visualEvidenceVideoRecorder !== undefined) {
       videoRecording = await deps.visualEvidenceVideoRecorder.startRunVideo({
@@ -306,6 +308,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     try {
       scenarioOutcome = await runScenario(scenario, ctx, { executor, resolver: deps.resolver, params: run.params, startNode });
     } catch (scenarioErr) {
+      throwReason = classifiedFailureReason(scenarioErr);
       // 인터프리터 예외를 system 으로 흡수하되 조용히 묻지 않는다(조용한 false/unknown 금지 — system 은 loud 채널).
       //   InterpreterError 면 code 도 표면화(터미널 분류·디버깅 신호 보존). 종결(running→failed_system)은 driveScenario 가 처리.
       const code = scenarioErr instanceof InterpreterError ? `[${scenarioErr.code}] ` : "";
@@ -317,6 +320,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     scenarioOutcome = await appendMergedExtractArtifact(scenarioOutcome, deps.mergedExtractArtifactSink, run);
     outcome = await appendRunVideoArtifact(scenarioOutcome, videoRecording, videoPolicy);
   } catch (driveErr) {
+    throwReason = classifiedFailureReason(driveErr);
     // video 시작·아티팩트 append 실패를 system 으로 흡수하되 조용히 묻지 않는다(조용한 false 금지 — system 은 loud
     //   채널). 안쪽 인터프리터 예외(runScenario)는 위 catch 가 이미 로그하므로 이 외곽 catch 만 무로그였다.
     console.error(
@@ -328,6 +332,8 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     outcome = systemFailureOutcome();
   }
 
+  // failed_* 사유: throw 흡수분 우선, 없으면 인터프리터가 운반한 in-band step 사유. driver 가 transition tx 로 기록.
+  const failureReason = throwReason ?? outcome.failureReason;
   // terminal 결과를 DB 전이로 종료(run 은 이미 running — driveClaimedRun R2 / driveResumedRun R18).
   if (outcome.terminal === "success" || outcome.terminal === "success_empty") {
     await transition(deps.pool, run, "running", { type: "last_node_success" }, { flowTerminalReached: true });
@@ -352,6 +358,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   if (outcome.terminal === "fail_business") {
     // R9(running→failed_business) 과 동일 tx 에서 연결 Workitem 을 W3(failed_business)로 정산.
     await transition(deps.pool, run, "running", { type: "business_exception" }, { exceptionClass: "business" }, undefined, async (client) => {
+      if (failureReason !== undefined) await client.query(`UPDATE runs SET failure_reason=$3::jsonb WHERE tenant_id=$1::uuid AND id=$2::uuid`, [run.tenantId, run.runId, JSON.stringify(failureReason)]);
       await settleLinkedWorkitemFromRun(client, run, "business");
       await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
     });
@@ -360,6 +367,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
   if (outcome.terminal === "fail_system") {
     // R8(running→failed_system) 과 동일 tx 에서 연결 Workitem 을 W4(retry)/W5(abandoned+dead_letter)로 정산.
     await transition(deps.pool, run, "running", { type: "unrecoverable_exception" }, { exceptionClass: "system" }, undefined, async (client) => {
+      if (failureReason !== undefined) await client.query(`UPDATE runs SET failure_reason=$3::jsonb WHERE tenant_id=$1::uuid AND id=$2::uuid`, [run.tenantId, run.runId, JSON.stringify(failureReason)]);
       await settleLinkedWorkitemFromRun(client, run, "system");
       await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
     });
