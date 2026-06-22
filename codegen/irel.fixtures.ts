@@ -238,22 +238,26 @@ fixture("fallback advance_when may be omitted", () => {
   }, []);
 });
 
-fixture("vlm_fallback.when is compiled", () => {
-  expectStaticReasons("vlm_fallback.when valid", {
+fixture("vlm_fallback.when is a verify-engine state condition, not IREL", () => {
+  // verify.schema.json: vlm_fallback.when 은 verify-engine 상태 조건(기본 'criteria_uncertain'), IREL scope 아님.
+  // 정적검증은 이를 IREL 로 컴파일/타입체크하지 않는다(문서화 기본값을 false-reject 하면 안 됨; AUD-12 a).
+  // 문서화된 기본값 'criteria_uncertain'(유효 IREL 식 아님)이 수용되어야 한다.
+  expectStaticReasons("vlm_fallback.when documented default accepted", {
     meta: { name: "vlm", version: 1 },
     start: "n1",
     nodes: {
       n1: {
         verify: {
           criteria: [{ type: "min_rows", n: 1 }],
-          vlm_fallback: { prompt: "inspect", when: "flags.reviews_visible" },
+          vlm_fallback: { prompt: "inspect", when: "criteria_uncertain" },
         },
         terminal: "success",
       },
     },
   }, []);
 
-  expectStaticReasons("vlm_fallback.when invalid", {
+  // IREL 였다면 unknown_flag 였을 토큰도 IREL 로 검사되지 않으므로 수용된다(스코프 분리).
+  expectStaticReasons("vlm_fallback.when non-IREL token not flagged", {
     meta: { name: "vlm", version: 1 },
     start: "n1",
     nodes: {
@@ -265,7 +269,64 @@ fixture("vlm_fallback.when is compiled", () => {
         terminal: "success",
       },
     },
-  }, ["unknown_flag"]);
+  }, []);
+});
+
+fixture("date_before/date_after reject offset-less datetime (determinism)", () => {
+  // ir-expression §5: now() 금지 + 결정성. 오프셋 없는 datetime 은 호스트 로컬 TZ 로 파싱돼 워커마다
+  // 다른 밀리초를 낸다(AUD-12 b). 평가 시 loud reject(IRELRuntimeMissingError).
+  const ast = compileOk("date_before(params.as_of, params.search)");
+  assert.throws(
+    () => evaluateIrelBooleanExpression(ast, { params: { as_of: "2026-06-22T10:00:00", search: "2026-06-22T11:00:00" } }),
+    IRELRuntimeMissingError,
+  );
+
+  // date-only(YYYY-MM-DD, UTC 자정) 와 명시 오프셋(Z) 은 결정적 → 평가 성공.
+  assert.equal(
+    evaluateIrelBooleanExpression(ast, { params: { as_of: "2026-06-22", search: "2026-06-23" } }),
+    true,
+  );
+  const after = compileOk("date_after(params.as_of, params.search)");
+  assert.equal(
+    evaluateIrelBooleanExpression(after, { params: { as_of: "2026-06-22T11:00:00Z", search: "2026-06-22T10:00:00Z" } }),
+    true,
+  );
+});
+
+fixture("V10 value_match.path root must be extracted or node", () => {
+  const base = (path: string): IRScenario => scenario({
+    meta: { name: "v10", version: 1 },
+    start: "n1",
+    nodes: { n1: { verify: { criteria: [{ type: "value_match", path, equals: 1 }] }, terminal: "success" } },
+  });
+  // §3: 평가 대상 루트는 직전 노드의 extracted 또는 node.<id>.* — 그 외 루트는 V10 위반(AUD-12 c).
+  expectStaticReasons("extracted root valid", base("extracted.total"), []);
+  expectStaticReasons("node root valid", base("node.n1.row_count"), []);
+  expectStaticReasons("bare root rejected", base("total"), ["invalid_value_path"]);
+  expectStaticReasons("unknown root rejected", base("response.body"), ["invalid_value_path"]);
+});
+
+fixture("on[].target reservedHandlerCall rejected at static validation (V1)", () => {
+  // schema/target 은 reservedHandlerCall 을 next/on[].target 양쪽에 허용하나 인터프리터는 on-branch 에서만
+  // 거부(compile-accept/runtime-reject 비대칭, AUD-12 e). 저장 시점에 거부해 비대칭을 제거한다.
+  expectStaticReasons("on-branch reserved handler unsupported", scenario({
+    meta: { name: "onrh", version: 1 },
+    start: "n1",
+    nodes: {
+      n1: { on: [{ when: "flags.blocked", target: { handler: "@human_task", input: {}, return_node: "n2" }, priority: 1 }] },
+      n2: { terminal: "success" },
+    },
+  }), ["on_branch_reserved_handler_unsupported"]);
+
+  // next= 동일 핸들러콜은 계속 허용(인터프리터 지원). 거부는 on-branch 에만 적용됨을 증명.
+  expectStaticReasons("next reserved handler still accepted", scenario({
+    meta: { name: "nextrh", version: 1 },
+    start: "n1",
+    nodes: {
+      n1: { next: { handler: "@human_task", input: {}, return_node: "n2" } },
+      n2: { terminal: "success" },
+    },
+  }), []);
 });
 
 fixture("loop body and exit targets are part of static graph validation", () => {

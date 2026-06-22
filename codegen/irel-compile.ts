@@ -625,6 +625,14 @@ function requireRuntimeArity(ast: Extract<IRELNode, { kind: "call" }>, expected:
 
 function runtimeDateMillis(ast: IRELNode, scope: IRELScope, detail: string): number {
   const value = expectRuntimeString(evaluateIrelExpression(ast, scope), detail);
+  // 결정성(ir-expression §5; now() 금지·재시도/replay 동일 결과): 오프셋 없는 datetime 은 ECMAScript 상
+  // 호스트 로컬 TZ 로 파싱돼 워커마다 다른 밀리초를 낸다. date-only(YYYY-MM-DD)는 UTC 자정으로 결정적이므로 허용하고,
+  // 시각을 포함한 datetime 은 명시 오프셋(Z 또는 ±HH:MM)을 요구한다(가정 금지: 로컬→UTC 암묵 가정 금지, loud reject).
+  if (/[tT]/.test(value) && !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(value)) {
+    throw new IRELRuntimeMissingError(
+      `${detail} datetime '${value}' requires an explicit UTC offset ('Z' or ±HH:MM) for deterministic comparison`,
+    );
+  }
   const millis = Date.parse(value);
   if (!Number.isFinite(millis)) {
     throw new IRELRuntimeMissingError(`${detail} must be an ISO-8601 string`);
