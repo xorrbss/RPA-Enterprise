@@ -294,7 +294,7 @@ async function seedLifecycleArtifacts(pool: ReturnType<typeof createPool>): Prom
            now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
           ($7,$2,$8,NULL,'screenshot','pending',0,'object://runtime-worker/redaction-active-claim',
            now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-          ($16,$2,$3,NULL,'screenshot','pending',1,'object://runtime-worker/redaction-retryable',
+          ($16,$2,$3,NULL,'screenshot','pending',3,'object://runtime-worker/redaction-retryable',
            now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
           ($17,$2,NULL,$18,'scenario_generation_llm_output','pending',0,'object://runtime-worker/generation-target',
            now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
@@ -1238,7 +1238,7 @@ async function main(): Promise<void> {
       check(
         "artifact_redaction port receives ArtifactRef, policy, and local-test binding",
         redactionCalls[0]?.artifact.artifactRef === ARTIFACT_REDACTION_PENDING &&
-          redactionCalls[0]?.policy.maxAttempts === 3 &&
+          redactionCalls[0]?.policy.maxAttempts === 5 &&
           redactionCalls[0]?.portBinding.kind === "test_fake",
         JSON.stringify(redactionCalls[0]),
       );
@@ -1264,7 +1264,7 @@ async function main(): Promise<void> {
       check(
         "artifact_redaction retryable below max increments attempts without marking failed",
         retryablePending.redactionStatus === "pending" &&
-          retryablePending.redactionAttempts === 2 &&
+          retryablePending.redactionAttempts === 4 &&
           retryablePending.lifecycleClaimSet === false,
         JSON.stringify(retryablePending),
       );
@@ -1284,7 +1284,7 @@ async function main(): Promise<void> {
       check(
         "artifact_redaction retryable at max marks failed and clears claim",
         retryableFailed.redactionStatus === "failed" &&
-          retryableFailed.redactionAttempts === 3 &&
+          retryableFailed.redactionAttempts === 5 &&
           retryableFailed.lifecycleClaimSet === false,
         JSON.stringify(retryableFailed),
       );

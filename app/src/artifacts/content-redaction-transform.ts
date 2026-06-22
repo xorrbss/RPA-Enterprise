@@ -366,9 +366,12 @@ export class ContentRedactionTransform implements ArtifactContentTransform {
       }
       return out;
     }
-    // 스칼라(string/number/boolean/null) — 비민감 키.
+    // 스칼라(string/number/boolean/null) — 비민감 키. 문자열 값은 텍스트 경로(maskLines)와 **대칭**으로 마스킹한다:
+    //   applyPatternRules(self-delimiting PATTERN)만으로는 비민감 키 값 안에 임베드된 키워드형 자격증명(예 "password=…",
+    //   "Authorization: Bearer …")이 누출된다 — maskLines 가 키워드→EOL + PATTERN 을 함께 적용해 임베드 자격증명까지 마스킹
+    //   (over-mask-not-under-mask 원칙 정합, 누출 0 우선). 다중 줄(임베드 \n) 값도 줄 단위 + folding 처리.
     if (typeof value === "string") {
-      return this.applyPatternRules(value);
+      return this.maskLines(value);
     }
     return value; // number/boolean/null 은 비민감 키면 그대로(패턴 마스크는 문자열에만).
   }
