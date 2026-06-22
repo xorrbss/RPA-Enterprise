@@ -6,8 +6,9 @@
  * (2) LeaseKeyedSessionProvider: leaseId 키 세션 레지스트리 — forLease 바운드 반환·미바운드 typed throw(조용한 null 금지)·
  *     idempotent, register 중복 throw, unbind 해제.
  */
-import { createStagehandSession, LeaseKeyedSessionProvider, type CdpSession } from "../src/executor/cdp-session";
+import { createStagehandSession, LeaseKeyedSessionProvider, NavigationTimeoutError, StagehandCdpSession, type CdpSession } from "../src/executor/cdp-session";
 import { CdpDisconnectedError } from "../src/executor/raw-cdp";
+import { ERROR_CATALOG } from "../../ts/error-catalog";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -141,6 +142,48 @@ async function main(): Promise<void> {
       `removed=${String(removed)}`,
     );
     check("unbind(absent) → undefined (idempotent)", provider.unbind("lease-A") === undefined);
+  }
+
+  // 5) goto() 실패 타입 분류 — 타임아웃→NAVIGATION_TIMEOUT, 단절→CDP_DISCONNECTED, 미상(net 등)→원 예외 전파(날조 금지).
+  //    종전: page.goto 실패가 .code 없이 던져져 generic CONTROL_PLANE_INTERNAL_ERROR(비-retryable "내부 오류")로 흡수돼
+    //  운영자가 사이트/세션 대신 control-plane 을 보게 되던 오진을 막는다.
+  {
+    const mk = (gotoErr: unknown): StagehandCdpSession => {
+      const page = { goto: (_u: string, _o?: unknown) => Promise.reject(gotoErr), url: () => "about:blank" };
+      return new StagehandCdpSession({} as never, page as never, "/tmp/dl");
+    };
+    const tmoErr = Object.assign(new Error("page.goto: Timeout 45000ms exceeded."), { name: "TimeoutError" });
+    const tmo = await caught(mk(tmoErr).goto("https://example.test"));
+    check(
+      "goto Playwright 타임아웃 → NavigationTimeoutError(NAVIGATION_TIMEOUT)",
+      tmo instanceof NavigationTimeoutError && (tmo as NavigationTimeoutError).code === "NAVIGATION_TIMEOUT",
+      String(tmo),
+    );
+    check(
+      "goto 타임아웃: 원 Playwright 텍스트(45000ms) 미노출",
+      tmo instanceof Error && !/45000ms/.test(tmo.message),
+      tmo instanceof Error ? tmo.message : String(tmo),
+    );
+
+    const dis = await caught(mk(new Error("Target page, context or browser has been closed")).goto("https://example.test"));
+    check(
+      "goto 단절(closed) → CdpDisconnectedError(CDP_DISCONNECTED)",
+      dis instanceof CdpDisconnectedError && (dis as CdpDisconnectedError).code === "CDP_DISCONNECTED",
+      String(dis),
+    );
+
+    const netErr = new Error("net::ERR_NAME_NOT_RESOLVED");
+    const net = await caught(mk(netErr).goto("https://example.test"));
+    check("goto 미상(net::ERR) → 원 예외 그대로 전파(timeout 으로 날조 안 함)", net === netErr, String(net));
+  }
+
+  // 6) error-catalog: NAVIGATION_TIMEOUT 등록(retryable/system) — generic 흡수 대신 typed 분류.
+  {
+    check(
+      "error-catalog: NAVIGATION_TIMEOUT retryable:true / system",
+      ERROR_CATALOG.NAVIGATION_TIMEOUT.retryable === true && ERROR_CATALOG.NAVIGATION_TIMEOUT.exceptionClass === "system",
+      JSON.stringify(ERROR_CATALOG.NAVIGATION_TIMEOUT),
+    );
   }
 
   if (failures > 0) {

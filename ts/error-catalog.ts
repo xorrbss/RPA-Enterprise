@@ -31,6 +31,7 @@ export type ErrorCode =
   | "BROWSER_LEASE_EXPIRED"
   | "BROWSER_CRASH"
   | "CDP_DISCONNECTED"
+  | "NAVIGATION_TIMEOUT"                // page.goto 가 시간 내 미완(타임아웃/wedge) → system(재시도). generic 흡수 금지.
   // --- LLM Gateway ---
   | "LLM_BUDGET_EXCEEDED"
   | "LLM_CAPABILITY_MISMATCH"
@@ -102,6 +103,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   BROWSER_LEASE_EXPIRED:       { retryable: true,  httpStatus: 500, exceptionClass: "system",   userMessage: "재시도됩니다.", operatorAction: "lease sweeper 동작 확인" },
   BROWSER_CRASH:               { retryable: true,  httpStatus: 500, exceptionClass: "system",   userMessage: "재시도됩니다.", operatorAction: "브라우저 메모리/재생성 확인" },
   CDP_DISCONNECTED:            { retryable: true,  httpStatus: 500, exceptionClass: "system",   userMessage: "재시도됩니다.", operatorAction: "CDP 엔드포인트 상태 확인" },
+  NAVIGATION_TIMEOUT:          { retryable: true,  httpStatus: 504, exceptionClass: "system",   userMessage: "페이지 응답이 지연되어 재시도됩니다.", operatorAction: "대상 사이트 응답·세션 상태·네트워크 확인" },
 
   LLM_BUDGET_EXCEEDED:         { retryable: false, httpStatus: 402, exceptionClass: "system",   userMessage: "처리 한도 초과.", operatorAction: "token budget 상향 또는 시나리오 점검" },
   LLM_CAPABILITY_MISMATCH:     { retryable: false, httpStatus: 422, exceptionClass: "system",   userMessage: "모델 미지원 작업.", operatorAction: "model policy/capabilities 확인" },
