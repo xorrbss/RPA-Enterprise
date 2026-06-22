@@ -21,6 +21,7 @@ import type { RunState } from "../../ts/state-machine-types";
 import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
+import type { RuntimeJobEnqueuePort } from "../src/runtime/executor-ports";
 import { extractEntryNavigateUrlRef, resolveSiteProfileId, resolveUrlRef } from "../src/runtime/site-resolution";
 import { createStagehandSession } from "../src/executor/cdp-session";
 import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
@@ -220,6 +221,10 @@ export async function startRunLoop(
       : new UtilityExecutor(p);
   // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
   const sessionStore = buildDevSessionStore(pool);
+  // 아티팩트 라이프사이클 enqueue — dev 아티팩트는 DevVisibleGatewayArtifactSink 가 not_required(가시)로 영속하므로
+  //   redaction 라이프사이클이 불필요(dev 는 graphile 워커도 미가동). 드라이버의 "artifacts→enqueuer 필수" 가드를
+  //   충족시키는 no-op(serve.ts 의 noopEnqueuer 패턴과 동형 — extract 성공 run 이 enqueue 미주입으로 failed_system 되던 갭).
+  const noopRuntimeJobEnqueuer: RuntimeJobEnqueuePort = { async enqueueRuntimeJob() {} };
   console.log(
     loggedGateway !== null
       ? "run-loop: 실 Chrome + Codex dom 실행기 활성(act/observe/extract→LLM; 자격증명 fill→SecretStore 주입; 세션 재사용 활성)."
@@ -303,6 +308,7 @@ export async function startRunLoop(
             workerId: WORKER_ID,
             sessionProvider: runProvider,
             sessionStore,
+            runtimeJobEnqueuer: noopRuntimeJobEnqueuer,
             recordExecutorSteps: true,
           },
         );
