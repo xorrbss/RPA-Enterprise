@@ -34,6 +34,15 @@ import { appendLifecycleAuditWithClient, assertLifecycleBypassUse } from "./runt
 // ops-defaults.md §6 artifact.redaction_fail_threshold = 5(초과 시 failed+알림·조회차단). 종전 3 은 계약 미달.
 const DEFAULT_ARTIFACT_REDACTION_MAX_ATTEMPTS = 5;
 
+/**
+ * redacted-at-rest(감사 AUD-9): redaction 이 원본을 새 redacted 객체로 대체한 뒤 **원본 평문 객체**를 object store
+ * 에서 삭제하는 최소 능력. S3ObjectStore/FsObjectStore(ObjectStore.delete)가 구조적으로 충족한다. delete 는 멱등
+ * (부재=무시)이라 재시도/재claim 에 안전하다.
+ */
+export interface SupersededObjectStore {
+  delete(objectRef: ObjectRef): Promise<void>;
+}
+
 export interface ArtifactRedactionProcessorDeps {
   readonly workerId?: string;
   readonly artifactRedactor?: ArtifactRedactor;
@@ -41,6 +50,8 @@ export interface ArtifactRedactionProcessorDeps {
   readonly artifactRedactionMaxAttempts?: number;
   readonly artifactLifecycleClaimTtlMs?: number;
   readonly artifactLifecycleAuditRetentionDays?: number;
+  /** AUD-9: redacted 결정으로 대체된 원본 평문 객체 삭제용(미주입 시 삭제 생략 — 후방호환). */
+  readonly artifactSupersededObjectStore?: SupersededObjectStore;
 }
 
 export class ArtifactRedactionProcessor {
@@ -116,6 +127,23 @@ export class ArtifactRedactionProcessor {
       await assertLifecycleBypassUse(client, "artifact_redaction_job", "artifact_lifecycle.redaction.finalize");
       await this.finalizeRedactionDecision(client, { claim: claim.claim, decision, maxAttempts, portBinding });
     });
+    // AUD-9(redacted-at-rest): finalize 가 object_ref 를 새 redacted 객체로 교체(redacted 결정)했으면, 커밋 후 원본
+    //   평문 객체(PII/credential 가능)를 삭제한다. 순서: finalize 커밋(row→redacted) 후 삭제 — 삭제가 실패해도 row 는
+    //   redacted 를 가리켜 read 안전(loud 로그, AUD-10 orphan sweeper/재시도가 잔류 회수). not_required 는 원본 유지라
+    //   비해당. finalize CAS 충돌이면 위에서 throw → 이 코드 미도달(잘못 삭제 안 함).
+    if (decision.kind === "redacted") {
+      const originalRef = claim.claim.artifact.objectRef;
+      const deleter = this.deps.artifactSupersededObjectStore;
+      if (deleter !== undefined && originalRef !== decision.redactedObjectRef) {
+        try {
+          await deleter.delete(originalRef);
+        } catch (e) {
+          console.error(
+            `artifact_redaction: superseded 원본 평문 객체 삭제 실패(artifact ${claim.claim.artifact.artifactRef.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+    }
     return { kind: "completed", emittedEvents: [] };
   }
 

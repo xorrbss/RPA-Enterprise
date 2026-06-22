@@ -231,6 +231,7 @@ export async function buildArtifactLifecycleWorkerOptions(
         new ArtifactRedactionContentTransform(),
       ),
       artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
+      artifactSupersededObjectStore: artifactStore, // AUD-9: redaction 후 원본 평문 객체 삭제
     };
   }
 
@@ -262,6 +263,7 @@ export async function buildArtifactLifecycleWorkerOptions(
       new ArtifactRedactionContentTransform(),
     ),
     artifactRetentionStore: new S3ArtifactRetentionStore(artifactStore, artifactObjectBinding),
+    artifactSupersededObjectStore: artifactStore, // AUD-9: redaction 후 원본 평문 객체 삭제
   };
 }
 
