@@ -219,6 +219,10 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       );
     }
     state.budget.remaining -= 1;
+    // @end_no_data 는 노드가 아니라 데이터-없음 terminal(success_empty)이다(ir.schema endNoDataTarget·reserved-handlers·V1/V7).
+    //   next/on[].target 으로 도달하면 노드 조회 전에 가로채 success_empty 로 종료한다 — 아니면 unknown node →
+    //   IR_SCHEMA_INVALID throw → failed_system 으로 오분류된다(IREL 감사). 노드 id 패턴(^[a-zA-Z_])상 "@end_no_data" 와 충돌 불가.
+    if (nodeId === "@end_no_data") return "success_empty";
     const node = state.scenario.nodes[nodeId];
     if (node === undefined) {
       throw new InterpreterError("IR_SCHEMA_INVALID", `interpreter: unknown node '${nodeId}'`);
