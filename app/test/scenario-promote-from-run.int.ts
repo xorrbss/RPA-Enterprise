@@ -35,6 +35,10 @@ const RUN_FILL = "71000000-0000-0000-0000-0000000000d1";
 const SCEN_SELECT = "70000000-0000-0000-0000-0000000000e3";
 const SV_SELECT = "70000000-0000-0000-0000-0000000000e4";
 const RUN_SELECT = "71000000-0000-0000-0000-0000000000e1";
+const SCEN_WARM = "70000000-0000-0000-0000-0000000000f3";
+const SV_WARM = "70000000-0000-0000-0000-0000000000f4";
+const RUN_WARM = "71000000-0000-0000-0000-0000000000f1";
+const CACHE_ID_WARM = "50000000-0000-4000-8000-0000000000f1";
 
 const SECRET = new TextEncoder().encode("promote-from-run-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -86,6 +90,16 @@ const SOURCE_IR_SELECT = {
   start: "g1",
   nodes: {
     g1: { what: [{ action: "act", instruction: "연도를 선택" }], next: "done", side_effect: { kind: "read_only" } },
+    done: { terminal: "success" },
+  },
+};
+
+// 캐시-hit 승격(PR-2): warm run 의 cache-hit step(stagehand 없음)도 action_plan_cache.plan_ref 에서 복구돼 승격돼야.
+const SOURCE_IR_WARM = {
+  meta: { name: "promo-warm", version: 1 },
+  start: "w1",
+  nodes: {
+    w1: { what: [{ action: "act", instruction: "제출 클릭" }], next: "done", side_effect: { kind: "read_only" } },
     done: { terminal: "success" },
   },
 };
@@ -169,6 +183,28 @@ async function main(): Promise<void> {
     });
     await seedRun(pool, RUN_SELECT, SV_SELECT, "completed");
     await seedActStep(pool, RUN_SELECT, "s1", "g1", "act", "success", { operation: "select", selector: "select#year", value: "2026" }, "done");
+    // 캐시-hit 승격: warm run — cache-hit step(stagehand 없음, action_plan_cache_id → active plan_ref).
+    await withTenantTx(pool, TENANT, async (c) => {
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,$3)`, [SCEN_WARM, TENANT, "promo-warm"]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'draft',$4::jsonb)`,
+        [SV_WARM, TENANT, SCEN_WARM, JSON.stringify(SOURCE_IR_WARM)],
+      );
+      await c.query(
+        `INSERT INTO action_plan_cache (id, tenant_id, scenario_version_id, step_id, url_pattern, dom_structural_hash,
+            model, prompt_template_version, browser_identity_version, plan_ref, status)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'w1s','u','h','codex','v1',1,$4,'active')`,
+        [CACHE_ID_WARM, TENANT, SV_WARM, JSON.stringify({ operation: "click", selector: "#warm-submit" })],
+      );
+    });
+    await seedRun(pool, RUN_WARM, SV_WARM, "completed");
+    await withTenantTx(pool, TENANT, (c) =>
+      c.query(
+        `INSERT INTO run_steps (id, run_id, tenant_id, step_id, node_id, attempt, action, status, cache_mode, action_plan_cache_id, created_at)
+         VALUES (gen_random_uuid(),$1,$2,'w1s','w1',0,'act','success','hit',$3::uuid,'2026-06-15T00:00:01Z')`,
+        [RUN_WARM, TENANT, CACHE_ID_WARM],
+      ),
+    );
 
     const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
@@ -241,6 +277,19 @@ async function main(): Promise<void> {
       const g1what = Array.isArray(g1.what) ? (g1.what as Array<Record<string, unknown>>) : [];
       const g1args = isRecord(g1what[0]?.args) ? (g1what[0].args as Record<string, unknown>) : {};
       check("select new version IR g1.act has deterministic select_selector + select_value", g1args.select_selector === "select#year" && g1args.select_value === "2026", JSON.stringify(g1what));
+
+      // 4d) 캐시-hit 승격(PR-2 headline): warm run(cache-hit step, stagehand 없음) → plan_ref 에서 복구 → click_selector 베이킹.
+      const warmRes = await post(SCEN_WARM, { run_id: RUN_WARM }, "promote-warm-1");
+      check("warm(cache-hit) promote-from-run → 201", warmRes.statusCode === 201, warmRes.body);
+      check("warm promoted_node_ids = [w1]", warmRes.json().promoted_node_ids?.[0] === "w1" && warmRes.json().promoted_node_ids?.length === 1, warmRes.body);
+      const warmVer = await withTenantTx(pool, TENANT, (c) =>
+        c.query<{ ir: unknown }>(`SELECT ir FROM scenario_versions WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND version=2`, [TENANT, SCEN_WARM]),
+      );
+      const warmIr = warmVer.rows[0]?.ir;
+      const w1 = isRecord(warmIr) && isRecord((warmIr.nodes as Record<string, unknown>)?.w1) ? ((warmIr.nodes as Record<string, Record<string, unknown>>).w1) : {};
+      const w1what = Array.isArray(w1.what) ? (w1.what as Array<Record<string, unknown>>) : [];
+      const w1args = isRecord(w1what[0]?.args) ? (w1what[0].args as Record<string, unknown>) : {};
+      check("warm cache-hit step promoted to deterministic click_selector (recovered from plan_ref)", w1args.click_selector === "#warm-submit", JSON.stringify(w1what));
 
       // 5) run 이 다른 시나리오 소속 → run_not_for_scenario.
       const wrongScenario = await post(SCEN2, { run_id: RUN_OK }, "promote-wrong-1");
