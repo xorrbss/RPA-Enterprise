@@ -887,6 +887,53 @@ AUD-12. IREL spec'd-but-generator-unused corner gaps (IREL audit, 5 × P2/P3 —
    hand-authoring surface is exposed to operators. Owner = project owner. Impact: bounded mis-validation /
    non-determinism in currently-unused IR features.
 
+## Audit Decisions (2026-06-23, PbD promotion adversarial audit)
+
+PbD 승격 + 결정형 act-mode + 캐시-hit 승격 + 일괄승인 코드(2026-06-22 scengen 감사 이후 머지, 미감사)
+adversarial audit (wf_3d28f25a, 6 finder → 2-lens, confirmed 8 / refuted 9). **MERGED (not deferred):**
+cluster A = node_id/step_id 입도 불일치 다중-act 노드 오귀속 (PBD-T-01·LRAP-02·DAM-01·IRT-1, 4건 중복,
+loud-skip multi_act_node_ambiguous, PR #293); CHP-01 = cache-hit 승격이 run 실행 후 덮어써진 plan_ref 베이킹
+(`apc.last_success_at <= rs.created_at` 가드, PR #294). The three below are confirmed-but-deferred / by-design,
+same discipline as AUD-1..12. **모든 도달 경로의 공통 게이트: 자동 생성기·시드는 트리거 IR 을 방출하지 않고
+(손수 IR-studio 저작), 산출물은 자동 prod 아닌 운영자-검토 draft** — 즉시 프로덕션 사고가 아니라 bounded.
+
+AUD-PBD-1. miss-path 승격이 cross-run 드리프트 게이트를 우회 (LRAP-01, P2) — by-design (deferred 결정 필요)
+   Finding: `loadRunActionPlans` 의 hit-path 는 `apc.status='active'`(+CHP-01 의 `last_success_at` 가드)로 드리프트
+   플랜을 제외하나, miss-path(`stagehand_calls.parsed_json`)는 status 필터가 없다. 같은 family 가 후속 run 에서
+   markSuspect(verify 실패) 됐어도, run R 의 stagehand 행은 불변이라 R 승격 시 그 셀렉터가 베이킹된다(hit↔miss
+   비대칭). Decision (by-design, NOT 즉시 수정): miss-path 의 plan 은 **run R 자신이 실행해 성공한 셀렉터**(run-time
+   truth, R 이 데모한 것)다 — PbD 의 본질은 "데모한 동작을 굳힘"이므로, R 자신의 성공 셀렉터를 베이킹하는 것은
+   정당하다. 후속 *다른* run B 의 드리프트 신호(다른 페이지 상태일 수도)로 R 의 데모를 무효화할지는 **설계 결정**
+   (cross-run 드리프트가 per-run 데모를 override 해야 하는가)이지 명백한 버그가 아니다. hit-path 가 공유 가변 캐시를
+   읽는 문제(CHP-01)는 별도 수정됨. Build-condition: 만약 cross-run 드리프트로 miss-path 도 게이트하기로 결정하면,
+   executor 가 miss step 에도 `action_plan_cache_id` 를 set(현재 hit 만)해 family 의 현재 status 를 JOIN 으로 확인
+   가능하게 한 뒤, plan 은 stagehand(run-time)에서 읽되 status 가 비-active 면 PromotionSkip(reason=
+   'drift_unverifiable')로 명시 제외. Owner = project owner. Impact: draft + 운영자검토로 bounded.
+
+AUD-PBD-2. 승격 시점 결정형 모드-배타/값출처 불변식 미검증 (PBD-T-02, P3) — known producer는 #293이 차단
+   Finding: `promoteScenarioFromRun` 은 베이킹 후 `compileScenario`(AJV+정적검증 V1-V11)만 돌리는데, click/fill/
+   select 모드 상호배타·fill 값출처 필수 불변식은 런타임 `ir-translate`(compiledScenarioFrom)에만 있어 승격 시점엔
+   미검증이다. `args` 는 `additionalProperties:true` 라 모순 args 조합도 AJV 통과 → 손상 draft 가 201 영속되고 실행
+   시점에야 IR_SCHEMA_INVALID 로 터진다(저장→실행 시점 지연). Decision (mostly mitigated, residual deferred): 이
+   결함의 **알려진 유일 producer 는 PBD-T-01 의 다중-act 오귀속**(click_selector + vars 동거 act 생성)이었고, **PR
+   #293 의 multi-act loud-skip 이 그 producer 를 닫았다**(단일-act 노드는 plan.operation 이 act 의 성격과 일치 →
+   모드 혼합 미발생). 잔여는 "향후 transform 버그가 모순 args 를 만들면" 이라는 가설적 defense-in-depth. Build-
+   condition (방어심층 원하면): `ir-translate` 의 모드-배타/값출처 검사를 순수 함수로 추출해 승격 저장 전(또는
+   compile 단계)에 재실행, 모순 시 loud 거부. Owner = project owner. Impact: 잔여는 가설적 — bounded.
+
+AUD-PBD-3. click_text 부분문자열 매칭이 모호 요소를 클릭 가능 (DAM-02, split P2/P3) — 저작 하드닝(계약 위반 아님)
+   Finding: `executeClickText` 의 stamp 스크립트가 `textContent.indexOf(t)!==-1`(부분문자열, 정확일치 아님)로 DOM
+   순서 첫 가시 요소를 고른다. click_text:'승인' 이 '재승인 요청' 등 더 긴 라벨/조상 컨테이너를 먼저 매칭하면 비가역
+   커밋이 엉뚱한 요소에 발사될 수 있고, click_selector 의 radio/checkbox read-back witness 가 click_text 엔 없다.
+   Decision (authoring hardening, NOT 계약 위반 — 2-lens 1:1 split, 회의 렌즈 채택): (1) read-back 비대칭 주장은
+   **버튼 클릭엔 거짓** — `executeDeterministicClick` 의 read-back 도 radio/checkbox 전용이라 일반 버튼 클릭엔 두 경로
+   모두 witness 없음(대칭). (2) 비가역 커밋의 효과 witness 는 **설계상 별도 `assert_absent` 노드**(DomAction doc·PR
+   #156 hiworks 결재 비가역 게이트가 이 패턴 사용). (3) 미발견은 loud throw, 부분문자열/첫-가시는 문서화된
+   "모호성에 fail 하지 않고 사용 가능 유지" 결정. (4) 도달은 짧고 모호한 click_text 베이킹 + assert_absent 생략 +
+   더 긴 라벨 DOM 선행 3조건 동시 필요. Build-condition (하드닝 원하면): click_text 정확일치(`textContent.trim()===t`)
+   우선 + 부분문자열 폴백, 또는 다중 가시 매칭 시 loud(모호성 거부). Owner = project owner. Impact: 현 비가역 prod
+   경로(PR #156)는 고유 onclick click_selector + assert_absent 를 써 미해당 — 저작 가이던스 개선 여지.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
