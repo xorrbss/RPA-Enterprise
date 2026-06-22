@@ -14,7 +14,7 @@ import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, statusLabel, errorCodeLabel, tone, type Tone } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
 import { RUN_STATES } from "./filters";
-import { mergeParams, navigate, useHashParam } from "../router";
+import { mergeParams, navigate, useHashIdParam, useHashParam } from "../router";
 import type {
   ArtifactDetail,
   RunArtifactItem,
@@ -51,9 +51,9 @@ export function RunTraceView(): JSX.Element {
   const initialFilter = statusParam !== null && (RUN_STATES as readonly string[]).includes(statusParam) ? { status: statusParam } : undefined;
   const lv = useListView<RunItem>(["runs"], (p) => api.listRuns(p), { refetchInterval: POLL_MS, initialFilter });
   // 선택 run을 해시(`#runTrace?run=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(useState 휘발 대체).
-  const sel = useHashParam("run");
+  const sel = useHashIdParam("run");
   const focusParam = useHashParam("focus");
-  const generationParam = useHashParam("generation");
+  const generationParam = useHashIdParam("generation");
   const focusArtifacts = focusParam === "artifacts";
   const detail = useQuery({
     queryKey: ["run-detail", sel],

@@ -11,7 +11,7 @@ import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, kindLabel, statusLabel } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
-import { mergeParams, navigate, useHashParam } from "../router";
+import { mergeParams, navigate, useHashIdParam, useHashParam } from "../router";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
 import type { HumanTaskItem } from "../api/types";
 
@@ -106,7 +106,7 @@ export function HumanTasksView(): JSX.Element {
     { refetchInterval: 5_000, initialFilter: runParam !== null ? { run_id: runParam } : undefined },
   );
   // 선택 사람확인 업무를 해시(`#humanTasks?ht=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
-  const sel = useHashParam("ht");
+  const sel = useHashIdParam("ht");
   const detail = useQuery({ queryKey: ["humantask-detail", sel], queryFn: () => api.getHumanTask(sel as string), enabled: sel !== null });
   const pageItems = lv.query.data?.items ?? [];
   const dueItems = useMemo(() => pageItems.filter((t) => !TERMINAL.has(t.state) && t.timeout !== null).sort((a, b) => dueTime(a) - dueTime(b)), [pageItems]);
