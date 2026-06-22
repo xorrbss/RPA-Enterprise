@@ -8,7 +8,26 @@ import type { LLMResponse, PromptInspectionTextRun } from "../../../ts/security-
 import { GatewayError } from "../gateway/llm-gateway";
 
 export const UTILITY_ACTIONS = new Set(["navigate", "download", "upload", "api_call", "file", "shell"]);
-export const ACTION_PLAN_SCHEMA = { type: "json_schema", schemaRef: "action_plan", schemaVersion: "1", strict: true } as const;
+// act LLM-plan 의 구조화 출력 스키마 — inline schema 동반이라 Gateway(llm-gateway.ts:321)가 bypass 대신 ajv 로
+//   강제한다(LLM 이 {operation,selector,value?,valueRef?} 형태로 수렴 — 모호객체 {action,target,criteria} 거부).
+//   shape 는 parseActionPlan(action-plan-cache.ts) 계약과 1:1(operation enum·non-empty selector). strict + 1회 repair.
+export const ACTION_PLAN_SCHEMA = {
+  type: "json_schema",
+  schemaRef: "action_plan",
+  schemaVersion: "1",
+  strict: true,
+  schema: {
+    type: "object",
+    required: ["operation", "selector"],
+    additionalProperties: false,
+    properties: {
+      operation: { enum: ["click", "select", "fill"] },
+      selector: { type: "string", minLength: 1 },
+      value: { type: "string" },
+      valueRef: { type: "string", minLength: 1 },
+    },
+  },
+} as const;
 // 결정형 클릭(click_selector) settle — 무거운 SPA 상세/async 모달 렌더 대응. 미존재 시 deadline 까지 폴 후 loud(은폐 금지).
 // 동적 읽기(매 호출): 테스트가 DET_CLICK_SETTLE_MS 로 단축할 수 있게 함(모듈 로드 시점 고정 회피).
 export const clickSettleMs = (): number => Number(process.env.DET_CLICK_SETTLE_MS ?? 15000);

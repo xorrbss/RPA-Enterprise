@@ -252,7 +252,12 @@ export function buildRequest(cfg: StagehandDomExecutorConfig, stepId: string, a:
   const systemContent =
     a.type === "extract"
       ? "Deterministic web automation extract worker. Extract actual records from [page].dom and return only the requested JSON data. Prefer [network_json] for virtualized grids or API-backed tables, then [visible_text], then [html]. Use only values present in [network_json], [visible_text], or [html]. If no matching records are present, return an empty collection that fits the requested schema. Never synthesize placeholder/example rows. Do not return an extraction plan, selector plan, or prose."
-      : `Deterministic web automation ${a.type} planner. Respond with a single minified JSON object only.`;
+      : a.type === "act"
+        ? // act 플래너 shape 을 system 프롬프트에 직접 고정 — §7 프롬프트-스키마 주입은 jsonMode=false(prod)에서만
+          //   발화하므로(dev 는 jsonMode=true), 모드 무관하게 {operation,selector} 로 수렴시키려면 여기서 지시해야 한다.
+          //   ACTION_PLAN_SCHEMA(ajv §5)와 동형. CSS 셀렉터만(text=/:has-text/:contains 는 결정형 click_text 의 몫).
+          'Deterministic web automation act planner. Respond with ONLY a single minified JSON object: {"operation":"click"|"select"|"fill","selector":"<a CSS selector that targets exactly one element>","value":"<string, only for select/fill>"}. The selector must be a concrete CSS selector (no text=, :has-text, or :contains). No prose, no markdown, no code fences.'
+        : `Deterministic web automation ${a.type} planner. Respond with a single minified JSON object only.`;
 
   const request = {
     model: cfg.model,

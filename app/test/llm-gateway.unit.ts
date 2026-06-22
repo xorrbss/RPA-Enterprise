@@ -286,14 +286,20 @@ async function main(): Promise<void> {
     check("call: non-strict repair once → success", res.parsedJson !== undefined && (res.parsedJson as { a: number }).a === 2 && q.calls() === 2);
   }
 
-  // ── DAH-01/SO-1: act 의 action_plan(inline schema 없음)이 **실제 ajv validator** 로도 통과해야 한다 ──────────
-  //    종전 finalize §5 가 schema-없는 action_plan 에 extract-스키마 검증을 적용→valid plan 을 LLM_MALFORMED_OUTPUT
-  //    으로 거부(LLM-plan act 전면 불능). 기존 테스트는 act 경로에 okValidator 만 써서 이 결함을 마스킹했다.
+  // ── DAH-01/SO-1: act 의 action_plan(inline schema 동반)이 **실제 ajv validator** 로 valid plan 통과 + 모호 plan 거부 ──
+  //    action_plan 은 이제 inline schema(stagehand-dom-executor-support.ts ACTION_PLAN_SCHEMA)를 싣는다 — §7 에서 LLM
+  //    프롬프트로 {operation,selector} shape 을 지시하고 finalize §5 ajv 로 강제(LLM 의 {action,target,criteria} 같은
+  //    모호 객체 거부). valid plan 은 통과(bypass 가 아니라 ajv 통과)해야 하고, schema 미스매치는 loud(LLM_MALFORMED_OUTPUT).
   {
     const realValidator = new AjvStructuredOutputValidator();
     const actReq = makeReq({ responseFormat: ACTION_PLAN_SCHEMA }); // makeReq 기본 primitive:"act"
     const res = await gateway({ primary: queueAdapter([textDone('{"operation":"click","selector":"#submit"}')]).adapter, validator: realValidator }).call(actReq, sig());
     check("DAH-01: act action_plan + 실 validator → 성공(parsedJson 반환)", res.parsedJson !== undefined && (res.parsedJson as { operation: string }).operation === "click", JSON.stringify(res.parsedJson));
+
+    // Phase 2A: 모호 plan({action,target,criteria}=종전 LLM 환각 shape)은 inline schema(operation enum·non-empty selector)
+    //   미스매치 → strict:true 라 repair 없이 즉시 loud(LLM_MALFORMED_OUTPUT). 종전엔 schema 부재로 bypass→이 형태를 통과시켰다.
+    const badErr = await caught(gateway({ primary: queueAdapter([textDone('{"action":"click","target":"제목","criteria":"present"}')]).adapter, validator: realValidator }).call(makeReq({ responseFormat: ACTION_PLAN_SCHEMA }), sig()));
+    check("DAH-01: act action_plan + 모호 plan → LLM_MALFORMED_OUTPUT(ajv 거부)", badErr?.code === "LLM_MALFORMED_OUTPUT", String(badErr?.code));
 
     // 회귀: 실 validator 의 extract 검증은 보존(invalid → throw).
     const exReq = makeReq({
