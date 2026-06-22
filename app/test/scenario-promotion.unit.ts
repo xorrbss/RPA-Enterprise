@@ -28,11 +28,18 @@ function baseIr(nodes: Record<string, unknown>): Record<string, unknown> {
   return { meta: { name: "t", version: 1 }, start: "n1", nodes: { ...nodes, done: { terminal: "success" } } };
 }
 
-function clickSelectorOf(result: { ir: Record<string, unknown> }, nodeId: string): unknown {
+function argsOf(result: { ir: Record<string, unknown> }, nodeId: string): Record<string, unknown> | undefined {
   const nodes = result.ir.nodes as Record<string, Record<string, unknown>>;
   const what = nodes[nodeId].what as Array<Record<string, unknown>>;
-  const args = what[0].args as Record<string, unknown> | undefined;
-  return args?.click_selector;
+  return what[0].args as Record<string, unknown> | undefined;
+}
+
+function clickSelectorOf(result: { ir: Record<string, unknown> }, nodeId: string): unknown {
+  return argsOf(result, nodeId)?.click_selector;
+}
+
+function fillSelectorOf(result: { ir: Record<string, unknown> }, nodeId: string): unknown {
+  return argsOf(result, nodeId)?.fill_selector;
 }
 
 function main(): void {
@@ -55,19 +62,35 @@ function main(): void {
     check("input IR not mutated", origArgs === undefined, JSON.stringify(ir));
   }
 
-  // 3. fill plan → skipped(미승격), act 불변.
+  // 3. fill plan + 값 출처(args.value_ref) → fill_selector 베이킹 + promoted(slice 2b). 값 출처 보존.
   {
-    const ir = baseIr({ n1: actNode("fill name") });
-    const r = promoteActsToDeterministic(ir, { n1: { operation: "fill", selector: "#name", valueRef: "p" } });
-    check("fill plan not promoted", r.promotedNodeIds.length === 0 && clickSelectorOf(r, "n1") === undefined);
-    check("fill plan skipped with reason", r.skipped.length === 1 && r.skipped[0].nodeId === "n1" && r.skipped[0].reason === "fill_not_click_deterministic", JSON.stringify(r.skipped));
+    const ir = baseIr({ n1: actNode("사유 입력", { value_ref: "reason" }) });
+    const r = promoteActsToDeterministic(ir, { n1: { operation: "fill", selector: "textarea#reason", valueRef: "reason" } });
+    check("fill plan(value_ref) bakes act.args.fill_selector", fillSelectorOf(r, "n1") === "textarea#reason" && r.promotedNodeIds[0] === "n1");
+    check("fill plan(value_ref) preserves value_ref(값 출처)", argsOf(r, "n1")?.value_ref === "reason");
+    check("fill plan(value_ref) no skips", r.skipped.length === 0, JSON.stringify(r.skipped));
   }
 
-  // 4. select plan → skipped.
+  // 3b. fill plan + 값 출처(vars[secret]) → fill_selector 베이킹.
+  {
+    const node = { what: [{ action: "act", instruction: "비밀번호 입력", vars: ["login.password"] }], next: "done", side_effect: { kind: "read_only" } };
+    const r = promoteActsToDeterministic(baseIr({ n1: node }), { n1: { operation: "fill", selector: "input#pw", valueRef: "login.password" } });
+    check("fill plan(secret vars) bakes act.args.fill_selector", fillSelectorOf(r, "n1") === "input#pw" && r.promotedNodeIds[0] === "n1", JSON.stringify(r));
+  }
+
+  // 3c. fill plan 인데 값 출처 없음(LLM 리터럴 value) → skipped(fill_selector 는 값 출처 필수).
+  {
+    const ir = baseIr({ n1: actNode("fill name") });
+    const r = promoteActsToDeterministic(ir, { n1: { operation: "fill", selector: "#name", value: "Alice" } });
+    check("fill plan(값 출처 없음) not promoted", r.promotedNodeIds.length === 0 && fillSelectorOf(r, "n1") === undefined);
+    check("fill plan(값 출처 없음) skipped fill_no_value_source", r.skipped.length === 1 && r.skipped[0].reason === "fill_no_value_source", JSON.stringify(r.skipped));
+  }
+
+  // 4. select plan → skipped(결정형 셀렉터 arg 부재).
   {
     const ir = baseIr({ n1: actNode("select option") });
     const r = promoteActsToDeterministic(ir, { n1: { operation: "select", selector: "#sel", value: "v" } });
-    check("select plan skipped", r.promotedNodeIds.length === 0 && r.skipped[0]?.reason === "select_not_click_deterministic");
+    check("select plan skipped", r.promotedNodeIds.length === 0 && r.skipped[0]?.reason === "select_not_deterministic", JSON.stringify(r.skipped));
   }
 
   // 5. captured plan for unknown node → node_not_found.

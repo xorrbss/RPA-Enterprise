@@ -248,11 +248,11 @@ export async function promoteScenarioFromRun(
       if (sourceRow === undefined || !isRecord(sourceRow.ir)) {
         throw new ApiResponseError("RESOURCE_NOT_FOUND");
       }
-      // 3) 캡처 plan → 결정형 transform(click-only).
+      // 3) 캡처 plan → 결정형 transform(click → click_selector, fill → fill_selector[값 출처 보유 노드]).
       const plans = await loadRunActionPlans(c, runId);
       const promotion = promoteActsToDeterministic(sourceRow.ir, plans);
       if (promotion.promotedNodeIds.length === 0) {
-        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "no_click_plans_to_promote" });
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "no_plans_to_promote" });
       }
       // 4) 다음 버전 번호 + meta(name/version) 세팅.
       const currentVersion = await c.query<{ version: number }>(

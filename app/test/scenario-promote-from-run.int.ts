@@ -29,6 +29,9 @@ const SV2 = "70000000-0000-0000-0000-0000000000c4";
 const RUN_OK = "71000000-0000-0000-0000-0000000000a1";
 const RUN_RUNNING = "71000000-0000-0000-0000-0000000000a2";
 const RUN_NOPLAN = "71000000-0000-0000-0000-0000000000a3";
+const SCEN_FILL = "70000000-0000-0000-0000-0000000000d3";
+const SV_FILL = "70000000-0000-0000-0000-0000000000d4";
+const RUN_FILL = "71000000-0000-0000-0000-0000000000d1";
 
 const SECRET = new TextEncoder().encode("promote-from-run-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -59,6 +62,17 @@ const SOURCE_IR = {
   start: "n1",
   nodes: {
     n1: { what: [{ action: "act", instruction: "click the submit button" }], next: "done", side_effect: { kind: "read_only" } },
+    done: { terminal: "success" },
+  },
+};
+
+// slice 2b: 값 출처(value_ref)를 가진 fill 노드 — 성공 run 의 fill ActionPlan 셀렉터가 act.args.fill_selector 로 베이킹돼야.
+const SOURCE_IR_FILL = {
+  meta: { name: "promo-fill", version: 1 },
+  start: "f1",
+  params_schema: { type: "object", properties: { reason: { type: "string" } } },
+  nodes: {
+    f1: { what: [{ action: "act", instruction: "사유를 입력", args: { value_ref: "reason" } }], next: "done", side_effect: { kind: "read_only" } },
     done: { terminal: "success" },
   },
 };
@@ -122,6 +136,16 @@ async function main(): Promise<void> {
     await seedRun(pool, RUN_NOPLAN, SV1, "completed");
     await seedActStep(pool, RUN_NOPLAN, "s1", "n1", "observe", "success", undefined, "done"); // act 아님 → plan 0
     await seedScenario(pool, SCEN2, SV2, "other");
+    // slice 2b fill 승격: 값 출처(value_ref) fill 노드 시나리오 + 성공 run 의 fill ActionPlan.
+    await withTenantTx(pool, TENANT, async (c) => {
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,$3)`, [SCEN_FILL, TENANT, "promo-fill"]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1,$2,$3,1,'draft',$4::jsonb)`,
+        [SV_FILL, TENANT, SCEN_FILL, JSON.stringify(SOURCE_IR_FILL)],
+      );
+    });
+    await seedRun(pool, RUN_FILL, SV_FILL, "completed");
+    await seedActStep(pool, RUN_FILL, "s1", "f1", "act", "success", { operation: "fill", selector: "textarea#reason", valueRef: "reason" }, "done");
 
     const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
     const app = buildServer({
@@ -165,9 +189,22 @@ async function main(): Promise<void> {
       const running = await post(SCEN, { run_id: RUN_RUNNING }, "promote-running-1");
       check("running run → 422 run_not_completed", running.statusCode === 422 && running.json().code === "IR_SCHEMA_INVALID", running.body);
 
-      // 4) click plan 0(observe만) → no_click_plans_to_promote.
+      // 4) plan 0(observe만) → no_plans_to_promote.
       const noplan = await post(SCEN, { run_id: RUN_NOPLAN }, "promote-noplan-1");
-      check("no click plans → 422 (no_click_plans_to_promote)", noplan.statusCode === 422 && noplan.json().code === "IR_SCHEMA_INVALID", noplan.body);
+      check("no plans → 422 (no_plans_to_promote)", noplan.statusCode === 422 && noplan.json().code === "IR_SCHEMA_INVALID", noplan.body);
+
+      // 4b) fill 승격(slice 2b): 값 출처 보유 fill 노드 → act.args.fill_selector 베이킹 + value_ref 보존.
+      const fillRes = await post(SCEN_FILL, { run_id: RUN_FILL }, "promote-fill-1");
+      check("fill promote-from-run → 201", fillRes.statusCode === 201, fillRes.body);
+      check("fill promoted_node_ids = [f1]", fillRes.json().promoted_node_ids?.[0] === "f1" && fillRes.json().promoted_node_ids?.length === 1, fillRes.body);
+      const fillVer = await withTenantTx(pool, TENANT, (c) =>
+        c.query<{ ir: unknown }>(`SELECT ir FROM scenario_versions WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND version=2`, [TENANT, SCEN_FILL]),
+      );
+      const fillIr = fillVer.rows[0]?.ir;
+      const f1 = isRecord(fillIr) && isRecord((fillIr.nodes as Record<string, unknown>)?.f1) ? ((fillIr.nodes as Record<string, Record<string, unknown>>).f1) : {};
+      const f1what = Array.isArray(f1.what) ? (f1.what as Array<Record<string, unknown>>) : [];
+      const f1args = isRecord(f1what[0]?.args) ? (f1what[0].args as Record<string, unknown>) : {};
+      check("fill new version IR f1.act has deterministic fill_selector + preserved value_ref", f1args.fill_selector === "textarea#reason" && f1args.value_ref === "reason", JSON.stringify(f1what));
 
       // 5) run 이 다른 시나리오 소속 → run_not_for_scenario.
       const wrongScenario = await post(SCEN2, { run_id: RUN_OK }, "promote-wrong-1");
