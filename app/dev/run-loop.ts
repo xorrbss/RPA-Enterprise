@@ -22,7 +22,8 @@ import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
 import { driveClaimedRun } from "../src/runtime/run-step-driver";
 import { extractEntryNavigateUrlRef, resolveSiteProfileId, resolveUrlRef } from "../src/runtime/site-resolution";
-import { createStagehandSession, SingleSessionProvider } from "../src/executor/cdp-session";
+import { createStagehandSession } from "../src/executor/cdp-session";
+import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
 import { SitePageStateResolver } from "../src/executor/site-page-state-resolver";
 import { loadSitePageStateConfig } from "../src/executor/site-page-state-config";
 import { UtilityExecutor } from "../src/executor/utility-executor";
@@ -51,6 +52,11 @@ const DOM_CFG = {
   scenarioVersionId: "dev-runloop",
   browserIdentityVersion: 1,
 };
+
+// run 당 wall-clock 워치독(env RUN_DEADLINE_MS, 기본 5분). driveClaimedRun 의 어떤 단계든(navigate/observe/act/LLM)이
+// 무한 대기하면 단일 세션 busy 가 영구 점유돼 이후 모든 queued run 이 막힌다(실관측: navigate 1h+ 행). 데드라인 초과 시
+// run 을 failed_system 으로 표면화(은폐 금지)하고 세션을 재생성해 루프가 자가복구한다.
+const RUN_DEADLINE_MS = Math.max(30_000, Number(process.env.RUN_DEADLINE_MS) || 300_000);
 
 /**
  * 실 Codex 게이트웨이 조립(CODEX_* env 필수). 미설정 시 null → dom 실행기 비활성(navigate/observe 만).
@@ -86,6 +92,10 @@ function buildCodexGateway(artifactSink?: GatewayArtifactSink): LlmGatewayCaller
       },
     },
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
+    // prompt.inspect 감사 fail-closed(Phase 8)로 securityAudit 가 필수 — 없으면 매 LLM 호출의 recordDecision 이
+    // undefined 로 throw → act/extract 가 CONTROL_PLANE_INTERNAL_ERROR 로 전멸한다(실관측). dev SecretBoundary 와
+    // 동일하게 인메모리 감사 writer 주입(프로덕션은 PgDurableSecurityAuditDecisionWriter).
+    securityAudit: new ContractDurableSecurityAuditWriter(new InMemoryImmutableAuditLog()),
     config: { retryMax: 2, fallbackAttempts: 0, repairAttempts: 1 },
   });
 }
@@ -173,9 +183,8 @@ export async function startRunLoop(
     return null;
   }
   const downloadDir = mkdtempSync(join(tmpdir(), "dev-runloop-"));
-  const session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
-  const provider = new SingleSessionProvider(session);
-  const utility = new UtilityExecutor(provider);
+  // 단일 세션 — 행(hang) 워치독이 wedge 된 세션을 교체(recreateSession)할 수 있도록 mutable 바인딩.
+  let session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
   const gateway = buildCodexGateway(artifactSink);
   const loggedGateway: LlmGatewayCaller | null =
     gateway === null
@@ -203,10 +212,12 @@ export async function startRunLoop(
     claims: { runtime_identity: "runtime-worker" }, // RESOLVE_MATRIX: runtime-worker → purpose 'executor'
   };
   // gateway 있으면 dom(act/observe/extract) + utility 합성. 없으면 utility 만(act/extract 시나리오는 실패).
-  const executor: ExecutorPlugin =
+  // run 별 격리: 각 run 은 시작 시점 세션 스냅샷에 바인딩된 provider/executor 를 받는다(buildExecutor). 데드라인
+  // 초과로 세션을 재생성해도 직전 run 의 댕글링 drive 는 자기(닫힌) 세션만 보므로 다음 run 의 새 세션을 오염시킬 수 없다.
+  const buildExecutor = (p: CdpSessionProvider): ExecutorPlugin =>
     loggedGateway !== null
-      ? new CompositeExecutor(new StagehandDomExecutor(loggedGateway, provider, DOM_CFG, undefined, secrets, executorPrincipal, extractArtifactSink), utility)
-      : utility;
+      ? new CompositeExecutor(new StagehandDomExecutor(loggedGateway, p, DOM_CFG, undefined, secrets, executorPrincipal, extractArtifactSink), new UtilityExecutor(p))
+      : new UtilityExecutor(p);
   // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
   const sessionStore = buildDevSessionStore(pool);
   console.log(
@@ -265,9 +276,14 @@ export async function startRunLoop(
           );
           return { siteProfileId, config, browserIdentityId: bid.rows[0]?.id ?? DEV_BROWSER_IDENTITY_ID };
         });
-        const resolver = new SitePageStateResolver(provider, resolved.config);
+        // run 별 세션 스냅샷 — 데드라인 후 session 재생성이 이 run 의 drive(executor/resolver/sessionProvider)에
+        // 전파되지 않게 격리(댕글링 drive 가 다음 run 의 새 세션을 만지지 못함).
+        const runSession = session;
+        const runProvider: CdpSessionProvider = { forLease: () => runSession };
+        const executor = buildExecutor(runProvider);
+        const resolver = new SitePageStateResolver(runProvider, resolved.config);
 
-        const result = await driveClaimedRun(
+        const drive = driveClaimedRun(
           {
             runId: next.id,
             tenantId,
@@ -285,12 +301,31 @@ export async function startRunLoop(
             executor,
             resolver,
             workerId: WORKER_ID,
-            sessionProvider: provider,
+            sessionProvider: runProvider,
             sessionStore,
             recordExecutorSteps: true,
           },
         );
-        console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
+        // 데드라인 워치독: drive 가 RUN_DEADLINE_MS 내 미정착이면 세션 wedge 로 간주 → failed_system + 세션 재생성.
+        // (drive 가 그 전에 reject 하면 race 도 reject → 아래 catch 의 기존 실패 경로로 처리.)
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        const raced = await Promise.race([
+          drive.then((r) => ({ r })),
+          new Promise<null>((resolve) => {
+            deadlineTimer = setTimeout(() => resolve(null), RUN_DEADLINE_MS);
+          }),
+        ]).finally(() => {
+          if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+        });
+        if (raced === null) {
+          console.error(`run-loop: ${next.id.slice(0, 8)} 데드라인 초과(${RUN_DEADLINE_MS}ms) — failed_system 처리 + 세션 재생성`);
+          void drive.catch(() => undefined); // 댕글링 drive 거부 흡수(unhandledRejection 방지)
+          await markRunFailedSystem(pool, tenantId, next.id, next.correlation_id, `run exceeded deadline ${RUN_DEADLINE_MS}ms (step hang)`);
+          session = await recreateSession(session, chrome, downloadDir);
+        } else {
+          const result = raced.r;
+          console.log(`run-loop: ${next.id.slice(0, 8)} → ${result.state} (site ${resolved.siteProfileId.slice(0, 8)}, ${result.outcome.visited.join("→")})`);
+        }
       } catch (e) {
         // 해소 실패(url_ref params 누락·0-match·ambiguous·셀렉터 미설정) 또는 구동 실패는 표면화(은폐 금지). run은 claimed에서 멈춤.
         const message = e instanceof Error ? e.message : String(e);
@@ -317,6 +352,12 @@ export async function startRunLoop(
       rmSync(downloadDir, { recursive: true, force: true });
     },
   };
+}
+
+/** wedge 된 세션을 닫고(close 는 내부 3s race 로 bounded) 새 세션을 기동한다. run-loop 데드라인 자가복구용. */
+async function recreateSession(old: CdpSession, chrome: string, downloadDir: string): Promise<CdpSession> {
+  await old.close().catch(() => undefined);
+  return createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
 }
 
 async function markRunFailedSystem(

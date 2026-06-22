@@ -81,7 +81,20 @@ export class StagehandCdpSession implements CdpSession {
   }
 
   async goto(url: string): Promise<void> {
-    await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    // 실사이트(recon: 하이웍스 결재 cold nav)에서 Playwright 내부 timeout 이 wedge 되어 page.goto 가
+    // NAV_TIMEOUT_MS 를 발화하지 않고 무한 대기 → run-loop 단일 세션 busy 영구 점유(실관측 1h+)가 재현됐다.
+    // 우리 이벤트루프의 setTimeout(내부 timeout +5s 유예) 외부 워치독으로 강제 reject 한다(은폐 금지: loud throw).
+    const nav = this.page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const watchdog = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`navigate watchdog: page.goto exceeded ${NAV_TIMEOUT_MS + 5_000}ms`)), NAV_TIMEOUT_MS + 5_000);
+    });
+    try {
+      await Promise.race([nav, watchdog]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      void Promise.resolve(nav).catch(() => undefined); // 댕글링 navigation 거부 흡수(unhandledRejection 방지)
+    }
   }
 
   async reload(): Promise<void> {
