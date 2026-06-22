@@ -19,13 +19,13 @@ import { fileURLToPath } from "node:url";
 import type { PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
 import type { CorrelationId, RunId, TenantId } from "../../ts/security-middleware-contract";
 import type {
-  BrowserLeasePlan,
   ResumeTokenEnvelope,
   SessionRestorer,
   SessionRestoreResult,
 } from "../../ts/runtime-contract";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { PgRuntimeWorker } from "../src/worker/runtime-worker";
+import type { BrowserLeasePlan } from "../src/worker/runtime-worker";
 import { HmacResumeTokenCodec } from "../src/runtime/resume-token-codec";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
