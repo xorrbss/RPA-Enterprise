@@ -55,6 +55,29 @@ export function buildRetentionSweeperJobs(
   }));
 }
 
+// impl-contracts §B artifact_integrity_checker(일배치): sha256 ↔ object 대조 → 불일치 quarantine. retention 과 같은 일 cadence.
+export function buildIntegritySweeperJobs(
+  tenantIds: readonly string[],
+  correlationId: () => string = randomUUID,
+): RuntimeWorkerJob[] {
+  return tenantIds.map((tenantId) => ({
+    kind: "artifact_integrity",
+    tenantId: tenantId as TenantId,
+    correlationId: correlationId() as CorrelationId,
+  }));
+}
+
+// 일배치 묶음(retention + integrity). 동일 cadence·idempotent.
+export function buildDailySweeperJobs(
+  tenantIds: readonly string[],
+  correlationId: () => string = randomUUID,
+): RuntimeWorkerJob[] {
+  return [
+    ...buildRetentionSweeperJobs(tenantIds, correlationId),
+    ...buildIntegritySweeperJobs(tenantIds, correlationId),
+  ];
+}
+
 export function millisecondsUntilNextKstHour(now: Date, hourKst: number): number {
   if (!Number.isInteger(hourKst) || hourKst < 0 || hourKst > 23) {
     throw new Error(`retentionHourKst must be an integer hour 0..23, got ${hourKst}`);
@@ -105,7 +128,7 @@ export function startMaintenanceScheduler(
         return;
       }
       retentionInFlight = true;
-      enqueueBatch(pool, enqueuer, buildRetentionSweeperJobs(options.tenantIds, correlationId))
+      enqueueBatch(pool, enqueuer, buildDailySweeperJobs(options.tenantIds, correlationId))
         .catch(onError)
         .finally(() => {
           retentionInFlight = false;

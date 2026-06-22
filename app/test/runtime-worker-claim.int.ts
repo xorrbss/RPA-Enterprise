@@ -5,6 +5,7 @@
  * claim a queued run only when a stable worker identity and explicit browser
  * lease plan are configured. It stops before real step execution/artifact work.
  */
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -106,6 +107,17 @@ const ARTIFACT_GENERATION_RETENTION_MATCH = "60000000-0000-0000-0000-00000000002
 const ARTIFACT_GENERATION_RETENTION_OTHER = "60000000-0000-0000-0000-000000000024";
 const ARTIFACT_RETENTION_TOCTOU = "60000000-0000-0000-0000-000000000025";
 const GENERATION_TOCTOU = "30000000-0000-0000-0000-000000000203";
+// AUD-10 integrity_checker: 전용 테넌트로 격리(integrity 스캔은 tenant-wide). run/generation 없이도 artifacts 유효.
+const TENANT_INTEGRITY = "00000000-0000-0000-0000-0000000000c3";
+const ARTIFACT_INTEGRITY_OK = "60000000-0000-0000-0000-000000000031";
+const ARTIFACT_INTEGRITY_TAMPERED = "60000000-0000-0000-0000-000000000032";
+const ARTIFACT_INTEGRITY_MISSING = "60000000-0000-0000-0000-000000000033";
+const ARTIFACT_INTEGRITY_PENDING = "60000000-0000-0000-0000-000000000034";
+const ARTIFACT_INTEGRITY_QUARANTINED = "60000000-0000-0000-0000-000000000035";
+const INTEGRITY_OK_BYTES = new TextEncoder().encode("integrity-ok-bytes");
+const INTEGRITY_TAMPERED_ACTUAL = new TextEncoder().encode("integrity-tampered-actual-bytes");
+const INTEGRITY_PENDING_ACTUAL = new TextEncoder().encode("integrity-pending-actual-bytes");
+const sha256hex = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 const ACTIVE_REDACTION_CLAIM = "70000000-0000-0000-0000-000000000001";
 const GENERATION_TARGET = "80000000-0000-0000-0000-000000000001";
 const GENERATION_UNRELATED = "80000000-0000-0000-0000-000000000002";
@@ -254,6 +266,62 @@ const fakeArtifactRetentionStore: ArtifactRetentionStore = {
     return { kind: "transient_failed", reason: `unexpected retention fixture ${input.artifact.artifactRef}` };
   },
 };
+
+// AUD-10 integrity_checker fake: object_ref → raw 바이트(또는 부재/transient). 호출된 ref 를 기록해 제외(pending/quarantined) 검증.
+const integrityGetBytesCalls: string[] = [];
+const fakeIntegrityObjectStore = {
+  getBytes: async (objectRef: ObjectRef): Promise<Uint8Array | null> => {
+    const ref = String(objectRef);
+    integrityGetBytesCalls.push(ref);
+    if (ref === "object://runtime-worker/integrity-ok") return INTEGRITY_OK_BYTES;
+    if (ref === "object://runtime-worker/integrity-tampered") return INTEGRITY_TAMPERED_ACTUAL;
+    if (ref === "object://runtime-worker/integrity-pending") return INTEGRITY_PENDING_ACTUAL;
+    if (ref === "object://runtime-worker/integrity-missing") return null;
+    throw new Error(`unexpected integrity fixture ${ref}`);
+  },
+};
+
+async function seedIntegrityArtifacts(pool: ReturnType<typeof createPool>): Promise<void> {
+  await withTenantTx(pool, TENANT_INTEGRITY, async (c) => {
+    await c.query(
+      `INSERT INTO artifacts (
+         id, tenant_id, run_id, generation_id, type, redaction_status, redaction_attempts, object_ref,
+         retention_until, legal_hold, quarantine, deleted_at, deleted_reason, deleted_by_job,
+         lifecycle_claim_id, lifecycle_claim_kind, lifecycle_claim_worker_id,
+         lifecycle_claim_correlation_id, lifecycle_claimed_at, lifecycle_claim_expires_at
+       )
+       VALUES
+         -- 일치(sha256 = 실제 해시) → 격리 안 됨(거짓양성 없음)
+         ($1,$6,NULL,NULL,'receipt','not_required',0,'object://runtime-worker/integrity-ok',
+          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+         -- 변조(저장 sha256 ≠ 실제 바이트 해시) → 격리
+         ($2,$6,NULL,NULL,'receipt','not_required',0,'object://runtime-worker/integrity-tampered',
+          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+         -- object 부재(비-삭제 행) → 격리
+         ($3,$6,NULL,NULL,'receipt','not_required',0,'object://runtime-worker/integrity-missing',
+          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+         -- pending(redaction 미완) → 스캔 제외(서빙 안정 상태 아님). getBytes 호출되면 안 됨
+         ($4,$6,NULL,NULL,'screenshot','pending',0,'object://runtime-worker/integrity-pending',
+          now() + interval '90 days',false,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),
+         -- 이미 격리됨 → 스캔 제외(재처리 안 함). getBytes 호출되면 안 됨
+         ($5,$6,NULL,NULL,'receipt','not_required',0,'object://runtime-worker/integrity-already-q',
+          now() + interval '90 days',false,true,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`,
+      [
+        ARTIFACT_INTEGRITY_OK,
+        ARTIFACT_INTEGRITY_TAMPERED,
+        ARTIFACT_INTEGRITY_MISSING,
+        ARTIFACT_INTEGRITY_PENDING,
+        ARTIFACT_INTEGRITY_QUARANTINED,
+        TENANT_INTEGRITY,
+      ],
+    );
+    // 기준 sha256 주입: OK 는 실제 해시(일치), tampered/missing/pending 은 의도적으로 실제와 다르게.
+    await c.query(`UPDATE artifacts SET sha256 = $2 WHERE id = $1::uuid`, [ARTIFACT_INTEGRITY_OK, sha256hex(INTEGRITY_OK_BYTES)]);
+    await c.query(`UPDATE artifacts SET sha256 = $2 WHERE id = $1::uuid`, [ARTIFACT_INTEGRITY_TAMPERED, sha256hex(new TextEncoder().encode("integrity-original"))]);
+    await c.query(`UPDATE artifacts SET sha256 = $2 WHERE id = $1::uuid`, [ARTIFACT_INTEGRITY_MISSING, sha256hex(new TextEncoder().encode("integrity-missing-baseline"))]);
+    await c.query(`UPDATE artifacts SET sha256 = $2 WHERE id = $1::uuid`, [ARTIFACT_INTEGRITY_PENDING, sha256hex(new TextEncoder().encode("integrity-pending-baseline"))]);
+  });
+}
 
 async function seedTenant(pool: ReturnType<typeof createPool>, tenantId: string): Promise<void> {
   await withTenantTx(pool, tenantId, async (c) => {
@@ -1219,6 +1287,7 @@ async function main(): Promise<void> {
         artifactRedactor: fakeArtifactRedactor,
         artifactRetentionStore: fakeArtifactRetentionStore,
         artifactSupersededObjectStore: { delete: async (ref) => { supersededDeletes.push(String(ref)); } },
+        artifactIntegrityObjectStore: fakeIntegrityObjectStore,
         allowTestArtifactLifecyclePorts: true,
       });
       const activeClaim = await bypassWorker.handle({
@@ -1581,6 +1650,46 @@ async function main(): Promise<void> {
         "artifact lifecycle local fake evidence is marked non-staging",
         lifecycleAudit.localTestEvidenceCount >= 3 && lifecycleAudit.stagingEvidenceCount === 0,
         JSON.stringify(lifecycleAudit),
+      );
+
+      // AUD-10 artifact_integrity_checker: sha256 ↔ object 실제 해시 대조 → 불일치 quarantine. 전용 테넌트로 격리.
+      await seedIntegrityArtifacts(lifecycleBypassPool);
+      // 사전 상태: 어떤 것도 격리되지 않음(체커가 플립하는 것임을 증명 — 사전 상태가 아님).
+      const okBefore = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_INTEGRITY_OK);
+      const tamperedBefore = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_INTEGRITY_TAMPERED);
+      check(
+        "artifact_integrity pre-scan: no integrity artifact is pre-quarantined",
+        okBefore.quarantine === false && tamperedBefore.quarantine === false,
+        JSON.stringify({ okBefore, tamperedBefore }),
+      );
+
+      integrityGetBytesCalls.length = 0;
+      const integrity = await bypassWorker.handle({
+        kind: "artifact_integrity",
+        tenantId: TENANT_INTEGRITY as TenantId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_integrity job completes", integrity.kind === "completed", JSON.stringify(integrity));
+
+      const okAfter = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_INTEGRITY_OK);
+      const tamperedAfter = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_INTEGRITY_TAMPERED);
+      const missingAfter = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_INTEGRITY_MISSING);
+      const pendingAfter = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_INTEGRITY_PENDING);
+      const quarantinedAfter = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_INTEGRITY_QUARANTINED);
+      check(
+        "artifact_integrity quarantines tampered (hash mismatch) and missing object, spares matching",
+        okAfter.quarantine === false &&
+          tamperedAfter.quarantine === true &&
+          missingAfter.quarantine === true,
+        JSON.stringify({ okAfter, tamperedAfter, missingAfter }),
+      );
+      check(
+        "artifact_integrity excludes pending and already-quarantined rows from scan",
+        pendingAfter.quarantine === false &&
+          quarantinedAfter.quarantine === true &&
+          !integrityGetBytesCalls.includes("object://runtime-worker/integrity-pending") &&
+          !integrityGetBytesCalls.includes("object://runtime-worker/integrity-already-q"),
+        JSON.stringify({ pendingAfter, quarantinedAfter, calls: integrityGetBytesCalls }),
       );
     } finally {
       await lifecycleBypassPool.end();

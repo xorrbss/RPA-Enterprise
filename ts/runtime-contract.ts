@@ -921,6 +921,7 @@ export interface RuntimeWorkerJob {
     | "workitem_checkout_sweeper"
     | "artifact_redaction"
     | "artifact_retention"
+    | "artifact_integrity"
     | "dlq_replay"
     | "sink_deliver";
   tenantId?: TenantId;

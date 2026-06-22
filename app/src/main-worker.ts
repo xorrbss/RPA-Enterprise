@@ -232,6 +232,7 @@ export async function buildArtifactLifecycleWorkerOptions(
       ),
       artifactRetentionStore: new FsArtifactRetentionStore(artifactStore, artifactObjectBinding),
       artifactSupersededObjectStore: artifactStore, // AUD-9: redaction 후 원본 평문 객체 삭제
+      artifactIntegrityObjectStore: artifactStore, // AUD-10: integrity_checker sha256 대조용 raw read
     };
   }
 
@@ -264,6 +265,7 @@ export async function buildArtifactLifecycleWorkerOptions(
     ),
     artifactRetentionStore: new S3ArtifactRetentionStore(artifactStore, artifactObjectBinding),
     artifactSupersededObjectStore: artifactStore, // AUD-9: redaction 후 원본 평문 객체 삭제
+    artifactIntegrityObjectStore: artifactStore, // AUD-10: integrity_checker sha256 대조용 raw read
   };
 }
 

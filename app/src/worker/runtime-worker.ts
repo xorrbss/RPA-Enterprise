@@ -15,6 +15,7 @@ import { WorkerRunDrive } from "./runtime-worker-run-drive";
 import { WorkerRunResume } from "./runtime-worker-run-resume";
 import { ArtifactRedactionProcessor, type SupersededObjectStore } from "./artifact-redaction-processor";
 import { ArtifactRetentionProcessor } from "./artifact-retention-processor";
+import { ArtifactIntegrityProcessor, type IntegrityObjectStore, type IntegrityMismatch } from "./artifact-integrity-processor";
 import type {
   ArtifactRedactor,
   ArtifactRetentionStore,
@@ -89,6 +90,10 @@ export interface PgRuntimeWorkerOptions {
   readonly artifactRetentionStore?: ArtifactRetentionStore;
   /** AUD-9: redaction 후 대체된 원본 평문 객체 삭제용(redacted-at-rest). */
   readonly artifactSupersededObjectStore?: SupersededObjectStore;
+  /** AUD-10 impl-contracts §B artifact_integrity_checker: sha256 ↔ object 실제 해시 대조용 raw 바이트 read. */
+  readonly artifactIntegrityObjectStore?: IntegrityObjectStore;
+  readonly artifactIntegrityBatchLimit?: number;
+  readonly onIntegrityMismatch?: (info: IntegrityMismatch) => void;
   readonly allowTestArtifactLifecyclePorts?: boolean;
   readonly defaultBrowserLeaseTtlMs?: number;
   readonly artifactRedactionMaxAttempts?: number;
@@ -136,6 +141,7 @@ const DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS = 5_000;
 export class PgRuntimeWorker implements RuntimeWorker {
   private readonly artifactRedaction: ArtifactRedactionProcessor;
   private readonly artifactRetention: ArtifactRetentionProcessor;
+  private readonly artifactIntegrity: ArtifactIntegrityProcessor;
   private readonly runDrive: WorkerRunDrive;
   private readonly runResume: WorkerRunResume;
 
@@ -145,6 +151,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
   ) {
     this.artifactRedaction = new ArtifactRedactionProcessor(pool, options);
     this.artifactRetention = new ArtifactRetentionProcessor(pool, options);
+    this.artifactIntegrity = new ArtifactIntegrityProcessor(pool, options);
     this.runDrive = new WorkerRunDrive(pool, options);
     this.runResume = new WorkerRunResume(pool, options);
   }
@@ -183,6 +190,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
       case "artifact_retention":
         return this.artifactRetention.handle(job);
+
+      case "artifact_integrity":
+        return this.artifactIntegrity.handle(job);
 
       case "sink_deliver":
         return this.handleSinkDeliver(job);
