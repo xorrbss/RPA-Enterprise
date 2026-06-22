@@ -140,6 +140,30 @@ function main(): void {
     check("node without what → node_what_missing", r.skipped[0]?.reason === "node_what_missing");
   }
 
+  // 10. 다중-act 노드(ambiguousNodeIds) → multi_act_node_ambiguous 로 loud skip, 베이킹/promoted 안 함(조용한 오귀속 금지).
+  {
+    // 한 노드 n1 에 act 가 둘(아이디 fill·비번 fill) — loadRunActionPlans 가 모호로 식별해 plans 에서 제외하고
+    //   ambiguousNodeIds 로 넘긴다. transform 은 그 노드를 베이킹하지 않고 명시 skip 해야 한다(엉뚱한 act 에 셀렉터 방지).
+    const node = {
+      what: [
+        { action: "act", instruction: "아이디 입력", vars: ["login.username"] },
+        { action: "act", instruction: "비번 입력", vars: ["login.password"] },
+      ],
+      next: "done",
+      side_effect: { kind: "read_only" },
+    };
+    const r = promoteActsToDeterministic(baseIr({ n1: node }), {}, ["n1"]);
+    check("ambiguous 다중-act 노드 not promoted", r.promotedNodeIds.length === 0, JSON.stringify(r.promotedNodeIds));
+    check("ambiguous 다중-act 노드 multi_act_node_ambiguous 로 skip", r.skipped.length === 1 && r.skipped[0]?.nodeId === "n1" && r.skipped[0]?.reason === "multi_act_node_ambiguous", JSON.stringify(r.skipped));
+    // 어떤 act 에도 셀렉터가 베이킹되지 않아야 한다(조용한 오귀속 방지).
+    const what = (r.ir.nodes as Record<string, Record<string, unknown>>).n1.what as Array<Record<string, unknown>>;
+    const noSelectorBaked = what.every((a) => {
+      const args = a.args as Record<string, unknown> | undefined;
+      return args === undefined || (args.fill_selector === undefined && args.click_selector === undefined && args.select_selector === undefined);
+    });
+    check("ambiguous 노드 어떤 act 도 셀렉터 미베이킹", noSelectorBaked, JSON.stringify(what));
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: scenario-promotion.unit (${failures})`);
     process.exit(1);

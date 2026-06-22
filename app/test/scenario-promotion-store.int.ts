@@ -71,6 +71,28 @@ async function seedStagehand(pool: Pool, tenant: string, run: string, stepId: st
   );
 }
 
+// attempt 변동 시드(loop 재해소: 같은 step_id·다른 attempt) — distinct step_id 모호성 판정 검증용.
+async function seedStepAttempt(pool: Pool, tenant: string, run: string, stepId: string, nodeId: string, action: string, status: string, attempt: number, createdAt: string): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO run_steps (id, run_id, tenant_id, step_id, node_id, attempt, action, status, cache_mode, created_at)
+       VALUES (gen_random_uuid(), $1,$2,$3,$4,$5,$6,$7,'miss',$8::timestamptz)`,
+      [run, tenant, stepId, nodeId, attempt, action, status, createdAt],
+    ),
+  );
+}
+
+async function seedStagehandAttempt(pool: Pool, tenant: string, run: string, stepId: string, parsedJson: unknown, streamStatus: string, attempt: number, createdAt: string): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO stagehand_calls (id, tenant_id, run_id, step_id, attempt, idempotency_key, request_hash, model,
+                                    transport, stream_status, parsed_json, created_at)
+       VALUES (gen_random_uuid(), $1,$2,$3,$4,$5,'rh','gpt-4o-mini','sse',$6,$7::jsonb,$8::timestamptz)`,
+      [tenant, run, stepId, attempt, `${run}:${stepId}:${attempt}`, streamStatus, JSON.stringify(parsedJson), createdAt],
+    ),
+  );
+}
+
 // cache-hit step: stagehand_call 없이 action_plan_cache(plan_ref)+run_steps(cache_mode='hit', action_plan_cache_id) 시드.
 async function seedHitStep(
   pool: Pool, tenant: string, run: string, sver: string, stepId: string, nodeId: string,
@@ -125,14 +147,26 @@ async function main(): Promise<void> {
     await seedHitStep(pool, TENANT_A, RUN_A, SVER_A, "s6", "n6", "50000000-0000-4000-8000-000000000061", { operation: "click", selector: "#cached" }, "active");
     // n7: cache-hit step 인데 캐시 entry 가 stale(드리프트) → 복구 제외(active-only — 알려진-나쁜 셀렉터 베이킹 금지).
     await seedHitStep(pool, TENANT_A, RUN_A, SVER_A, "s7", "n7", "50000000-0000-4000-8000-000000000071", { operation: "click", selector: "#stale" }, "stale");
+    // n8: 다중-act 노드 — 한 노드(n8)에 act 스텝 둘(s8.0 fill 아이디·s8.1 fill 비번, distinct step_id). plan→act 귀속
+    //   모호 → plans 에서 제외 + ambiguousNodeIds 에 보고(조용한 오귀속 금지; 자격증명 fill 셀렉터 오필드 차단).
+    await seedStep(pool, TENANT_A, RUN_A, "s8.0", "n8", "act", "success");
+    await seedStagehand(pool, TENANT_A, RUN_A, "s8.0", { operation: "fill", selector: "#user", value: "u" }, "done", "2026-06-15T00:00:07Z");
+    await seedStep(pool, TENANT_A, RUN_A, "s8.1", "n8", "act", "success");
+    await seedStagehand(pool, TENANT_A, RUN_A, "s8.1", { operation: "fill", selector: "#pw", value: "p" }, "done", "2026-06-15T00:00:08Z");
+    // n9: loop 재해소 — 같은 step_id(s9)·다른 attempt 다중 행. distinct step_id 가 1 개라 모호하지 않다(last-write-wins).
+    await seedStepAttempt(pool, TENANT_A, RUN_A, "s9", "n9", "act", "success", 0, "2026-06-15T00:00:09Z");
+    await seedStagehandAttempt(pool, TENANT_A, RUN_A, "s9", { operation: "click", selector: "#iter0" }, "done", 0, "2026-06-15T00:00:09Z");
+    await seedStepAttempt(pool, TENANT_A, RUN_A, "s9", "n9", "act", "success", 1, "2026-06-15T00:00:10Z");
+    await seedStagehandAttempt(pool, TENANT_A, RUN_A, "s9", { operation: "click", selector: "#iter1" }, "done", 1, "2026-06-15T00:00:10Z");
 
     // cross-tenant: tenant B act success + done → A 조회 시 비가시
     await seedRun(pool, TENANT_B, SCEN_B, SVER_B, RUN_B);
     await seedStep(pool, TENANT_B, RUN_B, "sb", "nb", "act", "success");
     await seedStagehand(pool, TENANT_B, RUN_B, "sb", { operation: "click", selector: "#b" }, "done", "2026-06-15T00:00:01Z");
 
-    const plans = await withTenantTx(pool, TENANT_A, (c) => loadRunActionPlans(c, RUN_A));
-    check("loads act+success plans from stagehand(miss) and active cache(hit)", Object.keys(plans).sort().join(",") === "n1,n2,n6", JSON.stringify(plans));
+    const { plans, ambiguousNodeIds } = await withTenantTx(pool, TENANT_A, (c) => loadRunActionPlans(c, RUN_A));
+    // n9(loop 재해소)는 distinct step_id 1 개라 모호 아님 → 포함. n8(다중-act)은 제외.
+    check("loads act+success plans from stagehand(miss), active cache(hit), loop(n9)", Object.keys(plans).sort().join(",") === "n1,n2,n6,n9", JSON.stringify(plans));
     check("n1 click selector", plans.n1?.operation === "click" && plans.n1.selector === "#submit", JSON.stringify(plans.n1));
     check("n2 fill selector", plans.n2?.operation === "fill" && plans.n2.selector === "#name", JSON.stringify(plans.n2));
     check("observe(n3) excluded", plans.n3 === undefined);
@@ -140,11 +174,16 @@ async function main(): Promise<void> {
     check("non-done stagehand(n5) excluded", plans.n5 === undefined);
     check("cache-hit(n6) recovered from active action_plan_cache.plan_ref", plans.n6?.operation === "click" && plans.n6.selector === "#cached", JSON.stringify(plans.n6));
     check("cache-hit with stale cache entry(n7) excluded (active-only)", plans.n7 === undefined, JSON.stringify(plans.n7));
+    // 다중-act 노드(n8): plans 제외 + ambiguousNodeIds 보고(조용한 오귀속 방지). 손수 IR 로만 도달하지만 plan→act 귀속 불가.
+    check("multi-act node(n8) excluded from plans", plans.n8 === undefined, JSON.stringify(plans.n8));
+    check("multi-act node(n8) reported in ambiguousNodeIds", ambiguousNodeIds.includes("n8"), JSON.stringify(ambiguousNodeIds));
+    // loop 재해소(n9): 같은 step_id 다중 attempt 는 distinct step_id 1 개 → 모호 아님, last-write-wins(attempt 1, #iter1).
+    check("loop node(n9) not ambiguous, last-write-wins", plans.n9?.operation === "click" && plans.n9.selector === "#iter1" && !ambiguousNodeIds.includes("n9"), JSON.stringify({ n9: plans.n9, ambiguousNodeIds }));
 
     const crossA = await withTenantTx(pool, TENANT_A, (c) => loadRunActionPlans(c, RUN_B));
-    check("cross-tenant run → empty (RLS)", Object.keys(crossA).length === 0, JSON.stringify(crossA));
+    check("cross-tenant run → empty (RLS)", Object.keys(crossA.plans).length === 0, JSON.stringify(crossA));
     const ownB = await withTenantTx(pool, TENANT_B, (c) => loadRunActionPlans(c, RUN_B));
-    check("tenant B sees own run plan", ownB.nb?.operation === "click" && ownB.nb.selector === "#b", JSON.stringify(ownB));
+    check("tenant B sees own run plan", ownB.plans.nb?.operation === "click" && ownB.plans.nb.selector === "#b", JSON.stringify(ownB));
 
     if (failures > 0) {
       console.error(`\nFAIL: scenario-promotion-store.int (${failures})`);
