@@ -34,8 +34,11 @@ import type { CdpSession, CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
 import { StagehandDomExecutorError, type DomExecutorErrorCode } from "./dom-executor-error";
 import {
+  CLICK_POLL_MS,
+  clickSettleMs,
   humanAssistChallenge,
   nowIso,
+  sleep,
   stagehandCallIdsFromError,
   stagehandCallIdsFromResponse,
 } from "./stagehand-dom-executor-support";
@@ -72,7 +75,9 @@ export type DomAction =
   //   상호배타(클릭 전용). 미존재면 loud(조용한 false 금지).
   // assertAbsent: 결정형 부재 단언(IR act.args.assert_absent). 셀렉터가 사라질 때까지 settle 폴링 — 비가역 커밋의 효과
   //   witness(예 확인 클릭 후 결재 버튼 소멸=실제 커밋). deadline 까지 잔존 시 loud. click/fill 과 상호배타(검증 전용).
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string; assertAbsent?: string }
+  // clickText: 결정형 텍스트 클릭(IR act.args.click_text). 보이는 텍스트를 포함한 첫 상호작용 요소를 브라우저 JS 로 찾아
+  //   클릭(LLM·CSS 미경유 — CSS 는 텍스트 매칭 불가). 매 실행 재해소라 동적 목록(예 결재 docId 변동)에 강함. 미발견 시 loud.
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string; clickText?: string; assertAbsent?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> }; rowAnchor?: ExtractRowAnchor };
 
@@ -201,6 +206,10 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     // value/secret 와 상호배타(ir-translate 가 강제). 미존재 시 loud(조용한 false 금지).
     if (a.clickSelector !== undefined) {
       return this.executeDeterministicClick(stepId, a.clickSelector, a.sideEffect, ctx, session, before, startedAt);
+    }
+    // 결정형 텍스트 클릭(click_text): 보이는 텍스트 포함 첫 상호작용 요소를 브라우저 JS 로 찾아 클릭(LLM·CSS 미경유).
+    if (a.clickText !== undefined) {
+      return this.executeClickText(stepId, a.clickText, a.sideEffect, ctx, session, before, startedAt);
     }
     // 결정형 부재 단언(assert_absent): 셀렉터 소멸까지 settle — 비가역 커밋 효과 witness(잔존 시 loud).
     if (a.assertAbsent !== undefined) {
@@ -380,6 +389,80 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       action: "act",
       status: "success",
       output: { plan: { operation: "click", selector } },
+      pageStateBefore: before,
+      pageStateAfter: before,
+      artifacts: [],
+      stagehandCallIds: [],
+      cache: { mode: "bypass" },
+      sideEffect: { kind: sideEffect ?? "update", committed: true },
+      timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
+    };
+  }
+
+  /**
+   * 결정형 텍스트 클릭(click_text) — IR 선언 텍스트를 포함한 첫 가시 상호작용 요소를 브라우저 JS 로 찾아 nonce 속성
+   * (data-rpa-ct)으로 스탬프 후 그 속성 셀렉터로 클릭한다. session.click 은 CSS 셀렉터만 받으므로(text= 불가) 스탬프
+   * 경유. LLM·CSS 미경유(셀렉터 환각 차단 + CSS 텍스트매칭 한계 회피) + 매 폴 재해소(동적 목록 docId 변동에 강함).
+   * settle 폴링(executeDeterministicClick 동형) — 미발견 시 deadline 까지 폴 후 loud. 클릭 직전 abort 재확인(TOCTOU).
+   * 다중 매칭은 DOM 순서 첫 가시 요소(문서화된 결정 — 모호성에 fail 하지 않고 사용 가능 유지).
+   */
+  private async executeClickText(
+    stepId: string,
+    text: string,
+    sideEffect: SideEffectKind | undefined,
+    ctx: RunContext,
+    session: CdpSession,
+    before: ReturnType<typeof pageStateRef>,
+    startedAt: string,
+  ): Promise<StepResult> {
+    // 보이는 텍스트 포함 첫 상호작용 요소(a/button/input/[role=button]/[onclick]/[data-href])를 스탬프. 없으면 텍스트를
+    //   직접 가진 leaf 요소로 폴백(클릭 버블링 의존). vis 는 challenge-detection 스크립트의 visible 과 동형.
+    const stampScript = `(function(t){
+      document.querySelectorAll('[data-rpa-ct]').forEach(function(e){ e.removeAttribute('data-rpa-ct'); });
+      var vis = function(el){ if(!(el instanceof Element)) return false; var s=window.getComputedStyle(el); if(s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0) return false; if(el.getAttribute('aria-hidden')==='true') return false; var r=el.getBoundingClientRect(); return (r.width>0&&r.height>0)||el.getClientRects().length>0; };
+      var hit=null, inter=document.querySelectorAll('a,button,input,[role="button"],[onclick],[data-href]');
+      for(var i=0;i<inter.length;i++){ if((inter[i].textContent||'').indexOf(t)!==-1 && vis(inter[i])){ hit=inter[i]; break; } }
+      if(!hit){ var all=document.querySelectorAll('*'); for(var j=0;j<all.length;j++){ if(all[j].children.length===0 && (all[j].textContent||'').indexOf(t)!==-1 && vis(all[j])){ hit=all[j]; break; } } }
+      if(!hit) return false;
+      hit.setAttribute('data-rpa-ct','1');
+      return true;
+    })(${JSON.stringify(text)})`;
+    const deadline = Date.now() + clickSettleMs();
+    let stamped = false;
+    for (;;) {
+      if (ctx.abortSignal.aborted) {
+        throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted while awaiting click_text '${text}'`);
+      }
+      try {
+        stamped = await session.evaluate<boolean>(stampScript);
+      } catch {
+        // 네비게이션/일시 단절 — 다음 폴에서 재시도(waitForSelectorState 동형).
+      }
+      if (stamped) break;
+      if (Date.now() >= deadline) {
+        throw new StagehandDomExecutorError(
+          "IR_SCHEMA_INVALID",
+          `step '${stepId}' click_text '${text}' 포함 가시 요소 미발견(settle ${clickSettleMs()}ms 초과) — 조용한 false 금지`,
+        );
+      }
+      await sleep(CLICK_POLL_MS);
+    }
+    if (ctx.abortSignal.aborted) {
+      throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted before click_text click '${text}'`);
+    }
+    await session.click("[data-rpa-ct]");
+    const postChallenge = await detectDomChallenge(session);
+    if (postChallenge !== undefined) {
+      return suspendForChallenge(stepId, "act", ctx, postChallenge, {
+        sideEffect: { kind: sideEffect ?? "update", committed: true },
+      });
+    }
+    const endedAt = nowIso();
+    return {
+      stepId,
+      action: "act",
+      status: "success",
+      output: { plan: { operation: "click", selector: `[data-rpa-ct] (click_text: ${text})` } },
       pageStateBefore: before,
       pageStateAfter: before,
       artifacts: [],
