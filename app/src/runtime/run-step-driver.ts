@@ -177,15 +177,17 @@ export async function terminalizeStuckRunAsSystemFailure(run: RunTerminalRef, po
         [run.tenantId, run.runId],
       );
       const status = r.rows[0]?.status;
-      if (status !== "running" && status !== "completing" && status !== "suspending" && status !== "resuming") return false;
+      if (status !== "running" && status !== "completing" && status !== "suspending" && status !== "resuming" && status !== "claimed") return false;
       const event: RunEvent =
         status === "running" ? { type: "unrecoverable_exception" }
           : status === "completing" ? { type: "finalize_failed" }
           : status === "suspending" ? { type: "bookmark_failed" }
+          : status === "claimed" ? { type: "init_failed" } // R3b: 크래시한 INIT(좀비 claimed)을 system 실패로 종결
           : { type: "restore_failed" }; // resuming → R20(완료 전이 tx 자체가 좌초)
       const guard: RunGuard =
         status === "running" ? { exceptionClass: "system" }
           : status === "resuming" ? { loginBypassPossible: false } // R20: 재로그인 우회 불가 종결
+          : status === "claimed" ? { initFailBelowThreshold: false } // R3b: 임계 초과 취급 → failed_system(재큐 금지)
           : {};
       const t = await applyRunTransition(client, {
         tenantId: run.tenantId,

@@ -33,6 +33,7 @@ import type {
 } from "../../../ts/runtime-contract";
 import { withTenantTx } from "../db/pool";
 import { relayOutbox } from "../runtime/outbox-relay";
+import { terminalizeStuckRunAsSystemFailure } from "../runtime/run-step-driver";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
 import type { InitBackoffConfig } from "../runtime/run-init-failure";
 import type { SiteCircuitConfig } from "../runtime/site-circuit";
@@ -249,13 +250,15 @@ export class PgRuntimeWorker implements RuntimeWorker {
     const expiredBrowser = await withTenantTx(this.pool, tenantId, async (client) => {
       // migration #7 sweeper 계약: UPDATE ... RETURNING * → 반환 row 의 프로세스 kill + cleanup(idempotent). RETURNING 으로
       //   만료된 browser_lease 를 수집해 tx 밖에서 세션 teardown 한다(아래).
-      const r = await client.query<{ id: string; run_id: string | null; owner_worker_id: string }>(
+      const r = await client.query<{ id: string; run_id: string | null; owner_worker_id: string; run_correlation_id: string | null }>(
         `UPDATE browser_leases
             SET state = 'expired'
           WHERE tenant_id = $1::uuid
             AND state IN ('reserved','active')
             AND expires_at < now()
-        RETURNING id::text AS id, run_id::text AS run_id, owner_worker_id::text AS owner_worker_id`,
+        RETURNING id::text AS id, run_id::text AS run_id, owner_worker_id::text AS owner_worker_id,
+                  (SELECT r.correlation_id::text FROM runs r
+                    WHERE r.tenant_id = browser_leases.tenant_id AND r.id = browser_leases.run_id) AS run_correlation_id`,
         [tenantId],
       );
       // credential_leases 는 OS 자원 없는 DB slot — 만료만(teardown 불요).
@@ -269,6 +272,17 @@ export class PgRuntimeWorker implements RuntimeWorker {
       );
       return r.rows;
     });
+
+    // 좀비 run 회수(감사 클러스터 B): 만료 lease 의 연결 run 이 비종결(claimed/running/completing/suspending/resuming)이면
+    //   소유 워커가 크래시/wedge(heartbeat 미갱신 5분 — 클러스터 A 배선 후 expired=dead-worker 신호) → failed_system 종결.
+    //   run-state 회수는 세션 불요라 cross-worker(어느 워커든 수행) + idempotent CAS(이미 종결됐으면 no-op). best-effort·loud(내부 흡수).
+    for (const lease of expiredBrowser) {
+      if (lease.run_id === null) continue;
+      await terminalizeStuckRunAsSystemFailure(
+        { tenantId, runId: lease.run_id, correlationId: lease.run_correlation_id ?? job.correlationId ?? tenantId },
+        this.pool,
+      );
+    }
 
     // XRT-1: 만료 browser_lease 의 라이브 세션 teardown(프로세스 close + 격리 다운로드 디렉토리 제거) — migration #7 sweeper
     //   계약의 'kill + cleanup'. drainAbort 는 leaseId 로 **이 워커가 bind 한 세션만** teardown 하고, 미바운드(타 워커 소유·
