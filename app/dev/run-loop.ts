@@ -281,6 +281,14 @@ export async function startRunLoop(
           );
           return { siteProfileId, config, browserIdentityId: bid.rows[0]?.id ?? DEV_BROWSER_IDENTITY_ID };
         });
+        // 세션 자가복구 — 유휴 중 CDP 소켓死(1006)나 직전 run 의 단절로 죽은 세션을 이 run **전에** 선제 재생성한다.
+        //   데드라인 워치독(RUN_DEADLINE_MS)은 hang(미정착)만 잡으므로, 빠르게 settle 하는 CDP_DISCONNECTED 는 else 로 빠져
+        //   세션이 죽은 채 남아 다음 run 들을 전멸시켰다(dev 단일 공유 세션 한정 — prod 는 lease 별 fresh). probe(Runtime.evaluate
+        //   round-trip)가 throw=소켓死 → 재생성. 살아있으면 ~1ms. 재생성은 busy 직렬화 + 이 run 의 스냅샷 前이라 격리 무해.
+        if (!(await isSessionAlive(session))) {
+          console.error("run-loop: CDP 세션 비정상(소켓死) 감지 → 데드라인 대기 없이 세션 재생성");
+          session = await recreateSession(session, chrome, downloadDir);
+        }
         // run 별 세션 스냅샷 — 데드라인 후 session 재생성이 이 run 의 drive(executor/resolver/sessionProvider)에
         // 전파되지 않게 격리(댕글링 drive 가 다음 run 의 새 세션을 만지지 못함).
         const runSession = session;
@@ -358,6 +366,31 @@ export async function startRunLoop(
       rmSync(downloadDir, { recursive: true, force: true });
     },
   };
+}
+
+// liveness probe 타임아웃 — 살아있는 세션은 evaluate 가 <100ms. 죽은 소켓(1006)은 evaluate 가 **throw 가 아니라 hang**
+//   하므로(pending CDP 요청이 reject 안 됨) 반드시 타임아웃으로 감싸야 probe 자체가 wedge 되지 않는다(break-it 로 확인).
+const SESSION_PROBE_TIMEOUT_MS = 3000;
+
+/** CDP 세션 liveness probe — Runtime.evaluate round-trip. throw **또는** 타임아웃(죽은 소켓은 hang)이면 not-alive→재생성.
+ *  url() 은 Playwright 캐시라 소켓을 안 쳐서 부적합. transient(context destroyed 등)도 false→재생성(fresh Chrome=안전). */
+async function isSessionAlive(s: CdpSession): Promise<boolean> {
+  const probe = s.evaluate("1");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      probe,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("session probe timeout")), SESSION_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    void Promise.resolve(probe).catch(() => undefined); // 댕글링 probe 거부 흡수(unhandledRejection 방지)
+  }
 }
 
 /** wedge 된 세션을 닫고(close 는 내부 3s race 로 bounded) 새 세션을 기동한다. run-loop 데드라인 자가복구용. */
