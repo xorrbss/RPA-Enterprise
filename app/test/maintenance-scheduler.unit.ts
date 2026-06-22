@@ -1,4 +1,6 @@
 import {
+  buildDailySweeperJobs,
+  buildIntegritySweeperJobs,
   buildMaintenancePollJobs,
   buildRetentionSweeperJobs,
   millisecondsUntilNextKstHour,
@@ -54,6 +56,27 @@ check(
     retentionJobs[0]?.tenantId === TENANT_A &&
     retentionJobs[0]?.correlationId === "20000000-0000-4000-8000-000000000005",
   JSON.stringify(retentionJobs),
+);
+
+// AUD-10: integrity_checker 도 일배치(retention 과 같은 cadence). 전용 fanout + daily 묶음에 포함.
+const integrityJobs = buildIntegritySweeperJobs([TENANT_A, TENANT_B]);
+check(
+  "integrity fanout enqueues tenant-scoped artifact_integrity per tenant",
+  integrityJobs.length === 2 &&
+    integrityJobs[0]?.kind === "artifact_integrity" &&
+    integrityJobs[0]?.tenantId === TENANT_A &&
+    integrityJobs[1]?.kind === "artifact_integrity" &&
+    integrityJobs[1]?.tenantId === TENANT_B,
+  JSON.stringify(integrityJobs),
+);
+
+const dailyJobs = buildDailySweeperJobs([TENANT_A, TENANT_B]);
+check(
+  "daily sweeper batch includes both retention and integrity for every tenant",
+  dailyJobs.length === 4 &&
+    dailyJobs.filter((j) => j.kind === "artifact_retention").length === 2 &&
+    dailyJobs.filter((j) => j.kind === "artifact_integrity").length === 2,
+  JSON.stringify(dailyJobs),
 );
 
 check(

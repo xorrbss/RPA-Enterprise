@@ -21,7 +21,13 @@ export const RUNTIME_JOB_TASK = RUNTIME_CONTROL_JOB_TASK;
 export type RuntimeTaskScope = "control" | "artifact_lifecycle" | "all";
 
 export function isArtifactLifecycleRuntimeJob(job: Pick<RuntimeWorkerJob, "kind">): boolean {
-  return job.kind === "artifact_redaction" || job.kind === "artifact_retention";
+  // artifact_integrity 도 BYPASSRLS lifecycle role 로 실행해야 한다(quarantine UPDATE 는 artifacts UPDATE RLS 정책
+  // 부재로 tenant role 로는 불가). redaction/retention 과 동일 task 로 라우팅.
+  return (
+    job.kind === "artifact_redaction" ||
+    job.kind === "artifact_retention" ||
+    job.kind === "artifact_integrity"
+  );
 }
 
 export function runtimeJobTaskIdentifier(job: Pick<RuntimeWorkerJob, "kind">): string {
