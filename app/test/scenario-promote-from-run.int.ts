@@ -191,9 +191,11 @@ async function main(): Promise<void> {
         [SV_WARM, TENANT, SCEN_WARM, JSON.stringify(SOURCE_IR_WARM)],
       );
       await c.query(
+        // last_success_at = run step 실행(00:01) 전(00:00) — 정당한 warm-hit(put 이 run 전). CHP-01 가드
+        //   (apc.last_success_at <= rs.created_at) 통과. 미설정 시 default now() > step → 오제외되므로 명시.
         `INSERT INTO action_plan_cache (id, tenant_id, scenario_version_id, step_id, url_pattern, dom_structural_hash,
-            model, prompt_template_version, browser_identity_version, plan_ref, status)
-         VALUES ($1::uuid,$2::uuid,$3::uuid,'w1s','u','h','codex','v1',1,$4,'active')`,
+            model, prompt_template_version, browser_identity_version, plan_ref, status, last_success_at)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'w1s','u','h','codex','v1',1,$4,'active','2026-06-15T00:00:00Z'::timestamptz)`,
         [CACHE_ID_WARM, TENANT, SV_WARM, JSON.stringify({ operation: "click", selector: "#warm-submit" })],
       );
     });
