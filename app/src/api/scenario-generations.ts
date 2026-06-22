@@ -375,7 +375,22 @@ async function planAndCompileScenario(
   }
 }
 
-function finalizePlannerEvidence(plan: GenerationPlan, trustedRequest: GenerationRequest, capabilities: GenerationCapabilities): GenerationPlan {
+// NLP-01: 생성된 IR 의 비가역(부작용) 노드 탐지. LLM 플래너 결과는 임의적이라 프롬프트 텍스트가 아니라 IR 형상으로
+//   부작용 심사한다. navigate/observe/extract(읽기)·human_task(그 자체가 승인 게이트)는 제외, 나머지는 mutating.
+const SIDE_EFFECT_IR_ACTIONS = new Set(["act", "download", "upload", "api_call", "file", "shell"]);
+export function draftIrContainsSideEffect(draftIr: Record<string, unknown>): boolean {
+  const nodes = isRecord(draftIr) ? draftIr.nodes : undefined;
+  if (!isRecord(nodes)) return false;
+  for (const node of Object.values(nodes)) {
+    if (!isRecord(node) || !Array.isArray((node as { what?: unknown }).what)) continue;
+    for (const step of (node as { what: unknown[] }).what) {
+      if (isRecord(step) && typeof step.action === "string" && SIDE_EFFECT_IR_ACTIONS.has(step.action)) return true;
+    }
+  }
+  return false;
+}
+
+export function finalizePlannerEvidence(plan: GenerationPlan, trustedRequest: GenerationRequest, capabilities: GenerationCapabilities): GenerationPlan {
   const recording = recordingPolicy(trustedRequest.evidence);
   const blockers = new Set(plan.blockers);
   const startUrl = trustedRequest.startUrl ?? extractFirstHttpUrl(trustedRequest.prompt);
@@ -388,8 +403,14 @@ function finalizePlannerEvidence(plan: GenerationPlan, trustedRequest: Generatio
     if (startUrl === undefined) blockers.add("start_url_required_for_auto_run");
   }
   // deterministic 플래너는 side-effect 를 @human_task(approval) 게이트로 처리하므로 블록하지 않는다(item⑤).
-  //   LLM 플래너는 IR 임의성 때문에 블록을 유지한다.
-  if (plan.planner !== "deterministic_mvp" && looksLikeSideEffectPrompt(trustedRequest.prompt, { allowPaginationControls: pagination.enabled })) {
+  //   LLM 플래너는 IR 임의성 때문에 블록을 유지한다. ⚠NLP-01: 부작용 심사를 프롬프트 키워드가 아니라 **생성된
+  //   draft_ir 형상**(mutating 노드)으로 판정 — 키워드 없는 프롬프트라도 LLM 이 mutating IR(act/download/upload/
+  //   api_call/file/shell)을 방출하면 무심사 auto-run 되던 것을 차단(프롬프트 키워드는 보조 신호로 유지).
+  if (
+    plan.planner !== "deterministic_mvp" &&
+    (draftIrContainsSideEffect(plan.draftIr) ||
+      looksLikeSideEffectPrompt(trustedRequest.prompt, { allowPaginationControls: pagination.enabled }))
+  ) {
     blockers.add("side_effect_prompt_requires_review");
   }
   if (pagination.blocker !== undefined) {
