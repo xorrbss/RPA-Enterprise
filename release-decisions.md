@@ -809,20 +809,23 @@ AUD-9. Redacted-at-rest violation: original plaintext object not deleted after r
    AUD-10 orphan sweeper if that is built first. Owner = project owner. Impact: at-rest plaintext retention
    (confidentiality regression), not API exposure.
 
-AUD-10. Artifact lifecycle hardening sweepers unimplemented: integrity-checker + orphan-sweeper (artifact audit P1/P2) — ⚠️ PARTIAL (integrity ✅ RESOLVED PR #276; orphan ⏸ DEFERRED)
+AUD-10. Artifact lifecycle hardening sweepers unimplemented: integrity-checker + orphan-sweeper (artifact audit P1/P2) — ✅ RESOLVED (integrity PR #276; orphan PR #278)
    Resolution (integrity): `artifact_integrity_checker` built — `ArtifactIntegrityProcessor` daily-batch tenant scan
    (redacted/not_required, non-deleted/non-quarantined, sha256 present) → `getBytes`(raw) → sha256 compare →
    `quarantine=true` on hash_mismatch or object_missing (read-only + idempotent → no claim lease). `artifact_integrity`
    added to `RuntimeWorkerJob.kind`; worker switch + graphile lifecycle routing (BYPASSRLS) + maintenance-scheduler
    daily tick wired; main-worker injects the object store.
-   Deferred (orphan): `artifact_orphan_sweeper` stays unbuilt — verify-before-build found the premise collapsed:
-   (1) its trigger ("run delete/cancel → unreferenced object") is absent (no run hard-delete path; `artifacts.run_id`
-   has no ON DELETE CASCADE; cancellation retains rows → retention sweeper's domain); (2) `ObjectStore` has no
-   enumeration and there is no superseded-ref tracking, so unreferenced objects are not findable DB-driven (every
-   object_ref has a row; AUD-9 deletes redaction-superseded originals immediately); (3) a per-tenant store-listing
-   diff is cross-tenant-unsafe under RLS (could delete other tenants' objects). Building it needs new infra
-   (`ObjectStore.list` + S3/Fs impls + global BYPASSRLS diff, or an orphan-tracking table). Owner = project owner;
-   apply when a run hard-delete path or enumeration/tracking is introduced.
+   Resolution (orphan): `artifact_orphan_sweeper` built (PR #278) after verify-before-build established the safe
+   reference index — every `ObjectStore.put` path inserts an `artifacts(object_ref)` row and returns an `ArtifactRef`
+   (artifacts.id); cross-refs (stagehand_calls.output_ref, run_steps.*) hold ArtifactRef, never raw ObjectRef. So
+   `artifacts.object_ref` is the complete index and orphan = stored object with no referencing row (AUD-9 superseded
+   originals whose immediate delete failed + put-then-INSERT-failed partials). `ArtifactOrphanProcessor` runs a single
+   GLOBAL job: `store.list()` → grace filter (24h, ops-defaults §6, skips in-flight INSERTs) → batched
+   `object_ref = ANY(...)` set-difference → `store.delete`. Cross-tenant safety: the global query + an
+   `assertLifecycleBypassUse` (rolbypassrls) self-check before scanning prevent an RLS-scoped misread from deleting
+   referenced objects; a per-tick delete cap bounds runaway. `ObjectStore.list()` added to FsObjectStore (readdir)
+   and S3ObjectStore (ListObjectsV2 + SigV4 query + pagination). Note: S3 list signing is validated structurally
+   (transport-fake, deterministic) like the existing S3 ops, not against live S3.
    Finding: `impl-contracts-bundle.md §B` specifies daily `artifact_integrity_checker` (sha256↔object compare →
    quarantine on mismatch) and `artifact_orphan_sweeper` (reclaim unreferenced objects), but neither exists in
    `app/src` (no job kind, no processor, no schedule). Effect: at-rest tampering/corruption of a
