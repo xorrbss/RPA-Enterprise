@@ -27,6 +27,20 @@ export class NoBranchMatchedError extends Error {
   }
 }
 
+/**
+ * login_required 페이지상태에 도달했으나 그것을 처리하는 on[] 분기가 없음 — 세션 (재)등록 필요.
+ * NoBranchMatchedError 의 특수화(무매칭인데 flags.login_required=true) — 인터프리터 호출부가 분류해 던진다.
+ * self-login 시나리오는 login_required 분기가 매칭되므로 여기 도달하지 않는다(오탐 0). error-catalog SESSION_REGISTRATION_REQUIRED.
+ */
+export class SessionRegistrationRequiredError extends Error {
+  readonly code = "SESSION_REGISTRATION_REQUIRED";
+
+  constructor(public readonly nodeId: string) {
+    super(`SESSION_REGISTRATION_REQUIRED: node '${nodeId}' reached login_required page-state with no on[] branch to handle it`);
+    this.name = "SessionRegistrationRequiredError";
+  }
+}
+
 /** 컴파일된 on[] 분기 — when은 캐시된 AST(문자열 아님). */
 export interface CompiledOnBranch<T> {
   readonly when: IRELNode;

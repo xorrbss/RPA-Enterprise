@@ -24,6 +24,7 @@ export type ErrorCode =
   | "SITE_CIRCUIT_OPEN"
   | "SESSION_LOCKED"                   // credential/session lease 경합
   | "SESSION_GENERATION_CONFLICT"
+  | "SESSION_REGISTRATION_REQUIRED"    // login_required 페이지 도달·처리 분기 없음 → 세션 (재)등록 필요
   | "CHALLENGE_UNRESOLVED"
   | "RATE_BUDGET_EXCEEDED"             // 도메인 일일 예산 초과
   // --- Browser / Lease ---
@@ -94,6 +95,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   SITE_CIRCUIT_OPEN:           { retryable: true,  httpStatus: 503, exceptionClass: "system",   userMessage: "일시적으로 수집이 중단되었습니다.", operatorAction: "차단율 대시보드 확인, 윈도우 재개" },
   SESSION_LOCKED:              { retryable: true,  httpStatus: 409, exceptionClass: "system",   userMessage: "잠시 후 재시도됩니다.", operatorAction: "credential 동시 실행 상한 확인" },
   SESSION_GENERATION_CONFLICT: { retryable: true,  httpStatus: 409, exceptionClass: "system",   userMessage: "세션 갱신 충돌.", operatorAction: "세션 재조회" },
+  SESSION_REGISTRATION_REQUIRED: { retryable: false, httpStatus: 422, exceptionClass: "system", userMessage: "로그인 세션 등록이 필요합니다.", operatorAction: "보안·개인정보에서 세션 등록 후 재실행" },
   CHALLENGE_UNRESOLVED:        { retryable: false, httpStatus: 422, exceptionClass: "challenge",userMessage: "추가 인증이 필요합니다.", operatorAction: "Human Task 인박스 처리" },
   RATE_BUDGET_EXCEEDED:        { retryable: true,  httpStatus: 429, exceptionClass: "system",   userMessage: "요청 한도 초과. 다음 윈도우에 처리됩니다.", operatorAction: "일일 예산/윈도우 조정" },
 

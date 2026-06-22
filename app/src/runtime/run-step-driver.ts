@@ -154,7 +154,7 @@ async function driveScenarioWithSystemFailsafe(run: ClaimedRun, deps: DriveDeps,
   try {
     return await driveScenario(run, deps, startNode);
   } catch (err) {
-    const terminalized = await terminalizeStuckRunAsSystemFailure(run, deps.pool);
+    const terminalized = await terminalizeStuckRunAsSystemFailure(run, deps.pool, classifiedFailureReason(err));
     if (!terminalized) throw err;
     console.error(
       `run-step-driver: drive 예외를 failed_system 으로 종결(run ${run.runId.slice(0, 8)}) — ${err instanceof Error ? err.message : String(err)}`,
@@ -169,7 +169,7 @@ async function driveScenarioWithSystemFailsafe(run: ClaimedRun, deps: DriveDeps,
  * R4/R5 commit 후 resume-token 발행·저장이 tx 밖 외부 I/O라 부분 실패 윈도우 — R12 '일관성 복구'로 종결). 폴백이라
  * throw 금지 — 변환 불가(이미 종결/동시 CAS 변경/정산 실패)면 false 를 반환해 호출부가 원 예외를 재던지게 한다.
  */
-export async function terminalizeStuckRunAsSystemFailure(run: RunTerminalRef, pool: Pool): Promise<boolean> {
+export async function terminalizeStuckRunAsSystemFailure(run: RunTerminalRef, pool: Pool, failureReason?: { code: string; message: string }): Promise<boolean> {
   try {
     return await withTenantTx(pool, run.tenantId, async (client) => {
       const r = await client.query<{ status: RunState }>(
@@ -199,6 +199,13 @@ export async function terminalizeStuckRunAsSystemFailure(run: RunTerminalRef, po
         eventIdempotencyKey: `${run.runId}:${event.type}`,
       });
       if (!t.applied) return false;
+      if (failureReason !== undefined) {
+        // failed_* 진입 사유를 runs.failure_reason(UI 표시용 비민감 진단)에 기록 — 전이와 같은 tx(원자적). 미주입(resume 콜러)은 생략(기존 동작 보존).
+        await client.query(
+          `UPDATE runs SET failure_reason=$3::jsonb WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+          [run.tenantId, run.runId, JSON.stringify(failureReason)],
+        );
+      }
       await settleLinkedWorkitemFromRun(client, run, "system");
       // H7: run 종결(failed_system) 시 연결된 비종결 human_task 를 cancel — 인박스 orphan + resolve silent-false 차단.
       await cancelLinkedHumanTasksForRunTerminal(client, { tenantId: run.tenantId, runId: run.runId, correlationId: run.correlationId });
@@ -538,4 +545,16 @@ async function transition(
     }
     if (afterApplied !== undefined) await afterApplied(c);
   });
+}
+
+/**
+ * 드라이브 throw 예외 → failure_reason{code}. 분류된 예외(.code: IR_NO_BRANCH_MATCHED / SESSION_REGISTRATION_REQUIRED /
+ * InterpreterError 등)는 그 코드를, 미분류는 CONTROL_PLANE_INTERNAL_ERROR(system catch-all)로. 항상 사유를 남긴다(조용한 false 금지).
+ * message 는 비운다 — 원 예외 메시지는 내부 누출 위험이라 싣지 않고(console.error 로 이미 표면화) UI 는 code→라벨로 표시한다.
+ */
+function classifiedFailureReason(err: unknown): { code: string; message: string } {
+  if (err !== null && typeof err === "object" && "code" in err && typeof (err as { code: unknown }).code === "string") {
+    return { code: (err as { code: string }).code, message: "" };
+  }
+  return { code: "CONTROL_PLANE_INTERNAL_ERROR", message: "" };
 }
