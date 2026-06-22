@@ -572,9 +572,17 @@ async function main(): Promise<void> {
   // act (no cache) → LLM plan → CDP click 적용
   {
     const s = fakeSessions();
-    const r = await new StagehandDomExecutor(countingGateway({ parsedJson: CLICK_PLAN }).gw, s.provider, cfg).execute("s3", { type: "act", instruction: "click login" }, makeCtx());
+    const g = countingGateway({ parsedJson: CLICK_PLAN });
+    const r = await new StagehandDomExecutor(g.gw, s.provider, cfg).execute("s3", { type: "act", instruction: "click login" }, makeCtx());
     check("act: applied click via CDP", r.status === "success" && s.ops.includes("click:#login"));
     check("act: sideEffect default=update, cache=bypass", r.sideEffect?.kind === "update" && r.cache.mode === "bypass");
+    // Phase 2A: act 요청은 (1) {operation,selector} shape 을 system 프롬프트에 직접 싣고(jsonMode 무관 가이드),
+    //   (2) responseFormat 에 inline schema(ACTION_PLAN_SCHEMA.schema)를 실어 Gateway §5 ajv 강제로 흐른다(bypass 아님).
+    const sys = g.lastReq()?.messages.find((m) => m.role === "system")?.content;
+    const sysMsg = typeof sys === "string" ? sys : JSON.stringify(sys ?? "");
+    check("act: prompt fixes {operation,selector} shape", sysMsg.includes('"operation"') && sysMsg.includes('"selector"') && sysMsg.includes(":has-text"));
+    const rf = g.lastReq()?.responseFormat as { schemaRef?: string; schema?: unknown } | undefined;
+    check("act: responseFormat carries inline action_plan schema (ajv, not bypass)", rf?.schemaRef === "action_plan" && typeof rf?.schema === "object" && rf?.schema !== null);
   }
 
   // act with declared sideEffect=submit
