@@ -780,6 +780,66 @@ AUD-8. If-Match version check is SELECT-then-INSERT (non-atomic) → concurrent 
    (tenant_id, scenario_id, version) DO NOTHING RETURNING id` → 412 on 0 rows; or `FOR UPDATE`/advisory-lock the
    scenario row. Owner = project owner. Impact: confusing 500 (not data corruption — UNIQUE preserves integrity).
 
+## Audit Decisions (2026-06-22, state-machine + event-pipeline + IREL + artifact-lifecycle adversarial audits)
+
+> Continuation of the adversarial-audit campaign. Merged this round (not deferred): state-machine clusters
+> A (browser_lease heartbeat #261), B (zombie-run sweeper #263), C (resume-token reissue #264); event-pipeline
+> EPL-01 (R13 per-cycle outbox key #266); IREL @end_no_data terminal (#268); artifact redaction correctness
+> (JSON embedded-credential mask + fail-threshold #270). The items below are the **confirmed-but-deferred**
+> findings (recipe + impact + build-condition + owner), same discipline as AUD-1..8.
+
+AUD-9. Redacted-at-rest violation: original plaintext object not deleted after redaction (artifact audit P1)
+   Finding: `artifact-redaction-processor.finalizeRedactionDecision` swaps `artifacts.object_ref` to the new
+   redacted object (`COALESCE($redacted, object_ref)`) but never deletes the **original pending plaintext
+   object** (merged-extract records / gateway llm_output etc., may contain PII/credentials). The retention
+   store only deletes the (swapped) redacted object; no lifecycle path reclaims the original → it lingers in
+   the object store indefinitely. Reachable whenever the artifact lifecycle redaction consumer runs
+   (`ARTIFACT_LIFECYCLE_CONSUMER=self|external`). **Not API-reachable** — the read route (`reads-artifacts.ts`)
+   serves the swapped redacted `object_ref` behind RLS; leak surface is object-store at-rest / backup / forensic.
+   Decision (recipe, not yet fixed): after the finalize CAS commits a `redacted` decision with a new ref,
+   idempotently delete the original object (reuse `ArtifactRetentionStore.deleteObject` + extend its
+   `deleteReason` union with `redaction_superseded`; the redaction processor needs the delete capability
+   injected) — order so the row points to redacted before delete, loud-retry on delete failure. Subsumed by the
+   AUD-10 orphan sweeper if that is built first. Owner = project owner. Impact: at-rest plaintext retention
+   (confidentiality regression), not API exposure.
+
+AUD-10. Artifact lifecycle hardening sweepers unimplemented: integrity-checker + orphan-sweeper (artifact audit P1/P2)
+   Finding: `impl-contracts-bundle.md §B` specifies daily `artifact_integrity_checker` (sha256↔object compare →
+   quarantine on mismatch) and `artifact_orphan_sweeper` (reclaim unreferenced objects), but neither exists in
+   `app/src` (no job kind, no processor, no schedule). Effect: at-rest tampering/corruption of a
+   redacted/not_required artifact is undetected (served as-is until detected elsewhere); orphan objects
+   (re-claim/retry redacted artifacts + AUD-9 originals) accumulate unbounded. Decision (recipe, not yet built):
+   add `artifact_integrity` / `artifact_orphan` to `ArtifactLifecycleJobKind` + `RuntimeWorkerJob.kind`, build
+   the processors, and wire daily ticks into the maintenance scheduler (sibling to retention). Owner = project
+   owner. Impact: missing at-rest integrity/GC hygiene; no active data corruption.
+
+AUD-11. legal_hold TOCTOU during retention claim window (artifact audit P2 — latent)
+   Finding: the retention processor commits the claim (legal_hold=false), deletes the object out-of-tx, then a
+   separate finalize tx re-checks legal_hold; if legal_hold flips to true within the ~5m claim window the object
+   is already deleted but finalize CAS fails, leaving `deleted_at` NULL — a hold-protected artifact's bytes are
+   irreversibly gone. **Latent**: there is no in-product write path that sets `legal_hold=true` (no API; grep
+   `SET legal_hold` = 0); only a direct operator DB write during an in-flight retention job triggers it.
+   Decision (recipe, not yet fixed): re-read legal_hold/deleted_at/retention_until under `FOR UPDATE` in the
+   same tx as (or immediately before) the object delete, skip delete on mismatch (CAS-before-delete). Owner =
+   project owner. Apply when a legal_hold write path is introduced.
+
+AUD-12. IREL spec'd-but-generator-unused corner gaps (IREL audit, 5 × P2/P3 — reachable only via hand-authored IR)
+   Finding: 5 confirmed IREL/static-validation gaps, all in IR constructs that **no auto-generator
+   (deterministic_mvp/llm_v1) emits** — reachable only via hand-authored IR-studio (`studio_mode:"ir"`)
+   scenarios: (a) `verify.vlm_fallback.when` compiled as IREL though `verify.schema.json` declares it a
+   verify-engine state condition (false-rejects the documented `criteria_uncertain` default) —
+   `static-validation.ts:373-376`; (b) `date_before`/`date_after` use `Date.parse` so offset-less ISO datetime
+   is parsed in worker-local TZ → non-deterministic (ir-expression §5) — `irel-compile.ts:626-633`; (c) V10
+   `value_match.path` checks grammar but not root existence (`extracted`/`node.<id>`) → false-accept —
+   `static-validation.ts:298-304`; (d) `flags.cursor_reached` is in the §2 closed registry but the interpreter
+   has no producer → `loop.until` referencing it always `IREL_RUNTIME_MISSING`; (e) `on[].target` =
+   reservedHandlerCall is accepted by schema/static but rejected by the interpreter (`ir-translate.ts:301-314`)
+   — compile-accept/runtime-reject asymmetry. The IREL **core** used by real scenarios (flags/params/on/loop/
+   terminal/verify.criteria) is sound. Decision (recipes in memory, not yet fixed): per-item fixes in
+   `codegen/static-validation.ts`/`irel-compile.ts` (+fixtures) and the interpreter; prioritize when the IR-studio
+   hand-authoring surface is exposed to operators. Owner = project owner. Impact: bounded mis-validation /
+   non-determinism in currently-unused IR features.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
