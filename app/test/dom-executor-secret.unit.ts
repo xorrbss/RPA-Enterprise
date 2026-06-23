@@ -158,6 +158,8 @@ async function main(): Promise<void> {
     const fillIdx = s.ops.findIndex((o) => o.op === "fill");
     check("자격증명 fill 대상 필드를 data-rpa-sensitive 로 표식", markIdx >= 0, JSON.stringify(s.ops.filter((o) => o.op === "evaluate")));
     check("표식이 fill 직전(누출 프레임 포함 커버)", markIdx >= 0 && markIdx < fillIdx);
+    // break-it AUD4-SHADOW-IFRAME: 표식이 open shadow root 를 관통(재귀 shadowRoot 순회)해야 셰도우 내 자격증명 필드도 표식됨.
+    check("표식이 shadow DOM 관통(shadowRoot 재귀 순회)", markIdx >= 0 && (s.ops[markIdx]?.selector ?? "").includes("shadowRoot"));
 
     const plan = (result.output as { plan?: { operation?: string; selector?: string; value?: unknown; valueRef?: unknown } }).plan;
     check("output.plan.valueRef = 에셋 키(평문 아님)", plan?.valueRef === ASSET_KEY);

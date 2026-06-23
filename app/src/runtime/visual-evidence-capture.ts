@@ -124,6 +124,7 @@ const VISUAL_EVIDENCE_MASK_APPLY_SCRIPT = String.raw`
       "input[autocomplete*='cc-'], input[autocomplete*='password'], input[autocomplete*='one-time-code'],",
       "textarea[data-rpa-sensitive], [data-rpa-sensitive='true'], [contenteditable='true'][data-rpa-sensitive='true'] {",
       "  color: transparent !important; caret-color: transparent !important;",
+      "  -webkit-text-fill-color: transparent !important; -webkit-text-security: disc !important;",
       "  text-shadow: none !important; background: #111827 !important;",
       "  border-color: #111827 !important;",
       "}",
@@ -141,7 +142,7 @@ const VISUAL_EVIDENCE_MASK_APPLY_SCRIPT = String.raw`
     for (const el of fields) {
       const input = el;
       const type = (input.getAttribute("type") || "").toLowerCase();
-      const sensitive = type === "password" || type === "email" || type === "tel" || sensitiveAttr.test(attrText(input));
+      const sensitive = input.getAttribute("data-rpa-sensitive") === "true" || type === "password" || type === "email" || type === "tel" || sensitiveAttr.test(attrText(input));
       if (!sensitive) continue;
       if ("value" in input && typeof input.value === "string") {
         originals.push({ node: input, prop: "value", value: input.value });
