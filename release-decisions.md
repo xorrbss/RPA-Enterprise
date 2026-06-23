@@ -1018,6 +1018,36 @@ AUD-CRED-3. 자격증명 fill 직전 type=password read-back 가드 부재 (AUD4
    폼)를 깨뜨릴 회귀 위험**이 있어, fill 가드 커버리지(어떤 필드를 허용할지)를 sensitiveAttr 휴리스틱과 정렬해 신중
    설계해야 한다. focused follow-up. Owner = project owner.
 
+## Audit Decisions (2026-06-23, credential-fix break-it 재검증)
+
+#302(SBA-01 P0)·#303(AUD-4 P1) 수정의 적대 break-it 재검증(wf_e81306bc, 4 finder→2-lens, confirmed 10/refuted 8).
+**🟢 코어 견고 재확인**: SBA-01 리터럴 cross-purpose 차단·#303 top-document 표식은 양 검증자 sound(CORE-REFUTED/
+SOUND-05). **MERGED (수정 보완):** percent-encoding 우회(SBA-01-BYPASS-PCTENC, `..%2f` → `%` 거부) PR #305;
+AUD-4 마스킹 견고성(value-scrub 비대칭·`-webkit-text-fill-color` override·shadow DOM 미관통) PR #306. 아래는 잔여.
+
+AUD-CFIX-1. 자격증명 fill 동일출처 iframe 미관통 (AUD4-SHADOW-IFRAME 잔여, P2) — deferred
+   Finding: #306 이 markFieldSensitive 를 shadow root 재귀 관통으로 보완했으나, session.fill(Playwright)이 관통하는
+   **동일출처 iframe** 내 자격증명 필드는 markFieldSensitive(별도 document)가 표식 못 한다 — 그 필드가 type≠password
+   오타깃이면 평문이 그 frame 스크린샷에 누출. Decision (deferred): iframe 표식은 frame 별 evaluate 또는 Playwright
+   frame-aware locator 가 필요(셰도우보다 드문 케이스). LLM 셀렉터는 156188e0 가 기본 차단(opt-in 만), 누출은 frame
+   캡처 시에만. Build-condition: markFieldSensitive 가 동일출처 frame 도 순회(contentDocument), 또는 마스크가 frame
+   재귀. Owner = project owner.
+
+AUD-CFIX-2. 자격증명 미러/확인 필드 미표식 (AUD4-VERIFY-2, P2) — site-conditional, VLM 잔여
+   Finding: markFieldSensitive 는 fill 셀렉터 단일 매칭만 표식한다. 페이지가 입력값을 다른 요소(확인 필드·show-password
+   미러·hidden form 직렬화)로 복사하면 그 사본은 미표식이고, 일반 이름(type=text, name='pwconfirm')이면 maskFieldsIn
+   휴리스틱도 못 잡아 평문이 캡처된다. Decision (deferred): 사이트-조건부(미러 위젯/SPA 폼 상태). 근본 해법은
+   impl-contracts §B 의 이미지-region(VLM) 마스킹 — 미구현(별도 capability). 단기 완화: querySelectorAll 전체 매칭 표식.
+   Owner = project owner.
+
+AUD-CFIX-3. namespace 결속이 env(seg[1])·tenant 미검증 (SBA01-CROSS-ENV P3 / SBA01-TENANT-BYPASS, refuted) — by-design/owner
+   Finding: refNamespaceDenial 이 seg[3](purpose)·seg[2](runtime)는 검증하나 seg[1](env)·tenant 는 안 함 → 운영자가
+   `rpa/staging/runtime-worker/executor/<name>`(cross-env) 또는 멀티테넌트서 타 테넌트 executor 경로를 명명 가능.
+   Decision (by-design, 단일테넌트 단일env 배포서 무해): env 격리는 Vault AppRole/mount 가 강제(prod AppRole 은 prod
+   mount 만), tenant 는 ref 컨벤션에 tenant 세그먼트 부재(SecretRef = `rpa/<env>/<runtime>/<purpose>/<name>`, tenant
+   무차원). 멀티테넌트 자격증명 배포 시 ref 에 tenant 세그먼트 추가 + seg 검증은 owner 결정. break-it 양 케이스 모두
+   refuted(획득 secret 이 여전히 executor namespace = 세션/서명키 아님; cross-env/tenant 는 AppRole 정책 의존). Owner = project owner.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
