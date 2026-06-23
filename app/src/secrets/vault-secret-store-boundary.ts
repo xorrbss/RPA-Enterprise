@@ -209,6 +209,13 @@ function decisionReason(decision: SecretAccessDecision): string {
  * 위반 사유 문자열(deny) 또는 null(통과). 시크릿 값/경로 전체는 사유에 담지 않는다(세그먼트 메타만).
  */
 function refNamespaceDenial(ref: string, identity: RuntimeIdentity, purpose: ResolvePurpose): string | null {
+  // percent-encoding 거부(break-it SBA-01-BYPASS-PCTENC): 이 검증기는 디코드를 안 하므로 `..%2f` 같은 인코딩
+  //   traversal 이 split('/') 에서 단일 불투명 세그먼트로 보여 통과하나, VaultSecretStore.resolve 는 percent 를 보존해
+  //   Vault 서버가 디코드+collapse 하면 cross-purpose 경로(resume_token_hmac/browser_session)로 도달한다(검증↔GET
+  //   문자열 불일치). 정당한 executor 비밀 경로는 percent 가 없으므로 ref 에 '%' 가 있으면 즉시 거부(검증/전송 단일 정규형).
+  if (ref.includes("%")) {
+    return "ref contains percent-encoding (validator/resolve path mismatch — traversal risk)";
+  }
   const segs = ref.split("/");
   if (segs.some((s) => s === "" || s === "." || s === "..")) {
     return "ref has empty or path-traversal segment";
