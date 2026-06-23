@@ -570,7 +570,11 @@ export class StagehandDomExecutor implements ExecutorPlugin {
    * 항상 시도 — fill 직전 best-effort). evaluate 전송 실패는 그대로 전파(그 경우 fill 도 실패 = step 이 loud).
    */
   private async markFieldSensitive(session: CdpSession, selector: string): Promise<void> {
-    const expr = `(function(){try{var e=document.querySelector(${JSON.stringify(selector)});if(e&&e.setAttribute)e.setAttribute('data-rpa-sensitive','true');}catch(_){}})()`;
+    // open shadow root 관통(break-it AUD4-SHADOW-IFRAME): session.fill 은 Playwright locator 라 열린 셰도우 DOM 을
+    //   자동 관통하나 document.querySelector 는 top-document 만 본다 → 셰도우 내 자격증명 필드가 fill 되고도 미표식되던
+    //   갭. 재귀로 셰도우 루트를 내려가며 첫 매칭을 표식한다. (동일출처 iframe 은 별도 document 라 미관통 — 잔여.)
+    const sel = JSON.stringify(selector);
+    const expr = `(function(){try{function find(root){var e=root.querySelector(${sel});if(e)return e;var all=root.querySelectorAll('*');for(var i=0;i<all.length;i++){if(all[i].shadowRoot){var f=find(all[i].shadowRoot);if(f)return f;}}return null;}var el=find(document);if(el&&el.setAttribute)el.setAttribute('data-rpa-sensitive','true');}catch(_){}})()`;
     await session.evaluate(expr);
   }
 
