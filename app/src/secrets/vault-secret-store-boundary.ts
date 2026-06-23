@@ -99,6 +99,15 @@ export interface VaultSecretStoreBoundaryDeps {
    * fail-closed 패턴: writer 는 retentionUntil 누락 시 throw 하므로 항상 명시한다.
    */
   retentionDays?: number;
+  /**
+   * ref↔purpose namespace 결속 강제(SBA-01/ASSET-01, prod). 켜지면 ref 가 `rpa/<env>/<runtime>/<purpose>/<name…>`
+   * 규약을 따르고 4번째 세그먼트(purpose)==request.purpose·3번째(runtime)==resolved identity·빈/`.`/`..` 세그먼트
+   * 부재여야 한다. (identity,purpose) 매트릭스만으론, executor fill ref 가 운영자-제어 IR(meta.assets)에서 오므로
+   * `rpa/<env>/runtime-worker/resume_token_hmac/active` 같은 타-purpose 경로를 executor purpose 로 해소해 세션/
+   * resume 서명키를 유출할 수 있다 — 이 결속이 그 격리(매트릭스 주석 §49-50)를 코드로 강제한다. dev(FakeSecretStore
+   * 단축키)는 미주입(permissive, 후방호환). 위반은 SECRET_ACCESS_DENIED(fail-closed 감사).
+   */
+  enforceRefNamespace?: boolean;
 }
 
 export class VaultSecretStoreBoundary implements SecretStoreBoundary {
@@ -107,6 +116,7 @@ export class VaultSecretStoreBoundary implements SecretStoreBoundary {
   private readonly identityResolver: RuntimeIdentityResolver;
   private readonly clock: () => Date;
   private readonly retentionMs: number;
+  private readonly enforceRefNamespace: boolean;
 
   constructor(deps: VaultSecretStoreBoundaryDeps) {
     this.store = deps.store;
@@ -114,6 +124,7 @@ export class VaultSecretStoreBoundary implements SecretStoreBoundary {
     this.identityResolver = deps.identityResolver ?? new ClaimRuntimeIdentityResolver();
     this.clock = deps.clock ?? (() => new Date());
     this.retentionMs = Math.max(1, deps.retentionDays ?? 365) * 24 * 60 * 60 * 1000;
+    this.enforceRefNamespace = deps.enforceRefNamespace ?? false;
   }
 
   async authorize(request: SecretAccessRequest): Promise<SecretAccessDecision> {
@@ -132,6 +143,12 @@ export class VaultSecretStoreBoundary implements SecretStoreBoundary {
         code: "SECRET_ACCESS_DENIED",
         reason: `runtime identity '${identity}' may not resolve purpose '${request.purpose}'`,
       };
+    }
+    if (this.enforceRefNamespace) {
+      const denial = refNamespaceDenial(String(request.ref), identity, request.purpose);
+      if (denial !== null) {
+        return { kind: "deny", code: "SECRET_ACCESS_DENIED", reason: denial };
+      }
     }
     return { kind: "allow", ref: request.ref };
   }
@@ -184,4 +201,26 @@ export class VaultSecretStoreBoundary implements SecretStoreBoundary {
 
 function decisionReason(decision: SecretAccessDecision): string {
   return decision.kind === "allow" ? "least-privilege resolve allowed" : decision.reason;
+}
+
+/**
+ * ref↔purpose namespace 결속 검증(SBA-01/ASSET-01). ref 는 `rpa/<env>/<runtime>/<purpose>/<name…>` 규약을 따라야 하며
+ * runtime(seg[2])==resolved identity·purpose(seg[3])==request.purpose 여야 한다. 빈/`.`/`..` 세그먼트는 경로조작이므로 거부.
+ * 위반 사유 문자열(deny) 또는 null(통과). 시크릿 값/경로 전체는 사유에 담지 않는다(세그먼트 메타만).
+ */
+function refNamespaceDenial(ref: string, identity: RuntimeIdentity, purpose: ResolvePurpose): string | null {
+  const segs = ref.split("/");
+  if (segs.some((s) => s === "" || s === "." || s === "..")) {
+    return "ref has empty or path-traversal segment";
+  }
+  if (segs.length < 5 || segs[0] !== "rpa") {
+    return "ref does not follow rpa/<env>/<runtime>/<purpose>/<name> convention";
+  }
+  if (segs[2] !== identity) {
+    return `ref runtime segment '${segs[2]}' does not match identity '${identity}'`;
+  }
+  if (segs[3] !== purpose) {
+    return `ref purpose segment '${segs[3]}' does not match requested purpose '${purpose}'`;
+  }
+  return null;
 }

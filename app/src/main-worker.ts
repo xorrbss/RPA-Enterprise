@@ -98,7 +98,9 @@ function buildExecutorFactory(pool: PgPool, credentialStore: SecretStore, execut
     extractArtifactSink: approvalInboxArtifactSink,
     // AUD-1: 자격증명 fill 경계 — act.vars(secretRef)를 SecretStore 경유 해소(LLM 미경유). runtime-worker identity 가
     //   executor purpose 를 RESOLVE_MATRIX(D8-A12)로 인가하고, secret.resolve 는 fail-closed 감사된다. dev 와 동형(secrets+principal).
-    secrets: new VaultSecretStoreBoundary({ store: credentialStore, audit: new PgDurableSecurityAuditDecisionWriter(pool) }),
+    //   enforceRefNamespace(SBA-01): prod 는 ref↔purpose namespace 결속을 강제 — 운영자-제어 executor fill ref 가
+    //   resume_token_hmac/browser_session 등 타-purpose 경로를 해소해 세션/서명키를 유출하는 것 차단.
+    secrets: new VaultSecretStoreBoundary({ store: credentialStore, audit: new PgDurableSecurityAuditDecisionWriter(pool), enforceRefNamespace: true }),
     executorPrincipal,
   });
 }
@@ -168,11 +170,13 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
       : undefined;
 
   // AUD-1: dom 실행기 자격증명 fill 용 서비스-계정 principal(runtime_identity=runtime-worker → executor purpose 인가).
-  //   tenantId 는 placeholder — factory 가 run.tenantId 로 per-run 덮어쓴다(감사 row 테넌트 정합). roles 는 boundary 미사용.
+  //   tenantId 는 placeholder — factory 가 run.tenantId 로 per-run 덮어쓴다(감사 row 테넌트 정합).
+  //   roles 는 boundary 인가에 미사용이나 secret.resolve 감사 actor.roles 로 영속되므로(SBA-02), 실제 RBAC admin 이
+  //   아닌 서비스계정을 'admin' 으로 오기록하지 않도록 빈 배열로 둔다(서비스계정은 RBAC role 없음; 인가엔 영향 없음).
   const executorPrincipal: AuthenticatedPrincipal = {
     subjectId: cfg.workerId as PrincipalId,
     tenantId: "00000000-0000-0000-0000-000000000000" as TenantId,
-    roles: ["admin"],
+    roles: [],
     source: "jwt",
     claims: { runtime_identity: "runtime-worker" },
   };
