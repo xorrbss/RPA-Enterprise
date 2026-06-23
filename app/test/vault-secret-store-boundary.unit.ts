@@ -215,6 +215,59 @@ async function main(): Promise<void> {
     check("audit 실패 → store.resolve 미호출", store.resolved.length === 0, `resolved=${store.resolved.length}`);
   }
 
+  // 5) enforceRefNamespace(SBA-01): ref↔purpose namespace 결속. 켜진 boundary.
+  {
+    const makeNs = (store: SecretStore, audit: DurableSecurityAuditDecisionWriter): VaultSecretStoreBoundary =>
+      new VaultSecretStoreBoundary({ store, audit, identityResolver: new ClaimRuntimeIdentityResolver(), clock: () => new Date("2026-06-16T00:00:00.000Z"), enforceRefNamespace: true });
+
+    // 5a) SBA-01 핵심: executor purpose 인데 ref 가 resume_token_hmac namespace → DENY + store.resolve 미호출.
+    {
+      const store = new FakeSecretStore();
+      const boundary = makeNs(store, new FakeAuditWriter());
+      const d = await boundary.authorize(request("runtime-worker", "executor", "rpa/staging/runtime-worker/resume_token_hmac/active"));
+      check("SBA-01: executor purpose + resume_token ref → DENY", d.kind === "deny" && d.code === "SECRET_ACCESS_DENIED", JSON.stringify(d));
+      let threw: unknown;
+      try { await boundary.resolveAuthorized(request("runtime-worker", "executor", "rpa/staging/runtime-worker/browser_session/active")); } catch (e) { threw = e; }
+      check("SBA-01: executor purpose + browser_session ref → throw + store.resolve 미호출", threw instanceof SecretAccessDeniedError && store.resolved.length === 0, String(threw));
+    }
+
+    // 5b) 정당한 executor fill ref(규약 준수) → allow + resolve.
+    {
+      const store = new FakeSecretStore();
+      const boundary = makeNs(store, new FakeAuditWriter());
+      const secret = await boundary.resolveAuthorized(request("runtime-worker", "executor", "rpa/staging/runtime-worker/executor/hiworks_pw"));
+      check("namespace: 정당 executor ref → resolve", String(secret) === SECRET_VALUE && store.resolved.length === 1);
+    }
+
+    // 5c) path-traversal 세그먼트(..) → DENY.
+    {
+      const boundary = makeNs(new FakeSecretStore(), new FakeAuditWriter());
+      const d = await boundary.authorize(request("runtime-worker", "executor", "rpa/staging/runtime-worker/executor/../resume_token_hmac/active"));
+      check("namespace: ../ traversal ref → DENY", d.kind === "deny", JSON.stringify(d));
+    }
+
+    // 5d) runtime 세그먼트가 identity 와 불일치 → DENY.
+    {
+      const boundary = makeNs(new FakeSecretStore(), new FakeAuditWriter());
+      const d = await boundary.authorize(request("runtime-worker", "executor", "rpa/staging/api/executor/x"));
+      check("namespace: runtime 세그먼트 불일치 → DENY", d.kind === "deny", JSON.stringify(d));
+    }
+
+    // 5e) 규약 미준수(단축키) → DENY(강제 모드).
+    {
+      const boundary = makeNs(new FakeSecretStore(), new FakeAuditWriter());
+      const d = await boundary.authorize(request("runtime-worker", "executor", "login.password"));
+      check("namespace: 규약 미준수 단축키 → DENY", d.kind === "deny", JSON.stringify(d));
+    }
+
+    // 5f) 후방호환: enforce 미주입(기본 off) 이면 단축키도 매트릭스만으로 allow.
+    {
+      const boundary = makeBoundary(new FakeSecretStore(), new FakeAuditWriter());
+      const d = await boundary.authorize(request("runtime-worker", "executor", "login.password"));
+      check("namespace off(기본): 단축키 allow(후방호환)", d.kind === "allow", JSON.stringify(d));
+    }
+  }
+
   console.log(`\nvault-secret-store-boundary.unit: ${failures === 0 ? "ALL PASS" : `${failures} FAILED`}`);
   process.exitCode = failures === 0 ? 0 : 1;
 }

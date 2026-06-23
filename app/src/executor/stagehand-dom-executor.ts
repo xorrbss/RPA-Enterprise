@@ -565,6 +565,11 @@ export class StagehandDomExecutor implements ExecutorPlugin {
    *   브랜드는 컴파일타임 전용 소거형. 비밀/에셋 구분은 assetRefs 주입 지점(run-loop)이 권위; resolveAuthorized 가 최종 권위.)
    */
   private async resolveSecretForFill(valueRef: string, ctx: RunContext): Promise<PlainSecret> {
+    // own-property 만 인정(ASSET-02): valueRef='constructor'/'toString' 등 상속 멤버가 미바인딩 가드를 우회해
+    //   Object.prototype 함수를 SecretRef 로 흘려보내지 않게 한다(조용한 빈 fill 금지 = loud throw 유지).
+    if (!Object.prototype.hasOwnProperty.call(ctx.assetRefs, valueRef)) {
+      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `credential fill: asset key '${valueRef}' not bound in ctx.assetRefs`);
+    }
     const ref = ctx.assetRefs[valueRef];
     if (ref === undefined) {
       throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `credential fill: asset key '${valueRef}' not bound in ctx.assetRefs`);

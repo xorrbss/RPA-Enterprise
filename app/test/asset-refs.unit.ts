@@ -37,6 +37,14 @@ function main(): void {
   }
   // 6) assets 가 배열 아님 → {}.
   check("assets non-array → {}", keys(deriveAssetRefs({ assets: "login.password" })) === "");
+  // 7) 위험 키(__proto__/constructor/prototype) 무시 + null-proto(상속 멤버 미노출) — ASSET-02 프로토타입 오염 차단.
+  {
+    const r = deriveAssetRefs({ assets: ["ok", "__proto__", "constructor", "prototype", "ok2"] });
+    check("dangerous keys(__proto__/constructor/prototype) skipped", keys(r) === "ok,ok2", keys(r));
+    const probe = r as Record<string, unknown>;
+    check("null-proto: constructor lookup → undefined(미바인딩 가드 우회 차단)", probe["constructor"] === undefined);
+    check("null-proto: toString lookup → undefined", probe["toString"] === undefined);
+  }
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
