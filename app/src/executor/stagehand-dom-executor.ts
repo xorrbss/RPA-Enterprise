@@ -541,6 +541,11 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         return;
       case "fill": {
         if (plan.valueRef !== undefined) {
+          // AUD-4 누출 차단(방어심층): 자격증명 fill 대상 필드를 data-rpa-sensitive 로 표식 → 캡처-마스크
+          //   (visual-evidence [data-rpa-sensitive] 규칙)가 type 무관하게 항상 마스킹. 셀렉터가 (오베이킹·LLM opt-in
+          //   환각으로) type=password 가 아닌 필드를 가리켜도 평문 비밀번호가 스크린샷/비디오에 at-rest 누출되지 않게
+          //   한다. plain 해소 전에 표식 — 비디오 프레임/실패 재시도 캡처도 커버.
+          await this.markFieldSensitive(session, plan.selector);
           // 자격증명 fill: SecretStore 경유 평문 해소 → CDP fill 에만 흘린다. plain 은 반환/로그/output 에 절대 미흐름(주통제).
           const plain = await this.resolveSecretForFill(plan.valueRef, ctx);
           await session.fill(plan.selector, plain);
@@ -556,6 +561,17 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         await session.selectOption(plan.selector, plan.value);
         return;
     }
+  }
+
+  /**
+   * 자격증명 fill 대상 필드를 data-rpa-sensitive='true' 로 표식(AUD-4 방어심층). 캡처-마스크가 이 속성을 무조건
+   * 마스킹하므로, 필드 type 이 password 가 아니어도 평문 비밀번호가 시각증거에 at-rest 누출되지 않는다. 셀렉터는
+   * JSON.stringify 로 안전 임베드(평가식 주입 차단), 요소 부재/속성설정 실패는 브라우저측 try/catch 로 흡수(표식은
+   * 항상 시도 — fill 직전 best-effort). evaluate 전송 실패는 그대로 전파(그 경우 fill 도 실패 = step 이 loud).
+   */
+  private async markFieldSensitive(session: CdpSession, selector: string): Promise<void> {
+    const expr = `(function(){try{var e=document.querySelector(${JSON.stringify(selector)});if(e&&e.setAttribute)e.setAttribute('data-rpa-sensitive','true');}catch(_){}})()`;
+    await session.evaluate(expr);
   }
 
   /**
