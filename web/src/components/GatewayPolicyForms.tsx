@@ -9,14 +9,16 @@ import {
 } from "../api/types";
 import { errorLabel } from "./badges";
 
+// 예산/한도 수치에 단위를 붙여 운영자에게 의미를 명확히 한다(계약: 토큰 한도=tokens, maxCost=USD).
+// 미설정 값엔 단위를 붙이지 않는다("미지정") — 없는 값을 0이나 단위로 위장하지 않는다(조용한 false 금지).
 function numberSetting(
   record: Record<string, unknown> | undefined,
   key: string,
+  unit: "토큰" | "USD",
 ): string {
   const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value)
-    ? String(value)
-    : "미지정";
+  if (typeof value !== "number" || !Number.isFinite(value)) return "미지정";
+  return unit === "USD" ? `$${value} USD` : `${value.toLocaleString("ko-KR")} 토큰`;
 }
 
 function booleanSetting(
@@ -52,7 +54,7 @@ export function PolicyReadout({
       <div className="metric">
         <div className="label">컨텍스트 한도</div>
         <div className="value" style={{ fontSize: 18 }}>
-          {numberSetting(policy.capabilities, "maxContextTokens")}
+          {numberSetting(policy.capabilities, "maxContextTokens", "토큰")}
         </div>
       </div>
       <div className="metric">
@@ -69,14 +71,14 @@ export function PolicyReadout({
       <div className="metric">
         <div className="label">사용량 한도</div>
         <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
-          <span>입력 {numberSetting(policy.budget, "maxInputTokens")}</span>
-          <span>출력 {numberSetting(policy.budget, "maxOutputTokens")}</span>
+          <span>입력 {numberSetting(policy.budget, "maxInputTokens", "토큰")}</span>
+          <span>출력 {numberSetting(policy.budget, "maxOutputTokens", "토큰")}</span>
         </div>
       </div>
       <div className="metric">
-        <div className="label">비용 한도</div>
+        <div className="label">비용 한도 (실행당)</div>
         <div className="value" style={{ fontSize: 18 }}>
-          {numberSetting(policy.budget, "maxCost")}
+          {numberSetting(policy.budget, "maxCost", "USD")}
         </div>
       </div>
       <div className="metric">

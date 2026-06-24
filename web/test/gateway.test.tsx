@@ -142,4 +142,35 @@ describe("LLM 게이트웨이 정책 — 목록·기본·CRUD", () => {
     expect(calls[0]?.body.is_default).toBe(true);
     expect(calls[0]?.key.length).toBeGreaterThan(0);
   });
+
+  test("정책 요약: 토큰/비용 한도에 단위를 표기한다(맨 숫자 노출 금지)", async () => {
+    renderApp(fakeClient({ listGatewayPolicies: async () => ({ items: POLICIES, next_cursor: null }) }));
+    location.hash = "#llmGateway";
+
+    // 기본 정책(gpt-4o) 요약: maxContextTokens 8000 → "8,000 토큰", maxCost 1 → "$1 USD".
+    await waitFor(() => expect(screen.getByText("8,000 토큰")).toBeInTheDocument());
+    expect(screen.getByText("$1 USD")).toBeInTheDocument();
+    expect(screen.getByText("비용 한도 (실행당)")).toBeInTheDocument();
+
+    // 입력/출력 토큰 한도에도 단위가 붙는다.
+    const span = (label: string) =>
+      screen.getByText((_, el) => el?.tagName === "SPAN" && el.textContent === label);
+    expect(span("입력 800 토큰")).toBeInTheDocument();
+    expect(span("출력 400 토큰")).toBeInTheDocument();
+  });
+
+  test("정책 요약: 미설정 한도엔 단위를 붙이지 않는다(조용한 false 금지)", async () => {
+    renderApp(
+      fakeClient({
+        listGatewayPolicies: async () => ({
+          items: [{ model: "gpt-4o", version: 1, capabilities: {}, budget: {}, is_default: true }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#llmGateway";
+    await waitFor(() => expect(screen.getAllByText("미지정").length).toBeGreaterThan(0));
+    expect(screen.queryByText(/미지정\s*토큰/)).toBeNull();
+    expect(screen.queryByText(/미지정\s*USD/)).toBeNull();
+  });
 });
