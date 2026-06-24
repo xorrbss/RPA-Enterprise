@@ -47,6 +47,17 @@ const BLOCKER_LABELS: Record<string, string> = {
 
 const GENERIC_BLOCKER_LABEL = "자동 생성에 실패했습니다. 검토 사유를 확인해 주세요.";
 
+// AI 생성기 예시 프롬프트 — 무엇을 적어야 할지 막막한 운영자가 클릭 한 번으로 textarea를 채워 시작한다.
+// 라벨은 '쉬운 만들기' 템플릿 어휘(목록 수집/결재 처리/첨부 다운로드/양식 입력/로그인 후 조회)와 맞춘다.
+// 예시 문장은 textarea placeholder("…신규 주문 목록을 확인하고 요약…")와 중복되지 않게 작성.
+const PROMPT_EXAMPLES: ReadonlyArray<{ readonly label: string; readonly prompt: string }> = [
+  { label: "목록 수집", prompt: "사내 게시판에서 오늘 등록된 공지 목록의 제목과 작성자, 등록일을 모아줘" },
+  { label: "결재 처리", prompt: "하이웍스 결재함에서 대기 중인 지출 품의 문서의 제목과 금액, 기안자를 확인해줘" },
+  { label: "첨부 다운로드", prompt: "전자세금계산서 페이지에서 이번 달 청구서 PDF 파일 목록을 확인해줘" },
+  { label: "양식 입력", prompt: "고객 문의 접수 화면에 정해진 양식대로 입력하고 제출 결과를 확인해줘" },
+  { label: "로그인 후 조회", prompt: "ERP에 로그인한 뒤 미수금 현황 화면에서 거래처별 잔액을 조회해줘" },
+];
+
 // 운영자 표면: 매핑된 blocker 라벨 → ErrorCode 한글(reason이 ErrorCode일 때) → generic 한글 폴백.
 // raw 영문 코드 노출 금지(비기술 운영자 레지스터), 진단정보 최대 보존(조용한 공백 금지).
 function blockerLabel(blocker: string): string {
@@ -1030,6 +1041,20 @@ export function PromptScenarioGenerator(): JSX.Element {
         <h2>말로 설명해 만들기</h2>
       </div>
       <div className="scenario-generator-body">
+        <div className="prompt-examples" role="group" aria-label="예시 프롬프트">
+          <span className="subtle">예시로 시작하기</span>
+          {PROMPT_EXAMPLES.map((ex) => (
+            <button
+              key={ex.label}
+              type="button"
+              className="prompt-example-chip"
+              aria-label={`예시 프롬프트 채우기: ${ex.label}`}
+              onClick={() => setPrompt(ex.prompt)}
+            >
+              {ex.label}
+            </button>
+          ))}
+        </div>
         <label className="field field-wide">
           <span>자연어 요청</span>
           <textarea
