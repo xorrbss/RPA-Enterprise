@@ -57,6 +57,27 @@ function apiFixture(pathname: string): unknown {
   if (pathname === "/api/v1/workitems") {
     return { items: [{ workitem_id: "55550000-aaaa-bbbb-cccc-000000000001", status: "new", unique_reference: "wi-e2e", target_id: null }], next_cursor: null };
   }
+  if (pathname === "/api/v1/human-tasks") {
+    return { items: [], next_cursor: null };
+  }
+  if (pathname === "/api/v1/dlq") {
+    return { items: [], next_cursor: null };
+  }
+  if (pathname === "/api/v1/sites") {
+    return { items: [], next_cursor: null };
+  }
+  if (pathname === "/api/v1/ops-alerts") {
+    return { items: [], next_cursor: null };
+  }
+  if (pathname === "/api/v1/ops/health") {
+    return {
+      status: "ok",
+      detected_at: "2026-06-24T09:00:00.000Z",
+      queue: { available: true, pending_jobs: 0 },
+      browser_leases: { reserved: 0, active: 0, draining: 0, expired: 0, expired_open: 0, next_expiry_at: null },
+      stale_runs: { nonterminal_over_15m: 0, oldest_updated_at: null },
+    };
+  }
   if (pathname === "/api/v1/gateway/policy") {
     return { model: "gpt-4o-mini", capabilities: { jsonMode: true } };
   }
@@ -119,11 +140,14 @@ async function main(): Promise<void> {
 
     // 1) 기본 라우트(dashboard) 부팅 + 시드 실행 렌더
     await page.goto(`${base}/`, { waitUntil: "networkidle0", timeout: 30_000 });
-    await page.waitForFunction(() => document.body.innerText.includes("최근 실행"), { timeout: 15_000 });
+    await page.waitForSelector("h1", { timeout: 15_000 });
+    await page.waitForFunction(() => document.body.innerText.includes("상세 보기") || document.body.innerText.includes("11111111-aaaa-bbbb-cccc-000000000001"), { timeout: 15_000 });
     const dash = await page.evaluate(() => document.body.innerText);
-    check("dashboard 부팅 + '최근 실행' 렌더", dash.includes("최근 실행"));
+    const dashboardTitle = await page.$eval("h1", (el) => el.textContent ?? "");
+    check("dashboard 부팅 + 운영 대시보드 제목", dashboardTitle === "RPA 운영 대시보드", dashboardTitle);
+    check("dashboard 최근 실행 행 렌더", dash.includes("상세 보기") || dash.includes("11111111-aaaa-bbbb-cccc-000000000001"), dash.slice(0, 300));
     check("시드 실행이 '실행 중'으로 표시(StatusBadge 한국어 라벨)", dash.includes("실행 중"), dash.slice(0, 200));
-    check("사이드바 16 nav 렌더", await page.$$eval("nav.sidebar button", (b) => b.length) === 16);
+    check("사이드바 18 nav 렌더", await page.$$eval("nav.sidebar button", (b) => b.length) === 18);
 
     // 2) 해시 라우팅 → workitems, 시드 작업항목 렌더
     await page.evaluate(() => {
