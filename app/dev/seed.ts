@@ -88,17 +88,17 @@ export async function seed(pool: PgPool): Promise<void> {
   });
 
   // human_tasks: open(exception) / assigned(approval) / open(approval) — assign·start·resolve·escalate 테스트용.
-  const HTS: ReadonlyArray<readonly [string, string, string, string | null, number]> = [
-    ["73000000-0000-0000-0000-0000000000d1", "open", "exception", null, 0],
-    ["73000000-0000-0000-0000-0000000000d2", "assigned", "approval", ASSIGNEE, 1],
-    ["73000000-0000-0000-0000-0000000000d3", "open", "approval", null, 2],
+  const HTS: ReadonlyArray<readonly [string, string, string, string | null, string, number]> = [
+    ["73000000-0000-0000-0000-0000000000d1", "open", "exception", null, "reviewer", 0],
+    ["73000000-0000-0000-0000-0000000000d2", "assigned", "approval", ASSIGNEE, "approver", 1],
+    ["73000000-0000-0000-0000-0000000000d3", "open", "approval", null, "approver", 2],
   ];
-  for (const [id, state, kind, assignee, i] of HTS) {
+  for (const [id, state, kind, assignee, assigneeRole, i] of HTS) {
     await withTenantTx(pool, TENANT, (c) =>
       c.query(
-        `INSERT INTO human_tasks (id, tenant_id, run_id, kind, state, assignee, expires_at, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6::text,'2026-07-01T00:00:00Z',$7::timestamptz)`,
-        [id, TENANT, SUSPENDED_RUN, kind, state, assignee, ts(i)],
+        `INSERT INTO human_tasks (id, tenant_id, run_id, kind, state, assignee, assignee_role, expires_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6::text,$7::text,'2026-07-01T00:00:00Z',$8::timestamptz)`,
+        [id, TENANT, SUSPENDED_RUN, kind, state, assignee, assigneeRole, ts(i)],
       ),
     );
   }

@@ -41,13 +41,14 @@ import type { RunEnqueuer } from "../src/api/run-queue";
 import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer } from "../src/api/server";
 import { PgBrowserSessionStore, DevPlaintextSessionEncryptor } from "../src/runtime/browser-session-store";
+import { processDueRunTriggers } from "../src/worker/run-trigger-scheduler";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { FsObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
 import { startRunLoop, type RunLoop } from "./run-loop";
 import { startCaptureLoop, type CaptureLoop } from "./capture-loop";
 import { DevVisibleGatewayArtifactSink } from "./dev-gateway-artifact-sink";
 import { seed } from "./seed";
-import { PORT, TENANT, FIXTURE_PATH, LOGIN_FIXTURE_PATH } from "./dev-constants";
+import { DEV_PRINCIPAL_SUBJECT, PORT, TENANT, FIXTURE_PATH, LOGIN_FIXTURE_PATH } from "./dev-constants";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -100,6 +101,15 @@ function devArtifactRetentionDays(): number {
 function shouldResetDevDb(): boolean {
   const raw = process.env.RPA_DEV_RESET_DB?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function devTriggerSchedulerIntervalMs(): number {
+  const raw = process.env.RUN_TRIGGER_SCHEDULER_INTERVAL_MS?.trim();
+  const value = raw === undefined || raw === "" ? 10_000 : Number(raw);
+  if (!Number.isInteger(value) || value < 1000) {
+    throw new Error(`RUN_TRIGGER_SCHEDULER_INTERVAL_MS must be an integer >= 1000, got ${raw}`);
+  }
+  return value;
 }
 
 type DevSchemaInitMode = "created" | "reset" | "preserved";
@@ -197,7 +207,12 @@ async function main(): Promise<void> {
     console.log("seeded: 8 runs · 3 human-tasks · 4 workitems · 2 dead-letters · 2 gateway policies · 3 sites");
   }
 
-  const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
+  const noopEnqueuer: RunEnqueuer = {
+    async enqueueRunClaim() {},
+    async enqueueRunAbort() {},
+    async enqueueSinkDeliver() {},
+    async enqueueRunResume() {},
+  };
   const signedCommandRegistry: SignedCommandRegistry = {
     async listAllowedCommandRefs() {
       return { kind: "available", snapshot: { sourceRef: "secret://dev/registry" as SecretRef, commands: [] } };
@@ -224,9 +239,8 @@ async function main(): Promise<void> {
 
   // dev 토큰: 전 역할 union(최대 권한)이 기본. ?role=<viewer|operator|reviewer|approver|admin>로 단일 역할
   // 토큰을 주입해 RBAC UI 게이팅(권한 없는 명령 버튼 숨김)을 시연한다. 12h.
-  const SUBJECT = "00000000-0000-0000-0000-0000000000de";
   const mintToken = (roles: readonly string[]): Promise<string> =>
-    new SignJWT({ sub: SUBJECT, tenant_id: TENANT, roles })
+    new SignJWT({ sub: DEV_PRINCIPAL_SUBJECT, tenant_id: TENANT, roles })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt()
       .setExpirationTime("12h")
@@ -328,6 +342,18 @@ async function main(): Promise<void> {
   );
   // dev 캡처 폴러: 콘솔 '세션 등록'(capture_sessions launching)을 폴링해 별도 headful 로그인창을 띄운다(run-loop 의 공유 세션과 무관).
   const captureLoop: CaptureLoop | null = await startCaptureLoop(pool, TENANT);
+  const triggerSchedulerTimer = setInterval(() => {
+    void processDueRunTriggers(pool, { tenantIds: [TENANT], enqueuer: noopEnqueuer, batchLimit: 10 })
+      .then((stats) => {
+        if (stats.runsQueued > 0 || stats.firesFailed > 0 || stats.firesSkipped > 0) {
+          console.log(
+            `trigger-scheduler: queued=${stats.runsQueued} failed=${stats.firesFailed} skipped=${stats.firesSkipped}`,
+          );
+        }
+      })
+      .catch((e) => console.error("trigger-scheduler tick error:", e instanceof Error ? e.message : String(e)));
+  }, devTriggerSchedulerIntervalMs());
+  triggerSchedulerTimer.unref?.();
 
   const shutdown = (): void => {
     console.log("shutting down dev console…");
@@ -346,6 +372,7 @@ async function main(): Promise<void> {
           /* ignore */
         }
       }
+      clearInterval(triggerSchedulerTimer);
       server.close(() => {
         void api.close().then(() => pool.end()).then(() => process.exit(0));
       });

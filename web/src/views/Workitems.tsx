@@ -8,7 +8,7 @@ import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, statusLabel, errorCodeLabel } from "../components/badges";
 import { ErrorState, Loading } from "../components/states";
-import { mergeParams, navigate, useHashParam } from "../router";
+import { mergeParams, navigate, useHashIdParam } from "../router";
 import { WORKITEM_STATES } from "./filters";
 import type { DeadLetterItem, WorkitemItem } from "../api/types";
 
@@ -39,7 +39,7 @@ export function WorkitemsView(): JSX.Element {
   const wiDlqItems = wiDlq.query.data?.items ?? [];
   const sinkDlqItems = sinkDlq.query.data?.items ?? [];
   // 선택 작업항목을 해시(`#workitems?wi=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
-  const sel = useHashParam("wi");
+  const sel = useHashIdParam("wi");
   const detail = useQuery({ queryKey: ["workitem-detail", sel], queryFn: () => api.getWorkitem(sel as string), enabled: sel !== null });
 
   return (

@@ -103,3 +103,24 @@ export function useHashParam(name: string): string | null {
   }, [name]);
   return value;
 }
+
+/**
+ * id 값이 **단일 안전 경로 세그먼트**인지 — path-traversal 차단. id 계열 딥링크 파라미터(run/wi/ht/scenario/
+ * generation)는 client.ts 에서 raw 로 API 경로 세그먼트에 보간되므로(`/v1/runs/${id}`), `/`·`\`·`..` 를 담은 값은
+ * 경로를 탈출해 다른 엔드포인트를 가리킬 수 있다(예 `../gateway/policy` → `/v1/runs/../gateway/policy` → 정규화 →
+ * `/v1/gateway/policy`). 백엔드 id 는 전부 UUID 라 이 문자들이 정상값엔 없다. URLSearchParams.get 이 1회 디코드하므로
+ * `..%2F` 도 여기서 `../` 로 보여 거부된다. (정상 UUID·일반 토큰은 통과 — 슬래시/.. 없음.)
+ */
+function isSafeIdSegment(v: string): boolean {
+  return v.length > 0 && !v.includes("/") && !v.includes("\\") && !v.includes("..");
+}
+
+/**
+ * 안전 경로 세그먼트 형식의 딥링크 id 파라미터만 구독한다. path-traversal 페이로드(조작된 해시)는 null →
+ * 드릴다운 미오픈·API 미호출. sink(client.ts path 보간)가 아니라 **source 에서** 검증한다(status enum·artifact
+ * UUID_RE 와 동형의 비대칭 해소 — 조작 링크가 `getRun('../gateway/policy')` 로 다른 엔드포인트를 인증 GET 하는 것 차단).
+ */
+export function useHashIdParam(name: string): string | null {
+  const value = useHashParam(name);
+  return value !== null && isSafeIdSegment(value) ? value : null;
+}

@@ -541,6 +541,11 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         return;
       case "fill": {
         if (plan.valueRef !== undefined) {
+          // AUD-4 누출 차단(방어심층): 자격증명 fill 대상 필드를 data-rpa-sensitive 로 표식 → 캡처-마스크
+          //   (visual-evidence [data-rpa-sensitive] 규칙)가 type 무관하게 항상 마스킹. 셀렉터가 (오베이킹·LLM opt-in
+          //   환각으로) type=password 가 아닌 필드를 가리켜도 평문 비밀번호가 스크린샷/비디오에 at-rest 누출되지 않게
+          //   한다. plain 해소 전에 표식 — 비디오 프레임/실패 재시도 캡처도 커버.
+          await this.markFieldSensitive(session, plan.selector);
           // 자격증명 fill: SecretStore 경유 평문 해소 → CDP fill 에만 흘린다. plain 은 반환/로그/output 에 절대 미흐름(주통제).
           const plain = await this.resolveSecretForFill(plan.valueRef, ctx);
           await session.fill(plan.selector, plain);
@@ -559,12 +564,32 @@ export class StagehandDomExecutor implements ExecutorPlugin {
   }
 
   /**
+   * 자격증명 fill 대상 필드를 data-rpa-sensitive='true' 로 표식(AUD-4 방어심층). 캡처-마스크가 이 속성을 무조건
+   * 마스킹하므로, 필드 type 이 password 가 아니어도 평문 비밀번호가 시각증거에 at-rest 누출되지 않는다. 셀렉터는
+   * JSON.stringify 로 안전 임베드(평가식 주입 차단), 요소 부재/속성설정 실패는 브라우저측 try/catch 로 흡수(표식은
+   * 항상 시도 — fill 직전 best-effort). evaluate 전송 실패는 그대로 전파(그 경우 fill 도 실패 = step 이 loud).
+   */
+  private async markFieldSensitive(session: CdpSession, selector: string): Promise<void> {
+    // open shadow root 관통(break-it AUD4-SHADOW-IFRAME): session.fill 은 Playwright locator 라 열린 셰도우 DOM 을
+    //   자동 관통하나 document.querySelector 는 top-document 만 본다 → 셰도우 내 자격증명 필드가 fill 되고도 미표식되던
+    //   갭. 재귀로 셰도우 루트를 내려가며 첫 매칭을 표식한다. (동일출처 iframe 은 별도 document 라 미관통 — 잔여.)
+    const sel = JSON.stringify(selector);
+    const expr = `(function(){try{function find(root){var e=root.querySelector(${sel});if(e)return e;var all=root.querySelectorAll('*');for(var i=0;i<all.length;i++){if(all[i].shadowRoot){var f=find(all[i].shadowRoot);if(f)return f;}}return null;}var el=find(document);if(el&&el.setAttribute)el.setAttribute('data-rpa-sensitive','true');}catch(_){}})()`;
+    await session.evaluate(expr);
+  }
+
+  /**
    * valueRef(에셋 키) → ctx.assetRefs[key](SecretRef) → SecretStoreBoundary.resolveAuthorized(purpose:'executor') → PlainSecret.
    * 반환 PlainSecret 의 수명은 호출측 applyPlan 의 지역변수(→ session.fill) 하나뿐 — 여기서 직렬화/로그/반환 금지.
    * 가드(loud, 조용한 빈 fill 금지): 에셋 키 미바인딩 / 경계·principal 미주입 → throw. (런타임엔 SecretRef vs 평문 판별 불가 —
    *   브랜드는 컴파일타임 전용 소거형. 비밀/에셋 구분은 assetRefs 주입 지점(run-loop)이 권위; resolveAuthorized 가 최종 권위.)
    */
   private async resolveSecretForFill(valueRef: string, ctx: RunContext): Promise<PlainSecret> {
+    // own-property 만 인정(ASSET-02): valueRef='constructor'/'toString' 등 상속 멤버가 미바인딩 가드를 우회해
+    //   Object.prototype 함수를 SecretRef 로 흘려보내지 않게 한다(조용한 빈 fill 금지 = loud throw 유지).
+    if (!Object.prototype.hasOwnProperty.call(ctx.assetRefs, valueRef)) {
+      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `credential fill: asset key '${valueRef}' not bound in ctx.assetRefs`);
+    }
     const ref = ctx.assetRefs[valueRef];
     if (ref === undefined) {
       throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `credential fill: asset key '${valueRef}' not bound in ctx.assetRefs`);

@@ -934,6 +934,120 @@ AUD-PBD-3. click_text 부분문자열 매칭이 모호 요소를 클릭 가능 (
    우선 + 부분문자열 폴백, 또는 다중 가시 매칭 시 loud(모호성 거부). Owner = project owner. Impact: 현 비가역 prod
    경로(PR #156)는 고유 onclick click_selector + assert_absent 를 써 미해당 — 저작 가이던스 개선 여지.
 
+## Audit Decisions (2026-06-23, web 콘솔 적대 감사)
+
+web 운영 콘솔 adversarial audit (wf_69027d68, 6 finder → 2-lens: XSS·토큰경계·클라권한·비가역가드·해시라우터·
+날조금지). **🟢 헤드라인 안심 신호: confirmed P0/P1 = 0.** 토큰 경계(JWT localStorage, URL/로그/외부요청 누출
+0, 401 단일-funnel 폐기·폴링정지), 클라 권한(useCan = UI 편의 게이팅뿐, 데이터 leak 없음·백엔드 RBAC+RLS 가 진짜
+게이트), XSS(doc_ref 는 javascript:/data: 가드, dangerouslySetInnerHTML 미사용), 인증 디코드(서명 미검증이나
+UI-only) 가 모두 refuted-as-sound 로 확인됐다. **MERGED (deferred 아님):** DL-01 딥링크 id path-traversal
+(useHashIdParam source 검증, PR #299); IRR-03 일괄승인 silent-swallow + IRR-01 bulk 이중제출 가드 (PR #300).
+아래는 confirmed-but-deferred / by-design (AUD-1..12·AUD-PBD 동일 규율).
+
+AUD-WEB-1. ActionButton(per-item 명령)의 멱등키가 매 호출 새로 생성 — 같은 틱 연타 시 다른 키 (IRR-01 잔여, P3) — bounded
+   Finding: `ActionButton` 의 `mutationFn` 이 `crypto.randomUUID()` 를 호출마다 새로 생성하고, 더블클릭 가드는
+   `mut.isPending`(다음 렌더에야 true)에만 의존한다. 같은 틱 연타로 확인 버튼이 두 번 발화하면 서로 다른 멱등키 2건이
+   백엔드로 가 멱등 dedup 이 무력화된다(human_task assign/start/resolve/escalate·approveSite·captureSession·
+   abortRun 등). Decision (bounded, deferred): 데이터 무결성은 **백엔드 CAS 전이/유일성**이 보호한다 — 두 번째 명령은
+   이미 전이된 상태를 만나 IllegalTransition/이미-결정 으로 loud 거부되므로 이중 실행·손상은 없다(멱등키는 2차 방어).
+   해악은 "연타 시 혼동되는 오류 표시" 로 bounded. 일괄 경로는 PR #300 에서 동기 ref 가드를 받았으나, 널리 쓰이는
+   `ActionButton` 에 동기 가드를 넣는 것은 회귀면이 넓어(전 명령 버튼) 즉시 적용 대신 deferred. Build-condition: 원하면
+   `ActionButton` 에 동기 `submitting` ref 가드 추가(onConfirm 직후 set, onSettled 해제) + 멱등키를 확인-시점 1회
+   생성해 retry 에 재사용(동일 키 replay = 동일 응답). Owner = project owner. Impact: 백엔드 CAS 가 무결성 보장 — bounded.
+
+AUD-WEB-2. Dashboard '실행 성공률' 드릴다운 모집단이 지표 정의와 불일치 (FAB-01, P3) — UX 폴리시
+   Finding: '실행 성공률'(=completed/(completed+failed_*) 비율) 카드 클릭 드릴다운이 `status=completed`(분자만) 필터
+   목록으로 이동해, 운영자가 분모(실패 실행)를 볼 동선이 끊긴다. 값 자체는 서버 집계라 정확(날조 아님)하나 드릴다운이
+   지표 의미를 부분만 비춘다. Decision (UX 폴리시, deferred): 데이터 정합/보안 문제가 아닌 드릴다운 UX 일관성. Build-
+   condition: 비율 카드는 단일-status 시드 대신 전체 실행 목록으로 이동하거나 hint 를 '실행 기록'으로. Owner = project owner.
+
+AUD-WEB-3. 미디어 휴리스틱 오분류 시 비-미디어 artifact 본문 미표시 (FAB-02, P3 — latent) — 조용한 미표시 방지 권고
+   Finding: `previewMediaType`/`mediaKind` 가 `media_type` 부재 시 type/filename 의 'image'/'screenshot' 부분일치로
+   미디어를 추정 → type='image_capture_metadata' 같은 비-미디어 JSON artifact 가 이미지로 오분류돼 깨진 `<img>` 만
+   뜨고 JSON 본문이 안 보일 수 있다("조용한 미표시"). Decision (latent, deferred): 현재 producer 는 스크린샷에 media_type
+   을 설정하고 JSON artifact(approval_inbox 등)는 'image'/'screenshot' 류 type/filename 을 갖지 않아 트리거 미발생
+   (latent). Build-condition: media 판정을 media_type 우선 + 휴리스틱은 확장자 같은 강신호로 한정, 또는 img/video
+   onError 시 JSON·텍스트 본문 경로로 폴백(조용한 미표시 금지). Owner = project owner.
+
+AUD-WEB-4. EvidenceStorageReadout terminal+pending==0 의 '처리 중 가능' 완곡 표기 (FAB-03, P3) — 문구 정직화 권고
+   Finding: terminal run + redaction pending 0 인데 요청 증빙(each_step 이미지 등)이 0건이면 '요청 이미지 미표시
+   (처리 중 가능)' 배지를 보이는데, pending==0 이면 '처리 중'이 아니라 '끝내 미생성'에 가깝다. 단정 회피('가능')라 거짓은
+   아니나 미생성을 일시 지연처럼 완화한다. Decision (문구, deferred): 사실 오류 아님(헤지된 표현). Build-condition:
+   missingScreenshot/missingVideo 에 `counts.pending===0` 을 결합해 terminal && pending==0 이면 '요청 증빙 미생성
+   (원인 확인 필요)', pending>0 일 때만 '처리 중 가능'. Owner = project owner.
+
+## Audit Decisions (2026-06-23, credential-fill adversarial audit)
+
+prod credential-fill 배선(#297, AUD-1) 적대 감사 (wf_e80f89c0, 6 finder → 2-lens, confirmed 12 / refuted 3).
+실 비밀번호를 다루는 최고-임계 신규 코드 대상. **MERGED (not deferred):** SBA-01(P0 purpose↔ref namespace
+미결속 → 세션/resume 서명키 유출) + ASSET-01(P1)/ASSET-02(P2 proto-pollution)/SBA-02(P3 감사 roles) = PR #302;
+AUD4-SCREENSHOT-01(P1)/AUD4-VIDEO-02/SCG-FILL-01(스크린샷·비디오 평문 누출) = data-rpa-sensitive fill-표식 PR #303.
+**SBA-03(P2 tenant 격리)**는 SBA-01 의 namespace 결속으로 단일테넌트 배포에선 사실상 해소(executor ref 가
+runtime-worker/executor namespace 로 고정; 멀티테넌트 ref 에 tenant 세그먼트 추가는 owner 결정). 아래는
+confirmed-but-deferred. **공통 완화:** ir-translate(156188e0)가 자격증명 fill 셀렉터를 **기본 결정형 필수**로 강제
+(LLM 셀렉터는 `allow_llm_secret_selector=true` 명시 opt-in 만) — AUD-4 환각 경로를 기본 차단; #303 표식이 누출 자체도 차단.
+
+AUD-CRED-1. credential_leases 동시성 캡 미획득 (SCG-FILL-02, P2) — CREDLEASE-1 재활성(전제 붕괴)
+   Finding: migration_concurrency_idempotency.sql 이 credential_leases + credential_concurrency_policies
+   (max_concurrency, slot_no) 를 정의하고 impl-contracts-bundle.md 가 'dispatcher 가 max_concurrency 로 slot 조건부
+   upsert' 를 규약하나, app/src 에 acquire(`INSERT INTO credential_leases ... ON CONFLICT`) 가 0건 — sweeper 만료
+   회수만 존재(browser_lease 는 획득됨). #297 로 prod fill 이 실행되며 [[concurrency-lease-audit-2026-06-22]] 의
+   **CREDLEASE-1 deferred 전제('assetRefs dev-only no-op')가 붕괴** → 같은 봇 계정을 N개 run 이 무제한 동시 사용
+   가능(사이트 동시-세션 제한 위반·계정 잠금). Decision (deferred, 재활성): resolveSecretForFill 상위(claim 게이트
+   또는 fill 도달 시)에서 credential_concurrency_policies.max_concurrency 를 읽어 slot 조건부 upsert(획득 실패=캡
+   도달→대기/재큐), 단말 정산에서 release. browser-lease-isomorphic. 비밀 누출 아닌 운영(가용성) 리스크라 P2;
+   focused follow-up. Owner = project owner.
+
+AUD-CRED-2. 결정형 act.args 모드/secret-selector 보안 가드가 save 경로 부재 (SEC-FILL-01, P2) — PBD-T-02 자매
+   Finding: 자격증명 fill 보안 가드(secretRef→fill_selector 또는 allow_llm_secret_selector 필수; click/fill/select
+   상호배타; secretRef+valueRef 금지)가 런타임 ir-translate(compiledScenarioFrom)에만 있고, 저장 경로(create/update/
+   validate/promote)가 부르는 compileScenario(AJV + 정적검증 V1-V11)엔 부재 — ir.schema args 가 additionalProperties:
+   true 라 위험 IR(vars[secret] 만, fill_selector·opt-in 없음)이 저장 성공 후 **실행 시점에야** IR_SCHEMA_INVALID 로
+   좌초(저장 거부 → 실행 실패로 강등). [[scengen-pbd-audit-2026-06-22]] PBD-T-02 와 동일 패턴(검증 레이어 불일치).
+   Decision (deferred): ir-translate 의 모드/secret-selector 검사를 순수 함수로 추출해 compile-pipeline 정적검증에서
+   재사용(저장 시점 loud reject). 런타임 검사는 방어심층 유지. 해악 bounded(실행 시 loud, draft 게이트). Owner = project owner.
+
+AUD-CRED-3. 자격증명 fill 직전 type=password read-back 가드 부재 (AUD4-FILL-01/02, P2) — defense-in-depth
+   Finding: applyPlan fill 이 resolveSecretForFill 평문을 session.fill 로 곧장 흘리고, 클릭의 checked read-back 동형
+   가드(채우기 직전 resolved 요소가 password/sensitive 입력·단일매칭·visible 인지)가 fill 경로엔 없다. 셀렉터가
+   (베이킹 DOM 드리프트·allow_llm_secret_selector opt-in 환각으로) 비-password 필드/숨김 트랩을 가리키면 비밀번호가
+   잘못된 필드에 평문 입력(트랩이면 form submit 으로 외부 전송). Decision (deferred, defense-in-depth): **누출 자체는
+   #303(data-rpa-sensitive 표식)이 차단**하고 LLM 셀렉터는 기본 결정형 가드(156188e0)로 막혀, 잔여는 opt-in 경로의
+   '잘못된 필드 입력→트랩 submit' 이다. read-back 가드(secretRef fill 직전 querySelectorAll 단일매칭 + type=password|
+   sensitive + visible 단언, 미충족 loud throw)는 강한 방어이나 **비표준 password 필드(type≠password 인 정당 로그인
+   폼)를 깨뜨릴 회귀 위험**이 있어, fill 가드 커버리지(어떤 필드를 허용할지)를 sensitiveAttr 휴리스틱과 정렬해 신중
+   설계해야 한다. focused follow-up. Owner = project owner.
+
+## Audit Decisions (2026-06-23, credential-fix break-it 재검증)
+
+#302(SBA-01 P0)·#303(AUD-4 P1) 수정의 적대 break-it 재검증(wf_e81306bc, 4 finder→2-lens, confirmed 10/refuted 8).
+**🟢 코어 견고 재확인**: SBA-01 리터럴 cross-purpose 차단·#303 top-document 표식은 양 검증자 sound(CORE-REFUTED/
+SOUND-05). **MERGED (수정 보완):** percent-encoding 우회(SBA-01-BYPASS-PCTENC, `..%2f` → `%` 거부) PR #305;
+AUD-4 마스킹 견고성(value-scrub 비대칭·`-webkit-text-fill-color` override·shadow DOM 미관통) PR #306. 아래는 잔여.
+
+AUD-CFIX-1. 자격증명 fill 동일출처 iframe 미관통 (AUD4-SHADOW-IFRAME 잔여, P2) — deferred
+   Finding: #306 이 markFieldSensitive 를 shadow root 재귀 관통으로 보완했으나, session.fill(Playwright)이 관통하는
+   **동일출처 iframe** 내 자격증명 필드는 markFieldSensitive(별도 document)가 표식 못 한다 — 그 필드가 type≠password
+   오타깃이면 평문이 그 frame 스크린샷에 누출. Decision (deferred): iframe 표식은 frame 별 evaluate 또는 Playwright
+   frame-aware locator 가 필요(셰도우보다 드문 케이스). LLM 셀렉터는 156188e0 가 기본 차단(opt-in 만), 누출은 frame
+   캡처 시에만. Build-condition: markFieldSensitive 가 동일출처 frame 도 순회(contentDocument), 또는 마스크가 frame
+   재귀. Owner = project owner.
+
+AUD-CFIX-2. 자격증명 미러/확인 필드 미표식 (AUD4-VERIFY-2, P2) — site-conditional, VLM 잔여
+   Finding: markFieldSensitive 는 fill 셀렉터 단일 매칭만 표식한다. 페이지가 입력값을 다른 요소(확인 필드·show-password
+   미러·hidden form 직렬화)로 복사하면 그 사본은 미표식이고, 일반 이름(type=text, name='pwconfirm')이면 maskFieldsIn
+   휴리스틱도 못 잡아 평문이 캡처된다. Decision (deferred): 사이트-조건부(미러 위젯/SPA 폼 상태). 근본 해법은
+   impl-contracts §B 의 이미지-region(VLM) 마스킹 — 미구현(별도 capability). 단기 완화: querySelectorAll 전체 매칭 표식.
+   Owner = project owner.
+
+AUD-CFIX-3. namespace 결속이 env(seg[1])·tenant 미검증 (SBA01-CROSS-ENV P3 / SBA01-TENANT-BYPASS, refuted) — by-design/owner
+   Finding: refNamespaceDenial 이 seg[3](purpose)·seg[2](runtime)는 검증하나 seg[1](env)·tenant 는 안 함 → 운영자가
+   `rpa/staging/runtime-worker/executor/<name>`(cross-env) 또는 멀티테넌트서 타 테넌트 executor 경로를 명명 가능.
+   Decision (by-design, 단일테넌트 단일env 배포서 무해): env 격리는 Vault AppRole/mount 가 강제(prod AppRole 은 prod
+   mount 만), tenant 는 ref 컨벤션에 tenant 세그먼트 부재(SecretRef = `rpa/<env>/<runtime>/<purpose>/<name>`, tenant
+   무차원). 멀티테넌트 자격증명 배포 시 ref 에 tenant 세그먼트 추가 + seg 검증은 owner 결정. break-it 양 케이스 모두
+   refuted(획득 secret 이 여전히 executor namespace = 세션/서명키 아님; cross-env/tenant 는 AppRole 정책 의존). Owner = project owner.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is

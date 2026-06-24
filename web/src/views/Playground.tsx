@@ -7,7 +7,7 @@ import { useListView } from "../api/useListView";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { actionLabel, terminalLabel } from "../components/badges";
-import { mergeParams, navigate, useHashParam } from "../router";
+import { mergeParams, navigate, useHashIdParam } from "../router";
 import type { ScenarioItem } from "../api/types";
 import { urlRefLabel } from "../api/scenario-params";
 
@@ -96,7 +96,7 @@ function Plan({ ir }: { ir: unknown }): JSX.Element {
 export function PlaygroundView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
-  const scenarioParam = useHashParam("scenario");
+  const scenarioParam = useHashIdParam("scenario");
   const list = useListView<ScenarioItem>(
     ["scenarios", "playground"],
     (params) => api.listScenarios(params),

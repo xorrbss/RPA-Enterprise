@@ -15,15 +15,19 @@ import { join } from "node:path";
 
 import type { Pool } from "pg";
 
-import type { ArtifactRef, ExecutorPlugin } from "../../ts/core-types";
+import type { ArtifactRef, ExecutorPlugin, SecretRef } from "../../ts/core-types";
 import { deriveAssetRefs } from "../src/runtime/asset-refs";
 import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../ts/security-middleware-contract";
+import type { IsoDateTime, ResumeTokenEnvelope } from "../../ts/runtime-contract";
 import type { RunState } from "../../ts/state-machine-types";
 import { withTenantTx } from "../src/db/pool";
 import { applyRunTransition } from "../src/runtime/run-transition";
-import { driveClaimedRun } from "../src/runtime/run-step-driver";
+import { PgChallengeSuspensionPort } from "../src/runtime/challenge-suspension-port";
+import { HmacResumeTokenCodec } from "../src/runtime/resume-token-codec";
+import { driveClaimedRun, driveResumedRun, RESUME_TOKEN_TTL_MS } from "../src/runtime/run-step-driver";
 import type { RuntimeJobEnqueuePort } from "../src/runtime/executor-ports";
 import { extractEntryNavigateUrlRef, resolveSiteProfileId, resolveUrlRef } from "../src/runtime/site-resolution";
+import { resumeLinkedWorkitemCheckout } from "../src/runtime/workitem-settlement";
 import { createStagehandSession } from "../src/executor/cdp-session";
 import type { CdpSession, CdpSessionProvider } from "../src/executor/cdp-session";
 import { SitePageStateResolver } from "../src/executor/site-page-state-resolver";
@@ -38,6 +42,7 @@ import { FetchCodexSseTransport } from "../src/gateway/codex-sse-transport";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import { VaultSecretStoreBoundary } from "../src/secrets/vault-secret-store-boundary";
+import { parseResumeTokenEnvelope } from "../src/worker/runtime-worker-parse";
 import { ContractDurableSecurityAuditWriter, FakeSecretStore, InMemoryImmutableAuditLog } from "../../security/compliance-scaffold";
 import { DevPlaintextSessionEncryptor, PgBrowserSessionStore } from "../src/runtime/browser-session-store";
 
@@ -59,6 +64,7 @@ const DOM_CFG = {
 // 무한 대기하면 단일 세션 busy 가 영구 점유돼 이후 모든 queued run 이 막힌다(실관측: navigate 1h+ 행). 데드라인 초과 시
 // run 을 failed_system 으로 표면화(은폐 금지)하고 세션을 재생성해 루프가 자가복구한다.
 const RUN_DEADLINE_MS = Math.max(30_000, Number(process.env.RUN_DEADLINE_MS) || 300_000);
+const DEV_RESUME_SIGNING_KEY_REF = "resume.signing" as SecretRef;
 
 /**
  * 실 Codex 게이트웨이 조립(CODEX_* env 필수). 미설정 시 null → dom 실행기 비활성(navigate/observe 만).
@@ -117,6 +123,18 @@ function buildDevSecretBoundary(): VaultSecretStoreBoundary {
   });
 }
 
+function buildDevResumeTokenCodec(): HmacResumeTokenCodec {
+  return new HmacResumeTokenCodec(
+    new FakeSecretStore({
+      [DEV_RESUME_SIGNING_KEY_REF]: JSON.stringify({
+        kid: "dev-resume-token-v1",
+        key: process.env.RPA_DEV_RESUME_TOKEN_KEY?.trim() || "dev-resume-token-key-do-not-use-in-prod",
+      }),
+    }),
+    DEV_RESUME_SIGNING_KEY_REF,
+  );
+}
+
 /**
  * dev 세션 스토어 — browser_sessions 영속(방식 A). dev-plaintext 암호화기 + 명시 allowDevPlaintext(prod 차단; 실 KMS
  * 미구현 TODO:[BLOCKED]). 복원/캡처는 driveClaimedRun 북엔드가 sessionProvider 의 live CdpSession 으로 수행.
@@ -142,12 +160,14 @@ function findChrome(): string | null {
   );
 }
 
-interface QueuedRun {
+interface RunnableRun {
   id: string;
+  status: "queued" | "resume_requested";
   scenario_version_id: string;
   correlation_id: string;
   ir: unknown;
   params: unknown;
+  resume_token: unknown;
 }
 
 // runs.params(jsonb) 정규화: 문자열이면 파싱, null/부재면 undefined(빈 {} 와 구분 — navigate 키 해소가 loud 실패).
@@ -211,6 +231,8 @@ export async function startRunLoop(
       : new UtilityExecutor(p);
   // 세션 재사용(방식 A) — dev 세션 스토어(browser_sessions, dev-plaintext 암호화기). 복원/캡처는 driver 북엔드가 수행.
   const sessionStore = buildDevSessionStore(pool);
+  const suspensionPort = new PgChallengeSuspensionPort();
+  const resumeTokenCodec = buildDevResumeTokenCodec();
   // 아티팩트 라이프사이클 enqueue — dev 아티팩트는 DevVisibleGatewayArtifactSink 가 not_required(가시)로 영속하므로
   //   redaction 라이프사이클이 불필요(dev 는 graphile 워커도 미가동). 드라이버의 "artifacts→enqueuer 필수" 가드를
   //   충족시키는 no-op(serve.ts 의 noopEnqueuer 패턴과 동형 — extract 성공 run 이 enqueue 미주입으로 failed_system 되던 갭).
@@ -229,18 +251,20 @@ export async function startRunLoop(
     busy = true;
     try {
       const next = await withTenantTx(pool, tenantId, async (c) => {
-        const r = await c.query<QueuedRun>(
-          `SELECT r.id::text AS id, r.scenario_version_id::text AS scenario_version_id,
-                  r.correlation_id::text AS correlation_id, sv.ir AS ir, r.params AS params
+        const r = await c.query<RunnableRun>(
+          `SELECT r.id::text AS id, r.status, r.scenario_version_id::text AS scenario_version_id,
+                  r.correlation_id::text AS correlation_id, sv.ir AS ir, r.params AS params, r.resume_token AS resume_token
              FROM runs r JOIN scenario_versions sv ON sv.id = r.scenario_version_id
-            WHERE r.status='queued' ORDER BY r.created_at LIMIT 1`,
+            WHERE r.status IN ('resume_requested','queued')
+            ORDER BY CASE WHEN r.status='resume_requested' THEN 0 ELSE 1 END, r.created_at LIMIT 1`,
         );
         return r.rows[0] ?? null;
       });
       if (next === null) return;
 
       // claim: queued → claimed (R1 대역).
-      const claimed = await withTenantTx(pool, tenantId, (c) =>
+      if (next.status === "queued") {
+        const claimed = await withTenantTx(pool, tenantId, (c) =>
         applyRunTransition(c, {
           tenantId,
           runId: next.id,
@@ -255,6 +279,7 @@ export async function startRunLoop(
       if (!claimed.applied) {
         console.log(`run-loop: ${next.id.slice(0, 8)} claim 경합(${claimed.reason}) — 건너뜀`);
         return;
+        }
       }
 
       try {
@@ -286,30 +311,34 @@ export async function startRunLoop(
         const executor = buildExecutor(runProvider);
         const resolver = new SitePageStateResolver(runProvider, resolved.config);
 
-        const drive = driveClaimedRun(
-          {
-            runId: next.id,
-            tenantId,
-            scenarioVersionId: next.scenario_version_id,
-            correlationId: next.correlation_id,
-            leaseId: "dev-lease",
-            siteProfileId: resolved.siteProfileId,
-            browserIdentityId: resolved.browserIdentityId,
-            networkPolicyId: "dev-np",
-            params,
-            assetRefs: deriveAssetRefs(next.ir), // meta.assets → 자격증명 fill 의 SecretRef 바인딩
-          },
-          {
-            pool,
-            executor,
-            resolver,
-            workerId: WORKER_ID,
-            sessionProvider: runProvider,
-            sessionStore,
-            runtimeJobEnqueuer: noopRuntimeJobEnqueuer,
-            recordExecutorSteps: true,
-          },
-        );
+        const runInput = {
+          runId: next.id,
+          tenantId,
+          scenarioVersionId: next.scenario_version_id,
+          correlationId: next.correlation_id,
+          leaseId: "dev-lease",
+          siteProfileId: resolved.siteProfileId,
+          browserIdentityId: resolved.browserIdentityId,
+          networkPolicyId: "dev-np",
+          params,
+          assetRefs: deriveAssetRefs(next.ir), // meta.assets → 자격증명 fill 의 SecretRef 바인딩
+        };
+        const driveDeps = {
+          pool,
+          executor,
+          resolver,
+          workerId: WORKER_ID,
+          suspensionPort,
+          resumeTokenCodec,
+          sessionProvider: runProvider,
+          sessionStore,
+          runtimeJobEnqueuer: noopRuntimeJobEnqueuer,
+          recordExecutorSteps: true,
+        };
+        const drive =
+          next.status === "queued"
+            ? driveClaimedRun(runInput, driveDeps)
+            : driveResumeRequestedRun(runInput, driveDeps, next.resume_token);
         // 데드라인 워치독: drive 가 RUN_DEADLINE_MS 내 미정착이면 세션 wedge 로 간주 → failed_system + 세션 재생성.
         // (drive 가 그 전에 reject 하면 race 도 reject → 아래 catch 의 기존 실패 경로로 처리.)
         let deadlineTimer: ReturnType<typeof setTimeout> | undefined;

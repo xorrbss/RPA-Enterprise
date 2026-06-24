@@ -103,7 +103,10 @@ function fakeSessions() {
     url: () => "u",
     goto: async () => {},
     reload: async () => {},
-    evaluate: async () => undefined as never,
+    evaluate: async (expr: string) => {
+      ops.push({ op: "evaluate", selector: expr }); // AUD-4: data-rpa-sensitive 표식 평가식 캡처
+      return undefined as never;
+    },
     sendCDP: async () => undefined as never,
     click: async (s) => void ops.push({ op: "click", selector: s }),
     fill: async (s, v) => void ops.push({ op: "fill", selector: s, value: v }),
@@ -150,6 +153,13 @@ async function main(): Promise<void> {
     check("fill 이 CDP 로 적용됨(#password)", fill?.selector === "#password");
     check("CDP fill 에 평문이 정확히 전달됨", fill?.value === SECRET);
     check("StepResult.status=success", result.status === "success");
+    // AUD-4 누출 차단: 자격증명 fill 대상 필드를 data-rpa-sensitive 로 표식(캡처-마스크가 type 무관 마스킹)·fill 직전.
+    const markIdx = s.ops.findIndex((o) => o.op === "evaluate" && o.selector.includes("data-rpa-sensitive") && o.selector.includes("#password"));
+    const fillIdx = s.ops.findIndex((o) => o.op === "fill");
+    check("자격증명 fill 대상 필드를 data-rpa-sensitive 로 표식", markIdx >= 0, JSON.stringify(s.ops.filter((o) => o.op === "evaluate")));
+    check("표식이 fill 직전(누출 프레임 포함 커버)", markIdx >= 0 && markIdx < fillIdx);
+    // break-it AUD4-SHADOW-IFRAME: 표식이 open shadow root 를 관통(재귀 shadowRoot 순회)해야 셰도우 내 자격증명 필드도 표식됨.
+    check("표식이 shadow DOM 관통(shadowRoot 재귀 순회)", markIdx >= 0 && (s.ops[markIdx]?.selector ?? "").includes("shadowRoot"));
 
     const plan = (result.output as { plan?: { operation?: string; selector?: string; value?: unknown; valueRef?: unknown } }).plan;
     check("output.plan.valueRef = 에셋 키(평문 아님)", plan?.valueRef === ASSET_KEY);
@@ -212,6 +222,7 @@ async function main(): Promise<void> {
     await ex.execute("n4", { type: "act", instruction: "검색어 입력" }, makeCtx());
     const fill = s.ops.find((o) => o.op === "fill");
     check("비-자격증명 fill 은 리터럴 value 보존", fill?.selector === "#q" && fill?.value === "hello");
+    check("비-자격증명 fill 은 data-rpa-sensitive 표식 안 함(자격증명만 표식)", !s.ops.some((o) => o.op === "evaluate" && o.selector.includes("data-rpa-sensitive")));
   }
 
   // ── 결정형 fill(fill_selector) + secretRef: LLM 을 전혀 경유하지 않고 IR 선언 셀렉터에 시크릿을 채운다(셀렉터 환각 차단) ──
