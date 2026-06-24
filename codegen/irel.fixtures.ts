@@ -12,10 +12,12 @@ import {
   IRELRuntimeMissingError,
   parseIrelExpression,
   typeCheckIrelExpression,
+  type HumanTaskNodeMeta,
   type IRELCompileContext,
   type IRELCompileDiagnostic,
   type IRELLiteralNode,
   type IRELNode,
+  type IRELTypeAtom,
 } from "./irel-compile";
 import { validateScenarioStatic } from "./static-validation";
 import type { IRScenario } from "./types";
@@ -349,6 +351,106 @@ fixture("loop body and exit targets are part of static graph validation", () => 
       done: { terminal: "success" },
     },
   }), []);
+});
+
+// ── @human_task decision/correction 출력(ir-expression §2, ir-static-validation V9/V13) ──
+
+const HUMAN_TASK_NODES = new Map<string, HumanTaskNodeMeta>([
+  ["start", {
+    correctionFields: new Map<string, readonly IRELTypeAtom[]>([
+      ["amount", ["number"]],
+      ["memo", ["string"]],
+      ["ok", ["boolean"]],
+    ]),
+  }],
+]);
+
+function humanTaskContext(): IRELCompileContext {
+  return context({ humanTaskNodes: HUMAN_TASK_NODES });
+}
+
+fixture("V9: node.<ht>.decision/correction gated to @human_task owning nodes", () => {
+  // decision = string(@human_task 노드만). start 는 extract 의 선행(GRAPH) 이라 forward-ref 통과.
+  const decisionAst = compileOk('node.start.decision == "approve"', humanTaskContext());
+  assert.equal(evaluateIrelBooleanExpression(decisionAst, { node: { start: { decision: "approve" } } }), true);
+  assert.equal(evaluateIrelBooleanExpression(decisionAst, { node: { start: { decision: "reject" } } }), false);
+
+  // correction.<key> 타입은 business_form_v1 fields 에서 결정(amount=number, memo=string, ok=boolean).
+  const amountAst = compileOk("node.start.correction.amount > 100", humanTaskContext());
+  assert.equal(evaluateIrelBooleanExpression(amountAst, { node: { start: { correction: { amount: 150 } } } }), true);
+  assert.equal(evaluateIrelBooleanExpression(amountAst, { node: { start: { correction: { amount: 50 } } } }), false);
+  compileOk('node.start.correction.memo == "ok"', humanTaskContext());
+  compileOk("node.start.correction.ok", humanTaskContext());
+
+  // 게이트: humanTaskNodes 없는 컨텍스트(일반 노드)에서 decision/correction 참조 → unknown_node_field(V9).
+  expectCompileError('node.start.decision == "approve"', "unknown_node_field");
+  expectCompileError("node.start.correction.amount > 1", "unknown_node_field");
+  // correction 미등록 키 / decision 하위경로 / 타입 불일치도 거부.
+  expectCompileError('node.start.correction.unknown_key == "x"', "unknown_node_field", humanTaskContext());
+  expectCompileError('node.start.decision.sub == "x"', "unknown_node_field", humanTaskContext());
+  expectCompileError('node.start.correction.amount == "x"', "irel_type_error", humanTaskContext());
+});
+
+function humanTaskScenario(branchOns: readonly unknown[]): IRScenario {
+  return scenario({
+    meta: { name: "ht", version: 1 },
+    start: "ask",
+    nodes: {
+      ask: {
+        next: {
+          handler: "@human_task",
+          input: {
+            assignee_role: "reviewer",
+            result_schema: { version: "business_form_v1", fields: [{ key: "amount", label: "금액", type: "number" }] },
+          },
+          return_node: "branch",
+        },
+      },
+      branch: { on: branchOns },
+      done: { terminal: "success" },
+    },
+  });
+}
+
+fixture("V13: decision branch completeness (promote-block)", () => {
+  // 부분 커버(approve/reject 만, correct/retry 누락)·catch-all 없음 → decision_branch_incomplete 경고.
+  expectStaticReasons("partial decision coverage warns", humanTaskScenario([
+    { when: 'node.ask.decision == "approve"', target: "done", priority: 1 },
+    { when: 'node.ask.decision == "reject"', target: "done", priority: 2 },
+  ]), [], ["decision_branch_incomplete"]);
+
+  // 닫힌 enum 전부 커버 → 경고 없음.
+  expectStaticReasons("full decision coverage clean", humanTaskScenario([
+    { when: 'node.ask.decision == "approve"', target: "done", priority: 1 },
+    { when: 'node.ask.decision == "reject"', target: "done", priority: 2 },
+    { when: 'node.ask.decision == "correct"', target: "done", priority: 3 },
+    { when: 'node.ask.decision == "retry"', target: "done", priority: 4 },
+  ]), [], []);
+
+  // catch-all(when:true) 이 미커버 decision 흡수 → 경고 없음.
+  expectStaticReasons("catch-all suppresses warning", humanTaskScenario([
+    { when: 'node.ask.decision == "approve"', target: "done", priority: 1 },
+    { when: "true", target: "done", priority: 2 },
+  ]), [], []);
+
+  // 복합 표현(&&)으로 decision 참조 + catch-all → 정적 증명 불가지만 catch-all 로 안전(false-positive 없음).
+  // 동시에 node.ask.correction.amount(number) 타입 추론이 통과함을 증명.
+  expectStaticReasons("impure decision ref with catch-all + typed correction", humanTaskScenario([
+    { when: 'node.ask.decision == "approve" && node.ask.correction.amount > 100', target: "done", priority: 1 },
+    { when: "true", target: "done", priority: 2 },
+  ]), [], []);
+});
+
+fixture("V9: decision on a non-@human_task node is a compile error", () => {
+  expectStaticReasons("decision ref on plain node rejected", scenario({
+    meta: { name: "nd", version: 1 },
+    start: "a",
+    nodes: {
+      a: { next: "b" },
+      b: { on: [{ when: 'node.a.decision == "approve"', target: "done", priority: 1 }] },
+      done: { terminal: "success" },
+    },
+  }), ["unknown_node_field"]);
 });
 
 console.log(`irel fixtures: ${failures.length === 0 ? "ALL PASS" : `${failures.length} failed`}`);

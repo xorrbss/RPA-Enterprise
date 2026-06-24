@@ -25,6 +25,11 @@ export const IREL_ALLOWED_NODE_FIELDS = [
   "http_ok",
 ] as const;
 
+// @human_task 노드 출력(ir-expression.md §2 · reserved-handlers.md): 표준 6필드 외에 `decision`(string)
+// 과 `correction.<key>`(scalar)는 `<id>`가 @human_task 를 선언한 소유 노드일 때만 참조 가능하다. decision 은
+// 닫힌 enum(api-surface RESOLUTION_DECISIONS SSoT), correction.<key> 타입은 business_form_v1 fields[] 에서 결정한다.
+export const IREL_DECISION_VALUES = ["approve", "reject", "correct", "retry"] as const;
+
 export type IRELTypeAtom = "int" | "number" | "string" | "boolean" | "null";
 export type IRELValue = number | string | boolean | null;
 export type IRELCompileErrorCode =
@@ -57,6 +62,12 @@ export interface IRELCompileDiagnostic {
   readonly location?: IRELSourceLocation;
 }
 
+/** @human_task 소유 노드 메타(static-validation 이 IR 에서 도출해 주입). decision 은 항상 string 이므로 별도 보관하지 않는다. */
+export interface HumanTaskNodeMeta {
+  /** business_form_v1 fields[].key → IREL scalar 타입(text/textarea/date/select→string, number→number, boolean→boolean). */
+  readonly correctionFields: ReadonlyMap<string, readonly IRELTypeAtom[]>;
+}
+
 export interface IRELCompileContext {
   readonly currentNodeId: string;
   readonly nodeIds: ReadonlySet<string>;
@@ -65,6 +76,8 @@ export interface IRELCompileContext {
   readonly additionalPriorNodeIds?: ReadonlySet<string>;
   readonly allowLoopScope?: boolean;
   readonly expectedType?: IRELTypeAtom;
+  /** @human_task 를 선언한 소유 노드 id → 메타. decision/correction 참조는 이 맵에 있는 노드에만 허용. */
+  readonly humanTaskNodes?: ReadonlyMap<string, HumanTaskNodeMeta>;
 }
 
 export type IRELCompiledExpression = {
@@ -646,13 +659,15 @@ function resolveRuntimeVariable(path: readonly string[], scope: IRELScope): IREL
   const [namespace] = path;
   if (namespace === "params") return toRuntimeValue(readRuntimePath(scope.params, path.slice(1), path.join(".")), path.join("."));
   if (namespace === "node") {
-    const [, nodeId, field] = path;
-    if (path.length !== 3 || nodeId === undefined || field === undefined) {
+    const [, nodeId] = path;
+    // 표준/decision = node.<id>.<field>(길이 3), correction = node.<id>.correction.<key>(길이 4).
+    const fieldPath = path.slice(2);
+    if ((path.length !== 3 && path.length !== 4) || nodeId === undefined || fieldPath.length === 0) {
       throw new IRELRuntimeMissingError(`invalid compiled node path '${path.join(".")}'`);
     }
     const nodeOutput = readRuntimePath(scope.node, [nodeId], `node.${nodeId}`);
     if (!isRecord(nodeOutput)) throw new IRELRuntimeMissingError(`node.${nodeId} is missing from runtime scope`);
-    return toRuntimeValue(readRuntimePath(nodeOutput, [field], path.join(".")), path.join("."));
+    return toRuntimeValue(readRuntimePath(nodeOutput, fieldPath, path.join(".")), path.join("."));
   }
   if (namespace === "cursor") return toRuntimeValue(readRuntimePath(scope.cursor, path.slice(1), path.join(".")), path.join("."));
   if (namespace === "flags") return toRuntimeValue(readRuntimePath(scope.flags, path.slice(1), path.join(".")), path.join("."));
@@ -849,16 +864,16 @@ function resolveNodeVariable(
   context: IRELCompileContext,
   diagnostics: IRELCompileDiagnostic[],
 ): TypeResult {
-  if (path.length !== 3 || path[1] === undefined || path[2] === undefined) {
+  const nodeId = path[1];
+  const field = path[2];
+  if (path.length < 3 || nodeId === undefined || field === undefined) {
     diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_variable", `node references must be node.<id>.<field>, got '${path.join(".")}'`));
     return failType();
   }
 
-  const [, nodeId, field] = path;
-  if (!NODE_FIELD_SET.has(field)) {
-    diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_node_field", `unknown node output field '${field}'`));
-    return failType();
-  }
+  const fieldType = resolveNodeFieldType(nodeId, field, path, context, diagnostics);
+  if (fieldType === undefined) return failType();
+
   if (!context.nodeIds.has(nodeId)) {
     diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_variable", `unknown node reference '${nodeId}'`));
     return failType();
@@ -871,9 +886,60 @@ function resolveNodeVariable(
     return failType();
   }
 
-  if (field === "row_count" || field === "http_status") return okType(typeOf("int"));
-  if (field === "http_ok") return okType(typeOf("boolean"));
-  return okType(typeOf("string"));
+  return okType(fieldType);
+}
+
+// node.<id>.<field>(+선택 sub-key)의 IREL 타입을 도출한다(미허용 필드는 diagnostics 적재 후 undefined).
+// 표준 6필드는 모든 노드, decision/correction.<key>는 @human_task 소유 노드(humanTaskNodes)에만 허용(ir-static-validation V9).
+function resolveNodeFieldType(
+  nodeId: string,
+  field: string,
+  path: readonly string[],
+  context: IRELCompileContext,
+  diagnostics: IRELCompileDiagnostic[],
+): readonly IRELTypeAtom[] | undefined {
+  if (NODE_FIELD_SET.has(field)) {
+    if (path.length !== 3) {
+      diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_node_field", `node output field '${field}' takes no sub-path, got '${path.join(".")}'`));
+      return undefined;
+    }
+    if (field === "row_count" || field === "http_status") return typeOf("int");
+    if (field === "http_ok") return typeOf("boolean");
+    return typeOf("string");
+  }
+
+  const humanTaskMeta = context.humanTaskNodes?.get(nodeId);
+  if (field === "decision") {
+    if (humanTaskMeta === undefined) {
+      diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_node_field", `node.${nodeId}.decision is only available on an @human_task owning node`));
+      return undefined;
+    }
+    if (path.length !== 3) {
+      diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_node_field", `node.<id>.decision takes no sub-path, got '${path.join(".")}'`));
+      return undefined;
+    }
+    return typeOf("string");
+  }
+  if (field === "correction") {
+    if (humanTaskMeta === undefined) {
+      diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_node_field", `node.${nodeId}.correction is only available on an @human_task owning node`));
+      return undefined;
+    }
+    const key = path[3];
+    if (path.length !== 4 || key === undefined) {
+      diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_node_field", `node.<id>.correction requires a single business_form_v1 field key, got '${path.join(".")}'`));
+      return undefined;
+    }
+    const correctionType = humanTaskMeta.correctionFields.get(key);
+    if (correctionType === undefined) {
+      diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_node_field", `unknown business_form_v1 correction field '${key}' on node.${nodeId}`));
+      return undefined;
+    }
+    return correctionType;
+  }
+
+  diagnostics.push(diagnostic("IREL_UNKNOWN_VARIABLE", "unknown_node_field", `unknown node output field '${field}'`));
+  return undefined;
 }
 
 function resolveParamVariable(
