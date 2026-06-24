@@ -868,13 +868,13 @@ After:
 
 ## 9. 설계 승인 체크리스트
 
-- [ ] 데스크톱/Attended 제외에 동의.
-- [ ] HTTP api_call은 P1 포함, file/shell은 제외에 동의.
-- [ ] P0 순서: 비개발자 UX -> PbD UI -> schedule contract에 동의.
+- [x] 데스크톱/Attended 제외에 동의. Product Open v1은 브라우저 기반 RPA 범위로 고정한다.
+- [x] HTTP api_call은 P1 포함, file/shell은 제외에 동의. `api_call`은 HTTP(S) + `secret_ref_bearer`까지, file/shell은 제품 범위 밖이다.
+- [x] P0 순서: 비개발자 UX -> PbD UI -> schedule contract에 동의. 해당 범위는 Scenario Studio, PbD/recording, cron/webhook trigger 계약으로 반영됐다.
 - [x] CoE/ROI를 실제 제품 범위로 본다. v1 범위는 운영자용 후보 파이프라인과 ROI 산정이며, 프로세스/태스크 마이닝 엔진은 별도 범위다.
 - [x] IDP/OCR engine 방향 결정.
-- [ ] 알림 채널 P1 최소 범위 결정.
-- [ ] 신규 DB migration 파일 전략 결정.
+- [x] 알림 채널 P1 최소 범위 결정. Product Open v1은 콘솔 알림 센터이며 Teams/Slack/email/webhook 발송은 P2/future다.
+- [x] 신규 DB migration 파일 전략 결정. 계약/스키마 변경은 기존 migration SSoT와 codegen fixture/gate를 함께 갱신한다.
 
 ## 10. 결론
 
