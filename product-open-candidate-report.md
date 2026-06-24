@@ -4,23 +4,15 @@ This report records the repository evidence for a Product Open Candidate state.
 It is a contract-first candidate report, not an external release approval or
 deployment authorization. The tagged Product Open Candidate baseline has green
 repo-controlled evidence on `main`; the current merged repo-controlled product-code
-evidence is `main` `Contract Gates` run `27858616856` on commit
-`80efdfaf4ecae73688836544d8dcc82aa0fbabcf`, superseding the earlier D4.4
-and Phase 7 remote evidence packets for current-main release judgment.
-This current merged delta connects natural-language generation result artifacts
-to the React console, hardens artifact lifecycle object-store SecretRef
-configuration, and wires `prompt.inspect` durable audit as a fail-closed gateway
-boundary; Scenario Studio also guides blocked natural-language generations
-through start URL, site onboarding/selection, params, and video-evidence
-corrections until a correction run can queue and deep-link to runTrace artifacts:
-the deterministic planner also derives prompt-requested extraction fields into
-inline extract schemas/instructions for saved and paginated runs;
-planner/output artifacts stay scoped to the generation, linked-run result
-artifacts use the `/result-artifacts` list, result bodies still pass through the
-global artifact audit gate, result/run media previews are readable only for
-`redaction_status IN ('redacted','not_required')`, `ARTIFACT_OBJECT_STORE_REF` must
-match `RPA_ENV`, and LLM adapter calls do not proceed when prompt-inspection audit
-append fails; any remaining active blocker is listed in
+evidence is `main` `Contract Gates` run `28098885737` on commit
+`a84d8b2a0cb3a8f0677e0149a0f1b930b7561425`, superseding the earlier Product Open,
+D4.4, Phase 7, and Browser RPA V2 remote evidence packets for current-main
+release judgment. This current merged delta includes the browser RPA operations
+console, run-loop resume helper, and console live e2e hang fix, while preserving
+the prior evidence for natural-language generation result artifacts, artifact
+lifecycle SecretRef boundaries, fail-closed `prompt.inspect` durable audit,
+result-artifact redaction gates, and `ARTIFACT_OBJECT_STORE_REF`/`RPA_ENV`
+alignment; any remaining active blocker is listed in
 `release-open-checklist.md` and the packets below. Product
 Open still requires the project owner to approve and operate the deployment
 path at deploy time (no external release/oncall team exists).
@@ -310,13 +302,13 @@ Remote CI evidence:
   `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945033`
   `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27499599708/job/81279945101`
 - Current `main` merged repo-controlled product-code evidence:
-  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27858616856`
-  (`Contract Gates` success on commit `80efdfaf4ecae73688836544d8dcc82aa0fbabcf`).
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/28098885737`
+  (`Contract Gates` success on commit `a84d8b2a0cb3a8f0677e0149a0f1b930b7561425`).
 - Current `main` required job URLs:
-  `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27858616856/job/82450613841`
-  `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27858616856/job/82450613864`
-  `Operations console (web) typecheck, tests, build`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27858616856/job/82450613885`
-  `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27858616856/job/82450613852`
+  `secret-scan`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/28098885737/job/83195321282`
+  `PostgreSQL 15 migration smoke`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/28098885737/job/83195321351`
+  `Operations console (web) typecheck, tests, build`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/28098885737/job/83195321285`
+  `App runtime typecheck and tests`: `https://github.com/xorrbss/RPA-Enterprise/actions/runs/28098885737/job/83195321235`
 - Phase 7 `main` runtime-delta `Contract Gates` attempt:
   `https://github.com/xorrbss/RPA-Enterprise/actions/runs/27525226281`
   on commit `6ac33af251bd362a4de200d2eba956d371408cf3`. The latest non-skipped
@@ -326,7 +318,7 @@ Remote CI evidence:
   billing/admin blocker is now resolved**: hosted-runner execution is restored and
   `main` `Contract Gates` run `27609993667` (commit `848413ce`, post-merge of #82)
   first restored hosted-runner evidence, and the latest `main` `Contract Gates` run
-  `27858616856` (commit `80efdfaf4ecae73688836544d8dcc82aa0fbabcf`) is the
+  `28098885737` (commit `a84d8b2a0cb3a8f0677e0149a0f1b930b7561425`) is the
   current success with the required `secret-scan` / `PostgreSQL 15 migration smoke` /
   `Operations console (web)` / `App runtime typecheck and tests` job URLs, closing the remote job URL gate for the
   Phase 7 delta as currently merged on `main`.
@@ -367,11 +359,11 @@ Environment note:
 - Repo-controlled Product Open Candidate gap: none remain for the tagged
   repo-controlled Product Open Candidate baseline. Current merged repo-controlled
   remote evidence is represented by latest `main` `Contract Gates` run
-  `27858616856` on commit `80efdfaf4ecae73688836544d8dcc82aa0fbabcf`; this closes only the
-  repo-controlled D4.4 remote evidence pointer plus the current `prompt.inspect`
-  fail-closed audit wiring, guided blocked-generation correction UI, and
-  deterministic prompt-field extraction schema/instruction inference, and does not
-  close external staging/open approval or active external blockers.
+  `28098885737` on commit `a84d8b2a0cb3a8f0677e0149a0f1b930b7561425`; this closes only the
+  repo-controlled remote evidence pointer plus the current browser RPA operations
+  console, run-loop resume helper, console live e2e hang fix, and prior
+  `prompt.inspect`/artifact/result evidence. It does not close external
+  staging/open approval or active external blockers.
 - Current D4.4 repo-controlled contract/runtime evidence includes
   per-expression `compiled_ast` export, app promote `If-Match`/idempotency
   coverage, `SecretRef`/`SecretStore`-backed signed command registry wiring
@@ -489,14 +481,14 @@ Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 
 - TODO: [BLOCKED] Deploy-time concrete staging deploy target is not defined for executable Product Open deployment outside this contract repository.
   Required decision: At deploy time, the project owner must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier (namespace/service or equivalent), release approval evidence, rollback confirmation, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
-- Blocked summary: Deploy-time staging SecretRef/SecretStore provisioning readiness is not defined outside this repository; the specific actionable evidence blockers are tracked in the Staging Secret Provisioning Evidence Packet below.
+- Blocked summary: Deploy-time staging SecretRef/SecretStore readiness is evidenced, but the executable Product Open deployment still needs the concrete platform repo, GitHub Environment protection, deploy target, owner approval, rollback confirmation, and deploy/provisioning log artifact locations in the row-43 redacted release packet.
 - Resolved (owner-attested staging evidence): Deploy-time per-producer retention policy is defined and proven on staging. Policy (release-decisions D8-A11 / D8-A14): `raw_items.raw_payload` 30d and `normalized_records.record` 90d via the inline retention source supplied by the ingest/normalize callers; `artifacts` retention is enforced by the `legal_hold OR retention_until IS NOT NULL` CHECK; `audit_log.payload` 2555d (7y, v1 default, override-able); repo-owned `events_outbox.retention_until` is `NOT NULL`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source. Staging evidence: against a real staging PostgreSQL (redacted alias `[staging-pg-1]`, server PostgreSQL 16.x) under a non-`SUPERUSER`/non-`BYPASSRLS` application role, `npm --prefix codegen run db:smoke:release` PASSED with `non-bypass RLS/redaction row-visibility assertions executed` (retention columns present on every payload table, `artifacts` CHECK + `events_outbox.retention_until` NOT NULL fail-closed enforcement, tenant RLS row-visibility), and the payload-bearing producer integration tests PASSED under the same non-bypass role proving each writer sets `retention_until` or fails closed — `security-audit.int` (`all rows persist retention_until`; invalid/malformed/calendar-invalid retention timestamp fails closed; duplicate idempotency key fails closed), `executor-invocation-recorder.int` (`step.completed retention set`; PlainSecret/cross-tenant fail-closed), `pipeline.int` (raw-ingest/normalize dedup + cross-tenant RLS row count 0), `outbox-relay.int` (`events_outbox` ordered idempotent relay), `api-artifacts.int` (artifact RLS redaction-gate). No host/IP/credential/env dump recorded (redacted endpoint alias only). Former Required decision: define per-producer retention duration/source and prove on staging that each payload-bearing writer sets `retention_until` or fails closed.
 - Resolved (owner-attested live evidence): D5 Codex SSE live capability captured. Production `CodexSseAdapter`/`FetchCodexSseTransport` ran live (`npm --prefix app/poc/d5-codex-sse run poc`) against endpoint `[codex-staging-1]` / model `[model-a]` (redacted aliases; absolute HTTPS, no credential/query/fragment). **4/5 PASS** — mandatory #1 basic SSE / #2 prompt-schema safe path / #4 abort all PASS; #3 native `json_schema` PASS (jsonMode=true active); #5 model metadata GAP with documented fallback (conservative `maxContextTokens=8192` retained). No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material recorded (harness self-redaction; `CODEX_API_KEY` kept in a gitignored local `.env`). Former Required decision: run the D5 PoC and record redacted mandatory-PASS evidence.
 - Resolved repo evidence: cancelable `suspending` abort and H5/R15 `reassignAssignee` are explicit fail-closed v1 paths. Successful in-flight bookmark abort still requires a future bookmark-cancel owner or durable abort intent; successful manual escalate still requires a future routing/assignment owner. Until then the API rejects/rolls back before reporting success, preserving no silent false/unknown.
 - Resolved repo evidence: runtime executor orchestration and audit semantics now have a local path through `PgExecutorStepOrchestrator`, `ExecutorStepAttemptStore`, `PgExecutorInvocationRecorder`, and `PgExecutorCompletionCoordinator`; executor plugins run outside DB transactions, step-bound producer writes require `step.started`, system/security/challenge/uncertain outcomes map through explicit catalog-backed paths, lifecycle jobs are enqueued for artifact-producing terminal outcomes, and executor evidence does not misuse security-boundary `audit_log`.
 - Resolved (owner-ratified object-I/O evidence, D8-A15): Runtime artifact_redaction object I/O is evidenced on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via the real SecretStore (Vault AppRole → `VaultSecretStore.resolve`; `S3_SECRET_ACCESS_KEY` unset). `objectstore:smoke` PASS: the production `S3ArtifactRedactor` with the injected §4 `ContentRedactionTransform` reads the source object, masks it, and writes a redacted object to a new `ObjectRef`; a planted credential+email is confirmed ABSENT from the redacted object on re-GET, the `redact` real-port receipt carries `sha256`, and the self-check confirms no plaintext Secret/PII, accessKeyId, internal `ObjectRef`, or AWS-credential-shape in the printed output or raw rows. Redacted backend alias `[s3-staging-1]`; no host/credential recorded. Masking is honest best-effort §4 (not a completeness proof for arbitrary content). Scope-split (repo-controlled, NOT claimed from this smoke): the claim-lease/finalize CAS — `redaction_status` CAS from `pending`, quarantine/deleted claim skip, and `bypassrls.use` audit — live in `runtime-worker.ts` `claimRedactionArtifact` and are proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime-execution-gates row); the `redaction_attempts < max` threshold predicate is present in code (claim + finalize retry→failed) but exercised at attempts=0 only by that test. Owner ratification of an owner-operated local real object store is recorded in release-decisions D8-A15 and the amended Deploy-Time Provisioning Blockers gate. Former Required decision: provide real object-store redaction object-I/O evidence with SecretRef-backed credentials and redacted receipts.
 - Resolved (owner-ratified object-I/O evidence, D8-A15): Runtime artifact_retention external object deletion is evidenced on an owner-operated real S3-compatible object store (MinIO, real SigV4 over HTTPS) with a SecretRef-backed credential resolved via the real SecretStore (Vault AppRole → `VaultSecretStore.resolve`). `objectstore:smoke` PASS: the production `S3ArtifactRetentionStore.deleteObject` returns `deleted` on first delete of a real test object and `not_found` on re-delete (idempotent), each with a redacted real-port `delete` receipt; transient (5xx/network) maps to `transient_failed` with no tombstone. The `not_found` path required a real-S3 fix — `S3ObjectStore.deleteDistinguishing` now HEAD-checks existence before DELETE, because real S3/MinIO DELETE returns 204 even for a missing key (merged PR #103, with a method-aware unit test). Redacted backend alias `[s3-staging-1]`; no host/credential recorded. Scope-split (repo-controlled, NOT claimed from this smoke): legal-hold/quarantine SKIP and `deleted_at`-set-under-unexpired-claim CAS live in `runtime-worker.ts` retention claim (`legal_hold = false AND quarantine = false AND deleted_at IS NULL`) and are proven by `runtime-worker-claim.int.ts` under main `Contract Gates` `test:int` (runtime-execution-gates row). Owner ratification recorded in release-decisions D8-A15 and the amended Deploy-Time Provisioning Blockers gate. Former Required decision: provide real external object deletion evidence with SecretRef-backed credentials, delete/not-found receipts, and legal-hold/quarantine handling.
-- Resolved (remote evidence): Runtime execution staging gates now have current remote `main` CI evidence. GitHub Actions hosted-runner execution is restored (the account payment/spending-limit blocker no longer applies — `main` `Contract Gates` runs start and succeed). The Phase 7 runtime delta is merged on `main` (`executor-step-orchestrator.ts` / `executor-completion-coordinator.ts` / `executor-invocation-recorder.ts`), and `main` `Contract Gates` run `27851302868` (commit `91bd3c055f51a835417a3880ab34e21d6a24f3d6`) is `success` with the required job URLs — `App runtime typecheck and tests` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27851302868/job/82430734959), `Secret scan` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27851302868/job/82430734923), `PostgreSQL 15 migration smoke` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/27851302868/job/82430734962). The `App runtime typecheck and tests` job runs `test:int` under a non-`SUPERUSER`/non-`BYPASSRLS` PostgreSQL 15 role, proving tenant boundary / RBAC/redaction / no `BYPASSRLS` / no silent false-unknown. Former Required decision: restore GitHub Actions hosted-runner execution, rerun `Contract Gates` on the Phase 7 `main` head, and provide the required PR/main job URLs.
+- Resolved (remote evidence): Runtime execution staging gates now have current remote `main` CI evidence. GitHub Actions hosted-runner execution is restored (the account payment/spending-limit blocker no longer applies — `main` `Contract Gates` runs start and succeed). The Phase 7 runtime delta is merged on `main` (`executor-step-orchestrator.ts` / `executor-completion-coordinator.ts` / `executor-invocation-recorder.ts`), and current `main` `Contract Gates` run `28098885737` (commit `a84d8b2a0cb3a8f0677e0149a0f1b930b7561425`) is `success` with the required job URLs — `App runtime typecheck and tests` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/28098885737/job/83195321235), `Secret scan` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/28098885737/job/83195321282), `PostgreSQL 15 migration smoke` (https://github.com/xorrbss/RPA-Enterprise/actions/runs/28098885737/job/83195321351). The `App runtime typecheck and tests` job runs `test:int` under a non-`SUPERUSER`/non-`BYPASSRLS` PostgreSQL 15 role, proving tenant boundary / RBAC/redaction / no `BYPASSRLS` / no silent false-unknown. Former Required decision: restore GitHub Actions hosted-runner execution, rerun `Contract Gates` on the Phase 7 `main` head, and provide the required PR/main job URLs.
 
 ### Durable Security Audit Writer Decision Packet
 
@@ -658,7 +650,7 @@ Evidence intake rules for this packet:
   material before it can be treated as staging-ready.
 
 - Resolved (owner-attested): SecretStore backend alias/path named — HashiCorp Vault, KV v2, mount `secret/`, base path `secret/data/rpa/staging/<runtime>/<purpose>/<name>` (no plaintext); identity map per D8-A12. Auth method (AppRole) is evidenced at the row-48 resolution smoke. Former Required decision: name the Vault mount/path or cloud KMS/secret-manager alias used by staging without exposing plaintext secret values.
-- Resolved (D8-A12): SecretRef namespace convention and runtime identity map are named — `rpa/<env>/<runtime>/<purpose>/<name>` with the owner-confirmed least-privilege resolve matrix (incl. `artifact-lifecycle`→`object_store`, D8-A10) in staging-decision-proposals.md §3. The real SecretStore backend mount/path remains row 44 (external). Former Required decision: name the namespace convention and the runtime identities allowed to resolve each namespace before staging deploy.
+- Resolved (D8-A12): SecretRef namespace convention and runtime identity map are named — `rpa/<env>/<runtime>/<purpose>/<name>` with the owner-confirmed least-privilege resolve matrix (incl. `artifact-lifecycle`→`object_store`, D8-A10) in staging-decision-proposals.md §3. The real SecretStore backend mount/path and AppRole smoke are evidenced in the SecretStore packet; resolved material remains outside the repository. Former Required decision: name the namespace convention and the runtime identities allowed to resolve each namespace before staging deploy.
 - Resolved (D8-A12): Initial SecretRef inventory is listed by identifier only (owning runtime + purpose, no resolved material) in staging-decision-proposals.md §4. Former Required decision: list initial SecretRef identifiers, owning service/runtime, and intended purpose only; resolved secret material must remain outside this repository.
 - Resolved (D8-A13): Rotation/break-glass policy and rotation owner are named — cadence defaults (`gateway_policy` 90d, `resume_token_hmac` kid 180d, `executor` 90d, `signed_command` 365d), break-glass procedure, and rotation owner = single project owner (release-decisions #13) in staging-decision-proposals.md §5. Former Required decision: name the rotation owner/cadence and break-glass/update procedure before staging deploy.
 - Resolved (owner-ratified Vault resolution evidence, D8-A15): SecretStore resolution + `secret.resolve` audit are evidenced on an owner-operated real HashiCorp Vault (AppRole auth, KV v2) with the durable `PgDurableSecurityAuditDecisionWriter` writing the hash-chained audit to a real PostgreSQL `audit_log` under a non-`SUPERUSER`/non-`BYPASSRLS` role. `secretstore:smoke` PASS: [A] authorized `runtime-worker` → `resume_token_hmac` (ref `rpa/staging/runtime-worker/resume_token_hmac/active`) → **ALLOW** (resolved via AppRole; PlainSecret non-empty, value never materialized/printed), `secret.resolve` audit seq#1 + hash; [B] unauthorized `browser-worker` → `gateway_policy` → **DENY** (`SECRET_ACCESS_DENIED`, least-privilege D8-A12 matrix, denied in-app before any Vault read), audit seq#2 + hash. redaction self-check PASS: no AppRole role_id/secret_id, Vault token, or resolved secret value in the printed output or raw report (no env dump/xtrace). The repo `Secret scan` CI gate is the standing negative control (AppRole creds are env-only, never committed). Owner ratification recorded in release-decisions D8-A15 and the amended Deploy-Time Provisioning Blockers gate. Former Required decision: provide authorized/unauthorized SecretStore resolution smoke + `secret.resolve` audit proof without material + log redaction + no-env-dump + secret-scan negative control.
@@ -715,19 +707,19 @@ refresh the `blocked:audit` count in both documents.
 
 ## Next 24h Actions
 
-1. Attach the tag, latest `contract-gates` run URL, DB migration smoke job, and
-   UI smoke screenshot/note to the external release review packet.
-2. As the single project owner, take Product Open through deploy-time approval
-   and rollback ownership (no external release/oncall team exists).
-3. Obtain the concrete staging deploy target, SecretStore provisioning
-   evidence, owner release-approval, and rollback confirmation before any
-   staging/open deployment.
-4. At deploy time, run the D5 Codex SSE PoC with SecretRef-resolved
-   credentials outside the repo and attach redacted mandatory PASS evidence.
-5. Define the next repo-owned runtime slice: real executor orchestration,
-   artifact redaction/retention jobs, executor audit semantics, and real app
-   artifact-read routing backed by the redaction/RBAC
-   `ArtifactRef`/`ObjectRef` boundary.
+1. Attach current `main` `Contract Gates` run `28098885737`, the required job
+   URLs, DB migration smoke job, and UI smoke note to the external release review
+   packet.
+2. As the single project owner, provide the concrete staging platform repo,
+   GitHub Environment `staging` protection settings, deploy target identifier,
+   release approval reference, and rollback confirmation.
+3. Add the deploy/provisioning log artifact locations proving no plaintext
+   materialization, no env dump/xtrace, and no RBAC/redaction weakening.
+4. Validate the owner-supplied row-43 packet with
+   `npm --prefix codegen run release-packet:validate -- --file <packet.md>`.
+5. After the packet passes, update `release-open-checklist.md` row 43 and the
+   matching blocked marker in this report in the same change, then refresh
+   `npm --prefix codegen run blocked:audit`.
 6. Keep the durable security audit writer wired as broader security-relevant app
    routes are implemented.
 7. Keep any new unresolved behavior out of implementation paths unless it uses

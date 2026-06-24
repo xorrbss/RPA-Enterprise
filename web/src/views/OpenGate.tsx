@@ -6,18 +6,19 @@
 import { Panel } from "../components/Panel";
 import type { Tone } from "../components/badges";
 
-// 목업 status(active/pending/risk/system) → badge tone.
-function toneOf(status: "active" | "pending" | "risk" | "system"): Tone {
+type GateStatus = "active" | "protected" | "external" | "system";
+
+// 목업 status → badge tone.
+function toneOf(status: GateStatus): Tone {
   if (status === "active") return "green";
-  if (status === "pending") return "amber";
-  if (status === "risk") return "red";
+  if (status === "external") return "amber";
   return "blue";
 }
 
-function statusText(status: "active" | "pending" | "risk" | "system"): string {
+function statusText(status: GateStatus): string {
   if (status === "active") return "반영됨";
-  if (status === "pending") return "검토 중";
-  if (status === "risk") return "위험 검토";
+  if (status === "protected") return "권한 보호됨";
+  if (status === "external") return "외부 증거 필요";
   return "시스템 항목";
 }
 
@@ -31,6 +32,7 @@ function gateLabel(gate: string): string {
     "Human Task inbox": "사람 확인함",
     "DLQ replay / sink retry": "실패 작업 복구",
     "Gateway policy / site approve": "AI 정책·고위험 사이트 승인",
+    "Staging deploy packet": "스테이징 배포 패킷",
   };
   return labels[gate] ?? gate;
 }
@@ -45,6 +47,7 @@ function gateSurfaceLabel(surface: string): string {
     "사람 확인함, 처리완료·이관": "사람 확인함의 완료·이관 처리",
     "작업 목록·복구 명령": "실패 작업 목록과 재처리 명령",
     "AI 모델 정책 편집(admin), 고위험 사이트 승인": "AI 모델 정책 편집과 고위험 사이트 승인",
+    "실제 staging platform repo·deploy target·approval·rollback packet": "실제 배포 대상과 승인·롤백 증거 패킷",
   };
   return labels[surface] ?? surface;
 }
@@ -59,6 +62,7 @@ function gateReviewLabel(review: string): string {
     "validation/captcha resolve는 reviewer 또는 assignee gate": "검증·챌린지 처리는 담당 검토자 범위에서만 허용합니다.",
     "operator+ · Idempotency-Key, sink는 별도 idempotency key": "운영자 이상만 재처리할 수 있고 중복 실행을 방지합니다.",
     "POLICY_VERSION_CONFLICT·admin gate·approver gate·SITE_PROFILE_BLOCKED 분리": "정책 충돌, 관리자 권한, 승인자 권한, 사이트 차단 사유를 분리해 안내합니다.",
+    "row 43은 실제 인프라 증거가 있어야 닫힘": "실제 스테이징 배포 대상, 승인, 롤백 증거가 있어야 닫습니다.",
   };
   return labels[review] ?? review;
 }
@@ -124,7 +128,7 @@ interface GateRow {
   gate: string;
   basis: string;
   surface: string;
-  status: "active" | "pending" | "risk" | "system";
+  status: GateStatus;
   review: string;
 }
 
@@ -134,10 +138,11 @@ const GATE_MAP: readonly GateRow[] = [
   { gate: "RBAC 화면/액션 gate", basis: "auth-rbac.md role registry + 액션 매트릭스", surface: "현재 역할 기준 허용/거부 badge(미허용 명령 버튼 숨김)", status: "active", review: "admin 전용 scenario promote·gateway edit은 거부 상태" },
   { gate: "Tenant/RLS/Audit", basis: "JWT tenant_id, SET LOCAL app.tenant_id, events envelope", surface: "탑바 인증 컨텍스트, RLS 스코프 조회", status: "active", review: "cross-tenant는 RESOURCE_NOT_FOUND/RLS로 존재 비노출" },
   { gate: "Idempotency/Artifact privacy", basis: "control_plane_idempotency_keys, sink_idempotency_key, artifact gate", surface: "실행/abort/DLQ/sink/site approve 명령", status: "active", review: "처리 중·실패·타 테넌트 증빙은 v1에서 RESOURCE_NOT_FOUND(404, 존재 비노출·RLS)" },
-  { gate: "Scenario validate/promote", basis: "POST validate dry-run, PUT/POST promote(If-Match + Idempotency-Key)", surface: "자동화 검사 화면·운영 반영 버튼(admin gate)", status: "pending", review: "현재 역할에 admin이 없으면 AUTHZ_FORBIDDEN" },
+  { gate: "Scenario validate/promote", basis: "POST validate dry-run, PUT/POST promote(If-Match + Idempotency-Key)", surface: "자동화 검사 화면·운영 반영 버튼(admin gate)", status: "active", review: "현재 역할에 admin이 없으면 AUTHZ_FORBIDDEN" },
   { gate: "Human Task inbox", basis: "GET human-tasks, assign/start/resolve/escalate", surface: "사람 확인함, 처리완료·이관", status: "active", review: "validation/captcha resolve는 reviewer 또는 assignee gate" },
   { gate: "DLQ replay / sink retry", basis: "GET /v1/dlq, POST /v1/dlq/{id}/replay", surface: "작업 목록·복구 명령", status: "active", review: "operator+ · Idempotency-Key, sink는 별도 idempotency key" },
   { gate: "Gateway policy / site approve", basis: "PUT /gateway/policy, POST /sites/{id}/approve", surface: "AI 모델 정책 편집(admin), 고위험 사이트 승인", status: "active", review: "POLICY_VERSION_CONFLICT·admin gate·approver gate·SITE_PROFILE_BLOCKED 분리" },
+  { gate: "Staging deploy packet", basis: "release-open-checklist.md row 43", surface: "실제 staging platform repo·deploy target·approval·rollback packet", status: "external", review: "row 43은 실제 인프라 증거가 있어야 닫힘" },
 ];
 
 interface RbacRow {
@@ -145,19 +150,19 @@ interface RbacRow {
   endpoint: string;
   role: string;
   denyCode: string;
-  status: "active" | "pending" | "risk";
+  status: GateStatus;
 }
 
 // RBAC action gate — auth-rbac.md §2 권한 매트릭스 + 자원특정 거부코드(문서용 정적 표).
 const RBAC_GATE: readonly RbacRow[] = [
   { action: "Run abort", endpoint: "POST /v1/runs/{id}/abort", role: "operator+", denyCode: "AUTHZ_FORBIDDEN", status: "active" },
-  { action: "Human validation resolve", endpoint: "POST /v1/human-tasks/{id}/resolve", role: "reviewer + assignee", denyCode: "AUTHZ_FORBIDDEN", status: "pending" },
+  { action: "Human validation resolve", endpoint: "POST /v1/human-tasks/{id}/resolve", role: "reviewer + assignee", denyCode: "AUTHZ_FORBIDDEN", status: "active" },
   { action: "Approval resolve", endpoint: "POST /v1/human-tasks/{id}/resolve", role: "approver + assignee", denyCode: "AUTHZ_FORBIDDEN", status: "active" },
   { action: "DLQ replay", endpoint: "POST /v1/dlq/{id}/replay", role: "operator+", denyCode: "AUTHZ_FORBIDDEN", status: "active" },
-  { action: "Scenario promote", endpoint: "POST /v1/scenarios/{id}/promote", role: "admin", denyCode: "AUTHZ_FORBIDDEN", status: "risk" },
-  { action: "Gateway policy edit", endpoint: "PUT /v1/gateway/policy", role: "admin", denyCode: "POLICY_VERSION_CONFLICT / AUTHZ_FORBIDDEN", status: "risk" },
+  { action: "Scenario promote", endpoint: "POST /v1/scenarios/{id}/promote", role: "admin", denyCode: "AUTHZ_FORBIDDEN", status: "protected" },
+  { action: "Gateway policy edit", endpoint: "PUT /v1/gateway/policy", role: "admin", denyCode: "POLICY_VERSION_CONFLICT / AUTHZ_FORBIDDEN", status: "protected" },
   { action: "고위험 사이트 승인", endpoint: "POST /v1/sites/{id}/approve", role: "approver", denyCode: "AUTHZ_FORBIDDEN", status: "active" },
-  { action: "증빙 자료 조회", endpoint: "GET /v1/artifacts/{id}", role: "viewer + privacy gate", denyCode: "RESOURCE_NOT_FOUND(404, v1) / SECRET_ACCESS_DENIED(403)", status: "pending" },
+  { action: "증빙 자료 조회", endpoint: "GET /v1/artifacts/{id}", role: "viewer + privacy gate", denyCode: "RESOURCE_NOT_FOUND(404, v1) / SECRET_ACCESS_DENIED(403)", status: "active" },
 ];
 
 interface ApiRow {
@@ -165,7 +170,7 @@ interface ApiRow {
   endpoint: string;
   header: string;
   response: string;
-  status: "active" | "pending";
+  status: GateStatus;
 }
 
 // API client contract — 화면 액션이 요구하는 header·동시성 토큰·오류 표면(api-surface.md 파생).
@@ -173,11 +178,11 @@ const API_CONTRACT: readonly ApiRow[] = [
   { surface: "새 실행", endpoint: "POST /v1/runs", header: "Idempotency-Key", response: "params.as_of 1회 고정", status: "active" },
   { surface: "실행 취소", endpoint: "POST /v1/runs/{id}/abort", header: "Idempotency-Key", response: "이미 종료면 RUN_ABORTED", status: "active" },
   { surface: "자동화 검사", endpoint: "POST /v1/scenarios/{id}/validate", header: "dry-run body", response: "ValidationReport V1..V11", status: "active" },
-  { surface: "자동화 운영 반영", endpoint: "POST /v1/scenarios/{id}/promote", header: "If-Match + Idempotency-Key", response: "SCENARIO_VERSION_CONFLICT / AUTHZ_FORBIDDEN", status: "pending" },
-  { surface: "사람확인 처리", endpoint: "POST /v1/human-tasks/{id}/resolve", header: "Idempotency-Key", response: "H3 + run.resume_requested", status: "pending" },
-  { surface: "실패 작업 재처리", endpoint: "POST /v1/dlq/{id}/replay", header: "Idempotency-Key", response: "W10 abandoned→new", status: "pending" },
+  { surface: "자동화 운영 반영", endpoint: "POST /v1/scenarios/{id}/promote", header: "If-Match + Idempotency-Key", response: "SCENARIO_VERSION_CONFLICT / AUTHZ_FORBIDDEN", status: "active" },
+  { surface: "사람확인 처리", endpoint: "POST /v1/human-tasks/{id}/resolve", header: "Idempotency-Key", response: "H3 + run.resume_requested", status: "active" },
+  { surface: "실패 작업 재처리", endpoint: "POST /v1/dlq/{id}/replay", header: "Idempotency-Key", response: "W10 abandoned→new", status: "active" },
   { surface: "Gateway 정책", endpoint: "PUT /v1/gateway/policy", header: "If-Match + Idempotency-Key", response: "POLICY_VERSION_CONFLICT / LLM_CAPABILITY_MISMATCH", status: "active" },
-  { surface: "사이트 승인", endpoint: "POST /v1/sites/{id}/approve", header: "Idempotency-Key", response: "고위험 사이트 실행 차단 해소", status: "pending" },
+  { surface: "사이트 승인", endpoint: "POST /v1/sites/{id}/approve", header: "Idempotency-Key", response: "고위험 사이트 실행 차단 해소", status: "active" },
 ];
 
 export function OpenGateView(): JSX.Element {

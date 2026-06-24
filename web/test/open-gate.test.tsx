@@ -42,6 +42,10 @@ describe("open gate view", () => {
     expect(screen.getAllByText("실행 취소").length).toBeGreaterThan(0);
     expect(screen.getAllByText("중복 실행 방지").length).toBeGreaterThan(0);
     expect(screen.getAllByText("반영됨").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("권한 보호됨").length).toBeGreaterThan(0);
+    expect(screen.getByText("외부 증거 필요")).toBeInTheDocument();
+    expect(screen.queryByText("검토 중")).toBeNull();
+    expect(screen.queryByText("위험 검토")).toBeNull();
 
     expect(screen.queryByText("계약 이름")).toBeNull();
     expect(screen.queryByText("필수 header/key")).toBeNull();
