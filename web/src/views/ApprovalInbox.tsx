@@ -8,36 +8,74 @@ import { COLLECT_SCENARIO_NAME, APPROVAL_ARTIFACT_TYPE, isHttpUrl, parseApproval
 import { StatusBadge, errorLabel } from "../components/badges";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
-import type { ApprovalRow, RunDetail } from "../api/types";
+import type { ApprovalRow, RunArtifactItem, RunDetail, ScenarioItem } from "../api/types";
 
-// 결재 처리 run 의 종결 상태(폴링 중단 기준). state-machine §1.
+// 결재 처리 자동화 실행의 종결 상태(폴링 중단 기준). state-machine §1.
 const RUN_TERMINAL: ReadonlySet<string> = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
 
 const POLL_MS = 10_000;
 
-// 결재 인박스 — '하이웍스 결재 수집' run이 남긴 아티팩트(결재 목록)를 읽어 구조화 요약 + 목록 표시(읽기 전용).
+async function findCollectScenario(
+  api: ReturnType<typeof useApiClient>,
+): Promise<ScenarioItem | null> {
+  let cursor: string | undefined;
+  for (let page = 0; page < 20; page += 1) {
+    const res = await api.listScenarios({
+      limit: 50,
+      ...(cursor !== undefined ? { cursor } : {}),
+    });
+    const found = res.items.find((s) => s.name === COLLECT_SCENARIO_NAME);
+    if (found !== undefined) return found;
+    if (res.next_cursor === null) return null;
+    cursor = res.next_cursor;
+  }
+  return null;
+}
+
+async function findApprovalArtifact(
+  api: ReturnType<typeof useApiClient>,
+  runId: string,
+): Promise<RunArtifactItem | null> {
+  let cursor: string | undefined;
+  for (let page = 0; page < 20; page += 1) {
+    const res = await api.listRunArtifacts(runId, {
+      limit: 50,
+      ...(cursor !== undefined ? { cursor } : {}),
+    });
+    const found = res.items.find((a) => a.type === APPROVAL_ARTIFACT_TYPE);
+    if (found !== undefined) return found;
+    if (res.next_cursor === null) return null;
+    cursor = res.next_cursor;
+  }
+  return null;
+}
+
+// 결재 인박스 — '하이웍스 결재 수집' 자동화 실행이 남긴 아티팩트(결재 목록)를 읽어 구조화 요약 + 목록 표시(읽기 전용).
 // 발견 경로: listScenarios(이름 매칭) → listRuns(scenario_version_id, completed) 최신 → listRunArtifacts → getArtifact.
-// Phase 2c 부터 approval.decide 권한 시 행별 [결재]/[반려] 버튼 노출(DecideButtons) — 비가역 결재 처리 run 을 스폰(휴먼게이트). 백엔드가 최종 강제.
+// Phase 2c 부터 approval.decide 권한 시 행별 [결재]/[반려] 버튼 노출(DecideButtons) — 되돌릴 수 없는 결재 처리를 위한 자동화 실행 생성(휴먼게이트). 백엔드가 최종 강제.
 export function ApprovalInboxView(): JSX.Element {
   const api = useApiClient();
 
-  const scenarios = useQuery({ queryKey: ["scenarios"], queryFn: () => api.listScenarios({ limit: 50 }) });
-  const collect = scenarios.data?.items.find((s) => s.name === COLLECT_SCENARIO_NAME);
+  const collect = useQuery({
+    queryKey: ["scenarios", "approval-inbox-collector"],
+    queryFn: () => findCollectScenario(api),
+  });
+  const collectScenario = collect.data ?? undefined;
 
   const runs = useQuery({
-    queryKey: ["runs", "collect", collect?.latest_version_id ?? ""],
-    queryFn: () => api.listRuns({ scenario_version_id: collect!.latest_version_id, status: "completed", limit: 1 }),
-    enabled: collect !== undefined,
+    queryKey: ["runs", "collect", collectScenario?.latest_version_id ?? ""],
+    queryFn: () => api.listRuns({ scenario_version_id: collectScenario!.latest_version_id, status: "completed", limit: 1 }),
+    enabled: collectScenario !== undefined,
     refetchInterval: POLL_MS,
   });
   const latestRun = runs.data?.items[0];
 
   const arts = useQuery({
-    queryKey: ["run-artifacts", latestRun?.run_id ?? ""],
-    queryFn: () => api.listRunArtifacts(latestRun!.run_id, { limit: 50 }),
+    queryKey: ["run-artifacts", "approval-inbox", latestRun?.run_id ?? ""],
+    queryFn: () => findApprovalArtifact(api, latestRun!.run_id),
     enabled: latestRun !== undefined,
   });
-  const inboxArt = arts.data?.items.find((a) => a.type === APPROVAL_ARTIFACT_TYPE) ?? arts.data?.items[0];
+  const inboxArt = arts.data ?? undefined;
 
   const detail = useQuery({
     queryKey: ["artifact", inboxArt?.artifact_id ?? ""],
@@ -46,7 +84,7 @@ export function ApprovalInboxView(): JSX.Element {
     retry: false,
   });
 
-  const recollect = collect !== undefined ? <RunScenarioButton scenario={collect} /> : null;
+  const recollect = collectScenario !== undefined ? <RunScenarioButton scenario={collectScenario} /> : null;
 
   return (
     <div>
@@ -57,8 +95,8 @@ export function ApprovalInboxView(): JSX.Element {
         {recollect}
       </div>
       <Body
-        scenarios={scenarios}
-        collect={collect}
+        scenarios={collect}
+        collect={collectScenario}
         runs={runs}
         latestRun={latestRun}
         arts={arts}
@@ -83,9 +121,9 @@ function Body(props: {
   const { scenarios, collect, runs, latestRun, arts, inboxArt, detail } = props;
 
   if (scenarios.isLoading) return <Loading />;
-  if (scenarios.isError) return <ErrorState message="시나리오 목록을 불러오지 못했습니다." onRetry={() => void scenarios.refetch()} />;
+  if (scenarios.isError) return <ErrorState message="자동화 목록을 불러오지 못했습니다." onRetry={() => void scenarios.refetch()} />;
   if (collect === undefined) {
-    return <EmptyState message={`'${COLLECT_SCENARIO_NAME}' 시나리오가 아직 없습니다. 자동화 만들기에서 등록하세요.`} />;
+    return <EmptyState message={`'${COLLECT_SCENARIO_NAME}' 자동화가 아직 없습니다. 자동화 만들기에서 등록하세요.`} />;
   }
   if (runs.isLoading) return <Loading />;
   if (runs.isError) return <ErrorState message="수집 실행 기록을 불러오지 못했습니다." onRetry={() => void runs.refetch()} />;
@@ -100,7 +138,7 @@ function Body(props: {
   if (detail.isError) {
     const e = (detail as { error?: unknown }).error;
     const msg = e instanceof ApiError && e.code === "RESOURCE_NOT_FOUND"
-      ? "결재 목록이 아직 준비(redaction)되지 않았거나 조회 권한이 없습니다."
+      ? "결재 목록 조회 준비가 끝나지 않았거나 조회 권한이 없습니다."
       : "결재 목록 본문을 불러오지 못했습니다.";
     return <ErrorState message={msg} onRetry={() => void detail.refetch()} />;
   }
@@ -122,10 +160,10 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
   const sum = summarize(rows);
   const can = useCan();
   const showActions = can("approval.decide"); // 비-approver 는 액션 열 숨김(백엔드가 최종 강제).
-  // 이번 세션에서 결재한 문서 → 스폰된 처리 run id. 결정된 행은 버튼 대신 처리 상태(폴링)를 보인다.
+  // 이번 세션에서 결재한 문서 → 생성된 처리 자동화 실행 ID. 결정된 행은 버튼 대신 처리 상태(폴링)를 보인다.
   const [decided, setDecided] = useState<Record<string, string>>({});
   const [pendingOnly, setPendingOnly] = useState(false);
-  // 일괄 승인(다중선택 + 배치 단일 확인). 비가역이라 per-row 자동승인이 아니라 운영자가 행을 선택→1회 확인한다.
+  // 일괄 승인(다중선택 + 배치 단일 확인). 되돌릴 수 없으므로 per-row 자동승인이 아니라 운영자가 행을 선택→1회 확인한다.
   //   반려는 건별 유지(사유 필수). 실패한 건은 행별로 표면화(조용한 false 금지).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [bulkConfirm, setBulkConfirm] = useState(false);
@@ -170,10 +208,10 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
         <Chips label="상태" entries={sum.byStatus} />
         <Chips label="유형" entries={sum.byType} />
       </section>
-      <section className="panel queue-controls" aria-label="결재 큐 제어">
+      <section className="panel queue-controls" aria-label="결재 업무 제어">
         <div>
-          <strong>결재 큐</strong>
-          <p className="subtle">비가역 결정은 건별 확인을 유지하고, 처리 대기 항목만 빠르게 좁힙니다.</p>
+          <strong>결재 업무</strong>
+          <p className="subtle">결재 결정은 되돌릴 수 없으므로 건별 확인을 유지하고, 처리 대기 항목만 빠르게 좁힙니다.</p>
         </div>
         <div className="quick-actions">
           <button className="btn" type="button" aria-pressed={pendingOnly} onClick={() => setPendingOnly((v) => !v)}>
@@ -182,7 +220,7 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
           <button className="btn" type="button" disabled={pendingRows.length === 0} onClick={() => setPendingOnly(true)}>
             다음 결재 보기
           </button>
-          {/* 일괄 승인: 선택 N건을 1회 배치 확인 후 순차 승인(비가역 가드는 건별→배치 단위로 유지). 반려는 건별. */}
+          {/* 일괄 승인: 선택 N건을 1회 배치 확인 후 순차 승인(되돌릴 수 없음 안내는 건별→배치 단위로 유지). 반려는 건별. */}
           {showActions && bulkRunning && <span className="subtle" role="status">일괄 승인 처리 중…</span>}
           {showActions && !bulkRunning && !bulkConfirm && selected.size > 0 && (
             <button className="btn" type="button" onClick={() => setBulkConfirm(true)}>
@@ -191,7 +229,7 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
           )}
           {showActions && bulkConfirm && (
             <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-              <span className="badge red">선택 {selected.size}건을 일괄 승인합니다 — 비가역(처리 run {selected.size}건 스폰).</span>
+              <span className="badge red">선택 {selected.size}건을 일괄 승인합니다. 승인 후에는 되돌릴 수 없으며 자동화 실행 {selected.size}건이 생성됩니다.</span>
               <button className="btn" type="button" onClick={() => void runBulkApprove()}>일괄 승인 확인</button>
               <button className="btn" type="button" onClick={() => setBulkConfirm(false)}>취소</button>
             </span>
@@ -262,7 +300,7 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
   );
 }
 
-// 건별 결재 버튼(승인/반려). 승인은 확인 1단계, 반려는 사유 입력 1단계(비가역 가드). 결정 성공 시 onDecided(spawned_run_id).
+// 건별 결재 버튼(승인/반려). 승인은 확인 1단계, 반려는 사유 입력 1단계(되돌릴 수 없음 안내). 결정 성공 시 onDecided(spawned_run_id).
 // 비-approver 는 부모(Inbox)가 열 자체를 숨기지만, 백엔드가 approval.decide 를 최종 강제한다.
 function DecideButtons(props: { sourceRunId: string; docRef: string; onDecided: (runId: string) => void }): JSX.Element {
   const api = useApiClient();
@@ -333,7 +371,7 @@ function DecideButtons(props: { sourceRunId: string; docRef: string; onDecided: 
   );
 }
 
-// 결정 후 스폰된 처리 run 의 상태를 폴링(종결까지) + 실행 기록 딥링크. 비가역 클릭은 처리 run 이 수행(휴먼게이트 검증 대상).
+// 결정 후 생성된 처리 자동화 실행 상태를 폴링(종결까지) + 실행 기록 딥링크. 되돌릴 수 없는 클릭은 처리 자동화 실행이 수행(휴먼게이트 검증 대상).
 function DecidedStatus({ runId }: { runId: string }): JSX.Element {
   const api = useApiClient();
   const run = useQuery<RunDetail>({
@@ -351,7 +389,7 @@ function DecidedStatus({ runId }: { runId: string }): JSX.Element {
   );
 }
 
-// 결재 원문 링크 — 비가역 결정 전 원문 확인 동선(승인/반려 단계·행에 노출). http(s) scheme만 새 탭 링크로
+// 결재 원문 링크 — 되돌릴 수 없는 결정 전 원문 확인 동선(승인/반려 단계·행에 노출). http(s) scheme만 새 탭 링크로
 // (javascript:/data: XSS 가드); 그 외 scheme면 링크 대신 비활성 안내(조용한 false 금지). doc_ref scheme는 parser가
 // 강제하지 않으므로 여기서 판정. rel=noopener noreferrer로 reverse-tabnabbing·Referer 누수 차단.
 function DocRefLink({ docRef }: { docRef: string }): JSX.Element {

@@ -920,14 +920,18 @@ export interface RuntimeWorkerJob {
     | "outbox_relay"
     | "lease_sweeper"
     | "workitem_checkout_sweeper"
+    | "human_task_timeout_sweeper"
     | "artifact_redaction"
     | "artifact_retention"
     | "artifact_integrity"
     | "artifact_orphan"
     | "dlq_replay"
-    | "sink_deliver";
+    | "sink_deliver"
+    | "trigger_fire";
   tenantId?: TenantId;
   runId?: RunId;
+  triggerId?: string;
+  scheduledFor?: IsoDateTime;
   artifactId?: ArtifactRef;
   generationId?: ScenarioGenerationId;
   workitemId?: WorkitemId;

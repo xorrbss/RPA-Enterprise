@@ -14,6 +14,7 @@
 - **인증(authn) vs 인가(authz) 분리**: 인증 미성립(`Authorization: Bearer` 누락·서명 무효·만료) → `UNAUTHENTICATED`(401). 인증은 성립했으나 tenant_id 클레임 누락/모호(auth-rbac §3) 또는 역할 권한 부족 → `AUTHZ_FORBIDDEN`(403). 둘 다 본문은 ApiError(§0.2).
 - RBAC 역할 레지스트리·권한 매트릭스의 **본문 정의는 `auth-rbac.md` §1–§2**다. 본 문서는 각 엔드포인트의 권한 게이트 지점을 표기하고, 실제 허용/거부 판정은 해당 매트릭스를 따른다.
 - 인가 실패는 `exceptionClass=security` 코드로 응답: 일반 역할 권한 부족(replay/promote/approve 등) → `AUTHZ_FORBIDDEN`(403), 시크릿/artifact 접근 권한 → `SECRET_ACCESS_DENIED`(403), 커넥터 권한 → `CONNECTOR_PERMISSION_DENIED`(403), 사이트 **실행** 미승인(런타임) → `SITE_PROFILE_BLOCKED`(403). 역할 매트릭스는 auth-rbac.md §2.
+- `GET /v1/auth/readiness` — `principal.read` 권한. 현재 인증된 JWT와 배포 인증 설정에서 도출한 **SSO/IdP 준비도**를 반환한다. 응답은 `enterprise_sso_ready`, provider 요약(`mode=hs256|jwks`, `algorithm=HS256|RS256`, `jwks_url_configured`, `jwks_host`, `issuer_configured`, `audience_configured`), 실제 claim mapping(기본 `sub`·`tenant_id`·`roles`·`exp`·`name`·`email`, 배포 시 `JWT_*_CLAIM`으로 tenant/roles/name/email 경로 변경 가능), role mapping 요약(`JWT_ROLE_MAP` 적용 여부와 항목 수), 현재 principal 요약, `operational_gaps`만 포함한다. HMAC secret, 토큰 원문, JWKS 전체 URL path/query, 평문 자격증명, 역할 매핑 원문은 반환하지 않는다.
 
 ### 0.2 에러 응답 형식 (`ApiError`)
 - 모든 4xx/5xx 응답 본문은 `ts/error-catalog.ts`의 `ApiError`:
@@ -57,19 +58,96 @@
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
 | POST | `/v1/runs` | `Idempotency-Key` 헤더. body: `scenario_version_id`, `params`(params_schema 준수), optional `params.as_of`, optional `workitem_id`, optional `model`(§0.7). operator+ 권한 필요 | 201 + run 리소스(`run_id`, `status=queued`). `run.created` 이벤트 emit. `runs.model` 1회 해소·동결 | `IR_SCHEMA_INVALID`(422; 미해소 `model_required` 포함), `IR_EXPRESSION_COMPILE_ERROR`(422), `RESOURCE_NOT_FOUND`(404; 명시 `model` 정책 부재), `AUTHZ_FORBIDDEN`(403), `SITE_PROFILE_BLOCKED`(403) |
-| GET | `/v1/runs/{run_id}` | — | 200 + run 상세(`run_id`, `status` ∈ RunState, `worker_id`, `attempts`, `as_of`, `current_node`, `failure_reason`, `updated_at`). 실제 진행 노드를 모르면 `current_node=null`, 실패 사유가 없으면 `failure_reason=null` | `RUN_NOT_FOUND`(404) |
+| GET | `/v1/runs/{run_id}` | — | 200 + run 상세(`run_id`, `scenario_id`, `scenario_version_id`, `status` ∈ RunState, `worker_id`, `attempts`, `as_of`, `current_node`, `failure_reason`, `updated_at`). 실제 진행 노드를 모르면 `current_node=null`, 실패 사유가 없으면 `failure_reason=null` | `RUN_NOT_FOUND`(404) |
 | GET | `/v1/runs/{run_id}/steps` | 쿼리: `?limit=&cursor=`. `run.read` 권한 | 200 + `{ items, next_cursor }` (run_steps 단계 트레이스, 실행 시간 오름차순)⁶ | `RESOURCE_NOT_FOUND`(404; 형식 무효 run_id) |
+| GET | `/v1/runs/{run_id}/steps/stream` | `Accept: text/event-stream`. `run.read` 권한 | 200 SSE. 이벤트는 `run_steps_changed`/`run_steps_closed`이며 `run_id`, `status`, `step_count`, `last_step_at`, `run_updated_at` 같은 변경 신호만 포함한다. 클라이언트는 이벤트 수신 시 `/steps`를 재조회한다 | `RESOURCE_NOT_FOUND`(404; 형식 무효 run_id) |
 | GET | `/v1/runs` | 쿼리: `?status=<RunState>&scenario_version_id=&limit=&cursor=` | 200 + `{ items, next_cursor }`, 각 item은 run 상세 요지(`current_node`, `failure_reason` 포함; 모름/없음은 null) | — |
 | GET | `/v1/runs/summary` | `run.read` 권한 | 200 + `{ by_status, success_rate, total, cache }` — 테넌트 run outcome+캐시 집계(관찰성). `by_status`=runs.status별 정확 카운트(부재 status 키 생략), `success_rate`=completed/(completed+failed_business+failed_system)(분모 0이면 `null`; cancelled 제외), `total`=전체 run 수, `cache`={ by_mode(run_steps.cache_mode별 카운트), hit_rate=hit/(조회=non-bypass), 조회 0이면 `null` }. RLS 스코프, 서버 GROUP BY(목록 `50+` 근사 아님) | — |
 | POST | `/v1/runs/{run_id}/abort` | `Idempotency-Key` 헤더. body: optional `reason` | 202 (abort 수락 → `aborting` 경유 `cancelled`). `run.cancelled` 이벤트 | `RUN_NOT_FOUND`(404), `RUN_ALREADY_TERMINAL`(409), `RUN_ABORTED`(409), `WORKITEM_CHECKOUT_CONFLICT`(409, `suspending` bookmark in-flight) |
 
 **어휘 정합(필수)**: API 명령은 `abort` → Run 상태는 `aborting`→`cancelled`(state-machine R6/R10/R16/R23/R24/R26/R27/R28) → 이벤트는 `run.cancelled`(event-envelope) → UI 문구는 "취소됨". 엔드포인트명은 `abort`를 유지한다.
 
-⁶ `GET /v1/runs/{run_id}/steps` — `run_steps` 단계 트레이스 read(운영 관찰). **비민감 요약 + 참조만** 노출(redaction-by-omission): `step_id`·`node_id`·`action`(IRActionType)·`status`(StepResult status 9값)·`attempt`·`cache_mode`·`started_at`/`ended_at`/`duration_ms`·`artifact_ids`(ArtifactRef[])·`stagehand_calls`(model/transport/stream_status/ttfb_ms/input·output_tokens/cost)·`exception`(`{class, code}`만). **민감 본문은 미노출**: `output`/`output_ref`/`input_redacted_ref` 내용·`exception.message`(RedactedString)·`evidenceRefs`·`page_state_before/after` 본문 — 평문/증빙 노출 금지(security-contracts §4/§9). 증빙(artifact)은 `artifact_ids`를 통해 **`GET /v1/artifacts/{id}` redaction→RBAC→audit 게이트**(§5)로만 조회한다. 따라서 step 본문 disclosure용 별도 RBAC/redaction 게이트는 불요하며 트레이스 요약은 `run.read`(viewer+, auth-rbac §2 "트레이스 조회")로 충분하다. 실시간성은 v1=폴링(architecture §6 outbox tail); SSE/WS 스트림은 미결정(후속). step별 판단-결과 데이터(승인/반려 등)를 이벤트 payload로 운반하는 것은 금지(event-envelope: per-event payload body는 closed-empty) — 관찰 데이터는 본 `run_steps` read가 권위다.
+⁶ `GET /v1/runs/{run_id}/steps` — `run_steps` 단계 트레이스 read(운영 관찰). **비민감 요약 + 참조만** 노출(redaction-by-omission): `step_id`·`node_id`·`action`(IRActionType)·`status`(StepResult status 9값)·`attempt`·`cache_mode`·`started_at`/`ended_at`/`duration_ms`·`artifact_ids`(ArtifactRef[])·`stagehand_calls`(model/transport/stream_status/ttfb_ms/input·output_tokens/cost)·`exception`(`{class, code}`만). **민감 본문은 미노출**: `output`/`output_ref`/`input_redacted_ref` 내용·`exception.message`(RedactedString)·`evidenceRefs`·`page_state_before/after` 본문 — 평문/증빙 노출 금지(security-contracts §4/§9). 증빙(artifact)은 `artifact_ids`를 통해 **`GET /v1/artifacts/{id}` redaction→RBAC→audit 게이트**(§5)로만 조회한다. 따라서 step 본문 disclosure용 별도 RBAC/redaction 게이트는 불요하며 트레이스 요약은 `run.read`(viewer+, auth-rbac §2 "트레이스 조회")로 충분하다. 실시간성은 v2=`/steps/stream` SSE 변경 신호 + `/steps` 재조회이며, 브라우저는 Bearer 헤더가 필요한 구조라 `EventSource`가 아니라 fetch stream을 사용한다. 폴링은 fallback으로 유지한다. step별 판단-결과 데이터(승인/반려 등)를 이벤트 payload로 운반하는 것은 금지(event-envelope: per-event payload body는 closed-empty) — 관찰 데이터는 본 `run_steps` read가 권위다.
 - `abort` 대상 상태: 비종결 실행 상태 전체(running·suspending·suspended·resume_requested·resuming). **예외: `completing`** — finalize 우선(R25), abort는 거부되고 `RUN_ALREADY_TERMINAL`(409)로 응답(상태 유지).
 - `suspending`은 R26 guard(`bookmarkCancelable`)가 런타임 소유 bookmark 저장/취소 상태를 증명할 때만 성공 응답을 낼 수 있다. Product Open v1 제어평면에는 bookmark-cancel port나 durable abort intent가 없으므로, 영속 상태가 `suspending`인 abort 요청은 멱등 예약 전에 `WORKITEM_CHECKOUT_CONFLICT`(409, `details.reason="run_bookmark_in_progress"`)로 실패시킨다. 클라이언트는 R11로 `suspended`에 도달한 뒤 같은 `Idempotency-Key`로 재시도할 수 있고, 그때 R16을 적용한다. bookmark 저장 중 202 성공을 반환해 side effect를 추정하는 동작은 금지한다.
 - 이미 종결(`completed`/`cancelled`/`failed_*`)된 run에 abort → `RUN_ALREADY_TERMINAL`(409). 이미 취소된 run에 대한 후속 작업 거부 → `RUN_ABORTED`(409).
 - `queued`/`claimed` 단계 abort는 run.started 이전이라 Run 전이가 아니라 dispatcher의 큐/claim 회수로 처리(state-machine §1 "abort 보편성" 주석). dispatcher는 `(id,status)` CAS로 큐/claim을 취소하고 같은 트랜잭션 outbox에 `run.cancelled`를 기록한다. 0 rows면 재조회해 `RUN_ALREADY_TERMINAL` 또는 최신 상태 기준으로 재판정한다. API는 동일하게 202를 수락하되 결과는 `cancelled`로 수렴.
+
+---
+
+## 1.4 Automation Ideas / CoE ROI (업무 발굴·승인 파이프라인 v1)
+
+Product Open v1에서 CoE/ROI는 **운영자 제품 표면**이다. 운영자/승인자/관리자는 자동화 후보를 등록·평가·연결하고 ROI 입력값과 계산 결과를 저장한다. Viewer는 tenant-scoped 후보와 ROI 산정 결과를 조회할 수 있으나 생성·수정·ROI 저장과 비승인 전이는 `automation_idea.manage` 권한이 필요하다. `assess -> approved/rejected` 승인·반려 전이는 SoD 경계로 분리해 `automation_idea.approve` 권한(approver/admin)을 멱등키 예약 전에 추가 검사한다. 이 표면은 프로세스/태스크 마이닝 엔진 자체가 아니라, 수동·imported·process_mining·task_mining source에서 들어온 후보를 평가/승인/연결하는 CoE control-plane이다.
+
+| Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
+|---|---|---|---|---|
+| GET | `/v1/automation-ideas` | query: optional `stage`, optional `department`, `limit`, `cursor`. `automation_idea.read` 권한 | 200 + `{ items, next_cursor }`, 각 item은 `AutomationIdea` | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
+| POST | `/v1/automation-ideas` | `Idempotency-Key`. body: `title`, `description`, `business_owner`, `department`, optional `source`, `priority`, `score`. `automation_idea.manage` 권한 | 201 + `AutomationIdea(stage=intake)` | `IR_SCHEMA_INVALID`(422), `AUTHZ_FORBIDDEN`(403) |
+| GET | `/v1/automation-ideas/{idea_id}` | `automation_idea.read` 권한 | 200 + `AutomationIdea` | `RESOURCE_NOT_FOUND`(404) |
+| PATCH | `/v1/automation-ideas/{idea_id}` | `Idempotency-Key`. 후보 메타데이터, optional `scenario_id`, optional `run_trigger_id` 연결. `automation_idea.manage` 권한 | 200 + 수정된 `AutomationIdea` | `IR_SCHEMA_INVALID`(422), `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+| POST | `/v1/automation-ideas/{idea_id}/transition` | `Idempotency-Key`. body: `{ stage }`. 허용된 전이만 수행. 기본 `automation_idea.manage`; 목표 stage가 `approved`/`rejected`이면 추가로 `automation_idea.approve` 권한 필요 | 200 + 전이된 `AutomationIdea` | `IR_SCHEMA_INVALID`(422), `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+| GET | `/v1/automation-ideas/{idea_id}/roi-estimate` | `automation_idea.read` 권한 | 200 + `RoiEstimate` 또는 미저장 시 404 | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+| POST | `/v1/automation-ideas/{idea_id}/roi-estimate` | `Idempotency-Key`. body: `frequency_per_month`, `minutes_per_case`, `exception_rate`, `hourly_cost`, `implementation_effort`, `confidence`. `automation_idea.manage` 권한 | 200 + 저장된 `RoiEstimate`(`monthly_hours_saved`, `estimated_monthly_value`, `payback_months` 계산 포함) | `IR_SCHEMA_INVALID`(422), `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+
+ROI v1 계산 규칙: `monthly_hours_saved = frequency_per_month * minutes_per_case * (1 - exception_rate) / 60`, `estimated_monthly_value = monthly_hours_saved * hourly_cost`, `payback_months = implementation_effort / estimated_monthly_value`(분모 0이면 `null`). ROI 입력은 운영자 판단을 돕는 추정치이며 billing/회계 원장으로 쓰지 않는다.
+
+---
+
+## 1.4a Document Automation / IDP v1 (텍스트·CSV·JSON 문서 검증 큐)
+
+Product Open v1의 문서 자동화는 **redacted artifact에 저장된 텍스트/CSV/JSON 본문**을 deterministic extractor로 읽고, 필수 필드 누락 또는 low-confidence 필드를 기존 `human_tasks(kind=validation)`의 `business_form_v1` 검증 큐로 넘기는 MVP다. OCR/이미지/PDF vision 추출은 이 버전 범위가 아니며, `image/*`·바이너리·미디어 타입 미상 artifact는 `IR_SCHEMA_INVALID(reason=unsupported_document_artifact_media_type)`로 거부한다. 원본 문서 bytes는 `GET /v1/artifacts/{id}`와 동일한 redaction→audit 경계를 통과해 읽으며, 응답에는 추출 필드와 검증 태스크 참조만 노출한다.
+
+| Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
+|---|---|---|---|---|
+| GET | `/v1/document-jobs` | query: optional `status`, `limit`, `cursor`. `document_job.read` 권한 | 200 + `{ items, next_cursor }`, 각 item은 `DocumentJob` | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
+| POST | `/v1/document-jobs` | `Idempotency-Key`. body: `source_artifact_id`, `document_type`, `field_schema[]`(`key`, optional `label`, `type`, `required`, `aliases`, `patterns`, `min_confidence`). `document_job.manage` 권한 | 201 + `DocumentJob(status=created)` | `RESOURCE_NOT_FOUND`(404; 보이지 않는 artifact), `IR_SCHEMA_INVALID`(422; 미지원 media type/field schema), `AUTHZ_FORBIDDEN`(403) |
+| GET | `/v1/document-jobs/{job_id}` | `document_job.read` 권한 | 200 + `DocumentJob` | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+| POST | `/v1/document-jobs/{job_id}/extract` | `Idempotency-Key`. 빈 body 또는 생략. redacted source artifact를 감사 기록과 함께 읽고 deterministic extraction 수행 | 200 + `DocumentExtraction(status=completed\|validation_required)`. `missing_fields`는 필수 누락 또는 low-confidence 필드만 포함 | `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422), `AUTHZ_FORBIDDEN`(403) |
+| GET | `/v1/document-jobs/{job_id}/extraction` | `document_job.read` 권한 | 200 + 저장된 `DocumentExtraction` | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+| POST | `/v1/document-jobs/{job_id}/validation-task` | `Idempotency-Key`. extraction이 `validation_required`일 때 reviewer용 validation human task 생성 | 201 + `{ human_task_id, state, result_schema, artifact_refs }`. 기존 task가 있으면 같은 task 참조 반환 | `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; 검증 불필요), `AUTHZ_FORBIDDEN`(403) |
+
+필드 추출 신뢰도 v1: JSON exact key/alias match는 high confidence, CSV header match는 high confidence, `patterns` match는 medium-high, label line(`Label: value`) match는 low confidence로 기록한다. 선택 필드(`required=false`)가 없다는 이유만으로 검증 큐를 열지 않는다. 잘못된 regex pattern은 저장/실행 전에 `IR_SCHEMA_INVALID(reason=invalid_field_schema)`로 fail-closed 처리한다.
+
+---
+
+## 1.5 Run Triggers (예약 실행 / Orchestration v1)
+
+Product Open v1의 trigger는 **cron 기반 예약 실행**과 **서명 웹훅 발화**만 성공 경로로 계약한다. 파일 도착과 queue 적재 trigger는 V2 P1에서 저장·발화 성공으로 응답하지 않으며, `POST /v1/run-triggers`는 `trigger_type=file_arrival|queue|queue_threshold` 같은 값을 `IR_SCHEMA_INVALID(reason=invalid_trigger_type)`로 거절한다. 파일 watcher, queue payload schema, SecretRef/connector auth, idempotent event key, replay window, and fire ledger semantics are P2/future contracts.
+
+`RunTrigger.webhook_secret_ref`는 `trigger.manage` 권한이 있는 응답에서만 원문 SecretRef를 포함한다. `trigger.read`만 가진 사용자에게는 `webhook_secret_ref=null`로 응답하고, 웹훅 키 연결 여부는 `webhook_secret_configured=true|false`로만 표시한다.
+
+| Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
+|---|---|---|---|---|
+| GET | `/v1/run-triggers` | query: optional `status`, optional `scenario_version_id`, `limit`, `cursor`. `trigger.read` 권한 | 200 + `{ items, next_cursor }`, 각 item은 `RunTrigger` | `AUTHZ_FORBIDDEN`(403) |
+| POST | `/v1/run-triggers` | `Idempotency-Key`. cron body: `trigger_type=cron`, `scenario_version_id`, 5-field `cron_expression`, `timezone`, optional `params`, `catchup_policy`, `max_concurrent_runs`, `next_fire_at`. `next_fire_at` 생략 시 API가 cron/timezone 기준 다음 발생 시각을 계산. webhook body: `trigger_type=webhook`, `scenario_version_id`, `webhook_secret_ref`, optional `params`, `max_concurrent_runs`. `trigger.manage` 권한 | 201 + `RunTrigger(status=enabled)` | `IR_SCHEMA_INVALID`(422), `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+| GET | `/v1/run-triggers/{trigger_id}` | `trigger.read` 권한 | 200 + `RunTrigger` | `RESOURCE_NOT_FOUND`(404) |
+| PATCH | `/v1/run-triggers/{trigger_id}` | `Idempotency-Key`. cron/timezone/params/catchup/max concurrency/next fire 부분 수정. cron/timezone 변경 시 `next_fire_at`을 생략하면 다음 발생 시각 재계산. `trigger.manage` 권한 | 200 + 수정된 `RunTrigger` | `IR_SCHEMA_INVALID`(422), `RESOURCE_NOT_FOUND`(404) |
+| POST | `/v1/run-triggers/{trigger_id}/pause` | `Idempotency-Key`. optional `{ reason }`. `trigger.manage` 권한 | 200 + `RunTrigger(status=paused)` | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+| POST | `/v1/run-triggers/{trigger_id}/resume` | `Idempotency-Key`. optional `{ reason }`. `trigger.manage` 권한 | 200 + `RunTrigger(status=enabled)` | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
+| GET | `/v1/run-triggers/{trigger_id}/fires` | query: `limit`, `cursor`. `trigger.read` 권한 | 200 + `{ items, next_cursor }`, 각 item은 `RunTriggerFire`(`scheduled_for`, `run_id`, `failure_reason`) | `RESOURCE_NOT_FOUND`(404) |
+| POST | `/v1/webhooks/run-triggers/{tenant_id}/{trigger_id}` | Public JWT-skip route. Headers: `X-RPA-Webhook-Event-Id`, `X-RPA-Webhook-Timestamp`, `X-RPA-Webhook-Signature=sha256=<hex>` where signature payload is `{timestamp}.{event_id}.{canonical_json(body)}` and key is resolved from `webhook_secret_ref`. Body must be a JSON object. | 202 + `RunTriggerWebhookReceipt`(`fire_id`, `status`, `run_id`, `duplicate`) | `UNAUTHENTICATED`(401), `IR_SCHEMA_INVALID`(422), `RESOURCE_NOT_FOUND`(404) |
+
+Run trigger cron v1은 5-field numeric cron만 지원한다. 허용 문법은 `*`, comma list, numeric range, step(`*/15`, `1-5/2`)이며 named month/day, seconds/year, `L/W/#/?`, day-of-month와 day-of-week 동시 제한은 `IR_SCHEMA_INVALID`로 거절한다. 스케줄러는 발화 성공/실패/동시성 skip/중복 ledger 모두에서 다음 `next_fire_at`을 갱신한다. `skip_missed`는 현재 scheduler tick 이후의 다음 발생 시각으로 이동해 추가 missed backlog를 건너뛰고, `fire_once`는 방금 처리한 `scheduled_for` 이후의 다음 발생 시각으로 이동해 poll당 한 회차씩 따라잡는다. `max_concurrent_runs` 초과는 `run_trigger_fires.status=skipped`, `failure_reason.code=MAX_CONCURRENCY_REACHED`로 기록하고 같은 규칙으로 다음 시각을 갱신한다.
+
+스케줄러 worker는 due trigger를 claim할 때 `(tenant_id, trigger_id, fire_key)` 멱등성을 먼저 확보하고, 같은 트랜잭션에서 `runs(queued)` 생성 + `run.created` outbox + `run_claim` enqueue를 수행해야 한다. `fire_key`는 trigger와 예정 시각을 포함하는 tenant-local idempotency key이며, 중복 fire는 새 run을 만들지 않는다.
+
+Webhook trigger v1은 bearer/JWT가 아니라 HMAC replay boundary를 사용한다. `X-RPA-Webhook-Timestamp`는 5분 skew 안에 있어야 하고, `X-RPA-Webhook-Event-Id`는 `(tenant_id, trigger_id, fire_key=webhook:{event_id})` 멱등성 키가 된다. 동일 event id의 재전송은 기존 fire/run receipt를 반환하고 새 run을 만들지 않는다. 서명 검증 후 trigger가 `enabled`가 아니면 발화 원장을 만들지 않고 `IR_SCHEMA_INVALID(reason=webhook_trigger_not_enabled)`를 반환한다. `max_concurrent_runs` 초과는 cron과 동일하게 `run_trigger_fires.status=skipped`, `failure_reason.code=MAX_CONCURRENCY_REACHED`로 기록한다.
+
+---
+
+## 1.6 Ops Alerts (SLA/운영 알림 센터 v1)
+
+Product Open v1의 P1 notification channel은 **콘솔용 계산형 알림 센터**다. Teams/Slack/메일/webhook 같은 외부 발송 채널, 수신자 라우팅, ack/snooze 원장, 재시도/전송 DLQ는 V2 P1 범위가 아니며 API가 성공으로 응답하지 않는다. 외부 발송을 추가하려면 SecretRef/connector/notification_deliveries 계약을 별도 버전으로 연다.
+
+| Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
+|---|---|---|---|---|
+| GET | `/v1/ops-alerts` | query: optional `severity`(`critical`/`warning`/`info`), optional `source`(`run_sla`/`human_task_sla`/`trigger_fire`/`failure_spike`/`dlq`), `limit`. `ops_alert.read` 권한 | 200 + `{ items, next_cursor:null }`, 각 item은 `OpsAlert`(`alert_id`, `severity`, `source`, `title`, `detail`, `subject_type`, `subject_id`, `recommended_action`, `route`, `detected_at`, optional `due_at`) | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
+| GET | `/v1/ops/health` | `ops_alert.read` 권한. 현재 테넌트의 graphile queue depth(가능한 경우), browser lease 점유/만료, 15분 이상 stale nonterminal run 수를 계산 | 200 + `OpsHealth`(`status`, `detected_at`, `queue`, `browser_leases`, `stale_runs`) | `AUTHZ_FORBIDDEN`(403) |
+| GET | `/v1/bot-pools` | `ops_alert.read` 권한. Product Open v1은 신규 `bot_pools` 테이블 없이 기존 `workers`(infra)와 tenant-scoped `browser_leases`/`runs`/`run_triggers`를 합산한 synthetic browser pool을 조회한다 | 200 + `{ items:[BotPool], next_cursor:null }`. `BotPool`은 `capacity_slots`, `workers`, `leases`, `queue`, `health`, `health_reason`을 포함 | `AUTHZ_FORBIDDEN`(403) |
+
+계산 규칙(v1): 비종결 run이 60분 이상 지속되면 `run_sla`, 활성 human_task가 만료됐거나 15분 이내 만료되면 `human_task_sla`, run trigger fire가 `failed`/`skipped`이면 `trigger_fire`, 최근 15분 실패 run이 3건 이상이면 `failure_spike`, 미재처리 workitem/sink DLQ가 있으면 `dlq` 알림으로 투영한다. 알림은 저장 원장이 아니라 현재 DB 상태에서 계산되며, payload 본문·artifact 본문·secret 값은 노출하지 않는다.
+Ops health(v1)는 저장 원장이 아니라 현재 DB 상태 계산값이다. `queue.available=false`는 Graphile queue view가 아직 설치되지 않은 배포/테스트 환경을 뜻하며, 이 경우 `pending_jobs=null`로 내려 보낸다. `browser_leases.expired_open>0`이면 `critical`, 15분 이상 stale nonterminal run이 있거나 tenant queue pending job이 100개 이상이면 `warning`, 그 외는 `ok`이다.
+Bot pool(v1)은 운영 용량 표면용 read model이다. `capacity_slots`는 최근 heartbeat가 있고 circuit이 닫힌 active browser worker 수로 계산한다. 2분 이상 heartbeat가 없는 worker는 `workers.stale`로 집계하고 용량 슬롯에서는 제외한다. `leases`와 `queue`는 요청 테넌트 범위로만 계산하며, 만료된 reserved/active browser lease가 있으면 `health=critical`이다. 저장/수정 가능한 풀 정책, SLA 라우팅, 외부 알림 발송은 별도 계약이 열릴 때까지 v1 범위가 아니다.
 
 ---
 
@@ -83,7 +161,7 @@
 | PUT | `/v1/scenarios/{scenario_id}` | `If-Match: <version>` 필수. body: 갱신 IR | 200 + 새 version. `ETag` 갱신 | `SCENARIO_VERSION_CONFLICT`(412), `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422) |
 | POST | `/v1/scenarios/{scenario_id}/validate` | body: 검증할 IR(저장 안 함) 또는 기존 version 참조 | 200 + ValidationReport(ir-static-validation.md V1..V11) | `IR_SCHEMA_INVALID`(422, reason), `IR_EXPRESSION_COMPILE_ERROR`(422) |
 | POST | `/v1/scenarios/{scenario_id}/promote` | `If-Match: <version>` + `Idempotency-Key`. body: `target`(예: prod) | 200 + 승격된 version(AST 캐시 빌드) | `SCENARIO_VERSION_CONFLICT`(412), `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422) |
-| POST | `/v1/scenarios/{scenario_id}/promote-from-run` | `Idempotency-Key`. body: `{ run_id }` | 201 + 새 draft version(성공 run 의 결정형 click ActionPlan 을 act.args.click_selector 로 베이킹, PbD) + `{ promoted_node_ids, skipped }` | `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422: run 미완료/타시나리오/promote할 click plan 0), `IR_EXPRESSION_COMPILE_ERROR`(422) |
+| POST | `/v1/scenarios/{scenario_id}/promote-from-run` | `Idempotency-Key`. body: `{ run_id }` | 201 + 새 draft version(성공 run의 결정형 ActionPlan(click/fill/select/cache-hit)을 IR act args로 베이킹, PbD) + `{ scenario_version_id, promoted_node_ids, skipped }` | `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422: run 미완료/타시나리오/promote할 deterministic plan 0), `IR_EXPRESSION_COMPILE_ERROR`(422) |
 | GET | `/v1/scenarios/{scenario_id}/versions` | - | 200 + `{ items, next_cursor }` 최신 version 우선 | `RESOURCE_NOT_FOUND`(404) |
 | GET | `/v1/scenarios/{scenario_id}/versions/{version}` | - | 200 + 지정 version의 IR + `ETag: <version>` | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/scenarios/{scenario_id}/versions/{version}/rollback` | `If-Match: <latest_version>` + `Idempotency-Key`. body `{}` optional | 200 + 과거 IR을 최신+1 draft로 복제. 같은 키 재시도는 중복 version 없이 최초 응답 재생 | `SCENARIO_VERSION_CONFLICT`(412), `IR_SCHEMA_INVALID`(422), `IR_EXPRESSION_COMPILE_ERROR`(422), `RESOURCE_NOT_FOUND`(404) |
@@ -139,18 +217,20 @@
 | POST | `/v1/principals` | `Idempotency-Key`. body: `sub`·`display_name`(필수)·optional `email`. admin 권한 | 201 + principal(`principal_id`/`sub`/`display_name`/`email`/`source=manual`) | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422; 중복 `sub`) |
 | PATCH | `/v1/principals/{principal_id}` | `Idempotency-Key`. body: optional `display_name`·`email`(`null`=제거) 최소 1개. admin 권한. sub 불변 | 200 + principal 갱신 | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
 | DELETE | `/v1/principals/{principal_id}` | `Idempotency-Key`. admin 권한 | 200 + `{ principal_id, deleted: true }`(human_tasks.assignee FK 없어 기존 배정 불변) | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403) |
-| GET | `/v1/human-tasks/{human_task_id}` | — | 200 + 태스크 상세(`state`, `kind`, `assignee`, `timeout`, `on_timeout`, run 연계; payload 본문 미노출) | `RESOURCE_NOT_FOUND`(404) |
+| GET | `/v1/human-tasks/{human_task_id}` | — | 200 + 태스크 상세(`state`, `kind`, `assignee`, `timeout`, `on_timeout`, run 연계, `payload`, `result_schema`, `artifact_refs`, `result`) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/human-tasks/{human_task_id}/start` | `Idempotency-Key`. 배정된 담당자/역할 스코프 필요 | 200 + `in_progress`(H2) | `HUMAN_TASK_EXPIRED`(410), `AUTHZ_FORBIDDEN`(403) |
-| POST | `/v1/human-tasks/{human_task_id}/resolve` | `Idempotency-Key`. body: optional `result`(object) — v1 미소비(아래 note) | 200 + `resolved`. `human_task.resolved` 이벤트 → Run `resume_requested`(R13/H3) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
+| POST | `/v1/human-tasks/{human_task_id}/resolve` | `Idempotency-Key`. body: optional `result` object(`decision`, `corrections`, `reason`, `confidence`, `notes`) | 200 + `resolved` 태스크 상세(`result` 저장). `human_task.resolved` 이벤트 → Run `resume_requested`(R13/H3) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410), `IR_SCHEMA_INVALID`(422; result shape 오류) |
 | POST | `/v1/human-tasks/{human_task_id}/assign` | `Idempotency-Key`. body: `assignee` | 200 + `assigned`(H1/H6) | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410) |
 | POST | `/v1/human-tasks/{human_task_id}/escalate` | `Idempotency-Key`. body: optional `reason` | 200 + `escalated`(H5)는 명시 routing/assignment owner가 `reassignAssignee`를 처리할 때만 가능. 현재 Fastify 경로는 미정의 routing이면 fail-closed. | `AUTHZ_FORBIDDEN`(403), `HUMAN_TASK_EXPIRED`(410), `CONTROL_PLANE_INTERNAL_ERROR`(500, unsupported `reassignAssignee`) |
 
 - 상태값은 `HumanTaskState`(`open`/`assigned`/`in_progress`/`resolved`/`expired`/`cancelled`/`escalated`)·`HumanTaskKind`(`approval`/`validation`/`exception`/`captcha`/`mfa`)와 정확히 일치(state-machine-types.ts).
-- HumanTask 응답은 v1에서 kind별 `payload` 본문을 노출하지 않는다. 현재 영속 모델은 inline payload가 아니라 payload_ref 계열 확장 여지만 두므로, API가 본문을 조합하거나 추측해 반환하지 않는다.
+- HumanTask V2 응답은 검증/교정 워크벤치를 위해 `payload`(작업 지시/필드), `result_schema`(입력 힌트), `artifact_refs`(참고 산출물 id 배열), `result`(해소 시 저장된 판정/교정 결과)를 포함한다. artifact 본문은 기존 Artifacts API의 redaction/RBAC 경계를 그대로 사용하며, HumanTask API가 artifact 본문을 인라인 조합하지 않는다.
+- `result_schema.version="business_form_v1"`은 configurable HITL/data-entry의 최소 폼 계약이다. schema는 `fields[]`를 가지며 각 field는 `key`(`/^[A-Za-z_][A-Za-z0-9_]{0,63}$/`), `label`, `type`(`text`/`textarea`/`number`/`boolean`/`date`/`select`), optional `required`, `options`, `help_text`로 닫힌다. `select`는 비어 있지 않은 `options`가 필수이고, 다른 type은 options를 무시한다. `POST /resolve` 시 `decision="correct"`이면 `result.corrections`가 이 schema의 required/type/options를 만족해야 하며, 알 수 없는 correction key는 `IR_SCHEMA_INVALID`(422)로 거부된다. version 없는 legacy object는 조회 힌트로만 취급한다.
 - 만료/종결 태스크에 resolve/assign/escalate 시도 → `HUMAN_TASK_EXPIRED`(410, business). timeout 정책 분기(fail→expired H4a / escalate→escalated H4b)는 태스크 생성 시 `on_timeout`(reserved-handlers @human_task 입력, 기본 `fail`)로 일원화되며 API가 재판정하지 않는다.
-- **resolve `result` payload는 v1에서 미정의·미소비다(이전 "kind별 payload" 문구를 실제 v1 모델로 정정).** `reserved-handlers.md` @human_task는 resolve를 `{status:"resolved", next}` **순수 continue 신호**로 모델링한다 — 운영자 판정(승인/반려·통과/실패)을 담을 자리가 reserved-handler 결과·resume token·IREL `node.<id>.*`(타입 고정) 어디에도 없다. 백엔드 `requireResolveBody`는 optional `result`(object)를 **수용하되 전이/이벤트만 확정하고 result는 검증·영속·소비하지 않는다**(forward seam). 따라서 콘솔의 resolve는 판정-데이터 입력이 아니라 "승인하고 계속(continue)" 신호다. kind별 result 스키마 정의 + run 재개 컨텍스트(IREL `node.<handler>.result` 신규 스코프)로의 분기는 **versioned 스키마 변경이 필요한 v2 scope-out**이다(reserved-handlers 결과 모델·resume token·state-machine·DB·런타임 일괄 — verify.schema/reserved-handlers 기반 result 저장 결정 선행).
+- `human_task_timeout_sweeper`는 `expires_at <= now()`인 `open`/`assigned`/`in_progress`/`escalated` 태스크를 tenant-scoped `FOR UPDATE SKIP LOCKED`로 처리한다. H4a/H8은 `human_task.expired` 후 연결 Run이 `suspended`이면 R14(`failed_business`)를 적용하고, H4b는 `human_task.escalated` 후 R15를 적용하되 태스크 상태 자체를 관리자 큐 표면으로 사용한다. H4b 진입 시 재만료를 위해 `expires_at`을 `human_task.default_timeout`만큼 연장한다.
+- V2 resolve `result`는 **영속**된다. 공통 shape는 `decision`(`approve`/`reject`/`correct`/`retry`)과 optional `corrections` object, `reason` string, `confidence` number(0..1), `notes` string이다. 이 결과는 인박스/상세/감사 검토의 제품 표면으로 제공된다. 단, 런타임 재개 컨텍스트(`node.<handler>.result`) 주입은 별도 versioned IREL/reserved-handler 변경 전까지 비활성이다. 즉 V2 MVP는 사람이 입력한 판정/교정 데이터를 **잃지 않고 조회 가능하게 저장**하되, 브라우저 자동화의 다음 노드가 이를 자동 소비한다고 가장하지 않는다.
 - 재에스컬레이션 후에도 미해소 → H8(escalated→timeout→expired, 무한 대기 방지). escalate API는 H5(수동) 진입만 담당하고 timeout 기반 H4b/H8은 타이머 주도(API 비주도).
-- assignment/routing 계약: `assignee`는 명시 담당자 PrincipalId(JWT sub, 자유형 string — UUID 보장 없음; `human_tasks.assignee`는 `approval_decisions.decided_by`와 동형 text), `assignee_role`은 @human_task 입력에서 온 역할 스코프이며 API가 임의로 "admin queue"로 재해석하지 않는다. `reassignAssignee` side effect는 반드시 호출측이 명시적으로 소비해야 한다. 현재 성공 가능한 소비자는 H6 `assign`뿐이며, 요청 body의 `assignee`로 `human_tasks.assignee`를 설정한다. H5 수동 escalate와 R15 coupling에서 발생하는 `reassignAssignee`는 durable routing port/assignee policy가 없으면 미지원 pending side effect로 보고 동일 트랜잭션을 rollback한 뒤 `CONTROL_PLANE_INTERNAL_ERROR`로 fail-closed해야 한다(`human_task.escalated` 이벤트 emit 금지, run 상태 유지).
+- assignment/routing 계약: `assignee`는 명시 담당자 PrincipalId(JWT sub, 자유형 string — UUID 보장 없음; `human_tasks.assignee`는 `approval_decisions.decided_by`와 동형 text), `assignee_role`은 @human_task 입력에서 온 역할 스코프이며 API가 임의로 "admin queue"로 재해석하지 않는다. `reassignAssignee` side effect는 반드시 호출측이 명시적으로 소비해야 한다. 현재 성공 가능한 소비자는 H6 `assign`과 timeout sweeper의 H4b/R15 소비(태스크 `state='escalated'`를 관리자 큐로 노출)뿐이다. H5 수동 escalate에서 발생하는 `reassignAssignee`는 durable routing port/assignee policy가 없으면 미지원 pending side effect로 보고 동일 트랜잭션을 rollback한 뒤 `CONTROL_PLANE_INTERNAL_ERROR`로 fail-closed해야 한다(`human_task.escalated` 이벤트 emit 금지, run 상태 유지).
 - 담당자 picker 소스(`GET /v1/principals`): **테넌트 주체 디렉터리**(`principals` 테이블). item = `principal_id`(surrogate uuid)·`sub`(PrincipalId=JWT sub, 자유형)·`display_name`·`email`·`source`(`jwt`|`manual`). 표시명은 JWT optional `name` 클레임 자동 upsert(source=`jwt`) 또는 admin 수동 등록(source=`manual`)으로 채운다 — 표시명 소스가 없으면 디렉터리에 동기화하지 않는다(이름 없는 항목 금지). `human_tasks.assignee` → `principals` FK는 두지 않아 디렉터리 미등록 sub도 직접 배정 가능(자유 입력 폴백 유지). RBAC=`principal.read`(viewer+ 후보 조회; 실 배정은 `human_task.assign`이 강제). 커서는 공유 `(created_at, id)` keyset.
 - `cancel`(H7)은 별도 엔드포인트를 두지 않는다 — Run abort(§1) 연동으로만 발생(R16). 직접 API 노출은 Phase 2 결정.
 
@@ -223,9 +303,26 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 | GET | `/v1/sites/{site_profile_id}` | — | 200 + 사이트 상세(`url_pattern`, risk, 승인 상태, circuit 상태, 세션 준비 메타) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/sites` | `Idempotency-Key`. 생성 권한(`site.create`) 필요. body: `name`(필수)·`url_pattern`(필수, http(s) origin)·optional `risk`(green default/amber/red)·optional `page_state_selectors` | 201 + 생성된 site 요약(`site_profile_id`/`name`/`url_pattern`/`risk`/`approved`/`default_browser_identity_id`/`default_network_policy_id`). 서버는 생성 tx 안에서 기본 `browser_identity`(site scoped)와 origin-host `network_policy`를 같이 만들어 자연어 생성 target 자동 채움에 사용한다. | `AUTHZ_FORBIDDEN`(403)⁴, `IR_SCHEMA_INVALID`(422)⁵ |
 | PATCH | `/v1/sites/{site_profile_id}` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `name`(필수) | 200 + 갱신된 site 요약(`site_profile_id`/`name`) | `AUTHZ_FORBIDDEN`(403)⁴, `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; 중복 name reason=`site_name_already_exists`) |
+| PATCH | `/v1/sites/{site_profile_id}/page-state` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `{ page_state_selectors }` where value is `SitePageStateConfig` 또는 `null`(해제) | 200 + `{ site_profile_id, page_state_selectors, page_state_summary }` | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; invalid_page_state_selectors) |
+| GET | `/v1/sites/{site_profile_id}/elements` | query: `?stability=stable\|review_needed\|broken&search=&limit=&cursor=`. 조회 권한(`site.read`) 필요 | 200 + `{ items, next_cursor }`. items are site-scoped browser Object Repository entries: `element_id`, `element_key`, `label`, `selector`, `element_type`, `stability`, `source`, `sample_url`, `usage_count`, `last_verified_at`, `updated_at` | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422) |
+| POST | `/v1/sites/{site_profile_id}/elements` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `element_key`, `label`, `selector`, optional `element_type`, `stability`, `source`, `sample_url`, `notes` | 201 + created `SiteElement`. `element_key` is unique per site. | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; duplicate reason=`element_key_already_exists`) |
+| PATCH | `/v1/sites/{site_profile_id}/elements/{element_id}` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body may update `label`, `selector`, `element_type`, `stability`, `sample_url`, `notes`. `last_verified_at`은 probe 결과 전용 필드라 일반 PATCH에서 `IR_SCHEMA_INVALID(reason=probe_managed_field)`로 거절한다. | 200 + updated `SiteElement` | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422) |
+| POST | `/v1/sites/{site_profile_id}/elements/{element_id}/probe` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. optional body: `sample_url`. Browser DOM selector probe only. | 200 + `{ probe_status, match_count, reason_code, checked_at, element }`. `probe_status=matched` updates `stability=stable`; `not_found` updates `review_needed`; `invalid_selector` updates `broken`; missing runtime/sample URL returns `not_run` and never pretends success. | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422) |
+| DELETE | `/v1/sites/{site_profile_id}/elements/{element_id}` | `Idempotency-Key`. 수정 권한(`site.update`) 필요 | 200 + `{ element_id, deleted: true }` | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404) |
+| GET | `/v1/sites/{site_profile_id}/recordings` | query: `?status=recording\|completed\|discarded\|failed&limit=&cursor=`. 조회 권한(`site.read`) 필요 | 200 + `{ items, next_cursor }`. items are Browser Recorder sessions with `recording_session_id`, `name`, `start_url`, `status`, `event_count`, `draft_ir`, `validation_report`, timestamps. | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422) |
+| POST | `/v1/sites/{site_profile_id}/recordings` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `name`, optional `start_url`(미지정 시 site `url_pattern`) | 201 + recording session `status=recording`. 쿠키/입력 원문은 저장하지 않음 | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `SITE_PROFILE_BLOCKED`(403), `IR_SCHEMA_INVALID`(422) |
+| GET | `/v1/sites/{site_profile_id}/recordings/{recording_session_id}/events` | query: `?limit=&cursor=`. 조회 권한(`site.read`) 필요 | 200 + `{ items, next_cursor }` ordered by `seq`. 이벤트는 `navigate/click/input/select/submit/wait` 메타와 selector/url/label/value_preview만 포함 | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422) |
+| POST | `/v1/sites/{site_profile_id}/recordings/{recording_session_id}/events` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `{ events: [...] }`, 각 event는 `event_type`, optional `selector`, `element_key`, `label`, `url`, `value_preview` | 200 + `{ recording_session_id, appended, event_count }`. raw `value`/password/token/cookie 필드는 거부 | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422) |
+| POST | `/v1/sites/{site_profile_id}/recordings/{recording_session_id}/complete` | `Idempotency-Key`. 수정 권한(`site.update`) 필요 | 200 + recording session `status=completed`, `draft_ir`, `validation_report` 포함. draft_ir는 `navigate` + deterministic `act.args.*_selector` 중심의 실행 가능한 초안이며, 서버는 같은 compile pipeline으로 정적 검증 리포트를 저장한다 | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; event 0건 등) |
 | POST | `/v1/sites/{site_profile_id}/approve` | `Idempotency-Key`. 승인 권한 필요. body: optional `reason`/`expires_at` | 200 + 승인 반영(risk=red 사이트 실행 허용) | `AUTHZ_FORBIDDEN`(403)⁴ |
+| POST | `/v1/sites/{site_profile_id}/session/capture` | `Idempotency-Key`. 세션 등록 권한(`session.capture`) 필요. body: optional `login_url`(미지정 시 사이트 `page_state_selectors.loginUrl`) | 201/200 + `{ capture_session_id, site_profile_id, status, login_url, auth_selector? }`. 동일 사이트 active 캡처가 있으면 새로 띄우지 않고 기존 행 반환 | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `SITE_PROFILE_BLOCKED`(403), `IR_SCHEMA_INVALID`(422) |
+| GET | `/v1/sites/{site_profile_id}/session/capture` | 세션 등록 권한(`session.capture`) 필요. 최근 10개 캡처 상태 조회 | 200 + `{ items: [{ capture_session_id, status, detail, updated_at }], next_cursor: null }`. 쿠키/자격증명/토큰/로그인 입력값은 절대 반환하지 않음 | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404) |
 
 - `site risk=red`는 미승인 시 실행 차단(`SITE_PROFILE_BLOCKED`, 403, error-catalog operatorAction="site risk=red 승인 워크플로우"). 본 엔드포인트가 그 승인 워크플로우의 제어평면 진입점.
+- 세션 캡처 상태 목록은 운영자 피드백용 메타데이터다. 상태 예: `launching`(창 열기), `awaiting_login`(운영자 로그인 대기), `capturing`(저장 중), `captured`(등록 완료), `failed`, `expired`.
+- `page_state_selectors`는 브라우저 페이지 상태 산출용 DOM selector 계약이다. `loginUrl`/`authenticatedWhen.selector`/`flags.*` 같은 비밀이 아닌 메타만 허용하며, 쿠키·토큰·비밀번호·OTP 등 Secret 값은 절대 저장하지 않는다. 수정 시 서버가 `parseSitePageStateConfig`로 닫힌 flag 레지스트리를 검증해 잘못된 selector 계약을 저장 전에 거부한다.
+- `site_element_repository`는 Browser RPA V2의 Object Repository v1이다. 범위는 DOM-backed browser selectors로 한정하며, desktop UIA/Win32/Citrix/vision 객체 저장소가 아니다. `selector`와 `sample_url`은 비밀이 아닌 메타데이터만 허용하고 cookie/token/password/OTP 값은 저장하지 않는다. 시나리오 실행 중 동적 IR selector 치환은 v1 성공 경로가 아니며, 콘솔 작성/유지보수 표면에서 같은 `element_key`의 selector를 한 곳에서 관리하는 것이 P1 범위다. 단, Browser Recorder 완료 시에는 녹화 이벤트의 `element_key`가 저장소에 존재하면 해당 저장소 selector를 draft IR에 정적 스냅샷으로 반영하고, 없으면 녹화 이벤트 selector로 fallback한다. selector probe는 실제 브라우저 probe 포트가 연결된 경우에만 DOM 매칭을 수행하며, 포트가 없거나 `sample_url`이 없으면 `not_run`으로 명시한다.
+- `browser_recording_sessions`/`browser_recording_events`는 Browser Recorder v1이다. 범위는 DOM 이벤트 메타 녹화이며 desktop/vision/attended 녹화가 아니다. 입력 이벤트는 원문 값을 저장하지 않고 `value_preview`만 허용한다. 서버는 `value`, `password`, `token`, `cookie`, `secret`, `otp`, `mfa` 같은 민감 필드명을 요청 본문에서 거부한다. 완료 시 생성되는 `draft_ir`은 운영자가 검토·수정할 초안이며, 자동 prod 승격이나 런타임 브라우저 확장 배포까지 포함하지 않는다. 완료 응답의 `validation_report`는 저장 전 시나리오와 같은 schema/static compile pipeline 결과이며, `errors`가 있으면 UI는 초안 저장/실행 전 수정 필요로 표시해야 한다. v1의 실브라우저 기록은 운영자 PC의 로컬 에이전트(`app record:browser`)가 대상 페이지 DOM 이벤트를 수집해 위 append API로 전송하는 방식이다. Bearer 토큰은 에이전트 프로세스의 Node fetch에만 사용하며 대상 페이지 스크립트에는 주입하지 않는다.
 
 ### 결재(approval) 명령 — 하이웍스 결재 인박스(Model A)
 
@@ -243,7 +340,34 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 
 ---
 
-## 8. 엔드포인트 ↔ 상태/이벤트 정합 요약
+## 8. Connector & Template Catalog (커넥터/템플릿 카탈로그)
+
+| Method | Path | 요청 요약 | 응답 요약 | 주요 ErrorCode |
+|---|---|---|---|---|
+| GET | `/v1/connectors` | 쿼리: `?kind=browser\|api\|file\|notification\|data&status=available\|candidate\|requires_admin\|blocked&limit=&cursor=`. 조회 권한(`connector.read`) 필요 | 200 + `{ items, next_cursor }`. 항목은 `connector_id`, `name`, `kind`, `category`, `status`, `priority`, `summary`, `best_for`, `supported_actions`, `template_ids`, `required_rbac_actions`, `required_secret_refs`, `allowed_domains`, `manifest_permissions`, `implementation_state`, `security_notes`, `created_at`, `updated_at` 포함 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
+| GET | `/v1/templates` | 쿼리: `?connector_id=&kind=browser_workflow\|api_workflow\|file_workflow\|notification_workflow&status=...&limit=&cursor=`. 조회 권한(`connector.read`) 필요 | 200 + `{ items, next_cursor }`. 항목은 `template_id`, `connector_id`, `name`, `kind`, `status`, `priority`, `summary`, `best_for`, `required_params`, `required_secret_refs`, `produced_ir_pattern`, `success_criteria`, `created_at`, `updated_at` 포함 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
+
+- 본 카탈로그는 브라우저 기반 RPA 도입 검토와 템플릿 선택을 위한 read-only surface다. 실제 enable/install, profile/target 생성, 외부 API 실행은 별도 보안 경계와 후속 계약이 필요하다.
+- `required_secret_refs`와 `manifest_permissions.secret_refs`는 SecretRef namespace 또는 pattern만 노출한다. 평문 token/password/cookie/header 값은 API 응답, audit payload, template payload에 들어가면 안 된다.
+- `status=requires_admin` 항목은 `connector.enable` 또는 runtime capability가 필요함을 뜻한다. 조회는 viewer+가 가능하지만 enable/install은 기존 admin-only `connector.enable` 및 `CONNECTOR_PERMISSION_DENIED` 경계를 유지한다.
+- desktop/attended client 자동화는 본 범위가 아니다. `blocked` 항목은 브라우저 전용 scope에서 실행 surface가 없음을 명시하기 위한 제품/로드맵 신호다.
+
+---
+
+## 9. Audit Log Explorer (감사로그 조회)
+
+| Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
+|---|---|---|---|---|
+| GET | `/v1/audit-log` | 쿼리: `?action=&outcome=allow\|deny\|blocked\|error&actor=&correlation_id=&limit=&cursor=`. 조회 권한(`audit.read`) 필요 | 200 + `{ items, next_cursor }`. 항목은 `audit_id`, `sequence_no`, `actor(subject_id, roles)`, `action`, `outcome`, `reason`, `correlation_id`, `idempotency_key`, `occurred_at`, `payload_schema_ref`, `retention_until`, `legal_hold`, `previous_hash`, `hash`, `created_at`만 포함. `payload` 본문은 의도적으로 미노출 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
+| GET | `/v1/audit-log/export` | 쿼리: list와 동일 + optional `format=csv`(기본 csv). 조회 권한(`audit.read`) 필요 | 200 `text/csv`. CSV 컬럼은 list 항목과 동일한 비민감 요약 필드만 포함하며 `payload` 본문은 미노출 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422; `invalid_export_format`) |
+
+- `audit_log`는 PostgreSQL append-only/hash-chain 권위 저장소이며 조회 API는 변이 동작을 제공하지 않는다.
+- 조회는 `withTenantTx`/RLS로 tenant scope를 강제한다. 타 tenant 행은 목록에 나타나지 않는다.
+- `payload` 본문은 보안 경계 판단의 내부 근거일 수 있어 콘솔/API에서 직접 노출하지 않는다. 운영자 검토 표면은 actor/action/outcome/reason/correlation/hash-chain 요약만 사용한다.
+
+---
+
+## 10. 엔드포인트 ↔ 상태/이벤트 정합 요약
 
 | 명령 엔드포인트 | 상태 전이(state-machine) | emit 이벤트(event-envelope) | UI 문구 |
 |---|---|---|---|
@@ -258,7 +382,7 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 
 ---
 
-## 9. D1 위임 (본 문서가 고정하지 않는 것)
+## 11. D1 위임 (본 문서가 고정하지 않는 것)
 - 전체 OpenAPI 본문: 요청/응답 **스키마 본문**(필드 타입·required·examples), 파라미터 상세, `details` 페이로드 구조 — D1 codegen이 본 envelope/error-catalog/schema 기반으로 생성.
 - [해소 v1.5] run 외 엔티티 미존재 → `RESOURCE_NOT_FOUND`(404) 신설. 일반 RBAC 거부 → `AUTHZ_FORBIDDEN`(403) 신설(auth-rbac.md). 자원특정 거부(시크릿/artifact→`SECRET_ACCESS_DENIED`, 커넥터→`CONNECTOR_PERMISSION_DENIED`, 사이트 런타임 차단→`SITE_PROFILE_BLOCKED`)는 유지.
 - RBAC 역할·권한 매트릭스: `auth-rbac.md`. gateway policy 버전 컬럼: `db/migration_core_entities.sql` `gateway_policies.version`. 전체 OpenAPI 본문(스키마/파라미터/details)은 D1 codegen 위임.

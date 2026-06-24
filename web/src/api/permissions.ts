@@ -5,6 +5,8 @@ import { RBAC_ROLE_ACTIONS, RBAC_ROLE_LABELS } from "../../../ts/rbac-policy";
 // is still authoritative, but the console now reads the same RBAC matrix source.
 export const ROLE_LABELS: Readonly<Record<string, string>> = RBAC_ROLE_LABELS;
 
+const DEFAULT_ROLES_CLAIM = "roles";
+
 export function decodeRoles(token: string | null): string[] {
   if (token === null || token === "") return [];
   const payloadPart = token.split(".")[1];
@@ -12,11 +14,63 @@ export function decodeRoles(token: string | null): string[] {
   try {
     const b64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
     const padded = b64.length % 4 === 0 ? b64 : b64 + "=".repeat(4 - (b64.length % 4));
-    const payload = JSON.parse(atob(padded)) as { roles?: unknown };
-    return Array.isArray(payload.roles) ? payload.roles.filter((r): r is string => typeof r === "string") : [];
+    const payload = JSON.parse(atob(padded)) as Record<string, unknown>;
+    const rawRoles = readClaim(payload, rolesClaimPath());
+    const values = Array.isArray(rawRoles)
+      ? rawRoles
+      : typeof rawRoles === "string" && rawRoles.length > 0
+        ? [rawRoles]
+        : [];
+    const roleMap = parseRoleMap();
+    const roles: string[] = [];
+    const seen = new Set<string>();
+    for (const value of values) {
+      if (typeof value !== "string" || value.length === 0) continue;
+      const mapped = roleMap[value] ?? value;
+      if (!seen.has(mapped)) {
+        seen.add(mapped);
+        roles.push(mapped);
+      }
+    }
+    return roles;
   } catch {
     return [];
   }
+}
+
+function rolesClaimPath(): string {
+  const configured = import.meta.env.VITE_JWT_ROLES_CLAIM;
+  return typeof configured === "string" && configured.trim().length > 0 ? configured.trim() : DEFAULT_ROLES_CLAIM;
+}
+
+function parseRoleMap(): Readonly<Record<string, string>> {
+  const raw = import.meta.env.VITE_JWT_ROLE_MAP;
+  if (typeof raw !== "string" || raw.trim().length === 0) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (key.length > 0 && typeof value === "string" && value.length > 0) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function readClaim(payload: Readonly<Record<string, unknown>>, claimPath: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(payload, claimPath)) return payload[claimPath];
+  const parts = claimPath.split(".");
+  if (parts.length <= 1 || parts.some((part) => part.length === 0)) return undefined;
+  let current: unknown = payload;
+  for (const part of parts) {
+    if (typeof current !== "object" || current === null || Array.isArray(current)) return undefined;
+    const record = current as Readonly<Record<string, unknown>>;
+    if (!Object.prototype.hasOwnProperty.call(record, part)) return undefined;
+    current = record[part];
+  }
+  return current;
 }
 
 export function rolesCan(roles: readonly string[], action: string): boolean {

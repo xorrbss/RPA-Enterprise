@@ -53,7 +53,7 @@ export async function runIdempotentCommand(
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "missing_idempotency_key", header: "Idempotency-Key" });
   }
 
-  const requestHash = canonicalRequestHash("POST", path, request.body ?? null);
+  const requestHash = canonicalRequestHash(request.method, path, request.body ?? null);
   const reservation = await deps.idempotency.reserve({
     tenantId: principal.tenantId,
     endpoint,

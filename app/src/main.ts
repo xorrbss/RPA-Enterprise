@@ -40,6 +40,7 @@ import { PgPrincipalDirectory } from "./api/principal-directory";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
 import { BufferedScenarioGenerationArtifactSink } from "./api/scenario-generation-artifacts";
+import { PuppeteerSelectorProbeProvider } from "./api/selector-probe-provider";
 import {
   PgScenarioGenerationLlmCallIdempotencyStore,
   type ScenarioGenerationLlmCallCleanup,
@@ -182,11 +183,37 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
     ? buildScenarioGenerationPlannerBinding(pool, scenarioGenerationLlmV1, securityAudit)
     : undefined;
   const artifactObjectReader = await buildApiArtifactObjectReader(cfg);
+  const selectorProbe = cfg.selectorProbe !== undefined
+    ? new PuppeteerSelectorProbeProvider({
+        chromeExecutablePath: cfg.selectorProbe.chromeExecutablePath,
+        headless: cfg.selectorProbe.headless,
+        timeoutMs: cfg.selectorProbe.timeoutMs,
+      })
+    : undefined;
   // 세션 캡처 봉투암호화 스토어 — KEK(api/browser_session) 프로비저닝 시에만 활성(미설정 → undefined → 엔드포인트 미등록, fail-closed).
   const sessionStore = await buildApiSessionStore(pool, common);
   const api = buildServer({
     pool,
-    auth: new JwtAuthenticationBoundary(buildJwtVerifier(cfg.jwt)),
+    auth: new JwtAuthenticationBoundary(buildJwtVerifier(cfg.jwt), {
+      claimMapping: cfg.jwt.claimMapping,
+      roleMap: cfg.jwt.roleMap,
+    }),
+    authReadiness: cfg.jwt.mode === "jwks"
+      ? {
+          mode: "jwks",
+          configurationSource: "deployment_config",
+          jwksUrl: cfg.jwt.jwksUrl,
+          claimMapping: cfg.jwt.claimMapping,
+          roleMap: cfg.jwt.roleMap,
+          ...(cfg.jwt.issuer !== undefined ? { issuer: cfg.jwt.issuer } : {}),
+          ...(cfg.jwt.audience !== undefined ? { audience: cfg.jwt.audience } : {}),
+        }
+      : {
+          mode: "hs256",
+          configurationSource: "deployment_config",
+          claimMapping: cfg.jwt.claimMapping,
+          roleMap: cfg.jwt.roleMap,
+        },
     rbac: new RoleMatrixRbacMiddleware(),
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: new PgGraphileRunEnqueuer(),
@@ -201,6 +228,7 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
         }
       : {}),
     security: { corsOrigins: cfg.corsOrigins, hsts: cfg.hsts },
+    ...(selectorProbe !== undefined ? { selectorProbe } : {}),
     ...(artifactObjectReader !== undefined
       ? {
           artifactStore: artifactObjectReader,
@@ -218,6 +246,7 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
     signedCommandRegistryMode: cfg.signedCommandRegistry.mode,
     scenarioGenerationLlmV1Enabled: scenarioGenerationLlmV1 !== undefined,
     sessionCapture: sessionStore !== undefined,
+    selectorProbe: selectorProbe !== undefined,
   }));
   return api;
 }

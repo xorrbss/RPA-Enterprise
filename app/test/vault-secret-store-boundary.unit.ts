@@ -103,6 +103,7 @@ function makeBoundary(store: SecretStore, audit: DurableSecurityAuditDecisionWri
 const ALLOW_PAIRS: ReadonlyArray<[RuntimeIdentity, SecretAccessRequest["purpose"]]> = [
   ["api", "resume_token_hmac"],
   ["api", "browser_session"],
+  ["api", "connector"],
   ["runtime-worker", "resume_token_hmac"],
   ["runtime-worker", "executor"],
   ["runtime-worker", "browser_session"],

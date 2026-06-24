@@ -74,7 +74,7 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
     expect(await axe(document.body, AXE_OPTS)).toHaveNoViolations();
   });
 
-  for (const view of ["workitems", "humanTasks", "runTrace", "security", "scenarioStudio", "playground", "approvalInbox"] as ViewKey[]) {
+  for (const view of ["automationOps", "documentIdp", "coePipeline", "connectorCatalog", "objectRepository", "auditExplorer", "workitems", "humanTasks", "runTrace", "security", "scenarioStudio", "playground", "approvalInbox"] as ViewKey[]) {
     test(`${view} 뷰 axe 위반 없음`, async () => {
       renderApp();
       navigate(view);
@@ -90,11 +90,11 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
   test("실행 상세 단계 트레이스(카드+표) axe 위반 없음", async () => {
     renderApp();
     location.hash = "#runTrace";
-    (await screen.findByRole("button", { name: "상세" })).click();
+    (await screen.findByRole("button", { name: "실행 추적 상세 보기" })).click();
     await screen.findByRole("button", { name: "카드" }); // 카드 보기 마운트 대기
     expect(await axe(document.body, AXE_OPTS)).toHaveNoViolations();
     (await screen.findByRole("button", { name: "표" })).click();
-    await waitFor(() => expect(screen.getByText("AI(모델·출력토큰)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("AI 판단")).toBeInTheDocument());
     expect(await axe(document.body, AXE_OPTS)).toHaveNoViolations();
   });
 });

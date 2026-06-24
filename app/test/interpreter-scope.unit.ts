@@ -48,10 +48,29 @@ let extractRows = 0;
 function extractResult(rowCount: number): StepResult {
   return { ...stepResult("success"), action: "extract", output: { rowCount }, artifacts: ["art://out"] as StepResult["artifacts"] };
 }
+function apiCallResult(): StepResult {
+  return {
+    ...stepResult("success"),
+    action: "api_call",
+    output: {
+      status: 202,
+      ok: true,
+      contentType: "application/json",
+      finalUrl: "https://api.example.com/status",
+      redirected: false,
+      body: { accepted: true },
+      bodyTruncated: false,
+    },
+  };
+}
 const fakeExecutor: ExecutorPlugin = {
   capabilities: () => ({ dom: false, vision: false, utility: true }),
   execute: async (_stepId, action) =>
-    (action as { type?: string }).type === "extract" ? extractResult(extractRows) : stepResult("success"),
+    (action as { type?: string }).type === "extract"
+      ? extractResult(extractRows)
+      : (action as { type?: string }).type === "api_call"
+        ? apiCallResult()
+        : stepResult("success"),
   verify: async (): Promise<VerifyResult> => ({ passed: true, criteria: [] }) as unknown as VerifyResult,
 };
 const cannedPageState: PageState = {
@@ -120,6 +139,20 @@ async function main(): Promise<void> {
   check("node.grab.status == 'success' 매칭 → ok", (await run(nodeStatusScenario)) === "success");
 
   // 3) 부재 노드 참조 → IREL_RUNTIME_MISSING (node-missing 경로).
+  const httpStatusScenario: CompiledScenario = {
+    start: "call",
+    nodes: {
+      call: { what: [{ type: "api_call" }], flow: { kind: "next", target: "check" } },
+      check: onNode([
+        { when: ast("node.call.http_status == 202 && node.call.http_ok"), target: "accepted", priority: 2 },
+        { when: ast("node.call.http_status >= 500"), target: "failed", priority: 1 },
+      ]),
+      accepted: term("success"),
+      failed: term("fail_system"),
+    },
+  };
+  check("node.call.http_status/http_ok 분기 -> accepted", (await run(httpStatusScenario)) === "success");
+
   const missingScenario: CompiledScenario = {
     start: "check",
     nodes: {

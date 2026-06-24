@@ -1,4 +1,6 @@
 // reads.ts 에서 추출 — run 조회 라우트(list/summary/steps/artifacts, 동작 무변경, api-surface §1·§5).
+import { Readable } from "node:stream";
+
 import type { FastifyInstance } from "fastify";
 
 import type { RunState } from "../../../ts/state-machine-types";
@@ -39,6 +41,16 @@ interface RunStepRow {
   cursor_at: string; // created_at::text(전정밀도) — keyset 커서 전용(PAG-01)
   stagehand_calls: unknown; // LATERAL json_agg(StagehandSummary[])
 }
+
+interface RunStepStreamSnapshot {
+  readonly status: string | null;
+  readonly step_count: number;
+  readonly last_step_at: string | null;
+  readonly run_updated_at: string | null;
+}
+
+const RUN_STEP_STREAM_POLL_MS = 1_000;
+const RUN_STEP_STREAM_TERMINAL = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
 
 // run_steps.exception(jsonb)에서 분류만 노출 — message(RedactedString)·evidenceRefs는 평문/증빙이라 미노출(평문 차단).
 function stepExceptionSummary(ex: { class?: unknown; code?: unknown } | null): { class: string; code: string } | null {
@@ -260,6 +272,107 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
   //   media hints만 노출하고 content 본문·object_ref·sha256(원본 무결성 해시=fingerprint)은 미노출. 본문 열람은 GET /v1/artifacts/{id}(§10 audit 게이트). 목록은
   //   content를 read하지 않아 disclosure 경로 아님 → audit 불요. RLS artifacts_visible_isolation이 가시성(redacted/
   //   not_required·미삭제·비격리·동tenant) 강제. artifact.read RBAC(deny→SECRET_ACCESS_DENIED).
+  app.get<{ Params: { id: string } }>(
+    "/v1/runs/:id/steps/stream",
+    { config: { rbacAction: "run.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const runId = request.params.id;
+      if (!UUID_RE.test(runId)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+
+      const stream = new Readable({ read() {} });
+      let closed = false;
+      let lastSignature: string | null = null;
+      let timer: ReturnType<typeof setInterval> | null = null;
+
+      function pushEvent(event: string, data: unknown): void {
+        if (closed) return;
+        stream.push(`event: ${event}\n`);
+        stream.push(`data: ${JSON.stringify(data)}\n\n`);
+      }
+
+      function closeStream(): void {
+        if (closed) return;
+        closed = true;
+        if (timer !== null) clearInterval(timer);
+        stream.push(null);
+      }
+      stream.on("close", () => {
+        closed = true;
+        if (timer !== null) clearInterval(timer);
+      });
+
+      async function snapshot(): Promise<RunStepStreamSnapshot> {
+        return withTenantTx(deps.pool, principal.tenantId, async (c) => {
+          const result = await c.query<{
+            status: string | null;
+            step_count: string;
+            last_step_at: string | null;
+            run_updated_at: string | null;
+          }>(
+            `SELECT r.status::text AS status,
+                    count(s.id)::text AS step_count,
+                    max(s.created_at)::text AS last_step_at,
+                    r.updated_at::text AS run_updated_at
+               FROM runs r
+               LEFT JOIN run_steps s ON s.tenant_id = r.tenant_id AND s.run_id = r.id
+              WHERE r.tenant_id = $1::uuid AND r.id = $2::uuid
+              GROUP BY r.status, r.updated_at`,
+            [principal.tenantId, runId],
+          );
+          const row = result.rows[0];
+          if (row === undefined) return { status: null, step_count: 0, last_step_at: null, run_updated_at: null };
+          return {
+            status: row.status,
+            step_count: Number(row.step_count),
+            last_step_at: row.last_step_at,
+            run_updated_at: row.run_updated_at,
+          };
+        });
+      }
+
+      async function tick(): Promise<void> {
+        if (closed) return;
+        try {
+          const next = await snapshot();
+          const signature = `${next.status ?? "missing"}:${next.step_count}:${next.last_step_at ?? ""}:${next.run_updated_at ?? ""}`;
+          if (signature !== lastSignature) {
+            lastSignature = signature;
+            pushEvent("run_steps_changed", {
+              run_id: runId,
+              status: next.status,
+              step_count: next.step_count,
+              last_step_at: next.last_step_at,
+              run_updated_at: next.run_updated_at,
+            });
+          }
+          if (next.status === null || RUN_STEP_STREAM_TERMINAL.has(next.status)) {
+            pushEvent("run_steps_closed", { run_id: runId, status: next.status });
+            closeStream();
+          }
+        } catch (err) {
+          request.log.warn({ err, run_id: runId, correlation_id: request.correlationId }, "run steps stream failed");
+          pushEvent("run_steps_error", { run_id: runId });
+          closeStream();
+        }
+      }
+
+      stream.push(`retry: ${RUN_STEP_STREAM_POLL_MS}\n\n`);
+      reply
+        .code(200)
+        .header("Content-Type", "text/event-stream; charset=utf-8")
+        .header("Cache-Control", "no-cache, no-transform")
+        .header("Connection", "keep-alive")
+        .send(stream);
+      await tick();
+      if (!closed) {
+        timer = setInterval(() => void tick(), RUN_STEP_STREAM_POLL_MS);
+      }
+    },
+  );
+
   app.get<{ Params: { id: string } }>(
     "/v1/runs/:id/artifacts",
     { config: { rbacAction: "artifact.read" } },

@@ -153,6 +153,40 @@ async function main(): Promise<void> {
     check("deps.secrets+principal: 자격증명 fill principal.tenantId=run 테넌트(per-run override)·평문 fill", capturedTenant === "RUN-TENANT" && filled === "pw-plain", `tenant=${capturedTenant} filled=${filled}`);
   }
 
+  // 6) HTTP api_call utility wiring: fetch + connector-runtime principal + purpose=connector SecretRef resolution.
+  {
+    let capturedTenant: string | undefined;
+    let capturedIdentity: unknown;
+    let capturedPurpose: string | undefined;
+    let authHeader = "";
+    const fakeSecrets = {
+      resolveAuthorized: async (req: { principal: { tenantId: string; claims: Record<string, unknown> }; purpose: string }) => {
+        capturedTenant = req.principal.tenantId;
+        capturedIdentity = req.principal.claims.runtime_identity;
+        capturedPurpose = req.purpose;
+        return "http-token" as never;
+      },
+    } as unknown as SecretStoreBoundary;
+    const principalTemplate = { subjectId: "w", tenantId: "PLACEHOLDER", roles: ["admin"], source: "jwt", claims: { runtime_identity: "runtime-worker" } } as unknown as AuthenticatedPrincipal;
+    const gw: LlmGatewayCaller = { call: async () => ({ outputRef: "o", usage: { inputTokens: 1, outputTokens: 1, cost: 0 }, finishReason: "stop", parsedJson: { operation: "click" } }) as unknown as LLMResponse };
+    const httpFetch = async (_url: string, init: { headers: Record<string, string> }) => {
+      authHeader = init.headers.Authorization ?? "";
+      return { status: 200, ok: true, headers: { get: () => "application/json" }, text: async () => "{\"ok\":true}" };
+    };
+    const ex6 = createDomUtilityExecutorFactory(gw, policy, { secrets: fakeSecrets, executorPrincipal: principalTemplate, httpFetch })(
+      { forLease: () => fakeSession } as unknown as CdpSessionProvider,
+      { scenarioVersionId: "sv", browserIdentityVersion: 1, tenantId: "RUN-TENANT" },
+    );
+    const r = await ex6.execute(
+      "n.4",
+      { type: "api_call", method: "GET", url: "https://api.example.com/status", auth: { type: "secret_ref_bearer", secret_ref: "secret://prod/connector/http-api/token" } },
+      { ...ctx(), networkAllowedDomains: ["api.example.com"] },
+    );
+    check("deps.httpFetch: api_call routed through utility", r.status === "success" && r.action === "api_call", JSON.stringify(r));
+    check("deps.httpFetch: connector principal injected", capturedTenant === "RUN-TENANT" && capturedIdentity === "connector-runtime" && capturedPurpose === "connector", `${capturedTenant}/${String(capturedIdentity)}/${capturedPurpose}`);
+    check("deps.httpFetch: SecretRef bearer Authorization sent", authHeader === "Bearer http-token", authHeader);
+  }
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);

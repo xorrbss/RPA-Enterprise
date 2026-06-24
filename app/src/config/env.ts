@@ -9,6 +9,7 @@
  */
 import { resolve } from "node:path";
 
+import { DEFAULT_JWT_CLAIM_MAPPING, type JwtClaimMapping, type JwtRoleMap } from "../api/auth";
 import {
   assertHttpsUrl,
   bool,
@@ -114,8 +115,13 @@ function buildPgConnString(): string {
  * the algorithm/issuer/JWKS endpoint are deploy-config (auth-rbac.md fixes only the claims, not the algorithm).
  */
 export type ApiJwtConfig =
-  | { readonly mode: "hs256"; readonly secret: string }
-  | { readonly mode: "jwks"; readonly jwksUrl: string; readonly issuer?: string; readonly audience?: string };
+  | ({ readonly mode: "hs256"; readonly secret: string } & ApiJwtCommonConfig)
+  | ({ readonly mode: "jwks"; readonly jwksUrl: string; readonly issuer?: string; readonly audience?: string } & ApiJwtCommonConfig);
+
+interface ApiJwtCommonConfig {
+  readonly claimMapping: JwtClaimMapping;
+  readonly roleMap: JwtRoleMap;
+}
 
 export interface ApiConfig {
   readonly port: number;
@@ -132,6 +138,12 @@ export interface ApiConfig {
   readonly artifactObjectStore?: ApiArtifactObjectStoreConfig;
   /** Enables natural-language scenario generation to request run-level masked WebM capture. */
   readonly videoRecordingEnabled: boolean;
+  /** Optional live browser selector probe for Object Repository validation. */
+  readonly selectorProbe?: {
+    readonly chromeExecutablePath: string;
+    readonly headless: boolean;
+    readonly timeoutMs: number;
+  };
 }
 
 export interface ApiArtifactObjectStoreConfig {
@@ -141,6 +153,8 @@ export interface ApiArtifactObjectStoreConfig {
 }
 
 function loadApiJwtConfig(): ApiJwtConfig {
+  const claimMapping = loadJwtClaimMapping();
+  const roleMap = loadJwtRoleMap();
   const jwksUrl = opt("JWKS_URL");
   if (jwksUrl !== undefined) {
     // RS256/JWKS mode: https-forced (IdP keys must not be fetched over cleartext).
@@ -149,6 +163,8 @@ function loadApiJwtConfig(): ApiJwtConfig {
     return {
       mode: "jwks",
       jwksUrl: assertHttpsUrl("JWKS_URL", jwksUrl),
+      claimMapping,
+      roleMap,
       ...(issuer !== undefined ? { issuer } : {}),
       ...(audience !== undefined ? { audience } : {}),
     };
@@ -159,7 +175,45 @@ function loadApiJwtConfig(): ApiJwtConfig {
   if (secret.length < 32) {
     throw new Error("JWT_HS256_SECRET must be at least 32 characters (HS256 key strength)");
   }
-  return { mode: "hs256", secret };
+  return { mode: "hs256", secret, claimMapping, roleMap };
+}
+
+function loadJwtClaimMapping(): JwtClaimMapping {
+  return {
+    subjectClaim: opt("JWT_SUBJECT_CLAIM") ?? DEFAULT_JWT_CLAIM_MAPPING.subjectClaim,
+    tenantClaim: opt("JWT_TENANT_CLAIM") ?? DEFAULT_JWT_CLAIM_MAPPING.tenantClaim,
+    rolesClaim: opt("JWT_ROLES_CLAIM") ?? DEFAULT_JWT_CLAIM_MAPPING.rolesClaim,
+    expiryClaim: DEFAULT_JWT_CLAIM_MAPPING.expiryClaim,
+    displayNameClaim: opt("JWT_DISPLAY_NAME_CLAIM") ?? DEFAULT_JWT_CLAIM_MAPPING.displayNameClaim,
+    emailClaim: opt("JWT_EMAIL_CLAIM") ?? DEFAULT_JWT_CLAIM_MAPPING.emailClaim,
+  };
+}
+
+const API_JWT_ROLES: ReadonlySet<string> = new Set(["viewer", "operator", "reviewer", "approver", "admin"]);
+
+function loadJwtRoleMap(): JwtRoleMap {
+  const raw = opt("JWT_ROLE_MAP");
+  if (raw === undefined) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("JWT_ROLE_MAP must be a JSON object mapping IdP role/group values to RPA roles");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("JWT_ROLE_MAP must be a JSON object mapping IdP role/group values to RPA roles");
+  }
+  const out: Record<string, JwtRoleMap[string]> = {};
+  for (const [source, target] of Object.entries(parsed as Record<string, unknown>)) {
+    if (source.trim().length === 0) {
+      throw new Error("JWT_ROLE_MAP must not contain empty IdP role keys");
+    }
+    if (typeof target !== "string" || !API_JWT_ROLES.has(target)) {
+      throw new Error(`JWT_ROLE_MAP target for ${JSON.stringify(source)} must be one of viewer|operator|reviewer|approver|admin`);
+    }
+    out[source] = target as JwtRoleMap[string];
+  }
+  return out;
 }
 
 function loadSignedCommandRegistryConfig(common: CommonConfig): ApiConfig["signedCommandRegistry"] {
@@ -181,6 +235,7 @@ export function loadApiConfig(common: CommonConfig, options: { readonly runMode?
   const origins = opt("CORS_ORIGINS");
   const videoRecordingEnabled = strictBool("VISUAL_EVIDENCE_VIDEO_ENABLED", false);
   const artifactObjectStore = loadApiArtifactObjectStoreConfig();
+  const selectorProbe = loadSelectorProbeConfig();
   if (videoRecordingEnabled) {
     req("VISUAL_EVIDENCE_FFMPEG_PATH");
     if (options.runMode === "api" && !strictBool("VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED", false)) {
@@ -198,6 +253,18 @@ export function loadApiConfig(common: CommonConfig, options: { readonly runMode?
     artifactDir: resolveApiArtifactDir(),
     ...(artifactObjectStore !== undefined ? { artifactObjectStore } : {}),
     videoRecordingEnabled,
+    ...(selectorProbe !== undefined ? { selectorProbe } : {}),
+  };
+}
+
+function loadSelectorProbeConfig(): ApiConfig["selectorProbe"] {
+  const chromeExecutablePath = opt("SELECTOR_PROBE_CHROME_EXECUTABLE_PATH") ?? opt("CHROME_EXECUTABLE_PATH");
+  if (chromeExecutablePath === undefined) return undefined;
+  const timeoutMs = positiveInt("SELECTOR_PROBE_TIMEOUT_MS", 15_000);
+  return {
+    chromeExecutablePath,
+    headless: bool("SELECTOR_PROBE_HEADLESS", true),
+    timeoutMs,
   };
 }
 

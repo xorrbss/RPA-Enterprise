@@ -151,6 +151,13 @@ async function main(): Promise<void> {
           headers: { authorization: `Bearer ${token}`, ...(key !== undefined ? { "idempotency-key": key } : {}) },
           payload: body ?? {},
         });
+      const patchPageState = (token: string, id: string, key?: string, body?: unknown) =>
+        app.inject({
+          method: "PATCH",
+          url: `/v1/sites/${id}/page-state`,
+          headers: { authorization: `Bearer ${token}`, ...(key !== undefined ? { "idempotency-key": key } : {}) },
+          payload: body ?? {},
+        });
 
       // 1) operator 생성(green + selectors) → 201 + DB 행
       const ok = await post(operator, "k-create-1", {
@@ -278,6 +285,35 @@ async function main(): Promise<void> {
       const renCross = await patch(operatorB, hiId, "k-ren-cross", { name: "stolen" });
       check("cross-tenant rename → 404", renCross.statusCode === 404, renCross.body);
       check("cross-tenant 거부: A 이름 불변", (await sitesOf(pool, TENANT_A)).some((r) => r.id === hiId && r.name === "하이웍스-수정"));
+
+      // 10) PATCH /v1/sites/{id}/page-state — selector 계약 수정/해제
+      const nextSelectors = {
+        loginUrl: "https://login.office.hiworks.com/signin",
+        authenticatedWhen: { selector: ".profile-menu" },
+        flags: { blocked: { kind: "present", selector: ".blocked" } },
+      };
+      const ps = await patchPageState(operator, hiId, "k-ps-1", { page_state_selectors: nextSelectors });
+      check("page-state update → 200", ps.statusCode === 200, ps.body);
+      check("page-state body: summary configured + flag_count=1", ps.json().page_state_summary.configured === true && ps.json().page_state_summary.flag_count === 1, ps.body);
+      const hiAfterPs = (await sitesOf(pool, TENANT_A)).find((r) => r.id === hiId);
+      check("DB: page_state_selectors 갱신 + parse 가능", hiAfterPs !== undefined && parseSitePageStateConfig(hiAfterPs.page_state_selectors).flags.blocked?.kind === "present");
+
+      const psReplay = await patchPageState(operator, hiId, "k-ps-1", { page_state_selectors: nextSelectors });
+      check("page-state replay → 200 동일", psReplay.statusCode === 200 && psReplay.json().page_state_summary.flag_count === 1, psReplay.body);
+
+      const psBad = await patchPageState(operator, hiId, "k-ps-bad", { page_state_selectors: { flags: { cursor_reached: { kind: "present", selector: ".cursor" } } } });
+      check("page-state invalid flag(cursor_reached) → 422", psBad.statusCode === 422 && psBad.json().code === "IR_SCHEMA_INVALID", psBad.body);
+
+      const psViewer = await patchPageState(viewer, hiId, "k-ps-viewer", { page_state_selectors: nextSelectors });
+      check("viewer page-state update → 403 AUTHZ_FORBIDDEN", psViewer.statusCode === 403 && psViewer.json().code === "AUTHZ_FORBIDDEN", psViewer.body);
+
+      const psCross = await patchPageState(operatorB, hiId, "k-ps-cross", { page_state_selectors: nextSelectors });
+      check("cross-tenant page-state update → 404", psCross.statusCode === 404, psCross.body);
+
+      const psClear = await patchPageState(operator, hiId, "k-ps-clear", { page_state_selectors: null });
+      check("page-state clear(null) → 200 configured=false", psClear.statusCode === 200 && psClear.json().page_state_summary.configured === false, psClear.body);
+      const hiCleared = (await sitesOf(pool, TENANT_A)).find((r) => r.id === hiId);
+      check("DB: page_state_selectors null로 해제", hiCleared?.page_state_selectors === null);
     } finally {
       await app.close();
     }

@@ -24,8 +24,86 @@ import type {
 const ROLES: ReadonlySet<string> = new Set<Role>(["viewer", "operator", "reviewer", "approver", "admin"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export interface JwtClaimMapping {
+  readonly subjectClaim: string;
+  readonly tenantClaim: string;
+  readonly rolesClaim: string;
+  readonly expiryClaim: string;
+  readonly displayNameClaim: string;
+  readonly emailClaim: string;
+}
+
+export const DEFAULT_JWT_CLAIM_MAPPING: JwtClaimMapping = {
+  subjectClaim: "sub",
+  tenantClaim: "tenant_id",
+  rolesClaim: "roles",
+  expiryClaim: "exp",
+  displayNameClaim: "name",
+  emailClaim: "email",
+};
+
+export type JwtRoleMap = Readonly<Record<string, Role>>;
+
+export interface JwtAuthenticationBoundaryOptions {
+  readonly claimMapping?: Partial<JwtClaimMapping>;
+  readonly roleMap?: JwtRoleMap;
+}
+
 function isRole(value: unknown): value is Role {
   return typeof value === "string" && ROLES.has(value);
+}
+
+export function normalizeJwtClaimMapping(mapping: Partial<JwtClaimMapping> | undefined): JwtClaimMapping {
+  return {
+    subjectClaim: nonEmptyClaimPath(mapping?.subjectClaim, DEFAULT_JWT_CLAIM_MAPPING.subjectClaim),
+    tenantClaim: nonEmptyClaimPath(mapping?.tenantClaim, DEFAULT_JWT_CLAIM_MAPPING.tenantClaim),
+    rolesClaim: nonEmptyClaimPath(mapping?.rolesClaim, DEFAULT_JWT_CLAIM_MAPPING.rolesClaim),
+    expiryClaim: nonEmptyClaimPath(mapping?.expiryClaim, DEFAULT_JWT_CLAIM_MAPPING.expiryClaim),
+    displayNameClaim: nonEmptyClaimPath(mapping?.displayNameClaim, DEFAULT_JWT_CLAIM_MAPPING.displayNameClaim),
+    emailClaim: nonEmptyClaimPath(mapping?.emailClaim, DEFAULT_JWT_CLAIM_MAPPING.emailClaim),
+  };
+}
+
+function nonEmptyClaimPath(value: string | undefined, fallback: string): string {
+  if (value === undefined) return fallback;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+}
+
+export function readJwtClaim(payload: Readonly<Record<string, unknown>>, claimPath: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(payload, claimPath)) return payload[claimPath];
+  const parts = claimPath.split(".");
+  if (parts.length <= 1 || parts.some((part) => part.length === 0)) return undefined;
+  let current: unknown = payload;
+  for (const part of parts) {
+    if (typeof current !== "object" || current === null || Array.isArray(current)) return undefined;
+    const record = current as Readonly<Record<string, unknown>>;
+    if (!Object.prototype.hasOwnProperty.call(record, part)) return undefined;
+    current = record[part];
+  }
+  return current;
+}
+
+function normalizeRoles(rawRoles: unknown, roleMap: JwtRoleMap): Role[] | null {
+  const values = Array.isArray(rawRoles)
+    ? rawRoles
+    : typeof rawRoles === "string" && rawRoles.length > 0
+      ? [rawRoles]
+      : null;
+  if (values === null) return null;
+
+  const roles: Role[] = [];
+  const seen = new Set<Role>();
+  for (const raw of values) {
+    if (typeof raw !== "string" || raw.length === 0) return null;
+    const mapped = roleMap[raw] ?? raw;
+    if (!isRole(mapped)) return null;
+    if (!seen.has(mapped)) {
+      seen.add(mapped);
+      roles.push(mapped);
+    }
+  }
+  return roles;
 }
 
 /** 토큰 → 검증된 JWT 클레임. 실패(서명 무효/만료/형식 오류)는 throw(인증 미성립). */
@@ -71,7 +149,16 @@ export function jwksRs256Verifier(opts: JwksRs256VerifierOptions): JwtVerifier {
 }
 
 export class JwtAuthenticationBoundary implements AuthenticationBoundary {
-  constructor(private readonly verify: JwtVerifier) {}
+  private readonly claimMapping: JwtClaimMapping;
+  private readonly roleMap: JwtRoleMap;
+
+  constructor(
+    private readonly verify: JwtVerifier,
+    options: JwtAuthenticationBoundaryOptions = {},
+  ) {
+    this.claimMapping = normalizeJwtClaimMapping(options.claimMapping);
+    this.roleMap = options.roleMap ?? {};
+  }
 
   async authenticate(headers: Readonly<Record<string, string | undefined>>): Promise<AuthBoundaryResult> {
     const authorization = headers.authorization;
@@ -89,27 +176,29 @@ export class JwtAuthenticationBoundary implements AuthenticationBoundary {
       return { kind: "denied", code: "UNAUTHENTICATED", reason: "jwt_verification_failed" };
     }
 
-    const tenantClaim = payload.tenant_id;
+    const claims = payload as Readonly<Record<string, unknown>>;
+    const tenantClaim = readJwtClaim(claims, this.claimMapping.tenantClaim);
     if (typeof tenantClaim !== "string" || !UUID_RE.test(tenantClaim)) {
       // 인증은 성립했으나 tenant_id 클레임 부재/형식 무효 → 403(authz, auth-rbac §3). 조용한 통과 금지.
       return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "missing_or_invalid_tenant_claim" };
     }
 
-    if (!Array.isArray(payload.roles) || payload.roles.some((role) => !isRole(role))) {
+    const roles = normalizeRoles(readJwtClaim(claims, this.claimMapping.rolesClaim), this.roleMap);
+    if (roles === null) {
       return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "invalid_roles_claim" };
     }
-    const roles = payload.roles as Role[];
-    if (typeof payload.sub !== "string" || payload.sub.length === 0) {
+    const subjectClaim = readJwtClaim(claims, this.claimMapping.subjectClaim);
+    if (typeof subjectClaim !== "string" || subjectClaim.length === 0) {
       return { kind: "denied", code: "AUTHZ_FORBIDDEN", reason: "missing_or_invalid_subject_claim" };
     }
-    const subjectId = payload.sub as PrincipalId;
+    const subjectId = subjectClaim as PrincipalId;
 
     const principal: AuthenticatedPrincipal = {
       subjectId,
       tenantId: tenantClaim as TenantId,
       roles,
       source: "jwt",
-      claims: payload as Readonly<Record<string, unknown>>,
+      claims,
     };
     return { kind: "authenticated", principal };
   }

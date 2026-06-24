@@ -20,7 +20,7 @@ const queryClient = new QueryClient({
   mutationCache: new MutationCache({ onError: handleAuthError }),
 });
 
-// 실시간 갱신은 v1=outbox tail 폴링(architecture §6) — 각 read 쿼리가 refetchInterval로 주기 폴링.
+// Run Trace는 SSE 변경 신호를 우선 사용하고, 각 read 쿼리의 refetchInterval을 fallback으로 유지한다.
 const apiClient = createHttpApiClient({
   baseUrl: import.meta.env.VITE_API_BASE_URL ?? "/api",
   getToken: () => localStorage.getItem("rpa.token"),

@@ -38,8 +38,8 @@ export interface WorkitemItem {
   readonly run_id: string | null;
 }
 
-// mapHumanTask 실 투영과 1:1. on_timeout=human_tasks.on_timeout 실 컬럼(타임아웃 시 동작). payload(kind별 본문)는
-// inline 저장 부재(payload_ref만)라 v1 미포함(fabrication 회피).
+// mapHumanTask 실 투영과 1:1. on_timeout=human_tasks.on_timeout 실 컬럼(타임아웃 시 동작).
+// V2 검증 워크벤치용 payload/result_schema/artifact_refs/result를 포함하되 artifact 본문은 Artifacts API로 별도 조회한다.
 export interface HumanTaskItem {
   readonly human_task_id: string;
   readonly state: string;
@@ -48,6 +48,34 @@ export interface HumanTaskItem {
   readonly timeout: string | null;
   readonly on_timeout: string | null;
   readonly run_id: string | null;
+  readonly payload?: Record<string, unknown> | null;
+  readonly result_schema?: Record<string, unknown> | null;
+  readonly artifact_refs?: readonly string[];
+  readonly result?: HumanTaskResolution | null;
+}
+
+export interface HumanTaskResolution {
+  readonly decision: "approve" | "reject" | "correct" | "retry";
+  readonly corrections?: Record<string, unknown>;
+  readonly reason?: string;
+  readonly confidence?: number;
+  readonly notes?: string;
+}
+
+export type HumanTaskBusinessFormFieldType = "text" | "textarea" | "number" | "boolean" | "date" | "select";
+
+export interface HumanTaskBusinessFormField {
+  readonly key: string;
+  readonly label: string;
+  readonly type: HumanTaskBusinessFormFieldType;
+  readonly required?: boolean;
+  readonly options?: readonly string[];
+  readonly help_text?: string;
+}
+
+export interface HumanTaskBusinessFormSchema {
+  readonly version: "business_form_v1";
+  readonly fields: readonly HumanTaskBusinessFormField[];
 }
 
 /**
@@ -61,6 +89,52 @@ export interface PrincipalItem {
   readonly display_name: string;
   readonly email: string | null;
   readonly source: "jwt" | "manual";
+}
+
+export type AuthReadinessStatus = "ok" | "warning" | "blocked";
+
+export interface AuthReadiness {
+  readonly status: AuthReadinessStatus;
+  readonly enterprise_sso_ready: boolean;
+  readonly provider: {
+    readonly mode: "hs256" | "jwks";
+    readonly configuration_source: "deployment_config" | "test_default";
+    readonly algorithm: "HS256" | "RS256";
+    readonly jwks_url_configured: boolean;
+    readonly jwks_host: string | null;
+    readonly issuer_configured: boolean;
+    readonly issuer: string | null;
+    readonly audience_configured: boolean;
+    readonly audience: string | null;
+  };
+  readonly claim_mapping: {
+    readonly subject_claim: string;
+    readonly tenant_claim: string;
+    readonly roles_claim: string;
+    readonly expiry_claim: string;
+    readonly display_name_claim: string;
+    readonly email_claim: string;
+  };
+  readonly role_mapping: {
+    readonly configured: boolean;
+    readonly mapped_values: number;
+  };
+  readonly required_claims: readonly {
+    readonly claim: string;
+    readonly label: string;
+    readonly required: boolean;
+    readonly present: boolean;
+    readonly mapped_to: string;
+  }[];
+  readonly current_principal: {
+    readonly subject_id: string;
+    readonly tenant_id: string;
+    readonly roles: readonly string[];
+    readonly source: "jwt" | "session";
+    readonly display_name: string | null;
+    readonly email: string | null;
+  };
+  readonly operational_gaps: readonly string[];
 }
 
 /** workitem DLQ(dead_letter) + sink DLQ(sink_deliveries) 공용. status는 DEAD_LETTER 통지(ApiError 아님). */
@@ -84,6 +158,373 @@ export interface ScenarioItem {
   readonly promotion_status?: string;
 }
 
+export type RunTriggerType = "cron" | "webhook";
+
+export interface RunTriggerItem {
+  readonly trigger_id: string;
+  readonly scenario_version_id: string;
+  readonly trigger_type: RunTriggerType;
+  readonly status: "enabled" | "paused" | "archived";
+  readonly cron_expression: string | null;
+  readonly timezone: string | null;
+  readonly webhook_secret_ref: string | null;
+  readonly webhook_secret_configured?: boolean;
+  readonly params: Record<string, unknown>;
+  readonly catchup_policy: "skip_missed" | "fire_once";
+  readonly max_concurrent_runs: number;
+  readonly next_fire_at: string | null;
+  readonly created_by: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface RunTriggerCreateBody {
+  readonly trigger_type?: RunTriggerType;
+  readonly scenario_version_id: string;
+  readonly cron_expression?: string;
+  readonly timezone?: string;
+  readonly webhook_secret_ref?: string;
+  readonly params?: Record<string, unknown>;
+  readonly catchup_policy?: "skip_missed" | "fire_once";
+  readonly max_concurrent_runs?: number;
+  readonly next_fire_at?: string | null;
+}
+
+export interface RunTriggerUpdateBody {
+  readonly cron_expression?: string;
+  readonly timezone?: string;
+  readonly webhook_secret_ref?: string;
+  readonly params?: Record<string, unknown>;
+  readonly catchup_policy?: "skip_missed" | "fire_once";
+  readonly max_concurrent_runs?: number;
+  readonly next_fire_at?: string | null;
+}
+
+export interface RunTriggerFireItem {
+  readonly fire_id: string;
+  readonly trigger_id: string;
+  readonly fire_key: string;
+  readonly status: "queued" | "skipped" | "failed";
+  readonly scheduled_for: string;
+  readonly run_id: string | null;
+  readonly failure_reason: Record<string, unknown> | null;
+  readonly created_at: string;
+}
+
+export type OpsAlertSeverity = "critical" | "warning" | "info";
+export type OpsAlertSource = "run_sla" | "human_task_sla" | "trigger_fire" | "failure_spike" | "dlq";
+
+export interface OpsAlertItem {
+  readonly alert_id: string;
+  readonly severity: OpsAlertSeverity;
+  readonly source: OpsAlertSource;
+  readonly title: string;
+  readonly detail: string;
+  readonly subject_type: "run" | "human_task" | "run_trigger" | "dlq";
+  readonly subject_id: string | null;
+  readonly status: "open";
+  readonly recommended_action: string;
+  readonly route: string | null;
+  readonly detected_at: string;
+  readonly due_at?: string | null;
+}
+
+export interface OpsAlertListParams extends ListParams {
+  readonly severity?: OpsAlertSeverity;
+  readonly source?: OpsAlertSource;
+}
+
+export type OpsHealthStatus = "ok" | "warning" | "critical";
+
+export interface OpsHealth {
+  readonly status: OpsHealthStatus;
+  readonly detected_at: string;
+  readonly queue: {
+    readonly available: boolean;
+    readonly pending_jobs: number | null;
+  };
+  readonly browser_leases: {
+    readonly reserved: number;
+    readonly active: number;
+    readonly draining: number;
+    readonly expired: number;
+    readonly expired_open: number;
+    readonly next_expiry_at: string | null;
+  };
+  readonly stale_runs: {
+    readonly nonterminal_over_15m: number;
+    readonly oldest_updated_at: string | null;
+  };
+}
+
+export type BotPoolHealth = "ok" | "warning" | "critical";
+
+export interface BotPoolItem {
+  readonly bot_pool_id: string;
+  readonly name: string;
+  readonly kind: "browser";
+  readonly capacity_slots: number;
+  readonly workers: {
+    readonly total: number;
+    readonly active: number;
+    readonly draining: number;
+    readonly dead: number;
+    readonly stale: number;
+    readonly open_circuit: number;
+  };
+  readonly leases: {
+    readonly reserved: number;
+    readonly active: number;
+    readonly draining: number;
+    readonly expired_open: number;
+    readonly next_expiry_at: string | null;
+  };
+  readonly queue: {
+    readonly pending_runs: number;
+    readonly due_triggers: number;
+  };
+  readonly health: BotPoolHealth;
+  readonly health_reason: string;
+}
+
+export type AutomationIdeaStage = "intake" | "assess" | "approved" | "build" | "operate" | "rejected" | "archived";
+export type AutomationIdeaPriority = "low" | "medium" | "high" | "critical";
+export type AutomationIdeaSource = "manual" | "process_mining" | "task_mining" | "imported";
+export type RoiConfidence = "low" | "medium" | "high";
+
+export interface AutomationIdeaItem {
+  readonly idea_id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly business_owner: string;
+  readonly department: string;
+  readonly source: AutomationIdeaSource;
+  readonly stage: AutomationIdeaStage;
+  readonly priority: AutomationIdeaPriority;
+  readonly score: number;
+  readonly scenario_id: string | null;
+  readonly run_trigger_id: string | null;
+  readonly created_by: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface AutomationIdeaListParams extends ListParams {
+  readonly stage?: AutomationIdeaStage;
+  readonly owner?: string;
+  readonly department?: string;
+}
+
+export interface AutomationIdeaCreateBody {
+  readonly title: string;
+  readonly description: string;
+  readonly business_owner: string;
+  readonly department: string;
+  readonly source?: AutomationIdeaSource;
+  readonly priority?: AutomationIdeaPriority;
+  readonly score?: number;
+}
+
+export interface AutomationIdeaUpdateBody {
+  readonly title?: string;
+  readonly description?: string;
+  readonly business_owner?: string;
+  readonly department?: string;
+  readonly priority?: AutomationIdeaPriority;
+  readonly score?: number;
+  readonly scenario_id?: string | null;
+  readonly run_trigger_id?: string | null;
+}
+
+export interface RoiEstimateRequest {
+  readonly frequency_per_month: number;
+  readonly minutes_per_case: number;
+  readonly exception_rate: number;
+  readonly hourly_cost: number;
+  readonly implementation_effort: number;
+  readonly confidence?: RoiConfidence;
+}
+
+export interface RoiEstimate {
+  readonly roi_estimate_id: string;
+  readonly automation_idea_id: string;
+  readonly frequency_per_month: number;
+  readonly minutes_per_case: number;
+  readonly exception_rate: number;
+  readonly hourly_cost: number;
+  readonly implementation_effort: number;
+  readonly monthly_hours_saved: number;
+  readonly estimated_monthly_value: number;
+  readonly payback_months: number | null;
+  readonly confidence: RoiConfidence;
+  readonly created_by: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export type AuditOutcome = "allow" | "deny" | "blocked" | "error";
+
+export interface AuditLogActor {
+  readonly subject_id: string | null;
+  readonly roles: readonly string[];
+}
+
+export interface AuditLogItem {
+  readonly audit_id: string;
+  readonly sequence_no: number;
+  readonly actor: AuditLogActor;
+  readonly action: string;
+  readonly outcome: AuditOutcome;
+  readonly reason: string | null;
+  readonly correlation_id: string;
+  readonly idempotency_key: string;
+  readonly occurred_at: string;
+  readonly payload_schema_ref: string;
+  readonly retention_until: string | null;
+  readonly legal_hold: boolean;
+  readonly previous_hash: string | null;
+  readonly hash: string;
+  readonly created_at: string;
+}
+
+export interface AuditLogListParams extends ListParams {
+  readonly action?: string;
+  readonly outcome?: AuditOutcome;
+  readonly actor?: string;
+  readonly correlation_id?: string;
+}
+
+export interface AuditLogExportParams extends AuditLogListParams {
+  readonly format?: "csv";
+}
+
+export type ConnectorCatalogKind = "browser" | "api" | "file" | "notification" | "data";
+export type CatalogStatus = "available" | "candidate" | "requires_admin" | "blocked";
+export type TemplateCatalogKind = "browser_workflow" | "api_workflow" | "file_workflow" | "notification_workflow";
+
+export interface ConnectorManifestPermissions {
+  readonly api: readonly ("migrateSchema" | "registerTargets" | "readConfig")[];
+  readonly network: false;
+  readonly secret_refs: readonly string[];
+}
+
+export interface ConnectorCatalogItem {
+  readonly catalog_id: string;
+  readonly connector_id: string;
+  readonly name: string;
+  readonly kind: ConnectorCatalogKind;
+  readonly category: string;
+  readonly status: CatalogStatus;
+  readonly priority: "P0" | "P1" | "P2" | "P3";
+  readonly summary: string;
+  readonly best_for: readonly string[];
+  readonly supported_actions: readonly string[];
+  readonly template_ids: readonly string[];
+  readonly required_rbac_actions: readonly string[];
+  readonly required_secret_refs: readonly string[];
+  readonly allowed_domains: readonly string[];
+  readonly manifest_permissions: ConnectorManifestPermissions;
+  readonly implementation_state: string;
+  readonly security_notes: readonly string[];
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface TemplateCatalogItem {
+  readonly catalog_id: string;
+  readonly template_id: string;
+  readonly connector_id: string;
+  readonly name: string;
+  readonly kind: TemplateCatalogKind;
+  readonly status: CatalogStatus;
+  readonly priority: "P0" | "P1" | "P2" | "P3";
+  readonly summary: string;
+  readonly best_for: readonly string[];
+  readonly required_params: readonly string[];
+  readonly required_secret_refs: readonly string[];
+  readonly produced_ir_pattern: string;
+  readonly success_criteria: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface ConnectorCatalogListParams extends ListParams {
+  readonly kind?: ConnectorCatalogKind;
+  readonly status?: CatalogStatus;
+}
+
+export interface TemplateCatalogListParams extends ListParams {
+  readonly connector_id?: string;
+  readonly kind?: TemplateCatalogKind;
+  readonly status?: CatalogStatus;
+}
+
+export type DocumentJobStatus = "created" | "extracted" | "validation_required" | "validated" | "failed";
+export type DocumentExtractionStatus = "completed" | "validation_required" | "failed";
+export type DocumentFieldType = "text" | "number" | "date" | "boolean";
+export type DocumentFieldStatus = "extracted" | "missing" | "low_confidence";
+export type DocumentFieldSource = "json" | "csv" | "pattern" | "label" | "missing";
+
+export interface DocumentFieldSchema {
+  readonly key: string;
+  readonly label?: string;
+  readonly type?: DocumentFieldType;
+  readonly required?: boolean;
+  readonly aliases?: readonly string[];
+  readonly patterns?: readonly string[];
+  readonly min_confidence?: number;
+}
+
+export interface DocumentJobItem {
+  readonly document_job_id: string;
+  readonly source_artifact_id: string;
+  readonly source_run_id: string;
+  readonly document_type: string;
+  readonly field_schema: readonly DocumentFieldSchema[];
+  readonly status: DocumentJobStatus;
+  readonly created_by: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface DocumentJobListParams extends ListParams {
+  readonly status?: DocumentJobStatus;
+}
+
+export interface DocumentJobCreateBody {
+  readonly source_artifact_id: string;
+  readonly document_type: string;
+  readonly field_schema: readonly DocumentFieldSchema[];
+}
+
+export interface DocumentExtractionField {
+  readonly key: string;
+  readonly label: string;
+  readonly value: string | null;
+  readonly confidence: number;
+  readonly status: DocumentFieldStatus;
+  readonly source: DocumentFieldSource;
+}
+
+export interface DocumentExtraction {
+  readonly document_extraction_id: string;
+  readonly document_job_id: string;
+  readonly engine: "built_in_deterministic_text_v1";
+  readonly status: DocumentExtractionStatus;
+  readonly fields: readonly DocumentExtractionField[];
+  readonly missing_fields: readonly string[];
+  readonly validation_human_task_id: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface DocumentValidationTaskResult {
+  readonly human_task_id: string;
+  readonly state: string;
+  readonly result_schema: HumanTaskBusinessFormSchema | Record<string, unknown>;
+  readonly artifact_refs: readonly string[];
+}
+
 export interface SiteItem {
   readonly site_profile_id: string;
   readonly risk: string;
@@ -97,6 +538,176 @@ export interface SiteItem {
   readonly session_expires_at?: string | null;
   readonly default_browser_identity_id?: string | null;
   readonly default_network_policy_id?: string | null;
+  readonly page_state_summary?: SitePageStateSummary;
+  readonly page_state_selectors?: unknown | null;
+}
+
+export interface SitePageStateSummary {
+  readonly configured: boolean;
+  readonly login_url_configured: boolean;
+  readonly authenticated_selector_configured: boolean;
+  readonly flag_count: number;
+  readonly flags: readonly string[];
+}
+
+export interface SitePageStateUpdateResult {
+  readonly site_profile_id: string;
+  readonly page_state_selectors: unknown | null;
+  readonly page_state_summary: SitePageStateSummary;
+}
+
+export type SiteElementType = "button" | "input" | "link" | "table" | "row" | "field" | "message" | "other";
+export type SiteElementStability = "stable" | "review_needed" | "broken";
+export type SiteElementSource = "manual" | "pbd" | "capture" | "imported";
+
+export interface SiteElementItem {
+  readonly element_id: string;
+  readonly site_profile_id: string;
+  readonly element_key: string;
+  readonly label: string;
+  readonly selector: string;
+  readonly element_type: SiteElementType;
+  readonly stability: SiteElementStability;
+  readonly source: SiteElementSource;
+  readonly sample_url: string | null;
+  readonly notes: string | null;
+  readonly usage_count: number;
+  readonly last_verified_at: string | null;
+  readonly updated_by: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface SiteElementListParams extends ListParams {
+  readonly site_profile_id?: string;
+  readonly stability?: SiteElementStability;
+  readonly search?: string;
+}
+
+export interface SiteElementCreateBody {
+  readonly element_key: string;
+  readonly label: string;
+  readonly selector: string;
+  readonly element_type?: SiteElementType;
+  readonly stability?: SiteElementStability;
+  readonly source?: SiteElementSource;
+  readonly sample_url?: string;
+  readonly notes?: string;
+}
+
+export interface SiteElementUpdateBody {
+  readonly label?: string;
+  readonly selector?: string;
+  readonly element_type?: SiteElementType;
+  readonly stability?: SiteElementStability;
+  readonly sample_url?: string | null;
+  readonly notes?: string | null;
+}
+
+export type SiteElementProbeStatus = "matched" | "not_found" | "invalid_selector" | "failed" | "not_run";
+
+export interface SiteElementProbeRequest {
+  readonly sample_url?: string;
+}
+
+export interface SiteElementProbeResponse {
+  readonly element_id: string;
+  readonly site_profile_id: string;
+  readonly selector: string;
+  readonly sample_url: string | null;
+  readonly probe_status: SiteElementProbeStatus;
+  readonly match_count: number | null;
+  readonly reason_code: string | null;
+  readonly checked_at: string;
+  readonly element: SiteElementItem;
+}
+
+export interface SiteElementDeleteResult {
+  readonly element_id: string;
+  readonly deleted: boolean;
+}
+
+export type BrowserRecordingStatus = "recording" | "completed" | "discarded" | "failed";
+export type BrowserRecordingEventType = "navigate" | "click" | "input" | "select" | "submit" | "wait";
+
+export interface BrowserRecordingValidationIssue {
+  readonly rule?: string;
+  readonly reason?: string;
+  readonly code?: string;
+  readonly nodeId?: string;
+  readonly node_id?: string;
+  readonly detail?: string;
+  readonly message?: string;
+}
+
+export interface BrowserRecordingValidationReport {
+  readonly errors: readonly BrowserRecordingValidationIssue[];
+  readonly warnings: readonly BrowserRecordingValidationIssue[];
+}
+
+export interface BrowserRecordingSession {
+  readonly recording_session_id: string;
+  readonly site_profile_id: string;
+  readonly name: string;
+  readonly start_url: string;
+  readonly status: BrowserRecordingStatus;
+  readonly event_count: number;
+  readonly draft_ir: Record<string, unknown> | null;
+  readonly validation_report: BrowserRecordingValidationReport | null;
+  readonly updated_by: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface BrowserRecordingListParams extends ListParams {
+  readonly status?: BrowserRecordingStatus;
+}
+
+export interface BrowserRecordingStartBody {
+  readonly name: string;
+  readonly start_url?: string;
+}
+
+export interface BrowserRecordingEvent {
+  readonly event_id: string;
+  readonly recording_session_id: string;
+  readonly seq: number;
+  readonly event_type: BrowserRecordingEventType;
+  readonly selector: string | null;
+  readonly element_key: string | null;
+  readonly label: string | null;
+  readonly url: string | null;
+  readonly value_preview: string | null;
+  readonly captured_at: string;
+  readonly created_at: string;
+}
+
+export interface BrowserRecordingAppendEvent {
+  readonly event_type: BrowserRecordingEventType;
+  readonly selector?: string;
+  readonly element_key?: string;
+  readonly label?: string;
+  readonly url?: string;
+  readonly value_preview?: string;
+}
+
+export interface BrowserRecordingAppendEventsBody {
+  readonly events: readonly BrowserRecordingAppendEvent[];
+}
+
+export interface BrowserRecordingAppendResult {
+  readonly recording_session_id: string;
+  readonly appended: number;
+  readonly event_count: number;
+}
+
+export type CaptureSessionStatus = "launching" | "awaiting_login" | "capturing" | "captured" | "failed" | "expired";
+
+export interface CaptureSessionItem {
+  readonly capture_session_id: string;
+  readonly status: CaptureSessionStatus;
+  readonly detail: string | null;
+  readonly updated_at: string;
 }
 
 // POST /v1/sites response. New sites include default run target IDs for generation prefill.
@@ -127,6 +738,8 @@ export interface ArtifactDetail {
 export interface RunDetail {
   readonly run_id: string;
   readonly status: string;
+  readonly scenario_id?: string;
+  readonly scenario_version_id?: string;
   readonly worker_id: string | null;
   readonly attempts: number;
   readonly as_of: string | null;
@@ -225,6 +838,12 @@ export interface ScenarioMutationResult {
   readonly scenario_id: string;
   readonly version: number;
   readonly promotion_status: string;
+}
+
+export interface PromoteFromRunResult extends ScenarioMutationResult {
+  readonly scenario_version_id: string;
+  readonly promoted_node_ids: readonly string[];
+  readonly skipped: readonly { readonly nodeId: string; readonly reason: string }[];
 }
 
 // POST /v1/runs 응답(server.ts: { run_id, status:"queued", as_of }). 실행 시작 직후 그 run 상세로 드릴다운하기 위해 run_id 가 필요.

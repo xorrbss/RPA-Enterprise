@@ -14,7 +14,7 @@ export function SiteNameEditor(props: { site: SiteItem }): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const qc = useQueryClient();
-  const display = site.name ?? site.site_profile_id.slice(0, 8);
+  const display = site.name ?? "사이트명 미정";
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(site.name ?? "");
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
@@ -28,13 +28,13 @@ export function SiteNameEditor(props: { site: SiteItem }): JSX.Element {
   });
 
   // 권한 없으면 평문(읽기 전용 역할은 편집 트리거를 노출하지 않는다).
-  if (!can("site.update")) return <span>{display}</span>;
+  if (!can("site.update")) return <span title={site.name === undefined ? `사이트 추적 번호: ${site.site_profile_id}` : undefined}>{display}</span>;
 
   if (!editing) {
     return (
       <button
         type="button"
-        title="이름 수정 (클릭)"
+        title={site.name === undefined ? `이름 수정 (사이트 추적 번호: ${site.site_profile_id})` : "이름 수정 (클릭)"}
         style={{
           background: "none",
           border: "none",

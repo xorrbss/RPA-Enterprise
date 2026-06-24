@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
+import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
+import { BrowserRecorderPanel } from "../components/BrowserRecorderPanel";
 import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
@@ -17,7 +19,11 @@ import type { ScenarioItem, ScenarioVersionItem } from "../api/types";
 export function ScenariosView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
-  const query = useQuery({ queryKey: ["scenarios"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 10_000 });
+  const scenarioList = useListView<ScenarioItem>(
+    ["scenarios"],
+    (params) => api.listScenarios(params),
+    { limit: 50, refetchInterval: 10_000 },
+  );
   const [form, setForm] = useState<ScenarioFormMode | null>(null);
   const [versionsFor, setVersionsFor] = useState<ScenarioItem | null>(null);
   // 'AI로 설명해서 만들기'(자연어 생성기) 펼침 — 기본 진입은 '+ 새 자동화 만들기'(쉬운 만들기), AI 생성기는 접어 둔다.
@@ -42,6 +48,7 @@ export function ScenariosView(): JSX.Element {
           <PromptScenarioGenerator />
         </details>
       )}
+      {can("scenario.create") && <BrowserRecorderPanel />}
       {can("scenario.create") && (
         <div style={{ marginBottom: 12 }}>
           <button className="btn" type="button" onClick={() => setForm({ kind: "create" })} disabled={form?.kind === "create"}>
@@ -51,10 +58,11 @@ export function ScenariosView(): JSX.Element {
       )}
       {form !== null && <ScenarioForm mode={form} onClose={() => setForm(null)} />}
       <QueryPanel<ScenarioItem>
-        title="시나리오"
-        query={query}
+        title="자동화 목록"
+        query={scenarioList.query}
+        pager={scenarioList.pager}
         rowKey={(r) => r.scenario_id}
-        emptyMessage="저장된 시나리오가 없습니다. ‘새 자동화 만들기’로 시작하세요."
+        emptyMessage="저장된 자동화가 없습니다. ‘새 자동화 만들기’로 시작하세요."
         emptyAction={
           can("scenario.create") ? (
             <button className="btn primary" type="button" onClick={() => setForm({ kind: "create" })} disabled={form?.kind === "create"}>
@@ -73,7 +81,7 @@ export function ScenariosView(): JSX.Element {
               </span>
             ),
           },
-          { header: "최신 버전 ID", render: (r) => <code>{r.latest_version_id.slice(0, 8)}</code> },
+          { header: "실행 기준", render: (r) => <span className="badge muted">v{r.version} 준비됨</span> },
           {
             header: "작업",
             render: (r) => (
@@ -101,7 +109,7 @@ export function ScenariosView(): JSX.Element {
                   confirmText={
                     r.promotion_status === "prod"
                       ? `${r.name} v${r.version}을(를) 운영 기준에서 내릴까요? 실행 이력은 보존됩니다.`
-                      : `${r.name} v${r.version}을(를) 운영 기준으로 지정할까요? 실행에 꼭 필요한 단계는 아니며, 운영 기준 표시를 위한 보조 작업입니다. 시나리오 검사를 통과하고 사이트 승인·세션이 준비되어야 실제로 실행됩니다.`
+                      : `${r.name} v${r.version}을(를) 운영 기준으로 지정할까요? 실행에 꼭 필요한 단계는 아니며, 운영 기준 표시를 위한 보조 작업입니다. 자동화 검사를 통과하고 사이트 승인·세션이 준비되어야 실제로 실행됩니다.`
                   }
                   run={(key) => api.setScenarioPromotion(r.scenario_id, r.version, r.promotion_status === "prod" ? "draft" : "prod", key)}
                   invalidateKeys={[["scenarios"]]}
@@ -158,10 +166,10 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
             header: "작업",
             render: (r) => (
               <ActionButton
-                label="이 버전으로 롤백"
+                label="이 버전으로 복원"
                 action="scenario.update"
                 disabled={r.version === props.scenario.version}
-                confirmText={`${props.scenario.name} v${r.version}을(를) 복제해 새 draft v${props.scenario.version + 1}을 만들까요?`}
+                confirmText={`${props.scenario.name} v${r.version}을(를) 복제해 새 초안 v${props.scenario.version + 1}을 만들까요?`}
                 run={(key) => api.rollbackScenario(props.scenario.scenario_id, r.version, props.scenario.version, key)}
                 invalidateKeys={[["scenarios"], ["scenario-versions", props.scenario.scenario_id]]}
               />

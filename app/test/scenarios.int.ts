@@ -49,8 +49,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasStaticReason(body: unknown, reason: string): boolean {
-  if (!isRecord(body) || !isRecord(body.details) || !isRecord(body.details.report)) return false;
-  const errors = body.details.report.errors;
+  if (!isRecord(body)) return false;
+  const report =
+    isRecord(body.details) && isRecord(body.details.report)
+      ? body.details.report
+      : isRecord(body.report)
+        ? body.report
+        : undefined;
+  if (!isRecord(report)) return false;
+  const errors = report.errors;
   return Array.isArray(errors) && errors.some((error) => isRecord(error) && error.reason === reason);
 }
 
@@ -89,6 +96,13 @@ const shellIr = (name: string, cmdRef: string): ScenarioIrFixture => ({
   start: "n1",
   nodes: {
     n1: { what: [{ action: "shell", cmd_ref: cmdRef }], terminal: "success" },
+  },
+});
+const fileIr = (name: string): ScenarioIrFixture => ({
+  meta: { name, version: 1 },
+  start: "n1",
+  nodes: {
+    n1: { what: [{ action: "file" }], terminal: "success" },
   },
 });
 const ajvInvalidIr = { meta: { name: "ajv-bad", version: 1 }, start: "n1", nodes: { n1: { terminal: "success", next: "n2" } } };
@@ -242,14 +256,45 @@ async function main(): Promise<void> {
         headers: { authorization: `Bearer ${operator}` },
         payload: shellIr("scenario-shell-ok", "signed.export_report"),
       });
-      check("create registered shell cmd_ref → 201", shellCreate.statusCode === 201, shellCreate.body);
+      check("create registered shell cmd_ref rejected in browser product mode → 422", shellCreate.statusCode === 422, shellCreate.body);
+      check(
+        "registered shell reason=unsupported_browser_product_action",
+        hasStaticReason(shellCreate.json(), "unsupported_browser_product_action"),
+        shellCreate.body,
+      );
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const r = await c.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+             FROM scenarios
+            WHERE tenant_id=$1::uuid AND name=$2`,
+          [TENANT_A, "scenario-shell-ok"],
+        );
+        check("rejected shell create does not insert scenario", r.rows[0]?.count === "0", JSON.stringify(r.rows[0]));
+      });
       const shellValidate = await app.inject({
         method: "POST",
         url: `/v1/scenarios/${scenarioId}/validate`,
         headers: { authorization: `Bearer ${viewer}` },
         payload: shellIr("ignored-shell", "signed.export_report"),
       });
-      check("validate registered shell cmd_ref → 200 valid:true", shellValidate.statusCode === 200 && shellValidate.json().valid === true, shellValidate.body);
+      check("validate registered shell cmd_ref rejected in browser product mode", shellValidate.statusCode === 200 && shellValidate.json().valid === false, shellValidate.body);
+      check(
+        "validate shell reason=unsupported_browser_product_action",
+        hasStaticReason(shellValidate.json(), "unsupported_browser_product_action"),
+        shellValidate.body,
+      );
+      const fileCreate = await app.inject({
+        method: "POST",
+        url: "/v1/scenarios",
+        headers: { authorization: `Bearer ${operator}` },
+        payload: fileIr("scenario-file-rejected"),
+      });
+      check("create file action rejected in browser product mode → 422", fileCreate.statusCode === 422, fileCreate.body);
+      check(
+        "file action reason=unsupported_browser_product_action",
+        hasStaticReason(fileCreate.json(), "unsupported_browser_product_action"),
+        fileCreate.body,
+      );
       const shellUnregistered = await app.inject({
         method: "POST",
         url: "/v1/scenarios",
@@ -257,6 +302,11 @@ async function main(): Promise<void> {
         payload: shellIr("scenario-shell-unregistered", "signed.unknown"),
       });
       check("create unregistered shell cmd_ref → 422", shellUnregistered.statusCode === 422, shellUnregistered.body);
+      check(
+        "unregistered shell also reason=unsupported_browser_product_action",
+        hasStaticReason(shellUnregistered.json(), "unsupported_browser_product_action"),
+        shellUnregistered.body,
+      );
       check(
         "unregistered shell reason=shell_cmd_unregistered",
         hasStaticReason(shellUnregistered.json(), "shell_cmd_unregistered"),
@@ -271,6 +321,11 @@ async function main(): Promise<void> {
       });
       registryMode = "available";
       check("create shell while registry unavailable → 422", shellUnavailable.statusCode === 422, shellUnavailable.body);
+      check(
+        "unavailable shell also reason=unsupported_browser_product_action",
+        hasStaticReason(shellUnavailable.json(), "unsupported_browser_product_action"),
+        shellUnavailable.body,
+      );
       check(
         "unavailable shell reason=shell_cmd_registry_unavailable",
         hasStaticReason(shellUnavailable.json(), "shell_cmd_registry_unavailable"),
@@ -334,6 +389,17 @@ async function main(): Promise<void> {
       check("edit rename → 422 scenario_name_immutable", editRename.statusCode === 422 && editRename.json().details?.reason === "scenario_name_immutable", editRename.body);
       const editInvalid = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(operator), "if-match": "2" }, payload: { meta: { name: "scenario-a", version: 3 }, start: "missing", nodes: { n1: { terminal: "success" } } } });
       check("edit invalid IR → 422 IR_SCHEMA_INVALID", editInvalid.statusCode === 422 && editInvalid.json().code === "IR_SCHEMA_INVALID", editInvalid.body);
+      const editFile = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(operator), "if-match": "2" }, payload: { ...fileIr("scenario-a"), meta: { name: "scenario-a", version: 3 } } });
+      check("edit file action rejected in browser product mode → 422", editFile.statusCode === 422 && hasStaticReason(editFile.json(), "unsupported_browser_product_action"), editFile.body);
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        const r = await c.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+             FROM scenario_versions
+            WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid`,
+          [TENANT_A, scenarioId],
+        );
+        check("rejected file edit does not insert version", r.rows[0]?.count === "2", JSON.stringify(r.rows[0]));
+      });
       const editViewer = await app.inject({ method: "PUT", url: `/v1/scenarios/${scenarioId}`, headers: { authorization: auth(viewer), "if-match": "2" }, payload: irV("scenario-a", 3) });
       check("viewer edit → 403 AUTHZ_FORBIDDEN", editViewer.statusCode === 403 && editViewer.json().code === "AUTHZ_FORBIDDEN", editViewer.body);
       const editAbsent = await app.inject({ method: "PUT", url: "/v1/scenarios/10000000-0000-0000-0000-0000000000ff", headers: { authorization: auth(operator), "if-match": "1" }, payload: irV("ghost", 2) });

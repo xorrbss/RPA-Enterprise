@@ -123,7 +123,7 @@ async function main(): Promise<void> {
     const dash = await page.evaluate(() => document.body.innerText);
     check("dashboard 부팅 + '최근 실행' 렌더", dash.includes("최근 실행"));
     check("시드 실행이 '실행 중'으로 표시(StatusBadge 한국어 라벨)", dash.includes("실행 중"), dash.slice(0, 200));
-    check("사이드바 12 nav 렌더", await page.$$eval("nav.sidebar button", (b) => b.length) === 12);
+    check("사이드바 16 nav 렌더", await page.$$eval("nav.sidebar button", (b) => b.length) === 16);
 
     // 2) 해시 라우팅 → workitems, 시드 작업항목 렌더
     await page.evaluate(() => {

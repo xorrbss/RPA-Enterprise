@@ -363,16 +363,66 @@ const activeBlockerRules = [
       "unknown reassignment side effect",
     ],
   },
+  {
+    label: "Browser RPA V2 HTTP/API connector authentication contract",
+    aliases: [
+      "HTTP api_call",
+      "SecretRef bearer",
+      "basic auth",
+      "mTLS",
+      "OAuth client credentials",
+    ],
+  },
+  {
+    label: "Browser RPA V2 webhook trigger authentication and idempotency contract",
+    aliases: ["webhook trigger", "external authentication", "idempotency key"],
+  },
+  {
+    label: "Browser RPA V2 IDP/OCR engine selection",
+    aliases: ["IDP/OCR", "OCR engine", "LLM vision"],
+  },
+  {
+    label: "Browser RPA V2 notification channel scope",
+    aliases: ["Teams/Slack/email", "Teams", "Slack", "email notification"],
+  },
+  {
+    label: "Browser RPA V2 CoE/ROI product scope",
+    aliases: ["CoE/ROI", "ROI", "administrator evaluation screen"],
+  },
+  {
+    label: "Browser RPA V2 business form schema contract",
+    aliases: ["업무별 form schema", "business form schema"],
+  },
+  {
+    label: "Run trigger file/queue event contract",
+    aliases: [
+      "file-arrival and queue-trigger contracts",
+      "file-arrival",
+      "queue-trigger",
+      "file arrival",
+    ],
+  },
+  {
+    label: "Run trigger cron catchup and concurrency semantics",
+    aliases: [
+      "catchup policy",
+      "next occurrence calculation",
+      "missed-run catchup",
+      "concurrent fire semantics",
+    ],
+  },
 ];
 const activeBlockerSectionHeadings = new Set([
   "## Deploy-Time Provisioning Blockers",
   "## Repo-Controlled D4.5 API P1 Evidence / Open",
   "## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)",
+  "## Repo-Controlled Browser RPA V2 Product Scope / Open",
 ]);
 const expectedActiveBlockerSectionCounts = new Map([
   ["## Deploy-Time Provisioning Blockers", 1],
   ["## Repo-Controlled D4.5 API P1 Evidence / Open", 0],
   ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 0],
+  ["## Repo-Controlled Browser RPA V2 Product Scope / Open", 0],
 ]);
 const activeChecklistEvidenceRules = [
   {
@@ -762,7 +812,9 @@ function buildAuditOutput(actionable) {
     activeBlockerSectionCounts.get("## Repo-Controlled D4.5 API P1 Evidence / Open") ?? 0;
   const repoD3Count =
     activeBlockerSectionCounts.get("## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)") ?? 0;
-  return `${todos.length} markers, ${actionable} actionable blockers, ${knownReleaseDecisions.length} known release decisions tracked, ${releaseDecisionLines.length} release decisions checked (${externalCount} active deploy-time provisioning checklist rows; ${repoD45Count} repo-controlled D4.5 API P1 open rows; ${repoD3Count} repo-controlled D3 runtime open rows)`;
+  const browserRpaV2Count =
+    activeBlockerSectionCounts.get("## Repo-Controlled Browser RPA V2 Product Scope / Open") ?? 0;
+  return `${todos.length} markers, ${actionable} actionable blockers, ${knownReleaseDecisions.length} known release decisions tracked, ${releaseDecisionLines.length} release decisions checked (${externalCount} active deploy-time provisioning checklist rows; ${repoD45Count} repo-controlled D4.5 API P1 open rows; ${repoD3Count} repo-controlled D3 runtime open rows; ${browserRpaV2Count} repo-controlled Browser RPA V2 product-scope open rows)`;
 }
 
 function checkReportedAuditOutputs(auditOutput) {

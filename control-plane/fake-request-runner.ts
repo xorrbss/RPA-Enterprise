@@ -614,6 +614,12 @@ function resourceForOperation(
     case "listRunArtifacts":
     case "abortRun":
       return { kind: "run", id: ctx.params.run_id };
+    case "getRunTrigger":
+    case "updateRunTrigger":
+    case "pauseRunTrigger":
+    case "resumeRunTrigger":
+    case "listRunTriggerFires":
+      return { kind: "trigger", id: ctx.params.trigger_id };
     case "startHumanTask":
     case "assignHumanTask":
     case "escalateHumanTask":
@@ -622,6 +628,7 @@ function resourceForOperation(
       return { kind: "workitem", id: ctx.params.dead_letter_id };
     case "validateScenario":
     case "promoteScenario":
+    case "promoteScenarioFromRun":
     case "archiveScenario":
     case "listScenarioVersions":
     case "getScenarioVersion":

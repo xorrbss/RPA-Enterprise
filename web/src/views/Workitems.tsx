@@ -13,6 +13,22 @@ import { WORKITEM_STATES } from "./filters";
 import type { DeadLetterItem, WorkitemItem } from "../api/types";
 
 const POLL_MS = 5_000;
+const DLQ_REASON_LABELS: Record<string, string> = {
+  VERIFY_FAILED: "검증 실패",
+};
+
+function trackingTitle(id: string): string {
+  return `추적 번호 ${id}`;
+}
+
+function dedupeTrackingTitle(id: string): string {
+  return `중복 방지 추적 번호 ${id}`;
+}
+
+function dlqReasonLabel(code: string | null | undefined): string {
+  if (code === null || code === undefined || code.trim().length === 0) return "—";
+  return DLQ_REASON_LABELS[code] ?? errorCodeLabel(code);
+}
 
 export function WorkitemsView(): JSX.Element {
   const api = useApiClient();
@@ -28,7 +44,7 @@ export function WorkitemsView(): JSX.Element {
 
   return (
     <>
-      {sel !== null && <WorkitemDetailPanel workitemId={sel} detail={detail} onClose={() => { mergeParams({ wi: null }); }} />}
+      {sel !== null && <WorkitemDetailPanel detail={detail} onClose={() => { mergeParams({ wi: null }); }} />}
       <QueryPanel<WorkitemItem>
         title="작업 목록"
         query={wi.query}
@@ -39,7 +55,7 @@ export function WorkitemsView(): JSX.Element {
         columns={[
           { header: "참조", render: (r) => r.unique_reference },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
-          { header: "작업 ID", render: (r) => <code>{r.workitem_id.slice(0, 8)}</code> },
+          { header: "작업 항목", render: (r) => <span title={trackingTitle(r.workitem_id)}>작업 항목</span> },
           {
             header: "작업",
             render: (r) => (
@@ -51,7 +67,7 @@ export function WorkitemsView(): JSX.Element {
         ]}
       />
       <QueryPanel<DeadLetterItem>
-        title="데드레터 — 작업항목(W5/W7)"
+        title="작업 항목 재처리 대기"
         query={wiDlq.query}
         pager={wiDlq.pager}
         actions={
@@ -59,32 +75,35 @@ export function WorkitemsView(): JSX.Element {
             <ActionButton
               label={`이 페이지 ${wiDlqItems.length}건 재처리`}
               action="dlq.replay"
-              confirmText={`이 페이지의 작업항목 데드레터 ${wiDlqItems.length}건을 모두 다시 처리 대기로 되돌릴까요?`}
+              confirmText={`이 페이지의 작업 항목 실패 ${wiDlqItems.length}건을 모두 다시 처리 대기로 되돌릴까요?`}
               run={async () => {
                 // 순차 재처리(동시성 충돌 회피). 멱등키를 dead_letter_id로 결정형 고정 → 재클릭/폴링 재렌더 시에도 같은 키가
                 // 재생(replay)되어 sink 중복 인큐·부분실패 후 재클릭 409를 막는다(적대리뷰 correctness-1/3). 실패는 집계해 표면화(조용한 실패 금지).
-                const failed: string[] = [];
+                let failedCount = 0;
                 for (const it of wiDlqItems) {
                   try {
                     await api.replayDeadLetter(it.dead_letter_id, `replay:${it.dead_letter_id}`, "workitem");
                   } catch {
-                    failed.push(it.dead_letter_id.slice(0, 8));
+                    failedCount += 1;
                   }
                 }
-                if (failed.length > 0) throw new Error(`${failed.length}/${wiDlqItems.length}건 재처리 실패(${failed.join(", ")}) — 나머지는 처리됨`);
+                if (failedCount > 0) {
+                  const succeededCount = wiDlqItems.length - failedCount;
+                  throw new Error(`${failedCount}건 재처리 실패${succeededCount > 0 ? ` — ${succeededCount}건은 처리됨` : ""}`);
+                }
               }}
               invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
             />
           ) : undefined
         }
         rowKey={(r) => r.dead_letter_id}
-        emptyMessage="작업항목 데드레터가 없습니다."
+        emptyMessage="재처리 대기 중인 작업 항목이 없습니다."
         columns={[
-          { header: "DLQ ID", render: (r) => <code>{r.dead_letter_id.slice(0, 8)}</code> },
+          { header: "실패 항목", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>작업 항목 재처리 대기</span> },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
-          { header: "원본", render: (r) => (r.source_id ? <code>{r.source_id.slice(0, 8)}</code> : "—") },
-          // reason_code(error-catalog ErrorCode)는 한국어 라벨로, 미매핑은 raw 폴백(errorCodeLabel). 부재 시 "—"(조용한 공백 금지).
-          { header: "사유", render: (r) => (r.reason_code ? errorCodeLabel(r.reason_code) : "—") },
+          { header: "원본 작업", render: (r) => (r.source_id ? <span title={trackingTitle(r.source_id)}>원본 작업 연결됨</span> : "—") },
+          // reason_code는 운영자 라벨 우선 표시, 원문 코드는 title로 보존한다. 부재 시 "—"(조용한 공백 금지).
+          { header: "사유", render: (r) => <span title={r.reason_code ?? undefined}>{dlqReasonLabel(r.reason_code)}</span> },
           { header: "발생", render: (r) => (r.created_at ? new Date(r.created_at).toLocaleString() : "—") },
           {
             header: "작업",
@@ -101,7 +120,7 @@ export function WorkitemsView(): JSX.Element {
         ]}
       />
       <QueryPanel<DeadLetterItem>
-        title="데드레터 — 외부 전달(sink)"
+        title="외부 전달 재시도 대상"
         query={sinkDlq.query}
         pager={sinkDlq.pager}
         actions={
@@ -113,33 +132,36 @@ export function WorkitemsView(): JSX.Element {
               run={async () => {
                 // replay가 원본 행을 requeued_at 마킹으로 소거하므로 2차 replay는 백엔드에서 404 — 다만 폴링 재렌더와
                 // 마킹 반영 사이 창에서의 재클릭 대비, 결정형 멱등키(dead_letter_id)로 중복 인큐를 한 번 더 차단한다.
-                const failed: string[] = [];
+                let failedCount = 0;
                 for (const it of sinkDlqItems) {
                   try {
                     await api.replayDeadLetter(it.dead_letter_id, `replay:${it.dead_letter_id}`, "sink");
                   } catch {
-                    failed.push(it.dead_letter_id.slice(0, 8));
+                    failedCount += 1;
                   }
                 }
-                if (failed.length > 0) throw new Error(`${failed.length}/${sinkDlqItems.length}건 재처리 실패(${failed.join(", ")}) — 나머지는 처리됨`);
+                if (failedCount > 0) {
+                  const succeededCount = sinkDlqItems.length - failedCount;
+                  throw new Error(`${failedCount}건 재처리 실패${succeededCount > 0 ? ` — ${succeededCount}건은 처리됨` : ""}`);
+                }
               }}
               invalidateKeys={[["dlq", "sink"]]}
             />
           ) : undefined
         }
         rowKey={(r) => r.dead_letter_id}
-        emptyMessage="외부 전달 데드레터가 없습니다."
+        emptyMessage="재처리 대기 중인 외부 전달 실패가 없습니다."
         columns={[
-          { header: "전달 ID", render: (r) => <code>{r.dead_letter_id.slice(0, 8)}</code> },
+          { header: "전달 실패", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>외부 전달 재시도 대상</span> },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
-          { header: "멱등키", render: (r) => <code>{r.sink_idempotency_key ?? "—"}</code> },
+          { header: "중복 방지", render: (r) => (r.sink_idempotency_key ? <span title={dedupeTrackingTitle(r.sink_idempotency_key)}>중복 방지 적용됨</span> : "적용되지 않음") },
           {
             header: "작업",
             render: (r) => (
               <ActionButton
                 label="재처리"
                 action="sink_dlq.replay"
-                confirmText="이 외부 전달 실패를 재처리(sink delivery 재시도)할까요?"
+                confirmText="이 외부 전달 실패를 재시도할까요?"
                 run={(key) => api.replayDeadLetter(r.dead_letter_id, key, "sink")}
                 invalidateKeys={[["dlq", "sink"]]}
               />
@@ -154,16 +176,14 @@ export function WorkitemsView(): JSX.Element {
 // 작업항목 상세 — getWorkitem(RLS 스코프). attempts/checked_out_by/checked_out_at/run_id는 mapWorkitem 실 투영(실측).
 // run_id가 채워졌을 때만 '원본 실행 보기' 교차링크(null이면 버튼 미렌더 — 조용한 false 금지). RunDetailPanel 구조 복제.
 function WorkitemDetailPanel({
-  workitemId,
   detail,
   onClose,
 }: {
-  workitemId: string;
   detail: UseQueryResult<WorkitemItem>;
   onClose: () => void;
 }): JSX.Element {
   return (
-    <SlideOver title={`작업항목 상세 — ${workitemId.slice(0, 8)}`} onClose={onClose}>
+    <SlideOver title="작업항목 상세" onClose={onClose}>
       {detail.isLoading ? (
         <Loading />
       ) : detail.isError ? (
@@ -176,9 +196,9 @@ function WorkitemDetailPanel({
           </dd>
           <dt className="subtle">시도 횟수</dt>
           <dd style={{ margin: 0 }}>{detail.data.attempts}</dd>
-          <dt className="subtle">점유자</dt>
+          <dt className="subtle">처리 담당</dt>
           <dd style={{ margin: 0 }}>{detail.data.checked_out_by ?? "— (미점유)"}</dd>
-          <dt className="subtle">점유 시각</dt>
+          <dt className="subtle">처리 시작 시각</dt>
           <dd style={{ margin: 0 }}>{detail.data.checked_out_at ?? "—"}</dd>
           <dt className="subtle">참조</dt>
           <dd style={{ margin: 0 }}>{detail.data.unique_reference}</dd>

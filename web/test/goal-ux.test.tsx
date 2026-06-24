@@ -86,9 +86,10 @@ describe("goal UX improvements", () => {
     expect(await screen.findByRole("region", { name: "역할별 작업대" })).toHaveTextContent("관리자 작업대");
     const queue = await screen.findByRole("region", { name: "지금 처리해야 할 Top 5" });
     expect(queue).toHaveTextContent("시스템 실패 실행");
-    expect(queue).toHaveTextContent("SYS_DOWN");
+    expect(queue).toHaveTextContent("실패 사유 확인 필요");
+    expect(queue).not.toHaveTextContent("SYS_DOWN");
 
-    within(queue).getByRole("button", { name: /Top 1 처리 항목 SYS_DOWN/ }).click();
+    within(queue).getByRole("button", { name: /Top 1 처리 항목 시스템 실패 실행/ }).click();
     await waitFor(() => expect(location.hash).toContain("status=failed_system"));
     expect(location.hash).toContain("run=fs-00000001");
   });
@@ -148,7 +149,7 @@ describe("goal UX improvements", () => {
     fireEvent.click(await screen.findByRole("button", { name: "실행" }));
     const readiness = await screen.findByRole("region", { name: "실행 전 준비 점검" });
     expect(readiness).toHaveTextContent("실행값");
-    expect(readiness).toHaveTextContent("정적 검증");
+    expect(readiness).toHaveTextContent("실행 전 검사");
     expect(readiness).toHaveTextContent("모델 정책");
     expect(readiness).toHaveTextContent("사이트/세션");
     expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled();
@@ -166,7 +167,7 @@ describe("goal UX improvements", () => {
     );
     location.hash = "#runTrace";
 
-    fireEvent.click(await screen.findByRole("button", { name: "상세" }));
+    fireEvent.click(await screen.findByRole("button", { name: "실행 추적 상세 보기" }));
     const detail = await screen.findByRole("region", { name: "실행 상세" });
     expect(detail).toHaveClass("slide-over");
     expect(location.hash).toContain("run=run-slide-1");
@@ -192,24 +193,24 @@ describe("goal UX improvements", () => {
 
     // 종류 필터 드롭다운에도 '보안문자/승인' 옵션이 있으므로, 작업 표시 여부 검증은 작업 표(table)로 좁힌다.
     expect(within(await screen.findByRole("table")).getByText("보안문자")).toBeInTheDocument();
-    const controls = await screen.findByRole("region", { name: "사람 확인 큐 제어" });
-    fireEvent.click(within(controls).getByRole("button", { name: "다음 건 처리" }));
+    const controls = await screen.findByRole("region", { name: "검토 업무 목록 제어" });
+    fireEvent.click(within(controls).getByRole("button", { name: "다음 업무 열기" }));
     await waitFor(() => expect(location.hash).toContain("ht=ht-due"));
-    fireEvent.click(within(await screen.findByRole("region", { name: "사람확인 상세" })).getByRole("button", { name: "닫기" }));
+    fireEvent.click(within(await screen.findByRole("region", { name: "검토 업무 상세" })).getByRole("button", { name: "닫기" }));
 
     fireEvent.click(within(controls).getByRole("button", { name: "마감 임박 1" }));
     await waitFor(() => expect(within(screen.getByRole("table")).getByText("보안문자")).toBeInTheDocument());
     expect(within(screen.getByRole("table")).queryByText("승인")).toBeNull();
 
-    fireEvent.click(within(controls).getByRole("button", { name: "현재 페이지 2건 배정" }));
-    fireEvent.change(await screen.findByLabelText("담당자(이름으로 선택 또는 ID 직접 입력)"), { target: { value: "u-assign" } });
+    fireEvent.click(within(controls).getByRole("button", { name: "현재 목록 2건 담당자 지정" }));
+    fireEvent.change(await screen.findByLabelText("담당자 선택 또는 직접 입력"), { target: { value: "u-assign" } });
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
     await waitFor(() => expect(assigned).toHaveLength(2));
     expect(assigned.map((c) => c.id).sort()).toEqual(["ht-due", "ht-later"]);
     expect(assigned.every((c) => c.assignee === "u-assign" && c.key.includes(c.id))).toBe(true);
   });
 
-  test("human task '내게 배정' self-assigns with current token sub (UUID, no uuid typing)", async () => {
+  test("human task '내 담당으로 지정' self-assigns with current token sub (UUID, no uuid typing)", async () => {
     const SUB = "11111111-1111-4111-8111-111111111111";
     localStorage.setItem("rpa.token", jwt(["operator"], SUB));
     const assigned: Array<{ id: string; assignee: string }> = [];
@@ -227,13 +228,13 @@ describe("goal UX improvements", () => {
     );
     location.hash = "#humanTasks";
     const table = await screen.findByRole("table");
-    fireEvent.click(within(table).getByRole("button", { name: "내게 배정" }));
+    fireEvent.click(within(table).getByRole("button", { name: "내 담당으로 지정" }));
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
     await waitFor(() => expect(assigned).toHaveLength(1));
     expect(assigned[0]).toEqual({ id: "ht-self", assignee: SUB });
   });
 
-  test("'내게 배정'·'내 담당만 보기' off when sub is non-UUID (OIDC auth0|…) — 가정 금지, uuid 배정 폴백 유지", async () => {
+  test("'내 담당으로 지정'·'내 업무만 보기' off when sub is non-UUID (OIDC auth0|…) — 가정 금지, uuid 배정 폴백 유지", async () => {
     localStorage.setItem("rpa.token", jwt(["operator"], "auth0|abc")); // 비-UUID sub: assignee(uuid)로 못 씀 → 백엔드 422
     renderApp(
       fakeClient({
@@ -245,12 +246,12 @@ describe("goal UX improvements", () => {
     );
     location.hash = "#humanTasks";
     const table = await screen.findByRole("table");
-    expect(within(table).queryByRole("button", { name: "내게 배정" })).toBeNull(); // 자가배정 숨김(비-UUID는 백엔드 422)
-    expect(within(table).getByRole("button", { name: "배정" })).toBeInTheDocument(); // uuid 직접입력 폴백 유지
-    expect(screen.getByRole("button", { name: "내 담당만 보기" })).toBeDisabled(); // 자가필터도 비활성(목록 422 방지)
+    expect(within(table).queryByRole("button", { name: "내 담당으로 지정" })).toBeNull(); // 자가배정 숨김(비-UUID는 백엔드 422)
+    expect(within(table).getByRole("button", { name: "담당자 지정" })).toBeInTheDocument(); // uuid 직접입력 폴백 유지
+    expect(screen.getByRole("button", { name: "내 업무만 보기" })).toBeDisabled(); // 자가필터도 비활성(목록 422 방지)
   });
 
-  test("DLQ panel gains a pager and 'page bulk replay' (sequential, per-item idempotency key)", async () => {
+  test("재처리 대기 panel gains a pager and 'page bulk replay' (sequential, per-item idempotency key)", async () => {
     localStorage.setItem("rpa.token", jwt(["operator"], "u"));
     const replayed: string[] = [];
     const keys = new Set<string>();
@@ -296,7 +297,7 @@ describe("goal UX improvements", () => {
 
     expect(await screen.findByText("대기 결재")).toBeInTheDocument();
     expect(screen.getByText("완료 결재")).toBeInTheDocument();
-    const controls = await screen.findByRole("region", { name: "결재 큐 제어" });
+    const controls = await screen.findByRole("region", { name: "결재 업무 제어" });
     fireEvent.click(within(controls).getByRole("button", { name: "처리 대기만 1" }));
     await waitFor(() => expect(screen.queryByText("완료 결재")).toBeNull());
     expect(screen.queryByRole("button", { name: /일괄/ })).toBeNull();
@@ -313,7 +314,7 @@ describe("goal UX improvements", () => {
     );
     location.hash = "#irValidation";
 
-    fireEvent.change(await screen.findByPlaceholderText(/00000000/), { target: { value: "sc-prescription" } });
+    fireEvent.change(await screen.findByLabelText("검사할 자동화"), { target: { value: "sc-prescription" } });
     fireEvent.click(screen.getByRole("button", { name: "검증 실행" }));
     expect(await screen.findByText(/조건 분기 대상과 다음 단계 ID/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /자동화 편집으로 이동/ }));
@@ -333,14 +334,14 @@ describe("goal UX improvements", () => {
     );
     location.hash = "#llmGateway";
 
-    fireEvent.change(await screen.findByLabelText("모델명"), { target: { value: "gpt-4.1-mini" } });
-    expect(screen.queryByLabelText("capabilities (JSON)")).toBeNull();
+    fireEvent.change(await screen.findByLabelText("AI 모델"), { target: { value: "gpt-4.1-mini" } });
+    expect(screen.queryByLabelText("기능 세부 설정")).toBeNull();
     fireEvent.change(screen.getByLabelText("컨텍스트 한도"), { target: { value: "16000" } });
     fireEvent.change(screen.getByLabelText("입력 토큰 한도"), { target: { value: "2000" } });
     fireEvent.change(screen.getByLabelText("출력 토큰 한도"), { target: { value: "800" } });
     fireEvent.change(screen.getByLabelText("비용 한도"), { target: { value: "3.5" } });
-    fireEvent.click(screen.getByLabelText("비전 입력 지원"));
-    fireEvent.change(screen.getByLabelText("fallback 모델"), { target: { value: "gpt-4o-mini" } });
+    fireEvent.click(screen.getByLabelText("화면 이미지 입력 지원"));
+    fireEvent.change(screen.getByLabelText("대체 모델"), { target: { value: "gpt-4o-mini" } });
     fireEvent.click(screen.getByRole("button", { name: "정책 생성" }));
 
     await waitFor(() => expect(calls).toHaveLength(1));
@@ -351,7 +352,7 @@ describe("goal UX improvements", () => {
       fallback_config: { model: "gpt-4o-mini" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "고급 JSON 열기" }));
-    expect(await screen.findByLabelText("capabilities (JSON)")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "상세 설정 원문 보기" }));
+    expect(await screen.findByLabelText("기능 세부 설정")).toBeInTheDocument();
   });
 });

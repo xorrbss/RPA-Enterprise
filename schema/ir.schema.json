@@ -157,6 +157,69 @@
         {
           "if": { "properties": { "action": { "const": "navigate" } } },
           "then": { "required": ["url_ref"] }
+        },
+        {
+          "if": { "properties": { "action": { "const": "api_call" } } },
+          "then": {
+            "required": ["url_ref", "args"],
+            "properties": {
+              "args": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "get", "post", "put", "patch", "delete"]
+                  },
+                  "headers": {
+                    "type": "object",
+                    "propertyNames": {
+                      "not": {
+                        "pattern": "^([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Pp][Rr][Oo][Xx][Yy]-[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Ss][Ee][Tt]-[Cc][Oo][Oo][Kk][Ii][Ee]|[Xx]-[Aa][Pp][Ii]-[Kk][Ee][Yy])$"
+                      }
+                    },
+                    "additionalProperties": { "type": "string" }
+                  },
+                  "auth": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": ["type"],
+                        "additionalProperties": false,
+                        "properties": { "type": { "const": "none" } }
+                      },
+                      {
+                        "type": "object",
+                        "required": ["type", "secret_ref"],
+                        "additionalProperties": false,
+                        "properties": {
+                          "type": { "const": "secret_ref_bearer" },
+                          "secret_ref": { "type": "string", "pattern": "^secret://.+" },
+                          "connector_id": { "type": "string", "minLength": 1 }
+                        }
+                      }
+                    ]
+                  },
+                  "idempotency_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "required": ["method"],
+                      "properties": {
+                        "method": { "enum": ["POST", "PUT", "PATCH", "DELETE", "post", "put", "patch", "delete"] }
+                      }
+                    },
+                    "then": { "required": ["idempotency_key"] }
+                  }
+                ]
+              }
+            }
+          }
         }
       ]
     },
@@ -227,6 +290,16 @@
       "type": "object",
       "required": ["handler", "input", "return_node"],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "handler": { "const": "@challenge" } }, "required": ["handler"] },
+          "then": { "properties": { "input": { "type": "object", "additionalProperties": false } } }
+        },
+        {
+          "if": { "properties": { "handler": { "const": "@human_task" } }, "required": ["handler"] },
+          "then": { "properties": { "input": { "$ref": "#/$defs/humanTaskInput" } } }
+        }
+      ],
       "properties": {
         "handler": { "type": "string", "enum": ["@challenge", "@human_task"] },
         "input": {
@@ -234,6 +307,63 @@
           "description": "핸들러별 명시 입력. 상세 의미는 reserved-handlers.md가 권위이며, 호출 객체 자체는 closed shape이다."
         },
         "return_node": { "$ref": "#/$defs/nodeTarget", "description": "핸들러 resolved 후 재개할 노드 id" }
+      }
+    },
+    "humanTaskInput": {
+      "type": "object",
+      "required": ["assignee_role"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["approval", "validation", "exception"] },
+        "payload": { "type": "object" },
+        "result_schema": { "$ref": "#/$defs/humanTaskResultSchema" },
+        "artifact_refs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "assignee_role": { "type": "string", "minLength": 1 },
+        "timeout": { "type": "string" },
+        "on_timeout": { "type": "string", "enum": ["fail", "escalate"] }
+      }
+    },
+    "humanTaskResultSchema": {
+      "oneOf": [
+        { "$ref": "#/$defs/businessFormSchema" },
+        {
+          "type": "object",
+          "not": { "required": ["version"] },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "businessFormSchema": {
+      "type": "object",
+      "required": ["version", "fields"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "const": "business_form_v1" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/businessFormField" }
+        }
+      }
+    },
+    "businessFormField": {
+      "type": "object",
+      "required": ["key", "label", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$" },
+        "label": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "enum": ["text", "textarea", "number", "boolean", "date", "select"] },
+        "required": { "type": "boolean" },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "help_text": { "type": "string" }
       }
     }
   }

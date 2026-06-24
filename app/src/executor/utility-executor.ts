@@ -10,19 +10,59 @@
 import type {
   ArtifactRef,
   ExecutorPlugin,
+  HttpResponseSnapshot,
   PageStateRef,
   RedactedString,
   RunContext,
+  SecretRef,
+  SideEffectKind,
   StepResult,
   VerifyResult,
 } from "../../../ts/core-types";
+import type { AuthenticatedPrincipal, RunId, SecretStoreBoundary } from "../../../ts/security-middleware-contract";
 import type { CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
 import { setDownloadBehavior } from "./raw-cdp";
 
 /** 본 실행기가 지원하는 결정형 액션(IRActionType 의 utility 부분집합). */
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+type HttpAuth =
+  | { type: "none" }
+  | { type: "secret_ref_bearer"; secretRef: SecretRef; connectorId?: string };
+type HttpFetchResponse = {
+  readonly status: number;
+  readonly ok: boolean;
+  readonly url?: string;
+  readonly redirected?: boolean;
+  readonly headers: { get(name: string): string | null };
+  text(): Promise<string>;
+};
+type HttpFetch = (
+  url: string,
+  init: { method: HttpMethod; headers: Record<string, string>; body?: string; signal: AbortSignal; redirect: "manual" },
+) => Promise<HttpFetchResponse>;
+
+export interface UtilityHttpApiDeps {
+  readonly fetch?: HttpFetch;
+  readonly secrets?: SecretStoreBoundary;
+  readonly principal?: AuthenticatedPrincipal;
+  readonly defaultTimeoutMs?: number;
+  readonly responseBodyLimitChars?: number;
+}
+
 export type UtilityAction =
   | { type: "navigate"; url: string }
+  | {
+      type: "api_call";
+      method: HttpMethod;
+      url: string;
+      headers: Record<string, string>;
+      body?: unknown;
+      auth: HttpAuth;
+      timeoutMs?: number;
+      sideEffectKind?: SideEffectKind;
+      idempotencyKey?: string;
+    }
   | { type: "download"; trigger: { selector: string }; fileName: string; timeoutMs?: number }
   | { type: "upload"; selector: string; files: string | string[] };
 
@@ -33,7 +73,8 @@ export type DeterministicCriteria =
   | { type: "element_absent"; target: { selector: string } }
   | { type: "text_includes"; texts: readonly string[] }
   | { type: "url_matches"; pattern: string }
-  | { type: "min_rows"; selector: string; n: number };
+  | { type: "min_rows"; selector: string; n: number }
+  | { type: "http_status"; codes: readonly number[] };
 
 /**
  * UtilityExecutor 도메인 에러코드 — error-catalog.ts 의 `ErrorCode` 와 **별개 네임스페이스**다.
@@ -59,12 +100,19 @@ export class UtilityExecutorError extends Error {
 }
 
 const DOM_ACTIONS = new Set(["act", "observe", "extract"]);
-const NON_BROWSER_ACTIONS = new Set(["api_call", "file", "shell"]);
+const NON_BROWSER_ACTIONS = new Set(["file", "shell"]);
+const HTTP_METHODS = new Set<HttpMethod>(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+const SENSITIVE_HTTP_HEADERS = new Set(["authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"]);
+const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
+const DEFAULT_HTTP_RESPONSE_BODY_LIMIT_CHARS = 65_536;
 
 const nowIso = () => new Date().toISOString();
 
 export class UtilityExecutor implements ExecutorPlugin {
-  constructor(private readonly sessions: CdpSessionProvider) {}
+  constructor(
+    private readonly sessions: CdpSessionProvider,
+    private readonly httpApi: UtilityHttpApiDeps = {},
+  ) {}
 
   capabilities(): { dom: boolean; vision: boolean; utility: boolean } {
     return { dom: false, vision: false, utility: true };
@@ -76,9 +124,11 @@ export class UtilityExecutor implements ExecutorPlugin {
       throw new UtilityExecutorError("RUN_ABORTED", `step '${stepId}' aborted before execute`);
     }
     const a = this.assertUtilityAction(stepId, action);
-    const policyFailure = a.type === "navigate" ? this.navigationPolicyFailure(stepId, a.url, ctx) : undefined;
+    const policyFailure =
+      a.type === "navigate" || a.type === "api_call"
+        ? this.navigationPolicyFailure(stepId, a.url, ctx, a.type)
+        : undefined;
     if (policyFailure !== undefined) return policyFailure;
-    const session = this.sessions.forLease(ctx.leaseId);
     const before = pageStateRef(ctx.pageState);
     const startedAt = nowIso();
 
@@ -87,6 +137,7 @@ export class UtilityExecutor implements ExecutorPlugin {
 
     switch (a.type) {
       case "navigate": {
+        const session = this.sessions.forLease(ctx.leaseId);
         await this.withAbort(ctx, session.goto(a.url));
         // NPA-02: session.goto 는 서버측 30x 리다이렉트를 추종한다. security-contracts §6("allowed_domains 밖 이동 →
         //   차단")는 요청 URL 뿐 아니라 **착지 결과**에도 적용된다 — 착지 URL(session.url())을 정책에 재검증한다.
@@ -98,7 +149,21 @@ export class UtilityExecutor implements ExecutorPlugin {
         output = { url: landed };
         break;
       }
+      case "api_call": {
+        const response = await this.executeHttpApiCall(a, ctx);
+        const redirectTarget = response.redirectLocation ?? response.finalUrl;
+        const responsePolicyFailure = this.navigationPolicyFailure(stepId, redirectTarget, ctx, a.type);
+        if (responsePolicyFailure !== undefined) return responsePolicyFailure;
+        sideEffectKind = {
+          kind: a.sideEffectKind ?? (a.method === "GET" ? "read_only" : "update"),
+          ...(a.idempotencyKey !== undefined ? { idempotencyKey: a.idempotencyKey } : {}),
+          committed: true,
+        };
+        output = response;
+        break;
+      }
       case "download": {
+        const session = this.sessions.forLease(ctx.leaseId);
         await this.withAbort(ctx, setDownloadBehavior(session, session.downloadDir())); // raw CDP 보완(§9.2 #5)
         await this.withAbort(ctx, session.click(a.trigger.selector));
         const captured = await this.withAbort(ctx, session.waitForDownload(a.fileName, a.timeoutMs ?? 5000));
@@ -114,6 +179,7 @@ export class UtilityExecutor implements ExecutorPlugin {
         break;
       }
       case "upload": {
+        const session = this.sessions.forLease(ctx.leaseId);
         await this.withAbort(ctx, session.setInputFiles(a.selector, a.files));
         sideEffectKind = { kind: "upload", committed: true };
         output = { files: a.files };
@@ -139,31 +205,40 @@ export class UtilityExecutor implements ExecutorPlugin {
 
   async verify(criteria: unknown, ctx: RunContext): Promise<VerifyResult> {
     const c = this.assertDeterministicCriteria(criteria);
-    const session = this.sessions.forLease(ctx.leaseId);
-
     let pass: boolean;
     if (c.type === "element_present") {
+      const session = this.sessions.forLease(ctx.leaseId);
       pass = await session.evaluate<boolean>(
         `!!document.querySelector(${JSON.stringify(c.selector)})`,
       );
     } else if (c.type === "element_visible") {
+      const session = this.sessions.forLease(ctx.leaseId);
       pass = await session.evaluate<boolean>(
         `!!document.querySelector(${JSON.stringify(c.target.selector)})`,
       );
     } else if (c.type === "element_absent") {
       // 결정형 부재: 셀렉터 미존재 → pass(비가역 커밋 witness·로딩완료 등). element_present/visible 의 역.
+      const session = this.sessions.forLease(ctx.leaseId);
       pass = await session.evaluate<boolean>(
         `!document.querySelector(${JSON.stringify(c.target.selector)})`,
       );
     } else if (c.type === "text_includes") {
       // 결정형 텍스트 포함: 모든 texts 가 body.innerText 에 존재해야 pass(AND). body 부재면 빈 문자열.
+      const session = this.sessions.forLease(ctx.leaseId);
       pass = await session.evaluate<boolean>(
         `(() => { const t = document.body ? document.body.innerText : ""; return ${JSON.stringify(c.texts)}.every((s) => t.includes(s)); })()`,
       );
     } else if (c.type === "url_matches") {
       // 결정형 URL 정규식: 현재 URL 이 pattern 에 매칭(Node 측 — session.url()). pattern 유효성은 parse 단계에서 검증.
+      const session = this.sessions.forLease(ctx.leaseId);
       pass = new RegExp(c.pattern).test(session.url());
+    } else if (c.type === "http_status") {
+      if (ctx.lastHttpResponse === undefined) {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "http_status verify requires a preceding api_call response");
+      }
+      pass = c.codes.includes(ctx.lastHttpResponse.status);
     } else {
+      const session = this.sessions.forLease(ctx.leaseId);
       const count = await session.evaluate<number>(
         `document.querySelectorAll(${JSON.stringify(c.selector)}).length`,
       );
@@ -221,6 +296,9 @@ export class UtilityExecutor implements ExecutorPlugin {
       }
       return { type, url };
     }
+    if (type === "api_call") {
+      return this.assertHttpApiCall(stepId, action as Record<string, unknown>);
+    }
     if (type === "download") {
       const trigger = (action as { trigger?: unknown }).trigger;
       const selector = typeof trigger === "object" && trigger !== null
@@ -256,6 +334,107 @@ export class UtilityExecutor implements ExecutorPlugin {
       return { type, selector, files: validFiles };
     }
     throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' unknown action '${type}'`);
+  }
+
+  private assertHttpApiCall(stepId: string, action: Record<string, unknown>): Extract<UtilityAction, { type: "api_call" }> {
+    const rawMethod = typeof action.method === "string" ? action.method.toUpperCase() : "GET";
+    if (!HTTP_METHODS.has(rawMethod as HttpMethod)) {
+      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.method must be one of GET/POST/PUT/PATCH/DELETE`);
+    }
+    const method = rawMethod as HttpMethod;
+    const url = nonEmptyString(action.url);
+    if (url === undefined) {
+      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.url must be a non-empty string`);
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.url must be an absolute URL`);
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.url must be an http(s) URL`);
+    }
+
+    const headers = this.assertHttpHeaders(stepId, action.headers);
+    const auth = this.assertHttpAuth(stepId, action.auth, action.connectorId ?? action.connector_id);
+    const timeoutMs = action.timeoutMs ?? action.timeout_ms;
+    if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || (timeoutMs as number) <= 0 || (timeoutMs as number) > 300_000)) {
+      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.timeoutMs must be an integer between 1 and 300000`);
+    }
+    const sideEffectKind = this.assertSideEffectKind(stepId, action.sideEffect ?? action.side_effect);
+    const idempotencyKey = nonEmptyString(action.idempotencyKey ?? action.idempotency_key);
+    const effectiveSideEffectKind = sideEffectKind ?? (method === "GET" ? "read_only" : "update");
+    if (effectiveSideEffectKind !== "read_only" && idempotencyKey === undefined) {
+      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.idempotency_key is required for non-read-only HTTP calls`);
+    }
+    return {
+      type: "api_call",
+      method,
+      url,
+      headers,
+      ...(action.body !== undefined ? { body: action.body } : {}),
+      auth,
+      ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs as number } : {}),
+      sideEffectKind: effectiveSideEffectKind,
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+    };
+  }
+
+  private assertHttpHeaders(stepId: string, raw: unknown): Record<string, string> {
+    if (raw === undefined) return {};
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.headers must be an object`);
+    }
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(raw)) {
+      if (name.trim().length === 0 || typeof value !== "string") {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.headers must contain non-empty string values`);
+      }
+      const normalized = name.trim();
+      if (SENSITIVE_HTTP_HEADERS.has(normalized.toLowerCase())) {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.headers.${normalized} must use SecretRef auth, not raw header values`);
+      }
+      headers[normalized] = value;
+    }
+    return headers;
+  }
+
+  private assertHttpAuth(stepId: string, raw: unknown, rawConnectorId: unknown): HttpAuth {
+    if (raw === undefined) return { type: "none" };
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.auth must be an object`);
+    }
+    const type = (raw as { type?: unknown }).type;
+    if (type === "none") return { type: "none" };
+    if (type === "secret_ref_bearer") {
+      const secretRef = nonEmptyString((raw as { secret_ref?: unknown; secretRef?: unknown }).secret_ref ?? (raw as { secretRef?: unknown }).secretRef);
+      if (secretRef === undefined || !secretRef.startsWith("secret://")) {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.auth.secret_ref must be a SecretRef`);
+      }
+      const connectorId = nonEmptyString(rawConnectorId ?? (raw as { connector_id?: unknown; connectorId?: unknown }).connector_id ?? (raw as { connectorId?: unknown }).connectorId);
+      return { type: "secret_ref_bearer", secretRef: secretRef as SecretRef, ...(connectorId !== undefined ? { connectorId } : {}) };
+    }
+    throw new UtilityExecutorError(
+      "IR_SCHEMA_INVALID",
+      `step '${stepId}' api_call.auth.type must be 'none' or 'secret_ref_bearer'`,
+    );
+  }
+
+  private assertSideEffectKind(stepId: string, raw: unknown): SideEffectKind | undefined {
+    if (raw === undefined) return undefined;
+    if (
+      raw === "read_only" ||
+      raw === "login" ||
+      raw === "submit" ||
+      raw === "create" ||
+      raw === "update" ||
+      raw === "delete" ||
+      raw === "upload"
+    ) {
+      return raw;
+    }
+    throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.sideEffect must be a valid side effect kind`);
   }
 
   private assertDeterministicCriteria(criteria: unknown): DeterministicCriteria {
@@ -320,6 +499,13 @@ export class UtilityExecutor implements ExecutorPlugin {
       }
       return { type, pattern };
     }
+    if (type === "http_status") {
+      const codes = (criteria as { codes?: unknown }).codes;
+      if (!Array.isArray(codes) || codes.length === 0 || !codes.every((code) => Number.isInteger(code) && code >= 100 && code <= 599)) {
+        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "http_status.codes must be non-empty HTTP status codes");
+      }
+      return { type, codes: codes as number[] };
+    }
     {
       // VLM/스크린샷 기준 등은 vision 실행기 소관(후행, §9.1) — 조용히 통과시키지 않는다.
       throw new UtilityExecutorError(
@@ -329,7 +515,76 @@ export class UtilityExecutor implements ExecutorPlugin {
     }
   }
 
-  private navigationPolicyFailure(stepId: string, url: string, ctx: RunContext): StepResult | undefined {
+  private async executeHttpApiCall(
+    action: Extract<UtilityAction, { type: "api_call" }>,
+    ctx: RunContext,
+  ): Promise<HttpResponseSnapshot> {
+    const fetchImpl = this.httpApi.fetch;
+    if (fetchImpl === undefined) {
+      throw new UtilityExecutorError("EXECUTOR_CAPABILITY_MISMATCH", "api_call HTTP fetch dependency is not configured");
+    }
+    const headers: Record<string, string> = { ...action.headers };
+    const secretsToRedact: string[] = [];
+    if (action.auth.type === "secret_ref_bearer") {
+      if (this.httpApi.secrets === undefined || this.httpApi.principal === undefined) {
+        throw new UtilityExecutorError("EXECUTOR_CAPABILITY_MISMATCH", "api_call SecretRef bearer auth requires SecretStoreBoundary and principal");
+      }
+      const secret = await this.httpApi.secrets.resolveAuthorized({
+        principal: this.httpApi.principal,
+        ref: action.auth.secretRef,
+        purpose: "connector",
+        runId: ctx.runId as RunId,
+        ...(action.auth.connectorId !== undefined ? { connectorId: action.auth.connectorId } : {}),
+      });
+      const plain = secret as string;
+      secretsToRedact.push(plain);
+      headers.Authorization = `Bearer ${plain}`;
+    }
+
+    const body = this.serializeHttpBody(action.body, headers);
+    const timeoutMs = action.timeoutMs ?? this.httpApi.defaultTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    ctx.abortSignal.addEventListener("abort", abort, { once: true });
+    try {
+      const response = await fetchImpl(action.url, { method: action.method, headers, ...(body !== undefined ? { body } : {}), signal: controller.signal, redirect: "manual" });
+      const contentType = response.headers.get("content-type") ?? "";
+      const finalUrl = typeof response.url === "string" && response.url.length > 0 ? response.url : action.url;
+      const redirectLocation = redirectTarget(action.url, response.status, response.headers.get("location"));
+      const rawText = redactSecrets(await response.text(), secretsToRedact);
+      const limit = this.httpApi.responseBodyLimitChars ?? DEFAULT_HTTP_RESPONSE_BODY_LIMIT_CHARS;
+      const bodyTruncated = rawText.length > limit;
+      const limitedText = bodyTruncated ? rawText.slice(0, limit) : rawText;
+      return {
+        status: response.status,
+        ok: response.ok,
+        contentType,
+        finalUrl,
+        redirected: response.redirected === true || redirectLocation !== undefined || finalUrl !== action.url,
+        ...(redirectLocation !== undefined ? { redirectLocation } : {}),
+        ...(limitedText.length > 0 ? { body: parseHttpBody(contentType, limitedText) } : {}),
+        bodyTruncated,
+      };
+    } finally {
+      clearTimeout(timer);
+      ctx.abortSignal.removeEventListener("abort", abort);
+    }
+  }
+
+  private serializeHttpBody(body: unknown, headers: Record<string, string>): string | undefined {
+    if (body === undefined) return undefined;
+    if (typeof body === "string") return body;
+    if (!hasHeader(headers, "content-type")) headers["Content-Type"] = "application/json";
+    return JSON.stringify(body);
+  }
+
+  private navigationPolicyFailure(
+    stepId: string,
+    url: string,
+    ctx: RunContext,
+    action: "navigate" | "api_call" = "navigate",
+  ): StepResult | undefined {
     const allowedDomains = ctx.networkAllowedDomains;
     if (allowedDomains === undefined) return undefined;
     const host = hostOf(url);
@@ -337,10 +592,10 @@ export class UtilityExecutor implements ExecutorPlugin {
 
     const now = nowIso();
     const pageRef = pageStateRef(ctx.pageState) as PageStateRef;
-    const message = `navigate host '${host ?? "invalid"}' is outside network policy '${ctx.networkPolicyId}'` as RedactedString;
+    const message = `${action} host '${host ?? "invalid"}' is outside network policy '${ctx.networkPolicyId}'` as RedactedString;
     return {
       stepId,
-      action: "navigate",
+      action,
       status: "failed_security",
       output: { url, allowed: false },
       pageStateBefore: pageRef,
@@ -367,6 +622,38 @@ export class UtilityExecutor implements ExecutorPlugin {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function hasHeader(headers: Record<string, string>, wanted: string): boolean {
+  const normalized = wanted.toLowerCase();
+  return Object.keys(headers).some((name) => name.toLowerCase() === normalized);
+}
+
+function parseHttpBody(contentType: string, text: string): unknown {
+  if (/\bjson\b/i.test(contentType)) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+function redirectTarget(baseUrl: string, status: number, location: string | null): string | undefined {
+  if (status < 300 || status > 399 || location === null || location.trim().length === 0) return undefined;
+  try {
+    return new URL(location, baseUrl).toString();
+  } catch {
+    return location;
+  }
+}
+
+function redactSecrets(value: string, secrets: readonly string[]): string {
+  return secrets.reduce((current, secret) => {
+    if (secret.length === 0) return current;
+    return current.split(secret).join("[REDACTED]");
+  }, value);
 }
 
 function hostOf(value: string): string | null {

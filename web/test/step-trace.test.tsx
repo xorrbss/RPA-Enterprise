@@ -21,7 +21,7 @@ function renderApp(client: ApiClient = fakeClient()): void {
 // 실행 상세 패널을 열어 단계 트레이스를 마운트.
 async function openDetail(): Promise<void> {
   location.hash = "#runTrace";
-  (await screen.findByRole("button", { name: "상세" })).click();
+  (await screen.findByRole("button", { name: "실행 추적 상세 보기" })).click();
 }
 
 describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
@@ -42,10 +42,18 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
     await openDetail();
     await waitFor(() => expect(screen.getByText("데이터 추출")).toBeInTheDocument()); // extract
     expect(screen.getByText("페이지 이동")).toBeInTheDocument(); // navigate
+    expect(screen.getByText("AI 판단 1회 · 출력 200토큰")).toBeInTheDocument();
     expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
-    expect(screen.getByText("입력 500 · 출력 200 토큰")).toBeInTheDocument();
+    expect(screen.getByText("입력량")).toBeInTheDocument();
+    expect(screen.getByText("500")).toBeInTheDocument();
+    expect(screen.getByText("출력량")).toBeInTheDocument();
+    expect(screen.getByText("200")).toBeInTheDocument();
+    expect(screen.getByText("비용")).toBeInTheDocument();
     expect(screen.getByText("$0.001234")).toBeInTheDocument(); // 원본 cost 문자열 그대로(toFixed 가공 없음)
-    expect(screen.getByText("첫응답 120ms")).toBeInTheDocument();
+    expect(screen.getByText("첫 응답 시간")).toBeInTheDocument();
+    expect(screen.getByText("120")).toBeInTheDocument();
+    expect(screen.getByText("계획 재사용 상태")).toBeInTheDocument();
+    expect(screen.queryByText(/input_tokens|output_tokens|ttfb_ms|cache_mode/)).toBeNull();
     expect(screen.getByText("AI 호출 없음")).toBeInTheDocument(); // stagehand 없는 bypass 단계(과거 '규칙 기반' 오표기 수정)
   });
 
@@ -82,10 +90,12 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
       }),
     );
     await openDetail();
-    await waitFor(() => expect(screen.getByText("gpt-4o-mini, gpt-4o (2회 호출)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("AI 판단 2회 · 출력 ≥200토큰")).toBeInTheDocument());
+    expect(screen.getByText("gpt-4o-mini, gpt-4o")).toBeInTheDocument();
     expect(screen.getByText("$0.0025")).toBeInTheDocument(); // 0.002 + 0.0005, 허위정밀(toFixed 6) 없이
-    expect(screen.getByText("입력 ≥500 · 출력 ≥200 토큰")).toBeInTheDocument(); // 2번째 호출 토큰 null → 합계를 총계 아닌 하한(≥)으로
-    expect(screen.queryByText(/첫응답/)).toBeNull(); // 다건은 단일 ttfb 단정 안 함
+    expect(screen.getByText("≥500")).toBeInTheDocument(); // 2번째 호출 토큰 null → 합계를 총계 아닌 하한(≥)으로
+    expect(screen.getByText("≥200")).toBeInTheDocument();
+    expect(screen.queryByText("첫 응답 시간")).toBeNull(); // 다건은 단일 첫응답 시간 단정 안 함
   });
 
   // 토큰 전부 null(usage 미수신) → '0 토큰'으로 거짓표기하지 않고 토큰 span 자체 생략.
@@ -225,7 +235,7 @@ describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {
     expect(cards).toHaveAttribute("aria-pressed", "true"); // 기본 = 카드
     expect(table).toHaveAttribute("aria-pressed", "false");
     table.click();
-    await waitFor(() => expect(screen.getByText("AI(모델·출력토큰)")).toBeInTheDocument()); // 표 전용 헤더
+    await waitFor(() => expect(screen.getByText("AI 판단")).toBeInTheDocument()); // 표 전용 헤더
     expect(screen.getByRole("button", { name: "표" })).toHaveAttribute("aria-pressed", "true");
   });
 

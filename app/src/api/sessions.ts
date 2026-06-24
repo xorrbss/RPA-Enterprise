@@ -90,8 +90,15 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ApiServerDeps)
       }
       const principal = requirePrincipal(request);
       const items = await withTenantTx(deps.pool, String(principal.tenantId), async (c) => {
-        const r = await c.query<{ id: string; status: string; detail: string | null; updated_at: Date }>(
-          `SELECT id::text AS id, status, detail, updated_at
+        const site = await c.query<{ id: string }>(
+          `SELECT id::text AS id FROM site_profiles WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+          [String(principal.tenantId), id],
+        );
+        if (site.rows[0] === undefined) {
+          throw new ApiResponseError("RESOURCE_NOT_FOUND");
+        }
+        const r = await c.query<{ capture_session_id: string; status: string; detail: string | null; updated_at: Date }>(
+          `SELECT id::text AS capture_session_id, status, detail, updated_at
              FROM capture_sessions
             WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid
             ORDER BY created_at DESC LIMIT 10`,
@@ -100,7 +107,7 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ApiServerDeps)
         return r.rows;
       });
       // 쿠키/자격증명 미포함(capture_sessions 는 상태·메타만 보유).
-      reply.code(200).send({ items });
+      reply.code(200).send({ items, next_cursor: null });
     },
   );
 

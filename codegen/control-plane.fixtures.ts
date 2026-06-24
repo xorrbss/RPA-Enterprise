@@ -74,13 +74,24 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
   runs: [{
     run_id: "run-existing",
     tenant_id: tenantId,
+    scenario_id: "scenario-1",
     scenario_version_id: "sv-1",
     status: "running",
     attempts: 0,
     as_of: "2026-06-13T00:00:00Z",
   }, {
+    run_id: "run-completed",
+    tenant_id: tenantId,
+    scenario_id: "scenario-1",
+    scenario_version_id: "sv-1",
+    status: "completed",
+    attempts: 1,
+    as_of: "2026-06-13T00:00:00Z",
+    progress_node: "submit",
+  }, {
     run_id: "run-suspending",
     tenant_id: tenantId,
+    scenario_id: "scenario-1",
     scenario_version_id: "sv-1",
     status: "suspending",
     attempts: 0,
@@ -88,6 +99,7 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
   }, {
     run_id: "run-other-tenant",
     tenant_id: otherTenantId,
+    scenario_id: "scenario-1",
     scenario_version_id: "sv-1",
     status: "running",
     attempts: 0,
@@ -191,6 +203,97 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
     }],
     exception: null,
   }],
+  runTriggers: [{
+    trigger_id: "trigger-existing",
+    tenant_id: tenantId,
+    scenario_version_id: "sv-1",
+    trigger_type: "cron",
+    status: "enabled",
+    cron_expression: "0 9 * * 1-5",
+    timezone: "Asia/Seoul",
+    webhook_secret_ref: null,
+    webhook_secret_configured: false,
+    params: { region: "KR" },
+    catchup_policy: "skip_missed",
+    max_concurrent_runs: 1,
+    next_fire_at: "2026-06-24T00:00:00.000Z",
+  }],
+  runTriggerFires: [{
+    fire_id: "fire-existing",
+    tenant_id: tenantId,
+    trigger_id: "trigger-existing",
+    fire_key: "trigger-existing:2026-06-24T00:00:00.000Z",
+    status: "queued",
+    scheduled_for: "2026-06-24T00:00:00.000Z",
+    run_id: "run-existing",
+  }],
+  automationIdeas: [{
+    id: "idea-existing",
+    tenant_id: tenantId,
+    title: "Invoice portal reconciliation",
+    description: "Match supplier invoice status across a browser portal and finance queue.",
+    business_owner: "finance-ops",
+    department: "Finance",
+    source: "manual",
+    stage: "intake",
+    priority: "high",
+    score: 72,
+    scenario_id: null,
+    run_trigger_id: null,
+    created_by: "principal-1",
+    created_at: "2026-06-13T00:00:00.000Z",
+    updated_at: "2026-06-13T00:00:00.000Z",
+  }],
+  roiEstimates: [{
+    id: "roi-existing",
+    tenant_id: tenantId,
+    automation_idea_id: "idea-existing",
+    frequency_per_month: 120,
+    minutes_per_case: 8,
+    exception_rate: 0.1,
+    hourly_cost: 40000,
+    implementation_effort: 3200000,
+    monthly_hours_saved: 14.4,
+    estimated_monthly_value: 576000,
+    payback_months: 5.555555555555555,
+    confidence: "medium",
+    created_by: "principal-1",
+    created_at: "2026-06-13T00:00:00.000Z",
+    updated_at: "2026-06-13T00:00:00.000Z",
+  }],
+  auditLog: [{
+    audit_id: "audit-existing",
+    tenant_id: tenantId,
+    sequence_no: 1,
+    actor: { subject_id: "principal-1", roles: ["admin"] },
+    action: "artifact.read",
+    outcome: "allow",
+    reason: "artifact disclosed",
+    correlation_id: "11111111-1111-4111-8111-111111111199",
+    idempotency_key: "audit-fixture-1",
+    occurred_at: "2026-06-15T00:00:00Z",
+    payload_schema_ref: "audit/security-boundary-decision@1",
+    retention_until: "2026-09-15T00:00:00Z",
+    legal_hold: false,
+    previous_hash: null,
+    hash: "sha256:fixture",
+    created_at: "2026-06-15T00:00:00Z",
+  }],
+  connectors: [{
+    catalog_id: "91000000-0000-4000-8000-000000000001",
+    connector_id: "sap-web",
+    name: "SAP Web / ERP Portal",
+    kind: "browser",
+    status: "candidate",
+  }],
+  templates: [{
+    catalog_id: "92000000-0000-4000-8000-000000000001",
+    template_id: "sap-web-list-extract",
+    connector_id: "sap-web",
+    name: "SAP list extract",
+    kind: "browser_workflow",
+    status: "candidate",
+  }],
   gatewayPolicies: [{
     id: "gp-default",
     tenant_id: tenantId,
@@ -206,6 +309,62 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
     approved: false,
     circuit_state: "closed",
   }],
+  siteElements: [{
+    element_id: "element-submit",
+    tenant_id: tenantId,
+    site_profile_id: "site-red",
+    element_key: "SubmitButton",
+    label: "Submit button",
+    selector: "button[type=submit]",
+    element_type: "button",
+    stability: "stable",
+    source: "manual",
+    usage_count: 2,
+    created_at: "2026-06-13T00:00:00.000Z",
+    updated_at: "2026-06-13T00:00:00.000Z",
+  }],
+  captureSessions: [{
+    capture_session_id: "capture-existing",
+    tenant_id: tenantId,
+    site_profile_id: "site-red",
+    status: "awaiting_login",
+    detail: "operator login pending",
+    updated_at: "2026-06-13T00:00:00.000Z",
+  }, {
+    capture_session_id: "capture-other-tenant",
+    tenant_id: otherTenantId,
+    site_profile_id: "site-red",
+    status: "captured",
+    updated_at: "2026-06-13T00:00:00.000Z",
+  }],
+  browserRecordingSessions: [{
+    recording_session_id: "recording-existing",
+    tenant_id: tenantId,
+    site_profile_id: "site-red",
+    name: "Existing browser recording",
+    start_url: "https://portal.example.test/invoices",
+    status: "recording",
+    event_count: 1,
+    draft_ir: null,
+    validation_report: null,
+    updated_by: "principal-1",
+    created_at: "2026-06-13T00:00:00.000Z",
+    updated_at: "2026-06-13T00:00:00.000Z",
+  }],
+  browserRecordingEvents: [{
+    event_id: "recording-event-existing",
+    tenant_id: tenantId,
+    recording_session_id: "recording-existing",
+    seq: 1,
+    event_type: "navigate",
+    url: "https://portal.example.test/invoices",
+    selector: null,
+    element_key: null,
+    label: "Invoice portal",
+    value_preview: null,
+    captured_at: "2026-06-13T00:00:00.000Z",
+    created_at: "2026-06-13T00:00:00.000Z",
+  }],
 });
 
 const handlers = createMinimalControlPlaneHandlers(services);
@@ -214,14 +373,37 @@ const binder = createRouteBinder(handlers, registry);
 
 const operationIds = CONTROL_PLANE_OPERATION_BINDINGS.map((binding) => binding.operationId);
 for (const operationId of [
+  "getAuthReadiness",
   "createRun",
   "getRun",
   "listRunSteps",
+  "streamRunSteps",
   "listRunArtifacts",
   "listRuns",
   "abortRun",
+  "listRunTriggers",
+  "createRunTrigger",
+  "getRunTrigger",
+  "updateRunTrigger",
+  "pauseRunTrigger",
+  "resumeRunTrigger",
+  "listRunTriggerFires",
+  "listOpsAlerts",
+  "getOpsHealth",
+  "listAutomationIdeas",
+  "createAutomationIdea",
+  "getAutomationIdea",
+  "updateAutomationIdea",
+  "transitionAutomationIdea",
+  "upsertRoiEstimate",
+  "getRoiEstimate",
+  "listAuditLog",
+  "exportAuditLog",
+  "listConnectors",
+  "listTemplates",
   "validateScenario",
   "promoteScenario",
+  "promoteScenarioFromRun",
   "archiveScenario",
   "listScenarioVersions",
   "getScenarioVersion",
@@ -241,14 +423,35 @@ for (const operationId of [
   "deleteGatewayPolicy",
   "listSites",
   "approveSite",
+  "listSessionCaptures",
+  "updateSitePageState",
+  "listSiteElements",
+  "createSiteElement",
+  "updateSiteElement",
+  "probeSiteElement",
+  "deleteSiteElement",
+  "listBrowserRecordings",
+  "startBrowserRecording",
+  "listBrowserRecordingEvents",
+  "appendBrowserRecordingEvents",
+  "completeBrowserRecording",
 ] satisfies OperationId[]) {
   assert.ok(operationIds.includes(operationId), `operation binding missing ${operationId}`);
 }
 
 assert.equal(registry.getOperation("createRun").requiresAuth, true);
+assert.equal(registry.getOperation("getAuthReadiness").requiresAuth, true);
 assert.equal(registry.getOperation("createRun").requiresTenantBinding, true);
 assert.equal(registry.getOperation("createRun").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("promoteScenario").ifMatch?.entity, "scenario_version");
+assert.equal(registry.getOperation("promoteScenarioFromRun").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("createRunTrigger").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("pauseRunTrigger").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("resumeRunTrigger").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("createAutomationIdea").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("updateAutomationIdea").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("transitionAutomationIdea").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("upsertRoiEstimate").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("archiveScenario").ifMatch?.entity, "scenario_version");
 assert.equal(registry.getOperation("rollbackScenario").ifMatch?.entity, "scenario_version");
 assert.equal(registry.getOperation("archiveScenario").requiresIdempotencyKey, true);
@@ -257,12 +460,40 @@ assert.equal(registry.getOperation("createGatewayPolicy").requiresIdempotencyKey
 assert.equal(registry.getOperation("updateGatewayPolicy").ifMatch?.entity, "gateway_policy");
 assert.equal(registry.getOperation("deleteGatewayPolicy").ifMatch?.entity, "gateway_policy");
 assert.equal(registry.getOperation("deleteGatewayPolicy").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("createSiteElement").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("updateSiteElement").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("probeSiteElement").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("deleteSiteElement").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("startBrowserRecording").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("appendBrowserRecordingEvents").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("completeBrowserRecording").requiresIdempotencyKey, true);
 assert.equal(staticRbacAction("createRun"), "run.create");
+assert.equal(staticRbacAction("getAuthReadiness"), "principal.read");
 assert.equal(staticRbacAction("abortRun"), "run.abort");
 assert.equal(staticRbacAction("listRunSteps"), "run.read");
+assert.equal(staticRbacAction("streamRunSteps"), "run.read");
 assert.equal(staticRbacAction("listRunArtifacts"), "artifact.read");
+assert.equal(staticRbacAction("listRunTriggers"), "trigger.read");
+assert.equal(staticRbacAction("createRunTrigger"), "trigger.manage");
+assert.equal(staticRbacAction("pauseRunTrigger"), "trigger.manage");
+assert.equal(staticRbacAction("resumeRunTrigger"), "trigger.manage");
+assert.equal(staticRbacAction("listRunTriggerFires"), "trigger.read");
+assert.equal(staticRbacAction("listOpsAlerts"), "ops_alert.read");
+assert.equal(staticRbacAction("getOpsHealth"), "ops_alert.read");
+assert.equal(staticRbacAction("listAutomationIdeas"), "automation_idea.read");
+assert.equal(staticRbacAction("createAutomationIdea"), "automation_idea.manage");
+assert.equal(staticRbacAction("getAutomationIdea"), "automation_idea.read");
+assert.equal(staticRbacAction("updateAutomationIdea"), "automation_idea.manage");
+assert.equal(staticRbacAction("transitionAutomationIdea"), "automation_idea.manage");
+assert.equal(staticRbacAction("upsertRoiEstimate"), "automation_idea.manage");
+assert.equal(staticRbacAction("getRoiEstimate"), "automation_idea.read");
+assert.equal(staticRbacAction("listAuditLog"), "audit.read");
+assert.equal(staticRbacAction("exportAuditLog"), "audit.read");
+assert.equal(staticRbacAction("listConnectors"), "connector.read");
+assert.equal(staticRbacAction("listTemplates"), "connector.read");
 assert.equal(staticRbacAction("validateScenario"), "scenario.read");
 assert.equal(staticRbacAction("promoteScenario"), "scenario.promote");
+assert.equal(staticRbacAction("promoteScenarioFromRun"), "scenario.promote");
 assert.equal(staticRbacAction("archiveScenario"), "scenario.update");
 assert.equal(staticRbacAction("listScenarioVersions"), "scenario.read");
 assert.equal(staticRbacAction("getScenarioVersion"), "scenario.read");
@@ -274,6 +505,17 @@ assert.equal(staticRbacAction("getGatewayPolicy"), "gateway_policy.read");
 assert.equal(staticRbacAction("createGatewayPolicy"), "gateway_policy.edit");
 assert.equal(staticRbacAction("updateGatewayPolicy"), "gateway_policy.edit");
 assert.equal(staticRbacAction("deleteGatewayPolicy"), "gateway_policy.edit");
+assert.equal(staticRbacAction("listSessionCaptures"), "session.capture");
+assert.equal(staticRbacAction("updateSitePageState"), "site.update");
+assert.equal(staticRbacAction("listSiteElements"), "site.read");
+assert.equal(staticRbacAction("createSiteElement"), "site.update");
+assert.equal(staticRbacAction("updateSiteElement"), "site.update");
+assert.equal(staticRbacAction("probeSiteElement"), "site.update");
+assert.equal(staticRbacAction("deleteSiteElement"), "site.update");
+assert.equal(staticRbacAction("listBrowserRecordings"), "site.read");
+assert.equal(staticRbacAction("startBrowserRecording"), "site.update");
+assert.equal(staticRbacAction("appendBrowserRecordingEvents"), "site.update");
+assert.equal(staticRbacAction("completeBrowserRecording"), "site.update");
 assert.throws(() => registry.getOperation("unknownOperation" as OperationId), /No control-plane operation binding/);
 
 assert.equal(registry.getBodyValidator("createRun")?.validate({}).valid, false);
@@ -282,17 +524,92 @@ assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini" }).valid, true);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, tenant_id: "t1" }).valid, false);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini", tenant_id: "t1" }).valid, false);
+assert.equal(registry.getBodyValidator("promoteScenarioFromRun")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("promoteScenarioFromRun")?.validate({ run_id: "run-completed" }).valid, true);
+assert.equal(registry.getBodyValidator("createRunTrigger")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createRunTrigger")?.validate({
+  scenario_version_id: "sv-1",
+  cron_expression: "0 9 * * 1-5",
+  timezone: "Asia/Seoul",
+}).valid, true);
+assert.equal(registry.getBodyValidator("createRunTrigger")?.validate({
+  trigger_type: "webhook",
+  scenario_version_id: "sv-1",
+  webhook_secret_ref: "secret://tenant-a/run-trigger/webhook",
+}).valid, true);
+assert.equal(registry.getBodyValidator("createRunTrigger")?.validate({
+  trigger_type: "webhook",
+  scenario_version_id: "sv-1",
+  webhook_secret_ref: "secret://tenant-a/run-trigger/webhook",
+  cron_expression: "0 9 * * 1-5",
+}).valid, false);
+assert.equal(registry.getBodyValidator("createAutomationIdea")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createAutomationIdea")?.validate({
+  title: "Portal invoice triage",
+  description: "Prioritize invoice exceptions from a browser portal.",
+  business_owner: "finance-ops",
+  department: "Finance",
+}).valid, true);
+assert.equal(registry.getBodyValidator("transitionAutomationIdea")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("transitionAutomationIdea")?.validate({ stage: "assess" }).valid, true);
+assert.equal(registry.getBodyValidator("upsertRoiEstimate")?.validate({
+  frequency_per_month: 100,
+  minutes_per_case: 5,
+  exception_rate: 0.1,
+  hourly_cost: 35000,
+  implementation_effort: 1200000,
+}).valid, true);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({ assignee: "reviewer-1" }).valid, true);
 assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
 assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ model: "codex", capabilities: {}, budget: {} }).valid, true);
 assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
+assert.equal(registry.getBodyValidator("updateSitePageState")?.validate({ page_state_selectors: { flags: {} } }).valid, true);
+assert.equal(registry.getBodyValidator("createSiteElement")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createSiteElement")?.validate({ element_key: "SubmitButton", label: "Submit", selector: "button[type=submit]" }).valid, true);
+assert.equal(registry.getBodyValidator("updateSiteElement")?.validate({ selector: "#submit" }).valid, true);
+assert.equal(registry.getBodyValidator("probeSiteElement")?.validate({ sample_url: "https://portal.example.test/form" }).valid, true);
+assert.equal(registry.getBodyValidator("startBrowserRecording")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("startBrowserRecording")?.validate({ name: "Portal recording" }).valid, true);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [] }).valid, false);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{}] }).valid, false);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "navigate" }] }).valid, false);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "click" }] }).valid, false);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "select", selector: "select[name=status]" }] }).valid, false);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "click", selector: "button" }] }).valid, true);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "navigate", url: "https://portal.example.test/form" }] }).valid, true);
+assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "select", selector: "select[name=status]", value_preview: "approved" }] }).valid, true);
 assert.equal(registry.getParamsValidator("getRun")?.validate({}).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({ run_id: "run-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("listRunSteps")?.validate({ run_id: "run-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("streamRunSteps")?.validate({ run_id: "run-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("listRunArtifacts")?.validate({ run_id: "run-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("getRunTrigger")?.validate({ trigger_id: "trigger-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("listRunTriggerFires")?.validate({ trigger_id: "trigger-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("getAutomationIdea")?.validate({ idea_id: "idea-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("getRoiEstimate")?.validate({ idea_id: "idea-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("assignHumanTask")?.validate({ human_task_id: "task-open" }).valid, true);
+assert.equal(registry.getParamsValidator("listSessionCaptures")?.validate({ site_profile_id: "site-red" }).valid, true);
+assert.equal(registry.getParamsValidator("updateSitePageState")?.validate({ site_profile_id: "site-red" }).valid, true);
+assert.equal(registry.getParamsValidator("listSiteElements")?.validate({ site_profile_id: "site-red" }).valid, true);
+assert.equal(registry.getParamsValidator("updateSiteElement")?.validate({ site_profile_id: "site-red", element_id: "el-submit" }).valid, true);
+assert.equal(registry.getParamsValidator("probeSiteElement")?.validate({ site_profile_id: "site-red", element_id: "el-submit" }).valid, true);
+assert.equal(registry.getParamsValidator("listBrowserRecordings")?.validate({ site_profile_id: "site-red" }).valid, true);
+assert.equal(registry.getParamsValidator("appendBrowserRecordingEvents")?.validate({ site_profile_id: "site-red", recording_session_id: "recording-existing" }).valid, true);
 assert.equal(registry.getQueryValidator("listRuns")?.validate(undefined).valid, false);
+assert.equal(registry.getQueryValidator("listRunTriggers")?.validate({ status: "enabled" }).valid, true);
+assert.equal(registry.getQueryValidator("listRunTriggerFires")?.validate({}).valid, true);
+assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ severity: "critical", source: "run_sla" }).valid, true);
+assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ severity: "warning", source: "failure_spike" }).valid, true);
+assert.equal(registry.getQueryValidator("listAutomationIdeas")?.validate({ stage: "intake" }).valid, true);
+assert.equal(registry.getQueryValidator("listAuditLog")?.validate({ action: "artifact.read", outcome: "allow" }).valid, true);
+assert.equal(registry.getQueryValidator("exportAuditLog")?.validate({ action: "artifact.read", outcome: "allow", format: "csv" }).valid, true);
+assert.equal(registry.getQueryValidator("listConnectors")?.validate({ kind: "browser", status: "candidate" }).valid, true);
+assert.equal(registry.getQueryValidator("listTemplates")?.validate({ connector_id: "sap-web" }).valid, true);
+assert.equal(registry.getQueryValidator("listSiteElements")?.validate({ stability: "stable", search: "submit" }).valid, true);
+assert.equal(registry.getQueryValidator("listBrowserRecordings")?.validate({ status: "recording" }).valid, true);
+assert.equal(registry.getQueryValidator("listBrowserRecordingEvents")?.validate({}).valid, true);
 assert.equal(registry.getQueryValidator("deleteGatewayPolicy")?.validate({}).valid, false);
 assert.equal(registry.getQueryValidator("deleteGatewayPolicy")?.validate({ model: "codex" }).valid, true);
 
@@ -351,6 +668,149 @@ await assertApiError(
   "WORKITEM_CHECKOUT_CONFLICT",
 );
 
+const triggerList = await handlers.listRunTriggers!(ctx("listRunTriggers", {
+  method: "GET",
+  path: "/v1/run-triggers",
+  query: { status: "enabled" },
+}));
+assert.equal((triggerList.body as { items: unknown[] }).items.length, 1);
+const triggerCreated = await handlers.createRunTrigger!(ctx("createRunTrigger", {
+  method: "POST",
+  path: "/v1/run-triggers",
+  body: {
+    scenario_version_id: "sv-2",
+    cron_expression: "30 8 * * 1-5",
+    timezone: "Asia/Seoul",
+    params: { team: "finance" },
+    catchup_policy: "fire_once",
+    max_concurrent_runs: 2,
+  },
+}));
+assert.equal(triggerCreated.status, 201);
+assert.equal((triggerCreated.body as { status: string }).status, "enabled");
+assert.equal((triggerCreated.body as { trigger_type: string }).trigger_type, "cron");
+const webhookTriggerCreated = await handlers.createRunTrigger!(ctx("createRunTrigger", {
+  method: "POST",
+  path: "/v1/run-triggers",
+  body: {
+    trigger_type: "webhook",
+    scenario_version_id: "sv-3",
+    webhook_secret_ref: "secret://tenant-a/run-trigger/webhook",
+  },
+}));
+assert.equal(webhookTriggerCreated.status, 201);
+assert.equal((webhookTriggerCreated.body as { trigger_type: string }).trigger_type, "webhook");
+assert.equal((webhookTriggerCreated.body as { webhook_secret_configured: boolean }).webhook_secret_configured, true);
+const triggerId = (triggerCreated.body as { trigger_id: string }).trigger_id;
+const triggerPaused = await handlers.pauseRunTrigger!(ctx("pauseRunTrigger", {
+  method: "POST",
+  path: "/v1/run-triggers/{trigger_id}/pause",
+  params: { trigger_id: triggerId },
+}));
+assert.equal((triggerPaused.body as { status: string }).status, "paused");
+const triggerResumed = await handlers.resumeRunTrigger!(ctx("resumeRunTrigger", {
+  method: "POST",
+  path: "/v1/run-triggers/{trigger_id}/resume",
+  params: { trigger_id: triggerId },
+}));
+assert.equal((triggerResumed.body as { status: string }).status, "enabled");
+const triggerFires = await handlers.listRunTriggerFires!(ctx("listRunTriggerFires", {
+  method: "GET",
+  path: "/v1/run-triggers/{trigger_id}/fires",
+  params: { trigger_id: "trigger-existing" },
+}));
+assert.equal((triggerFires.body as { items: unknown[] }).items.length, 1);
+const opsHealth = await handlers.getOpsHealth!(ctx("getOpsHealth", {
+  method: "GET",
+  path: "/v1/ops/health",
+}));
+assert.equal((opsHealth.body as { status: string }).status, "ok");
+
+const ideaList = await handlers.listAutomationIdeas!(ctx("listAutomationIdeas", {
+  method: "GET",
+  path: "/v1/automation-ideas",
+  query: { stage: "intake" },
+}));
+assert.equal((ideaList.body as { items: unknown[] }).items.length, 1);
+const ideaCreated = await handlers.createAutomationIdea!(ctx("createAutomationIdea", {
+  method: "POST",
+  path: "/v1/automation-ideas",
+  body: {
+    title: "Vendor portal status checks",
+    description: "Check vendor payment status in a browser portal and flag exceptions.",
+    business_owner: "finance-ops",
+    department: "Finance",
+    priority: "high",
+    score: 80,
+  },
+}));
+assert.equal(ideaCreated.status, 201);
+const ideaId = (ideaCreated.body as { id: string }).id;
+const ideaTransitioned = await handlers.transitionAutomationIdea!(ctx("transitionAutomationIdea", {
+  method: "POST",
+  path: "/v1/automation-ideas/{idea_id}/transition",
+  params: { idea_id: ideaId },
+  body: { stage: "assess" },
+}));
+assert.equal((ideaTransitioned.body as { stage: string }).stage, "assess");
+const roiEstimate = await handlers.upsertRoiEstimate!(ctx("upsertRoiEstimate", {
+  method: "POST",
+  path: "/v1/automation-ideas/{idea_id}/roi-estimate",
+  params: { idea_id: ideaId },
+  body: {
+    frequency_per_month: 120,
+    minutes_per_case: 8,
+    exception_rate: 0.1,
+    hourly_cost: 40000,
+    implementation_effort: 3200000,
+    confidence: "medium",
+  },
+}));
+assert.equal(roiEstimate.status, 200);
+assert.equal((roiEstimate.body as { monthly_hours_saved: number }).monthly_hours_saved, 14.4);
+const roiFetched = await handlers.getRoiEstimate!(ctx("getRoiEstimate", {
+  method: "GET",
+  path: "/v1/automation-ideas/{idea_id}/roi-estimate",
+  params: { idea_id: ideaId },
+}));
+assert.equal((roiFetched.body as { estimated_monthly_value: number }).estimated_monthly_value, 576000);
+const auditList = await handlers.listAuditLog!(ctx("listAuditLog", {
+  method: "GET",
+  path: "/v1/audit-log",
+  query: { action: "artifact.read", outcome: "allow" },
+}));
+assert.equal((auditList.body as { items: unknown[] }).items.length, 1);
+assert.equal(((auditList.body as { items: Array<{ payload?: unknown }> }).items[0]).payload, undefined);
+const auditExport = await handlers.exportAuditLog!(ctx("exportAuditLog", {
+  method: "GET",
+  path: "/v1/audit-log/export",
+  query: { action: "artifact.read", outcome: "allow", format: "csv" },
+}));
+assert.equal(auditExport.status, 200);
+assert.ok(String(auditExport.headers?.["content-type"] ?? "").includes("text/csv"));
+assert.ok(String(auditExport.body).includes("audit_id"));
+assert.equal(String(auditExport.body).split("\n")[0]?.split(",").includes("payload"), false);
+const authReadiness = await handlers.getAuthReadiness!(ctx("getAuthReadiness", {
+  method: "GET",
+  path: "/v1/auth/readiness",
+}));
+assert.equal(authReadiness.status, 200);
+assert.equal((authReadiness.body as { provider: { mode: string } }).provider.mode, "hs256");
+assert.equal((authReadiness.body as { enterprise_sso_ready: boolean }).enterprise_sso_ready, false);
+assert.equal((authReadiness.body as { current_principal: { subject_id: string } }).current_principal.subject_id, "principal-1");
+const connectorList = await handlers.listConnectors!(ctx("listConnectors", {
+  method: "GET",
+  path: "/v1/connectors",
+  query: { kind: "browser", status: "candidate" },
+}));
+assert.equal((connectorList.body as { items: Array<{ connector_id: string }> }).items[0]?.connector_id, "sap-web");
+const templateList = await handlers.listTemplates!(ctx("listTemplates", {
+  method: "GET",
+  path: "/v1/templates",
+  query: { connector_id: "sap-web" },
+}));
+assert.equal((templateList.body as { items: Array<{ template_id: string }> }).items[0]?.template_id, "sap-web-list-extract");
+
 const resolved = await handlers.resolveHumanTask!(ctx("resolveHumanTask", {
   method: "POST",
   path: "/v1/human-tasks/{human_task_id}/resolve",
@@ -408,6 +868,15 @@ assert.deepEqual(stepItems[0]?.artifact_ids, ["artifact-redacted"]);
 assert.equal(Object.prototype.hasOwnProperty.call(stepItems[0], "output"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(stepItems[0], "page_state_before"), false);
 
+const stepStream = await handlers.streamRunSteps!(ctx("streamRunSteps", {
+  method: "GET",
+  path: "/v1/runs/{run_id}/steps/stream",
+  params: { run_id: "run-existing" },
+}));
+assert.equal(stepStream.status, 200);
+assert.ok(String(stepStream.headers?.["content-type"] ?? "").includes("text/event-stream"));
+assert.ok(String(stepStream.body).includes("event: run_steps_changed"));
+
 const artifactList = await handlers.listRunArtifacts!(ctx("listRunArtifacts", {
   method: "GET",
   path: "/v1/runs/{run_id}/artifacts",
@@ -432,6 +901,16 @@ const promoted = await handlers.promoteScenario!(ctx("promoteScenario", {
   ifMatch: { kind: "match", currentVersion: 1, nextVersion: 2 },
 }));
 assert.equal(promoted.headers?.ETag, "2");
+
+const promotedFromRun = await handlers.promoteScenarioFromRun!(ctx("promoteScenarioFromRun", {
+  method: "POST",
+  path: "/v1/scenarios/{scenario_id}/promote-from-run",
+  params: { scenario_id: "scenario-1" },
+  body: { run_id: "run-completed" },
+}));
+assert.equal(promotedFromRun.status, 201);
+assert.equal((promotedFromRun.body as { scenario_version_id: string }).scenario_version_id, "scenario-1:v2");
+assert.deepEqual((promotedFromRun.body as { promoted_node_ids: string[] }).promoted_node_ids, ["submit"]);
 
 const scenarioVersions = await handlers.listScenarioVersions!(ctx("listScenarioVersions", {
   method: "GET",
@@ -518,6 +997,91 @@ const site = await handlers.approveSite!(ctx("approveSite", {
   body: { reason: "approved for smoke" },
 }));
 assert.equal((site.body as { approved: boolean }).approved, true);
+const captures = await handlers.listSessionCaptures!(ctx("listSessionCaptures", {
+  method: "GET",
+  path: "/v1/sites/{site_profile_id}/session/capture",
+  params: { site_profile_id: "site-red" },
+}));
+assert.equal((captures.body as { items: Array<{ capture_session_id: string }> }).items.length, 1);
+assert.equal((captures.body as { items: Array<{ capture_session_id: string }> }).items[0]?.capture_session_id, "capture-existing");
+const updatedPageState = await handlers.updateSitePageState!(ctx("updateSitePageState", {
+  method: "PATCH",
+  path: "/v1/sites/{site_profile_id}/page-state",
+  params: { site_profile_id: "site-red" },
+  body: { page_state_selectors: { flags: { blocked: { kind: "present", selector: ".blocked" } } } },
+}));
+assert.equal((updatedPageState.body as { site_profile_id: string }).site_profile_id, "site-red");
+const listedElements = await handlers.listSiteElements!(ctx("listSiteElements", {
+  method: "GET",
+  path: "/v1/sites/{site_profile_id}/elements",
+  params: { site_profile_id: "site-red" },
+  query: { stability: "stable" },
+}));
+assert.equal((listedElements.body as { items: Array<{ element_key: string }> }).items[0]?.element_key, "SubmitButton");
+const createdElement = await handlers.createSiteElement!(ctx("createSiteElement", {
+  method: "POST",
+  path: "/v1/sites/{site_profile_id}/elements",
+  params: { site_profile_id: "site-red" },
+  body: { element_key: "SearchInput", label: "Search input", selector: "input[name=q]", element_type: "input" },
+}));
+assert.equal((createdElement.body as { stability: string }).stability, "stable");
+const updatedElement = await handlers.updateSiteElement!(ctx("updateSiteElement", {
+  method: "PATCH",
+  path: "/v1/sites/{site_profile_id}/elements/{element_id}",
+  params: { site_profile_id: "site-red", element_id: "element-submit" },
+  body: { selector: "button.submit", stability: "review_needed" },
+}));
+assert.equal((updatedElement.body as { selector: string }).selector, "button.submit");
+const probedElement = await handlers.probeSiteElement!(ctx("probeSiteElement", {
+  method: "POST",
+  path: "/v1/sites/{site_profile_id}/elements/{element_id}/probe",
+  params: { site_profile_id: "site-red", element_id: "element-submit" },
+  body: { sample_url: "https://portal.example.test/form" },
+}));
+assert.equal((probedElement.body as { probe_status: string }).probe_status, "not_run");
+assert.equal((probedElement.body as { reason_code: string }).reason_code, "SELECTOR_PROBE_PROVIDER_UNAVAILABLE");
+const deletedElement = await handlers.deleteSiteElement!(ctx("deleteSiteElement", {
+  method: "DELETE",
+  path: "/v1/sites/{site_profile_id}/elements/{element_id}",
+  params: { site_profile_id: "site-red", element_id: "element-submit" },
+}));
+assert.equal((deletedElement.body as { deleted: boolean }).deleted, true);
+const recordingList = await handlers.listBrowserRecordings!(ctx("listBrowserRecordings", {
+  method: "GET",
+  path: "/v1/sites/{site_profile_id}/recordings",
+  params: { site_profile_id: "site-red" },
+  query: { status: "recording" },
+}));
+assert.equal((recordingList.body as { items: Array<{ recording_session_id: string }> }).items[0]?.recording_session_id, "recording-existing");
+const recordingEvents = await handlers.listBrowserRecordingEvents!(ctx("listBrowserRecordingEvents", {
+  method: "GET",
+  path: "/v1/sites/{site_profile_id}/recordings/{recording_session_id}/events",
+  params: { site_profile_id: "site-red", recording_session_id: "recording-existing" },
+}));
+assert.equal((recordingEvents.body as { items: Array<{ event_type: string }> }).items[0]?.event_type, "navigate");
+const createdRecording = await handlers.startBrowserRecording!(ctx("startBrowserRecording", {
+  method: "POST",
+  path: "/v1/sites/{site_profile_id}/recordings",
+  params: { site_profile_id: "site-red" },
+  body: { name: "Vendor portal recording", start_url: "https://portal.example.test/vendors" },
+}));
+assert.equal(createdRecording.status, 201);
+const recordingId = (createdRecording.body as { recording_session_id: string }).recording_session_id;
+const appendedRecordingEvents = await handlers.appendBrowserRecordingEvents!(ctx("appendBrowserRecordingEvents", {
+  method: "POST",
+  path: "/v1/sites/{site_profile_id}/recordings/{recording_session_id}/events",
+  params: { site_profile_id: "site-red", recording_session_id: recordingId },
+  body: { events: [{ event_type: "click", selector: "button[type=submit]", label: "Submit" }] },
+}));
+assert.equal((appendedRecordingEvents.body as { appended: number }).appended, 1);
+const completedRecording = await handlers.completeBrowserRecording!(ctx("completeBrowserRecording", {
+  method: "POST",
+  path: "/v1/sites/{site_profile_id}/recordings/{recording_session_id}/complete",
+  params: { site_profile_id: "site-red", recording_session_id: recordingId },
+}));
+assert.equal((completedRecording.body as { status: string }).status, "completed");
+assert.equal(typeof (completedRecording.body as { draft_ir: unknown }).draft_ir, "object");
+assert.deepEqual((completedRecording.body as { validation_report: unknown }).validation_report, { errors: [], warnings: [] });
 
 assert.deepEqual(apiErrorResponse("AUTHZ_FORBIDDEN", "corr").status, 403);
 assert.equal(exceptionResponse(new ApiResponseException("RUN_NOT_FOUND"), "corr").status, 404);

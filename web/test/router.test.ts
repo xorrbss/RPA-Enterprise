@@ -6,10 +6,21 @@ describe("viewFromHash — 딥링크 쿼리 파라미터 지원", () => {
   test("플레인 해시 → 뷰 키", () => {
     expect(viewFromHash("#runTrace")).toBe("runTrace");
     expect(viewFromHash("#dashboard")).toBe("dashboard");
+    expect(viewFromHash("#automationOps")).toBe("automationOps");
+    expect(viewFromHash("#coePipeline")).toBe("coePipeline");
+    expect(viewFromHash("#connectorCatalog")).toBe("connectorCatalog");
+    expect(viewFromHash("#objectRepository")).toBe("objectRepository");
+    expect(viewFromHash("#auditExplorer")).toBe("auditExplorer");
+    expect(viewFromHash("#documentIdp")).toBe("documentIdp");
   });
 
   test("쿼리 파라미터 붙은 해시 → '?' 이전을 뷰 키로(드릴다운 딥링크, 폴백 안 함)", () => {
     expect(viewFromHash("#runTrace?run=11111111-2222-3333-4444-555555555555")).toBe("runTrace");
+    expect(viewFromHash("#automationOps?status=queued")).toBe("automationOps");
+    expect(viewFromHash("#connectorCatalog?kind=browser")).toBe("connectorCatalog");
+    expect(viewFromHash("#objectRepository?site=site-1")).toBe("objectRepository");
+    expect(viewFromHash("#auditExplorer?action=artifact.read")).toBe("auditExplorer");
+    expect(viewFromHash("#documentIdp?doc=93000000-0000-4000-8000-000000000001")).toBe("documentIdp");
     expect(viewFromHash("#workitems?foo=bar")).toBe("workitems");
   });
 

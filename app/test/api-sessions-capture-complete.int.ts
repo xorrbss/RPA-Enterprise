@@ -100,6 +100,12 @@ async function main(): Promise<void> {
             payload: body,
           })
           .then((r) => r);
+      const listCaptures = (token: string, siteId = SITE) =>
+        app.inject({
+          method: "GET",
+          url: `/v1/sites/${siteId}/session/capture`,
+          headers: { authorization: `Bearer ${token}` },
+        });
 
       // 1) operator 캡처 완료 → 200 captured.
       const r1 = await post(operator, app, "key1", { capture_session_id: CAP, cookies });
@@ -117,6 +123,13 @@ async function main(): Promise<void> {
       const r2 = await post(operator, app, "key1", { capture_session_id: CAP, cookies });
       check("멱등 replay → 200 captured(동일)", r2.statusCode === 200 && JSON.parse(r2.body).status === "captured");
 
+      // 4-1) 상태 조회 → 최근 캡처 목록 + 민감정보 미노출.
+      const statusList = await listCaptures(operator);
+      const statusBody = JSON.parse(statusList.body) as { items: Array<Record<string, unknown>>; next_cursor: unknown };
+      check("GET capture status → 200 + captured row", statusList.statusCode === 200 && statusBody.items.some((item) => item.capture_session_id === CAP && item.status === "captured"), `${statusList.statusCode} ${statusList.body}`);
+      check("GET capture status → next_cursor null", statusBody.next_cursor === null);
+      check("GET capture status → 쿠키/로그인 URL 미노출", !statusList.body.includes("secret-cookie-val") && !Object.prototype.hasOwnProperty.call(statusBody.items[0] ?? {}, "login_url"), statusList.body);
+
       // 5) 미존재 capture → 404.
       const r404 = await post(operator, app, "key2", { capture_session_id: "c0000000-0000-0000-0000-0000000000ff", cookies });
       check("미존재 capture_session → 404", r404.statusCode === 404);
@@ -128,6 +141,8 @@ async function main(): Promise<void> {
       // 7) viewer → 403(RBAC).
       const rViewer = await post(viewer, app, "key4", { capture_session_id: CAP, cookies });
       check("viewer capture/complete → 403", rViewer.statusCode === 403);
+      const rViewerList = await listCaptures(viewer);
+      check("viewer capture status → 403", rViewerList.statusCode === 403);
 
       // 8) malformed body(쿠키 없음) → 422.
       const rBad = await post(operator, app, "key5", { capture_session_id: CAP });
@@ -140,6 +155,8 @@ async function main(): Promise<void> {
       // 10) cross-tenant(테넌트 B operator가 A의 capture) → 404(RLS 비노출).
       const rXt = await post(operatorB, app, "key6", { capture_session_id: CAP, cookies });
       check("cross-tenant capture → 404", rXt.statusCode === 404);
+      const rXtList = await listCaptures(operatorB);
+      check("cross-tenant capture status → 404", rXtList.statusCode === 404);
 
       // 11) sessionStore 미주입 앱 → 라우트 미등록(404, 메서드 없음).
       const rNoStore = await post(operator, appNoStore, "key7", { capture_session_id: CAP, cookies });

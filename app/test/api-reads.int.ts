@@ -464,7 +464,12 @@ async function main(): Promise<void> {
       check("getHumanTask detail fields",
         detail.json().human_task_id === HT_A2 && detail.json().state === "assigned" &&
         detail.json().kind === "approval" && detail.json().assignee === ASSIGNEE, JSON.stringify(detail.json()));
-      check("getHumanTask omits inline payload", !("payload" in detail.json()), JSON.stringify(detail.json()));
+      check("getHumanTask exposes V2 review fields",
+        JSON.stringify(detail.json().payload) === "{}" &&
+        JSON.stringify(detail.json().result_schema) === "{}" &&
+        Array.isArray(detail.json().artifact_refs) &&
+        detail.json().result === null,
+        JSON.stringify(detail.json()));
       const absent = await get(`/v1/human-tasks/${ABSENT}`);
       check("absent human task → 404", absent.statusCode === 404 && absent.json().code === "RESOURCE_NOT_FOUND", absent.body);
       const crossHt = await get(`/v1/human-tasks/${HT_A2}`, viewerB);

@@ -220,8 +220,17 @@ async function main(): Promise<void> {
     await app.ready();
     try {
       const admin = await mint({ sub: "ad", tenant_id: TENANT, roles: ["admin"] });
-      const post = (scen: string, body: Record<string, unknown>, key: string) =>
-        app.inject({ method: "POST", url: `/v1/scenarios/${scen}/promote-from-run`, headers: { authorization: `Bearer ${admin}`, "idempotency-key": key }, payload: body });
+      const operator = await mint({ sub: "op", tenant_id: TENANT, roles: ["operator"] });
+      const postAs = (token: string, scen: string, body: Record<string, unknown>, key: string) =>
+        app.inject({ method: "POST", url: `/v1/scenarios/${scen}/promote-from-run`, headers: { authorization: `Bearer ${token}`, "idempotency-key": key }, payload: body });
+      const post = (scen: string, body: Record<string, unknown>, key: string) => postAs(admin, scen, body, key);
+
+      const operatorDenied = await postAs(operator, SCEN, { run_id: RUN_OK }, "promote-denied-operator-1");
+      check("operator promote-from-run 거부(403)", operatorDenied.statusCode === 403, operatorDenied.body);
+      const deniedCount = await withTenantTx(pool, TENANT, (c) =>
+        c.query<{ n: string }>(`SELECT count(*)::text AS n FROM scenario_versions WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid`, [TENANT, SCEN]),
+      );
+      check("operator 거부는 draft version을 만들지 않음", deniedCount.rows[0]?.n === "1", JSON.stringify(deniedCount.rows));
 
       // 1) 해피패스: 성공 run → 새 draft 버전, click_selector 베이킹.
       const ok = await post(SCEN, { run_id: RUN_OK }, "promote-ok-1");

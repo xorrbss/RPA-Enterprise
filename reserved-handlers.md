@@ -16,10 +16,26 @@ type ReservedHandlerTarget =
 type HumanTaskInput = {
   kind: "approval" | "validation" | "exception";
   payload?: Record<string, unknown>;
+  result_schema?: HumanTaskResultSchema;
+  artifact_refs?: string[];
   assignee_role: string;
   timeout?: string;
   on_timeout?: "fail" | "escalate"; // default fail
 };
+
+type HumanTaskResultSchema =
+  | {
+      version: "business_form_v1";
+      fields: Array<{
+        key: string;        // /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+        label: string;
+        type: "text" | "textarea" | "number" | "boolean" | "date" | "select";
+        required?: boolean; // default false
+        options?: string[]; // select only
+        help_text?: string;
+      }>;
+    }
+  | Record<string, unknown>; // legacy display-only hint, not schema-validated
 ```
 
 규칙:
@@ -81,7 +97,7 @@ ChallengeResolutionPolicy 상태머신(PRD §10.6)을 실행한다.
 승인/검증/예외 등 사람 개입이 필요한 노드. 항상 suspend.
 
 ```ts
-// 입력: kind(approval|validation|exception), payload, assignee_role, timeout, on_timeout(fail|escalate, 기본 fail)
+// 입력: kind(approval|validation|exception), payload, result_schema, artifact_refs, assignee_role, timeout, on_timeout(fail|escalate, 기본 fail)
 ```
 
 | 종료 | 결과 |
@@ -92,6 +108,13 @@ ChallengeResolutionPolicy 상태머신(PRD §10.6)을 실행한다.
 | timeout 초과 (on_timeout=escalate) | Human Task `escalated`(H4b) → 관리자 큐, Run은 suspended 유지(R15). 재배정(H6) 없이 다시 timeout되면 `expired`(H8) → Run R14 → HUMAN_TASK_EXPIRED |
 
 복귀 시점: `human_tasks.state = resolved` 이벤트 → Run `resume_requested`. resume_token으로 진입 노드 컨텍스트 복원.
+
+Business form v1:
+- `result_schema.version="business_form_v1"`이면 콘솔은 `fields[]`를 업무 입력 폼으로 렌더한다.
+- resolve payload의 `result.corrections`는 `fields[].key`와 매칭되어야 한다. `decision="correct"`일 때 `required=true` 필드는 필수다.
+- 타입 검증: `number`는 finite number, `boolean`은 boolean, `date`는 `YYYY-MM-DD`, `select`는 `options[]` 중 하나, `text`/`textarea`는 string.
+- `payload`와 `artifact_refs`는 검토자가 폼을 채우기 위한 문맥/증거 참조다. artifact 본문은 HumanTask 응답에 인라인하지 않고 Artifacts API의 redaction/RBAC 경계를 사용한다.
+- `timeout` duration string(`1000ms`/`30s`/`15m`/`2h`/`1d`)은 `human_tasks.expires_at`으로 저장한다. 미지정 시 `ops-defaults.md#human_task.default_timeout`(30m)을 적용한다. `human_task_timeout_sweeper`는 H4a/H4b/H8과 Run R14/R15를 처리한다.
 
 ---
 

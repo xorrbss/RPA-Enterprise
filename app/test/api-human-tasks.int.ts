@@ -56,6 +56,7 @@ const RUN_SUSP_ESCALATE = "40000000-0000-0000-0000-000000000013";
 const RUN_SUSP_SCOPE_OK = "40000000-0000-0000-0000-000000000014";
 const RUN_SUSP_SCOPE_DENY = "40000000-0000-0000-0000-000000000015";
 const RUN_SUSP_ROLE_SCOPE = "40000000-0000-0000-0000-000000000016";
+const RUN_SUSP_FORM = "40000000-0000-0000-0000-000000000017";
 const HT_RESOLVE_OK = "41000000-0000-0000-0000-000000000010";
 const HT_RESOLVE_OK_CYCLE2 = "41000000-0000-0000-0000-000000000020"; // EPL-01: 같은 run 2번째 suspend 사이클 task
 const HT_RESOLVE_NOCOUPLE = "41000000-0000-0000-0000-000000000011";
@@ -66,6 +67,7 @@ const HT_ESCALATED_AGAIN = "41000000-0000-0000-0000-000000000015";
 const HT_RESOLVE_SCOPE_OK = "41000000-0000-0000-0000-000000000016";
 const HT_RESOLVE_SCOPE_DENY = "41000000-0000-0000-0000-000000000017";
 const HT_RESOLVE_ROLE_SCOPE = "41000000-0000-0000-0000-000000000018";
+const HT_BUSINESS_FORM = "41000000-0000-0000-0000-000000000019";
 
 const SECRET = new TextEncoder().encode("d45-htask-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -150,10 +152,14 @@ async function outboxCount(pool: Pool, tenant: string, run: string, eventType: s
   });
 }
 
-async function taskRow(pool: Pool, tenant: string, id: string): Promise<{ state: string; assignee: string | null } | null> {
+async function taskRow(
+  pool: Pool,
+  tenant: string,
+  id: string,
+): Promise<{ state: string; assignee: string | null; result: Record<string, unknown> | null; resolved_by: string | null } | null> {
   return withTenantTx(pool, tenant, async (c) => {
-    const r = await c.query<{ state: string; assignee: string | null }>(
-      `SELECT state, assignee::text AS assignee FROM human_tasks WHERE id=$1::uuid`,
+    const r = await c.query<{ state: string; assignee: string | null; result: Record<string, unknown> | null; resolved_by: string | null }>(
+      `SELECT state, assignee::text AS assignee, result, resolved_by FROM human_tasks WHERE id=$1::uuid`,
       [id],
     );
     return r.rows[0] ?? null;
@@ -218,6 +224,7 @@ async function main(): Promise<void> {
     await seedExtraRun(pool, TENANT_A, SVER_A, RUN_SUSP_SCOPE_OK, "suspended");
     await seedExtraRun(pool, TENANT_A, SVER_A, RUN_SUSP_SCOPE_DENY, "suspended");
     await seedExtraRun(pool, TENANT_A, SVER_A, RUN_SUSP_ROLE_SCOPE, "suspended");
+    await seedExtraRun(pool, TENANT_A, SVER_A, RUN_SUSP_FORM, "suspended");
     await seedTask(pool, TENANT_A, RUN_SUSP_RESOLVE, HT_RESOLVE_OK, "in_progress", "exception", {
       assignee: ASSIGNEE,
       assigneeRole: "reviewer",
@@ -248,6 +255,33 @@ async function main(): Promise<void> {
       assignee: APPROVER_ASSIGNEE,
       assigneeRole: "approver",
     });
+    await seedTask(pool, TENANT_A, RUN_SUSP_FORM, HT_BUSINESS_FORM, "in_progress", "validation", {
+      assignee: ASSIGNEE,
+      assigneeRole: "reviewer",
+    });
+    await withTenantTx(pool, TENANT_A, (c) =>
+      c.query(
+        `UPDATE human_tasks
+            SET result_schema=$3::jsonb,
+                payload=$4::jsonb,
+                artifact_refs=$5::jsonb
+          WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+        [
+          TENANT_A,
+          HT_BUSINESS_FORM,
+          JSON.stringify({
+            version: "business_form_v1",
+            fields: [
+              { key: "invoice_id", label: "Invoice ID", type: "text", required: true },
+              { key: "total", label: "Total", type: "number", required: true },
+              { key: "approved", label: "Approved", type: "boolean" },
+            ],
+          }),
+          JSON.stringify({ source: "invoice" }),
+          JSON.stringify(["artifact.invoice.scan"]),
+        ],
+      ),
+    );
     console.log("seeded human tasks across states");
 
     const resumeEnqueued: string[] = [];
@@ -374,9 +408,24 @@ async function main(): Promise<void> {
         post(`/v1/human-tasks/${id}/resolve`, key, token, payload);
 
       // 14) in_progress(exception) + resolve → 200 resolved + run resume_requested + 이벤트 2종.
-      const r1 = await resolve(HT_RESOLVE_OK, "resolve-ok");
+      const resolution = {
+        decision: "correct",
+        corrections: { invoice_no: "INV-2026-001" },
+        confidence: 0.93,
+        notes: "검증 큐에서 송장번호를 교정했습니다.",
+      };
+      const r1 = await resolve(HT_RESOLVE_OK, "resolve-ok", assignedReviewer, { result: resolution });
       check("resolve in_progress → 200 resolved", r1.statusCode === 200 && r1.json().state === "resolved", r1.body);
-      check("resolve → DB resolved", (await taskRow(pool, TENANT_A, HT_RESOLVE_OK))?.state === "resolved");
+      const resolvedTask = await taskRow(pool, TENANT_A, HT_RESOLVE_OK);
+      check("resolve → DB resolved", resolvedTask?.state === "resolved");
+      check("resolve response includes review result",
+        r1.json().result?.decision === "correct" && r1.json().result?.corrections?.invoice_no === "INV-2026-001" &&
+        r1.json().result?.confidence === 0.93, r1.body);
+      check("resolve → DB stores review result",
+        resolvedTask?.result?.decision === "correct" &&
+        (resolvedTask?.result?.corrections as { invoice_no?: unknown } | undefined)?.invoice_no === "INV-2026-001" &&
+        resolvedTask?.result?.confidence === 0.93, JSON.stringify(resolvedTask));
+      check("resolve → DB stores resolved_by", resolvedTask?.resolved_by === ASSIGNEE, JSON.stringify(resolvedTask));
       check("resolve → run resume_requested (R13)", (await runStatus(pool, TENANT_A, RUN_SUSP_RESOLVE)) === "resume_requested");
       check("resolve emits human_task.resolved", (await outboxCount(pool, TENANT_A, RUN_SUSP_RESOLVE, "human_task.resolved")) === 1);
       check("resolve emits run.resume_requested", (await outboxCount(pool, TENANT_A, RUN_SUSP_RESOLVE, "run.resume_requested")) === 1);
@@ -396,6 +445,33 @@ async function main(): Promise<void> {
       check("2회차 resolve(R13) → 200(per-cycle 키, UNIQUE 충돌 없음)", r1b.statusCode === 200 && r1b.json().state === "resolved", r1b.body);
       check("2회차 resolve → run resume_requested(stuck 아님)", (await runStatus(pool, TENANT_A, RUN_SUSP_RESOLVE)) === "resume_requested");
       check("2회차 resolve → run.resume_requested 이벤트 2건(유실 없음)", (await outboxCount(pool, TENANT_A, RUN_SUSP_RESOLVE, "run.resume_requested")) === 2);
+
+      const invalidResult = await resolve(HT_RESOLVE_NOCOUPLE, "resolve-invalid-result", assignedReviewer, { result: { decision: "maybe" } });
+      check("resolve invalid result decision → 422", invalidResult.statusCode === 422 && invalidResult.json().details?.reason === "invalid_resolve_decision", invalidResult.body);
+      check("resolve invalid result key unused", (await idemRowCount(pool, TENANT_A, "resolveHumanTask", "resolve-invalid-result")) === 0);
+
+      const formMissing = await resolve(HT_BUSINESS_FORM, "resolve-form-missing", assignedReviewer, {
+        result: { decision: "correct", corrections: { invoice_id: "INV-9" } },
+      });
+      check("business form required field missing → 422", formMissing.statusCode === 422 && formMissing.json().details?.reason === "business_form_required_field_missing", formMissing.body);
+      check("business form missing key unused", (await idemRowCount(pool, TENANT_A, "resolveHumanTask", "resolve-form-missing")) === 0);
+
+      const formTypeMismatch = await resolve(HT_BUSINESS_FORM, "resolve-form-type", assignedReviewer, {
+        result: { decision: "correct", corrections: { invoice_id: "INV-9", total: "not-a-number" } },
+      });
+      check("business form number type mismatch → 422", formTypeMismatch.statusCode === 422 && formTypeMismatch.json().details?.reason === "business_form_value_type_mismatch", formTypeMismatch.body);
+      check("business form type key unused", (await idemRowCount(pool, TENANT_A, "resolveHumanTask", "resolve-form-type")) === 0);
+
+      const formOk = await resolve(HT_BUSINESS_FORM, "resolve-form-ok", assignedReviewer, {
+        result: { decision: "correct", corrections: { invoice_id: "INV-9", total: 125000, approved: true } },
+      });
+      check("business form valid corrections → 200", formOk.statusCode === 200 && formOk.json().state === "resolved", formOk.body);
+      const storedFormResult = (await taskRow(pool, TENANT_A, HT_BUSINESS_FORM))?.result;
+      check(
+        "business form valid corrections stored",
+        (storedFormResult?.corrections as { total?: unknown } | undefined)?.total === 125000,
+        formOk.body,
+      );
 
       // 15) run이 suspended가 아니면(running) 교차 전이 건너뜀 — task는 resolved, run 불변.
       const r2 = await resolve(HT_RESOLVE_NOCOUPLE, "resolve-nocouple");

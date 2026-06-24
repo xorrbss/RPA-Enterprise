@@ -111,7 +111,7 @@ describe("LLM 게이트웨이 정책 — 목록·기본·CRUD", () => {
     const selectMini = selectButtons[0];
     if (selectMini === undefined) throw new Error("expected selectable secondary policy");
     selectMini.click();
-    await waitFor(() => expect(screen.getByText(/모델 gpt-4o-mini · v2/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/AI 모델 gpt-4o-mini · 변경 2/)).toBeInTheDocument());
     screen.getByRole("button", { name: "정책 삭제" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.model).toBe("gpt-4o-mini");
@@ -119,7 +119,7 @@ describe("LLM 게이트웨이 정책 — 목록·기본·CRUD", () => {
     expect(calls[0]?.key.length).toBeGreaterThan(0);
   });
 
-  test("새 정책 생성: JSON body + 기본 정책 플래그 전송", async () => {
+  test("새 정책 생성: 구조화 설정 + 기본 정책 플래그 전송", async () => {
     const calls: Array<{ body: GatewayPolicyUpdate; key: string }> = [];
     renderApp(
       fakeClient({
@@ -131,7 +131,7 @@ describe("LLM 게이트웨이 정책 — 목록·기본·CRUD", () => {
       }),
     );
     location.hash = "#llmGateway";
-    fireEvent.change(await screen.findByLabelText("모델명"), { target: { value: "gpt-4.1-mini" } });
+    fireEvent.change(await screen.findByLabelText("AI 모델"), { target: { value: "gpt-4.1-mini" } });
     fireEvent.click(screen.getByLabelText("기본 정책으로 생성"));
     screen.getByRole("button", { name: "정책 생성" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));

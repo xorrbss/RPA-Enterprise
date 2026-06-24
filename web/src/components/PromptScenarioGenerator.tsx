@@ -8,6 +8,7 @@ import { GenerationArtifactsPanel } from "./GenerationArtifactsPanel";
 import { SiteCreateForm, type CreatedSite } from "./SiteCreateForm";
 import { errorCodeLabel, errorLabel, StatusBadge } from "./badges";
 import { navigate, useHashParam } from "../router";
+import { urlRefLabel } from "../api/scenario-params";
 import {
   ApiError,
   type ApiErrorBody,
@@ -22,29 +23,29 @@ import {
 } from "../api/types";
 
 const BLOCKER_LABELS: Record<string, string> = {
-  target_start_url_site_mismatch: "시작 URL이 선택한 사이트의 origin과 일치하지 않습니다.",
+  target_start_url_site_mismatch: "시작 주소가 선택한 사이트 주소와 일치하지 않습니다.",
   target_required_for_auto_run: "실행 대상이 필요합니다.",
-  start_url_required_for_auto_run: "시작 URL이 필요합니다.",
+  start_url_required_for_auto_run: "시작 주소가 필요합니다.",
   side_effect_prompt_requires_review: "쓰기 작업은 검토 후 실행해야 합니다.",
   site_profile_not_found: "사이트를 찾을 수 없습니다.",
-  browser_identity_not_found: "브라우저 ID를 찾을 수 없습니다.",
-  browser_identity_site_mismatch: "브라우저 ID가 선택한 사이트에 속하지 않습니다.",
-  network_policy_not_found: "네트워크 정책을 찾을 수 없습니다.",
-  network_policy_domain_mismatch: "네트워크 정책이 사이트 도메인을 허용하지 않습니다.",
+  browser_identity_not_found: "로그인 세션을 찾을 수 없습니다.",
+  browser_identity_site_mismatch: "로그인 세션이 선택한 사이트에 속하지 않습니다.",
+  network_policy_not_found: "보안 정책을 찾을 수 없습니다.",
+  network_policy_domain_mismatch: "보안 정책이 사이트 도메인을 허용하지 않습니다.",
   site_profile_blocked: "사이트 승인이 필요합니다.",
   video_recording_port_not_configured: "서버에서 동영상 녹화가 비활성화되어 있습니다.",
-  params_context_redacted_value_required: "마스킹된 실행 params가 있어 값을 다시 입력해야 합니다.",
-  pagination_page_limit_exceeded: "자동 반복 페이지 상한을 넘었습니다. max_pages를 10 이하로 줄여 주세요.",
-  compile_failed: "자동 생성한 IR 컴파일에 실패했습니다. 운영자 검토가 필요합니다.",
-  scenario_generation_failed: "시나리오 자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.",
-  site_profile_unresolved_for_start_url: "이 시작 URL에 매칭되는 사이트가 없습니다. 사이트를 새로 등록하세요.",
-  site_profile_ambiguous_for_start_url: "이 시작 URL에 매칭되는 사이트가 여러 개입니다. 실행 대상을 직접 선택하세요.",
-  browser_identity_unresolved_for_start_url: "이 사이트에 사용할 브라우저 ID가 없습니다. 사이트를 등록하면 함께 생성됩니다.",
-  network_policy_unresolved_for_start_url: "이 시작 URL을 허용하는 네트워크 정책이 없습니다. 사이트를 등록하면 함께 생성됩니다.",
-  network_policy_ambiguous_for_start_url: "이 시작 URL을 허용하는 네트워크 정책이 여러 개입니다. 실행 대상을 직접 선택하세요.",
+  params_context_redacted_value_required: "보안상 숨겨진 실행 입력값이 있어 값을 다시 입력해야 합니다.",
+  pagination_page_limit_exceeded: "자동 반복 페이지 상한을 넘었습니다. 최대 페이지 수를 10 이하로 줄여 주세요.",
+  compile_failed: "자동 생성한 자동화 정의를 검증하지 못했습니다. 운영자 검토가 필요합니다.",
+  scenario_generation_failed: "자동화 생성에 실패했습니다. 검토 사유를 확인해 주세요.",
+  site_profile_unresolved_for_start_url: "이 시작 주소와 매칭되는 사이트가 없습니다. 사이트를 새로 등록하세요.",
+  site_profile_ambiguous_for_start_url: "이 시작 주소와 매칭되는 사이트가 여러 개입니다. 실행 대상을 직접 선택하세요.",
+  browser_identity_unresolved_for_start_url: "이 사이트에 사용할 로그인 세션이 없습니다. 사이트를 등록하면 함께 생성됩니다.",
+  network_policy_unresolved_for_start_url: "이 시작 주소를 허용하는 보안 정책이 없습니다. 사이트를 등록하면 함께 생성됩니다.",
+  network_policy_ambiguous_for_start_url: "이 시작 주소를 허용하는 보안 정책이 여러 개입니다. 실행 대상을 직접 선택하세요.",
 };
 
-const GENERIC_BLOCKER_LABEL = "자동 생성에 실패했습니다. 진단 상세를 확인해 주세요.";
+const GENERIC_BLOCKER_LABEL = "자동 생성에 실패했습니다. 검토 사유를 확인해 주세요.";
 
 // 운영자 표면: 매핑된 blocker 라벨 → ErrorCode 한글(reason이 ErrorCode일 때) → generic 한글 폴백.
 // raw 영문 코드 노출 금지(비기술 운영자 레지스터), 진단정보 최대 보존(조용한 공백 금지).
@@ -113,7 +114,7 @@ const FALLBACK_SCREENSHOT_POLICIES: readonly ScreenshotPolicy[] = ["never", "fai
 const FALLBACK_VIDEO_POLICIES: readonly VideoPolicy[] = ["never", "failure", "always"];
 
 function plannerLabel(value: ScenarioGenerationPlanner): string {
-  return value === "llm_v1" ? "LLM Planner" : "MVP Planner";
+  return value === "llm_v1" ? "AI 생성" : "기본 생성";
 }
 
 function generationStatusLabel(status: ScenarioGenerationResult["status"]): string {
@@ -134,10 +135,6 @@ function generationStatusLabel(status: ScenarioGenerationResult["status"]): stri
 function generationStatusTone(status: ScenarioGenerationResult["status"]): string {
   if (status === "run_queued" || status === "saved" || status === "drafted") return status === "run_queued" ? "blue" : "green";
   return status === "blocked" ? "red" : "amber";
-}
-
-function compactId(value: string | null): string {
-  return value === null ? "-" : value.slice(0, 8);
 }
 
 function screenshotPolicyLabel(value: ScenarioGenerationEvidence["screenshot"]): string {
@@ -202,10 +199,10 @@ function blockerSummary(blockers: readonly string[]): string | null {
 
 function historyActionLabel(item: ScenarioGenerationResult): string {
   if (item.run_id !== null) return evidenceReviewActionLabel(item.evidence_policy);
-  if (item.status === "blocked") return "진단·산출물 보기";
+  if (item.status === "blocked") return "검토 사유·산출물 보기";
   if (item.status === "saved") return "저장본 확인";
   if (item.status === "drafted") return "초안 확인";
-  return "진단 보기";
+  return "검토 사유 보기";
 }
 
 function canRunGenerationWithCorrections(result: ScenarioGenerationResult): boolean {
@@ -232,12 +229,12 @@ function correctionGuideReady(guide: CorrectionGuideState): boolean {
 }
 
 function correctionGuideError(guide: CorrectionGuideState): string | null {
-  if (guide.needsStartUrl && !guide.startUrlReady) return "시작 URL을 입력한 뒤 다시 실행하세요.";
-  if (guide.needsTarget && guide.targetPartial) return "사이트, 브라우저 ID, 네트워크 정책 ID를 모두 입력하세요.";
+  if (guide.needsStartUrl && !guide.startUrlReady) return "시작 주소를 입력한 뒤 다시 실행하세요.";
+  if (guide.needsTarget && guide.targetPartial) return "사이트, 로그인 세션, 보안 정책을 모두 준비하세요.";
   if (guide.needsTarget && !guide.targetReady) return "기존 사이트를 선택하거나 새 사이트를 등록해 실행 대상을 채우세요.";
-  if (!guide.targetStartUrlMatches) return "시작 URL과 선택한 사이트의 origin을 맞춘 뒤 다시 실행하세요.";
+  if (!guide.targetStartUrlMatches) return "시작 주소와 선택한 사이트 주소를 맞춘 뒤 다시 실행하세요.";
   if (guide.needsVideoPolicy && !guide.videoPolicyReady) return "동영상 녹화를 끄고 다시 실행하세요.";
-  if (guide.needsParams && !guide.paramsReady) return "마스킹된 params 값을 다시 입력한 뒤 실행하세요.";
+  if (guide.needsParams && !guide.paramsReady) return "마스킹된 실행 입력값을 다시 입력한 뒤 실행하세요.";
   return null;
 }
 
@@ -249,8 +246,37 @@ function modelRequiredOf(body: ApiErrorBody | null): { available: number } | nul
 }
 
 function siteLabel(site: SiteItem): string {
-  const name = site.name ?? site.site_profile_id.slice(0, 8);
+  const name = site.name ?? "사이트명 미정";
   return site.url_pattern !== undefined ? `${name} (${site.url_pattern})` : name;
+}
+
+function siteSessionLabel(site: SiteItem | null): string {
+  if (site === null) return "사이트 선택 시 자동 연결";
+  if (site.default_browser_identity_id === null || site.default_browser_identity_id === undefined) return "기본 로그인 세션 없음";
+  if (site.session_ready === false) return "세션 등록 필요";
+  return "기본 로그인 세션 사용";
+}
+
+function siteNetworkLabel(site: SiteItem | null): string {
+  if (site === null) return "사이트 선택 시 자동 적용";
+  return site.default_network_policy_id === null || site.default_network_policy_id === undefined ? "기본 보안 정책 없음" : "사이트 기본 보안 정책 사용";
+}
+
+function siteTargetSummary(site: SiteItem | null, siteProfileId: string): string {
+  if (site !== null) return siteLabel(site);
+  return siteProfileId.trim().length > 0 ? "직접 지정된 사이트" : "사이트 선택 필요";
+}
+
+function browserIdentityTargetSummary(site: SiteItem | null, browserIdentityId: string): string {
+  if (browserIdentityId.trim().length === 0) return "로그인 세션 확인 필요";
+  if (site !== null && site.default_browser_identity_id === browserIdentityId.trim()) return siteSessionLabel(site);
+  return "직접 지정된 로그인 세션";
+}
+
+function networkPolicyTargetSummary(site: SiteItem | null, networkPolicyId: string): string {
+  if (networkPolicyId.trim().length === 0) return "보안 정책 확인 필요";
+  if (site !== null && site.default_network_policy_id === networkPolicyId.trim()) return siteNetworkLabel(site);
+  return "직접 지정된 보안 정책";
 }
 
 const HTTP_URL_TOKEN_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
@@ -357,10 +383,10 @@ function parseParamsText(value: string): Record<string, unknown> | undefined {
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    throw new Error("params JSON 형식이 올바르지 않습니다.");
+    throw new Error("실행 입력값 형식이 올바르지 않습니다. 여러 항목을 담은 객체 형태로 입력하세요.");
   }
   if (!isRecord(parsed)) {
-    throw new Error("params JSON은 객체여야 합니다.");
+    throw new Error("실행 입력값은 여러 항목을 담은 객체 형태여야 합니다.");
   }
   return parsed;
 }
@@ -384,6 +410,72 @@ function paramsDefaultsFromDraftIr(draftIr: unknown): Record<string, unknown> | 
     defaults[key] = property.default;
   }
   return Object.keys(defaults).length > 0 ? defaults : null;
+}
+
+interface ParamFieldView {
+  key: string;
+  label: string;
+  value: string;
+  valueType: string;
+}
+
+function paramsFieldsFromText(value: string): { fields: ParamFieldView[]; invalid: boolean } {
+  try {
+    const params = parseParamsText(value);
+    if (params === undefined) return { fields: [], invalid: false };
+    return {
+      fields: Object.entries(params).map(([key, fieldValue]) => ({
+        key,
+        label: urlRefLabel(key),
+        value: paramValueToInput(fieldValue),
+        valueType: paramValueTypeLabel(fieldValue),
+      })),
+      invalid: false,
+    };
+  } catch {
+    return { fields: [], invalid: true };
+  }
+}
+
+function paramValueToInput(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null || value === undefined) return "";
+  return JSON.stringify(value);
+}
+
+function paramValueTypeLabel(value: unknown): string {
+  if (Array.isArray(value)) return "목록";
+  if (value === null) return "빈 값";
+  if (typeof value === "number") return "숫자";
+  if (typeof value === "boolean") return "true/false";
+  if (typeof value === "object") return "복합 값";
+  return "텍스트";
+}
+
+function coerceParamInput(raw: string, previous: unknown): unknown {
+  const trimmed = raw.trim();
+  if (typeof previous === "number") {
+    const parsed = Number(trimmed);
+    return trimmed.length > 0 && Number.isFinite(parsed) ? parsed : raw;
+  }
+  if (typeof previous === "boolean") {
+    if (trimmed === "true") return true;
+    if (trimmed === "false") return false;
+  }
+  if (previous !== null && typeof previous === "object") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return raw;
+}
+
+function paramsTextWithField(currentText: string, key: string, raw: string): string {
+  const current = parseParamsText(currentText) ?? {};
+  return JSON.stringify({ ...current, [key]: coerceParamInput(raw, current[key]) }, null, 2);
 }
 
 function draftStartUrl(draftIr: unknown): string | null {
@@ -418,6 +510,11 @@ export function PromptScenarioGenerator(): JSX.Element {
   const prefillStartUrl = useHashParam("start_url");
   const prefillBrowserIdentityId = useHashParam("browser_identity");
   const prefillNetworkPolicyId = useHashParam("network_policy");
+  const prefillConnectorId = useHashParam("connector_id");
+  const prefillTemplateId = useHashParam("template_id");
+  const prefillPrompt = useHashParam("prompt");
+  const prefillName = useHashParam("name");
+  const prefillParams = useHashParam("params");
   const sites = useQuery({ queryKey: ["sites", "scenario-generator"], queryFn: () => api.listSites({ limit: 100 }) });
   const policies = useQuery({
     queryKey: ["gateway-policies", "scenario-generator"],
@@ -469,6 +566,8 @@ export function PromptScenarioGenerator(): JSX.Element {
   const [siteCreateOpenSignal, setSiteCreateOpenSignal] = useState(0);
   // 고급 설정(<details>) 펼침 상태 — 모델 지정 필요·params 보정 시 자동으로 펼쳐 묻힘(무음 no-op) 방지.
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [developerOpen, setDeveloperOpen] = useState(false);
+  const [paramsJsonOpen, setParamsJsonOpen] = useState(false);
   const startUrlInputRef = useRef<HTMLInputElement | null>(null);
   const siteSelectRef = useRef<HTMLSelectElement | null>(null);
   const paramsInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -476,6 +575,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   const autoStartUrlRef = useRef<string | null>(null);
   const targetManuallyEditedRef = useRef(false);
   const hashPrefillKeyRef = useRef<string | null>(null);
+  const templatePrefillKeyRef = useRef<string | null>(null);
   const canCreateSite = can("site.create");
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
@@ -510,6 +610,8 @@ export function PromptScenarioGenerator(): JSX.Element {
     () => (sites.data?.items ?? []).find((s) => s.site_profile_id === siteProfileId) ?? null,
     [sites.data?.items, siteProfileId],
   );
+  const gatewayPolicies = policies.data?.items ?? [];
+  const defaultGatewayPolicy = gatewayPolicies.find((policy) => policy.is_default === true) ?? null;
   const scenarioNameById = useMemo(() => scenarioNameMap(scenariosForHistory.data?.items ?? []), [scenariosForHistory.data?.items]);
 
   function applySiteDefaults(site: SiteItem): void {
@@ -526,9 +628,9 @@ export function PromptScenarioGenerator(): JSX.Element {
     element?.scrollIntoView?.({ block: "center" });
   }
 
-  // 고급 설정을 펼친 뒤(리렌더 후) 대상에 포커스 — 닫힌 <details> 안은 display:none 이라 즉시 focus()가 no-op.
-  function openAdvancedThen(focus: () => void): void {
+  function openDeveloperThen(focus: () => void): void {
     setAdvancedOpen(true);
+    setDeveloperOpen(true);
     if (typeof window.requestAnimationFrame === "function") {
       window.requestAnimationFrame(focus);
       return;
@@ -566,6 +668,11 @@ export function PromptScenarioGenerator(): JSX.Element {
   function handleNetworkPolicyIdChange(nextNetworkPolicyId: string): void {
     markTargetManuallyEdited();
     setNetworkPolicyId(nextNetworkPolicyId);
+  }
+
+  function handleModelChange(nextModel: string): void {
+    setModel(nextModel);
+    if (nextModel.trim() !== checkedModel) setCheckedModel("");
   }
 
   function selectSite(nextSiteId: string): void {
@@ -628,6 +735,32 @@ export function PromptScenarioGenerator(): JSX.Element {
       canCreateSite,
     };
   }
+
+  useEffect(() => {
+    const key = JSON.stringify([prefillConnectorId, prefillTemplateId, prefillPrompt, prefillName, prefillParams]);
+    if (templatePrefillKeyRef.current === key) return;
+    if (
+      prefillConnectorId === null &&
+      prefillTemplateId === null &&
+      prefillPrompt === null &&
+      prefillName === null &&
+      prefillParams === null
+    ) {
+      return;
+    }
+
+    templatePrefillKeyRef.current = key;
+    if (prefillPrompt !== null) setPrompt(prefillPrompt);
+    if (prefillName !== null) setName(prefillName);
+    if (prefillParams !== null) {
+      setParamsText(prefillParams);
+      setAdvancedOpen(true);
+      setDeveloperOpen(true);
+    }
+    if (prefillConnectorId !== null || prefillTemplateId !== null) setMode("save");
+    setLocalError(null);
+    setResult(null);
+  }, [prefillConnectorId, prefillName, prefillParams, prefillPrompt, prefillTemplateId]);
 
   useEffect(() => {
     const key = JSON.stringify([prefillSiteId, prefillStartUrl, prefillBrowserIdentityId, prefillNetworkPolicyId]);
@@ -710,11 +843,6 @@ export function PromptScenarioGenerator(): JSX.Element {
     }
   }, [availablePlanners, defaultPlanner, planner]);
 
-  // 모델 지정이 필요해지면(modelRequired) 고급 설정을 자동으로 펼친다 — 확인 버튼/AI 모델이 닫힌 고급에 묻히지 않게.
-  useEffect(() => {
-    if (modelRequired !== null) setAdvancedOpen(true);
-  }, [modelRequired]);
-
   const mutation = useMutation({
     mutationFn: async (body: ScenarioGenerationRequest) => {
       return api.generateScenario(body, crypto.randomUUID());
@@ -778,7 +906,7 @@ export function PromptScenarioGenerator(): JSX.Element {
     const hasAnyTarget = targetValues.some((v) => v.length > 0);
     const hasFullTarget = targetValues.every((v) => v.length > 0);
     if (hasAnyTarget && !hasFullTarget) {
-      throw new Error("사이트, 브라우저 ID, 네트워크 정책 ID를 모두 입력하세요.");
+      throw new Error("사이트, 로그인 세션, 보안 정책을 모두 준비하세요.");
     }
     const [site, identity, network] = targetValues as [string, string, string];
     const params = parseParamsText(paramsText);
@@ -808,7 +936,7 @@ export function PromptScenarioGenerator(): JSX.Element {
     const hasAnyTarget = targetValues.some((v) => v.length > 0);
     const hasFullTarget = targetValues.every((v) => v.length > 0);
     if (hasAnyTarget && !hasFullTarget) {
-      throw new Error("사이트, 브라우저 ID, 네트워크 정책 ID를 모두 입력하세요.");
+      throw new Error("사이트, 로그인 세션, 보안 정책을 모두 준비하세요.");
     }
     const [site, identity, network] = targetValues as [string, string, string];
     const params = parseParamsText(paramsText);
@@ -832,7 +960,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   function submit(): void {
     setLocalError(null);
     if (needModel) {
-      setLocalError("AI 모델을 입력하고 정책 확인을 완료한 뒤 다시 실행하세요.");
+      setLocalError("AI 모델을 입력하고 확인을 완료한 뒤 다시 실행하세요.");
       return;
     }
     if (evidenceSettingsLoading) {
@@ -854,7 +982,7 @@ export function PromptScenarioGenerator(): JSX.Element {
       return;
     }
     if (needModel) {
-      setLocalError("AI 모델을 입력하고 정책 확인을 완료한 뒤 다시 실행하세요.");
+      setLocalError("AI 모델을 입력하고 확인을 완료한 뒤 다시 실행하세요.");
       return;
     }
     const guide = currentCorrectionGuide(generation);
@@ -908,19 +1036,47 @@ export function PromptScenarioGenerator(): JSX.Element {
         </label>
         <div className="form-grid">
           <label className="field">
-            <span>시작 URL</span>
+            <span>시작 주소</span>
             <input ref={startUrlInputRef} value={startUrl} onChange={(event) => handleStartUrlChange(event.target.value)} placeholder="https://..." />
           </label>
           <label className="field">
             <span>사이트</span>
             <select ref={siteSelectRef} value={siteProfileId} onChange={(event) => selectSite(event.target.value)}>
-              <option value="">직접 입력 또는 생략</option>
+              <option value="">사이트 선택 안 함</option>
               {(sites.data?.items ?? []).map((site) => (
                 <option key={site.site_profile_id} value={site.site_profile_id}>
                   {siteLabel(site)}
                 </option>
               ))}
             </select>
+          </label>
+          <label className="field">
+            <span>AI 모델</span>
+            <select aria-label="AI 모델" value={model} onChange={(event) => handleModelChange(event.target.value)}>
+              <option value="">{defaultGatewayPolicy === null ? "기본 AI 모델 사용" : `기본 AI 모델 사용 (${defaultGatewayPolicy.model})`}</option>
+              {gatewayPolicies.map((policy) => (
+                <option key={policy.model} value={policy.model}>
+                  {policy.model}
+                  {policy.is_default === true ? " · 기본" : ""}
+                </option>
+              ))}
+            </select>
+            {modelRequired !== null && (
+              <span className="model-confirm-row">
+                <button className="btn" type="button" onClick={() => setCheckedModel(model.trim())} disabled={model.trim().length === 0 || policyCheck.isFetching}>
+                  확인
+                </button>
+                <span className="subtle" role="status">
+                  {policyCheck.isFetching
+                    ? "AI 모델 확인 중..."
+                    : modelConfirmed
+                      ? `확인됨 - '${policyCheck.data?.model ?? checkedModel}' 사용`
+                      : checkedModel.length > 0 && checkedModel === model.trim() && policyCheck.isError
+                        ? `'${checkedModel}'을 사용할 수 없습니다. AI 모델명을 확인하세요.`
+                        : "AI 모델을 선택하고 확인 후 다시 실행하세요."}
+                </span>
+              </span>
+            )}
           </label>
           <div className="field field-wide" ref={siteCreateRef}>
             <SiteCreateForm
@@ -933,11 +1089,25 @@ export function PromptScenarioGenerator(): JSX.Element {
             />
           </div>
         </div>
+        <div className="target-summary" aria-label="실행 대상 요약">
+          <span>
+            <span className="subtle">로그인 세션</span>
+            <strong>{siteSessionLabel(selectedSite)}</strong>
+          </span>
+          <span>
+            <span className="subtle">보안 정책</span>
+            <strong>{siteNetworkLabel(selectedSite)}</strong>
+          </span>
+          <span>
+            <span className="subtle">AI 모델</span>
+            <strong>{model.trim().length > 0 ? model.trim() : defaultGatewayPolicy?.model ?? "기본값 자동 선택"}</strong>
+          </span>
+        </div>
         <details className="advanced-settings" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.currentTarget as HTMLDetailsElement).open)}>
-          <summary>고급 설정 (이름·처리 방식·AI 모델·대상 ID·증거·params) — 대부분 비워두면 기본값으로 동작합니다</summary>
+          <summary>고급 설정 (이름·처리 방식·생성 방식·증거) — 대부분 비워두면 기본값으로 동작합니다</summary>
           <div className="form-grid">
             <label className="field">
-              <span>시나리오 이름</span>
+              <span>자동화 이름</span>
               <input value={name} onChange={(event) => setName(event.target.value)} placeholder="비워두면 자동 생성" />
             </label>
             <label className="field">
@@ -949,7 +1119,7 @@ export function PromptScenarioGenerator(): JSX.Element {
               </select>
             </label>
             <label className="field">
-              <span>Planner</span>
+              <span>생성 방식</span>
               <select value={planner} onChange={(event) => setPlanner(event.target.value as ScenarioGenerationPlanner)}>
                 {availablePlanners.map((option) => (
                   <option key={option} value={option}>
@@ -957,54 +1127,6 @@ export function PromptScenarioGenerator(): JSX.Element {
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="field">
-              <span>AI 모델</span>
-              <input
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
-                aria-label="AI 모델"
-                list="scenario-generator-models"
-                placeholder="기본 정책 사용"
-              />
-              <datalist id="scenario-generator-models">
-                {(policies.data?.items ?? []).map((policy) => (
-                  <option key={policy.model} value={policy.model} />
-                ))}
-              </datalist>
-              {modelRequired !== null && (
-                <span style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                  <button
-                    className="btn"
-                    type="button"
-                    onClick={() => setCheckedModel(model.trim())}
-                    disabled={model.trim().length === 0 || policyCheck.isFetching}
-                  >
-                    확인
-                  </button>
-                  <span className="subtle" role="status">
-                    {policyCheck.isFetching
-                      ? "모델 정책 확인 중..."
-                      : modelConfirmed
-                        ? `확인됨 - 정책 '${policyCheck.data?.model ?? checkedModel}' 사용`
-                        : checkedModel.length > 0 && checkedModel === model.trim() && policyCheck.isError
-                          ? `'${checkedModel}' 정책을 찾을 수 없습니다. 모델명을 확인하세요.`
-                          : "모델명을 입력하고 정책 확인 후 다시 실행하세요."}
-                  </span>
-                </span>
-              )}
-            </label>
-            <label className="field">
-              <span>사이트 ID</span>
-              <input value={siteProfileId} onChange={(event) => handleSiteProfileIdChange(event.target.value)} placeholder="site_profile_id" />
-            </label>
-            <label className="field">
-              <span>브라우저 ID</span>
-              <input value={browserIdentityId} onChange={(event) => handleBrowserIdentityIdChange(event.target.value)} placeholder="browser_identity_id" />
-            </label>
-            <label className="field">
-              <span>네트워크 정책 ID</span>
-              <input value={networkPolicyId} onChange={(event) => handleNetworkPolicyIdChange(event.target.value)} placeholder="network_policy_id" />
             </label>
             <label className="field">
               <span>스크린샷</span>
@@ -1042,17 +1164,72 @@ export function PromptScenarioGenerator(): JSX.Element {
               {!videoRecordingEnabled && <span className="muted">영상 녹화 비활성</span>}
             </label>
           </div>
-          <label className="field field-wide">
-            <span>생성/실행 params JSON</span>
-            <textarea
-              ref={paramsInputRef}
-              value={paramsText}
-              onChange={(event) => setParamsText(event.target.value)}
-              rows={4}
-              spellCheck={false}
-              placeholder='{"entry_url":"https://example.com"}'
-            />
-          </label>
+          <details
+            className="developer-details"
+            open={developerOpen}
+            onToggle={(event) => setDeveloperOpen((event.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary>운영자 세부값 (대상 선택값·실행 입력값)</summary>
+            <p className="developer-note">
+              사이트를 선택하면 로그인 세션과 보안 정책은 자동으로 채워집니다. 직접 입력은 기존 자동화 이관이나 운영 보정이 필요할 때만 사용하세요.
+            </p>
+            <div className="target-operator-summary" aria-label="선택된 실행 대상">
+              <span>
+                <span className="subtle">사이트</span>
+                <strong>{siteTargetSummary(selectedSite, siteProfileId)}</strong>
+              </span>
+              <span>
+                <span className="subtle">로그인 세션</span>
+                <strong>{browserIdentityTargetSummary(selectedSite, browserIdentityId)}</strong>
+              </span>
+              <span>
+                <span className="subtle">보안 정책</span>
+                <strong>{networkPolicyTargetSummary(selectedSite, networkPolicyId)}</strong>
+              </span>
+            </div>
+            <details className="developer-details target-id-details">
+              <summary>고급/원문 선택값 직접 입력</summary>
+              <p className="developer-note">외부 이관, 장애 보정, 지원 요청처럼 정확한 내부 선택값을 알고 있을 때만 수정합니다.</p>
+              <div className="form-grid">
+                <label className="field">
+                  <span>사이트 선택값</span>
+                  <input value={siteProfileId} onChange={(event) => handleSiteProfileIdChange(event.target.value)} placeholder="사이트를 선택하면 자동 입력" />
+                </label>
+                <label className="field">
+                  <span>로그인 세션 선택값</span>
+                  <input value={browserIdentityId} onChange={(event) => handleBrowserIdentityIdChange(event.target.value)} placeholder="사이트 기본 로그인 세션" />
+                </label>
+                <label className="field">
+                  <span>보안 정책 선택값</span>
+                  <input value={networkPolicyId} onChange={(event) => handleNetworkPolicyIdChange(event.target.value)} placeholder="사이트 기본 보안 정책" />
+                </label>
+              </div>
+            </details>
+            <div className="field field-wide">
+              <span>실행 입력값</span>
+              <ExecutionParamsEditor paramsText={paramsText} onChange={setParamsText} />
+              <small className="field-help">필요한 경우에만 값을 입력합니다. 일반 사용자는 사이트 선택만으로 충분합니다.</small>
+              <details
+                className="developer-details params-json-details"
+                open={paramsJsonOpen}
+                onToggle={(event) => setParamsJsonOpen((event.currentTarget as HTMLDetailsElement).open)}
+              >
+                <summary>고급/원문 입력값 보기</summary>
+                <textarea
+                  ref={paramsInputRef}
+                  aria-label="고급/원문 입력값"
+                  value={paramsText}
+                  onChange={(event) => setParamsText(event.target.value)}
+                  rows={4}
+                  spellCheck={false}
+                  placeholder={`{
+  "entry_url": "https://example.com",
+  "max_pages": 3
+}`}
+                />
+              </details>
+            </div>
+          </details>
         </details>
         {selectedSite !== null && (
           <div className="inline-facts" role="status">
@@ -1060,7 +1237,7 @@ export function PromptScenarioGenerator(): JSX.Element {
             <StatusBadge status={selectedSite.risk} />
             <span className="subtle">승인</span>
             <StatusBadge status={selectedSite.approval_status} />
-            <span className="subtle">서킷</span>
+            <span className="subtle">자동 차단</span>
             <StatusBadge status={selectedSite.circuit_status} kind="circuit" />
           </div>
         )}
@@ -1093,7 +1270,10 @@ export function PromptScenarioGenerator(): JSX.Element {
             onFocusStartUrl={() => focusField(startUrlInputRef.current)}
             onFocusTarget={() => focusField(siteSelectRef.current)}
             onOpenSiteCreate={openInlineSiteCreate}
-            onFocusParams={() => openAdvancedThen(() => focusField(paramsInputRef.current))}
+            onFocusParams={() => {
+              setParamsJsonOpen(true);
+              openDeveloperThen(() => focusField(paramsInputRef.current));
+            }}
             onDisableVideoEvidence={() => {
               setVideoTouched(true);
               setVideo("never");
@@ -1158,18 +1338,18 @@ function BlockedCorrectionGuide({
   onDisableVideoEvidence: () => void;
 }): JSX.Element {
   return (
-    <div className="site-create-inline recovery-guide" aria-label="blocked generation recovery guide">
+    <div className="site-create-inline recovery-guide" aria-label="실행 전 보정 안내">
       <strong>실행 전 보정</strong>
       <ul className="recovery-guide-list">
         {guide.needsStartUrl && (
           <li className="recovery-guide-row">
             <span className="inline-facts recovery-guide-main">
               <ReadinessBadge ready={guide.startUrlReady} />
-              <span>시작 URL</span>
-              <span className="subtle">{guide.startUrlReady ? "입력됨" : "자동 실행에 필요한 첫 페이지 URL을 입력하세요."}</span>
+              <span>시작 주소</span>
+              <span className="subtle">{guide.startUrlReady ? "입력됨" : "자동 실행에 필요한 첫 페이지 주소를 입력하세요."}</span>
             </span>
             <button className="linklike" type="button" onClick={onFocusStartUrl}>
-              시작 URL 입력
+              시작 주소 입력
             </button>
           </li>
         )}
@@ -1180,9 +1360,9 @@ function BlockedCorrectionGuide({
               <span>실행 대상</span>
               <span className="subtle">
                 {guide.targetReady
-                  ? "사이트·브라우저·네트워크 정책 ID가 준비됐습니다."
+                  ? "사이트·로그인 세션·보안 정책이 준비됐습니다."
                   : guide.targetPartial
-                    ? "대상 ID 3개를 모두 채우세요."
+                    ? "실행 대상 구성을 완료하세요."
                     : "기존 사이트를 선택하거나 새 사이트를 등록하세요."}
               </span>
             </span>
@@ -1204,12 +1384,12 @@ function BlockedCorrectionGuide({
           <li className="recovery-guide-row">
             <span className="inline-facts recovery-guide-main">
               <ReadinessBadge ready={false} />
-              <span>origin 일치</span>
-              <span className="subtle">시작 URL과 선택한 사이트의 origin을 맞추세요.</span>
+              <span>사이트 주소 일치</span>
+              <span className="subtle">시작 주소와 선택한 사이트 주소를 맞추세요.</span>
             </span>
             <span className="inline-facts recovery-guide-actions">
               <button className="linklike" type="button" onClick={onFocusStartUrl}>
-                시작 URL 확인
+                시작 주소 확인
               </button>
               <button className="linklike" type="button" onClick={onFocusTarget}>
                 사이트 확인
@@ -1233,15 +1413,51 @@ function BlockedCorrectionGuide({
           <li className="recovery-guide-row">
             <span className="inline-facts recovery-guide-main">
               <ReadinessBadge ready={guide.paramsReady} />
-              <span>params JSON</span>
+              <span>실행 입력값</span>
               <span className="subtle">{guide.paramsReady ? "입력됨" : "마스킹된 값을 다시 입력하세요."}</span>
             </span>
             <button className="linklike" type="button" onClick={onFocusParams}>
-              params 입력
+              입력값 수정
             </button>
           </li>
         )}
       </ul>
+    </div>
+  );
+}
+
+function ExecutionParamsEditor({
+  paramsText,
+  onChange,
+}: {
+  paramsText: string;
+  onChange: (next: string) => void;
+}): JSX.Element {
+  const { fields, invalid } = useMemo(() => paramsFieldsFromText(paramsText), [paramsText]);
+  if (invalid) {
+    return (
+      <p className="form-alert red" role="status">
+        실행 입력값 형식이 올바르지 않습니다. 고급/원문 입력값 보기에서 여러 항목을 담은 형태로 수정하세요.
+      </p>
+    );
+  }
+  if (fields.length === 0) {
+    return <p className="empty-state">추가 실행 입력값이 없습니다. 필요한 경우 고급/원문 입력값 보기에서 값을 추가하세요.</p>;
+  }
+  return (
+    <div className="params-field-editor" aria-label="실행 입력값">
+      {fields.map((field) => (
+        <label className="field" key={field.key}>
+          <span>{field.label}</span>
+          <input
+            aria-label={field.label}
+            value={field.value}
+            onChange={(event) => onChange(paramsTextWithField(paramsText, field.key, event.target.value))}
+            placeholder={field.valueType === "숫자" ? "예: 3" : "값 입력"}
+          />
+          <small className="field-help">{field.valueType}</small>
+        </label>
+      ))}
     </div>
   );
 }
@@ -1276,22 +1492,34 @@ function GenerationResult({
     <div className="generation-result" role="status">
       <div className="generation-result-head">
         <span className={`badge ${generationStatusTone(result.status)}`}>{generationStatusLabel(result.status)}</span>
-        <code>{result.generation_id.slice(0, 8)}</code>
       </div>
       <div className="result-grid">
         <span className="subtle">자동화</span>
-        <code>{compactId(result.scenario_id)}</code>
+        <strong>{result.scenario_id === null ? "아직 저장 전" : "저장됨"}</strong>
         <span className="subtle">버전</span>
-        <code>{compactId(result.scenario_version_id)}</code>
+        <strong>{result.scenario_version_id === null ? "아직 없음" : "생성됨"}</strong>
         <span className="subtle">실행</span>
-        <code>{compactId(result.run_id)}</code>
-        <span className="subtle">모델</span>
-        <code>{result.model ?? "-"}</code>
+        <strong>{result.run_id === null ? "아직 실행 전" : "실행 기록 연결됨"}</strong>
+        <span className="subtle">AI 모델</span>
+        <strong>{result.model ?? "기본값 자동 선택"}</strong>
         <span className="subtle">AI 방식</span>
-        <code>{plannerLabel(result.planner)}</code>
+        <strong>{plannerLabel(result.planner)}</strong>
       </div>
+      <details className="developer-details result-raw-details">
+        <summary>고급/원문 식별값 보기</summary>
+        <div className="result-grid">
+          <span className="subtle">생성 추적 번호</span>
+          <code>{result.generation_id}</code>
+          <span className="subtle">자동화 추적 번호</span>
+          <code>{result.scenario_id ?? "-"}</code>
+          <span className="subtle">버전 추적 번호</span>
+          <code>{result.scenario_version_id ?? "-"}</code>
+          <span className="subtle">실행 추적 번호</span>
+          <code>{result.run_id ?? "-"}</code>
+        </div>
+      </details>
       {result.evidence_policy !== undefined && (
-        <div className="inline-facts" aria-label="evidence policy">
+        <div className="inline-facts" aria-label="증거 저장 설정">
           <span className="evidence-chip">
             <Image size={14} aria-hidden="true" />
             {screenshotPolicyLabel(result.evidence_policy.screenshot)}
@@ -1303,18 +1531,21 @@ function GenerationResult({
         </div>
       )}
       {result.run_id !== null && (
-        <div className="inline-facts" aria-label="evidence handoff">
+        <div className="inline-facts" aria-label="실행 기록 연결">
           <span className="badge blue">실행 기록 연결</span>
           <EvidenceStorageChip policy={result.evidence_policy} />
           <span className="subtle">실행 기록 산출물에서 확인</span>
         </div>
       )}
       {result.blockers.length > 0 && (
-        <ul className="blocker-list">
-          {result.blockers.map((blocker) => (
-            <li key={blocker}>{blockerLabel(blocker)}</li>
-          ))}
-        </ul>
+        <div className="blocker-section" aria-label="검토 필요 사유">
+          <strong>검토 필요 사유</strong>
+          <ul className="blocker-list">
+            {result.blockers.map((blocker) => (
+              <li key={blocker}>{blockerLabel(blocker)}</li>
+            ))}
+          </ul>
+        </div>
       )}
       {canRunWithCorrections && correctionGuide !== null && hasVisibleCorrectionSteps(correctionGuide) && (
         <BlockedCorrectionGuide
@@ -1328,7 +1559,7 @@ function GenerationResult({
       )}
       <GenerationArtifactsPanel generationId={result.generation_id} />
       {result.run_id !== null && (
-        <GenerationArtifactsPanel generationId={result.generation_id} source="result" title="실행 결과 산출물" />
+        <GenerationArtifactsPanel generationId={result.generation_id} source="result" title="실행 결과 증빙" />
       )}
       {canRunWithCorrections && (
         <>
@@ -1343,6 +1574,19 @@ function GenerationResult({
           </button>
           {modelConfirmationRequired && <span className="subtle">AI 모델 확인 후 실행할 수 있습니다.</span>}
         </>
+      )}
+      {result.scenario_id !== null && (
+        <div className="inline-actions" aria-label="저장된 자동화 연결">
+          <button className="btn" type="button" onClick={() => navigate("playground", { scenario: result.scenario_id! })}>
+            자동화 보기
+          </button>
+          <button className="btn" type="button" onClick={() => navigate("automationOps", { scenario: result.scenario_id! })}>
+            운영 예약
+          </button>
+          <button className="btn" type="button" onClick={() => navigate("coePipeline", { scenario: result.scenario_id! })}>
+            CoE 연결
+          </button>
+        </div>
       )}
       {result.run_id !== null && (
         <button className="btn" type="button" onClick={() => navigate("runTrace", { run: result.run_id!, generation: result.generation_id, focus: "artifacts" })}>
@@ -1400,7 +1644,7 @@ function GenerationHistory({
     <div className="generation-history">
       <div className="generation-history-head">
         <h3>최근 생성 · 다음 액션</h3>
-        <div className="segmented small" role="group" aria-label="generation filter">
+        <div className="segmented small" role="group" aria-label="생성 이력 필터">
           <button className={!blockedOnly ? "active" : ""} type="button" onClick={() => onBlockedOnlyChange(false)}>
             전체
           </button>
@@ -1413,7 +1657,7 @@ function GenerationHistory({
             aria-label="생성 검색"
             value={search}
             onChange={(event) => onSearchChange(event.currentTarget.value)}
-            placeholder="이름·ID·모델 검색"
+            placeholder="이름·상태·AI 모델 검색"
             type="search"
           />
         </label>
@@ -1436,21 +1680,20 @@ function GenerationHistory({
               <div className="generation-history-row" key={item.generation_id} aria-current={isSelected ? "true" : undefined}>
                 <span className={`badge ${generationStatusTone(item.status)}`}>{generationStatusLabel(item.status)}</span>
                 {scenarioName !== undefined ? (
-                  <span className="subtle" title={item.scenario_id ?? undefined}>
-                    시나리오: {scenarioName}
+                  <span className="subtle">
+                    자동화: {scenarioName}
                   </span>
                 ) : (
-                  <span className="subtle" title={item.prompt_redacted_ref ?? item.prompt_hash}>
-                    prompt: {item.prompt_redacted_ref ?? item.prompt_hash.slice(0, 12)}
+                  <span className="subtle">
+                    요청 내용 보호됨
                   </span>
                 )}
-                <code>{item.generation_id.slice(0, 8)}</code>
                 <span className="subtle">{formatGenerationTime(item.created_at)}</span>
                 <span className="subtle">{plannerLabel(item.planner)}</span>
                 {item.model !== undefined && item.model !== null && <span className="subtle">{item.model}</span>}
                 {diagnostic !== null && (
-                  <span className="subtle" title={item.blockers.join(", ")}>
-                    진단: {diagnostic}
+                  <span className="subtle">
+                    검토 필요 사유: {diagnostic}
                   </span>
                 )}
                 {item.status === "saved" && item.run_id === null && <span className="subtle">실행 연결 없음</span>}
@@ -1464,6 +1707,16 @@ function GenerationHistory({
                   <button className="linklike" type="button" onClick={() => onSelect(item)}>
                     {historyActionLabel(item)}
                   </button>
+                )}
+                {item.status === "saved" && item.run_id === null && item.scenario_id !== null && (
+                  <>
+                    <button className="linklike" type="button" onClick={() => navigate("automationOps", { scenario: item.scenario_id! })}>
+                      운영 예약
+                    </button>
+                    <button className="linklike" type="button" onClick={() => navigate("coePipeline", { scenario: item.scenario_id! })}>
+                      CoE 연결
+                    </button>
+                  </>
                 )}
               </div>
             );

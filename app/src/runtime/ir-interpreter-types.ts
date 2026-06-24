@@ -84,6 +84,10 @@ export interface HumanTaskSuspendContext extends SuspendContextBase {
   readonly humanTaskKind: "approval" | "validation" | "exception";
   readonly assigneeRole: string;
   readonly onTimeout: "fail" | "escalate";
+  readonly timeoutMs?: number;
+  readonly payload?: Record<string, unknown>;
+  readonly resultSchema?: Record<string, unknown>;
+  readonly artifactRefs?: readonly string[];
 }
 export type SuspendContext = ChallengeSuspendContext | HumanTaskSuspendContext;
 

@@ -18,6 +18,7 @@ import type { IRELCompileDiagnostic, IRELNode } from "./irel-compile";
 
 const END_NO_DATA_TARGET = "@end_no_data";
 const RETURNING_RESERVED_HANDLERS = new Set(["@challenge", "@human_task"]);
+const BROWSER_PRODUCT_EXCLUDED_ACTIONS = new Set(["file", "shell"]);
 const MAX_LOOP_ITERATIONS = 10000;
 const TIER_ORDER: Record<string, number> = { T0: 0, T1: 1, T2: 2, T3: 3 };
 const VALUE_PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
@@ -160,6 +161,7 @@ export function compileScenarioStatic(
     validateValuePaths(nodeId, node, errors);
     const compiledNode = validateExpressions(nodeId, node, ir, nodeIds, graph, errors);
     if (compiledNode !== undefined) compiledNodes[nodeId] = compiledNode;
+    validateBrowserProductActions(nodeId, node, errors);
     validateSignedCommands(nodeId, node, signedCommandRefs, errors);
     validateLoopContract(nodeId, node, errors);
   }
@@ -450,6 +452,19 @@ function validateSignedCommands(
     if (!signedCommandRefs.has(action.cmd_ref)) {
       errors.push(issue("V8", "shell_cmd_unregistered", "IR_SCHEMA_INVALID", `shell cmd_ref '${action.cmd_ref}' is not registered`, nodeId));
     }
+  }
+}
+
+function validateBrowserProductActions(nodeId: string, node: IRNode, errors: ValidationIssue[]): void {
+  for (const action of node.what ?? []) {
+    if (!BROWSER_PRODUCT_EXCLUDED_ACTIONS.has(action.action)) continue;
+    errors.push(issue(
+      "V8",
+      "unsupported_browser_product_action",
+      "IR_SCHEMA_INVALID",
+      `action '${action.action}' is outside browser product mode; use api_call for supported server-side HTTP integration`,
+      nodeId,
+    ));
   }
 }
 

@@ -23,9 +23,10 @@ function harness(response: { status?: number; body?: unknown; headers?: Record<s
       headers,
       body: init?.body !== undefined && init.body !== null ? JSON.parse(String(init.body)) : undefined,
     });
-    return new Response(JSON.stringify(response.body ?? {}), {
+    const body = typeof response.body === "string" ? response.body : JSON.stringify(response.body ?? {});
+    return new Response(body, {
       status: response.status ?? 200,
-      headers: { "content-type": "application/json", ...(response.headers ?? {}) },
+      headers: { "content-type": typeof response.body === "string" ? "text/plain" : "application/json", ...(response.headers ?? {}) },
     });
   }) as typeof fetch;
   const client = createHttpApiClient({ baseUrl: "http://api.test", getToken: () => "jwt-123", fetchImpl });
@@ -47,12 +48,202 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.url).toBe("http://api.test/v1/dlq?limit=10&kind=sink");
   });
 
+  test("listAuditLog → GET /v1/audit-log + 필터 쿼리", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listAuditLog({ action: "artifact.read", outcome: "allow", actor: "viewer-a", limit: 25 });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/audit-log?action=artifact.read&outcome=allow&actor=viewer-a&limit=25");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
+  test("exportAuditLogCsv → GET /v1/audit-log/export + text/csv", async () => {
+    const { calls, client } = harness({ body: "audit_id,action\n81000000-0000-4000-8000-0000000000a1,artifact.read\n", headers: { "content-type": "text/csv" } });
+    const csv = await client.exportAuditLogCsv({ action: "artifact.read", outcome: "allow", actor: "viewer-a", limit: 200 });
+    expect(csv).toContain("audit_id");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/audit-log/export?action=artifact.read&outcome=allow&actor=viewer-a&limit=200&format=csv");
+    expect(calls[0]?.headers.get("accept")).toBe("text/csv");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
+  test("getAuthReadiness → GET /v1/auth/readiness + Bearer", async () => {
+    const { calls, client } = harness({
+      body: {
+        status: "ok",
+        enterprise_sso_ready: true,
+        provider: {
+          mode: "jwks",
+          configuration_source: "deployment_config",
+          algorithm: "RS256",
+          jwks_url_configured: true,
+          jwks_host: "idp.example.com",
+          issuer_configured: true,
+          issuer: "https://idp.example.com/",
+          audience_configured: true,
+          audience: "rpa-console",
+        },
+        claim_mapping: {
+          subject_claim: "sub",
+          tenant_claim: "tenant_id",
+          roles_claim: "roles",
+          expiry_claim: "exp",
+          display_name_claim: "name",
+          email_claim: "email",
+        },
+        role_mapping: {
+          configured: false,
+          mapped_values: 0,
+        },
+        required_claims: [],
+        current_principal: {
+          subject_id: "viewer-a",
+          tenant_id: "tenant-a",
+          roles: ["viewer"],
+          source: "jwt",
+          display_name: null,
+          email: null,
+        },
+        operational_gaps: [],
+      },
+    });
+    const readiness = await client.getAuthReadiness();
+    expect(readiness.enterprise_sso_ready).toBe(true);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/auth/readiness");
+    expect(calls[0]?.headers.get("accept")).toBe("application/json");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
+  test("listConnectors/listTemplates use catalog routes with filters", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listConnectors({ kind: "browser", status: "available", limit: 20 });
+    await client.listTemplates({ connector_id: "sap-web", kind: "browser_workflow", status: "available", limit: 20 });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/connectors?kind=browser&status=available&limit=20");
+    expect(calls[1]?.method).toBe("GET");
+    expect(calls[1]?.url).toBe("http://api.test/v1/templates?connector_id=sap-web&kind=browser_workflow&status=available&limit=20");
+  });
+
+  test("document IDP routes use document-jobs endpoints and idempotency", async () => {
+    const { calls, client } = harness({
+      body: {
+        document_job_id: "job-1",
+        document_extraction_id: "ext-1",
+        human_task_id: "ht-1",
+        items: [],
+        next_cursor: null,
+      },
+    });
+
+    await client.listDocumentJobs({ status: "validation_required", limit: 20 });
+    await client.createDocumentJob(
+      {
+        source_artifact_id: "artifact-1",
+        document_type: "invoice",
+        field_schema: [{ key: "invoice_id", label: "송장 번호", type: "text", required: true }],
+      },
+      "idem-doc-create",
+    );
+    await client.getDocumentJob("job-1");
+    await client.extractDocumentJob("job-1", "idem-doc-extract");
+    await client.getDocumentExtraction("job-1");
+    await client.createDocumentValidationTask("job-1", "idem-doc-validate");
+
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/document-jobs?status=validation_required&limit=20");
+    expect(calls[1]?.method).toBe("POST");
+    expect(calls[1]?.url).toBe("http://api.test/v1/document-jobs");
+    expect(calls[1]?.headers.get("idempotency-key")).toBe("idem-doc-create");
+    expect(calls[1]?.body).toEqual({
+      source_artifact_id: "artifact-1",
+      document_type: "invoice",
+      field_schema: [{ key: "invoice_id", label: "송장 번호", type: "text", required: true }],
+    });
+    expect(calls[2]?.url).toBe("http://api.test/v1/document-jobs/job-1");
+    expect(calls[3]?.method).toBe("POST");
+    expect(calls[3]?.url).toBe("http://api.test/v1/document-jobs/job-1/extract");
+    expect(calls[3]?.headers.get("idempotency-key")).toBe("idem-doc-extract");
+    expect(calls[4]?.url).toBe("http://api.test/v1/document-jobs/job-1/extraction");
+    expect(calls[5]?.method).toBe("POST");
+    expect(calls[5]?.url).toBe("http://api.test/v1/document-jobs/job-1/validation-task");
+    expect(calls[5]?.headers.get("idempotency-key")).toBe("idem-doc-validate");
+  });
+
+  test("site element repository routes use site-scoped endpoints and idempotency", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listSiteElements("site-1", { stability: "stable", search: "submit", limit: 20 });
+    await client.createSiteElement("site-1", { element_key: "SubmitButton", label: "Submit", selector: "button[type=submit]" }, "idem-create");
+    await client.updateSiteElement("site-1", "element-1", { selector: "button.primary", stability: "review_needed" }, "idem-update");
+    await client.deleteSiteElement("site-1", "element-1", "idem-delete");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/sites/site-1/elements?stability=stable&search=submit&limit=20");
+    expect(calls[1]?.method).toBe("POST");
+    expect(calls[1]?.headers.get("idempotency-key")).toBe("idem-create");
+    expect(calls[1]?.body).toEqual({ element_key: "SubmitButton", label: "Submit", selector: "button[type=submit]" });
+    expect(calls[2]?.method).toBe("PATCH");
+    expect(calls[2]?.headers.get("idempotency-key")).toBe("idem-update");
+    expect(calls[2]?.body).toEqual({ selector: "button.primary", stability: "review_needed" });
+    expect(calls[3]?.method).toBe("DELETE");
+    expect(calls[3]?.headers.get("idempotency-key")).toBe("idem-delete");
+  });
+
+  test("browser recorder routes use site-scoped endpoints and idempotency", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listBrowserRecordings("site-1", { status: "recording", limit: 20 });
+    await client.startBrowserRecording("site-1", { name: "Invoice portal", start_url: "https://portal.example.com" }, "idem-start");
+    await client.listBrowserRecordingEvents("site-1", "recording-1", { limit: 100 });
+    await client.appendBrowserRecordingEvents("site-1", "recording-1", { events: [{ event_type: "click", selector: "button[type=submit]" }] }, "idem-events");
+    await client.completeBrowserRecording("site-1", "recording-1", "idem-complete");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/sites/site-1/recordings?status=recording&limit=20");
+    expect(calls[1]?.method).toBe("POST");
+    expect(calls[1]?.url).toBe("http://api.test/v1/sites/site-1/recordings");
+    expect(calls[1]?.headers.get("idempotency-key")).toBe("idem-start");
+    expect(calls[1]?.body).toEqual({ name: "Invoice portal", start_url: "https://portal.example.com" });
+    expect(calls[2]?.method).toBe("GET");
+    expect(calls[2]?.url).toBe("http://api.test/v1/sites/site-1/recordings/recording-1/events?limit=100");
+    expect(calls[3]?.method).toBe("POST");
+    expect(calls[3]?.headers.get("idempotency-key")).toBe("idem-events");
+    expect(calls[3]?.body).toEqual({ events: [{ event_type: "click", selector: "button[type=submit]" }] });
+    expect(calls[4]?.method).toBe("POST");
+    expect(calls[4]?.url).toBe("http://api.test/v1/sites/site-1/recordings/recording-1/complete");
+    expect(calls[4]?.headers.get("idempotency-key")).toBe("idem-complete");
+  });
+
   test("listRunSteps → GET /v1/runs/{id}/steps + Bearer (단계 트레이스 read 배선)", async () => {
     const { calls, client } = harness({ body: { items: [], next_cursor: null } });
     await client.listRunSteps("run-9", { limit: 100 });
     expect(calls[0]?.method).toBe("GET");
     expect(calls[0]?.url).toBe("http://api.test/v1/runs/run-9/steps?limit=100");
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
+  test("watchRunSteps → GET /v1/runs/{id}/steps/stream + Bearer + SSE parse", async () => {
+    const calls: Captured[] = [];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          `event: run_steps_changed\n` +
+            `data: {"run_id":"run-9","status":"running","step_count":2,"last_step_at":"2026-06-24T00:00:00Z","run_updated_at":"2026-06-24T00:00:01Z"}\n\n`,
+        ));
+        controller.close();
+      },
+    });
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      calls.push({ url: String(input), method: init?.method ?? "GET", headers, body: undefined });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const client = createHttpApiClient({ baseUrl: "http://api.test", getToken: () => "jwt-123", fetchImpl });
+    const event = await new Promise<{ step_count?: number; status: string | null }>((resolve) => {
+      client.watchRunSteps("run-9", resolve);
+    });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/runs/run-9/steps/stream");
+    expect(calls[0]?.headers.get("accept")).toBe("text/event-stream");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+    expect(event.status).toBe("running");
+    expect(event.step_count).toBe(2);
   });
 
   test("listRunArtifacts → GET /v1/runs/{id}/artifacts + Bearer (artifact 목록 read 배선)", async () => {
@@ -96,6 +287,25 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.headers.get("if-match")).toBe("3");
     expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-xyz");
     expect(calls[0]?.body).toEqual({ target: "prod" });
+  });
+
+  test("promoteScenarioFromRun → POST .../promote-from-run + Idempotency-Key + body{run_id}", async () => {
+    const { calls, client } = harness({
+      status: 201,
+      body: {
+        scenario_id: "scn-1",
+        version: 4,
+        scenario_version_id: "sv-4",
+        promotion_status: "draft",
+        promoted_node_ids: ["click_order"],
+        skipped: [],
+      },
+    });
+    await client.promoteScenarioFromRun("scn-1", "run-1", "idem-pbd");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenarios/scn-1/promote-from-run");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-pbd");
+    expect(calls[0]?.body).toEqual({ run_id: "run-1" });
   });
 
   test("scenario lifecycle → 운영 해제·보관·버전 목록·롤백 경로", async () => {
@@ -178,9 +388,9 @@ describe("HttpApiClient 계약", () => {
 
   test("resolveHumanTask(result) → body{result}", async () => {
     const { calls, client } = harness();
-    await client.resolveHumanTask("ht-1", "k1", { outcome: "approved" });
+    await client.resolveHumanTask("ht-1", "k1", { decision: "approve" });
     expect(calls[0]?.url).toBe("http://api.test/v1/human-tasks/ht-1/resolve");
-    expect(calls[0]?.body).toEqual({ result: { outcome: "approved" } });
+    expect(calls[0]?.body).toEqual({ result: { decision: "approve" } });
   });
 
   test("assignHumanTask → body{assignee}", async () => {
@@ -366,6 +576,22 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.url).toBe("http://api.test/v1/sites");
     expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-site");
     expect(calls[0]?.body).toEqual({ name: "하이웍스", url_pattern: "https://login.office.hiworks.com", risk: "green", page_state_selectors: selectors });
+  });
+
+  test("listSessionCaptures → GET /v1/sites/{id}/session/capture", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listSessionCaptures("site-1");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/sites/site-1/session/capture");
+  });
+
+  test("updateSitePageState → PATCH /v1/sites/{id}/page-state + Idempotency-Key", async () => {
+    const { calls, client } = harness({ body: { site_profile_id: "site-1", page_state_selectors: { flags: {} } } });
+    await client.updateSitePageState("site-1", { flags: {} }, "idem-page-state");
+    expect(calls[0]?.method).toBe("PATCH");
+    expect(calls[0]?.url).toBe("http://api.test/v1/sites/site-1/page-state");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-page-state");
+    expect(calls[0]?.body).toEqual({ page_state_selectors: { flags: {} } });
   });
 
   test("4xx 응답 → ApiError(code, httpStatus) 표면화 (조용한 실패 금지)", async () => {

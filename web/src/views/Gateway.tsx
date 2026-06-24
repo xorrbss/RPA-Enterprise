@@ -83,10 +83,10 @@ function GatewayPolicyList({
       <table>
         <thead>
           <tr>
-            <th>모델</th>
+            <th>AI 모델</th>
             <th>기본</th>
-            <th>버전</th>
-            <th>작업</th>
+            <th>변경 번호</th>
+            <th>선택</th>
           </tr>
         </thead>
         <tbody>

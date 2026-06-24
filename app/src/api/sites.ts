@@ -12,6 +12,9 @@
  * (auth-rbac §2, rbacAction=site.update). Idempotency-Key 멱등. UNIQUE(tenant_id, name) → 중복 name 422.
  * 미존재/타테넌트(RLS)/형식 무효 id → 404.
  *
+ * `PATCH /v1/sites/{site_profile_id}/page-state` — site_profile page_state_selectors 수정. operator+ 권한
+ * (rbacAction=site.update). Idempotency-Key 멱등. body.page_state_selectors 는 null(해제) 또는 SitePageStateConfig.
+ *
  * `POST /v1/sites/{site_profile_id}/approve` — risk=red 사이트 실행 승인 워크플로우의 제어평면 진입점.
  * 승인 시 site_profiles.approved=true(SITE_PROFILE_BLOCKED 런타임 게이트 해제) + site_profile_approvals 감사 행.
  * approver+ 권한(auth-rbac §2, rbacAction=site.approve; 미보유→AUTHZ_FORBIDDEN). Idempotency-Key 멱등.
@@ -29,6 +32,7 @@ import { originOf } from "../runtime/site-resolution";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import { type ApiServerDeps, requirePrincipal } from "./server";
+import { summarizePageStateSelectors } from "./site-page-state-contract";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -65,6 +69,10 @@ interface UpdateBody {
   readonly name: string;
 }
 
+interface PageStateUpdateBody {
+  readonly pageStateSelectors: unknown | null;
+}
+
 /** PATCH body 선검사(키 소모 이전). name(필수 비공백)만 허용 — risk/url/selectors 등 다른 설정은 별도 라우트(YAGNI). */
 function parseUpdateBody(raw: unknown): UpdateBody {
   if (!isRecord(raw)) {
@@ -80,6 +88,29 @@ function parseUpdateBody(raw: unknown): UpdateBody {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_name" });
   }
   return { name: name.trim() };
+}
+
+/** PATCH /page-state body 선검사. page_state_selectors=null(해제) 또는 SitePageStateConfig만 허용. */
+function parsePageStateUpdateBody(raw: unknown): PageStateUpdateBody {
+  if (!isRecord(raw)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "request_body_object_required" });
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "page_state_selectors") {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unexpected_field", field: key });
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(raw, "page_state_selectors")) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "missing_page_state_selectors" });
+  }
+  const selectors = raw.page_state_selectors;
+  if (selectors === null) return { pageStateSelectors: null };
+  try {
+    parseSitePageStateConfig(selectors);
+  } catch {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_page_state_selectors" });
+  }
+  return { pageStateSelectors: selectors };
 }
 
 type SiteRisk = "green" | "amber" | "red";
@@ -172,6 +203,27 @@ export function registerSiteRoutes(app: FastifyInstance, deps: ApiServerDeps): v
     },
   );
 
+  app.patch<{ Params: { id: string } }>(
+    "/v1/sites/:id/page-state",
+    { config: { rbacAction: "site.update" } },
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
+      const id = request.params.id;
+      if (!UUID_RE.test(id)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      requirePrincipal(request);
+      const body = parsePageStateUpdateBody(request.body);
+      const result = await runIdempotentCommand(
+        deps,
+        request,
+        "updateSitePageState",
+        `/v1/sites/${id}/page-state`,
+        (client, tenantId) => applySitePageStateUpdate(client, tenantId, id, body),
+      );
+      reply.code(result.status).send(result.body);
+    },
+  );
+
   app.post<{ Params: { id: string } }>(
     "/v1/sites/:id/approve",
     { config: { rbacAction: "site.approve" } },
@@ -253,6 +305,33 @@ async function applySiteUpdate(
     }
     throw err;
   }
+}
+
+async function applySitePageStateUpdate(
+  client: PoolClient,
+  tenantId: string,
+  siteId: string,
+  body: PageStateUpdateBody,
+): Promise<CommandResponse> {
+  const updated = await client.query<{ id: string; page_state_selectors: unknown }>(
+    `UPDATE site_profiles
+        SET page_state_selectors = $1::jsonb
+      WHERE id = $2::uuid AND tenant_id = $3::uuid
+      RETURNING id::text AS id, page_state_selectors`,
+    [body.pageStateSelectors !== null ? JSON.stringify(body.pageStateSelectors) : null, siteId, tenantId],
+  );
+  const row = updated.rows[0];
+  if (row === undefined) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  }
+  return {
+    status: 200,
+    body: {
+      site_profile_id: row.id,
+      page_state_selectors: row.page_state_selectors,
+      page_state_summary: summarizePageStateSelectors(row.page_state_selectors),
+    },
+  };
 }
 
 async function applySiteCreate(

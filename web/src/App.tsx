@@ -3,10 +3,16 @@ import { Layout } from "./components/Layout";
 import { TokenGate } from "./components/TokenGate";
 import { useHashRoute, type ViewKey } from "./router";
 import { DashboardView } from "./views/Dashboard";
+import { CoePipelineView } from "./views/CoePipeline";
+import { ConnectorCatalogView } from "./views/ConnectorCatalog";
+import { SiteElementsView } from "./views/SiteElements";
+import { OrchestrationView } from "./views/Orchestration";
+import { DocumentIdpView } from "./views/DocumentIdp";
 import { RunTraceView } from "./views/RunTrace";
 import { WorkitemsView } from "./views/Workitems";
 import { HumanTasksView } from "./views/HumanTasks";
 import { ApprovalInboxView } from "./views/ApprovalInbox";
+import { AuditExplorerView } from "./views/AuditExplorer";
 import { SecurityView } from "./views/Security";
 import { GatewayView } from "./views/Gateway";
 import { ScenariosView } from "./views/Scenarios";
@@ -19,8 +25,18 @@ import { PlaceholderView } from "./views/Placeholder";
 // 라우트 → 뷰. read 백엔드가 있는 뷰는 실 연결, 그 외는 정직한 placeholder(D7.2+ 워크플로우 대상).
 function renderView(view: ViewKey): JSX.Element {
   switch (view) {
+    case "coePipeline":
+      return <CoePipelineView />;
+    case "connectorCatalog":
+      return <ConnectorCatalogView />;
+    case "objectRepository":
+      return <SiteElementsView />;
     case "dashboard":
       return <DashboardView />;
+    case "automationOps":
+      return <OrchestrationView />;
+    case "documentIdp":
+      return <DocumentIdpView />;
     case "runTrace":
       return <RunTraceView />;
     case "workitems":
@@ -29,6 +45,8 @@ function renderView(view: ViewKey): JSX.Element {
       return <HumanTasksView />;
     case "approvalInbox":
       return <ApprovalInboxView />;
+    case "auditExplorer":
+      return <AuditExplorerView />;
     case "security":
       return <SecurityView />;
     case "llmGateway":

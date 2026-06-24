@@ -9,7 +9,7 @@ import { fakeClient } from "./fake-client";
 
 // 사람확인 담당자 '배정' picker — /v1/principals 담당자 디렉터리를 datalist로 노출(자유 입력 폴백 유지).
 // 디렉터리 항목은 이름(display_name)으로 보이고 배정값은 sub. 디렉터리 밖 값도 자유 입력 가능(폴백).
-const LABEL = "담당자(이름으로 선택 또는 ID 직접 입력)";
+const LABEL = "담당자 선택 또는 직접 입력";
 
 function renderApp(client: ApiClient): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -48,7 +48,7 @@ describe("담당자 배정 picker(/v1/principals datalist)", () => {
       }),
     );
     location.hash = "#humanTasks";
-    fireEvent.click(await screen.findByRole("button", { name: "현재 페이지 1건 배정" }));
+    fireEvent.click(await screen.findByRole("button", { name: "현재 목록 1건 담당자 지정" }));
     const input = await screen.findByLabelText(LABEL);
     expect(input).toHaveAttribute("list"); // 자유 입력 + 제안 연결
     await waitFor(() => {
@@ -71,7 +71,7 @@ describe("담당자 배정 picker(/v1/principals datalist)", () => {
       }),
     );
     location.hash = "#humanTasks";
-    fireEvent.click(await screen.findByRole("button", { name: "현재 페이지 1건 배정" }));
+    fireEvent.click(await screen.findByRole("button", { name: "현재 목록 1건 담당자 지정" }));
     const input = await screen.findByLabelText(LABEL);
     expect(input).toBeInTheDocument();
     expect(document.querySelectorAll("datalist option").length).toBe(0); // 제안 0 — 그래도 입력 가능

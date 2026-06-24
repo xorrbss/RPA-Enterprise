@@ -1,23 +1,53 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
 import { useApiClient } from "../api/context";
 import { StatusBadge, actionLabel, cacheLabel, errorCodeLabel, isStreamWarning, streamStatusLabel } from "./badges";
 import { ErrorState, Loading } from "./states";
-import { ArtifactRef } from "./ArtifactLookup";
 import { hhmmss } from "../util/time";
-import { useHashParam } from "../router";
+import { mergeParams, useHashParam } from "../router";
 import type { StagehandCallSummary, StepSummary } from "../api/types";
 
-const POLL_MS = 5_000; // 라이브 = outbox tail 폴링(v1)
+const POLL_MS = 5_000; // SSE 변경 신호가 끊긴 경우를 위한 fallback 재조회 간격.
 
 // 증빙 칩 목록(카드/표 공용). 클릭 시 위 '산출물 조회' 자동 입력(A3, 현재 해시 파라미터 보존).
 function ArtifactRefs({ ids }: { ids: readonly string[] }): JSX.Element {
   return (
     <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-      {ids.map((id) => <ArtifactRef key={id} id={id} />)}
+      {ids.map((id, index) => (
+        <button
+          key={id}
+          type="button"
+          className="linklike"
+          aria-label={`증빙 ${index + 1} 조회`}
+          title="증빙 원본 참조는 단계 상세에서 확인"
+          onClick={() => { mergeParams({ artifact: id }); }}
+        >
+          증빙 #{index + 1}
+        </button>
+      ))}
     </span>
+  );
+}
+
+function stepDisplayLabel(index: number): string {
+  return `단계 #${index + 1}`;
+}
+
+function StepTechnicalDetails({ step }: { step: StepSummary }): JSX.Element {
+  return (
+    <details className="developer-details">
+      <summary>원문 단계 정보</summary>
+      <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px", margin: "8px 0 0" }}>
+        <dt className="subtle">자동화 단계 참조</dt>
+        <dd style={{ margin: 0 }}><code>{step.node_id}</code></dd>
+        <dt className="subtle">처리 기록 참조</dt>
+        <dd style={{ margin: 0 }}><code>{step.step_id}</code></dd>
+        <dt className="subtle">시도 번호</dt>
+        <dd style={{ margin: 0 }}><code>{step.attempt}</code></dd>
+      </dl>
+    </details>
   );
 }
 
@@ -38,11 +68,18 @@ function formatCost(calls: readonly StagehandCallSummary[]): string | null {
 // 데이터에 없는 값은 절대 지어내지 않는다(없으면 보이는 신호 조합으로만 구성).
 export function StepTrace({ runId }: { runId: string }): JSX.Element {
   const api = useApiClient();
+  const queryClient = useQueryClient();
   const q = useQuery({
     queryKey: ["run-steps", runId],
     queryFn: () => api.listRunSteps(runId, { limit: 100 }),
     refetchInterval: POLL_MS,
   });
+  useEffect(() => {
+    return api.watchRunSteps(runId, () => {
+      void queryClient.invalidateQueries({ queryKey: ["run-steps", runId] });
+      void queryClient.invalidateQueries({ queryKey: ["run-detail", runId] });
+    });
+  }, [api, queryClient, runId]);
   const [view, setView] = useState<"cards" | "table">("cards");
   const items: readonly StepSummary[] = q.data?.items ?? [];
   const focusStep = useHashParam("step");
@@ -117,8 +154,8 @@ function stepElementId(key: string, view: "cards" | "table"): string {
   return `step-${view}-${encodeURIComponent(key)}`;
 }
 
-// 트레이스-로컬 갱신 인디케이터(F2) — 전역 Freshness를 복제하지 않고 이 패널의 폴링 사실만 표시한다.
-// isFetching=실제 폴링 진행(관찰값), dataUpdatedAt=react-query가 기록한 마지막 성공 fetch 시각(추정 아님).
+// 트레이스-로컬 갱신 인디케이터(F2): SSE 신호/수동 재조회/fallback 폴링으로 발생한 fetch 상태만 표시한다.
+// isFetching=실제 fetch 진행(관찰값), dataUpdatedAt=react-query가 기록한 마지막 성공 fetch 시각(추정 아님).
 function TraceFreshness({ isFetching, dataUpdatedAt }: { isFetching: boolean; dataUpdatedAt: number }): JSX.Element {
   return (
     <span className="freshness" role="status" aria-live="polite">
@@ -174,7 +211,7 @@ function StepCard({
     <div id={stepElementId(key, "cards")} className={`step-card${isCurrent ? " current" : ""}${isFocused ? " focused" : ""}`} tabIndex={isFocused ? -1 : undefined}>
       <div className="step-card-head">
         <span className="subtle" style={{ minWidth: 22 }}>#{index + 1}</span>
-        <code>{s.node_id}</code>
+        <span className="badge muted" title="원본 단계 참조는 단계 상세에서 확인">{stepDisplayLabel(index)}</span>
         <strong>{actionLabel(s.action)}</strong>
         {isFocused && <span className="badge amber">산출물 선택 단계</span>}
         {isCurrent && (
@@ -196,7 +233,10 @@ function StepCard({
         <div className="step-line">
           <span className="subtle">예외</span>
           <span className="badge red">{errorCodeLabel(s.exception.code)}</span>
-          <span className="subtle">{s.exception.class}</span>
+          <details className="developer-details">
+            <summary>예외 상세</summary>
+            <code>{s.exception.class}</code>
+          </details>
         </div>
       )}
       {s.artifact_ids.length > 0 && (
@@ -205,6 +245,7 @@ function StepCard({
           <ArtifactRefs ids={s.artifact_ids} />
         </div>
       )}
+      <StepTechnicalDetails step={s} />
     </div>
   );
 }
@@ -217,6 +258,54 @@ function tokenText(values: readonly (number | null)[]): string {
   const sum = values.reduce<number>((a, v) => a + (v ?? 0), 0);
   return values.every((v) => v !== null) ? String(sum) : `≥${sum}`; // 일부 미보고 → 하한
 }
+
+function aiCompactLabel(calls: readonly StagehandCallSummary[]): string {
+  if (calls.length === 0) return "—";
+  const outText = tokenText(calls.map((c) => c.output_tokens));
+  return `AI 판단 ${calls.length}회${outText !== "—" ? ` · 출력 ${outText}토큰` : ""}`;
+}
+
+function AiTechnicalDetails({
+  calls,
+  cacheMode,
+  cost,
+  firstCall,
+}: {
+  calls: readonly StagehandCallSummary[];
+  cacheMode: string;
+  cost: string | null;
+  firstCall: StagehandCallSummary | null;
+}): JSX.Element {
+  const models = [...new Set(calls.map((c) => c.model))].join(", ");
+  return (
+    <details className="developer-details">
+      <summary>AI 판단 상세</summary>
+      <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px", margin: "8px 0 0" }}>
+        <dt className="subtle">사용 모델</dt>
+        <dd style={{ margin: 0 }}><code>{models}</code></dd>
+        <dt className="subtle">입력량</dt>
+        <dd style={{ margin: 0 }}><code>{tokenText(calls.map((c) => c.input_tokens))}</code></dd>
+        <dt className="subtle">출력량</dt>
+        <dd style={{ margin: 0 }}><code>{tokenText(calls.map((c) => c.output_tokens))}</code></dd>
+        {cost !== null && (
+          <>
+            <dt className="subtle">비용</dt>
+            <dd style={{ margin: 0 }}><code>{cost}</code></dd>
+          </>
+        )}
+        {firstCall?.ttfb_ms != null && (
+          <>
+            <dt className="subtle">첫 응답 시간</dt>
+            <dd style={{ margin: 0 }}><code>{firstCall.ttfb_ms}</code></dd>
+          </>
+        )}
+        <dt className="subtle">계획 재사용 상태</dt>
+        <dd style={{ margin: 0 }}><code>{cacheMode}</code></dd>
+      </dl>
+    </details>
+  );
+}
+
 function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary[]; cacheMode: string }): JSX.Element {
   if (calls.length === 0) {
     // 캐시 hit = 이전에 AI가 도출한 plan을 LLM 호출 없이 재생(impl-contracts §D) — 'AI 미사용'으로 단정하지 않는다.
@@ -229,8 +318,6 @@ function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary
       </div>
     );
   }
-  const models = [...new Set(calls.map((c) => c.model))].join(", ");
-  const anyTok = calls.some((c) => c.input_tokens !== null || c.output_tokens !== null);
   const cost = formatCost(calls);
   const single = calls.length === 1 ? calls[0]! : null;
   // 비정상 응답 종료(잘림/필터/오류) — 관찰된 stream_status 만, 정상 종료는 표기하지 않는다(노이즈 방지·창작 금지).
@@ -238,14 +325,12 @@ function AiJudgment({ calls, cacheMode }: { calls: readonly StagehandCallSummary
   return (
     <div className="step-line">
       <span className="subtle">AI 판단</span>
-      <span>{models}{calls.length > 1 ? ` (${calls.length}회 호출)` : ""}</span>
-      {anyTok && <span className="subtle">입력 {tokenText(calls.map((c) => c.input_tokens))} · 출력 {tokenText(calls.map((c) => c.output_tokens))} 토큰</span>}
-      {cost !== null && <span className="subtle">{cost}</span>}
-      {single?.ttfb_ms != null && <span className="subtle">첫응답 {single.ttfb_ms}ms</span>}
+      <span>{aiCompactLabel(calls)}</span>
       {warnings.map((w) => (
         <span key={w} className="badge amber" title="응답이 정상 종료되지 않았습니다(관찰된 신호).">응답 {streamStatusLabel(w)}</span>
       ))}
       <span className="badge muted">{cacheLabel(cacheMode)}</span>
+      <AiTechnicalDetails calls={calls} cacheMode={cacheMode} cost={cost} firstCall={single} />
     </div>
   );
 }
@@ -280,13 +365,12 @@ function StepTable({
       <table>
         <thead>
           <tr>
-            <th>#</th><th>노드</th><th>동작</th><th>상태</th><th>캐시</th><th>소요</th><th>AI(모델·출력토큰)</th><th>증빙</th>
+            <th>#</th><th>단계</th><th>동작</th><th>상태</th><th>캐시</th><th>소요</th><th>AI 판단</th><th>증빙</th>
           </tr>
         </thead>
         <tbody>
           {items.map((s, i) => {
             const calls = s.stagehand_calls;
-            const outText = tokenText(calls.map((c) => c.output_tokens)); // '—'/'N'/'≥N'
             const key = `${s.step_id}:${s.attempt}`;
             return (
               <tr
@@ -297,7 +381,10 @@ function StepTable({
                 tabIndex={key === focusedKey ? -1 : undefined}
               >
                 <td>{i + 1}{s.attempt > 0 ? <span className="subtle"> ·재{s.attempt}</span> : null}</td>
-                <td><code>{s.node_id}</code></td>
+                <td>
+                  <span title="원본 단계 참조는 단계 상세에서 확인">{stepDisplayLabel(i)}</span>
+                  <StepTechnicalDetails step={s} />
+                </td>
                 <td>{actionLabel(s.action)}</td>
                 <td>
                   <StatusBadge status={s.status} />
@@ -305,7 +392,7 @@ function StepTable({
                 </td>
                 <td>{cacheLabel(s.cache_mode)}</td>
                 <td style={{ minWidth: 120 }}><DurationBar durationMs={s.duration_ms} maxDuration={maxDuration} /></td>
-                <td>{calls.length > 0 ? <span className="subtle">{calls[0]!.model}{outText !== "—" ? ` · ${outText}tok` : ""}</span> : "—"}</td>
+                <td>{calls.length > 0 ? <span className="subtle">{aiCompactLabel(calls)}</span> : "—"}</td>
                 <td>{s.artifact_ids.length > 0 ? <ArtifactRefs ids={s.artifact_ids} /> : "—"}</td>
               </tr>
             );

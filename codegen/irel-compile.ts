@@ -21,6 +21,8 @@ export const IREL_ALLOWED_NODE_FIELDS = [
   "status",
   "extracted_ref",
   "tier",
+  "http_status",
+  "http_ok",
 ] as const;
 
 export type IRELTypeAtom = "int" | "number" | "string" | "boolean" | "null";
@@ -869,7 +871,8 @@ function resolveNodeVariable(
     return failType();
   }
 
-  if (field === "row_count") return okType(typeOf("int"));
+  if (field === "row_count" || field === "http_status") return okType(typeOf("int"));
+  if (field === "http_ok") return okType(typeOf("boolean"));
   return okType(typeOf("string"));
 }
 

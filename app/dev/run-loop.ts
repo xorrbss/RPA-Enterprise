@@ -44,7 +44,7 @@ import { DevPlaintextSessionEncryptor, PgBrowserSessionStore } from "../src/runt
 const WORKER_ID = "9a000000-0000-0000-0000-0000000000df";
 // dev 브라우저 정체성(실 UUID) — browser_sessions PK/FK 가 uuid + browser_identities 행을 요구하므로 serve.ts 가
 // 이 id 로 browser_identities 를 시드한다(세션 재사용 키의 browser_identity_id). leaseId/networkPolicyId 는 DB 미조회라 리터럴 유지.
-export const DEV_BROWSER_IDENTITY_ID = "9b000000-0000-0000-0000-0000000000b1";
+export const DEV_BROWSER_IDENTITY_ID = "9b000000-0000-4000-8000-0000000000b1";
 
 // dom 실행기 cfg(run-loop 전역 — 캐시 미주입(bypass)이라 scenarioVersionId 는 cacheKey 전용으로 미사용; 정적 placeholder).
 const DOM_CFG = {

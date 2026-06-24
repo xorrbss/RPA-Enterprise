@@ -5,6 +5,7 @@ import { PgGraphileRunEnqueuer } from "../api/run-queue";
 import type { PgPool } from "../db/pool";
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import type { CorrelationId, TenantId } from "../../../ts/security-middleware-contract";
+import { processDueRunTriggers } from "./run-trigger-scheduler";
 
 export const MAINTENANCE_POLL_INTERVAL_MS = 5_000;
 export const RETENTION_SWEEPER_HOUR_KST = 2;
@@ -22,6 +23,7 @@ export interface MaintenanceSchedulerOptions {
   readonly enqueuer?: PgGraphileRunEnqueuer;
   readonly correlationId?: () => string;
   readonly now?: () => Date;
+  readonly runTriggerBatchLimit?: number;
   readonly onError?: (err: unknown) => void;
 }
 
@@ -31,6 +33,11 @@ export function buildMaintenancePollJobs(
 ): RuntimeWorkerJob[] {
   return tenantIds.flatMap((tenantId) => [
     { kind: "lease_sweeper", tenantId: tenantId as TenantId },
+    {
+      kind: "human_task_timeout_sweeper",
+      tenantId: tenantId as TenantId,
+      correlationId: correlationId() as CorrelationId,
+    },
     {
       kind: "workitem_checkout_sweeper",
       tenantId: tenantId as TenantId,
@@ -104,8 +111,6 @@ export function startMaintenanceScheduler(
   pool: PgPool,
   options: MaintenanceSchedulerOptions,
 ): MaintenanceScheduler | undefined {
-  if (options.tenantIds.length === 0) return undefined;
-
   const enqueuer = options.enqueuer ?? new PgGraphileRunEnqueuer();
   const correlationId = options.correlationId ?? randomUUID;
   const pollIntervalMs = options.pollIntervalMs ?? MAINTENANCE_POLL_INTERVAL_MS;
@@ -120,7 +125,13 @@ export function startMaintenanceScheduler(
   const poll = (): void => {
     if (stopped || pollInFlight) return;
     pollInFlight = true;
-    void enqueueBatch(pool, enqueuer, buildMaintenancePollJobs(options.tenantIds, correlationId))
+    void runMaintenancePoll(pool, {
+      tenantIds: options.tenantIds,
+      enqueuer,
+      correlationId,
+      now,
+      runTriggerBatchLimit: options.runTriggerBatchLimit,
+    })
       .catch(onError)
       .finally(() => {
         pollInFlight = false;
@@ -150,7 +161,7 @@ export function startMaintenanceScheduler(
   const pollTimer = setInterval(poll, pollIntervalMs);
   unrefTimer(pollTimer);
   timers.push(pollTimer);
-  scheduleRetention();
+  if (options.tenantIds.length > 0) scheduleRetention();
 
   return {
     stop() {
@@ -173,6 +184,49 @@ async function enqueueBatch(pool: PgPool, enqueuer: PgGraphileRunEnqueuer, jobs:
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw err;
+  } finally {
+    client.release();
+  }
+}
+
+interface MaintenancePollInput {
+  readonly tenantIds: readonly string[];
+  readonly enqueuer: PgGraphileRunEnqueuer;
+  readonly correlationId: () => string;
+  readonly now: () => Date;
+  readonly runTriggerBatchLimit?: number;
+}
+
+async function runMaintenancePoll(pool: PgPool, input: MaintenancePollInput): Promise<void> {
+  if (input.tenantIds.length > 0) {
+    await enqueueBatch(pool, input.enqueuer, buildMaintenancePollJobs(input.tenantIds, input.correlationId));
+  }
+  const triggerTenantIds = await resolveRunTriggerTenantIds(pool, input.tenantIds, input.now());
+  if (triggerTenantIds.length === 0) return;
+  await processDueRunTriggers(pool, {
+    tenantIds: triggerTenantIds,
+    enqueuer: input.enqueuer,
+    correlationId: input.correlationId,
+    now: input.now,
+    ...(input.runTriggerBatchLimit !== undefined ? { batchLimit: input.runTriggerBatchLimit } : {}),
+  });
+}
+
+export async function resolveRunTriggerTenantIds(pool: PgPool, configuredTenantIds: readonly string[], now: Date): Promise<readonly string[]> {
+  if (configuredTenantIds.length > 0) return configuredTenantIds;
+  const client = await pool.connect();
+  try {
+    const res = await client.query<{ tenant_id: string }>(
+      `SELECT DISTINCT tenant_id::text AS tenant_id
+         FROM run_triggers
+        WHERE status = 'enabled'
+          AND trigger_type = 'cron'
+          AND next_fire_at IS NOT NULL
+          AND next_fire_at <= $1::timestamptz
+        ORDER BY tenant_id`,
+      [now.toISOString()],
+    );
+    return res.rows.map((row) => row.tenant_id);
   } finally {
     client.release();
   }

@@ -1,0 +1,903 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>브라우저 RPA 갭 반영 검토</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --surface-2: #f9fafb;
+      --line: #dce3ea;
+      --line-strong: #c5d0dc;
+      --text: #1e293b;
+      --muted: #51607a;
+      --soft: #eef3f8;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --blue-ink: #1d4ed8;
+      --green: #0f9f6e;
+      --green-soft: #e7f8f0;
+      --green-ink: #0a7350;
+      --amber: #b7791f;
+      --amber-soft: #fff5dc;
+      --amber-ink: #875200;
+      --red: #c24141;
+      --red-soft: #fdecec;
+      --red-ink: #a52d2d;
+      --purple: #6d5bd0;
+      --purple-soft: #f0edff;
+      --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 10px 30px rgba(15, 23, 42, .05);
+      --radius: 8px;
+      --sidebar: 268px;
+      font-family: Inter, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+    button, input, select { font: inherit; }
+    a { color: inherit; }
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+
+    .app { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100vh; }
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .brand { font-weight: 700; font-size: 15px; padding: 8px 10px 14px; display: flex; align-items: center; gap: 8px; }
+    .brand-mark {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .nav-group { display: flex; flex-direction: column; gap: 4px; }
+    .nav-group + .nav-group { margin-top: 10px; }
+    .nav-group-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      padding: 4px 10px 2px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 9px 10px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: var(--radius);
+      cursor: default;
+      font-size: 13px;
+      text-align: left;
+    }
+    .nav-item.active { background: var(--blue-soft); color: var(--blue); font-weight: 600; }
+    .nav-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--line-strong); flex: none; }
+    .nav-item.active .nav-dot { background: var(--blue); }
+
+    .main { display: flex; flex-direction: column; min-width: 0; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .topbar h1 { font-size: 18px; margin: 0; }
+    .topbar .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .top-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    .content { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.green { background: var(--green-soft); color: var(--green-ink); }
+    .badge.amber { background: var(--amber-soft); color: var(--amber-ink); }
+    .badge.red { background: var(--red-soft); color: var(--red-ink); }
+    .badge.blue { background: var(--blue-soft); color: var(--blue-ink); }
+    .badge.purple { background: var(--purple-soft); color: var(--purple); }
+    .badge.muted { background: var(--soft); color: var(--muted); }
+
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .panel-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .panel-head h2 { font-size: 14px; margin: 0; }
+    .panel-body { padding: 16px; }
+    .subtle { color: var(--muted); font-size: 12px; }
+    .muted { color: var(--muted); margin: 0; }
+    .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
+
+    .summary-strip {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(280px, .8fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .summary-strip h2 { margin: 0 0 8px; font-size: 18px; }
+    .summary-strip p { margin: 0; color: var(--muted); line-height: 1.6; }
+    .decision-rule {
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      border-radius: var(--radius);
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .rule-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: start; }
+    .rule-row strong { font-size: 12px; }
+
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)); gap: 12px; }
+    .metric { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+    .metric .label { color: var(--muted); font-size: 12px; }
+    .metric .value { font-size: 24px; font-weight: 800; margin-top: 6px; }
+    .metric .note { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.45; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(320px, .7fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+    .segmented button {
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      padding: 7px 10px;
+      cursor: pointer;
+    }
+    .segmented button:last-child { border-right: 0; }
+    .segmented button.active { background: var(--blue-soft); color: var(--blue); font-weight: 700; }
+    .search {
+      min-width: min(100%, 240px);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      padding: 7px 10px;
+      color: var(--text);
+      background: var(--surface);
+    }
+
+    .table-wrap { width: 100%; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; }
+    th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 700; font-size: 12px; background: var(--surface-2); position: sticky; top: 0; z-index: 1; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: var(--surface-2); }
+    tbody tr.selected td { background: var(--blue-soft); }
+    td strong { display: block; margin-bottom: 3px; }
+    td .desc { color: var(--muted); line-height: 1.45; }
+
+    .detail-panel { position: sticky; top: 88px; }
+    .detail-title { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+    .detail-title h2 { line-height: 1.35; }
+    .detail-body { display: grid; gap: 12px; }
+    .detail-card {
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+    .detail-card h3 { margin: 0 0 8px; font-size: 13px; }
+    .detail-card p { margin: 0; color: var(--muted); line-height: 1.55; }
+    .field-grid { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; font-size: 13px; }
+    .field-grid dt { color: var(--muted); }
+    .field-grid dd { margin: 0; }
+
+    .roadmap { display: grid; gap: 10px; }
+    .roadmap-item {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      background: var(--surface);
+    }
+    .roadmap-index {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: var(--soft);
+      color: var(--muted);
+      font-weight: 800;
+      font-size: 12px;
+    }
+    .roadmap-item strong { display: block; margin-bottom: 3px; }
+    .roadmap-item p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .card-grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; }
+    .review-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: var(--surface);
+      display: grid;
+      gap: 9px;
+    }
+    .review-card h3 { margin: 0; font-size: 13px; line-height: 1.35; }
+    .review-card p { margin: 0; color: var(--muted); line-height: 1.5; font-size: 12px; }
+    .card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+    .legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .btn:hover { background: var(--soft); }
+    .btn.primary:hover { background: #1d4ed8; }
+
+    .callout {
+      border: 1px solid var(--amber);
+      background: var(--amber-soft);
+      color: var(--amber-ink);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      line-height: 1.55;
+    }
+    .callout strong { color: var(--text); }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 1120px) {
+      .summary-strip, .workspace { grid-template-columns: 1fr; }
+      .detail-panel { position: static; }
+      .metrics { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+      .card-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+    }
+    @media (max-width: 840px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; }
+      .brand { width: 100%; padding: 4px 8px 8px; }
+      .nav-group { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 100%; }
+      .nav-group + .nav-group { margin-top: 4px; }
+      .nav-group-label { flex: 1 1 100%; padding: 4px 8px 0; }
+      .nav-item { width: auto; flex: 0 1 auto; }
+      .topbar { padding: 12px 14px; flex-wrap: wrap; align-items: flex-start; }
+      .content { padding: 14px; }
+    }
+    @media (max-width: 600px) {
+      .metrics, .card-grid { grid-template-columns: 1fr; }
+      .roadmap-item { grid-template-columns: 32px minmax(0, 1fr); }
+      .roadmap-item .badge { grid-column: 2; justify-self: start; }
+      .field-grid, .rule-row { grid-template-columns: 1fr; }
+      .filters { align-items: stretch; }
+      .segmented { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); }
+      .segmented button { border-bottom: 0; padding: 8px 6px; }
+      .search { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar" aria-label="주 메뉴">
+      <div class="brand"><span class="brand-mark">R</span> RPA 운영 콘솔</div>
+      <div class="nav-group" role="group" aria-label="운영">
+        <div class="nav-group-label">운영</div>
+        <button class="nav-item" type="button"><span class="nav-dot"></span><span>대시보드</span></button>
+        <button class="nav-item" type="button"><span class="nav-dot"></span><span>실행 기록</span></button>
+        <button class="nav-item" type="button"><span class="nav-dot"></span><span>사람 확인</span></button>
+      </div>
+      <div class="nav-group" role="group" aria-label="제작">
+        <div class="nav-group-label">제작</div>
+        <button class="nav-item" type="button"><span class="nav-dot"></span><span>자동화 만들기</span></button>
+        <button class="nav-item" type="button"><span class="nav-dot"></span><span>시나리오 검증</span></button>
+      </div>
+      <div class="nav-group" role="group" aria-label="검토">
+        <div class="nav-group-label">검토</div>
+        <button class="nav-item active" type="button" aria-current="page"><span class="nav-dot"></span><span>경쟁 갭 검토</span></button>
+        <button class="nav-item" type="button"><span class="nav-dot"></span><span>보안/거버넌스</span></button>
+      </div>
+    </nav>
+
+    <div class="main">
+      <header class="topbar">
+        <div>
+          <h1>브라우저 RPA 갭 반영 검토</h1>
+          <div class="sub">데스크톱 애플리케이션 범위를 제외하고 제품 개발에 반영할 항목을 정리합니다.</div>
+        </div>
+        <div class="top-actions">
+          <span class="badge blue">브라우저 전용</span>
+          <span class="badge muted">Desktop 제외</span>
+          <span class="badge green">검토용 HTML</span>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="summary-strip" aria-labelledby="summary-title">
+          <div>
+            <h2 id="summary-title">결론: 저작 진입점, 예외 처리, 운영 보안 UX는 그대로 살아남습니다.</h2>
+            <p>
+              데스크톱 자동화, VDI, Windows 셀렉터는 제외합니다. 대신 브라우저 자동화의 실제 도입 장벽인
+              레코더, PbD 승격, Human-in-the-loop, Challenge 복구, SSO, 감사 증적, 웹 템플릿 카탈로그를
+              개발 후보로 올립니다.
+            </p>
+          </div>
+          <div class="decision-rule" aria-label="검토 기준">
+            <div class="rule-row">
+              <strong>반영</strong>
+              <span>브라우저 자동화의 제작, 실행, 운영 신뢰성에 직접 영향을 주는 항목</span>
+            </div>
+            <div class="rule-row">
+              <strong>재분류</strong>
+              <span>데스크톱 근거는 버리고 브라우저 제품 문맥으로 표현을 바꿀 항목</span>
+            </div>
+            <div class="rule-row">
+              <strong>제외</strong>
+              <span>VDI, Citrix, Windows 앱, 데스크톱 attended 자동화처럼 범위 밖인 항목</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="metrics" aria-label="요약 지표">
+          <div class="metric">
+            <div class="label">바로 반영</div>
+            <div class="value">7</div>
+            <div class="note">브라우저 RPA 경쟁력에 직접 영향</div>
+          </div>
+          <div class="metric">
+            <div class="label">표현 재분류</div>
+            <div class="value">7</div>
+            <div class="note">범위 조정 후 개발 후보 유지</div>
+          </div>
+          <div class="metric">
+            <div class="label">제외</div>
+            <div class="value">4</div>
+            <div class="note">데스크톱 자동화 전제 항목</div>
+          </div>
+          <div class="metric">
+            <div class="label">1차 개발 후보</div>
+            <div class="value">5</div>
+            <div class="note">혼선 제거, 레코더, 승격, HITL, SSO/감사</div>
+          </div>
+        </section>
+
+        <section class="workspace" aria-label="갭 검토 작업 영역">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>갭 반영 매트릭스</h2>
+                <div class="subtle">행을 선택하면 오른쪽에서 개발 메모를 확인할 수 있습니다.</div>
+              </div>
+              <div class="filters" aria-label="필터">
+                <div class="segmented" role="group" aria-label="상태 필터">
+                  <button type="button" class="active" data-filter="all">전체</button>
+                  <button type="button" data-filter="apply">반영</button>
+                  <button type="button" data-filter="reframe">재분류</button>
+                  <button type="button" data-filter="exclude">제외</button>
+                </div>
+                <input id="search" class="search" type="search" placeholder="항목 검색" aria-label="항목 검색" />
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">항목</th>
+                    <th scope="col">판정</th>
+                    <th scope="col">우선순위</th>
+                    <th scope="col">반영 방식</th>
+                    <th scope="col">도입자 관점 이유</th>
+                  </tr>
+                </thead>
+                <tbody id="gap-table"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside class="panel detail-panel" aria-labelledby="detail-title">
+            <div class="panel-head detail-title">
+              <div>
+                <h2 id="detail-title">선택 항목</h2>
+                <div id="detail-sub" class="subtle">첫 번째 항목이 기본 선택되어 있습니다.</div>
+              </div>
+              <span id="detail-badge" class="badge blue">반영</span>
+            </div>
+            <div class="panel-body detail-body">
+              <dl class="field-grid">
+                <dt>항목</dt>
+                <dd id="detail-name">브라우저 레코더</dd>
+                <dt>권고</dt>
+                <dd id="detail-decision">반영</dd>
+                <dt>개발 단계</dt>
+                <dd id="detail-phase">Phase 1</dd>
+              </dl>
+              <div class="detail-card">
+                <h3>개발 메모</h3>
+                <p id="detail-note">웹사이트를 조작하면서 클릭, 입력, 선택, 검증을 녹화하고 셀렉터 후보를 저장하는 진입점을 추가합니다.</p>
+              </div>
+              <div class="detail-card">
+                <h3>완료 기준</h3>
+                <p id="detail-done">녹화한 액션이 실행 가능한 시나리오 초안으로 저장되고, 셀렉터 테스트 결과를 사용자가 확인할 수 있습니다.</p>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section class="panel" aria-labelledby="roadmap-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="roadmap-title">추천 개발 순서</h2>
+              <div class="subtle">데스크톱 제외 후에도 즉시 개발 검토할 만한 1차 흐름입니다.</div>
+            </div>
+            <span class="badge green">1차 스코프</span>
+          </div>
+          <div class="panel-body roadmap">
+            <div class="roadmap-item">
+              <span class="roadmap-index">1</span>
+              <div>
+                <strong>지원하지 않는 액션의 혼선 제거</strong>
+                <p>api_call, file, shell은 브라우저 전용 범위 밖이면 작성/저장 단계에서 차단하거나 명확히 비활성 처리합니다.</p>
+              </div>
+              <span class="badge red">P0</span>
+            </div>
+            <div class="roadmap-item">
+              <span class="roadmap-index">2</span>
+              <div>
+                <strong>브라우저 레코더와 셀렉터 테스트</strong>
+                <p>클릭하면서 봇을 만들고, 실행 전 셀렉터가 잡히는지 바로 검증합니다.</p>
+              </div>
+              <span class="badge red">P0</span>
+            </div>
+            <div class="roadmap-item">
+              <span class="roadmap-index">3</span>
+              <div>
+                <strong>성공 실행을 봇으로 승격</strong>
+                <p>성공한 브라우저 실행을 콘솔에서 바로 결정형 시나리오로 저장합니다.</p>
+              </div>
+              <span class="badge red">P0</span>
+            </div>
+            <div class="roadmap-item">
+              <span class="roadmap-index">4</span>
+              <div>
+                <strong>HITL 입력, 만료, 에스컬레이션</strong>
+                <p>승인뿐 아니라 데이터 보정, timeout, 담당자 재배정까지 닫힌 업무 흐름으로 만듭니다.</p>
+              </div>
+              <span class="badge amber">P1</span>
+            </div>
+            <div class="roadmap-item">
+              <span class="roadmap-index">5</span>
+              <div>
+                <strong>SSO와 감사 증적 화면</strong>
+                <p>raw JWT 입력을 제거하고, 감사 로그 조회/필터/내보내기로 보안 심사 대응력을 올립니다.</p>
+              </div>
+              <span class="badge amber">P1</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="cards-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="cards-title">분류별 개발 후보</h2>
+              <div class="subtle">개발 전 워크숍에서 그대로 카드 단위로 논의할 수 있게 압축했습니다.</div>
+            </div>
+            <div class="legend">
+              <span class="badge blue">반영</span>
+              <span class="badge amber">재분류</span>
+              <span class="badge muted">제외</span>
+            </div>
+          </div>
+          <div class="panel-body card-grid">
+            <article class="review-card">
+              <div class="card-meta"><span class="badge blue">반영</span><span class="badge red">P0</span></div>
+              <h3>레코더와 PbD 승격</h3>
+              <p>브라우저 RPA의 제작 진입점을 낮추고, 성공 실행을 재사용 가능한 봇으로 바꿉니다.</p>
+            </article>
+            <article class="review-card">
+              <div class="card-meta"><span class="badge blue">반영</span><span class="badge amber">P1</span></div>
+              <h3>HITL 업무 데이터 입력</h3>
+              <p>사람 확인을 단순 계속 신호가 아니라 검수, 보정, 승인 데이터를 받는 업무 화면으로 확장합니다.</p>
+            </article>
+            <article class="review-card">
+              <div class="card-meta"><span class="badge blue">반영</span><span class="badge amber">P1</span></div>
+              <h3>Challenge 복구</h3>
+              <p>MFA, CAPTCHA, 로그인 만료를 감지한 뒤 사람 확인과 세션 갱신, 재시도를 연결합니다.</p>
+            </article>
+            <article class="review-card">
+              <div class="card-meta"><span class="badge amber">재분류</span><span class="badge red">P0</span></div>
+              <h3>비지원 액션 혼선 제거</h3>
+              <p>비브라우저 액션을 당장 구현하기보다, 사용자가 실행 가능한 것처럼 착각하지 않게 막습니다.</p>
+            </article>
+            <article class="review-card">
+              <div class="card-meta"><span class="badge amber">재분류</span><span class="badge amber">P2</span></div>
+              <h3>웹 요소 저장소</h3>
+              <p>Object Repository를 Windows 객체가 아니라 사이트별 셀렉터 라이브러리로 정의합니다.</p>
+            </article>
+            <article class="review-card">
+              <div class="card-meta"><span class="badge muted">제외</span><span class="badge muted">Out</span></div>
+              <h3>VDI, Citrix, Windows 자동화</h3>
+              <p>현재 제품 포지션이 브라우저 전용이면 경쟁 비교표에서 제외하고 별도 라인업으로 분리합니다.</p>
+            </article>
+          </div>
+        </section>
+
+        <div class="callout">
+          <strong>개발 판단 메모:</strong>
+          이 화면의 핵심은 “경쟁사 기능을 모두 따라 하자”가 아닙니다. 브라우저 전용 제품이라고 명확히 선을 긋되,
+          그 범위 안에서 도입자가 바로 막히는 제작, 예외, 보안, 감사 경험을 먼저 닫는 방향입니다.
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const gaps = [
+      {
+        id: "browser-recorder",
+        name: "브라우저 레코더",
+        desc: "클릭하면서 녹화해 봇 초안을 만드는 1급 진입점",
+        decision: "apply",
+        priority: "P0",
+        phase: "Phase 1",
+        method: "새 자동화 만들기 화면에 녹화 시작, 일시정지, 셀렉터 확인, 초안 저장 흐름 추가",
+        reason: "국내 RPA 사용자는 화면을 보여주고 봇을 만드는 방식을 가장 직관적으로 기대합니다.",
+        note: "브라우저 확장 또는 제어 브라우저 세션에서 클릭, 입력, 선택, 검증 후보를 기록합니다.",
+        done: "녹화한 액션이 시나리오 초안으로 저장되고 사용자가 셀렉터 안정성을 확인할 수 있습니다."
+      },
+      {
+        id: "pbd-promotion",
+        name: "PbD 승격 버튼",
+        desc: "성공 실행을 결정형 브라우저 봇으로 저장",
+        decision: "apply",
+        priority: "P0",
+        phase: "Phase 1",
+        method: "실행 상세에 '이 실행을 자동화로 저장' 버튼과 승격 diff 표시",
+        reason: "REST를 직접 호출하지 않고 콘솔에서 셀프서비스로 봇을 만들 수 있어야 합니다.",
+        note: "기존 promote-from-run 백엔드 계약을 콘솔 액션으로 연결합니다.",
+        done: "성공 실행 상세에서 승격 결과, 생성된 노드, selector bake 결과가 보입니다."
+      },
+      {
+        id: "unsupported-actions",
+        name: "api_call/file/shell 혼선 제거",
+        desc: "비브라우저 액션이 실행 가능한 것처럼 보이는 문제",
+        decision: "reframe",
+        priority: "P0",
+        phase: "Phase 1",
+        method: "브라우저 전용 모드에서는 작성, 저장, 배지 노출을 차단하거나 out-of-scope로 표시",
+        reason: "기능 부족보다 더 위험한 것은 데모에서는 있어 보이지만 실제 실행에서 실패하는 경험입니다.",
+        note: "구현 우선순위가 아니라 제품 정직성 우선순위로 다룹니다.",
+        done: "사용자는 실행기가 없는 액션을 저장하거나 운영 배포할 수 없습니다."
+      },
+      {
+        id: "hitl-data",
+        name: "HITL 데이터 입력",
+        desc: "승인뿐 아니라 검수, 보정, 판정 데이터를 받는 사람 확인",
+        decision: "apply",
+        priority: "P1",
+        phase: "Phase 2",
+        method: "Human Task schema, 입력 폼, resolve result 저장과 다음 단계 참조 추가",
+        reason: "문서 검증, 주문 보정, 예외 승인 같은 기업 업무는 사람이 값을 입력해야 완성됩니다.",
+        note: "단순 '처리완료' 버튼에서 업무별 form renderer로 확장합니다.",
+        done: "사람이 입력한 값이 이후 노드에서 참조되고 감사 로그에 남습니다."
+      },
+      {
+        id: "hitl-timeout",
+        name: "HITL 만료와 에스컬레이션",
+        desc: "무응답 장기 대기와 500 에러 버튼 방지",
+        decision: "apply",
+        priority: "P1",
+        phase: "Phase 2",
+        method: "timeout sweeper, 담당자 재배정 정책, 지원 안 되는 경우 버튼 비활성화",
+        reason: "사람 확인은 운영 SLA와 연결되므로 멈춘 run을 자동으로 수습해야 합니다.",
+        note: "routing owner가 없을 때는 에스컬레이션 버튼을 숨기거나 사유를 보여줍니다.",
+        done: "만료된 작업은 정책대로 실패, 재배정, 알림 중 하나로 전이됩니다."
+      },
+      {
+        id: "challenge-recovery",
+        name: "Challenge 자동 복구",
+        desc: "MFA, CAPTCHA, 로그인 만료 대응",
+        decision: "apply",
+        priority: "P1",
+        phase: "Phase 2",
+        method: "감지 후 사람 확인, 세션 갱신, 원 단계 재시도 흐름 연결",
+        reason: "브라우저 RPA는 로그인과 보안 challenge 때문에 실제 운영에서 자주 중단됩니다.",
+        note: "감지는 부분적으로 있으므로 복구 정책과 UX를 닫는 것이 핵심입니다.",
+        done: "challenge 발생 run이 사람 확인 후 동일 위치에서 재시도됩니다."
+      },
+      {
+        id: "sso",
+        name: "SSO/IdP 콘솔 로그인",
+        desc: "raw JWT 붙여넣기 대신 기업 로그인 흐름 제공",
+        decision: "apply",
+        priority: "P1",
+        phase: "Phase 2",
+        method: "OIDC 로그인, role claim mapping, SCIM 또는 사용자 동기화 화면 추가",
+        reason: "대기업 보안 심사에서 운영자 토큰 수동 입력은 PoC 이후 바로 걸립니다.",
+        note: "백엔드 JWKS 기반을 살리고 콘솔 로그인 UX를 제품화합니다.",
+        done: "운영자가 사내 IdP로 로그인하고 역할이 자동 반영됩니다."
+      },
+      {
+        id: "audit-explorer",
+        name: "감사로그 조회와 증적 내보내기",
+        desc: "write-only audit을 운영자가 조회 가능한 증적으로 전환",
+        decision: "apply",
+        priority: "P1",
+        phase: "Phase 2",
+        method: "감사 이벤트 필터, 상세, 해시체인 검증 상태, CSV/PDF export 추가",
+        reason: "감사 대응은 DB 직접 쿼리가 아니라 콘솔에서 바로 제출 가능한 증적이 필요합니다.",
+        note: "감사 로그 저장 계약은 유지하고 조회 권한과 redaction을 붙입니다.",
+        done: "권한 있는 사용자가 실행, 승인, 권한 변경 이벤트를 검색하고 내보낼 수 있습니다."
+      },
+      {
+        id: "web-template-catalog",
+        name: "웹 템플릿/사이트 카탈로그",
+        desc: "커넥터 마켓플레이스를 브라우저 RPA 문맥으로 재정의",
+        decision: "apply",
+        priority: "P2",
+        phase: "Phase 3",
+        method: "사이트 프로필, 로그인 패턴, 대표 업무 템플릿, 셀렉터 팩 제공",
+        reason: "반복 구축 비용을 줄여야 파일럿 이후 여러 업무로 확장됩니다.",
+        note: "3rd-party marketplace가 아니라 1st-party 업무 템플릿부터 시작합니다.",
+        done: "사용자가 표준 웹 업무 템플릿을 복사해 빠르게 자동화를 시작합니다."
+      },
+      {
+        id: "vision-browser",
+        name: "브라우저 시각 보조",
+        desc: "VDI가 아니라 캔버스, 이미지형 UI, DOM 불안정 페이지 대응",
+        decision: "reframe",
+        priority: "P2",
+        phase: "Phase 3",
+        method: "visual verify, screenshot evidence, image target fallback을 제한적으로 제공",
+        reason: "브라우저 안에서도 DOM만으로 다루기 어려운 화면이 있습니다.",
+        note: "Citrix나 레거시 데스크톱 자동화 근거는 제외합니다.",
+        done: "DOM 실패 시 시각 검증 또는 사람 확인으로 안전하게 분기합니다."
+      },
+      {
+        id: "visual-designer",
+        name: "비주얼 디자이너",
+        desc: "선형 리스트를 넘어 분기, 반복, 예외를 이해하기 쉽게 표시",
+        decision: "reframe",
+        priority: "P2",
+        phase: "Phase 3",
+        method: "전체 캔버스보다 recorder, step test 이후 flow map부터 추가",
+        reason: "복잡한 업무에서는 선형 폼만으로 유지보수가 어려워집니다.",
+        note: "초기 PoC에서는 필수는 아니지만 엔터프라이즈 확장 전에 필요합니다.",
+        done: "분기, 반복, 실패 흐름을 한 화면에서 추적할 수 있습니다."
+      },
+      {
+        id: "object-repository",
+        name: "웹 요소 저장소",
+        desc: "Object Repository를 사이트별 셀렉터 라이브러리로 전환",
+        decision: "reframe",
+        priority: "P2",
+        phase: "Phase 3",
+        method: "공유 element key, selector 후보, 영향도 분석, 일괄 갱신 추가",
+        reason: "같은 웹 요소를 여러 봇이 공유할 때 유지보수 비용이 크게 줄어듭니다.",
+        note: "Windows 객체 저장소가 아니라 page object catalog로 정의합니다.",
+        done: "셀렉터 변경 시 영향받는 봇 목록과 재검증 결과를 보여줍니다."
+      },
+      {
+        id: "try-catch",
+        name: "노드 단위 예외 처리",
+        desc: "retry, fallback, 사람 확인, 중단 정책을 UI에서 설정",
+        decision: "reframe",
+        priority: "P2",
+        phase: "Phase 3",
+        method: "step error policy, retry count, fallback step, HITL 전환 UI 추가",
+        reason: "웹 자동화는 사이트 지연과 일시 오류가 잦아 예외 처리가 운영 품질을 좌우합니다.",
+        note: "고급 try/catch보다 실용적인 retry/fallback부터 제공합니다.",
+        done: "각 단계에서 실패 시 재시도, 대체 단계, 사람 확인을 선택할 수 있습니다."
+      },
+      {
+        id: "credential-session",
+        name: "세션/SecretRef 운영 화면",
+        desc: "자격증명 볼트를 브라우저 세션 운영 관점으로 재정의",
+        decision: "reframe",
+        priority: "P2",
+        phase: "Phase 3",
+        method: "사이트 세션 만료, 재등록, SecretRef health, 회전 이력 화면 추가",
+        reason: "브라우저 RPA는 사이트 로그인 상태와 credential 정책이 운영 안정성의 핵심입니다.",
+        note: "외부 Vault 통합은 후순위로 두고, 먼저 보이는 운영성을 만듭니다.",
+        done: "운영자가 어떤 사이트 세션이 만료 예정인지 확인하고 갱신할 수 있습니다."
+      },
+      {
+        id: "rbac-scope",
+        name: "폴더/환경 단위 RBAC",
+        desc: "5개 고정 역할을 업무 조직과 dev/test/prod 환경으로 확장",
+        decision: "reframe",
+        priority: "P3",
+        phase: "Phase 4",
+        method: "folder, environment, department scope와 SoD 정책 추가",
+        reason: "엔터프라이즈 확장 시 admin 권한 집중과 부서 간 경계가 문제가 됩니다.",
+        note: "초기 테넌트 RBAC는 유지하고 범위를 점진 확장합니다.",
+        done: "사용자 권한이 조직, 폴더, 환경 기준으로 제한됩니다."
+      },
+      {
+        id: "desktop-vision",
+        name: "VDI/Citrix/레거시 데스크톱 비전 자동화",
+        desc: "DOM 없는 데스크톱 화면 자동화",
+        decision: "exclude",
+        priority: "Out",
+        phase: "범위 제외",
+        method: "브라우저 전용 제품 비교표에서는 제외",
+        reason: "제품 포지션이 브라우저 기반이면 데스크톱 화면 자동화는 별도 라인업입니다.",
+        note: "경쟁사 대비 약점으로 쓰면 제품 범위를 흐립니다.",
+        done: "요구사항 문서와 화면에서 데스크톱 자동화 기대를 제거합니다."
+      },
+      {
+        id: "windows-selector",
+        name: "Windows 앱 셀렉터와 데스크톱 레코더",
+        desc: "Win32, Java, SAP GUI 같은 데스크톱 앱 자동화",
+        decision: "exclude",
+        priority: "Out",
+        phase: "범위 제외",
+        method: "브라우저 recorder와 명확히 분리",
+        reason: "브라우저 DOM, Playwright, 사이트 프로필 중심 아키텍처와 목표가 다릅니다.",
+        note: "향후 데스크톱 제품을 만들 때 별도 검토합니다.",
+        done: "비교표와 세일즈 설명에서 Windows selector promise를 제거합니다."
+      },
+      {
+        id: "desktop-attended",
+        name: "데스크톱 Attended 자동화",
+        desc: "사용자 PC에서 데스크톱 앱과 함께 도는 보조 봇",
+        decision: "exclude",
+        priority: "Out",
+        phase: "범위 제외",
+        method: "브라우저 assistant를 약속하지 않는 한 제외",
+        reason: "현재 핵심은 unattended browser run과 control-plane 운영성입니다.",
+        note: "브라우저 attended assistant를 만들 계획이면 별도 제품 정의가 필요합니다.",
+        done: "attended 항목은 이번 개발 후보에서 빠집니다."
+      },
+      {
+        id: "full-shell-file",
+        name: "범용 shell/file executor",
+        desc: "로컬 명령과 파일 처리 자동화",
+        decision: "exclude",
+        priority: "Out",
+        phase: "범위 제외",
+        method: "strict browser-only라면 구현하지 않고 노출만 차단",
+        reason: "브라우저 RPA의 핵심 가치와 보안 경계가 달라집니다.",
+        note: "필요 시 서버 사이드 커넥터 제품으로 별도 스코프를 잡습니다.",
+        done: "사용자는 shell/file 자동화를 기대하지 않게 됩니다."
+      }
+    ];
+
+    const table = document.getElementById("gap-table");
+    const search = document.getElementById("search");
+    const filterButtons = Array.from(document.querySelectorAll("[data-filter]"));
+    let activeFilter = "all";
+    let selectedId = gaps[0].id;
+
+    function decisionLabel(decision) {
+      if (decision === "apply") return { text: "반영", className: "blue" };
+      if (decision === "reframe") return { text: "재분류", className: "amber" };
+      return { text: "제외", className: "muted" };
+    }
+
+    function priorityClass(priority) {
+      if (priority === "P0") return "red";
+      if (priority === "P1") return "amber";
+      if (priority === "P2") return "blue";
+      if (priority === "P3") return "purple";
+      return "muted";
+    }
+
+    function filteredGaps() {
+      const keyword = search.value.trim().toLowerCase();
+      return gaps.filter((gap) => {
+        const byFilter = activeFilter === "all" || gap.decision === activeFilter;
+        const target = [gap.name, gap.desc, gap.method, gap.reason, gap.note].join(" ").toLowerCase();
+        return byFilter && target.includes(keyword);
+      });
+    }
+
+    function renderRows() {
+      const rows = filteredGaps();
+      table.innerHTML = rows.map((gap) => {
+        const decision = decisionLabel(gap.decision);
+        const selected = gap.id === selectedId ? " selected" : "";
+        return `
+          <tr class="${selected}" data-id="${gap.id}" tabindex="0">
+            <td><strong>${gap.name}</strong><span class="desc">${gap.desc}</span></td>
+            <td><span class="badge ${decision.className}">${decision.text}</span></td>
+            <td><span class="badge ${priorityClass(gap.priority)}">${gap.priority}</span></td>
+            <td>${gap.method}</td>
+            <td><span class="desc">${gap.reason}</span></td>
+          </tr>
+        `;
+      }).join("");
+
+      Array.from(table.querySelectorAll("tr")).forEach((row) => {
+        row.addEventListener("click", () => selectGap(row.dataset.id));
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            selectGap(row.dataset.id);
+          }
+        });
+      });
+    }
+
+    function selectGap(id) {
+      const gap = gaps.find((item) => item.id === id) || gaps[0];
+      selectedId = gap.id;
+      const decision = decisionLabel(gap.decision);
+      document.getElementById("detail-title").textContent = gap.name;
+      document.getElementById("detail-sub").textContent = gap.desc;
+      const badge = document.getElementById("detail-badge");
+      badge.textContent = decision.text;
+      badge.className = `badge ${decision.className}`;
+      document.getElementById("detail-name").textContent = gap.name;
+      document.getElementById("detail-decision").textContent = decision.text;
+      document.getElementById("detail-phase").textContent = gap.phase;
+      document.getElementById("detail-note").textContent = gap.note;
+      document.getElementById("detail-done").textContent = gap.done;
+      renderRows();
+    }
+
+    filterButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        activeFilter = button.dataset.filter;
+        filterButtons.forEach((item) => item.classList.toggle("active", item === button));
+        const rows = filteredGaps();
+        if (!rows.some((gap) => gap.id === selectedId) && rows[0]) selectedId = rows[0].id;
+        renderRows();
+        if (rows[0]) selectGap(selectedId);
+      });
+    });
+
+    search.addEventListener("input", () => {
+      const rows = filteredGaps();
+      if (!rows.some((gap) => gap.id === selectedId) && rows[0]) selectedId = rows[0].id;
+      renderRows();
+      if (rows[0]) selectGap(selectedId);
+    });
+
+    renderRows();
+    selectGap(selectedId);
+  </script>
+</body>
+</html>

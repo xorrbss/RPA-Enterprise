@@ -5,9 +5,9 @@ import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
-import { StatusBadge, errorCodeLabel } from "../components/badges";
+import { StatusBadge, errorCodeLabel, kindLabel } from "../components/badges";
 import { navigate, type ViewKey } from "../router";
-import type { DeadLetterItem, HumanTaskItem, RunItem, RunSummary, SiteItem } from "../api/types";
+import type { DeadLetterItem, HumanTaskItem, OpsAlertItem, OpsHealth, RunItem, RunSummary, SiteItem } from "../api/types";
 
 // 첫-실행 안내 배너 — 권한별(RBAC) 안내문/CTA. cta 없으면 viewer 안내문만(없는 권한 동선 창작 금지).
 // 입력은 부모가 실 응답으로 판정한 '진짜 빈 테넌트' 여부 + useCan뿐(데이터 미창작).
@@ -67,13 +67,14 @@ type ActionItem = {
   readonly tone: "red" | "amber" | "blue";
   readonly title: string;
   readonly meta: string;
+  readonly traceTitle?: string;
   readonly view: ViewKey;
   readonly params?: Record<string, string>;
 };
 
 function roleFocus(roles: readonly string[], can: (a: string) => boolean): { title: string; note: string; actions: readonly { label: string; view: ViewKey; params?: Record<string, string> }[] } {
   const known = roles.map((r) => ROLE_LABELS[r] ?? r);
-  const roleText = known.length > 0 ? known.join(" · ") : "역할 미확인";
+  const roleText = known.length > 0 ? known.join(" · ") : "권한 미확인";
   if (roles.includes("admin")) {
     return {
       title: `관리자 작업대 · ${roleText}`,
@@ -81,14 +82,14 @@ function roleFocus(roles: readonly string[], can: (a: string) => boolean): { tit
       actions: [
         { label: "AI 모델 정책", view: "llmGateway" },
         { label: "사이트 접근 정책", view: "security" },
-        { label: "Product-open gate", view: "openGate" },
+        { label: "Product-open 점검", view: "openGate" },
       ],
     };
   }
   if (roles.includes("approver")) {
     return {
       title: `승인자 작업대 · ${roleText}`,
-      note: "결재, red 사이트 승인, 사람 확인 대기를 먼저 처리해 자동화 재개 시간을 줄입니다.",
+      note: "결재, 고위험 사이트 승인, 사람 확인 대기를 먼저 처리해 자동화 재개 시간을 줄입니다.",
       actions: [
         { label: "결재 인박스", view: "approvalInbox" },
         { label: "사람 확인", view: "humanTasks" },
@@ -109,7 +110,7 @@ function roleFocus(roles: readonly string[], can: (a: string) => boolean): { tit
   if (can("run.create")) {
     return {
       title: `운영자 작업대 · ${roleText}`,
-      note: "실패, DLQ, 실행 중인 자동화를 먼저 보고 재처리 또는 취소까지 이어갑니다.",
+      note: "실패, 재처리 대기, 실행 중인 자동화를 먼저 보고 재처리 또는 취소까지 이어갑니다.",
       actions: [
         { label: "실패 실행", view: "runTrace", params: { status: "failed_system" } },
         { label: "작업 목록", view: "workitems" },
@@ -154,12 +155,49 @@ function bySoonestTimeout(a: HumanTaskItem, b: HumanTaskItem): number {
 
 function runningFreshness(run: RunItem): { tone: "amber" | "blue"; meta: string } {
   const updated = run.updated_at ?? run.as_of;
-  if (updated === null || updated === undefined) return { tone: "blue", meta: run.run_id.slice(0, 8) };
+  if (updated === null || updated === undefined) return { tone: "blue", meta: "진행 시각 확인 필요" };
   const t = Date.parse(updated);
-  if (Number.isNaN(t)) return { tone: "blue", meta: updated };
+  if (Number.isNaN(t)) return { tone: "blue", meta: "진행 시각 확인 필요" };
   const minutes = Math.max(0, Math.floor((Date.now() - t) / 60_000));
   if (minutes >= 15) return { tone: "amber", meta: `최근 진행 ${minutes}분 전` };
   return { tone: "blue", meta: `최근 진행 ${minutes}분 전` };
+}
+
+function businessErrorLabel(code: string | undefined, fallback: string): string {
+  if (code === undefined) return fallback;
+  const label = errorCodeLabel(code);
+  return label === code ? fallback : label;
+}
+
+function failedRunMeta(run: RunItem): string {
+  return businessErrorLabel(run.failure_reason?.code, "실패 사유 확인 필요");
+}
+
+function failedRunTraceTitle(run: RunItem): string {
+  const parts = [`실행 추적 번호: ${run.run_id}`];
+  if (run.failure_reason !== null && run.failure_reason !== undefined) parts.push(`상세 오류 코드: ${run.failure_reason.code}`);
+  return parts.join(" · ");
+}
+
+function humanTaskMeta(task: HumanTaskItem): string {
+  if (task.timeout !== null) return `마감 ${task.timeout}`;
+  const label = kindLabel(task.kind);
+  return label === task.kind ? "확인 대기" : `${label} 확인 대기`;
+}
+
+function workitemRetryMeta(item: DeadLetterItem): string {
+  return businessErrorLabel(item.reason_code, "재처리 원인 확인 필요");
+}
+
+function workitemTraceTitle(item: DeadLetterItem): string {
+  const parts = [`재처리 추적 번호: ${item.dead_letter_id}`];
+  if (item.source_id !== null) parts.push(`원본 항목 추적 번호: ${item.source_id}`);
+  if (item.reason_code !== undefined) parts.push(`상세 사유 코드: ${item.reason_code}`);
+  return parts.join(" · ");
+}
+
+function sinkTraceTitle(item: DeadLetterItem): string {
+  return `외부 전달 추적 번호: ${item.dead_letter_id}`;
 }
 
 function collectActionItems(args: {
@@ -173,26 +211,26 @@ function collectActionItems(args: {
 }): ActionItem[] {
   const out: ActionItem[] = [];
   for (const r of args.failedSys.slice(0, 2)) {
-    out.push({ key: `fs-${r.run_id}`, tone: "red", title: "시스템 실패 실행", meta: r.failure_reason ? errorCodeLabel(r.failure_reason.code) : r.run_id.slice(0, 8), view: "runTrace", params: { run: r.run_id, status: "failed_system" } });
+    out.push({ key: `fs-${r.run_id}`, tone: "red", title: "시스템 실패 실행", meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_system" } });
   }
   for (const r of args.failedBiz.slice(0, 2)) {
-    out.push({ key: `fb-${r.run_id}`, tone: "red", title: "업무 실패 실행", meta: r.failure_reason ? errorCodeLabel(r.failure_reason.code) : r.run_id.slice(0, 8), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
+    out.push({ key: `fb-${r.run_id}`, tone: "red", title: "업무 실패 실행", meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
   }
   for (const h of [...args.human].sort(bySoonestTimeout).slice(0, 3)) {
-    out.push({ key: `h-${h.human_task_id}`, tone: h.timeout !== null ? "amber" : "blue", title: "사람 확인 대기", meta: h.timeout !== null ? `마감 ${h.timeout}` : h.kind, view: "humanTasks", params: { ht: h.human_task_id } });
+    out.push({ key: `h-${h.human_task_id}`, tone: h.timeout !== null ? "amber" : "blue", title: "사람 확인 대기", meta: humanTaskMeta(h), traceTitle: `사람 확인 추적 번호: ${h.human_task_id}`, view: "humanTasks", params: { ht: h.human_task_id } });
   }
   for (const d of args.wiDlq.slice(0, 2)) {
-    out.push({ key: `wd-${d.dead_letter_id}`, tone: "red", title: "작업항목 DLQ", meta: d.source_id?.slice(0, 8) ?? d.dead_letter_id.slice(0, 8), view: "workitems" });
+    out.push({ key: `wd-${d.dead_letter_id}`, tone: "red", title: "작업 항목 재처리 대기", meta: workitemRetryMeta(d), traceTitle: workitemTraceTitle(d), view: "workitems" });
   }
   for (const d of args.sinkDlq.slice(0, 2)) {
-    out.push({ key: `sd-${d.dead_letter_id}`, tone: "red", title: "외부 전달 DLQ", meta: d.sink_idempotency_key ?? d.dead_letter_id.slice(0, 8), view: "workitems" });
+    out.push({ key: `sd-${d.dead_letter_id}`, tone: "red", title: "외부 전달 재처리 대기", meta: "외부 전달 재처리", traceTitle: sinkTraceTitle(d), view: "workitems" });
   }
   for (const s of args.redSites.filter((site) => site.approval_status === "pending").slice(0, 2)) {
-    out.push({ key: `site-${s.site_profile_id}`, tone: "amber", title: "red 사이트 승인 대기", meta: s.name ?? s.site_profile_id.slice(0, 8), view: "security" });
+    out.push({ key: `site-${s.site_profile_id}`, tone: "amber", title: "고위험 사이트 승인 대기", meta: s.name ?? "사이트명 확인 필요", traceTitle: `사이트 추적 번호: ${s.site_profile_id}`, view: "security" });
   }
   for (const r of args.running.slice(0, 1)) {
     const freshness = runningFreshness(r);
-    out.push({ key: `run-${r.run_id}`, tone: freshness.tone, title: "실행 중 상태 점검", meta: freshness.meta, view: "runTrace", params: { run: r.run_id, status: "running" } });
+    out.push({ key: `run-${r.run_id}`, tone: freshness.tone, title: "실행 중 상태 점검", meta: freshness.meta, traceTitle: `실행 추적 번호: ${r.run_id}`, view: "runTrace", params: { run: r.run_id, status: "running" } });
   }
   return out.slice(0, 5);
 }
@@ -208,7 +246,7 @@ function ActionQueue({ items }: { items: readonly ActionItem[] }): JSX.Element {
       ) : (
         <div className="queue-list">
           {items.map((item, index) => (
-            <button key={item.key} className="queue-item" type="button" aria-label={`Top ${index + 1} 처리 항목 ${item.meta}`} onClick={() => navigate(item.view, item.params)}>
+            <button key={item.key} className="queue-item" type="button" aria-label={`Top ${index + 1} 처리 항목 ${item.title}. ${item.meta}`} title={item.traceTitle} onClick={() => navigate(item.view, item.params)}>
               <span className={`badge ${item.tone}`}>{index + 1}</span>
               <span>
                 <strong>{item.title}</strong>
@@ -221,6 +259,112 @@ function ActionQueue({ items }: { items: readonly ActionItem[] }): JSX.Element {
       )}
     </section>
   );
+}
+
+function OpsSignalPanel({
+  health,
+  alerts,
+  isLoading,
+  isError,
+}: {
+  health: OpsHealth | undefined;
+  alerts: readonly OpsAlertItem[];
+  isLoading: boolean;
+  isError: boolean;
+}): JSX.Element {
+  const topAlerts = alerts.slice(0, 3);
+  return (
+    <section className="panel ops-signal-panel" aria-label="운영 헬스와 긴급 알림">
+      <div className="panel-head">
+        <div>
+          <h2>운영 헬스와 긴급 알림</h2>
+          <p className="subtle">{health?.detected_at ?? (isLoading ? "동기화 중" : "스냅샷 없음")}</p>
+        </div>
+        <span className={`badge ${opsHealthTone(health?.status, isError)}`}>{opsHealthLabel(health?.status, isLoading, isError)}</span>
+      </div>
+      {isError ? (
+        <p className="empty-state">운영 알림 스냅샷을 불러오지 못했습니다.</p>
+      ) : (
+        <div className="ops-signal-body">
+          <div className="ops-signal-facts">
+            <span>
+              <strong>{health === undefined ? "-" : health.queue.available ? String(health.queue.pending_jobs ?? 0) : "미연결"}</strong>
+              <small>큐 대기</small>
+            </span>
+            <span>
+              <strong>{health === undefined ? "-" : String(health.stale_runs.nonterminal_over_15m)}</strong>
+              <small>지연 실행</small>
+            </span>
+            <span>
+              <strong>{health === undefined ? "-" : String(health.browser_leases.expired_open)}</strong>
+              <small>만료 미회수 세션</small>
+            </span>
+          </div>
+          {topAlerts.length === 0 ? (
+            <p className="subtle ops-signal-empty">긴급 운영 알림이 없습니다.</p>
+          ) : (
+            <ul className="ops-signal-alerts">
+              {topAlerts.map((alert) => (
+                <li key={alert.alert_id}>
+                  <span className={`badge ${opsAlertTone(alert.severity)}`}>{opsAlertSeverityLabel(alert.severity)}</span>
+                  <button className="linklike" type="button" onClick={() => navigateOpsAlert(alert.route)}>
+                    {alert.title}
+                  </button>
+                  <span className="subtle">{opsAlertSourceLabel(alert.source)} · {alert.recommended_action}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button className="btn" type="button" onClick={() => navigate("automationOps")}>알림 센터 열기</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function opsHealthTone(status: OpsHealth["status"] | undefined, isError: boolean): "green" | "amber" | "red" | "muted" {
+  if (isError) return "red";
+  if (status === "ok") return "green";
+  if (status === "warning") return "amber";
+  if (status === "critical") return "red";
+  return "muted";
+}
+
+function opsHealthLabel(status: OpsHealth["status"] | undefined, isLoading: boolean, isError: boolean): string {
+  if (isError) return "조회 실패";
+  if (status === "ok") return "정상";
+  if (status === "warning") return "주의";
+  if (status === "critical") return "위험";
+  return isLoading ? "동기화 중" : "미확인";
+}
+
+function opsAlertTone(severity: OpsAlertItem["severity"]): "red" | "amber" | "blue" {
+  if (severity === "critical") return "red";
+  if (severity === "warning") return "amber";
+  return "blue";
+}
+
+function opsAlertSeverityLabel(severity: OpsAlertItem["severity"]): string {
+  if (severity === "critical") return "위험";
+  if (severity === "warning") return "주의";
+  return "정보";
+}
+
+function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
+  if (source === "run_sla") return "실행 SLA";
+  if (source === "human_task_sla") return "사람 작업 SLA";
+  if (source === "trigger_fire") return "트리거 발화";
+  if (source === "failure_spike") return "실패 급증";
+  return "재처리 대기";
+}
+
+function navigateOpsAlert(route: string | null): void {
+  if (route === null || route.trim().length === 0) {
+    navigate("automationOps");
+    return;
+  }
+  const trimmed = route.trim();
+  location.hash = trimmed.startsWith("#") ? trimmed : `#${trimmed.replace(/^\/+/, "")}`;
 }
 
 export function DashboardView(): JSX.Element {
@@ -242,6 +386,8 @@ export function DashboardView(): JSX.Element {
   const redSites = useQuery({ queryKey: ["sites", "red"], queryFn: () => api.listSites({ risk: "red", limit: 50 }), refetchInterval: 10_000 });
   // 관찰성 집계(§E run_success_rate + status별 정확 카운트). 서버 GROUP BY 라 카드가 '50+' 근사 대신 정확 총계.
   const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
+  const opsHealth = useQuery({ queryKey: ["ops-health", "dashboard"], queryFn: () => api.getOpsHealth(), refetchInterval: 5_000 });
+  const opsAlerts = useQuery({ queryKey: ["ops-alerts", "dashboard"], queryFn: () => api.listOpsAlerts({ limit: 3 }), refetchInterval: 5_000 });
 
   // 첫-실행 안내 배너: '진짜 빈 테넌트'(실행 0건)일 때만. recent(무필터 listRuns)의 실 필드로만 판정.
   // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
@@ -252,6 +398,12 @@ export function DashboardView(): JSX.Element {
     <>
       {isEmptyTenant && <OnboardingBanner {...onboardingProps(can)} />}
       <RoleWorkbench roles={roles} can={can} />
+      <OpsSignalPanel
+        health={opsHealth.data}
+        alerts={opsAlerts.data?.items ?? []}
+        isLoading={(opsHealth.data === undefined && opsHealth.isFetching) || (opsAlerts.data === undefined && opsAlerts.isFetching)}
+        isError={opsHealth.isError || opsAlerts.isError}
+      />
       <div className="metrics">
         <Metric label="실행 성공률" value={successRateLabel(summary.data)} view="runTrace" params={{ status: "completed" }} hint="완료 실행" />
         <Metric label="캐시 재사용률" value={cacheHitRateLabel(summary.data)} view="runTrace" hint="실행 기록" />
@@ -259,11 +411,11 @@ export function DashboardView(): JSX.Element {
         <Metric label="사람 확인 대기" value={pageCount(human.data)} view="humanTasks" hint="사람 확인" />
         <Metric label="업무 실패" value={exactCount(summary.data, "failed_business")} view="runTrace" params={{ status: "failed_business" }} hint="실행 기록" />
         <Metric label="시스템 실패" value={exactCount(summary.data, "failed_system")} view="runTrace" params={{ status: "failed_system" }} hint="실행 기록" />
-        <Metric label="작업항목 DLQ" value={pageCount(wiDlq.data)} view="workitems" hint="작업 목록" />
-        <Metric label="외부 전달 DLQ" value={pageCount(sinkDlq.data)} view="workitems" hint="작업 목록" />
+        <Metric label="작업 항목 재처리 대기" value={pageCount(wiDlq.data)} view="workitems" hint="작업 목록" />
+        <Metric label="외부 전달 재처리 대기" value={pageCount(sinkDlq.data)} view="workitems" hint="작업 목록" />
       </div>
       <p className="subtle" style={{ margin: "0 2px" }}>
-        실행 성공률·캐시 재사용률·실행 중·업무 실패·시스템 실패는 전체 기간 정확 집계입니다. 사람 확인·DLQ는 최신 50건 기준이며 <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
+        실행 성공률·캐시 재사용률·실행 중·업무 실패·시스템 실패는 전체 기간 정확 집계입니다. 사람 확인·재처리 대기는 최신 50건 기준이며 <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
       </p>
       <ActionQueue
         items={collectActionItems({
@@ -287,16 +439,16 @@ export function DashboardView(): JSX.Element {
         emptyMessage="아직 실행이 없습니다."
         columns={[
           {
-            header: "실행 ID",
+            header: "실행 추적 번호",
             render: (r) => (
               <button
                 type="button"
                 className="linklike"
-                aria-label={`실행 ${r.run_id.slice(0, 8)} 상세 보기`}
-                title="실행 상세 보기"
+                aria-label="실행 추적 상세 보기"
+                title={`실행 추적 번호: ${r.run_id}`}
                 onClick={() => navigate("runTrace", { run: r.run_id })}
               >
-                <code>{r.run_id.slice(0, 8)}</code>
+                상세 보기
               </button>
             ),
           },

@@ -75,141 +75,169 @@ channels:
   run.created:
     subscribe:
       operationId: onRunCreated
+      description: Subscribe when a run command is accepted and queued.
       message:
         $ref: '#/components/messages/EventEnvelope'
   run.started:
     subscribe:
       operationId: onRunStarted
+      description: Subscribe when a queued run is picked up by a worker.
       message:
         $ref: '#/components/messages/EventEnvelope'
   run.suspended:
     subscribe:
       operationId: onRunSuspended
+      description: Subscribe when a run pauses for human input or external recovery.
       message:
         $ref: '#/components/messages/EventEnvelope'
   run.resume_requested:
     subscribe:
       operationId: onRunResumeRequested
+      description: Subscribe when a suspended run is requested to resume.
       message:
         $ref: '#/components/messages/EventEnvelope'
   run.resumed:
     subscribe:
       operationId: onRunResumed
+      description: Subscribe when a suspended run has resumed execution.
       message:
         $ref: '#/components/messages/EventEnvelope'
   run.cancelled:
     subscribe:
       operationId: onRunCancelled
+      description: Subscribe when a run is cancelled before normal completion.
       message:
         $ref: '#/components/messages/EventEnvelope'
   run.completed:
     subscribe:
       operationId: onRunCompleted
+      description: Subscribe when a run reaches a completed terminal state.
       message:
         $ref: '#/components/messages/EventEnvelope'
   run.failed_business:
     subscribe:
       operationId: onRunFailedBusiness
+      description: Subscribe when a run fails because of a business-rule condition.
       message:
         $ref: '#/components/messages/EventEnvelope'
   run.failed_system:
     subscribe:
       operationId: onRunFailedSystem
+      description: Subscribe when a run fails because of a system or runtime condition.
       message:
         $ref: '#/components/messages/EventEnvelope'
   step.started:
     subscribe:
       operationId: onStepStarted
+      description: Subscribe when an execution step starts for a run attempt.
       message:
         $ref: '#/components/messages/EventEnvelope'
   step.completed:
     subscribe:
       operationId: onStepCompleted
+      description: Subscribe when an execution step completes successfully.
       message:
         $ref: '#/components/messages/EventEnvelope'
   step.verify.failed:
     subscribe:
       operationId: onStepVerifyFailed
+      description: Subscribe when a step verification guard fails.
       message:
         $ref: '#/components/messages/EventEnvelope'
   llm.stream.started:
     subscribe:
       operationId: onLlmStreamStarted
+      description: Subscribe when an LLM stream starts for a run or generation.
       message:
         $ref: '#/components/messages/EventEnvelope'
   llm.stream.completed:
     subscribe:
       operationId: onLlmStreamCompleted
+      description: Subscribe when an LLM stream completes normally.
       message:
         $ref: '#/components/messages/EventEnvelope'
   llm.stream.aborted:
     subscribe:
       operationId: onLlmStreamAborted
+      description: Subscribe when an LLM stream is aborted before completion.
       message:
         $ref: '#/components/messages/EventEnvelope'
   challenge.detected:
     subscribe:
       operationId: onChallengeDetected
+      description: Subscribe when the runtime detects an automation challenge.
       message:
         $ref: '#/components/messages/EventEnvelope'
   challenge.resolved:
     subscribe:
       operationId: onChallengeResolved
+      description: Subscribe when a detected automation challenge is resolved.
       message:
         $ref: '#/components/messages/EventEnvelope'
   human_task.created:
     subscribe:
       operationId: onHumanTaskCreated
+      description: Subscribe when a human task is created for attended review.
       message:
         $ref: '#/components/messages/EventEnvelope'
   human_task.resolved:
     subscribe:
       operationId: onHumanTaskResolved
+      description: Subscribe when a human task is resolved by an operator.
       message:
         $ref: '#/components/messages/EventEnvelope'
   human_task.expired:
     subscribe:
       operationId: onHumanTaskExpired
+      description: Subscribe when a human task reaches its timeout.
       message:
         $ref: '#/components/messages/EventEnvelope'
   human_task.escalated:
     subscribe:
       operationId: onHumanTaskEscalated
+      description: Subscribe when a human task is escalated to another owner.
       message:
         $ref: '#/components/messages/EventEnvelope'
   workitem.completed:
     subscribe:
       operationId: onWorkitemCompleted
+      description: Subscribe when a queue workitem completes processing.
       message:
         $ref: '#/components/messages/EventEnvelope'
   workitem.dead_lettered:
     subscribe:
       operationId: onWorkitemDeadLettered
+      description: Subscribe when a queue workitem is moved to the dead-letter state.
       message:
         $ref: '#/components/messages/EventEnvelope'
   pipeline.stage.completed:
     subscribe:
       operationId: onPipelineStageCompleted
+      description: Subscribe when a pipeline stage completes for a tracked workflow.
       message:
         $ref: '#/components/messages/EventEnvelope'
   sink.delivered:
     subscribe:
       operationId: onSinkDelivered
+      description: Subscribe when an outbound sink delivery succeeds.
       message:
         $ref: '#/components/messages/EventEnvelope'
   sink.dead_lettered:
     subscribe:
       operationId: onSinkDeadLettered
+      description: Subscribe when an outbound sink delivery moves to dead letter.
       message:
         $ref: '#/components/messages/EventEnvelope'
   site.circuit_opened:
     subscribe:
       operationId: onSiteCircuitOpened
+      description: Subscribe when a site circuit opens after repeated failures.
       message:
         $ref: '#/components/messages/EventEnvelope'
   site.circuit_closed:
     subscribe:
       operationId: onSiteCircuitClosed
+      description: Subscribe when a site circuit closes after recovery.
       message:
         $ref: '#/components/messages/EventEnvelope'
 
