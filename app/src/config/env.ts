@@ -100,6 +100,23 @@ export function loadTelemetryExporter(): TelemetryExporter {
   return e;
 }
 
+export type ApiLogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
+
+const API_LOG_LEVELS: readonly ApiLogLevel[] = ["fatal", "error", "warn", "info", "debug", "trace", "silent"];
+
+/**
+ * 제어평면 API 구조화 로거 레벨(server.ts buildServer 의 Fastify/pino logger). 기본 `info` — authz 거부·라우트
+ * 미설정 경고·미분류 에러 경로의 `request.log.warn/error`(correlation_id·code·reason 포함)가 실제로 방출된다.
+ * `silent`=명시적 opt-out. 미정의 값은 fail-closed throw("조용한 false/unknown 금지").
+ */
+export function loadApiLogLevel(): ApiLogLevel {
+  const e = (opt("API_LOG_LEVEL") ?? "info").toLowerCase();
+  if (!API_LOG_LEVELS.includes(e as ApiLogLevel)) {
+    throw new Error(`API_LOG_LEVEL must be one of ${API_LOG_LEVELS.join("|")}, got ${JSON.stringify(e)}`);
+  }
+  return e as ApiLogLevel;
+}
+
 function buildPgConnString(): string {
   const host = req("PGHOST");
   const port = opt("PGPORT") ?? "5432";

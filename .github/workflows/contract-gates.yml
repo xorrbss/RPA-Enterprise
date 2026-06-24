@@ -35,6 +35,9 @@ jobs:
       - name: Check authoritative contracts
         run: node scripts/contract-lint.mjs
 
+      - name: Audit app test wiring (no CI-orphan tests)
+        run: node scripts/test-wiring-audit.mjs
+
   blocked-decision-audit:
     name: Blocked decision audit
     runs-on: ubuntu-latest

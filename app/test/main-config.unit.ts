@@ -9,6 +9,7 @@ import {
   assertArtifactStoreTopologyCompatibility,
   assertArtifactStoreStartupCompatibility,
   loadApiConfig,
+  loadApiLogLevel,
   loadArtifactLifecycleConsumer,
   loadArtifactLifecycleWorkerConfig,
   loadCommonConfig,
@@ -42,7 +43,7 @@ const CLEAR = [
   "RPA_ENV", "RUN_MODE", "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "DATABASE_URL",
   "WORKER_ID", "ARTIFACT_LIFECYCLE_DATABASE_URL", "ARTIFACT_LIFECYCLE_WORKER_ID",
   "ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY", "ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS",
-  "PORT", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
+  "PORT", "API_LOG_LEVEL", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
   "VAULT_RUNTIME_WORKER_ROLE_ID", "VAULT_RUNTIME_WORKER_SECRET_ID", "VAULT_API_ROLE_ID", "VAULT_API_SECRET_ID",
   "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF", "OTEL_EXPORTER", "ARTIFACT_LIFECYCLE_CONSUMER",
   "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_KIND", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
@@ -120,6 +121,12 @@ function main(): void {
   withEnv({ OTEL_EXPORTER: "console" }, () => check("OTEL_EXPORTER console", loadTelemetryExporter() === "console"));
   withEnv({ OTEL_EXPORTER: "CONSOLE" }, () => check("OTEL_EXPORTER case-insensitive", loadTelemetryExporter() === "console"));
   withEnv({ OTEL_EXPORTER: "otlp" }, () => expectThrow("OTEL_EXPORTER invalid throws", () => loadTelemetryExporter()));
+
+  // API_LOG_LEVEL (제어평면 구조화 로거 레벨) — default info, 명시 레벨, 대소문자 무관, 미정의 값 fail-closed.
+  withEnv({}, () => check("API_LOG_LEVEL default info", loadApiLogLevel() === "info"));
+  withEnv({ API_LOG_LEVEL: "warn" }, () => check("API_LOG_LEVEL warn", loadApiLogLevel() === "warn"));
+  withEnv({ API_LOG_LEVEL: "SILENT" }, () => check("API_LOG_LEVEL case-insensitive", loadApiLogLevel() === "silent"));
+  withEnv({ API_LOG_LEVEL: "verbose" }, () => expectThrow("API_LOG_LEVEL invalid throws", () => loadApiLogLevel()));
 
   // ARTIFACT_LIFECYCLE_CONSUMER (N1 fail-closed topology) — unset/invalid throws, external|self, 대소문자 무관.
   withEnv({}, () => expectThrow("ARTIFACT_LIFECYCLE_CONSUMER unset throws (N1 fail-closed)", () => loadArtifactLifecycleConsumer()));

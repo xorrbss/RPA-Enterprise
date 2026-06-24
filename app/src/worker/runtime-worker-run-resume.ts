@@ -157,7 +157,10 @@ export class WorkerRunResume {
         }
       }
 
-      await client.query(
+      // worker_id 스탬프는 조건부 UPDATE(CAS) — FOR UPDATE 락 + 위 R17 전이/재진입 후 status 는 항상 'resuming' 이라
+      //   rowCount=1 이어야 한다. 결과를 버리면 불변식 위반이 조용한 no-op 으로 묻힌다(코드베이스 CAS 규율: rowCount 검사).
+      //   applyRunTransition 의 CAS-conflict throw 와 동형으로 loud 하게 표면화한다("조용한 false 금지").
+      const stamp = await client.query(
         `UPDATE runs
             SET worker_id = $3::uuid,
                 updated_at = now()
@@ -166,6 +169,11 @@ export class WorkerRunResume {
             AND status = 'resuming'`,
         [tenantId, runId, workerId],
       );
+      if (stamp.rowCount !== 1) {
+        throw new Error(
+          `RuntimeWorker: run_resume worker_id stamp expected status='resuming' (rowCount=1), got rowCount=${stamp.rowCount ?? "null"}`,
+        );
+      }
 
       return {
         kind: "ready",

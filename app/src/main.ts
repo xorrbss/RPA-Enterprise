@@ -48,7 +48,7 @@ import {
 import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { buildServer } from "./api/server";
 import { DenyAllSignedCommandRegistry, SecretStoreSignedCommandRegistry } from "./api/signed-command-registry";
-import { assertArtifactStoreStartupCompatibility, loadApiConfig, loadArtifactLifecycleConsumer, loadCommonConfig, loadRunMode, loadScenarioGenerationLlmV1Config, type ApiConfig, type CommonConfig, type ScenarioGenerationLlmV1Config } from "./config/env";
+import { assertArtifactStoreStartupCompatibility, loadApiConfig, loadApiLogLevel, loadArtifactLifecycleConsumer, loadCommonConfig, loadRunMode, loadScenarioGenerationLlmV1Config, type ApiConfig, type CommonConfig, type ScenarioGenerationLlmV1Config } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
 import { bootstrapMetrics, bootstrapTracing } from "./observability/bootstrap";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
@@ -194,6 +194,12 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
   const sessionStore = await buildApiSessionStore(pool, common);
   const api = buildServer({
     pool,
+    // 구조화 로거(pino, Fastify 번들) — authz 거부·라우트 미설정 경고·미분류 에러 경로의 request.log 가 실제 방출된다.
+    //   Authorization/Cookie 헤더는 remove-redact 로 마스킹(secret 경계). 레벨은 API_LOG_LEVEL(기본 info)로 제어.
+    logger: {
+      level: loadApiLogLevel(),
+      redact: { paths: ["req.headers.authorization", "req.headers.cookie"], remove: true },
+    },
     auth: new JwtAuthenticationBoundary(buildJwtVerifier(cfg.jwt), {
       claimMapping: cfg.jwt.claimMapping,
       roleMap: cfg.jwt.roleMap,
