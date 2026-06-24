@@ -379,7 +379,7 @@ export function BrowserRecorderPanel(): JSX.Element {
     onSuccess: (result) => {
       setLocalSession((session) =>
         session !== null && session.recording_session_id === result.recording_session_id
-          ? { ...session, event_count: result.event_count, updated_at: new Date().toISOString() }
+          ? { ...session, event_count: result.event_count }
           : session,
       );
       setEventDraft((prev) => ({
@@ -417,7 +417,7 @@ export function BrowserRecorderPanel(): JSX.Element {
     onSuccess: (result) => {
       setLocalSession((session) =>
         session !== null && session.recording_session_id === result.recording_session_id
-          ? { ...session, event_count: result.event_count, updated_at: new Date().toISOString() }
+          ? { ...session, event_count: result.event_count }
           : session,
       );
       const count = queuedEvents.length;

@@ -347,14 +347,17 @@ function singleMatchingSiteForUrl(url: string, sites: readonly SiteItem[]): Site
   return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
+// 신규 생성 사이트의 낙관적 표시 — 서버가 보내지 않은 값(risk 미제공·circuit_status 부재)은 단정하지 않고
+//   중립 "확인 중" 센티넬로 둔다(날조 금지). 호출부에서 sites 쿼리를 무효화해 곧 실제 서버 값으로 대체된다.
+const PENDING_FACT = "확인 중";
 function createdSiteToItem(site: CreatedSite): SiteItem {
   return {
     site_profile_id: site.site_profile_id,
     name: site.name,
     url_pattern: site.url_pattern,
-    risk: site.risk ?? "green",
+    risk: site.risk ?? PENDING_FACT,
     approval_status: site.approved === true ? "approved" : "pending",
-    circuit_status: "closed",
+    circuit_status: PENDING_FACT,
     default_browser_identity_id: site.default_browser_identity_id ?? null,
     default_network_policy_id: site.default_network_policy_id ?? null,
   };
@@ -700,6 +703,8 @@ export function PromptScenarioGenerator(): JSX.Element {
         : [site, ...items];
       return { items: nextItems, next_cursor: current?.next_cursor ?? null };
     });
+    // 낙관적 항목의 "확인 중" 사실값을 서버 진본으로 교체 — 무효화로 곧 재조회.
+    void qc.invalidateQueries({ queryKey: ["sites", "scenario-generator"] });
     setSiteProfileId(site.site_profile_id);
     setBrowserIdentityId(site.default_browser_identity_id ?? "");
     setNetworkPolicyId(site.default_network_policy_id ?? "");
@@ -832,7 +837,7 @@ export function PromptScenarioGenerator(): JSX.Element {
       setVideo(firstAllowedPolicy(videoPolicies, videoDefaultPolicy, "never"));
       return;
     }
-    if (!videoTouched && video === "never" && videoCapability.policies.includes(videoDefaultPolicy)) {
+    if (!videoTouched && video === "never" && videoPolicies.includes(videoDefaultPolicy)) {
       setVideo(videoDefaultPolicy);
     }
   }, [video, videoCapability, videoDefaultPolicy, videoPolicies, videoTouched]);
