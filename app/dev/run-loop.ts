@@ -387,6 +387,125 @@ export async function startRunLoop(
   };
 }
 
+type DevDriveRun = Parameters<typeof driveResumedRun>[0];
+type DevDriveDeps = Parameters<typeof driveResumedRun>[1];
+
+async function driveResumeRequestedRun(
+  run: DevDriveRun,
+  deps: DevDriveDeps,
+  rawResumeToken: unknown,
+): Promise<Awaited<ReturnType<typeof driveResumedRun>>> {
+  const parsedToken = parseResumeTokenEnvelope(rawResumeToken, run.runId);
+  const resumeCycleKey = parsedToken?.issuedAt ?? "missing-token";
+
+  const r17 = await withTenantTx(deps.pool, run.tenantId, (client) =>
+    applyRunTransition(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      fromStatus: "resume_requested",
+      event: { type: "worker.claimed" },
+      guard: { leaseAcquired: true },
+      correlationId: run.correlationId,
+      workerId: deps.workerId,
+      eventIdempotencyKey: `${run.runId}:dev-run_resume:r17:${resumeCycleKey}`,
+    }),
+  );
+  if (!r17.applied) {
+    throw new Error(`driveResumeRequestedRun: R17 not applied (${r17.reason}, observed=${r17.observed ?? "none"})`);
+  }
+  if (r17.pending.some((cmd) => cmd.kind !== "restoreSession")) {
+    throw new Error("driveResumeRequestedRun: R17 produced unsupported pending side effects");
+  }
+  if (parsedToken === null) {
+    await failResumingRun(run, deps, "resume_token missing or malformed");
+    throw new Error("driveResumeRequestedRun: resume_token missing or malformed");
+  }
+
+  const token = await recoverDevResumeToken(run, deps, parsedToken);
+  const r18 = await withTenantTx(deps.pool, run.tenantId, async (client) => {
+    const transition = await applyRunTransition(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      fromStatus: "resuming",
+      event: { type: "restore_ok" },
+      guard: { restoreOk: true },
+      correlationId: run.correlationId,
+      workerId: deps.workerId,
+      eventIdempotencyKey: `${run.runId}:dev-run_resume:${resumeCycleKey}`,
+    });
+    if (!transition.applied) return transition;
+    if (transition.pending.length > 0) {
+      throw new Error("driveResumeRequestedRun: R18 produced unsupported pending side effects");
+    }
+    await resumeLinkedWorkitemCheckout(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      correlationId: run.correlationId,
+    });
+    return transition;
+  });
+  if (!r18.applied) {
+    throw new Error(`driveResumeRequestedRun: R18 not applied (${r18.reason}, observed=${r18.observed ?? "none"})`);
+  }
+
+  return driveResumedRun(run, deps, token.resumeNodeId);
+}
+
+async function recoverDevResumeToken(
+  run: DevDriveRun,
+  deps: DevDriveDeps,
+  token: ResumeTokenEnvelope,
+): Promise<ResumeTokenEnvelope> {
+  const codec = deps.resumeTokenCodec;
+  if (codec === undefined) {
+    throw new Error("driveResumeRequestedRun: resumeTokenCodec is required");
+  }
+  const verified = await codec.verify(token);
+  if (verified.kind === "valid") return verified.token;
+  if (verified.kind === "expired") {
+    const now = Date.now();
+    const fresh = await codec.issue({
+      runId: token.runId,
+      resumeNodeId: token.resumeNodeId,
+      pageStateRef: token.pageStateRef,
+      ...(token.loopContext !== undefined ? { loopContext: token.loopContext } : {}),
+      issuedAt: new Date(now).toISOString() as IsoDateTime,
+      expiresAt: new Date(now + RESUME_TOKEN_TTL_MS).toISOString() as IsoDateTime,
+    });
+    await withTenantTx(deps.pool, run.tenantId, (client) =>
+      client.query(
+        `UPDATE runs SET resume_token = $3::jsonb, updated_at = now()
+          WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'resuming'`,
+        [run.tenantId, run.runId, JSON.stringify(fresh)],
+      ),
+    );
+    return fresh;
+  }
+
+  await failResumingRun(run, deps, verified.reason);
+  throw new Error(`driveResumeRequestedRun: resume token invalid: ${verified.reason}`);
+}
+
+async function failResumingRun(run: DevDriveRun, deps: DevDriveDeps, message: string): Promise<void> {
+  await withTenantTx(deps.pool, run.tenantId, async (client) => {
+    const transition = await applyRunTransition(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      fromStatus: "resuming",
+      event: { type: "restore_failed" },
+      guard: { loginBypassPossible: false },
+      correlationId: run.correlationId,
+      eventIdempotencyKey: `${run.runId}:dev-run_resume:restore_failed`,
+    });
+    if (!transition.applied) return;
+    await client.query(
+      `UPDATE runs SET failure_reason=$3::jsonb, updated_at=now()
+        WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+      [run.tenantId, run.runId, JSON.stringify({ code: "RUN_LOOP_FAILED", message })],
+    );
+  });
+}
+
 // liveness probe 타임아웃 — 살아있는 세션은 evaluate 가 <100ms. 죽은 소켓(1006)은 evaluate 가 **throw 가 아니라 hang**
 //   하므로(pending CDP 요청이 reject 안 됨) 반드시 타임아웃으로 감싸야 probe 자체가 wedge 되지 않는다(break-it 로 확인).
 const SESSION_PROBE_TIMEOUT_MS = 3000;
