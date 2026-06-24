@@ -48,6 +48,44 @@ function check(label: string, cond: boolean, detail?: string): void {
   }
 }
 
+async function withTimeout<T>(label: string, promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function closeWithTimeout(label: string, close: () => Promise<void>, timeoutMs = 5_000): Promise<void> {
+  try {
+    await withTimeout(label, close(), timeoutMs);
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error(`WARN: ${label} cleanup did not finish cleanly — ${detail}`);
+  }
+}
+
+async function closeHttpServer(server: http.Server): Promise<void> {
+  await closeWithTimeout("console live static proxy close", () => new Promise<void>((resolve, reject) => {
+    const nudge = setTimeout(() => {
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
+    }, 250);
+    server.close((err) => {
+      clearTimeout(nudge);
+      if (err !== undefined) reject(err);
+      else resolve();
+    });
+    server.closeIdleConnections?.();
+  }));
+}
+
 function findChrome(): string | null {
   const env = process.env.CHROME_PATH?.trim();
   if (env !== undefined && env.length > 0 && existsSync(env)) return env;
@@ -69,6 +107,10 @@ function contentType(ext: string): string {
 }
 
 async function main(): Promise<void> {
+  const watchdog = setTimeout(() => {
+    console.error("FAIL: console live e2e exceeded 180000ms");
+    process.exit(1);
+  }, 180_000);
   const chrome = findChrome();
   if (chrome === null) {
     console.log("SKIP: Chrome/Chromium not found (set CHROME_PATH).");
@@ -186,6 +228,8 @@ async function main(): Promise<void> {
     // 5) 실 브라우저 구동
     browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
     const page = await browser.newPage();
+    page.setDefaultTimeout(15_000);
+    page.setDefaultNavigationTimeout(30_000);
     const pageErrors: string[] = [];
     page.on("pageerror", (e: unknown) => pageErrors.push(e instanceof Error ? e.message : String(e)));
     page.on("dialog", (d) => void d.accept()); // 명령 확인창 자동 수락
@@ -264,12 +308,18 @@ async function main(): Promise<void> {
     check("자동화 실행(run-create) → 새 queued run (실 DB)", queuedRuns >= 1, `queued=${queuedRuns}`);
 
     // 명령: 사람확인 처리완료(resolve) — humanTasks '처리완료' 클릭 → task resolved + 연계 run resume_requested(H3+R13).
+    await withTimeout(
+      "navigate to humanTasks",
+      page.goto(`${base}/#humanTasks`, { waitUntil: "domcontentloaded", timeout: 30_000 }).then(() => undefined),
+      35_000,
+    );
+    await withTimeout(
+      "wait for human task resolve button",
+      page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some((b) => b.textContent === "완료 처리"), { timeout: 15_000 }).then(() => undefined),
+      20_000,
+    );
     await page.evaluate(() => {
-      location.hash = "#humanTasks";
-    });
-    await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some((b) => b.textContent === "처리완료"), { timeout: 15_000 });
-    await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "처리완료");
+      const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "완료 처리");
       (btn as HTMLButtonElement | undefined)?.click();
     });
     // 포커스 트랩 확인 다이얼로그(RQ-013) → '확인' 클릭.
@@ -296,10 +346,15 @@ async function main(): Promise<void> {
 
     check("브라우저 페이지 에러 없음", pageErrors.length === 0, pageErrors.join("; "));
   } finally {
-    if (browser !== null) await browser.close();
-    if (proxy !== null) await new Promise<void>((resolve) => proxy!.close(() => resolve()));
-    if (api !== null) await api.close();
-    await pool.end();
+    if (browser !== null) await closeWithTimeout("browser close", () => browser!.close());
+    if (proxy !== null) await closeHttpServer(proxy);
+    if (api !== null) {
+      api.server.closeIdleConnections?.();
+      api.server.closeAllConnections?.();
+      await closeWithTimeout("api close", () => api!.close());
+    }
+    await closeWithTimeout("pool end", () => pool.end());
+    clearTimeout(watchdog);
   }
 
   if (failures > 0) {
