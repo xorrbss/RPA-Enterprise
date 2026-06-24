@@ -1,0 +1,8 @@
+{
+  // dev/ 전용 보강 typecheck 게이트. 기본 tsconfig.json 의 include 는 src/+test/ 만이라
+  // dev/(dev:serve·캡처·시드 등 실사용 도구)의 타입 오류가 가려진다(F9). 이 설정으로 CI 에서
+  // dev/ 도 strict typecheck 한다(import 로 src/ 는 자동 포함). poc/(throwaway smoke)는 의도적 제외 —
+  // 자체 node_modules·미완성 PoC 라 게이트 대상이 아니다(필요 시 dev-poc-verification-path 로 수동 검증).
+  "extends": "./tsconfig.json",
+  "include": ["dev/**/*.ts"]
+}

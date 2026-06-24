@@ -248,11 +248,8 @@ export class WorkerRunResume {
       }
 
       // W11: R18/R19 로 running 도달 시 연결 workitem 의 checkout timer resume(잔여 TTL 부터). R20(failed_system)은 제외.
-      const resumed = await client.query<{ status: string }>(
-        `SELECT status FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
-        [tenantId, runId],
-      );
-      if (resumed.rows[0]?.status === "running") {
+      //   transition.applied 가 참이므로 transition.next 가 방금 영속된 상태의 권위값 — 같은 tx 의 재SELECT(TOCTOU 형상)는 불필요.
+      if (transition.next === "running") {
         await resumeLinkedWorkitemCheckout(client, { tenantId, runId, correlationId: job.correlationId ?? row.correlation_id });
       }
 
