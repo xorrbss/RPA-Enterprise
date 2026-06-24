@@ -454,6 +454,9 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 
 .scenario-generator { margin-bottom: 12px; }
 .scenario-generator-body { padding: 14px 16px 16px; display: grid; gap: 12px; }
+.prompt-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.prompt-example-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
+.prompt-example-chip:hover { background: var(--blue-soft); color: var(--blue-ink); border-color: var(--blue); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .field { display: grid; gap: 5px; min-width: 0; }
 .field span { color: var(--muted); font-size: 12px; font-weight: 600; }
