@@ -39,6 +39,7 @@ import type {
 import type { CorrelationId, RunId, TenantId } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
+import { errText, workerLog } from "../observability/log";
 import { applyRunTransition } from "../runtime/run-transition";
 import { driveResumedRun, RESUME_TOKEN_TTL_MS, terminalizeStuckRunAsSystemFailure } from "../runtime/run-step-driver";
 import { recordSiteCircuitOutcome, DEFAULT_SITE_CIRCUIT } from "../runtime/site-circuit";
@@ -271,9 +272,7 @@ export class WorkerRunResume {
       //   좌초한다(graphile 재시도도 같은 오류면 무한 — 좀비). suspend 측 R12 와 대칭으로
       //   terminalizeStuckRunAsSystemFailure 가 resuming→R20(failed_system)으로 종결하고 연결 workitem 을 system 정산한다.
       //   terminalize 가 false(동시 abort 등으로 더는 'resuming' 아님)면 원 예외를 재던져 graphile 에 위임한다.
-      console.error(
-        `runtime-worker: resume 완료 tx 좌초(run ${runId.slice(0, 8)}) — R20 종결 시도: ${completionErr instanceof Error ? completionErr.message : String(completionErr)}`,
-      );
+      workerLog("error", { at: "runtime-worker", msg: "resume 완료 tx 좌초 — R20 종결 시도", run_id: runId, correlation_id: txA.intent.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(completionErr) });
       const terminalized = await terminalizeStuckRunAsSystemFailure(
         { tenantId, runId, correlationId: txA.intent.correlationId },
         this.pool,
@@ -347,12 +346,10 @@ export class WorkerRunResume {
         try {
           await boundForInitCleanup.release();
         } catch (relErr) {
-          console.error(`runtime-worker: resume INIT 실패 후 세션 해제 실패(run ${runId.slice(0, 8)}) — ${relErr instanceof Error ? relErr.message : String(relErr)}`);
+          workerLog("error", { at: "runtime-worker", msg: "resume INIT 실패 후 세션 해제 실패", run_id: runId, correlation_id: drive.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(relErr) });
         }
       }
-      console.error(
-        `runtime-worker: resume INIT 셋업 실패(run ${runId.slice(0, 8)}) — ${initErr instanceof Error ? initErr.message : String(initErr)}`,
-      );
+      workerLog("error", { at: "runtime-worker", msg: "resume INIT 셋업 실패", run_id: runId, correlation_id: drive.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(initErr) });
       // run 은 R18로 이미 running — 좌초 방지로 R8(running→failed_system) 종결 + 연결 workitem system 정산.
       const terminalized = await terminalizeStuckRunAsSystemFailure(driveRun, this.pool);
       // worker 서킷: per-worker 연속 INIT 실패 누적(claim 과 대칭). **B1**: terminalize=false(run 이 이미 aborting/
@@ -366,10 +363,10 @@ export class WorkerRunResume {
         await withTenantTx(this.pool, tenantId, (c) =>
           deleteInitReservedBrowserLease(c, { tenantId, leaseId: drive.leaseId, workerId }),
         ).catch((e) =>
-          console.error(`runtime-worker: resume INIT 실패 browser lease 해제 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+          workerLog("error", { at: "runtime-worker", msg: "resume INIT 실패 browser lease 해제 실패", run_id: runId, correlation_id: drive.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(e) }),
         );
         await this.runSupport.recordWorkerInitFailure(workerId).catch((e) =>
-          console.error(`runtime-worker: resume worker 서킷 실패기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+          workerLog("error", { at: "runtime-worker", msg: "resume worker 서킷 실패기록 실패", run_id: runId, correlation_id: drive.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(e) }),
         );
       }
       return result;
@@ -387,7 +384,7 @@ export class WorkerRunResume {
           renewBrowserLease(c, { tenantId, leaseId: drive.leaseId, workerId, ttlMs: leaseTtlMs }),
         ),
       onLost: (reason) =>
-        console.error(`runtime-worker: resume browser-lease heartbeat lost (run ${runId.slice(0, 8)}) — ${reason}`),
+        workerLog("error", { at: "runtime-worker", msg: "resume browser-lease heartbeat lost", run_id: runId, correlation_id: drive.correlationId, tenant_id: tenantId, worker_id: workerId, reason }),
     });
     let driveResult: Awaited<ReturnType<typeof driveResumedRun>> | undefined;
     try {
@@ -427,7 +424,7 @@ export class WorkerRunResume {
         correlationId: drive.correlationId,
         blocked,
       }).catch((e) =>
-        console.error(`runtime-worker: resume 사이트 서킷 표본기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+        workerLog("error", { at: "runtime-worker", msg: "resume 사이트 서킷 표본기록 실패", run_id: runId, correlation_id: drive.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(e) }),
       );
     }
     return result;

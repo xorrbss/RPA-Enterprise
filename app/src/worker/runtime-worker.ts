@@ -49,6 +49,7 @@ import type { CdpSessionProvider } from "../executor/cdp-session";
 import type { ExecutorPlugin } from "../../../ts/core-types";
 import type { RunEnqueuer } from "../api/run-queue";
 import { processRunTriggerFireJob } from "./run-trigger-scheduler";
+import { errText, workerLog } from "../observability/log";
 
 /** 만료 lease 세션 teardown 대기(ops-defaults run.abort_timeout 30s 동형 — close 미완 시 timeout 처리). */
 const DEFAULT_LEASE_SWEEP_TEARDOWN_TIMEOUT_MS = 30_000;
@@ -359,9 +360,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
             timeoutMs,
           } as RunAbortDrainInput)
           .catch((e: unknown) =>
-            console.error(
-              `runtime-worker: lease_sweeper 세션 teardown 실패(lease ${lease.id.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`,
-            ),
+            workerLog("error", { at: "runtime-worker", msg: "lease_sweeper 세션 teardown 실패", run_id: lease.run_id, lease_id: lease.id, correlation_id: job.correlationId ?? tenantId, tenant_id: tenantId, worker_id: workerId, error: errText(e) }),
           );
       }
     }

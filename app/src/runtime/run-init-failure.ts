@@ -15,6 +15,7 @@ import type { RunState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import { applyRunTransition } from "./run-transition";
 import { settleLinkedWorkitemForRunTerminal } from "./workitem-settlement";
+import { workerLog } from "../observability/log";
 
 // ops-defaults.md §1: run.init_fail_threshold=3 / run.init_backoff base 2s·factor 2·max 60s. 코드 상수 금지 규약 — inline 인용.
 const DEFAULT_INIT_FAIL_THRESHOLD = 3;
@@ -128,9 +129,13 @@ export async function handleClaimedInitFailure(
     //   W5 abandoned+dead_letter(run_id 포함))이 R3b 'DLQ 판단'(evaluateDeadLetter side-effect)을 충족한다 — run-less 면 no-op.
     //   드리프트 차단(적대리뷰 B3): transitionRun 이 evaluateDeadLetter 를 실제로 내놓았는지 단정(향후 R3b sideEffect 구성 변경 감지).
     if (!t.pending.some((p) => p.kind === "evaluateDeadLetter")) {
-      console.warn(
-        `run-init-failure: R3b pending 에 evaluateDeadLetter 부재(run ${input.runId.slice(0, 8)}) — transitionRun R3b sideEffect 구성 변경 의심(workitem 정산이 DLQ 판단을 충족한다는 가정 재검토 필요).`,
-      );
+      workerLog("warn", {
+        at: "run-init-failure",
+        msg: "R3b pending 에 evaluateDeadLetter 부재 — transitionRun R3b sideEffect 구성 변경 의심(workitem 정산이 DLQ 판단을 충족한다는 가정 재검토 필요)",
+        run_id: input.runId,
+        correlation_id: input.correlationId,
+        tenant_id: input.tenantId,
+      });
     }
     await settleLinkedWorkitemForRunTerminal(client, row.workitem_id, {
       tenantId: input.tenantId,

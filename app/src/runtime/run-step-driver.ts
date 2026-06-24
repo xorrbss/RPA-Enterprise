@@ -53,6 +53,7 @@ import { InterpreterError, runScenario, type ScenarioOutcome, type SuspendContex
 import { pauseLinkedWorkitemCheckout, settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
 import { cancelLinkedHumanTasksForRunTerminal } from "./human-task-transition";
 import { recordChallenge } from "../observability/telemetry";
+import { errText, workerLog } from "../observability/log";
 import type { MergedExtractArtifactSink } from "./merged-extract-artifact";
 import {
   VisualEvidenceExecutor,
@@ -157,9 +158,7 @@ async function driveScenarioWithSystemFailsafe(run: ClaimedRun, deps: DriveDeps,
   } catch (err) {
     const terminalized = await terminalizeStuckRunAsSystemFailure(run, deps.pool, classifiedFailureReason(err));
     if (!terminalized) throw err;
-    console.error(
-      `run-step-driver: drive 예외를 failed_system 으로 종결(run ${run.runId.slice(0, 8)}) — ${err instanceof Error ? err.message : String(err)}`,
-    );
+    workerLog("error", { at: "run-step-driver", msg: "drive 예외를 failed_system 으로 종결", run_id: run.runId, correlation_id: run.correlationId, tenant_id: run.tenantId, error: errText(err) });
     return { state: "failed_system", outcome: systemFailureOutcome() };
   }
 }
@@ -213,9 +212,7 @@ export async function terminalizeStuckRunAsSystemFailure(run: RunTerminalRef, po
       return true;
     });
   } catch (e) {
-    console.error(
-      `run-step-driver: failed_system 폴백 종결 실패(run ${run.runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`,
-    );
+    workerLog("error", { at: "run-step-driver", msg: "failed_system 폴백 종결 실패", run_id: run.runId, correlation_id: run.correlationId, tenant_id: run.tenantId, error: errText(e) });
     return false;
   }
 }
@@ -323,9 +320,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
       // 인터프리터 예외를 system 으로 흡수하되 조용히 묻지 않는다(조용한 false/unknown 금지 — system 은 loud 채널).
       //   InterpreterError 면 code 도 표면화(터미널 분류·디버깅 신호 보존). 종결(running→failed_system)은 driveScenario 가 처리.
       const code = scenarioErr instanceof InterpreterError ? `[${scenarioErr.code}] ` : "";
-      console.error(
-        `run-step-driver: 인터프리터 예외를 failed_system 으로 흡수(run ${run.runId.slice(0, 8)}) — ${code}${scenarioErr instanceof Error ? scenarioErr.message : String(scenarioErr)}`,
-      );
+      workerLog("error", { at: "run-step-driver", msg: "인터프리터 예외를 failed_system 으로 흡수", run_id: run.runId, correlation_id: run.correlationId, tenant_id: run.tenantId, ...(scenarioErr instanceof InterpreterError ? { error_code: scenarioErr.code } : {}), error: errText(scenarioErr) });
       scenarioOutcome = systemFailureOutcome();
     }
     scenarioOutcome = await appendMergedExtractArtifact(scenarioOutcome, deps.mergedExtractArtifactSink, run);
@@ -334,9 +329,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     throwReason = classifiedFailureReason(driveErr);
     // video 시작·아티팩트 append 실패를 system 으로 흡수하되 조용히 묻지 않는다(조용한 false 금지 — system 은 loud
     //   채널). 안쪽 인터프리터 예외(runScenario)는 위 catch 가 이미 로그하므로 이 외곽 catch 만 무로그였다.
-    console.error(
-      `run-step-driver: drive 외곽(video/artifact) 실패를 failed_system 으로 흡수(run ${run.runId.slice(0, 8)}) — ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`,
-    );
+    workerLog("error", { at: "run-step-driver", msg: "drive 외곽(video/artifact) 실패를 failed_system 으로 흡수", run_id: run.runId, correlation_id: run.correlationId, tenant_id: run.tenantId, error: errText(driveErr) });
     if (videoRecording !== undefined) {
       await videoRecording.discard({ reason: "run_drive_error" });
     }
@@ -362,7 +355,7 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
         const cookies = await getAllCookies(deps.sessionProvider.forLease(run.leaseId));
         await deps.sessionStore.save(sessionKey(run.tenantId, run.siteProfileId, run.browserIdentityId), { cookies });
       } catch (e) {
-        console.error(`run-step-driver: 세션 캡처 실패(run ${run.runId.slice(0, 8)}, 완료는 유지) — ${e instanceof Error ? e.message : String(e)}`);
+        workerLog("error", { at: "run-step-driver", msg: "세션 캡처 실패(완료는 유지)", run_id: run.runId, correlation_id: run.correlationId, tenant_id: run.tenantId, error: errText(e) });
       }
     }
     return { state: "completed", outcome };
