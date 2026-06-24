@@ -34,6 +34,7 @@ import type {
 import type { CorrelationId, RunId, TenantId } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { SPAN, withSpan, type CommonSpanAttrs } from "../observability/telemetry";
+import { errText, workerLog } from "../observability/log";
 import { applyRunTransition } from "../runtime/run-transition";
 import { driveClaimedRun } from "../runtime/run-step-driver";
 import { handleClaimedInitFailure } from "../runtime/run-init-failure";
@@ -178,12 +179,10 @@ export class WorkerRunDrive {
         try {
           await boundForInitCleanup.release();
         } catch (relErr) {
-          console.error(`runtime-worker: INIT 실패 후 세션 해제 실패(run ${runId.slice(0, 8)}) — ${relErr instanceof Error ? relErr.message : String(relErr)}`);
+          workerLog("error", { at: "runtime-worker", msg: "INIT 실패 후 세션 해제 실패", run_id: runId, correlation_id: d.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(relErr) });
         }
       }
-      console.error(
-        `runtime-worker: INIT 셋업 실패(run ${runId.slice(0, 8)}) — ${initErr instanceof Error ? initErr.message : String(initErr)}`,
-      );
+      workerLog("error", { at: "runtime-worker", msg: "INIT 셋업 실패", run_id: runId, correlation_id: d.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(initErr) });
       const enqueuer = this.options.runtimeJobEnqueuer;
       const outcome = await handleClaimedInitFailure(
         {
@@ -215,14 +214,14 @@ export class WorkerRunDrive {
           },
         },
       );
-      console.warn(`runtime-worker: INIT 실패 처리(run ${runId.slice(0, 8)}) → ${outcome ?? "미적용(비-claimed/경합)"}`);
+      workerLog("warn", { at: "runtime-worker", msg: "INIT 실패 처리", run_id: runId, correlation_id: d.correlationId, tenant_id: tenantId, worker_id: workerId, outcome: outcome ?? "미적용(비-claimed/경합)" });
       // worker 서킷: per-worker 연속 INIT 실패 누적(+1, 임계 도달 시 open) — R3b openCircuit 의 worker-격리를 per-worker
       //   누적으로 실현(per-run 직결 과잉격리 회피). **적대리뷰 B1**: outcome=null(run 부재·비-claimed·CAS 경합 =
       //   init_failed 미적용; 취소·경합 패배는 이 워커의 INIT 실패 아님)은 카운터 미증가 → spurious open 방지. best-effort
       //   기록(별도 tx)이라 실패는 잡을 깨지 않게 흡수(loud).
       if (outcome !== null) {
         await this.runSupport.recordWorkerInitFailure(workerId).catch((e) =>
-          console.error(`runtime-worker: worker 서킷 실패기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+          workerLog("error", { at: "runtime-worker", msg: "worker 서킷 실패기록 실패", run_id: runId, correlation_id: d.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(e) }),
         );
       }
       return claim.result;
@@ -240,7 +239,7 @@ export class WorkerRunDrive {
           renewBrowserLease(c, { tenantId, leaseId: d.leaseId, workerId, ttlMs: leaseTtlMs }),
         ),
       onLost: (reason) =>
-        console.error(`runtime-worker: browser-lease heartbeat lost (run ${runId.slice(0, 8)}) — ${reason}`),
+        workerLog("error", { at: "runtime-worker", msg: "browser-lease heartbeat lost", run_id: runId, correlation_id: d.correlationId, tenant_id: tenantId, worker_id: workerId, reason }),
     });
     let driveResult: Awaited<ReturnType<typeof driveClaimedRun>> | undefined;
     try {
@@ -291,7 +290,7 @@ export class WorkerRunDrive {
         correlationId: d.correlationId,
         blocked,
       }).catch((e) =>
-        console.error(`runtime-worker: 사이트 서킷 표본기록 실패(run ${runId.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`),
+        workerLog("error", { at: "runtime-worker", msg: "사이트 서킷 표본기록 실패", run_id: runId, correlation_id: d.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(e) }),
       );
     }
     return claim.result;

@@ -19,6 +19,7 @@ import { applyRunTransition } from "../runtime/run-transition";
 import { unpauseLinkedWorkitemForRunAbort } from "../runtime/workitem-settlement";
 import { cancelLinkedHumanTasksForRunTerminal } from "../runtime/human-task-transition";
 import { isOnlyAbortLeasePending } from "./runtime-worker-parse";
+import { errText, workerLog } from "../observability/log";
 
 export interface BrowserLeaseRenewInput {
   readonly tenantId: string;
@@ -98,7 +99,7 @@ export function startBrowserLeaseHeartbeat(input: {
       }
     } catch (err) {
       // best-effort: 일시 DB 오류는 lease 가 아직 유효할 수 있으므로 다음 비트에 재시도(loud).
-      console.error(`browser-lease heartbeat 갱신 오류 — ${err instanceof Error ? err.message : String(err)}`);
+      workerLog("error", { at: "browser-lease", msg: "heartbeat 갱신 오류", error: errText(err) });
     }
     if (!stopped) schedule();
   };

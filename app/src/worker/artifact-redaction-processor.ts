@@ -30,6 +30,7 @@ import {
   type ArtifactLifecycleRow,
 } from "./runtime-worker-artifact-lifecycle";
 import { appendLifecycleAuditWithClient, assertLifecycleBypassUse } from "./runtime-worker-lifecycle-audit";
+import { errText, workerLog } from "../observability/log";
 
 // ops-defaults.md §6 artifact.redaction_fail_threshold = 5(초과 시 failed+알림·조회차단). 종전 3 은 계약 미달.
 const DEFAULT_ARTIFACT_REDACTION_MAX_ATTEMPTS = 5;
@@ -138,9 +139,14 @@ export class ArtifactRedactionProcessor {
         try {
           await deleter.delete(originalRef);
         } catch (e) {
-          console.error(
-            `artifact_redaction: superseded 원본 평문 객체 삭제 실패(artifact ${claim.claim.artifact.artifactRef.slice(0, 8)}) — ${e instanceof Error ? e.message : String(e)}`,
-          );
+          workerLog("error", {
+            at: "artifact_redaction",
+            msg: "superseded 원본 평문 객체 삭제 실패",
+            artifact_ref: claim.claim.artifact.artifactRef,
+            correlation_id: correlationId,
+            tenant_id: tenantId,
+            error: errText(e),
+          });
         }
       }
     }
