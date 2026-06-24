@@ -2,6 +2,7 @@ import {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
   Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow, Stamp,
   CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
+  HelpCircle,
   type LucideIcon,
 } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
@@ -87,7 +88,17 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
       <div className="main">
         <header className="topbar">
           <div>
-            <h1>{meta.title}</h1>
+            <div className="topbar-heading">
+              <h1>{meta.title}</h1>
+              <button
+                type="button"
+                className="help-button"
+                aria-label={`${meta.title} 화면 도움말`}
+                title={meta.helpText ?? meta.subtitle}
+              >
+                <HelpCircle size={15} aria-hidden="true" />
+              </button>
+            </div>
             <div className="sub">{meta.subtitle}</div>
           </div>
           <span style={{ display: "inline-flex", gap: 12, alignItems: "center" }}>
