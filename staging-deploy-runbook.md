@@ -7,7 +7,8 @@ release-approval/rollback + SecretRef/SecretStore provisioning path) 을 닫기 
 이 작업은 **이 contract 레포 밖**(별도 플랫폼/배포 레포)에서 일어난다 — 이 레포의
 "Deploy-Time Provisioning Blockers" 게이트가 deploy/Environment 바인딩을 금지하기 때문이다
 (release-decisions D8-A14 #13). 따라서 row 43 은 코드로 닫히지 않고, 오너가 실제 플랫폼을
-프로비저닝하고 **redacted 릴리스 패킷**(아래 §6)을 제출할 때 닫힌다.
+프로비저닝하고 **redacted 릴리스 패킷**(아래 §6)을 검증 통과 상태로 제출할 때 닫힌다.
+이 문서의 패킷 블록은 작성 템플릿일 뿐이며, `<...>` 자리표시자가 남아 있으면 종료 증거가 아니다.
 
 > ⚠ **평문 금지.** 패킷·로그·이 레포 어디에도 실 시크릿/토큰/role_id/secret_id/AKID 를 적지 않는다.
 > SecretRef **경로**·redacted alias·repo/Environment **이름**·deploy target **식별자**는 노출 안전(값이 아님).
@@ -103,31 +104,54 @@ SecretRef **경로/식별자** 목록(값 없음).
 
 ---
 
-## 6. Redacted 릴리스 패킷 (row 43 종료 증거)
+## 6. Row 43 redacted 릴리스 패킷 작성/검증
 
-아래를 모두 채운 **redacted 패킷**을 `product-open-candidate-report.md` 의 row 43 마커 자리에 붙이면
-row 43 이 닫힌다(closure-boundary "Deploy-time provisioning" may-close 컬럼과 1:1):
+아래 블록은 오너가 실제 플랫폼 repo/Environment/deploy target 에서 얻은 사실로 채워야 하는 **템플릿**이다.
+패킷은 먼저 별도 파일로 작성하고 `release-packet:validate` 를 통과시킨 뒤, 그 통과한 본문만
+`product-open-candidate-report.md` 의 row 43 마커 자리에 붙인다. 템플릿 그대로 붙이거나 로컬 fixture
+결과만 붙이면 row 43 은 닫히지 않는다(closure-boundary "Deploy-time provisioning" may-close 컬럼과 1:1).
 
 ```
-[STAGING RELEASE PACKET — redacted]
-- staging platform repo            : <org/repo 이름>
-- concrete deploy target           : <namespace/service 식별자>
-- GitHub Environment `staging`      : protection=<on>, required reviewer=<owner>, branch policy=<...>
-- release approval reference        : <approved deployment URL/ID, redacted>
+[STAGING RELEASE PACKET -- redacted]
+- staging platform repo            : <org/repo>
+- concrete deploy target           : <namespace/service>
+- GitHub Environment `staging`      : protection=<on/off>, required reviewer=<owner #13>, branch policy=<protected-main/release-tag policy>
+- release approval reference        : <approved deployment HTTPS URL or deployment ID, redacted>
 - rollback confirmation             : forward-only(D7-4) + prior-image redeploy; owner=#13
-- SecretStore alias/path            : Vault KV v2 mount `secret/`, base secret/data/rpa/staging/<runtime>/<purpose>/<name>  (값 없음)
-- namespace / identity map          : D8-A12 (staging-decision-proposals §3) 참조
-- SecretRef inventory               : D8-A12 (staging-decision-proposals §4) 참조 (식별자만)
-- runtime artifact object-store env : `ARTIFACT_OBJECT_STORE_REF=<SecretRef identifier>`, optional `ARTIFACT_OBJECT_STORE_BACKEND_ALIAS=<alias>`
-- artifact store topology preflight  : run `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle` with the final deploy env bundle; PASS is required before starting separate worker/lifecycle processes.
-- retention policy                  : D8-A11/A14 / ops-defaults §6.1 참조
-- live D5 evidence                  : row 50 packet 참조 ([codex-staging-1]/[model-a])
-- secret.resolve audit sample       : seq#/hash (material 없음)
+- SecretStore alias/path            : Vault KV v2 mount `secret/`, base secret/data/rpa/staging/<runtime>/<purpose>/<name> (값 없음)
+- namespace / identity map          : D8-A12 staging-decision-proposals §3 참조 + <runtime identity binding summary>
+- SecretRef inventory               : D8-A12 staging-decision-proposals §4 참조 + <identifier-only inventory reference>
+- runtime artifact object-store env : `ARTIFACT_OBJECT_STORE_REF=<SecretRef identifier>`, optional alias=[<backend-alias>]
+- artifact store topology preflight  : run `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle` with the final deploy env bundle; PASS before starting separate worker/lifecycle processes.
+- retention policy                  : D8-A11/D8-A14 / ops-defaults §6.1 참조
+- live D5 evidence                  : row 50 packet aliases [<codex-staging-alias>]/[<model-alias>]
+- secret.resolve audit sample       : seq#<n>/hash#<redacted>, no material
 - negative control proof            : secret-scan rejects GitHub `secrets` context, `environment: staging` binding, env dump commands, and xtrace
-[금지: 실 시크릿/토큰/role_id/secret_id/AKID/평문 자격 — 하나라도 있으면 패킷 무효]
+[금지: 실 시크릿/토큰/role_id/secret_id/AKID/평문 자격/내부 ObjectRef/raw model id — 하나라도 있으면 패킷 무효]
 ```
 
-패킷을 붙이기 전에 별도 파일로 저장해 `npm --prefix codegen run release-packet:validate -- --file <packet.md>` 를 통과시킨다.
+패킷 작성자가 반드시 확인할 것:
+
+1. `staging platform repo`, `concrete deploy target`, GitHub Environment `staging`, 승인 URL/ID 는 실제 외부
+   플랫폼에서 나온 식별자다. 이 contract 레포 내부 파일명이나 mock fixture 이름으로 대체하지 않는다.
+2. GitHub Environment `staging` 값에는 `protection=`, `required reviewer=`, `branch policy=` 세 토큰이 모두 있다.
+3. `artifact store topology preflight` 는 최종 deploy env bundle 로 실행한
+   `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle` 결과이며, `PASS` 증거가 있다.
+4. `live D5 evidence` 는 row 50 의 실제 redacted live evidence 를 참조하고, raw 모델명 대신 bracketed alias 2개 이상을 쓴다.
+5. `secret.resolve audit sample` 은 `seq`/`hash` 만 포함한다. `material=present`, `value=`, 평문 secret material 은 금지다.
+6. `negative control proof` 는 secret-scan, GitHub `secrets`, `environment: staging`, env dump, xtrace 차단 증거를 포함한다.
+
+검증 순서:
+
+```powershell
+npm --prefix codegen run release-packet:fixtures
+npm --prefix codegen run release-packet:validate -- --file <packet.md>
+npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle
+npm --prefix codegen run secret:scan
+```
+
+`release-packet:validate` 는 자리표시자(`<...>`), raw secret/token, query string 이 붙은 URL, 내부 ObjectRef,
+raw model id 를 실패 처리한다. 실패한 패킷은 보고서에 붙이지 않는다.
 
 ---
 
