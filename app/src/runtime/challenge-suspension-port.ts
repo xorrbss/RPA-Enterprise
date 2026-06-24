@@ -16,6 +16,7 @@ import type { ClassifiedException } from "../../../ts/core-types";
 import type { EventId } from "../../../ts/runtime-contract";
 import type { SideEffectCmd } from "../../../ts/state-machine-types";
 import type { ExecutorChallengeSuspensionPort } from "./executor-ports";
+import { assertHumanTaskTimeoutMs, HUMAN_TASK_DEFAULT_TIMEOUT_MS } from "./human-task-timeout-policy";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "./outbox";
 
 export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPort {
@@ -31,6 +32,10 @@ export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPor
       pendingSideEffects: readonly SideEffectCmd[];
       assigneeRole?: string;
       onTimeout?: "fail" | "escalate";
+      timeoutMs?: number;
+      payload?: Record<string, unknown>;
+      resultSchema?: Record<string, unknown>;
+      artifactRefs?: readonly string[];
       reason?: string;
     },
   ): Promise<{ readonly emittedEvents: readonly EventId[] }> {
@@ -48,11 +53,27 @@ export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPor
 
     // 1) human_tasks row 생성. kind 는 createHumanTask 에서; assignee_role/on_timeout 은 @human_task(R5) input 에서(challenge 는
     //    미지정 → NULL/DDL 기본 'fail'). state='open' 은 DDL 기본. on_timeout NOT NULL 이라 COALESCE 로 기본 'fail' 보장.
+    const timeoutMs = input.timeoutMs ?? HUMAN_TASK_DEFAULT_TIMEOUT_MS;
+    assertHumanTaskTimeoutMs(timeoutMs, "PgChallengeSuspensionPort.timeoutMs");
+
     const humanTaskId = randomUUID();
     await client.query(
-      `INSERT INTO human_tasks (id, tenant_id, run_id, kind, assignee_role, on_timeout)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, COALESCE($6, 'fail'))`,
-      [humanTaskId, input.tenantId, input.runId, createCmd.humanTaskKind, input.assigneeRole ?? null, input.onTimeout ?? null],
+      `INSERT INTO human_tasks
+         (id, tenant_id, run_id, kind, assignee_role, on_timeout, payload, result_schema, artifact_refs, expires_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, COALESCE($6, 'fail'), $7::jsonb, $8::jsonb, $9::jsonb,
+               now() + ($10::bigint * interval '1 millisecond'))`,
+      [
+        humanTaskId,
+        input.tenantId,
+        input.runId,
+        createCmd.humanTaskKind,
+        input.assigneeRole ?? null,
+        input.onTimeout ?? null,
+        JSON.stringify(input.payload ?? {}),
+        JSON.stringify(input.resultSchema ?? {}),
+        JSON.stringify(input.artifactRefs ?? []),
+        timeoutMs,
+      ],
     );
 
     // 2) suspend bookmark 영속(전용 runs.bookmark — resume_token 과 분리). 재개 지점 마커(서명 봉투 아님; pageStateRef/kid/hmac 은 R11 후속).

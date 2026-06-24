@@ -32,6 +32,7 @@ import { applyHumanTaskTransition } from "../runtime/human-task-transition";
 import { applyRunTransition } from "../runtime/run-transition";
 import { runIdempotentCommand, isRecord, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
+import { validateResolutionAgainstBusinessForm } from "./human-task-form-schema";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 import type { RunEnqueuer } from "./run-queue";
 
@@ -138,11 +139,11 @@ async function resolveHumanTask(
 ): Promise<CommandResponse> {
   const principal = requirePrincipal(request);
   const id = requireTaskId(request.params.id);
-  requireResolveBody(request);
+  const resolveResult = requireResolveBody(request);
 
   const authRow = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
     const r = await c.query<ResolveTaskAuthRow>(
-      `SELECT kind, assignee::text AS assignee, assignee_role
+      `SELECT kind, assignee::text AS assignee, assignee_role, result_schema
          FROM human_tasks
         WHERE id=$1::uuid`,
       [id],
@@ -170,6 +171,7 @@ async function resolveHumanTask(
     );
     throw new ApiResponseError(decision.code);
   }
+  validateResolutionAgainstBusinessForm(authRow.result_schema, resolveResult);
 
   return runIdempotentCommand(
     deps,
@@ -190,6 +192,8 @@ async function resolveHumanTask(
           guard: { humanTaskValid: true },
         },
         deps.enqueuer,
+        resolveResult,
+        principal.subjectId,
       ),
   );
 }
@@ -198,6 +202,7 @@ interface ResolveTaskAuthRow {
   kind: HumanTaskKind;
   assignee: string | null;
   assignee_role: string | null;
+  result_schema: unknown;
 }
 
 const ROLES: ReadonlySet<string> = new Set<Role>(["viewer", "operator", "reviewer", "approver", "admin"]);
@@ -210,6 +215,30 @@ function toRole(value: string | null): Role | undefined {
 interface HumanTaskRow {
   state: HumanTaskState;
   run_id: string;
+}
+
+interface HumanTaskResponseRow {
+  id: string;
+  state: HumanTaskState;
+  kind: HumanTaskKind;
+  assignee: string | null;
+  expires_at: Date | null;
+  on_timeout: string;
+  run_id: string | null;
+  payload: unknown;
+  result_schema: unknown;
+  artifact_refs: unknown;
+  result: unknown;
+}
+
+type ResolutionDecision = "approve" | "reject" | "correct" | "retry";
+
+interface HumanTaskResolution {
+  readonly decision: ResolutionDecision;
+  readonly corrections?: Record<string, unknown>;
+  readonly reason?: string;
+  readonly confidence?: number;
+  readonly notes?: string;
 }
 
 /**
@@ -225,6 +254,8 @@ async function applyHumanTaskCommand(
   assignee: string | undefined,
   runCoupling?: RunCoupling,
   enqueuer?: RunEnqueuer,
+  resolveResult?: HumanTaskResolution,
+  resolvedBy?: PrincipalId,
 ): Promise<CommandResponse> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const cur = await client.query<HumanTaskRow>(
@@ -263,13 +294,67 @@ async function applyHumanTaskCommand(
 
     // 교차 전이(R13/R15): human_task 전이 직후 동일 tx에서 연관 run 전이 적용.
     assertHumanTaskPendingHandled(event, assignee, outcome.pending);
+    if (event.type === "resolve") {
+      await storeHumanTaskResolution(client, tenantId, humanTaskId, resolveResult, resolvedBy);
+    }
     if (runCoupling !== undefined) {
       await applyCoupledRunTransition(client, tenantId, row.run_id, humanTaskId, correlationId, runCoupling, enqueuer);
     }
-    return { status: 200, body: { human_task_id: humanTaskId, state: outcome.next } };
+    return { status: 200, body: await readHumanTaskResponse(client, tenantId, humanTaskId) };
   }
   // CAS 경합 3회 — 조용한 false 금지: 재시도 가능 충돌로 표면화.
   throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", { reason: "human_task_cas_contention" });
+}
+
+async function storeHumanTaskResolution(
+  client: PoolClient,
+  tenantId: string,
+  humanTaskId: string,
+  resolveResult: HumanTaskResolution | undefined,
+  resolvedBy: PrincipalId | undefined,
+): Promise<void> {
+  const updated = await client.query(
+    `UPDATE human_tasks
+        SET result = $3::jsonb,
+            resolved_by = $4::text,
+            updated_at = now()
+      WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+    [tenantId, humanTaskId, resolveResult === undefined ? null : JSON.stringify(resolveResult), resolvedBy ?? null],
+  );
+  if (updated.rowCount !== 1) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  }
+}
+
+async function readHumanTaskResponse(
+  client: PoolClient,
+  tenantId: string,
+  humanTaskId: string,
+): Promise<Record<string, unknown>> {
+  const result = await client.query<HumanTaskResponseRow>(
+    `SELECT id::text AS id, state, kind, assignee, expires_at, on_timeout, run_id::text AS run_id,
+            payload, result_schema, artifact_refs, result
+       FROM human_tasks
+      WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+    [tenantId, humanTaskId],
+  );
+  const row = result.rows[0] ?? null;
+  if (row === null) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  }
+  return {
+    human_task_id: row.id,
+    state: row.state,
+    kind: row.kind,
+    assignee: row.assignee,
+    timeout: row.expires_at !== null ? row.expires_at.toISOString() : null,
+    on_timeout: row.on_timeout,
+    run_id: row.run_id,
+    payload: recordOrEmpty(row.payload),
+    result_schema: recordOrEmpty(row.result_schema),
+    artifact_refs: stringArray(row.artifact_refs),
+    result: recordOrNull(row.result),
+  };
 }
 
 /**
@@ -372,6 +457,18 @@ function requireAssignee(request: FastifyRequest): string {
   return assignee;
 }
 
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 /** start 등 본문 없는 명령: 비어있거나 닫힌 빈 객체만 허용. */
 function requireEmptyBody(request: FastifyRequest): void {
   if (request.body === undefined || request.body === null) return;
@@ -381,17 +478,55 @@ function requireEmptyBody(request: FastifyRequest): void {
 }
 
 /**
- * resolve body: optional `result`(object)만 허용. v1은 전이/이벤트만 확정하고 kind별 해소 payload의
- * 스키마 검증·영속은 후속(verify.schema/reserved-handlers 기반 result 저장 결정 필요)으로 미룬다.
+ * resolve body: optional `result`만 허용. V2 result는 인박스/검증 워크벤치 표면으로 영속한다.
+ * 런타임 재개 컨텍스트 자동 주입은 별도 IREL/reserved-handler versioned 변경 전까지 비활성.
  */
-function requireResolveBody(request: FastifyRequest): void {
-  if (request.body === undefined || request.body === null) return;
+function requireResolveBody(request: FastifyRequest): HumanTaskResolution | undefined {
+  if (request.body === undefined || request.body === null) return undefined;
   if (!isRecord(request.body) || Object.keys(request.body).some((k) => k !== "result")) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_resolve_request" });
   }
-  if (request.body.result !== undefined && !isRecord(request.body.result)) {
+  if (request.body.result === undefined) return undefined;
+  if (!isRecord(request.body.result)) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_resolve_result" });
   }
+  return requireResolutionResult(request.body.result);
+}
+
+const RESOLUTION_DECISIONS = new Set<ResolutionDecision>(["approve", "reject", "correct", "retry"]);
+
+function requireResolutionResult(value: Record<string, unknown>): HumanTaskResolution {
+  const allowed = new Set(["decision", "corrections", "reason", "confidence", "notes"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_resolve_result_key" });
+  }
+  const decision = value.decision;
+  if (typeof decision !== "string" || !RESOLUTION_DECISIONS.has(decision as ResolutionDecision)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_resolve_decision" });
+  }
+  const corrections = value.corrections;
+  if (corrections !== undefined && !isRecord(corrections)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_resolve_corrections" });
+  }
+  const reason = value.reason;
+  if (reason !== undefined && typeof reason !== "string") {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_resolve_reason" });
+  }
+  const confidence = value.confidence;
+  if (confidence !== undefined && (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_resolve_confidence" });
+  }
+  const notes = value.notes;
+  if (notes !== undefined && typeof notes !== "string") {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_resolve_notes" });
+  }
+  return {
+    decision: decision as ResolutionDecision,
+    ...(corrections !== undefined ? { corrections } : {}),
+    ...(reason !== undefined ? { reason } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(notes !== undefined ? { notes } : {}),
+  };
 }
 
 /** escalate body: optional `reason`(string)만 허용. reason은 v1 비영속(수신만). */

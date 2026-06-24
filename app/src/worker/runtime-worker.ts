@@ -11,6 +11,7 @@ import type pg from "pg";
 
 import { requireString } from "./runtime-worker-parse";
 import { handleWorkitemCheckout, handleWorkitemCheckoutSweeper } from "./runtime-worker-workitem-checkout";
+import { handleHumanTaskTimeoutSweeper } from "./runtime-worker-human-task-timeout";
 import { WorkerRunDrive } from "./runtime-worker-run-drive";
 import { WorkerRunResume } from "./runtime-worker-run-resume";
 import { ArtifactRedactionProcessor, type SupersededObjectStore } from "./artifact-redaction-processor";
@@ -46,6 +47,8 @@ import type { BrowserSessionProvider } from "../executor/browser-session-provide
 import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "../runtime/executor-ports";
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import type { ExecutorPlugin } from "../../../ts/core-types";
+import type { RunEnqueuer } from "../api/run-queue";
+import { processRunTriggerFireJob } from "./run-trigger-scheduler";
 
 /** 만료 lease 세션 teardown 대기(ops-defaults run.abort_timeout 30s 동형 — close 미완 시 timeout 처리). */
 const DEFAULT_LEASE_SWEEP_TEARDOWN_TIMEOUT_MS = 30_000;
@@ -186,6 +189,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
       case "workitem_checkout_sweeper":
         return handleWorkitemCheckoutSweeper(this.pool, job);
 
+      case "human_task_timeout_sweeper":
+        return handleHumanTaskTimeoutSweeper(this.pool, job);
+
       case "workitem_checkout":
         return handleWorkitemCheckout(this.pool, this.options.workerId, job);
 
@@ -207,6 +213,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
       case "sink_deliver":
         return this.handleSinkDeliver(job);
+
+      case "trigger_fire":
+        return this.handleTriggerFire(job);
 
       case "dlq_replay":
         throw new Error(
@@ -266,6 +275,27 @@ export class PgRuntimeWorker implements RuntimeWorker {
       kind: "completed",
       emittedEvents: outcome.emitted ? [outcome.emitted.eventId as EventId] : [],
     };
+  }
+
+  private async handleTriggerFire(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
+    const tenantId = requireString(job.tenantId, "trigger_fire.tenantId");
+    const triggerId = requireString(job.triggerId, "trigger_fire.triggerId");
+    const scheduledFor = requireString(job.scheduledFor, "trigger_fire.scheduledFor");
+    const correlationId = requireString(job.correlationId, "trigger_fire.correlationId");
+    const runtimeJobEnqueuer = this.options.runtimeJobEnqueuer;
+    if (runtimeJobEnqueuer === undefined) {
+      throw new Error("RuntimeWorker: trigger_fire requires runtimeJobEnqueuer to enqueue created run_claim jobs");
+    }
+
+    await processRunTriggerFireJob(this.pool, {
+      tenantId,
+      triggerId,
+      scheduledFor,
+      enqueuer: runtimeJobEnqueuerAsRunEnqueuer(runtimeJobEnqueuer),
+      correlationId: () => correlationId,
+    });
+
+    return { kind: "completed", emittedEvents: [] };
   }
 
   private async handleLeaseSweeper(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
@@ -335,7 +365,26 @@ export class PgRuntimeWorker implements RuntimeWorker {
           );
       }
     }
+
     return { kind: "completed", emittedEvents: [] };
   }
+}
 
+function runtimeJobEnqueuerAsRunEnqueuer(port: RuntimeJobEnqueuePort): RunEnqueuer {
+  return {
+    async enqueueRunClaim(client, input) {
+      await port.enqueueRuntimeJob(client, {
+        kind: "run_claim",
+        tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
+        runId: input.runId as RuntimeWorkerJob["runId"],
+        correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
+      });
+    },
+    async enqueueRunAbort() {
+      throw new Error("trigger_fire RunEnqueuer adapter does not support run_abort");
+    },
+    async enqueueSinkDeliver() {
+      throw new Error("trigger_fire RunEnqueuer adapter does not support sink_deliver");
+    },
+  };
 }

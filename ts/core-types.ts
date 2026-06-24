@@ -73,6 +73,17 @@ export type StepStatus =
   | "success" | "failed_business" | "failed_system" | "failed_challenge"
   | "failed_security" | "uncertain" | "skipped" | "suspended";
 
+export type HttpResponseSnapshot = {
+  status: number;
+  ok: boolean;
+  contentType: string;
+  finalUrl: string;
+  redirected: boolean;
+  redirectLocation?: string;
+  body?: unknown;
+  bodyTruncated: boolean;
+};
+
 export type StepResult = {
   stepId: string;
   action: IRActionType;
@@ -128,6 +139,7 @@ export type RunContext = {
   browserIdentityId: string;
   networkPolicyId: string;
   networkAllowedDomains?: readonly string[];
+  lastHttpResponse?: HttpResponseSnapshot;
   leaseId: string;             // BrowserLease
   // 자격증명은 ref만. resolve는 SecretStore 경유(Executor가 직접 LLM에 전달 금지).
   assetRefs: Record<string, SecretRef | string>;

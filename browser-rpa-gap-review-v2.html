@@ -1,0 +1,1042 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RPA 도입 갭 검토 V2</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --surface-2: #f9fafb;
+      --line: #dce3ea;
+      --line-strong: #c5d0dc;
+      --text: #1e293b;
+      --muted: #51607a;
+      --soft: #eef3f8;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --blue-ink: #1d4ed8;
+      --green: #0f9f6e;
+      --green-soft: #e7f8f0;
+      --green-ink: #0a7350;
+      --amber: #b7791f;
+      --amber-soft: #fff5dc;
+      --amber-ink: #875200;
+      --red: #c24141;
+      --red-soft: #fdecec;
+      --red-ink: #a52d2d;
+      --purple: #6d5bd0;
+      --purple-soft: #f0edff;
+      --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 10px 30px rgba(15, 23, 42, .05);
+      --radius: 8px;
+      --sidebar: 276px;
+      font-family: Inter, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+    button, input, select, textarea { font: inherit; }
+    a { color: inherit; text-decoration: none; }
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+
+    .app { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100vh; }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 8px 10px 10px; }
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      background: var(--blue);
+      color: #fff;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .brand strong { display: block; font-size: 15px; }
+    .brand span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .scope-box {
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      border-radius: var(--radius);
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .nav-group { display: grid; gap: 4px; }
+    .nav-group-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      padding: 2px 10px;
+    }
+    .nav-link {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 10px;
+      color: var(--muted);
+      border-radius: var(--radius);
+      font-size: 13px;
+    }
+    .nav-link:hover { background: var(--soft); color: var(--text); }
+    .nav-link.active { background: var(--blue-soft); color: var(--blue); font-weight: 700; }
+    .nav-icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      border: 1px solid var(--line-strong);
+      display: grid;
+      place-items: center;
+      font-size: 10px;
+      font-weight: 800;
+      background: var(--surface);
+      color: var(--muted);
+      flex: none;
+    }
+    .nav-link.active .nav-icon { border-color: var(--blue); background: var(--blue); color: #fff; }
+
+    .main { min-width: 0; display: flex; flex-direction: column; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 24px;
+      background: rgba(255,255,255,.96);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px);
+    }
+    .topbar h1 { margin: 0; font-size: 18px; }
+    .topbar .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .top-actions { display: inline-flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+    .content { padding: 24px; display: grid; gap: 16px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .badge.green { background: var(--green-soft); color: var(--green-ink); }
+    .badge.amber { background: var(--amber-soft); color: var(--amber-ink); }
+    .badge.red { background: var(--red-soft); color: var(--red-ink); }
+    .badge.blue { background: var(--blue-soft); color: var(--blue-ink); }
+    .badge.purple { background: var(--purple-soft); color: var(--purple); }
+    .badge.muted { background: var(--soft); color: var(--muted); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      min-height: 34px;
+    }
+    .btn:hover { background: var(--soft); }
+    .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .btn.primary:hover { background: #1d4ed8; }
+    .btn.danger { border-color: var(--red); color: var(--red-ink); background: var(--red-soft); }
+    .btn.small { min-height: 30px; padding: 5px 9px; font-size: 12px; }
+
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .panel-head {
+      min-height: 54px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .panel-head h2 { margin: 0; font-size: 14px; }
+    .panel-head p, .muted { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .panel-body { padding: 16px; }
+    .subtle { color: var(--muted); font-size: 12px; }
+    .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
+
+    .hero {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(330px, .75fr);
+      gap: 16px;
+      padding: 18px;
+      align-items: stretch;
+    }
+    .hero h2 { margin: 0; font-size: 20px; line-height: 1.35; }
+    .hero p { margin: 9px 0 0; color: var(--muted); line-height: 1.65; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .decision-board {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-2);
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .decision-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; align-items: start; }
+    .decision-row strong { font-size: 12px; }
+    .decision-row span { color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; }
+    .metric {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      box-shadow: var(--shadow);
+      display: grid;
+      gap: 6px;
+      min-height: 110px;
+    }
+    .metric .label { color: var(--muted); font-size: 12px; }
+    .metric .value { font-size: 26px; font-weight: 850; letter-spacing: 0; }
+    .metric .note { color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; }
+
+    .card {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+    }
+    .card h3 { margin: 0; font-size: 13px; line-height: 1.35; }
+    .card p { margin: 0; color: var(--muted); line-height: 1.5; font-size: 12px; }
+    .card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+    .segmented button {
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      padding: 7px 10px;
+      cursor: pointer;
+    }
+    .segmented button:last-child { border-right: 0; }
+    .segmented button.active { background: var(--blue-soft); color: var(--blue); font-weight: 800; }
+    .search, .select {
+      min-width: min(100%, 220px);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      padding: 7px 9px;
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    .table-wrap { width: 100%; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 920px; }
+    th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; font-weight: 800; background: var(--surface-2); }
+    tbody tr:hover { background: var(--surface-2); }
+    tbody tr.selected td { background: var(--blue-soft); }
+    td strong { display: block; margin-bottom: 3px; }
+    td .desc { color: var(--muted); line-height: 1.45; }
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .sticky { position: sticky; top: 86px; }
+    .detail-stack { display: grid; gap: 12px; }
+    .detail-card { border: 1px solid var(--line); background: var(--surface-2); border-radius: var(--radius); padding: 12px; }
+    .detail-card h3 { margin: 0 0 8px; font-size: 13px; }
+    .detail-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+
+    .field-grid { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; font-size: 13px; }
+    .field-grid dt { color: var(--muted); }
+    .field-grid dd { margin: 0; overflow-wrap: anywhere; }
+
+    .kanban { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 12px; }
+    .kanban-col { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); min-height: 360px; }
+    .kanban-head { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .kanban-head strong { font-size: 13px; }
+    .kanban-body { padding: 10px; display: grid; gap: 8px; }
+    .idea-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 10px; display: grid; gap: 8px; }
+    .idea-card strong { font-size: 13px; }
+    .idea-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .timeline { display: grid; gap: 10px; }
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+    }
+    .index-dot {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: var(--soft);
+      color: var(--muted);
+      font-weight: 850;
+      font-size: 12px;
+    }
+    .timeline-item strong { display: block; margin-bottom: 3px; }
+    .timeline-item p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .bar-list { display: grid; gap: 10px; }
+    .bar-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 54px; gap: 10px; align-items: center; font-size: 12px; }
+    .bar-track { height: 8px; background: var(--soft); border-radius: 999px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--blue); border-radius: 999px; }
+    .bar-fill.green { background: var(--green); }
+    .bar-fill.amber { background: var(--amber); }
+    .bar-fill.red { background: var(--red); }
+
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 10px; }
+    .field { display: grid; gap: 5px; }
+    .field span { color: var(--muted); font-size: 12px; font-weight: 800; }
+    .field input, .field select, .field textarea {
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 9px;
+      width: 100%;
+      min-width: 0;
+    }
+    .field textarea { min-height: 92px; resize: vertical; }
+    .field-wide { grid-column: 1 / -1; }
+
+    .screen { display: none; }
+    .screen.active { display: grid; gap: 16px; }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 80;
+      width: min(420px, calc(100vw - 36px));
+      display: grid;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .toast-item {
+      pointer-events: auto;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--text);
+      border-radius: var(--radius);
+      box-shadow: 0 18px 45px rgba(15, 23, 42, .18);
+      padding: 11px 12px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .toast-item strong { display: block; font-size: 13px; }
+    .toast-item span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.35; }
+
+    .drawer {
+      position: fixed;
+      top: 74px;
+      right: 16px;
+      bottom: 16px;
+      z-index: 60;
+      width: min(560px, calc(100vw - 32px));
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 22px 70px rgba(15, 23, 42, .22);
+      display: none;
+      overflow: hidden;
+    }
+    .drawer.open { display: flex; flex-direction: column; }
+    .drawer-head { padding: 13px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .drawer-head h2 { margin: 0; font-size: 15px; }
+    .drawer-body { padding: 14px; overflow: auto; display: grid; gap: 12px; }
+
+    .notice {
+      border: 1px solid var(--amber);
+      background: var(--amber-soft);
+      color: var(--amber-ink);
+      border-radius: var(--radius);
+      padding: 11px 12px;
+      line-height: 1.55;
+    }
+    .notice strong { color: var(--text); }
+
+    @media (max-width: 1180px) {
+      .hero, .split, .grid-2 { grid-template-columns: 1fr; }
+      .sticky { position: static; }
+      .metrics, .grid-4 { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
+      .grid-3, .kanban { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+    }
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
+      .nav-group { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .nav-group-label { grid-column: 1 / -1; }
+      .topbar { padding: 12px 14px; align-items: flex-start; flex-wrap: wrap; }
+      .content { padding: 14px; }
+    }
+    @media (max-width: 620px) {
+      .metrics, .grid-3, .grid-4, .kanban, .form-grid { grid-template-columns: 1fr; }
+      .decision-row, .field-grid, .bar-row { grid-template-columns: 1fr; }
+      .timeline-item { grid-template-columns: 34px minmax(0, 1fr); }
+      .timeline-item .badge { grid-column: 2; justify-self: start; }
+      .segmented { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); }
+      .segmented button { padding-left: 4px; padding-right: 4px; }
+      .search, .select { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">R2</div>
+        <div>
+          <strong>RPA 도입 평가</strong>
+          <span>Enterprise gap review</span>
+        </div>
+      </div>
+      <div class="scope-box">
+        <span class="badge blue">브라우저 RPA 중심</span>
+        <span class="badge muted">데스크톱 자동화는 별도 전략</span>
+      </div>
+      <nav aria-label="주요 화면" id="side-nav"></nav>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">Executive Overview</h1>
+          <div class="sub" id="page-subtitle">도입 판단에 필요한 핵심 갭과 보강 우선순위를 한 화면에서 봅니다.</div>
+        </div>
+        <div class="top-actions">
+          <button class="btn small" type="button" data-action="export">검토본 내보내기</button>
+          <button class="btn small" type="button" data-route="roadmap">보강 순서 보기</button>
+          <button class="btn primary small" type="button" data-action="decision">도입 판단 기록</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="screen" id="view-overview" aria-label="Executive Overview"></section>
+        <section class="screen" id="view-matrix" aria-label="Gap Matrix"></section>
+        <section class="screen" id="view-coe" aria-label="CoE ROI"></section>
+        <section class="screen" id="view-scheduler" aria-label="Scheduler Bot Pool"></section>
+        <section class="screen" id="view-idp" aria-label="IDP"></section>
+        <section class="screen" id="view-connectors" aria-label="Connectors"></section>
+        <section class="screen" id="view-nocode" aria-label="No-code UX"></section>
+        <section class="screen" id="view-ops" aria-label="Operations SLA"></section>
+        <section class="screen" id="view-governance" aria-label="Governance"></section>
+        <section class="screen" id="view-roadmap" aria-label="Roadmap"></section>
+      </div>
+    </main>
+  </div>
+
+  <aside class="drawer" id="drawer" aria-live="polite">
+    <div class="drawer-head">
+      <div>
+        <h2 id="drawer-title">상세</h2>
+        <p class="muted" id="drawer-subtitle">선택한 항목의 개발 메모입니다.</p>
+      </div>
+      <button class="btn small" type="button" data-action="close-drawer">닫기</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const routes = [
+      { id: "overview", group: "도입 판단", icon: "EX", title: "Executive", subtitle: "도입 가능 범위와 차단 갭을 요약합니다." },
+      { id: "matrix", group: "도입 판단", icon: "GM", title: "Gap Matrix", subtitle: "경쟁 대비 갭을 반영, 재분류, 제외로 관리합니다." },
+      { id: "coe", group: "전략/발굴", icon: "CO", title: "CoE / ROI", subtitle: "업무 발굴, 승인 파이프라인, ROI를 관리합니다." },
+      { id: "scheduler", group: "운영", icon: "SC", title: "스케줄 / 봇 풀", subtitle: "무인 실행, 이벤트 트리거, 용량을 설계합니다." },
+      { id: "idp", group: "업무 확장", icon: "ID", title: "문서 자동화 / IDP", subtitle: "문서 분류, OCR, 검증 큐를 제품화합니다." },
+      { id: "connectors", group: "업무 확장", icon: "CX", title: "커넥터 카탈로그", subtitle: "HTTP API와 업무 템플릿 생태계를 정의합니다." },
+      { id: "nocode", group: "제작 UX", icon: "UX", title: "비개발자 UX", subtitle: "기술 ID와 JSON을 선택형 업무 언어로 바꿉니다." },
+      { id: "ops", group: "운영", icon: "OP", title: "실시간 운영 / SLA", subtitle: "알림, SLA 위험, 워커 상태를 운영 화면으로 올립니다." },
+      { id: "governance", group: "보안/통제", icon: "GV", title: "거버넌스", subtitle: "SSO, 감사, RBAC, SecretRef 운영을 보강합니다." },
+      { id: "roadmap", group: "실행 계획", icon: "RM", title: "보강 Roadmap", subtitle: "P0부터 상용화 준비도까지 순서를 정리합니다." }
+    ];
+
+    const gapItems = [
+      { id: "schedule", name: "무인 스케줄/이벤트 트리거", decision: "apply", priority: "P0", domain: "운영", impact: "기업 RPA 1순위 유스케이스인 정기 실행과 이벤트 기동이 막힙니다.", action: "운영 메뉴에 cron, 파일 도착, 큐 적재, API webhook 트리거를 추가합니다.", done: "업무 담당자가 매일 9시, 파일 도착 시, 큐 적재 시 실행을 직접 설정합니다." },
+      { id: "id-json", name: "기술 ID/JSON 노출 제거", decision: "apply", priority: "P0", domain: "제작 UX", impact: "현업 사용자가 site_profile_id, params JSON, model key를 이해해야 하는 순간 이탈합니다.", action: "사이트, 로그인 세션, 보안 정책, 모델을 선택형 UI로 바꿉니다.", done: "JSON 직접 입력 없이 자동화 초안을 만들고 검증할 수 있습니다." },
+      { id: "recorder", name: "브라우저 레코더", decision: "apply", priority: "P0", domain: "제작 UX", impact: "클릭하며 봇을 만드는 진입점이 없어 시민 개발자 접근성이 낮습니다.", action: "녹화 시작, 셀렉터 후보, step test, 초안 저장 흐름을 만듭니다.", done: "클릭/입력/검증 기록이 시나리오 초안으로 저장됩니다." },
+      { id: "pbd", name: "PbD 승격 버튼", decision: "apply", priority: "P0", domain: "제작 UX", impact: "성공 실행을 결정형 봇으로 굳히는 차별점이 UI에서 단절됩니다.", action: "RunTrace에 '이 실행을 봇으로 굳히기' 버튼과 diff 화면을 추가합니다.", done: "성공 실행이 콘솔에서 새 자동화 초안으로 승격됩니다." },
+      { id: "http", name: "HTTP api_call 실행기", decision: "apply", priority: "P1", domain: "통합", impact: "브라우저 화면 우회만으로는 SAP, ERP, DB 연동 비용이 커집니다.", action: "file/shell과 분리해 HTTP 실행기와 1st-party connector runtime을 제공합니다.", done: "HTTP API 호출은 실행 가능하고 file/shell은 범위 밖으로 명확히 차단됩니다." },
+      { id: "coe-roi", name: "업무 발굴/ROI/CoE", decision: "apply", priority: "P1", domain: "전략", impact: "어떤 업무를 자동화할지, ROI가 얼마인지, 승인 단계가 어디인지 보이지 않습니다.", action: "Automation Hub형 아이디어 intake, scoring, 승인 파이프라인, ROI 카드뷰를 추가합니다.", done: "자동화 후보가 접수, 평가, 승인, 구현, 운영 단계로 흐릅니다." },
+      { id: "idp", name: "문서 자동화/IDP", decision: "apply", priority: "P1", domain: "업무 확장", impact: "송장, 계약서, 신분증, PDF 처리 업무가 별도 구축으로 밀립니다.", action: "문서 분류, OCR, 필드 추출, validation station 큐를 추가합니다.", done: "문서 필드 교정 결과가 다음 자동화 단계로 주입됩니다." },
+      { id: "sla", name: "SLA/알림/운영 가시성", decision: "apply", priority: "P1", domain: "운영", impact: "실패 급증, 큐 적체, 담당자 지연을 대시보드를 계속 봐야 알 수 있습니다.", action: "Teams/Slack/메일 알림, SLA 위험, 워커 헬스, 큐 깊이 화면을 추가합니다.", done: "SLA 위반 전 알림과 담당자 호출이 발생합니다." },
+      { id: "connectors", name: "커넥터/템플릿 생태계", decision: "apply", priority: "P2", domain: "통합", impact: "SAP, Excel, Outlook, Teams, DB, ERP 연결을 매번 새로 만들어야 합니다.", action: "1st-party 업무 템플릿과 HTTP connector catalog부터 시작합니다.", done: "사용자가 카탈로그에서 커넥터를 선택해 업무 초안을 생성합니다." },
+      { id: "realtime", name: "실시간 실행 추적", decision: "apply", priority: "P2", domain: "운영", impact: "5초 폴링만으로는 긴급 장애 인지가 늦고 운영감이 약합니다.", action: "SSE 또는 WebSocket 기반 live run feed를 검토합니다.", done: "실행 상태, 단계 로그, 경고가 실시간으로 갱신됩니다." },
+      { id: "alm", name: "ALM/CI/CD/환경 분리", decision: "apply", priority: "P2", domain: "상용화", impact: "전사 표준으로 가려면 dev/test/prod, diff, 배포 승인이 필요합니다.", action: "버전 diff, export/import, Git 연동, 테스트 관리, 환경 분리를 추가합니다.", done: "자동화가 개발, 검증, 운영 환경을 거쳐 배포됩니다." },
+      { id: "subflow", name: "재사용 서브시나리오", decision: "apply", priority: "P2", domain: "제작 UX", impact: "공통 로그인, 조회, 다운로드 로직을 매번 재작성해야 합니다.", action: "공유 subflow, input/output contract, 영향도 분석을 추가합니다.", done: "공통 로직 변경이 참조 자동화에 일괄 반영됩니다." },
+      { id: "hitl", name: "HITL 데이터 입력/에스컬레이션", decision: "apply", priority: "P1", domain: "운영", impact: "사람 확인이 OK/계속이면 문서 검증과 예외 보정 루프가 막힙니다.", action: "입력 폼, timeout sweeper, 재배정 정책을 추가합니다.", done: "사람이 입력한 판정 데이터가 후속 노드로 전달됩니다." },
+      { id: "sso-audit", name: "SSO/감사 증적", decision: "apply", priority: "P1", domain: "거버넌스", impact: "raw JWT와 DB 직접 쿼리는 보안 심사에서 바로 걸립니다.", action: "OIDC 로그인, audit explorer, export, 해시체인 검증 표시를 추가합니다.", done: "운영자가 IdP 로그인 후 감사 증적을 내보낼 수 있습니다." },
+      { id: "object-repo", name: "웹 요소 저장소", decision: "reframe", priority: "P2", domain: "제작 UX", impact: "같은 웹 요소를 여러 봇이 공유할 때 유지보수 비용이 선형 증가합니다.", action: "Object Repository를 사이트별 selector library로 재정의합니다.", done: "셀렉터 변경 영향과 재검증 결과가 표시됩니다." },
+      { id: "vision", name: "브라우저 시각 보조", decision: "reframe", priority: "P2", domain: "업무 확장", impact: "DOM이 불안정한 캔버스, 이미지형 UI, 보안 challenge에서 보조가 필요합니다.", action: "VDI 근거는 제외하고 browser visual verify로 제한합니다.", done: "DOM 실패 시 시각 검증 또는 사람 확인으로 안전 분기합니다." },
+      { id: "desktop", name: "데스크톱/Attended RPA", decision: "exclude", priority: "Out", domain: "범위", impact: "브라우저 전용 제품 범위와 실행 아키텍처가 다릅니다.", action: "이번 제품에서는 제외하고 별도 전략 문서로 분리합니다.", done: "비교표에서 데스크톱 기대를 제거하거나 별도 라인업으로 표시합니다." },
+      { id: "ha-license", name: "HA/DR, 라이선스, i18n", decision: "reframe", priority: "P3", domain: "상용화", impact: "상용화 평가에서는 장애복구, 과금, 글로벌 언어 전환도 질문받습니다.", action: "상용화 준비도 섹션으로 분리해 후속 단계에 배치합니다.", done: "DR runbook, seat model, i18n 기반이 정의됩니다." }
+    ];
+
+    const coeCards = [
+      { stage: "Intake", title: "세금계산서 대사 자동화", roi: "월 72시간 절감", score: 88, owner: "재무팀", status: "승인 대기" },
+      { stage: "Assess", title: "협력사 포털 납품확인 수집", roi: "월 46시간 절감", score: 76, owner: "구매팀", status: "기술 검토" },
+      { stage: "Build", title: "그룹웨어 결재함 정리", roi: "월 31시간 절감", score: 69, owner: "총무팀", status: "PoC 구현" },
+      { stage: "Operate", title: "매일 ERP 매출 리포트 업로드", roi: "월 94시간 절감", score: 91, owner: "영업관리", status: "운영 중" }
+    ];
+
+    const connectors = [
+      { name: "HTTP API", type: "Core", status: "P1 후보", use: "ERP, 사내 API, 승인 시스템 연동" },
+      { name: "Excel / CSV", type: "Office", status: "P2 후보", use: "정산, 대량 업로드, 결과 취합" },
+      { name: "Outlook / Exchange", type: "Trigger", status: "P2 후보", use: "메일 도착 시 자동 실행" },
+      { name: "Teams / Slack", type: "Notify", status: "P1 후보", use: "SLA 위험, 담당자 호출, 승인 요청" },
+      { name: "SAP Web / ERP Portal", type: "Template", status: "P2 후보", use: "브라우저 템플릿과 selector pack" },
+      { name: "Database", type: "Core", status: "P3 후보", use: "조회, 적재, reconciliation" }
+    ];
+
+    const schedulerRows = [
+      { job: "매일 09:00 협력사 포털 수집", trigger: "Cron", pool: "browser-pool-a", sla: "10:00", status: "초안" },
+      { job: "메일 첨부 인보이스 도착", trigger: "Event", pool: "idp-pool", sla: "30분", status: "설계 필요" },
+      { job: "작업 큐 100건 이상 적재", trigger: "Queue", pool: "browser-pool-b", sla: "2시간", status: "후보" },
+      { job: "월말 ERP 리포트 업로드", trigger: "Calendar", pool: "secure-pool", sla: "D+1", status: "후보" }
+    ];
+
+    const idpDocs = [
+      { doc: "세금계산서", fields: "공급가액, 세액, 사업자번호", queue: "검증 18건", risk: "중" },
+      { doc: "인보이스", fields: "PO 번호, 금액, 납기일", queue: "검증 9건", risk: "중" },
+      { doc: "계약서", fields: "계약번호, 시작일, 종료일", queue: "검증 5건", risk: "상" },
+      { doc: "신분증", fields: "이름, 생년월일, 마스킹", queue: "검증 0건", risk: "상" }
+    ];
+
+    const nav = document.getElementById("side-nav");
+    const toast = document.getElementById("toast");
+    const drawer = document.getElementById("drawer");
+    const drawerTitle = document.getElementById("drawer-title");
+    const drawerSubtitle = document.getElementById("drawer-subtitle");
+    const drawerBody = document.getElementById("drawer-body");
+    let selectedGap = gapItems[0].id;
+    let currentFilter = "all";
+
+    function groupRoutes() {
+      const groups = [];
+      for (const route of routes) {
+        let group = groups.find((item) => item.label === route.group);
+        if (!group) {
+          group = { label: route.group, items: [] };
+          groups.push(group);
+        }
+        group.items.push(route);
+      }
+      return groups;
+    }
+
+    function renderNav() {
+      nav.innerHTML = groupRoutes().map((group) => `
+        <div class="nav-group">
+          <div class="nav-group-label">${group.label}</div>
+          ${group.items.map((route) => `
+            <a class="nav-link" href="#${route.id}" data-nav="${route.id}">
+              <span class="nav-icon">${route.icon}</span>
+              <span>${route.title}</span>
+            </a>
+          `).join("")}
+        </div>
+      `).join("");
+    }
+
+    function badge(text, tone) {
+      return `<span class="badge ${tone}">${text}</span>`;
+    }
+
+    function priorityTone(priority) {
+      if (priority === "P0") return "red";
+      if (priority === "P1") return "amber";
+      if (priority === "P2") return "blue";
+      if (priority === "P3") return "purple";
+      return "muted";
+    }
+
+    function decisionLabel(decision) {
+      if (decision === "apply") return { text: "반영", tone: "blue" };
+      if (decision === "reframe") return { text: "재분류", tone: "amber" };
+      return { text: "제외", tone: "muted" };
+    }
+
+    function showToast(title, message) {
+      const node = document.createElement("div");
+      node.className = "toast-item";
+      node.innerHTML = `<div><strong>${title}</strong><span>${message}</span></div><button class="btn small" type="button">닫기</button>`;
+      node.querySelector("button").addEventListener("click", () => node.remove());
+      toast.appendChild(node);
+      setTimeout(() => node.remove(), 4200);
+    }
+
+    function openDrawer(title, subtitle, html) {
+      drawerTitle.textContent = title;
+      drawerSubtitle.textContent = subtitle;
+      drawerBody.innerHTML = html;
+      drawer.classList.add("open");
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove("open");
+    }
+
+    function go(route) {
+      location.hash = route;
+    }
+
+    function renderOverview() {
+      document.getElementById("view-overview").innerHTML = `
+        <section class="hero">
+          <div>
+            <h2>전사 표준 RPA 대체 전에는 보강이 필요합니다. 단, 보안형 브라우저 PoC에는 도입 검토 가치가 있습니다.</h2>
+            <p>V2는 기존 제작/실행 갭에 더해 업무 발굴, ROI, 스케줄, IDP, SLA, 커넥터, 비개발자 UX를 모두 포함했습니다. 데스크톱 앱 자동화는 이번 제품의 핵심 범위에서 제외하고 별도 전략으로 분리합니다.</p>
+            <div class="hero-actions">
+              <button class="btn primary" type="button" data-route="matrix">전체 갭 보기</button>
+              <button class="btn" type="button" data-route="coe">ROI 파이프라인 보기</button>
+              <button class="btn" type="button" data-action="decision">도입 판단 기록</button>
+            </div>
+          </div>
+          <div class="decision-board">
+            <div class="decision-row"><strong>도입 적합</strong><span>내부 PoC, 제한된 브라우저 업무 자동화, 보안/감사 추적이 중요한 업무</span></div>
+            <div class="decision-row"><strong>보강 선행</strong><span>전사 표준 플랫폼, 시민 개발자 확산, 문서 자동화, 스케줄 기반 운영</span></div>
+            <div class="decision-row"><strong>범위 제외</strong><span>ERP 클라이언트, 레거시 데스크톱 앱, 사용자 PC 보조봇</span></div>
+          </div>
+        </section>
+        <section class="metrics">
+          <div class="metric"><div class="label">P0 차단급</div><div class="value">4</div><div class="note">스케줄, 기술 ID/JSON, 레코더, PbD</div></div>
+          <div class="metric"><div class="label">P1 도입 보강</div><div class="value">6</div><div class="note">CoE/ROI, IDP, SLA, HTTP, HITL, SSO</div></div>
+          <div class="metric"><div class="label">기업 UX 축</div><div class="value">9</div><div class="note">운영자가 보는 제품 표면으로 재구성</div></div>
+          <div class="metric"><div class="label">제외 범위</div><div class="value">1</div><div class="note">데스크톱/Attended RPA는 별도 전략</div></div>
+        </section>
+        <section class="grid-3">
+          ${summaryCard("업무 발굴/ROI/CoE", "Automation Hub형 후보 접수, scoring, 승인 파이프라인이 없습니다.", "P1", "coe")}
+          ${summaryCard("스케줄/봇 풀 운영", "매일 9시, 파일 도착, 큐 적재 시 실행을 현업이 설정하지 못합니다.", "P0", "scheduler")}
+          ${summaryCard("비개발자 UX", "site_profile_id, params JSON, model key가 현업 화면에 노출됩니다.", "P0", "nocode")}
+          ${summaryCard("문서 자동화/IDP", "송장, 계약서, PDF OCR, 필드 검증 큐가 제품화되어 있지 않습니다.", "P1", "idp")}
+          ${summaryCard("커넥터 생태계", "SAP, Excel, Outlook, Teams, DB, HTTP API 카탈로그가 약합니다.", "P2", "connectors")}
+          ${summaryCard("실시간 운영감", "SLA 위험, 실패 급증, 워커 헬스, 알림이 운영 표면에 약합니다.", "P1", "ops")}
+        </section>
+      `;
+    }
+
+    function summaryCard(title, text, p, route) {
+      return `
+        <article class="card">
+          <div class="card-meta">${badge("반영", "blue")}${badge(p, priorityTone(p))}</div>
+          <h3>${title}</h3>
+          <p>${text}</p>
+          <div><button class="btn small" type="button" data-route="${route}">자세히 보기</button></div>
+        </article>
+      `;
+    }
+
+    function renderMatrix() {
+      document.getElementById("view-matrix").innerHTML = `
+        <section class="split">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>갭 반영 매트릭스 V2</h2>
+                <p>업무 발굴, ROI, 스케줄, IDP, SLA, 커넥터, 비개발자 UX까지 포함합니다.</p>
+              </div>
+              <div class="filters">
+                <div class="segmented" role="group" aria-label="판정 필터">
+                  <button type="button" class="active" data-filter="all">전체</button>
+                  <button type="button" data-filter="apply">반영</button>
+                  <button type="button" data-filter="reframe">재분류</button>
+                  <button type="button" data-filter="exclude">제외</button>
+                </div>
+                <input class="search" id="gap-search" type="search" placeholder="갭 검색" aria-label="갭 검색" />
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>항목</th><th>판정</th><th>우선순위</th><th>영역</th><th>반영 방식</th><th>동작</th></tr>
+                </thead>
+                <tbody id="gap-body"></tbody>
+              </table>
+            </div>
+          </div>
+          <aside class="panel sticky">
+            <div class="panel-head"><h2 id="gap-detail-title">상세</h2><span id="gap-detail-badge" class="badge blue">반영</span></div>
+            <div class="panel-body detail-stack">
+              <dl class="field-grid">
+                <dt>우선순위</dt><dd id="gap-detail-priority">P0</dd>
+                <dt>영역</dt><dd id="gap-detail-domain">운영</dd>
+                <dt>완료 기준</dt><dd id="gap-detail-done">-</dd>
+              </dl>
+              <div class="detail-card"><h3>도입자 관점 리스크</h3><p id="gap-detail-impact"></p></div>
+              <div class="detail-card"><h3>개발 메모</h3><p id="gap-detail-action"></p></div>
+              <button class="btn primary" type="button" data-action="create-ticket">개발 티켓 만들기</button>
+            </div>
+          </aside>
+        </section>
+      `;
+      bindMatrix();
+    }
+
+    function bindMatrix() {
+      const body = document.getElementById("gap-body");
+      const search = document.getElementById("gap-search");
+      const buttons = Array.from(document.querySelectorAll("[data-filter]"));
+      function rows() {
+        const keyword = (search?.value || "").trim().toLowerCase();
+        return gapItems.filter((item) => {
+          const filterMatch = currentFilter === "all" || item.decision === currentFilter;
+          const text = [item.name, item.domain, item.impact, item.action].join(" ").toLowerCase();
+          return filterMatch && text.includes(keyword);
+        });
+      }
+      function renderRows() {
+        const out = rows();
+        body.innerHTML = out.map((item) => {
+          const d = decisionLabel(item.decision);
+          return `
+            <tr class="${item.id === selectedGap ? "selected" : ""}" data-gap="${item.id}">
+              <td><strong>${item.name}</strong><span class="desc">${item.impact}</span></td>
+              <td>${badge(d.text, d.tone)}</td>
+              <td>${badge(item.priority, priorityTone(item.priority))}</td>
+              <td>${item.domain}</td>
+              <td><span class="desc">${item.action}</span></td>
+              <td><button class="btn small" type="button" data-open-gap="${item.id}">상세</button></td>
+            </tr>
+          `;
+        }).join("");
+        body.querySelectorAll("tr[data-gap]").forEach((row) => {
+          row.addEventListener("click", (event) => {
+            if (event.target.closest("button")) return;
+            selectGap(row.dataset.gap);
+          });
+        });
+        body.querySelectorAll("[data-open-gap]").forEach((button) => {
+          button.addEventListener("click", () => selectGap(button.dataset.openGap));
+        });
+      }
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          currentFilter = button.dataset.filter;
+          buttons.forEach((b) => b.classList.toggle("active", b === button));
+          const first = rows()[0];
+          if (first && !rows().some((item) => item.id === selectedGap)) selectedGap = first.id;
+          renderRows();
+          selectGap(selectedGap, false);
+        });
+      });
+      if (search) search.addEventListener("input", () => {
+        const first = rows()[0];
+        if (first && !rows().some((item) => item.id === selectedGap)) selectedGap = first.id;
+        renderRows();
+        selectGap(selectedGap, false);
+      });
+      function selectGap(id, rerender = true) {
+        const item = gapItems.find((g) => g.id === id) || gapItems[0];
+        selectedGap = item.id;
+        const d = decisionLabel(item.decision);
+        document.getElementById("gap-detail-title").textContent = item.name;
+        const detailBadge = document.getElementById("gap-detail-badge");
+        detailBadge.textContent = d.text;
+        detailBadge.className = `badge ${d.tone}`;
+        document.getElementById("gap-detail-priority").innerHTML = badge(item.priority, priorityTone(item.priority));
+        document.getElementById("gap-detail-domain").textContent = item.domain;
+        document.getElementById("gap-detail-done").textContent = item.done;
+        document.getElementById("gap-detail-impact").textContent = item.impact;
+        document.getElementById("gap-detail-action").textContent = item.action;
+        if (rerender) renderRows();
+      }
+      window.selectGap = selectGap;
+      renderRows();
+      selectGap(selectedGap, false);
+    }
+
+    function renderCoe() {
+      document.getElementById("view-coe").innerHTML = `
+        <section class="metrics">
+          <div class="metric"><div class="label">자동화 후보</div><div class="value">42</div><div class="note">접수부터 운영까지 파이프라인 관리 필요</div></div>
+          <div class="metric"><div class="label">예상 절감</div><div class="value">310h</div><div class="note">월 기준 추정, 검증 전 수치</div></div>
+          <div class="metric"><div class="label">승인 대기</div><div class="value">11</div><div class="note">CoE 검토 및 보안 승인 필요</div></div>
+          <div class="metric"><div class="label">ROI 미산정</div><div class="value">18</div><div class="note">업무량, 예외율, 처리 시간 입력 필요</div></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div><h2>자동화 후보 파이프라인</h2><p>UiPath Automation Hub류 제품 표면을 브라우저 RPA 도입 검토에 맞춘 목업입니다.</p></div>
+            <button class="btn primary" type="button" data-action="new-idea">후보 업무 접수</button>
+          </div>
+          <div class="panel-body kanban">
+            ${kanbanColumn("Intake", coeCards.filter((c) => c.stage === "Intake"))}
+            ${kanbanColumn("Assess", coeCards.filter((c) => c.stage === "Assess"))}
+            ${kanbanColumn("Build", coeCards.filter((c) => c.stage === "Build"))}
+            ${kanbanColumn("Operate", coeCards.filter((c) => c.stage === "Operate"))}
+          </div>
+        </section>
+        <section class="grid-2">
+          <div class="panel"><div class="panel-head"><h2>ROI 산정 기준</h2><button class="btn small" type="button" data-action="roi-calc">계산식 보기</button></div><div class="panel-body bar-list">${bar("반복 빈도", 86, "green")}${bar("평균 처리 시간", 74, "blue")}${bar("예외율", 38, "amber")}${bar("개발 난이도", 52, "blue")}</div></div>
+          <div class="panel"><div class="panel-head"><h2>승인 게이트</h2><button class="btn small" type="button" data-action="approve-pipeline">승인 라우팅 설정</button></div><div class="panel-body timeline">${timeline("1", "업무 오너 승인", "자동화 대상 업무와 기대 효과 확인", "진행")}${timeline("2", "보안 검토", "사이트 위험도, SecretRef, 감사 로그 범위 확인", "대기")}${timeline("3", "CoE 우선순위", "ROI와 난이도로 분기", "대기")}</div></div>
+        </section>
+      `;
+    }
+
+    function kanbanColumn(title, cards) {
+      return `<div class="kanban-col"><div class="kanban-head"><strong>${title}</strong>${badge(String(cards.length), "muted")}</div><div class="kanban-body">${cards.map((c) => `<article class="idea-card"><strong>${c.title}</strong><p>${c.owner} · ${c.roi}</p><div class="card-meta">${badge(c.status, "blue")}${badge(`Score ${c.score}`, c.score >= 85 ? "green" : "amber")}</div><button class="btn small" type="button" data-action="open-idea">상세 보기</button></article>`).join("")}</div></div>`;
+    }
+
+    function renderScheduler() {
+      document.getElementById("view-scheduler").innerHTML = `
+        <section class="metrics">
+          <div class="metric"><div class="label">스케줄 후보</div><div class="value">12</div><div class="note">cron, calendar, queue, webhook</div></div>
+          <div class="metric"><div class="label">봇 풀 용량</div><div class="value">68%</div><div class="note">오전 9-10시 피크</div></div>
+          <div class="metric"><div class="label">SLA 위험</div><div class="value">4</div><div class="note">마감 30분 이내 예상</div></div>
+          <div class="metric"><div class="label">수동 실행 의존</div><div class="value">높음</div><div class="note">P0 보강 대상</div></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div><h2>스케줄/이벤트 트리거 설계</h2><p>현업 담당자가 직접 무인 실행 조건을 설정하는 제품 표면입니다.</p></div><button class="btn primary" type="button" data-action="new-schedule">스케줄 추가</button></div>
+          <div class="table-wrap"><table><thead><tr><th>업무</th><th>트리거</th><th>봇 풀</th><th>SLA</th><th>상태</th><th>동작</th></tr></thead><tbody>${schedulerRows.map((r) => `<tr><td><strong>${r.job}</strong></td><td>${r.trigger}</td><td>${r.pool}</td><td>${r.sla}</td><td>${badge(r.status, r.status === "초안" ? "blue" : "amber")}</td><td><button class="btn small" type="button" data-action="simulate-run">실행 시뮬레이션</button></td></tr>`).join("")}</tbody></table></div>
+        </section>
+        <section class="grid-2">
+          <div class="panel"><div class="panel-head"><h2>봇 풀 상태</h2><button class="btn small" type="button" data-action="scale-pool">용량 조정</button></div><div class="panel-body bar-list">${bar("browser-pool-a", 82, "amber")}${bar("browser-pool-b", 56, "blue")}${bar("idp-pool", 43, "green")}${bar("secure-pool", 71, "blue")}</div></div>
+          <div class="panel"><div class="panel-head"><h2>트리거 타입</h2><button class="btn small" type="button" data-action="trigger-test">트리거 테스트</button></div><div class="panel-body grid-2">${miniCard("Cron", "매일/매주/월말 정기 실행")}${miniCard("Webhook", "외부 시스템 이벤트 수신")}${miniCard("Queue", "작업 큐 유입/임계치 기반")}${miniCard("File/Mail", "파일 또는 메일 도착 기반")}</div></div>
+        </section>
+      `;
+    }
+
+    function renderIdp() {
+      document.getElementById("view-idp").innerHTML = `
+        <section class="hero">
+          <div><h2>문서 자동화는 브라우저 RPA 밖이 아니라 기업 업무 확장 축입니다.</h2><p>송장, 계약서, PDF, 신분증 처리에는 문서 분류, OCR, 필드 추출, 사람 검증 큐가 필요합니다. 현재 웹 페이지 추출만으로는 도입 평가표의 IDP 항목을 채우기 어렵습니다.</p><div class="hero-actions"><button class="btn primary" type="button" data-action="upload-doc">문서 샘플 업로드</button><button class="btn" type="button" data-action="open-validation">검증 큐 열기</button></div></div>
+          <div class="decision-board"><div class="decision-row"><strong>입력</strong><span>PDF, 이미지, 스캔본, 메일 첨부</span></div><div class="decision-row"><strong>처리</strong><span>문서 분류, OCR, 필드 추출, confidence scoring</span></div><div class="decision-row"><strong>검증</strong><span>HITL validation station에서 필드 교정 후 후속 봇에 주입</span></div></div>
+        </section>
+        <section class="panel"><div class="panel-head"><h2>문서 타입별 검증 큐</h2><button class="btn small" type="button" data-action="idp-model">모델 설정</button></div><div class="table-wrap"><table><thead><tr><th>문서</th><th>추출 필드</th><th>큐 상태</th><th>리스크</th><th>동작</th></tr></thead><tbody>${idpDocs.map((d) => `<tr><td><strong>${d.doc}</strong></td><td>${d.fields}</td><td>${d.queue}</td><td>${badge(d.risk, d.risk === "상" ? "red" : "amber")}</td><td><button class="btn small" type="button" data-action="validate-doc">검증하기</button></td></tr>`).join("")}</tbody></table></div></section>
+      `;
+    }
+
+    function renderConnectors() {
+      document.getElementById("view-connectors").innerHTML = `
+        <section class="panel">
+          <div class="panel-head"><div><h2>커넥터/템플릿 카탈로그</h2><p>Power Automate류 대규모 마켓플레이스보다 먼저, 1st-party 핵심 업무 연결부터 설계합니다.</p></div><button class="btn primary" type="button" data-action="request-connector">커넥터 요청</button></div>
+          <div class="panel-body grid-3">${connectors.map((c) => `<article class="card"><div class="card-meta">${badge(c.type, "blue")}${badge(c.status, c.status.includes("P1") ? "amber" : "muted")}</div><h3>${c.name}</h3><p>${c.use}</p><button class="btn small" type="button" data-action="connector-detail">상세 보기</button></article>`).join("")}</div>
+        </section>
+        <section class="grid-2">
+          <div class="panel"><div class="panel-head"><h2>브라우저 템플릿</h2><button class="btn small" type="button" data-action="template-copy">템플릿 복사</button></div><div class="panel-body grid-2">${miniCard("ERP 웹 조회", "로그인, 검색, 테이블 추출")}${miniCard("그룹웨어 결재", "결재함, 승인, 반려 사유")}${miniCard("협력사 포털", "주문 조회, 납품 확인")}${miniCard("정산 업로드", "파일 업로드, 결과 검증")}</div></div>
+          <div class="panel"><div class="panel-head"><h2>연동 전략</h2></div><div class="panel-body timeline">${timeline("1", "HTTP API 실행기", "브라우저 외 backend 연동의 최소 단위", "P1")}${timeline("2", "1st-party 커넥터", "Office, Teams, ERP Web부터", "P2")}${timeline("3", "파트너 마켓플레이스", "검증된 connector packaging", "P3")}</div></div>
+        </section>
+      `;
+    }
+
+    function renderNocode() {
+      document.getElementById("view-nocode").innerHTML = `
+        <section class="hero">
+          <div><h2>기술 ID와 JSON을 숨기고, 현업 언어의 선택형 UI로 바꿉니다.</h2><p>기업 담당자는 site_profile_id가 아니라 사이트 이름, browser_identity_id가 아니라 로그인 세션, gateway_policies.model이 아니라 기본 AI 모델을 기대합니다.</p><div class="hero-actions"><button class="btn primary" type="button" data-action="preview-wizard">마법사 미리보기</button><button class="btn" type="button" data-route="matrix">관련 갭 보기</button></div></div>
+          <div class="decision-board"><div class="decision-row"><strong>Before</strong><span class="mono">site_profile_id, browser_identity_id, params JSON, network_policy_id</span></div><div class="decision-row"><strong>After</strong><span>사이트 선택, 로그인 세션 선택, 보안 정책 선택, 기본 AI 모델 사용</span></div><div class="decision-row"><strong>검증</strong><span>실행 전 selector probe와 step test로 실패를 미리 노출</span></div></div>
+        </section>
+        <section class="grid-2">
+          <div class="panel"><div class="panel-head"><h2>현업용 자동화 만들기</h2><button class="btn small" type="button" data-action="save-draft">초안 저장</button></div><div class="panel-body form-grid"><label class="field"><span>사이트</span><select><option>하이웍스 결재</option><option>협력사 포털</option><option>ERP 웹 리포트</option></select></label><label class="field"><span>로그인 세션</span><select><option>재무팀 공용 세션</option><option>구매팀 포털 세션</option></select></label><label class="field"><span>보안 정책</span><select><option>기본 정책 사용</option><option>Red site 승인 필요</option></select></label><label class="field"><span>AI 모델</span><select><option>기본 AI 모델 사용</option><option>고정 모델 사용</option></select></label><label class="field field-wide"><span>업무 설명</span><textarea>매일 오전 9시에 협력사 포털에서 납품 확인 목록을 수집하고, 실패하면 담당자에게 알림을 보냅니다.</textarea></label></div></div>
+          <div class="panel"><div class="panel-head"><h2>숨겨야 할 기술 값</h2></div><div class="panel-body table-wrap"><table><thead><tr><th>기술 값</th><th>대체 UI</th><th>상태</th></tr></thead><tbody><tr><td class="mono">site_profile_id</td><td>사이트 선택</td><td>${badge("필수", "red")}</td></tr><tr><td class="mono">params JSON</td><td>업무별 폼</td><td>${badge("필수", "red")}</td></tr><tr><td class="mono">gateway_policies.model</td><td>모델 정책 선택</td><td>${badge("권장", "amber")}</td></tr><tr><td class="mono">network_policy_id</td><td>보안 정책 선택</td><td>${badge("권장", "amber")}</td></tr></tbody></table></div></div>
+        </section>
+      `;
+    }
+
+    function renderOps() {
+      document.getElementById("view-ops").innerHTML = `
+        <section class="metrics">
+          <div class="metric"><div class="label">SLA 위험</div><div class="value">4</div><div class="note">30분 이내 위반 예상</div></div>
+          <div class="metric"><div class="label">큐 깊이</div><div class="value">1,248</div><div class="note">workitem backlog</div></div>
+          <div class="metric"><div class="label">워커 헬스</div><div class="value">92%</div><div class="note">browser pool healthy</div></div>
+          <div class="metric"><div class="label">알림 채널</div><div class="value">0</div><div class="note">Teams/Slack/메일 연결 필요</div></div>
+        </section>
+        <section class="grid-2">
+          <div class="panel"><div class="panel-head"><h2>운영 신호</h2><button class="btn primary small" type="button" data-action="send-alert">알림 테스트</button></div><div class="panel-body bar-list">${bar("실패 급증", 64, "amber")}${bar("큐 적체", 78, "red")}${bar("lease 점유", 55, "blue")}${bar("human task 지연", 42, "amber")}</div></div>
+          <div class="panel"><div class="panel-head"><h2>알림 라우팅</h2><button class="btn small" type="button" data-action="route-alert">라우팅 설정</button></div><div class="panel-body timeline">${timeline("1", "SLA 위험", "Teams 채널 + 업무 오너 DM", "설계")}${timeline("2", "시스템 실패", "운영자 메일 + Slack on-call", "설계")}${timeline("3", "HITL 지연", "담당자 재호출 + 매니저 escalation", "설계")}</div></div>
+        </section>
+        <section class="notice"><strong>운영감 보강:</strong> 현재 실행 추적 중심 화면을 SLA 위험, 큐 깊이, 워커 풀, 알림 정책 중심의 Control Room 화면으로 확장해야 합니다.</section>
+      `;
+    }
+
+    function renderGovernance() {
+      document.getElementById("view-governance").innerHTML = `
+        <section class="grid-3">
+          ${govCard("SSO/IdP 로그인", "raw JWT 붙여넣기를 OIDC 리다이렉트와 역할 매핑으로 대체합니다.", "P1")}
+          ${govCard("감사 증적 Explorer", "write-only audit을 조회, 필터, export 가능한 화면으로 올립니다.", "P1")}
+          ${govCard("SecretRef 운영", "세션 만료, 재등록, 회전 이력, 외부 PAM 연동 상태를 보여줍니다.", "P2")}
+          ${govCard("RBAC Scope", "폴더, 부서, 환경별 권한과 SoD 정책을 추가합니다.", "P3")}
+          ${govCard("Compliance Pack", "SOC2/ISO 준비도, 증적 묶음, 심사 export를 제공합니다.", "P3")}
+          ${govCard("HA/DR", "PostgreSQL SPOF, replica, failover, DR runbook을 상용화 항목으로 관리합니다.", "P3")}
+        </section>
+        <section class="panel"><div class="panel-head"><h2>감사 증적 검색</h2><button class="btn primary small" type="button" data-action="audit-export">감사 리포트 Export</button></div><div class="panel-body form-grid"><label class="field"><span>기간</span><select><option>최근 7일</option><option>최근 30일</option></select></label><label class="field"><span>이벤트</span><select><option>실행/승인/권한 변경</option><option>SecretRef 접근</option></select></label><label class="field"><span>테넌트</span><select><option>현재 테넌트</option></select></label><label class="field"><span>무결성</span><select><option>해시체인 검증 통과</option></select></label></div></section>
+      `;
+    }
+
+    function govCard(title, text, p) {
+      return `<article class="card"><div class="card-meta">${badge("거버넌스", "blue")}${badge(p, priorityTone(p))}</div><h3>${title}</h3><p>${text}</p><button class="btn small" type="button" data-action="open-governance">세부 정책 보기</button></article>`;
+    }
+
+    function renderRoadmap() {
+      document.getElementById("view-roadmap").innerHTML = `
+        <section class="panel">
+          <div class="panel-head"><div><h2>보강 우선순위 V2</h2><p>기업 도입 평가에서 바로 감점되는 항목부터 정리했습니다.</p></div><button class="btn primary" type="button" data-action="roadmap-export">Roadmap Export</button></div>
+          <div class="panel-body timeline">
+            ${timeline("1", "스케줄/이벤트 트리거", "무인 실행성과 봇 풀 운영의 시작점입니다.", "P0")}
+            ${timeline("2", "기술 ID/JSON 제거 + 브라우저 레코더", "현업 시민 개발자가 쓸 수 있는 제작 UX를 만듭니다.", "P0")}
+            ${timeline("3", "PbD 승격 버튼 + HTTP api_call 실행기", "차별점을 제품화하고 headless 연동을 엽니다.", "P0/P1")}
+            ${timeline("4", "CoE/ROI 파이프라인", "어떤 업무를 자동화할지와 투자 효과를 보여줍니다.", "P1")}
+            ${timeline("5", "HITL/IDP/SLA 알림", "문서 검증과 운영 예외를 닫힌 루프로 만듭니다.", "P1")}
+            ${timeline("6", "커넥터/ALM/거버넌스 고도화", "전사 표준 플랫폼으로 확장하는 기반입니다.", "P2/P3")}
+          </div>
+        </section>
+        <section class="grid-2">
+          <div class="panel"><div class="panel-head"><h2>도입 판단</h2></div><div class="panel-body decision-board"><div class="decision-row"><strong>지금 가능</strong><span>제한된 브라우저 PoC, 감사/승인 추적이 중요한 업무</span></div><div class="decision-row"><strong>보강 후</strong><span>현업 확산, 문서 자동화, 무인 운영, 커넥터 기반 확장</span></div><div class="decision-row"><strong>별도 전략</strong><span>데스크톱/Attended, ERP 클라이언트, 레거시 GUI</span></div></div></div>
+          <div class="panel"><div class="panel-head"><h2>상용화 준비도</h2></div><div class="panel-body bar-list">${bar("제품 UX", 48, "amber")}${bar("운영 자동화", 36, "red")}${bar("보안 코어", 82, "green")}${bar("생태계/ALM", 28, "red")}</div></div>
+        </section>
+      `;
+    }
+
+    function renderAll() {
+      renderOverview();
+      renderMatrix();
+      renderCoe();
+      renderScheduler();
+      renderIdp();
+      renderConnectors();
+      renderNocode();
+      renderOps();
+      renderGovernance();
+      renderRoadmap();
+    }
+
+    function miniCard(title, text) {
+      return `<article class="card"><h3>${title}</h3><p>${text}</p><button class="btn small" type="button" data-action="mini-detail">상세</button></article>`;
+    }
+
+    function bar(label, pct, tone) {
+      return `<div class="bar-row"><span>${label}</span><div class="bar-track"><div class="bar-fill ${tone}" style="width:${pct}%"></div></div><strong>${pct}%</strong></div>`;
+    }
+
+    function timeline(num, title, text, state) {
+      const tone = state === "P0" || state === "P0/P1" ? "red" : state === "P1" || state === "설계" || state === "진행" ? "amber" : state === "P2/P3" ? "purple" : "blue";
+      return `<div class="timeline-item"><span class="index-dot">${num}</span><div><strong>${title}</strong><p>${text}</p></div>${badge(state, tone)}</div>`;
+    }
+
+    function activateRoute(routeId) {
+      const route = routes.find((r) => r.id === routeId) || routes[0];
+      document.querySelectorAll(".screen").forEach((screen) => screen.classList.remove("active"));
+      document.getElementById(`view-${route.id}`).classList.add("active");
+      document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === route.id));
+      document.getElementById("page-title").textContent = route.title;
+      document.getElementById("page-subtitle").textContent = route.subtitle;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function currentRoute() {
+      return (location.hash || "#overview").replace("#", "") || "overview";
+    }
+
+    function bindGlobalActions() {
+      document.body.addEventListener("click", (event) => {
+        const routeButton = event.target.closest("[data-route]");
+        if (routeButton) {
+          go(routeButton.dataset.route);
+          return;
+        }
+        const actionButton = event.target.closest("[data-action]");
+        if (!actionButton) return;
+        const action = actionButton.dataset.action;
+        if (action === "close-drawer") return closeDrawer();
+        if (action === "create-ticket") return openGapTicket();
+        if (action === "decision") return openDrawer("도입 판단 기록", "검토 회의에서 바로 남기는 의사결정 메모입니다.", `<div class="form-grid"><label class="field"><span>판단</span><select><option>제한 PoC 승인</option><option>보강 후 재검토</option><option>도입 보류</option></select></label><label class="field"><span>오너</span><input value="RPA CoE" /></label><label class="field field-wide"><span>메모</span><textarea>브라우저 PoC는 진행하되, 전사 표준 전에는 스케줄/CoE/IDP/SLA 보강을 선행한다.</textarea></label></div><button class="btn primary" type="button" data-action="save-decision">기록 저장</button>`);
+        const messages = {
+          export: ["검토본 내보내기", "V2 갭 검토 요약을 생성한 것처럼 표시했습니다."],
+          "new-idea": ["후보 업무 접수", "CoE 파이프라인에 새 자동화 후보 입력 화면을 열었습니다."],
+          "roi-calc": ["ROI 계산식", "처리 시간, 빈도, 예외율, 개발 난이도를 기준으로 산정합니다."],
+          "approve-pipeline": ["승인 라우팅", "업무 오너, 보안, CoE 승인 단계를 설정했습니다."],
+          "open-idea": ["후보 상세", "자동화 후보 상세 패널을 열었습니다."],
+          "new-schedule": ["스케줄 추가", "무인 실행 트리거 생성 플로우가 시작되었습니다."],
+          "simulate-run": ["실행 시뮬레이션", "다음 실행 시간과 봇 풀 점유를 계산했습니다."],
+          "scale-pool": ["봇 풀 용량 조정", "피크 시간대 용량 증설 요청을 생성했습니다."],
+          "trigger-test": ["트리거 테스트", "이벤트 수신과 큐 적재 조건을 검증했습니다."],
+          "upload-doc": ["문서 샘플 업로드", "IDP 샘플 문서를 업로드한 것처럼 처리했습니다."],
+          "open-validation": ["검증 큐", "문서 필드 교정 큐 화면을 열었습니다."],
+          "idp-model": ["IDP 모델 설정", "문서 분류와 필드 추출 모델 설정을 열었습니다."],
+          "validate-doc": ["문서 검증", "선택한 문서를 HITL 검증 화면으로 보냈습니다."],
+          "request-connector": ["커넥터 요청", "1st-party 커넥터 후보 요청을 등록했습니다."],
+          "connector-detail": ["커넥터 상세", "인증 방식, 입력값, 실패 정책을 확인합니다."],
+          "template-copy": ["템플릿 복사", "브라우저 업무 템플릿을 새 자동화 초안으로 복사했습니다."],
+          "preview-wizard": ["마법사 미리보기", "기술 ID 없는 자동화 만들기 플로우를 열었습니다."],
+          "save-draft": ["초안 저장", "현업용 입력값으로 자동화 초안을 저장했습니다."],
+          "send-alert": ["알림 테스트", "Teams/Slack/메일 알림을 보낸 것처럼 표시했습니다."],
+          "route-alert": ["알림 라우팅", "SLA 위험 알림 라우팅 정책을 설정했습니다."],
+          "audit-export": ["감사 리포트", "감사 증적 export 작업을 시작했습니다."],
+          "open-governance": ["정책 상세", "거버넌스 정책 상세 패널을 열었습니다."],
+          "roadmap-export": ["Roadmap Export", "보강 순서와 책임자를 포함한 문서를 생성했습니다."],
+          "save-decision": ["도입 판단 저장", "검토 회의 메모를 저장했습니다."],
+          "mini-detail": ["상세 보기", "선택한 항목의 세부 요구사항을 확인합니다."]
+        };
+        const msg = messages[action] || ["동작 완료", "버튼이 실제 제품처럼 반응하도록 연결되어 있습니다."];
+        showToast(msg[0], msg[1]);
+      });
+    }
+
+    function openGapTicket() {
+      const item = gapItems.find((g) => g.id === selectedGap) || gapItems[0];
+      openDrawer("개발 티켓 만들기", item.name, `
+        <dl class="field-grid"><dt>우선순위</dt><dd>${badge(item.priority, priorityTone(item.priority))}</dd><dt>영역</dt><dd>${item.domain}</dd><dt>완료 기준</dt><dd>${item.done}</dd></dl>
+        <div class="detail-card"><h3>요구사항</h3><p>${item.action}</p></div>
+        <div class="detail-card"><h3>리스크</h3><p>${item.impact}</p></div>
+        <button class="btn primary" type="button" data-action="save-decision">티켓 저장</button>
+      `);
+    }
+
+    function boot() {
+      renderNav();
+      renderAll();
+      bindGlobalActions();
+      window.addEventListener("hashchange", () => activateRoute(currentRoute()));
+      activateRoute(currentRoute());
+    }
+
+    boot();
+  </script>
+</body>
+</html>

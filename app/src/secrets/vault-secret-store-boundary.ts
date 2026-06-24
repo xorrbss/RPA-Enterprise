@@ -44,13 +44,14 @@ type ResolvePurpose = SecretAccessRequest["purpose"];
 
 /**
  * 최소권한 resolve 매트릭스 (release-decisions D8-A12, authoritative).
- * `api`→resume_token_hmac(검증)·browser_session(세션 캡처 시 봉투암호화); signed_command 는 `SecretAccessRequest.purpose`
+ * `api`→resume_token_hmac(검증)·browser_session(세션 캡처 시 봉투암호화)·connector(public webhook HMAC 검증);
+ * signed_command 는 `SecretAccessRequest.purpose`
  * enum 밖이라 여기 미포함(해당 namespace 는 SignedCommandRegistry 경계 책임 — 본 boundary 의 purpose 집합과 분리).
  * browser_session(세션 KEK)은 api(capture/complete 암호화)·runtime-worker/browser-worker(세션 복원 복호화)에 한정 —
  * executor(자격증명 fill)와 분리해 세션키 유출이 라이브 자격증명 트래픽과 격리되게 한다(browser-session-store.ts).
  */
 const RESOLVE_MATRIX: Readonly<Record<RuntimeIdentity, readonly ResolvePurpose[]>> = {
-  api: ["resume_token_hmac", "browser_session"],
+  api: ["resume_token_hmac", "browser_session", "connector"],
   "runtime-worker": ["resume_token_hmac", "executor", "browser_session"],
   "browser-worker": ["executor", "browser_session"],
   "llm-gateway": ["gateway_policy"],

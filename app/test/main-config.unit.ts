@@ -56,7 +56,9 @@ const CLEAR = [
   "CODEX_PRICE_PER_1K_INPUT_USD", "CODEX_PRICE_PER_1K_OUTPUT_USD",
   "API_ARTIFACT_DIR", "GATEWAY_ARTIFACT_DIR", "GATEWAY_ARTIFACT_RETENTION_DAYS", "PROMPT_TEMPLATE_VERSION",
   "SCENARIO_GENERATION_LLM_V1_ENABLED", "SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION",
-  "JWKS_URL", "JWT_ISSUER", "JWT_AUDIENCE",
+  "JWKS_URL", "JWT_ISSUER", "JWT_AUDIENCE", "JWT_SUBJECT_CLAIM", "JWT_TENANT_CLAIM", "JWT_ROLES_CLAIM",
+  "JWT_DISPLAY_NAME_CLAIM", "JWT_EMAIL_CLAIM", "JWT_ROLE_MAP",
+  "SELECTOR_PROBE_CHROME_EXECUTABLE_PATH", "SELECTOR_PROBE_HEADLESS", "SELECTOR_PROBE_TIMEOUT_MS", "CHROME_EXECUTABLE_PATH",
   "VISUAL_EVIDENCE_VIDEO_ENABLED", "VISUAL_EVIDENCE_VIDEO_WORKER_CONFIRMED", "VISUAL_EVIDENCE_FFMPEG_PATH",
   "VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS", "VISUAL_EVIDENCE_VIDEO_FPS",
   "VAULT_ARTIFACT_LIFECYCLE_ROLE_ID", "VAULT_ARTIFACT_LIFECYCLE_SECRET_ID",
@@ -140,10 +142,20 @@ function main(): void {
     check("api cors undefined when unset", a.corsOrigins === undefined);
     check("api jwt mode hs256 (no JWKS_URL)", a.jwt.mode === "hs256");
     check("api jwt hs256 secret carried", a.jwt.mode === "hs256" && a.jwt.secret.length === 40);
+    check("api jwt claim mapping defaults", a.jwt.claimMapping.tenantClaim === "tenant_id" && a.jwt.claimMapping.rolesClaim === "roles");
+    check("api jwt role map default empty", Object.keys(a.jwt.roleMap).length === 0);
     check("api signed command registry explicit deny_all", a.signedCommandRegistry.mode === "deny_all");
     check("api artifactDir undefined when unset", a.artifactDir === undefined);
     check("api video recording capability default false", a.videoRecordingEnabled === false);
+    check("api selector probe disabled without chrome path", a.selectorProbe === undefined);
   });
+  withEnv({ ...FULL, SELECTOR_PROBE_CHROME_EXECUTABLE_PATH: "C:\\tools\\chrome.exe", SELECTOR_PROBE_HEADLESS: "false", SELECTOR_PROBE_TIMEOUT_MS: "7000" }, () => {
+    const a = loadApiConfig(API_COMMON);
+    check("api selector probe enabled with explicit chrome path", a.selectorProbe?.chromeExecutablePath === "C:\\tools\\chrome.exe");
+    check("api selector probe headless/timeout parsed", a.selectorProbe?.headless === false && a.selectorProbe.timeoutMs === 7000);
+  });
+  withEnv({ ...FULL, CHROME_EXECUTABLE_PATH: "C:\\tools\\chrome-worker.exe" }, () =>
+    check("api selector probe falls back to CHROME_EXECUTABLE_PATH", loadApiConfig(API_COMMON).selectorProbe?.chromeExecutablePath === "C:\\tools\\chrome-worker.exe"));
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "true" }, () =>
     expectThrow("api video enabled without ffmpeg path throws", () => loadApiConfig(API_COMMON)));
   withEnv({ ...FULL, VISUAL_EVIDENCE_VIDEO_ENABLED: "maybe" }, () =>
@@ -250,6 +262,24 @@ function main(): void {
     check("api jwks issuer carried", a.jwt.mode === "jwks" && a.jwt.issuer === "https://idp.example/");
     check("api jwks audience carried", a.jwt.mode === "jwks" && a.jwt.audience === "rpa-control-plane");
   });
+  withEnv({
+    JWKS_URL: JWKS,
+    JWT_TENANT_CLAIM: "app.tenant_id",
+    JWT_ROLES_CLAIM: "groups",
+    JWT_DISPLAY_NAME_CLAIM: "profile.name",
+    JWT_EMAIL_CLAIM: "profile.email",
+    JWT_ROLE_MAP: JSON.stringify({ "RPA Admin": "admin", "RPA Operator": "operator" }),
+    SIGNED_COMMAND_REGISTRY_MODE: "deny_all",
+  }, () => {
+    const a = loadApiConfig(API_COMMON);
+    check("api jwt custom claim mapping carried", a.jwt.claimMapping.tenantClaim === "app.tenant_id" && a.jwt.claimMapping.rolesClaim === "groups");
+    check("api jwt display/email claim mapping carried", a.jwt.claimMapping.displayNameClaim === "profile.name" && a.jwt.claimMapping.emailClaim === "profile.email");
+    check("api jwt role map carried", a.jwt.roleMap["RPA Admin"] === "admin" && a.jwt.roleMap["RPA Operator"] === "operator");
+  });
+  withEnv({ JWKS_URL: JWKS, JWT_ROLE_MAP: "{not-json", SIGNED_COMMAND_REGISTRY_MODE: "deny_all" }, () =>
+    expectThrow("api jwt role map rejects invalid JSON", () => loadApiConfig(API_COMMON)));
+  withEnv({ JWKS_URL: JWKS, JWT_ROLE_MAP: JSON.stringify({ "RPA Owner": "owner" }), SIGNED_COMMAND_REGISTRY_MODE: "deny_all" }, () =>
+    expectThrow("api jwt role map rejects unknown RPA role", () => loadApiConfig(API_COMMON)));
   withEnv({ JWKS_URL: "http://idp.example/jwks" }, () =>
     expectThrow("api jwks plaintext http JWKS_URL throws", () => loadApiConfig(API_COMMON)));
   withEnv({ JWKS_URL: "not-a-url" }, () =>

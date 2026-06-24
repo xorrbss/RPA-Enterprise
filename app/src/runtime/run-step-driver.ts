@@ -453,7 +453,15 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
       pendingSideEffects: t.pending,
       // @human_task(R5)만 human_tasks 라우팅/타임아웃 정책 + bookmark reason 전달(challenge 는 omit → 기존 동작).
       ...(s.kind === "human_task"
-        ? { assigneeRole: s.assigneeRole, onTimeout: s.onTimeout, reason: "human_task" }
+        ? {
+            assigneeRole: s.assigneeRole,
+            onTimeout: s.onTimeout,
+            ...(s.timeoutMs !== undefined ? { timeoutMs: s.timeoutMs } : {}),
+            ...(s.payload !== undefined ? { payload: s.payload } : {}),
+            ...(s.resultSchema !== undefined ? { resultSchema: s.resultSchema } : {}),
+            ...(s.artifactRefs !== undefined ? { artifactRefs: s.artifactRefs } : {}),
+            reason: "human_task",
+          }
         : {}),
     });
     // W9: suspend 시 연결 workitem 의 checkout timer pause(suspend 중 checkout 10m 만료로 회수/abandon 오발 방지).

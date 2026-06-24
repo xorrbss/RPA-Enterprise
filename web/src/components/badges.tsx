@@ -115,7 +115,7 @@ const ERROR_LABELS: Record<string, string> = {
   RUN_ABORTED: "실행이 중단되었습니다.",
   SCENARIO_VERSION_CONFLICT: "버전 충돌. 최신본을 다시 불러오세요.",
   POLICY_VERSION_CONFLICT: "정책 버전 충돌. 최신 정책을 다시 불러오세요.",
-  IR_SCHEMA_INVALID: "시나리오 정의 오류.",
+  IR_SCHEMA_INVALID: "자동화 정의 오류.",
   IR_EXPRESSION_COMPILE_ERROR: "조건식 오류.",
   SITE_PROFILE_BLOCKED: "해당 사이트는 승인이 필요합니다.",
   SITE_CIRCUIT_OPEN: "일시적으로 수집이 중단되었습니다.",

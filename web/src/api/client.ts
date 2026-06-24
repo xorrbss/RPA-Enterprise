@@ -1,21 +1,56 @@
 // 주입형 ApiClient 포트 + HTTP 구현. 테스트는 동일 인터페이스의 fake를 주입(백엔드 무의존).
 import {
   ApiError,
+  type BrowserRecordingAppendEventsBody,
+  type BrowserRecordingAppendResult,
+  type BrowserRecordingEvent,
+  type BrowserRecordingListParams,
+  type BrowserRecordingSession,
+  type BrowserRecordingStartBody,
+  type BotPoolItem,
+  type AuditLogItem,
+  type AuditLogExportParams,
+  type AuditLogListParams,
+  type AuthReadiness,
+  type AutomationIdeaCreateBody,
+  type AutomationIdeaItem,
+  type AutomationIdeaListParams,
+  type AutomationIdeaStage,
+  type AutomationIdeaUpdateBody,
   type ArtifactDetail,
+  type CaptureSessionItem,
+  type ConnectorCatalogItem,
+  type ConnectorCatalogListParams,
   type CreateRunBody,
   type CreateRunResult,
   type DecideApprovalBody,
   type DecideApprovalResult,
   type DeadLetterItem,
+  type DocumentExtraction,
+  type DocumentJobCreateBody,
+  type DocumentJobItem,
+  type DocumentJobListParams,
+  type DocumentValidationTaskResult,
   type GatewayPolicy,
   type GatewayPolicyUpdate,
   type GenerationArtifactDetail,
   type GenerationArtifactItem,
   type HumanTaskItem,
+  type HumanTaskResolution,
   type ListParams,
+  type OpsAlertItem,
+  type OpsAlertListParams,
+  type OpsHealth,
   type Paginated,
+  type PromoteFromRunResult,
   type PrincipalItem,
+  type RoiEstimate,
+  type RoiEstimateRequest,
   type RunDetail,
+  type RunTriggerCreateBody,
+  type RunTriggerFireItem,
+  type RunTriggerItem,
+  type RunTriggerUpdateBody,
   type RunItem,
   type RunSummary,
   type ScenarioDetail,
@@ -30,8 +65,18 @@ import {
   type ScenarioMutationResult,
   type ScenarioVersionItem,
   type SiteCreateResult,
+  type SiteElementCreateBody,
+  type SiteElementDeleteResult,
+  type SiteElementItem,
+  type SiteElementListParams,
+  type SiteElementProbeRequest,
+  type SiteElementProbeResponse,
+  type SiteElementUpdateBody,
   type SiteItem,
+  type SitePageStateUpdateResult,
   type StepSummary,
+  type TemplateCatalogItem,
+  type TemplateCatalogListParams,
   type ValidationResult,
   type WorkitemItem,
 } from "./types";
@@ -40,6 +85,7 @@ export interface ApiClient {
   listRuns(p?: ListParams): Promise<Paginated<RunItem>>;
   // run 하위 단계 트레이스(api-surface §1). 비민감 요약+참조만(본문은 artifact_ids→getArtifact).
   listRunSteps(runId: string, p?: ListParams): Promise<Paginated<StepSummary>>;
+  watchRunSteps(runId: string, onChange: (event: RunStepStreamEvent) => void): () => void;
   // run 하위 artifact 목록(api-surface §5). metadata-only(본문은 artifact_id→getArtifact).
   listRunArtifacts(runId: string, p?: ListParams): Promise<Paginated<RunArtifactItem>>;
   listScenarioGenerationArtifacts(generationId: string, p?: ListParams): Promise<Paginated<GenerationArtifactItem>>;
@@ -49,7 +95,51 @@ export interface ApiClient {
   listPrincipals(p?: ListParams): Promise<Paginated<PrincipalItem>>;
   listDlq(kind: "workitem" | "sink", p?: ListParams): Promise<Paginated<DeadLetterItem>>;
   listScenarios(p?: ListParams): Promise<Paginated<ScenarioItem>>;
+  listRunTriggers(p?: ListParams): Promise<Paginated<RunTriggerItem>>;
+  getRunTrigger(triggerId: string): Promise<RunTriggerItem>;
+  createRunTrigger(body: RunTriggerCreateBody, idempotencyKey: string): Promise<RunTriggerItem>;
+  updateRunTrigger(triggerId: string, body: RunTriggerUpdateBody, idempotencyKey: string): Promise<RunTriggerItem>;
+  pauseRunTrigger(triggerId: string, idempotencyKey: string): Promise<RunTriggerItem>;
+  resumeRunTrigger(triggerId: string, idempotencyKey: string): Promise<RunTriggerItem>;
+  listRunTriggerFires(triggerId: string, p?: ListParams): Promise<Paginated<RunTriggerFireItem>>;
+  listOpsAlerts(p?: OpsAlertListParams): Promise<Paginated<OpsAlertItem>>;
+  getOpsHealth(): Promise<OpsHealth>;
+  listBotPools(p?: ListParams): Promise<Paginated<BotPoolItem>>;
+  listAutomationIdeas(p?: AutomationIdeaListParams): Promise<Paginated<AutomationIdeaItem>>;
+  listAuditLog(p?: AuditLogListParams): Promise<Paginated<AuditLogItem>>;
+  exportAuditLogCsv(p?: AuditLogExportParams): Promise<string>;
+  getAuthReadiness(): Promise<AuthReadiness>;
+  listConnectors(p?: ConnectorCatalogListParams): Promise<Paginated<ConnectorCatalogItem>>;
+  listTemplates(p?: TemplateCatalogListParams): Promise<Paginated<TemplateCatalogItem>>;
+  listDocumentJobs(p?: DocumentJobListParams): Promise<Paginated<DocumentJobItem>>;
+  createDocumentJob(body: DocumentJobCreateBody, idempotencyKey: string): Promise<DocumentJobItem>;
+  getDocumentJob(jobId: string): Promise<DocumentJobItem>;
+  extractDocumentJob(jobId: string, idempotencyKey: string): Promise<DocumentExtraction>;
+  getDocumentExtraction(jobId: string): Promise<DocumentExtraction>;
+  createDocumentValidationTask(jobId: string, idempotencyKey: string): Promise<DocumentValidationTaskResult>;
+  createAutomationIdea(body: AutomationIdeaCreateBody, idempotencyKey: string): Promise<AutomationIdeaItem>;
+  getAutomationIdea(ideaId: string): Promise<AutomationIdeaItem>;
+  updateAutomationIdea(ideaId: string, body: AutomationIdeaUpdateBody, idempotencyKey: string): Promise<AutomationIdeaItem>;
+  transitionAutomationIdea(ideaId: string, stage: AutomationIdeaStage, idempotencyKey: string): Promise<AutomationIdeaItem>;
+  upsertRoiEstimate(ideaId: string, body: RoiEstimateRequest, idempotencyKey: string): Promise<RoiEstimate>;
+  getRoiEstimate(ideaId: string): Promise<RoiEstimate>;
   listSites(p?: ListParams): Promise<Paginated<SiteItem>>;
+  listSiteElements(siteId: string, p?: SiteElementListParams): Promise<Paginated<SiteElementItem>>;
+  createSiteElement(siteId: string, body: SiteElementCreateBody, idempotencyKey: string): Promise<SiteElementItem>;
+  updateSiteElement(siteId: string, elementId: string, body: SiteElementUpdateBody, idempotencyKey: string): Promise<SiteElementItem>;
+  probeSiteElement(siteId: string, elementId: string, body: SiteElementProbeRequest, idempotencyKey: string): Promise<SiteElementProbeResponse>;
+  deleteSiteElement(siteId: string, elementId: string, idempotencyKey: string): Promise<SiteElementDeleteResult>;
+  listBrowserRecordings(siteId: string, p?: BrowserRecordingListParams): Promise<Paginated<BrowserRecordingSession>>;
+  startBrowserRecording(siteId: string, body: BrowserRecordingStartBody, idempotencyKey: string): Promise<BrowserRecordingSession>;
+  listBrowserRecordingEvents(siteId: string, recordingId: string, p?: ListParams): Promise<Paginated<BrowserRecordingEvent>>;
+  appendBrowserRecordingEvents(
+    siteId: string,
+    recordingId: string,
+    body: BrowserRecordingAppendEventsBody,
+    idempotencyKey: string,
+  ): Promise<BrowserRecordingAppendResult>;
+  completeBrowserRecording(siteId: string, recordingId: string, idempotencyKey: string): Promise<BrowserRecordingSession>;
+  listSessionCaptures(siteId: string): Promise<Paginated<CaptureSessionItem>>;
   listGatewayPolicies(): Promise<Paginated<GatewayPolicy>>;
   getGatewayPolicy(model?: string): Promise<GatewayPolicy>;
   createGatewayPolicy(body: GatewayPolicyUpdate, idempotencyKey: string): Promise<GatewayPolicy>;
@@ -67,6 +157,7 @@ export interface ApiClient {
   createSite(body: { name: string; url_pattern: string; risk?: string; page_state_selectors?: unknown }, idempotencyKey: string): Promise<SiteCreateResult>;
   // 사이트 이름 수정(operator+, api-surface §7 PATCH /v1/sites/{id}). Idempotency-Key + body{name}. 중복 name→422.
   updateSite(siteId: string, name: string, idempotencyKey: string): Promise<unknown>;
+  updateSitePageState(siteId: string, pageStateSelectors: unknown | null, idempotencyKey: string): Promise<SitePageStateUpdateResult>;
   // 담당자 디렉터리 수동 등록/수정/삭제(admin=principal.manage, api-surface §3). 중복 sub→422, 미존재→404.
   createPrincipal(body: { sub: string; display_name: string; email?: string | null }, idempotencyKey: string): Promise<PrincipalItem>;
   updatePrincipal(principalId: string, body: { display_name?: string; email?: string | null }, idempotencyKey: string): Promise<PrincipalItem>;
@@ -78,10 +169,11 @@ export interface ApiClient {
   // resolve{result?}·escalate{reason?}. 권한/assignee 범위는 백엔드가 강제(거부 시 AUTHZ_FORBIDDEN 표면화).
   assignHumanTask(id: string, assignee: string, idempotencyKey: string): Promise<unknown>;
   startHumanTask(id: string, idempotencyKey: string): Promise<unknown>;
-  resolveHumanTask(id: string, idempotencyKey: string, result?: Record<string, unknown>): Promise<unknown>;
+  resolveHumanTask(id: string, idempotencyKey: string, result?: HumanTaskResolution | Record<string, unknown>): Promise<unknown>;
   escalateHumanTask(id: string, idempotencyKey: string, reason?: string): Promise<unknown>;
   // scenario 승격: If-Match(현재 version) + body{target:"prod"} + Idempotency-Key. 충돌→SCENARIO_VERSION_CONFLICT 표면화.
   promoteScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
+  promoteScenarioFromRun(scenarioId: string, runId: string, idempotencyKey: string): Promise<PromoteFromRunResult>;
   setScenarioPromotion(scenarioId: string, version: number, target: "prod" | "draft", idempotencyKey: string): Promise<unknown>;
   archiveScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
   listScenarioVersions(scenarioId: string): Promise<Paginated<ScenarioVersionItem>>;
@@ -119,6 +211,39 @@ export interface HttpApiClientOptions {
   readonly baseUrl: string;
   readonly getToken: () => string | null;
   readonly fetchImpl?: typeof fetch;
+}
+
+export interface RunStepStreamEvent {
+  readonly run_id: string;
+  readonly status: string | null;
+  readonly step_count?: number;
+  readonly last_step_at?: string | null;
+  readonly run_updated_at?: string | null;
+}
+
+function parseRunStepStreamFrame(frame: string): RunStepStreamEvent | null {
+  let event = "message";
+  const data: string[] = [];
+  for (const line of frame.split(/\n/)) {
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) event = line.slice("event:".length).trim();
+    if (line.startsWith("data:")) data.push(line.slice("data:".length).trimStart());
+  }
+  if (event !== "run_steps_changed" && event !== "run_steps_closed") return null;
+  try {
+    const parsed = JSON.parse(data.join("\n")) as Partial<RunStepStreamEvent>;
+    return typeof parsed.run_id === "string"
+      ? {
+          run_id: parsed.run_id,
+          status: typeof parsed.status === "string" ? parsed.status : null,
+          step_count: typeof parsed.step_count === "number" ? parsed.step_count : undefined,
+          last_step_at: typeof parsed.last_step_at === "string" ? parsed.last_step_at : null,
+          run_updated_at: typeof parsed.run_updated_at === "string" ? parsed.run_updated_at : null,
+        }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 // ETag(약한 접두/따옴표 허용) → version(int). 백엔드 parseIfMatch 규약과 동일. 부재/무효 → undefined(편집 차단).
@@ -173,12 +298,33 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     return res.blob();
   }
 
+  async function parseTextOrThrow(res: Response): Promise<string> {
+    if (!res.ok) {
+      let body = null;
+      try {
+        body = (await res.json()) as { code?: string; message?: string };
+      } catch {
+        body = null;
+      }
+      throw new ApiError(res.status, body?.code ?? `HTTP_${res.status}`, body as never);
+    }
+    return res.text();
+  }
+
   async function get<T>(path: string): Promise<T> {
     const res = await doFetch(`${opts.baseUrl}${path}`, {
       method: "GET",
       headers: { Accept: "application/json", ...authHeaders() },
     });
     return parseOrThrow<T>(res);
+  }
+
+  async function getText(path: string, accept: string): Promise<string> {
+    const res = await doFetch(`${opts.baseUrl}${path}`, {
+      method: "GET",
+      headers: { Accept: accept, ...authHeaders() },
+    });
+    return parseTextOrThrow(res);
   }
 
   // Idempotency-Key 없는 변이(scenario create/update). If-Match 등은 extraHeaders로.
@@ -221,9 +367,45 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     return parseOrThrow<T>(res);
   }
 
+  function watchRunSteps(runId: string, onChange: (event: RunStepStreamEvent) => void): () => void {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await doFetch(`${opts.baseUrl}/v1/runs/${runId}/steps/stream`, {
+          method: "GET",
+          headers: { Accept: "text/event-stream", ...authHeaders() },
+          signal: controller.signal,
+        });
+        if (!res.ok || res.body === null) return;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!controller.signal.aborted) {
+          const read = await reader.read();
+          if (read.done) break;
+          buffer += decoder.decode(read.value, { stream: true });
+          const frames = buffer.split(/\n\n/);
+          buffer = frames.pop() ?? "";
+          for (const frame of frames) {
+            const parsed = parseRunStepStreamFrame(frame);
+            if (parsed !== null) onChange(parsed);
+          }
+        }
+        if (buffer.trim().length > 0) {
+          const parsed = parseRunStepStreamFrame(buffer);
+          if (parsed !== null) onChange(parsed);
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) console.warn("run steps stream failed", err);
+      }
+    })();
+    return () => controller.abort();
+  }
+
   return {
     listRuns: (p) => get(`/v1/runs${queryString(p)}`),
     listRunSteps: (runId, p) => get(`/v1/runs/${runId}/steps${queryString(p)}`),
+    watchRunSteps,
     listRunArtifacts: (runId, p) => get(`/v1/runs/${runId}/artifacts${queryString(p)}`),
     listScenarioGenerationArtifacts: (generationId, p) => get(`/v1/scenario-generations/${generationId}/artifacts${queryString(p)}`),
     listScenarioGenerationResultArtifacts: (generationId, p) =>
@@ -233,7 +415,54 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listPrincipals: (p) => get(`/v1/principals${queryString(p)}`),
     listDlq: (kind, p) => get(`/v1/dlq${queryString({ ...p, kind })}`),
     listScenarios: (p) => get(`/v1/scenarios${queryString(p)}`),
+    listRunTriggers: (p) => get(`/v1/run-triggers${queryString(p)}`),
+    getRunTrigger: (triggerId) => get(`/v1/run-triggers/${triggerId}`),
+    createRunTrigger: (body, key) => post(`/v1/run-triggers`, key, body),
+    updateRunTrigger: (triggerId, body, key) =>
+      send("PATCH", `/v1/run-triggers/${triggerId}`, body, { "Idempotency-Key": key }),
+    pauseRunTrigger: (triggerId, key) => post(`/v1/run-triggers/${triggerId}/pause`, key),
+    resumeRunTrigger: (triggerId, key) => post(`/v1/run-triggers/${triggerId}/resume`, key),
+    listRunTriggerFires: (triggerId, p) => get(`/v1/run-triggers/${triggerId}/fires${queryString(p)}`),
+    listOpsAlerts: (p) => get(`/v1/ops-alerts${queryString(p)}`),
+    getOpsHealth: () => get(`/v1/ops/health`),
+    listBotPools: (p) => get(`/v1/bot-pools${queryString(p)}`),
+    listAutomationIdeas: (p) => get(`/v1/automation-ideas${queryString(p)}`),
+    listAuditLog: (p) => get(`/v1/audit-log${queryString(p)}`),
+    exportAuditLogCsv: (p) => getText(`/v1/audit-log/export${queryString({ ...p, format: "csv" })}`, "text/csv"),
+    getAuthReadiness: () => get(`/v1/auth/readiness`),
+    listConnectors: (p) => get(`/v1/connectors${queryString(p)}`),
+    listTemplates: (p) => get(`/v1/templates${queryString(p)}`),
+    listDocumentJobs: (p) => get(`/v1/document-jobs${queryString(p)}`),
+    createDocumentJob: (body, key) => post(`/v1/document-jobs`, key, body),
+    getDocumentJob: (jobId) => get(`/v1/document-jobs/${jobId}`),
+    extractDocumentJob: (jobId, key) => post(`/v1/document-jobs/${jobId}/extract`, key),
+    getDocumentExtraction: (jobId) => get(`/v1/document-jobs/${jobId}/extraction`),
+    createDocumentValidationTask: (jobId, key) => post(`/v1/document-jobs/${jobId}/validation-task`, key),
+    createAutomationIdea: (body, key) => post(`/v1/automation-ideas`, key, body),
+    getAutomationIdea: (ideaId) => get(`/v1/automation-ideas/${ideaId}`),
+    updateAutomationIdea: (ideaId, body, key) =>
+      send("PATCH", `/v1/automation-ideas/${ideaId}`, body, { "Idempotency-Key": key }),
+    transitionAutomationIdea: (ideaId, stage, key) => post(`/v1/automation-ideas/${ideaId}/transition`, key, { stage }),
+    upsertRoiEstimate: (ideaId, body, key) => post(`/v1/automation-ideas/${ideaId}/roi-estimate`, key, body),
+    getRoiEstimate: (ideaId) => get(`/v1/automation-ideas/${ideaId}/roi-estimate`),
     listSites: (p) => get(`/v1/sites${queryString(p)}`),
+    listSiteElements: (siteId, p) => get(`/v1/sites/${siteId}/elements${queryString(p)}`),
+    createSiteElement: (siteId, body, key) => post(`/v1/sites/${siteId}/elements`, key, body),
+    updateSiteElement: (siteId, elementId, body, key) =>
+      send("PATCH", `/v1/sites/${siteId}/elements/${elementId}`, body, { "Idempotency-Key": key }),
+    probeSiteElement: (siteId, elementId, body, key) =>
+      post(`/v1/sites/${siteId}/elements/${elementId}/probe`, key, body),
+    deleteSiteElement: (siteId, elementId, key) =>
+      send("DELETE", `/v1/sites/${siteId}/elements/${elementId}`, undefined, { "Idempotency-Key": key }),
+    listBrowserRecordings: (siteId, p) => get(`/v1/sites/${siteId}/recordings${queryString(p)}`),
+    startBrowserRecording: (siteId, body, key) => post(`/v1/sites/${siteId}/recordings`, key, body),
+    listBrowserRecordingEvents: (siteId, recordingId, p) =>
+      get(`/v1/sites/${siteId}/recordings/${recordingId}/events${queryString(p)}`),
+    appendBrowserRecordingEvents: (siteId, recordingId, body, key) =>
+      post(`/v1/sites/${siteId}/recordings/${recordingId}/events`, key, body),
+    completeBrowserRecording: (siteId, recordingId, key) =>
+      post(`/v1/sites/${siteId}/recordings/${recordingId}/complete`, key),
+    listSessionCaptures: (siteId) => get(`/v1/sites/${siteId}/session/capture`),
     listGatewayPolicies: () => get(`/v1/gateway/policies`),
     getGatewayPolicy: async (model) => {
       // GET은 ETag(=version) 헤더로 동시성 토큰을 노출 → PUT If-Match의 선행 read. body shape는 불변.
@@ -258,6 +487,8 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     approveSite: (siteId, key, opts) => post(`/v1/sites/${siteId}/approve`, key, opts ?? {}),
     createSite: (body, key) => post(`/v1/sites`, key, body),
     updateSite: (siteId, name, key) => send("PATCH", `/v1/sites/${siteId}`, { name }, { "Idempotency-Key": key }),
+    updateSitePageState: (siteId, pageStateSelectors, key) =>
+      send("PATCH", `/v1/sites/${siteId}/page-state`, { page_state_selectors: pageStateSelectors }, { "Idempotency-Key": key }),
     createPrincipal: (body, key) => post(`/v1/principals`, key, body),
     updatePrincipal: (principalId, body, key) => send("PATCH", `/v1/principals/${principalId}`, body, { "Idempotency-Key": key }),
     deletePrincipal: (principalId, key) => send("DELETE", `/v1/principals/${principalId}`, undefined, { "Idempotency-Key": key }),
@@ -268,6 +499,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     escalateHumanTask: (id, key, reason) => post(`/v1/human-tasks/${id}/escalate`, key, reason !== undefined ? { reason } : {}),
     promoteScenario: (scenarioId, version, key) =>
       post(`/v1/scenarios/${scenarioId}/promote`, key, { target: "prod" }, { "If-Match": String(version) }),
+    promoteScenarioFromRun: (scenarioId, runId, key) => post(`/v1/scenarios/${scenarioId}/promote-from-run`, key, { run_id: runId }),
     setScenarioPromotion: (scenarioId, version, target, key) =>
       post(`/v1/scenarios/${scenarioId}/promote`, key, { target }, { "If-Match": String(version) }),
     archiveScenario: (scenarioId, version, key) =>

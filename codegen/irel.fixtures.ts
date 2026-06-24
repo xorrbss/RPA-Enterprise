@@ -176,6 +176,8 @@ fixture("params_schema unsupported shapes are compile errors", () => {
 fixture("node, cursor, flags, and loop scopes typecheck deterministically", () => {
   const nodeAst = compileOk("node.start.row_count > 0");
   assert.equal(evaluateIrelBooleanExpression(nodeAst, { node: { start: { row_count: 3 } } }), true);
+  const httpAst = compileOk("node.start.http_status == 202 && node.start.http_ok");
+  assert.equal(evaluateIrelBooleanExpression(httpAst, { node: { start: { http_status: 202, http_ok: true } } }), true);
 
   const cursorAst = compileOk("cursor.last_review_id == null || flags.reviews_visible");
   assert.equal(
@@ -313,7 +315,7 @@ fixture("on[].target reservedHandlerCall rejected at static validation (V1)", ()
     meta: { name: "onrh", version: 1 },
     start: "n1",
     nodes: {
-      n1: { on: [{ when: "flags.blocked", target: { handler: "@human_task", input: {}, return_node: "n2" }, priority: 1 }] },
+      n1: { on: [{ when: "flags.blocked", target: { handler: "@human_task", input: { assignee_role: "reviewer" }, return_node: "n2" }, priority: 1 }] },
       n2: { terminal: "success" },
     },
   }), ["on_branch_reserved_handler_unsupported"]);
@@ -323,7 +325,7 @@ fixture("on[].target reservedHandlerCall rejected at static validation (V1)", ()
     meta: { name: "nextrh", version: 1 },
     start: "n1",
     nodes: {
-      n1: { next: { handler: "@human_task", input: {}, return_node: "n2" } },
+      n1: { next: { handler: "@human_task", input: { assignee_role: "reviewer" }, return_node: "n2" } },
       n2: { terminal: "success" },
     },
   }), []);

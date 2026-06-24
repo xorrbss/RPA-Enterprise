@@ -163,6 +163,46 @@ function parseRowAnchor(raw: unknown, nodeId: string): Record<string, string> | 
 // IR 액션 → ExecutorPlugin 액션. instruction 없는 observe는 on[] PageState resolve 전용으로 drop(null)하고,
 // instruction이 있는 observe는 자연어 이해/관찰 증적을 남기기 위해 executor action으로 전달한다.
 // dom 프리미티브(act/extract)는 StagehandDomExecutor 가 받는 DomAction 형태로 산출(composite-executor 가 type 으로 라우팅).
+function parseApiCallAction(nodeId: string, a: Record<string, unknown>, params: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (typeof a.url_ref !== "string") {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' api_call.url_ref 누락`);
+  }
+  const args = isRec(a.args) ? a.args : {};
+  let url: string;
+  try {
+    url = resolveUrlRef(a.url_ref, params);
+  } catch (e) {
+    if (e instanceof SiteResolutionError) throw new InterpreterError(e.code, `node '${nodeId}': ${e.message}`);
+    throw e;
+  }
+  const connectorId =
+    typeof args.connector_id === "string"
+      ? args.connector_id
+      : typeof args.connectorId === "string"
+        ? args.connectorId
+        : undefined;
+  const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : typeof args.timeoutMs === "number" ? args.timeoutMs : undefined;
+  const sideEffect = typeof args.side_effect === "string" ? args.side_effect : typeof args.sideEffect === "string" ? args.sideEffect : undefined;
+  const idempotencyKey =
+    typeof args.idempotency_key === "string"
+      ? args.idempotency_key
+      : typeof args.idempotencyKey === "string"
+        ? args.idempotencyKey
+        : undefined;
+  return {
+    type: "api_call",
+    method: typeof args.method === "string" ? args.method.toUpperCase() : "GET",
+    url,
+    ...(isRec(args.headers) ? { headers: args.headers } : {}),
+    ...(args.body !== undefined ? { body: args.body } : {}),
+    ...(isRec(args.auth) ? { auth: args.auth } : {}),
+    ...(connectorId !== undefined ? { connectorId } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(sideEffect !== undefined ? { sideEffect } : {}),
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  };
+}
+
 function mapAction(
   nodeId: string,
   a: unknown,
@@ -191,6 +231,9 @@ function mapAction(
       if (e instanceof SiteResolutionError) throw new InterpreterError(e.code, `node '${nodeId}': ${e.message}`);
       throw e;
     }
+  }
+  if (a.action === "api_call") {
+    return withRecording(parseApiCallAction(nodeId, a, params), nodeRecording);
   }
   if (a.action === "act") {
     if (typeof a.instruction !== "string" || a.instruction.trim().length === 0) {

@@ -167,6 +167,15 @@ async function main(): Promise<void> {
       const cross = await get(`/v1/runs/${RUN_B}/steps`, viewer);
       check("cross-tenant run steps → 200 empty(RLS)", cross.statusCode === 200 && (cross.json().items as unknown[]).length === 0, cross.body);
 
+      await withTenantTx(pool, TENANT_A, (c) =>
+        c.query(`UPDATE runs SET status='completed', updated_at='2026-06-15T00:00:04Z' WHERE id=$1::uuid`, [RUN_A]),
+      );
+      const stream = await get(`/v1/runs/${RUN_A}/steps/stream`, viewer);
+      check("run steps stream → 200 text/event-stream", stream.statusCode === 200 && String(stream.headers["content-type"]).includes("text/event-stream"), stream.body);
+      check("run steps stream emits change signal only", stream.body.includes("event: run_steps_changed") && stream.body.includes('"step_count":3'), stream.body);
+      check("run steps stream closes terminal run", stream.body.includes("event: run_steps_closed") && stream.body.includes('"status":"completed"'), stream.body);
+      check("run steps stream does not leak sensitive step bodies", !stream.body.includes("SECRET-EXCEPTION-MESSAGE") && !stream.body.includes("SECRET-PAGESTATE"), stream.body);
+
       // 6) malformed run_id → 404
       const mal = await get(`/v1/runs/not-a-uuid/steps`, viewer);
       check("malformed run_id → 404 RESOURCE_NOT_FOUND", mal.statusCode === 404 && mal.json().code === "RESOURCE_NOT_FOUND", mal.body);

@@ -43,9 +43,18 @@ export type Role =
 |---|---|:--:|:--:|:--:|:--:|:--:|---|
 | run/workitem/human_task 조회 + run step 트레이스(`GET /v1/runs/{id}/steps`) | 콘솔 read | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | principal 디렉터리 조회(담당자 name-picker) | api-surface §3 `GET /v1/principals` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 인증/SSO 준비도 조회 | api-surface §0.1 `GET /v1/auth/readiness` (`principal.read`; provider/claim mapping 요약, secret·토큰 원문 미노출) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | principal 디렉터리 관리(수동 등록/수정/삭제) | api-surface §3 `POST`/`PATCH`/`DELETE /v1/principals` (admin 디렉터리 CRUD) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | run `create` | api-surface `POST /v1/runs` | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run `abort` (R6 → cancelled) | error-catalog `RUN_ABORTED` 어휘체인 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| run trigger 조회 | api-surface `GET /v1/run-triggers`, `GET /v1/run-triggers/{id}/fires` (`trigger.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| run trigger 관리(예약 생성/수정/일시정지/재개) | api-surface `POST/PATCH /v1/run-triggers`, `POST /pause|resume` (`trigger.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 운영 알림/SLA 조회 | api-surface `GET /v1/ops-alerts` (`ops_alert.read`; 계산형 알림, payload 본문 미노출) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| automation idea/ROI 조회 | api-surface `GET /v1/automation-ideas`, `GET /v1/automation-ideas/{id}/roi-estimate` (`automation_idea.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| automation idea/ROI 관리(후보 등록/수정/ROI 산정/비승인 전이) | api-surface `POST/PATCH /v1/automation-ideas`, `POST /transition`, `POST /roi-estimate` (`automation_idea.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| automation idea 승인·반려 전이 | api-surface `POST /v1/automation-ideas/{id}/transition` 목표 stage `approved`/`rejected` (`automation_idea.approve`, SoD) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 문서 자동화 작업 조회 | api-surface `GET /v1/document-jobs`, `GET /v1/document-jobs/{id}` (`document_job.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 문서 자동화 작업 생성/추출/검증 태스크 생성 | api-surface `POST /v1/document-jobs`, `POST /extract`, `POST /validation-task` (`document_job.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | human_task `assign`/`start` (H1/H2) | state-machine H1·H2 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | human_task `escalate` (H5) | state-machine H5, api-surface fail-closed routing 규칙 | — | — | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | human_task `resolve` — kind=validation/exception/captcha/mfa (H3) | reserved-handlers @human_task | — | — | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
@@ -64,9 +73,11 @@ export type Role =
 | site risk=red 승인 권한 | approver 게이트(권한 부족=일반 RBAC 거부) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 결재 인박스 건별 결재(approve/reject) | api-surface `POST /v1/approvals/decide` (`approval.decide`; approver 게이트). 이중결재=`APPROVAL_ALREADY_DECIDED`(409) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | secret 접근(SecretStore.resolve 스코프) | security-contracts §1, core-types `SecretStore` | — | — | — | — | ✓ | `SECRET_ACCESS_DENIED` |
+| connector/template catalog read | api-surface §8 `GET /v1/connectors`, `GET /v1/templates` (`connector.read`; metadata/SecretRef namespace only) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | connector enable/install | security-contracts §7, error-catalog `CONNECTOR_PERMISSION_DENIED` | — | — | — | — | ✓ | `CONNECTOR_PERMISSION_DENIED` |
 | gateway policy 조회 | api-surface §6 `GET /v1/gateway/policy` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | gateway policy 편집 | api-surface §6 `PUT /v1/gateway/policy` | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| 감사로그 조회 | api-surface §9 `GET /v1/audit-log` (`audit.read`; payload 본문 미노출, hash-chain/actor/action/outcome 요약) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | network policy 편집(allowed_domains) | security-contracts §6 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | RBAC 역할 부여/회수 | 본 문서 §1 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 
@@ -84,7 +95,7 @@ export type Role =
 
 `migration_concurrency_idempotency.sql`은 "모든 테이블 tenant_id 보유 + RLS(P2)"를 전제하나 tenant_id의 **인증 출처**를 정의하지 않았다. 본 절이 고정한다.
 
-- **출처**: 인증 주체(JWT 또는 세션)의 클레임에서 `tenant_id`(+ `roles: Role[]`)를 도출한다. 클라이언트 입력 body/query의 tenant_id는 **신뢰하지 않는다**(위조 방지). 토큰 클레임만이 권위.
+- **출처**: 인증 주체(JWT 또는 세션)의 클레임에서 `tenant_id`(+ `roles: Role[]`)를 도출한다. 기본 클레임은 `tenant_id`/`roles`이나 운영 배포는 `JWT_TENANT_CLAIM`, `JWT_ROLES_CLAIM`으로 IdP별 경로(`app.tenant_id`, `realm_access.roles`, namespaced claim 등)를 지정할 수 있다. `JWT_ROLE_MAP`은 IdP 그룹/역할 값을 닫힌 RPA 역할(`viewer|operator|reviewer|approver|admin`)로 변환하며, 미매핑 외부 역할은 통과시키지 않는다. 클라이언트 입력 body/query의 tenant_id는 **신뢰하지 않는다**(위조 방지). 토큰 클레임만이 권위.
 - **경계 강제**: 모든 요청 경계(제어평면 API 진입, queue job 소비, 이벤트 발행)에서 인증 컨텍스트의 tenant_id를 추출해 트랜잭션 세션에 바인딩(§4 `SET LOCAL`)한다. **인증 자체가 미성립**(Bearer 토큰 누락·서명 무효·만료)이면 → `UNAUTHENTICATED`(401). 인증은 성립했으나 **클레임에 tenant_id가 없거나 다중 모호**하면 → **요청 거부**(`AUTHZ_FORBIDDEN`, 403), 통과 금지(조용한 false 금지). authn(401)/authz(403)는 분리한다(§5).
 - **정합**: 도출된 tenant_id는 `RunContext.tenantId`(core-types) 및 이벤트 envelope의 `tenant_id`(event-envelope, impl-bundle §E trace 공통 속성)와 **동일 값이어야 한다**. 불일치 시 system 무결성 위반으로 차단(cross-tenant 접근 의심).
 - **자원 단위 일치**: run/workitem/artifact 등 자원 접근 시 자원 row의 tenant_id가 인증 tenant_id와 다르면 RLS(§4)가 row를 보이지 않게 하며, 미들웨어 레벨에서도 `RUN_NOT_FOUND` 등 자원 부재로 응답(존재 노출 회피). RBAC 역할 평가는 동일 tenant 내에서만 의미를 가진다.

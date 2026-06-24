@@ -2,7 +2,7 @@
  * Dev 시드 — 실행 가능 데모 시나리오의 컴파일 + 영속(scenario_versions/site_profiles/browser_identities).
  * 주문수집(raw) + 데모 리뷰 + 로그인 + 세션 재사용 + 하이웍스 + 삼성 공지를 단일 트랜잭션으로 시드한다.
  */
-import { withTenantTx, type PgPool } from "../src/db/pool";
+import { withTenantTx, type PgClient, type PgPool } from "../src/db/pool";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { DEV_BROWSER_IDENTITY_ID } from "./run-loop";
 import { seedHiworksApproval } from "./seed-hiworks-approval";
@@ -15,27 +15,35 @@ import {
   DEMO_SCEN,
   DEMO_SVER,
   DEMO_SITE,
+  DEMO_NETWORK_POLICY,
   LOGIN_SCEN,
   LOGIN_SVER,
   SESS_SCEN,
   SESS_SVER,
   HIWORKS_SITE,
   HIWORKS_BID,
+  HIWORKS_NETWORK_POLICY,
   HIWORKS_SCEN,
   HIWORKS_SVER,
   HIWORKS_LOGIN_URL,
   HIWORKS_OFFICE_ORIGIN,
   SAMSUNG_SITE,
+  SAMSUNG_BID,
+  SAMSUNG_NETWORK_POLICY,
   SAMSUNG_SCEN,
   SAMSUNG_SVER,
   SAMSUNG_ORIGIN,
+  SAMSUNG_NOTICE_URL,
 } from "./dev-constants";
+
+const DEMO_REVIEW_URL = `http://127.0.0.1:${PORT}/fixture/reviews`;
+const DEMO_LOGIN_URL = `http://127.0.0.1:${PORT}/fixture/login`;
 
 // 데모 사이트 프로파일의 PageState 산출 규칙(마커 없는 /fixture/reviews 셀렉터 매핑) — page_state_selectors 로 영속.
 // loginUrl: 운영자-보조 캡처가 headful 로 띄울 로그인 페이지(사이트별 — resolver 는 무시, capture API 가 읽음).
 const DEMO_PAGE_STATE_SELECTORS = {
   authenticatedWhen: { selector: ".user-menu" },
-  loginUrl: `http://127.0.0.1:${PORT}/fixture/login`,
+  loginUrl: DEMO_LOGIN_URL,
   flags: {
     reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 },
     not_found: { kind: "present", selector: ".empty-results" },
@@ -52,6 +60,44 @@ const SAMSUNG_PAGE_STATE_SELECTORS = {
     reviews_visible: { kind: "min_count", selector: ".grid-row-rendered", n: 1 },
   },
 };
+
+function runtimeTarget(siteProfileId: string, browserIdentityId: string, networkPolicyId: string): {
+  site_profile_id: string;
+  browser_identity_id: string;
+  network_policy_id: string;
+} {
+  return {
+    site_profile_id: siteProfileId,
+    browser_identity_id: browserIdentityId,
+    network_policy_id: networkPolicyId,
+  };
+}
+
+function entryUrlParamsSchema(defaultUrl: string): {
+  type: "object";
+  properties: {
+    entry_url: { type: "string"; title: string; format: "uri"; default: string };
+  };
+  required: ["entry_url"];
+  additionalProperties: false;
+} {
+  return {
+    type: "object",
+    properties: {
+      entry_url: { type: "string", title: "접속 주소 (시작 주소)", format: "uri", default: defaultUrl },
+    },
+    required: ["entry_url"],
+    additionalProperties: false,
+  };
+}
+
+async function insertNetworkPolicy(c: PgClient, id: string, allowedDomains: readonly string[]): Promise<void> {
+  await c.query(
+    `INSERT INTO network_policies (id, tenant_id, allowed_domains)
+     VALUES ($1,$2,$3::text[])`,
+    [id, TENANT, [...allowedDomains]],
+  );
+}
 
 // Phase 1 관찰성(make-the-run-watchable) 코드범위 점검 — 데모가 자가복구/세션재사용 모먼트를 안정적으로 산출하는가.
 //   (코드는 손대지 않는다. 서버 실행/실 하이웍스 로그인/세션 캡처 reseed = 오너 영역이라 절차로만 명시.)
@@ -99,6 +145,8 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
     const demo = compileScenario(
       {
         meta: { name: "데모 — 리뷰 수집(실행 가능)", version: 1 },
+        target: runtimeTarget(DEMO_SITE, DEV_BROWSER_IDENTITY_ID, DEMO_NETWORK_POLICY),
+        params_schema: entryUrlParamsSchema(DEMO_REVIEW_URL),
         start: "open",
         nodes: {
           open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
@@ -123,6 +171,7 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
          VALUES ($1,$2,'데모 사이트(리뷰)',$3,$4::jsonb)`,
         [DEMO_SITE, TENANT, `http://127.0.0.1:${PORT}`, JSON.stringify(DEMO_PAGE_STATE_SELECTORS)],
       );
+      await insertNetworkPolicy(c, DEMO_NETWORK_POLICY, ["127.0.0.1"]);
       // dev 브라우저 정체성 — 세션 재사용(browser_sessions) 의 browser_identity_id FK 대상. run-loop 가 이 id 를 ClaimedRun 에 주입.
       await c.query(
         `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version) VALUES ($1,$2,$3,'dev-identity',1)`,
@@ -141,6 +190,8 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
       const login = compileScenario(
         {
           meta: { name: "그룹웨어 로그인 + 메일 수집(실행 가능)", version: 1 },
+          target: runtimeTarget(DEMO_SITE, DEV_BROWSER_IDENTITY_ID, DEMO_NETWORK_POLICY),
+          params_schema: entryUrlParamsSchema(DEMO_LOGIN_URL),
           assets: ["login.username", "login.password"],
           start: "open",
           nodes: {
@@ -221,6 +272,8 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
       const sess = compileScenario(
         {
           meta: { name: "그룹웨어 세션 재사용 데모(실행 가능)", version: 1 },
+          target: runtimeTarget(DEMO_SITE, DEV_BROWSER_IDENTITY_ID, DEMO_NETWORK_POLICY),
+          params_schema: entryUrlParamsSchema(DEMO_LOGIN_URL),
           assets: ["login.username", "login.password"],
           start: "open",
           nodes: {
@@ -318,6 +371,7 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
          VALUES ($1,$2,'하이웍스(ibizsoftware.net)',$3,'green',$4::jsonb)`,
         [HIWORKS_SITE, TENANT, HIWORKS_OFFICE_ORIGIN, JSON.stringify(HW_SELECTORS)],
       );
+      await insertNetworkPolicy(c, HIWORKS_NETWORK_POLICY, ["dashboard.office.hiworks.com"]);
       await c.query(
         `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version) VALUES ($1,$2,$3,'hiworks-identity',1)`,
         [HIWORKS_BID, TENANT, HIWORKS_SITE],
@@ -326,6 +380,8 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
       const hw = compileScenario(
         {
           meta: { name: "하이웍스 세션 재사용 확인", version: 1 },
+          target: runtimeTarget(HIWORKS_SITE, HIWORKS_BID, HIWORKS_NETWORK_POLICY),
+          params_schema: entryUrlParamsSchema(HIWORKS_OFFICE_ORIGIN),
           start: "open",
           nodes: {
             open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
@@ -360,6 +416,8 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
       const samsung = compileScenario(
         {
           meta: { name: "삼성디스플레이 공지 수집", version: 1 },
+          target: runtimeTarget(SAMSUNG_SITE, SAMSUNG_BID, SAMSUNG_NETWORK_POLICY),
+          params_schema: entryUrlParamsSchema(SAMSUNG_NOTICE_URL),
           start: "open",
           nodes: {
             open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "ready" },
@@ -390,6 +448,11 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
           `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, page_state_selectors)
            VALUES ($1,$2,'삼성디스플레이(게스트 공지)',$3,$4::jsonb)`,
           [SAMSUNG_SITE, TENANT, SAMSUNG_ORIGIN, JSON.stringify(SAMSUNG_PAGE_STATE_SELECTORS)],
+        );
+        await insertNetworkPolicy(c, SAMSUNG_NETWORK_POLICY, ["guest.samsungdisplay.com"]);
+        await c.query(
+          `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version) VALUES ($1,$2,$3,'samsung-identity',1)`,
+          [SAMSUNG_BID, TENANT, SAMSUNG_SITE],
         );
         await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'삼성디스플레이 공지 수집')`, [SAMSUNG_SCEN, TENANT]);
         await c.query(

@@ -146,6 +146,9 @@ this repository.
   user traffic must not be routed through BYPASSRLS infrastructure roles.
 - `control_plane_idempotency_keys` rejects same-tenant duplicate
   `(endpoint, Idempotency-Key)` rows while allowing the same key across tenants.
+- `run_triggers` and `run_trigger_fires` keep scheduled-run definitions separate
+  from tenant-local fire idempotency, so duplicate cron fires cannot create
+  duplicate runs.
 - Credential lease slot trigger, active-slot non-steal CAS, released-slot takeover,
   and expired-slot takeover.
 - Browser lease owner-only renewal, no renewal after expiry, and idempotent sweeper

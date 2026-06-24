@@ -138,7 +138,7 @@ export function buildIr(
   const meta = { name: name.trim() || "새 자동화", version, studio_mode: "easy" };
   // url_ref = 고정 키(ENTRY_KEY). 입력 URL은 url_ref 에 박지 않고 params_schema[entry_url].default 로 싣는다
   // (유효 http(s) URL일 때만) — 실행 대화상자가 이 default 로 prefill한다. 무효/빈값이면 default 없이 키만 선언.
-  const entryParam: Record<string, unknown> = { type: "string", description: "실행 대상 페이지 URL" };
+  const entryParam: Record<string, unknown> = { type: "string", description: "실행 대상 페이지 주소" };
   if (urlState(pageUrl) === "ok") entryParam.default = pageUrl.trim();
   const params_schema = { type: "object", properties: { [ENTRY_KEY]: entryParam }, required: [ENTRY_KEY] };
   const schemaRef = dataName.trim() || "수집데이터";
@@ -347,7 +347,7 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
         onChange={setSuccessCriteria}
         placeholder="예: 최소 1개 행을 추출하거나 데이터 없음으로 종료한다."
         multiline
-        hint={<span className="subtle">IR 스키마가 닫힌 구조라 별도 필드 대신 실행 지시문에 포함됩니다.</span>}
+        hint={<span className="subtle">자동화 정의 구조에 맞춰 실행 지시문에 포함됩니다.</span>}
       />
       <label style={{ display: "block", marginBottom: 6 }}>
         <span className="subtle">⑥ 방식</span>
@@ -388,7 +388,7 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
               ))}
             </select>
           </label>
-          <span className="subtle">사이트 설정에서 이 flag selector를 등록하면 마지막 페이지에서 반복이 멈춥니다.</span>
+          <span className="subtle">사이트 설정에서 이 화면 조건을 등록하면 마지막 페이지에서 반복이 멈춥니다.</span>
         </div>
       )}
       </details>

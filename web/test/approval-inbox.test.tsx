@@ -6,7 +6,7 @@ import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
 import type { DecideApprovalBody } from "../src/api/types";
-import { COLLECT_SCENARIO_NAME, isHttpUrl, parseApprovalRows, summarize } from "../src/api/approval-inbox";
+import { APPROVAL_ARTIFACT_TYPE, COLLECT_SCENARIO_NAME, isHttpUrl, parseApprovalRows, summarize } from "../src/api/approval-inbox";
 import { fakeClient } from "./fake-client";
 
 function renderApp(client: ApiClient): void {
@@ -90,6 +90,55 @@ describe("결재 인박스 — 뷰", () => {
     expect(screen.getByText("출장비 정산")).toBeInTheDocument();
     expect(screen.getByText("지출 2")).toBeInTheDocument(); // 유형 집계 칩
     expect(screen.getByText("홍길동")).toBeInTheDocument();
+  });
+
+  test("수집 시나리오가 다음 페이지에 있어도 cursor를 따라 찾는다", async () => {
+    const scenarioCalls: Array<{ cursor?: string; limit?: number }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async (params) => {
+          scenarioCalls.push(params ?? {});
+          if (params?.cursor === "scenario-cursor-2") {
+            return { items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null };
+          }
+          return { items: [{ scenario_id: "sc-other", name: "다른 자동화", version: 1, latest_version_id: "ver-other" }], next_cursor: "scenario-cursor-2" };
+        },
+        listRuns: async () => ({ items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }),
+        listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: APPROVAL_ARTIFACT_TYPE, redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
+        getArtifact: async (id) => ({ artifact_id: id, type: APPROVAL_ARTIFACT_TYPE, sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: [ROW()] }) }),
+      }),
+    );
+    location.hash = "#approvalInbox";
+
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+    expect(scenarioCalls.some((c) => c.cursor === "scenario-cursor-2")).toBe(true);
+  });
+
+  test("approval_inbox 아티팩트가 다음 페이지에 있어도 첫 아티팩트로 fallback하지 않는다", async () => {
+    const artifactCalls: Array<{ cursor?: string; limit?: number }> = [];
+    const bodyCalls: string[] = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
+        listRuns: async () => ({ items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }),
+        listRunArtifacts: async (_runId, params) => {
+          artifactCalls.push(params ?? {});
+          if (params?.cursor === "artifact-cursor-2") {
+            return { items: [{ artifact_id: "art-approval", type: APPROVAL_ARTIFACT_TYPE, redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:02.000Z" }], next_cursor: null };
+          }
+          return { items: [{ artifact_id: "art-screen", type: "screen_capture", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: "artifact-cursor-2" };
+        },
+        getArtifact: async (id) => {
+          bodyCalls.push(id);
+          return { artifact_id: id, type: APPROVAL_ARTIFACT_TYPE, sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: [ROW()] }) };
+        },
+      }),
+    );
+    location.hash = "#approvalInbox";
+
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+    expect(artifactCalls.some((c) => c.cursor === "artifact-cursor-2")).toBe(true);
+    expect(bodyCalls).toEqual(["art-approval"]);
   });
 
   test("행에 '원문 보기' 새 탭 링크(doc_ref) — http(s) + noopener", async () => {
@@ -191,9 +240,9 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
     await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "결재" }));
-    fireEvent.click(screen.getByRole("button", { name: "확인" })); // 비가역 가드 1단계
+    fireEvent.click(screen.getByRole("button", { name: "확인" })); // 되돌릴 수 없음 안내 1단계
 
-    // 결정 후: 처리 run 딥링크가 보이고, decideApproval 이 인박스 source run + 행 doc_ref + approve 로 호출됨.
+    // 결정 후: 처리 자동화 실행 딥링크가 보이고, decideApproval 이 인박스 source run + 행 doc_ref + approve 로 호출됨.
     await waitFor(() => expect(screen.getByText("실행 기록 보기")).toBeInTheDocument());
     expect(captured).not.toBeNull();
     expect(captured!.source_run_id).toBe("run-c");
@@ -228,10 +277,11 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
     location.hash = "#approvalInbox";
     await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
 
-    // 2건 선택 → '선택 2건 일괄 승인' → 배치 단일 확인(비가역 가드) → 확인.
+    // 2건 선택 → '선택 2건 일괄 승인' → 배치 단일 확인(되돌릴 수 없음 안내) → 확인.
     fireEvent.click(screen.getByLabelText("연차 신청 일괄 승인 선택"));
     fireEvent.click(screen.getByLabelText("출장비 정산 일괄 승인 선택"));
     fireEvent.click(screen.getByRole("button", { name: "선택 2건 일괄 승인" }));
+    expect(screen.getByText("선택 2건을 일괄 승인합니다. 승인 후에는 되돌릴 수 없으며 자동화 실행 2건이 생성됩니다.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "일괄 승인 확인" }));
 
     // 두 선택 행이 처리 상태(딥링크)로, decideApproval 이 선택 2건만 approve 로 호출됨.

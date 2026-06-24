@@ -525,7 +525,24 @@ const humanTaskIr = {
   meta: { name: "human-task-test", version: 1 },
   start: "task",
   nodes: {
-    task: { what: [], next: { handler: "@human_task", input: { kind: "approval", assignee_role: "approver", on_timeout: "escalate" }, return_node: "after" } },
+    task: {
+      what: [],
+      next: {
+        handler: "@human_task",
+        input: {
+          kind: "approval",
+          assignee_role: "approver",
+          on_timeout: "escalate",
+          payload: { invoice_id: "INV-42" },
+          result_schema: {
+            version: "business_form_v1",
+            fields: [{ key: "invoice_id", label: "Invoice ID", type: "text", required: true }],
+          },
+          artifact_refs: ["artifact.invoice.scan"],
+        },
+        return_node: "after",
+      },
+    },
     after: { terminal: "success" },
   },
 };
@@ -1215,8 +1232,16 @@ async function main(): Promise<void> {
     check("@human_task resume_token.resumeNodeId = after(return_node)", htdb?.resume_token?.resumeNodeId === "after", JSON.stringify(htdb?.resume_token));
     check("@human_task bookmark reason = human_task", htdb?.bookmark?.reason === "human_task", JSON.stringify(htdb?.bookmark));
     const htTask = await withTenantTx(pool, TENANT, async (c) => {
-      const r = await c.query<{ kind: string; state: string; assignee_role: string | null; on_timeout: string }>(
-        `SELECT kind, state, assignee_role, on_timeout FROM human_tasks WHERE run_id=$1::uuid`,
+      const r = await c.query<{
+        kind: string;
+        state: string;
+        assignee_role: string | null;
+        on_timeout: string;
+        payload: Record<string, unknown>;
+        result_schema: Record<string, unknown>;
+        artifact_refs: string[];
+      }>(
+        `SELECT kind, state, assignee_role, on_timeout, payload, result_schema, artifact_refs FROM human_tasks WHERE run_id=$1::uuid`,
         [RUN_HUMAN_TASK],
       );
       return r.rows;
@@ -1230,6 +1255,7 @@ async function main(): Promise<void> {
         htTask[0]?.state === "open",
       JSON.stringify(htTask),
     );
+    check("@human_task payload/result_schema/artifact_refs 보존", htTask[0]?.payload.invoice_id === "INV-42" && htTask[0]?.result_schema.version === "business_form_v1" && htTask[0]?.artifact_refs[0] === "artifact.invoice.scan", JSON.stringify(htTask));
     const htEvents = await withTenantTx(pool, TENANT, async (c) => {
       const r = await c.query<{ event_type: string }>(`SELECT event_type FROM events_outbox WHERE correlation_id=$1::uuid ORDER BY created_at`, [RUN_HUMAN_TASK]);
       return r.rows.map((x) => x.event_type);

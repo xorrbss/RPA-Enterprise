@@ -27,16 +27,29 @@ import { registerGatewayRoutes } from "./gateway";
 import { registerHumanTaskRoutes } from "./human-tasks";
 import { registerReadRoutes } from "./reads";
 import { registerPrincipalRoutes } from "./principals";
+import { registerSiteElementRoutes } from "./site-elements";
 import { registerSiteRoutes } from "./sites";
 import { registerSessionRoutes } from "./sessions";
 import { registerApprovalRoutes } from "./approvals";
 import { registerScenarioGenerationRoutes } from "./scenario-generations";
 import { registerScenarioRoutes } from "./scenarios";
+import { registerAuditLogRoutes } from "./audit-log";
+import { registerAutomationIdeaRoutes } from "./automation-ideas";
+import { registerBrowserRecordingRoutes } from "./browser-recordings";
+import { registerConnectorCatalogRoutes } from "./connector-catalog";
+import { registerDocumentJobRoutes } from "./document-jobs";
+import { registerAuthReadinessRoutes } from "./auth-readiness";
+import { registerOpsAlertRoutes } from "./ops-alerts";
+import { registerOpsHealthRoutes } from "./ops-health";
+import { registerBotPoolRoutes } from "./bot-pools";
+import { registerRunTriggerRoutes } from "./run-triggers";
+import { registerWebhookTriggerRoutes } from "./webhook-triggers";
 import { registerSecurity } from "./security";
 import {
   normalizeFailureReason,
   requirePrincipal,
   UUID_RE,
+  type AuthReadinessConfig,
   type ApiServerDeps,
 } from "./server-shared";
 import { abortRun } from "./server-abort-run";
@@ -46,6 +59,8 @@ import { createRun } from "./server-create-run";
 interface RunRow {
   id: string;
   status: string;
+  scenario_id: string;
+  scenario_version_id: string;
   worker_id: string | null;
   attempts: number;
   as_of: Date | null;
@@ -73,6 +88,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
 
   // 2) authenticate — 인증 경계 위임(auth.ts). 거부 코드(401/403)를 ApiResponseError로 표면화.
   app.addHook("preHandler", async (request) => {
+    if (request.routeOptions.config.skipJwtAuth === true) return;
     if (request.is404) return; // 미매칭 라우트는 인증 이전에 notFoundHandler로 404 수렴(api-surface §2 각주1).
     const result = await deps.auth.authenticate({ authorization: request.headers.authorization });
     if (result.kind === "denied") {
@@ -105,6 +121,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
 
   // 5) authorize(RBAC) — auth 다음(미들웨어 순서 …→rbac→handler). 라우트 선언 rbacAction을 §2 매트릭스로 평가.
   app.addHook("preHandler", async (request) => {
+    if (request.routeOptions.config.skipJwtAuth === true) return;
     if (request.is404) return; // 미매칭/미지원 메서드는 RBAC 평가 없이 notFoundHandler로 404(403·오탐 로그 방지).
     const action = request.routeOptions.config.rbacAction;
     if (action === undefined) {
@@ -143,7 +160,10 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     }
     const run = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const result = await client.query<RunRow>(
-        `SELECT id, status, worker_id, attempts, as_of, failure_reason, updated_at FROM runs WHERE id = $1::uuid`,
+        `SELECT r.id, r.status, sv.scenario_id, r.scenario_version_id, r.worker_id, r.attempts, r.as_of, r.failure_reason, r.updated_at
+           FROM runs r
+           JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
+          WHERE r.id = $1::uuid`,
         [runId],
       );
       return result.rows[0] ?? null;
@@ -155,6 +175,8 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     return {
       run_id: run.id,
       status: run.status,
+      scenario_id: run.scenario_id,
+      scenario_version_id: run.scenario_version_id,
       worker_id: run.worker_id,
       attempts: run.attempts,
       as_of: run.as_of !== null ? run.as_of.toISOString() : null,
@@ -186,21 +208,33 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
 
   registerScenarioGenerationRoutes(app, deps);
   registerScenarioRoutes(app, deps);
+  registerAutomationIdeaRoutes(app, deps);
+  registerAuthReadinessRoutes(app, deps);
+  registerRunTriggerRoutes(app, deps);
+  registerWebhookTriggerRoutes(app, deps);
   registerHumanTaskRoutes(app, deps);
   registerDlqRoutes(app, deps);
   registerReadRoutes(app, deps);
   registerPrincipalRoutes(app, deps);
   registerSiteRoutes(app, deps);
+  registerSiteElementRoutes(app, deps);
+  registerBrowserRecordingRoutes(app, deps);
   registerSessionRoutes(app, deps);
   registerGatewayRoutes(app, deps);
   registerApprovalRoutes(app, deps);
+  registerAuditLogRoutes(app, deps);
+  registerConnectorCatalogRoutes(app, deps);
+  registerDocumentJobRoutes(app, deps);
+  registerOpsAlertRoutes(app, deps);
+  registerOpsHealthRoutes(app, deps);
+  registerBotPoolRoutes(app, deps);
 
   return app;
 }
 
 // 분해 전 공개 표면 보존(consumers import from "./server") — server-shared/server-create-run 구현 재노출.
 export { requirePrincipal };
-export type { ApiServerDeps };
+export type { ApiServerDeps, AuthReadinessConfig };
 export { createRunInTx } from "./server-create-run";
 export type { CreateRunInTxInput } from "./server-create-run";
 export type { ArtifactObjectReader } from "./server-shared";

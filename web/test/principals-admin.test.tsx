@@ -40,11 +40,15 @@ describe("담당자 디렉터리 관리(admin)", () => {
     // 디렉터리 목록(이름·식별자) 렌더.
     expect(await screen.findByText("담당자 디렉터리")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("앨리스")).toBeInTheDocument());
-    expect(screen.getByText("auth0|bob")).toBeInTheDocument();
+    expect(screen.queryByText("auth0|bob")).toBeNull();
+    expect(screen.getByText("계정 연결됨")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "계정" })).toBeInTheDocument();
+    expect(screen.getByText("수동 등록")).toBeInTheDocument();
+    expect(screen.getByText("로그인 자동 등록")).toBeInTheDocument();
 
-    // 등록 폼 열고 sub/이름 입력 → 등록 호출.
+    // 등록 폼 열고 계정 참조/이름 입력 → 등록 호출.
     fireEvent.click(screen.getByRole("button", { name: "+ 담당자 등록" }));
-    fireEvent.change(screen.getByPlaceholderText("예: auth0|abc123"), { target: { value: "auth0|carol" } });
+    fireEvent.change(screen.getByPlaceholderText("예: hong.gildong 또는 user@example.com"), { target: { value: "auth0|carol" } });
     fireEvent.change(screen.getByPlaceholderText("예: 홍길동"), { target: { value: "캐롤" } });
     fireEvent.click(screen.getByRole("button", { name: "등록" }));
     await waitFor(() => expect(createPrincipal).toHaveBeenCalledTimes(1));

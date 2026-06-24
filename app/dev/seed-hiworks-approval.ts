@@ -13,11 +13,24 @@ import {
   HIWORKS_APPROVAL_ORIGIN,
   HIWORKS_APPROVAL_SITE,
   HIWORKS_APPROVAL_BID,
+  HIWORKS_APPROVAL_NETWORK_POLICY,
   HIWORKS_COLLECT_SCEN,
   HIWORKS_COLLECT_SVER,
   HIWORKS_DECIDE_SCEN,
   HIWORKS_DECIDE_SVER,
 } from "./dev-constants";
+
+function runtimeTarget(siteProfileId: string, browserIdentityId: string, networkPolicyId: string): {
+  site_profile_id: string;
+  browser_identity_id: string;
+  network_policy_id: string;
+} {
+  return {
+    site_profile_id: siteProfileId,
+    browser_identity_id: browserIdentityId,
+    network_policy_id: networkPolicyId,
+  };
+}
 
 /** 하이웍스 결재 site_profile + 수집/처리 시나리오 시드(seedScenarios 의 tenant tx 안에서 호출). */
 export async function seedHiworksApproval(c: PgClient): Promise<void> {
@@ -41,6 +54,11 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
     [HIWORKS_APPROVAL_SITE, TENANT, HIWORKS_APPROVAL_ORIGIN, JSON.stringify(HW_APPROVAL_SELECTORS)],
   );
   await c.query(
+    `INSERT INTO network_policies (id, tenant_id, allowed_domains)
+     VALUES ($1,$2,$3::text[])`,
+    [HIWORKS_APPROVAL_NETWORK_POLICY, TENANT, ["approval.office.hiworks.com"]],
+  );
+  await c.query(
     `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version) VALUES ($1,$2,$3,'hiworks-approval-identity',1)`,
     [HIWORKS_APPROVAL_BID, TENANT, HIWORKS_APPROVAL_SITE],
   );
@@ -57,6 +75,7 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
   const collect = compileScenario(
     {
       meta: { name: "하이웍스 결재 수집", version: 1 },
+      target: runtimeTarget(HIWORKS_APPROVAL_SITE, HIWORKS_APPROVAL_BID, HIWORKS_APPROVAL_NETWORK_POLICY),
       start: "open",
       nodes: {
         open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
@@ -129,6 +148,7 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
   const decide = compileScenario(
     {
       meta: { name: "하이웍스 결재 처리", version: 1 },
+      target: runtimeTarget(HIWORKS_APPROVAL_SITE, HIWORKS_APPROVAL_BID, HIWORKS_APPROVAL_NETWORK_POLICY),
       params_schema: {
         type: "object",
         properties: {

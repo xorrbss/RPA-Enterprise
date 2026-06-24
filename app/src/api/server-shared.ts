@@ -16,9 +16,11 @@ import type {
   DurableSecurityAuditDecisionWriter,
   RbacAction,
   RbacMiddleware,
+  SecretStoreBoundary,
   SignedCommandRegistry,
 } from "../../../ts/security-middleware-contract";
 import type { BrowserSessionStore } from "../runtime/browser-session-store";
+import type { JwtClaimMapping, JwtRoleMap } from "./auth";
 import { ApiResponseError } from "./errors";
 import type { RunEnqueuer } from "./run-queue";
 import type { PrincipalDirectoryWriter } from "./principal-directory";
@@ -35,6 +37,7 @@ declare module "fastify" {
   // 라우트별 RBAC 액션 선언(auth-rbac §2). RBAC preHandler가 이 값으로 authorize를 호출한다.
   interface FastifyContextConfig {
     rbacAction?: RbacAction;
+    skipJwtAuth?: boolean;
   }
 }
 
@@ -51,6 +54,37 @@ export interface ArtifactObjectReader {
   get(objectRef: ObjectRef): Promise<string | null>;
   /** object raw bytes. Binary artifact routes use this path to avoid lossy UTF-8 decoding. */
   getBytes(objectRef: ObjectRef): Promise<Uint8Array | null>;
+}
+
+export type SelectorProbeStatus = "matched" | "not_found" | "invalid_selector" | "failed";
+
+export interface SelectorProbeInput {
+  readonly tenantId: string;
+  readonly siteProfileId: string;
+  readonly elementId: string;
+  readonly selector: string;
+  readonly sampleUrl: string | null;
+  readonly correlationId: string;
+}
+
+export interface SelectorProbeResult {
+  readonly status: SelectorProbeStatus;
+  readonly matchCount: number | null;
+  readonly reasonCode?: string | null;
+}
+
+export interface SelectorProbeProvider {
+  probe(input: SelectorProbeInput): Promise<SelectorProbeResult>;
+}
+
+export interface AuthReadinessConfig {
+  readonly mode: "hs256" | "jwks";
+  readonly configurationSource: "deployment_config" | "test_default";
+  readonly jwksUrl?: string;
+  readonly issuer?: string;
+  readonly audience?: string;
+  readonly claimMapping?: JwtClaimMapping;
+  readonly roleMap?: JwtRoleMap;
 }
 
 export interface ApiServerDeps {
@@ -89,6 +123,12 @@ export interface ApiServerDeps {
    * 담당자 디렉터리를 동기화한다. 미주입 시 JWT 자동 동기화는 비활성(GET /v1/principals는 그대로 동작).
    */
   principalDirectory?: PrincipalDirectoryWriter;
+  /** Webhook trigger HMAC verification key boundary. Values are resolved only while verifying a signed webhook and always through secret.resolve audit. */
+  webhookSecretBoundary?: SecretStoreBoundary;
+  /** Optional live DOM selector probe boundary. Missing provider is surfaced as not_run, never inferred success. */
+  selectorProbe?: SelectorProbeProvider;
+  /** Public auth readiness metadata for security review surfaces. Secrets are never exposed. */
+  authReadiness?: AuthReadinessConfig;
 }
 
 export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;

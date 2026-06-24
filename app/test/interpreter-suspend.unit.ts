@@ -189,8 +189,28 @@ async function main(): Promise<void> {
   }
   {
     // on_timeout=escalate 투영(H4b).
-    const o = await runScenario(htScenario({ kind: "validation", assignee_role: "reviewer", on_timeout: "escalate" }), ctx(), htDeps());
+    const o = await runScenario(htScenario({ kind: "validation", assignee_role: "reviewer", on_timeout: "escalate", timeout: "45m" }), ctx(), htDeps());
     check("@human_task on_timeout=escalate 투영", o.suspend?.kind === "human_task" && o.suspend.onTimeout === "escalate", JSON.stringify(o.suspend));
+    check("@human_task timeout=45m projection", o.suspend?.kind === "human_task" && o.suspend.timeoutMs === 45 * 60 * 1000, JSON.stringify(o.suspend));
+  }
+  {
+    const input = {
+      kind: "validation",
+      assignee_role: "reviewer",
+      payload: { invoice_id: "INV-7" },
+      result_schema: {
+        version: "business_form_v1",
+        fields: [
+          { key: "invoice_id", label: "Invoice ID", type: "text", required: true },
+          { key: "total", label: "Total", type: "number", required: true },
+        ],
+      },
+      artifact_refs: ["artifact.invoice.scan"],
+    };
+    const o = await runScenario(htScenario(input), ctx(), htDeps());
+    check("@human_task payload 보존", o.suspend?.kind === "human_task" && o.suspend.payload?.invoice_id === "INV-7", JSON.stringify(o.suspend));
+    check("@human_task result_schema 보존", o.suspend?.kind === "human_task" && o.suspend.resultSchema?.version === "business_form_v1", JSON.stringify(o.suspend));
+    check("@human_task artifact_refs 보존", o.suspend?.kind === "human_task" && o.suspend.artifactRefs?.[0] === "artifact.invoice.scan", JSON.stringify(o.suspend));
   }
   {
     // what 실행 노드 → pageStateRef = 마지막 StepResult.pageStateAfter(challenge 와 동일 출처).
@@ -210,7 +230,16 @@ async function main(): Promise<void> {
     check("@human_task kind 'weird' → IR_SCHEMA_INVALID throw", threw instanceof Error && (threw as { code?: string }).code === "IR_SCHEMA_INVALID", String(threw));
   }
   {
+    let threw: unknown;
+    try { await runScenario(htScenario({ assignee_role: "ops", artifact_refs: ["ok", ""] }), ctx(), htDeps()); } catch (e) { threw = e; }
+    check("@human_task artifact_refs 빈 문자열 → IR_SCHEMA_INVALID throw", threw instanceof Error && (threw as { code?: string }).code === "IR_SCHEMA_INVALID", String(threw));
+  }
+  {
     // @challenge reserved-handler 노드 → RESERVED_HANDLER_UNSUPPORTED(ResolutionPolicy 미구현, 조용한 false 금지).
+    let invalidTimeoutThrew: unknown;
+    try { await runScenario(htScenario({ assignee_role: "ops", timeout: "soon" }), ctx(), htDeps()); } catch (e) { invalidTimeoutThrew = e; }
+    check("@human_task invalid timeout -> IR_SCHEMA_INVALID throw", invalidTimeoutThrew instanceof Error && (invalidTimeoutThrew as { code?: string }).code === "IR_SCHEMA_INVALID", String(invalidTimeoutThrew));
+
     const challengeNode: CompiledScenario = {
       start: "c",
       nodes: {

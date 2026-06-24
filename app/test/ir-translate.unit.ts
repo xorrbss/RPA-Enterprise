@@ -46,6 +46,28 @@ const irNav = {
     done: { terminal: "success" },
   },
 };
+const irApi = {
+  start: "call",
+  nodes: {
+    call: {
+      what: [
+        {
+          action: "api_call",
+          url_ref: "api_url",
+          args: {
+            method: "post",
+            headers: { Accept: "application/json" },
+            body: { status: "approved" },
+            auth: { type: "secret_ref_bearer", secret_ref: "secret://prod/connector/http-api/token" },
+            connector_id: "http-api",
+            idempotency_key: "api-call-1",
+          },
+        },
+      ],
+      terminal: "success",
+    },
+  },
+};
 
 function main(): void {
   // ── (A) compiled_ast on[] 드리프트 (RQ-008) ──
@@ -249,6 +271,41 @@ function main(): void {
 
   // ── (C) dom 프리미티브 act/extract 매핑 ──
   // 10) act: instruction + node side_effect.kind → sideEffect 소싱.
+  {
+    const s = compiledScenarioFrom(irApi, {}, { api_url: "https://api.example.com/status" });
+    const api = s.nodes.call?.what[0] as {
+      type?: string;
+      method?: string;
+      url?: string;
+      headers?: Record<string, unknown>;
+      body?: { status?: string };
+      auth?: { type?: string; secret_ref?: string };
+      connectorId?: string;
+      idempotencyKey?: string;
+    } | undefined;
+    check(
+      "api_call: url_ref params + SecretRef bearer args -> executor action",
+      api?.type === "api_call" &&
+        api.method === "POST" &&
+        api.url === "https://api.example.com/status" &&
+        api.headers?.Accept === "application/json" &&
+        api.body?.status === "approved" &&
+        api.auth?.type === "secret_ref_bearer" &&
+        api.auth.secret_ref === "secret://prod/connector/http-api/token" &&
+        api.connectorId === "http-api" &&
+        api.idempotencyKey === "api-call-1",
+      JSON.stringify(api),
+    );
+  }
+  {
+    const err = caught(() => compiledScenarioFrom({ start: "call", nodes: { call: { what: [{ action: "api_call" }], terminal: "success" } } }, {}, {}));
+    check("api_call.url_ref 누락 -> IR_SCHEMA_INVALID", err instanceof InterpreterError && err.code === "IR_SCHEMA_INVALID", String(err));
+  }
+  {
+    const err = caught(() => compiledScenarioFrom(irApi, {}, { api_url: "not_absolute" }));
+    check("api_call url_ref 비절대 URL -> URL_REF_VALUE_NOT_ABSOLUTE_URL", err instanceof InterpreterError && err.code === "URL_REF_VALUE_NOT_ABSOLUTE_URL", String(err));
+  }
+
   {
     const ir = { start: "a", nodes: { a: { what: [{ action: "act", instruction: "click login" }], side_effect: { kind: "submit" }, terminal: "success" } } };
     const s = compiledScenarioFrom(ir, {});

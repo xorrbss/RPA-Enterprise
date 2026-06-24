@@ -78,7 +78,17 @@ async function main(): Promise<void> {
   await expectAllow(["viewer"], "scenario.read");
   await expectAllow(["viewer"], "site.read");
   await expectAllow(["viewer"], "gateway_policy.read");
+  await expectAllow(["viewer"], "trigger.read");
+  await expectAllow(["viewer"], "ops_alert.read");
+  await expectAllow(["viewer"], "automation_idea.read");
+  await expectAllow(["viewer"], "connector.read");
+  await expectAllow(["viewer"], "document_job.read");
+  await expectAllow(["viewer"], "audit.read");
   await expectDeny(["viewer"], "run.create");
+  await expectDeny(["viewer"], "trigger.manage");
+  await expectDeny(["viewer"], "automation_idea.manage");
+  await expectDeny(["viewer"], "automation_idea.approve");
+  await expectDeny(["viewer"], "document_job.manage");
   await expectDeny(["viewer"], "site.approve");
   await expectDeny(["viewer"], "site.create");
   await expectDeny(["viewer"], "gateway_policy.edit");
@@ -86,6 +96,7 @@ async function main(): Promise<void> {
   await expectDeny(["viewer"], "scenario.create");
   await expectDeny(["viewer"], "scenario.update");
   await expectDeny(["viewer"], "scenario.promote");
+  await expectDeny(["viewer"], "connector.enable", "CONNECTOR_PERMISSION_DENIED");
 
   // operator: run create/abort·DLQ replay 허용, resolve·promote 거부
   await expectAllow(["operator"], "run.read");
@@ -96,9 +107,16 @@ async function main(): Promise<void> {
   await expectAllow(["operator"], "scenario.create");
   await expectAllow(["operator"], "scenario.update");
   await expectAllow(["operator"], "site.create");
+  await expectAllow(["operator"], "trigger.manage");
+  await expectAllow(["operator"], "automation_idea.manage");
+  await expectAllow(["operator"], "connector.read");
+  await expectAllow(["operator"], "document_job.read");
+  await expectAllow(["operator"], "document_job.manage");
+  await expectAllow(["operator"], "audit.read");
   await expectDeny(["operator"], "human_task.resolve.validation");
   await expectDeny(["operator"], "human_task.escalate");
   await expectDeny(["operator"], "scenario.promote");
+  await expectDeny(["operator"], "automation_idea.approve");
 
   // reviewer: validation/exception/captcha/mfa resolve + escalate 허용, approval resolve 거부
   await expectDeny(["reviewer"], "human_task.resolve.validation");
@@ -145,6 +163,7 @@ async function main(): Promise<void> {
   await expectAllow(["reviewer"], "human_task.escalate");
   await expectDeny(["reviewer"], "human_task.resolve.approval");
   await expectDeny(["reviewer"], "node_policy.approve");
+  await expectDeny(["reviewer"], "automation_idea.approve");
 
   // approver: approval resolve·node_policy·site 승인 허용, secret/promote 거부
   await expectAllowCheck(
@@ -158,6 +177,7 @@ async function main(): Promise<void> {
   );
   await expectAllow(["approver"], "node_policy.approve");
   await expectAllow(["approver"], "site.approve");
+  await expectAllow(["approver"], "automation_idea.approve");
   await expectDeny(["approver"], "secret.resolve", "SECRET_ACCESS_DENIED");
   await expectDeny(["approver"], "connector.enable", "CONNECTOR_PERMISSION_DENIED");
   await expectDeny(["approver"], "scenario.promote");

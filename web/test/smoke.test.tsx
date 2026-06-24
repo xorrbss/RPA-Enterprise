@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -20,7 +26,10 @@ function renderApp(client: ApiClient = fakeClient()): void {
   );
 }
 
-function renderGenerationArtifactsPanel(client: ApiClient, source: "planner" | "result" = "planner"): void {
+function renderGenerationArtifactsPanel(
+  client: ApiClient,
+  source: "planner" | "result" = "planner",
+): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -44,7 +53,10 @@ function renderPromptScenarioGenerator(client: ApiClient): void {
 
 // roles 클레임을 담은 가짜 JWT(서명 미검증 — 프론트는 표시 판단용으로만 payload를 읽는다).
 function jwt(roles: readonly string[]): string {
-  const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles }))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
   return `e30.${payload}.sig`;
 }
 
@@ -63,33 +75,42 @@ const ALL_ROLES = ["viewer", "operator", "reviewer", "approver", "admin"];
 
 describe("D7 운영 콘솔 shell", () => {
   test("generation result artifacts use the linked-run result route and global artifact body gate", async () => {
-    const resultListCalls: Array<{ generationId: string; cursor: string | undefined }> = [];
+    const resultListCalls: Array<{
+      generationId: string;
+      cursor: string | undefined;
+    }> = [];
     const bodyCalls: string[] = [];
     renderGenerationArtifactsPanel(
       fakeClient({
         listScenarioGenerationArtifacts: async () => {
-          throw new Error("planner artifact route should not be used for result source");
+          throw new Error(
+            "planner artifact route should not be used for result source",
+          );
         },
         listScenarioGenerationResultArtifacts: async (generationId, params) => {
           resultListCalls.push({ generationId, cursor: params?.cursor });
           return {
-            items: [{
-              artifact_id: "cc000000-0000-0000-0000-000000000003",
-              type: "extract_result_json",
-              media_type: "application/json",
-              filename: "result.json",
-              byte_size: 128,
-              duration_ms: null,
-              redaction_status: "redacted",
-              retention_until: null,
-              legal_hold: false,
-              created_at: "2026-06-15T00:00:02.000Z",
-            }],
+            items: [
+              {
+                artifact_id: "cc000000-0000-0000-0000-000000000003",
+                type: "extract_result_json",
+                media_type: "application/json",
+                filename: "result.json",
+                byte_size: 128,
+                duration_ms: null,
+                redaction_status: "redacted",
+                retention_until: null,
+                legal_hold: false,
+                created_at: "2026-06-15T00:00:02.000Z",
+              },
+            ],
             next_cursor: null,
           };
         },
         getScenarioGenerationArtifact: async () => {
-          throw new Error("generation-scoped body route should not be used for result source");
+          throw new Error(
+            "generation-scoped body route should not be used for result source",
+          );
         },
         getArtifact: async (artifactId) => {
           bodyCalls.push(artifactId);
@@ -110,10 +131,16 @@ describe("D7 운영 콘솔 shell", () => {
       "result",
     );
 
-    expect(await screen.findByText("실행 결과 산출물")).toBeInTheDocument();
-    expect(await screen.findByText("extract_result_json")).toBeInTheDocument();
-    expect(await screen.findByText(/total/)).toBeInTheDocument();
-    expect(resultListCalls).toEqual([{ generationId: "gen-page", cursor: undefined }]);
+    expect(await screen.findByText("실행 결과 증빙")).toBeInTheDocument();
+    expect((await screen.findAllByText("추출 결과")).length).toBeGreaterThan(0);
+    expect(await screen.findByLabelText("결과 요약")).toHaveTextContent(
+      "rows",
+    );
+    expect(screen.getByLabelText("결과 요약")).toHaveTextContent("total");
+    expect(screen.queryByText("원본 결과 보기")).toBeNull();
+    expect(resultListCalls).toEqual([
+      { generationId: "gen-page", cursor: undefined },
+    ]);
     expect(bodyCalls).toEqual(["cc000000-0000-0000-0000-000000000003"]);
   });
 
@@ -124,7 +151,9 @@ describe("D7 운영 콘솔 shell", () => {
     renderGenerationArtifactsPanel(
       fakeClient({
         listScenarioGenerationArtifacts: async () => {
-          throw new Error("planner artifact route should not be used for result media");
+          throw new Error(
+            "planner artifact route should not be used for result media",
+          );
         },
         listScenarioGenerationResultArtifacts: async (generationId) => {
           resultListCalls.push(generationId);
@@ -159,14 +188,20 @@ describe("D7 운영 콘솔 shell", () => {
           };
         },
         getScenarioGenerationArtifact: async () => {
-          throw new Error("generation-scoped body route should not be used for result media");
+          throw new Error(
+            "generation-scoped body route should not be used for result media",
+          );
         },
         getArtifact: async () => {
-          throw new Error("artifact body route should not be used for result media preview");
+          throw new Error(
+            "artifact body route should not be used for result media preview",
+          );
         },
         getArtifactBlob: async (artifactId) => {
           blobCalls.push(artifactId);
-          return new Blob([new Uint8Array([1, 2, 3])], { type: artifactId.startsWith("ee") ? "video/webm" : "image/png" });
+          return new Blob([new Uint8Array([1, 2, 3])], {
+            type: artifactId.startsWith("ee") ? "video/webm" : "image/png",
+          });
         },
       }),
       "result",
@@ -174,12 +209,19 @@ describe("D7 운영 콘솔 shell", () => {
 
     const image = await screen.findByRole("img", { name: "result.png" });
     expect(image).toHaveAttribute("src", "blob:test-preview");
-    expect(screen.getByText("image 1")).toBeInTheDocument();
-    expect(screen.getByText("video 1")).toBeInTheDocument();
+    expect(screen.getByText("이미지 1")).toBeInTheDocument();
+    expect(screen.getByText("영상 1")).toBeInTheDocument();
     expect(resultListCalls).toEqual(["gen-page"]);
     expect(blobCalls).toContain("dd000000-0000-0000-0000-000000000004");
-    fireEvent.click(screen.getByText("run_video").closest("button") as HTMLButtonElement);
-    await waitFor(() => expect(document.querySelector("video")).toHaveAttribute("src", "blob:test-preview"));
+    fireEvent.click(
+      screen.getByText("실행 영상").closest("button") as HTMLButtonElement,
+    );
+    await waitFor(() =>
+      expect(document.querySelector("video")).toHaveAttribute(
+        "src",
+        "blob:test-preview",
+      ),
+    );
     expect(blobCalls).toContain("ee000000-0000-0000-0000-000000000005");
   });
 
@@ -189,22 +231,26 @@ describe("D7 운영 콘솔 shell", () => {
     renderGenerationArtifactsPanel(
       fakeClient({
         listScenarioGenerationResultArtifacts: async () => ({
-          items: [{
-            artifact_id: "bb200000-0000-0000-0000-000000000008",
-            type: "screen_capture",
-            media_type: "image/png",
-            filename: "not-required.png",
-            byte_size: 512,
-            duration_ms: null,
-            redaction_status: "not_required",
-            retention_until: null,
-            legal_hold: false,
-            created_at: "2026-06-15T00:00:02.000Z",
-          }],
+          items: [
+            {
+              artifact_id: "bb200000-0000-0000-0000-000000000008",
+              type: "screen_capture",
+              media_type: "image/png",
+              filename: "not-required.png",
+              byte_size: 512,
+              duration_ms: null,
+              redaction_status: "not_required",
+              retention_until: null,
+              legal_hold: false,
+              created_at: "2026-06-15T00:00:02.000Z",
+            },
+          ],
           next_cursor: null,
         }),
         getArtifact: async () => {
-          throw new Error("not_required media preview must use blob route, not body route");
+          throw new Error(
+            "not_required media preview must use blob route, not body route",
+          );
         },
         getArtifactBlob: async (artifactId) => {
           blobCalls.push(artifactId);
@@ -216,8 +262,10 @@ describe("D7 운영 콘솔 shell", () => {
 
     const image = await screen.findByRole("img", { name: "not-required.png" });
     expect(image).toHaveAttribute("src", "blob:test-preview");
-    expect(screen.getByText("image 1")).toBeInTheDocument();
-    expect(screen.queryByText("Preview is available after redaction completes.")).toBeNull();
+    expect(screen.getByText("이미지 1")).toBeInTheDocument();
+    expect(
+      screen.queryByText("처리가 완료되면 미리볼 수 있습니다."),
+    ).toBeNull();
     expect(blobCalls).toEqual(["bb200000-0000-0000-0000-000000000008"]);
   });
 
@@ -262,7 +310,9 @@ describe("D7 운영 콘솔 shell", () => {
         },
         getScenarioGenerationArtifact: async (_generationId, artifactId) => {
           scopedBodyCalls.push(artifactId);
-          throw new Error("pending generation artifact body must not be requested");
+          throw new Error(
+            "pending generation artifact body must not be requested",
+          );
         },
         getArtifactBlob: async (artifactId) => {
           blobCalls.push(artifactId);
@@ -272,16 +322,20 @@ describe("D7 운영 콘솔 shell", () => {
       "result",
     );
 
-    expect(await screen.findByText("screen_capture")).toBeInTheDocument();
-    expect(screen.getByText("Preview is available after redaction completes.")).toBeInTheDocument();
+    expect((await screen.findAllByText("화면 캡처")).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("처리가 완료되면 미리볼 수 있습니다."),
+    ).toBeInTheDocument();
     expect(blobCalls).toEqual([]);
     expect(bodyCalls).toEqual([]);
     expect(scopedBodyCalls).toEqual([]);
 
-    const jsonButton = screen.getByText("extract_result_json").closest("button");
+    const jsonButton = screen.getByText("추출 결과").closest("button");
     expect(jsonButton).not.toBeNull();
     fireEvent.click(jsonButton as HTMLButtonElement);
-    expect(screen.getByText("Preview is available after redaction completes.")).toBeInTheDocument();
+    expect(
+      screen.getByText("처리가 완료되면 미리볼 수 있습니다."),
+    ).toBeInTheDocument();
     expect(blobCalls).toEqual([]);
     expect(bodyCalls).toEqual([]);
     expect(scopedBodyCalls).toEqual([]);
@@ -295,47 +349,65 @@ describe("D7 운영 콘솔 shell", () => {
   test("토큰 게이트: 토큰 없으면 접속 화면", () => {
     localStorage.removeItem("rpa.token");
     renderApp();
-    expect(screen.getByRole("heading", { level: 1, name: "RPA 운영 콘솔 접속" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "RPA 운영 콘솔 접속" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "주 메뉴" })).toBeNull();
   });
 
-  test("사이드바 + 12 nav item 렌더", () => {
+  test("사이드바 + 18 nav item 렌더", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(within(nav).getAllByRole("button")).toHaveLength(12);
+    expect(within(nav).getAllByRole("button")).toHaveLength(18);
   });
 
   test("기본 라우트 = dashboard (지표 + 최근 실행)", async () => {
     renderApp();
-    expect(screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("최근 실행")).toBeInTheDocument());
+    expect(
+      screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("최근 실행")).toBeInTheDocument(),
+    );
     // fake 실행이 running 상태로 표시(StatusBadge 한국어 라벨)
-    await waitFor(() => expect(screen.getByText("실행 중")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("실행 중")).toBeInTheDocument(),
+    );
   });
 
   test("해시 라우팅 → workitems", async () => {
     renderApp();
     location.hash = "#workitems";
     await waitFor(() =>
-      expect(screen.getByRole("heading", { level: 1, name: "작업 목록" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("heading", { level: 1, name: "작업 목록" }),
+      ).toBeInTheDocument(),
     );
     // 빈 상태는 쿼리 resolve 후 표시(로딩 → 빈)
-    await waitFor(() => expect(screen.getByText("조건에 맞는 작업 항목이 없습니다.")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText("조건에 맞는 작업 항목이 없습니다."),
+      ).toBeInTheDocument(),
+    );
   });
 
   test("잘못된 해시 → dashboard 폴백", async () => {
     renderApp();
     location.hash = "#nonsense";
     await waitFor(() =>
-      expect(screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" }),
+      ).toBeInTheDocument(),
     );
   });
 
   test("openGate: 정적 contract-doc 뷰 렌더(Placeholder 아님)", async () => {
     renderApp();
     location.hash = "#openGate";
-    await waitFor(() => expect(screen.getByText("Product-open gate map")).toBeInTheDocument());
-    expect(screen.getByText("RBAC 화면/액션 gate")).toBeInTheDocument(); // 계약 파생 행
+    await waitFor(() =>
+      expect(screen.getByText("출시 점검 항목")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("권한별 화면 제어")).toBeInTheDocument(); // 계약 파생 행
     expect(screen.queryByText("준비 중")).toBeNull(); // Placeholder 배지 미노출
   });
 
@@ -346,20 +418,26 @@ describe("D7 운영 콘솔 shell", () => {
   test("openGate: artifact 거부 코드 = 계약 v1 거동(RESOURCE_NOT_FOUND), ARTIFACT_NOT_REDACTED 재유입 시 실패", async () => {
     renderApp();
     location.hash = "#openGate";
-    await waitFor(() => expect(screen.getByText("Product-open gate map")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("출시 점검 항목")).toBeInTheDocument(),
+    );
     // (정) 계약 v1 거동(404, 존재 비노출)이 노출됨.
     expect(screen.getAllByText(/RESOURCE_NOT_FOUND/).length).toBeGreaterThan(0);
     // (드리프트 가드) v1 미노출 코드가 OpenGate에 재유입되면 실패 — 계약 표방 vs 위반의 거짓 봉쇄.
     expect(screen.queryByText(/ARTIFACT_NOT_REDACTED/)).toBeNull();
   });
 
-  test("idempotency: 정적 contract-doc 뷰 렌더(Placeholder 아님)", async () => {
+  test("idempotency: 중복 방지 운영 점검 뷰 렌더(Placeholder 아님)", async () => {
     renderApp();
     location.hash = "#idempotency";
-    await waitFor(() => expect(screen.getByText("중복 방지 메커니즘")).toBeInTheDocument());
-    expect(screen.getByText("제어평면 멱등 키 처리 흐름")).toBeInTheDocument(); // 계약 파생 패널
-    // replay(완료 재제출)는 부작용 재실행 없이 최초 응답 반환 — 핵심 계약 의미 노출
-    expect(screen.getByText("부작용 재실행 없이 최초 응답 재생 (replay)")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("중복 방지 메커니즘")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("운영 명령 중복 처리 흐름")).toBeInTheDocument();
+    // 완료 재제출은 부작용 재실행 없이 최초 응답 반환 — 핵심 의미 노출
+    expect(
+      screen.getByText("부작용 재실행 없이 최초 응답 반환"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("준비 중")).toBeNull(); // Placeholder 배지 미노출
   });
 
@@ -371,7 +449,9 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    await waitFor(() => expect(screen.getByText("불러오지 못했습니다")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("불러오지 못했습니다")).toBeInTheDocument(),
+    );
   });
 
   test("운영자 명령: 실행 취소(abort) 디스패치 + Idempotency-Key", async () => {
@@ -390,11 +470,18 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.runId).toBe("11111111-aaaa-bbbb-cccc-000000000001");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
-    expect(await screen.findByText("완료", { selector: "span.badge" })).toBeInTheDocument();
+    expect(
+      await screen.findByText("완료", { selector: "span.badge" }),
+    ).toBeInTheDocument();
   });
 
   test("자동화 운영 해제 성공은 인라인 완료 배지를 남기지 않는다", async () => {
-    const calls: Array<{ scenarioId: string; version: number; target: "prod" | "draft"; key: string }> = [];
+    const calls: Array<{
+      scenarioId: string;
+      version: number;
+      target: "prod" | "draft";
+      key: string;
+    }> = [];
     renderApp(
       fakeClient({
         listScenarios: async () => ({
@@ -429,12 +516,22 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.queryByText("완료")).toBeNull();
   });
 
-  test("human-task 처리완료(resolve) 디스패치", async () => {
+  test("human-task 완료 처리(resolve) 디스패치", async () => {
     const calls: string[] = [];
     renderApp(
       fakeClient({
         listHumanTasks: async () => ({
-          items: [{ human_task_id: "ht-1", state: "in_progress", kind: "approval", assignee: null, timeout: null, on_timeout: null, run_id: null }],
+          items: [
+            {
+              human_task_id: "ht-1",
+              state: "in_progress",
+              kind: "approval",
+              assignee: null,
+              timeout: null,
+              on_timeout: null,
+              run_id: null,
+            },
+          ],
           next_cursor: null,
         }),
         resolveHumanTask: async (id) => {
@@ -444,7 +541,7 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#humanTasks";
-    const btn = await screen.findByRole("button", { name: "처리완료" });
+    const btn = await screen.findByRole("button", { name: "완료 처리" });
     btn.click();
     (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toContain("ht-1"));
@@ -452,7 +549,14 @@ describe("D7 운영 콘솔 shell", () => {
 
   test("확인 다이얼로그: role=dialog + aria-modal + 포커스 이동 + Esc 취소(focus trap)", async () => {
     const calls: string[] = [];
-    renderApp(fakeClient({ abortRun: async () => { calls.push("x"); return {}; } }));
+    renderApp(
+      fakeClient({
+        abortRun: async () => {
+          calls.push("x");
+          return {};
+        },
+      }),
+    );
     location.hash = "#runTrace";
     (await screen.findByRole("button", { name: "취소" })).click();
     const dialog = await screen.findByRole("dialog");
@@ -467,14 +571,33 @@ describe("D7 운영 콘솔 shell", () => {
     const calls: Array<{ assignee: string }> = [];
     renderApp(
       fakeClient({
-        listHumanTasks: async () => ({ items: [{ human_task_id: "ht-9", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: null, run_id: null }], next_cursor: null }),
-        assignHumanTask: async (_id, assignee) => { calls.push({ assignee }); return {}; },
+        listHumanTasks: async () => ({
+          items: [
+            {
+              human_task_id: "ht-9",
+              state: "open",
+              kind: "approval",
+              assignee: null,
+              timeout: null,
+              on_timeout: null,
+              run_id: null,
+            },
+          ],
+          next_cursor: null,
+        }),
+        assignHumanTask: async (_id, assignee) => {
+          calls.push({ assignee });
+          return {};
+        },
       }),
     );
     location.hash = "#humanTasks";
-    (await screen.findByRole("button", { name: "배정" })).click();
+    (await screen.findByRole("button", { name: "담당자 지정" })).click();
     expect(await screen.findByRole("button", { name: "확인" })).toBeDisabled(); // 빈 입력 → 확인 비활성(가드)
-    fireEvent.change(screen.getByLabelText("담당자(이름으로 선택 또는 ID 직접 입력)"), { target: { value: "00000000-0000-0000-0000-0000000000aa" } });
+    fireEvent.change(
+      screen.getByLabelText("담당자 선택 또는 직접 입력"),
+      { target: { value: "00000000-0000-0000-0000-0000000000aa" } },
+    );
     screen.getByRole("button", { name: "확인" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.assignee).toBe("00000000-0000-0000-0000-0000000000aa");
@@ -485,7 +608,15 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(
       fakeClient({
         listScenarios: async () => ({
-          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000001", name: "리뷰 수집", version: 3, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000001", promotion_status: "draft" }],
+          items: [
+            {
+              scenario_id: "22222222-aaaa-bbbb-cccc-000000000001",
+              name: "리뷰 수집",
+              version: 3,
+              latest_version_id: "33333333-aaaa-bbbb-cccc-000000000001",
+              promotion_status: "draft",
+            },
+          ],
           next_cursor: null,
         }),
         setScenarioPromotion: async (id, version, target) => {
@@ -496,24 +627,43 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#scenarioStudio";
     const btn = await screen.findByRole("button", { name: "운영 지정" });
-    expect(btn).toHaveAttribute("title", expect.stringContaining("실행에 꼭 필요한"));
+    expect(btn).toHaveAttribute(
+      "title",
+      expect.stringContaining("실행에 꼭 필요한"),
+    );
     btn.click();
-    expect(await screen.findByText(/실행에 꼭 필요한 단계는 아니며/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/실행에 꼭 필요한 단계는 아니며/),
+    ).toBeInTheDocument();
     (await screen.findByRole("button", { name: "확인" })).click();
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]).toEqual({ id: "22222222-aaaa-bbbb-cccc-000000000001", version: 3, target: "prod" });
+    expect(calls[0]).toEqual({
+      id: "22222222-aaaa-bbbb-cccc-000000000001",
+      version: 3,
+      target: "prod",
+    });
   });
 
   test("scenario 새 자동화 단계 편집은 추출 규칙 입력 영역을 바로 노출", async () => {
-    renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+      }),
+    );
     location.hash = "#scenarioStudio";
-    fireEvent.click(await screen.findByRole("button", { name: "+ 새 자동화 만들기" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "+ 새 자동화 만들기" }),
+    );
     fireEvent.click(await screen.findByRole("button", { name: "단계 편집" }));
 
     const rule = screen.getByRole("textbox", { name: "추출 규칙" });
     expect(rule.tagName).toBe("TEXTAREA");
-    expect(rule).toHaveValue("현재 페이지에서 extracted_rows 데이터를 추출하라.");
-    expect(screen.getByDisplayValue("extracted_rows")).toBeInTheDocument();
+    expect(rule).toHaveValue(
+      "현재 페이지에서 수집데이터 내용을 추출하라.",
+    );
+    expect(screen.getByDisplayValue("수집데이터")).toBeInTheDocument();
+    expect(screen.queryByText(/schema_ref|url_ref|cmd_ref/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /observe|extract|navigate|loop/ })).not.toBeInTheDocument();
   });
 
   test("자연어 자동화 생성 → 저장 후 실행 대기 + 실행 기록 딥링크", async () => {
@@ -530,7 +680,8 @@ describe("D7 운영 콘솔 shell", () => {
               circuit_status: "closed",
               name: "shop",
               url_pattern: "https://shop.example",
-              default_browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
+              default_browser_identity_id:
+                "10000000-0000-4000-8000-0000000000a2",
               default_network_policy_id: "10000000-0000-4000-8000-0000000000a3",
             },
           ],
@@ -548,7 +699,10 @@ describe("D7 운영 콘솔 shell", () => {
             scenario_id: "00000000-0000-0000-0000-0000000000c1",
             scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
             run_id: "00000000-0000-0000-0000-000000000099",
-            evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
+            evidence_policy: body.evidence ?? {
+              screenshot: "failure",
+              video: "never",
+            },
             blockers: [],
             created_at: "2026-06-15T00:00:00.000Z",
             created_by: "operator",
@@ -559,13 +713,31 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "https://shop.example/orders. 주문 목록을 요약해줘" } });
-    await waitFor(() => expect(screen.getByLabelText("시작 URL")).toHaveValue("https://shop.example/orders"));
-    await waitFor(() => expect(screen.getByLabelText("사이트")).toHaveValue("10000000-0000-4000-8000-0000000000a1"));
-    fireEvent.change(screen.getByLabelText("Planner"), { target: { value: "llm_v1" } });
-    fireEvent.change(screen.getByLabelText("AI 모델"), { target: { value: "gpt-4o-mini" } });
-    expect(screen.getByLabelText("브라우저 ID")).toHaveValue("10000000-0000-4000-8000-0000000000a2");
-    expect(screen.getByLabelText("네트워크 정책 ID")).toHaveValue("10000000-0000-4000-8000-0000000000a3");
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "https://shop.example/orders. 주문 목록을 요약해줘" },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("시작 주소")).toHaveValue(
+        "https://shop.example/orders",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("사이트")).toHaveValue(
+        "10000000-0000-4000-8000-0000000000a1",
+      ),
+    );
+    fireEvent.change(screen.getByLabelText("생성 방식"), {
+      target: { value: "llm_v1" },
+    });
+    fireEvent.change(screen.getByLabelText("AI 모델"), {
+      target: { value: "gpt-4o-mini" },
+    });
+    expect(screen.getByLabelText("로그인 세션 선택값")).toHaveValue(
+      "10000000-0000-4000-8000-0000000000a2",
+    );
+    expect(screen.getByLabelText("보안 정책 선택값")).toHaveValue(
+      "10000000-0000-4000-8000-0000000000a3",
+    );
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     await waitFor(() => expect(calls).toHaveLength(1));
@@ -589,39 +761,66 @@ describe("D7 운영 콘솔 shell", () => {
     );
   });
 
-  test("자연어 자동화 생성: 사용자가 수정한 시작 URL은 prompt 변경으로 덮지 않는다", async () => {
-    renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
+  test("자연어 자동화 생성: 사용자가 수정한 시작 주소는 prompt 변경으로 덮지 않는다", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+      }),
+    );
     location.hash = "#scenarioStudio";
 
     const promptBox = await screen.findByLabelText("자연어 요청");
-    fireEvent.change(promptBox, { target: { value: "https://shop.example/orders. 주문 목록을 요약해줘" } });
-    await waitFor(() => expect(screen.getByLabelText("시작 URL")).toHaveValue("https://shop.example/orders"));
+    fireEvent.change(promptBox, {
+      target: { value: "https://shop.example/orders. 주문 목록을 요약해줘" },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("시작 주소")).toHaveValue(
+        "https://shop.example/orders",
+      ),
+    );
 
-    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://manual.example/dashboard" } });
-    fireEvent.change(promptBox, { target: { value: "https://new.example/orders. 새 주문을 확인해줘" } });
+    fireEvent.change(screen.getByLabelText("시작 주소"), {
+      target: { value: "https://manual.example/dashboard" },
+    });
+    fireEvent.change(promptBox, {
+      target: { value: "https://new.example/orders. 새 주문을 확인해줘" },
+    });
 
-    await waitFor(() => expect(promptBox).toHaveValue("https://new.example/orders. 새 주문을 확인해줘"));
-    expect(screen.getByLabelText("시작 URL")).toHaveValue("https://manual.example/dashboard");
+    await waitFor(() =>
+      expect(promptBox).toHaveValue(
+        "https://new.example/orders. 새 주문을 확인해줘",
+      ),
+    );
+    expect(screen.getByLabelText("시작 주소")).toHaveValue(
+      "https://manual.example/dashboard",
+    );
   });
 
   test("자연어 자동화 생성: 새 사이트를 화면 안에서 등록하고 바로 선택한다", async () => {
     const createdSiteId = "10000000-0000-4000-8000-0000000000f1";
     const createCalls: Array<Parameters<ApiClient["createSite"]>[0]> = [];
-    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
-    const siteItems = new Map<string, {
-      site_profile_id: string;
-      risk: string;
-      approval_status: string;
-      circuit_status: string;
-      name: string;
-      url_pattern: string;
-      default_browser_identity_id: string | null;
-      default_network_policy_id: string | null;
-    }>();
+    const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> =
+      [];
+    const siteItems = new Map<
+      string,
+      {
+        site_profile_id: string;
+        risk: string;
+        approval_status: string;
+        circuit_status: string;
+        name: string;
+        url_pattern: string;
+        default_browser_identity_id: string | null;
+        default_network_policy_id: string | null;
+      }
+    >();
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
-        listSites: async () => ({ items: [...siteItems.values()], next_cursor: null }),
+        listSites: async () => ({
+          items: [...siteItems.values()],
+          next_cursor: null,
+        }),
         createSite: async (body) => {
           createCalls.push(body);
           siteItems.set(createdSiteId, {
@@ -656,7 +855,10 @@ describe("D7 운영 콘솔 shell", () => {
             scenario_id: "00000000-0000-0000-0000-0000000000c1",
             scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
             run_id: "00000000-0000-0000-0000-000000000099",
-            evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+            evidence_policy: body.evidence ?? {
+              screenshot: "each_step",
+              video: "never",
+            },
             blockers: [],
             created_at: "2026-06-15T00:00:00.000Z",
             created_by: "operator",
@@ -668,13 +870,23 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#scenarioStudio";
 
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "새 포털에서 주문 목록을 요약해줘" } });
-    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://new.example/orders" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "새 포털에서 주문 목록을 요약해줘" },
+    });
+    fireEvent.change(screen.getByLabelText("시작 주소"), {
+      target: { value: "https://new.example/orders" },
+    });
 
-    const onboarding = screen.getByText("새 사이트 온보딩").closest("section") as HTMLElement;
+    const onboarding = screen
+      .getByText("새 사이트 온보딩")
+      .closest("section") as HTMLElement;
     fireEvent.click(within(onboarding).getByRole("button", { name: "등록" }));
-    expect(within(onboarding).getByLabelText("URL 패턴 (http/https origin)")).toHaveValue("https://new.example");
-    fireEvent.change(within(onboarding).getByLabelText("이름"), { target: { value: "새 포털" } });
+    expect(
+      within(onboarding).getByLabelText("사이트 주소"),
+    ).toHaveValue("https://new.example");
+    fireEvent.change(within(onboarding).getByLabelText("이름"), {
+      target: { value: "새 포털" },
+    });
     fireEvent.click(within(onboarding).getByRole("button", { name: "등록" }));
 
     await waitFor(() => expect(createCalls).toHaveLength(1));
@@ -683,11 +895,17 @@ describe("D7 운영 콘솔 shell", () => {
       url_pattern: "https://new.example",
       risk: "green",
     });
-    await waitFor(() => expect(screen.getByLabelText("사이트")).toHaveValue(createdSiteId));
-    expect(screen.getByLabelText("사이트 ID")).toHaveValue(createdSiteId);
+    await waitFor(() =>
+      expect(screen.getByLabelText("사이트")).toHaveValue(createdSiteId),
+    );
+    expect(screen.getByLabelText("사이트")).toHaveValue(createdSiteId);
 
-    fireEvent.change(screen.getByLabelText("브라우저 ID"), { target: { value: "10000000-0000-4000-8000-0000000000f2" } });
-    fireEvent.change(screen.getByLabelText("네트워크 정책 ID"), { target: { value: "10000000-0000-4000-8000-0000000000f3" } });
+    fireEvent.change(screen.getByLabelText("로그인 세션 선택값"), {
+      target: { value: "10000000-0000-4000-8000-0000000000f2" },
+    });
+    fireEvent.change(screen.getByLabelText("보안 정책 선택값"), {
+      target: { value: "10000000-0000-4000-8000-0000000000f3" },
+    });
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     await waitFor(() => expect(generateCalls).toHaveLength(1));
@@ -707,19 +925,36 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(
       fakeClient({
         getScenarioGenerationCapabilities: async () => ({
-          planner: { default_planner: "deterministic_mvp", available: ["deterministic_mvp"] },
+          planner: {
+            default_planner: "deterministic_mvp",
+            available: ["deterministic_mvp"],
+          },
           visual_evidence: {
-            screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
-            video: { enabled: false, policies: ["never"], default_policy: "never", artifact_type: "video_masked", media_type: "video/webm" },
+            screenshot: {
+              enabled: true,
+              policies: ["never", "failure", "each_step"],
+              default_policy: "each_step",
+            },
+            video: {
+              enabled: false,
+              policies: ["never"],
+              default_policy: "never",
+              artifact_type: "video_masked",
+              media_type: "video/webm",
+            },
           },
         }),
       }),
     );
     location.hash = "#scenarioStudio";
-    const plannerSelect = await screen.findByLabelText("Planner");
+    const plannerSelect = await screen.findByLabelText("생성 방식");
     expect(plannerSelect).toHaveValue("deterministic_mvp");
-    expect(within(plannerSelect).getByRole("option", { name: "MVP Planner" })).toBeInTheDocument();
-    expect(within(plannerSelect).queryByRole("option", { name: "LLM Planner" })).not.toBeInTheDocument();
+    expect(
+      within(plannerSelect).getByRole("option", { name: "기본 생성" }),
+    ).toBeInTheDocument();
+    expect(
+      within(plannerSelect).queryByRole("option", { name: "AI 생성" }),
+    ).not.toBeInTheDocument();
   });
 
   test("자연어 자동화 생성: 서버 영상 capability가 있으면 기본 동영상 증거를 요청", async () => {
@@ -728,8 +963,18 @@ describe("D7 운영 콘솔 shell", () => {
       fakeClient({
         getScenarioGenerationCapabilities: async () => ({
           visual_evidence: {
-            screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
-            video: { enabled: true, policies: ["never", "failure", "always"], default_policy: "always", artifact_type: "video_masked", media_type: "video/webm" },
+            screenshot: {
+              enabled: true,
+              policies: ["never", "failure", "each_step"],
+              default_policy: "each_step",
+            },
+            video: {
+              enabled: true,
+              policies: ["never", "failure", "always"],
+              default_policy: "always",
+              artifact_type: "video_masked",
+              media_type: "video/webm",
+            },
           },
         }),
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -742,7 +987,8 @@ describe("D7 운영 콘솔 shell", () => {
               circuit_status: "closed",
               name: "shop",
               url_pattern: "https://shop.example",
-              default_browser_identity_id: "10000000-0000-4000-8000-0000000000a2",
+              default_browser_identity_id:
+                "10000000-0000-4000-8000-0000000000a2",
               default_network_policy_id: "10000000-0000-4000-8000-0000000000a3",
             },
           ],
@@ -760,7 +1006,10 @@ describe("D7 운영 콘솔 shell", () => {
             scenario_id: "00000000-0000-0000-0000-0000000000c1",
             scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
             run_id: "00000000-0000-0000-0000-000000000099",
-            evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
+            evidence_policy: body.evidence ?? {
+              screenshot: "failure",
+              video: "never",
+            },
             blockers: [],
             created_at: "2026-06-15T00:00:00.000Z",
             created_by: "operator",
@@ -771,19 +1020,31 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 요약해줘" } });
-    fireEvent.change(screen.getByLabelText("시작 URL"), { target: { value: "https://shop.example/orders" } });
-    fireEvent.change(await screen.findByLabelText("사이트"), { target: { value: "10000000-0000-4000-8000-0000000000a1" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "주문 목록을 요약해줘" },
+    });
+    fireEvent.change(screen.getByLabelText("시작 주소"), {
+      target: { value: "https://shop.example/orders" },
+    });
+    fireEvent.change(await screen.findByLabelText("사이트"), {
+      target: { value: "10000000-0000-4000-8000-0000000000a1" },
+    });
 
-    await waitFor(() => expect(screen.getByLabelText("동영상")).toHaveValue("always"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("동영상")).toHaveValue("always"),
+    );
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]).toMatchObject({ evidence: { screenshot: "each_step", video: "always" } });
+    expect(calls[0]).toMatchObject({
+      evidence: { screenshot: "each_step", video: "always" },
+    });
   });
 
   test("자연어 자동화 생성: 증거 capability 확인 전에는 제출하지 않는다", async () => {
-    type Capabilities = Awaited<ReturnType<ApiClient["getScenarioGenerationCapabilities"]>>;
+    type Capabilities = Awaited<
+      ReturnType<ApiClient["getScenarioGenerationCapabilities"]>
+    >;
     let resolveCapabilities!: (value: Capabilities) => void;
     const capabilities = new Promise<Capabilities>((resolve) => {
       resolveCapabilities = resolve;
@@ -805,7 +1066,10 @@ describe("D7 운영 콘솔 shell", () => {
             scenario_id: "00000000-0000-0000-0000-0000000000c1",
             scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
             run_id: null,
-            evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
+            evidence_policy: body.evidence ?? {
+              screenshot: "failure",
+              video: "never",
+            },
             blockers: [],
             created_at: "2026-06-15T00:00:00.000Z",
             created_by: "operator",
@@ -816,25 +1080,43 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 요약해줘" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "주문 목록을 요약해줘" },
+    });
 
-    const pendingButton = await screen.findByRole("button", { name: "증거 설정 확인 중…" });
+    const pendingButton = await screen.findByRole("button", {
+      name: "증거 설정 확인 중…",
+    });
     expect(pendingButton).toBeDisabled();
     fireEvent.click(pendingButton);
     expect(calls).toHaveLength(0);
 
     resolveCapabilities({
       visual_evidence: {
-        screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
-        video: { enabled: true, policies: ["never", "failure", "always"], default_policy: "always", artifact_type: "video_masked", media_type: "video/webm" },
+        screenshot: {
+          enabled: true,
+          policies: ["never", "failure", "each_step"],
+          default_policy: "each_step",
+        },
+        video: {
+          enabled: true,
+          policies: ["never", "failure", "always"],
+          default_policy: "always",
+          artifact_type: "video_masked",
+          media_type: "video/webm",
+        },
       },
     });
 
-    await waitFor(() => expect(screen.getByLabelText("동영상")).toHaveValue("always"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("동영상")).toHaveValue("always"),
+    );
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]).toMatchObject({ evidence: { screenshot: "each_step", video: "always" } });
+    expect(calls[0]).toMatchObject({
+      evidence: { screenshot: "each_step", video: "always" },
+    });
   });
 
   test("자연어 자동화 생성: 서버 영상 default_policy가 failure이면 기본값을 실패 시 녹화로 둔다", async () => {
@@ -843,8 +1125,18 @@ describe("D7 운영 콘솔 shell", () => {
       fakeClient({
         getScenarioGenerationCapabilities: async () => ({
           visual_evidence: {
-            screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
-            video: { enabled: true, policies: ["never", "failure", "always"], default_policy: "failure", artifact_type: "video_masked", media_type: "video/webm" },
+            screenshot: {
+              enabled: true,
+              policies: ["never", "failure", "each_step"],
+              default_policy: "each_step",
+            },
+            video: {
+              enabled: true,
+              policies: ["never", "failure", "always"],
+              default_policy: "failure",
+              artifact_type: "video_masked",
+              media_type: "video/webm",
+            },
           },
         }),
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -860,7 +1152,10 @@ describe("D7 운영 콘솔 shell", () => {
             scenario_id: "00000000-0000-0000-0000-0000000000c1",
             scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
             run_id: null,
-            evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
+            evidence_policy: body.evidence ?? {
+              screenshot: "failure",
+              video: "never",
+            },
             blockers: [],
             created_at: "2026-06-15T00:00:00.000Z",
             created_by: "operator",
@@ -871,13 +1166,19 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 요약해줘" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "주문 목록을 요약해줘" },
+    });
 
-    await waitFor(() => expect(screen.getByLabelText("동영상")).toHaveValue("failure"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("동영상")).toHaveValue("failure"),
+    );
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]).toMatchObject({ evidence: { screenshot: "each_step", video: "failure" } });
+    expect(calls[0]).toMatchObject({
+      evidence: { screenshot: "each_step", video: "failure" },
+    });
   });
 
   test("자연어 자동화 생성: 서버 스크린샷 capability 기본값과 허용 정책을 따른다", async () => {
@@ -886,8 +1187,18 @@ describe("D7 운영 콘솔 shell", () => {
       fakeClient({
         getScenarioGenerationCapabilities: async () => ({
           visual_evidence: {
-            screenshot: { enabled: true, policies: ["never", "failure"], default_policy: "failure" },
-            video: { enabled: false, policies: ["never"], default_policy: "never", artifact_type: "video_masked", media_type: "video/webm" },
+            screenshot: {
+              enabled: true,
+              policies: ["never", "failure"],
+              default_policy: "failure",
+            },
+            video: {
+              enabled: false,
+              policies: ["never"],
+              default_policy: "never",
+              artifact_type: "video_masked",
+              media_type: "video/webm",
+            },
           },
         }),
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -903,7 +1214,10 @@ describe("D7 운영 콘솔 shell", () => {
             scenario_id: "00000000-0000-0000-0000-0000000000c1",
             scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
             run_id: null,
-            evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
+            evidence_policy: body.evidence ?? {
+              screenshot: "failure",
+              video: "never",
+            },
             blockers: [],
             created_at: "2026-06-15T00:00:00.000Z",
             created_by: "operator",
@@ -914,15 +1228,21 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 목록을 요약해줘" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "주문 목록을 요약해줘" },
+    });
 
     const screenshotSelect = await screen.findByLabelText("스크린샷");
     await waitFor(() => expect(screenshotSelect).toHaveValue("failure"));
-    expect(within(screenshotSelect).queryByRole("option", { name: "매 단계" })).not.toBeInTheDocument();
+    expect(
+      within(screenshotSelect).queryByRole("option", { name: "매 단계" }),
+    ).not.toBeInTheDocument();
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]).toMatchObject({ evidence: { screenshot: "failure", video: "never" } });
+    expect(calls[0]).toMatchObject({
+      evidence: { screenshot: "failure", video: "never" },
+    });
   });
 
   test("자연어 자동화 생성 차단 → blocker를 한국어로 표면화", async () => {
@@ -931,8 +1251,18 @@ describe("D7 운영 콘솔 shell", () => {
       fakeClient({
         getScenarioGenerationCapabilities: async () => ({
           visual_evidence: {
-            screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
-            video: { enabled: true, policies: ["never", "failure", "always"], default_policy: "always", artifact_type: "video_masked", media_type: "video/webm" },
+            screenshot: {
+              enabled: true,
+              policies: ["never", "failure", "each_step"],
+              default_policy: "each_step",
+            },
+            video: {
+              enabled: true,
+              policies: ["never", "failure", "always"],
+              default_policy: "always",
+              artifact_type: "video_masked",
+              media_type: "video/webm",
+            },
           },
         }),
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -948,8 +1278,15 @@ describe("D7 운영 콘솔 shell", () => {
             scenario_id: "00000000-0000-0000-0000-0000000000c1",
             scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
             run_id: null,
-            evidence_policy: body.evidence ?? { screenshot: "failure", video: "never" },
-            blockers: ["start_url_required_for_auto_run", "target_required_for_auto_run", "video_recording_port_not_configured"],
+            evidence_policy: body.evidence ?? {
+              screenshot: "failure",
+              video: "never",
+            },
+            blockers: [
+              "start_url_required_for_auto_run",
+              "target_required_for_auto_run",
+              "video_recording_port_not_configured",
+            ],
             created_at: "2026-06-15T00:00:00.000Z",
             created_by: "operator",
             draft_ir: {},
@@ -959,16 +1296,22 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "오늘 주문을 확인해줘" } });
-    fireEvent.change(screen.getByLabelText("동영상"), { target: { value: "always" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "오늘 주문을 확인해줘" },
+    });
+    fireEvent.change(screen.getByLabelText("동영상"), {
+      target: { value: "always" },
+    });
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]).toMatchObject({ evidence: { video: "always" } });
     await waitFor(() => expect(screen.getByText("차단됨")).toBeInTheDocument());
-    expect(screen.getByText("시작 URL이 필요합니다.")).toBeInTheDocument();
+    expect(screen.getByText("시작 주소가 필요합니다.")).toBeInTheDocument();
     expect(screen.getByText("실행 대상이 필요합니다.")).toBeInTheDocument();
-    expect(screen.getByText("서버에서 동영상 녹화가 비활성화되어 있습니다.")).toBeInTheDocument();
+    expect(
+      screen.getByText("서버에서 동영상 녹화가 비활성화되어 있습니다."),
+    ).toBeInTheDocument();
   });
 
   test("최근 생성: run 연결 항목은 증거 저장 상태와 RunTrace artifact focus 딥링크를 보여준다", async () => {
@@ -1001,8 +1344,12 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#scenarioStudio";
 
-    expect(await screen.findByText("이미지·동영상 저장 요청됨")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "이미지·동영상 결과 확인" }));
+    expect(
+      await screen.findByText("이미지·동영상 저장 요청됨"),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "이미지·동영상 결과 확인" }),
+    );
 
     await waitFor(() =>
       expect(location.hash).toBe(
@@ -1035,15 +1382,21 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#scenarioStudio";
 
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "주문 결과 증거를 확인해줘" } });
-    const submitButton = await screen.findByRole("button", { name: "저장 후 실행" });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "주문 결과 증거를 확인해줘" },
+    });
+    const submitButton = await screen.findByRole("button", {
+      name: "저장 후 실행",
+    });
     await waitFor(() => expect(submitButton).not.toBeDisabled());
     fireEvent.click(submitButton);
 
     expect(await screen.findByText("실행 기록 연결")).toBeInTheDocument();
     expect(screen.getByText("이미지·동영상 저장 요청됨")).toBeInTheDocument();
     expect(screen.getByText("실행 기록 산출물에서 확인")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "이미지·동영상 결과 확인" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "이미지·동영상 결과 확인" }),
+    ).toBeInTheDocument();
     await waitFor(() =>
       expect(location.hash).toBe(
         "#runTrace?run=00000000-0000-0000-0000-000000000099&generation=00000000-0000-0000-0000-0000000000a1&focus=artifacts",
@@ -1129,17 +1482,29 @@ describe("D7 운영 콘솔 shell", () => {
 
     const search = await screen.findByLabelText("생성 검색");
     const history = search.closest(".generation-history") as HTMLElement;
-    expect(await within(history).findByText(/월간 정산 수집/)).toBeInTheDocument();
+    expect(
+      await within(history).findByText(/월간 정산 수집/),
+    ).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: "월간" } });
-    expect(await within(history).findByText(/월간 정산 수집/)).toBeInTheDocument();
-    expect(within(history).queryByText(/현재 페이지에서 일치하는 생성이 없습니다/)).toBeNull();
+    expect(
+      await within(history).findByText(/월간 정산 수집/),
+    ).toBeInTheDocument();
+    expect(
+      within(history).queryByText(/현재 페이지에서 일치하는 생성이 없습니다/),
+    ).toBeNull();
 
     fireEvent.change(search, { target: { value: "" } });
-    fireEvent.click(await within(history).findByRole("button", { name: "다음" }));
+    fireEvent.click(
+      await within(history).findByRole("button", { name: "다음" }),
+    );
 
-    await waitFor(() => expect(calls.some((call) => call.cursor === "cursor-2")).toBe(true));
-    expect(await within(history).findByText(/결제 승인 점검/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(calls.some((call) => call.cursor === "cursor-2")).toBe(true),
+    );
+    expect(
+      await within(history).findByText(/결제 승인 점검/),
+    ).toBeInTheDocument();
     expect(within(history).getByText("2 페이지")).toBeInTheDocument();
   });
 
@@ -1160,7 +1525,11 @@ describe("D7 운영 콘솔 shell", () => {
               scenario_version_id: null,
               run_id: null,
               evidence_policy: { screenshot: "each_step", video: "always" },
-              blockers: ["start_url_required_for_auto_run", "target_required_for_auto_run", "video_recording_port_not_configured"],
+              blockers: [
+                "start_url_required_for_auto_run",
+                "target_required_for_auto_run",
+                "video_recording_port_not_configured",
+              ],
               draft_ir: {},
               validation_report: {},
               created_at: "2026-06-15T00:00:00.000Z",
@@ -1199,13 +1568,19 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#scenarioStudio";
 
-    expect(await screen.findByText(/진단: 시작 URL이 필요합니다/)).toHaveTextContent("외 1건");
-    fireEvent.click(screen.getByRole("button", { name: "진단·산출물 보기" }));
+    expect(
+      await screen.findByText(/검토 필요 사유: 시작 주소가 필요합니다/),
+    ).toHaveTextContent("외 1건");
+    fireEvent.click(screen.getByRole("button", { name: "검토 사유·산출물 보기" }));
 
     expect(location.hash).toBe("#scenarioStudio");
-    expect(await screen.findByLabelText("generation artifacts")).toBeInTheDocument();
-    expect(await screen.findByText("scenario_generation_planner_output")).toBeInTheDocument();
-    expect(await screen.findByText(/target missing/)).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText("생성 결과 증빙"),
+    ).toBeInTheDocument();
+    expect((await screen.findAllByText("생성 진단")).length).toBeGreaterThan(0);
+    expect(await screen.findByLabelText("결과 요약")).toHaveTextContent(
+      "target missing",
+    );
   });
 
   test("자연어 생성 산출물: 이미지·동영상은 generation-scoped JSON 본문 대신 blob 미리보기로 표시", async () => {
@@ -1225,7 +1600,10 @@ describe("D7 운영 콘솔 shell", () => {
           scenario_id: "00000000-0000-0000-0000-0000000000c1",
           scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
           run_id: null,
-          evidence_policy: body.evidence ?? { screenshot: "each_step", video: "never" },
+          evidence_policy: body.evidence ?? {
+            screenshot: "each_step",
+            video: "never",
+          },
           blockers: [],
           created_at: "2026-06-15T00:00:00.000Z",
           created_by: "operator",
@@ -1287,34 +1665,51 @@ describe("D7 운영 콘솔 shell", () => {
         },
         getArtifactBlob: async (artifactId) => {
           blobCalls.push(artifactId);
-          return new Blob([new Uint8Array([1, 2, 3])], { type: artifactId.endsWith("102") ? "video/webm" : "image/png" });
+          return new Blob([new Uint8Array([1, 2, 3])], {
+            type: artifactId.endsWith("102") ? "video/webm" : "image/png",
+          });
         },
       }),
     );
     location.hash = "#scenarioStudio";
 
-    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "결과 이미지를 저장해줘" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), {
+      target: { value: "결과 이미지를 저장해줘" },
+    });
     screen.getByRole("button", { name: "저장 후 실행" }).click();
 
     const image = await screen.findByRole("img", { name: "generation.png" });
     expect(image).toHaveAttribute("src", "blob:test-preview");
-    expect(screen.getByText("image 1")).toBeInTheDocument();
-    expect(screen.getByText("video 1")).toBeInTheDocument();
+    expect(screen.getByText("이미지 1")).toBeInTheDocument();
+    expect(screen.getByText("영상 1")).toBeInTheDocument();
     expect(blobCalls).toContain("91000000-0000-0000-0000-000000000101");
     expect(scopedDetailCalls).toBe(0);
-    screen.getByRole("button", { name: /91000000-0000-0000-0000-000000000101/ }).click();
-    await waitFor(() => expect(location.hash).toContain("artifact=91000000-0000-0000-0000-000000000101"));
-    const videoButton = screen.getByText("video_masked").closest("button");
+    fireEvent.click(screen.getByText("증빙 번호 보기"));
+    screen.getByRole("button", { name: "증빙 91000000-0000-0000-0000-000000000101 조회" }).click();
+    await waitFor(() =>
+      expect(location.hash).toContain(
+        "artifact=91000000-0000-0000-0000-000000000101",
+      ),
+    );
+    const videoButton = screen.getByText("실행 영상").closest("button");
     expect(videoButton).not.toBeNull();
     fireEvent.click(videoButton as HTMLButtonElement);
-    await waitFor(() => expect(document.querySelector("video")).toHaveAttribute("src", "blob:test-preview"));
+    await waitFor(() =>
+      expect(document.querySelector("video")).toHaveAttribute(
+        "src",
+        "blob:test-preview",
+      ),
+    );
     expect(blobCalls).toContain("91000000-0000-0000-0000-000000000102");
     expect(scopedDetailCalls).toBe(0);
     expect(screen.queryByText(/should_not_render/)).toBeNull();
   });
 
   test("자연어 생성 산출물: 더 보기는 next_cursor로 다음 페이지를 이어 붙인다", async () => {
-    const artifactCalls: Array<{ generationId: string; cursor: string | undefined }> = [];
+    const artifactCalls: Array<{
+      generationId: string;
+      cursor: string | undefined;
+    }> = [];
     const firstArtifact = {
       artifact_id: "aa000000-0000-0000-0000-000000000001",
       type: "scenario_generation_planner_output",
@@ -1352,18 +1747,25 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
 
-    expect(await screen.findByText("scenario_generation_planner_output")).toBeInTheDocument();
+    expect((await screen.findAllByText("생성 진단")).length).toBeGreaterThan(0);
     expect(screen.getByText("1+건")).toBeInTheDocument();
     expect(screen.getByText("더 있음")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "더 보기" }));
 
-    await waitFor(() => expect(artifactCalls).toContainEqual({ generationId: "gen-page", cursor: "cursor-2" }));
-    expect(await screen.findByText("scenario_generation_validation_report")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(artifactCalls).toContainEqual({
+        generationId: "gen-page",
+        cursor: "cursor-2",
+      }),
+    );
+    expect(await screen.findByText("검증 보고서")).toBeInTheDocument();
     expect(screen.getByText("2건")).toBeInTheDocument();
     const artifactList = document.querySelector(".generation-artifact-list");
     expect(artifactList).not.toBeNull();
-    expect(within(artifactList as HTMLElement).getAllByRole("button")).toHaveLength(2);
+    expect(
+      within(artifactList as HTMLElement).getAllByRole("button"),
+    ).toHaveLength(2);
   });
 
   test("최근 생성: saved/no-run 항목은 실행 딥링크로 연결한 척하지 않는다", async () => {
@@ -1397,19 +1799,38 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#scenarioStudio";
 
     expect(await screen.findByText("실행 연결 없음")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "이미지 결과 확인" })).toBeNull();
-    expect(screen.queryByLabelText("generation artifacts")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "이미지 결과 확인" }),
+    ).toBeNull();
+    expect(screen.queryByLabelText("생성 결과 증빙")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "저장본 확인" }));
 
     expect(location.hash).toBe("#scenarioStudio");
-    expect(await screen.findByLabelText("generation artifacts")).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText("생성 결과 증빙"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: "운영 예약" }).length,
+    ).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole("button", { name: "CoE 연결" })[0]!);
+    expect(location.hash).toBe(
+      "#coePipeline?scenario=00000000-0000-0000-0000-0000000000c1",
+    );
   });
 
   test("scenario 편집은 저장된 studio_mode=easy로 쉬운 만들기 폼을 복원", async () => {
     renderApp(
       fakeClient({
         listScenarios: async () => ({
-          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000010", name: "리뷰 수집", version: 1, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000010", promotion_status: "draft" }],
+          items: [
+            {
+              scenario_id: "22222222-aaaa-bbbb-cccc-000000000010",
+              name: "리뷰 수집",
+              version: 1,
+              latest_version_id: "33333333-aaaa-bbbb-cccc-000000000010",
+              promotion_status: "draft",
+            },
+          ],
           next_cursor: null,
         }),
         getScenario: async (id) => ({
@@ -1419,11 +1840,32 @@ describe("D7 운영 콘솔 shell", () => {
           promotion_status: "draft",
           ir: {
             meta: { name: "리뷰 수집", version: 1, studio_mode: "easy" },
-            params_schema: { type: "object", properties: { entry_url: { type: "string", default: "https://shop.example/reviews" } }, required: ["entry_url"] },
+            params_schema: {
+              type: "object",
+              properties: {
+                entry_url: {
+                  type: "string",
+                  default: "https://shop.example/reviews",
+                },
+              },
+              required: ["entry_url"],
+            },
             start: "open",
             nodes: {
-              open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "collect" },
-              collect: { what: [{ action: "extract", instruction: "리뷰 제목과 별점을 추출하라.", schema_ref: "리뷰" }], next: "done" },
+              open: {
+                what: [{ action: "navigate", url_ref: "entry_url" }],
+                next: "collect",
+              },
+              collect: {
+                what: [
+                  {
+                    action: "extract",
+                    instruction: "리뷰 제목과 별점을 추출하라.",
+                    schema_ref: "리뷰",
+                  },
+                ],
+                next: "done",
+              },
               done: { terminal: "success" },
             },
           },
@@ -1433,8 +1875,13 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#scenarioStudio";
     (await screen.findByRole("button", { name: "편집" })).click();
     await screen.findByDisplayValue("리뷰 제목과 별점을 추출하라.");
-    expect(screen.getByRole("button", { name: "쉬운 만들기" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByDisplayValue("https://shop.example/reviews")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "쉬운 만들기" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      screen.getByDisplayValue("https://shop.example/reviews"),
+    ).toBeInTheDocument();
   });
 
   test("페이지네이션: next_cursor 있으면 '다음' 클릭 시 cursor 전달", async () => {
@@ -1444,7 +1891,17 @@ describe("D7 운영 콘솔 shell", () => {
         listRuns: async (p) => {
           calls.push(p ?? {});
           // 커서 기준(호출 횟수 무관): 첫 페이지→cursor-1, 진행 후→끝.
-          return { items: [{ run_id: "r1", status: "running", current_node: null, as_of: null }], next_cursor: p?.cursor ? null : "cursor-1" };
+          return {
+            items: [
+              {
+                run_id: "r1",
+                status: "running",
+                current_node: null,
+                as_of: null,
+              },
+            ],
+            next_cursor: p?.cursor ? null : "cursor-1",
+          };
         },
       }),
     );
@@ -1452,7 +1909,9 @@ describe("D7 운영 콘솔 shell", () => {
     const nextBtn = await screen.findByRole("button", { name: "다음" });
     expect(nextBtn).not.toBeDisabled();
     nextBtn.click();
-    await waitFor(() => expect(calls.some((c) => c.cursor === "cursor-1")).toBe(true));
+    await waitFor(() =>
+      expect(calls.some((c) => c.cursor === "cursor-1")).toBe(true),
+    );
   });
 
   test("필터: 상태 선택 시 fetcher에 status 전달", async () => {
@@ -1468,7 +1927,9 @@ describe("D7 운영 콘솔 shell", () => {
     location.hash = "#runTrace";
     const select = await screen.findByLabelText("상태");
     fireEvent.change(select, { target: { value: "running" } });
-    await waitFor(() => expect(calls.some((c) => c.status === "running")).toBe(true));
+    await waitFor(() =>
+      expect(calls.some((c) => c.status === "running")).toBe(true),
+    );
   });
 
   test("시나리오 검사: validate 디스패치 + ValidationReport 렌더", async () => {
@@ -1477,33 +1938,55 @@ describe("D7 운영 콘솔 shell", () => {
       fakeClient({
         validateScenario: async (id) => {
           calls.push({ id });
-          return { valid: false, report: { errors: [{ rule: "V3", message: "no branch matched" }], warnings: [] } };
+          return {
+            valid: false,
+            report: {
+              errors: [{ rule: "V3", message: "no branch matched" }],
+              warnings: [],
+            },
+          };
         },
       }),
     );
     location.hash = "#irValidation";
-    const idInput = await screen.findByPlaceholderText(/00000000/);
+    const idInput = await screen.findByLabelText("검사할 자동화");
     fireEvent.change(idInput, { target: { value: "scn-1" } });
     screen.getByRole("button", { name: "검증 실행" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
-    await waitFor(() => expect(screen.getByText("검증 실패")).toBeInTheDocument());
-    expect(screen.getByText(/no branch matched/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("검증 실패")).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(
+        "조건 분기 대상 단계가 없습니다. 다음 단계 연결을 확인하세요.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/no branch matched/)).not.toBeVisible();
   });
 
-  // F3 — validate 성공 표기는 정적 구조 검증(dry-run이 실제 보고한 것)만 말하고 '승격 가능'을 단정하지 않는다(조용한 false 금지).
+  // F3 — validate 성공 표기는 자동화 정의 검사(dry-run이 실제 보고한 것)만 말하고 '승격 가능'을 단정하지 않는다(조용한 false 금지).
   // 승격은 별개 명령(admin·If-Match version)이라 이 화면이 관찰하지 못한 값 → scenarioStudio로 안내만 한다(막다른 길 해소).
-  test("시나리오 검사: valid → 정적 구조 검증 통과(승격 가능 단정 없음) + 자동화 만들기 안내 동선", async () => {
+  test("시나리오 검사: valid → 자동화 정의 검사 통과(승격 가능 단정 없음) + 자동화 만들기 안내 동선", async () => {
     renderApp(
       fakeClient({
-        validateScenario: async () => ({ valid: true, report: { errors: [], warnings: [] } }),
+        validateScenario: async () => ({
+          valid: true,
+          report: { errors: [], warnings: [] },
+        }),
       }),
     );
     location.hash = "#irValidation";
-    fireEvent.change(await screen.findByPlaceholderText(/00000000/), { target: { value: "scn-1" } });
+    fireEvent.change(await screen.findByLabelText("검사할 자동화"), {
+      target: { value: "scn-1" },
+    });
     screen.getByRole("button", { name: "검증 실행" }).click();
-    await waitFor(() => expect(screen.getByText("정적 구조 검증 통과")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("자동화 정의 검사 통과")).toBeInTheDocument(),
+    );
     expect(screen.queryByText(/승격 가능/)).toBeNull(); // 거짓금지 회귀 가드(재유입 시 실패)
-    const goto = await screen.findByRole("button", { name: /자동화 만들기에서 진행/ });
+    const goto = await screen.findByRole("button", {
+      name: /자동화 만들기에서 진행/,
+    });
     goto.click();
     await waitFor(() => expect(location.hash).toBe("#scenarioStudio")); // navigate 실배선(죽은 버튼 아님)
   });
@@ -1522,7 +2005,9 @@ describe("D7 운영 콘솔 shell", () => {
     abortBtn.click();
     (await screen.findByRole("button", { name: "확인" })).click();
     // errorLabel(계약 ERROR_CATALOG[RUN_ABORTED].userMessage 미러)로 통일 — 이전 'RUN_ABORTED (409)' raw 덤프 갱신(의도된 변경).
-    await waitFor(() => expect(screen.getByText("실행이 중단되었습니다.")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("실행이 중단되었습니다.")).toBeInTheDocument(),
+    );
   });
 
   test("자동화 실행(run-start) 디스패치 — 최신 버전 createRun + Idempotency-Key", async () => {
@@ -1531,7 +2016,14 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(
       fakeClient({
         listScenarios: async () => ({
-          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000001", name: "리뷰 수집", version: 2, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000099" }],
+          items: [
+            {
+              scenario_id: "22222222-aaaa-bbbb-cccc-000000000001",
+              name: "리뷰 수집",
+              version: 2,
+              latest_version_id: "33333333-aaaa-bbbb-cccc-000000000099",
+            },
+          ],
           next_cursor: null,
         }),
         createRun: async (body, key) => {
@@ -1555,7 +2047,14 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(
       fakeClient({
         listScenarios: async () => ({
-          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000002", name: "주문 수집", version: 1, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000002" }],
+          items: [
+            {
+              scenario_id: "22222222-aaaa-bbbb-cccc-000000000002",
+              name: "주문 수집",
+              version: 1,
+              latest_version_id: "33333333-aaaa-bbbb-cccc-000000000002",
+            },
+          ],
           next_cursor: null,
         }),
         getScenario: async (id) => ({
@@ -1563,7 +2062,16 @@ describe("D7 운영 콘솔 shell", () => {
           name: "주문 수집",
           version: 1,
           promotion_status: "prod",
-          ir: { start: "open", nodes: { open: { what: [{ action: "navigate", url_ref: "orders_url" }], next: "done" }, done: { terminal: "success" } } },
+          ir: {
+            start: "open",
+            nodes: {
+              open: {
+                what: [{ action: "navigate", url_ref: "orders_url" }],
+                next: "done",
+              },
+              done: { terminal: "success" },
+            },
+          },
         }),
         createRun: async (body) => {
           calls.push({ params: body.params ?? {} });
@@ -1577,11 +2085,94 @@ describe("D7 운영 콘솔 shell", () => {
     const field = await screen.findByLabelText("주문 페이지 주소");
     // 값 미입력 시 '실행 시작' 비활성(필수값 가드).
     expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled();
-    fireEvent.change(field, { target: { value: "https://shop.example/orders/9" } });
+    fireEvent.change(field, {
+      target: { value: "https://shop.example/orders/9" },
+    });
     screen.getByRole("button", { name: "실행 시작" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]?.params).toEqual({ orders_url: "https://shop.example/orders/9" });
+    expect(calls[0]?.params).toEqual({
+      orders_url: "https://shop.example/orders/9",
+    });
     expect(location.hash).toBe("#runTrace?run=run-2&focus=artifacts");
+  });
+
+  test("params_schema 실행 폼 — 문자열·숫자·체크박스·선택값을 createRun(params)에 반영", async () => {
+    const calls: Array<{ params: Record<string, unknown> }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [
+            {
+              scenario_id: "22222222-aaaa-bbbb-cccc-000000000042",
+              name: "거래처 지급 상태 확인",
+              version: 1,
+              latest_version_id: "33333333-aaaa-bbbb-cccc-000000000042",
+            },
+          ],
+          next_cursor: null,
+        }),
+        getScenario: async (id) => ({
+          scenario_id: id,
+          name: "거래처 지급 상태 확인",
+          version: 1,
+          promotion_status: "prod",
+          ir: {
+            params_schema: {
+              type: "object",
+              required: ["entry_url", "max_pages", "range"],
+              properties: {
+                entry_url: {
+                  type: "string",
+                  title: "업무 포털 주소",
+                  description: "자동화를 시작할 웹 주소",
+                  default: "https://vendor.example/payments",
+                  format: "uri",
+                },
+                max_pages: { type: "integer", title: "최대 페이지", default: 3 },
+                include_closed: { type: "boolean", title: "마감건 포함", default: true },
+                range: { type: "string", title: "조회 범위", enum: ["today", "week"] },
+              },
+            },
+            start: "open",
+            nodes: {
+              open: {
+                what: [{ action: "navigate", url_ref: "entry_url" }],
+                next: "done",
+              },
+              done: { terminal: "success" },
+            },
+          },
+        }),
+        createRun: async (body) => {
+          calls.push({ params: body.params ?? {} });
+          return { run_id: "run-schema", status: "queued" };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+    (await screen.findByRole("button", { name: "실행" })).click();
+
+    expect(await screen.findByLabelText("업무 포털 주소")).toHaveDisplayValue("https://vendor.example/payments");
+    const maxPages = screen.getByLabelText("최대 페이지");
+    expect(maxPages).toHaveDisplayValue("3");
+    const includeClosed = screen.getByLabelText("마감건 포함");
+    expect(includeClosed).toBeChecked();
+    const range = screen.getByLabelText("조회 범위");
+    expect(screen.getByRole("button", { name: "실행 시작" })).toBeDisabled();
+
+    fireEvent.change(maxPages, { target: { value: "7" } });
+    fireEvent.click(includeClosed);
+    fireEvent.change(range, { target: { value: "week" } });
+    screen.getByRole("button", { name: "실행 시작" }).click();
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.params).toEqual({
+      entry_url: "https://vendor.example/payments",
+      max_pages: 7,
+      include_closed: false,
+      range: "week",
+    });
+    expect(location.hash).toBe("#runTrace?run=run-schema&focus=artifacts");
   });
 
   test("run-start model_required → 모델 입력 폼 노출 + 에러 패널내 표면화 + 재실행 시 model 전달", async () => {
@@ -1591,7 +2182,14 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(
       fakeClient({
         listScenarios: async () => ({
-          items: [{ scenario_id: "22222222-aaaa-bbbb-cccc-000000000003", name: "세션 확인", version: 1, latest_version_id: "33333333-aaaa-bbbb-cccc-000000000003" }],
+          items: [
+            {
+              scenario_id: "22222222-aaaa-bbbb-cccc-000000000003",
+              name: "세션 확인",
+              version: 1,
+              latest_version_id: "33333333-aaaa-bbbb-cccc-000000000003",
+            },
+          ],
           next_cursor: null,
         }),
         getScenario: async (id) => ({
@@ -1600,13 +2198,22 @@ describe("D7 운영 콘솔 shell", () => {
           version: 1,
           promotion_status: "prod",
           // url_ref 키 없음 → 추가 입력 없이 바로 실행(모델 해소만 검증).
-          ir: { start: "open", nodes: { open: { what: [{ action: "observe" }], next: "done" }, done: { terminal: "success" } } },
+          ir: {
+            start: "open",
+            nodes: {
+              open: { what: [{ action: "observe" }], next: "done" },
+              done: { terminal: "success" },
+            },
+          },
         }),
         createRun: async (body) => {
           attempt += 1;
           // 1차: 다정책+기본없음 → model_required(임의선택 금지). 2차(model 지정): 성공.
           if (attempt === 1) {
-            throw new ApiError(422, "IR_SCHEMA_INVALID", { code: "IR_SCHEMA_INVALID", details: { reason: "model_required", available: 2 } });
+            throw new ApiError(422, "IR_SCHEMA_INVALID", {
+              code: "IR_SCHEMA_INVALID",
+              details: { reason: "model_required", available: 2 },
+            });
           }
           calls.push({ model: body.model });
           return { run_id: "run-3", status: "queued" };
@@ -1619,13 +2226,26 @@ describe("D7 운영 콘솔 shell", () => {
     // 모델 입력 폼 + 에러 메시지가 패널 안에 노출(조용한 무반응 금지).
     const panel = screen.getByRole("region", { name: "세션 확인 실행" });
     const modelField = await within(panel).findByLabelText("AI 모델");
-    expect(within(panel).getByText(/AI 모델을 지정해야 합니다/)).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: "실행 시작" })).toBeDisabled(); // 모델 미입력 가드
+    expect(modelField.tagName).toBe("SELECT");
+    expect(modelField).toHaveDisplayValue("AI 모델 선택");
+    expect(within(panel).queryByText(/gateway_policies\.model/)).toBeNull();
+    expect(
+      within(panel).getByText(/AI 모델을 지정해야 합니다/),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByRole("button", { name: "실행 시작" }),
+    ).toBeDisabled(); // 모델 미입력 가드
     fireEvent.change(modelField, { target: { value: "gpt-4o-mini" } });
     // P0-3: 직타 모델은 getGatewayPolicy로 '확인'해야 실행 허용(맹목 입력 차단). 확인 전엔 여전히 비활성.
-    expect(within(panel).getByRole("button", { name: "실행 시작" })).toBeDisabled();
+    expect(
+      within(panel).getByRole("button", { name: "실행 시작" }),
+    ).toBeDisabled();
     within(panel).getByRole("button", { name: "확인" }).click();
-    await waitFor(() => expect(within(panel).getByRole("button", { name: "실행 시작" })).toBeEnabled());
+    await waitFor(() =>
+      expect(
+        within(panel).getByRole("button", { name: "실행 시작" }),
+      ).toBeEnabled(),
+    );
     within(panel).getByRole("button", { name: "실행 시작" }).click(); // 2차 createRun(model)
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.model).toBe("gpt-4o-mini"); // 검증된 모델 전달
@@ -1636,17 +2256,33 @@ describe("D7 운영 콘솔 shell", () => {
     const calls: string[] = [];
     renderApp(
       fakeClient({
-        listRuns: async () => ({ items: [{ run_id: "run-abc12345", status: "running", current_node: null, as_of: null }], next_cursor: null }),
+        listRuns: async () => ({
+          items: [
+            {
+              run_id: "run-abc12345",
+              status: "running",
+              current_node: null,
+              as_of: null,
+            },
+          ],
+          next_cursor: null,
+        }),
         getRun: async (id) => {
           calls.push(id);
-          return { run_id: id, status: "running", worker_id: "w-7", attempts: 2, as_of: "2026-06-15T00:00:00.000Z" };
+          return {
+            run_id: id,
+            status: "running",
+            worker_id: "w-7",
+            attempts: 2,
+            as_of: "2026-06-15T00:00:00.000Z",
+          };
         },
       }),
     );
     location.hash = "#runTrace";
-    (await screen.findByRole("button", { name: "상세" })).click();
+    (await screen.findByRole("button", { name: "실행 추적 상세 보기" })).click();
     await waitFor(() => expect(calls).toContain("run-abc12345"));
-    await waitFor(() => expect(screen.getByText("실행 상세 — run-abc1")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("실행 상세")).toBeInTheDocument());
     expect(screen.getByText("w-7")).toBeInTheDocument(); // 워커
   });
 
@@ -1655,7 +2291,15 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(
       fakeClient({
         listSites: async () => ({
-          items: [{ site_profile_id: "site-1", risk: "red", approval_status: "pending", circuit_status: "open", name: "red-site" }],
+          items: [
+            {
+              site_profile_id: "site-1",
+              risk: "red",
+              approval_status: "pending",
+              circuit_status: "open",
+              name: "red-site",
+            },
+          ],
           next_cursor: null,
         }),
         approveSite: async (id, key) => {
@@ -1673,7 +2317,10 @@ describe("D7 운영 콘솔 shell", () => {
   });
 
   test("사이트 등록 폼 → page_state_selectors 입력 전송", async () => {
-    const calls: Array<{ body: Parameters<ApiClient["createSite"]>[0]; key: string }> = [];
+    const calls: Array<{
+      body: Parameters<ApiClient["createSite"]>[0];
+      key: string;
+    }> = [];
     renderApp(
       fakeClient({
         listSites: async () => ({ items: [], next_cursor: null }),
@@ -1693,13 +2340,28 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#security";
     (await screen.findByRole("button", { name: "새 사이트" })).click();
-    fireEvent.change(await screen.findByLabelText("이름"), { target: { value: "하이웍스" } });
-    fireEvent.change(screen.getByLabelText("URL 패턴 (http/https origin)"), { target: { value: "https://login.office.hiworks.com" } });
-    fireEvent.change(screen.getByLabelText("로그인 URL (선택)"), { target: { value: "https://login.office.hiworks.com" } });
-    fireEvent.change(screen.getByLabelText("로그인 확인 selector (선택)"), { target: { value: ".user-menu" } });
-    fireEvent.change(screen.getByLabelText("reviews_visible selector (선택)"), { target: { value: ".review-item" } });
-    fireEvent.click(screen.getByRole("button", { name: "+ flag" }));
-    fireEvent.change(screen.getByPlaceholderText("예: .pagination .disabled-next"), { target: { value: ".next.disabled" } });
+    fireEvent.change(await screen.findByLabelText("이름"), {
+      target: { value: "하이웍스" },
+    });
+    fireEvent.change(screen.getByLabelText("사이트 주소"), {
+      target: { value: "https://login.office.hiworks.com" },
+    });
+    fireEvent.change(screen.getByLabelText("로그인 주소 (선택)"), {
+      target: { value: "https://login.office.hiworks.com" },
+    });
+    fireEvent.change(screen.getByLabelText("로그인 완료 확인 조건 (선택)"), {
+      target: { value: ".user-menu" },
+    });
+    fireEvent.change(screen.getByLabelText("리뷰 목록 확인 조건 (선택)"), {
+      target: { value: ".review-item" },
+    });
+    expect(screen.getByText("판정 기준 보기")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "+ 판정" }));
+    expect(screen.getByText("다음 페이지 없음")).toBeInTheDocument();
+    expect(screen.getByText("화면에 있으면 참")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("화면 확인 조건"), {
+      target: { value: ".next.disabled" },
+    });
     screen.getByRole("button", { name: "등록" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.body.page_state_selectors).toEqual({
@@ -1717,11 +2379,23 @@ describe("D7 운영 콘솔 shell", () => {
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     renderApp(
       fakeClient({
-        listRuns: async () => ({ items: [{ run_id: "r1", status: "running", current_node: null, as_of: null }], next_cursor: null }),
+        listRuns: async () => ({
+          items: [
+            {
+              run_id: "r1",
+              status: "running",
+              current_node: null,
+              as_of: null,
+            },
+          ],
+          next_cursor: null,
+        }),
       }),
     );
     location.hash = "#runTrace";
-    await waitFor(() => expect(screen.getByRole("button", { name: "상세" })).toBeInTheDocument()); // 읽기 drill-down은 허용
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "실행 추적 상세 보기" })).toBeInTheDocument(),
+    ); // 읽기 drill-down은 허용
     expect(screen.queryByRole("button", { name: "취소" })).toBeNull(); // run.abort 미보유 → 숨김
   });
 
@@ -1730,13 +2404,22 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp(
       fakeClient({
         listScenarios: async () => ({
-          items: [{ scenario_id: "s1", name: "a", version: 1, latest_version_id: "v1" }],
+          items: [
+            {
+              scenario_id: "s1",
+              name: "a",
+              version: 1,
+              latest_version_id: "v1",
+            },
+          ],
           next_cursor: null,
         }),
       }),
     );
     location.hash = "#scenarioStudio";
-    await waitFor(() => expect(screen.getByRole("button", { name: "실행" })).toBeInTheDocument()); // run.create: operator 보유
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "실행" })).toBeInTheDocument(),
+    ); // run.create: operator 보유
     expect(screen.getByRole("button", { name: "편집" })).toBeInTheDocument(); // scenario.update: operator 보유
     expect(screen.queryByRole("button", { name: "운영 지정" })).toBeNull(); // scenario.promote: admin만
   });

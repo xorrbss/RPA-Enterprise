@@ -24,6 +24,7 @@ const SVER = "70000000-0000-0000-0000-0000000000f2";
 const RUN_CAPTCHA = "71000000-0000-0000-0000-0000000000f1";
 const RUN_MFA = "71000000-0000-0000-0000-0000000000f2";
 const RUN_NEG = "71000000-0000-0000-0000-0000000000f3";
+const RUN_FORM = "71000000-0000-0000-0000-0000000000f4";
 const CORR = "20000000-0000-0000-0000-0000000000f1";
 
 let failures = 0;
@@ -80,7 +81,7 @@ async function main(): Promise<void> {
         [SVER, TENANT, SCEN],
       );
       // R4 적용 후 상태(suspending)로 시드 — 포트는 run 상태를 보거나 바꾸지 않는다(coordinator 가 R4 소유).
-      for (const rid of [RUN_CAPTCHA, RUN_MFA, RUN_NEG]) {
+      for (const rid of [RUN_CAPTCHA, RUN_MFA, RUN_NEG, RUN_FORM]) {
         await c.query(
           `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id)
            VALUES ($1,$2,$3,'suspending',$4)`,
@@ -108,13 +109,15 @@ async function main(): Promise<void> {
       check(`suspendForChallenge(${tc.kind}) → emittedEvents 1건`, res.emittedEvents.length === 1, String(res.emittedEvents.length));
 
       const ht = await withTenantTx(pool, TENANT, async (c) => {
-        const r = await c.query<{ kind: string; state: string }>(
-          `SELECT kind, state FROM human_tasks WHERE run_id=$1::uuid`,
+        const r = await c.query<{ kind: string; state: string; expires_in_future: boolean }>(
+          `SELECT kind, state, expires_at > now() AS expires_in_future FROM human_tasks WHERE run_id=$1::uuid`,
           [tc.rid],
         );
         return r.rows;
       });
       check(`human_tasks 1건 (kind=${tc.kind}, state=open, 하드코딩 아님)`, ht.length === 1 && ht[0]?.kind === tc.kind && ht[0]?.state === "open", JSON.stringify(ht));
+
+      check(`human_tasks default expires_at future (${tc.kind})`, ht[0]?.expires_in_future === true, JSON.stringify(ht));
 
       const evs = await withTenantTx(pool, TENANT, async (c) => {
         const r = await c.query<{ event_type: string }>(`SELECT event_type FROM events_outbox WHERE run_id=$1::uuid`, [tc.rid]);
@@ -127,6 +130,43 @@ async function main(): Promise<void> {
         return r.rows[0]?.bookmark ?? null;
       });
       check(`runs.bookmark 영속(stepId=${tc.step}, reason=challenge)`, bm?.stepId === tc.step && bm?.reason === "challenge", JSON.stringify(bm));
+    }
+
+    {
+      await withTenantTx(pool, TENANT, (c) =>
+        port.suspendForChallenge(c, {
+          tenantId: TENANT,
+          runId: RUN_FORM,
+          stepId: "human-task#form",
+          attempt: 0,
+          correlationId: CORR,
+          exception,
+          pendingSideEffects: pending("mfa"),
+          assigneeRole: "reviewer",
+          onTimeout: "escalate",
+          timeoutMs: 45 * 60 * 1000,
+          payload: { invoice_id: "INV-9" },
+          resultSchema: {
+            version: "business_form_v1",
+            fields: [{ key: "total", label: "Total", type: "number", required: true }],
+          },
+          artifactRefs: ["artifact.invoice.scan"],
+          reason: "human_task",
+        }),
+      );
+      const row = await withTenantTx(pool, TENANT, async (c) => {
+        const r = await c.query<{ payload: Record<string, unknown>; result_schema: Record<string, unknown>; artifact_refs: string[]; on_timeout: string; timeout_roughly_45m: boolean }>(
+          `SELECT payload, result_schema, artifact_refs, on_timeout,
+                  expires_at > now() + interval '44 minutes' AND expires_at < now() + interval '46 minutes' AS timeout_roughly_45m
+             FROM human_tasks WHERE run_id=$1::uuid`,
+          [RUN_FORM],
+        );
+        return r.rows[0];
+      });
+      check("human_task form payload 저장", row?.payload.invoice_id === "INV-9", JSON.stringify(row));
+      check("human_task form result_schema 저장", row?.result_schema.version === "business_form_v1", JSON.stringify(row));
+      check("human_task form artifact_refs 저장", row?.artifact_refs[0] === "artifact.invoice.scan", JSON.stringify(row));
+      check("human_task on_timeout 저장", row?.on_timeout === "escalate", JSON.stringify(row));
     }
 
     // 2) 음성: createHumanTask 부재 → throw(조용한 false 금지).

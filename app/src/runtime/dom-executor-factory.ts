@@ -19,7 +19,7 @@ import {
   type LlmGatewayCaller,
 } from "../executor/stagehand-dom-executor";
 import type { GatewayArtifactSink } from "../gateway/llm-gateway";
-import { UtilityExecutor } from "../executor/utility-executor";
+import { UtilityExecutor, type UtilityHttpApiDeps } from "../executor/utility-executor";
 import { CompositeExecutor } from "./composite-executor";
 
 /**
@@ -31,6 +31,7 @@ export interface DomExecutorFactoryDeps {
   readonly secrets?: SecretStoreBoundary;
   readonly executorPrincipal?: AuthenticatedPrincipal;
   readonly extractArtifactSink?: GatewayArtifactSink;
+  readonly httpFetch?: UtilityHttpApiDeps["fetch"];
 }
 
 /** worker run-drive 컨텍스트(executorFactory seam): dom config 의 run-scoped ActionPlanCache 키 필드 + 자격증명 fill 감사용 tenant. */
@@ -65,6 +66,10 @@ export function createDomUtilityExecutorFactory(
       deps.executorPrincipal !== undefined && run.tenantId !== undefined
         ? { ...deps.executorPrincipal, tenantId: run.tenantId as (typeof deps.executorPrincipal)["tenantId"] }
         : deps.executorPrincipal;
+    const connectorPrincipal =
+      principal !== undefined
+        ? { ...principal, claims: { ...principal.claims, runtime_identity: "connector-runtime" } }
+        : undefined;
     return new CompositeExecutor(
       new StagehandDomExecutor(
         gateway,
@@ -81,7 +86,11 @@ export function createDomUtilityExecutorFactory(
         principal,
         deps.extractArtifactSink,
       ),
-      new UtilityExecutor(provider),
+      new UtilityExecutor(provider, {
+        fetch: deps.httpFetch ?? globalThis.fetch.bind(globalThis),
+        secrets: deps.secrets,
+        principal: connectorPrincipal,
+      }),
     );
   };
 }

@@ -10,9 +10,13 @@ import { navigate } from "../router";
 // url_pattern은 http(s) origin이어야 백엔드가 수락(런타임 resolveSiteProfileId가 URL.origin 매칭) — 1차 검증.
 // 조용한 실패 금지: 중복 name·비-origin 등은 ApiError(IR_SCHEMA_INVALID) 코드로 표면화.
 const RISKS = ["green", "amber", "red"] as const;
+const RISK_LABELS: Record<(typeof RISKS)[number], string> = {
+  green: "낮음",
+  amber: "중간",
+  red: "높음",
+};
 const FLAG_KEYS = [
   "no_next_page",
-  "cursor_reached",
   "login_required",
   "blocked",
   "not_found",
@@ -27,6 +31,21 @@ type FlagRow = {
   kind: (typeof FLAG_KINDS)[number];
   selector: string;
   n: number;
+};
+
+const FLAG_KEY_LABELS: Record<FlagRow["key"], string> = {
+  no_next_page: "다음 페이지 없음",
+  login_required: "로그인 필요 화면",
+  blocked: "차단 화면",
+  not_found: "페이지 없음",
+  no_review_message_visible: "리뷰 없음 안내 표시",
+  reviews_visible: "리뷰 목록 표시",
+};
+
+const FLAG_KIND_LABELS: Record<FlagRow["kind"], string> = {
+  present: "화면에 있으면 참",
+  absent: "화면에 없으면 참",
+  min_count: "최소 개수 이상",
 };
 
 export interface CreatedSite {
@@ -218,19 +237,20 @@ export function SiteCreateForm({
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 하이웍스" />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">URL 패턴 (http/https origin)</span>
+            <span className="subtle">사이트 주소</span>
             <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="예: https://login.office.hiworks.com" style={{ fontFamily: "monospace" }} />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">위험도 (red는 등록 후 승인 필요)</span>
+            <span className="subtle">사이트 위험도</span>
             <select value={risk} onChange={(e) => setRisk(e.target.value as (typeof RISKS)[number])}>
               {RISKS.map((r) => (
-                <option key={r} value={r}>{r}</option>
+                <option key={r} value={r}>{RISK_LABELS[r]}</option>
               ))}
             </select>
+            <span className="subtle">높음은 등록 후 승인되어야 실행할 수 있습니다.</span>
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">로그인 URL (선택)</span>
+            <span className="subtle">로그인 주소 (선택)</span>
             <input
               value={loginUrl}
               onChange={(e) => setLoginUrl(e.target.value)}
@@ -239,50 +259,56 @@ export function SiteCreateForm({
             />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">로그인 확인 selector (선택)</span>
+            <span className="subtle">로그인 완료 확인 조건 (선택)</span>
             <input
               value={authenticatedSelector}
               onChange={(e) => setAuthenticatedSelector(e.target.value)}
-              placeholder="예: .user-menu"
+              placeholder="예: 사용자 메뉴"
               style={{ fontFamily: "monospace" }}
             />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">reviews_visible selector (선택)</span>
+            <span className="subtle">리뷰 목록 확인 조건 (선택)</span>
             <input
               value={reviewsSelector}
               onChange={(e) => setReviewsSelector(e.target.value)}
-              placeholder="예: .review-item"
+              placeholder="예: 리뷰 카드"
               style={{ fontFamily: "monospace" }}
             />
           </label>
+          <details style={{ fontSize: 12 }}>
+            <summary className="subtle">판정 기준 보기</summary>
+            <code>화면 판정 조건 · 리뷰 목록 표시 · 최소 개수</code>
+          </details>
           <div className={embedded ? "site-create-flags" : "panel"} style={{ padding: 10, display: "grid", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <span className="subtle">추가 page-state flags</span>
-              <button className="btn" type="button" onClick={addFlagRow}>+ flag</button>
+              <span className="subtle">추가 화면 상태 판정</span>
+              <button className="btn" type="button" onClick={addFlagRow}>+ 판정</button>
             </div>
             {flagRows.length === 0 ? (
-              <span className="subtle">마지막 페이지, 로그인 필요, 차단 화면 같은 실행 전/중 판정을 selector로 추가할 수 있습니다.</span>
+              <span className="subtle">마지막 페이지, 로그인 필요, 차단 화면 같은 실행 전/중 판정을 화면에서 확인할 조건으로 추가할 수 있습니다.</span>
             ) : (
               flagRows.map((row) => (
                 <div key={row.id} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6, alignItems: "center" }}>
-                  <select value={row.key} onChange={(e) => updateFlagRow(row.id, { key: e.target.value as FlagRow["key"] })}>
+                  <select aria-label="판정 항목" value={row.key} onChange={(e) => updateFlagRow(row.id, { key: e.target.value as FlagRow["key"] })}>
                     {FLAG_KEYS.map((key) => (
-                      <option key={key} value={key}>{key}</option>
+                      <option key={key} value={key}>{FLAG_KEY_LABELS[key]}</option>
                     ))}
                   </select>
-                  <select value={row.kind} onChange={(e) => updateFlagRow(row.id, { kind: e.target.value as FlagRow["kind"] })}>
+                  <select aria-label="판정 방식" value={row.kind} onChange={(e) => updateFlagRow(row.id, { kind: e.target.value as FlagRow["kind"] })}>
                     {FLAG_KINDS.map((kind) => (
-                      <option key={kind} value={kind}>{kind}</option>
+                      <option key={kind} value={kind}>{FLAG_KIND_LABELS[kind]}</option>
                     ))}
                   </select>
                   <input
+                    aria-label="화면 확인 조건"
                     value={row.selector}
                     onChange={(e) => updateFlagRow(row.id, { selector: e.target.value })}
-                    placeholder="예: .pagination .disabled-next"
+                    placeholder="예: 다음 버튼 비활성"
                     style={{ fontFamily: "monospace", minWidth: 0 }}
                   />
                   <input
+                    aria-label="최소 개수"
                     type="number"
                     min={1}
                     value={row.n}
@@ -290,6 +316,10 @@ export function SiteCreateForm({
                     onChange={(e) => updateFlagRow(row.id, { n: Number(e.target.value) })}
                   />
                   <button className="btn" type="button" onClick={() => removeFlagRow(row.id)}>삭제</button>
+                  <details style={{ gridColumn: "1 / -1", fontSize: 12 }}>
+                    <summary className="subtle">판정 기준 보기</summary>
+                    <code>{`화면 판정 조건 · ${FLAG_KEY_LABELS[row.key]} · ${FLAG_KIND_LABELS[row.kind]}${row.kind === "min_count" ? " · 최소 개수" : ""}`}</code>
+                  </details>
                 </div>
               ))
             )}
@@ -298,7 +328,7 @@ export function SiteCreateForm({
             <button className="btn primary" type="button" disabled={invalid || create.isPending} onClick={() => create.mutate()}>
               {create.isPending ? "등록 중…" : "등록"}
             </button>
-            {invalid && <span className="subtle" style={{ marginLeft: 8 }}>이름과 http(s) URL을 입력하세요. 로그인 URL도 http(s)여야 합니다.</span>}
+            {invalid && <span className="subtle" style={{ marginLeft: 8 }}>사이트 이름과 http(s) 사이트 주소를 입력하세요. 로그인 주소도 http(s)여야 합니다.</span>}
           </div>
         </div>
       )}

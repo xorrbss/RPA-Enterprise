@@ -6,6 +6,7 @@ import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
 import { UUID_RE } from "./reads-support";
 import { requirePrincipal, type ApiServerDeps } from "./server";
+import { summarizePageStateSelectors } from "./site-page-state-contract";
 
 interface ScenarioRow {
   id: string;
@@ -39,6 +40,7 @@ interface SiteRow {
   session_expires_at: Date | null;
   default_browser_identity_id: string | null;
   default_network_policy_id: string | null;
+  page_state_selectors: unknown;
   created_at: Date;
   cursor_at: string; // created_at::text(전정밀도) — keyset 커서(PAG-01)
 }
@@ -74,6 +76,8 @@ function mapSite(r: SiteRow): Record<string, unknown> {
     session_expires_at: r.session_expires_at !== null ? r.session_expires_at.toISOString() : null,
     default_browser_identity_id: r.default_browser_identity_id,
     default_network_policy_id: r.default_network_policy_id,
+    page_state_selectors: r.page_state_selectors,
+    page_state_summary: summarizePageStateSelectors(r.page_state_selectors),
   };
 }
 
@@ -184,7 +188,7 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<SiteRow>(
-        `SELECT s.id, s.name, s.risk, s.approved, s.circuit_state, s.url_pattern,
+        `SELECT s.id, s.name, s.risk, s.approved, s.circuit_state, s.url_pattern, s.page_state_selectors,
                 (s.page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable,
                 EXISTS (
                   SELECT 1 FROM browser_sessions bs
@@ -240,7 +244,7 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
       }
       const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<SiteRow>(
-          `SELECT s.id, s.name, s.risk, s.approved, s.circuit_state, s.url_pattern,
+          `SELECT s.id, s.name, s.risk, s.approved, s.circuit_state, s.url_pattern, s.page_state_selectors,
                   (s.page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable,
                   EXISTS (
                     SELECT 1 FROM browser_sessions bs

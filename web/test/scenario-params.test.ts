@@ -1,6 +1,15 @@
 import { describe, expect, test } from "vitest";
 
-import { extractUrlRefKeys, extractParamDefaults } from "../src/api/scenario-params";
+import {
+  coerceParamValue,
+  extractScenarioParamFields,
+  extractUrlRefKeys,
+  extractParamDefaults,
+  isParamFieldInvalid,
+  isParamFieldMissing,
+  shouldIncludeParam,
+  urlRefLabel,
+} from "../src/api/scenario-params";
 import { buildIr, wizardInitialFromIr } from "../src/components/OperatorWizard";
 import { stepBuilderInitialFromIr } from "../src/components/StepBuilder";
 
@@ -50,6 +59,142 @@ describe("extractParamDefaults", () => {
 
   test("비-string/빈 default 는 무시", () => {
     expect(extractParamDefaults({ params_schema: { properties: { a: { default: 5 }, b: { default: "" } } } })).toEqual({});
+  });
+});
+
+describe("urlRefLabel", () => {
+  test("known execution params use business labels instead of raw keys", () => {
+    expect(urlRefLabel("entry_url")).toBe("접속 주소 (시작 주소)");
+    expect(urlRefLabel("start_url")).toBe("시작 주소");
+    expect(urlRefLabel("max_pages")).toBe("최대 페이지 수");
+  });
+
+  test("unknown execution params fall back to the original key", () => {
+    expect(urlRefLabel("customer_code")).toBe("customer_code");
+  });
+});
+
+describe("extractScenarioParamFields", () => {
+  test("params_schema를 운영자용 실행 폼 필드로 변환한다", () => {
+    const ir = {
+      params_schema: {
+        type: "object",
+        required: ["entry_url", "max_pages", "mode"],
+        properties: {
+          entry_url: {
+            type: "string",
+            title: "업무 포털 주소",
+            description: "자동화를 시작할 웹 주소",
+            default: "https://portal.example/orders",
+            format: "uri",
+          },
+          max_pages: { type: "integer", title: "최대 페이지", default: 3 },
+          include_closed: { type: "boolean", title: "마감건 포함", default: true },
+          mode: { type: "string", title: "조회 범위", enum: ["today", "week"] },
+        },
+      },
+      start: "open",
+      nodes: {
+        open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "done" },
+        done: { terminal: "success" },
+      },
+    };
+
+    expect(extractScenarioParamFields(ir)).toEqual([
+      {
+        key: "entry_url",
+        label: "업무 포털 주소",
+        kind: "text",
+        required: true,
+        defaultValue: "https://portal.example/orders",
+        description: "자동화를 시작할 웹 주소",
+        placeholder: "https://…",
+        source: "params_schema",
+      },
+      {
+        key: "max_pages",
+        label: "최대 페이지",
+        kind: "number",
+        required: true,
+        defaultValue: "3",
+        placeholder: "0",
+        source: "params_schema",
+      },
+      {
+        key: "include_closed",
+        label: "마감건 포함",
+        kind: "checkbox",
+        required: false,
+        defaultValue: "true",
+        source: "params_schema",
+      },
+      {
+        key: "mode",
+        label: "조회 범위",
+        kind: "select",
+        required: true,
+        defaultValue: "",
+        options: [
+          { value: "today", label: "today" },
+          { value: "week", label: "week" },
+        ],
+        source: "params_schema",
+      },
+    ]);
+  });
+
+  test("params_schema에 빠진 navigate.url_ref는 필수 URL 필드로 병합한다", () => {
+    const ir = {
+      params_schema: {
+        type: "object",
+        properties: {
+          report_type: { type: "string", title: "보고서 유형" },
+        },
+      },
+      nodes: {
+        open: { what: [{ action: "navigate", url_ref: "entry_url" }] },
+      },
+    };
+
+    expect(extractScenarioParamFields(ir).map((field) => ({
+      key: field.key,
+      label: field.label,
+      required: field.required,
+      source: field.source,
+    }))).toEqual([
+      { key: "report_type", label: "보고서 유형", required: false, source: "params_schema" },
+      { key: "entry_url", label: "접속 주소 (시작 주소)", required: true, source: "url_ref" },
+    ]);
+  });
+});
+
+describe("scenario param field validation/coercion", () => {
+  test("필수/숫자 검증과 payload 변환을 타입별로 수행한다", () => {
+    const fields = extractScenarioParamFields({
+      params_schema: {
+        required: ["entry_url", "max_pages"],
+        properties: {
+          entry_url: { type: "string", title: "시작 주소" },
+          max_pages: { type: "integer", title: "최대 페이지" },
+          include_closed: { type: "boolean", title: "마감건 포함" },
+        },
+      },
+    });
+    const [entry, maxPages, includeClosed] = fields;
+    expect(entry).toBeDefined();
+    expect(maxPages).toBeDefined();
+    expect(includeClosed).toBeDefined();
+
+    expect(isParamFieldMissing(entry!, "")).toBe(true);
+    expect(isParamFieldMissing(includeClosed!, "")).toBe(false);
+    expect(isParamFieldInvalid(maxPages!, "not-a-number")).toBe(true);
+    expect(shouldIncludeParam(entry!, " https://x.example ")).toBe(true);
+    expect(shouldIncludeParam(maxPages!, "")).toBe(true);
+    expect(shouldIncludeParam(includeClosed!, "")).toBe(true);
+    expect(coerceParamValue(entry!, " https://x.example ")).toBe("https://x.example");
+    expect(coerceParamValue(maxPages!, "5")).toBe(5);
+    expect(coerceParamValue(includeClosed!, "true")).toBe(true);
+    expect(coerceParamValue(includeClosed!, "")).toBe(false);
   });
 });
 

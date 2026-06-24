@@ -16,7 +16,7 @@ describe("errorLabel — 계약 userMessage 미러 + raw 폴백", () => {
     ["RUN_NOT_FOUND", "실행을 찾을 수 없습니다."],
     ["RESOURCE_NOT_FOUND", "대상을 찾을 수 없습니다."],
     ["RUN_ALREADY_TERMINAL", "이미 종료된 실행입니다."],
-    ["IR_SCHEMA_INVALID", "시나리오 정의 오류."],
+    ["IR_SCHEMA_INVALID", "자동화 정의 오류."],
     ["IR_EXPRESSION_COMPILE_ERROR", "조건식 오류."],
     ["SITE_PROFILE_BLOCKED", "해당 사이트는 승인이 필요합니다."],
     ["CHALLENGE_UNRESOLVED", "추가 인증이 필요합니다."],

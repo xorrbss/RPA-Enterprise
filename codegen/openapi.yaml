@@ -23,8 +23,22 @@ servers:
     description: Control-plane v1 base path.
 
 tags:
+  - name: Auth
+    description: 인증·SSO/IdP 준비도와 JWT claim mapping 점검.
   - name: Runs
     description: 실행 제어 (api-surface §1)
+  - name: RunTriggers
+    description: 실행 예약·cron trigger orchestration (api-surface Run Triggers v1)
+  - name: OpsAlerts
+    description: 계산형 운영 알림·SLA 위험 센터 (api-surface Ops Alerts v1)
+  - name: AutomationIdeas
+    description: CoE automation intake, approval pipeline, and ROI estimation.
+  - name: AuditLog
+    description: Tenant-scoped immutable audit log explorer without raw payload disclosure.
+  - name: ConnectorCatalog
+    description: Browser RPA connector and template catalog metadata.
+  - name: DocumentIDP
+    description: Deterministic text/CSV/JSON document extraction and human validation queue.
   - name: Scenarios
     description: 시나리오 CRUD · 검증 · 승격 (api-surface §2)
   - name: ScenarioGenerations
@@ -46,6 +60,24 @@ security:
   - bearerAuth: []
 
 paths:
+  /auth/readiness:
+    get:
+      tags: [Auth]
+      operationId: getAuthReadiness
+      summary: Get SSO/IdP readiness
+      description: >
+        Returns non-secret auth provider readiness, required JWT claim mapping, and the current authenticated principal.
+        HMAC secrets, raw tokens, and JWKS URL paths/queries are never returned.
+      responses:
+        '200':
+          description: SSO/IdP readiness summary for the authenticated tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthReadiness'
+        default:
+          $ref: '#/components/responses/Error'
+
   # ============================================================
   # 1. Runs (실행 제어) — api-surface §1
   # ============================================================
@@ -81,6 +113,7 @@ paths:
     get:
       tags: [Runs]
       operationId: listRuns
+      description: List tenant-scoped run records for operations monitoring and trace entry points.
       summary: 실행 목록
       parameters:
         - name: status
@@ -111,6 +144,7 @@ paths:
     get:
       tags: [Runs]
       operationId: getRun
+      description: Return one run record with current state, worker metadata, and failure context.
       summary: 실행 상세
       responses:
         '200':
@@ -181,6 +215,31 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /runs/{run_id}/steps/stream:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Runs]
+      operationId: streamRunSteps
+      summary: run step trace change stream
+      description: >
+        Server-sent event stream for RunTrace freshness. Events carry non-sensitive
+        change signals only; clients refetch /runs/{run_id}/steps for the authoritative
+        step summaries.
+      responses:
+        '200':
+          description: SSE frames run_steps_changed and run_steps_closed.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/RunStepStream'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   /runs/{run_id}/abort:
     parameters:
       - $ref: '#/components/parameters/RunId'
@@ -218,8 +277,746 @@ paths:
           $ref: '#/components/responses/Error'
 
   # ============================================================
+  # 1.5 Run Triggers (예약 실행 / orchestration)
+  # ============================================================
+  /run-triggers:
+    get:
+      tags: [RunTriggers]
+      operationId: listRunTriggers
+      description: List tenant-scoped cron and signed webhook run triggers for operations and scheduling views.
+      summary: 실행 예약 목록
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RunTriggerStatus'
+        - name: scenario_version_id
+          in: query
+          required: false
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: cron/webhook run trigger 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTriggerPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [RunTriggers]
+      operationId: createRunTrigger
+      summary: 실행 트리거 생성
+      description: >
+        Product Open v1 trigger는 cron 기반 예약 실행과 HMAC 서명 웹훅 발화만 성공 경로로 계약한다.
+        파일 도착과 queue 적재 trigger는 V2 P1에서 저장하거나 성공처럼 응답하지 않는다.
+        trigger_type=file_arrival|queue|queue_threshold 값은 IR_SCHEMA_INVALID(reason=invalid_trigger_type)로 거절한다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunTriggerCreateRequest'
+      responses:
+        '201':
+          description: 생성된 run trigger.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTrigger'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /run-triggers/{trigger_id}:
+    parameters:
+      - $ref: '#/components/parameters/RunTriggerId'
+    get:
+      tags: [RunTriggers]
+      operationId: getRunTrigger
+      description: Return one tenant-scoped cron run trigger and its scheduling metadata.
+      summary: 실행 예약 상세
+      responses:
+        '200':
+          description: run trigger 상세.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTrigger'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [RunTriggers]
+      operationId: updateRunTrigger
+      description: Update mutable scheduling metadata for one cron run trigger.
+      summary: 실행 예약 수정
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunTriggerUpdateRequest'
+      responses:
+        '200':
+          description: 수정된 run trigger.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTrigger'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /run-triggers/{trigger_id}/pause:
+    parameters:
+      - $ref: '#/components/parameters/RunTriggerId'
+    post:
+      tags: [RunTriggers]
+      operationId: pauseRunTrigger
+      description: Pause one enabled cron run trigger without deleting its configuration.
+      summary: 실행 예약 일시정지
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunTriggerCommandRequest'
+      responses:
+        '200':
+          description: paused 상태의 run trigger.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTrigger'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /run-triggers/{trigger_id}/resume:
+    parameters:
+      - $ref: '#/components/parameters/RunTriggerId'
+    post:
+      tags: [RunTriggers]
+      operationId: resumeRunTrigger
+      description: Resume one paused cron run trigger and continue future scheduling.
+      summary: 실행 예약 재개
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunTriggerCommandRequest'
+      responses:
+        '200':
+          description: enabled 상태의 run trigger.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTrigger'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /run-triggers/{trigger_id}/fires:
+    parameters:
+      - $ref: '#/components/parameters/RunTriggerId'
+    get:
+      tags: [RunTriggers]
+      operationId: listRunTriggerFires
+      description: List the fire ledger for one run trigger, including recent outcomes.
+      summary: 실행 예약 발화 이력
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: trigger fire ledger 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTriggerFirePage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /webhooks/run-triggers/{tenant_id}/{trigger_id}:
+    post:
+      tags: [RunTriggers]
+      operationId: receiveRunTriggerWebhook
+      security: []
+      summary: 서명 웹훅 트리거 발화 수신
+      description: >
+        Public JWT-skip webhook ingestion endpoint. The request is authenticated by
+        X-RPA-Webhook-Signature over "{timestamp}.{event_id}.{canonical_json(body)}" using the
+        SecretStore value referenced by the trigger's webhook_secret_ref. X-RPA-Webhook-Event-Id
+        becomes fire_key "webhook:{event_id}" and is idempotent per tenant and trigger.
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: trigger_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: X-RPA-Webhook-Event-Id
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: X-RPA-Webhook-Timestamp
+          in: header
+          required: true
+          schema: { type: string }
+          description: Unix timestamp in seconds or milliseconds; must be within five minutes of receipt.
+        - name: X-RPA-Webhook-Signature
+          in: header
+          required: true
+          schema: { type: string, pattern: '^sha256=[A-Fa-f0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Webhook fire accepted, replayed, skipped by concurrency, or recorded as failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTriggerWebhookReceipt'
+        '401':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 1.6 Ops Alerts (SLA/운영 알림 센터)
+  # ============================================================
+  /ops-alerts:
+    get:
+      tags: [OpsAlerts]
+      operationId: listOpsAlerts
+      description: >
+        List computed tenant-scoped operations alerts from current runs, human tasks, trigger fires, and DLQ rows.
+        Product Open v1 P1 notification channel is the console alert center only; it does not persist
+        acknowledgement state or send Teams/Slack/email/webhook notifications.
+      summary: 운영 알림 목록
+      parameters:
+        - name: severity
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/OpsAlertSeverity'
+        - name: source
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/OpsAlertSource'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 계산형 운영 알림 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertPage'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops/health:
+    get:
+      tags: [OpsAlerts]
+      operationId: getOpsHealth
+      description: >
+        Return computed tenant-scoped operational health: queue depth when Graphile jobs view is
+        available, browser lease occupancy/expiry, and stale nonterminal runs.
+      summary: Operations health snapshot
+      responses:
+        '200':
+          description: Current tenant operations health snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsHealth'
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
   # 2.5 Scenario Generations — api-surface §2.5
   # ============================================================
+  # ============================================================
+  # 1.6 Automation Ideas / CoE ROI
+  # ============================================================
+  /automation-ideas:
+    get:
+      tags: [AutomationIdeas]
+      operationId: listAutomationIdeas
+      description: List tenant-scoped automation candidates for CoE intake and prioritization.
+      summary: List automation ideas
+      parameters:
+        - name: stage
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AutomationIdeaStage'
+        - name: owner
+          in: query
+          required: false
+          schema: { type: string }
+        - name: department
+          in: query
+          required: false
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Tenant-scoped automation idea page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationIdeaPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [AutomationIdeas]
+      operationId: createAutomationIdea
+      summary: Create automation idea
+      description: Intake an automation candidate for CoE assessment and ROI tracking.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutomationIdeaCreateRequest'
+      responses:
+        '201':
+          description: Created automation idea.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationIdea'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /automation-ideas/{idea_id}:
+    parameters:
+      - $ref: '#/components/parameters/AutomationIdeaId'
+    get:
+      tags: [AutomationIdeas]
+      operationId: getAutomationIdea
+      description: Return one automation candidate with stage, ownership, and impact fields.
+      summary: Get automation idea
+      responses:
+        '200':
+          description: Automation idea detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationIdea'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [AutomationIdeas]
+      operationId: updateAutomationIdea
+      description: Update intake metadata for one automation candidate without changing stage.
+      summary: Update automation idea
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutomationIdeaUpdateRequest'
+      responses:
+        '200':
+          description: Updated automation idea.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationIdea'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /automation-ideas/{idea_id}/transition:
+    parameters:
+      - $ref: '#/components/parameters/AutomationIdeaId'
+    post:
+      tags: [AutomationIdeas]
+      operationId: transitionAutomationIdea
+      description: Move one automation candidate through the CoE approval pipeline.
+      summary: Transition automation idea stage
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutomationIdeaTransitionRequest'
+      responses:
+        '200':
+          description: Transitioned automation idea.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationIdea'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /automation-ideas/{idea_id}/roi-estimate:
+    parameters:
+      - $ref: '#/components/parameters/AutomationIdeaId'
+    get:
+      tags: [AutomationIdeas]
+      operationId: getRoiEstimate
+      description: Return saved ROI inputs and calculated value metrics for an automation idea.
+      summary: Get ROI estimate
+      responses:
+        '200':
+          description: ROI estimate for an automation idea.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoiEstimate'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [AutomationIdeas]
+      operationId: upsertRoiEstimate
+      summary: Upsert ROI estimate
+      description: Stores inputs and server-calculated monthly hours, monthly value, and payback.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoiEstimateRequest'
+      responses:
+        '200':
+          description: Upserted ROI estimate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoiEstimate'
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 1.7 Audit Log Explorer
+  # ============================================================
+  /audit-log:
+    get:
+      tags: [AuditLog]
+      operationId: listAuditLog
+      description: List tenant-scoped immutable audit records without exposing payload bodies.
+      summary: List audit log records
+      parameters:
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: outcome
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AuditOutcome'
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: correlation_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Tenant-scoped audit log page. Payload bodies are intentionally omitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /audit-log/export:
+    get:
+      tags: [AuditLog]
+      operationId: exportAuditLog
+      description: Export tenant-scoped immutable audit records as CSV without exposing payload bodies.
+      summary: Export audit log records
+      parameters:
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: outcome
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AuditOutcome'
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: correlation_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [csv]
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: CSV audit export containing non-sensitive audit summary fields only.
+          content:
+            text/csv:
+              schema:
+                $ref: '#/components/schemas/AuditLogExportCsv'
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 1.8 Connector and Template Catalog
+  # ============================================================
+  /connectors:
+    get:
+      tags: [ConnectorCatalog]
+      operationId: listConnectors
+      summary: List connector catalog items
+      description: List browser-RPA connector catalog metadata. Secret values and connector runtime credentials are never returned.
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ConnectorCatalogKind'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CatalogStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Connector catalog page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorCatalogPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /templates:
+    get:
+      tags: [ConnectorCatalog]
+      operationId: listTemplates
+      summary: List automation template catalog items
+      description: List browser-RPA template metadata. Templates reference SecretRef namespaces only; no secret values are returned.
+      parameters:
+        - name: connector_id
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/TemplateCatalogKind'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CatalogStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Template catalog page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateCatalogPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /document-jobs:
+    get:
+      tags: [DocumentIDP]
+      operationId: listDocumentJobs
+      summary: List document automation jobs
+      description: List tenant-scoped document extraction jobs. Source document bytes are never returned by this endpoint.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/DocumentJobStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Document job page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentJobPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [DocumentIDP]
+      operationId: createDocumentJob
+      summary: Create a document extraction job
+      description: Create a deterministic text/CSV/JSON document extraction job from a redacted source artifact.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentJobCreateRequest'
+      responses:
+        '201':
+          description: Created document job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentJob'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /document-jobs/{job_id}:
+    get:
+      tags: [DocumentIDP]
+      operationId: getDocumentJob
+      summary: Get a document extraction job
+      description: Return a tenant-scoped document job without source artifact bytes.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Document job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentJob'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /document-jobs/{job_id}/extract:
+    post:
+      tags: [DocumentIDP]
+      operationId: extractDocumentJob
+      summary: Run deterministic document extraction
+      description: Read the redacted source artifact through the artifact audit boundary and store extraction fields.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentJobCommandRequest'
+      responses:
+        '200':
+          description: Document extraction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentExtraction'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /document-jobs/{job_id}/extraction:
+    get:
+      tags: [DocumentIDP]
+      operationId: getDocumentExtraction
+      summary: Get stored document extraction result
+      description: Return stored extraction fields and validation state for a document job.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Document extraction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentExtraction'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /document-jobs/{job_id}/validation-task:
+    post:
+      tags: [DocumentIDP]
+      operationId: createDocumentValidationTask
+      summary: Create a human validation task for missing or low-confidence fields
+      description: Create or return the reviewer task that captures corrected document field values.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentJobCommandRequest'
+      responses:
+        '201':
+          description: Human task reference for validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentValidationTask'
+        default:
+          $ref: '#/components/responses/Error'
+
   /scenario-generations/capabilities:
     get:
       tags: [ScenarioGenerations]
@@ -240,6 +1037,7 @@ paths:
     get:
       tags: [ScenarioGenerations]
       operationId: listScenarioGenerations
+      description: List saved scenario generation attempts without exposing raw prompt bodies.
       summary: 자연어 generation 원장 목록
       parameters:
         - in: query
@@ -322,6 +1120,7 @@ paths:
     get:
       tags: [ScenarioGenerations]
       operationId: getScenarioGeneration
+      description: Return one scenario generation record, blockers, and linked run metadata.
       summary: 자연어 생성 원장 조회
       responses:
         '200':
@@ -469,6 +1268,7 @@ paths:
     get:
       tags: [Scenarios]
       operationId: listScenarios
+      description: List tenant-scoped scenario definitions and their current versions.
       summary: 시나리오 목록
       parameters:
         - $ref: '#/components/parameters/Limit'
@@ -602,6 +1402,38 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /scenarios/{scenario_id}/promote-from-run:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    post:
+      tags: [Scenarios]
+      operationId: promoteScenarioFromRun
+      summary: 성공 실행을 결정형 봇 draft로 굳히기
+      description: >
+        성공 run의 결정형 ActionPlan(click/fill/select 및 cache-hit)을 새 draft scenario version의
+        IR act args로 베이킹한다(PbD). run은 같은 scenario에 속해야 하며 completed 상태여야 한다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromoteScenarioFromRunRequest'
+      responses:
+        '201':
+          description: 성공 run에서 결정형 act args를 베이킹한 새 draft version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromoteScenarioFromRunResponse'
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
   /scenarios/{scenario_id}/archive:
     parameters:
       - $ref: '#/components/parameters/ScenarioId'
@@ -725,6 +1557,7 @@ paths:
     get:
       tags: [HumanTasks]
       operationId: listHumanTasks
+      description: List human-in-the-loop tasks for queue triage and suspended run recovery.
       summary: 휴먼 태스크 인박스 목록
       parameters:
         - name: status
@@ -867,6 +1700,7 @@ paths:
     get:
       tags: [HumanTasks]
       operationId: getHumanTask
+      description: Return one human task with assignment, timeout, and related run metadata.
       summary: 휴먼 태스크 상세
       responses:
         '200':
@@ -888,7 +1722,8 @@ paths:
       operationId: resolveHumanTask
       summary: 휴먼 태스크 해소
       description: >
-        v1 resolve는 optional result 객체를 수용하지만 전이/이벤트만 확정하고 result는 검증·영속·소비하지 않는다.
+        V2 resolve는 optional result 객체를 검증·영속해 검증/교정 워크벤치 결과로 조회 가능하게 한다.
+        런타임 재개 컨텍스트 자동 주입은 별도 IREL/reserved-handler 변경 전까지 비활성이다.
         HumanTask in_progress→resolved(H3), human_task.resolved 이벤트 → Run suspended→resume_requested(R13).
         만료/종결 태스크 → HUMAN_TASK_EXPIRED(410, business).
       parameters:
@@ -1013,6 +1848,7 @@ paths:
     get:
       tags: [Workitems]
       operationId: listWorkitems
+      description: List queue workitems by state for throughput, retry, and exception handling.
       summary: 작업항목 목록
       parameters:
         - name: status
@@ -1038,6 +1874,7 @@ paths:
     get:
       tags: [Workitems]
       operationId: getWorkitem
+      description: Return one queue workitem with state, attempt, checkout, and linked run fields.
       summary: 작업항목 상세
       responses:
         '200':
@@ -1309,6 +2146,7 @@ paths:
     get:
       tags: [Sites]
       operationId: listSites
+      description: List tenant-scoped site profiles and their default automation resources.
       summary: 사이트 목록
       parameters:
         - name: risk
@@ -1404,6 +2242,345 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /sites/{site_profile_id}/page-state:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+    patch:
+      tags: [Sites]
+      operationId: updateSitePageState
+      summary: 사이트 page-state 셀렉터 설정 수정
+      description: >
+        사이트의 page_state_selectors 계약을 수정한다. body.page_state_selectors는 null(해제) 또는
+        닫힌 SitePageStateConfig이며, 서버가 저장 전 엄격 검증한다. 토큰/쿠키/자격증명은 포함하지 않는다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SitePageStateUpdateRequest'
+      responses:
+        '200':
+          description: page-state 셀렉터 설정 갱신 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SitePageStateUpdateResponse'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}/elements:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+    get:
+      tags: [Sites]
+      operationId: listSiteElements
+      summary: 사이트 화면요소 저장소 목록
+      description: Browser Object Repository v1. DOM-backed browser selector metadata only; desktop/vision objects are out of scope.
+      parameters:
+        - name: stability
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/SiteElementStability'
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 사이트 화면요소 저장소 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteElementPage'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Sites]
+      operationId: createSiteElement
+      summary: 사이트 화면요소 등록
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteElementCreateRequest'
+      responses:
+        '201':
+          description: 화면요소 등록 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteElement'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}/elements/{element_id}:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+      - name: element_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Sites]
+      operationId: updateSiteElement
+      summary: 사이트 화면요소 수정
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteElementUpdateRequest'
+      responses:
+        '200':
+          description: 화면요소 수정 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteElement'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Sites]
+      operationId: deleteSiteElement
+      summary: 사이트 화면요소 삭제
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 화면요소 삭제 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteElementDeleteResponse'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}/elements/{element_id}/probe:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+      - name: element_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Sites]
+      operationId: probeSiteElement
+      summary: Browser Object Repository selector probe
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteElementProbeRequest'
+      responses:
+        '200':
+          description: Selector probe result. not_run is explicit when no live probe provider or sample URL is available.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteElementProbeResponse'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}/recordings:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+    get:
+      tags: [Sites]
+      operationId: listBrowserRecordings
+      summary: Browser Recorder 세션 목록
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/BrowserRecordingStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 사이트별 Browser Recorder 세션 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserRecordingPage'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Sites]
+      operationId: startBrowserRecording
+      summary: Browser Recorder 세션 시작
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowserRecordingStartRequest'
+      responses:
+        '201':
+          description: 녹화 세션 시작.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserRecordingSession'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}/recordings/{recording_session_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+      - name: recording_session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Sites]
+      operationId: listBrowserRecordingEvents
+      summary: Browser Recorder 이벤트 목록
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: seq 오름차순 이벤트 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserRecordingEventPage'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Sites]
+      operationId: appendBrowserRecordingEvents
+      summary: Browser Recorder 이벤트 추가
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowserRecordingAppendEventsRequest'
+      responses:
+        '200':
+          description: 이벤트 추가 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserRecordingAppendEventsResponse'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}/recordings/{recording_session_id}/complete:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+      - name: recording_session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Sites]
+      operationId: completeBrowserRecording
+      summary: Browser Recorder 완료 및 IR 초안 생성
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 녹화 완료 및 draft_ir 생성.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserRecordingSession'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   /sites/{site_profile_id}/approve:
     parameters:
       - $ref: '#/components/parameters/SiteProfileId'
@@ -1434,6 +2611,64 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /sites/{site_profile_id}/session/capture:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+    post:
+      tags: [Sites]
+      operationId: captureSession
+      summary: 운영자 보조 세션 등록 시작
+      description: >
+        로그인 URL을 열 세션 캡처 행을 생성한다. 동일 사이트에 active 캡처가 있으면 새 창을 중복 launch하지 않고
+        기존 capture_session을 반환한다. 쿠키/자격증명은 이 응답에 포함하지 않는다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureSessionStartRequest'
+      responses:
+        '200':
+          description: 이미 진행 중인 세션 캡처.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureSessionStartResponse'
+        '201':
+          description: 새 세션 캡처 시작.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureSessionStartResponse'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    get:
+      tags: [Sites]
+      operationId: listSessionCaptures
+      summary: 세션 등록 상태 목록
+      description: 최근 세션 캡처 상태만 반환한다. 쿠키, 토큰, 자격증명, 로그인 입력값은 절대 반환하지 않는다.
+      responses:
+        '200':
+          description: 최근 10개 세션 캡처 상태.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureSessionPage'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
 # ============================================================
 # Components
 # ============================================================
@@ -1455,6 +2690,16 @@ components:
       in: path
       required: true
       schema: { type: string }
+    RunTriggerId:
+      name: trigger_id
+      in: path
+      required: true
+      schema: { type: string }
+    AutomationIdeaId:
+      name: idea_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     ScenarioId:
       name: scenario_id
       in: path
@@ -1657,6 +2902,124 @@ components:
         - cancelled
         - failed_business
         - failed_system
+    RunTriggerStatus:
+      type: string
+      enum:
+        - enabled
+        - paused
+        - archived
+    RunTriggerType:
+      type: string
+      enum:
+        - cron
+        - webhook
+    RunTriggerFireStatus:
+      type: string
+      enum:
+        - queued
+        - skipped
+        - failed
+    OpsAlertSeverity:
+      type: string
+      enum:
+        - critical
+        - warning
+        - info
+    OpsAlertSource:
+      type: string
+      enum:
+        - run_sla
+        - human_task_sla
+        - trigger_fire
+        - failure_spike
+        - dlq
+    OpsAlertSubjectType:
+      type: string
+      enum:
+        - run
+        - human_task
+        - run_trigger
+        - dlq
+    AutomationIdeaStage:
+      type: string
+      enum:
+        - intake
+        - assess
+        - approved
+        - build
+        - operate
+        - rejected
+        - archived
+    AutomationIdeaPriority:
+      type: string
+      enum:
+        - low
+        - medium
+        - high
+        - critical
+    AutomationIdeaSource:
+      type: string
+      enum:
+        - manual
+        - process_mining
+        - task_mining
+        - imported
+    RoiConfidence:
+      type: string
+      enum:
+        - low
+        - medium
+        - high
+    DocumentJobStatus:
+      type: string
+      enum:
+        - created
+        - extracted
+        - validation_required
+        - validated
+        - failed
+    DocumentExtractionStatus:
+      type: string
+      enum:
+        - completed
+        - validation_required
+        - failed
+    DocumentFieldType:
+      type: string
+      enum:
+        - text
+        - number
+        - date
+        - boolean
+    AuditOutcome:
+      type: string
+      enum:
+        - allow
+        - deny
+        - blocked
+        - error
+    CatalogStatus:
+      type: string
+      enum:
+        - available
+        - candidate
+        - requires_admin
+        - blocked
+    ConnectorCatalogKind:
+      type: string
+      enum:
+        - browser
+        - api
+        - file
+        - notification
+        - data
+    TemplateCatalogKind:
+      type: string
+      enum:
+        - browser_workflow
+        - api_workflow
+        - file_workflow
+        - notification_workflow
     WorkitemState:
       type: string
       enum:
@@ -1701,6 +3064,265 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/Run' }
+        next_cursor:
+          type: [string, "null"]
+    RunTriggerPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RunTrigger' }
+        next_cursor:
+          type: [string, "null"]
+    RunTriggerFirePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RunTriggerFire' }
+        next_cursor:
+          type: [string, "null"]
+    OpsAlertPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OpsAlert' }
+        next_cursor:
+          type: [string, "null"]
+    OpsHealthStatus:
+      type: string
+      enum: [ok, warning, critical]
+    OpsQueueHealth:
+      type: object
+      additionalProperties: false
+      required: [available, pending_jobs]
+      properties:
+        available:
+          type: boolean
+        pending_jobs:
+          type: [integer, "null"]
+          minimum: 0
+    OpsBrowserLeaseHealth:
+      type: object
+      additionalProperties: false
+      required: [reserved, active, draining, expired, expired_open, next_expiry_at]
+      properties:
+        reserved: { type: integer, minimum: 0 }
+        active: { type: integer, minimum: 0 }
+        draining: { type: integer, minimum: 0 }
+        expired: { type: integer, minimum: 0 }
+        expired_open: { type: integer, minimum: 0 }
+        next_expiry_at:
+          type: [string, "null"]
+          format: date-time
+    OpsStaleRunHealth:
+      type: object
+      additionalProperties: false
+      required: [nonterminal_over_15m, oldest_updated_at]
+      properties:
+        nonterminal_over_15m: { type: integer, minimum: 0 }
+        oldest_updated_at:
+          type: [string, "null"]
+          format: date-time
+    OpsHealth:
+      type: object
+      additionalProperties: false
+      required: [status, detected_at, queue, browser_leases, stale_runs]
+      properties:
+        status:
+          $ref: '#/components/schemas/OpsHealthStatus'
+        detected_at:
+          type: string
+          format: date-time
+        queue:
+          $ref: '#/components/schemas/OpsQueueHealth'
+        browser_leases:
+          $ref: '#/components/schemas/OpsBrowserLeaseHealth'
+        stale_runs:
+          $ref: '#/components/schemas/OpsStaleRunHealth'
+    AuthReadinessStatus:
+      type: string
+      enum: [ok, warning, blocked]
+    AuthProviderMode:
+      type: string
+      enum: [hs256, jwks]
+    AuthReadinessProvider:
+      type: object
+      additionalProperties: false
+      required: [mode, configuration_source, algorithm, jwks_url_configured, jwks_host, issuer_configured, issuer, audience_configured, audience]
+      properties:
+        mode:
+          $ref: '#/components/schemas/AuthProviderMode'
+        configuration_source:
+          type: string
+          enum: [deployment_config, test_default]
+        algorithm:
+          type: string
+          enum: [HS256, RS256]
+        jwks_url_configured:
+          type: boolean
+        jwks_host:
+          type: [string, "null"]
+        issuer_configured:
+          type: boolean
+        issuer:
+          type: [string, "null"]
+        audience_configured:
+          type: boolean
+        audience:
+          type: [string, "null"]
+    AuthClaimMapping:
+      type: object
+      additionalProperties: false
+      required: [subject_claim, tenant_claim, roles_claim, expiry_claim, display_name_claim, email_claim]
+      properties:
+        subject_claim: { type: string }
+        tenant_claim: { type: string }
+        roles_claim: { type: string }
+        expiry_claim: { type: string }
+        display_name_claim: { type: string }
+        email_claim: { type: string }
+    AuthRoleMapping:
+      type: object
+      additionalProperties: false
+      required: [configured, mapped_values]
+      properties:
+        configured:
+          type: boolean
+        mapped_values:
+          type: integer
+          minimum: 0
+    AuthClaimReadiness:
+      type: object
+      additionalProperties: false
+      required: [claim, label, required, present, mapped_to]
+      properties:
+        claim:
+          type: string
+        label:
+          type: string
+        required:
+          type: boolean
+        present:
+          type: boolean
+        mapped_to:
+          type: string
+    AuthCurrentPrincipal:
+      type: object
+      additionalProperties: false
+      required: [subject_id, tenant_id, roles, source, display_name, email]
+      properties:
+        subject_id: { type: string }
+        tenant_id: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        source:
+          type: string
+          enum: [jwt, session]
+        display_name:
+          type: [string, "null"]
+        email:
+          type: [string, "null"]
+    AuthReadiness:
+      type: object
+      additionalProperties: false
+      required: [status, enterprise_sso_ready, provider, claim_mapping, role_mapping, required_claims, current_principal, operational_gaps]
+      properties:
+        status:
+          $ref: '#/components/schemas/AuthReadinessStatus'
+        enterprise_sso_ready:
+          type: boolean
+        provider:
+          $ref: '#/components/schemas/AuthReadinessProvider'
+        claim_mapping:
+          $ref: '#/components/schemas/AuthClaimMapping'
+        role_mapping:
+          $ref: '#/components/schemas/AuthRoleMapping'
+        required_claims:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthClaimReadiness'
+        current_principal:
+          $ref: '#/components/schemas/AuthCurrentPrincipal'
+        operational_gaps:
+          type: array
+          items: { type: string }
+    AutomationIdeaPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AutomationIdea' }
+        next_cursor:
+          type: [string, "null"]
+    AuditLogPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AuditLog' }
+        next_cursor:
+          type: [string, "null"]
+    AuditLogListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        action: { type: string, minLength: 1 }
+        outcome:
+          $ref: '#/components/schemas/AuditOutcome'
+        actor: { type: string, minLength: 1 }
+        correlation_id: { type: string, format: uuid }
+        limit: { type: integer, minimum: 1 }
+        cursor: { type: string, minLength: 1 }
+    AuditLogExportQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        action: { type: string, minLength: 1 }
+        outcome:
+          $ref: '#/components/schemas/AuditOutcome'
+        actor: { type: string, minLength: 1 }
+        correlation_id: { type: string, format: uuid }
+        limit: { type: integer, minimum: 1 }
+        cursor: { type: string, minLength: 1 }
+        format:
+          type: string
+          enum: [csv]
+    AuditLogExportCsv:
+      type: string
+      description: CSV audit export. Raw audit payload bodies are intentionally omitted.
+    ConnectorCatalogPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConnectorCatalogItem' }
+        next_cursor:
+          type: [string, "null"]
+    TemplateCatalogPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TemplateCatalogItem' }
+        next_cursor:
+          type: [string, "null"]
+    DocumentJobPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DocumentJob' }
         next_cursor:
           type: [string, "null"]
     StepPage:
@@ -1819,6 +3441,15 @@ components:
           items: { $ref: '#/components/schemas/Site' }
         next_cursor:
           type: [string, "null"]
+    CaptureSessionPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CaptureSession' }
+        next_cursor:
+          type: [string, "null"]
     GenerationArtifactList:
       type: object
       required: [items, next_cursor]
@@ -1853,6 +3484,8 @@ components:
       description: 실행 리소스(요지). Read responses always include current_node and failure_reason; unknown node and absent failure are explicit nulls.
       required:
         - run_id
+        - scenario_id
+        - scenario_version_id
         - status
         - worker_id
         - attempts
@@ -1862,6 +3495,7 @@ components:
         - updated_at
       properties:
         run_id: { type: string }
+        scenario_id: { type: string }
         status: { $ref: '#/components/schemas/RunState' }
         scenario_version_id: { type: string }
         worker_id: { type: [string, "null"] }
@@ -1898,6 +3532,741 @@ components:
           type: [string, "null"]
           format: date-time
           description: Present on createRun responses; omitted on abort responses.
+
+    RunTrigger:
+      type: object
+      additionalProperties: false
+      required:
+        - trigger_id
+        - scenario_version_id
+        - trigger_type
+        - status
+        - cron_expression
+        - timezone
+        - webhook_secret_ref
+        - webhook_secret_configured
+        - params
+        - catchup_policy
+        - max_concurrent_runs
+        - next_fire_at
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        trigger_id: { type: string }
+        scenario_version_id: { type: string }
+        trigger_type:
+          $ref: '#/components/schemas/RunTriggerType'
+        status:
+          $ref: '#/components/schemas/RunTriggerStatus'
+        cron_expression:
+          type: [string, "null"]
+          minLength: 1
+          description: Five-field cron expression for cron triggers; null for webhook triggers.
+        timezone:
+          type: [string, "null"]
+          minLength: 1
+          description: IANA timezone for cron triggers; null for webhook triggers.
+        webhook_secret_ref:
+          type: [string, "null"]
+          pattern: '^secret://.+'
+          description: SecretRef used for webhook HMAC verification when the caller can manage triggers; null for cron triggers and read-only callers.
+        webhook_secret_configured:
+          type: boolean
+          description: True when a webhook trigger has an HMAC SecretRef configured, without exposing the raw SecretRef to read-only callers.
+        params:
+          type: object
+          additionalProperties: true
+        catchup_policy:
+          type: string
+          enum: [skip_missed, fire_once]
+        max_concurrent_runs:
+          type: integer
+          minimum: 1
+        next_fire_at:
+          type: [string, "null"]
+          format: date-time
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    RunTriggerCreateRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [scenario_version_id, cron_expression, timezone]
+          properties:
+            trigger_type:
+              type: string
+              enum: [cron]
+              default: cron
+            scenario_version_id: { type: string }
+            cron_expression:
+              type: string
+              minLength: 1
+              description: Five-field cron expression. Supports numeric *, list, range, and step syntax.
+            timezone: { type: string, minLength: 1 }
+            params:
+              type: object
+              additionalProperties: true
+              default: {}
+            catchup_policy:
+              type: string
+              enum: [skip_missed, fire_once]
+              default: skip_missed
+            max_concurrent_runs:
+              type: integer
+              minimum: 1
+              default: 1
+            next_fire_at:
+              type: [string, "null"]
+              format: date-time
+              description: Optional explicit first fire time. When omitted, the API calculates the next occurrence from cron_expression and timezone.
+        - type: object
+          additionalProperties: false
+          required: [trigger_type, scenario_version_id, webhook_secret_ref]
+          properties:
+            trigger_type:
+              type: string
+              enum: [webhook]
+            scenario_version_id: { type: string }
+            webhook_secret_ref:
+              type: string
+              pattern: '^secret://.+'
+            params:
+              type: object
+              additionalProperties: true
+              default: {}
+            catchup_policy:
+              type: string
+              enum: [skip_missed, fire_once]
+              default: skip_missed
+            max_concurrent_runs:
+              type: integer
+              minimum: 1
+              default: 1
+
+    RunTriggerUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        cron_expression:
+          type: string
+          minLength: 1
+          description: Five-field cron expression. Supports numeric *, list, range, and step syntax.
+        timezone: { type: string, minLength: 1 }
+        webhook_secret_ref:
+          type: string
+          pattern: '^secret://.+'
+        params:
+          type: object
+          additionalProperties: true
+        catchup_policy:
+          type: string
+          enum: [skip_missed, fire_once]
+        max_concurrent_runs:
+          type: integer
+          minimum: 1
+        next_fire_at:
+          type: [string, "null"]
+          format: date-time
+          description: Optional explicit next fire time. When cron_expression or timezone changes and this field is omitted, the API recalculates the next occurrence.
+
+    RunTriggerCommandRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string }
+
+    RunTriggerFire:
+      type: object
+      additionalProperties: false
+      required:
+        - fire_id
+        - trigger_id
+        - fire_key
+        - status
+        - scheduled_for
+        - run_id
+        - failure_reason
+        - created_at
+      properties:
+        fire_id: { type: string }
+        trigger_id: { type: string }
+        fire_key:
+          type: string
+          description: tenant-local idempotency key for a trigger and scheduled instant.
+        status:
+          $ref: '#/components/schemas/RunTriggerFireStatus'
+        scheduled_for:
+          type: string
+          format: date-time
+        run_id:
+          type: [string, "null"]
+        failure_reason:
+          type: [object, "null"]
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    RunTriggerWebhookReceipt:
+      type: object
+      additionalProperties: false
+      required:
+        - fire_id
+        - trigger_id
+        - fire_key
+        - status
+        - run_id
+        - duplicate
+        - failure_reason
+        - received_at
+      properties:
+        fire_id: { type: string }
+        trigger_id: { type: string }
+        fire_key:
+          type: string
+          description: webhook:{event_id}; tenant-local idempotency key.
+        status:
+          $ref: '#/components/schemas/RunTriggerFireStatus'
+        run_id:
+          type: [string, "null"]
+        duplicate:
+          type: boolean
+        failure_reason:
+          type: [object, "null"]
+          additionalProperties: true
+        received_at:
+          type: string
+          format: date-time
+
+    OpsAlert:
+      type: object
+      additionalProperties: false
+      required:
+        - alert_id
+        - severity
+        - source
+        - title
+        - detail
+        - subject_type
+        - subject_id
+        - status
+        - recommended_action
+        - route
+        - detected_at
+      properties:
+        alert_id:
+          type: string
+          description: Stable computed key for the current alert source and subject.
+        severity:
+          $ref: '#/components/schemas/OpsAlertSeverity'
+        source:
+          $ref: '#/components/schemas/OpsAlertSource'
+        title:
+          type: string
+        detail:
+          type: string
+          description: Non-sensitive operational summary. Artifact/body/secret payloads must not appear here.
+        subject_type:
+          $ref: '#/components/schemas/OpsAlertSubjectType'
+        subject_id:
+          type: [string, "null"]
+        status:
+          type: string
+          enum: [open]
+        recommended_action:
+          type: string
+        route:
+          type: [string, "null"]
+          description: Console hash route hint such as '#runTrace?status=running'.
+        detected_at:
+          type: string
+          format: date-time
+        due_at:
+          type: [string, "null"]
+          format: date-time
+    AutomationIdea:
+      type: object
+      additionalProperties: false
+      required:
+        - idea_id
+        - title
+        - description
+        - business_owner
+        - department
+        - source
+        - stage
+        - priority
+        - score
+        - scenario_id
+        - run_trigger_id
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        idea_id: { type: string, format: uuid }
+        title: { type: string, minLength: 1 }
+        description: { type: string, minLength: 1 }
+        business_owner: { type: string, minLength: 1 }
+        department: { type: string, minLength: 1 }
+        source:
+          $ref: '#/components/schemas/AutomationIdeaSource'
+        stage:
+          $ref: '#/components/schemas/AutomationIdeaStage'
+        priority:
+          $ref: '#/components/schemas/AutomationIdeaPriority'
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        scenario_id: { type: [string, "null"], format: uuid }
+        run_trigger_id: { type: [string, "null"], format: uuid }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AutomationIdeaCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [title, description, business_owner, department]
+      properties:
+        title: { type: string, minLength: 1 }
+        description: { type: string, minLength: 1 }
+        business_owner: { type: string, minLength: 1 }
+        department: { type: string, minLength: 1 }
+        source:
+          $ref: '#/components/schemas/AutomationIdeaSource'
+        priority:
+          $ref: '#/components/schemas/AutomationIdeaPriority'
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          default: 0
+
+    AutomationIdeaUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1 }
+        description: { type: string, minLength: 1 }
+        business_owner: { type: string, minLength: 1 }
+        department: { type: string, minLength: 1 }
+        priority:
+          $ref: '#/components/schemas/AutomationIdeaPriority'
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        scenario_id: { type: [string, "null"], format: uuid }
+        run_trigger_id: { type: [string, "null"], format: uuid }
+
+    AutomationIdeaTransitionRequest:
+      type: object
+      additionalProperties: false
+      required: [stage]
+      properties:
+        stage:
+          $ref: '#/components/schemas/AutomationIdeaStage'
+
+    RoiEstimateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - frequency_per_month
+        - minutes_per_case
+        - exception_rate
+        - hourly_cost
+        - implementation_effort
+      properties:
+        frequency_per_month:
+          type: integer
+          minimum: 0
+        minutes_per_case:
+          type: number
+          minimum: 0
+        exception_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+        hourly_cost:
+          type: number
+          minimum: 0
+        implementation_effort:
+          type: number
+          minimum: 0
+        confidence:
+          $ref: '#/components/schemas/RoiConfidence'
+
+    RoiEstimate:
+      type: object
+      additionalProperties: false
+      required:
+        - roi_estimate_id
+        - automation_idea_id
+        - frequency_per_month
+        - minutes_per_case
+        - exception_rate
+        - hourly_cost
+        - implementation_effort
+        - monthly_hours_saved
+        - estimated_monthly_value
+        - payback_months
+        - confidence
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        roi_estimate_id: { type: string, format: uuid }
+        automation_idea_id: { type: string, format: uuid }
+        frequency_per_month:
+          type: integer
+          minimum: 0
+        minutes_per_case:
+          type: number
+          minimum: 0
+        exception_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+        hourly_cost:
+          type: number
+          minimum: 0
+        implementation_effort:
+          type: number
+          minimum: 0
+        monthly_hours_saved:
+          type: number
+          minimum: 0
+        estimated_monthly_value:
+          type: number
+          minimum: 0
+        payback_months:
+          type: [number, "null"]
+          minimum: 0
+        confidence:
+          $ref: '#/components/schemas/RoiConfidence'
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AuditActor:
+      type: object
+      additionalProperties: false
+      required: [subject_id, roles]
+      properties:
+        subject_id:
+          type: [string, "null"]
+          description: Actor subject id from the audit writer actor metadata.
+        roles:
+          type: array
+          items: { type: string }
+
+    AuditLog:
+      type: object
+      additionalProperties: false
+      description: Immutable audit log summary. The raw payload body is intentionally omitted.
+      required:
+        - audit_id
+        - sequence_no
+        - actor
+        - action
+        - outcome
+        - reason
+        - correlation_id
+        - idempotency_key
+        - occurred_at
+        - payload_schema_ref
+        - retention_until
+        - legal_hold
+        - previous_hash
+        - hash
+        - created_at
+      properties:
+        audit_id: { type: string, format: uuid }
+        sequence_no:
+          type: integer
+          minimum: 1
+        actor:
+          $ref: '#/components/schemas/AuditActor'
+        action: { type: string, minLength: 1 }
+        outcome:
+          $ref: '#/components/schemas/AuditOutcome'
+        reason: { type: [string, "null"] }
+        correlation_id: { type: string, format: uuid }
+        idempotency_key: { type: string, minLength: 1 }
+        occurred_at: { type: string, format: date-time }
+        payload_schema_ref: { type: string, minLength: 1 }
+        retention_until: { type: [string, "null"], format: date-time }
+        legal_hold: { type: boolean }
+        previous_hash: { type: [string, "null"] }
+        hash: { type: string, minLength: 1 }
+        created_at: { type: string, format: date-time }
+
+    ConnectorManifestPermissions:
+      type: object
+      additionalProperties: false
+      required: [api, network, secret_refs]
+      properties:
+        api:
+          type: array
+          items:
+            type: string
+            enum: [migrateSchema, registerTargets, readConfig]
+        network:
+          type: boolean
+          const: false
+        secret_refs:
+          type: array
+          items: { type: string }
+
+    ConnectorCatalogItem:
+      type: object
+      additionalProperties: false
+      description: Connector catalog metadata. Secret values are never returned; only SecretRef namespaces may appear.
+      required:
+        - catalog_id
+        - connector_id
+        - name
+        - kind
+        - category
+        - status
+        - priority
+        - summary
+        - best_for
+        - supported_actions
+        - template_ids
+        - required_rbac_actions
+        - required_secret_refs
+        - allowed_domains
+        - manifest_permissions
+        - implementation_state
+        - security_notes
+        - created_at
+        - updated_at
+      properties:
+        catalog_id: { type: string, format: uuid }
+        connector_id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        kind:
+          $ref: '#/components/schemas/ConnectorCatalogKind'
+        category: { type: string, minLength: 1 }
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        priority:
+          type: string
+          enum: [P0, P1, P2, P3]
+        summary: { type: string, minLength: 1 }
+        best_for:
+          type: array
+          items: { type: string }
+        supported_actions:
+          type: array
+          items: { type: string }
+        template_ids:
+          type: array
+          items: { type: string }
+        required_rbac_actions:
+          type: array
+          items: { type: string }
+        required_secret_refs:
+          type: array
+          items: { type: string }
+        allowed_domains:
+          type: array
+          items: { type: string }
+        manifest_permissions:
+          $ref: '#/components/schemas/ConnectorManifestPermissions'
+        implementation_state: { type: string }
+        security_notes:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TemplateCatalogItem:
+      type: object
+      additionalProperties: false
+      description: Automation template catalog metadata. Templates reference SecretRef namespaces only.
+      required:
+        - catalog_id
+        - template_id
+        - connector_id
+        - name
+        - kind
+        - status
+        - priority
+        - summary
+        - best_for
+        - required_params
+        - required_secret_refs
+        - produced_ir_pattern
+        - success_criteria
+        - created_at
+        - updated_at
+      properties:
+        catalog_id: { type: string, format: uuid }
+        template_id: { type: string, minLength: 1 }
+        connector_id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        kind:
+          $ref: '#/components/schemas/TemplateCatalogKind'
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        priority:
+          type: string
+          enum: [P0, P1, P2, P3]
+        summary: { type: string, minLength: 1 }
+        best_for:
+          type: array
+          items: { type: string }
+        required_params:
+          type: array
+          items: { type: string }
+        required_secret_refs:
+          type: array
+          items: { type: string }
+        produced_ir_pattern: { type: string }
+        success_criteria: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DocumentFieldSchema:
+      type: object
+      additionalProperties: false
+      required: [key]
+      properties:
+        key: { type: string, minLength: 1, maxLength: 80 }
+        label: { type: string, minLength: 1 }
+        type:
+          $ref: '#/components/schemas/DocumentFieldType'
+        required: { type: boolean, default: false }
+        aliases:
+          type: array
+          items: { type: string, minLength: 1 }
+        patterns:
+          type: array
+          description: JavaScript regular expressions with optional capture group 1 as extracted value.
+          items: { type: string, minLength: 1 }
+        min_confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    DocumentJobCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [source_artifact_id, document_type, field_schema]
+      properties:
+        source_artifact_id: { type: string, format: uuid }
+        document_type: { type: string, minLength: 1, maxLength: 120 }
+        field_schema:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/DocumentFieldSchema'
+
+    DocumentJobCommandRequest:
+      type: object
+      additionalProperties: false
+
+    DocumentJob:
+      type: object
+      additionalProperties: false
+      required:
+        - document_job_id
+        - source_artifact_id
+        - source_run_id
+        - document_type
+        - field_schema
+        - status
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        document_job_id: { type: string, format: uuid }
+        source_artifact_id: { type: string, format: uuid }
+        source_run_id: { type: string, format: uuid }
+        document_type: { type: string }
+        field_schema:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentFieldSchema'
+        status:
+          $ref: '#/components/schemas/DocumentJobStatus'
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DocumentExtractionField:
+      type: object
+      additionalProperties: false
+      required: [key, label, value, confidence, status, source]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        value: { type: [string, "null"] }
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        status:
+          type: string
+          enum: [extracted, missing, low_confidence]
+        source:
+          type: string
+          enum: [json, csv, pattern, label, missing]
+
+    DocumentExtraction:
+      type: object
+      additionalProperties: false
+      required:
+        - document_extraction_id
+        - document_job_id
+        - engine
+        - status
+        - fields
+        - missing_fields
+        - validation_human_task_id
+        - created_at
+        - updated_at
+      properties:
+        document_extraction_id: { type: string, format: uuid }
+        document_job_id: { type: string, format: uuid }
+        engine:
+          type: string
+          enum: [built_in_deterministic_text_v1]
+        status:
+          $ref: '#/components/schemas/DocumentExtractionStatus'
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentExtractionField'
+        missing_fields:
+          type: array
+          items: { type: string }
+        validation_human_task_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DocumentValidationTask:
+      type: object
+      additionalProperties: false
+      required: [human_task_id, state, result_schema, artifact_refs]
+      properties:
+        human_task_id: { type: string, format: uuid }
+        state:
+          $ref: '#/components/schemas/HumanTaskState'
+        result_schema:
+          type: object
+          description: business_form_v1 schema for reviewer correction input.
+          additionalProperties: true
+        artifact_refs:
+          type: array
+          items: { type: string }
     StepSummary:
       type: object
       description: run_steps metadata-only step trace. Sensitive input/output bodies are not exposed.
@@ -1957,6 +4326,54 @@ components:
         latest_version_id: { type: string }
         ir:
           $ref: '#/components/schemas/IRDocument'
+
+    PromoteScenarioFromRunRequest:
+      type: object
+      additionalProperties: false
+      required: [run_id]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+
+    PromoteScenarioFromRunResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - scenario_id
+        - version
+        - scenario_version_id
+        - promotion_status
+        - promoted_node_ids
+        - skipped
+      properties:
+        scenario_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        scenario_version_id:
+          type: string
+          format: uuid
+        promotion_status:
+          type: string
+          enum: [draft]
+        promoted_node_ids:
+          type: array
+          items:
+            type: string
+        skipped:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [nodeId, reason]
+            properties:
+              nodeId:
+                type: string
+              reason:
+                type: string
 
     ScenarioVersion:
       type: object
@@ -2256,7 +4673,7 @@ components:
 
     HumanTask:
       type: object
-      description: 휴먼 태스크 상세(요지). v1은 inline payload 본문을 조합하거나 노출하지 않는다.
+      description: 휴먼 태스크 상세. artifact 본문은 별도 Artifacts API의 redaction/RBAC 경계를 탄다.
       properties:
         human_task_id: { type: string }
         state: { $ref: '#/components/schemas/HumanTaskState' }
@@ -2268,14 +4685,92 @@ components:
           enum: [fail, escalate]
           description: reserved-handlers @human_task 입력(기본 fail). HumanTaskGuard.onTimeout과 정합.
         run_id: { type: [string, "null"] }
+        payload:
+          type: object
+          additionalProperties: true
+        result_schema:
+          oneOf:
+            - $ref: '#/components/schemas/HumanTaskBusinessFormSchema'
+            - type: object
+              additionalProperties: true
+          description: >
+            HumanTask V2 form hint. version=business_form_v1 is the configurable HITL/data-entry contract;
+            legacy objects without version remain read-only hints.
+        artifact_refs:
+          type: array
+          items: { type: string }
+        result:
+          oneOf:
+            - $ref: '#/components/schemas/HumanTaskResolution'
+            - type: "null"
+
+    HumanTaskResolution:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject, correct, retry]
+        corrections:
+          type: object
+          additionalProperties: true
+          description: >
+            For result_schema.version=business_form_v1 and decision=correct, keys must match declared fields
+            and values must satisfy required/type/options validation.
+        reason: { type: string }
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        notes: { type: string }
+      additionalProperties: false
+
+    HumanTaskBusinessFormSchema:
+      type: object
+      required: [version, fields]
+      properties:
+        version:
+          type: string
+          enum: [business_form_v1]
+        title:
+          type: string
+        description:
+          type: string
+        fields:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/HumanTaskBusinessFormField'
+      additionalProperties: false
+
+    HumanTaskBusinessFormField:
+      type: object
+      required: [key, label, type]
+      properties:
+        key:
+          type: string
+          pattern: '^[A-Za-z_][A-Za-z0-9_]{0,63}$'
+        label:
+          type: string
+        type:
+          type: string
+          enum: [text, textarea, number, boolean, date, select]
+        required:
+          type: boolean
+        options:
+          type: array
+          items:
+            type: string
+        help_text:
+          type: string
+      additionalProperties: false
 
     HumanTaskResolveRequest:
       type: object
-      description: v1 forward seam. optional result 객체는 수용하지만 전이/이벤트 외에는 검증·영속·소비하지 않는다.
+      description: V2 검증/교정 워크벤치 결과. 런타임 자동 소비는 별도 versioned IREL 변경 전까지 비활성.
       properties:
         result:
-          type: object
-          additionalProperties: true
+          $ref: '#/components/schemas/HumanTaskResolution'
       additionalProperties: false
 
     HumanTaskAssignRequest:
@@ -2410,6 +4905,12 @@ components:
       description: >
         run-scoped artifact list item. Metadata-only; content, object_ref, and sha256 are excluded.
         step_id/attempt are populated for step-scoped artifacts and null for run-level artifacts.
+
+    RunStepStream:
+      type: string
+      description: >
+        Server-sent event frame stream for run step changes. Frames carry only
+        non-sensitive change signals; clients refetch RunStepList for detail.
 
     RunStep:
       type: object
@@ -2560,6 +5061,137 @@ components:
         default_network_policy_id:
           type: [string, "null"]
           description: 자연어 실행 target에 자동 제안할 테넌트 기본 network_policy id.
+        page_state_summary:
+          $ref: '#/components/schemas/SitePageStateSummary'
+        page_state_selectors:
+          description: Non-secret SitePageStateConfig JSON used to derive auth and flags. Credentials/cookies are never stored here.
+          oneOf:
+            - $ref: '#/components/schemas/SitePageStateSelectors'
+            - type: "null"
+
+    SitePageStateSummary:
+      type: object
+      required: [configured, login_url_configured, authenticated_selector_configured, flag_count, flags]
+      properties:
+        configured: { type: boolean }
+        login_url_configured: { type: boolean }
+        authenticated_selector_configured: { type: boolean }
+        flag_count: { type: integer, minimum: 0 }
+        flags:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    SitePageStateSelectors:
+      type: object
+      required: [flags]
+      properties:
+        loginUrl:
+          type: string
+        authenticatedWhen:
+          type: object
+          required: [selector]
+          properties:
+            selector:
+              type: string
+              minLength: 1
+          additionalProperties: false
+        flags:
+          type: object
+          additionalProperties:
+            type: object
+            required: [kind, selector]
+            properties:
+              kind:
+                type: string
+                enum: [present, absent, min_count]
+              selector:
+                type: string
+                minLength: 1
+              n:
+                type: integer
+                minimum: 0
+            additionalProperties: false
+      additionalProperties: false
+
+    SitePageStateUpdateRequest:
+      type: object
+      required: [page_state_selectors]
+      properties:
+        page_state_selectors:
+          oneOf:
+            - $ref: '#/components/schemas/SitePageStateSelectors'
+            - type: "null"
+      additionalProperties: false
+
+    SitePageStateUpdateResponse:
+      type: object
+      required: [site_profile_id, page_state_selectors, page_state_summary]
+      properties:
+        site_profile_id:
+          type: string
+          format: uuid
+        page_state_selectors:
+          oneOf:
+            - $ref: '#/components/schemas/SitePageStateSelectors'
+            - type: "null"
+        page_state_summary:
+          $ref: '#/components/schemas/SitePageStateSummary'
+      additionalProperties: false
+
+    CaptureSessionStatus:
+      type: string
+      enum:
+        - launching
+        - awaiting_login
+        - capturing
+        - captured
+        - failed
+        - expired
+
+    CaptureSessionStartRequest:
+      type: object
+      properties:
+        login_url:
+          type: string
+          description: Optional absolute http(s) login URL. When omitted, the site page_state_selectors.loginUrl is used.
+      additionalProperties: false
+
+    CaptureSessionStartResponse:
+      type: object
+      required: [capture_session_id, site_profile_id, status, login_url]
+      properties:
+        capture_session_id:
+          type: string
+          format: uuid
+        site_profile_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/CaptureSessionStatus'
+        login_url:
+          type: string
+        auth_selector:
+          type: string
+          description: Non-secret selector used by the local capture agent to detect authenticated state.
+      additionalProperties: false
+
+    CaptureSession:
+      type: object
+      required: [capture_session_id, status, detail, updated_at]
+      properties:
+        capture_session_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/CaptureSessionStatus'
+        detail:
+          type: [string, "null"]
+          description: Non-secret operator-facing status detail.
+        updated_at:
+          type: string
+          format: date-time
+      additionalProperties: false
 
     SiteCreateRequest:
       type: object
@@ -2629,6 +5261,485 @@ components:
           format: uuid
         name:
           type: string
+      additionalProperties: false
+
+    BrowserRecordingStatus:
+      type: string
+      enum: [recording, completed, discarded, failed]
+
+    BrowserRecordingEventType:
+      type: string
+      enum: [navigate, click, input, select, submit, wait]
+
+    BrowserRecordingListQuery:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/BrowserRecordingStatus'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        cursor:
+          type: string
+      additionalProperties: false
+
+    BrowserRecordingEventListQuery:
+      type: object
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        cursor:
+          type: string
+      additionalProperties: false
+
+    BrowserRecordingPathParams:
+      type: object
+      required: [site_profile_id, recording_session_id]
+      properties:
+        site_profile_id:
+          type: string
+          format: uuid
+        recording_session_id:
+          type: string
+          format: uuid
+      additionalProperties: false
+
+    BrowserRecordingSession:
+      type: object
+      required:
+        - recording_session_id
+        - site_profile_id
+        - name
+        - start_url
+        - status
+        - event_count
+        - draft_ir
+        - validation_report
+        - updated_by
+        - created_at
+        - updated_at
+      properties:
+        recording_session_id:
+          type: string
+          format: uuid
+        site_profile_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        start_url:
+          type: string
+          format: uri
+        status:
+          $ref: '#/components/schemas/BrowserRecordingStatus'
+        event_count:
+          type: integer
+          minimum: 0
+        draft_ir:
+          type: [object, "null"]
+          additionalProperties: true
+        validation_report:
+          oneOf:
+            - $ref: '#/components/schemas/ValidationReport'
+            - type: "null"
+        updated_by:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+
+    BrowserRecordingPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BrowserRecordingSession'
+        next_cursor:
+          type: [string, "null"]
+      additionalProperties: false
+
+    BrowserRecordingStartRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        start_url:
+          type: string
+          format: uri
+      additionalProperties: false
+
+    BrowserRecordingEvent:
+      type: object
+      required:
+        - event_id
+        - recording_session_id
+        - seq
+        - event_type
+        - selector
+        - element_key
+        - label
+        - url
+        - value_preview
+        - captured_at
+        - created_at
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        recording_session_id:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+          minimum: 1
+        event_type:
+          $ref: '#/components/schemas/BrowserRecordingEventType'
+        selector:
+          type: [string, "null"]
+        element_key:
+          type: [string, "null"]
+          pattern: '^[A-Za-z][A-Za-z0-9_]{1,63}$'
+        label:
+          type: [string, "null"]
+        url:
+          type: [string, "null"]
+          format: uri
+        value_preview:
+          type: [string, "null"]
+        captured_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+
+    BrowserRecordingEventPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BrowserRecordingEvent'
+        next_cursor:
+          type: [string, "null"]
+      additionalProperties: false
+
+    BrowserRecordingAppendEvent:
+      oneOf:
+        - type: object
+          required: [event_type, url]
+          properties:
+            event_type:
+              const: navigate
+            selector:
+              type: string
+            element_key:
+              type: string
+              pattern: '^[A-Za-z][A-Za-z0-9_]{1,63}$'
+            label:
+              type: string
+            url:
+              type: string
+              format: uri
+            value_preview:
+              type: string
+          additionalProperties: false
+        - type: object
+          required: [event_type, selector]
+          properties:
+            event_type:
+              enum: [click, input, submit]
+            selector:
+              type: string
+            element_key:
+              type: string
+              pattern: '^[A-Za-z][A-Za-z0-9_]{1,63}$'
+            label:
+              type: string
+            url:
+              type: string
+              format: uri
+            value_preview:
+              type: string
+          additionalProperties: false
+        - type: object
+          required: [event_type, selector, value_preview]
+          properties:
+            event_type:
+              const: select
+            selector:
+              type: string
+            element_key:
+              type: string
+              pattern: '^[A-Za-z][A-Za-z0-9_]{1,63}$'
+            label:
+              type: string
+            url:
+              type: string
+              format: uri
+            value_preview:
+              type: string
+          additionalProperties: false
+        - type: object
+          required: [event_type]
+          properties:
+            event_type:
+              const: wait
+            selector:
+              type: string
+            element_key:
+              type: string
+              pattern: '^[A-Za-z][A-Za-z0-9_]{1,63}$'
+            label:
+              type: string
+            url:
+              type: string
+              format: uri
+            value_preview:
+              type: string
+          additionalProperties: false
+
+    BrowserRecordingAppendEventsRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/BrowserRecordingAppendEvent'
+      additionalProperties: false
+
+    BrowserRecordingAppendEventsResponse:
+      type: object
+      required: [recording_session_id, appended, event_count]
+      properties:
+        recording_session_id:
+          type: string
+          format: uuid
+        appended:
+          type: integer
+          minimum: 0
+        event_count:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+
+    SiteElementType:
+      type: string
+      enum: [button, input, link, table, row, field, message, other]
+
+    SiteElementStability:
+      type: string
+      enum: [stable, review_needed, broken]
+
+    SiteElementSource:
+      type: string
+      enum: [manual, pbd, capture, imported]
+
+    SiteElement:
+      type: object
+      required:
+        - element_id
+        - site_profile_id
+        - element_key
+        - label
+        - selector
+        - element_type
+        - stability
+        - source
+        - sample_url
+        - notes
+        - usage_count
+        - last_verified_at
+        - updated_by
+        - created_at
+        - updated_at
+      properties:
+        element_id:
+          type: string
+          format: uuid
+        site_profile_id:
+          type: string
+          format: uuid
+        element_key:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_]{1,63}$'
+        label:
+          type: string
+        selector:
+          type: string
+        element_type:
+          $ref: '#/components/schemas/SiteElementType'
+        stability:
+          $ref: '#/components/schemas/SiteElementStability'
+        source:
+          $ref: '#/components/schemas/SiteElementSource'
+        sample_url:
+          type: [string, "null"]
+        notes:
+          type: [string, "null"]
+        usage_count:
+          type: integer
+          minimum: 0
+        last_verified_at:
+          type: [string, "null"]
+          format: date-time
+          description: Last successful or explicit selector probe timestamp; managed by the probe endpoint, not by generic PATCH.
+        updated_by:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+
+    SiteElementPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SiteElement'
+        next_cursor:
+          type: [string, "null"]
+      additionalProperties: false
+
+    SiteElementListQuery:
+      type: object
+      properties:
+        stability:
+          $ref: '#/components/schemas/SiteElementStability'
+        search:
+          type: string
+        limit:
+          type: integer
+          minimum: 1
+        cursor:
+          type: string
+      additionalProperties: false
+
+    SiteElementCreateRequest:
+      type: object
+      required: [element_key, label, selector]
+      properties:
+        element_key:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_]{1,63}$'
+        label:
+          type: string
+          minLength: 1
+        selector:
+          type: string
+          minLength: 1
+        element_type:
+          $ref: '#/components/schemas/SiteElementType'
+        stability:
+          $ref: '#/components/schemas/SiteElementStability'
+        source:
+          $ref: '#/components/schemas/SiteElementSource'
+        sample_url:
+          type: string
+        notes:
+          type: string
+      additionalProperties: false
+
+    SiteElementUpdateRequest:
+      type: object
+      properties:
+        label:
+          type: string
+          minLength: 1
+        selector:
+          type: string
+          minLength: 1
+        element_type:
+          $ref: '#/components/schemas/SiteElementType'
+        stability:
+          $ref: '#/components/schemas/SiteElementStability'
+        sample_url:
+          type: [string, "null"]
+        notes:
+          type: [string, "null"]
+      additionalProperties: false
+
+    SiteElementProbeStatus:
+      type: string
+      enum: [matched, not_found, invalid_selector, failed, not_run]
+
+    SiteElementProbeRequest:
+      type: object
+      properties:
+        sample_url:
+          type: string
+      additionalProperties: false
+
+    SiteElementProbeResponse:
+      type: object
+      required: [element_id, site_profile_id, selector, sample_url, probe_status, match_count, reason_code, checked_at, element]
+      properties:
+        element_id:
+          type: string
+          format: uuid
+        site_profile_id:
+          type: string
+          format: uuid
+        selector:
+          type: string
+        sample_url:
+          type: [string, "null"]
+        probe_status:
+          $ref: '#/components/schemas/SiteElementProbeStatus'
+        match_count:
+          type: [integer, "null"]
+          minimum: 0
+        reason_code:
+          type: [string, "null"]
+        checked_at:
+          type: string
+          format: date-time
+        element:
+          $ref: '#/components/schemas/SiteElement'
+      additionalProperties: false
+
+    SiteElementPathParams:
+      type: object
+      required: [site_profile_id, element_id]
+      properties:
+        site_profile_id:
+          type: string
+          format: uuid
+        element_id:
+          type: string
+          format: uuid
+      additionalProperties: false
+
+    SiteElementDeleteResponse:
+      type: object
+      required: [element_id, deleted]
+      properties:
+        element_id:
+          type: string
+          format: uuid
+        deleted:
+          type: boolean
       additionalProperties: false
 
     SiteApproveRequest:

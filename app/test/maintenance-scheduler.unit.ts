@@ -5,6 +5,7 @@ import {
   buildOrphanSweeperJob,
   buildRetentionSweeperJobs,
   millisecondsUntilNextKstHour,
+  resolveRunTriggerTenantIds,
 } from "../src/worker/maintenance-scheduler";
 
 const TENANT_A = "00000000-0000-4000-8000-0000000000a1";
@@ -24,27 +25,32 @@ const nextCorrelation = (): string => `20000000-0000-4000-8000-${String(++seq).p
 
 const pollJobs = buildMaintenancePollJobs([TENANT_A, TENANT_B], nextCorrelation);
 check(
-  "maintenance poll fanout enqueues lease + checkout sweeper + redaction per tenant",
-  pollJobs.length === 6 &&
+  "maintenance poll fanout enqueues lease + human task timeout + checkout sweeper + redaction per tenant",
+  pollJobs.length === 8 &&
     pollJobs[0]?.kind === "lease_sweeper" &&
     pollJobs[0]?.tenantId === TENANT_A &&
-    pollJobs[1]?.kind === "workitem_checkout_sweeper" &&
+    pollJobs[1]?.kind === "human_task_timeout_sweeper" &&
     pollJobs[1]?.tenantId === TENANT_A &&
     pollJobs[1]?.correlationId === "20000000-0000-4000-8000-000000000001" &&
-    pollJobs[2]?.kind === "artifact_redaction" &&
+    pollJobs[2]?.kind === "workitem_checkout_sweeper" &&
     pollJobs[2]?.tenantId === TENANT_A &&
     pollJobs[2]?.correlationId === "20000000-0000-4000-8000-000000000002" &&
-    pollJobs[2]?.runId === undefined &&
-    pollJobs[2]?.artifactId === undefined &&
-    pollJobs[2]?.generationId === undefined &&
-    pollJobs[3]?.kind === "lease_sweeper" &&
-    pollJobs[3]?.tenantId === TENANT_B &&
-    pollJobs[4]?.kind === "workitem_checkout_sweeper" &&
+    pollJobs[3]?.kind === "artifact_redaction" &&
+    pollJobs[3]?.tenantId === TENANT_A &&
+    pollJobs[3]?.correlationId === "20000000-0000-4000-8000-000000000003" &&
+    pollJobs[3]?.runId === undefined &&
+    pollJobs[3]?.artifactId === undefined &&
+    pollJobs[3]?.generationId === undefined &&
+    pollJobs[4]?.kind === "lease_sweeper" &&
     pollJobs[4]?.tenantId === TENANT_B &&
-    pollJobs[5]?.kind === "artifact_redaction" &&
+    pollJobs[5]?.kind === "human_task_timeout_sweeper" &&
     pollJobs[5]?.tenantId === TENANT_B &&
-    pollJobs[5]?.artifactId === undefined &&
-    pollJobs[5]?.generationId === undefined,
+    pollJobs[6]?.kind === "workitem_checkout_sweeper" &&
+    pollJobs[6]?.tenantId === TENANT_B &&
+    pollJobs[7]?.kind === "artifact_redaction" &&
+    pollJobs[7]?.tenantId === TENANT_B &&
+    pollJobs[7]?.artifactId === undefined &&
+    pollJobs[7]?.generationId === undefined,
   JSON.stringify(pollJobs),
 );
 
@@ -55,7 +61,7 @@ check(
   retentionJobs.length === 1 &&
     retentionJobs[0]?.kind === "artifact_retention" &&
     retentionJobs[0]?.tenantId === TENANT_A &&
-    retentionJobs[0]?.correlationId === "20000000-0000-4000-8000-000000000005",
+    retentionJobs[0]?.correlationId === "20000000-0000-4000-8000-000000000007",
   JSON.stringify(retentionJobs),
 );
 
@@ -87,6 +93,35 @@ check(
     dailyJobs.filter((j) => j.kind === "artifact_orphan").length === 1,
   JSON.stringify(dailyJobs),
 );
+
+{
+  let released = false;
+  let queryCount = 0;
+  let queryNow = "";
+  const fakePool = {
+    connect: async () => ({
+      query: async (_sql: string, params: readonly unknown[]) => {
+        queryCount += 1;
+        queryNow = String(params[0]);
+        return { rows: [{ tenant_id: TENANT_A }, { tenant_id: TENANT_B }] };
+      },
+      release: () => { released = true; },
+    }),
+  };
+  const pool = fakePool as unknown as Parameters<typeof resolveRunTriggerTenantIds>[0];
+  const discovered = await resolveRunTriggerTenantIds(pool, [], new Date("2026-06-24T01:02:03.000Z"));
+  check(
+    "empty maintenance tenant list discovers due cron trigger tenants",
+    discovered.length === 2 && discovered[0] === TENANT_A && discovered[1] === TENANT_B && released && queryNow === "2026-06-24T01:02:03.000Z",
+    JSON.stringify({ discovered, released, queryNow }),
+  );
+  const configured = await resolveRunTriggerTenantIds(pool, [TENANT_B], new Date("2026-06-24T01:02:03.000Z"));
+  check(
+    "configured maintenance tenant list bypasses discovery query",
+    configured.length === 1 && configured[0] === TENANT_B && queryCount === 1,
+    JSON.stringify({ configured, queryCount }),
+  );
+}
 
 check(
   "next KST 02:00 from prior minute is one minute",

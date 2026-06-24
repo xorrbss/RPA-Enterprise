@@ -3,11 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
+import { useListView } from "../api/useListView";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { actionLabel, terminalLabel } from "../components/badges";
 import { mergeParams, navigate, useHashIdParam } from "../router";
 import type { ScenarioItem } from "../api/types";
+import { urlRefLabel } from "../api/scenario-params";
 
 // 테스트 실행(playground) — 저장된 자동화의 실행 계획(IR → 단계·흐름)을 정적으로 미리본 뒤, 그대로 실제 실행을
 // 시작할 수 있다(RunScenarioButton = createRun, run.create 게이팅). 실제 브라우저 작업은 worker/Chrome가
@@ -25,8 +27,10 @@ function actionText(a: unknown): string {
   if (!isRecord(a)) return "?";
   const name = typeof a.action === "string" ? a.action : "?";
   const label = actionLabel(name);
-  const ref = a.schema_ref ?? a.url_ref ?? a.cmd_ref;
-  return typeof ref === "string" ? `${label}(${ref})` : label;
+  if (typeof a.url_ref === "string") return `${label} · ${urlRefLabel(a.url_ref)}`;
+  if (typeof a.schema_ref === "string") return `${label} · 출력 형식 ${a.schema_ref}`;
+  if (typeof a.cmd_ref === "string") return `${label} · 관리 명령 ${a.cmd_ref}`;
+  return label;
 }
 
 function flowText(node: Record<string, unknown>): string {
@@ -64,7 +68,7 @@ function orderedNodeIds(start: string, nodes: Record<string, unknown>): string[]
 
 function Plan({ ir }: { ir: unknown }): JSX.Element {
   if (!isRecord(ir) || !isRecord(ir.nodes) || typeof ir.start !== "string") {
-    return <EmptyState message="실행 계획을 표시할 IR이 없습니다." />;
+    return <EmptyState message="실행 계획을 표시할 자동화 정의가 없습니다." />;
   }
   const nodes = ir.nodes;
   const order = orderedNodeIds(ir.start, nodes);
@@ -93,11 +97,15 @@ export function PlaygroundView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const scenarioParam = useHashIdParam("scenario");
-  const list = useQuery({ queryKey: ["scenarios"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 10_000 });
+  const list = useListView<ScenarioItem>(
+    ["scenarios", "playground"],
+    (params) => api.listScenarios(params),
+    { limit: 50, refetchInterval: 10_000 },
+  );
   const [sel, setSel] = useState<string>(() => scenarioParam ?? "");
   const detail = useQuery({ queryKey: ["scenario-detail", sel], queryFn: () => api.getScenario(sel), enabled: sel !== "" });
 
-  const items: readonly ScenarioItem[] = list.data?.items ?? [];
+  const items: readonly ScenarioItem[] = list.query.data?.items ?? [];
   const selected = items.find((s) => s.scenario_id === sel);
 
   useEffect(() => {
@@ -122,10 +130,10 @@ export function PlaygroundView(): JSX.Element {
           <span className="subtle">저장 후 실행까지 이어지는 자동화 생성 화면으로 이동합니다.</span>
         </div>
       )}
-      {list.isLoading ? (
+      {list.query.isLoading ? (
         <Loading />
-      ) : list.isError ? (
-        <ErrorState message="시나리오 목록을 불러오지 못했습니다." onRetry={() => void list.refetch()} />
+      ) : list.query.isError ? (
+        <ErrorState message="자동화 목록을 불러오지 못했습니다." onRetry={() => void list.query.refetch()} />
       ) : (
         <>
           <label style={{ display: "block", marginBottom: 12 }}>
@@ -135,26 +143,45 @@ export function PlaygroundView(): JSX.Element {
               <option value="">— 자동화를 선택하세요 —</option>
               {items.map((s) => (
                 <option key={s.scenario_id} value={s.scenario_id}>
-                  {s.name} (v{s.version})
+                  {s.name} (변경 {s.version})
                 </option>
               ))}
             </select>
+            <span className="subtle" style={{ display: "block", marginTop: 6 }}>
+              현재 {list.pager.pageIndex + 1}페이지 {items.length}
+              {(list.query.data?.next_cursor ?? null) !== null ? "+" : ""}건을 표시합니다.
+            </span>
           </label>
+          {(list.pager.hasPrev || list.pager.hasNext) && (
+            <div className="inline-actions" style={{ marginBottom: 12 }}>
+              <button className="btn" type="button" onClick={list.pager.onPrev} disabled={!list.pager.hasPrev}>
+                이전
+              </button>
+              <button className="btn" type="button" onClick={list.pager.onNext} disabled={!list.pager.hasNext}>
+                다음
+              </button>
+              <span className="subtle">찾는 자동화가 없으면 다음 페이지를 확인하세요.</span>
+            </div>
+          )}
           {sel === "" ? (
             <EmptyState message="자동화를 선택하면 실행 계획이 표시됩니다." />
           ) : (
             <>
-              {selected !== undefined && (
+              {selected !== undefined ? (
                 <div style={{ position: "relative", display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
                   {can("run.create") && <RunScenarioButton scenario={selected} />}
                   <button className="btn" type="button" onClick={() => navigate("runTrace")}>실행 기록 보기</button>
-                  {can("run.create") && <span className="subtle">실행 시작 시 실제 run이 등록되고 그 실행의 진행 화면으로 바로 이동합니다.</span>}
+                  {can("run.create") && <span className="subtle">실행 시작 시 실제 실행이 등록되고 진행 화면으로 바로 이동합니다.</span>}
                 </div>
+              ) : (
+                <p className="subtle" role="status" style={{ margin: "0 0 12px" }}>
+                  선택한 자동화의 실행 버튼은 현재 목록 페이지에 있을 때 표시됩니다. 계획은 아래에서 확인할 수 있습니다.
+                </p>
               )}
               {detail.isLoading ? (
                 <Loading />
               ) : detail.isError ? (
-                <ErrorState message="시나리오를 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
+                <ErrorState message="자동화 정보를 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
               ) : (
                 <Plan ir={detail.data?.ir} />
               )}

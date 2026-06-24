@@ -1,7 +1,7 @@
 -- ============================================================
 -- Migration: 핵심 엔티티 DDL (Phase 2 — README §외부 의존 맵 잔여 TODO 해소)
 -- 대상: runs, run_steps, workitems, human_tasks, scenarios,
---       scenario_versions, artifacts, events_outbox, dead_letter,
+--       scenario_versions, automation_ideas, roi_estimates, run_triggers, run_trigger_fires, artifacts, events_outbox, dead_letter,
 --       stagehand_calls, action_plan_cache, site_profiles,
 --       site_profile_approvals, site_block_samples, browser_identities, network_policies,
 --       gateway_policies, control_plane_idempotency_keys, workers
@@ -72,6 +72,73 @@ CREATE TABLE site_block_samples (
   occurred_at     timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_site_block_samples_window ON site_block_samples (tenant_id, site_profile_id, occurred_at);
+
+-- site_element_repository -- Browser Object Repository v1. 사이트별 재사용 DOM 요소 이름/selector 저장소.
+--   v1은 DOM-backed browser automation 전용이며 desktop/vision object repository가 아니다.
+--   시나리오 생성/유지보수 UI가 element_key로 같은 화면 요소를 찾고, selector 변경은 한 곳에서 추적한다.
+CREATE TABLE site_element_repository (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  site_profile_id uuid        NOT NULL,
+  element_key     text        NOT NULL CHECK (element_key ~ '^[A-Za-z][A-Za-z0-9_]{1,63}$'),
+  label           text        NOT NULL CHECK (length(trim(label)) > 0),
+  selector        text        NOT NULL CHECK (length(trim(selector)) > 0),
+  element_type    text        NOT NULL DEFAULT 'other'
+                    CHECK (element_type IN ('button','input','link','table','row','field','message','other')),
+  stability       text        NOT NULL DEFAULT 'stable'
+                    CHECK (stability IN ('stable','review_needed','broken')),
+  source          text        NOT NULL DEFAULT 'manual'
+                    CHECK (source IN ('manual','pbd','capture','imported')),
+  sample_url      text,
+  notes           text,
+  usage_count     int         NOT NULL DEFAULT 0 CHECK (usage_count >= 0),
+  last_verified_at timestamptz,
+  updated_by      uuid,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, site_profile_id, element_key)
+);
+CREATE INDEX idx_site_element_repository_site ON site_element_repository (tenant_id, site_profile_id, updated_at DESC);
+CREATE INDEX idx_site_element_repository_stability ON site_element_repository (tenant_id, stability, updated_at DESC);
+
+-- browser_recording_sessions -- Browser Recorder v1. 사용자가 브라우저에서 보여준 DOM 조작 이벤트를
+--   사이트별 녹화 원장으로 저장하고, 완료 시 실행 가능한 IR 초안(draft_ir)을 생성한다.
+--   세션 로그인 캡처(capture_sessions)와 분리한다: 여기는 쿠키/자격증명/입력 원문을 저장하지 않는다.
+CREATE TABLE browser_recording_sessions (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  site_profile_id uuid        NOT NULL,
+  browser_identity_id uuid,
+  name            text        NOT NULL CHECK (length(trim(name)) > 0),
+  start_url       text        NOT NULL CHECK (start_url ~ '^https?://'),
+  status          text        NOT NULL DEFAULT 'recording'
+                    CHECK (status IN ('recording','completed','discarded','failed')),
+  event_count     int         NOT NULL DEFAULT 0 CHECK (event_count >= 0),
+  draft_ir        jsonb,
+  validation_report jsonb,
+  updated_by      uuid,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_browser_recording_sessions_site ON browser_recording_sessions (tenant_id, site_profile_id, updated_at DESC);
+CREATE INDEX idx_browser_recording_sessions_status ON browser_recording_sessions (tenant_id, status, updated_at DESC);
+
+CREATE TABLE browser_recording_events (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  recording_session_id uuid   NOT NULL,
+  seq             int         NOT NULL CHECK (seq >= 1),
+  recording_event_type text   NOT NULL CHECK (recording_event_type IN ('navigate','click','input','select','submit','wait')),
+  selector        text,
+  element_key     text        CHECK (element_key IS NULL OR element_key ~ '^[A-Za-z][A-Za-z0-9_]{1,63}$'),
+  label           text,
+  url             text        CHECK (url IS NULL OR url ~ '^https?://'),
+  value_preview   text,
+  captured_at     timestamptz NOT NULL DEFAULT now(),
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, recording_session_id, seq)
+);
+CREATE INDEX idx_browser_recording_events_session ON browser_recording_events (tenant_id, recording_session_id, seq);
 
 -- ------------------------------------------------------------
 -- workers — 실행기 생존(heartbeat) + 워커 서킷 상태 레지스트리.
@@ -202,6 +269,101 @@ CREATE UNIQUE INDEX uq_scenario_versions_prod ON scenario_versions (tenant_id, s
   WHERE promotion_status = 'prod';                          -- scenario당 prod 1건
 
 -- ============================================================
+-- ============================================================
+-- 2a-1. automation_ideas / roi_estimates
+--    CoE/ROI automation discovery pipeline. Browser-RPA scope only; desktop automation is out-of-scope.
+-- ============================================================
+
+CREATE TABLE automation_ideas (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  title           text        NOT NULL CHECK (length(trim(title)) > 0),
+  description     text        NOT NULL CHECK (length(trim(description)) > 0),
+  business_owner  text        NOT NULL CHECK (length(trim(business_owner)) > 0),
+  department      text        NOT NULL CHECK (length(trim(department)) > 0),
+  source          text        NOT NULL DEFAULT 'manual'
+                    CHECK (source IN ('manual','process_mining','task_mining','imported')),
+  stage           text        NOT NULL DEFAULT 'intake'
+                    CHECK (stage IN ('intake','assess','approved','build','operate','rejected','archived')),
+  priority        text        NOT NULL DEFAULT 'medium'
+                    CHECK (priority IN ('low','medium','high','critical')),
+  score           int         NOT NULL DEFAULT 0 CHECK (score >= 0 AND score <= 100),
+  scenario_id     uuid        REFERENCES scenarios(id),
+  run_trigger_id  uuid,
+  created_by      text        NOT NULL,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_automation_ideas_stage ON automation_ideas (tenant_id, stage, updated_at DESC);
+CREATE INDEX idx_automation_ideas_owner ON automation_ideas (tenant_id, business_owner);
+CREATE INDEX idx_automation_ideas_department ON automation_ideas (tenant_id, department);
+
+CREATE TABLE roi_estimates (
+  id                      uuid          PRIMARY KEY,
+  tenant_id               uuid          NOT NULL,
+  automation_idea_id      uuid          NOT NULL REFERENCES automation_ideas(id),
+  frequency_per_month     int           NOT NULL CHECK (frequency_per_month >= 0),
+  minutes_per_case        numeric(10,2) NOT NULL CHECK (minutes_per_case >= 0),
+  exception_rate          numeric(5,4)  NOT NULL DEFAULT 0 CHECK (exception_rate >= 0 AND exception_rate <= 1),
+  hourly_cost             numeric(12,2) NOT NULL CHECK (hourly_cost >= 0),
+  implementation_effort   numeric(12,2) NOT NULL DEFAULT 0 CHECK (implementation_effort >= 0),
+  monthly_hours_saved     numeric(12,2) NOT NULL CHECK (monthly_hours_saved >= 0),
+  estimated_monthly_value numeric(14,2) NOT NULL CHECK (estimated_monthly_value >= 0),
+  payback_months          numeric(10,2),
+  confidence              text          NOT NULL DEFAULT 'medium'
+                              CHECK (confidence IN ('low','medium','high')),
+  created_by              text          NOT NULL,
+  created_at              timestamptz   NOT NULL DEFAULT now(),
+  updated_at              timestamptz   NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, automation_idea_id)
+);
+CREATE INDEX idx_roi_estimates_idea ON roi_estimates (tenant_id, automation_idea_id);
+
+-- ============================================================
+-- 2b. run_triggers
+--    Product Open v1: cron scheduled runs plus signed webhook fire ingestion.
+--    File/queue triggers remain BLOCKED until contracted.
+-- ============================================================
+
+CREATE TABLE run_triggers (
+  id                  uuid        PRIMARY KEY,
+  tenant_id           uuid        NOT NULL,
+  scenario_version_id uuid        NOT NULL REFERENCES scenario_versions(id),
+  trigger_type        text        NOT NULL DEFAULT 'cron'
+                        CHECK (trigger_type IN ('cron','webhook')),
+  status              text        NOT NULL DEFAULT 'enabled'
+                        CHECK (status IN ('enabled','paused','archived')),
+  cron_expression     text,
+  timezone            text,
+  webhook_secret_ref  text,
+  params              jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  catchup_policy      text        NOT NULL DEFAULT 'skip_missed'
+                        CHECK (catchup_policy IN ('skip_missed','fire_once')),
+  max_concurrent_runs int         NOT NULL DEFAULT 1 CHECK (max_concurrent_runs >= 1),
+  next_fire_at        timestamptz,
+  created_by          text        NOT NULL,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    (trigger_type = 'cron'
+      AND cron_expression IS NOT NULL AND length(cron_expression) > 0
+      AND timezone IS NOT NULL AND length(timezone) > 0
+      AND webhook_secret_ref IS NULL)
+    OR
+    (trigger_type = 'webhook'
+      AND cron_expression IS NULL
+      AND timezone IS NULL
+      AND next_fire_at IS NULL
+      AND webhook_secret_ref IS NOT NULL AND webhook_secret_ref LIKE 'secret://%')
+  )
+);
+CREATE INDEX idx_run_triggers_due ON run_triggers (tenant_id, next_fire_at)
+  WHERE status = 'enabled' AND trigger_type = 'cron' AND next_fire_at IS NOT NULL;
+CREATE INDEX idx_run_triggers_scenario_version ON run_triggers (tenant_id, scenario_version_id);
+CREATE INDEX idx_run_triggers_webhook ON run_triggers (tenant_id, id)
+  WHERE trigger_type = 'webhook';
+
+-- ============================================================
 -- 3. workitems
 --    state-machine.md §2 (W1..W11). unique_reference = tenant+connector 단위 dedup.
 --    checkout timer pause/resume(W9/W11)는 cursor/evidence와 함께 추적.
@@ -280,6 +442,23 @@ CREATE INDEX idx_runs_workitem ON runs (workitem_id);
 CREATE UNIQUE INDEX idx_runs_one_per_workitem ON runs (tenant_id, workitem_id)
   WHERE workitem_id IS NOT NULL;                              -- Product Open: 1 Workitem = 1 Run
 CREATE INDEX idx_runs_correlation ON runs (correlation_id);
+
+CREATE TABLE run_trigger_fires (
+  id             uuid        PRIMARY KEY,
+  tenant_id      uuid        NOT NULL,
+  trigger_id     uuid        NOT NULL REFERENCES run_triggers(id),
+  fire_key       text        NOT NULL CHECK (length(fire_key) > 0),
+  status         text        NOT NULL CHECK (status IN ('queued','skipped','failed')),
+  scheduled_for  timestamptz NOT NULL,
+  run_id         uuid        REFERENCES runs(id),
+  failure_reason jsonb,
+  correlation_id uuid        NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, trigger_id, fire_key)
+);
+CREATE INDEX idx_run_trigger_fires_trigger ON run_trigger_fires (tenant_id, trigger_id, scheduled_for DESC);
+CREATE INDEX idx_run_trigger_fires_run ON run_trigger_fires (tenant_id, run_id)
+  WHERE run_id IS NOT NULL;
 
 -- ============================================================
 -- 4b. scenario_generations
@@ -376,6 +555,11 @@ CREATE TABLE human_tasks (
                   CHECK (on_timeout IN ('fail','escalate')),  -- H4a(fail→expired)/H4b(escalate→escalated)
   expires_at    timestamptz,                                -- timeout 기준 시각
   payload_ref   text,                                       -- 작업 본문 참조(artifact/payload)
+  payload       jsonb       NOT NULL DEFAULT '{}'::jsonb,    -- V2 검증 워크벤치 입력 본문(문서/필드/지시)
+  result_schema jsonb       NOT NULL DEFAULT '{}'::jsonb,    -- V2 resolve result 입력 힌트/간단 스키마
+  artifact_refs jsonb       NOT NULL DEFAULT '[]'::jsonb,    -- V2 검증 참고 artifact id 배열(본문은 artifacts API로 조회)
+  result        jsonb,                                      -- V2 사람이 입력한 판정/교정 결과
+  resolved_by   text,                                       -- result 제출 주체(JWT sub)
   created_at    timestamptz NOT NULL DEFAULT now(),
   resolved_at   timestamptz,
   updated_at    timestamptz NOT NULL DEFAULT now()
@@ -474,6 +658,7 @@ CREATE INDEX idx_artifacts_generation ON artifacts (tenant_id, generation_id)
   WHERE generation_id IS NOT NULL;
 CREATE INDEX idx_artifacts_step ON artifacts (tenant_id, run_id, step_id, attempt)
   WHERE step_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_artifacts_tenant_id ON artifacts (tenant_id, id);
 CREATE INDEX idx_artifacts_redaction ON artifacts (redaction_status)
   WHERE redaction_status = 'pending';                       -- redaction_job 폴링
 CREATE INDEX idx_artifacts_retention ON artifacts (retention_until)
@@ -482,6 +667,59 @@ CREATE UNIQUE INDEX idx_artifacts_lifecycle_claim ON artifacts (tenant_id, lifec
   WHERE lifecycle_claim_id IS NOT NULL;
 CREATE INDEX idx_artifacts_lifecycle_claim_expiry ON artifacts (tenant_id, lifecycle_claim_kind, lifecycle_claim_expires_at)
   WHERE lifecycle_claim_id IS NOT NULL;
+
+-- ============================================================
+-- 7a. document_jobs / document_extractions
+--    Browser RPA V2 IDP MVP: redaction-visible browser artifacts(text/CSV/JSON)에서 deterministic field extraction을
+--    수행하고, 누락/저신뢰 필드는 human_task(validation)+business_form_v1로 검증 큐에 넘긴다.
+--    외부 OCR/vision/LLM 호출은 P1 범위 밖이며 source artifact는 run에 연결되어야 한다.
+-- ============================================================
+
+CREATE TABLE document_jobs (
+  id                 uuid        PRIMARY KEY,
+  tenant_id          uuid        NOT NULL,
+  source_artifact_id uuid        NOT NULL,
+  source_run_id      uuid        NOT NULL,
+  document_type      text        NOT NULL,
+  field_schema       jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  status             text        NOT NULL DEFAULT 'created'
+                       CHECK (status IN ('created','extracted','validation_required','validated','failed')),
+  created_by         text        NOT NULL,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now(),
+  retention_until    timestamptz NOT NULL DEFAULT (now() + interval '90 days'),
+  deleted_at         timestamptz,
+  legal_hold         boolean     NOT NULL DEFAULT false
+);
+CREATE INDEX idx_document_jobs_status ON document_jobs (tenant_id, status, created_at DESC, id DESC);
+CREATE INDEX idx_document_jobs_artifact ON document_jobs (tenant_id, source_artifact_id);
+CREATE UNIQUE INDEX idx_document_jobs_tenant_id ON document_jobs (tenant_id, id);
+CREATE INDEX idx_document_jobs_retention ON document_jobs (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
+CREATE TABLE document_extractions (
+  id                       uuid        PRIMARY KEY,
+  tenant_id                uuid        NOT NULL,
+  document_job_id          uuid        NOT NULL,
+  engine                   text        NOT NULL DEFAULT 'built_in_deterministic_text_v1'
+                             CHECK (engine IN ('built_in_deterministic_text_v1')),
+  status                   text        NOT NULL
+                             CHECK (status IN ('completed','validation_required','failed')),
+  fields                   jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  missing_fields           jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  validation_human_task_id uuid,
+  created_at               timestamptz NOT NULL DEFAULT now(),
+  updated_at               timestamptz NOT NULL DEFAULT now(),
+  retention_until          timestamptz NOT NULL DEFAULT (now() + interval '90 days'),
+  deleted_at               timestamptz,
+  legal_hold               boolean     NOT NULL DEFAULT false,
+  UNIQUE (tenant_id, document_job_id)
+);
+CREATE INDEX idx_document_extractions_status ON document_extractions (tenant_id, status, created_at DESC, id DESC);
+CREATE INDEX idx_document_extractions_validation_task ON document_extractions (tenant_id, validation_human_task_id)
+  WHERE validation_human_task_id IS NOT NULL;
+CREATE INDEX idx_document_extractions_retention ON document_extractions (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
 
 -- ============================================================
 -- 7b. approval_decisions
@@ -794,12 +1032,19 @@ ALTER TABLE site_profiles       ADD CONSTRAINT uq_site_profiles_tenant_id_id UNI
 ALTER TABLE browser_identities  ADD CONSTRAINT uq_browser_identities_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenarios           ADD CONSTRAINT uq_scenarios_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenario_versions   ADD CONSTRAINT uq_scenario_versions_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE automation_ideas    ADD CONSTRAINT uq_automation_ideas_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE roi_estimates       ADD CONSTRAINT uq_roi_estimates_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE run_triggers        ADD CONSTRAINT uq_run_triggers_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE run_trigger_fires   ADD CONSTRAINT uq_run_trigger_fires_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE workitems           ADD CONSTRAINT uq_workitems_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE runs                ADD CONSTRAINT uq_runs_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenario_generations ADD CONSTRAINT uq_scenario_generations_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE raw_items           ADD CONSTRAINT uq_raw_items_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE normalized_records  ADD CONSTRAINT uq_normalized_records_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE action_plan_cache   ADD CONSTRAINT uq_action_plan_cache_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE site_element_repository ADD CONSTRAINT uq_site_element_repository_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE browser_recording_sessions ADD CONSTRAINT uq_browser_recording_sessions_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE browser_recording_events ADD CONSTRAINT uq_browser_recording_events_tenant_id_id UNIQUE (tenant_id, id);
 
 ALTER TABLE site_profile_approvals
   ADD CONSTRAINT fk_site_profile_approvals_site_tenant
@@ -808,6 +1053,20 @@ ALTER TABLE site_profile_approvals
 ALTER TABLE site_block_samples
   ADD CONSTRAINT fk_site_block_samples_site_tenant
   FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id) ON DELETE CASCADE;
+
+ALTER TABLE site_element_repository
+  ADD CONSTRAINT fk_site_element_repository_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id) ON DELETE CASCADE;
+
+ALTER TABLE browser_recording_sessions
+  ADD CONSTRAINT fk_browser_recording_sessions_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id) ON DELETE CASCADE,
+  ADD CONSTRAINT fk_browser_recording_sessions_identity_tenant
+  FOREIGN KEY (tenant_id, browser_identity_id) REFERENCES browser_identities(tenant_id, id);
+
+ALTER TABLE browser_recording_events
+  ADD CONSTRAINT fk_browser_recording_events_session_tenant
+  FOREIGN KEY (tenant_id, recording_session_id) REFERENCES browser_recording_sessions(tenant_id, id) ON DELETE CASCADE;
 
 ALTER TABLE browser_identities
   ADD CONSTRAINT fk_browser_identities_site_tenant
@@ -822,6 +1081,26 @@ ALTER TABLE runs
   FOREIGN KEY (tenant_id, scenario_version_id) REFERENCES scenario_versions(tenant_id, id),
   ADD CONSTRAINT fk_runs_workitem_tenant
   FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id);
+
+ALTER TABLE run_triggers
+  ADD CONSTRAINT fk_run_triggers_scenario_version_tenant
+  FOREIGN KEY (tenant_id, scenario_version_id) REFERENCES scenario_versions(tenant_id, id);
+
+ALTER TABLE run_trigger_fires
+  ADD CONSTRAINT fk_run_trigger_fires_trigger_tenant
+  FOREIGN KEY (tenant_id, trigger_id) REFERENCES run_triggers(tenant_id, id),
+  ADD CONSTRAINT fk_run_trigger_fires_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id);
+
+ALTER TABLE automation_ideas
+  ADD CONSTRAINT fk_automation_ideas_scenario_tenant
+  FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios(tenant_id, id),
+  ADD CONSTRAINT fk_automation_ideas_run_trigger_tenant
+  FOREIGN KEY (tenant_id, run_trigger_id) REFERENCES run_triggers(tenant_id, id);
+
+ALTER TABLE roi_estimates
+  ADD CONSTRAINT fk_roi_estimates_automation_idea_tenant
+  FOREIGN KEY (tenant_id, automation_idea_id) REFERENCES automation_ideas(tenant_id, id);
 
 ALTER TABLE scenario_generations
   ADD CONSTRAINT fk_scenario_generations_scenario_tenant
@@ -848,6 +1127,16 @@ ALTER TABLE artifacts
   FOREIGN KEY (tenant_id, generation_id) REFERENCES scenario_generations(tenant_id, id),
   ADD CONSTRAINT fk_artifacts_step_attempt_tenant
   FOREIGN KEY (tenant_id, run_id, step_id, attempt) REFERENCES run_steps(tenant_id, run_id, step_id, attempt);
+
+ALTER TABLE document_jobs
+  ADD CONSTRAINT fk_document_jobs_source_run_tenant
+  FOREIGN KEY (tenant_id, source_run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_document_jobs_source_artifact_tenant
+  FOREIGN KEY (tenant_id, source_artifact_id) REFERENCES artifacts(tenant_id, id);
+
+ALTER TABLE document_extractions
+  ADD CONSTRAINT fk_document_extractions_job_tenant
+  FOREIGN KEY (tenant_id, document_job_id) REFERENCES document_jobs(tenant_id, id);
 
 -- approval_decisions 복합 테넌트 FK(다른 runs 참조 테이블 동형) — tenant_id 가 참조 run 의 tenant 와 일치하도록 DB 강제.
 --   spawned_run_id 는 nullable(결정 INSERT 직후 NULL → createRunInTx 후 UPDATE 로 채움; NULL 행은 FK 미검사).
@@ -944,6 +1233,9 @@ BEGIN
     'site_profiles',
     'site_profile_approvals',
     'site_block_samples',
+    'site_element_repository',
+    'browser_recording_sessions',
+    'browser_recording_events',
     'approval_decisions',
     'browser_identities',
     'network_policies',
@@ -951,12 +1243,18 @@ BEGIN
     'control_plane_idempotency_keys',
     'scenarios',
     'scenario_versions',
+    'automation_ideas',
+    'roi_estimates',
+    'run_triggers',
+    'run_trigger_fires',
     'workitems',
     'runs',
     'scenario_generations',
     'run_steps',
     'human_tasks',
     'principals',
+    'document_jobs',
+    'document_extractions',
     'events_outbox',
     'dead_letter',
     'action_plan_cache',

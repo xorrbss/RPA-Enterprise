@@ -12,6 +12,18 @@ import { errorLabel } from "./badges";
 // sub=배정값(PrincipalId, 불변), display_name=표시이름. source=jwt(로그인 자동)/manual(여기서 수동 등록).
 const KEY = ["principals"];
 
+function principalSourceLabel(source: PrincipalItem["source"]): string {
+  return source === "manual" ? "수동 등록" : "로그인 자동 등록";
+}
+
+function principalSourceTone(source: PrincipalItem["source"]): string {
+  return source === "manual" ? "amber" : "green";
+}
+
+function principalAccountLabel(principal: PrincipalItem): string {
+  return principal.email ?? "계정 연결됨";
+}
+
 export function PrincipalDirectory(): JSX.Element | null {
   const can = useCan();
   // 관리(쓰기) 권한이 없으면 패널 자체를 숨긴다 — 디렉터리 조회는 담당자 picker(HumanTasks)가 이미 소비한다.
@@ -24,19 +36,21 @@ function PrincipalDirectoryPanel(): JSX.Element {
   const list = useQuery({ queryKey: KEY, queryFn: () => api.listPrincipals({ limit: 200 }), refetchInterval: 15_000 });
   const [editing, setEditing] = useState<string | null>(null);
   const items = list.data?.items ?? [];
+  const hasMore = (list.data?.next_cursor ?? null) !== null;
   return (
     <section className="panel" style={{ padding: 12, marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <strong>담당자 디렉터리</strong>
-        <span className="subtle">이름으로 배정할 담당자 목록 — 미로그인 담당자를 사전 등록할 수 있습니다.</span>
+        <span className="subtle">사람 확인 업무에 배정할 담당자 목록입니다. SSO/SCIM 연동 전에는 필요한 계정을 수동 등록할 수 있습니다.</span>
+        {hasMore && <span className="badge amber">현재 200건 기준</span>}
       </div>
       <PrincipalCreateForm />
       {items.length === 0 ? (
-        <p className="subtle" style={{ marginTop: 10 }}>등록된 담당자가 없습니다. 로그인한 사용자는 자동 등록되며, 위에서 수동으로 추가할 수 있습니다.</p>
+        <p className="subtle" style={{ marginTop: 10 }}>등록된 담당자가 없습니다. 로그인한 사용자는 자동 등록되며, 필요한 담당자는 위에서 수동으로 추가할 수 있습니다.</p>
       ) : (
         <table className="table" style={{ marginTop: 10 }}>
           <thead>
-            <tr><th>이름</th><th>식별자(sub)</th><th>이메일</th><th>출처</th><th>작업</th></tr>
+            <tr><th>이름</th><th>계정</th><th>이메일</th><th>등록 출처</th><th>작업</th></tr>
           </thead>
           <tbody>
             {items.map((p) =>
@@ -45,9 +59,9 @@ function PrincipalDirectoryPanel(): JSX.Element {
               ) : (
                 <tr key={p.principal_id}>
                   <td>{p.display_name}</td>
-                  <td style={{ fontFamily: "monospace" }}>{p.sub}</td>
+                  <td><span title={`권한 시스템 계정 참조: ${p.sub}`}>{principalAccountLabel(p)}</span></td>
                   <td>{p.email ?? <span className="subtle">—</span>}</td>
-                  <td><span className={`badge ${p.source === "manual" ? "" : "green"}`}>{p.source === "manual" ? "수동" : "자동"}</span></td>
+                  <td><span className={`badge ${principalSourceTone(p.source)}`}>{principalSourceLabel(p.source)}</span></td>
                   <td>
                     <span style={{ display: "inline-flex", gap: 8 }}>
                       <button className="btn" type="button" onClick={() => setEditing(p.principal_id)}>수정</button>
@@ -105,8 +119,8 @@ function PrincipalCreateForm(): JSX.Element {
       {open && (
         <div style={{ display: "grid", gap: 8, marginTop: 10, maxWidth: 480 }}>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">식별자(sub) — JWT subject. 로그인 ID와 동일</span>
-            <input value={sub} onChange={(e) => setSub(e.target.value)} placeholder="예: auth0|abc123" style={{ fontFamily: "monospace" }} />
+            <span className="subtle">계정 참조 — 배정할 때 사용하는 고유 계정값</span>
+            <input value={sub} onChange={(e) => setSub(e.target.value)} placeholder="예: hong.gildong 또는 user@example.com" />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
             <span className="subtle">이름(표시명)</span>
@@ -120,7 +134,7 @@ function PrincipalCreateForm(): JSX.Element {
             <button className="btn primary" type="button" disabled={invalid || create.isPending} onClick={() => create.mutate()}>
               {create.isPending ? "등록 중…" : "등록"}
             </button>
-            {invalid && <span className="subtle" style={{ marginLeft: 8 }}>식별자(sub)와 이름을 입력하세요.</span>}
+            {invalid && <span className="subtle" style={{ marginLeft: 8 }}>계정 참조와 이름을 입력하세요.</span>}
           </div>
         </div>
       )}
@@ -145,9 +159,9 @@ function PrincipalEditRow({ principal, onDone }: { principal: PrincipalItem; onD
   return (
     <tr>
       <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
-      <td style={{ fontFamily: "monospace" }}>{principal.sub}</td>
+      <td><span title={`권한 시스템 계정 참조: ${principal.sub}`}>{principalAccountLabel(principal)}</span></td>
       <td><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="(비우면 제거)" /></td>
-      <td><span className={`badge ${principal.source === "manual" ? "" : "green"}`}>{principal.source === "manual" ? "수동" : "자동"}</span></td>
+      <td><span className={`badge ${principalSourceTone(principal.source)}`}>{principalSourceLabel(principal.source)}</span></td>
       <td>
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           <button className="btn primary" type="button" disabled={name.trim() === "" || save.isPending} onClick={() => save.mutate()}>

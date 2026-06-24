@@ -19,10 +19,15 @@
  *     InterpreterError로 표면화한다("조용한 false/unknown 금지").
  */
 import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
-import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, StepStatus, VerifyResult } from "../../../ts/core-types";
+import type { ArtifactRef, ClassifiedException, ExecutorPlugin, HttpResponseSnapshot, PageStateResolver, RunContext, StepResult, StepStatus, VerifyResult } from "../../../ts/core-types";
 import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 import { evaluateCondition, selectOnBranch, NoBranchMatchedError, SessionRegistrationRequiredError, type CompiledOnBranch } from "./flow-control";
 import { mergeExtractOutputs, type ExtractResultPage, type MergedExtractResult } from "./extract-result-merge";
+import {
+  HUMAN_TASK_MAX_TIMEOUT_MS,
+  HUMAN_TASK_MIN_TIMEOUT_MS,
+  parseHumanTaskTimeoutMs,
+} from "./human-task-timeout-policy";
 import type {
   CompiledScenario,
   InterpreterDeps,
@@ -55,12 +60,26 @@ interface NodeOutput {
   readonly status: StepStatus;
   readonly row_count?: number;
   readonly extracted_ref?: string;
+  readonly http_status?: number;
+  readonly http_ok?: boolean;
+  readonly http_body?: unknown;
   // tier: fallback_chain 노드가 채택한 티어(T0..T3). fallback 노드 출력에만 부착(ir-expression §2). 비-fallback은 부재(loud).
   readonly tier?: string;
 }
 
 /** StepResult → 표준 노드 출력 투영(ir-expression §2). status는 항상; row_count/extracted_ref는 extract 액션만. */
 function projectNodeOutput(res: StepResult): NodeOutput {
+  if (res.action === "api_call") {
+    const http = httpResponseFromStep(res);
+    return {
+      status: res.status,
+      ...(http !== undefined ? {
+        http_status: http.status,
+        http_ok: http.ok,
+        ...(http.body !== undefined ? { http_body: http.body } : {}),
+      } : {}),
+    };
+  }
   if (res.action !== "extract") return { status: res.status };
   const rowCount = res.output !== null && typeof res.output === "object" ? (res.output as { rowCount?: unknown }).rowCount : undefined;
   const ref = res.artifacts[0];
@@ -68,6 +87,22 @@ function projectNodeOutput(res: StepResult): NodeOutput {
     status: res.status,
     ...(typeof rowCount === "number" ? { row_count: rowCount } : {}),
     ...(typeof ref === "string" ? { extracted_ref: ref } : {}),
+  };
+}
+
+function httpResponseFromStep(res: StepResult): HttpResponseSnapshot | undefined {
+  if (res.action !== "api_call" || res.output === undefined || typeof res.output !== "object" || res.output === null) return undefined;
+  const output = res.output as Partial<HttpResponseSnapshot>;
+  if (typeof output.status !== "number" || typeof output.ok !== "boolean" || typeof output.contentType !== "string" || typeof output.finalUrl !== "string" || typeof output.bodyTruncated !== "boolean") return undefined;
+  return {
+    status: output.status,
+    ok: output.ok,
+    contentType: output.contentType,
+    finalUrl: output.finalUrl,
+    redirected: output.redirected === true,
+    ...(typeof output.redirectLocation === "string" ? { redirectLocation: output.redirectLocation } : {}),
+    ...(Object.prototype.hasOwnProperty.call(output, "body") ? { body: output.body } : {}),
+    bodyTruncated: output.bodyTruncated,
   };
 }
 
@@ -155,7 +190,15 @@ function isFailureTerminal(terminal: string): boolean {
 function parseHumanTaskInput(
   nodeId: string,
   input: Record<string, unknown>,
-): { humanTaskKind: "approval" | "validation" | "exception"; assigneeRole: string; onTimeout: "fail" | "escalate" } {
+): {
+  humanTaskKind: "approval" | "validation" | "exception";
+  assigneeRole: string;
+  onTimeout: "fail" | "escalate";
+  timeoutMs?: number;
+  payload?: Record<string, unknown>;
+  resultSchema?: Record<string, unknown>;
+  artifactRefs?: readonly string[];
+} {
   const kindRaw = input.kind;
   let humanTaskKind: "approval" | "validation" | "exception";
   if (kindRaw === undefined) humanTaskKind = "exception";
@@ -178,7 +221,49 @@ function parseHumanTaskInput(
       "IR_SCHEMA_INVALID",
       `@human_task node '${nodeId}': input.on_timeout '${String(onTimeoutRaw)}' 무효(fail|escalate)`,
     );
-  return { humanTaskKind, assigneeRole, onTimeout };
+  const timeoutRaw = input.timeout;
+  let timeoutMs: number | undefined;
+  if (timeoutRaw !== undefined) {
+    if (typeof timeoutRaw !== "string") {
+      throw new InterpreterError("IR_SCHEMA_INVALID", `@human_task node '${nodeId}': input.timeout must be a duration string`);
+    }
+    const parsed = parseHumanTaskTimeoutMs(timeoutRaw);
+    if (parsed === null) {
+      throw new InterpreterError(
+        "IR_SCHEMA_INVALID",
+        `@human_task node '${nodeId}': input.timeout '${timeoutRaw}' invalid (ms|s|m|h|d, ${HUMAN_TASK_MIN_TIMEOUT_MS}-${HUMAN_TASK_MAX_TIMEOUT_MS}ms)`,
+      );
+    }
+    timeoutMs = parsed;
+  }
+  const payload = optionalRecordInput(nodeId, input.payload, "payload");
+  const resultSchema = optionalRecordInput(nodeId, input.result_schema, "result_schema");
+  const artifactRefs = optionalStringArrayInput(nodeId, input.artifact_refs, "artifact_refs");
+  return {
+    humanTaskKind,
+    assigneeRole,
+    onTimeout,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(payload !== undefined ? { payload } : {}),
+    ...(resultSchema !== undefined ? { resultSchema } : {}),
+    ...(artifactRefs !== undefined ? { artifactRefs } : {}),
+  };
+}
+
+function optionalRecordInput(nodeId: string, value: unknown, field: string): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  throw new InterpreterError("IR_SCHEMA_INVALID", `@human_task node '${nodeId}': input.${field} 는 object 여야 함`);
+}
+
+function optionalStringArrayInput(nodeId: string, value: unknown, field: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0)) {
+    return value;
+  }
+  throw new InterpreterError("IR_SCHEMA_INVALID", `@human_task node '${nodeId}': input.${field} 는 non-empty string[] 이어야 함`);
 }
 
 /**
@@ -257,6 +342,10 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
         state.steps.push({ nodeId, action: res.action, status: res.status });
         state.artifacts.push(...res.artifacts);
         lastResult = res;
+        {
+          const http = httpResponseFromStep(res);
+          if (http !== undefined) execCtx = { ...execCtx, lastHttpResponse: http };
+        }
         if (res.status === "success") {
           collectExtractPage(state, nodeId, stepId, res);
           // 쓰기 커밋 추적 — self-heal 재실행 금지 판정(double-commit 안전): 비-read_only 커밋 노드는 재시도하지 않는다.
@@ -409,6 +498,10 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
         humanTaskKind: ht.humanTaskKind,
         assigneeRole: ht.assigneeRole,
         onTimeout: ht.onTimeout,
+        ...(ht.timeoutMs !== undefined ? { timeoutMs: ht.timeoutMs } : {}),
+        ...(ht.payload !== undefined ? { payload: ht.payload } : {}),
+        ...(ht.resultSchema !== undefined ? { resultSchema: ht.resultSchema } : {}),
+        ...(ht.artifactRefs !== undefined ? { artifactRefs: ht.artifactRefs } : {}),
         pageStateRef: pageRef,
       };
       return "suspend";

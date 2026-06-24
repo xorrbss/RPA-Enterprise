@@ -83,7 +83,7 @@ describe("site onboarding to scenario studio", () => {
     location.hash = "#security";
     (await screen.findByRole("button", { name: "새 사이트" })).click();
     fireEvent.change(await screen.findByLabelText("이름"), { target: { value: "하이웍스" } });
-    fireEvent.change(screen.getByLabelText("URL 패턴 (http/https origin)"), { target: { value: "https://login.office.hiworks.com" } });
+    fireEvent.change(screen.getByLabelText("사이트 주소"), { target: { value: "https://login.office.hiworks.com" } });
     screen.getByRole("button", { name: "등록" }).click();
 
     await waitFor(() => expect(location.hash.startsWith("#scenarioStudio?")).toBe(true));
@@ -92,10 +92,10 @@ describe("site onboarding to scenario studio", () => {
     expect(params.get("start_url")).toBe("https://login.office.hiworks.com");
     expect(params.get("browser_identity")).toBe("browser-new");
     expect(params.get("network_policy")).toBe("network-new");
-    expect(await screen.findByLabelText("시작 URL")).toHaveValue("https://login.office.hiworks.com");
-    expect(screen.getByLabelText("사이트 ID")).toHaveValue("site-new");
-    expect(screen.getByLabelText("브라우저 ID")).toHaveValue("browser-new");
-    expect(screen.getByLabelText("네트워크 정책 ID")).toHaveValue("network-new");
+    expect(await screen.findByLabelText("시작 주소")).toHaveValue("https://login.office.hiworks.com");
+    expect(screen.getByLabelText("사이트")).toHaveValue("site-new");
+    expect(screen.getByLabelText("로그인 세션 선택값")).toHaveValue("browser-new");
+    expect(screen.getByLabelText("보안 정책 선택값")).toHaveValue("network-new");
 
     fireEvent.change(screen.getByLabelText("자연어 요청"), { target: { value: "오늘 결재함을 확인해줘" } });
     screen.getByRole("button", { name: "저장 후 실행" }).click();

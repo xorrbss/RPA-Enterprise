@@ -29,11 +29,15 @@ export interface ExecutorChallengeSuspensionPort {
       correlationId: string;
       exception: ClassifiedException;
       pendingSideEffects: readonly SideEffectCmd[];
-      // @human_task(R5) suspend 시 human_tasks 라우팅/타임아웃 정책(reserved-handlers). challenge(R4)는 omit(둘 다 부재).
-      assigneeRole?: string;
-      onTimeout?: "fail" | "escalate";
-      // bookmark reason 마커("challenge"|"human_task"). 미지정 시 "challenge"(기존 동작 보존).
-      reason?: string;
-    },
+        // @human_task(R5) suspend 시 human_tasks 라우팅/타임아웃 정책(reserved-handlers). challenge(R4)는 omit(둘 다 부재).
+        assigneeRole?: string;
+        onTimeout?: "fail" | "escalate";
+        timeoutMs?: number;
+        payload?: Record<string, unknown>;
+        resultSchema?: Record<string, unknown>;
+        artifactRefs?: readonly string[];
+        // bookmark reason 마커("challenge"|"human_task"). 미지정 시 "challenge"(기존 동작 보존).
+        reason?: string;
+      },
   ): Promise<{ readonly emittedEvents: readonly EventId[]; readonly enqueuedRuntimeJobs?: readonly RuntimeWorkerJob[] }>;
 }

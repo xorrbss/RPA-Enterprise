@@ -8,7 +8,8 @@
  */
 import { UtilityExecutor, UtilityExecutorError } from "../src/executor/utility-executor";
 import type { CdpSessionProvider } from "../src/executor/cdp-session";
-import type { RunContext } from "../../ts/core-types";
+import type { PlainSecret, RunContext } from "../../ts/core-types";
+import type { AuthenticatedPrincipal, SecretStoreBoundary } from "../../ts/security-middleware-contract";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -63,6 +64,13 @@ const policyCtx = {
   assetRefs: {},
   abortSignal: new AbortController().signal,
 } satisfies RunContext;
+const connectorPrincipal = {
+  subjectId: "runtime-connector" as AuthenticatedPrincipal["subjectId"],
+  tenantId: "tenant-1" as AuthenticatedPrincipal["tenantId"],
+  roles: ["operator"],
+  source: "jwt",
+  claims: {},
+} satisfies AuthenticatedPrincipal;
 
 async function expectSchemeRejected(label: string, url: string): Promise<void> {
   try {
@@ -124,6 +132,179 @@ await (async () => {
   }
 
   // ── 슬라이스3: 결정형 verify criteria 확장 (element_absent/text_includes/url_matches) ──
+  // HTTP api_call P1: HTTP-only + SecretRef bearer only + network policy. Browser session is not required.
+  {
+    try {
+      await new UtilityExecutor(neverSessions).execute(
+        "api.noDeps",
+        { type: "api_call", method: "GET", url: "https://api.example.com/status" },
+        { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+      );
+      check("api_call without HTTP deps -> throw", false);
+    } catch (e) {
+      check("api_call without HTTP deps -> EXECUTOR_CAPABILITY_MISMATCH", e instanceof UtilityExecutorError && e.code === "EXECUTOR_CAPABILITY_MISMATCH", String(e));
+    }
+  }
+  {
+    const calls: Array<{ url: string; headers: Record<string, string>; body?: string }> = [];
+    const http = new UtilityExecutor(neverSessions, {
+      fetch: async (url, init) => {
+        calls.push({ url, headers: init.headers, ...(init.body !== undefined ? { body: init.body } : {}) });
+        return { status: 200, ok: true, headers: { get: () => "application/json" }, text: async () => JSON.stringify({ ok: true }) };
+      },
+    });
+    const res = await http.execute(
+      "api.ok",
+      { type: "api_call", method: "GET", url: "https://api.example.com/status", headers: { Accept: "application/json" } },
+      { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+    );
+    check("api_call GET succeeds without browser session", res.status === "success" && res.action === "api_call", JSON.stringify(res));
+    check("api_call GET output status/body", (res.output as { status?: number; body?: { ok?: boolean } }).status === 200 && (res.output as { body?: { ok?: boolean } }).body?.ok === true, JSON.stringify(res.output));
+    check("api_call GET sideEffect read_only", res.sideEffect?.kind === "read_only" && res.sideEffect.committed === true, JSON.stringify(res.sideEffect));
+    check("api_call fetch called once", calls.length === 1 && calls[0].url === "https://api.example.com/status", JSON.stringify(calls));
+  }
+  {
+    const resolved: Array<{ purpose: string; connectorId?: string }> = [];
+    const secrets = {
+      store: { resolve: async () => "bearer-token-123" as PlainSecret },
+      authorize: async (request) => ({ kind: "allow", ref: request.ref }),
+      resolveAuthorized: async (request) => {
+        resolved.push({ purpose: request.purpose, ...(request.connectorId !== undefined ? { connectorId: request.connectorId } : {}) });
+        return "bearer-token-123" as PlainSecret;
+      },
+    } satisfies SecretStoreBoundary;
+    let authHeader = "";
+    const http = new UtilityExecutor(neverSessions, {
+      secrets,
+      principal: connectorPrincipal,
+      fetch: async (_url, init) => {
+        authHeader = init.headers.Authorization ?? "";
+        return {
+          status: 200,
+          ok: true,
+          headers: { get: () => "application/json" },
+          text: async () => JSON.stringify({ echoed: init.headers.Authorization }),
+        };
+      },
+    });
+    const res = await http.execute(
+      "api.secret",
+      {
+        type: "api_call",
+        method: "GET",
+        url: "https://api.example.com/secure",
+        connectorId: "http-api",
+        auth: { type: "secret_ref_bearer", secret_ref: "secret://prod/connector/http-api/token" },
+      },
+      { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+    );
+    check("api_call SecretRef bearer sends Authorization", authHeader === "Bearer bearer-token-123", authHeader);
+    check("api_call SecretRef purpose connector", resolved.length === 1 && resolved[0].purpose === "connector" && resolved[0].connectorId === "http-api", JSON.stringify(resolved));
+    check("api_call output redacts echoed secret", !JSON.stringify(res.output).includes("bearer-token-123") && JSON.stringify(res.output).includes("[REDACTED]"), JSON.stringify(res.output));
+  }
+  {
+    const calls: string[] = [];
+    const http = new UtilityExecutor(neverSessions, {
+      fetch: async (url) => {
+        calls.push(url);
+        return { status: 200, ok: true, headers: { get: () => "text/plain" }, text: async () => "ok" };
+      },
+    });
+    const res = await http.execute(
+      "api.blocked",
+      { type: "api_call", method: "GET", url: "https://evil.example/status" },
+      { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+    );
+    check("api_call policy mismatch -> failed_security", res.status === "failed_security" && res.action === "api_call", JSON.stringify(res));
+    check("api_call policy mismatch no fetch", calls.length === 0, JSON.stringify(calls));
+  }
+  {
+    let redirectMode = "";
+    const http = new UtilityExecutor(neverSessions, {
+      fetch: async (_url, init) => {
+        redirectMode = init.redirect;
+        return {
+          status: 302,
+          ok: false,
+          headers: { get: (name) => name.toLowerCase() === "location" ? "https://169.254.169.254/latest/meta-data/" : "text/plain" },
+          text: async () => "",
+        };
+      },
+    });
+    const res = await http.execute(
+      "api.redirectBlocked",
+      { type: "api_call", method: "GET", url: "https://api.example.com/status" },
+      { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+    );
+    check("api_call fetch uses manual redirect", redirectMode === "manual", redirectMode);
+    check("api_call redirect landing outside policy -> failed_security", res.status === "failed_security" && res.exception?.code === "DOMAIN_POLICY_VIOLATION", JSON.stringify(res));
+    check("api_call redirect policy mismatch no commit", res.sideEffect?.committed === false, JSON.stringify(res.sideEffect));
+  }
+  {
+    try {
+      await new UtilityExecutor(neverSessions, { fetch: async () => ({ status: 200, ok: true, headers: { get: () => "text/plain" }, text: async () => "ok" }) }).execute(
+        "api.rawAuth",
+        { type: "api_call", method: "GET", url: "https://api.example.com/status", headers: { Authorization: "Bearer plaintext" } },
+        { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+      );
+      check("api_call raw Authorization header -> throw", false);
+    } catch (e) {
+      check("api_call raw Authorization header -> IR_SCHEMA_INVALID", e instanceof UtilityExecutorError && e.code === "IR_SCHEMA_INVALID", String(e));
+    }
+  }
+  {
+    try {
+      await new UtilityExecutor(neverSessions, { fetch: async () => ({ status: 200, ok: true, headers: { get: () => "text/plain" }, text: async () => "ok" }) }).execute(
+        "api.basic",
+        { type: "api_call", method: "GET", url: "https://api.example.com/status", auth: { type: "basic", username: "u", password: "p" } },
+        { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+      );
+      check("api_call basic auth -> throw", false);
+    } catch (e) {
+      check("api_call basic auth -> IR_SCHEMA_INVALID", e instanceof UtilityExecutorError && e.code === "IR_SCHEMA_INVALID", String(e));
+    }
+  }
+  {
+    try {
+      await new UtilityExecutor(neverSessions, { fetch: async () => ({ status: 200, ok: true, headers: { get: () => "text/plain" }, text: async () => "ok" }) }).execute(
+        "api.mutateNoKey",
+        { type: "api_call", method: "POST", url: "https://api.example.com/update", body: { x: 1 } },
+        { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+      );
+      check("api_call POST without idempotency_key -> throw", false);
+    } catch (e) {
+      check("api_call POST without idempotency_key -> IR_SCHEMA_INVALID", e instanceof UtilityExecutorError && e.code === "IR_SCHEMA_INVALID", String(e));
+    }
+  }
+  {
+    let bodySeen = "";
+    let contentTypeSeen = "";
+    const http = new UtilityExecutor(neverSessions, {
+      fetch: async (_url, init) => {
+        bodySeen = init.body ?? "";
+        contentTypeSeen = init.headers["Content-Type"] ?? "";
+        return { status: 202, ok: true, headers: { get: () => "text/plain" }, text: async () => "accepted" };
+      },
+    });
+    const res = await http.execute(
+      "api.post",
+      { type: "api_call", method: "POST", url: "https://api.example.com/update", body: { x: 1 }, idempotency_key: "api.post.1" },
+      { ...policyCtx, networkAllowedDomains: ["api.example.com"] },
+    );
+    check("api_call POST serializes JSON body", bodySeen === "{\"x\":1}" && contentTypeSeen === "application/json", `${bodySeen} / ${contentTypeSeen}`);
+    check("api_call POST sideEffect update with idempotency", res.sideEffect?.kind === "update" && res.sideEffect.idempotencyKey === "api.post.1", JSON.stringify(res.sideEffect));
+  }
+  {
+    for (const action of ["file", "shell"]) {
+      try {
+        await new UtilityExecutor(neverSessions).execute(`nonbrowser.${action}`, { type: action }, policyCtx);
+        check(`${action} remains blocked`, false);
+      } catch (e) {
+        check(`${action} remains EXECUTOR_CAPABILITY_MISMATCH`, e instanceof UtilityExecutorError && e.code === "EXECUTOR_CAPABILITY_MISMATCH", String(e));
+      }
+    }
+  }
+
   {
     const r = await new UtilityExecutor(mockSessions({ evalResult: true })).verify({ type: "element_absent", target: { selector: ".spinner" } }, policyCtx);
     check("verify element_absent 부재→pass", r.status === "pass", JSON.stringify(r));
@@ -150,6 +331,28 @@ await (async () => {
   }
   {
     // 기존 지원(회귀): element_visible 유지
+    const httpCtx = {
+      ...policyCtx,
+      lastHttpResponse: {
+        status: 202,
+        ok: true,
+        contentType: "application/json",
+        finalUrl: "https://api.example.com/status",
+        redirected: false,
+        body: { ok: true },
+        bodyTruncated: false,
+      },
+    };
+    const httpPass = await new UtilityExecutor(neverSessions).verify({ type: "http_status", codes: [200, 202] }, httpCtx);
+    check("verify http_status 직전 api_call 응답 -> pass", httpPass.status === "pass", JSON.stringify(httpPass));
+    const httpFail = await new UtilityExecutor(neverSessions).verify({ type: "http_status", codes: [200] }, httpCtx);
+    check("verify http_status 불일치 -> fail_det", httpFail.status === "fail_det" && httpFail.failedCriteria.includes("http_status"), JSON.stringify(httpFail));
+    try {
+      await new UtilityExecutor(neverSessions).verify({ type: "http_status", codes: [200] }, policyCtx);
+      check("verify http_status without response -> throw", false);
+    } catch (e) {
+      check("verify http_status without response -> IR_SCHEMA_INVALID", e instanceof UtilityExecutorError && e.code === "IR_SCHEMA_INVALID", String(e));
+    }
     const r = await new UtilityExecutor(mockSessions({ evalResult: true })).verify({ type: "element_visible", target: { selector: "#ok" } }, policyCtx);
     check("verify element_visible(기존) pass", r.status === "pass");
   }

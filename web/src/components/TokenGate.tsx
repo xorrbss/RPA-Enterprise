@@ -5,6 +5,7 @@ import { ApiError } from "../api/types";
 // 토큰 게이트 — Bearer 토큰(외부 발급 JWT)을 브라우저(localStorage)에만 저장. IdP 없음(토큰은 외부 공급).
 // 토큰 없으면 입력 화면, 있으면 콘솔. 조용한 401 루프 대신 명시적 접속 화면.
 const KEY = "rpa.token";
+const REDIRECT_TOKEN_KEYS = ["id_token", "access_token", "token"] as const;
 
 export function clearToken(): void {
   localStorage.removeItem(KEY);
@@ -28,6 +29,7 @@ export function TokenGate({ children }: { children: ReactNode }): JSX.Element {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(KEY));
   const [emptyTried, setEmptyTried] = useState(false);
   const [expired, setExpired] = useState(false);
+  const oidcAuthUrl = oidcLoginUrl();
 
   // 전역 401 구독: 세션 만료 시 토큰 제거 + 게이트 노출(전체 리로드 대신 SPA 유지 — 자식 언마운트로 폴링도 멈춘다).
   useEffect(() => {
@@ -39,6 +41,16 @@ export function TokenGate({ children }: { children: ReactNode }): JSX.Element {
     return () => {
       authExpiredListener = null;
     };
+  }, []);
+
+  useEffect(() => {
+    const redirectedToken = readRedirectToken();
+    if (redirectedToken === null) return;
+    localStorage.setItem(KEY, redirectedToken);
+    clearRedirectTokenFromUrl();
+    setEmptyTried(false);
+    setExpired(false);
+    setToken(redirectedToken);
   }, []);
 
   if (token !== null && token !== "") return <>{children}</>;
@@ -64,20 +76,25 @@ export function TokenGate({ children }: { children: ReactNode }): JSX.Element {
         <h1 style={{ fontSize: 18, margin: 0 }}>RPA 운영 콘솔 접속</h1>
         {expired && (
           <p className="form-alert red" role="alert" style={{ margin: 0 }}>
-            세션이 만료되었거나 토큰이 유효하지 않습니다. 새 토큰으로 다시 접속하세요.
+            세션이 만료되었거나 접속 권한을 확인할 수 없습니다. 새 접속 코드로 다시 접속하세요.
           </p>
         )}
         <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
-          발급받은 Bearer 토큰(JWT)을 입력하세요. 토큰은 이 브라우저에만 저장되며 서버로 별도 전송되지 않습니다.
+          발급받은 운영 콘솔 접속 코드를 입력하면 현재 권한을 확인합니다. 접속 코드는 이 브라우저에 저장되고 API 요청의 권한 확인에만 사용됩니다.
         </p>
         <p style={{ color: "var(--muted)", fontSize: 12, margin: 0 }}>
-          토큰은 관리자/IT 담당자가 발급합니다. 토큰이 없으면 담당자에게 콘솔 접속 토큰을 요청하세요.
+          접속 코드는 관리자 또는 IT 담당자가 발급합니다. 코드가 없으면 담당자에게 운영 콘솔 접속 권한을 요청하세요.
         </p>
+        {oidcAuthUrl !== null && (
+          <a className="btn primary" href={oidcAuthUrl}>
+            SSO로 로그인
+          </a>
+        )}
         <textarea
           name="token"
           rows={4}
-          placeholder="eyJhbGciOi..."
-          aria-label="Bearer 토큰"
+          placeholder="접속 코드를 붙여넣으세요"
+          aria-label="접속 코드"
           aria-invalid={emptyTried}
           spellCheck={false}
           onChange={() => {
@@ -87,13 +104,67 @@ export function TokenGate({ children }: { children: ReactNode }): JSX.Element {
         />
         {emptyTried && (
           <span className="form-alert red" role="alert" style={{ margin: 0 }}>
-            토큰을 입력하세요.
+            접속 코드를 입력하세요.
           </span>
         )}
         <button className="btn primary" type="submit">
-          접속
+          운영 콘솔 접속
         </button>
       </form>
     </div>
   );
+}
+
+function oidcLoginUrl(): string | null {
+  const value = import.meta.env.VITE_OIDC_AUTH_URL;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readRedirectToken(): string | null {
+  const fromSearch = tokenFromParams(new URLSearchParams(window.location.search));
+  if (fromSearch !== null) return fromSearch;
+  const rawHash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+  if (rawHash.length === 0) return null;
+  return tokenFromParams(new URLSearchParams(rawHash));
+}
+
+function tokenFromParams(params: URLSearchParams): string | null {
+  for (const key of REDIRECT_TOKEN_KEYS) {
+    const value = params.get(key);
+    if (value !== null && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+function clearRedirectTokenFromUrl(): void {
+  const url = new URL(window.location.href);
+  let changed = false;
+
+  for (const key of REDIRECT_TOKEN_KEYS) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  }
+
+  const rawHash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+  if (rawHash.length > 0) {
+    const hashParams = new URLSearchParams(rawHash);
+    let hashChanged = false;
+    for (const key of REDIRECT_TOKEN_KEYS) {
+      if (hashParams.has(key)) {
+        hashParams.delete(key);
+        hashChanged = true;
+      }
+    }
+    if (hashChanged) {
+      const nextHash = hashParams.toString();
+      url.hash = nextHash.length > 0 ? nextHash : "";
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }
 }

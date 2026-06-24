@@ -206,6 +206,8 @@ async function main(): Promise<void> {
       const runBody = ownRun.json();
       check("own run body.run_id", runBody.run_id === RUN_A, JSON.stringify(runBody));
       check("own run body.status", runBody.status === "running", JSON.stringify(runBody));
+      check("own run body.scenario_id", runBody.scenario_id === SCENARIO_A, JSON.stringify(runBody));
+      check("own run body.scenario_version_id", runBody.scenario_version_id === SVER_A, JSON.stringify(runBody));
       check("own run body.attempts", runBody.attempts === 2, JSON.stringify(runBody));
       check("own run body.worker_id null", runBody.worker_id === null, JSON.stringify(runBody));
       check("own run body.current_node null", runBody.current_node === null, JSON.stringify(runBody));
@@ -221,6 +223,8 @@ async function main(): Promise<void> {
       check("failed run detail → 200", failedRun.statusCode === 200, failedRun.body);
       const failedRunBody = failedRun.json();
       check("failed run current_node null", failedRunBody.current_node === null, failedRun.body);
+      check("failed run scenario_id", failedRunBody.scenario_id === SCENARIO_A, failedRun.body);
+      check("failed run scenario_version_id", failedRunBody.scenario_version_id === SVER_A, failedRun.body);
       check(
         "failed run failure_reason shape",
         JSON.stringify(failedRunBody.failure_reason) ===

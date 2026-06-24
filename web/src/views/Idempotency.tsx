@@ -18,39 +18,40 @@ interface MechanismRow {
 // 멱등(중복 방지) 메커니즘 — 계층별. 키 규약·근거는 api-surface §0.4 / migration SQL / impl-contracts-bundle 파생.
 const MECHANISMS: readonly MechanismRow[] = [
   {
-    layer: "제어평면",
+    layer: "운영 명령",
     layerTone: "blue",
-    target: "명령형 POST (run create/abort · promote · human-task · DLQ replay · site approve · gateway)",
-    key: "tenant_id + endpoint + Idempotency-Key (request_hash 로 본문 변조 탐지)",
-    basis: "api-surface §0.4 · control_plane_idempotency_keys",
+    target:
+      "실행 시작/취소 · 운영 반영 · 사람 확인 · 재처리 · 사이트 승인 · AI 정책 변경",
+    key: "접속 테넌트 + 업무 동작 + 요청 고유값",
+    basis: "운영 명령 중복 방지 저장소",
   },
   {
     layer: "데이터 수집",
     layerTone: "green",
-    target: "원본 항목 (raw_items)",
-    key: "natural key (UNIQUE NULLS NOT DISTINCT)",
-    basis: "migration_concurrency_idempotency · raw_items",
+    target: "수집 원본 항목",
+    key: "업무 고유값",
+    basis: "수집 원본 중복 제한",
   },
   {
     layer: "데이터 전달",
     layerTone: "green",
-    target: "외부 sink 전송 (sink_deliveries)",
-    key: "tenant_id : sink_config_id : schema_ref : natural_key",
-    basis: "api-surface §0.4 · sink_deliveries.sink_idempotency_key",
+    target: "외부 시스템 전달",
+    key: "접속 테넌트 + 전달 설정 + 데이터 종류 + 업무 고유값",
+    basis: "전달 이력 중복 키",
   },
   {
-    layer: "인증",
+    layer: "추가 인증",
     layerTone: "amber",
-    target: "챌린지 해결 시도 (challenge_resolution_attempts)",
+    target: "추가 인증·챌린지 해결 시도",
     key: "시도 단위 기록 — 동일 인증 재실행 방지",
-    basis: "migration_concurrency_idempotency · challenge_resolution_attempts",
+    basis: "인증 시도 이력",
   },
   {
     layer: "실행기",
     layerTone: "muted",
-    target: "액션 계획 캐시 (action_plan_cache)",
-    key: "scenario + step + page-state 특징 + model",
-    basis: "impl-contracts-bundle ActionPlanCache · action_plan_cache",
+    target: "화면 액션 계획 캐시",
+    key: "자동화 + 단계 + 화면 상태 + AI 모델",
+    basis: "계획 캐시",
   },
 ];
 
@@ -65,26 +66,26 @@ interface FlowRow {
 const CONTROL_PLANE_FLOW: readonly FlowRow[] = [
   {
     situation: "최초 제출",
-    handling: "(tenant_id, endpoint, Idempotency-Key) 예약 → status=processing",
-    result: "명령 실행 후 succeeded/failed + 응답 기록",
+    handling: "요청 고유값을 예약하고 처리 중 상태로 표시",
+    result: "명령 실행 후 성공/실패와 응답 기록",
     resultTone: "green",
   },
   {
-    situation: "동일 키 재제출 (완료된 명령)",
-    handling: "부작용 재실행 없이 최초 응답 재생 (replay)",
-    result: "저장된 response_status / response_body 반환",
+    situation: "동일 요청 재제출 (완료된 명령)",
+    handling: "부작용 재실행 없이 최초 응답 반환",
+    result: "최초 처리 결과 재사용",
     resultTone: "green",
   },
   {
     situation: "처리 중 재제출 (in-flight)",
-    handling: "예약이 processing 상태로 가시 → 충돌",
-    result: "WORKITEM_CHECKOUT_CONFLICT (409, 재시도 가능)",
+    handling: "이미 처리 중인 요청으로 감지",
+    result: "잠시 후 다시 시도 안내",
     resultTone: "amber",
   },
   {
-    situation: "본문 변조 (request_hash 불일치)",
-    handling: "동일 키이나 canonical request_hash 가 다름",
-    result: "SCENARIO_VERSION_CONFLICT (412) 거부",
+    situation: "요청 내용 변경",
+    handling: "같은 요청 고유값으로 다른 내용을 보내면 거부",
+    result: "변경된 요청으로 보아 차단",
     resultTone: "red",
   },
 ];
@@ -99,35 +100,48 @@ interface LeaseRow {
 const LEASES: readonly LeaseRow[] = [
   {
     target: "자격증명 슬롯",
-    unit: "credential_leases (slot_no · max_concurrency, §19 기본 1)",
-    basis: "credential_concurrency_policies",
+    unit: "로그인 계정별 동시 실행 수 제한",
+    basis: "자격증명 동시성 정책",
   },
   {
     target: "브라우저",
-    unit: "browser_leases (실행 단위 · TTL 만료 sweeper 회수)",
-    basis: "migration_concurrency_idempotency · ops-defaults §lease",
+    unit: "실행 단위 브라우저 점유와 만료 후 회수",
+    basis: "브라우저 점유 정책",
   },
 ];
 
 export function IdempotencyView(): JSX.Element {
   return (
     <div>
-      <Panel title="중복 방지 (idempotency)" subtitle="정적 contract-documentation 뷰 · 백엔드 없음">
-        <p style={{ padding: "0 16px", color: "var(--muted)", fontSize: 13, margin: "8px 0" }}>
-          이 화면은 시스템 계층별 중복 방지(멱등) 메커니즘과 키 규약을 계약 문서(api-surface §0.4 ·
-          migration SQL · impl-contracts-bundle)에서 파생해 검토할 수 있게 노출합니다. control_plane_idempotency_keys
-          의 라이브 키 목록은 별도 read 표면을 발명하지 않았습니다(내부 재시도-보호 메커니즘 · YAGNI).
+      <Panel
+        title="중복 방지"
+        subtitle="운영 명령과 데이터 처리의 재실행 보호"
+      >
+        <p
+          style={{
+            padding: "0 16px",
+            color: "var(--muted)",
+            fontSize: 13,
+            margin: "8px 0",
+          }}
+        >
+          이 화면은 같은 요청이 반복되거나 사용자가 다시 클릭해도 실행, 전달,
+          검토 업무가 중복 처리되지 않는지 확인하는 운영 점검 화면입니다. 내부 키
+          목록을 직접 노출하지 않고, 계층별 판단 기준과 처리 결과만 보여줍니다.
         </p>
       </Panel>
 
-      <Panel title="중복 방지 메커니즘" subtitle="계층별 멱등 키 규약 · 계약 근거">
+      <Panel
+        title="중복 방지 메커니즘"
+        subtitle="계층별 중복 판단 기준"
+      >
         <table>
           <thead>
             <tr>
               <th>계층</th>
               <th>대상</th>
-              <th>중복 판단 키</th>
-              <th>계약 근거</th>
+              <th>중복 판단 기준</th>
+              <th>운영 근거</th>
             </tr>
           </thead>
           <tbody>
@@ -138,16 +152,17 @@ export function IdempotencyView(): JSX.Element {
                 </td>
                 <td>{r.target}</td>
                 <td style={{ color: "var(--muted)" }}>{r.key}</td>
-                <td style={{ color: "var(--muted)" }}>
-                  <code>{r.basis}</code>
-                </td>
+                <td style={{ color: "var(--muted)" }}>{r.basis}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </Panel>
 
-      <Panel title="제어평면 멱등 키 처리 흐름" subtitle="control_plane_idempotency_keys · api-surface §0.4 · release-decisions #7">
+      <Panel
+        title="운영 명령 중복 처리 흐름"
+        subtitle="재클릭·재시도·변경된 요청 처리 기준"
+      >
         <table>
           <thead>
             <tr>
@@ -170,7 +185,10 @@ export function IdempotencyView(): JSX.Element {
         </table>
       </Panel>
 
-      <Panel title="동시성 점유 (lease)" subtitle="같은 계정·브라우저 동시 점유 차단 · migration_concurrency_idempotency.sql">
+      <Panel
+        title="동시 실행 점유"
+        subtitle="같은 계정·브라우저 동시 점유 차단"
+      >
         <table>
           <thead>
             <tr>
@@ -184,9 +202,7 @@ export function IdempotencyView(): JSX.Element {
               <tr key={r.target}>
                 <td>{r.target}</td>
                 <td style={{ color: "var(--muted)" }}>{r.unit}</td>
-                <td style={{ color: "var(--muted)" }}>
-                  <code>{r.basis}</code>
-                </td>
+                <td style={{ color: "var(--muted)" }}>{r.basis}</td>
               </tr>
             ))}
           </tbody>

@@ -84,7 +84,8 @@ path at deploy time (no external release/oncall team exists).
   evidence row has a matching specific evidence-packet TODO line. Current local
   output: 20 markers, 1 actionable blockers, 13 known release decisions tracked,
   13 release decisions checked (1 active deploy-time provisioning checklist rows;
-  0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows). New unresolved behavior must still use the repository
+  0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows;
+  0 repo-controlled Browser RPA V2 product-scope open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
 ## Changed Files / Evidence Scope
@@ -228,7 +229,7 @@ Passed locally:
   (current output: 20 markers, 1 actionable blockers, 13 known release
   decisions tracked, 13 release decisions checked (1 active deploy-time provisioning
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
-  runtime open rows))
+  runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
   DB-backed release posture from `npm --prefix codegen run ci:local:temp-db`,
   `npm --prefix codegen run db:temp-smoke`, or

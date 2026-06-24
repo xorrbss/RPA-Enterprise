@@ -23,6 +23,10 @@ interface HumanTaskRow {
   expires_at: Date | null;
   on_timeout: string;
   run_id: string;
+  payload: unknown;
+  result_schema: unknown;
+  artifact_refs: unknown;
+  result: unknown;
   created_at: Date;
   cursor_at: string; // created_at::text(전정밀도) — keyset 커서(PAG-01)
 }
@@ -47,7 +51,23 @@ function mapHumanTask(r: HumanTaskRow): Record<string, unknown> {
     timeout: r.expires_at !== null ? r.expires_at.toISOString() : null,
     on_timeout: r.on_timeout,
     run_id: r.run_id,
+    payload: recordOrEmpty(r.payload),
+    result_schema: recordOrEmpty(r.result_schema),
+    artifact_refs: stringArray(r.artifact_refs),
+    result: recordOrNull(r.result),
   };
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 /** Principal 행 → 계약 Principal 응답(디렉터리 항목; name-picker용 메타데이터만). */
@@ -74,7 +94,9 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<HumanTaskRow>(
-        `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id, created_at, created_at::text AS cursor_at
+        `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id,
+                payload, result_schema, artifact_refs, result,
+                created_at, created_at::text AS cursor_at
            FROM human_tasks
           WHERE tenant_id = $1::uuid
             AND ($2::text IS NULL OR state = $2)
@@ -135,7 +157,9 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
       }
       const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<HumanTaskRow>(
-          `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id, created_at, created_at::text AS cursor_at
+          `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id,
+                  payload, result_schema, artifact_refs, result,
+                  created_at, created_at::text AS cursor_at
              FROM human_tasks WHERE id = $1::uuid`,
           [id],
         );

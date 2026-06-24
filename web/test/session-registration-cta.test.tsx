@@ -52,7 +52,100 @@ describe("로그인 세션 등록 안내/진입", () => {
   test("Security 목록 — login_capable 사이트에 '세션 미등록' 배지", async () => {
     renderApp(fakeClient({ listSites: async () => ({ items: [LOGIN_SITE], next_cursor: null }) }));
     location.hash = "#security";
-    expect(await screen.findByText("세션 미등록")).toBeInTheDocument();
+    expect((await screen.findAllByText("세션 미등록")).length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("Security 상단 — 세션 갱신 큐에서 미등록 사이트를 바로 처리한다", async () => {
+    renderApp(fakeClient({ listSites: async () => ({ items: [LOGIN_SITE], next_cursor: null }) }));
+    location.hash = "#security";
+
+    const queue = await screen.findByRole("region", { name: "로그인 세션 갱신 큐" });
+    expect(within(queue).getByText("1건 확인 필요")).toBeInTheDocument();
+    expect(within(queue).getByText("하이웍스")).toBeInTheDocument();
+    expect(within(queue).getByText("로그인 세션이 없어 브라우저 실행 전에 등록이 필요합니다.")).toBeInTheDocument();
+    expect(within(queue).getByText("세션 미등록")).toBeInTheDocument();
+    expect(within(queue).getByRole("button", { name: "세션 등록" })).toBeInTheDocument();
+    expect(within(queue).getByRole("button", { name: "운영자 PC 등록" })).toBeInTheDocument();
+  });
+
+  test("Security 목록 — 세션 등록 상태를 펼쳐 최근 capture 진행 상태를 확인한다", async () => {
+    renderApp(
+      fakeClient({
+        listSites: async () => ({ items: [LOGIN_SITE], next_cursor: null }),
+        listSessionCaptures: async () => ({
+          items: [
+            {
+              capture_session_id: "c0000000-0000-0000-0000-000000000001",
+              status: "awaiting_login",
+              detail: "operator login pending",
+              updated_at: "2026-06-23T09:00:00.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#security";
+    fireEvent.click(await screen.findByRole("button", { name: "상태 보기" }));
+    const panel = await screen.findByRole("region", { name: /세션 등록 상태/ });
+    expect(await within(panel).findByText("로그인 대기")).toBeInTheDocument();
+    expect(within(panel).getByText("운영자 로그인을 기다리는 중입니다.")).toHaveAttribute("title", "operator login pending");
+    expect(within(panel).queryByText("operator login pending")).not.toBeInTheDocument();
+  });
+
+  test("Security 목록 — 사이트 화면 상태 조건을 수정 저장한다", async () => {
+    let saved: unknown = undefined;
+    const siteWithSelectors = {
+      ...LOGIN_SITE,
+      page_state_summary: {
+        configured: true,
+        login_url_configured: true,
+        authenticated_selector_configured: true,
+        flag_count: 1,
+        flags: ["reviews_visible"],
+      },
+    };
+    renderApp(
+      fakeClient({
+        listSites: async () => ({ items: [siteWithSelectors], next_cursor: null }),
+        getSite: async () => ({
+          ...siteWithSelectors,
+          page_state_selectors: {
+            loginUrl: "https://login.example/signin",
+            authenticatedWhen: { selector: ".old-user-menu" },
+            flags: { reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 } },
+          },
+        }),
+        updateSitePageState: async (_siteId, selectors) => {
+          saved = selectors;
+          return {
+            site_profile_id: LOGIN_SITE.site_profile_id,
+            page_state_selectors: selectors,
+            page_state_summary: {
+              configured: selectors !== null,
+              login_url_configured: true,
+              authenticated_selector_configured: true,
+              flag_count: 1,
+              flags: ["reviews_visible"],
+            },
+          };
+        },
+      }),
+    );
+    location.hash = "#security";
+    fireEvent.click(await screen.findByRole("button", { name: "판정 설정" }));
+    const panel = await screen.findByRole("region", { name: /화면 상태 판정/ });
+    expect(await within(panel).findByText("리뷰 목록 표시")).toBeInTheDocument();
+    expect(within(panel).getByText("최소 개수 이상")).toBeInTheDocument();
+    expect(within(panel).getByText("판정 기준 보기")).toBeInTheDocument();
+    fireEvent.change(await within(panel).findByLabelText("로그인 완료 확인 조건"), { target: { value: ".user-menu" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(saved).not.toBeUndefined());
+    expect(saved).toEqual({
+      loginUrl: "https://login.example/signin",
+      authenticatedWhen: { selector: ".user-menu" },
+      flags: { reviews_visible: { kind: "min_count", selector: ".review-item", n: 1 } },
+    });
   });
 
   test("실행 패널의 세션 미등록 → '세션 등록하러 가기'가 그 사이트로 딥링크", async () => {

@@ -131,8 +131,47 @@ async function main(): Promise<void> {
       check("capabilities default video policies only never", JSON.stringify(res.json().visual_evidence?.video?.policies) === JSON.stringify(["never"]), res.body);
       check("capabilities default video default_policy never", res.json().visual_evidence?.video?.default_policy === "never", res.body);
       check("capabilities default screenshot default_policy each_step", res.json().visual_evidence?.screenshot?.default_policy === "each_step", res.body);
+
+      const readiness = await capsDefault.inject({
+        method: "GET",
+        url: "/v1/auth/readiness",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("auth readiness default → 200", readiness.statusCode === 200, readiness.body);
+      check("auth readiness default marks HS256 as not enterprise SSO", readiness.json().enterprise_sso_ready === false && readiness.json().provider?.mode === "hs256", readiness.body);
+      check("auth readiness current principal mapped from JWT", readiness.json().current_principal?.subject_id === "viewer-a", readiness.body);
     } finally {
       await capsDefault.close();
+    }
+
+    const ssoReady = buildServer({
+      pool,
+      auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+      authReadiness: {
+        mode: "jwks",
+        configurationSource: "deployment_config",
+        jwksUrl: "https://idp.example.com/.well-known/jwks.json",
+        issuer: "https://idp.example.com/",
+        audience: "rpa-console",
+      },
+      rbac: new RoleMatrixRbacMiddleware(),
+      idempotency: new PgControlPlaneIdempotencyStore(pool),
+      enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} } as RunEnqueuer,
+      signedCommandRegistry,
+    });
+    await ssoReady.ready();
+    try {
+      const readiness = await ssoReady.inject({
+        method: "GET",
+        url: "/v1/auth/readiness",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("auth readiness JWKS configured → 200", readiness.statusCode === 200, readiness.body);
+      check("auth readiness JWKS enterprise ready", readiness.json().enterprise_sso_ready === true && readiness.json().status === "ok", readiness.body);
+      check("auth readiness exposes JWKS host only", readiness.json().provider?.jwks_host === "idp.example.com" && !readiness.body.includes("/.well-known/jwks.json"), readiness.body);
+      check("auth readiness reports required claim mapping", readiness.json().required_claims?.some((c: { claim?: string; present?: boolean }) => c.claim === "tenant_id" && c.present === true) === true, readiness.body);
+    } finally {
+      await ssoReady.close();
     }
 
     const capsVideoWithoutReader = buildServer({
