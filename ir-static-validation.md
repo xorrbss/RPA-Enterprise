@@ -31,10 +31,11 @@
 | V6 | **on priority 동률 금지** — 한 노드 `on[]` 내 동일 `priority` 둘 이상 금지(비결정 분기 방지). | `IR_SCHEMA_INVALID` | error | `duplicate_priority` |
 | V7 | **@end_no_data witness 필수** — `@end_no_data` target 또는 `terminal: success_empty`로 가는 진입 노드의 `verify.criteria`에 `empty_result_allowed` witness가 있어야 한다. 없으면 수집 실패를 빈 데이터로 위장할 위험. | (저장 허용) | promote-block | `empty_result_without_witness` |
 | V8 | **flags 레지스트리 준수** — 모든 `flags.*` 참조는 §2 권위 레지스트리에 등록된 키여야 한다(닫힌 집합). | `IR_EXPRESSION_COMPILE_ERROR`(IREL_UNKNOWN_VARIABLE) | error | `unknown_flag` |
-| V9 | **node 출력 필드 한정** — `node.<id>.*`는 표준 출력 필드(`row_count`/`status`/`extracted_ref`/`tier`)만 참조 가능. | `IR_EXPRESSION_COMPILE_ERROR` | error | `unknown_node_field` |
+| V9 | **node 출력 필드 한정** — `node.<id>.*`는 표준 출력 필드(`row_count`/`status`/`extracted_ref`/`tier`/`http_status`/`http_ok`)만 참조 가능. **단 `decision`(scalar)·`correction.<key>`(sub-namespace)는 `<id>`가 `@human_task`를 선언한 소유 노드일 때만 허용**(ir-expression §2; 일반 노드에서 참조 시 위반). | `IR_EXPRESSION_COMPILE_ERROR` | error | `unknown_node_field` |
 | V10 | **value_match.path 문법** — §3 path 문법(dot-path, 인덱싱 금지)을 위반하거나 평가 대상이 부재. | `IR_SCHEMA_INVALID` | error | `invalid_value_path` |
 | V11 | **fallback_chain 정합** — `tier`는 `T0..T3` 중 **중복 없이** 단조 사용. `entry_node`는 V1 적용. `advance_when` 생략·마지막 티어 실패 시 의미는 §4. | `IR_SCHEMA_INVALID` | error | `fallback_chain_invalid` |
 | V12 | **fallback_chain 멱등성** — 체인 내 어느 티어든 `entry_node`가 **비-read_only** `side_effect`를 선언하면(=체인이 비-read_only), fallback이 티어를 재실행하므로 **모든 티어 `entry_node`**가 `side_effect.idempotency_key`(비어있지 않음)를 명시해야 한다(§4). `entry_node`가 `side_effect` 미선언이거나 `read_only`(키 없음)면 위반 — 스키마(`ir.schema.json`)는 *선언된* 비-read_only side_effect에만 키를 강제하므로 못 잡는 **무방비 재실행 진입점**이다. | `IR_SCHEMA_INVALID` | error | `fallback_side_effect_idempotency_missing` |
+| V13 | **decision 분기 완전성** — 한 노드의 `on[]`이 `node.<htId>.decision`(@human_task 출력, **닫힌 enum** `approve`/`reject`/`correct`/`retry`)을 분기 키로 참조하면, 그 enum 도메인을 **전부** 커버해야 한다(catch-all when 또는 각 값 대응 branch). 부분 커버(일부 decision 값에 대응 branch 없음)면 그 값으로 해소된 task의 재개가 매칭 branch 없음 → `IR_NO_BRANCH_MATCHED`(System 예외→노드 재시도). decision은 사람 판정으로 고정이라 재시도해도 불변 → run 영구 stuck. "조용한 false/dead-end 금지"의 prod 적용. (값-의존 무매칭 일반은 정적 미검출이나, decision은 **닫힌 enum**이라 커버리지를 정적 판정 가능.) | (저장 허용) | promote-block | `decision_branch_incomplete` |
 
 > V3/V4의 도달성·사이클 판정은 흐름 그래프를 노드=정점, (`next`/`on[].target` 노드 id/복귀형 예약 핸들러 `return_node`/`fallback entry_node`/`loop.body_target`/`loop.exit_target`)=간선으로 구성해 수행한다. `@end_no_data`/`terminal`은 종료 정점이다.
 >
@@ -77,7 +78,7 @@
 ### ValidationReport (검증 산출 — codegen 대상)
 ```ts
 type ValidationIssue = {
-  rule: "V1"|"V2"|"V3"|"V4"|"V5"|"V6"|"V7"|"V8"|"V9"|"V10"|"V11"|"V12";
+  rule: "V1"|"V2"|"V3"|"V4"|"V5"|"V6"|"V7"|"V8"|"V9"|"V10"|"V11"|"V12"|"V13";
   reason: string;            // 위 표 reason 태그
   code: "IR_SCHEMA_INVALID" | "IR_EXPRESSION_COMPILE_ERROR";
   nodeId?: string;           // 위반 위치
@@ -86,7 +87,7 @@ type ValidationIssue = {
 type ValidationReport = { errors: ValidationIssue[]; warnings: ValidationIssue[] };
 ```
 - `errors` 비어있지 않으면 저장 거부(HTTP 422, `code`별).
-- `warnings`(promote-block 규칙 V5/V7): draft 저장은 허용, **prod 승격 API는 거부**(승격 차단). 운영자에게 목록 표시.
+- `warnings`(promote-block 규칙 V5/V7/V13): draft 저장은 허용, **prod 승격 API는 거부**(승격 차단). 운영자에게 목록 표시.
 
 ---
 
@@ -106,6 +107,6 @@ type ValidationReport = { errors: ValidationIssue[]; warnings: ValidationIssue[]
 |---|---|---|---|
 | 구조/그래프(V1·V2·V3·V4·V6·V10·V11·V12) | `IR_SCHEMA_INVALID` | business | 저장 |
 | 표현식/스코프(V8 flag·V9 node 필드) | `IR_EXPRESSION_COMPILE_ERROR` | business | 저장 |
-| 승격 차단(V5·V7) | (warning, 코드 없음) | — | 승격 |
+| 승격 차단(V5·V7·V13) | (warning, 코드 없음) | — | 승격 |
 
 전부 `ir-expression.md` §7·`error-catalog.ts`와 정합. 본 문서는 **그래프 수준 규칙**을 고정하고, 표현식 수준은 `ir-expression.md`가 담당한다.

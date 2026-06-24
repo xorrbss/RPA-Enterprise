@@ -115,6 +115,7 @@ Business form v1:
 - 타입 검증: `number`는 finite number, `boolean`은 boolean, `date`는 `YYYY-MM-DD`, `select`는 `options[]` 중 하나, `text`/`textarea`는 string.
 - `payload`와 `artifact_refs`는 검토자가 폼을 채우기 위한 문맥/증거 참조다. artifact 본문은 HumanTask 응답에 인라인하지 않고 Artifacts API의 redaction/RBAC 경계를 사용한다.
 - `timeout` duration string(`1000ms`/`30s`/`15m`/`2h`/`1d`)은 `human_tasks.expires_at`으로 저장한다. 미지정 시 `ops-defaults.md#human_task.default_timeout`(30m)을 적용한다. `human_task_timeout_sweeper`는 H4a/H4b/H8과 Run R14/R15를 처리한다.
+- **IREL 출력 노출(재개 분기)**: @human_task 노드는 suspend→resolve→resume로 완료되는 ‘완료된 노드’이며 사람 판정이 그 표준 출력이다. 재개 후 후행 노드의 `on[].when`/`loop.until` 등은 `node.<owningNodeId>.decision`(닫힌 enum `approve`/`reject`/`correct`/`retry`, api-surface `RESOLUTION_DECISIONS` SSoT)·`node.<owningNodeId>.correction.<key>`(business_form_v1 `fields[].key` 대응 scalar)로 분기할 수 있다(ir-expression §2). 네임스페이스는 기존 `node.<id>.*` 확장이며 별도 `human_task.*`를 신설하지 않는다. **출처 노드 = @human_task를 선언한 소유 노드 id**(`return_node` 아님; DB `human_tasks.node_id`). **주입 = 재개 시 런타임이 `human_tasks.result`를 re-SELECT**(아래 “복귀(resume) 토큰” 참조) — resume token에 판정을 적재하지 않는다. decision 참조 분기는 닫힌 enum 전부를 커버해야 하며 미해소 분기는 prod 승격이 차단된다(`ir-static-validation.md` V13).
 
 ---
 
@@ -149,3 +150,5 @@ type ResumeToken = {
 ```
 
 resume 시 인터프리터는 `pageStateRef`와 현재 페이지 상태를 대조 — 불일치 시(세션 만료 등) 재로그인 플로우로 우회하거나 System 예외.
+
+**판정 결과 주입(@human_task 재개).** resume token은 `human_tasks.result`(운영자 판정/교정)를 **적재하지 않는다**. 재개 시 런타임은 `human_tasks.node_id`로 @human_task 소유 노드를 식별하고 `human_tasks.result`를 **re-SELECT**해 IREL `node.<node_id>.decision`·`node.<node_id>.correction.<key>` 스코프로 주입한다(ir-expression §2). 서버 권위 데이터를 resolve 이후 RBAC+RLS 경계 뒤에서 다시 읽으므로(`app/src/worker/runtime-worker-run-resume.ts`의 재개 시 run 행 re-SELECT 선례와 동형) 토큰 변조·재사용으로 판정을 위조할 수 없고, **토큰 스키마/HMAC/`kid` 회전 경계는 불변**(기존 발급 토큰 호환).
