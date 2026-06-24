@@ -6,6 +6,7 @@
   "description": "D2+ 프로덕션 런타임 — 계약(ts/·schema/·db/)과 검증된 codegen 산출물을 PostgreSQL·Worker에 연결한다. 계약 SSoT는 상위 디렉터리(consumed, not redefined).",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:dev": "tsc --noEmit -p tsconfig.dev.json",
     "lint": "eslint src",
     "test:lint": "tsx tools/eslint-rules/no-secret-taint.test.ts",
     "dev:serve": "tsx dev/serve.ts",

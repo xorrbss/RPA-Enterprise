@@ -284,6 +284,9 @@ jobs:
       - name: Typecheck app runtime
         run: npm --prefix app run typecheck
 
+      - name: Typecheck dev tooling (dev/ — previously typecheck-blind)
+        run: npm --prefix app run typecheck:dev
+
       - name: Lint app runtime (secret-taint gate)
         run: npm --prefix app run lint
 
