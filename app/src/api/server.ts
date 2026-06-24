@@ -35,6 +35,7 @@ import { registerScenarioGenerationRoutes } from "./scenario-generations";
 import { registerScenarioRoutes } from "./scenarios";
 import { registerAuditLogRoutes } from "./audit-log";
 import { registerAutomationIdeaRoutes } from "./automation-ideas";
+import { registerRoiEstimateRoutes } from "./roi-estimate";
 import { registerBrowserRecordingRoutes } from "./browser-recordings";
 import { registerConnectorCatalogRoutes } from "./connector-catalog";
 import { registerDocumentJobRoutes } from "./document-jobs";
@@ -209,6 +210,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerScenarioGenerationRoutes(app, deps);
   registerScenarioRoutes(app, deps);
   registerAutomationIdeaRoutes(app, deps);
+  registerRoiEstimateRoutes(app, deps);
   registerAuthReadinessRoutes(app, deps);
   registerRunTriggerRoutes(app, deps);
   registerWebhookTriggerRoutes(app, deps);
