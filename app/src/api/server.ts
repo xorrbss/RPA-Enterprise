@@ -69,7 +69,7 @@ interface RunRow {
 }
 
 export function buildServer(deps: ApiServerDeps): FastifyInstance {
-  const app = Fastify({ logger: false, genReqId: () => randomUUID() });
+  const app = Fastify({ logger: deps.logger ?? false, genReqId: () => randomUUID() });
 
   // B2/B3 보안(헤더 + opt-in CORS) — 라우트/인증 훅보다 먼저 등록해 CORS preflight가 인증보다 앞서 처리되고
   //   베이스라인 헤더가 모든 응답(에러 포함)에 적용된다(D7 분석 §4.3).

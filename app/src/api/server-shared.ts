@@ -3,7 +3,7 @@
  * 요청 principal 가드, 멱등 응답·에러 본문 헬퍼. server.ts(buildServer)·server-create-run·server-abort-run 공유.
  * value-cycle 회피: 형제 모듈(server-create-run/server-abort-run)을 import 하지 않는 단방향 leaf.
  */
-import type { FastifyRequest } from "fastify";
+import type { FastifyRequest, FastifyServerOptions } from "fastify";
 import type { Pool } from "pg";
 
 import { isApiErrorResponse, toApiError } from "../../../codegen/error-middleware";
@@ -129,6 +129,12 @@ export interface ApiServerDeps {
   selectorProbe?: SelectorProbeProvider;
   /** Public auth readiness metadata for security review surfaces. Secrets are never exposed. */
   authReadiness?: AuthReadinessConfig;
+  /**
+   * Fastify 구조화 로거 설정(선택). 미지정 시 `false`(무음) — 테스트/내장 경계는 조용히 유지된다. 프로덕션(main.ts)은
+   * pino 설정을 주입해 authz 거부·미분류 에러 경로의 request.log.warn/error(correlation_id·code 포함)를 실제로 방출한다.
+   * Authorization/Cookie 헤더는 호출측 redact 로 마스킹한다(security 경계).
+   */
+  logger?: FastifyServerOptions["logger"];
 }
 
 export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
