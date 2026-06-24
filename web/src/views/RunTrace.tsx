@@ -846,6 +846,8 @@ function mediaKind(a: RunArtifactItem): "screenshot" | "video" | null {
   return null;
 }
 
+// 서버가 실제로 단언한 미디어 타입만 반환한다(날조 금지). 미상이면 null — ArtifactMediaPreview 가
+//   실제 blob(q.data.type)에서 종류를 해석하므로 추측한 MIME("video/webm" 등)을 만들 필요가 없다.
 function previewMediaType(a: RunArtifactItem | undefined): string | null {
   if (a === undefined) return null;
   if (
@@ -853,14 +855,15 @@ function previewMediaType(a: RunArtifactItem | undefined): string | null {
     (a.media_type.startsWith("image/") || a.media_type.startsWith("video/"))
   )
     return a.media_type;
-  const kind = mediaKind(a);
-  if (kind === "video") return "video/webm";
-  if (kind === "screenshot") return "image/png";
   return null;
 }
 
+// 미리보기 가능 여부 — 서버 미디어 타입 또는 artifact 종류(screenshot/video)로 판정. 정확한 MIME 단언과는 분리.
 function isPreviewableMedia(a: RunArtifactItem | undefined): boolean {
-  return previewMediaType(a) !== null;
+  if (a === undefined) return false;
+  if (previewMediaType(a) !== null) return true;
+  const kind = mediaKind(a);
+  return kind === "video" || kind === "screenshot";
 }
 
 function isArtifactReadable(a: RunArtifactItem | undefined): boolean {
@@ -1494,7 +1497,7 @@ function RunArtifactsList({
                   message="증빙 결과를 불러오지 못했습니다."
                   onRetry={() => void detail.refetch()}
                 />
-              ) : selectedItem !== undefined && selectedMediaType !== null ? (
+              ) : selectedItem !== undefined && selectedIsMedia ? (
                 <ArtifactMediaPreview
                   artifactId={selectedItem.artifact_id}
                   mediaType={selectedMediaType}

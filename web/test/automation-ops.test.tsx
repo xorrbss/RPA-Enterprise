@@ -311,7 +311,7 @@ describe("automation ops view", () => {
     expect(screen.getByText("예약 스케줄러")).toBeInTheDocument();
     expect(screen.getAllByText("작업 큐 미연결").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("큐 연결 확인")).toBeInTheDocument();
-    expect(screen.getByText(/발화 작업 큐가 미연결 상태입니다/)).toBeInTheDocument();
+    expect(screen.getByText(/실제 정기 실행은 아직 시작되지 않습니다/)).toBeInTheDocument();
     expect(screen.getByText("만료 미회수 1건")).toBeInTheDocument();
     expect(screen.getByText("15분 이상 진행 중")).toBeInTheDocument();
 

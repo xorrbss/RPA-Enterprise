@@ -149,7 +149,7 @@ export function OrchestrationView(): JSX.Element {
   const [cadence, setCadence] = useState<Cadence>("daily");
   const [time, setTime] = useState("09:00");
   const [timezone, setTimezone] = useState("Asia/Seoul");
-  const [webhookSecretRef, setWebhookSecretRef] = useState("prod/run-triggers/month-end");
+  const [webhookSecretRef, setWebhookSecretRef] = useState("");
   const [catchupPolicy, setCatchupPolicy] = useState<RunTriggerItem["catchup_policy"]>("skip_missed");
   const [maxConcurrentRuns, setMaxConcurrentRuns] = useState(1);
   const [alertSeverity, setAlertSeverity] = useState<AlertSeverityFilter>("all");
@@ -486,9 +486,13 @@ export function OrchestrationView(): JSX.Element {
             {!canManageTriggers && <span className="badge amber">예약 변경 권한 없음</span>}
           </div>
           {schedulerQueueUnavailable && (
-            <p className="form-alert amber" role="status">
-              예약 정의는 저장할 수 있지만 발화 작업 큐가 미연결 상태입니다. worker Graphile queue와 MAINTENANCE_TENANT_IDS 배포 설정을 확인해야 실제 정기 실행이 시작됩니다.
-            </p>
+            <div className="form-alert amber" role="status">
+              <p>예약 정의는 저장할 수 있지만, 실제 정기 실행은 아직 시작되지 않습니다. 운영 담당자에게 정기 실행 연결을 요청하세요.</p>
+              <details className="developer-details">
+                <summary>기술 세부 정보</summary>
+                <p>발화 작업 큐(worker Graphile queue)와 <code>MAINTENANCE_TENANT_IDS</code> 배포 설정이 연결돼야 정기 실행이 시작됩니다.</p>
+              </details>
+            </div>
           )}
           {createTrigger.isError && <p className="error">{errorWithDetails(createTrigger.error)}</p>}
           {lastSaved !== null && (
@@ -665,11 +669,12 @@ export function OrchestrationView(): JSX.Element {
         <div className="orchestration-grid">
           <StatusColumn
             title="트리거"
+            caption="현재 지원 범위 안내 — 실시간 상태가 아닙니다."
             rows={[
               { name: "시간 예약", status: "저장 가능", tone: "green", action: "cron 기반" },
               { name: "외부 이벤트", status: "저장 가능", tone: "green", action: "서명 검증 + 이벤트 중복 방지" },
-              { name: "파일 도착", status: "계약 필요", tone: "amber", action: "후속 설계" },
-              { name: "큐 적재", status: "계약 필요", tone: "amber", action: "후속 설계" },
+              { name: "파일 도착", status: "준비 중", tone: "amber", action: "후속 설계" },
+              { name: "큐 적재", status: "준비 중", tone: "amber", action: "후속 설계" },
             ]}
           />
           <NotificationRoutingReadiness
@@ -1183,7 +1188,7 @@ function BotPoolCapacityPanel({
       {isError ? (
         <div className="ops-alert-empty" role="status">
           <strong>봇 풀 상태를 불러오지 못했습니다.</strong>
-          <span className="subtle">worker, lease, run queue 조회 권한과 API 상태를 확인하세요.</span>
+          <span className="subtle">잠시 후 다시 시도하거나, 권한·연결 상태를 운영 담당자에게 문의하세요.</span>
         </div>
       ) : isLoading ? (
         <div className="ops-alert-empty" role="status">
@@ -1274,19 +1279,24 @@ function opsAlertActionLabel(alert: OpsAlertItem): string {
       return "예약 이력 보기";
     case "dlq":
       return "재처리 대기 보기";
+    default:
+      return "자세히 보기";
   }
 }
 
 function StatusColumn({
   title,
   rows,
+  caption,
 }: {
   title: string;
   rows: readonly { name: string; status: string; tone: "green" | "blue" | "amber" | "red" | "muted"; action: string }[];
+  caption?: string;
 }): JSX.Element {
   return (
     <div className="ops-column">
       <h3>{title}</h3>
+      {caption !== undefined && <p className="subtle">{caption}</p>}
       <ul>
         {rows.map((row) => (
           <li key={row.name}>
