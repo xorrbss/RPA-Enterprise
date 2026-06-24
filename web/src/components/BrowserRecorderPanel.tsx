@@ -151,24 +151,10 @@ function idempotencyKey(): string {
   );
 }
 
-function appendUniqueSessions(prev: readonly BrowserRecordingSession[], next: readonly BrowserRecordingSession[]): BrowserRecordingSession[] {
-  const seen = new Set(prev.map((item) => item.recording_session_id));
-  return [...prev, ...next.filter((item) => !seen.has(item.recording_session_id))];
-}
-
-function appendUniqueBrowserSites(prev: readonly SiteItem[], next: readonly SiteItem[]): SiteItem[] {
-  const seen = new Set(prev.map((item) => item.site_profile_id));
-  return [...prev, ...next.filter((item) => !seen.has(item.site_profile_id))];
-}
-
-function appendUniqueEvents(prev: readonly BrowserRecordingEvent[], next: readonly BrowserRecordingEvent[]): BrowserRecordingEvent[] {
-  const seen = new Set(prev.map((item) => item.event_id));
-  return [...prev, ...next.filter((item) => !seen.has(item.event_id))];
-}
-
-function appendUniqueSiteElements(prev: readonly SiteElementItem[], next: readonly SiteElementItem[]): SiteElementItem[] {
-  const seen = new Set(prev.map((item) => item.element_id));
-  return [...prev, ...next.filter((item) => !seen.has(item.element_id))];
+// 커서 페이지네이션 누적 — key 별로 중복 제거하며 append(이전 4개의 동일 구현을 generic 하나로 통합).
+function appendUniqueBy<T>(prev: readonly T[], next: readonly T[], keyOf: (item: T) => string): T[] {
+  const seen = new Set(prev.map(keyOf));
+  return [...prev, ...next.filter((item) => !seen.has(keyOf(item)))];
 }
 
 export function BrowserRecorderPanel(): JSX.Element {
@@ -224,7 +210,7 @@ export function BrowserRecorderPanel(): JSX.Element {
 
   useEffect(() => {
     if (sitesQuery.data === undefined) return;
-    setLoadedBrowserSites((prev) => browserSiteCursor === null ? [...sitesQuery.data.items] : appendUniqueBrowserSites(prev, sitesQuery.data.items));
+    setLoadedBrowserSites((prev) => browserSiteCursor === null ? [...sitesQuery.data.items] : appendUniqueBy(prev, sitesQuery.data.items, (i) => i.site_profile_id));
     setNextBrowserSiteCursor(sitesQuery.data.next_cursor);
   }, [browserSiteCursor, sitesQuery.data]);
 
@@ -258,7 +244,7 @@ export function BrowserRecorderPanel(): JSX.Element {
 
   useEffect(() => {
     if (recordingsQuery.data === undefined) return;
-    setLoadedRecordings((prev) => recordingCursor === null ? [...recordingsQuery.data.items] : appendUniqueSessions(prev, recordingsQuery.data.items));
+    setLoadedRecordings((prev) => recordingCursor === null ? [...recordingsQuery.data.items] : appendUniqueBy(prev, recordingsQuery.data.items, (i) => i.recording_session_id));
     setNextRecordingCursor(recordingsQuery.data.next_cursor);
   }, [recordingCursor, recordingsQuery.data]);
 
@@ -325,7 +311,7 @@ export function BrowserRecorderPanel(): JSX.Element {
 
   useEffect(() => {
     if (eventsQuery.data === undefined) return;
-    setLoadedEvents((prev) => eventCursor === null ? [...eventsQuery.data.items] : appendUniqueEvents(prev, eventsQuery.data.items));
+    setLoadedEvents((prev) => eventCursor === null ? [...eventsQuery.data.items] : appendUniqueBy(prev, eventsQuery.data.items, (i) => i.event_id));
     setNextEventCursor(eventsQuery.data.next_cursor);
   }, [eventCursor, eventsQuery.data]);
 
@@ -337,7 +323,7 @@ export function BrowserRecorderPanel(): JSX.Element {
 
   useEffect(() => {
     if (siteElementsQuery.data === undefined) return;
-    setLoadedRepositoryElements((prev) => repositoryElementCursor === null ? [...siteElementsQuery.data.items] : appendUniqueSiteElements(prev, siteElementsQuery.data.items));
+    setLoadedRepositoryElements((prev) => repositoryElementCursor === null ? [...siteElementsQuery.data.items] : appendUniqueBy(prev, siteElementsQuery.data.items, (i) => i.element_id));
     setNextRepositoryElementCursor(siteElementsQuery.data.next_cursor);
   }, [repositoryElementCursor, siteElementsQuery.data]);
 
