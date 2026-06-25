@@ -36,6 +36,7 @@ export function GatewayView(): JSX.Element {
   }, [policies, query.data, selectedModel]);
 
   return (
+    <>
     <section className="panel">
       <div className="panel-head">
         <h2>AI 모델 정책</h2>
@@ -59,6 +60,78 @@ export function GatewayView(): JSX.Element {
                 <GatewayCreateForm />
               </div>
             )}
+          </>
+        )}
+      </div>
+    </section>
+      <GatewayUsagePanel />
+    </>
+  );
+}
+
+function formatUsageTokens(n: number | null): string {
+  return n === null ? "—" : n.toLocaleString("ko-KR");
+}
+
+function formatUsageCost(cost: string | null): string {
+  return cost === null ? "—" : `$${cost}`;
+}
+
+// AI 사용량·비용 패널 — stagehand_calls 모델별 집계(GET /v1/gateway/call-summary). 데이터 미도착/오류/빈 호출을
+// 정직 구분(단정 금지). 토큰/비용 null 은 '—'(0 단정 금지).
+function GatewayUsagePanel(): JSX.Element {
+  const api = useApiClient();
+  const query = useQuery({
+    queryKey: ["gateway-call-summary"],
+    queryFn: () => api.getGatewayCallSummary(30),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+  const data = query.data;
+  // by_model 이 배열이 아니면(미도착/계약 위반 응답) 빈 목록으로 — 패널 크래시 대신 정직한 빈 상태(white-screen 방지).
+  const byModel = Array.isArray(data?.by_model) ? data.by_model : [];
+  return (
+    <section className="panel" aria-label="AI 사용량·비용">
+      <div className="panel-head">
+        <h2>사용량·비용</h2>
+        {data !== undefined && <span className="subtle">최근 {data.window_days}일</span>}
+      </div>
+      <div className="panel-body" style={{ padding: 16 }}>
+        {query.isLoading ? (
+          <Loading />
+        ) : query.isError ? (
+          <ErrorState message={errorLabel(query.error)} onRetry={() => void query.refetch()} />
+        ) : data === undefined || byModel.length === 0 ? (
+          <p className="empty-state">기간 내 AI 호출 기록이 없습니다.</p>
+        ) : (
+          <>
+            <p className="subtle" style={{ marginTop: 0 }}>
+              전체 {data.total.calls.toLocaleString("ko-KR")}회 · 입력 {formatUsageTokens(data.total.input_tokens)} · 출력 {formatUsageTokens(data.total.output_tokens)} · 비용 {formatUsageCost(data.total.cost)}
+            </p>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>AI 모델</th>
+                    <th>호출</th>
+                    <th>입력 토큰</th>
+                    <th>출력 토큰</th>
+                    <th>비용</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byModel.map((m) => (
+                    <tr key={m.model}>
+                      <td>{m.model}</td>
+                      <td>{m.calls.toLocaleString("ko-KR")}</td>
+                      <td>{formatUsageTokens(m.input_tokens)}</td>
+                      <td>{formatUsageTokens(m.output_tokens)}</td>
+                      <td>{formatUsageCost(m.cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </>
         )}
       </div>

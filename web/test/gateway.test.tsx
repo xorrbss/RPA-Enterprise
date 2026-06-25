@@ -173,4 +173,37 @@ describe("LLM 게이트웨이 정책 — 목록·기본·CRUD", () => {
     expect(screen.queryByText(/미지정\s*토큰/)).toBeNull();
     expect(screen.queryByText(/미지정\s*USD/)).toBeNull();
   });
+
+  test("사용량·비용 패널: 모델별 호출/토큰/비용 + 전체 합계", async () => {
+    renderApp(
+      fakeClient({
+        listGatewayPolicies: async () => ({ items: POLICIES, next_cursor: null }),
+        getGatewayCallSummary: async () => ({
+          window_days: 30,
+          total: { calls: 3, input_tokens: 150, output_tokens: 30, cost: "0.001500" },
+          by_model: [
+            { model: "gpt-4o-mini", calls: 2, input_tokens: 150, output_tokens: 30, cost: "0.001500" },
+            { model: "claude-haiku", calls: 1, input_tokens: null, output_tokens: null, cost: null },
+          ],
+        }),
+      }),
+    );
+    location.hash = "#llmGateway";
+    const panel = await screen.findByRole("region", { name: "AI 사용량·비용" });
+    await waitFor(() => expect(panel).toHaveTextContent("$0.001500")); // gpt-4o-mini 비용
+    expect(panel).toHaveTextContent("전체 3회"); // 전체 합계
+    expect(panel).toHaveTextContent("claude-haiku");
+    expect(panel).toHaveTextContent("—"); // NULL 토큰/비용은 '—'(0 단정 금지)
+  });
+
+  test("사용량·비용 패널: 호출 0건 → 정직 빈 표기", async () => {
+    renderApp(
+      fakeClient({
+        listGatewayPolicies: async () => ({ items: POLICIES, next_cursor: null }),
+        getGatewayCallSummary: async () => ({ window_days: 30, total: { calls: 0, input_tokens: null, output_tokens: null, cost: null }, by_model: [] }),
+      }),
+    );
+    location.hash = "#llmGateway";
+    expect(await screen.findByText("기간 내 AI 호출 기록이 없습니다.")).toBeInTheDocument();
+  });
 });
