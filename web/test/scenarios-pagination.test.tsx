@@ -60,4 +60,19 @@ describe("Scenario studio pagination", () => {
     await waitFor(() => expect(calls.some((c) => c.cursor === "scenario-cursor-2")).toBe(true));
     expect(await screen.findByText("second page scenario")).toBeInTheDocument();
   });
+
+  test("자동화 목록이 식별값(scenario_id)을 노출한다 — 자동화 검사 화면이 가리키는 출처", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "sc-7e3f0011", name: "주문 수집", version: 1, latest_version_id: "ver-1" }],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    const idCell = await screen.findByText("sc-7e3f0011");
+    expect(idCell.tagName).toBe("CODE"); // 선택·복사 가능한 식별값
+  });
 });

@@ -72,6 +72,9 @@ export function ScenariosView(): JSX.Element {
         }
         columns={[
           { header: "이름", render: (r) => r.name },
+          // 식별값(scenario_id) 노출 — 자동화 검사 화면이 "자동화 목록에서 복사한 식별값"을 요구하므로
+          // 그 출처를 실제로 보여준다(개발자도구를 열어야 하던 dead-end 해소). code 요소라 선택·복사 가능.
+          { header: "식별값", render: (r) => <code className="subtle">{r.scenario_id}</code> },
           { header: "버전", render: (r) => `v${r.version}` },
           {
             header: "운영",

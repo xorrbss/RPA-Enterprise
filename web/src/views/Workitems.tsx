@@ -21,6 +21,12 @@ function trackingTitle(id: string): string {
   return `추적 번호 ${id}`;
 }
 
+// 추적번호 짧은 표기 — 호버(title)에만 숨기지 않고 가시 셀에 앞 8자리를 노출해
+// 운영자가 호버 없이 항목을 구두/티켓으로 참조할 수 있게 한다(전체 번호는 title 유지).
+function shortRef(id: string): string {
+  return `#${id.slice(0, 8)}`;
+}
+
 function dedupeTrackingTitle(id: string): string {
   return `중복 방지 추적 번호 ${id}`;
 }
@@ -99,7 +105,7 @@ export function WorkitemsView(): JSX.Element {
         rowKey={(r) => r.dead_letter_id}
         emptyMessage="재처리 대기 중인 작업 항목이 없습니다."
         columns={[
-          { header: "실패 항목", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>작업 항목 재처리 대기</span> },
+          { header: "실패 항목", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>작업 항목 재처리 대기 <code>{shortRef(r.dead_letter_id)}</code></span> },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
           { header: "원본 작업", render: (r) => (r.source_id ? <span title={trackingTitle(r.source_id)}>원본 작업 연결됨</span> : "—") },
           // reason_code는 운영자 라벨 우선 표시, 원문 코드는 title로 보존한다. 부재 시 "—"(조용한 공백 금지).
@@ -152,7 +158,7 @@ export function WorkitemsView(): JSX.Element {
         rowKey={(r) => r.dead_letter_id}
         emptyMessage="재처리 대기 중인 외부 전달 실패가 없습니다."
         columns={[
-          { header: "전달 실패", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>외부 전달 재시도 대상</span> },
+          { header: "전달 실패", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>외부 전달 재시도 대상 <code>{shortRef(r.dead_letter_id)}</code></span> },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
           { header: "중복 방지", render: (r) => (r.sink_idempotency_key ? <span title={dedupeTrackingTitle(r.sink_idempotency_key)}>중복 방지 적용됨</span> : "적용되지 않음") },
           {
