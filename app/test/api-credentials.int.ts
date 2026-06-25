@@ -131,7 +131,7 @@ async function main(): Promise<void> {
     const operator = await mint(["operator"], TENANT_A, "operator-a");
     const adminB = await mint(["admin"], TENANT_B, "admin-b");
 
-    const post = (token: string, key: string | undefined, body: unknown) =>
+    const post = (token: string, key: string | undefined, body: Record<string, unknown>) =>
       app.inject({
         method: "POST",
         url: "/v1/credentials",
