@@ -1,8 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import type { Pool } from "pg";
 
 import { safeSerialize } from "../../../security/compliance-scaffold";
+import { computeAuditHash } from "./audit-record-hash";
 import {
   SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
   SECURITY_AUDIT_REQUIRED_ACTIONS,
@@ -59,7 +60,22 @@ export class PgDurableSecurityAuditDecisionWriter implements DurableSecurityAudi
           throw new Error(`invalid next audit sequence for tenant ${input.tenantId}`);
         }
         const previousHash = previousRow?.hash ?? "GENESIS";
-        const hash = hashAuditRecord(input, sequence, previousHash, payloadJson);
+        // 영속 컬럼만으로 hash 계산(공유 computeAuditHash) — 저장 행에서 재계산 가능(verifyAuditChain). resource 는 비영속이라 제외.
+        const hash = computeAuditHash({
+          tenantId: input.tenantId,
+          sequenceNo: sequence,
+          actor: input.actor,
+          action: input.action,
+          outcome: input.outcome,
+          reason: input.reason,
+          correlationId: input.correlationId,
+          idempotencyKey: input.idempotencyKey,
+          occurredAt: input.occurredAt,
+          retentionUntil: input.retentionUntil,
+          payloadSchemaRef: input.payloadSchemaRef,
+          payload: JSON.parse(payloadJson),
+          previousHash,
+        });
         await client.query(
           `INSERT INTO audit_log
              (id, tenant_id, sequence_no, actor, action, outcome, reason,
@@ -148,36 +164,3 @@ function isLeapYear(year: number): boolean {
   return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
 }
 
-function hashAuditRecord(
-  input: SecurityAuditDecisionAppendInput,
-  sequence: number,
-  previousHash: string,
-  payloadJson: string,
-): string {
-  const canonical = canonicalize({
-    tenantId: input.tenantId,
-    sequence,
-    actor: input.actor,
-    action: input.action,
-    outcome: input.outcome,
-    resource: input.resource,
-    reason: input.reason,
-    correlationId: input.correlationId,
-    idempotencyKey: input.idempotencyKey,
-    occurredAt: input.occurredAt,
-    retentionUntil: input.retentionUntil,
-    payloadSchemaRef: input.payloadSchemaRef,
-    payload: JSON.parse(payloadJson),
-    previousHash,
-  });
-  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
-}
-
-function canonicalize(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item)).join(",")}]`;
-  const entries = Object.entries(value as Readonly<Record<string, unknown>>)
-    .filter(([, child]) => child !== undefined)
-    .sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${canonicalize(child)}`).join(",")}}`;
-}

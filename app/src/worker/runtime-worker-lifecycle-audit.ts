@@ -1,7 +1,8 @@
 // runtime-worker.ts 에서 추출 — artifact-lifecycle BYPASSRLS 운영감사 + 해시체인 append-only 기록(동작 무변경).
 // 매핑·검증(순수)은 runtime-worker-artifact-lifecycle.ts. 본 모듈은 async DB(client.query) + append-only 감사 해시체인(createHash).
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { computeAuditHash } from "../api/audit-record-hash";
 import {
   SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
   checkBypassRlsUse,
@@ -114,16 +115,20 @@ export async function appendLifecycleAuditWithClient(client: pg.PoolClient, inpu
     throw new Error(`RuntimeWorker: invalid lifecycle audit sequence for tenant ${input.tenantId}`);
   }
   const previousHash = previousRow?.hash ?? "GENESIS";
-  const hash = hashLifecycleAuditRecord({
+  // 공유 computeAuditHash(영속 컬럼만) — security-audit writer 와 동일 canonical 로 단일 verifyAuditChain 이 양쪽 재계산 가능.
+  const hash = computeAuditHash({
     tenantId: input.tenantId,
-    sequence,
+    sequenceNo: sequence,
     actor,
+    action: "bypassrls.use",
+    outcome: "allow",
     reason: input.reasonCode,
     correlationId: input.correlationId,
     idempotencyKey,
     occurredAt: occurredAtIso,
     retentionUntil: retentionUntilIso,
-    payloadJson,
+    payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+    payload: JSON.parse(payloadJson),
     previousHash,
   });
 
@@ -154,41 +159,3 @@ export async function appendLifecycleAuditWithClient(client: pg.PoolClient, inpu
   );
 }
 
-function hashLifecycleAuditRecord(input: {
-  tenantId: string;
-  sequence: number;
-  actor: Readonly<Record<string, string>>;
-  reason: string;
-  correlationId: string;
-  idempotencyKey: string;
-  occurredAt: string;
-  retentionUntil: string;
-  payloadJson: string;
-  previousHash: string;
-}): string {
-  const canonical = canonicalize({
-    tenantId: input.tenantId,
-    sequence: input.sequence,
-    actor: input.actor,
-    action: "bypassrls.use",
-    outcome: "allow",
-    reason: input.reason,
-    correlationId: input.correlationId,
-    idempotencyKey: input.idempotencyKey,
-    occurredAt: input.occurredAt,
-    retentionUntil: input.retentionUntil,
-    payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
-    payload: JSON.parse(input.payloadJson) as unknown,
-    previousHash: input.previousHash,
-  });
-  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
-}
-
-function canonicalize(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item)).join(",")}]`;
-  const entries = Object.entries(value as Readonly<Record<string, unknown>>)
-    .filter(([, child]) => child !== undefined)
-    .sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${canonicalize(child)}`).join(",")}}`;
-}
