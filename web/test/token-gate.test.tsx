@@ -68,8 +68,9 @@ describe("TokenGate — 접속/온보딩 + 세션 만료", () => {
     expect(localStorage.getItem(KEY)).toBe("eyJ.aaa.bbb");
   });
 
-  test("OIDC 리디렉션 토큰을 자동 저장하고 URL에서 제거", async () => {
-    window.history.replaceState(null, "", "/?id_token=oidc.jwt.token#security");
+  test("OIDC 리디렉션 토큰(fragment)을 자동 저장하고 URL에서 제거", async () => {
+    // #C1: 토큰은 fragment(hash)로만 수용(쿼리스트링 누출 차단). 소비 후 해시에서 토큰 스크럽.
+    window.history.replaceState(null, "", "/#id_token=oidc.jwt.token");
     render(
       <TokenGate>
         <div>APP</div>
@@ -77,8 +78,18 @@ describe("TokenGate — 접속/온보딩 + 세션 만료", () => {
     );
     expect(await screen.findByText("APP")).toBeInTheDocument();
     expect(localStorage.getItem(KEY)).toBe("oidc.jwt.token");
-    expect(window.location.search).not.toContain("id_token");
-    expect(window.location.hash).toBe("#security");
+    expect(window.location.hash).toBe("");
+  });
+
+  test("쿼리스트링 토큰은 거부 — 게이트 유지·미저장(#C1 access-log 누출 방지)", () => {
+    window.history.replaceState(null, "", "/?id_token=oidc.jwt.token");
+    render(
+      <TokenGate>
+        <div>APP</div>
+      </TokenGate>,
+    );
+    expect(screen.queryByText("APP")).toBeNull(); // 쿼리 토큰 미수용 → 미입장
+    expect(localStorage.getItem(KEY)).toBeNull(); // 미저장
   });
 
   test("세션 만료(notifyAuthExpired) → 토큰 제거 + 만료 안내 + 게이트 복귀(리로드 없이)", () => {

@@ -121,8 +121,8 @@ function oidcLoginUrl(): string | null {
 }
 
 function readRedirectToken(): string | null {
-  const fromSearch = tokenFromParams(new URLSearchParams(window.location.search));
-  if (fromSearch !== null) return fromSearch;
+  // 보안(적대감사 #C1): 리디렉션 토큰은 **fragment(hash)만** 수용한다. 쿼리스트링 토큰은 GET request-line 으로 서버/프록시
+  //   access-log·브라우저 히스토리에 평문 기록되고(RFC6750 §5.3·OWASP), URL 스크럽은 초기 GET 이후라 이미 늦다 → 쿼리 분기 제거.
   const rawHash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
   if (rawHash.length === 0) return null;
   return tokenFromParams(new URLSearchParams(rawHash));

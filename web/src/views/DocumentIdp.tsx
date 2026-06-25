@@ -17,7 +17,7 @@ import {
   type RunArtifactItem,
 } from "../api/types";
 import { useListView } from "../api/useListView";
-import { mergeParams, navigate, useHashParam } from "../router";
+import { mergeParams, navigate, useHashIdParam } from "../router";
 import { errorLabel } from "../components/badges";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 
@@ -75,9 +75,11 @@ function listRunArtifactsForPicker(api: ApiClient, runId: string): Promise<Picke
 export function DocumentIdpView(): JSX.Element {
   const api = useApiClient();
   const queryClient = useQueryClient();
-  const selectedId = useHashParam("doc");
-  const runParam = useHashParam("run");
-  const artifactParam = useHashParam("artifact");
+  // id 딥링크 파라미터는 useHashIdParam(path-traversal 가드) — doc/run/artifact 가 client.ts path 보간으로 흐르므로
+  //   조작 해시(`doc=../../gateway/policy`)가 다른 제어평면 엔드포인트를 인증 GET 하는 것 차단(적대감사 #C2).
+  const selectedId = useHashIdParam("doc");
+  const runParam = useHashIdParam("run");
+  const artifactParam = useHashIdParam("artifact");
   const [status, setStatus] = useState<"" | DocumentJobStatus>("");
   const [sourceRunId, setSourceRunId] = useState<string>(runParam ?? "");
   const [sourceArtifactId, setSourceArtifactId] = useState<string>(artifactParam ?? "");
