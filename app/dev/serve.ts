@@ -46,6 +46,7 @@ import { createPool, withTenantTx } from "../src/db/pool";
 import { FsObjectStore } from "../src/gateway/pg-gateway-artifact-sink";
 import { startRunLoop, type RunLoop } from "./run-loop";
 import { startCaptureLoop, type CaptureLoop } from "./capture-loop";
+import { startRecordingLoop, type RecordingLoop } from "./recording-loop";
 import { DevVisibleGatewayArtifactSink } from "./dev-gateway-artifact-sink";
 import { seed } from "./seed";
 import { DEV_PRINCIPAL_SUBJECT, PORT, TENANT, FIXTURE_PATH, LOGIN_FIXTURE_PATH } from "./dev-constants";
@@ -342,6 +343,9 @@ async function main(): Promise<void> {
   );
   // dev 캡처 폴러: 콘솔 '세션 등록'(capture_sessions launching)을 폴링해 별도 headful 로그인창을 띄운다(run-loop 의 공유 세션과 무관).
   const captureLoop: CaptureLoop | null = await startCaptureLoop(pool, TENANT);
+  // dev 녹화 폴러: 콘솔 '브라우저 녹화로 만들기'의 녹화 시작(status=recording)을 폴링해 headful Chrome 을 띄워 DOM 동작을 캡처한다
+  //   (prod 는 운영자 PC 도우미 CLI 가 담당 — 웹은 로컬 Chrome 직접 실행 불가. dev 는 세션 등록과 대칭으로 서버가 대신 띄운다).
+  const recordingLoop: RecordingLoop | null = await startRecordingLoop(pool, TENANT);
   const triggerSchedulerTimer = setInterval(() => {
     void processDueRunTriggers(pool, { tenantIds: [TENANT], enqueuer: noopEnqueuer, batchLimit: 10 })
       .then((stats) => {
@@ -361,6 +365,13 @@ async function main(): Promise<void> {
       if (captureLoop !== null) {
         try {
           await captureLoop.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (recordingLoop !== null) {
+        try {
+          await recordingLoop.stop();
         } catch {
           /* ignore */
         }
