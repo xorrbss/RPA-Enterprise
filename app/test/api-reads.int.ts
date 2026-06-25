@@ -586,6 +586,19 @@ async function main(): Promise<void> {
         Array.isArray(detail.json().artifact_refs) &&
         detail.json().result === null,
         JSON.stringify(detail.json()));
+      // 이관 사유 read 투영(escalate가 영속한 escalation_reason/by/at를 GET·목록이 노출해야 웹 상세가 표시 가능).
+      await withTenantTx(pool, TENANT_A, (c) =>
+        c.query(`UPDATE human_tasks SET escalation_reason='상위 검토 필요', escalated_by='rv', escalated_at=now() WHERE id=$1::uuid`, [HT_A2]));
+      const escDetail = await get(`/v1/human-tasks/${HT_A2}`);
+      check("getHumanTask projects escalation_reason/by/at",
+        escDetail.json().escalation_reason === "상위 검토 필요" &&
+        escDetail.json().escalated_by === "rv" &&
+        typeof escDetail.json().escalated_at === "string",
+        JSON.stringify(escDetail.json()));
+      const escList = await get(`/v1/human-tasks?assignee=${ASSIGNEE}`);
+      check("listHumanTasks projects escalation_reason",
+        escList.json().items.find((t: { human_task_id: string; escalation_reason?: string }) => t.human_task_id === HT_A2)?.escalation_reason === "상위 검토 필요",
+        JSON.stringify(escList.json()));
       const absent = await get(`/v1/human-tasks/${ABSENT}`);
       check("absent human task → 404", absent.statusCode === 404 && absent.json().code === "RESOURCE_NOT_FOUND", absent.body);
       const crossHt = await get(`/v1/human-tasks/${HT_A2}`, viewerB);
