@@ -42,6 +42,30 @@ function runParamStorage(): Storage | null {
   return window.localStorage;
 }
 
+// model_required(다정책+기본없음) 테넌트에서 마지막으로 성공 실행에 쓴 AI 모델을 기억(테넌트 단위 정책이라 전역 키).
+// model_required 가 실제로 걸렸을 때만 pre-fill 하므로, 모델이 불필요한 실행에 stale 모델이 적용되지 않는다.
+const RUN_MODEL_MEMORY_KEY = "rpa.run.last_model";
+
+function readLastRunModel(): string {
+  const storage = runParamStorage();
+  if (storage === null) return "";
+  try {
+    return storage.getItem(RUN_MODEL_MEMORY_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeLastRunModel(model: string): void {
+  const storage = runParamStorage();
+  if (storage === null || model.length === 0) return;
+  try {
+    storage.setItem(RUN_MODEL_MEMORY_KEY, model);
+  } catch {
+    // 브라우저 저장소가 막힌 환경(시크릿/하드닝)에서도 실행은 계속되어야 한다.
+  }
+}
+
 function readRememberedRunParams(scenarioId: string): Record<string, string> {
   const storage = runParamStorage();
   if (storage === null) return {};
@@ -158,6 +182,8 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
     },
     onSuccess: (result) => {
       writeRememberedRunParams(scenario.scenario_id, fields, pendingRememberedValues.current);
+      writeLastRunModel(model.trim()); // 성공한 실행의 모델만 기억(실패 모델 미기억)
+
       setRememberedValues(readRememberedRunParams(scenario.scenario_id));
       setMsg(null);
       setOpen(false);
@@ -174,6 +200,11 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
       const mr = e instanceof ApiError && e.code === "IR_SCHEMA_INVALID" ? modelRequiredOf(e.body) : null;
       if (mr !== null) {
         setModelRequired(mr);
+        // 마지막으로 쓴 모델을 pre-fill(확인은 여전히 필요 — 정책 조회로 유효성 재확인, 맹목 직타 아님).
+        if (model.trim().length === 0) {
+          const last = readLastRunModel();
+          if (last.length > 0) setModel(last);
+        }
         setMsg({ tone: "red", text: `AI 모델을 지정해야 합니다 (정책 ${mr.available}개, 기본 미지정). AI 모델을 선택하고 확인한 뒤 다시 실행하세요.` });
       } else {
         setMsg({ tone: "red", text: errorLabel(e) });
