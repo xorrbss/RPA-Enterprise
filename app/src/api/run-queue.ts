@@ -11,6 +11,7 @@ import type { PoolClient } from "pg";
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import type { RuntimeJobEnqueuePort } from "../runtime/executor-ports";
 import { runtimeJobTaskIdentifier } from "../worker/graphile-runner";
+import { poolFlagFor } from "../worker/pool-forbidden-flags";
 
 export interface RunEnqueueInput {
   tenantId: string;
@@ -67,6 +68,24 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
     ]);
   }
 
+  /**
+   * DG-3: run 을 구동하는 job(run_claim/run_resume)을 테넌트의 워커 풀 배정에 따라 `pool:<key>` flag 와 함께
+   * 인큐한다. 배정 없으면 'default'(모든 미선언 워커). worker_pool_assignments 는 RLS — 호출측 tenant tx 전제
+   * (run create/resume 는 모두 withTenantTx). Graphile 워커의 forbiddenFlags 가 미서비스 풀 job 을 거른다.
+   */
+  private async enqueueDrivingJobWithPoolFlag(client: PoolClient, job: RuntimeWorkerJob, tenantId: string): Promise<void> {
+    const assignment = await client.query<{ pool_key: string }>(
+      `SELECT pool_key FROM worker_pool_assignments WHERE tenant_id = $1::uuid`,
+      [tenantId],
+    );
+    const poolKey = assignment.rows[0]?.pool_key ?? "default";
+    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json, flags := $3::text[])`, [
+      runtimeJobTaskIdentifier(job),
+      JSON.stringify(job),
+      [poolFlagFor(poolKey)],
+    ]);
+  }
+
   async enqueueRunClaim(client: PoolClient, input: RunEnqueueInput): Promise<void> {
     const job: RuntimeWorkerJob = {
       kind: "run_claim",
@@ -74,7 +93,7 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     };
-    await this.enqueueRuntimeJob(client, job);
+    await this.enqueueDrivingJobWithPoolFlag(client, job, input.tenantId);
   }
 
   async enqueueRunAbort(client: PoolClient, input: RunEnqueueInput): Promise<void> {
@@ -119,6 +138,6 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     };
-    await this.enqueueRuntimeJob(client, job);
+    await this.enqueueDrivingJobWithPoolFlag(client, job, input.tenantId);
   }
 }

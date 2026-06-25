@@ -164,6 +164,25 @@ CREATE TABLE workers (
 CREATE INDEX idx_workers_heartbeat ON workers (heartbeat_at) WHERE status = 'active';
 -- 참고: runs.worker_id·browser_leases.owner_worker_id는 workers.id를 논리 참조(인프라/테넌트 도메인 분리로 hard FK는 선택).
 
+-- worker_pools (DG-3) — 전용 워커 풀 레지스트리. 인프라 도메인(tenant_id 없음, workers 처럼 RLS 제외):
+--   워커가 forbiddenFlags 계산 시 "등록된 풀 키 전체"를 읽어야 하므로 테넌트 비종속이어야 한다.
+--   'default'는 미배정 런의 암묵 풀(예약어)이라 레지스트리에 못 넣는다. pool_key 는 Graphile job flag(pool:<key>)
+--   문자열 구성요소이므로 소문자 영숫자+_- 로 제한.
+CREATE TABLE worker_pools (
+  pool_key    text        PRIMARY KEY
+                CHECK (pool_key ~ '^[a-z0-9][a-z0-9_-]{0,62}$' AND pool_key <> 'default'),
+  description text,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- worker_pool_assignments (DG-3) — 테넌트→풀 배정(테넌트당 1풀). RLS(테넌트 스코프). 배정 풀은 레지스트리에 존재해야 함.
+--   미배정 테넌트의 런은 'default' 풀(모든 미선언 워커 서비스). enqueue 가 배정을 읽어 run_claim/run_resume job 에 flag 부착.
+CREATE TABLE worker_pool_assignments (
+  tenant_id   uuid        PRIMARY KEY,
+  pool_key    text        NOT NULL REFERENCES worker_pools(pool_key),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- browser_identities — 브라우저 지문/정체성. version은 action_plan_cache family 키 구성요소.
 CREATE TABLE browser_identities (
   id              uuid        PRIMARY KEY,
@@ -1291,7 +1310,8 @@ BEGIN
     'stagehand_calls',
     'scenario_generation_llm_calls',
     'audit_log',
-    'scenario_promotion_requests'
+    'scenario_promotion_requests',
+    'worker_pool_assignments'
   ]
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tenant_table);
