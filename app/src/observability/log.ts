@@ -22,9 +22,22 @@ export interface WorkerLogFields {
   readonly [key: string]: unknown;
 }
 
-/** 예외에서 message 문자열만 추출(원 예외 객체/스택은 싣지 않음 — 기존 redaction 자세 보존). */
+/**
+ * 에러/로그 텍스트의 URL 쿼리스트링·프래그먼트를 마스킹한다. navigate(page.goto) 실패의 원 Playwright 메시지는
+ * 대상 URL 전체(`...at https://host/path?token=...`)를 담는데, url_ref 가 SSO 티켓·매직링크·세션ID 를 쿼리/프래그먼트로
+ * 운반할 수 있어 평문 비밀이 로그/span(redaction 미적용 싱크)으로 샌다. scheme://host/path 진단정보는 보존하고
+ * `?`/`#` 이후만 마스킹한다(조용한 누출 금지, redaction 경계를 텔레메트리 경계까지 확장).
+ */
+const URL_SECRET_RE = /(https?:\/\/[^\s?#]+)(\?[^\s#]*)?(#[^\s]*)?/gi;
+export function redactUrlSecrets(text: string): string {
+  return text.replace(URL_SECRET_RE, (_m, base: string, qs?: string, frag?: string) =>
+    base + (qs ? "?<redacted>" : "") + (frag ? "#<redacted>" : ""),
+  );
+}
+
+/** 예외에서 message 문자열만 추출(원 예외 객체/스택은 싣지 않음) + URL 쿼리/프래그먼트 비밀 마스킹. */
 export function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return redactUrlSecrets(err instanceof Error ? err.message : String(err));
 }
 
 /** 구조화 JSON 한 줄을 level 별 console 싱크로 방출(main.ts 패턴과 동형). */
