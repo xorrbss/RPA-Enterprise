@@ -43,6 +43,7 @@ import { registerAuthReadinessRoutes } from "./auth-readiness";
 import { registerOpsAlertRoutes } from "./ops-alerts";
 import { registerOpsHealthRoutes } from "./ops-health";
 import { registerBotPoolRoutes } from "./bot-pools";
+import { registerConcurrencyPolicyRoutes } from "./concurrency-policies";
 import { registerRunTriggerRoutes } from "./run-triggers";
 import { registerWebhookTriggerRoutes } from "./webhook-triggers";
 import { registerSecurity } from "./security";
@@ -230,6 +231,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerOpsAlertRoutes(app, deps);
   registerOpsHealthRoutes(app, deps);
   registerBotPoolRoutes(app, deps);
+  registerConcurrencyPolicyRoutes(app, deps);
 
   return app;
 }
