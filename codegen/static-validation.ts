@@ -13,8 +13,14 @@ import type {
 import {
   compileIrelExpression,
   validateParamsSchemaForIrel,
+  IREL_DECISION_VALUES,
 } from "./irel-compile";
-import type { IRELCompileDiagnostic, IRELNode } from "./irel-compile";
+import type {
+  HumanTaskNodeMeta,
+  IRELCompileDiagnostic,
+  IRELNode,
+  IRELTypeAtom,
+} from "./irel-compile";
 
 const END_NO_DATA_TARGET = "@end_no_data";
 const RETURNING_RESERVED_HANDLERS = new Set(["@challenge", "@human_task"]);
@@ -150,6 +156,7 @@ export function compileScenarioStatic(
   }
 
   const graph = buildGraph(ir);
+  const humanTaskNodes = buildHumanTaskNodes(ir);
 
   for (const [nodeId, node] of Object.entries(ir.nodes)) {
     validateTargets(nodeId, node, nodeIds, errors);
@@ -159,8 +166,11 @@ export function compileScenarioStatic(
     validateFallbackChain(nodeId, node, errors);
     validateFallbackIdempotency(nodeId, node, ir, errors);
     validateValuePaths(nodeId, node, errors);
-    const compiledNode = validateExpressions(nodeId, node, ir, nodeIds, graph, errors);
-    if (compiledNode !== undefined) compiledNodes[nodeId] = compiledNode;
+    const compiledNode = validateExpressions(nodeId, node, ir, nodeIds, graph, humanTaskNodes, errors);
+    if (compiledNode !== undefined) {
+      compiledNodes[nodeId] = compiledNode;
+      validateDecisionBranchCompleteness(nodeId, compiledNode, humanTaskNodes, warnings);
+    }
     validateBrowserProductActions(nodeId, node, errors);
     validateSignedCommands(nodeId, node, signedCommandRefs, errors);
     validateLoopContract(nodeId, node, errors);
@@ -338,6 +348,7 @@ function validateExpressions(
   ir: IRScenario,
   nodeIds: ReadonlySet<string>,
   graph: ReadonlyMap<string, readonly string[]>,
+  humanTaskNodes: ReadonlyMap<string, HumanTaskNodeMeta>,
   errors: ValidationIssue[],
 ): CompiledNodeAst | undefined {
   const compiled: {
@@ -350,7 +361,7 @@ function validateExpressions(
   const on: CompiledOnBranchAst[] = [];
   for (const branch of onBranchesOf(node)) {
     if (typeof branch.when !== "string") continue;
-    const when = compileBooleanExpression(nodeId, branch.when, ir, nodeIds, graph, errors);
+    const when = compileBooleanExpression(nodeId, branch.when, ir, nodeIds, graph, humanTaskNodes, errors);
     if (when !== undefined && typeof branch.priority === "number") {
       on.push({ when, target: branch.target, priority: branch.priority });
     }
@@ -359,7 +370,7 @@ function validateExpressions(
 
   const loop = loopOf(node);
   if (loop !== undefined && typeof loop.until === "string") {
-    const until = compileBooleanExpression(nodeId, loop.until, ir, nodeIds, graph, errors, { allowLoopScope: true });
+    const until = compileBooleanExpression(nodeId, loop.until, ir, nodeIds, graph, humanTaskNodes, errors, { allowLoopScope: true });
     if (
       until !== undefined &&
       typeof loop.body_target === "string" &&
@@ -383,7 +394,7 @@ function validateExpressions(
 
     let advanceWhen: IRELNode | undefined;
     if (typeof tier.advance_when === "string") {
-      advanceWhen = compileBooleanExpression(nodeId, tier.advance_when, ir, nodeIds, graph, errors, {
+      advanceWhen = compileBooleanExpression(nodeId, tier.advance_when, ir, nodeIds, graph, humanTaskNodes, errors, {
         additionalPriorNodeIds: new Set(priorTierNodes),
       });
     }
@@ -403,7 +414,7 @@ function validateExpressions(
   const emptyResultAllowed: IRELNode[] = [];
   for (const criterion of node.verify?.criteria ?? []) {
     if (criterion.type !== "empty_result_allowed") continue;
-    const witness = compileBooleanExpression(nodeId, criterion.when, ir, nodeIds, graph, errors);
+    const witness = compileBooleanExpression(nodeId, criterion.when, ir, nodeIds, graph, humanTaskNodes, errors);
     if (witness !== undefined) emptyResultAllowed.push(witness);
   }
   if (emptyResultAllowed.length > 0) verify.empty_result_allowed = emptyResultAllowed;
@@ -418,6 +429,7 @@ function compileBooleanExpression(
   ir: IRScenario,
   nodeIds: ReadonlySet<string>,
   graph: ReadonlyMap<string, readonly string[]>,
+  humanTaskNodes: ReadonlyMap<string, HumanTaskNodeMeta>,
   errors: ValidationIssue[],
   options: Pick<ExpressionRef, "additionalPriorNodeIds" | "allowLoopScope"> = {},
 ): IRELNode | undefined {
@@ -426,6 +438,7 @@ function compileBooleanExpression(
     nodeIds,
     graph,
     paramsSchema: ir.params_schema,
+    humanTaskNodes,
     additionalPriorNodeIds: options.additionalPriorNodeIds,
     allowLoopScope: options.allowLoopScope,
     expectedType: "boolean",
@@ -482,6 +495,165 @@ function validateLoopContract(nodeId: string, node: IRNode, errors: ValidationIs
     loop.max_iterations > MAX_LOOP_ITERATIONS
   ) {
     errors.push(issue("V4", "loop_max_iterations_unbounded", "IR_SCHEMA_INVALID", `loop.max_iterations must be between 1 and ${MAX_LOOP_ITERATIONS}`, nodeId));
+  }
+}
+
+// business_form_v1 field.type → IREL scalar 타입(reserved-handlers.md @human_task; text/textarea/date/select=string).
+const BUSINESS_FORM_FIELD_TYPE: Readonly<Record<string, readonly IRELTypeAtom[]>> = {
+  text: ["string"],
+  textarea: ["string"],
+  date: ["string"],
+  select: ["string"],
+  number: ["number"],
+  boolean: ["boolean"],
+};
+
+// @human_task 를 선언한 소유 노드(next= reservedHandlerCall(@human_task))를 도출한다(human_tasks.node_id 의 정적 대응).
+// on[].target 핸들러콜은 V1(on_branch_reserved_handler_unsupported)로 거부되므로 소유 노드로 보지 않는다.
+// correction.<key> 타입은 그 노드 input.result_schema(business_form_v1) fields[] 에서 결정(없으면 decision 만 노출).
+function buildHumanTaskNodes(ir: IRScenario): Map<string, HumanTaskNodeMeta> {
+  const map = new Map<string, HumanTaskNodeMeta>();
+  for (const [nodeId, node] of Object.entries(ir.nodes)) {
+    const next = runtimeFlow(node).next;
+    if (!isRecord(next) || next.handler !== "@human_task") continue;
+    const input = isRecord(next.input) ? next.input : {};
+    map.set(nodeId, { correctionFields: correctionFieldsOf(input) });
+  }
+  return map;
+}
+
+function correctionFieldsOf(input: Record<string, unknown>): ReadonlyMap<string, readonly IRELTypeAtom[]> {
+  const fields = new Map<string, readonly IRELTypeAtom[]>();
+  const schema = input.result_schema;
+  if (!isRecord(schema) || schema.version !== "business_form_v1" || !Array.isArray(schema.fields)) return fields;
+  for (const field of schema.fields) {
+    if (!isRecord(field)) continue;
+    const key = field.key;
+    const type = field.type;
+    if (typeof key !== "string" || typeof type !== "string") continue;
+    const irelType = BUSINESS_FORM_FIELD_TYPE[type];
+    if (irelType !== undefined) fields.set(key, irelType);
+  }
+  return fields;
+}
+
+// V13 — decision 분기 완전성(ir-static-validation.md §1). 한 노드의 on[] 이 node.<htId>.decision(@human_task 닫힌 enum)
+// 을 분기 키로 참조하면 enum 전부를 커버해야 한다(각 값 대응 == branch 또는 catch-all when:true). 부분 커버 시 그 값으로
+// 해소된 task 의 재개가 매칭 branch 없음 → IR_NO_BRANCH_MATCHED → run 영구 stuck. promote-block warning.
+// 보수적 판정(false-positive 방지): 단순 등식(`node.htId.decision == "L"`) 커버리지만 인정하고, 그 외 형태(!=, &&/||, 함수
+// 내 참조 등)로 decision 을 참조하는 branch 가 있으면 정적 증명 불가로 보고 해당 ht 는 억제한다(런타임 백스톱이 최종 가드).
+function validateDecisionBranchCompleteness(
+  nodeId: string,
+  compiledNode: CompiledNodeAst,
+  humanTaskNodes: ReadonlyMap<string, HumanTaskNodeMeta>,
+  warnings: ValidationIssue[],
+): void {
+  const branches = compiledNode.on;
+  if (branches === undefined || branches.length === 0) return;
+
+  const covered = new Map<string, Set<string>>();
+  const impure = new Set<string>();
+  const referenced = new Set<string>();
+  let hasCatchAll = false;
+
+  for (const branch of branches) {
+    if (isLiteralTrue(branch.when)) {
+      hasCatchAll = true;
+      continue;
+    }
+    const equality = bareDecisionEquality(branch.when, humanTaskNodes);
+    if (equality !== undefined) {
+      referenced.add(equality.htNodeId);
+      const literals = covered.get(equality.htNodeId) ?? new Set<string>();
+      literals.add(equality.literal);
+      covered.set(equality.htNodeId, literals);
+      continue;
+    }
+    for (const htNodeId of decisionRefsIn(branch.when, humanTaskNodes)) {
+      referenced.add(htNodeId);
+      impure.add(htNodeId);
+    }
+  }
+
+  if (hasCatchAll) return; // catch-all branch 가 미커버 decision 을 흡수.
+  for (const htNodeId of referenced) {
+    if (impure.has(htNodeId)) continue;
+    const literals = covered.get(htNodeId) ?? new Set<string>();
+    const missing = IREL_DECISION_VALUES.filter((value) => !literals.has(value));
+    if (missing.length > 0) {
+      warnings.push(issue(
+        "V13",
+        "decision_branch_incomplete",
+        "IR_SCHEMA_INVALID",
+        `on[] branches on node.${htNodeId}.decision do not cover decision value(s) [${missing.join(", ")}] and no catch-all branch exists; resume on an uncovered human decision would raise IR_NO_BRANCH_MATCHED and stick the run`,
+        nodeId,
+      ));
+    }
+  }
+}
+
+function isLiteralTrue(ast: IRELNode): boolean {
+  return ast.kind === "literal" && ast.valueType === "boolean" && ast.value === true;
+}
+
+// `node.<htId>.decision == "literal"`(좌우 어느 쪽이든) 단순 등식이면 {htNodeId, literal} 반환.
+function bareDecisionEquality(
+  ast: IRELNode,
+  humanTaskNodes: ReadonlyMap<string, HumanTaskNodeMeta>,
+): { readonly htNodeId: string; readonly literal: string } | undefined {
+  if (ast.kind !== "compare" || ast.op !== "==") return undefined;
+  const leftNode = decisionVarNodeId(ast.left, humanTaskNodes);
+  const rightNode = decisionVarNodeId(ast.right, humanTaskNodes);
+  const leftLiteral = stringLiteralValue(ast.left);
+  const rightLiteral = stringLiteralValue(ast.right);
+  if (leftNode !== undefined && rightLiteral !== undefined) return { htNodeId: leftNode, literal: rightLiteral };
+  if (rightNode !== undefined && leftLiteral !== undefined) return { htNodeId: rightNode, literal: leftLiteral };
+  return undefined;
+}
+
+function decisionVarNodeId(
+  ast: IRELNode,
+  humanTaskNodes: ReadonlyMap<string, HumanTaskNodeMeta>,
+): string | undefined {
+  if (ast.kind !== "variable" || ast.path.length !== 3) return undefined;
+  const [namespace, nodeId, field] = ast.path;
+  if (namespace !== "node" || field !== "decision" || nodeId === undefined) return undefined;
+  return humanTaskNodes.has(nodeId) ? nodeId : undefined;
+}
+
+function stringLiteralValue(ast: IRELNode): string | undefined {
+  return ast.kind === "literal" && ast.valueType === "string" && typeof ast.value === "string" ? ast.value : undefined;
+}
+
+function decisionRefsIn(
+  ast: IRELNode,
+  humanTaskNodes: ReadonlyMap<string, HumanTaskNodeMeta>,
+): Set<string> {
+  const refs = new Set<string>();
+  walkIrel(ast, (node) => {
+    const htNodeId = decisionVarNodeId(node, humanTaskNodes);
+    if (htNodeId !== undefined) refs.add(htNodeId);
+  });
+  return refs;
+}
+
+function walkIrel(ast: IRELNode, visit: (node: IRELNode) => void): void {
+  visit(ast);
+  switch (ast.kind) {
+    case "unary":
+      walkIrel(ast.expr, visit);
+      break;
+    case "binary":
+    case "compare":
+    case "logical":
+      walkIrel(ast.left, visit);
+      walkIrel(ast.right, visit);
+      break;
+    case "call":
+      for (const arg of ast.args) walkIrel(arg, visit);
+      break;
+    default:
+      break;
   }
 }
 
