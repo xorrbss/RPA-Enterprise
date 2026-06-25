@@ -82,6 +82,19 @@ describe("ScenarioForm — @human_task 분기 보호 (C4)", () => {
     expect(screen.queryByRole("note")).toBeNull();
   });
 
+  // 적대감사 #3 — StepBuilder 가 표현 못 하는 액션(api_call 등)을 포함한 IR 은 단계 편집 잠금(무음 action 소실 차단).
+  //   C4 의 예약-핸들러 한정 가드를 모든 무음-손실 형태로 확장(stepBuilderRepresentable).
+  test("api_call 액션 포함 IR 은 단계 편집 잠김(직접 편집 유지)", async () => {
+    const API_CALL_IR = {
+      meta: { name: "api", version: 1, studio_mode: "ir" },
+      start: "call",
+      nodes: { call: { what: [{ action: "api_call", url_ref: "entry_url" }], terminal: "success" } },
+    };
+    renderEdit(API_CALL_IR);
+    await screen.findByLabelText("자동화 정의 원문");
+    expect(screen.getByRole("button", { name: "단계 편집" })).toBeDisabled();
+  });
+
   // C4c — 저장본(백엔드 target 주입 + jsonb key 재배열 + version bump 를 거친 승인 분기 IR)을 다시 열면 '쉬운 만들기'로
   //   재편집할 수 있다(라운드트립 정밀화 → easyUnsafe=false, '직접 편집' 강등 안 됨).
   test("저장본 승인 분기 재편집 — 쉬운 만들기(승인 양식)로 열림", async () => {

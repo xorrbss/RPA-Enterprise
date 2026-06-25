@@ -5,7 +5,7 @@ import { useApiClient } from "../api/context";
 import { ApiError, type ValidationResult } from "../api/types";
 import { errorLabel } from "./badges";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { StepBuilder, stepBuilderInitialFromIr, irContainsReservedHandler } from "./StepBuilder";
+import { StepBuilder, stepBuilderInitialFromIr, stepBuilderRepresentable } from "./StepBuilder";
 import { OperatorWizard, wizardInitialFromIr } from "./OperatorWizard";
 
 // 자동화(시나리오) 작성/편집 폼. 자동화 정의 원문(ir.schema)을 입력 → 저장 시 백엔드 컴파일 파이프라인
@@ -265,7 +265,7 @@ export function ScenarioForm({
     setEditor(
       sm === "easy" && wizardInitialFromIr(ir) === undefined
         ? "ir"
-        : sm === "form" && irContainsReservedHandler(ir)
+        : sm === "form" && !stepBuilderRepresentable(ir)
           ? "ir"
           : sm,
     );
@@ -297,10 +297,11 @@ export function ScenarioForm({
     [parsedIr],
   );
   // 빌더가 무음으로 IR 을 파괴하는 경우를 모드별로 잠근다(조용한 false 방지).
-  //   - 단계 편집(StepBuilder): @human_task 등 예약 핸들러 노드를 표현 못 해 terminal 로 떨군다(formUnsafe).
+  //   - 단계 편집(StepBuilder): 예약 핸들러(@human_task)·fallback_chain·미지원/다중 what 액션(api_call·shell 등)을 표현 못 해
+  //     terminal/none 으로 떨군다 → stepBuilderRepresentable 가 false 면 잠금(formUnsafe). C4 의 예약-핸들러 한정 가드 확장.
   //   - 쉬운 만들기(OperatorWizard): 승인 분기는 1급 지원(C4b)이나, 그 외 형태(일반 @human_task·손편집 분기)는 표현 불가
   //     → wizardInitialFromIr 가 undefined(easyUnsafe). 승인 분기 정형은 라운드트립 가능해 잠기지 않는다.
-  const formUnsafe = useMemo(() => irContainsReservedHandler(parsedIr), [parsedIr]);
+  const formUnsafe = useMemo(() => !stepBuilderRepresentable(parsedIr), [parsedIr]);
   const easyUnsafe = wizardInitial === undefined;
   // '직접 편집' 전용(어느 빌더로도 안전히 못 여는) IR — 운영자 안내 노트 표시 기준.
   const rawOnly = formUnsafe && easyUnsafe;

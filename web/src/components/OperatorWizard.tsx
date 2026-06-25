@@ -332,6 +332,8 @@ export function wizardInitialFromIr(ir: unknown): OperatorWizardInitial | undefi
     typeof nextAction.instruction === "string" && nextAction.instruction.trim().length > 0
       ? nextAction.instruction
       : undefined;
+  // 쉬운 만들기(OperatorWizard)는 템플릿 기반 단순화기 — collect IR 은 best-effort prefill 로 표현(엄격 라운드트립 아님,
+  //   기존 설계: 쉬운 만들기는 자동화를 '템플릿 형태로 단순화'). 예약 핸들러 미포함 collect 류는 항상 쉬운 만들기로 연다.
   return { name, pageUrl, dataName, kind, instruction, maxPages, nextInstruction, noNextFlag: extractFlagFromUntil(loop.until) };
 }
 
