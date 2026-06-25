@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../../api/context";
 import { useCan } from "../../api/permissions";
-import { navigate, useHashParam } from "../../router";
+import { navigate, useHashIdParam, useHashParam } from "../../router";
 import type { RunTriggerItem } from "../../api/types";
 import { errorWithDetails } from "./format";
 import { TriggerFireHistory } from "./TriggerFireHistory";
@@ -38,7 +38,8 @@ export function TriggerScheduler({
   const queryClient = useQueryClient();
   const can = useCan();
   const canManageTriggers = can("trigger.manage");
-  const triggerParam = useHashParam("trigger");
+  // trigger 는 api.getRunTrigger(triggerParam) path 보간으로 흐르므로 path-traversal 가드(적대감사 #C3).
+  const triggerParam = useHashIdParam("trigger");
   const scenarioParam = useHashParam("scenario");
   const scenarios = useQuery({ queryKey: ["scenarios", "orchestration-picker"], queryFn: () => listScenarioPicker(api), refetchInterval: 10_000 });
   const triggers = useQuery({ queryKey: ["run-triggers"], queryFn: () => api.listRunTriggers({ limit: 20 }), refetchInterval: 10_000 });
