@@ -274,6 +274,10 @@ export interface ConcurrencyPolicy {
   readonly site_name: string | null;
   readonly max_concurrency: number;
   readonly active_leases: number;
+  // DG-4 메타(가시성): 표시명·마지막 등록자·등록 시각. 값(시크릿) 아님.
+  readonly label?: string | null;
+  readonly registered_by?: string | null;
+  readonly registered_at?: string;
 }
 
 // DG-4 자격증명 *참조* 등록 요청/응답 — ⛔ 시크릿 값 필드 없음(SecretRef 경로 식별자 + 한도만). 값은 out-of-band(Vault/KMS).
@@ -281,6 +285,7 @@ export interface CredentialBindingRequest {
   readonly credential_ref: string;
   readonly site_profile_id: string;
   readonly max_concurrency: number;
+  readonly label?: string;
 }
 
 export interface CredentialBindingResult {

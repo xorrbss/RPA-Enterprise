@@ -159,8 +159,8 @@ async function main(): Promise<void> {
     check("DB: 정책 행 생성 max=3", rows.some((r) => r.credential_ref === REF_OK && r.max_concurrency === 3));
 
     // 3) upsert: 동일 (ref, site) 새 키 + max=5 → 200, max 갱신, 1행
-    const up = await post(admin, "k-2", { credential_ref: REF_OK, site_profile_id: SITE_A, max_concurrency: 5 });
-    check("upsert → 200 max=5", up.statusCode === 200 && up.json().max_concurrency === 5, up.body);
+    const up = await post(admin, "k-2", { credential_ref: REF_OK, site_profile_id: SITE_A, max_concurrency: 5, label: "운영계정" });
+    check("upsert → 200 max=5 + label", up.statusCode === 200 && up.json().max_concurrency === 5 && up.json().label === "운영계정", up.body);
     rows = await policiesOf(pool, TENANT_A);
     check("DB: upsert 1행 유지 max=5", rows.filter((r) => r.credential_ref === REF_OK).length === 1 && rows.find((r) => r.credential_ref === REF_OK)?.max_concurrency === 5);
 
@@ -187,9 +187,11 @@ async function main(): Promise<void> {
     const noKey = await post(admin, undefined, { credential_ref: REF_OK2, site_profile_id: SITE_A, max_concurrency: 1 });
     check("멱등키 누락 → 422", noKey.statusCode === 422 && noKey.json().code === "IR_SCHEMA_INVALID", noKey.body);
 
-    // 7) GET D5 — admin 이 등록 바인딩을 본다
+    // 7) GET D5 — admin 이 등록 바인딩을 본다 + DG-4 메타(label·registered_by) 투영
     const conc = await getConc(admin);
-    check("GET concurrency → 200 REF_OK max=5", conc.statusCode === 200 && (conc.json().items as Array<{ credential_ref: string; max_concurrency: number }>).some((i) => i.credential_ref === REF_OK && i.max_concurrency === 5), conc.body);
+    const concItem = (conc.json().items as Array<{ credential_ref: string; max_concurrency: number; label: string | null; registered_by: string | null; registered_at: string }>).find((i) => i.credential_ref === REF_OK);
+    check("GET concurrency → 200 REF_OK max=5", conc.statusCode === 200 && concItem?.max_concurrency === 5, conc.body);
+    check("GET: 메타 label·registered_by·registered_at 투영", concItem?.label === "운영계정" && concItem?.registered_by === "admin-a" && typeof concItem?.registered_at === "string", JSON.stringify(concItem));
 
     // 8) RLS cross-tenant: tenant B admin 은 A 바인딩을 못 본다; B 가 site_A(타테넌트) 등록 → 404
     const concB = await getConc(adminB);
