@@ -95,14 +95,18 @@ IR terminal `success_empty`는 RunState를 새로 만들지 않고 `completed` +
 | H3 | in_progress | resolve | resolved | — | **run resume_requested 트리거**(R13) |
 | H4a | open/assigned/in_progress | timeout | expired | on_timeout=fail | run R14(failed_business) |
 | H4b | open/assigned/in_progress | timeout | escalated | on_timeout=escalate | 관리자 큐로 **자동 에스컬레이션**, run R15(suspended 유지) |
-| H5 | open/assigned/in_progress | escalate | escalated | — | 관리자 **수동 에스컬레이션** → assigned로 복귀 가능, run R15 |
+| H5 | open/assigned/in_progress | escalate | escalated | reassignAssignee(담당자 해제) | 관리자 **수동 에스컬레이션** → `assignee=NULL`로 비워 escalated 큐 개방(H6 assign으로 복귀), `escalation_reason` 영속, run R15 |
 | H6 | escalated | assign | assigned | — | 새 담당자 재배정 |
 | H7 | open/assigned/in_progress/escalated | cancel | cancelled | — | run abort 연동(R16). resolved/expired/cancelled에서 cancel은 IllegalTransition |
 | H8 | escalated | timeout | expired | — | **에스컬레이션 후에도 미해소 → 최종 만료**(재에스컬레이션 없음 — 무한 대기 방지), run R14 |
 
 규칙: Phase A에서는 `live_assist` 종류 없이 approval/validation/captcha/mfa/exception만. captcha/mfa는 **snapshot 기반 처리**(Phase A, lease 반납됨) — 실시간 제어는 Phase B(D12).
 
-**assignment/routing 규칙**: `reassignAssignee`는 자동 DB 반영이 아니라 호출측이 반드시 소비해야 하는 pending side effect다. H6 `assign`은 요청 body의 명시 `assignee`로 이 side effect를 소비한다. H5 수동 escalate와 Run R15는 durable routing port/assignee policy가 없으면 어떤 assignee/assignee_role/admin queue로도 추정 매핑하지 않는다. 현재 API 구현은 이 pending side effect를 미지원으로 보고 동일 트랜잭션 rollback + `CONTROL_PLANE_INTERNAL_ERROR`로 fail-closed한다.
+**assignment/routing 규칙**: `reassignAssignee`는 자동 DB 반영이 아니라 호출측이 반드시 소비해야 하는 pending side effect다. 소비는 **명시 routing**이어야 하며 admin queue/assignee_role로 **추정 매핑은 금지**한다. 두 가지 명시 소비 경로가 있다:
+- **H6 `assign`** — 요청 body의 명시 `assignee`로 소비(특정 담당자 재배정).
+- **H5 수동 escalate(담당자 해제 모델)** — 호출측이 `assignee = NULL`로 소비한다. 즉 escalate는 담당자를 비워 task를 `escalated` 큐에 개방하고, 이후 누구든 H6 `assign`으로 가져간다. 이는 특정 대상을 추정하지 않으므로 "추정 매핑 금지" 규칙과 양립한다. escalate 시 `escalation_reason`(운영자 입력, optional)·`escalated_by`(JWT sub)·`escalated_at`을 같은 트랜잭션에 영속해 재배정될 담당자에게 맥락을 전달한다.
+
+Run R15의 run-레벨 `reassignAssignee`는 task-레벨 담당자 해제로 이미 소비된 것으로 본다(run은 `suspended` 유지, run-레벨 assignee 개념 없음). durable routing port/assignee policy가 도입되면 특정 대상 자동 라우팅으로 확장할 수 있으나, v1 명시 소비 경로는 위 둘이다. 위 경로 외의 미지원 pending side effect는 동일 트랜잭션 rollback + `CONTROL_PLANE_INTERNAL_ERROR`로 fail-closed한다.
 
 ---
 

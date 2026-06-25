@@ -127,7 +127,15 @@ function HumanTaskActions({
     />
   );
   const escalate = (
-    <ActionButton label="이관" action="human_task.escalate" confirmText="이 업무를 상위 담당자에게 이관할까요?" run={(key) => api.escalateHumanTask(id, key)} invalidateKeys={KEYS} />
+    <ActionButton
+      label="이관"
+      action="human_task.escalate"
+      confirmText="이 업무를 상위 담당자에게 이관할까요? 담당자가 비워지고 이관 대기 목록에 올라갑니다."
+      inputLabel="이관 사유 (선택)"
+      inputOptional
+      run={(key, reason) => api.escalateHumanTask(id, key, reason !== undefined && reason.trim() !== "" ? reason.trim() : undefined)}
+      invalidateKeys={KEYS}
+    />
   );
   const requiresStructuredReview = requiresStructuredReviewInput(task);
   const structuredReviewAction = inDetail ? (
@@ -399,6 +407,12 @@ function HumanTaskDetailPanel({
                     연결된 실행 보기 <span aria-hidden="true">→</span>
                   </button>
                 </dd>
+              </>
+            )}
+            {detail.data.escalation_reason !== null && detail.data.escalation_reason !== undefined && detail.data.escalation_reason !== "" && (
+              <>
+                <dt className="subtle">이관 사유</dt>
+                <dd style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{detail.data.escalation_reason}</dd>
               </>
             )}
           </dl>

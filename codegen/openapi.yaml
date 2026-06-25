@@ -1812,11 +1812,12 @@ paths:
       operationId: escalateHumanTask
       summary: 휴먼 태스크 에스컬레이션
       description: >
-        escalated(H5, 수동 진입만 담당). 성공 응답은 명시 routing/assignment owner가 reassignAssignee를
-        소비할 때만 가능하다. 현재 Fastify 경로는 H5/R15 reassignAssignee를 admin queue/assignee_role로
-        추정 매핑하지 않고, 미지원 pending side effect면 rollback 후 CONTROL_PLANE_INTERNAL_ERROR로
-        fail-closed한다. timeout 기반 H4b/H8은 타이머 주도(API 비주도). 권한 부족 →
-        AUTHZ_FORBIDDEN(403). 만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
+        escalated(H5, 수동 진입만 담당). 담당자 해제 모델: reassignAssignee를 명시 소비로
+        처리한다 — assignee를 NULL로 비워 escalated 큐를 개방하고(이후 H6 assign으로 재배정),
+        optional reason을 escalation_reason(+escalated_by/escalated_at)으로 같은 트랜잭션에
+        영속한다(추정 admin queue 매핑 아님 — state-machine.md §3 routing). Run R15는 suspended
+        유지. timeout 기반 H4b/H8은 타이머 주도(API 비주도). 권한 부족 → AUTHZ_FORBIDDEN(403).
+        만료/종결 태스크 → HUMAN_TASK_EXPIRED(410).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -1837,7 +1838,7 @@ paths:
         '410':
           $ref: '#/components/responses/Error'        # HUMAN_TASK_EXPIRED
         '500':
-          $ref: '#/components/responses/Error'        # CONTROL_PLANE_INTERNAL_ERROR unsupported reassignAssignee
+          $ref: '#/components/responses/Error'        # CONTROL_PLANE_INTERNAL_ERROR (run coupling 등 미지원 pending side effect fail-closed)
         default:
           $ref: '#/components/responses/Error'
 
@@ -4703,6 +4704,15 @@ components:
           oneOf:
             - $ref: '#/components/schemas/HumanTaskResolution'
             - type: "null"
+        escalation_reason:
+          type: [string, "null"]
+          description: H5 수동 이관 사유(운영자 입력, optional). 재배정될 담당자 맥락 전달. 미이관/미입력이면 null.
+        escalated_by:
+          type: [string, "null"]
+          description: H5 이관 주체(JWT sub). assignee/resolved_by와 동형.
+        escalated_at:
+          type: [string, "null"]
+          description: H5 이관 시각(ISO-8601). 미이관이면 null.
 
     HumanTaskResolution:
       type: object

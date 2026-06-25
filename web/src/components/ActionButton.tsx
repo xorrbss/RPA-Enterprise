@@ -19,6 +19,7 @@ export function ActionButton(props: {
   disabled?: boolean;
   action?: string;
   inputLabel?: string;
+  inputOptional?: boolean; // true면 입력이 비어도 확인 가능(예: 이관 사유=선택). 기본 false(입력 필수).
   inputOptions?: readonly { value: string; label?: string }[];
   title?: string;
   successText?: string | null;
@@ -60,7 +61,7 @@ export function ActionButton(props: {
       {confirming && (
         <ConfirmDialog
           title={props.confirmText}
-          confirmDisabled={needsInput && input.trim() === ""}
+          confirmDisabled={needsInput && props.inputOptional !== true && input.trim() === ""}
           onCancel={() => setConfirming(false)}
           onConfirm={() => {
             const value = needsInput ? input.trim() : undefined;

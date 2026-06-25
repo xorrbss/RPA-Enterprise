@@ -69,6 +69,9 @@ export interface HumanTaskItem {
   readonly result_schema?: Record<string, unknown> | null;
   readonly artifact_refs?: readonly string[];
   readonly result?: HumanTaskResolution | null;
+  readonly escalation_reason?: string | null; // H5 이관 사유(optional). 재배정 담당자 맥락.
+  readonly escalated_by?: string | null;
+  readonly escalated_at?: string | null;
 }
 
 export interface HumanTaskResolution {
