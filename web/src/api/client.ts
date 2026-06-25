@@ -68,6 +68,7 @@ import {
   type ConcurrencyPolicy,
   type CredentialBindingRequest,
   type CredentialBindingResult,
+  type WorkerPoolList,
   type RunArtifactItem,
   type ScenarioMutationResult,
   type ScenarioVersionItem,
@@ -194,6 +195,12 @@ export interface ApiClient {
   // DG-4: 자격증명 *참조*(SecretRef 경로) 등록/삭제. ⛔ 시크릿 값은 보내지 않는다(경로 식별자 + 한도만). credential.manage(admin).
   registerCredentialBinding(body: CredentialBindingRequest, idempotencyKey: string): Promise<CredentialBindingResult>;
   deleteCredentialBinding(credentialRef: string, siteProfileId: string, idempotencyKey: string): Promise<unknown>;
+  // DG-3 전용 워커 풀(admin worker_pool.manage): 풀 레지스트리 + 호출 테넌트 배정 관리.
+  listWorkerPools(): Promise<WorkerPoolList>;
+  createWorkerPool(body: { pool_key: string; description?: string }, idempotencyKey: string): Promise<unknown>;
+  deleteWorkerPool(poolKey: string, idempotencyKey: string): Promise<unknown>;
+  assignWorkerPool(poolKey: string, idempotencyKey: string): Promise<unknown>;
+  unassignWorkerPool(idempotencyKey: string): Promise<unknown>;
   listScenarioVersions(scenarioId: string): Promise<Paginated<ScenarioVersionItem>>;
   rollbackScenario(scenarioId: string, sourceVersion: number, latestVersion: number, idempotencyKey: string): Promise<ScenarioMutationResult>;
   // 상세 GET-by-id(RLS 스코프, 미존재/타테넌트→404). drill-down 뷰의 선행.
@@ -535,6 +542,12 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       send("DELETE", `/v1/credentials${queryString({ credential_ref: credentialRef, site_profile_id: siteProfileId })}`, undefined, {
         "Idempotency-Key": key,
       }),
+    listWorkerPools: () => get(`/v1/worker-pools`),
+    createWorkerPool: (body, key) => post(`/v1/worker-pools`, key, body),
+    deleteWorkerPool: (poolKey, key) =>
+      send("DELETE", `/v1/worker-pools/${encodeURIComponent(poolKey)}`, undefined, { "Idempotency-Key": key }),
+    assignWorkerPool: (poolKey, key) => send("PUT", `/v1/worker-pool`, { pool_key: poolKey }, { "Idempotency-Key": key }),
+    unassignWorkerPool: (key) => send("DELETE", `/v1/worker-pool`, undefined, { "Idempotency-Key": key }),
     decidePromotionRequest: (scenarioId, requestId, decision, reason, key) =>
       post(
         `/v1/scenarios/${scenarioId}/promotion-requests/${requestId}/decide`,

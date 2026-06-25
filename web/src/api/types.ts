@@ -220,6 +220,18 @@ export interface CredentialBindingResult {
   readonly max_concurrency: number;
 }
 
+// DG-3 전용 워커 풀 — 풀 레지스트리 항목 + 호출 테넌트의 배정.
+export interface WorkerPoolItem {
+  readonly pool_key: string;
+  readonly description: string | null;
+  readonly created_at: string;
+}
+
+export interface WorkerPoolList {
+  readonly items: readonly WorkerPoolItem[];
+  readonly assigned_pool_key: string | null;
+}
+
 export type RunTriggerType = "cron" | "webhook";
 
 export interface RunTriggerItem {
