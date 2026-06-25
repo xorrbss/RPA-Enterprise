@@ -38,6 +38,9 @@ export class PgDurableSecurityAuditDecisionWriter implements DurableSecurityAudi
     try {
       assertAuditInput(input);
       const payloadJson = safeSerialize(input.payload ?? null);
+      // actor 도 payload 와 동일하게 PlainSecret taint 가드 경유(적대감사 #C9): 불변 감사로그가 비밀 누출처가 되지 않도록
+      //   직렬화 차단(현 호출자는 안전하나 회귀 방어). hash canonical 은 동일 actor 객체를 쓰므로 정합 불변.
+      const actorJson = safeSerialize(input.actor);
       const auditRecord = await withTenantTx(this.pool, input.tenantId, async (client) => {
         // 동일 테넌트 audit 체인은 선형(sequence_no/hash) — 동시 append 직렬화(tx advisory lock). FOR UPDATE LIMIT1 만으론 동시 INSERT 경합(UNIQUE 위반) 발생.
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1::text))", [input.tenantId]);
@@ -70,7 +73,7 @@ export class PgDurableSecurityAuditDecisionWriter implements DurableSecurityAudi
             randomUUID(),
             input.tenantId,
             sequence,
-            JSON.stringify(input.actor),
+            actorJson,
             input.action,
             input.outcome,
             input.reason,

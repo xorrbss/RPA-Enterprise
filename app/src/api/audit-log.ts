@@ -200,6 +200,9 @@ function auditRowsToCsv(rows: readonly AuditLogRow[]): string {
   return [header.join(","), ...lines].join("\n");
 }
 
+// CSV 수식 인젝션 방어(적대감사 #C8): =,+,-,@,탭,CR 로 시작하는 셀은 스프레드시트(Excel/Sheets)에서 수식으로 실행될 수 있다.
+//   actor.subject_id(IdP/사용자-영향 sub)·reason 등 비신뢰 값이 감사 export 로 흐르므로, 위험 접두는 작은따옴표로 무력화한 뒤 인용.
 function csvCell(value: string): string {
-  return `"${value.replace(/"/g, "\"\"")}"`;
+  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return `"${guarded.replace(/"/g, "\"\"")}"`;
 }
