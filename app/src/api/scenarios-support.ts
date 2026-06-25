@@ -63,6 +63,9 @@ export async function promoteScenario(
   if (!UUID_RE.test(scenarioId)) {
     throw new ApiResponseError("RESOURCE_NOT_FOUND");
   }
+  if (deps.enforceAlmMakerChecker === true) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "legacy_promote_disabled_by_enterprise_alm" });
+  }
   const target = isRecord(request.body) && (request.body.target === "prod" || request.body.target === "draft")
     ? request.body.target
     : null;

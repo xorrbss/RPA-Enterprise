@@ -65,6 +65,11 @@ export type Role =
 | scenario 조회/검증(read·validate dry-run) | api-surface §2 `GET /v1/scenarios` · `POST .../validate` | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario 작성/수정(create·save) | api-surface §2 `POST /v1/scenarios`·`PUT` (D4 결정: operator+ 작성) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario promote(prod 승격) | error-catalog `SCENARIO_VERSION_CONFLICT`(If-Match 412) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| scenario release 조회 | api-surface §2.1 `GET /v1/scenarios/{id}/releases`, `/environment-bindings` (`scenario_release.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| scenario release 제출 | api-surface §2.1 release draft→submitted (`scenario_release.submit`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| scenario release 승인/반려 | api-surface §2.1 submitted→approved/rejected (`scenario_release.approve`, maker-checker) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| scenario release 배포 | api-surface §2.1 approved→deployed (`scenario_release.deploy`) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| scenario release rollback | api-surface §2.1 deployed release 기준 rollback release 생성/배포 (`scenario_release.rollback`) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | artifact 조회 | security-contracts §8(redaction→RBAC 게이트) | ✓ | ✓ | ✓ | ✓ | ✓ | `SECRET_ACCESS_DENIED` |
 | site 조회(risk/circuit 상태) | api-surface §7 `GET /v1/sites`·`/{id}` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | site 신규 등록(온보딩) | api-surface §7 `POST /v1/sites` (`site.create`; scenario 작성과 동일 레벨) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
@@ -88,6 +93,13 @@ export type Role =
 비고(assignee 스코핑):
 - human_task `resolve`는 **역할 충족 AND 해당 task의 `assignee_role`/`assignee` 스코프 일치**를 함께 검사한다. 역할은 충족하나 다른 담당자에게 배정된 task를 가로채는 것을 막는다(H1에서 assignee set). 둘 다 만족해야 통과(security-contracts §8과 동일한 "복수 게이트 순차 검사" 패턴).
 - artifact 조회는 security-contracts §8 그대로 **2게이트 순서 검사**: ① `redaction_status ∈ {redacted, not_required}`(미통과 → `ARTIFACT_NOT_REDACTED`) → ② 호출자 역할의 해당 tenant/run artifact 조회 권한(미통과 → `SECRET_ACCESS_DENIED`). 미들웨어 1지점(impl-bundle §C)에서 redaction → RBAC 순으로 평가.
+
+비고(role assignment 스코핑):
+- v1 수동 역할 부여는 tenant-wide만 지원한다. folder/department/scenario/environment scope는 별도 계약 전까지 성공 응답을 만들지 않는다.
+- effective roles = 인증 토큰의 유효 role claim ∪ `principal_role_assignments(status='active', expires_at IS NULL OR expires_at > now())`.
+- 수동 role 부여/회수는 `rbac.grant` 권한이 필요하며, 자기 자신에게 `admin`을 부여하거나 자기 자신의 마지막 `rbac.grant` 근거를 제거하는 것은 차단한다.
+- IdP/JWT claim으로 온 role은 콘솔 API가 회수할 수 없다. 회수 가능한 것은 `source='manual'` assignment뿐이다.
+- SCIM 동기화 provider/inbound schema/conflict rule은 `docs/enterprise-alm-rbac-implementation-design.md`의 blocked decision으로 추적한다. v1 저장 source는 `manual`만 허용한다.
 
 ---
 

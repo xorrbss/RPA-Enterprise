@@ -56,7 +56,9 @@ import {
   type RunItem,
   type RunSummary,
   type RunTrends,
+  type RoleAssignmentItem,
   type ScenarioDetail,
+  type ScenarioEnvironmentBinding,
   type ScenarioGenerationList,
   type ScenarioGenerationListParams,
   type ScenarioGenerationCapabilities,
@@ -69,6 +71,8 @@ import {
   type CredentialBindingRequest,
   type CredentialBindingResult,
   type WorkerPoolList,
+  type ScenarioReleaseItem,
+  type ScenarioReleaseTarget,
   type RunArtifactItem,
   type ScenarioMutationResult,
   type ScenarioVersionItem,
@@ -174,6 +178,14 @@ export interface ApiClient {
   createPrincipal(body: { sub: string; display_name: string; email?: string | null }, idempotencyKey: string): Promise<PrincipalItem>;
   updatePrincipal(principalId: string, body: { display_name?: string; email?: string | null }, idempotencyKey: string): Promise<PrincipalItem>;
   deletePrincipal(principalId: string, idempotencyKey: string): Promise<unknown>;
+  listPrincipalRoleAssignments(principalId: string, p?: ListParams): Promise<Paginated<RoleAssignmentItem>>;
+  listRoleAssignments(p?: ListParams & { principal_sub?: string; role?: string; status?: string }): Promise<Paginated<RoleAssignmentItem>>;
+  grantPrincipalRole(
+    principalId: string,
+    body: { role: string; reason?: string | null; expires_at?: string | null },
+    idempotencyKey: string,
+  ): Promise<RoleAssignmentItem>;
+  revokeRoleAssignment(assignmentId: string, reason: string, idempotencyKey: string): Promise<RoleAssignmentItem>;
   // 운영자-보조 세션 등록(operator+, POST /v1/sites/{id}/session/capture). headful 로그인창을 띄워 운영자가 직접 로그인 → 세션 저장.
   // login_url 은 사이트 설정(page_state_selectors.loginUrl)에서 해소 — 사이트별 로그인 URL.
   captureSession(siteId: string, idempotencyKey: string): Promise<unknown>;
@@ -187,6 +199,19 @@ export interface ApiClient {
   promoteScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
   promoteScenarioFromRun(scenarioId: string, runId: string, idempotencyKey: string): Promise<PromoteFromRunResult>;
   setScenarioPromotion(scenarioId: string, version: number, target: "prod" | "draft", idempotencyKey: string): Promise<unknown>;
+  listScenarioEnvironmentBindings(scenarioId: string): Promise<Paginated<ScenarioEnvironmentBinding>>;
+  listScenarioReleases(scenarioId: string, p?: ListParams): Promise<Paginated<ScenarioReleaseItem>>;
+  createScenarioRelease(
+    scenarioId: string,
+    body: { source_version: number; target_environment: ScenarioReleaseTarget; reason?: string | null },
+    idempotencyKey: string,
+  ): Promise<ScenarioReleaseItem>;
+  getScenarioRelease(releaseId: string): Promise<ScenarioReleaseItem>;
+  submitScenarioRelease(releaseId: string, idempotencyKey: string): Promise<ScenarioReleaseItem>;
+  approveScenarioRelease(releaseId: string, reason: string | null, idempotencyKey: string): Promise<ScenarioReleaseItem>;
+  rejectScenarioRelease(releaseId: string, reason: string, idempotencyKey: string): Promise<ScenarioReleaseItem>;
+  deployScenarioRelease(releaseId: string, latestVersion: number, idempotencyKey: string): Promise<ScenarioReleaseItem>;
+  rollbackScenarioRelease(releaseId: string, latestVersion: number, idempotencyKey: string): Promise<ScenarioReleaseItem>;
   archiveScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
   createPromotionRequest(scenarioId: string, version: number, reason: string, idempotencyKey: string): Promise<unknown>;
   listPromotionRequests(): Promise<Paginated<PromotionRequest>>;
@@ -521,6 +546,10 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     createPrincipal: (body, key) => post(`/v1/principals`, key, body),
     updatePrincipal: (principalId, body, key) => send("PATCH", `/v1/principals/${principalId}`, body, { "Idempotency-Key": key }),
     deletePrincipal: (principalId, key) => send("DELETE", `/v1/principals/${principalId}`, undefined, { "Idempotency-Key": key }),
+    listPrincipalRoleAssignments: (principalId, p) => get(`/v1/principals/${principalId}/role-assignments${queryString(p)}`),
+    listRoleAssignments: (p) => get(`/v1/role-assignments${queryString(p)}`),
+    grantPrincipalRole: (principalId, body, key) => post(`/v1/principals/${principalId}/role-assignments`, key, body),
+    revokeRoleAssignment: (assignmentId, reason, key) => post(`/v1/role-assignments/${assignmentId}/revoke`, key, { reason }),
     captureSession: (siteId, key) => post(`/v1/sites/${siteId}/session/capture`, key, {}),
     assignHumanTask: (id, assignee, key) => post(`/v1/human-tasks/${id}/assign`, key, { assignee }),
     startHumanTask: (id, key) => post(`/v1/human-tasks/${id}/start`, key),
@@ -531,6 +560,18 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     promoteScenarioFromRun: (scenarioId, runId, key) => post(`/v1/scenarios/${scenarioId}/promote-from-run`, key, { run_id: runId }),
     setScenarioPromotion: (scenarioId, version, target, key) =>
       post(`/v1/scenarios/${scenarioId}/promote`, key, { target }, { "If-Match": String(version) }),
+    listScenarioEnvironmentBindings: (scenarioId) => get(`/v1/scenarios/${scenarioId}/environment-bindings`),
+    listScenarioReleases: (scenarioId, p) => get(`/v1/scenarios/${scenarioId}/releases${queryString(p)}`),
+    createScenarioRelease: (scenarioId, body, key) => post(`/v1/scenarios/${scenarioId}/releases`, key, body),
+    getScenarioRelease: (releaseId) => get(`/v1/scenario-releases/${releaseId}`),
+    submitScenarioRelease: (releaseId, key) => post(`/v1/scenario-releases/${releaseId}/submit`, key),
+    approveScenarioRelease: (releaseId, reason, key) =>
+      post(`/v1/scenario-releases/${releaseId}/approve`, key, reason !== null ? { reason } : {}),
+    rejectScenarioRelease: (releaseId, reason, key) => post(`/v1/scenario-releases/${releaseId}/reject`, key, { reason }),
+    deployScenarioRelease: (releaseId, latestVersion, key) =>
+      post(`/v1/scenario-releases/${releaseId}/deploy`, key, {}, { "If-Match": String(latestVersion) }),
+    rollbackScenarioRelease: (releaseId, latestVersion, key) =>
+      post(`/v1/scenario-releases/${releaseId}/rollback`, key, {}, { "If-Match": String(latestVersion) }),
     archiveScenario: (scenarioId, version, key) =>
       post(`/v1/scenarios/${scenarioId}/archive`, key, {}, { "If-Match": String(version) }),
     createPromotionRequest: (scenarioId, version, reason, key) =>

@@ -38,6 +38,18 @@ function renderApp(client: ApiClient): void {
   );
 }
 
+async function startRecordingAndFindActionSelect(): Promise<HTMLElement> {
+  const startButton = await screen.findByRole("button", { name: "녹화 시작" });
+  await waitFor(() => expect(startButton).toBeEnabled());
+  fireEvent.click(startButton);
+  const workbench = await screen.findByRole(
+    "region",
+    { name: "브라우저 녹화 동작 추가" },
+    { timeout: 5000 },
+  );
+  return within(workbench).findByLabelText("녹화 동작", undefined, { timeout: 5000 });
+}
+
 describe("browser recorder panel", () => {
   beforeEach(() => {
     location.hash = "#scenarioStudio";
@@ -472,8 +484,8 @@ describe("browser recorder panel", () => {
     });
     renderApp(client);
 
-    fireEvent.click(await screen.findByRole("button", { name: "녹화 시작" }));
-    fireEvent.change(await screen.findByLabelText("녹화 동작"), { target: { value: "navigate" } });
+    const actionSelect = await startRecordingAndFindActionSelect();
+    fireEvent.change(actionSelect, { target: { value: "navigate" } });
     fireEvent.click(screen.getByRole("button", { name: "동작 추가" }));
 
     await waitFor(() => expect(appended[0]).toMatchObject({
@@ -526,8 +538,8 @@ describe("browser recorder panel", () => {
     });
     renderApp(client);
 
-    fireEvent.click(await screen.findByRole("button", { name: "녹화 시작" }));
-    fireEvent.change(await screen.findByLabelText("녹화 동작"), { target: { value: "wait" } });
+    const actionSelect = await startRecordingAndFindActionSelect();
+    fireEvent.change(actionSelect, { target: { value: "wait" } });
     expect(screen.getByRole("button", { name: "동작 추가" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "동작 추가" }));
 

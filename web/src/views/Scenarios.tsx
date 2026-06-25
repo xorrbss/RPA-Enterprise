@@ -11,7 +11,7 @@ import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
 import { navigate, useHashParam } from "../router";
-import type { ScenarioItem, ScenarioVersionItem } from "../api/types";
+import type { ScenarioEnvironmentBinding, ScenarioItem, ScenarioReleaseItem, ScenarioReleaseTarget, ScenarioVersionItem } from "../api/types";
 
 // 자동화 만들기(시나리오 스튜디오): 작성/편집 폼 + 목록 + 운영 기준 지정.
 // 생성=POST /v1/scenarios, 편집=PUT(If-Match), 운영 지정=POST /promote(If-Match=현재 version). 역할 게이팅: scenario.create/update/promote.
@@ -26,6 +26,7 @@ export function ScenariosView(): JSX.Element {
   );
   const [form, setForm] = useState<ScenarioFormMode | null>(null);
   const [versionsFor, setVersionsFor] = useState<ScenarioItem | null>(null);
+  const [releasesFor, setReleasesFor] = useState<ScenarioItem | null>(null);
   // 'AI로 설명해서 만들기'(자연어 생성기) 펼침 — 기본 진입은 '+ 새 자동화 만들기'(쉬운 만들기), AI 생성기는 접어 둔다.
   // 단 사이트 등록→생성 prefill·Playground 'AI로 만들기' 딥링크로 들어오면 자동 펼침(접힌 채면 prefill이 묻혀 dead-end).
   const prefillSite = useHashParam("site");
@@ -106,6 +107,9 @@ export function ScenariosView(): JSX.Element {
                 <button className="btn" type="button" onClick={() => setVersionsFor(r)}>
                   이력
                 </button>
+                <button className="btn" type="button" onClick={() => setReleasesFor(r)}>
+                  릴리스
+                </button>
                 <ActionButton
                   label={r.promotion_status === "prod" ? "운영 해제" : "운영 지정"}
                   action="scenario.promote"
@@ -144,6 +148,7 @@ export function ScenariosView(): JSX.Element {
         ]}
       />
       {versionsFor !== null && <ScenarioVersionsPanel scenario={versionsFor} onClose={() => setVersionsFor(null)} />}
+      {releasesFor !== null && <ScenarioReleasesPanel scenario={releasesFor} onClose={() => setReleasesFor(null)} />}
     </div>
   );
 }
@@ -251,4 +256,141 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
       />
     </section>
   );
+}
+
+function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => void }): JSX.Element {
+  const api = useApiClient();
+  const [target, setTarget] = useState<ScenarioReleaseTarget>("prod");
+  const bindings = useQuery({
+    queryKey: ["scenario-bindings", props.scenario.scenario_id],
+    queryFn: () => api.listScenarioEnvironmentBindings(props.scenario.scenario_id),
+  });
+  const releases = useQuery({
+    queryKey: ["scenario-releases", props.scenario.scenario_id],
+    queryFn: () => api.listScenarioReleases(props.scenario.scenario_id, { limit: 20 }),
+  });
+  const invalidate = [["scenario-releases", props.scenario.scenario_id], ["scenario-bindings", props.scenario.scenario_id], ["scenarios"]] as const;
+
+  return (
+    <section style={{ marginTop: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0, fontSize: 18 }}>{props.scenario.name} 릴리스</h2>
+        <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+            <span className="label">대상</span>
+            <select value={target} onChange={(event) => setTarget(event.target.value as ScenarioReleaseTarget)}>
+              <option value="prod">prod</option>
+              <option value="staging">staging</option>
+            </select>
+          </label>
+          <ActionButton
+            label="릴리스 요청"
+            action="scenario_release.submit"
+            confirmText={`${props.scenario.name} v${props.scenario.version}을(를) ${target} 릴리스 후보로 만들까요?`}
+            run={(key) => api.createScenarioRelease(props.scenario.scenario_id, { source_version: props.scenario.version, target_environment: target, reason: "console release request" }, key)}
+            invalidateKeys={invalidate}
+          />
+          <button className="btn" type="button" onClick={props.onClose}>닫기</button>
+        </span>
+      </div>
+      <QueryPanel<ScenarioEnvironmentBinding>
+        title="환경 기준"
+        query={bindings}
+        rowKey={(r) => r.binding_id}
+        emptyMessage="아직 활성화된 환경 기준이 없습니다."
+        columns={[
+          { header: "환경", render: (r) => <span className={`badge ${r.environment === "prod" ? "green" : "muted"}`}>{r.environment}</span> },
+          { header: "버전", render: (r) => `v${r.version}` },
+          { header: "활성화", render: (r) => new Date(r.activated_at).toLocaleString() },
+          { header: "처리자", render: (r) => <code className="subtle">{r.activated_by}</code> },
+        ]}
+      />
+      <QueryPanel<ScenarioReleaseItem>
+        title="릴리스 이력"
+        query={releases}
+        rowKey={(r) => r.release_id}
+        emptyMessage="릴리스 요청이 없습니다."
+        columns={[
+          { header: "대상", render: (r) => <span className={`badge ${r.target_environment === "prod" ? "green" : "muted"}`}>{r.target_environment}</span> },
+          { header: "버전", render: (r) => `v${r.source_version}` },
+          { header: "상태", render: (r) => <span className={`badge ${releaseTone(r.status)}`}>{releaseLabel(r.status)}</span> },
+          { header: "요청자", render: (r) => <code className="subtle">{r.requested_by}</code> },
+          { header: "패키지", render: (r) => <code className="subtle">{r.package_hash.slice(0, 18)}…</code> },
+          {
+            header: "작업",
+            render: (r) => (
+              <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                {r.status === "draft" && (
+                  <ActionButton
+                    label="제출"
+                    action="scenario_release.submit"
+                    confirmText={`v${r.source_version} ${r.target_environment} 릴리스를 제출할까요?`}
+                    run={(key) => api.submitScenarioRelease(r.release_id, key)}
+                    invalidateKeys={invalidate}
+                  />
+                )}
+                {r.status === "submitted" && (
+                  <ActionButton
+                    label="승인"
+                    action="scenario_release.approve"
+                    confirmText={`v${r.source_version} ${r.target_environment} 릴리스를 승인할까요?`}
+                    run={(key) => api.approveScenarioRelease(r.release_id, null, key)}
+                    invalidateKeys={invalidate}
+                  />
+                )}
+                {r.status === "submitted" && (
+                  <ActionButton
+                    label="반려"
+                    action="scenario_release.approve"
+                    confirmText={`v${r.source_version} ${r.target_environment} 릴리스를 반려할까요?`}
+                    inputLabel="반려 사유"
+                    run={(key, reason) => api.rejectScenarioRelease(r.release_id, reason ?? "", key)}
+                    invalidateKeys={invalidate}
+                  />
+                )}
+                {r.status === "approved" && (
+                  <ActionButton
+                    label="배포"
+                    action="scenario_release.deploy"
+                    confirmText={`v${r.source_version}을(를) ${r.target_environment} 기준으로 배포할까요?`}
+                    run={(key) => api.deployScenarioRelease(r.release_id, props.scenario.version, key)}
+                    invalidateKeys={invalidate}
+                  />
+                )}
+                {r.status === "deployed" && (
+                  <ActionButton
+                    label="롤백"
+                    action="scenario_release.rollback"
+                    confirmText={`${r.target_environment} 기준을 직전 배포 버전으로 롤백할까요?`}
+                    run={(key) => api.rollbackScenarioRelease(r.release_id, props.scenario.version, key)}
+                    invalidateKeys={invalidate}
+                  />
+                )}
+              </span>
+            ),
+          },
+        ]}
+      />
+    </section>
+  );
+}
+
+function releaseLabel(status: string): string {
+  const labels: Record<string, string> = {
+    draft: "초안",
+    submitted: "승인 대기",
+    approved: "승인됨",
+    rejected: "반려됨",
+    deployed: "배포됨",
+    rolled_back: "롤백됨",
+    cancelled: "취소됨",
+  };
+  return labels[status] ?? status;
+}
+
+function releaseTone(status: string): "green" | "amber" | "red" | "muted" {
+  if (status === "deployed" || status === "approved") return "green";
+  if (status === "submitted" || status === "draft") return "amber";
+  if (status === "rejected") return "red";
+  return "muted";
 }

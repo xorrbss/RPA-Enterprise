@@ -9,6 +9,7 @@ import { ActionButton } from "../components/ActionButton";
 import { CaptureGuide } from "../components/CaptureGuide";
 import { FilterSelect } from "../components/FilterSelect";
 import { PrincipalDirectory } from "../components/PrincipalDirectory";
+import { RoleAssignmentPanel } from "../components/RoleAssignmentPanel";
 import { SitePageStateEditor } from "../components/SitePageStateEditor";
 import { SiteCircuitNotice } from "../components/SiteCircuitNotice";
 import { SiteCreateForm } from "../components/SiteCreateForm";
@@ -47,6 +48,7 @@ export function SecurityView(): JSX.Element {
     <SecurityConnectionsPanel />
     <SecretRefAuditPanel />
     <PrincipalDirectory />
+    <RoleAssignmentPanel />
     <SiteCircuitNotice openCount={circuitOpenCount} />
     {focusSite !== null && focusNeedsSession && (
       <section className="panel" style={{ marginBottom: 12, padding: 12 }} role="status" aria-label="세션 등록 안내">

@@ -27,11 +27,13 @@ import { registerGatewayRoutes } from "./gateway";
 import { registerHumanTaskRoutes } from "./human-tasks";
 import { registerReadRoutes } from "./reads";
 import { registerPrincipalRoutes } from "./principals";
+import { registerRoleAssignmentRoutes } from "./role-assignments";
 import { registerSiteElementRoutes } from "./site-elements";
 import { registerSiteRoutes } from "./sites";
 import { registerSessionRoutes } from "./sessions";
 import { registerApprovalRoutes } from "./approvals";
 import { registerScenarioGenerationRoutes } from "./scenario-generations";
+import { registerScenarioReleaseRoutes } from "./scenario-releases";
 import { registerScenarioRoutes } from "./scenarios";
 import { registerAuditLogRoutes } from "./audit-log";
 import { registerAutomationIdeaRoutes } from "./automation-ideas";
@@ -102,16 +104,16 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       );
       throw new ApiResponseError(result.code);
     }
-    request.principal = result.principal;
+    let effectivePrincipal = result.principal;
 
     // 디렉터리 동기화(name-picker): JWT `name` 클레임이 있으면 best-effort upsert. 인증/인가와 무관한 부수효과라
     // 실패해도 요청은 진행하되 조용히 삼키지 않고 log.warn 한다(가정/은폐 금지). directory 미주입 시 no-op.
     if (deps.principalDirectory !== undefined) {
       try {
         await deps.principalDirectory.upsertFromClaims(
-          result.principal.tenantId,
-          result.principal.subjectId,
-          result.principal.claims,
+          effectivePrincipal.tenantId,
+          effectivePrincipal.subjectId,
+          effectivePrincipal.claims,
         );
       } catch (err) {
         request.log.warn(
@@ -120,6 +122,25 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
         );
       }
     }
+    if (deps.roleAssignments !== undefined) {
+      const assignedRoles = await deps.roleAssignments.resolveActiveRoles(
+        effectivePrincipal.tenantId,
+        effectivePrincipal.subjectId,
+      );
+      if (assignedRoles.length > 0) {
+        effectivePrincipal = {
+          ...effectivePrincipal,
+          roles: Array.from(new Set([...effectivePrincipal.roles, ...assignedRoles])),
+        };
+      }
+    } else if (deps.roleAssignmentsRequired === true) {
+      request.log.error(
+        { correlation_id: request.correlationId },
+        "role assignment resolver required but missing",
+      );
+      throw new ApiResponseError("AUTHZ_FORBIDDEN");
+    }
+    request.principal = effectivePrincipal;
   });
 
   // 5) authorize(RBAC) — auth 다음(미들웨어 순서 …→rbac→handler). 라우트 선언 rbacAction을 §2 매트릭스로 평가.
@@ -210,6 +231,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   );
 
   registerScenarioGenerationRoutes(app, deps);
+  registerScenarioReleaseRoutes(app, deps);
   registerScenarioRoutes(app, deps);
   registerAutomationIdeaRoutes(app, deps);
   registerRoiEstimateRoutes(app, deps);
@@ -220,6 +242,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerDlqRoutes(app, deps);
   registerReadRoutes(app, deps);
   registerPrincipalRoutes(app, deps);
+  registerRoleAssignmentRoutes(app, deps);
   registerSiteRoutes(app, deps);
   registerSiteElementRoutes(app, deps);
   registerBrowserRecordingRoutes(app, deps);

@@ -38,6 +38,7 @@ import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
 import { createLlmScenarioPlanner, LlmGatewayScenarioPlannerClient } from "./api/llm-scenario-planner";
 import { PgPrincipalDirectory } from "./api/principal-directory";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
+import { PgPrincipalRoleAssignmentResolver } from "./api/role-assignments";
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
 import { BufferedScenarioGenerationArtifactSink } from "./api/scenario-generation-artifacts";
 import { PuppeteerSelectorProbeProvider } from "./api/selector-probe-provider";
@@ -254,6 +255,7 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: new PgGraphileRunEnqueuer(),
     principalDirectory: new PgPrincipalDirectory(pool),
+    roleAssignments: new PgPrincipalRoleAssignmentResolver(pool),
     signedCommandRegistry: buildSignedCommandRegistry(cfg.signedCommandRegistry),
     scenarioGenerationCapabilities: { videoRecording: cfg.videoRecordingEnabled },
     ...(scenarioPlanner !== undefined

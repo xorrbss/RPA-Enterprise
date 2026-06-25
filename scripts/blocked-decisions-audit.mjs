@@ -411,18 +411,31 @@ const activeBlockerRules = [
       "concurrent fire semantics",
     ],
   },
+  {
+    label: "Enterprise ALM/RBAC SCIM synchronization contract",
+    aliases: [
+      "SCIM 동기화",
+      "SCIM provider",
+      "inbound schema",
+      "conflict rule",
+      "source='scim'",
+      "role-mapping source of truth",
+    ],
+  },
 ];
 const activeBlockerSectionHeadings = new Set([
   "## Deploy-Time Provisioning Blockers",
   "## Repo-Controlled D4.5 API P1 Evidence / Open",
   "## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)",
   "## Repo-Controlled Browser RPA V2 Product Scope / Open",
+  "## Repo-Controlled Enterprise ALM/RBAC Product Scope / Open",
 ]);
 const expectedActiveBlockerSectionCounts = new Map([
   ["## Deploy-Time Provisioning Blockers", 1],
   ["## Repo-Controlled D4.5 API P1 Evidence / Open", 0],
   ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 0],
   ["## Repo-Controlled Browser RPA V2 Product Scope / Open", 0],
+  ["## Repo-Controlled Enterprise ALM/RBAC Product Scope / Open", 1],
 ]);
 const activeChecklistEvidenceRules = [
   {
@@ -814,7 +827,9 @@ function buildAuditOutput(actionable) {
     activeBlockerSectionCounts.get("## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)") ?? 0;
   const browserRpaV2Count =
     activeBlockerSectionCounts.get("## Repo-Controlled Browser RPA V2 Product Scope / Open") ?? 0;
-  return `${todos.length} markers, ${actionable} actionable blockers, ${knownReleaseDecisions.length} known release decisions tracked, ${releaseDecisionLines.length} release decisions checked (${externalCount} active deploy-time provisioning checklist rows; ${repoD45Count} repo-controlled D4.5 API P1 open rows; ${repoD3Count} repo-controlled D3 runtime open rows; ${browserRpaV2Count} repo-controlled Browser RPA V2 product-scope open rows)`;
+  const enterpriseAlmRbacCount =
+    activeBlockerSectionCounts.get("## Repo-Controlled Enterprise ALM/RBAC Product Scope / Open") ?? 0;
+  return `${todos.length} markers, ${actionable} actionable blockers, ${knownReleaseDecisions.length} known release decisions tracked, ${releaseDecisionLines.length} release decisions checked (${externalCount} active deploy-time provisioning checklist rows; ${repoD45Count} repo-controlled D4.5 API P1 open rows; ${repoD3Count} repo-controlled D3 runtime open rows; ${browserRpaV2Count} repo-controlled Browser RPA V2 product-scope open rows; ${enterpriseAlmRbacCount} repo-controlled Enterprise ALM/RBAC product-scope open rows)`;
 }
 
 function checkReportedAuditOutputs(auditOutput) {

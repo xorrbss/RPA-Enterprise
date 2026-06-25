@@ -311,6 +311,73 @@ CREATE INDEX idx_promotion_requests_pending ON scenario_promotion_requests (tena
   WHERE status = 'pending';
 
 -- ============================================================
+-- 2a. scenario release workflow / environment bindings
+--    Enterprise ALM v1: draft package -> submit -> approve -> deploy, maker-checker, rollback evidence.
+-- ============================================================
+
+CREATE TABLE scenario_releases (
+  id                    uuid        PRIMARY KEY,
+  tenant_id             uuid        NOT NULL,
+  scenario_id           uuid        NOT NULL REFERENCES scenarios(id),
+  source_version_id     uuid        NOT NULL REFERENCES scenario_versions(id),
+  target_environment    text        NOT NULL CHECK (target_environment IN ('staging','prod')),
+  status                text        NOT NULL DEFAULT 'draft'
+                                      CHECK (status IN ('draft','submitted','approved','rejected','deployed','rolled_back','cancelled')),
+  package_hash          text        NOT NULL CHECK (length(package_hash) > 0),
+  validation_report     jsonb       NOT NULL,
+  requested_by          text        NOT NULL CHECK (length(requested_by) > 0),
+  requested_at          timestamptz NOT NULL DEFAULT now(),
+  submitted_at          timestamptz,
+  approved_by           text,
+  approved_at           timestamptz,
+  rejected_by           text,
+  rejected_at           timestamptz,
+  rejection_reason      text,
+  deployed_by           text,
+  deployed_at           timestamptz,
+  rollback_of_release_id uuid       REFERENCES scenario_releases(id),
+  reason                text,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now(),
+  CHECK ((approved_by IS NULL) = (approved_at IS NULL)),
+  CHECK ((rejected_by IS NULL) = (rejected_at IS NULL)),
+  CHECK ((deployed_by IS NULL) = (deployed_at IS NULL))
+);
+CREATE INDEX idx_scenario_releases_scenario ON scenario_releases (tenant_id, scenario_id, created_at DESC);
+CREATE INDEX idx_scenario_releases_status ON scenario_releases (tenant_id, status, target_environment);
+
+CREATE TABLE scenario_environment_bindings (
+  id                     uuid        PRIMARY KEY,
+  tenant_id              uuid        NOT NULL,
+  scenario_id            uuid        NOT NULL REFERENCES scenarios(id),
+  environment            text        NOT NULL CHECK (environment IN ('dev','staging','prod')),
+  scenario_version_id    uuid        NOT NULL REFERENCES scenario_versions(id),
+  release_id             uuid        REFERENCES scenario_releases(id),
+  activated_by           text        NOT NULL CHECK (length(activated_by) > 0),
+  activated_at           timestamptz NOT NULL DEFAULT now(),
+  deactivated_by         text,
+  deactivated_at         timestamptz,
+  replaced_by_binding_id uuid,
+  CHECK ((deactivated_by IS NULL) = (deactivated_at IS NULL))
+);
+CREATE UNIQUE INDEX uq_current_scenario_environment_binding
+  ON scenario_environment_bindings (tenant_id, scenario_id, environment)
+  WHERE deactivated_at IS NULL;
+CREATE INDEX idx_scenario_environment_bindings_history
+  ON scenario_environment_bindings (tenant_id, scenario_id, environment, activated_at DESC);
+
+CREATE TABLE scenario_release_events (
+  id          uuid        PRIMARY KEY,
+  tenant_id   uuid        NOT NULL,
+  release_id  uuid        NOT NULL REFERENCES scenario_releases(id),
+  event_type  text        NOT NULL CHECK (event_type = ANY (ARRAY['created','submitted','approved','rejected','deployed','rolled_back','cancelled']::text[])),
+  actor_sub   text        NOT NULL CHECK (length(actor_sub) > 0),
+  reason      text,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_scenario_release_events_release ON scenario_release_events (tenant_id, release_id, created_at DESC);
+
+-- ============================================================
 -- ============================================================
 -- 2a-1. automation_ideas / roi_estimates
 --    CoE/ROI automation discovery pipeline. Browser-RPA scope only; desktop automation is out-of-scope.
@@ -635,6 +702,50 @@ CREATE TABLE principals (
   UNIQUE (tenant_id, sub)                                  -- sub = 테넌트 내 자연키(upsert ON CONFLICT 타깃)
 );
 CREATE INDEX idx_principals_tenant_name ON principals (tenant_id, display_name);  -- picker 이름 정렬/검색
+
+-- ============================================================
+-- 6c. principal_role_assignments — tenant-wide manual RBAC assignment ledger
+--    JWT roles remain valid; effective_roles = token roles ∪ active manual assignments.
+-- ============================================================
+
+CREATE TABLE principal_role_assignments (
+  id             uuid        PRIMARY KEY,
+  tenant_id      uuid        NOT NULL,
+  principal_sub  text        NOT NULL CHECK (length(principal_sub) > 0),
+  role           text        NOT NULL CHECK (role IN ('viewer','operator','reviewer','approver','admin')),
+  source         text        NOT NULL DEFAULT 'manual' CHECK (source IN ('manual')),
+  status         text        NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+  reason         text,
+  expires_at     timestamptz,
+  granted_by     text        NOT NULL CHECK (length(granted_by) > 0),
+  granted_at     timestamptz NOT NULL DEFAULT now(),
+  revoked_by     text,
+  revoked_at     timestamptz,
+  revoke_reason  text,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  CHECK ((revoked_by IS NULL) = (revoked_at IS NULL)),
+  CHECK (expires_at IS NULL OR expires_at > granted_at)
+);
+CREATE UNIQUE INDEX uq_active_principal_role_assignment
+  ON principal_role_assignments (tenant_id, principal_sub, role)
+  WHERE status = 'active';
+CREATE INDEX idx_principal_role_assignments_principal
+  ON principal_role_assignments (tenant_id, principal_sub, status, granted_at DESC);
+
+CREATE TABLE principal_role_assignment_events (
+  id             uuid        PRIMARY KEY,
+  tenant_id      uuid        NOT NULL,
+  assignment_id  uuid        NOT NULL REFERENCES principal_role_assignments(id),
+  event_type     text        NOT NULL CHECK (event_type = ANY (ARRAY['granted','revoked','expired']::text[])),
+  actor_sub      text        NOT NULL CHECK (length(actor_sub) > 0),
+  target_sub     text        NOT NULL CHECK (length(target_sub) > 0),
+  role           text        NOT NULL CHECK (role IN ('viewer','operator','reviewer','approver','admin')),
+  reason         text,
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_principal_role_assignment_events_assignment
+  ON principal_role_assignment_events (tenant_id, assignment_id, created_at DESC);
 
 -- ============================================================
 -- 7. artifacts
@@ -1081,6 +1192,9 @@ ALTER TABLE scenario_promotion_requests
   ADD CONSTRAINT fk_promotion_requests_scenario_tenant
   FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios (tenant_id, id);
 ALTER TABLE scenario_versions   ADD CONSTRAINT uq_scenario_versions_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scenario_releases   ADD CONSTRAINT uq_scenario_releases_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scenario_environment_bindings ADD CONSTRAINT uq_scenario_environment_bindings_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scenario_release_events ADD CONSTRAINT uq_scenario_release_events_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE automation_ideas    ADD CONSTRAINT uq_automation_ideas_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE roi_estimates       ADD CONSTRAINT uq_roi_estimates_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE run_triggers        ADD CONSTRAINT uq_run_triggers_tenant_id_id UNIQUE (tenant_id, id);
@@ -1094,6 +1208,8 @@ ALTER TABLE action_plan_cache   ADD CONSTRAINT uq_action_plan_cache_tenant_id_id
 ALTER TABLE site_element_repository ADD CONSTRAINT uq_site_element_repository_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE browser_recording_sessions ADD CONSTRAINT uq_browser_recording_sessions_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE browser_recording_events ADD CONSTRAINT uq_browser_recording_events_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE principal_role_assignments ADD CONSTRAINT uq_principal_role_assignments_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE principal_role_assignment_events ADD CONSTRAINT uq_principal_role_assignment_events_tenant_id_id UNIQUE (tenant_id, id);
 
 ALTER TABLE site_profile_approvals
   ADD CONSTRAINT fk_site_profile_approvals_site_tenant
@@ -1124,6 +1240,28 @@ ALTER TABLE browser_identities
 ALTER TABLE scenario_versions
   ADD CONSTRAINT fk_scenario_versions_scenario_tenant
   FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios(tenant_id, id);
+
+ALTER TABLE scenario_releases
+  ADD CONSTRAINT fk_scenario_releases_scenario_tenant
+  FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios(tenant_id, id),
+  ADD CONSTRAINT fk_scenario_releases_source_version_tenant
+  FOREIGN KEY (tenant_id, source_version_id) REFERENCES scenario_versions(tenant_id, id),
+  ADD CONSTRAINT fk_scenario_releases_rollback_release_tenant
+  FOREIGN KEY (tenant_id, rollback_of_release_id) REFERENCES scenario_releases(tenant_id, id);
+
+ALTER TABLE scenario_environment_bindings
+  ADD CONSTRAINT fk_scenario_environment_bindings_scenario_tenant
+  FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios(tenant_id, id),
+  ADD CONSTRAINT fk_scenario_environment_bindings_version_tenant
+  FOREIGN KEY (tenant_id, scenario_version_id) REFERENCES scenario_versions(tenant_id, id),
+  ADD CONSTRAINT fk_scenario_environment_bindings_release_tenant
+  FOREIGN KEY (tenant_id, release_id) REFERENCES scenario_releases(tenant_id, id),
+  ADD CONSTRAINT fk_scenario_environment_bindings_replaced_by_tenant
+  FOREIGN KEY (tenant_id, replaced_by_binding_id) REFERENCES scenario_environment_bindings(tenant_id, id);
+
+ALTER TABLE scenario_release_events
+  ADD CONSTRAINT fk_scenario_release_events_release_tenant
+  FOREIGN KEY (tenant_id, release_id) REFERENCES scenario_releases(tenant_id, id);
 
 ALTER TABLE runs
   ADD CONSTRAINT fk_runs_scenario_version_tenant
@@ -1168,6 +1306,10 @@ ALTER TABLE run_steps
 ALTER TABLE human_tasks
   ADD CONSTRAINT fk_human_tasks_run_tenant
   FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id);
+
+ALTER TABLE principal_role_assignment_events
+  ADD CONSTRAINT fk_principal_role_assignment_events_assignment_tenant
+  FOREIGN KEY (tenant_id, assignment_id) REFERENCES principal_role_assignments(tenant_id, id);
 
 ALTER TABLE artifacts
   ADD CONSTRAINT fk_artifacts_run_tenant
@@ -1289,10 +1431,13 @@ BEGIN
     'browser_identities',
     'network_policies',
     'gateway_policies',
-    'control_plane_idempotency_keys',
-    'scenarios',
-    'scenario_versions',
-    'automation_ideas',
+	    'control_plane_idempotency_keys',
+	    'scenarios',
+	    'scenario_versions',
+	    'scenario_releases',
+	    'scenario_environment_bindings',
+	    'scenario_release_events',
+	    'automation_ideas',
     'roi_estimates',
     'run_triggers',
     'run_trigger_fires',
@@ -1300,9 +1445,11 @@ BEGIN
     'runs',
     'scenario_generations',
     'run_steps',
-    'human_tasks',
-    'principals',
-    'document_jobs',
+	    'human_tasks',
+	    'principals',
+	    'principal_role_assignments',
+	    'principal_role_assignment_events',
+	    'document_jobs',
     'document_extractions',
     'events_outbox',
     'dead_letter',

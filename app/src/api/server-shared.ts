@@ -16,6 +16,7 @@ import type {
   DurableSecurityAuditDecisionWriter,
   RbacAction,
   RbacMiddleware,
+  Role,
   SecretStoreBoundary,
   SignedCommandRegistry,
 } from "../../../ts/security-middleware-contract";
@@ -123,6 +124,14 @@ export interface ApiServerDeps {
    * 담당자 디렉터리를 동기화한다. 미주입 시 JWT 자동 동기화는 비활성(GET /v1/principals는 그대로 동작).
    */
   principalDirectory?: PrincipalDirectoryWriter;
+  /** Optional tenant-scoped manual RBAC assignment resolver. When injected, roles are token roles ∪ active manual assignments. */
+  roleAssignments?: {
+    resolveActiveRoles(tenantId: string, principalSub: string): Promise<readonly Role[]>;
+  };
+  /** Enterprise hardening: if true, missing roleAssignments resolver is fail-closed after authentication. */
+  roleAssignmentsRequired?: boolean;
+  /** Enterprise ALM hardening: if true, legacy /promote cannot bypass release maker-checker. */
+  enforceAlmMakerChecker?: boolean;
   /** Webhook trigger HMAC verification key boundary. Values are resolved only while verifying a signed webhook and always through secret.resolve audit. */
   webhookSecretBoundary?: SecretStoreBoundary;
   /** Optional live DOM selector probe boundary. Missing provider is surfaced as not_run, never inferred success. */

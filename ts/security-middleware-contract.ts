@@ -93,6 +93,11 @@ export type RbacAction =
   | "scenario.update"
   | "scenario.promote"
   | "scenario.promote.approve"
+  | "scenario_release.read"
+  | "scenario_release.submit"
+  | "scenario_release.approve"
+  | "scenario_release.deploy"
+  | "scenario_release.rollback"
   | "artifact.read"
   | "site.read"
   | "site.approve"
@@ -142,7 +147,10 @@ export interface AuthorizationCheck {
       | "scenario"
       | "trigger"
       | "automation_idea"
+      | "principal"
+      | "role_assignment"
       | "audit_log"
+      | "scenario_release"
       | "gateway_policy"
       | "network_policy";
     id: string;
@@ -410,6 +418,14 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "secret.resolve",
   "connector.enable",
   "connector.install",
+  "scenario_release.create",
+  "scenario_release.submit",
+  "scenario_release.approve",
+  "scenario_release.reject",
+  "scenario_release.deploy",
+  "scenario_release.rollback",
+  "rbac.grant",
+  "rbac.revoke",
   "network.request",
   "prompt.inspect",
   "bypassrls.use",

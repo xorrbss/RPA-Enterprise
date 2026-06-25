@@ -111,6 +111,75 @@ export interface PrincipalItem {
   readonly source: "jwt" | "manual";
 }
 
+export type RoleAssignmentRole = "viewer" | "operator" | "reviewer" | "approver" | "admin";
+
+export interface RoleAssignmentItem {
+  readonly assignment_id: string;
+  readonly principal_sub: string;
+  readonly role: RoleAssignmentRole;
+  readonly source: "manual";
+  readonly status: "active" | "revoked";
+  readonly reason: string | null;
+  readonly expires_at: string | null;
+  readonly granted_by: string;
+  readonly granted_at: string;
+  readonly revoked_by: string | null;
+  readonly revoked_at: string | null;
+  readonly revoke_reason: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export type ScenarioEnvironment = "dev" | "staging" | "prod";
+export type ScenarioReleaseTarget = "staging" | "prod";
+export type ScenarioReleaseStatus = "draft" | "submitted" | "approved" | "rejected" | "deployed" | "rolled_back" | "cancelled";
+
+export interface ScenarioEnvironmentBinding {
+  readonly binding_id: string;
+  readonly scenario_id: string;
+  readonly environment: ScenarioEnvironment;
+  readonly scenario_version_id: string;
+  readonly version: number;
+  readonly release_id: string | null;
+  readonly activated_by: string;
+  readonly activated_at: string;
+}
+
+export interface ScenarioReleaseEvent {
+  readonly event_id: string;
+  readonly event_type: string;
+  readonly actor_sub: string;
+  readonly reason: string | null;
+  readonly created_at: string;
+}
+
+export interface ScenarioReleaseItem {
+  readonly release_id: string;
+  readonly scenario_id: string;
+  readonly source_version_id: string;
+  readonly source_version: number;
+  readonly target_environment: ScenarioReleaseTarget;
+  readonly status: ScenarioReleaseStatus;
+  readonly package_hash: string;
+  readonly validation_report: unknown;
+  readonly requested_by: string;
+  readonly requested_at: string;
+  readonly submitted_at: string | null;
+  readonly approved_by: string | null;
+  readonly approved_at: string | null;
+  readonly rejected_by: string | null;
+  readonly rejected_at: string | null;
+  readonly rejection_reason: string | null;
+  readonly deployed_by: string | null;
+  readonly deployed_at: string | null;
+  readonly rollback_of_release_id: string | null;
+  readonly reason: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly events?: readonly ScenarioReleaseEvent[];
+  readonly current_binding?: ScenarioEnvironmentBinding | null;
+}
+
 export type AuthReadinessStatus = "ok" | "warning" | "blocked";
 
 export interface AuthReadiness {

@@ -30,7 +30,7 @@
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact read/mutation RLS posture, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
 - [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output is recorded in the next row.
 - [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. Staging/deploy rollback evidence remains outside this contract repository and must be supplied by the project owner at deploy time.
-- [x] Current local blocked:audit output: 20 markers, 1 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (1 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows). Re-run this after the row-43 staging packet is supplied.
+- [x] Current local blocked:audit output: 21 markers, 2 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (1 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows; 1 repo-controlled Enterprise ALM/RBAC product-scope open rows). Re-run this after the row-43 staging packet is supplied or the SCIM contract is resolved.
 
 ## Deploy-Time Provisioning Blockers
 
@@ -85,6 +85,15 @@ before the related feature may be exposed as working product behavior.
 - [x] Browser RPA V2 business form schema contract. Resolved locally: HumanTask `result_schema.version="business_form_v1"` defines closed field descriptors for `text`/`textarea`/`number`/`boolean`/`date`/`select`; runtime `@human_task.input.result_schema` is persisted to `human_tasks.result_schema`; resolve validation enforces required/type/options/unknown-key rules before idempotency reservation. Evidence: `reserved-handlers.md`, `schema/ir.schema.json`, `api-surface.md`, `app/src/api/human-task-form-schema.ts`, `app/src/runtime/ir-interpreter.ts`, `web/src/components/HumanTaskReviewPanel.tsx`, `app/test/api-human-tasks.int.ts`, `app/test/run-step-driver.int.ts`, and `web/test/detail-drilldown.test.tsx`.
 - [x] Run trigger file/queue event contract. Resolved locally: V2 P1 exposes successful trigger creation/firing only for `cron` and signed `webhook`; `file_arrival`, `queue`, and `queue_threshold` trigger types are rejected with `IR_SCHEMA_INVALID(reason=invalid_trigger_type)` before idempotency reservation and never create `run_triggers` or `run_trigger_fires`. File watcher, queue payload schema, external queue credentials, replay window, and event fire-key semantics remain P2/future. Evidence: `api-surface.md`, `codegen/openapi.yaml`, `docs/browser-rpa-v2-design.md`, `app/src/api/run-triggers.ts`, `app/test/api-run-triggers.int.ts`, `web/src/views/Orchestration.tsx`, and `web/test/automation-ops.test.tsx`.
 - [x] Run trigger cron catchup and concurrency semantics. Resolved locally: `api-surface.md` and `docs/browser-rpa-v2-design.md` define 5-field cron support, next occurrence calculation, `skip_missed` vs `fire_once`, and concurrency skip behavior; `app/src/runtime/run-trigger-schedule.ts`, `app/src/api/run-triggers.ts`, and `app/src/worker/run-trigger-scheduler.ts` implement it. Evidence: `npm --prefix app run typecheck`, `npm --prefix app exec tsx app/test/run-trigger-schedule.unit.ts`, `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx app/test/api-run-triggers.int.ts`, and `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx app/test/run-trigger-scheduler.int.ts`.
+
+## Repo-Controlled Enterprise ALM/RBAC Product Scope / Open
+
+These rows track enterprise-governance behavior intentionally left out of the
+current manual role-assignment slice. They do not close by UI-only prototypes;
+each row needs a contract decision, API/runtime ownership, and targeted test
+evidence before the related feature may be exposed as working product behavior.
+
+- [ ] Enterprise ALM/RBAC SCIM synchronization contract. Required decision: choose the SCIM provider boundary, inbound principal/group schema, role-mapping source of truth, and token/manual/SCIM conflict resolution rule before any `source='scim'` role assignment can be accepted.
 
 ## Repo-Controlled D4.4 Evidence
 
