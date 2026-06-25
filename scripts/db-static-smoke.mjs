@@ -9,6 +9,7 @@ const DB = join(ROOT, "db");
 const smoke = readSql("migration_smoke.sql");
 const concurrency = readSql("migration_concurrency_idempotency.sql");
 const core = readSql("migration_core_entities.sql");
+const roles = readSql("roles.sql");
 const allMigrations = `${concurrency}\n${core}`;
 const failures = [];
 
@@ -78,6 +79,7 @@ checkIdempotencyAndCasContracts();
 checkAuditLogContract();
 checkEventsOutboxContract();
 checkForbiddenSql();
+checkRoles();
 
 if (failures.length > 0) {
   console.error(`db static smoke: ${failures.length} failed`);
@@ -116,6 +118,19 @@ function checkSmokeHarness() {
     arrayAssignment(smoke, "tenant_tables"),
     tenantTables,
   );
+}
+
+function checkRoles() {
+  // DG1 — 최소권한 역할 분리(db/roles.sql). rpa_app(런타임)은 DDL/superuser/bypassrls 없이 DML 만.
+  requireRegex("roles.sql rpa_migrator non-privileged", roles, /CREATE\s+ROLE\s+rpa_migrator\s+NOLOGIN\s+NOSUPERUSER\s+NOBYPASSRLS/i);
+  requireRegex("roles.sql rpa_app least-privilege attrs", roles, /CREATE\s+ROLE\s+rpa_app\s+NOLOGIN\s+NOSUPERUSER\s+NOBYPASSRLS\s+NOCREATEDB\s+NOCREATEROLE/i);
+  requireRegex("roles.sql rpa_app schema USAGE only", roles, /GRANT\s+USAGE\s+ON\s+SCHEMA\s+public\s+TO\s+rpa_app/i);
+  requireRegex("roles.sql rpa_app DML grant", roles, /GRANT\s+SELECT,\s*INSERT,\s*UPDATE,\s*DELETE\s+ON\s+ALL\s+TABLES\s+IN\s+SCHEMA\s+public\s+TO\s+rpa_app/i);
+  requireRegex("roles.sql default privileges for migrator", roles, /ALTER\s+DEFAULT\s+PRIVILEGES\s+FOR\s+ROLE\s+rpa_migrator\s+IN\s+SCHEMA\s+public/i);
+  // rpa_app 에 DDL(스키마 CREATE) 을 부여하면 최소권한이 깨진다 — 금지.
+  if (/GRANT\s+CREATE\s+ON\s+SCHEMA\s+public\s+TO\s+rpa_app/i.test(roles)) {
+    failures.push("roles.sql must NOT grant CREATE on schema public to rpa_app (DDL must stay denied)");
+  }
 }
 
 function checkCreatedTables() {
