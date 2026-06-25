@@ -26,12 +26,17 @@ const TENANT_B = "00000000-0000-4000-8000-0000000000b2";
 const AUDIT_A_NEW = "81000000-0000-4000-8000-0000000000a1";
 const AUDIT_A_OLD = "81000000-0000-4000-8000-0000000000a2";
 const AUDIT_B = "81000000-0000-4000-8000-0000000000b1";
+const AUDIT_A_INJ = "81000000-0000-4000-8000-0000000000a3";
 const CORR_A_NEW = "82000000-0000-4000-8000-0000000000a1";
 const CORR_A_OLD = "82000000-0000-4000-8000-0000000000a2";
+const CORR_A_INJ = "82000000-0000-4000-8000-0000000000a3";
 const CORR_B = "82000000-0000-4000-8000-0000000000b1";
 const HASH_A_OLD = "sha256:audit-old";
 const HASH_A_NEW = "sha256:audit-new";
+const HASH_A_INJ = "sha256:audit-inj";
 const HASH_B = "sha256:audit-b";
+// CSV 수식 인젝션 프로브(적대감사 #C8): actor.subject_id 가 '=' 로 시작 → export 가 작은따옴표로 무력화해야 함.
+const INJ_SUBJECT = "=cmd|' /C calc'!A0";
 
 const SECRET = new TextEncoder().encode("audit-log-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -85,6 +90,28 @@ async function seedAuditLog(pool: Pool): Promise<void> {
         CORR_A_NEW,
         JSON.stringify({ secret: "must-not-leak-new", resource: "artifact-new" }),
         HASH_A_NEW,
+      ],
+    );
+  });
+  // CSV 수식 인젝션 프로브 행(#C8): actor.subject_id 가 '=' 로 시작. seq=3, previous_hash=HASH_A_NEW(체인 연속).
+  await withTenantTx(pool, TENANT_A, async (c) => {
+    await c.query(
+      `INSERT INTO audit_log
+         (id, tenant_id, sequence_no, actor, action, outcome, reason, correlation_id,
+          idempotency_key, occurred_at, payload, payload_schema_ref, retention_until,
+          previous_hash, hash, created_at)
+       VALUES
+         ($1,$2,3,$3::jsonb,'artifact.read','allow','csv injection probe',$4,
+          'audit-inj','2026-06-20T09:00:00Z',$5::jsonb,'audit/security-boundary-decision@1',
+          '2026-09-20T09:00:00Z',$6,$7,'2026-06-20T09:00:01Z')`,
+      [
+        AUDIT_A_INJ,
+        TENANT_A,
+        JSON.stringify({ subjectId: INJ_SUBJECT, roles: ["viewer"] }),
+        CORR_A_INJ,
+        JSON.stringify({ secret: "must-not-leak-inj", resource: "artifact-inj" }),
+        HASH_A_NEW,
+        HASH_A_INJ,
       ],
     );
   });
@@ -182,6 +209,9 @@ async function main(): Promise<void> {
       check("audit export includes bounded summary fields", exported.body.includes("audit_id") && exported.body.includes(AUDIT_A_NEW) && exported.body.includes("artifact.read"), exported.body);
       check("audit export omits payload and other tenants", !exported.body.includes("must-not-leak") && !exported.body.includes(AUDIT_B), exported.body);
       check("audit export content-disposition filename", String(exported.headers["content-disposition"] ?? "").includes("audit-log-"), JSON.stringify(exported.headers));
+      // #C8: 수식 인젝션 셀(=cmd...)은 작은따옴표 접두로 무력화되어야(스프레드시트 수식 실행 차단). 원시 "=cmd 노출 금지.
+      check("CSV 수식 인젝션 셀 무력화(작은따옴표 접두)", exported.body.includes(`"'${INJ_SUBJECT}"`), exported.body);
+      check("CSV 무가드 =cmd 셀 미노출", !exported.body.includes(`"${INJ_SUBJECT}"`), exported.body);
 
       const invalidExport = await app.inject({
         method: "GET",
