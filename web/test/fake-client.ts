@@ -720,6 +720,9 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     }),
     setScenarioPromotion: async (_scenarioId, version, target) => ({ version, promotion_status: target }),
     archiveScenario: async () => ({ archived: true }),
+    createPromotionRequest: async (_scenarioId, version) => ({ request_id: "req-fake", version, status: "pending" }),
+    listPromotionRequests: empty,
+    decidePromotionRequest: async () => ({ status: "approved" }),
     listScenarioVersions: async () => ({ items: [], next_cursor: null }),
     rollbackScenario: async (_scenarioId, _sourceVersion, latestVersion) => ({
       scenario_id: "00000000-0000-0000-0000-0000000000c1",

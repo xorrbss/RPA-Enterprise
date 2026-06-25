@@ -187,6 +187,17 @@ export interface ScenarioItem {
   readonly promotion_status?: string;
 }
 
+// maker-checker prod 승격 요청(D4) — approver 인박스 항목.
+export interface PromotionRequest {
+  readonly request_id: string;
+  readonly scenario_id: string;
+  readonly scenario_name: string;
+  readonly version: number;
+  readonly reason: string;
+  readonly requested_by: string;
+  readonly created_at: string;
+}
+
 export type RunTriggerType = "cron" | "webhook";
 
 export interface RunTriggerItem {

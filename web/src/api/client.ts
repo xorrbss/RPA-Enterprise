@@ -64,6 +64,7 @@ import {
   type ScenarioGenerationRunRequest,
   type ScenarioGenerationResult,
   type ScenarioItem,
+  type PromotionRequest,
   type RunArtifactItem,
   type ScenarioMutationResult,
   type ScenarioVersionItem,
@@ -183,6 +184,9 @@ export interface ApiClient {
   promoteScenarioFromRun(scenarioId: string, runId: string, idempotencyKey: string): Promise<PromoteFromRunResult>;
   setScenarioPromotion(scenarioId: string, version: number, target: "prod" | "draft", idempotencyKey: string): Promise<unknown>;
   archiveScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
+  createPromotionRequest(scenarioId: string, version: number, reason: string, idempotencyKey: string): Promise<unknown>;
+  listPromotionRequests(): Promise<Paginated<PromotionRequest>>;
+  decidePromotionRequest(scenarioId: string, requestId: string, decision: "approve" | "reject", reason: string | undefined, idempotencyKey: string): Promise<unknown>;
   listScenarioVersions(scenarioId: string): Promise<Paginated<ScenarioVersionItem>>;
   rollbackScenario(scenarioId: string, sourceVersion: number, latestVersion: number, idempotencyKey: string): Promise<ScenarioMutationResult>;
   // 상세 GET-by-id(RLS 스코프, 미존재/타테넌트→404). drill-down 뷰의 선행.
@@ -515,6 +519,15 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/scenarios/${scenarioId}/promote`, key, { target }, { "If-Match": String(version) }),
     archiveScenario: (scenarioId, version, key) =>
       post(`/v1/scenarios/${scenarioId}/archive`, key, {}, { "If-Match": String(version) }),
+    createPromotionRequest: (scenarioId, version, reason, key) =>
+      post(`/v1/scenarios/${scenarioId}/promotion-requests`, key, { version, reason }),
+    listPromotionRequests: () => get(`/v1/scenarios/promotion-requests`),
+    decidePromotionRequest: (scenarioId, requestId, decision, reason, key) =>
+      post(
+        `/v1/scenarios/${scenarioId}/promotion-requests/${requestId}/decide`,
+        key,
+        reason !== undefined && reason.trim() !== "" ? { decision, reason: reason.trim() } : { decision },
+      ),
     listScenarioVersions: (scenarioId) => get(`/v1/scenarios/${scenarioId}/versions`),
     rollbackScenario: (scenarioId, sourceVersion, latestVersion, key) =>
       post(`/v1/scenarios/${scenarioId}/versions/${sourceVersion}/rollback`, key, {}, { "If-Match": String(latestVersion) }),
