@@ -48,6 +48,30 @@ describe("동시성 정책 패널 (D5b)", () => {
     expect(screen.getByText("포화")).toBeInTheDocument(); // 1 - 1 = 0
   });
 
+  test("DG-4 메타: 표시명·등록자 표기", async () => {
+    renderApp(
+      fakeClient({
+        listConcurrencyPolicies: async () => ({
+          items: [
+            {
+              credential_ref: "rpa/prod/runtime-worker/executor/hr_pw",
+              site_profile_id: "s1",
+              site_name: "급여시스템",
+              max_concurrency: 2,
+              active_leases: 0,
+              label: "하이웍스 운영 계정",
+              registered_by: "admin-a",
+              registered_at: "2026-06-26T00:00:00.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    expect(await screen.findByText("하이웍스 운영 계정")).toBeInTheDocument();
+    expect(screen.getByText(/등록: admin-a/)).toBeInTheDocument();
+  });
+
   test("정책 없으면 정직한 빈 표기", async () => {
     renderApp(fakeClient({ listConcurrencyPolicies: async () => ({ items: [], next_cursor: null }) }));
     expect(await screen.findByText(/설정된 동시성 정책이 없습니다/)).toBeInTheDocument();

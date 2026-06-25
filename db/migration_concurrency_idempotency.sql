@@ -18,6 +18,9 @@ CREATE TABLE credential_concurrency_policies (
   credential_ref   text        NOT NULL,
   site_profile_id  uuid        NOT NULL,
   max_concurrency  int         NOT NULL DEFAULT 1 CHECK (max_concurrency >= 1),
+  label            text,                                 -- DG-4 메타: 운영자 표시명(선택). 값 아님.
+  registered_by    text,                                 -- DG-4 메타: 마지막 등록/갱신 처리자(principal subject)
+  registered_at    timestamptz NOT NULL DEFAULT now(),   -- DG-4 메타: 마지막 등록/갱신 시각
   PRIMARY KEY (tenant_id, credential_ref, site_profile_id)
 );
 

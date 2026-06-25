@@ -53,7 +53,14 @@ export function ConcurrencyPolicyPanel(): JSX.Element | null {
                   <tr key={`${p.credential_ref}:${p.site_profile_id}`}>
                     <td>{p.site_name ?? <code className="subtle">{p.site_profile_id}</code>}</td>
                     <td>
+                      {p.label != null && p.label !== "" && <div>{p.label}</div>}
                       <code className="subtle">{p.credential_ref}</code>
+                      {p.registered_by != null && (
+                        <div className="subtle" style={{ fontSize: 11 }}>
+                          등록: {p.registered_by}
+                          {p.registered_at != null ? ` · ${p.registered_at.slice(0, 10)}` : ""}
+                        </div>
+                      )}
                     </td>
                     <td>{p.max_concurrency}</td>
                     <td>{p.active_leases}</td>
@@ -93,6 +100,7 @@ function CredentialRegisterForm(): JSX.Element {
   const [credentialRef, setCredentialRef] = useState("");
   const [siteId, setSiteId] = useState("");
   const [maxConcurrency, setMaxConcurrency] = useState(1);
+  const [label, setLabel] = useState("");
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
 
   const sites = useQuery({
@@ -104,7 +112,12 @@ function CredentialRegisterForm(): JSX.Element {
   const register = useMutation({
     mutationFn: () =>
       api.registerCredentialBinding(
-        { credential_ref: credentialRef.trim(), site_profile_id: siteId, max_concurrency: Math.max(1, Math.floor(maxConcurrency)) },
+        {
+          credential_ref: credentialRef.trim(),
+          site_profile_id: siteId,
+          max_concurrency: Math.max(1, Math.floor(maxConcurrency)),
+          ...(label.trim() !== "" ? { label: label.trim() } : {}),
+        },
         crypto.randomUUID(),
       ),
     onSuccess: () => {
@@ -112,6 +125,7 @@ function CredentialRegisterForm(): JSX.Element {
       setCredentialRef("");
       setSiteId("");
       setMaxConcurrency(1);
+      setLabel("");
       void qc.invalidateQueries({ queryKey: ["concurrency-policies"] });
     },
     onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
@@ -167,6 +181,10 @@ function CredentialRegisterForm(): JSX.Element {
               value={maxConcurrency}
               onChange={(e) => setMaxConcurrency(Number(e.target.value))}
             />
+          </label>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span className="subtle">표시명 (선택)</span>
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="예: 하이웍스 운영 계정" />
           </label>
           <div>
             <button className="btn primary" type="button" disabled={invalid || register.isPending} onClick={() => register.mutate()}>

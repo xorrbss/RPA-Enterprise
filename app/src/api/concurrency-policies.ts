@@ -12,6 +12,9 @@ interface ConcurrencyPolicyRow {
   readonly site_name: string | null;
   readonly max_concurrency: number;
   readonly active_leases: string;
+  readonly label: string | null;
+  readonly registered_by: string | null;
+  readonly registered_at: Date;
 }
 
 interface ConcurrencyPolicyItem {
@@ -20,6 +23,9 @@ interface ConcurrencyPolicyItem {
   readonly site_name: string | null;
   readonly max_concurrency: number;
   readonly active_leases: number;
+  readonly label: string | null;
+  readonly registered_by: string | null;
+  readonly registered_at: string;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,6 +76,7 @@ export function registerConcurrencyPolicyRoutes(app: FastifyInstance, deps: ApiS
   //   ⛔ 시크릿 값은 절대 받지 않는다 — SecretRef 식별자 + max_concurrency 만. 값은 out-of-band(Vault/KMS).
   //   동일 (ref, site) 재등록은 max_concurrency 갱신(upsert) — 새 ref 로 회전 시 새 ref 등록 후 옛 ref 삭제.
   app.post("/v1/credentials", { config: { rbacAction: "credential.manage" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
     const body = isRecord(request.body) ? request.body : {};
     const forbidden = FORBIDDEN_VALUE_FIELDS.find((field) => field in body);
     if (forbidden !== undefined) {
@@ -79,6 +86,8 @@ export function registerConcurrencyPolicyRoutes(app: FastifyInstance, deps: ApiS
     const siteProfileId = typeof body.site_profile_id === "string" ? body.site_profile_id : "";
     const maxConcurrency =
       typeof body.max_concurrency === "number" && Number.isInteger(body.max_concurrency) ? body.max_concurrency : null;
+    // DG-4 메타(선택): 운영자 표시명. 값(시크릿) 아님. registered_by 는 처리자 principal 로 자동 기록.
+    const label = typeof body.label === "string" && body.label.trim() !== "" ? body.label.trim() : null;
     if (credentialRef.length === 0) {
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "missing_credential_ref", field: "credential_ref" });
     }
@@ -105,15 +114,16 @@ export function registerConcurrencyPolicyRoutes(app: FastifyInstance, deps: ApiS
         );
         if (site.rows[0] === undefined) throw new ApiResponseError("RESOURCE_NOT_FOUND");
         await client.query(
-          `INSERT INTO credential_concurrency_policies (tenant_id, credential_ref, site_profile_id, max_concurrency)
-             VALUES ($1::uuid, $2, $3::uuid, $4)
+          `INSERT INTO credential_concurrency_policies (tenant_id, credential_ref, site_profile_id, max_concurrency, label, registered_by, registered_at)
+             VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6, now())
            ON CONFLICT (tenant_id, credential_ref, site_profile_id)
-             DO UPDATE SET max_concurrency = EXCLUDED.max_concurrency`,
-          [tenantId, credentialRef, siteProfileId, maxConcurrency],
+             DO UPDATE SET max_concurrency = EXCLUDED.max_concurrency, label = EXCLUDED.label,
+                           registered_by = EXCLUDED.registered_by, registered_at = now()`,
+          [tenantId, credentialRef, siteProfileId, maxConcurrency, label, principal.subjectId],
         );
         return {
           status: 200,
-          body: { credential_ref: credentialRef, site_profile_id: siteProfileId, max_concurrency: maxConcurrency },
+          body: { credential_ref: credentialRef, site_profile_id: siteProfileId, max_concurrency: maxConcurrency, label },
         };
       },
     );
@@ -169,7 +179,10 @@ async function readConcurrencyPolicies(client: PoolClient, tenantId: string): Pr
         p.site_profile_id::text AS site_profile_id,
         sp.name AS site_name,
         p.max_concurrency,
-        COALESCE(l.active_leases, 0)::text AS active_leases
+        COALESCE(l.active_leases, 0)::text AS active_leases,
+        p.label,
+        p.registered_by,
+        p.registered_at
        FROM credential_concurrency_policies p
        LEFT JOIN site_profiles sp ON sp.tenant_id = p.tenant_id AND sp.id = p.site_profile_id
        LEFT JOIN (
@@ -188,5 +201,8 @@ async function readConcurrencyPolicies(client: PoolClient, tenantId: string): Pr
     site_name: row.site_name,
     max_concurrency: row.max_concurrency,
     active_leases: Number(row.active_leases),
+    label: row.label,
+    registered_by: row.registered_by,
+    registered_at: row.registered_at.toISOString(),
   }));
 }
