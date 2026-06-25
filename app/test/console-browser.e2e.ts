@@ -84,6 +84,17 @@ function apiFixture(pathname: string): unknown {
   if (pathname === "/api/v1/runs/summary") {
     return { by_status: { running: 1 }, success_rate: null, total: 1, cache: { by_mode: { bypass: 1 }, hit_rate: null } };
   }
+  if (pathname === "/api/v1/runs/trends") {
+    return {
+      window_days: 30,
+      timezone: "Asia/Seoul",
+      points: [
+        { day: "2026-06-23", completed: 1, failed_business: 0, failed_system: 0, total: 1, success_rate: 1 },
+        { day: "2026-06-24", completed: 0, failed_business: 0, failed_system: 0, total: 0, success_rate: null },
+        { day: "2026-06-25", completed: 1, failed_business: 0, failed_system: 1, total: 2, success_rate: 0.5 },
+      ],
+    };
+  }
   // human-tasks / dlq / sites / scenarios 등 → 빈 페이지(정직)
   return { items: [], next_cursor: null };
 }

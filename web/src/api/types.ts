@@ -16,6 +16,23 @@ export interface RunSummary {
   readonly cache: { readonly by_mode: Record<string, number>; readonly hit_rate: number | null };
 }
 
+// run outcome 일별 추세(api-surface §1 GET /v1/runs/trends). 윈도우 내 모든 날 포함(0건 날도 — 스파크라인 연속).
+// success_rate=completed/(completed+failed_business+failed_system), 그 날 분모 0이면 null(0/0 단정 금지).
+export interface RunTrendPoint {
+  readonly day: string;
+  readonly completed: number;
+  readonly failed_business: number;
+  readonly failed_system: number;
+  readonly total: number;
+  readonly success_rate: number | null;
+}
+
+export interface RunTrends {
+  readonly window_days: number;
+  readonly timezone: string;
+  readonly points: readonly RunTrendPoint[];
+}
+
 export interface RunItem {
   readonly run_id: string;
   readonly status: string;
