@@ -27,6 +27,9 @@ interface HumanTaskRow {
   result_schema: unknown;
   artifact_refs: unknown;
   result: unknown;
+  escalation_reason: string | null;
+  escalated_by: string | null;
+  escalated_at: Date | null;
   created_at: Date;
   cursor_at: string; // created_at::text(전정밀도) — keyset 커서(PAG-01)
 }
@@ -55,6 +58,9 @@ function mapHumanTask(r: HumanTaskRow): Record<string, unknown> {
     result_schema: recordOrEmpty(r.result_schema),
     artifact_refs: stringArray(r.artifact_refs),
     result: recordOrNull(r.result),
+    escalation_reason: r.escalation_reason,
+    escalated_by: r.escalated_by,
+    escalated_at: r.escalated_at !== null ? r.escalated_at.toISOString() : null,
   };
 }
 
@@ -96,6 +102,7 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
       const result = await c.query<HumanTaskRow>(
         `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id,
                 payload, result_schema, artifact_refs, result,
+                escalation_reason, escalated_by, escalated_at,
                 created_at, created_at::text AS cursor_at
            FROM human_tasks
           WHERE tenant_id = $1::uuid
@@ -159,6 +166,7 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
         const result = await c.query<HumanTaskRow>(
           `SELECT id, state, kind, assignee, expires_at, on_timeout, run_id,
                   payload, result_schema, artifact_refs, result,
+                  escalation_reason, escalated_by, escalated_at,
                   created_at, created_at::text AS cursor_at
              FROM human_tasks WHERE id = $1::uuid`,
           [id],
