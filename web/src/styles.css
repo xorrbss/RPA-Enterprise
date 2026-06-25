@@ -48,8 +48,9 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 10; }
 .topbar h1 { font-size: 18px; margin: 0; }
 .topbar-heading { display: inline-flex; align-items: center; gap: 6px; }
-.help-button { display: inline-flex; align-items: center; justify-content: center; padding: 2px; border: 0; background: transparent; color: var(--muted); cursor: help; border-radius: 999px; }
-.help-button:hover { color: var(--blue); }
+.help-button { display: inline-flex; align-items: center; justify-content: center; padding: 2px; border: 0; background: transparent; color: var(--muted); cursor: pointer; border-radius: 999px; }
+.help-button:hover, .help-button[aria-expanded="true"] { color: var(--blue); }
+.help-text { margin-top: 6px; max-width: 640px; padding: 8px 10px; border: 1px solid var(--blue-soft); border-radius: var(--radius); background: var(--blue-soft); color: var(--text); font-size: 12px; line-height: 1.5; }
 .topbar .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .freshness { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .live-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--green); animation: livePulse 2s infinite; }

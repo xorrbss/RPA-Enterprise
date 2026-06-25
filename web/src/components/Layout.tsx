@@ -5,7 +5,7 @@ import {
   HelpCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 
 import { NAV_GROUPS, navigate, type ViewKey } from "../router";
 import { decodeRoles, decodeSubject, ROLE_LABELS } from "../api/permissions";
@@ -70,6 +70,12 @@ function SubjectChip(): JSX.Element {
 
 export function Layout({ view, children }: { view: ViewKey; children: ReactNode }): JSX.Element {
   const meta = VIEW_META[view];
+  // '?' 도움말 토글 — title 툴팁은 터치/스크린리더에 안 닿으므로 클릭 시 본문을 화면에 펼친다.
+  const [showHelp, setShowHelp] = useState(false);
+  const helpId = useId();
+  // 화면을 바꾸면 이전 화면의 도움말은 닫는다(맥락 불일치 방지).
+  useEffect(() => setShowHelp(false), [view]);
+  const helpText = meta.helpText ?? meta.subtitle;
   return (
     <div className="app">
       <nav className="sidebar" aria-label="주 메뉴">
@@ -94,12 +100,20 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
                 type="button"
                 className="help-button"
                 aria-label={`${meta.title} 화면 도움말`}
-                title={meta.helpText ?? meta.subtitle}
+                aria-expanded={showHelp}
+                aria-controls={showHelp ? helpId : undefined}
+                title={helpText}
+                onClick={() => setShowHelp((v) => !v)}
               >
                 <HelpCircle size={15} aria-hidden="true" />
               </button>
             </div>
             <div className="sub">{meta.subtitle}</div>
+            {showHelp && (
+              <div id={helpId} className="help-text" role="region" aria-label={`${meta.title} 화면 도움말`}>
+                {helpText}
+              </div>
+            )}
           </div>
           <span style={{ display: "inline-flex", gap: 12, alignItems: "center" }}>
             <SubjectChip />
