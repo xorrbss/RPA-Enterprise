@@ -72,8 +72,11 @@ async function main(): Promise<void> {
       { runId: RUN, nodeId: "malformed", kind: "approval", state: "resolved", result: { reason: "no decision field" } },
       { runId: RUN, nodeId: "open_node", kind: "approval", state: "open", result: { decision: "approve" } },
       // 다중 cycle 최신 권위: 같은 node_id, resolved_at 이른 것(correct) → 늦은 것(retry)으로 덮어씀.
-      { runId: RUN, nodeId: "loop_node", kind: "validation", state: "resolved", result: { decision: "correct" }, resolvedAt: "2026-06-25T01:00:00Z" },
       { runId: RUN, nodeId: "loop_node", kind: "validation", state: "resolved", result: { decision: "retry" }, resolvedAt: "2026-06-25T02:00:00Z" },
+      { runId: RUN, nodeId: "loop_node", kind: "validation", state: "resolved", result: { decision: "correct" }, resolvedAt: "2026-06-25T01:00:00Z" },
+      // 최신 해소가 malformed(decision 부재)면 이전 사이클 유효값으로 폴백 금지(latest-wins) — 미투영(부재) 되어야.
+      { runId: RUN, nodeId: "stale_guard", kind: "validation", state: "resolved", result: { decision: "approve" }, resolvedAt: "2026-06-25T01:00:00Z" },
+      { runId: RUN, nodeId: "stale_guard", kind: "validation", state: "resolved", result: { reason: "no decision" }, resolvedAt: "2026-06-25T02:00:00Z" },
       // 다른 run 격리.
       { runId: OTHER_RUN, nodeId: "approve_node", kind: "approval", state: "resolved", result: { decision: "reject" } },
     ];
@@ -112,11 +115,12 @@ async function main(): Promise<void> {
     check("malformed(decision 부재) 미투영", outputs.malformed === undefined, JSON.stringify(outputs.malformed));
     check("open(비-resolved) 미투영", outputs.open_node === undefined, JSON.stringify(outputs.open_node));
 
-    check("loop_node 다중 cycle 최신 권위 = retry", outputs.loop_node?.decision === "retry", JSON.stringify(outputs.loop_node));
+    check("loop_node 다중 cycle 최신 권위 = retry(resolved_at 정렬 기준, 배열 순서 무관)", outputs.loop_node?.decision === "retry", JSON.stringify(outputs.loop_node));
+    check("stale_guard 최신 malformed → 이전 유효(approve) 폴백 금지(미투영)", outputs.stale_guard === undefined, JSON.stringify(outputs.stale_guard));
 
     check("다른 run 격리(approve_node 는 RUN 의 approve, OTHER_RUN 의 reject 아님)", outputs.approve_node?.decision === "approve", JSON.stringify(outputs.approve_node));
     const keyCount = Object.keys(outputs).length;
-    check("투영 키 = {approve_node, correct_node, decision_only, loop_node} 4개", keyCount === 4, `keys=${Object.keys(outputs).join(",")}`);
+    check("투영 키 = {approve_node, correct_node, decision_only, loop_node} 4개(stale_guard 제외)", keyCount === 4, `keys=${Object.keys(outputs).join(",")}`);
   } finally {
     await pool.end();
   }

@@ -38,8 +38,11 @@ export async function loadResolvedHumanTaskNodeOutputs(
 
   const outputs: Record<string, HumanTaskNodeOutput> = {};
   for (const row of rows) {
+    // 행은 resolved_at→created_at ASC — 같은 node_id 는 최신 해소가 권위(latest-wins). 최신이 malformed/decision 부재면
+    //   이전 사이클의 유효 출력으로 폴백하지 않는다(stale 판정 사용 금지) → 부재 = 참조 시 IREL_RUNTIME_MISSING(loud).
     const output = humanTaskNodeOutput(row.result);
     if (output !== undefined) outputs[row.node_id] = output;
+    else delete outputs[row.node_id];
   }
   return outputs;
 }
