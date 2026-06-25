@@ -296,6 +296,22 @@ export function stepBuilderInitialFromIr(
   return { name, steps: steps.length > 0 ? steps : DEFAULT_STEPS };
 }
 
+// 빌더(쉬운 만들기/단계 편집)가 충실히 표현하지 못하는 흐름 — 복귀형 예약 핸들러(@human_task/@challenge) 노드.
+// next(또는 on[].target)가 {handler,input,return_node} 객체면 stepBuilderInitialFromIr 가 어느 분기에도 안 걸려
+// 무음으로 terminal:success 로 떨어뜨린다(사람 승인 단계·decision 분기 파괴). 그런 IR 은 '직접 편집'으로만 안전.
+export function irContainsReservedHandler(ir: unknown): boolean {
+  if (!isRecord(ir) || !isRecord(ir.nodes)) return false;
+  return Object.values(ir.nodes).some((node) => {
+    if (!isRecord(node)) return false;
+    if (isReservedHandlerCall(node.next)) return true;
+    return Array.isArray(node.on) && node.on.some((branch) => isRecord(branch) && isReservedHandlerCall(branch.target));
+  });
+}
+
+function isReservedHandlerCall(target: unknown): boolean {
+  return isRecord(target) && typeof target.handler === "string";
+}
+
 function initialCounter(steps: readonly Step[]): number {
   const max = steps.reduce((acc, step) => {
     const match = /^n(\d+)$/.exec(step.id);
