@@ -92,6 +92,7 @@ const ARTIFACT_REDACTION_ACTIVE_CLAIM = "60000000-0000-0000-0000-000000000005";
 const ARTIFACT_REDACTION_RETRYABLE = "60000000-0000-0000-0000-000000000006";
 const ARTIFACT_REDACTION_GENERATION_TARGET = "60000000-0000-0000-0000-000000000007";
 const ARTIFACT_REDACTION_GENERATION_UNRELATED = "60000000-0000-0000-0000-000000000008";
+const ARTIFACT_REDACTION_LEGAL_HOLD = "60000000-0000-0000-0000-000000000009";
 const ARTIFACT_RETENTION_DELETE = "60000000-0000-0000-0000-000000000011";
 const ARTIFACT_RETENTION_NOT_FOUND = "60000000-0000-0000-0000-000000000012";
 const ARTIFACT_RETENTION_TRANSIENT = "60000000-0000-0000-0000-000000000013";
@@ -1481,6 +1482,35 @@ async function main(): Promise<void> {
           tenantWideClaimed.redactionStatus === "failed" &&
           tenantWideClaimed.lifecycleClaimSet === false,
         JSON.stringify({ calls: redactionCalls.map((call) => call.artifact.artifactRef), tenantWideClaimed }),
+      );
+
+      // legal_hold 가드(DG 감사 #C1, impl-contracts §B): legal_hold=true 인 pending artifact 는 redaction 이 claim/redact
+      //   하지 않는다(원본 비가역 삭제 방지). retention 처리기와 대칭. 가드 부재 시 held 원본이 'redacted' 되고 평문 삭제됨.
+      await withTenantTx(lifecycleBypassPool, TENANT_A, async (c) => {
+        await c.query(
+          `INSERT INTO artifacts (
+             id, tenant_id, run_id, generation_id, type, redaction_status, redaction_attempts, object_ref,
+             retention_until, legal_hold, quarantine, deleted_at, deleted_reason, deleted_by_job,
+             lifecycle_claim_id, lifecycle_claim_kind, lifecycle_claim_worker_id,
+             lifecycle_claim_correlation_id, lifecycle_claimed_at, lifecycle_claim_expires_at
+           )
+           VALUES ($1,$2,NULL,NULL,'receipt','pending',0,'object://runtime-worker/legal-hold-original',
+              now() + interval '90 days', true, false, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`,
+          [ARTIFACT_REDACTION_LEGAL_HOLD, TENANT_A],
+        );
+      });
+      const heldSweep = await bypassWorker.handle({
+        kind: "artifact_redaction",
+        tenantId: TENANT_A as TenantId,
+        correlationId: CORRELATION as CorrelationId,
+      });
+      check("artifact_redaction legal_hold sweep completes", heldSweep.kind === "completed", JSON.stringify(heldSweep));
+      const heldArtifact = await artifactLifecycleDetails(lifecycleBypassPool, ARTIFACT_REDACTION_LEGAL_HOLD);
+      check(
+        "legal_hold pending artifact 는 redaction 미claim·미redact(원본 보존, §B fail-closed)",
+        heldArtifact.redactionStatus === "pending" &&
+          !redactionCalls.some((call) => call.artifact.artifactRef === ARTIFACT_REDACTION_LEGAL_HOLD),
+        JSON.stringify({ heldArtifact, calls: redactionCalls.map((call) => call.artifact.artifactRef) }),
       );
 
       const retentionDelete = await bypassWorker.handle({

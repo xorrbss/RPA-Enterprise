@@ -175,6 +175,7 @@ export class ArtifactRedactionProcessor {
           AND redaction_attempts < $3::int
            AND deleted_at IS NULL
            AND quarantine = false
+           AND legal_hold = false
            AND ($4::uuid IS NULL OR id = $4::uuid)
            AND (
              ($2::uuid IS NULL AND $5::uuid IS NULL)
@@ -204,6 +205,7 @@ export class ArtifactRedactionProcessor {
           AND redaction_attempts < $3::int
            AND deleted_at IS NULL
            AND quarantine = false
+           AND legal_hold = false
            AND ($4::uuid IS NULL OR id = $4::uuid)
            AND (
              ($2::uuid IS NULL AND $5::uuid IS NULL)
@@ -250,6 +252,7 @@ export class ArtifactRedactionProcessor {
            AND redaction_attempts < $7::int
            AND deleted_at IS NULL
            AND quarantine = false
+           AND legal_hold = false
            AND ($8::uuid IS NULL OR id = $8::uuid)
            AND ($9::uuid IS NULL OR generation_id = $9::uuid)
            AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= now())`,
@@ -356,7 +359,8 @@ export class ArtifactRedactionProcessor {
           AND lifecycle_claim_expires_at > now()
           AND redaction_status = 'pending'
           AND deleted_at IS NULL
-          AND quarantine = false`,
+          AND quarantine = false
+          AND legal_hold = false`,
       [
         input.claim.tenantId,
         input.claim.artifact.artifactRef,
