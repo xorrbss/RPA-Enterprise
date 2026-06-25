@@ -109,10 +109,12 @@ export function registerWebhookTriggerRoutes(app: FastifyInstance, deps: ApiServ
 }
 
 function webhookSecretPrincipal(tenantId: string): AuthenticatedPrincipal {
+  // 최소권한(적대감사 #C11): 웹훅 시크릿 해소 인가는 runtime_identity('api')→RESOLVE_MATRIX(connector)로 결정되고
+  //   roles 는 검사·감사 페이로드 어디에도 쓰이지 않는다. admin 부여는 불필요·오해소지 → roles 비움(서비스-계정 정직).
   return {
     subjectId: "api:webhook-trigger" as PrincipalId,
     tenantId: tenantId as TenantId,
-    roles: ["admin"],
+    roles: [],
     source: "jwt",
     claims: { runtime_identity: "api" },
   };
