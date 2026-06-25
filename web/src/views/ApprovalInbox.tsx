@@ -169,6 +169,8 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
   const [bulkConfirm, setBulkConfirm] = useState(false);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
+  // 일괄 승인 결과 집계 — 완료 후 '성공 N건 · 실패 M건'을 한눈에(행별 에러를 스크롤로 찾지 않게). null = 미실행.
+  const [bulkResult, setBulkResult] = useState<{ ok: number; failed: number } | null>(null);
   // 동기 이중제출 가드: bulkRunning(state)은 다음 렌더에야 true 라 같은 틱 연타를 못 막는다 → ref 로 즉시 차단.
   const bulkSubmitting = useRef(false);
   const pendingRows = rows.filter((r) => !["approved", "rejected", "completed"].includes(r.status));
@@ -200,22 +202,28 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
     bulkSubmitting.current = true;
     setBulkConfirm(false);
     setBulkRunning(true);
+    setBulkResult(null);
+    let ok = 0;
+    let failed = 0;
     try {
       for (const docRef of selected) {
         if (decided[docRef] !== undefined) continue; // 이미 결정된 건은 재제출 안 함(409 묻힘 방지, IRR-03)
         try {
           const res = await api.decideApproval({ source_run_id: sourceRunId, doc_ref: docRef, decision: "approve" }, crypto.randomUUID());
           markDecided(docRef, res.spawned_run_id);
+          ok += 1;
           setBulkErrors((prev) => {
             const next = { ...prev };
             delete next[docRef];
             return next;
           });
         } catch (e) {
+          failed += 1;
           setBulkErrors((prev) => ({ ...prev, [docRef]: e instanceof ApiError ? errorLabel(e) : "결재 처리 실패" }));
         }
       }
       setSelected(new Set());
+      setBulkResult({ ok, failed });
     } finally {
       setBulkRunning(false);
       bulkSubmitting.current = false;
@@ -242,6 +250,14 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
           </button>
           {/* 일괄 승인: 선택 N건을 1회 배치 확인 후 순차 승인(되돌릴 수 없음 안내는 건별→배치 단위로 유지). 반려는 건별. */}
           {showActions && bulkRunning && <span className="subtle" role="status">일괄 승인 처리 중…</span>}
+          {showActions && !bulkRunning && bulkResult !== null && (
+            <span
+              className={`badge ${bulkResult.failed > 0 ? "amber" : "green"}`}
+              role={bulkResult.failed > 0 ? "alert" : "status"}
+            >
+              승인 완료 {bulkResult.ok}건{bulkResult.failed > 0 ? ` · 실패 ${bulkResult.failed}건(아래 표에서 확인)` : ""}
+            </span>
+          )}
           {showActions && !bulkRunning && !bulkConfirm && selected.size > 0 && (
             <button className="btn" type="button" onClick={() => setBulkConfirm(true)}>
               선택 {selected.size}건 일괄 승인

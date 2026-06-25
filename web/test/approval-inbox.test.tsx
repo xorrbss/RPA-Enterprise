@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
-import type { DecideApprovalBody } from "../src/api/types";
+import { ApiError, type DecideApprovalBody } from "../src/api/types";
 import { APPROVAL_ARTIFACT_TYPE, COLLECT_SCENARIO_NAME, isHttpUrl, parseApprovalRows, summarize } from "../src/api/approval-inbox";
 import { fakeClient } from "./fake-client";
 
@@ -295,6 +295,39 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
     // 미선택 3번째 행(비품 구매)은 일괄 대상 아님 — 여전히 건별 [결재] 버튼 보유.
     expect(screen.getByText("비품 구매")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "결재" }).length).toBeGreaterThanOrEqual(1);
+    // 일괄 결과 집계: 성공 2건을 한눈에(스크롤로 행을 찾지 않게).
+    expect(await screen.findByText("승인 완료 2건")).toBeInTheDocument();
+  });
+
+  test("일괄 승인 부분 실패 → '성공 N건 · 실패 M건' 집계 + 실패 행 에러 배지", async () => {
+    localStorage.setItem("rpa.token", jwt(["approver"]));
+    let n = 0;
+    const client = fakeClient({
+      listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
+      listRuns: async (p) =>
+        p?.scenario_version_id === "ver-c"
+          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          : { items: [], next_cursor: null },
+      listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
+      getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
+      decideApproval: async (body) => {
+        n += 1;
+        if (n === 1) throw new ApiError(409, "APPROVAL_ALREADY_DECIDED", { code: "APPROVAL_ALREADY_DECIDED" });
+        return { decision_id: `dec-${n}`, source_run_id: body.source_run_id, doc_ref: body.doc_ref, decision: body.decision, spawned_run_id: `spawn-${n}` };
+      },
+      getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+    });
+    renderApp(client);
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("연차 신청 일괄 승인 선택"));
+    fireEvent.click(screen.getByLabelText("출장비 정산 일괄 승인 선택"));
+    fireEvent.click(screen.getByRole("button", { name: "선택 2건 일괄 승인" }));
+    fireEvent.click(screen.getByRole("button", { name: "일괄 승인 확인" }));
+
+    // 부분 실패가 집계로 즉시 표면화(조용한 false 금지).
+    expect(await screen.findByText("승인 완료 1건 · 실패 1건(아래 표에서 확인)")).toBeInTheDocument();
   });
 
   // IRR-03: 일괄 선택 후 그 중 한 건을 건별 승인하면 selected 에서 제거돼, 일괄 경로가 그 건을 재제출하지 않는다
