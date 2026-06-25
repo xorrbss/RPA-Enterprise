@@ -57,7 +57,8 @@ function executorCapabilityLabel(caps: { dom: boolean; vision: boolean; utility:
 
 /** 표준 노드 출력 필드(IREL node.<id>.*). 미투영 필드는 부재 → 참조 시 IREL_RUNTIME_MISSING(loud). */
 interface NodeOutput {
-  readonly status: StepStatus;
+  // status 는 실행 노드(StepResult 투영)에만 부착. @human_task 해소 출력은 StepStatus 가 없어 status 부재(decision/correction 만, ir-expression §2).
+  readonly status?: StepStatus;
   readonly row_count?: number;
   readonly extracted_ref?: string;
   readonly http_status?: number;
@@ -65,6 +66,9 @@ interface NodeOutput {
   readonly http_body?: unknown;
   // tier: fallback_chain 노드가 채택한 티어(T0..T3). fallback 노드 출력에만 부착(ir-expression §2). 비-fallback은 부재(loud).
   readonly tier?: string;
+  // @human_task 해소 출력(resume nodeScope 시드): decision(닫힌 enum)·correction(business_form 교정값). reserved-handlers.md.
+  readonly decision?: string;
+  readonly correction?: Record<string, unknown>;
 }
 
 /** StepResult → 표준 노드 출력 투영(ir-expression §2). status는 항상; row_count/extracted_ref는 extract 액션만. */
@@ -492,6 +496,7 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       const pageRef = lastResult !== undefined ? lastResult.pageStateAfter : `ps_${ctx.pageState.dom.structuralHash}`;
       state.suspendBox.current = {
         kind: "human_task",
+        nodeId,
         stepId: `${nodeId}.@human_task`,
         resumeNodeId: rh.returnNode,
         attempt: ctx.attempt,
@@ -548,7 +553,8 @@ export async function runScenario(
   const state: TraversalState = {
     scenario,
     deps,
-    nodeScope: {},
+    // resume 시 해소된 @human_task 출력(node.<id>.decision/correction)을 시드(드라이버 주입). 정상 시작은 빈 스코프.
+    nodeScope: { ...(deps.resumeNodeOutputs ?? {}) },
     loopState: new Map(),
     visited: [],
     steps: [],

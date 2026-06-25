@@ -30,6 +30,7 @@ export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPor
       correlationId: string;
       exception: ClassifiedException;
       pendingSideEffects: readonly SideEffectCmd[];
+      nodeId?: string;
       assigneeRole?: string;
       onTimeout?: "fail" | "escalate";
       timeoutMs?: number;
@@ -58,14 +59,16 @@ export class PgChallengeSuspensionPort implements ExecutorChallengeSuspensionPor
 
     const humanTaskId = randomUUID();
     await client.query(
+      // node_id: @human_task(R5) 선언 소유 노드 id(재개 시 IREL node.<id>.decision/correction 출처). challenge(R4)는 omit → NULL.
       `INSERT INTO human_tasks
-         (id, tenant_id, run_id, kind, assignee_role, on_timeout, payload, result_schema, artifact_refs, expires_at)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, COALESCE($6, 'fail'), $7::jsonb, $8::jsonb, $9::jsonb,
-               now() + ($10::bigint * interval '1 millisecond'))`,
+         (id, tenant_id, run_id, node_id, kind, assignee_role, on_timeout, payload, result_schema, artifact_refs, expires_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, COALESCE($7, 'fail'), $8::jsonb, $9::jsonb, $10::jsonb,
+               now() + ($11::bigint * interval '1 millisecond'))`,
       [
         humanTaskId,
         input.tenantId,
         input.runId,
+        input.nodeId ?? null,
         createCmd.humanTaskKind,
         input.assigneeRole ?? null,
         input.onTimeout ?? null,

@@ -52,6 +52,7 @@ import { compiledScenarioFrom } from "./ir-translate";
 import { InterpreterError, runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
 import { pauseLinkedWorkitemCheckout, settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
 import { cancelLinkedHumanTasksForRunTerminal } from "./human-task-transition";
+import { loadResolvedHumanTaskNodeOutputs } from "./human-task-resume-scope";
 import { recordChallenge } from "../observability/telemetry";
 import { errText, workerLog } from "../observability/log";
 import type { MergedExtractArtifactSink } from "./merged-extract-artifact";
@@ -314,7 +315,9 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     }
     let scenarioOutcome: ScenarioOutcome;
     try {
-      scenarioOutcome = await runScenario(scenario, ctx, { executor, resolver: deps.resolver, params: run.params, startNode });
+      // resume(startNode 지정): 해소된 @human_task 판정을 nodeScope 로 시드(human_tasks.result re-SELECT, 토큰 미적재).
+      const resumeNodeOutputs = startNode !== undefined ? await loadResolvedHumanTaskNodeOutputs(deps.pool, run.tenantId, run.runId) : undefined;
+      scenarioOutcome = await runScenario(scenario, ctx, { executor, resolver: deps.resolver, params: run.params, startNode, ...(resumeNodeOutputs !== undefined ? { resumeNodeOutputs } : {}) });
     } catch (scenarioErr) {
       throwReason = classifiedFailureReason(scenarioErr);
       // 인터프리터 예외를 system 으로 흡수하되 조용히 묻지 않는다(조용한 false/unknown 금지 — system 은 loud 채널).
@@ -447,6 +450,7 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
       // @human_task(R5)만 human_tasks 라우팅/타임아웃 정책 + bookmark reason 전달(challenge 는 omit → 기존 동작).
       ...(s.kind === "human_task"
         ? {
+            nodeId: s.nodeId,
             assigneeRole: s.assigneeRole,
             onTimeout: s.onTimeout,
             ...(s.timeoutMs !== undefined ? { timeoutMs: s.timeoutMs } : {}),

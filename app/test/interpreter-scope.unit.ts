@@ -242,11 +242,52 @@ async function main(): Promise<void> {
     check("interpreter: mergedExtract dedupes repeated SEQ across pages", outcome.mergedExtract?.records.length === 3 && outcome.mergedExtract.duplicateCount === 1);
   }
 
+  // 9) resume nodeScope 시드(C3) — @human_task 판정 decision/correction 이 node.<id>.* 로 분기.
+  //    드라이버가 human_tasks.result re-SELECT 로 deps.resumeNodeOutputs 를 구성해 주입하는 경로를 단위로 검증.
+  async function runSeeded(scenario: CompiledScenario, resumeNodeOutputs: Record<string, { decision: string; correction?: Record<string, unknown> }>): Promise<string> {
+    const o = await runScenario(scenario, ctx(), { executor: fakeExecutor, resolver: fakeResolver, resumeNodeOutputs });
+    return o.terminal;
+  }
+  const decisionScenario: CompiledScenario = {
+    start: "branch",
+    nodes: {
+      branch: onNode([
+        { when: ast('node.task.decision == "approve"'), target: "ok", priority: 3 },
+        { when: ast('node.task.decision == "reject"'), target: "no", priority: 2 },
+        { when: ast("true"), target: "other", priority: 1 },
+      ]),
+      ok: term("success"),
+      no: term("fail_business"),
+      other: term("success_empty"),
+    },
+  };
+  check("decision=approve → ok(success)", (await runSeeded(decisionScenario, { task: { decision: "approve" } })) === "success");
+  check("decision=reject → no(fail_business)", (await runSeeded(decisionScenario, { task: { decision: "reject" } })) === "fail_business");
+  check("decision=retry → catch-all other(success_empty)", (await runSeeded(decisionScenario, { task: { decision: "retry" } })) === "success_empty");
+
+  const correctionScenario: CompiledScenario = {
+    start: "branch",
+    nodes: {
+      branch: onNode([
+        { when: ast("node.task.correction.amount > 100"), target: "hi", priority: 2 },
+        { when: ast("true"), target: "lo", priority: 1 },
+      ]),
+      hi: term("success"),
+      lo: term("success_empty"),
+    },
+  };
+  check("correction.amount=150 → hi(>100)", (await runSeeded(correctionScenario, { task: { decision: "correct", correction: { amount: 150 } } })) === "success");
+  check("correction.amount=50 → lo", (await runSeeded(correctionScenario, { task: { decision: "correct", correction: { amount: 50 } } })) === "success_empty");
+
+  // 시드 없음(미해소/미주입) → node.task.decision 부재 → IREL_RUNTIME_MISSING(loud, 조용한 false 금지).
+  const decisionMissing = await runThrows(decisionScenario);
+  check("시드 없는 decision 참조 → IREL_RUNTIME_MISSING(loud)", decisionMissing instanceof Error && (decisionMissing as { code?: string }).code === "IREL_RUNTIME_MISSING", String(decisionMissing));
+
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: 인터프리터 스코프 — params.*·node.status·extract row_count/extracted_ref 분기, 미투영은 IREL_RUNTIME_MISSING(loud) (RQ-002)");
+  console.log("\nPASS: 인터프리터 스코프 — params.*·node.status·extract row_count/extracted_ref·@human_task decision/correction 시드 분기, 미투영은 IREL_RUNTIME_MISSING(loud) (RQ-002/C3)");
   process.exit(0);
 }
 
