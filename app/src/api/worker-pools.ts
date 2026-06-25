@@ -26,6 +26,15 @@ export function registerWorkerPoolRoutes(app: FastifyInstance, deps: ApiServerDe
         `SELECT pool_key FROM worker_pool_assignments WHERE tenant_id = $1::uuid`,
         [principal.tenantId],
       );
+      // 운영 안전(stuck 가시화): 워커의 풀 소속은 env(WORKER_POOL_KEYS)라 DB로 "풀 서비스 워커"를 직접 못 본다.
+      // 대신 관측 가능한 증상을 노출한다 — 배정 풀을 서비스하는 워커가 없으면 그 테넌트의 run 은 Graphile 가 어떤
+      // 워커에도 디스패치하지 않아 'queued' 로 쌓인다. queued 수 + 가장 오래된 시각을 주고, 콘솔이 정직한 지연 힌트를
+      // 표기한다("워커 없음/포화 가능"; 단정 아님 — '조용한 false 금지'와 과대단언 금지 사이).
+      const pending = await client.query<{ queued_runs: string; oldest_queued_at: Date | null }>(
+        `SELECT count(*)::text AS queued_runs, min(created_at) AS oldest_queued_at
+           FROM runs WHERE tenant_id = $1::uuid AND status = 'queued'`,
+        [principal.tenantId],
+      );
       return {
         items: pools.rows.map((row) => ({
           pool_key: row.pool_key,
@@ -33,6 +42,10 @@ export function registerWorkerPoolRoutes(app: FastifyInstance, deps: ApiServerDe
           created_at: row.created_at.toISOString(),
         })),
         assigned_pool_key: assignment.rows[0]?.pool_key ?? null,
+        pending: {
+          queued_runs: Number(pending.rows[0]?.queued_runs ?? "0"),
+          oldest_queued_at: pending.rows[0]?.oldest_queued_at?.toISOString() ?? null,
+        },
       };
     });
     reply.code(200).send(result);

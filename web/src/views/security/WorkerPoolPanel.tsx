@@ -16,7 +16,12 @@ export function WorkerPoolPanel(): JSX.Element | null {
     refetchInterval: 15_000,
   });
   if (q.isLoading || q.data === undefined) return null;
-  const { items, assigned_pool_key } = q.data;
+  const { items, assigned_pool_key, pending } = q.data;
+  // 지연 힌트: 전용 풀 배정 + queued 가 5분 이상 쌓이면 워커 부재/포화 가능성을 정직하게 표기(단정 아님).
+  const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
+  const oldestQueuedMs =
+    pending.oldest_queued_at !== null ? Date.now() - new Date(pending.oldest_queued_at).getTime() : 0;
+  const stuckHint = assigned_pool_key !== null && pending.queued_runs > 0 && oldestQueuedMs > STUCK_THRESHOLD_MS;
   return (
     <section className="panel" aria-label="전용 워커 풀" style={{ marginBottom: 12 }}>
       <div className="panel-head">
@@ -45,6 +50,18 @@ export function WorkerPoolPanel(): JSX.Element | null {
           </>
         )}
       </p>
+      {pending.queued_runs > 0 && (
+        <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span className="subtle">대기 중 실행:</span>
+          <span className={`badge ${stuckHint ? "amber" : ""}`}>
+            {pending.queued_runs}건
+            {oldestQueuedMs > 0 ? ` · 가장 오래된 ${Math.floor(oldestQueuedMs / 60000)}분 대기` : ""}
+          </span>
+          {stuckHint && (
+            <span className="subtle">⚠ 이 풀을 서비스하는 워커가 없거나 포화일 수 있습니다 — 워커 배치/WORKER_POOL_KEYS를 확인하세요.</span>
+          )}
+        </p>
+      )}
       <WorkerPoolCreateForm />
       {items.length === 0 ? (
         <p className="subtle">등록된 전용 풀이 없습니다. 풀을 만들고 워커를 그 풀에 배치한 뒤 테넌트를 배정하세요.</p>

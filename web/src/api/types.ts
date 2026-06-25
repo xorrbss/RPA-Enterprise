@@ -299,6 +299,9 @@ export interface WorkerPoolItem {
 export interface WorkerPoolList {
   readonly items: readonly WorkerPoolItem[];
   readonly assigned_pool_key: string | null;
+  // 운영 안전(stuck 가시화): 호출 테넌트의 대기(queued) 실행 수 + 가장 오래된 시각. 배정 풀에 워커가 없으면
+  // run 이 디스패치되지 않아 queued 로 쌓인다 — 콘솔이 정직한 지연 힌트를 표기.
+  readonly pending: { readonly queued_runs: number; readonly oldest_queued_at: string | null };
 }
 
 export type RunTriggerType = "cron" | "webhook";
