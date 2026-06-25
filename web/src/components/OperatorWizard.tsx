@@ -246,8 +246,10 @@ export function buildApprovalIr(name: string, pageUrl: string, assigneeRole: str
   };
 }
 
-// 승인 분기 IR 의 라운드트립 — 양식 필드(이름/URL/역할)를 복원하되, **재생성 결과가 원본과 정확히 일치할 때만** 인정한다.
+// 승인 분기 IR 의 라운드트립 — 양식 필드(이름/URL/역할)를 복원하되, **재생성 결과가 원본과 구조적으로 일치할 때만** 인정한다.
 //   (운영자가 '직접 편집'에서 분기 구조를 손보면 재생성으로 그 수정을 무음 손실하므로, 불일치 시 undefined → 쉬운 만들기 잠금.)
+//   비교는 백엔드/콘솔이 주입·변형하는 필드(ir.target·meta.studio_mode·meta.version)를 제외하고 key 순서 무관(canonical)으로
+//   수행한다 — 저장(scenarios.ts: {...ir, target} + jsonb key 재배열)을 거친 IR 도 동일 구조면 라운드트립 가능(저장본 재편집).
 function approvalInitialFromIr(ir: unknown): OperatorWizardInitial | undefined {
   if (!isRecord(ir) || !isRecord(ir.nodes)) return undefined;
   const review = isRecord(ir.nodes.review) ? ir.nodes.review : undefined;
@@ -260,18 +262,40 @@ function approvalInitialFromIr(ir: unknown): OperatorWizardInitial | undefined {
   const properties = isRecord(ir.params_schema) && isRecord(ir.params_schema.properties) ? ir.params_schema.properties : {};
   const entryParam = isRecord(properties[ENTRY_KEY]) ? properties[ENTRY_KEY] : {};
   const pageUrl = typeof entryParam.default === "string" ? entryParam.default : "";
-  const version = typeof meta.version === "number" ? meta.version : 1;
-  // 정확 일치 검사(version 제외): 재생성 IR == 원본이면 손실 없이 라운드트립 가능.
-  if (JSON.stringify(buildApprovalIr(name, pageUrl, assigneeRole, version)) !== JSON.stringify(bumpApprovalVersion(ir, version))) {
+  // 구조 동등성 검사: 비교-무관 필드 제외 + canonical(key 정렬) 후 재생성 IR 과 일치하면 손실 없이 라운드트립.
+  if (approvalCanonical(buildApprovalIr(name, pageUrl, assigneeRole)) !== approvalCanonical(ir)) {
     return undefined;
   }
   return { name, pageUrl, dataName: "", kind: "once", instruction: "", template: "approval_branch", assigneeRole };
 }
 
-// 비교용: 원본 IR 의 meta.version 만 통일(나머지 구조 비교). buildApprovalIr 가 version 을 받으므로 동일 기준으로 맞춘다.
-function bumpApprovalVersion(ir: Record<string, unknown>, version: number): unknown {
-  const meta = isRecord(ir.meta) ? ir.meta : {};
-  return { ...ir, meta: { ...meta, version } };
+// 비교용 정규화 — 저장이 주입·변형하는 비교-무관 필드를 제거하고 key 순서를 무관화(jsonb 재배열 흡수)한다.
+//   ir.target: 저장 시 시작 URL→사이트 자동 추론 주입(scenarios.ts). easy 재저장 시 동일 URL 로 재추론되어 무손실.
+//   meta.studio_mode/version: 콘솔 스탬프·편집 버전 bump(+1). 분기 구조 동등성과 무관.
+function approvalCanonical(ir: unknown): string {
+  return canonicalJson(stripApprovalVolatile(ir));
+}
+
+function stripApprovalVolatile(ir: unknown): unknown {
+  if (!isRecord(ir)) return ir;
+  const clone: Record<string, unknown> = { ...ir };
+  delete clone.target;
+  if (isRecord(clone.meta)) {
+    const meta = { ...clone.meta };
+    delete meta.studio_mode;
+    delete meta.version;
+    clone.meta = meta;
+  }
+  return clone;
+}
+
+// key 순서 무관 canonical JSON(객체 key 재귀 정렬; 배열 순서는 의미 보존). jsonb round-trip 의 key 재배열을 흡수.
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 export function wizardInitialFromIr(ir: unknown): OperatorWizardInitial | undefined {

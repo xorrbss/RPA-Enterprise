@@ -82,6 +82,32 @@ describe("ScenarioForm — @human_task 분기 보호 (C4)", () => {
     expect(screen.queryByRole("note")).toBeNull();
   });
 
+  // C4c — 저장본(백엔드 target 주입 + jsonb key 재배열 + version bump 를 거친 승인 분기 IR)을 다시 열면 '쉬운 만들기'로
+  //   재편집할 수 있다(라운드트립 정밀화 → easyUnsafe=false, '직접 편집' 강등 안 됨).
+  test("저장본 승인 분기 재편집 — 쉬운 만들기(승인 양식)로 열림", async () => {
+    const STORED_APPROVAL = {
+      target: { site_profile_id: "s1", browser_identity_id: "b1", network_policy_id: "n1" },
+      start: "open",
+      nodes: {
+        decide: { on: [{ priority: 2, target: "approved", when: 'node.review.decision == "approve"' }, { target: "rejected", when: "true", priority: 1 }] },
+        rejected: { terminal: "fail_business" },
+        review: { next: { return_node: "decide", input: { assignee_role: "reviewer", kind: "approval" }, handler: "@human_task" }, what: [] },
+        approved: { terminal: "success" },
+        open: { next: "review", what: [{ url_ref: "entry_url", action: "navigate" }] },
+      },
+      params_schema: { required: ["entry_url"], type: "object", properties: { entry_url: { default: "https://ok.example/doc", type: "string", description: "승인 대상이 보이는 페이지 주소" } } },
+      meta: { studio_mode: "easy", version: 5, name: "승인자동화" },
+    };
+    renderEdit(STORED_APPROVAL);
+
+    // 쉬운 만들기(승인 양식)로 열림 — 담당자 역할 필드 표시, 직접 편집 textarea 미표시, 잠금 노트 없음.
+    expect(await screen.findByText("③ 승인을 맡을 담당자 역할")).toBeInTheDocument();
+    expect(screen.queryByLabelText("자동화 정의 원문")).toBeNull();
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(screen.getByRole("button", { name: "쉬운 만들기" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "단계 편집" })).toBeDisabled();
+  });
+
   // C4b — 쉬운 만들기에서 '승인 후 분기' 템플릿으로 @human_task 분기 자동화를 양식 저작. 생성 중 easy 가 잠기지 않는다
   //   (승인 분기 정형은 라운드트립 가능 → easyUnsafe=false). 단계 편집은 @human_task 표현 불가라 잠긴 채.
   test("새 자동화 — '승인 후 분기' 템플릿 선택 시 쉬운 만들기 유지(잠김 없음)+@human_task 양식 저작", () => {

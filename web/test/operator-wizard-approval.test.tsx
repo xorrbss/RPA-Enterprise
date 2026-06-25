@@ -51,6 +51,33 @@ describe("buildApprovalIr / 라운드트립 (C4b)", () => {
     expect(wizardInitialFromIr(tampered)).toBeUndefined();
   });
 
+  test("저장본 재편집 — target 주입 + key 재배열 + version bump 를 거친 IR 도 라운드트립(C4c)", () => {
+    // 백엔드 저장(scenarios.ts {...ir,target} + jsonb key 재배열) + 콘솔 version bump 를 모사한 '저장본' 형태.
+    const stored = {
+      target: { site_profile_id: "s1", browser_identity_id: "b1", network_policy_id: "n1" },
+      start: "open",
+      nodes: {
+        decide: { on: [{ priority: 2, target: "approved", when: 'node.review.decision == "approve"' }, { target: "rejected", when: "true", priority: 1 }] },
+        rejected: { terminal: "fail_business" },
+        review: { next: { return_node: "decide", input: { assignee_role: "approver", kind: "approval" }, handler: "@human_task" }, what: [] },
+        approved: { terminal: "success" },
+        open: { next: "review", what: [{ url_ref: "entry_url", action: "navigate" }] },
+      },
+      params_schema: { required: ["entry_url"], type: "object", properties: { entry_url: { default: "https://ok.example/doc", type: "string", description: "승인 대상이 보이는 페이지 주소" } } },
+      meta: { studio_mode: "easy", version: 3, name: "승인자동화" },
+    };
+    const initial = wizardInitialFromIr(stored);
+    expect(initial?.template).toBe("approval_branch");
+    expect(initial?.assigneeRole).toBe("approver");
+    expect(initial?.pageUrl).toBe("https://ok.example/doc");
+    expect(initial?.name).toBe("승인자동화");
+
+    // 저장본이라도 분기 구조가 손상되면(반려 분기 제거) 여전히 거부.
+    const storedTampered = JSON.parse(JSON.stringify(stored)) as any;
+    storedTampered.nodes.decide.on = [{ when: "true", target: "approved", priority: 1 }];
+    expect(wizardInitialFromIr(storedTampered)).toBeUndefined();
+  });
+
   test("승인 분기 정형이 아닌 일반 @human_task IR 은 쉬운 만들기로 표현 불가(undefined)", () => {
     const ir = {
       meta: { name: "x", version: 1 },
