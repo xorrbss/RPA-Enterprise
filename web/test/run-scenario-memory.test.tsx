@@ -6,6 +6,7 @@ import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
 import { fakeClient } from "./fake-client";
+import { ApiError } from "../src/api/types";
 
 const SCENARIO = { scenario_id: "sc1", name: "reviews", version: 2, latest_version_id: "ver-9" };
 const RUN_BUTTON_LABEL = "실행";
@@ -109,5 +110,31 @@ describe("RunScenarioButton URL memory", () => {
 
     await waitFor(() => expect(localStorage.getItem("rpa.run.params.sc1")).not.toBeNull());
     expect(JSON.parse(localStorage.getItem("rpa.run.params.sc1") ?? "{}")).toEqual({ entry_url: url });
+  });
+});
+
+describe("RunScenarioButton model memory", () => {
+  beforeEach(() => {
+    location.hash = "";
+    localStorage.clear();
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+  });
+
+  test("model_required 거부 시 마지막으로 쓴 모델을 pre-fill(확인은 여전히 필요)", async () => {
+    localStorage.setItem("rpa.run.params.sc1", JSON.stringify({ entry_url: "http://127.0.0.1:8080/x" }));
+    localStorage.setItem("rpa.run.last_model", "gpt-4o-mini");
+    location.hash = "#playground";
+    renderApp(
+      scenarioClient({
+        listGatewayPolicies: async () => ({ items: [], next_cursor: null }),
+        createRun: async () => {
+          throw new ApiError(422, "IR_SCHEMA_INVALID", { code: "IR_SCHEMA_INVALID", details: { reason: "model_required", available: 2 } });
+        },
+      }),
+    );
+    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
+    (await screen.findByRole("button", { name: RUN_BUTTON_LABEL })).click();
+    (await screen.findByRole("button", { name: START_BUTTON_LABEL })).click();
+    expect(await screen.findByLabelText("AI 모델")).toHaveValue("gpt-4o-mini");
   });
 });
