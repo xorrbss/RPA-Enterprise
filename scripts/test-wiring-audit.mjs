@@ -36,6 +36,8 @@ const ALLOWLIST = {
   "interpreter-llm.int.ts": "live LLM model + Chrome (run via `npm run test:interpreter-llm`)",
   "run-multisite-resolution.int.ts": "live Chrome + multi-site model (run via `npm run test:multisite`)",
   "dev-gateway-artifact-sink.int.ts": "dev-only DevVisibleGatewayArtifactSink path, not a production gate",
+  "db-roles-least-privilege.int.ts":
+    "needs db-temp-postgres-gate postgres-superuser trust to CREATE ROLE + connect as rpa_app (CI service-container test:int runs as a single non-superuser role); structure is CI-gated by scripts/db-static-smoke.mjs, runtime is verified via `node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/db-roles-least-privilege.int.ts`",
 };
 
 const pkg = JSON.parse(readFileSync(join(APP, "package.json"), "utf8"));
