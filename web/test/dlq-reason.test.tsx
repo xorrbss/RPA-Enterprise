@@ -89,8 +89,8 @@ describe("작업 항목 재처리 대기 — 사유·발생 컬럼", () => {
     expect(row).not.toHaveTextContent("sink-key-raw");
   });
 
-  test("일괄 재처리 실패 알림은 짧은 추적값 대신 실패 건수만 표시", async () => {
-    const replayed: string[] = [];
+  test("전체 일괄 재처리: 충돌 요약만 표시(짧은 추적값 노출 금지)", async () => {
+    let calledKind: string | null = null;
     renderApp(
       fakeClient({
         listDlq: async (kind) =>
@@ -100,25 +100,49 @@ describe("작업 항목 재처리 대기 — 사유·발생 컬럼", () => {
                   { dead_letter_id: "dl-fail-raw-0001", kind: "workitem", status: "DEAD_LETTER", source_id: null },
                   { dead_letter_id: "dl-ok-raw-0002", kind: "workitem", status: "DEAD_LETTER", source_id: null },
                 ],
-                next_cursor: null,
+                next_cursor: "more",
               }
             : { items: [], next_cursor: null },
-        replayDeadLetter: async (id) => {
-          replayed.push(id);
-          if (id === "dl-fail-raw-0001") throw new Error("backend raw failure");
-          return {};
+        replayAllDlq: async (kind) => {
+          calledKind = kind;
+          return { kind, attempted: 5, replayed: 3, conflicts: 2, truncated: false };
         },
       }),
     );
     location.hash = "#workitems";
 
-    fireEvent.click(await screen.findByRole("button", { name: "이 페이지 2건 재처리" }));
+    // 서버측 일괄 호출(현재 페이지 한도 없이 적격 전체) — replayAllDlq 1회. 충돌 요약은 표면화하되 추적값은 미노출.
+    fireEvent.click(await screen.findByRole("button", { name: "전체 일괄 재처리" }));
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
 
     const alert = await screen.findByRole("alert");
-    await waitFor(() => expect(replayed).toEqual(["dl-fail-raw-0001", "dl-ok-raw-0002"]));
-    expect(alert).toHaveTextContent("1건 재처리 실패 — 1건은 처리됨");
+    await waitFor(() => expect(calledKind).toBe("workitem"));
+    expect(alert).toHaveTextContent("3건 재처리됨");
+    expect(alert).toHaveTextContent("2건은 이미 처리/진행 중");
     expect(alert).not.toHaveTextContent("dl-fail");
     expect(alert).not.toHaveTextContent("dl-ok");
+  });
+
+  test("전체 일괄 재처리: 충돌·절단 없으면 성공 표기", async () => {
+    let called = false;
+    renderApp(
+      fakeClient({
+        listDlq: async (kind) =>
+          kind === "workitem"
+            ? { items: [{ dead_letter_id: "dl-x-0001", kind: "workitem", status: "DEAD_LETTER", source_id: null }], next_cursor: null }
+            : { items: [], next_cursor: null },
+        replayAllDlq: async (kind) => {
+          called = true;
+          return { kind, attempted: 1, replayed: 1, conflicts: 0, truncated: false };
+        },
+      }),
+    );
+    location.hash = "#workitems";
+
+    fireEvent.click(await screen.findByRole("button", { name: "전체 일괄 재처리" }));
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+
+    await waitFor(() => expect(called).toBe(true));
+    expect(await screen.findByText("전체 재처리 요청됨")).toBeInTheDocument();
   });
 });

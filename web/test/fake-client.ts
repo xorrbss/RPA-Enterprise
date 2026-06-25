@@ -704,6 +704,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     getGatewayCallSummary: async () => ({ window_days: 30, total: { calls: 0, input_tokens: null, output_tokens: null, cost: null }, by_model: [] }),
     abortRun: async () => ({ status: "cancelled" }),
     replayDeadLetter: async () => ({ status: "new" }),
+    replayAllDlq: async (kind) => ({ kind, attempted: 0, replayed: 0, conflicts: 0, truncated: false }),
     assignHumanTask: async () => ({ status: "assigned" }),
     startHumanTask: async () => ({ status: "in_progress" }),
     resolveHumanTask: async () => ({ status: "resolved" }),

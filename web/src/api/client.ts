@@ -26,6 +26,7 @@ import {
   type DecideApprovalBody,
   type DecideApprovalResult,
   type DeadLetterItem,
+  type ReplayAllDlqResult,
   type DocumentExtraction,
   type DocumentJobCreateBody,
   type DocumentJobItem,
@@ -155,6 +156,8 @@ export interface ApiClient {
   abortRun(runId: string, idempotencyKey: string): Promise<unknown>;
   // DLQ 재처리(W10). kind로 workitem/sink 분기(백엔드 `?kind=` — sink는 별도 OperationId 멱등 네임스페이스).
   replayDeadLetter(deadLetterId: string, idempotencyKey: string, kind: "workitem" | "sink"): Promise<unknown>;
+  // DLQ 전체 일괄 재처리(현재 페이지 한도 없이 적격 전체, 캡 500; api-surface §4). 자연 멱등이라 Idempotency-Key 불요(헤더는 무해).
+  replayAllDlq(kind: "workitem" | "sink", idempotencyKey: string): Promise<ReplayAllDlqResult>;
   // 사이트 risk 승인(approver). Idempotency-Key + body{reason?,expires_at?} → approval_status=approved.
   approveSite(siteId: string, idempotencyKey: string, opts?: { reason?: string; expires_at?: string }): Promise<unknown>;
   // 사이트 신규 등록(operator+, api-surface §7 POST /v1/sites). Idempotency-Key + body. url_pattern은 http(s) origin.
@@ -491,6 +494,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       }),
     abortRun: (runId, idempotencyKey) => post(`/v1/runs/${runId}/abort`, idempotencyKey),
     replayDeadLetter: (deadLetterId, idempotencyKey, kind) => post(`/v1/dlq/${deadLetterId}/replay${queryString({ kind })}`, idempotencyKey),
+    replayAllDlq: (kind, idempotencyKey) => post(`/v1/dlq/replay-all${queryString({ kind })}`, idempotencyKey),
     approveSite: (siteId, key, opts) => post(`/v1/sites/${siteId}/approve`, key, opts ?? {}),
     createSite: (body, key) => post(`/v1/sites`, key, body),
     updateSite: (siteId, name, key) => send("PATCH", `/v1/sites/${siteId}`, { name }, { "Idempotency-Key": key }),

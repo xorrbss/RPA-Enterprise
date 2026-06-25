@@ -270,10 +270,9 @@ describe("goal UX improvements", () => {
     expect(screen.getByRole("button", { name: "내 업무만 보기" })).toBeDisabled(); // 자가필터도 비활성(목록 422 방지)
   });
 
-  test("재처리 대기 panel gains a pager and 'page bulk replay' (sequential, per-item idempotency key)", async () => {
+  test("재처리 대기 panel: 페이저 + 전체 일괄 재처리(서버측 단일 호출, 페이지 한도 없음)", async () => {
     localStorage.setItem("rpa.token", jwt(["operator"], "u"));
-    const replayed: string[] = [];
-    const keys = new Set<string>();
+    let replayedKind: string | null = null;
     renderApp(
       fakeClient({
         listDlq: async (kind, p) => {
@@ -286,23 +285,21 @@ describe("goal UX improvements", () => {
             next_cursor: p?.cursor === undefined ? "CUR2" : null,
           };
         },
-        replayDeadLetter: async (id, key) => {
-          replayed.push(id);
-          keys.add(key);
-          return {};
+        replayAllDlq: async (kind) => {
+          replayedKind = kind;
+          return { kind, attempted: 2, replayed: 2, conflicts: 0, truncated: false };
         },
       }),
     );
     location.hash = "#workitems";
     // 일괄 버튼·페이저 모두 로드된 items에 의존 → 일괄 버튼(데이터 로드 신호)을 먼저 await
-    const bulkBtn = await screen.findByRole("button", { name: "이 페이지 2건 재처리" });
+    const bulkBtn = await screen.findByRole("button", { name: "전체 일괄 재처리" });
     // next_cursor 있으니 '다음' 페이저 노출(51건째부터 조용한 누락 해소)
     expect(screen.getAllByRole("button", { name: "다음" }).length).toBeGreaterThan(0);
-    // 일괄 재처리: 페이지 2건을 각자 고유 멱등키로 순차 재처리
+    // 전체 일괄 재처리: 서버측 일괄 호출 1회(현재 페이지 한도 없이 적격 전체)
     fireEvent.click(bulkBtn);
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
-    await waitFor(() => expect([...replayed].sort()).toEqual(["dl-1", "dl-2"]));
-    expect(keys.size).toBe(2);
+    await waitFor(() => expect(replayedKind).toBe("workitem"));
   });
 
   test("approval inbox can focus pending rows without adding unsafe bulk decisions", async () => {
