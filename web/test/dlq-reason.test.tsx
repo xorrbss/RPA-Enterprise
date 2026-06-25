@@ -44,8 +44,8 @@ describe("작업 항목 재처리 대기 — 사유·발생 컬럼", () => {
     location.hash = "#workitems";
     const cell = await screen.findByTitle("추적 번호 dl-aaaa1111");
     const row = cell.closest("tr") as HTMLElement;
-    expect(cell).toHaveTextContent("작업 항목 재처리 대기");
-    expect(row).not.toHaveTextContent("dl-aaaa");
+    expect(cell).toHaveTextContent("작업 항목 재처리 대기 #dl-aaaa1"); // 단축 추적번호 가시 노출
+    expect(row).not.toHaveTextContent("dl-aaaa1111"); // 전체 추적번호는 여전히 title에만
     expect(within(row).getByTitle("추적 번호 wi-bbbb2222")).toHaveTextContent("원본 작업 연결됨");
     expect(within(row).getByText("재시도됩니다.")).toBeInTheDocument(); // errorCodeLabel(WORKITEM_CHECKOUT_CONFLICT)
     expect(within(row).getByText(new Date(createdAt).toLocaleString())).toBeInTheDocument();
@@ -64,8 +64,8 @@ describe("작업 항목 재처리 대기 — 사유·발생 컬럼", () => {
     location.hash = "#workitems";
     const cell = await screen.findByTitle("추적 번호 dl-cccc3333");
     const row = cell.closest("tr") as HTMLElement;
-    expect(cell).toHaveTextContent("작업 항목 재처리 대기");
-    expect(row).not.toHaveTextContent("dl-cccc");
+    expect(cell).toHaveTextContent("작업 항목 재처리 대기 #dl-cccc3"); // 단축 추적번호 가시 노출
+    expect(row).not.toHaveTextContent("dl-cccc3333"); // 전체 추적번호는 여전히 title에만
     expect(within(row).getByText("검증 실패")).toBeInTheDocument();
   });
 
