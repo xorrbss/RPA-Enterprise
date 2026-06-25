@@ -92,6 +92,7 @@ export type RbacAction =
   | "scenario.read"
   | "scenario.update"
   | "scenario.promote"
+  | "scenario.promote.approve"
   | "artifact.read"
   | "site.read"
   | "site.approve"

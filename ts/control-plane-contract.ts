@@ -151,6 +151,8 @@ export type OperationId =
   | "validateScenario"
   | "promoteScenario"
   | "promoteScenarioFromRun"
+  | "createScenarioPromotionRequest"
+  | "decideScenarioPromotionRequest"
   | "archiveScenario"
   | "listScenarioVersions"
   | "getScenarioVersion"

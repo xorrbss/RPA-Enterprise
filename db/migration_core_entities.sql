@@ -268,6 +268,29 @@ CREATE INDEX idx_scenario_versions_scenario ON scenario_versions (scenario_id, v
 CREATE UNIQUE INDEX uq_scenario_versions_prod ON scenario_versions (tenant_id, scenario_id)
   WHERE promotion_status = 'prod';                          -- scenario당 prod 1건
 
+-- scenario_promotion_requests — maker-checker prod 승격 게이트(D4). operator 요청 → approver 승인(요청자≠승인자).
+--   불변 요청 원장(감사). 직접 POST /promote(admin)와 별개의 인간 승격 경로.
+CREATE TABLE scenario_promotion_requests (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  scenario_id     uuid        NOT NULL REFERENCES scenarios(id),
+  version         int         NOT NULL,                   -- 승격 대상 scenario_versions.version
+  reason          text        NOT NULL CHECK (length(trim(reason)) > 0),  -- 사유 필수(maker-checker 감사)
+  status          text        NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','approved','rejected')),
+  requested_by    text        NOT NULL,                   -- PrincipalId(요청자; ::uuid 캐스트 금지 — OIDC sub 허용)
+  decided_by      text,                                   -- PrincipalId(승인/반려자)
+  decision_reason text,                                   -- 반려/승인 메모(선택)
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  decided_at      timestamptz
+);
+-- (scenario, version)당 pending 1건만 — 중복 요청 차단(부분 UNIQUE).
+CREATE UNIQUE INDEX uq_promotion_requests_pending ON scenario_promotion_requests (tenant_id, scenario_id, version)
+  WHERE status = 'pending';
+-- approver 인박스 — pending 최신순.
+CREATE INDEX idx_promotion_requests_pending ON scenario_promotion_requests (tenant_id, created_at DESC)
+  WHERE status = 'pending';
+
 -- ============================================================
 -- ============================================================
 -- 2a-1. automation_ideas / roi_estimates
@@ -1035,6 +1058,9 @@ ALTER TABLE challenge_resolution_attempts
 ALTER TABLE site_profiles       ADD CONSTRAINT uq_site_profiles_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE browser_identities  ADD CONSTRAINT uq_browser_identities_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenarios           ADD CONSTRAINT uq_scenarios_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scenario_promotion_requests
+  ADD CONSTRAINT fk_promotion_requests_scenario_tenant
+  FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios (tenant_id, id);
 ALTER TABLE scenario_versions   ADD CONSTRAINT uq_scenario_versions_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE automation_ideas    ADD CONSTRAINT uq_automation_ideas_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE roi_estimates       ADD CONSTRAINT uq_roi_estimates_tenant_id_id UNIQUE (tenant_id, id);
@@ -1264,7 +1290,8 @@ BEGIN
     'action_plan_cache',
     'stagehand_calls',
     'scenario_generation_llm_calls',
-    'audit_log'
+    'audit_log',
+    'scenario_promotion_requests'
   ]
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tenant_table);
