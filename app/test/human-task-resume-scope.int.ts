@@ -66,10 +66,11 @@ async function main(): Promise<void> {
       { runId: RUN, nodeId: "approve_node", kind: "approval", state: "resolved", result: { decision: "approve", corrections: { amount: 100 } } },
       { runId: RUN, nodeId: "correct_node", kind: "validation", state: "resolved", result: { decision: "correct", corrections: { memo: "fixme" } } },
       { runId: RUN, nodeId: "decision_only", kind: "approval", state: "resolved", result: { decision: "reject" } },
-      // 스킵: node_id NULL(challenge)·result NULL·malformed(decision 부재)·비-resolved.
+      // 스킵: node_id NULL(challenge)·result NULL·malformed(decision 부재)·enum 밖 decision·비-resolved.
       { runId: RUN, nodeId: null, kind: "captcha", state: "resolved", result: { decision: "approve" } },
       { runId: RUN, nodeId: "no_result", kind: "approval", state: "resolved", result: null },
       { runId: RUN, nodeId: "malformed", kind: "approval", state: "resolved", result: { reason: "no decision field" } },
+      { runId: RUN, nodeId: "bad_enum", kind: "approval", state: "resolved", result: { decision: "bogus" } },
       { runId: RUN, nodeId: "open_node", kind: "approval", state: "open", result: { decision: "approve" } },
       // 다중 cycle 최신 권위: 같은 node_id, resolved_at 이른 것(correct) → 늦은 것(retry)으로 덮어씀.
       { runId: RUN, nodeId: "loop_node", kind: "validation", state: "resolved", result: { decision: "retry" }, resolvedAt: "2026-06-25T02:00:00Z" },
@@ -113,6 +114,7 @@ async function main(): Promise<void> {
     check("node_id NULL(challenge) 미투영", !("null" in outputs) && Object.values(outputs).every((o) => o !== undefined), "challenge 행은 SQL 필터로 제외");
     check("result NULL 미투영", outputs.no_result === undefined, JSON.stringify(outputs.no_result));
     check("malformed(decision 부재) 미투영", outputs.malformed === undefined, JSON.stringify(outputs.malformed));
+    check("enum 밖 decision('bogus') 미투영(방어심층 재검증)", outputs.bad_enum === undefined, JSON.stringify(outputs.bad_enum));
     check("open(비-resolved) 미투영", outputs.open_node === undefined, JSON.stringify(outputs.open_node));
 
     check("loop_node 다중 cycle 최신 권위 = retry(resolved_at 정렬 기준, 배열 순서 무관)", outputs.loop_node?.decision === "retry", JSON.stringify(outputs.loop_node));

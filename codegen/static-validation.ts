@@ -680,36 +680,6 @@ function targetRefsOf(node: IRNode): TargetRef[] {
   return refs;
 }
 
-function expressionsOf(node: IRNode): ExpressionRef[] {
-  const expressions: ExpressionRef[] = [];
-  for (const branch of onBranchesOf(node)) {
-    if (typeof branch.when === "string") expressions.push({ expression: branch.when });
-  }
-  const loop = loopOf(node);
-  if (loop !== undefined && typeof loop.until === "string") {
-    expressions.push({ expression: loop.until, allowLoopScope: true });
-  }
-  const fallbackChain = fallbackChainOf(node);
-  if (fallbackChain.length > 0) {
-    const priorTierNodes = new Set<string>();
-    for (const tier of fallbackChain) {
-      if (typeof tier.entry_node !== "string") continue;
-      priorTierNodes.add(tier.entry_node);
-      if (typeof tier.advance_when === "string") {
-        expressions.push({
-          expression: tier.advance_when,
-          additionalPriorNodeIds: new Set(priorTierNodes),
-        });
-      }
-    }
-  }
-  // verify.vlm_fallback.when 은 IREL scope 가 아니므로 IREL 식으로 수집하지 않는다(AUD-12 a).
-  for (const criterion of node.verify?.criteria ?? []) {
-    if (criterion.type === "empty_result_allowed") expressions.push({ expression: criterion.when });
-  }
-  return expressions;
-}
-
 function buildGraph(ir: IRScenario): Map<string, string[]> {
   const graph = new Map<string, string[]>();
   for (const [nodeId, node] of Object.entries(ir.nodes)) {
