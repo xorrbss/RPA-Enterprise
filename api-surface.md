@@ -282,6 +282,7 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
 | GET | `/v1/gateway/policies` | — | 200 + `{ items: [정책 + version], next_cursor: null }` | — |
+| GET | `/v1/gateway/call-summary` | 쿼리: `?days=<1..90>`(기본 30). `gateway_policy.read` 권한 | 200 + `{ window_days, total, by_model }` — LLM 호출 사용량/비용 집계(stagehand_calls GROUP BY model, 기간 윈도우). 각 항목=`{ model, calls, input_tokens, output_tokens, cost }`. 토큰/비용이 전부 NULL이면 합도 `null`(0 단정 금지). 비용 DESC(NULL 마지막), RLS 스코프 | — |
 | GET | `/v1/gateway/policy` | 쿼리: optional `?model=` | 200 + 모델 정책(`model`, `capabilities`{jsonMode/vision/...}, `budget`{maxInputTokens/maxOutputTokens/maxCost}, fallback 설정, `is_default`) | — |
 | POST | `/v1/gateway/policy` | `Idempotency-Key`. body: 신규 정책(`model`, `capabilities`, `budget`, optional fallback/`is_default`) | 201 + 생성 정책, `ETag`=정책 버전 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422; `policy_model_in_use`), `LLM_CAPABILITY_MISMATCH`(422)³ |
 | PUT | `/v1/gateway/policy` | `If-Match`(정책 버전) + `Idempotency-Key`. body: 정책 갱신(optional `is_default` 토글) | 200 + 갱신 정책(`is_default` 포함) | `AUTHZ_FORBIDDEN`(403), `POLICY_VERSION_CONFLICT`(412), `LLM_CAPABILITY_MISMATCH`(422)³ |

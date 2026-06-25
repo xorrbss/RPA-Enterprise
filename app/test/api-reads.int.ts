@@ -104,6 +104,23 @@ async function seedRunRelative(pool: Pool, tenant: string, sver: string, id: str
   );
 }
 
+async function seedStagehandCall(
+  pool: Pool,
+  tenant: string,
+  run: string,
+  id: string,
+  model: string,
+  tokens: { input: number | null; output: number | null; cost: string | null },
+): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO stagehand_calls (id, tenant_id, run_id, step_id, attempt, idempotency_key, request_hash, model, transport, input_tokens, output_tokens, cost)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'st-1', 0, $1::text, 'rh', $4, 'sse', $5, $6, $7::numeric)`,
+      [id, tenant, run, model, tokens.input, tokens.output, tokens.cost],
+    ),
+  );
+}
+
 async function seedHumanTask(
   pool: Pool, tenant: string, run: string, id: string, state: string, kind: string,
   assignee: string | null, createdAt: string,
@@ -265,6 +282,18 @@ async function main(): Promise<void> {
     await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000003", "completed", 0);
     await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000004", "failed_system", 0);
     await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000005", "running", 2);
+    // stagehand_calls(tenant C, call-summary 픽스처). FK(tenant,run,step,attempt)→run_steps 라 부모 step 먼저 시드.
+    await withTenantTx(pool, TENANT_C, (c) =>
+      c.query(
+        `INSERT INTO run_steps (id, run_id, tenant_id, step_id, node_id, action, status, cache_mode)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, 'st-1', 'node-c', 'extract', 'success', 'bypass')`,
+        ["7e0c0000-0000-0000-0000-0000000000c1", "7c000000-0000-0000-0000-000000000001", TENANT_C],
+      ),
+    );
+    // gpt-4o-mini 2콜(토큰/비용 합산) + claude-haiku 1콜(전부 NULL → 합 null).
+    await seedStagehandCall(pool, TENANT_C, "7c000000-0000-0000-0000-000000000001", "7d000000-0000-0000-0000-000000000001", "gpt-4o-mini", { input: 100, output: 20, cost: "0.001000" });
+    await seedStagehandCall(pool, TENANT_C, "7c000000-0000-0000-0000-000000000001", "7d000000-0000-0000-0000-000000000002", "gpt-4o-mini", { input: 50, output: 10, cost: "0.000500" });
+    await seedStagehandCall(pool, TENANT_C, "7c000000-0000-0000-0000-000000000001", "7d000000-0000-0000-0000-000000000003", "claude-haiku", { input: null, output: null, cost: null });
     // run_steps(cache_mode) — cache_hit_rate 집계용(tenant A): hit×2·miss×1·stale×1·bypass×1.
     await withTenantTx(pool, TENANT_A, async (c) => {
       const modes = ["hit", "hit", "miss", "stale", "bypass"];
@@ -483,6 +512,36 @@ async function main(): Promise<void> {
       // RBAC: 역할 없음 → 403.
       const noRoleTrends = await get("/v1/runs/trends", noRole);
       check("no-role trends → 403", noRoleTrends.statusCode === 403, noRoleTrends.body);
+
+      // ===== gateway call-summary(LLM 사용량/비용 집계 — 분석; tenant C 격리 픽스처) =====
+      const callSummary = await get("/v1/gateway/call-summary", viewerC);
+      check("call-summary → 200", callSummary.statusCode === 200, callSummary.body);
+      const csBody = callSummary.json();
+      check("call-summary window_days=30(기본)", csBody.window_days === 30, JSON.stringify(csBody.window_days));
+      check("call-summary by_model 2종(cost DESC, NULL 마지막)",
+        Array.isArray(csBody.by_model) && csBody.by_model.length === 2 &&
+        csBody.by_model[0].model === "gpt-4o-mini" && csBody.by_model[1].model === "claude-haiku",
+        JSON.stringify(csBody.by_model));
+      check("call-summary gpt-4o-mini 집계(calls 2·input 150·output 30·cost 0.001500)",
+        csBody.by_model[0].calls === 2 && csBody.by_model[0].input_tokens === 150 &&
+        csBody.by_model[0].output_tokens === 30 && csBody.by_model[0].cost === "0.001500",
+        JSON.stringify(csBody.by_model[0]));
+      check("call-summary claude-haiku 전부 NULL → null(0 단정 금지)",
+        csBody.by_model[1].calls === 1 && csBody.by_model[1].input_tokens === null &&
+        csBody.by_model[1].output_tokens === null && csBody.by_model[1].cost === null,
+        JSON.stringify(csBody.by_model[1]));
+      check("call-summary total(calls 3·input 150·output 30·cost 0.001500)",
+        csBody.total.calls === 3 && csBody.total.input_tokens === 150 &&
+        csBody.total.output_tokens === 30 && csBody.total.cost === "0.001500",
+        JSON.stringify(csBody.total));
+      // RLS: tenant B viewer 는 C 데이터 미가시 → by_model 빈, total calls 0·cost null.
+      const callSummaryB = await get("/v1/gateway/call-summary", viewerB);
+      check("tenant B call-summary 격리(by_model 0·total calls 0·cost null)",
+        callSummaryB.json().by_model.length === 0 && callSummaryB.json().total.calls === 0 && callSummaryB.json().total.cost === null,
+        callSummaryB.body);
+      // RBAC: 역할 없음 → 403.
+      const noRoleCs = await get("/v1/gateway/call-summary", noRole);
+      check("no-role call-summary → 403", noRoleCs.statusCode === 403, noRoleCs.body);
 
       // ===== listHumanTasks =====
       const allHt = await get("/v1/human-tasks");
