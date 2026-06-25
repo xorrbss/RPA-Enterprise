@@ -471,7 +471,7 @@ describe("D7 운영 콘솔 shell", () => {
     expect(calls[0]?.runId).toBe("11111111-aaaa-bbbb-cccc-000000000001");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // crypto.randomUUID 멱등키
     expect(
-      await screen.findByText("완료", { selector: "span.badge" }),
+      await screen.findByText("실행이 취소되었습니다.", { selector: "span.badge" }),
     ).toBeInTheDocument();
   });
 

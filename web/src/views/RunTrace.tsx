@@ -211,6 +211,7 @@ export function RunTraceView(): JSX.Element {
                     label="취소"
                     action="run.abort"
                     confirmText="선택한 실행을 취소할까요? 취소하면 다시 시작할 수 없습니다."
+                    successText="실행이 취소되었습니다."
                     run={(key) => api.abortRun(r.run_id, key)}
                     invalidateKeys={[["runs"]]}
                   />

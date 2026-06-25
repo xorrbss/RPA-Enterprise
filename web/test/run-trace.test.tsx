@@ -1346,3 +1346,28 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(screen.queryByLabelText("evidence storage")).toBeNull();
   });
 });
+
+describe("실행 취소 즉시 피드백", () => {
+  beforeEach(() => {
+    location.hash = "";
+    localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
+  });
+
+  test("실행 목록에서 취소 → '실행이 취소되었습니다.' 명시 피드백(기본 '완료' 모호 해소)", async () => {
+    renderApp(
+      fakeClient({
+        listRuns: async () => ({
+          items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000077", status: "running", current_node: null, as_of: null }],
+          next_cursor: null,
+        }),
+        abortRun: async () => ({ run_id: "11111111-aaaa-bbbb-cccc-000000000077", status: "cancelled" }),
+      }),
+    );
+    location.hash = "#runTrace";
+
+    fireEvent.click(await screen.findByRole("button", { name: "취소" }));
+    fireEvent.click(await screen.findByRole("button", { name: "확인" }));
+
+    expect(await screen.findByText("실행이 취소되었습니다.")).toBeInTheDocument();
+  });
+});
