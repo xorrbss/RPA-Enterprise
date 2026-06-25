@@ -16,7 +16,10 @@ import type { DeadLetterItem, HumanTaskItem, OpsAlertItem, OpsHealth, RunItem, R
 // 문구는 시나리오 존재를 단정하지 않는다 — 부모는 listScenarios를 조회하지 않아 '준비된 자동화'가 있는지
 // 관찰한 적이 없다(데이터 미창작). CTA 라벨('자동화 화면으로 가기')은 동작 그대로의 안내문이고, 이동 대상은
 // scenarioStudio(meta.ts title='자동화 만들기')다 — 라벨은 대상 title을 그대로 쓰지 않는다.
-function onboardingProps(can: (a: string) => boolean): ComponentProps<typeof OnboardingBanner> {
+function onboardingProps(can: (a: string) => boolean, roles: readonly string[]): ComponentProps<typeof OnboardingBanner> {
+  // 역할 미확인(roles 없음)은 '데이터 없음'이 아니라 '권한/설정 문제'일 수 있다 — 빈 화면의 원인을 구분해
+  // 운영자가 IT 담당자에게 접근 권한을 요청하도록 안내한다(Topbar '권한 미확인 · 읽기 전용'과 일관).
+  if (roles.length === 0) return { message: "현재 역할을 확인할 수 없어 화면이 비어 보일 수 있습니다. IT 담당자에게 접근 권한을 요청하세요." };
   if (can("run.create")) return { message: "첫 실행을 시작해 보세요.", cta: { label: "자동화 화면으로 가기", view: "scenarioStudio" } };
   return { message: "아직 등록된 실행이 없습니다. 권한이 있는 담당자가 첫 실행을 시작할 수 있습니다." };
 }
@@ -396,7 +399,7 @@ export function DashboardView(): JSX.Element {
 
   return (
     <>
-      {isEmptyTenant && <OnboardingBanner {...onboardingProps(can)} />}
+      {isEmptyTenant && <OnboardingBanner {...onboardingProps(can, roles)} />}
       <RoleWorkbench roles={roles} can={can} />
       <OpsSignalPanel
         health={opsHealth.data}
