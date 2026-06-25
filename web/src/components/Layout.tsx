@@ -2,7 +2,7 @@ import {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
   Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow, Stamp,
   CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
-  HelpCircle,
+  HelpCircle, Search,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
@@ -10,6 +10,7 @@ import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { NAV_GROUPS, navigate, type ViewKey } from "../router";
 import { decodeRoles, decodeSubject, ROLE_LABELS } from "../api/permissions";
 import { VIEW_META } from "../views/meta";
+import { CommandPalette } from "./CommandPalette";
 import { Freshness } from "./Freshness";
 import { clearToken } from "./TokenGate";
 
@@ -76,6 +77,18 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
   // 화면을 바꾸면 이전 화면의 도움말은 닫는다(맥락 불일치 방지).
   useEffect(() => setShowHelp(false), [view]);
   const helpText = meta.helpText ?? meta.subtitle;
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // 전역 단축키 Ctrl/⌘+K → 커맨드 팔레트(어느 화면에서나 검색·이동 진입점).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent): void {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   return (
     <div className="app">
       <nav className="sidebar" aria-label="주 메뉴">
@@ -119,6 +132,15 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
             <SubjectChip />
             <RolesChip />
             <Freshness />
+            <button
+              className="btn palette-trigger"
+              type="button"
+              aria-keyshortcuts="Control+K Meta+K"
+              title="전역 검색·화면 이동 (Ctrl/⌘+K)"
+              onClick={() => setPaletteOpen(true)}
+            >
+              <Search size={14} aria-hidden="true" /> 검색
+            </button>
             <button className="btn" type="button" onClick={clearToken}>
               로그아웃
             </button>
@@ -126,6 +148,7 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
         </header>
         <main className="content">{children}</main>
       </div>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }
