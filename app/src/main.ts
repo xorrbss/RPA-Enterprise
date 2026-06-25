@@ -58,6 +58,8 @@ import { FetchCodexSseTransport } from "./gateway/codex-sse-transport";
 import { LlmGateway } from "./gateway/llm-gateway";
 import { FsObjectStore } from "./gateway/pg-gateway-artifact-sink";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
+import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
+import type { SecretStoreBoundary } from "../../ts/security-middleware-contract";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
@@ -121,6 +123,32 @@ function buildSignedCommandRegistry(cfg: ApiConfig["signedCommandRegistry"]): Si
     appRole: { roleId: cfg.vaultApi.roleId, secretId: cfg.vaultApi.secretId },
   });
   return new SecretStoreSignedCommandRegistry(store, cfg.sourceRef as SecretRef);
+}
+
+/**
+ * 인바운드 웹훅 서명 검증 시크릿(connector purpose) 경계 — API Vault AppRole 로 해소(적대감사 #C1: 합성루트가
+ * webhookSecretBoundary 를 미주입해 모든 서명 웹훅이 500 으로 죽던 dead-path 수정). signed-command Vault 구성 시에만
+ * 활성(deny_all → undefined → 웹훅 발화 fail-closed, 기존 동작 보존). 'api' runtime identity 가 RESOLVE_MATRIX 로
+ * connector 인가, enforceRefNamespace 로 ref↔purpose namespace 결속 강제.
+ */
+export function buildApiWebhookSecretBoundary(
+  pool: PgPool,
+  cfg: ApiConfig["signedCommandRegistry"],
+): SecretStoreBoundary | undefined {
+  if (cfg.mode === "deny_all") {
+    return undefined;
+  }
+  const store = new VaultSecretStore({
+    baseUrl: cfg.vaultApi.addr,
+    mount: cfg.vaultApi.mount,
+    kvApiVersion: 2,
+    appRole: { roleId: cfg.vaultApi.roleId, secretId: cfg.vaultApi.secretId },
+  });
+  return new VaultSecretStoreBoundary({
+    store,
+    audit: new PgDurableSecurityAuditDecisionWriter(pool),
+    enforceRefNamespace: true,
+  });
 }
 
 interface ScenarioGenerationPlannerBinding {
@@ -192,6 +220,8 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
     : undefined;
   // 세션 캡처 봉투암호화 스토어 — KEK(api/browser_session) 프로비저닝 시에만 활성(미설정 → undefined → 엔드포인트 미등록, fail-closed).
   const sessionStore = await buildApiSessionStore(pool, common);
+  // 인바운드 웹훅 서명 검증 시크릿 경계(적대감사 #C1) — signed-command Vault 구성 시 활성(미구성 → undefined → 웹훅 발화 fail-closed).
+  const webhookSecretBoundary = buildApiWebhookSecretBoundary(pool, cfg.signedCommandRegistry);
   const api = buildServer({
     pool,
     // 구조화 로거(pino, Fastify 번들) — authz 거부·라우트 미설정 경고·미분류 에러 경로의 request.log 가 실제 방출된다.
@@ -242,6 +272,7 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
         }
       : {}),
     ...(sessionStore !== undefined ? { sessionStore } : {}),
+    ...(webhookSecretBoundary !== undefined ? { webhookSecretBoundary } : {}),
   });
   await api.listen({ host: "0.0.0.0", port: cfg.port });
   console.log(JSON.stringify({
