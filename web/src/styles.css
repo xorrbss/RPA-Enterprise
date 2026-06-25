@@ -1268,3 +1268,56 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   .object-repo-summary { grid-template-columns: 1fr; }
   .object-repo-form { grid-template-columns: 1fr; }
 }
+
+/* 커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·화면 이동 오버레이 */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 100;
+}
+.palette {
+  width: min(560px, 92vw);
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+}
+.palette-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  padding: 14px 16px;
+  font-size: 15px;
+  outline: none;
+  background: transparent;
+  color: inherit;
+}
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.palette-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.palette-item.active {
+  background: var(--accent-soft, #eff6ff);
+}
+.palette-item-label { font-weight: 600; }
+.palette-item-hint { font-size: 12px; }
+.palette-empty { padding: 14px 12px; color: var(--muted, #64748b); }
+.palette-trigger { display: inline-flex; align-items: center; gap: 4px; }
