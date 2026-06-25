@@ -260,8 +260,15 @@ export function ScenarioForm({
       return;
     const ir = detail.data.ir;
     setDirty(false);
-    // 예약 핸들러(@human_task 분기 등) 포함 시 빌더 모드는 무음 손실 → '직접 편집' 강제(studio_mode 무시).
-    setEditor(irContainsReservedHandler(ir) ? "ir" : studioModeFromIr(ir));
+    // studio_mode 를 따르되, 그 빌더가 이 IR 을 표현 못 하면 '직접 편집'으로 강등(무음 손실 차단). 승인 분기 정형은 easy 유지.
+    const sm = studioModeFromIr(ir);
+    setEditor(
+      sm === "easy" && wizardInitialFromIr(ir) === undefined
+        ? "ir"
+        : sm === "form" && irContainsReservedHandler(ir)
+          ? "ir"
+          : sm,
+    );
     setText(
       ir !== undefined
         ? bumpVersion(ir, mode.version + 1)
@@ -289,14 +296,19 @@ export function ScenarioForm({
     () => stepBuilderInitialFromIr(parsedIr),
     [parsedIr],
   );
-  // 복귀형 예약 핸들러(@human_task 사람 승인 분기 등)를 포함한 IR 은 빌더가 무음으로 단계를 파괴한다(조용한 false).
-  //   → 쉬운 만들기/단계 편집을 잠그고 '직접 편집'에서만 다룬다. C1–C3 으로 빌드한 decision 분기 보호.
-  const builderUnsafe = useMemo(() => irContainsReservedHandler(parsedIr), [parsedIr]);
+  // 빌더가 무음으로 IR 을 파괴하는 경우를 모드별로 잠근다(조용한 false 방지).
+  //   - 단계 편집(StepBuilder): @human_task 등 예약 핸들러 노드를 표현 못 해 terminal 로 떨군다(formUnsafe).
+  //   - 쉬운 만들기(OperatorWizard): 승인 분기는 1급 지원(C4b)이나, 그 외 형태(일반 @human_task·손편집 분기)는 표현 불가
+  //     → wizardInitialFromIr 가 undefined(easyUnsafe). 승인 분기 정형은 라운드트립 가능해 잠기지 않는다.
+  const formUnsafe = useMemo(() => irContainsReservedHandler(parsedIr), [parsedIr]);
+  const easyUnsafe = wizardInitial === undefined;
+  // '직접 편집' 전용(어느 빌더로도 안전히 못 여는) IR — 운영자 안내 노트 표시 기준.
+  const rawOnly = formUnsafe && easyUnsafe;
 
-  // 방어 심층: 어떤 경로로든 빌더 모드인데 IR 이 예약 핸들러를 포함하면 '직접 편집'으로 되돌린다(무음 손실 차단).
+  // 방어 심층: 현재 빌더 모드가 이 IR 을 표현 못 하면 '직접 편집'으로 되돌린다(무음 손실 차단).
   useEffect(() => {
-    if (builderUnsafe && editor !== "ir") setEditor("ir");
-  }, [builderUnsafe, editor]);
+    if ((editor === "easy" && easyUnsafe) || (editor === "form" && formUnsafe)) setEditor("ir");
+  }, [editor, easyUnsafe, formUnsafe]);
 
   const validate = useMutation({
     mutationFn: async () => {
@@ -412,7 +424,7 @@ export function ScenarioForm({
           type="button"
           aria-pressed={editor === "easy"}
           onClick={() => switchEditor("easy")}
-          disabled={busy || builderUnsafe}
+          disabled={busy || easyUnsafe}
         >
           쉬운 만들기
         </button>
@@ -434,7 +446,7 @@ export function ScenarioForm({
               type="button"
               aria-pressed={editor === "form"}
               onClick={() => switchEditor("form")}
-              disabled={busy || builderUnsafe}
+              disabled={busy || formUnsafe}
             >
               단계 편집
             </button>
@@ -449,7 +461,7 @@ export function ScenarioForm({
           </div>
         </details>
       </div>
-      {builderUnsafe && (
+      {rawOnly && (
         <p role="note" style={{ margin: "8px 0", fontSize: 13, color: "var(--muted, #555)" }}>
           이 자동화는 <strong>사람 승인 분기</strong>(승인·반려에 따라 흐름이 갈리는 단계) 같은 고급 흐름을 포함해, ‘쉬운
           만들기·단계 편집’으로 열면 그 단계가 사라질 수 있어요. 그래서 ‘자동화 정의 직접 편집’에서만 안전하게 수정합니다.
