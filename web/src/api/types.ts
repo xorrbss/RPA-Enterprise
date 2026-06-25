@@ -198,6 +198,15 @@ export interface PromotionRequest {
   readonly created_at: string;
 }
 
+// 자격증명 동시성 정책 가시화(D5) — 사이트·자격증명별 max_concurrency 와 현재 사용량(활성 lease 수).
+export interface ConcurrencyPolicy {
+  readonly credential_ref: string;
+  readonly site_profile_id: string;
+  readonly site_name: string | null;
+  readonly max_concurrency: number;
+  readonly active_leases: number;
+}
+
 export type RunTriggerType = "cron" | "webhook";
 
 export interface RunTriggerItem {

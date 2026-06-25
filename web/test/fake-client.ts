@@ -723,6 +723,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     createPromotionRequest: async (_scenarioId, version) => ({ request_id: "req-fake", version, status: "pending" }),
     listPromotionRequests: empty,
     decidePromotionRequest: async () => ({ status: "approved" }),
+    listConcurrencyPolicies: empty,
     listScenarioVersions: async () => ({ items: [], next_cursor: null }),
     rollbackScenario: async (_scenarioId, _sourceVersion, latestVersion) => ({
       scenario_id: "00000000-0000-0000-0000-0000000000c1",

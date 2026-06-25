@@ -65,6 +65,7 @@ import {
   type ScenarioGenerationResult,
   type ScenarioItem,
   type PromotionRequest,
+  type ConcurrencyPolicy,
   type RunArtifactItem,
   type ScenarioMutationResult,
   type ScenarioVersionItem,
@@ -187,6 +188,7 @@ export interface ApiClient {
   createPromotionRequest(scenarioId: string, version: number, reason: string, idempotencyKey: string): Promise<unknown>;
   listPromotionRequests(): Promise<Paginated<PromotionRequest>>;
   decidePromotionRequest(scenarioId: string, requestId: string, decision: "approve" | "reject", reason: string | undefined, idempotencyKey: string): Promise<unknown>;
+  listConcurrencyPolicies(): Promise<Paginated<ConcurrencyPolicy>>;
   listScenarioVersions(scenarioId: string): Promise<Paginated<ScenarioVersionItem>>;
   rollbackScenario(scenarioId: string, sourceVersion: number, latestVersion: number, idempotencyKey: string): Promise<ScenarioMutationResult>;
   // 상세 GET-by-id(RLS 스코프, 미존재/타테넌트→404). drill-down 뷰의 선행.
@@ -522,6 +524,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     createPromotionRequest: (scenarioId, version, reason, key) =>
       post(`/v1/scenarios/${scenarioId}/promotion-requests`, key, { version, reason }),
     listPromotionRequests: () => get(`/v1/scenarios/promotion-requests`),
+    listConcurrencyPolicies: () => get(`/v1/credentials/concurrency`),
     decidePromotionRequest: (scenarioId, requestId, decision, reason, key) =>
       post(
         `/v1/scenarios/${scenarioId}/promotion-requests/${requestId}/decide`,
