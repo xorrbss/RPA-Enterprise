@@ -343,6 +343,8 @@ export interface WorkerConfig {
   readonly graphileSchema?: string;
   readonly graphileConcurrency: number;
   readonly graphilePollIntervalMs: number;
+  /** DG-3: 이 워커가 서비스하는 전용 풀 키(WORKER_POOL_KEYS, csv). 빈 값이면 'default' 풀만 서비스. */
+  readonly workerPoolKeys: readonly string[];
   readonly maintenanceTenantIds: readonly string[];
   readonly sinkDeliveryMaxAttempts: number;
   readonly sinkDeliveryRetryAfterMs: number;
@@ -370,6 +372,10 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
     graphileSchema: opt("GRAPHILE_WORKER_SCHEMA"),
     graphileConcurrency: num("GRAPHILE_CONCURRENCY", 1),
     graphilePollIntervalMs: num("GRAPHILE_POLL_INTERVAL_MS", 2000),
+    workerPoolKeys: (opt("WORKER_POOL_KEYS") ?? "")
+      .split(",")
+      .map((key) => key.trim())
+      .filter((key) => key.length > 0),
     maintenanceTenantIds: csvUuidList("MAINTENANCE_TENANT_IDS"),
     sinkDeliveryMaxAttempts: positiveInt("SINK_DELIVERY_MAX_ATTEMPTS", 3),
     sinkDeliveryRetryAfterMs: positiveInt("SINK_DELIVERY_RETRY_AFTER_MS", 5_000),

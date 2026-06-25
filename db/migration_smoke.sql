@@ -64,7 +64,9 @@ DECLARE
     'stagehand_calls',
     'scenario_generation_llm_calls',
     'audit_log',
-    'scenario_promotion_requests'
+    'scenario_promotion_requests',
+    'worker_pools',
+    'worker_pool_assignments'
   ];
   table_name text;
 BEGIN
@@ -118,7 +120,8 @@ DECLARE
     'stagehand_calls',
     'scenario_generation_llm_calls',
     'audit_log',
-    'scenario_promotion_requests'
+    'scenario_promotion_requests',
+    'worker_pool_assignments'
   ];
   table_name text;
   rel_id oid;

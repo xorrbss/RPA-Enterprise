@@ -36,6 +36,7 @@ import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runt
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
 import { buildTaskList } from "./worker/graphile-runner";
+import { buildPoolForbiddenFlags } from "./worker/pool-forbidden-flags";
 import { startMaintenanceScheduler, type MaintenanceScheduler } from "./worker/maintenance-scheduler";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
@@ -208,6 +209,8 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
     taskList: buildTaskList(pool, workerOptions, "control"),
     concurrency: cfg.graphileConcurrency,
     pollInterval: cfg.graphilePollIntervalMs,
+    // DG-3 전용 워커 풀: 이 워커가 서비스하지 않는 풀의 run_claim/run_resume job(pool:<key> flag)을 건너뛴다.
+    forbiddenFlags: buildPoolForbiddenFlags(pool, cfg.workerPoolKeys),
     ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
   });
   registerQueueDepthGauge(pool);
