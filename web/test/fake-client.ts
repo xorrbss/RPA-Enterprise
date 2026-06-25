@@ -730,6 +730,11 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       max_concurrency: body.max_concurrency,
     }),
     deleteCredentialBinding: async () => ({ deleted: true }),
+    listWorkerPools: async () => ({ items: [], assigned_pool_key: null }),
+    createWorkerPool: async (body) => ({ pool_key: body.pool_key, description: body.description ?? null }),
+    deleteWorkerPool: async (poolKey) => ({ pool_key: poolKey, deleted: true }),
+    assignWorkerPool: async (poolKey) => ({ assigned_pool_key: poolKey }),
+    unassignWorkerPool: async () => ({ assigned_pool_key: null }),
     listScenarioVersions: async () => ({ items: [], next_cursor: null }),
     rollbackScenario: async (_scenarioId, _sourceVersion, latestVersion) => ({
       scenario_id: "00000000-0000-0000-0000-0000000000c1",

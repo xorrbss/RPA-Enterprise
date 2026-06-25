@@ -19,6 +19,7 @@ import type { SiteItem } from "../api/types";
 import { AuthReadinessPanel } from "./security/AuthReadinessPanel";
 import { RbacMatrixPanel } from "./security/RbacMatrixPanel";
 import { ConcurrencyPolicyPanel } from "./security/ConcurrencyPolicyPanel";
+import { WorkerPoolPanel } from "./security/WorkerPoolPanel";
 import { SecurityConnectionsPanel } from "./security/SecurityConnectionsPanel";
 import { SecretRefAuditPanel } from "./security/SecretRefAuditPanel";
 import { SessionCaptureStatus } from "./security/SessionCaptureStatus";
@@ -42,6 +43,7 @@ export function SecurityView(): JSX.Element {
     <AuthReadinessPanel />
     <RbacMatrixPanel />
     {can("ops_alert.read") && <ConcurrencyPolicyPanel />}
+    {can("worker_pool.manage") && <WorkerPoolPanel />}
     <SecurityConnectionsPanel />
     <SecretRefAuditPanel />
     <PrincipalDirectory />
