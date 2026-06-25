@@ -53,6 +53,7 @@ import {
   type RunTriggerUpdateBody,
   type RunItem,
   type RunSummary,
+  type RunTrends,
   type ScenarioDetail,
   type ScenarioGenerationList,
   type ScenarioGenerationListParams,
@@ -182,6 +183,8 @@ export interface ApiClient {
   getRun(runId: string): Promise<RunDetail>;
   // run outcome 집계(관찰성). status별 정확 카운트 + 성공률(api-surface §1 GET /v1/runs/summary).
   getRunSummary(): Promise<RunSummary>;
+  // run outcome 일별 추세(분석; api-surface §1 GET /v1/runs/trends). days=조회 윈도우(기본 30, [1,90] 서버 클램프).
+  getRunTrends(days?: number): Promise<RunTrends>;
   getWorkitem(id: string): Promise<WorkitemItem>;
   getHumanTask(id: string): Promise<HumanTaskItem>;
   getScenario(id: string): Promise<ScenarioDetail>;
@@ -509,6 +512,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/scenarios/${scenarioId}/versions/${sourceVersion}/rollback`, key, {}, { "If-Match": String(latestVersion) }),
     getRun: (id) => get(`/v1/runs/${id}`),
     getRunSummary: () => get<RunSummary>("/v1/runs/summary"),
+    getRunTrends: (days) => get<RunTrends>(`/v1/runs/trends${days !== undefined ? `?days=${days}` : ""}`),
     getWorkitem: (id) => get(`/v1/workitems/${id}`),
     getHumanTask: (id) => get(`/v1/human-tasks/${id}`),
     getScenario: (id) => get(`/v1/scenarios/${id}`),

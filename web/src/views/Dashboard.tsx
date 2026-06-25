@@ -5,9 +5,10 @@ import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
+import { Sparkline, type SparklinePoint } from "../components/Sparkline";
 import { StatusBadge, errorCodeLabel, kindLabel } from "../components/badges";
 import { navigate, type ViewKey } from "../router";
-import type { DeadLetterItem, HumanTaskItem, OpsAlertItem, OpsHealth, RunItem, RunSummary, SiteItem } from "../api/types";
+import type { DeadLetterItem, HumanTaskItem, OpsAlertItem, OpsHealth, RunItem, RunSummary, RunTrendPoint, RunTrends, SiteItem } from "../api/types";
 
 // 첫-실행 안내 배너 — 권한별(RBAC) 안내문/CTA. cta 없으면 viewer 안내문만(없는 권한 동선 창작 금지).
 // 입력은 부모가 실 응답으로 판정한 '진짜 빈 테넌트' 여부 + useCan뿐(데이터 미창작).
@@ -63,6 +64,103 @@ function successRateLabel(s: RunSummary | undefined): string {
 function cacheHitRateLabel(s: RunSummary | undefined): string {
   if (s === undefined || s.cache === undefined || typeof s.cache.hit_rate !== "number") return "—";
   return `${Math.round(s.cache.hit_rate * 100)}%`;
+}
+
+// 일별 추세(GET /v1/runs/trends) — 스냅샷 지표를 시계열로 보강. 마지막 non-null 성공률 + 윈도우 처리량 합계.
+function latestSuccessRate(points: readonly RunTrendPoint[]): number | null {
+  for (let i = points.length - 1; i >= 0; i -= 1) {
+    const r = points[i]?.success_rate;
+    if (r !== null && r !== undefined) return r;
+  }
+  return null;
+}
+
+function windowThroughput(points: readonly RunTrendPoint[]): number {
+  return points.reduce((sum, p) => sum + p.total, 0);
+}
+
+function trendAria(metric: "성공률" | "처리량", trends: RunTrends): string {
+  const last = trends.points[trends.points.length - 1];
+  let tail = "";
+  if (metric === "성공률") {
+    tail = last !== undefined && last.success_rate !== null ? `최근 ${Math.round(last.success_rate * 100)}%` : "최근 측정값 없음";
+  } else if (last !== undefined) {
+    tail = `최근 ${last.total}건`;
+  }
+  return `최근 ${trends.window_days}일 ${metric} 추세. ${tail}`.trim();
+}
+
+function TrendRow({
+  title,
+  current,
+  note,
+  points,
+  ariaLabel,
+  domainMax,
+}: {
+  title: string;
+  current: string;
+  note: string;
+  points: readonly SparklinePoint[];
+  ariaLabel: string;
+  domainMax?: number;
+}): JSX.Element {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "6px 0" }}>
+      <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <span className="subtle">{title}</span>
+        <strong>{current}</strong>
+        <span className="subtle">{note}</span>
+      </span>
+      <Sparkline points={points} ariaLabel={ariaLabel} domainMax={domainMax} />
+    </div>
+  );
+}
+
+// 최근 추세 패널 — 데이터 미도착/오류/빈 시리즈를 정직하게 구분 표기(단정 금지). 성공률 도메인 [0,1], 처리량 자동.
+function RunTrendsPanel({
+  trends,
+  isLoading,
+  isError,
+}: {
+  trends: RunTrends | undefined;
+  isLoading: boolean;
+  isError: boolean;
+}): JSX.Element {
+  const rate = trends !== undefined ? latestSuccessRate(trends.points) : null;
+  return (
+    <section className="panel run-trends-panel" aria-label="실행 추세">
+      <div className="panel-head">
+        <h2>최근 추세</h2>
+        {trends !== undefined && <span className="subtle">{trends.window_days}일 · {trends.timezone}</span>}
+      </div>
+      {isError ? (
+        <p className="empty-state">추세를 불러오지 못했습니다.</p>
+      ) : isLoading ? (
+        <p className="empty-state">추세를 동기화하는 중입니다.</p>
+      ) : trends === undefined || trends.points.length === 0 ? (
+        <p className="empty-state">표시할 추세 데이터가 없습니다.</p>
+      ) : (
+        <div>
+          <TrendRow
+            title="실행 성공률"
+            current={rate === null ? "—" : `${Math.round(rate * 100)}%`}
+            note={rate === null ? "완료·실패한 실행이 아직 없습니다" : "최근 측정값"}
+            points={trends.points.map((p) => ({ value: p.success_rate, label: p.day }))}
+            ariaLabel={trendAria("성공률", trends)}
+            domainMax={1}
+          />
+          <TrendRow
+            title="일별 처리량"
+            current={`${windowThroughput(trends.points)}건`}
+            note={`${trends.window_days}일 합계`}
+            points={trends.points.map((p) => ({ value: p.total, label: p.day }))}
+            ariaLabel={trendAria("처리량", trends)}
+          />
+        </div>
+      )}
+    </section>
+  );
 }
 
 type ActionItem = {
@@ -389,6 +487,7 @@ export function DashboardView(): JSX.Element {
   const redSites = useQuery({ queryKey: ["sites", "red"], queryFn: () => api.listSites({ risk: "red", limit: 50 }), refetchInterval: 10_000 });
   // 관찰성 집계(§E run_success_rate + status별 정확 카운트). 서버 GROUP BY 라 카드가 '50+' 근사 대신 정확 총계.
   const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
+  const trends = useQuery({ queryKey: ["runs", "trends"], queryFn: () => api.getRunTrends(30), refetchInterval: 30_000 });
   const opsHealth = useQuery({ queryKey: ["ops-health", "dashboard"], queryFn: () => api.getOpsHealth(), refetchInterval: 5_000 });
   const opsAlerts = useQuery({ queryKey: ["ops-alerts", "dashboard"], queryFn: () => api.listOpsAlerts({ limit: 3 }), refetchInterval: 5_000 });
 
@@ -420,6 +519,11 @@ export function DashboardView(): JSX.Element {
       <p className="subtle" style={{ margin: "0 2px" }}>
         실행 성공률·캐시 재사용률·실행 중·업무 실패·시스템 실패는 전체 기간 정확 집계입니다. 사람 확인·재처리 대기는 최신 50건 기준이며 <strong>+</strong>는 표시 한도를 넘겨 더 있음을 뜻합니다(예: <code>50+</code> = 50건 이상).
       </p>
+      <RunTrendsPanel
+        trends={trends.data}
+        isLoading={trends.data === undefined && trends.isFetching}
+        isError={trends.isError}
+      />
       <ActionQueue
         items={collectActionItems({
           failedBiz: failedBiz.data?.items ?? [],

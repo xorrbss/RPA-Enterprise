@@ -238,4 +238,52 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     screen.getByRole("button", { name: "알림 센터 열기" }).click();
     await waitFor(() => expect(location.hash).toBe("#automationOps"));
   });
+
+  // (d) 최근 추세 패널: 스냅샷 지표를 일별 시계열로 보강(GET /v1/runs/trends). 성공률·처리량 스파크라인 + 현재값.
+  test("최근 추세 패널: 성공률·처리량 스파크라인 + 현재값", async () => {
+    renderApp(
+      fakeClient({
+        getRunTrends: async () => ({
+          window_days: 30,
+          timezone: "Asia/Seoul",
+          points: [
+            { day: "2026-06-23", completed: 2, failed_business: 0, failed_system: 0, total: 2, success_rate: 1 },
+            { day: "2026-06-24", completed: 0, failed_business: 0, failed_system: 0, total: 0, success_rate: null },
+            { day: "2026-06-25", completed: 3, failed_business: 0, failed_system: 1, total: 4, success_rate: 0.75 },
+          ],
+        }),
+      }),
+    );
+    const panel = await screen.findByRole("region", { name: "실행 추세" });
+    expect(await screen.findByRole("img", { name: /성공률 추세/ })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /처리량 추세/ })).toBeInTheDocument();
+    await waitFor(() => expect(panel).toHaveTextContent("75%")); // 최근 non-null 성공률
+    expect(panel).toHaveTextContent("6건"); // 처리량 합계 2+0+4
+  });
+
+  // (d2) 빈 시리즈 → 정직 표기(스냅샷을 0/100%로 단정하지 않음).
+  test("추세 데이터 없음 → '표시할 추세 데이터가 없습니다.'", async () => {
+    renderApp(fakeClient({ getRunTrends: async () => ({ window_days: 30, timezone: "Asia/Seoul", points: [] }) }));
+    await screen.findByRole("region", { name: "실행 추세" });
+    expect(await screen.findByText("표시할 추세 데이터가 없습니다.")).toBeInTheDocument();
+  });
+
+  // (d3) 성공률 전부 null(종결 run 0) → 성공률 '—' + 정직 문구, 처리량은 합계 표시.
+  test("성공률 전부 null → 성공률 '—' + 정직 문구, 처리량 합계", async () => {
+    renderApp(
+      fakeClient({
+        getRunTrends: async () => ({
+          window_days: 7,
+          timezone: "Asia/Seoul",
+          points: [
+            { day: "2026-06-24", completed: 0, failed_business: 0, failed_system: 0, total: 1, success_rate: null },
+            { day: "2026-06-25", completed: 0, failed_business: 0, failed_system: 0, total: 2, success_rate: null },
+          ],
+        }),
+      }),
+    );
+    const panel = await screen.findByRole("region", { name: "실행 추세" });
+    await waitFor(() => expect(panel).toHaveTextContent("완료·실패한 실행이 아직 없습니다"));
+    expect(panel).toHaveTextContent("3건"); // 처리량 1+2
+  });
 });
