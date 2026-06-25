@@ -413,7 +413,7 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
   }
 
   // 멱등 키 per-cycle 스코프 해소(같은 노드 재suspend 시 키 충돌 방지 — resolveSuspendKeyAttempt 참조).
-  const keyAttempt = await resolveSuspendKeyAttempt(deps.pool, run, s.stepId, s.attempt);
+  const keyAttempt = await resolveSuspendKeyAttempt(deps.pool, run, s);
 
   // 1) R4(challenge)/R5(@human_task)(running→suspending) + 포트(human_task INSERT + human_task.created + bookmark) — 한 tenant tx.
   //    두 트리거 모두 pending=[createHumanTask(kind), startBookmark] → 같은 포트가 소비. event/idem 키만 kind 로 분기.
@@ -509,13 +509,24 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
  * run_steps 에 (run,step)별 단조 증가 attempt(MAX+1)를 영속하므로 그 최댓값을 키 스코프로 쓴다 — per-cycle 고유 +
  * 재시도 안정(영속). 기록 미사용(ad-hoc) run 은 run_steps 부재 → fallback(s.attempt, 단일 사이클).
  */
-async function resolveSuspendKeyAttempt(pool: Pool, run: RunTerminalRef, stepId: string, fallback: number): Promise<number> {
+async function resolveSuspendKeyAttempt(pool: Pool, run: RunTerminalRef, s: SuspendContext): Promise<number> {
   return withTenantTx(pool, run.tenantId, async (client) => {
+    if (s.kind === "human_task") {
+      // @human_task 는 reserved_handler flow 라 executor 미경유 → run_steps 행 부재로 위 방식이 fallback(=ctx.attempt=0)에 고정돼
+      //   loop/재진입 2회차 키가 충돌(events_outbox UNIQUE 23505→run stuck)했다. 대신 그 노드(node_id)의 기존 human_tasks 행 수로
+      //   스코프 — 사이클당 1행 생성이라 단조 증가·per-cycle 고유(키 계산 시점엔 이번 사이클 행 미생성 → prior count).
+      const r = await client.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM human_tasks WHERE tenant_id=$1::uuid AND run_id=$2::uuid AND node_id=$3`,
+        [run.tenantId, run.runId, s.nodeId],
+      );
+      return Number(r.rows[0]?.n ?? "0");
+    }
+    // challenge: 기록 executor 가 run_steps 에 (run,step)별 MAX+1 attempt 영속 → per-cycle 고유.
     const r = await client.query<{ attempt: number }>(
       `SELECT COALESCE(MAX(attempt), $3::int) AS attempt FROM run_steps WHERE tenant_id=$1::uuid AND run_id=$2::uuid AND step_id=$4`,
-      [run.tenantId, run.runId, fallback, stepId],
+      [run.tenantId, run.runId, s.attempt, s.stepId],
     );
-    return r.rows[0]?.attempt ?? fallback;
+    return r.rows[0]?.attempt ?? s.attempt;
   });
 }
 
