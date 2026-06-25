@@ -724,6 +724,12 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     listPromotionRequests: empty,
     decidePromotionRequest: async () => ({ status: "approved" }),
     listConcurrencyPolicies: empty,
+    registerCredentialBinding: async (body) => ({
+      credential_ref: body.credential_ref,
+      site_profile_id: body.site_profile_id,
+      max_concurrency: body.max_concurrency,
+    }),
+    deleteCredentialBinding: async () => ({ deleted: true }),
     listScenarioVersions: async () => ({ items: [], next_cursor: null }),
     rollbackScenario: async (_scenarioId, _sourceVersion, latestVersion) => ({
       scenario_id: "00000000-0000-0000-0000-0000000000c1",
