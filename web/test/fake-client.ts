@@ -853,7 +853,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       max_concurrency: body.max_concurrency,
     }),
     deleteCredentialBinding: async () => ({ deleted: true }),
-    listWorkerPools: async () => ({ items: [], assigned_pool_key: null }),
+    listWorkerPools: async () => ({ items: [], assigned_pool_key: null, pending: { queued_runs: 0, oldest_queued_at: null } }),
     createWorkerPool: async (body) => ({ pool_key: body.pool_key, description: body.description ?? null }),
     deleteWorkerPool: async (poolKey) => ({ pool_key: poolKey, deleted: true }),
     assignWorkerPool: async (poolKey) => ({ assigned_pool_key: poolKey }),

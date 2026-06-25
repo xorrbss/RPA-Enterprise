@@ -130,6 +130,28 @@ async function main(): Promise<void> {
     const list1 = await getPools(admin);
     check("GET: 'pa' 목록 + assigned null", list1.statusCode === 200 && (list1.json().items as Array<{ pool_key: string }>).some((p) => p.pool_key === "pa") && list1.json().assigned_pool_key === null, list1.body);
 
+    // 2b) 운영 안전(stuck 가시화): queued run 적체를 pending 으로 노출. RLS 로 호출 테넌트 스코프.
+    await withTenantTx(pool, TENANT_A, async (c) => {
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1::uuid,$2::uuid,'wp')`, ["ac000000-0000-4000-8000-000000000001", TENANT_A]);
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir) VALUES ($1::uuid,$2::uuid,$3::uuid,1,'prod','{"nodes":[]}'::jsonb)`,
+        ["ac000000-0000-4000-8000-000000000002", TENANT_A, "ac000000-0000-4000-8000-000000000001"],
+      );
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, created_at, updated_at)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'queued',$1::uuid, now() - interval '10 minutes', now())`,
+        ["ac000000-0000-4000-8000-000000000003", TENANT_A, "ac000000-0000-4000-8000-000000000002"],
+      );
+    });
+    const listPending = await getPools(admin);
+    check(
+      "GET: pending.queued_runs=1 + oldest_queued_at(stuck 신호)",
+      listPending.json().pending?.queued_runs === 1 && typeof listPending.json().pending?.oldest_queued_at === "string",
+      listPending.body,
+    );
+    const listPendingB = await getPools(adminB);
+    check("RLS: tenant B pending.queued_runs=0(격리)", listPendingB.json().pending?.queued_runs === 0, listPendingB.body);
+
     // 3) 미배정 테넌트 enqueue → pool:default flag
     await withTenantTx(pool, TENANT_A, async (client) => {
       await realEnqueuer.enqueueRunClaim(client, { tenantId: TENANT_A, runId: "aa000000-0000-4000-8000-000000000001", correlationId: "aa000000-0000-4000-8000-0000000000c1" });
