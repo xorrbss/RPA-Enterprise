@@ -202,11 +202,13 @@ describe("goal UX improvements", () => {
     await waitFor(() => expect(within(screen.getByRole("table")).getByText("보안문자")).toBeInTheDocument());
     expect(within(screen.getByRole("table")).queryByText("승인")).toBeNull();
 
-    fireEvent.click(within(controls).getByRole("button", { name: "현재 목록 2건 담당자 지정" }));
+    // '마감 임박' 필터가 적용돼 화면에는 ht-due 1건만 보인다 → 일괄 배정도 보이는 1건만 대상이어야 한다
+    // (visibleItems 기준). 숨은 ht-later 까지 배정하면 예상 외 업무 처리(안전 버그).
+    fireEvent.click(within(controls).getByRole("button", { name: "현재 목록 1건 담당자 지정" }));
     fireEvent.change(await screen.findByLabelText("담당자 선택 또는 직접 입력"), { target: { value: "u-assign" } });
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
-    await waitFor(() => expect(assigned).toHaveLength(2));
-    expect(assigned.map((c) => c.id).sort()).toEqual(["ht-due", "ht-later"]);
+    await waitFor(() => expect(assigned).toHaveLength(1));
+    expect(assigned.map((c) => c.id)).toEqual(["ht-due"]);
     expect(assigned.every((c) => c.assignee === "u-assign" && c.key.includes(c.id))).toBe(true);
   });
 
