@@ -17,6 +17,8 @@ import {
   type Tracer,
 } from "@opentelemetry/api";
 
+import { redactUrlSecrets } from "./log";
+
 export const TRACER_NAME = "rpa-runtime";
 export const METER_NAME = "rpa-runtime";
 
@@ -179,11 +181,11 @@ export async function withSpan<T>(
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
     } catch (err) {
-      span.recordException(err as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: err instanceof Error ? err.message : String(err),
-      });
+      // recordException/status.message 는 redaction 미적용 exporter 로 나가므로 URL 쿼리/프래그먼트 비밀을 마스킹
+      //   (navigate 원 Playwright 메시지의 토큰 누출 차단 — errText 로그 경계와 대칭).
+      const message = redactUrlSecrets(err instanceof Error ? err.message : String(err));
+      span.recordException(err instanceof Error ? { name: err.name, message, stack: err.stack } : message);
+      span.setStatus({ code: SpanStatusCode.ERROR, message });
       throw err;
     } finally {
       span.end();

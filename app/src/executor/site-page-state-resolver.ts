@@ -16,6 +16,7 @@ import type { CdpSessionProvider } from "./cdp-session";
 import { getAccessibilityTree } from "./raw-cdp";
 import { PAGESTATE_FLAG_KEYS } from "./page-state-resolver";
 import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
+import { errText } from "../observability/log";
 
 const sha1 = (s: string): string => createHash("sha1").update(s).digest("hex").slice(0, 16);
 
@@ -116,7 +117,7 @@ export class SitePageStateResolver {
         landmarks.push({ role, name, pathHash: sha1(`${role}|${name}|${idx}`) });
       });
     } catch (e) {
-      console.error(`site-page-state-resolver: a11y 트리 실패 — landmarks 빈값으로 진행(flags/auth 는 probe 산출) — ${e instanceof Error ? e.message : String(e)}`);
+      console.error(`site-page-state-resolver: a11y 트리 실패 — landmarks 빈값으로 진행(flags/auth 는 probe 산출) — ${errText(e)}`);
     }
 
     // 닫힌 레지스트리 6키만, 항상 명시 set(미지정=false).
