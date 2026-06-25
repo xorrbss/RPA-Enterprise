@@ -63,7 +63,8 @@ DECLARE
     'action_plan_cache',
     'stagehand_calls',
     'scenario_generation_llm_calls',
-    'audit_log'
+    'audit_log',
+    'scenario_promotion_requests'
   ];
   table_name text;
 BEGIN
@@ -116,7 +117,8 @@ DECLARE
     'action_plan_cache',
     'stagehand_calls',
     'scenario_generation_llm_calls',
-    'audit_log'
+    'audit_log',
+    'scenario_promotion_requests'
   ];
   table_name text;
   rel_id oid;

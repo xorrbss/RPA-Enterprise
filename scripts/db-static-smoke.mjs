@@ -55,6 +55,7 @@ const expectedTables = [
   "stagehand_calls",
   "scenario_generation_llm_calls",
   "audit_log",
+  "scenario_promotion_requests",
 ];
 
 const tenantTables = expectedTables.filter((table) => table !== "workers" && table !== "artifacts");

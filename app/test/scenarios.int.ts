@@ -547,6 +547,39 @@ async function main(): Promise<void> {
         const retry = await app.inject({ method: "POST", url: `/v1/scenarios/${sid}/versions/1/rollback`, headers: { authorization: `Bearer ${operator}`, "if-match": "1", "idempotency-key": key }, payload: {} });
         check("IFM-1: 같은 키 + 올바른 If-Match 재시도 → 성공(412 영구잠금/replay 아님)", retry.statusCode !== 412 && retry.statusCode < 300, `status=${retry.statusCode} body=${retry.body}`);
       }
+
+      // 4) maker-checker prod 승격 게이트(D4): operator 요청 → approver 승인(요청자≠승인자), SoD·RBAC·반려.
+      const approver = await mint({ sub: "ap", tenant_id: TENANT_A, roles: ["approver"] });
+      const promoA = await app.inject({ method: "POST", url: "/v1/scenarios", headers: { authorization: `Bearer ${operator}` }, payload: validIr("scenario-promo-a") });
+      const promoAId = promoA.json().scenario_id as string;
+      const reqNoReason = await app.inject({ method: "POST", url: `/v1/scenarios/${promoAId}/promotion-requests`, headers: { authorization: `Bearer ${operator}`, "idempotency-key": "pr-noreason" }, payload: { version: 1 } });
+      check("승격요청 사유 누락 → 422", reqNoReason.statusCode === 422, reqNoReason.body);
+      const req1 = await app.inject({ method: "POST", url: `/v1/scenarios/${promoAId}/promotion-requests`, headers: { authorization: `Bearer ${operator}`, "idempotency-key": "pr-1" }, payload: { version: 1, reason: "운영 적용 요청" } });
+      check("operator 승격요청 → 201 pending", req1.statusCode === 201 && req1.json().status === "pending", req1.body);
+      const reqId = req1.json().request_id as string;
+      const reqDup = await app.inject({ method: "POST", url: `/v1/scenarios/${promoAId}/promotion-requests`, headers: { authorization: `Bearer ${operator}`, "idempotency-key": "pr-dup" }, payload: { version: 1, reason: "중복" } });
+      check("중복 pending 요청 → 412 SCENARIO_VERSION_CONFLICT", reqDup.statusCode === 412 && reqDup.json().code === "SCENARIO_VERSION_CONFLICT", reqDup.body);
+      const decNoRbac = await app.inject({ method: "POST", url: `/v1/scenarios/${promoAId}/promotion-requests/${reqId}/decide`, headers: { authorization: `Bearer ${operator}`, "idempotency-key": "dec-norbac" }, payload: { decision: "approve" } });
+      check("operator decide → 403(승인 권한 없음)", decNoRbac.statusCode === 403, decNoRbac.body);
+      const inbox = await app.inject({ method: "GET", url: "/v1/scenarios/promotion-requests", headers: { authorization: `Bearer ${approver}` } });
+      check("approver 인박스 → pending 노출", inbox.statusCode === 200 && inbox.json().items.some((i: { request_id: string }) => i.request_id === reqId), inbox.body);
+      const dec = await app.inject({ method: "POST", url: `/v1/scenarios/${promoAId}/promotion-requests/${reqId}/decide`, headers: { authorization: `Bearer ${approver}`, "idempotency-key": "dec-1" }, payload: { decision: "approve" } });
+      check("approver(≠요청자) 승인 → 200 approved", dec.statusCode === 200 && dec.json().status === "approved", dec.body);
+      const proPromoted = await withTenantTx(pool, TENANT_A, (c) => c.query<{ promotion_status: string }>(`SELECT promotion_status FROM scenario_versions WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND version=1`, [TENANT_A, promoAId]));
+      check("승인 → version 1 prod 승격", proPromoted.rows[0]?.promotion_status === "prod", JSON.stringify(proPromoted.rows[0]));
+      const decAgain = await app.inject({ method: "POST", url: `/v1/scenarios/${promoAId}/promotion-requests/${reqId}/decide`, headers: { authorization: `Bearer ${admin}`, "idempotency-key": "dec-again" }, payload: { decision: "reject" } });
+      check("결정된 요청 재-decide → 404", decAgain.statusCode === 404, decAgain.body);
+      // SoD: approver 가 만든 시나리오를 본인이 요청+승인 시도 → 403(self_approval_forbidden). admin 반려 → 미승격.
+      const promoB = await app.inject({ method: "POST", url: "/v1/scenarios", headers: { authorization: `Bearer ${approver}` }, payload: validIr("scenario-promo-b") });
+      const promoBId = promoB.json().scenario_id as string;
+      const reqB = await app.inject({ method: "POST", url: `/v1/scenarios/${promoBId}/promotion-requests`, headers: { authorization: `Bearer ${approver}`, "idempotency-key": "pr-b" }, payload: { version: 1, reason: "본인 승인 시도" } });
+      const reqBId = reqB.json().request_id as string;
+      const selfDec = await app.inject({ method: "POST", url: `/v1/scenarios/${promoBId}/promotion-requests/${reqBId}/decide`, headers: { authorization: `Bearer ${approver}`, "idempotency-key": "dec-self" }, payload: { decision: "approve" } });
+      check("SoD: 요청자 본인 승인 → 403 self_approval_forbidden", selfDec.statusCode === 403 && selfDec.json().details?.reason === "self_approval_forbidden", selfDec.body);
+      const rej = await app.inject({ method: "POST", url: `/v1/scenarios/${promoBId}/promotion-requests/${reqBId}/decide`, headers: { authorization: `Bearer ${admin}`, "idempotency-key": "dec-rej" }, payload: { decision: "reject", reason: "추가 검토 필요" } });
+      check("admin(≠요청자) 반려 → 200 rejected", rej.statusCode === 200 && rej.json().status === "rejected", rej.body);
+      const stillDraft = await withTenantTx(pool, TENANT_A, (c) => c.query<{ promotion_status: string }>(`SELECT promotion_status FROM scenario_versions WHERE tenant_id=$1::uuid AND scenario_id=$2::uuid AND version=1`, [TENANT_A, promoBId]));
+      check("반려 → version 1 미승격(draft 유지)", stillDraft.rows[0]?.promotion_status === "draft", JSON.stringify(stillDraft.rows[0]));
     } finally {
       await app.close();
     }
