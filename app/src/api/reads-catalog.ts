@@ -8,6 +8,35 @@ import { UUID_RE } from "./reads-support";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 import { summarizePageStateSelectors } from "./site-page-state-contract";
 
+// ── gateway call-summary(B4): stagehand_calls 사용량/비용 집계 ──
+interface GatewayCallSummaryRow {
+  model: string;
+  calls: string;
+  input_tokens: string | null;
+  output_tokens: string | null;
+  cost: string | null;
+}
+
+// days 윈도우 → [1,90] 정수(기본 30). 무효는 조용히 클램프(표시 윈도우는 진실 주장이 아니라 조회 범위).
+function callSummaryWindowDays(raw: unknown): number {
+  const n = typeof raw === "string" ? Number.parseInt(raw, 10) : typeof raw === "number" ? raw : Number.NaN;
+  if (!Number.isFinite(n)) return 30;
+  return Math.max(1, Math.min(90, Math.trunc(n)));
+}
+
+// 집계 행 → 응답 figure. 토큰=number(int 합), cost=string(numeric 정밀도 보존). sum 이 전부 NULL이면 null 유지(0 단정 금지).
+function callSummaryFigures(
+  row: { calls: string; input_tokens: string | null; output_tokens: string | null; cost: string | null } | undefined,
+): { calls: number; input_tokens: number | null; output_tokens: number | null; cost: string | null } {
+  if (row === undefined) return { calls: 0, input_tokens: null, output_tokens: null, cost: null };
+  return {
+    calls: Number(row.calls),
+    input_tokens: row.input_tokens === null ? null : Number(row.input_tokens),
+    output_tokens: row.output_tokens === null ? null : Number(row.output_tokens),
+    cost: row.cost,
+  };
+}
+
 interface ScenarioRow {
   id: string;
   name: string;
@@ -135,6 +164,42 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
       return result.rows;
     });
     reply.code(200).send({ items: rows.map((r) => ({ ...mapGatewayPolicy(r), version: r.version })), next_cursor: null });
+  });
+
+  // GET /v1/gateway/call-summary — 테넌트-스코프 LLM 호출 사용량/비용 집계(stagehand_calls GROUP BY model, 기간 윈도우).
+  //   모델별 호출수·입력/출력 토큰 합·비용 합 + 전체 합계. 토큰/비용이 전부 NULL이면 합도 null(0 단정 금지, "조용한
+  //   false 금지"). 비용 DESC(NULL 마지막) 정렬. RLS 스코프, gateway_policy.read. days=조회 윈도우(기본 30, [1,90] 클램프).
+  app.get("/v1/gateway/call-summary", { config: { rbacAction: "gateway_policy.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const windowDays = callSummaryWindowDays((request.query as Record<string, unknown>).days);
+    const { modelRows, totalRow } = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+      const models = await c.query<GatewayCallSummaryRow>(
+        `SELECT model, count(*)::text AS calls,
+                sum(input_tokens)::text AS input_tokens,
+                sum(output_tokens)::text AS output_tokens,
+                sum(cost)::text AS cost
+           FROM stagehand_calls
+          WHERE tenant_id = $1::uuid AND created_at >= now() - ($2::int || ' days')::interval
+          GROUP BY model
+          ORDER BY sum(cost) DESC NULLS LAST, model ASC`,
+        [principal.tenantId, windowDays],
+      );
+      const total = await c.query<Omit<GatewayCallSummaryRow, "model">>(
+        `SELECT count(*)::text AS calls,
+                sum(input_tokens)::text AS input_tokens,
+                sum(output_tokens)::text AS output_tokens,
+                sum(cost)::text AS cost
+           FROM stagehand_calls
+          WHERE tenant_id = $1::uuid AND created_at >= now() - ($2::int || ' days')::interval`,
+        [principal.tenantId, windowDays],
+      );
+      return { modelRows: models.rows, totalRow: total.rows[0] };
+    });
+    reply.code(200).send({
+      window_days: windowDays,
+      total: callSummaryFigures(totalRow),
+      by_model: modelRows.map((r) => ({ model: r.model, ...callSummaryFigures(r) })),
+    });
   });
 
   // GET /v1/gateway/policy — 모델 정책(model/capabilities/budget/fallback). RLS 스코프.
