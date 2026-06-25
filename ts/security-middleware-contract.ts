@@ -101,6 +101,7 @@ export type RbacAction =
   | "approval.decide"
   | "session.capture"
   | "secret.resolve"
+  | "credential.manage"
   | "connector.read"
   | "connector.enable"
   | "gateway_policy.read"

@@ -153,6 +153,8 @@ export type OperationId =
   | "promoteScenarioFromRun"
   | "createScenarioPromotionRequest"
   | "decideScenarioPromotionRequest"
+  | "registerCredentialBinding"
+  | "deleteCredentialBinding"
   | "archiveScenario"
   | "listScenarioVersions"
   | "getScenarioVersion"

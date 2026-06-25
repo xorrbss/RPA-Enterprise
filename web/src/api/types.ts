@@ -207,6 +207,19 @@ export interface ConcurrencyPolicy {
   readonly active_leases: number;
 }
 
+// DG-4 자격증명 *참조* 등록 요청/응답 — ⛔ 시크릿 값 필드 없음(SecretRef 경로 식별자 + 한도만). 값은 out-of-band(Vault/KMS).
+export interface CredentialBindingRequest {
+  readonly credential_ref: string;
+  readonly site_profile_id: string;
+  readonly max_concurrency: number;
+}
+
+export interface CredentialBindingResult {
+  readonly credential_ref: string;
+  readonly site_profile_id: string;
+  readonly max_concurrency: number;
+}
+
 export type RunTriggerType = "cron" | "webhook";
 
 export interface RunTriggerItem {
