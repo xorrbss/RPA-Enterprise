@@ -312,13 +312,40 @@ describe("automation ops view", () => {
     expect(screen.getAllByText("작업 큐 미연결").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("큐 연결 확인")).toBeInTheDocument();
     expect(screen.getByText(/실제 정기 실행은 아직 시작되지 않습니다/)).toBeInTheDocument();
-    expect(screen.getByText("만료 미회수 1건")).toBeInTheDocument();
-    expect(screen.getByText("15분 이상 진행 중")).toBeInTheDocument();
+    // 브라우저 세션 타일: 만료 미회수 건수 + 다음 만료 시각(next_expiry_at) 표면화.
+    const browserTile = screen.getByText("브라우저 세션").closest(".ops-health-tile") as HTMLElement;
+    expect(browserTile).toHaveTextContent("만료 미회수 1건");
+    expect(browserTile).toHaveTextContent("다음 만료");
 
+    // 지연 실행 타일: 가장 오래된 시작 시각(oldest_updated_at) 표면화.
     const staleTile = screen.getByText("지연 실행").closest(".ops-health-tile") as HTMLElement;
+    expect(staleTile).toHaveTextContent("가장 오래된 시작");
     fireEvent.click(within(staleTile).getByRole("button", { name: "실행 보기" }));
 
     expect(location.hash).toBe("#runTrace?status=running");
+  });
+
+  test("운영 헬스: 만료 시각/지연 실행이 없으면 시각을 지어내지 않는다(조용한 false 금지)", async () => {
+    renderApp(
+      clientWithOpsData({
+        getOpsHealth: async () => ({
+          status: "ok" as const,
+          detected_at: "2026-06-23T09:04:00.000Z",
+          queue: { available: true, pending_jobs: 0 },
+          browser_leases: { reserved: 0, active: 1, draining: 0, expired: 0, expired_open: 0, next_expiry_at: null },
+          stale_runs: { nonterminal_over_15m: 0, oldest_updated_at: null },
+        }),
+      }),
+    );
+
+    // health 로드 완료를 기다린다(로딩 중엔 타일이 '사용 중/예약'을 보임).
+    const detailBadge = await screen.findByText("만료 미회수 0건");
+    const browserTile = detailBadge.closest(".ops-health-tile") as HTMLElement;
+    expect(browserTile).not.toHaveTextContent("다음 만료"); // next_expiry_at null → 표기 안 함
+
+    const staleTile = screen.getByText("지연 실행").closest(".ops-health-tile") as HTMLElement;
+    expect(staleTile).toHaveTextContent("15분 이상 진행 중"); // 지연 없음 → 일반 문구
+    expect(staleTile).not.toHaveTextContent("가장 오래된 시작");
   });
 
   test("봇 풀 용량 패널은 worker/lease/대기 실행 집계를 표시한다", async () => {
