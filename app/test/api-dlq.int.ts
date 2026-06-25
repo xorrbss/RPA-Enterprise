@@ -40,6 +40,13 @@ const DL_NOTABANDONED = "63000000-0000-0000-0000-000000000004";
 const DL_IDEM = "63000000-0000-0000-0000-000000000005";
 const DL_VIEWER = "63000000-0000-0000-0000-000000000006";
 const DL_B = "64000000-0000-0000-0000-000000000001";
+const TENANT_C = "00000000-0000-0000-0000-0000000000c3";
+const WI_C1 = "6c000000-0000-0000-0000-000000000001";
+const WI_C2 = "6c000000-0000-0000-0000-000000000002";
+const WI_C3 = "6c000000-0000-0000-0000-000000000003";
+const DL_C1 = "6d000000-0000-0000-0000-000000000001";
+const DL_C2 = "6d000000-0000-0000-0000-000000000002";
+const DL_C3 = "6d000000-0000-0000-0000-000000000003";
 
 const SECRET = new TextEncoder().encode("d45-dlq-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -145,6 +152,13 @@ async function main(): Promise<void> {
     await seedDeadLetter(pool, TENANT_A, DL_IDEM, WI_IDEM, true);
     await seedDeadLetter(pool, TENANT_A, DL_VIEWER, WI_VIEWER, true);
     await seedDeadLetter(pool, TENANT_B, DL_B, WI_B, true);
+    // tenant C 일괄 replay 픽스처(격리): C1/C2 abandoned(replayable) → 일괄 복원, C3 'new'(replayable이나 not abandoned) → 충돌.
+    await seedWorkitem(pool, TENANT_C, WI_C1, "wi-c1", "abandoned", 4);
+    await seedWorkitem(pool, TENANT_C, WI_C2, "wi-c2", "abandoned", 3);
+    await seedWorkitem(pool, TENANT_C, WI_C3, "wi-c3", "new", 0);
+    await seedDeadLetter(pool, TENANT_C, DL_C1, WI_C1, true);
+    await seedDeadLetter(pool, TENANT_C, DL_C2, WI_C2, true);
+    await seedDeadLetter(pool, TENANT_C, DL_C3, WI_C3, true);
     console.log("seeded workitems + dead letters");
 
     const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
@@ -160,6 +174,8 @@ async function main(): Promise<void> {
     try {
       const op = await mint({ sub: "op", tenant_id: TENANT_A, roles: ["operator"] });
       const viewer = await mint({ sub: "vi", tenant_id: TENANT_A, roles: ["viewer"] });
+      const opC = await mint({ sub: "opc", tenant_id: TENANT_C, roles: ["operator"] });
+      const viewerC = await mint({ sub: "vic", tenant_id: TENANT_C, roles: ["viewer"] });
 
       const replay = (id: string, key: string, token = op) =>
         app.inject({
@@ -219,6 +235,27 @@ async function main(): Promise<void> {
       // 10) Idempotency-Key 누락 → 422.
       const noKey = await app.inject({ method: "POST", url: `/v1/dlq/${DL_OK}/replay`, headers: { authorization: `Bearer ${op}` } });
       check("missing Idempotency-Key → 422", noKey.statusCode === 422 && noKey.json().code === "IR_SCHEMA_INVALID", noKey.body);
+
+      // 11) 일괄 재처리(tenant C 격리): 적격 3건 → 2 복원 + 1 충돌(C3 workitem not abandoned). Idempotency-Key 불요.
+      const replayAll = (kind: string, token = opC) =>
+        app.inject({ method: "POST", url: `/v1/dlq/replay-all?kind=${kind}`, headers: { authorization: `Bearer ${token}` } });
+      const ra1 = await replayAll("workitem");
+      check("replay-all → 202", ra1.statusCode === 202, ra1.body);
+      check("replay-all 집계(attempted 3·replayed 2·conflicts 1·truncated false; attempted=3 가 RLS 격리 증명)",
+        ra1.json().attempted === 3 && ra1.json().replayed === 2 && ra1.json().conflicts === 1 && ra1.json().truncated === false,
+        ra1.body);
+      check("replay-all: C1/C2 replayed_at 마킹",
+        (await replayedAt(pool, TENANT_C, DL_C1)) === true && (await replayedAt(pool, TENANT_C, DL_C2)) === true);
+      check("replay-all: C3(충돌) 미복원", (await replayedAt(pool, TENANT_C, DL_C3)) === false);
+      check("replay-all: WI_C1 → new + attempts reset",
+        (await workitem(pool, TENANT_C, WI_C1))?.status === "new" && (await workitem(pool, TENANT_C, WI_C1))?.attempts === 0);
+      // 12) 자연 멱등: 재호출 → 신규 적격만(C1/C2 이미 복원 → 제외), C3만 재시도(여전히 충돌).
+      const ra2 = await replayAll("workitem");
+      check("replay-all 재호출 멱등(attempted 1·replayed 0·conflicts 1)",
+        ra2.json().attempted === 1 && ra2.json().replayed === 0 && ra2.json().conflicts === 1, ra2.body);
+      // 13) RBAC viewer → 403.
+      const ra3 = await replayAll("workitem", viewerC);
+      check("viewer replay-all → 403", ra3.statusCode === 403 && ra3.json().code === "AUTHZ_FORBIDDEN", ra3.body);
     } finally {
       await app.close();
     }

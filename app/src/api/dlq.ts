@@ -22,6 +22,7 @@ import type { PoolClient } from "pg";
 
 import type { WorkitemState } from "../../../ts/state-machine-types";
 import { applyWorkitemTransition } from "../runtime/workitem-transition";
+import { withTenantTx } from "../db/pool";
 import { runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import type { SinkDeliverEnqueueInput } from "./run-queue";
@@ -35,6 +36,9 @@ function parseReplayKind(raw: unknown): "workitem" | "sink" {
   if (raw === "workitem" || raw === "sink") return raw;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_kind", param: "kind" });
 }
+
+// 일괄 replay 에서 per-item 으로 건너뛸 예상 결과(이미 처리/진행·미존재 race·미복원 대상). 그 외(인프라) 오류는 전파.
+const BULK_SKIPPABLE: ReadonlySet<string> = new Set(["WORKITEM_CHECKOUT_CONFLICT", "RESOURCE_NOT_FOUND", "IR_SCHEMA_INVALID"]);
 
 export function registerDlqRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.post<{ Params: { id: string }; Querystring: { kind?: string } }>(
@@ -84,6 +88,63 @@ export function registerDlqRoutes(app: FastifyInstance, deps: ApiServerDeps): vo
         (client, tenantId) => applyDeadLetterReplay(client, tenantId, id, request.correlationId),
       );
       reply.code(result.status).send(result.body);
+    },
+  );
+
+  // POST /v1/dlq/replay-all?kind=workitem|sink — 운영자 일괄 재처리(현재 페이지 50건 한도 없이 적격 전체).
+  //   적격 id 를 캡(500)까지 조회 → per-item 별도 tx 로 단건 replay 로직(applyDeadLetterReplay/applySinkDeadLetterReplay)을
+  //   재사용해 결과 집계. 예상 충돌(이미 처리/진행/race)은 conflicts 로 집계하고 그 외(인프라)는 전파(조용한 false 금지).
+  //   행 CAS(replayed_at/requeued_at)+적격 SELECT 가 자연 멱등(재호출은 신규 적격만) → Idempotency-Key 불요. 202 + 집계.
+  app.post<{ Querystring: { kind?: string } }>(
+    "/v1/dlq/replay-all",
+    { config: { rbacAction: "dlq.replay" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const kind = parseReplayKind(request.query.kind);
+      if (kind === "sink") {
+        const decision = await deps.rbac.authorize(principal, { action: "sink_dlq.replay", tenantId: principal.tenantId });
+        if (decision.kind === "deny") {
+          request.log.warn(
+            { action: decision.action, code: decision.code, reason: decision.reason, correlation_id: request.correlationId },
+            "sink_dlq.replay-all denied",
+          );
+          throw new ApiResponseError(decision.code);
+        }
+      }
+      const CAP = 500;
+      const ids = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
+        const sql =
+          kind === "sink"
+            ? `SELECT id::text AS id FROM sink_deliveries
+                WHERE tenant_id=$1::uuid AND status='dead_letter' AND requeued_at IS NULL
+                ORDER BY attempted_at ASC LIMIT $2`
+            : `SELECT id::text AS id FROM dead_letter
+                WHERE tenant_id=$1::uuid AND replayed_at IS NULL AND replayable=true AND workitem_id IS NOT NULL
+                ORDER BY created_at ASC LIMIT $2`;
+        const result = await client.query<{ id: string }>(sql, [principal.tenantId, CAP + 1]);
+        return result.rows.map((r) => r.id);
+      });
+      const truncated = ids.length > CAP;
+      const batch = truncated ? ids.slice(0, CAP) : ids;
+      let replayed = 0;
+      let conflicts = 0;
+      for (const id of batch) {
+        try {
+          await withTenantTx(deps.pool, principal.tenantId, (client) =>
+            kind === "sink"
+              ? applySinkDeadLetterReplay(deps, client, principal.tenantId, id, request.correlationId)
+              : applyDeadLetterReplay(client, principal.tenantId, id, request.correlationId),
+          );
+          replayed += 1;
+        } catch (err) {
+          if (err instanceof ApiResponseError && BULK_SKIPPABLE.has(err.code)) {
+            conflicts += 1;
+          } else {
+            throw err;
+          }
+        }
+      }
+      reply.code(202).send({ kind, attempted: batch.length, replayed, conflicts, truncated });
     },
   );
 }
