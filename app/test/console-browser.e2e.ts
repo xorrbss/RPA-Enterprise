@@ -81,6 +81,9 @@ function apiFixture(pathname: string): unknown {
   if (pathname === "/api/v1/gateway/policy") {
     return { model: "gpt-4o-mini", capabilities: { jsonMode: true } };
   }
+  if (pathname === "/api/v1/gateway/call-summary") {
+    return { window_days: 30, total: { calls: 0, input_tokens: null, output_tokens: null, cost: null }, by_model: [] };
+  }
   if (pathname === "/api/v1/runs/summary") {
     return { by_status: { running: 1 }, success_rate: null, total: 1, cache: { by_mode: { bypass: 1 }, hit_rate: null } };
   }

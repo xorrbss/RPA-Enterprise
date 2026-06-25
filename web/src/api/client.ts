@@ -31,6 +31,7 @@ import {
   type DocumentJobItem,
   type DocumentJobListParams,
   type DocumentValidationTaskResult,
+  type GatewayCallSummary,
   type GatewayPolicy,
   type GatewayPolicyUpdate,
   type GenerationArtifactDetail,
@@ -143,6 +144,8 @@ export interface ApiClient {
   listSessionCaptures(siteId: string): Promise<Paginated<CaptureSessionItem>>;
   listGatewayPolicies(): Promise<Paginated<GatewayPolicy>>;
   getGatewayPolicy(model?: string): Promise<GatewayPolicy>;
+  // LLM 호출 사용량/비용 집계(분석; GET /v1/gateway/call-summary). days=윈도우(기본 30).
+  getGatewayCallSummary(days?: number): Promise<GatewayCallSummary>;
   createGatewayPolicy(body: GatewayPolicyUpdate, idempotencyKey: string): Promise<GatewayPolicy>;
   // admin gateway policy 갱신: PUT If-Match(현재 version) + Idempotency-Key + body. 충돌→POLICY_VERSION_CONFLICT(412),
   // 예산>컨텍스트→LLM_CAPABILITY_MISMATCH(422), 권한 없음→AUTHZ_FORBIDDEN(403) 표면화.
@@ -467,6 +470,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/sites/${siteId}/recordings/${recordingId}/complete`, key),
     listSessionCaptures: (siteId) => get(`/v1/sites/${siteId}/session/capture`),
     listGatewayPolicies: () => get(`/v1/gateway/policies`),
+    getGatewayCallSummary: (days) => get<GatewayCallSummary>(`/v1/gateway/call-summary${days !== undefined ? `?days=${days}` : ""}`),
     getGatewayPolicy: async (model) => {
       // GET은 ETag(=version) 헤더로 동시성 토큰을 노출 → PUT If-Match의 선행 read. body shape는 불변.
       const res = await doFetch(`${opts.baseUrl}/v1/gateway/policy${queryString(model ? { model } : undefined)}`, {

@@ -701,6 +701,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     createGatewayPolicy: async (body) => ({ model: body.model, version: 1, capabilities: body.capabilities, budget: body.budget, fallback: body.fallback_config ?? null, is_default: body.is_default ?? false }),
     updateGatewayPolicy: async (version) => ({ model: "gpt-4o-mini", version: version + 1 }),
     deleteGatewayPolicy: async (model) => ({ model, deleted: true }),
+    getGatewayCallSummary: async () => ({ window_days: 30, total: { calls: 0, input_tokens: null, output_tokens: null, cost: null }, by_model: [] }),
     abortRun: async () => ({ status: "cancelled" }),
     replayDeadLetter: async () => ({ status: "new" }),
     assignHumanTask: async () => ({ status: "assigned" }),
