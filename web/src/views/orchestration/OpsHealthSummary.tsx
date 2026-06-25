@@ -41,13 +41,13 @@ export function OpsHealthSummary({
         <HealthTile
           title="브라우저 세션"
           value={health === undefined ? "-" : String(health.browser_leases.active + health.browser_leases.reserved)}
-          detail={health === undefined ? "사용 중/예약" : `만료 미회수 ${health.browser_leases.expired_open}건`}
+          detail={browserLeaseDetail(health)}
           tone={health !== undefined && health.browser_leases.expired_open > 0 ? "red" : "green"}
         />
         <HealthTile
           title="지연 실행"
           value={health === undefined ? "-" : String(health.stale_runs.nonterminal_over_15m)}
-          detail="15분 이상 진행 중"
+          detail={staleRunDetail(health)}
           tone={health !== undefined && health.stale_runs.nonterminal_over_15m > 0 ? "amber" : "green"}
           action={health !== undefined && health.stale_runs.nonterminal_over_15m > 0 ? () => navigate("runTrace", { status: "running" }) : undefined}
         />
@@ -87,6 +87,26 @@ function HealthTile({
       )}
     </div>
   );
+}
+
+// 브라우저 세션 만료 타이밍 표면화 — 만료 미회수 건수만으론 긴급성 판단 불가.
+// next_expiry_at(다음 자동 회수 시각)은 계약 제공 필드이며, null 이면 표기하지 않는다(조용한 false 금지).
+function browserLeaseDetail(health: OpsHealth | undefined): string {
+  if (health === undefined) return "사용 중/예약";
+  const { expired_open, next_expiry_at } = health.browser_leases;
+  const base = `만료 미회수 ${expired_open}건`;
+  return next_expiry_at !== null ? `${base} · 다음 만료 ${formatDateTime(next_expiry_at)}` : base;
+}
+
+// 지연 실행의 '가장 오래된 시작 시각'을 표면화 — 15분인지 2시간인지로 심각도가 갈린다.
+// 지연 건이 있고 oldest_updated_at(계약 제공)이 있으면 그 시각을, 아니면 기존 일반 문구를 보인다.
+function staleRunDetail(health: OpsHealth | undefined): string {
+  if (health === undefined) return "15분 이상 진행 중";
+  const { nonterminal_over_15m, oldest_updated_at } = health.stale_runs;
+  if (nonterminal_over_15m > 0 && oldest_updated_at !== null) {
+    return `가장 오래된 시작 ${formatDateTime(oldest_updated_at)}`;
+  }
+  return "15분 이상 진행 중";
 }
 
 function opsHealthTone(status: OpsHealth["status"] | undefined): "green" | "amber" | "red" | "muted" {
