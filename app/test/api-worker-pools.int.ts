@@ -170,6 +170,10 @@ async function main(): Promise<void> {
     const listB = await getPools(adminB);
     check("RLS: A assigned null(미배정), B assigned pb", listA.json().assigned_pool_key === null && listB.json().assigned_pool_key === "pb", `${listA.body} | ${listB.body}`);
   } finally {
+    // 공유 graphile_worker 큐 정리: CI test:int 는 모든 통합 테스트가 한 DB 를 공유하고 graphile_worker 스키마는
+    // 전역이라(앱 테이블은 per-test SCHEMA), 이 테스트가 flag 검증용으로 enqueue 한 run_claim job 을 남기면
+    // 뒤따르는 queue-depth-gauge.int.ts(빈 큐 전제)를 오염시킨다. enqueue 한 job 을 제거해 큐를 원상복구한다.
+    await pool.query(`DELETE FROM graphile_worker._private_jobs`).catch(() => undefined);
     await app.close();
     await pool.end();
   }
