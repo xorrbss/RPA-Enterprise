@@ -109,6 +109,47 @@ describe("작업항목·사람확인 상세 드릴다운", () => {
     expect(within(panel).getByRole("button", { name: "완료 처리" })).toBeInTheDocument(); // in_progress 액션(HumanTaskActions 재사용)
   });
 
+  // 이관 사유(escalation_reason) 노출 — 재배정될 담당자에게 맥락 전달.
+  test("escalated 태스크 상세는 이관 사유를 표시한다", async () => {
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({
+          items: [{ human_task_id: "ht-esc", state: "escalated", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null }],
+          next_cursor: null,
+        }),
+        getHumanTask: async (id) => ({ human_task_id: id, state: "escalated", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null, escalation_reason: "고객 본인 확인이 필요해 상위 담당자에게 넘김", escalated_by: "rv", escalated_at: "2026-06-25T00:00:00.000Z" }),
+      }),
+    );
+    location.hash = "#humanTasks";
+    (await screen.findByRole("button", { name: "상세" })).click();
+    const panel = await screen.findByRole("region", { name: "검토 업무 상세" });
+    expect(await within(panel).findByText("이관 사유")).toBeInTheDocument();
+    expect(within(panel).getByText("고객 본인 확인이 필요해 상위 담당자에게 넘김")).toBeInTheDocument();
+  });
+
+  // 이관 사유는 선택 입력 — 비워도 이관 가능, 입력 시 escalateHumanTask(reason) 호출.
+  test("이관 버튼은 선택 사유를 받아 escalateHumanTask(reason)로 전달한다", async () => {
+    const calls: Array<{ id: string; reason?: string }> = [];
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({
+          items: [{ human_task_id: "ht-e2", state: "in_progress", kind: "approval", assignee: "u-1", timeout: null, on_timeout: "escalate", run_id: null }],
+          next_cursor: null,
+        }),
+        getHumanTask: async (id) => ({ human_task_id: id, state: "in_progress", kind: "approval", assignee: "u-1", timeout: null, on_timeout: "escalate", run_id: null }),
+        escalateHumanTask: async (id, _key, reason) => { calls.push({ id, reason }); return { human_task_id: id, state: "escalated" }; },
+      }),
+    );
+    location.hash = "#humanTasks";
+    (await screen.findByRole("button", { name: "상세" })).click();
+    const panel = await screen.findByRole("region", { name: "검토 업무 상세" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "이관" }));
+    fireEvent.change(await screen.findByLabelText("이관 사유 (선택)"), { target: { value: "처리 권한 부족" } });
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.reason).toBe("처리 권한 부족");
+  });
+
   test("Human Task result_schema가 있으면 목록에서 바로 resolve하지 않고 검토 입력으로 보낸다", async () => {
     const resolved: string[] = [];
     renderApp(

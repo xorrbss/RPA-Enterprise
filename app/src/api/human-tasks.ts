@@ -96,18 +96,32 @@ export function registerHumanTaskRoutes(app: FastifyInstance, deps: ApiServerDep
     { config: { rbacAction: "human_task.escalate" } },
     async (request, reply) => {
       const id = requireTaskId(request.params.id);
-      requireReasonBody(request);
+      const escalationReason = requireReasonBody(request);
+      const principal = requirePrincipal(request);
       const result = await runIdempotentCommand(
         deps,
         request,
         "escalateHumanTask",
         `/v1/human-tasks/${id}/escalate`,
         (client, tenantId) =>
-          applyHumanTaskCommand(client, tenantId, id, request.correlationId, { type: "escalate" }, undefined, {
-            // R15: suspended + human_task.escalated → suspended(reassignAssignee). run 상태 불변.
-            event: { type: "human_task.escalated" },
-            guard: {},
-          }),
+          applyHumanTaskCommand(
+            client,
+            tenantId,
+            id,
+            request.correlationId,
+            { type: "escalate" },
+            undefined,
+            {
+              // R15: suspended + human_task.escalated → suspended(reassignAssignee). run 상태 불변.
+              event: { type: "human_task.escalated" },
+              guard: {},
+            },
+            undefined,
+            undefined,
+            undefined,
+            // 담당자 해제 모델(routing): escalate는 assignee를 비우고 escalated 큐에 올린다(H6 assign으로 재배정).
+            { reason: escalationReason, escalatedBy: principal.subjectId },
+          ),
       );
       reply.code(result.status).send(result.body);
     },
@@ -229,6 +243,9 @@ interface HumanTaskResponseRow {
   result_schema: unknown;
   artifact_refs: unknown;
   result: unknown;
+  escalation_reason: string | null;
+  escalated_by: string | null;
+  escalated_at: Date | null;
 }
 
 type ResolutionDecision = "approve" | "reject" | "correct" | "retry";
@@ -256,6 +273,7 @@ async function applyHumanTaskCommand(
   enqueuer?: RunEnqueuer,
   resolveResult?: HumanTaskResolution,
   resolvedBy?: PrincipalId,
+  escalation?: { reason: string | undefined; escalatedBy: PrincipalId | undefined },
 ): Promise<CommandResponse> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const cur = await client.query<HumanTaskRow>(
@@ -297,6 +315,10 @@ async function applyHumanTaskCommand(
     if (event.type === "resolve") {
       await storeHumanTaskResolution(client, tenantId, humanTaskId, resolveResult, resolvedBy);
     }
+    if (event.type === "escalate") {
+      // 담당자 해제 모델: H5 reassignAssignee 를 '담당자 비움'으로 소비(추정 라우팅 아님) + 사유 영속.
+      await storeHumanTaskEscalation(client, tenantId, humanTaskId, escalation?.reason, escalation?.escalatedBy);
+    }
     if (runCoupling !== undefined) {
       await applyCoupledRunTransition(client, tenantId, row.run_id, humanTaskId, correlationId, runCoupling, enqueuer);
     }
@@ -326,6 +348,30 @@ async function storeHumanTaskResolution(
   }
 }
 
+// H5 담당자 해제 모델: escalate 시 assignee 를 비우고(escalated 큐 개방) 사유/주체/시각을 영속한다.
+// assignee=NULL 이 reassignAssignee side effect 의 명시 소비(추정 admin queue 매핑 아님).
+async function storeHumanTaskEscalation(
+  client: PoolClient,
+  tenantId: string,
+  humanTaskId: string,
+  reason: string | undefined,
+  escalatedBy: PrincipalId | undefined,
+): Promise<void> {
+  const updated = await client.query(
+    `UPDATE human_tasks
+        SET assignee = NULL,
+            escalation_reason = $3::text,
+            escalated_by = $4::text,
+            escalated_at = now(),
+            updated_at = now()
+      WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+    [tenantId, humanTaskId, reason ?? null, escalatedBy ?? null],
+  );
+  if (updated.rowCount !== 1) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  }
+}
+
 async function readHumanTaskResponse(
   client: PoolClient,
   tenantId: string,
@@ -333,7 +379,8 @@ async function readHumanTaskResponse(
 ): Promise<Record<string, unknown>> {
   const result = await client.query<HumanTaskResponseRow>(
     `SELECT id::text AS id, state, kind, assignee, expires_at, on_timeout, run_id::text AS run_id,
-            payload, result_schema, artifact_refs, result
+            payload, result_schema, artifact_refs, result,
+            escalation_reason, escalated_by, escalated_at
        FROM human_tasks
       WHERE tenant_id = $1::uuid AND id = $2::uuid`,
     [tenantId, humanTaskId],
@@ -354,6 +401,9 @@ async function readHumanTaskResponse(
     result_schema: recordOrEmpty(row.result_schema),
     artifact_refs: stringArray(row.artifact_refs),
     result: recordOrNull(row.result),
+    escalation_reason: row.escalation_reason,
+    escalated_by: row.escalated_by,
+    escalated_at: row.escalated_at !== null ? row.escalated_at.toISOString() : null,
   };
 }
 
@@ -369,7 +419,12 @@ function assertHumanTaskPendingHandled(
   pending: readonly SideEffectCmd[],
 ): void {
   if (pending.length === 0) return;
+  // reassignAssignee 소비 규칙(state-machine.md §3 routing): H6 assign 은 명시 assignee 로,
+  // H5 escalate 는 '담당자 해제'(escalated 큐 개방)로 소비한다 — 둘 다 추정 매핑이 아닌 명시 routing.
   if (event.type === "assign" && assignee !== undefined && pending.every((cmd) => cmd.kind === "reassignAssignee")) {
+    return;
+  }
+  if (event.type === "escalate" && pending.every((cmd) => cmd.kind === "reassignAssignee")) {
     return;
   }
   throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", {
@@ -380,6 +435,9 @@ function assertHumanTaskPendingHandled(
 
 function assertRunCouplingPendingHandled(pending: readonly SideEffectCmd[]): void {
   if (pending.length === 0) return;
+  // R15(human_task.escalated) 의 run-레벨 reassignAssignee 는 task-레벨 담당자 해제로 이미 소비됐다
+  // (run 은 suspended 유지, run-레벨 assignee 개념 없음). 그 외 미지원 pending 은 fail-closed.
+  if (pending.every((cmd) => cmd.kind === "reassignAssignee")) return;
   throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", {
     reason: "human_task_run_coupling_pending_side_effects_unsupported",
     pending: pending.map((cmd) => cmd.kind),
@@ -529,13 +587,15 @@ function requireResolutionResult(value: Record<string, unknown>): HumanTaskResol
   };
 }
 
-/** escalate body: optional `reason`(string)만 허용. reason은 v1 비영속(수신만). */
-function requireReasonBody(request: FastifyRequest): void {
-  if (request.body === undefined || request.body === null) return;
+/** escalate body: optional `reason`(string)만 허용. reason은 escalation_reason 으로 영속(H5). */
+function requireReasonBody(request: FastifyRequest): string | undefined {
+  if (request.body === undefined || request.body === null) return undefined;
   if (!isRecord(request.body) || Object.keys(request.body).some((k) => k !== "reason")) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_escalate_request" });
   }
-  if (request.body.reason !== undefined && typeof request.body.reason !== "string") {
+  if (request.body.reason === undefined) return undefined;
+  if (typeof request.body.reason !== "string") {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_escalate_reason" });
   }
+  return request.body.reason;
 }

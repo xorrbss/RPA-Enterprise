@@ -561,6 +561,9 @@ CREATE TABLE human_tasks (
   artifact_refs jsonb       NOT NULL DEFAULT '[]'::jsonb,    -- V2 검증 참고 artifact id 배열(본문은 artifacts API로 조회)
   result        jsonb,                                      -- V2 사람이 입력한 판정/교정 결과
   resolved_by   text,                                       -- result 제출 주체(JWT sub)
+  escalation_reason text,                                   -- H5 수동 이관 사유(운영자 입력, optional). 재배정될 새 담당자 맥락 전달용; 비민감 텍스트.
+  escalated_by  text,                                       -- H5 이관 주체(JWT sub); assignee/resolved_by와 동형(자유형 string, UUID 보장 없음).
+  escalated_at  timestamptz,                                -- H5 이관 시각
   created_at    timestamptz NOT NULL DEFAULT now(),
   resolved_at   timestamptz,
   updated_at    timestamptz NOT NULL DEFAULT now()

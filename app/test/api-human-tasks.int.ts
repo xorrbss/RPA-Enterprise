@@ -156,10 +156,10 @@ async function taskRow(
   pool: Pool,
   tenant: string,
   id: string,
-): Promise<{ state: string; assignee: string | null; result: Record<string, unknown> | null; resolved_by: string | null } | null> {
+): Promise<{ state: string; assignee: string | null; result: Record<string, unknown> | null; resolved_by: string | null; escalation_reason: string | null; escalated_by: string | null; escalated_at: Date | null } | null> {
   return withTenantTx(pool, tenant, async (c) => {
-    const r = await c.query<{ state: string; assignee: string | null; result: Record<string, unknown> | null; resolved_by: string | null }>(
-      `SELECT state, assignee::text AS assignee, result, resolved_by FROM human_tasks WHERE id=$1::uuid`,
+    const r = await c.query<{ state: string; assignee: string | null; result: Record<string, unknown> | null; resolved_by: string | null; escalation_reason: string | null; escalated_by: string | null; escalated_at: Date | null }>(
+      `SELECT state, assignee::text AS assignee, result, resolved_by, escalation_reason, escalated_by, escalated_at FROM human_tasks WHERE id=$1::uuid`,
       [id],
     );
     return r.rows[0] ?? null;
@@ -241,7 +241,7 @@ async function main(): Promise<void> {
       assignee: APPROVER_ASSIGNEE,
       assigneeRole: "approver",
     });
-    await seedTask(pool, TENANT_A, RUN_SUSP_ESCALATE, HT_ESCALATE_OPEN, "open");
+    await seedTask(pool, TENANT_A, RUN_SUSP_ESCALATE, HT_ESCALATE_OPEN, "assigned", "exception", { assignee: ASSIGNEE });
     await seedTask(pool, TENANT_A, RUN_A, HT_ESCALATED_AGAIN, "escalated");
     await seedTask(pool, TENANT_A, RUN_SUSP_SCOPE_OK, HT_RESOLVE_SCOPE_OK, "in_progress", "exception", {
       assignee: ASSIGNEE,
@@ -516,17 +516,22 @@ async function main(): Promise<void> {
       const escalate = (id: string, key: string, token = reviewer, payload?: unknown) =>
         post(`/v1/human-tasks/${id}/escalate`, key, token, payload);
 
-      // 19) open + escalate fails closed until reassignAssignee ownership is decided.
+      // 19) 담당자 해제 모델: escalate → 200 escalated, assignee 비움 + 사유/주체/시각 영속, run suspended 유지.
       const e1 = await escalate(HT_ESCALATE_OPEN, "escalate-open", reviewer, { reason: "need admin" });
-      check("escalate open unresolved reassignAssignee → 500", e1.statusCode === 500, e1.body);
-      check("escalate open unresolved → CONTROL_PLANE_INTERNAL_ERROR", e1.json().code === "CONTROL_PLANE_INTERNAL_ERROR", e1.body);
-      check("escalate unresolved rolls back task", (await taskRow(pool, TENANT_A, HT_ESCALATE_OPEN))?.state === "open");
-      check("escalate unresolved leaves run suspended", (await runStatus(pool, TENANT_A, RUN_SUSP_ESCALATE)) === "suspended");
-      check("escalate unresolved emits no human_task.escalated", (await outboxCount(pool, TENANT_A, RUN_SUSP_ESCALATE, "human_task.escalated")) === 0);
-      check("escalate unresolved stores deterministic failure", (await idemRowCount(pool, TENANT_A, "escalateHumanTask", "escalate-open")) === 1);
+      check("escalate → 200 escalated", e1.statusCode === 200 && e1.json().state === "escalated", e1.body);
+      const e1row = await taskRow(pool, TENANT_A, HT_ESCALATE_OPEN);
+      check("escalate clears assignee (escalated 큐 개방)", e1row?.state === "escalated" && e1row?.assignee === null, JSON.stringify(e1row));
+      check("escalate persists reason", e1row?.escalation_reason === "need admin", JSON.stringify(e1row));
+      check("escalate persists escalated_by (JWT sub)", e1row?.escalated_by === "rv", JSON.stringify(e1row));
+      check("escalate persists escalated_at", e1row?.escalated_at !== null && e1row?.escalated_at !== undefined, JSON.stringify(e1row));
+      check("escalate response surfaces reason", e1.json().escalation_reason === "need admin", e1.body);
+      check("escalate leaves run suspended (R15)", (await runStatus(pool, TENANT_A, RUN_SUSP_ESCALATE)) === "suspended");
+      check("escalate emits human_task.escalated", (await outboxCount(pool, TENANT_A, RUN_SUSP_ESCALATE, "human_task.escalated")) === 1);
+      check("escalate stores idempotency row", (await idemRowCount(pool, TENANT_A, "escalateHumanTask", "escalate-open")) === 1);
+      // 멱등 재생: 같은 키 → 캐시 응답(200), 부작용 1회.
       const e1Replay = await escalate(HT_ESCALATE_OPEN, "escalate-open", reviewer, { reason: "need admin" });
-      check("escalate unresolved same-key replay → 500", e1Replay.statusCode === 500 && e1Replay.json().code === "CONTROL_PLANE_INTERNAL_ERROR", e1Replay.body);
-      check("escalate unresolved replay leaves task open", (await taskRow(pool, TENANT_A, HT_ESCALATE_OPEN))?.state === "open");
+      check("escalate same-key replay → 200 idempotent", e1Replay.statusCode === 200 && e1Replay.json().state === "escalated", e1Replay.body);
+      check("escalate replay emits no duplicate event", (await outboxCount(pool, TENANT_A, RUN_SUSP_ESCALATE, "human_task.escalated")) === 1);
 
       // 20) escalated + escalate → 422(H5는 escalated에서 정의 안 됨).
       const e2 = await escalate(HT_ESCALATED_AGAIN, "escalate-again");
