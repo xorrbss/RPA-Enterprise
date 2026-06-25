@@ -107,6 +107,8 @@ type ValidationReport = { errors: ValidationIssue[]; warnings: ValidationIssue[]
 |---|---|---|---|
 | 구조/그래프(V1·V2·V3·V4·V6·V10·V11·V12) | `IR_SCHEMA_INVALID` | business | 저장 |
 | 표현식/스코프(V8 flag·V9 node 필드) | `IR_EXPRESSION_COMPILE_ERROR` | business | 저장 |
-| 승격 차단(V5·V7·V13) | (warning, 코드 없음) | — | 승격 |
+| 승격 차단(V5·V7·V13) | `IR_SCHEMA_INVALID`(warning) | — | 승격 |
+
+> 승격-차단 규칙은 `warnings[]`의 `ValidationIssue`로 산출되며, §3 타입대로 `code`는 필수(`IR_SCHEMA_INVALID`)다 — 단 **저장은 거부하지 않고**(errors가 아니라 warnings) prod 승격 API만 차단한다. "코드 없음"이 아니라 "저장 거부 없는 warning"으로 읽는다.
 
 전부 `ir-expression.md` §7·`error-catalog.ts`와 정합. 본 문서는 **그래프 수준 규칙**을 고정하고, 표현식 수준은 `ir-expression.md`가 담당한다.
