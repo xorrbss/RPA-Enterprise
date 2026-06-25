@@ -7,8 +7,13 @@
  */
 import type { Pool } from "pg";
 
+import { IREL_DECISION_VALUES } from "../../../codegen/irel-compile";
 import { withTenantTx } from "../db/pool";
 import type { HumanTaskNodeOutput } from "./ir-interpreter-types";
+
+// decision 닫힌 enum(api-surface RESOLUTION_DECISIONS SSoT). API resolve 가 강제하나(single-writer), re-SELECT 주입 전
+//   방어심층으로 재검증 — enum 밖 값(데이터 손상)은 미투영(부재=IREL_RUNTIME_MISSING loud, 조용한 false 금지).
+const DECISION_SET = new Set<string>(IREL_DECISION_VALUES);
 
 interface ResolvedHumanTaskRow {
   node_id: string;
@@ -49,7 +54,7 @@ export async function loadResolvedHumanTaskNodeOutputs(
 
 /** human_tasks.result(JSONB) → {decision, correction?}. decision 은 닫힌 enum(API 검증 완료), corrections 는 business_form 교정값. */
 function humanTaskNodeOutput(result: unknown): HumanTaskNodeOutput | undefined {
-  if (!isRecord(result) || typeof result.decision !== "string") return undefined;
+  if (!isRecord(result) || typeof result.decision !== "string" || !DECISION_SET.has(result.decision)) return undefined;
   const corrections = result.corrections;
   return isRecord(corrections)
     ? { decision: result.decision, correction: corrections }
