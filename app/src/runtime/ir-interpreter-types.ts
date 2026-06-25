@@ -52,6 +52,17 @@ export interface InterpreterDeps {
   readonly maxSteps?: number;
   /** resume 재진입 노드(ResumeToken.resumeNodeId). 미지정 시 scenario.start. 재개 시 드라이버가 주입(같은 노드 재진입). */
   readonly startNode?: string;
+  /**
+   * resume 시 nodeScope 초기 시드 — 해소된 @human_task 노드의 출력(node.<id>.decision/correction)을 주입한다.
+   * 드라이버가 human_tasks.result 를 re-SELECT 해 구성(reserved-handlers.md: 토큰 미적재·서버 권위). 정상 시작은 미지정.
+   */
+  readonly resumeNodeOutputs?: Readonly<Record<string, HumanTaskNodeOutput>>;
+}
+
+/** @human_task 해소 출력(node.<id>.decision/correction). decision=닫힌 enum(approve/reject/correct/retry), correction=business_form 교정값. */
+export interface HumanTaskNodeOutput {
+  readonly decision: string;
+  readonly correction?: Record<string, unknown>;
 }
 
 export interface InterpreterStep {
@@ -81,6 +92,8 @@ export interface ChallengeSuspendContext extends SuspendContextBase {
 }
 export interface HumanTaskSuspendContext extends SuspendContextBase {
   readonly kind: "human_task";
+  /** @human_task 를 선언한 소유 노드 id(return_node 아님). human_tasks.node_id 로 영속 — 재개 시 IREL node.<id>.decision/correction 출처. */
+  readonly nodeId: string;
   readonly humanTaskKind: "approval" | "validation" | "exception";
   readonly assigneeRole: string;
   readonly onTimeout: "fail" | "escalate";

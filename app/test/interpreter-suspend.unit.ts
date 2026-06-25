@@ -176,6 +176,7 @@ async function main(): Promise<void> {
       check("assigneeRole === 'approver'", o.suspend.assigneeRole === "approver", o.suspend.assigneeRole);
       check("onTimeout === 'fail'(기본)", o.suspend.onTimeout === "fail", o.suspend.onTimeout);
       check("resumeNodeId === 'after'(return_node 재개)", o.suspend.resumeNodeId === "after", o.suspend.resumeNodeId);
+      check("nodeId === 'task'(선언 소유 노드 — human_tasks.node_id 출처, return_node 아님)", o.suspend.nodeId === "task", o.suspend.nodeId);
       check("stepId === 'task.@human_task'", o.suspend.stepId === "task.@human_task", o.suspend.stepId);
       check("pageStateRef === 'ps_h'(what-less → ctx.pageState ref)", o.suspend.pageStateRef === "ps_h", o.suspend.pageStateRef);
     }

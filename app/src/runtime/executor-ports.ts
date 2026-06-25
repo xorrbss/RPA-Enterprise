@@ -30,6 +30,8 @@ export interface ExecutorChallengeSuspensionPort {
       exception: ClassifiedException;
       pendingSideEffects: readonly SideEffectCmd[];
         // @human_task(R5) suspend 시 human_tasks 라우팅/타임아웃 정책(reserved-handlers). challenge(R4)는 omit(둘 다 부재).
+        // nodeId = @human_task 선언 소유 노드 id → human_tasks.node_id(재개 시 IREL decision/correction 출처). challenge 는 omit → NULL.
+        nodeId?: string;
         assigneeRole?: string;
         onTimeout?: "fail" | "escalate";
         timeoutMs?: number;

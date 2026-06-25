@@ -130,6 +130,12 @@ async function main(): Promise<void> {
         return r.rows[0]?.bookmark ?? null;
       });
       check(`runs.bookmark 영속(stepId=${tc.step}, reason=challenge)`, bm?.stepId === tc.step && bm?.reason === "challenge", JSON.stringify(bm));
+
+      const nodeIdRow = await withTenantTx(pool, TENANT, async (c) => {
+        const r = await c.query<{ node_id: string | null }>(`SELECT node_id FROM human_tasks WHERE run_id=$1::uuid`, [tc.rid]);
+        return r.rows[0]?.node_id ?? null;
+      });
+      check(`challenge(${tc.kind}) human_tasks.node_id IS NULL (IR 노드 출처 없음)`, nodeIdRow === null, String(nodeIdRow));
     }
 
     {
@@ -142,6 +148,7 @@ async function main(): Promise<void> {
           correlationId: CORR,
           exception,
           pendingSideEffects: pending("mfa"),
+          nodeId: "approve_invoice",
           assigneeRole: "reviewer",
           onTimeout: "escalate",
           timeoutMs: 45 * 60 * 1000,
@@ -155,14 +162,15 @@ async function main(): Promise<void> {
         }),
       );
       const row = await withTenantTx(pool, TENANT, async (c) => {
-        const r = await c.query<{ payload: Record<string, unknown>; result_schema: Record<string, unknown>; artifact_refs: string[]; on_timeout: string; timeout_roughly_45m: boolean }>(
-          `SELECT payload, result_schema, artifact_refs, on_timeout,
+        const r = await c.query<{ payload: Record<string, unknown>; result_schema: Record<string, unknown>; artifact_refs: string[]; on_timeout: string; node_id: string | null; timeout_roughly_45m: boolean }>(
+          `SELECT payload, result_schema, artifact_refs, on_timeout, node_id,
                   expires_at > now() + interval '44 minutes' AND expires_at < now() + interval '46 minutes' AS timeout_roughly_45m
              FROM human_tasks WHERE run_id=$1::uuid`,
           [RUN_FORM],
         );
         return r.rows[0];
       });
+      check("human_task node_id 저장(@human_task 선언 소유 노드 — IREL decision/correction 출처)", row?.node_id === "approve_invoice", JSON.stringify(row));
       check("human_task form payload 저장", row?.payload.invoice_id === "INV-9", JSON.stringify(row));
       check("human_task form result_schema 저장", row?.result_schema.version === "business_form_v1", JSON.stringify(row));
       check("human_task form artifact_refs 저장", row?.artifact_refs[0] === "artifact.invoice.scan", JSON.stringify(row));
