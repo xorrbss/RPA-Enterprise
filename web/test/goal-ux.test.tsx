@@ -120,6 +120,23 @@ describe("goal UX improvements", () => {
     expect(serialized).toContain("성공 기준: 첨부가 없으면 데이터 없음으로 종료한다.");
   });
 
+  test("쉬운 만들기 마지막 페이지 판정은 raw flag 대신 운영자 라벨을 보인다", async () => {
+    renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
+    location.hash = "#scenarioStudio";
+
+    fireEvent.click(await screen.findByRole("button", { name: "+ 새 자동화 만들기" }));
+    fireEvent.change(await screen.findByLabelText("업무 템플릿"), { target: { value: "attachment_download" } });
+
+    // list 템플릿이면 페이지 반복 옵션이 나타난다 — 판정 방법은 운영자 라벨로.
+    const select = await screen.findByRole("combobox", { name: "마지막 페이지 판정 방법" });
+    expect(within(select).getByRole("option", { name: "다음 페이지 없음" })).toBeInTheDocument();
+    expect(within(select).getByRole("option", { name: "목록 끝에 도달" })).toBeInTheDocument();
+    // raw flag 키는 노출되지 않는다.
+    expect(within(select).queryByRole("option", { name: "no_next_page" })).toBeNull();
+    // 라벨 텍스트의 'flag' 용어도 제거됐다.
+    expect(screen.queryByText("마지막 페이지 판정 flag")).toBeNull();
+  });
+
   test("run panel shows pre-run readiness checks and fix paths", async () => {
     renderApp(
       fakeClient({

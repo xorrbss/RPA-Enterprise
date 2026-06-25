@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { flagLabel } from "./StepBuilder";
+
 // 운영자용 '쉬운 만들기' — IR/flags/동작 같은 기술 용어 없이 평이한 질문 몇 개로 유효 IR을 생성한다.
 // 템플릿이 흐름(navigate→observe→extract→종료)을 고정하고, 운영자는 페이지 주소/데이터 이름만 채운다.
 // navigate.url_ref 는 리터럴 URL이 아니라 run params 의 '키'다(런타임 site-resolution: 키-only, 리터럴 흡수 금지).
@@ -381,10 +383,10 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
             />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">마지막 페이지 판정 flag</span>
+            <span className="subtle">마지막 페이지 판정 방법</span>
             <select value={noNextFlag} onChange={(e) => setNoNextFlag(e.target.value)} style={{ padding: "8px 10px", fontSize: 14, width: 220 }}>
               {PAGE_END_FLAGS.map((flag) => (
-                <option key={flag} value={flag}>{flag}</option>
+                <option key={flag} value={flag}>{flagLabel(flag)}</option>
               ))}
             </select>
           </label>

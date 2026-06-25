@@ -86,7 +86,8 @@ function normalizeDefaultRef(value: string, fallback: string): string {
   return value;
 }
 
-function flagLabel(flag: string): string {
+// 닫힌 flags 레지스트리(ir-static-validation §2)의 운영자 라벨 — OperatorWizard 등과 공유(vocab 단일 출처).
+export function flagLabel(flag: string): string {
   return FLAGS.includes(flag as (typeof FLAGS)[number])
     ? FLAG_LABELS[flag as (typeof FLAGS)[number]]
     : "사용자 조건";
