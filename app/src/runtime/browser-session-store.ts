@@ -38,6 +38,11 @@ export function sessionKey(
   return { tenantId, siteProfileId, browserIdentityId, identityKey };
 }
 
+/** 세션 컨텍스트 바인딩 태그 — 암호화 평문에 포함해 GCM 태그로 인증(at-rest 행간 ciphertext 치환 방어). 버전 접두로 도메인 분리. */
+export function sessionContextTag(key: SessionKey): string {
+  return `bsession:v1|${key.tenantId}|${key.siteProfileId}|${key.browserIdentityId}|${key.identityKey}`;
+}
+
 /** 세션 영속 포트. load=없으면 null(cold start), save=UPSERT(세대 증가). */
 export interface BrowserSessionStore {
   load(key: SessionKey): Promise<CookieBundle | null>;
@@ -298,16 +303,24 @@ export class PgBrowserSessionStore implements BrowserSessionStore {
       return r.rows[0] ?? null;
     });
     if (row === null) return null;
-    // decrypt → 단명 평문 버퍼 → JSON.parse. 평문은 여기서만, 반환 객체로만 흐른다(호출측이 즉시 소비).
-    const plaintext = this.encryptor.decrypt(row.ciphertext, row.enc_kid);
-    const parsed = JSON.parse(plaintext.toString("utf8")) as { cookies?: unknown };
-    if (!Array.isArray(parsed.cookies)) return null; // 손상 → cold start(조용한 잘못된 세션 금지)
-    return { cookies: parsed.cookies as RawCookie[] };
+    // decrypt → 단명 평문 버퍼 → JSON.parse → ctx 검증. 평문은 여기서만, 반환 객체로만 흐른다(호출측이 즉시 소비).
+    //   복호 실패(변조·enc_kid 불일치·손상)·ctx 불일치(다른 행에서 옮겨진 ciphertext·레거시)는 모두 cold start(null) — 조용한 잘못된 세션 금지.
+    try {
+      const plaintext = this.encryptor.decrypt(row.ciphertext, row.enc_kid);
+      const parsed = JSON.parse(plaintext.toString("utf8")) as { ctx?: unknown; cookies?: unknown };
+      if (parsed.ctx !== sessionContextTag(key)) return null; // cross-identity 치환·레거시 ciphertext → cold start
+      if (!Array.isArray(parsed.cookies)) return null;
+      return { cookies: parsed.cookies as RawCookie[] };
+    } catch {
+      return null;
+    }
   }
 
   async save(key: SessionKey, bundle: CookieBundle): Promise<void> {
-    // 평문 직렬화 → 즉시 암호화. 평문 버퍼는 이 메서드 지역으로만 존재(로그/반환 없음).
-    const { ciphertext, kid } = this.encryptor.encrypt(Buffer.from(JSON.stringify(bundle), "utf8"));
+    // 평문에 세션 컨텍스트 태그를 포함해 직렬화 → 암호화. GCM 인증 태그가 ctx 까지 보호하므로, at-rest 에서 ciphertext 를
+    //   다른 행(다른 정체성/사이트, 동일 kid)으로 옮겨도 load 의 ctx 검증이 cross-identity 치환을 거부한다(AAD 등가).
+    const payload = JSON.stringify({ v: 1, ctx: sessionContextTag(key), cookies: bundle.cookies });
+    const { ciphertext, kid } = this.encryptor.encrypt(Buffer.from(payload, "utf8"));
     await withTenantTx(this.pool, key.tenantId, (c: PoolClient) =>
       c.query(
         `INSERT INTO browser_sessions

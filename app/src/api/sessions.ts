@@ -194,13 +194,20 @@ async function applyCaptureComplete(
   if (row.status !== "launching" && row.status !== "awaiting_login" && row.status !== "capturing") {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "capture_not_active", status: row.status }); // expired/failed → 거부
   }
-  // 봉투암호화 저장(store 자체 tx, 주입 encryptor). 키=capture_session 행의 browser_identity(바디 불신). 쿠키 평문은 여기서만.
-  await store.save(sessionKey(tenantId, siteId, row.browser_identity_id), { cookies: body.cookies });
-  await client.query(
+  // CAS 먼저(행 잠금으로 동시 완료 직렬화): 상태 전이 승자만 저장한다 — store.save 가 CAS 를 이기지 못한 요청이 세션을
+  //   덮어쓰는 경합(loser overwrite) 방지. rowCount=0 이면 동시 승자가 이미 캡처 완료 → 멱등 반환(미저장).
+  const cas = await client.query(
     `UPDATE capture_sessions SET status='captured', updated_at=now()
       WHERE id=$1::uuid AND tenant_id=$2::uuid AND status IN ('launching','awaiting_login','capturing')`,
     [body.captureSessionId, tenantId],
   );
+  if (cas.rowCount !== 1) {
+    // 동시 요청이 먼저 전이 완료 → 이 요청의 쿠키로 덮어쓰지 않는다(멱등).
+    return { status: 200, body: { capture_session_id: row.id, site_profile_id: siteId, status: "captured" } };
+  }
+  // 봉투암호화 저장(store 자체 tx, 주입 encryptor). CAS 승자만 도달 — 키=capture_session 행의 browser_identity(바디 불신).
+  //   save 실패 시 outer tx(CAS) 롤백되어 capture_session 이 active 로 남아 재시도 가능(고아 captured-무세션 방지).
+  await store.save(sessionKey(tenantId, siteId, row.browser_identity_id), { cookies: body.cookies });
   return { status: 200, body: { capture_session_id: row.id, site_profile_id: siteId, status: "captured" } };
 }
 
