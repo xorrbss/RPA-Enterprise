@@ -1048,6 +1048,69 @@ AUD-CFIX-3. namespace 결속이 env(seg[1])·tenant 미검증 (SBA01-CROSS-ENV P
    무차원). 멀티테넌트 자격증명 배포 시 ref 에 tenant 세그먼트 추가 + seg 검증은 owner 결정. break-it 양 케이스 모두
    refuted(획득 secret 이 여전히 executor namespace = 세션/서명키 아님; cross-env/tenant 는 AppRole 정책 의존). Owner = project owner.
 
+## Governance Boundary Decisions (2026-06-25, UX 거버넌스 감사 — DG 트랙)
+
+도입-검토(adoption-reviewer) UX 감사가 올린 5건의 "경계 변경" 거버넌스 항목(DG-1…DG-5)을 닫는다.
+DG-1(DB 역할 분리)은 코드로 출하됐다(PR #362). DG-2…DG-5 는 **경계/인프라/거부 항목이지 기능
+빌드가 아니다**: DG-4·DG-5 를 감사가 제시한 형태로 만들면 `security-contracts.md`·`auth-rbac.md`
+를 위반하고, DG-3 는 어떤 계약에도 없는 net-new 워커-친화이며, DG-2 는 이 레포 밖 배포 인프라다.
+각 항목은 결정 전에 **라이브 계약에 file:line 으로 대조**했다(아래). 오너가 결정 게이트를 연
+계약/범위 결정이며, 외부 사실 주장이 아니다. 빌드 가능한 부분이 없어 코드를 만들지 않는 것은
+회피가 아니라 KISS·YAGNI·"조용한 false 금지"의 직접 적용이다(no-op/계약 위반 빌드 금지).
+
+DG-1. DB 역할 분리 (최소권한) — ✅ 구현 (PR #362)
+   Decision (implemented): `db/roles.sql` 이 `rpa_migrator`(DDL/소유) / `rpa_app`(런타임 DML 전용,
+   NOSUPERUSER·NOBYPASSRLS·DDL 불가)로 분리한다. 배포 순서·검증은 `docs/staging-deploy-runbook.md`
+   "DB 역할 분리" 절. 구조 가드 = `scripts/db-static-smoke.mjs checkRoles`(Contract Gate), 런타임 증명 =
+   `app/test/db-roles-least-privilege.int.ts`(gate-수동, CI service-container 비대상으로 test-wiring
+   allowlist). 앱/계약/codegen 무변경 = 순수 배포 아티팩트. Owner = project owner.
+
+DG-2. 환경 ALM (dev→staging→prod) — by-design (배포 인프라, 코드 아님)
+   Finding: 감사가 환경 승격(dev→staging→prod) 라이프사이클의 콘솔/코드 표면 부재를 지적.
+   Decision (by-design): 플랫폼은 **환경 무관(env-agnostic)**이며 환경 식별은 **배포 설정 차원**이다 —
+   env 는 코드·계약에 박히지 않고 Vault mount `rpa/<env>/...`(`security-contracts.md §3`, AppRole per
+   env)·`DATABASE_URL`·`*_REF` override 로만 들어온다. 환경 간 승격 = 운영 절차(각 env 독립 배포 + `db/`
+   마이그레이션 동일 순서 적용 + 시나리오/설정 재배포)이지 런타임 기능이 아니다. **환경 *내부* 시나리오
+   draft→prod 승격은 D4 maker-checker(`scenario_promotion_requests`, PR #353/#355)가 이미 콘솔에서
+   제공.** 운영 모델은 `docs/staging-deploy-runbook.md` "환경 ALM" 절에 문서화. 코드로 만들 부분(분리
+   배포 파이프라인 = CI/CD·인프라)이 이 레포 밖이라 미구현이 아니라 **범위 밖**이다. 재고 조건: 단일
+   제어평면이 여러 env 를 오케스트레이션하는 요구(예: 중앙 승격 콘솔)가 생기면 net-new 기능으로 별도
+   설계. Owner = project owner.
+
+DG-3. 워커 배정 (전용 풀 vs 공유 풀) — by-design (공유 풀이 의도된 설계)
+   Finding: 감사가 워커를 테넌트/시나리오에 전용 배정하는 표면 부재를 지적.
+   Decision (by-design): `workers` 테이블은 **실행기 생존·서킷 레지스트리**(`auth-rbac.md §4:141` —
+   `tenant_id` 없음, BYPASSRLS 인프라 도메인)이고 run claim 은 **공유 Graphile 작업 큐**다. 워커-친화
+   배정(테넌트/사이트/시나리오 핀)은 어떤 계약에도 없는 **net-new 기능**이며 공유 풀은 의도된 설계다 —
+   동시성 격리는 워커 핀이 아니라 자원 단위에서 건다(`credential_concurrency_policies.max_concurrency`
+   슬롯·browser-lease·서킷; D5 `GET /v1/credentials/concurrency`(PR #356/#357)가 가시화). 따라서 추정
+   매핑을 발명하지 않고(가정 금지) 공유 풀을 확정한다. 재고 조건(별도 spec 필요): 전용 워커 풀이 실제
+   요구가 되면(민감 테넌트 격리·특수 시나리오 라우팅) `worker_pools`+claim-time 필터+RBAC+web 의 versioned
+   기능으로 설계하되, 오너가 친화 차원(테넌트/사이트/시나리오)·예약 모델을 먼저 결정. Owner = project owner.
+
+DG-4. 앱 측 시크릿 쓰기 — REJECTED (계약 경계, out-of-band 유지)
+   Finding: 감사가 콘솔에서 자격증명/시크릿을 등록·수정하는 표면 부재를 지적.
+   Decision (rejected by contract): **앱은 시크릿 값을 쓰지 않는다.** `security-contracts.md §1` 이
+   `SecretStore` 를 `resolve(ref)→PlainSecret` **읽기 전용**으로 고정하고(쓰기 API 없음), 키 자료는
+   "SecretStore/KMS 도메인(DB 테이블 아님)"이며, 평문을 LLM·로그·이벤트·artifact 경로로 흘리면 build/lint
+   차단, §9 증거는 "PlainSecret/resolved material 절대 포함 금지". 시크릿 값 write 경로를 앱에 만드는 것은
+   이 경계의 직접 위반이라 거부한다(편법·문제 은폐 금지). 운영 모델: 시크릿 값은 **out-of-band**(Vault/KMS,
+   배포-오너/운영)로 등록·회전하고 앱은 `SecretRef` 만 보유; 콘솔은 시크릿 **참조**의 운영 상태(자격증명별
+   동시성 정책·lease)를 **읽기 전용**으로만 노출한다(D5, PR #356/#357). 재고 조건: 콘솔이 SecretRef
+   **식별자**(값이 아니라 — 실제 값은 KMS 보관)를 등록/회전하는 메타데이터 워크플로는 경계를 위반하지 않는
+   별도 기능 — net-new spec 필요(어떤 메타데이터를, 어떤 RBAC 로). 값 자체의 write 는 영구 거부. Owner = project owner.
+
+DG-5. 멀티테넌시 모델 (RLS 단일 Postgres vs schema/db-per-tenant) — by-design (계약 전제)
+   Finding: 감사가 schema-per-tenant/db-per-tenant 강격리 부재를 지적.
+   Decision (by-design, 계약 전제): 테넌시 모델은 **단일 Postgres 스택 + RLS** 다(`auth-rbac.md §4:107`
+   "전제: 단일 Postgres 스택"). tenant_id 는 트랜잭션 세션 변수로 주입, 모든 멀티테넌트 테이블에 동일
+   `tenant_isolation` USING 정책 + FORCE RLS, 복합 FK 로 cross-tenant 참조 차단, BYPASSRLS 는 운영/마이그레이션
+   롤로만 분리(DG-1). schema/db-per-tenant 로 바꾸는 것은 계약 SSoT 의 전제를 뒤집는 대규모 재아키텍처이고
+   현 배포(단일~소수 테넌트)에 YAGNI 다. 심층 방어는 P1 미들웨어/쿼리 필터 + P2 RLS 2겹(이미 활성).
+   재고 조건: 규제/계약상 물리 격리가 강제되는 테넌트가 생기면 그 테넌트만 별도 스택으로 분리 배포(앱은
+   env-agnostic, DG-2)하는 편이 RLS 를 schema-per-tenant 로 갈아엎는 것보다 KISS — 모델 전환 자체는 오너 결정.
+   Owner = project owner.
+
 ## Follow-Up Rule
 
 Any remaining historical blocked marker that names one of the decisions above is
