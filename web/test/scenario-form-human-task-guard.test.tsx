@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ScenarioForm } from "../src/components/ScenarioForm";
@@ -80,5 +80,29 @@ describe("ScenarioForm — @human_task 분기 보호 (C4)", () => {
     expect(screen.getByRole("button", { name: "쉬운 만들기" })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: "단계 편집" })).not.toBeDisabled();
     expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  // C4b — 쉬운 만들기에서 '승인 후 분기' 템플릿으로 @human_task 분기 자동화를 양식 저작. 생성 중 easy 가 잠기지 않는다
+  //   (승인 분기 정형은 라운드트립 가능 → easyUnsafe=false). 단계 편집은 @human_task 표현 불가라 잠긴 채.
+  test("새 자동화 — '승인 후 분기' 템플릿 선택 시 쉬운 만들기 유지(잠김 없음)+@human_task 양식 저작", () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ApiClientProvider client={fakeClient({})}>
+          <ScenarioForm mode={{ kind: "create" }} onClose={() => {}} />
+        </ApiClientProvider>
+      </QueryClientProvider>,
+    );
+
+    // 생성은 쉬운 만들기 기본 → 업무 템플릿 select 노출.
+    const templateSelect = screen.getByLabelText("업무 템플릿") as HTMLSelectElement;
+    fireEvent.change(templateSelect, { target: { value: "approval_branch" } });
+
+    // 승인 전용 필드(담당자 역할) 노출, easy 유지(직접 편집 textarea 미표시).
+    expect(screen.getByText("③ 승인을 맡을 담당자 역할")).toBeInTheDocument();
+    expect(screen.queryByLabelText("자동화 정의 원문")).toBeNull();
+    // 쉬운 만들기 버튼은 활성(승인 분기 정형은 표현 가능), 단계 편집은 비활성(@human_task 표현 불가).
+    expect(screen.getByRole("button", { name: "쉬운 만들기" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "단계 편집" })).toBeDisabled();
   });
 });

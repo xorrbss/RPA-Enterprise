@@ -10,7 +10,7 @@ import { flagLabel } from "./StepBuilder";
 // ※ 산출 IR은 '구조'다 — 실제로 그 페이지에서 데이터를 가져오려면 실행기 연결 + 사이트별 추출 설정이 필요하다.
 
 type Kind = "list" | "once";
-type TemplateKey = "list_collect" | "approval_decide" | "attachment_download" | "form_entry" | "login_lookup";
+type TemplateKey = "list_collect" | "approval_branch" | "approval_decide" | "attachment_download" | "form_entry" | "login_lookup";
 export interface OperatorWizardInitial {
   readonly name: string;
   readonly pageUrl: string;
@@ -20,6 +20,9 @@ export interface OperatorWizardInitial {
   readonly maxPages?: number;
   readonly nextInstruction?: string;
   readonly noNextFlag?: string;
+  // 승인 후 분기(@human_task) 라운드트립 — template="approval_branch" 면 승인 분기 양식 복원.
+  readonly template?: TemplateKey;
+  readonly assigneeRole?: string;
 }
 
 export interface PaginationOptions {
@@ -36,6 +39,14 @@ const TEMPLATES: Readonly<Record<TemplateKey, { label: string; defaultName: stri
     kind: "list",
     instruction: "목록의 각 행에서 제목, 작성자, 날짜, 상태처럼 반복되는 값을 추출하라.",
     success: "수집할 행이 없으면 데이터 없음으로 종료하고, 있으면 행 단위 결과를 만든다.",
+  },
+  approval_branch: {
+    label: "승인 후 분기 (사람 판정)",
+    defaultName: "승인 후 분기 자동화",
+    dataName: "",
+    kind: "once",
+    instruction: "",
+    success: "",
   },
   approval_decide: {
     label: "결재 처리",
@@ -193,8 +204,82 @@ export function buildIr(
   };
 }
 
+// 승인 후 분기(@human_task approval) — 운영자가 양식으로 만드는 사람 판정 분기 자동화.
+//   open(navigate) → review(@human_task approval, return_node=decide) → decide(on node.review.decision)
+//   → approved(success) / rejected(fail_business). 분기 골격은 고정(승인=완료/반려=업무실패), 운영자는
+//   이름·페이지·승인자 역할만 채운다. 더 정교한 분기는 '직접 편집'에서. (C1–C3 계약/런타임이 이 형태를 실행한다.)
+const APPROVAL_ASSIGNEE_ROLES = ["approver", "reviewer"] as const;
+const DEFAULT_ASSIGNEE_ROLE = "approver";
+
+function sanitizeAssigneeRole(role: string | undefined): string {
+  return role !== undefined && (APPROVAL_ASSIGNEE_ROLES as readonly string[]).includes(role)
+    ? role
+    : DEFAULT_ASSIGNEE_ROLE;
+}
+
+export function buildApprovalIr(name: string, pageUrl: string, assigneeRole: string, version = 1): unknown {
+  const entryParam: Record<string, unknown> = { type: "string", description: "승인 대상이 보이는 페이지 주소" };
+  if (urlState(pageUrl) === "ok") entryParam.default = pageUrl.trim();
+  return {
+    meta: { name: name.trim() || "승인 후 분기 자동화", version, studio_mode: "easy" },
+    params_schema: { type: "object", properties: { [ENTRY_KEY]: entryParam }, required: [ENTRY_KEY] },
+    start: "open",
+    nodes: {
+      open: { what: [{ action: "navigate", url_ref: ENTRY_KEY }], next: "review" },
+      review: {
+        what: [],
+        next: {
+          handler: "@human_task",
+          input: { kind: "approval", assignee_role: sanitizeAssigneeRole(assigneeRole) },
+          return_node: "decide",
+        },
+      },
+      decide: {
+        on: [
+          { when: 'node.review.decision == "approve"', target: "approved", priority: 2 },
+          { when: "true", target: "rejected", priority: 1 },
+        ],
+      },
+      approved: { terminal: "success" },
+      rejected: { terminal: "fail_business" },
+    },
+  };
+}
+
+// 승인 분기 IR 의 라운드트립 — 양식 필드(이름/URL/역할)를 복원하되, **재생성 결과가 원본과 정확히 일치할 때만** 인정한다.
+//   (운영자가 '직접 편집'에서 분기 구조를 손보면 재생성으로 그 수정을 무음 손실하므로, 불일치 시 undefined → 쉬운 만들기 잠금.)
+function approvalInitialFromIr(ir: unknown): OperatorWizardInitial | undefined {
+  if (!isRecord(ir) || !isRecord(ir.nodes)) return undefined;
+  const review = isRecord(ir.nodes.review) ? ir.nodes.review : undefined;
+  const call = review !== undefined && isRecord(review.next) ? review.next : undefined;
+  if (call === undefined || call.handler !== "@human_task") return undefined;
+  const input = isRecord(call.input) ? call.input : {};
+  const assigneeRole = sanitizeAssigneeRole(typeof input.assignee_role === "string" ? input.assignee_role : undefined);
+  const meta = isRecord(ir.meta) ? ir.meta : {};
+  const name = typeof meta.name === "string" ? meta.name : "승인 후 분기 자동화";
+  const properties = isRecord(ir.params_schema) && isRecord(ir.params_schema.properties) ? ir.params_schema.properties : {};
+  const entryParam = isRecord(properties[ENTRY_KEY]) ? properties[ENTRY_KEY] : {};
+  const pageUrl = typeof entryParam.default === "string" ? entryParam.default : "";
+  const version = typeof meta.version === "number" ? meta.version : 1;
+  // 정확 일치 검사(version 제외): 재생성 IR == 원본이면 손실 없이 라운드트립 가능.
+  if (JSON.stringify(buildApprovalIr(name, pageUrl, assigneeRole, version)) !== JSON.stringify(bumpApprovalVersion(ir, version))) {
+    return undefined;
+  }
+  return { name, pageUrl, dataName: "", kind: "once", instruction: "", template: "approval_branch", assigneeRole };
+}
+
+// 비교용: 원본 IR 의 meta.version 만 통일(나머지 구조 비교). buildApprovalIr 가 version 을 받으므로 동일 기준으로 맞춘다.
+function bumpApprovalVersion(ir: Record<string, unknown>, version: number): unknown {
+  const meta = isRecord(ir.meta) ? ir.meta : {};
+  return { ...ir, meta: { ...meta, version } };
+}
+
 export function wizardInitialFromIr(ir: unknown): OperatorWizardInitial | undefined {
   if (!isRecord(ir) || !isRecord(ir.nodes)) return undefined;
+  // 예약 핸들러(@human_task) 포함 IR: 승인 분기 정형이면 라운드트립, 아니면 쉬운 만들기로 표현 불가(undefined → 잠금).
+  if (Object.values(ir.nodes).some((n) => isRecord(n) && isRecord(n.next) && typeof n.next.handler === "string")) {
+    return approvalInitialFromIr(ir);
+  }
   const meta = isRecord(ir.meta) ? ir.meta : {};
   const name = typeof meta.name === "string" ? meta.name : "새 자동화";
   const paramsSchema = isRecord(ir.params_schema) ? ir.params_schema : {};
@@ -253,10 +338,11 @@ function Field({ label, value, onChange, placeholder, hint, multiline }: { label
 }
 
 export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (ir: unknown) => void; initial?: OperatorWizardInitial; version?: number }): JSX.Element {
-  const [templateKey, setTemplateKey] = useState<TemplateKey>("list_collect");
+  const [templateKey, setTemplateKey] = useState<TemplateKey>(initial?.template ?? "list_collect");
   const template = TEMPLATES[templateKey];
   const [name, setName] = useState(initial?.name ?? template.defaultName);
   const [pageUrl, setPageUrl] = useState(initial?.pageUrl ?? "");
+  const [assigneeRole, setAssigneeRole] = useState(initial?.assigneeRole ?? DEFAULT_ASSIGNEE_ROLE);
   const [dataName, setDataName] = useState(initial?.dataName ?? template.dataName);
   const [kind, setKind] = useState<Kind>(initial?.kind ?? template.kind);
   const [instruction, setInstruction] = useState(initial?.instruction ?? template.instruction);
@@ -272,10 +358,16 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
     if (!instructionTouched) setInstruction(TEMPLATES[templateKey].instruction);
   }, [templateKey, instructionTouched]);
 
-  // 입력이 바뀔 때마다 IR 재생성 → 상위(폼)로 전달. 저장은 동일 파이프라인.
+  const isApproval = templateKey === "approval_branch";
+
+  // 입력이 바뀔 때마다 IR 재생성 → 상위(폼)로 전달. 저장은 동일 파이프라인. 승인 분기는 전용 생성기(buildApprovalIr).
   useEffect(() => {
-    onChange(buildIr(name, pageUrl, dataName, kind, instruction, successCriteria, version, { maxPages: Number(maxPages), nextInstruction, noNextFlag }));
-  }, [name, pageUrl, dataName, kind, instruction, successCriteria, version, maxPages, nextInstruction, noNextFlag, onChange]);
+    onChange(
+      isApproval
+        ? buildApprovalIr(name, pageUrl, assigneeRole, version)
+        : buildIr(name, pageUrl, dataName, kind, instruction, successCriteria, version, { maxPages: Number(maxPages), nextInstruction, noNextFlag }),
+    );
+  }, [isApproval, name, pageUrl, assigneeRole, dataName, kind, instruction, successCriteria, version, maxPages, nextInstruction, noNextFlag, onChange]);
 
   const us = urlState(pageUrl);
   const instructionMissing = instruction.trim().length === 0;
@@ -303,6 +395,7 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
             setNextInstruction(DEFAULT_NEXT_INSTRUCTION);
             setNoNextFlag(DEFAULT_NO_NEXT_FLAG);
             setInstructionTouched(false);
+            setAssigneeRole(DEFAULT_ASSIGNEE_ROLE);
           }}
           style={{ padding: "8px 10px", fontSize: 14, minWidth: 420, maxWidth: "100%" }}
         >
@@ -325,6 +418,23 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
           ) : undefined
         }
       />
+      {isApproval && (
+        <div className="panel" style={{ padding: 10, marginTop: 4, display: "grid", gap: 8, maxWidth: 560 }}>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span className="subtle">③ 승인을 맡을 담당자 역할</span>
+            <select value={assigneeRole} onChange={(e) => setAssigneeRole(e.target.value)} style={{ padding: "8px 10px", fontSize: 14, width: 220 }}>
+              {APPROVAL_ASSIGNEE_ROLES.map((role) => (
+                <option key={role} value={role}>{role === "approver" ? "승인자(approver)" : "검토자(reviewer)"}</option>
+              ))}
+            </select>
+          </label>
+          <span className="subtle">
+            이 페이지를 연 뒤 <b>사람의 승인/반려</b>를 기다립니다. <b>승인</b>하면 자동화가 정상 완료되고, <b>반려</b>하면
+            업무 실패로 종료합니다. (승인 후 다른 작업으로 이어지게 하려면 ‘자동화 정의 직접 편집’에서 분기 대상을 바꾸세요.)
+          </span>
+        </div>
+      )}
+      {!isApproval && (
       <details className="wizard-advanced" open={detailsOpen} onToggle={(event) => setDetailsOpen((event.currentTarget as HTMLDetailsElement).open)}>
         <summary>세부 조정 (선택) — 비워두면 업무 템플릿 기본값으로 동작합니다</summary>
       <Field label="③ 가져올 데이터 이름(라벨)" value={dataName} onChange={setDataName} placeholder="예: 리뷰목록" />
@@ -394,6 +504,7 @@ export function OperatorWizard({ onChange, initial, version = 1 }: { onChange: (
         </div>
       )}
       </details>
+      )}
       <p className="badge" style={{ display: "block", margin: "10px 0 0", whiteSpace: "normal" }}>
         ⚠ 지금은 자동화의 <b>흐름(구조)</b>만 만들어 저장합니다. 실제로 이 페이지에서 데이터를 가져오는 동작은
         실행기(브라우저 워커) 연결과 사이트별 추출 설정이 있어야 합니다.
