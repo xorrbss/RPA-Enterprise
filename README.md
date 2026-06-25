@@ -854,3 +854,29 @@
 | 헬퍼 분리 | `app/src/runtime/executor-failure-result.ts`(신규) | `executorFailureStepResult`(executor 플러그인 throw→분류→실패 StepResult). run-step-driver가 사용 |
 | 테스트 split | `app/test/executor-invocation-recorder.int.ts` | 휴면 coordinator/orchestrator 단언 제거, **live** `PgExecutorStepAttemptStore`·`PgExecutorInvocationRecorder` 단언(begin/record·RLS·dedup·secret-taint)만 존치 — 유일한 직접 recorder 커버리지 보존 |
 | 무회귀 | run-step-driver·runtime-worker-drive·suspend-drive·circuit·init-failure int + tsc·Contract Gates | production 완료 경로(driveClaimedRun) 커버리지는 6개 live int가 이미 보유 — 삭제로 손실 0 |
+
+## v2.30 패치 로그 (분기형 HITL 계약 — @human_task 사람 판정을 IREL 재개 분기로 노출: C1 계약+DDL)
+
+> **검증된 SSoT 공백 해소**(신기능 아님). web 콘솔은 이미 @human_task 판정(`decision`/`corrections`)을 수집·전송·영속(`human_tasks.result`)하나,
+> 그 판정이 **런타임 IREL 스코프에 미노출**이라 재개 후 `on[].when`이 사람 판정으로 분기하지 못했다 — 폼은 결과를 보내는데 그 결과를 읽을
+> 표현식 변수가 계약 어디에도 없던 단방향 공백이다. [[v2.20]]이 "human-task 판정 입력 부재는 UI 갭이 아니라 **계약 미정의**"임을 확정하며
+> 운영자 판정 + IR 분기를 "reserved-handler 결과 모델·resume token·IREL `node.<handler>.*` 신규 스코프·DB·런타임을 일괄 바꾸는
+> **versioned v2 scope-out**"으로 명시 분리했는데, 본 패치가 그 v2의 **계약+DDL 레이어(C1)**를 닫는다(codegen=C2·런타임=C3 별도 PR).
+> **확정 설계(오너 결정 2026-06-24)**: ① **네임스페이스 = 기존 `node.<owningNodeId>.*` 확장**(별도 `human_task.*` 신설 금지) — @human_task도
+> suspend→resolve→resume로 완료되는 '완료된 노드'이고 판정이 그 표준 출력. 출력 = `node.<htId>.decision`(닫힌 enum `approve`/`reject`/`correct`/`retry`,
+> `RESOLUTION_DECISIONS` SSoT) + `node.<htId>.correction.<key>`(business_form_v1 `fields[].key` 대응 scalar). ② **신뢰 경계 = resume 토큰에 결과
+> 미적재** — 런타임이 재개 시 `human_tasks.result`를 re-SELECT(서버 권위·RBAC+RLS 뒤·resolve 후 불변·idempotent → 변조/재사용 안전). 결과:
+> resume-token 스키마/codec/`kid` **무변경**, 기존 발급 토큰 호환. ③ **출처 = @human_task를 선언한 소유 노드 id**(`return_node` 아님) → DDL
+> `human_tasks.node_id text` 신설(NULL 허용: challenge task는 IR 노드 출처 없음, @human_task만 set). ④ **미해소 분기 = "조용한 false" 방지** →
+> 신규 정적검증 **V13 `decision_branch_incomplete`**(닫힌 enum 부분 커버 시 draft 허용·prod 승격 차단). decision은 사람 판정으로 고정이라
+> 무매칭 시 재시도해도 불변 → run 영구 stuck 위험을 승격 게이트로 차단.
+> **역호환**: `node_id`는 NULL 컬럼 + 소비자(C2/C3) 부재 = 무동작 변경. **신규 ErrorCode 미도입**(V13은 promote-block warning, 코드 없음).
+> ir.schema.json·resume-token·state-machine·error-catalog **무변경**. **검증: db migration smoke(human_tasks.node_id clean apply)·contract:lint·역호환(NULL·소비자 0).**
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| DDL | `db/migration_core_entities.sql` §6 human_tasks | `node_id text`(NULL 허용) 추가 — @human_task 소유 노드 id, IREL `node.<node_id>.*` 출처. challenge task는 NULL. 단일 정렬 core 파일 규약(per-feature 증분 아님) |
+| 계약(IREL) | `ir-expression.md` §2 | 표준 노드 출력에 `decision`(string)·`correction.<key>`(scalar) 추가(**@human_task 노드만**) + 투영 규약(`human_tasks.result` re-SELECT 주입, 미해소/비-@human_task 노드 참조 시 `IREL_RUNTIME_MISSING`) |
+| 계약(핸들러) | `reserved-handlers.md` @human_task·복귀 토큰 | @human_task 재개 시 `node.<owningNodeId>.*` 노출 bullet + "판정 결과 주입" 단락(출처=`human_tasks.node_id`, 주입=resume re-SELECT, 토큰 미적재) |
+| 계약(정적검증) | `ir-static-validation.md` §1 V9·신규 V13·§3·§5 | V9에 @human_task 노드 게이트(decision/correction 허용) 명시 + V13 `decision_branch_incomplete`(promote-block) + ValidationReport rule union·§5 매핑표에 V13 |
+| 비도입(C2/C3) | codegen `static-validation.ts`/IREL compile·런타임 인터프리터/worker·web | V13 구현·`node.<id>.decision/correction` 투영·재개 re-SELECT 주입 — 전부 후속 PR(C2 codegen·C3 런타임·C4 web). 이번 PR은 계약+DDL만 |

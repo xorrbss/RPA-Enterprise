@@ -544,6 +544,7 @@ CREATE TABLE human_tasks (
   id            uuid        PRIMARY KEY,
   tenant_id     uuid        NOT NULL,
   run_id        uuid        NOT NULL REFERENCES runs(id),
+  node_id       text,                                       -- @human_task를 선언한 소유 IR 노드 id(return_node 아님). 재개 시 IREL `node.<node_id>.*`(decision/correction) 출처. NULL 허용: challenge task(captcha/mfa 자동감지)는 IR 노드 출처 없음 — @human_task만 set. 소비자(C2 codegen·C3 런타임) 도달 전까지 무동작.
   kind          text        NOT NULL
                   CHECK (kind IN ('approval','validation','exception','captcha','mfa')),  -- HumanTaskKind 5개
   state         text        NOT NULL DEFAULT 'open'
