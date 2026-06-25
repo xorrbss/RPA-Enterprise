@@ -203,8 +203,10 @@ export function HumanTasksView(): JSX.Element {
   const panelQuery: typeof lv.query = lv.query.data !== undefined
     ? ({ ...lv.query, data: { ...lv.query.data, items: visibleItems } } as typeof lv.query)
     : lv.query;
-  const bulkAssignable = pageItems.filter((t) => t.state === "open" || t.state === "escalated");
-  const bulkEscalatable = pageItems.filter((t) => t.state === "open" || t.state === "assigned" || t.state === "in_progress");
+  // 일괄 대상은 화면에 실제로 보이는 목록(visibleItems = 문서/마감 필터 반영) 기준이어야 한다.
+  // pageItems(필터 미반영) 기준이면 '현재 목록 N건' 라벨과 처리 범위가 어긋나 보이지 않는 업무까지 배정/이관된다(안전 직결).
+  const bulkAssignable = visibleItems.filter((t) => t.state === "open" || t.state === "escalated");
+  const bulkEscalatable = visibleItems.filter((t) => t.state === "open" || t.state === "assigned" || t.state === "in_progress");
   const canFilterMine = isUuid(subject);
   return (
     <>
@@ -263,7 +265,19 @@ export function HumanTasksView(): JSX.Element {
               confirmText="현재 목록의 미배정/이관 업무를 같은 담당자로 지정할까요?"
               run={async (key, assignee) => {
                 if (assignee === undefined || assignee === "") throw new Error("담당자를 입력하세요.");
-                await Promise.all(bulkAssignable.map((task) => api.assignHumanTask(task.human_task_id, assignee, `${key}:${task.human_task_id}`)));
+                // 부분 실패를 집계해 표면화한다(조용한 false 금지). 멱등키는 task별 결정형이라 재시도 안전.
+                let failedCount = 0;
+                for (const task of bulkAssignable) {
+                  try {
+                    await api.assignHumanTask(task.human_task_id, assignee, `${key}:${task.human_task_id}`);
+                  } catch {
+                    failedCount += 1;
+                  }
+                }
+                if (failedCount > 0) {
+                  const succeededCount = bulkAssignable.length - failedCount;
+                  throw new Error(`${failedCount}건 지정 실패${succeededCount > 0 ? ` — ${succeededCount}건은 처리됨` : ""}`);
+                }
               }}
               invalidateKeys={KEYS}
             />
@@ -274,7 +288,19 @@ export function HumanTasksView(): JSX.Element {
               action="human_task.escalate"
               confirmText="현재 목록의 미종결 업무를 상위 담당자에게 이관할까요?"
               run={async (key) => {
-                await Promise.all(bulkEscalatable.map((task) => api.escalateHumanTask(task.human_task_id, `${key}:${task.human_task_id}`, "bulk_escalate")));
+                // 부분 실패 집계 표면화(조용한 false 금지). 멱등키 task별 결정형 → 재시도 안전.
+                let failedCount = 0;
+                for (const task of bulkEscalatable) {
+                  try {
+                    await api.escalateHumanTask(task.human_task_id, `${key}:${task.human_task_id}`, "bulk_escalate");
+                  } catch {
+                    failedCount += 1;
+                  }
+                }
+                if (failedCount > 0) {
+                  const succeededCount = bulkEscalatable.length - failedCount;
+                  throw new Error(`${failedCount}건 이관 실패${succeededCount > 0 ? ` — ${succeededCount}건은 처리됨` : ""}`);
+                }
               }}
               invalidateKeys={KEYS}
             />
