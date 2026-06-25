@@ -154,6 +154,15 @@ export interface AuthReadiness {
   readonly operational_gaps: readonly string[];
 }
 
+// POST /v1/dlq/replay-all 결과 — 적격 전체 일괄 재처리 집계. conflicts=이미 처리/진행 중, truncated=캡(500) 초과 잔여.
+export interface ReplayAllDlqResult {
+  readonly kind: "workitem" | "sink";
+  readonly attempted: number;
+  readonly replayed: number;
+  readonly conflicts: number;
+  readonly truncated: boolean;
+}
+
 /** workitem DLQ(dead_letter) + sink DLQ(sink_deliveries) 공용. status는 DEAD_LETTER 통지(ApiError 아님). */
 export interface DeadLetterItem {
   readonly dead_letter_id: string;

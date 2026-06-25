@@ -79,25 +79,18 @@ export function WorkitemsView(): JSX.Element {
         actions={
           wiDlqItems.length > 0 ? (
             <ActionButton
-              label={`이 페이지 ${wiDlqItems.length}건 재처리`}
+              label="전체 일괄 재처리"
               action="dlq.replay"
-              confirmText={`이 페이지의 작업 항목 실패 ${wiDlqItems.length}건을 모두 다시 처리 대기로 되돌릴까요?`}
-              run={async () => {
-                // 순차 재처리(동시성 충돌 회피). 멱등키를 dead_letter_id로 결정형 고정 → 재클릭/폴링 재렌더 시에도 같은 키가
-                // 재생(replay)되어 sink 중복 인큐·부분실패 후 재클릭 409를 막는다(적대리뷰 correctness-1/3). 실패는 집계해 표면화(조용한 실패 금지).
-                let failedCount = 0;
-                for (const it of wiDlqItems) {
-                  try {
-                    await api.replayDeadLetter(it.dead_letter_id, `replay:${it.dead_letter_id}`, "workitem");
-                  } catch {
-                    failedCount += 1;
-                  }
-                }
-                if (failedCount > 0) {
-                  const succeededCount = wiDlqItems.length - failedCount;
-                  throw new Error(`${failedCount}건 재처리 실패${succeededCount > 0 ? ` — ${succeededCount}건은 처리됨` : ""}`);
-                }
+              confirmText="재처리 대기 중인 작업 항목을 다시 처리 대기로 되돌릴까요? (현재 페이지 너머 적격 전체)"
+              run={async (key) => {
+                // 서버측 일괄(현재 페이지 50건 한도 없이 적격 전체, 캡 500). 충돌(이미 처리/진행)·절단은 표면화(조용한 실패 금지).
+                const r = await api.replayAllDlq("workitem", key);
+                const parts = [`${r.replayed}건 재처리됨`];
+                if (r.conflicts > 0) parts.push(`${r.conflicts}건은 이미 처리/진행 중`);
+                if (r.truncated) parts.push("500건 초과분은 다시 눌러 계속");
+                if (r.conflicts > 0 || r.truncated) throw new Error(parts.join(" · "));
               }}
+              successText="전체 재처리 요청됨"
               invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
             />
           ) : undefined
@@ -132,25 +125,17 @@ export function WorkitemsView(): JSX.Element {
         actions={
           sinkDlqItems.length > 0 ? (
             <ActionButton
-              label={`이 페이지 ${sinkDlqItems.length}건 재처리`}
+              label="전체 일괄 재처리"
               action="sink_dlq.replay"
-              confirmText={`이 페이지의 외부 전달 실패 ${sinkDlqItems.length}건을 모두 재시도할까요?`}
-              run={async () => {
-                // replay가 원본 행을 requeued_at 마킹으로 소거하므로 2차 replay는 백엔드에서 404 — 다만 폴링 재렌더와
-                // 마킹 반영 사이 창에서의 재클릭 대비, 결정형 멱등키(dead_letter_id)로 중복 인큐를 한 번 더 차단한다.
-                let failedCount = 0;
-                for (const it of sinkDlqItems) {
-                  try {
-                    await api.replayDeadLetter(it.dead_letter_id, `replay:${it.dead_letter_id}`, "sink");
-                  } catch {
-                    failedCount += 1;
-                  }
-                }
-                if (failedCount > 0) {
-                  const succeededCount = sinkDlqItems.length - failedCount;
-                  throw new Error(`${failedCount}건 재처리 실패${succeededCount > 0 ? ` — ${succeededCount}건은 처리됨` : ""}`);
-                }
+              confirmText="재처리 대기 중인 외부 전달 실패를 재시도할까요? (현재 페이지 너머 적격 전체)"
+              run={async (key) => {
+                const r = await api.replayAllDlq("sink", key);
+                const parts = [`${r.replayed}건 재시도 요청됨`];
+                if (r.conflicts > 0) parts.push(`${r.conflicts}건은 이미 처리됨`);
+                if (r.truncated) parts.push("500건 초과분은 다시 눌러 계속");
+                if (r.conflicts > 0 || r.truncated) throw new Error(parts.join(" · "));
               }}
+              successText="전체 재시도 요청됨"
               invalidateKeys={[["dlq", "sink"]]}
             />
           ) : undefined
