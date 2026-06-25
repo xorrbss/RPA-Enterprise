@@ -99,8 +99,8 @@ D5 read 에 투영(가시성: "표시명", "마지막 회전", "등록자"). 없
 
 ## 8. 결정 필요 (DECISION REQUIRED — 오너 확인)
 
-- **DG4-D1 RBAC 역할**: ▶ 권장 신규 `credential.manage` = **admin 전용**(자격증명 바인딩은 민감). operator
-  포함? (D5 읽기는 ops_alert.read 유지.)
+- **DG4-D1 RBAC 역할**: ✅ **결정 = 신규 `credential.manage`, admin 전용**(자격증명 바인딩은 민감).
+  D5 읽기는 `ops_alert.read` 유지. [오너 확정 2026-06-26]
 - **DG4-D2 회전 시 활성 lease**: ▶ 권장 활성 lease 있는 ref 의 즉시 회전은 **거부**(in-flight run 보호,
   `WORKITEM_CHECKOUT_CONFLICT` 류) — lease 소진 후 회전. 대안: grace(양쪽 ref 일시 유효). 확정?
 - **DG4-D3 메타 컬럼**: `label`/`rotated_at`/`registered_by` 추가 여부 — 가시성 vs KISS. 어디까지?

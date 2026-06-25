@@ -108,8 +108,8 @@ run 적재 시 `pool_key` 를 결정해 job flag `pool:<key>` 로 부착한다. 
 
 ## 8. 결정 필요 (DECISION REQUIRED — 오너 확인)
 
-- **DG3-D1 풀 배정 차원**: ▶ 권장 **테넌트-레벨**(`worker_pool_assignments`; 가장 흔한 격리 요구) +
-  선택적 시나리오 오버라이드. 대안: 사이트-레벨, 다차원 우선순위. → 어느 차원으로 시작?
+- **DG3-D1 풀 배정 차원**: ✅ **결정 = 테넌트-레벨**(`worker_pool_assignments`, MVP). 시나리오
+  오버라이드(`scenarios.pool_key`)는 후속 확장으로 남긴다. [오너 확정 2026-06-26]
 - **DG3-D2 기본 풀 의미**: ▶ 권장 미지정=`default`=모든 미선언 워커 서비스(무변경 호환). 확정?
 - **DG3-D3 워커 풀 선언 소스**: ▶ 권장 env `WORKER_POOL_KEYS`(배포 설정 — DG-2 env-agnostic 와 일관).
   대안: DB 워커 등록 행. 확정?
