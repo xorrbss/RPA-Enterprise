@@ -79,15 +79,15 @@ function windowThroughput(points: readonly RunTrendPoint[]): number {
   return points.reduce((sum, p) => sum + p.total, 0);
 }
 
-function trendAria(metric: "성공률" | "처리량", trends: RunTrends): string {
-  const last = trends.points[trends.points.length - 1];
+function trendAria(metric: "성공률" | "처리량", windowDays: number, points: readonly RunTrendPoint[]): string {
+  const last = points[points.length - 1];
   let tail = "";
   if (metric === "성공률") {
     tail = last !== undefined && last.success_rate !== null ? `최근 ${Math.round(last.success_rate * 100)}%` : "최근 측정값 없음";
   } else if (last !== undefined) {
     tail = `최근 ${last.total}건`;
   }
-  return `최근 ${trends.window_days}일 ${metric} 추세. ${tail}`.trim();
+  return `최근 ${windowDays}일 ${metric} 추세. ${tail}`.trim();
 }
 
 function TrendRow({
@@ -127,7 +127,9 @@ function RunTrendsPanel({
   isLoading: boolean;
   isError: boolean;
 }): JSX.Element {
-  const rate = trends !== undefined ? latestSuccessRate(trends.points) : null;
+  // points 가 배열이 아니면(미도착/계약 위반 응답) 빈 시리즈로 — 패널 크래시 대신 정직한 빈 상태(white-screen 방지).
+  const points: readonly RunTrendPoint[] = trends !== undefined && Array.isArray(trends.points) ? trends.points : [];
+  const rate = latestSuccessRate(points);
   return (
     <section className="panel run-trends-panel" aria-label="실행 추세">
       <div className="panel-head">
@@ -138,7 +140,7 @@ function RunTrendsPanel({
         <p className="empty-state">추세를 불러오지 못했습니다.</p>
       ) : isLoading ? (
         <p className="empty-state">추세를 동기화하는 중입니다.</p>
-      ) : trends === undefined || trends.points.length === 0 ? (
+      ) : trends === undefined || points.length === 0 ? (
         <p className="empty-state">표시할 추세 데이터가 없습니다.</p>
       ) : (
         <div>
@@ -146,16 +148,16 @@ function RunTrendsPanel({
             title="실행 성공률"
             current={rate === null ? "—" : `${Math.round(rate * 100)}%`}
             note={rate === null ? "완료·실패한 실행이 아직 없습니다" : "최근 측정값"}
-            points={trends.points.map((p) => ({ value: p.success_rate, label: p.day }))}
-            ariaLabel={trendAria("성공률", trends)}
+            points={points.map((p) => ({ value: p.success_rate, label: p.day }))}
+            ariaLabel={trendAria("성공률", trends.window_days, points)}
             domainMax={1}
           />
           <TrendRow
             title="일별 처리량"
-            current={`${windowThroughput(trends.points)}건`}
+            current={`${windowThroughput(points)}건`}
             note={`${trends.window_days}일 합계`}
-            points={trends.points.map((p) => ({ value: p.total, label: p.day }))}
-            ariaLabel={trendAria("처리량", trends)}
+            points={points.map((p) => ({ value: p.total, label: p.day }))}
+            ariaLabel={trendAria("처리량", trends.window_days, points)}
           />
         </div>
       )}
