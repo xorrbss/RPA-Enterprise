@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "vitest-axe";
 import { beforeEach, describe, expect, test } from "vitest";
 
@@ -52,10 +52,30 @@ describe("화면별 맥락 도움말 '?' 버튼", () => {
     }
   });
 
-  test("도움말 버튼이 접근성 위반을 만들지 않는다", async () => {
+  test("'?' 클릭 시 도움말 본문을 화면에 펼치고 다시 누르면 닫는다(터치/SR 접근)", () => {
+    location.hash = "#dashboard";
+    renderApp();
+    const help = VIEW_META.dashboard.helpText as string;
+    const button = screen.getByRole("button", { name: "RPA 운영 대시보드 화면 도움말" });
+
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "RPA 운영 대시보드 화면 도움말" })).toBeNull();
+
+    fireEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    const region = screen.getByRole("region", { name: "RPA 운영 대시보드 화면 도움말" });
+    expect(region).toHaveTextContent(help);
+
+    fireEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "RPA 운영 대시보드 화면 도움말" })).toBeNull();
+  });
+
+  test("도움말 버튼이 접근성 위반을 만들지 않는다(닫힘·열림 모두)", async () => {
     location.hash = "#security";
     const container = renderApp();
-    const results = await axe(container);
-    expect(results.violations).toEqual([]);
+    expect((await axe(container)).violations).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "보안/개인정보 화면 도움말" }));
+    expect((await axe(container)).violations).toEqual([]);
   });
 });
