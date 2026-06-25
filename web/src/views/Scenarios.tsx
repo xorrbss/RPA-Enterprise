@@ -42,6 +42,7 @@ export function ScenariosView(): JSX.Element {
 
   return (
     <div>
+      {can("scenario.promote.approve") && <PromotionInbox />}
       {can("scenario.create") && (
         <details className="ai-creator" open={aiOpen} onToggle={(event) => setAiOpen((event.currentTarget as HTMLDetailsElement).open)}>
           <summary>AI로 설명해서 만들기 — 하고 싶은 일을 문장으로 적으면 자동으로 만들어 줍니다</summary>
@@ -118,6 +119,18 @@ export function ScenariosView(): JSX.Element {
                   invalidateKeys={[["scenarios"]]}
                   successText={null}
                 />
+                {r.promotion_status !== "prod" && !can("scenario.promote") && (
+                  <ActionButton
+                    label="승격 요청"
+                    action="scenario.update"
+                    inputLabel="승격 사유"
+                    title="운영(prod) 승격을 승인자에게 요청합니다. 요청자와 다른 승인자가 승인해야 적용됩니다."
+                    confirmText={`${r.name} v${r.version}을(를) 운영 기준으로 승격 요청할까요? 승인자 검토 후 적용됩니다.`}
+                    run={(key, reason) => api.createPromotionRequest(r.scenario_id, r.version, reason ?? "", key)}
+                    invalidateKeys={[["promotion-requests"]]}
+                    successText="요청됨"
+                  />
+                )}
                 <ActionButton
                   label="보관"
                   action="scenario.update"
@@ -132,6 +145,62 @@ export function ScenariosView(): JSX.Element {
       />
       {versionsFor !== null && <ScenarioVersionsPanel scenario={versionsFor} onClose={() => setVersionsFor(null)} />}
     </div>
+  );
+}
+
+// approver 승격 인박스(maker-checker, D4) — pending prod 승격 요청을 승인/반려. 요청자≠승인자는 백엔드가 강제(SoD).
+function PromotionInbox(): JSX.Element | null {
+  const api = useApiClient();
+  const inbox = useQuery({ queryKey: ["promotion-requests"], queryFn: () => api.listPromotionRequests(), refetchInterval: 15_000 });
+  if (inbox.isLoading || inbox.data === undefined) return null;
+  const items = inbox.data.items;
+  return (
+    <section
+      aria-label="승격 승인 대기"
+      style={{ border: "1px solid var(--border, #e2e8f0)", borderRadius: 8, padding: 12, marginBottom: 12 }}
+    >
+      <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>승격 승인 대기{items.length > 0 ? ` (${items.length})` : ""}</h2>
+      <p className="subtle" style={{ margin: "0 0 8px" }}>
+        운영자가 요청한 운영(prod) 승격입니다. 요청자와 다른 승인자가 승인해야 실제로 적용됩니다.
+      </p>
+      {items.length === 0 ? (
+        <p className="subtle" style={{ margin: 0 }}>대기 중인 승격 요청이 없습니다.</p>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
+          {items.map((req) => (
+            <li
+              key={req.request_id}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+            >
+              <div>
+                <strong>{req.scenario_name}</strong> <span className="badge muted">v{req.version}</span>
+                <div className="subtle">요청자 {req.requested_by} · 사유: {req.reason}</div>
+              </div>
+              <span style={{ display: "inline-flex", gap: 6 }}>
+                <ActionButton
+                  label="승인"
+                  action="scenario.promote.approve"
+                  confirmText={`${req.scenario_name} v${req.version}을(를) 운영 기준으로 승격할까요? 요청자: ${req.requested_by}`}
+                  run={(key) => api.decidePromotionRequest(req.scenario_id, req.request_id, "approve", undefined, key)}
+                  invalidateKeys={[["promotion-requests"], ["scenarios"]]}
+                  successText="승격됨"
+                />
+                <ActionButton
+                  label="반려"
+                  action="scenario.promote.approve"
+                  inputLabel="반려 사유(선택)"
+                  inputOptional={true}
+                  confirmText={`${req.scenario_name} v${req.version} 승격 요청을 반려할까요?`}
+                  run={(key, reason) => api.decidePromotionRequest(req.scenario_id, req.request_id, "reject", reason, key)}
+                  invalidateKeys={[["promotion-requests"]]}
+                  successText="반려됨"
+                />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
