@@ -26,11 +26,14 @@ const SCHEMA = "rpa_reads_int";
 
 const TENANT_A = "00000000-0000-0000-0000-0000000000a1";
 const TENANT_B = "00000000-0000-0000-0000-0000000000b2";
+const TENANT_C = "00000000-0000-0000-0000-0000000000c3";
 const SCEN_A = "70000000-0000-0000-0000-0000000000a3";
 const SVER_A = "70000000-0000-0000-0000-0000000000a4";
 const SVER_A2 = "70000000-0000-0000-0000-0000000000a5";
 const SCEN_B = "70000000-0000-0000-0000-0000000000b3";
 const SVER_B = "70000000-0000-0000-0000-0000000000b4";
+const SCEN_C = "70000000-0000-0000-0000-0000000000c4";
+const SVER_C = "70000000-0000-0000-0000-0000000000c5";
 const ASSIGNEE = "70000000-0000-0000-0000-0000000000c1";
 const ABSENT = "70000000-0000-0000-0000-0000000000ff";
 const NETWORK_A = "7a200000-0000-0000-0000-000000000001";
@@ -85,6 +88,18 @@ async function seedRun(
       `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of, created_at, failure_reason)
        VALUES ($1,$2,$3,$4,$1,1,'2026-06-15T00:00:00Z',$5::timestamptz,$6::jsonb)`,
       [id, tenant, sver, status, createdAt, failureReason === null ? null : JSON.stringify(failureReason)],
+    ),
+  );
+}
+
+// 트렌드 테스트용 — created_at 을 (오늘 Seoul − daysAgo) 정오로 시드(now() 상대, 시간-비의존). +12h로 일 경계 모호성 회피.
+async function seedRunRelative(pool: Pool, tenant: string, sver: string, id: string, status: string, daysAgo: number): Promise<void> {
+  await withTenantTx(pool, tenant, (c) =>
+    c.query(
+      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of, created_at)
+       VALUES ($1,$2,$3,$4,$1,1,'2026-06-15T00:00:00Z',
+               ((((now() AT TIME ZONE 'Asia/Seoul')::date - $5::int)::timestamp + interval '12 hours') AT TIME ZONE 'Asia/Seoul'))`,
+      [id, tenant, sver, status, daysAgo],
     ),
   );
 }
@@ -221,6 +236,7 @@ async function main(): Promise<void> {
 
     await seedScenario(pool, TENANT_A, SCEN_A, [SVER_A, SVER_A2]);
     await seedScenario(pool, TENANT_B, SCEN_B, [SVER_B]);
+    await seedScenario(pool, TENANT_C, SCEN_C, [SVER_C]);
 
     // tenant A: 5 runs (created_at 오름차 0..4), 상태/버전 혼합.
     const A_RUNS = [
@@ -242,6 +258,13 @@ async function main(): Promise<void> {
       );
     }
     await seedRun(pool, TENANT_B, SVER_B, "72000000-0000-0000-0000-000000000001", "running", ts(2));
+    // trends 픽스처(별도 tenant C — A/B summary 카운트 불간섭, now() 상대 날짜). 오늘: completed×3 + failed_system×1
+    // (rated=4 → success_rate 0.75, total 4). 1일전: 0건(분모0→null). 2일전: running×1(rated=0 → null, throughput 1).
+    await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000001", "completed", 0);
+    await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000002", "completed", 0);
+    await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000003", "completed", 0);
+    await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000004", "failed_system", 0);
+    await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000005", "running", 2);
     // run_steps(cache_mode) — cache_hit_rate 집계용(tenant A): hit×2·miss×1·stale×1·bypass×1.
     await withTenantTx(pool, TENANT_A, async (c) => {
       const modes = ["hit", "hit", "miss", "stale", "bypass"];
@@ -335,6 +358,7 @@ async function main(): Promise<void> {
     try {
       const viewer = await mint({ sub: "vi", tenant_id: TENANT_A, roles: ["viewer"] });
       const viewerB = await mint({ sub: "vb", tenant_id: TENANT_B, roles: ["viewer"] });
+      const viewerC = await mint({ sub: "vc", tenant_id: TENANT_C, roles: ["viewer"] });
       const noRole = await mint({ sub: "nr", tenant_id: TENANT_A, roles: [] });
 
       const get = (url: string, token = viewer) =>
@@ -426,6 +450,39 @@ async function main(): Promise<void> {
       // RBAC: 역할 없음 → 403.
       const noRoleSummary = await get("/v1/runs/summary", noRole);
       check("no-role summary → 403", noRoleSummary.statusCode === 403, noRoleSummary.body);
+
+      // ===== runs trends(일별 추세 — 분석; tenant C 격리 픽스처) =====
+      const trends7 = await get("/v1/runs/trends?days=7", viewerC);
+      check("runs trends → 200", trends7.statusCode === 200, trends7.body);
+      const tBody = trends7.json();
+      check("trends window_days=7", tBody.window_days === 7, JSON.stringify(tBody.window_days));
+      check("trends timezone Asia/Seoul", tBody.timezone === "Asia/Seoul", JSON.stringify(tBody.timezone));
+      check("trends 7 points (연속 시리즈)", Array.isArray(tBody.points) && tBody.points.length === 7, JSON.stringify(tBody.points?.length));
+      const tToday = tBody.points?.[6];
+      check("trends 오늘 버킷(completed 3·failed_system 1·total 4·success_rate 0.75)",
+        tToday?.completed === 3 && tToday?.failed_system === 1 && tToday?.total === 4 && tToday?.success_rate === 0.75,
+        JSON.stringify(tToday));
+      check("trends 1일전 0건 → success_rate null(0/0 단정 금지)",
+        tBody.points?.[5]?.total === 0 && tBody.points?.[5]?.success_rate === null, JSON.stringify(tBody.points?.[5]));
+      check("trends 2일전 running만 → rated 0 → null, throughput total 1",
+        tBody.points?.[4]?.total === 1 && tBody.points?.[4]?.success_rate === null, JSON.stringify(tBody.points?.[4]));
+      check("trends points day 오름차순",
+        tBody.points.every((p: { day: string }, i: number) => i === 0 || tBody.points[i - 1].day <= p.day),
+        JSON.stringify(tBody.points.map((p: { day: string }) => p.day)));
+      // 기본 윈도우=30.
+      const trends30 = await get("/v1/runs/trends", viewerC);
+      check("trends 기본 → window_days 30, 30 points", trends30.json().window_days === 30 && trends30.json().points.length === 30, JSON.stringify(trends30.json().window_days));
+      // 클램프: days=999 → 90, days=abc → 30.
+      const trendsClamp = await get("/v1/runs/trends?days=999", viewerC);
+      check("trends days=999 클램프 → 90", trendsClamp.json().window_days === 90 && trendsClamp.json().points.length === 90, JSON.stringify(trendsClamp.json().window_days));
+      const trendsBad = await get("/v1/runs/trends?days=abc", viewerC);
+      check("trends days=abc → 기본 30", trendsBad.json().window_days === 30, JSON.stringify(trendsBad.json().window_days));
+      // RLS: tenant B viewer 는 C 데이터 미가시 → 오늘 버킷 total 0(누출 없음).
+      const trendsB = await get("/v1/runs/trends?days=7", viewerB);
+      check("tenant B trends 격리(오늘 total 0 — C 누출 없음)", trendsB.json().points?.[6]?.total === 0, JSON.stringify(trendsB.json().points?.[6]));
+      // RBAC: 역할 없음 → 403.
+      const noRoleTrends = await get("/v1/runs/trends", noRole);
+      check("no-role trends → 403", noRoleTrends.statusCode === 403, noRoleTrends.body);
 
       // ===== listHumanTasks =====
       const allHt = await get("/v1/human-tasks");

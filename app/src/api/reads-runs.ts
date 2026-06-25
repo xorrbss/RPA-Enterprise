@@ -106,6 +106,14 @@ function artifactListPage(rows: readonly RunArtifactRow[], limit: number) {
   );
 }
 
+// days 쿼리 파라미터 → [1,90] 정수(기본 30). 무효/범위초과는 조용히 클램프 — 표시 윈도우는 진실 주장이 아니라
+// 분석 화면의 조회 범위이므로 파싱 실패로 화면을 막지 않는다(반환 데이터 자체는 윈도우에 대해 정직하다).
+function trendWindowDays(raw: unknown): number {
+  const n = typeof raw === "string" ? Number.parseInt(raw, 10) : typeof raw === "number" ? raw : Number.NaN;
+  if (!Number.isFinite(n)) return 30;
+  return Math.max(1, Math.min(90, Math.trunc(n)));
+}
+
 export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   // GET /v1/runs — 커서 페이지(items=Run). filter: status(RunState)·scenario_version_id. RLS 스코프.
   app.get("/v1/runs", { config: { rbacAction: "run.read" } }, async (request, reply) => {
@@ -201,6 +209,65 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
       success_rate: successRate,
       total,
       cache: { by_mode: byMode, hit_rate: hitRate },
+    });
+  });
+
+  // GET /v1/runs/trends — 테넌트-스코프 일별 run outcome 추세(분석: summary 스냅샷을 시계열로 확장). Asia/Seoul
+  //   일 경계로 버킷팅하고 윈도우 내 모든 날을 포함한다(0건 날도 연속 시리즈 — 스파크라인 x축 연속). per-day
+  //   success_rate = completed/(completed+failed_business+failed_system), 그 날 평가 대상 run 0이면 null(0/0 단정
+  //   금지, "조용한 false 금지"). total=그 날 생성된 run 수(처리량). cancelled/queued/running 은 분모 제외(summary 동형).
+  //   RLS 스코프, run.read. days=조회 윈도우(기본 30, [1,90] 클램프).
+  app.get("/v1/runs/trends", { config: { rbacAction: "run.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const windowDays = trendWindowDays((request.query as Record<string, unknown>).days);
+    const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+      const result = await c.query<{
+        day: string;
+        completed: number;
+        failed_business: number;
+        failed_system: number;
+        total: number;
+      }>(
+        `WITH win AS (
+           SELECT (now() AT TIME ZONE 'Asia/Seoul')::date AS today, ($2::int - 1) AS span
+         ),
+         days AS (
+           SELECT generate_series(win.today - win.span, win.today, interval '1 day')::date AS day FROM win
+         ),
+         agg AS (
+           SELECT (created_at AT TIME ZONE 'Asia/Seoul')::date AS day, status, count(*)::int AS n
+             FROM runs, win
+            WHERE tenant_id = $1::uuid
+              AND (created_at AT TIME ZONE 'Asia/Seoul')::date >= win.today - win.span
+            GROUP BY 1, 2
+         )
+         SELECT d.day::text AS day,
+                COALESCE(SUM(a.n) FILTER (WHERE a.status = 'completed'), 0)::int AS completed,
+                COALESCE(SUM(a.n) FILTER (WHERE a.status = 'failed_business'), 0)::int AS failed_business,
+                COALESCE(SUM(a.n) FILTER (WHERE a.status = 'failed_system'), 0)::int AS failed_system,
+                COALESCE(SUM(a.n), 0)::int AS total
+           FROM days d
+           LEFT JOIN agg a ON a.day = d.day
+          GROUP BY d.day
+          ORDER BY d.day`,
+        [principal.tenantId, windowDays],
+      );
+      return result.rows;
+    });
+    reply.code(200).send({
+      window_days: windowDays,
+      timezone: "Asia/Seoul",
+      points: rows.map((r) => {
+        const rated = r.completed + r.failed_business + r.failed_system;
+        return {
+          day: r.day,
+          completed: r.completed,
+          failed_business: r.failed_business,
+          failed_system: r.failed_system,
+          total: r.total,
+          success_rate: rated > 0 ? r.completed / rated : null,
+        };
+      }),
     });
   });
 
