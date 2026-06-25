@@ -123,3 +123,40 @@ Invoke-RestMethod -Method Post -Uri "https://<api-host>/v1/scenario-generations"
 ```
 
 `llm_v1` smoke는 같은 body에서 `planner="llm_v1"`만 바꿔 실행한다. 응답이 `201`이고 `planner`, `generation_id`, `scenario_version_id`가 채워지면 저장 경계가 통과한 것이다. `save_and_run`은 `status=run_queued`와 `run_id`를 확인하고, evidence는 lifecycle 후 `GET /v1/runs/{run_id}/artifacts` 및 필요한 경우 `GET /v1/artifacts/{artifact_id}/blob`에서 redacted metadata/blob만 확인한다.
+
+## DB 역할 분리 (최소권한, DG1)
+
+`db/roles.sql`은 DDL 권한과 런타임 데이터 접근을 두 역할로 분리한다. 런타임이 스키마를 바꾸거나 RLS를 우회하지 못하게 하는 최소권한 경계다.
+
+- `rpa_migrator` — 스키마/객체 소유 + DDL/마이그레이션 전용. **런타임 연결에 쓰지 않는다.**
+- `rpa_app` — 런타임(제어평면 API + 워커) DML 전용. `SUPERUSER`·`BYPASSRLS`·DDL 없음 → RLS 적용, 스키마 변경 불가.
+
+### 배포 순서
+
+1. 슈퍼유저(배포 관리자)로 역할 + 기본권한 생성(마이그레이션 **전에**, idempotent):
+   ```bash
+   psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 -f db/roles.sql
+   ```
+2. 역할 LOGIN·비밀번호 주입(배포 비밀 — `roles.sql`에 비밀번호를 넣지 않는다):
+   ```sql
+   ALTER ROLE rpa_migrator LOGIN PASSWORD '<migrator-secret>';
+   ALTER ROLE rpa_app      LOGIN PASSWORD '<app-secret>';
+   ```
+3. **`rpa_migrator`로** 마이그레이션 실행 — 테이블이 `rpa_migrator` 소유가 되어 `ALTER DEFAULT PRIVILEGES`가 신규 객체의 DML을 `rpa_app`에 자동 부여한다:
+   ```bash
+   psql "$MIGRATOR_DSN" -v ON_ERROR_STOP=1 -f db/migration_concurrency_idempotency.sql
+   psql "$MIGRATOR_DSN" -v ON_ERROR_STOP=1 -f db/migration_core_entities.sql
+   ```
+4. **제어평면 API와 워커는 `rpa_app`으로 연결**한다(`DATABASE_URL` 사용자 = `rpa_app`). 절대 슈퍼유저/`rpa_migrator`로 런타임을 연결하지 않는다.
+5. 이후 모든 마이그레이션은 `rpa_migrator`로 실행한다(기본권한이 신규 객체에 계속 자동 적용).
+
+### 검증
+
+```bash
+node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/db-roles-least-privilege.int.ts
+```
+임시 PostgreSQL에서 `rpa_app`이 **DML 동작 · RLS 적용(타 테넌트 0건) · DDL 거부(CREATE TABLE 차단)**임을 증명한다. 구조 회귀는 `node scripts/db-static-smoke.mjs`(Contract Gate)가 막는다.
+
+### app/worker 연결 분리 (선택)
+
+제어평면 API와 워커는 같은 런타임 데이터평면(`runs`·`run_steps`·`credential_leases` 등)을 크게 공유하므로 기본적으로 `rpa_app` 하나를 함께 쓴다. 연결 단위 자격 분리(회전·감사)가 필요하면 배포에서 `rpa_app`과 동일 권한의 복제 역할(`rpa_worker`)을 추가하고 워커만 그 역할로 연결한다 — 테이블별 app/worker 권한 세분은 두 경로의 런타임 테이블 중첩이 커 실익이 작다.
