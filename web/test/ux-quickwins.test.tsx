@@ -578,4 +578,18 @@ describe("Phase 2 온보딩", () => {
     expect(screen.queryByRole("button", { name: ONBOARD_CTA })).toBeNull();
     expect(screen.queryByRole("button", { name: /가기/ })).toBeNull();
   });
+
+  // (5) 역할 미확인(roles 없음): '데이터 없음'이 아니라 '권한/설정 문제'로 안내 — 무데이터(viewer)와 구분.
+  test("역할 미확인 사용자는 권한 요청 안내(무데이터 문구와 구분)", async () => {
+    localStorage.setItem("rpa.token", jwt([]));
+    renderApp(
+      fakeClient({ listRuns: async () => ({ items: [], next_cursor: null }) }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/IT 담당자에게 접근 권한을 요청하세요/)).toBeInTheDocument(),
+    );
+    // viewer용 '아직 등록된 실행이 없습니다' 문구와 다르고, CTA도 없다.
+    expect(screen.queryByText(/아직 등록된 실행이 없습니다/)).toBeNull();
+    expect(screen.queryByRole("button", { name: ONBOARD_CTA })).toBeNull();
+  });
 });
