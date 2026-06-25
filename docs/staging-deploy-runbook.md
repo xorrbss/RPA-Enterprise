@@ -160,3 +160,19 @@ node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/
 ### app/worker 연결 분리 (선택)
 
 제어평면 API와 워커는 같은 런타임 데이터평면(`runs`·`run_steps`·`credential_leases` 등)을 크게 공유하므로 기본적으로 `rpa_app` 하나를 함께 쓴다. 연결 단위 자격 분리(회전·감사)가 필요하면 배포에서 `rpa_app`과 동일 권한의 복제 역할(`rpa_worker`)을 추가하고 워커만 그 역할로 연결한다 — 테이블별 app/worker 권한 세분은 두 경로의 런타임 테이블 중첩이 커 실익이 작다.
+
+## 환경 ALM (dev→staging→prod, DG2)
+
+플랫폼은 **환경 무관(env-agnostic)**이다. 환경(dev/staging/prod) 식별은 코드·계약에 박히지 않고 **배포 설정**으로만 들어온다:
+
+- 시크릿/키 네임스페이스 = Vault mount `rpa/<env>/...` (env 별 AppRole — prod AppRole 은 prod mount 만, `security-contracts.md §3`).
+- 데이터평면 = `DATABASE_URL`(env 별 독립 PostgreSQL 스택).
+- 배포별 override = `*_REF`(예: `SIGNED_COMMAND_REGISTRY_REF`).
+
+따라서 **환경 간 승격은 운영 절차**이지 런타임 기능이 아니다:
+
+1. 각 env 를 **독립 배포**한다(별도 DB·Vault·워커 — 위 "공통 배포 env"·"DB 역할 분리" 절을 env 마다 반복).
+2. `db/` 마이그레이션을 **동일 순서**로 각 env 에 적용한다(`rpa_migrator`, DG1 절).
+3. 시나리오/설정은 소스(계약·codegen)에서 각 env 로 재배포한다.
+
+**환경 *내부* 시나리오 draft→prod 승격은 D4 maker-checker**(`scenario_promotion_requests`, 요청자≠승인자 SoD)가 콘솔에서 처리한다 — 환경 간 ALM 과 별개 레이어다. 중앙 제어평면이 여러 env 를 오케스트레이션하는 단일 승격 콘솔은 v1 범위 밖이다(net-new, `release-decisions.md` DG-2).
