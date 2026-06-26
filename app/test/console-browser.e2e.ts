@@ -13,9 +13,12 @@ import http from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import puppeteer, { type HTTPRequest } from "puppeteer-core";
+import puppeteer, { type HTTPRequest, type Page } from "puppeteer-core";
 
 const DIST = fileURLToPath(new URL("../../web/dist/", import.meta.url));
+const SEEDED_RUN_ID = "11111111-aaaa-bbbb-cccc-000000000001";
+const SEEDED_WORKITEM_REF = "wi-e2e";
+const RUN_DETAIL_LABEL = "실행 추적 상세 보기";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -48,14 +51,25 @@ function contentType(ext: string): string {
   return "application/octet-stream";
 }
 
-function apiFixture(pathname: string): unknown {
+function apiFixture(url: URL): unknown {
+  const { pathname, searchParams } = url;
   if (pathname === "/api/v1/runs") {
+    const status = searchParams.get("status");
     // current_node 는 백엔드(reads-runs)가 계약 미약속으로 영구 null 을 반환한다 — fixture 도 null(백엔드가 못 만드는
     //   값을 e2e 에서 창작하지 않는다; api-reads.int·web/fake-client 와 동형 fabrication-guard).
-    return { items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", current_node: null, as_of: null }], next_cursor: null };
+    const seededRun = {
+      run_id: SEEDED_RUN_ID,
+      status: "running",
+      priority: "medium",
+      current_node: null,
+      as_of: "2026-06-24T09:00:00.000Z",
+      updated_at: "2026-06-24T09:00:00.000Z",
+      failure_reason: null,
+    };
+    return { items: status === null || status === "running" ? [seededRun] : [], next_cursor: null };
   }
   if (pathname === "/api/v1/workitems") {
-    return { items: [{ workitem_id: "55550000-aaaa-bbbb-cccc-000000000001", status: "new", unique_reference: "wi-e2e", target_id: null }], next_cursor: null };
+    return { items: [{ workitem_id: "55550000-aaaa-bbbb-cccc-000000000001", status: "new", unique_reference: SEEDED_WORKITEM_REF, target_id: null }], next_cursor: null };
   }
   if (pathname === "/api/v1/human-tasks") {
     return { items: [], next_cursor: null };
@@ -100,8 +114,22 @@ function apiFixture(pathname: string): unknown {
         reprocessing_rate: 0,
         estimated_hours_saved: 1,
         estimated_value: 40000,
+        implementation_effort: 0,
+        net_value: 40000,
+        value_to_cost_ratio: null,
+        payback_months: null,
         gateway_cost: 0.25,
+        cost_by_status: { completed: 0.25, failed_business: 0, failed_system: 0, other: 0 },
+        failed_cost: 0,
+        rerun_cost: 0,
+        avg_cost_per_run: 0.25,
+        cost_per_completed_run: 0.25,
+        llm_call_cost: null,
+        run_vs_call_cost_delta: null,
+        roi_idea_count: 1,
+        roi_confidence: { low: 0, medium: 1, high: 0 },
       },
+      cost_by_model: [],
       failure_top: [],
       by_workflow: [
         {
@@ -116,7 +144,17 @@ function apiFixture(pathname: string): unknown {
           reprocessing_rate: 0,
           estimated_hours_saved: 1,
           estimated_value: 40000,
+          implementation_effort: 0,
+          net_value: 40000,
+          value_to_cost_ratio: null,
+          payback_months: null,
           gateway_cost: 0.25,
+          cost_by_status: { completed: 0.25, failed_business: 0, failed_system: 0, other: 0 },
+          rerun_cost: 0,
+          avg_cost_per_run: 0.25,
+          cost_per_completed_run: 0.25,
+          roi_idea_count: 1,
+          roi_confidence: { low: 0, medium: 1, high: 0 },
         },
       ],
       trends: [
@@ -132,6 +170,11 @@ function apiFixture(pathname: string): unknown {
           estimated_hours_saved: 1,
           estimated_value: 40000,
           gateway_cost: 0.25,
+          cost_by_status: { completed: 0.25, failed_business: 0, failed_system: 0, other: 0 },
+          rerun_cost: 0,
+          avg_cost_per_run: 0.25,
+          cost_per_completed_run: 0.25,
+          cost_delta_from_previous_day: null,
         },
       ],
     };
@@ -152,6 +195,105 @@ function apiFixture(pathname: string): unknown {
   }
   // human-tasks / dlq / sites / scenarios 등 → 빈 페이지(정직)
   return { items: [], next_cursor: null };
+}
+
+async function debugSnapshot(
+  page: Page,
+  apiRequests: readonly string[],
+  pageErrors: readonly string[],
+  consoleErrors: readonly string[],
+): Promise<string> {
+  const pageState = await page.evaluate(() => ({
+    url: location.href,
+    h1: document.querySelector("h1")?.textContent ?? null,
+    body: document.body.innerText.slice(0, 1_200),
+    titled: Array.from(document.querySelectorAll("[title]"))
+      .slice(0, 12)
+      .map((el) => ({
+        text: (el.textContent ?? "").trim().slice(0, 80),
+        title: el.getAttribute("title"),
+        ariaLabel: el.getAttribute("aria-label"),
+      })),
+  }));
+  return JSON.stringify(
+    {
+      page: pageState,
+      apiRequests: apiRequests.slice(-20),
+      pageErrors,
+      consoleErrors: consoleErrors.slice(-10),
+    },
+    null,
+    2,
+  );
+}
+
+async function waitForDashboardSeed(
+  page: Page,
+  apiRequests: readonly string[],
+  pageErrors: readonly string[],
+  consoleErrors: readonly string[],
+): Promise<void> {
+  let status: unknown;
+  try {
+    const result = await page.waitForFunction(
+      (runId, detailLabel) => {
+        const body = document.body.innerText;
+        if (body.includes("화면을 표시하지 못했습니다")) return "error-boundary";
+
+        const recentPanel = Array.from(document.querySelectorAll("section"))
+          .find((section) => (section.textContent ?? "").includes("최근 실행"));
+        if (recentPanel === undefined) return false;
+
+        const panelText = recentPanel.textContent ?? "";
+        const elements = Array.from(recentPanel.querySelectorAll("button, [title], [aria-label]"));
+        const hasRunIdentity =
+          panelText.includes(runId) ||
+          panelText.includes(runId.slice(0, 8)) ||
+          elements.some((el) => (el.getAttribute("title") ?? "").includes(runId));
+        const hasDetailControl = elements.some((el) =>
+          (el.getAttribute("aria-label") ?? "") === detailLabel ||
+          (el.textContent ?? "").includes("상세 보기")
+        );
+        const hasRunningStatus = panelText.includes("실행 중");
+        return hasRunIdentity && hasDetailControl && hasRunningStatus ? "ready" : false;
+      },
+      { timeout: 15_000 },
+      SEEDED_RUN_ID,
+      RUN_DETAIL_LABEL,
+    );
+    status = await result.jsonValue();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`dashboard seed run was not rendered before timeout: ${message}\n${await debugSnapshot(page, apiRequests, pageErrors, consoleErrors)}`);
+  }
+  if (status === "ready") return;
+  throw new Error(`dashboard rendered ${String(status)}: ${await debugSnapshot(page, apiRequests, pageErrors, consoleErrors)}`);
+}
+
+async function waitForWorkitemSeed(
+  page: Page,
+  apiRequests: readonly string[],
+  pageErrors: readonly string[],
+  consoleErrors: readonly string[],
+): Promise<void> {
+  let status: unknown;
+  try {
+    const result = await page.waitForFunction(
+      (workitemRef) => {
+        const body = document.body.innerText;
+        if (body.includes("화면을 표시하지 못했습니다")) return "error-boundary";
+        return body.includes(workitemRef) ? "ready" : false;
+      },
+      { timeout: 15_000 },
+      SEEDED_WORKITEM_REF,
+    );
+    status = await result.jsonValue();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`workitem seed row was not rendered before timeout: ${message}\n${await debugSnapshot(page, apiRequests, pageErrors, consoleErrors)}`);
+  }
+  if (status === "ready") return;
+  throw new Error(`workitem route rendered ${String(status)}: ${await debugSnapshot(page, apiRequests, pageErrors, consoleErrors)}`);
 }
 
 async function main(): Promise<void> {
@@ -183,10 +325,15 @@ async function main(): Promise<void> {
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
   });
+  const apiRequests: string[] = [];
   const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
   try {
     const page = await browser.newPage();
     page.on("pageerror", (e: unknown) => pageErrors.push(e instanceof Error ? e.message : String(e)));
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
     await page.evaluateOnNewDocument(() => {
       try {
         localStorage.setItem("rpa.token", "e2e-token");
@@ -198,7 +345,8 @@ async function main(): Promise<void> {
     page.on("request", (req: HTTPRequest) => {
       const url = new URL(req.url());
       if (url.pathname.startsWith("/api/")) {
-        void req.respond({ status: 200, contentType: "application/json", body: JSON.stringify(apiFixture(url.pathname)) });
+        apiRequests.push(`${url.pathname}${url.search}`);
+        void req.respond({ status: 200, contentType: "application/json", body: JSON.stringify(apiFixture(url)) });
       } else {
         void req.continue();
       }
@@ -207,11 +355,11 @@ async function main(): Promise<void> {
     // 1) 기본 라우트(dashboard) 부팅 + 시드 실행 렌더
     await page.goto(`${base}/`, { waitUntil: "networkidle0", timeout: 30_000 });
     await page.waitForSelector("h1", { timeout: 15_000 });
-    await page.waitForFunction(() => document.body.innerText.includes("상세 보기") || document.body.innerText.includes("11111111-aaaa-bbbb-cccc-000000000001"), { timeout: 15_000 });
+    await waitForDashboardSeed(page, apiRequests, pageErrors, consoleErrors);
     const dash = await page.evaluate(() => document.body.innerText);
     const dashboardTitle = await page.$eval("h1", (el) => el.textContent ?? "");
     check("dashboard 부팅 + 운영 대시보드 제목", dashboardTitle === "RPA 운영 대시보드", dashboardTitle);
-    check("dashboard 최근 실행 행 렌더", dash.includes("상세 보기") || dash.includes("11111111-aaaa-bbbb-cccc-000000000001"), dash.slice(0, 300));
+    check("dashboard 최근 실행 행 렌더", dash.includes("상세 보기") || dash.includes(SEEDED_RUN_ID.slice(0, 8)), dash.slice(0, 300));
     check("시드 실행이 '실행 중'으로 표시(StatusBadge 한국어 라벨)", dash.includes("실행 중"), dash.slice(0, 200));
     check("사이드바 18 nav 렌더", await page.$$eval("nav.sidebar button", (b) => b.length) === 18);
 
@@ -219,13 +367,13 @@ async function main(): Promise<void> {
     await page.evaluate(() => {
       location.hash = "#workitems";
     });
-    await page.waitForFunction(() => document.body.innerText.includes("wi-e2e"), { timeout: 15_000 });
+    await waitForWorkitemSeed(page, apiRequests, pageErrors, consoleErrors);
     const h1 = await page.$eval("h1", (el) => el.textContent ?? "");
     check("라우팅 후 탑바 제목 = 작업 목록", h1 === "작업 목록", h1);
-    check("시드 작업항목(wi-e2e) 렌더", (await page.evaluate(() => document.body.innerText)).includes("wi-e2e"));
+    check("시드 작업항목(wi-e2e) 렌더", (await page.evaluate(() => document.body.innerText)).includes(SEEDED_WORKITEM_REF));
 
     // 3) 런타임 에러 없음(번들 무결성)
-    check("브라우저 페이지 에러 없음", pageErrors.length === 0, pageErrors.join("; "));
+    check("브라우저 페이지 에러 없음", pageErrors.length === 0 && consoleErrors.length === 0, [...pageErrors, ...consoleErrors].join("; "));
   } finally {
     await browser.close();
     server.close();
