@@ -1,6 +1,6 @@
 # Current Readiness Report
 
-Date: 2026-06-26
+Date: 2026-06-27
 Branch: `codex/remaining-enterprise-ops`
 Baseline: `origin/main` at `a16df579` (`Phase 6: 운영 거버넌스 후속 보강`)
 
@@ -19,6 +19,7 @@ Baseline: `origin/main` at `a16df579` (`Phase 6: 운영 거버넌스 후속 보�
   - Runtime `pauseRequested` port that suspends a running run at the next safe node boundary with `operator_pause` bookmark evidence.
   - Workitem checkout timer pause and resume-token issuance are reused through the existing suspend path.
   - RunTrace exposes a running-run pause action without exposing secret or page-state body data.
+  - Phase 8 DB integration coverage now exists in `app/test/api-run-pause.int.ts` and `app/test/runtime-worker-operator-pause.int.ts`, both wired into `npm --prefix app run test:int`.
 - Worker Pool worker membership:
   - `worker_pool_memberships` table plus smoke/RLS coverage.
   - `PUT /v1/worker-pools/:pool_key/workers/:worker_id` and `DELETE /v1/worker-pools/:pool_key/workers/:worker_id`.
@@ -32,6 +33,8 @@ Baseline: `origin/main` at `a16df579` (`Phase 6: 운영 거버넌스 후속 보�
   - Upserts SCIM-managed principals and synchronizes active SCIM role assignments.
   - Deactivation revokes active SCIM assignments for the provider-managed principal.
   - Manual revoke still rejects externally managed SCIM assignments.
+  - Phase 8 hardening closes the registered-provider, inbound `scim-principal@1` schema, signed-request, group-to-role mapping, and external identity conflict policy gaps.
+  - `app/test/api-scim.int.ts` covers active/disabled provider gates, signature verification through `SecretStoreBoundary`, schema rejection, `roles` versus `external_groups`, unmapped/disabled groups, SCIM role revocation, and external-id/sub relink conflicts.
 - Reporting/ROI package:
   - Automation performance report now includes daily `trends`.
   - CSV, XLSX, and PoC Markdown exports include daily trend sections in addition to summary, failure Top N, and workflow ROI/cost.
@@ -39,10 +42,8 @@ Baseline: `origin/main` at `a16df579` (`Phase 6: 운영 거버넌스 후속 보�
 
 ## Remaining Work
 
-- Active pause follow-up tests:
-  - Add a DB-backed integration test for `/v1/runs/:run_id/pause` and runtime operator-pause drive once a stable fixture is chosen.
-- SCIM hardening:
-  - Provider registration, inbound schema versioning, signature/auth boundary, and conflict policy for sub/external identity changes.
+- SCIM/IdP administration surface:
+  - The inbound sync boundary is hardened, but self-service provider registration, signature-secret rotation, and group mapping administration APIs/UI remain future managed-IdP work. Current sync expects pre-provisioned `scim_providers` and `scim_group_role_mappings` rows.
 - Bot Pool health automation:
   - Worker-level lease expiry isolation can be expanded through existing `workers.circuit_state`, but alert delivery/ack workflows remain future notification contracts.
 - Reporting/ROI package:

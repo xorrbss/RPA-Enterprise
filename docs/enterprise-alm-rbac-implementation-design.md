@@ -317,7 +317,7 @@ CREATE TABLE principal_role_assignment_events (
 
 SCIM v1 최소 동기화는 `POST /v1/scim/principals`로 열린다. 이 엔드포인트는 `scim.sync` 권한과 `Idempotency-Key`를 요구하고, `idp_provider`/`external_id`/`sub` 기준 principal을 `source='scim'`, `lifecycle_source='scim'`으로 upsert한 뒤 제출된 role set을 SCIM-managed assignment로 동기화한다. `active=false`는 해당 provider principal의 active SCIM assignments를 revoke한다. 수동 revoke API는 계속 `source='manual'`만 회수한다.
 
-Open SCIM hardening decisions: provider registration, inbound auth/signature boundary, schema versioning, group-to-role mapping source of truth, and token/manual/SCIM conflict resolution rule.
+Phase 8 update: the SCIM sync boundary is now hardened in the contract and app implementation. `scim_providers` is the registered provider ledger, inbound requests are closed to `schema_version='scim-principal@1'`, signed requests are verified through `SecretStoreBoundary`, `scim_group_role_mappings` is the RPA-owned group-to-role source of truth, and external-id/sub relink conflicts fail closed. `app/test/api-scim.int.ts` covers these cases. Managed provider lifecycle APIs/UI and signature-secret rotation workflows remain future IdP administration work, not an open sync-boundary hardening decision.
 
 ## 6. Web 콘솔 설계
 

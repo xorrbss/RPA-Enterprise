@@ -94,7 +94,7 @@ current manual role-assignment slice. They do not close by UI-only prototypes;
 each row needs a contract decision, API/runtime ownership, and targeted test
 evidence before the related feature may be exposed as working product behavior.
 
-- [x] Enterprise ALM/RBAC SCIM synchronization contract. Resolved locally: `POST /v1/scim/principals` accepts provider/external principal sync with `scim.sync` RBAC, idempotency, audit, SCIM-managed assignment create/revoke, and manual revoke protection for external assignments. Provider registration, inbound auth/schema versioning, and identity conflict policy remain future hardening decisions.
+- [x] Enterprise ALM/RBAC hardened SCIM synchronization contract. Resolved in Phase 8: `POST /v1/scim/principals` accepts provider/external principal sync with `scim.sync` RBAC, idempotency, audit, SCIM-managed assignment create/revoke, and manual revoke protection for external assignments. The repo now includes registered `scim_providers`, inbound `scim-principal@1` schema checks, signed-request verification through `SecretStoreBoundary`, RPA-owned `scim_group_role_mappings`, direct `roles` versus `external_groups` fail-closed role-source handling, and external-id/sub relink conflict rejection. Evidence: `app/test/api-scim.int.ts`, wired into `npm --prefix app run test:int`. Managed provider lifecycle APIs/UI and signature-secret rotation workflows are future IdP administration work, not an open sync-boundary hardening blocker.
 
 ## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)
 
@@ -104,7 +104,7 @@ each row needs a runtime contract decision, implementation owner, and targeted
 test evidence before the related behavior may be exposed as working product
 behavior.
 
-- [x] Runtime-owned operator pause intent/bookmark port. Resolved locally: `POST /v1/runs/:run_id/pause` records a durable `run_pause_requests` intent and the runtime `pauseRequested` port consumes it at a safe node boundary into R5b `operator_pause_requested`, writing an `operator_pause` bookmark and resume token.
+- [x] Runtime-owned operator pause intent/bookmark port. Resolved in Phase 8: `POST /v1/runs/:run_id/pause` records a durable `run_pause_requests` intent and the runtime `pauseRequested` port consumes it at a safe node boundary into R5b `operator_pause_requested`, writing an `operator_pause` bookmark and resume token. Evidence: `app/test/api-run-pause.int.ts` and `app/test/runtime-worker-operator-pause.int.ts`, both wired into `npm --prefix app run test:int`.
 - [x] Worker-to-pool membership and per-pool live capacity contract. Resolved locally: `worker_pool_memberships` records browser worker membership, Worker Pool APIs assign/remove workers, and Bot Pool live capacity is calculated from the tenant-assigned pool membership with explicit default-pool behavior.
 
 ## Repo-Controlled D4.4 Evidence

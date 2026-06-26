@@ -67,7 +67,8 @@ path at deploy time (no external release/oncall team exists).
   remaining repo-controlled D3 runtime blocker rows for operator pause
   ownership and true per-pool live capacity membership are resolved locally,
   and the Enterprise ALM/RBAC SCIM synchronization contract is implemented as
-  a minimal `POST /v1/scim/principals` sync surface.
+  a hardened `POST /v1/scim/principals` sync surface with registered-provider,
+  signed-request, schema-version, group-mapping, and identity-conflict gates.
   Repo-controlled D4.5 API P1 rows remain resolved locally as fail-closed
   API behavior, real executor orchestration/outcome mapping, and artifact
   lifecycle port/evidence guardrails.
