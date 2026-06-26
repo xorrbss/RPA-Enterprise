@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../../api/context";
-import type { WorkerPoolItem, WorkerPoolPriority, WorkerPoolStatus } from "../../api/types";
+import type { WorkerPoolItem, WorkerPoolList, WorkerPoolPriority, WorkerPoolStatus } from "../../api/types";
 import { ActionButton } from "../../components/ActionButton";
 import { errorLabel } from "../../components/badges";
 
@@ -12,6 +12,7 @@ const PRIORITIES: readonly { value: WorkerPoolPriority; label: string }[] = [
   { value: "high", label: "높음" },
   { value: "critical", label: "긴급" },
 ];
+const STUCK_QUEUE_MS = 5 * 60 * 1000;
 
 export function WorkerPoolPanel(): JSX.Element | null {
   const api = useApiClient();
@@ -22,9 +23,13 @@ export function WorkerPoolPanel(): JSX.Element | null {
   });
   if (q.isLoading || q.data === undefined) return null;
   const { items, assigned_pool_key, pending } = q.data;
-  const oldestQueuedMs =
-    pending.oldest_queued_at !== null ? Date.now() - new Date(pending.oldest_queued_at).getTime() : 0;
-  const stuckHint = assigned_pool_key !== null && pending.queued_runs > 0 && oldestQueuedMs > 5 * 60 * 1000;
+  const oldestQueuedMs = queuedAgeMs(pending.oldest_queued_at);
+  const stuckHint =
+    assigned_pool_key !== null &&
+    pending.queued_runs > 0 &&
+    oldestQueuedMs !== null &&
+    oldestQueuedMs > STUCK_QUEUE_MS;
+  const pressure = queuePressure(pending, oldestQueuedMs, stuckHint);
 
   return (
     <section className="panel" aria-label="전용 워커 풀" style={{ marginBottom: 12 }}>
@@ -52,14 +57,16 @@ export function WorkerPoolPanel(): JSX.Element | null {
         )}
       </p>
 
-      {pending.queued_runs > 0 && (
-        <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span className="subtle">대기 실행:</span>
-          <span className={`badge ${stuckHint ? "amber" : ""}`}>
-            {pending.queued_runs}건
-            {oldestQueuedMs > 0 ? ` · 가장 오래된 대기 ${Math.floor(oldestQueuedMs / 60000)}분` : ""}
-          </span>
-          {stuckHint && <span className="subtle">배정 풀의 worker, drain/disable 상태, WORKER_POOL_KEYS를 확인하세요.</span>}
+      <p aria-label="전용 워커 풀 압력" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span className="subtle">풀 압력:</span>
+        <span className={["badge", pressure.tone].filter(Boolean).join(" ")}>{pressure.label}</span>
+        <span className="subtle">{pressure.detail}</span>
+        {stuckHint && <span className="subtle">배정 풀의 worker, drain/disable 상태, WORKER_POOL_KEYS를 확인하세요.</span>}
+      </p>
+
+      {pending.queued_runs > 0 && assigned_pool_key === null && oldestQueuedMs !== null && oldestQueuedMs > STUCK_QUEUE_MS && (
+        <p className="subtle" style={{ marginTop: -4 }}>
+          기본 풀 대기는 전용 풀 배정 오류로 단정하지 않습니다. Bot Pool 용량과 Graphile queue 상태를 함께 확인하세요.
         </p>
       )}
 
@@ -342,6 +349,35 @@ function statusTone(status: WorkerPoolStatus): string {
 
 function priorityLabel(priority: WorkerPoolPriority): string {
   return PRIORITIES.find((p) => p.value === priority)?.label ?? priority;
+}
+
+function queuedAgeMs(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = new Date(value).getTime();
+  if (Number.isNaN(parsed)) return null;
+  return Math.max(0, Date.now() - parsed);
+}
+
+function queuePressure(
+  pending: WorkerPoolList["pending"],
+  oldestQueuedMs: number | null,
+  stuckHint: boolean,
+): { label: string; detail: string; tone: "green" | "amber" | "" } {
+  if (pending.queued_runs <= 0) {
+    return { label: "정상", detail: "queued 0건", tone: "green" };
+  }
+  const age = oldestQueuedMs !== null ? ` · 가장 오래된 대기 ${formatQueuedAge(oldestQueuedMs)}` : " · 가장 오래된 대기 미확인";
+  return {
+    label: stuckHint ? "지연 위험" : "대기 감지",
+    detail: `queued ${pending.queued_runs}건${age}`,
+    tone: stuckHint ? "amber" : "",
+  };
+}
+
+function formatQueuedAge(ms: number): string {
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "<1분";
+  return `${minutes}분`;
 }
 
 function dateShort(value: string | null | undefined): string {

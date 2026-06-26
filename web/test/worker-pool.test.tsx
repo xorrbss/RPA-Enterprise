@@ -129,8 +129,9 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
       }),
     );
     const region = await screen.findByRole("region", { name: "전용 워커 풀" });
-    expect(within(region).getByText(/대기 실행/)).toBeInTheDocument();
-    expect(within(region).getByText(/3건/)).toBeInTheDocument();
+    expect(within(region).getByLabelText("전용 워커 풀 압력")).toBeInTheDocument();
+    expect(within(region).getByText("지연 위험")).toBeInTheDocument();
+    expect(within(region).getByText(/queued 3건/)).toBeInTheDocument();
     // 5분 초과 적체 + 전용 풀 → 정직한 지연 힌트(단정 아님)
     expect(within(region).getByText(/WORKER_POOL_KEYS/)).toBeInTheDocument();
   });
@@ -144,7 +145,10 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
       }),
     );
     const region = await screen.findByRole("region", { name: "전용 워커 풀" });
-    expect(within(region).getByText(/대기 실행/)).toBeInTheDocument();
+    expect(within(region).getByLabelText("전용 워커 풀 압력")).toBeInTheDocument();
+    expect(within(region).getByText("대기 감지")).toBeInTheDocument();
+    expect(within(region).getByText(/queued 2건/)).toBeInTheDocument();
+    expect(within(region).getByText(/기본 풀 대기/)).toBeInTheDocument();
     expect(within(region).queryByText(/WORKER_POOL_KEYS/)).toBeNull();
   });
 });
