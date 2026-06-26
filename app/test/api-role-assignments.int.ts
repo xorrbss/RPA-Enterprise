@@ -58,6 +58,20 @@ async function main(): Promise<void> {
          ('a1000000-0000-0000-0000-000000000002',$1::uuid,'auth0|admin','관리자',NULL,'manual')`,
         [TENANT],
       );
+      await c.query(
+        `INSERT INTO principals
+           (id, tenant_id, sub, display_name, email, source, external_id, idp_provider, lifecycle_source)
+         VALUES
+           ('a1000000-0000-0000-0000-000000000003',$1::uuid,'auth0|scim-target','SCIM 사용자',NULL,'scim','00u-scim-target','okta','scim')`,
+        [TENANT],
+      );
+      await c.query(
+        `INSERT INTO principal_role_assignments
+           (id, tenant_id, principal_sub, role, source, external_id, idp_provider, lifecycle_source, status, granted_by)
+         VALUES
+           ('67000000-0000-4000-8000-0000000000a1',$1::uuid,'auth0|scim-target','viewer','scim','grp-scim-viewer','okta','scim','active','scim:okta')`,
+        [TENANT],
+      );
     });
 
     const enqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
@@ -74,9 +88,41 @@ async function main(): Promise<void> {
     try {
       const admin = await mint({ sub: "auth0|admin", tenant_id: TENANT, roles: ["admin"] });
       const targetNoRole = await mint({ sub: "auth0|target", tenant_id: TENANT, roles: [] });
+      const scimTargetNoRole = await mint({ sub: "auth0|scim-target", tenant_id: TENANT, roles: [] });
 
       const deniedBefore = await app.inject({ method: "GET", url: "/v1/principals", headers: { authorization: `Bearer ${targetNoRole}` } });
       check("target before assignment → 403", deniedBefore.statusCode === 403 && deniedBefore.json().code === "AUTHZ_FORBIDDEN", deniedBefore.body);
+
+      const scimAllowed = await app.inject({ method: "GET", url: "/v1/principals", headers: { authorization: `Bearer ${scimTargetNoRole}` } });
+      check("SCIM active assignment contributes effective role", scimAllowed.statusCode === 200, scimAllowed.body);
+
+      const scimAssignments = await app.inject({
+        method: "GET",
+        url: "/v1/role-assignments?principal_sub=auth0%7Cscim-target",
+        headers: { authorization: `Bearer ${admin}` },
+      });
+      const scimAssignment = scimAssignments.json().items?.[0];
+      check(
+        "SCIM assignment list exposes external identity fields",
+        scimAssignments.statusCode === 200 &&
+          scimAssignment?.source === "scim" &&
+          scimAssignment?.external_id === "grp-scim-viewer" &&
+          scimAssignment?.idp_provider === "okta" &&
+          scimAssignment?.lifecycle_source === "scim",
+        scimAssignments.body,
+      );
+
+      const scimRevoke = await app.inject({
+        method: "POST",
+        url: "/v1/role-assignments/67000000-0000-4000-8000-0000000000a1/revoke",
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "scim-revoke-deny" },
+        payload: { reason: "managed in IdP" },
+      });
+      check(
+        "SCIM-managed assignment revoke denied",
+        scimRevoke.statusCode === 403 && scimRevoke.json().details?.reason === "externally_managed_role_assignment",
+        scimRevoke.body,
+      );
 
       const grant = await app.inject({
         method: "POST",

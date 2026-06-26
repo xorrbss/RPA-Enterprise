@@ -93,6 +93,7 @@ async function main(): Promise<void> {
   await expectDeny(["viewer"], "site.create");
   await expectDeny(["viewer"], "gateway_policy.edit");
   await expectDeny(["viewer"], "run.abort");
+  await expectDeny(["viewer"], "run.resume");
   await expectDeny(["viewer"], "scenario.create");
   await expectDeny(["viewer"], "scenario.update");
   await expectDeny(["viewer"], "scenario.promote");
@@ -102,6 +103,7 @@ async function main(): Promise<void> {
   await expectAllow(["operator"], "run.read");
   await expectAllow(["operator"], "run.create");
   await expectAllow(["operator"], "run.abort");
+  await expectAllow(["operator"], "run.resume");
   await expectAllow(["operator"], "human_task.assign");
   await expectAllow(["operator"], "dlq.replay");
   await expectAllow(["operator"], "scenario.create");
@@ -192,6 +194,7 @@ async function main(): Promise<void> {
 
   // 다중 역할 합집합: viewer는 abort 불가지만 operator 보유 시 통과
   await expectAllow(["viewer", "operator"], "run.abort");
+  await expectAllow(["viewer", "operator"], "run.resume");
 
   // 역할 없음(빈 집합) → 어떤 액션도 거부
   await expectDeny([], "run.read");

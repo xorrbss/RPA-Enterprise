@@ -15,6 +15,7 @@ const failures = [];
 
 const expectedTables = [
   "credential_concurrency_policies",
+  "credential_binding_events",
   "credential_leases",
   "browser_leases",
   "browser_sessions",
@@ -47,6 +48,7 @@ const expectedTables = [
   "scenario_generations",
   "workitems",
   "runs",
+  "run_reruns",
   "run_steps",
   "human_tasks",
   "principals",
@@ -196,6 +198,7 @@ function checkTenantForeignKeys() {
     "browser_identities",
     "scenario_versions",
     "runs",
+    "run_reruns",
     "run_steps",
     "human_tasks",
     "document_jobs",
@@ -209,6 +212,7 @@ function checkTenantForeignKeys() {
     "stagehand_calls",
     "credential_leases",
     "credential_concurrency_policies",
+    "credential_binding_events",
     "browser_leases",
     "browser_sessions",
     "capture_sessions",
@@ -342,7 +346,7 @@ function checkAuditLogContract() {
 }
 
 function checkEventsOutboxContract() {
-  const ddlEventTypes = extractEventTypeCheck(allMigrations);
+  const ddlEventTypes = extractEventTypeCheck(createTableBody("events_outbox"));
   expectEqualArray("events_outbox event_type CHECK", ddlEventTypes, expectedEventTypes);
   if (ddlEventTypes.some((eventType) => eventType.startsWith("worker."))) {
     failures.push("events_outbox event_type CHECK must not include worker.* infrastructure telemetry");

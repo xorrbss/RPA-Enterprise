@@ -23,8 +23,8 @@ function jwt(roles: readonly string[]): string {
   return `e30.${payload}.sig`;
 }
 const PRINCIPALS = [
-  { principal_id: "a1000000-0000-0000-0000-000000000001", sub: "auth0|alice", display_name: "앨리스", email: "alice@ex.com", source: "manual" as const },
-  { principal_id: "a1000000-0000-0000-0000-000000000002", sub: "auth0|bob", display_name: "밥", email: null, source: "jwt" as const },
+  { principal_id: "a1000000-0000-0000-0000-000000000001", sub: "auth0|alice", display_name: "앨리스", email: "alice@ex.com", source: "manual" as const, external_id: null, idp_provider: null, lifecycle_source: "local" as const },
+  { principal_id: "a1000000-0000-0000-0000-000000000002", sub: "auth0|bob", display_name: "밥", email: null, source: "jwt" as const, external_id: null, idp_provider: null, lifecycle_source: "jwt" as const },
 ];
 
 describe("담당자 디렉터리 관리(admin)", () => {
@@ -32,7 +32,14 @@ describe("담당자 디렉터리 관리(admin)", () => {
     localStorage.setItem("rpa.token", jwt(["admin"]));
     location.hash = "";
     const createPrincipal = vi.fn(async (body: { sub: string; display_name: string; email?: string | null }) => ({
-      principal_id: "new", sub: body.sub, display_name: body.display_name, email: body.email ?? null, source: "manual" as const,
+      principal_id: "new",
+      sub: body.sub,
+      display_name: body.display_name,
+      email: body.email ?? null,
+      source: "manual" as const,
+      external_id: null,
+      idp_provider: null,
+      lifecycle_source: "local" as const,
     }));
     renderApp(fakeClient({ listPrincipals: async () => ({ items: PRINCIPALS, next_cursor: null }), createPrincipal }));
     location.hash = "#security";

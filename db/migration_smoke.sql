@@ -23,6 +23,7 @@ DO $$
 DECLARE
   expected_tables text[] := ARRAY[
     'credential_concurrency_policies',
+    'credential_binding_events',
     'credential_leases',
     'browser_leases',
     'browser_sessions',
@@ -55,6 +56,7 @@ DECLARE
     'scenario_generations',
     'workitems',
     'runs',
+    'run_reruns',
     'run_steps',
     'human_tasks',
     'principals',
@@ -86,6 +88,7 @@ DO $$
 DECLARE
   tenant_tables text[] := ARRAY[
     'credential_concurrency_policies',
+    'credential_binding_events',
     'credential_leases',
     'browser_leases',
     'browser_sessions',
@@ -117,6 +120,7 @@ DECLARE
     'scenario_generations',
     'workitems',
     'runs',
+    'run_reruns',
     'run_steps',
     'human_tasks',
     'principals',
@@ -397,6 +401,8 @@ DECLARE
   workitem_2 uuid := '10000000-0000-0000-0000-000000000006';
   run_1 uuid := '10000000-0000-0000-0000-000000000007';
   run_2 uuid := '10000000-0000-0000-0000-000000000008';
+  rerun_child uuid := '10000000-0000-0000-0000-000000000044';
+  rerun_event_id uuid := '10000000-0000-0000-0000-000000000045';
   run_duplicate_workitem uuid := '10000000-0000-0000-0000-000000000016';
   worker_id uuid := '10000000-0000-0000-0000-000000000009';
   browser_lease_id uuid := '10000000-0000-0000-0000-000000000010';
@@ -456,6 +462,28 @@ BEGIN
     VALUES (run_duplicate_workitem, tenant_a, scenario_version_id, workitem_1, 'queued', '20000000-0000-0000-0000-000000000016');
     RAISE EXCEPTION 'runs must reject duplicate workitem_id per tenant';
   EXCEPTION WHEN unique_violation THEN
+    NULL;
+  END;
+
+  INSERT INTO runs (id, tenant_id, scenario_version_id, status, params, correlation_id)
+  VALUES (rerun_child, tenant_a, scenario_version_id, 'queued', '{"mode":"smoke"}'::jsonb, '20000000-0000-0000-0000-000000000045');
+
+  INSERT INTO run_reruns (id, tenant_id, source_run_id, child_run_id, mode, params, requested_by, reason)
+  VALUES (rerun_event_id, tenant_a, run_1, rerun_child, 'edited_input', '{"mode":"smoke"}'::jsonb, 'smoke-user', 'operator retry');
+
+  BEGIN
+    INSERT INTO run_reruns (id, tenant_id, source_run_id, child_run_id, mode, params, requested_by)
+    VALUES ('10000000-0000-0000-0000-000000000046', tenant_a, run_1, run_1, 'same_input', '{}'::jsonb, 'smoke-user');
+    RAISE EXCEPTION 'run_reruns must reject self links';
+  EXCEPTION WHEN check_violation THEN
+    NULL;
+  END;
+
+  BEGIN
+    INSERT INTO run_reruns (id, tenant_id, source_run_id, child_run_id, mode, params, requested_by)
+    VALUES ('10000000-0000-0000-0000-000000000047', tenant_b, run_1, rerun_child, 'same_input', '{}'::jsonb, 'smoke-user');
+    RAISE EXCEPTION 'run_reruns must reject cross-tenant run links';
+  EXCEPTION WHEN foreign_key_violation THEN
     NULL;
   END;
 

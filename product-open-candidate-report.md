@@ -63,11 +63,11 @@ path at deploy time (no external release/oncall team exists).
   `release-open-checklist.md` / `release-decisions.md`.
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
   blockers split by scope: the remaining external/staging blocker category
-  is the concrete staging platform/deploy target + GitHub Environment, and the
-  remaining Enterprise ALM/RBAC product-scope blocker is the future SCIM
-  synchronization contract.
-  Repo-controlled D4.5 API P1 and
-  D3 runtime execution blocker rows are now resolved locally as fail-closed
+  is the concrete staging platform/deploy target + GitHub Environment, the
+  remaining D3 runtime blocker rows are operator pause ownership and true
+  per-pool live capacity membership, and the remaining Enterprise ALM/RBAC
+  product-scope blocker is the future SCIM synchronization contract.
+  Repo-controlled D4.5 API P1 rows remain resolved locally as fail-closed
   API behavior, real executor orchestration/outcome mapping, and artifact
   lifecycle port/evidence guardrails.
   The durable security audit writer D4.4 row remains resolved locally by
@@ -76,9 +76,9 @@ path at deploy time (no external release/oncall team exists).
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 21 markers, 2 actionable blockers, 13 known release decisions tracked,
+  output: 24 markers, 5 actionable blockers, 13 known release decisions tracked,
   13 release decisions checked (1 active deploy-time provisioning checklist rows;
-  0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows;
+  0 repo-controlled D4.5 API P1 open rows; 2 repo-controlled D3 runtime open rows;
   0 repo-controlled Browser RPA V2 product-scope open rows; 1 repo-controlled Enterprise ALM/RBAC product-scope open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
@@ -220,9 +220,9 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 21 markers, 2 actionable blockers, 13 known release
+  (current output: 24 markers, 5 actionable blockers, 13 known release
   decisions tracked, 13 release decisions checked (1 active deploy-time provisioning
-  checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
+  checklist rows; 0 repo-controlled D4.5 API P1 open rows; 2 repo-controlled D3
   runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows;
   1 repo-controlled Enterprise ALM/RBAC product-scope open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes

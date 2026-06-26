@@ -64,6 +64,9 @@ export type RbacAction =
   | "run.read"
   | "run.create"
   | "run.abort"
+  | "run.rerun"
+  | "run.resume"
+  | "run.prioritize"
   | "trigger.read"
   | "trigger.manage"
   | "ops_alert.read"
@@ -424,6 +427,11 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "scenario_release.reject",
   "scenario_release.deploy",
   "scenario_release.rollback",
+  "run.rerun",
+  "run.resume",
+  "run.prioritize",
+  "credential.manage",
+  "worker_pool.manage",
   "rbac.grant",
   "rbac.revoke",
   "network.request",

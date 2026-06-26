@@ -422,6 +422,29 @@ const activeBlockerRules = [
       "role-mapping source of truth",
     ],
   },
+  {
+    label: "Runtime-owned operator pause intent/bookmark port",
+    aliases: [
+      "runtime-owned operator pause",
+      "operator pause intent",
+      "bookmark-cancel/intent port",
+      "bookmark-cancel port",
+      "active run pause",
+      "running run",
+      "suspending",
+    ],
+  },
+  {
+    label: "Worker-to-pool membership and per-pool live capacity contract",
+    aliases: [
+      "worker-to-pool membership",
+      "per-pool live capacity",
+      "live capacity",
+      "capacity source of truth",
+      "health-isolation evidence",
+      "browser-default",
+    ],
+  },
 ];
 const activeBlockerSectionHeadings = new Set([
   "## Deploy-Time Provisioning Blockers",
@@ -433,7 +456,7 @@ const activeBlockerSectionHeadings = new Set([
 const expectedActiveBlockerSectionCounts = new Map([
   ["## Deploy-Time Provisioning Blockers", 1],
   ["## Repo-Controlled D4.5 API P1 Evidence / Open", 0],
-  ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 0],
+  ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 2],
   ["## Repo-Controlled Browser RPA V2 Product Scope / Open", 0],
   ["## Repo-Controlled Enterprise ALM/RBAC Product Scope / Open", 1],
 ]);

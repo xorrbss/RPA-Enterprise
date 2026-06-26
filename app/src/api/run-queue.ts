@@ -12,11 +12,15 @@ import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import type { RuntimeJobEnqueuePort } from "../runtime/executor-ports";
 import { runtimeJobTaskIdentifier } from "../worker/graphile-runner";
 import { poolFlagFor } from "../worker/pool-forbidden-flags";
+import { ApiResponseError } from "./errors";
+
+export type RunPriority = "low" | "medium" | "high" | "critical";
 
 export interface RunEnqueueInput {
   tenantId: string;
   runId: string;
   correlationId: string;
+  priority?: RunPriority;
 }
 
 /** sink-DLQ replay enqueue 입력(release-decisions D8-A3). 잡 페이로드는 closed: schema_ref/natural_key는
@@ -51,6 +55,23 @@ export interface RunEnqueuer {
   enqueueRunResume?(client: PoolClient, input: RunEnqueueInput): Promise<void>;
 }
 
+type WorkerPoolStatus = "active" | "draining" | "disabled";
+type WorkerPoolPriority = RunPriority;
+
+const GRAPHILE_PRIORITY_BY_POOL_PRIORITY: Record<WorkerPoolPriority, number> = {
+  low: 5,
+  medium: 0,
+  high: -5,
+  critical: -10,
+};
+
+const GRAPHILE_PRIORITY_BY_RUN_PRIORITY: Record<RunPriority, number> = {
+  low: 5,
+  medium: 0,
+  high: -5,
+  critical: -10,
+};
+
 /** 운영: graphile_worker.add_job을 호출측 트랜잭션에서 실행(상태변경+인큐 원자화). */
 export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort {
   async enqueueRuntimeJob(client: PoolClient, job: RuntimeWorkerJob, delayMs?: number): Promise<void> {
@@ -73,17 +94,47 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
    * 인큐한다. 배정 없으면 'default'(모든 미선언 워커). worker_pool_assignments 는 RLS — 호출측 tenant tx 전제
    * (run create/resume 는 모두 withTenantTx). Graphile 워커의 forbiddenFlags 가 미서비스 풀 job 을 거른다.
    */
-  private async enqueueDrivingJobWithPoolFlag(client: PoolClient, job: RuntimeWorkerJob, tenantId: string): Promise<void> {
-    const assignment = await client.query<{ pool_key: string }>(
-      `SELECT pool_key FROM worker_pool_assignments WHERE tenant_id = $1::uuid`,
+  private async enqueueDrivingJobWithPoolFlag(
+    client: PoolClient,
+    job: RuntimeWorkerJob,
+    tenantId: string,
+    runPriority?: RunPriority,
+  ): Promise<void> {
+    const assignment = await client.query<{ pool_key: string; status: WorkerPoolStatus; priority: WorkerPoolPriority }>(
+      `SELECT a.pool_key, p.status, p.priority
+         FROM worker_pool_assignments a
+         JOIN worker_pools p ON p.pool_key = a.pool_key
+        WHERE a.tenant_id = $1::uuid`,
       [tenantId],
     );
-    const poolKey = assignment.rows[0]?.pool_key ?? "default";
-    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json, flags := $3::text[])`, [
+    const row = assignment.rows[0];
+    const poolKey = row?.pool_key ?? "default";
+    const effectiveRunPriority = runPriority ?? (await this.loadRunPriority(client, tenantId, job.runId));
+    const priority =
+      (row === undefined ? GRAPHILE_PRIORITY_BY_POOL_PRIORITY.medium : GRAPHILE_PRIORITY_BY_POOL_PRIORITY[row.priority]) +
+      GRAPHILE_PRIORITY_BY_RUN_PRIORITY[effectiveRunPriority];
+    if (row !== undefined && row.status !== "active") {
+      throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", {
+        reason: "worker_pool_unavailable",
+        pool_key: row.pool_key,
+        status: row.status,
+      });
+    }
+    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json, flags := $3::text[], priority := $4::int)`, [
       runtimeJobTaskIdentifier(job),
       JSON.stringify(job),
       [poolFlagFor(poolKey)],
+      priority,
     ]);
+  }
+
+  private async loadRunPriority(client: PoolClient, tenantId: string, runId: unknown): Promise<RunPriority> {
+    if (typeof runId !== "string") return "medium";
+    const result = await client.query<{ priority: RunPriority }>(
+      `SELECT priority FROM runs WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+      [tenantId, runId],
+    );
+    return result.rows[0]?.priority ?? "medium";
   }
 
   async enqueueRunClaim(client: PoolClient, input: RunEnqueueInput): Promise<void> {
@@ -93,7 +144,7 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     };
-    await this.enqueueDrivingJobWithPoolFlag(client, job, input.tenantId);
+    await this.enqueueDrivingJobWithPoolFlag(client, job, input.tenantId, input.priority);
   }
 
   async enqueueRunAbort(client: PoolClient, input: RunEnqueueInput): Promise<void> {
@@ -138,6 +189,6 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
       runId: input.runId as RuntimeWorkerJob["runId"],
       correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
     };
-    await this.enqueueDrivingJobWithPoolFlag(client, job, input.tenantId);
+    await this.enqueueDrivingJobWithPoolFlag(client, job, input.tenantId, input.priority);
   }
 }

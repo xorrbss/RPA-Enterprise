@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
+import { useHashParam } from "../router";
 import type { PrincipalItem } from "../api/types";
 import { ActionButton } from "./ActionButton";
 import { errorLabel } from "./badges";
@@ -13,10 +14,12 @@ import { errorLabel } from "./badges";
 const KEY = ["principals"];
 
 function principalSourceLabel(source: PrincipalItem["source"]): string {
+  if (source === "scim") return "SCIM 동기화";
   return source === "manual" ? "수동 등록" : "로그인 자동 등록";
 }
 
 function principalSourceTone(source: PrincipalItem["source"]): string {
+  if (source === "scim") return "blue";
   return source === "manual" ? "amber" : "green";
 }
 
@@ -35,8 +38,15 @@ function PrincipalDirectoryPanel(): JSX.Element {
   const api = useApiClient();
   const list = useQuery({ queryKey: KEY, queryFn: () => api.listPrincipals({ limit: 200 }), refetchInterval: 15_000 });
   const [editing, setEditing] = useState<string | null>(null);
+  const focusPrincipal = useHashParam("principal");
+  const focusRef = useRef<HTMLTableRowElement | null>(null);
   const items = list.data?.items ?? [];
   const hasMore = (list.data?.next_cursor ?? null) !== null;
+
+  useEffect(() => {
+    if (focusPrincipal !== null) focusRef.current?.scrollIntoView?.({ block: "center" });
+  }, [focusPrincipal, items.length]);
+
   return (
     <section className="panel" style={{ padding: 12, marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -53,11 +63,17 @@ function PrincipalDirectoryPanel(): JSX.Element {
             <tr><th>이름</th><th>계정</th><th>이메일</th><th>등록 출처</th><th>작업</th></tr>
           </thead>
           <tbody>
-            {items.map((p) =>
-              editing === p.principal_id ? (
+            {items.map((p) => {
+              const focused = focusPrincipal === p.principal_id || focusPrincipal === p.sub;
+              return editing === p.principal_id ? (
                 <PrincipalEditRow key={p.principal_id} principal={p} onDone={() => setEditing(null)} />
               ) : (
-                <tr key={p.principal_id}>
+                <tr
+                  key={p.principal_id}
+                  ref={focused ? focusRef : undefined}
+                  aria-current={focused ? "true" : undefined}
+                  style={focused ? { outline: "2px solid var(--accent, #2563eb)", outlineOffset: -2 } : undefined}
+                >
                   <td>{p.display_name}</td>
                   <td><span title={`권한 시스템 계정 참조: ${p.sub}`}>{principalAccountLabel(p)}</span></td>
                   <td>{p.email ?? <span className="subtle">—</span>}</td>
@@ -75,8 +91,8 @@ function PrincipalDirectoryPanel(): JSX.Element {
                     </span>
                   </td>
                 </tr>
-              ),
-            )}
+              );
+            })}
           </tbody>
         </table>
       )}

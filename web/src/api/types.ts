@@ -33,9 +33,57 @@ export interface RunTrends {
   readonly points: readonly RunTrendPoint[];
 }
 
+export interface AutomationPerformanceSummary {
+  readonly total_runs: number;
+  readonly completed: number;
+  readonly failed_business: number;
+  readonly failed_system: number;
+  readonly success_rate: number | null;
+  readonly rerun_count: number;
+  readonly reprocessing_rate: number | null;
+  readonly estimated_hours_saved: number;
+  readonly estimated_value: number;
+  readonly gateway_cost: number;
+}
+
+export interface AutomationPerformanceFailureTop {
+  readonly code: string;
+  readonly count: number;
+}
+
+export interface AutomationPerformanceWorkflow {
+  readonly scenario_id: string;
+  readonly scenario_name: string;
+  readonly total_runs: number;
+  readonly completed: number;
+  readonly failed_business: number;
+  readonly failed_system: number;
+  readonly success_rate: number | null;
+  readonly rerun_count: number;
+  readonly reprocessing_rate: number | null;
+  readonly estimated_hours_saved: number;
+  readonly estimated_value: number;
+  readonly gateway_cost: number;
+}
+
+export interface AutomationPerformanceReport {
+  readonly month: string;
+  readonly timezone: "Asia/Seoul";
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly summary: AutomationPerformanceSummary;
+  readonly failure_top: readonly AutomationPerformanceFailureTop[];
+  readonly by_workflow: readonly AutomationPerformanceWorkflow[];
+}
+
+export type AutomationPerformanceReportExportFormat = "csv" | "xlsx" | "poc_markdown";
+
+export type RunPriority = "low" | "medium" | "high" | "critical";
+
 export interface RunItem {
   readonly run_id: string;
   readonly status: string;
+  readonly priority?: RunPriority;
   readonly current_node: string | null;
   readonly as_of: string | null;
   readonly updated_at?: string | null;
@@ -108,7 +156,10 @@ export interface PrincipalItem {
   readonly sub: string;
   readonly display_name: string;
   readonly email: string | null;
-  readonly source: "jwt" | "manual";
+  readonly source: "jwt" | "manual" | "scim";
+  readonly external_id: string | null;
+  readonly idp_provider: string | null;
+  readonly lifecycle_source: "local" | "jwt" | "scim";
 }
 
 export type RoleAssignmentRole = "viewer" | "operator" | "reviewer" | "approver" | "admin";
@@ -117,7 +168,10 @@ export interface RoleAssignmentItem {
   readonly assignment_id: string;
   readonly principal_sub: string;
   readonly role: RoleAssignmentRole;
-  readonly source: "manual";
+  readonly source: "manual" | "scim";
+  readonly external_id: string | null;
+  readonly idp_provider: string | null;
+  readonly lifecycle_source: "local" | "scim";
   readonly status: "active" | "revoked";
   readonly reason: string | null;
   readonly expires_at: string | null;
@@ -278,6 +332,15 @@ export interface ConcurrencyPolicy {
   readonly label?: string | null;
   readonly registered_by?: string | null;
   readonly registered_at?: string;
+  readonly status?: "active" | "deprecated" | "revoked";
+  readonly owner_sub?: string | null;
+  readonly scope?: "site";
+  readonly rotation_policy?: "manual" | "periodic_30d" | "periodic_60d" | "periodic_90d";
+  readonly rotated_at?: string | null;
+  readonly last_used_at?: string | null;
+  readonly deprecated_at?: string | null;
+  readonly revoked_at?: string | null;
+  readonly replaced_by_credential_ref?: string | null;
 }
 
 // DG-4 자격증명 *참조* 등록 요청/응답 — ⛔ 시크릿 값 필드 없음(SecretRef 경로 식별자 + 한도만). 값은 out-of-band(Vault/KMS).
@@ -286,19 +349,71 @@ export interface CredentialBindingRequest {
   readonly site_profile_id: string;
   readonly max_concurrency: number;
   readonly label?: string;
+  readonly owner_sub?: string;
+  readonly rotation_policy?: "manual" | "periodic_30d" | "periodic_60d" | "periodic_90d";
 }
 
 export interface CredentialBindingResult {
   readonly credential_ref: string;
   readonly site_profile_id: string;
   readonly max_concurrency: number;
+  readonly status?: "active" | "deprecated" | "revoked";
+  readonly owner_sub?: string | null;
+  readonly scope?: "site";
+  readonly rotation_policy?: "manual" | "periodic_30d" | "periodic_60d" | "periodic_90d";
+}
+
+export interface CredentialRotateRequest {
+  readonly credential_ref: string;
+  readonly new_credential_ref: string;
+  readonly site_profile_id: string;
+  readonly max_concurrency?: number;
+  readonly label?: string;
+  readonly rotation_policy?: "manual" | "periodic_30d" | "periodic_60d" | "periodic_90d";
+  readonly reason?: string;
+}
+
+export interface CredentialRotateResult {
+  readonly credential_ref: string;
+  readonly site_profile_id: string;
+  readonly status: "deprecated";
+  readonly replaced_by_credential_ref: string;
+  readonly replacement: CredentialBindingResult;
+}
+
+export interface CredentialDecommissionRequest {
+  readonly credential_ref: string;
+  readonly site_profile_id: string;
+  readonly reason?: string;
+}
+
+export interface CredentialDecommissionResult {
+  readonly credential_ref: string;
+  readonly site_profile_id: string;
+  readonly status: "revoked";
 }
 
 // DG-3 전용 워커 풀 — 풀 레지스트리 항목 + 호출 테넌트의 배정.
+export type WorkerPoolStatus = "active" | "draining" | "disabled";
+export type WorkerPoolPriority = "low" | "medium" | "high" | "critical";
+
 export interface WorkerPoolItem {
   readonly pool_key: string;
   readonly description: string | null;
+  readonly status: WorkerPoolStatus;
+  readonly max_concurrency: number;
+  readonly priority: WorkerPoolPriority;
   readonly created_at: string;
+  readonly updated_at: string;
+  readonly updated_by: string | null;
+}
+
+export interface WorkerPoolMutationBody {
+  readonly description?: string | null;
+  readonly status?: WorkerPoolStatus;
+  readonly max_concurrency?: number;
+  readonly priority?: WorkerPoolPriority;
+  readonly reason?: string;
 }
 
 export interface WorkerPoolList {
@@ -432,7 +547,20 @@ export interface BotPoolItem {
   };
   readonly queue: {
     readonly pending_runs: number;
+    readonly queued_runs: number;
+    readonly claimed_runs: number;
+    readonly oldest_queued_at: string | null;
     readonly due_triggers: number;
+  };
+  readonly capacity: {
+    readonly occupied_slots: number;
+    readonly available_slots: number;
+    readonly capacity_gap: number;
+    readonly queue_pressure: number | null;
+    readonly live_capacity: {
+      readonly available: boolean;
+      readonly reason_code: "worker_pool_membership_missing";
+    };
   };
   readonly health: BotPoolHealth;
   readonly health_reason: string;
@@ -889,6 +1017,7 @@ export interface ArtifactDetail {
 export interface RunDetail {
   readonly run_id: string;
   readonly status: string;
+  readonly priority?: RunPriority;
   readonly scenario_id?: string;
   readonly scenario_version_id?: string;
   readonly worker_id: string | null;
@@ -1002,6 +1131,7 @@ export interface CreateRunResult {
   readonly run_id: string;
   readonly status: string;
   readonly as_of?: string | null;
+  readonly priority?: RunPriority;
 }
 
 export interface CreateRunBody {
@@ -1011,6 +1141,40 @@ export interface CreateRunBody {
   // 다정책+기본없음 테넌트에서 어느 LLM 모델로 실행할지 명시(서버 createRun model 해소; 미지정 시 기본/단일정책 자동해소,
   // 다정책+기본없음이면 model_required 422). gateway_policies.model 값.
   readonly model?: string;
+  readonly priority?: RunPriority;
+}
+
+export interface RerunRunBody {
+  readonly mode: "same_input" | "edited_input";
+  readonly params?: Record<string, unknown>;
+  readonly reason?: string | null;
+}
+
+export interface RerunRunResult {
+  readonly rerun_id: string;
+  readonly source_run_id: string;
+  readonly run_id: string;
+  readonly status: string;
+  readonly mode: "same_input" | "edited_input";
+  readonly as_of: string;
+}
+
+export interface ResumeRunResult {
+  readonly run_id: string;
+  readonly status: "resume_requested";
+  readonly previous_status: "suspended" | "resume_requested";
+}
+
+export interface PrioritizeRunBody {
+  readonly priority: RunPriority;
+  readonly reason?: string | null;
+}
+
+export interface PrioritizeRunResult {
+  readonly run_id: string;
+  readonly status: "queued";
+  readonly previous_priority: RunPriority;
+  readonly priority: RunPriority;
 }
 
 export interface ScenarioGenerationTarget {

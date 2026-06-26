@@ -40,8 +40,8 @@ describe("담당자 배정 picker(/v1/principals datalist)", () => {
         listHumanTasks: async () => ({ items: [OPEN_TASK], next_cursor: null }),
         listPrincipals: async () => ({
           items: [
-            { principal_id: "a1000000-0000-0000-0000-000000000001", sub: "70000000-0000-0000-0000-0000000000c1", display_name: "홍길동", email: null, source: "manual" },
-            { principal_id: "a1000000-0000-0000-0000-000000000002", sub: "auth0|jane", display_name: "제인", email: "jane@ex.com", source: "jwt" },
+            { principal_id: "a1000000-0000-0000-0000-000000000001", sub: "70000000-0000-0000-0000-0000000000c1", display_name: "홍길동", email: null, source: "manual", external_id: null, idp_provider: null, lifecycle_source: "local" },
+            { principal_id: "a1000000-0000-0000-0000-000000000002", sub: "auth0|jane", display_name: "제인", email: "jane@ex.com", source: "jwt", external_id: null, idp_provider: null, lifecycle_source: "jwt" },
           ],
           next_cursor: null,
         }),

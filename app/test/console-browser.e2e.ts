@@ -84,6 +84,43 @@ function apiFixture(pathname: string): unknown {
   if (pathname === "/api/v1/gateway/call-summary") {
     return { window_days: 30, total: { calls: 0, input_tokens: null, output_tokens: null, cost: null }, by_model: [] };
   }
+  if (pathname === "/api/v1/reports/automation-performance") {
+    return {
+      month: "2026-06",
+      timezone: "Asia/Seoul",
+      period_start: "2026-05-31T15:00:00.000Z",
+      period_end: "2026-06-30T15:00:00.000Z",
+      summary: {
+        total_runs: 1,
+        completed: 1,
+        failed_business: 0,
+        failed_system: 0,
+        success_rate: 1,
+        rerun_count: 0,
+        reprocessing_rate: 0,
+        estimated_hours_saved: 1,
+        estimated_value: 40000,
+        gateway_cost: 0.25,
+      },
+      failure_top: [],
+      by_workflow: [
+        {
+          scenario_id: "00000000-0000-4000-8000-0000000000a1",
+          scenario_name: "E2E invoice lookup",
+          total_runs: 1,
+          completed: 1,
+          failed_business: 0,
+          failed_system: 0,
+          success_rate: 1,
+          rerun_count: 0,
+          reprocessing_rate: 0,
+          estimated_hours_saved: 1,
+          estimated_value: 40000,
+          gateway_cost: 0.25,
+        },
+      ],
+    };
+  }
   if (pathname === "/api/v1/runs/summary") {
     return { by_status: { running: 1 }, success_rate: null, total: 1, cache: { by_mode: { bypass: 1 }, hit_rate: null } };
   }

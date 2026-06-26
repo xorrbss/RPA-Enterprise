@@ -178,7 +178,16 @@ async function applyPrincipalCreate(
   }
   return {
     status: 201,
-    body: { principal_id: id, sub: body.sub, display_name: body.displayName, email: body.email, source: "manual" },
+    body: {
+      principal_id: id,
+      sub: body.sub,
+      display_name: body.displayName,
+      email: body.email,
+      source: "manual",
+      external_id: null,
+      idp_provider: null,
+      lifecycle_source: "local",
+    },
   };
 }
 
@@ -195,13 +204,16 @@ async function applyPrincipalUpdate(
     display_name: string;
     email: string | null;
     source: string;
+    external_id: string | null;
+    idp_provider: string | null;
+    lifecycle_source: string;
   }>(
     `UPDATE principals
         SET display_name = CASE WHEN $1::boolean THEN $2::text ELSE display_name END,
             email        = CASE WHEN $3::boolean THEN $4::text ELSE email END,
             updated_at   = now()
       WHERE id = $5::uuid AND tenant_id = $6::uuid
-      RETURNING id::text AS id, sub, display_name, email, source`,
+      RETURNING id::text AS id, sub, display_name, email, source, external_id, idp_provider, lifecycle_source`,
     [body.displayNameProvided, body.displayName, body.emailProvided, body.email, id, tenantId],
   );
   const row = updated.rows[0];
@@ -210,7 +222,16 @@ async function applyPrincipalUpdate(
   }
   return {
     status: 200,
-    body: { principal_id: row.id, sub: row.sub, display_name: row.display_name, email: row.email, source: row.source },
+    body: {
+      principal_id: row.id,
+      sub: row.sub,
+      display_name: row.display_name,
+      email: row.email,
+      source: row.source,
+      external_id: row.external_id,
+      idp_provider: row.idp_provider,
+      lifecycle_source: row.lifecycle_source,
+    },
   };
 }
 

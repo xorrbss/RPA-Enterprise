@@ -30,7 +30,7 @@
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact read/mutation RLS posture, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
 - [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output is recorded in the next row.
 - [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. Staging/deploy rollback evidence remains outside this contract repository and must be supplied by the project owner at deploy time.
-- [x] Current local blocked:audit output: 21 markers, 2 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (1 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows; 1 repo-controlled Enterprise ALM/RBAC product-scope open rows). Re-run this after the row-43 staging packet is supplied or the SCIM contract is resolved.
+- [x] Current local blocked:audit output: 24 markers, 5 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (1 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 2 repo-controlled D3 runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows; 1 repo-controlled Enterprise ALM/RBAC product-scope open rows). Re-run this after the row-43 staging packet, operator pause contract, worker-to-pool membership contract, or SCIM contract is resolved.
 
 ## Deploy-Time Provisioning Blockers
 
@@ -94,6 +94,17 @@ each row needs a contract decision, API/runtime ownership, and targeted test
 evidence before the related feature may be exposed as working product behavior.
 
 - [ ] Enterprise ALM/RBAC SCIM synchronization contract. Required decision: choose the SCIM provider boundary, inbound principal/group schema, role-mapping source of truth, and token/manual/SCIM conflict resolution rule before any `source='scim'` role assignment can be accepted.
+
+## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)
+
+These rows track runtime ownership decisions intentionally left out of the current
+operator-control and pool-capacity slice. They do not close by UI-only controls;
+each row needs a runtime contract decision, implementation owner, and targeted
+test evidence before the related behavior may be exposed as working product
+behavior.
+
+- [ ] Runtime-owned operator pause intent/bookmark port. Required decision: define the runtime-owned operator pause intent/bookmark-cancel port, ownership boundary, state transition evidence, and targeted tests before exposing active run pause.
+- [ ] Worker-to-pool membership and per-pool live capacity contract. Required decision: define worker-to-pool membership, per-pool capacity source of truth, tenant/pool scoping, and health-isolation evidence before claiming true per-pool live capacity.
 
 ## Repo-Controlled D4.4 Evidence
 

@@ -34,6 +34,56 @@ function harness(response: { status?: number; body?: unknown; headers?: Record<s
 }
 
 describe("HttpApiClient 계약", () => {
+  test("automation performance report JSON/CSV/XLSX/PoC Markdown routes", async () => {
+    const jsonHarness = harness({
+      body: {
+        month: "2026-06",
+        timezone: "Asia/Seoul",
+        period_start: "2026-05-31T15:00:00.000Z",
+        period_end: "2026-06-30T15:00:00.000Z",
+        summary: {
+          total_runs: 1,
+          completed: 1,
+          failed_business: 0,
+          failed_system: 0,
+          success_rate: 1,
+          rerun_count: 0,
+          reprocessing_rate: 0,
+          estimated_hours_saved: 1,
+          estimated_value: 50000,
+          gateway_cost: 1.25,
+        },
+        failure_top: [],
+        by_workflow: [],
+      },
+    });
+    const report = await jsonHarness.client.getAutomationPerformanceReport("2026-06");
+    expect(report.summary.total_runs).toBe(1);
+    expect(jsonHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance?month=2026-06");
+    expect(jsonHarness.calls[0]?.headers.get("accept")).toBe("application/json");
+
+    const csvHarness = harness({ body: "Summary\nmetric,value\n", headers: { "content-type": "text/csv" } });
+    const csv = await csvHarness.client.exportAutomationPerformanceReportCsv("2026-06");
+    expect(csv).toContain("Summary");
+    expect(csvHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&format=csv");
+    expect(csvHarness.calls[0]?.headers.get("accept")).toBe("text/csv");
+
+    const xlsxHarness = harness({
+      body: "PK\u0003\u0004",
+      headers: { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+    });
+    const xlsx = await xlsxHarness.client.exportAutomationPerformanceReportXlsx?.("2026-06");
+    expect(xlsx).toBeInstanceOf(Blob);
+    expect(xlsxHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&format=xlsx");
+    expect(xlsxHarness.calls[0]?.headers.get("accept")).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+    const pocHarness = harness({ body: "# Automation Performance PoC Report\n", headers: { "content-type": "text/markdown" } });
+    const poc = await pocHarness.client.exportAutomationPerformanceReportPocMarkdown?.("2026-06");
+    expect(poc).toContain("PoC Report");
+    expect(pocHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&format=poc_markdown");
+    expect(pocHarness.calls[0]?.headers.get("accept")).toBe("text/markdown");
+  });
+
   test("listRuns → GET /v1/runs?limit=50 + Bearer", async () => {
     const { calls, client } = harness({ body: { items: [], next_cursor: null } });
     await client.listRuns({ limit: 50 });
@@ -278,6 +328,15 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-abc");
     expect(calls[0]?.headers.get("content-type")).toBe("application/json");
     expect(calls[0]?.body).toEqual({});
+  });
+
+  test("resumeRun → POST .../resume + Idempotency-Key + reason body", async () => {
+    const { calls, client } = harness({ body: { run_id: "run-1", status: "resume_requested", previous_status: "suspended" } });
+    await client.resumeRun("run-1", "idem-resume", "operator repair");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/runs/run-1/resume");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-resume");
+    expect(calls[0]?.body).toEqual({ reason: "operator repair" });
   });
 
   test("promoteScenario → POST .../promote + If-Match + body{target:prod}", async () => {

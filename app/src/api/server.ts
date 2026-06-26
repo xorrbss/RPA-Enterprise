@@ -37,6 +37,7 @@ import { registerScenarioReleaseRoutes } from "./scenario-releases";
 import { registerScenarioRoutes } from "./scenarios";
 import { registerAuditLogRoutes } from "./audit-log";
 import { registerAutomationIdeaRoutes } from "./automation-ideas";
+import { registerAutomationPerformanceReportRoutes } from "./automation-performance-report";
 import { registerRoiEstimateRoutes } from "./roi-estimate";
 import { registerBrowserRecordingRoutes } from "./browser-recordings";
 import { registerConnectorCatalogRoutes } from "./connector-catalog";
@@ -59,11 +60,15 @@ import {
 } from "./server-shared";
 import { abortRun } from "./server-abort-run";
 import { createRun } from "./server-create-run";
+import { prioritizeRun } from "./server-prioritize-run";
+import { resumeRun } from "./server-resume-run";
+import { rerunRun } from "./server-rerun-run";
 
 /** RLS 스코프로 조회한 run 상세(api-surface §1 GET /v1/runs/{run_id}). */
 interface RunRow {
   id: string;
   status: string;
+  priority: string;
   scenario_id: string;
   scenario_version_id: string;
   worker_id: string | null;
@@ -184,7 +189,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     }
     const run = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const result = await client.query<RunRow>(
-        `SELECT r.id, r.status, sv.scenario_id, r.scenario_version_id, r.worker_id, r.attempts, r.as_of, r.failure_reason, r.updated_at
+        `SELECT r.id, r.status, r.priority, sv.scenario_id, r.scenario_version_id, r.worker_id, r.attempts, r.as_of, r.failure_reason, r.updated_at
            FROM runs r
            JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
           WHERE r.id = $1::uuid`,
@@ -199,6 +204,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     return {
       run_id: run.id,
       status: run.status,
+      priority: run.priority,
       scenario_id: run.scenario_id,
       scenario_version_id: run.scenario_version_id,
       worker_id: run.worker_id,
@@ -230,11 +236,39 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     },
   );
 
+  app.post<{ Params: { run_id: string } }>(
+    "/v1/runs/:run_id/rerun",
+    { config: { rbacAction: "run.rerun" } },
+    async (request, reply) => {
+      const result = await rerunRun(deps, request.params.run_id, request);
+      reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { run_id: string } }>(
+    "/v1/runs/:run_id/resume",
+    { config: { rbacAction: "run.resume" } },
+    async (request, reply) => {
+      const result = await resumeRun(deps, request.params.run_id, request);
+      reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { run_id: string } }>(
+    "/v1/runs/:run_id/priority",
+    { config: { rbacAction: "run.prioritize" } },
+    async (request, reply) => {
+      const result = await prioritizeRun(deps, request.params.run_id, request);
+      reply.code(result.status).send(result.body);
+    },
+  );
+
   registerScenarioGenerationRoutes(app, deps);
   registerScenarioReleaseRoutes(app, deps);
   registerScenarioRoutes(app, deps);
   registerAutomationIdeaRoutes(app, deps);
   registerRoiEstimateRoutes(app, deps);
+  registerAutomationPerformanceReportRoutes(app, deps);
   registerAuthReadinessRoutes(app, deps);
   registerRunTriggerRoutes(app, deps);
   registerWebhookTriggerRoutes(app, deps);

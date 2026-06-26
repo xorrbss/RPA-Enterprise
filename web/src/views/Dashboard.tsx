@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ComponentProps } from "react";
+import { useState, type ComponentProps } from "react";
 
 import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
@@ -8,7 +8,19 @@ import { QueryPanel } from "../components/QueryPanel";
 import { Sparkline, type SparklinePoint } from "../components/Sparkline";
 import { StatusBadge, errorCodeLabel, kindLabel } from "../components/badges";
 import { navigate, type ViewKey } from "../router";
-import type { DeadLetterItem, HumanTaskItem, OpsAlertItem, OpsHealth, RunItem, RunSummary, RunTrendPoint, RunTrends, SiteItem } from "../api/types";
+import type {
+  AutomationPerformanceReport,
+  AutomationPerformanceReportExportFormat,
+  DeadLetterItem,
+  HumanTaskItem,
+  OpsAlertItem,
+  OpsHealth,
+  RunItem,
+  RunSummary,
+  RunTrendPoint,
+  RunTrends,
+  SiteItem,
+} from "../api/types";
 
 // 첫-실행 안내 배너 — 권한별(RBAC) 안내문/CTA. cta 없으면 viewer 안내문만(없는 권한 동선 창작 금지).
 // 입력은 부모가 실 응답으로 판정한 '진짜 빈 테넌트' 여부 + useCan뿐(데이터 미창작).
@@ -470,10 +482,186 @@ function navigateOpsAlert(route: string | null): void {
   location.hash = trimmed.startsWith("#") ? trimmed : `#${trimmed.replace(/^\/+/, "")}`;
 }
 
+type ReportExportState = "idle" | "pending" | "success" | "error";
+type ReportExportFormat = AutomationPerformanceReportExportFormat;
+
+function currentReportMonth(): string {
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function percentLabel(value: number | null): string {
+  return value === null ? "-" : `${Math.round(value * 100)}%`;
+}
+
+function compactNumber(value: number, digits = 0): string {
+  return new Intl.NumberFormat("ko-KR", { maximumFractionDigits: digits }).format(value);
+}
+
+function moneyLabel(value: number): string {
+  return new Intl.NumberFormat("ko-KR", { style: "currency", currency: "KRW", maximumFractionDigits: 0 }).format(value);
+}
+
+function ReportMetric({ label, value, note }: { label: string; value: string; note: string }): JSX.Element {
+  return (
+    <span className="metric-card">
+      <span className="label">{label}</span>
+      <strong>{value}</strong>
+      <span className="subtle">{note}</span>
+    </span>
+  );
+}
+
+function AutomationPerformancePanel({
+  report,
+  month,
+  exportState,
+  exportFormat,
+  isLoading,
+  isError,
+  onMonthChange,
+  onRetry,
+  onExportCsv,
+  onExportXlsx,
+  onExportPocMarkdown,
+  canExportXlsx,
+  canExportPocMarkdown,
+}: {
+  report: AutomationPerformanceReport | undefined;
+  month: string;
+  exportState: ReportExportState;
+  exportFormat: ReportExportFormat | null;
+  isLoading: boolean;
+  isError: boolean;
+  onMonthChange: (month: string) => void;
+  onRetry: () => void;
+  onExportCsv: () => void;
+  onExportXlsx: () => void;
+  onExportPocMarkdown: () => void;
+  canExportXlsx: boolean;
+  canExportPocMarkdown: boolean;
+}): JSX.Element {
+  const topWorkflows = report?.by_workflow.slice(0, 5) ?? [];
+  return (
+    <section className="panel performance-report-panel" aria-label="월간 자동화 성과 리포트">
+      <div className="panel-head">
+        <div>
+          <h2>월간 자동화 성과</h2>
+          <p className="subtle">{report !== undefined ? `${report.month} · ${report.timezone}` : `${month} · Asia/Seoul`}</p>
+        </div>
+        <div className="inline-actions">
+          <label className="field month-field">
+            <span>월</span>
+            <input type="month" value={month} onChange={(event) => onMonthChange(event.target.value)} />
+          </label>
+          <button className="btn" type="button" onClick={onRetry}>새로고침</button>
+          <button className="btn" type="button" disabled={exportState === "pending" || report === undefined} onClick={onExportCsv}>
+            {exportState === "pending" && exportFormat === "csv" ? "준비 중" : "CSV"}
+          </button>
+          <button className="btn" type="button" disabled={exportState === "pending" || report === undefined || !canExportPocMarkdown} onClick={onExportPocMarkdown}>
+            {exportState === "pending" && exportFormat === "poc_markdown" ? "Preparing" : "PoC MD"}
+          </button>
+          <button className="btn" type="button" disabled={exportState === "pending" || report === undefined || !canExportXlsx} onClick={onExportXlsx}>
+            {exportState === "pending" && exportFormat === "xlsx" ? "준비 중" : "XLSX"}
+          </button>
+        </div>
+      </div>
+      {exportState === "success" && <p className="notice success" role="status">성과 리포트 {exportFormat?.toUpperCase() ?? "export"}를 준비했습니다.</p>}
+      {exportState === "error" && <p className="form-alert red" role="alert">성과 리포트 {exportFormat?.toUpperCase() ?? "export"}를 준비하지 못했습니다.</p>}
+      {isError ? (
+        <p className="empty-state">성과 리포트를 불러오지 못했습니다.</p>
+      ) : isLoading ? (
+        <p className="empty-state">성과 리포트를 동기화하는 중입니다.</p>
+      ) : report === undefined ? (
+        <p className="empty-state">성과 리포트 데이터가 없습니다.</p>
+      ) : (
+        <>
+          <div className="summary-grid performance-summary">
+            <ReportMetric label="성공률" value={percentLabel(report.summary.success_rate)} note={`${compactNumber(report.summary.completed)}건 완료`} />
+            <ReportMetric label="절감 시간" value={`${compactNumber(report.summary.estimated_hours_saved, 1)}h`} note={moneyLabel(report.summary.estimated_value)} />
+            <ReportMetric label="재처리율" value={percentLabel(report.summary.reprocessing_rate)} note={`${compactNumber(report.summary.rerun_count)}건 재실행`} />
+            <ReportMetric label="Gateway 비용" value={moneyLabel(report.summary.gateway_cost)} note={`${compactNumber(report.summary.total_runs)}건 실행`} />
+          </div>
+          <div className="performance-report-grid">
+            <div className="performance-failure-list">
+              <h3>실패 원인 Top N</h3>
+              {report.failure_top.length === 0 ? (
+                <p className="subtle">집계된 실패가 없습니다.</p>
+              ) : (
+                <ul>
+                  {report.failure_top.map((item) => (
+                    <li key={item.code}>
+                      <code>{item.code}</code>
+                      <strong>{compactNumber(item.count)}건</strong>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="table-wrap performance-workflow-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">업무</th>
+                    <th scope="col">성공률</th>
+                    <th scope="col">재처리</th>
+                    <th scope="col">절감</th>
+                    <th scope="col">비용</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topWorkflows.length === 0 ? (
+                    <tr>
+                      <td colSpan={5}>표시할 업무별 성과가 없습니다.</td>
+                    </tr>
+                  ) : (
+                    topWorkflows.map((row) => (
+                      <tr key={row.scenario_id}>
+                        <th scope="row">{row.scenario_name}</th>
+                        <td>{percentLabel(row.success_rate)}</td>
+                        <td>{percentLabel(row.reprocessing_rate)}</td>
+                        <td>{compactNumber(row.estimated_hours_saved, 1)}h · {moneyLabel(row.estimated_value)}</td>
+                        <td>{moneyLabel(row.gateway_cost)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function downloadCsv(csv: string, filename: string): void {
+  downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), filename);
+}
+
+function downloadMarkdown(markdown: string, filename: string): void {
+  downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }), filename);
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  if (typeof URL.createObjectURL !== "function") return;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function DashboardView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const roles = useRoles();
+  const [reportMonth, setReportMonth] = useState(currentReportMonth);
+  const [reportExportState, setReportExportState] = useState<ReportExportState>("idle");
+  const [reportExportFormat, setReportExportFormat] = useState<ReportExportFormat | null>(null);
   // '실행 중'은 서버 status 필터로 정확히 집계(이전: 전체 50건을 클라에서 status==='running' 필터 → 50건 초과 시 구조적 오집계).
   const running = useQuery({ queryKey: ["runs", "running"], queryFn: () => api.listRuns({ status: "running", limit: 50 }), refetchInterval: 5_000 });
   const recent = useQuery({ queryKey: ["runs"], queryFn: () => api.listRuns({ limit: 50 }), refetchInterval: 5_000 });
@@ -490,8 +678,51 @@ export function DashboardView(): JSX.Element {
   // 관찰성 집계(§E run_success_rate + status별 정확 카운트). 서버 GROUP BY 라 카드가 '50+' 근사 대신 정확 총계.
   const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
   const trends = useQuery({ queryKey: ["runs", "trends"], queryFn: () => api.getRunTrends(30), refetchInterval: 30_000 });
+  const performanceReport = useQuery({
+    queryKey: ["automation-performance-report", reportMonth],
+    queryFn: () => api.getAutomationPerformanceReport(reportMonth),
+    refetchInterval: 60_000,
+  });
   const opsHealth = useQuery({ queryKey: ["ops-health", "dashboard"], queryFn: () => api.getOpsHealth(), refetchInterval: 5_000 });
   const opsAlerts = useQuery({ queryKey: ["ops-alerts", "dashboard"], queryFn: () => api.listOpsAlerts({ limit: 3 }), refetchInterval: 5_000 });
+
+  async function exportPerformanceReportCsv(): Promise<void> {
+    setReportExportState("pending");
+    setReportExportFormat("csv");
+    try {
+      const csv = await api.exportAutomationPerformanceReportCsv(reportMonth);
+      downloadCsv(csv, `automation-performance-${reportMonth}.csv`);
+      setReportExportState("success");
+    } catch {
+      setReportExportState("error");
+    }
+  }
+
+  async function exportPerformanceReportXlsx(): Promise<void> {
+    setReportExportState("pending");
+    setReportExportFormat("xlsx");
+    try {
+      if (api.exportAutomationPerformanceReportXlsx === undefined) throw new Error("xlsx export is not available");
+      const xlsx = await api.exportAutomationPerformanceReportXlsx(reportMonth);
+      downloadBlob(xlsx, `automation-performance-${reportMonth}.xlsx`);
+      setReportExportState("success");
+    } catch {
+      setReportExportState("error");
+    }
+  }
+
+  async function exportPerformanceReportPocMarkdown(): Promise<void> {
+    setReportExportState("pending");
+    setReportExportFormat("poc_markdown");
+    try {
+      if (api.exportAutomationPerformanceReportPocMarkdown === undefined) throw new Error("PoC Markdown export is not available");
+      const markdown = await api.exportAutomationPerformanceReportPocMarkdown(reportMonth);
+      downloadMarkdown(markdown, `automation-performance-poc-${reportMonth}.md`);
+      setReportExportState("success");
+    } catch {
+      setReportExportState("error");
+    }
+  }
 
   // 첫-실행 안내 배너: '진짜 빈 테넌트'(실행 0건)일 때만. recent(무필터 listRuns)의 실 필드로만 판정.
   // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
@@ -525,6 +756,25 @@ export function DashboardView(): JSX.Element {
         trends={trends.data}
         isLoading={trends.data === undefined && trends.isFetching}
         isError={trends.isError}
+      />
+      <AutomationPerformancePanel
+        report={performanceReport.data}
+        month={reportMonth}
+        exportState={reportExportState}
+        exportFormat={reportExportFormat}
+        isLoading={performanceReport.data === undefined && performanceReport.isFetching}
+        isError={performanceReport.isError}
+        onMonthChange={(month) => {
+          setReportMonth(month);
+          setReportExportState("idle");
+          setReportExportFormat(null);
+        }}
+        onRetry={() => void performanceReport.refetch()}
+        onExportCsv={() => void exportPerformanceReportCsv()}
+        onExportXlsx={() => void exportPerformanceReportXlsx()}
+        onExportPocMarkdown={() => void exportPerformanceReportPocMarkdown()}
+        canExportXlsx={api.exportAutomationPerformanceReportXlsx !== undefined}
+        canExportPocMarkdown={api.exportAutomationPerformanceReportPocMarkdown !== undefined}
       />
       <ActionQueue
         items={collectActionItems({

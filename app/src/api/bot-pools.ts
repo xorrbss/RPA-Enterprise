@@ -25,6 +25,9 @@ interface LeaseStatsRow {
 
 interface PendingRow {
   readonly pending_runs: string;
+  readonly queued_runs: string;
+  readonly claimed_runs: string;
+  readonly oldest_queued_at: Date | null;
   readonly due_triggers: string;
 }
 
@@ -50,7 +53,20 @@ interface BotPoolItem {
   };
   readonly queue: {
     readonly pending_runs: number;
+    readonly queued_runs: number;
+    readonly claimed_runs: number;
+    readonly oldest_queued_at: string | null;
     readonly due_triggers: number;
+  };
+  readonly capacity: {
+    readonly occupied_slots: number;
+    readonly available_slots: number;
+    readonly capacity_gap: number;
+    readonly queue_pressure: number | null;
+    readonly live_capacity: {
+      readonly available: false;
+      readonly reason_code: "worker_pool_membership_missing";
+    };
   };
   readonly health: BotPoolHealth;
   readonly health_reason: string;
@@ -71,7 +87,8 @@ async function readBrowserBotPool(client: PoolClient, tenantId: string): Promise
   const leaseStats = await readLeaseStats(client, tenantId);
   const pending = await readPending(client, tenantId);
   const capacitySlots = workerStats.active;
-  const health = botPoolHealth(workerStats, leaseStats, pending, capacitySlots);
+  const capacity = botPoolCapacity(pending, leaseStats, capacitySlots);
+  const health = botPoolHealth(workerStats, leaseStats, pending, capacity);
   return {
     bot_pool_id: "browser-default",
     name: "브라우저 실행 풀",
@@ -80,8 +97,9 @@ async function readBrowserBotPool(client: PoolClient, tenantId: string): Promise
     workers: workerStats,
     leases: leaseStats,
     queue: pending,
+    capacity,
     health,
-    health_reason: botPoolHealthReason(health, workerStats, leaseStats, pending, capacitySlots),
+    health_reason: botPoolHealthReason(health, workerStats, leaseStats, pending, capacity),
   };
 }
 
@@ -146,6 +164,18 @@ async function readPending(client: PoolClient, tenantId: string): Promise<BotPoo
           WHERE tenant_id = $1::uuid
             AND status IN ('queued','claimed')) AS pending_runs,
         (SELECT count(*)::text
+           FROM runs
+          WHERE tenant_id = $1::uuid
+            AND status = 'queued') AS queued_runs,
+        (SELECT count(*)::text
+           FROM runs
+          WHERE tenant_id = $1::uuid
+            AND status = 'claimed') AS claimed_runs,
+        (SELECT min(created_at)
+           FROM runs
+          WHERE tenant_id = $1::uuid
+            AND status = 'queued') AS oldest_queued_at,
+        (SELECT count(*)::text
            FROM run_triggers
           WHERE tenant_id = $1::uuid
             AND trigger_type = 'cron'
@@ -157,7 +187,30 @@ async function readPending(client: PoolClient, tenantId: string): Promise<BotPoo
   const row = result.rows[0];
   return {
     pending_runs: Number(row?.pending_runs ?? 0),
+    queued_runs: Number(row?.queued_runs ?? 0),
+    claimed_runs: Number(row?.claimed_runs ?? 0),
+    oldest_queued_at: row?.oldest_queued_at?.toISOString() ?? null,
     due_triggers: Number(row?.due_triggers ?? 0),
+  };
+}
+
+function botPoolCapacity(
+  pending: BotPoolItem["queue"],
+  leases: BotPoolItem["leases"],
+  capacitySlots: number,
+): BotPoolItem["capacity"] {
+  const occupiedSlots = leases.active + leases.reserved;
+  const availableSlots = Math.max(capacitySlots - occupiedSlots, 0);
+  const queuedDemand = pending.queued_runs;
+  return {
+    occupied_slots: occupiedSlots,
+    available_slots: availableSlots,
+    capacity_gap: Math.max(queuedDemand - availableSlots, 0),
+    queue_pressure: capacitySlots > 0 ? queuedDemand / capacitySlots : null,
+    live_capacity: {
+      available: false,
+      reason_code: "worker_pool_membership_missing",
+    },
   };
 }
 
@@ -165,12 +218,12 @@ function botPoolHealth(
   workers: BotPoolItem["workers"],
   leases: BotPoolItem["leases"],
   pending: BotPoolItem["queue"],
-  capacitySlots: number,
+  capacity: BotPoolItem["capacity"],
 ): BotPoolHealth {
   if (leases.expired_open > 0) return "critical";
-  if (capacitySlots === 0 && (pending.pending_runs > 0 || pending.due_triggers > 0)) return "critical";
+  if (workers.active === 0 && (pending.queued_runs > 0 || pending.due_triggers > 0)) return "critical";
   if (workers.total === 0 || workers.stale > 0 || workers.open_circuit > 0) return "warning";
-  if (pending.pending_runs > capacitySlots * 5) return "warning";
+  if (capacity.capacity_gap > 0) return "warning";
   return "ok";
 }
 
@@ -179,13 +232,13 @@ function botPoolHealthReason(
   workers: BotPoolItem["workers"],
   leases: BotPoolItem["leases"],
   pending: BotPoolItem["queue"],
-  capacitySlots: number,
+  capacity: BotPoolItem["capacity"],
 ): string {
   if (leases.expired_open > 0) return `만료된 활성 브라우저 lease ${leases.expired_open}건을 회수해야 합니다.`;
-  if (capacitySlots === 0 && (pending.pending_runs > 0 || pending.due_triggers > 0)) return "대기 중인 실행이 있지만 사용 가능한 브라우저 worker가 없습니다.";
+  if (workers.active === 0 && (pending.queued_runs > 0 || pending.due_triggers > 0)) return "대기 중인 실행이 있지만 사용 가능한 브라우저 worker가 없습니다.";
   if (workers.total === 0) return "등록된 브라우저 worker가 없습니다.";
   if (workers.stale > 0) return `브라우저 worker ${workers.stale}개가 2분 이상 heartbeat를 보내지 않았습니다.`;
   if (workers.open_circuit > 0) return `브라우저 worker ${workers.open_circuit}개의 circuit 상태를 확인해야 합니다.`;
-  if (health === "warning") return "대기 실행이 현재 브라우저 용량보다 많습니다.";
+  if (health === "warning") return `대기 실행이 가용 슬롯보다 ${capacity.capacity_gap}건 많습니다.`;
   return "브라우저 실행 용량이 정상 범위입니다.";
 }

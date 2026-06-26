@@ -25,11 +25,12 @@ export function poolFlagFor(poolKey: string): string {
 export function buildPoolForbiddenFlags(pool: PgPool, servedPoolKeys: readonly string[]): () => Promise<string[]> {
   const served = new Set(servedPoolKeys.length > 0 ? servedPoolKeys : ["default"]);
   return async () => {
-    const res = await pool.query<{ pool_key: string }>(`SELECT pool_key FROM worker_pools`);
+    const res = await pool.query<{ pool_key: string; status: string }>(`SELECT pool_key, status FROM worker_pools`);
     const all = new Set<string>(["default", ...res.rows.map((row) => row.pool_key)]);
+    const inactive = new Set(res.rows.filter((row) => row.status !== "active").map((row) => row.pool_key));
     const forbidden: string[] = [];
     for (const key of all) {
-      if (!served.has(key)) forbidden.push(poolFlagFor(key));
+      if (!served.has(key) || inactive.has(key)) forbidden.push(poolFlagFor(key));
     }
     return forbidden;
   };

@@ -26,7 +26,10 @@ interface AssignmentRow {
   id: string;
   principal_sub: string;
   role: Role;
-  source: "manual";
+  source: "manual" | "scim";
+  external_id: string | null;
+  idp_provider: string | null;
+  lifecycle_source: "local" | "scim";
   status: "active" | "revoked";
   reason: string | null;
   expires_at: Date | null;
@@ -174,7 +177,8 @@ export function registerRoleAssignmentRoutes(app: FastifyInstance, deps: ApiServ
 }
 
 function assignmentSelectSql(): string {
-  return `SELECT id::text AS id, principal_sub, role, source, status, reason, expires_at,
+  return `SELECT id::text AS id, principal_sub, role, source, external_id, idp_provider, lifecycle_source,
+                 status, reason, expires_at,
                  granted_by, granted_at, revoked_by, revoked_at, revoke_reason,
                  created_at, updated_at, created_at::text AS cursor_at
             FROM principal_role_assignments`;
@@ -232,6 +236,7 @@ async function applyGrant(
     principal_sub: targetSub,
     role: body.role,
     source: "manual",
+    lifecycle_source: "local",
   });
   const row = await loadAssignment(client, tenantId, id);
   return { status: 201, body: mapAssignment(row) };
@@ -250,6 +255,9 @@ async function applyRevoke(
   const current = await loadAssignment(client, tenantId, assignmentId);
   if (current.status !== "active") {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "role_assignment_not_active" });
+  }
+  if (current.source !== "manual") {
+    throw new ApiResponseError("AUTHZ_FORBIDDEN", { reason: "externally_managed_role_assignment" });
   }
   if (actor.subjectId === current.principal_sub && roleAllowsRbacGrant(current.role)) {
     const other = await client.query<{ n: number }>(
@@ -283,7 +291,8 @@ async function applyRevoke(
     assignment_id: assignmentId,
     principal_sub: current.principal_sub,
     role: current.role,
-    source: "manual",
+    source: current.source,
+    lifecycle_source: current.lifecycle_source,
   });
   const row = await loadAssignment(client, tenantId, assignmentId);
   return { status: 200, body: mapAssignment(row) };
@@ -372,6 +381,9 @@ function mapAssignment(row: AssignmentRow): Record<string, unknown> {
     principal_sub: row.principal_sub,
     role: row.role,
     source: row.source,
+    external_id: row.external_id,
+    idp_provider: row.idp_provider,
+    lifecycle_source: row.lifecycle_source,
     status: row.status,
     reason: row.reason,
     expires_at: row.expires_at?.toISOString() ?? null,

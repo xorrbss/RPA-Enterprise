@@ -51,8 +51,9 @@ export class WorkerRunSupport {
       return { kind: "failed", result: { kind: "failed", code: "RUN_NOT_FOUND" } };
     }
     if (row.status !== expectedStatus) {
-      if (expectedStatus === "queued" && row.status === "cancelled") {
-        // A queued/claimed run can be cancelled by the API before its stale run_claim job is consumed.
+      if (expectedStatus === "queued") {
+        // A queued run may be cancelled or reprioritized after the original run_claim job was enqueued.
+        // A later/higher-priority duplicate can legitimately claim it first; stale queued-claim jobs then no-op.
         return { kind: "failed", result: { kind: "completed", emittedEvents: [] } };
       }
       return { kind: "failed", result: { kind: "failed", code: "CONTROL_PLANE_INTERNAL_ERROR" } };

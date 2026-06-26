@@ -21,8 +21,31 @@ CREATE TABLE credential_concurrency_policies (
   label            text,                                 -- DG-4 메타: 운영자 표시명(선택). 값 아님.
   registered_by    text,                                 -- DG-4 메타: 마지막 등록/갱신 처리자(principal subject)
   registered_at    timestamptz NOT NULL DEFAULT now(),   -- DG-4 메타: 마지막 등록/갱신 시각
+  status           text        NOT NULL DEFAULT 'active' CHECK (status IN ('active','deprecated','revoked')),
+  owner_sub        text,
+  scope            text        NOT NULL DEFAULT 'site' CHECK (scope IN ('site')),
+  rotation_policy  text        NOT NULL DEFAULT 'manual' CHECK (rotation_policy IN ('manual','periodic_30d','periodic_60d','periodic_90d')),
+  rotated_at       timestamptz,
+  last_used_at     timestamptz,
+  deprecated_at    timestamptz,
+  revoked_at       timestamptz,
+  replaced_by_credential_ref text,
   PRIMARY KEY (tenant_id, credential_ref, site_profile_id)
 );
+
+CREATE TABLE credential_binding_events (
+  id                         uuid        PRIMARY KEY,
+  tenant_id                  uuid        NOT NULL,
+  credential_ref             text        NOT NULL,
+  site_profile_id            uuid        NOT NULL,
+  event_type                 text        NOT NULL CHECK (event_type IN ('registered','updated','rotated_from','rotated_to','decommissioned')),
+  actor_sub                  text        NOT NULL,
+  reason                     text,
+  replacement_credential_ref text,
+  created_at                 timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_credential_binding_events_ref
+  ON credential_binding_events (tenant_id, credential_ref, site_profile_id, created_at DESC);
 
 CREATE TABLE credential_leases (
   tenant_id        uuid        NOT NULL,
@@ -42,14 +65,19 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   allowed_max int;
+  policy_status text;
 BEGIN
-  SELECT max_concurrency
-    INTO allowed_max
+  SELECT max_concurrency, status
+    INTO allowed_max, policy_status
     FROM credential_concurrency_policies
    WHERE tenant_id = NEW.tenant_id
      AND credential_ref = NEW.credential_ref
      AND site_profile_id = NEW.site_profile_id;
 
+  IF policy_status IS NOT NULL AND policy_status <> 'active' THEN
+    RAISE EXCEPTION 'credential policy % is not active', policy_status
+      USING ERRCODE = '23514';
+  END IF;
   allowed_max := COALESCE(allowed_max, 1);
   IF NEW.slot_no < 0 OR NEW.slot_no >= allowed_max THEN
     RAISE EXCEPTION 'credential lease slot_no % exceeds max_concurrency %', NEW.slot_no, allowed_max
@@ -62,6 +90,27 @@ CREATE TRIGGER trg_validate_credential_lease_slot
 BEFORE INSERT OR UPDATE OF tenant_id, credential_ref, site_profile_id, slot_no
 ON credential_leases
 FOR EACH ROW EXECUTE FUNCTION validate_credential_lease_slot();
+
+CREATE OR REPLACE FUNCTION mark_credential_policy_last_used()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.status = 'active' THEN
+    UPDATE credential_concurrency_policies
+       SET last_used_at = now()
+     WHERE tenant_id = NEW.tenant_id
+       AND credential_ref = NEW.credential_ref
+       AND site_profile_id = NEW.site_profile_id
+       AND status = 'active';
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE TRIGGER trg_mark_credential_policy_last_used
+AFTER INSERT OR UPDATE OF status, locked_until
+ON credential_leases
+FOR EACH ROW EXECUTE FUNCTION mark_credential_policy_last_used();
 
 -- 획득(원자적, slot 1개를 점유):
 --   dispatcher는 credential_concurrency_policies.max_concurrency(없으면 기본 1)를 읽어

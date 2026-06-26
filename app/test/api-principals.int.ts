@@ -78,12 +78,15 @@ interface PrincipalDbRow {
   display_name: string;
   email: string | null;
   source: string;
+  external_id: string | null;
+  idp_provider: string | null;
+  lifecycle_source: string;
 }
 
 async function principalBySub(pool: Pool, tenant: string, sub: string): Promise<PrincipalDbRow | null> {
   return withTenantTx(pool, tenant, async (c) => {
     const r = await c.query<PrincipalDbRow>(
-      `SELECT sub, display_name, email, source FROM principals WHERE sub = $1::text`,
+      `SELECT sub, display_name, email, source, external_id, idp_provider, lifecycle_source FROM principals WHERE sub = $1::text`,
       [sub],
     );
     return r.rows[0] ?? null;
@@ -157,12 +160,15 @@ async function main(): Promise<void> {
       );
       const carol = allBody.items[0];
       check(
-        "item shape (principal_id/sub/display_name/email/source)",
+        "item shape (principal_id/sub/display_name/email/source/external identity)",
         typeof carol.principal_id === "string" &&
           carol.sub === "auth0|carol" &&
           carol.display_name === "캐롤" &&
           carol.email === "carol@ex.com" &&
-          carol.source === "manual",
+          carol.source === "manual" &&
+          carol.external_id === null &&
+          carol.idp_provider === null &&
+          carol.lifecycle_source === "local",
         JSON.stringify(carol),
       );
       check("null email round-trip", allBody.items[1].sub === "auth0|bob" && allBody.items[1].email === null, JSON.stringify(allBody.items[1]));
@@ -191,6 +197,26 @@ async function main(): Promise<void> {
       // operatorB(name 없음)는 upsert no-op → tenant B 수동 1건(dave)만.
       check("tenant B sees only B principals", bBody.items.length === 1 && bBody.items[0].sub === "auth0|dave", JSON.stringify(bBody.items));
 
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        await c.query(
+          `INSERT INTO principals
+             (id, tenant_id, sub, display_name, email, source, external_id, idp_provider, lifecycle_source, created_at)
+           VALUES
+             ('a1000000-0000-0000-0000-000000000091',$1::uuid,'scim|zoe','조이','zoe@ex.com','scim','00u-scim-zoe','okta','scim',$2::timestamptz)`,
+          [TENANT_A, ts(9)],
+        );
+      });
+      const scimList = await get("/v1/principals?limit=1");
+      const scimPrincipal = scimList.json().items[0];
+      check(
+        "SCIM principal external identity fields round-trip",
+        scimPrincipal.source === "scim" &&
+          scimPrincipal.external_id === "00u-scim-zoe" &&
+          scimPrincipal.idp_provider === "okta" &&
+          scimPrincipal.lifecycle_source === "scim",
+        JSON.stringify(scimPrincipal),
+      );
+
       // ===== JWT name 클레임 best-effort upsert =====
       // 3) name 클레임 보유 토큰으로 인증 요청 → principals 자동 등록(source='jwt').
       const newAssignee = await mint({ sub: "auth0|erin", tenant_id: TENANT_A, roles: ["operator"], name: "에린", email: "erin@ex.com" });
@@ -199,7 +225,7 @@ async function main(): Promise<void> {
       const erinRow = await principalBySub(pool, TENANT_A, "auth0|erin");
       check(
         "JWT name upsert → row created (source=jwt)",
-        erinRow !== null && erinRow.display_name === "에린" && erinRow.email === "erin@ex.com" && erinRow.source === "jwt",
+        erinRow !== null && erinRow.display_name === "에린" && erinRow.email === "erin@ex.com" && erinRow.source === "jwt" && erinRow.lifecycle_source === "jwt",
         JSON.stringify(erinRow),
       );
 
@@ -242,7 +268,16 @@ async function main(): Promise<void> {
       // ===== admin CRUD (POST/PATCH/DELETE — principal.manage) =====
       // 9) create(admin): 미로그인 담당자 수동 등록 → 201 source='manual'.
       const c1 = await send("POST", "/v1/principals", "p-create-1", admin, { sub: "auth0|frodo", display_name: "프로도", email: "frodo@ex.com" });
-      check("create → 201", c1.statusCode === 201 && c1.json().source === "manual" && c1.json().sub === "auth0|frodo", c1.body);
+      check(
+        "create → 201 local lifecycle",
+        c1.statusCode === 201 &&
+          c1.json().source === "manual" &&
+          c1.json().sub === "auth0|frodo" &&
+          c1.json().external_id === null &&
+          c1.json().idp_provider === null &&
+          c1.json().lifecycle_source === "local",
+        c1.body,
+      );
       const frodo = await principalBySub(pool, TENANT_A, "auth0|frodo");
       check("create → DB row manual", frodo?.display_name === "프로도" && frodo?.email === "frodo@ex.com" && frodo?.source === "manual", JSON.stringify(frodo));
       const createdId = c1.json().principal_id as string;

@@ -15,7 +15,7 @@
 // 권위: 본 문서. enum/CHECK·미들웨어·JWT role 클레임이 모두 이 값을 참조.
 export type Role =
   | "viewer"     // 조회 전용
-  | "operator"   // 운영 실행/복구 (run create/abort·W10 manual_replay)
+  | "operator"   // 운영 실행/복구 (run create/abort/rerun/prioritize·W10 manual_replay)
   | "reviewer"   // Human Task 검증/예외 처리 (kind=validation|exception|captcha|mfa)
   | "approver"   // 승인 (nodePolicy.requires_approval, kind=approval, site risk=red)
   | "admin";     // 전권 (secret/connector/scenario promote 포함)
@@ -24,7 +24,7 @@ export type Role =
 | 역할 | 설명 | 도출 근거 |
 |---|---|---|
 | `viewer` | run/workitem/human_task/대시보드·트레이스·artifact 조회만. 상태 변경 불가. | 운영 콘솔 read-only audience |
-| `operator` | run `create`/`abort`(R6), DLQ `manual_replay`(W10 `operatorAuthorized`), sink DLQ replay, human_task 인박스 assign/start. 조회 포함. | api-surface run create, state-machine W10 "운영자 재처리 권한", R6, error-catalog `DEAD_LETTER`/`SINK_DELIVERY_FAILED` operatorAction |
+| `operator` | run `create`/`abort`(R6)/`rerun`/`resume`/`prioritize`, DLQ `manual_replay`(W10 `operatorAuthorized`), sink DLQ replay, human_task 인박스 assign/start. 조회 포함. | api-surface run create/rerun/resume/priority, state-machine W10 "운영자 재처리 권한", R6/R13, error-catalog `DEAD_LETTER`/`SINK_DELIVERY_FAILED` operatorAction |
 | `reviewer` | human_task `resolve`(H3, kind=validation/exception/captcha/mfa) 및 manual `escalate`(H5). operator 권한 포함(assign/start). | reserved-handlers @human_task kind, state-machine H1/H2/H3/H5 |
 | `approver` | human_task `resolve`(kind=approval), `nodePolicy.requires_approval` 승인, site risk=red 승인, 결재 인박스 건별 결재(`approval.decide`). reviewer 권한 포함. | ir.schema `requires_approval`, error-catalog `SITE_PROFILE_BLOCKED`(risk=red)·`APPROVAL_ALREADY_DECIDED`, reserved-handlers kind=approval, api-surface `POST /v1/approvals/decide` |
 | `admin` | scenario promote(prod 승격), secret 접근, connector enable, RBAC 역할 부여, network policy 편집. 전 권한 포함. | error-catalog `SECRET_ACCESS_DENIED`/`CONNECTOR_PERMISSION_DENIED`, SCENARIO_VERSION_CONFLICT(승격 경로) |
@@ -47,6 +47,9 @@ export type Role =
 | principal 디렉터리 관리(수동 등록/수정/삭제) | api-surface §3 `POST`/`PATCH`/`DELETE /v1/principals` (admin 디렉터리 CRUD) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | run `create` | api-surface `POST /v1/runs` | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run `abort` (R6 → cancelled) | error-catalog `RUN_ABORTED` 어휘체인 | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| run `rerun` | api-surface `POST /v1/runs/{run_id}/rerun` (`run.rerun`; failed run 자식 실행 생성) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| run `resume` | api-surface `POST /v1/runs/{run_id}/resume` (`run.resume`; suspended/resume_requested run 복구 재개) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| run `prioritize` | api-surface `POST /v1/runs/{run_id}/priority` (`run.prioritize`; queued run 우선순위 변경) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run trigger 조회 | api-surface `GET /v1/run-triggers`, `GET /v1/run-triggers/{id}/fires` (`trigger.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run trigger 관리(예약 생성/수정/일시정지/재개) | api-surface `POST/PATCH /v1/run-triggers`, `POST /pause|resume` (`trigger.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 운영 알림/SLA 조회 | api-surface `GET /v1/ops-alerts` (`ops_alert.read`; 계산형 알림, payload 본문 미노출) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
@@ -88,7 +91,7 @@ export type Role =
 
 거부 ErrorCode 선택 규칙(조용한 false/unknown 금지):
 - **자원 종류가 특정된 보안 게이트**는 그 자원 코드를 쓴다: artifact·secret → `SECRET_ACCESS_DENIED`(security, 403), connector → `CONNECTOR_PERMISSION_DENIED`(security, 403). `SITE_PROFILE_BLOCKED`는 **런타임 실행 차단**(미승인 red 사이트 실행 시도) 전용이며, site **승인 권한** 부족은 일반 RBAC 거부 `AUTHZ_FORBIDDEN`이다(api-surface §7과 정합).
-- **그 외 일반 역할/액션 권한 부족**(run create/abort·DLQ replay·promote·human_task resolve·역할관리 등)은 신규 `AUTHZ_FORBIDDEN`(security, 403, retryable=false)로 통일한다. 이는 SECRET/CONNECTOR/SITE 어느 자원 게이트에도 속하지 않는 RBAC 거부의 단일 코드다.
+- **그 외 일반 역할/액션 권한 부족**(run create/abort/rerun/prioritize·DLQ replay·promote·human_task resolve·역할관리 등)은 신규 `AUTHZ_FORBIDDEN`(security, 403, retryable=false)로 통일한다. 이는 SECRET/CONNECTOR/SITE 어느 자원 게이트에도 속하지 않는 RBAC 거부의 단일 코드다.
 
 비고(assignee 스코핑):
 - human_task `resolve`는 **역할 충족 AND 해당 task의 `assignee_role`/`assignee` 스코프 일치**를 함께 검사한다. 역할은 충족하나 다른 담당자에게 배정된 task를 가로채는 것을 막는다(H1에서 assignee set). 둘 다 만족해야 통과(security-contracts §8과 동일한 "복수 게이트 순차 검사" 패턴).
@@ -96,10 +99,10 @@ export type Role =
 
 비고(role assignment 스코핑):
 - v1 수동 역할 부여는 tenant-wide만 지원한다. folder/department/scenario/environment scope는 별도 계약 전까지 성공 응답을 만들지 않는다.
-- effective roles = 인증 토큰의 유효 role claim ∪ `principal_role_assignments(status='active', expires_at IS NULL OR expires_at > now())`.
+- effective roles = 인증 토큰의 유효 role claim ∪ `principal_role_assignments(status='active', expires_at IS NULL OR expires_at > now())`. 저장 계약은 수동 assignment와 향후 SCIM-managed assignment를 모두 포함한다.
 - 수동 role 부여/회수는 `rbac.grant` 권한이 필요하며, 자기 자신에게 `admin`을 부여하거나 자기 자신의 마지막 `rbac.grant` 근거를 제거하는 것은 차단한다.
-- IdP/JWT claim으로 온 role은 콘솔 API가 회수할 수 없다. 회수 가능한 것은 `source='manual'` assignment뿐이다.
-- SCIM 동기화 provider/inbound schema/conflict rule은 `docs/enterprise-alm-rbac-implementation-design.md`의 blocked decision으로 추적한다. v1 저장 source는 `manual`만 허용한다.
+- IdP/JWT claim으로 온 role은 콘솔 API가 회수할 수 없다. 회수 가능한 것은 `source='manual'` assignment뿐이며, `source='scim'` assignment는 외부 IdP 관리 항목으로 간주해 `AUTHZ_FORBIDDEN(externally_managed_role_assignment)`으로 fail-closed 한다.
+- SCIM 동기화 provider/inbound schema/conflict rule은 `docs/enterprise-alm-rbac-implementation-design.md`의 blocked decision으로 추적한다. v1 수동 API는 `manual`만 생성하지만 저장 계약은 `source='scim'`, `external_id`, `idp_provider`, `lifecycle_source`를 예약한다.
 
 ---
 

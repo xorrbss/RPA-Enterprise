@@ -13,6 +13,7 @@ import { requirePrincipal, type ApiServerDeps } from "./server";
 interface RunListRow {
   id: string;
   status: RunState;
+  priority: string;
   scenario_version_id: string;
   worker_id: string | null;
   attempts: number;
@@ -125,7 +126,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<RunListRow>(
-        `SELECT id, status, scenario_version_id, worker_id, attempts, as_of, workitem_id, failure_reason, created_at, created_at::text AS cursor_at, updated_at
+        `SELECT id, status, priority, scenario_version_id, worker_id, attempts, as_of, workitem_id, failure_reason, created_at, created_at::text AS cursor_at, updated_at
            FROM runs
           WHERE tenant_id = $1::uuid
             AND ($2::text IS NULL OR status = $2)
@@ -153,6 +154,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
         (r) => ({
           run_id: r.id,
           status: r.status,
+          priority: r.priority,
           scenario_version_id: r.scenario_version_id,
           worker_id: r.worker_id,
           attempts: r.attempts,

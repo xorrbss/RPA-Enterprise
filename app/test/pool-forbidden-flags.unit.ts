@@ -16,8 +16,12 @@ function check(label: string, cond: boolean, detail?: string): void {
 
 // worker_pools 등록 풀을 반환하는 가짜 pool(쿼리 1종만 사용).
 function fakePool(registeredPoolKeys: readonly string[]): PgPool {
+  return fakePoolRows(registeredPoolKeys.map((pool_key) => ({ pool_key, status: "active" })));
+}
+
+function fakePoolRows(rows: readonly { pool_key: string; status: string }[]): PgPool {
   return {
-    query: async () => ({ rows: registeredPoolKeys.map((pool_key) => ({ pool_key })) }),
+    query: async () => ({ rows }),
   } as unknown as PgPool;
 }
 
@@ -47,6 +51,9 @@ async function main(): Promise<void> {
   // 다중 서비스(served=['pa','default']): pb 만 forbid
   const multi = await buildPoolForbiddenFlags(fakePool(["pa", "pb"]), ["pa", "default"])();
   check("다중 서비스 pa+default → forbid pool:pb 만", multi.length === 1 && multi[0] === "pool:pb", JSON.stringify(multi));
+
+  const drained = await buildPoolForbiddenFlags(fakePoolRows([{ pool_key: "pa", status: "draining" }]), ["pa"])();
+  check("draining 풀은 served 여도 forbid pool:pa", drained.includes("pool:pa"), JSON.stringify(drained));
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} pool-forbidden-flags check(s) failed`);

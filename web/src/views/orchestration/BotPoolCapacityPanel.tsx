@@ -1,5 +1,6 @@
 import { navigate } from "../../router";
 import type { BotPoolItem } from "../../api/types";
+import { formatDateTime } from "./format";
 
 export function BotPoolCapacityPanel({
   pools,
@@ -39,6 +40,7 @@ export function BotPoolCapacityPanel({
               <span>
                 <strong>{pool.name}</strong>
                 <span className="subtle">{botPoolCapacityDetail(pool)}</span>
+                <span className="subtle">{botPoolQueueDetail(pool)}</span>
                 <span className="subtle">{pool.health_reason}</span>
               </span>
               <span className={`badge ${botPoolTone(pool.health)}`}>{botPoolHealthLabel(pool.health)}</span>
@@ -81,10 +83,18 @@ function botPoolHealthLabel(health: BotPoolItem["health"]): string {
 }
 
 function botPoolCapacityDetail(pool: BotPoolItem): string {
-  const occupied = pool.leases.active + pool.leases.reserved;
+  const occupied = pool.capacity.occupied_slots;
   const workers = `worker ${pool.workers.active}/${pool.workers.total}`;
   const leases = `사용 ${occupied}/${pool.capacity_slots}`;
-  const pending = `대기 ${pool.queue.pending_runs}건`;
+  const available = `여유 ${pool.capacity.available_slots}`;
+  const gap = pool.capacity.capacity_gap > 0 ? ` · 부족 ${pool.capacity.capacity_gap}` : "";
+  return `${workers} · ${leases} · ${available}${gap}`;
+}
+
+function botPoolQueueDetail(pool: BotPoolItem): string {
+  const pressure = pool.capacity.queue_pressure !== null ? `${pool.capacity.queue_pressure.toFixed(1)}x` : "미확인";
+  const oldest = pool.queue.oldest_queued_at !== null ? ` · 가장 오래된 대기 ${formatDateTime(pool.queue.oldest_queued_at)}` : "";
   const dueTriggers = pool.queue.due_triggers > 0 ? ` · 발화 예정 ${pool.queue.due_triggers}건` : "";
-  return `${workers} · ${leases} · ${pending}${dueTriggers}`;
+  const blocked = pool.capacity.live_capacity.available ? "" : " · 풀별 live 용량 미계약";
+  return `queued ${pool.queue.queued_runs}건 · claimed ${pool.queue.claimed_runs}건 · 압력 ${pressure}${dueTriggers}${oldest}${blocked}`;
 }

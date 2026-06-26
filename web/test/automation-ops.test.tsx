@@ -160,7 +160,14 @@ function clientWithOpsData(overrides: Partial<ApiClient> = {}): ApiClient {
           capacity_slots: 1,
           workers: { total: 2, active: 1, draining: 0, dead: 0, stale: 1, open_circuit: 0 },
           leases: { reserved: 1, active: 1, draining: 0, expired_open: 1, next_expiry_at: "2026-06-23T09:20:00.000Z" },
-          queue: { pending_runs: 3, due_triggers: 1 },
+          queue: { pending_runs: 3, queued_runs: 3, claimed_runs: 0, oldest_queued_at: "2026-06-23T08:30:00.000Z", due_triggers: 1 },
+          capacity: {
+            occupied_slots: 2,
+            available_slots: 0,
+            capacity_gap: 3,
+            queue_pressure: 3,
+            live_capacity: { available: false, reason_code: "worker_pool_membership_missing" },
+          },
           health: "critical" as const,
           health_reason: "만료된 활성 브라우저 lease 1건을 회수해야 합니다.",
         },
@@ -353,7 +360,10 @@ describe("automation ops view", () => {
 
     expect(await screen.findByRole("heading", { name: "용량" })).toBeInTheDocument();
     const poolRow = (await screen.findByText("브라우저 실행 풀")).closest("li") as HTMLLIElement;
-    expect(within(poolRow).getByText("worker 1/2 · 사용 2/1 · 대기 3건 · 발화 예정 1건")).toBeInTheDocument();
+    expect(within(poolRow).getByText("worker 1/2 · 사용 2/1 · 여유 0 · 부족 3")).toBeInTheDocument();
+    expect(poolRow).toHaveTextContent("queued 3건 · claimed 0건 · 압력 3.0x · 발화 예정 1건");
+    expect(poolRow).toHaveTextContent("가장 오래된 대기");
+    expect(poolRow).toHaveTextContent("풀별 live 용량 미계약");
     expect(within(poolRow).getByText("만료된 활성 브라우저 lease 1건을 회수해야 합니다.")).toBeInTheDocument();
     expect(within(poolRow).getByText("위험")).toBeInTheDocument();
 

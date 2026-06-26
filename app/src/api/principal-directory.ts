@@ -48,8 +48,8 @@ export class PgPrincipalDirectory implements PrincipalDirectoryWriter {
       // source='jwt'는 INSERT 경로에만. 기존 행(수동 'manual' 포함)은 source를 보존하고 표시이름/이메일만 갱신한다
       // (로그인 upsert가 admin 수동 등록을 덮어쓰지 않음). 변경 없는 경우 WHERE로 불필요 write를 건너뛴다.
       await c.query(
-        `INSERT INTO principals (id, tenant_id, sub, display_name, email, source)
-         VALUES ($1::uuid, $2::uuid, $3::text, $4::text, $5::text, 'jwt')
+        `INSERT INTO principals (id, tenant_id, sub, display_name, email, source, lifecycle_source)
+         VALUES ($1::uuid, $2::uuid, $3::text, $4::text, $5::text, 'jwt', 'jwt')
          ON CONFLICT (tenant_id, sub) DO UPDATE
            SET display_name = EXCLUDED.display_name,
                email        = EXCLUDED.email,

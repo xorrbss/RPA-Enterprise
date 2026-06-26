@@ -166,17 +166,43 @@ async function main(): Promise<void> {
     const noRole = await mint([]);
 
     const pools = await app.inject({ method: "GET", url: "/v1/bot-pools", headers: { authorization: `Bearer ${viewer}` } });
-    const body = pools.json() as { items: Array<{ health: string; capacity_slots: number; workers: { active: number; stale: number }; leases: { active: number; reserved: number; expired_open: number }; queue: { pending_runs: number; due_triggers: number } }> };
+    const body = pools.json() as {
+      items: Array<{
+        health: string;
+        capacity_slots: number;
+        workers: { active: number; stale: number };
+        leases: { active: number; reserved: number; expired_open: number };
+        queue: { pending_runs: number; queued_runs: number; claimed_runs: number; oldest_queued_at: string | null; due_triggers: number };
+        capacity: {
+          occupied_slots: number;
+          available_slots: number;
+          capacity_gap: number;
+          queue_pressure: number | null;
+          live_capacity: { available: boolean; reason_code: string };
+        };
+      }>;
+    };
     const poolItem = body.items[0];
     check("viewer bot pools -> 200", pools.statusCode === 200 && body.items.length === 1, pools.body);
     check("capacity excludes stale browser workers", poolItem?.capacity_slots === 1 && poolItem.workers.stale === 1, pools.body);
     check("tenant A lease and queue counts", poolItem?.leases.active === 1 && poolItem.leases.reserved === 1 && poolItem.queue.pending_runs === 1 && poolItem.queue.due_triggers === 1, pools.body);
+    check("tenant A queued read model includes oldest queued and capacity gap",
+      poolItem?.queue.queued_runs === 1 &&
+        poolItem.queue.claimed_runs === 0 &&
+        poolItem.queue.oldest_queued_at !== null &&
+        poolItem.capacity.occupied_slots === 2 &&
+        poolItem.capacity.available_slots === 0 &&
+        poolItem.capacity.capacity_gap === 1 &&
+        poolItem.capacity.queue_pressure === 1 &&
+        poolItem.capacity.live_capacity.available === false &&
+        poolItem.capacity.live_capacity.reason_code === "worker_pool_membership_missing",
+      pools.body);
     check("expired active lease raises critical", poolItem?.health === "critical" && poolItem.leases.expired_open === 1, pools.body);
 
     const poolsB = await app.inject({ method: "GET", url: "/v1/bot-pools", headers: { authorization: `Bearer ${viewerB}` } });
-    const bodyB = poolsB.json() as { items: Array<{ leases: { active: number; expired_open: number }; queue: { pending_runs: number; due_triggers: number } }> };
+    const bodyB = poolsB.json() as { items: Array<{ leases: { active: number; expired_open: number }; queue: { pending_runs: number; queued_runs: number; oldest_queued_at: string | null; due_triggers: number } }> };
     const poolB = bodyB.items[0];
-    check("tenant B sees tenant-scoped leases/queue", poolsB.statusCode === 200 && poolB?.leases.active === 1 && poolB.leases.expired_open === 0 && poolB.queue.pending_runs === 0 && poolB.queue.due_triggers === 0, poolsB.body);
+    check("tenant B sees tenant-scoped leases/queue", poolsB.statusCode === 200 && poolB?.leases.active === 1 && poolB.leases.expired_open === 0 && poolB.queue.pending_runs === 0 && poolB.queue.queued_runs === 0 && poolB.queue.oldest_queued_at === null && poolB.queue.due_triggers === 0, poolsB.body);
 
     const denied = await app.inject({ method: "GET", url: "/v1/bot-pools", headers: { authorization: `Bearer ${noRole}` } });
     check("no-role bot pools denied -> 403", denied.statusCode === 403 && denied.json().code === "AUTHZ_FORBIDDEN", denied.body);

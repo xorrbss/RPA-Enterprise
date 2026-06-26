@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -10,7 +10,7 @@ import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge, statusLabel, errorCodeLabel } from "../components/badges";
 import { RUN_STATES } from "./filters";
 import { mergeParams, useHashIdParam, useHashParam } from "../router";
-import type { RunItem, ScenarioGenerationResult } from "../api/types";
+import type { RunItem, RunPriority, ScenarioGenerationResult } from "../api/types";
 import { POLL_MS, TERMINAL, runDetailRefetchInterval } from "./runtrace/constants";
 import { RunDetailPanel } from "./runtrace/RunDetailPanel";
 
@@ -134,6 +134,7 @@ export function RunTraceView(): JSX.Element {
             ),
           },
           { header: "기준 시각", render: (r) => r.as_of ?? "—" },
+          { header: "우선순위", render: (r) => <RunPriorityControl run={r} /> },
           {
             header: "작업",
             render: (r) => (
@@ -157,6 +158,51 @@ export function RunTraceView(): JSX.Element {
                 >
                   상세 보기
                 </button>
+                {isFailedRunStatus(r.status) && (
+                  <>
+                    <ActionButton
+                      label="같은 입력 재실행"
+                      action="run.rerun"
+                      confirmText="선택한 실패 실행을 같은 입력으로 다시 실행할까요?"
+                      successText="재실행을 대기열에 등록했습니다."
+                      run={(key) => api.rerunRun(r.run_id, { mode: "same_input" }, key)}
+                      invalidateKeys={[["runs"]]}
+                    />
+                    <ActionButton
+                      label="수정 입력 재실행"
+                      action="run.rerun"
+                      confirmText="수정한 입력으로 실패 실행을 다시 실행할까요?"
+                      inputLabel="수정 입력(JSON object)"
+                      successText="수정 입력 재실행을 대기열에 등록했습니다."
+                      run={(key, input) =>
+                        api.rerunRun(
+                          r.run_id,
+                          {
+                            mode: "edited_input",
+                            params: parseEditedRerunParams(input),
+                            reason: "operator edited input",
+                          },
+                          key,
+                        )
+                      }
+                      invalidateKeys={[["runs"]]}
+                    />
+                  </>
+                )}
+                {isResumableRunStatus(r.status) && (
+                  <ActionButton
+                    label={r.status === "resume_requested" ? "재개 재시도" : "재개"}
+                    action="run.resume"
+                    confirmText={
+                      r.status === "resume_requested"
+                        ? "선택한 실행의 재개 작업을 다시 큐에 넣을까요?"
+                        : "선택한 중단 실행을 재개할까요? 미해결 사람 확인 작업이 있으면 서버에서 거부됩니다."
+                    }
+                    successText="실행 재개를 요청했습니다."
+                    run={(key) => api.resumeRun(r.run_id, key, "operator resume from RunTrace")}
+                    invalidateKeys={[["runs"]]}
+                  />
+                )}
                 {!TERMINAL.has(r.status) && (
                   <ActionButton
                     label="취소"
@@ -174,4 +220,73 @@ export function RunTraceView(): JSX.Element {
       />
     </div>
   );
+}
+
+function RunPriorityControl(props: { readonly run: RunItem }): JSX.Element {
+  const api = useApiClient();
+  const current = props.run.priority ?? "medium";
+  const [priority, setPriority] = useState<RunPriority>(current);
+
+  useEffect(() => {
+    setPriority(current);
+  }, [current, props.run.run_id]);
+
+  if (props.run.status !== "queued") {
+    return <span className="badge blue">{priorityLabel(current)}</span>;
+  }
+
+  return (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <select
+        aria-label="실행 우선순위"
+        value={priority}
+        onChange={(event) => setPriority(event.target.value as RunPriority)}
+      >
+        <option value="low">낮음</option>
+        <option value="medium">보통</option>
+        <option value="high">높음</option>
+        <option value="critical">긴급</option>
+      </select>
+      <ActionButton
+        label="변경"
+        action="run.prioritize"
+        confirmText={`선택한 실행의 우선순위를 ${priorityLabel(priority)}(으)로 변경할까요?`}
+        successText="실행 우선순위를 변경했습니다."
+        run={(key) =>
+          api.prioritizeRun(
+            props.run.run_id,
+            { priority, reason: "operator priority change" },
+            key,
+          )
+        }
+        invalidateKeys={[["runs"]]}
+      />
+    </span>
+  );
+}
+
+function priorityLabel(priority: RunPriority): string {
+  if (priority === "low") return "낮음";
+  if (priority === "high") return "높음";
+  if (priority === "critical") return "긴급";
+  return "보통";
+}
+
+function isFailedRunStatus(status: string): boolean {
+  return status === "failed_business" || status === "failed_system";
+}
+
+function isResumableRunStatus(status: string): boolean {
+  return status === "suspended" || status === "resume_requested";
+}
+
+function parseEditedRerunParams(input: string | undefined): Record<string, unknown> {
+  if (input === undefined || input.trim() === "") {
+    throw new Error("수정 입력 JSON을 입력하세요.");
+  }
+  const parsed = JSON.parse(input) as unknown;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("수정 입력은 JSON object여야 합니다.");
+  }
+  return parsed as Record<string, unknown>;
 }

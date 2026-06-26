@@ -21,6 +21,7 @@ import { PgGraphileRunEnqueuer } from "../src/api/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { RUNTIME_JOB_TASK } from "../src/worker/graphile-runner";
+import { ApiResponseError } from "../src/api/errors";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -65,15 +66,28 @@ function connectionString(): string {
 
 type Pool = ReturnType<typeof createPool>;
 
-async function jobFlagsForRun(pool: Pool, runId: string): Promise<Record<string, boolean> | null> {
-  const row = await pool.query<{ flags: Record<string, boolean> | null }>(
-    `SELECT j.flags
+async function jobForRun(pool: Pool, runId: string): Promise<{ flags: Record<string, boolean> | null; priority: number } | null> {
+  const row = await pool.query<{ flags: Record<string, boolean> | null; priority: number }>(
+    `SELECT j.flags, j.priority
        FROM graphile_worker._private_jobs j
        JOIN graphile_worker._private_tasks t ON t.id = j.task_id
       WHERE t.identifier = $1 AND j.payload->>'runId' = $2`,
     [RUNTIME_JOB_TASK, runId],
   );
-  return row.rows[0]?.flags ?? null;
+  return row.rows[0] ?? null;
+}
+
+async function auditCount(pool: Pool, reason: string): Promise<number> {
+  return withTenantTx(pool, TENANT_A, async (client) => {
+    const row = await client.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM audit_log
+        WHERE action = 'worker_pool.manage'
+          AND reason = $1`,
+      [reason],
+    );
+    return row.rows[0]?.n ?? 0;
+  });
 }
 
 async function main(): Promise<void> {
@@ -113,6 +127,8 @@ async function main(): Promise<void> {
       app.inject({ method: "DELETE", url: "/v1/worker-pool", headers: { authorization: `Bearer ${token}`, "idempotency-key": key } });
     const deletePool = (token: string, poolKey: string, key: string) =>
       app.inject({ method: "DELETE", url: `/v1/worker-pools/${poolKey}`, headers: { authorization: `Bearer ${token}`, "idempotency-key": key } });
+    const patchPool = (token: string, poolKey: string, key: string, body: Record<string, unknown>) =>
+      app.inject({ method: "PATCH", url: `/v1/worker-pools/${poolKey}`, headers: { authorization: `Bearer ${token}`, "idempotency-key": key }, payload: body });
     const getPools = (token: string) =>
       app.inject({ method: "GET", url: "/v1/worker-pools", headers: { authorization: `Bearer ${token}` } });
 
@@ -123,12 +139,27 @@ async function main(): Promise<void> {
       const r = await post(admin, `k-bad-${bad}`, { pool_key: bad });
       check(`pool_key '${bad}'(${label}) → 422`, r.statusCode === 422 && r.json().details?.reason === "invalid_pool_key", r.body);
     }
-    const okCreate = await post(admin, "k-pa", { pool_key: "pa", description: "민감 테넌트 전용" });
-    check("admin create pool 'pa' → 200", okCreate.statusCode === 200 && okCreate.json().pool_key === "pa", okCreate.body);
+    const okCreate = await post(admin, "k-pa", { pool_key: "pa", description: "민감 테넌트 전용", max_concurrency: 3, priority: "high" });
+    check(
+      "admin create pool 'pa' → 200 + 운영 노브",
+      okCreate.statusCode === 200 &&
+        okCreate.json().pool_key === "pa" &&
+        okCreate.json().status === "active" &&
+        okCreate.json().max_concurrency === 3 &&
+        okCreate.json().priority === "high",
+      okCreate.body,
+    );
+    check("worker_pool_upserted audit row", (await auditCount(pool, "worker_pool_upserted")) === 1);
 
     // 2) GET: 풀 목록 + 미배정
     const list1 = await getPools(admin);
-    check("GET: 'pa' 목록 + assigned null", list1.statusCode === 200 && (list1.json().items as Array<{ pool_key: string }>).some((p) => p.pool_key === "pa") && list1.json().assigned_pool_key === null, list1.body);
+    check(
+      "GET: 'pa' 목록 + assigned null + 운영 노브",
+      list1.statusCode === 200 &&
+        (list1.json().items as Array<{ pool_key: string; max_concurrency: number; priority: string }>).some((p) => p.pool_key === "pa" && p.max_concurrency === 3 && p.priority === "high") &&
+        list1.json().assigned_pool_key === null,
+      list1.body,
+    );
 
     // 2b) 운영 안전(stuck 가시화): queued run 적체를 pending 으로 노출. RLS 로 호출 테넌트 스코프.
     await withTenantTx(pool, TENANT_A, async (c) => {
@@ -156,19 +187,60 @@ async function main(): Promise<void> {
     await withTenantTx(pool, TENANT_A, async (client) => {
       await realEnqueuer.enqueueRunClaim(client, { tenantId: TENANT_A, runId: "aa000000-0000-4000-8000-000000000001", correlationId: "aa000000-0000-4000-8000-0000000000c1" });
     });
-    const defFlags = await jobFlagsForRun(pool, "aa000000-0000-4000-8000-000000000001");
-    check("미배정 enqueue → flag pool:default", defFlags !== null && defFlags["pool:default"] === true, JSON.stringify(defFlags));
+    const defJob = await jobForRun(pool, "aa000000-0000-4000-8000-000000000001");
+    check(
+      "미배정 enqueue → flag pool:default + medium priority",
+      defJob !== null && defJob.flags?.["pool:default"] === true && defJob.priority === 0,
+      JSON.stringify(defJob),
+    );
 
     // 4) 배정 후 enqueue → pool:pa flag
     const assign = await put(admin, "k-assign", { pool_key: "pa" });
     check("admin assign A→'pa' → 200", assign.statusCode === 200 && assign.json().assigned_pool_key === "pa", assign.body);
+    check("worker_pool_assigned audit row", (await auditCount(pool, "worker_pool_assigned")) === 1);
     const list2 = await getPools(admin);
     check("GET: assigned_pool_key 'pa'", list2.json().assigned_pool_key === "pa", list2.body);
     await withTenantTx(pool, TENANT_A, async (client) => {
       await realEnqueuer.enqueueRunClaim(client, { tenantId: TENANT_A, runId: "aa000000-0000-4000-8000-000000000002", correlationId: "aa000000-0000-4000-8000-0000000000c2" });
     });
-    const paFlags = await jobFlagsForRun(pool, "aa000000-0000-4000-8000-000000000002");
-    check("배정 후 enqueue → flag pool:pa", paFlags !== null && paFlags["pool:pa"] === true && paFlags["pool:default"] === undefined, JSON.stringify(paFlags));
+    const paJob = await jobForRun(pool, "aa000000-0000-4000-8000-000000000002");
+    check(
+      "배정 후 enqueue → flag pool:pa + high priority",
+      paJob !== null && paJob.flags?.["pool:pa"] === true && paJob.flags?.["pool:default"] === undefined && paJob.priority === -5,
+      JSON.stringify(paJob),
+    );
+
+    // 4b) 운영 제어: priority/concurrency/status PATCH, 감사 로그, draining pool 신규 인큐 차단.
+    const patch = await patchPool(admin, "pa", "k-pa-draining", {
+      status: "draining",
+      max_concurrency: 7,
+      priority: "critical",
+      reason: "worker maintenance",
+    });
+    check(
+      "PATCH pool control → 200 + draining/critical/max_concurrency",
+      patch.statusCode === 200 && patch.json().status === "draining" && patch.json().max_concurrency === 7 && patch.json().priority === "critical",
+      patch.body,
+    );
+    check("worker_pool_updated audit row", (await auditCount(pool, "worker_pool_updated")) === 1);
+    let blocked: unknown = null;
+    try {
+      await withTenantTx(pool, TENANT_A, async (client) => {
+        await realEnqueuer.enqueueRunClaim(client, { tenantId: TENANT_A, runId: "aa000000-0000-4000-8000-000000000003", correlationId: "aa000000-0000-4000-8000-0000000000c3" });
+      });
+    } catch (err) {
+      blocked = err;
+    }
+    check(
+      "draining pool blocks new run_claim enqueue with 409-class ApiResponseError",
+      blocked instanceof ApiResponseError &&
+        blocked.code === "WORKITEM_CHECKOUT_CONFLICT" &&
+        typeof blocked.details === "object" &&
+        blocked.details !== null &&
+        "status" in blocked.details &&
+        blocked.details.status === "draining",
+      blocked instanceof Error ? blocked.message : String(blocked),
+    );
 
     // 5) 미존재 풀 배정 → 404(FK)
     const ghost = await put(admin, "k-ghost", { pool_key: "ghost" });
@@ -179,8 +251,10 @@ async function main(): Promise<void> {
     check("배정 중 풀 삭제 → 409 pool_in_use", delBusy.statusCode === 409 && delBusy.json().code === "WORKITEM_CHECKOUT_CONFLICT", delBusy.body);
     const un = await unassign(admin, "k-unassign");
     check("배정 해제 → 200 null", un.statusCode === 200 && un.json().assigned_pool_key === null, un.body);
+    check("worker_pool_unassigned audit row", (await auditCount(pool, "worker_pool_unassigned")) === 1);
     const delOk = await deletePool(admin, "pa", "k-del-ok");
     check("해제 후 풀 삭제 → 200", delOk.statusCode === 200 && delOk.json().deleted === true, delOk.body);
+    check("worker_pool_deleted audit row", (await auditCount(pool, "worker_pool_deleted")) === 1);
     const delGhost = await deletePool(admin, "pa", "k-del-ghost");
     check("이미 삭제된 풀 삭제 → 404", delGhost.statusCode === 404, delGhost.body);
 

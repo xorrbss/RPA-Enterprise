@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, test } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -237,6 +237,103 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(await screen.findByText("긴급 운영 알림이 없습니다.")).toBeInTheDocument();
     screen.getByRole("button", { name: "알림 센터 열기" }).click();
     await waitFor(() => expect(location.hash).toBe("#automationOps"));
+  });
+
+  test("월간 자동화 성과 리포트가 ROI, 실패 Top N, CSV/XLSX export를 제공한다", async () => {
+    const csvExportMonths: string[] = [];
+    const pocExportMonths: string[] = [];
+    const xlsxExportMonths: string[] = [];
+    const createObjectURL = vi.fn(() => "blob:performance-csv");
+    const revokeObjectURL = vi.fn();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+
+    renderApp(
+      dashboardClient({
+        getAutomationPerformanceReport: async (month) => ({
+          month: month ?? "2026-06",
+          timezone: "Asia/Seoul",
+          period_start: "2026-05-31T15:00:00.000Z",
+          period_end: "2026-06-30T15:00:00.000Z",
+          summary: {
+            total_runs: 12,
+            completed: 9,
+            failed_business: 2,
+            failed_system: 1,
+            success_rate: 0.75,
+            rerun_count: 2,
+            reprocessing_rate: 0.16666666666666666,
+            estimated_hours_saved: 18.5,
+            estimated_value: 740000,
+            gateway_cost: 1234,
+          },
+          failure_top: [{ code: "SITE_SELECTOR_MISSING", count: 2 }],
+          by_workflow: [
+            {
+              scenario_id: "00000000-0000-4000-8000-0000000000a1",
+              scenario_name: "Vendor invoice lookup",
+              total_runs: 12,
+              completed: 9,
+              failed_business: 2,
+              failed_system: 1,
+              success_rate: 0.75,
+              rerun_count: 2,
+              reprocessing_rate: 0.16666666666666666,
+              estimated_hours_saved: 18.5,
+              estimated_value: 740000,
+              gateway_cost: 1234,
+            },
+          ],
+        }),
+        exportAutomationPerformanceReportCsv: async (month) => {
+          csvExportMonths.push(month ?? "");
+          return "Summary\nmetric,value\nmonth,2026-06\n";
+        },
+        exportAutomationPerformanceReportPocMarkdown: async (month) => {
+          pocExportMonths.push(month ?? "");
+          return "# Automation Performance PoC Report\n\n## Decision Guide\n";
+        },
+        exportAutomationPerformanceReportXlsx: async (month) => {
+          xlsxExportMonths.push(month ?? "");
+          return new Blob([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          });
+        },
+      }),
+    );
+
+    const panel = await screen.findByRole("region", { name: "월간 자동화 성과 리포트" });
+    fireEvent.change(within(panel).getByLabelText("월"), { target: { value: "2026-06" } });
+
+    expect(await within(panel).findByText("Vendor invoice lookup")).toBeInTheDocument();
+    expect(within(panel).getByText("SITE_SELECTOR_MISSING")).toBeInTheDocument();
+    expect(within(panel).getByText("18.5h")).toBeInTheDocument();
+    expect(within(panel).getAllByText("75%").length).toBeGreaterThan(0);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "CSV" }));
+
+    await waitFor(() => expect(csvExportMonths).toEqual(["2026-06"]));
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:performance-csv");
+    expect(await within(panel).findByText("성과 리포트 CSV를 준비했습니다.")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "PoC MD" }));
+
+    await waitFor(() => expect(pocExportMonths).toEqual(["2026-06"]));
+    expect(createObjectURL).toHaveBeenCalledTimes(2);
+    expect(click).toHaveBeenCalledTimes(2);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(2);
+    expect(await within(panel).findByText(/POC_MARKDOWN/)).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "XLSX" }));
+
+    await waitFor(() => expect(xlsxExportMonths).toEqual(["2026-06"]));
+    expect(createObjectURL).toHaveBeenCalledTimes(3);
+    expect(click).toHaveBeenCalledTimes(3);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(3);
+    expect(await within(panel).findByText("성과 리포트 XLSX를 준비했습니다.")).toBeInTheDocument();
   });
 
   // (d) 최근 추세 패널: 스냅샷 지표를 일별 시계열로 보강(GET /v1/runs/trends). 성공률·처리량 스파크라인 + 현재값.

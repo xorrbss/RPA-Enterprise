@@ -9,6 +9,14 @@ import type { PrincipalItem, RoleAssignmentItem, RoleAssignmentRole } from "../a
 
 const ROLES: readonly RoleAssignmentRole[] = ["viewer", "operator", "reviewer", "approver", "admin"];
 
+function roleAssignmentSourceLabel(source: RoleAssignmentItem["source"]): string {
+  return source === "scim" ? "SCIM 동기화" : "수동 부여";
+}
+
+function roleAssignmentSourceTone(source: RoleAssignmentItem["source"]): string {
+  return source === "scim" ? "blue" : "amber";
+}
+
 export function RoleAssignmentPanel(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
@@ -106,6 +114,7 @@ export function RoleAssignmentPanel(): JSX.Element {
         columns={[
           { header: "대상", render: (r) => <code className="subtle">{r.principal_sub}</code> },
           { header: "역할", render: (r) => ROLE_LABELS[r.role] ?? r.role },
+          { header: "출처", render: (r) => <span className={`badge ${roleAssignmentSourceTone(r.source)}`}>{roleAssignmentSourceLabel(r.source)}</span> },
           { header: "상태", render: (r) => <span className={`badge ${r.status === "active" ? "green" : "muted"}`}>{r.status === "active" ? "활성" : "회수됨"}</span> },
           { header: "부여자", render: (r) => <code className="subtle">{r.granted_by}</code> },
           { header: "부여", render: (r) => new Date(r.granted_at).toLocaleString() },
@@ -115,7 +124,8 @@ export function RoleAssignmentPanel(): JSX.Element {
               <button
                 className="btn"
                 type="button"
-                disabled={!canGrant || r.status !== "active" || revoke.isPending}
+                disabled={!canGrant || r.status !== "active" || r.source !== "manual" || revoke.isPending}
+                title={r.source !== "manual" ? "외부 IdP/SCIM 관리 역할은 콘솔에서 회수할 수 없습니다." : undefined}
                 onClick={() => revoke.mutate(r.assignment_id)}
               >
                 회수

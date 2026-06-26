@@ -172,7 +172,14 @@ CREATE TABLE worker_pools (
   pool_key    text        PRIMARY KEY
                 CHECK (pool_key ~ '^[a-z0-9][a-z0-9_-]{0,62}$' AND pool_key <> 'default'),
   description text,
-  created_at  timestamptz NOT NULL DEFAULT now()
+  status      text        NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','draining','disabled')),
+  max_concurrency int     NOT NULL DEFAULT 1 CHECK (max_concurrency >= 1),
+  priority    text        NOT NULL DEFAULT 'medium'
+                CHECK (priority IN ('low','medium','high','critical')),
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  updated_by  text
 );
 
 -- worker_pool_assignments (DG-3) — 테넌트→풀 배정(테넌트당 1풀). RLS(테넌트 스코프). 배정 풀은 레지스트리에 존재해야 함.
@@ -521,6 +528,8 @@ CREATE TABLE runs (
                         CHECK (status IN ('queued','claimed','running','suspending','suspended',
                                           'resume_requested','resuming','completing','completed',
                                           'aborting','cancelled','failed_business','failed_system')),  -- RunState 13개
+  priority            text        NOT NULL DEFAULT 'medium'
+                        CHECK (priority IN ('low','medium','high','critical')), -- 운영자 큐 우선순위. Graphile priority로 enqueue 시 반영.
   attempts            int         NOT NULL DEFAULT 0,        -- R3a 재큐 시 attempts+1 (누적 requeue 카운터)
   consecutive_init_failures int   NOT NULL DEFAULT 0,        -- R3a/R3b 분기 입력: 연속 INIT(claimed→running 셋업) 실패 횟수.
                                                              --   R3a 재큐 시 +1, R2(=running 진입=INIT 성공) 시 0 으로 reset. attempts(누적)와 분리 —
@@ -547,10 +556,28 @@ CREATE TABLE runs (
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_runs_status ON runs (tenant_id, status);
+CREATE INDEX idx_runs_queue_priority ON runs (tenant_id, priority, created_at)
+  WHERE status = 'queued';
 CREATE INDEX idx_runs_workitem ON runs (workitem_id);
 CREATE UNIQUE INDEX idx_runs_one_per_workitem ON runs (tenant_id, workitem_id)
   WHERE workitem_id IS NOT NULL;                              -- Product Open: 1 Workitem = 1 Run
 CREATE INDEX idx_runs_correlation ON runs (correlation_id);
+
+CREATE TABLE run_reruns (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  source_run_id   uuid        NOT NULL REFERENCES runs(id),
+  child_run_id    uuid        NOT NULL REFERENCES runs(id),
+  mode            text        NOT NULL CHECK (mode IN ('same_input','edited_input')),
+  params          jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  requested_by    text        NOT NULL CHECK (length(requested_by) > 0),
+  reason          text,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  CHECK (source_run_id <> child_run_id),
+  UNIQUE (tenant_id, child_run_id),
+  UNIQUE (tenant_id, source_run_id, child_run_id)
+);
+CREATE INDEX idx_run_reruns_source ON run_reruns (tenant_id, source_run_id, created_at DESC);
 
 CREATE TABLE run_trigger_fires (
   id             uuid        PRIMARY KEY,
@@ -687,6 +714,7 @@ CREATE INDEX idx_human_tasks_expiry ON human_tasks (expires_at)
 --    PrincipalId(JWT sub) ↔ display_name 매핑. sub 는 human_tasks.assignee / approval_decisions.decided_by 와
 --    동형 자유형 text(UUID 보장 없음: OIDC sub auth0|… 등). 쓰기 경로 2개:
 --    ① JWT optional `name` 클레임 자동 upsert(source='jwt') ② admin 수동 등록(source='manual').
+--    SCIM은 동기화 엔진 없이 저장 계약만 예약한다(source/lifecycle_source='scim', external_id/idp_provider).
 --    human_tasks.assignee → principals FK 없음(의도적): 디렉터리 미등록 sub 배정도 허용(자유형 정책 보존).
 -- ============================================================
 CREATE TABLE principals (
@@ -696,16 +724,23 @@ CREATE TABLE principals (
   display_name text        NOT NULL,
   email        text,                                       -- optional(OIDC email 클레임 등)
   source       text        NOT NULL DEFAULT 'manual'
-                 CHECK (source IN ('jwt','manual')),        -- 쓰기 경로: jwt(로그인 upsert)/manual(admin 등록)
+                 CHECK (source IN ('jwt','manual','scim')), -- 쓰기 경로: jwt(로그인 upsert)/manual(admin 등록)/scim(향후 IdP 동기화)
+  external_id  text,                                       -- SCIM externalId 또는 IdP immutable user id(예약 필드)
+  idp_provider text,                                       -- IdP/SCIM provider key(예: entra-id, okta)
+  lifecycle_source text    NOT NULL DEFAULT 'local'
+                 CHECK (lifecycle_source IN ('local','jwt','scim')),
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, sub)                                  -- sub = 테넌트 내 자연키(upsert ON CONFLICT 타깃)
 );
 CREATE INDEX idx_principals_tenant_name ON principals (tenant_id, display_name);  -- picker 이름 정렬/검색
+CREATE UNIQUE INDEX uq_principals_external_identity
+  ON principals (tenant_id, idp_provider, external_id)
+  WHERE idp_provider IS NOT NULL AND external_id IS NOT NULL;
 
 -- ============================================================
--- 6c. principal_role_assignments — tenant-wide manual RBAC assignment ledger
---    JWT roles remain valid; effective_roles = token roles ∪ active manual assignments.
+-- 6c. principal_role_assignments — tenant-wide RBAC assignment ledger
+--    JWT roles remain valid; effective_roles = token roles ∪ active manual/SCIM assignments.
 -- ============================================================
 
 CREATE TABLE principal_role_assignments (
@@ -713,7 +748,10 @@ CREATE TABLE principal_role_assignments (
   tenant_id      uuid        NOT NULL,
   principal_sub  text        NOT NULL CHECK (length(principal_sub) > 0),
   role           text        NOT NULL CHECK (role IN ('viewer','operator','reviewer','approver','admin')),
-  source         text        NOT NULL DEFAULT 'manual' CHECK (source IN ('manual')),
+  source         text        NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','scim')),
+  external_id    text,
+  idp_provider   text,
+  lifecycle_source text      NOT NULL DEFAULT 'local' CHECK (lifecycle_source IN ('local','scim')),
   status         text        NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
   reason         text,
   expires_at     timestamptz,
@@ -732,6 +770,9 @@ CREATE UNIQUE INDEX uq_active_principal_role_assignment
   WHERE status = 'active';
 CREATE INDEX idx_principal_role_assignments_principal
   ON principal_role_assignments (tenant_id, principal_sub, status, granted_at DESC);
+CREATE UNIQUE INDEX uq_principal_role_assignment_external_identity
+  ON principal_role_assignments (tenant_id, idp_provider, external_id)
+  WHERE idp_provider IS NOT NULL AND external_id IS NOT NULL;
 
 CREATE TABLE principal_role_assignment_events (
   id             uuid        PRIMARY KEY,
@@ -1168,6 +1209,9 @@ ALTER TABLE credential_leases
 ALTER TABLE credential_concurrency_policies
   ADD CONSTRAINT fk_credpolicy_site FOREIGN KEY (site_profile_id) REFERENCES site_profiles(id);
 
+ALTER TABLE credential_binding_events
+  ADD CONSTRAINT fk_credbinding_events_site FOREIGN KEY (site_profile_id) REFERENCES site_profiles(id);
+
 ALTER TABLE browser_leases
   ADD CONSTRAINT fk_browserlease_site FOREIGN KEY (site_profile_id) REFERENCES site_profiles(id),
   ADD CONSTRAINT fk_browserlease_identity FOREIGN KEY (browser_identity_id) REFERENCES browser_identities(id),
@@ -1201,6 +1245,7 @@ ALTER TABLE run_triggers        ADD CONSTRAINT uq_run_triggers_tenant_id_id UNIQ
 ALTER TABLE run_trigger_fires   ADD CONSTRAINT uq_run_trigger_fires_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE workitems           ADD CONSTRAINT uq_workitems_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE runs                ADD CONSTRAINT uq_runs_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE run_reruns          ADD CONSTRAINT uq_run_reruns_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenario_generations ADD CONSTRAINT uq_scenario_generations_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE raw_items           ADD CONSTRAINT uq_raw_items_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE normalized_records  ADD CONSTRAINT uq_normalized_records_tenant_id_id UNIQUE (tenant_id, id);
@@ -1210,6 +1255,7 @@ ALTER TABLE browser_recording_sessions ADD CONSTRAINT uq_browser_recording_sessi
 ALTER TABLE browser_recording_events ADD CONSTRAINT uq_browser_recording_events_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE principal_role_assignments ADD CONSTRAINT uq_principal_role_assignments_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE principal_role_assignment_events ADD CONSTRAINT uq_principal_role_assignment_events_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE credential_binding_events ADD CONSTRAINT uq_credential_binding_events_tenant_id_id UNIQUE (tenant_id, id);
 
 ALTER TABLE site_profile_approvals
   ADD CONSTRAINT fk_site_profile_approvals_site_tenant
@@ -1268,6 +1314,12 @@ ALTER TABLE runs
   FOREIGN KEY (tenant_id, scenario_version_id) REFERENCES scenario_versions(tenant_id, id),
   ADD CONSTRAINT fk_runs_workitem_tenant
   FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id);
+
+ALTER TABLE run_reruns
+  ADD CONSTRAINT fk_run_reruns_source_run_tenant
+  FOREIGN KEY (tenant_id, source_run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_run_reruns_child_run_tenant
+  FOREIGN KEY (tenant_id, child_run_id) REFERENCES runs(tenant_id, id);
 
 ALTER TABLE run_triggers
   ADD CONSTRAINT fk_run_triggers_scenario_version_tenant
@@ -1373,6 +1425,10 @@ ALTER TABLE credential_concurrency_policies
   ADD CONSTRAINT fk_credpolicy_site_tenant
   FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
 
+ALTER TABLE credential_binding_events
+  ADD CONSTRAINT fk_credbinding_events_site_tenant
+  FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
+
 ALTER TABLE browser_leases
   ADD CONSTRAINT fk_browserlease_site_tenant
   FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id),
@@ -1413,6 +1469,7 @@ DECLARE
 BEGIN
   FOREACH tenant_table IN ARRAY ARRAY[
     'credential_concurrency_policies',
+    'credential_binding_events',
     'credential_leases',
     'browser_leases',
     'browser_sessions',
@@ -1443,6 +1500,7 @@ BEGIN
     'run_trigger_fires',
     'workitems',
     'runs',
+    'run_reruns',
     'scenario_generations',
     'run_steps',
 	    'human_tasks',

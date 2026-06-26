@@ -10,6 +10,7 @@ import {
   type BotPoolItem,
   type AuditLogItem,
   type AuditLogExportParams,
+  type AutomationPerformanceReport,
   type AuditLogListParams,
   type AuthReadiness,
   type AutomationIdeaCreateBody,
@@ -46,8 +47,13 @@ import {
   type Paginated,
   type PromoteFromRunResult,
   type PrincipalItem,
+  type PrioritizeRunBody,
+  type PrioritizeRunResult,
   type RoiEstimate,
   type RoiEstimateRequest,
+  type RerunRunBody,
+  type RerunRunResult,
+  type ResumeRunResult,
   type RunDetail,
   type RunTriggerCreateBody,
   type RunTriggerFireItem,
@@ -70,7 +76,12 @@ import {
   type ConcurrencyPolicy,
   type CredentialBindingRequest,
   type CredentialBindingResult,
+  type CredentialDecommissionRequest,
+  type CredentialDecommissionResult,
+  type CredentialRotateRequest,
+  type CredentialRotateResult,
   type WorkerPoolList,
+  type WorkerPoolMutationBody,
   type ScenarioReleaseItem,
   type ScenarioReleaseTarget,
   type RunArtifactItem,
@@ -117,6 +128,10 @@ export interface ApiClient {
   listOpsAlerts(p?: OpsAlertListParams): Promise<Paginated<OpsAlertItem>>;
   getOpsHealth(): Promise<OpsHealth>;
   listBotPools(p?: ListParams): Promise<Paginated<BotPoolItem>>;
+  getAutomationPerformanceReport(month?: string): Promise<AutomationPerformanceReport>;
+  exportAutomationPerformanceReportCsv(month?: string): Promise<string>;
+  exportAutomationPerformanceReportXlsx?(month?: string): Promise<Blob>;
+  exportAutomationPerformanceReportPocMarkdown?(month?: string): Promise<string>;
   listAutomationIdeas(p?: AutomationIdeaListParams): Promise<Paginated<AutomationIdeaItem>>;
   listAuditLog(p?: AuditLogListParams): Promise<Paginated<AuditLogItem>>;
   exportAuditLogCsv(p?: AuditLogExportParams): Promise<string>;
@@ -163,6 +178,9 @@ export interface ApiClient {
   deleteGatewayPolicy(model: string, version: number, idempotencyKey: string): Promise<unknown>;
   // 운영자 명령(POST + Idempotency-Key). 어휘체인 abort→cancelled, W10 replay.
   abortRun(runId: string, idempotencyKey: string): Promise<unknown>;
+  rerunRun(runId: string, body: RerunRunBody, idempotencyKey: string): Promise<RerunRunResult>;
+  resumeRun(runId: string, idempotencyKey: string, reason?: string | null): Promise<ResumeRunResult>;
+  prioritizeRun(runId: string, body: PrioritizeRunBody, idempotencyKey: string): Promise<PrioritizeRunResult>;
   // DLQ 재처리(W10). kind로 workitem/sink 분기(백엔드 `?kind=` — sink는 별도 OperationId 멱등 네임스페이스).
   replayDeadLetter(deadLetterId: string, idempotencyKey: string, kind: "workitem" | "sink"): Promise<unknown>;
   // DLQ 전체 일괄 재처리(현재 페이지 한도 없이 적격 전체, 캡 500; api-surface §4). 자연 멱등이라 Idempotency-Key 불요(헤더는 무해).
@@ -219,10 +237,16 @@ export interface ApiClient {
   listConcurrencyPolicies(): Promise<Paginated<ConcurrencyPolicy>>;
   // DG-4: 자격증명 *참조*(SecretRef 경로) 등록/삭제. ⛔ 시크릿 값은 보내지 않는다(경로 식별자 + 한도만). credential.manage(admin).
   registerCredentialBinding(body: CredentialBindingRequest, idempotencyKey: string): Promise<CredentialBindingResult>;
+  rotateCredentialBinding(body: CredentialRotateRequest, idempotencyKey: string): Promise<CredentialRotateResult>;
+  decommissionCredentialBinding(
+    body: CredentialDecommissionRequest,
+    idempotencyKey: string,
+  ): Promise<CredentialDecommissionResult>;
   deleteCredentialBinding(credentialRef: string, siteProfileId: string, idempotencyKey: string): Promise<unknown>;
   // DG-3 전용 워커 풀(admin worker_pool.manage): 풀 레지스트리 + 호출 테넌트 배정 관리.
   listWorkerPools(): Promise<WorkerPoolList>;
-  createWorkerPool(body: { pool_key: string; description?: string }, idempotencyKey: string): Promise<unknown>;
+  createWorkerPool(body: { pool_key: string; description?: string; max_concurrency?: number; priority?: string }, idempotencyKey: string): Promise<unknown>;
+  updateWorkerPool(poolKey: string, body: WorkerPoolMutationBody, idempotencyKey: string): Promise<unknown>;
   deleteWorkerPool(poolKey: string, idempotencyKey: string): Promise<unknown>;
   assignWorkerPool(poolKey: string, idempotencyKey: string): Promise<unknown>;
   unassignWorkerPool(idempotencyKey: string): Promise<unknown>;
@@ -379,6 +403,14 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     return parseTextOrThrow(res);
   }
 
+  async function getBlob(path: string, accept: string): Promise<Blob> {
+    const res = await doFetch(`${opts.baseUrl}${path}`, {
+      method: "GET",
+      headers: { Accept: accept, ...authHeaders() },
+    });
+    return parseBlobOrThrow(res);
+  }
+
   // Idempotency-Key 없는 변이(scenario create/update). If-Match 등은 extraHeaders로.
   async function send<T>(
     method: string,
@@ -478,6 +510,20 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listOpsAlerts: (p) => get(`/v1/ops-alerts${queryString(p)}`),
     getOpsHealth: () => get(`/v1/ops/health`),
     listBotPools: (p) => get(`/v1/bot-pools${queryString(p)}`),
+    getAutomationPerformanceReport: (month) =>
+      get(`/v1/reports/automation-performance${queryString(month !== undefined ? { month } : undefined)}`),
+    exportAutomationPerformanceReportCsv: (month) =>
+      getText(`/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), format: "csv" })}`, "text/csv"),
+    exportAutomationPerformanceReportXlsx: (month) =>
+      getBlob(
+        `/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), format: "xlsx" })}`,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ),
+    exportAutomationPerformanceReportPocMarkdown: (month) =>
+      getText(
+        `/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), format: "poc_markdown" })}`,
+        "text/markdown",
+      ),
     listAutomationIdeas: (p) => get(`/v1/automation-ideas${queryString(p)}`),
     listAuditLog: (p) => get(`/v1/audit-log${queryString(p)}`),
     exportAuditLogCsv: (p) => getText(`/v1/audit-log/export${queryString({ ...p, format: "csv" })}`, "text/csv"),
@@ -536,6 +582,9 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
         "Idempotency-Key": key,
       }),
     abortRun: (runId, idempotencyKey) => post(`/v1/runs/${runId}/abort`, idempotencyKey),
+    rerunRun: (runId, body, idempotencyKey) => post(`/v1/runs/${runId}/rerun`, idempotencyKey, body),
+    resumeRun: (runId, idempotencyKey, reason) => post(`/v1/runs/${runId}/resume`, idempotencyKey, reason !== undefined ? { reason } : {}),
+    prioritizeRun: (runId, body, idempotencyKey) => post(`/v1/runs/${runId}/priority`, idempotencyKey, body),
     replayDeadLetter: (deadLetterId, idempotencyKey, kind) => post(`/v1/dlq/${deadLetterId}/replay${queryString({ kind })}`, idempotencyKey),
     replayAllDlq: (kind, idempotencyKey) => post(`/v1/dlq/replay-all${queryString({ kind })}`, idempotencyKey),
     approveSite: (siteId, key, opts) => post(`/v1/sites/${siteId}/approve`, key, opts ?? {}),
@@ -579,12 +628,16 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listPromotionRequests: () => get(`/v1/scenarios/promotion-requests`),
     listConcurrencyPolicies: () => get(`/v1/credentials/concurrency`),
     registerCredentialBinding: (body, key) => post(`/v1/credentials`, key, body),
+    rotateCredentialBinding: (body, key) => post(`/v1/credentials/rotate`, key, body),
+    decommissionCredentialBinding: (body, key) => post(`/v1/credentials/decommission`, key, body),
     deleteCredentialBinding: (credentialRef, siteProfileId, key) =>
       send("DELETE", `/v1/credentials${queryString({ credential_ref: credentialRef, site_profile_id: siteProfileId })}`, undefined, {
         "Idempotency-Key": key,
       }),
     listWorkerPools: () => get(`/v1/worker-pools`),
     createWorkerPool: (body, key) => post(`/v1/worker-pools`, key, body),
+    updateWorkerPool: (poolKey, body, key) =>
+      send("PATCH", `/v1/worker-pools/${encodeURIComponent(poolKey)}`, body, { "Idempotency-Key": key }),
     deleteWorkerPool: (poolKey, key) =>
       send("DELETE", `/v1/worker-pools/${encodeURIComponent(poolKey)}`, undefined, { "Idempotency-Key": key }),
     assignWorkerPool: (poolKey, key) => send("PUT", `/v1/worker-pool`, { pool_key: poolKey }, { "Idempotency-Key": key }),

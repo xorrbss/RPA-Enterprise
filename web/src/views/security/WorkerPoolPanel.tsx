@@ -2,12 +2,17 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../../api/context";
+import type { WorkerPoolItem, WorkerPoolPriority, WorkerPoolStatus } from "../../api/types";
 import { ActionButton } from "../../components/ActionButton";
 import { errorLabel } from "../../components/badges";
 
-// DG-3 전용 워커 풀(admin worker_pool.manage). 풀 레지스트리 + 현재 테넌트 배정 관리. 테넌트를 전용 풀에
-// 배정하면 그 테넌트의 실행이 해당 풀을 서비스하는 워커에서만 처리된다(민감 테넌트 격리). 미배정=기본(default,
-// 모든 워커). 라우팅은 백엔드 enqueue flag + 워커 forbiddenFlags 가 수행. 게이트는 SecurityView 에서 적용.
+const PRIORITIES: readonly { value: WorkerPoolPriority; label: string }[] = [
+  { value: "low", label: "낮음" },
+  { value: "medium", label: "보통" },
+  { value: "high", label: "높음" },
+  { value: "critical", label: "긴급" },
+];
+
 export function WorkerPoolPanel(): JSX.Element | null {
   const api = useApiClient();
   const q = useQuery({
@@ -17,31 +22,27 @@ export function WorkerPoolPanel(): JSX.Element | null {
   });
   if (q.isLoading || q.data === undefined) return null;
   const { items, assigned_pool_key, pending } = q.data;
-  // 지연 힌트: 전용 풀 배정 + queued 가 5분 이상 쌓이면 워커 부재/포화 가능성을 정직하게 표기(단정 아님).
-  const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
   const oldestQueuedMs =
     pending.oldest_queued_at !== null ? Date.now() - new Date(pending.oldest_queued_at).getTime() : 0;
-  const stuckHint = assigned_pool_key !== null && pending.queued_runs > 0 && oldestQueuedMs > STUCK_THRESHOLD_MS;
+  const stuckHint = assigned_pool_key !== null && pending.queued_runs > 0 && oldestQueuedMs > 5 * 60 * 1000;
+
   return (
     <section className="panel" aria-label="전용 워커 풀" style={{ marginBottom: 12 }}>
       <div className="panel-head">
         <h2>전용 워커 풀</h2>
         <span className="badge blue">{items.length}개 풀</span>
       </div>
-      <p className="subtle">
-        테넌트를 전용 워커 풀에 배정하면 그 테넌트의 실행이 해당 풀을 맡은 워커에서만 처리됩니다(민감 테넌트 격리).
-        배정하지 않으면 모든 워커가 처리하는 기본 풀로 실행됩니다.
-      </p>
-      <p style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span className="subtle">현재 이 테넌트 배정:</span>
+
+      <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span className="subtle">현재 테넌트 배정:</span>
         {assigned_pool_key === null ? (
-          <span className="badge">기본(default) · 모든 워커</span>
+          <span className="badge">기본(default)</span>
         ) : (
           <>
             <span className="badge green">{assigned_pool_key}</span>
             <ActionButton
               label="배정 해제"
-              confirmText="이 테넌트의 풀 배정을 해제할까요? (기본 풀로 돌아갑니다)"
+              confirmText="이 테넌트의 워커 풀 배정을 해제할까요?"
               action="worker_pool.manage"
               successText="해제됨"
               invalidateKeys={[["worker-pools"]]}
@@ -50,27 +51,31 @@ export function WorkerPoolPanel(): JSX.Element | null {
           </>
         )}
       </p>
+
       {pending.queued_runs > 0 && (
         <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span className="subtle">대기 중 실행:</span>
+          <span className="subtle">대기 실행:</span>
           <span className={`badge ${stuckHint ? "amber" : ""}`}>
             {pending.queued_runs}건
-            {oldestQueuedMs > 0 ? ` · 가장 오래된 ${Math.floor(oldestQueuedMs / 60000)}분 대기` : ""}
+            {oldestQueuedMs > 0 ? ` · 가장 오래된 대기 ${Math.floor(oldestQueuedMs / 60000)}분` : ""}
           </span>
-          {stuckHint && (
-            <span className="subtle">⚠ 이 풀을 서비스하는 워커가 없거나 포화일 수 있습니다 — 워커 배치/WORKER_POOL_KEYS를 확인하세요.</span>
-          )}
+          {stuckHint && <span className="subtle">배정 풀의 worker, drain/disable 상태, WORKER_POOL_KEYS를 확인하세요.</span>}
         </p>
       )}
+
       <WorkerPoolCreateForm />
+
       {items.length === 0 ? (
-        <p className="subtle">등록된 전용 풀이 없습니다. 풀을 만들고 워커를 그 풀에 배치한 뒤 테넌트를 배정하세요.</p>
+        <p className="subtle">등록된 전용 풀이 없습니다.</p>
       ) : (
         <div className="table-wrap">
           <table className="ops-table">
             <thead>
               <tr>
-                <th scope="col">풀 키</th>
+                <th scope="col">풀</th>
+                <th scope="col">상태</th>
+                <th scope="col">동시성</th>
+                <th scope="col">Priority</th>
                 <th scope="col">설명</th>
                 <th scope="col">관리</th>
               </tr>
@@ -81,27 +86,14 @@ export function WorkerPoolPanel(): JSX.Element | null {
                   <td>
                     <code className="subtle">{p.pool_key}</code>
                     {assigned_pool_key === p.pool_key && <span className="badge green" style={{ marginLeft: 6 }}>배정됨</span>}
+                    <div className="subtle" style={{ fontSize: 11 }}>수정: {p.updated_by ?? "-"} · {dateShort(p.updated_at)}</div>
                   </td>
-                  <td>{p.description ?? <span className="subtle">—</span>}</td>
-                  <td style={{ display: "flex", gap: 6 }}>
-                    {assigned_pool_key !== p.pool_key && (
-                      <ActionButton
-                        label="이 풀에 배정"
-                        confirmText={`이 테넌트를 '${p.pool_key}' 풀에 배정할까요?`}
-                        action="worker_pool.manage"
-                        successText="배정됨"
-                        invalidateKeys={[["worker-pools"]]}
-                        run={(key) => api.assignWorkerPool(p.pool_key, key)}
-                      />
-                    )}
-                    <ActionButton
-                      label="삭제"
-                      confirmText={`'${p.pool_key}' 풀을 삭제할까요? (배정된 테넌트가 있으면 먼저 해제해야 합니다)`}
-                      action="worker_pool.manage"
-                      successText="삭제됨"
-                      invalidateKeys={[["worker-pools"]]}
-                      run={(key) => api.deleteWorkerPool(p.pool_key, key)}
-                    />
+                  <td><span className={`badge ${statusTone(p.status)}`}>{statusLabel(p.status)}</span></td>
+                  <td>{p.max_concurrency}</td>
+                  <td>{priorityLabel(p.priority)}</td>
+                  <td>{p.description ?? <span className="subtle">-</span>}</td>
+                  <td>
+                    <WorkerPoolControls key={`${p.pool_key}:${p.updated_at}`} pool={p} assigned={assigned_pool_key === p.pool_key} />
                   </td>
                 </tr>
               ))}
@@ -113,25 +105,33 @@ export function WorkerPoolPanel(): JSX.Element | null {
   );
 }
 
-// 풀 생성 폼(admin). pool_key = 소문자 영숫자+_-, 'default' 예약.
 function WorkerPoolCreateForm(): JSX.Element {
   const api = useApiClient();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [poolKey, setPoolKey] = useState("");
   const [description, setDescription] = useState("");
+  const [maxConcurrency, setMaxConcurrency] = useState(1);
+  const [priority, setPriority] = useState<WorkerPoolPriority>("medium");
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
 
   const create = useMutation({
     mutationFn: () =>
       api.createWorkerPool(
-        { pool_key: poolKey.trim(), ...(description.trim() !== "" ? { description: description.trim() } : {}) },
+        {
+          pool_key: poolKey.trim(),
+          ...(description.trim() !== "" ? { description: description.trim() } : {}),
+          max_concurrency: Math.max(1, Math.floor(maxConcurrency)),
+          priority,
+        },
         crypto.randomUUID(),
       ),
     onSuccess: () => {
       setMsg({ tone: "green", text: "생성됨" });
       setPoolKey("");
       setDescription("");
+      setMaxConcurrency(1);
+      setPriority("medium");
       void qc.invalidateQueries({ queryKey: ["worker-pools"] });
     },
     onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
@@ -143,7 +143,7 @@ function WorkerPoolCreateForm(): JSX.Element {
   return (
     <section className="panel" style={{ padding: 12, marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <strong>전용 풀 만들기</strong>
+        <strong>풀 만들기</strong>
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
           <button className="btn" type="button" onClick={() => { setMsg(null); setOpen((v) => !v); }}>
@@ -152,29 +152,153 @@ function WorkerPoolCreateForm(): JSX.Element {
         </span>
       </div>
       {open && (
-        <div style={{ display: "grid", gap: 8, marginTop: 10, maxWidth: 520 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(160px, 2fr) 110px 120px auto", gap: 8, marginTop: 10, alignItems: "end" }}>
           <label style={{ display: "grid", gap: 4 }}>
             <span className="subtle">풀 키</span>
-            <input
-              value={poolKey}
-              onChange={(e) => setPoolKey(e.target.value)}
-              placeholder="예: sensitive-finance"
-              style={{ fontFamily: "monospace" }}
-            />
-            <span className="subtle">소문자 영숫자와 -, _ 만. (default 는 기본 풀이라 사용할 수 없습니다.)</span>
+            <input value={poolKey} onChange={(e) => setPoolKey(e.target.value)} placeholder="sensitive-finance" style={{ fontFamily: "monospace" }} />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">설명 (선택)</span>
-            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="예: 재무 민감 업무 전용" />
+            <span className="subtle">설명</span>
+            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="재무 민감 업무 전용" />
           </label>
-          <div>
-            <button className="btn primary" type="button" disabled={!keyValid || create.isPending} onClick={() => create.mutate()}>
-              {create.isPending ? "생성 중…" : "생성"}
-            </button>
-            {!keyValid && <span className="subtle" style={{ marginLeft: 8 }}>소문자 영숫자/-/_ 형식의 풀 키를 입력하세요.</span>}
-          </div>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span className="subtle">동시성</span>
+            <input type="number" min={1} value={maxConcurrency} onChange={(e) => setMaxConcurrency(Number(e.target.value))} />
+          </label>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span className="subtle">Priority</span>
+            <select value={priority} onChange={(e) => setPriority(e.target.value as WorkerPoolPriority)}>
+              {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </select>
+          </label>
+          <button className="btn primary" type="button" disabled={!keyValid || create.isPending} onClick={() => create.mutate()}>
+            {create.isPending ? "생성 중…" : "생성"}
+          </button>
         </div>
       )}
     </section>
   );
+}
+
+function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }): JSX.Element {
+  const api = useApiClient();
+  const qc = useQueryClient();
+  const [description, setDescription] = useState(props.pool.description ?? "");
+  const [maxConcurrency, setMaxConcurrency] = useState(props.pool.max_concurrency);
+  const [priority, setPriority] = useState<WorkerPoolPriority>(props.pool.priority);
+  const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.updateWorkerPool(
+        props.pool.pool_key,
+        {
+          description: description.trim() !== "" ? description.trim() : null,
+          max_concurrency: Math.max(1, Math.floor(maxConcurrency)),
+          priority,
+        },
+        crypto.randomUUID(),
+      ),
+    onSuccess: () => {
+      setMsg({ tone: "green", text: "저장됨" });
+      void qc.invalidateQueries({ queryKey: ["worker-pools"] });
+    },
+    onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
+  });
+
+  return (
+    <div style={{ display: "grid", gap: 8, minWidth: 420 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) 90px 110px auto", gap: 6, alignItems: "end" }}>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span className="subtle">설명</span>
+          <input value={description} onChange={(e) => setDescription(e.target.value)} />
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span className="subtle">동시성</span>
+          <input type="number" min={1} value={maxConcurrency} onChange={(e) => setMaxConcurrency(Number(e.target.value))} />
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span className="subtle">Priority</span>
+          <select value={priority} onChange={(e) => setPriority(e.target.value as WorkerPoolPriority)}>
+            {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+          </select>
+        </label>
+        <button className="btn" type="button" disabled={save.isPending} onClick={() => save.mutate()}>
+          {save.isPending ? "저장 중…" : "저장"}
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
+        <PoolStatusButton pool={props.pool} status="active" label="활성화" disabled={props.pool.status === "active"} />
+        <PoolStatusButton pool={props.pool} status="draining" label="Drain" disabled={props.pool.status === "draining"} />
+        <PoolStatusButton pool={props.pool} status="disabled" label="비활성화" disabled={props.pool.status === "disabled"} />
+        {!props.assigned && (
+          <ActionButton
+            label="이 테넌트에 배정"
+            confirmText={`이 테넌트를 '${props.pool.pool_key}' 풀에 배정할까요?`}
+            action="worker_pool.manage"
+            successText="배정됨"
+            invalidateKeys={[["worker-pools"]]}
+            run={(key) => api.assignWorkerPool(props.pool.pool_key, key)}
+          />
+        )}
+        <ActionButton
+          label="삭제"
+          confirmText={`'${props.pool.pool_key}' 풀을 삭제할까요?`}
+          action="worker_pool.manage"
+          successText="삭제됨"
+          invalidateKeys={[["worker-pools"]]}
+          run={(key) => api.deleteWorkerPool(props.pool.pool_key, key)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PoolStatusButton(props: { pool: WorkerPoolItem; status: WorkerPoolStatus; label: string; disabled: boolean }): JSX.Element | null {
+  const api = useApiClient();
+  return (
+    <ActionButton
+      label={props.label}
+      confirmText={`'${props.pool.pool_key}' 풀 상태를 ${statusLabel(props.status)}(으)로 변경할까요?`}
+      action="worker_pool.manage"
+      inputLabel="변경 사유"
+      inputOptional
+      disabled={props.disabled}
+      successText="변경됨"
+      invalidateKeys={[["worker-pools"]]}
+      run={(key, reason) =>
+        api.updateWorkerPool(
+          props.pool.pool_key,
+          {
+            status: props.status,
+            ...(reason !== undefined && reason.trim() !== "" ? { reason: reason.trim() } : {}),
+          },
+          key,
+        )
+      }
+    />
+  );
+}
+
+function statusLabel(status: WorkerPoolStatus): string {
+  if (status === "active") return "활성";
+  if (status === "draining") return "Drain";
+  return "비활성";
+}
+
+function statusTone(status: WorkerPoolStatus): string {
+  if (status === "active") return "green";
+  if (status === "draining") return "amber";
+  return "red";
+}
+
+function priorityLabel(priority: WorkerPoolPriority): string {
+  return PRIORITIES.find((p) => p.value === priority)?.label ?? priority;
+}
+
+function dateShort(value: string | null | undefined): string {
+  if (value == null) return "-";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toISOString().slice(0, 16).replace("T", " ");
 }

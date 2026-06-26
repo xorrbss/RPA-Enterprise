@@ -40,6 +40,9 @@ interface PrincipalRow {
   display_name: string;
   email: string | null;
   source: string;
+  external_id: string | null;
+  idp_provider: string | null;
+  lifecycle_source: string;
   created_at: Date;
   cursor_at: string; // created_at::text(전정밀도) — keyset 커서(PAG-01)
 }
@@ -84,6 +87,9 @@ function mapPrincipal(r: PrincipalRow): Record<string, unknown> {
     display_name: r.display_name,
     email: r.email,
     source: r.source,
+    external_id: r.external_id,
+    idp_provider: r.idp_provider,
+    lifecycle_source: r.lifecycle_source,
   };
 }
 
@@ -138,7 +144,8 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<PrincipalRow>(
-        `SELECT id, sub, display_name, email, source, created_at, created_at::text AS cursor_at
+        `SELECT id, sub, display_name, email, source, external_id, idp_provider, lifecycle_source,
+                created_at, created_at::text AS cursor_at
            FROM principals
           WHERE tenant_id = $1::uuid
             AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))

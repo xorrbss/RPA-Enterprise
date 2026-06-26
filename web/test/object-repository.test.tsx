@@ -108,7 +108,7 @@ describe("object repository view", () => {
 
     expect(await screen.findByText("사이트별 화면 요소 저장소")).toBeInTheDocument();
     expect(await screen.findByText("업무 식별명 등록됨")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("button[type=submit]")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("button[type=submit]")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "찾기 검증" }));
     await waitFor(() => expect(probed).toMatchObject({

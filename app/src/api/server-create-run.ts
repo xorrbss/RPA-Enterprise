@@ -13,7 +13,7 @@ import { withTenantTx } from "../db/pool";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "../runtime/outbox";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
-import type { RunEnqueuer } from "./run-queue";
+import type { RunEnqueuer, RunPriority } from "./run-queue";
 import {
   apiErrorBody,
   isRecord,
@@ -50,12 +50,14 @@ export async function createRun(deps: ApiServerDeps, request: FastifyRequest): P
     params?: unknown;
     workitem_id?: unknown;
     model?: unknown;
+    priority?: unknown;
   };
   for (const key of Object.keys(body)) {
-    if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id" && key !== "model") {
+    if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id" && key !== "model" && key !== "priority") {
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unknown_field", field: key });
     }
   }
+  const priority = parseRunPriority(body.priority);
   // Gap2(B+C): optional model. 형식 검증은 예약 이전, 정책 존재/해소는 작업 tx(RLS 스코프).
   let model: string | null = null;
   if (body.model !== undefined && body.model !== null) {
@@ -113,7 +115,7 @@ export async function createRun(deps: ApiServerDeps, request: FastifyRequest): P
   // (4) reserved → 작업 수행(동일 tx).
   const recordId = reservation.recordId;
   const runId = randomUUID();
-  const response: CommandResponse = { status: 201, body: { run_id: runId, status: "queued", as_of: asOf } };
+  const response: CommandResponse = { status: 201, body: { run_id: runId, status: "queued", as_of: asOf, priority } };
   try {
     await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       // run 생성 핵심(scenario_version 확인·model 해소·workitem 확인·INSERT·run.created outbox·run_claim enqueue)은
@@ -127,6 +129,7 @@ export async function createRun(deps: ApiServerDeps, request: FastifyRequest): P
         correlationId: request.correlationId,
         workitemId,
         model,
+        priority,
       });
       // 멱등 성공 기록을 동일 tx에 원자화(작업 커밋 == 'succeeded' 커밋). 별도 tx 불일치 창 제거.
       await completeIdempotencyInTx(c, recordId, response);
@@ -156,6 +159,7 @@ export interface CreateRunInTxInput {
   readonly workitemId?: string | null;
   /** 명시 model(미지정/null → default·단일정책 자동해소; 0건 → null). */
   readonly model?: string | null;
+  readonly priority?: RunPriority;
   /** 미지정 시 생성(POST /v1/runs 는 응답에 미리 쓴 runId 를 주입). */
   readonly runId?: string;
 }
@@ -173,6 +177,7 @@ export async function createRunInTx(
 ): Promise<string> {
   const runId = input.runId ?? randomUUID();
   const workitemId = input.workitemId ?? null;
+  const priority = input.priority ?? "medium";
   // correlation_id 저장 coerce — runs.correlation_id/event envelope 는 uuid(format:uuid). 비-UUID 요청 헤더(에러 echo 엔
   //   그대로 실리되 추적용)는 저장 시점에 서버 UUID 로 대체해 ::uuid 캐스트 22P02→미분류 500 을 막는다(review 후속).
   const correlationId = UUID_RE.test(input.correlationId) ? input.correlationId : randomUUID();
@@ -236,9 +241,9 @@ export async function createRunInTx(
     }
   }
   await client.query(
-    `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, params, as_of, correlation_id, model)
-     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5::jsonb, $6::timestamptz, $7::uuid, $8)`,
-    [runId, input.tenantId, input.scenarioVersionId, workitemId, JSON.stringify(input.params), input.asOf, correlationId, resolvedModel],
+    `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, priority, params, as_of, correlation_id, model)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5, $6::jsonb, $7::timestamptz, $8::uuid, $9)`,
+    [runId, input.tenantId, input.scenarioVersionId, workitemId, priority, JSON.stringify(input.params), input.asOf, correlationId, resolvedModel],
   );
   await emitOutboxEvent(client, {
     tenantId: input.tenantId,
@@ -248,8 +253,14 @@ export async function createRunInTx(
     idempotencyKey: `${runId}:run.created`,
     retentionPolicy: EVENTS_OUTBOX_RETENTION_POLICY,
   });
-  await enqueuer.enqueueRunClaim(client, { tenantId: input.tenantId, runId, correlationId });
+  await enqueuer.enqueueRunClaim(client, { tenantId: input.tenantId, runId, correlationId, priority });
   return runId;
+}
+
+function parseRunPriority(raw: unknown): RunPriority {
+  if (raw === undefined || raw === null) return "medium";
+  if (raw === "low" || raw === "medium" || raw === "high" || raw === "critical") return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_run_priority" });
 }
 
 function classifyRunCreateFailure(error: unknown): ApiResponseError | undefined {
