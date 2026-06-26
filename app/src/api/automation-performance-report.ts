@@ -36,9 +36,19 @@ interface WorkflowReportRow {
   failed_business: number;
   failed_system: number;
   rerun_count: number;
+  rerun_cost: string;
   estimated_hours_saved: string;
   estimated_value: string;
+  implementation_effort: string;
+  roi_idea_count: number;
+  confidence_low: number;
+  confidence_medium: number;
+  confidence_high: number;
   gateway_cost: string;
+  completed_cost: string;
+  failed_business_cost: string;
+  failed_system_cost: string;
+  other_cost: string;
 }
 
 interface FailureTopRow {
@@ -53,7 +63,42 @@ interface TrendReportRow {
   failed_business: number;
   failed_system: number;
   rerun_count: number;
+  rerun_cost: string;
   gateway_cost: string;
+  completed_cost: string;
+  failed_business_cost: string;
+  failed_system_cost: string;
+  other_cost: string;
+}
+
+interface CostByModelRow {
+  model: string;
+  calls: number;
+  input_tokens: string | null;
+  output_tokens: string | null;
+  cost: string | null;
+}
+
+interface CostByStatus {
+  readonly completed: number;
+  readonly failed_business: number;
+  readonly failed_system: number;
+  readonly other: number;
+}
+
+interface RoiConfidenceBreakdown {
+  readonly low: number;
+  readonly medium: number;
+  readonly high: number;
+}
+
+interface CostByModelItem {
+  readonly model: string;
+  readonly calls: number;
+  readonly input_tokens: number | null;
+  readonly output_tokens: number | null;
+  readonly cost: number | null;
+  readonly cost_share: number | null;
 }
 
 interface TrendReportItem {
@@ -66,6 +111,11 @@ interface TrendReportItem {
   readonly rerun_count: number;
   readonly reprocessing_rate: number | null;
   readonly gateway_cost: number;
+  readonly cost_by_status: CostByStatus;
+  readonly rerun_cost: number;
+  readonly avg_cost_per_run: number | null;
+  readonly cost_per_completed_run: number | null;
+  readonly cost_delta_from_previous_day: number | null;
 }
 
 interface WorkflowReportItem {
@@ -80,7 +130,17 @@ interface WorkflowReportItem {
   readonly reprocessing_rate: number | null;
   readonly estimated_hours_saved: number;
   readonly estimated_value: number;
+  readonly implementation_effort: number;
+  readonly net_value: number;
+  readonly value_to_cost_ratio: number | null;
+  readonly payback_months: number | null;
   readonly gateway_cost: number;
+  readonly cost_by_status: CostByStatus;
+  readonly rerun_cost: number;
+  readonly avg_cost_per_run: number | null;
+  readonly cost_per_completed_run: number | null;
+  readonly roi_idea_count: number;
+  readonly roi_confidence: RoiConfidenceBreakdown;
 }
 
 interface AutomationPerformanceReport {
@@ -98,8 +158,22 @@ interface AutomationPerformanceReport {
     readonly reprocessing_rate: number | null;
     readonly estimated_hours_saved: number;
     readonly estimated_value: number;
+    readonly implementation_effort: number;
+    readonly net_value: number;
+    readonly value_to_cost_ratio: number | null;
+    readonly payback_months: number | null;
     readonly gateway_cost: number;
+    readonly cost_by_status: CostByStatus;
+    readonly failed_cost: number;
+    readonly rerun_cost: number;
+    readonly avg_cost_per_run: number | null;
+    readonly cost_per_completed_run: number | null;
+    readonly llm_call_cost: number | null;
+    readonly run_vs_call_cost_delta: number | null;
+    readonly roi_idea_count: number;
+    readonly roi_confidence: RoiConfidenceBreakdown;
   };
+  readonly cost_by_model: readonly CostByModelItem[];
   readonly failure_top: readonly FailureTopRow[];
   readonly trends: readonly TrendReportItem[];
   readonly by_workflow: readonly WorkflowReportItem[];
@@ -151,7 +225,7 @@ async function buildAutomationPerformanceReport(
   tenantId: string,
   period: ReportPeriod,
 ): Promise<AutomationPerformanceReport> {
-  const { workflowRows, failureRows, trendRows } = await withTenantTx(deps.pool, tenantId, async (client) => {
+  const { workflowRows, failureRows, trendRows, costByModelRows } = await withTenantTx(deps.pool, tenantId, async (client) => {
     const workflows = await client.query<WorkflowReportRow>(
       `WITH run_by_scenario AS (
          SELECT sv.scenario_id::text AS scenario_id,
@@ -160,7 +234,11 @@ async function buildAutomationPerformanceReport(
                 count(*) FILTER (WHERE r.status = 'completed')::int AS completed,
                 count(*) FILTER (WHERE r.status = 'failed_business')::int AS failed_business,
                 count(*) FILTER (WHERE r.status = 'failed_system')::int AS failed_system,
-                COALESCE(sum(r.usage_cost), 0)::text AS gateway_cost
+                COALESCE(sum(r.usage_cost), 0)::text AS gateway_cost,
+                COALESCE(sum(r.usage_cost) FILTER (WHERE r.status = 'completed'), 0)::text AS completed_cost,
+                COALESCE(sum(r.usage_cost) FILTER (WHERE r.status = 'failed_business'), 0)::text AS failed_business_cost,
+                COALESCE(sum(r.usage_cost) FILTER (WHERE r.status = 'failed_system'), 0)::text AS failed_system_cost,
+                COALESCE(sum(r.usage_cost) FILTER (WHERE r.status NOT IN ('completed','failed_business','failed_system')), 0)::text AS other_cost
            FROM runs r
            JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
            JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
@@ -171,7 +249,8 @@ async function buildAutomationPerformanceReport(
        ),
        reruns_by_scenario AS (
          SELECT sv.scenario_id::text AS scenario_id,
-                count(rr.id)::int AS rerun_count
+                count(rr.id)::int AS rerun_count,
+                COALESCE(sum(child.usage_cost), 0)::text AS rerun_cost
            FROM run_reruns rr
            JOIN runs child ON child.tenant_id = rr.tenant_id AND child.id = rr.child_run_id
            JOIN scenario_versions sv ON sv.tenant_id = child.tenant_id AND sv.id = child.scenario_version_id
@@ -184,7 +263,12 @@ async function buildAutomationPerformanceReport(
          SELECT ai.scenario_id::text AS scenario_id,
                 s.name AS scenario_name,
                 COALESCE(sum(re.monthly_hours_saved), 0)::text AS estimated_hours_saved,
-                COALESCE(sum(re.estimated_monthly_value), 0)::text AS estimated_value
+                COALESCE(sum(re.estimated_monthly_value), 0)::text AS estimated_value,
+                COALESCE(sum(re.implementation_effort), 0)::text AS implementation_effort,
+                count(re.id)::int AS roi_idea_count,
+                count(*) FILTER (WHERE re.confidence = 'low')::int AS confidence_low,
+                count(*) FILTER (WHERE re.confidence = 'medium')::int AS confidence_medium,
+                count(*) FILTER (WHERE re.confidence = 'high')::int AS confidence_high
            FROM automation_ideas ai
            JOIN scenarios s ON s.tenant_id = ai.tenant_id AND s.id = ai.scenario_id
            JOIN roi_estimates re ON re.tenant_id = ai.tenant_id AND re.automation_idea_id = ai.id
@@ -200,9 +284,19 @@ async function buildAutomationPerformanceReport(
               COALESCE(r.failed_business, 0)::int AS failed_business,
               COALESCE(r.failed_system, 0)::int AS failed_system,
               COALESCE(rr.rerun_count, 0)::int AS rerun_count,
+              COALESCE(rr.rerun_cost, '0') AS rerun_cost,
               COALESCE(roi.estimated_hours_saved, '0') AS estimated_hours_saved,
               COALESCE(roi.estimated_value, '0') AS estimated_value,
-              COALESCE(r.gateway_cost, '0') AS gateway_cost
+              COALESCE(roi.implementation_effort, '0') AS implementation_effort,
+              COALESCE(roi.roi_idea_count, 0)::int AS roi_idea_count,
+              COALESCE(roi.confidence_low, 0)::int AS confidence_low,
+              COALESCE(roi.confidence_medium, 0)::int AS confidence_medium,
+              COALESCE(roi.confidence_high, 0)::int AS confidence_high,
+              COALESCE(r.gateway_cost, '0') AS gateway_cost,
+              COALESCE(r.completed_cost, '0') AS completed_cost,
+              COALESCE(r.failed_business_cost, '0') AS failed_business_cost,
+              COALESCE(r.failed_system_cost, '0') AS failed_system_cost,
+              COALESCE(r.other_cost, '0') AS other_cost
          FROM run_by_scenario r
          FULL OUTER JOIN roi_by_scenario roi ON roi.scenario_id = r.scenario_id
          LEFT JOIN reruns_by_scenario rr ON rr.scenario_id = COALESCE(r.scenario_id, roi.scenario_id)
@@ -236,7 +330,11 @@ async function buildAutomationPerformanceReport(
                 count(*) FILTER (WHERE r.status = 'completed')::int AS completed,
                 count(*) FILTER (WHERE r.status = 'failed_business')::int AS failed_business,
                 count(*) FILTER (WHERE r.status = 'failed_system')::int AS failed_system,
-                COALESCE(sum(r.usage_cost), 0)::text AS gateway_cost
+                COALESCE(sum(r.usage_cost), 0)::text AS gateway_cost,
+                COALESCE(sum(r.usage_cost) FILTER (WHERE r.status = 'completed'), 0)::text AS completed_cost,
+                COALESCE(sum(r.usage_cost) FILTER (WHERE r.status = 'failed_business'), 0)::text AS failed_business_cost,
+                COALESCE(sum(r.usage_cost) FILTER (WHERE r.status = 'failed_system'), 0)::text AS failed_system_cost,
+                COALESCE(sum(r.usage_cost) FILTER (WHERE r.status NOT IN ('completed','failed_business','failed_system')), 0)::text AS other_cost
            FROM runs r
           WHERE r.tenant_id = $1::uuid
             AND r.created_at >= $2::timestamptz
@@ -245,8 +343,10 @@ async function buildAutomationPerformanceReport(
        ),
        reruns_by_day AS (
          SELECT date_trunc('day', rr.created_at AT TIME ZONE $4) AS day_kst,
-                count(*)::int AS rerun_count
+                count(*)::int AS rerun_count,
+                COALESCE(sum(child.usage_cost), 0)::text AS rerun_cost
            FROM run_reruns rr
+           JOIN runs child ON child.tenant_id = rr.tenant_id AND child.id = rr.child_run_id
           WHERE rr.tenant_id = $1::uuid
             AND rr.created_at >= $2::timestamptz
             AND rr.created_at < $3::timestamptz
@@ -258,25 +358,46 @@ async function buildAutomationPerformanceReport(
               COALESCE(r.failed_business, 0)::int AS failed_business,
               COALESCE(r.failed_system, 0)::int AS failed_system,
               COALESCE(rr.rerun_count, 0)::int AS rerun_count,
-              COALESCE(r.gateway_cost, '0') AS gateway_cost
+              COALESCE(rr.rerun_cost, '0') AS rerun_cost,
+              COALESCE(r.gateway_cost, '0') AS gateway_cost,
+              COALESCE(r.completed_cost, '0') AS completed_cost,
+              COALESCE(r.failed_business_cost, '0') AS failed_business_cost,
+              COALESCE(r.failed_system_cost, '0') AS failed_system_cost,
+              COALESCE(r.other_cost, '0') AS other_cost
          FROM days d
          LEFT JOIN runs_by_day r ON r.day_kst = date_trunc('day', d.day_start AT TIME ZONE $4)
          LEFT JOIN reruns_by_day rr ON rr.day_kst = date_trunc('day', d.day_start AT TIME ZONE $4)
-        ORDER BY d.day_start`,
+       ORDER BY d.day_start`,
       [tenantId, period.start.toISOString(), period.end.toISOString(), REPORT_TZ],
     );
-    return { workflowRows: workflows.rows, failureRows: failures.rows, trendRows: trends.rows };
+    const costByModel = await client.query<CostByModelRow>(
+      `SELECT model,
+              count(*)::int AS calls,
+              sum(input_tokens)::text AS input_tokens,
+              sum(output_tokens)::text AS output_tokens,
+              sum(cost)::text AS cost
+         FROM stagehand_calls
+        WHERE tenant_id = $1::uuid
+          AND created_at >= $2::timestamptz
+          AND created_at < $3::timestamptz
+        GROUP BY model
+        ORDER BY sum(cost) DESC NULLS LAST, model ASC`,
+      [tenantId, period.start.toISOString(), period.end.toISOString()],
+    );
+    return { workflowRows: workflows.rows, failureRows: failures.rows, trendRows: trends.rows, costByModelRows: costByModel.rows };
   });
 
   const byWorkflow = workflowRows.map(mapWorkflowRow);
-  const trends = trendRows.map(mapTrendRow);
-  const summary = summarizeWorkflows(byWorkflow);
+  const trends = mapTrendRows(trendRows);
+  const costByModel = mapCostByModelRows(costByModelRows);
+  const summary = summarizeWorkflows(byWorkflow, costByModel);
   return {
     month: period.month,
     timezone: REPORT_TZ,
     period_start: period.start.toISOString(),
     period_end: period.end.toISOString(),
     summary,
+    cost_by_model: costByModel,
     failure_top: failureRows,
     trends,
     by_workflow: byWorkflow,
@@ -285,6 +406,10 @@ async function buildAutomationPerformanceReport(
 
 function mapWorkflowRow(row: WorkflowReportRow): WorkflowReportItem {
   const rated = row.completed + row.failed_business + row.failed_system;
+  const estimatedValue = Number(row.estimated_value);
+  const implementationEffort = Number(row.implementation_effort);
+  const gatewayCost = Number(row.gateway_cost);
+  const completedCost = Number(row.completed_cost);
   return {
     scenario_id: row.scenario_id,
     scenario_name: row.scenario_name,
@@ -296,13 +421,42 @@ function mapWorkflowRow(row: WorkflowReportRow): WorkflowReportItem {
     rerun_count: row.rerun_count,
     reprocessing_rate: row.total_runs > 0 ? row.rerun_count / row.total_runs : null,
     estimated_hours_saved: Number(row.estimated_hours_saved),
-    estimated_value: Number(row.estimated_value),
-    gateway_cost: Number(row.gateway_cost),
+    estimated_value: estimatedValue,
+    implementation_effort: implementationEffort,
+    net_value: estimatedValue - gatewayCost,
+    value_to_cost_ratio: gatewayCost > 0 ? estimatedValue / gatewayCost : null,
+    payback_months: estimatedValue > 0 ? implementationEffort / estimatedValue : null,
+    gateway_cost: gatewayCost,
+    cost_by_status: {
+      completed: completedCost,
+      failed_business: Number(row.failed_business_cost),
+      failed_system: Number(row.failed_system_cost),
+      other: Number(row.other_cost),
+    },
+    rerun_cost: Number(row.rerun_cost),
+    avg_cost_per_run: row.total_runs > 0 ? gatewayCost / row.total_runs : null,
+    cost_per_completed_run: row.completed > 0 ? completedCost / row.completed : null,
+    roi_idea_count: row.roi_idea_count,
+    roi_confidence: {
+      low: row.confidence_low,
+      medium: row.confidence_medium,
+      high: row.confidence_high,
+    },
   };
 }
 
-function mapTrendRow(row: TrendReportRow): TrendReportItem {
+function mapTrendRows(rows: readonly TrendReportRow[]): readonly TrendReportItem[] {
+  const out: TrendReportItem[] = [];
+  for (const row of rows) {
+    out.push(mapTrendRow(row, out[out.length - 1]));
+  }
+  return out;
+}
+
+function mapTrendRow(row: TrendReportRow, previous: TrendReportItem | undefined): TrendReportItem {
   const rated = row.completed + row.failed_business + row.failed_system;
+  const gatewayCost = Number(row.gateway_cost);
+  const completedCost = Number(row.completed_cost);
   return {
     day: row.day,
     total_runs: row.total_runs,
@@ -312,11 +466,39 @@ function mapTrendRow(row: TrendReportRow): TrendReportItem {
     success_rate: rated > 0 ? row.completed / rated : null,
     rerun_count: row.rerun_count,
     reprocessing_rate: row.total_runs > 0 ? row.rerun_count / row.total_runs : null,
-    gateway_cost: Number(row.gateway_cost),
+    gateway_cost: gatewayCost,
+    cost_by_status: {
+      completed: completedCost,
+      failed_business: Number(row.failed_business_cost),
+      failed_system: Number(row.failed_system_cost),
+      other: Number(row.other_cost),
+    },
+    rerun_cost: Number(row.rerun_cost),
+    avg_cost_per_run: row.total_runs > 0 ? gatewayCost / row.total_runs : null,
+    cost_per_completed_run: row.completed > 0 ? completedCost / row.completed : null,
+    cost_delta_from_previous_day: previous === undefined ? null : gatewayCost - previous.gateway_cost,
   };
 }
 
-function summarizeWorkflows(byWorkflow: readonly WorkflowReportItem[]): AutomationPerformanceReport["summary"] {
+function mapCostByModelRows(rows: readonly CostByModelRow[]): readonly CostByModelItem[] {
+  const totalKnownCost = rows.reduce((sum, row) => sum + (row.cost === null ? 0 : Number(row.cost)), 0);
+  return rows.map((row) => {
+    const cost = row.cost === null ? null : Number(row.cost);
+    return {
+      model: row.model,
+      calls: row.calls,
+      input_tokens: row.input_tokens === null ? null : Number(row.input_tokens),
+      output_tokens: row.output_tokens === null ? null : Number(row.output_tokens),
+      cost,
+      cost_share: cost !== null && totalKnownCost > 0 ? cost / totalKnownCost : null,
+    };
+  });
+}
+
+function summarizeWorkflows(
+  byWorkflow: readonly WorkflowReportItem[],
+  costByModel: readonly CostByModelItem[],
+): AutomationPerformanceReport["summary"] {
   const totals = byWorkflow.reduce(
     (acc, row) => ({
       total_runs: acc.total_runs + row.total_runs,
@@ -326,7 +508,17 @@ function summarizeWorkflows(byWorkflow: readonly WorkflowReportItem[]): Automati
       rerun_count: acc.rerun_count + row.rerun_count,
       estimated_hours_saved: acc.estimated_hours_saved + row.estimated_hours_saved,
       estimated_value: acc.estimated_value + row.estimated_value,
+      implementation_effort: acc.implementation_effort + row.implementation_effort,
       gateway_cost: acc.gateway_cost + row.gateway_cost,
+      completed_cost: acc.completed_cost + row.cost_by_status.completed,
+      failed_business_cost: acc.failed_business_cost + row.cost_by_status.failed_business,
+      failed_system_cost: acc.failed_system_cost + row.cost_by_status.failed_system,
+      other_cost: acc.other_cost + row.cost_by_status.other,
+      rerun_cost: acc.rerun_cost + row.rerun_cost,
+      roi_idea_count: acc.roi_idea_count + row.roi_idea_count,
+      confidence_low: acc.confidence_low + row.roi_confidence.low,
+      confidence_medium: acc.confidence_medium + row.roi_confidence.medium,
+      confidence_high: acc.confidence_high + row.roi_confidence.high,
     }),
     {
       total_runs: 0,
@@ -336,15 +528,67 @@ function summarizeWorkflows(byWorkflow: readonly WorkflowReportItem[]): Automati
       rerun_count: 0,
       estimated_hours_saved: 0,
       estimated_value: 0,
+      implementation_effort: 0,
       gateway_cost: 0,
+      completed_cost: 0,
+      failed_business_cost: 0,
+      failed_system_cost: 0,
+      other_cost: 0,
+      rerun_cost: 0,
+      roi_idea_count: 0,
+      confidence_low: 0,
+      confidence_medium: 0,
+      confidence_high: 0,
     },
   );
   const rated = totals.completed + totals.failed_business + totals.failed_system;
+  const llmCallCost = sumKnownModelCost(costByModel);
   return {
-    ...totals,
+    total_runs: totals.total_runs,
+    completed: totals.completed,
+    failed_business: totals.failed_business,
+    failed_system: totals.failed_system,
     success_rate: rated > 0 ? totals.completed / rated : null,
+    rerun_count: totals.rerun_count,
     reprocessing_rate: totals.total_runs > 0 ? totals.rerun_count / totals.total_runs : null,
+    estimated_hours_saved: totals.estimated_hours_saved,
+    estimated_value: totals.estimated_value,
+    implementation_effort: totals.implementation_effort,
+    net_value: totals.estimated_value - totals.gateway_cost,
+    value_to_cost_ratio: totals.gateway_cost > 0 ? totals.estimated_value / totals.gateway_cost : null,
+    payback_months: totals.estimated_value > 0 ? totals.implementation_effort / totals.estimated_value : null,
+    gateway_cost: totals.gateway_cost,
+    cost_by_status: {
+      completed: totals.completed_cost,
+      failed_business: totals.failed_business_cost,
+      failed_system: totals.failed_system_cost,
+      other: totals.other_cost,
+    },
+    failed_cost: totals.failed_business_cost + totals.failed_system_cost,
+    rerun_cost: totals.rerun_cost,
+    avg_cost_per_run: totals.total_runs > 0 ? totals.gateway_cost / totals.total_runs : null,
+    cost_per_completed_run: totals.completed > 0 ? totals.completed_cost / totals.completed : null,
+    llm_call_cost: llmCallCost,
+    run_vs_call_cost_delta: llmCallCost === null ? null : totals.gateway_cost - llmCallCost,
+    roi_idea_count: totals.roi_idea_count,
+    roi_confidence: {
+      low: totals.confidence_low,
+      medium: totals.confidence_medium,
+      high: totals.confidence_high,
+    },
   };
+}
+
+function sumKnownModelCost(costByModel: readonly CostByModelItem[]): number | null {
+  let hasKnown = false;
+  let total = 0;
+  for (const row of costByModel) {
+    if (row.cost !== null) {
+      hasKnown = true;
+      total += row.cost;
+    }
+  }
+  return hasKnown ? total : null;
 }
 
 function parseReportPeriod(raw: unknown): ReportPeriod {
@@ -389,11 +633,58 @@ function reportToCsv(report: AutomationPerformanceReport): string {
     ["reprocessing_rate", rateCell(report.summary.reprocessing_rate)],
     ["estimated_hours_saved", String(report.summary.estimated_hours_saved)],
     ["estimated_value", String(report.summary.estimated_value)],
+    ["implementation_effort", String(report.summary.implementation_effort)],
+    ["net_value", String(report.summary.net_value)],
+    ["value_to_cost_ratio", rateCell(report.summary.value_to_cost_ratio)],
+    ["payback_months", rateCell(report.summary.payback_months)],
     ["gateway_cost", String(report.summary.gateway_cost)],
+    ["completed_cost", String(report.summary.cost_by_status.completed)],
+    ["failed_business_cost", String(report.summary.cost_by_status.failed_business)],
+    ["failed_system_cost", String(report.summary.cost_by_status.failed_system)],
+    ["failed_cost", String(report.summary.failed_cost)],
+    ["other_cost", String(report.summary.cost_by_status.other)],
+    ["rerun_cost", String(report.summary.rerun_cost)],
+    ["avg_cost_per_run", rateCell(report.summary.avg_cost_per_run)],
+    ["cost_per_completed_run", rateCell(report.summary.cost_per_completed_run)],
+    ["llm_call_cost", rateCell(report.summary.llm_call_cost)],
+    ["run_vs_call_cost_delta", rateCell(report.summary.run_vs_call_cost_delta)],
+    ["roi_idea_count", String(report.summary.roi_idea_count)],
+    ["roi_confidence_low", String(report.summary.roi_confidence.low)],
+    ["roi_confidence_medium", String(report.summary.roi_confidence.medium)],
+    ["roi_confidence_high", String(report.summary.roi_confidence.high)],
   ];
   const failureLines = [["code", "count"], ...report.failure_top.map((row) => [row.code, String(row.count)])];
+  const modelCostLines = [
+    ["model", "calls", "input_tokens", "output_tokens", "cost", "cost_share"],
+    ...report.cost_by_model.map((row) => [
+      row.model,
+      String(row.calls),
+      nullableNumberCell(row.input_tokens),
+      nullableNumberCell(row.output_tokens),
+      nullableNumberCell(row.cost),
+      rateCell(row.cost_share),
+    ]),
+  ];
   const trendLines = [
-    ["day", "total_runs", "completed", "failed_business", "failed_system", "success_rate", "rerun_count", "reprocessing_rate", "gateway_cost"],
+    [
+      "day",
+      "total_runs",
+      "completed",
+      "failed_business",
+      "failed_system",
+      "success_rate",
+      "rerun_count",
+      "reprocessing_rate",
+      "gateway_cost",
+      "completed_cost",
+      "failed_business_cost",
+      "failed_system_cost",
+      "other_cost",
+      "rerun_cost",
+      "avg_cost_per_run",
+      "cost_per_completed_run",
+      "cost_delta_from_previous_day",
+    ],
     ...report.trends.map((row) => [
       row.day,
       String(row.total_runs),
@@ -404,6 +695,14 @@ function reportToCsv(report: AutomationPerformanceReport): string {
       String(row.rerun_count),
       rateCell(row.reprocessing_rate),
       String(row.gateway_cost),
+      String(row.cost_by_status.completed),
+      String(row.cost_by_status.failed_business),
+      String(row.cost_by_status.failed_system),
+      String(row.cost_by_status.other),
+      String(row.rerun_cost),
+      rateCell(row.avg_cost_per_run),
+      rateCell(row.cost_per_completed_run),
+      rateCell(row.cost_delta_from_previous_day),
     ]),
   ];
   const workflowLines = [
@@ -419,7 +718,22 @@ function reportToCsv(report: AutomationPerformanceReport): string {
       "reprocessing_rate",
       "estimated_hours_saved",
       "estimated_value",
+      "implementation_effort",
+      "net_value",
+      "value_to_cost_ratio",
+      "payback_months",
       "gateway_cost",
+      "completed_cost",
+      "failed_business_cost",
+      "failed_system_cost",
+      "other_cost",
+      "rerun_cost",
+      "avg_cost_per_run",
+      "cost_per_completed_run",
+      "roi_idea_count",
+      "roi_confidence_low",
+      "roi_confidence_medium",
+      "roi_confidence_high",
     ],
     ...report.by_workflow.map((row) => [
       row.scenario_id,
@@ -433,7 +747,22 @@ function reportToCsv(report: AutomationPerformanceReport): string {
       rateCell(row.reprocessing_rate),
       String(row.estimated_hours_saved),
       String(row.estimated_value),
+      String(row.implementation_effort),
+      String(row.net_value),
+      rateCell(row.value_to_cost_ratio),
+      rateCell(row.payback_months),
       String(row.gateway_cost),
+      String(row.cost_by_status.completed),
+      String(row.cost_by_status.failed_business),
+      String(row.cost_by_status.failed_system),
+      String(row.cost_by_status.other),
+      String(row.rerun_cost),
+      rateCell(row.avg_cost_per_run),
+      rateCell(row.cost_per_completed_run),
+      String(row.roi_idea_count),
+      String(row.roi_confidence.low),
+      String(row.roi_confidence.medium),
+      String(row.roi_confidence.high),
     ]),
   ];
   return [
@@ -442,6 +771,9 @@ function reportToCsv(report: AutomationPerformanceReport): string {
     [],
     ["Failure Top N"],
     ...failureLines,
+    [],
+    ["Cost By Model"],
+    ...modelCostLines,
     [],
     ["Daily Trends"],
     ...trendLines,
@@ -454,6 +786,10 @@ function reportToCsv(report: AutomationPerformanceReport): string {
 }
 
 function rateCell(value: number | null): string {
+  return value === null ? "" : String(value);
+}
+
+function nullableNumberCell(value: number | null): string {
   return value === null ? "" : String(value);
 }
 
@@ -481,7 +817,19 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
     ["Reprocessing rate", percentCell(report.summary.reprocessing_rate)],
     ["Estimated hours saved", decimalCell(report.summary.estimated_hours_saved, 1)],
     ["Estimated monthly value", moneyCell(report.summary.estimated_value)],
+    ["Implementation effort", moneyCell(report.summary.implementation_effort)],
+    ["Net monthly value", moneyCell(report.summary.net_value)],
+    ["Value/cost ratio", nullableDecimalCell(report.summary.value_to_cost_ratio, 2)],
+    ["Payback months", nullableDecimalCell(report.summary.payback_months, 1)],
     ["Gateway cost", moneyCell(report.summary.gateway_cost)],
+    ["Failed cost", moneyCell(report.summary.failed_cost)],
+    ["Rerun cost", moneyCell(report.summary.rerun_cost)],
+    ["Avg cost/run", nullableMoneyCell(report.summary.avg_cost_per_run)],
+    ["Cost/completed run", nullableMoneyCell(report.summary.cost_per_completed_run)],
+    ["LLM call cost", nullableMoneyCell(report.summary.llm_call_cost)],
+    ["Run-call cost delta", nullableMoneyCell(report.summary.run_vs_call_cost_delta)],
+    ["ROI ideas", String(report.summary.roi_idea_count)],
+    ["ROI confidence", confidenceCell(report.summary.roi_confidence)],
   ];
   const failureRows =
     report.failure_top.length > 0
@@ -496,10 +844,16 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
           percentCell(row.reprocessing_rate),
           decimalCell(row.estimated_hours_saved, 1),
           moneyCell(row.estimated_value),
+          moneyCell(row.net_value),
+          nullableDecimalCell(row.value_to_cost_ratio, 2),
+          nullableDecimalCell(row.payback_months, 1),
           moneyCell(row.gateway_cost),
+          nullableMoneyCell(row.cost_per_completed_run),
+          String(row.roi_idea_count),
+          confidenceCell(row.roi_confidence),
           workflowDecision(row),
         ])
-      : [["No workflow evidence", "0", "-", "-", "0", "0", "0", "Hold: collect monthly run evidence"]];
+      : [["No workflow evidence", "0", "-", "-", "0", "0", "0", "-", "-", "0", "-", "0", "-", "Hold: collect monthly run evidence"]];
   const trendRows =
     report.trends.length > 0
       ? report.trends.map((row) => [
@@ -509,8 +863,21 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
           String(row.rerun_count),
           percentCell(row.reprocessing_rate),
           moneyCell(row.gateway_cost),
+          nullableMoneyCell(row.avg_cost_per_run),
+          nullableMoneyCell(row.cost_delta_from_previous_day),
         ])
-      : [["No daily evidence", "0", "-", "0", "-", "0"]];
+      : [["No daily evidence", "0", "-", "0", "-", "0", "-", "-"]];
+  const modelCostRows =
+    report.cost_by_model.length > 0
+      ? report.cost_by_model.map((row) => [
+          row.model,
+          String(row.calls),
+          nullableIntegerCell(row.input_tokens),
+          nullableIntegerCell(row.output_tokens),
+          nullableMoneyCell(row.cost),
+          percentCell(row.cost_share),
+        ])
+      : [["No model calls", "0", "-", "-", "-", "-"]];
 
   return [
     "# Automation Performance PoC Report",
@@ -528,20 +895,39 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
     "",
     markdownTable(["Rank", "Failure code", "Count"], failureRows),
     "",
+    "## Cost By Model",
+    "",
+    markdownTable(["Model", "Calls", "Input tokens", "Output tokens", "Cost", "Cost share"], modelCostRows),
+    "",
     "## Workflow ROI / Cost",
     "",
     markdownTable(
-      ["Workflow", "Runs", "Success rate", "Reprocessing", "Hours saved", "Value", "Gateway cost", "Decision signal"],
+      [
+        "Workflow",
+        "Runs",
+        "Success rate",
+        "Reprocessing",
+        "Hours saved",
+        "Value",
+        "Net",
+        "Value/cost",
+        "Payback",
+        "Gateway cost",
+        "Cost/completed",
+        "ROI ideas",
+        "Confidence",
+        "Decision signal",
+      ],
       workflowRows,
     ),
     "",
     "## Daily Trends",
     "",
-    markdownTable(["Day", "Runs", "Success rate", "Reruns", "Reprocessing", "Gateway cost"], trendRows),
+    markdownTable(["Day", "Runs", "Success rate", "Reruns", "Reprocessing", "Gateway cost", "Avg cost/run", "Cost delta"], trendRows),
     "",
     "## Decision Guide",
     "",
-    "- Expand: success rate is at least 90%, reprocessing is at most 10%, and estimated value exceeds gateway cost.",
+    "- Expand: success rate is at least 90%, reprocessing is at most 10%, and net monthly value is positive.",
     "- Hold: success rate is below 80%, reprocessing is above 20%, or the workflow has no monthly run evidence.",
     "- Watch: metrics are mixed; review failure causes and ROI assumptions before scaling.",
     "- Never paste secrets, tokens, passwords, or resolved secret material into this report.",
@@ -557,7 +943,7 @@ function reportDecision(report: AutomationPerformanceReport): string {
     report.summary.success_rate !== null &&
     report.summary.success_rate >= 0.9 &&
     (report.summary.reprocessing_rate ?? 0) <= 0.1 &&
-    report.summary.estimated_value > report.summary.gateway_cost
+    report.summary.net_value > 0
   ) {
     return "Expand: PoC evidence supports scaling";
   }
@@ -572,7 +958,7 @@ function workflowDecision(row: WorkflowReportItem): string {
     row.success_rate !== null &&
     row.success_rate >= 0.9 &&
     (row.reprocessing_rate ?? 0) <= 0.1 &&
-    row.estimated_value > row.gateway_cost
+    row.net_value > 0
   ) {
     return "Expand";
   }
@@ -605,12 +991,28 @@ function percentCell(value: number | null): string {
   return value === null ? "-" : `${Math.round(value * 100)}%`;
 }
 
+function nullableDecimalCell(value: number | null, maximumFractionDigits: number): string {
+  return value === null ? "-" : decimalCell(value, maximumFractionDigits);
+}
+
+function nullableIntegerCell(value: number | null): string {
+  return value === null ? "-" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+}
+
 function decimalCell(value: number, maximumFractionDigits: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits }).format(value);
 }
 
 function moneyCell(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+}
+
+function nullableMoneyCell(value: number | null): string {
+  return value === null ? "-" : moneyCell(value);
+}
+
+function confidenceCell(value: RoiConfidenceBreakdown): string {
+  return `H ${value.high} / M ${value.medium} / L ${value.low}`;
 }
 
 function reportToXlsx(report: AutomationPerformanceReport): Buffer {
@@ -722,7 +1124,25 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
         ["reprocessing_rate", report.summary.reprocessing_rate],
         ["estimated_hours_saved", report.summary.estimated_hours_saved],
         ["estimated_value", report.summary.estimated_value],
+        ["implementation_effort", report.summary.implementation_effort],
+        ["net_value", report.summary.net_value],
+        ["value_to_cost_ratio", report.summary.value_to_cost_ratio],
+        ["payback_months", report.summary.payback_months],
         ["gateway_cost", report.summary.gateway_cost],
+        ["completed_cost", report.summary.cost_by_status.completed],
+        ["failed_business_cost", report.summary.cost_by_status.failed_business],
+        ["failed_system_cost", report.summary.cost_by_status.failed_system],
+        ["failed_cost", report.summary.failed_cost],
+        ["other_cost", report.summary.cost_by_status.other],
+        ["rerun_cost", report.summary.rerun_cost],
+        ["avg_cost_per_run", report.summary.avg_cost_per_run],
+        ["cost_per_completed_run", report.summary.cost_per_completed_run],
+        ["llm_call_cost", report.summary.llm_call_cost],
+        ["run_vs_call_cost_delta", report.summary.run_vs_call_cost_delta],
+        ["roi_idea_count", report.summary.roi_idea_count],
+        ["roi_confidence_low", report.summary.roi_confidence.low],
+        ["roi_confidence_medium", report.summary.roi_confidence.medium],
+        ["roi_confidence_high", report.summary.roi_confidence.high],
       ],
     },
     {
@@ -730,9 +1150,41 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
       rows: [["code", "count"], ...report.failure_top.map((row) => [row.code, row.count] as const)],
     },
     {
+      name: "Cost By Model",
+      rows: [
+        ["model", "calls", "input_tokens", "output_tokens", "cost", "cost_share"],
+        ...report.cost_by_model.map((row) => [
+          row.model,
+          row.calls,
+          row.input_tokens,
+          row.output_tokens,
+          row.cost,
+          row.cost_share,
+        ]),
+      ],
+    },
+    {
       name: "Daily Trends",
       rows: [
-        ["day", "total_runs", "completed", "failed_business", "failed_system", "success_rate", "rerun_count", "reprocessing_rate", "gateway_cost"],
+        [
+          "day",
+          "total_runs",
+          "completed",
+          "failed_business",
+          "failed_system",
+          "success_rate",
+          "rerun_count",
+          "reprocessing_rate",
+          "gateway_cost",
+          "completed_cost",
+          "failed_business_cost",
+          "failed_system_cost",
+          "other_cost",
+          "rerun_cost",
+          "avg_cost_per_run",
+          "cost_per_completed_run",
+          "cost_delta_from_previous_day",
+        ],
         ...report.trends.map((row) => [
           row.day,
           row.total_runs,
@@ -743,6 +1195,14 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
           row.rerun_count,
           row.reprocessing_rate,
           row.gateway_cost,
+          row.cost_by_status.completed,
+          row.cost_by_status.failed_business,
+          row.cost_by_status.failed_system,
+          row.cost_by_status.other,
+          row.rerun_cost,
+          row.avg_cost_per_run,
+          row.cost_per_completed_run,
+          row.cost_delta_from_previous_day,
         ]),
       ],
     },
@@ -761,7 +1221,22 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
           "reprocessing_rate",
           "estimated_hours_saved",
           "estimated_value",
+          "implementation_effort",
+          "net_value",
+          "value_to_cost_ratio",
+          "payback_months",
           "gateway_cost",
+          "completed_cost",
+          "failed_business_cost",
+          "failed_system_cost",
+          "other_cost",
+          "rerun_cost",
+          "avg_cost_per_run",
+          "cost_per_completed_run",
+          "roi_idea_count",
+          "roi_confidence_low",
+          "roi_confidence_medium",
+          "roi_confidence_high",
         ],
         ...report.by_workflow.map((row) => [
           row.scenario_id,
@@ -775,7 +1250,22 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
           row.reprocessing_rate,
           row.estimated_hours_saved,
           row.estimated_value,
+          row.implementation_effort,
+          row.net_value,
+          row.value_to_cost_ratio,
+          row.payback_months,
           row.gateway_cost,
+          row.cost_by_status.completed,
+          row.cost_by_status.failed_business,
+          row.cost_by_status.failed_system,
+          row.cost_by_status.other,
+          row.rerun_cost,
+          row.avg_cost_per_run,
+          row.cost_per_completed_run,
+          row.roi_idea_count,
+          row.roi_confidence.low,
+          row.roi_confidence.medium,
+          row.roi_confidence.high,
         ]),
       ],
     },

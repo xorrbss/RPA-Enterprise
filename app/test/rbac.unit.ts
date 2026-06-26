@@ -80,6 +80,7 @@ async function main(): Promise<void> {
   await expectAllow(["viewer"], "gateway_policy.read");
   await expectAllow(["viewer"], "trigger.read");
   await expectAllow(["viewer"], "ops_alert.read");
+  await expectDeny(["viewer"], "ops_alert.ack");
   await expectAllow(["viewer"], "automation_idea.read");
   await expectAllow(["viewer"], "connector.read");
   await expectAllow(["viewer"], "document_job.read");
@@ -110,6 +111,7 @@ async function main(): Promise<void> {
   await expectAllow(["operator"], "scenario.update");
   await expectAllow(["operator"], "site.create");
   await expectAllow(["operator"], "trigger.manage");
+  await expectAllow(["operator"], "ops_alert.ack");
   await expectAllow(["operator"], "automation_idea.manage");
   await expectAllow(["operator"], "connector.read");
   await expectAllow(["operator"], "document_job.read");

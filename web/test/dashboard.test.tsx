@@ -50,6 +50,8 @@ function dashboardClient(overrides: Partial<ApiClient> = {}): ApiClient {
           subject_type: "run",
           subject_id: "run-ops-1",
           status: "open",
+          delivery: { channel: "console", status: "delivered", delivered_at: "2026-06-23T09:01:00.000Z", external_delivery: false },
+          ack: null,
           recommended_action: "실행 기록에서 병목 단계를 확인하세요.",
           route: "#runTrace?run=run-ops-1",
           detected_at: "2026-06-23T09:01:00.000Z",
@@ -64,6 +66,8 @@ function dashboardClient(overrides: Partial<ApiClient> = {}): ApiClient {
           subject_type: "run",
           subject_id: null,
           status: "open",
+          delivery: { channel: "console", status: "delivered", delivered_at: "2026-06-23T09:03:00.000Z", external_delivery: false },
+          ack: null,
           recommended_action: "공통 장애 여부를 점검하세요.",
           route: "#runTrace",
           detected_at: "2026-06-23T09:03:00.000Z",
@@ -266,8 +270,24 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
             reprocessing_rate: 0.16666666666666666,
             estimated_hours_saved: 18.5,
             estimated_value: 740000,
+            implementation_effort: 900000,
+            net_value: 738766,
+            value_to_cost_ratio: 599.6758508914101,
+            payback_months: 1.2162162162162162,
             gateway_cost: 1234,
+            cost_by_status: { completed: 900, failed_business: 200, failed_system: 134, other: 0 },
+            failed_cost: 334,
+            rerun_cost: 120,
+            avg_cost_per_run: 102.83333333333333,
+            cost_per_completed_run: 100,
+            llm_call_cost: 1000,
+            run_vs_call_cost_delta: 234,
+            roi_idea_count: 1,
+            roi_confidence: { low: 0, medium: 0, high: 1 },
           },
+          cost_by_model: [
+            { model: "gpt-4o-mini", calls: 12, input_tokens: 12000, output_tokens: 2400, cost: 1000, cost_share: 1 },
+          ],
           failure_top: [{ code: "SITE_SELECTOR_MISSING", count: 2 }],
           by_workflow: [
             {
@@ -282,7 +302,17 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
               reprocessing_rate: 0.16666666666666666,
               estimated_hours_saved: 18.5,
               estimated_value: 740000,
+              implementation_effort: 900000,
+              net_value: 738766,
+              value_to_cost_ratio: 599.6758508914101,
+              payback_months: 1.2162162162162162,
               gateway_cost: 1234,
+              cost_by_status: { completed: 900, failed_business: 200, failed_system: 134, other: 0 },
+              rerun_cost: 120,
+              avg_cost_per_run: 102.83333333333333,
+              cost_per_completed_run: 100,
+              roi_idea_count: 1,
+              roi_confidence: { low: 0, medium: 0, high: 1 },
             },
           ],
           trends: [],
@@ -309,6 +339,8 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
 
     expect(await within(panel).findByText("Vendor invoice lookup")).toBeInTheDocument();
     expect(within(panel).getByText("SITE_SELECTOR_MISSING")).toBeInTheDocument();
+    expect(within(panel).getByText("gpt-4o-mini")).toBeInTheDocument();
+    expect(within(panel).getAllByText("순가치").length).toBeGreaterThan(0);
     expect(within(panel).getByText("18.5h")).toBeInTheDocument();
     expect(within(panel).getAllByText("75%").length).toBeGreaterThan(0);
 

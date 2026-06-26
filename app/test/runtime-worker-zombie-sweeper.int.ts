@@ -64,6 +64,34 @@ async function wiStatus(pool: ReturnType<typeof createPool>, id: string): Promis
     return r.rows[0]?.status ?? "missing";
   });
 }
+async function workerCircuit(pool: ReturnType<typeof createPool>, id: string): Promise<{
+  state: string;
+  untilFuture: boolean;
+  initFailures: number;
+  halfOpenSuccesses: number;
+}> {
+  const r = await pool.query<{
+    circuit_state: string;
+    until_future: boolean;
+    consecutive_init_failures: number;
+    half_open_successes: number;
+  }>(
+    `SELECT circuit_state,
+            circuit_until > now() AS until_future,
+            consecutive_init_failures,
+            half_open_successes
+       FROM workers
+      WHERE id = $1::uuid`,
+    [id],
+  );
+  const row = r.rows[0];
+  return {
+    state: row?.circuit_state ?? "missing",
+    untilFuture: row?.until_future ?? false,
+    initFailures: row?.consecutive_init_failures ?? -1,
+    halfOpenSuccesses: row?.half_open_successes ?? -1,
+  };
+}
 
 async function seedRunWithLease(
   pool: ReturnType<typeof createPool>,
@@ -98,6 +126,8 @@ async function main(): Promise<void> {
       await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
+      await setup.query(`CREATE TABLE tenants (id uuid PRIMARY KEY)`);
+      await setup.query(`INSERT INTO tenants (id) VALUES ($1::uuid)`, [TENANT]);
       await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));
       await setup.query(readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8"));
       await setup.query(
@@ -140,6 +170,24 @@ async function main(): Promise<void> {
     const worker = new PgRuntimeWorker(pool, { workerId: WORKER });
     const sweep = await worker.handle({ kind: "lease_sweeper", tenantId: TENANT as TenantId });
     check("lease_sweeper completes", sweep.kind === "completed", JSON.stringify(sweep));
+    const primaryCircuit = await workerCircuit(pool, WORKER);
+    const otherCircuit = await workerCircuit(pool, OTHER_WORKER);
+    check(
+      "만료 browser lease owner worker 는 circuit open 으로 격리",
+      primaryCircuit.state === "open" &&
+        primaryCircuit.untilFuture === true &&
+        primaryCircuit.initFailures === 0 &&
+        primaryCircuit.halfOpenSuccesses === 0,
+      JSON.stringify(primaryCircuit),
+    );
+    check(
+      "cross-worker 만료 lease owner 도 circuit open 으로 격리",
+      otherCircuit.state === "open" &&
+        otherCircuit.untilFuture === true &&
+        otherCircuit.initFailures === 0 &&
+        otherCircuit.halfOpenSuccesses === 0,
+      JSON.stringify(otherCircuit),
+    );
 
     for (const [label, runId] of [
       ["claimed", RUN_CLAIMED], ["running", RUN_RUNNING], ["completing", RUN_COMPLETING],

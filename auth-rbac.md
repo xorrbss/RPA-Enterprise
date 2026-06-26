@@ -53,6 +53,7 @@ export type Role =
 | run trigger 조회 | api-surface `GET /v1/run-triggers`, `GET /v1/run-triggers/{id}/fires` (`trigger.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | run trigger 관리(예약 생성/수정/일시정지/재개) | api-surface `POST/PATCH /v1/run-triggers`, `POST /pause|resume` (`trigger.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 운영 알림/SLA 조회 | api-surface `GET /v1/ops-alerts` (`ops_alert.read`; 계산형 알림, payload 본문 미노출) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 운영 알림 확인 처리 | api-surface `POST /v1/ops-alerts/{alert_id}/ack` (`ops_alert.ack`; console ack 원장, Idempotency-Key 필수) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | automation idea/ROI 조회 | api-surface `GET /v1/automation-ideas`, `GET /v1/automation-ideas/{id}/roi-estimate` (`automation_idea.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | automation idea/ROI 관리(후보 등록/수정/ROI 산정/비승인 전이) | api-surface `POST/PATCH /v1/automation-ideas`, `POST /transition`, `POST /roi-estimate` (`automation_idea.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | automation idea 승인·반려 전이 | api-surface `POST /v1/automation-ideas/{id}/transition` 목표 stage `approved`/`rejected` (`automation_idea.approve`, SoD) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
@@ -88,6 +89,7 @@ export type Role =
 | 감사로그 조회 | api-surface §9 `GET /v1/audit-log` (`audit.read`; payload 본문 미노출, hash-chain/actor/action/outcome 요약) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | network policy 편집(allowed_domains) | security-contracts §6 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | RBAC 역할 부여/회수 | 본 문서 §1 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| SCIM provider 동기화(`POST /v1/scim/principals`) | 본 문서 §2 비고(SCIM) + security-contracts §12. registered provider·schema version·signed request를 통과해야 함 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 
 거부 ErrorCode 선택 규칙(조용한 false/unknown 금지):
 - **자원 종류가 특정된 보안 게이트**는 그 자원 코드를 쓴다: artifact·secret → `SECRET_ACCESS_DENIED`(security, 403), connector → `CONNECTOR_PERMISSION_DENIED`(security, 403). `SITE_PROFILE_BLOCKED`는 **런타임 실행 차단**(미승인 red 사이트 실행 시도) 전용이며, site **승인 권한** 부족은 일반 RBAC 거부 `AUTHZ_FORBIDDEN`이다(api-surface §7과 정합).
@@ -102,7 +104,17 @@ export type Role =
 - effective roles = 인증 토큰의 유효 role claim ∪ `principal_role_assignments(status='active', expires_at IS NULL OR expires_at > now())`. 저장 계약은 수동 assignment와 향후 SCIM-managed assignment를 모두 포함한다.
 - 수동 role 부여/회수는 `rbac.grant` 권한이 필요하며, 자기 자신에게 `admin`을 부여하거나 자기 자신의 마지막 `rbac.grant` 근거를 제거하는 것은 차단한다.
 - IdP/JWT claim으로 온 role은 콘솔 API가 회수할 수 없다. 회수 가능한 것은 `source='manual'` assignment뿐이며, `source='scim'` assignment는 외부 IdP 관리 항목으로 간주해 `AUTHZ_FORBIDDEN(externally_managed_role_assignment)`으로 fail-closed 한다.
-- SCIM 동기화 provider/inbound schema/conflict rule은 `docs/enterprise-alm-rbac-implementation-design.md`의 blocked decision으로 추적한다. v1 수동 API는 `manual`만 생성하지만 저장 계약은 `source='scim'`, `external_id`, `idp_provider`, `lifecycle_source`를 예약한다.
+- SCIM sync API는 `source='scim'`, `external_id`, `idp_provider`, `lifecycle_source='scim'`만 생성/갱신/회수한다. manual/token role은 SCIM sync가 회수하지 않는다.
+- SCIM assignment의 `external_id`는 provider principal `external_id`와 role을 결합한 stable membership key(`<external_id>:<role>`)다. 같은 SCIM user가 여러 role을 받아도 assignment external identity unique index와 충돌하지 않아야 한다.
+
+비고(SCIM provider/inbound 스코핑):
+- `scim_providers`가 provider 등록 원장이다. `provider_key`는 SCIM payload의 `idp_provider`와 같고, row가 없거나 `status!='active'`면 `AUTHZ_FORBIDDEN(scim_provider_not_registered|scim_provider_disabled)`으로 차단한다.
+- inbound schema는 `schema_version='scim-principal@1'`로 닫는다. provider row의 `inbound_schema_ref`와 요청 `schema_version`이 다르거나 unknown schema이면 `IR_SCHEMA_INVALID`로 차단한다.
+- SCIM sync request는 기존 제어평면 JWT/RBAC(`scim.sync`, admin)와 provider signed request를 모두 통과해야 한다. 서명 헤더는 `X-RPA-SCIM-Timestamp`(epoch seconds), `X-RPA-SCIM-Signature=sha256:<hex>`가 아니라 `sha256=<hex>` 형식이며, payload는 `timestamp + ".POST./v1/scim/principals." + provider_key + "." + schema_version + "." + canonical_json(body)`다. 서명키 평문은 DB에 저장하지 않고 `scim_providers.signature_secret_ref`로만 참조한다.
+- provider external identity(`tenant_id`, `idp_provider`, `external_id`)는 한 `sub`에만 묶인다. 같은 external identity를 다른 `sub`로 이동하거나, 이미 다른 external identity에 묶인 `sub`를 재링크하면 `IR_SCHEMA_INVALID(scim_external_id_sub_conflict|scim_sub_external_id_conflict)`로 fail-closed 한다. 외부 IdP의 subject rename/merge 정책은 자동 추측하지 않는다.
+- SCIM group-to-role mapping source of truth는 RPA-owned `scim_group_role_mappings` 원장이다. 각 row는 `(tenant_id, provider_key, external_group)` opaque external group string 하나를 닫힌 RPA role enum 하나로 매핑하며, `status='active'` row만 inbound sync에 사용한다. 외부 IdP group 의미/계층/상속은 추측하지 않는다.
+- `POST /v1/scim/principals` body는 `roles` 또는 `external_groups` 중 정확히 하나만 포함해야 한다. 둘을 혼합하거나 둘 다 생략하면 `IR_SCHEMA_INVALID(scim_role_source_conflict|missing_scim_role_source)`로 fail-closed 한다. `external_groups` 경로는 모든 group이 active ledger row로 매핑되어야 하며, 하나라도 미매핑/disabled이면 `IR_SCHEMA_INVALID(scim_group_role_unmapped)`이고 principal/role upsert를 수행하지 않는다.
+- 여러 external group이 같은 RPA role로 매핑되면 resolved role set은 중복 제거한다. direct `roles` 입력은 이미 upstream에서 닫힌 RPA role로 변환된 provider에 한해 유지되는 경로이며, ledger 기반 `external_groups`와 병합하지 않는다.
 
 ---
 

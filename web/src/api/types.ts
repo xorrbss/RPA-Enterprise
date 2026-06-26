@@ -59,7 +59,42 @@ export interface AutomationPerformanceSummary {
   readonly reprocessing_rate: number | null;
   readonly estimated_hours_saved: number;
   readonly estimated_value: number;
+  readonly implementation_effort: number;
+  readonly net_value: number;
+  readonly value_to_cost_ratio: number | null;
+  readonly payback_months: number | null;
   readonly gateway_cost: number;
+  readonly cost_by_status: AutomationPerformanceCostByStatus;
+  readonly failed_cost: number;
+  readonly rerun_cost: number;
+  readonly avg_cost_per_run: number | null;
+  readonly cost_per_completed_run: number | null;
+  readonly llm_call_cost: number | null;
+  readonly run_vs_call_cost_delta: number | null;
+  readonly roi_idea_count: number;
+  readonly roi_confidence: AutomationPerformanceRoiConfidence;
+}
+
+export interface AutomationPerformanceCostByStatus {
+  readonly completed: number;
+  readonly failed_business: number;
+  readonly failed_system: number;
+  readonly other: number;
+}
+
+export interface AutomationPerformanceRoiConfidence {
+  readonly low: number;
+  readonly medium: number;
+  readonly high: number;
+}
+
+export interface AutomationPerformanceCostByModel {
+  readonly model: string;
+  readonly calls: number;
+  readonly input_tokens: number | null;
+  readonly output_tokens: number | null;
+  readonly cost: number | null;
+  readonly cost_share: number | null;
 }
 
 export interface AutomationPerformanceFailureTop {
@@ -79,7 +114,17 @@ export interface AutomationPerformanceWorkflow {
   readonly reprocessing_rate: number | null;
   readonly estimated_hours_saved: number;
   readonly estimated_value: number;
+  readonly implementation_effort: number;
+  readonly net_value: number;
+  readonly value_to_cost_ratio: number | null;
+  readonly payback_months: number | null;
   readonly gateway_cost: number;
+  readonly cost_by_status: AutomationPerformanceCostByStatus;
+  readonly rerun_cost: number;
+  readonly avg_cost_per_run: number | null;
+  readonly cost_per_completed_run: number | null;
+  readonly roi_idea_count: number;
+  readonly roi_confidence: AutomationPerformanceRoiConfidence;
 }
 
 export interface AutomationPerformanceTrend {
@@ -92,6 +137,11 @@ export interface AutomationPerformanceTrend {
   readonly rerun_count: number;
   readonly reprocessing_rate: number | null;
   readonly gateway_cost: number;
+  readonly cost_by_status: AutomationPerformanceCostByStatus;
+  readonly rerun_cost: number;
+  readonly avg_cost_per_run: number | null;
+  readonly cost_per_completed_run: number | null;
+  readonly cost_delta_from_previous_day: number | null;
 }
 
 export interface AutomationPerformanceReport {
@@ -100,6 +150,7 @@ export interface AutomationPerformanceReport {
   readonly period_start: string;
   readonly period_end: string;
   readonly summary: AutomationPerformanceSummary;
+  readonly cost_by_model: readonly AutomationPerformanceCostByModel[];
   readonly failure_top: readonly AutomationPerformanceFailureTop[];
   readonly trends: readonly AutomationPerformanceTrend[];
   readonly by_workflow: readonly AutomationPerformanceWorkflow[];
@@ -513,7 +564,21 @@ export interface RunTriggerFireItem {
 }
 
 export type OpsAlertSeverity = "critical" | "warning" | "info";
-export type OpsAlertSource = "run_sla" | "human_task_sla" | "trigger_fire" | "failure_spike" | "dlq";
+export type OpsAlertSource = "run_sla" | "human_task_sla" | "trigger_fire" | "failure_spike" | "dlq" | "bot_pool";
+export type OpsAlertStatus = "open" | "acknowledged";
+
+export interface OpsAlertDelivery {
+  readonly channel: "console";
+  readonly status: "delivered";
+  readonly delivered_at: string;
+  readonly external_delivery: false;
+}
+
+export interface OpsAlertAck {
+  readonly acknowledged_by: string;
+  readonly acknowledged_at: string;
+  readonly comment: string | null;
+}
 
 export interface OpsAlertItem {
   readonly alert_id: string;
@@ -521,9 +586,11 @@ export interface OpsAlertItem {
   readonly source: OpsAlertSource;
   readonly title: string;
   readonly detail: string;
-  readonly subject_type: "run" | "human_task" | "run_trigger" | "dlq";
+  readonly subject_type: "run" | "human_task" | "run_trigger" | "dlq" | "bot_pool";
   readonly subject_id: string | null;
-  readonly status: "open";
+  readonly status: OpsAlertStatus;
+  readonly delivery: OpsAlertDelivery;
+  readonly ack: OpsAlertAck | null;
   readonly recommended_action: string;
   readonly route: string | null;
   readonly detected_at: string;
@@ -533,6 +600,7 @@ export interface OpsAlertItem {
 export interface OpsAlertListParams extends ListParams {
   readonly severity?: OpsAlertSeverity;
   readonly source?: OpsAlertSource;
+  readonly status?: OpsAlertStatus | "all";
 }
 
 export type OpsHealthStatus = "ok" | "warning" | "critical";

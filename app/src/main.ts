@@ -274,7 +274,7 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
         }
       : {}),
     ...(sessionStore !== undefined ? { sessionStore } : {}),
-    ...(webhookSecretBoundary !== undefined ? { webhookSecretBoundary } : {}),
+    ...(webhookSecretBoundary !== undefined ? { webhookSecretBoundary, scimSignatureSecretBoundary: webhookSecretBoundary } : {}),
   });
   await api.listen({ host: "0.0.0.0", port: cfg.port });
   console.log(JSON.stringify({

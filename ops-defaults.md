@@ -46,6 +46,17 @@
 | `worker.circuit.consecutive_failures` | 5 | 3 | worker.circuit_opened | 워커 격리. 카운터 = `workers.consecutive_init_failures`(per-worker 연속 INIT 실패; R3b openCircuit 트리거 — state-machine §1). INIT 성공 시 0 reset |
 | `worker.circuit.open_duration` | 1m | 200ms | worker.circuit_opened→half_open | cooldown. **`circuit_until` 경과 후 claim 은 프로브로 허용**(게이트 `checkWorkerCircuit`=read-only). 프로브 성공이 `open`→`half_open`→`closed`, 프로브 실패가 `open` 재진입을 **`recordWorkerInit*`에서 원자적으로** 처리(게이트 미전이 → SESSION_LOCKED/resume 조기반환이 limbo 안 만듦). cooldown 중·`circuit_until` 미설정(레거시/수동 open)은 fail-closed. worker 서킷은 infra → tenant `events_outbox` 미발행 |
 | `worker.circuit.half_open_close_threshold` | 2 | 2 | worker.circuit_closed | **half_open 회복**: 연속 INIT 프로브 성공 N회(=`workers.half_open_successes`) → `closed`(회복 확정). half_open 프로브 **1회 실패 → 즉시 `open` 재진입**+cooldown(closed 의 누적 임계보다 민감). N=1 이면 단일 프로브 성공으로 close |
+| `worker.lease_expiry_isolation.open_duration` | = `worker.circuit.open_duration` | 200ms | `lease_sweeper` → `workers.circuit_state` | `lease_sweeper`가 `browser_leases.state IN ('reserved','active') AND expires_at < now()` 행을 `expired`로 전환하면, 반환된 `owner_worker_id`의 browser worker를 즉시 `circuit_state='open'`으로 격리하고 동일 cooldown을 설정한다. 두 번째 sweep은 이미 만료된 lease를 반환하지 않아 멱등이다. worker는 infra이므로 tenant `events_outbox`는 발행하지 않고, tenant 영향은 `bot_pool` ops alert로 노출한다 |
+
+### 3.1 Ops alert console delivery / ack
+
+- Product Open v1 delivery channel은 콘솔 alert center뿐이다. 모든 `OpsAlert.delivery`는 `{ channel:"console", status:"delivered", external_delivery:false }`이며 Teams/Slack/email/webhook 전송 성공으로 위장하지 않는다.
+- `POST /v1/ops-alerts/{alert_id}/ack`는 `ops_alert.ack` + `Idempotency-Key`를 요구한다. 현재 계산 가능한 alert가 아니면 `RESOURCE_NOT_FOUND(reason=ops_alert_not_current)`로 실패한다.
+- ack 원장은 `ops_alert_acknowledgements(tenant_id, alert_id, detected_at)` generation 키로 저장한다. 장애가 해소 후 재발해 `detected_at`이 바뀌면 이전 ack가 새 open alert를 숨기지 않는다. `GET /v1/ops-alerts` 기본은 `status=open`이며 `status=acknowledged|all`로 원장 반영 상태를 조회한다.
+- v1.1 external delivery 준비 계약은 future-only이며 기본값은 disabled다. 후보 외부 채널은 `teams`·`slack`·`email`·`webhook`이고, Product Open v1에서 `delivered`로 인정되는 채널은 계속 `console`뿐이다.
+- future external delivery는 ack와 별도 leg다. ack 원장은 외부 전송 성공/실패를 표시하지 않고, 외부 전송 실패도 `POST /ack` 성공을 막지 않는다.
+- 외부 전송 전제조건은 all-or-nothing이다: channel connector 활성화, endpoint/credential의 `SecretRef` 보관, 수신자/route policy, real send receipt가 모두 있어야 한다. 하나라도 없거나 unknown이면 외부 leg는 `deferred` 또는 미인큐 상태로 남기고, console alert만 노출한다. `sent`/`delivered`를 합성하지 않는다.
+- v1.1 구현 전 owner input: 채택 채널, SecretRef namespace/backend, 수신자 라우팅 owner, retry/DLQ 정책, 허용 endpoint domain/provider account ownership. 이는 Product Open v1 blocker가 아니다.
 
 ---
 

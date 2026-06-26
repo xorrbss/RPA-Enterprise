@@ -367,6 +367,7 @@ export interface MinimalControlPlaneServices {
   resumeRunTrigger(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listRunTriggerFires(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listOpsAlerts(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  ackOpsAlert(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getOpsHealth(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listAutomationIdeas(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   createAutomationIdea(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -709,6 +710,40 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
 
   async listOpsAlerts(_ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
     return page([]);
+  }
+
+  async ackOpsAlert(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const alertId = requireParam(ctx, "alert_id");
+    const body = isRecord(ctx.body) ? ctx.body : {};
+    const now = new Date().toISOString();
+    return {
+      status: 200,
+      body: {
+        alert_id: alertId,
+        severity: "info",
+        source: "bot_pool",
+        title: "Acknowledged alert",
+        detail: "Console alert acknowledgement accepted.",
+        subject_type: "bot_pool",
+        subject_id: alertId.startsWith("bot_pool:") ? alertId.slice("bot_pool:".length) : null,
+        status: "acknowledged",
+        delivery: {
+          channel: "console",
+          status: "delivered",
+          delivered_at: now,
+          external_delivery: false,
+        },
+        ack: {
+          acknowledged_by: ctx.principal.subjectId,
+          acknowledged_at: now,
+          comment: optionalString(body, "comment") ?? null,
+        },
+        recommended_action: "Review the current operations alert in the console.",
+        route: "#orchestration?panel=botPools",
+        detected_at: now,
+        due_at: null,
+      },
+    };
   }
 
   async getOpsHealth(_ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -1664,6 +1699,7 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     resumeRunTrigger: bind(services.resumeRunTrigger),
     listRunTriggerFires: bind(services.listRunTriggerFires),
     listOpsAlerts: bind(services.listOpsAlerts),
+    ackOpsAlert: bind(services.ackOpsAlert),
     getOpsHealth: bind(services.getOpsHealth),
     listAutomationIdeas: bind(services.listAutomationIdeas),
     createAutomationIdea: bind(services.createAutomationIdea),

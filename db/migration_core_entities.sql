@@ -1,7 +1,8 @@
 -- ============================================================
 -- Migration: 핵심 엔티티 DDL (Phase 2 — README §외부 의존 맵 잔여 TODO 해소)
 -- 대상: runs, run_steps, workitems, human_tasks, scenarios,
---       scenario_versions, automation_ideas, roi_estimates, run_triggers, run_trigger_fires, artifacts, events_outbox, dead_letter,
+--       scenario_versions, automation_ideas, roi_estimates, run_triggers, run_trigger_fires, artifacts, events_outbox,
+--       ops_alert_acknowledgements, dead_letter,
 --       stagehand_calls, action_plan_cache, site_profiles,
 --       site_profile_approvals, site_block_samples, browser_identities, network_policies,
 --       gateway_policies, control_plane_idempotency_keys, workers
@@ -592,7 +593,7 @@ CREATE INDEX idx_run_reruns_source ON run_reruns (tenant_id, source_run_id, crea
 
 CREATE TABLE run_pause_requests (
   id              uuid        PRIMARY KEY,
-  tenant_id       uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  tenant_id       uuid        NOT NULL,
   run_id          uuid        NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
   requested_by    text        NOT NULL CHECK (length(requested_by) > 0),
   reason          text,
@@ -740,7 +741,57 @@ CREATE INDEX idx_human_tasks_expiry ON human_tasks (expires_at)
   WHERE state IN ('open','assigned','in_progress','escalated');  -- timeout sweeper(H4/H8)
 
 -- ============================================================
--- 6b. principals — 테넌트 주체 디렉터리(name-picker)
+-- 6b. scim_providers — SCIM inbound provider 등록/검증 모델
+--    provider_key(idp_provider)는 SCIM sync body의 idp_provider와 일치해야 한다.
+--    서명키 material은 DB에 저장하지 않고 SecretRef만 보유한다(security-contracts §1).
+--    v1 inbound schema는 scim-principal@1로 닫고, unknown schema는 성공처럼 처리하지 않는다.
+-- ============================================================
+CREATE TABLE scim_providers (
+  id                   uuid        PRIMARY KEY,
+  tenant_id            uuid        NOT NULL,
+  provider_key         text        NOT NULL CHECK (provider_key ~ '^[a-z0-9][a-z0-9._:-]{1,63}$'),
+  display_name         text        NOT NULL CHECK (length(display_name) > 0),
+  status               text        NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  inbound_schema_ref   text        NOT NULL DEFAULT 'scim-principal@1'
+                         CHECK (inbound_schema_ref IN ('scim-principal@1')),
+  auth_mode            text        NOT NULL DEFAULT 'signed_request_v1'
+                         CHECK (auth_mode IN ('signed_request_v1')),
+  signature_secret_ref text        NOT NULL CHECK (length(signature_secret_ref) > 0),
+  clock_skew_seconds   integer     NOT NULL DEFAULT 300 CHECK (clock_skew_seconds BETWEEN 0 AND 900),
+  created_by           text        NOT NULL CHECK (length(created_by) > 0),
+  updated_by           text,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, provider_key)
+);
+CREATE INDEX idx_scim_providers_tenant_status ON scim_providers (tenant_id, status, provider_key);
+
+-- ============================================================
+-- 6c. scim_group_role_mappings — RPA-owned SCIM external group → role ledger
+--    외부 group id의 의미는 추측하지 않는다. 테넌트 admin이 provider별 opaque group string을
+--    닫힌 RPA role enum 하나로 명시 매핑한 row만 source of truth다.
+-- ============================================================
+CREATE TABLE scim_group_role_mappings (
+  id             uuid        PRIMARY KEY,
+  tenant_id      uuid        NOT NULL,
+  provider_key   text        NOT NULL CHECK (provider_key ~ '^[a-z0-9][a-z0-9._:-]{1,63}$'),
+  external_group text        NOT NULL CHECK (length(external_group) > 0),
+  role           text        NOT NULL CHECK (role IN ('viewer','operator','reviewer','approver','admin')),
+  status         text        NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  description    text,
+  created_by     text        NOT NULL CHECK (length(created_by) > 0),
+  updated_by     text,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, provider_key, external_group),
+  FOREIGN KEY (tenant_id, provider_key) REFERENCES scim_providers(tenant_id, provider_key)
+);
+CREATE INDEX idx_scim_group_role_mappings_active
+  ON scim_group_role_mappings (tenant_id, provider_key, external_group, role)
+  WHERE status = 'active';
+
+-- ============================================================
+-- 6d. principals — 테넌트 주체 디렉터리(name-picker)
 --    PrincipalId(JWT sub) ↔ display_name 매핑. sub 는 human_tasks.assignee / approval_decisions.decided_by 와
 --    동형 자유형 text(UUID 보장 없음: OIDC sub auth0|… 등). 쓰기 경로 2개:
 --    ① JWT optional `name` 클레임 자동 upsert(source='jwt') ② admin 수동 등록(source='manual').
@@ -769,7 +820,7 @@ CREATE UNIQUE INDEX uq_principals_external_identity
   WHERE idp_provider IS NOT NULL AND external_id IS NOT NULL;
 
 -- ============================================================
--- 6c. principal_role_assignments — tenant-wide RBAC assignment ledger
+-- 6e. principal_role_assignments — tenant-wide RBAC assignment ledger
 --    JWT roles remain valid; effective_roles = token roles ∪ active manual/SCIM assignments.
 -- ============================================================
 
@@ -1036,6 +1087,27 @@ CREATE INDEX idx_events_outbox_retention ON events_outbox (retention_until)
 --   RETURNING event_id;
 -- 0 row면 이미 다른 relay가 발행했거나 row가 없으므로 재발행하지 않는다.
 
+-- ------------------------------------------------------------
+-- ops_alert_acknowledgements — 계산형 운영 알림의 console-only ack 원장.
+--   알림 본문은 저장하지 않는다. 현재 계산된 generation(alert_id + detected_at)만 ack 가능하며,
+--   장애가 해소 후 재발해 detected_at 이 바뀌면 이전 ack 가 새 장애를 숨기지 않는다.
+-- ------------------------------------------------------------
+CREATE TABLE ops_alert_acknowledgements (
+  id                uuid        PRIMARY KEY,
+  tenant_id         uuid        NOT NULL,
+  alert_id          text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
+  detected_at       timestamptz NOT NULL,
+  source            text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool')),
+  subject_type      text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool')),
+  subject_id        text,
+  acknowledged_by   text        NOT NULL CHECK (length(acknowledged_by) > 0),
+  acknowledged_at   timestamptz NOT NULL DEFAULT now(),
+  comment           text        CHECK (comment IS NULL OR length(comment) <= 1000),
+  UNIQUE (tenant_id, alert_id, detected_at)
+);
+CREATE INDEX idx_ops_alert_acknowledgements_tenant_time
+  ON ops_alert_acknowledgements (tenant_id, acknowledged_at DESC);
+
 -- ============================================================
 -- 9. dead_letter
 --    state-machine W5/W7(생성)·W10(manual_replay 복원). error-catalog DEAD_LETTER.
@@ -1284,6 +1356,8 @@ ALTER TABLE action_plan_cache   ADD CONSTRAINT uq_action_plan_cache_tenant_id_id
 ALTER TABLE site_element_repository ADD CONSTRAINT uq_site_element_repository_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE browser_recording_sessions ADD CONSTRAINT uq_browser_recording_sessions_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE browser_recording_events ADD CONSTRAINT uq_browser_recording_events_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scim_providers ADD CONSTRAINT uq_scim_providers_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE scim_group_role_mappings ADD CONSTRAINT uq_scim_group_role_mappings_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE principal_role_assignments ADD CONSTRAINT uq_principal_role_assignments_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE principal_role_assignment_events ADD CONSTRAINT uq_principal_role_assignment_events_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE credential_binding_events ADD CONSTRAINT uq_credential_binding_events_tenant_id_id UNIQUE (tenant_id, id);
@@ -1537,15 +1611,18 @@ BEGIN
     'runs',
     'run_reruns',
     'run_pause_requests',
-    'scenario_generations',
+	    'scenario_generations',
     'run_steps',
 	    'human_tasks',
+	    'scim_providers',
+	    'scim_group_role_mappings',
 	    'principals',
 	    'principal_role_assignments',
 	    'principal_role_assignment_events',
-	    'document_jobs',
+    'document_jobs',
     'document_extractions',
     'events_outbox',
+    'ops_alert_acknowledgements',
     'dead_letter',
     'action_plan_cache',
     'stagehand_calls',

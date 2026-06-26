@@ -50,6 +50,7 @@ import type { ExecutorPlugin } from "../../../ts/core-types";
 import type { RunEnqueuer } from "../api/run-queue";
 import { processRunTriggerFireJob } from "./run-trigger-scheduler";
 import { errText, workerLog } from "../observability/log";
+import { DEFAULT_WORKER_CIRCUIT_OPEN_MS } from "./runtime-worker-run-context";
 
 /** 만료 lease 세션 teardown 대기(ops-defaults run.abort_timeout 30s 동형 — close 미완 시 timeout 처리). */
 const DEFAULT_LEASE_SWEEP_TEARDOWN_TIMEOUT_MS = 30_000;
@@ -327,6 +328,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
       return r.rows;
     });
 
+    await this.isolateWorkersForExpiredBrowserLeases(expiredBrowser);
+
     // 좀비 run 회수(감사 클러스터 B): 만료 lease 의 연결 run 이 비종결(claimed/running/completing/suspending/resuming)이면
     //   소유 워커가 크래시/wedge(heartbeat 미갱신 5분 — 클러스터 A 배선 후 expired=dead-worker 신호) → failed_system 종결.
     //   run-state 회수는 세션 불요라 cross-worker(어느 워커든 수행) + idempotent CAS(이미 종결됐으면 no-op). best-effort·loud(내부 흡수).
@@ -366,6 +369,33 @@ export class PgRuntimeWorker implements RuntimeWorker {
     }
 
     return { kind: "completed", emittedEvents: [] };
+  }
+
+  private async isolateWorkersForExpiredBrowserLeases(
+    expiredBrowser: readonly { readonly owner_worker_id: string }[],
+  ): Promise<void> {
+    const workerIds = [...new Set(expiredBrowser.map((lease) => lease.owner_worker_id))];
+    if (workerIds.length === 0) return;
+
+    const openMs = this.options.workerCircuitOpenMs ?? DEFAULT_WORKER_CIRCUIT_OPEN_MS;
+    if (!Number.isInteger(openMs) || openMs <= 0) {
+      throw new Error("RuntimeWorker: workerCircuitOpenMs must be a positive integer");
+    }
+
+    await this.pool.query(
+      `UPDATE workers
+          SET circuit_state = 'open',
+              circuit_until = GREATEST(
+                COALESCE(circuit_until, '-infinity'::timestamptz),
+                now() + ($2::int * interval '1 millisecond')
+              ),
+              consecutive_init_failures = 0,
+              half_open_successes = 0
+        WHERE id = ANY($1::uuid[])
+          AND kind = 'browser'
+          AND status = 'active'`,
+      [workerIds, openMs],
+    );
   }
 }
 

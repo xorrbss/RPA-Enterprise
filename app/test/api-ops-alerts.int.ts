@@ -44,6 +44,10 @@ const TRIGGER_A = "8a300000-0000-4000-8000-000000000001";
 const FIRE_A = "8a310000-0000-4000-8000-000000000001";
 const WORKITEM_A = "8a400000-0000-4000-8000-000000000001";
 const DLQ_A = "8a410000-0000-4000-8000-000000000001";
+const WORKER_POOL_A = "8a500000-0000-4000-8000-000000000001";
+const SITE_POOL_A = "8a600000-0000-4000-8000-000000000001";
+const IDENTITY_POOL_A = "8a700000-0000-4000-8000-000000000001";
+const LEASE_POOL_EXPIRED = "8a800000-0000-4000-8000-000000000001";
 
 const SECRET = new TextEncoder().encode("ops-alerts-int-secret-do-not-use-in-prod-0123456789");
 
@@ -91,11 +95,31 @@ async function seedAlerts(pool: Pool): Promise<void> {
   await seedScenario(pool, TENANT_A, SCEN_A, SVER_A);
   await seedScenario(pool, TENANT_B, SCEN_B, SVER_B);
 
+  const direct = await pool.connect();
+  try {
+    await direct.query(`SET search_path = ${SCHEMA}, public`);
+    await direct.query(
+      `INSERT INTO workers (id, kind, status, heartbeat_at, circuit_state)
+       VALUES ($1,'browser','active',now(),'closed')`,
+      [WORKER_POOL_A],
+    );
+  } finally {
+    direct.release();
+  }
+
   await withTenantTx(pool, TENANT_A, async (client) => {
+    await client.query(`INSERT INTO site_profiles (id, tenant_id, name, url_pattern) VALUES ($1,$2,'ops-pool','https://ops-pool.example/*')`, [SITE_POOL_A, TENANT_A]);
+    await client.query(`INSERT INTO browser_identities (id, tenant_id, site_profile_id, label) VALUES ($1,$2,$3,'ops-pool')`, [IDENTITY_POOL_A, TENANT_A, SITE_POOL_A]);
     await client.query(
       `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, created_at, updated_at)
        VALUES ($1,$2,$3,'running',$1,$4::timestamptz,$5::timestamptz)`,
       [RUN_A, TENANT_A, SVER_A, isoMinutesFromNow(-90), isoMinutesFromNow(-5)],
+    );
+    await client.query(
+      `INSERT INTO browser_leases
+         (id, tenant_id, site_profile_id, browser_identity_id, run_id, owner_worker_id, isolation, state, cleanup_policy, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'context','active','preserve_session',$7::timestamptz)`,
+      [LEASE_POOL_EXPIRED, TENANT_A, SITE_POOL_A, IDENTITY_POOL_A, RUN_A, WORKER_POOL_A, isoMinutesFromNow(-7)],
     );
     for (const [index, runId] of RUN_SLA_EXTRA.entries()) {
       await client.query(
@@ -164,6 +188,8 @@ async function main(): Promise<void> {
       await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
+      await setup.query(`CREATE TABLE tenants (id uuid PRIMARY KEY)`);
+      await setup.query(`INSERT INTO tenants (id) VALUES ($1::uuid), ($2::uuid)`, [TENANT_A, TENANT_B]);
       await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));
       await setup.query(readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8"));
     } finally {
@@ -173,19 +199,33 @@ async function main(): Promise<void> {
     await app.ready();
 
     const viewer = await mint(["viewer"]);
+    const operator = await mint(["operator"], TENANT_A, "operator-a");
     const noRole = await mint([]);
     const viewerB = await mint(["viewer"], TENANT_B, "viewer-b");
 
     const all = await app.inject({ method: "GET", url: "/v1/ops-alerts?limit=20", headers: { authorization: `Bearer ${viewer}` } });
     check("viewer list ops alerts -> 200", all.statusCode === 200, all.body);
-    const allBody = all.json() as { items: Array<{ alert_id: string; severity: string; source: string; route: string | null }>; next_cursor: string | null };
+    const allBody = all.json() as {
+      items: Array<{
+        alert_id: string;
+        severity: string;
+        source: string;
+        route: string | null;
+        status: string;
+        delivery: { channel: string; external_delivery: boolean };
+        ack: null | { acknowledged_by: string; acknowledged_at: string; comment: string | null };
+      }>;
+      next_cursor: string | null;
+    };
     const alertById = new Map(allBody.items.map((item) => [item.alert_id, item]));
-    check("all five alert sources are present", ["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "dlq"].every((source) => allBody.items.some((item) => item.source === source)), all.body);
+    check("all six alert sources are present", ["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "dlq", "bot_pool"].every((source) => allBody.items.some((item) => item.source === source)), all.body);
+    check("console delivery metadata is explicit and unacked by default", allBody.items.every((item) => item.status === "open" && item.delivery.channel === "console" && item.delivery.external_delivery === false && item.ack === null), all.body);
     check("critical alerts sort first", allBody.items[0]?.severity === "critical", all.body);
     check("route hints are console hash routes", allBody.items.some((item) => typeof item.route === "string" && item.route.startsWith("#")), all.body);
     check("run SLA route deep-links to run trace subject", alertById.get(`run_sla:${RUN_A}`)?.route === `#runTrace?run=${RUN_A}`, all.body);
     check("human task SLA route deep-links to task subject", alertById.get(`human_task_sla:${HT_CRITICAL}`)?.route === `#humanTasks?ht=${HT_CRITICAL}`, all.body);
     check("trigger fire route deep-links to trigger subject", alertById.get(`trigger_fire:${FIRE_A}`)?.route === `#automationOps?trigger=${TRIGGER_A}`, all.body);
+    check("bot pool alert targets orchestration panel", alertById.get("bot_pool:browser-default")?.route === "#orchestration?panel=botPools", all.body);
 
     const humanOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=human_task_sla&severity=warning", headers: { authorization: `Bearer ${viewer}` } });
     const humanBody = humanOnly.json() as { items: Array<{ source: string; severity: string; alert_id: string; route: string | null }> };
@@ -208,6 +248,62 @@ async function main(): Promise<void> {
 
     const invalid = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=email", headers: { authorization: `Bearer ${viewer}` } });
     check("invalid source -> 422", invalid.statusCode === 422 && invalid.json().code === "IR_SCHEMA_INVALID", invalid.body);
+
+    const viewerAckDenied = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/ack`,
+      headers: { authorization: `Bearer ${viewer}`, "idempotency-key": "ack-viewer-denied" },
+      payload: { comment: "viewer should not ack" },
+    });
+    check("viewer ops alert ack denied -> 403", viewerAckDenied.statusCode === 403 && viewerAckDenied.json().code === "AUTHZ_FORBIDDEN", viewerAckDenied.body);
+
+    const missingKeyAck = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/ack`,
+      headers: { authorization: `Bearer ${operator}` },
+      payload: { comment: "missing idempotency key" },
+    });
+    check("ops alert ack without idempotency key -> 422", missingKeyAck.statusCode === 422 && missingKeyAck.json().code === "IR_SCHEMA_INVALID", missingKeyAck.body);
+
+    const ack = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/ack`,
+      headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ack-bot-pool" },
+      payload: { comment: "checking worker lease expiry" },
+    });
+    const ackBody = ack.json() as { alert_id: string; status: string; source: string; ack: { acknowledged_by: string; acknowledged_at: string; comment: string | null } };
+    check("operator bot pool ack -> 200 acknowledged", ack.statusCode === 200 && ackBody.alert_id === "bot_pool:browser-default" && ackBody.status === "acknowledged" && ackBody.source === "bot_pool" && ackBody.ack.acknowledged_by === "operator-a" && ackBody.ack.comment === "checking worker lease expiry", ack.body);
+
+    const ackReplay = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/ack`,
+      headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ack-bot-pool" },
+      payload: { comment: "checking worker lease expiry" },
+    });
+    const ackReplayBody = ackReplay.json() as { alert_id: string; status: string; ack: { acknowledged_by: string; acknowledged_at: string; comment: string | null } };
+    check(
+      "ops alert ack idempotency replay returns same acknowledged generation",
+      ackReplay.statusCode === 200 &&
+        ackReplayBody.alert_id === ackBody.alert_id &&
+        ackReplayBody.status === "acknowledged" &&
+        ackReplayBody.ack.acknowledged_by === ackBody.ack.acknowledged_by &&
+        ackReplayBody.ack.acknowledged_at === ackBody.ack.acknowledged_at &&
+        ackReplayBody.ack.comment === ackBody.ack.comment,
+      ackReplay.body,
+    );
+
+    const botPoolOpen = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=bot_pool", headers: { authorization: `Bearer ${viewer}` } });
+    check("acknowledged bot pool alert hidden from default open list", botPoolOpen.statusCode === 200 && botPoolOpen.json().items.length === 0, botPoolOpen.body);
+    const botPoolAcked = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=bot_pool&status=acknowledged", headers: { authorization: `Bearer ${viewer}` } });
+    check("acknowledged bot pool alert visible by status filter", botPoolAcked.statusCode === 200 && botPoolAcked.json().items.length === 1 && botPoolAcked.json().items[0]?.status === "acknowledged", botPoolAcked.body);
+
+    const unknownAck = await app.inject({
+      method: "POST",
+      url: "/v1/ops-alerts/bot_pool%3Amissing/ack",
+      headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ack-missing" },
+      payload: {},
+    });
+    check("ack for non-current alert -> 404", unknownAck.statusCode === 404 && unknownAck.json().code === "RESOURCE_NOT_FOUND", unknownAck.body);
 
     const tenantB = await app.inject({ method: "GET", url: "/v1/ops-alerts", headers: { authorization: `Bearer ${viewerB}` } });
     check("tenant B sees no tenant A alerts", tenantB.statusCode === 200 && tenantB.json().items.length === 0, tenantB.body);

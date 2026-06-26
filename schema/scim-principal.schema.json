@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scim-principal@1",
+  "title": "SCIM Principal Sync v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "idp_provider", "external_id", "sub", "display_name"],
+  "oneOf": [
+    {
+      "required": ["roles"],
+      "not": { "required": ["external_groups"] }
+    },
+    {
+      "required": ["external_groups"],
+      "not": { "required": ["roles"] }
+    }
+  ],
+  "properties": {
+    "schema_version": { "const": "scim-principal@1" },
+    "idp_provider": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9._:-]{1,63}$"
+    },
+    "external_id": { "type": "string", "minLength": 1 },
+    "sub": { "type": "string", "minLength": 1 },
+    "display_name": { "type": "string", "minLength": 1 },
+    "email": {
+      "anyOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ]
+    },
+    "active": { "type": "boolean", "default": true },
+    "roles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["viewer", "operator", "reviewer", "approver", "admin"]
+      }
+    },
+    "external_groups": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

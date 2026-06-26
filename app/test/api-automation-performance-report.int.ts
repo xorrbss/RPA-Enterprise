@@ -34,6 +34,16 @@ const RUN_FAILED_SYSTEM = "43000000-0000-4000-8000-000000000003";
 const RUN_RERUN_CHILD = "43000000-0000-4000-8000-000000000004";
 const RUN_OUTSIDE = "43000000-0000-4000-8000-000000000005";
 const RUN_TENANT_B = "44000000-0000-4000-8000-000000000001";
+const STEP_COMPLETED = "43000000-0000-4000-8000-000000000101";
+const STEP_FAILED_BUSINESS = "43000000-0000-4000-8000-000000000102";
+const STEP_FAILED_SYSTEM = "43000000-0000-4000-8000-000000000103";
+const STEP_RERUN_CHILD = "43000000-0000-4000-8000-000000000104";
+const STEP_TENANT_B = "44000000-0000-4000-8000-000000000101";
+const CALL_COMPLETED = "43000000-0000-4000-8000-000000000201";
+const CALL_FAILED_BUSINESS = "43000000-0000-4000-8000-000000000202";
+const CALL_FAILED_SYSTEM = "43000000-0000-4000-8000-000000000203";
+const CALL_RERUN_CHILD = "43000000-0000-4000-8000-000000000204";
+const CALL_TENANT_B = "44000000-0000-4000-8000-000000000201";
 const IDEA_A1 = "45000000-0000-4000-8000-000000000001";
 const ROI_A1 = "45000000-0000-4000-8000-000000000011";
 const IDEA_A2 = "45000000-0000-4000-8000-000000000002";
@@ -104,6 +114,26 @@ async function seed(pool: Pool): Promise<void> {
       [RUN_COMPLETED, TENANT_A, SVER_A1, RUN_FAILED_BUSINESS, RUN_FAILED_SYSTEM, RUN_RERUN_CHILD, RUN_OUTSIDE],
     );
     await client.query(
+      `INSERT INTO run_steps (id, tenant_id, run_id, step_id, node_id, attempt, action, status, cache_mode, created_at)
+       VALUES
+         ($1::uuid, $2::uuid, $3::uuid, 'extract', 'extract', 0, 'extract', 'success', 'miss', '2026-06-02T00:00:10Z'),
+         ($4::uuid, $2::uuid, $5::uuid, 'extract', 'extract', 0, 'extract', 'failed_business', 'miss', '2026-06-03T00:00:10Z'),
+         ($6::uuid, $2::uuid, $7::uuid, 'extract', 'extract', 0, 'extract', 'failed_system', 'miss', '2026-06-04T00:00:10Z'),
+         ($8::uuid, $2::uuid, $9::uuid, 'extract', 'extract', 0, 'extract', 'success', 'hit', '2026-06-05T00:00:10Z')`,
+      [STEP_COMPLETED, TENANT_A, RUN_COMPLETED, STEP_FAILED_BUSINESS, RUN_FAILED_BUSINESS, STEP_FAILED_SYSTEM, RUN_FAILED_SYSTEM, STEP_RERUN_CHILD, RUN_RERUN_CHILD],
+    );
+    await client.query(
+      `INSERT INTO stagehand_calls
+         (id, tenant_id, run_id, step_id, attempt, idempotency_key, request_hash, model, transport, stream_status,
+          input_tokens, output_tokens, cost, created_at)
+       VALUES
+         ($1::uuid, $2::uuid, $3::uuid, 'extract', 0, 'call-completed', 'sha256:completed', 'gpt-4o-mini', 'sse', 'done', 1000, 200, 1.250000, '2026-06-02T00:00:11Z'),
+         ($4::uuid, $2::uuid, $5::uuid, 'extract', 0, 'call-business', 'sha256:business', 'gpt-4o-mini', 'sse', 'done', 300, 50, 0.200000, '2026-06-03T00:00:11Z'),
+         ($6::uuid, $2::uuid, $7::uuid, 'extract', 0, 'call-system', 'sha256:system', 'claude-haiku', 'sync', 'done', 400, 100, 0.500000, '2026-06-04T00:00:11Z'),
+         ($8::uuid, $2::uuid, $9::uuid, 'extract', 0, 'call-rerun', 'sha256:rerun', 'gpt-4o-mini', 'sse', 'done', 500, 150, 0.750000, '2026-06-05T00:00:11Z')`,
+      [CALL_COMPLETED, TENANT_A, RUN_COMPLETED, CALL_FAILED_BUSINESS, RUN_FAILED_BUSINESS, CALL_FAILED_SYSTEM, RUN_FAILED_SYSTEM, CALL_RERUN_CHILD, RUN_RERUN_CHILD],
+    );
+    await client.query(
       `INSERT INTO run_reruns (id, tenant_id, source_run_id, child_run_id, mode, params, requested_by, reason, created_at)
        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'same_input', '{}'::jsonb, 'operator-a', 'retry report check', '2026-06-05T00:00:01Z')`,
       [RERUN_ID, TENANT_A, RUN_FAILED_SYSTEM, RUN_RERUN_CHILD],
@@ -131,6 +161,18 @@ async function seed(pool: Pool): Promise<void> {
       `INSERT INTO runs (id, tenant_id, scenario_version_id, status, params, failure_reason, usage_cost, correlation_id, created_at, updated_at)
        VALUES ($1::uuid, $2::uuid, $3::uuid, 'failed_system', '{}'::jsonb, '{"code":"TENANT_B_ONLY","message":"hidden"}'::jsonb, 99.000000, $1::uuid, '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')`,
       [RUN_TENANT_B, TENANT_B, SVER_B],
+    );
+    await client.query(
+      `INSERT INTO run_steps (id, tenant_id, run_id, step_id, node_id, attempt, action, status, cache_mode, created_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'extract', 'extract', 0, 'extract', 'failed_system', 'miss', '2026-06-10T00:00:10Z')`,
+      [STEP_TENANT_B, TENANT_B, RUN_TENANT_B],
+    );
+    await client.query(
+      `INSERT INTO stagehand_calls
+         (id, tenant_id, run_id, step_id, attempt, idempotency_key, request_hash, model, transport, stream_status,
+          input_tokens, output_tokens, cost, created_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'extract', 0, 'tenant-b-call', 'sha256:tenant-b', 'tenant-b-model', 'sse', 'done', 9000, 900, 99.000000, '2026-06-10T00:00:11Z')`,
+      [CALL_TENANT_B, TENANT_B, RUN_TENANT_B],
     );
     await client.query(
       `INSERT INTO automation_ideas (id, tenant_id, title, description, business_owner, department, stage, scenario_id, created_by)
@@ -163,6 +205,8 @@ async function main(): Promise<void> {
       await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
+      await setup.query(`CREATE TABLE tenants (id uuid PRIMARY KEY)`);
+      await setup.query(`INSERT INTO tenants (id) VALUES ($1::uuid), ($2::uuid)`, [TENANT_A, TENANT_B]);
       await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));
       await setup.query(readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8"));
     } finally {
@@ -187,13 +231,67 @@ async function main(): Promise<void> {
     check("success rate uses completed / terminal outcomes", approx(body.summary.success_rate, 0.5), String(body.summary.success_rate));
     check("rerun count and rate are included", body.summary.rerun_count === 1 && approx(body.summary.reprocessing_rate, 0.25), JSON.stringify(body.summary));
     check("ROI and gateway cost are summed", body.summary.estimated_hours_saved === 25 && body.summary.estimated_value === 1250000 && body.summary.gateway_cost === 3, JSON.stringify(body.summary));
+    check(
+      "cost analytics split status, rerun, unit cost, and LLM delta",
+      body.summary.cost_by_status.completed === 2.25 &&
+        body.summary.cost_by_status.failed_business === 0.25 &&
+        body.summary.cost_by_status.failed_system === 0.5 &&
+        body.summary.failed_cost === 0.75 &&
+        body.summary.rerun_cost === 0.75 &&
+        approx(body.summary.avg_cost_per_run, 0.75) &&
+        approx(body.summary.cost_per_completed_run, 1.125) &&
+        approx(body.summary.llm_call_cost, 2.7) &&
+        approx(body.summary.run_vs_call_cost_delta, 0.3),
+      JSON.stringify(body.summary),
+    );
+    check(
+      "ROI analytics include net value, payback, and confidence distribution",
+      body.summary.implementation_effort === 1250000 &&
+        body.summary.net_value === 1249997 &&
+        approx(body.summary.payback_months, 1) &&
+        body.summary.roi_idea_count === 2 &&
+        body.summary.roi_confidence.high === 1 &&
+        body.summary.roi_confidence.medium === 1,
+      JSON.stringify(body.summary),
+    );
+    check(
+      "model cost breakdown is tenant-scoped",
+      Array.isArray(body.cost_by_model) &&
+        body.cost_by_model.length === 2 &&
+        body.cost_by_model[0].model === "gpt-4o-mini" &&
+        approx(body.cost_by_model[0].cost, 2.2) &&
+        body.cost_by_model.every((r: { model: string }) => r.model !== "tenant-b-model"),
+      JSON.stringify(body.cost_by_model),
+    );
     check("failure top excludes cross-tenant rows", body.failure_top.every((r: { code: string }) => r.code !== "TENANT_B_ONLY"), JSON.stringify(body.failure_top));
     const workflowNames = (body.by_workflow as Array<{ scenario_name: string }>).map((row) => row.scenario_name);
     check("ROI-only workflow is present", workflowNames.includes("=Formula [workflow](javascript:alert(1)) <script>"), JSON.stringify(workflowNames));
+    const invoiceWorkflow = (body.by_workflow as Array<{ scenario_name: string; net_value: number; value_to_cost_ratio: number | null; cost_per_completed_run: number | null }>).find((row) => row.scenario_name === "Vendor invoice lookup");
+    check(
+      "workflow ROI analytics include net value and unit cost",
+      invoiceWorkflow !== undefined &&
+        invoiceWorkflow.net_value === 999997 &&
+        invoiceWorkflow.value_to_cost_ratio !== null &&
+        approx(invoiceWorkflow.value_to_cost_ratio, 333333.3333333333) &&
+        invoiceWorkflow.cost_per_completed_run !== null &&
+        approx(invoiceWorkflow.cost_per_completed_run, 1.125),
+      JSON.stringify(invoiceWorkflow),
+    );
+    const rerunTrend = (body.trends as Array<{ day: string; rerun_cost: number; avg_cost_per_run: number | null; cost_delta_from_previous_day: number | null }>).find((row) => row.day === "2026-06-05");
+    check(
+      "daily trends include rerun cost and cost deltas",
+      rerunTrend !== undefined &&
+        rerunTrend.rerun_cost === 0.75 &&
+        rerunTrend.avg_cost_per_run === 0.75 &&
+        rerunTrend.cost_delta_from_previous_day !== null &&
+        approx(rerunTrend.cost_delta_from_previous_day, 0.25),
+      JSON.stringify(rerunTrend),
+    );
 
     const csv = await exportReport(viewer);
     check("CSV export returns text/csv", csv.statusCode === 200 && csv.headers["content-type"]?.toString().includes("text/csv") === true, csv.body);
     check("CSV includes workflow section", csv.body.includes("Workflow ROI"), csv.body);
+    check("CSV includes cost and ROI analytics sections", csv.body.includes("Cost By Model") && csv.body.includes("net_value") && csv.body.includes("cost_delta_from_previous_day"), csv.body);
     check("CSV guards spreadsheet formulas", csv.body.includes("\"'=Formula [workflow](javascript:alert(1)) <script>\""), csv.body);
 
     const xlsx = await exportReport(viewer, "month=2026-06&format=xlsx");
@@ -202,13 +300,13 @@ async function main(): Promise<void> {
     check("XLSX export returns workbook media type", xlsx.statusCode === 200 && xlsx.headers["content-type"]?.toString().includes("spreadsheetml.sheet") === true, xlsx.body);
     check("XLSX export uses xlsx attachment filename", xlsx.headers["content-disposition"]?.toString().includes("automation-performance-2026-06.xlsx") === true, String(xlsx.headers["content-disposition"]));
     check("XLSX export returns zip container", xlsxBody.subarray(0, 2).equals(Buffer.from("PK")), xlsxBody.subarray(0, 4).toString("hex"));
-    check("XLSX includes workflow worksheet", xlsxText.includes("xl/worksheets/sheet3.xml") && xlsxText.includes("Workflow ROI"), xlsxText);
+    check("XLSX includes workflow and model-cost worksheets", xlsxText.includes("Cost By Model") && xlsxText.includes("Workflow ROI"), xlsxText);
     check("XLSX guards spreadsheet formulas", xlsxText.includes("&apos;=Formula [workflow](javascript:alert(1)) &lt;script&gt;"), xlsxText);
 
     const poc = await exportReport(viewer, "month=2026-06&format=poc_markdown");
     check("PoC Markdown export returns markdown", poc.statusCode === 200 && poc.headers["content-type"]?.toString().includes("text/markdown") === true, poc.body);
     check("PoC Markdown export uses md attachment filename", poc.headers["content-disposition"]?.toString().includes("automation-performance-poc-2026-06.md") === true, String(poc.headers["content-disposition"]));
-    check("PoC Markdown includes summary, failures, workflow ROI, and decision guide", poc.body.includes("## Summary Metrics") && poc.body.includes("## Failure Top N") && poc.body.includes("## Workflow ROI / Cost") && poc.body.includes("## Decision Guide"), poc.body);
+    check("PoC Markdown includes summary, failures, model cost, workflow ROI, and decision guide", poc.body.includes("## Summary Metrics") && poc.body.includes("## Failure Top N") && poc.body.includes("## Cost By Model") && poc.body.includes("## Workflow ROI / Cost") && poc.body.includes("## Decision Guide"), poc.body);
     check("PoC Markdown includes report month and decision recommendation", poc.body.includes("2026\\-06") && poc.body.includes("Recommended decision"), poc.body);
     check("PoC Markdown guards spreadsheet formulas", poc.body.includes("'=Formula"), poc.body);
     check("PoC Markdown escapes markdown links", !poc.body.includes("[workflow](javascript:alert(1))") && poc.body.includes("\\[workflow\\]"), poc.body);

@@ -71,6 +71,7 @@ export type RbacAction =
   | "trigger.read"
   | "trigger.manage"
   | "ops_alert.read"
+  | "ops_alert.ack"
   | "automation_idea.read"
   | "automation_idea.manage"
   | "automation_idea.approve"

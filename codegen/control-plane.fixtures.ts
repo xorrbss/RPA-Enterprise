@@ -389,6 +389,7 @@ for (const operationId of [
   "resumeRunTrigger",
   "listRunTriggerFires",
   "listOpsAlerts",
+  "ackOpsAlert",
   "getOpsHealth",
   "listAutomationIdeas",
   "createAutomationIdea",
@@ -448,6 +449,7 @@ assert.equal(registry.getOperation("promoteScenarioFromRun").requiresIdempotency
 assert.equal(registry.getOperation("createRunTrigger").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("pauseRunTrigger").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("resumeRunTrigger").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("ackOpsAlert").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("createAutomationIdea").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("updateAutomationIdea").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("transitionAutomationIdea").requiresIdempotencyKey, true);
@@ -479,6 +481,7 @@ assert.equal(staticRbacAction("pauseRunTrigger"), "trigger.manage");
 assert.equal(staticRbacAction("resumeRunTrigger"), "trigger.manage");
 assert.equal(staticRbacAction("listRunTriggerFires"), "trigger.read");
 assert.equal(staticRbacAction("listOpsAlerts"), "ops_alert.read");
+assert.equal(staticRbacAction("ackOpsAlert"), "ops_alert.ack");
 assert.equal(staticRbacAction("getOpsHealth"), "ops_alert.read");
 assert.equal(staticRbacAction("listAutomationIdeas"), "automation_idea.read");
 assert.equal(staticRbacAction("createAutomationIdea"), "automation_idea.manage");
@@ -561,6 +564,7 @@ assert.equal(registry.getBodyValidator("upsertRoiEstimate")?.validate({
 }).valid, true);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({ assignee: "reviewer-1" }).valid, true);
+assert.equal(registry.getBodyValidator("ackOpsAlert")?.validate({ comment: "확인 중" }).valid, true);
 assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
 assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ model: "codex", capabilities: {}, budget: {} }).valid, true);
 assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
@@ -597,11 +601,13 @@ assert.equal(registry.getParamsValidator("updateSiteElement")?.validate({ site_p
 assert.equal(registry.getParamsValidator("probeSiteElement")?.validate({ site_profile_id: "site-red", element_id: "el-submit" }).valid, true);
 assert.equal(registry.getParamsValidator("listBrowserRecordings")?.validate({ site_profile_id: "site-red" }).valid, true);
 assert.equal(registry.getParamsValidator("appendBrowserRecordingEvents")?.validate({ site_profile_id: "site-red", recording_session_id: "recording-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("ackOpsAlert")?.validate({ alert_id: "bot_pool:browser-default" }).valid, true);
 assert.equal(registry.getQueryValidator("listRuns")?.validate(undefined).valid, false);
 assert.equal(registry.getQueryValidator("listRunTriggers")?.validate({ status: "enabled" }).valid, true);
 assert.equal(registry.getQueryValidator("listRunTriggerFires")?.validate({}).valid, true);
 assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ severity: "critical", source: "run_sla" }).valid, true);
 assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ severity: "warning", source: "failure_spike" }).valid, true);
+assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ source: "bot_pool", status: "acknowledged" }).valid, true);
 assert.equal(registry.getQueryValidator("listAutomationIdeas")?.validate({ stage: "intake" }).valid, true);
 assert.equal(registry.getQueryValidator("listAuditLog")?.validate({ action: "artifact.read", outcome: "allow" }).valid, true);
 assert.equal(registry.getQueryValidator("exportAuditLog")?.validate({ action: "artifact.read", outcome: "allow", format: "csv" }).valid, true);
@@ -720,6 +726,14 @@ const triggerFires = await handlers.listRunTriggerFires!(ctx("listRunTriggerFire
   params: { trigger_id: "trigger-existing" },
 }));
 assert.equal((triggerFires.body as { items: unknown[] }).items.length, 1);
+const alertAcked = await handlers.ackOpsAlert!(ctx("ackOpsAlert", {
+  method: "POST",
+  path: "/v1/ops-alerts/{alert_id}/ack",
+  params: { alert_id: "bot_pool:browser-default" },
+  body: { comment: "확인 중" },
+}));
+assert.equal((alertAcked.body as { status: string }).status, "acknowledged");
+assert.equal((alertAcked.body as { source: string }).source, "bot_pool");
 const opsHealth = await handlers.getOpsHealth!(ctx("getOpsHealth", {
   method: "GET",
   path: "/v1/ops/health",

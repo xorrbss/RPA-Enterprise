@@ -60,6 +60,8 @@ DECLARE
     'run_pause_requests',
     'run_steps',
     'human_tasks',
+    'scim_providers',
+    'scim_group_role_mappings',
     'principals',
     'principal_role_assignments',
     'principal_role_assignment_events',
@@ -67,6 +69,7 @@ DECLARE
     'document_jobs',
     'document_extractions',
     'events_outbox',
+    'ops_alert_acknowledgements',
     'dead_letter',
     'action_plan_cache',
     'stagehand_calls',
@@ -126,12 +129,15 @@ DECLARE
     'run_pause_requests',
     'run_steps',
     'human_tasks',
+    'scim_providers',
+    'scim_group_role_mappings',
     'principals',
     'principal_role_assignments',
     'principal_role_assignment_events',
     'document_jobs',
     'document_extractions',
     'events_outbox',
+    'ops_alert_acknowledgements',
     'dead_letter',
     'action_plan_cache',
     'stagehand_calls',
@@ -483,12 +489,14 @@ BEGIN
   END;
 
   BEGIN
+    PERFORM set_config('app.tenant_id', tenant_b::text, true);
     INSERT INTO run_reruns (id, tenant_id, source_run_id, child_run_id, mode, params, requested_by)
     VALUES ('10000000-0000-0000-0000-000000000047', tenant_b, run_1, rerun_child, 'same_input', '{}'::jsonb, 'smoke-user');
     RAISE EXCEPTION 'run_reruns must reject cross-tenant run links';
   EXCEPTION WHEN foreign_key_violation THEN
     NULL;
   END;
+  PERFORM set_config('app.tenant_id', tenant_a::text, true);
 
   INSERT INTO runs (id, tenant_id, scenario_version_id, status, abort_source_status, correlation_id)
   VALUES (

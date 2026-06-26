@@ -515,9 +515,9 @@ paths:
       tags: [OpsAlerts]
       operationId: listOpsAlerts
       description: >
-        List computed tenant-scoped operations alerts from current runs, human tasks, trigger fires, and DLQ rows.
-        Product Open v1 P1 notification channel is the console alert center only; it does not persist
-        acknowledgement state or send Teams/Slack/email/webhook notifications.
+        List computed tenant-scoped operations alerts from current runs, human tasks, trigger fires, DLQ rows,
+        and Bot Pool health. Product Open v1 delivery is console-only; acknowledgement state is persisted
+        by alert generation, while Teams/Slack/email/webhook notifications remain unopened.
       summary: 운영 알림 목록
       parameters:
         - name: severity
@@ -530,6 +530,13 @@ paths:
           required: false
           schema:
             $ref: '#/components/schemas/OpsAlertSource'
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [open, acknowledged, all]
+            default: open
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
@@ -538,6 +545,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OpsAlertPage'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops-alerts/{alert_id}/ack:
+    post:
+      tags: [OpsAlerts]
+      operationId: ackOpsAlert
+      summary: 운영 알림 확인 처리
+      description: >
+        Acknowledge the current computed alert generation in the console alert center. The command requires
+        Idempotency-Key and ops_alert.ack. The alert must still be current; stale or unknown alert IDs fail closed.
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 300
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpsAlertAckRequest'
+      responses:
+        '200':
+          description: Acknowledged current alert generation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlert'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
         '422':
           $ref: '#/components/responses/Error'
         default:
@@ -2934,6 +2981,7 @@ components:
         - trigger_fire
         - failure_spike
         - dlq
+        - bot_pool
     OpsAlertSubjectType:
       type: string
       enum:
@@ -2941,6 +2989,87 @@ components:
         - human_task
         - run_trigger
         - dlq
+        - bot_pool
+    OpsAlertStatus:
+      type: string
+      enum:
+        - open
+        - acknowledged
+    OpsAlertListStatus:
+      type: string
+      enum:
+        - open
+        - acknowledged
+        - all
+    OpsAlertPathParams:
+      type: object
+      additionalProperties: false
+      required: [alert_id]
+      properties:
+        alert_id:
+          type: string
+          minLength: 1
+          maxLength: 300
+    OpsAlertAckRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        comment:
+          type: [string, "null"]
+          maxLength: 1000
+    OpsAlertListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        severity:
+          $ref: '#/components/schemas/OpsAlertSeverity'
+        source:
+          $ref: '#/components/schemas/OpsAlertSource'
+        status:
+          $ref: '#/components/schemas/OpsAlertListStatus'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
+    OpsAlertDelivery:
+      type: object
+      additionalProperties: false
+      required:
+        - channel
+        - status
+        - delivered_at
+        - external_delivery
+      properties:
+        channel:
+          type: string
+          enum: [console]
+        status:
+          type: string
+          enum: [delivered]
+        delivered_at:
+          type: string
+          format: date-time
+        external_delivery:
+          type: boolean
+          enum: [false]
+    OpsAlertAcknowledgement:
+      type: object
+      additionalProperties: false
+      required:
+        - acknowledged_by
+        - acknowledged_at
+        - comment
+      properties:
+        acknowledged_by:
+          type: string
+        acknowledged_at:
+          type: string
+          format: date-time
+        comment:
+          type: [string, "null"]
+          maxLength: 1000
     AutomationIdeaStage:
       type: string
       enum:
@@ -3754,6 +3883,8 @@ components:
         - subject_type
         - subject_id
         - status
+        - delivery
+        - ack
         - recommended_action
         - route
         - detected_at
@@ -3775,8 +3906,13 @@ components:
         subject_id:
           type: [string, "null"]
         status:
-          type: string
-          enum: [open]
+          $ref: '#/components/schemas/OpsAlertStatus'
+        delivery:
+          $ref: '#/components/schemas/OpsAlertDelivery'
+        ack:
+          oneOf:
+            - $ref: '#/components/schemas/OpsAlertAcknowledgement'
+            - type: "null"
         recommended_action:
           type: string
         route:

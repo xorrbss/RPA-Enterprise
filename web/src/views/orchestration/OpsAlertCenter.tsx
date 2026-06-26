@@ -123,6 +123,7 @@ function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
   if (source === "human_task_sla") return "사람 작업 SLA";
   if (source === "trigger_fire") return "트리거 발화";
   if (source === "failure_spike") return "실패 급증";
+  if (source === "bot_pool") return "Bot Pool";
   return "재처리 대기";
 }
 
@@ -143,6 +144,8 @@ function opsAlertActionLabel(alert: OpsAlertItem): string {
       return "예약 이력 보기";
     case "dlq":
       return "재처리 대기 보기";
+    case "bot_pool":
+      return "Bot Pool 보기";
     default:
       return "자세히 보기";
   }

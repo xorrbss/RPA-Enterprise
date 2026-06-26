@@ -32,6 +32,7 @@ export type SupportedControlPlaneOperationId = Extract<
   | "resumeRunTrigger"
   | "listRunTriggerFires"
   | "listOpsAlerts"
+  | "ackOpsAlert"
   | "getOpsHealth"
   | "listAutomationIdeas"
   | "createAutomationIdea"
@@ -259,6 +260,17 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     querySchemaRef: "#/components/schemas/OpsAlertListQuery",
     responseSchemaRef: "#/components/schemas/OpsAlertPage",
     rbacAction: "ops_alert.read",
+  }),
+  operation({
+    operationId: "ackOpsAlert",
+    method: "POST",
+    path: "/v1/ops-alerts/{alert_id}/ack",
+    paramsSchemaRef: "#/components/schemas/OpsAlertPathParams",
+    requestBodySchemaRef: "#/components/schemas/OpsAlertAckRequest",
+    requestBodyRequired: false,
+    responseSchemaRef: "#/components/schemas/OpsAlert",
+    rbacAction: "ops_alert.ack",
+    requiresIdempotencyKey: true,
   }),
   operation({
     operationId: "getOpsHealth",
@@ -978,6 +990,7 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
   ["updateRunTrigger", requireObject("#/components/schemas/RunTriggerUpdateRequest")],
   ["pauseRunTrigger", requireObject("#/components/schemas/RunTriggerCommandRequest", [], true)],
   ["resumeRunTrigger", requireObject("#/components/schemas/RunTriggerCommandRequest", [], true)],
+  ["ackOpsAlert", requireObject("#/components/schemas/OpsAlertAckRequest", [], true)],
   ["createAutomationIdea", requireObject("#/components/schemas/AutomationIdeaCreateRequest", ["title", "description", "business_owner", "department"])],
   ["createDocumentJob", requireDocumentJobCreateBody("#/components/schemas/DocumentJobCreateRequest")],
   ["extractDocumentJob", requireObject("#/components/schemas/DocumentJobCommandRequest", [], true)],
@@ -1015,6 +1028,7 @@ const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Op
   ["pauseRunTrigger", requireParams("#/components/schemas/RunTriggerPathParams", ["trigger_id"])],
   ["resumeRunTrigger", requireParams("#/components/schemas/RunTriggerPathParams", ["trigger_id"])],
   ["listRunTriggerFires", requireParams("#/components/schemas/RunTriggerPathParams", ["trigger_id"])],
+  ["ackOpsAlert", requireParams("#/components/schemas/OpsAlertPathParams", ["alert_id"])],
   ["getAutomationIdea", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
   ["getDocumentJob", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],
   ["extractDocumentJob", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],

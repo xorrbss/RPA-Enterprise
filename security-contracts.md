@@ -176,3 +176,44 @@ TS 코드 계약: `ts/security-middleware-contract.ts` `ImmutableAuditLogAppendO
 
 TS 코드 계약: `ts/security-middleware-contract.ts` `BypassRlsPolicyContract` 및 `MINIMUM_BYPASS_RLS_POLICY`.
 - Release/staging evidence may record only `SecretRef` identifiers, SecretStore backend aliases/paths, namespace conventions, runtime identity aliases, and `secret.resolve` audit outcome metadata such as row IDs, hashes, counts, and allow/deny results. It must never include `PlainSecret`/resolved material, value-derived hashes or fingerprints, raw credential payloads, or sensitive backend paths designated non-evidence by the staging owner.
+
+---
+
+## 12. SCIM inbound signature boundary
+
+SCIM sync is not a free-form admin upsert. It is a two-gate boundary:
+- Gate 1: normal control-plane authentication and RBAC. The caller must authenticate as a tenant principal with `scim.sync` (admin) permission.
+- Gate 2: registered provider signed request. `scim_providers` is tenant-scoped and stores only provider metadata plus `signature_secret_ref`; HMAC material stays behind `SecretStoreBoundary.resolveAuthorized(purpose='connector', connectorId='scim:<provider_key>')`.
+
+Request headers:
+- `X-RPA-SCIM-Timestamp`: epoch seconds. The provider row controls maximum clock skew; stale or malformed timestamps are `UNAUTHENTICATED`.
+- `X-RPA-SCIM-Signature`: `sha256=<hex>`.
+
+Signing payload:
+
+```text
+{timestamp}.POST./v1/scim/principals.{provider_key}.{schema_version}.{canonical_json(body)}
+```
+
+Rules:
+- Provider row missing/disabled is `AUTHZ_FORBIDDEN`, not implicit bootstrap.
+- Only `schema_version='scim-principal@1'` is contracted. Unknown or mismatched schemas are `IR_SCHEMA_INVALID`; no best-effort field interpretation.
+- Provider external identity `(tenant_id, idp_provider, external_id)` is immutable for a `sub`. Moving it to another `sub`, or relinking an already externally linked `sub`, is `IR_SCHEMA_INVALID`.
+- SCIM role sync may create/revive/revoke only `source='scim'` role assignments. Token roles and `source='manual'` assignments remain outside the SCIM lifecycle.
+- SCIM group-to-role mapping is repo-owned, not inferred from IdP semantics. `scim_group_role_mappings` is the tenant-scoped source of truth for opaque external group strings; only `status='active'` rows map to closed RPA roles.
+- A SCIM principal body must contain exactly one role source: direct `roles` or `external_groups`. Mixing both, omitting both, or sending any unmapped/disabled external group is `IR_SCHEMA_INVALID`; no principal or role upsert may be committed.
+- `signature_secret_ref` may be logged or audited only as a SecretRef identifier. The resolved HMAC key, value-derived hash, or fingerprint must not appear in logs, audit payloads, events, screenshots, or release evidence.
+
+---
+
+## 13. Ops alert external notification SecretRef boundary
+
+Product Open v1 has no external ops-alert send path. If v1.1 opens external delivery, the security boundary is:
+- Channel enum candidates are `teams`, `slack`, `email`, and `webhook`; `console` remains the in-product delivery channel and does not require external SecretRef material.
+- Endpoint URLs, webhook path/query, bearer tokens, SMTP credentials, provider signing secrets, and channel-specific credentials are `SecretRef` material. API/config/audit surfaces may store only SecretRef identifiers, backend aliases, runtime identity aliases, route policy ids, provider/channel aliases, and non-secret display labels.
+- Recommended namespace shape is `rpa/<env>/notification/<channel>/<name>` with a dedicated notification sender runtime identity. Reusing executor/site credentials for notification delivery is not allowed without a versioned contract change.
+- Endpoint allowlist is metadata, not a substitute for SecretRef. The resolved endpoint host must match the approved provider/domain policy; redirects to unapproved domains, missing allowlist, unresolved SecretRef, denied resolve, disabled connector, or missing provider receipt all fail closed.
+- Delivery evidence may record channel, provider alias, SecretRef identifier, receipt id, status class, attempt count, and redacted error code. It must not record PlainSecret, resolved endpoint URL, Authorization headers, webhook body containing secret material, recipient secrets, or value-derived hashes/fingerprints.
+- `test_fake` sender receipts are repo-local test evidence only and cannot satisfy staging/product-open external delivery evidence. A future `sent`/`delivered` state requires a real provider/network receipt through the SecretRef-backed sender.
+- Ack remains a separate authorization and ledger boundary. `ops_alert_acknowledgements` proves only operator acknowledgement; it must not be used as proof that Teams/Slack/email/webhook delivery happened, and external delivery failures must not weaken `ops_alert.ack` RBAC.
+- Owner input before v1.1 implementation: selected channel set, SecretStore backend/namespace, notification sender identity, recipient/group routing policy owner, provider/domain allowlist, retry/DLQ retention, rotation cadence, and break-glass owner. These are future inputs, not Product Open v1 release blockers.

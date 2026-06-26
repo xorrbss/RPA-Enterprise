@@ -156,10 +156,9 @@ async function main(): Promise<void> {
 
     if (failures > 0) {
       console.error(`\nFAIL: ${failures} check(s) failed`);
-      process.exit(1);
+      throw new Error(`${failures} capture-agent integration check(s) failed`);
     }
     console.log("\nPASS: 운영자-로컬 캡처 에이전트 통합 green");
-    process.exit(0);
   } finally {
     await pool.end().catch(() => undefined);
   }
@@ -167,5 +166,5 @@ async function main(): Promise<void> {
 
 main().catch((e) => {
   console.error("capture-agent int fatal:", e);
-  process.exit(1);
+  process.exitCode = 1;
 });

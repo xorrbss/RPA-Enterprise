@@ -153,6 +153,8 @@ async function main(): Promise<void> {
       await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
+      await setup.query(`CREATE TABLE tenants (id uuid PRIMARY KEY)`);
+      await setup.query(`INSERT INTO tenants (id) VALUES ($1::uuid), ($2::uuid)`, [TENANT_A, TENANT_B]);
       await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));
       await setup.query(readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8"));
     } finally {

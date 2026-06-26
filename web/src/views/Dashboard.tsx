@@ -470,6 +470,7 @@ function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
   if (source === "human_task_sla") return "사람 작업 SLA";
   if (source === "trigger_fire") return "트리거 발화";
   if (source === "failure_spike") return "실패 급증";
+  if (source === "bot_pool") return "Bot Pool";
   return "재처리 대기";
 }
 
@@ -500,6 +501,18 @@ function compactNumber(value: number, digits = 0): string {
 
 function moneyLabel(value: number): string {
   return new Intl.NumberFormat("ko-KR", { style: "currency", currency: "KRW", maximumFractionDigits: 0 }).format(value);
+}
+
+function nullableMoneyLabel(value: number | null): string {
+  return value === null ? "-" : moneyLabel(value);
+}
+
+function ratioLabel(value: number | null): string {
+  return value === null ? "-" : `${compactNumber(value, 1)}x`;
+}
+
+function confidenceLabel(value: AutomationPerformanceReport["summary"]["roi_confidence"]): string {
+  return `H${value.high}/M${value.medium}/L${value.low}`;
 }
 
 function ReportMetric({ label, value, note }: { label: string; value: string; note: string }): JSX.Element {
@@ -543,6 +556,7 @@ function AutomationPerformancePanel({
 }): JSX.Element {
   const topWorkflows = report?.by_workflow.slice(0, 5) ?? [];
   const recentTrends = report?.trends.slice(-7) ?? [];
+  const topCostModels = report?.cost_by_model.slice(0, 3) ?? [];
   return (
     <section className="panel performance-report-panel" aria-label="월간 자동화 성과 리포트">
       <div className="panel-head">
@@ -582,6 +596,8 @@ function AutomationPerformancePanel({
             <ReportMetric label="절감 시간" value={`${compactNumber(report.summary.estimated_hours_saved, 1)}h`} note={moneyLabel(report.summary.estimated_value)} />
             <ReportMetric label="재처리율" value={percentLabel(report.summary.reprocessing_rate)} note={`${compactNumber(report.summary.rerun_count)}건 재실행`} />
             <ReportMetric label="Gateway 비용" value={moneyLabel(report.summary.gateway_cost)} note={`${compactNumber(report.summary.total_runs)}건 실행`} />
+            <ReportMetric label="순가치" value={moneyLabel(report.summary.net_value)} note={`${ratioLabel(report.summary.value_to_cost_ratio)} value/cost`} />
+            <ReportMetric label="LLM 비용" value={nullableMoneyLabel(report.summary.llm_call_cost)} note={`delta ${nullableMoneyLabel(report.summary.run_vs_call_cost_delta)}`} />
           </div>
           {recentTrends.length > 0 && (
             <div className="table-wrap performance-workflow-table">
@@ -593,6 +609,8 @@ function AutomationPerformancePanel({
                     <th scope="col">성공률</th>
                     <th scope="col">재처리</th>
                     <th scope="col">비용</th>
+                    <th scope="col">Cost/run</th>
+                    <th scope="col">Delta</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -603,6 +621,8 @@ function AutomationPerformancePanel({
                       <td>{percentLabel(row.success_rate)}</td>
                       <td>{percentLabel(row.reprocessing_rate)}</td>
                       <td>{moneyLabel(row.gateway_cost)}</td>
+                      <td>{nullableMoneyLabel(row.avg_cost_per_run)}</td>
+                      <td>{nullableMoneyLabel(row.cost_delta_from_previous_day)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -625,6 +645,21 @@ function AutomationPerformancePanel({
                 </ul>
               )}
             </div>
+            <div className="performance-failure-list">
+              <h3>모델 비용 Top 3</h3>
+              {topCostModels.length === 0 ? (
+                <p className="subtle">집계된 LLM 호출 비용이 없습니다.</p>
+              ) : (
+                <ul>
+                  {topCostModels.map((item) => (
+                    <li key={item.model}>
+                      <code>{item.model}</code>
+                      <strong>{nullableMoneyLabel(item.cost)} · {compactNumber(item.calls)} calls · {percentLabel(item.cost_share)}</strong>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <div className="table-wrap performance-workflow-table">
               <table>
                 <thead>
@@ -633,13 +668,16 @@ function AutomationPerformancePanel({
                     <th scope="col">성공률</th>
                     <th scope="col">재처리</th>
                     <th scope="col">절감</th>
+                    <th scope="col">순가치</th>
                     <th scope="col">비용</th>
+                    <th scope="col">Cost/run</th>
+                    <th scope="col">ROI 근거</th>
                   </tr>
                 </thead>
                 <tbody>
                   {topWorkflows.length === 0 ? (
                     <tr>
-                      <td colSpan={5}>표시할 업무별 성과가 없습니다.</td>
+                      <td colSpan={8}>표시할 업무별 성과가 없습니다.</td>
                     </tr>
                   ) : (
                     topWorkflows.map((row) => (
@@ -648,7 +686,10 @@ function AutomationPerformancePanel({
                         <td>{percentLabel(row.success_rate)}</td>
                         <td>{percentLabel(row.reprocessing_rate)}</td>
                         <td>{compactNumber(row.estimated_hours_saved, 1)}h · {moneyLabel(row.estimated_value)}</td>
+                        <td>{moneyLabel(row.net_value)} · {ratioLabel(row.value_to_cost_ratio)}</td>
                         <td>{moneyLabel(row.gateway_cost)}</td>
+                        <td>{nullableMoneyLabel(row.cost_per_completed_run)}</td>
+                        <td>{compactNumber(row.roi_idea_count)} · {confidenceLabel(row.roi_confidence)}</td>
                       </tr>
                     ))
                   )}

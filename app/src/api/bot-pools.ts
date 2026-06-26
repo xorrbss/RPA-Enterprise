@@ -4,7 +4,7 @@ import type { PoolClient } from "pg";
 import { withTenantTx } from "../db/pool";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 
-type BotPoolHealth = "ok" | "warning" | "critical";
+export type BotPoolHealth = "ok" | "warning" | "critical";
 
 interface WorkerStatsRow {
   readonly total_count: string;
@@ -31,7 +31,7 @@ interface PendingRow {
   readonly due_triggers: string;
 }
 
-interface BotPoolItem {
+export interface BotPoolItem {
   readonly bot_pool_id: string;
   readonly name: string;
   readonly kind: "browser";
@@ -64,9 +64,10 @@ interface BotPoolItem {
     readonly capacity_gap: number;
     readonly queue_pressure: number | null;
     readonly live_capacity: {
-      readonly available: true;
+      readonly available: boolean;
       readonly pool_key: string;
       readonly source: "worker_pool_memberships";
+      readonly reason_code?: string;
     };
   };
   readonly health: BotPoolHealth;
@@ -83,7 +84,7 @@ export function registerBotPoolRoutes(app: FastifyInstance, deps: ApiServerDeps)
   });
 }
 
-async function readBrowserBotPool(client: PoolClient, tenantId: string): Promise<BotPoolItem> {
+export async function readBrowserBotPool(client: PoolClient, tenantId: string): Promise<BotPoolItem> {
   const poolKey = await readTenantPoolKey(client, tenantId);
   const workerStats = await readWorkerStats(client, poolKey);
   const leaseStats = await readLeaseStats(client, tenantId);
@@ -223,9 +224,10 @@ function botPoolCapacity(
     capacity_gap: Math.max(queuedDemand - availableSlots, 0),
     queue_pressure: capacitySlots > 0 ? queuedDemand / capacitySlots : null,
     live_capacity: {
-      available: true,
+      available: poolKey !== "default",
       pool_key: poolKey,
       source: "worker_pool_memberships",
+      ...(poolKey === "default" ? { reason_code: "worker_pool_membership_missing" } : {}),
     },
   };
 }
