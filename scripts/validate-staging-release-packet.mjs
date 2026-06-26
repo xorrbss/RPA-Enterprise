@@ -99,7 +99,11 @@ function validatePacket(text, source = "packet") {
   requireContains(fields, failures, "SecretStore alias/path", ["Vault", "KV v2", "secret/", "secret/data/rpa/staging"]);
   requireContains(fields, failures, "namespace / identity map", ["D8-A12"]);
   requireContains(fields, failures, "SecretRef inventory", ["D8-A12"]);
-  requireContains(fields, failures, "runtime artifact object-store env", ["ARTIFACT_OBJECT_STORE_REF="]);
+  requireContains(fields, failures, "runtime artifact object-store env", [
+    "GATEWAY_ARTIFACT_STORE_MODE=s3",
+    "GATEWAY_ARTIFACT_OBJECT_STORE_REF=",
+    "ARTIFACT_OBJECT_STORE_REF=",
+  ]);
   requireContains(fields, failures, "artifact store topology preflight", [
     "npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle",
     "PASS",
@@ -206,7 +210,7 @@ function runSelfTest() {
     "- SecretStore alias/path            : Vault KV v2 mount `secret/`, base secret/data/rpa/staging/<runtime>/<purpose>/<name> (values omitted)",
     "- namespace / identity map          : D8-A12 staging-decision-proposals section 3",
     "- SecretRef inventory               : D8-A12 staging-decision-proposals section 4 identifiers only",
-    "- runtime artifact object-store env : `ARTIFACT_OBJECT_STORE_REF=rpa/staging/artifact-lifecycle/object_store/s3`, optional alias=[s3-staging-1]",
+    "- runtime artifact object-store env : `GATEWAY_ARTIFACT_STORE_MODE=s3`; `GATEWAY_ARTIFACT_OBJECT_STORE_REF=rpa/staging/runtime-worker/object_store/s3-producer`; `ARTIFACT_OBJECT_STORE_REF=rpa/staging/artifact-lifecycle/object_store/s3`; alias=[s3-staging-1]",
     "- artifact store topology preflight  : run `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle`; PASS before process start",
     "- retention policy                  : D8-A11/D8-A14 and ops-defaults section 6.1",
     "- live D5 evidence                  : row 50 packet aliases [codex-staging-1]/[model-a]",

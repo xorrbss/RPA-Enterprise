@@ -190,10 +190,10 @@ export interface SecretAccessRequest {
   ref: SecretRef;
   /**
    * Least-privilege scope of the credential. `object_store` is dedicated to artifact
-   * redaction/retention real object-store credentials, resolved only by the isolated
-   * artifact-lifecycle operational identity (ARTIFACT_LIFECYCLE_OPERATIONAL_CONTRACT),
-   * kept distinct from `executor` user-traffic so executor identities are never authorized
-   * for object-store credentials — see release-decisions.md D8-A10.
+   * producer/reader/lifecycle real object-store credentials, resolved only by the D8-A12
+   * authorized operational identities (`api`, `runtime-worker`, `artifact-lifecycle`).
+   * It stays distinct from `executor` user-traffic so executor credentials never imply
+   * object-store access; see release-decisions.md D8-A12/D8-A16.
    * `browser_session` is the at-rest envelope-encryption KEK for reused login sessions
    * (browser_sessions.ciphertext), kept distinct from `executor` credential-fill so a
    * session-key compromise is isolated from live credential traffic — see browser-session-store.ts.

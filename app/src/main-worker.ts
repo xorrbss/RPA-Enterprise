@@ -9,7 +9,7 @@ import { run, runMigrations, type Runner } from "graphile-worker";
 
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
 import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
-import { loadApiSessionEncryption, loadArtifactLifecycleWorkerConfig, loadBrowserConfig, loadGatewayConfig, loadWorkerConfig, type ArtifactLifecycleWorkerConfig, type CommonConfig } from "./config/env";
+import { loadApiSessionEncryption, loadArtifactLifecycleWorkerConfig, loadBrowserConfig, loadGatewayConfig, loadWorkerConfig, type ArtifactLifecycleWorkerConfig, type CommonConfig, type GatewayConfig } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
 import { registerQueueDepthGauge } from "./observability/queue-depth-gauge";
 import { ArtifactRedactionContentTransform } from "./artifacts/artifact-redaction-content-transform";
@@ -21,8 +21,9 @@ import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-va
 import { SafeCapabilityGate } from "./gateway/capability-gate";
 import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "./gateway/codex-sse-transport";
+import { buildGatewayArtifactObjectStore } from "./gateway/artifact-object-store-binding";
 import { LlmGateway } from "./gateway/llm-gateway";
-import { FsObjectStore, PgGatewayArtifactSink } from "./gateway/pg-gateway-artifact-sink";
+import { FsObjectStore, PgGatewayArtifactSink, type ObjectStore } from "./gateway/pg-gateway-artifact-sink";
 import { PgLlmCallIdempotencyStore } from "./gateway/pg-llm-call-idempotency-store";
 import { StagehandBrowserSessionProvider } from "./executor/browser-session-provider";
 import { PgChallengeSuspensionPort } from "./runtime/challenge-suspension-port";
@@ -51,7 +52,7 @@ import {
 /**
  * Assemble the in-process production LLM Gateway and the dom/utility executor factory (release-decisions
  * D8-A16). The gateway = CodexSseAdapter (env-sourced creds) + SafeCapabilityGate + AjvStructuredOutputValidator
- * + PgGatewayArtifactSink(FsObjectStore) + DeterministicGatewayRedactionBoundary, with ops-defaults §4 knobs.
+ * + PgGatewayArtifactSink(configured fs/S3 ObjectStore) + DeterministicGatewayRedactionBoundary, with ops-defaults §4 knobs.
  * The returned RunExecutorFactory routes dom primitives (act/observe/extract) through the gateway and utility
  * actions deterministically.
  *
@@ -60,9 +61,13 @@ import {
  * structured-output safe-path (extract scenarios → prompt-schema injection + ajv validation) is implemented
  * (gateway jsonMode=false path), so a real Chrome run drives end-to-end.
  */
-function buildExecutorFactory(pool: PgPool, credentialStore: SecretStore, executorPrincipal: AuthenticatedPrincipal): RunExecutorFactory {
-  const gw = loadGatewayConfig();
-  const artifactStore = new FsObjectStore(gw.artifactDir);
+function buildExecutorFactory(
+  pool: PgPool,
+  credentialStore: SecretStore,
+  executorPrincipal: AuthenticatedPrincipal,
+  gw: GatewayConfig,
+  artifactStore: ObjectStore,
+): RunExecutorFactory {
   const gatewayArtifactSink = new PgGatewayArtifactSink(pool, artifactStore, {
     retentionDays: gw.artifactRetentionDays,
   });
@@ -149,12 +154,12 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
 
   const browser = loadBrowserConfig();
   const gw = loadGatewayConfig();
+  const artifactStore = await buildGatewayArtifactObjectStore(gw, { secretStore: runtimeWorkerStore });
   const browserSessionProvider = new StagehandBrowserSessionProvider({
     chromeExecutablePath: browser.chromeExecutablePath,
     headless: browser.headless,
     ...(browser.downloadRootDir !== undefined ? { downloadRootDir: browser.downloadRootDir } : {}),
   });
-  const artifactStore = new FsObjectStore(gw.artifactDir);
   const visualEvidenceVideoRecorderFactory: PgRuntimeWorkerOptions["visualEvidenceVideoRecorderFactory"] =
     cfg.videoRecordingEnabled
       ? (provider) => {
@@ -189,7 +194,7 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
     sessionRestorer: new PgSessionRestorer({ pool, resumeTokenCodec, sessionStore }),
     runAbortDrainer: browserSessionProvider,
     browserLeasePlanResolver: pgBrowserLeasePlanResolver,
-    executorFactory: buildExecutorFactory(pool, runtimeWorkerStore, executorPrincipal),
+    executorFactory: buildExecutorFactory(pool, runtimeWorkerStore, executorPrincipal, gw, artifactStore),
     browserSessionProvider,
     sessionStore,
     visualEvidenceRecorder: new PgVisualEvidenceRecorder(pool, artifactStore, {
@@ -350,4 +355,3 @@ export async function startArtifactLifecycleWorker(): Promise<ArtifactLifecycleR
     throw err;
   }
 }
-

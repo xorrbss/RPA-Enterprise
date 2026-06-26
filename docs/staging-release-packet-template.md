@@ -52,7 +52,8 @@ Additional required substrings:
 - `rollback confirmation` must include `forward-only` and `owner=#13`.
 - `SecretStore alias/path` must include `Vault`, `KV v2`, `secret/`, and `secret/data/rpa/staging`.
 - `namespace / identity map` and `SecretRef inventory` must each include `D8-A12`.
-- `runtime artifact object-store env` must include `ARTIFACT_OBJECT_STORE_REF=`.
+- `runtime artifact object-store env` must include `GATEWAY_ARTIFACT_STORE_MODE=s3`,
+  `GATEWAY_ARTIFACT_OBJECT_STORE_REF=`, and `ARTIFACT_OBJECT_STORE_REF=`.
 - `artifact store topology preflight` must include the exact command `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle` and `PASS`.
 - `retention policy` must include `D8-A11` and `D8-A14`.
 - `live D5 evidence` must include `row 50` and at least two bracketed aliases.
@@ -92,7 +93,7 @@ closure from this skeleton alone.
 - SecretStore alias/path            : Vault KV v2 mount `secret/`, base `secret/data/rpa/staging/runtime-worker/resume_token_hmac/active` pattern; backend alias=[vault-staging-1]; values omitted
 - namespace / identity map          : D8-A12 runtime identity map bound to [runtime-worker-1], [browser-worker-1], [artifact-lifecycle-1], [llm-gateway-1]
 - SecretRef inventory               : D8-A12 identifier-only inventory [secretref-inventory-1]; no resolved material
-- runtime artifact object-store env : `ARTIFACT_OBJECT_STORE_REF=rpa/staging/artifact-lifecycle/object_store/s3`; backend alias=[s3-staging-1]
+- runtime artifact object-store env : `GATEWAY_ARTIFACT_STORE_MODE=s3`; `GATEWAY_ARTIFACT_OBJECT_STORE_REF=rpa/staging/runtime-worker/object_store/s3-producer`; `ARTIFACT_OBJECT_STORE_REF=rpa/staging/artifact-lifecycle/object_store/s3`; backend alias=[s3-staging-1]
 - artifact store topology preflight  : run `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle`; PASS; evidence=[preflight-log-1]
 - retention policy                  : D8-A11/D8-A14 and ops-defaults section 6.1; DB alias=[staging-pg-1]
 - live D5 evidence                  : row 50 packet aliases [codex-staging-1]/[model-a]; evidence=[d5-live-run-1]

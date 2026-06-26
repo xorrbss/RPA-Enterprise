@@ -74,7 +74,7 @@ function printUsage(): void {
   console.log([
     "Usage: tsx src/config/artifact-store-topology-preflight.ts --topology <in-process|split-worker-lifecycle>",
     "",
-    "Validates that D8-A16 FsObjectStore artifact producers and the artifact lifecycle worker share a compatible backing store.",
+    "Validates that runtime artifact producers and the artifact lifecycle worker share a compatible fs or S3 backing store.",
     "For split staging/prod deployments, run this in the deploy environment before starting worker processes.",
   ].join("\n"));
 }

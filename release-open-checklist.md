@@ -31,7 +31,7 @@
 - [x] DB static smoke: `npm --prefix codegen run db:static-smoke` 또는 `node scripts/db-static-smoke.mjs`. PostgreSQL 없이 migration order, isolated rollback harness, table set, tenant RLS loop, artifact read/mutation RLS posture, tenant composite FK, idempotency/CAS anchors, immutable audit hash-chain, event_type CHECK를 확인.
 - [x] Blocked decision audit: `npm --prefix codegen run blocked:audit` 또는 `node scripts/blocked-decisions-audit.mjs`. Every actionable `TODO: [BLOCKED]` must have nearby Required decision text and be tracked by the release checklist; every active unchecked blocker in the staging/open blocker sections must also have a matching actionable TODO. The 13 resolved release decisions must remain present for traceability. Current local output is recorded in the next row.
 - [x] Repo rollback/recovery evidence: DB smoke proves isolated migration transaction cleanup with `ROLLBACK`; runtime recovery smoke proves DLQ replay and idempotent recovery paths. Staging/deploy rollback evidence remains outside this contract repository and must be supplied by the project owner at deploy time.
-- [x] Current local blocked:audit output: 20 markers, 1 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (1 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows; 0 repo-controlled Enterprise ALM/RBAC product-scope open rows). Re-run this after the row-43 staging packet or new release blocker is introduced.
+- [x] Current local blocked:audit output: 19 markers, 0 actionable blockers, 13 known release decisions tracked, 13 release decisions checked (0 active deploy-time provisioning checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows; 0 repo-controlled Enterprise ALM/RBAC product-scope open rows). Re-run this if a new release blocker is introduced.
 
 ## Deploy-Time Provisioning Blockers
 
@@ -51,7 +51,7 @@ real HashiCorp Vault (AppRole auth + KV v2) with the `secret.resolve` audit
 written to a real PostgreSQL `audit_log` IS acceptable real evidence (same
 D8-A15 ratification).
 
-- [ ] Deploy-time concrete staging platform repo and deploy target identifier, GitHub Environment `staging` protection/approver configuration, owner release-approval and rollback confirmation, and SecretRef/SecretStore provisioning path. Required decision: see `product-open-candidate-report.md`.
+- [x] Deploy-time concrete staging platform repo and deploy target identifier, GitHub Environment `staging` protection/approver configuration, owner release-approval and rollback confirmation, and SecretRef/SecretStore provisioning path. Owner-attested row 43 packet validated in `docs/staging-github-governance-evidence-2026-06-26.md`: repo `xorrbss/rpa-platform-deploy`, Environment `staging`, workflow run `28237204757`, deployment id `5209830863`, rollback `[rollback-plan-1]`, SecretStore alias `[vault-staging-1]`, and S3 producer/lifecycle preflight `[preflight-s3-1]`. The concrete target is the owner-ratified GitHub Actions Environment gate for this release; no managed app/container target is claimed.
 - [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretStore backend alias/path is named without plaintext secret values (owner-attested: HashiCorp Vault, KV v2, mount `secret/`, base path `secret/data/rpa/staging/<runtime>/<purpose>/<name>`, identity map per D8-A12; auth=AppRole evidenced at the row-48 resolution smoke). No plaintext.
 - [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - SecretRef namespace convention and runtime identities allowed to resolve each namespace are named (release-decisions D8-A12 / staging-decision-proposals.md §3; owner-confirmed least-privilege access matrix incl. `artifact-lifecycle`→`object_store`). The real SecretStore backend mount/path and AppRole smoke are evidenced in the adjacent SecretStore rows; resolved material remains outside the repository.
 - [x] Deploy-time staging SecretRef/SecretStore provisioning readiness - initial SecretRef inventory is listed by SecretRef identifiers only, with owning service/runtime and no resolved material (release-decisions D8-A12 / staging-decision-proposals.md §4). Resolved credential values remain deploy-time.
@@ -206,10 +206,10 @@ PR/main `Contract Gates` run attaches the required job URLs.
 
 ## Remaining External Evidence Notes
 
-The only unchecked row left in this checklist requires owner deploy-time
-provisioning: the concrete staging platform repo / deploy target + GitHub
-Environment protection (row 43). Do not close that row from local fixtures,
-temp DBs, in-process fake ports, hard-coded aliases, or unredacted logs.
+There are no active unchecked deploy-time provisioning rows in this checklist.
+Do not infer a managed app/container staging runtime from row 43: the concrete
+target closed here is the owner-ratified GitHub Actions Environment gate for
+this release, backed by the redacted packet and S3 producer/lifecycle preflight.
 
 ## Manual Release Review
 

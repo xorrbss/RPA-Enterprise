@@ -56,13 +56,13 @@ import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-va
 import { SafeCapabilityGate } from "./gateway/capability-gate";
 import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "./gateway/codex-sse-transport";
+import { buildGatewayArtifactObjectStore } from "./gateway/artifact-object-store-binding";
 import { LlmGateway } from "./gateway/llm-gateway";
-import { FsObjectStore } from "./gateway/pg-gateway-artifact-sink";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
-import type { SecretStoreBoundary } from "../../ts/security-middleware-contract";
+import type { AuthenticatedPrincipal, PrincipalId, SecretStoreBoundary, TenantId } from "../../ts/security-middleware-contract";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
-import type { SecretRef } from "../../ts/core-types";
+import type { PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 import type { ScenarioPlanner } from "./api/scenario-generation-types";
 import type { ScenarioGenerationArtifactBuffer } from "./api/scenario-generation-artifacts";
@@ -158,13 +158,19 @@ interface ScenarioGenerationPlannerBinding {
   readonly llmCalls: ScenarioGenerationLlmCallCleanup;
 }
 
-function buildScenarioGenerationPlannerBinding(
+async function buildScenarioGenerationPlannerBinding(
   pool: PgPool,
   cfg: ScenarioGenerationLlmV1Config,
+  apiCfg: ApiConfig,
   securityAudit: PgDurableSecurityAuditDecisionWriter,
-): ScenarioGenerationPlannerBinding {
+): Promise<ScenarioGenerationPlannerBinding> {
   const gw = cfg.gateway;
-  const artifactSink = new BufferedScenarioGenerationArtifactSink(new FsObjectStore(gw.artifactDir), {
+  const apiArtifactStoreSecretStore = buildApiGatewayArtifactSecretStore(gw, apiCfg, securityAudit);
+  const artifactStore = await buildGatewayArtifactObjectStore(
+    gw,
+    apiArtifactStoreSecretStore !== undefined ? { secretStore: apiArtifactStoreSecretStore } : {},
+  );
+  const artifactSink = new BufferedScenarioGenerationArtifactSink(artifactStore, {
     retentionDays: gw.artifactRetentionDays,
   });
   const llmCalls = new PgScenarioGenerationLlmCallIdempotencyStore(pool, {
@@ -204,14 +210,73 @@ function buildScenarioGenerationPlannerBinding(
   };
 }
 
+function buildApiGatewayArtifactSecretStore(
+  gw: ScenarioGenerationLlmV1Config["gateway"],
+  cfg: ApiConfig,
+  securityAudit: PgDurableSecurityAuditDecisionWriter,
+): SecretStore | undefined {
+  if (gw.artifactStore.mode === "fs") return undefined;
+  const apiArtifactObjectStore = cfg.artifactObjectStore;
+  if (apiArtifactObjectStore === undefined || apiArtifactObjectStore.objectStore.kind !== "s3") {
+    throw new Error(
+      "SCENARIO_GENERATION_LLM_V1 with GATEWAY_ARTIFACT_STORE_MODE=s3 requires ARTIFACT_OBJECT_STORE_KIND=s3 and VAULT_API_* config",
+    );
+  }
+  if (
+    apiArtifactObjectStore.objectStore.endpoint !== gw.artifactStore.endpoint ||
+    apiArtifactObjectStore.objectStore.region !== gw.artifactStore.region ||
+    apiArtifactObjectStore.objectStore.bucket !== gw.artifactStore.bucket ||
+    apiArtifactObjectStore.objectStore.forcePathStyle !== gw.artifactStore.forcePathStyle
+  ) {
+    throw new Error("API artifact S3 reader config must match GATEWAY_ARTIFACT_STORE_MODE=s3 producer config");
+  }
+  const store = new VaultSecretStore({
+    baseUrl: apiArtifactObjectStore.vaultApi.addr,
+    mount: apiArtifactObjectStore.vaultApi.mount,
+    kvApiVersion: 2,
+    appRole: { roleId: apiArtifactObjectStore.vaultApi.roleId, secretId: apiArtifactObjectStore.vaultApi.secretId },
+  });
+  const boundary = new VaultSecretStoreBoundary({
+    store,
+    audit: securityAudit,
+    enforceRefNamespace: true,
+  });
+  return new ObjectStoreBoundarySecretStore(boundary, apiObjectStorePrincipal());
+}
+
+class ObjectStoreBoundarySecretStore implements SecretStore {
+  constructor(
+    private readonly boundary: SecretStoreBoundary,
+    private readonly principal: AuthenticatedPrincipal,
+  ) {}
+
+  resolve(ref: SecretRef): Promise<PlainSecret> {
+    return this.boundary.resolveAuthorized({
+      principal: this.principal,
+      ref,
+      purpose: "object_store",
+    });
+  }
+}
+
+function apiObjectStorePrincipal(): AuthenticatedPrincipal {
+  return {
+    subjectId: "api:scenario-generation-artifacts" as PrincipalId,
+    tenantId: "00000000-0000-0000-0000-000000000000" as TenantId,
+    roles: ["admin"],
+    source: "jwt",
+    claims: { runtime_identity: "api" },
+  };
+}
+
 async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMode()): Promise<FastifyInstance> {
   const cfg = loadApiConfig(common, { runMode });
   const scenarioGenerationLlmV1 = loadScenarioGenerationLlmV1Config();
   const securityAudit = new PgDurableSecurityAuditDecisionWriter(pool);
-  const scenarioPlanner = scenarioGenerationLlmV1 !== undefined
-    ? buildScenarioGenerationPlannerBinding(pool, scenarioGenerationLlmV1, securityAudit)
-    : undefined;
   const artifactObjectReader = await buildApiArtifactObjectReader(cfg);
+  const scenarioPlanner = scenarioGenerationLlmV1 !== undefined
+    ? await buildScenarioGenerationPlannerBinding(pool, scenarioGenerationLlmV1, cfg, securityAudit)
+    : undefined;
   const selectorProbe = cfg.selectorProbe !== undefined
     ? new PuppeteerSelectorProbeProvider({
         chromeExecutablePath: cfg.selectorProbe.chromeExecutablePath,

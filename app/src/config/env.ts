@@ -429,13 +429,28 @@ export function assertArtifactStoreTopologyCompatibility(topology: ArtifactStore
   const gateway = loadGatewayConfig();
   const lifecycle = loadArtifactLifecycleWorkerConfig();
   const label = topology === "in_process" ? "RUN_MODE=all" : "split worker/lifecycle deployment";
-  if (lifecycle.objectStore.mode !== "local_fs") {
-    throw new Error(
-      `${label} cannot combine D8-A16 FsObjectStore artifact producers with ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE=s3`,
-    );
+  if (gateway.artifactStore.mode === "fs") {
+    if (lifecycle.objectStore.mode !== "local_fs") {
+      throw new Error(
+        `${label} cannot combine FsObjectStore artifact producers with ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE=s3`,
+      );
+    }
+    if (resolve(gateway.artifactStore.artifactDir) !== resolve(lifecycle.objectStore.artifactDir)) {
+      throw new Error(`${label} requires runtime artifact producers and local artifact lifecycle worker to share GATEWAY_ARTIFACT_DIR`);
+    }
+    return;
   }
-  if (resolve(gateway.artifactDir) !== resolve(lifecycle.objectStore.artifactDir)) {
-    throw new Error(`${label} requires runtime artifact producers and local artifact lifecycle worker to share GATEWAY_ARTIFACT_DIR`);
+
+  if (lifecycle.objectStore.mode !== "s3") {
+    throw new Error(`${label} cannot combine S3 artifact producers with ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE=local_fs`);
+  }
+  if (
+    gateway.artifactStore.endpoint !== lifecycle.objectStore.endpoint ||
+    gateway.artifactStore.region !== lifecycle.objectStore.region ||
+    gateway.artifactStore.bucket !== lifecycle.objectStore.bucket ||
+    gateway.artifactStore.forcePathStyle !== lifecycle.objectStore.forcePathStyle
+  ) {
+    throw new Error(`${label} requires runtime artifact producers and artifact lifecycle worker to target the same S3-compatible object store`);
   }
 }
 

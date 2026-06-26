@@ -55,6 +55,10 @@ const CLEAR = [
   "SINK_DELIVERY_MAX_ATTEMPTS", "SINK_DELIVERY_RETRY_AFTER_MS",
   "CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL", "CODEX_MAX_CONTEXT_TOKENS",
   "CODEX_PRICE_PER_1K_INPUT_USD", "CODEX_PRICE_PER_1K_OUTPUT_USD",
+  "GATEWAY_ARTIFACT_STORE_MODE", "GATEWAY_ARTIFACT_OBJECT_STORE_REF", "GATEWAY_ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
+  "GATEWAY_ARTIFACT_OBJECT_STORE_S3_ENDPOINT", "GATEWAY_ARTIFACT_OBJECT_STORE_S3_REGION",
+  "GATEWAY_ARTIFACT_OBJECT_STORE_S3_BUCKET", "GATEWAY_ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID",
+  "GATEWAY_ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE",
   "API_ARTIFACT_DIR", "GATEWAY_ARTIFACT_DIR", "GATEWAY_ARTIFACT_RETENTION_DAYS", "PROMPT_TEMPLATE_VERSION",
   "SCENARIO_GENERATION_LLM_V1_ENABLED", "SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION",
   "JWKS_URL", "JWT_ISSUER", "JWT_AUDIENCE", "JWT_SUBJECT_CLAIM", "JWT_TENANT_CLAIM", "JWT_ROLES_CLAIM",
@@ -494,6 +498,11 @@ function main(): void {
     CODEX_BASE_URL: "https://api.example/v1", CODEX_API_KEY: "sk-test", CODEX_MODEL: "gpt-x",
     GATEWAY_ARTIFACT_DIR: "/var/lib/rpa/gw-artifacts",
   };
+  const GW_S3_REQ = {
+    CODEX_BASE_URL: "https://api.example/v1", CODEX_API_KEY: "sk-test", CODEX_MODEL: "gpt-x",
+    GATEWAY_ARTIFACT_STORE_MODE: "s3",
+    GATEWAY_ARTIFACT_OBJECT_STORE_REF: "rpa/staging/runtime-worker/object_store/s3-producer",
+  };
   withEnv({
     ...FULL,
     ...GW_REQ,
@@ -508,6 +517,32 @@ function main(): void {
     ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
   }, () =>
     expectThrow("split worker/lifecycle topology rejects fs producers with s3 lifecycle store", () => assertArtifactStoreTopologyCompatibility("split_worker_lifecycle")));
+  withEnv({
+    ...FULL,
+    ...GW_S3_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+  }, () => {
+    assertArtifactStoreStartupCompatibility("all", undefined);
+    check("RUN_MODE=all accepts S3 gateway producers with S3 lifecycle store in staging", true);
+  });
+  withEnv({
+    ...FULL,
+    ...GW_S3_REQ,
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+  }, () => {
+    assertArtifactStoreTopologyCompatibility("split_worker_lifecycle");
+    check("split worker/lifecycle topology accepts S3 gateway producers with S3 lifecycle store in staging", true);
+  });
+  withEnv({
+    ...FULL,
+    ...GW_S3_REQ,
+    GATEWAY_ARTIFACT_OBJECT_STORE_S3_BUCKET: "other-artifacts",
+    ARTIFACT_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle@db/rpa",
+    ARTIFACT_LIFECYCLE_WORKER_ID: "20000000-0000-4000-8000-0000000000aa",
+  }, () =>
+    expectThrow("split worker/lifecycle topology rejects S3 producer/lifecycle target drift", () => assertArtifactStoreTopologyCompatibility("split_worker_lifecycle")));
   withEnv({
     RPA_ENV: "local",
     ...GW_REQ,
@@ -567,6 +602,14 @@ function main(): void {
     expectThrow("gateway blank CODEX_MODEL throws", () => loadGatewayConfig()));
   withEnv({ CODEX_BASE_URL: "https://api.example/v1", CODEX_API_KEY: "k", CODEX_MODEL: "m" }, () =>
     expectThrow("gateway missing GATEWAY_ARTIFACT_DIR throws", () => loadGatewayConfig()));
+  withEnv({ ...GW_REQ, GATEWAY_ARTIFACT_STORE_MODE: "bogus" }, () =>
+    expectThrow("gateway invalid artifact store mode throws", () => loadGatewayConfig()));
+  withEnv({ ...GW_REQ, GATEWAY_ARTIFACT_STORE_MODE: "s3" }, () =>
+    expectThrow("gateway s3 mode missing producer SecretRef throws", () => loadGatewayConfig()));
+  withEnv({ ...FULL, ...GW_S3_REQ, GATEWAY_ARTIFACT_OBJECT_STORE_REF: "rpa/staging/artifact-lifecycle/object_store/s3" }, () =>
+    expectThrow("gateway s3 producer SecretRef must use runtime-worker namespace", () => loadGatewayConfig()));
+  withEnv({ ...FULL, ...GW_S3_REQ, GATEWAY_ARTIFACT_OBJECT_STORE_REF: "rpa/prod/runtime-worker/object_store/s3-producer" }, () =>
+    expectThrow("gateway s3 producer SecretRef env must match RPA_ENV", () => loadGatewayConfig()));
   withEnv({ ...GW_REQ, CODEX_BASE_URL: "not-a-url" }, () =>
     expectThrow("gateway non-URL CODEX_BASE_URL throws", () => loadGatewayConfig()));
   withEnv({ ...GW_REQ, CODEX_BASE_URL: "http://api.example/v1" }, () =>
@@ -577,6 +620,7 @@ function main(): void {
     expectThrow("gateway non-positive CODEX_MAX_CONTEXT_TOKENS throws", () => loadGatewayConfig()));
   withEnv(GW_REQ, () => {
     const g = loadGatewayConfig();
+    check("gateway artifact store default fs", g.artifactStore.mode === "fs" && g.artifactStore.artifactDir === "/var/lib/rpa/gw-artifacts");
     check("gateway maxContextTokens default 8192", g.codexMaxContextTokens === 8192);
     check("gateway price defaults 0 (cost cap inactive)", g.pricePer1kInputUsd === 0 && g.pricePer1kOutputUsd === 0);
     check("gateway ops-defaults knobs", g.retryMax === 2 && g.idleTimeoutMs === 20_000 && g.wallTimeoutMs === 120_000);
@@ -584,6 +628,23 @@ function main(): void {
     check("gateway budget output/cost ops-defaults", g.budget.maxOutputTokens === 4096 && g.budget.maxCost === 0.85);
     check("gateway retention default 90", g.artifactRetentionDays === 90);
     check("gateway promptTemplateVersion default", g.promptTemplateVersion === "dom-executor@1");
+  });
+  withEnv({ ...FULL, ...GW_S3_REQ, GATEWAY_ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: "s3-producer", GATEWAY_ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE: "false" }, () => {
+    const g = loadGatewayConfig();
+    check("gateway artifact store s3 mode carried", g.artifactStore.mode === "s3");
+    check(
+      "gateway artifact store s3 config carried",
+      g.artifactStore.mode === "s3" &&
+        g.artifactStore.endpoint === "https://s3.example.internal" &&
+        g.artifactStore.region === "ap-northeast-2" &&
+        g.artifactStore.bucket === "rpa-artifacts" &&
+        g.artifactStore.accessKeyId === "rpa-lifecycle-access-key-id" &&
+        g.artifactStore.secretAccessKeyRef === "rpa/staging/runtime-worker/object_store/s3-producer" &&
+        g.artifactStore.backendAlias === "s3-producer" &&
+        g.artifactStore.forcePathStyle === false,
+      JSON.stringify(g.artifactStore),
+    );
+    check("gateway artifactDir omitted in s3 mode", g.artifactDir === undefined);
   });
   withEnv({}, () =>
     check("scenario generation llm_v1 default disabled without CODEX env", loadScenarioGenerationLlmV1Config() === undefined));

@@ -51,8 +51,8 @@ type ResolvePurpose = SecretAccessRequest["purpose"];
  * executor(자격증명 fill)와 분리해 세션키 유출이 라이브 자격증명 트래픽과 격리되게 한다(browser-session-store.ts).
  */
 const RESOLVE_MATRIX: Readonly<Record<RuntimeIdentity, readonly ResolvePurpose[]>> = {
-  api: ["resume_token_hmac", "browser_session", "connector"],
-  "runtime-worker": ["resume_token_hmac", "executor", "browser_session"],
+  api: ["resume_token_hmac", "browser_session", "connector", "object_store"],
+  "runtime-worker": ["resume_token_hmac", "executor", "browser_session", "object_store"],
   "browser-worker": ["executor", "browser_session"],
   "llm-gateway": ["gateway_policy"],
   "artifact-lifecycle": ["object_store"],

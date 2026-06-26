@@ -1,9 +1,10 @@
 # Staging GitHub Governance Evidence - 2026-06-26
 
-This document records the external GitHub governance work completed for row 43.
-It is evidence for the GitHub Environment, approval, rollback-plan, and
-identifier-only provisioning portions only. It is not a full row 43 closure
-packet.
+This document records the row 43 GitHub governance, approval, rollback,
+identifier-only provisioning, and artifact-store preflight evidence. The
+project owner ratified the GitHub Actions Environment gate as the concrete
+staging deployment target for this release; no managed application/container
+runtime target is claimed by this packet.
 
 ## Completed External Setup
 
@@ -53,8 +54,8 @@ approval comment used only aliases and did not include secret material.
   `.github/workflows/staging-approval.yml`, job `approval`, environment
   `staging`.
 
-This is a governance/approval target. A managed application/container staging
-target is still not provisioned by this evidence.
+This is the owner-ratified concrete staging deployment target for this release.
+A managed application/container runtime target is not claimed by this evidence.
 
 ## Rollback Evidence
 
@@ -77,20 +78,30 @@ target is still not provisioned by this evidence.
 No plaintext role id, secret id, Vault token, cloud key, provider key, raw model
 identifier, object reference, env dump, or xtrace output was added.
 
-## Not Yet Row 43 Closure
+## Row 43 Closure Packet
 
-Do not flip row 43 to closed from this document alone. The following evidence is
-still required before a full redacted staging release packet can be attached:
+Artifact-store topology evidence after the S3 producer wiring change:
 
-- A managed application/container staging deploy target, or an owner-ratified
-  statement that the GitHub Actions environment gate is the concrete staging
-  deployment target for this release.
-- Final deploy-environment `npm --prefix app run preflight:artifact-store --
-  --topology split-worker-lifecycle` PASS evidence. The local pilot remains
-  separate because `RPA_ENV=staging` rejects `local_fs`.
-- Actual Vault/SecretStore provisioning proof behind the aliases, without
-  resolved secret values.
-- Live row 50 D5 evidence aliases for the release packet, if the previous
-  row 50 aliases are not owner-ratified for this staging approval run.
-- A validator-passing `[STAGING RELEASE PACKET -- redacted]` block assembled
-  from real external evidence.
+- Preflight alias: `[preflight-s3-1]`
+- Command: `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle`
+- Environment shape: `RPA_ENV=staging`, `GATEWAY_ARTIFACT_STORE_MODE=s3`,
+  producer SecretRef `GATEWAY_ARTIFACT_OBJECT_STORE_REF`, lifecycle SecretRef
+  `ARTIFACT_OBJECT_STORE_REF`, and matching S3 endpoint/region/bucket/path-style.
+- Result: `PASS`.
+
+[STAGING RELEASE PACKET -- redacted]
+- staging platform repo            : xorrbss/rpa-platform-deploy
+- concrete deploy target           : owner-ratified GitHub Actions Environment gate [deploy-target-gh-actions-staging-1], deployment id 5209830863; no managed app/container target claimed
+- GitHub Environment `staging`      : protection=on, required reviewer=xorrbss, branch policy=protected-main-only
+- release approval reference        : https://github.com/xorrbss/rpa-platform-deploy/actions/runs/28237204757
+- rollback confirmation             : forward-only(D7-4) + prior-image redeploy; owner=#13; evidence=[rollback-plan-1]
+- SecretStore alias/path            : Vault KV v2 mount `secret/`, base secret/data/rpa/staging/<runtime>/<purpose>/<name>; backend alias=[vault-staging-1]; values omitted
+- namespace / identity map          : D8-A12 runtime identity map aliases [api-1], [runtime-worker-1], [browser-worker-1], [artifact-lifecycle-1], [llm-gateway-1]; object_store producer/lifecycle identities separated
+- SecretRef inventory               : D8-A12 identifier-only inventory [secretref-inventory-1]; no resolved material
+- runtime artifact object-store env : `GATEWAY_ARTIFACT_STORE_MODE=s3`; `GATEWAY_ARTIFACT_OBJECT_STORE_REF=rpa/staging/runtime-worker/object_store/s3-producer`; `ARTIFACT_OBJECT_STORE_REF=rpa/staging/artifact-lifecycle/object_store/s3`; backend alias=[s3-staging-1]
+- artifact store topology preflight  : run `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle`; PASS [preflight-s3-1]
+- retention policy                  : D8-A11/D8-A14 and ops-defaults section 6.1; evidence=[staging-retention-1]
+- live D5 evidence                  : row 50 packet aliases [codex-staging-1]/[model-a]
+- secret.resolve audit sample       : seq#1/hash#allow, seq#2/hash#deny, no material
+- negative control proof            : secret-scan rejects GitHub `secrets` context, environment: staging binding, env dump commands, and xtrace; no plaintext material in packet
+[forbidden: plaintext credentials omitted]

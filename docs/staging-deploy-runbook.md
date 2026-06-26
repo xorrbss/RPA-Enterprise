@@ -35,12 +35,23 @@ Artifact 본문/blob 조회 라우트를 운영 smoke에 포함하려면 object_
 |---|---|
 | 모드 | `RUN_MODE=worker` 또는 `RUN_MODE=all` |
 | worker Vault identity | `VAULT_ADDR`, optional `VAULT_MOUNT`, `VAULT_RUNTIME_WORKER_ROLE_ID`, `VAULT_RUNTIME_WORKER_SECRET_ID` |
-| artifact object store SecretRef | `ARTIFACT_OBJECT_STORE_REF`, optional `ARTIFACT_OBJECT_STORE_BACKEND_ALIAS` |
+| artifact lifecycle object store SecretRef | `ARTIFACT_OBJECT_STORE_REF`, optional `ARTIFACT_OBJECT_STORE_BACKEND_ALIAS` |
 | browser | `CHROME_EXECUTABLE_PATH`, optional `BROWSER_HEADLESS`, `BROWSER_DOWNLOAD_ROOT_DIR` |
 | worker queue | optional `GRAPHILE_WORKER_SCHEMA`, `GRAPHILE_CONCURRENCY`, `GRAPHILE_POLL_INTERVAL_MS` |
-| runtime LLM gateway for `observe`/`extract` | `CODEX_BASE_URL`(https only), `CODEX_API_KEY`, `CODEX_MODEL`, `GATEWAY_ARTIFACT_DIR` |
+| runtime LLM gateway for `observe`/`extract` | `CODEX_BASE_URL`(https only), `CODEX_API_KEY`, `CODEX_MODEL`; default FS artifact store uses `GATEWAY_ARTIFACT_DIR`; staging S3 producer mode uses `GATEWAY_ARTIFACT_STORE_MODE=s3`, `GATEWAY_ARTIFACT_OBJECT_STORE_REF`, and optional `GATEWAY_ARTIFACT_OBJECT_STORE_S3_*` overrides |
 
 `CODEX_API_KEY`는 현재 D8-A16 v1 gap 때문에 env-sourced provider secret이다. 평문 값을 runbook, log, screenshot, PR 본문에 남기지 말고 배포 플랫폼 secret으로 주입한다.
+
+For split worker/lifecycle staging with S3 artifacts, run this before process
+start and require PASS:
+
+```powershell
+npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle
+```
+
+The preflight accepts `fs + local_fs` for local/dev shared-volume deployments and
+`s3 + s3` for staging when producer and lifecycle endpoint/region/bucket/path-style
+match. It rejects mixed `fs + s3`, `s3 + local_fs`, and S3 target drift.
 
 ### 3. `llm_v1` 켜기
 

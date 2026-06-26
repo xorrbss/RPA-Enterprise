@@ -62,9 +62,9 @@ path at deploy time (no external release/oncall team exists).
 - The 13 release decisions are resolved and tracked by
   `release-open-checklist.md` / `release-decisions.md`.
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
-  blockers split by scope: the remaining external/staging blocker category
-  is the concrete staging platform/deploy target + GitHub Environment, the
-  the remaining repo-controlled D3 runtime blocker rows for operator pause
+  blockers split by scope: the deploy-time concrete staging platform/deploy
+  target + GitHub Environment row is resolved by the row 43 packet, the
+  remaining repo-controlled D3 runtime blocker rows for operator pause
   ownership and true per-pool live capacity membership are resolved locally,
   and the Enterprise ALM/RBAC SCIM synchronization contract is implemented as
   a minimal `POST /v1/scim/principals` sync surface.
@@ -77,8 +77,8 @@ path at deploy time (no external release/oncall team exists).
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 20 markers, 1 actionable blockers, 13 known release decisions tracked,
-  13 release decisions checked (1 active deploy-time provisioning checklist rows;
+  output: 19 markers, 0 actionable blockers, 13 known release decisions tracked,
+  13 release decisions checked (0 active deploy-time provisioning checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows;
   0 repo-controlled Browser RPA V2 product-scope open rows; 0 repo-controlled Enterprise ALM/RBAC product-scope open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
@@ -221,8 +221,8 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 20 markers, 1 actionable blockers, 13 known release
-  decisions tracked, 13 release decisions checked (1 active deploy-time provisioning
+  (current output: 19 markers, 0 actionable blockers, 13 known release
+  decisions tracked, 13 release decisions checked (0 active deploy-time provisioning
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows;
   0 repo-controlled Enterprise ALM/RBAC product-scope open rows))
@@ -483,9 +483,8 @@ hard-coded SecretRef identifiers, CI service-container credentials, or unredacte
 live logs. Evidence intake must follow the Staging Secret Provisioning
 Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 
-- TODO: [BLOCKED] Deploy-time concrete staging deploy target is not defined for executable Product Open deployment outside this contract repository.
-  Required decision: At deploy time, the project owner must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier (namespace/service or equivalent), release approval evidence, rollback confirmation, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
-- Blocked summary: Deploy-time staging SecretRef/SecretStore readiness is evidenced, but the executable Product Open deployment still needs the concrete platform repo, GitHub Environment protection, deploy target, owner approval, rollback confirmation, and deploy/provisioning log artifact locations in the row-43 redacted release packet.
+- Resolved (owner-attested row 43 staging evidence): Deploy-time concrete staging deploy target is defined for this release as the owner-ratified GitHub Actions Environment gate in `xorrbss/rpa-platform-deploy`, workflow run `28237204757`, deployment id `5209830863`, Environment `staging`, target alias `[deploy-target-gh-actions-staging-1]`. The row 43 packet in `docs/staging-github-governance-evidence-2026-06-26.md` records the protected branch policy, required reviewer, release approval reference, rollback `[rollback-plan-1]`, SecretStore alias/path `[vault-staging-1]`, D8-A12 identifier-only SecretRef inventory, and S3 producer/lifecycle preflight `[preflight-s3-1]`. No managed application/container runtime target is claimed by this evidence. Former Required decision: At deploy time, the project owner must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier, release approval evidence, rollback confirmation, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
+- Resolved summary: Deploy-time staging SecretRef/SecretStore readiness and row 43 governance are evidenced by the validated redacted release packet; remaining production operation must not infer a managed app/container runtime from this governance target.
 - Resolved (owner-attested staging evidence): Deploy-time per-producer retention policy is defined and proven on staging. Policy (release-decisions D8-A11 / D8-A14): `raw_items.raw_payload` 30d and `normalized_records.record` 90d via the inline retention source supplied by the ingest/normalize callers; `artifacts` retention is enforced by the `legal_hold OR retention_until IS NOT NULL` CHECK; `audit_log.payload` 2555d (7y, v1 default, override-able); repo-owned `events_outbox.retention_until` is `NOT NULL`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source. Staging evidence: against a real staging PostgreSQL (redacted alias `[staging-pg-1]`, server PostgreSQL 16.x) under a non-`SUPERUSER`/non-`BYPASSRLS` application role, `npm --prefix codegen run db:smoke:release` PASSED with `non-bypass RLS/redaction row-visibility assertions executed` (retention columns present on every payload table, `artifacts` CHECK + `events_outbox.retention_until` NOT NULL fail-closed enforcement, tenant RLS row-visibility), and the payload-bearing producer integration tests PASSED under the same non-bypass role proving each writer sets `retention_until` or fails closed — `security-audit.int` (`all rows persist retention_until`; invalid/malformed/calendar-invalid retention timestamp fails closed; duplicate idempotency key fails closed), `executor-invocation-recorder.int` (`step.completed retention set`; PlainSecret/cross-tenant fail-closed), `pipeline.int` (raw-ingest/normalize dedup + cross-tenant RLS row count 0), `outbox-relay.int` (`events_outbox` ordered idempotent relay), `api-artifacts.int` (artifact RLS redaction-gate). No host/IP/credential/env dump recorded (redacted endpoint alias only). Former Required decision: define per-producer retention duration/source and prove on staging that each payload-bearing writer sets `retention_until` or fails closed.
 - Resolved (owner-attested live evidence): D5 Codex SSE live capability captured. Production `CodexSseAdapter`/`FetchCodexSseTransport` ran live (`npm --prefix app/poc/d5-codex-sse run poc`) against endpoint `[codex-staging-1]` / model `[model-a]` (redacted aliases; absolute HTTPS, no credential/query/fragment). **4/5 PASS** — mandatory #1 basic SSE / #2 prompt-schema safe path / #4 abort all PASS; #3 native `json_schema` PASS (jsonMode=true active); #5 model metadata GAP with documented fallback (conservative `maxContextTokens=8192` retained). No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material recorded (harness self-redaction; `CODEX_API_KEY` kept in a gitignored local `.env`). Former Required decision: run the D5 PoC and record redacted mandatory-PASS evidence.
 - Resolved repo evidence: cancelable `suspending` abort and H5/R15 `reassignAssignee` are explicit fail-closed v1 paths. Successful in-flight bookmark abort still requires a future bookmark-cancel owner or durable abort intent; successful manual escalate still requires a future routing/assignment owner. Until then the API rejects/rolls back before reporting success, preserving no silent false/unknown.

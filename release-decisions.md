@@ -508,6 +508,13 @@ D8-A12. SecretRef namespace convention + initial inventory (resolves checklist r
    `api`→`signed_command`,`resume_token_hmac`(verify); `runtime-worker`→`resume_token_hmac`,`executor`;
    `browser-worker`→`executor`; `llm-gateway`→`gateway_policy`; `artifact-lifecycle` (redaction/
    retention BYPASSRLS operational role)→`object_store`; `connector-runtime`→`connector` (D7+ deferred).
+   2026-06-26 amendment for staging S3 producer closure: `object_store` resolution is also allowed for
+   `api` artifact reader/scenario-generation artifact production and for `runtime-worker` runtime artifact
+   production. Producer credentials use `rpa/<env>/runtime-worker/object_store/<name>` (or API-owned
+   reader credentials under the API identity), while artifact lifecycle redaction/retention keeps the
+   separate `rpa/<env>/artifact-lifecycle/object_store/<name>` credential. This supersedes the earlier
+   artifact-lifecycle-only object_store matrix text for producer-side S3 wiring, without authorizing
+   `browser-worker` or `llm-gateway` to resolve object-store credentials.
    Initial inventory is the namespace skeleton by identifier only (no resolved material) — see §4.
    Rationale / 비발명: the convention is a logical naming scheme and the matrix/inventory are derived
    from the code's `SecretAccessRequest.purpose` usage per runtime (not invented external facts); they
@@ -616,6 +623,12 @@ D8-A16. LLM Gateway deployment topology + secret-sourcing for the production com
    therefore does not bite until backlog item 2 lands a provider. Owner = project owner. Build-condition:
    topology + secret-sourcing named (this decision); the gateway assembly lands in `app/src/main.ts` +
    `app/src/config/env.ts` (`loadGatewayConfig`).
+   2026-06-26 amendment for row 43 staging closure: the Codex provider key remains env-sourced, but the
+   gateway/runtime artifact producer store is no longer limited to `FsObjectStore`.
+   `GATEWAY_ARTIFACT_STORE_MODE=s3` switches producers to `S3ObjectStore` with
+   `GATEWAY_ARTIFACT_OBJECT_STORE_REF`, and `preflight:artifact-store -- --topology split-worker-lifecycle`
+   now fails closed unless producer and artifact-lifecycle S3 endpoint/region/bucket/path-style match. The
+   FS default remains for local/dev and simple single-host deployments.
 
 ## Audit Decisions (2026-06-22, concurrency / lease adversarial audit)
 
