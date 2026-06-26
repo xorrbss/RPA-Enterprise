@@ -321,6 +321,20 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
     state.visited.push(nodeId);
     ctx = { ...ctx, nodeId };
 
+    const pause = await state.deps.pauseRequested?.(ctx);
+    if (pause !== undefined && pause !== null) {
+      state.suspendBox.current = {
+        kind: "operator_pause",
+        stepId: `${nodeId}.operator_pause`,
+        resumeNodeId: nodeId,
+        attempt: ctx.attempt,
+        pageStateRef: `ps_${ctx.pageState.dom.structuralHash}`,
+        pauseRequestId: pause.pauseRequestId,
+        ...(pause.reason !== undefined ? { reason: pause.reason } : {}),
+      };
+      return "suspend";
+    }
+
     // 1) 결정형 what 액션 실행 + (있으면) node.verify 검증. verify 실패 시 self-heal(markSuspect+노드 재실행) 또는 loud fail.
     //    self-heal 은 read-only 노드만(쓰기 커밋 노드 재실행=double-commit 금지) + max_self_heal 한도 + budget 소비.
     let lastResult: StepResult | undefined;

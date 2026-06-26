@@ -329,8 +329,8 @@ describe("coe pipeline view", () => {
     fireEvent.change(screen.getByLabelText("부서 필터"), { target: { value: "재무" } });
 
     await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({ owner: "finance-ops", department: "재무" })));
-    const high = screen.getAllByText("송장 검증 큐 자동화")[0]!;
-    const low = screen.getAllByText("월말 정산 상태 확인")[0]!;
+    const high = (await screen.findAllByText("송장 검증 큐 자동화"))[0]!;
+    const low = (await screen.findAllByText("월말 정산 상태 확인"))[0]!;
     expect(high.compareDocumentPosition(low) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     const beforeReset = calls.length;

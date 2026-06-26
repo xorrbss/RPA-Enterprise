@@ -46,6 +46,28 @@ interface FailureTopRow {
   count: number;
 }
 
+interface TrendReportRow {
+  day: string;
+  total_runs: number;
+  completed: number;
+  failed_business: number;
+  failed_system: number;
+  rerun_count: number;
+  gateway_cost: string;
+}
+
+interface TrendReportItem {
+  readonly day: string;
+  readonly total_runs: number;
+  readonly completed: number;
+  readonly failed_business: number;
+  readonly failed_system: number;
+  readonly success_rate: number | null;
+  readonly rerun_count: number;
+  readonly reprocessing_rate: number | null;
+  readonly gateway_cost: number;
+}
+
 interface WorkflowReportItem {
   readonly scenario_id: string;
   readonly scenario_name: string;
@@ -79,6 +101,7 @@ interface AutomationPerformanceReport {
     readonly gateway_cost: number;
   };
   readonly failure_top: readonly FailureTopRow[];
+  readonly trends: readonly TrendReportItem[];
   readonly by_workflow: readonly WorkflowReportItem[];
 }
 
@@ -128,7 +151,7 @@ async function buildAutomationPerformanceReport(
   tenantId: string,
   period: ReportPeriod,
 ): Promise<AutomationPerformanceReport> {
-  const { workflowRows, failureRows } = await withTenantTx(deps.pool, tenantId, async (client) => {
+  const { workflowRows, failureRows, trendRows } = await withTenantTx(deps.pool, tenantId, async (client) => {
     const workflows = await client.query<WorkflowReportRow>(
       `WITH run_by_scenario AS (
          SELECT sv.scenario_id::text AS scenario_id,
@@ -199,10 +222,54 @@ async function buildAutomationPerformanceReport(
         LIMIT 5`,
       [tenantId, period.start.toISOString(), period.end.toISOString()],
     );
-    return { workflowRows: workflows.rows, failureRows: failures.rows };
+    const trends = await client.query<TrendReportRow>(
+      `WITH days AS (
+         SELECT generate_series(
+                  $2::timestamptz,
+                  $3::timestamptz - interval '1 day',
+                  interval '1 day'
+                ) AS day_start
+       ),
+       runs_by_day AS (
+         SELECT date_trunc('day', r.created_at AT TIME ZONE $4) AS day_kst,
+                count(*)::int AS total_runs,
+                count(*) FILTER (WHERE r.status = 'completed')::int AS completed,
+                count(*) FILTER (WHERE r.status = 'failed_business')::int AS failed_business,
+                count(*) FILTER (WHERE r.status = 'failed_system')::int AS failed_system,
+                COALESCE(sum(r.usage_cost), 0)::text AS gateway_cost
+           FROM runs r
+          WHERE r.tenant_id = $1::uuid
+            AND r.created_at >= $2::timestamptz
+            AND r.created_at < $3::timestamptz
+          GROUP BY 1
+       ),
+       reruns_by_day AS (
+         SELECT date_trunc('day', rr.created_at AT TIME ZONE $4) AS day_kst,
+                count(*)::int AS rerun_count
+           FROM run_reruns rr
+          WHERE rr.tenant_id = $1::uuid
+            AND rr.created_at >= $2::timestamptz
+            AND rr.created_at < $3::timestamptz
+          GROUP BY 1
+       )
+       SELECT to_char(d.day_start AT TIME ZONE $4, 'YYYY-MM-DD') AS day,
+              COALESCE(r.total_runs, 0)::int AS total_runs,
+              COALESCE(r.completed, 0)::int AS completed,
+              COALESCE(r.failed_business, 0)::int AS failed_business,
+              COALESCE(r.failed_system, 0)::int AS failed_system,
+              COALESCE(rr.rerun_count, 0)::int AS rerun_count,
+              COALESCE(r.gateway_cost, '0') AS gateway_cost
+         FROM days d
+         LEFT JOIN runs_by_day r ON r.day_kst = date_trunc('day', d.day_start AT TIME ZONE $4)
+         LEFT JOIN reruns_by_day rr ON rr.day_kst = date_trunc('day', d.day_start AT TIME ZONE $4)
+        ORDER BY d.day_start`,
+      [tenantId, period.start.toISOString(), period.end.toISOString(), REPORT_TZ],
+    );
+    return { workflowRows: workflows.rows, failureRows: failures.rows, trendRows: trends.rows };
   });
 
   const byWorkflow = workflowRows.map(mapWorkflowRow);
+  const trends = trendRows.map(mapTrendRow);
   const summary = summarizeWorkflows(byWorkflow);
   return {
     month: period.month,
@@ -211,6 +278,7 @@ async function buildAutomationPerformanceReport(
     period_end: period.end.toISOString(),
     summary,
     failure_top: failureRows,
+    trends,
     by_workflow: byWorkflow,
   };
 }
@@ -229,6 +297,21 @@ function mapWorkflowRow(row: WorkflowReportRow): WorkflowReportItem {
     reprocessing_rate: row.total_runs > 0 ? row.rerun_count / row.total_runs : null,
     estimated_hours_saved: Number(row.estimated_hours_saved),
     estimated_value: Number(row.estimated_value),
+    gateway_cost: Number(row.gateway_cost),
+  };
+}
+
+function mapTrendRow(row: TrendReportRow): TrendReportItem {
+  const rated = row.completed + row.failed_business + row.failed_system;
+  return {
+    day: row.day,
+    total_runs: row.total_runs,
+    completed: row.completed,
+    failed_business: row.failed_business,
+    failed_system: row.failed_system,
+    success_rate: rated > 0 ? row.completed / rated : null,
+    rerun_count: row.rerun_count,
+    reprocessing_rate: row.total_runs > 0 ? row.rerun_count / row.total_runs : null,
     gateway_cost: Number(row.gateway_cost),
   };
 }
@@ -309,6 +392,20 @@ function reportToCsv(report: AutomationPerformanceReport): string {
     ["gateway_cost", String(report.summary.gateway_cost)],
   ];
   const failureLines = [["code", "count"], ...report.failure_top.map((row) => [row.code, String(row.count)])];
+  const trendLines = [
+    ["day", "total_runs", "completed", "failed_business", "failed_system", "success_rate", "rerun_count", "reprocessing_rate", "gateway_cost"],
+    ...report.trends.map((row) => [
+      row.day,
+      String(row.total_runs),
+      String(row.completed),
+      String(row.failed_business),
+      String(row.failed_system),
+      rateCell(row.success_rate),
+      String(row.rerun_count),
+      rateCell(row.reprocessing_rate),
+      String(row.gateway_cost),
+    ]),
+  ];
   const workflowLines = [
     [
       "scenario_id",
@@ -345,6 +442,9 @@ function reportToCsv(report: AutomationPerformanceReport): string {
     [],
     ["Failure Top N"],
     ...failureLines,
+    [],
+    ["Daily Trends"],
+    ...trendLines,
     [],
     ["Workflow ROI"],
     ...workflowLines,
@@ -400,6 +500,17 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
           workflowDecision(row),
         ])
       : [["No workflow evidence", "0", "-", "-", "0", "0", "0", "Hold: collect monthly run evidence"]];
+  const trendRows =
+    report.trends.length > 0
+      ? report.trends.map((row) => [
+          row.day,
+          String(row.total_runs),
+          percentCell(row.success_rate),
+          String(row.rerun_count),
+          percentCell(row.reprocessing_rate),
+          moneyCell(row.gateway_cost),
+        ])
+      : [["No daily evidence", "0", "-", "0", "-", "0"]];
 
   return [
     "# Automation Performance PoC Report",
@@ -423,6 +534,10 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
       ["Workflow", "Runs", "Success rate", "Reprocessing", "Hours saved", "Value", "Gateway cost", "Decision signal"],
       workflowRows,
     ),
+    "",
+    "## Daily Trends",
+    "",
+    markdownTable(["Day", "Runs", "Success rate", "Reruns", "Reprocessing", "Gateway cost"], trendRows),
     "",
     "## Decision Guide",
     "",
@@ -613,6 +728,23 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
     {
       name: "Failure Top N",
       rows: [["code", "count"], ...report.failure_top.map((row) => [row.code, row.count] as const)],
+    },
+    {
+      name: "Daily Trends",
+      rows: [
+        ["day", "total_runs", "completed", "failed_business", "failed_system", "success_rate", "rerun_count", "reprocessing_rate", "gateway_cost"],
+        ...report.trends.map((row) => [
+          row.day,
+          row.total_runs,
+          row.completed,
+          row.failed_business,
+          row.failed_system,
+          row.success_rate,
+          row.rerun_count,
+          row.reprocessing_rate,
+          row.gateway_cost,
+        ]),
+      ],
     },
     {
       name: "Workflow ROI",

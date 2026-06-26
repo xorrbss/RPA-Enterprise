@@ -31,6 +31,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     listPrincipals: empty,
     listDlq: empty,
     listScenarios: empty,
+    search: async () => ({ items: [], next_cursor: null }),
     listRunTriggers: empty,
     createRunTrigger: async (body) => ({
       trigger_id: "00000000-0000-0000-0000-00000000f001",
@@ -178,6 +179,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
           gateway_cost: 12.34,
         },
       ],
+      trends: [],
     }),
     exportAutomationPerformanceReportCsv: async () => "Summary\nmetric,value\nmonth,2026-06\n",
     listAuditLog: async (p) => ({
@@ -949,6 +951,8 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       priority: body.priority ?? "medium",
     }),
     deleteWorkerPool: async (poolKey) => ({ pool_key: poolKey, deleted: true }),
+    assignWorkerToPool: async (poolKey, workerId) => ({ pool_key: poolKey, worker_id: workerId }),
+    removeWorkerFromPool: async (poolKey, workerId) => ({ pool_key: poolKey, worker_id: workerId, deleted: true }),
     assignWorkerPool: async (poolKey) => ({ assigned_pool_key: poolKey }),
     unassignWorkerPool: async () => ({ assigned_pool_key: null }),
     listScenarioVersions: async () => ({ items: [], next_cursor: null }),
@@ -1166,6 +1170,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       validation_report: {},
     }),
     createRun: async () => ({ run_id: "00000000-0000-0000-0000-000000000099", status: "queued" }),
+    pauseRun: async () => ({ status: "accepted" }),
     decideApproval: async (body) => ({
       decision_id: "00000000-0000-0000-0000-0000000000de",
       source_run_id: body.source_run_id,

@@ -1,6 +1,6 @@
 # DG-3 설계 스펙 — 전용 워커 풀 (Worker Pool Affinity)
 
-> Status: **PROPOSED** (설계 제안). `release-decisions.md` DG-3 의 "재고 조건(net-new spec 필요)"을
+> Status: **IMPLEMENTED v1**. `release-decisions.md` DG-3 의 "재고 조건(net-new spec 필요)"을
 > 구체화한다. **이 문서는 설계 제안이며 코드·계약을 바꾸지 않는다.** 구현 착수 전 오너가 §8
 > "결정 필요"를 확정해야 한다. file:line 앵커는 작성 시점(main `3e6fc88f`) 기준 — 구현 시 재확인.
 
@@ -48,6 +48,7 @@ run 적재 시 `pool_key` 를 결정해 job flag `pool:<key>` 로 부착한다. 
 
 1. *(선택 확장)* `scenarios.pool_key` — 시나리오 지정.
 2. `worker_pool_assignments(tenant_id) → pool_key` — **테넌트 지정(MVP 핵심)**.
+3. `worker_pool_memberships(worker_id) → pool_key` — **worker membership(v1)**. Bot Pool live capacity와 Worker Pool admin UI의 worker summary 원천.
 3. `'default'` — 미지정.
 
 `createRunInTx` 와 **같은 tx** 에서 해석(추가 round-trip 0). `default` → flag 미부착(= 모든 워커 서비스).

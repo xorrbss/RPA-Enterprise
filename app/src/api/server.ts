@@ -50,6 +50,8 @@ import { registerConcurrencyPolicyRoutes } from "./concurrency-policies";
 import { registerWorkerPoolRoutes } from "./worker-pools";
 import { registerRunTriggerRoutes } from "./run-triggers";
 import { registerWebhookTriggerRoutes } from "./webhook-triggers";
+import { registerSearchRoutes } from "./search";
+import { registerScimRoutes } from "./scim";
 import { registerSecurity } from "./security";
 import {
   normalizeFailureReason,
@@ -62,6 +64,7 @@ import { abortRun } from "./server-abort-run";
 import { createRun } from "./server-create-run";
 import { prioritizeRun } from "./server-prioritize-run";
 import { resumeRun } from "./server-resume-run";
+import { pauseRun } from "./server-pause-run";
 import { rerunRun } from "./server-rerun-run";
 
 /** RLS 스코프로 조회한 run 상세(api-surface §1 GET /v1/runs/{run_id}). */
@@ -255,6 +258,15 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   );
 
   app.post<{ Params: { run_id: string } }>(
+    "/v1/runs/:run_id/pause",
+    { config: { rbacAction: "run.pause" } },
+    async (request, reply) => {
+      const result = await pauseRun(deps, request.params.run_id, request);
+      reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { run_id: string } }>(
     "/v1/runs/:run_id/priority",
     { config: { rbacAction: "run.prioritize" } },
     async (request, reply) => {
@@ -291,6 +303,8 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerBotPoolRoutes(app, deps);
   registerConcurrencyPolicyRoutes(app, deps);
   registerWorkerPoolRoutes(app, deps);
+  registerSearchRoutes(app, deps);
+  registerScimRoutes(app, deps);
 
   return app;
 }

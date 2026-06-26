@@ -85,6 +85,11 @@ export function transitionRun(
           { kind: "startBookmark" },
         ]);
       }
+      // R5b: running + operator_pause_requested → suspending.
+      // Runtime consumes the durable pause intent at a safe boundary and writes a bookmark/resume token.
+      if (ev.type === "operator_pause_requested") {
+        return r("suspending", [{ kind: "startBookmark" }]);
+      }
       // R6: running + abort_requested → aborting (SSE close + browser drain)
       if (ev.type === "abort_requested") {
         return r("aborting", [

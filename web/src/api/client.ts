@@ -36,6 +36,7 @@ import {
   type GatewayCallSummary,
   type GatewayPolicy,
   type GatewayPolicyUpdate,
+  type GlobalSearchResult,
   type GenerationArtifactDetail,
   type GenerationArtifactItem,
   type HumanTaskItem,
@@ -106,6 +107,7 @@ import {
 
 export interface ApiClient {
   listRuns(p?: ListParams): Promise<Paginated<RunItem>>;
+  search(query: string, limit?: number): Promise<GlobalSearchResult>;
   // run 하위 단계 트레이스(api-surface §1). 비민감 요약+참조만(본문은 artifact_ids→getArtifact).
   listRunSteps(runId: string, p?: ListParams): Promise<Paginated<StepSummary>>;
   watchRunSteps(runId: string, onChange: (event: RunStepStreamEvent) => void): () => void;
@@ -178,6 +180,7 @@ export interface ApiClient {
   deleteGatewayPolicy(model: string, version: number, idempotencyKey: string): Promise<unknown>;
   // 운영자 명령(POST + Idempotency-Key). 어휘체인 abort→cancelled, W10 replay.
   abortRun(runId: string, idempotencyKey: string): Promise<unknown>;
+  pauseRun(runId: string, idempotencyKey: string, reason?: string | null): Promise<unknown>;
   rerunRun(runId: string, body: RerunRunBody, idempotencyKey: string): Promise<RerunRunResult>;
   resumeRun(runId: string, idempotencyKey: string, reason?: string | null): Promise<ResumeRunResult>;
   prioritizeRun(runId: string, body: PrioritizeRunBody, idempotencyKey: string): Promise<PrioritizeRunResult>;
@@ -248,6 +251,8 @@ export interface ApiClient {
   createWorkerPool(body: { pool_key: string; description?: string; max_concurrency?: number; priority?: string }, idempotencyKey: string): Promise<unknown>;
   updateWorkerPool(poolKey: string, body: WorkerPoolMutationBody, idempotencyKey: string): Promise<unknown>;
   deleteWorkerPool(poolKey: string, idempotencyKey: string): Promise<unknown>;
+  assignWorkerToPool(poolKey: string, workerId: string, idempotencyKey: string): Promise<unknown>;
+  removeWorkerFromPool(poolKey: string, workerId: string, idempotencyKey: string): Promise<unknown>;
   assignWorkerPool(poolKey: string, idempotencyKey: string): Promise<unknown>;
   unassignWorkerPool(idempotencyKey: string): Promise<unknown>;
   listScenarioVersions(scenarioId: string): Promise<Paginated<ScenarioVersionItem>>;
@@ -488,6 +493,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
 
   return {
     listRuns: (p) => get(`/v1/runs${queryString(p)}`),
+    search: (q, limit = 20) => get(`/v1/search${queryString({ q, limit })}`),
     listRunSteps: (runId, p) => get(`/v1/runs/${runId}/steps${queryString(p)}`),
     watchRunSteps,
     listRunArtifacts: (runId, p) => get(`/v1/runs/${runId}/artifacts${queryString(p)}`),
@@ -582,6 +588,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
         "Idempotency-Key": key,
       }),
     abortRun: (runId, idempotencyKey) => post(`/v1/runs/${runId}/abort`, idempotencyKey),
+    pauseRun: (runId, idempotencyKey, reason) => post(`/v1/runs/${runId}/pause`, idempotencyKey, reason !== undefined ? { reason } : {}),
     rerunRun: (runId, body, idempotencyKey) => post(`/v1/runs/${runId}/rerun`, idempotencyKey, body),
     resumeRun: (runId, idempotencyKey, reason) => post(`/v1/runs/${runId}/resume`, idempotencyKey, reason !== undefined ? { reason } : {}),
     prioritizeRun: (runId, body, idempotencyKey) => post(`/v1/runs/${runId}/priority`, idempotencyKey, body),
@@ -640,6 +647,10 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       send("PATCH", `/v1/worker-pools/${encodeURIComponent(poolKey)}`, body, { "Idempotency-Key": key }),
     deleteWorkerPool: (poolKey, key) =>
       send("DELETE", `/v1/worker-pools/${encodeURIComponent(poolKey)}`, undefined, { "Idempotency-Key": key }),
+    assignWorkerToPool: (poolKey, workerId, key) =>
+      send("PUT", `/v1/worker-pools/${encodeURIComponent(poolKey)}/workers/${encodeURIComponent(workerId)}`, undefined, { "Idempotency-Key": key }),
+    removeWorkerFromPool: (poolKey, workerId, key) =>
+      send("DELETE", `/v1/worker-pools/${encodeURIComponent(poolKey)}/workers/${encodeURIComponent(workerId)}`, undefined, { "Idempotency-Key": key }),
     assignWorkerPool: (poolKey, key) => send("PUT", `/v1/worker-pool`, { pool_key: poolKey }, { "Idempotency-Key": key }),
     unassignWorkerPool: (key) => send("DELETE", `/v1/worker-pool`, undefined, { "Idempotency-Key": key }),
     decidePromotionRequest: (scenarioId, requestId, decision, reason, key) =>

@@ -542,6 +542,7 @@ function AutomationPerformancePanel({
   canExportPocMarkdown: boolean;
 }): JSX.Element {
   const topWorkflows = report?.by_workflow.slice(0, 5) ?? [];
+  const recentTrends = report?.trends.slice(-7) ?? [];
   return (
     <section className="panel performance-report-panel" aria-label="월간 자동화 성과 리포트">
       <div className="panel-head">
@@ -582,6 +583,32 @@ function AutomationPerformancePanel({
             <ReportMetric label="재처리율" value={percentLabel(report.summary.reprocessing_rate)} note={`${compactNumber(report.summary.rerun_count)}건 재실행`} />
             <ReportMetric label="Gateway 비용" value={moneyLabel(report.summary.gateway_cost)} note={`${compactNumber(report.summary.total_runs)}건 실행`} />
           </div>
+          {recentTrends.length > 0 && (
+            <div className="table-wrap performance-workflow-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">일자</th>
+                    <th scope="col">실행</th>
+                    <th scope="col">성공률</th>
+                    <th scope="col">재처리</th>
+                    <th scope="col">비용</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentTrends.map((row) => (
+                    <tr key={row.day}>
+                      <th scope="row">{row.day}</th>
+                      <td>{compactNumber(row.total_runs)}</td>
+                      <td>{percentLabel(row.success_rate)}</td>
+                      <td>{percentLabel(row.reprocessing_rate)}</td>
+                      <td>{moneyLabel(row.gateway_cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           <div className="performance-report-grid">
             <div className="performance-failure-list">
               <h3>실패 원인 Top N</h3>

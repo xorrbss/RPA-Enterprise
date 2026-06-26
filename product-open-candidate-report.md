@@ -64,9 +64,10 @@ path at deploy time (no external release/oncall team exists).
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
   blockers split by scope: the remaining external/staging blocker category
   is the concrete staging platform/deploy target + GitHub Environment, the
-  remaining D3 runtime blocker rows are operator pause ownership and true
-  per-pool live capacity membership, and the remaining Enterprise ALM/RBAC
-  product-scope blocker is the future SCIM synchronization contract.
+  the remaining repo-controlled D3 runtime blocker rows for operator pause
+  ownership and true per-pool live capacity membership are resolved locally,
+  and the Enterprise ALM/RBAC SCIM synchronization contract is implemented as
+  a minimal `POST /v1/scim/principals` sync surface.
   Repo-controlled D4.5 API P1 rows remain resolved locally as fail-closed
   API behavior, real executor orchestration/outcome mapping, and artifact
   lifecycle port/evidence guardrails.
@@ -76,10 +77,10 @@ path at deploy time (no external release/oncall team exists).
   marker is tracked by an active checklist blocker, every active unchecked
   staging/open blocker has a matching actionable TODO, and each split SecretRef
   evidence row has a matching specific evidence-packet TODO line. Current local
-  output: 24 markers, 5 actionable blockers, 13 known release decisions tracked,
+  output: 20 markers, 1 actionable blockers, 13 known release decisions tracked,
   13 release decisions checked (1 active deploy-time provisioning checklist rows;
-  0 repo-controlled D4.5 API P1 open rows; 2 repo-controlled D3 runtime open rows;
-  0 repo-controlled Browser RPA V2 product-scope open rows; 1 repo-controlled Enterprise ALM/RBAC product-scope open rows). New unresolved behavior must still use the repository
+  0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows;
+  0 repo-controlled Browser RPA V2 product-scope open rows; 0 repo-controlled Enterprise ALM/RBAC product-scope open rows). New unresolved behavior must still use the repository
   blocked-decision marker with nearby required-decision text.
 
 ## Changed Files / Evidence Scope
@@ -220,11 +221,11 @@ Passed locally:
   `app.vendor.example:8443` but blocks apex `vendor.example` in the LLM
   redaction boundary.
 - `npm --prefix codegen run blocked:audit`
-  (current output: 24 markers, 5 actionable blockers, 13 known release
+  (current output: 20 markers, 1 actionable blockers, 13 known release
   decisions tracked, 13 release decisions checked (1 active deploy-time provisioning
-  checklist rows; 0 repo-controlled D4.5 API P1 open rows; 2 repo-controlled D3
+  checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows;
-  1 repo-controlled Enterprise ALM/RBAC product-scope open rows))
+  0 repo-controlled Enterprise ALM/RBAC product-scope open rows))
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
   DB-backed release posture from `npm --prefix codegen run ci:local:temp-db`,
   `npm --prefix codegen run db:temp-smoke`, or

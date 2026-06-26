@@ -57,6 +57,7 @@ DECLARE
     'workitems',
     'runs',
     'run_reruns',
+    'run_pause_requests',
     'run_steps',
     'human_tasks',
     'principals',
@@ -73,7 +74,8 @@ DECLARE
     'audit_log',
     'scenario_promotion_requests',
     'worker_pools',
-    'worker_pool_assignments'
+    'worker_pool_assignments',
+    'worker_pool_memberships'
   ];
   table_name text;
 BEGIN
@@ -121,6 +123,7 @@ DECLARE
     'workitems',
     'runs',
     'run_reruns',
+    'run_pause_requests',
     'run_steps',
     'human_tasks',
     'principals',

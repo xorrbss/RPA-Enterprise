@@ -190,6 +190,17 @@ CREATE TABLE worker_pool_assignments (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- worker_pool_memberships (DG-3 live capacity) — worker→pool registry.
+-- pool_key='default' is implicit: browser workers without a membership row serve the default pool.
+CREATE TABLE worker_pool_memberships (
+  worker_id   uuid        PRIMARY KEY REFERENCES workers(id) ON DELETE CASCADE,
+  pool_key    text        NOT NULL REFERENCES worker_pools(pool_key) ON DELETE CASCADE,
+  assigned_by text,
+  assigned_at timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_worker_pool_memberships_pool ON worker_pool_memberships (pool_key);
+
 -- browser_identities — 브라우저 지문/정체성. version은 action_plan_cache family 키 구성요소.
 CREATE TABLE browser_identities (
   id              uuid        PRIMARY KEY,
@@ -578,6 +589,25 @@ CREATE TABLE run_reruns (
   UNIQUE (tenant_id, source_run_id, child_run_id)
 );
 CREATE INDEX idx_run_reruns_source ON run_reruns (tenant_id, source_run_id, created_at DESC);
+
+CREATE TABLE run_pause_requests (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  run_id          uuid        NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  requested_by    text        NOT NULL CHECK (length(requested_by) > 0),
+  reason          text,
+  status          text        NOT NULL DEFAULT 'requested'
+                              CHECK (status IN ('requested','accepted','cancelled','completed','failed')),
+  accepted_by_worker_id uuid REFERENCES workers(id),
+  completed_at    timestamptz,
+  failure_reason  jsonb,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_run_pause_requests_one_open
+  ON run_pause_requests (tenant_id, run_id)
+  WHERE status IN ('requested','accepted');
+CREATE INDEX idx_run_pause_requests_run ON run_pause_requests (tenant_id, run_id, created_at DESC);
 
 CREATE TABLE run_trigger_fires (
   id             uuid        PRIMARY KEY,
@@ -1246,6 +1276,7 @@ ALTER TABLE run_trigger_fires   ADD CONSTRAINT uq_run_trigger_fires_tenant_id_id
 ALTER TABLE workitems           ADD CONSTRAINT uq_workitems_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE runs                ADD CONSTRAINT uq_runs_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE run_reruns          ADD CONSTRAINT uq_run_reruns_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE run_pause_requests  ADD CONSTRAINT uq_run_pause_requests_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenario_generations ADD CONSTRAINT uq_scenario_generations_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE raw_items           ADD CONSTRAINT uq_raw_items_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE normalized_records  ADD CONSTRAINT uq_normalized_records_tenant_id_id UNIQUE (tenant_id, id);
@@ -1455,6 +1486,10 @@ ALTER TABLE challenge_resolution_attempts
   ADD CONSTRAINT fk_challenge_workitem_tenant
   FOREIGN KEY (tenant_id, workitem_id) REFERENCES workitems(tenant_id, id);
 
+ALTER TABLE run_pause_requests
+  ADD CONSTRAINT fk_run_pause_requests_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id) ON DELETE CASCADE;
+
 ALTER TABLE normalized_records
   ADD CONSTRAINT fk_normalized_records_raw_item_tenant
   FOREIGN KEY (tenant_id, raw_item_id) REFERENCES raw_items(tenant_id, id);
@@ -1501,6 +1536,7 @@ BEGIN
     'workitems',
     'runs',
     'run_reruns',
+    'run_pause_requests',
     'scenario_generations',
     'run_steps',
 	    'human_tasks',

@@ -5,6 +5,22 @@ export interface Paginated<T> {
   readonly next_cursor: string | null;
 }
 
+export type GlobalSearchType = "run" | "scenario" | "human_task" | "principal" | "credential";
+
+export interface GlobalSearchItem {
+  readonly type: GlobalSearchType;
+  readonly id: string;
+  readonly label: string;
+  readonly description: string | null;
+  readonly route: string;
+  readonly matched_field: string;
+}
+
+export interface GlobalSearchResult {
+  readonly items: readonly GlobalSearchItem[];
+  readonly next_cursor: string | null;
+}
+
 // run outcome 집계(api-surface §1 GET /v1/runs/summary). by_status=runs.status별 정확 카운트(부재 status는 키 생략).
 // success_rate=completed/(completed+failed_business+failed_system), 분모 0이면 null(0/0 단정 금지).
 export interface RunSummary {
@@ -66,6 +82,18 @@ export interface AutomationPerformanceWorkflow {
   readonly gateway_cost: number;
 }
 
+export interface AutomationPerformanceTrend {
+  readonly day: string;
+  readonly total_runs: number;
+  readonly completed: number;
+  readonly failed_business: number;
+  readonly failed_system: number;
+  readonly success_rate: number | null;
+  readonly rerun_count: number;
+  readonly reprocessing_rate: number | null;
+  readonly gateway_cost: number;
+}
+
 export interface AutomationPerformanceReport {
   readonly month: string;
   readonly timezone: "Asia/Seoul";
@@ -73,6 +101,7 @@ export interface AutomationPerformanceReport {
   readonly period_end: string;
   readonly summary: AutomationPerformanceSummary;
   readonly failure_top: readonly AutomationPerformanceFailureTop[];
+  readonly trends: readonly AutomationPerformanceTrend[];
   readonly by_workflow: readonly AutomationPerformanceWorkflow[];
 }
 
@@ -406,6 +435,12 @@ export interface WorkerPoolItem {
   readonly created_at: string;
   readonly updated_at: string;
   readonly updated_by: string | null;
+  readonly workers?: {
+    readonly total: number;
+    readonly active: number;
+    readonly stale: number;
+    readonly worker_ids: readonly string[];
+  };
 }
 
 export interface WorkerPoolMutationBody {
@@ -559,7 +594,9 @@ export interface BotPoolItem {
     readonly queue_pressure: number | null;
     readonly live_capacity: {
       readonly available: boolean;
-      readonly reason_code: "worker_pool_membership_missing";
+      readonly pool_key?: string;
+      readonly source?: "worker_pool_memberships";
+      readonly reason_code?: "worker_pool_membership_missing";
     };
   };
   readonly health: BotPoolHealth;

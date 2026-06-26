@@ -49,6 +49,7 @@ const expectedTables = [
   "workitems",
   "runs",
   "run_reruns",
+  "run_pause_requests",
   "run_steps",
   "human_tasks",
   "principals",
@@ -66,11 +67,12 @@ const expectedTables = [
   "scenario_promotion_requests",
   "worker_pools",
   "worker_pool_assignments",
+  "worker_pool_memberships",
 ];
 
 // worker_pools 는 workers/artifacts 처럼 인프라(non-RLS) 도메인이라 테넌트 RLS 검증에서 제외한다.
 const tenantTables = expectedTables.filter(
-  (table) => table !== "workers" && table !== "artifacts" && table !== "worker_pools",
+  (table) => table !== "workers" && table !== "artifacts" && table !== "worker_pools" && table !== "worker_pool_memberships",
 );
 const expectedEventTypes = readdirSync(join(ROOT, "schema", "events"))
   .filter((name) => name.endsWith(".schema.json") && name !== "common-empty-payload.schema.json")

@@ -5,7 +5,7 @@ import type { ApiClient } from "../api/client";
 import { useApiClient } from "../api/context";
 import { VIEW_KEYS, navigate, type ViewKey } from "../router";
 import { VIEW_META } from "../views/meta";
-import type { ConcurrencyPolicy, HumanTaskItem, RunItem, ScenarioItem } from "../api/types";
+import type { ConcurrencyPolicy, GlobalSearchItem, HumanTaskItem, RunItem, ScenarioItem } from "../api/types";
 
 const LOOKUP_LIMIT = 50;
 const SEARCH_STALE_MS = 30_000;
@@ -114,6 +114,18 @@ function credentialLabel(policy: ConcurrencyPolicy): string {
     : policy.credential_ref;
 }
 
+function navigateSearchItem(item: GlobalSearchItem): void {
+  if (item.type === "run") navigate("runTrace", { run: item.id });
+  else if (item.type === "scenario") navigate("playground", { scenario: item.id });
+  else if (item.type === "human_task") navigate("humanTasks", { ht: item.id });
+  else if (item.type === "principal") navigate("security", { principal: item.id });
+  else if (item.type === "credential") {
+    const [siteProfileId, ...rest] = item.id.split(":");
+    if (siteProfileId === undefined) return;
+    navigate("security", { credential_site: siteProfileId, credential: rest.join(":") });
+  }
+}
+
 // 전역 커맨드 팔레트(Ctrl/⌘+K) — 화면 이동 + 최근 실행/업무/담당자/Credential/자동화 검색. 입력 포커스 유지 + ↑↓ 하이라이트
 // (aria-activedescendant), Enter 실행, Esc·배경 클릭 닫기. 열기 직전 포커스를 닫을 때 복원한다(접근성).
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element | null {
@@ -124,6 +136,13 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const restoreRef = useRef<HTMLElement | null>(null);
   const q = query.trim().toLowerCase();
   const lookupEnabled = open && q.length >= MIN_ENTITY_QUERY_LENGTH;
+
+  const globalSearch = useQuery({
+    queryKey: ["palette-global-search", q],
+    queryFn: async () => (await api.search(q, 30)).items,
+    enabled: lookupEnabled,
+    staleTime: SEARCH_STALE_MS,
+  });
 
   const runs = useQuery({
     queryKey: ["palette-runs"],
@@ -173,6 +192,19 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   }, [open]);
 
   const items = useMemo<readonly PaletteItem[]>(() => {
+    const globalItems: PaletteItem[] =
+      q.length < MIN_ENTITY_QUERY_LENGTH
+        ? []
+        : (globalSearch.data ?? []).slice(0, GROUP_LIMIT * 2).map((item) => ({
+            id: `global:${item.type}:${item.id}`,
+            group: "통합 검색",
+            label: item.label,
+            hint: item.description ?? item.matched_field,
+            run: () => {
+              navigateSearchItem(item);
+              onClose();
+            },
+          }));
     const quickActions: PaletteItem[] = QUICK_ACTIONS.filter((action) =>
       q === "" || includesQuery(q, [action.label, action.hint, ...action.keywords]),
     ).map((action) => ({
@@ -287,8 +319,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                 onClose();
               },
             }));
-    return [...quickActions, ...views, ...runItems, ...humanTaskItems, ...principalItems, ...scenarioItems, ...credentialItems];
-  }, [q, runs.data, humanTasks.data, principals.data, scenarios.data, credentials.data, onClose]);
+    return [...globalItems, ...quickActions, ...views, ...runItems, ...humanTaskItems, ...principalItems, ...scenarioItems, ...credentialItems];
+  }, [q, globalSearch.data, runs.data, humanTasks.data, principals.data, scenarios.data, credentials.data, onClose]);
 
   useEffect(() => {
     setActive((a) => (items.length === 0 ? 0 : Math.max(0, Math.min(a, items.length - 1))));
@@ -314,9 +346,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const isSearching =
     lookupEnabled &&
-    (runs.isFetching || humanTasks.isFetching || principals.isFetching || scenarios.isFetching || credentials.isFetching);
+    (globalSearch.isFetching || runs.isFetching || humanTasks.isFetching || principals.isFetching || scenarios.isFetching || credentials.isFetching);
   const hasLookupError =
-    lookupEnabled && (runs.isError || humanTasks.isError || principals.isError || scenarios.isError || credentials.isError);
+    lookupEnabled && (globalSearch.isError || runs.isError || humanTasks.isError || principals.isError || scenarios.isError || credentials.isError);
   const emptyMessage = isSearching
     ? "검색 중…"
     : hasLookupError

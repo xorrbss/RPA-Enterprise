@@ -186,6 +186,7 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
   const [description, setDescription] = useState(props.pool.description ?? "");
   const [maxConcurrency, setMaxConcurrency] = useState(props.pool.max_concurrency);
   const [priority, setPriority] = useState<WorkerPoolPriority>(props.pool.priority);
+  const [workerId, setWorkerId] = useState("");
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
 
   const save = useMutation({
@@ -205,6 +206,29 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
     },
     onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
   });
+
+  const assignWorker = useMutation({
+    mutationFn: () => api.assignWorkerToPool(props.pool.pool_key, workerId.trim(), crypto.randomUUID()),
+    onSuccess: () => {
+      setMsg({ tone: "green", text: "worker 배정됨" });
+      setWorkerId("");
+      void qc.invalidateQueries({ queryKey: ["worker-pools"] });
+    },
+    onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
+  });
+
+  const removeWorker = useMutation({
+    mutationFn: () => api.removeWorkerFromPool(props.pool.pool_key, workerId.trim(), crypto.randomUUID()),
+    onSuccess: () => {
+      setMsg({ tone: "green", text: "worker 제거됨" });
+      setWorkerId("");
+      void qc.invalidateQueries({ queryKey: ["worker-pools"] });
+    },
+    onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
+  });
+
+  const workerIdValid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(workerId.trim());
+  const workerSummary = props.pool.workers;
 
   return (
     <div style={{ display: "grid", gap: 8, minWidth: 420 }}>
@@ -229,6 +253,12 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
       </div>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
+        {workerSummary !== undefined && (
+          <span className="badge blue">
+            worker {workerSummary.active}/{workerSummary.total}
+            {workerSummary.stale > 0 ? ` · stale ${workerSummary.stale}` : ""}
+          </span>
+        )}
         <PoolStatusButton pool={props.pool} status="active" label="활성화" disabled={props.pool.status === "active"} />
         <PoolStatusButton pool={props.pool} status="draining" label="Drain" disabled={props.pool.status === "draining"} />
         <PoolStatusButton pool={props.pool} status="disabled" label="비활성화" disabled={props.pool.status === "disabled"} />
@@ -251,6 +281,23 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
           run={(key) => api.deleteWorkerPool(props.pool.pool_key, key)}
         />
       </div>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto auto", gap: 6, alignItems: "end" }}>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span className="subtle">Worker UUID</span>
+          <input value={workerId} onChange={(e) => setWorkerId(e.target.value)} placeholder="00000000-0000-4000-8000-000000000000" />
+        </label>
+        <button className="btn" type="button" disabled={!workerIdValid || assignWorker.isPending} onClick={() => assignWorker.mutate()}>
+          배정
+        </button>
+        <button className="btn" type="button" disabled={!workerIdValid || removeWorker.isPending} onClick={() => removeWorker.mutate()}>
+          제거
+        </button>
+      </div>
+      {workerSummary !== undefined && workerSummary.worker_ids.length > 0 && (
+        <div className="subtle" style={{ fontSize: 11, wordBreak: "break-all" }}>
+          {workerSummary.worker_ids.join(", ")}
+        </div>
+      )}
     </div>
   );
 }

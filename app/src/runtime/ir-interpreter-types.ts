@@ -3,7 +3,7 @@
  * suspend 컨텍스트, scenario outcome. 분해 전 ir-interpreter.ts 내부였음(CLAUDE.md #7). 런타임 코드 없는 타입 전용.
  */
 import type { IRELNode } from "../../../codegen/irel-compile";
-import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, StepStatus } from "../../../ts/core-types";
+import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepStatus } from "../../../ts/core-types";
 import type { CompiledOnBranch } from "./flow-control";
 import type { ExtractResultPage, MergedExtractResult } from "./extract-result-merge";
 
@@ -57,6 +57,12 @@ export interface InterpreterDeps {
    * 드라이버가 human_tasks.result 를 re-SELECT 해 구성(reserved-handlers.md: 토큰 미적재·서버 권위). 정상 시작은 미지정.
    */
   readonly resumeNodeOutputs?: Readonly<Record<string, HumanTaskNodeOutput>>;
+  readonly pauseRequested?: (ctx: RunContext) => Promise<OperatorPauseDecision | null>;
+}
+
+export interface OperatorPauseDecision {
+  readonly pauseRequestId: string;
+  readonly reason?: string;
 }
 
 /** @human_task 해소 출력(node.<id>.decision/correction). decision=닫힌 enum(approve/reject/correct/retry), correction=business_form 교정값. */
@@ -102,7 +108,12 @@ export interface HumanTaskSuspendContext extends SuspendContextBase {
   readonly resultSchema?: Record<string, unknown>;
   readonly artifactRefs?: readonly string[];
 }
-export type SuspendContext = ChallengeSuspendContext | HumanTaskSuspendContext;
+export interface OperatorPauseSuspendContext extends SuspendContextBase {
+  readonly kind: "operator_pause";
+  readonly pauseRequestId: string;
+  readonly reason?: string;
+}
+export type SuspendContext = ChallengeSuspendContext | HumanTaskSuspendContext | OperatorPauseSuspendContext;
 
 export interface ScenarioOutcome {
   readonly terminal: string; // success | success_empty | fail_business | fail_system | suspend

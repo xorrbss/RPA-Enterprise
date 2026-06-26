@@ -317,7 +317,14 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     try {
       // resume(startNode 지정): 해소된 @human_task 판정을 nodeScope 로 시드(human_tasks.result re-SELECT, 토큰 미적재).
       const resumeNodeOutputs = startNode !== undefined ? await loadResolvedHumanTaskNodeOutputs(deps.pool, run.tenantId, run.runId) : undefined;
-      scenarioOutcome = await runScenario(scenario, ctx, { executor, resolver: deps.resolver, params: run.params, startNode, ...(resumeNodeOutputs !== undefined ? { resumeNodeOutputs } : {}) });
+      scenarioOutcome = await runScenario(scenario, ctx, {
+        executor,
+        resolver: deps.resolver,
+        params: run.params,
+        startNode,
+        ...(resumeNodeOutputs !== undefined ? { resumeNodeOutputs } : {}),
+        pauseRequested: () => readOperatorPauseRequest(deps.pool, run),
+      });
     } catch (scenarioErr) {
       throwReason = classifiedFailureReason(scenarioErr);
       // 인터프리터 예외를 system 으로 흡수하되 조용히 묻지 않는다(조용한 false/unknown 금지 — system 은 loud 채널).
@@ -396,23 +403,55 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
  * 토큰 save+R11 은 한 tx(원자: 토큰 없이 suspended 금지). R11 pending(issueResumeToken/releaseLease)은 driver 미소비
  * (success/fail 경로와 동일 — lease 회수는 deferred lease lifecycle; 토큰은 R11 전에 이미 발행·저장).
  */
+async function readOperatorPauseRequest(
+  pool: Pool,
+  run: RunTerminalRef,
+): Promise<{ readonly pauseRequestId: string; readonly reason?: string } | null> {
+  return withTenantTx(pool, run.tenantId, async (client) => {
+    const result = await client.query<{ id: string; reason: string | null }>(
+      `SELECT id::text, reason
+         FROM run_pause_requests
+        WHERE tenant_id = $1::uuid
+          AND run_id = $2::uuid
+          AND status = 'requested'
+        ORDER BY created_at
+        LIMIT 1`,
+      [run.tenantId, run.runId],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return null;
+    return {
+      pauseRequestId: row.id,
+      ...(row.reason !== null ? { reason: row.reason } : {}),
+    };
+  });
+}
+
 async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioOutcome): Promise<DriveResult> {
   const s: SuspendContext | undefined = outcome.suspend;
   if (s === undefined) {
     throw new Error("driveSuspend: terminal 'suspend' 인데 suspend 컨텍스트 부재(인터프리터 불변 위반)");
   }
-  const port = deps.suspensionPort;
   const codec = deps.resumeTokenCodec;
-  if (port === undefined || codec === undefined) {
+  if (codec === undefined) {
     throw new Error("driveSuspend: suspend 경로는 suspensionPort + resumeTokenCodec 주입 필요(미구성)");
   }
 
   // §E challenge_rate: challenge 자동 감지(인간개입 @human_task 트리거 제외) 카운트. bootstrap 전이면 no-op meter.
-  if (s.kind !== "human_task") {
+  if (s.kind === "challenge") {
     recordChallenge({ tenant_id: run.tenantId });
   }
 
   // 멱등 키 per-cycle 스코프 해소(같은 노드 재suspend 시 키 충돌 방지 — resolveSuspendKeyAttempt 참조).
+  if (s.kind === "operator_pause") {
+    return driveOperatorPause(run, deps, s, codec, outcome);
+  }
+
+  const port = deps.suspensionPort;
+  if (port === undefined) {
+    throw new Error("driveSuspend: challenge/human_task suspend path requires suspensionPort");
+  }
+
   const keyAttempt = await resolveSuspendKeyAttempt(deps.pool, run, s);
 
   // 1) R4(challenge)/R5(@human_task)(running→suspending) + 포트(human_task INSERT + human_task.created + bookmark) — 한 tenant tx.
@@ -497,6 +536,114 @@ async function driveSuspend(run: ClaimedRun, deps: DriveDeps, outcome: ScenarioO
     if (!r11.applied) {
       throw new Error(`driveSuspend: R11 not applied (${r11.reason}, observed=${r11.observed ?? "none"})`);
     }
+    await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
+  });
+
+  return { state: "suspended", outcome };
+}
+
+async function driveOperatorPause(
+  run: ClaimedRun,
+  deps: DriveDeps,
+  s: Extract<SuspendContext, { readonly kind: "operator_pause" }>,
+  codec: ResumeTokenCodec,
+  outcome: ScenarioOutcome,
+): Promise<DriveResult> {
+  await withTenantTx(deps.pool, run.tenantId, async (client) => {
+    const transition = await applyRunTransition(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      fromStatus: "running",
+      event: { type: "operator_pause_requested" },
+      guard: {},
+      correlationId: run.correlationId,
+      eventIdempotencyKey: `${run.runId}:${s.pauseRequestId}:operator_pause_requested`,
+    });
+    if (!transition.applied) {
+      throw new Error(`driveOperatorPause: operator_pause_requested not applied (${transition.reason}, observed=${transition.observed ?? "none"})`);
+    }
+    if (transition.pending.length !== 1 || transition.pending[0]?.kind !== "startBookmark") {
+      throw new Error("driveOperatorPause: operator pause transition produced unsupported pending side effects");
+    }
+    const accepted = await client.query(
+      `UPDATE run_pause_requests
+          SET status = 'accepted',
+              accepted_by_worker_id = $4::uuid,
+              updated_at = now()
+        WHERE tenant_id = $1::uuid
+          AND run_id = $2::uuid
+          AND id = $3::uuid
+          AND status = 'requested'`,
+      [run.tenantId, run.runId, s.pauseRequestId, deps.workerId],
+    );
+    if (accepted.rowCount !== 1) {
+      throw new Error(`driveOperatorPause: pause request '${s.pauseRequestId}' was not claimable`);
+    }
+    const saved = await client.query(
+      `UPDATE runs
+          SET bookmark = $3::jsonb,
+              updated_at = now()
+        WHERE tenant_id = $1::uuid
+          AND id = $2::uuid
+          AND status = 'suspending'`,
+      [
+        run.tenantId,
+        run.runId,
+        JSON.stringify({
+          stepId: s.stepId,
+          attempt: s.attempt,
+          reason: "operator_pause",
+          pauseRequestId: s.pauseRequestId,
+        }),
+      ],
+    );
+    if (saved.rowCount !== 1) {
+      throw new Error(`driveOperatorPause: bookmark save affected ${saved.rowCount ?? 0} rows`);
+    }
+    await pauseLinkedWorkitemCheckout(client, { tenantId: run.tenantId, runId: run.runId, correlationId: run.correlationId });
+  });
+
+  const now = Date.now();
+  const token: ResumeTokenEnvelope = await codec.issue({
+    runId: run.runId as RunId,
+    resumeNodeId: s.resumeNodeId,
+    pageStateRef: s.pageStateRef as PageStateRef,
+    issuedAt: new Date(now).toISOString() as IsoDateTime,
+    expiresAt: new Date(now + RESUME_TOKEN_TTL_MS).toISOString() as IsoDateTime,
+  });
+
+  await withTenantTx(deps.pool, run.tenantId, async (client) => {
+    const saved = await client.query(
+      `UPDATE runs SET resume_token = $3::jsonb, updated_at = now()
+        WHERE tenant_id = $1::uuid AND id = $2::uuid AND status = 'suspending'`,
+      [run.tenantId, run.runId, JSON.stringify(token)],
+    );
+    if (saved.rowCount !== 1) {
+      throw new Error(`driveOperatorPause: resume_token save affected ${saved.rowCount ?? 0} rows`);
+    }
+    const r11 = await applyRunTransition(client, {
+      tenantId: run.tenantId,
+      runId: run.runId,
+      fromStatus: "suspending",
+      event: { type: "bookmark_saved" },
+      guard: { resumeTokenIssued: true },
+      correlationId: run.correlationId,
+      eventIdempotencyKey: `${run.runId}:${s.pauseRequestId}:bookmark_saved`,
+    });
+    if (!r11.applied) {
+      throw new Error(`driveOperatorPause: R11 not applied (${r11.reason}, observed=${r11.observed ?? "none"})`);
+    }
+    await client.query(
+      `UPDATE run_pause_requests
+          SET status = 'completed',
+              completed_at = now(),
+              updated_at = now()
+        WHERE tenant_id = $1::uuid
+          AND run_id = $2::uuid
+          AND id = $3::uuid
+          AND status = 'accepted'`,
+      [run.tenantId, run.runId, s.pauseRequestId],
+    );
     await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
   });
 

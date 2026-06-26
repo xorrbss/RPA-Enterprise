@@ -119,6 +119,21 @@ function apiFixture(pathname: string): unknown {
           gateway_cost: 0.25,
         },
       ],
+      trends: [
+        {
+          day: "2026-06-25",
+          total_runs: 1,
+          completed: 1,
+          failed_business: 0,
+          failed_system: 0,
+          success_rate: 1,
+          rerun_count: 0,
+          reprocessing_rate: 0,
+          estimated_hours_saved: 1,
+          estimated_value: 40000,
+          gateway_cost: 0.25,
+        },
+      ],
     };
   }
   if (pathname === "/api/v1/runs/summary") {

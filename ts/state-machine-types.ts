@@ -31,6 +31,7 @@ export type RunEvent =
   | { type: "init_failed" }
   | { type: "step.challenge_detected"; challengeKind?: "captcha" | "mfa" }   // ChallengeSummary.type → human-assist kind(R4)
   | { type: "human_task_required"; humanTaskKind?: "approval" | "validation" | "exception" } // R5: node→@human_task(kind=@human_task input, reserved-handlers)
+  | { type: "operator_pause_requested" }
   | { type: "abort_requested" }
   | { type: "last_node_success" }
   | { type: "unrecoverable_exception" }

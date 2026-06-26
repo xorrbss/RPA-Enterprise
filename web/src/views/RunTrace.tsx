@@ -189,6 +189,16 @@ export function RunTraceView(): JSX.Element {
                     />
                   </>
                 )}
+                {r.status === "running" && (
+                  <ActionButton
+                    label="일시정지"
+                    action="run.pause"
+                    confirmText="선택한 실행을 다음 안전 지점에서 일시정지할까요?"
+                    successText="실행 일시정지를 요청했습니다."
+                    run={(key) => api.pauseRun(r.run_id, key, "operator pause from RunTrace")}
+                    invalidateKeys={[["runs"]]}
+                  />
+                )}
                 {isResumableRunStatus(r.status) && (
                   <ActionButton
                     label={r.status === "resume_requested" ? "재개 재시도" : "재개"}

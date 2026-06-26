@@ -285,6 +285,7 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
               gateway_cost: 1234,
             },
           ],
+          trends: [],
         }),
         exportAutomationPerformanceReportCsv: async (month) => {
           csvExportMonths.push(month ?? "");

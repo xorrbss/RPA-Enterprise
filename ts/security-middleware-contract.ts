@@ -66,6 +66,7 @@ export type RbacAction =
   | "run.abort"
   | "run.rerun"
   | "run.resume"
+  | "run.pause"
   | "run.prioritize"
   | "trigger.read"
   | "trigger.manage"
@@ -116,6 +117,7 @@ export type RbacAction =
   | "gateway_policy.read"
   | "gateway_policy.edit"
   | "network_policy.edit"
+  | "scim.sync"
   | "rbac.grant";
 
 export type SecurityDenyCode = Extract<
@@ -429,11 +431,13 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "scenario_release.rollback",
   "run.rerun",
   "run.resume",
+  "run.pause",
   "run.prioritize",
   "credential.manage",
   "worker_pool.manage",
   "rbac.grant",
   "rbac.revoke",
+  "scim.sync",
   "network.request",
   "prompt.inspect",
   "bypassrls.use",

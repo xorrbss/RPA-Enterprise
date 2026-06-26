@@ -6,6 +6,7 @@ import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "./errors";
 import { appendGovernanceAudit } from "./role-assignments";
 import { requirePrincipal, type ApiServerDeps } from "./server";
+import { UUID_RE } from "./server-shared";
 
 const POOL_KEY_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const WORKER_POOL_STATUSES = ["active", "draining", "disabled"] as const;
@@ -23,6 +24,21 @@ interface WorkerPoolRow {
   readonly created_at: Date;
   readonly updated_at: Date;
   readonly updated_by: string | null;
+}
+
+interface WorkerPoolMemberSummary {
+  readonly total: number;
+  readonly active: number;
+  readonly stale: number;
+  readonly worker_ids: readonly string[];
+}
+
+interface WorkerPoolMemberSummaryRow {
+  readonly pool_key: string;
+  readonly total_count: string;
+  readonly active_count: string;
+  readonly stale_count: string;
+  readonly worker_ids: readonly string[] | string;
 }
 
 interface WorkerPoolInput {
@@ -54,6 +70,7 @@ export function registerWorkerPoolRoutes(app: FastifyInstance, deps: ApiServerDe
            FROM worker_pools
           ORDER BY pool_key`,
       );
+      const memberSummaries = await readWorkerPoolMemberSummaries(client);
       const assignment = await client.query<{ pool_key: string }>(
         `SELECT pool_key FROM worker_pool_assignments WHERE tenant_id = $1::uuid`,
         [principal.tenantId],
@@ -66,7 +83,7 @@ export function registerWorkerPoolRoutes(app: FastifyInstance, deps: ApiServerDe
         [principal.tenantId],
       );
       return {
-        items: pools.rows.map(mapPoolRow),
+        items: pools.rows.map((row) => mapPoolRow(row, memberSummaries.get(row.pool_key))),
         assigned_pool_key: assignment.rows[0]?.pool_key ?? null,
         pending: {
           queued_runs: Number(pending.rows[0]?.queued_runs ?? "0"),
@@ -197,9 +214,82 @@ export function registerWorkerPoolRoutes(app: FastifyInstance, deps: ApiServerDe
     });
     reply.code(result.status).send(result.body);
   });
+
+  app.put<{ Params: { poolKey: string; workerId: string } }>(
+    "/v1/worker-pools/:poolKey/workers/:workerId",
+    { config: { rbacAction: "worker_pool.manage" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const { poolKey, workerId } = request.params;
+      if (poolKeyInvalid(poolKey)) throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      if (!UUID_RE.test(workerId)) throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      const result = await runIdempotentCommand(
+        deps,
+        request,
+        "assignWorkerPoolWorker",
+        `/v1/worker-pools/${poolKey}/workers/${workerId}`,
+        async (client) => {
+          await ensureBrowserWorker(client, workerId);
+          try {
+            await client.query(
+              `INSERT INTO worker_pool_memberships (worker_id, pool_key, assigned_by)
+               VALUES ($1::uuid, $2, $3)
+               ON CONFLICT (worker_id) DO UPDATE SET
+                  pool_key = EXCLUDED.pool_key,
+                  assigned_by = EXCLUDED.assigned_by,
+                  updated_at = now()`,
+              [workerId, poolKey, principal.subjectId],
+            );
+          } catch (err) {
+            if (isRecord(err) && (err as { code?: unknown }).code === "23503") {
+              throw new ApiResponseError("RESOURCE_NOT_FOUND");
+            }
+            throw err;
+          }
+          await appendWorkerPoolAudit(client, request, "worker_pool_worker_assigned", {
+            pool_key: poolKey,
+            worker_id: workerId,
+          });
+          return { status: 200, body: { pool_key: poolKey, worker_id: workerId, assigned: true } };
+        },
+      );
+      reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.delete<{ Params: { poolKey: string; workerId: string } }>(
+    "/v1/worker-pools/:poolKey/workers/:workerId",
+    { config: { rbacAction: "worker_pool.manage" } },
+    async (request, reply) => {
+      const { poolKey, workerId } = request.params;
+      if (poolKeyInvalid(poolKey)) throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      if (!UUID_RE.test(workerId)) throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      const result = await runIdempotentCommand(
+        deps,
+        request,
+        "removeWorkerPoolWorker",
+        `/v1/worker-pools/${poolKey}/workers/${workerId}`,
+        async (client) => {
+          const deleted = await client.query(
+            `DELETE FROM worker_pool_memberships
+              WHERE worker_id = $1::uuid
+                AND pool_key = $2`,
+            [workerId, poolKey],
+          );
+          if (deleted.rowCount === 0) throw new ApiResponseError("RESOURCE_NOT_FOUND");
+          await appendWorkerPoolAudit(client, request, "worker_pool_worker_removed", {
+            pool_key: poolKey,
+            worker_id: workerId,
+          });
+          return { status: 200, body: { pool_key: poolKey, worker_id: workerId, assigned: false } };
+        },
+      );
+      reply.code(result.status).send(result.body);
+    },
+  );
 }
 
-function mapPoolRow(row: WorkerPoolRow): Record<string, unknown> {
+function mapPoolRow(row: WorkerPoolRow, members?: WorkerPoolMemberSummary): Record<string, unknown> {
   return {
     pool_key: row.pool_key,
     description: row.description,
@@ -209,6 +299,7 @@ function mapPoolRow(row: WorkerPoolRow): Record<string, unknown> {
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),
     updated_by: row.updated_by,
+    workers: members ?? { total: 0, active: 0, stale: 0, worker_ids: [] },
   };
 }
 
@@ -275,6 +366,50 @@ async function updateWorkerPool(
     values,
   );
   return result.rows[0] ?? null;
+}
+
+async function readWorkerPoolMemberSummaries(client: PoolClient): Promise<Map<string, WorkerPoolMemberSummary>> {
+  const result = await client.query<WorkerPoolMemberSummaryRow>(
+    `SELECT m.pool_key,
+            count(*)::text AS total_count,
+            count(*) FILTER (
+              WHERE w.status = 'active'
+                AND w.kind = 'browser'
+                AND w.circuit_state = 'closed'
+                AND w.heartbeat_at > now() - interval '2 minutes'
+            )::text AS active_count,
+            count(*) FILTER (
+              WHERE w.status = 'active'
+                AND w.kind = 'browser'
+                AND w.heartbeat_at <= now() - interval '2 minutes'
+            )::text AS stale_count,
+            array_agg(m.worker_id::text ORDER BY m.worker_id::text) AS worker_ids
+       FROM worker_pool_memberships m
+       JOIN workers w ON w.id = m.worker_id
+      WHERE w.kind = 'browser'
+      GROUP BY m.pool_key`,
+  );
+  const out = new Map<string, WorkerPoolMemberSummary>();
+  for (const row of result.rows) {
+    out.set(row.pool_key, {
+      total: Number(row.total_count),
+      active: Number(row.active_count),
+      stale: Number(row.stale_count),
+      worker_ids: Array.isArray(row.worker_ids) ? row.worker_ids : [],
+    });
+  }
+  return out;
+}
+
+async function ensureBrowserWorker(client: PoolClient, workerId: string): Promise<void> {
+  const worker = await client.query<{ id: string }>(
+    `SELECT id::text
+       FROM workers
+      WHERE id = $1::uuid
+        AND kind = 'browser'`,
+    [workerId],
+  );
+  if (worker.rows[0] === undefined) throw new ApiResponseError("RESOURCE_NOT_FOUND");
 }
 
 async function appendWorkerPoolAudit(

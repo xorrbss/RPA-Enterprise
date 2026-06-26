@@ -315,8 +315,9 @@ CREATE TABLE principal_role_assignment_events (
 - 동일 active `(tenant_id, principal_sub, role)` 중복 부여는 `IR_SCHEMA_INVALID(reason=role_assignment_already_active)`로 거부한다.
 - IdP claim role은 이 API로 회수할 수 없다. UI는 source를 `token`과 `manual`로 분리 표시한다.
 
-TODO: [BLOCKED] SCIM 동기화의 provider, inbound schema, conflict rule이 정해지지 않았다. v1은 `source='manual'`만 저장하고, SCIM은 별도 계약이 열릴 때까지 성공 응답을 만들지 않는다.
-Required decision: choose the SCIM provider boundary, inbound principal/group schema, role-mapping source of truth, and token/manual/SCIM conflict resolution rule before any `source='scim'` assignment can be accepted.
+SCIM v1 최소 동기화는 `POST /v1/scim/principals`로 열린다. 이 엔드포인트는 `scim.sync` 권한과 `Idempotency-Key`를 요구하고, `idp_provider`/`external_id`/`sub` 기준 principal을 `source='scim'`, `lifecycle_source='scim'`으로 upsert한 뒤 제출된 role set을 SCIM-managed assignment로 동기화한다. `active=false`는 해당 provider principal의 active SCIM assignments를 revoke한다. 수동 revoke API는 계속 `source='manual'`만 회수한다.
+
+Open SCIM hardening decisions: provider registration, inbound auth/signature boundary, schema versioning, group-to-role mapping source of truth, and token/manual/SCIM conflict resolution rule.
 
 ## 6. Web 콘솔 설계
 

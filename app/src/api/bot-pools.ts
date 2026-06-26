@@ -64,8 +64,9 @@ interface BotPoolItem {
     readonly capacity_gap: number;
     readonly queue_pressure: number | null;
     readonly live_capacity: {
-      readonly available: false;
-      readonly reason_code: "worker_pool_membership_missing";
+      readonly available: true;
+      readonly pool_key: string;
+      readonly source: "worker_pool_memberships";
     };
   };
   readonly health: BotPoolHealth;
@@ -83,14 +84,15 @@ export function registerBotPoolRoutes(app: FastifyInstance, deps: ApiServerDeps)
 }
 
 async function readBrowserBotPool(client: PoolClient, tenantId: string): Promise<BotPoolItem> {
-  const workerStats = await readWorkerStats(client);
+  const poolKey = await readTenantPoolKey(client, tenantId);
+  const workerStats = await readWorkerStats(client, poolKey);
   const leaseStats = await readLeaseStats(client, tenantId);
   const pending = await readPending(client, tenantId);
   const capacitySlots = workerStats.active;
-  const capacity = botPoolCapacity(pending, leaseStats, capacitySlots);
+  const capacity = botPoolCapacity(pending, leaseStats, capacitySlots, poolKey);
   const health = botPoolHealth(workerStats, leaseStats, pending, capacity);
   return {
-    bot_pool_id: "browser-default",
+    bot_pool_id: `browser-${poolKey}`,
     name: "브라우저 실행 풀",
     kind: "browser",
     capacity_slots: capacitySlots,
@@ -103,25 +105,37 @@ async function readBrowserBotPool(client: PoolClient, tenantId: string): Promise
   };
 }
 
-async function readWorkerStats(client: PoolClient): Promise<BotPoolItem["workers"]> {
+async function readTenantPoolKey(client: PoolClient, tenantId: string): Promise<string> {
+  const assignment = await client.query<{ pool_key: string }>(
+    `SELECT pool_key FROM worker_pool_assignments WHERE tenant_id = $1::uuid`,
+    [tenantId],
+  );
+  return assignment.rows[0]?.pool_key ?? "default";
+}
+
+async function readWorkerStats(client: PoolClient, poolKey: string): Promise<BotPoolItem["workers"]> {
   const result = await client.query<WorkerStatsRow>(
     `SELECT
-        count(*) FILTER (WHERE kind = 'browser')::text AS total_count,
+        count(*) FILTER (WHERE w.kind = 'browser')::text AS total_count,
         count(*) FILTER (
-          WHERE kind = 'browser'
-            AND status = 'active'
-            AND circuit_state = 'closed'
-            AND heartbeat_at > now() - interval '2 minutes'
+          WHERE w.kind = 'browser'
+            AND w.status = 'active'
+            AND w.circuit_state = 'closed'
+            AND w.heartbeat_at > now() - interval '2 minutes'
         )::text AS active_count,
-        count(*) FILTER (WHERE kind = 'browser' AND status = 'draining')::text AS draining_count,
-        count(*) FILTER (WHERE kind = 'browser' AND status = 'dead')::text AS dead_count,
+        count(*) FILTER (WHERE w.kind = 'browser' AND w.status = 'draining')::text AS draining_count,
+        count(*) FILTER (WHERE w.kind = 'browser' AND w.status = 'dead')::text AS dead_count,
         count(*) FILTER (
-          WHERE kind = 'browser'
-            AND status = 'active'
-            AND heartbeat_at <= now() - interval '2 minutes'
+          WHERE w.kind = 'browser'
+            AND w.status = 'active'
+            AND w.heartbeat_at <= now() - interval '2 minutes'
         )::text AS stale_count,
-        count(*) FILTER (WHERE kind = 'browser' AND circuit_state IN ('open','half_open'))::text AS open_circuit_count
-       FROM workers`,
+        count(*) FILTER (WHERE w.kind = 'browser' AND w.circuit_state IN ('open','half_open'))::text AS open_circuit_count
+       FROM workers w
+       LEFT JOIN worker_pool_memberships m ON m.worker_id = w.id
+      WHERE ($1 = 'default' AND m.worker_id IS NULL)
+         OR m.pool_key = $1`,
+    [poolKey],
   );
   const row = result.rows[0];
   return {
@@ -198,6 +212,7 @@ function botPoolCapacity(
   pending: BotPoolItem["queue"],
   leases: BotPoolItem["leases"],
   capacitySlots: number,
+  poolKey: string,
 ): BotPoolItem["capacity"] {
   const occupiedSlots = leases.active + leases.reserved;
   const availableSlots = Math.max(capacitySlots - occupiedSlots, 0);
@@ -208,8 +223,9 @@ function botPoolCapacity(
     capacity_gap: Math.max(queuedDemand - availableSlots, 0),
     queue_pressure: capacitySlots > 0 ? queuedDemand / capacitySlots : null,
     live_capacity: {
-      available: false,
-      reason_code: "worker_pool_membership_missing",
+      available: true,
+      pool_key: poolKey,
+      source: "worker_pool_memberships",
     },
   };
 }

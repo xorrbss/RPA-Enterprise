@@ -456,9 +456,9 @@ const activeBlockerSectionHeadings = new Set([
 const expectedActiveBlockerSectionCounts = new Map([
   ["## Deploy-Time Provisioning Blockers", 1],
   ["## Repo-Controlled D4.5 API P1 Evidence / Open", 0],
-  ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 2],
+  ["## Repo-Controlled D3 Runtime Execution Readiness (Local Dirty Evidence / Open)", 0],
   ["## Repo-Controlled Browser RPA V2 Product Scope / Open", 0],
-  ["## Repo-Controlled Enterprise ALM/RBAC Product Scope / Open", 1],
+  ["## Repo-Controlled Enterprise ALM/RBAC Product Scope / Open", 0],
 ]);
 const activeChecklistEvidenceRules = [
   {
