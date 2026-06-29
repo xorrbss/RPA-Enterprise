@@ -18,6 +18,12 @@ import { ArtifactRedactionProcessor, type SupersededObjectStore } from "./artifa
 import { ArtifactRetentionProcessor } from "./artifact-retention-processor";
 import { ArtifactIntegrityProcessor, type IntegrityObjectStore, type IntegrityMismatch } from "./artifact-integrity-processor";
 import { ArtifactOrphanProcessor, type OrphanInventoryStore } from "./artifact-orphan-processor";
+import {
+  INTEGRATION_HANDOFF_DISPATCH_MAX_ATTEMPTS_DEFAULT,
+  INTEGRATION_HANDOFF_DISPATCH_RETRY_AFTER_MS_DEFAULT,
+  OPS_NOTIFICATION_DELIVERY_MAX_ATTEMPTS_DEFAULT,
+  OPS_NOTIFICATION_DELIVERY_RETRY_AFTER_MS_DEFAULT,
+} from "../../../ts/runtime-contract";
 import type {
   ArtifactRedactor,
   ArtifactRetentionStore,
@@ -33,11 +39,15 @@ import type {
   VisualEvidenceVideoRecorder,
   SessionRestorer,
   SinkDeliveryPort,
+  OpsNotificationDeliveryPort,
+  IntegrationHandoffDispatchPort,
 } from "../../../ts/runtime-contract";
 import { withTenantTx } from "../db/pool";
 import { relayOutbox } from "../runtime/outbox-relay";
 import { terminalizeStuckRunAsSystemFailure } from "../runtime/run-step-driver";
 import { deliverNormalizedRecord } from "../runtime/pipeline/sink-delivery";
+import { deliverOpsNotificationAttempt } from "../runtime/ops-notification-delivery";
+import { dispatchIntegrationHandoffAttempt } from "../runtime/integration-handoff-dispatch";
 import type { InitBackoffConfig } from "../runtime/run-init-failure";
 import type { SiteCircuitConfig } from "../runtime/site-circuit";
 import type { BrowserSessionStore } from "../runtime/browser-session-store";
@@ -51,6 +61,7 @@ import type { RunEnqueuer } from "../api/run-queue";
 import { processRunTriggerFireJob } from "./run-trigger-scheduler";
 import { errText, workerLog } from "../observability/log";
 import { DEFAULT_WORKER_CIRCUIT_OPEN_MS } from "./runtime-worker-run-context";
+import { handleAuditVerifierJob } from "./audit-verifier-worker";
 
 /** 만료 lease 세션 teardown 대기(ops-defaults run.abort_timeout 30s 동형 — close 미완 시 timeout 처리). */
 const DEFAULT_LEASE_SWEEP_TEARDOWN_TIMEOUT_MS = 30_000;
@@ -117,6 +128,14 @@ export interface PgRuntimeWorkerOptions {
   readonly sinkDeliveryMaxAttempts?: number;
   readonly sinkDeliveryRetryAfterMs?: number;
   readonly allowTestSinkDeliveryPort?: boolean;
+  readonly opsNotificationDeliveryPort?: OpsNotificationDeliveryPort;
+  readonly opsNotificationDeliveryMaxAttempts?: number;
+  readonly opsNotificationDeliveryRetryAfterMs?: number;
+  readonly allowTestOpsNotificationDeliveryPort?: boolean;
+  readonly integrationHandoffDispatchPort?: IntegrationHandoffDispatchPort;
+  readonly integrationHandoffDispatchMaxAttempts?: number;
+  readonly integrationHandoffDispatchRetryAfterMs?: number;
+  readonly allowTestIntegrationHandoffDispatchPort?: boolean;
   // A.1 run-drive: claim 후 lease 에 라이브 세션을 바인딩해 driveClaimedRun 으로 구동(미주입 시 claimed 까지만 = 기존 동작).
   // test_fake 포트는 allowTestBrowserSessionProvider opt-in 필수(gateBrowserSessionProvider, sink 포트와 동형 fail-closed).
   readonly browserSessionProvider?: BrowserSessionProvider;
@@ -216,8 +235,17 @@ export class PgRuntimeWorker implements RuntimeWorker {
       case "sink_deliver":
         return this.handleSinkDeliver(job);
 
+      case "ops_notification_send":
+        return this.handleOpsNotificationSend(job);
+
+      case "integration_handoff_dispatch":
+        return this.handleIntegrationHandoffDispatch(job);
+
       case "trigger_fire":
         return this.handleTriggerFire(job);
+
+      case "audit_verifier":
+        return handleAuditVerifierJob(this.pool, job);
 
       case "dlq_replay":
         throw new Error(
@@ -246,7 +274,11 @@ export class PgRuntimeWorker implements RuntimeWorker {
     }
     const port = this.options.sinkDeliveryPort;
     if (port === undefined) {
-      throw new Error("RuntimeWorker: sink_deliver requires an injected SinkDeliveryPort (fail-closed)");
+      return {
+        kind: "deferred",
+        retryAfterMs: this.options.sinkDeliveryRetryAfterMs ?? DEFAULT_SINK_DELIVERY_RETRY_AFTER_MS,
+        code: "SINK_DELIVERY_FAILED",
+      };
     }
     if (port.binding.kind === "test_fake" && this.options.allowTestSinkDeliveryPort !== true) {
       throw new Error("RuntimeWorker: test_fake sink port requires explicit allowTestSinkDeliveryPort opt-in");
@@ -297,6 +329,69 @@ export class PgRuntimeWorker implements RuntimeWorker {
       correlationId: () => correlationId,
     });
 
+    return { kind: "completed", emittedEvents: [] };
+  }
+
+  private async handleOpsNotificationSend(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
+    const tenantId = requireString(job.tenantId, "ops_notification_send.tenantId");
+    const correlationId = requireString(job.correlationId, "ops_notification_send.correlationId");
+    const attemptId = requireString(job.opsNotification?.attemptId, "ops_notification_send.opsNotification.attemptId");
+    const port = this.options.opsNotificationDeliveryPort;
+    if (port === undefined) {
+      throw new Error("RuntimeWorker: ops_notification_send requires an injected OpsNotificationDeliveryPort (fail-closed)");
+    }
+    if (port.binding.kind === "test_fake" && this.options.allowTestOpsNotificationDeliveryPort !== true) {
+      throw new Error("RuntimeWorker: test_fake ops notification port requires explicit allowTestOpsNotificationDeliveryPort opt-in");
+    }
+    const enqueuer = this.options.runtimeJobEnqueuer;
+    if (enqueuer === undefined) {
+      throw new Error("RuntimeWorker: ops_notification_send requires runtimeJobEnqueuer for retry scheduling");
+    }
+    const maxAttempts = this.options.opsNotificationDeliveryMaxAttempts ?? OPS_NOTIFICATION_DELIVERY_MAX_ATTEMPTS_DEFAULT;
+    const retryAfterMs =
+      this.options.opsNotificationDeliveryRetryAfterMs ?? OPS_NOTIFICATION_DELIVERY_RETRY_AFTER_MS_DEFAULT;
+    const outcome = await deliverOpsNotificationAttempt(
+      {
+        pool: this.pool,
+        port,
+        enqueuer,
+        retryAfterMs,
+        policy: { source: "ops-defaults.md#ops.notification.delivery", maxAttempts },
+      },
+      { tenantId, attemptId, correlationId },
+    );
+    return { kind: "completed", emittedEvents: [] };
+  }
+
+  private async handleIntegrationHandoffDispatch(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
+    const tenantId = requireString(job.tenantId, "integration_handoff_dispatch.tenantId");
+    const correlationId = requireString(job.correlationId, "integration_handoff_dispatch.correlationId");
+    const attemptId = requireString(job.integrationHandoff?.attemptId, "integration_handoff_dispatch.integrationHandoff.attemptId");
+    const port = this.options.integrationHandoffDispatchPort;
+    if (port === undefined) {
+      throw new Error("RuntimeWorker: integration_handoff_dispatch requires an injected IntegrationHandoffDispatchPort (fail-closed)");
+    }
+    if (port.binding.kind === "test_fake" && this.options.allowTestIntegrationHandoffDispatchPort !== true) {
+      throw new Error("RuntimeWorker: test_fake integration handoff dispatch port requires explicit allowTestIntegrationHandoffDispatchPort opt-in");
+    }
+    const enqueuer = this.options.runtimeJobEnqueuer;
+    if (enqueuer === undefined) {
+      throw new Error("RuntimeWorker: integration_handoff_dispatch requires runtimeJobEnqueuer for retry scheduling");
+    }
+    const maxAttempts =
+      this.options.integrationHandoffDispatchMaxAttempts ?? INTEGRATION_HANDOFF_DISPATCH_MAX_ATTEMPTS_DEFAULT;
+    const retryAfterMs =
+      this.options.integrationHandoffDispatchRetryAfterMs ?? INTEGRATION_HANDOFF_DISPATCH_RETRY_AFTER_MS_DEFAULT;
+    await dispatchIntegrationHandoffAttempt(
+      {
+        pool: this.pool,
+        port,
+        enqueuer,
+        retryAfterMs,
+        policy: { source: "ops-defaults.md#integration.handoff.dispatch", maxAttempts },
+      },
+      { tenantId, attemptId, correlationId },
+    );
     return { kind: "completed", emittedEvents: [] };
   }
 

@@ -1,0 +1,82 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rpa-api
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rpa-api
+      app.kubernetes.io/component: api
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpa-api-ingress
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rpa-api
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              rpa-ingress-approved: "true"
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpa-default-deny-egress
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-egress
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rpa-enterprise
+  policyTypes:
+    - Egress
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpa-dns-egress
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-egress
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rpa-enterprise
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

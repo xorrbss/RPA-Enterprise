@@ -63,7 +63,14 @@ path at deploy time (no external release/oncall team exists).
   `release-open-checklist.md` / `release-decisions.md`.
 - `blocked:audit` reports the repo-controlled candidate decisions plus active
   blockers split by scope: the deploy-time concrete staging platform/deploy
-  target + GitHub Environment row is resolved by the row 43 packet, the
+  target + GitHub Environment row is resolved by the row 43 packet, and that
+  packet now also exposes `controlled-prod readiness snapshot`,
+  `external alert delivery evidence`, and `ops webhook sender evidence` fields
+  so deferred production-readiness state cannot be hidden. The
+  separate controlled-prod readiness packet validator records the production
+  open shape for `summary.controlled_prod_ready=true`,
+  `managed_backup_restore_drill`, `slo_oncall_signoff`,
+  `support_training_completion`, and `observability_telemetry_wiring`. The
   remaining repo-controlled D3 runtime blocker rows for operator pause
   ownership and true per-pool live capacity membership are resolved locally,
   and the Enterprise ALM/RBAC SCIM synchronization contract is implemented as
@@ -81,8 +88,8 @@ path at deploy time (no external release/oncall team exists).
   output: 19 markers, 0 actionable blockers, 13 known release decisions tracked,
   13 release decisions checked (0 active deploy-time provisioning checklist rows;
   0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3 runtime open rows;
-  0 repo-controlled Browser RPA V2 product-scope open rows; 0 repo-controlled Enterprise ALM/RBAC product-scope open rows). New unresolved behavior must still use the repository
-  blocked-decision marker with nearby required-decision text.
+  0 repo-controlled Browser RPA V2 product-scope open rows; 0 repo-controlled Enterprise ALM/RBAC product-scope open rows). New unresolved behavior must still use the
+  repository blocked-decision marker with nearby required-decision text.
 
 ## Changed Files / Evidence Scope
 
@@ -227,6 +234,10 @@ Passed locally:
   checklist rows; 0 repo-controlled D4.5 API P1 open rows; 0 repo-controlled D3
   runtime open rows; 0 repo-controlled Browser RPA V2 product-scope open rows;
   0 repo-controlled Enterprise ALM/RBAC product-scope open rows))
+- `npm --prefix codegen run release-packet:fixtures`
+- `npm --prefix codegen run release-packet:validate -- --file ../docs/staging-release-packet-draft-2026-06-27.md`
+- `npm --prefix codegen run release-packet:validate -- --file ../docs/staging-github-governance-evidence-2026-06-26.md`
+- `npm --prefix codegen run prod-readiness-packet:fixtures`
 - Current Phase 7 local gate evidence for 2026-06-15 KST includes
   DB-backed release posture from `npm --prefix codegen run ci:local:temp-db`,
   `npm --prefix codegen run db:temp-smoke`, or
@@ -484,8 +495,8 @@ hard-coded SecretRef identifiers, CI service-container credentials, or unredacte
 live logs. Evidence intake must follow the Staging Secret Provisioning
 Evidence Packet below and preserve RBAC/redaction/RLS boundaries.
 
-- Resolved (owner-attested row 43 staging evidence): Deploy-time concrete staging deploy target is defined for this release as the owner-ratified GitHub Actions Environment gate in `xorrbss/rpa-platform-deploy`, workflow run `28237204757`, deployment id `5209830863`, Environment `staging`, target alias `[deploy-target-gh-actions-staging-1]`. The row 43 packet in `docs/staging-github-governance-evidence-2026-06-26.md` records the protected branch policy, required reviewer, release approval reference, rollback `[rollback-plan-1]`, SecretStore alias/path `[vault-staging-1]`, D8-A12 identifier-only SecretRef inventory, and S3 producer/lifecycle preflight `[preflight-s3-1]`. No managed application/container runtime target is claimed by this evidence. Former Required decision: At deploy time, the project owner must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier, release approval evidence, rollback confirmation, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
-- Resolved summary: Deploy-time staging SecretRef/SecretStore readiness and row 43 governance are evidenced by the validated redacted release packet; remaining production operation must not infer a managed app/container runtime from this governance target.
+- Resolved (owner-attested row 43 staging evidence): Deploy-time concrete staging deploy target is defined for this release as the owner-ratified GitHub Actions Environment gate in `xorrbss/rpa-platform-deploy`, workflow run `28237204757`, deployment id `5209830863`, Environment `staging`, target alias `[deploy-target-gh-actions-staging-1]`. The row 43 packet in `docs/staging-github-governance-evidence-2026-06-26.md` records the protected branch policy, required reviewer, release approval reference, rollback `[rollback-plan-1]`, SecretStore alias/path `[vault-staging-1]`, D8-A12 identifier-only SecretRef inventory, S3 producer/lifecycle preflight `[preflight-s3-1]`, `controlled-prod readiness snapshot` (`controlled_prod_ready=false`, `external_alert_delivery=deferred`, `support_training_completion=deferred`, `observability_telemetry_wiring=deferred`, `production_readiness_evidence` alias), `external alert delivery evidence` (`metadata.delivery_status=delivered` required before production open, `no endpoint_url/token/webhook_secret`), and `ops webhook sender evidence` (`ops_notification_attempts`, `ops_notification_deliveries`, `no webhook_url/token`). No managed application/container runtime target is claimed by this evidence. Former Required decision: At deploy time, the project owner must name the exact staging platform repo, GitHub Environment `staging` protection/approver configuration, concrete deploy target identifier, release approval evidence, rollback confirmation, and SecretRef/SecretStore provisioning path before staging/open deployment is authorized.
+- Resolved summary: Deploy-time staging SecretRef/SecretStore readiness and row 43 governance are evidenced by the validated redacted release packet; remaining production operation must not infer a managed app/container runtime or production-ready external alert delivery from this governance target.
 - Resolved (owner-attested staging evidence): Deploy-time per-producer retention policy is defined and proven on staging. Policy (release-decisions D8-A11 / D8-A14): `raw_items.raw_payload` 30d and `normalized_records.record` 90d via the inline retention source supplied by the ingest/normalize callers; `artifacts` retention is enforced by the `legal_hold OR retention_until IS NOT NULL` CHECK; `audit_log.payload` 2555d (7y, v1 default, override-able); repo-owned `events_outbox.retention_until` is `NOT NULL`; the D4.3 app idempotency writer uses `expires_at` as the repo-controlled retention source. Staging evidence: against a real staging PostgreSQL (redacted alias `[staging-pg-1]`, server PostgreSQL 16.x) under a non-`SUPERUSER`/non-`BYPASSRLS` application role, `npm --prefix codegen run db:smoke:release` PASSED with `non-bypass RLS/redaction row-visibility assertions executed` (retention columns present on every payload table, `artifacts` CHECK + `events_outbox.retention_until` NOT NULL fail-closed enforcement, tenant RLS row-visibility), and the payload-bearing producer integration tests PASSED under the same non-bypass role proving each writer sets `retention_until` or fails closed — `security-audit.int` (`all rows persist retention_until`; invalid/malformed/calendar-invalid retention timestamp fails closed; duplicate idempotency key fails closed), `executor-invocation-recorder.int` (`step.completed retention set`; PlainSecret/cross-tenant fail-closed), `pipeline.int` (raw-ingest/normalize dedup + cross-tenant RLS row count 0), `outbox-relay.int` (`events_outbox` ordered idempotent relay), `api-artifacts.int` (artifact RLS redaction-gate). No host/IP/credential/env dump recorded (redacted endpoint alias only). Former Required decision: define per-producer retention duration/source and prove on staging that each payload-bearing writer sets `retention_until` or fails closed.
 - Resolved (owner-attested live evidence): D5 Codex SSE live capability captured. Production `CodexSseAdapter`/`FetchCodexSseTransport` ran live (`npm --prefix app/poc/d5-codex-sse run poc`) against endpoint `[codex-staging-1]` / model `[model-a]` (redacted aliases; absolute HTTPS, no credential/query/fragment). **4/5 PASS** — mandatory #1 basic SSE / #2 prompt-schema safe path / #4 abort all PASS; #3 native `json_schema` PASS (jsonMode=true active); #5 model metadata GAP with documented fallback (conservative `maxContextTokens=8192` retained). No plaintext API key, raw endpoint/model identifier, env dump, or resolved SecretRef material recorded (harness self-redaction; `CODEX_API_KEY` kept in a gitignored local `.env`). Former Required decision: run the D5 PoC and record redacted mandatory-PASS evidence.
 - Resolved repo evidence: cancelable `suspending` abort and H5/R15 `reassignAssignee` are explicit fail-closed v1 paths. Successful in-flight bookmark abort still requires a future bookmark-cancel owner or durable abort intent; successful manual escalate still requires a future routing/assignment owner. Until then the API rejects/rolls back before reporting success, preserving no silent false/unknown.
@@ -699,32 +710,46 @@ mandatory #1/#2/#4 PASS). The `CODEX_API_KEY` stays in a gitignored local `.env`
 ## Remaining External Evidence Notes
 
 All repo-controlled D4.5 API P1 and D3 runtime execution rows are locally
-resolved in this patch. The one remaining unchecked row requires owner deploy-time
-provisioning: the concrete staging platform/deploy target + GitHub Environment
-(row 43).
+resolved in this patch, and the row 43 governance packet is validated. There
+are currently no active unchecked deploy-time provisioning rows in
+`release-open-checklist.md`.
 
-Do not close those rows from local fixtures, temp DBs, fake object-store ports,
-hard-coded aliases, CI service-container credentials, or unredacted logs. When
-the owner provisions evidence at deploy time, update the matching checklist row, replace the
-matching blocked marker in this report with a redacted evidence reference, and
-refresh the `blocked:audit` count in both documents.
+Do not infer production open from that result. Controlled production still
+requires `GET /v1/ops/production-readiness`
+`summary.controlled_prod_ready=true`, a passing `external_alert_delivery` gate,
+owner PITR/restore evidence, SLO/on-call sign-off, observability telemetry
+wiring, and external alert provider receipt metadata recorded through
+`production_readiness_evidence` without
+endpoint URLs, webhook URLs, tokens, or resolved secret material.
+The owner-facing controlled-prod readiness packet is documented in
+`docs/controlled-prod-readiness-packet-template.md` and is validated with
+`npm --prefix codegen run prod-readiness-packet:validate -- --file <packet.md>`.
 
 ## Next 24h Actions
 
 1. Attach current `main` `Contract Gates` run `28234600652`, the required job
    URLs, DB migration smoke job, and UI smoke note to the external release review
    packet.
-2. As the single project owner, provide the concrete staging platform repo,
-   GitHub Environment `staging` protection settings, deploy target identifier,
-   release approval reference, and rollback confirmation.
-3. Add the deploy/provisioning log artifact locations proving no plaintext
-   materialization, no env dump/xtrace, and no RBAC/redaction weakening.
-4. Validate the owner-supplied row-43 packet with
-   `npm --prefix codegen run release-packet:validate -- --file <packet.md>`.
-5. After the packet passes, update `release-open-checklist.md` row 43 and the
-   matching blocked marker in this report in the same change, then refresh
-   `npm --prefix codegen run blocked:audit`.
-6. Keep the durable security audit writer wired as broader security-relevant app
+2. Keep the row 43 packet validated with
+   `npm --prefix codegen run release-packet:fixtures` and
+   `npm --prefix codegen run release-packet:validate -- --file <packet.md>`;
+   the packet must keep `controlled-prod readiness snapshot`,
+   `external alert delivery evidence`, `ops webhook sender evidence`,
+   `external_alert_delivery`, `support_training_completion`,
+   `production_readiness_evidence`,
+   `metadata.delivery_status=delivered`, `ops_notification_attempts`,
+   `ops_notification_deliveries`, `no endpoint_url/token/webhook_secret`, and
+   `no webhook_url/token`.
+3. Before any controlled-production claim, record owner-approved
+   `external_alert_delivery`, PITR/restore, SLO/on-call,
+   `support_training_completion`, and `observability_telemetry_wiring`
+   evidence so
+   `GET /v1/ops/production-readiness` returns
+   `summary.controlled_prod_ready=true`; then validate the redacted owner
+   readiness packet with `npm --prefix codegen run prod-readiness-packet:validate -- --file <packet.md>`.
+4. Re-run `npm --prefix codegen run blocked:audit` whenever a packet, release
+   decision, or active blocker line changes.
+5. Keep the durable security audit writer wired as broader security-relevant app
    routes are implemented.
-7. Keep any new unresolved behavior out of implementation paths unless it uses
+6. Keep any new unresolved behavior out of implementation paths unless it uses
    the repository blocked-decision marker with nearby required-decision text.

@@ -58,6 +58,22 @@ const EXPECTED_HUMAN_TASK_KINDS = [
   "mfa",
 ] as const;
 
+const EXPECTED_PRODUCTION_READINESS_EVIDENCE_TYPES = [
+  "external_alert_delivery",
+  "managed_backup_restore_drill",
+  "slo_oncall_signoff",
+  "observability_telemetry_wiring",
+  "support_training_completion",
+] as const;
+
+const EXPECTED_AI_GOVERNANCE_EVIDENCE_TYPES = [
+  "model_registry",
+  "prompt_registry",
+  "eval_result",
+  "cost_control",
+  "human_override",
+] as const;
+
 const failures: string[] = [];
 
 assertUnique("EVENT_TYPES", EVENT_TYPES);
@@ -87,6 +103,16 @@ assertEqualSet("OpenAPI RunState enum", openApiEnum("RunState"), EXPECTED_RUN_ST
 assertEqualSet("OpenAPI WorkitemState enum", openApiEnum("WorkitemState"), EXPECTED_WORKITEM_STATES);
 assertEqualSet("OpenAPI HumanTaskState enum", openApiEnum("HumanTaskState"), EXPECTED_HUMAN_TASK_STATES);
 assertEqualSet("OpenAPI HumanTaskKind enum", openApiEnum("HumanTaskKind"), EXPECTED_HUMAN_TASK_KINDS);
+assertEqualSet(
+  "OpenAPI ProductionReadinessEvidenceType enum",
+  openApiEnum("ProductionReadinessEvidenceType"),
+  EXPECTED_PRODUCTION_READINESS_EVIDENCE_TYPES,
+);
+assertEqualSet(
+  "OpenAPI AiGovernanceEvidenceType enum",
+  openApiEnum("AiGovernanceEvidenceType"),
+  EXPECTED_AI_GOVERNANCE_EVIDENCE_TYPES,
+);
 assertOpenApiContains(
   "createRun requestBody required",
   "      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/RunCreateRequest'",
@@ -107,13 +133,23 @@ assertOpenApiPath("/run-triggers/{trigger_id}/pause");
 assertOpenApiPath("/run-triggers/{trigger_id}/resume");
 assertOpenApiPath("/run-triggers/{trigger_id}/fires");
 assertOpenApiPath("/webhooks/run-triggers/{tenant_id}/{trigger_id}");
+assertOpenApiPath("/integration-handoffs");
+assertOpenApiPath("/integration-handoffs/{handoff_id}/dispatch");
+assertOpenApiPath("/integration-handoffs/{handoff_id}/callback");
+assertOpenApiPath("/webhooks/integration-handoffs/{tenant_id}/{handoff_id}");
 assertOpenApiPath("/ops-alerts");
 assertOpenApiPath("/ops-alerts/{alert_id}/ack");
+assertOpenApiPath("/ops-alerts/{alert_id}/deliveries");
+assertOpenApiPath("/ops-alerts/{alert_id}/deliveries/send-webhook");
+assertOpenApiPath("/webhooks/ops-alerts/{tenant_id}/{attempt_id}");
 assertOpenApiPath("/ops/health");
+assertOpenApiPath("/ai-governance/evidence");
 assertOpenApiPath("/automation-ideas");
 assertOpenApiPath("/automation-ideas/{idea_id}");
 assertOpenApiPath("/automation-ideas/{idea_id}/transition");
 assertOpenApiPath("/automation-ideas/{idea_id}/roi-estimate");
+assertOpenApiPath("/automation-ideas/{idea_id}/adoption-evidence");
+assertOpenApiPath("/scenarios/{scenario_id}/versions/{version}/governance-stage");
 assertOpenApiPath("/scenarios/{scenario_id}/promote-from-run");
 assertOpenApiPath("/scenario-generations/{generation_id}/run");
 assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");
@@ -136,11 +172,16 @@ assertControlPlanePath("/v1/run-triggers/{trigger_id}/resume");
 assertControlPlanePath("/v1/run-triggers/{trigger_id}/fires");
 assertControlPlanePath("/v1/ops-alerts");
 assertControlPlanePath("/v1/ops-alerts/{alert_id}/ack");
+assertControlPlanePath("/v1/ops-alerts/{alert_id}/deliveries");
+assertControlPlanePath("/v1/ops-alerts/{alert_id}/deliveries/send-webhook");
 assertControlPlanePath("/v1/ops/health");
+assertControlPlanePath("/v1/ai-governance/evidence");
 assertControlPlanePath("/v1/automation-ideas");
 assertControlPlanePath("/v1/automation-ideas/{idea_id}");
 assertControlPlanePath("/v1/automation-ideas/{idea_id}/transition");
 assertControlPlanePath("/v1/automation-ideas/{idea_id}/roi-estimate");
+assertControlPlanePath("/v1/automation-ideas/{idea_id}/adoption-evidence");
+assertControlPlanePath("/v1/scenarios/{scenario_id}/versions/{version}/governance-stage");
 assertControlPlanePath("/v1/scenarios/{scenario_id}/promote-from-run");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/run");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts");
@@ -165,6 +206,9 @@ assertOperationId("resumeRunTrigger");
 assertOperationId("listRunTriggerFires");
 assertOperationId("listOpsAlerts");
 assertOperationId("ackOpsAlert");
+assertOperationId("listOpsAlertDeliveries");
+assertOperationId("recordOpsAlertDelivery");
+assertOperationId("sendOpsAlertWebhookDelivery");
 assertOperationId("getOpsHealth");
 assertOperationId("listAutomationIdeas");
 assertOperationId("createAutomationIdea");
@@ -173,6 +217,24 @@ assertOperationId("updateAutomationIdea");
 assertOperationId("transitionAutomationIdea");
 assertOperationId("upsertRoiEstimate");
 assertOperationId("getRoiEstimate");
+assertOperationId("listAutomationAdoptionEvidence");
+assertOperationId("recordAutomationAdoptionEvidence");
+assertOperationId("listAiGovernanceEvidence");
+assertOperationId("recordAiGovernanceEvidence");
+assertOpenApiSchemaContains("AiGovernanceEvidenceRequest", "                required: [eval_suite_ref, dataset_ref, sampled_at, pass_rate, prompt_injection_passed, data_leakage_passed, hallucination_passed, policy_block_passed]");
+assertOpenApiSchemaContains("AiGovernanceEvidenceRequest", "            required: [evidence_ref, policy_decision_ref, audit_correlation_id, metadata]");
+assertOpenApiSchemaContains("AiGovernanceEvidenceRequest", "              audit_correlation_id:\n                type: string\n                format: uuid");
+assertOpenApiSchemaContains("AiGovernanceEvidenceRequest", "              expires_at:\n                type: string\n                format: date-time");
+assertOpenApiContains("AI governance idempotency header", "      operationId: recordAiGovernanceEvidence\n      summary: Record AI governance evidence\n      description: >\n        Record admin-only metadata evidence for AI governance controls.");
+assertOpenApiContains("AI governance idempotency parameter", "      parameters:\n        - $ref: '#/components/parameters/IdempotencyKey'\n      requestBody:");
+assertOperationId("setScenarioVersionGovernanceStage");
+assertOpenApiSchemaContains("ScenarioCertification", "        - governance_stage");
+assertOpenApiSchemaContains("ScenarioGovernanceStageRequest", "          enum: [review, pilot, deprecated]");
+assertOpenApiSchemaContains("ProductionReadinessEvidenceRequest", "                const: support_training_completion");
+assertOpenApiSchemaContains("ProductionReadinessEvidenceRequest", "                required: [support_model_ref, training_completion_ref, trained_role_count, trained_user_count, coverage_percent, completed_at]");
+assertOpenApiSchemaContains("OpsNotificationAttempt", "        - callback_signature_secret_ref");
+assertOpenApiSchemaContains("OpsNotificationWebhookSendRequest", "        callback_signature_secret_ref:");
+assertOpenApiSchemaContains("OpsNotificationWebhookCallbackRequest", "          enum: [delivered, failed]");
 assertOpenApiPath("/auth/readiness");
 assertControlPlanePath("/v1/auth/readiness");
 assertOperationId("getAuthReadiness");
@@ -184,6 +246,7 @@ assertOperationId("listDocumentJobs");
 assertOperationId("createDocumentJob");
 assertOperationId("getDocumentJob");
 assertOperationId("extractDocumentJob");
+assertOperationId("recordExternalDocumentExtraction");
 assertOperationId("getDocumentExtraction");
 assertOperationId("createDocumentValidationTask");
 assertOperationId("promoteScenarioFromRun");

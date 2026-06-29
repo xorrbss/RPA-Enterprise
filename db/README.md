@@ -10,6 +10,77 @@ Do not apply `migration_core_entities.sql` first. It adds FKs/RLS policies over 
 lease, raw, normalized, sink, and challenge tables created by the concurrency
 migration.
 
+## Versioned Migration Runner Contract
+
+P0-adoption uses a repo-local Node migration runner as the default migration
+tool. Flyway, Sqitch, or a managed deploy tool may replace it later, but the
+behavior below is the contract the implementation must satisfy.
+
+The runner owns a `schema_migrations` ledger with these fields:
+
+- `version`: monotonic migration version or ordered migration id.
+- `name`: migration file or logical step name.
+- `checksum`: SHA-256 of the exact applied migration content.
+- `applied_at`: database timestamp when the migration completed.
+- `applied_by`: migration actor or runtime identity.
+- `duration_ms`: non-negative integer execution duration.
+- `status`: closed enum `applied|failed`.
+- `baseline`: boolean. `true` means the row records an existing schema that was
+  verified and adopted without rerunning DDL.
+
+Fresh install behavior:
+
+1. Create the ledger if absent.
+2. Apply `migration_concurrency_idempotency.sql`.
+3. Apply `migration_core_entities.sql`.
+4. Record both rows with `baseline=false`, `status='applied'`, and their
+   checksums.
+5. Run `migration_smoke.sql` and at least one non-BYPASSRLS RLS smoke before
+   product-open evidence is accepted.
+
+Existing DB baseline behavior:
+
+1. Detect whether the core schema already exists.
+2. Verify required tables, constraints, RLS posture, and migration order shape.
+3. Compute the current repo checksums for the two ordered SQL files.
+4. If the database shape matches the expected contract, insert ledger rows with
+   `baseline=true`, `status='applied'`, and the computed checksums.
+5. If the shape is incomplete, unexpected, or ambiguous, stop with drift rather
+   than repairing automatically.
+
+Baseline deep verification minimum:
+
+| Check | Required behavior |
+|---|---|
+| Required tables and columns | Verify every contracted table and critical column, not just a representative table count |
+| Constraints | Verify CHECK constraints, UNIQUE constraints, tenant composite FKs, and idempotency keys required by the two baseline SQL files |
+| RLS posture | Verify `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY` for every tenant-scoped table |
+| RLS policy body | Reject permissive or ambiguous policies such as `USING (true)`. Tenant policies must bind to strict `current_setting('app.tenant_id')::uuid` or an equivalent fail-closed expression |
+| Audit append-only trigger | Verify the audit append/update/delete protection trigger and hash-chain columns exist before adopting the schema |
+| Audit verifier evidence | Verify `audit_verifier_runs` exists with tenant RLS, status/sequence checks, retention fields, legal hold, and a 90-day evidence-retention path |
+| BYPASSRLS split | Verify API/worker roles used for smoke are non-`SUPERUSER` and non-`BYPASSRLS`; superuser smoke is catalog-only evidence |
+| Migration order | Verify concurrency/idempotency objects exist before core FK/RLS objects |
+
+The runner must not insert `baseline=true`, `status='applied'` rows if only table
+presence and `relrowsecurity`/`relforcerowsecurity` flags were checked. That
+would permanently bless an unverified tenant-isolation or audit-integrity shape.
+The repo runner implements this by applying the ordered migrations into an
+isolated expected schema in the same database, then comparing public catalog
+shape before writing baseline rows. The comparison includes tables, columns,
+defaults, constraints, indexes/idempotency shapes, tenant composite FKs, exact
+RLS policy bodies, strict `current_setting('app.tenant_id')` usage, and
+append-only trigger/function evidence for `audit_log`.
+
+Re-run and drift behavior:
+
+- Reapplying the same version with the same checksum is a no-op.
+- Reapplying the same version with a different checksum fails closed.
+- Applying migrations out of order fails closed.
+- A failed migration must not be recorded as partial success.
+- The runner must not synthesize rollback success. Database rollback is backup
+  restore/PITR or a forward fix migration, distinct from scenario release
+  rollback.
+
 ## Roles
 
 - The migration role may own DDL.
@@ -22,6 +93,18 @@ migration.
 - Runtime code must bind `SET LOCAL app.tenant_id = '<tenant-uuid>'` on every
   transaction boundary. Policies intentionally use strict
   `current_setting('app.tenant_id')`, not `current_setting(..., true)`.
+- API and browser worker connections must not use the migration owner or
+  `postgres` superuser role for product-open evidence. Local compose may use a
+  superuser only when the run is explicitly labeled review-only/catalog-only.
+- `compose.yaml` follows this split: `role-bootstrap` uses the image bootstrap
+  owner only to apply `db/roles.sql` and inject local LOGIN passwords;
+  `migrate` runs as `rpa_migrator` with `--graphile-worker --require-non-bypass`;
+  API/runtime worker services connect as `rpa_app`. A compose run that changes API/worker
+  back to `${POSTGRES_USER}`/`postgres` is catalog or wiring evidence only, not
+  product-open DB/RLS evidence.
+- Artifact lifecycle or maintenance BYPASSRLS credentials are operational-only
+  and must be reviewed as separate audited maintenance evidence. They do not
+  satisfy the Product Open API/runtime-worker RLS evidence requirement.
 
 ## Smoke
 
@@ -53,6 +136,22 @@ cluster under the OS temp directory, binds it to `127.0.0.1`, creates `rpa_smoke
 as non-`SUPERUSER`/non-`BYPASSRLS`, runs the smoke with repo-local PG env, and
 then stops/removes the cluster. It does not use the installed Windows PostgreSQL
 service or modify its authentication config.
+
+Pilot backup/restore drill evidence:
+
+```powershell
+npm --prefix codegen run db:restore-drill:temp
+```
+
+This starts the same disposable PostgreSQL 15 cluster, applies
+`scripts/db-migrate.mjs --smoke --require-non-bypass` as the non-bypass
+`rpa_smoke` role, seeds representative tenant and infrastructure rows, performs a
+logical `pg_dump`/`pg_restore` into a fresh database, and then reruns
+`scripts/db-migrate.mjs --baseline-existing --smoke --require-non-bypass` against
+the restored database. The temporary cluster uses its bootstrap `postgres` owner
+only for the dump/restore operation; release evidence is accepted only after the
+restored database passes the non-`SUPERUSER`/non-`BYPASSRLS` smoke. This is
+pilot logical-restore evidence, not production PITR/HA/DR evidence.
 
 The wrapper detects `psql` from `PSQL_BIN` first, then `PATH` (`psql.exe` on
 Windows). It checks the PostgreSQL client version, connects to the configured

@@ -5,6 +5,7 @@ import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
 import { UUID_RE } from "./reads-support";
+import { mapScenarioCertification, type ScenarioCertificationRow } from "./scenario-certification";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 import { summarizePageStateSelectors } from "./site-page-state-contract";
 
@@ -37,7 +38,7 @@ function callSummaryFigures(
   };
 }
 
-interface ScenarioRow {
+interface ScenarioRow extends ScenarioCertificationRow {
   id: string;
   name: string;
   version: number;
@@ -122,10 +123,22 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<ScenarioRow>(
-        `SELECT s.id, s.name, s.created_at, s.created_at::text AS cursor_at, sv.version, sv.id AS version_id, sv.promotion_status
+        `SELECT s.id, s.name, s.created_at, s.created_at::text AS cursor_at,
+                sv.version, sv.id AS version_id, sv.promotion_status,
+                sv.certification_status, sv.certified_by, sv.certified_at,
+                sv.certification_expires_at, sv.certification_reason,
+                sv.certification_revoked_by, sv.certification_revoked_at,
+                sv.certification_revoke_reason, sv.governance_stage,
+                sv.governance_reason, sv.governance_evidence_ref, sv.governance_metadata,
+                sv.governance_updated_by, sv.governance_updated_at
            FROM scenarios s
            JOIN LATERAL (
-             SELECT id, version, promotion_status FROM scenario_versions v
+             SELECT id, version, promotion_status, certification_status, certified_by, certified_at,
+                     certification_expires_at, certification_reason, certification_revoked_by,
+                     certification_revoked_at, certification_revoke_reason, governance_stage,
+                     governance_reason, governance_evidence_ref, governance_metadata,
+                     governance_updated_by, governance_updated_at
+               FROM scenario_versions v
               WHERE v.tenant_id = s.tenant_id AND v.scenario_id = s.id
               ORDER BY v.version DESC LIMIT 1
           ) sv ON true
@@ -146,6 +159,7 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
         version: r.version,
         latest_version_id: r.version_id,
         promotion_status: r.promotion_status,
+        certification: mapScenarioCertification(r),
       })),
     );
   });

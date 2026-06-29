@@ -633,6 +633,8 @@ function resourceForOperation(
     case "listScenarioVersions":
     case "getScenarioVersion":
     case "rollbackScenario":
+    case "certifyScenarioVersion":
+    case "revokeScenarioCertification":
       return { kind: "scenario", id: ctx.params.scenario_id };
     case "createGatewayPolicy":
     case "updateGatewayPolicy":

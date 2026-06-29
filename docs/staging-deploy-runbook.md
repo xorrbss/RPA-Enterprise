@@ -49,6 +49,13 @@ start and require PASS:
 npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle
 ```
 
+For Kubernetes or Helm packaging review, run the static deployment contract gate
+before cluster dry-run or install:
+
+```powershell
+npm --prefix codegen run k8s:static-smoke
+```
+
 The preflight accepts `fs + local_fs` for local/dev shared-volume deployments and
 `s3 + s3` for staging when producer and lifecycle endpoint/region/bucket/path-style
 match. It rejects mixed `fs + s3`, `s3 + local_fs`, and S3 target drift.
@@ -152,6 +159,7 @@ Invoke-RestMethod -Method Post -Uri "https://<api-host>/v1/scenario-generations"
    ```sql
    ALTER ROLE rpa_migrator LOGIN PASSWORD '<migrator-secret>';
    ALTER ROLE rpa_app      LOGIN PASSWORD '<app-secret>';
+   ALTER ROLE rpa_lifecycle_bypass LOGIN PASSWORD '<lifecycle-bypass-secret>';
    ```
 3. **`rpa_migrator`로** 마이그레이션 실행 — 테이블이 `rpa_migrator` 소유가 되어 `ALTER DEFAULT PRIVILEGES`가 신규 객체의 DML을 `rpa_app`에 자동 부여한다:
    ```bash
@@ -165,7 +173,9 @@ Invoke-RestMethod -Method Post -Uri "https://<api-host>/v1/scenario-generations"
 
 ```bash
 node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/db-roles-least-privilege.int.ts
+npm --prefix codegen run db:restore-drill:temp
 ```
+`db:restore-drill:temp` proves pilot logical backup/restore in a disposable PostgreSQL cluster, then reruns baseline verification and non-BYPASSRLS smoke on the restored DB. Production PITR/managed-backup restore remains separate environment evidence.
 임시 PostgreSQL에서 `rpa_app`이 **DML 동작 · RLS 적용(타 테넌트 0건) · DDL 거부(CREATE TABLE 차단)**임을 증명한다. 구조 회귀는 `node scripts/db-static-smoke.mjs`(Contract Gate)가 막는다.
 
 ### app/worker 연결 분리 (선택)

@@ -14,6 +14,7 @@ import type {
   ArtifactObjectIoEvidence,
   ArtifactObjectIoPortBinding,
 } from "../../../ts/runtime-contract";
+import type { BypassRlsUseCase } from "../../../ts/security-middleware-contract";
 
 export type LifecycleAuditAppendInput = {
   readonly tenantId: string;
@@ -31,7 +32,7 @@ export type LifecycleAuditAppendInput = {
 
 export async function assertLifecycleBypassUse(
   client: pg.PoolClient,
-  useCase: ArtifactLifecycleOperationalUseCase,
+  useCase: BypassRlsUseCase,
   reasonCode: string,
 ): Promise<void> {
   const policyDecision = checkBypassRlsUse({
@@ -158,4 +159,3 @@ export async function appendLifecycleAuditWithClient(client: pg.PoolClient, inpu
     ],
   );
 }
-

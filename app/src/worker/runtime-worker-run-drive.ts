@@ -18,6 +18,10 @@ import {
   renewBrowserLease,
   startBrowserLeaseHeartbeat,
 } from "./runtime-worker-browser-lease";
+import {
+  acquireCredentialLeasesForRun,
+  releaseCredentialLeasesForRun,
+} from "./runtime-worker-credential-lease";
 import { requireString, unknownToReason } from "./runtime-worker-parse";
 import { DEFAULT_BROWSER_LEASE_HEARTBEAT_MS, DEFAULT_BROWSER_LEASE_TTL_MS } from "./runtime-worker-run-context";
 import type { RunClaimDriveInputs, RunRow } from "./runtime-worker-run-context";
@@ -106,6 +110,28 @@ export class WorkerRunDrive {
           );
           if (lease.kind !== "acquired") return { result: lease };
 
+          let drive: RunClaimDriveInputs | undefined;
+          if (sessionProvider !== undefined && plan !== null) {
+            drive = await this.runSupport.loadRunDriveInputs(
+              client,
+              tenantId,
+              runId,
+              plan,
+              lease.leaseId,
+              correlationId,
+            );
+            const credentialLease = await acquireCredentialLeasesForRun(client, {
+              tenantId,
+              runId,
+              scenarioVersionId: drive.scenarioVersionId,
+              siteProfileId: drive.siteProfileId,
+            });
+            if (credentialLease.kind !== "acquired") {
+              await deleteInitReservedBrowserLease(client, { tenantId, leaseId: lease.leaseId, workerId });
+              return { result: credentialLease };
+            }
+          }
+
           const transition = await applyRunTransition(client, {
             tenantId,
             runId,
@@ -130,7 +156,9 @@ export class WorkerRunDrive {
           };
           // provider 미주입(또는 plan null)이면 구동 안 함 → claimed 까지만(기존 동작).
           if (sessionProvider === undefined || plan === null) return { result };
-          const drive = await this.runSupport.loadRunDriveInputs(client, tenantId, runId, plan, lease.leaseId, correlationId);
+          if (drive === undefined) {
+            throw new Error("RuntimeWorker: run_claim credential lease acquired without drive inputs");
+          }
           return { result, drive };
         });
       },
@@ -141,6 +169,7 @@ export class WorkerRunDrive {
     // 미구현 throw 로 표면화(propagate). 세션은 어느 경로든 finally 에서 해제.
     if (claim.drive === undefined || sessionProvider === undefined) return claim.result;
     const d = claim.drive;
+    try {
 
     // INIT phase(status='claimed', state-machine §1 INIT 정의 = drive-input 적재 + 세션 bind + executor/resolver 구성).
     //   이 셋업이 throw 하면 좀비 claimed 잔류 대신 init_failed(R3a 재큐 / R3b 종결)로 처리한다. bind 후 executor/resolver
@@ -158,10 +187,13 @@ export class WorkerRunDrive {
       );
       boundForInitCleanup = await sessionProvider.bind({
         tenantId,
+        runId,
+        correlationId: d.correlationId,
         leaseId: d.leaseId,
         siteProfileId: d.siteProfileId,
         browserIdentityId: d.browserIdentityId,
         networkPolicyId: d.networkPolicyId,
+        networkAllowedDomains: d.networkAllowedDomains,
         isolation: d.isolation,
         cleanupPolicy: d.cleanupPolicy,
       });
@@ -294,6 +326,11 @@ export class WorkerRunDrive {
       );
     }
     return claim.result;
+    } finally {
+      await withTenantTx(this.pool, tenantId, (c) => releaseCredentialLeasesForRun(c, { tenantId, runId })).catch((e) =>
+        workerLog("error", { at: "runtime-worker", msg: "credential lease release failed after run_claim drive", run_id: runId, correlation_id: d.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(e) }),
+      );
+    }
   }
 
   async handleRunAbort(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {

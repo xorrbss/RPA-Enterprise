@@ -386,6 +386,29 @@ const activeBlockerRules = [
     aliases: ["Teams/Slack/email", "Teams", "Slack", "email notification"],
   },
   {
+    label: "Existing RPA handoff provider-signed public callback security contract",
+    aliases: [
+      "provider-signed public callback",
+      "provider-signed public callback adapter",
+      "public callback signature",
+      "callback idempotency",
+      "signature scheme",
+      "replay window",
+    ],
+  },
+  {
+    label: "Existing RPA handoff real provider dispatcher contract",
+    aliases: [
+      "real provider dispatcher",
+      "provider dispatcher",
+      "SecretRef resolve authority",
+      "SecretRef resolve purpose",
+      "allowed host policy",
+      "external job id/state mapping",
+      "provider-specific state mapping",
+    ],
+  },
+  {
     label: "Browser RPA V2 CoE/ROI product scope",
     aliases: ["CoE/ROI", "ROI", "administrator evaluation screen"],
   },
@@ -587,6 +610,7 @@ for (const relPath of collectFiles(ROOT)) {
 }
 
 checkReleaseChecklist();
+checkReleasePacketEvidenceCoverage();
 checkActionableChecklistTracking();
 checkEventPlaceholderCoverage();
 
@@ -678,6 +702,38 @@ function checkReleaseChecklist() {
     }
     if (!line.includes("Former Required decision:")) {
       failures.push(`release-open-checklist.md: resolved decision ${JSON.stringify(rule.label)} must preserve former Required decision`);
+    }
+  }
+}
+
+function checkReleasePacketEvidenceCoverage() {
+  const requiredNeedles = [
+    "controlled-prod readiness snapshot",
+    "external alert delivery evidence",
+    "ops webhook sender evidence",
+    "external_alert_delivery",
+    "production_readiness_evidence",
+    "metadata.delivery_status=delivered",
+    "ops_notification_attempts",
+    "ops_notification_deliveries",
+    "no endpoint_url/token/webhook_secret",
+    "no webhook_url/token",
+    "controlled-prod readiness packet",
+    "prod-readiness-packet:fixtures",
+    "managed_backup_restore_drill",
+    "slo_oncall_signoff",
+    "observability_telemetry_wiring",
+    "summary.controlled_prod_ready=true",
+  ];
+  const files = [
+    ["release-open-checklist.md", releaseChecklistText],
+    ["product-open-candidate-report.md", readFileSync(join(ROOT, "product-open-candidate-report.md"), "utf8")],
+  ];
+  for (const [relPath, text] of files) {
+    for (const needle of requiredNeedles) {
+      if (!text.includes(needle)) {
+        failures.push(`${relPath}: release packet evidence coverage must mention ${JSON.stringify(needle)}`);
+      }
     }
   }
 }

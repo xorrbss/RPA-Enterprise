@@ -54,8 +54,9 @@ export type Role =
 | run trigger 관리(예약 생성/수정/일시정지/재개) | api-surface `POST/PATCH /v1/run-triggers`, `POST /pause|resume` (`trigger.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 운영 알림/SLA 조회 | api-surface `GET /v1/ops-alerts` (`ops_alert.read`; 계산형 알림, payload 본문 미노출) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 운영 알림 확인 처리 | api-surface `POST /v1/ops-alerts/{alert_id}/ack` (`ops_alert.ack`; console ack 원장, Idempotency-Key 필수) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
-| automation idea/ROI 조회 | api-surface `GET /v1/automation-ideas`, `GET /v1/automation-ideas/{id}/roi-estimate` (`automation_idea.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
-| automation idea/ROI 관리(후보 등록/수정/ROI 산정/비승인 전이) | api-surface `POST/PATCH /v1/automation-ideas`, `POST /transition`, `POST /roi-estimate` (`automation_idea.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| controlled-prod readiness owner 증거 등록 | api-surface `POST /v1/ops/production-readiness/evidence` (`ops_readiness.manage`; external alert/PITR/SLO-on-call/support-training/observability metadata-only evidence, raw URL/token/password/webhook secret/raw roster 금지) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| automation idea/ROI/adoption evidence 조회 | api-surface `GET /v1/automation-ideas`, `GET /v1/automation-ideas/{id}/roi-estimate`, `GET /v1/automation-ideas/{id}/roi-actuals`, `GET /v1/automation-ideas/{id}/adoption-evidence` (`automation_idea.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| automation idea/ROI/adoption evidence 관리(후보 등록/수정/ROI 산정/비승인 전이/실제값 증거 등록/파일럿 채택 증거 등록) | api-surface `POST/PATCH /v1/automation-ideas`, `POST /transition`, `POST /roi-estimate`, `POST /roi-actuals`, `POST /adoption-evidence` (`automation_idea.manage`; POST evidence는 `Idempotency-Key` 필수) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | automation idea 승인·반려 전이 | api-surface `POST /v1/automation-ideas/{id}/transition` 목표 stage `approved`/`rejected` (`automation_idea.approve`, SoD) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 문서 자동화 작업 조회 | api-surface `GET /v1/document-jobs`, `GET /v1/document-jobs/{id}` (`document_job.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 문서 자동화 작업 생성/추출/검증 태스크 생성 | api-surface `POST /v1/document-jobs`, `POST /extract`, `POST /validation-task` (`document_job.manage`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
@@ -69,6 +70,7 @@ export type Role =
 | scenario 조회/검증(read·validate dry-run) | api-surface §2 `GET /v1/scenarios` · `POST .../validate` | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario 작성/수정(create·save) | api-surface §2 `POST /v1/scenarios`·`PUT` (D4 결정: operator+ 작성) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario promote(prod 승격) | error-catalog `SCENARIO_VERSION_CONFLICT`(If-Match 412) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| scenario version 운영 인증/취소 | api-surface §2 `POST /versions/{version}/certify`, `/revoke-certification` (`scenario.certify`) | — | — | — | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario release 조회 | api-surface §2.1 `GET /v1/scenarios/{id}/releases`, `/environment-bindings` (`scenario_release.read`) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario release 제출 | api-surface §2.1 release draft→submitted (`scenario_release.submit`) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | scenario release 승인/반려 | api-surface §2.1 submitted→approved/rejected (`scenario_release.approve`, maker-checker) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
@@ -84,12 +86,15 @@ export type Role =
 | secret 접근(SecretStore.resolve 스코프) | security-contracts §1, core-types `SecretStore` | — | — | — | — | ✓ | `SECRET_ACCESS_DENIED` |
 | connector/template catalog read | api-surface §8 `GET /v1/connectors`, `GET /v1/templates` (`connector.read`; metadata/SecretRef namespace only) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | connector enable/install | security-contracts §7, error-catalog `CONNECTOR_PERMISSION_DENIED` | — | — | — | — | ✓ | `CONNECTOR_PERMISSION_DENIED` |
+| 기존 RPA/IDP handoff 실행 | api-surface §11 `POST /v1/integration-handoffs` (`integration.handoff`; SecretRef-backed provider만) | — | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | gateway policy 조회 | api-surface §6 `GET /v1/gateway/policy` (콘솔 read) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | gateway policy 편집 | api-surface §6 `PUT /v1/gateway/policy` | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | 감사로그 조회 | api-surface §9 `GET /v1/audit-log` (`audit.read`; payload 본문 미노출, hash-chain/actor/action/outcome 요약) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 감사 체인 검증 이력 조회 | api-surface §9 `GET /v1/audit-log/verification-runs` (`audit.read`; payload 본문 미노출, metadata-only violations) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
+| 감사 체인 수동 검증 실행 | api-surface §9 `POST /v1/audit-log/verification-runs/verify` (`audit.verify`; 90일 verifier evidence 저장) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | network policy 편집(allowed_domains) | security-contracts §6 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | RBAC 역할 부여/회수 | 본 문서 §1 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
-| SCIM provider 동기화(`POST /v1/scim/principals`) | 본 문서 §2 비고(SCIM) + security-contracts §12. registered provider·schema version·signed request를 통과해야 함 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| SCIM provider 관리 및 동기화(`/v1/scim/providers`, `POST /v1/scim/principals`) | 본 문서 §2 비고(SCIM) + security-contracts §12. provider/mapping 관리는 SecretRef만 저장하고, inbound sync는 registered provider·schema version·signed request를 통과해야 함 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 
 거부 ErrorCode 선택 규칙(조용한 false/unknown 금지):
 - **자원 종류가 특정된 보안 게이트**는 그 자원 코드를 쓴다: artifact·secret → `SECRET_ACCESS_DENIED`(security, 403), connector → `CONNECTOR_PERMISSION_DENIED`(security, 403). `SITE_PROFILE_BLOCKED`는 **런타임 실행 차단**(미승인 red 사이트 실행 시도) 전용이며, site **승인 권한** 부족은 일반 RBAC 거부 `AUTHZ_FORBIDDEN`이다(api-surface §7과 정합).
@@ -109,6 +114,7 @@ export type Role =
 
 비고(SCIM provider/inbound 스코핑):
 - `scim_providers`가 provider 등록 원장이다. `provider_key`는 SCIM payload의 `idp_provider`와 같고, row가 없거나 `status!='active'`면 `AUTHZ_FORBIDDEN(scim_provider_not_registered|scim_provider_disabled)`으로 차단한다.
+- `GET/POST/PATCH /v1/scim/providers`와 `/v1/scim/providers/{provider_key}/group-role-mappings`는 `scim.sync`(admin) 권한을 사용한다. 관리 API는 `signature_secret_ref`만 저장하며 signing secret 평문, token, password 필드는 request/response/audit에 들어가면 안 된다.
 - inbound schema는 `schema_version='scim-principal@1'`로 닫는다. provider row의 `inbound_schema_ref`와 요청 `schema_version`이 다르거나 unknown schema이면 `IR_SCHEMA_INVALID`로 차단한다.
 - SCIM sync request는 기존 제어평면 JWT/RBAC(`scim.sync`, admin)와 provider signed request를 모두 통과해야 한다. 서명 헤더는 `X-RPA-SCIM-Timestamp`(epoch seconds), `X-RPA-SCIM-Signature=sha256:<hex>`가 아니라 `sha256=<hex>` 형식이며, payload는 `timestamp + ".POST./v1/scim/principals." + provider_key + "." + schema_version + "." + canonical_json(body)`다. 서명키 평문은 DB에 저장하지 않고 `scim_providers.signature_secret_ref`로만 참조한다.
 - provider external identity(`tenant_id`, `idp_provider`, `external_id`)는 한 `sub`에만 묶인다. 같은 external identity를 다른 `sub`로 이동하거나, 이미 다른 external identity에 묶인 `sub`를 재링크하면 `IR_SCHEMA_INVALID(scim_external_id_sub_conflict|scim_sub_external_id_conflict)`로 fail-closed 한다. 외부 IdP의 subject rename/merge 정책은 자동 추측하지 않는다.
@@ -117,6 +123,11 @@ export type Role =
 - 여러 external group이 같은 RPA role로 매핑되면 resolved role set은 중복 제거한다. direct `roles` 입력은 이미 upstream에서 닫힌 RPA role로 변환된 provider에 한해 유지되는 경로이며, ledger 기반 `external_groups`와 병합하지 않는다.
 
 ---
+
+AI governance addendum:
+- `ai_governance.read` is allowed for viewer/operator/reviewer/approver/admin and gates `GET /v1/ai-governance/evidence`.
+- `ai_governance.manage` is admin-only and gates `POST /v1/ai-governance/evidence`.
+- Valid AI governance evidence cannot be recorded without `evidence_ref`, `policy_decision_ref`, and an existing audit correlation id; raw prompt/output/URL/secret material remains forbidden.
 
 ## 3. tenant_id 인증 출처 & 경계 강제
 
@@ -200,3 +211,38 @@ UNAUTHENTICATED: { retryable: false, httpStatus: 401, exceptionClass: "security"
   userMessage: "인증이 필요합니다.", operatorAction: "유효한 Bearer JWT 제시(auth-rbac.md §3) — 토큰 누락/서명 무효" },
 ```
 - 인증 경계(`security-middleware-contract.ts` `AuthenticationBoundary`)는 토큰 미성립 시 이 코드로 거부하고(401), 인증 성립 후 tenant/역할 권한 부족은 `AUTHZ_FORBIDDEN`(403)로 분리한다(`AuthFailureCode = UNAUTHENTICATED | AUTHZ_FORBIDDEN`).
+
+---
+
+## 6. CoE / adoption governance overlay (90점+ 설계)
+
+`docs/rpa-adoption-90plus-design-2026-06-29.md`의 enterprise adoption 기준은 새 역할을 즉시 추가하지 않고, 현행 역할 위에 CoE 운영 규칙을 겹쳐 적용한다. 전용 `coe_admin` 같은 새 역할은 schema/codegen 계약 변경 후에만 도입한다.
+
+| Governance action | 최소 역할 | 추가 규칙 |
+|---|---|---|
+| automation idea 등록/ROI baseline 입력 | `operator` 이상 | business owner와 ROI owner를 기록 |
+| automation idea 승인/반려 | `approver` 또는 `admin` | 작성자와 승인자가 같으면 high-risk 업무는 거부 |
+| scenario release 제출 | `operator` 이상 | release note, risk, rollback target 필요 |
+| scenario release 승인 | `admin` | maker-checker: 제출자와 승인자 분리 |
+| high-risk site approval | `approver` 또는 `admin` | security owner sign-off 필요 |
+| credential scope 변경 | `admin` | SecretRef 값 원문 접근 없이 ref/scope만 변경 |
+| AI policy/model 변경 | `admin` | eval evidence와 rollback target 필요 |
+| production promotion | `admin` | pilot evidence, support owner, training completion, restore drill, security sign-off 필요 |
+
+CoE certification lifecycle:
+
+`scenario.certify` also gates `POST /v1/scenarios/{scenario_id}/versions/{version}/governance-stage`, which requires `Idempotency-Key` and records metadata-only `review|pilot|deprecated` lifecycle state. These governance stages are not prod certification; `target_environment='prod'` release gates may pass only when `certification.status='certified'` and must ignore review/pilot/deprecated as certification claims. Governance reason/evidence metadata must not contain raw URLs, endpoint URLs, tokens/passwords/secrets, resolved SecretRef material, long approval packets, or raw rosters.
+
+| State | 의미 | 전이 조건 |
+|---|---|---|
+| `draft` | 작성 중 | 작성자 저장 |
+| `review` | 검토 대기 | static validation, owner 입력 완료 |
+| `pilot` | 제한 실행 | approver 승인, pilot charter 연결 |
+| `certified` | 운영 승인 | support/RACI, training completion, ROI baseline, security sign-off |
+| `deprecated` | 사용 중단 | owner 승인 또는 운영 정책 |
+
+현행 API/DB는 `scenario_versions.certification_status`(`uncertified|certified|revoked`)와 인증/취소 actor·reason·expiry metadata를 갖는다. `target_environment='prod'` release는 source version 인증이 없거나 만료되면 approve/deploy/rollback을 fail-closed로 차단한다. prod approve/deploy는 추가로 controlled-prod readiness `summary.controlled_prod_ready=true`를 요구하며, rollback은 복구 경로라 readiness로 막지 않는다. certification state가 응답에서 누락되면 콘솔은 `인증 미확인`으로 표시하고 운영 승인처럼 표시하지 않는다.
+
+## Addendum: Ops Alert Delivery Receipt RBAC
+
+`ops_alert.deliver` is admin-only. It gates `POST /v1/ops-alerts/{alert_id}/deliveries`, which records metadata-only provider delivery receipts with an `Idempotency-Key`. `viewer`, `operator`, `reviewer`, and `approver` must receive `AUTHZ_FORBIDDEN`; `operator` retains `ops_alert.ack` for console acknowledgement but cannot record external delivery evidence. `GET /v1/ops-alerts/{alert_id}/deliveries` remains `ops_alert.read` for the existing read roles.

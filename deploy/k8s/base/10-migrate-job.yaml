@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rpa-migrate
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-migrate
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rpa-migrate
+        app.kubernetes.io/component: migration
+        app.kubernetes.io/part-of: rpa-enterprise
+    spec:
+      serviceAccountName: rpa-migrate
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/example/rpa-runtime:replace-me
+          imagePullPolicy: IfNotPresent
+          command: ["node", "scripts/db-migrate.mjs", "--baseline-existing", "--graphile-worker", "--smoke", "--require-non-bypass"]
+          envFrom:
+            - configMapRef:
+                name: rpa-runtime-config
+          env:
+            - name: PGUSER
+              value: rpa_migrator
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: RPA_MIGRATOR_DB_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { SignJWT } from "jose";
 
+import { insertAuditVerificationRun } from "../src/api/audit-verification-runs";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
@@ -15,6 +16,8 @@ import type { SignedCommandRegistry } from "../../ts/security-middleware-contrac
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_scenario_releases_int";
 const TENANT = "00000000-0000-0000-0000-0000000000a1";
+const WORKER_A = "85000000-0000-4000-8000-000000000101";
+const WORKER_B = "85000000-0000-4000-8000-000000000102";
 const SECRET = new TextEncoder().encode("scenario-releases-int-secret-do-not-use-in-prod-0123456789");
 
 let failures = 0;
@@ -93,12 +96,146 @@ async function createSubmitApproveDeploy(
   return releaseId;
 }
 
+async function seedControlledProdReadiness(pool: ReturnType<typeof createPool>): Promise<void> {
+  const direct = await pool.connect();
+  try {
+    await direct.query(`SET search_path = ${SCHEMA}, public`);
+    await direct.query(`CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, status text NOT NULL)`);
+    await direct.query(
+      `INSERT INTO schema_migrations (version, status)
+       VALUES ('0001','applied'), ('0002','applied')
+       ON CONFLICT (version) DO UPDATE SET status=EXCLUDED.status`,
+    );
+    await direct.query(`CREATE SCHEMA IF NOT EXISTS graphile_worker`);
+    await direct.query(`CREATE TABLE IF NOT EXISTS graphile_worker.jobs (id serial PRIMARY KEY, locked_at timestamptz, payload jsonb NOT NULL DEFAULT '{}'::jsonb)`);
+    await direct.query(
+      `INSERT INTO workers (id, kind, status, heartbeat_at, circuit_state)
+       VALUES ($1,'browser','active',now(),'closed'), ($2,'browser','active',now(),'closed')
+       ON CONFLICT (id) DO UPDATE SET status='active', heartbeat_at=now(), circuit_state='closed'`,
+      [WORKER_A, WORKER_B],
+    );
+    await direct.query(
+      `INSERT INTO worker_pools (pool_key, description, max_concurrency, priority)
+       VALUES ('prod-release-readiness', 'prod release readiness pool', 2, 'high')
+       ON CONFLICT (pool_key) DO UPDATE SET description=EXCLUDED.description, max_concurrency=2, priority='high'`,
+    );
+    await direct.query(
+      `INSERT INTO worker_pool_memberships (worker_id, pool_key, assigned_by)
+       VALUES ($1, 'prod-release-readiness', 'admin-a'), ($2, 'prod-release-readiness', 'admin-a')
+       ON CONFLICT (worker_id) DO UPDATE SET pool_key=EXCLUDED.pool_key, assigned_by=EXCLUDED.assigned_by`,
+      [WORKER_A, WORKER_B],
+    );
+  } finally {
+    direct.release();
+  }
+
+  await withTenantTx(pool, TENANT, async (client) => {
+    await client.query(
+      `INSERT INTO worker_pool_assignments (tenant_id, pool_key)
+       VALUES ($1::uuid, 'prod-release-readiness')
+       ON CONFLICT (tenant_id) DO UPDATE SET pool_key=EXCLUDED.pool_key`,
+      [TENANT],
+    );
+    await insertAuditVerificationRun(client, {
+      tenantId: TENANT,
+      result: {
+        tenantId: TENANT,
+        valid: true,
+        rowsChecked: 1,
+        violations: [],
+        checkedFromSequence: 1,
+        checkedToSequence: 1,
+      },
+      startedAt: new Date(),
+      completedAt: new Date(),
+      correlationId: "85000000-0000-4000-8000-000000000301",
+      triggeredBy: { subjectId: "ad", roles: ["admin"] },
+      triggerKind: "manual_api",
+      legalHold: false,
+    });
+    await client.query(
+      `INSERT INTO production_readiness_evidence (
+         id, tenant_id, evidence_type, status, evidence_at, expires_at,
+         summary, evidence_ref, metadata, recorded_by, retention_until, legal_hold
+       )
+       VALUES
+         (
+           gen_random_uuid(), $1::uuid, 'external_alert_delivery', 'valid', now(), now() + interval '90 days',
+           'External alert delivery drill receipt verified for prod release.',
+           'ticket:OPS-900',
+           '{"channel":"teams","provider_alias":"teams-primary","receipt_id":"receipt-prod-release","receipt_at":"2026-06-29T00:05:30.000Z","delivery_status":"delivered"}'::jsonb,
+           'admin-a', now() + interval '365 days', false
+         ),
+         (
+           gen_random_uuid(), $1::uuid, 'managed_backup_restore_drill', 'valid', now(), now() + interval '90 days',
+           'Managed backup/PITR restore drill completed within target.',
+           'drill:PITR-prod-release',
+           '{"backup_policy_ref":"backup-policy:managed-pg-prod","restore_scope":"tenant-control-plane","restore_completed_at":"2026-06-29T00:30:00.000Z","rto_minutes":20,"rpo_minutes":5}'::jsonb,
+           'admin-a', now() + interval '365 days', false
+         ),
+          (
+            gen_random_uuid(), $1::uuid, 'slo_oncall_signoff', 'valid', now(), now() + interval '90 days',
+            'SLO dashboard, severity policy, and on-call/RACI sign-off approved.',
+            'ticket:SRE-900',
+            '{"slo_dashboard":"grafana-folder-rpa","severity_model":"sev1-sev4","oncall_rota":"primary-secondary","raci_ref":"raci:SRE-RPA","support_hours":"24x7"}'::jsonb,
+            'admin-a', now() + interval '365 days', false
+          ),
+          (
+            gen_random_uuid(), $1::uuid, 'observability_telemetry_wiring', 'valid', now(), now() + interval '90 days',
+            'OTLP/Prometheus telemetry wiring sampled with dashboard and alert route.',
+            'ticket:OBS-900',
+            '{"exporter":"prometheus","collector_ref":"otel-collector:rpa-prod","dashboard_ref":"grafana-folder-rpa","alert_route_ref":"alert-route:rpa-sev","sampled_at":"2026-06-29T00:10:00.000Z"}'::jsonb,
+            'admin-a', now() + interval '365 days', false
+          ),
+          (
+            gen_random_uuid(), $1::uuid, 'support_training_completion', 'valid', now(), now() + interval '90 days',
+            'Support model and role training completion approved.',
+            'ticket:TRAIN-900',
+            '{"support_model_ref":"support-model:L1-L3","training_completion_ref":"training:completion-prod","trained_role_count":3,"trained_user_count":18,"coverage_percent":100,"completed_at":"2026-06-29T00:20:00.000Z"}'::jsonb,
+            'admin-a', now() + interval '365 days', false
+          )`,
+      [TENANT],
+    );
+  });
+}
+
+async function recordSloReadinessEvidence(
+  pool: ReturnType<typeof createPool>,
+  status: "valid" | "failed",
+  evidenceAt: string,
+): Promise<void> {
+  await withTenantTx(pool, TENANT, async (client) => {
+    await client.query(
+      `INSERT INTO production_readiness_evidence (
+         id, tenant_id, evidence_type, status, evidence_at, expires_at,
+         summary, evidence_ref, metadata, recorded_by, retention_until, legal_hold
+       )
+       VALUES (
+         gen_random_uuid(), $1::uuid, 'slo_oncall_signoff', $2, $3::timestamptz,
+         CASE WHEN $2 = 'valid' THEN $3::timestamptz + interval '90 days' ELSE NULL END,
+         CASE WHEN $2 = 'valid'
+           THEN 'SLO dashboard, severity policy, and on-call/RACI sign-off approved.'
+           ELSE 'SLO/on-call coverage regressed before prod deploy.'
+         END,
+         CASE WHEN $2 = 'valid' THEN 'ticket:SRE-901' ELSE 'ticket:SRE-REGRESSED' END,
+         CASE WHEN $2 = 'valid'
+           THEN '{"slo_dashboard":"grafana-folder-rpa","severity_model":"sev1-sev4","oncall_rota":"primary-secondary","raci_ref":"raci:SRE-RPA","support_hours":"24x7"}'::jsonb
+           ELSE '{"slo_dashboard":"grafana-folder-rpa","oncall_gap":"secondary_missing"}'::jsonb
+         END,
+         'admin-a', $3::timestamptz + interval '365 days', false
+       )`,
+      [TENANT, status, evidenceAt],
+    );
+  });
+}
+
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
   try {
     const setup = await pool.connect();
     try {
       await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+      await setup.query(`DROP SCHEMA IF EXISTS graphile_worker CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));
@@ -139,6 +276,155 @@ async function main(): Promise<void> {
       });
       check("enterprise mode blocks legacy promote", legacyPromote.statusCode === 422 && legacyPromote.json().details?.reason === "legacy_promote_disabled_by_enterprise_alm", legacyPromote.body);
 
+      const uncertified = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/releases`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "uncertified-create" },
+        payload: { source_version: 1, target_environment: "prod", reason: "certification gate negative" },
+      });
+      check("uncertified prod release can be drafted", uncertified.statusCode === 201 && uncertified.json().status === "draft", uncertified.body);
+      const uncertifiedReleaseId = uncertified.json().release_id as string;
+      const operatorGovernanceDenied = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/versions/1/governance-stage`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "governance-operator-denied" },
+        payload: { stage: "pilot", reason: "pilot charter accepted", evidence_ref: "ticket:GOV-OP-DENIED" },
+      });
+      check("operator cannot set scenario governance stage", operatorGovernanceDenied.statusCode === 403, operatorGovernanceDenied.body);
+
+      const governanceUrlDenied = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/versions/1/governance-stage`,
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "governance-url-denied" },
+        payload: {
+          stage: "pilot",
+          reason: "pilot charter accepted",
+          evidence_ref: "https://example.invalid/governance",
+        },
+      });
+      check(
+        "governance evidence forbids raw URL refs",
+        governanceUrlDenied.statusCode === 422 && governanceUrlDenied.json().details?.reason === "raw_endpoint_url_forbidden",
+        governanceUrlDenied.body,
+      );
+
+      const pilotGovernance = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/versions/1/governance-stage`,
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "governance-pilot-v1" },
+        payload: {
+          stage: "pilot",
+          reason: "pilot charter and RACI accepted",
+          evidence_ref: "ticket:GOV-PILOT-1",
+          metadata: { pilot_charter_ref: "ticket:PILOT-1", raci_ref: "raci:finance-rpa" },
+        },
+      });
+      check("admin sets pilot governance stage", pilotGovernance.statusCode === 200, pilotGovernance.body);
+      check(
+        "pilot governance is not prod certification",
+        pilotGovernance.json().certification?.governance_stage === "pilot" &&
+          pilotGovernance.json().certification?.status === "uncertified" &&
+          pilotGovernance.json().certification?.valid_for_prod === false,
+        pilotGovernance.body,
+      );
+
+      await app.inject({
+        method: "POST",
+        url: `/v1/scenario-releases/${uncertifiedReleaseId}/submit`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "uncertified-submit" },
+        payload: {},
+      });
+      const uncertifiedApprove = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-releases/${uncertifiedReleaseId}/approve`,
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "uncertified-approve" },
+        payload: { reason: "should block" },
+      });
+      check(
+        "prod approval blocked until source version is certified",
+        uncertifiedApprove.statusCode === 422 && uncertifiedApprove.json().details?.reason === "certification_required_for_prod",
+        uncertifiedApprove.body,
+      );
+
+      const certifiedV1 = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/versions/1/certify`,
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "certify-v1" },
+        payload: { reason: "pilot evidence accepted" },
+      });
+      check("certify v1 for prod release", certifiedV1.statusCode === 200 && certifiedV1.json().certification?.valid_for_prod === true, certifiedV1.body);
+
+      const readinessBlocked = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/releases`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "readiness-blocked-create" },
+        payload: { source_version: 1, target_environment: "prod", reason: "readiness gate negative" },
+      });
+      check("certified prod release can be drafted before readiness closes",
+        readinessBlocked.statusCode === 201 && readinessBlocked.json().status === "draft",
+        readinessBlocked.body);
+      const readinessBlockedReleaseId = readinessBlocked.json().release_id as string;
+      await app.inject({
+        method: "POST",
+        url: `/v1/scenario-releases/${readinessBlockedReleaseId}/submit`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "readiness-blocked-submit" },
+        payload: {},
+      });
+      const readinessBlockedApprove = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-releases/${readinessBlockedReleaseId}/approve`,
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "readiness-blocked-approve" },
+        payload: { reason: "should block until controlled-prod readiness is ready" },
+      });
+      check(
+        "prod approval blocked until controlled-prod readiness is ready",
+        readinessBlockedApprove.statusCode === 422 &&
+          readinessBlockedApprove.json().details?.reason === "controlled_prod_readiness_required" &&
+          readinessBlockedApprove.json().details?.deferred_count >= 1,
+        readinessBlockedApprove.body,
+      );
+
+      await seedControlledProdReadiness(pool);
+
+      const deployBlocked = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/releases`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "deploy-blocked-create" },
+        payload: { source_version: 1, target_environment: "prod", reason: "deploy readiness regression" },
+      });
+      check("ready prod release can be drafted for deploy regression test",
+        deployBlocked.statusCode === 201 && deployBlocked.json().status === "draft",
+        deployBlocked.body);
+      const deployBlockedReleaseId = deployBlocked.json().release_id as string;
+      await app.inject({
+        method: "POST",
+        url: `/v1/scenario-releases/${deployBlockedReleaseId}/submit`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "deploy-blocked-submit" },
+        payload: {},
+      });
+      const deployBlockedApprove = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-releases/${deployBlockedReleaseId}/approve`,
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "deploy-blocked-approve" },
+        payload: { reason: "ready at approval time" },
+      });
+      check("prod approval succeeds while controlled-prod readiness is ready",
+        deployBlockedApprove.statusCode === 200 && deployBlockedApprove.json().status === "approved",
+        deployBlockedApprove.body);
+      await recordSloReadinessEvidence(pool, "failed", new Date(Date.now() + 60_000).toISOString());
+      const deployBlockedByReadiness = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-releases/${deployBlockedReleaseId}/deploy`,
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "deploy-blocked-deploy", "if-match": "1" },
+        payload: {},
+      });
+      check("prod deploy blocked if controlled-prod readiness regresses after approval",
+        deployBlockedByReadiness.statusCode === 422 &&
+          deployBlockedByReadiness.json().details?.reason === "controlled_prod_readiness_required" &&
+          deployBlockedByReadiness.json().details?.blocking_gate_ids?.includes("slo_oncall_signoff"),
+        deployBlockedByReadiness.body);
+      await recordSloReadinessEvidence(pool, "valid", new Date(Date.now() + 120_000).toISOString());
+
       const releaseV1 = await createSubmitApproveDeploy(app, scenarioId, 1, "prod", 1, operator, admin, "v1");
 
       const prodAfterV1 = await withTenantTx(pool, TENANT, async (c) => {
@@ -159,6 +445,14 @@ async function main(): Promise<void> {
         payload: validIr("release-scenario", 2),
       });
       check("update scenario v2", updated.statusCode === 200 && updated.json().version === 2, updated.body);
+
+      const certifiedV2 = await app.inject({
+        method: "POST",
+        url: `/v1/scenarios/${scenarioId}/versions/2/certify`,
+        headers: { authorization: `Bearer ${admin}`, "idempotency-key": "certify-v2" },
+        payload: { reason: "pilot evidence accepted" },
+      });
+      check("certify v2 for prod release", certifiedV2.statusCode === 200 && certifiedV2.json().certification?.status === "certified", certifiedV2.body);
 
       const releaseV2 = await createSubmitApproveDeploy(app, scenarioId, 2, "prod", 2, operator, admin, "v2");
 

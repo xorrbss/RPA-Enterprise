@@ -3,10 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   ApiError,
+  type AutomationAdoptionEvidenceItem,
+  type AutomationAdoptionEvidenceStatus,
+  type AutomationAdoptionEvidenceType,
   type AutomationIdeaItem,
   type AutomationIdeaPriority,
   type AutomationIdeaSource,
   type AutomationIdeaStage,
+  type RoiActualEvidence,
   type RoiEstimate,
   type RunTriggerItem,
   type ScenarioItem,
@@ -19,6 +23,12 @@ import { navigate, useHashParam } from "../router";
 const STAGES: readonly AutomationIdeaStage[] = ["intake", "assess", "approved", "build", "operate", "rejected", "archived"];
 const PRIORITIES: readonly AutomationIdeaPriority[] = ["low", "medium", "high", "critical"];
 const SOURCES: readonly AutomationIdeaSource[] = ["manual", "process_mining", "task_mining", "imported"];
+const ADOPTION_EVIDENCE_TYPES: readonly AutomationAdoptionEvidenceType[] = [
+  "pilot_charter_signoff",
+  "raci_signoff",
+  "training_completion",
+  "support_model_signoff",
+];
 
 const STAGE_LABEL: Record<AutomationIdeaStage, string> = {
   intake: "접수",
@@ -50,6 +60,19 @@ const TRIGGER_STATUS_LABEL: Record<RunTriggerItem["status"], string> = {
   archived: "보관됨",
 };
 
+const ADOPTION_EVIDENCE_TYPE_LABEL: Record<AutomationAdoptionEvidenceType, string> = {
+  pilot_charter_signoff: "Pilot charter",
+  raci_signoff: "RACI signoff",
+  training_completion: "Training complete",
+  support_model_signoff: "Support model",
+};
+
+const ADOPTION_EVIDENCE_STATUS_LABEL: Record<AutomationAdoptionEvidenceStatus, string> = {
+  valid: "Valid",
+  failed: "Failed",
+  deferred: "Deferred",
+};
+
 function idempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -70,6 +93,12 @@ function stageTone(stage: AutomationIdeaStage): string {
   return "amber";
 }
 
+function adoptionEvidenceStatusTone(status: AutomationAdoptionEvidenceStatus): string {
+  if (status === "valid") return "green";
+  if (status === "failed") return "red";
+  return "amber";
+}
+
 function currency(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return new Intl.NumberFormat("ko-KR", { style: "currency", currency: "KRW", maximumFractionDigits: 0 }).format(value);
@@ -78,6 +107,11 @@ function currency(value: number | null | undefined): string {
 function numberLabel(value: number | null | undefined, unit = ""): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return `${new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 }).format(value)}${unit}`;
+}
+
+function percentLabel(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  return `${new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 }).format(value * 100)}%`;
 }
 
 function triggerLinkLabel(trigger: RunTriggerItem, scenarioByVersionId: ReadonlyMap<string, ScenarioItem>): string {
@@ -94,7 +128,11 @@ function scenarioOptionLabel(scenario: ScenarioItem): string {
 interface RoiPreview {
   monthly_hours_saved: number | null;
   estimated_monthly_value: number | null;
+  platform_monthly_cost: number | null;
+  avoided_license_cost: number | null;
+  monthly_value: number | null;
   payback_months: number | null;
+  viability: RoiEstimate["viability"] | null;
 }
 
 interface ApprovalDecision {
@@ -111,12 +149,19 @@ function roiPreview(input: RoiFormState): RoiPreview {
   const exceptionRate = Number(input.exception_rate);
   const hourlyCost = Number(input.hourly_cost);
   const effort = Number(input.implementation_effort);
+  const platformMonthlyCost = Number(input.platform_monthly_cost);
+  const avoidedLicenseCost = Number(input.avoided_license_cost);
   const monthly_hours_saved = (frequency * minutes * (1 - exceptionRate)) / 60;
   const estimated_monthly_value = monthly_hours_saved * hourlyCost;
+  const monthly_value = estimated_monthly_value + avoidedLicenseCost - platformMonthlyCost;
   return {
     monthly_hours_saved,
     estimated_monthly_value,
-    payback_months: estimated_monthly_value > 0 ? effort / estimated_monthly_value : null,
+    platform_monthly_cost: platformMonthlyCost,
+    avoided_license_cost: avoidedLicenseCost,
+    monthly_value,
+    payback_months: monthly_value > 0 ? effort / monthly_value : null,
+    viability: monthly_value > 0 ? "viable" : "not_viable",
   };
 }
 
@@ -131,6 +176,10 @@ function roiValidationMessage(input: RoiFormState): string | null {
   if (!Number.isFinite(hourlyCost) || hourlyCost < 0) return "시간당 비용은 0 이상이어야 합니다.";
   const effort = Number(input.implementation_effort);
   if (!Number.isFinite(effort) || effort < 0) return "자동화 구축 비용은 0 이상이어야 합니다.";
+  const platformMonthlyCost = Number(input.platform_monthly_cost);
+  if (!Number.isFinite(platformMonthlyCost) || platformMonthlyCost < 0) return "Platform monthly cost must be 0 or greater.";
+  const avoidedLicenseCost = Number(input.avoided_license_cost);
+  if (!Number.isFinite(avoidedLicenseCost) || avoidedLicenseCost < 0) return "Avoided license cost must be 0 or greater.";
   return null;
 }
 
@@ -160,6 +209,8 @@ function approvalDecision(idea: AutomationIdeaItem | null, roi: RoiEstimate | nu
     items.push("ROI를 저장해야 승인 검토를 시작할 수 있습니다.");
   } else {
     items.push(`회수 기간 ${numberLabel(roi.payback_months, "개월")} · 월 절감액 ${currency(roi.estimated_monthly_value)}`);
+    items.push(`순 월가치 ${currency(roi.monthly_value)} · 판정 ${roi.viability}`);
+    if (roi.viability === "not_viable") items.push("플랫폼 비용이 월 절감액을 초과해 유한한 회수 기간을 산정하지 않습니다.");
     if (roi.payback_months === null) items.push("회수 기간을 산정할 수 없어 CoE 검토가 필요합니다.");
     if (roi.payback_months !== null && roi.payback_months > 12) items.push("회수 기간이 12개월을 넘어 우선순위 재검토가 필요합니다.");
     if (roi.confidence === "low") items.push("추정 신뢰도가 낮아 처리 건수나 샘플 근거를 보강해야 합니다.");
@@ -169,6 +220,7 @@ function approvalDecision(idea: AutomationIdeaItem | null, roi: RoiEstimate | nu
 
   const needsWork = roi === null
     || roi.payback_months === null
+    || roi.viability === "not_viable"
     || (roi.payback_months !== null && roi.payback_months > 12)
     || roi.confidence === "low"
     || idea.scenario_id === null
@@ -199,7 +251,27 @@ interface RoiFormState {
   exception_rate: string;
   hourly_cost: string;
   implementation_effort: string;
+  platform_monthly_cost: string;
+  avoided_license_cost: string;
   confidence: "low" | "medium" | "high";
+}
+
+interface RoiActualFormState {
+  period_start: string;
+  period_end: string;
+  actual_transaction_count: string;
+  actual_failure_rate: string;
+  human_intervention_minutes: string;
+  reprocessing_minutes: string;
+  evidence_ref: string;
+  summary: string;
+}
+
+interface AdoptionEvidenceFormState {
+  evidence_type: AutomationAdoptionEvidenceType;
+  status: AutomationAdoptionEvidenceStatus;
+  evidence_ref: string;
+  summary: string;
 }
 
 async function readRoi(api: ReturnType<typeof useApiClient>, ideaId: string): Promise<RoiEstimate | null> {
@@ -209,6 +281,59 @@ async function readRoi(api: ReturnType<typeof useApiClient>, ideaId: string): Pr
     if (err instanceof ApiError && err.httpStatus === 404) return null;
     throw err;
   }
+}
+
+function currentMonthActualDefaults(): RoiActualFormState {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  return {
+    period_start: dateOnly(start),
+    period_end: dateOnly(now),
+    actual_transaction_count: "0",
+    actual_failure_rate: "0",
+    human_intervention_minutes: "0",
+    reprocessing_minutes: "0",
+    evidence_ref: "ticket:ROI-ACTUAL",
+    summary: "Pilot actuals reconciled from run, review, and reprocessing evidence.",
+  };
+}
+
+function adoptionEvidenceDefaults(): AdoptionEvidenceFormState {
+  return {
+    evidence_type: "pilot_charter_signoff",
+    status: "valid",
+    evidence_ref: "ticket:PILOT-123",
+    summary: "Pilot readiness evidence reviewed by the CoE owner.",
+  };
+}
+
+function dateOnly(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function roiActualValidationMessage(input: RoiActualFormState): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.period_start) || !/^\d{4}-\d{2}-\d{2}$/.test(input.period_end)) return "실제값 기간을 날짜 형식으로 입력해야 합니다.";
+  if (input.period_end < input.period_start) return "실제값 종료일은 시작일 이후여야 합니다.";
+  const actualCount = Number(input.actual_transaction_count);
+  if (!Number.isInteger(actualCount) || actualCount < 0) return "실제 처리 건수는 0 이상의 정수여야 합니다.";
+  const failureRate = Number(input.actual_failure_rate);
+  if (!Number.isFinite(failureRate) || failureRate < 0 || failureRate > 1) return "실제 실패율은 0에서 1 사이여야 합니다.";
+  const intervention = Number(input.human_intervention_minutes);
+  if (!Number.isFinite(intervention) || intervention < 0) return "사람 개입 시간은 0 이상이어야 합니다.";
+  const reprocessing = Number(input.reprocessing_minutes);
+  if (!Number.isFinite(reprocessing) || reprocessing < 0) return "재처리 시간은 0 이상이어야 합니다.";
+  if (input.evidence_ref.trim().length === 0) return "실제값 근거 참조가 필요합니다.";
+  if (input.summary.trim().length === 0) return "실제값 요약이 필요합니다.";
+  return null;
+}
+
+function adoptionEvidenceValidationMessage(input: AdoptionEvidenceFormState): string | null {
+  if (input.evidence_ref.trim().length === 0) return "Pilot evidence ref is required.";
+  if (input.summary.trim().length === 0) return "Pilot evidence summary is required.";
+  return null;
 }
 
 function appendUniqueIdeas(
@@ -253,8 +378,12 @@ export function CoePipelineView(): JSX.Element {
     exception_rate: "0.1",
     hourly_cost: "40000",
     implementation_effort: "3200000",
+    platform_monthly_cost: "0",
+    avoided_license_cost: "0",
     confidence: "medium",
   });
+  const [roiActualInput, setRoiActualInput] = useState<RoiActualFormState>(() => currentMonthActualDefaults());
+  const [adoptionEvidenceInput, setAdoptionEvidenceInput] = useState<AdoptionEvidenceFormState>(() => adoptionEvidenceDefaults());
 
   const ownerQuery = ownerFilter.trim();
   const departmentQuery = departmentFilter.trim();
@@ -365,6 +494,26 @@ export function CoePipelineView(): JSX.Element {
     enabled: selected !== null,
   });
 
+  const roiActuals = useQuery({
+    queryKey: ["automation-ideas", selected?.idea_id, "roi-actuals"],
+    queryFn: () => (
+      selected === null
+        ? Promise.resolve({ items: [] as RoiActualEvidence[], next_cursor: null })
+        : api.listRoiActualEvidence(selected.idea_id, { limit: 5 })
+    ),
+    enabled: selected !== null,
+  });
+
+  const adoptionEvidence = useQuery({
+    queryKey: ["automation-ideas", selected?.idea_id, "adoption-evidence"],
+    queryFn: () => (
+      selected === null
+        ? Promise.resolve({ items: [] as AutomationAdoptionEvidenceItem[], next_cursor: null })
+        : api.listAutomationAdoptionEvidence(selected.idea_id, { limit: 6 })
+    ),
+    enabled: selected !== null,
+  });
+
   useEffect(() => {
     if (roi.data !== null && roi.data !== undefined) {
       setRoiInput({
@@ -373,6 +522,8 @@ export function CoePipelineView(): JSX.Element {
         exception_rate: String(roi.data.exception_rate),
         hourly_cost: String(roi.data.hourly_cost),
         implementation_effort: String(roi.data.implementation_effort),
+        platform_monthly_cost: String(roi.data.platform_monthly_cost),
+        avoided_license_cost: String(roi.data.avoided_license_cost),
         confidence: roi.data.confidence,
       });
     }
@@ -422,11 +573,50 @@ export function CoePipelineView(): JSX.Element {
           exception_rate: Number(roiInput.exception_rate),
           hourly_cost: Number(roiInput.hourly_cost),
           implementation_effort: Number(roiInput.implementation_effort),
+          platform_monthly_cost: Number(roiInput.platform_monthly_cost),
+          avoided_license_cost: Number(roiInput.avoided_license_cost),
           confidence: roiInput.confidence,
         },
         idempotencyKey("roi-estimate"),
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["automation-ideas", selected?.idea_id, "roi"] }),
+  });
+
+  const saveRoiActual = useMutation({
+    mutationFn: (idea: AutomationIdeaItem) =>
+      api.recordRoiActualEvidence(
+        idea.idea_id,
+        {
+          period_start: roiActualInput.period_start,
+          period_end: roiActualInput.period_end,
+          actual_transaction_count: Number(roiActualInput.actual_transaction_count),
+          actual_failure_rate: Number(roiActualInput.actual_failure_rate),
+          human_intervention_minutes: Number(roiActualInput.human_intervention_minutes),
+          reprocessing_minutes: Number(roiActualInput.reprocessing_minutes),
+          evidence_ref: roiActualInput.evidence_ref.trim(),
+          summary: roiActualInput.summary.trim(),
+          metadata: { measurement_method: "manual_pilot_reconciliation" },
+        },
+        idempotencyKey("roi-actual"),
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["automation-ideas", selected?.idea_id, "roi-actuals"] }),
+  });
+
+  const saveAdoptionEvidence = useMutation({
+    mutationFn: (idea: AutomationIdeaItem) =>
+      api.recordAutomationAdoptionEvidence(
+        idea.idea_id,
+        {
+          evidence_type: adoptionEvidenceInput.evidence_type,
+          status: adoptionEvidenceInput.status,
+          evidence_at: new Date().toISOString(),
+          evidence_ref: adoptionEvidenceInput.evidence_ref.trim(),
+          summary: adoptionEvidenceInput.summary.trim(),
+          metadata: { source: "coe_pipeline" },
+        },
+        idempotencyKey("adoption-evidence"),
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["automation-ideas", selected?.idea_id, "adoption-evidence"] }),
   });
 
   const stageCounts = useMemo(() => {
@@ -454,7 +644,28 @@ export function CoePipelineView(): JSX.Element {
 
   const roiInvalidReason = roiValidationMessage(roiInput);
   const canSaveRoi = canManageIdeas && selected !== null && roiInvalidReason === null && !saveRoi.isPending;
-  const preview = roi.data ?? (roiInvalidReason === null ? roiPreview(roiInput) : { monthly_hours_saved: null, estimated_monthly_value: null, payback_months: null });
+  const roiActualInvalidReason = roiActualValidationMessage(roiActualInput);
+  const canSaveRoiActual = canManageIdeas && selected !== null && roiActualInvalidReason === null && !saveRoiActual.isPending;
+  const roiActualItems = roiActuals.data?.items ?? [];
+  const adoptionEvidenceInvalidReason = adoptionEvidenceValidationMessage(adoptionEvidenceInput);
+  const canSaveAdoptionEvidence = canManageIdeas && selected !== null && adoptionEvidenceInvalidReason === null && !saveAdoptionEvidence.isPending;
+  const adoptionEvidenceItems = adoptionEvidence.data?.items ?? [];
+  const validAdoptionEvidenceCount = new Set(
+    adoptionEvidenceItems.filter((item) => item.status === "valid").map((item) => item.evidence_type),
+  ).size;
+  const preview = roi.data ?? (
+    roiInvalidReason === null
+      ? roiPreview(roiInput)
+      : {
+        monthly_hours_saved: null,
+        estimated_monthly_value: null,
+        platform_monthly_cost: null,
+        avoided_license_cost: null,
+        monthly_value: null,
+        payback_months: null,
+        viability: null,
+      }
+  );
   const decision = approvalDecision(selected, roi.data);
 
   return (
@@ -752,6 +963,89 @@ export function CoePipelineView(): JSX.Element {
                 </button>
                 {updateLinks.isError && <span className="badge red">연결 실패</span>}
               </div>
+              <div className="panel-subsection" aria-label="Pilot readiness evidence">
+                <div className="panel-head compact">
+                  <h3>Pilot readiness evidence</h3>
+                  <span className={`badge ${validAdoptionEvidenceCount === ADOPTION_EVIDENCE_TYPES.length ? "green" : "amber"}`}>
+                    {validAdoptionEvidenceCount}/{ADOPTION_EVIDENCE_TYPES.length} valid
+                  </span>
+                </div>
+                <div className="form-grid coe-roi-grid">
+                  <label className="field">
+                    <span>Evidence type</span>
+                    <select
+                      value={adoptionEvidenceInput.evidence_type}
+                      onChange={(event) =>
+                        setAdoptionEvidenceInput({
+                          ...adoptionEvidenceInput,
+                          evidence_type: event.target.value as AutomationAdoptionEvidenceType,
+                        })}
+                    >
+                      {ADOPTION_EVIDENCE_TYPES.map((type) => (
+                        <option key={type} value={type}>{ADOPTION_EVIDENCE_TYPE_LABEL[type]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Status</span>
+                    <select
+                      value={adoptionEvidenceInput.status}
+                      onChange={(event) =>
+                        setAdoptionEvidenceInput({
+                          ...adoptionEvidenceInput,
+                          status: event.target.value as AutomationAdoptionEvidenceStatus,
+                        })}
+                    >
+                      <option value="valid">Valid</option>
+                      <option value="failed">Failed</option>
+                      <option value="deferred">Deferred</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Evidence ref</span>
+                    <input
+                      value={adoptionEvidenceInput.evidence_ref}
+                      onChange={(event) => setAdoptionEvidenceInput({ ...adoptionEvidenceInput, evidence_ref: event.target.value })}
+                      placeholder="ticket:PILOT-123"
+                    />
+                  </label>
+                  <label className="field wide">
+                    <span>Summary</span>
+                    <input
+                      value={adoptionEvidenceInput.summary}
+                      onChange={(event) => setAdoptionEvidenceInput({ ...adoptionEvidenceInput, summary: event.target.value })}
+                      placeholder="Owner signoff recorded."
+                    />
+                  </label>
+                </div>
+                <div className="coe-roi-summary">
+                  <span><strong>{adoptionEvidenceItems.length}</strong><small>records</small></span>
+                  <span><strong>{validAdoptionEvidenceCount}</strong><small>valid types</small></span>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => selected !== null && adoptionEvidenceInvalidReason === null && saveAdoptionEvidence.mutate(selected)}
+                    disabled={!canSaveAdoptionEvidence}
+                  >
+                    {saveAdoptionEvidence.isPending ? "Saving" : "Record evidence"}
+                  </button>
+                  {adoptionEvidenceInvalidReason !== null && <span className="badge red coe-roi-alert" role="alert">{adoptionEvidenceInvalidReason}</span>}
+                  {saveAdoptionEvidence.isError && <span className="badge red">Evidence save failed</span>}
+                </div>
+                {adoptionEvidence.isError && <p className="form-alert red" role="alert">Pilot evidence could not be loaded.</p>}
+                {adoptionEvidenceItems.length > 0 && (
+                  <div className="mini-table" aria-label="Pilot readiness evidence list">
+                    {adoptionEvidenceItems.map((item) => (
+                      <div className="mini-table-row" key={item.evidence_id}>
+                        <span>{ADOPTION_EVIDENCE_TYPE_LABEL[item.evidence_type]}</span>
+                        <strong className={`badge ${adoptionEvidenceStatusTone(item.status)}`}>{ADOPTION_EVIDENCE_STATUS_LABEL[item.status]}</strong>
+                        <span>{item.evidence_ref ?? "-"}</span>
+                        <span>{item.summary}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -785,6 +1079,14 @@ export function CoePipelineView(): JSX.Element {
             <input type="number" min={0} value={roiInput.implementation_effort} onChange={(event) => setRoiInput({ ...roiInput, implementation_effort: event.target.value })} />
           </label>
           <label className="field">
+            <span>월 플랫폼 비용</span>
+            <input type="number" min={0} value={roiInput.platform_monthly_cost} onChange={(event) => setRoiInput({ ...roiInput, platform_monthly_cost: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>회피 라이선스 비용</span>
+            <input type="number" min={0} value={roiInput.avoided_license_cost} onChange={(event) => setRoiInput({ ...roiInput, avoided_license_cost: event.target.value })} />
+          </label>
+          <label className="field">
             <span>추정 신뢰도</span>
             <select value={roiInput.confidence} onChange={(event) => setRoiInput({ ...roiInput, confidence: event.target.value as RoiFormState["confidence"] })}>
               <option value="low">낮음</option>
@@ -796,12 +1098,80 @@ export function CoePipelineView(): JSX.Element {
         <div className="coe-roi-summary">
           <span><strong>{numberLabel(preview.monthly_hours_saved, "시간")}</strong><small>월 절감 시간</small></span>
           <span><strong>{currency(preview.estimated_monthly_value)}</strong><small>월 절감액</small></span>
+          <span><strong>{currency(preview.platform_monthly_cost)}</strong><small>월 플랫폼 비용</small></span>
+          <span><strong>{currency(preview.avoided_license_cost)}</strong><small>회피 비용</small></span>
+          <span><strong>{currency(preview.monthly_value)}</strong><small>순 월가치</small></span>
           <span><strong>{numberLabel(preview.payback_months, "개월")}</strong><small>회수 기간</small></span>
+          <span><strong>{preview.viability ?? "-"}</strong><small>ROI 판정</small></span>
           <button className="btn primary" type="button" onClick={() => selected !== null && roiInvalidReason === null && saveRoi.mutate(selected)} disabled={!canSaveRoi}>
             {saveRoi.isPending ? "저장 중" : "ROI 저장"}
           </button>
           {roiInvalidReason !== null && <span className="badge red coe-roi-alert" role="alert">{roiInvalidReason}</span>}
           {saveRoi.isError && <span className="badge red">ROI 저장 실패</span>}
+        </div>
+        <div className="panel-subsection">
+          <div className="panel-head compact">
+            <h3>파일럿 실제값</h3>
+            {roiActualItems.length === 0 ? <span className="badge amber">근거 없음</span> : <span className="badge green">{roiActualItems.length}건</span>}
+          </div>
+          <div className="form-grid coe-roi-grid">
+            <label className="field">
+              <span>시작일</span>
+              <input type="date" value={roiActualInput.period_start} onChange={(event) => setRoiActualInput({ ...roiActualInput, period_start: event.target.value })} />
+            </label>
+            <label className="field">
+              <span>종료일</span>
+              <input type="date" value={roiActualInput.period_end} onChange={(event) => setRoiActualInput({ ...roiActualInput, period_end: event.target.value })} />
+            </label>
+            <label className="field">
+              <span>실제 처리 건수</span>
+              <input type="number" min={0} value={roiActualInput.actual_transaction_count} onChange={(event) => setRoiActualInput({ ...roiActualInput, actual_transaction_count: event.target.value })} />
+            </label>
+            <label className="field">
+              <span>실제 실패율</span>
+              <input type="number" min={0} max={1} step={0.01} value={roiActualInput.actual_failure_rate} onChange={(event) => setRoiActualInput({ ...roiActualInput, actual_failure_rate: event.target.value })} />
+            </label>
+            <label className="field">
+              <span>사람 개입 시간(분)</span>
+              <input type="number" min={0} value={roiActualInput.human_intervention_minutes} onChange={(event) => setRoiActualInput({ ...roiActualInput, human_intervention_minutes: event.target.value })} />
+            </label>
+            <label className="field">
+              <span>재처리 시간(분)</span>
+              <input type="number" min={0} value={roiActualInput.reprocessing_minutes} onChange={(event) => setRoiActualInput({ ...roiActualInput, reprocessing_minutes: event.target.value })} />
+            </label>
+            <label className="field">
+              <span>근거 참조</span>
+              <input value={roiActualInput.evidence_ref} onChange={(event) => setRoiActualInput({ ...roiActualInput, evidence_ref: event.target.value })} />
+            </label>
+            <label className="field wide">
+              <span>요약</span>
+              <input value={roiActualInput.summary} onChange={(event) => setRoiActualInput({ ...roiActualInput, summary: event.target.value })} />
+            </label>
+          </div>
+          <div className="coe-roi-summary">
+            <span><strong>{roiActualItems[0]?.actual_transaction_count ?? "-"}</strong><small>최근 실제 건수</small></span>
+            <span><strong>{percentLabel(roiActualItems[0]?.actual_failure_rate ?? null)}</strong><small>최근 실패율</small></span>
+            <span><strong>{numberLabel(roiActualItems[0]?.human_intervention_minutes ?? null, "분")}</strong><small>사람 개입</small></span>
+            <span><strong>{numberLabel(roiActualItems[0]?.reprocessing_minutes ?? null, "분")}</strong><small>재처리</small></span>
+            <button className="btn" type="button" onClick={() => selected !== null && roiActualInvalidReason === null && saveRoiActual.mutate(selected)} disabled={!canSaveRoiActual}>
+              {saveRoiActual.isPending ? "저장 중" : "실제값 저장"}
+            </button>
+            {roiActualInvalidReason !== null && <span className="badge red coe-roi-alert" role="alert">{roiActualInvalidReason}</span>}
+            {saveRoiActual.isError && <span className="badge red">실제값 저장 실패</span>}
+          </div>
+          {roiActuals.isError && <p className="form-alert red" role="alert">ROI 실제값을 불러오지 못했습니다.</p>}
+          {roiActualItems.length > 0 && (
+            <div className="mini-table" aria-label="ROI 실제값 근거 목록">
+              {roiActualItems.map((item) => (
+                <div className="mini-table-row" key={item.roi_actual_id}>
+                  <span>{item.period_start} - {item.period_end}</span>
+                  <strong>{item.actual_transaction_count}건</strong>
+                  <span>{percentLabel(item.actual_failure_rate)}</span>
+                  <span>{item.evidence_ref}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
     </div>

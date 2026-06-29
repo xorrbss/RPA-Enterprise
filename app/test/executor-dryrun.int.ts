@@ -65,6 +65,9 @@ function startServer(): Promise<Server> {
         .writeHead(200, { "content-type": "text/csv", "content-disposition": 'attachment; filename="report.csv"', "content-length": Buffer.byteLength(body) })
         .end(body);
     }
+    if (url.pathname === "/missing") {
+      return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>unmarked</title></head><body><main>마커 없는 페이지</main></body></html>`);
+    }
     res.writeHead(404).end();
   });
   return new Promise((r) => s.listen(PORT, "127.0.0.1", () => r(s)));

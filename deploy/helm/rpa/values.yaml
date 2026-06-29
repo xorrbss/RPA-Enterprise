@@ -1,0 +1,187 @@
+image:
+  repository: ghcr.io/example/rpa-runtime
+  tag: replace-me
+  pullPolicy: IfNotPresent
+
+namespaceOverride: ""
+
+secrets:
+  existingSecret: rpa-runtime-secrets
+  keys:
+    migratorPassword: RPA_MIGRATOR_DB_PASSWORD
+    appPassword: RPA_APP_DB_PASSWORD
+    jwtSecret: JWT_HS256_SECRET
+    maintenanceLifecycleDatabaseUrl: MAINTENANCE_LIFECYCLE_DATABASE_URL
+    artifactLifecycleDatabaseUrl: ARTIFACT_LIFECYCLE_DATABASE_URL
+    codexBaseUrl: CODEX_BASE_URL
+    codexApiKey: CODEX_API_KEY
+    codexModel: CODEX_MODEL
+    vaultAddr: VAULT_ADDR
+    vaultMount: VAULT_MOUNT
+    vaultRuntimeWorkerRoleId: VAULT_RUNTIME_WORKER_ROLE_ID
+    vaultRuntimeWorkerSecretId: VAULT_RUNTIME_WORKER_SECRET_ID
+    vaultApiRoleId: VAULT_API_ROLE_ID
+    vaultApiSecretId: VAULT_API_SECRET_ID
+    vaultArtifactLifecycleRoleId: VAULT_ARTIFACT_LIFECYCLE_ROLE_ID
+    vaultArtifactLifecycleSecretId: VAULT_ARTIFACT_LIFECYCLE_SECRET_ID
+
+database:
+  host: rpa-postgres.example.internal
+  port: "5432"
+  name: rpa
+  migratorUser: rpa_migrator
+  appUser: rpa_app
+
+runtime:
+  env: staging
+  healthPort: "8081"
+  apiPort: "8080"
+  apiLogLevel: info
+  otelExporter: console
+  otlpEndpoint: ""
+  otlpTracesEndpoint: ""
+  otlpMetricsEndpoint: ""
+  signedCommandRegistryMode: deny_all
+  scenarioGenerationLlmV1Enabled: "false"
+  graphileConcurrency: "1"
+  graphilePollIntervalMs: "2000"
+  graphileMigrationsMode: external
+  workerId: "10000000-0000-4000-8000-0000000000aa"
+  lifecycleWorkerId: "20000000-0000-4000-8000-0000000000aa"
+  workerPoolKeys: ""
+  maintenanceTenantIds: ""
+  browserHeadless: "true"
+  videoEnabled: "false"
+
+artifactStore:
+  mode: s3
+  backendAlias: s3-compatible
+  endpoint: https://object-store.example.internal
+  region: ap-northeast-2
+  bucket: rpa-artifacts
+  accessKeyId: rpa-artifact-writer
+  forcePathStyle: "true"
+  gatewaySecretRef: rpa/staging/runtime-worker/object_store/artifacts
+  lifecycleSecretRef: rpa/staging/artifact-lifecycle/object_store/artifacts
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls:
+    secretName: ""
+
+networkPolicy:
+  enabled: true
+  apiIngress:
+    enabled: true
+    ingressNamespaceLabel:
+      rpa-ingress-approved: "true"
+  egress:
+    defaultDeny: true
+    allowDns: true
+    dnsNamespaceLabel:
+      kubernetes.io/metadata.name: kube-system
+    dnsPodLabel:
+      k8s-app: kube-dns
+    ownerApprovedCidrs: []
+
+migrate:
+  enabled: true
+  backoffLimit: 1
+
+api:
+  replicas: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: rpa-api
+          app.kubernetes.io/component: api
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: rpa-api
+          app.kubernetes.io/component: api
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rpa-api
+              app.kubernetes.io/component: api
+          topologyKey: kubernetes.io/hostname
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+worker:
+  replicas: 1
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: rpa-worker
+          app.kubernetes.io/component: worker
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: rpa-worker
+                app.kubernetes.io/component: worker
+            topologyKey: kubernetes.io/hostname
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+
+lifecycleWorker:
+  replicas: 1
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: rpa-lifecycle-worker
+          app.kubernetes.io/component: lifecycle-worker
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: rpa-lifecycle-worker
+                app.kubernetes.io/component: lifecycle-worker
+            topologyKey: kubernetes.io/hostname
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi

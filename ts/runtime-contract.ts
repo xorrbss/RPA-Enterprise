@@ -863,7 +863,8 @@ export const SINK_DELIVERY_LOCAL_TEST_SCHEMA_REF = "sink/delivery-local-test@1" 
 export interface SinkRealDeliveryPortBinding {
   kind: "real_sink";
   backendAlias: string;
-  credentialRef: SecretRef;
+  endpointSecretRef: SecretRef;
+  allowedHosts: readonly string[];
   evidenceSchemaRef: typeof SINK_DELIVERY_EVIDENCE_SCHEMA_REF;
 }
 
@@ -892,6 +893,9 @@ export interface SinkDeliveryRequest {
   sinkConfigId: string;
   sinkIdempotencyKey: string;
   normalizedRecordId: string;
+  schemaRef: string;
+  naturalKey: string;
+  record: unknown;
   attemptNo: number;
   portBinding: SinkDeliveryPortBinding;
 }
@@ -911,6 +915,101 @@ export interface SinkDeliveryPort {
   deliver(input: SinkDeliveryRequest): Promise<SinkDeliveryDecision>;
 }
 
+// ============================================================================
+// Operations notification sender port (ops alert external webhook v1.1)
+// ============================================================================
+export const OPS_NOTIFICATION_DELIVERY_EVIDENCE_SCHEMA_REF = "ops/notification-delivery-evidence@1" as const;
+export const OPS_NOTIFICATION_LOCAL_TEST_SCHEMA_REF = "ops/notification-local-test@1" as const;
+export const OPS_NOTIFICATION_DELIVERY_MAX_ATTEMPTS_DEFAULT = 3 as const;
+export const OPS_NOTIFICATION_DELIVERY_RETRY_AFTER_MS_DEFAULT = 5_000 as const;
+
+export interface OpsNotificationRealWebhookPortBinding {
+  kind: "real_webhook";
+  backendAlias: string;
+  evidenceSchemaRef: typeof OPS_NOTIFICATION_DELIVERY_EVIDENCE_SCHEMA_REF;
+}
+
+export interface OpsNotificationLocalTestPortBinding {
+  kind: "test_fake";
+  backendAlias: "local-test-fake";
+  evidenceSchemaRef: typeof OPS_NOTIFICATION_LOCAL_TEST_SCHEMA_REF;
+  testOnly: true;
+}
+
+export type OpsNotificationDeliveryPortBinding =
+  | OpsNotificationRealWebhookPortBinding
+  | OpsNotificationLocalTestPortBinding;
+
+export interface OpsNotificationDeliveryRequest {
+  tenantId: TenantId;
+  correlationId: CorrelationId;
+  attemptId: string;
+  alertId: string;
+  endpointSecretRef: SecretRef;
+  routePolicyRef: string;
+  recipientGroupRef: string | null;
+  allowedHosts: readonly string[];
+  payload: Readonly<Record<string, unknown>>;
+  attemptNo: number;
+}
+
+export type OpsNotificationDeliveryDecision =
+  | { kind: "sent"; receiptId: string; providerStatusCode: number }
+  | { kind: "transient_failed"; reason: string; providerStatusCode?: number }
+  | { kind: "permanent_failed"; reason: string; providerStatusCode?: number };
+
+export interface OpsNotificationDeliveryPort {
+  readonly binding: OpsNotificationDeliveryPortBinding;
+  deliver(input: OpsNotificationDeliveryRequest): Promise<OpsNotificationDeliveryDecision>;
+}
+
+// ============================================================================
+// Integration handoff dispatcher port (external RPA provider dispatch v1)
+// ============================================================================
+export const INTEGRATION_HANDOFF_DISPATCH_EVIDENCE_SCHEMA_REF = "integration/handoff-dispatch-evidence@1" as const;
+export const INTEGRATION_HANDOFF_DISPATCH_LOCAL_TEST_SCHEMA_REF = "integration/handoff-local-test@1" as const;
+export const INTEGRATION_HANDOFF_DISPATCH_MAX_ATTEMPTS_DEFAULT = 3 as const;
+export const INTEGRATION_HANDOFF_DISPATCH_RETRY_AFTER_MS_DEFAULT = 5_000 as const;
+
+export interface IntegrationHandoffRealProviderPortBinding {
+  kind: "real_provider";
+  backendAlias: string;
+  evidenceSchemaRef: typeof INTEGRATION_HANDOFF_DISPATCH_EVIDENCE_SCHEMA_REF;
+}
+
+export interface IntegrationHandoffLocalTestPortBinding {
+  kind: "test_fake";
+  backendAlias: "local-test-fake";
+  evidenceSchemaRef: typeof INTEGRATION_HANDOFF_DISPATCH_LOCAL_TEST_SCHEMA_REF;
+  testOnly: true;
+}
+
+export type IntegrationHandoffDispatchPortBinding =
+  | IntegrationHandoffRealProviderPortBinding
+  | IntegrationHandoffLocalTestPortBinding;
+
+export interface IntegrationHandoffDispatchRequest {
+  tenantId: TenantId;
+  correlationId: CorrelationId;
+  attemptId: string;
+  handoffId: string;
+  providerAlias: string;
+  endpointSecretRef: SecretRef;
+  allowedHosts: readonly string[];
+  payload: Readonly<Record<string, unknown>>;
+  attemptNo: number;
+}
+
+export type IntegrationHandoffDispatchDecision =
+  | { kind: "accepted"; receiptId: string; providerStatusCode: number; externalJobId?: string }
+  | { kind: "transient_failed"; reason: string; providerStatusCode?: number }
+  | { kind: "permanent_failed"; reason: string; providerStatusCode?: number };
+
+export interface IntegrationHandoffDispatchPort {
+  readonly binding: IntegrationHandoffDispatchPortBinding;
+  dispatch(input: IntegrationHandoffDispatchRequest): Promise<IntegrationHandoffDispatchDecision>;
+}
+
 export interface RuntimeWorkerJob {
   kind:
     | "run_claim"
@@ -927,6 +1026,9 @@ export interface RuntimeWorkerJob {
     | "artifact_orphan"
     | "dlq_replay"
     | "sink_deliver"
+    | "ops_notification_send"
+    | "integration_handoff_dispatch"
+    | "audit_verifier"
     | "trigger_fire";
   tenantId?: TenantId;
   runId?: RunId;
@@ -946,6 +1048,12 @@ export interface RuntimeWorkerJob {
   sinkDelivery?: {
     sinkConfigId: string;
     normalizedRecordId: string;
+  };
+  opsNotification?: {
+    attemptId: string;
+  };
+  integrationHandoff?: {
+    attemptId: string;
   };
 }
 

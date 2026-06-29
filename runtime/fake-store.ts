@@ -979,6 +979,9 @@ export class InMemoryRuntimeWorker implements RuntimeWorker {
       case "artifact_integrity":
       case "artifact_orphan":
       case "sink_deliver":
+      case "ops_notification_send":
+      case "integration_handoff_dispatch":
+      case "audit_verifier":
       case "trigger_fire":
         // Decision v1 defines these as closed job-kind inputs; the fake runtime
         // intentionally fails unsupported execution instead of inventing effects.

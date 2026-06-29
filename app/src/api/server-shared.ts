@@ -134,6 +134,10 @@ export interface ApiServerDeps {
   enforceAlmMakerChecker?: boolean;
   /** Webhook trigger HMAC verification key boundary. Values are resolved only while verifying a signed webhook and always through secret.resolve audit. */
   webhookSecretBoundary?: SecretStoreBoundary;
+  /** Existing RPA handoff provider callback HMAC verification key boundary. Signature keys stay behind SecretStore. */
+  integrationHandoffCallbackSecretBoundary?: SecretStoreBoundary;
+  /** Ops alert provider delivery callback HMAC verification key boundary. Signature keys stay behind SecretStore. */
+  opsNotificationCallbackSecretBoundary?: SecretStoreBoundary;
   /** SCIM inbound HMAC verification key boundary. Provider rows store only SecretRef metadata; key material stays behind SecretStore. */
   scimSignatureSecretBoundary?: SecretStoreBoundary;
   /** Optional live DOM selector probe boundary. Missing provider is surfaced as not_run, never inferred success. */

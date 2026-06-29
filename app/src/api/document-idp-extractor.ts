@@ -1,6 +1,6 @@
 export type DocumentFieldType = "text" | "number" | "date" | "boolean";
 export type DocumentFieldStatus = "extracted" | "missing" | "low_confidence";
-export type DocumentFieldSource = "json" | "csv" | "pattern" | "label" | "missing";
+export type DocumentFieldSource = "json" | "csv" | "pattern" | "label" | "missing" | "external_idp";
 export type DocumentExtractionStatus = "completed" | "validation_required";
 
 export interface DocumentFieldSchema {

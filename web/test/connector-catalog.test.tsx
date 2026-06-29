@@ -83,6 +83,12 @@ describe("connector catalog view", () => {
     const apiTemplateRow = (await screen.findByText("HTTP status check")).closest("tr") as HTMLTableRowElement;
     expect(within(apiTemplateRow).getByRole("button", { name: "관리자 활성화 필요" })).toBeDisabled();
     expect(within(apiTemplateRow).getByText("관리자 활성화 후 초안을 만들 수 있습니다.")).toBeInTheDocument();
+    const managedIdpRow = (await screen.findByText("Managed IdP SCIM")).closest("tr") as HTMLTableRowElement;
+    fireEvent.click(within(managedIdpRow).getByRole("button"));
+    expect(await screen.findByText("SCIM provider registration")).toBeInTheDocument();
+    const idpTemplateRow = (await screen.findByText("SCIM group-role import")).closest("tr") as HTMLTableRowElement;
+    expect(within(idpTemplateRow).getByRole("button", { name: "관리자 활성화 필요" })).toBeDisabled();
+    expect(screen.getAllByText(/signature_secret_ref/).length).toBeGreaterThan(0);
     const documentRow = (await screen.findByText("Document IDP (Browser Artifacts)")).closest("tr") as HTMLTableRowElement;
     fireEvent.click(within(documentRow).getByRole("button"));
     expect(await screen.findByText(/내장 문서 추출 후보/)).toBeInTheDocument();
@@ -91,6 +97,25 @@ describe("connector catalog view", () => {
     expect(screen.queryByTitle(/secret:\/\//)).not.toBeInTheDocument();
     expect(screen.queryByText("super-secret")).not.toBeInTheDocument();
     expect(screen.queryByText("password")).not.toBeInTheDocument();
+  });
+
+  test("shows existing RPA vendors as metadata-only handoff profiles", async () => {
+    renderApp();
+
+    const federationRow = (await screen.findByText("Existing RPA handoff profiles")).closest("tr") as HTMLTableRowElement;
+    fireEvent.click(within(federationRow).getByRole("button"));
+
+    expect(await screen.findByText(/not direct vendor API\/OAuth connectors/)).toBeInTheDocument();
+    expect(await screen.findByText("UiPath handoff provider profile")).toBeInTheDocument();
+    expect(await screen.findByText("Automation Anywhere handoff provider profile")).toBeInTheDocument();
+    expect(await screen.findByText("Power Automate handoff provider profile")).toBeInTheDocument();
+    expect(await screen.findByText("Blue Prism handoff provider profile")).toBeInTheDocument();
+    expect(screen.getAllByText(/owner\/provider/).length).toBeGreaterThan(0);
+
+    const uipathTemplateRow = screen.getByText("UiPath handoff provider profile").closest("tr") as HTMLTableRowElement;
+    expect(within(uipathTemplateRow).getByRole("button")).toBeDisabled();
+    expect(screen.queryByText("UiPath direct connector")).not.toBeInTheDocument();
+    expect(screen.queryByText("Power Automate direct connector")).not.toBeInTheDocument();
   });
 
   test("shows an error state when the connector catalog cannot load", async () => {

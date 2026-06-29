@@ -246,10 +246,42 @@ Resolved decision:
 - `exception_rate`
 - `hourly_cost`
 - `implementation_effort`
+- `platform_monthly_cost`
+- `avoided_license_cost`
 - `monthly_hours_saved`
 - `estimated_monthly_value`
+- `monthly_value`
+- `payback_months`
+- `viability`
 - `confidence`
 - `created_at`
+
+`estimated_monthly_value`는 하위 호환을 위한 gross 월 절감액이다. CoE 승인 판단과 회수 기간은 `monthly_value = estimated_monthly_value + avoided_license_cost - platform_monthly_cost`를 기준으로 계산하며, `monthly_value <= 0`이면 `payback_months = null`, `viability = 'not_viable'`로 저장한다.
+
+### roi_actual_evidence
+
+파일럿 종료 후 추정 ROI와 분리해 실제 운영값을 기록하는 append-only evidence ledger.
+
+주요 필드:
+
+- `id`
+- `tenant_id`
+- `automation_idea_id`
+- `period_start`
+- `period_end`
+- `actual_transaction_count`
+- `actual_failure_rate`
+- `human_intervention_minutes`
+- `reprocessing_minutes`
+- `evidence_ref`
+- `summary`
+- `metadata`
+- `recorded_by`
+- `recorded_at`
+
+`evidence_ref`, `summary`, `metadata`는 metadata-only 증거 참조이며 endpoint URL, token, password, webhook secret, resolved SecretRef 값을 저장하지 않는다.
+
+월간 automation performance report는 월 범위 안에 완전히 포함된 ledger만 `roi_actuals` 집계로 소비한다. 추정값은 수정하지 않고, actual-only 파일럿은 전체 actual로 표시하되 추정 대비 attainment/delta 계산에서는 comparable actual에서 제외한다. evidence 원문/metadata/URL/Secret 계열 값은 report/API export/Dashboard에 노출하지 않는다.
 
 ### run_triggers
 

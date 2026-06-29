@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rpa-api
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rpa-api
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rpa-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: rpa-enterprise
+    spec:
+      serviceAccountName: rpa-api
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rpa-api
+              app.kubernetes.io/component: api
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rpa-api
+              app.kubernetes.io/component: api
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: rpa-api
+                  app.kubernetes.io/component: api
+              topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: ghcr.io/example/rpa-runtime:replace-me
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: rpa-runtime-config
+          env:
+            - name: RUN_MODE
+              value: api
+            - name: PGUSER
+              value: rpa_app
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: RPA_APP_DB_PASSWORD
+            - name: JWT_HS256_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: JWT_HS256_SECRET
+            - name: VAULT_API_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: VAULT_API_ROLE_ID
+            - name: VAULT_API_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: VAULT_API_SECRET_ID
+            - name: VAULT_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: VAULT_ADDR
+            - name: VAULT_MOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: VAULT_MOUNT
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rpa-api
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

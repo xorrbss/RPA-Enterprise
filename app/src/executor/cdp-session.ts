@@ -13,6 +13,11 @@ import { readdirSync } from "node:fs";
 import { Stagehand } from "@browserbasehq/stagehand";
 
 import { CdpDisconnectedError } from "./raw-cdp";
+import {
+  installBrowserNetworkGuardForStagehandPage,
+  type BrowserNetworkGuardHandle,
+  type BrowserNetworkGuardPolicy,
+} from "./browser-network-guard";
 
 /** 결정형 브라우저 프리미티브 — resolver/executor 가 의존하는 최소 표면. */
 export interface CdpSession {
@@ -22,6 +27,7 @@ export interface CdpSession {
   evaluate<R = unknown>(expression: string): Promise<R>;
   /** Stagehand 공개 raw CDP(동일 세션). 예: Accessibility.getFullAXTree, Browser.setDownloadBehavior. */
   sendCDP<T = unknown>(method: string, params?: object): Promise<T>;
+  installNetworkGuard?(policy: BrowserNetworkGuardPolicy): Promise<BrowserNetworkGuardHandle>;
   click(selector: string): Promise<void>;
   fill(selector: string, value: string): Promise<void>;
   selectOption(selector: string, value: string): Promise<void>;
@@ -84,6 +90,8 @@ export class NavigationTimeoutError extends Error {
 
 /** Stagehand v3 page 를 CdpSession 으로 감싸는 어댑터. */
 export class StagehandCdpSession implements CdpSession {
+  private networkGuard: BrowserNetworkGuardHandle | undefined;
+
   constructor(
     private readonly sh: ShInstance,
     private readonly page: ShPage,
@@ -95,6 +103,7 @@ export class StagehandCdpSession implements CdpSession {
   }
 
   async goto(url: string): Promise<void> {
+    this.assertNetworkAllowed();
     // 실사이트(recon: 하이웍스 결재 cold nav)에서 Playwright 내부 timeout 이 wedge 되어 page.goto 가
     // NAV_TIMEOUT_MS 를 발화하지 않고 무한 대기 → run-loop 단일 세션 busy 영구 점유(실관측 1h+)가 재현됐다.
     // 우리 이벤트루프의 setTimeout(내부 timeout +5s 유예) 외부 워치독으로 강제 reject 한다(은폐 금지: loud throw).
@@ -120,34 +129,57 @@ export class StagehandCdpSession implements CdpSession {
       if (timer !== undefined) clearTimeout(timer);
       void Promise.resolve(nav).catch(() => undefined); // 댕글링 navigation 거부 흡수(unhandledRejection 방지)
     }
+    this.assertNetworkAllowed();
   }
 
   async reload(): Promise<void> {
+    this.assertNetworkAllowed();
     await this.page.reload();
+    this.assertNetworkAllowed();
   }
 
-  evaluate<R = unknown>(expression: string): Promise<R> {
-    return this.page.evaluate<R>(expression);
+  async evaluate<R = unknown>(expression: string): Promise<R> {
+    this.assertNetworkAllowed();
+    const result = await this.page.evaluate<R>(expression);
+    this.assertNetworkAllowed();
+    return result;
   }
 
-  sendCDP<T = unknown>(method: string, params?: object): Promise<T> {
-    return this.page.sendCDP<T>(method, params);
+  async sendCDP<T = unknown>(method: string, params?: object): Promise<T> {
+    this.assertNetworkAllowed();
+    const result = await this.page.sendCDP<T>(method, params);
+    this.assertNetworkAllowed();
+    return result;
+  }
+
+  async installNetworkGuard(policy: BrowserNetworkGuardPolicy): Promise<BrowserNetworkGuardHandle> {
+    if (this.networkGuard !== undefined) await this.networkGuard.dispose();
+    this.networkGuard = await installBrowserNetworkGuardForStagehandPage(this.page, policy);
+    return this.networkGuard;
   }
 
   async click(selector: string): Promise<void> {
+    this.assertNetworkAllowed();
     await this.page.locator(selector).click();
+    this.assertNetworkAllowed();
   }
 
   async fill(selector: string, value: string): Promise<void> {
+    this.assertNetworkAllowed();
     await this.page.locator(selector).fill(value);
+    this.assertNetworkAllowed();
   }
 
   async selectOption(selector: string, value: string): Promise<void> {
+    this.assertNetworkAllowed();
     await this.page.locator(selector).selectOption(value);
+    this.assertNetworkAllowed();
   }
 
   async setInputFiles(selector: string, files: string | string[]): Promise<void> {
+    this.assertNetworkAllowed();
     await this.page.locator(selector).setInputFiles(files);
+    this.assertNetworkAllowed();
   }
 
   downloadDir(): string {
@@ -155,10 +187,12 @@ export class StagehandCdpSession implements CdpSession {
   }
 
   async waitForDownload(fileName: string, timeoutMs: number): Promise<boolean> {
+    this.assertNetworkAllowed();
     // 경과시간(wall-clock) 기준 폴링. 매 폴에서 확인하고, 남은 시간만큼만 sleep 한 뒤 루프 상단에서
     // 다시 확인한다 → 마지막 sleep 직후 떨어지는 파일도 놓치지 않는다(반복횟수=타임아웃 혼동 제거).
     const start = Date.now();
     for (;;) {
+      this.assertNetworkAllowed();
       if (readdirSync(this.downloads).includes(fileName)) return true;
       const remaining = timeoutMs - (Date.now() - start);
       if (remaining <= 0) return false;
@@ -167,8 +201,15 @@ export class StagehandCdpSession implements CdpSession {
   }
 
   async close(): Promise<void> {
+    if (this.networkGuard !== undefined) {
+      await this.networkGuard.dispose().catch(() => undefined);
+      this.networkGuard = undefined;
+    }
     // ctx 가 이미 닫혔어도(abort 경로) 무응답 hang 가능 → 타임아웃 race(§9.2 PoC 발견).
     await Promise.race([this.sh.close().catch(() => undefined), sleep(3000)]);
+  }
+  private assertNetworkAllowed(): void {
+    this.networkGuard?.assertNoViolation();
   }
 }
 

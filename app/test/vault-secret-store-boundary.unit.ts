@@ -113,6 +113,7 @@ const ALLOW_PAIRS: ReadonlyArray<[RuntimeIdentity, SecretAccessRequest["purpose"
   ["browser-worker", "browser_session"],
   ["llm-gateway", "gateway_policy"],
   ["artifact-lifecycle", "object_store"],
+  ["notification-sender", "notification"],
   ["connector-runtime", "connector"],
 ];
 
@@ -124,6 +125,9 @@ const DENY_PAIRS: ReadonlyArray<[RuntimeIdentity, SecretAccessRequest["purpose"]
   ["artifact-lifecycle", "executor"],
   ["artifact-lifecycle", "browser_session"],
   ["runtime-worker", "gateway_policy"],
+  ["runtime-worker", "notification"],
+  ["api", "notification"],
+  ["notification-sender", "connector"],
   ["connector-runtime", "resume_token_hmac"],
 ];
 
@@ -240,6 +244,15 @@ async function main(): Promise<void> {
       const boundary = makeNs(store, new FakeAuditWriter());
       const secret = await boundary.resolveAuthorized(request("runtime-worker", "executor", "rpa/staging/runtime-worker/executor/hiworks_pw"));
       check("namespace: 정당 executor ref → resolve", String(secret) === SECRET_VALUE && store.resolved.length === 1);
+    }
+
+    {
+      const store = new FakeSecretStore();
+      const boundary = makeNs(store, new FakeAuditWriter());
+      const secret = await boundary.resolveAuthorized(
+        request("notification-sender", "notification", "rpa/staging/notification-sender/notification/webhook/ops-primary"),
+      );
+      check("namespace: 정당 notification ref → resolve", String(secret) === SECRET_VALUE && store.resolved.length === 1);
     }
 
     // 5c) path-traversal 세그먼트(..) → DENY.

@@ -335,7 +335,7 @@ export function TriggerScheduler({
               <strong>{selectedScenario?.name ?? lastSaved.scenario_version_id}</strong>
               <span>{triggerSummary(lastSaved)}</span>
               <span>{triggerSecondary(lastSaved)}</span>
-              {lastSaved.trigger_type === "webhook" && <span>외부 시스템 연결 주소 준비됨</span>}
+              {lastSaved.trigger_type === "webhook" && <span>수신 트리거 저장됨 · 외부 시스템 등록은 별도</span>}
             </div>
           )}
         </section>

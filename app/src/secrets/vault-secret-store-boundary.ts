@@ -38,6 +38,7 @@ export type RuntimeIdentity =
   | "browser-worker"
   | "llm-gateway"
   | "artifact-lifecycle"
+  | "notification-sender"
   | "connector-runtime";
 
 type ResolvePurpose = SecretAccessRequest["purpose"];
@@ -56,6 +57,7 @@ const RESOLVE_MATRIX: Readonly<Record<RuntimeIdentity, readonly ResolvePurpose[]
   "browser-worker": ["executor", "browser_session"],
   "llm-gateway": ["gateway_policy"],
   "artifact-lifecycle": ["object_store"],
+  "notification-sender": ["notification"],
   "connector-runtime": ["connector"],
 };
 

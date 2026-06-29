@@ -11,6 +11,9 @@ import { navigate, type ViewKey } from "../router";
 import type {
   AutomationPerformanceReport,
   AutomationPerformanceReportExportFormat,
+  AutomationPerformanceRoiSource,
+  AutomationPerformanceRoiSourceLineage,
+  AutomationPerformanceRoiStage,
   DeadLetterItem,
   HumanTaskItem,
   OpsAlertItem,
@@ -471,6 +474,8 @@ function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
   if (source === "trigger_fire") return "트리거 발화";
   if (source === "failure_spike") return "실패 급증";
   if (source === "bot_pool") return "Bot Pool";
+  if (source === "scim_secret_rotation") return "SCIM SecretRef";
+  if (source === "audit_verifier") return "감사 체인";
   return "재처리 대기";
 }
 
@@ -511,8 +516,296 @@ function ratioLabel(value: number | null): string {
   return value === null ? "-" : `${compactNumber(value, 1)}x`;
 }
 
+type CompactMixTone = "blue" | "green" | "amber" | "purple" | "muted";
+
+type CompactMixItem = {
+  readonly key: string;
+  readonly label: string;
+  readonly count: number;
+  readonly tone: CompactMixTone;
+};
+
+type ModelCostDayTrend = {
+  readonly day: string;
+  readonly cost: number | null;
+  readonly rowCount: number;
+  readonly nullCostRows: number;
+};
+
+const ROI_SOURCE_ORDER: readonly AutomationPerformanceRoiSource[] = ["process_mining", "task_mining", "manual", "imported"];
+
+const ROI_SOURCE_LABELS: Record<AutomationPerformanceRoiSource, string> = {
+  manual: "manual",
+  process_mining: "process mining",
+  task_mining: "task mining",
+  imported: "imported",
+};
+
+const ROI_SOURCE_TONES: Record<AutomationPerformanceRoiSource, CompactMixTone> = {
+  manual: "green",
+  process_mining: "blue",
+  task_mining: "purple",
+  imported: "amber",
+};
+
+const ROI_STAGE_ORDER: readonly AutomationPerformanceRoiStage[] = ["approved", "build", "operate"];
+
+const ROI_STAGE_LABELS: Record<AutomationPerformanceRoiStage, string> = {
+  approved: "approved",
+  build: "build",
+  operate: "operate",
+};
+
+const ROI_STAGE_TONES: Record<AutomationPerformanceRoiStage, CompactMixTone> = {
+  approved: "green",
+  build: "blue",
+  operate: "amber",
+};
+
 function confidenceLabel(value: AutomationPerformanceReport["summary"]["roi_confidence"]): string {
   return `H${value.high}/M${value.medium}/L${value.low}`;
+}
+
+function decisionSignalLabel(value: AutomationPerformanceReport["summary"]["decision_signal"]): string {
+  if (value.status === "expand") return "Expand";
+  if (value.status === "hold") return "Hold";
+  return "Watch";
+}
+
+function roiActualsValue(value: AutomationPerformanceReport["summary"]["roi_actuals"]): string {
+  if (value.evidence_count === 0) return "No actuals";
+  if (value.estimated_transaction_count === 0) return `${compactNumber(value.actual_transaction_count)} actual tx`;
+  return `${compactNumber(value.comparable_actual_transaction_count)}/${compactNumber(value.estimated_transaction_count)} tx`;
+}
+
+function roiActualsNote(value: AutomationPerformanceReport["summary"]["roi_actuals"]): string {
+  if (value.evidence_count === 0) return "evidence 0";
+  if (value.estimated_transaction_count === 0) return `no estimate · fail ${percentLabel(value.actual_failure_rate)}`;
+  return `attain ${percentLabel(value.transaction_attainment_rate)} · actual ${compactNumber(value.actual_transaction_count)}`;
+}
+
+function roiActualsTitle(value: AutomationPerformanceReport["summary"]["roi_actuals"]): string {
+  if (value.evidence_count === 0) return "No ROI actual evidence for this report period";
+  return [
+    `evidence ${compactNumber(value.evidence_count)}`,
+    `comparable/estimate ${compactNumber(value.comparable_actual_transaction_count)}/${compactNumber(value.estimated_transaction_count)}`,
+    `total actual ${compactNumber(value.actual_transaction_count)}`,
+    `attainment ${percentLabel(value.transaction_attainment_rate)}`,
+    `failure ${percentLabel(value.comparable_actual_failure_rate)} vs estimate ${percentLabel(value.estimated_exception_rate)}`,
+    `total actual failure ${percentLabel(value.actual_failure_rate)}`,
+    `delta ${percentLabel(value.failure_rate_delta)}`,
+    `human ${compactNumber(value.human_intervention_minutes, 1)}m`,
+    `rework ${compactNumber(value.reprocessing_minutes, 1)}m`,
+    `latest ${value.latest_period_end ?? "-"}`,
+  ].join(" · ");
+}
+
+function compactTextList(values: readonly string[], limit: number): string {
+  const unique = [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+  if (unique.length === 0) return "";
+  const head = unique.slice(0, limit).join(", ");
+  const remaining = unique.length - limit;
+  return remaining > 0 ? `${head} 외 ${compactNumber(remaining)}` : head;
+}
+
+function roiLineageSourceLabel(lineage: AutomationPerformanceRoiSourceLineage): string {
+  const parts = ROI_SOURCE_ORDER
+    .map((source) => ({ source, count: lineage.source_counts[source] }))
+    .filter((item) => item.count > 0)
+    .map((item) => `${ROI_SOURCE_LABELS[item.source]} ${compactNumber(item.count)}`);
+  if (parts.length > 0) return parts.join(" · ");
+  return lineage.idea_count > 0 ? `${compactNumber(lineage.idea_count)}건` : "근거 없음";
+}
+
+function roiLineageMeta(lineage: AutomationPerformanceRoiSourceLineage): string {
+  const departments = compactTextList(lineage.departments, 2);
+  const owners = compactTextList(lineage.business_owners, 2);
+  const parts: string[] = [];
+  if (departments.length > 0) parts.push(`부서 ${departments}`);
+  if (owners.length > 0) parts.push(`오너 ${owners}`);
+  return parts.length > 0 ? parts.join(" · ") : `${compactNumber(lineage.idea_count)}건`;
+}
+
+function roiLineageTitle(
+  lineage: AutomationPerformanceRoiSourceLineage,
+  confidence: AutomationPerformanceReport["summary"]["roi_confidence"],
+): string {
+  const sampleTitles = compactTextList(lineage.sample_ideas.map((idea) => idea.title), 3);
+  const sampleText = sampleTitles.length > 0 ? ` · 샘플 ${sampleTitles}` : "";
+  return `${roiLineageSourceLabel(lineage)} · ${roiLineageMeta(lineage)} · 신뢰도 ${confidenceLabel(confidence)}${sampleText}`;
+}
+
+function safeMixCount(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function compactMixTotal(items: readonly CompactMixItem[]): number {
+  return items.reduce((sum, item) => sum + item.count, 0);
+}
+
+function compactMixPercent(count: number, total: number): string {
+  return total > 0 ? percentLabel(count / total) : "0%";
+}
+
+function compactMixAriaLabel(chartName: string, items: readonly CompactMixItem[]): string {
+  const total = compactMixTotal(items);
+  const detail = items
+    .map((item) => `${item.label} ${compactNumber(item.count)} (${compactMixPercent(item.count, total)})`)
+    .join(", ");
+  return `${chartName}. total ${compactNumber(total)}. ${detail}`;
+}
+
+function CompactHorizontalBarSummary({
+  title,
+  items,
+  ariaLabel,
+}: {
+  title: string;
+  items: readonly CompactMixItem[];
+  ariaLabel: string;
+}): JSX.Element {
+  const total = compactMixTotal(items);
+  return (
+    <div className="performance-viz-card">
+      <div className="performance-viz-head">
+        <h3>{title}</h3>
+        <strong>{compactNumber(total)}건</strong>
+      </div>
+      <div className="compact-bar" role="img" aria-label={ariaLabel}>
+        {total === 0 ? (
+          <span className="compact-bar-empty" aria-hidden="true">0</span>
+        ) : (
+          items.map((item) => (
+            <span
+              key={item.key}
+              className={`compact-bar-segment ${item.tone}`}
+              style={{ width: `${(item.count / total) * 100}%` }}
+              aria-hidden="true"
+            />
+          ))
+        )}
+      </div>
+      <ul className="compact-bar-legend" aria-hidden="true">
+        {items.map((item) => (
+          <li key={item.key}>
+            <span className={`compact-bar-dot ${item.tone}`} />
+            <span>{item.label}</span>
+            <strong>{compactNumber(item.count)} · {compactMixPercent(item.count, total)}</strong>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RoiSourceMixChart({ lineage }: { lineage: AutomationPerformanceRoiSourceLineage }): JSX.Element {
+  const items: readonly CompactMixItem[] = ROI_SOURCE_ORDER.map((source) => ({
+    key: source,
+    label: ROI_SOURCE_LABELS[source],
+    count: safeMixCount(lineage.source_counts[source]),
+    tone: ROI_SOURCE_TONES[source],
+  }));
+  return (
+    <CompactHorizontalBarSummary
+      title="ROI source mix"
+      items={items}
+      ariaLabel={compactMixAriaLabel("ROI source mix chart", items)}
+    />
+  );
+}
+
+function RoiStageMixChart({ lineage }: { lineage: AutomationPerformanceRoiSourceLineage }): JSX.Element {
+  const items: readonly CompactMixItem[] = ROI_STAGE_ORDER.map((stage) => ({
+    key: stage,
+    label: ROI_STAGE_LABELS[stage],
+    count: safeMixCount(lineage.stage_counts[stage]),
+    tone: ROI_STAGE_TONES[stage],
+  }));
+  return (
+    <CompactHorizontalBarSummary
+      title="ROI stage mix"
+      items={items}
+      ariaLabel={compactMixAriaLabel("ROI stage mix chart", items)}
+    />
+  );
+}
+
+function aggregateModelCostByDay(
+  trends: AutomationPerformanceReport["model_cost_trends"],
+): readonly ModelCostDayTrend[] {
+  const byDay = new Map<string, { cost: number; hasKnownCost: boolean; rowCount: number; nullCostRows: number }>();
+  for (const row of trends) {
+    const current = byDay.get(row.day) ?? { cost: 0, hasKnownCost: false, rowCount: 0, nullCostRows: 0 };
+    current.rowCount += 1;
+    if (row.cost === null || !Number.isFinite(row.cost)) {
+      current.nullCostRows += 1;
+    } else {
+      current.cost += row.cost;
+      current.hasKnownCost = true;
+    }
+    byDay.set(row.day, current);
+  }
+  return [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, value]) => ({
+      day,
+      cost: value.hasKnownCost ? value.cost : null,
+      rowCount: value.rowCount,
+      nullCostRows: value.nullCostRows,
+    }));
+}
+
+function modelCostKnownTotal(days: readonly ModelCostDayTrend[]): number {
+  return days.reduce((sum, day) => sum + (day.cost ?? 0), 0);
+}
+
+function modelCostMissingRows(days: readonly ModelCostDayTrend[]): number {
+  return days.reduce((sum, day) => sum + day.nullCostRows, 0);
+}
+
+function modelCostTrendAriaLabel(days: readonly ModelCostDayTrend[]): string {
+  const total = modelCostKnownTotal(days);
+  const missingRows = modelCostMissingRows(days);
+  const latest = days[days.length - 1];
+  const latestText = latest === undefined
+    ? "latest empty"
+    : latest.cost === null
+      ? `latest ${latest.day} missing cost`
+      : `latest ${latest.day} ${moneyLabel(latest.cost)}`;
+  return `Model cost trend chart. ${compactNumber(days.length)} days, total ${moneyLabel(total)}, missing costs ${compactNumber(missingRows)}. ${latestText}`;
+}
+
+function ModelCostTrendMini({
+  trends,
+}: {
+  trends: AutomationPerformanceReport["model_cost_trends"];
+}): JSX.Element {
+  const days = aggregateModelCostByDay(trends).slice(-7);
+  const total = modelCostKnownTotal(days);
+  const missingRows = modelCostMissingRows(days);
+  const note = days.length === 0
+    ? "0일 · 비용 데이터 없음 · 미집계 0건"
+    : `${compactNumber(days.length)}일 · 미집계 ${compactNumber(missingRows)}건`;
+  return (
+    <div className="performance-viz-card">
+      <div className="performance-viz-head">
+        <h3>Model cost trend</h3>
+        <strong>합계</strong>
+      </div>
+      <div className="model-cost-mini">
+        <span>
+          <strong>{moneyLabel(total)}</strong>
+          <span className="subtle">{note}</span>
+        </span>
+        <Sparkline
+          points={days.map((day) => ({ label: day.day, value: day.cost }))}
+          ariaLabel={modelCostTrendAriaLabel(days)}
+          width={150}
+          height={32}
+        />
+      </div>
+    </div>
+  );
 }
 
 function ReportMetric({ label, value, note }: { label: string; value: string; note: string }): JSX.Element {
@@ -521,6 +814,52 @@ function ReportMetric({ label, value, note }: { label: string; value: string; no
       <span className="label">{label}</span>
       <strong>{value}</strong>
       <span className="subtle">{note}</span>
+    </span>
+  );
+}
+
+function RoiSourceLineageMetric({
+  lineage,
+  confidence,
+}: {
+  lineage: AutomationPerformanceRoiSourceLineage;
+  confidence: AutomationPerformanceReport["summary"]["roi_confidence"];
+}): JSX.Element {
+  return (
+    <span className="metric-card" title={roiLineageTitle(lineage, confidence)}>
+      <span className="label">ROI 근거</span>
+      <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{roiLineageSourceLabel(lineage)}</strong>
+      <span className="subtle" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{roiLineageMeta(lineage)}</span>
+    </span>
+  );
+}
+
+function RoiSourceLineage({
+  lineage,
+  confidence,
+}: {
+  lineage: AutomationPerformanceRoiSourceLineage;
+  confidence: AutomationPerformanceReport["summary"]["roi_confidence"];
+}): JSX.Element {
+  return (
+    <span
+      title={roiLineageTitle(lineage, confidence)}
+      style={{ display: "inline-grid", gap: 2, maxWidth: 240, minWidth: 0, verticalAlign: "middle" }}
+    >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{roiLineageSourceLabel(lineage)}</span>
+      <span className="subtle" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{roiLineageMeta(lineage)}</span>
+    </span>
+  );
+}
+
+function RoiActualsInline({ actuals }: { actuals: AutomationPerformanceReport["summary"]["roi_actuals"] }): JSX.Element {
+  return (
+    <span
+      title={roiActualsTitle(actuals)}
+      style={{ display: "inline-grid", gap: 2, maxWidth: 220, minWidth: 0, verticalAlign: "middle" }}
+    >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{roiActualsValue(actuals)}</span>
+      <span className="subtle" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{roiActualsNote(actuals)}</span>
     </span>
   );
 }
@@ -557,6 +896,7 @@ function AutomationPerformancePanel({
   const topWorkflows = report?.by_workflow.slice(0, 5) ?? [];
   const recentTrends = report?.trends.slice(-7) ?? [];
   const topCostModels = report?.cost_by_model.slice(0, 3) ?? [];
+  const recentModelCostTrends = report?.model_cost_trends.slice(-7) ?? [];
   return (
     <section className="panel performance-report-panel" aria-label="월간 자동화 성과 리포트">
       <div className="panel-head">
@@ -598,6 +938,14 @@ function AutomationPerformancePanel({
             <ReportMetric label="Gateway 비용" value={moneyLabel(report.summary.gateway_cost)} note={`${compactNumber(report.summary.total_runs)}건 실행`} />
             <ReportMetric label="순가치" value={moneyLabel(report.summary.net_value)} note={`${ratioLabel(report.summary.value_to_cost_ratio)} value/cost`} />
             <ReportMetric label="LLM 비용" value={nullableMoneyLabel(report.summary.llm_call_cost)} note={`delta ${nullableMoneyLabel(report.summary.run_vs_call_cost_delta)}`} />
+            <RoiSourceLineageMetric lineage={report.summary.roi_source_lineage} confidence={report.summary.roi_confidence} />
+            <ReportMetric label="ROI actuals" value={roiActualsValue(report.summary.roi_actuals)} note={roiActualsNote(report.summary.roi_actuals)} />
+            <ReportMetric label="판단" value={decisionSignalLabel(report.summary.decision_signal)} note={report.summary.decision_signal.reason} />
+          </div>
+          <div className="performance-compact-visuals">
+            <RoiSourceMixChart lineage={report.summary.roi_source_lineage} />
+            <RoiStageMixChart lineage={report.summary.roi_source_lineage} />
+            <ModelCostTrendMini trends={report.model_cost_trends} />
           </div>
           {recentTrends.length > 0 && (
             <div className="table-wrap performance-workflow-table">
@@ -623,6 +971,34 @@ function AutomationPerformancePanel({
                       <td>{moneyLabel(row.gateway_cost)}</td>
                       <td>{nullableMoneyLabel(row.avg_cost_per_run)}</td>
                       <td>{nullableMoneyLabel(row.cost_delta_from_previous_day)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {recentModelCostTrends.length > 0 && (
+            <div className="table-wrap performance-workflow-table">
+              <table aria-label="Model cost daily trends">
+                <thead>
+                  <tr>
+                    <th scope="col">일자</th>
+                    <th scope="col">모델</th>
+                    <th scope="col">Calls</th>
+                    <th scope="col">비용</th>
+                    <th scope="col">일 비중</th>
+                    <th scope="col">Delta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentModelCostTrends.map((row) => (
+                    <tr key={`${row.day}-${row.model}`}>
+                      <th scope="row">{row.day}</th>
+                      <td><code>{row.model}</code></td>
+                      <td>{compactNumber(row.calls)}</td>
+                      <td>{nullableMoneyLabel(row.cost)}</td>
+                      <td>{percentLabel(row.cost_share_of_day)}</td>
+                      <td>{nullableMoneyLabel(row.cost_delta_from_previous_day_for_model)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -671,13 +1047,15 @@ function AutomationPerformancePanel({
                     <th scope="col">순가치</th>
                     <th scope="col">비용</th>
                     <th scope="col">Cost/run</th>
+                    <th scope="col">ROI actuals</th>
                     <th scope="col">ROI 근거</th>
+                    <th scope="col">판단</th>
                   </tr>
                 </thead>
                 <tbody>
                   {topWorkflows.length === 0 ? (
                     <tr>
-                      <td colSpan={8}>표시할 업무별 성과가 없습니다.</td>
+                      <td colSpan={10}>표시할 업무별 성과가 없습니다.</td>
                     </tr>
                   ) : (
                     topWorkflows.map((row) => (
@@ -689,7 +1067,9 @@ function AutomationPerformancePanel({
                         <td>{moneyLabel(row.net_value)} · {ratioLabel(row.value_to_cost_ratio)}</td>
                         <td>{moneyLabel(row.gateway_cost)}</td>
                         <td>{nullableMoneyLabel(row.cost_per_completed_run)}</td>
-                        <td>{compactNumber(row.roi_idea_count)} · {confidenceLabel(row.roi_confidence)}</td>
+                        <td><RoiActualsInline actuals={row.roi_actuals} /></td>
+                        <td><RoiSourceLineage lineage={row.roi_source_lineage} confidence={row.roi_confidence} /></td>
+                        <td>{decisionSignalLabel(row.decision_signal)}</td>
                       </tr>
                     ))
                   )}

@@ -3,6 +3,12 @@ asyncapi: '2.6.0'
 info:
   title: RPA Enterprise Platform Run Events
   version: '1.3.0'
+  contact:
+    name: RPA Platform Owners
+    url: https://example.invalid/rpa-platform
+    email: rpa-platform@example.invalid
+  license:
+    name: Proprietary
   description: |
     Tenant-scoped run event bus contract. Channels map 1:1 to the event_type
     enum in schema/event-envelope.schema.json. Payload bodies are closed empty
@@ -11,6 +17,16 @@ info:
     not stored in tenant-scoped events_outbox.
 
 defaultContentType: application/json
+
+servers:
+  tenantEventOutbox:
+    url: events_outbox
+    protocol: postgres
+    description: Tenant-scoped events_outbox relay source; concrete brokers are deployment-owned.
+
+tags:
+  - name: RunEvents
+    description: Tenant-scoped run, step, human-task, workitem, pipeline, sink, and site-circuit event channels.
 
 x-envelope-correlation-contract:
   required:

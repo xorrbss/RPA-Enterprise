@@ -104,23 +104,27 @@ function notificationRoutingBadge(rows: readonly NotificationRoutingRow[], isLoa
   if (isError) return "조회 실패";
   if (isLoading) return "동기화 중";
   if (rows.length === 0) return "계약 필요";
+  const blocked = rows.filter((row) => row.status === "blocked").length;
+  if (blocked > 0) return `외부 발송 보류 ${blocked}건`;
   const adminRequired = rows.filter((row) => row.status === "requires_admin").length;
   if (adminRequired > 0) return `승인 필요 ${adminRequired}건`;
+  const candidate = rows.filter((row) => row.status === "candidate").length;
+  if (candidate > 0) return `검토 후보 ${candidate}건`;
   return `${rows.length}개 경로`;
 }
 
 function connectorActionLabel(connector: ConnectorCatalogItem): string {
-  if (connector.status === "available") return "알림 발송에 사용할 수 있습니다.";
+  if (connector.status === "available") return "SecretRef 기반 알림 발송에 사용할 수 있습니다.";
   if (connector.status === "requires_admin") return "관리자 승인 후 알림 발송에 사용할 수 있습니다.";
-  if (connector.status === "blocked") return "외부 발송은 아직 어댑터 계약이 필요합니다.";
-  return "도입 후보로 검토 중입니다.";
+  if (connector.status === "blocked") return "외부 발송은 future 알림 계약이 열릴 때까지 보류됩니다.";
+  return "owner/provider 증거가 필요한 도입 후보입니다.";
 }
 
 function templateActionLabel(template: TemplateCatalogItem): string {
-  if (template.status === "available") return "실패, SLA, 사람 작업 알림에 사용할 수 있습니다.";
+  if (template.status === "available") return "실패, SLA, 사람 작업 알림을 웹훅 시도로 큐잉할 수 있습니다.";
   if (template.status === "requires_admin") return "관리자 승인 후 알림 워크플로로 사용할 수 있습니다.";
-  if (template.status === "blocked") return "현재는 콘솔 알림 센터 기준으로만 확인합니다.";
-  return "알림 워크플로 후보로 검토 중입니다.";
+  if (template.status === "blocked") return "현재는 콘솔 알림 센터에만 기록하고 외부 전송은 하지 않습니다.";
+  return "owner/provider 증거가 필요한 알림 워크플로 후보입니다.";
 }
 
 function secretRequirementLabel(count: number): string {

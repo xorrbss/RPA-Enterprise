@@ -65,8 +65,8 @@ export async function deliverNormalizedRecord(deps: SinkDeliveryDeps, input: Del
     // FIX#7: sink_idempotency_key는 normalized_records 행의 schema_ref/natural_key에서 산출한다 —
     // 호출 페이로드를 신뢰하면 stale/오타 잡이 같은 레코드에 다른 외부 키를 보내 다운스트림 dedup이 깨진다.
     // 행은 (tenant_id, schema_ref, natural_key) UNIQUE이므로 키는 행의 순수 함수다. 미존재면 throw(조용한 skip 금지).
-    const rec = await c.query<{ schema_ref: string; natural_key: string }>(
-      `SELECT schema_ref, natural_key FROM normalized_records WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+    const rec = await c.query<{ schema_ref: string; natural_key: string; record: unknown }>(
+      `SELECT schema_ref, natural_key, record FROM normalized_records WHERE tenant_id=$1::uuid AND id=$2::uuid`,
       [input.tenantId, input.normalizedRecordId],
     );
     const row = rec.rows[0];
@@ -103,7 +103,15 @@ export async function deliverNormalizedRecord(deps: SinkDeliveryDeps, input: Del
        VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::int,$6,'pending')`,
       [id, input.tenantId, input.normalizedRecordId, input.sinkConfigId, attemptNo, key],
     );
-    return { alreadyDelivered: false as const, attemptNo, id, key };
+    return {
+      alreadyDelivered: false as const,
+      attemptNo,
+      id,
+      key,
+      schemaRef: row.schema_ref,
+      naturalKey: row.natural_key,
+      record: row.record,
+    };
   });
 
   const key = claim.key;
@@ -117,15 +125,19 @@ export async function deliverNormalizedRecord(deps: SinkDeliveryDeps, input: Del
     { sink: input.sinkConfigId, attempt_no: claim.attemptNo, status: "pending" },
     async (span) => {
       // port: 트랜잭션 밖 네트워크 전송(실 전송은 외부 경계). 멱등키를 외부 Idempotency-Key로 전달.
+      // Port exceptions must still finalize the pending attempt; otherwise an infra/SecretRef failure can strand rows.
       const decision = await deps.port.deliver({
         tenantId: input.tenantId as TenantId,
         correlationId: input.correlationId as CorrelationId,
         sinkConfigId: input.sinkConfigId,
         sinkIdempotencyKey: key,
         normalizedRecordId: input.normalizedRecordId,
+        schemaRef: claim.schemaRef,
+        naturalKey: claim.naturalKey,
+        record: claim.record,
         attemptNo: claim.attemptNo,
         portBinding: deps.port.binding,
-      });
+      }).catch(() => ({ kind: "transient_failed" as const, reason: "sink_port_exception" }));
 
       // tx B: status CAS finalize + 이벤트
       const outcome = await withTenantTx(deps.pool, input.tenantId, async (c) => {

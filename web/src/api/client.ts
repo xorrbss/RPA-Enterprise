@@ -1,6 +1,9 @@
 // 주입형 ApiClient 포트 + HTTP 구현. 테스트는 동일 인터페이스의 fake를 주입(백엔드 무의존).
 import {
   ApiError,
+  type AiGovernanceEvidence,
+  type AiGovernanceEvidenceListParams,
+  type AiGovernanceEvidenceRequest,
   type BrowserRecordingAppendEventsBody,
   type BrowserRecordingAppendResult,
   type BrowserRecordingEvent,
@@ -10,8 +13,14 @@ import {
   type BotPoolItem,
   type AuditLogItem,
   type AuditLogExportParams,
+  type AuditVerificationRun,
+  type AuditVerificationRunListParams,
   type AutomationPerformanceReport,
   type AuditLogListParams,
+  type AutomationAdoptionEvidenceItem,
+  type AutomationAdoptionEvidenceListParams,
+  type AutomationAdoptionEvidencePage,
+  type AutomationAdoptionEvidenceRequest,
   type AuthReadiness,
   type AutomationIdeaCreateBody,
   type AutomationIdeaItem,
@@ -29,6 +38,7 @@ import {
   type DeadLetterItem,
   type ReplayAllDlqResult,
   type DocumentExtraction,
+  type ExternalDocumentExtractionBody,
   type DocumentJobCreateBody,
   type DocumentJobItem,
   type DocumentJobListParams,
@@ -41,15 +51,31 @@ import {
   type GenerationArtifactItem,
   type HumanTaskItem,
   type HumanTaskResolution,
+  type IntegrationHandoff,
+  type IntegrationHandoffCallbackRequest,
+  type IntegrationHandoffCreateRequest,
+  type IntegrationHandoffDispatchAttempt,
+  type IntegrationHandoffDispatchRequest,
+  type IntegrationHandoffListParams,
   type ListParams,
+  type OpsNotificationAttempt,
+  type OpsNotificationDelivery,
+  type OpsNotificationDeliveryRequest,
+  type OpsNotificationWebhookSendRequest,
   type OpsAlertItem,
   type OpsAlertListParams,
   type OpsHealth,
   type Paginated,
+  type ProductionReadiness,
+  type ProductionReadinessEvidence,
+  type ProductionReadinessEvidenceRequest,
+  type ProductionReadinessEvidenceType,
   type PromoteFromRunResult,
   type PrincipalItem,
   type PrioritizeRunBody,
   type PrioritizeRunResult,
+  type RoiActualEvidence,
+  type RoiActualEvidenceRequest,
   type RoiEstimate,
   type RoiEstimateRequest,
   type RerunRunBody,
@@ -72,6 +98,12 @@ import {
   type ScenarioGenerationRequest,
   type ScenarioGenerationRunRequest,
   type ScenarioGenerationResult,
+  type ScimGroupRoleMappingImportBody,
+  type ScimGroupRoleMappingImportResult,
+  type ScimGroupRoleMappingItem,
+  type ScimProviderCreateBody,
+  type ScimProviderUpdateBody,
+  type ScimProviderItem,
   type ScenarioItem,
   type PromotionRequest,
   type ConcurrencyPolicy,
@@ -87,6 +119,7 @@ import {
   type ScenarioReleaseTarget,
   type RunArtifactItem,
   type ScenarioMutationResult,
+  type ScenarioVersionGovernanceStageBody,
   type ScenarioVersionItem,
   type SiteCreateResult,
   type SiteElementCreateBody,
@@ -103,6 +136,8 @@ import {
   type TemplateCatalogListParams,
   type ValidationResult,
   type WorkitemItem,
+  type ScimProviderDecommissionBody,
+  type ScimProviderDecommissionResult,
 } from "./types";
 
 export interface ApiClient {
@@ -128,7 +163,16 @@ export interface ApiClient {
   resumeRunTrigger(triggerId: string, idempotencyKey: string): Promise<RunTriggerItem>;
   listRunTriggerFires(triggerId: string, p?: ListParams): Promise<Paginated<RunTriggerFireItem>>;
   listOpsAlerts(p?: OpsAlertListParams): Promise<Paginated<OpsAlertItem>>;
+  ackOpsAlert(alertId: string, idempotencyKey: string, comment?: string): Promise<OpsAlertItem>;
+  listOpsAlertDeliveries(alertId: string, p?: ListParams): Promise<Paginated<OpsNotificationDelivery>>;
+  recordOpsAlertDelivery(alertId: string, body: OpsNotificationDeliveryRequest, idempotencyKey: string): Promise<OpsNotificationDelivery>;
+  sendOpsAlertWebhookDelivery(alertId: string, body: OpsNotificationWebhookSendRequest, idempotencyKey: string): Promise<OpsNotificationAttempt>;
   getOpsHealth(): Promise<OpsHealth>;
+  getProductionReadiness(): Promise<ProductionReadiness>;
+  listProductionReadinessEvidence(p?: ListParams & { evidence_type?: ProductionReadinessEvidenceType }): Promise<Paginated<ProductionReadinessEvidence>>;
+  recordProductionReadinessEvidence(body: ProductionReadinessEvidenceRequest, idempotencyKey: string): Promise<ProductionReadinessEvidence>;
+  listAiGovernanceEvidence(p?: AiGovernanceEvidenceListParams): Promise<Paginated<AiGovernanceEvidence>>;
+  recordAiGovernanceEvidence(body: AiGovernanceEvidenceRequest, idempotencyKey: string): Promise<AiGovernanceEvidence>;
   listBotPools(p?: ListParams): Promise<Paginated<BotPoolItem>>;
   getAutomationPerformanceReport(month?: string): Promise<AutomationPerformanceReport>;
   exportAutomationPerformanceReportCsv(month?: string): Promise<string>;
@@ -137,13 +181,20 @@ export interface ApiClient {
   listAutomationIdeas(p?: AutomationIdeaListParams): Promise<Paginated<AutomationIdeaItem>>;
   listAuditLog(p?: AuditLogListParams): Promise<Paginated<AuditLogItem>>;
   exportAuditLogCsv(p?: AuditLogExportParams): Promise<string>;
+  listAuditVerificationRuns(p?: AuditVerificationRunListParams): Promise<Paginated<AuditVerificationRun>>;
+  runAuditVerification(idempotencyKey: string, body?: { legal_hold?: boolean }): Promise<AuditVerificationRun>;
   getAuthReadiness(): Promise<AuthReadiness>;
   listConnectors(p?: ConnectorCatalogListParams): Promise<Paginated<ConnectorCatalogItem>>;
   listTemplates(p?: TemplateCatalogListParams): Promise<Paginated<TemplateCatalogItem>>;
+  listIntegrationHandoffs(p?: IntegrationHandoffListParams): Promise<Paginated<IntegrationHandoff>>;
+  createIntegrationHandoff(body: IntegrationHandoffCreateRequest, idempotencyKey: string): Promise<IntegrationHandoff>;
+  dispatchIntegrationHandoff(handoffId: string, body: IntegrationHandoffDispatchRequest, idempotencyKey: string): Promise<IntegrationHandoffDispatchAttempt>;
+  recordIntegrationHandoffCallback(handoffId: string, body: IntegrationHandoffCallbackRequest): Promise<IntegrationHandoff>;
   listDocumentJobs(p?: DocumentJobListParams): Promise<Paginated<DocumentJobItem>>;
   createDocumentJob(body: DocumentJobCreateBody, idempotencyKey: string): Promise<DocumentJobItem>;
   getDocumentJob(jobId: string): Promise<DocumentJobItem>;
   extractDocumentJob(jobId: string, idempotencyKey: string): Promise<DocumentExtraction>;
+  recordExternalDocumentExtraction(jobId: string, body: ExternalDocumentExtractionBody, idempotencyKey: string): Promise<DocumentExtraction>;
   getDocumentExtraction(jobId: string): Promise<DocumentExtraction>;
   createDocumentValidationTask(jobId: string, idempotencyKey: string): Promise<DocumentValidationTaskResult>;
   createAutomationIdea(body: AutomationIdeaCreateBody, idempotencyKey: string): Promise<AutomationIdeaItem>;
@@ -152,6 +203,14 @@ export interface ApiClient {
   transitionAutomationIdea(ideaId: string, stage: AutomationIdeaStage, idempotencyKey: string): Promise<AutomationIdeaItem>;
   upsertRoiEstimate(ideaId: string, body: RoiEstimateRequest, idempotencyKey: string): Promise<RoiEstimate>;
   getRoiEstimate(ideaId: string): Promise<RoiEstimate>;
+  listAutomationAdoptionEvidence(ideaId: string, p?: AutomationAdoptionEvidenceListParams): Promise<AutomationAdoptionEvidencePage>;
+  recordAutomationAdoptionEvidence(
+    ideaId: string,
+    body: AutomationAdoptionEvidenceRequest,
+    idempotencyKey: string,
+  ): Promise<AutomationAdoptionEvidenceItem>;
+  listRoiActualEvidence(ideaId: string, p?: ListParams): Promise<Paginated<RoiActualEvidence>>;
+  recordRoiActualEvidence(ideaId: string, body: RoiActualEvidenceRequest, idempotencyKey: string): Promise<RoiActualEvidence>;
   listSites(p?: ListParams): Promise<Paginated<SiteItem>>;
   listSiteElements(siteId: string, p?: SiteElementListParams): Promise<Paginated<SiteElementItem>>;
   createSiteElement(siteId: string, body: SiteElementCreateBody, idempotencyKey: string): Promise<SiteElementItem>;
@@ -199,6 +258,38 @@ export interface ApiClient {
   createPrincipal(body: { sub: string; display_name: string; email?: string | null }, idempotencyKey: string): Promise<PrincipalItem>;
   updatePrincipal(principalId: string, body: { display_name?: string; email?: string | null }, idempotencyKey: string): Promise<PrincipalItem>;
   deletePrincipal(principalId: string, idempotencyKey: string): Promise<unknown>;
+  listScimProviders(): Promise<Paginated<ScimProviderItem>>;
+  createScimProvider(
+    body: ScimProviderCreateBody,
+    idempotencyKey: string,
+  ): Promise<ScimProviderItem>;
+  updateScimProvider(
+    providerKey: string,
+    body: ScimProviderUpdateBody,
+    idempotencyKey: string,
+  ): Promise<ScimProviderItem>;
+  decommissionScimProvider(
+    providerKey: string,
+    body: ScimProviderDecommissionBody,
+    idempotencyKey: string,
+  ): Promise<ScimProviderDecommissionResult>;
+  listScimGroupRoleMappings(providerKey: string): Promise<Paginated<ScimGroupRoleMappingItem>>;
+  importScimGroupRoleMappings(
+    providerKey: string,
+    body: ScimGroupRoleMappingImportBody,
+    idempotencyKey: string,
+  ): Promise<ScimGroupRoleMappingImportResult>;
+  createScimGroupRoleMapping(
+    providerKey: string,
+    body: { external_group: string; role: string; description?: string | null },
+    idempotencyKey: string,
+  ): Promise<ScimGroupRoleMappingItem>;
+  updateScimGroupRoleMapping(
+    providerKey: string,
+    mappingId: string,
+    body: { role?: string; status?: "active" | "disabled"; description?: string | null },
+    idempotencyKey: string,
+  ): Promise<ScimGroupRoleMappingItem>;
   listPrincipalRoleAssignments(principalId: string, p?: ListParams): Promise<Paginated<RoleAssignmentItem>>;
   listRoleAssignments(p?: ListParams & { principal_sub?: string; role?: string; status?: string }): Promise<Paginated<RoleAssignmentItem>>;
   grantPrincipalRole(
@@ -233,6 +324,14 @@ export interface ApiClient {
   rejectScenarioRelease(releaseId: string, reason: string, idempotencyKey: string): Promise<ScenarioReleaseItem>;
   deployScenarioRelease(releaseId: string, latestVersion: number, idempotencyKey: string): Promise<ScenarioReleaseItem>;
   rollbackScenarioRelease(releaseId: string, latestVersion: number, idempotencyKey: string): Promise<ScenarioReleaseItem>;
+  certifyScenarioVersion(scenarioId: string, version: number, reason: string, expiresAt: string | null, idempotencyKey: string): Promise<ScenarioVersionItem>;
+  revokeScenarioCertification(scenarioId: string, version: number, reason: string, idempotencyKey: string): Promise<ScenarioVersionItem>;
+  setScenarioVersionGovernanceStage(
+    scenarioId: string,
+    version: number,
+    body: ScenarioVersionGovernanceStageBody,
+    idempotencyKey: string,
+  ): Promise<ScenarioVersionItem>;
   archiveScenario(scenarioId: string, version: number, idempotencyKey: string): Promise<unknown>;
   createPromotionRequest(scenarioId: string, version: number, reason: string, idempotencyKey: string): Promise<unknown>;
   listPromotionRequests(): Promise<Paginated<PromotionRequest>>;
@@ -514,7 +613,20 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     resumeRunTrigger: (triggerId, key) => post(`/v1/run-triggers/${triggerId}/resume`, key),
     listRunTriggerFires: (triggerId, p) => get(`/v1/run-triggers/${triggerId}/fires${queryString(p)}`),
     listOpsAlerts: (p) => get(`/v1/ops-alerts${queryString(p)}`),
+    ackOpsAlert: (alertId, idempotencyKey, comment) =>
+      post(`/v1/ops-alerts/${encodeURIComponent(alertId)}/ack`, idempotencyKey, comment !== undefined ? { comment } : {}),
+    listOpsAlertDeliveries: (alertId, p) =>
+      get(`/v1/ops-alerts/${encodeURIComponent(alertId)}/deliveries${queryString(p)}`),
+    recordOpsAlertDelivery: (alertId, body, idempotencyKey) =>
+      post(`/v1/ops-alerts/${encodeURIComponent(alertId)}/deliveries`, idempotencyKey, body),
+    sendOpsAlertWebhookDelivery: (alertId, body, idempotencyKey) =>
+      post(`/v1/ops-alerts/${encodeURIComponent(alertId)}/deliveries/send-webhook`, idempotencyKey, body),
     getOpsHealth: () => get(`/v1/ops/health`),
+    getProductionReadiness: () => get(`/v1/ops/production-readiness`),
+    listProductionReadinessEvidence: (p) => get(`/v1/ops/production-readiness/evidence${queryString(p)}`),
+    recordProductionReadinessEvidence: (body, idempotencyKey) => post(`/v1/ops/production-readiness/evidence`, idempotencyKey, body),
+    listAiGovernanceEvidence: (p) => get(`/v1/ai-governance/evidence${queryString(p)}`),
+    recordAiGovernanceEvidence: (body, idempotencyKey) => post(`/v1/ai-governance/evidence`, idempotencyKey, body),
     listBotPools: (p) => get(`/v1/bot-pools${queryString(p)}`),
     getAutomationPerformanceReport: (month) =>
       get(`/v1/reports/automation-performance${queryString(month !== undefined ? { month } : undefined)}`),
@@ -533,13 +645,20 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listAutomationIdeas: (p) => get(`/v1/automation-ideas${queryString(p)}`),
     listAuditLog: (p) => get(`/v1/audit-log${queryString(p)}`),
     exportAuditLogCsv: (p) => getText(`/v1/audit-log/export${queryString({ ...p, format: "csv" })}`, "text/csv"),
+    listAuditVerificationRuns: (p) => get(`/v1/audit-log/verification-runs${queryString(p)}`),
+    runAuditVerification: (idempotencyKey, body) => post(`/v1/audit-log/verification-runs/verify`, idempotencyKey, body ?? {}),
     getAuthReadiness: () => get(`/v1/auth/readiness`),
     listConnectors: (p) => get(`/v1/connectors${queryString(p)}`),
     listTemplates: (p) => get(`/v1/templates${queryString(p)}`),
+    listIntegrationHandoffs: (p) => get(`/v1/integration-handoffs${queryString(p)}`),
+    createIntegrationHandoff: (body, key) => post(`/v1/integration-handoffs`, key, body),
+    dispatchIntegrationHandoff: (handoffId, body, key) => post(`/v1/integration-handoffs/${handoffId}/dispatch`, key, body),
+    recordIntegrationHandoffCallback: (handoffId, body) => send("POST", `/v1/integration-handoffs/${handoffId}/callback`, body),
     listDocumentJobs: (p) => get(`/v1/document-jobs${queryString(p)}`),
     createDocumentJob: (body, key) => post(`/v1/document-jobs`, key, body),
     getDocumentJob: (jobId) => get(`/v1/document-jobs/${jobId}`),
     extractDocumentJob: (jobId, key) => post(`/v1/document-jobs/${jobId}/extract`, key),
+    recordExternalDocumentExtraction: (jobId, body, key) => post(`/v1/document-jobs/${jobId}/external-extractions`, key, body),
     getDocumentExtraction: (jobId) => get(`/v1/document-jobs/${jobId}/extraction`),
     createDocumentValidationTask: (jobId, key) => post(`/v1/document-jobs/${jobId}/validation-task`, key),
     createAutomationIdea: (body, key) => post(`/v1/automation-ideas`, key, body),
@@ -549,6 +668,12 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     transitionAutomationIdea: (ideaId, stage, key) => post(`/v1/automation-ideas/${ideaId}/transition`, key, { stage }),
     upsertRoiEstimate: (ideaId, body, key) => post(`/v1/automation-ideas/${ideaId}/roi-estimate`, key, body),
     getRoiEstimate: (ideaId) => get(`/v1/automation-ideas/${ideaId}/roi-estimate`),
+    listAutomationAdoptionEvidence: (ideaId, p) =>
+      get(`/v1/automation-ideas/${ideaId}/adoption-evidence${queryString(p)}`),
+    recordAutomationAdoptionEvidence: (ideaId, body, key) =>
+      post(`/v1/automation-ideas/${ideaId}/adoption-evidence`, key, body),
+    listRoiActualEvidence: (ideaId, p) => get(`/v1/automation-ideas/${ideaId}/roi-actuals${queryString(p)}`),
+    recordRoiActualEvidence: (ideaId, body, key) => post(`/v1/automation-ideas/${ideaId}/roi-actuals`, key, body),
     listSites: (p) => get(`/v1/sites${queryString(p)}`),
     listSiteElements: (siteId, p) => get(`/v1/sites/${siteId}/elements${queryString(p)}`),
     createSiteElement: (siteId, body, key) => post(`/v1/sites/${siteId}/elements`, key, body),
@@ -602,6 +727,22 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     createPrincipal: (body, key) => post(`/v1/principals`, key, body),
     updatePrincipal: (principalId, body, key) => send("PATCH", `/v1/principals/${principalId}`, body, { "Idempotency-Key": key }),
     deletePrincipal: (principalId, key) => send("DELETE", `/v1/principals/${principalId}`, undefined, { "Idempotency-Key": key }),
+    listScimProviders: () => get(`/v1/scim/providers`),
+    createScimProvider: (body, key) => post(`/v1/scim/providers`, key, body),
+    updateScimProvider: (providerKey, body, key) =>
+      send("PATCH", `/v1/scim/providers/${encodeURIComponent(providerKey)}`, body, { "Idempotency-Key": key }),
+    decommissionScimProvider: (providerKey, body, key) =>
+      post(`/v1/scim/providers/${encodeURIComponent(providerKey)}/decommission`, key, body),
+    listScimGroupRoleMappings: (providerKey) =>
+      get(`/v1/scim/providers/${encodeURIComponent(providerKey)}/group-role-mappings`),
+    importScimGroupRoleMappings: (providerKey, body, key) =>
+      post(`/v1/scim/providers/${encodeURIComponent(providerKey)}/group-role-mappings/import`, key, body),
+    createScimGroupRoleMapping: (providerKey, body, key) =>
+      post(`/v1/scim/providers/${encodeURIComponent(providerKey)}/group-role-mappings`, key, body),
+    updateScimGroupRoleMapping: (providerKey, mappingId, body, key) =>
+      send("PATCH", `/v1/scim/providers/${encodeURIComponent(providerKey)}/group-role-mappings/${encodeURIComponent(mappingId)}`, body, {
+        "Idempotency-Key": key,
+      }),
     listPrincipalRoleAssignments: (principalId, p) => get(`/v1/principals/${principalId}/role-assignments${queryString(p)}`),
     listRoleAssignments: (p) => get(`/v1/role-assignments${queryString(p)}`),
     grantPrincipalRole: (principalId, body, key) => post(`/v1/principals/${principalId}/role-assignments`, key, body),
@@ -628,6 +769,12 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/scenario-releases/${releaseId}/deploy`, key, {}, { "If-Match": String(latestVersion) }),
     rollbackScenarioRelease: (releaseId, latestVersion, key) =>
       post(`/v1/scenario-releases/${releaseId}/rollback`, key, {}, { "If-Match": String(latestVersion) }),
+    certifyScenarioVersion: (scenarioId, version, reason, expiresAt, key) =>
+      post(`/v1/scenarios/${scenarioId}/versions/${version}/certify`, key, expiresAt !== null ? { reason, expires_at: expiresAt } : { reason }),
+    revokeScenarioCertification: (scenarioId, version, reason, key) =>
+      post(`/v1/scenarios/${scenarioId}/versions/${version}/revoke-certification`, key, { reason }),
+    setScenarioVersionGovernanceStage: (scenarioId, version, body, key) =>
+      post(`/v1/scenarios/${scenarioId}/versions/${version}/governance-stage`, key, body),
     archiveScenario: (scenarioId, version, key) =>
       post(`/v1/scenarios/${scenarioId}/archive`, key, {}, { "If-Match": String(version) }),
     createPromotionRequest: (scenarioId, version, reason, key) =>

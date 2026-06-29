@@ -1,3 +1,8 @@
+-- Role summary:
+--   rpa_migrator: NOSUPERUSER/NOBYPASSRLS DDL owner for schema migration only.
+--   rpa_app: NOSUPERUSER/NOBYPASSRLS runtime DML role for API and browser worker.
+--   rpa_lifecycle_bypass: NOSUPERUSER/BYPASSRLS operational role for audited
+--     artifact lifecycle and maintenance discovery only; no DDL or user traffic.
 -- ============================================================
 -- DB 역할 분리(최소권한, DG1 — governance).
 --   배포 시 1회 적용한다(마이그레이션과 별개; docs/staging-deploy-runbook.md 참조).
@@ -21,6 +26,18 @@ BEGIN
     -- 런타임. 최소권한: DML 만. DDL·SUPERUSER·BYPASSRLS·CREATEROLE·CREATEDB 없음.
     CREATE ROLE rpa_app NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rpa_lifecycle_bypass') THEN
+    -- Dedicated operational role for approved artifact lifecycle / maintenance discovery only.
+    CREATE ROLE rpa_lifecycle_bypass NOLOGIN NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+  END IF;
+END $$;
+
+-- Migration owner privileges. rpa_migrator may create DDL objects and isolated
+-- verification schemas, but remains NOSUPERUSER/NOBYPASSRLS.
+GRANT USAGE, CREATE ON SCHEMA public TO rpa_migrator;
+DO $$
+BEGIN
+  EXECUTE format('GRANT CREATE ON DATABASE %I TO rpa_migrator', current_database());
 END $$;
 
 -- 런타임 역할: 스키마 USAGE(CREATE 미부여 = DDL 불가) + 기존 객체 DML/시퀀스/함수 권한.
@@ -29,6 +46,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rpa_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rpa_app;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO rpa_app;
 
+-- Operational BYPASSRLS role: DML/function access only; no schema CREATE.
+GRANT USAGE ON SCHEMA public TO rpa_lifecycle_bypass;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rpa_lifecycle_bypass;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rpa_lifecycle_bypass;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO rpa_lifecycle_bypass;
+
 -- 이후 rpa_migrator 가 만드는 객체에도 같은 권한 자동 부여(마이그레이션마다 재GRANT 불필요).
 ALTER DEFAULT PRIVILEGES FOR ROLE rpa_migrator IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO rpa_app;
@@ -36,3 +59,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE rpa_migrator IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO rpa_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE rpa_migrator IN SCHEMA public
   GRANT EXECUTE ON FUNCTIONS TO rpa_app;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE rpa_migrator IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO rpa_lifecycle_bypass;
+ALTER DEFAULT PRIVILEGES FOR ROLE rpa_migrator IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO rpa_lifecycle_bypass;
+ALTER DEFAULT PRIVILEGES FOR ROLE rpa_migrator IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO rpa_lifecycle_bypass;

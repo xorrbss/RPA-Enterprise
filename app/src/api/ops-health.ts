@@ -4,14 +4,14 @@ import type { PoolClient } from "pg";
 import { withTenantTx } from "../db/pool";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 
-type OpsHealthStatus = "ok" | "warning" | "critical";
+export type OpsHealthStatus = "ok" | "warning" | "critical";
 
-interface QueueDepth {
+export interface QueueDepth {
   readonly available: boolean;
   readonly pending_jobs: number | null;
 }
 
-interface BrowserLeaseStats {
+export interface BrowserLeaseStats {
   readonly reserved: number;
   readonly active: number;
   readonly draining: number;
@@ -20,7 +20,7 @@ interface BrowserLeaseStats {
   readonly next_expiry_at: string | null;
 }
 
-interface StaleRuns {
+export interface StaleRuns {
   readonly nonterminal_over_15m: number;
   readonly oldest_updated_at: string | null;
 }
@@ -42,22 +42,33 @@ interface StaleRunsRow {
 export function registerOpsHealthRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get("/v1/ops/health", { config: { rbacAction: "ops_alert.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
-    const health = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
-      const queue = await readQueueDepth(client, principal.tenantId);
-      const leases = await readBrowserLeaseStats(client, principal.tenantId);
-      const staleRuns = await readStaleRuns(client, principal.tenantId);
-
-      const status = opsHealthStatus(queue, leases, staleRuns);
-      return {
-        status,
-        detected_at: new Date().toISOString(),
-        queue,
-        browser_leases: leases,
-        stale_runs: staleRuns,
-      };
-    });
+    const health = await withTenantTx(deps.pool, principal.tenantId, async (client) =>
+      readOpsHealth(client, principal.tenantId),
+    );
     reply.code(200).send(health);
   });
+}
+
+export interface OpsHealthSnapshot {
+  readonly status: OpsHealthStatus;
+  readonly detected_at: string;
+  readonly queue: QueueDepth;
+  readonly browser_leases: BrowserLeaseStats;
+  readonly stale_runs: StaleRuns;
+}
+
+export async function readOpsHealth(client: PoolClient, tenantId: string): Promise<OpsHealthSnapshot> {
+  const queue = await readQueueDepth(client, tenantId);
+  const leases = await readBrowserLeaseStats(client, tenantId);
+  const staleRuns = await readStaleRuns(client, tenantId);
+
+  return {
+    status: opsHealthStatus(queue, leases, staleRuns),
+    detected_at: new Date().toISOString(),
+    queue,
+    browser_leases: leases,
+    stale_runs: staleRuns,
+  };
 }
 
 async function readQueueDepth(client: PoolClient, tenantId: string): Promise<QueueDepth> {

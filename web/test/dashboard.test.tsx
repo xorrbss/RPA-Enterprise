@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
-import type { DeadLetterItem, Paginated } from "../src/api/types";
+import type { AutomationPerformanceRoiSourceLineage, DeadLetterItem, Paginated } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 // 대시보드 관찰성 지표: run outcome 정확 집계(getRunSummary by_status) + run_success_rate + 절단 정직성(여전히
@@ -29,6 +29,32 @@ function jwt(roles: readonly string[]): string {
 function dl(id: string): DeadLetterItem {
   return { dead_letter_id: id, kind: "workitem", status: "DEAD_LETTER", source_id: null };
 }
+
+const automationPerformanceRoiSourceLineage: AutomationPerformanceRoiSourceLineage = {
+  idea_count: 2,
+  source_counts: { manual: 1, process_mining: 1, task_mining: 0, imported: 0 },
+  stage_counts: { approved: 1, build: 1, operate: 0 },
+  departments: ["Finance", "Procurement"],
+  business_owners: ["Mina Kim", "Joon Park"],
+  sample_ideas: [
+    {
+      idea_id: "61000000-0000-4000-8000-000000000001",
+      title: "Invoice lookup ROI",
+      source: "process_mining",
+      stage: "approved",
+      department: "Finance",
+      business_owner: "Mina Kim",
+    },
+    {
+      idea_id: "61000000-0000-4000-8000-000000000002",
+      title: "Vendor exception triage",
+      source: "manual",
+      stage: "build",
+      department: "Procurement",
+      business_owner: "Joon Park",
+    },
+  ],
+};
 
 function dashboardClient(overrides: Partial<ApiClient> = {}): ApiClient {
   return fakeClient({
@@ -71,6 +97,22 @@ function dashboardClient(overrides: Partial<ApiClient> = {}): ApiClient {
           recommended_action: "공통 장애 여부를 점검하세요.",
           route: "#runTrace",
           detected_at: "2026-06-23T09:03:00.000Z",
+          due_at: null,
+        },
+        {
+          alert_id: "audit_verifier:stale",
+          severity: "warning",
+          source: "audit_verifier",
+          title: "감사 체인 검증 증적 지연",
+          detail: "감사 로그가 존재하지만 자동 검증 증적이 지연되었습니다.",
+          subject_type: "audit_verifier",
+          subject_id: null,
+          status: "open",
+          delivery: { channel: "console", status: "delivered", delivered_at: "2026-06-23T09:04:00.000Z", external_delivery: false },
+          ack: null,
+          recommended_action: "Audit Explorer에서 검증 실행 증적을 확인하세요.",
+          route: "#auditExplorer",
+          detected_at: "2026-06-23T09:04:00.000Z",
           due_at: null,
         },
       ],
@@ -229,7 +271,9 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(screen.getByText("만료 미회수 세션")).toBeInTheDocument();
     expect(screen.getByText("월말 정산 실행 SLA 초과")).toBeInTheDocument();
     expect(screen.getByText("실패 급증 감지")).toBeInTheDocument();
+    expect(screen.getByText("감사 체인 검증 증적 지연")).toBeInTheDocument();
     expect(screen.getByText("실행 SLA · 실행 기록에서 병목 단계를 확인하세요.")).toBeInTheDocument();
+    expect(screen.getByText("감사 체인 · Audit Explorer에서 검증 실행 증적을 확인하세요.")).toBeInTheDocument();
 
     screen.getByRole("button", { name: "월말 정산 실행 SLA 초과" }).click();
     await waitFor(() => expect(location.hash).toBe("#runTrace?run=run-ops-1"));
@@ -282,11 +326,49 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
             cost_per_completed_run: 100,
             llm_call_cost: 1000,
             run_vs_call_cost_delta: 234,
-            roi_idea_count: 1,
-            roi_confidence: { low: 0, medium: 0, high: 1 },
+            roi_idea_count: 2,
+            roi_confidence: { low: 0, medium: 1, high: 1 },
+            roi_source_lineage: automationPerformanceRoiSourceLineage,
+            roi_actuals: {
+              evidence_count: 2,
+              estimated_transaction_count: 110,
+              actual_transaction_count: 98,
+              comparable_actual_transaction_count: 98,
+              transaction_attainment_rate: 98 / 110,
+              estimated_exception_rate: 0,
+              actual_failure_rate: 5.5 / 98,
+              comparable_actual_failure_rate: 5.5 / 98,
+              failure_rate_delta: 5.5 / 98,
+              human_intervention_minutes: 140,
+              reprocessing_minutes: 40,
+              latest_period_end: "2026-06-28",
+            },
+            decision_signal: { status: "hold", reason: "improve reliability before scaling" },
           },
           cost_by_model: [
             { model: "gpt-4o-mini", calls: 12, input_tokens: 12000, output_tokens: 2400, cost: 1000, cost_share: 1 },
+          ],
+          model_cost_trends: [
+            {
+              day: "2026-06-02",
+              model: "gpt-4o-mini",
+              calls: 8,
+              input_tokens: 8000,
+              output_tokens: 1600,
+              cost: 600,
+              cost_share_of_day: 1,
+              cost_delta_from_previous_day_for_model: null,
+            },
+            {
+              day: "2026-06-03",
+              model: "gpt-4o-mini",
+              calls: 4,
+              input_tokens: 4000,
+              output_tokens: 800,
+              cost: 400,
+              cost_share_of_day: 1,
+              cost_delta_from_previous_day_for_model: -200,
+            },
           ],
           failure_top: [{ code: "SITE_SELECTOR_MISSING", count: 2 }],
           by_workflow: [
@@ -311,8 +393,24 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
               rerun_cost: 120,
               avg_cost_per_run: 102.83333333333333,
               cost_per_completed_run: 100,
-              roi_idea_count: 1,
-              roi_confidence: { low: 0, medium: 0, high: 1 },
+              roi_idea_count: 2,
+              roi_confidence: { low: 0, medium: 1, high: 1 },
+              roi_source_lineage: automationPerformanceRoiSourceLineage,
+              roi_actuals: {
+                evidence_count: 2,
+                estimated_transaction_count: 110,
+                actual_transaction_count: 98,
+                comparable_actual_transaction_count: 98,
+                transaction_attainment_rate: 98 / 110,
+                estimated_exception_rate: 0,
+                actual_failure_rate: 5.5 / 98,
+                comparable_actual_failure_rate: 5.5 / 98,
+                failure_rate_delta: 5.5 / 98,
+                human_intervention_minutes: 140,
+                reprocessing_minutes: 40,
+                latest_period_end: "2026-06-28",
+              },
+              decision_signal: { status: "hold", reason: "improve reliability" },
             },
           ],
           trends: [],
@@ -339,8 +437,17 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
 
     expect(await within(panel).findByText("Vendor invoice lookup")).toBeInTheDocument();
     expect(within(panel).getByText("SITE_SELECTOR_MISSING")).toBeInTheDocument();
-    expect(within(panel).getByText("gpt-4o-mini")).toBeInTheDocument();
+    expect(within(panel).getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
+    expect(within(panel).getByRole("img", { name: /ROI source mix chart/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("img", { name: /ROI stage mix chart/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("img", { name: /Model cost trend chart/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("table", { name: "Model cost daily trends" })).toBeInTheDocument();
+    expect(within(panel).getByText("2026-06-03")).toBeInTheDocument();
+    expect(within(panel).getAllByText("Hold").length).toBeGreaterThan(0);
     expect(within(panel).getAllByText("순가치").length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText("process mining 1 · manual 1").length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText("부서 Finance, Procurement · 오너 Mina Kim, Joon Park").length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText("98/110 tx").length).toBeGreaterThan(0);
     expect(within(panel).getByText("18.5h")).toBeInTheDocument();
     expect(within(panel).getAllByText("75%").length).toBeGreaterThan(0);
 

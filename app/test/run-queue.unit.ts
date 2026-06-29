@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { PgGraphileRunEnqueuer } from "../src/api/run-queue";
-import { RUNTIME_LIFECYCLE_JOB_TASK } from "../src/worker/graphile-runner";
+import { RUNTIME_CONTROL_JOB_TASK, RUNTIME_LIFECYCLE_JOB_TASK } from "../src/worker/graphile-runner";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -17,6 +17,7 @@ const RUN = "10000000-0000-4000-8000-000000000001";
 const CORRELATION = "20000000-0000-4000-8000-000000000001";
 const ARTIFACT = "60000000-0000-4000-8000-000000000001";
 const GENERATION = "80000000-0000-4000-8000-000000000001";
+const NOTIFICATION_ATTEMPT = "90000000-0000-4000-8000-000000000001";
 
 const calls: Array<{ readonly sql: string; readonly params: readonly unknown[] }> = [];
 const client = {
@@ -79,6 +80,22 @@ check(
     runClaimPayload.runId === RUN &&
     runClaimPayload.correlationId === CORRELATION,
   JSON.stringify(runClaimPayload),
+);
+
+await enqueuer.enqueueOpsNotificationSend(client, {
+  tenantId: TENANT,
+  attemptId: NOTIFICATION_ATTEMPT,
+  correlationId: CORRELATION,
+}, 7_000);
+const notificationAddJob = calls[calls.length - 1];
+const notificationPayload = JSON.parse(String(notificationAddJob?.params[1])) as Record<string, unknown>;
+check("ops notification enqueue uses control task", notificationAddJob?.params[0] === RUNTIME_CONTROL_JOB_TASK);
+check("ops notification enqueue preserves attempt id and delay",
+  notificationPayload.kind === "ops_notification_send" &&
+    notificationPayload.tenantId === TENANT &&
+    (notificationPayload.opsNotification as { attemptId?: string } | undefined)?.attemptId === NOTIFICATION_ATTEMPT &&
+    notificationAddJob?.params[2] === 7_000,
+  JSON.stringify({ notificationPayload, params: notificationAddJob?.params }),
 );
 
 if (failures > 0) {

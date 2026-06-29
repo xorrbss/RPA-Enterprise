@@ -167,22 +167,20 @@ async function main(): Promise<void> {
         ],
       };
 
-      const create = await app.inject({
-        method: "POST",
-        url: "/v1/document-jobs",
-        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-create-1" },
-        payload: body,
-      });
+      const createDocumentJob = (idempotencyKey: string) =>
+        app.inject({
+          method: "POST",
+          url: "/v1/document-jobs",
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": idempotencyKey },
+          payload: body,
+        });
+
+      const create = await createDocumentJob("doc-create-1");
       check("operator create document job -> 201", create.statusCode === 201, create.body);
       const jobId = create.json().document_job_id as string;
       check("job links source run", create.json().source_run_id === RUN_A, create.body);
 
-      const replay = await app.inject({
-        method: "POST",
-        url: "/v1/document-jobs",
-        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-create-1" },
-        payload: body,
-      });
+      const replay = await createDocumentJob("doc-create-1");
       check("create idempotency replay -> same job", replay.statusCode === 201 && replay.json().document_job_id === jobId, replay.body);
 
       const viewerDenied = await app.inject({
@@ -245,6 +243,142 @@ async function main(): Promise<void> {
         payload: {},
       });
       check("validation task idempotency replay -> same task", validationReplay.statusCode === 201 && validationReplay.json().human_task_id === taskId, validationReplay.body);
+
+      const externalCreate = await createDocumentJob("doc-create-external-1");
+      check("operator create external document job -> 201", externalCreate.statusCode === 201, externalCreate.body);
+      const externalJobId = externalCreate.json().document_job_id as string;
+      const externalPayload = {
+        provider_alias: "external-idp-primary",
+        receipt_id: "idp-receipt-1",
+        normalized_schema_ref: "document-extraction/invoice@1",
+        evidence_ref: "ticket:IDP-1",
+        fields: [
+          { key: "invoice_id", value: "INV-EXT-1", confidence: 0.99 },
+          { key: "total", value: "9900", confidence: 0.5 },
+        ],
+        metadata: { provider_region: "ap-northeast-2" },
+      };
+      const external = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${externalJobId}/external-extractions`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-external-1" },
+        payload: externalPayload,
+      });
+      check("external IDP extraction accepted -> 202", external.statusCode === 202, external.body);
+      check(
+        "external extraction stores provider receipt metadata",
+        external.json().engine === "external_idp_adapter_v1" &&
+          external.json().provider_alias === "external-idp-primary" &&
+          external.json().provider_receipt_id === "idp-receipt-1",
+        external.body,
+      );
+      check(
+        "external low confidence requires validation",
+        external.json().status === "validation_required" && external.json().missing_fields.includes("total"),
+        external.body,
+      );
+      check("external fields are normalized with source", external.body.includes('"source":"external_idp"'), external.body);
+
+      const externalReplay = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${externalJobId}/external-extractions`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-external-1" },
+        payload: externalPayload,
+      });
+      check(
+        "external extraction idempotency replay -> same extraction",
+        externalReplay.statusCode === 202 && externalReplay.json().document_extraction_id === external.json().document_extraction_id,
+        externalReplay.body,
+      );
+
+      const externalProviderReplay = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${externalJobId}/external-extractions`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-external-provider-replay" },
+        payload: externalPayload,
+      });
+      check(
+        "external provider receipt replay -> same extraction",
+        externalProviderReplay.statusCode === 202 &&
+          externalProviderReplay.json().document_extraction_id === external.json().document_extraction_id,
+        externalProviderReplay.body,
+      );
+
+      const externalValidation = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${externalJobId}/validation-task`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-external-validation-1" },
+        payload: {},
+      });
+      check(
+        "external validation task created -> 201",
+        externalValidation.statusCode === 201 && externalValidation.body.includes("total"),
+        externalValidation.body,
+      );
+
+      const deterministicAfterExternal = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${externalJobId}/extract`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-external-deterministic-blocked" },
+        payload: {},
+      });
+      check("deterministic extractor cannot overwrite external receipt", deterministicAfterExternal.statusCode === 422, deterministicAfterExternal.body);
+
+      const externalViewerDenied = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${externalJobId}/external-extractions`,
+        headers: { authorization: `Bearer ${viewer}`, "idempotency-key": "doc-external-viewer-denied" },
+        payload: externalPayload,
+      });
+      check("viewer cannot record external extraction", externalViewerDenied.statusCode === 403, externalViewerDenied.body);
+
+      const unknownFieldCreate = await createDocumentJob("doc-create-external-unknown-field");
+      const unknownFieldJobId = unknownFieldCreate.json().document_job_id as string;
+      const unknownField = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${unknownFieldJobId}/external-extractions`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-external-unknown-field" },
+        payload: {
+          ...externalPayload,
+          receipt_id: "idp-receipt-unknown-field",
+          fields: [{ key: "vendor_id", value: "ACME", confidence: 0.99 }],
+        },
+      });
+      check(
+        "external field outside declared schema is rejected",
+        unknownField.statusCode === 422 && unknownField.body.includes("external_field_not_in_schema"),
+        unknownField.body,
+      );
+
+      const unsafeMetadata = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${externalJobId}/external-extractions`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-external-unsafe-metadata" },
+        payload: {
+          ...externalPayload,
+          receipt_id: "idp-receipt-unsafe-metadata",
+          metadata: { raw_ocr_text: "full raw OCR text must not be stored" },
+        },
+      });
+      check(
+        "external metadata forbids raw OCR text",
+        unsafeMetadata.statusCode === 422 && unsafeMetadata.body.includes("metadata_secret_or_endpoint_key_forbidden"),
+        unsafeMetadata.body,
+      );
+
+      const duplicateReceiptCreate = await createDocumentJob("doc-create-external-duplicate-receipt");
+      const duplicateReceiptJobId = duplicateReceiptCreate.json().document_job_id as string;
+      const duplicateReceipt = await app.inject({
+        method: "POST",
+        url: `/v1/document-jobs/${duplicateReceiptJobId}/external-extractions`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "doc-external-duplicate-receipt" },
+        payload: externalPayload,
+      });
+      check(
+        "external provider receipt cannot attach to another job",
+        duplicateReceipt.statusCode === 422 && duplicateReceipt.body.includes("provider_receipt_already_used"),
+        duplicateReceipt.body,
+      );
 
       const list = await app.inject({ method: "GET", url: "/v1/document-jobs", headers: { authorization: `Bearer ${viewer}` } });
       check("viewer can list document jobs", list.statusCode === 200 && list.body.includes(jobId), list.body);

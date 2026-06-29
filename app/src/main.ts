@@ -29,6 +29,9 @@ import http from "node:http";
 import { pathToFileURL } from "node:url";
 
 import type { FastifyInstance } from "fastify";
+import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
+import { PrometheusExporter } from "@opentelemetry/exporter-prometheus";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { ConsoleMetricExporter, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 
@@ -68,8 +71,45 @@ import type { ScenarioPlanner } from "./api/scenario-generation-types";
 import type { ScenarioGenerationArtifactBuffer } from "./api/scenario-generation-artifacts";
 import { buildApiSessionStore, startArtifactLifecycleWorker, startWorker, type ArtifactLifecycleRunner, type StartedWorker } from "./main-worker";
 
+const REQUIRED_SCHEMA_MIGRATION_VERSIONS = ["0001", "0002"] as const;
+
+interface HealthReadiness {
+  readonly ready: boolean;
+  readonly reason?: string;
+}
+
+async function readHealthReadiness(pool: PgPool): Promise<HealthReadiness> {
+  await pool.query("SELECT 1");
+  const ledger = await pool.query<{ schema_migrations_regclass: string | null }>(
+    `SELECT to_regclass('public.schema_migrations')::text AS schema_migrations_regclass`,
+  );
+  if (ledger.rows[0]?.schema_migrations_regclass === null || ledger.rows[0]?.schema_migrations_regclass === undefined) {
+    return { ready: false, reason: "schema_migrations_missing" };
+  }
+
+  const applied = await pool.query<{ applied_count: string }>(
+    `SELECT count(*)::text AS applied_count
+       FROM schema_migrations
+      WHERE version = ANY($1::text[])
+        AND status = 'applied'`,
+    [[...REQUIRED_SCHEMA_MIGRATION_VERSIONS]],
+  );
+  const appliedCount = Number(applied.rows[0]?.applied_count ?? 0);
+  if (appliedCount !== REQUIRED_SCHEMA_MIGRATION_VERSIONS.length) {
+    return { ready: false, reason: "schema_migrations_incomplete" };
+  }
+
+  const role = await pool.query<{ bypasses_rls: string }>(
+    `SELECT COALESCE((SELECT (rolsuper OR rolbypassrls)::text FROM pg_roles WHERE rolname = current_user), 'unknown') AS bypasses_rls`,
+  );
+  if (role.rows[0]?.bypasses_rls !== "false") {
+    return { ready: false, reason: "db_role_bypasses_rls" };
+  }
+  return { ready: true };
+}
+
 /** Unauthenticated health probe server (separate http server — bypasses the Fastify auth/RBAC chain). */
-function startHealthServer(pool: PgPool, port: number): http.Server {
+export function startHealthServer(pool: PgPool, port: number, prometheusExporter?: PrometheusExporter): http.Server {
   const server = http.createServer((reqMsg, res) => {
     const url = reqMsg.url ?? "/";
     if (url === "/livez") {
@@ -78,16 +118,24 @@ function startHealthServer(pool: PgPool, port: number): http.Server {
       return;
     }
     if (url === "/readyz") {
-      pool
-        .query("SELECT 1")
-        .then(() => {
+      readHealthReadiness(pool)
+        .then((readiness) => {
+          if (!readiness.ready) {
+            res.writeHead(503, { "content-type": "application/json" });
+            res.end(JSON.stringify({ status: "not-ready", reason: readiness.reason }));
+            return;
+          }
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ status: "ready" }));
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           res.writeHead(503, { "content-type": "application/json" });
-          res.end(JSON.stringify({ status: "not-ready" }));
+          res.end(JSON.stringify({ status: "not-ready", reason: String(err) }));
         });
+      return;
+    }
+    if (url === "/metrics" && prometheusExporter !== undefined) {
+      prometheusExporter.getMetricsRequestHandler(reqMsg, res);
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
@@ -339,7 +387,13 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
         }
       : {}),
     ...(sessionStore !== undefined ? { sessionStore } : {}),
-    ...(webhookSecretBoundary !== undefined ? { webhookSecretBoundary, scimSignatureSecretBoundary: webhookSecretBoundary } : {}),
+    ...(webhookSecretBoundary !== undefined
+      ? {
+          webhookSecretBoundary,
+          integrationHandoffCallbackSecretBoundary: webhookSecretBoundary,
+          scimSignatureSecretBoundary: webhookSecretBoundary,
+        }
+      : {}),
   });
   await api.listen({ host: "0.0.0.0", port: cfg.port });
   console.log(JSON.stringify({
@@ -361,26 +415,40 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
  * none=전역 Provider 미등록(no-op, 명시적 opt-out). OTLP(prod 수집 백엔드)는 후속 — 별도 exporter 패키지를 이
  * 선택지에 추가한다.
  */
-function bootstrapObservability(common: CommonConfig): void {
+function bootstrapObservability(common: CommonConfig): PrometheusExporter | undefined {
   if (common.telemetryExporter === "none") {
     console.log(JSON.stringify({ at: "main", msg: "observability disabled (OTEL_EXPORTER=none)" }));
-    return;
+    return undefined;
+  }
+  if (common.telemetryExporter === "prometheus") {
+    const exporter = new PrometheusExporter({ preventServerStart: true, endpoint: "/metrics" });
+    bootstrapMetrics(exporter);
+    console.log(JSON.stringify({ at: "main", msg: "observability bootstrapped", exporter: common.telemetryExporter, metrics: "/metrics" }));
+    return exporter;
+  }
+  if (common.telemetryExporter === "otlp") {
+    if (common.otlp === undefined) throw new Error("OTEL_EXPORTER=otlp requires OTLP endpoints");
+    bootstrapTracing(new OTLPTraceExporter({ url: common.otlp.tracesEndpoint }));
+    bootstrapMetrics(new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter({ url: common.otlp.metricsEndpoint }) }));
+    console.log(JSON.stringify({ at: "main", msg: "observability bootstrapped", exporter: common.telemetryExporter }));
+    return undefined;
   }
   bootstrapTracing(new ConsoleSpanExporter());
   bootstrapMetrics(new PeriodicExportingMetricReader({ exporter: new ConsoleMetricExporter() }));
   console.log(JSON.stringify({ at: "main", msg: "observability bootstrapped", exporter: common.telemetryExporter }));
+  return undefined;
 }
 
 async function main(): Promise<void> {
   const mode = loadRunMode();
   const common = loadCommonConfig();
-  bootstrapObservability(common);
+  const prometheusExporter = bootstrapObservability(common);
   assertArtifactStoreStartupCompatibility(mode, mode === "worker" ? loadArtifactLifecycleConsumer() : undefined);
   const pool = createPool();
   // Fail fast on DB connectivity before binding anything.
   await pool.query("SELECT 1");
 
-  const health = startHealthServer(pool, common.healthPort);
+  const health = startHealthServer(pool, common.healthPort, prometheusExporter);
   let api: FastifyInstance | undefined;
   let worker: StartedWorker | undefined;
   let lifecycleRunner: ArtifactLifecycleRunner | undefined;
@@ -406,10 +474,15 @@ async function main(): Promise<void> {
         if (api !== undefined) await api.close();
         if (worker !== undefined) {
           worker.maintenance?.stop();
+          worker.heartbeat.stop();
           await worker.runner.stop();
         }
-        if (lifecycleRunner !== undefined) await lifecycleRunner.runner.stop();
+        if (lifecycleRunner !== undefined) {
+          lifecycleRunner.heartbeat.stop();
+          await lifecycleRunner.runner.stop();
+        }
       } finally {
+        if (worker?.maintenanceBypassPool !== undefined) await worker.maintenanceBypassPool.end().catch(() => undefined);
         if (lifecycleRunner !== undefined) await lifecycleRunner.pool.end().catch(() => undefined);
         await pool.end().catch(() => undefined);
       }

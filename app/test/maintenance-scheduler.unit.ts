@@ -1,12 +1,20 @@
 import {
+  AUDIT_VERIFIER_INTERVAL_MS,
+  buildAuditVerifierJobs,
   buildDailySweeperJobs,
   buildIntegritySweeperJobs,
   buildMaintenancePollJobs,
   buildOrphanSweeperJob,
   buildRetentionSweeperJobs,
   millisecondsUntilNextKstHour,
+  resolveAuditVerifierTenantIds,
+  resolveDailyLifecycleTenantIds,
+  resolveMaintenanceTenantIds,
   resolveRunTriggerTenantIds,
+  runAuditVerifier,
+  runDailySweeper,
 } from "../src/worker/maintenance-scheduler";
+import type { RuntimeWorkerJob } from "../../ts/runtime-contract";
 
 const TENANT_A = "00000000-0000-4000-8000-0000000000a1";
 const TENANT_B = "00000000-0000-4000-8000-0000000000a2";
@@ -55,6 +63,23 @@ check(
 );
 
 // pollJobs 가 4회 correlation()을 소비(테넌트당 checkout_sweeper+redaction) → 다음은 005.
+{
+  let auditSeq = 0;
+  const auditCorrelation = (): string => `21000000-0000-4000-8000-${String(++auditSeq).padStart(12, "0")}`;
+  const auditJobs = buildAuditVerifierJobs([TENANT_A, TENANT_B], auditCorrelation);
+  check(
+    "audit verifier fanout enqueues tenant-scoped verifier jobs with correlation",
+    auditJobs.length === 2 &&
+      auditJobs[0]?.kind === "audit_verifier" &&
+      auditJobs[0]?.tenantId === TENANT_A &&
+      auditJobs[0]?.correlationId === "21000000-0000-4000-8000-000000000001" &&
+      auditJobs[1]?.kind === "audit_verifier" &&
+      auditJobs[1]?.tenantId === TENANT_B &&
+      auditJobs[1]?.correlationId === "21000000-0000-4000-8000-000000000002",
+    JSON.stringify(auditJobs),
+  );
+}
+
 const retentionJobs = buildRetentionSweeperJobs([TENANT_A], nextCorrelation);
 check(
   "retention fanout enqueues tenant-scoped artifact retention with correlation",
@@ -94,32 +119,285 @@ check(
   JSON.stringify(dailyJobs),
 );
 
+const emptyDailyJobs = buildDailySweeperJobs([]);
+check(
+  "daily sweeper batch with no tenant ids still includes one global orphan job",
+  emptyDailyJobs.length === 1 &&
+    emptyDailyJobs[0]?.kind === "artifact_orphan" &&
+    emptyDailyJobs[0]?.tenantId === undefined,
+  JSON.stringify(emptyDailyJobs),
+);
+
 {
   let released = false;
   let queryCount = 0;
   let queryNow = "";
-  const fakePool = {
+  const appPool = {
+    connect: async () => {
+      throw new Error("app-role pool must not be used for cross-tenant run trigger discovery");
+    },
+  };
+  const lifecycleBypassPool = {
     connect: async () => ({
       query: async (_sql: string, params: readonly unknown[]) => {
         queryCount += 1;
+        if (_sql.includes("pg_roles")) {
+          return { rows: [{ rolsuper: false, rolbypassrls: true }] };
+        }
         queryNow = String(params[0]);
         return { rows: [{ tenant_id: TENANT_A }, { tenant_id: TENANT_B }] };
       },
       release: () => { released = true; },
     }),
   };
-  const pool = fakePool as unknown as Parameters<typeof resolveRunTriggerTenantIds>[0];
-  const discovered = await resolveRunTriggerTenantIds(pool, [], new Date("2026-06-24T01:02:03.000Z"));
+  const pool = appPool as unknown as Parameters<typeof resolveRunTriggerTenantIds>[0];
+  const bypassPool = lifecycleBypassPool as unknown as NonNullable<Parameters<typeof resolveRunTriggerTenantIds>[3]>["lifecycleBypassPool"];
+  const discovered = await resolveRunTriggerTenantIds(pool, [], new Date("2026-06-24T01:02:03.000Z"), { lifecycleBypassPool: bypassPool });
   check(
-    "empty maintenance tenant list discovers due cron trigger tenants",
-    discovered.length === 2 && discovered[0] === TENANT_A && discovered[1] === TENANT_B && released && queryNow === "2026-06-24T01:02:03.000Z",
-    JSON.stringify({ discovered, released, queryNow }),
+    "empty maintenance tenant list discovers due cron trigger tenants through lifecycle BYPASSRLS",
+    discovered.length === 2 &&
+      discovered[0] === TENANT_A &&
+      discovered[1] === TENANT_B &&
+      released &&
+      queryNow === "2026-06-24T01:02:03.000Z" &&
+      queryCount === 2,
+    JSON.stringify({ discovered, released, queryNow, queryCount }),
   );
   const configured = await resolveRunTriggerTenantIds(pool, [TENANT_B], new Date("2026-06-24T01:02:03.000Z"));
   check(
     "configured maintenance tenant list bypasses discovery query",
-    configured.length === 1 && configured[0] === TENANT_B && queryCount === 1,
+    configured.length === 1 && configured[0] === TENANT_B && queryCount === 2,
     JSON.stringify({ configured, queryCount }),
+  );
+}
+
+{
+  let threw = false;
+  const appPool = {
+    connect: async () => {
+      throw new Error("app-role pool must not be used for missing run trigger discovery config");
+    },
+  };
+  try {
+    await resolveRunTriggerTenantIds(appPool as unknown as Parameters<typeof resolveRunTriggerTenantIds>[0], [], new Date("2026-06-24T01:02:03.000Z"));
+  } catch (err) {
+    threw = String(err).includes("dedicated BYPASSRLS lifecycle pool");
+  }
+  check("empty cron trigger tenant discovery fails closed without lifecycle BYPASSRLS pool", threw);
+}
+
+{
+  let released = false;
+  let queryCount = 0;
+  let queryNow = "";
+  let intervalMs = 0;
+  const lifecycleBypassPool = {
+    connect: async () => ({
+      query: async (sql: string, params: readonly unknown[]) => {
+        queryCount += 1;
+        if (sql.includes("pg_roles")) {
+          return { rows: [{ rolsuper: false, rolbypassrls: true }] };
+        }
+        queryNow = String(params[0]);
+        intervalMs = Number(params[1]);
+        return { rows: [{ tenant_id: TENANT_A }, { tenant_id: TENANT_B }] };
+      },
+      release: () => { released = true; },
+    }),
+  } as unknown as NonNullable<Parameters<typeof resolveAuditVerifierTenantIds>[2]>["lifecycleBypassPool"];
+  const discovered = await resolveAuditVerifierTenantIds([], new Date("2026-06-24T01:02:03.000Z"), { lifecycleBypassPool });
+  check(
+    "empty audit verifier tenant list discovers due audit tenants through lifecycle BYPASSRLS",
+    discovered.length === 2 &&
+      discovered[0] === TENANT_A &&
+      discovered[1] === TENANT_B &&
+      released &&
+      queryNow === "2026-06-24T01:02:03.000Z" &&
+      intervalMs === AUDIT_VERIFIER_INTERVAL_MS &&
+      queryCount === 2,
+    JSON.stringify({ discovered, released, queryNow, intervalMs, queryCount }),
+  );
+  const configured = await resolveAuditVerifierTenantIds([TENANT_B], new Date("2026-06-24T01:02:03.000Z"));
+  check(
+    "configured audit verifier tenant list bypasses discovery query",
+    configured.length === 1 && configured[0] === TENANT_B && queryCount === 2,
+    JSON.stringify({ configured, queryCount }),
+  );
+}
+
+{
+  let threw = false;
+  try {
+    await resolveAuditVerifierTenantIds([], new Date("2026-06-24T01:02:03.000Z"));
+  } catch (err) {
+    threw = String(err).includes("dedicated BYPASSRLS lifecycle pool");
+  }
+  check("empty audit verifier tenant discovery fails closed without lifecycle BYPASSRLS pool", threw);
+}
+
+{
+  let released = false;
+  let queryCount = 0;
+  let queryNow = "";
+  let threshold = 0;
+  const appPool = {
+    connect: async () => {
+      throw new Error("app-role pool must not be used for cross-tenant maintenance discovery");
+    },
+  };
+  const lifecycleBypassPool = {
+    connect: async () => ({
+      query: async (sql: string, params: readonly unknown[]) => {
+        queryCount += 1;
+        if (sql.includes("pg_roles")) {
+          return { rows: [{ rolsuper: false, rolbypassrls: true }] };
+        }
+        queryNow = String(params[0]);
+        threshold = Number(params[1]);
+        return {
+          rows: sql.includes("due_tenants")
+            ? [{ tenant_id: TENANT_A }, { tenant_id: TENANT_B }]
+            : [],
+        };
+      },
+      release: () => { released = true; },
+    }),
+  };
+  const pool = appPool as unknown as Parameters<typeof resolveMaintenanceTenantIds>[0];
+  const bypassPool = lifecycleBypassPool as unknown as NonNullable<Parameters<typeof resolveMaintenanceTenantIds>[3]>["lifecycleBypassPool"];
+  const discovered = await resolveMaintenanceTenantIds(pool, [], new Date("2026-06-24T01:02:03.000Z"), { lifecycleBypassPool: bypassPool });
+  check(
+    "empty maintenance tenant list uses lifecycle BYPASSRLS discovery with ops-defaults redaction threshold",
+    discovered.length === 2 &&
+      discovered[0] === TENANT_A &&
+      discovered[1] === TENANT_B &&
+      released &&
+      queryNow === "2026-06-24T01:02:03.000Z" &&
+      threshold === 5 &&
+      queryCount === 2,
+    JSON.stringify({ discovered, released, queryNow, threshold, queryCount }),
+  );
+  const configured = await resolveMaintenanceTenantIds(pool, [TENANT_B], new Date("2026-06-24T01:02:03.000Z"));
+  check(
+    "configured maintenance tenant list bypasses due-work discovery query",
+    configured.length === 1 && configured[0] === TENANT_B && queryCount === 2,
+    JSON.stringify({ configured, queryCount }),
+  );
+}
+
+{
+  let threw = false;
+  const appPool = {
+    connect: async () => {
+      throw new Error("app-role pool must not be used for missing lifecycle discovery config");
+    },
+  };
+  try {
+    await resolveMaintenanceTenantIds(appPool as unknown as Parameters<typeof resolveMaintenanceTenantIds>[0], [], new Date("2026-06-24T01:02:03.000Z"));
+  } catch (err) {
+    threw = String(err).includes("dedicated BYPASSRLS lifecycle pool");
+  }
+  check("empty maintenance tenant discovery fails closed without lifecycle BYPASSRLS pool", threw);
+}
+
+{
+  let released = false;
+  let queryCount = 0;
+  let queryNow = "";
+  const lifecycleBypassPool = {
+    connect: async () => ({
+      query: async (sql: string, params: readonly unknown[]) => {
+        queryCount += 1;
+        if (sql.includes("pg_roles")) {
+          return { rows: [{ rolsuper: false, rolbypassrls: true }] };
+        }
+        queryNow = String(params[0]);
+        return { rows: [{ tenant_id: TENANT_B }, { tenant_id: TENANT_A }] };
+      },
+      release: () => { released = true; },
+    }),
+  } as unknown as NonNullable<Parameters<typeof resolveDailyLifecycleTenantIds>[2]>["lifecycleBypassPool"];
+  const discovered = await resolveDailyLifecycleTenantIds([], new Date("2026-06-24T01:02:03.000Z"), { lifecycleBypassPool });
+  check(
+    "empty daily lifecycle tenant list discovers lifecycle tenants through BYPASSRLS role assertion",
+    discovered.length === 2 &&
+      discovered[0] === TENANT_B &&
+      discovered[1] === TENANT_A &&
+      released &&
+      queryNow === "2026-06-24T01:02:03.000Z" &&
+      queryCount === 2,
+    JSON.stringify({ discovered, released, queryNow, queryCount }),
+  );
+  const configured = await resolveDailyLifecycleTenantIds([TENANT_A], new Date("2026-06-24T01:02:03.000Z"));
+  check(
+    "configured daily lifecycle tenant list bypasses discovery query",
+    configured.length === 1 && configured[0] === TENANT_A && queryCount === 2,
+    JSON.stringify({ configured, queryCount }),
+  );
+}
+
+{
+  const jobs: RuntimeWorkerJob[] = [];
+  const fakePool = {
+    connect: async () => ({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      release: () => undefined,
+    }),
+  };
+  const fakeEnqueuer = {
+    enqueueRuntimeJob: async (_client: unknown, job: RuntimeWorkerJob) => {
+      jobs.push(job);
+    },
+  };
+  let auditSeq = 0;
+  await runAuditVerifier(fakePool as never, {
+    tenantIds: [TENANT_A, TENANT_B],
+    enqueuer: fakeEnqueuer as never,
+    correlationId: () => `22000000-0000-4000-8000-${String(++auditSeq).padStart(12, "0")}`,
+    now: () => new Date("2026-06-24T01:02:03.000Z"),
+  });
+  check(
+    "audit verifier runner enqueues configured tenant verifier jobs",
+    jobs.length === 2 &&
+      jobs[0]?.kind === "audit_verifier" &&
+      jobs[0]?.tenantId === TENANT_A &&
+      jobs[1]?.kind === "audit_verifier" &&
+      jobs[1]?.tenantId === TENANT_B,
+    JSON.stringify(jobs),
+  );
+}
+
+{
+  const jobs: RuntimeWorkerJob[] = [];
+  const fakePool = {
+    connect: async () => ({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      release: () => undefined,
+    }),
+  };
+  const fakeEnqueuer = {
+    enqueueRuntimeJob: async (_client: unknown, job: RuntimeWorkerJob) => {
+      jobs.push(job);
+    },
+  };
+  let threw = false;
+  try {
+    await runDailySweeper(fakePool as never, {
+      tenantIds: [],
+      enqueuer: fakeEnqueuer as never,
+      correlationId: nextCorrelation,
+      now: () => new Date("2026-06-24T01:02:03.000Z"),
+    });
+  } catch (err) {
+    threw = String(err).includes("dedicated BYPASSRLS lifecycle pool");
+  }
+  check(
+    "daily sweeper still enqueues global orphan once when tenant discovery is deferred",
+    threw &&
+      jobs.length === 1 &&
+      jobs[0]?.kind === "artifact_orphan" &&
+      jobs[0]?.tenantId === undefined,
+    JSON.stringify({ threw, jobs }),
   );
 }
 

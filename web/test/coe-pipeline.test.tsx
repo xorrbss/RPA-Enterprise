@@ -116,7 +116,8 @@ describe("coe pipeline view", () => {
   test("단계 전환과 ROI 저장이 실제 API 메서드로 연결된다", async () => {
     const transitionAutomationIdea = vi.fn(fakeClient().transitionAutomationIdea);
     const upsertRoiEstimate = vi.fn(fakeClient().upsertRoiEstimate);
-    renderApp(fakeClient({ transitionAutomationIdea, upsertRoiEstimate }));
+    const recordRoiActualEvidence = vi.fn(fakeClient().recordRoiActualEvidence);
+    renderApp(fakeClient({ transitionAutomationIdea, upsertRoiEstimate, recordRoiActualEvidence }));
 
     await screen.findAllByText("거래처 포털 지급 상태 확인");
     fireEvent.click(screen.getByRole("button", { name: "ROI 검토로 이동" }));
@@ -135,6 +136,43 @@ describe("coe pipeline view", () => {
         exception_rate: 0.1,
         hourly_cost: 40000,
         implementation_effort: 3200000,
+        platform_monthly_cost: 0,
+        avoided_license_cost: 0,
+      }),
+      expect.any(String),
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "실제값 저장" }));
+    await waitFor(() => expect(recordRoiActualEvidence).toHaveBeenCalledWith(
+      "61000000-0000-4000-8000-000000000001",
+      expect.objectContaining({
+        actual_transaction_count: 0,
+        actual_failure_rate: 0,
+        human_intervention_minutes: 0,
+        reprocessing_minutes: 0,
+      }),
+      expect.any(String),
+    ));
+  });
+
+  test("pilot readiness evidence is shown and can be recorded", async () => {
+    const recordAutomationAdoptionEvidence = vi.fn(fakeClient().recordAutomationAdoptionEvidence);
+    renderApp(fakeClient({ recordAutomationAdoptionEvidence }));
+
+    expect(await screen.findByRole("heading", { name: "Pilot readiness evidence" })).toBeInTheDocument();
+    expect(screen.getAllByText("Pilot charter").length).toBeGreaterThan(0);
+    expect(await screen.findByText("ticket:PILOT-123")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Record evidence" }));
+
+    await waitFor(() => expect(recordAutomationAdoptionEvidence).toHaveBeenCalledWith(
+      "61000000-0000-4000-8000-000000000001",
+      expect.objectContaining({
+        evidence_type: "pilot_charter_signoff",
+        status: "valid",
+        evidence_ref: "ticket:PILOT-123",
+        summary: "Pilot readiness evidence reviewed by the CoE owner.",
+        metadata: { source: "coe_pipeline" },
       }),
       expect.any(String),
     ));

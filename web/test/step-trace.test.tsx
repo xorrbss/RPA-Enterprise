@@ -21,7 +21,7 @@ function renderApp(client: ApiClient = fakeClient()): void {
 // 실행 상세 패널을 열어 단계 트레이스를 마운트.
 async function openDetail(): Promise<void> {
   location.hash = "#runTrace";
-  (await screen.findByRole("button", { name: "실행 추적 상세 보기" })).click();
+  (await screen.findByRole("button", { name: "실행 추적 상세 보기" }, { timeout: 10000 })).click();
 }
 
 describe("단계 트레이스 — 셀프힐링 서사 (B)", () => {

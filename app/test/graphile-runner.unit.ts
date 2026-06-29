@@ -66,6 +66,10 @@ check(
   runtimeJobTaskIdentifier({ kind: "trigger_fire" } as never) === RUNTIME_CONTROL_JOB_TASK,
 );
 check(
+  "audit_verifier routes to control task",
+  runtimeJobTaskIdentifier({ kind: "audit_verifier" } as never) === RUNTIME_CONTROL_JOB_TASK,
+);
+check(
   "artifact_redaction routes to lifecycle task",
   runtimeJobTaskIdentifier({ kind: "artifact_redaction" } as never) === RUNTIME_LIFECYCLE_JOB_TASK,
 );
@@ -154,6 +158,11 @@ await enqueuer.enqueueRuntimeJob(fakeClient, {
   scheduledFor: "2026-06-23T08:20:00.000Z" as never,
   correlationId: "corr" as never,
 } satisfies RuntimeWorkerJob);
+await enqueuer.enqueueRuntimeJob(fakeClient, {
+  kind: "audit_verifier",
+  tenantId: "tenant" as never,
+  correlationId: "corr" as never,
+} satisfies RuntimeWorkerJob);
 check(
   "PgGraphileRunEnqueuer writes run jobs to control task",
   enqueuedTasks[0] === RUNTIME_CONTROL_JOB_TASK,
@@ -167,6 +176,11 @@ check(
 check(
   "PgGraphileRunEnqueuer writes trigger_fire jobs to control task",
   enqueuedTasks[2] === RUNTIME_CONTROL_JOB_TASK,
+  JSON.stringify(enqueuedTasks),
+);
+check(
+  "PgGraphileRunEnqueuer writes audit_verifier jobs to control task",
+  enqueuedTasks[3] === RUNTIME_CONTROL_JOB_TASK,
   JSON.stringify(enqueuedTasks),
 );
 

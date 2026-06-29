@@ -29,6 +29,7 @@ const ARTIFACT_READ_AUDIT_RETENTION_DAYS = 90;
 
 type DocumentJobStatus = "created" | "extracted" | "validation_required" | "validated" | "failed";
 type DocumentExtractionStatus = "completed" | "validation_required" | "failed";
+type DocumentExtractionEngine = "built_in_deterministic_text_v1" | "external_idp_adapter_v1";
 
 interface DocumentJobRow {
   id: string;
@@ -46,8 +47,13 @@ interface DocumentJobRow {
 interface DocumentExtractionRow {
   id: string;
   document_job_id: string;
-  engine: "built_in_deterministic_text_v1";
+  engine: DocumentExtractionEngine;
   status: DocumentExtractionStatus;
+  provider_alias: string | null;
+  provider_receipt_id: string | null;
+  normalized_schema_ref: string | null;
+  evidence_ref: string | null;
+  provider_metadata: unknown;
   fields: unknown;
   missing_fields: unknown;
   validation_human_task_id: string | null;
@@ -68,6 +74,22 @@ interface CreateDocumentJobBody {
   source_artifact_id: string;
   document_type: string;
   field_schema: readonly DocumentFieldSchema[];
+}
+
+interface ExternalDocumentExtractionFieldInput {
+  readonly key: string;
+  readonly value: string | null;
+  readonly confidence: number;
+}
+
+interface ExternalDocumentExtractionBody {
+  readonly providerAlias: string;
+  readonly receiptId: string;
+  readonly normalizedSchemaRef: string;
+  readonly evidenceRef: string | null;
+  readonly fields: readonly ExternalDocumentExtractionFieldInput[];
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly legalHold: boolean;
 }
 
 export function registerDocumentJobRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
@@ -119,6 +141,23 @@ export function registerDocumentJobRoutes(app: FastifyInstance, deps: ApiServerD
       const jobId = validateJobId(request.params.jobId);
       const result = await runIdempotentCommand(deps, request, "extractDocumentJob", `/v1/document-jobs/${jobId}/extract`, (client, tenantId) =>
         extractDocumentJob(deps, client, tenantId, request, jobId),
+      );
+      reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { jobId: string } }>(
+    "/v1/document-jobs/:jobId/external-extractions",
+    { config: { rbacAction: "document_job.manage" } },
+    async (request, reply) => {
+      const body = parseExternalExtractionBody(request.body);
+      const jobId = validateJobId(request.params.jobId);
+      const result = await runIdempotentCommand(
+        deps,
+        request,
+        "recordExternalDocumentExtraction",
+        `/v1/document-jobs/${jobId}/external-extractions`,
+        (client, tenantId) => recordExternalDocumentExtraction(client, tenantId, jobId, body),
       );
       reply.code(result.status).send(result.body);
     },
@@ -200,6 +239,10 @@ async function extractDocumentJob(
   }
   const job = await selectDocumentJob(client, jobId);
   if (job === null) throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  const existing = await selectExtraction(client, job.id);
+  if (existing !== null && existing.engine !== "built_in_deterministic_text_v1") {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "document_extraction_already_recorded" });
+  }
   const artifact = await selectVisibleSourceArtifact(client, job.source_artifact_id);
   if (artifact === null) throw new ApiResponseError("RESOURCE_NOT_FOUND", { reason: "source_artifact_not_found" });
   assertSupportedSourceArtifact(artifact);
@@ -216,6 +259,35 @@ async function extractDocumentJob(
     [tenantId, job.id, status === "completed" ? "extracted" : "validation_required"],
   );
   return { status: 200, body: mapExtraction(extraction) };
+}
+
+async function recordExternalDocumentExtraction(
+  client: PoolClient,
+  tenantId: string,
+  jobId: string,
+  body: ExternalDocumentExtractionBody,
+): Promise<CommandResponse> {
+  const job = await selectDocumentJob(client, jobId);
+  if (job === null) throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  await assertProviderReceiptUnused(client, tenantId, jobId, body.providerAlias, body.receiptId);
+  const existing = await selectExtraction(client, jobId);
+  if (
+    existing !== null &&
+    (existing.engine !== "external_idp_adapter_v1" ||
+      existing.provider_alias !== body.providerAlias ||
+      existing.provider_receipt_id !== body.receiptId)
+  ) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "document_extraction_already_recorded" });
+  }
+  if (existing !== null) return { status: 202, body: mapExtraction(existing) };
+
+  const normalized = normalizeExternalFields(parseSchemaForApi(job.field_schema), body.fields);
+  const extraction = await upsertExternalExtraction(client, tenantId, job.id, normalized, body);
+  await client.query(
+    `UPDATE document_jobs SET status=$3, updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+    [tenantId, job.id, normalized.status === "completed" ? "extracted" : "validation_required"],
+  );
+  return { status: 202, body: mapExtraction(extraction) };
 }
 
 async function createValidationTask(
@@ -297,10 +369,87 @@ async function upsertExtraction(
                    fields=EXCLUDED.fields,
                    missing_fields=EXCLUDED.missing_fields,
                    updated_at=now()
-     RETURNING id, document_job_id, engine, status, fields, missing_fields, validation_human_task_id, created_at, updated_at`,
+     RETURNING id, document_job_id, engine, status, provider_alias, provider_receipt_id,
+               normalized_schema_ref, evidence_ref, provider_metadata, fields, missing_fields,
+               validation_human_task_id, created_at, updated_at`,
     [randomUUID(), tenantId, jobId, status, JSON.stringify(fields), JSON.stringify(missingFields)],
   );
   return result.rows[0];
+}
+
+async function upsertExternalExtraction(
+  client: PoolClient,
+  tenantId: string,
+  jobId: string,
+  normalized: {
+    readonly status: "completed" | "validation_required";
+    readonly fields: readonly DocumentExtractionField[];
+    readonly missingFields: readonly string[];
+  },
+  body: ExternalDocumentExtractionBody,
+): Promise<DocumentExtractionRow> {
+  const result = await client.query<DocumentExtractionRow>(
+    `INSERT INTO document_extractions
+       (id, tenant_id, document_job_id, engine, status, provider_alias, provider_receipt_id,
+        normalized_schema_ref, evidence_ref, provider_metadata, fields, missing_fields, legal_hold)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, 'external_idp_adapter_v1', $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12)
+     ON CONFLICT (tenant_id, document_job_id)
+     DO UPDATE SET status=EXCLUDED.status,
+                   provider_alias=EXCLUDED.provider_alias,
+                   provider_receipt_id=EXCLUDED.provider_receipt_id,
+                   normalized_schema_ref=EXCLUDED.normalized_schema_ref,
+                   evidence_ref=EXCLUDED.evidence_ref,
+                   provider_metadata=EXCLUDED.provider_metadata,
+                   fields=EXCLUDED.fields,
+                   missing_fields=EXCLUDED.missing_fields,
+                   legal_hold=EXCLUDED.legal_hold,
+                   updated_at=now()
+       WHERE document_extractions.engine='external_idp_adapter_v1'
+         AND document_extractions.provider_alias=EXCLUDED.provider_alias
+         AND document_extractions.provider_receipt_id=EXCLUDED.provider_receipt_id
+     RETURNING id, document_job_id, engine, status, provider_alias, provider_receipt_id,
+               normalized_schema_ref, evidence_ref, provider_metadata, fields, missing_fields,
+               validation_human_task_id, created_at, updated_at`,
+    [
+      randomUUID(),
+      tenantId,
+      jobId,
+      normalized.status,
+      body.providerAlias,
+      body.receiptId,
+      body.normalizedSchemaRef,
+      body.evidenceRef,
+      JSON.stringify(body.metadata),
+      JSON.stringify(normalized.fields),
+      JSON.stringify(normalized.missingFields),
+      body.legalHold,
+    ],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "document_extraction_already_recorded" });
+  return row;
+}
+
+async function assertProviderReceiptUnused(
+  client: PoolClient,
+  tenantId: string,
+  jobId: string,
+  providerAlias: string,
+  receiptId: string,
+): Promise<void> {
+  const result = await client.query<{ document_job_id: string }>(
+    `SELECT document_job_id
+       FROM document_extractions
+      WHERE tenant_id=$1::uuid
+        AND provider_alias=$2
+        AND provider_receipt_id=$3
+        AND deleted_at IS NULL`,
+    [tenantId, providerAlias, receiptId],
+  );
+  const row = result.rows[0];
+  if (row !== undefined && row.document_job_id !== jobId) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "provider_receipt_already_used" });
+  }
 }
 
 async function recordArtifactRead(deps: ApiServerDeps, request: FastifyRequest, artifact: SourceArtifactRow): Promise<void> {
@@ -358,7 +507,9 @@ async function selectDocumentJob(client: PoolClient, id: string): Promise<Docume
 
 async function selectExtraction(client: PoolClient, jobId: string): Promise<DocumentExtractionRow | null> {
   const result = await client.query<DocumentExtractionRow>(
-    `SELECT id, document_job_id, engine, status, fields, missing_fields, validation_human_task_id, created_at, updated_at
+    `SELECT id, document_job_id, engine, status, provider_alias, provider_receipt_id,
+            normalized_schema_ref, evidence_ref, provider_metadata, fields, missing_fields,
+            validation_human_task_id, created_at, updated_at
        FROM document_extractions
       WHERE document_job_id=$1::uuid AND deleted_at IS NULL`,
     [jobId],
@@ -404,6 +555,85 @@ function parseCreateBody(raw: unknown): CreateDocumentJobBody {
   return { source_artifact_id: sourceArtifactId, document_type: documentType, field_schema: fieldSchema };
 }
 
+function parseExternalExtractionBody(raw: unknown): ExternalDocumentExtractionBody {
+  const body = parseKnownBody(raw, [
+    "provider_alias",
+    "receipt_id",
+    "normalized_schema_ref",
+    "evidence_ref",
+    "fields",
+    "metadata",
+    "legal_hold",
+  ]);
+  return {
+    providerAlias: requiredSafeText(body.provider_alias, "provider_alias", 1, 120),
+    receiptId: requiredSafeText(body.receipt_id, "receipt_id", 1, 160),
+    normalizedSchemaRef: requiredSafeText(body.normalized_schema_ref, "normalized_schema_ref", 1, 160),
+    evidenceRef: body.evidence_ref === undefined || body.evidence_ref === null
+      ? null
+      : requiredSafeText(body.evidence_ref, "evidence_ref", 1, 240),
+    fields: parseExternalFields(body.fields),
+    metadata: parseSafeMetadata(body.metadata),
+    legalHold: body.legal_hold === undefined ? false : requiredBoolean(body.legal_hold, "legal_hold"),
+  };
+}
+
+function parseExternalFields(raw: unknown): readonly ExternalDocumentExtractionFieldInput[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 200) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_external_fields" });
+  }
+  const seen = new Set<string>();
+  return raw.map((item, index) => {
+    if (!isRecord(item)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_external_field", index });
+    const body = parseKnownBody(item, ["key", "value", "confidence"]);
+    const key = requiredSafeText(body.key, `fields.${index}.key`, 1, 80);
+    if (!/^[A-Za-z0-9_.-]{1,80}$/.test(key)) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_external_field_key", field: key });
+    }
+    if (seen.has(key)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "duplicate_external_field", field: key });
+    seen.add(key);
+    const value = normalizeExternalValue(body.value, `fields.${index}.value`);
+    const confidence = requiredConfidence(body.confidence, `fields.${index}.confidence`);
+    return { key, value, confidence };
+  });
+}
+
+function normalizeExternalFields(
+  schema: readonly DocumentFieldSchema[],
+  inputFields: readonly ExternalDocumentExtractionFieldInput[],
+): {
+  readonly status: "completed" | "validation_required";
+  readonly fields: readonly DocumentExtractionField[];
+  readonly missingFields: readonly string[];
+} {
+  const schemaByKey = new Map(schema.map((field) => [field.key, field]));
+  for (const input of inputFields) {
+    if (!schemaByKey.has(input.key)) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "external_field_not_in_schema", field: input.key });
+    }
+  }
+  const byKey = new Map(inputFields.map((field) => [field.key, field]));
+  const fields = schema.map((field): DocumentExtractionField => {
+    const input = byKey.get(field.key);
+    if (input === undefined || input.value === null || input.value.trim().length === 0) {
+      return { key: field.key, label: field.label, value: null, confidence: 0, status: "missing", source: "external_idp" };
+    }
+    const status = input.confidence >= field.minConfidence ? "extracted" : "low_confidence";
+    return {
+      key: field.key,
+      label: field.label,
+      value: input.value,
+      confidence: input.confidence,
+      status,
+      source: "external_idp",
+    };
+  });
+  const missingFields = fields
+    .filter((field, index) => field.status === "low_confidence" || (field.status === "missing" && schema[index]?.required === true))
+    .map((field) => field.key);
+  return { status: missingFields.length > 0 ? "validation_required" : "completed", fields, missingFields };
+}
+
 function parseSchemaForApi(value: unknown): readonly DocumentFieldSchema[] {
   try {
     return parseDocumentFieldSchema(value);
@@ -445,6 +675,82 @@ function requiredText(value: unknown, field: string): string {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
   }
   return value.trim();
+}
+
+function requiredSafeText(value: unknown, field: string, min: number, max: number): string {
+  if (typeof value !== "string") throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
+  const text = value.trim();
+  if (text.length < min || text.length > max) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
+  assertSafeEvidenceString(text, field);
+  return text;
+}
+
+function normalizeExternalValue(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  if (typeof value === "string") {
+    if (value.length > 2000) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "external_field_value_too_large", field });
+    assertSafeEvidenceString(value, field);
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_external_field_value", field });
+}
+
+function requiredConfidence(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_external_field_confidence", field });
+  }
+  return value;
+}
+
+function requiredBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
+  return value;
+}
+
+function parseSafeMetadata(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === undefined || value === null) return {};
+  if (!isRecord(value)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_must_be_object" });
+  if (JSON.stringify(value).length > 4000) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_too_large" });
+  assertSafeMetadata(value, "metadata", 0);
+  return value;
+}
+
+function assertSafeMetadata(value: unknown, path: string, depth: number): void {
+  if (depth > 4) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_too_deep", path });
+  if (value === null || typeof value === "number" || typeof value === "boolean") return;
+  if (typeof value === "string") {
+    assertSafeEvidenceString(value, path);
+    return;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 50) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_array_too_large", path });
+    value.forEach((item, index) => assertSafeMetadata(item, `${path}.${index}`, depth + 1));
+    return;
+  }
+  if (!isRecord(value)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_value_not_json", path });
+  const entries = Object.entries(value);
+  if (entries.length > 50) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_object_too_large", path });
+  for (const [key, child] of entries) {
+    if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key) || forbiddenMetadataKey(key)) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_secret_or_endpoint_key_forbidden", path: `${path}.${key}` });
+    }
+    assertSafeMetadata(child, `${path}.${key}`, depth + 1);
+  }
+}
+
+function forbiddenMetadataKey(key: string): boolean {
+  return /(^|[_\-.])(secret|token|password|credential|authorization|cookie|webhook_url|endpoint_url|url|dsn|smtp|raw_ocr_text|ocr_text|full_text|payload|body)([_\-.]|$)/i.test(key);
+}
+
+function assertSafeEvidenceString(value: string, field: string): void {
+  if (/https?:\/\//i.test(value) || /hooks\.slack\.com/i.test(value)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "raw_endpoint_url_forbidden", field });
+  }
+  if (/\bbearer\s+[a-z0-9._~+/=-]{8,}/i.test(value) || /\b(token|password|secret)=/i.test(value)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "secret_material_forbidden", field });
+  }
 }
 
 function statusFilter(value: unknown): DocumentJobStatus | undefined {
@@ -496,6 +802,11 @@ function mapExtraction(row: DocumentExtractionRow): Record<string, unknown> {
     document_job_id: row.document_job_id,
     engine: row.engine,
     status: row.status,
+    provider_alias: row.provider_alias,
+    provider_receipt_id: row.provider_receipt_id,
+    normalized_schema_ref: row.normalized_schema_ref,
+    evidence_ref: row.evidence_ref,
+    provider_metadata: recordOrEmpty(row.provider_metadata),
     fields: Array.isArray(row.fields) ? row.fields : [],
     missing_fields: stringArray(row.missing_fields),
     validation_human_task_id: row.validation_human_task_id,

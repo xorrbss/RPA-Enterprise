@@ -75,4 +75,89 @@ describe("Scenario studio pagination", () => {
     const idCell = await screen.findByText("sc-7e3f0011");
     expect(idCell.tagName).toBe("CODE"); // 선택·복사 가능한 식별값
   });
+
+  test("version history shows governance stage and sends opaque evidence ref", async () => {
+    const calls: Array<{ version: number; body: Parameters<ApiClient["setScenarioVersionGovernanceStage"]>[2] }> = [];
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "sc-governance", name: "governed scenario", version: 2, latest_version_id: "ver-2" }],
+          next_cursor: null,
+        }),
+        listScenarioVersions: async () => ({
+          items: [
+            {
+              version_id: "ver-2",
+              version: 2,
+              promotion_status: "draft",
+              certification: {
+                status: "uncertified",
+                governance_stage: "pilot",
+                governance_reason: "pilot cohort ready",
+                governance_evidence_ref: "ticket:GOV-122",
+                governance_metadata: null,
+                governance_updated_by: "reviewer-a",
+                governance_updated_at: "2026-06-24T00:00:00.000Z",
+                certified_by: null,
+                certified_at: null,
+                expires_at: null,
+                reason: null,
+                revoked_by: null,
+                revoked_at: null,
+                revoke_reason: null,
+                valid_for_prod: false,
+              },
+              created_at: "2026-06-24T00:00:00.000Z",
+              promoted_at: null,
+            },
+          ],
+          next_cursor: null,
+        }),
+        setScenarioVersionGovernanceStage: async (_scenarioId, version, body) => {
+          calls.push({ version, body });
+          return {
+            version_id: "ver-2",
+            version,
+            promotion_status: "draft",
+            certification: {
+              status: "revoked",
+              governance_stage: body.stage,
+              governance_reason: body.reason,
+              governance_evidence_ref: body.evidence_ref,
+              governance_metadata: body.metadata ?? null,
+              governance_updated_by: "operator-a",
+              governance_updated_at: "2026-06-25T00:00:00.000Z",
+              certified_by: null,
+              certified_at: null,
+              expires_at: null,
+              reason: null,
+              revoked_by: "operator-a",
+              revoked_at: "2026-06-25T00:00:00.000Z",
+              revoke_reason: body.reason,
+              valid_for_prod: false,
+            },
+            created_at: "2026-06-24T00:00:00.000Z",
+            promoted_at: null,
+          };
+        },
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    expect(await screen.findByText("governed scenario")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "이력" }));
+
+    expect(await screen.findByText("pilot", { selector: "span.badge" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "stage: deprecated" }));
+    expect(screen.getByPlaceholderText("ticket:GOV-123")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "retire pilot" } });
+    fireEvent.change(screen.getByLabelText("Evidence ref"), { target: { value: "ticket:GOV-123" } });
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({
+      version: 2,
+      body: { stage: "deprecated", reason: "retire pilot", evidence_ref: "ticket:GOV-123" },
+    });
+  });
 });

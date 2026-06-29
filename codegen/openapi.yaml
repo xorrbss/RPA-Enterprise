@@ -2,6 +2,12 @@ openapi: 3.1.0
 info:
   title: RPA Control-Plane API
   version: "1.0"
+  contact:
+    name: RPA Platform Owners
+    url: https://example.invalid/rpa-platform
+    email: rpa-platform@example.invalid
+  license:
+    name: Proprietary
   description: >
     제어평면 REST API (v1). 운영 콘솔/외부 클라이언트가 호출하는 제어평면 엔드포인트의
     경로·메서드·요청/응답 요지·주요 에러코드를 고정한다. 본 문서는 api-surface.md(Control-Plane
@@ -33,10 +39,14 @@ tags:
     description: 계산형 운영 알림·SLA 위험 센터 (api-surface Ops Alerts v1)
   - name: AutomationIdeas
     description: CoE automation intake, approval pipeline, and ROI estimation.
+  - name: Reports
+    description: Monthly automation performance, ROI evidence, and adoption decision reports.
   - name: AuditLog
     description: Tenant-scoped immutable audit log explorer without raw payload disclosure.
   - name: ConnectorCatalog
     description: Browser RPA connector and template catalog metadata.
+  - name: IntegrationHandoffs
+    description: Existing RPA product handoff ledger and provider receipt metadata.
   - name: DocumentIDP
     description: Deterministic text/CSV/JSON document extraction and human validation queue.
   - name: Scenarios
@@ -75,6 +85,80 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthReadiness'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ai-governance/evidence:
+    get:
+      tags: [AIGovernance]
+      operationId: listAiGovernanceEvidence
+      summary: List AI governance evidence
+      description: >
+        List tenant-scoped metadata-only AI governance evidence. Evidence covers model registry approvals,
+        prompt registry approvals, evaluation results, cost controls, and human overrides. Raw prompts, raw
+        model outputs, raw endpoint URLs, tokens, passwords, provider credentials, and resolved SecretRef
+        values are never returned.
+      parameters:
+        - name: evidence_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AiGovernanceEvidenceType'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+        - name: subject_ref
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 300
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: AI governance evidence ledger page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiGovernanceEvidencePage'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [AIGovernance]
+      operationId: recordAiGovernanceEvidence
+      summary: Record AI governance evidence
+      description: >
+        Record admin-only metadata evidence for AI governance controls. status=valid requires an opaque
+        evidence reference, policy decision reference, and existing audit correlation id. Valid model, prompt,
+        eval, and cost-control evidence also requires a future expiry; human override evidence is event based
+        and may omit expiry. Raw prompts, model outputs, raw URLs, tokens, passwords, provider credentials,
+        and resolved SecretRef values are rejected.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiGovernanceEvidenceRequest'
+      responses:
+        '201':
+          description: AI governance evidence recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiGovernanceEvidence'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
 
@@ -516,7 +600,7 @@ paths:
       operationId: listOpsAlerts
       description: >
         List computed tenant-scoped operations alerts from current runs, human tasks, trigger fires, DLQ rows,
-        and Bot Pool health. Product Open v1 delivery is console-only; acknowledgement state is persisted
+        Bot Pool health, SCIM SecretRef rotation, and audit verifier evidence health. Product Open v1 delivery is console-only; acknowledgement state is persisted
         by alert generation, while Teams/Slack/email/webhook notifications remain unopened.
       summary: 운영 알림 목록
       parameters:
@@ -590,6 +674,182 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /ops-alerts/{alert_id}/deliveries:
+    get:
+      tags: [OpsAlerts]
+      operationId: listOpsAlertDeliveries
+      summary: List external ops alert delivery receipts
+      description: >
+        List metadata-only external notification delivery receipts for an alert id. This ledger is independent
+        from console acknowledgement and never exposes endpoint URLs, authorization headers, webhook secrets,
+        SMTP credentials, provider payload bodies, or resolved SecretRef values.
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 300
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: External delivery receipt page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsNotificationDeliveryPage'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [OpsAlerts]
+      operationId: recordOpsAlertDelivery
+      summary: Record external ops alert delivery receipt
+      description: >
+        Record an admin-only, SecretRef-backed external notification provider receipt for the current computed
+        alert generation. The route records evidence only; it does not send network traffic and it does not
+        acknowledge the alert. Successful sent/delivered receipts require a provider receipt_id; failed receipts
+        require a non-secret error_code.
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 300
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpsNotificationDeliveryRequest'
+      responses:
+        '201':
+          description: External delivery receipt recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsNotificationDelivery'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops-alerts/{alert_id}/deliveries/send-webhook:
+    post:
+      tags: [OpsAlerts]
+      operationId: sendOpsAlertWebhookDelivery
+      summary: Queue SecretRef-backed webhook delivery for an ops alert
+      description: >
+        Create a durable webhook notification attempt for the current computed alert generation and enqueue
+        the runtime sender. The endpoint URL stays behind endpoint_secret_ref, the resolved URL is never
+        returned or recorded, and callback signing material stays behind callback_signature_secret_ref when
+        configured. A successful HTTP 2xx send records only a sent receipt. Delivered evidence still requires
+        a provider receipt/callback and is not synthesized by this route.
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 300
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpsNotificationWebhookSendRequest'
+      responses:
+        '202':
+          description: Webhook notification attempt queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsNotificationAttempt'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /webhooks/ops-alerts/{tenant_id}/{attempt_id}:
+    post:
+      tags: [OpsAlerts]
+      operationId: receiveOpsAlertWebhookCallback
+      security: []
+      summary: Receive signed ops alert provider delivery callback
+      description: >
+        Public JWT-skip provider callback ingress for ops alert webhook delivery attempts. The request is
+        authenticated by X-RPA-Ops-Notification-Signature over
+        "{timestamp}.{receipt_id}.{canonical_json(metadata-only body)}" using the SecretStore value referenced
+        by callback_signature_secret_ref on the originating ops_notification_attempts row. The
+        X-RPA-Ops-Notification-Event-Id header must equal body.receipt_id and the timestamp skew window is
+        five minutes. Acceptance inserts a new ops_notification_deliveries receipt with status delivered or
+        failed; it never rewrites a prior sent receipt as delivered silently.
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: attempt_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: X-RPA-Ops-Notification-Event-Id
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: X-RPA-Ops-Notification-Timestamp
+          in: header
+          required: true
+          schema: { type: string }
+          description: Unix timestamp in seconds or milliseconds; must be within five minutes of receipt.
+        - name: X-RPA-Ops-Notification-Signature
+          in: header
+          required: true
+          schema: { type: string, pattern: '^sha256=[A-Fa-f0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpsNotificationWebhookCallbackRequest'
+      responses:
+        '202':
+          description: Provider callback receipt accepted or idempotently replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsNotificationDelivery'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '412':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   /ops/health:
     get:
       tags: [OpsAlerts]
@@ -605,6 +865,85 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OpsHealth'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops/production-readiness:
+    get:
+      tags: [OpsAlerts]
+      operationId: getProductionReadiness
+      description: >
+        Return tenant-scoped controlled-production readiness evidence. Runtime gates are computed from
+        migration ledger, queue health, browser pool capacity, lease hygiene, stale runs, and audit verifier
+        freshness. External owner evidence such as outbound alert delivery, managed backup/PITR restore
+        drills, SLO/on-call sign-off, support training completion, and observability telemetry wiring is
+        surfaced as deferred instead of being inferred as ready.
+      summary: Controlled production readiness snapshot
+      responses:
+        '200':
+          description: Current tenant controlled-production readiness snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductionReadiness'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops/production-readiness/evidence:
+    get:
+      tags: [OpsAlerts]
+      operationId: listProductionReadinessEvidence
+      summary: List controlled production readiness evidence
+      description: >
+        List tenant-scoped metadata-only owner/platform evidence used by controlled-production readiness gates.
+        The response never includes raw rosters, user lists, training documents, endpoint URLs, tokens, passwords,
+        webhook secrets, or resolved SecretRef values.
+      parameters:
+        - name: evidence_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ProductionReadinessEvidenceType'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Production readiness evidence ledger page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductionReadinessEvidencePage'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [OpsAlerts]
+      operationId: recordProductionReadinessEvidence
+      summary: Record controlled production readiness evidence
+      description: >
+        Record admin-only owner/platform evidence for controlled-production gates. Valid evidence requires a future
+        expires_at plus type-specific metadata. The request is metadata-only; raw rosters, user lists, training
+        documents, raw URLs, tokens, passwords, webhook secrets, and resolved SecretRef values are rejected by the
+        API boundary.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductionReadinessEvidenceRequest'
+      responses:
+        '201':
+          description: Production readiness evidence recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductionReadinessEvidence'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
 
@@ -774,6 +1113,174 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /automation-ideas/{idea_id}/roi-actuals:
+    parameters:
+      - $ref: '#/components/parameters/AutomationIdeaId'
+    get:
+      tags: [AutomationIdeas]
+      operationId: listRoiActualEvidence
+      description: List metadata-only pilot actual ROI evidence separately from ROI estimates.
+      summary: List ROI actual evidence
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: ROI actual evidence page for an automation idea.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoiActualEvidencePage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [AutomationIdeas]
+      operationId: recordRoiActualEvidence
+      summary: Record ROI actual evidence
+      description: >
+        Append pilot actual metrics for an automation idea. This ledger records actual transaction count,
+        failure rate, human intervention minutes, and reprocessing minutes with a metadata-only evidence
+        reference. It never stores endpoint URLs, tokens, passwords, webhook secrets, or resolved SecretRef values.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoiActualEvidenceRequest'
+      responses:
+        '201':
+          description: ROI actual evidence recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoiActualEvidence'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /automation-ideas/{idea_id}/adoption-evidence:
+    parameters:
+      - $ref: '#/components/parameters/AutomationIdeaId'
+    get:
+      tags: [AutomationIdeas]
+      operationId: listAutomationAdoptionEvidence
+      summary: List automation adoption readiness evidence
+      description: >
+        List metadata-only pilot readiness evidence for an automation idea. Evidence refs are opaque
+        ticket or artifact references; raw URLs, tokens, passwords, webhook secrets, resolved SecretRef
+        material, long raw documents, and raw training rosters are excluded.
+      parameters:
+        - name: evidence_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AutomationAdoptionEvidenceType'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Automation adoption evidence page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationAdoptionEvidencePage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [AutomationIdeas]
+      operationId: recordAutomationAdoptionEvidence
+      summary: Record automation adoption readiness evidence
+      description: >
+        Append metadata-only pilot readiness evidence for an automation idea. This endpoint requires
+        Idempotency-Key and rejects raw URLs, tokens, passwords, webhook secrets, resolved SecretRef
+        material, long raw documents, and raw training rosters in summary, evidence_ref, and metadata.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutomationAdoptionEvidenceRequest'
+      responses:
+        '201':
+          description: Automation adoption evidence recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationAdoptionEvidence'
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 1.6b Automation Performance Reports
+  # ============================================================
+  /reports/automation-performance:
+    get:
+      tags: [Reports]
+      operationId: getAutomationPerformanceReport
+      summary: Get monthly automation performance report
+      description: >
+        Return tenant-scoped monthly run, cost, ROI estimate, ROI actual comparison, and adoption decision
+        aggregates. ROI actuals are aggregated from metadata-only evidence and never expose evidence refs,
+        evidence summaries, evidence metadata, endpoint URLs, tokens, passwords, webhook secrets, or resolved
+        SecretRef values.
+      parameters:
+        - name: month
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+      responses:
+        '200':
+          description: Monthly automation performance report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationPerformanceReport'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /reports/automation-performance/export:
+    get:
+      tags: [Reports]
+      operationId: exportAutomationPerformanceReport
+      summary: Export monthly automation performance report
+      description: >
+        Export the same monthly report evidence as CSV, XLSX, or PoC Markdown. Exports include ROI actual
+        aggregate comparison columns only; raw ROI actual evidence refs, summaries, metadata, endpoint URLs,
+        tokens, passwords, webhook secrets, and resolved SecretRef values are excluded.
+      parameters:
+        - name: month
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [csv, xlsx, poc_markdown]
+            default: csv
+      responses:
+        '200':
+          description: Monthly report export.
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+            text/markdown:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Error'
+
   # ============================================================
   # 1.7 Audit Log Explorer
   # ============================================================
@@ -855,6 +1362,57 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /audit-log/verification-runs:
+    get:
+      tags: [AuditLog]
+      operationId: listAuditVerificationRuns
+      description: List tenant-scoped audit hash-chain verification evidence without exposing audit payload bodies.
+      summary: List audit verification runs
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AuditVerificationRunStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Tenant-scoped verifier run page. Raw audit payload bodies are intentionally omitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditVerificationRunPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /audit-log/verification-runs/verify:
+    post:
+      tags: [AuditLog]
+      operationId: runAuditVerification
+      description: >
+        Recompute the current tenant audit_log hash chain and persist a 90-day verifier evidence row.
+        Chain tampering is recorded as status=invalid with metadata-only violations; it is not treated as
+        an unknown healthy state.
+      summary: Run audit hash-chain verification
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditVerificationRequest'
+      responses:
+        '201':
+          description: Stored verifier evidence for the tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditVerificationRun'
+        default:
+          $ref: '#/components/responses/Error'
+
   # ============================================================
   # 1.8 Connector and Template Catalog
   # ============================================================
@@ -917,6 +1475,205 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TemplateCatalogPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /integration-handoffs:
+    get:
+      tags: [IntegrationHandoffs]
+      operationId: listIntegrationHandoffs
+      summary: List existing RPA handoffs
+      description: >
+        List tenant-scoped existing RPA handoff requests. The response is metadata-only:
+        endpoint URLs, credentials, provider tokens, and callback secret material are never returned.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/IntegrationHandoffStatus'
+        - name: provider_alias
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 120
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Tenant-scoped existing RPA handoff page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationHandoffPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [IntegrationHandoffs]
+      operationId: createIntegrationHandoff
+      summary: Request existing RPA product handoff
+      description: >
+        Records a SecretRef-only existing RPA handoff request. Product Open first slice does not
+        claim provider execution; the response status is deferred until an authenticated receipt
+        is recorded by the callback endpoint.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationHandoffCreateRequest'
+      responses:
+        '202':
+          description: Handoff request accepted into the control-plane ledger.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationHandoff'
+        '403':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /integration-handoffs/{handoff_id}/dispatch:
+    post:
+      tags: [IntegrationHandoffs]
+      operationId: dispatchIntegrationHandoff
+      summary: Dispatch existing RPA handoff to provider
+      description: >
+        Creates a durable dispatch attempt for an existing RPA provider. The endpoint is resolved
+        from endpoint_secret_ref only by the runtime SecretStore boundary, and allowed_hosts is the
+        egress allow-list used by the worker before any network call.
+      parameters:
+        - name: handoff_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationHandoffDispatchRequest'
+      responses:
+        '202':
+          description: Dispatch attempt queued for runtime provider delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationHandoffDispatchAttempt'
+        '404':
+          $ref: '#/components/responses/Error'
+        '412':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /integration-handoffs/{handoff_id}/callback:
+    post:
+      tags: [IntegrationHandoffs]
+      operationId: recordIntegrationHandoffCallback
+      summary: Record existing RPA provider handoff receipt
+      description: >
+        Records the provider receipt/status for a handoff without exposing raw callback payloads or
+        secret material. Provider-signed public callback verification remains a separate adapter;
+        this control-plane route requires integration.handoff authorization.
+      parameters:
+        - name: handoff_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationHandoffCallbackRequest'
+      responses:
+        '200':
+          description: Updated handoff receipt metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationHandoff'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /webhooks/integration-handoffs/{tenant_id}/{handoff_id}:
+    post:
+      tags: [IntegrationHandoffs]
+      operationId: receiveIntegrationHandoffProviderCallback
+      security: []
+      summary: Receive signed existing RPA provider callback
+      description: >
+        Public JWT-skip provider callback ingress for existing RPA handoffs. The request is
+        authenticated by X-RPA-Integration-Signature over
+        "{timestamp}.{receipt_id}.{canonical_json(body)}" using the SecretStore value referenced
+        by callback_signature_secret_ref. X-RPA-Integration-Event-Id must equal body.receipt_id
+        and receipt_id is the replay key per tenant and handoff.
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: handoff_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-RPA-Integration-Event-Id
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: X-RPA-Integration-Timestamp
+          in: header
+          required: true
+          schema: { type: string }
+          description: Unix timestamp in seconds or milliseconds; must be within five minutes of receipt.
+        - name: X-RPA-Integration-Signature
+          in: header
+          required: true
+          schema: { type: string, pattern: '^sha256=[A-Fa-f0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationHandoffCallbackRequest'
+      responses:
+        '202':
+          description: Provider receipt accepted or idempotently replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationHandoff'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '412':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
 
@@ -1008,6 +1765,37 @@ paths:
       responses:
         '200':
           description: Document extraction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentExtraction'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /document-jobs/{job_id}/external-extractions:
+    post:
+      tags: [DocumentIDP]
+      operationId: recordExternalDocumentExtraction
+      summary: Record external IDP extraction result
+      description: >
+        Receive a metadata-only external IDP/OCR provider result for an existing document job.
+        The provider must send normalized fields that match the job field_schema. Raw OCR full text,
+        endpoint URLs, tokens, passwords, webhook secrets, and resolved SecretRef values are rejected.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExternalDocumentExtractionRequest'
+      responses:
+        '202':
+          description: External IDP extraction stored for validation or completion.
           content:
             application/json:
               schema:
@@ -1556,6 +2344,111 @@ paths:
               $ref: '#/components/headers/ETag'
         '404':
           $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/versions/{version}/certify:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+      - $ref: '#/components/parameters/Version'
+    post:
+      tags: [Scenarios]
+      operationId: certifyScenarioVersion
+      summary: 시나리오 버전 운영 인증
+      description: prod 릴리스 approve/deploy/rollback 게이트에 사용할 source version 인증 상태를 기록한다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioCertificationRequest'
+      responses:
+        '200':
+          description: certified scenario version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioVersion'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/versions/{version}/governance-stage:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+      - $ref: '#/components/parameters/Version'
+    post:
+      tags: [Scenarios]
+      operationId: setScenarioVersionGovernanceStage
+      summary: Set scenario version governance stage
+      description: >
+        Records a metadata-only CoE governance stage for a scenario version.
+        Allowed request stages are review, pilot, and deprecated; they are
+        not production certification and must not satisfy the prod release
+        certification gate. Only certification.status=certified is valid for
+        prod. Raw URLs, endpoint URLs, tokens, passwords, secrets, resolved
+        SecretRef values, long approval packets, and raw rosters are forbidden.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioGovernanceStageRequest'
+      responses:
+        '200':
+          description: scenario version with updated governance metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioVersion'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/versions/{version}/revoke-certification:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+      - $ref: '#/components/parameters/Version'
+    post:
+      tags: [Scenarios]
+      operationId: revokeScenarioCertification
+      summary: 시나리오 버전 운영 인증 취소
+      description: source version 인증을 취소하고 이후 prod 릴리스 approve/deploy/rollback을 fail-closed로 차단한다.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioCertificationRevokeRequest'
+      responses:
+        '200':
+          description: revoked scenario version certification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioVersion'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
         default:
           $ref: '#/components/responses/Error'
 
@@ -2363,6 +3256,7 @@ paths:
     post:
       tags: [Sites]
       operationId: createSiteElement
+      description: Register one DOM-backed browser Object Repository element for the site. Desktop, vision, and credential-bearing selectors remain out of scope.
       summary: 사이트 화면요소 등록
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2400,6 +3294,7 @@ paths:
     patch:
       tags: [Sites]
       operationId: updateSiteElement
+      description: Update mutable browser selector metadata only. Probe-managed verification fields are changed only by the selector probe endpoint.
       summary: 사이트 화면요소 수정
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2427,6 +3322,7 @@ paths:
     delete:
       tags: [Sites]
       operationId: deleteSiteElement
+      description: Delete one tenant-scoped site element from the browser Object Repository without affecting historical run evidence.
       summary: 사이트 화면요소 삭제
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2456,6 +3352,7 @@ paths:
     post:
       tags: [Sites]
       operationId: probeSiteElement
+      description: Probe a DOM selector against a sample page when a live probe provider and sample URL are available. Missing runtime evidence returns explicit not_run.
       summary: Browser Object Repository selector probe
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2487,6 +3384,7 @@ paths:
     get:
       tags: [Sites]
       operationId: listBrowserRecordings
+      description: List metadata-only browser recorder sessions for one site. Raw cookies, tokens, and typed input values are never returned.
       summary: Browser Recorder 세션 목록
       parameters:
         - name: status
@@ -2514,6 +3412,7 @@ paths:
     post:
       tags: [Sites]
       operationId: startBrowserRecording
+      description: Start a browser recorder session for DOM event metadata capture. The external local agent sends events through append APIs rather than exposing browser secrets.
       summary: Browser Recorder 세션 시작
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2551,6 +3450,7 @@ paths:
     get:
       tags: [Sites]
       operationId: listBrowserRecordingEvents
+      description: List ordered DOM recorder events for one session. Event payloads contain selector, URL, label, and value previews only.
       summary: Browser Recorder 이벤트 목록
       parameters:
         - $ref: '#/components/parameters/Limit'
@@ -2573,6 +3473,7 @@ paths:
     post:
       tags: [Sites]
       operationId: appendBrowserRecordingEvents
+      description: Append sanitized DOM recorder events to an active session. Raw passwords, tokens, cookies, OTP, MFA, and secret-bearing fields are rejected.
       summary: Browser Recorder 이벤트 추가
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2610,6 +3511,7 @@ paths:
     post:
       tags: [Sites]
       operationId: completeBrowserRecording
+      description: Complete a recorder session and generate a deterministic draft IR plus validation report. The draft requires operator review before production use.
       summary: Browser Recorder 완료 및 IR 초안 생성
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2982,6 +3884,9 @@ components:
         - failure_spike
         - dlq
         - bot_pool
+        - scim_secret_rotation
+        - audit_verifier
+        - readiness_evidence
     OpsAlertSubjectType:
       type: string
       enum:
@@ -2990,6 +3895,9 @@ components:
         - run_trigger
         - dlq
         - bot_pool
+        - scim_provider
+        - audit_verifier
+        - readiness_evidence
     OpsAlertStatus:
       type: string
       enum:
@@ -3033,6 +3941,669 @@ components:
           maximum: 200
         cursor:
           type: string
+    OpsNotificationChannel:
+      type: string
+      enum: [teams, slack, email, webhook]
+    OpsNotificationDeliveryStatus:
+      type: string
+      enum: [sent, delivered, failed]
+    OpsAlertDeliveryListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        cursor:
+          type: string
+    SecretRefIdentifier:
+      type: string
+      minLength: 10
+      maxLength: 500
+      pattern: '^secret://.+'
+      description: SecretRef identifier only; resolved secret material must never be present.
+    IntegrationHandoffStatus:
+      type: string
+      enum: [accepted, deferred, completed, failed, cancelled]
+    IntegrationHandoffReceiptStatus:
+      type: string
+      enum: [accepted, completed, failed, cancelled]
+    IntegrationHandoffDispatchAttemptStatus:
+      type: string
+      enum: [pending, sending, accepted, failed, dead_letter]
+    IntegrationHandoff:
+      type: object
+      additionalProperties: false
+      required:
+        - handoff_id
+        - provider_alias
+        - job_ref
+        - payload_ref
+        - callback_url_secret_ref
+        - callback_signature_secret_ref
+        - external_job_id
+        - status
+        - latest_receipt_id
+        - error_code
+        - requested_by
+        - request_idempotency_key
+        - requested_at
+        - updated_at
+        - callback_received_at
+        - legal_hold
+      properties:
+        handoff_id:
+          type: string
+          minLength: 1
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        job_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        payload_ref:
+          type: string
+          minLength: 1
+          maxLength: 500
+        callback_url_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        external_job_id:
+          type: [string, "null"]
+          maxLength: 200
+        status:
+          $ref: '#/components/schemas/IntegrationHandoffStatus'
+        latest_receipt_id:
+          type: [string, "null"]
+          maxLength: 200
+        error_code:
+          type: [string, "null"]
+          maxLength: 120
+        requested_by:
+          type: string
+          minLength: 1
+        request_idempotency_key:
+          type: string
+          minLength: 1
+        requested_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        callback_received_at:
+          type: [string, "null"]
+          format: date-time
+        legal_hold:
+          type: boolean
+    IntegrationHandoffCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [provider_alias, job_ref, payload_ref]
+      properties:
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        job_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        payload_ref:
+          type: string
+          minLength: 1
+          maxLength: 500
+        callback_url_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        legal_hold:
+          type: boolean
+          default: false
+    IntegrationHandoffDispatchRequest:
+      type: object
+      additionalProperties: false
+      required: [endpoint_secret_ref, allowed_hosts]
+      properties:
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+            pattern: '^[A-Za-z0-9.-]+$'
+        max_attempts:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 3
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+        legal_hold:
+          type: boolean
+          default: false
+    IntegrationHandoffDispatchAttempt:
+      type: object
+      additionalProperties: false
+      required:
+        - attempt_id
+        - handoff_id
+        - provider_alias
+        - status
+        - endpoint_secret_ref
+        - allowed_hosts
+        - request_idempotency_key
+        - attempt_no
+        - max_attempts
+        - external_job_id
+        - receipt_id
+        - error_code
+        - requested_by
+        - requested_at
+        - updated_at
+        - legal_hold
+      properties:
+        attempt_id:
+          type: string
+          format: uuid
+        handoff_id:
+          type: string
+          format: uuid
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        status:
+          $ref: '#/components/schemas/IntegrationHandoffDispatchAttemptStatus'
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        allowed_hosts:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+        request_idempotency_key:
+          type: string
+          minLength: 1
+        attempt_no:
+          type: integer
+          minimum: 1
+        max_attempts:
+          type: integer
+          minimum: 1
+          maximum: 20
+        external_job_id:
+          type: [string, "null"]
+          maxLength: 200
+        receipt_id:
+          type: [string, "null"]
+          maxLength: 200
+        error_code:
+          type: [string, "null"]
+          maxLength: 120
+        requested_by:
+          type: string
+          minLength: 1
+        requested_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        legal_hold:
+          type: boolean
+    IntegrationHandoffCallbackRequest:
+      type: object
+      additionalProperties: false
+      required: [external_job_id, status, receipt_id]
+      properties:
+        external_job_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+        status:
+          $ref: '#/components/schemas/IntegrationHandoffReceiptStatus'
+        receipt_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+        error_code:
+          type: [string, "null"]
+          maxLength: 120
+        legal_hold:
+          type: boolean
+          default: false
+      allOf:
+        - if:
+            properties:
+              status:
+                const: failed
+          then:
+            required: [error_code]
+    IntegrationHandoffPathParams:
+      type: object
+      additionalProperties: false
+      required: [handoff_id]
+      properties:
+        handoff_id:
+          type: string
+          format: uuid
+    IntegrationHandoffListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          $ref: '#/components/schemas/IntegrationHandoffStatus'
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
+    IntegrationHandoffPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationHandoff'
+        next_cursor:
+          type: [string, "null"]
+    OpsNotificationDelivery:
+      type: object
+      additionalProperties: false
+      required:
+        - delivery_id
+        - alert_id
+        - detected_at
+        - source
+        - subject_type
+        - subject_id
+        - channel
+        - provider_alias
+        - status
+        - receipt_id
+        - receipt_at
+        - endpoint_secret_ref
+        - credential_secret_ref
+        - callback_signature_secret_ref
+        - route_policy_ref
+        - recipient_group_ref
+        - attempt_no
+        - summary
+        - error_code
+        - metadata
+        - recorded_by
+        - recorded_at
+        - legal_hold
+      properties:
+        delivery_id:
+          type: string
+          minLength: 1
+        alert_id:
+          type: string
+          minLength: 1
+          maxLength: 300
+        detected_at:
+          type: string
+          format: date-time
+        source:
+          $ref: '#/components/schemas/OpsAlertSource'
+        subject_type:
+          $ref: '#/components/schemas/OpsAlertSubjectType'
+        subject_id:
+          type: [string, "null"]
+        channel:
+          $ref: '#/components/schemas/OpsNotificationChannel'
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        status:
+          $ref: '#/components/schemas/OpsNotificationDeliveryStatus'
+        receipt_id:
+          type: [string, "null"]
+          maxLength: 200
+        receipt_at:
+          type: string
+          format: date-time
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        credential_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        route_policy_ref:
+          type: [string, "null"]
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        attempt_no:
+          type: integer
+          minimum: 1
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        error_code:
+          type: [string, "null"]
+          maxLength: 120
+        metadata:
+          type: object
+          additionalProperties: true
+        recorded_by:
+          type: string
+          minLength: 1
+        recorded_at:
+          type: string
+          format: date-time
+        legal_hold:
+          type: boolean
+    OpsNotificationDeliveryRequest:
+      type: object
+      additionalProperties: false
+      required: [channel, provider_alias, status, receipt_at, endpoint_secret_ref, summary]
+      properties:
+        channel:
+          $ref: '#/components/schemas/OpsNotificationChannel'
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        status:
+          $ref: '#/components/schemas/OpsNotificationDeliveryStatus'
+        receipt_id:
+          type: [string, "null"]
+          maxLength: 200
+        receipt_at:
+          type: string
+          format: date-time
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        credential_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        route_policy_ref:
+          type: [string, "null"]
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        attempt_no:
+          type: integer
+          minimum: 1
+          default: 1
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        error_code:
+          type: [string, "null"]
+          maxLength: 120
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+        legal_hold:
+          type: boolean
+          default: false
+      allOf:
+        - if:
+            properties:
+              status:
+                const: failed
+          then:
+            required: [error_code]
+        - if:
+            properties:
+              status:
+                enum: [sent, delivered]
+          then:
+            required: [receipt_id]
+    OpsNotificationAttemptStatus:
+      type: string
+      enum: [pending, sending, sent, failed, dead_letter]
+    OpsNotificationAttempt:
+      type: object
+      additionalProperties: false
+      required:
+        - attempt_id
+        - alert_id
+        - detected_at
+        - source
+        - subject_type
+        - subject_id
+        - channel
+        - provider_alias
+        - status
+        - endpoint_secret_ref
+        - route_policy_ref
+        - recipient_group_ref
+        - callback_signature_secret_ref
+        - allowed_hosts
+        - attempt_no
+        - max_attempts
+        - next_attempt_at
+        - summary
+        - error_code
+        - receipt_id
+        - receipt_at
+        - metadata
+        - requested_by
+        - requested_at
+        - legal_hold
+      properties:
+        attempt_id:
+          type: string
+          minLength: 1
+        alert_id:
+          type: string
+          minLength: 1
+          maxLength: 300
+        detected_at:
+          type: string
+          format: date-time
+        source:
+          $ref: '#/components/schemas/OpsAlertSource'
+        subject_type:
+          $ref: '#/components/schemas/OpsAlertSubjectType'
+        subject_id:
+          type: [string, "null"]
+        channel:
+          type: string
+          enum: [webhook]
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        status:
+          $ref: '#/components/schemas/OpsNotificationAttemptStatus'
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        route_policy_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+            pattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'
+        attempt_no:
+          type: integer
+          minimum: 1
+        max_attempts:
+          type: integer
+          minimum: 1
+          maximum: 20
+        next_attempt_at:
+          type: string
+          format: date-time
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        error_code:
+          type: [string, "null"]
+          maxLength: 120
+        receipt_id:
+          type: [string, "null"]
+          maxLength: 200
+        receipt_at:
+          type: [string, "null"]
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+        requested_by:
+          type: string
+          minLength: 1
+        requested_at:
+          type: string
+          format: date-time
+        legal_hold:
+          type: boolean
+    OpsNotificationWebhookSendRequest:
+      type: object
+      additionalProperties: false
+      required: [endpoint_secret_ref, route_policy_ref, allowed_hosts]
+      properties:
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+          default: webhook-primary
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        route_policy_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+        legal_hold:
+          type: boolean
+          default: false
+    OpsNotificationWebhookCallbackRequest:
+      type: object
+      additionalProperties: false
+      required: [receipt_id, status]
+      description: >
+        Provider delivery callback body. This body is metadata-only and is the canonical body covered by
+        X-RPA-Ops-Notification-Signature. Event id must equal receipt_id.
+      properties:
+        receipt_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+        status:
+          type: string
+          enum: [delivered, failed]
+        error_code:
+          type: [string, "null"]
+          maxLength: 120
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+        legal_hold:
+          type: boolean
+          default: false
+      allOf:
+        - if:
+            properties:
+              status:
+                const: failed
+          then:
+            required: [error_code]
+        - if:
+            properties:
+              status:
+                const: delivered
+          then:
+            properties:
+              error_code:
+                type: "null"
+    OpsNotificationDeliveryPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpsNotificationDelivery'
+        next_cursor:
+          type: [string, "null"]
     OpsAlertDelivery:
       type: object
       additionalProperties: false
@@ -3094,12 +4665,30 @@ components:
         - process_mining
         - task_mining
         - imported
+    AutomationAdoptionEvidenceType:
+      type: string
+      enum:
+        - pilot_charter_signoff
+        - raci_signoff
+        - training_completion
+        - support_model_signoff
+    AutomationAdoptionEvidenceStatus:
+      type: string
+      enum:
+        - valid
+        - failed
+        - deferred
     RoiConfidence:
       type: string
       enum:
         - low
         - medium
         - high
+    RoiViability:
+      type: string
+      enum:
+        - viable
+        - not_viable
     DocumentJobStatus:
       type: string
       enum:
@@ -3274,6 +4863,754 @@ components:
           $ref: '#/components/schemas/OpsBrowserLeaseHealth'
         stale_runs:
           $ref: '#/components/schemas/OpsStaleRunHealth'
+    ProductionReadinessStatus:
+      type: string
+      enum: [ready, warning, blocked]
+    ProductionReadinessEvidenceType:
+      type: string
+      description: >
+        Controlled-production owner/platform evidence gate type. `slo_oncall_signoff` remains the SLO,
+        support-hours, and RACI evidence type; role training completion is recorded separately as
+        `support_training_completion`.
+      enum:
+        - external_alert_delivery
+        - managed_backup_restore_drill
+        - slo_oncall_signoff
+        - observability_telemetry_wiring
+        - support_training_completion
+    ProductionReadinessEvidenceStatus:
+      type: string
+      enum: [valid, failed]
+    ProductionReadinessEvidence:
+      type: object
+      additionalProperties: false
+      required: [evidence_id, evidence_type, status, evidence_at, expires_at, summary, evidence_ref, metadata, recorded_by, recorded_at, legal_hold]
+      properties:
+        evidence_id:
+          type: string
+          minLength: 1
+        evidence_type:
+          $ref: '#/components/schemas/ProductionReadinessEvidenceType'
+        status:
+          $ref: '#/components/schemas/ProductionReadinessEvidenceStatus'
+        evidence_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        evidence_ref:
+          type: [string, "null"]
+          maxLength: 500
+        metadata:
+          type: object
+          additionalProperties: true
+        recorded_by:
+          type: string
+          minLength: 1
+        recorded_at:
+          type: string
+          format: date-time
+        legal_hold:
+          type: boolean
+    ProductionReadinessEvidenceRequest:
+      type: object
+      description: >
+        Metadata-only owner/platform evidence request. Valid evidence requires a future `expires_at` and
+        type-specific metadata. Raw rosters, user lists, training documents, raw URLs, tokens, passwords,
+        secrets, and resolved SecretRef values are forbidden in `summary`, `evidence_ref`, and `metadata`.
+      additionalProperties: false
+      required: [evidence_type, status, evidence_at, summary]
+      properties:
+        evidence_type:
+          $ref: '#/components/schemas/ProductionReadinessEvidenceType'
+        status:
+          $ref: '#/components/schemas/ProductionReadinessEvidenceStatus'
+        evidence_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        evidence_ref:
+          type: [string, "null"]
+          maxLength: 500
+        metadata:
+          type: object
+          description: >
+            Type-specific, metadata-only evidence fields. Do not include raw rosters, user lists, training
+            documents, raw URLs, tokens, passwords, secrets, or resolved SecretRef values.
+          additionalProperties: true
+          default: {}
+        legal_hold:
+          type: boolean
+          default: false
+      allOf:
+        - if:
+            properties:
+              status:
+                const: valid
+          then:
+            required: [expires_at]
+        - if:
+            properties:
+              evidence_type:
+                const: external_alert_delivery
+              status:
+                const: valid
+            required: [evidence_type, status]
+          then:
+            required: [evidence_ref, metadata]
+            properties:
+              evidence_ref:
+                type: string
+                minLength: 1
+                maxLength: 500
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [channel, provider_alias, receipt_id, receipt_at, delivery_status]
+                properties:
+                  channel:
+                    type: string
+                    enum: [teams, slack, email, webhook]
+                  provider_alias:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  receipt_id:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  receipt_at:
+                    type: string
+                    format: date-time
+                  delivery_status:
+                    type: string
+                    enum: [delivered]
+        - if:
+            properties:
+              evidence_type:
+                const: slo_oncall_signoff
+              status:
+                const: valid
+            required: [evidence_type, status]
+          then:
+            required: [evidence_ref, metadata]
+            properties:
+              evidence_ref:
+                type: string
+                minLength: 1
+                maxLength: 500
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [slo_dashboard, severity_model, oncall_rota, raci_ref, support_hours]
+                properties:
+                  slo_dashboard:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  severity_model:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  oncall_rota:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  raci_ref:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  support_hours:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+        - if:
+            properties:
+              evidence_type:
+                const: support_training_completion
+              status:
+                const: valid
+            required: [evidence_type, status]
+          then:
+            required: [evidence_ref, metadata]
+            properties:
+              evidence_ref:
+                type: string
+                minLength: 1
+                maxLength: 500
+              metadata:
+                type: object
+                description: >
+                  Metadata-only support/training completion proof. Raw rosters, user lists, training documents,
+                  raw URLs, tokens, passwords, secrets, and resolved SecretRef values are forbidden.
+                additionalProperties: true
+                required: [support_model_ref, training_completion_ref, trained_role_count, trained_user_count, coverage_percent, completed_at]
+                properties:
+                  support_model_ref:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  training_completion_ref:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  trained_role_count:
+                    type: integer
+                    minimum: 1
+                  trained_user_count:
+                    type: integer
+                    minimum: 1
+                  coverage_percent:
+                    type: number
+                    minimum: 0
+                    maximum: 100
+                  completed_at:
+                    type: string
+                    format: date-time
+        - if:
+            properties:
+              evidence_type:
+                const: managed_backup_restore_drill
+              status:
+                const: valid
+            required: [evidence_type, status]
+          then:
+            required: [evidence_ref, metadata]
+            properties:
+              evidence_ref:
+                type: string
+                minLength: 1
+                maxLength: 500
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [backup_policy_ref, restore_scope, restore_completed_at, rto_minutes, rpo_minutes]
+                properties:
+                  backup_policy_ref:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  restore_scope:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  restore_completed_at:
+                    type: string
+                    format: date-time
+                  rto_minutes:
+                    type: number
+                    exclusiveMinimum: 0
+                    maximum: 120
+                  rpo_minutes:
+                    type: number
+                    exclusiveMinimum: 0
+                    maximum: 15
+        - if:
+            properties:
+              evidence_type:
+                const: observability_telemetry_wiring
+              status:
+                const: valid
+            required: [evidence_type, status]
+          then:
+            required: [evidence_ref, metadata]
+            properties:
+              evidence_ref:
+                type: string
+                minLength: 1
+                maxLength: 500
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [exporter, collector_ref, dashboard_ref, alert_route_ref, sampled_at]
+                properties:
+                  exporter:
+                    type: string
+                    enum: [prometheus, otlp]
+                  collector_ref:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  dashboard_ref:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  alert_route_ref:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                  sampled_at:
+                    type: string
+                    format: date-time
+    ProductionReadinessEvidencePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductionReadinessEvidence'
+        next_cursor:
+          type: [string, "null"]
+    ProductionReadinessEvidenceListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        evidence_type:
+          $ref: '#/components/schemas/ProductionReadinessEvidenceType'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+    AiGovernanceEvidenceType:
+      type: string
+      description: >
+        Metadata-only AI governance evidence type. Prompt and output bodies are never stored in these records.
+      enum:
+        - model_registry
+        - prompt_registry
+        - eval_result
+        - cost_control
+        - human_override
+    AiGovernanceEvidenceStatus:
+      type: string
+      enum: [valid, failed, deferred]
+    AiGovernanceEvidence:
+      type: object
+      additionalProperties: false
+      required: [evidence_id, evidence_type, subject_ref, status, evidence_at, expires_at, summary, evidence_ref, policy_decision_ref, audit_correlation_id, metadata, recorded_by, recorded_at, legal_hold]
+      properties:
+        evidence_id:
+          type: string
+          minLength: 1
+        evidence_type:
+          $ref: '#/components/schemas/AiGovernanceEvidenceType'
+        subject_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        status:
+          $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+        evidence_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        evidence_ref:
+          type: [string, "null"]
+          maxLength: 500
+        policy_decision_ref:
+          type: [string, "null"]
+          maxLength: 300
+        audit_correlation_id:
+          type: [string, "null"]
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        recorded_by:
+          type: string
+          minLength: 1
+        recorded_at:
+          type: string
+          format: date-time
+        legal_hold:
+          type: boolean
+    AiGovernanceEvidenceRequest:
+      type: object
+      description: >
+        Metadata-only AI governance evidence request. status=valid requires evidence_ref,
+        policy_decision_ref, audit_correlation_id, and type-specific metadata. Raw prompts, model outputs,
+        raw URLs, tokens, passwords, provider credentials, resolved SecretRef values, payloads, and bodies
+        are forbidden in summary, subject_ref, evidence_ref, policy_decision_ref, and metadata.
+      additionalProperties: false
+      required: [evidence_type, subject_ref, status, evidence_at, summary]
+      properties:
+        evidence_type:
+          $ref: '#/components/schemas/AiGovernanceEvidenceType'
+        subject_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        status:
+          $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+        evidence_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        evidence_ref:
+          type: [string, "null"]
+          maxLength: 500
+        policy_decision_ref:
+          type: [string, "null"]
+          maxLength: 300
+        audit_correlation_id:
+          type: [string, "null"]
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+        legal_hold:
+          type: boolean
+          default: false
+      allOf:
+        - if:
+            properties:
+              status:
+                const: valid
+            required: [status]
+          then:
+            required: [evidence_ref, policy_decision_ref, audit_correlation_id, metadata]
+            properties:
+              evidence_ref:
+                type: string
+                minLength: 1
+                maxLength: 500
+              policy_decision_ref:
+                type: string
+                minLength: 1
+                maxLength: 300
+              audit_correlation_id:
+                type: string
+                format: uuid
+        - if:
+            properties:
+              status:
+                const: valid
+              evidence_type:
+                const: model_registry
+            required: [status, evidence_type]
+          then:
+            required: [expires_at, metadata]
+            properties:
+              expires_at:
+                type: string
+                format: date-time
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [provider_alias, model_alias, model_version, risk_tier, data_retention_policy_ref, tenant_allowlist_ref, approved_at]
+                properties:
+                  provider_alias: { type: string, minLength: 1, maxLength: 300 }
+                  model_alias: { type: string, minLength: 1, maxLength: 300 }
+                  model_version: { type: string, minLength: 1, maxLength: 300 }
+                  risk_tier: { type: string, enum: [low, medium, high] }
+                  data_retention_policy_ref: { type: string, minLength: 1, maxLength: 300 }
+                  tenant_allowlist_ref: { type: string, minLength: 1, maxLength: 300 }
+                  approved_at: { type: string, format: date-time }
+        - if:
+            properties:
+              status:
+                const: valid
+              evidence_type:
+                const: prompt_registry
+            required: [status, evidence_type]
+          then:
+            required: [expires_at, metadata]
+            properties:
+              expires_at:
+                type: string
+                format: date-time
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [prompt_template_id, prompt_template_version, owner_ref, eval_suite_ref, rollback_target_ref, approved_at]
+                properties:
+                  prompt_template_id: { type: string, minLength: 1, maxLength: 300 }
+                  prompt_template_version: { type: string, minLength: 1, maxLength: 300 }
+                  owner_ref: { type: string, minLength: 1, maxLength: 300 }
+                  eval_suite_ref: { type: string, minLength: 1, maxLength: 300 }
+                  rollback_target_ref: { type: string, minLength: 1, maxLength: 300 }
+                  approved_at: { type: string, format: date-time }
+        - if:
+            properties:
+              status:
+                const: valid
+              evidence_type:
+                const: eval_result
+            required: [status, evidence_type]
+          then:
+            required: [expires_at, metadata]
+            properties:
+              expires_at:
+                type: string
+                format: date-time
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [eval_suite_ref, dataset_ref, sampled_at, pass_rate, prompt_injection_passed, data_leakage_passed, hallucination_passed, policy_block_passed]
+                properties:
+                  eval_suite_ref: { type: string, minLength: 1, maxLength: 300 }
+                  dataset_ref: { type: string, minLength: 1, maxLength: 300 }
+                  sampled_at: { type: string, format: date-time }
+                  pass_rate: { type: number, minimum: 0, maximum: 1 }
+                  prompt_injection_passed: { type: boolean, const: true }
+                  data_leakage_passed: { type: boolean, const: true }
+                  hallucination_passed: { type: boolean, const: true }
+                  policy_block_passed: { type: boolean, const: true }
+        - if:
+            properties:
+              status:
+                const: valid
+              evidence_type:
+                const: cost_control
+            required: [status, evidence_type]
+          then:
+            required: [expires_at, metadata]
+            properties:
+              expires_at:
+                type: string
+                format: date-time
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [budget_ref, scope_ref, monthly_limit, per_run_cap, anomaly_alert_ref, effective_at]
+                properties:
+                  budget_ref: { type: string, minLength: 1, maxLength: 300 }
+                  scope_ref: { type: string, minLength: 1, maxLength: 300 }
+                  monthly_limit: { type: number, exclusiveMinimum: 0 }
+                  per_run_cap: { type: number, exclusiveMinimum: 0 }
+                  anomaly_alert_ref: { type: string, minLength: 1, maxLength: 300 }
+                  effective_at: { type: string, format: date-time }
+        - if:
+            properties:
+              status:
+                const: valid
+              evidence_type:
+                const: human_override
+            required: [status, evidence_type]
+          then:
+            required: [metadata]
+            properties:
+              metadata:
+                type: object
+                additionalProperties: true
+                required: [override_actor_ref, override_action, reason_code, audit_event_ref, occurred_at]
+                properties:
+                  override_actor_ref: { type: string, minLength: 1, maxLength: 300 }
+                  override_action:
+                    type: string
+                    enum: [accepted_ai_output, rejected_ai_output, corrected_ai_output, escalated_to_human, rolled_back_prompt]
+                  reason_code: { type: string, minLength: 1, maxLength: 300 }
+                  audit_event_ref: { type: string, minLength: 1, maxLength: 300 }
+                  occurred_at: { type: string, format: date-time }
+    AiGovernanceEvidencePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AiGovernanceEvidence'
+        next_cursor:
+          type: [string, "null"]
+    AiGovernanceEvidenceListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        evidence_type:
+          $ref: '#/components/schemas/AiGovernanceEvidenceType'
+        status:
+          $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+        subject_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+    ProductionReadinessGateStatus:
+      type: string
+      enum: [pass, warning, blocked, deferred]
+    ProductionReadinessGate:
+      type: object
+      description: >
+        Controlled-production readiness gate. Missing or expired owner evidence is `deferred`, failed owner
+        evidence is `blocked`, and `summary.controlled_prod_ready` can be true only when every required gate passes.
+      additionalProperties: false
+      required: [gate_id, label, status, reason_code, detail, evidence, required_action]
+      properties:
+        gate_id:
+          type: string
+          description: >
+            Gate identifier. Owner evidence gates include `external_alert_delivery`,
+            `managed_backup_restore_drill`, `slo_oncall_signoff`, `support_training_completion`, and
+            `observability_telemetry_wiring`.
+          minLength: 1
+        label:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/ProductionReadinessGateStatus'
+        reason_code:
+          type: [string, "null"]
+        detail:
+          type: string
+          minLength: 1
+        evidence:
+          type: array
+          items:
+            type: string
+        required_action:
+          type: [string, "null"]
+    ProductionReadinessSummary:
+      type: object
+      additionalProperties: false
+      required: [controlled_prod_ready, status, blocker_count, warning_count, deferred_count]
+      properties:
+        controlled_prod_ready:
+          type: boolean
+          description: >
+            True only when all runtime and owner/platform gates pass, including support training completion.
+        status:
+          $ref: '#/components/schemas/ProductionReadinessStatus'
+        blocker_count:
+          type: integer
+          minimum: 0
+        warning_count:
+          type: integer
+          minimum: 0
+        deferred_count:
+          type: integer
+          minimum: 0
+    ProductionReadinessEnvironment:
+      type: object
+      additionalProperties: false
+      required: [target, tenant_id]
+      properties:
+        target:
+          type: string
+          enum: [controlled_prod]
+        tenant_id:
+          type: string
+    ProductionReadinessBotPoolSignal:
+      type: object
+      additionalProperties: false
+      required: [bot_pool_id, capacity_slots, workers, leases, queue, health]
+      properties:
+        bot_pool_id:
+          type: string
+        capacity_slots:
+          type: integer
+          minimum: 0
+        workers:
+          type: object
+          additionalProperties: false
+          required: [total, active, draining, dead, stale, open_circuit]
+          properties:
+            total: { type: integer, minimum: 0 }
+            active: { type: integer, minimum: 0 }
+            draining: { type: integer, minimum: 0 }
+            dead: { type: integer, minimum: 0 }
+            stale: { type: integer, minimum: 0 }
+            open_circuit: { type: integer, minimum: 0 }
+        leases:
+          type: object
+          additionalProperties: false
+          required: [reserved, active, draining, expired_open, next_expiry_at]
+          properties:
+            reserved: { type: integer, minimum: 0 }
+            active: { type: integer, minimum: 0 }
+            draining: { type: integer, minimum: 0 }
+            expired_open: { type: integer, minimum: 0 }
+            next_expiry_at:
+              type: [string, "null"]
+              format: date-time
+        queue:
+          type: object
+          additionalProperties: false
+          required: [pending_runs, queued_runs, claimed_runs, oldest_queued_at, due_triggers]
+          properties:
+            pending_runs: { type: integer, minimum: 0 }
+            queued_runs: { type: integer, minimum: 0 }
+            claimed_runs: { type: integer, minimum: 0 }
+            oldest_queued_at:
+              type: [string, "null"]
+              format: date-time
+            due_triggers: { type: integer, minimum: 0 }
+        health:
+          type: string
+          enum: [ok, warning, critical]
+    ProductionReadinessAuditVerifierSignal:
+      type: object
+      additionalProperties: false
+      required: [audit_count, latest_run_id, latest_status, latest_completed_at, rows_checked, violation_count, stale]
+      properties:
+        audit_count:
+          type: integer
+          minimum: 0
+        latest_run_id:
+          type: [string, "null"]
+        latest_status:
+          type: [string, "null"]
+        latest_completed_at:
+          type: [string, "null"]
+          format: date-time
+        rows_checked:
+          type: [integer, "null"]
+          minimum: 0
+        violation_count:
+          type: [integer, "null"]
+          minimum: 0
+        stale:
+          type: boolean
+    ProductionReadinessSignals:
+      type: object
+      additionalProperties: false
+      required: [ops_health, bot_pool, audit_verifier]
+      properties:
+        ops_health:
+          $ref: '#/components/schemas/OpsHealth'
+        bot_pool:
+          $ref: '#/components/schemas/ProductionReadinessBotPoolSignal'
+        audit_verifier:
+          $ref: '#/components/schemas/ProductionReadinessAuditVerifierSignal'
+    ProductionReadiness:
+      type: object
+      additionalProperties: false
+      required: [status, evaluated_at, environment, summary, gates, signals]
+      properties:
+        status:
+          $ref: '#/components/schemas/ProductionReadinessStatus'
+        evaluated_at:
+          type: string
+          format: date-time
+        environment:
+          $ref: '#/components/schemas/ProductionReadinessEnvironment'
+        summary:
+          $ref: '#/components/schemas/ProductionReadinessSummary'
+        gates:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductionReadinessGate'
+        signals:
+          $ref: '#/components/schemas/ProductionReadinessSignals'
     AuthReadinessStatus:
       type: string
       enum: [ok, warning, blocked]
@@ -3428,6 +5765,29 @@ components:
     AuditLogExportCsv:
       type: string
       description: CSV audit export. Raw audit payload bodies are intentionally omitted.
+    AuditVerificationRunPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AuditVerificationRun' }
+        next_cursor:
+          type: [string, "null"]
+    AuditVerificationRunListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          $ref: '#/components/schemas/AuditVerificationRunStatus'
+        limit: { type: integer, minimum: 1 }
+        cursor: { type: string, minLength: 1 }
+    AuditVerificationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        legal_hold:
+          type: boolean
     ConnectorCatalogPage:
       type: object
       required: [items, next_cursor]
@@ -4035,6 +6395,14 @@ components:
         implementation_effort:
           type: number
           minimum: 0
+        platform_monthly_cost:
+          type: number
+          minimum: 0
+          default: 0
+        avoided_license_cost:
+          type: number
+          minimum: 0
+          default: 0
         confidence:
           $ref: '#/components/schemas/RoiConfidence'
 
@@ -4049,9 +6417,13 @@ components:
         - exception_rate
         - hourly_cost
         - implementation_effort
+        - platform_monthly_cost
+        - avoided_license_cost
         - monthly_hours_saved
         - estimated_monthly_value
+        - monthly_value
         - payback_months
+        - viability
         - confidence
         - created_by
         - created_at
@@ -4075,20 +6447,712 @@ components:
         implementation_effort:
           type: number
           minimum: 0
+        platform_monthly_cost:
+          type: number
+          minimum: 0
+        avoided_license_cost:
+          type: number
+          minimum: 0
         monthly_hours_saved:
           type: number
           minimum: 0
         estimated_monthly_value:
           type: number
           minimum: 0
+        monthly_value:
+          type: number
         payback_months:
           type: [number, "null"]
           minimum: 0
+        viability:
+          $ref: '#/components/schemas/RoiViability'
         confidence:
           $ref: '#/components/schemas/RoiConfidence'
         created_by: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    RoiActualEvidenceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - period_start
+        - period_end
+        - actual_transaction_count
+        - actual_failure_rate
+        - human_intervention_minutes
+        - reprocessing_minutes
+        - evidence_ref
+        - summary
+      properties:
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        actual_transaction_count:
+          type: integer
+          minimum: 0
+        actual_failure_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+        human_intervention_minutes:
+          type: number
+          minimum: 0
+        reprocessing_minutes:
+          type: number
+          minimum: 0
+        evidence_ref:
+          type: string
+          minLength: 1
+          maxLength: 500
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+        legal_hold:
+          type: boolean
+          default: false
+
+    RoiActualEvidence:
+      type: object
+      additionalProperties: false
+      required:
+        - roi_actual_id
+        - automation_idea_id
+        - period_start
+        - period_end
+        - actual_transaction_count
+        - actual_failure_rate
+        - human_intervention_minutes
+        - reprocessing_minutes
+        - evidence_ref
+        - summary
+        - metadata
+        - recorded_by
+        - recorded_at
+        - legal_hold
+      properties:
+        roi_actual_id: { type: string, format: uuid }
+        automation_idea_id: { type: string, format: uuid }
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        actual_transaction_count:
+          type: integer
+          minimum: 0
+        actual_failure_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+        human_intervention_minutes:
+          type: number
+          minimum: 0
+        reprocessing_minutes:
+          type: number
+          minimum: 0
+        evidence_ref:
+          type: string
+        summary:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        recorded_by:
+          type: string
+        recorded_at:
+          type: string
+          format: date-time
+        legal_hold:
+          type: boolean
+
+    RoiActualEvidencePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoiActualEvidence'
+        next_cursor:
+          type: [string, "null"]
+
+    RoiActualEvidenceListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+
+    AutomationAdoptionEvidenceRequest:
+      type: object
+      additionalProperties: false
+      description: >
+        Metadata-only pilot readiness evidence. Raw URLs, tokens, passwords, webhook secrets,
+        resolved SecretRef material, long raw documents, and raw training rosters are forbidden.
+      required:
+        - evidence_type
+        - status
+        - evidence_at
+        - summary
+      properties:
+        evidence_type:
+          $ref: '#/components/schemas/AutomationAdoptionEvidenceType'
+        status:
+          $ref: '#/components/schemas/AutomationAdoptionEvidenceStatus'
+        evidence_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        evidence_ref:
+          type: [string, "null"]
+          maxLength: 500
+          description: Opaque ticket or artifact reference, never a raw URL or secret-bearing value.
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+        legal_hold:
+          type: boolean
+          default: false
+
+    AutomationAdoptionEvidence:
+      type: object
+      additionalProperties: false
+      required:
+        - evidence_id
+        - idea_id
+        - evidence_type
+        - status
+        - evidence_at
+        - expires_at
+        - summary
+        - evidence_ref
+        - metadata
+        - recorded_by
+        - recorded_at
+        - legal_hold
+      properties:
+        evidence_id:
+          type: string
+          minLength: 1
+        idea_id:
+          type: string
+          format: uuid
+        evidence_type:
+          $ref: '#/components/schemas/AutomationAdoptionEvidenceType'
+        status:
+          $ref: '#/components/schemas/AutomationAdoptionEvidenceStatus'
+        evidence_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        evidence_ref:
+          type: [string, "null"]
+          maxLength: 500
+        metadata:
+          type: object
+          additionalProperties: true
+        recorded_by:
+          type: string
+          minLength: 1
+        recorded_at:
+          type: string
+          format: date-time
+        legal_hold:
+          type: boolean
+
+    AutomationAdoptionEvidencePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationAdoptionEvidence'
+        next_cursor:
+          type: [string, "null"]
+
+    AutomationAdoptionEvidenceListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        evidence_type:
+          $ref: '#/components/schemas/AutomationAdoptionEvidenceType'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+
+    AutomationPerformanceDecisionSignal:
+      type: object
+      additionalProperties: false
+      required: [status, reason]
+      properties:
+        status:
+          type: string
+          enum: [expand, hold, watch]
+        reason:
+          type: string
+
+    AutomationPerformanceCostByStatus:
+      type: object
+      additionalProperties: false
+      required: [completed, failed_business, failed_system, other]
+      properties:
+        completed: { type: number, minimum: 0 }
+        failed_business: { type: number, minimum: 0 }
+        failed_system: { type: number, minimum: 0 }
+        other: { type: number, minimum: 0 }
+
+    AutomationPerformanceRoiConfidenceBreakdown:
+      type: object
+      additionalProperties: false
+      required: [low, medium, high]
+      properties:
+        low: { type: integer, minimum: 0 }
+        medium: { type: integer, minimum: 0 }
+        high: { type: integer, minimum: 0 }
+
+    AutomationPerformanceRoiSourceCounts:
+      type: object
+      additionalProperties: false
+      required: [manual, process_mining, task_mining, imported]
+      properties:
+        manual: { type: integer, minimum: 0 }
+        process_mining: { type: integer, minimum: 0 }
+        task_mining: { type: integer, minimum: 0 }
+        imported: { type: integer, minimum: 0 }
+
+    AutomationPerformanceRoiStage:
+      type: string
+      enum: [approved, build, operate]
+
+    AutomationPerformanceRoiStageCounts:
+      type: object
+      additionalProperties: false
+      required: [approved, build, operate]
+      properties:
+        approved: { type: integer, minimum: 0 }
+        build: { type: integer, minimum: 0 }
+        operate: { type: integer, minimum: 0 }
+
+    AutomationPerformanceRoiSourceLineageIdea:
+      type: object
+      additionalProperties: false
+      required: [idea_id, title, source, stage, department, business_owner]
+      properties:
+        idea_id: { type: string, format: uuid }
+        title: { type: string }
+        source:
+          $ref: '#/components/schemas/AutomationIdeaSource'
+        stage:
+          $ref: '#/components/schemas/AutomationPerformanceRoiStage'
+        department: { type: string }
+        business_owner: { type: string }
+
+    AutomationPerformanceRoiSourceLineage:
+      type: object
+      additionalProperties: false
+      required: [idea_count, source_counts, stage_counts, departments, business_owners, sample_ideas]
+      properties:
+        idea_count: { type: integer, minimum: 0 }
+        source_counts:
+          $ref: '#/components/schemas/AutomationPerformanceRoiSourceCounts'
+        stage_counts:
+          $ref: '#/components/schemas/AutomationPerformanceRoiStageCounts'
+        departments:
+          type: array
+          maxItems: 5
+          items: { type: string }
+        business_owners:
+          type: array
+          maxItems: 5
+          items: { type: string }
+        sample_ideas:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/AutomationPerformanceRoiSourceLineageIdea'
+
+    AutomationPerformanceRoiActuals:
+      type: object
+      additionalProperties: false
+      description: >
+        Aggregated ROI actual comparison for the report period. Raw evidence refs, evidence summaries,
+        metadata, endpoint URLs, tokens, passwords, webhook secrets, and resolved SecretRef values are excluded.
+        Total actual fields include all month-contained actual evidence; comparable fields include only actuals
+        with matching estimate assumptions and are the basis for attainment and failure-rate delta.
+      required:
+        - evidence_count
+        - estimated_transaction_count
+        - actual_transaction_count
+        - comparable_actual_transaction_count
+        - transaction_attainment_rate
+        - estimated_exception_rate
+        - actual_failure_rate
+        - comparable_actual_failure_rate
+        - failure_rate_delta
+        - human_intervention_minutes
+        - reprocessing_minutes
+        - latest_period_end
+      properties:
+        evidence_count: { type: integer, minimum: 0 }
+        estimated_transaction_count: { type: number, minimum: 0 }
+        actual_transaction_count: { type: integer, minimum: 0 }
+        comparable_actual_transaction_count: { type: integer, minimum: 0 }
+        transaction_attainment_rate:
+          type: [number, "null"]
+          minimum: 0
+        estimated_exception_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        actual_failure_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        comparable_actual_failure_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        failure_rate_delta:
+          type: [number, "null"]
+        human_intervention_minutes: { type: number, minimum: 0 }
+        reprocessing_minutes: { type: number, minimum: 0 }
+        latest_period_end:
+          type: [string, "null"]
+          format: date
+
+    AutomationPerformanceCostByModel:
+      type: object
+      additionalProperties: false
+      required: [model, calls, input_tokens, output_tokens, cost, cost_share]
+      properties:
+        model: { type: string }
+        calls: { type: integer, minimum: 0 }
+        input_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        output_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        cost:
+          type: [number, "null"]
+          minimum: 0
+        cost_share:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+
+    AutomationPerformanceModelCostTrend:
+      type: object
+      additionalProperties: false
+      required: [day, model, calls, input_tokens, output_tokens, cost, cost_share_of_day, cost_delta_from_previous_day_for_model]
+      properties:
+        day:
+          type: string
+          format: date
+        model: { type: string }
+        calls: { type: integer, minimum: 0 }
+        input_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        output_tokens:
+          type: [integer, "null"]
+          minimum: 0
+        cost:
+          type: [number, "null"]
+          minimum: 0
+        cost_share_of_day:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        cost_delta_from_previous_day_for_model:
+          type: [number, "null"]
+
+    AutomationPerformanceFailureTop:
+      type: object
+      additionalProperties: false
+      required: [code, count]
+      properties:
+        code: { type: string }
+        count: { type: integer, minimum: 0 }
+
+    AutomationPerformanceTrend:
+      type: object
+      additionalProperties: false
+      required:
+        - day
+        - total_runs
+        - completed
+        - failed_business
+        - failed_system
+        - success_rate
+        - rerun_count
+        - reprocessing_rate
+        - gateway_cost
+        - cost_by_status
+        - rerun_cost
+        - avg_cost_per_run
+        - cost_per_completed_run
+        - cost_delta_from_previous_day
+      properties:
+        day:
+          type: string
+          format: date
+        total_runs: { type: integer, minimum: 0 }
+        completed: { type: integer, minimum: 0 }
+        failed_business: { type: integer, minimum: 0 }
+        failed_system: { type: integer, minimum: 0 }
+        success_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        rerun_count: { type: integer, minimum: 0 }
+        reprocessing_rate:
+          type: [number, "null"]
+          minimum: 0
+        gateway_cost: { type: number, minimum: 0 }
+        cost_by_status:
+          $ref: '#/components/schemas/AutomationPerformanceCostByStatus'
+        rerun_cost: { type: number, minimum: 0 }
+        avg_cost_per_run:
+          type: [number, "null"]
+          minimum: 0
+        cost_per_completed_run:
+          type: [number, "null"]
+          minimum: 0
+        cost_delta_from_previous_day:
+          type: [number, "null"]
+
+    AutomationPerformanceWorkflow:
+      type: object
+      additionalProperties: false
+      required:
+        - scenario_id
+        - scenario_name
+        - total_runs
+        - completed
+        - failed_business
+        - failed_system
+        - success_rate
+        - rerun_count
+        - reprocessing_rate
+        - estimated_hours_saved
+        - estimated_value
+        - implementation_effort
+        - net_value
+        - value_to_cost_ratio
+        - payback_months
+        - gateway_cost
+        - cost_by_status
+        - rerun_cost
+        - avg_cost_per_run
+        - cost_per_completed_run
+        - roi_idea_count
+        - roi_confidence
+        - roi_source_lineage
+        - roi_actuals
+        - decision_signal
+      properties:
+        scenario_id: { type: string, format: uuid }
+        scenario_name: { type: string }
+        total_runs: { type: integer, minimum: 0 }
+        completed: { type: integer, minimum: 0 }
+        failed_business: { type: integer, minimum: 0 }
+        failed_system: { type: integer, minimum: 0 }
+        success_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        rerun_count: { type: integer, minimum: 0 }
+        reprocessing_rate:
+          type: [number, "null"]
+          minimum: 0
+        estimated_hours_saved: { type: number, minimum: 0 }
+        estimated_value: { type: number, minimum: 0 }
+        implementation_effort: { type: number, minimum: 0 }
+        net_value: { type: number }
+        value_to_cost_ratio:
+          type: [number, "null"]
+          minimum: 0
+        payback_months:
+          type: [number, "null"]
+          minimum: 0
+        gateway_cost: { type: number, minimum: 0 }
+        cost_by_status:
+          $ref: '#/components/schemas/AutomationPerformanceCostByStatus'
+        rerun_cost: { type: number, minimum: 0 }
+        avg_cost_per_run:
+          type: [number, "null"]
+          minimum: 0
+        cost_per_completed_run:
+          type: [number, "null"]
+          minimum: 0
+        roi_idea_count: { type: integer, minimum: 0 }
+        roi_confidence:
+          $ref: '#/components/schemas/AutomationPerformanceRoiConfidenceBreakdown'
+        roi_source_lineage:
+          $ref: '#/components/schemas/AutomationPerformanceRoiSourceLineage'
+        roi_actuals:
+          $ref: '#/components/schemas/AutomationPerformanceRoiActuals'
+        decision_signal:
+          $ref: '#/components/schemas/AutomationPerformanceDecisionSignal'
+
+    AutomationPerformanceSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - total_runs
+        - completed
+        - failed_business
+        - failed_system
+        - success_rate
+        - rerun_count
+        - reprocessing_rate
+        - estimated_hours_saved
+        - estimated_value
+        - implementation_effort
+        - net_value
+        - value_to_cost_ratio
+        - payback_months
+        - gateway_cost
+        - cost_by_status
+        - failed_cost
+        - rerun_cost
+        - avg_cost_per_run
+        - cost_per_completed_run
+        - llm_call_cost
+        - run_vs_call_cost_delta
+        - roi_idea_count
+        - roi_confidence
+        - roi_source_lineage
+        - roi_actuals
+        - decision_signal
+      properties:
+        total_runs: { type: integer, minimum: 0 }
+        completed: { type: integer, minimum: 0 }
+        failed_business: { type: integer, minimum: 0 }
+        failed_system: { type: integer, minimum: 0 }
+        success_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        rerun_count: { type: integer, minimum: 0 }
+        reprocessing_rate:
+          type: [number, "null"]
+          minimum: 0
+        estimated_hours_saved: { type: number, minimum: 0 }
+        estimated_value: { type: number, minimum: 0 }
+        implementation_effort: { type: number, minimum: 0 }
+        net_value: { type: number }
+        value_to_cost_ratio:
+          type: [number, "null"]
+          minimum: 0
+        payback_months:
+          type: [number, "null"]
+          minimum: 0
+        gateway_cost: { type: number, minimum: 0 }
+        cost_by_status:
+          $ref: '#/components/schemas/AutomationPerformanceCostByStatus'
+        failed_cost: { type: number, minimum: 0 }
+        rerun_cost: { type: number, minimum: 0 }
+        avg_cost_per_run:
+          type: [number, "null"]
+          minimum: 0
+        cost_per_completed_run:
+          type: [number, "null"]
+          minimum: 0
+        llm_call_cost:
+          type: [number, "null"]
+          minimum: 0
+        run_vs_call_cost_delta:
+          type: [number, "null"]
+        roi_idea_count: { type: integer, minimum: 0 }
+        roi_confidence:
+          $ref: '#/components/schemas/AutomationPerformanceRoiConfidenceBreakdown'
+        roi_source_lineage:
+          $ref: '#/components/schemas/AutomationPerformanceRoiSourceLineage'
+        roi_actuals:
+          $ref: '#/components/schemas/AutomationPerformanceRoiActuals'
+        decision_signal:
+          $ref: '#/components/schemas/AutomationPerformanceDecisionSignal'
+
+    AutomationPerformanceReport:
+      type: object
+      additionalProperties: false
+      required:
+        - month
+        - timezone
+        - period_start
+        - period_end
+        - summary
+        - cost_by_model
+        - model_cost_trends
+        - failure_top
+        - trends
+        - by_workflow
+      properties:
+        month:
+          type: string
+          pattern: '^\d{4}-\d{2}$'
+        timezone:
+          type: string
+          enum: [Asia/Seoul]
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        summary:
+          $ref: '#/components/schemas/AutomationPerformanceSummary'
+        cost_by_model:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationPerformanceCostByModel'
+        model_cost_trends:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationPerformanceModelCostTrend'
+        failure_top:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationPerformanceFailureTop'
+        trends:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationPerformanceTrend'
+        by_workflow:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationPerformanceWorkflow'
 
     AuditActor:
       type: object
@@ -4142,6 +7206,81 @@ components:
         previous_hash: { type: [string, "null"] }
         hash: { type: string, minLength: 1 }
         created_at: { type: string, format: date-time }
+
+    AuditVerificationRunStatus:
+      type: string
+      enum: [valid, invalid, failed]
+
+    AuditVerificationTriggerKind:
+      type: string
+      enum: [manual_api, maintenance]
+
+    AuditChainViolation:
+      type: object
+      additionalProperties: false
+      description: Metadata-only audit chain violation. Raw audit payload bodies are intentionally omitted.
+      required: [sequenceNo, id, kind, detail]
+      properties:
+        sequenceNo:
+          type: integer
+          minimum: 1
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [hash_mismatch, broken_link, sequence_gap, genesis_invalid]
+        detail:
+          type: string
+          minLength: 1
+
+    AuditVerificationRun:
+      type: object
+      additionalProperties: false
+      description: Tenant-scoped audit hash-chain verification evidence. Raw audit payload bodies are intentionally omitted.
+      required:
+        - verification_run_id
+        - status
+        - rows_checked
+        - violation_count
+        - violations
+        - checked_from_sequence
+        - checked_to_sequence
+        - started_at
+        - completed_at
+        - correlation_id
+        - triggered_by
+        - trigger_kind
+        - retention_until
+        - legal_hold
+      properties:
+        verification_run_id: { type: string, format: uuid }
+        status:
+          $ref: '#/components/schemas/AuditVerificationRunStatus'
+        rows_checked:
+          type: integer
+          minimum: 0
+        violation_count:
+          type: integer
+          minimum: 0
+        violations:
+          type: array
+          items: { $ref: '#/components/schemas/AuditChainViolation' }
+        checked_from_sequence:
+          type: [integer, "null"]
+          minimum: 1
+        checked_to_sequence:
+          type: [integer, "null"]
+          minimum: 1
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        correlation_id: { type: string, format: uuid }
+        triggered_by:
+          $ref: '#/components/schemas/AuditActor'
+        trigger_kind:
+          $ref: '#/components/schemas/AuditVerificationTriggerKind'
+        retention_until: { type: string, format: date-time }
+        legal_hold: { type: boolean }
 
     ConnectorManifestPermissions:
       type: object
@@ -4310,6 +7449,55 @@ components:
       type: object
       additionalProperties: false
 
+    ExternalDocumentExtractionField:
+      type: object
+      additionalProperties: false
+      required: [key, value, confidence]
+      properties:
+        key:
+          type: string
+          pattern: '^[A-Za-z0-9_.-]{1,80}$'
+        value:
+          type: [string, number, boolean, "null"]
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    ExternalDocumentExtractionRequest:
+      type: object
+      additionalProperties: false
+      required: [provider_alias, receipt_id, normalized_schema_ref, fields]
+      properties:
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        receipt_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        normalized_schema_ref:
+          type: string
+          minLength: 1
+          maxLength: 160
+        evidence_ref:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 240
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/ExternalDocumentExtractionField'
+        metadata:
+          type: object
+          description: Metadata-only provider evidence. Raw OCR full text, URLs, tokens, secrets, and credentials are rejected by the API boundary.
+          additionalProperties: true
+        legal_hold:
+          type: boolean
+
     DocumentJob:
       type: object
       additionalProperties: false
@@ -4355,7 +7543,7 @@ components:
           enum: [extracted, missing, low_confidence]
         source:
           type: string
-          enum: [json, csv, pattern, label, missing]
+          enum: [json, csv, pattern, label, missing, external_idp]
 
     DocumentExtraction:
       type: object
@@ -4365,6 +7553,11 @@ components:
         - document_job_id
         - engine
         - status
+        - provider_alias
+        - provider_receipt_id
+        - normalized_schema_ref
+        - evidence_ref
+        - provider_metadata
         - fields
         - missing_fields
         - validation_human_task_id
@@ -4375,9 +7568,16 @@ components:
         document_job_id: { type: string, format: uuid }
         engine:
           type: string
-          enum: [built_in_deterministic_text_v1]
+          enum: [built_in_deterministic_text_v1, external_idp_adapter_v1]
         status:
           $ref: '#/components/schemas/DocumentExtractionStatus'
+        provider_alias: { type: [string, "null"] }
+        provider_receipt_id: { type: [string, "null"] }
+        normalized_schema_ref: { type: [string, "null"] }
+        evidence_ref: { type: [string, "null"] }
+        provider_metadata:
+          type: object
+          additionalProperties: true
         fields:
           type: array
           items:
@@ -4461,6 +7661,8 @@ components:
           type: integer
           description: 최신 version(ir.schema meta.version). ETag 값.
         latest_version_id: { type: string }
+        certification:
+          $ref: '#/components/schemas/ScenarioCertification'
         ir:
           $ref: '#/components/schemas/IRDocument'
 
@@ -4512,6 +7714,114 @@ components:
               reason:
                 type: string
 
+    ScenarioCertificationRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+
+    ScenarioCertificationRevokeRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+
+    ScenarioGovernanceStageRequest:
+      type: object
+      additionalProperties: false
+      required: [stage, reason, evidence_ref]
+      description: >
+        Metadata-only scenario version governance update. The stage values
+        review, pilot, and deprecated are not production certification.
+        Raw URLs, endpoint URLs, tokens, passwords, secrets, resolved SecretRef
+        values, long approval packets, and raw rosters are forbidden; use opaque
+        ticket/artifact references in evidence_ref.
+      properties:
+        stage:
+          type: string
+          enum: [review, pilot, deprecated]
+        reason:
+          type: string
+          minLength: 1
+        evidence_ref:
+          type: string
+          minLength: 1
+          description: Opaque evidence reference only; never a raw URL or secret-bearing value.
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Non-secret metadata only; no raw URLs, endpoint URLs, token/password/secret material, resolved SecretRef values, long approval packets, or raw rosters.
+        legal_hold:
+          type: boolean
+
+    ScenarioCertification:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - certified_by
+        - certified_at
+        - expires_at
+        - reason
+        - revoked_by
+        - revoked_at
+        - revoke_reason
+        - valid_for_prod
+        - governance_stage
+        - governance_reason
+        - governance_evidence_ref
+        - governance_metadata
+        - governance_updated_by
+        - governance_updated_at
+      properties:
+        status:
+          type: string
+          enum: [uncertified, certified, revoked]
+        certified_by:
+          type: [string, "null"]
+        certified_at:
+          type: [string, "null"]
+          format: date-time
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        reason:
+          type: [string, "null"]
+        revoked_by:
+          type: [string, "null"]
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+        revoke_reason:
+          type: [string, "null"]
+        valid_for_prod:
+          type: boolean
+          description: True only when certification status is certified; governance stages review, pilot, and deprecated must not claim prod certification.
+        governance_stage:
+          type: string
+          enum: [dev, review, pilot, certified, deprecated]
+        governance_reason:
+          type: [string, "null"]
+        governance_evidence_ref:
+          type: [string, "null"]
+        governance_metadata:
+          type: [object, "null"]
+          additionalProperties: true
+        governance_updated_by:
+          type: [string, "null"]
+        governance_updated_at:
+          type: [string, "null"]
+          format: date-time
+
     ScenarioVersion:
       type: object
       description: scenario_versions row 요약. 상세 조회는 ir을 포함한다.
@@ -4524,6 +7834,8 @@ components:
         promotion_status:
           type: string
           enum: [draft, prod]
+        certification:
+          $ref: '#/components/schemas/ScenarioCertification'
         created_at:
           type: string
           format: date-time

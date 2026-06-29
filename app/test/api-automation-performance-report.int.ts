@@ -26,6 +26,8 @@ const SCENARIO_A1 = "41000000-0000-4000-8000-000000000001";
 const SVER_A1 = "41000000-0000-4000-8000-000000000011";
 const SCENARIO_A2 = "41000000-0000-4000-8000-000000000002";
 const SVER_A2 = "41000000-0000-4000-8000-000000000012";
+const SCENARIO_A3 = "41000000-0000-4000-8000-000000000003";
+const SVER_A3 = "41000000-0000-4000-8000-000000000013";
 const SCENARIO_B = "42000000-0000-4000-8000-000000000001";
 const SVER_B = "42000000-0000-4000-8000-000000000011";
 const RUN_COMPLETED = "43000000-0000-4000-8000-000000000001";
@@ -46,10 +48,16 @@ const CALL_RERUN_CHILD = "43000000-0000-4000-8000-000000000204";
 const CALL_TENANT_B = "44000000-0000-4000-8000-000000000201";
 const IDEA_A1 = "45000000-0000-4000-8000-000000000001";
 const ROI_A1 = "45000000-0000-4000-8000-000000000011";
+const ROI_ACTUAL_A1 = "45000000-0000-4000-8000-000000000021";
+const ROI_ACTUAL_A1_SPANNING = "45000000-0000-4000-8000-000000000024";
 const IDEA_A2 = "45000000-0000-4000-8000-000000000002";
 const ROI_A2 = "45000000-0000-4000-8000-000000000012";
+const ROI_ACTUAL_A2 = "45000000-0000-4000-8000-000000000022";
+const IDEA_A3 = "45000000-0000-4000-8000-000000000003";
+const ROI_ACTUAL_A3 = "45000000-0000-4000-8000-000000000023";
 const IDEA_B = "46000000-0000-4000-8000-000000000001";
 const ROI_B = "46000000-0000-4000-8000-000000000011";
+const ROI_ACTUAL_B = "46000000-0000-4000-8000-000000000021";
 const RERUN_ID = "47000000-0000-4000-8000-000000000001";
 const SECRET = new TextEncoder().encode("automation-performance-report-secret-do-not-use-0123456789");
 
@@ -100,6 +108,7 @@ async function seedScenario(pool: Pool, tenant: string, scenarioId: string, vers
 async function seed(pool: Pool): Promise<void> {
   await seedScenario(pool, TENANT_A, SCENARIO_A1, SVER_A1, "Vendor invoice lookup");
   await seedScenario(pool, TENANT_A, SCENARIO_A2, SVER_A2, "=Formula [workflow](javascript:alert(1)) <script>");
+  await seedScenario(pool, TENANT_A, SCENARIO_A3, SVER_A3, "Actual-only pilot evidence");
   await seedScenario(pool, TENANT_B, SCENARIO_B, SVER_B, "Tenant B hidden workflow");
 
   await withTenantTx(pool, TENANT_A, async (client) => {
@@ -139,20 +148,38 @@ async function seed(pool: Pool): Promise<void> {
       [RERUN_ID, TENANT_A, RUN_FAILED_SYSTEM, RUN_RERUN_CHILD],
     );
     await client.query(
-      `INSERT INTO automation_ideas (id, tenant_id, title, description, business_owner, department, stage, scenario_id, created_by)
+      `INSERT INTO automation_ideas (id, tenant_id, title, description, business_owner, department, source, stage, scenario_id, created_by)
        VALUES
-         ($1::uuid, $2::uuid, 'invoice lookup', 'lookup', 'finance owner', 'finance', 'operate', $3::uuid, 'operator-a'),
-         ($4::uuid, $2::uuid, 'formula workflow', 'guard csv', 'ops owner', 'ops', 'approved', $5::uuid, 'operator-a')`,
-      [IDEA_A1, TENANT_A, SCENARIO_A1, IDEA_A2, SCENARIO_A2],
+         ($1::uuid, $2::uuid, 'invoice lookup', 'lookup', 'finance owner', 'finance', 'process_mining', 'operate', $3::uuid, 'operator-a'),
+         ($4::uuid, $2::uuid, 'formula workflow', 'guard csv', 'ops owner', 'ops', 'manual', 'approved', $5::uuid, 'operator-a'),
+         ($6::uuid, $2::uuid, 'actual only pilot', 'actuals without estimate', 'coe owner', 'coe', 'task_mining', 'operate', $7::uuid, 'operator-a')`,
+      [IDEA_A1, TENANT_A, SCENARIO_A1, IDEA_A2, SCENARIO_A2, IDEA_A3, SCENARIO_A3],
     );
     await client.query(
       `INSERT INTO roi_estimates
          (id, tenant_id, automation_idea_id, frequency_per_month, minutes_per_case, exception_rate, hourly_cost,
-          implementation_effort, monthly_hours_saved, estimated_monthly_value, payback_months, confidence, created_by)
+          implementation_effort, platform_monthly_cost, avoided_license_cost, monthly_hours_saved, estimated_monthly_value,
+          monthly_value, payback_months, viability, confidence, created_by)
        VALUES
-         ($1::uuid, $2::uuid, $3::uuid, 100, 12, 0, 50000, 1000000, 20, 1000000, 1, 'high', 'operator-a'),
-         ($4::uuid, $2::uuid, $5::uuid, 10, 30, 0, 50000, 250000, 5, 250000, 1, 'medium', 'operator-a')`,
+         ($1::uuid, $2::uuid, $3::uuid, 100, 12, 0, 50000, 1000000, 0, 0, 20, 1000000, 1000000, 1, 'viable', 'high', 'operator-a'),
+         ($4::uuid, $2::uuid, $5::uuid, 10, 30, 0, 50000, 250000, 0, 0, 5, 250000, 250000, 1, 'viable', 'medium', 'operator-a')`,
       [ROI_A1, TENANT_A, IDEA_A1, ROI_A2, IDEA_A2],
+    );
+    await client.query(
+      `INSERT INTO roi_actual_evidence
+         (id, tenant_id, automation_idea_id, period_start, period_end, actual_transaction_count,
+          actual_failure_rate, human_intervention_minutes, reprocessing_minutes, evidence_ref,
+          summary, metadata, recorded_by, retention_until, legal_hold, recorded_at)
+       VALUES
+         ($1::uuid, $2::uuid, $3::uuid, '2026-06-01', '2026-06-28', 90, 0.05, 120, 30,
+          'ticket:ROI-ACT-A1', 'Pilot actuals reconciled.', '{}'::jsonb, 'operator-a', '2027-06-30T00:00:00Z', false, '2026-06-28T00:00:00Z'),
+         ($4::uuid, $2::uuid, $5::uuid, '2026-06-01', '2026-06-20', 8, 0.125, 20, 10,
+          'ticket:ROI-ACT-A2', 'Formula workflow actuals reconciled.', '{}'::jsonb, 'operator-a', '2027-06-30T00:00:00Z', false, '2026-06-20T00:00:00Z'),
+         ($6::uuid, $2::uuid, $7::uuid, '2026-06-01', '2026-06-18', 7, 0.2, 15, 2,
+          'ticket:ROI-ACT-A3', 'Actual-only pilot metrics reconciled.', '{}'::jsonb, 'operator-a', '2027-06-30T00:00:00Z', false, '2026-06-18T00:00:00Z'),
+         ($8::uuid, $2::uuid, $3::uuid, '2026-05-01', '2026-07-31', 1000, 0.9, 1000, 1000,
+          'ticket:ROI-ACT-SPAN', 'Multi-month evidence must not be counted in one month.', '{}'::jsonb, 'operator-a', '2027-06-30T00:00:00Z', false, '2026-06-15T00:00:00Z')`,
+      [ROI_ACTUAL_A1, TENANT_A, IDEA_A1, ROI_ACTUAL_A2, IDEA_A2, ROI_ACTUAL_A3, IDEA_A3, ROI_ACTUAL_A1_SPANNING],
     );
   });
 
@@ -175,16 +202,26 @@ async function seed(pool: Pool): Promise<void> {
       [CALL_TENANT_B, TENANT_B, RUN_TENANT_B],
     );
     await client.query(
-      `INSERT INTO automation_ideas (id, tenant_id, title, description, business_owner, department, stage, scenario_id, created_by)
-       VALUES ($1::uuid, $2::uuid, 'hidden', 'hidden', 'b owner', 'b dept', 'operate', $3::uuid, 'operator-b')`,
+      `INSERT INTO automation_ideas (id, tenant_id, title, description, business_owner, department, source, stage, scenario_id, created_by)
+       VALUES ($1::uuid, $2::uuid, 'hidden', 'hidden', 'b owner', 'b dept', 'task_mining', 'operate', $3::uuid, 'operator-b')`,
       [IDEA_B, TENANT_B, SCENARIO_B],
     );
     await client.query(
       `INSERT INTO roi_estimates
          (id, tenant_id, automation_idea_id, frequency_per_month, minutes_per_case, exception_rate, hourly_cost,
-          implementation_effort, monthly_hours_saved, estimated_monthly_value, payback_months, confidence, created_by)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, 100, 60, 0, 100000, 1000000, 100, 10000000, 0.1, 'high', 'operator-b')`,
+          implementation_effort, platform_monthly_cost, avoided_license_cost, monthly_hours_saved, estimated_monthly_value,
+          monthly_value, payback_months, viability, confidence, created_by)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 100, 60, 0, 100000, 1000000, 0, 0, 100, 10000000, 10000000, 0.1, 'viable', 'high', 'operator-b')`,
       [ROI_B, TENANT_B, IDEA_B],
+    );
+    await client.query(
+      `INSERT INTO roi_actual_evidence
+         (id, tenant_id, automation_idea_id, period_start, period_end, actual_transaction_count,
+          actual_failure_rate, human_intervention_minutes, reprocessing_minutes, evidence_ref,
+          summary, metadata, recorded_by, retention_until, legal_hold, recorded_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, '2026-06-01', '2026-06-28', 999, 0.9, 999, 999,
+          'ticket:ROI-ACT-B', 'Tenant B hidden actuals.', '{}'::jsonb, 'operator-b', '2027-06-30T00:00:00Z', false, '2026-06-28T00:00:00Z')`,
+      [ROI_ACTUAL_B, TENANT_B, IDEA_B],
     );
   });
 }
@@ -251,8 +288,41 @@ async function main(): Promise<void> {
         approx(body.summary.payback_months, 1) &&
         body.summary.roi_idea_count === 2 &&
         body.summary.roi_confidence.high === 1 &&
-        body.summary.roi_confidence.medium === 1,
+        body.summary.roi_confidence.medium === 1 &&
+        body.summary.decision_signal.status === "hold" &&
+        body.summary.decision_signal.reason === "improve reliability before scaling",
       JSON.stringify(body.summary),
+    );
+    check(
+      "ROI source lineage is tenant-scoped and summarizes source evidence",
+      body.summary.roi_source_lineage.idea_count === 2 &&
+        body.summary.roi_source_lineage.source_counts.process_mining === 1 &&
+        body.summary.roi_source_lineage.source_counts.manual === 1 &&
+        body.summary.roi_source_lineage.source_counts.task_mining === 0 &&
+        body.summary.roi_source_lineage.stage_counts.operate === 1 &&
+        body.summary.roi_source_lineage.stage_counts.approved === 1 &&
+        body.summary.roi_source_lineage.departments.includes("finance") &&
+        body.summary.roi_source_lineage.departments.includes("ops") &&
+        body.summary.roi_source_lineage.business_owners.includes("finance owner") &&
+        body.summary.roi_source_lineage.sample_ideas.some((idea: { title: string; source: string }) => idea.title === "invoice lookup" && idea.source === "process_mining") &&
+        body.summary.roi_source_lineage.sample_ideas.every((idea: { title: string }) => idea.title !== "hidden"),
+      JSON.stringify(body.summary.roi_source_lineage),
+    );
+    check(
+      "ROI actuals are tenant-scoped and compare pilot actuals against estimates",
+        body.summary.roi_actuals.evidence_count === 3 &&
+        body.summary.roi_actuals.estimated_transaction_count === 110 &&
+        body.summary.roi_actuals.actual_transaction_count === 105 &&
+        body.summary.roi_actuals.comparable_actual_transaction_count === 98 &&
+        approx(body.summary.roi_actuals.transaction_attainment_rate, 98 / 110) &&
+        body.summary.roi_actuals.estimated_exception_rate === 0 &&
+        approx(body.summary.roi_actuals.actual_failure_rate, 6.9 / 105) &&
+        approx(body.summary.roi_actuals.comparable_actual_failure_rate, 5.5 / 98) &&
+        approx(body.summary.roi_actuals.failure_rate_delta, 5.5 / 98) &&
+        body.summary.roi_actuals.human_intervention_minutes === 155 &&
+        body.summary.roi_actuals.reprocessing_minutes === 42 &&
+        body.summary.roi_actuals.latest_period_end === "2026-06-28",
+      JSON.stringify(body.summary.roi_actuals),
     );
     check(
       "model cost breakdown is tenant-scoped",
@@ -263,18 +333,108 @@ async function main(): Promise<void> {
         body.cost_by_model.every((r: { model: string }) => r.model !== "tenant-b-model"),
       JSON.stringify(body.cost_by_model),
     );
+    const gptModelTrend = (body.model_cost_trends as Array<{
+      day: string;
+      model: string;
+      cost: number | null;
+      cost_share_of_day: number | null;
+      cost_delta_from_previous_day_for_model: number | null;
+    }>).find((row) => row.day === "2026-06-03" && row.model === "gpt-4o-mini");
+    check(
+      "model daily cost trends are tenant-scoped and include per-model deltas",
+      Array.isArray(body.model_cost_trends) &&
+        body.model_cost_trends.length === 4 &&
+        body.model_cost_trends.every((r: { model: string }) => r.model !== "tenant-b-model") &&
+        gptModelTrend !== undefined &&
+        gptModelTrend.cost !== null &&
+        approx(gptModelTrend.cost, 0.2) &&
+        gptModelTrend.cost_share_of_day !== null &&
+        approx(gptModelTrend.cost_share_of_day, 1) &&
+        gptModelTrend.cost_delta_from_previous_day_for_model !== null &&
+        approx(gptModelTrend.cost_delta_from_previous_day_for_model, -1.05),
+      JSON.stringify(body.model_cost_trends),
+    );
     check("failure top excludes cross-tenant rows", body.failure_top.every((r: { code: string }) => r.code !== "TENANT_B_ONLY"), JSON.stringify(body.failure_top));
     const workflowNames = (body.by_workflow as Array<{ scenario_name: string }>).map((row) => row.scenario_name);
     check("ROI-only workflow is present", workflowNames.includes("=Formula [workflow](javascript:alert(1)) <script>"), JSON.stringify(workflowNames));
-    const invoiceWorkflow = (body.by_workflow as Array<{ scenario_name: string; net_value: number; value_to_cost_ratio: number | null; cost_per_completed_run: number | null }>).find((row) => row.scenario_name === "Vendor invoice lookup");
+    check("actual-only workflow is present", workflowNames.includes("Actual-only pilot evidence"), JSON.stringify(workflowNames));
+    const actualOnlyWorkflow = (body.by_workflow as Array<{
+      scenario_name: string;
+      roi_actuals: {
+        evidence_count: number;
+        estimated_transaction_count: number;
+        actual_transaction_count: number;
+        comparable_actual_transaction_count: number;
+        transaction_attainment_rate: number | null;
+        actual_failure_rate: number | null;
+        comparable_actual_failure_rate: number | null;
+        failure_rate_delta: number | null;
+      };
+    }>).find((row) => row.scenario_name === "Actual-only pilot evidence");
     check(
-      "workflow ROI analytics include net value and unit cost",
+      "actual-only workflow keeps actuals but does not synthesize estimate attainment",
+      actualOnlyWorkflow !== undefined &&
+        actualOnlyWorkflow.roi_actuals.evidence_count === 1 &&
+        actualOnlyWorkflow.roi_actuals.estimated_transaction_count === 0 &&
+        actualOnlyWorkflow.roi_actuals.actual_transaction_count === 7 &&
+        actualOnlyWorkflow.roi_actuals.comparable_actual_transaction_count === 0 &&
+        actualOnlyWorkflow.roi_actuals.transaction_attainment_rate === null &&
+        actualOnlyWorkflow.roi_actuals.actual_failure_rate === 0.2 &&
+        actualOnlyWorkflow.roi_actuals.comparable_actual_failure_rate === null &&
+        actualOnlyWorkflow.roi_actuals.failure_rate_delta === null,
+      JSON.stringify(actualOnlyWorkflow),
+    );
+    const invoiceWorkflow = (body.by_workflow as Array<{
+      scenario_name: string;
+      net_value: number;
+      value_to_cost_ratio: number | null;
+      cost_per_completed_run: number | null;
+      roi_source_lineage: {
+        source_counts: { process_mining: number; manual: number; task_mining: number; imported: number };
+        stage_counts: { approved: number; build: number; operate: number };
+        departments: string[];
+        business_owners: string[];
+        sample_ideas: Array<{ title: string; source: string; stage: string }>;
+      };
+      roi_actuals: {
+        evidence_count: number;
+        estimated_transaction_count: number;
+        actual_transaction_count: number;
+        transaction_attainment_rate: number | null;
+        estimated_exception_rate: number | null;
+        actual_failure_rate: number | null;
+        failure_rate_delta: number | null;
+        human_intervention_minutes: number;
+        reprocessing_minutes: number;
+        comparable_actual_transaction_count: number;
+        comparable_actual_failure_rate: number | null;
+        latest_period_end: string | null;
+      };
+      decision_signal: { status: string; reason: string };
+    }>).find((row) => row.scenario_name === "Vendor invoice lookup");
+    check(
+      "workflow ROI analytics include net value, unit cost, and actual evidence",
       invoiceWorkflow !== undefined &&
         invoiceWorkflow.net_value === 999997 &&
         invoiceWorkflow.value_to_cost_ratio !== null &&
         approx(invoiceWorkflow.value_to_cost_ratio, 333333.3333333333) &&
         invoiceWorkflow.cost_per_completed_run !== null &&
-        approx(invoiceWorkflow.cost_per_completed_run, 1.125),
+        approx(invoiceWorkflow.cost_per_completed_run, 1.125) &&
+        invoiceWorkflow.roi_source_lineage.source_counts.process_mining === 1 &&
+        invoiceWorkflow.roi_source_lineage.stage_counts.operate === 1 &&
+        invoiceWorkflow.roi_source_lineage.departments.includes("finance") &&
+        invoiceWorkflow.roi_source_lineage.business_owners.includes("finance owner") &&
+        invoiceWorkflow.roi_source_lineage.sample_ideas.some((idea) => idea.title === "invoice lookup" && idea.source === "process_mining" && idea.stage === "operate") &&
+        invoiceWorkflow.roi_actuals.evidence_count === 1 &&
+        invoiceWorkflow.roi_actuals.estimated_transaction_count === 100 &&
+        invoiceWorkflow.roi_actuals.actual_transaction_count === 90 &&
+        invoiceWorkflow.roi_actuals.comparable_actual_transaction_count === 90 &&
+        approx(invoiceWorkflow.roi_actuals.actual_failure_rate ?? -1, 0.05) &&
+        approx(invoiceWorkflow.roi_actuals.comparable_actual_failure_rate ?? -1, 0.05) &&
+        invoiceWorkflow.roi_actuals.human_intervention_minutes === 120 &&
+        invoiceWorkflow.roi_actuals.latest_period_end === "2026-06-28" &&
+        invoiceWorkflow.decision_signal.status === "hold" &&
+        invoiceWorkflow.decision_signal.reason === "improve reliability",
       JSON.stringify(invoiceWorkflow),
     );
     const rerunTrend = (body.trends as Array<{ day: string; rerun_cost: number; avg_cost_per_run: number | null; cost_delta_from_previous_day: number | null }>).find((row) => row.day === "2026-06-05");
@@ -291,7 +451,9 @@ async function main(): Promise<void> {
     const csv = await exportReport(viewer);
     check("CSV export returns text/csv", csv.statusCode === 200 && csv.headers["content-type"]?.toString().includes("text/csv") === true, csv.body);
     check("CSV includes workflow section", csv.body.includes("Workflow ROI"), csv.body);
-    check("CSV includes cost and ROI analytics sections", csv.body.includes("Cost By Model") && csv.body.includes("net_value") && csv.body.includes("cost_delta_from_previous_day"), csv.body);
+    check("CSV includes cost and ROI analytics sections", csv.body.includes("Cost By Model") && csv.body.includes("Model Cost Trends") && csv.body.includes("decision_signal_status") && csv.body.includes("net_value") && csv.body.includes("cost_delta_from_previous_day"), csv.body);
+    check("CSV includes ROI source lineage", csv.body.includes("roi_source_counts") && csv.body.includes("process_mining:1") && csv.body.includes("finance owner"), csv.body);
+    check("CSV includes ROI actuals without evidence details", csv.body.includes("roi_actual_evidence_count") && csv.body.includes("comparable_actual_transaction_count") && !csv.body.includes("ticket:ROI-ACT-A1") && !csv.body.includes("ticket:ROI-ACT-SPAN"), csv.body);
     check("CSV guards spreadsheet formulas", csv.body.includes("\"'=Formula [workflow](javascript:alert(1)) <script>\""), csv.body);
 
     const xlsx = await exportReport(viewer, "month=2026-06&format=xlsx");
@@ -300,14 +462,18 @@ async function main(): Promise<void> {
     check("XLSX export returns workbook media type", xlsx.statusCode === 200 && xlsx.headers["content-type"]?.toString().includes("spreadsheetml.sheet") === true, xlsx.body);
     check("XLSX export uses xlsx attachment filename", xlsx.headers["content-disposition"]?.toString().includes("automation-performance-2026-06.xlsx") === true, String(xlsx.headers["content-disposition"]));
     check("XLSX export returns zip container", xlsxBody.subarray(0, 2).equals(Buffer.from("PK")), xlsxBody.subarray(0, 4).toString("hex"));
-    check("XLSX includes workflow and model-cost worksheets", xlsxText.includes("Cost By Model") && xlsxText.includes("Workflow ROI"), xlsxText);
+    check("XLSX includes workflow and model-cost worksheets", xlsxText.includes("Cost By Model") && xlsxText.includes("Model Cost Trends") && xlsxText.includes("Workflow ROI"), xlsxText);
+    check("XLSX includes ROI source lineage", xlsxText.includes("roi_source_counts") && xlsxText.includes("process_mining:1") && xlsxText.includes("finance owner"), xlsxText);
+    check("XLSX includes ROI actuals without evidence details", xlsxText.includes("roi_actual_evidence_count") && xlsxText.includes("comparable_actual_transaction_count") && !xlsxText.includes("ticket:ROI-ACT-A1") && !xlsxText.includes("ticket:ROI-ACT-SPAN"), xlsxText);
     check("XLSX guards spreadsheet formulas", xlsxText.includes("&apos;=Formula [workflow](javascript:alert(1)) &lt;script&gt;"), xlsxText);
 
     const poc = await exportReport(viewer, "month=2026-06&format=poc_markdown");
     check("PoC Markdown export returns markdown", poc.statusCode === 200 && poc.headers["content-type"]?.toString().includes("text/markdown") === true, poc.body);
     check("PoC Markdown export uses md attachment filename", poc.headers["content-disposition"]?.toString().includes("automation-performance-poc-2026-06.md") === true, String(poc.headers["content-disposition"]));
-    check("PoC Markdown includes summary, failures, model cost, workflow ROI, and decision guide", poc.body.includes("## Summary Metrics") && poc.body.includes("## Failure Top N") && poc.body.includes("## Cost By Model") && poc.body.includes("## Workflow ROI / Cost") && poc.body.includes("## Decision Guide"), poc.body);
-    check("PoC Markdown includes report month and decision recommendation", poc.body.includes("2026\\-06") && poc.body.includes("Recommended decision"), poc.body);
+    check("PoC Markdown includes summary, failures, model cost, workflow ROI, and decision guide", poc.body.includes("## Summary Metrics") && poc.body.includes("## Failure Top N") && poc.body.includes("## Cost By Model") && poc.body.includes("## Model Cost Trends") && poc.body.includes("## Workflow ROI / Cost") && poc.body.includes("## Decision Guide"), poc.body);
+    check("PoC Markdown includes ROI source lineage", poc.body.includes("ROI sources") && poc.body.includes("process\\_mining:1") && poc.body.includes("finance owner"), poc.body);
+    check("PoC Markdown includes ROI actual comparison without evidence details", poc.body.includes("ROI actuals") && poc.body.includes("comparable tx 98/110") && !poc.body.includes("ticket:ROI-ACT-A1") && !poc.body.includes("ticket:ROI-ACT-SPAN"), poc.body);
+    check("PoC Markdown includes report month and decision recommendation", poc.body.includes("2026\\-06") && poc.body.includes("Recommended decision") && poc.body.includes("Hold"), poc.body);
     check("PoC Markdown guards spreadsheet formulas", poc.body.includes("'=Formula"), poc.body);
     check("PoC Markdown escapes markdown links", !poc.body.includes("[workflow](javascript:alert(1))") && poc.body.includes("\\[workflow\\]"), poc.body);
     check("PoC Markdown escapes HTML tags", !poc.body.includes("<script>") && poc.body.includes("&lt;script&gt;"), poc.body);

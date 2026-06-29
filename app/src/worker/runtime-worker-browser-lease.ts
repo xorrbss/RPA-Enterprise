@@ -19,6 +19,7 @@ import { applyRunTransition } from "../runtime/run-transition";
 import { unpauseLinkedWorkitemForRunAbort } from "../runtime/workitem-settlement";
 import { cancelLinkedHumanTasksForRunTerminal } from "../runtime/human-task-transition";
 import { isOnlyAbortLeasePending } from "./runtime-worker-parse";
+import { releaseCredentialLeasesForRun } from "./runtime-worker-credential-lease";
 import { errText, workerLog } from "../observability/log";
 
 export interface BrowserLeaseRenewInput {
@@ -308,6 +309,7 @@ export async function finalizeRunAbort(
         workerId: input.workerId,
       });
     }
+    await releaseCredentialLeasesForRun(client, { tenantId, runId });
 
     return {
       kind: "completed",

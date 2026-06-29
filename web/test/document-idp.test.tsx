@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
-import { ApiError, type DocumentJobCreateBody } from "../src/api/types";
+import { ApiError, type DocumentJobCreateBody, type ExternalDocumentExtractionBody } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 function jwt(roles: readonly string[]): string {
@@ -197,6 +197,11 @@ describe("document IDP view", () => {
           document_job_id: jobId,
           engine: "built_in_deterministic_text_v1",
           status: "validation_required",
+          provider_alias: null,
+          provider_receipt_id: null,
+          normalized_schema_ref: null,
+          evidence_ref: null,
+          provider_metadata: {},
           fields: [],
           missing_fields: ["invoice_id"],
           validation_human_task_id: null,
@@ -226,6 +231,117 @@ describe("document IDP view", () => {
 
     await waitFor(() => expect(validationJobs).toEqual(["93000000-0000-4000-8000-000000000001"]));
     expect(location.hash).toBe("#humanTasks?ht=55000000-0000-0000-0000-000000000055");
+  });
+
+  test("records external IDP normalized result as metadata-only alias and refs", async () => {
+    const calls: Array<{ readonly jobId: string; readonly body: ExternalDocumentExtractionBody }> = [];
+    renderApp(fakeClient({
+      recordExternalDocumentExtraction: async (jobId, body) => {
+        calls.push({ jobId, body });
+        return {
+          document_extraction_id: "94000000-0000-4000-8000-0000000000e1",
+          document_job_id: jobId,
+          engine: "external_idp_adapter_v1",
+          status: "completed",
+          provider_alias: body.provider_alias,
+          provider_receipt_id: body.receipt_id,
+          normalized_schema_ref: body.normalized_schema_ref,
+          evidence_ref: body.evidence_ref ?? null,
+          provider_metadata: body.metadata ?? {},
+          fields: body.fields.map((field) => ({
+            key: field.key,
+            label: field.key,
+            value: field.value === null ? null : String(field.value),
+            confidence: field.confidence,
+            status: field.value === null ? "missing" as const : "extracted" as const,
+            source: "external_idp" as const,
+          })),
+          missing_fields: [],
+          validation_human_task_id: null,
+          created_at: "2026-06-23T09:00:05.000Z",
+          updated_at: "2026-06-23T09:00:05.000Z",
+        };
+      },
+    }));
+
+    const invoiceButton = await screen.findByRole("button", { name: "송장" });
+    fireEvent.click(within(invoiceButton.closest("tr") as HTMLTableRowElement).getByRole("button", { name: "결과 보기" }));
+
+    expect(await screen.findByRole("form", { name: "외부 IDP normalized 결과 등록" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Provider alias"), { target: { value: "external-idp-prod" } });
+    fireEvent.change(screen.getByLabelText("Receipt ref"), { target: { value: "receipt-20260630-001" } });
+    fireEvent.change(screen.getByLabelText("Schema ref"), { target: { value: "document-extraction/invoice@1" } });
+    fireEvent.change(screen.getByLabelText("Evidence ref"), { target: { value: "artifact:72000000-0000-0000-0000-000000000001" } });
+    fireEvent.change(screen.getByLabelText("Provider metadata ref"), { target: { value: "metadata:external-idp-prod/batch-001" } });
+    fireEvent.change(screen.getByLabelText("외부 필드 값 송장 번호"), { target: { value: "INV-900" } });
+    fireEvent.change(screen.getByLabelText("외부 필드 신뢰도 송장 번호"), { target: { value: "0.93" } });
+    fireEvent.change(screen.getByLabelText("외부 필드 값 금액"), { target: { value: "1200" } });
+    fireEvent.change(screen.getByLabelText("외부 필드 신뢰도 금액"), { target: { value: "0.88" } });
+    fireEvent.change(screen.getByLabelText("외부 필드 값 승인 여부"), { target: { value: "true" } });
+    fireEvent.click(screen.getByRole("button", { name: "외부 결과 등록" }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.jobId).toBe("93000000-0000-4000-8000-000000000001");
+    expect(calls[0]?.body).toMatchObject({
+      provider_alias: "external-idp-prod",
+      receipt_id: "receipt-20260630-001",
+      normalized_schema_ref: "document-extraction/invoice@1",
+      evidence_ref: "artifact:72000000-0000-0000-0000-000000000001",
+      metadata: {
+        intake_mode: "metadata_only",
+        provider_alias_ref: "external-idp-prod",
+        receipt_ref: "receipt-20260630-001",
+        normalized_schema_ref: "document-extraction/invoice@1",
+        provider_metadata_ref: "metadata:external-idp-prod/batch-001",
+      },
+    });
+    expect(calls[0]?.body.fields).toEqual([
+      { key: "invoice_id", value: "INV-900", confidence: 0.93 },
+      { key: "total", value: 1200, confidence: 0.88 },
+      { key: "approved", value: true, confidence: 0.7 },
+    ]);
+    expect(JSON.stringify(calls[0]?.body).toLowerCase()).not.toMatch(/raw_ocr|provider_response|token|secret|document_bytes/);
+    expect(await screen.findByText("외부 IDP normalized 결과를 metadata-only로 등록했습니다.")).toBeInTheDocument();
+    expect(screen.getByText("external-idp-prod")).toBeInTheDocument();
+    expect(screen.getByText("receipt-20260630-001")).toBeInTheDocument();
+  });
+
+  test("blocks raw external URL or secret-shaped values before recording external results", async () => {
+    const calls: ExternalDocumentExtractionBody[] = [];
+    renderApp(fakeClient({
+      recordExternalDocumentExtraction: async (_jobId, body) => {
+        calls.push(body);
+        return {
+          document_extraction_id: "94000000-0000-4000-8000-0000000000e1",
+          document_job_id: "93000000-0000-4000-8000-000000000001",
+          engine: "external_idp_adapter_v1",
+          status: "completed",
+          provider_alias: body.provider_alias,
+          provider_receipt_id: body.receipt_id,
+          normalized_schema_ref: body.normalized_schema_ref,
+          evidence_ref: body.evidence_ref ?? null,
+          provider_metadata: body.metadata ?? {},
+          fields: [],
+          missing_fields: [],
+          validation_human_task_id: null,
+          created_at: "2026-06-23T09:00:05.000Z",
+          updated_at: "2026-06-23T09:00:05.000Z",
+        };
+      },
+    }));
+
+    const invoiceButton = await screen.findByRole("button", { name: "송장" });
+    fireEvent.click(within(invoiceButton.closest("tr") as HTMLTableRowElement).getByRole("button", { name: "결과 보기" }));
+
+    fireEvent.change(await screen.findByLabelText("Receipt ref"), { target: { value: "receipt-20260630-002" } });
+    fireEvent.change(screen.getByLabelText("Schema ref"), { target: { value: "document-extraction/invoice@1" } });
+    fireEvent.change(screen.getByLabelText("Provider metadata ref"), { target: { value: "https://idp.example/raw/provider-response?token=secret" } });
+    fireEvent.change(screen.getByLabelText("외부 필드 값 송장 번호"), { target: { value: "INV-901" } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("raw URL, token, secret, provider response body");
+    expect(screen.getByRole("button", { name: "외부 결과 등록" })).toBeDisabled();
+    expect(calls).toHaveLength(0);
+    expect(screen.queryByLabelText(/raw OCR|provider response body|raw document bytes/i)).not.toBeInTheDocument();
   });
 
   test("shows missing extraction as empty state but real extraction errors as retryable errors", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { createHttpApiClient } from "../src/api/client";
-import { ApiError } from "../src/api/types";
+import { ApiError, type AutomationPerformanceRoiSourceLineage } from "../src/api/types";
 
 // 실 HttpApiClient의 요청 구성(경로·헤더·body)이 제어평면 계약(api-surface)과 일치하는지 검증.
 // fetchImpl 주입으로 라이브 서버 없이 결정적으로 캡처. smoke/a11y는 fake 포트라 이 경로를 안 탄다.
@@ -33,7 +33,420 @@ function harness(response: { status?: number; body?: unknown; headers?: Record<s
   return { calls, client };
 }
 
+const automationPerformanceRoiSourceLineage: AutomationPerformanceRoiSourceLineage = {
+  idea_count: 1,
+  source_counts: { manual: 0, process_mining: 1, task_mining: 0, imported: 0 },
+  stage_counts: { approved: 1, build: 0, operate: 0 },
+  departments: ["Finance"],
+  business_owners: ["Mina Kim"],
+  sample_ideas: [
+    {
+      idea_id: "61000000-0000-4000-8000-000000000001",
+      title: "Invoice lookup ROI",
+      source: "process_mining",
+      stage: "approved",
+      department: "Finance",
+      business_owner: "Mina Kim",
+    },
+  ],
+};
+
 describe("HttpApiClient 계약", () => {
+  test("ops alert ack route uses encoded alert id and idempotency key", async () => {
+    const { calls, client } = harness({
+      body: {
+        alert_id: "bot_pool:browser-default",
+        severity: "warning",
+        source: "bot_pool",
+        title: "Bot pool capacity",
+        detail: "Worker lease needs attention.",
+        subject_type: "bot_pool",
+        subject_id: "browser-default",
+        status: "acknowledged",
+        delivery: { channel: "console", status: "delivered", delivered_at: "2026-06-23T09:00:00.000Z", external_delivery: false },
+        ack: { acknowledged_by: "operator-a", acknowledged_at: "2026-06-23T09:05:00.000Z", comment: "checking" },
+        recommended_action: "Review bot pool.",
+        route: "#automationOps",
+        detected_at: "2026-06-23T09:00:00.000Z",
+        due_at: null,
+      },
+    });
+
+    const ack = await client.ackOpsAlert("bot_pool:browser-default", "idem-ack", "checking");
+    expect(ack.status).toBe("acknowledged");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/ops-alerts/bot_pool%3Abrowser-default/ack");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-ack");
+    expect(calls[0]?.body).toEqual({ comment: "checking" });
+  });
+
+  test("ops alert delivery receipt routes use encoded alert id and idempotency key", async () => {
+    const listHarness = harness({ body: { items: [], next_cursor: null } });
+    await listHarness.client.listOpsAlertDeliveries("bot_pool:browser-default", { limit: 5 });
+    expect(listHarness.calls[0]?.method).toBe("GET");
+    expect(listHarness.calls[0]?.url).toBe("http://api.test/v1/ops-alerts/bot_pool%3Abrowser-default/deliveries?limit=5");
+
+    const postHarness = harness({
+      body: {
+        delivery_id: "delivery-1",
+        alert_id: "bot_pool:browser-default",
+        detected_at: "2026-06-23T09:00:00.000Z",
+        source: "bot_pool",
+        subject_type: "bot_pool",
+        subject_id: "browser-default",
+        channel: "teams",
+        provider_alias: "teams-primary",
+        status: "delivered",
+        receipt_id: "teams-receipt-1",
+        receipt_at: "2026-06-23T09:01:00.000Z",
+        endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+        credential_secret_ref: "secret://tenant-a/notification/teams/credential",
+        callback_signature_secret_ref: null,
+        route_policy_ref: "ops-alerts-primary",
+        recipient_group_ref: "ops-primary-oncall",
+        attempt_no: 1,
+        summary: "Provider accepted and delivered test alert.",
+        error_code: null,
+        metadata: { provider_region: "ap-northeast-2" },
+        recorded_by: "admin-a",
+        recorded_at: "2026-06-23T09:02:00.000Z",
+        legal_hold: false,
+      },
+    });
+    await postHarness.client.recordOpsAlertDelivery("bot_pool:browser-default", {
+      channel: "teams",
+      provider_alias: "teams-primary",
+      status: "delivered",
+      receipt_id: "teams-receipt-1",
+      receipt_at: "2026-06-23T09:01:00.000Z",
+      endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+      credential_secret_ref: "secret://tenant-a/notification/teams/credential",
+      callback_signature_secret_ref: null,
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      attempt_no: 1,
+      summary: "Provider accepted and delivered test alert.",
+      metadata: { provider_region: "ap-northeast-2" },
+    }, "delivery-receipt-1");
+    expect(postHarness.calls[0]?.method).toBe("POST");
+    expect(postHarness.calls[0]?.url).toBe("http://api.test/v1/ops-alerts/bot_pool%3Abrowser-default/deliveries");
+    expect(postHarness.calls[0]?.headers.get("idempotency-key")).toBe("delivery-receipt-1");
+    expect(postHarness.calls[0]?.body).toMatchObject({
+      endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+      credential_secret_ref: "secret://tenant-a/notification/teams/credential",
+    });
+  });
+
+  test("ops alert webhook send route queues SecretRef-backed delivery attempts", async () => {
+    const { calls, client } = harness({
+      status: 202,
+      body: {
+        attempt_id: "attempt-1",
+        alert_id: "bot_pool:browser-default",
+        detected_at: "2026-06-23T09:00:00.000Z",
+        source: "bot_pool",
+        subject_type: "bot_pool",
+        subject_id: "browser-default",
+        channel: "webhook",
+        provider_alias: "webhook-primary",
+        status: "pending",
+        endpoint_secret_ref: "secret://rpa/staging/notification-sender/notification/webhook/ops-primary",
+        callback_signature_secret_ref: "secret://rpa/staging/notification-sender/signing/webhook-callback",
+        route_policy_ref: "ops-alerts-primary",
+        recipient_group_ref: "ops-primary-oncall",
+        allowed_hosts: ["hooks.slack.com"],
+        attempt_no: 1,
+        max_attempts: 3,
+        next_attempt_at: "2026-06-23T09:01:00.000Z",
+        summary: "Queue test webhook.",
+        error_code: null,
+        receipt_id: null,
+        receipt_at: null,
+        metadata: { requested_from: "admin_console" },
+        requested_by: "admin-a",
+        requested_at: "2026-06-23T09:00:01.000Z",
+        legal_hold: false,
+      },
+    });
+
+    const attempt = await client.sendOpsAlertWebhookDelivery("bot_pool:browser-default", {
+      endpoint_secret_ref: "secret://rpa/staging/notification-sender/notification/webhook/ops-primary",
+      callback_signature_secret_ref: "secret://rpa/staging/notification-sender/signing/webhook-callback",
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      allowed_hosts: ["hooks.slack.com"],
+      provider_alias: "webhook-primary",
+      summary: "Queue test webhook.",
+      metadata: { requested_from: "admin_console" },
+      legal_hold: false,
+    }, "webhook-send-1");
+
+    expect(attempt.status).toBe("pending");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/ops-alerts/bot_pool%3Abrowser-default/deliveries/send-webhook");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("webhook-send-1");
+    expect(calls[0]?.body).toEqual({
+      endpoint_secret_ref: "secret://rpa/staging/notification-sender/notification/webhook/ops-primary",
+      callback_signature_secret_ref: "secret://rpa/staging/notification-sender/signing/webhook-callback",
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      allowed_hosts: ["hooks.slack.com"],
+      provider_alias: "webhook-primary",
+      summary: "Queue test webhook.",
+      metadata: { requested_from: "admin_console" },
+      legal_hold: false,
+    });
+  });
+
+  test("integration handoff routes use SecretRef-only request and receipt metadata", async () => {
+    const listHarness = harness({ body: { items: [], next_cursor: null } });
+    await listHarness.client.listIntegrationHandoffs({ provider_alias: "uipath-primary", status: "deferred", limit: 5 });
+    expect(listHarness.calls[0]?.method).toBe("GET");
+    expect(listHarness.calls[0]?.url).toBe("http://api.test/v1/integration-handoffs?provider_alias=uipath-primary&status=deferred&limit=5");
+
+    const handoffId = "00000000-0000-4000-8000-0000000000a1";
+    const createHarness = harness({
+      status: 202,
+      body: {
+        handoff_id: handoffId,
+        provider_alias: "uipath-primary",
+        job_ref: "queue:invoice-posting",
+        payload_ref: "artifact://handoff/invoice-posting-001",
+        callback_url_secret_ref: "secret://tenant-a/integration/uipath/callback-url",
+        callback_signature_secret_ref: "secret://tenant-a/integration/uipath/callback-signing",
+        external_job_id: null,
+        status: "deferred",
+        latest_receipt_id: null,
+        error_code: null,
+        requested_by: "operator-a",
+        request_idempotency_key: "handoff-create-1",
+        requested_at: "2026-06-29T00:00:00.000Z",
+        updated_at: "2026-06-29T00:00:00.000Z",
+        callback_received_at: null,
+        legal_hold: false,
+      },
+    });
+    await createHarness.client.createIntegrationHandoff({
+      provider_alias: "uipath-primary",
+      job_ref: "queue:invoice-posting",
+      payload_ref: "artifact://handoff/invoice-posting-001",
+      callback_url_secret_ref: "secret://tenant-a/integration/uipath/callback-url",
+      callback_signature_secret_ref: "secret://tenant-a/integration/uipath/callback-signing",
+    }, "handoff-create-1");
+    expect(createHarness.calls[0]?.method).toBe("POST");
+    expect(createHarness.calls[0]?.url).toBe("http://api.test/v1/integration-handoffs");
+    expect(createHarness.calls[0]?.headers.get("idempotency-key")).toBe("handoff-create-1");
+    expect(createHarness.calls[0]?.body).toMatchObject({
+      provider_alias: "uipath-primary",
+      callback_url_secret_ref: "secret://tenant-a/integration/uipath/callback-url",
+      callback_signature_secret_ref: "secret://tenant-a/integration/uipath/callback-signing",
+    });
+
+    const dispatchHarness = harness({
+      status: 202,
+      body: {
+        attempt_id: "10000000-0000-4000-8000-0000000000d1",
+        handoff_id: handoffId,
+        provider_alias: "uipath-primary",
+        status: "pending",
+        endpoint_secret_ref: "secret://tenant-a/integration/uipath/dispatch-endpoint",
+        allowed_hosts: ["uipath.example.com"],
+        request_idempotency_key: "handoff-dispatch-1",
+        attempt_no: 1,
+        max_attempts: 3,
+        external_job_id: null,
+        receipt_id: null,
+        error_code: null,
+        requested_by: "operator-a",
+        requested_at: "2026-06-29T00:00:10.000Z",
+        updated_at: "2026-06-29T00:00:10.000Z",
+        legal_hold: false,
+      },
+    });
+    await dispatchHarness.client.dispatchIntegrationHandoff(handoffId, {
+      endpoint_secret_ref: "secret://tenant-a/integration/uipath/dispatch-endpoint",
+      allowed_hosts: ["uipath.example.com"],
+      max_attempts: 3,
+      metadata: { requested_from: "admin_console" },
+    }, "handoff-dispatch-1");
+    expect(dispatchHarness.calls[0]?.method).toBe("POST");
+    expect(dispatchHarness.calls[0]?.url).toBe(`http://api.test/v1/integration-handoffs/${handoffId}/dispatch`);
+    expect(dispatchHarness.calls[0]?.headers.get("idempotency-key")).toBe("handoff-dispatch-1");
+    expect(dispatchHarness.calls[0]?.body).toEqual({
+      endpoint_secret_ref: "secret://tenant-a/integration/uipath/dispatch-endpoint",
+      allowed_hosts: ["uipath.example.com"],
+      max_attempts: 3,
+      metadata: { requested_from: "admin_console" },
+    });
+
+    const callbackHarness = harness({
+      body: {
+        handoff_id: handoffId,
+        provider_alias: "uipath-primary",
+        job_ref: "queue:invoice-posting",
+        payload_ref: "artifact://handoff/invoice-posting-001",
+        callback_url_secret_ref: "secret://tenant-a/integration/uipath/callback-url",
+        callback_signature_secret_ref: "secret://tenant-a/integration/uipath/callback-signing",
+        external_job_id: "job-123",
+        status: "completed",
+        latest_receipt_id: "receipt-123",
+        error_code: null,
+        requested_by: "operator-a",
+        request_idempotency_key: "handoff-create-1",
+        requested_at: "2026-06-29T00:00:00.000Z",
+        updated_at: "2026-06-29T00:01:00.000Z",
+        callback_received_at: "2026-06-29T00:01:00.000Z",
+        legal_hold: false,
+      },
+    });
+    await callbackHarness.client.recordIntegrationHandoffCallback(handoffId, {
+      external_job_id: "job-123",
+      status: "completed",
+      receipt_id: "receipt-123",
+    });
+    expect(callbackHarness.calls[0]?.method).toBe("POST");
+    expect(callbackHarness.calls[0]?.url).toBe(`http://api.test/v1/integration-handoffs/${handoffId}/callback`);
+    expect(callbackHarness.calls[0]?.headers.get("idempotency-key")).toBeNull();
+    expect(callbackHarness.calls[0]?.body).toEqual({ external_job_id: "job-123", status: "completed", receipt_id: "receipt-123" });
+  });
+
+  test("production readiness route uses controlled-prod evidence endpoint", async () => {
+    const { calls, client } = harness({
+      body: {
+        status: "warning",
+        evaluated_at: "2026-06-23T09:04:00.000Z",
+        environment: { target: "controlled_prod", tenant_id: "tenant-a" },
+        summary: { controlled_prod_ready: false, status: "warning", blocker_count: 0, warning_count: 0, deferred_count: 3 },
+        gates: [],
+        signals: {
+          ops_health: {
+            status: "ok",
+            detected_at: "2026-06-23T09:04:00.000Z",
+            queue: { available: true, pending_jobs: 0 },
+            browser_leases: { reserved: 0, active: 0, draining: 0, expired: 0, expired_open: 0, next_expiry_at: null },
+            stale_runs: { nonterminal_over_15m: 0, oldest_updated_at: null },
+          },
+          bot_pool: {
+            bot_pool_id: "browser-finance-prod",
+            capacity_slots: 2,
+            workers: { total: 2, active: 2, draining: 0, dead: 0, stale: 0, open_circuit: 0 },
+            leases: { reserved: 0, active: 0, draining: 0, expired_open: 0, next_expiry_at: null },
+            queue: { pending_runs: 0, queued_runs: 0, claimed_runs: 0, oldest_queued_at: null, due_triggers: 0 },
+            health: "ok",
+          },
+          audit_verifier: {
+            audit_count: 8,
+            latest_run_id: "verifier-1",
+            latest_status: "valid",
+            latest_completed_at: "2026-06-23T09:03:00.000Z",
+            rows_checked: 8,
+            violation_count: 0,
+            stale: false,
+          },
+        },
+      },
+    });
+
+    const readiness = await client.getProductionReadiness();
+    expect(readiness.summary.deferred_count).toBe(3);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/ops/production-readiness");
+  });
+
+  test("production readiness evidence list and record routes", async () => {
+    const listHarness = harness({ body: { items: [], next_cursor: null } });
+    await listHarness.client.listProductionReadinessEvidence({ evidence_type: "external_alert_delivery", limit: 10 });
+    expect(listHarness.calls[0]?.method).toBe("GET");
+    expect(listHarness.calls[0]?.url).toBe("http://api.test/v1/ops/production-readiness/evidence?evidence_type=external_alert_delivery&limit=10");
+
+    const postHarness = harness({
+      body: {
+        evidence_id: "evidence-1",
+        evidence_type: "external_alert_delivery",
+        status: "valid",
+        evidence_at: "2026-06-23T09:00:00.000Z",
+        expires_at: "2026-09-23T09:00:00.000Z",
+        summary: "External delivery drill receipt verified.",
+        evidence_ref: "ticket:OPS-123",
+        metadata: {
+          channel: "teams",
+          provider_alias: "teams-primary",
+          receipt_id: "receipt-1",
+          receipt_at: "2026-06-23T09:01:00.000Z",
+          delivery_status: "delivered",
+        },
+        recorded_by: "admin-a",
+        recorded_at: "2026-06-23T09:05:00.000Z",
+        legal_hold: false,
+      },
+    });
+    await postHarness.client.recordProductionReadinessEvidence({
+      evidence_type: "external_alert_delivery",
+      status: "valid",
+      evidence_at: "2026-06-23T09:00:00.000Z",
+      expires_at: "2026-09-23T09:00:00.000Z",
+      summary: "External delivery drill receipt verified.",
+      evidence_ref: "ticket:OPS-123",
+      metadata: {
+        channel: "teams",
+        provider_alias: "teams-primary",
+        receipt_id: "receipt-1",
+        receipt_at: "2026-06-23T09:01:00.000Z",
+        delivery_status: "delivered",
+      },
+    }, "readiness-evidence-1");
+    expect(postHarness.calls[0]?.method).toBe("POST");
+    expect(postHarness.calls[0]?.url).toBe("http://api.test/v1/ops/production-readiness/evidence");
+    expect(postHarness.calls[0]?.headers.get("idempotency-key")).toBe("readiness-evidence-1");
+  });
+
+  test("automation adoption evidence list and record routes", async () => {
+    const listHarness = harness({ body: { items: [], next_cursor: null } });
+    await listHarness.client.listAutomationAdoptionEvidence("idea-123", {
+      evidence_type: "pilot_charter_signoff",
+      status: "valid",
+      limit: 5,
+    });
+    expect(listHarness.calls[0]?.method).toBe("GET");
+    expect(listHarness.calls[0]?.url).toBe("http://api.test/v1/automation-ideas/idea-123/adoption-evidence?evidence_type=pilot_charter_signoff&status=valid&limit=5");
+
+    const postHarness = harness({
+      body: {
+        evidence_id: "adoption-evidence-1",
+        idea_id: "idea-123",
+        evidence_type: "support_model_signoff",
+        status: "deferred",
+        evidence_at: "2026-06-29T00:00:00.000Z",
+        expires_at: null,
+        summary: "Support model owner review is scheduled.",
+        evidence_ref: "ticket:PILOT-123",
+        metadata: { source: "coe_pipeline" },
+        recorded_by: "operator-a",
+        recorded_at: "2026-06-29T00:01:00.000Z",
+        legal_hold: false,
+      },
+    });
+    await postHarness.client.recordAutomationAdoptionEvidence("idea-123", {
+      evidence_type: "support_model_signoff",
+      status: "deferred",
+      evidence_at: "2026-06-29T00:00:00.000Z",
+      summary: "Support model owner review is scheduled.",
+      evidence_ref: "ticket:PILOT-123",
+      metadata: { source: "coe_pipeline" },
+    }, "adoption-evidence-1");
+    expect(postHarness.calls[0]?.method).toBe("POST");
+    expect(postHarness.calls[0]?.url).toBe("http://api.test/v1/automation-ideas/idea-123/adoption-evidence");
+    expect(postHarness.calls[0]?.headers.get("idempotency-key")).toBe("adoption-evidence-1");
+    expect(postHarness.calls[0]?.body).toEqual({
+      evidence_type: "support_model_signoff",
+      status: "deferred",
+      evidence_at: "2026-06-29T00:00:00.000Z",
+      summary: "Support model owner review is scheduled.",
+      evidence_ref: "ticket:PILOT-123",
+      metadata: { source: "coe_pipeline" },
+    });
+  });
+
   test("automation performance report JSON/CSV/XLSX/PoC Markdown routes", async () => {
     const jsonHarness = harness({
       body: {
@@ -51,14 +464,76 @@ describe("HttpApiClient 계약", () => {
           reprocessing_rate: 0,
           estimated_hours_saved: 1,
           estimated_value: 50000,
+          implementation_effort: 0,
+          net_value: 49998.75,
+          value_to_cost_ratio: 40000,
+          payback_months: 0,
           gateway_cost: 1.25,
+          cost_by_status: { completed: 1.25, failed_business: 0, failed_system: 0, other: 0 },
+          failed_cost: 0,
+          rerun_cost: 0,
+          avg_cost_per_run: 1.25,
+          cost_per_completed_run: 1.25,
+          llm_call_cost: 1,
+          run_vs_call_cost_delta: 0.25,
+          roi_idea_count: 1,
+          roi_confidence: { low: 0, medium: 1, high: 0 },
+          roi_source_lineage: automationPerformanceRoiSourceLineage,
+          roi_actuals: {
+            evidence_count: 1,
+            estimated_transaction_count: 10,
+            actual_transaction_count: 9,
+            comparable_actual_transaction_count: 9,
+            transaction_attainment_rate: 0.9,
+            estimated_exception_rate: 0,
+            actual_failure_rate: 0.1,
+            comparable_actual_failure_rate: 0.1,
+            failure_rate_delta: 0.1,
+            human_intervention_minutes: 30,
+            reprocessing_minutes: 5,
+            latest_period_end: "2026-06-28",
+          },
+          decision_signal: { status: "expand", reason: "PoC evidence supports scaling" },
         },
+        cost_by_model: [{ model: "gpt-4o-mini", calls: 1, input_tokens: 100, output_tokens: 20, cost: 1, cost_share: 1 }],
+        model_cost_trends: [
+          {
+            day: "2026-06-02",
+            model: "gpt-4o-mini",
+            calls: 1,
+            input_tokens: 100,
+            output_tokens: 20,
+            cost: 1,
+            cost_share_of_day: 1,
+            cost_delta_from_previous_day_for_model: null,
+          },
+        ],
         failure_top: [],
+        trends: [
+          {
+            day: "2026-06-02",
+            total_runs: 1,
+            completed: 1,
+            failed_business: 0,
+            failed_system: 0,
+            success_rate: 1,
+            rerun_count: 0,
+            reprocessing_rate: 0,
+            gateway_cost: 1.25,
+            cost_by_status: { completed: 1.25, failed_business: 0, failed_system: 0, other: 0 },
+            rerun_cost: 0,
+            avg_cost_per_run: 1.25,
+            cost_per_completed_run: 1.25,
+            cost_delta_from_previous_day: null,
+          },
+        ],
         by_workflow: [],
       },
     });
     const report = await jsonHarness.client.getAutomationPerformanceReport("2026-06");
     expect(report.summary.total_runs).toBe(1);
+    expect(report.summary.roi_source_lineage.source_counts.process_mining).toBe(1);
+    expect(report.model_cost_trends[0]?.model).toBe("gpt-4o-mini");
     expect(jsonHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance?month=2026-06");
     expect(jsonHarness.calls[0]?.headers.get("accept")).toBe("application/json");
 
@@ -114,6 +589,59 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.url).toBe("http://api.test/v1/audit-log/export?action=artifact.read&outcome=allow&actor=viewer-a&limit=200&format=csv");
     expect(calls[0]?.headers.get("accept")).toBe("text/csv");
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
+  test("audit verification runs use evidence endpoints", async () => {
+    const fixture = {
+      verification_run_id: "83000000-0000-4000-8000-000000000001",
+      status: "valid",
+      rows_checked: 2,
+      violation_count: 0,
+      violations: [],
+      checked_from_sequence: 1,
+      checked_to_sequence: 2,
+      started_at: "2026-06-29T00:00:00.000Z",
+      completed_at: "2026-06-29T00:00:01.000Z",
+      correlation_id: "84000000-0000-4000-8000-000000000001",
+      triggered_by: { subject_id: "admin-a", roles: ["admin"] },
+      trigger_kind: "manual_api",
+      retention_until: "2026-09-29T00:00:01.000Z",
+      legal_hold: false,
+    };
+    const { calls, client } = harness({ body: { items: [fixture], next_cursor: null } });
+    const list = await client.listAuditVerificationRuns({ status: "valid", limit: 5 });
+
+    expect(list.items[0]?.verification_run_id).toBe(fixture.verification_run_id);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/audit-log/verification-runs?status=valid&limit=5");
+  });
+
+  test("runAuditVerification posts idempotent command", async () => {
+    const { calls, client } = harness({
+      body: {
+        verification_run_id: "83000000-0000-4000-8000-000000000001",
+        status: "invalid",
+        rows_checked: 3,
+        violation_count: 1,
+        violations: [{ sequenceNo: 3, id: "audit-row-3", kind: "hash_mismatch", detail: "recomputed hash does not match stored hash" }],
+        checked_from_sequence: 1,
+        checked_to_sequence: 3,
+        started_at: "2026-06-29T00:00:00.000Z",
+        completed_at: "2026-06-29T00:00:01.000Z",
+        correlation_id: "84000000-0000-4000-8000-000000000001",
+        triggered_by: { subject_id: "admin-a", roles: ["admin"] },
+        trigger_kind: "manual_api",
+        retention_until: "2026-09-29T00:00:01.000Z",
+        legal_hold: true,
+      },
+    });
+    const run = await client.runAuditVerification("verify-1", { legal_hold: true });
+
+    expect(run.status).toBe("invalid");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/audit-log/verification-runs/verify");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("verify-1");
+    expect(calls[0]?.body).toEqual({ legal_hold: true });
   });
 
   test("getAuthReadiness → GET /v1/auth/readiness + Bearer", async () => {
@@ -196,6 +724,21 @@ describe("HttpApiClient 계약", () => {
     );
     await client.getDocumentJob("job-1");
     await client.extractDocumentJob("job-1", "idem-doc-extract");
+    await client.recordExternalDocumentExtraction(
+      "job-1",
+      {
+        provider_alias: "external-idp",
+        receipt_id: "receipt-1",
+        normalized_schema_ref: "document-extraction/invoice@1",
+        evidence_ref: "artifact://idp-receipt-1",
+        fields: [
+          { key: "invoice_id", value: "INV-7", confidence: 0.98 },
+          { key: "total", value: 9900, confidence: 0.94 },
+        ],
+        metadata: { provider_region: "ap-northeast-2" },
+      },
+      "idem-doc-external",
+    );
     await client.getDocumentExtraction("job-1");
     await client.createDocumentValidationTask("job-1", "idem-doc-validate");
 
@@ -213,10 +756,24 @@ describe("HttpApiClient 계약", () => {
     expect(calls[3]?.method).toBe("POST");
     expect(calls[3]?.url).toBe("http://api.test/v1/document-jobs/job-1/extract");
     expect(calls[3]?.headers.get("idempotency-key")).toBe("idem-doc-extract");
-    expect(calls[4]?.url).toBe("http://api.test/v1/document-jobs/job-1/extraction");
-    expect(calls[5]?.method).toBe("POST");
-    expect(calls[5]?.url).toBe("http://api.test/v1/document-jobs/job-1/validation-task");
-    expect(calls[5]?.headers.get("idempotency-key")).toBe("idem-doc-validate");
+    expect(calls[4]?.method).toBe("POST");
+    expect(calls[4]?.url).toBe("http://api.test/v1/document-jobs/job-1/external-extractions");
+    expect(calls[4]?.headers.get("idempotency-key")).toBe("idem-doc-external");
+    expect(calls[4]?.body).toEqual({
+      provider_alias: "external-idp",
+      receipt_id: "receipt-1",
+      normalized_schema_ref: "document-extraction/invoice@1",
+      evidence_ref: "artifact://idp-receipt-1",
+      fields: [
+        { key: "invoice_id", value: "INV-7", confidence: 0.98 },
+        { key: "total", value: 9900, confidence: 0.94 },
+      ],
+      metadata: { provider_region: "ap-northeast-2" },
+    });
+    expect(calls[5]?.url).toBe("http://api.test/v1/document-jobs/job-1/extraction");
+    expect(calls[6]?.method).toBe("POST");
+    expect(calls[6]?.url).toBe("http://api.test/v1/document-jobs/job-1/validation-task");
+    expect(calls[6]?.headers.get("idempotency-key")).toBe("idem-doc-validate");
   });
 
   test("site element repository routes use site-scoped endpoints and idempotency", async () => {
@@ -373,6 +930,12 @@ describe("HttpApiClient 계약", () => {
     await client.archiveScenario("scn-1", 3, "idem-archive");
     await client.listScenarioVersions("scn-1");
     await client.rollbackScenario("scn-1", 1, 3, "idem-rollback");
+    await client.setScenarioVersionGovernanceStage(
+      "scn-1",
+      3,
+      { stage: "pilot", reason: "SME pilot accepted", evidence_ref: "ticket:GOV-123", metadata: { lane: "finance" }, legal_hold: true },
+      "idem-governance",
+    );
 
     expect(calls[0]?.url).toBe("http://api.test/v1/scenarios/scn-1/promote");
     expect(calls[0]?.headers.get("if-match")).toBe("3");
@@ -385,6 +948,15 @@ describe("HttpApiClient 계약", () => {
     expect(calls[3]?.url).toBe("http://api.test/v1/scenarios/scn-1/versions/1/rollback");
     expect(calls[3]?.headers.get("if-match")).toBe("3");
     expect(calls[3]?.headers.get("idempotency-key")).toBe("idem-rollback");
+    expect(calls[4]?.url).toBe("http://api.test/v1/scenarios/scn-1/versions/3/governance-stage");
+    expect(calls[4]?.headers.get("idempotency-key")).toBe("idem-governance");
+    expect(calls[4]?.body).toEqual({
+      stage: "pilot",
+      reason: "SME pilot accepted",
+      evidence_ref: "ticket:GOV-123",
+      metadata: { lane: "finance" },
+      legal_hold: true,
+    });
   });
 
   test("getGatewayPolicy → ETag(version) 헤더를 body.version으로 병합", async () => {

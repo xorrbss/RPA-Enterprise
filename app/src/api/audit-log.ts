@@ -1,9 +1,20 @@
+import { randomUUID } from "node:crypto";
+
 import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
+import { verifyAuditChainInTenantTx } from "./audit-record-hash";
+import {
+  insertAuditVerificationRun,
+  mapAuditVerificationRunRow,
+  type AuditVerifierRunRow,
+  type AuditVerificationRunStatus,
+} from "./audit-verification-runs";
+import { runIdempotentCommand, isRecord } from "./command";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams, principalIdFilter, uuidFilter } from "./list-query";
 import { requirePrincipal, type ApiServerDeps } from "./server";
+import { UUID_RE } from "./server-shared";
 
 type AuditOutcome = "allow" | "deny" | "blocked" | "error";
 
@@ -39,6 +50,10 @@ interface AuditLogFilters {
   readonly correlationId?: string;
 }
 
+interface VerificationRunFilters {
+  readonly status?: AuditVerificationRunStatus;
+}
+
 export function registerAuditLogRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get("/v1/audit-log", { config: { rbacAction: "audit.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
@@ -66,6 +81,44 @@ export function registerAuditLogRoutes(app: FastifyInstance, deps: ApiServerDeps
       .header("content-type", "text/csv; charset=utf-8")
       .header("content-disposition", `attachment; filename="${filename}"`)
       .send(auditRowsToCsv(rows));
+  });
+
+  app.get("/v1/audit-log/verification-runs", { config: { rbacAction: "audit.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const query = request.query as Record<string, unknown>;
+    const { limit, cursor } = parsePageParams(query);
+    const filters = parseVerificationRunFilters(query);
+    const rows = await selectVerificationRuns(deps, principal.tenantId, filters, limit + 1, cursor);
+
+    reply.code(200).send(paginate(rows, limit, (row) => ({ createdAt: row.cursor_at, id: row.id }), mapAuditVerificationRunRow));
+  });
+
+  app.post("/v1/audit-log/verification-runs/verify", { config: { rbacAction: "audit.verify" } }, async (request, reply) => {
+    const response = await runIdempotentCommand(
+      deps,
+      request,
+      "runAuditVerification",
+      "/v1/audit-log/verification-runs/verify",
+      async (client, tenantId) => {
+        const body = parseVerificationRequest(request.body);
+        const principal = requirePrincipal(request);
+        const startedAt = new Date();
+        const result = await verifyAuditChainInTenantTx(client, tenantId);
+        const completedAt = new Date();
+        const row = await insertAuditVerificationRun(client, {
+          tenantId,
+          result,
+          startedAt,
+          completedAt,
+          correlationId: UUID_RE.test(request.correlationId) ? request.correlationId : randomUUID(),
+          triggeredBy: { subjectId: principal.subjectId, roles: principal.roles },
+          triggerKind: "manual_api",
+          legalHold: body.legalHold,
+        });
+        return { status: 201, body: mapAuditVerificationRunRow(row) };
+      },
+    );
+    reply.code(response.status).send(response.body);
   });
 }
 
@@ -126,6 +179,56 @@ function auditOutcomeFilter(raw: unknown): AuditOutcome | undefined {
   if (raw === undefined) return undefined;
   if (raw === "allow" || raw === "deny" || raw === "blocked" || raw === "error") return raw;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_outcome" });
+}
+
+function parseVerificationRunFilters(query: Record<string, unknown>): VerificationRunFilters {
+  return { status: verificationRunStatusFilter(query.status) };
+}
+
+function verificationRunStatusFilter(raw: unknown): AuditVerificationRunStatus | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "valid" || raw === "invalid" || raw === "failed") return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_audit_verification_status" });
+}
+
+function parseVerificationRequest(raw: unknown): { legalHold: boolean } {
+  if (raw === undefined || raw === null) return { legalHold: false };
+  if (!isRecord(raw)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "audit_verification_body_expected_object" });
+  const keys = Object.keys(raw);
+  if (keys.some((key) => key !== "legal_hold")) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "audit_verification_unknown_field" });
+  }
+  if (raw.legal_hold === undefined || raw.legal_hold === null) return { legalHold: false };
+  if (typeof raw.legal_hold !== "boolean") {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_legal_hold" });
+  }
+  return { legalHold: raw.legal_hold };
+}
+
+async function selectVerificationRuns(
+  deps: ApiServerDeps,
+  tenantId: string,
+  filters: VerificationRunFilters,
+  limit: number,
+  cursor: { readonly createdAt: string; readonly id: string } | null,
+): Promise<AuditVerifierRunRow[]> {
+  return withTenantTx(deps.pool, tenantId, async (client) => {
+    const result = await client.query<AuditVerifierRunRow>(
+      `SELECT id, status, rows_checked::text, violation_count, violations,
+              checked_from_sequence::text, checked_to_sequence::text,
+              started_at, completed_at, correlation_id, triggered_by, trigger_kind,
+              retention_until, legal_hold, completed_at::text AS cursor_at
+         FROM audit_verifier_runs
+        WHERE tenant_id = $1::uuid
+          AND deleted_at IS NULL
+          AND ($2::text IS NULL OR status = $2)
+          AND ($3::timestamptz IS NULL OR (completed_at, id) < ($3::timestamptz, $4::uuid))
+        ORDER BY completed_at DESC, id DESC
+        LIMIT $5`,
+      [tenantId, filters.status ?? null, cursor?.createdAt ?? null, cursor?.id ?? null, limit],
+    );
+    return result.rows;
+  });
 }
 
 function mapActor(raw: unknown): ActorSummary {

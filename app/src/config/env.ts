@@ -76,20 +76,28 @@ export interface CommonConfig {
   readonly healthPort: number;
   /** OTel exporter 선택(부트스트랩 호출측 위임, observability/bootstrap.ts §). console=stdout 표면화, none=미등록(no-op). */
   readonly telemetryExporter: TelemetryExporter;
+  readonly otlp?: OtlpTelemetryConfig;
 }
 
 export function loadCommonConfig(): CommonConfig {
   // node-pg (createPool) reads PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD directly; graphile needs a URL.
   const connectionString = opt("DATABASE_URL") ?? buildPgConnString();
+  const telemetryExporter = loadTelemetryExporter();
   return {
     rpaEnv: req("RPA_ENV"),
     connectionString,
     healthPort: num("HEALTH_PORT", 8081),
-    telemetryExporter: loadTelemetryExporter(),
+    telemetryExporter,
+    ...(telemetryExporter === "otlp" ? { otlp: loadOtlpTelemetryConfig() } : {}),
   };
 }
 
-export type TelemetryExporter = "console" | "none";
+export type TelemetryExporter = "console" | "none" | "prometheus" | "otlp";
+
+export interface OtlpTelemetryConfig {
+  readonly tracesEndpoint: string;
+  readonly metricsEndpoint: string;
+}
 
 /**
  * OTel exporter 선택(부트스트랩 호출측 위임, bootstrap.ts §). `console`=내장 exporter 로 stdout 표면화(수집 백엔드 무의존),
@@ -98,10 +106,45 @@ export type TelemetryExporter = "console" | "none";
  */
 export function loadTelemetryExporter(): TelemetryExporter {
   const e = (opt("OTEL_EXPORTER") ?? "none").toLowerCase();
-  if (e !== "console" && e !== "none") {
-    throw new Error(`OTEL_EXPORTER must be one of console|none, got ${JSON.stringify(e)}`);
+  if (e !== "console" && e !== "none" && e !== "prometheus" && e !== "otlp") {
+    throw new Error(`OTEL_EXPORTER must be one of console|none|prometheus|otlp, got ${JSON.stringify(e)}`);
   }
   return e;
+}
+
+export function loadOtlpTelemetryConfig(): OtlpTelemetryConfig {
+  const base = opt("OTEL_EXPORTER_OTLP_ENDPOINT");
+  const traces = opt("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") ?? (base !== undefined ? joinOtlpEndpoint(base, "v1/traces") : undefined);
+  const metrics = opt("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") ?? (base !== undefined ? joinOtlpEndpoint(base, "v1/metrics") : undefined);
+  if (traces === undefined || metrics === undefined) {
+    throw new Error(
+      "OTEL_EXPORTER=otlp requires OTEL_EXPORTER_OTLP_ENDPOINT or both OTEL_EXPORTER_OTLP_TRACES_ENDPOINT and OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    );
+  }
+  return {
+    tracesEndpoint: assertHttpTelemetryUrl("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", traces),
+    metricsEndpoint: assertHttpTelemetryUrl("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", metrics),
+  };
+}
+
+function joinOtlpEndpoint(base: string, suffix: "v1/traces" | "v1/metrics"): string {
+  return `${base.replace(/\/+$/, "")}/${suffix}`;
+}
+
+function assertHttpTelemetryUrl(name: string, value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`env ${name} must be an absolute http(s) URL, got ${JSON.stringify(value)}`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`env ${name} must use http or https, got protocol ${JSON.stringify(parsed.protocol)}`);
+  }
+  if (parsed.username !== "" || parsed.password !== "" || parsed.search !== "" || parsed.hash !== "") {
+    throw new Error(`env ${name} must not include credentials, query, or fragment`);
+  }
+  return value;
 }
 
 export type ApiLogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
@@ -341,17 +384,29 @@ export interface WorkerConfig {
   /** SecretRef for the active browser session AES-256-GCM data key (base64/base64url encoded 32 bytes). */
   readonly browserSessionKeyRef: string;
   readonly graphileSchema?: string;
+  readonly graphileMigrationsMode: "runtime" | "external";
   readonly graphileConcurrency: number;
   readonly graphilePollIntervalMs: number;
   /** DG-3: 이 워커가 서비스하는 전용 풀 키(WORKER_POOL_KEYS, csv). 빈 값이면 'default' 풀만 서비스. */
   readonly workerPoolKeys: readonly string[];
   readonly maintenanceTenantIds: readonly string[];
+  /** Dedicated non-superuser BYPASSRLS pool used only for cross-tenant maintenance/lifecycle discovery. */
+  readonly maintenanceLifecycleDatabaseUrl?: string;
   readonly sinkDeliveryMaxAttempts: number;
   readonly sinkDeliveryRetryAfterMs: number;
+  readonly sinkDelivery?: SinkDeliveryEgressConfig;
   readonly videoRecordingEnabled: boolean;
   readonly videoFfmpegPath?: string;
   readonly videoFrameIntervalMs: number;
   readonly videoFrameRate: number;
+}
+
+export interface SinkDeliveryEgressConfig {
+  readonly endpointSecretRef: string;
+  readonly allowedHosts: readonly string[];
+  readonly backendAlias: string;
+  readonly timeoutMs: number;
+  readonly maxRedirects: number;
 }
 
 export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
@@ -364,26 +419,122 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
   if (!Number.isInteger(videoFrameRate) || videoFrameRate <= 0) {
     throw new Error(`VISUAL_EVIDENCE_VIDEO_FPS must be a positive integer, got ${videoFrameRate}`);
   }
+  const maintenanceTenantIds = csvUuidList("MAINTENANCE_TENANT_IDS");
+  const maintenanceLifecycleDatabaseUrl =
+    maintenanceTenantIds.length === 0 ? req("MAINTENANCE_LIFECYCLE_DATABASE_URL") : opt("MAINTENANCE_LIFECYCLE_DATABASE_URL");
+  const graphileMigrationsMode = graphileMigrationMode();
+  const sinkDelivery = loadSinkDeliveryEgressConfig(common.rpaEnv);
   return {
     workerId: req("WORKER_ID"),
     vaultRuntimeWorker: loadVaultIdentity("RUNTIME_WORKER"),
     resumeTokenRef: `rpa/${common.rpaEnv}/runtime-worker/resume_token_hmac/active`,
     browserSessionKeyRef: `rpa/${common.rpaEnv}/runtime-worker/browser_session/active`,
     graphileSchema: opt("GRAPHILE_WORKER_SCHEMA"),
+    graphileMigrationsMode,
     graphileConcurrency: num("GRAPHILE_CONCURRENCY", 1),
     graphilePollIntervalMs: num("GRAPHILE_POLL_INTERVAL_MS", 2000),
     workerPoolKeys: (opt("WORKER_POOL_KEYS") ?? "")
       .split(",")
       .map((key) => key.trim())
       .filter((key) => key.length > 0),
-    maintenanceTenantIds: csvUuidList("MAINTENANCE_TENANT_IDS"),
+    maintenanceTenantIds,
+    ...(maintenanceLifecycleDatabaseUrl !== undefined ? { maintenanceLifecycleDatabaseUrl } : {}),
     sinkDeliveryMaxAttempts: positiveInt("SINK_DELIVERY_MAX_ATTEMPTS", 3),
     sinkDeliveryRetryAfterMs: positiveInt("SINK_DELIVERY_RETRY_AFTER_MS", 5_000),
+    ...(sinkDelivery !== undefined ? { sinkDelivery } : {}),
     videoRecordingEnabled,
     ...(videoRecordingEnabled ? { videoFfmpegPath: req("VISUAL_EVIDENCE_FFMPEG_PATH") } : {}),
     videoFrameIntervalMs,
     videoFrameRate,
   };
+}
+
+function loadSinkDeliveryEgressConfig(rpaEnv: string): SinkDeliveryEgressConfig | undefined {
+  const endpointSecretRef = opt("SINK_DELIVERY_ENDPOINT_SECRET_REF");
+  const allowedHostsRaw = opt("SINK_DELIVERY_ALLOWED_HOSTS");
+  const hasPartial =
+    allowedHostsRaw !== undefined ||
+    opt("SINK_DELIVERY_BACKEND_ALIAS") !== undefined ||
+    opt("SINK_DELIVERY_TIMEOUT_MS") !== undefined ||
+    opt("SINK_DELIVERY_MAX_REDIRECTS") !== undefined;
+  if (endpointSecretRef === undefined) {
+    if (hasPartial) {
+      throw new Error("SINK_DELIVERY_ENDPOINT_SECRET_REF is required when configuring sink delivery egress");
+    }
+    return undefined;
+  }
+  const refDenial = sinkDeliveryEndpointSecretRefDenial(endpointSecretRef, rpaEnv);
+  if (refDenial !== null) {
+    throw new Error(`env SINK_DELIVERY_ENDPOINT_SECRET_REF ${refDenial}`);
+  }
+  if (allowedHostsRaw === undefined) {
+    throw new Error("SINK_DELIVERY_ALLOWED_HOSTS is required when SINK_DELIVERY_ENDPOINT_SECRET_REF is set");
+  }
+  const backendAlias = opt("SINK_DELIVERY_BACKEND_ALIAS") ?? "secretref-sink";
+  if (!/^[A-Za-z0-9._:-]{1,100}$/.test(backendAlias)) {
+    throw new Error("env SINK_DELIVERY_BACKEND_ALIAS must be 1-100 chars of A-Z a-z 0-9 . _ : -");
+  }
+  const maxRedirects = num("SINK_DELIVERY_MAX_REDIRECTS", 3);
+  if (!Number.isInteger(maxRedirects) || maxRedirects < 0) {
+    throw new Error(`env SINK_DELIVERY_MAX_REDIRECTS must be a non-negative integer, got ${maxRedirects}`);
+  }
+  return {
+    endpointSecretRef,
+    allowedHosts: csvAllowedDnsHosts("SINK_DELIVERY_ALLOWED_HOSTS", allowedHostsRaw),
+    backendAlias,
+    timeoutMs: positiveInt("SINK_DELIVERY_TIMEOUT_MS", 5_000),
+    maxRedirects,
+  };
+}
+
+function sinkDeliveryEndpointSecretRefDenial(ref: string, rpaEnv: string): string | null {
+  const parts = ref.split("/");
+  if (
+    parts.length < 5 ||
+    parts[0] !== "rpa" ||
+    parts[2] !== "connector-runtime" ||
+    parts[3] !== "connector" ||
+    parts.some((part) => part.length === 0 || part === "." || part === "..")
+  ) {
+    return `must follow rpa/<env>/connector-runtime/connector/<name>, got ${JSON.stringify(ref)}`;
+  }
+  if (parts[1] !== rpaEnv) {
+    return `env segment must match RPA_ENV=${JSON.stringify(rpaEnv)}, got ${JSON.stringify(parts[1])}`;
+  }
+  return null;
+}
+
+function csvAllowedDnsHosts(name: string, raw: string): string[] {
+  const values = raw.split(",").map((part) => part.trim().toLowerCase());
+  if (values.length === 0 || values.some((value) => value.length === 0)) {
+    throw new Error(`env ${name} must be a comma-separated list of DNS hostnames without empty entries`);
+  }
+  const seen = new Set<string>();
+  for (const value of values) {
+    const denial = allowedDnsHostDenial(value);
+    if (denial !== null) throw new Error(`env ${name} host ${JSON.stringify(value)} ${denial}`);
+    if (seen.has(value)) throw new Error(`env ${name} contains duplicate host ${JSON.stringify(value)}`);
+    seen.add(value);
+  }
+  return values;
+}
+
+function allowedDnsHostDenial(host: string): string | null {
+  if (host.includes("://") || host.includes("/") || host.includes("\\") || host.includes("?") || host.includes("#") || host.includes("@")) {
+    return "must be a hostname, not a URL";
+  }
+  if (host === "localhost" || host.endsWith(".localhost")) return "must not be localhost";
+  if (/^[0-9.]+$/.test(host) || host.includes(":")) return "must not be an IP literal";
+  const label = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+  const hostRe = new RegExp(`^${label}(?:\\.${label})*$`);
+  if (!hostRe.test(host)) return "must be a DNS hostname";
+  return null;
+}
+
+function graphileMigrationMode(): "runtime" | "external" {
+  const value = (opt("GRAPHILE_MIGRATIONS_MODE") ?? "runtime").toLowerCase();
+  if (value === "runtime" || value === "external") return value;
+  throw new Error(`GRAPHILE_MIGRATIONS_MODE must be runtime|external, got ${JSON.stringify(value)}`);
 }
 
 function loadArtifactObjectStoreConfig(): ArtifactObjectStoreConfig {

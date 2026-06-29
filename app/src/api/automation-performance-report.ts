@@ -9,6 +9,9 @@ import { requirePrincipal, type ApiServerDeps } from "./server";
 const REPORT_TZ = "Asia/Seoul";
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const POC_MARKDOWN_CONTENT_TYPE = "text/markdown; charset=utf-8";
+const ROI_SOURCES = ["manual", "process_mining", "task_mining", "imported"] as const;
+const ROI_STAGES = ["approved", "build", "operate"] as const;
+const ROI_LINEAGE_SAMPLE_LIMIT = 5;
 
 type SpreadsheetCell = string | number | null;
 
@@ -39,11 +42,20 @@ interface WorkflowReportRow {
   rerun_cost: string;
   estimated_hours_saved: string;
   estimated_value: string;
+  estimated_transaction_count: string;
+  estimated_exception_rate: string | null;
   implementation_effort: string;
   roi_idea_count: number;
   confidence_low: number;
   confidence_medium: number;
   confidence_high: number;
+  roi_ideas: unknown;
+  actual_evidence_count: number;
+  actual_transaction_count: number;
+  actual_failure_rate: string | null;
+  human_intervention_minutes: string;
+  reprocessing_minutes: string;
+  latest_actual_period_end: string | null;
   gateway_cost: string;
   completed_cost: string;
   failed_business_cost: string;
@@ -79,6 +91,16 @@ interface CostByModelRow {
   cost: string | null;
 }
 
+interface ModelCostTrendRow {
+  day: string;
+  model: string;
+  calls: number;
+  input_tokens: string | null;
+  output_tokens: string | null;
+  cost: string | null;
+  day_known_cost: string | null;
+}
+
 interface CostByStatus {
   readonly completed: number;
   readonly failed_business: number;
@@ -92,6 +114,62 @@ interface RoiConfidenceBreakdown {
   readonly high: number;
 }
 
+type RoiSource = "manual" | "process_mining" | "task_mining" | "imported";
+type RoiStage = "approved" | "build" | "operate";
+
+interface RoiSourceCounts {
+  manual: number;
+  process_mining: number;
+  task_mining: number;
+  imported: number;
+}
+
+interface RoiStageCounts {
+  approved: number;
+  build: number;
+  operate: number;
+}
+
+interface RoiLineageIdea {
+  readonly idea_id: string;
+  readonly title: string;
+  readonly source: RoiSource;
+  readonly stage: RoiStage;
+  readonly department: string;
+  readonly business_owner: string;
+}
+
+interface RoiSourceLineage {
+  readonly idea_count: number;
+  readonly source_counts: RoiSourceCounts;
+  readonly stage_counts: RoiStageCounts;
+  readonly departments: readonly string[];
+  readonly business_owners: readonly string[];
+  readonly sample_ideas: readonly RoiLineageIdea[];
+}
+
+type DecisionSignalStatus = "expand" | "hold" | "watch";
+
+interface DecisionSignal {
+  readonly status: DecisionSignalStatus;
+  readonly reason: string;
+}
+
+interface RoiActualsSummary {
+  readonly evidence_count: number;
+  readonly estimated_transaction_count: number;
+  readonly actual_transaction_count: number;
+  readonly comparable_actual_transaction_count: number;
+  readonly transaction_attainment_rate: number | null;
+  readonly estimated_exception_rate: number | null;
+  readonly actual_failure_rate: number | null;
+  readonly comparable_actual_failure_rate: number | null;
+  readonly failure_rate_delta: number | null;
+  readonly human_intervention_minutes: number;
+  readonly reprocessing_minutes: number;
+  readonly latest_period_end: string | null;
+}
+
 interface CostByModelItem {
   readonly model: string;
   readonly calls: number;
@@ -99,6 +177,17 @@ interface CostByModelItem {
   readonly output_tokens: number | null;
   readonly cost: number | null;
   readonly cost_share: number | null;
+}
+
+interface ModelCostTrendItem {
+  readonly day: string;
+  readonly model: string;
+  readonly calls: number;
+  readonly input_tokens: number | null;
+  readonly output_tokens: number | null;
+  readonly cost: number | null;
+  readonly cost_share_of_day: number | null;
+  readonly cost_delta_from_previous_day_for_model: number | null;
 }
 
 interface TrendReportItem {
@@ -141,6 +230,9 @@ interface WorkflowReportItem {
   readonly cost_per_completed_run: number | null;
   readonly roi_idea_count: number;
   readonly roi_confidence: RoiConfidenceBreakdown;
+  readonly roi_source_lineage: RoiSourceLineage;
+  readonly roi_actuals: RoiActualsSummary;
+  readonly decision_signal: DecisionSignal;
 }
 
 interface AutomationPerformanceReport {
@@ -172,8 +264,12 @@ interface AutomationPerformanceReport {
     readonly run_vs_call_cost_delta: number | null;
     readonly roi_idea_count: number;
     readonly roi_confidence: RoiConfidenceBreakdown;
+    readonly roi_source_lineage: RoiSourceLineage;
+    readonly roi_actuals: RoiActualsSummary;
+    readonly decision_signal: DecisionSignal;
   };
   readonly cost_by_model: readonly CostByModelItem[];
+  readonly model_cost_trends: readonly ModelCostTrendItem[];
   readonly failure_top: readonly FailureTopRow[];
   readonly trends: readonly TrendReportItem[];
   readonly by_workflow: readonly WorkflowReportItem[];
@@ -225,7 +321,9 @@ async function buildAutomationPerformanceReport(
   tenantId: string,
   period: ReportPeriod,
 ): Promise<AutomationPerformanceReport> {
-  const { workflowRows, failureRows, trendRows, costByModelRows } = await withTenantTx(deps.pool, tenantId, async (client) => {
+  const { workflowRows, failureRows, trendRows, costByModelRows, modelCostTrendRows } = await withTenantTx(deps.pool, tenantId, async (client) => {
+    const actualPeriodStart = `${period.month}-01`;
+    const actualPeriodEnd = nextMonthDate(period.month);
     const workflows = await client.query<WorkflowReportRow>(
       `WITH run_by_scenario AS (
          SELECT sv.scenario_id::text AS scenario_id,
@@ -264,11 +362,27 @@ async function buildAutomationPerformanceReport(
                 s.name AS scenario_name,
                 COALESCE(sum(re.monthly_hours_saved), 0)::text AS estimated_hours_saved,
                 COALESCE(sum(re.estimated_monthly_value), 0)::text AS estimated_value,
+                COALESCE(sum(re.frequency_per_month), 0)::text AS estimated_transaction_count,
+                CASE WHEN COALESCE(sum(re.frequency_per_month), 0) > 0
+                     THEN (sum(re.frequency_per_month * re.exception_rate) / sum(re.frequency_per_month))::text
+                     ELSE NULL
+                END AS estimated_exception_rate,
                 COALESCE(sum(re.implementation_effort), 0)::text AS implementation_effort,
                 count(re.id)::int AS roi_idea_count,
                 count(*) FILTER (WHERE re.confidence = 'low')::int AS confidence_low,
                 count(*) FILTER (WHERE re.confidence = 'medium')::int AS confidence_medium,
-                count(*) FILTER (WHERE re.confidence = 'high')::int AS confidence_high
+                count(*) FILTER (WHERE re.confidence = 'high')::int AS confidence_high,
+                jsonb_agg(
+                  jsonb_build_object(
+                    'idea_id', ai.id::text,
+                    'title', ai.title,
+                    'source', ai.source,
+                    'stage', ai.stage,
+                    'department', ai.department,
+                    'business_owner', ai.business_owner
+                  )
+                  ORDER BY re.estimated_monthly_value DESC, ai.updated_at DESC, ai.id::text
+                ) AS roi_ideas
            FROM automation_ideas ai
            JOIN scenarios s ON s.tenant_id = ai.tenant_id AND s.id = ai.scenario_id
            JOIN roi_estimates re ON re.tenant_id = ai.tenant_id AND re.automation_idea_id = ai.id
@@ -276,9 +390,32 @@ async function buildAutomationPerformanceReport(
             AND ai.scenario_id IS NOT NULL
             AND ai.stage IN ('approved','build','operate')
           GROUP BY ai.scenario_id, s.name
+       ),
+       actual_by_scenario AS (
+         SELECT ai.scenario_id::text AS scenario_id,
+                s.name AS scenario_name,
+                count(ra.id)::int AS actual_evidence_count,
+                COALESCE(sum(ra.actual_transaction_count), 0)::int AS actual_transaction_count,
+                CASE WHEN COALESCE(sum(ra.actual_transaction_count), 0) > 0
+                     THEN (sum(ra.actual_transaction_count * ra.actual_failure_rate) / sum(ra.actual_transaction_count))::text
+                     ELSE NULL
+                END AS actual_failure_rate,
+                COALESCE(sum(ra.human_intervention_minutes), 0)::text AS human_intervention_minutes,
+                COALESCE(sum(ra.reprocessing_minutes), 0)::text AS reprocessing_minutes,
+                max(ra.period_end)::text AS latest_actual_period_end
+           FROM automation_ideas ai
+           JOIN scenarios s ON s.tenant_id = ai.tenant_id AND s.id = ai.scenario_id
+           JOIN roi_actual_evidence ra ON ra.tenant_id = ai.tenant_id AND ra.automation_idea_id = ai.id
+          WHERE ai.tenant_id = $1::uuid
+            AND ai.scenario_id IS NOT NULL
+            AND ai.stage IN ('approved','build','operate')
+            AND ra.deleted_at IS NULL
+            AND ra.period_start >= $4::date
+            AND ra.period_end < $5::date
+          GROUP BY ai.scenario_id, s.name
        )
-       SELECT COALESCE(r.scenario_id, roi.scenario_id) AS scenario_id,
-              COALESCE(r.scenario_name, roi.scenario_name) AS scenario_name,
+       SELECT COALESCE(r.scenario_id, roi.scenario_id, actual.scenario_id) AS scenario_id,
+              COALESCE(r.scenario_name, roi.scenario_name, actual.scenario_name) AS scenario_name,
               COALESCE(r.total_runs, 0)::int AS total_runs,
               COALESCE(r.completed, 0)::int AS completed,
               COALESCE(r.failed_business, 0)::int AS failed_business,
@@ -287,11 +424,20 @@ async function buildAutomationPerformanceReport(
               COALESCE(rr.rerun_cost, '0') AS rerun_cost,
               COALESCE(roi.estimated_hours_saved, '0') AS estimated_hours_saved,
               COALESCE(roi.estimated_value, '0') AS estimated_value,
+              COALESCE(roi.estimated_transaction_count, '0') AS estimated_transaction_count,
+              roi.estimated_exception_rate AS estimated_exception_rate,
               COALESCE(roi.implementation_effort, '0') AS implementation_effort,
               COALESCE(roi.roi_idea_count, 0)::int AS roi_idea_count,
               COALESCE(roi.confidence_low, 0)::int AS confidence_low,
               COALESCE(roi.confidence_medium, 0)::int AS confidence_medium,
               COALESCE(roi.confidence_high, 0)::int AS confidence_high,
+              COALESCE(roi.roi_ideas, '[]'::jsonb) AS roi_ideas,
+              COALESCE(actual.actual_evidence_count, 0)::int AS actual_evidence_count,
+              COALESCE(actual.actual_transaction_count, 0)::int AS actual_transaction_count,
+              actual.actual_failure_rate AS actual_failure_rate,
+              COALESCE(actual.human_intervention_minutes, '0') AS human_intervention_minutes,
+              COALESCE(actual.reprocessing_minutes, '0') AS reprocessing_minutes,
+              actual.latest_actual_period_end AS latest_actual_period_end,
               COALESCE(r.gateway_cost, '0') AS gateway_cost,
               COALESCE(r.completed_cost, '0') AS completed_cost,
               COALESCE(r.failed_business_cost, '0') AS failed_business_cost,
@@ -299,9 +445,10 @@ async function buildAutomationPerformanceReport(
               COALESCE(r.other_cost, '0') AS other_cost
          FROM run_by_scenario r
          FULL OUTER JOIN roi_by_scenario roi ON roi.scenario_id = r.scenario_id
-         LEFT JOIN reruns_by_scenario rr ON rr.scenario_id = COALESCE(r.scenario_id, roi.scenario_id)
-        ORDER BY COALESCE(r.total_runs, 0) DESC, COALESCE(roi.estimated_value::numeric, 0) DESC, COALESCE(r.scenario_name, roi.scenario_name) ASC`,
-      [tenantId, period.start.toISOString(), period.end.toISOString()],
+         FULL OUTER JOIN actual_by_scenario actual ON actual.scenario_id = COALESCE(r.scenario_id, roi.scenario_id)
+         LEFT JOIN reruns_by_scenario rr ON rr.scenario_id = COALESCE(r.scenario_id, roi.scenario_id, actual.scenario_id)
+        ORDER BY COALESCE(r.total_runs, 0) DESC, COALESCE(roi.estimated_value::numeric, 0) DESC, COALESCE(r.scenario_name, roi.scenario_name, actual.scenario_name) ASC`,
+      [tenantId, period.start.toISOString(), period.end.toISOString(), actualPeriodStart, actualPeriodEnd],
     );
     const failures = await client.query<FailureTopRow>(
       `SELECT COALESCE(NULLIF(failure_reason->>'code', ''), 'RUN_FAILED') AS code,
@@ -384,12 +531,52 @@ async function buildAutomationPerformanceReport(
         ORDER BY sum(cost) DESC NULLS LAST, model ASC`,
       [tenantId, period.start.toISOString(), period.end.toISOString()],
     );
-    return { workflowRows: workflows.rows, failureRows: failures.rows, trendRows: trends.rows, costByModelRows: costByModel.rows };
+    const modelCostTrends = await client.query<ModelCostTrendRow>(
+      `WITH model_daily AS (
+         SELECT to_char(date_trunc('day', created_at AT TIME ZONE $4), 'YYYY-MM-DD') AS day,
+                model,
+                count(*)::int AS calls,
+                sum(input_tokens) AS input_tokens,
+                sum(output_tokens) AS output_tokens,
+                sum(cost) AS cost
+           FROM stagehand_calls
+          WHERE tenant_id = $1::uuid
+            AND created_at >= $2::timestamptz
+            AND created_at < $3::timestamptz
+          GROUP BY 1, model
+       ),
+       day_cost AS (
+         SELECT day,
+                sum(cost) AS known_cost
+           FROM model_daily
+          WHERE cost IS NOT NULL
+          GROUP BY day
+       )
+       SELECT md.day,
+              md.model,
+              md.calls,
+              md.input_tokens::text AS input_tokens,
+              md.output_tokens::text AS output_tokens,
+              md.cost::text AS cost,
+              dc.known_cost::text AS day_known_cost
+         FROM model_daily md
+         LEFT JOIN day_cost dc ON dc.day = md.day
+        ORDER BY md.day ASC, md.cost DESC NULLS LAST, md.model ASC`,
+      [tenantId, period.start.toISOString(), period.end.toISOString(), REPORT_TZ],
+    );
+    return {
+      workflowRows: workflows.rows,
+      failureRows: failures.rows,
+      trendRows: trends.rows,
+      costByModelRows: costByModel.rows,
+      modelCostTrendRows: modelCostTrends.rows,
+    };
   });
 
   const byWorkflow = workflowRows.map(mapWorkflowRow);
   const trends = mapTrendRows(trendRows);
   const costByModel = mapCostByModelRows(costByModelRows);
+  const modelCostTrends = mapModelCostTrendRows(modelCostTrendRows);
   const summary = summarizeWorkflows(byWorkflow, costByModel);
   return {
     month: period.month,
@@ -398,10 +585,127 @@ async function buildAutomationPerformanceReport(
     period_end: period.end.toISOString(),
     summary,
     cost_by_model: costByModel,
+    model_cost_trends: modelCostTrends,
     failure_top: failureRows,
     trends,
     by_workflow: byWorkflow,
   };
+}
+
+function roiSourceLineageFromRaw(raw: unknown): RoiSourceLineage {
+  if (!Array.isArray(raw)) {
+    throw new Error("Invalid ROI source lineage row: expected array");
+  }
+  const ideas = raw.map(parseRoiLineageIdea);
+  return roiSourceLineageFromIdeas(ideas);
+}
+
+function parseRoiLineageIdea(raw: unknown): RoiLineageIdea {
+  const record = asRecord(raw);
+  if (record === null) throw new Error("Invalid ROI source lineage row: expected object");
+  const ideaId = requiredString(record.idea_id, "idea_id");
+  const title = requiredString(record.title, "title");
+  const source = requiredRoiSource(record.source);
+  const stage = requiredRoiStage(record.stage);
+  const department = requiredString(record.department, "department");
+  const businessOwner = requiredString(record.business_owner, "business_owner");
+  return { idea_id: ideaId, title, source, stage, department, business_owner: businessOwner };
+}
+
+function roiSourceLineageFromIdeas(ideas: readonly RoiLineageIdea[]): RoiSourceLineage {
+  const sourceCounts = emptyRoiSourceCounts();
+  const stageCounts = emptyRoiStageCounts();
+  const departments: string[] = [];
+  const businessOwners: string[] = [];
+  for (const idea of ideas) {
+    sourceCounts[idea.source] += 1;
+    stageCounts[idea.stage] += 1;
+    pushUniqueBounded(departments, idea.department, ROI_LINEAGE_SAMPLE_LIMIT);
+    pushUniqueBounded(businessOwners, idea.business_owner, ROI_LINEAGE_SAMPLE_LIMIT);
+  }
+  return {
+    idea_count: ideas.length,
+    source_counts: sourceCounts,
+    stage_counts: stageCounts,
+    departments,
+    business_owners: businessOwners,
+    sample_ideas: ideas.slice(0, ROI_LINEAGE_SAMPLE_LIMIT),
+  };
+}
+
+function summarizeRoiSourceLineage(byWorkflow: readonly WorkflowReportItem[]): RoiSourceLineage {
+  const sourceCounts = emptyRoiSourceCounts();
+  const stageCounts = emptyRoiStageCounts();
+  const departments: string[] = [];
+  const businessOwners: string[] = [];
+  const sampleIdeas: RoiLineageIdea[] = [];
+  let ideaCount = 0;
+  for (const row of byWorkflow) {
+    ideaCount += row.roi_source_lineage.idea_count;
+    for (const source of ROI_SOURCES) sourceCounts[source] += row.roi_source_lineage.source_counts[source];
+    for (const stage of ROI_STAGES) stageCounts[stage] += row.roi_source_lineage.stage_counts[stage];
+    for (const department of row.roi_source_lineage.departments) pushUniqueBounded(departments, department, ROI_LINEAGE_SAMPLE_LIMIT);
+    for (const owner of row.roi_source_lineage.business_owners) pushUniqueBounded(businessOwners, owner, ROI_LINEAGE_SAMPLE_LIMIT);
+    for (const idea of row.roi_source_lineage.sample_ideas) {
+      if (sampleIdeas.length < ROI_LINEAGE_SAMPLE_LIMIT) sampleIdeas.push(idea);
+    }
+  }
+  return {
+    idea_count: ideaCount,
+    source_counts: sourceCounts,
+    stage_counts: stageCounts,
+    departments,
+    business_owners: businessOwners,
+    sample_ideas: sampleIdeas,
+  };
+}
+
+function emptyRoiSourceCounts(): RoiSourceCounts {
+  return { manual: 0, process_mining: 0, task_mining: 0, imported: 0 };
+}
+
+function emptyRoiStageCounts(): RoiStageCounts {
+  return { approved: 0, build: 0, operate: 0 };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Invalid ROI source lineage row: ${field}`);
+  }
+  return value;
+}
+
+function requiredRoiSource(value: unknown): RoiSource {
+  if (isRoiSource(value)) return value;
+  throw new Error("Invalid ROI source lineage row: source");
+}
+
+function requiredRoiStage(value: unknown): RoiStage {
+  if (isRoiStage(value)) return value;
+  throw new Error("Invalid ROI source lineage row: stage");
+}
+
+function isRoiSource(value: unknown): value is RoiSource {
+  return typeof value === "string" && ROI_SOURCES.includes(value as RoiSource);
+}
+
+function isRoiStage(value: unknown): value is RoiStage {
+  return typeof value === "string" && ROI_STAGES.includes(value as RoiStage);
+}
+
+function pushUniqueBounded(values: string[], value: string, limit: number): void {
+  if (values.length >= limit || values.includes(value)) return;
+  values.push(value);
+}
+
+function latestDateString(left: string | null, right: string | null): string | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return left >= right ? left : right;
 }
 
 function mapWorkflowRow(row: WorkflowReportRow): WorkflowReportItem {
@@ -410,6 +714,11 @@ function mapWorkflowRow(row: WorkflowReportRow): WorkflowReportItem {
   const implementationEffort = Number(row.implementation_effort);
   const gatewayCost = Number(row.gateway_cost);
   const completedCost = Number(row.completed_cost);
+  const successRate = rated > 0 ? row.completed / rated : null;
+  const reprocessingRate = row.total_runs > 0 ? row.rerun_count / row.total_runs : null;
+  const netValue = estimatedValue - gatewayCost;
+  const roiSourceLineage = roiSourceLineageFromRaw(row.roi_ideas);
+  const roiActuals = roiActualsFromWorkflowRow(row);
   return {
     scenario_id: row.scenario_id,
     scenario_name: row.scenario_name,
@@ -417,13 +726,13 @@ function mapWorkflowRow(row: WorkflowReportRow): WorkflowReportItem {
     completed: row.completed,
     failed_business: row.failed_business,
     failed_system: row.failed_system,
-    success_rate: rated > 0 ? row.completed / rated : null,
+    success_rate: successRate,
     rerun_count: row.rerun_count,
-    reprocessing_rate: row.total_runs > 0 ? row.rerun_count / row.total_runs : null,
+    reprocessing_rate: reprocessingRate,
     estimated_hours_saved: Number(row.estimated_hours_saved),
     estimated_value: estimatedValue,
     implementation_effort: implementationEffort,
-    net_value: estimatedValue - gatewayCost,
+    net_value: netValue,
     value_to_cost_ratio: gatewayCost > 0 ? estimatedValue / gatewayCost : null,
     payback_months: estimatedValue > 0 ? implementationEffort / estimatedValue : null,
     gateway_cost: gatewayCost,
@@ -442,6 +751,39 @@ function mapWorkflowRow(row: WorkflowReportRow): WorkflowReportItem {
       medium: row.confidence_medium,
       high: row.confidence_high,
     },
+    roi_source_lineage: roiSourceLineage,
+    roi_actuals: roiActuals,
+    decision_signal: decisionSignalFor({
+      total_runs: row.total_runs,
+      success_rate: successRate,
+      reprocessing_rate: reprocessingRate,
+      net_value: netValue,
+      failures: row.failed_business + row.failed_system,
+      scope: "workflow",
+    }),
+  };
+}
+
+function roiActualsFromWorkflowRow(row: WorkflowReportRow): RoiActualsSummary {
+  const estimatedTransactionCount = Number(row.estimated_transaction_count);
+  const actualTransactionCount = row.actual_transaction_count;
+  const comparableActualTransactionCount = estimatedTransactionCount > 0 ? actualTransactionCount : 0;
+  const estimatedExceptionRate = row.estimated_exception_rate === null ? null : Number(row.estimated_exception_rate);
+  const actualFailureRate = row.actual_failure_rate === null ? null : Number(row.actual_failure_rate);
+  const comparableActualFailureRate = comparableActualTransactionCount > 0 ? actualFailureRate : null;
+  return {
+    evidence_count: row.actual_evidence_count,
+    estimated_transaction_count: estimatedTransactionCount,
+    actual_transaction_count: actualTransactionCount,
+    comparable_actual_transaction_count: comparableActualTransactionCount,
+    transaction_attainment_rate: estimatedTransactionCount > 0 ? comparableActualTransactionCount / estimatedTransactionCount : null,
+    estimated_exception_rate: estimatedExceptionRate,
+    actual_failure_rate: actualFailureRate,
+    comparable_actual_failure_rate: comparableActualFailureRate,
+    failure_rate_delta: estimatedExceptionRate !== null && comparableActualFailureRate !== null ? comparableActualFailureRate - estimatedExceptionRate : null,
+    human_intervention_minutes: Number(row.human_intervention_minutes),
+    reprocessing_minutes: Number(row.reprocessing_minutes),
+    latest_period_end: row.latest_actual_period_end,
   };
 }
 
@@ -495,6 +837,27 @@ function mapCostByModelRows(rows: readonly CostByModelRow[]): readonly CostByMod
   });
 }
 
+function mapModelCostTrendRows(rows: readonly ModelCostTrendRow[]): readonly ModelCostTrendItem[] {
+  const previousKnownCostByModel = new Map<string, number>();
+  return rows.map((row) => {
+    const cost = row.cost === null ? null : Number(row.cost);
+    const dayKnownCost = row.day_known_cost === null ? null : Number(row.day_known_cost);
+    const previousCost = previousKnownCostByModel.get(row.model);
+    const costDelta = cost !== null && previousCost !== undefined ? cost - previousCost : null;
+    if (cost !== null) previousKnownCostByModel.set(row.model, cost);
+    return {
+      day: row.day,
+      model: row.model,
+      calls: row.calls,
+      input_tokens: row.input_tokens === null ? null : Number(row.input_tokens),
+      output_tokens: row.output_tokens === null ? null : Number(row.output_tokens),
+      cost,
+      cost_share_of_day: cost !== null && dayKnownCost !== null && dayKnownCost > 0 ? cost / dayKnownCost : null,
+      cost_delta_from_previous_day_for_model: costDelta,
+    };
+  });
+}
+
 function summarizeWorkflows(
   byWorkflow: readonly WorkflowReportItem[],
   costByModel: readonly CostByModelItem[],
@@ -519,6 +882,24 @@ function summarizeWorkflows(
       confidence_low: acc.confidence_low + row.roi_confidence.low,
       confidence_medium: acc.confidence_medium + row.roi_confidence.medium,
       confidence_high: acc.confidence_high + row.roi_confidence.high,
+      actual_evidence_count: acc.actual_evidence_count + row.roi_actuals.evidence_count,
+      estimated_transaction_count: acc.estimated_transaction_count + row.roi_actuals.estimated_transaction_count,
+      actual_transaction_count: acc.actual_transaction_count + row.roi_actuals.actual_transaction_count,
+      comparable_actual_transaction_count: acc.comparable_actual_transaction_count + row.roi_actuals.comparable_actual_transaction_count,
+      estimated_exception_weighted_sum: acc.estimated_exception_weighted_sum + (
+        row.roi_actuals.estimated_exception_rate === null ? 0 : row.roi_actuals.estimated_exception_rate * row.roi_actuals.estimated_transaction_count
+      ),
+      actual_failure_weighted_sum: acc.actual_failure_weighted_sum + (
+        row.roi_actuals.actual_failure_rate === null ? 0 : row.roi_actuals.actual_failure_rate * row.roi_actuals.actual_transaction_count
+      ),
+      comparable_actual_failure_weighted_sum: acc.comparable_actual_failure_weighted_sum + (
+        row.roi_actuals.comparable_actual_failure_rate === null
+          ? 0
+          : row.roi_actuals.comparable_actual_failure_rate * row.roi_actuals.comparable_actual_transaction_count
+      ),
+      human_intervention_minutes: acc.human_intervention_minutes + row.roi_actuals.human_intervention_minutes,
+      actual_reprocessing_minutes: acc.actual_reprocessing_minutes + row.roi_actuals.reprocessing_minutes,
+      latest_actual_period_end: latestDateString(acc.latest_actual_period_end, row.roi_actuals.latest_period_end),
     }),
     {
       total_runs: 0,
@@ -539,22 +920,59 @@ function summarizeWorkflows(
       confidence_low: 0,
       confidence_medium: 0,
       confidence_high: 0,
+      actual_evidence_count: 0,
+      estimated_transaction_count: 0,
+      actual_transaction_count: 0,
+      comparable_actual_transaction_count: 0,
+      estimated_exception_weighted_sum: 0,
+      actual_failure_weighted_sum: 0,
+      comparable_actual_failure_weighted_sum: 0,
+      human_intervention_minutes: 0,
+      actual_reprocessing_minutes: 0,
+      latest_actual_period_end: null as string | null,
     },
   );
+  const roiSourceLineage = summarizeRoiSourceLineage(byWorkflow);
+  const estimatedExceptionRate = totals.estimated_transaction_count > 0
+    ? totals.estimated_exception_weighted_sum / totals.estimated_transaction_count
+    : null;
+  const actualFailureRate = totals.actual_transaction_count > 0
+    ? totals.actual_failure_weighted_sum / totals.actual_transaction_count
+    : null;
+  const comparableActualFailureRate = totals.comparable_actual_transaction_count > 0
+    ? totals.comparable_actual_failure_weighted_sum / totals.comparable_actual_transaction_count
+    : null;
+  const roiActuals: RoiActualsSummary = {
+    evidence_count: totals.actual_evidence_count,
+    estimated_transaction_count: totals.estimated_transaction_count,
+    actual_transaction_count: totals.actual_transaction_count,
+    comparable_actual_transaction_count: totals.comparable_actual_transaction_count,
+    transaction_attainment_rate: totals.estimated_transaction_count > 0 ? totals.comparable_actual_transaction_count / totals.estimated_transaction_count : null,
+    estimated_exception_rate: estimatedExceptionRate,
+    actual_failure_rate: actualFailureRate,
+    comparable_actual_failure_rate: comparableActualFailureRate,
+    failure_rate_delta: estimatedExceptionRate !== null && comparableActualFailureRate !== null ? comparableActualFailureRate - estimatedExceptionRate : null,
+    human_intervention_minutes: totals.human_intervention_minutes,
+    reprocessing_minutes: totals.actual_reprocessing_minutes,
+    latest_period_end: totals.latest_actual_period_end,
+  };
   const rated = totals.completed + totals.failed_business + totals.failed_system;
   const llmCallCost = sumKnownModelCost(costByModel);
+  const successRate = rated > 0 ? totals.completed / rated : null;
+  const reprocessingRate = totals.total_runs > 0 ? totals.rerun_count / totals.total_runs : null;
+  const netValue = totals.estimated_value - totals.gateway_cost;
   return {
     total_runs: totals.total_runs,
     completed: totals.completed,
     failed_business: totals.failed_business,
     failed_system: totals.failed_system,
-    success_rate: rated > 0 ? totals.completed / rated : null,
+    success_rate: successRate,
     rerun_count: totals.rerun_count,
-    reprocessing_rate: totals.total_runs > 0 ? totals.rerun_count / totals.total_runs : null,
+    reprocessing_rate: reprocessingRate,
     estimated_hours_saved: totals.estimated_hours_saved,
     estimated_value: totals.estimated_value,
     implementation_effort: totals.implementation_effort,
-    net_value: totals.estimated_value - totals.gateway_cost,
+    net_value: netValue,
     value_to_cost_ratio: totals.gateway_cost > 0 ? totals.estimated_value / totals.gateway_cost : null,
     payback_months: totals.estimated_value > 0 ? totals.implementation_effort / totals.estimated_value : null,
     gateway_cost: totals.gateway_cost,
@@ -576,7 +994,41 @@ function summarizeWorkflows(
       medium: totals.confidence_medium,
       high: totals.confidence_high,
     },
+    roi_source_lineage: roiSourceLineage,
+    roi_actuals: roiActuals,
+    decision_signal: decisionSignalFor({
+      total_runs: totals.total_runs,
+      success_rate: successRate,
+      reprocessing_rate: reprocessingRate,
+      net_value: netValue,
+      failures: totals.failed_business + totals.failed_system,
+      scope: "summary",
+    }),
   };
+}
+
+function decisionSignalFor(args: {
+  readonly total_runs: number;
+  readonly success_rate: number | null;
+  readonly reprocessing_rate: number | null;
+  readonly net_value: number;
+  readonly failures: number;
+  readonly scope: "summary" | "workflow";
+}): DecisionSignal {
+  if (args.total_runs === 0) {
+    return { status: "hold", reason: args.scope === "summary" ? "collect monthly run evidence" : "collect run evidence" };
+  }
+  if (args.success_rate !== null && args.success_rate < 0.8) {
+    return { status: "hold", reason: args.scope === "summary" ? "improve reliability before scaling" : "improve reliability" };
+  }
+  if (args.reprocessing_rate !== null && args.reprocessing_rate > 0.2) {
+    return { status: "hold", reason: args.scope === "summary" ? "reduce reruns before scaling" : "reduce reruns" };
+  }
+  if (args.success_rate !== null && args.success_rate >= 0.9 && (args.reprocessing_rate ?? 0) <= 0.1 && args.net_value > 0) {
+    return { status: "expand", reason: args.scope === "summary" ? "PoC evidence supports scaling" : "scale candidate" };
+  }
+  if (args.failures > 0) return { status: "watch", reason: "review failure causes" };
+  return { status: "watch", reason: "validate ROI assumptions" };
 }
 
 function sumKnownModelCost(costByModel: readonly CostByModelItem[]): number | null {
@@ -617,6 +1069,14 @@ function currentKstMonth(): string {
   return `${yyyy}-${mm}`;
 }
 
+function nextMonthDate(month: string): string {
+  const [yearText, monthText] = month.split("-");
+  const year = Number.parseInt(yearText, 10);
+  const monthIndex = Number.parseInt(monthText, 10) - 1;
+  const next = new Date(Date.UTC(year, monthIndex + 1, 1));
+  return next.toISOString().slice(0, 10);
+}
+
 function reportToCsv(report: AutomationPerformanceReport): string {
   const summaryLines = [
     ["metric", "value"],
@@ -652,6 +1112,25 @@ function reportToCsv(report: AutomationPerformanceReport): string {
     ["roi_confidence_low", String(report.summary.roi_confidence.low)],
     ["roi_confidence_medium", String(report.summary.roi_confidence.medium)],
     ["roi_confidence_high", String(report.summary.roi_confidence.high)],
+    ["roi_source_counts", roiSourceCountsCell(report.summary.roi_source_lineage)],
+    ["roi_stage_counts", roiStageCountsCell(report.summary.roi_source_lineage)],
+    ["roi_departments", listCell(report.summary.roi_source_lineage.departments)],
+    ["roi_business_owners", listCell(report.summary.roi_source_lineage.business_owners)],
+    ["roi_sample_ideas", roiSampleIdeasCell(report.summary.roi_source_lineage)],
+    ["roi_actual_evidence_count", String(report.summary.roi_actuals.evidence_count)],
+    ["estimated_transaction_count", String(report.summary.roi_actuals.estimated_transaction_count)],
+    ["actual_transaction_count", String(report.summary.roi_actuals.actual_transaction_count)],
+    ["comparable_actual_transaction_count", String(report.summary.roi_actuals.comparable_actual_transaction_count)],
+    ["transaction_attainment_rate", rateCell(report.summary.roi_actuals.transaction_attainment_rate)],
+    ["estimated_exception_rate", rateCell(report.summary.roi_actuals.estimated_exception_rate)],
+    ["actual_failure_rate", rateCell(report.summary.roi_actuals.actual_failure_rate)],
+    ["comparable_actual_failure_rate", rateCell(report.summary.roi_actuals.comparable_actual_failure_rate)],
+    ["failure_rate_delta", rateCell(report.summary.roi_actuals.failure_rate_delta)],
+    ["human_intervention_minutes", String(report.summary.roi_actuals.human_intervention_minutes)],
+    ["actual_reprocessing_minutes", String(report.summary.roi_actuals.reprocessing_minutes)],
+    ["latest_roi_actual_period_end", report.summary.roi_actuals.latest_period_end ?? ""],
+    ["decision_signal_status", report.summary.decision_signal.status],
+    ["decision_signal_reason", report.summary.decision_signal.reason],
   ];
   const failureLines = [["code", "count"], ...report.failure_top.map((row) => [row.code, String(row.count)])];
   const modelCostLines = [
@@ -663,6 +1142,19 @@ function reportToCsv(report: AutomationPerformanceReport): string {
       nullableNumberCell(row.output_tokens),
       nullableNumberCell(row.cost),
       rateCell(row.cost_share),
+    ]),
+  ];
+  const modelCostTrendLines = [
+    ["day", "model", "calls", "input_tokens", "output_tokens", "cost", "cost_share_of_day", "cost_delta_from_previous_day_for_model"],
+    ...report.model_cost_trends.map((row) => [
+      row.day,
+      row.model,
+      String(row.calls),
+      nullableNumberCell(row.input_tokens),
+      nullableNumberCell(row.output_tokens),
+      nullableNumberCell(row.cost),
+      rateCell(row.cost_share_of_day),
+      rateCell(row.cost_delta_from_previous_day_for_model),
     ]),
   ];
   const trendLines = [
@@ -734,6 +1226,25 @@ function reportToCsv(report: AutomationPerformanceReport): string {
       "roi_confidence_low",
       "roi_confidence_medium",
       "roi_confidence_high",
+      "roi_source_counts",
+      "roi_stage_counts",
+      "roi_departments",
+      "roi_business_owners",
+      "roi_sample_ideas",
+      "roi_actual_evidence_count",
+      "estimated_transaction_count",
+      "actual_transaction_count",
+      "comparable_actual_transaction_count",
+      "transaction_attainment_rate",
+      "estimated_exception_rate",
+      "actual_failure_rate",
+      "comparable_actual_failure_rate",
+      "failure_rate_delta",
+      "human_intervention_minutes",
+      "actual_reprocessing_minutes",
+      "latest_roi_actual_period_end",
+      "decision_signal_status",
+      "decision_signal_reason",
     ],
     ...report.by_workflow.map((row) => [
       row.scenario_id,
@@ -763,6 +1274,25 @@ function reportToCsv(report: AutomationPerformanceReport): string {
       String(row.roi_confidence.low),
       String(row.roi_confidence.medium),
       String(row.roi_confidence.high),
+      roiSourceCountsCell(row.roi_source_lineage),
+      roiStageCountsCell(row.roi_source_lineage),
+      listCell(row.roi_source_lineage.departments),
+      listCell(row.roi_source_lineage.business_owners),
+      roiSampleIdeasCell(row.roi_source_lineage),
+      String(row.roi_actuals.evidence_count),
+      String(row.roi_actuals.estimated_transaction_count),
+      String(row.roi_actuals.actual_transaction_count),
+      String(row.roi_actuals.comparable_actual_transaction_count),
+      rateCell(row.roi_actuals.transaction_attainment_rate),
+      rateCell(row.roi_actuals.estimated_exception_rate),
+      rateCell(row.roi_actuals.actual_failure_rate),
+      rateCell(row.roi_actuals.comparable_actual_failure_rate),
+      rateCell(row.roi_actuals.failure_rate_delta),
+      String(row.roi_actuals.human_intervention_minutes),
+      String(row.roi_actuals.reprocessing_minutes),
+      row.roi_actuals.latest_period_end ?? "",
+      row.decision_signal.status,
+      row.decision_signal.reason,
     ]),
   ];
   return [
@@ -774,6 +1304,9 @@ function reportToCsv(report: AutomationPerformanceReport): string {
     [],
     ["Cost By Model"],
     ...modelCostLines,
+    [],
+    ["Model Cost Trends"],
+    ...modelCostTrendLines,
     [],
     ["Daily Trends"],
     ...trendLines,
@@ -791,6 +1324,57 @@ function rateCell(value: number | null): string {
 
 function nullableNumberCell(value: number | null): string {
   return value === null ? "" : String(value);
+}
+
+function roiSourceCountsCell(lineage: RoiSourceLineage): string {
+  return countPairsCell(ROI_SOURCES.map((source) => [source, lineage.source_counts[source]] as const));
+}
+
+function roiStageCountsCell(lineage: RoiSourceLineage): string {
+  return countPairsCell(ROI_STAGES.map((stage) => [stage, lineage.stage_counts[stage]] as const));
+}
+
+function countPairsCell(pairs: readonly (readonly [string, number])[]): string {
+  const nonZero = pairs.filter((pair) => pair[1] > 0).map((pair) => `${pair[0]}:${pair[1]}`);
+  return nonZero.length === 0 ? "none" : nonZero.join("; ");
+}
+
+function listCell(values: readonly string[]): string {
+  return values.length === 0 ? "none" : values.join("; ");
+}
+
+function roiSampleIdeasCell(lineage: RoiSourceLineage): string {
+  if (lineage.sample_ideas.length === 0) return "none";
+  return lineage.sample_ideas
+    .map((idea) => `${idea.title} [${idea.source}/${idea.stage}/${idea.department}/${idea.business_owner}]`)
+    .join("; ");
+}
+
+function roiLineageCell(lineage: RoiSourceLineage): string {
+  return [
+    `sources ${roiSourceCountsCell(lineage)}`,
+    `stages ${roiStageCountsCell(lineage)}`,
+    `departments ${listCell(lineage.departments)}`,
+    `owners ${listCell(lineage.business_owners)}`,
+  ].join("; ");
+}
+
+function roiActualsCell(actuals: RoiActualsSummary): string {
+  if (actuals.evidence_count === 0) return "no actual evidence";
+  const transactionText = actuals.estimated_transaction_count > 0
+    ? `comparable tx ${actuals.comparable_actual_transaction_count}/${actuals.estimated_transaction_count} (${percentCell(actuals.transaction_attainment_rate)})`
+    : `actual tx ${actuals.actual_transaction_count}; no estimate`;
+  return [
+    `evidence ${actuals.evidence_count}`,
+    transactionText,
+    `total actual tx ${actuals.actual_transaction_count}`,
+    `comparable failure ${percentCell(actuals.comparable_actual_failure_rate)} vs estimated ${percentCell(actuals.estimated_exception_rate)}`,
+    `total actual failure ${percentCell(actuals.actual_failure_rate)}`,
+    `delta ${percentCell(actuals.failure_rate_delta)}`,
+    `human ${decimalCell(actuals.human_intervention_minutes, 1)}m`,
+    `rework ${decimalCell(actuals.reprocessing_minutes, 1)}m`,
+    `latest ${actuals.latest_period_end ?? "-"}`,
+  ].join("; ");
 }
 
 function csvCell(value: string): string {
@@ -830,6 +1414,12 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
     ["Run-call cost delta", nullableMoneyCell(report.summary.run_vs_call_cost_delta)],
     ["ROI ideas", String(report.summary.roi_idea_count)],
     ["ROI confidence", confidenceCell(report.summary.roi_confidence)],
+    ["ROI sources", roiSourceCountsCell(report.summary.roi_source_lineage)],
+    ["ROI stages", roiStageCountsCell(report.summary.roi_source_lineage)],
+    ["ROI departments", listCell(report.summary.roi_source_lineage.departments)],
+    ["ROI business owners", listCell(report.summary.roi_source_lineage.business_owners)],
+    ["ROI actuals", roiActualsCell(report.summary.roi_actuals)],
+    ["Decision signal", decisionSignalCell(report.summary.decision_signal)],
   ];
   const failureRows =
     report.failure_top.length > 0
@@ -851,9 +1441,11 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
           nullableMoneyCell(row.cost_per_completed_run),
           String(row.roi_idea_count),
           confidenceCell(row.roi_confidence),
-          workflowDecision(row),
+          roiLineageCell(row.roi_source_lineage),
+          roiActualsCell(row.roi_actuals),
+          decisionSignalCell(row.decision_signal),
         ])
-      : [["No workflow evidence", "0", "-", "-", "0", "0", "0", "-", "-", "0", "-", "0", "-", "Hold: collect monthly run evidence"]];
+      : [["No workflow evidence", "0", "-", "-", "0", "0", "0", "-", "-", "0", "-", "0", "-", "none", "no actual evidence", "Hold: collect monthly run evidence"]];
   const trendRows =
     report.trends.length > 0
       ? report.trends.map((row) => [
@@ -878,6 +1470,19 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
           percentCell(row.cost_share),
         ])
       : [["No model calls", "0", "-", "-", "-", "-"]];
+  const modelCostTrendRows =
+    report.model_cost_trends.length > 0
+      ? report.model_cost_trends.slice(-14).map((row) => [
+          row.day,
+          row.model,
+          String(row.calls),
+          nullableIntegerCell(row.input_tokens),
+          nullableIntegerCell(row.output_tokens),
+          nullableMoneyCell(row.cost),
+          percentCell(row.cost_share_of_day),
+          nullableMoneyCell(row.cost_delta_from_previous_day_for_model),
+        ])
+      : [["No model daily evidence", "-", "0", "-", "-", "-", "-", "-"]];
 
   return [
     "# Automation Performance PoC Report",
@@ -885,7 +1490,7 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
     `- Month: ${markdownInline(report.month)}`,
     `- Reporting timezone: ${markdownInline(report.timezone)}`,
     `- Period: ${markdownInline(report.period_start)} to ${markdownInline(report.period_end)}`,
-    `- Recommended decision: ${markdownInline(reportDecision(report))}`,
+    `- Recommended decision: ${markdownInline(decisionSignalCell(report.summary.decision_signal))}`,
     "",
     "## Summary Metrics",
     "",
@@ -898,6 +1503,13 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
     "## Cost By Model",
     "",
     markdownTable(["Model", "Calls", "Input tokens", "Output tokens", "Cost", "Cost share"], modelCostRows),
+    "",
+    "## Model Cost Trends",
+    "",
+    markdownTable(
+      ["Day", "Model", "Calls", "Input tokens", "Output tokens", "Cost", "Day share", "Cost delta"],
+      modelCostTrendRows,
+    ),
     "",
     "## Workflow ROI / Cost",
     "",
@@ -916,6 +1528,8 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
         "Cost/completed",
         "ROI ideas",
         "Confidence",
+        "ROI lineage",
+        "ROI actuals",
         "Decision signal",
       ],
       workflowRows,
@@ -935,35 +1549,9 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
   ].join("\n");
 }
 
-function reportDecision(report: AutomationPerformanceReport): string {
-  if (report.summary.total_runs === 0) return "Hold: collect monthly run evidence";
-  if (report.summary.success_rate !== null && report.summary.success_rate < 0.8) return "Hold: improve reliability before scaling";
-  if (report.summary.reprocessing_rate !== null && report.summary.reprocessing_rate > 0.2) return "Hold: reduce reruns before scaling";
-  if (
-    report.summary.success_rate !== null &&
-    report.summary.success_rate >= 0.9 &&
-    (report.summary.reprocessing_rate ?? 0) <= 0.1 &&
-    report.summary.net_value > 0
-  ) {
-    return "Expand: PoC evidence supports scaling";
-  }
-  return "Watch: continue PoC and review failure/ROI assumptions";
-}
-
-function workflowDecision(row: WorkflowReportItem): string {
-  if (row.total_runs === 0) return "Hold: collect run evidence";
-  if (row.success_rate !== null && row.success_rate < 0.8) return "Hold: improve reliability";
-  if (row.reprocessing_rate !== null && row.reprocessing_rate > 0.2) return "Hold: reduce reruns";
-  if (
-    row.success_rate !== null &&
-    row.success_rate >= 0.9 &&
-    (row.reprocessing_rate ?? 0) <= 0.1 &&
-    row.net_value > 0
-  ) {
-    return "Expand";
-  }
-  if (row.failed_business + row.failed_system > 0) return "Watch: review failure causes";
-  return "Watch: validate ROI assumptions";
+function decisionSignalCell(signal: DecisionSignal): string {
+  const label = signal.status === "expand" ? "Expand" : signal.status === "hold" ? "Hold" : "Watch";
+  return `${label}: ${signal.reason}`;
 }
 
 function markdownTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
@@ -1143,6 +1731,25 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
         ["roi_confidence_low", report.summary.roi_confidence.low],
         ["roi_confidence_medium", report.summary.roi_confidence.medium],
         ["roi_confidence_high", report.summary.roi_confidence.high],
+        ["roi_source_counts", roiSourceCountsCell(report.summary.roi_source_lineage)],
+        ["roi_stage_counts", roiStageCountsCell(report.summary.roi_source_lineage)],
+        ["roi_departments", listCell(report.summary.roi_source_lineage.departments)],
+        ["roi_business_owners", listCell(report.summary.roi_source_lineage.business_owners)],
+        ["roi_sample_ideas", roiSampleIdeasCell(report.summary.roi_source_lineage)],
+        ["roi_actual_evidence_count", report.summary.roi_actuals.evidence_count],
+        ["estimated_transaction_count", report.summary.roi_actuals.estimated_transaction_count],
+        ["actual_transaction_count", report.summary.roi_actuals.actual_transaction_count],
+        ["comparable_actual_transaction_count", report.summary.roi_actuals.comparable_actual_transaction_count],
+        ["transaction_attainment_rate", report.summary.roi_actuals.transaction_attainment_rate],
+        ["estimated_exception_rate", report.summary.roi_actuals.estimated_exception_rate],
+        ["actual_failure_rate", report.summary.roi_actuals.actual_failure_rate],
+        ["comparable_actual_failure_rate", report.summary.roi_actuals.comparable_actual_failure_rate],
+        ["failure_rate_delta", report.summary.roi_actuals.failure_rate_delta],
+        ["human_intervention_minutes", report.summary.roi_actuals.human_intervention_minutes],
+        ["actual_reprocessing_minutes", report.summary.roi_actuals.reprocessing_minutes],
+        ["latest_roi_actual_period_end", report.summary.roi_actuals.latest_period_end],
+        ["decision_signal_status", report.summary.decision_signal.status],
+        ["decision_signal_reason", report.summary.decision_signal.reason],
       ],
     },
     {
@@ -1160,6 +1767,31 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
           row.output_tokens,
           row.cost,
           row.cost_share,
+        ]),
+      ],
+    },
+    {
+      name: "Model Cost Trends",
+      rows: [
+        [
+          "day",
+          "model",
+          "calls",
+          "input_tokens",
+          "output_tokens",
+          "cost",
+          "cost_share_of_day",
+          "cost_delta_from_previous_day_for_model",
+        ],
+        ...report.model_cost_trends.map((row) => [
+          row.day,
+          row.model,
+          row.calls,
+          row.input_tokens,
+          row.output_tokens,
+          row.cost,
+          row.cost_share_of_day,
+          row.cost_delta_from_previous_day_for_model,
         ]),
       ],
     },
@@ -1237,6 +1869,25 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
           "roi_confidence_low",
           "roi_confidence_medium",
           "roi_confidence_high",
+          "roi_source_counts",
+          "roi_stage_counts",
+          "roi_departments",
+          "roi_business_owners",
+          "roi_sample_ideas",
+          "roi_actual_evidence_count",
+          "estimated_transaction_count",
+          "actual_transaction_count",
+          "comparable_actual_transaction_count",
+          "transaction_attainment_rate",
+          "estimated_exception_rate",
+          "actual_failure_rate",
+          "comparable_actual_failure_rate",
+          "failure_rate_delta",
+          "human_intervention_minutes",
+          "actual_reprocessing_minutes",
+          "latest_roi_actual_period_end",
+          "decision_signal_status",
+          "decision_signal_reason",
         ],
         ...report.by_workflow.map((row) => [
           row.scenario_id,
@@ -1266,6 +1917,25 @@ function reportToWorkbookSheets(report: AutomationPerformanceReport): readonly W
           row.roi_confidence.low,
           row.roi_confidence.medium,
           row.roi_confidence.high,
+          roiSourceCountsCell(row.roi_source_lineage),
+          roiStageCountsCell(row.roi_source_lineage),
+          listCell(row.roi_source_lineage.departments),
+          listCell(row.roi_source_lineage.business_owners),
+          roiSampleIdeasCell(row.roi_source_lineage),
+          row.roi_actuals.evidence_count,
+          row.roi_actuals.estimated_transaction_count,
+          row.roi_actuals.actual_transaction_count,
+          row.roi_actuals.comparable_actual_transaction_count,
+          row.roi_actuals.transaction_attainment_rate,
+          row.roi_actuals.estimated_exception_rate,
+          row.roi_actuals.actual_failure_rate,
+          row.roi_actuals.comparable_actual_failure_rate,
+          row.roi_actuals.failure_rate_delta,
+          row.roi_actuals.human_intervention_minutes,
+          row.roi_actuals.reprocessing_minutes,
+          row.roi_actuals.latest_period_end,
+          row.decision_signal.status,
+          row.decision_signal.reason,
         ]),
       ],
     },

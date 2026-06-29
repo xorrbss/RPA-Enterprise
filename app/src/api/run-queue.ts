@@ -40,6 +40,18 @@ export interface ArtifactRedactionEnqueueInput {
   artifactId?: string;
 }
 
+export interface OpsNotificationSendEnqueueInput {
+  tenantId: string;
+  attemptId: string;
+  correlationId: string;
+}
+
+export interface IntegrationHandoffDispatchEnqueueInput {
+  tenantId: string;
+  attemptId: string;
+  correlationId: string;
+}
+
 export interface RunEnqueuer {
   /** run create 직후 run_claim 잡을 호출측 트랜잭션(client)으로 인큐(동일 tx 보장). */
   enqueueRunClaim(client: PoolClient, input: RunEnqueueInput): Promise<void>;
@@ -48,6 +60,10 @@ export interface RunEnqueuer {
   /** sink-DLQ replay: 새 sink_deliver attempt를 호출측 트랜잭션으로 인큐(D8-A3 — 상태전이 아님,
    *  worker가 attempt_no=MAX+1·동일 멱등키 산출). 실 재전달은 worker의 SinkDeliveryPort(egress) 의존. */
   enqueueSinkDeliver(client: PoolClient, input: SinkDeliverEnqueueInput): Promise<void>;
+  /** External ops alert notification sender job. Optional so older/noop test enqueuers stay source-compatible. */
+  enqueueOpsNotificationSend?(client: PoolClient, input: OpsNotificationSendEnqueueInput, delayMs?: number): Promise<void>;
+  /** External RPA provider handoff dispatcher job. Optional so older/noop test enqueuers stay source-compatible. */
+  enqueueIntegrationHandoffDispatch?(client: PoolClient, input: IntegrationHandoffDispatchEnqueueInput, delayMs?: number): Promise<void>;
   /** Artifacts need scoped redaction before they become readable; run-less generation artifacts use generationId/artifactId scope. */
   enqueueArtifactRedaction?(client: PoolClient, input: ArtifactRedactionEnqueueInput): Promise<void>;
   /** human_task resolve(R13: suspended→resume_requested) 직후 run_resume 잡을 같은 트랜잭션으로 인큐(원자).
@@ -165,6 +181,34 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
       sinkDelivery: { sinkConfigId: input.sinkConfigId, normalizedRecordId: input.normalizedRecordId },
     };
     await this.enqueueRuntimeJob(client, job);
+  }
+
+  async enqueueOpsNotificationSend(
+    client: PoolClient,
+    input: OpsNotificationSendEnqueueInput,
+    delayMs?: number,
+  ): Promise<void> {
+    const job: RuntimeWorkerJob = {
+      kind: "ops_notification_send",
+      tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
+      correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
+      opsNotification: { attemptId: input.attemptId },
+    };
+    await this.enqueueRuntimeJob(client, job, delayMs);
+  }
+
+  async enqueueIntegrationHandoffDispatch(
+    client: PoolClient,
+    input: IntegrationHandoffDispatchEnqueueInput,
+    delayMs?: number,
+  ): Promise<void> {
+    const job: RuntimeWorkerJob = {
+      kind: "integration_handoff_dispatch",
+      tenantId: input.tenantId as RuntimeWorkerJob["tenantId"],
+      correlationId: input.correlationId as RuntimeWorkerJob["correlationId"],
+      integrationHandoff: { attemptId: input.attemptId },
+    };
+    await this.enqueueRuntimeJob(client, job, delayMs);
   }
 
   async enqueueArtifactRedaction(client: PoolClient, input: ArtifactRedactionEnqueueInput): Promise<void> {

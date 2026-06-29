@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
@@ -7,11 +7,22 @@ import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { BrowserRecorderPanel } from "../components/BrowserRecorderPanel";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
+import { errorLabel } from "../components/badges";
 import { navigate, useHashParam } from "../router";
-import type { ScenarioEnvironmentBinding, ScenarioItem, ScenarioReleaseItem, ScenarioReleaseTarget, ScenarioVersionItem } from "../api/types";
+import type {
+  ScenarioCertification,
+  ScenarioEnvironmentBinding,
+  ScenarioGovernanceStage,
+  ScenarioGovernanceTransitionStage,
+  ScenarioItem,
+  ScenarioReleaseItem,
+  ScenarioReleaseTarget,
+  ScenarioVersionItem,
+} from "../api/types";
 
 // 자동화 만들기(시나리오 스튜디오): 작성/편집 폼 + 목록 + 운영 기준 지정.
 // 생성=POST /v1/scenarios, 편집=PUT(If-Match), 운영 지정=POST /promote(If-Match=현재 version). 역할 게이팅: scenario.create/update/promote.
@@ -229,6 +240,8 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
         emptyMessage="저장된 버전이 없습니다."
         columns={[
           { header: "버전", render: (r) => `v${r.version}` },
+          { header: "인증", render: (r) => <CertificationBadge certification={r.certification} /> },
+          { header: "거버넌스", render: (r) => <GovernanceStageBadge certification={r.certification} /> },
           {
             header: "상태",
             render: (r) => (
@@ -242,14 +255,54 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
           {
             header: "작업",
             render: (r) => (
-              <ActionButton
-                label="이 버전으로 복원"
-                action="scenario.update"
-                disabled={r.version === props.scenario.version}
-                confirmText={`${props.scenario.name} v${r.version}을(를) 복제해 새 초안 v${props.scenario.version + 1}을 만들까요?`}
-                run={(key) => api.rollbackScenario(props.scenario.scenario_id, r.version, props.scenario.version, key)}
-                invalidateKeys={[["scenarios"], ["scenario-versions", props.scenario.scenario_id]]}
-              />
+              <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                <ActionButton
+                  label="이 버전으로 복원"
+                  action="scenario.update"
+                  disabled={r.version === props.scenario.version}
+                  confirmText={`${props.scenario.name} v${r.version}을(를) 복제해 새 초안 v${props.scenario.version + 1}을 만들까요?`}
+                  run={(key) => api.rollbackScenario(props.scenario.scenario_id, r.version, props.scenario.version, key)}
+                  invalidateKeys={[["scenarios"], ["scenario-versions", props.scenario.scenario_id]]}
+                />
+                <GovernanceStageButton
+                  scenario={props.scenario}
+                  version={r.version}
+                  targetStage="review"
+                  currentStage={governanceStage(r.certification)}
+                />
+                <GovernanceStageButton
+                  scenario={props.scenario}
+                  version={r.version}
+                  targetStage="pilot"
+                  currentStage={governanceStage(r.certification)}
+                />
+                <GovernanceStageButton
+                  scenario={props.scenario}
+                  version={r.version}
+                  targetStage="deprecated"
+                  currentStage={governanceStage(r.certification)}
+                />
+                {r.certification.status !== "certified" && (
+                  <ActionButton
+                    label="인증"
+                    action="scenario.certify"
+                    inputLabel="인증 사유"
+                    confirmText={`${props.scenario.name} v${r.version}을 운영 인증할까요? prod 릴리스 승인은 인증 이후에만 가능합니다.`}
+                    run={(key, reason) => api.certifyScenarioVersion(props.scenario.scenario_id, r.version, reason ?? "", null, key)}
+                    invalidateKeys={[["scenarios"], ["scenario-versions", props.scenario.scenario_id], ["scenario-releases", props.scenario.scenario_id]]}
+                  />
+                )}
+                {r.certification.status === "certified" && (
+                  <ActionButton
+                    label="인증 취소"
+                    action="scenario.certify"
+                    inputLabel="취소 사유"
+                    confirmText={`${props.scenario.name} v${r.version}의 운영 인증을 취소할까요? 이후 prod 승인과 배포가 차단됩니다.`}
+                    run={(key, reason) => api.revokeScenarioCertification(props.scenario.scenario_id, r.version, reason ?? "", key)}
+                    invalidateKeys={[["scenarios"], ["scenario-versions", props.scenario.scenario_id], ["scenario-releases", props.scenario.scenario_id]]}
+                  />
+                )}
+              </span>
             ),
           },
         ]}
@@ -313,6 +366,7 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
         columns={[
           { header: "대상", render: (r) => <span className={`badge ${r.target_environment === "prod" ? "green" : "muted"}`}>{r.target_environment}</span> },
           { header: "버전", render: (r) => `v${r.source_version}` },
+          { header: "인증", render: (r) => <CertificationBadge certification={r.certification} /> },
           { header: "상태", render: (r) => <span className={`badge ${releaseTone(r.status)}`}>{releaseLabel(r.status)}</span> },
           { header: "요청자", render: (r) => <code className="subtle">{r.requested_by}</code> },
           { header: "패키지", render: (r) => <code className="subtle">{r.package_hash.slice(0, 18)}…</code> },
@@ -373,6 +427,138 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
       />
     </section>
   );
+}
+
+function GovernanceStageBadge(props: { certification?: ScenarioCertification | null }): JSX.Element {
+  const stage = governanceStage(props.certification);
+  const certification = props.certification;
+  const details = [
+    certification?.governance_reason ?? null,
+    certification?.governance_evidence_ref !== null && certification?.governance_evidence_ref !== undefined
+      ? `evidence ${certification.governance_evidence_ref}`
+      : null,
+    certification?.governance_updated_by !== null && certification?.governance_updated_by !== undefined
+      ? `by ${certification.governance_updated_by}`
+      : null,
+    certification?.governance_updated_at !== null && certification?.governance_updated_at !== undefined
+      ? new Date(certification.governance_updated_at).toLocaleString()
+      : null,
+  ].filter((value): value is string => value !== null && value.length > 0);
+  return (
+    <span className={`badge ${governanceStageTone(stage)}`} title={details.length > 0 ? details.join(" / ") : "governance stage"}>
+      {stage}
+    </span>
+  );
+}
+
+function GovernanceStageButton(props: {
+  scenario: ScenarioItem;
+  version: number;
+  targetStage: ScenarioGovernanceTransitionStage;
+  currentStage: ScenarioGovernanceStage;
+}): JSX.Element | null {
+  const api = useApiClient();
+  const can = useCan();
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const [reason, setReason] = useState("");
+  const [evidenceRef, setEvidenceRef] = useState("");
+  const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
+  const invalidateKeys = [["scenarios"], ["scenario-versions", props.scenario.scenario_id], ["scenario-releases", props.scenario.scenario_id]] as const;
+  const mut = useMutation({
+    mutationFn: (body: { reason: string; evidence_ref: string }) =>
+      api.setScenarioVersionGovernanceStage(
+        props.scenario.scenario_id,
+        props.version,
+        { stage: props.targetStage, reason: body.reason, evidence_ref: body.evidence_ref },
+        crypto.randomUUID(),
+      ),
+    onSuccess: () => {
+      setMsg({ tone: "green", text: "saved" });
+      for (const key of invalidateKeys) void qc.invalidateQueries({ queryKey: key });
+    },
+    onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
+  });
+
+  if (!can("scenario.update")) return null;
+
+  return (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      <button
+        className="btn"
+        type="button"
+        title="Governance stage only; prod certification is unchanged."
+        disabled={props.currentStage === props.targetStage || mut.isPending}
+        onClick={() => {
+          setReason("");
+          setEvidenceRef("");
+          setMsg(null);
+          setConfirming(true);
+        }}
+      >
+        {mut.isPending ? "처리 중…" : `stage: ${props.targetStage}`}
+      </button>
+      {msg !== null && <span className={`badge ${msg.tone}`} role={msg.tone === "green" ? "status" : "alert"}>{msg.text}</span>}
+      {confirming && (
+        <ConfirmDialog
+          title={`${props.scenario.name} v${props.version} governance stage: ${props.targetStage}`}
+          confirmDisabled={reason.trim() === "" || evidenceRef.trim() === "" || mut.isPending}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            const body = { reason: reason.trim(), evidence_ref: evidenceRef.trim() };
+            setConfirming(false);
+            mut.mutate(body);
+          }}
+        >
+          <label style={{ display: "grid", gap: 4 }}>
+            <span className="label">Reason</span>
+            <input value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+          </label>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span className="label">Evidence ref</span>
+            <input value={evidenceRef} onChange={(e) => setEvidenceRef(e.target.value)} placeholder="ticket:GOV-123" />
+          </label>
+        </ConfirmDialog>
+      )}
+    </span>
+  );
+}
+
+function governanceStage(certification?: ScenarioCertification | null): ScenarioGovernanceStage {
+  return certification?.governance_stage ?? (certification?.status === "certified" && certification.valid_for_prod ? "certified" : "dev");
+}
+
+function governanceStageTone(stage: ScenarioGovernanceStage): "green" | "amber" | "red" | "blue" | "muted" {
+  if (stage === "certified") return "green";
+  if (stage === "pilot") return "amber";
+  if (stage === "review") return "blue";
+  if (stage === "deprecated") return "red";
+  return "muted";
+}
+
+function CertificationBadge(props: { certification?: ScenarioCertification | null }): JSX.Element {
+  const certification = props.certification;
+  if (certification === undefined || certification === null) {
+    return <span className="badge amber" title="API 응답에 인증 상태가 없습니다.">인증 미확인</span>;
+  }
+  if (certification.status === "certified" && certification.valid_for_prod) {
+    return (
+      <span className="badge green" title={certification.reason ?? "운영 인증됨"}>
+        인증됨
+      </span>
+    );
+  }
+  if (certification.status === "certified") {
+    return (
+      <span className="badge amber" title={certification.expires_at !== null ? `만료: ${new Date(certification.expires_at).toLocaleString()}` : "운영 인증 유효성 확인 필요"}>
+        만료
+      </span>
+    );
+  }
+  if (certification.status === "revoked") {
+    return <span className="badge red" title={certification.revoke_reason ?? "운영 인증 취소됨"}>취소됨</span>;
+  }
+  return <span className="badge muted">미인증</span>;
 }
 
 function releaseLabel(status: string): string {

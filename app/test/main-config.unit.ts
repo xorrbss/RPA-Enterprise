@@ -14,6 +14,7 @@ import {
   loadArtifactLifecycleWorkerConfig,
   loadCommonConfig,
   loadGatewayConfig,
+  loadOtlpTelemetryConfig,
   loadRunMode,
   loadScenarioGenerationLlmV1Config,
   loadTelemetryExporter,
@@ -45,14 +46,19 @@ const CLEAR = [
   "ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY", "ARTIFACT_LIFECYCLE_GRAPHILE_POLL_INTERVAL_MS",
   "PORT", "API_LOG_LEVEL", "JWT_HS256_SECRET", "CORS_ORIGINS", "ENABLE_HSTS", "HEALTH_PORT", "VAULT_ADDR", "VAULT_MOUNT",
   "VAULT_RUNTIME_WORKER_ROLE_ID", "VAULT_RUNTIME_WORKER_SECRET_ID", "VAULT_API_ROLE_ID", "VAULT_API_SECRET_ID",
-  "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF", "OTEL_EXPORTER", "ARTIFACT_LIFECYCLE_CONSUMER",
+  "SIGNED_COMMAND_REGISTRY_MODE", "SIGNED_COMMAND_REGISTRY_REF", "OTEL_EXPORTER",
+  "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "ARTIFACT_LIFECYCLE_CONSUMER",
   "ARTIFACT_OBJECT_STORE_REF", "ARTIFACT_OBJECT_STORE_KIND", "ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
   "S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_FORCE_PATH_STYLE",
   "ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE",
   "ARTIFACT_OBJECT_STORE_S3_ENDPOINT", "ARTIFACT_OBJECT_STORE_S3_REGION", "ARTIFACT_OBJECT_STORE_S3_BUCKET",
   "ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID", "ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE",
-  "GRAPHILE_WORKER_SCHEMA", "GRAPHILE_CONCURRENCY", "GRAPHILE_POLL_INTERVAL_MS", "MAINTENANCE_TENANT_IDS",
+  "GRAPHILE_WORKER_SCHEMA", "GRAPHILE_MIGRATIONS_MODE", "GRAPHILE_CONCURRENCY", "GRAPHILE_POLL_INTERVAL_MS", "MAINTENANCE_TENANT_IDS",
+  "MAINTENANCE_LIFECYCLE_DATABASE_URL",
   "SINK_DELIVERY_MAX_ATTEMPTS", "SINK_DELIVERY_RETRY_AFTER_MS",
+  "SINK_DELIVERY_ENDPOINT_SECRET_REF", "SINK_DELIVERY_ALLOWED_HOSTS", "SINK_DELIVERY_BACKEND_ALIAS",
+  "SINK_DELIVERY_TIMEOUT_MS", "SINK_DELIVERY_MAX_REDIRECTS",
   "CODEX_BASE_URL", "CODEX_API_KEY", "CODEX_MODEL", "CODEX_MAX_CONTEXT_TOKENS",
   "CODEX_PRICE_PER_1K_INPUT_USD", "CODEX_PRICE_PER_1K_OUTPUT_USD",
   "GATEWAY_ARTIFACT_STORE_MODE", "GATEWAY_ARTIFACT_OBJECT_STORE_REF", "GATEWAY_ARTIFACT_OBJECT_STORE_BACKEND_ALIAS",
@@ -87,6 +93,7 @@ function withEnv(vars: Record<string, string>, fn: () => void): void {
 const FULL: Record<string, string> = {
   RPA_ENV: "staging", PGHOST: "h", PGPORT: "5432", PGUSER: "u", PGPASSWORD: "p", PGDATABASE: "d",
   WORKER_ID: "10000000-0000-4000-8000-0000000000aa",
+  MAINTENANCE_LIFECYCLE_DATABASE_URL: "postgresql://lifecycle-bypass@db/rpa",
   PORT: "8080", JWT_HS256_SECRET: "x".repeat(40), VAULT_ADDR: "https://v:8200",
   VAULT_RUNTIME_WORKER_ROLE_ID: "r", VAULT_RUNTIME_WORKER_SECRET_ID: "s",
   VAULT_ARTIFACT_LIFECYCLE_ROLE_ID: "artifact-role", VAULT_ARTIFACT_LIFECYCLE_SECRET_ID: "artifact-secret",
@@ -119,12 +126,40 @@ function main(): void {
     check("DATABASE_URL override", loadCommonConfig().connectionString === "postgresql://x@y/z"));
   withEnv({ ...FULL, OTEL_EXPORTER: "console" }, () =>
     check("common telemetryExporter from OTEL_EXPORTER", loadCommonConfig().telemetryExporter === "console"));
+  withEnv({ ...FULL, OTEL_EXPORTER: "prometheus" }, () =>
+    check("common telemetryExporter prometheus", loadCommonConfig().telemetryExporter === "prometheus"));
+  withEnv({ ...FULL, OTEL_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel.example.internal" }, () => {
+    const c = loadCommonConfig();
+    check("common telemetryExporter otlp", c.telemetryExporter === "otlp");
+    check("common otlp traces endpoint from base", c.otlp?.tracesEndpoint === "https://otel.example.internal/v1/traces");
+    check("common otlp metrics endpoint from base", c.otlp?.metricsEndpoint === "https://otel.example.internal/v1/metrics");
+  });
 
   // OTEL_EXPORTER (C4 부트스트랩 exporter 선택) — default none, console, 대소문자 무관, 미정의 값 fail-closed.
   withEnv({}, () => check("OTEL_EXPORTER default none", loadTelemetryExporter() === "none"));
   withEnv({ OTEL_EXPORTER: "console" }, () => check("OTEL_EXPORTER console", loadTelemetryExporter() === "console"));
+  withEnv({ OTEL_EXPORTER: "prometheus" }, () => check("OTEL_EXPORTER prometheus", loadTelemetryExporter() === "prometheus"));
+  withEnv({ OTEL_EXPORTER: "otlp" }, () => check("OTEL_EXPORTER otlp", loadTelemetryExporter() === "otlp"));
   withEnv({ OTEL_EXPORTER: "CONSOLE" }, () => check("OTEL_EXPORTER case-insensitive", loadTelemetryExporter() === "console"));
-  withEnv({ OTEL_EXPORTER: "otlp" }, () => expectThrow("OTEL_EXPORTER invalid throws", () => loadTelemetryExporter()));
+  withEnv({ OTEL_EXPORTER: "bogus" }, () => expectThrow("OTEL_EXPORTER invalid throws", () => loadTelemetryExporter()));
+  withEnv({ ...FULL, OTEL_EXPORTER: "otlp" }, () => expectThrow("OTEL_EXPORTER otlp without endpoint throws", () => loadCommonConfig()));
+  withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel.example.internal/" }, () => {
+    const cfg = loadOtlpTelemetryConfig();
+    check("OTLP base joins traces", cfg.tracesEndpoint === "https://otel.example.internal/v1/traces");
+    check("OTLP base joins metrics", cfg.metricsEndpoint === "https://otel.example.internal/v1/metrics");
+  });
+  withEnv({
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://otel.example.internal/custom-traces",
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "https://otel.example.internal/custom-metrics",
+  }, () => {
+    const cfg = loadOtlpTelemetryConfig();
+    check("OTLP explicit traces endpoint", cfg.tracesEndpoint === "https://otel.example.internal/custom-traces");
+    check("OTLP explicit metrics endpoint", cfg.metricsEndpoint === "https://otel.example.internal/custom-metrics");
+  });
+  withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://user:pass@otel.example.internal" }, () =>
+    expectThrow("OTLP endpoint credentials rejected", () => loadOtlpTelemetryConfig()));
+  withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel.example.internal/v1?token=x" }, () =>
+    expectThrow("OTLP endpoint query rejected", () => loadOtlpTelemetryConfig()));
 
   // API_LOG_LEVEL (제어평면 구조화 로거 레벨) — default info, 명시 레벨, 대소문자 무관, 미정의 값 fail-closed.
   withEnv({}, () => check("API_LOG_LEVEL default info", loadApiLogLevel() === "info"));
@@ -317,15 +352,65 @@ function main(): void {
     );
     check("worker has no lifecycle artifact SecretRef config", !("artifactObjectStoreRef" in w));
     check("worker concurrency default 1", w.graphileConcurrency === 1);
+    check("worker graphile migrations default runtime", w.graphileMigrationsMode === "runtime");
     check("worker maintenance tenant list default empty", w.maintenanceTenantIds.length === 0);
+    check("worker maintenance discovery requires dedicated lifecycle DB URL", w.maintenanceLifecycleDatabaseUrl === FULL.MAINTENANCE_LIFECYCLE_DATABASE_URL);
     check("worker sink delivery policy defaults", w.sinkDeliveryMaxAttempts === 3 && w.sinkDeliveryRetryAfterMs === 5000);
     check("worker video recording default false", w.videoRecordingEnabled === false);
     check("worker video frame defaults", w.videoFrameIntervalMs === 1000 && w.videoFrameRate === 1);
   });
+  withEnv({ ...FULL, MAINTENANCE_LIFECYCLE_DATABASE_URL: "" }, () =>
+    expectThrow("worker empty maintenance tenant list requires lifecycle BYPASSRLS database URL", () => loadWorkerConfig(common)));
+  withEnv({ ...FULL, GRAPHILE_MIGRATIONS_MODE: "external" }, () =>
+    check("worker graphile migrations external mode carried", loadWorkerConfig(common).graphileMigrationsMode === "external"));
+  withEnv({ ...FULL, GRAPHILE_MIGRATIONS_MODE: "bogus" }, () =>
+    expectThrow("worker graphile migrations mode rejects invalid value", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, SINK_DELIVERY_MAX_ATTEMPTS: "5", SINK_DELIVERY_RETRY_AFTER_MS: "2500" }, () => {
     const w = loadWorkerConfig(common);
     check("worker sink delivery policy overrides carried", w.sinkDeliveryMaxAttempts === 5 && w.sinkDeliveryRetryAfterMs === 2500);
   });
+  withEnv({
+    ...FULL,
+    SINK_DELIVERY_ENDPOINT_SECRET_REF: "rpa/staging/connector-runtime/connector/sink-primary-endpoint",
+    SINK_DELIVERY_ALLOWED_HOSTS: "sink.example.com, sink-backup.example.com",
+    SINK_DELIVERY_BACKEND_ALIAS: "primary-sink",
+    SINK_DELIVERY_TIMEOUT_MS: "2500",
+    SINK_DELIVERY_MAX_REDIRECTS: "0",
+  }, () => {
+    const w = loadWorkerConfig(common);
+    check(
+      "worker sink egress SecretRef config carried",
+      w.sinkDelivery?.endpointSecretRef === "rpa/staging/connector-runtime/connector/sink-primary-endpoint" &&
+        w.sinkDelivery.allowedHosts.length === 2 &&
+        w.sinkDelivery.allowedHosts[0] === "sink.example.com" &&
+        w.sinkDelivery.backendAlias === "primary-sink" &&
+        w.sinkDelivery.timeoutMs === 2500 &&
+        w.sinkDelivery.maxRedirects === 0,
+      JSON.stringify(w.sinkDelivery),
+    );
+  });
+  withEnv({ ...FULL, SINK_DELIVERY_ALLOWED_HOSTS: "sink.example.com" }, () =>
+    expectThrow("worker sink egress partial config requires endpoint SecretRef", () => loadWorkerConfig(common)));
+  withEnv({
+    ...FULL,
+    SINK_DELIVERY_ENDPOINT_SECRET_REF: "rpa/staging/runtime-worker/connector/sink-primary-endpoint",
+    SINK_DELIVERY_ALLOWED_HOSTS: "sink.example.com",
+  }, () => expectThrow("worker sink egress SecretRef requires connector-runtime namespace", () => loadWorkerConfig(common)));
+  withEnv({
+    ...FULL,
+    SINK_DELIVERY_ENDPOINT_SECRET_REF: "rpa/prod/connector-runtime/connector/sink-primary-endpoint",
+    SINK_DELIVERY_ALLOWED_HOSTS: "sink.example.com",
+  }, () => expectThrow("worker sink egress SecretRef env mismatch throws", () => loadWorkerConfig(common)));
+  withEnv({
+    ...FULL,
+    SINK_DELIVERY_ENDPOINT_SECRET_REF: "rpa/staging/connector-runtime/connector/sink-primary-endpoint",
+    SINK_DELIVERY_ALLOWED_HOSTS: "https://sink.example.com/hook",
+  }, () => expectThrow("worker sink egress allowed host rejects URL shape", () => loadWorkerConfig(common)));
+  withEnv({
+    ...FULL,
+    SINK_DELIVERY_ENDPOINT_SECRET_REF: "rpa/staging/connector-runtime/connector/sink-primary-endpoint",
+    SINK_DELIVERY_ALLOWED_HOSTS: "127.0.0.1",
+  }, () => expectThrow("worker sink egress allowed host rejects IP literal", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, SINK_DELIVERY_MAX_ATTEMPTS: "0" }, () =>
     expectThrow("worker sink delivery max attempts rejects non-positive", () => loadWorkerConfig(common)));
   withEnv({ ...FULL, SINK_DELIVERY_RETRY_AFTER_MS: "1.5" }, () =>
@@ -336,6 +421,14 @@ function main(): void {
       "worker maintenance tenant list parsed",
       w.maintenanceTenantIds.length === 2 && w.maintenanceTenantIds[1] === "00000000-0000-4000-8000-0000000000a2",
       JSON.stringify(w.maintenanceTenantIds),
+    );
+  });
+  withEnv({ ...FULL, MAINTENANCE_LIFECYCLE_DATABASE_URL: "", MAINTENANCE_TENANT_IDS: "00000000-0000-4000-8000-0000000000a1" }, () => {
+    const w = loadWorkerConfig(common);
+    check(
+      "worker explicit maintenance tenant list does not require lifecycle DB URL",
+      w.maintenanceTenantIds.length === 1 && w.maintenanceLifecycleDatabaseUrl === undefined,
+      JSON.stringify(w),
     );
   });
   withEnv({ ...FULL, MAINTENANCE_TENANT_IDS: "not-a-uuid" }, () =>

@@ -73,6 +73,9 @@ export interface AutomationPerformanceSummary {
   readonly run_vs_call_cost_delta: number | null;
   readonly roi_idea_count: number;
   readonly roi_confidence: AutomationPerformanceRoiConfidence;
+  readonly roi_source_lineage: AutomationPerformanceRoiSourceLineage;
+  readonly roi_actuals: AutomationPerformanceRoiActuals;
+  readonly decision_signal: AutomationPerformanceDecisionSignal;
 }
 
 export interface AutomationPerformanceCostByStatus {
@@ -88,6 +91,61 @@ export interface AutomationPerformanceRoiConfidence {
   readonly high: number;
 }
 
+export type AutomationPerformanceRoiSource = "manual" | "process_mining" | "task_mining" | "imported";
+
+export type AutomationPerformanceRoiStage = "approved" | "build" | "operate";
+
+export interface AutomationPerformanceRoiSourceCounts {
+  readonly manual: number;
+  readonly process_mining: number;
+  readonly task_mining: number;
+  readonly imported: number;
+}
+
+export interface AutomationPerformanceRoiStageCounts {
+  readonly approved: number;
+  readonly build: number;
+  readonly operate: number;
+}
+
+export interface AutomationPerformanceRoiSourceLineageIdea {
+  readonly idea_id: string;
+  readonly title: string;
+  readonly source: AutomationPerformanceRoiSource;
+  readonly stage: AutomationPerformanceRoiStage;
+  readonly department: string;
+  readonly business_owner: string;
+}
+
+export interface AutomationPerformanceRoiSourceLineage {
+  readonly idea_count: number;
+  readonly source_counts: AutomationPerformanceRoiSourceCounts;
+  readonly stage_counts: AutomationPerformanceRoiStageCounts;
+  readonly departments: readonly string[];
+  readonly business_owners: readonly string[];
+  readonly sample_ideas: readonly AutomationPerformanceRoiSourceLineageIdea[];
+}
+
+export interface AutomationPerformanceRoiActuals {
+  readonly evidence_count: number;
+  readonly estimated_transaction_count: number;
+  readonly actual_transaction_count: number;
+  readonly comparable_actual_transaction_count: number;
+  readonly transaction_attainment_rate: number | null;
+  readonly estimated_exception_rate: number | null;
+  readonly actual_failure_rate: number | null;
+  readonly comparable_actual_failure_rate: number | null;
+  readonly failure_rate_delta: number | null;
+  readonly human_intervention_minutes: number;
+  readonly reprocessing_minutes: number;
+  readonly latest_period_end: string | null;
+}
+
+export interface AutomationPerformanceDecisionSignal {
+  readonly status: "expand" | "hold" | "watch";
+  readonly reason: string;
+}
+
 export interface AutomationPerformanceCostByModel {
   readonly model: string;
   readonly calls: number;
@@ -95,6 +153,17 @@ export interface AutomationPerformanceCostByModel {
   readonly output_tokens: number | null;
   readonly cost: number | null;
   readonly cost_share: number | null;
+}
+
+export interface AutomationPerformanceModelCostTrend {
+  readonly day: string;
+  readonly model: string;
+  readonly calls: number;
+  readonly input_tokens: number | null;
+  readonly output_tokens: number | null;
+  readonly cost: number | null;
+  readonly cost_share_of_day: number | null;
+  readonly cost_delta_from_previous_day_for_model: number | null;
 }
 
 export interface AutomationPerformanceFailureTop {
@@ -125,6 +194,9 @@ export interface AutomationPerformanceWorkflow {
   readonly cost_per_completed_run: number | null;
   readonly roi_idea_count: number;
   readonly roi_confidence: AutomationPerformanceRoiConfidence;
+  readonly roi_source_lineage: AutomationPerformanceRoiSourceLineage;
+  readonly roi_actuals: AutomationPerformanceRoiActuals;
+  readonly decision_signal: AutomationPerformanceDecisionSignal;
 }
 
 export interface AutomationPerformanceTrend {
@@ -151,6 +223,7 @@ export interface AutomationPerformanceReport {
   readonly period_end: string;
   readonly summary: AutomationPerformanceSummary;
   readonly cost_by_model: readonly AutomationPerformanceCostByModel[];
+  readonly model_cost_trends: readonly AutomationPerformanceModelCostTrend[];
   readonly failure_top: readonly AutomationPerformanceFailureTop[];
   readonly trends: readonly AutomationPerformanceTrend[];
   readonly by_workflow: readonly AutomationPerformanceWorkflow[];
@@ -244,6 +317,95 @@ export interface PrincipalItem {
 
 export type RoleAssignmentRole = "viewer" | "operator" | "reviewer" | "approver" | "admin";
 
+export type ScimProviderSecretRotationPolicy = "manual" | "periodic_30d" | "periodic_60d" | "periodic_90d";
+
+export type ScimProviderRotationStatus = "manual" | "current" | "due_soon" | "overdue" | "decommissioned";
+
+export interface ScimProviderItem {
+  readonly provider_id: string;
+  readonly provider_key: string;
+  readonly display_name: string;
+  readonly status: "active" | "disabled";
+  readonly inbound_schema_ref: "scim-principal@1";
+  readonly auth_mode: "signed_request_v1";
+  readonly signature_secret_ref: string;
+  readonly secret_rotation_policy: ScimProviderSecretRotationPolicy;
+  readonly rotation_due_at: string | null;
+  readonly rotation_status: ScimProviderRotationStatus;
+  readonly clock_skew_seconds: number;
+  readonly created_by: string;
+  readonly updated_by: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly last_secret_rotated_at: string | null;
+  readonly last_secret_rotated_by: string | null;
+  readonly decommissioned_at: string | null;
+  readonly decommissioned_by: string | null;
+  readonly decommission_reason: string | null;
+}
+
+export interface ScimProviderCreateBody {
+  readonly provider_key: string;
+  readonly display_name: string;
+  readonly signature_secret_ref: string;
+  readonly secret_rotation_policy?: ScimProviderSecretRotationPolicy;
+  readonly clock_skew_seconds?: number;
+}
+
+export interface ScimProviderUpdateBody {
+  readonly display_name?: string;
+  readonly status?: "active" | "disabled";
+  readonly signature_secret_ref?: string;
+  readonly secret_rotation_policy?: ScimProviderSecretRotationPolicy;
+  readonly clock_skew_seconds?: number;
+}
+
+export interface ScimProviderDecommissionBody {
+  readonly reason: string;
+}
+
+export interface ScimProviderDecommissionResult {
+  readonly provider: ScimProviderItem;
+  readonly disabled_mappings: number;
+  readonly revoked_assignments: number;
+}
+
+export interface ScimGroupRoleMappingItem {
+  readonly mapping_id: string;
+  readonly provider_key: string;
+  readonly external_group: string;
+  readonly role: RoleAssignmentRole;
+  readonly status: "active" | "disabled";
+  readonly description: string | null;
+  readonly created_by: string;
+  readonly updated_by: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export type ScimGroupRoleMappingImportMode = "upsert_only" | "replace_active";
+
+export interface ScimGroupRoleMappingImportEntry {
+  readonly external_group: string;
+  readonly role: RoleAssignmentRole;
+  readonly description?: string | null;
+}
+
+export interface ScimGroupRoleMappingImportBody {
+  readonly mode: ScimGroupRoleMappingImportMode;
+  readonly mappings: readonly ScimGroupRoleMappingImportEntry[];
+}
+
+export interface ScimGroupRoleMappingImportResult {
+  readonly provider_key: string;
+  readonly mode: ScimGroupRoleMappingImportMode;
+  readonly imported: number;
+  readonly updated: number;
+  readonly unchanged: number;
+  readonly disabled: number;
+  readonly items: readonly ScimGroupRoleMappingItem[];
+}
+
 export interface RoleAssignmentItem {
   readonly assignment_id: string;
   readonly principal_sub: string;
@@ -267,6 +429,35 @@ export interface RoleAssignmentItem {
 export type ScenarioEnvironment = "dev" | "staging" | "prod";
 export type ScenarioReleaseTarget = "staging" | "prod";
 export type ScenarioReleaseStatus = "draft" | "submitted" | "approved" | "rejected" | "deployed" | "rolled_back" | "cancelled";
+export type ScenarioCertificationStatus = "uncertified" | "certified" | "revoked";
+export type ScenarioGovernanceStage = "dev" | "review" | "pilot" | "certified" | "deprecated";
+export type ScenarioGovernanceTransitionStage = "review" | "pilot" | "deprecated";
+
+export interface ScenarioVersionGovernanceStageBody {
+  readonly stage: ScenarioGovernanceTransitionStage;
+  readonly reason: string;
+  readonly evidence_ref: string;
+  readonly metadata?: Record<string, unknown>;
+  readonly legal_hold?: boolean;
+}
+
+export interface ScenarioCertification {
+  readonly status: ScenarioCertificationStatus;
+  readonly governance_stage: ScenarioGovernanceStage;
+  readonly governance_reason: string | null;
+  readonly governance_evidence_ref: string | null;
+  readonly governance_metadata: Record<string, unknown> | null;
+  readonly governance_updated_by: string | null;
+  readonly governance_updated_at: string | null;
+  readonly certified_by: string | null;
+  readonly certified_at: string | null;
+  readonly expires_at: string | null;
+  readonly reason: string | null;
+  readonly revoked_by: string | null;
+  readonly revoked_at: string | null;
+  readonly revoke_reason: string | null;
+  readonly valid_for_prod: boolean;
+}
 
 export interface ScenarioEnvironmentBinding {
   readonly binding_id: string;
@@ -296,6 +487,7 @@ export interface ScenarioReleaseItem {
   readonly status: ScenarioReleaseStatus;
   readonly package_hash: string;
   readonly validation_report: unknown;
+  readonly certification: ScenarioCertification;
   readonly requested_by: string;
   readonly requested_at: string;
   readonly submitted_at: string | null;
@@ -388,6 +580,7 @@ export interface ScenarioItem {
   readonly version: number;
   readonly latest_version_id: string;
   readonly promotion_status?: string;
+  readonly certification?: ScenarioCertification;
 }
 
 // maker-checker prod 승격 요청(D4) — approver 인박스 항목.
@@ -564,8 +757,19 @@ export interface RunTriggerFireItem {
 }
 
 export type OpsAlertSeverity = "critical" | "warning" | "info";
-export type OpsAlertSource = "run_sla" | "human_task_sla" | "trigger_fire" | "failure_spike" | "dlq" | "bot_pool";
+export type OpsAlertSource =
+  | "run_sla"
+  | "human_task_sla"
+  | "trigger_fire"
+  | "failure_spike"
+  | "dlq"
+  | "bot_pool"
+  | "scim_secret_rotation"
+  | "audit_verifier"
+  | "readiness_evidence";
 export type OpsAlertStatus = "open" | "acknowledged";
+export type OpsNotificationChannel = "teams" | "slack" | "email" | "webhook";
+export type OpsNotificationDeliveryStatus = "sent" | "delivered" | "failed";
 
 export interface OpsAlertDelivery {
   readonly channel: "console";
@@ -586,7 +790,7 @@ export interface OpsAlertItem {
   readonly source: OpsAlertSource;
   readonly title: string;
   readonly detail: string;
-  readonly subject_type: "run" | "human_task" | "run_trigger" | "dlq" | "bot_pool";
+  readonly subject_type: "run" | "human_task" | "run_trigger" | "dlq" | "bot_pool" | "scim_provider" | "audit_verifier" | "readiness_evidence";
   readonly subject_id: string | null;
   readonly status: OpsAlertStatus;
   readonly delivery: OpsAlertDelivery;
@@ -601,6 +805,164 @@ export interface OpsAlertListParams extends ListParams {
   readonly severity?: OpsAlertSeverity;
   readonly source?: OpsAlertSource;
   readonly status?: OpsAlertStatus | "all";
+}
+
+export interface OpsNotificationDelivery {
+  readonly delivery_id: string;
+  readonly alert_id: string;
+  readonly detected_at: string;
+  readonly source: OpsAlertSource;
+  readonly subject_type: "run" | "human_task" | "run_trigger" | "dlq" | "bot_pool" | "scim_provider" | "audit_verifier" | "readiness_evidence";
+  readonly subject_id: string | null;
+  readonly channel: OpsNotificationChannel;
+  readonly provider_alias: string;
+  readonly status: OpsNotificationDeliveryStatus;
+  readonly receipt_id: string | null;
+  readonly receipt_at: string;
+  readonly endpoint_secret_ref: string;
+  readonly credential_secret_ref: string | null;
+  readonly callback_signature_secret_ref: string | null;
+  readonly route_policy_ref: string | null;
+  readonly recipient_group_ref: string | null;
+  readonly attempt_no: number;
+  readonly summary: string;
+  readonly error_code: string | null;
+  readonly metadata: Record<string, unknown>;
+  readonly recorded_by: string;
+  readonly recorded_at: string;
+  readonly legal_hold: boolean;
+}
+
+export interface OpsNotificationDeliveryRequest {
+  readonly channel: OpsNotificationChannel;
+  readonly provider_alias: string;
+  readonly status: OpsNotificationDeliveryStatus;
+  readonly receipt_id?: string | null;
+  readonly receipt_at: string;
+  readonly endpoint_secret_ref: string;
+  readonly credential_secret_ref?: string | null;
+  readonly callback_signature_secret_ref?: string | null;
+  readonly route_policy_ref?: string | null;
+  readonly recipient_group_ref?: string | null;
+  readonly attempt_no?: number;
+  readonly summary: string;
+  readonly error_code?: string | null;
+  readonly metadata?: Record<string, unknown>;
+  readonly legal_hold?: boolean;
+}
+
+export type OpsNotificationAttemptStatus = "pending" | "sending" | "sent" | "failed" | "dead_letter";
+
+export interface OpsNotificationAttempt {
+  readonly attempt_id: string;
+  readonly alert_id: string;
+  readonly detected_at: string;
+  readonly source: OpsAlertSource;
+  readonly subject_type: OpsAlertItem["subject_type"];
+  readonly subject_id: string | null;
+  readonly channel: "webhook";
+  readonly provider_alias: string;
+  readonly status: OpsNotificationAttemptStatus;
+  readonly endpoint_secret_ref: string;
+  readonly callback_signature_secret_ref: string | null;
+  readonly route_policy_ref: string;
+  readonly recipient_group_ref: string | null;
+  readonly allowed_hosts: readonly string[];
+  readonly attempt_no: number;
+  readonly max_attempts: number;
+  readonly next_attempt_at: string;
+  readonly summary: string;
+  readonly error_code: string | null;
+  readonly receipt_id: string | null;
+  readonly receipt_at: string | null;
+  readonly metadata: Record<string, unknown>;
+  readonly requested_by: string;
+  readonly requested_at: string;
+  readonly legal_hold: boolean;
+}
+
+export interface OpsNotificationWebhookSendRequest {
+  readonly provider_alias?: string;
+  readonly endpoint_secret_ref: string;
+  readonly callback_signature_secret_ref?: string | null;
+  readonly route_policy_ref: string;
+  readonly recipient_group_ref?: string | null;
+  readonly allowed_hosts: readonly string[];
+  readonly summary?: string;
+  readonly metadata?: Record<string, unknown>;
+  readonly legal_hold?: boolean;
+}
+
+export type IntegrationHandoffStatus = "accepted" | "deferred" | "completed" | "failed" | "cancelled";
+export type IntegrationHandoffReceiptStatus = "accepted" | "completed" | "failed" | "cancelled";
+export type IntegrationHandoffDispatchAttemptStatus = "pending" | "sending" | "accepted" | "failed" | "dead_letter";
+
+export interface IntegrationHandoff {
+  readonly handoff_id: string;
+  readonly provider_alias: string;
+  readonly job_ref: string;
+  readonly payload_ref: string;
+  readonly callback_url_secret_ref: string | null;
+  readonly callback_signature_secret_ref: string | null;
+  readonly external_job_id: string | null;
+  readonly status: IntegrationHandoffStatus;
+  readonly latest_receipt_id: string | null;
+  readonly error_code: string | null;
+  readonly requested_by: string;
+  readonly request_idempotency_key: string;
+  readonly requested_at: string;
+  readonly updated_at: string;
+  readonly callback_received_at: string | null;
+  readonly legal_hold: boolean;
+}
+
+export interface IntegrationHandoffCreateRequest {
+  readonly provider_alias: string;
+  readonly job_ref: string;
+  readonly payload_ref: string;
+  readonly callback_url_secret_ref?: string | null;
+  readonly callback_signature_secret_ref?: string | null;
+  readonly legal_hold?: boolean;
+}
+
+export interface IntegrationHandoffDispatchRequest {
+  readonly endpoint_secret_ref: string;
+  readonly allowed_hosts: readonly string[];
+  readonly max_attempts?: number;
+  readonly metadata?: Record<string, unknown>;
+  readonly legal_hold?: boolean;
+}
+
+export interface IntegrationHandoffDispatchAttempt {
+  readonly attempt_id: string;
+  readonly handoff_id: string;
+  readonly provider_alias: string;
+  readonly status: IntegrationHandoffDispatchAttemptStatus;
+  readonly endpoint_secret_ref: string;
+  readonly allowed_hosts: readonly string[];
+  readonly request_idempotency_key: string;
+  readonly attempt_no: number;
+  readonly max_attempts: number;
+  readonly external_job_id: string | null;
+  readonly receipt_id: string | null;
+  readonly error_code: string | null;
+  readonly requested_by: string;
+  readonly requested_at: string;
+  readonly updated_at: string;
+  readonly legal_hold: boolean;
+}
+
+export interface IntegrationHandoffCallbackRequest {
+  readonly external_job_id: string;
+  readonly status: IntegrationHandoffReceiptStatus;
+  readonly receipt_id: string;
+  readonly error_code?: string | null;
+  readonly legal_hold?: boolean;
+}
+
+export interface IntegrationHandoffListParams extends ListParams {
+  readonly status?: IntegrationHandoffStatus;
+  readonly provider_alias?: string;
 }
 
 export type OpsHealthStatus = "ok" | "warning" | "critical";
@@ -624,6 +986,133 @@ export interface OpsHealth {
     readonly nonterminal_over_15m: number;
     readonly oldest_updated_at: string | null;
   };
+}
+
+export type ProductionReadinessStatus = "ready" | "warning" | "blocked";
+export type ProductionReadinessGateStatus = "pass" | "warning" | "blocked" | "deferred";
+export type ProductionReadinessEvidenceType =
+  | "external_alert_delivery"
+  | "managed_backup_restore_drill"
+  | "slo_oncall_signoff"
+  | "observability_telemetry_wiring"
+  | "support_training_completion";
+export type ProductionReadinessEvidenceStatus = "valid" | "failed";
+
+export interface ProductionReadinessEvidence {
+  readonly evidence_id: string;
+  readonly evidence_type: ProductionReadinessEvidenceType;
+  readonly status: ProductionReadinessEvidenceStatus;
+  readonly evidence_at: string;
+  readonly expires_at: string | null;
+  readonly summary: string;
+  readonly evidence_ref: string | null;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly recorded_by: string;
+  readonly recorded_at: string;
+  readonly legal_hold: boolean;
+}
+
+export interface ProductionReadinessEvidenceRequest {
+  readonly evidence_type: ProductionReadinessEvidenceType;
+  readonly status: ProductionReadinessEvidenceStatus;
+  readonly evidence_at: string;
+  readonly expires_at?: string | null;
+  readonly summary: string;
+  readonly evidence_ref?: string | null;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly legal_hold?: boolean;
+}
+
+export interface ProductionReadinessGate {
+  readonly gate_id: string;
+  readonly label: string;
+  readonly status: ProductionReadinessGateStatus;
+  readonly reason_code: string | null;
+  readonly detail: string;
+  readonly evidence: readonly string[];
+  readonly required_action: string | null;
+}
+
+export interface ProductionReadiness {
+  readonly status: ProductionReadinessStatus;
+  readonly evaluated_at: string;
+  readonly environment: {
+    readonly target: "controlled_prod";
+    readonly tenant_id: string;
+  };
+  readonly summary: {
+    readonly controlled_prod_ready: boolean;
+    readonly status: ProductionReadinessStatus;
+    readonly blocker_count: number;
+    readonly warning_count: number;
+    readonly deferred_count: number;
+  };
+  readonly gates: readonly ProductionReadinessGate[];
+  readonly signals: {
+    readonly ops_health: OpsHealth;
+    readonly bot_pool: {
+      readonly bot_pool_id: string;
+      readonly capacity_slots: number;
+      readonly workers: BotPoolItem["workers"];
+      readonly leases: BotPoolItem["leases"];
+      readonly queue: BotPoolItem["queue"];
+      readonly health: BotPoolHealth;
+    };
+    readonly audit_verifier: {
+      readonly audit_count: number;
+      readonly latest_run_id: string | null;
+      readonly latest_status: AuditVerificationStatus | null;
+      readonly latest_completed_at: string | null;
+      readonly rows_checked: number | null;
+      readonly violation_count: number | null;
+      readonly stale: boolean;
+    };
+  };
+}
+
+export type AiGovernanceEvidenceType =
+  | "model_registry"
+  | "prompt_registry"
+  | "eval_result"
+  | "cost_control"
+  | "human_override";
+export type AiGovernanceEvidenceStatus = "valid" | "failed" | "deferred";
+
+export interface AiGovernanceEvidence {
+  readonly evidence_id: string;
+  readonly evidence_type: AiGovernanceEvidenceType;
+  readonly subject_ref: string;
+  readonly status: AiGovernanceEvidenceStatus;
+  readonly evidence_at: string;
+  readonly expires_at: string | null;
+  readonly summary: string;
+  readonly evidence_ref: string | null;
+  readonly policy_decision_ref: string | null;
+  readonly audit_correlation_id: string | null;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly recorded_by: string;
+  readonly recorded_at: string;
+  readonly legal_hold: boolean;
+}
+
+export interface AiGovernanceEvidenceRequest {
+  readonly evidence_type: AiGovernanceEvidenceType;
+  readonly subject_ref: string;
+  readonly status: AiGovernanceEvidenceStatus;
+  readonly evidence_at: string;
+  readonly expires_at?: string | null;
+  readonly summary: string;
+  readonly evidence_ref?: string | null;
+  readonly policy_decision_ref?: string | null;
+  readonly audit_correlation_id?: string | null;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly legal_hold?: boolean;
+}
+
+export interface AiGovernanceEvidenceListParams extends ListParams {
+  readonly evidence_type?: AiGovernanceEvidenceType;
+  readonly status?: AiGovernanceEvidenceStatus;
+  readonly subject_ref?: string;
 }
 
 export type BotPoolHealth = "ok" | "warning" | "critical";
@@ -674,7 +1163,10 @@ export interface BotPoolItem {
 export type AutomationIdeaStage = "intake" | "assess" | "approved" | "build" | "operate" | "rejected" | "archived";
 export type AutomationIdeaPriority = "low" | "medium" | "high" | "critical";
 export type AutomationIdeaSource = "manual" | "process_mining" | "task_mining" | "imported";
+export type AutomationAdoptionEvidenceType = "pilot_charter_signoff" | "raci_signoff" | "training_completion" | "support_model_signoff";
+export type AutomationAdoptionEvidenceStatus = "valid" | "failed" | "deferred";
 export type RoiConfidence = "low" | "medium" | "high";
+export type RoiViability = "viable" | "not_viable";
 
 export interface AutomationIdeaItem {
   readonly idea_id: string;
@@ -720,12 +1212,47 @@ export interface AutomationIdeaUpdateBody {
   readonly run_trigger_id?: string | null;
 }
 
+export interface AutomationAdoptionEvidenceItem {
+  readonly evidence_id: string;
+  readonly idea_id: string;
+  readonly evidence_type: AutomationAdoptionEvidenceType;
+  readonly status: AutomationAdoptionEvidenceStatus;
+  readonly evidence_at: string;
+  readonly expires_at: string | null;
+  readonly summary: string;
+  readonly evidence_ref: string | null;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly recorded_by: string;
+  readonly recorded_at: string;
+  readonly legal_hold: boolean;
+}
+
+export interface AutomationAdoptionEvidenceRequest {
+  readonly evidence_type: AutomationAdoptionEvidenceType;
+  readonly status: AutomationAdoptionEvidenceStatus;
+  readonly evidence_at: string;
+  readonly expires_at?: string | null;
+  readonly summary: string;
+  readonly evidence_ref?: string | null;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly legal_hold?: boolean;
+}
+
+export type AutomationAdoptionEvidencePage = Paginated<AutomationAdoptionEvidenceItem>;
+
+export interface AutomationAdoptionEvidenceListParams extends ListParams {
+  readonly evidence_type?: AutomationAdoptionEvidenceType;
+  readonly status?: AutomationAdoptionEvidenceStatus;
+}
+
 export interface RoiEstimateRequest {
   readonly frequency_per_month: number;
   readonly minutes_per_case: number;
   readonly exception_rate: number;
   readonly hourly_cost: number;
   readonly implementation_effort: number;
+  readonly platform_monthly_cost?: number;
+  readonly avoided_license_cost?: number;
   readonly confidence?: RoiConfidence;
 }
 
@@ -737,13 +1264,47 @@ export interface RoiEstimate {
   readonly exception_rate: number;
   readonly hourly_cost: number;
   readonly implementation_effort: number;
+  readonly platform_monthly_cost: number;
+  readonly avoided_license_cost: number;
   readonly monthly_hours_saved: number;
   readonly estimated_monthly_value: number;
+  readonly monthly_value: number;
   readonly payback_months: number | null;
+  readonly viability: RoiViability;
   readonly confidence: RoiConfidence;
   readonly created_by: string;
   readonly created_at: string;
   readonly updated_at: string;
+}
+
+export interface RoiActualEvidenceRequest {
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly actual_transaction_count: number;
+  readonly actual_failure_rate: number;
+  readonly human_intervention_minutes: number;
+  readonly reprocessing_minutes: number;
+  readonly evidence_ref: string;
+  readonly summary: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly legal_hold?: boolean;
+}
+
+export interface RoiActualEvidence {
+  readonly roi_actual_id: string;
+  readonly automation_idea_id: string;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly actual_transaction_count: number;
+  readonly actual_failure_rate: number;
+  readonly human_intervention_minutes: number;
+  readonly reprocessing_minutes: number;
+  readonly evidence_ref: string;
+  readonly summary: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly recorded_by: string;
+  readonly recorded_at: string;
+  readonly legal_hold: boolean;
 }
 
 export type AuditOutcome = "allow" | "deny" | "blocked" | "error";
@@ -780,6 +1341,36 @@ export interface AuditLogListParams extends ListParams {
 
 export interface AuditLogExportParams extends AuditLogListParams {
   readonly format?: "csv";
+}
+
+export type AuditVerificationStatus = "valid" | "invalid" | "failed";
+
+export interface AuditChainViolation {
+  readonly sequenceNo: number;
+  readonly id: string;
+  readonly kind: "hash_mismatch" | "broken_link" | "sequence_gap" | "genesis_invalid";
+  readonly detail: string;
+}
+
+export interface AuditVerificationRun {
+  readonly verification_run_id: string;
+  readonly status: AuditVerificationStatus;
+  readonly rows_checked: number;
+  readonly violation_count: number;
+  readonly violations: readonly AuditChainViolation[];
+  readonly checked_from_sequence: number | null;
+  readonly checked_to_sequence: number | null;
+  readonly started_at: string;
+  readonly completed_at: string;
+  readonly correlation_id: string;
+  readonly triggered_by: AuditLogActor;
+  readonly trigger_kind: "manual_api" | "maintenance";
+  readonly retention_until: string;
+  readonly legal_hold: boolean;
+}
+
+export interface AuditVerificationRunListParams extends ListParams {
+  readonly status?: AuditVerificationStatus;
 }
 
 export type ConnectorCatalogKind = "browser" | "api" | "file" | "notification" | "data";
@@ -847,7 +1438,8 @@ export type DocumentJobStatus = "created" | "extracted" | "validation_required" 
 export type DocumentExtractionStatus = "completed" | "validation_required" | "failed";
 export type DocumentFieldType = "text" | "number" | "date" | "boolean";
 export type DocumentFieldStatus = "extracted" | "missing" | "low_confidence";
-export type DocumentFieldSource = "json" | "csv" | "pattern" | "label" | "missing";
+export type DocumentFieldSource = "json" | "csv" | "pattern" | "label" | "missing" | "external_idp";
+export type DocumentExtractionEngine = "built_in_deterministic_text_v1" | "external_idp_adapter_v1";
 
 export interface DocumentFieldSchema {
   readonly key: string;
@@ -890,11 +1482,32 @@ export interface DocumentExtractionField {
   readonly source: DocumentFieldSource;
 }
 
+export interface ExternalDocumentExtractionField {
+  readonly key: string;
+  readonly value: string | number | boolean | null;
+  readonly confidence: number;
+}
+
+export interface ExternalDocumentExtractionBody {
+  readonly provider_alias: string;
+  readonly receipt_id: string;
+  readonly normalized_schema_ref: string;
+  readonly evidence_ref?: string | null;
+  readonly fields: readonly ExternalDocumentExtractionField[];
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly legal_hold?: boolean;
+}
+
 export interface DocumentExtraction {
   readonly document_extraction_id: string;
   readonly document_job_id: string;
-  readonly engine: "built_in_deterministic_text_v1";
+  readonly engine: DocumentExtractionEngine;
   readonly status: DocumentExtractionStatus;
+  readonly provider_alias: string | null;
+  readonly provider_receipt_id: string | null;
+  readonly normalized_schema_ref: string | null;
+  readonly evidence_ref: string | null;
+  readonly provider_metadata: Readonly<Record<string, unknown>>;
   readonly fields: readonly DocumentExtractionField[];
   readonly missing_fields: readonly string[];
   readonly validation_human_task_id: string | null;
@@ -1202,6 +1815,7 @@ export interface ScenarioDetail {
   readonly version: number;
   readonly promotion_status: string;
   // GET 상세는 IR 본문을 포함(편집 prefill). 목록(ScenarioItem)에는 없음.
+  readonly certification?: ScenarioCertification;
   readonly ir?: unknown;
 }
 
@@ -1209,6 +1823,7 @@ export interface ScenarioVersionItem {
   readonly version_id: string;
   readonly version: number;
   readonly promotion_status: string;
+  readonly certification: ScenarioCertification;
   readonly created_at: string;
   readonly promoted_at: string | null;
 }

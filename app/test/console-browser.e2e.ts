@@ -99,6 +99,23 @@ function apiFixture(url: URL): unknown {
     return { window_days: 30, total: { calls: 0, input_tokens: null, output_tokens: null, cost: null }, by_model: [] };
   }
   if (pathname === "/api/v1/reports/automation-performance") {
+    const roiSourceLineage = {
+      idea_count: 1,
+      source_counts: { manual: 0, process_mining: 1, task_mining: 0, imported: 0 },
+      stage_counts: { approved: 0, build: 0, operate: 1 },
+      departments: ["finance"],
+      business_owners: ["finance owner"],
+      sample_ideas: [
+        {
+          idea_id: "45000000-0000-4000-8000-000000000001",
+          title: "invoice lookup",
+          source: "process_mining",
+          stage: "operate",
+          department: "finance",
+          business_owner: "finance owner",
+        },
+      ],
+    };
     return {
       month: "2026-06",
       timezone: "Asia/Seoul",
@@ -128,8 +145,25 @@ function apiFixture(url: URL): unknown {
         run_vs_call_cost_delta: null,
         roi_idea_count: 1,
         roi_confidence: { low: 0, medium: 1, high: 0 },
+        roi_source_lineage: roiSourceLineage,
+        roi_actuals: {
+          evidence_count: 1,
+          estimated_transaction_count: 10,
+          actual_transaction_count: 9,
+          comparable_actual_transaction_count: 9,
+          transaction_attainment_rate: 0.9,
+          estimated_exception_rate: 0,
+          actual_failure_rate: 0.1,
+          comparable_actual_failure_rate: 0.1,
+          failure_rate_delta: 0.1,
+          human_intervention_minutes: 30,
+          reprocessing_minutes: 5,
+          latest_period_end: "2026-06-25",
+        },
+        decision_signal: { status: "expand", reason: "PoC evidence supports scaling" },
       },
       cost_by_model: [],
+      model_cost_trends: [],
       failure_top: [],
       by_workflow: [
         {
@@ -155,6 +189,22 @@ function apiFixture(url: URL): unknown {
           cost_per_completed_run: 0.25,
           roi_idea_count: 1,
           roi_confidence: { low: 0, medium: 1, high: 0 },
+          roi_source_lineage: roiSourceLineage,
+          roi_actuals: {
+            evidence_count: 1,
+            estimated_transaction_count: 10,
+            actual_transaction_count: 9,
+            comparable_actual_transaction_count: 9,
+            transaction_attainment_rate: 0.9,
+            estimated_exception_rate: 0,
+            actual_failure_rate: 0.1,
+            comparable_actual_failure_rate: 0.1,
+            failure_rate_delta: 0.1,
+            human_intervention_minutes: 30,
+            reprocessing_minutes: 5,
+            latest_period_end: "2026-06-25",
+          },
+          decision_signal: { status: "expand", reason: "scale candidate" },
         },
       ],
       trends: [

@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
@@ -12,6 +12,7 @@ import {
 } from "../../../ts/security-middleware-contract";
 import { RBAC_ROLE_ACTIONS } from "../../../ts/rbac-policy";
 import { withTenantTx } from "../db/pool";
+import { computeAuditHash } from "./audit-record-hash";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
@@ -427,9 +428,9 @@ export async function appendGovernanceAudit(
   const payloadJson = safeSerialize(payload);
   const actor = { subjectId: principal.subjectId, roles: principal.roles };
   const previousHash = previousRow?.hash ?? "GENESIS";
-  const hash = hashAuditRecord({
+  const hash = computeAuditHash({
     tenantId: principal.tenantId,
-    sequence,
+    sequenceNo: sequence,
     actor,
     action,
     outcome,
@@ -438,6 +439,7 @@ export async function appendGovernanceAudit(
     idempotencyKey,
     occurredAt,
     retentionUntil,
+    payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
     payload: JSON.parse(payloadJson) as unknown,
     previousHash,
   });
@@ -467,30 +469,4 @@ export async function appendGovernanceAudit(
       hash,
     ],
   );
-}
-
-function hashAuditRecord(input: {
-  tenantId: string;
-  sequence: number;
-  actor: unknown;
-  action: string;
-  outcome: string;
-  reason: string;
-  correlationId: string;
-  idempotencyKey: string;
-  occurredAt: string;
-  retentionUntil: string;
-  payload: unknown;
-  previousHash: string;
-}): string {
-  return `sha256:${createHash("sha256").update(canonicalize(input)).digest("hex")}`;
-}
-
-function canonicalize(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item)).join(",")}]`;
-  const entries = Object.entries(value as Readonly<Record<string, unknown>>)
-    .filter(([, child]) => child !== undefined)
-    .sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${canonicalize(child)}`).join(",")}}`;
 }

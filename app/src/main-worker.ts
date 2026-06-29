@@ -31,6 +31,9 @@ import { PgBrowserSessionStore, buildAesGcmSessionEncryptor, type BrowserSession
 import { createDomUtilityExecutorFactory } from "./runtime/dom-executor-factory";
 import { PgActionPlanCache } from "./executor/pg-action-plan-cache";
 import { PgMergedExtractArtifactSink } from "./runtime/merged-extract-artifact";
+import { SecretRefWebhookNotificationPort } from "./runtime/ops-notification-webhook-port";
+import { SecretRefIntegrationHandoffDispatchPort } from "./runtime/integration-handoff-dispatch-port";
+import { SecretRefSinkDeliveryPort } from "./runtime/sink-delivery-port";
 import { HmacResumeTokenCodec } from "./runtime/resume-token-codec";
 import { PgSessionRestorer } from "./runtime/session-restorer";
 import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runtime/visual-evidence";
@@ -39,6 +42,8 @@ import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary"
 import { buildTaskList } from "./worker/graphile-runner";
 import { buildPoolForbiddenFlags } from "./worker/pool-forbidden-flags";
 import { startMaintenanceScheduler, type MaintenanceScheduler } from "./worker/maintenance-scheduler";
+import { WORKER_HEARTBEAT_INTERVAL_MS } from "./worker/worker-heartbeat-policy";
+export { WORKER_HEARTBEAT_INTERVAL_MS } from "./worker/worker-heartbeat-policy";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
@@ -136,11 +141,74 @@ export async function buildApiSessionStore(pool: PgPool, common: CommonConfig): 
 export interface StartedWorker {
   readonly runner: Runner;
   readonly maintenance?: MaintenanceScheduler;
+  readonly maintenanceBypassPool?: PgPool;
+  readonly heartbeat: WorkerHeartbeat;
+}
+
+export interface WorkerHeartbeat {
+  stop(): void;
+}
+
+export async function upsertWorkerHeartbeat(
+  pool: PgPool,
+  input: { readonly workerId: string; readonly kind: "browser" | "sweeper" | "orchestrator" | "gateway" },
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO workers (id, kind, status, heartbeat_at)
+       VALUES ($1::uuid, $2, 'active', now())
+     ON CONFLICT (id) DO UPDATE
+       SET kind = EXCLUDED.kind,
+           status = CASE WHEN workers.status = 'dead' THEN 'active' ELSE workers.status END,
+           heartbeat_at = now()`,
+    [input.workerId, input.kind],
+  );
+}
+
+export async function startWorkerHeartbeat(
+  pool: PgPool,
+  input: {
+    readonly workerId: string;
+    readonly kind: "browser" | "sweeper" | "orchestrator" | "gateway";
+    readonly intervalMs?: number;
+    readonly onError?: (err: unknown) => void;
+  },
+): Promise<WorkerHeartbeat> {
+  const intervalMs = input.intervalMs ?? WORKER_HEARTBEAT_INTERVAL_MS;
+  if (!Number.isInteger(intervalMs) || intervalMs <= 0) {
+    throw new Error(`worker heartbeat interval must be a positive integer, got ${intervalMs}`);
+  }
+  const onError = input.onError ?? ((err) => console.error(JSON.stringify({ at: "worker_heartbeat", error: String(err) })));
+  let stopped = false;
+  let inFlight = false;
+  const beat = (): void => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    void upsertWorkerHeartbeat(pool, input)
+      .catch(onError)
+      .finally(() => {
+        inFlight = false;
+      });
+  };
+
+  await upsertWorkerHeartbeat(pool, input);
+  const timer = setInterval(beat, intervalMs);
+  const maybe = timer as { unref?: () => void };
+  if (typeof maybe.unref === "function") maybe.unref();
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }
 
 export async function startWorker(pool: PgPool, common: CommonConfig): Promise<StartedWorker> {
   const cfg = loadWorkerConfig(common);
-  await runMigrations({ connectionString: common.connectionString });
+  if (cfg.graphileMigrationsMode === "runtime") {
+    await runMigrations({ connectionString: common.connectionString });
+  } else {
+    console.log(JSON.stringify({ at: "main", msg: "graphile migrations managed externally" }));
+  }
 
   const runtimeWorkerStore = new VaultSecretStore({
     baseUrl: cfg.vaultRuntimeWorker.addr,
@@ -155,10 +223,20 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
   const browser = loadBrowserConfig();
   const gw = loadGatewayConfig();
   const artifactStore = await buildGatewayArtifactObjectStore(gw, { secretStore: runtimeWorkerStore });
+  const runtimeSecurityAudit = new PgDurableSecurityAuditDecisionWriter(pool);
+  const runtimeSecretBoundary = new VaultSecretStoreBoundary({
+    store: runtimeWorkerStore,
+    audit: runtimeSecurityAudit,
+    enforceRefNamespace: true,
+  });
   const browserSessionProvider = new StagehandBrowserSessionProvider({
     chromeExecutablePath: browser.chromeExecutablePath,
     headless: browser.headless,
     ...(browser.downloadRootDir !== undefined ? { downloadRootDir: browser.downloadRootDir } : {}),
+    networkAudit: {
+      writer: runtimeSecurityAudit,
+      actor: { subjectId: cfg.workerId, roles: [] },
+    },
   });
   const visualEvidenceVideoRecorderFactory: PgRuntimeWorkerOptions["visualEvidenceVideoRecorderFactory"] =
     cfg.videoRecordingEnabled
@@ -206,10 +284,33 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
     }),
     sinkDeliveryMaxAttempts: cfg.sinkDeliveryMaxAttempts,
     sinkDeliveryRetryAfterMs: cfg.sinkDeliveryRetryAfterMs,
+    ...(cfg.sinkDelivery !== undefined
+      ? {
+          sinkDeliveryPort: new SecretRefSinkDeliveryPort({
+            secrets: runtimeSecretBoundary,
+            endpointSecretRef: cfg.sinkDelivery.endpointSecretRef as SecretRef,
+            allowedHosts: cfg.sinkDelivery.allowedHosts,
+            backendAlias: cfg.sinkDelivery.backendAlias,
+            timeoutMs: cfg.sinkDelivery.timeoutMs,
+            maxRedirects: cfg.sinkDelivery.maxRedirects,
+          }),
+        }
+      : {}),
+    opsNotificationDeliveryPort: new SecretRefWebhookNotificationPort({ secrets: runtimeSecretBoundary }),
+    integrationHandoffDispatchPort: new SecretRefIntegrationHandoffDispatchPort({ secrets: runtimeSecretBoundary }),
     runtimeJobEnqueuer: new PgGraphileRunEnqueuer(),
   };
 
-  const runner = await run({
+  const maintenanceBypassPool =
+    cfg.maintenanceLifecycleDatabaseUrl !== undefined
+      ? createPool({ connectionString: cfg.maintenanceLifecycleDatabaseUrl })
+      : undefined;
+  let runner: Runner | undefined;
+  let maintenance: MaintenanceScheduler | undefined;
+  let heartbeat: WorkerHeartbeat | undefined;
+  try {
+    if (maintenanceBypassPool !== undefined) await maintenanceBypassPool.query("SELECT 1");
+    runner = await run({
     connectionString: common.connectionString,
     taskList: buildTaskList(pool, workerOptions, "control"),
     concurrency: cfg.graphileConcurrency,
@@ -217,21 +318,39 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
     // DG-3 전용 워커 풀: 이 워커가 서비스하지 않는 풀의 run_claim/run_resume job(pool:<key> flag)을 건너뛴다.
     forbiddenFlags: buildPoolForbiddenFlags(pool, cfg.workerPoolKeys),
     ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
-  });
-  registerQueueDepthGauge(pool);
-  const maintenance = startMaintenanceScheduler(pool, { tenantIds: cfg.maintenanceTenantIds });
-  console.log(JSON.stringify({
-    at: "main",
-    msg: "worker daemon running",
-    concurrency: cfg.graphileConcurrency,
-    maintenanceTenantCount: cfg.maintenanceTenantIds.length,
-  }));
-  return { runner, ...(maintenance !== undefined ? { maintenance } : {}) };
+    });
+    registerQueueDepthGauge(pool);
+    maintenance = startMaintenanceScheduler(pool, {
+      tenantIds: cfg.maintenanceTenantIds,
+      ...(maintenanceBypassPool !== undefined ? { lifecycleBypassPool: maintenanceBypassPool } : {}),
+    });
+    heartbeat = await startWorkerHeartbeat(pool, { workerId: cfg.workerId, kind: "browser" });
+    console.log(JSON.stringify({
+      at: "main",
+      msg: "worker daemon running",
+      concurrency: cfg.graphileConcurrency,
+      maintenanceTenantCount: cfg.maintenanceTenantIds.length,
+      maintenanceLifecycleDiscovery: maintenanceBypassPool !== undefined ? "dedicated_bypassrls_pool" : "configured_tenant_list",
+    }));
+    return {
+      runner,
+      heartbeat,
+      ...(maintenance !== undefined ? { maintenance } : {}),
+      ...(maintenanceBypassPool !== undefined ? { maintenanceBypassPool } : {}),
+    };
+  } catch (err) {
+    heartbeat?.stop();
+    maintenance?.stop();
+    await runner?.stop().catch(() => undefined);
+    await maintenanceBypassPool?.end().catch(() => undefined);
+    throw err;
+  }
 }
 
 export interface ArtifactLifecycleRunner {
   readonly pool: PgPool;
   readonly runner: Runner;
+  readonly heartbeat: WorkerHeartbeat;
 }
 
 export interface ArtifactLifecycleWorkerOptionDeps {
@@ -330,6 +449,8 @@ function buildArtifactLifecycleSecretStore(cfg: ArtifactLifecycleWorkerConfig): 
 export async function startArtifactLifecycleWorker(): Promise<ArtifactLifecycleRunner> {
   const cfg = loadArtifactLifecycleWorkerConfig();
   const pool = createPool({ connectionString: cfg.connectionString });
+  let heartbeat: WorkerHeartbeat | undefined;
+  let runner: Runner | undefined;
   try {
     await pool.query("SELECT 1");
     const secretStore = buildArtifactLifecycleSecretStore(cfg);
@@ -337,20 +458,23 @@ export async function startArtifactLifecycleWorker(): Promise<ArtifactLifecycleR
       cfg,
       secretStore !== undefined ? { secretStore } : {},
     );
-    const runner = await run({
+    runner = await run({
       connectionString: cfg.connectionString,
       taskList: buildTaskList(pool, workerOptions, "artifact_lifecycle"),
       concurrency: cfg.graphileConcurrency,
       pollInterval: cfg.graphilePollIntervalMs,
       ...(cfg.graphileSchema !== undefined ? { schema: cfg.graphileSchema } : {}),
     });
+    heartbeat = await startWorkerHeartbeat(pool, { workerId: cfg.workerId, kind: "sweeper" });
     console.log(JSON.stringify({
       at: "main",
       msg: "artifact lifecycle worker daemon running",
       concurrency: cfg.graphileConcurrency,
     }));
-    return { pool, runner };
+    return { pool, runner, heartbeat };
   } catch (err) {
+    heartbeat?.stop();
+    await runner?.stop().catch(() => undefined);
     await pool.end().catch(() => undefined);
     throw err;
   }

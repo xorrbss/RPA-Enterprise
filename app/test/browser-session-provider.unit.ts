@@ -47,10 +47,13 @@ function caughtSync(fn: () => unknown): unknown {
 
 const INPUT: BrowserSessionBindInput = {
   tenantId: "t1",
+  runId: "run-1",
+  correlationId: "corr-1",
   leaseId: "lease-1",
   siteProfileId: "sp1",
   browserIdentityId: "bid1",
   networkPolicyId: "np1",
+  networkAllowedDomains: ["example.com"],
   isolation: "browser",
   cleanupPolicy: "clear_all",
 };
@@ -97,6 +100,8 @@ async function main(): Promise<void> {
     check("binding.kind === 'real'", provider.binding.kind === "real");
     const bound = await provider.bind(INPUT);
     const session = bound.provider.forLease("lease-1");
+    check("bind installs network guard", (session as FakeCdpSession).networkGuardInstallCalls === 1);
+    check("bind passes run correlation to network guard", (session as FakeCdpSession).lastNetworkGuardPolicy?.correlationId === "corr-1");
     check("bind → forLease(leaseId) returns a live session (FakeCdpSession)", session instanceof FakeCdpSession);
     await bound.release();
   }
@@ -222,6 +227,7 @@ async function main(): Promise<void> {
     const bound = await provider.bind(INPUT);
     const session = bound.provider.forLease("lease-1");
     check("test_fake bind → FakeCdpSession", session instanceof FakeCdpSession);
+    check("test_fake bind installs network guard", (session as FakeCdpSession).networkGuardInstallCalls === 1);
     await bound.release();
     check("test_fake release closes session", (session as FakeCdpSession).closeCalls === 1);
   }

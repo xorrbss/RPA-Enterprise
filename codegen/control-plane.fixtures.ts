@@ -28,6 +28,7 @@ import type {
   AuthenticatedPrincipal,
   CanonicalRequestHash,
   CorrelationId,
+  IdempotencyKey,
   PrincipalId,
   TenantBindingStatement,
   TenantId,
@@ -253,9 +254,13 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
     exception_rate: 0.1,
     hourly_cost: 40000,
     implementation_effort: 3200000,
+    platform_monthly_cost: 0,
+    avoided_license_cost: 0,
     monthly_hours_saved: 14.4,
     estimated_monthly_value: 576000,
+    monthly_value: 576000,
     payback_months: 5.555555555555555,
+    viability: "viable",
     confidence: "medium",
     created_by: "principal-1",
     created_at: "2026-06-13T00:00:00.000Z",
@@ -390,7 +395,15 @@ for (const operationId of [
   "listRunTriggerFires",
   "listOpsAlerts",
   "ackOpsAlert",
+  "listOpsAlertDeliveries",
+  "recordOpsAlertDelivery",
+  "sendOpsAlertWebhookDelivery",
   "getOpsHealth",
+  "getProductionReadiness",
+  "listProductionReadinessEvidence",
+  "recordProductionReadinessEvidence",
+  "listAiGovernanceEvidence",
+  "recordAiGovernanceEvidence",
   "listAutomationIdeas",
   "createAutomationIdea",
   "getAutomationIdea",
@@ -398,10 +411,25 @@ for (const operationId of [
   "transitionAutomationIdea",
   "upsertRoiEstimate",
   "getRoiEstimate",
+  "listRoiActualEvidence",
+  "recordRoiActualEvidence",
+  "listAutomationAdoptionEvidence",
+  "recordAutomationAdoptionEvidence",
   "listAuditLog",
   "exportAuditLog",
   "listConnectors",
   "listTemplates",
+  "listIntegrationHandoffs",
+  "createIntegrationHandoff",
+  "dispatchIntegrationHandoff",
+  "recordIntegrationHandoffCallback",
+  "listDocumentJobs",
+  "createDocumentJob",
+  "getDocumentJob",
+  "extractDocumentJob",
+  "recordExternalDocumentExtraction",
+  "getDocumentExtraction",
+  "createDocumentValidationTask",
   "validateScenario",
   "promoteScenario",
   "promoteScenarioFromRun",
@@ -409,6 +437,9 @@ for (const operationId of [
   "listScenarioVersions",
   "getScenarioVersion",
   "rollbackScenario",
+  "certifyScenarioVersion",
+  "setScenarioVersionGovernanceStage",
+  "revokeScenarioCertification",
   "listHumanTasks",
   "startHumanTask",
   "resolveHumanTask",
@@ -450,14 +481,26 @@ assert.equal(registry.getOperation("createRunTrigger").requiresIdempotencyKey, t
 assert.equal(registry.getOperation("pauseRunTrigger").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("resumeRunTrigger").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("ackOpsAlert").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("recordOpsAlertDelivery").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("sendOpsAlertWebhookDelivery").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("recordProductionReadinessEvidence").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("recordAiGovernanceEvidence").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("createIntegrationHandoff").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("dispatchIntegrationHandoff").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("recordExternalDocumentExtraction").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("createAutomationIdea").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("updateAutomationIdea").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("transitionAutomationIdea").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("upsertRoiEstimate").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("recordRoiActualEvidence").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("recordAutomationAdoptionEvidence").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("archiveScenario").ifMatch?.entity, "scenario_version");
 assert.equal(registry.getOperation("rollbackScenario").ifMatch?.entity, "scenario_version");
 assert.equal(registry.getOperation("archiveScenario").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("rollbackScenario").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("certifyScenarioVersion").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("setScenarioVersionGovernanceStage").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("revokeScenarioCertification").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("createGatewayPolicy").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("updateGatewayPolicy").ifMatch?.entity, "gateway_policy");
 assert.equal(registry.getOperation("deleteGatewayPolicy").ifMatch?.entity, "gateway_policy");
@@ -482,7 +525,15 @@ assert.equal(staticRbacAction("resumeRunTrigger"), "trigger.manage");
 assert.equal(staticRbacAction("listRunTriggerFires"), "trigger.read");
 assert.equal(staticRbacAction("listOpsAlerts"), "ops_alert.read");
 assert.equal(staticRbacAction("ackOpsAlert"), "ops_alert.ack");
+assert.equal(staticRbacAction("listOpsAlertDeliveries"), "ops_alert.read");
+assert.equal(staticRbacAction("recordOpsAlertDelivery"), "ops_alert.deliver");
+assert.equal(staticRbacAction("sendOpsAlertWebhookDelivery"), "ops_alert.deliver");
 assert.equal(staticRbacAction("getOpsHealth"), "ops_alert.read");
+assert.equal(staticRbacAction("getProductionReadiness"), "ops_alert.read");
+assert.equal(staticRbacAction("listProductionReadinessEvidence"), "ops_alert.read");
+assert.equal(staticRbacAction("recordProductionReadinessEvidence"), "ops_readiness.manage");
+assert.equal(staticRbacAction("listAiGovernanceEvidence"), "ai_governance.read");
+assert.equal(staticRbacAction("recordAiGovernanceEvidence"), "ai_governance.manage");
 assert.equal(staticRbacAction("listAutomationIdeas"), "automation_idea.read");
 assert.equal(staticRbacAction("createAutomationIdea"), "automation_idea.manage");
 assert.equal(staticRbacAction("getAutomationIdea"), "automation_idea.read");
@@ -490,10 +541,18 @@ assert.equal(staticRbacAction("updateAutomationIdea"), "automation_idea.manage")
 assert.equal(staticRbacAction("transitionAutomationIdea"), "automation_idea.manage");
 assert.equal(staticRbacAction("upsertRoiEstimate"), "automation_idea.manage");
 assert.equal(staticRbacAction("getRoiEstimate"), "automation_idea.read");
+assert.equal(staticRbacAction("listRoiActualEvidence"), "automation_idea.read");
+assert.equal(staticRbacAction("recordRoiActualEvidence"), "automation_idea.manage");
+assert.equal(staticRbacAction("listAutomationAdoptionEvidence"), "automation_idea.read");
+assert.equal(staticRbacAction("recordAutomationAdoptionEvidence"), "automation_idea.manage");
 assert.equal(staticRbacAction("listAuditLog"), "audit.read");
 assert.equal(staticRbacAction("exportAuditLog"), "audit.read");
 assert.equal(staticRbacAction("listConnectors"), "connector.read");
 assert.equal(staticRbacAction("listTemplates"), "connector.read");
+assert.equal(staticRbacAction("listIntegrationHandoffs"), "integration.handoff");
+assert.equal(staticRbacAction("createIntegrationHandoff"), "integration.handoff");
+assert.equal(staticRbacAction("dispatchIntegrationHandoff"), "integration.handoff");
+assert.equal(staticRbacAction("recordIntegrationHandoffCallback"), "integration.handoff");
 assert.equal(staticRbacAction("validateScenario"), "scenario.read");
 assert.equal(staticRbacAction("promoteScenario"), "scenario.promote");
 assert.equal(staticRbacAction("promoteScenarioFromRun"), "scenario.promote");
@@ -501,6 +560,9 @@ assert.equal(staticRbacAction("archiveScenario"), "scenario.update");
 assert.equal(staticRbacAction("listScenarioVersions"), "scenario.read");
 assert.equal(staticRbacAction("getScenarioVersion"), "scenario.read");
 assert.equal(staticRbacAction("rollbackScenario"), "scenario.update");
+assert.equal(staticRbacAction("certifyScenarioVersion"), "scenario.certify");
+assert.equal(staticRbacAction("setScenarioVersionGovernanceStage"), "scenario.certify");
+assert.equal(staticRbacAction("revokeScenarioCertification"), "scenario.certify");
 assert.equal(staticRbacAction("assignHumanTask"), "human_task.assign");
 assert.equal(staticRbacAction("escalateHumanTask"), "human_task.escalate");
 assert.equal(staticRbacAction("listGatewayPolicies"), "gateway_policy.read");
@@ -508,6 +570,7 @@ assert.equal(staticRbacAction("getGatewayPolicy"), "gateway_policy.read");
 assert.equal(staticRbacAction("createGatewayPolicy"), "gateway_policy.edit");
 assert.equal(staticRbacAction("updateGatewayPolicy"), "gateway_policy.edit");
 assert.equal(staticRbacAction("deleteGatewayPolicy"), "gateway_policy.edit");
+assert.equal(staticRbacAction("recordExternalDocumentExtraction"), "document_job.manage");
 assert.equal(staticRbacAction("listSessionCaptures"), "session.capture");
 assert.equal(staticRbacAction("updateSitePageState"), "site.update");
 assert.equal(staticRbacAction("listSiteElements"), "site.read");
@@ -529,6 +592,36 @@ assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini", tenant_id: "t1" }).valid, false);
 assert.equal(registry.getBodyValidator("promoteScenarioFromRun")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("promoteScenarioFromRun")?.validate({ run_id: "run-completed" }).valid, true);
+assert.equal(registry.getBodyValidator("setScenarioVersionGovernanceStage")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("setScenarioVersionGovernanceStage")?.validate({
+  stage: "pilot",
+  reason: "Pilot charter accepted by CoE approver.",
+  evidence_ref: "ticket:SCN-GOV-123",
+  metadata: { pilot_charter_ref: "artifact:pilot-charter-v1" },
+  legal_hold: true,
+}).valid, true);
+assert.equal(registry.getBodyValidator("setScenarioVersionGovernanceStage")?.validate({
+  stage: "certified",
+  reason: "Must use certify endpoint for prod certification.",
+  evidence_ref: "ticket:SCN-GOV-124",
+}).valid, false);
+assert.equal(registry.getBodyValidator("setScenarioVersionGovernanceStage")?.validate({
+  stage: "pilot",
+  reason: "Contains raw URL https://example.invalid/packet",
+  evidence_ref: "ticket:SCN-GOV-125",
+}).valid, false);
+assert.equal(registry.getBodyValidator("setScenarioVersionGovernanceStage")?.validate({
+  stage: "review",
+  reason: "Review evidence captured.",
+  evidence_ref: "ticket:SCN-GOV-126",
+  metadata: { raw_approval_packet: "inline packet body is forbidden" },
+}).valid, false);
+assert.equal(registry.getBodyValidator("setScenarioVersionGovernanceStage")?.validate({
+  stage: "pilot",
+  reason: "Pilot evidence captured.",
+  evidence_ref: "ticket:SCN-GOV-127",
+  metadata: { password: "plain-text-secret" },
+}).valid, false);
 assert.equal(registry.getBodyValidator("createRunTrigger")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("createRunTrigger")?.validate({
   scenario_version_id: "sv-1",
@@ -561,10 +654,140 @@ assert.equal(registry.getBodyValidator("upsertRoiEstimate")?.validate({
   exception_rate: 0.1,
   hourly_cost: 35000,
   implementation_effort: 1200000,
+  platform_monthly_cost: 250000,
+  avoided_license_cost: 50000,
 }).valid, true);
+assert.equal(registry.getBodyValidator("recordRoiActualEvidence")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("recordRoiActualEvidence")?.validate({
+  period_start: "2026-06-01",
+  period_end: "2026-06-30",
+  actual_transaction_count: 420,
+  actual_failure_rate: 0.07,
+  human_intervention_minutes: 180,
+  reprocessing_minutes: 45,
+  evidence_ref: "ticket:ROI-actual-420",
+  summary: "Pilot actuals reconciled from queue and operator review logs.",
+  metadata: { measurement_method: "pilot_reconciliation" },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordAutomationAdoptionEvidence")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("recordAutomationAdoptionEvidence")?.validate({
+  evidence_type: "pilot_charter_signoff",
+  status: "valid",
+  evidence_at: "2026-06-29T01:00:00.000Z",
+  expires_at: "2026-09-29T01:00:00.000Z",
+  summary: "Pilot charter signed by business and platform owners.",
+  evidence_ref: "ticket:PILOT-123",
+  metadata: { business_owner: "finance-ops", success_criteria_ref: "artifact:pilot-charter-v1" },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordAutomationAdoptionEvidence")?.validate({
+  evidence_type: "raci_signoff",
+  status: "valid",
+  evidence_at: "2026-06-29T01:00:00.000Z",
+  summary: "RACI includes a raw URL https://example.invalid/raci",
+}).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("assignHumanTask")?.validate({ assignee: "reviewer-1" }).valid, true);
 assert.equal(registry.getBodyValidator("ackOpsAlert")?.validate({ comment: "확인 중" }).valid, true);
+assert.equal(registry.getBodyValidator("recordOpsAlertDelivery")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("recordOpsAlertDelivery")?.validate({
+  channel: "teams",
+  provider_alias: "teams-primary",
+  status: "delivered",
+  receipt_id: "teams-receipt-1",
+  receipt_at: "2026-06-29T00:05:00.000Z",
+  endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+  credential_secret_ref: "secret://tenant-a/notification/teams/credential",
+  route_policy_ref: "ops-alerts-primary",
+  recipient_group_ref: "ops-primary-oncall",
+  attempt_no: 1,
+  summary: "Provider delivered the controlled-prod drill alert.",
+  metadata: { provider_region: "ap-northeast-2" },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordOpsAlertDelivery")?.validate({
+  channel: "teams",
+  provider_alias: "teams-primary",
+  status: "delivered",
+  receipt_id: "teams-receipt-1",
+  receipt_at: "2026-06-29T00:05:00.000Z",
+  endpoint_secret_ref: "https://hooks.example.com/real-endpoint",
+  summary: "Provider delivered the controlled-prod drill alert.",
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordOpsAlertDelivery")?.validate({
+  channel: "teams",
+  provider_alias: "teams-primary",
+  status: "delivered",
+  receipt_id: "teams-receipt-1",
+  receipt_at: "2026-06-29T00:05:00.000Z",
+  endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+  summary: "Bearer abcdefghijklmnop",
+}).valid, false);
+assert.equal(registry.getBodyValidator("sendOpsAlertWebhookDelivery")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("sendOpsAlertWebhookDelivery")?.validate({
+  provider_alias: "webhook-primary",
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/primary-endpoint",
+  route_policy_ref: "ops-alerts-primary",
+  recipient_group_ref: "ops-primary-oncall",
+  callback_signature_secret_ref: "secret://tenant-a/notification/webhook/callback-signing",
+  allowed_hosts: ["alerts.example.com"],
+  summary: "Send controlled-prod drill alert through the webhook provider.",
+  metadata: { callback_contract: "ops-notification-callback-v1" },
+}).valid, true);
+assert.equal(registry.getBodyValidator("sendOpsAlertWebhookDelivery")?.validate({
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/primary-endpoint",
+  route_policy_ref: "ops-alerts-primary",
+  callback_signature_secret_ref: "plain-secret-value",
+  allowed_hosts: ["alerts.example.com"],
+}).valid, false);
+assert.equal(registry.getBodyValidator("sendOpsAlertWebhookDelivery")?.validate({
+  endpoint_secret_ref: "https://hooks.example.com/services/T000",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["alerts.example.com"],
+}).valid, false);
+assert.equal(registry.getBodyValidator("sendOpsAlertWebhookDelivery")?.validate({
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/primary-endpoint",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["https://hooks.example.com/services/T000"],
+}).valid, false);
+assert.equal(registry.getBodyValidator("sendOpsAlertWebhookDelivery")?.validate({
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/primary-endpoint",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["alerts.example.com"],
+  metadata: { endpoint_url: "https://hooks.example.com/services/T000" },
+}).valid, false);
+assert.equal(registry.getBodyValidator("createIntegrationHandoff")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createIntegrationHandoff")?.validate({
+  provider_alias: "uipath-primary",
+  job_ref: "queue:invoice-posting",
+  payload_ref: "artifact://handoff/invoice-posting-001",
+  callback_url_secret_ref: "secret://tenant-a/integration/uipath/callback-url",
+  callback_signature_secret_ref: "secret://tenant-a/integration/uipath/callback-signing",
+}).valid, true);
+assert.equal(registry.getBodyValidator("dispatchIntegrationHandoff")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("dispatchIntegrationHandoff")?.validate({
+  endpoint_secret_ref: "secret://tenant-a/integration/uipath/dispatch-endpoint",
+  allowed_hosts: ["uipath.example.com"],
+  max_attempts: 3,
+  metadata: { source: "fixture" },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordIntegrationHandoffCallback")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("recordIntegrationHandoffCallback")?.validate({
+  external_job_id: "job-123",
+  status: "completed",
+  receipt_id: "receipt-123",
+}).valid, true);
+assert.equal(registry.getBodyValidator("createDocumentJob")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createDocumentJob")?.validate({
+  source_artifact_id: "artifact-1",
+  document_type: "invoice",
+  field_schema: [{ key: "invoice_id", required: true }],
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordExternalDocumentExtraction")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("recordExternalDocumentExtraction")?.validate({
+  provider_alias: "external-idp",
+  receipt_id: "receipt-1",
+  normalized_schema_ref: "document-extraction/invoice@1",
+  fields: [{ key: "invoice_id", value: "INV-1", confidence: 0.98 }],
+}).valid, true);
 assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
 assert.equal(registry.getBodyValidator("createGatewayPolicy")?.validate({ model: "codex", capabilities: {}, budget: {} }).valid, true);
 assert.equal(registry.getBodyValidator("updateGatewayPolicy")?.validate({ budget: { maxCost: 1 } }).valid, false);
@@ -584,6 +807,323 @@ assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate
 assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "click", selector: "button" }] }).valid, true);
 assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "navigate", url: "https://portal.example.test/form" }] }).valid, true);
 assert.equal(registry.getBodyValidator("appendBrowserRecordingEvents")?.validate({ events: [{ event_type: "select", selector: "select[name=status]", value_preview: "approved" }] }).valid, true);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "external_alert_delivery",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "External delivery drill receipt verified.",
+  evidence_ref: "ticket:OPS-123",
+  metadata: {
+    channel: "teams",
+    provider_alias: "teams-primary",
+    receipt_id: "receipt-123",
+    receipt_at: "2026-06-29T00:05:30.000Z",
+    delivery_status: "delivered",
+  },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordAiGovernanceEvidence")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("recordAiGovernanceEvidence")?.validate({
+  evidence_type: "model_registry",
+  subject_ref: "model:codex-prod-primary",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "Model registry approval recorded.",
+  evidence_ref: "artifact:ai-model-registry",
+  policy_decision_ref: "policy-decision:ai-model-approval",
+  audit_correlation_id: "85000000-0000-4000-8000-0000000000a1",
+  metadata: {
+    provider_alias: "openai-approved",
+    model_alias: "codex-prod-primary",
+    model_version: "2026-06-approved",
+    risk_tier: "medium",
+    data_retention_policy_ref: "policy:data-retention-standard",
+    tenant_allowlist_ref: "allowlist:tenant-a-ai",
+    approved_at: "2026-06-29T00:05:00.000Z",
+  },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordAiGovernanceEvidence")?.validate({
+  evidence_type: "model_registry",
+  subject_ref: "model:codex-prod-primary",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "Model registry approval missing type metadata.",
+  evidence_ref: "artifact:ai-model-registry",
+  policy_decision_ref: "policy-decision:ai-model-approval",
+  audit_correlation_id: "85000000-0000-4000-8000-0000000000a1",
+  metadata: {},
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordAiGovernanceEvidence")?.validate({
+  evidence_type: "model_registry",
+  subject_ref: "model:codex-prod-primary",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "Model registry approval missing audit linkage.",
+  evidence_ref: "artifact:ai-model-registry",
+  policy_decision_ref: "policy-decision:ai-model-approval",
+  metadata: {},
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordAiGovernanceEvidence")?.validate({
+  evidence_type: "prompt_registry",
+  subject_ref: "prompt:invoice-extract:v12",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "Prompt approval with raw text should be rejected.",
+  evidence_ref: "artifact:ai-prompt-registry",
+  policy_decision_ref: "policy-decision:prompt-approval",
+  audit_correlation_id: "85000000-0000-4000-8000-0000000000a1",
+  metadata: { raw_prompt: "unredacted prompt" },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordAiGovernanceEvidence")?.validate({
+  evidence_type: "model_registry",
+  subject_ref: "model:codex-prod-primary",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "authorization: Basic abcdefghijklmnop",
+  evidence_ref: "artifact:ai-model-registry",
+  policy_decision_ref: "policy-decision:ai-model-approval",
+  audit_correlation_id: "85000000-0000-4000-8000-0000000000a1",
+  metadata: {
+    provider_alias: "openai-approved",
+    model_alias: "codex-prod-primary",
+    model_version: "2026-06-approved",
+    risk_tier: "medium",
+    data_retention_policy_ref: "policy:data-retention-standard",
+    tenant_allowlist_ref: "allowlist:tenant-a-ai",
+    approved_at: "2026-06-29T00:05:00.000Z",
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordAiGovernanceEvidence")?.validate({
+  evidence_type: "eval_result",
+  subject_ref: "prompt:invoice-extract:v12",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "Eval failed a required safety check.",
+  evidence_ref: "artifact:ai-eval-suite",
+  policy_decision_ref: "policy-decision:prompt-eval",
+  audit_correlation_id: "85000000-0000-4000-8000-0000000000a1",
+  metadata: {
+    eval_suite_ref: "eval-suite:prompt-safety",
+    dataset_ref: "dataset:redacted-fixtures",
+    sampled_at: "2026-06-29T00:05:00.000Z",
+    pass_rate: 0.99,
+    prompt_injection_passed: true,
+    data_leakage_passed: false,
+    hallucination_passed: true,
+    policy_block_passed: true,
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "external_alert_delivery",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  summary: "External delivery drill receipt without expiry should be rejected.",
+  evidence_ref: "ticket:OPS-124",
+  metadata: {
+    channel: "teams",
+    provider_alias: "teams-primary",
+    receipt_id: "receipt-124",
+    receipt_at: "2026-06-29T00:05:30.000Z",
+    delivery_status: "delivered",
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "external_alert_delivery",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "External delivery drill receipt with sent status should be rejected.",
+  evidence_ref: "ticket:OPS-125",
+  metadata: {
+    channel: "teams",
+    provider_alias: "teams-primary",
+    receipt_id: "receipt-125",
+    receipt_at: "2026-06-29T00:05:30.000Z",
+    delivery_status: "sent",
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "external_alert_delivery",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "External delivery drill receipt without evidence ref should be rejected.",
+  metadata: {
+    channel: "teams",
+    provider_alias: "teams-primary",
+    receipt_id: "receipt-126",
+    receipt_at: "2026-06-29T00:05:30.000Z",
+    delivery_status: "delivered",
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "external_alert_delivery",
+  status: "valid",
+  evidence_at: "2026-06-29T00:05:00.000Z",
+  expires_at: "2026-09-29T00:05:00.000Z",
+  summary: "Should reject https://hooks.example.invalid/path?token=plain",
+  evidence_ref: "ticket:OPS-127",
+  metadata: {
+    channel: "webhook",
+    provider_alias: "webhook-primary",
+    receipt_id: "receipt-127",
+    receipt_at: "2026-06-29T00:05:30.000Z",
+    delivery_status: "delivered",
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "managed_backup_restore_drill",
+  status: "valid",
+  evidence_at: "2026-06-29T00:10:00.000Z",
+  expires_at: "2026-09-29T00:10:00.000Z",
+  summary: "Managed backup PITR restore drill completed within target.",
+  evidence_ref: "drill:PITR-2026-06-29",
+  metadata: {
+    backup_policy_ref: "backup-policy:managed-pg-prod",
+    restore_scope: "tenant-a-control-plane",
+    restore_completed_at: "2026-06-29T00:30:00.000Z",
+    rto_minutes: 20,
+    rpo_minutes: 5,
+  },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "managed_backup_restore_drill",
+  status: "valid",
+  evidence_at: "2026-06-29T00:10:00.000Z",
+  expires_at: "2026-09-29T00:10:00.000Z",
+  summary: "Managed backup restore exceeded the controlled-prod RPO target.",
+  evidence_ref: "drill:PITR-2026-06-30",
+  metadata: {
+    backup_policy_ref: "backup-policy:managed-pg-prod",
+    restore_scope: "tenant-a-control-plane",
+    restore_completed_at: "2026-06-29T00:30:00.000Z",
+    rto_minutes: 20,
+    rpo_minutes: 30,
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "slo_oncall_signoff",
+  status: "valid",
+  evidence_at: "2026-06-29T00:15:00.000Z",
+  expires_at: "2026-09-29T00:15:00.000Z",
+  summary: "SLO dashboard and on-call RACI sign-off verified.",
+  evidence_ref: "ticket:SRE-456",
+  metadata: {
+    slo_dashboard: "grafana-folder-rpa",
+    severity_model: "sev1-sev4",
+    oncall_rota: "primary-secondary",
+    raci_ref: "raci:SRE-RPA",
+    support_hours: "24x7",
+  },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "slo_oncall_signoff",
+  status: "valid",
+  evidence_at: "2026-06-29T00:15:00.000Z",
+  expires_at: "2026-09-29T00:15:00.000Z",
+  summary: "SLO dashboard without on-call rota should not be enough.",
+  evidence_ref: "ticket:SRE-457",
+  metadata: { slo_dashboard: "grafana-folder-rpa", severity_model: "sev1-sev4" },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "support_training_completion",
+  status: "valid",
+  evidence_at: "2026-06-29T00:15:30.000Z",
+  expires_at: "2026-09-29T00:15:30.000Z",
+  summary: "Support model and training completion coverage verified.",
+  evidence_ref: "ticket:SUPPORT-TRAINING-456",
+  metadata: {
+    support_model_ref: "support-model:RPA-L1-L2-L3",
+    training_completion_ref: "training:controlled-prod-2026-06",
+    trained_role_count: 4,
+    trained_user_count: 12,
+    coverage_percent: 100,
+    completed_at: "2026-06-29T00:15:00.000Z",
+  },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "support_training_completion",
+  status: "valid",
+  evidence_at: "2026-06-29T00:15:30.000Z",
+  expires_at: "2026-09-29T00:15:30.000Z",
+  summary: "Support training evidence without completion ref should be rejected.",
+  evidence_ref: "ticket:SUPPORT-TRAINING-457",
+  metadata: {
+    support_model_ref: "support-model:RPA-L1-L2-L3",
+    trained_role_count: 4,
+    trained_user_count: 12,
+    coverage_percent: 100,
+    completed_at: "2026-06-29T00:15:00.000Z",
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "support_training_completion",
+  status: "valid",
+  evidence_at: "2026-06-29T00:15:30.000Z",
+  expires_at: "2026-09-29T00:15:30.000Z",
+  summary: "Support training evidence with raw roster rows should be rejected.",
+  evidence_ref: "ticket:SUPPORT-TRAINING-458",
+  metadata: {
+    support_model_ref: "support-model:RPA-L1-L2-L3",
+    training_completion_ref: "training:controlled-prod-2026-06",
+    trained_role_count: 4,
+    trained_user_count: 12,
+    coverage_percent: 100,
+    completed_at: "2026-06-29T00:15:00.000Z",
+    raw_roster_rows: "alice@example.test,bob@example.test",
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "observability_telemetry_wiring",
+  status: "valid",
+  evidence_at: "2026-06-29T00:16:00.000Z",
+  expires_at: "2026-09-29T00:16:00.000Z",
+  summary: "OTLP collector and alert route evidence approved.",
+  evidence_ref: "ticket:OBS-124",
+  metadata: {
+    exporter: "otlp",
+    collector_ref: "otel-collector:rpa-prod",
+    dashboard_ref: "grafana-folder-rpa",
+    alert_route_ref: "alert-route:rpa-sev",
+    sampled_at: "2026-06-29T00:16:30.000Z",
+  },
+}).valid, true);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "observability_telemetry_wiring",
+  status: "valid",
+  evidence_at: "2026-06-29T00:16:00.000Z",
+  expires_at: "2026-09-29T00:16:00.000Z",
+  summary: "Telemetry evidence without alert route should be rejected.",
+  evidence_ref: "ticket:OBS-125",
+  metadata: {
+    exporter: "otlp",
+    collector_ref: "otel-collector:rpa-prod",
+    dashboard_ref: "grafana-folder-rpa",
+    sampled_at: "2026-06-29T00:16:30.000Z",
+  },
+}).valid, false);
+assert.equal(registry.getBodyValidator("recordProductionReadinessEvidence")?.validate({
+  evidence_type: "observability_telemetry_wiring",
+  status: "valid",
+  evidence_at: "2026-06-29T00:16:00.000Z",
+  expires_at: "2026-09-29T00:16:00.000Z",
+  summary: "Telemetry evidence with console-only exporter should be rejected.",
+  evidence_ref: "ticket:OBS-126",
+  metadata: {
+    exporter: "console",
+    collector_ref: "otel-collector:rpa-prod",
+    dashboard_ref: "grafana-folder-rpa",
+    alert_route_ref: "alert-route:rpa-sev",
+    sampled_at: "2026-06-29T00:16:30.000Z",
+  },
+}).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({}).valid, false);
 assert.equal(registry.getParamsValidator("getRun")?.validate({ run_id: "run-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("listRunSteps")?.validate({ run_id: "run-existing" }).valid, true);
@@ -593,6 +1133,10 @@ assert.equal(registry.getParamsValidator("getRunTrigger")?.validate({ trigger_id
 assert.equal(registry.getParamsValidator("listRunTriggerFires")?.validate({ trigger_id: "trigger-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("getAutomationIdea")?.validate({ idea_id: "idea-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("getRoiEstimate")?.validate({ idea_id: "idea-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("listRoiActualEvidence")?.validate({ idea_id: "idea-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("recordRoiActualEvidence")?.validate({ idea_id: "idea-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("listAutomationAdoptionEvidence")?.validate({ idea_id: "idea-existing" }).valid, true);
+assert.equal(registry.getParamsValidator("recordAutomationAdoptionEvidence")?.validate({ idea_id: "idea-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("assignHumanTask")?.validate({ human_task_id: "task-open" }).valid, true);
 assert.equal(registry.getParamsValidator("listSessionCaptures")?.validate({ site_profile_id: "site-red" }).valid, true);
 assert.equal(registry.getParamsValidator("updateSitePageState")?.validate({ site_profile_id: "site-red" }).valid, true);
@@ -602,13 +1146,29 @@ assert.equal(registry.getParamsValidator("probeSiteElement")?.validate({ site_pr
 assert.equal(registry.getParamsValidator("listBrowserRecordings")?.validate({ site_profile_id: "site-red" }).valid, true);
 assert.equal(registry.getParamsValidator("appendBrowserRecordingEvents")?.validate({ site_profile_id: "site-red", recording_session_id: "recording-existing" }).valid, true);
 assert.equal(registry.getParamsValidator("ackOpsAlert")?.validate({ alert_id: "bot_pool:browser-default" }).valid, true);
+assert.equal(registry.getParamsValidator("listOpsAlertDeliveries")?.validate({ alert_id: "bot_pool:browser-default" }).valid, true);
+assert.equal(registry.getParamsValidator("recordOpsAlertDelivery")?.validate({ alert_id: "bot_pool:browser-default" }).valid, true);
+assert.equal(registry.getParamsValidator("sendOpsAlertWebhookDelivery")?.validate({ alert_id: "bot_pool:browser-default" }).valid, true);
+assert.equal(registry.getParamsValidator("dispatchIntegrationHandoff")?.validate({ handoff_id: "00000000-0000-4000-8000-0000000000a1" }).valid, true);
+assert.equal(registry.getParamsValidator("recordIntegrationHandoffCallback")?.validate({ handoff_id: "00000000-0000-4000-8000-0000000000a1" }).valid, true);
+assert.equal(registry.getParamsValidator("recordExternalDocumentExtraction")?.validate({ job_id: "00000000-0000-4000-8000-0000000000d1" }).valid, true);
 assert.equal(registry.getQueryValidator("listRuns")?.validate(undefined).valid, false);
 assert.equal(registry.getQueryValidator("listRunTriggers")?.validate({ status: "enabled" }).valid, true);
 assert.equal(registry.getQueryValidator("listRunTriggerFires")?.validate({}).valid, true);
 assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ severity: "critical", source: "run_sla" }).valid, true);
 assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ severity: "warning", source: "failure_spike" }).valid, true);
 assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ source: "bot_pool", status: "acknowledged" }).valid, true);
+assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ source: "audit_verifier", status: "open" }).valid, true);
+assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ source: "readiness_evidence", status: "open" }).valid, true);
+assert.equal(registry.getQueryValidator("listOpsAlertDeliveries")?.validate({ limit: 10 }).valid, true);
+assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "external_alert_delivery", limit: 10 }).valid, true);
+assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "managed_backup_restore_drill", limit: 10 }).valid, true);
+assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "slo_oncall_signoff", limit: 10 }).valid, true);
+assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "observability_telemetry_wiring", limit: 10 }).valid, true);
+assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "support_training_completion", limit: 10 }).valid, true);
+assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "support_training_roster", limit: 10 }).valid, false);
 assert.equal(registry.getQueryValidator("listAutomationIdeas")?.validate({ stage: "intake" }).valid, true);
+assert.equal(registry.getQueryValidator("listAutomationAdoptionEvidence")?.validate({ evidence_type: "training_completion", limit: 10 }).valid, true);
 assert.equal(registry.getQueryValidator("listAuditLog")?.validate({ action: "artifact.read", outcome: "allow" }).valid, true);
 assert.equal(registry.getQueryValidator("exportAuditLog")?.validate({ action: "artifact.read", outcome: "allow", format: "csv" }).valid, true);
 assert.equal(registry.getQueryValidator("listConnectors")?.validate({ kind: "browser", status: "candidate" }).valid, true);
@@ -734,11 +1294,198 @@ const alertAcked = await handlers.ackOpsAlert!(ctx("ackOpsAlert", {
 }));
 assert.equal((alertAcked.body as { status: string }).status, "acknowledged");
 assert.equal((alertAcked.body as { source: string }).source, "bot_pool");
+const alertDeliveries = await handlers.listOpsAlertDeliveries!(ctx("listOpsAlertDeliveries", {
+  method: "GET",
+  path: "/v1/ops-alerts/{alert_id}/deliveries",
+  params: { alert_id: "bot_pool:browser-default" },
+  query: { limit: "10" },
+}));
+assert.equal((alertDeliveries.body as { items: unknown[] }).items.length, 0);
+const alertDeliveryRecorded = await handlers.recordOpsAlertDelivery!(ctx("recordOpsAlertDelivery", {
+  method: "POST",
+  path: "/v1/ops-alerts/{alert_id}/deliveries",
+  params: { alert_id: "bot_pool:browser-default" },
+  body: {
+    channel: "teams",
+    provider_alias: "teams-primary",
+    status: "delivered",
+    receipt_id: "teams-receipt-1",
+    receipt_at: "2026-06-29T00:05:00.000Z",
+    endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+    credential_secret_ref: "secret://tenant-a/notification/teams/credential",
+    route_policy_ref: "ops-alerts-primary",
+    recipient_group_ref: "ops-primary-oncall",
+    summary: "Provider delivered the controlled-prod drill alert.",
+    metadata: { provider_region: "ap-northeast-2" },
+  },
+}));
+assert.equal(alertDeliveryRecorded.status, 201);
+assert.equal((alertDeliveryRecorded.body as { status: string }).status, "delivered");
+assert.equal((alertDeliveryRecorded.body as { recipient_group_ref: string }).recipient_group_ref, "ops-primary-oncall");
+const alertWebhookQueued = await handlers.sendOpsAlertWebhookDelivery!(ctx("sendOpsAlertWebhookDelivery", {
+  method: "POST",
+  path: "/v1/ops-alerts/{alert_id}/deliveries/send-webhook",
+  params: { alert_id: "bot_pool:browser-default" },
+  body: {
+    provider_alias: "webhook-primary",
+    endpoint_secret_ref: "secret://tenant-a/notification/webhook/primary-endpoint",
+    route_policy_ref: "ops-alerts-primary",
+    recipient_group_ref: "ops-primary-oncall",
+    callback_signature_secret_ref: "secret://tenant-a/notification/webhook/callback-signing",
+    allowed_hosts: ["alerts.example.com"],
+    summary: "Send controlled-prod drill alert through the webhook provider.",
+    metadata: { callback_contract: "ops-notification-callback-v1" },
+  },
+}));
+assert.equal(alertWebhookQueued.status, 202);
+assert.equal((alertWebhookQueued.body as { status: string }).status, "pending");
+assert.equal((alertWebhookQueued.body as { callback_signature_secret_ref: string }).callback_signature_secret_ref, "secret://tenant-a/notification/webhook/callback-signing");
 const opsHealth = await handlers.getOpsHealth!(ctx("getOpsHealth", {
   method: "GET",
   path: "/v1/ops/health",
 }));
 assert.equal((opsHealth.body as { status: string }).status, "ok");
+const productionReadiness = await handlers.getProductionReadiness!(ctx("getProductionReadiness", {
+  method: "GET",
+  path: "/v1/ops/production-readiness",
+}));
+assert.equal((productionReadiness.body as { status: string }).status, "blocked");
+assert.equal((productionReadiness.body as { summary: { controlled_prod_ready: boolean } }).summary.controlled_prod_ready, false);
+assert.equal((productionReadiness.body as { summary: { deferred_count: number } }).summary.deferred_count, 5);
+assert.ok((productionReadiness.body as { gates: Array<{ gate_id: string }> }).gates.some((gate) => gate.gate_id === "support_training_completion"));
+const readinessEvidenceList = await handlers.listProductionReadinessEvidence!(ctx("listProductionReadinessEvidence", {
+  method: "GET",
+  path: "/v1/ops/production-readiness/evidence",
+  query: { evidence_type: "external_alert_delivery", limit: "10" },
+}));
+assert.equal((readinessEvidenceList.body as { items: unknown[] }).items.length, 0);
+const readinessEvidenceRecorded = await handlers.recordProductionReadinessEvidence!(ctx("recordProductionReadinessEvidence", {
+  method: "POST",
+  path: "/v1/ops/production-readiness/evidence",
+  body: {
+    evidence_type: "external_alert_delivery",
+    status: "valid",
+    evidence_at: "2026-06-29T00:05:00.000Z",
+    expires_at: "2026-09-29T00:05:00.000Z",
+    summary: "External delivery drill receipt verified.",
+    evidence_ref: "ticket:OPS-123",
+    metadata: {
+      channel: "teams",
+      provider_alias: "teams-primary",
+      receipt_id: "receipt-123",
+      receipt_at: "2026-06-29T00:05:30.000Z",
+      delivery_status: "delivered",
+    },
+  },
+}));
+assert.equal(readinessEvidenceRecorded.status, 201);
+assert.equal((readinessEvidenceRecorded.body as { evidence_type: string }).evidence_type, "external_alert_delivery");
+const supportReadinessEvidenceRecorded = await handlers.recordProductionReadinessEvidence!(ctx("recordProductionReadinessEvidence", {
+  method: "POST",
+  path: "/v1/ops/production-readiness/evidence",
+  body: {
+    evidence_type: "support_training_completion",
+    status: "valid",
+    evidence_at: "2026-06-29T00:15:30.000Z",
+    expires_at: "2026-09-29T00:15:30.000Z",
+    summary: "Support model and training completion coverage verified.",
+    evidence_ref: "ticket:SUPPORT-TRAINING-456",
+    metadata: {
+      support_model_ref: "support-model:RPA-L1-L2-L3",
+      training_completion_ref: "training:controlled-prod-2026-06",
+      trained_role_count: 4,
+      trained_user_count: 12,
+      coverage_percent: 100,
+      completed_at: "2026-06-29T00:15:00.000Z",
+    },
+  },
+}));
+assert.equal(supportReadinessEvidenceRecorded.status, 201);
+assert.equal((supportReadinessEvidenceRecorded.body as { evidence_type: string }).evidence_type, "support_training_completion");
+
+const aiGovernanceEvidenceList = await handlers.listAiGovernanceEvidence!(ctx("listAiGovernanceEvidence", {
+  method: "GET",
+  path: "/v1/ai-governance/evidence",
+  query: { evidence_type: "model_registry", status: "valid", limit: "10" },
+}));
+assert.equal((aiGovernanceEvidenceList.body as { items: unknown[] }).items.length, 0);
+const aiGovernanceEvidenceRecorded = await handlers.recordAiGovernanceEvidence!(ctx("recordAiGovernanceEvidence", {
+  method: "POST",
+  path: "/v1/ai-governance/evidence",
+  body: {
+    evidence_type: "model_registry",
+    subject_ref: "model:codex-prod-primary",
+    status: "valid",
+    evidence_at: "2026-06-29T00:20:00.000Z",
+    expires_at: "2026-09-29T00:20:00.000Z",
+    summary: "Model registry approval recorded.",
+    evidence_ref: "artifact:ai-model-registry",
+    policy_decision_ref: "policy-decision:ai-model-approval",
+    audit_correlation_id: "85000000-0000-4000-8000-0000000000a1",
+    metadata: {
+      provider_alias: "openai-approved",
+      model_alias: "codex-prod-primary",
+      model_version: "2026-06-approved",
+      risk_tier: "medium",
+      data_retention_policy_ref: "policy:data-retention-standard",
+      tenant_allowlist_ref: "allowlist:tenant-a-ai",
+      approved_at: "2026-06-29T00:20:00.000Z",
+    },
+  },
+}));
+assert.equal(aiGovernanceEvidenceRecorded.status, 201);
+assert.equal((aiGovernanceEvidenceRecorded.body as { evidence_type: string }).evidence_type, "model_registry");
+assert.equal((aiGovernanceEvidenceRecorded.body as { policy_decision_ref: string }).policy_decision_ref, "policy-decision:ai-model-approval");
+
+const handoffCreated = await handlers.createIntegrationHandoff!(ctx("createIntegrationHandoff", {
+  method: "POST",
+  path: "/v1/integration-handoffs",
+  headers: { "idempotency-key": "handoff-fixture-1" as IdempotencyKey },
+  body: {
+    provider_alias: "uipath-primary",
+    job_ref: "queue:invoice-posting",
+    payload_ref: "artifact://handoff/invoice-posting-001",
+    callback_url_secret_ref: "secret://tenant-a/integration/uipath/callback-url",
+    callback_signature_secret_ref: "secret://tenant-a/integration/uipath/callback-signing",
+  },
+}));
+assert.equal(handoffCreated.status, 202);
+assert.equal((handoffCreated.body as { status: string }).status, "deferred");
+assert.equal((handoffCreated.body as { request_idempotency_key: string }).request_idempotency_key, "handoff-fixture-1");
+assert.equal((handoffCreated.body as { callback_signature_secret_ref: string }).callback_signature_secret_ref, "secret://tenant-a/integration/uipath/callback-signing");
+const handoffList = await handlers.listIntegrationHandoffs!(ctx("listIntegrationHandoffs", {
+  method: "GET",
+  path: "/v1/integration-handoffs",
+  query: { provider_alias: "uipath-primary", limit: "10" },
+}));
+assert.equal((handoffList.body as { items: unknown[] }).items.length, 1);
+const handoffDispatch = await handlers.dispatchIntegrationHandoff!(ctx("dispatchIntegrationHandoff", {
+  method: "POST",
+  path: "/v1/integration-handoffs/{handoff_id}/dispatch",
+  headers: { "idempotency-key": "handoff-dispatch-fixture-1" as IdempotencyKey },
+  params: { handoff_id: (handoffCreated.body as { handoff_id: string }).handoff_id },
+  body: {
+    endpoint_secret_ref: "secret://tenant-a/integration/uipath/dispatch-endpoint",
+    allowed_hosts: ["uipath.example.com"],
+    max_attempts: 3,
+  },
+}));
+assert.equal(handoffDispatch.status, 202);
+assert.equal((handoffDispatch.body as { status: string }).status, "pending");
+assert.equal((handoffDispatch.body as { request_idempotency_key: string }).request_idempotency_key, "handoff-dispatch-fixture-1");
+const handoffReceipt = await handlers.recordIntegrationHandoffCallback!(ctx("recordIntegrationHandoffCallback", {
+  method: "POST",
+  path: "/v1/integration-handoffs/{handoff_id}/callback",
+  params: { handoff_id: (handoffCreated.body as { handoff_id: string }).handoff_id },
+  body: {
+    external_job_id: "uipath-job-123",
+    status: "completed",
+    receipt_id: "uipath-receipt-123",
+  },
+}));
+assert.equal(handoffReceipt.status, 200);
+assert.equal((handoffReceipt.body as { status: string }).status, "completed");
+assert.equal((handoffReceipt.body as { latest_receipt_id: string }).latest_receipt_id, "uipath-receipt-123");
 
 const ideaList = await handlers.listAutomationIdeas!(ctx("listAutomationIdeas", {
   method: "GET",
@@ -777,17 +1524,71 @@ const roiEstimate = await handlers.upsertRoiEstimate!(ctx("upsertRoiEstimate", {
     exception_rate: 0.1,
     hourly_cost: 40000,
     implementation_effort: 3200000,
+    platform_monthly_cost: 700000,
+    avoided_license_cost: 240000,
     confidence: "medium",
   },
 }));
 assert.equal(roiEstimate.status, 200);
 assert.equal((roiEstimate.body as { monthly_hours_saved: number }).monthly_hours_saved, 14.4);
+assert.equal((roiEstimate.body as { monthly_value: number }).monthly_value, 116000);
+assert.equal((roiEstimate.body as { viability: string }).viability, "viable");
 const roiFetched = await handlers.getRoiEstimate!(ctx("getRoiEstimate", {
   method: "GET",
   path: "/v1/automation-ideas/{idea_id}/roi-estimate",
   params: { idea_id: ideaId },
 }));
 assert.equal((roiFetched.body as { estimated_monthly_value: number }).estimated_monthly_value, 576000);
+const roiActual = await handlers.recordRoiActualEvidence!(ctx("recordRoiActualEvidence", {
+  method: "POST",
+  path: "/v1/automation-ideas/{idea_id}/roi-actuals",
+  params: { idea_id: ideaId },
+  body: {
+    period_start: "2026-06-01",
+    period_end: "2026-06-30",
+    actual_transaction_count: 420,
+    actual_failure_rate: 0.07,
+    human_intervention_minutes: 180,
+    reprocessing_minutes: 45,
+    evidence_ref: "ticket:ROI-actual-420",
+    summary: "Pilot actuals reconciled from queue and operator review logs.",
+    metadata: { measurement_method: "pilot_reconciliation" },
+  },
+}));
+assert.equal(roiActual.status, 201);
+assert.equal((roiActual.body as { actual_transaction_count: number }).actual_transaction_count, 420);
+const roiActualList = await handlers.listRoiActualEvidence!(ctx("listRoiActualEvidence", {
+  method: "GET",
+  path: "/v1/automation-ideas/{idea_id}/roi-actuals",
+  params: { idea_id: ideaId },
+}));
+assert.equal((roiActualList.body as { items: unknown[] }).items.length, 1);
+const adoptionEvidence = await handlers.recordAutomationAdoptionEvidence!(ctx("recordAutomationAdoptionEvidence", {
+  method: "POST",
+  path: "/v1/automation-ideas/{idea_id}/adoption-evidence",
+  headers: { "idempotency-key": "adoption-evidence-fixture-1" as IdempotencyKey },
+  params: { idea_id: ideaId },
+  body: {
+    evidence_type: "support_model_signoff",
+    status: "valid",
+    evidence_at: "2026-06-29T01:00:00.000Z",
+    expires_at: "2026-09-29T01:00:00.000Z",
+    summary: "Support model signed off by L1/L2/L3 owners.",
+    evidence_ref: "ticket:SUPPORT-321",
+    metadata: { support_hours: "business-hours", l2_owner: "automation-coe" },
+  },
+}));
+assert.equal(adoptionEvidence.status, 201);
+assert.equal((adoptionEvidence.body as { idea_id: string }).idea_id, ideaId);
+assert.equal((adoptionEvidence.body as { evidence_type: string }).evidence_type, "support_model_signoff");
+assert.equal("tenant_id" in (adoptionEvidence.body as Record<string, unknown>), false);
+const adoptionEvidenceList = await handlers.listAutomationAdoptionEvidence!(ctx("listAutomationAdoptionEvidence", {
+  method: "GET",
+  path: "/v1/automation-ideas/{idea_id}/adoption-evidence",
+  params: { idea_id: ideaId },
+  query: { evidence_type: "support_model_signoff" },
+}));
+assert.equal((adoptionEvidenceList.body as { items: unknown[] }).items.length, 1);
 const auditList = await handlers.listAuditLog!(ctx("listAuditLog", {
   method: "GET",
   path: "/v1/audit-log",
@@ -939,6 +1740,53 @@ const scenarioVersion = await handlers.getScenarioVersion!(ctx("getScenarioVersi
   params: { scenario_id: "scenario-1", version: "1" },
 }));
 assert.equal(scenarioVersion.headers?.ETag, "1");
+
+const pilotGovernance = await handlers.setScenarioVersionGovernanceStage!(ctx("setScenarioVersionGovernanceStage", {
+  method: "POST",
+  path: "/v1/scenarios/{scenario_id}/versions/{version}/governance-stage",
+  params: { scenario_id: "scenario-1", version: "1" },
+  body: {
+    stage: "pilot",
+    reason: "Pilot charter accepted by CoE approver.",
+    evidence_ref: "ticket:SCN-GOV-123",
+    metadata: { pilot_charter_ref: "artifact:pilot-charter-v1" },
+  },
+}));
+const pilotCertification = (pilotGovernance.body as { certification: Record<string, unknown> }).certification;
+assert.equal(pilotCertification.governance_stage, "pilot");
+assert.equal(pilotCertification.governance_reason, "Pilot charter accepted by CoE approver.");
+assert.equal(pilotCertification.governance_evidence_ref, "ticket:SCN-GOV-123");
+assert.equal(pilotCertification.status, "uncertified");
+assert.equal(pilotCertification.valid_for_prod, false, "pilot governance stage is not a prod certification");
+
+const scenarioVersionAfterGovernance = await handlers.getScenarioVersion!(ctx("getScenarioVersion", {
+  method: "GET",
+  path: "/v1/scenarios/{scenario_id}/versions/{version}",
+  params: { scenario_id: "scenario-1", version: "1" },
+}));
+assert.equal((scenarioVersionAfterGovernance.body as { certification: Record<string, unknown> }).certification.governance_stage, "pilot");
+
+const certifiedScenarioVersion = await handlers.certifyScenarioVersion!(ctx("certifyScenarioVersion", {
+  method: "POST",
+  path: "/v1/scenarios/{scenario_id}/versions/{version}/certify",
+  params: { scenario_id: "scenario-1", version: "1" },
+  body: { reason: "Controlled-prod certification packet accepted." },
+}));
+const certifiedCertification = (certifiedScenarioVersion.body as { certification: Record<string, unknown> }).certification;
+assert.equal(certifiedCertification.status, "certified");
+assert.equal(certifiedCertification.governance_stage, "certified");
+assert.equal(certifiedCertification.valid_for_prod, true);
+
+const revokedScenarioVersion = await handlers.revokeScenarioCertification!(ctx("revokeScenarioCertification", {
+  method: "POST",
+  path: "/v1/scenarios/{scenario_id}/versions/{version}/revoke-certification",
+  params: { scenario_id: "scenario-1", version: "1" },
+  body: { reason: "Superseded by deprecated governance decision." },
+}));
+const revokedCertification = (revokedScenarioVersion.body as { certification: Record<string, unknown> }).certification;
+assert.equal(revokedCertification.status, "revoked");
+assert.equal(revokedCertification.governance_stage, "deprecated");
+assert.equal(revokedCertification.valid_for_prod, false);
 
 const rolledBack = await handlers.rollbackScenario!(ctx("rollbackScenario", {
   method: "POST",
@@ -1304,6 +2152,7 @@ console.log("control-plane fixtures: ALL PASS");
 function ctx(operationId: OperationId, overrides: {
   method: ControlPlaneRequestContext["method"];
   path: ControlPlaneRequestContext["path"];
+  headers?: ControlPlaneRequestContext["headers"];
   params?: Record<string, string>;
   query?: Record<string, string>;
   body?: unknown;
@@ -1313,7 +2162,7 @@ function ctx(operationId: OperationId, overrides: {
     method: overrides.method,
     path: overrides.path,
     operationId,
-    headers: {},
+    headers: overrides.headers ?? {},
     params: overrides.params ?? {},
     query: overrides.query ?? {},
     body: overrides.body,

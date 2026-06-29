@@ -98,6 +98,57 @@ async function main(): Promise<void> {
     const httpTemplateBody = JSON.parse(httpTemplates.body) as { items: Array<{ template_id: string; produced_ir_pattern: string; success_criteria: string }> };
     check("http-api template advertises implemented http_status verify", httpTemplateBody.items.some((item) => item.template_id === "http-api-status-check" && item.produced_ir_pattern.includes("verify(http_status)") && item.success_criteria.includes("future connector profile")), httpTemplates.body);
 
+    const apiConnectors = await app.inject({ method: "GET", url: "/v1/connectors?kind=api", headers: { authorization: `Bearer ${viewer}` } });
+    check("viewer list api connectors -> 200", apiConnectors.statusCode === 200, apiConnectors.body);
+    const apiConnectorBody = JSON.parse(apiConnectors.body) as {
+      items: Array<{
+        connector_id: string;
+        status: string;
+        required_rbac_actions: string[];
+        required_secret_refs: string[];
+        manifest_permissions: { network: boolean; secret_refs: string[] };
+        implementation_state: string;
+      }>;
+    };
+    const managedIdp = apiConnectorBody.items.find((item) => item.connector_id === "managed-idp-scim");
+    check(
+      "managed IdP SCIM connector is metadata-only admin setup",
+      managedIdp !== undefined &&
+        managedIdp.status === "requires_admin" &&
+        managedIdp.required_rbac_actions.includes("scim.sync") &&
+        managedIdp.required_secret_refs.every((ref) => ref.startsWith("secret://")) &&
+        managedIdp.manifest_permissions.network === false &&
+        managedIdp.implementation_state.includes("/v1/scim/providers"),
+      apiConnectors.body,
+    );
+    check("managed IdP connector does not expose signing material", !apiConnectors.body.includes("actual-signing-secret") && !apiConnectors.body.includes("client_secret"), apiConnectors.body);
+
+    const idpScimTemplates = await app.inject({ method: "GET", url: "/v1/templates?connector_id=managed-idp-scim", headers: { authorization: `Bearer ${viewer}` } });
+    check("viewer list managed IdP SCIM templates -> 200", idpScimTemplates.statusCode === 200, idpScimTemplates.body);
+    const idpScimTemplateBody = JSON.parse(idpScimTemplates.body) as {
+      items: Array<{ template_id: string; status: string; required_params: string[]; required_secret_refs: string[]; produced_ir_pattern: string; success_criteria: string }>;
+    };
+    check(
+      "managed IdP SCIM templates cover registration, import, and decommission",
+      ["managed-idp-scim-provider-registration", "managed-idp-scim-group-role-import", "managed-idp-scim-provider-decommission"].every((templateId) =>
+        idpScimTemplateBody.items.some((item) => item.template_id === templateId && item.status === "requires_admin"),
+      ),
+      idpScimTemplates.body,
+    );
+    check(
+      "managed IdP SCIM templates stay SecretRef-only",
+      idpScimTemplateBody.items.some((item) =>
+        item.template_id === "managed-idp-scim-provider-registration" &&
+        item.required_params.includes("signature_secret_ref") &&
+        item.required_secret_refs.every((ref) => ref.startsWith("secret://")) &&
+        item.success_criteria.includes("signature_secret_ref"),
+      ) &&
+        idpScimTemplateBody.items.some((item) => item.template_id === "managed-idp-scim-group-role-import" && item.required_secret_refs.length === 0) &&
+        !idpScimTemplates.body.includes("actual-signing-secret") &&
+        !idpScimTemplates.body.includes("password"),
+      idpScimTemplates.body,
+    );
+
     const notificationTemplates = await app.inject({ method: "GET", url: "/v1/templates?connector_id=teams-webhook", headers: { authorization: `Bearer ${viewer}` } });
     check("viewer list notification templates -> 200", notificationTemplates.statusCode === 200, notificationTemplates.body);
     const notificationTemplateBody = JSON.parse(notificationTemplates.body) as { items: Array<{ template_id: string; status: string; required_secret_refs: string[]; produced_ir_pattern: string; success_criteria: string }> };

@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rpa-api
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: rpa-enterprise
+  annotations:
+    rpa.example.com/owner-decision-required: ingress-class,host,tls-secret,source-network-policy
+spec:
+  ingressClassName: OWNER_DECISION_REQUIRED_INGRESS_CLASS
+  tls:
+    - hosts:
+        - OWNER_DECISION_REQUIRED_HOST
+      secretName: OWNER_DECISION_REQUIRED_TLS_SECRET
+  rules:
+    - host: OWNER_DECISION_REQUIRED_HOST
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rpa-api
+                port:
+                  name: http

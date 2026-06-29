@@ -33,7 +33,15 @@ export type SupportedControlPlaneOperationId = Extract<
   | "listRunTriggerFires"
   | "listOpsAlerts"
   | "ackOpsAlert"
+  | "listOpsAlertDeliveries"
+  | "recordOpsAlertDelivery"
+  | "sendOpsAlertWebhookDelivery"
   | "getOpsHealth"
+  | "getProductionReadiness"
+  | "listProductionReadinessEvidence"
+  | "recordProductionReadinessEvidence"
+  | "listAiGovernanceEvidence"
+  | "recordAiGovernanceEvidence"
   | "listAutomationIdeas"
   | "createAutomationIdea"
   | "getAutomationIdea"
@@ -41,14 +49,23 @@ export type SupportedControlPlaneOperationId = Extract<
   | "transitionAutomationIdea"
   | "upsertRoiEstimate"
   | "getRoiEstimate"
+  | "listRoiActualEvidence"
+  | "recordRoiActualEvidence"
+  | "listAutomationAdoptionEvidence"
+  | "recordAutomationAdoptionEvidence"
   | "listAuditLog"
   | "exportAuditLog"
   | "listConnectors"
   | "listTemplates"
+  | "listIntegrationHandoffs"
+  | "createIntegrationHandoff"
+  | "dispatchIntegrationHandoff"
+  | "recordIntegrationHandoffCallback"
   | "listDocumentJobs"
   | "createDocumentJob"
   | "getDocumentJob"
   | "extractDocumentJob"
+  | "recordExternalDocumentExtraction"
   | "getDocumentExtraction"
   | "createDocumentValidationTask"
   | "validateScenario"
@@ -58,6 +75,9 @@ export type SupportedControlPlaneOperationId = Extract<
   | "listScenarioVersions"
   | "getScenarioVersion"
   | "rollbackScenario"
+  | "certifyScenarioVersion"
+  | "setScenarioVersionGovernanceStage"
+  | "revokeScenarioCertification"
   | "listHumanTasks"
   | "startHumanTask"
   | "resolveHumanTask"
@@ -273,11 +293,85 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     requiresIdempotencyKey: true,
   }),
   operation({
+    operationId: "listOpsAlertDeliveries",
+    method: "GET",
+    path: "/v1/ops-alerts/{alert_id}/deliveries",
+    paramsSchemaRef: "#/components/schemas/OpsAlertPathParams",
+    querySchemaRef: "#/components/schemas/OpsAlertDeliveryListQuery",
+    responseSchemaRef: "#/components/schemas/OpsNotificationDeliveryPage",
+    rbacAction: "ops_alert.read",
+  }),
+  operation({
+    operationId: "recordOpsAlertDelivery",
+    method: "POST",
+    path: "/v1/ops-alerts/{alert_id}/deliveries",
+    paramsSchemaRef: "#/components/schemas/OpsAlertPathParams",
+    requestBodySchemaRef: "#/components/schemas/OpsNotificationDeliveryRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/OpsNotificationDelivery",
+    rbacAction: "ops_alert.deliver",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "sendOpsAlertWebhookDelivery",
+    method: "POST",
+    path: "/v1/ops-alerts/{alert_id}/deliveries/send-webhook",
+    paramsSchemaRef: "#/components/schemas/OpsAlertPathParams",
+    requestBodySchemaRef: "#/components/schemas/OpsNotificationWebhookSendRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/OpsNotificationAttempt",
+    rbacAction: "ops_alert.deliver",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
     operationId: "getOpsHealth",
     method: "GET",
     path: "/v1/ops/health",
     responseSchemaRef: "#/components/schemas/OpsHealth",
     rbacAction: "ops_alert.read",
+  }),
+  operation({
+    operationId: "getProductionReadiness",
+    method: "GET",
+    path: "/v1/ops/production-readiness",
+    responseSchemaRef: "#/components/schemas/ProductionReadiness",
+    rbacAction: "ops_alert.read",
+  }),
+  operation({
+    operationId: "listProductionReadinessEvidence",
+    method: "GET",
+    path: "/v1/ops/production-readiness/evidence",
+    querySchemaRef: "#/components/schemas/ProductionReadinessEvidenceListQuery",
+    responseSchemaRef: "#/components/schemas/ProductionReadinessEvidencePage",
+    rbacAction: "ops_alert.read",
+  }),
+  operation({
+    operationId: "recordProductionReadinessEvidence",
+    method: "POST",
+    path: "/v1/ops/production-readiness/evidence",
+    requestBodySchemaRef: "#/components/schemas/ProductionReadinessEvidenceRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/ProductionReadinessEvidence",
+    rbacAction: "ops_readiness.manage",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "listAiGovernanceEvidence",
+    method: "GET",
+    path: "/v1/ai-governance/evidence",
+    querySchemaRef: "#/components/schemas/AiGovernanceEvidenceListQuery",
+    responseSchemaRef: "#/components/schemas/AiGovernanceEvidencePage",
+    rbacAction: "ai_governance.read",
+  }),
+  operation({
+    operationId: "recordAiGovernanceEvidence",
+    method: "POST",
+    path: "/v1/ai-governance/evidence",
+    requestBodySchemaRef: "#/components/schemas/AiGovernanceEvidenceRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/AiGovernanceEvidence",
+    rbacAction: "ai_governance.manage",
+    requiresIdempotencyKey: true,
   }),
   operation({
     operationId: "listAutomationIdeas",
@@ -320,6 +414,45 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     rbacAction: "connector.read",
   }),
   operation({
+    operationId: "listIntegrationHandoffs",
+    method: "GET",
+    path: "/v1/integration-handoffs",
+    querySchemaRef: "#/components/schemas/IntegrationHandoffListQuery",
+    responseSchemaRef: "#/components/schemas/IntegrationHandoffPage",
+    rbacAction: "integration.handoff",
+  }),
+  operation({
+    operationId: "createIntegrationHandoff",
+    method: "POST",
+    path: "/v1/integration-handoffs",
+    requestBodySchemaRef: "#/components/schemas/IntegrationHandoffCreateRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/IntegrationHandoff",
+    rbacAction: "integration.handoff",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "dispatchIntegrationHandoff",
+    method: "POST",
+    path: "/v1/integration-handoffs/{handoff_id}/dispatch",
+    paramsSchemaRef: "#/components/schemas/IntegrationHandoffPathParams",
+    requestBodySchemaRef: "#/components/schemas/IntegrationHandoffDispatchRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/IntegrationHandoffDispatchAttempt",
+    rbacAction: "integration.handoff",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "recordIntegrationHandoffCallback",
+    method: "POST",
+    path: "/v1/integration-handoffs/{handoff_id}/callback",
+    paramsSchemaRef: "#/components/schemas/IntegrationHandoffPathParams",
+    requestBodySchemaRef: "#/components/schemas/IntegrationHandoffCallbackRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/IntegrationHandoff",
+    rbacAction: "integration.handoff",
+  }),
+  operation({
     operationId: "listDocumentJobs",
     method: "GET",
     path: "/v1/document-jobs",
@@ -352,6 +485,17 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     paramsSchemaRef: "#/components/schemas/DocumentJobPathParams",
     requestBodySchemaRef: "#/components/schemas/DocumentJobCommandRequest",
     requestBodyRequired: false,
+    responseSchemaRef: "#/components/schemas/DocumentExtraction",
+    rbacAction: "document_job.manage",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "recordExternalDocumentExtraction",
+    method: "POST",
+    path: "/v1/document-jobs/{job_id}/external-extractions",
+    paramsSchemaRef: "#/components/schemas/DocumentJobPathParams",
+    requestBodySchemaRef: "#/components/schemas/ExternalDocumentExtractionRequest",
+    requestBodyRequired: true,
     responseSchemaRef: "#/components/schemas/DocumentExtraction",
     rbacAction: "document_job.manage",
     requiresIdempotencyKey: true,
@@ -435,6 +579,46 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     rbacAction: "automation_idea.read",
   }),
   operation({
+    operationId: "listRoiActualEvidence",
+    method: "GET",
+    path: "/v1/automation-ideas/{idea_id}/roi-actuals",
+    paramsSchemaRef: "#/components/schemas/AutomationIdeaPathParams",
+    querySchemaRef: "#/components/schemas/RoiActualEvidenceListQuery",
+    responseSchemaRef: "#/components/schemas/RoiActualEvidencePage",
+    rbacAction: "automation_idea.read",
+  }),
+  operation({
+    operationId: "recordRoiActualEvidence",
+    method: "POST",
+    path: "/v1/automation-ideas/{idea_id}/roi-actuals",
+    paramsSchemaRef: "#/components/schemas/AutomationIdeaPathParams",
+    requestBodySchemaRef: "#/components/schemas/RoiActualEvidenceRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/RoiActualEvidence",
+    rbacAction: "automation_idea.manage",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "listAutomationAdoptionEvidence",
+    method: "GET",
+    path: "/v1/automation-ideas/{idea_id}/adoption-evidence",
+    paramsSchemaRef: "#/components/schemas/AutomationIdeaPathParams",
+    querySchemaRef: "#/components/schemas/AutomationAdoptionEvidenceListQuery",
+    responseSchemaRef: "#/components/schemas/AutomationAdoptionEvidencePage",
+    rbacAction: "automation_idea.read",
+  }),
+  operation({
+    operationId: "recordAutomationAdoptionEvidence",
+    method: "POST",
+    path: "/v1/automation-ideas/{idea_id}/adoption-evidence",
+    paramsSchemaRef: "#/components/schemas/AutomationIdeaPathParams",
+    requestBodySchemaRef: "#/components/schemas/AutomationAdoptionEvidenceRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/AutomationAdoptionEvidence",
+    rbacAction: "automation_idea.manage",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
     operationId: "validateScenario",
     method: "POST",
     path: "/v1/scenarios/{scenario_id}/validate",
@@ -494,6 +678,39 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     paramsSchemaRef: "#/components/schemas/ScenarioVersionPathParams",
     responseSchemaRef: "#/components/schemas/ScenarioVersion",
     rbacAction: "scenario.read",
+  }),
+  operation({
+    operationId: "certifyScenarioVersion",
+    method: "POST",
+    path: "/v1/scenarios/{scenario_id}/versions/{version}/certify",
+    paramsSchemaRef: "#/components/schemas/ScenarioVersionPathParams",
+    requestBodySchemaRef: "#/components/schemas/ScenarioCertificationRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/ScenarioVersion",
+    rbacAction: "scenario.certify",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "setScenarioVersionGovernanceStage",
+    method: "POST",
+    path: "/v1/scenarios/{scenario_id}/versions/{version}/governance-stage",
+    paramsSchemaRef: "#/components/schemas/ScenarioVersionPathParams",
+    requestBodySchemaRef: "#/components/schemas/ScenarioGovernanceStageRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/ScenarioVersion",
+    rbacAction: "scenario.certify",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "revokeScenarioCertification",
+    method: "POST",
+    path: "/v1/scenarios/{scenario_id}/versions/{version}/revoke-certification",
+    paramsSchemaRef: "#/components/schemas/ScenarioVersionPathParams",
+    requestBodySchemaRef: "#/components/schemas/ScenarioCertificationRevokeRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/ScenarioVersion",
+    rbacAction: "scenario.certify",
+    requiresIdempotencyKey: true,
   }),
   operation({
     operationId: "rollbackScenario",
@@ -799,6 +1016,582 @@ const requireObject =
     },
   });
 
+const requireIntegrationHandoffDispatchBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    if (typeof input.endpoint_secret_ref !== "string" || input.endpoint_secret_ref.length === 0) {
+      return validationFailure({ schemaRef, reason: "missing_required_string", prop: "endpoint_secret_ref" });
+    }
+    if (!Array.isArray(input.allowed_hosts) || input.allowed_hosts.length === 0) {
+      return validationFailure({ schemaRef, reason: "missing_required_array", prop: "allowed_hosts" });
+    }
+    if (input.allowed_hosts.some((host) => typeof host !== "string" || host.length === 0)) {
+      return validationFailure({ schemaRef, reason: "invalid_array_item", prop: "allowed_hosts" });
+    }
+    return { valid: true, value: input };
+  },
+});
+
+const opsNotificationHostRe = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+
+function isOpsNotificationSecretRef(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith("secret://") && value.length > "secret://".length && value.length <= 500;
+}
+
+function containsOpsNotificationForbiddenEvidence(value: string): boolean {
+  return containsProductionEvidenceSecretOrEndpoint(value) ||
+    /https?:\/\//i.test(value) ||
+    /hooks\.slack\.com/i.test(value) ||
+    /\bbearer\s+[a-z0-9._~+/=-]{8,}/i.test(value) ||
+    /\b(token|password|secret)=/i.test(value);
+}
+
+function validateOpsNotificationSafeString(value: unknown, prop: string, schemaRef: string): BoundaryValidationFailure | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return validationFailure({ schemaRef, reason: "missing_required_string", prop });
+  }
+  if (value.length > 1000 || containsOpsNotificationForbiddenEvidence(value)) {
+    return validationFailure({ schemaRef, reason: "secret_or_raw_endpoint_forbidden", prop });
+  }
+  return null;
+}
+
+function validateOpsNotificationMetadata(input: unknown, schemaRef: string): BoundaryValidationFailure | null {
+  if (input === undefined) return null;
+  if (!isRecord(input)) {
+    return validationFailure({ schemaRef, reason: "metadata_must_be_object", prop: "metadata" });
+  }
+  const text = JSON.stringify(input);
+  if (text.length > 4000 || containsOpsNotificationForbiddenEvidence(text)) {
+    return validationFailure({ schemaRef, reason: "secret_or_raw_endpoint_forbidden", prop: "metadata" });
+  }
+  return null;
+}
+
+const requireOpsNotificationDeliveryBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    for (const prop of ["channel", "provider_alias", "status", "receipt_at", "summary"] as const) {
+      const failure = validateOpsNotificationSafeString(input[prop], prop, schemaRef);
+      if (failure !== null) return failure;
+    }
+    if (!isOpsNotificationSecretRef(input.endpoint_secret_ref)) {
+      return validationFailure({ schemaRef, reason: "invalid_secret_ref", prop: "endpoint_secret_ref" });
+    }
+    for (const prop of ["credential_secret_ref", "callback_signature_secret_ref"] as const) {
+      if (input[prop] !== undefined && input[prop] !== null && !isOpsNotificationSecretRef(input[prop])) {
+        return validationFailure({ schemaRef, reason: "invalid_secret_ref", prop });
+      }
+    }
+    if ((input.status === "sent" || input.status === "delivered") && (typeof input.receipt_id !== "string" || input.receipt_id.length === 0)) {
+      return validationFailure({ schemaRef, reason: "receipt_id_required_for_successful_delivery", prop: "receipt_id" });
+    }
+    if (input.status === "failed" && (typeof input.error_code !== "string" || input.error_code.length === 0)) {
+      return validationFailure({ schemaRef, reason: "error_code_required_for_failed_delivery", prop: "error_code" });
+    }
+    if (input.status !== "failed" && input.error_code !== undefined && input.error_code !== null) {
+      return validationFailure({ schemaRef, reason: "error_code_for_successful_delivery_forbidden", prop: "error_code" });
+    }
+    const metadataFailure = validateOpsNotificationMetadata(input.metadata, schemaRef);
+    if (metadataFailure !== null) return metadataFailure;
+    return { valid: true, value: input };
+  },
+});
+
+const requireOpsNotificationWebhookSendBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    if (!isOpsNotificationSecretRef(input.endpoint_secret_ref)) {
+      return validationFailure({ schemaRef, reason: "invalid_secret_ref", prop: "endpoint_secret_ref" });
+    }
+    for (const prop of ["route_policy_ref"] as const) {
+      const failure = validateOpsNotificationSafeString(input[prop], prop, schemaRef);
+      if (failure !== null) return failure;
+    }
+    if (!Array.isArray(input.allowed_hosts) || input.allowed_hosts.length === 0) {
+      return validationFailure({ schemaRef, reason: "missing_required_array", prop: "allowed_hosts" });
+    }
+    if (
+      input.allowed_hosts.length > 20 ||
+      input.allowed_hosts.some((host) =>
+        typeof host !== "string" ||
+        host.length === 0 ||
+        host.length > 253 ||
+        host.includes("://") ||
+        host.includes("/") ||
+        host.includes(":") ||
+        host === "localhost" ||
+        !opsNotificationHostRe.test(host)
+      )
+    ) {
+      return validationFailure({ schemaRef, reason: "invalid_array_item", prop: "allowed_hosts" });
+    }
+    if (
+      input.callback_signature_secret_ref !== undefined &&
+      input.callback_signature_secret_ref !== null &&
+      !isOpsNotificationSecretRef(input.callback_signature_secret_ref)
+    ) {
+      return validationFailure({ schemaRef, reason: "invalid_secret_ref", prop: "callback_signature_secret_ref" });
+    }
+    for (const prop of ["provider_alias", "recipient_group_ref", "summary"] as const) {
+      if (input[prop] !== undefined && input[prop] !== null) {
+        const failure = validateOpsNotificationSafeString(input[prop], prop, schemaRef);
+        if (failure !== null) return failure;
+      }
+    }
+    const metadataFailure = validateOpsNotificationMetadata(input.metadata, schemaRef);
+    if (metadataFailure !== null) return metadataFailure;
+    return { valid: true, value: input };
+  },
+});
+
+const containsProductionEvidenceSecretOrEndpoint = (value: string): boolean =>
+  /https?:\/\//i.test(value) ||
+  /hooks\.slack\.com/i.test(value) ||
+  /bearer\s+[a-z0-9._-]+/i.test(value) ||
+  /\b(?:endpoint_url|webhook_url|dashboard_url|dsn|url)\s*[:=]/i.test(value) ||
+  /\b(?:api[_-]?key|secret|token|password|credential|authorization|webhook_secret)\s*[:=]/i.test(value) ||
+  /"(?:api[_-]?key|secret|token|password|credential|authorization|webhook_secret)"\s*:/i.test(value) ||
+  /\b(?:raw[_-]?url|endpoint[_-]?url|resolved[_-]?secret(?:[_-]?ref)?|plaintext[_-]?secret)\b/i.test(value) ||
+  /\b(?:raw[_-]?roster(?:[_-]?rows)?|raw[_-]?user[_-]?list(?:[_-]?rows)?|raw[_-]?training[_-]?(?:document|docs?)(?:[_-]?body)?|roster[_-]?rows|training[_-]?roster|user[_-]?list[_-]?rows)\b/i.test(value) ||
+  /\b(?:raw\s+(?:rosters?|user\s+lists?|training\s+documents?)|rosters?|user\s+lists?|training\s+documents?)\b/i.test(value);
+
+const productionReadinessEvidenceTypes = new Set([
+  "external_alert_delivery",
+  "managed_backup_restore_drill",
+  "slo_oncall_signoff",
+  "observability_telemetry_wiring",
+  "support_training_completion",
+]);
+
+const productionReadinessEvidenceStatuses = new Set(["valid", "failed"]);
+
+const aiGovernanceEvidenceTypes = new Set([
+  "model_registry",
+  "prompt_registry",
+  "eval_result",
+  "cost_control",
+  "human_override",
+]);
+
+const aiGovernanceEvidenceStatuses = new Set(["valid", "failed", "deferred"]);
+
+const containsAiGovernanceForbiddenEvidence = (value: string): boolean =>
+  containsProductionEvidenceSecretOrEndpoint(value) ||
+  /\b(?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)\s*[:=]\s*\S{4,}/i.test(value) ||
+  /"(?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)"\s*:/i.test(value) ||
+  /\b(?:raw[_-]?prompt|prompt[_-]?text|prompt[_-]?body|raw[_-]?output|output[_-]?text|output[_-]?body)\b/i.test(value) ||
+  /"(?:raw[_-]?prompt|prompt[_-]?text|prompt[_-]?body|raw[_-]?output|output[_-]?text|output[_-]?body|payload|body)"\s*:/i.test(value);
+
+function requireAiMetadataString(
+  metadata: Record<string, unknown>,
+  key: string,
+  schemaRef: string,
+  reason: string,
+): BoundaryValidationFailure | null {
+  const value = metadata[key];
+  if (typeof value !== "string" || value.length === 0 || value.length > 300) {
+    return validationFailure({ schemaRef, reason, prop: `metadata.${key}` });
+  }
+  if (containsAiGovernanceForbiddenEvidence(value)) {
+    return validationFailure({ schemaRef, reason: "secret_or_raw_ai_evidence_value_forbidden", prop: `metadata.${key}` });
+  }
+  return null;
+}
+
+function requireAiMetadataDate(metadata: Record<string, unknown>, key: string, schemaRef: string, reason: string): BoundaryValidationFailure | null {
+  const stringFailure = requireAiMetadataString(metadata, key, schemaRef, reason);
+  if (stringFailure !== null) return stringFailure;
+  if (!Number.isFinite(Date.parse(metadata[key] as string))) {
+    return validationFailure({ schemaRef, reason: "invalid_ai_governance_metadata_datetime", prop: `metadata.${key}` });
+  }
+  return null;
+}
+
+function requireAiMetadataNumber(
+  metadata: Record<string, unknown>,
+  key: string,
+  schemaRef: string,
+  reason: string,
+): BoundaryValidationFailure | null {
+  const value = metadata[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return validationFailure({ schemaRef, reason, prop: `metadata.${key}` });
+  }
+  return null;
+}
+
+function requireAiMetadataBooleanTrue(
+  metadata: Record<string, unknown>,
+  key: string,
+  schemaRef: string,
+  reason: string,
+): BoundaryValidationFailure | null {
+  if (metadata[key] !== true) {
+    return validationFailure({ schemaRef, reason, prop: `metadata.${key}` });
+  }
+  return null;
+}
+
+function validateAiGovernanceTypeMetadata(input: Record<string, unknown>, schemaRef: string): BoundaryValidationFailure | null {
+  if (input.status !== "valid") return null;
+  if (!isRecord(input.metadata)) {
+    return validationFailure({ schemaRef, reason: "valid_ai_governance_metadata_required", prop: "metadata" });
+  }
+  const metadata = input.metadata;
+  if (input.evidence_type === "model_registry") {
+    for (const key of ["provider_alias", "model_alias", "model_version", "data_retention_policy_ref", "tenant_allowlist_ref"] as const) {
+      const failure = requireAiMetadataString(metadata, key, schemaRef, "model_registry_metadata_required");
+      if (failure !== null) return failure;
+    }
+    const riskTier = metadata.risk_tier;
+    if (riskTier !== "low" && riskTier !== "medium" && riskTier !== "high") {
+      return validationFailure({ schemaRef, reason: "model_registry_risk_tier_invalid", prop: "metadata.risk_tier" });
+    }
+    return requireAiMetadataDate(metadata, "approved_at", schemaRef, "model_registry_metadata_required");
+  }
+  if (input.evidence_type === "prompt_registry") {
+    for (const key of ["prompt_template_id", "prompt_template_version", "owner_ref", "eval_suite_ref", "rollback_target_ref"] as const) {
+      const failure = requireAiMetadataString(metadata, key, schemaRef, "prompt_registry_metadata_required");
+      if (failure !== null) return failure;
+    }
+    return requireAiMetadataDate(metadata, "approved_at", schemaRef, "prompt_registry_metadata_required");
+  }
+  if (input.evidence_type === "eval_result") {
+    for (const key of ["eval_suite_ref", "dataset_ref"] as const) {
+      const failure = requireAiMetadataString(metadata, key, schemaRef, "eval_result_metadata_required");
+      if (failure !== null) return failure;
+    }
+    const sampledAtFailure = requireAiMetadataDate(metadata, "sampled_at", schemaRef, "eval_result_metadata_required");
+    if (sampledAtFailure !== null) return sampledAtFailure;
+    const passRateFailure = requireAiMetadataNumber(metadata, "pass_rate", schemaRef, "eval_result_metadata_required");
+    if (passRateFailure !== null) return passRateFailure;
+    const passRate = metadata.pass_rate as number;
+    if (passRate < 0 || passRate > 1) return validationFailure({ schemaRef, reason: "eval_result_pass_rate_invalid", prop: "metadata.pass_rate" });
+    for (const key of ["prompt_injection_passed", "data_leakage_passed", "hallucination_passed", "policy_block_passed"] as const) {
+      const failure = requireAiMetadataBooleanTrue(metadata, key, schemaRef, "eval_result_required_check_failed");
+      if (failure !== null) return failure;
+    }
+    return null;
+  }
+  if (input.evidence_type === "cost_control") {
+    for (const key of ["budget_ref", "scope_ref", "anomaly_alert_ref"] as const) {
+      const failure = requireAiMetadataString(metadata, key, schemaRef, "cost_control_metadata_required");
+      if (failure !== null) return failure;
+    }
+    const monthlyFailure = requireAiMetadataNumber(metadata, "monthly_limit", schemaRef, "cost_control_metadata_required");
+    if (monthlyFailure !== null) return monthlyFailure;
+    const capFailure = requireAiMetadataNumber(metadata, "per_run_cap", schemaRef, "cost_control_metadata_required");
+    if (capFailure !== null) return capFailure;
+    const monthlyLimit = metadata.monthly_limit as number;
+    const perRunCap = metadata.per_run_cap as number;
+    if (monthlyLimit <= 0) return validationFailure({ schemaRef, reason: "cost_control_monthly_limit_invalid", prop: "metadata.monthly_limit" });
+    if (perRunCap <= 0 || perRunCap > monthlyLimit) {
+      return validationFailure({ schemaRef, reason: "cost_control_per_run_cap_invalid", prop: "metadata.per_run_cap" });
+    }
+    return requireAiMetadataDate(metadata, "effective_at", schemaRef, "cost_control_metadata_required");
+  }
+  for (const key of ["override_actor_ref", "reason_code", "audit_event_ref"] as const) {
+    const failure = requireAiMetadataString(metadata, key, schemaRef, "human_override_metadata_required");
+    if (failure !== null) return failure;
+  }
+  const action = metadata.override_action;
+  if (
+    action !== "accepted_ai_output" &&
+    action !== "rejected_ai_output" &&
+    action !== "corrected_ai_output" &&
+    action !== "escalated_to_human" &&
+    action !== "rolled_back_prompt"
+  ) {
+    return validationFailure({ schemaRef, reason: "human_override_action_invalid", prop: "metadata.override_action" });
+  }
+  return requireAiMetadataDate(metadata, "occurred_at", schemaRef, "human_override_metadata_required");
+}
+
+const scenarioGovernanceStages = new Set(["review", "pilot", "deprecated"]);
+
+const containsScenarioGovernanceForbiddenEvidence = (value: string): boolean =>
+  containsProductionEvidenceSecretOrEndpoint(value) ||
+  /"(?:api[_-]?key|secret|token|password|credential|authorization|webhook_secret)"\s*:/i.test(value) ||
+  /\b(?:raw[_-]?url|endpoint[_-]?url|resolved[_-]?secret[_-]?ref|resolved[_-]?secret|plaintext[_-]?secret)\b/i.test(value) ||
+  /\b(?:raw[_-]?approval[_-]?packet|approval[_-]?packet|approval[_-]?body|raw[_-]?roster|roster[_-]?rows|training[_-]?roster)\b/i.test(value);
+
+const requireScenarioGovernanceStageBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    for (const prop of ["stage", "reason", "evidence_ref"] as const) {
+      if (typeof input[prop] !== "string" || input[prop].length === 0) {
+        return validationFailure({ schemaRef, reason: "missing_required_string", prop });
+      }
+    }
+    if (!scenarioGovernanceStages.has(input.stage as string)) {
+      return validationFailure({ schemaRef, reason: "invalid_governance_stage", prop: "stage" });
+    }
+    for (const prop of ["reason", "evidence_ref"] as const) {
+      if (containsScenarioGovernanceForbiddenEvidence(input[prop] as string)) {
+        return validationFailure({ schemaRef, reason: "secret_or_raw_evidence_value_forbidden", prop });
+      }
+    }
+    if (input.metadata !== undefined) {
+      if (!isRecord(input.metadata)) {
+        return validationFailure({ schemaRef, reason: "metadata_must_be_object", prop: "metadata" });
+      }
+      const metadataText = JSON.stringify(input.metadata);
+      if (metadataText.length > 8000 || containsScenarioGovernanceForbiddenEvidence(metadataText)) {
+        return validationFailure({ schemaRef, reason: "secret_or_raw_evidence_value_forbidden", prop: "metadata" });
+      }
+    }
+    if (input.legal_hold !== undefined && typeof input.legal_hold !== "boolean") {
+      return validationFailure({ schemaRef, reason: "legal_hold_must_be_boolean", prop: "legal_hold" });
+    }
+    return { valid: true, value: input };
+  },
+});
+
+const requireProductionReadinessEvidenceBody = (schemaRef: string): BoundaryValidator => {
+  const base = requireObject(schemaRef, ["evidence_type", "status", "evidence_at", "summary"]);
+  return {
+    schemaRef,
+    validate(input: unknown): BoundaryValidationResult {
+      const baseResult = base.validate(input);
+      if (!baseResult.valid) return baseResult;
+      if (!isRecord(input)) return validationFailure({ schemaRef, reason: "expected_object" });
+
+      const evidenceType = input.evidence_type as string;
+      const status = input.status as string;
+      if (!productionReadinessEvidenceTypes.has(evidenceType)) {
+        return validationFailure({ schemaRef, reason: "invalid_production_readiness_evidence_type", prop: "evidence_type" });
+      }
+      if (!productionReadinessEvidenceStatuses.has(status)) {
+        return validationFailure({ schemaRef, reason: "invalid_production_readiness_evidence_status", prop: "status" });
+      }
+      if (typeof input.summary === "string" && containsProductionEvidenceSecretOrEndpoint(input.summary)) {
+        return validationFailure({ schemaRef, reason: "secret_or_raw_evidence_value_forbidden", prop: "summary" });
+      }
+      if (typeof input.evidence_ref === "string" && containsProductionEvidenceSecretOrEndpoint(input.evidence_ref)) {
+        return validationFailure({ schemaRef, reason: "secret_or_raw_evidence_value_forbidden", prop: "evidence_ref" });
+      }
+      if (input.metadata !== undefined && containsProductionEvidenceSecretOrEndpoint(JSON.stringify(input.metadata))) {
+        return validationFailure({ schemaRef, reason: "secret_or_raw_evidence_value_forbidden", prop: "metadata" });
+      }
+      if (input.status === "valid") {
+        if (typeof input.expires_at !== "string" || input.expires_at.length === 0) {
+          return validationFailure({ schemaRef, reason: "expires_at_required_for_valid_evidence", prop: "expires_at" });
+        }
+        if (!Number.isFinite(Date.parse(input.expires_at))) {
+          return validationFailure({ schemaRef, reason: "invalid_expires_at", prop: "expires_at" });
+        }
+      }
+      if (input.evidence_type === "external_alert_delivery" && input.status === "valid") {
+        if (typeof input.evidence_ref !== "string" || input.evidence_ref.length === 0) {
+          return validationFailure({ schemaRef, reason: "external_alert_delivery_evidence_ref_required", prop: "evidence_ref" });
+        }
+        if (!isRecord(input.metadata)) {
+          return validationFailure({ schemaRef, reason: "external_alert_delivery_metadata_required", prop: "metadata" });
+        }
+        for (const prop of ["channel", "provider_alias", "receipt_id", "receipt_at"] as const) {
+          if (typeof input.metadata[prop] !== "string" || input.metadata[prop].length === 0) {
+            return validationFailure({ schemaRef, reason: "external_alert_delivery_metadata_required", prop: `metadata.${prop}` });
+          }
+        }
+        const channel = input.metadata.channel;
+        if (typeof channel !== "string" || !["teams", "slack", "email", "webhook"].includes(channel)) {
+          return validationFailure({ schemaRef, reason: "external_alert_delivery_channel_invalid", prop: "metadata.channel" });
+        }
+        if (input.metadata.delivery_status !== "delivered") {
+          return validationFailure({ schemaRef, reason: "external_alert_delivery_status_must_be_delivered", prop: "metadata.delivery_status" });
+        }
+        const receiptAt = input.metadata.receipt_at;
+        if (typeof receiptAt !== "string" || !Number.isFinite(Date.parse(receiptAt))) {
+          return validationFailure({ schemaRef, reason: "invalid_receipt_at", prop: "metadata.receipt_at" });
+        }
+      }
+      if (input.evidence_type === "slo_oncall_signoff" && input.status === "valid") {
+        if (typeof input.evidence_ref !== "string" || input.evidence_ref.length === 0) {
+          return validationFailure({ schemaRef, reason: "slo_oncall_evidence_ref_required", prop: "evidence_ref" });
+        }
+        if (!isRecord(input.metadata)) {
+          return validationFailure({ schemaRef, reason: "slo_oncall_metadata_required", prop: "metadata" });
+        }
+        for (const prop of ["slo_dashboard", "severity_model", "oncall_rota", "raci_ref", "support_hours"] as const) {
+          if (typeof input.metadata[prop] !== "string" || input.metadata[prop].length === 0) {
+            return validationFailure({ schemaRef, reason: "slo_oncall_metadata_required", prop: `metadata.${prop}` });
+          }
+        }
+      }
+      if (input.evidence_type === "support_training_completion" && input.status === "valid") {
+        if (typeof input.evidence_ref !== "string" || input.evidence_ref.length === 0) {
+          return validationFailure({ schemaRef, reason: "support_training_evidence_ref_required", prop: "evidence_ref" });
+        }
+        if (!isRecord(input.metadata)) {
+          return validationFailure({ schemaRef, reason: "support_training_metadata_required", prop: "metadata" });
+        }
+        for (const prop of ["support_model_ref", "training_completion_ref", "completed_at"] as const) {
+          if (typeof input.metadata[prop] !== "string" || input.metadata[prop].length === 0) {
+            return validationFailure({ schemaRef, reason: "support_training_metadata_required", prop: `metadata.${prop}` });
+          }
+        }
+        if (
+          typeof input.metadata.trained_role_count !== "number" ||
+          !Number.isInteger(input.metadata.trained_role_count) ||
+          input.metadata.trained_role_count <= 0
+        ) {
+          return validationFailure({ schemaRef, reason: "support_training_role_count_invalid", prop: "metadata.trained_role_count" });
+        }
+        if (
+          typeof input.metadata.trained_user_count !== "number" ||
+          !Number.isInteger(input.metadata.trained_user_count) ||
+          input.metadata.trained_user_count <= 0
+        ) {
+          return validationFailure({ schemaRef, reason: "support_training_user_count_invalid", prop: "metadata.trained_user_count" });
+        }
+        if (
+          typeof input.metadata.coverage_percent !== "number" ||
+          !Number.isFinite(input.metadata.coverage_percent) ||
+          input.metadata.coverage_percent < 0 ||
+          input.metadata.coverage_percent > 100
+        ) {
+          return validationFailure({ schemaRef, reason: "support_training_coverage_invalid", prop: "metadata.coverage_percent" });
+        }
+        const completedAt = input.metadata.completed_at;
+        if (typeof completedAt !== "string" || !Number.isFinite(Date.parse(completedAt))) {
+          return validationFailure({ schemaRef, reason: "invalid_completed_at", prop: "metadata.completed_at" });
+        }
+      }
+      if (input.evidence_type === "observability_telemetry_wiring" && input.status === "valid") {
+        if (typeof input.evidence_ref !== "string" || input.evidence_ref.length === 0) {
+          return validationFailure({ schemaRef, reason: "observability_telemetry_evidence_ref_required", prop: "evidence_ref" });
+        }
+        if (!isRecord(input.metadata)) {
+          return validationFailure({ schemaRef, reason: "observability_telemetry_metadata_required", prop: "metadata" });
+        }
+        for (const prop of ["collector_ref", "dashboard_ref", "alert_route_ref", "sampled_at"] as const) {
+          if (typeof input.metadata[prop] !== "string" || input.metadata[prop].length === 0) {
+            return validationFailure({ schemaRef, reason: "observability_telemetry_metadata_required", prop: `metadata.${prop}` });
+          }
+        }
+        if (input.metadata.exporter !== "prometheus" && input.metadata.exporter !== "otlp") {
+          return validationFailure({ schemaRef, reason: "observability_telemetry_exporter_invalid", prop: "metadata.exporter" });
+        }
+        const sampledAt = input.metadata.sampled_at;
+        if (typeof sampledAt !== "string" || !Number.isFinite(Date.parse(sampledAt))) {
+          return validationFailure({ schemaRef, reason: "invalid_sampled_at", prop: "metadata.sampled_at" });
+        }
+      }
+      if (input.evidence_type === "managed_backup_restore_drill" && input.status === "valid") {
+        if (typeof input.evidence_ref !== "string" || input.evidence_ref.length === 0) {
+          return validationFailure({ schemaRef, reason: "managed_backup_restore_evidence_ref_required", prop: "evidence_ref" });
+        }
+        if (!isRecord(input.metadata)) {
+          return validationFailure({ schemaRef, reason: "managed_backup_restore_metadata_required", prop: "metadata" });
+        }
+        for (const prop of ["backup_policy_ref", "restore_scope", "restore_completed_at"] as const) {
+          if (typeof input.metadata[prop] !== "string" || input.metadata[prop].length === 0) {
+            return validationFailure({ schemaRef, reason: "managed_backup_restore_metadata_required", prop: `metadata.${prop}` });
+          }
+        }
+        if (typeof input.metadata.rto_minutes !== "number" || input.metadata.rto_minutes <= 0 || input.metadata.rto_minutes > 120) {
+          return validationFailure({ schemaRef, reason: "managed_backup_restore_rto_target_missed", prop: "metadata.rto_minutes" });
+        }
+        if (typeof input.metadata.rpo_minutes !== "number" || input.metadata.rpo_minutes <= 0 || input.metadata.rpo_minutes > 15) {
+          return validationFailure({ schemaRef, reason: "managed_backup_restore_rpo_target_missed", prop: "metadata.rpo_minutes" });
+        }
+      }
+
+      return { valid: true, value: input };
+    },
+  };
+};
+
+const requireRoiActualEvidenceBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    for (const prop of ["period_start", "period_end", "evidence_ref", "summary"] as const) {
+      if (typeof input[prop] !== "string" || input[prop].length === 0) {
+        return validationFailure({ schemaRef, reason: "missing_required_string", prop });
+      }
+    }
+    for (const prop of ["actual_transaction_count", "actual_failure_rate", "human_intervention_minutes", "reprocessing_minutes"] as const) {
+      if (typeof input[prop] !== "number" || !Number.isFinite(input[prop])) {
+        return validationFailure({ schemaRef, reason: "missing_required_number", prop });
+      }
+    }
+    return { valid: true, value: input };
+  },
+});
+
+const adoptionEvidenceTypes = new Set([
+  "pilot_charter_signoff",
+  "raci_signoff",
+  "training_completion",
+  "support_model_signoff",
+]);
+
+const adoptionEvidenceStatuses = new Set(["valid", "failed", "deferred"]);
+
+const requireAutomationAdoptionEvidenceBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    for (const prop of ["evidence_type", "status", "evidence_at", "summary"] as const) {
+      if (typeof input[prop] !== "string" || input[prop].length === 0) {
+        return validationFailure({ schemaRef, reason: "missing_required_string", prop });
+      }
+    }
+    const evidenceType = input.evidence_type as string;
+    const status = input.status as string;
+    const evidenceAt = input.evidence_at as string;
+    const summary = input.summary as string;
+    if (!adoptionEvidenceTypes.has(evidenceType)) {
+      return validationFailure({ schemaRef, reason: "invalid_adoption_evidence_type", prop: "evidence_type" });
+    }
+    if (!adoptionEvidenceStatuses.has(status)) {
+      return validationFailure({ schemaRef, reason: "invalid_adoption_evidence_status", prop: "status" });
+    }
+    if (!Number.isFinite(Date.parse(evidenceAt))) {
+      return validationFailure({ schemaRef, reason: "invalid_evidence_at", prop: "evidence_at" });
+    }
+    if (input.expires_at !== undefined && input.expires_at !== null && (
+      typeof input.expires_at !== "string" || !Number.isFinite(Date.parse(input.expires_at))
+    )) {
+      return validationFailure({ schemaRef, reason: "invalid_expires_at", prop: "expires_at" });
+    }
+    if (containsProductionEvidenceSecretOrEndpoint(summary)) {
+      return validationFailure({ schemaRef, reason: "secret_or_endpoint_value_forbidden", prop: "summary" });
+    }
+    if (typeof input.evidence_ref === "string" && containsProductionEvidenceSecretOrEndpoint(input.evidence_ref)) {
+      return validationFailure({ schemaRef, reason: "secret_or_endpoint_value_forbidden", prop: "evidence_ref" });
+    }
+    if (input.metadata !== undefined) {
+      const metadataText = JSON.stringify(input.metadata);
+      if (containsProductionEvidenceSecretOrEndpoint(metadataText)) {
+        return validationFailure({ schemaRef, reason: "secret_or_endpoint_value_forbidden", prop: "metadata" });
+      }
+      if (metadataText.length > 8000 || /\b(?:raw_document|document_body|training_roster|roster_rows)\b/i.test(metadataText)) {
+        return validationFailure({ schemaRef, reason: "raw_document_or_roster_forbidden", prop: "metadata" });
+      }
+    }
+    return { valid: true, value: input };
+  },
+});
+
 const requireParams = (schemaRef: string, keys: readonly string[]): BoundaryValidator =>
   ({
     schemaRef,
@@ -824,6 +1617,123 @@ const passQuery = (schemaRef: string): BoundaryValidator => ({
       return validationFailure({ schemaRef, reason: "expected_query_object" });
     }
 
+    return { valid: true, value: input };
+  },
+});
+
+const requireAiGovernanceEvidenceBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    const allowed = new Set([
+      "evidence_type",
+      "subject_ref",
+      "status",
+      "evidence_at",
+      "expires_at",
+      "summary",
+      "evidence_ref",
+      "policy_decision_ref",
+      "audit_correlation_id",
+      "metadata",
+      "legal_hold",
+    ]);
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) return validationFailure({ schemaRef, reason: "additional_property", key });
+    }
+    for (const prop of ["evidence_type", "subject_ref", "status", "evidence_at", "summary"] as const) {
+      if (typeof input[prop] !== "string" || input[prop].length === 0) {
+        return validationFailure({ schemaRef, reason: "missing_required_string", prop });
+      }
+    }
+    if (typeof input.evidence_type !== "string" || !aiGovernanceEvidenceTypes.has(input.evidence_type)) {
+      return validationFailure({ schemaRef, reason: "invalid_ai_governance_evidence_type", prop: "evidence_type" });
+    }
+    if (typeof input.status !== "string" || !aiGovernanceEvidenceStatuses.has(input.status)) {
+      return validationFailure({ schemaRef, reason: "invalid_ai_governance_evidence_status", prop: "status" });
+    }
+    if (typeof input.evidence_at !== "string" || !Number.isFinite(Date.parse(input.evidence_at))) {
+      return validationFailure({ schemaRef, reason: "invalid_evidence_at", prop: "evidence_at" });
+    }
+    if (input.expires_at !== undefined && input.expires_at !== null && (
+      typeof input.expires_at !== "string" || !Number.isFinite(Date.parse(input.expires_at))
+    )) {
+      return validationFailure({ schemaRef, reason: "invalid_expires_at", prop: "expires_at" });
+    }
+    const summary = input.summary;
+    if (typeof summary !== "string" || containsAiGovernanceForbiddenEvidence(summary)) {
+      return validationFailure({ schemaRef, reason: "secret_or_raw_ai_evidence_value_forbidden", prop: "summary" });
+    }
+    for (const prop of ["subject_ref", "evidence_ref", "policy_decision_ref"] as const) {
+      const value = input[prop];
+      if (typeof value === "string" && containsAiGovernanceForbiddenEvidence(value)) {
+        return validationFailure({ schemaRef, reason: "secret_or_raw_ai_evidence_value_forbidden", prop });
+      }
+    }
+    if (input.metadata !== undefined) {
+      if (!isRecord(input.metadata)) return validationFailure({ schemaRef, reason: "metadata_must_be_object", prop: "metadata" });
+      if (containsAiGovernanceForbiddenEvidence(JSON.stringify(input.metadata))) {
+        return validationFailure({ schemaRef, reason: "secret_or_raw_ai_evidence_value_forbidden", prop: "metadata" });
+      }
+    }
+    if (input.status === "valid") {
+      for (const prop of ["evidence_ref", "policy_decision_ref", "audit_correlation_id"] as const) {
+        if (typeof input[prop] !== "string" || input[prop].length === 0) {
+          return validationFailure({ schemaRef, reason: "valid_ai_governance_linkage_required", prop });
+        }
+      }
+      if (input.evidence_type !== "human_override" && (typeof input.expires_at !== "string" || input.expires_at.length === 0)) {
+        return validationFailure({ schemaRef, reason: "expires_at_required_for_valid_ai_governance_evidence", prop: "expires_at" });
+      }
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.audit_correlation_id as string)) {
+        return validationFailure({ schemaRef, reason: "invalid_audit_correlation_id", prop: "audit_correlation_id" });
+      }
+      const metadataFailure = validateAiGovernanceTypeMetadata(input, schemaRef);
+      if (metadataFailure !== null) return metadataFailure;
+    }
+    if (input.legal_hold !== undefined && typeof input.legal_hold !== "boolean") {
+      return validationFailure({ schemaRef, reason: "legal_hold_must_be_boolean", prop: "legal_hold" });
+    }
+    return { valid: true, value: input };
+  },
+});
+
+const requireProductionReadinessEvidenceQuery = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_query_object" });
+    }
+    if (
+      input.evidence_type !== undefined &&
+      (typeof input.evidence_type !== "string" || !productionReadinessEvidenceTypes.has(input.evidence_type))
+    ) {
+      return validationFailure({ schemaRef, reason: "invalid_production_readiness_evidence_type", prop: "evidence_type" });
+    }
+    return { valid: true, value: input };
+  },
+});
+
+const requireAiGovernanceEvidenceQuery = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_query_object" });
+    }
+    if (
+      input.evidence_type !== undefined &&
+      (typeof input.evidence_type !== "string" || !aiGovernanceEvidenceTypes.has(input.evidence_type))
+    ) {
+      return validationFailure({ schemaRef, reason: "invalid_ai_governance_evidence_type", prop: "evidence_type" });
+    }
+    if (
+      input.status !== undefined &&
+      (typeof input.status !== "string" || !aiGovernanceEvidenceStatuses.has(input.status))
+    ) {
+      return validationFailure({ schemaRef, reason: "invalid_ai_governance_evidence_status", prop: "status" });
+    }
     return { valid: true, value: input };
   },
 });
@@ -947,6 +1857,28 @@ const requireDocumentJobCreateBody = (schemaRef: string): BoundaryValidator => (
   },
 });
 
+const requireExternalDocumentExtractionBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    const allowed = new Set(["provider_alias", "receipt_id", "normalized_schema_ref", "evidence_ref", "fields", "metadata", "legal_hold"]);
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) return validationFailure({ schemaRef, reason: "additional_property", key });
+    }
+    for (const prop of ["provider_alias", "receipt_id", "normalized_schema_ref"]) {
+      if (typeof input[prop] !== "string" || input[prop].length === 0) {
+        return validationFailure({ schemaRef, reason: "missing_required_string", prop });
+      }
+    }
+    if (!Array.isArray(input.fields) || input.fields.length === 0) {
+      return validationFailure({ schemaRef, reason: "missing_required_array", prop: "fields" });
+    }
+    return { valid: true, value: input };
+  },
+});
+
 const browserRecordingEventTypes = new Set(["navigate", "click", "input", "select", "submit", "wait"]);
 
 const requireBrowserRecordingAppendEventsBody = (schemaRef: string): BoundaryValidator => ({
@@ -991,18 +1923,31 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
   ["pauseRunTrigger", requireObject("#/components/schemas/RunTriggerCommandRequest", [], true)],
   ["resumeRunTrigger", requireObject("#/components/schemas/RunTriggerCommandRequest", [], true)],
   ["ackOpsAlert", requireObject("#/components/schemas/OpsAlertAckRequest", [], true)],
+  ["recordOpsAlertDelivery", requireOpsNotificationDeliveryBody("#/components/schemas/OpsNotificationDeliveryRequest")],
+  ["sendOpsAlertWebhookDelivery", requireOpsNotificationWebhookSendBody("#/components/schemas/OpsNotificationWebhookSendRequest")],
+  ["recordProductionReadinessEvidence", requireProductionReadinessEvidenceBody("#/components/schemas/ProductionReadinessEvidenceRequest")],
+  ["recordAiGovernanceEvidence", requireAiGovernanceEvidenceBody("#/components/schemas/AiGovernanceEvidenceRequest")],
   ["createAutomationIdea", requireObject("#/components/schemas/AutomationIdeaCreateRequest", ["title", "description", "business_owner", "department"])],
   ["createDocumentJob", requireDocumentJobCreateBody("#/components/schemas/DocumentJobCreateRequest")],
   ["extractDocumentJob", requireObject("#/components/schemas/DocumentJobCommandRequest", [], true)],
+  ["recordExternalDocumentExtraction", requireExternalDocumentExtractionBody("#/components/schemas/ExternalDocumentExtractionRequest")],
   ["createDocumentValidationTask", requireObject("#/components/schemas/DocumentJobCommandRequest", [], true)],
   ["updateAutomationIdea", requireObject("#/components/schemas/AutomationIdeaUpdateRequest")],
   ["transitionAutomationIdea", requireObject("#/components/schemas/AutomationIdeaTransitionRequest", ["stage"])],
   ["upsertRoiEstimate", requireObject("#/components/schemas/RoiEstimateRequest")],
+  ["recordRoiActualEvidence", requireRoiActualEvidenceBody("#/components/schemas/RoiActualEvidenceRequest")],
+  ["recordAutomationAdoptionEvidence", requireAutomationAdoptionEvidenceBody("#/components/schemas/AutomationAdoptionEvidenceRequest")],
+  ["createIntegrationHandoff", requireObject("#/components/schemas/IntegrationHandoffCreateRequest", ["provider_alias", "job_ref", "payload_ref"])],
+  ["dispatchIntegrationHandoff", requireIntegrationHandoffDispatchBody("#/components/schemas/IntegrationHandoffDispatchRequest")],
+  ["recordIntegrationHandoffCallback", requireObject("#/components/schemas/IntegrationHandoffCallbackRequest", ["external_job_id", "status", "receipt_id"])],
   ["validateScenario", requireObject("#/components/schemas/ValidateRequest")],
   ["promoteScenario", requireObject("#/components/schemas/PromoteRequest", ["target"])],
   ["promoteScenarioFromRun", requireObject("#/components/schemas/PromoteScenarioFromRunRequest", ["run_id"])],
   ["archiveScenario", requireObject("#/components/schemas/ScenarioCommandRequest", [], true)],
   ["rollbackScenario", requireObject("#/components/schemas/ScenarioCommandRequest", [], true)],
+  ["certifyScenarioVersion", requireObject("#/components/schemas/ScenarioCertificationRequest", ["reason"])],
+  ["setScenarioVersionGovernanceStage", requireScenarioGovernanceStageBody("#/components/schemas/ScenarioGovernanceStageRequest")],
+  ["revokeScenarioCertification", requireObject("#/components/schemas/ScenarioCertificationRevokeRequest", ["reason"])],
   ["resolveHumanTask", requireObject("#/components/schemas/HumanTaskResolveRequest")],
   ["assignHumanTask", requireObject("#/components/schemas/HumanTaskAssignRequest", ["assignee"])],
   ["escalateHumanTask", requireObject("#/components/schemas/HumanTaskEscalateRequest", [], true)],
@@ -1029,15 +1974,25 @@ const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Op
   ["resumeRunTrigger", requireParams("#/components/schemas/RunTriggerPathParams", ["trigger_id"])],
   ["listRunTriggerFires", requireParams("#/components/schemas/RunTriggerPathParams", ["trigger_id"])],
   ["ackOpsAlert", requireParams("#/components/schemas/OpsAlertPathParams", ["alert_id"])],
+  ["listOpsAlertDeliveries", requireParams("#/components/schemas/OpsAlertPathParams", ["alert_id"])],
+  ["recordOpsAlertDelivery", requireParams("#/components/schemas/OpsAlertPathParams", ["alert_id"])],
+  ["sendOpsAlertWebhookDelivery", requireParams("#/components/schemas/OpsAlertPathParams", ["alert_id"])],
   ["getAutomationIdea", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
   ["getDocumentJob", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],
   ["extractDocumentJob", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],
+  ["recordExternalDocumentExtraction", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],
   ["getDocumentExtraction", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],
   ["createDocumentValidationTask", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],
   ["updateAutomationIdea", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
   ["transitionAutomationIdea", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
   ["upsertRoiEstimate", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
   ["getRoiEstimate", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
+  ["listRoiActualEvidence", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
+  ["recordRoiActualEvidence", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
+  ["listAutomationAdoptionEvidence", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
+  ["recordAutomationAdoptionEvidence", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
+  ["dispatchIntegrationHandoff", requireParams("#/components/schemas/IntegrationHandoffPathParams", ["handoff_id"])],
+  ["recordIntegrationHandoffCallback", requireParams("#/components/schemas/IntegrationHandoffPathParams", ["handoff_id"])],
   ["validateScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
   ["promoteScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
   ["promoteScenarioFromRun", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
@@ -1045,6 +2000,9 @@ const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Op
   ["listScenarioVersions", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
   ["getScenarioVersion", requireParams("#/components/schemas/ScenarioVersionPathParams", ["scenario_id", "version"])],
   ["rollbackScenario", requireParams("#/components/schemas/ScenarioVersionPathParams", ["scenario_id", "version"])],
+  ["certifyScenarioVersion", requireParams("#/components/schemas/ScenarioVersionPathParams", ["scenario_id", "version"])],
+  ["setScenarioVersionGovernanceStage", requireParams("#/components/schemas/ScenarioVersionPathParams", ["scenario_id", "version"])],
+  ["revokeScenarioCertification", requireParams("#/components/schemas/ScenarioVersionPathParams", ["scenario_id", "version"])],
   ["startHumanTask", requireParams("#/components/schemas/HumanTaskPathParams", ["human_task_id"])],
   ["resolveHumanTask", requireParams("#/components/schemas/HumanTaskPathParams", ["human_task_id"])],
   ["assignHumanTask", requireParams("#/components/schemas/HumanTaskPathParams", ["human_task_id"])],
@@ -1080,12 +2038,18 @@ const queryValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Ope
   ["listRunTriggers", passQuery("#/components/schemas/RunTriggerListQuery")],
   ["listRunTriggerFires", passQuery("#/components/schemas/RunTriggerFireListQuery")],
   ["listOpsAlerts", passQuery("#/components/schemas/OpsAlertListQuery")],
+  ["listOpsAlertDeliveries", passQuery("#/components/schemas/OpsAlertDeliveryListQuery")],
+  ["listProductionReadinessEvidence", requireProductionReadinessEvidenceQuery("#/components/schemas/ProductionReadinessEvidenceListQuery")],
+  ["listAiGovernanceEvidence", requireAiGovernanceEvidenceQuery("#/components/schemas/AiGovernanceEvidenceListQuery")],
   ["listAutomationIdeas", passQuery("#/components/schemas/AutomationIdeaListQuery")],
+  ["listRoiActualEvidence", passQuery("#/components/schemas/RoiActualEvidenceListQuery")],
+  ["listAutomationAdoptionEvidence", passQuery("#/components/schemas/AutomationAdoptionEvidenceListQuery")],
   ["listDocumentJobs", passQuery("#/components/schemas/DocumentJobListQuery")],
   ["listAuditLog", passQuery("#/components/schemas/AuditLogListQuery")],
   ["exportAuditLog", passQuery("#/components/schemas/AuditLogExportQuery")],
   ["listConnectors", passQuery("#/components/schemas/ConnectorCatalogListQuery")],
   ["listTemplates", passQuery("#/components/schemas/TemplateCatalogListQuery")],
+  ["listIntegrationHandoffs", passQuery("#/components/schemas/IntegrationHandoffListQuery")],
   ["listHumanTasks", passQuery("#/components/schemas/HumanTaskListQuery")],
   ["listWorkitems", passQuery("#/components/schemas/WorkitemListQuery")],
   ["getGatewayPolicy", passQuery("#/components/schemas/GatewayPolicyQuery")],

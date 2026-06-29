@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-enterprise
+    app.kubernetes.io/part-of: rpa-enterprise

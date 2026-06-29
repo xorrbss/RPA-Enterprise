@@ -2,7 +2,7 @@
 -- Migration: 핵심 엔티티 DDL (Phase 2 — README §외부 의존 맵 잔여 TODO 해소)
 -- 대상: runs, run_steps, workitems, human_tasks, scenarios,
 --       scenario_versions, automation_ideas, roi_estimates, run_triggers, run_trigger_fires, artifacts, events_outbox,
---       ops_alert_acknowledgements, dead_letter,
+--       ops_alert_acknowledgements, ops_notification_deliveries, dead_letter,
 --       stagehand_calls, action_plan_cache, site_profiles,
 --       site_profile_approvals, site_block_samples, browser_identities, network_policies,
 --       gateway_policies, control_plane_idempotency_keys, workers
@@ -245,6 +245,57 @@ CREATE UNIQUE INDEX uq_gateway_policies_default ON gateway_policies (tenant_id)
   WHERE is_default;                                          -- 테넌트당 기본 정책 1건(uq_scenario_versions_prod 동형)
 
 -- control_plane_idempotency_keys — api-surface.md §0.4 명령형 POST 중복 제출 보호.
+-- ai_governance_evidence -- metadata-only evidence registry for enterprise AI controls.
+--   Stores model/prompt registry approvals, eval results, cost controls, and human override evidence.
+--   Raw prompts, raw outputs, raw URLs, tokens, passwords, provider credentials, and resolved SecretRef
+--   values must never be stored here. Valid evidence is linked to a policy decision and audit correlation.
+CREATE TABLE ai_governance_evidence (
+  id                  uuid        PRIMARY KEY,
+  tenant_id           uuid        NOT NULL,
+  evidence_type       text        NOT NULL
+                                  CHECK (evidence_type IN ('model_registry','prompt_registry','eval_result','cost_control','human_override')),
+  subject_ref         text        NOT NULL CHECK (length(trim(subject_ref)) > 0 AND length(subject_ref) <= 300),
+  status              text        NOT NULL
+                                  CHECK (status IN ('valid','failed','deferred')),
+  evidence_at         timestamptz NOT NULL,
+  expires_at          timestamptz,
+  summary             text        NOT NULL CHECK (length(trim(summary)) > 0 AND length(summary) <= 1000),
+  evidence_ref        text        CHECK (evidence_ref IS NULL OR (length(trim(evidence_ref)) > 0 AND length(evidence_ref) <= 500)),
+  policy_decision_ref text        CHECK (policy_decision_ref IS NULL OR (length(trim(policy_decision_ref)) > 0 AND length(policy_decision_ref) <= 300)),
+  audit_correlation_id uuid,
+  metadata            jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  recorded_by         text        NOT NULL CHECK (length(trim(recorded_by)) > 0),
+  recorded_at         timestamptz NOT NULL DEFAULT now(),
+  retention_until     timestamptz NOT NULL,
+  legal_hold          boolean     NOT NULL DEFAULT false,
+  deleted_at          timestamptz,
+  CHECK (expires_at IS NULL OR expires_at > evidence_at),
+  CHECK (jsonb_typeof(metadata) = 'object'),
+  CHECK (
+    summary !~* '(https?://|hooks\.slack\.com|bearer[[:space:]]+[a-z0-9._~+/=-]{8,}|(^|[^a-z0-9_])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:]]{4,}|raw[_-]?prompt|prompt[_-]?text|prompt[_-]?body|raw[_-]?output|output[_-]?text|output[_-]?body)'
+    AND COALESCE(evidence_ref, '') !~* '(https?://|hooks\.slack\.com|bearer[[:space:]]+[a-z0-9._~+/=-]{8,}|(^|[^a-z0-9_])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:]]{4,})'
+    AND COALESCE(policy_decision_ref, '') !~* '(https?://|hooks\.slack\.com|bearer[[:space:]]+[a-z0-9._~+/=-]{8,}|(^|[^a-z0-9_])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:]]{4,})'
+    AND metadata::text !~* '(https?://|hooks\.slack\.com|bearer[[:space:]]+[a-z0-9._~+/=-]{8,}|(^|[^a-z0-9_])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:]]{4,}|"(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization|raw_prompt|prompt_text|prompt_body|raw_output|output_text|output_body|payload|body)"[[:space:]]*:)'
+  ),
+  CHECK (status <> 'valid' OR evidence_ref IS NOT NULL),
+  CHECK (status <> 'valid' OR policy_decision_ref IS NOT NULL),
+  CHECK (status <> 'valid' OR audit_correlation_id IS NOT NULL),
+  CHECK (status <> 'valid' OR evidence_type = 'human_override' OR expires_at IS NOT NULL),
+  CHECK (retention_until >= recorded_at)
+);
+CREATE INDEX idx_ai_governance_evidence_latest
+  ON ai_governance_evidence (tenant_id, evidence_type, subject_ref, evidence_at DESC, recorded_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_ai_governance_evidence_status
+  ON ai_governance_evidence (tenant_id, status, recorded_at DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_ai_governance_evidence_audit_correlation
+  ON ai_governance_evidence (tenant_id, audit_correlation_id)
+  WHERE audit_correlation_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX idx_ai_governance_evidence_retention
+  ON ai_governance_evidence (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
 CREATE TABLE control_plane_idempotency_keys (
   id               uuid        PRIMARY KEY,
   tenant_id        uuid        NOT NULL,
@@ -292,6 +343,22 @@ CREATE TABLE scenario_versions (
   tenant_id         uuid        NOT NULL,
   scenario_id       uuid        NOT NULL REFERENCES scenarios(id),
   version           int         NOT NULL,                   -- ir.schema meta.version. optimistic lock/ETag 근거
+  certification_status text     NOT NULL DEFAULT 'uncertified'
+                      CHECK (certification_status IN ('uncertified','certified','revoked')),
+  certified_by     text,
+  certified_at     timestamptz,
+  certification_expires_at timestamptz,
+  certification_reason text,
+  certification_revoked_by text,
+  certification_revoked_at timestamptz,
+  certification_revoke_reason text,
+  governance_stage text NOT NULL DEFAULT 'dev'
+                      CHECK (governance_stage IN ('dev','review','pilot','certified','deprecated')),
+  governance_reason text,
+  governance_evidence_ref text CHECK (governance_evidence_ref IS NULL OR (length(trim(governance_evidence_ref)) > 0 AND length(governance_evidence_ref) <= 500)),
+  governance_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  governance_updated_by text,
+  governance_updated_at timestamptz,
   promotion_status  text        NOT NULL DEFAULT 'draft'
                       CHECK (promotion_status IN ('draft','prod')),  -- prod 승격은 ValidationReport warnings 차단(ir-static-validation §3)
   ir                jsonb       NOT NULL,                   -- ir.schema.json 원본
@@ -299,10 +366,59 @@ CREATE TABLE scenario_versions (
   params_schema     jsonb,                                  -- ir.schema params_schema(IREL params.* 타입 추론 근거)
   created_at        timestamptz NOT NULL DEFAULT now(),
   promoted_at       timestamptz,
+  CHECK (
+    (
+      certification_status = 'uncertified'
+      AND certified_by IS NULL
+      AND certified_at IS NULL
+      AND certification_expires_at IS NULL
+      AND certification_reason IS NULL
+      AND certification_revoked_by IS NULL
+      AND certification_revoked_at IS NULL
+      AND certification_revoke_reason IS NULL
+    )
+    OR (
+      certification_status = 'certified'
+      AND certified_by IS NOT NULL
+      AND certified_at IS NOT NULL
+      AND certification_reason IS NOT NULL
+      AND certification_revoked_by IS NULL
+      AND certification_revoked_at IS NULL
+      AND certification_revoke_reason IS NULL
+    )
+    OR (
+      certification_status = 'revoked'
+      AND certified_by IS NOT NULL
+      AND certified_at IS NOT NULL
+      AND certification_reason IS NOT NULL
+      AND certification_revoked_by IS NOT NULL
+      AND certification_revoked_at IS NOT NULL
+      AND certification_revoke_reason IS NOT NULL
+    )
+  ),
+  CHECK (certification_expires_at IS NULL OR (certified_at IS NOT NULL AND certification_expires_at > certified_at)),
   -- (scenario, version) 유일 → If-Match 충돌 시 SCENARIO_VERSION_CONFLICT(412)
+  CHECK (
+    (
+      governance_stage = 'dev'
+      AND governance_reason IS NULL
+      AND governance_evidence_ref IS NULL
+      AND governance_updated_by IS NULL
+      AND governance_updated_at IS NULL
+    )
+    OR (
+      governance_stage <> 'dev'
+      AND governance_reason IS NOT NULL
+      AND governance_evidence_ref IS NOT NULL
+      AND governance_updated_by IS NOT NULL
+      AND governance_updated_at IS NOT NULL
+    )
+  ),
   UNIQUE (tenant_id, scenario_id, version)
 );
 CREATE INDEX idx_scenario_versions_scenario ON scenario_versions (scenario_id, version);
+CREATE INDEX idx_scenario_versions_certification ON scenario_versions (tenant_id, certification_status, certification_expires_at);
+CREATE INDEX idx_scenario_versions_governance ON scenario_versions (tenant_id, governance_stage, governance_updated_at DESC);
 CREATE UNIQUE INDEX uq_scenario_versions_prod ON scenario_versions (tenant_id, scenario_id)
   WHERE promotion_status = 'prod';                          -- scenario당 prod 1건
 
@@ -435,9 +551,14 @@ CREATE TABLE roi_estimates (
   exception_rate          numeric(5,4)  NOT NULL DEFAULT 0 CHECK (exception_rate >= 0 AND exception_rate <= 1),
   hourly_cost             numeric(12,2) NOT NULL CHECK (hourly_cost >= 0),
   implementation_effort   numeric(12,2) NOT NULL DEFAULT 0 CHECK (implementation_effort >= 0),
+  platform_monthly_cost   numeric(14,2) NOT NULL CHECK (platform_monthly_cost >= 0),
+  avoided_license_cost    numeric(14,2) NOT NULL CHECK (avoided_license_cost >= 0),
   monthly_hours_saved     numeric(12,2) NOT NULL CHECK (monthly_hours_saved >= 0),
   estimated_monthly_value numeric(14,2) NOT NULL CHECK (estimated_monthly_value >= 0),
+  monthly_value           numeric(14,2) NOT NULL,
   payback_months          numeric(10,2),
+  viability               text          NOT NULL DEFAULT 'viable'
+                              CHECK (viability IN ('viable','not_viable')),
   confidence              text          NOT NULL DEFAULT 'medium'
                               CHECK (confidence IN ('low','medium','high')),
   created_by              text          NOT NULL,
@@ -446,6 +567,67 @@ CREATE TABLE roi_estimates (
   UNIQUE (tenant_id, automation_idea_id)
 );
 CREATE INDEX idx_roi_estimates_idea ON roi_estimates (tenant_id, automation_idea_id);
+
+CREATE TABLE roi_actual_evidence (
+  id                         uuid          PRIMARY KEY,
+  tenant_id                  uuid          NOT NULL,
+  automation_idea_id         uuid          NOT NULL REFERENCES automation_ideas(id),
+  period_start               date          NOT NULL,
+  period_end                 date          NOT NULL,
+  actual_transaction_count   int           NOT NULL CHECK (actual_transaction_count >= 0),
+  actual_failure_rate        numeric(5,4)  NOT NULL CHECK (actual_failure_rate >= 0 AND actual_failure_rate <= 1),
+  human_intervention_minutes numeric(12,2) NOT NULL CHECK (human_intervention_minutes >= 0),
+  reprocessing_minutes       numeric(12,2) NOT NULL CHECK (reprocessing_minutes >= 0),
+  evidence_ref               text          NOT NULL CHECK (length(evidence_ref) > 0 AND length(evidence_ref) <= 500),
+  summary                    text          NOT NULL CHECK (length(summary) > 0 AND length(summary) <= 1000),
+  metadata                   jsonb         NOT NULL DEFAULT '{}'::jsonb,
+  recorded_by                text          NOT NULL CHECK (length(recorded_by) > 0),
+  recorded_at                timestamptz   NOT NULL DEFAULT now(),
+  retention_until            timestamptz   NOT NULL,
+  legal_hold                 boolean       NOT NULL DEFAULT false,
+  deleted_at                 timestamptz,
+  CHECK (period_end >= period_start),
+  CHECK (retention_until >= recorded_at)
+);
+CREATE INDEX idx_roi_actual_evidence_idea_period
+  ON roi_actual_evidence (tenant_id, automation_idea_id, period_end DESC, recorded_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_roi_actual_evidence_retention
+  ON roi_actual_evidence (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
+CREATE TABLE automation_adoption_evidence (
+  id                  uuid        PRIMARY KEY,
+  tenant_id           uuid        NOT NULL,
+  automation_idea_id  uuid        NOT NULL REFERENCES automation_ideas(id),
+  evidence_type       text        NOT NULL
+                                  CHECK (evidence_type IN ('pilot_charter_signoff','raci_signoff','training_completion','support_model_signoff')),
+  status              text        NOT NULL
+                                  CHECK (status IN ('valid','failed','deferred')),
+  evidence_at         timestamptz NOT NULL,
+  expires_at          timestamptz,
+  summary             text        NOT NULL CHECK (length(trim(summary)) > 0 AND length(summary) <= 1000),
+  evidence_ref        text        CHECK (evidence_ref IS NULL OR (length(trim(evidence_ref)) > 0 AND length(evidence_ref) <= 500)),
+  metadata            jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  recorded_by         text        NOT NULL CHECK (length(trim(recorded_by)) > 0),
+  recorded_at         timestamptz NOT NULL DEFAULT now(),
+  retention_until     timestamptz NOT NULL,
+  legal_hold          boolean     NOT NULL DEFAULT false,
+  deleted_at          timestamptz,
+  CHECK (expires_at IS NULL OR expires_at >= evidence_at),
+  CHECK (status <> 'valid' OR evidence_ref IS NOT NULL),
+  CHECK (status <> 'valid' OR expires_at IS NOT NULL),
+  CHECK (retention_until >= recorded_at)
+);
+CREATE INDEX idx_automation_adoption_evidence_idea
+  ON automation_adoption_evidence (tenant_id, automation_idea_id, evidence_type, recorded_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_automation_adoption_evidence_status
+  ON automation_adoption_evidence (tenant_id, status, recorded_at DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_automation_adoption_evidence_retention
+  ON automation_adoption_evidence (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
 
 -- ============================================================
 -- 2b. run_triggers
@@ -757,7 +939,14 @@ CREATE TABLE scim_providers (
   auth_mode            text        NOT NULL DEFAULT 'signed_request_v1'
                          CHECK (auth_mode IN ('signed_request_v1')),
   signature_secret_ref text        NOT NULL CHECK (length(signature_secret_ref) > 0),
+  secret_rotation_policy text      NOT NULL DEFAULT 'periodic_90d'
+                         CHECK (secret_rotation_policy IN ('manual','periodic_30d','periodic_60d','periodic_90d')),
   clock_skew_seconds   integer     NOT NULL DEFAULT 300 CHECK (clock_skew_seconds BETWEEN 0 AND 900),
+  last_secret_rotated_at timestamptz,
+  last_secret_rotated_by text,
+  decommissioned_at    timestamptz,
+  decommissioned_by    text,
+  decommission_reason  text        CHECK (decommission_reason IS NULL OR length(trim(decommission_reason)) > 0),
   created_by           text        NOT NULL CHECK (length(created_by) > 0),
   updated_by           text,
   created_at           timestamptz NOT NULL DEFAULT now(),
@@ -798,6 +987,103 @@ CREATE INDEX idx_scim_group_role_mappings_active
 --    SCIM은 동기화 엔진 없이 저장 계약만 예약한다(source/lifecycle_source='scim', external_id/idp_provider).
 --    human_tasks.assignee → principals FK 없음(의도적): 디렉터리 미등록 sub 배정도 허용(자유형 정책 보존).
 -- ============================================================
+-- ============================================================
+-- 6d. integration_handoffs -- existing RPA product handoff ledger.
+--    No endpoint URL, credential, provider token, or callback secret material is stored here.
+--    create status=deferred means the control plane accepted ledger evidence only; a provider
+--    receipt/callback is required before completed can be shown.
+-- ============================================================
+CREATE TABLE integration_handoffs (
+  id                      uuid        PRIMARY KEY,
+  tenant_id               uuid        NOT NULL,
+  provider_alias          text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
+  job_ref                 text        NOT NULL CHECK (length(job_ref) > 0 AND length(job_ref) <= 300),
+  payload_ref             text        NOT NULL CHECK (length(payload_ref) > 0 AND length(payload_ref) <= 500),
+  callback_url_secret_ref text        CHECK (callback_url_secret_ref IS NULL OR callback_url_secret_ref ~ '^secret://.+'),
+  callback_signature_secret_ref text  CHECK (callback_signature_secret_ref IS NULL OR callback_signature_secret_ref ~ '^secret://.+'),
+  request_idempotency_key text        NOT NULL CHECK (length(request_idempotency_key) > 0),
+  status                  text        NOT NULL DEFAULT 'deferred'
+                            CHECK (status IN ('accepted','deferred','completed','failed','cancelled')),
+  external_job_id         text        CHECK (external_job_id IS NULL OR length(external_job_id) <= 200),
+  latest_receipt_id       text        CHECK (latest_receipt_id IS NULL OR length(latest_receipt_id) <= 200),
+  latest_error_code       text        CHECK (latest_error_code IS NULL OR length(latest_error_code) <= 120),
+  requested_by            text        NOT NULL CHECK (length(requested_by) > 0),
+  callback_received_at    timestamptz,
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  updated_at              timestamptz NOT NULL DEFAULT now(),
+  retention_until         timestamptz NOT NULL DEFAULT (now() + interval '365 days'),
+  legal_hold              boolean     NOT NULL DEFAULT false,
+  UNIQUE (tenant_id, request_idempotency_key)
+);
+CREATE INDEX idx_integration_handoffs_latest
+  ON integration_handoffs (tenant_id, created_at DESC, id DESC);
+CREATE INDEX idx_integration_handoffs_status
+  ON integration_handoffs (tenant_id, status, updated_at DESC, id DESC);
+CREATE INDEX idx_integration_handoffs_provider
+  ON integration_handoffs (tenant_id, provider_alias, updated_at DESC, id DESC);
+CREATE INDEX idx_integration_handoffs_retention
+  ON integration_handoffs (retention_until)
+  WHERE legal_hold = false;
+
+CREATE TABLE integration_handoff_receipts (
+  id                uuid        PRIMARY KEY,
+  tenant_id         uuid        NOT NULL,
+  handoff_id        uuid        NOT NULL,
+  external_job_id   text        NOT NULL CHECK (length(external_job_id) > 0 AND length(external_job_id) <= 200),
+  status            text        NOT NULL CHECK (status IN ('accepted','completed','failed','cancelled')),
+  receipt_id        text        NOT NULL CHECK (length(receipt_id) > 0 AND length(receipt_id) <= 200),
+  error_code        text        CHECK (error_code IS NULL OR length(error_code) <= 120),
+  received_by       text        NOT NULL CHECK (length(received_by) > 0),
+  received_at       timestamptz NOT NULL DEFAULT now(),
+  retention_until   timestamptz NOT NULL DEFAULT (now() + interval '365 days'),
+  legal_hold        boolean     NOT NULL DEFAULT false,
+  UNIQUE (tenant_id, handoff_id, receipt_id)
+);
+CREATE INDEX idx_integration_handoff_receipts_handoff
+  ON integration_handoff_receipts (tenant_id, handoff_id, received_at DESC, id DESC);
+CREATE INDEX idx_integration_handoff_receipts_retention
+  ON integration_handoff_receipts (retention_until)
+  WHERE legal_hold = false;
+
+CREATE TABLE integration_handoff_dispatch_attempts (
+  id                      uuid        PRIMARY KEY,
+  tenant_id               uuid        NOT NULL,
+  handoff_id              uuid        NOT NULL,
+  provider_alias          text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
+  status                  text        NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending','sending','accepted','failed','dead_letter')),
+  endpoint_secret_ref     text        NOT NULL CHECK (endpoint_secret_ref ~ '^secret://.+'),
+  allowed_hosts           text[]      NOT NULL CHECK (array_length(allowed_hosts, 1) BETWEEN 1 AND 20),
+  request_idempotency_key text        NOT NULL CHECK (length(request_idempotency_key) > 0),
+  attempt_no              integer     NOT NULL DEFAULT 1 CHECK (attempt_no >= 1),
+  max_attempts            integer     NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 20 AND attempt_no <= max_attempts),
+  next_attempt_at         timestamptz NOT NULL DEFAULT now(),
+  lease_token             uuid,
+  payload                 jsonb       NOT NULL,
+  provider_status_code    integer     CHECK (provider_status_code IS NULL OR provider_status_code BETWEEN 100 AND 599),
+  external_job_id         text        CHECK (external_job_id IS NULL OR length(external_job_id) <= 200),
+  receipt_id              text        CHECK (receipt_id IS NULL OR length(receipt_id) <= 200),
+  error_code              text        CHECK (error_code IS NULL OR length(error_code) <= 120),
+  requested_by            text        NOT NULL CHECK (length(requested_by) > 0),
+  started_at              timestamptz,
+  completed_at            timestamptz,
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  updated_at              timestamptz NOT NULL DEFAULT now(),
+  retention_until         timestamptz NOT NULL DEFAULT (now() + interval '365 days'),
+  legal_hold              boolean     NOT NULL DEFAULT false,
+  deleted_at              timestamptz,
+  UNIQUE (tenant_id, handoff_id, request_idempotency_key, attempt_no)
+);
+CREATE INDEX idx_integration_handoff_dispatch_attempts_handoff
+  ON integration_handoff_dispatch_attempts (tenant_id, handoff_id, created_at DESC, attempt_no DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_integration_handoff_dispatch_attempts_pending
+  ON integration_handoff_dispatch_attempts (tenant_id, next_attempt_at, id)
+  WHERE status = 'pending' AND deleted_at IS NULL;
+CREATE INDEX idx_integration_handoff_dispatch_attempts_retention
+  ON integration_handoff_dispatch_attempts (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
 CREATE TABLE principals (
   id           uuid        PRIMARY KEY,                     -- surrogate(다른 엔티티·커서 keyset과 동형)
   tenant_id    uuid        NOT NULL,
@@ -981,9 +1267,14 @@ CREATE TABLE document_extractions (
   tenant_id                uuid        NOT NULL,
   document_job_id          uuid        NOT NULL,
   engine                   text        NOT NULL DEFAULT 'built_in_deterministic_text_v1'
-                             CHECK (engine IN ('built_in_deterministic_text_v1')),
+                             CHECK (engine IN ('built_in_deterministic_text_v1','external_idp_adapter_v1')),
   status                   text        NOT NULL
                              CHECK (status IN ('completed','validation_required','failed')),
+  provider_alias           text,
+  provider_receipt_id      text,
+  normalized_schema_ref    text,
+  evidence_ref             text,
+  provider_metadata        jsonb       NOT NULL DEFAULT '{}'::jsonb,
   fields                   jsonb       NOT NULL DEFAULT '[]'::jsonb,
   missing_fields           jsonb       NOT NULL DEFAULT '[]'::jsonb,
   validation_human_task_id uuid,
@@ -995,6 +1286,9 @@ CREATE TABLE document_extractions (
   UNIQUE (tenant_id, document_job_id)
 );
 CREATE INDEX idx_document_extractions_status ON document_extractions (tenant_id, status, created_at DESC, id DESC);
+CREATE UNIQUE INDEX idx_document_extractions_provider_receipt
+  ON document_extractions (tenant_id, provider_alias, provider_receipt_id)
+  WHERE provider_alias IS NOT NULL AND provider_receipt_id IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX idx_document_extractions_validation_task ON document_extractions (tenant_id, validation_human_task_id)
   WHERE validation_human_task_id IS NOT NULL;
 CREATE INDEX idx_document_extractions_retention ON document_extractions (retention_until)
@@ -1097,8 +1391,8 @@ CREATE TABLE ops_alert_acknowledgements (
   tenant_id         uuid        NOT NULL,
   alert_id          text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
   detected_at       timestamptz NOT NULL,
-  source            text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool')),
-  subject_type      text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool')),
+  source            text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence')),
+  subject_type      text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence')),
   subject_id        text,
   acknowledged_by   text        NOT NULL CHECK (length(acknowledged_by) > 0),
   acknowledged_at   timestamptz NOT NULL DEFAULT now(),
@@ -1107,6 +1401,147 @@ CREATE TABLE ops_alert_acknowledgements (
 );
 CREATE INDEX idx_ops_alert_acknowledgements_tenant_time
   ON ops_alert_acknowledgements (tenant_id, acknowledged_at DESC);
+
+-- ------------------------------------------------------------
+-- ops_notification_deliveries — external ops alert delivery receipt ledger.
+--   Ack is not delivery. This table stores metadata-only provider receipt
+--   evidence for SecretRef-backed outbound notification attempts. It must not
+--   contain endpoint URLs, tokens, SMTP credentials, webhook secrets, provider
+--   payload bodies with secret material, or resolved SecretRef values.
+-- ------------------------------------------------------------
+CREATE TABLE ops_notification_deliveries (
+  id                    uuid        PRIMARY KEY,
+  tenant_id             uuid        NOT NULL,
+  alert_id              text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
+  detected_at           timestamptz NOT NULL,
+  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence')),
+  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence')),
+  subject_id            text,
+  channel               text        NOT NULL CHECK (channel IN ('teams','slack','email','webhook')),
+  provider_alias        text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
+  status                text        NOT NULL CHECK (status IN ('sent','delivered','failed')),
+  receipt_id            text        CHECK (receipt_id IS NULL OR (length(receipt_id) > 0 AND length(receipt_id) <= 200)),
+  receipt_at            timestamptz NOT NULL,
+  endpoint_secret_ref   text        NOT NULL CHECK (endpoint_secret_ref LIKE 'secret://%' AND length(endpoint_secret_ref) > length('secret://') AND length(endpoint_secret_ref) <= 500),
+  credential_secret_ref text        CHECK (credential_secret_ref IS NULL OR (credential_secret_ref LIKE 'secret://%' AND length(credential_secret_ref) > length('secret://') AND length(credential_secret_ref) <= 500)),
+  callback_signature_secret_ref text CHECK (callback_signature_secret_ref IS NULL OR (callback_signature_secret_ref LIKE 'secret://%' AND length(callback_signature_secret_ref) > length('secret://') AND length(callback_signature_secret_ref) <= 500)),
+  route_policy_ref      text        CHECK (route_policy_ref IS NULL OR (length(route_policy_ref) > 0 AND length(route_policy_ref) <= 200)),
+  recipient_group_ref   text        CHECK (recipient_group_ref IS NULL OR (length(recipient_group_ref) > 0 AND length(recipient_group_ref) <= 200)),
+  attempt_no            int         NOT NULL DEFAULT 1 CHECK (attempt_no >= 1),
+  summary               text        NOT NULL CHECK (length(summary) > 0 AND length(summary) <= 1000),
+  error_code            text        CHECK (error_code IS NULL OR (length(error_code) > 0 AND length(error_code) <= 120)),
+  metadata              jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  recorded_by           text        NOT NULL CHECK (length(recorded_by) > 0),
+  recorded_at           timestamptz NOT NULL DEFAULT now(),
+  retention_until       timestamptz NOT NULL,
+  legal_hold            boolean     NOT NULL DEFAULT false,
+  deleted_at            timestamptz,
+  CHECK (status <> 'failed' OR error_code IS NOT NULL),
+  CHECK (status = 'failed' OR receipt_id IS NOT NULL),
+  CHECK (retention_until >= recorded_at)
+);
+CREATE INDEX idx_ops_notification_deliveries_alert
+  ON ops_notification_deliveries (tenant_id, alert_id, detected_at DESC, receipt_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_ops_notification_deliveries_readiness
+  ON ops_notification_deliveries (tenant_id, status, receipt_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX uq_ops_notification_deliveries_provider_receipt
+  ON ops_notification_deliveries (tenant_id, alert_id, detected_at, provider_alias, receipt_id)
+  WHERE receipt_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX idx_ops_notification_deliveries_retention
+  ON ops_notification_deliveries (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
+-- ------------------------------------------------------------
+-- ops_notification_attempts -- durable outbound notification sender work.
+--   This is intentionally separate from ops_notification_deliveries: attempts
+--   own pending/sending/retry/dead_letter state, while deliveries remain
+--   metadata-only provider receipts. Webhook v1.1 stores only SecretRefs,
+--   approved host names, and a safe alert summary payload; endpoint URLs,
+--   credentials, headers, resolved SecretRef values, and provider response
+--   bodies never belong here.
+-- ------------------------------------------------------------
+CREATE TABLE ops_notification_attempts (
+  id                    uuid        PRIMARY KEY,
+  tenant_id             uuid        NOT NULL,
+  alert_id              text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
+  detected_at           timestamptz NOT NULL,
+  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence')),
+  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence')),
+  subject_id            text,
+  channel               text        NOT NULL CHECK (channel IN ('webhook')),
+  provider_alias        text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
+  status                text        NOT NULL CHECK (status IN ('pending','sending','sent','failed','dead_letter')),
+  endpoint_secret_ref   text        NOT NULL CHECK (endpoint_secret_ref LIKE 'secret://%' AND length(endpoint_secret_ref) > length('secret://') AND length(endpoint_secret_ref) <= 500),
+  credential_secret_ref text        CHECK (credential_secret_ref IS NULL OR (credential_secret_ref LIKE 'secret://%' AND length(credential_secret_ref) > length('secret://') AND length(credential_secret_ref) <= 500)),
+  callback_signature_secret_ref text CHECK (callback_signature_secret_ref IS NULL OR (callback_signature_secret_ref LIKE 'secret://%' AND length(callback_signature_secret_ref) > length('secret://') AND length(callback_signature_secret_ref) <= 500)),
+  route_policy_ref      text        NOT NULL CHECK (length(route_policy_ref) > 0 AND length(route_policy_ref) <= 200),
+  recipient_group_ref   text        CHECK (recipient_group_ref IS NULL OR (length(recipient_group_ref) > 0 AND length(recipient_group_ref) <= 200)),
+  allowed_hosts         text[]      NOT NULL CHECK (array_length(allowed_hosts, 1) BETWEEN 1 AND 20),
+  attempt_no            int         NOT NULL CHECK (attempt_no >= 1),
+  max_attempts          int         NOT NULL CHECK (max_attempts >= 1 AND max_attempts <= 20 AND attempt_no <= max_attempts),
+  next_attempt_at       timestamptz NOT NULL,
+  payload               jsonb       NOT NULL,
+  summary               text        NOT NULL CHECK (length(summary) > 0 AND length(summary) <= 1000),
+  error_code            text        CHECK (error_code IS NULL OR (length(error_code) > 0 AND length(error_code) <= 120)),
+  receipt_id            text        CHECK (receipt_id IS NULL OR (length(receipt_id) > 0 AND length(receipt_id) <= 200)),
+  receipt_at            timestamptz,
+  metadata              jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  requested_by          text        NOT NULL CHECK (length(requested_by) > 0),
+  requested_at          timestamptz NOT NULL DEFAULT now(),
+  started_at            timestamptz,
+  completed_at          timestamptz,
+  lease_token           uuid,
+  retention_until       timestamptz NOT NULL,
+  legal_hold            boolean     NOT NULL DEFAULT false,
+  deleted_at            timestamptz,
+  CHECK (status IN ('failed','dead_letter') OR error_code IS NULL),
+  CHECK (status NOT IN ('sent') OR (receipt_id IS NOT NULL AND receipt_at IS NOT NULL)),
+  CHECK (retention_until >= requested_at)
+);
+CREATE INDEX idx_ops_notification_attempts_alert
+  ON ops_notification_attempts (tenant_id, alert_id, detected_at DESC, attempt_no DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_ops_notification_attempts_pending
+  ON ops_notification_attempts (tenant_id, next_attempt_at, id)
+  WHERE status = 'pending' AND deleted_at IS NULL;
+CREATE INDEX idx_ops_notification_attempts_retention
+  ON ops_notification_attempts (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
+-- ------------------------------------------------------------
+-- production_readiness_evidence — owner/platform evidence attached to controlled-prod readiness gates.
+--   Stores metadata-only proof for evidence that is external to the RPA runtime
+--   itself, such as outbound alert delivery drills and managed backup/PITR
+--   restore drills. Endpoint URLs, tokens, passwords, webhook payload secrets,
+--   and resolved SecretRef values must never be stored here.
+-- ------------------------------------------------------------
+CREATE TABLE production_readiness_evidence (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  evidence_type   text        NOT NULL CHECK (evidence_type IN ('external_alert_delivery','managed_backup_restore_drill','slo_oncall_signoff','observability_telemetry_wiring','support_training_completion')),
+  status          text        NOT NULL CHECK (status IN ('valid','failed')),
+  evidence_at     timestamptz NOT NULL,
+  expires_at      timestamptz,
+  summary         text        NOT NULL CHECK (length(summary) > 0 AND length(summary) <= 1000),
+  evidence_ref    text        CHECK (evidence_ref IS NULL OR (length(evidence_ref) > 0 AND length(evidence_ref) <= 500)),
+  metadata        jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  recorded_by     text        NOT NULL CHECK (length(recorded_by) > 0),
+  recorded_at     timestamptz NOT NULL DEFAULT now(),
+  retention_until timestamptz NOT NULL,
+  legal_hold      boolean     NOT NULL DEFAULT false,
+  deleted_at      timestamptz,
+  CHECK (expires_at IS NULL OR expires_at > evidence_at),
+  CHECK (status <> 'valid' OR expires_at IS NOT NULL),
+  CHECK (retention_until >= recorded_at)
+);
+CREATE INDEX idx_production_readiness_evidence_latest
+  ON production_readiness_evidence (tenant_id, evidence_type, evidence_at DESC, recorded_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_production_readiness_evidence_retention
+  ON production_readiness_evidence (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
 
 -- ============================================================
 -- 9. dead_letter
@@ -1297,6 +1732,37 @@ CREATE TRIGGER trg_audit_log_append_only
 BEFORE UPDATE OR DELETE ON audit_log
 FOR EACH ROW EXECUTE FUNCTION prevent_audit_log_mutation();
 
+-- audit_verifier_runs — operational evidence for tenant-scoped audit hash-chain checks.
+CREATE TABLE audit_verifier_runs (
+  id               uuid        PRIMARY KEY,
+  tenant_id        uuid        NOT NULL,
+  status           text        NOT NULL CHECK (status IN ('valid','invalid','failed')),
+  rows_checked     bigint      NOT NULL CHECK (rows_checked >= 0),
+  violation_count  int         NOT NULL CHECK (violation_count >= 0),
+  violations       jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  checked_from_sequence bigint CHECK (checked_from_sequence IS NULL OR checked_from_sequence >= 1),
+  checked_to_sequence   bigint CHECK (checked_to_sequence IS NULL OR checked_to_sequence >= 1),
+  started_at       timestamptz NOT NULL,
+  completed_at     timestamptz NOT NULL,
+  correlation_id   uuid        NOT NULL,
+  triggered_by     jsonb       NOT NULL,
+  trigger_kind     text        NOT NULL CHECK (trigger_kind IN ('manual_api','maintenance')),
+  retention_until  timestamptz NOT NULL,
+  legal_hold       boolean     NOT NULL DEFAULT false,
+  deleted_at       timestamptz,
+  CHECK (completed_at >= started_at),
+  CHECK (
+    (rows_checked = 0 AND checked_from_sequence IS NULL AND checked_to_sequence IS NULL)
+    OR (rows_checked > 0 AND checked_from_sequence IS NOT NULL AND checked_to_sequence IS NOT NULL AND checked_from_sequence <= checked_to_sequence)
+  )
+);
+CREATE INDEX idx_audit_verifier_runs_tenant_completed
+  ON audit_verifier_runs (tenant_id, completed_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_audit_verifier_runs_retention
+  ON audit_verifier_runs (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
 -- ============================================================
 -- FK: lease 테이블(migration_concurrency_idempotency.sql)의 uuid 참조 보강
 --   해당 파일은 site_profile_id/browser_identity_id/run_id/workitem_id를 uuid 컬럼으로만 두고
@@ -1343,6 +1809,7 @@ ALTER TABLE scenario_environment_bindings ADD CONSTRAINT uq_scenario_environment
 ALTER TABLE scenario_release_events ADD CONSTRAINT uq_scenario_release_events_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE automation_ideas    ADD CONSTRAINT uq_automation_ideas_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE roi_estimates       ADD CONSTRAINT uq_roi_estimates_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE roi_actual_evidence ADD CONSTRAINT uq_roi_actual_evidence_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE run_triggers        ADD CONSTRAINT uq_run_triggers_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE run_trigger_fires   ADD CONSTRAINT uq_run_trigger_fires_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE workitems           ADD CONSTRAINT uq_workitems_tenant_id_id UNIQUE (tenant_id, id);
@@ -1358,9 +1825,25 @@ ALTER TABLE browser_recording_sessions ADD CONSTRAINT uq_browser_recording_sessi
 ALTER TABLE browser_recording_events ADD CONSTRAINT uq_browser_recording_events_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scim_providers ADD CONSTRAINT uq_scim_providers_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scim_group_role_mappings ADD CONSTRAINT uq_scim_group_role_mappings_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE integration_handoffs ADD CONSTRAINT uq_integration_handoffs_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE integration_handoff_receipts ADD CONSTRAINT uq_integration_handoff_receipts_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE integration_handoff_dispatch_attempts ADD CONSTRAINT uq_integration_handoff_dispatch_attempts_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE principal_role_assignments ADD CONSTRAINT uq_principal_role_assignments_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE principal_role_assignment_events ADD CONSTRAINT uq_principal_role_assignment_events_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE credential_binding_events ADD CONSTRAINT uq_credential_binding_events_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE production_readiness_evidence ADD CONSTRAINT uq_production_readiness_evidence_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE ops_notification_deliveries ADD CONSTRAINT uq_ops_notification_deliveries_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE ops_notification_attempts ADD CONSTRAINT uq_ops_notification_attempts_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE automation_adoption_evidence ADD CONSTRAINT uq_automation_adoption_evidence_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE ai_governance_evidence ADD CONSTRAINT uq_ai_governance_evidence_tenant_id_id UNIQUE (tenant_id, id);
+
+ALTER TABLE integration_handoff_receipts
+  ADD CONSTRAINT fk_integration_handoff_receipts_handoff_tenant
+  FOREIGN KEY (tenant_id, handoff_id) REFERENCES integration_handoffs(tenant_id, id);
+
+ALTER TABLE integration_handoff_dispatch_attempts
+  ADD CONSTRAINT fk_integration_handoff_dispatch_attempts_handoff_tenant
+  FOREIGN KEY (tenant_id, handoff_id) REFERENCES integration_handoffs(tenant_id, id);
 
 ALTER TABLE site_profile_approvals
   ADD CONSTRAINT fk_site_profile_approvals_site_tenant
@@ -1444,6 +1927,14 @@ ALTER TABLE automation_ideas
 
 ALTER TABLE roi_estimates
   ADD CONSTRAINT fk_roi_estimates_automation_idea_tenant
+  FOREIGN KEY (tenant_id, automation_idea_id) REFERENCES automation_ideas(tenant_id, id);
+
+ALTER TABLE roi_actual_evidence
+  ADD CONSTRAINT fk_roi_actual_evidence_automation_idea_tenant
+  FOREIGN KEY (tenant_id, automation_idea_id) REFERENCES automation_ideas(tenant_id, id);
+
+ALTER TABLE automation_adoption_evidence
+  ADD CONSTRAINT fk_automation_adoption_evidence_idea_tenant
   FOREIGN KEY (tenant_id, automation_idea_id) REFERENCES automation_ideas(tenant_id, id);
 
 ALTER TABLE scenario_generations
@@ -1602,9 +2093,11 @@ BEGIN
 	    'scenario_versions',
 	    'scenario_releases',
 	    'scenario_environment_bindings',
-	    'scenario_release_events',
-	    'automation_ideas',
+    'scenario_release_events',
+    'automation_ideas',
     'roi_estimates',
+    'roi_actual_evidence',
+    'automation_adoption_evidence',
     'run_triggers',
     'run_trigger_fires',
     'workitems',
@@ -1616,6 +2109,9 @@ BEGIN
 	    'human_tasks',
 	    'scim_providers',
 	    'scim_group_role_mappings',
+	    'integration_handoffs',
+	    'integration_handoff_receipts',
+	    'integration_handoff_dispatch_attempts',
 	    'principals',
 	    'principal_role_assignments',
 	    'principal_role_assignment_events',
@@ -1623,11 +2119,16 @@ BEGIN
     'document_extractions',
     'events_outbox',
     'ops_alert_acknowledgements',
+    'ops_notification_deliveries',
+    'ops_notification_attempts',
+    'production_readiness_evidence',
+    'ai_governance_evidence',
     'dead_letter',
     'action_plan_cache',
     'stagehand_calls',
     'scenario_generation_llm_calls',
     'audit_log',
+    'audit_verifier_runs',
     'scenario_promotion_requests',
     'worker_pool_assignments'
   ]

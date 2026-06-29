@@ -48,6 +48,9 @@ or raw model identifiers.
 - runtime artifact object-store env : `GATEWAY_ARTIFACT_STORE_MODE=s3`; `GATEWAY_ARTIFACT_OBJECT_STORE_REF=rpa/staging/runtime-worker/object_store/s3-producer`; `ARTIFACT_OBJECT_STORE_REF=rpa/staging/artifact-lifecycle/object_store/s3`; backend alias=[s3-staging-1]
 - artifact store topology preflight  : run `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle`; PASS; evidence=[preflight-s3-1]
 - retention policy                  : D8-A11/D8-A14 and ops-defaults section 6.1; DB alias=[staging-pg-1]; evidence=[staging-retention-1]
+- controlled-prod readiness snapshot : GET /v1/ops/production-readiness; controlled_prod_ready=false; blocker_count=0; deferred_count=5; external_alert_delivery=deferred; support_training_completion=deferred; observability_telemetry_wiring=deferred; evidence=production_readiness_evidence [readiness-snapshot-1]; no production open claimed
+- external alert delivery evidence : evidence_type=external_alert_delivery; status=deferred; metadata.channel=[external-alert-channel-pending]; metadata.provider_alias=[external-alert-provider-pending]; metadata.receipt_id=[external-alert-receipt-pending]; metadata.receipt_at=[external-alert-receipt-at-pending]; metadata.delivery_status=delivered required before production open; evidence=production_readiness_evidence [external-alert-delivery-pending-1]; no endpoint_url/token/webhook_secret
+- ops webhook sender evidence : POST /v1/ops-alerts/{alert_id}/deliveries/send-webhook; ops_notification_attempts=[ops-webhook-attempts-1]; ops_notification_deliveries=[ops-webhook-deliveries-1]; endpoint_secret_ref=SecretRef alias [ops-webhook-secretref-1]; route_policy_ref=[ops-webhook-route-policy-1]; allowed_hosts=public_dns [ops-webhook-host-policy-1]; status=sent; rehearsal only; no webhook_url/token
 - live D5 evidence                  : row 50 packet aliases [codex-staging-1]/[model-a]; mandatory #1/#2/#4 PASS, #3 PASS, #5 metadata GAP fallback retained; evidence=[d5-live-run-1]
 - secret.resolve audit sample       : seq#1/hash#[secret-resolve-allow-hash-1], seq#2/hash#[secret-resolve-deny-hash-1], no material
 - negative control proof            : secret-scan rejects GitHub `secrets` context, environment: staging binding, env dump commands, and xtrace; latest gate job=https://github.com/xorrbss/RPA-Enterprise/actions/runs/28234600652/job/83646278480; evidence=[negative-control-1]
@@ -67,6 +70,13 @@ evidence references:
 - `[s3-staging-1]`
 - `[preflight-s3-1]`
 - `[staging-pg-1]`, `[staging-retention-1]`
+- `[readiness-snapshot-1]`
+- `[external-alert-channel-pending]`, `[external-alert-provider-pending]`,
+  `[external-alert-receipt-pending]`, `[external-alert-receipt-at-pending]`,
+  `[external-alert-delivery-pending-1]`
+- `[ops-webhook-attempts-1]`, `[ops-webhook-deliveries-1]`,
+  `[ops-webhook-secretref-1]`, `[ops-webhook-route-policy-1]`,
+  `[ops-webhook-host-policy-1]`
 - `[codex-staging-1]`, `[model-a]`, `[d5-live-run-1]`
 - `[secret-resolve-allow-hash-1]`, `[secret-resolve-deny-hash-1]`
 - `[negative-control-1]`

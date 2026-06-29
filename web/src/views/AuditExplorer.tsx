@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
-import { ROLE_LABELS } from "../api/permissions";
-import type { AuditLogExportParams, AuditOutcome } from "../api/types";
+import { ROLE_LABELS, useCan } from "../api/permissions";
+import type { AuditLogExportParams, AuditOutcome, AuditVerificationRun } from "../api/types";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, useHashParam } from "../router";
 
@@ -25,10 +25,20 @@ const ACTION_LABEL: Record<string, string> = {
   "site.approve": "업무 사이트 승인",
 };
 
+const VERIFICATION_STATUS_LABEL: Record<AuditVerificationRun["status"], string> = {
+  valid: "정상",
+  invalid: "무결성 오류",
+  failed: "검증 실패",
+};
+
 function outcomeTone(outcome: AuditOutcome): string {
   if (outcome === "allow") return "green";
   if (outcome === "deny" || outcome === "blocked") return "red";
   return "amber";
+}
+
+function verificationTone(status: AuditVerificationRun["status"]): string {
+  return status === "valid" ? "green" : "red";
 }
 
 function actionLabel(action: string): string {
@@ -85,6 +95,8 @@ function outcomeFromHash(value: string | null): "all" | AuditOutcome {
 
 export function AuditExplorerView(): JSX.Element {
   const api = useApiClient();
+  const can = useCan();
+  const canVerify = can("audit.verify");
   const hashAction = useHashParam("action");
   const hashOutcome = useHashParam("outcome");
   const hashActor = useHashParam("actor");
@@ -95,6 +107,7 @@ export function AuditExplorerView(): JSX.Element {
   const [correlationId, setCorrelationId] = useState(hashCorrelationId ?? "");
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [exportState, setExportState] = useState<"idle" | "pending" | "success" | "error">("idle");
+  const [verifyState, setVerifyState] = useState<"idle" | "pending" | "success" | "error">("idle");
 
   const params = useMemo(
     () => {
@@ -118,6 +131,14 @@ export function AuditExplorerView(): JSX.Element {
   });
 
   const items = q.data?.items ?? [];
+
+  const verificationQ = useQuery({
+    queryKey: ["audit-verification-runs"],
+    queryFn: () => api.listAuditVerificationRuns({ limit: 5 }),
+    refetchInterval: 15_000,
+  });
+  const verificationRuns = verificationQ.data?.items ?? [];
+  const latestVerification = verificationRuns[0];
 
   const exportParams = useMemo<AuditLogExportParams>(
     () => {
@@ -163,6 +184,17 @@ export function AuditExplorerView(): JSX.Element {
     }
   }
 
+  async function runVerification(): Promise<void> {
+    setVerifyState("pending");
+    try {
+      await api.runAuditVerification(`audit-verify-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      await verificationQ.refetch();
+      setVerifyState("success");
+    } catch {
+      setVerifyState("error");
+    }
+  }
+
   useEffect(() => {
     const next = actionFilterText(hashAction);
     if (next !== action) {
@@ -197,6 +229,64 @@ export function AuditExplorerView(): JSX.Element {
 
   return (
     <div className="audit-view">
+      <section className="panel" aria-label="감사 체인 검증">
+        <div className="panel-head">
+          <h2>감사 체인 검증</h2>
+          {latestVerification !== undefined && (
+            <span className={`badge ${verificationTone(latestVerification.status)}`}>
+              {VERIFICATION_STATUS_LABEL[latestVerification.status]}
+            </span>
+          )}
+        </div>
+        {verificationQ.isLoading ? (
+          <Loading />
+        ) : verificationQ.isError ? (
+          <ErrorState message="감사 체인 검증 이력을 불러오지 못했습니다." onRetry={() => void verificationQ.refetch()} />
+        ) : latestVerification === undefined ? (
+          <p className="empty-state">아직 저장된 검증 이력이 없습니다.</p>
+        ) : (
+          <div className="audit-verification-summary">
+            <div>
+              <span className="metric-label">검증 행</span>
+              <strong>{latestVerification.rows_checked.toLocaleString("ko-KR")}</strong>
+              <span className="subtle">
+                #{latestVerification.checked_from_sequence ?? "-"} - #{latestVerification.checked_to_sequence ?? "-"}
+              </span>
+            </div>
+            <div>
+              <span className="metric-label">위반</span>
+              <strong>{latestVerification.violation_count.toLocaleString("ko-KR")}</strong>
+              <span className="subtle">{dateLabel(latestVerification.completed_at)}</span>
+            </div>
+            <div>
+              <span className="metric-label">실행자</span>
+              <strong>{latestVerification.triggered_by.subject_id ?? "system"}</strong>
+              <span className="subtle">{latestVerification.trigger_kind}</span>
+            </div>
+            {latestVerification.violations.length > 0 && (
+              <details className="audit-technical-details">
+                <summary>검증 위반 보기</summary>
+                <ul className="compact-list">
+                  {latestVerification.violations.slice(0, 5).map((violation) => (
+                    <li key={`${violation.sequenceNo}:${violation.id}:${violation.kind}`}>
+                      #{violation.sequenceNo} <code>{violation.kind}</code>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+        <div className="inline-actions">
+          <button className="btn" type="button" disabled={!canVerify || verifyState === "pending"} onClick={() => void runVerification()}>
+            {verifyState === "pending" ? "검증 중" : "체인 검증 실행"}
+          </button>
+          <button className="btn" type="button" onClick={() => void verificationQ.refetch()}>새로고침</button>
+        </div>
+        {!canVerify && <p className="subtle">수동 검증 실행은 관리자 권한이 필요합니다.</p>}
+        {verifyState === "success" && <p className="notice success" role="status">감사 체인 검증 이력을 저장했습니다.</p>}
+        {verifyState === "error" && <p className="form-alert red" role="alert">감사 체인 검증을 실행하지 못했습니다.</p>}
+      </section>
       <section className="panel audit-filters" aria-label="감사 기록 필터">
         <div className="panel-head">
           <h2>감사 기록 조회</h2>

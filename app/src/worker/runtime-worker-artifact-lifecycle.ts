@@ -21,6 +21,9 @@ import type {
 import type { CorrelationId, RunId, StepId, TenantId } from "../../../ts/security-middleware-contract";
 import { isRecord, optionalString, stringField } from "./runtime-worker-parse";
 
+// ops-defaults.md §6 artifact.redaction_fail_threshold.
+export const ARTIFACT_REDACTION_FAIL_THRESHOLD = 5;
+
 export type ArtifactLifecycleRow = {
   id: string;
   tenant_id: string;

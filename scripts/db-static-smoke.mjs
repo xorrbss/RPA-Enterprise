@@ -10,6 +10,11 @@ const smoke = readSql("migration_smoke.sql");
 const concurrency = readSql("migration_concurrency_idempotency.sql");
 const core = readSql("migration_core_entities.sql");
 const roles = readSql("roles.sql");
+const dbMigrate = readRoot("scripts/db-migrate.mjs");
+const dbTempGate = readRoot("scripts/db-temp-postgres-gate.mjs");
+const codegenPackage = readRoot("codegen/package.json");
+const compose = readRoot("compose.yaml");
+const dockerEnv = readRoot("deploy/docker.env.example");
 const allMigrations = `${concurrency}\n${core}`;
 const failures = [];
 
@@ -35,6 +40,7 @@ const expectedTables = [
   "browser_identities",
   "network_policies",
   "gateway_policies",
+  "ai_governance_evidence",
   "control_plane_idempotency_keys",
   "scenarios",
   "scenario_versions",
@@ -43,6 +49,8 @@ const expectedTables = [
   "scenario_release_events",
   "automation_ideas",
   "roi_estimates",
+  "roi_actual_evidence",
+  "automation_adoption_evidence",
   "run_triggers",
   "run_trigger_fires",
   "scenario_generations",
@@ -54,6 +62,9 @@ const expectedTables = [
   "human_tasks",
   "scim_providers",
   "scim_group_role_mappings",
+  "integration_handoffs",
+  "integration_handoff_receipts",
+  "integration_handoff_dispatch_attempts",
   "principals",
   "principal_role_assignments",
   "principal_role_assignment_events",
@@ -62,11 +73,15 @@ const expectedTables = [
   "document_extractions",
   "events_outbox",
   "ops_alert_acknowledgements",
+  "ops_notification_deliveries",
+  "ops_notification_attempts",
+  "production_readiness_evidence",
   "dead_letter",
   "action_plan_cache",
   "stagehand_calls",
   "scenario_generation_llm_calls",
   "audit_log",
+  "audit_verifier_runs",
   "scenario_promotion_requests",
   "worker_pools",
   "worker_pool_assignments",
@@ -97,6 +112,9 @@ checkAuditLogContract();
 checkEventsOutboxContract();
 checkForbiddenSql();
 checkRoles();
+checkDbMigrateBaselineVerifier();
+checkDbRestoreDrill();
+checkComposeRoleSplit();
 
 if (failures.length > 0) {
   console.error(`db static smoke: ${failures.length} failed`);
@@ -141,13 +159,91 @@ function checkRoles() {
   // DG1 — 최소권한 역할 분리(db/roles.sql). rpa_app(런타임)은 DDL/superuser/bypassrls 없이 DML 만.
   requireRegex("roles.sql rpa_migrator non-privileged", roles, /CREATE\s+ROLE\s+rpa_migrator\s+NOLOGIN\s+NOSUPERUSER\s+NOBYPASSRLS/i);
   requireRegex("roles.sql rpa_app least-privilege attrs", roles, /CREATE\s+ROLE\s+rpa_app\s+NOLOGIN\s+NOSUPERUSER\s+NOBYPASSRLS\s+NOCREATEDB\s+NOCREATEROLE/i);
+  requireRegex("roles.sql lifecycle bypass role attrs", roles, /CREATE\s+ROLE\s+rpa_lifecycle_bypass\s+NOLOGIN\s+NOSUPERUSER\s+BYPASSRLS\s+NOCREATEDB\s+NOCREATEROLE/i);
+  requireRegex("roles.sql rpa_migrator schema create", roles, /GRANT\s+USAGE,\s*CREATE\s+ON\s+SCHEMA\s+public\s+TO\s+rpa_migrator/i);
+  requireRegex("roles.sql rpa_migrator baseline schema create", roles, /GRANT\s+CREATE\s+ON\s+DATABASE\s+%I\s+TO\s+rpa_migrator/i);
   requireRegex("roles.sql rpa_app schema USAGE only", roles, /GRANT\s+USAGE\s+ON\s+SCHEMA\s+public\s+TO\s+rpa_app/i);
   requireRegex("roles.sql rpa_app DML grant", roles, /GRANT\s+SELECT,\s*INSERT,\s*UPDATE,\s*DELETE\s+ON\s+ALL\s+TABLES\s+IN\s+SCHEMA\s+public\s+TO\s+rpa_app/i);
+  requireRegex("roles.sql lifecycle bypass DML grant", roles, /GRANT\s+SELECT,\s*INSERT,\s*UPDATE,\s*DELETE\s+ON\s+ALL\s+TABLES\s+IN\s+SCHEMA\s+public\s+TO\s+rpa_lifecycle_bypass/i);
   requireRegex("roles.sql default privileges for migrator", roles, /ALTER\s+DEFAULT\s+PRIVILEGES\s+FOR\s+ROLE\s+rpa_migrator\s+IN\s+SCHEMA\s+public/i);
   // rpa_app 에 DDL(스키마 CREATE) 을 부여하면 최소권한이 깨진다 — 금지.
   if (/GRANT\s+CREATE\s+ON\s+SCHEMA\s+public\s+TO\s+rpa_app/i.test(roles)) {
     failures.push("roles.sql must NOT grant CREATE on schema public to rpa_app (DDL must stay denied)");
   }
+  if (/GRANT\s+CREATE\s+ON\s+SCHEMA\s+public\s+TO\s+rpa_lifecycle_bypass/i.test(roles)) {
+    failures.push("roles.sql must NOT grant CREATE on schema public to rpa_lifecycle_bypass (DDL must stay denied)");
+  }
+}
+
+function checkDbMigrateBaselineVerifier() {
+  requireRegex("db-migrate baseline expected schema", dbMigrate, /CREATE SCHEMA \$\{sqlIdentifier\(expectedSchema\)\}/);
+  requireRegex("db-migrate baseline includes ordered migrations", dbMigrate, /const includeLines = migrations\.map/);
+  requireRegex("db-migrate baseline verifies columns", dbMigrate, /column drift/i);
+  requireRegex("db-migrate baseline rejects unexpected columns", dbMigrate, /unexpected column\(s\)/i);
+  requireRegex("db-migrate baseline verifies constraints", dbMigrate, /missing constraint\(s\)/i);
+  requireRegex("db-migrate baseline verifies indexes", dbMigrate, /missing index\/idempotency shape\(s\)/i);
+  requireRegex("db-migrate baseline verifies tenant composite FKs", dbMigrate, /missing tenant composite FK\(s\)/i);
+  requireRegex("db-migrate baseline verifies RLS policy bodies", dbMigrate, /missing or drifted RLS policy body/i);
+  requireRegex("db-migrate baseline requires strict tenant setting", dbMigrate, /strict current_setting\(''app\.tenant_id''\)/i);
+  requireRegex("db-migrate baseline verifies audit append-only trigger", dbMigrate, /trg_audit_log_append_only/);
+  requireRegex("db-migrate baseline verifies audit append-only function body", dbMigrate, /audit_log is append-only/);
+  requireRegex("db-migrate graphile worker migration flag", dbMigrate, /--graphile-worker/);
+  requireRegex("db-migrate graphile runtime grants", dbMigrate, /GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA graphile_worker TO rpa_app, rpa_lifecycle_bypass/i);
+  if (/required core table count mismatch/i.test(dbMigrate) || /coreState\.rlsOk/i.test(dbMigrate)) {
+    failures.push("db-migrate baseline verifier must not bless baseline=true from table count + RLS flag counts");
+  }
+}
+
+function checkDbRestoreDrill() {
+  requireRegex("temp DB restore drill option", dbTempGate, /--restore-drill/);
+  requireRegex("temp DB restore drill source migrate", dbTempGate, /"scripts\/db-migrate\.mjs",\s*"--smoke",\s*"--require-non-bypass"/);
+  requireRegex("temp DB restore drill uses pg_dump", dbTempGate, /pg_dump/);
+  requireRegex("temp DB restore drill uses pg_restore", dbTempGate, /pg_restore/);
+  requireRegex("temp DB restore drill restore database", dbTempGate, /rpa_contract_gate_restore/);
+  requireRegex("temp DB restore drill seeds tenant row", dbTempGate, /restore-drill-site/);
+  requireRegex(
+    "temp DB restore drill verifies restored DB",
+    dbTempGate,
+    /"scripts\/db-migrate\.mjs",\s*"--baseline-existing",\s*"--smoke",\s*"--require-non-bypass"/,
+  );
+  requireRegex("codegen restore drill command", codegenPackage, /"db:restore-drill:temp":\s*"node \.\.\/scripts\/db-temp-postgres-gate\.mjs --restore-drill"/);
+}
+
+function checkComposeRoleSplit() {
+  requireRegex("compose role bootstrap service", compose, /\n  role-bootstrap:\n/i);
+  requireRegex("compose role bootstrap applies roles.sql", compose, /psql\s+-v\s+ON_ERROR_STOP=1\s+-f\s+db\/roles\.sql/i);
+  requireRegex("compose role bootstrap injects migrator password", compose, /ALTER ROLE :\\"migrator_user\\"\s+LOGIN\s+PASSWORD\s+:'migrator_password'/i);
+  requireRegex("compose role bootstrap injects app password", compose, /ALTER ROLE :\\"app_user\\"\s+LOGIN\s+PASSWORD\s+:'app_password'/i);
+  requireRegex("compose role bootstrap injects lifecycle bypass password", compose, /ALTER ROLE :\\"lifecycle_user\\"\s+LOGIN\s+PASSWORD\s+:'lifecycle_password'/i);
+  requireRegex("compose migrate uses non-bypass release smoke", compose, /"scripts\/db-migrate\.mjs",\s*"--baseline-existing",\s*"--graphile-worker",\s*"--smoke",\s*"--require-non-bypass"/i);
+  requireRegex("compose migrate uses migrator role", serviceBlock(compose, "migrate"), /PGUSER:\s+\$\{RPA_MIGRATOR_DB_USER:-rpa_migrator\}/i);
+
+  for (const service of ["api", "worker"]) {
+    const block = serviceBlock(compose, service);
+    requireRegex(`compose ${service} uses rpa_app`, block, /PGUSER:\s+\$\{RPA_APP_DB_USER:-rpa_app\}/i);
+    rejectRegex(`compose ${service} must not use postgres runtime user`, block, /PGUSER:\s+\$\{POSTGRES_USER|DATABASE_URL:\s+postgresql:\/\/\$\{POSTGRES_USER/i);
+  }
+  requireRegex("compose worker skips runtime graphile DDL", serviceBlock(compose, "worker"), /GRAPHILE_MIGRATIONS_MODE:\s+external/i);
+
+  requireRegex(
+    "compose worker maintenance discovery uses lifecycle bypass URL",
+    serviceBlock(compose, "worker"),
+    /MAINTENANCE_LIFECYCLE_DATABASE_URL:\s+postgresql:\/\/\$\{RPA_LIFECYCLE_BYPASS_DB_USER:-rpa_lifecycle_bypass\}:/i,
+  );
+  requireRegex(
+    "compose lifecycle worker uses lifecycle bypass URL",
+    serviceBlock(compose, "lifecycle-worker"),
+    /ARTIFACT_LIFECYCLE_DATABASE_URL:\s+postgresql:\/\/\$\{RPA_LIFECYCLE_BYPASS_DB_USER:-rpa_lifecycle_bypass\}:/i,
+  );
+  requireRegex(
+    "compose lifecycle worker health pool uses rpa_app",
+    serviceBlock(compose, "lifecycle-worker"),
+    /PGUSER:\s+\$\{RPA_APP_DB_USER:-rpa_app\}/i,
+  );
+  requireRegex("docker env migrator role", dockerEnv, /^RPA_MIGRATOR_DB_USER=rpa_migrator$/m);
+  requireRegex("docker env app role", dockerEnv, /^RPA_APP_DB_USER=rpa_app$/m);
+  requireRegex("docker env lifecycle bypass role", dockerEnv, /^RPA_LIFECYCLE_BYPASS_DB_USER=rpa_lifecycle_bypass$/m);
+  requireRegex("docker env product evidence note", dockerEnv, /API\/worker product evidence must use rpa_app/i);
 }
 
 function checkCreatedTables() {
@@ -376,6 +472,19 @@ function checkForbiddenSql() {
 
 function readSql(name) {
   return stripSqlComments(readFileSync(join(DB, name), "utf8"));
+}
+
+function readRoot(path) {
+  return readFileSync(join(ROOT, ...path.split("/")), "utf8");
+}
+
+function serviceBlock(source, service) {
+  const match = source.match(new RegExp(`\\n  ${service}:\\n([\\s\\S]*?)(?=\\n  [A-Za-z0-9_-]+:\\n|\\nvolumes:|$)`));
+  if (!match) {
+    failures.push(`compose.yaml missing service block ${service}`);
+    return "";
+  }
+  return match[0];
 }
 
 function arrayAssignment(source, name) {

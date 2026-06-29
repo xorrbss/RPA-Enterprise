@@ -17,6 +17,7 @@ import type { CorrelationId, RunId, TenantId } from "../../../ts/security-middle
 import { withTenantTx } from "../db/pool";
 import { optionalString, requireString } from "./runtime-worker-parse";
 import {
+  ARTIFACT_REDACTION_FAIL_THRESHOLD,
   artifactLifecycleJobScope,
   artifactTargetFromRow,
   evidenceFromRedactionDecision,
@@ -31,9 +32,6 @@ import {
 } from "./runtime-worker-artifact-lifecycle";
 import { appendLifecycleAuditWithClient, assertLifecycleBypassUse } from "./runtime-worker-lifecycle-audit";
 import { errText, workerLog } from "../observability/log";
-
-// ops-defaults.md §6 artifact.redaction_fail_threshold = 5(초과 시 failed+알림·조회차단). 종전 3 은 계약 미달.
-const DEFAULT_ARTIFACT_REDACTION_MAX_ATTEMPTS = 5;
 
 /**
  * redacted-at-rest(감사 AUD-9): redaction 이 원본을 새 redacted 객체로 대체한 뒤 **원본 평문 객체**를 object store
@@ -77,7 +75,7 @@ export class ArtifactRedactionProcessor {
       "artifact_redaction",
       this.deps.allowTestArtifactLifecyclePorts === true,
     );
-    const maxAttempts = this.deps.artifactRedactionMaxAttempts ?? DEFAULT_ARTIFACT_REDACTION_MAX_ATTEMPTS;
+    const maxAttempts = this.deps.artifactRedactionMaxAttempts ?? ARTIFACT_REDACTION_FAIL_THRESHOLD;
     if (!Number.isInteger(maxAttempts) || maxAttempts <= 0) {
       throw new Error("RuntimeWorker: artifact_redaction maxAttempts must be a positive integer");
     }

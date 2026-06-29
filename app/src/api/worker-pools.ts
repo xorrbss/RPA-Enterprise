@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
+import { workerStaleThresholdSeconds } from "../worker/worker-heartbeat-policy";
 import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "./errors";
 import { appendGovernanceAudit } from "./role-assignments";
@@ -369,6 +370,7 @@ async function updateWorkerPool(
 }
 
 async function readWorkerPoolMemberSummaries(client: PoolClient): Promise<Map<string, WorkerPoolMemberSummary>> {
+  const staleThresholdSeconds = workerStaleThresholdSeconds();
   const result = await client.query<WorkerPoolMemberSummaryRow>(
     `SELECT m.pool_key,
             count(*)::text AS total_count,
@@ -376,18 +378,19 @@ async function readWorkerPoolMemberSummaries(client: PoolClient): Promise<Map<st
               WHERE w.status = 'active'
                 AND w.kind = 'browser'
                 AND w.circuit_state = 'closed'
-                AND w.heartbeat_at > now() - interval '2 minutes'
+                AND w.heartbeat_at > now() - ($1::integer * interval '1 second')
             )::text AS active_count,
             count(*) FILTER (
               WHERE w.status = 'active'
                 AND w.kind = 'browser'
-                AND w.heartbeat_at <= now() - interval '2 minutes'
+                AND w.heartbeat_at <= now() - ($1::integer * interval '1 second')
             )::text AS stale_count,
             array_agg(m.worker_id::text ORDER BY m.worker_id::text) AS worker_ids
        FROM worker_pool_memberships m
        JOIN workers w ON w.id = m.worker_id
       WHERE w.kind = 'browser'
       GROUP BY m.pool_key`,
+    [staleThresholdSeconds],
   );
   const out = new Map<string, WorkerPoolMemberSummary>();
   for (const row of result.rows) {

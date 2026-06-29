@@ -24,6 +24,7 @@ import { inferRuntimeTargetForStartUrl } from "./scenario-generation-target";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 import { promoteActsToDeterministic } from "./scenario-promotion";
 import { loadRunActionPlans } from "./scenario-promotion-store";
+import type { ScenarioCertificationStatus, ScenarioGovernanceStage } from "./scenario-certification";
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -44,6 +45,20 @@ export interface ScenarioVersionListRow {
   version_id: string;
   version: number;
   promotion_status: string;
+  certification_status: ScenarioCertificationStatus;
+  certified_by: string | null;
+  certified_at: string | null;
+  certification_expires_at: string | null;
+  certification_reason: string | null;
+  certification_revoked_by: string | null;
+  certification_revoked_at: string | null;
+  certification_revoke_reason: string | null;
+  governance_stage: ScenarioGovernanceStage;
+  governance_reason: string | null;
+  governance_evidence_ref: string | null;
+  governance_metadata: unknown;
+  governance_updated_by: string | null;
+  governance_updated_at: string | null;
   created_at: string;
   promoted_at: string | null;
 }

@@ -12,6 +12,14 @@ import { startBrowserLeaseHeartbeat } from "../src/worker/runtime-worker-browser
 import type { LeaseRenewResult } from "../../ts/runtime-contract";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitUntil(predicate: () => boolean, timeoutMs = 500, stepMs = 10): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await sleep(stepMs);
+  }
+  return predicate();
+}
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
   if (cond) console.log(`  PASS  ${label}`);
@@ -26,7 +34,7 @@ async function main(): Promise<void> {
   {
     let calls = 0;
     const hb = startBrowserLeaseHeartbeat({ intervalMs: 10, renew: async () => { calls += 1; return RENEWED; } });
-    await sleep(110);
+    await waitUntil(() => calls >= 3);
     const afterRun = calls;
     check("주기 갱신: drive 동안 여러 비트 발생", afterRun >= 3, `calls=${afterRun}`);
     hb.stop();
@@ -39,7 +47,8 @@ async function main(): Promise<void> {
     let calls = 0;
     let lostReason: string | undefined;
     startBrowserLeaseHeartbeat({ intervalMs: 10, renew: async () => { calls += 1; return LOST; }, onLost: (r) => { lostReason = r; } });
-    await sleep(80);
+    await waitUntil(() => calls >= 1 && lostReason !== undefined);
+    await sleep(40);
     check("lost(sweeper 승) 시 비트 1회 후 정지(재생성 금지)", calls === 1, `calls=${calls}`);
     check("onLost 사유 전달", lostReason === "test-lost", String(lostReason));
   }
@@ -48,7 +57,7 @@ async function main(): Promise<void> {
   {
     let calls = 0;
     const hb = startBrowserLeaseHeartbeat({ intervalMs: 10, renew: async () => { calls += 1; throw new Error("transient"); } });
-    await sleep(80);
+    await waitUntil(() => calls >= 3);
     hb.stop();
     check("일시 DB 오류에도 재시도 지속", calls >= 3, `calls=${calls}`);
   }

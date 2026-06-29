@@ -14,6 +14,14 @@ function check(label: string, cond: boolean, detail?: string): void {
   }
 }
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+async function waitUntil(predicate: () => boolean, timeoutMs = 500, stepMs = 10): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await sleep(stepMs);
+  }
+  return predicate();
+}
 
 async function main(): Promise<void> {
   // 1) status 가 'aborting' 으로 바뀌면 controller.abort() 발화.
@@ -21,7 +29,7 @@ async function main(): Promise<void> {
     const controller = new AbortController();
     let n = 0;
     const stop = startRunAbortWatcher(async () => { n += 1; return n >= 2 ? "aborting" : "running"; }, controller, 10);
-    await sleep(80);
+    await waitUntil(() => controller.signal.aborted);
     stop();
     check("aborting status → controller aborted", controller.signal.aborted === true, `n=${n}`);
   }
@@ -41,7 +49,7 @@ async function main(): Promise<void> {
     const controller = new AbortController();
     let n = 0;
     const stop = startRunAbortWatcher(async () => { n += 1; if (n < 3) throw new Error("db hiccup"); return "aborting"; }, controller, 10);
-    await sleep(100);
+    await waitUntil(() => controller.signal.aborted && n >= 3);
     stop();
     check("readStatus throws then recovers → eventually aborts (best-effort)", controller.signal.aborted === true && n >= 3, `n=${n}`);
   }
@@ -50,7 +58,7 @@ async function main(): Promise<void> {
   {
     const controller = new AbortController();
     const stop = startRunAbortWatcher(async () => "cancelled", controller, 10);
-    await sleep(40);
+    await waitUntil(() => controller.signal.aborted);
     stop();
     check("cancelled status → controller aborted", controller.signal.aborted === true);
   }

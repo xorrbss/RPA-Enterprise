@@ -160,13 +160,69 @@ export interface MinimalRoiEstimate {
   exception_rate: number;
   hourly_cost: number;
   implementation_effort: number;
+  platform_monthly_cost: number;
+  avoided_license_cost: number;
   monthly_hours_saved: number;
   estimated_monthly_value: number;
+  monthly_value: number;
   payback_months: number | null;
+  viability: "viable" | "not_viable";
   confidence: "low" | "medium" | "high";
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface MinimalRoiActualEvidence {
+  roi_actual_id: string;
+  tenant_id: string;
+  automation_idea_id: string;
+  period_start: string;
+  period_end: string;
+  actual_transaction_count: number;
+  actual_failure_rate: number;
+  human_intervention_minutes: number;
+  reprocessing_minutes: number;
+  evidence_ref: string;
+  summary: string;
+  metadata: Readonly<Record<string, unknown>>;
+  recorded_by: string;
+  recorded_at: string;
+  legal_hold: boolean;
+}
+
+export interface MinimalAutomationAdoptionEvidence {
+  evidence_id: string;
+  tenant_id: string;
+  idea_id: string;
+  evidence_type: "pilot_charter_signoff" | "raci_signoff" | "training_completion" | "support_model_signoff";
+  status: "valid" | "failed" | "deferred";
+  evidence_at: string;
+  expires_at: string | null;
+  summary: string;
+  evidence_ref: string | null;
+  metadata: Readonly<Record<string, unknown>>;
+  recorded_by: string;
+  recorded_at: string;
+  legal_hold: boolean;
+}
+
+export interface MinimalAiGovernanceEvidence {
+  evidence_id: string;
+  tenant_id: string;
+  evidence_type: "model_registry" | "prompt_registry" | "eval_result" | "cost_control" | "human_override";
+  subject_ref: string;
+  status: "valid" | "failed" | "deferred";
+  evidence_at: string;
+  expires_at: string | null;
+  summary: string;
+  evidence_ref: string | null;
+  policy_decision_ref: string | null;
+  audit_correlation_id: string | null;
+  metadata: Readonly<Record<string, unknown>>;
+  recorded_by: string;
+  recorded_at: string;
+  legal_hold: boolean;
 }
 
 export interface MinimalAuditLogItem {
@@ -203,6 +259,73 @@ export interface MinimalTemplateCatalogItem {
   name: string;
   kind: "browser_workflow" | "api_workflow" | "file_workflow" | "notification_workflow";
   status: "available" | "candidate" | "requires_admin" | "blocked";
+}
+
+export interface MinimalIntegrationHandoff {
+  handoff_id: string;
+  tenant_id: string;
+  provider_alias: string;
+  job_ref: string;
+  payload_ref: string;
+  callback_url_secret_ref: string | null;
+  callback_signature_secret_ref: string | null;
+  external_job_id: string | null;
+  status: "accepted" | "deferred" | "completed" | "failed" | "cancelled";
+  latest_receipt_id: string | null;
+  error_code: string | null;
+  requested_by: string;
+  request_idempotency_key: string;
+  requested_at: string;
+  updated_at: string;
+  callback_received_at: string | null;
+  legal_hold: boolean;
+}
+
+export interface MinimalIntegrationHandoffDispatchAttempt {
+  attempt_id: string;
+  handoff_id: string;
+  provider_alias: string;
+  status: "pending" | "sending" | "accepted" | "failed" | "dead_letter";
+  endpoint_secret_ref: string;
+  allowed_hosts: readonly string[];
+  request_idempotency_key: string;
+  attempt_no: number;
+  max_attempts: number;
+  external_job_id: string | null;
+  receipt_id: string | null;
+  error_code: string | null;
+  requested_by: string;
+  requested_at: string;
+  updated_at: string;
+  legal_hold: boolean;
+}
+
+export interface MinimalOpsNotificationAttempt {
+  attempt_id: string;
+  alert_id: string;
+  detected_at: string;
+  source: "bot_pool";
+  subject_type: "bot_pool";
+  subject_id: string | null;
+  channel: "webhook";
+  provider_alias: string;
+  status: "pending" | "sending" | "sent" | "failed" | "dead_letter";
+  endpoint_secret_ref: string;
+  route_policy_ref: string;
+  recipient_group_ref: string | null;
+  callback_signature_secret_ref: string | null;
+  allowed_hosts: readonly string[];
+  attempt_no: number;
+  max_attempts: number;
+  next_attempt_at: string;
+  summary: string;
+  error_code: string | null;
+  receipt_id: string | null;
+  receipt_at: string | null;
+  metadata: Readonly<Record<string, unknown>>;
+  requested_by: string;
+  requested_at: string;
+  legal_hold: boolean;
 }
 
 export interface MinimalGatewayPolicy {
@@ -318,8 +441,13 @@ export interface MinimalDocumentExtraction {
   document_extraction_id: string;
   tenant_id: string;
   document_job_id: string;
-  engine: "built_in_deterministic_text_v1";
+  engine: "built_in_deterministic_text_v1" | "external_idp_adapter_v1";
   status: MinimalDocumentExtractionStatus;
+  provider_alias?: string | null;
+  provider_receipt_id?: string | null;
+  normalized_schema_ref?: string | null;
+  evidence_ref?: string | null;
+  provider_metadata?: Readonly<Record<string, unknown>>;
   fields: readonly Record<string, unknown>[];
   missing_fields: readonly string[];
   validation_human_task_id?: string | null;
@@ -337,9 +465,13 @@ export interface MinimalControlPlaneSeed {
   runTriggerFires?: readonly MinimalRunTriggerFire[];
   automationIdeas?: readonly MinimalAutomationIdea[];
   roiEstimates?: readonly MinimalRoiEstimate[];
+  roiActualEvidence?: readonly MinimalRoiActualEvidence[];
+  automationAdoptionEvidence?: readonly MinimalAutomationAdoptionEvidence[];
+  aiGovernanceEvidence?: readonly MinimalAiGovernanceEvidence[];
   auditLog?: readonly MinimalAuditLogItem[];
   connectors?: readonly MinimalConnectorCatalogItem[];
   templates?: readonly MinimalTemplateCatalogItem[];
+  integrationHandoffs?: readonly MinimalIntegrationHandoff[];
   documentJobs?: readonly MinimalDocumentJob[];
   documentExtractions?: readonly MinimalDocumentExtraction[];
   gatewayPolicies?: readonly MinimalGatewayPolicy[];
@@ -368,7 +500,13 @@ export interface MinimalControlPlaneServices {
   listRunTriggerFires(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listOpsAlerts(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   ackOpsAlert(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listOpsAlertDeliveries(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  recordOpsAlertDelivery(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  sendOpsAlertWebhookDelivery(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getOpsHealth(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  getProductionReadiness(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listProductionReadinessEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  recordProductionReadinessEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listAutomationIdeas(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   createAutomationIdea(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getAutomationIdea(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -376,14 +514,25 @@ export interface MinimalControlPlaneServices {
   transitionAutomationIdea(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   upsertRoiEstimate(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getRoiEstimate(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listRoiActualEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  recordRoiActualEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listAutomationAdoptionEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  recordAutomationAdoptionEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listAiGovernanceEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  recordAiGovernanceEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listAuditLog(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   exportAuditLog(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listConnectors(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listTemplates(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listIntegrationHandoffs(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  createIntegrationHandoff(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  dispatchIntegrationHandoff(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  recordIntegrationHandoffCallback(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listDocumentJobs(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   createDocumentJob(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getDocumentJob(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   extractDocumentJob(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  recordExternalDocumentExtraction(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getDocumentExtraction(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   createDocumentValidationTask(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   validateScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -393,6 +542,9 @@ export interface MinimalControlPlaneServices {
   listScenarioVersions(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getScenarioVersion(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   rollbackScenario(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  certifyScenarioVersion(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  setScenarioVersionGovernanceStage(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  revokeScenarioCertification(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listHumanTasks(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   startHumanTask(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   resolveHumanTask(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -427,11 +579,19 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private triggerSequence = 0;
   private ideaSequence = 0;
   private roiSequence = 0;
+  private roiActualSequence = 0;
+  private automationAdoptionEvidenceSequence = 0;
+  private aiGovernanceEvidenceSequence = 0;
   private documentJobSequence = 0;
   private documentExtractionSequence = 0;
   private documentTaskSequence = 0;
+  private integrationHandoffSequence = 0;
   private recordingSequence = 0;
   private recordingEventSequence = 0;
+  private readinessEvidenceSequence = 0;
+  private opsAlertDeliverySequence = 0;
+  private opsAlertAttemptSequence = 0;
+  private integrationHandoffDispatchSequence = 0;
   private readonly runs = new Map<string, MinimalRun>();
   private readonly humanTasks = new Map<string, MinimalHumanTask>();
   private readonly workitems = new Map<string, MinimalWorkitem>();
@@ -441,9 +601,14 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private readonly runTriggerFires: MinimalRunTriggerFire[] = [];
   private readonly automationIdeas = new Map<string, MinimalAutomationIdea>();
   private readonly roiEstimates = new Map<string, MinimalRoiEstimate>();
+  private readonly roiActualEvidence: MinimalRoiActualEvidence[] = [];
+  private readonly automationAdoptionEvidence: MinimalAutomationAdoptionEvidence[] = [];
+  private readonly aiGovernanceEvidence: MinimalAiGovernanceEvidence[] = [];
   private readonly auditLog: MinimalAuditLogItem[] = [];
   private readonly connectors: MinimalConnectorCatalogItem[] = [];
   private readonly templates: MinimalTemplateCatalogItem[] = [];
+  private readonly integrationHandoffs = new Map<string, MinimalIntegrationHandoff>();
+  private readonly integrationHandoffDispatchAttempts = new Map<string, MinimalIntegrationHandoffDispatchAttempt>();
   private readonly documentJobs = new Map<string, MinimalDocumentJob>();
   private readonly documentExtractions = new Map<string, MinimalDocumentExtraction>();
   private readonly gatewayPolicies = new Map<string, MinimalGatewayPolicy>();
@@ -452,6 +617,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private readonly captureSessions: MinimalCaptureSession[] = [];
   private readonly browserRecordingSessions = new Map<string, MinimalBrowserRecordingSession>();
   private readonly browserRecordingEvents: MinimalBrowserRecordingEvent[] = [];
+  private readonly scenarioVersionCertifications = new Map<string, Record<string, unknown>>();
   private readonly artifactGate: ArtifactAccessGate;
 
   constructor(artifactGate: ArtifactAccessGate, seed: MinimalControlPlaneSeed = {}) {
@@ -475,9 +641,15 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     for (const roi of seed.roiEstimates ?? []) {
       this.roiEstimates.set(key(roi.tenant_id, roi.automation_idea_id), { ...roi });
     }
+    this.roiActualEvidence.push(...(seed.roiActualEvidence ?? []).map((row) => ({ ...row })));
+    this.automationAdoptionEvidence.push(...(seed.automationAdoptionEvidence ?? []).map((row) => ({ ...row })));
+    this.aiGovernanceEvidence.push(...(seed.aiGovernanceEvidence ?? []).map((row) => ({ ...row })));
     this.auditLog.push(...(seed.auditLog ?? []).map((row) => ({ ...row })));
     this.connectors.push(...(seed.connectors ?? []).map((row) => ({ ...row })));
     this.templates.push(...(seed.templates ?? []).map((row) => ({ ...row })));
+    for (const handoff of seed.integrationHandoffs ?? []) {
+      this.integrationHandoffs.set(key(handoff.tenant_id, handoff.handoff_id), { ...handoff });
+    }
     for (const job of seed.documentJobs ?? []) {
       this.documentJobs.set(key(job.tenant_id, job.document_job_id), { ...job });
     }
@@ -746,17 +918,281 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     };
   }
 
+  async listOpsAlertDeliveries(_ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    return page([]);
+  }
+
+  async recordOpsAlertDelivery(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const alertId = optionalString(ctx.params, "alert_id") ?? "bot_pool:browser-default";
+    return {
+      status: 201,
+      body: {
+        delivery_id: `ops-delivery-${++this.opsAlertDeliverySequence}`,
+        alert_id: alertId,
+        detected_at: now,
+        source: "bot_pool",
+        subject_type: "bot_pool",
+        subject_id: "browser-default",
+        channel: optionalString(body, "channel") ?? "teams",
+        provider_alias: optionalString(body, "provider_alias") ?? "teams-primary",
+        status: optionalString(body, "status") ?? "delivered",
+        receipt_id: optionalString(body, "receipt_id") ?? "receipt-fixture",
+        receipt_at: optionalString(body, "receipt_at") ?? now,
+        endpoint_secret_ref: optionalString(body, "endpoint_secret_ref") ?? "secret://tenant-a/notification/teams/primary",
+        credential_secret_ref: optionalString(body, "credential_secret_ref") ?? null,
+        route_policy_ref: optionalString(body, "route_policy_ref") ?? null,
+        recipient_group_ref: optionalString(body, "recipient_group_ref") ?? null,
+        attempt_no: typeof body.attempt_no === "number" ? body.attempt_no : 1,
+        summary: optionalString(body, "summary") ?? "External notification provider receipt recorded.",
+        error_code: optionalString(body, "error_code") ?? null,
+        metadata: isRecord(body.metadata) ? body.metadata : {},
+        recorded_by: ctx.principal.subjectId,
+        recorded_at: now,
+        legal_hold: Boolean(body.legal_hold),
+      },
+    };
+  }
+
+  async sendOpsAlertWebhookDelivery(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const alertId = optionalString(ctx.params, "alert_id") ?? "bot_pool:browser-default";
+    const allowedHosts = Array.isArray(body.allowed_hosts)
+      ? body.allowed_hosts.filter((host): host is string => typeof host === "string")
+      : [];
+    const attempt: MinimalOpsNotificationAttempt = {
+      attempt_id: `ops-attempt-${++this.opsAlertAttemptSequence}`,
+      alert_id: alertId,
+      detected_at: now,
+      source: "bot_pool",
+      subject_type: "bot_pool",
+      subject_id: alertId.startsWith("bot_pool:") ? alertId.slice("bot_pool:".length) : null,
+      channel: "webhook",
+      provider_alias: optionalString(body, "provider_alias") ?? "webhook-primary",
+      status: "pending",
+      endpoint_secret_ref: requireString(body, "endpoint_secret_ref"),
+      route_policy_ref: requireString(body, "route_policy_ref"),
+      recipient_group_ref: optionalString(body, "recipient_group_ref") ?? null,
+      callback_signature_secret_ref: optionalString(body, "callback_signature_secret_ref") ?? null,
+      allowed_hosts: allowedHosts,
+      attempt_no: 1,
+      max_attempts: 3,
+      next_attempt_at: now,
+      summary: optionalString(body, "summary") ?? "Webhook notification attempt queued.",
+      error_code: null,
+      receipt_id: null,
+      receipt_at: null,
+      metadata: isRecord(body.metadata) ? body.metadata : {},
+      requested_by: ctx.principal.subjectId,
+      requested_at: now,
+      legal_hold: Boolean(body.legal_hold),
+    };
+    return { status: 202, body: attempt };
+  }
+
   async getOpsHealth(_ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const now = new Date().toISOString();
     return {
       status: 200,
       body: {
         status: "ok",
-        detected_at: new Date().toISOString(),
+        detected_at: now,
         queue: { available: false, pending_jobs: null },
         browser_leases: { reserved: 0, active: 0, draining: 0, expired: 0, expired_open: 0, next_expiry_at: null },
         stale_runs: { nonterminal_over_15m: 0, oldest_updated_at: null },
       },
     };
+  }
+
+  async getProductionReadiness(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const now = new Date().toISOString();
+    return {
+      status: 200,
+      body: {
+        status: "blocked",
+        evaluated_at: now,
+        environment: { target: "controlled_prod", tenant_id: tenant(ctx) },
+        summary: {
+          controlled_prod_ready: false,
+          status: "blocked",
+          blocker_count: 2,
+          warning_count: 0,
+          deferred_count: 5,
+        },
+        gates: [
+          {
+            gate_id: "browser_pool_ha",
+            label: "Browser pool HA",
+            status: "blocked",
+            reason_code: "worker_pool_membership_missing",
+            detail: "Tenant traffic is still using implicit default browser capacity.",
+            evidence: ["pool_key=default", "active_workers=0"],
+            required_action: "Assign the tenant to an explicit worker pool with at least two live browser workers.",
+          },
+          {
+            gate_id: "audit_chain_evidence",
+            label: "Audit chain evidence",
+            status: "blocked",
+            reason_code: "audit_verifier_missing",
+            detail: "No verifier evidence is available in the minimal in-memory handler.",
+            evidence: ["audit_verifier=not_configured"],
+            required_action: "Run the audit verifier against the deployed tenant database.",
+          },
+          {
+            gate_id: "external_alert_delivery",
+            label: "External alert delivery",
+            status: "deferred",
+            reason_code: "external_delivery_contract_not_open",
+            detail: "Console-only alerts are available; external delivery needs a provider contract.",
+            evidence: ["ops_alert.delivery.external_delivery=false"],
+            required_action: "Open the notification delivery contract.",
+          },
+          {
+            gate_id: "managed_backup_restore_drill",
+            label: "Managed backup restore drill",
+            status: "deferred",
+            reason_code: "owner_controlled_pitr_evidence_missing",
+            detail: "Owner-controlled managed backup/PITR restore evidence is external.",
+            evidence: ["local_restore_drill=available"],
+            required_action: "Attach owner-controlled backup/PITR restore drill evidence.",
+          },
+          {
+            gate_id: "slo_oncall_signoff",
+            label: "SLO/on-call sign-off",
+            status: "deferred",
+            reason_code: "slo_oncall_signoff_missing",
+            detail: "SLO targets, severity policy, and on-call/RACI coverage evidence are owner-controlled.",
+            evidence: ["slo_dashboard=evidence_required", "on_call_raci=evidence_required"],
+            required_action: "Attach SLO dashboard and on-call/RACI sign-off evidence.",
+          },
+          {
+            gate_id: "support_training_completion",
+            label: "Support and training completion",
+            status: "deferred",
+            reason_code: "support_training_completion_missing",
+            detail: "Support model and role training completion evidence are owner-controlled.",
+            evidence: ["support_model=evidence_required", "training_completion=evidence_required", "coverage_percent=evidence_required"],
+            required_action: "Attach metadata-only support model and training completion evidence.",
+          },
+          {
+            gate_id: "observability_telemetry_wiring",
+            label: "Observability telemetry wiring",
+            status: "deferred",
+            reason_code: "observability_telemetry_evidence_missing",
+            detail: "OTLP/Prometheus exporter, collector, dashboard, and alert-route evidence are owner-controlled.",
+            evidence: ["telemetry_exporter=evidence_required", "collector_ref=evidence_required", "dashboard_alert_route=evidence_required"],
+            required_action: "Attach telemetry collector, dashboard, and alert-route evidence.",
+          },
+        ],
+        signals: {
+          ops_health: {
+            status: "ok",
+            detected_at: now,
+            queue: { available: false, pending_jobs: null },
+            browser_leases: { reserved: 0, active: 0, draining: 0, expired: 0, expired_open: 0, next_expiry_at: null },
+            stale_runs: { nonterminal_over_15m: 0, oldest_updated_at: null },
+          },
+          bot_pool: {
+            bot_pool_id: "browser-default",
+            capacity_slots: 0,
+            workers: { total: 0, active: 0, draining: 0, dead: 0, stale: 0, open_circuit: 0 },
+            leases: { reserved: 0, active: 0, draining: 0, expired_open: 0, next_expiry_at: null },
+            queue: { pending_runs: 0, queued_runs: 0, claimed_runs: 0, oldest_queued_at: null, due_triggers: 0 },
+            health: "warning",
+          },
+          audit_verifier: {
+            audit_count: 0,
+            latest_run_id: null,
+            latest_status: null,
+            latest_completed_at: null,
+            rows_checked: null,
+            violation_count: null,
+            stale: true,
+          },
+        },
+      },
+    };
+  }
+
+  async listProductionReadinessEvidence(_ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    return page([]);
+  }
+
+  async recordProductionReadinessEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    return {
+      status: 201,
+      body: {
+        evidence_id: `readiness-evidence-${++this.readinessEvidenceSequence}`,
+        evidence_type: optionalString(body, "evidence_type") ?? "external_alert_delivery",
+        status: optionalString(body, "status") ?? "valid",
+        evidence_at: optionalString(body, "evidence_at") ?? now,
+        expires_at: optionalString(body, "expires_at") ?? new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+        summary: optionalString(body, "summary") ?? "Owner evidence recorded.",
+        evidence_ref: optionalString(body, "evidence_ref") ?? null,
+        metadata: isRecord(body.metadata) ? body.metadata : {},
+        recorded_by: ctx.principal.subjectId,
+        recorded_at: now,
+        legal_hold: Boolean(body.legal_hold),
+      },
+    };
+  }
+
+  async listAiGovernanceEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const evidenceType = optionalQueryString(ctx, "evidence_type");
+    const status = optionalQueryString(ctx, "status");
+    const subjectRef = optionalQueryString(ctx, "subject_ref");
+    const items = this.aiGovernanceEvidence
+      .filter((row) =>
+        row.tenant_id === tenant(ctx) &&
+        (evidenceType === undefined || row.evidence_type === evidenceType) &&
+        (status === undefined || row.status === status) &&
+        (subjectRef === undefined || row.subject_ref === subjectRef),
+      )
+      .map((row) => this.aiGovernanceEvidenceResponse(row));
+    return page(items);
+  }
+
+  async recordAiGovernanceEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const evidenceType = requireAiGovernanceEvidenceType(body);
+    const status = requireAiGovernanceEvidenceStatus(body);
+    const expiresAt = optionalString(body, "expires_at") ?? null;
+    const evidenceRef = optionalString(body, "evidence_ref") ?? null;
+    const policyDecisionRef = optionalString(body, "policy_decision_ref") ?? null;
+    const auditCorrelationId = optionalString(body, "audit_correlation_id") ?? null;
+    if (status === "valid") {
+      if (evidenceRef === null || policyDecisionRef === null || auditCorrelationId === null) {
+        throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "valid_ai_governance_linkage_required" });
+      }
+      if (evidenceType !== "human_override" && expiresAt === null) {
+        throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "expires_at_required_for_valid_ai_governance_evidence" });
+      }
+    }
+    const metadata = requireAiGovernanceMetadata(body, evidenceType, status);
+    const item: MinimalAiGovernanceEvidence = {
+      evidence_id: `ai-governance-evidence-${++this.aiGovernanceEvidenceSequence}`,
+      tenant_id: tenant(ctx),
+      evidence_type: evidenceType,
+      subject_ref: requireString(body, "subject_ref"),
+      status,
+      evidence_at: requireString(body, "evidence_at"),
+      expires_at: expiresAt,
+      summary: requireString(body, "summary"),
+      evidence_ref: evidenceRef,
+      policy_decision_ref: policyDecisionRef,
+      audit_correlation_id: auditCorrelationId,
+      metadata,
+      recorded_by: ctx.principal.subjectId,
+      recorded_at: now,
+      legal_hold: Boolean(body.legal_hold),
+    };
+    this.aiGovernanceEvidence.push(item);
+    return { status: 201, body: this.aiGovernanceEvidenceResponse(item) };
   }
 
   async listAutomationIdeas(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -845,8 +1281,11 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     const exceptionRate = requireFiniteNumber(body, "exception_rate");
     const hourlyCost = requireFiniteNumber(body, "hourly_cost");
     const implementationEffort = requireFiniteNumber(body, "implementation_effort");
+    const platformMonthlyCost = optionalFiniteNumber(body, "platform_monthly_cost") ?? 0;
+    const avoidedLicenseCost = optionalFiniteNumber(body, "avoided_license_cost") ?? 0;
     const monthlyHoursSaved = (frequencyPerMonth * minutesPerCase * (1 - exceptionRate)) / 60;
     const estimatedMonthlyValue = monthlyHoursSaved * hourlyCost;
+    const monthlyValue = estimatedMonthlyValue + avoidedLicenseCost - platformMonthlyCost;
     const existing = this.roiEstimates.get(key(tenant(ctx), idea.id));
     const estimate: MinimalRoiEstimate = {
       id: existing?.id ?? `roi-${++this.roiSequence}`,
@@ -857,9 +1296,13 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       exception_rate: exceptionRate,
       hourly_cost: hourlyCost,
       implementation_effort: implementationEffort,
+      platform_monthly_cost: platformMonthlyCost,
+      avoided_license_cost: avoidedLicenseCost,
       monthly_hours_saved: monthlyHoursSaved,
       estimated_monthly_value: estimatedMonthlyValue,
-      payback_months: estimatedMonthlyValue > 0 ? implementationEffort / estimatedMonthlyValue : null,
+      monthly_value: monthlyValue,
+      payback_months: monthlyValue > 0 ? implementationEffort / monthlyValue : null,
+      viability: monthlyValue > 0 ? "viable" : "not_viable",
       confidence: optionalRoiConfidence(body) ?? "medium",
       created_by: existing?.created_by ?? ctx.principal.subjectId,
       created_at: existing?.created_at ?? now,
@@ -874,6 +1317,76 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     const estimate = this.roiEstimates.get(key(tenant(ctx), ideaId));
     if (estimate === undefined) throw new ApiResponseException("RESOURCE_NOT_FOUND");
     return { status: 200, body: estimate };
+  }
+
+  async listRoiActualEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const idea = this.requireAutomationIdea(ctx);
+    const items = this.roiActualEvidence
+      .filter((row) => row.tenant_id === tenant(ctx) && row.automation_idea_id === idea.id)
+      .sort((a, b) => b.period_end.localeCompare(a.period_end) || b.recorded_at.localeCompare(a.recorded_at));
+    return page(items);
+  }
+
+  async recordRoiActualEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const idea = this.requireAutomationIdea(ctx);
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const item: MinimalRoiActualEvidence = {
+      roi_actual_id: `roi-actual-${++this.roiActualSequence}`,
+      tenant_id: tenant(ctx),
+      automation_idea_id: idea.id,
+      period_start: requireString(body, "period_start"),
+      period_end: requireString(body, "period_end"),
+      actual_transaction_count: requireFiniteNumber(body, "actual_transaction_count"),
+      actual_failure_rate: requireFiniteNumber(body, "actual_failure_rate"),
+      human_intervention_minutes: requireFiniteNumber(body, "human_intervention_minutes"),
+      reprocessing_minutes: requireFiniteNumber(body, "reprocessing_minutes"),
+      evidence_ref: requireString(body, "evidence_ref"),
+      summary: requireString(body, "summary"),
+      metadata: isRecord(body.metadata) ? body.metadata : {},
+      recorded_by: ctx.principal.subjectId,
+      recorded_at: now,
+      legal_hold: Boolean(body.legal_hold),
+    };
+    this.roiActualEvidence.push(item);
+    return { status: 201, body: item };
+  }
+
+  async listAutomationAdoptionEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const idea = this.requireAutomationIdea(ctx);
+    const evidenceType = optionalQueryString(ctx, "evidence_type");
+    const items = this.automationAdoptionEvidence
+      .filter((row) =>
+        row.tenant_id === tenant(ctx)
+        && row.idea_id === idea.id
+        && (evidenceType === undefined || row.evidence_type === evidenceType),
+      )
+      .sort((a, b) => b.evidence_at.localeCompare(a.evidence_at) || b.recorded_at.localeCompare(a.recorded_at))
+      .map((row) => this.automationAdoptionEvidenceResponse(row));
+    return page(items);
+  }
+
+  async recordAutomationAdoptionEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const idea = this.requireAutomationIdea(ctx);
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const item: MinimalAutomationAdoptionEvidence = {
+      evidence_id: `adoption-evidence-${++this.automationAdoptionEvidenceSequence}`,
+      tenant_id: tenant(ctx),
+      idea_id: idea.id,
+      evidence_type: requireString(body, "evidence_type") as MinimalAutomationAdoptionEvidence["evidence_type"],
+      status: requireString(body, "status") as MinimalAutomationAdoptionEvidence["status"],
+      evidence_at: requireString(body, "evidence_at"),
+      expires_at: optionalString(body, "expires_at") ?? null,
+      summary: requireString(body, "summary"),
+      evidence_ref: optionalString(body, "evidence_ref") ?? null,
+      metadata: isRecord(body.metadata) ? body.metadata : {},
+      recorded_by: ctx.principal.subjectId,
+      recorded_at: now,
+      legal_hold: Boolean(body.legal_hold),
+    };
+    this.automationAdoptionEvidence.push(item);
+    return { status: 201, body: this.automationAdoptionEvidenceResponse(item) };
   }
 
   async listAuditLog(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -924,6 +1437,104 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       && (connectorId === undefined || row.connector_id === connectorId),
     );
     return page(items);
+  }
+
+  async listIntegrationHandoffs(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const status = optionalQueryString(ctx, "status");
+    const providerAlias = optionalQueryString(ctx, "provider_alias");
+    const items = [...this.integrationHandoffs.values()].filter((row) =>
+      row.tenant_id === tenant(ctx)
+      && (status === undefined || row.status === status)
+      && (providerAlias === undefined || row.provider_alias === providerAlias),
+    );
+    return page(items);
+  }
+
+  async createIntegrationHandoff(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const handoffSequence = String(++this.integrationHandoffSequence).padStart(12, "0");
+    const handoff: MinimalIntegrationHandoff = {
+      handoff_id: `00000000-0000-4000-8000-${handoffSequence}`,
+      tenant_id: tenant(ctx),
+      provider_alias: requireString(body, "provider_alias"),
+      job_ref: requireString(body, "job_ref"),
+      payload_ref: requireString(body, "payload_ref"),
+      callback_url_secret_ref: optionalString(body, "callback_url_secret_ref") ?? null,
+      callback_signature_secret_ref: optionalString(body, "callback_signature_secret_ref") ?? null,
+      external_job_id: null,
+      status: "deferred",
+      latest_receipt_id: null,
+      error_code: null,
+      requested_by: ctx.principal.subjectId,
+      request_idempotency_key: ctx.headers["idempotency-key"] ?? "fixture-idempotency-key",
+      requested_at: now,
+      updated_at: now,
+      callback_received_at: null,
+      legal_hold: Boolean(body.legal_hold),
+    };
+    this.integrationHandoffs.set(key(handoff.tenant_id, handoff.handoff_id), handoff);
+    return { status: 202, body: handoff };
+  }
+
+  async dispatchIntegrationHandoff(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const handoffId = requireParam(ctx, "handoff_id");
+    const existing = this.integrationHandoffs.get(key(tenant(ctx), handoffId));
+    if (existing === undefined) {
+      throw new ApiResponseException("RESOURCE_NOT_FOUND");
+    }
+    if (existing.status !== "deferred" && existing.status !== "failed") {
+      throw new ApiResponseException("SCENARIO_VERSION_CONFLICT");
+    }
+    const allowedHosts = Array.isArray(body.allowed_hosts) ? body.allowed_hosts.map((item) => String(item)) : [];
+    if (allowedHosts.length === 0) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID");
+    }
+    const now = new Date().toISOString();
+    const attemptSequence = String(++this.integrationHandoffDispatchSequence).padStart(12, "0");
+    const attempt: MinimalIntegrationHandoffDispatchAttempt = {
+      attempt_id: `10000000-0000-4000-8000-${attemptSequence}`,
+      handoff_id: existing.handoff_id,
+      provider_alias: existing.provider_alias,
+      status: "pending",
+      endpoint_secret_ref: requireString(body, "endpoint_secret_ref"),
+      allowed_hosts: allowedHosts,
+      request_idempotency_key: ctx.headers["idempotency-key"] ?? "fixture-idempotency-key",
+      attempt_no: 1,
+      max_attempts: typeof body.max_attempts === "number" ? body.max_attempts : 3,
+      external_job_id: null,
+      receipt_id: null,
+      error_code: null,
+      requested_by: ctx.principal.subjectId,
+      requested_at: now,
+      updated_at: now,
+      legal_hold: Boolean(body.legal_hold),
+    };
+    this.integrationHandoffDispatchAttempts.set(key(tenant(ctx), attempt.attempt_id), attempt);
+    return { status: 202, body: attempt };
+  }
+
+  async recordIntegrationHandoffCallback(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const handoffId = requireParam(ctx, "handoff_id");
+    const existing = this.integrationHandoffs.get(key(tenant(ctx), handoffId));
+    if (existing === undefined) {
+      throw new ApiResponseException("RESOURCE_NOT_FOUND");
+    }
+    const now = new Date().toISOString();
+    const updated: MinimalIntegrationHandoff = {
+      ...existing,
+      external_job_id: requireString(body, "external_job_id"),
+      status: requireString(body, "status") as MinimalIntegrationHandoff["status"],
+      latest_receipt_id: requireString(body, "receipt_id"),
+      error_code: optionalString(body, "error_code") ?? null,
+      updated_at: now,
+      callback_received_at: now,
+      legal_hold: existing.legal_hold || Boolean(body.legal_hold),
+    };
+    this.integrationHandoffs.set(key(updated.tenant_id, updated.handoff_id), updated);
+    return { status: 200, body: updated };
   }
 
   async listDocumentJobs(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -1005,6 +1616,63 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     this.documentJobs.set(key(updatedJob.tenant_id, updatedJob.document_job_id), updatedJob);
     this.documentExtractions.set(key(extraction.tenant_id, extraction.document_job_id), extraction);
     return { status: 200, body: extraction };
+  }
+
+  async recordExternalDocumentExtraction(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const job = this.requireDocumentJob(ctx);
+    const body = requireBody(ctx);
+    const schemaKeys = new Set(job.field_schema.map((field) => field.key));
+    const fieldsInput = Array.isArray(body.fields) ? body.fields : [];
+    for (const item of fieldsInput) {
+      if (!isRecord(item) || typeof item.key !== "string" || !schemaKeys.has(item.key)) {
+        throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "external_field_not_in_schema" });
+      }
+    }
+    const now = new Date().toISOString();
+    const fields = job.field_schema.map((field) => {
+      const match = fieldsInput.find((item) => isRecord(item) && item.key === field.key);
+      const confidence = isRecord(match) && typeof match.confidence === "number" ? match.confidence : 0;
+      const value = isRecord(match) && (typeof match.value === "string" || typeof match.value === "number" || typeof match.value === "boolean")
+        ? String(match.value)
+        : null;
+      const missing = value === null || value.length === 0;
+      const lowConfidence = !missing && confidence < (field.min_confidence ?? 0.8);
+      return {
+        key: field.key,
+        label: field.label ?? field.key,
+        value,
+        confidence,
+        status: missing ? "missing" : lowConfidence ? "low_confidence" : "extracted",
+        source: "external_idp",
+      };
+    });
+    const missingFields = fields
+      .filter((field) => field.status === "low_confidence" || (field.status === "missing" && job.field_schema.find((schema) => schema.key === field.key)?.required === true))
+      .map((field) => String(field.key));
+    const extraction: MinimalDocumentExtraction = {
+      document_extraction_id: `document-extraction-${++this.documentExtractionSequence}`,
+      tenant_id: tenant(ctx),
+      document_job_id: job.document_job_id,
+      engine: "external_idp_adapter_v1",
+      status: missingFields.length > 0 ? "validation_required" : "completed",
+      provider_alias: requireString(body, "provider_alias"),
+      provider_receipt_id: requireString(body, "receipt_id"),
+      normalized_schema_ref: requireString(body, "normalized_schema_ref"),
+      evidence_ref: optionalString(body, "evidence_ref") ?? null,
+      provider_metadata: isRecord(body.metadata) ? body.metadata : {},
+      fields,
+      missing_fields: missingFields,
+      validation_human_task_id: null,
+      created_at: now,
+      updated_at: now,
+    };
+    this.documentExtractions.set(key(extraction.tenant_id, extraction.document_job_id), extraction);
+    this.documentJobs.set(key(job.tenant_id, job.document_job_id), {
+      ...job,
+      status: extraction.status === "completed" ? "extracted" : "validation_required",
+      updated_at: now,
+    });
+    return { status: 202, body: extraction };
   }
 
   async getDocumentExtraction(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -1116,6 +1784,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       version_id: `${scenarioId}:v1`,
       version: 1,
       promotion_status: "draft",
+      certification: this.scenarioCertification(ctx, scenarioId, 1),
     }]);
   }
 
@@ -1131,8 +1800,95 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
         version_id: `${scenarioId}:v${safeVersion}`,
         version: safeVersion,
         promotion_status: "draft",
+        certification: this.scenarioCertification(ctx, scenarioId, safeVersion),
         ir: { meta: { name: scenarioId, version: safeVersion }, start: "done", nodes: { done: { terminal: "success" } } },
       },
+    };
+  }
+
+  async certifyScenarioVersion(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const scenarioId = requireParam(ctx, "scenario_id");
+    const version = Number(requireParam(ctx, "version"));
+    const safeVersion = Number.isFinite(version) && version > 0 ? version : 1;
+    const reason = typeof ctx.body === "object" && ctx.body !== null && "reason" in ctx.body && typeof ctx.body.reason === "string"
+      ? ctx.body.reason
+      : "fixture certification";
+    const certification = certifiedScenarioCertification(reason);
+    this.scenarioVersionCertifications.set(scenarioVersionCertificationKey(ctx, scenarioId, safeVersion), certification);
+    return {
+      status: 200,
+      body: {
+        scenario_id: scenarioId,
+        version_id: `${scenarioId}:v${safeVersion}`,
+        version: safeVersion,
+        promotion_status: "draft",
+        certification,
+      },
+    };
+  }
+
+  async setScenarioVersionGovernanceStage(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const scenarioId = requireParam(ctx, "scenario_id");
+    const version = Number(requireParam(ctx, "version"));
+    const safeVersion = Number.isFinite(version) && version > 0 ? version : 1;
+    const body = requireBody(ctx);
+    const stage = requireScenarioGovernanceStage(body);
+    const reason = requireString(body, "reason");
+    const evidenceRef = requireString(body, "evidence_ref");
+    const existing = stage === "deprecated" ? revokedScenarioCertification(reason) : uncertifiedScenarioCertification();
+    const certification = {
+      ...existing,
+      governance_stage: stage,
+      governance_reason: reason,
+      governance_evidence_ref: evidenceRef,
+      governance_metadata: isRecord(body.metadata) ? { ...body.metadata } : null,
+      governance_updated_by: ctx.principal.subjectId,
+      governance_updated_at: "2026-06-29T00:00:00.000Z",
+    };
+    this.scenarioVersionCertifications.set(scenarioVersionCertificationKey(ctx, scenarioId, safeVersion), certification);
+    return {
+      status: 200,
+      body: {
+        scenario_id: scenarioId,
+        version_id: `${scenarioId}:v${safeVersion}`,
+        version: safeVersion,
+        promotion_status: "draft",
+        certification,
+      },
+    };
+  }
+
+  async revokeScenarioCertification(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const scenarioId = requireParam(ctx, "scenario_id");
+    const version = Number(requireParam(ctx, "version"));
+    const safeVersion = Number.isFinite(version) && version > 0 ? version : 1;
+    const reason = typeof ctx.body === "object" && ctx.body !== null && "reason" in ctx.body && typeof ctx.body.reason === "string"
+      ? ctx.body.reason
+      : "fixture revoke";
+    const certification = revokedScenarioCertification(reason);
+    this.scenarioVersionCertifications.set(scenarioVersionCertificationKey(ctx, scenarioId, safeVersion), certification);
+    return {
+      status: 200,
+      body: {
+        scenario_id: scenarioId,
+        version_id: `${scenarioId}:v${safeVersion}`,
+        version: safeVersion,
+        promotion_status: "draft",
+        certification,
+      },
+    };
+  }
+
+  private scenarioCertification(
+    ctx: ControlPlaneRequestContext,
+    scenarioId: string,
+    version: number,
+  ): Record<string, unknown> {
+    const stored = this.scenarioVersionCertifications.get(scenarioVersionCertificationKey(ctx, scenarioId, version));
+    if (stored === undefined) return uncertifiedScenarioCertification();
+    return {
+      ...stored,
+      governance_metadata: isRecord(stored.governance_metadata) ? { ...stored.governance_metadata } : stored.governance_metadata,
     };
   }
 
@@ -1658,6 +2414,42 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     return idea;
   }
 
+  private automationAdoptionEvidenceResponse(row: MinimalAutomationAdoptionEvidence): Record<string, unknown> {
+    return {
+      evidence_id: row.evidence_id,
+      idea_id: row.idea_id,
+      evidence_type: row.evidence_type,
+      status: row.status,
+      evidence_at: row.evidence_at,
+      expires_at: row.expires_at,
+      summary: row.summary,
+      evidence_ref: row.evidence_ref,
+      metadata: row.metadata,
+      recorded_by: row.recorded_by,
+      recorded_at: row.recorded_at,
+      legal_hold: row.legal_hold,
+    };
+  }
+
+  private aiGovernanceEvidenceResponse(row: MinimalAiGovernanceEvidence): Record<string, unknown> {
+    return {
+      evidence_id: row.evidence_id,
+      evidence_type: row.evidence_type,
+      subject_ref: row.subject_ref,
+      status: row.status,
+      evidence_at: row.evidence_at,
+      expires_at: row.expires_at,
+      summary: row.summary,
+      evidence_ref: row.evidence_ref,
+      policy_decision_ref: row.policy_decision_ref,
+      audit_correlation_id: row.audit_correlation_id,
+      metadata: row.metadata,
+      recorded_by: row.recorded_by,
+      recorded_at: row.recorded_at,
+      legal_hold: row.legal_hold,
+    };
+  }
+
   private requireDocumentJob(ctx: ControlPlaneRequestContext): MinimalDocumentJob {
     const job = this.documentJobs.get(key(tenant(ctx), requireParam(ctx, "job_id")));
     if (job === undefined) throw new ApiResponseException("RESOURCE_NOT_FOUND");
@@ -1700,7 +2492,13 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     listRunTriggerFires: bind(services.listRunTriggerFires),
     listOpsAlerts: bind(services.listOpsAlerts),
     ackOpsAlert: bind(services.ackOpsAlert),
+    listOpsAlertDeliveries: bind(services.listOpsAlertDeliveries),
+    recordOpsAlertDelivery: bind(services.recordOpsAlertDelivery),
+    sendOpsAlertWebhookDelivery: bind(services.sendOpsAlertWebhookDelivery),
     getOpsHealth: bind(services.getOpsHealth),
+    getProductionReadiness: bind(services.getProductionReadiness),
+    listProductionReadinessEvidence: bind(services.listProductionReadinessEvidence),
+    recordProductionReadinessEvidence: bind(services.recordProductionReadinessEvidence),
     listAutomationIdeas: bind(services.listAutomationIdeas),
     createAutomationIdea: bind(services.createAutomationIdea),
     getAutomationIdea: bind(services.getAutomationIdea),
@@ -1708,14 +2506,25 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     transitionAutomationIdea: bind(services.transitionAutomationIdea),
     upsertRoiEstimate: bind(services.upsertRoiEstimate),
     getRoiEstimate: bind(services.getRoiEstimate),
+    listRoiActualEvidence: bind(services.listRoiActualEvidence),
+    recordRoiActualEvidence: bind(services.recordRoiActualEvidence),
+    listAutomationAdoptionEvidence: bind(services.listAutomationAdoptionEvidence),
+    recordAutomationAdoptionEvidence: bind(services.recordAutomationAdoptionEvidence),
+    listAiGovernanceEvidence: bind(services.listAiGovernanceEvidence),
+    recordAiGovernanceEvidence: bind(services.recordAiGovernanceEvidence),
     listAuditLog: bind(services.listAuditLog),
     exportAuditLog: bind(services.exportAuditLog),
     listConnectors: bind(services.listConnectors),
     listTemplates: bind(services.listTemplates),
+    listIntegrationHandoffs: bind(services.listIntegrationHandoffs),
+    createIntegrationHandoff: bind(services.createIntegrationHandoff),
+    dispatchIntegrationHandoff: bind(services.dispatchIntegrationHandoff),
+    recordIntegrationHandoffCallback: bind(services.recordIntegrationHandoffCallback),
     listDocumentJobs: bind(services.listDocumentJobs),
     createDocumentJob: bind(services.createDocumentJob),
     getDocumentJob: bind(services.getDocumentJob),
     extractDocumentJob: bind(services.extractDocumentJob),
+    recordExternalDocumentExtraction: bind(services.recordExternalDocumentExtraction),
     getDocumentExtraction: bind(services.getDocumentExtraction),
     createDocumentValidationTask: bind(services.createDocumentValidationTask),
     validateScenario: bind(services.validateScenario),
@@ -1725,6 +2534,9 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     listScenarioVersions: bind(services.listScenarioVersions),
     getScenarioVersion: bind(services.getScenarioVersion),
     rollbackScenario: bind(services.rollbackScenario),
+    certifyScenarioVersion: bind(services.certifyScenarioVersion),
+    setScenarioVersionGovernanceStage: bind(services.setScenarioVersionGovernanceStage),
+    revokeScenarioCertification: bind(services.revokeScenarioCertification),
     listHumanTasks: bind(services.listHumanTasks),
     startHumanTask: bind(services.startHumanTask),
     resolveHumanTask: bind(services.resolveHumanTask),
@@ -1757,6 +2569,10 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
 
 function key(tenantId: string, id: string): string {
   return `${tenantId}:${id}`;
+}
+
+function scenarioVersionCertificationKey(ctx: ControlPlaneRequestContext, scenarioId: string, version: number): string {
+  return key(tenant(ctx), `${scenarioId}:v${version}:certification`);
 }
 
 function tenant(ctx: ControlPlaneRequestContext): string {
@@ -1904,6 +2720,116 @@ function requireString(record: Readonly<Record<string, unknown>>, keyName: strin
     throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "missing_required_string", key: keyName });
   }
   return value;
+}
+
+function requireScenarioGovernanceStage(record: Readonly<Record<string, unknown>>): "review" | "pilot" | "deprecated" {
+  const value = requireString(record, "stage");
+  if (value === "review" || value === "pilot" || value === "deprecated") return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_governance_stage", key: "stage" });
+}
+
+function requireAiGovernanceEvidenceType(record: Readonly<Record<string, unknown>>): MinimalAiGovernanceEvidence["evidence_type"] {
+  const value = requireString(record, "evidence_type");
+  if (
+    value === "model_registry" ||
+    value === "prompt_registry" ||
+    value === "eval_result" ||
+    value === "cost_control" ||
+    value === "human_override"
+  ) return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_ai_governance_evidence_type" });
+}
+
+function requireAiGovernanceEvidenceStatus(record: Readonly<Record<string, unknown>>): MinimalAiGovernanceEvidence["status"] {
+  const value = requireString(record, "status");
+  if (value === "valid" || value === "failed" || value === "deferred") return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_ai_governance_evidence_status" });
+}
+
+function requireAiGovernanceMetadata(
+  record: Readonly<Record<string, unknown>>,
+  evidenceType: MinimalAiGovernanceEvidence["evidence_type"],
+  status: MinimalAiGovernanceEvidence["status"],
+): Readonly<Record<string, unknown>> {
+  if (record.metadata === undefined) {
+    if (status === "valid") throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "valid_ai_governance_metadata_required" });
+    return {};
+  }
+  if (!isRecord(record.metadata)) {
+    throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "metadata_must_be_object" });
+  }
+  const metadata = record.metadata;
+  if (status !== "valid") return metadata;
+  if (evidenceType === "model_registry") {
+    requireMetadataStrings(metadata, "model_registry_metadata_required", [
+      "provider_alias",
+      "model_alias",
+      "model_version",
+      "data_retention_policy_ref",
+      "tenant_allowlist_ref",
+      "approved_at",
+    ]);
+    if (metadata.risk_tier !== "low" && metadata.risk_tier !== "medium" && metadata.risk_tier !== "high") {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "model_registry_risk_tier_invalid" });
+    }
+    return metadata;
+  }
+  if (evidenceType === "prompt_registry") {
+    requireMetadataStrings(metadata, "prompt_registry_metadata_required", [
+      "prompt_template_id",
+      "prompt_template_version",
+      "owner_ref",
+      "eval_suite_ref",
+      "rollback_target_ref",
+      "approved_at",
+    ]);
+    return metadata;
+  }
+  if (evidenceType === "eval_result") {
+    requireMetadataStrings(metadata, "eval_result_metadata_required", ["eval_suite_ref", "dataset_ref", "sampled_at"]);
+    if (typeof metadata.pass_rate !== "number" || metadata.pass_rate < 0 || metadata.pass_rate > 1) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "eval_result_pass_rate_invalid" });
+    }
+    for (const key of ["prompt_injection_passed", "data_leakage_passed", "hallucination_passed", "policy_block_passed"] as const) {
+      if (metadata[key] !== true) throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "eval_result_required_check_failed", key });
+    }
+    return metadata;
+  }
+  if (evidenceType === "cost_control") {
+    requireMetadataStrings(metadata, "cost_control_metadata_required", ["budget_ref", "scope_ref", "anomaly_alert_ref", "effective_at"]);
+    if (typeof metadata.monthly_limit !== "number" || metadata.monthly_limit <= 0) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "cost_control_monthly_limit_invalid" });
+    }
+    if (typeof metadata.per_run_cap !== "number" || metadata.per_run_cap <= 0 || metadata.per_run_cap > metadata.monthly_limit) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "cost_control_per_run_cap_invalid" });
+    }
+    return metadata;
+  }
+  requireMetadataStrings(metadata, "human_override_metadata_required", [
+    "override_actor_ref",
+    "override_action",
+    "reason_code",
+    "audit_event_ref",
+    "occurred_at",
+  ]);
+  if (
+    metadata.override_action !== "accepted_ai_output" &&
+    metadata.override_action !== "rejected_ai_output" &&
+    metadata.override_action !== "corrected_ai_output" &&
+    metadata.override_action !== "escalated_to_human" &&
+    metadata.override_action !== "rolled_back_prompt"
+  ) {
+    throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "human_override_action_invalid" });
+  }
+  return metadata;
+}
+
+function requireMetadataStrings(record: Readonly<Record<string, unknown>>, reason: string, keys: readonly string[]): void {
+  for (const key of keys) {
+    if (typeof record[key] !== "string" || record[key].length === 0) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason, key: `metadata.${key}` });
+    }
+  }
 }
 
 function optionalString(record: Readonly<Record<string, unknown>>, keyName: string): string | undefined {
@@ -2062,6 +2988,13 @@ function requireFiniteNumber(record: Readonly<Record<string, unknown>>, keyName:
   throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "missing_required_number", key: keyName });
 }
 
+function optionalFiniteNumber(record: Readonly<Record<string, unknown>>, keyName: string): number | undefined {
+  const value = record[keyName];
+  if (value === undefined) return undefined;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_optional_number", key: keyName });
+}
+
 function optionalPositiveInteger(record: Readonly<Record<string, unknown>>, keyName: string): number | undefined {
   const value = record[keyName];
   if (value === undefined) return undefined;
@@ -2131,6 +3064,68 @@ function documentValidationTaskResponse(extraction: MinimalDocumentExtraction): 
       },
       artifact_refs: [],
     },
+  };
+}
+
+function uncertifiedScenarioCertification(): Record<string, unknown> {
+  return {
+    status: "uncertified",
+    certified_by: null,
+    certified_at: null,
+    expires_at: null,
+    reason: null,
+    revoked_by: null,
+    revoked_at: null,
+    revoke_reason: null,
+    valid_for_prod: false,
+    governance_stage: null,
+    governance_reason: null,
+    governance_evidence_ref: null,
+    governance_metadata: null,
+    governance_updated_by: null,
+    governance_updated_at: null,
+  };
+}
+
+function certifiedScenarioCertification(reason: string): Record<string, unknown> {
+  const certifiedAt = "2026-06-24T00:00:00.000Z";
+  return {
+    status: "certified",
+    certified_by: "fixture-approver",
+    certified_at: certifiedAt,
+    expires_at: null,
+    reason,
+    revoked_by: null,
+    revoked_at: null,
+    revoke_reason: null,
+    valid_for_prod: true,
+    governance_stage: "certified",
+    governance_reason: reason,
+    governance_evidence_ref: null,
+    governance_metadata: null,
+    governance_updated_by: "fixture-approver",
+    governance_updated_at: certifiedAt,
+  };
+}
+
+function revokedScenarioCertification(reason: string): Record<string, unknown> {
+  const revokedAt = "2026-06-25T00:00:00.000Z";
+  return {
+    status: "revoked",
+    certified_by: "fixture-approver",
+    certified_at: "2026-06-24T00:00:00.000Z",
+    expires_at: null,
+    reason: "fixture certification",
+    revoked_by: "fixture-approver",
+    revoked_at: revokedAt,
+    revoke_reason: reason,
+    valid_for_prod: false,
+    governance_stage: "deprecated",
+    governance_reason: reason,
+    governance_evidence_ref: null,
+    governance_metadata: null,
+    governance_updated_by: "fixture-approver",
+    governance_updated_at: revokedAt,
   };
 }
 

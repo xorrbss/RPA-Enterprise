@@ -1,0 +1,113 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- if .Values.networkPolicy.apiIngress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpa-api-ingress
+  namespace: {{ include "rpa.namespace" . }}
+  labels:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rpa-api
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+{{ toYaml .Values.networkPolicy.apiIngress.ingressNamespaceLabel | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+{{- end }}
+{{- if .Values.networkPolicy.egress.defaultDeny }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpa-default-deny-egress
+  namespace: {{ include "rpa.namespace" . }}
+  labels:
+    app.kubernetes.io/name: rpa-egress
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rpa-enterprise
+  policyTypes:
+    - Egress
+  egress: []
+{{- end }}
+{{- if and .Values.networkPolicy.egress.defaultDeny .Values.networkPolicy.egress.allowDns }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpa-dns-egress
+  namespace: {{ include "rpa.namespace" . }}
+  labels:
+    app.kubernetes.io/name: rpa-egress
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rpa-enterprise
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+{{ toYaml .Values.networkPolicy.egress.dnsNamespaceLabel | nindent 14 }}
+          podSelector:
+            matchLabels:
+{{ toYaml .Values.networkPolicy.egress.dnsPodLabel | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}
+{{- with .Values.networkPolicy.egress.ownerApprovedCidrs }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpa-owner-approved-egress
+  namespace: {{ include "rpa.namespace" $ }}
+  labels:
+    app.kubernetes.io/name: rpa-egress
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rpa-enterprise
+  policyTypes:
+    - Egress
+  egress:
+{{- range . }}
+{{- $cidr := required "networkPolicy.egress.ownerApprovedCidrs[].cidr is required" .cidr }}
+{{- if or (eq $cidr "0.0.0.0/0") (eq $cidr "::/0") }}
+{{- fail "networkPolicy.egress.ownerApprovedCidrs must not include 0.0.0.0/0 or ::/0" }}
+{{- end }}
+    - to:
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
+{{- with .except }}
+            except:
+{{ toYaml . | nindent 14 }}
+{{- end }}
+{{- with .ports }}
+      ports:
+{{- range . }}
+        - protocol: {{ default "TCP" .protocol | quote }}
+          port: {{ required "networkPolicy.egress.ownerApprovedCidrs[].ports[].port is required" .port }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

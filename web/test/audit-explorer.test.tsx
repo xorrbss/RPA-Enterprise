@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
@@ -16,6 +16,11 @@ function renderApp(client: ApiClient): void {
       </ApiClientProvider>
     </QueryClientProvider>,
   );
+}
+
+function unsignedToken(roles: readonly string[]): string {
+  const encode = (value: unknown) => btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return `${encode({ alg: "none" })}.${encode({ sub: "admin-a", roles })}.`;
 }
 
 describe("audit explorer view", () => {
@@ -52,6 +57,42 @@ describe("audit explorer view", () => {
 
     fireEvent.click(screen.getByText("무결성 세부값 보기"));
     expect(currentHash).toBeVisible();
+  });
+
+  test("감사 체인 검증 최근 결과를 표시한다", async () => {
+    renderApp(fakeClient());
+
+    expect(await screen.findByRole("heading", { name: "감사 체인 검증" })).toBeInTheDocument();
+    expect(await screen.findByText("정상")).toBeInTheDocument();
+    expect(screen.getByText("검증 행")).toBeInTheDocument();
+    expect(screen.getByText("위반")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "체인 검증 실행" })).toBeDisabled();
+  });
+
+  test("관리자는 감사 체인 검증을 수동 실행할 수 있다", async () => {
+    const runAuditVerification = vi.fn(async () => ({
+      verification_run_id: "83000000-0000-4000-8000-000000000099",
+      status: "invalid" as const,
+      rows_checked: 3,
+      violation_count: 1,
+      violations: [{ sequenceNo: 3, id: "audit-row-3", kind: "hash_mismatch" as const, detail: "mismatch" }],
+      checked_from_sequence: 1,
+      checked_to_sequence: 3,
+      started_at: "2026-06-29T00:00:00.000Z",
+      completed_at: "2026-06-29T00:00:01.000Z",
+      correlation_id: "84000000-0000-4000-8000-000000000099",
+      triggered_by: { subject_id: "admin-a", roles: ["admin"] },
+      trigger_kind: "manual_api" as const,
+      retention_until: "2026-09-29T00:00:01.000Z",
+      legal_hold: false,
+    }));
+    localStorage.setItem("rpa.token", unsignedToken(["admin"]));
+    renderApp(fakeClient({ runAuditVerification }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "체인 검증 실행" }));
+
+    await waitFor(() => expect(runAuditVerification).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("감사 체인 검증 이력을 저장했습니다.")).toBeInTheDocument();
   });
 
   test("감사 기록 실패를 오류 상태로 표시한다", async () => {

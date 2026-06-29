@@ -98,9 +98,9 @@ type NetworkPolicy = {
   block_on_violation: true;      // Product Open: monitor-only false is not contracted
 };
 ```
+- Implementation status (2026-06-29): worker run-drive/resume now pass `network_policies.allowed_domains` into `BrowserSessionProvider.bind`, which requires a CDP `Fetch`/`Network` browser guard before a lease session is registered. `UtilityExecutor.navigate` and `api_call` still perform preflight allowlist checks, while the browser guard blocks off-allowlist navigation, subresource/fetch/XHR-style requests, iframe/document loads, WebSocket handshakes, and downloads with `DOMAIN_POLICY_VIOLATION`.
+- Audit evidence (2026-06-29): production worker composition injects `PgDurableSecurityAuditDecisionWriter` into the browser guard. Guard decisions append durable `network.request` audit rows before `Fetch.continueRequest` or `Fetch.failRequest`; audit append failure blocks the request fail-closed.
 - **enforce 지점**: 브라우저 navigation + 모든 outbound request 가로채기. allowed_domains 밖 이동/요청 → 차단 + `DOMAIN_POLICY_VIOLATION`(security, 침해 의심 알림).
-- 구현 상태(2026-06-19): worker run-drive/resume 경로는 `network_policies.allowed_domains`를 `RunContext.networkAllowedDomains`로 주입하고, `UtilityExecutor.navigate`는 세션 접근 전에 허용 도메인 밖 URL을 `DOMAIN_POLICY_VIOLATION`/`failed_security`로 차단한다.
-- Deferred implementation note: 모든 outbound request 가로채기는 CDP `Fetch`/`Network` 이벤트 구독 또는 브라우저 라우팅 포트 증분에서 다룬다. 현재 `CdpSession`은 send-only 포트라 request interception 생명주기를 표현하지 못한다.
 - `@challenge`/login 우회 중에도 정책 유지. 정책은 site profile과 독립적으로 run에 바인딩(Phase 2 site_profiles와 FK 연계).
 
 ---
@@ -156,6 +156,7 @@ impl-bundle §C access middleware는 `redaction_status` 게이트만 강제했�
 - Boundary rows use `payload_schema_ref = audit/security-boundary-decision@1`, explicit `retentionUntil`, and `failClosed = true`. If safe serialization, payload schema selection, retention timestamp validation, or durable append fails, the caller must fail closed and must not return protected artifacts, PlainSecret material, connector activation, network/prompt continuation, or BYPASSRLS work.
 - Broader API routes that are not implemented in the repo-owned app runtime remain scoped out of executable staging evidence until they are wired to this boundary or explicitly excluded in the staging packet.
 - `audit_log.payload` is a payload-bearing column and therefore carries inline `retention_until`, `deleted_at`, and `legal_hold`. Audit retention/deletion evidence is appended; audit rows are not updated or deleted in place.
+- `audit_verifier_runs` is the tenant-scoped operational evidence table for hash-chain checks. Manual API verification requires `audit.verify`; listing evidence requires `audit.read`. The maintenance scheduler enqueues tenant-scoped `audit_verifier` jobs hourly for tenants with audit rows; runtime exceptions are recorded as `status=failed` evidence rather than reported as unknown healthy. Results are retained for 90 days by default, expose metadata-only violations (`sequenceNo`, `id`, `kind`, `detail`), and never return raw audit payload bodies. Tampering is recorded as `status=invalid`, not reported as unknown healthy.
 
 TS 코드 계약: `ts/security-middleware-contract.ts` `ImmutableAuditLogAppendOnly`, fixture scaffold: `security/compliance-scaffold.ts` `InMemoryImmutableAuditLog`, app integration evidence: `app/test/security-audit.int.ts`.
 
@@ -170,6 +171,9 @@ TS 코드 계약: `ts/security-middleware-contract.ts` `ImmutableAuditLogAppendO
 - `BYPASSRLS` 전용 DB role은 user HTTP/API traffic을 처리할 수 없다.
 - 전용 DB role, reason code, immutable audit append가 모두 필수다.
 - 허용 use case는 schema migration, artifact redaction/retention/integrity/orphan jobs, lease sweeper, scheduler/worker registry infra 작업으로 제한한다.
+- maintenance tenant discovery가 tenant 경계를 넘는 catalog/data scan을 수행하려면 전용 BYPASSRLS operational role과 `bypassrls.use` audit가 필수다. 대안은 tenant별 non-bypass transaction에서 `SET LOCAL app.tenant_id`를 바인딩해 실행하는 것이다.
+- app-role에서 `SET LOCAL app.tenant_id` 없이 cross-tenant discovery 쿼리를 실행하는 설계는 금지한다. superuser에서만 동작하는 discovery는 product-open evidence가 아니다.
+- artifact integrity/orphan sweeper는 `MAINTENANCE_TENANT_IDS` 공백 때문에 조용히 휴면하면 안 된다. orphan sweeper는 전역 object-store 작업으로 매 cadence 1회 실행하고, BYPASSRLS 사용 시 audit evidence를 남긴다.
 - artifact redaction/retention object I/O는 `real_object_store` 포트 바인딩 + `SecretRef` credential path + `artifact/object-io-evidence@1` 성공 receipt가 있어야 finalize CAS가 가능하다. `test_fake` / `artifact/object-io-local-test@1` 포트는 repo-local 테스트 전용이며 staging/product-open object-store evidence로 인용 금지.
 - object I/O evidence는 `ArtifactRef`, backend alias, `SecretRef` 식별자, receipt id, operation, sha256 메타데이터만 기록할 수 있다. `ObjectRef`, `PlainSecret`, resolved secret material은 audit/log/event/release evidence에 남기지 않는다.
 - 그 외 운영 편의성 작업은 `TODO: [BLOCKED]` 결정 없이 확장 금지. Required decision: 신규 BYPASSRLS use case, operational DB role, reason code, immutable audit append contract.
@@ -203,17 +207,87 @@ Rules:
 - SCIM group-to-role mapping is repo-owned, not inferred from IdP semantics. `scim_group_role_mappings` is the tenant-scoped source of truth for opaque external group strings; only `status='active'` rows map to closed RPA roles.
 - A SCIM principal body must contain exactly one role source: direct `roles` or `external_groups`. Mixing both, omitting both, or sending any unmapped/disabled external group is `IR_SCHEMA_INVALID`; no principal or role upsert may be committed.
 - `signature_secret_ref` may be logged or audited only as a SecretRef identifier. The resolved HMAC key, value-derived hash, or fingerprint must not appear in logs, audit payloads, events, screenshots, or release evidence.
+- `secret_rotation_policy` is metadata-only and closed to `manual`, `periodic_30d`, `periodic_60d`, `periodic_90d` (default `periodic_90d`). Rotation monitoring computes `rotation_due_at` from `COALESCE(last_secret_rotated_at, created_at)` and never resolves or stores signing secret material. Decommissioned providers surface `rotation_status='decommissioned'` and do not raise SCIM rotation ops alerts.
 
 ---
 
 ## 13. Ops alert external notification SecretRef boundary
 
-Product Open v1 has no external ops-alert send path. If v1.1 opens external delivery, the security boundary is:
-- Channel enum candidates are `teams`, `slack`, `email`, and `webhook`; `console` remains the in-product delivery channel and does not require external SecretRef material.
+Product Open v1 uses the console alert center as the in-product delivery channel. v1.1 opens one external network send path: SecretRef-backed webhook notification attempts. The same security boundary applies to the current webhook sender and any future Teams/Slack/email expansion:
+- Channel enum candidates are `teams`, `slack`, `email`, and `webhook`; only `webhook` has an active runtime sender in v1.1. `console` remains the in-product delivery channel and does not require external SecretRef material.
 - Endpoint URLs, webhook path/query, bearer tokens, SMTP credentials, provider signing secrets, and channel-specific credentials are `SecretRef` material. API/config/audit surfaces may store only SecretRef identifiers, backend aliases, runtime identity aliases, route policy ids, provider/channel aliases, and non-secret display labels.
-- Recommended namespace shape is `rpa/<env>/notification/<channel>/<name>` with a dedicated notification sender runtime identity. Reusing executor/site credentials for notification delivery is not allowed without a versioned contract change.
+- Required runtime namespace shape for the active sender is `rpa/<env>/notification-sender/notification/<channel>/<name>`, resolved by the dedicated `notification-sender` runtime identity with SecretStore purpose `notification`. Reusing executor/site credentials for notification delivery is not allowed without a versioned contract change.
 - Endpoint allowlist is metadata, not a substitute for SecretRef. The resolved endpoint host must match the approved provider/domain policy; redirects to unapproved domains, missing allowlist, unresolved SecretRef, denied resolve, disabled connector, or missing provider receipt all fail closed.
 - Delivery evidence may record channel, provider alias, SecretRef identifier, receipt id, status class, attempt count, and redacted error code. It must not record PlainSecret, resolved endpoint URL, Authorization headers, webhook body containing secret material, recipient secrets, or value-derived hashes/fingerprints.
-- `test_fake` sender receipts are repo-local test evidence only and cannot satisfy staging/product-open external delivery evidence. A future `sent`/`delivered` state requires a real provider/network receipt through the SecretRef-backed sender.
+- `ops_notification_deliveries` is a receipt ledger, not a sender. `ops_notification_attempts` owns sender state (`pending|sending|sent|failed|dead_letter`) and retry/DLQ for webhook. `sent`/`delivered` requires a provider receipt id and `failed` requires a redacted error code. HTTP 2xx webhook sends record `sent`, not synthesized `delivered`. `test_fake` sender receipts are repo-local test evidence only and cannot satisfy staging/product-open external delivery evidence.
 - Ack remains a separate authorization and ledger boundary. `ops_alert_acknowledgements` proves only operator acknowledgement; it must not be used as proof that Teams/Slack/email/webhook delivery happened, and external delivery failures must not weaken `ops_alert.ack` RBAC.
-- Owner input before v1.1 implementation: selected channel set, SecretStore backend/namespace, notification sender identity, recipient/group routing policy owner, provider/domain allowlist, retry/DLQ retention, rotation cadence, and break-glass owner. These are future inputs, not Product Open v1 release blockers.
+- Remaining owner input after webhook v1.1: Teams/Slack/email channel contracts, recipient/group routing policy owner, provider-specific authentication policy, rotation cadence, and break-glass owner for non-webhook channels.
+
+### 13.1 Sink delivery egress SecretRef boundary
+
+Sink delivery egress is a repo-local runtime capability when the injected `SinkDeliveryPort` is bound as `real_sink`; it is not a blanket claim that production/customer external delivery evidence is complete.
+- `real_sink` must resolve an HTTPS endpoint from SecretRef material and must validate the resolved endpoint host, plus redirect hosts, against the configured `allowed_hosts`. Raw endpoint URLs, path/query secrets, bearer values, passwords, Authorization headers, provider credentials, and resolved SecretRef material must not appear in request bodies, responses, audit payloads, logs, release evidence, or UI state.
+- The downstream idempotency value is `sink_idempotency_key = tenant_id:sink_config_id:schema_ref:natural_key`; the runtime sends it as the external `Idempotency-Key`, and all retry attempts for the same normalized record/sink config reuse that value.
+- Sink egress evidence may record only SecretRef identifiers, backend aliases, allowed host names, sink config id, normalized record id, attempt number, status class, receipt alias, and redacted error code. Raw payload bodies and Authorization header values are never evidence fields.
+- Customer/provider endpoint ownership, allowed-host approval, and SecretRef provisioning remain owner evidence. A repo-local `real_sink` implementation, or a passing local test, cannot close those owner-evidence gates by itself.
+- Retry and dead-letter behavior remains governed by `ops-defaults.md#sink.delivery`: transient failures retry under the injected `SinkDeliveryPolicy`; max-attempt exhaustion becomes `dead_letter`/`SINK_DELIVERY_FAILED`. `test_fake` sink ports are local test evidence only.
+
+---
+
+## 14. Enterprise adoption AI/IDP/federation security boundary
+
+90점+ 도입 설계는 기능 폭을 과장하지 않고 외부 시스템 연계 경계를 명시한다. 이 절은 `docs/rpa-adoption-90plus-design-2026-06-29.md`의 market-federation 전략을 보안 계약에 고정한다.
+
+### 14.1 AI governance evidence
+
+LLM/AI 기능은 다음 evidence 없이는 enterprise-scale 기능으로 표시할 수 없다.
+
+| Evidence | 보안 경계 |
+|---|---|
+| model registry | provider/model/version, tenant allowlist, data retention policy만 저장. provider credential은 `SecretRef` |
+| prompt registry | template id, owner, version, eval set id, rollback target만 저장. 민감 payload 원문 저장 금지 |
+| eval result | prompt injection, data leakage, hallucination, policy block 결과를 redacted evidence로만 저장 |
+| cost control | tenant/scenario budget, per-run cap, anomaly alert. billing credential은 `SecretRef` |
+| human override | override actor/action/reason/correlation id를 audit append. override가 AI 원판정을 삭제하지 않음 |
+
+AI 판단을 감사 가능한 결정으로 쓰려면 policy decision id와 audit correlation id를 연결해야 한다. 연결이 없으면 "AI approved" 같은 성공 상태로 표시하지 않는다.
+
+Implementation contract:
+- `ai_governance_evidence` is the tenant-scoped metadata-only ledger for these five evidence classes.
+- `GET /v1/ai-governance/evidence` uses `ai_governance.read`; `POST /v1/ai-governance/evidence` uses `ai_governance.manage` plus `Idempotency-Key`.
+- `status=valid` evidence must include `evidence_ref`, `policy_decision_ref`, and an existing `audit_log.correlation_id`. Model/prompt/eval/cost-control evidence also needs future `expires_at`; human override evidence is event-scoped and may omit expiry.
+- Evidence fields may store opaque aliases, policy refs, artifact refs, audit refs, pass/fail metrics, and non-secret summary metadata only. Raw prompts, model outputs, prompt/output bodies, endpoint URLs, provider credentials, bearer values, tokens, passwords, webhook secrets, resolved SecretRef material, payloads, and document bodies are forbidden in `summary`, `subject_ref`, `evidence_ref`, `policy_decision_ref`, and `metadata`.
+
+- Runtime AI enforcement is a separate policy decision, not an inference from the evidence table alone. Required decision: tenant/customer AI policy must define enforcement mode (`observe`, `warn`, `block`), subject mapping, grace period, and emergency override owner before missing or expired AI governance evidence may block `/v1/runs`, model selection, or prompt template rollout.
+
+### 14.2 External IDP/OCR boundary
+
+Product Open v1은 OCR/IDP 완성 제품을 주장하지 않는다. 외부 IDP/OCR 연계를 여는 경우:
+- 열린 제품 표면은 외부 IDP/OCR 공급자가 이미 산출한 **metadata-only normalized result intake**다. 본 시스템이 이미지/PDF OCR 엔진, provider-side classification/extraction/validation 엔진, 또는 장문 OCR 전문 저장소를 제공한다고 주장하지 않는다.
+- OCR/IDP provider credential, raw endpoint URL, webhook/callback URL, webhook secret, storage credential, bearer/API token, Authorization header, signed URL은 모두 `SecretRef`/SecretStore 경계 뒤의 material이다. API/config/audit/event/release evidence/UI state에는 SecretRef 식별자와 provider alias 같은 비밀 아닌 별칭만 남길 수 있고 resolved material은 남길 수 없다.
+- API/audit/event에는 provider alias, document job id, normalized extraction schema id, field key/value, field confidence, validation task id, provider receipt id/receipt_at, opaque evidence_ref, redacted error code, non-secret metadata만 기록한다. `evidence_ref`는 외부 증거 별칭이지 raw URL 또는 signed object path가 아니다.
+- 원본 문서 bytes, 원문 OCR 전문, 장문 OCR text block, provider response body, provider token/secret, raw endpoint URL, signed URL, callback secret은 DB payload, 로그, 감사, event, LLM payload, release evidence, UI state에 남길 수 없다.
+- `POST /v1/document-jobs/{job_id}/external-extractions`는 `document_job.manage` RBAC, tenant-scoped `job_id`, `Idempotency-Key`, provider receipt replay key를 강제한다. cross-tenant job 참조, receipt mismatch replay, idempotency hash mismatch는 fail-closed다.
+- confidence threshold 미달, schema mismatch, provider receipt 부재, media type 미지원은 human validation 또는 fail-closed로 처리한다.
+- 외부 IDP 결과가 없는데 extraction success를 합성하지 않는다.
+
+### 14.3 Existing RPA handoff boundary
+
+Implementation boundary:
+- `integration_handoffs` is a control-plane handoff request ledger, `integration_handoff_dispatch_attempts` is the durable outbound provider attempt ledger, and `integration_handoff_receipts` is the provider receipt ledger. They record metadata and status evidence only.
+- `POST /v1/integration-handoffs` does not perform external provider dispatch. Dispatch is explicit through `POST /v1/integration-handoffs/{handoff_id}/dispatch`, which creates an idempotent attempt and enqueues `integration_handoff_dispatch`.
+- Callback/webhook and dispatch endpoint material is SecretRef-only. `callback_url_secret_ref` may store a callback endpoint SecretRef identifier, `callback_signature_secret_ref` may store a provider callback HMAC verification SecretRef identifier, and dispatch attempts store only `endpoint_secret_ref`, but raw callback URLs, webhook URLs, provider endpoint URLs, path/query secrets, bearer tokens, passwords, Authorization headers, provider credentials, signing keys, and resolved SecretRef material must not appear in request bodies, responses, audit payloads, logs, release evidence, or UI state.
+- Runtime dispatch resolves `endpoint_secret_ref` through `SecretStoreBoundary` with `purpose="connector"`, `connectorId=provider_alias`, and runtime identity `integration-handoff-dispatcher`; it requires HTTPS, public-host `allowed_hosts`, redirect host revalidation, timeout handling, retry/backoff, and `dead_letter` final failure. A provider 2xx response may mark the handoff `accepted`; `completed` still requires a provider receipt/callback.
+- `POST /v1/integration-handoffs/{handoff_id}/callback` is a JWT/RBAC-protected control-plane receipt recording endpoint guarded by `integration.handoff`. It is not public provider ingress.
+- `POST /v1/webhooks/integration-handoffs/{tenant_id}/{handoff_id}` is the public provider callback ingress. It skips JWT, verifies `X-RPA-Integration-Signature=sha256=<hex>` over `{timestamp}.{receipt_id}.{canonical_json(body)}`, resolves only `callback_signature_secret_ref` through `SecretStoreBoundary` with `purpose="connector"` and runtime identity `api`, enforces a five-minute timestamp window, and uses `(tenant_id,handoff_id,receipt_id)` as the replay key.
+- Handoff request/dispatch/receipt payloads may record provider alias, handoff id, external job id, receipt id, status class, idempotency key, redacted error code, allowed host names, SecretRef identifiers, and non-secret metadata only.
+
+Desktop/SAP/Citrix/Office 자동화는 Product Open/P0 범위가 아니다. 기존 RPA 제품에 handoff하는 경우:
+- handoff credential과 endpoint는 `SecretRef`로만 저장한다.
+- handoff request/receipt에는 external system alias, job id, status class, idempotency key, redacted error code만 저장한다.
+- 외부 RPA job의 `accepted`와 실제 업무 `completed`를 분리한다. provider callback/receipt 없이 completed로 표시하지 않는다.
+- 외부 RPA가 처리하는 화면/파일/자격증명은 본 시스템의 redaction/RBAC/audit 경계 밖 외부 사실로 표시한다.
+
+### 14.4 CAPTCHA/MFA rule
+
+CAPTCHA/MFA 자동 해결은 enterprise adoption score를 올리기 위한 기능으로 주장하지 않는다. 기본 동작은 human-first suspend이며, 자동 우회/해결은 법무·보안·사이트 정책 owner 승인과 별도 계약 없이는 금지한다.

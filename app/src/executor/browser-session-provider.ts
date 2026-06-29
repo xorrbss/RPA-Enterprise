@@ -27,14 +27,23 @@ import {
   type CreateStagehandSessionDeps,
   type StagehandSessionOptions,
 } from "./cdp-session";
+import {
+  createNoopBrowserNetworkGuard,
+  type BrowserNetworkGuardAuditOptions,
+  type BrowserNetworkGuardHandle,
+  type BrowserNetworkGuardPolicy,
+} from "./browser-network-guard";
 
 /** claim 시 lease 에 라이브 세션을 바인딩하기 위한 입력(3-tuple identity + 격리/정리 정책 + 진입 URL). */
 export interface BrowserSessionBindInput {
   readonly tenantId: string;
+  readonly runId?: string;
+  readonly correlationId?: string;
   readonly leaseId: string;
   readonly siteProfileId: string;
   readonly browserIdentityId: string;
   readonly networkPolicyId: string;
+  readonly networkAllowedDomains: readonly string[];
   /** 격리 수준(Phase 1: 'browser' 만 — lease 당 새 프로세스). resolver 가 공급(가정 금지). */
   readonly isolation: LeaseIsolation;
   /** 정리 정책(Phase 1: 'clear_all' 만 — release 시 통째 폐기). */
@@ -113,6 +122,28 @@ interface ActiveBoundSession {
   readonly downloadDir: string;
 }
 
+function networkGuardPolicy(input: BrowserSessionBindInput, audit: BrowserNetworkGuardAuditOptions | undefined): BrowserNetworkGuardPolicy {
+  return {
+    tenantId: input.tenantId,
+    ...(input.runId !== undefined ? { runId: input.runId } : {}),
+    ...(input.correlationId !== undefined ? { correlationId: input.correlationId } : {}),
+    networkPolicyId: input.networkPolicyId,
+    allowedDomains: input.networkAllowedDomains,
+    ...(audit !== undefined ? { audit } : {}),
+  };
+}
+
+async function installRequiredNetworkGuard(
+  session: CdpSession,
+  input: BrowserSessionBindInput,
+  audit: BrowserNetworkGuardAuditOptions | undefined,
+): Promise<void> {
+  if (session.installNetworkGuard === undefined) {
+    throw new Error("BrowserSessionProvider: CdpSession does not support Product Open network guard");
+  }
+  await session.installNetworkGuard(networkGuardPolicy(input, audit));
+}
+
 function closeWithTimeout(session: CdpSession, timeoutMs: number): Promise<"drained" | "timeout" | { kind: "error"; reason: string }> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<"timeout">((resolve) => {
@@ -140,6 +171,7 @@ export interface StagehandBrowserSessionProviderOptions {
   readonly headless?: boolean;
   /** per-lease 다운로드 디렉토리 루트(없으면 OS tmp). */
   readonly downloadRootDir?: string;
+  readonly networkAudit?: BrowserNetworkGuardAuditOptions;
   /** 테스트 주입: 세션 팩토리(기본 createStagehandSession — RQ-001 DI 경계 재사용). */
   readonly createSession?: (
     opts: StagehandSessionOptions,
@@ -164,7 +196,7 @@ export class StagehandBrowserSessionProvider implements BrowserSessionProvider, 
   async bind(input: BrowserSessionBindInput): Promise<BoundBrowserSession> {
     assertPhase1Supported(input);
     const downloadDir = mkdtempSync(join(this.options.downloadRootDir ?? tmpdir(), `lease-${input.leaseId}-`));
-    let session: CdpSession;
+    let session: CdpSession | undefined;
     try {
       session = await this.createSession({
         chromeExecutablePath: this.options.chromeExecutablePath,
@@ -172,10 +204,13 @@ export class StagehandBrowserSessionProvider implements BrowserSessionProvider, 
         headless: this.options.headless,
         initialUrl: input.initialUrl,
       });
+      await installRequiredNetworkGuard(session, input, this.options.networkAudit);
     } catch (e) {
+      if (session !== undefined) await session.close().catch(() => undefined);
       rmSync(downloadDir, { recursive: true, force: true }); // 기동 실패 시 디렉토리 누수 방지
       throw e; // CDP_DISCONNECTED 등 표면화 — 조용한 null 세션 금지
     }
+    if (session === undefined) throw new Error("BrowserSessionProvider: session bind completed without a session");
     this.pool.register(input.leaseId, session);
     this.active.set(input.leaseId, { session, downloadDir });
     return {
@@ -223,6 +258,8 @@ export class FakeCdpSession implements CdpSession {
   closeCalls = 0;
   /** 테스트 단언용 goto(navigate) 호출 횟수 — resume 재진입이 앞선 노드를 건너뛰는지 검증. */
   gotoCalls = 0;
+  networkGuardInstallCalls = 0;
+  lastNetworkGuardPolicy: BrowserNetworkGuardPolicy | undefined;
 
   constructor(private readonly downloads: string) {}
 
@@ -239,6 +276,11 @@ export class FakeCdpSession implements CdpSession {
   }
   async sendCDP<T = unknown>(): Promise<T> {
     return {} as T;
+  }
+  async installNetworkGuard(policy: BrowserNetworkGuardPolicy): Promise<BrowserNetworkGuardHandle> {
+    this.networkGuardInstallCalls += 1;
+    this.lastNetworkGuardPolicy = policy;
+    return createNoopBrowserNetworkGuard();
   }
   async click(): Promise<void> {}
   async fill(): Promise<void> {}
@@ -274,6 +316,13 @@ export class TestFakeBrowserSessionProvider implements BrowserSessionProvider {
     const session = this.options.makeSession
       ? this.options.makeSession(downloadDir, input)
       : new FakeCdpSession(downloadDir);
+    try {
+      await installRequiredNetworkGuard(session, input, undefined);
+    } catch (e) {
+      await session.close().catch(() => undefined);
+      rmSync(downloadDir, { recursive: true, force: true });
+      throw e;
+    }
     this.pool.register(input.leaseId, session);
     return boundSession(this.pool, input.leaseId, downloadDir);
   }

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
+import { workerStaleThresholdSeconds } from "../worker/worker-heartbeat-policy";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 
 export type BotPoolHealth = "ok" | "warning" | "critical";
@@ -115,6 +116,7 @@ async function readTenantPoolKey(client: PoolClient, tenantId: string): Promise<
 }
 
 async function readWorkerStats(client: PoolClient, poolKey: string): Promise<BotPoolItem["workers"]> {
+  const staleThresholdSeconds = workerStaleThresholdSeconds();
   const result = await client.query<WorkerStatsRow>(
     `SELECT
         count(*) FILTER (WHERE w.kind = 'browser')::text AS total_count,
@@ -122,21 +124,21 @@ async function readWorkerStats(client: PoolClient, poolKey: string): Promise<Bot
           WHERE w.kind = 'browser'
             AND w.status = 'active'
             AND w.circuit_state = 'closed'
-            AND w.heartbeat_at > now() - interval '2 minutes'
+            AND w.heartbeat_at > now() - ($2::integer * interval '1 second')
         )::text AS active_count,
         count(*) FILTER (WHERE w.kind = 'browser' AND w.status = 'draining')::text AS draining_count,
         count(*) FILTER (WHERE w.kind = 'browser' AND w.status = 'dead')::text AS dead_count,
         count(*) FILTER (
           WHERE w.kind = 'browser'
             AND w.status = 'active'
-            AND w.heartbeat_at <= now() - interval '2 minutes'
+            AND w.heartbeat_at <= now() - ($2::integer * interval '1 second')
         )::text AS stale_count,
         count(*) FILTER (WHERE w.kind = 'browser' AND w.circuit_state IN ('open','half_open'))::text AS open_circuit_count
        FROM workers w
        LEFT JOIN worker_pool_memberships m ON m.worker_id = w.id
       WHERE ($1 = 'default' AND m.worker_id IS NULL)
          OR m.pool_key = $1`,
-    [poolKey],
+    [poolKey, staleThresholdSeconds],
   );
   const row = result.rows[0];
   return {

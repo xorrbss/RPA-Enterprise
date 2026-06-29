@@ -5,6 +5,7 @@
  *   npm --prefix app exec tsx -- app/test/api-ops-alerts.int.ts
  */
 import { readFileSync } from "node:fs";
+import { createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { SignJWT } from "jose";
@@ -14,9 +15,10 @@ import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
 import { buildServer } from "../src/api/server";
+import { webhookSigningPayload } from "../src/api/webhook-trigger-auth";
 import { createPool, withTenantTx } from "../src/db/pool";
-import type { SecretRef } from "../../ts/core-types";
-import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
+import type { PlainSecret, SecretRef } from "../../ts/core-types";
+import type { SecretStoreBoundary, SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_ops_alerts_int";
@@ -48,12 +50,40 @@ const WORKER_POOL_A = "8a500000-0000-4000-8000-000000000001";
 const SITE_POOL_A = "8a600000-0000-4000-8000-000000000001";
 const IDENTITY_POOL_A = "8a700000-0000-4000-8000-000000000001";
 const LEASE_POOL_EXPIRED = "8a800000-0000-4000-8000-000000000001";
+const AUDIT_A = "8a900000-0000-4000-8000-000000000001";
+const AUDIT_VERIFIER_INVALID = "8a910000-0000-4000-8000-000000000001";
+const READINESS_EVIDENCE_SLO = "8aa00000-0000-4000-8000-000000000001";
+const READINESS_EVIDENCE_SUPPORT = "8aa00000-0000-4000-8000-000000000002";
+const OPS_CALLBACK_SIGNATURE_SECRET_REF = "secret://tenant-a/notification/webhook/callback-signing" as SecretRef;
+const OPS_CALLBACK_SIGNATURE_SECRET = "ops-notification-callback-signing-secret" as PlainSecret;
 
 const SECRET = new TextEncoder().encode("ops-alerts-int-secret-do-not-use-in-prod-0123456789");
 
 const signedCommandRegistry: SignedCommandRegistry = {
   async listAllowedCommandRefs() {
     return { kind: "available", snapshot: { sourceRef: "secret://staging/registry" as SecretRef, commands: [] } };
+  },
+};
+
+const opsCallbackBoundaryCalls: Array<{ ref: string; purpose: string; tenantId: string; connectorId: string | undefined }> = [];
+const opsNotificationCallbackSecretBoundary: SecretStoreBoundary = {
+  store: {
+    async resolve(ref) {
+      if (ref !== OPS_CALLBACK_SIGNATURE_SECRET_REF) throw new Error(`unexpected ops callback secret ref: ${ref}`);
+      return OPS_CALLBACK_SIGNATURE_SECRET;
+    },
+  },
+  async authorize(request) {
+    return { kind: "allow", ref: request.ref };
+  },
+  async resolveAuthorized(request) {
+    opsCallbackBoundaryCalls.push({
+      ref: request.ref,
+      purpose: request.purpose,
+      tenantId: request.principal.tenantId,
+      connectorId: request.connectorId,
+    });
+    return this.store.resolve(request.ref);
   },
 };
 
@@ -78,7 +108,38 @@ function isoMinutesFromNow(minutes: number): string {
   return new Date(Date.now() + minutes * 60_000).toISOString();
 }
 
+function isoDaysFromNow(days: number): string {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function signedOpsNotificationCallbackHeaders(
+  receiptId: string,
+  body: unknown,
+  timestamp = String(Date.now()),
+): Record<string, string> {
+  const signature = createHmac("sha256", OPS_CALLBACK_SIGNATURE_SECRET)
+    .update(webhookSigningPayload(timestamp, receiptId, body))
+    .digest("hex");
+  return {
+    "x-rpa-ops-notification-event-id": receiptId,
+    "x-rpa-ops-notification-timestamp": timestamp,
+    "x-rpa-ops-notification-signature": `sha256=${signature}`,
+  };
+}
+
 type Pool = ReturnType<typeof createPool>;
+
+async function deliveryReceiptCount(pool: Pool, tenantId: string, alertId: string): Promise<number> {
+  return withTenantTx(pool, tenantId, async (client) => {
+    const result = await client.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM ops_notification_deliveries
+        WHERE tenant_id=$1::uuid AND alert_id=$2 AND deleted_at IS NULL`,
+      [tenantId, alertId],
+    );
+    return Number(result.rows[0]?.count ?? "0");
+  });
+}
 
 async function seedScenario(pool: Pool, tenant: string, scenarioId: string, versionId: string): Promise<void> {
   await withTenantTx(pool, tenant, async (client) => {
@@ -161,6 +222,94 @@ async function seedAlerts(pool: Pool): Promise<void> {
        VALUES ($1,$2,$3,'WORKITEM_CHECKOUT_CONFLICT',true,$4::timestamptz)`,
       [DLQ_A, TENANT_A, WORKITEM_A, isoMinutesFromNow(-20)],
     );
+    await client.query(
+      `INSERT INTO scim_providers
+         (id, tenant_id, provider_key, display_name, status, inbound_schema_ref, auth_mode,
+          signature_secret_ref, secret_rotation_policy, clock_skew_seconds, created_by, created_at,
+          decommissioned_at, decommissioned_by, decommission_reason)
+       VALUES
+         (gen_random_uuid(), $1::uuid, 'okta-due-soon', 'Okta Due Soon', 'active', 'scim-principal@1',
+          'signed_request_v1', 'secret://tenant-a/scim/okta-due-soon/signing', 'periodic_30d', 300, 'ops-test', $2::timestamptz,
+          NULL, NULL, NULL),
+         (gen_random_uuid(), $1::uuid, 'okta-overdue', 'Okta Overdue', 'active', 'scim-principal@1',
+          'signed_request_v1', 'secret://tenant-a/scim/okta-overdue/signing', 'periodic_30d', 300, 'ops-test', $3::timestamptz,
+          NULL, NULL, NULL),
+         (gen_random_uuid(), $1::uuid, 'okta-manual', 'Okta Manual', 'active', 'scim-principal@1',
+          'signed_request_v1', 'secret://tenant-a/scim/okta-manual/signing', 'manual', 300, 'ops-test', $4::timestamptz,
+          NULL, NULL, NULL),
+         (gen_random_uuid(), $1::uuid, 'okta-decommissioned', 'Okta Decommissioned', 'disabled', 'scim-principal@1',
+          'signed_request_v1', 'secret://tenant-a/scim/okta-decommissioned/signing', 'periodic_30d', 300, 'ops-test', $5::timestamptz,
+          now(), 'ops-test', 'retired')`,
+      [TENANT_A, isoDaysFromNow(-25), isoDaysFromNow(-31), isoDaysFromNow(-365), isoDaysFromNow(-365)],
+    );
+    await client.query(
+      `INSERT INTO audit_log (
+         id, tenant_id, sequence_no, actor, action, outcome, reason, correlation_id,
+         idempotency_key, occurred_at, payload, retention_until, previous_hash, hash
+       )
+       VALUES (
+         $1,$2::uuid,1,'{"subjectId":"operator-a","roles":["admin"]}'::jsonb,
+         'ops_alert.audit_seed','allow',NULL,$1,'ops-alert-audit-seed',$3::timestamptz,
+         '{"kind":"ops_alert_seed"}'::jsonb,$4::timestamptz,NULL,'sha256:ops-alert-audit-seed'
+       )`,
+      [AUDIT_A, TENANT_A, isoMinutesFromNow(-95), isoDaysFromNow(90)],
+    );
+    await client.query(
+      `INSERT INTO audit_verifier_runs (
+         id, tenant_id, status, rows_checked, violation_count, violations,
+         checked_from_sequence, checked_to_sequence, started_at, completed_at,
+         correlation_id, triggered_by, trigger_kind, retention_until, legal_hold
+       )
+       VALUES (
+         $1,$2::uuid,'invalid',1,1,
+         '[{"sequenceNo":1,"id":"8a900000-0000-4000-8000-000000000001","kind":"hash_mismatch","detail":"test mismatch"}]'::jsonb,
+         1,1,$3::timestamptz,$4::timestamptz,$1,
+         '{"subjectId":"system:maintenance","roles":["system","audit_verifier"]}'::jsonb,
+         'maintenance',$5::timestamptz,false
+      )`,
+      [AUDIT_VERIFIER_INVALID, TENANT_A, isoMinutesFromNow(-91), isoMinutesFromNow(-90), isoDaysFromNow(90)],
+    );
+    await client.query(
+      `INSERT INTO production_readiness_evidence (
+         id, tenant_id, evidence_type, status, evidence_at, expires_at,
+         summary, evidence_ref, metadata, recorded_by, retention_until, legal_hold
+       )
+       VALUES (
+         $1,$2::uuid,'slo_oncall_signoff','valid',$3::timestamptz,$4::timestamptz,
+         'SLO/on-call signoff expires during pilot readiness review.',
+         'artifact://readiness/slo-oncall/2026-06-29',
+         '{
+           "slo_dashboard":"grafana-rpa-controlled-prod",
+           "severity_model":"sev1-sev4",
+           "oncall_rota":"ops-primary-weekly",
+           "raci_ref":"raci-rpa-ops",
+           "support_hours":"24x7"
+         }'::jsonb,
+         'ops-test',$5::timestamptz,false
+       )`,
+      [READINESS_EVIDENCE_SLO, TENANT_A, isoDaysFromNow(-25), isoDaysFromNow(3), isoDaysFromNow(365)],
+    );
+    await client.query(
+      `INSERT INTO production_readiness_evidence (
+         id, tenant_id, evidence_type, status, evidence_at, expires_at,
+         summary, evidence_ref, metadata, recorded_by, retention_until, legal_hold
+       )
+       VALUES (
+         $1,$2::uuid,'support_training_completion','failed',$3::timestamptz,NULL,
+         'Support model exists, but role training completion evidence failed.',
+         'artifact://readiness/support-training/2026-06-29',
+         '{
+           "support_model_ref":"support-model:L1-L3",
+           "training_completion_ref":"training:completion-2026-06",
+           "trained_role_count":3,
+           "trained_user_count":12,
+           "coverage_percent":80,
+           "completed_at":"2026-06-29T00:17:30.000Z"
+         }'::jsonb,
+         'ops-test',$4::timestamptz,false
+       )`,
+      [READINESS_EVIDENCE_SUPPORT, TENANT_A, isoDaysFromNow(-1), isoDaysFromNow(365)],
+    );
   });
 
   await withTenantTx(pool, TENANT_B, async (client) => {
@@ -174,13 +323,23 @@ async function seedAlerts(pool: Pool): Promise<void> {
 
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
+  const enqueuedNotifications: Array<{ tenantId: string; attemptId: string; correlationId: string }> = [];
+  const enqueuer: RunEnqueuer = {
+    async enqueueRunClaim() {},
+    async enqueueRunAbort() {},
+    async enqueueSinkDeliver() {},
+    async enqueueOpsNotificationSend(_client, input) {
+      enqueuedNotifications.push(input);
+    },
+  };
   const app = buildServer({
     pool,
     auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
     rbac: new RoleMatrixRbacMiddleware(),
     idempotency: new PgControlPlaneIdempotencyStore(pool),
-    enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} } as RunEnqueuer,
+    enqueuer,
     signedCommandRegistry,
+    opsNotificationCallbackSecretBoundary,
   });
   try {
     const setup = await pool.connect();
@@ -200,6 +359,7 @@ async function main(): Promise<void> {
 
     const viewer = await mint(["viewer"]);
     const operator = await mint(["operator"], TENANT_A, "operator-a");
+    const admin = await mint(["admin"], TENANT_A, "admin-a");
     const noRole = await mint([]);
     const viewerB = await mint(["viewer"], TENANT_B, "viewer-b");
 
@@ -218,7 +378,13 @@ async function main(): Promise<void> {
       next_cursor: string | null;
     };
     const alertById = new Map(allBody.items.map((item) => [item.alert_id, item]));
-    check("all six alert sources are present", ["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "dlq", "bot_pool"].every((source) => allBody.items.some((item) => item.source === source)), all.body);
+    check(
+      "all nine alert sources are present",
+      ["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "dlq", "bot_pool", "scim_secret_rotation", "audit_verifier", "readiness_evidence"].every((source) =>
+        allBody.items.some((item) => item.source === source),
+      ),
+      all.body,
+    );
     check("console delivery metadata is explicit and unacked by default", allBody.items.every((item) => item.status === "open" && item.delivery.channel === "console" && item.delivery.external_delivery === false && item.ack === null), all.body);
     check("critical alerts sort first", allBody.items[0]?.severity === "critical", all.body);
     check("route hints are console hash routes", allBody.items.some((item) => typeof item.route === "string" && item.route.startsWith("#")), all.body);
@@ -226,6 +392,71 @@ async function main(): Promise<void> {
     check("human task SLA route deep-links to task subject", alertById.get(`human_task_sla:${HT_CRITICAL}`)?.route === `#humanTasks?ht=${HT_CRITICAL}`, all.body);
     check("trigger fire route deep-links to trigger subject", alertById.get(`trigger_fire:${FIRE_A}`)?.route === `#automationOps?trigger=${TRIGGER_A}`, all.body);
     check("bot pool alert targets orchestration panel", alertById.get("bot_pool:browser-default")?.route === "#orchestration?panel=botPools", all.body);
+    check("audit verifier alert targets Audit Explorer", alertById.get(`audit_verifier:${AUDIT_VERIFIER_INVALID}`)?.route === "#auditExplorer", all.body);
+    check("readiness evidence alert targets production readiness panel", alertById.get("readiness_evidence:slo_oncall_signoff")?.route === "#automationOps?panel=productionReadiness", all.body);
+
+    const scimOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=scim_secret_rotation", headers: { authorization: `Bearer ${viewer}` } });
+    const scimBody = scimOnly.json() as {
+      items: Array<{ alert_id: string; source: string; severity: string; subject_type: string; subject_id: string | null; route: string | null; due_at: string | null }>;
+    };
+    check("SCIM SecretRef rotation alert filter -> 200", scimOnly.statusCode === 200, scimOnly.body);
+    check(
+      "SCIM SecretRef rotation emits due soon and overdue only",
+      scimBody.items.length === 2 &&
+        scimBody.items.some((item) => item.alert_id === "scim_secret_rotation:okta-due-soon" && item.severity === "warning") &&
+        scimBody.items.some((item) => item.alert_id === "scim_secret_rotation:okta-overdue" && item.severity === "critical") &&
+        scimBody.items.every((item) => item.source === "scim_secret_rotation" && item.subject_type === "scim_provider" && typeof item.due_at === "string") &&
+        !scimBody.items.some((item) => item.subject_id === "okta-manual" || item.subject_id === "okta-decommissioned"),
+      scimOnly.body,
+    );
+    check(
+      "SCIM SecretRef rotation alert routes to security console",
+      scimBody.items.every((item) => item.route?.startsWith("#security?panel=scim") === true),
+      scimOnly.body,
+    );
+
+    const auditOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=audit_verifier", headers: { authorization: `Bearer ${viewer}` } });
+    const auditBody = auditOnly.json() as {
+      items: Array<{ alert_id: string; source: string; severity: string; subject_type: string; subject_id: string | null; route: string | null; due_at?: string | null }>;
+    };
+    check("audit verifier alert filter -> 200", auditOnly.statusCode === 200, auditOnly.body);
+    check(
+      "audit verifier emits invalid and stale metadata-only alerts",
+      auditBody.items.length === 2 &&
+        auditBody.items.some((item) => item.alert_id === `audit_verifier:${AUDIT_VERIFIER_INVALID}` && item.severity === "critical" && item.subject_id === AUDIT_VERIFIER_INVALID) &&
+        auditBody.items.some((item) => item.alert_id === "audit_verifier:stale" && item.severity === "warning" && typeof item.due_at === "string") &&
+        auditBody.items.every((item) => item.source === "audit_verifier" && item.subject_type === "audit_verifier" && item.route === "#auditExplorer"),
+      auditOnly.body,
+    );
+
+    const readinessOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=readiness_evidence", headers: { authorization: `Bearer ${viewer}` } });
+    const readinessBody = readinessOnly.json() as {
+      items: Array<{ alert_id: string; source: string; severity: string; subject_type: string; subject_id: string | null; route: string | null; due_at?: string | null; detail: string }>;
+    };
+    check("readiness evidence alert filter -> 200", readinessOnly.statusCode === 200, readinessOnly.body);
+    check(
+      "readiness evidence emits due-soon and failed metadata-only alerts",
+      readinessBody.items.length === 2 &&
+        readinessBody.items.some((item) =>
+          item.alert_id === "readiness_evidence:slo_oncall_signoff" &&
+          item.severity === "warning" &&
+          item.subject_id === "slo_oncall_signoff" &&
+          typeof item.due_at === "string" &&
+          !item.detail.includes("artifact://"),
+        ) &&
+        readinessBody.items.some((item) =>
+          item.alert_id === "readiness_evidence:support_training_completion" &&
+          item.severity === "critical" &&
+          item.subject_id === "support_training_completion" &&
+          !item.detail.includes("artifact://"),
+        ) &&
+        readinessBody.items.every((item) =>
+          item.source === "readiness_evidence" &&
+          item.subject_type === "readiness_evidence" &&
+          item.route === "#automationOps?panel=productionReadiness",
+        ),
+      readinessOnly.body,
+    );
 
     const humanOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=human_task_sla&severity=warning", headers: { authorization: `Bearer ${viewer}` } });
     const humanBody = humanOnly.json() as { items: Array<{ source: string; severity: string; alert_id: string; route: string | null }> };
@@ -264,6 +495,356 @@ async function main(): Promise<void> {
       payload: { comment: "missing idempotency key" },
     });
     check("ops alert ack without idempotency key -> 422", missingKeyAck.statusCode === 422 && missingKeyAck.json().code === "IR_SCHEMA_INVALID", missingKeyAck.body);
+
+    const deliveryViewerDenied = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries`,
+      headers: { authorization: `Bearer ${viewer}`, "idempotency-key": "delivery-viewer-denied" },
+      payload: {
+        channel: "teams",
+        provider_alias: "teams-primary",
+        status: "delivered",
+        receipt_id: "teams-receipt-viewer",
+        receipt_at: isoMinutesFromNow(-3),
+        endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+        summary: "Viewer should not record delivery receipts.",
+      },
+    });
+    check("viewer cannot record ops alert delivery receipt -> 403", deliveryViewerDenied.statusCode === 403 && deliveryViewerDenied.json().code === "AUTHZ_FORBIDDEN", deliveryViewerDenied.body);
+
+    const deliveryOperatorDenied = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries`,
+      headers: { authorization: `Bearer ${operator}`, "idempotency-key": "delivery-operator-denied" },
+      payload: {
+        channel: "teams",
+        provider_alias: "teams-primary",
+        status: "delivered",
+        receipt_id: "teams-receipt-operator",
+        receipt_at: isoMinutesFromNow(-3),
+        endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+        summary: "Operator acknowledgement does not grant external delivery write.",
+      },
+    });
+    check("operator cannot record ops alert delivery receipt -> 403", deliveryOperatorDenied.statusCode === 403 && deliveryOperatorDenied.json().code === "AUTHZ_FORBIDDEN", deliveryOperatorDenied.body);
+
+    const failedReceiptAt = isoMinutesFromNow(-4);
+    const deliveredReceiptAt = isoMinutesFromNow(-2);
+    const failedDelivery = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "delivery-bot-pool-failed-1" },
+      payload: {
+        channel: "teams",
+        provider_alias: "teams-primary",
+        status: "failed",
+        receipt_at: failedReceiptAt,
+        endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+        credential_secret_ref: "secret://tenant-a/notification/teams/credential",
+        route_policy_ref: "ops-alerts-primary",
+        recipient_group_ref: "ops-primary-oncall",
+        attempt_no: 1,
+        summary: "Provider returned a temporary error for the drill alert.",
+        error_code: "PROVIDER_5XX",
+        metadata: { provider_region: "ap-northeast-2" },
+      },
+    });
+    const failedDeliveryBody = failedDelivery.json() as { delivery_id: string; status: string; receipt_id: string | null; error_code: string | null; endpoint_secret_ref: string; recipient_group_ref: string | null };
+    check("admin records failed external delivery receipt",
+      failedDelivery.statusCode === 201 &&
+        failedDeliveryBody.status === "failed" &&
+        failedDeliveryBody.receipt_id === null &&
+        failedDeliveryBody.error_code === "PROVIDER_5XX" &&
+        failedDeliveryBody.recipient_group_ref === "ops-primary-oncall" &&
+        failedDeliveryBody.endpoint_secret_ref === "secret://tenant-a/notification/teams/primary",
+      failedDelivery.body);
+
+    const deliveredDelivery = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "delivery-bot-pool-delivered-1" },
+      payload: {
+        channel: "teams",
+        provider_alias: "teams-primary",
+        status: "delivered",
+        receipt_id: "teams-receipt-1",
+        receipt_at: deliveredReceiptAt,
+        endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+        credential_secret_ref: "secret://tenant-a/notification/teams/credential",
+        route_policy_ref: "ops-alerts-primary",
+        recipient_group_ref: "ops-primary-oncall",
+        attempt_no: 2,
+        summary: "Provider accepted and delivered the drill alert.",
+        metadata: { provider_region: "ap-northeast-2" },
+      },
+    });
+    const deliveredDeliveryBody = deliveredDelivery.json() as { delivery_id: string; status: string; receipt_id: string | null; recipient_group_ref: string | null; attempt_no: number; metadata: { provider_region?: string } };
+    check("admin records delivered external delivery receipt",
+      deliveredDelivery.statusCode === 201 &&
+        deliveredDeliveryBody.status === "delivered" &&
+        deliveredDeliveryBody.receipt_id === "teams-receipt-1" &&
+        deliveredDeliveryBody.recipient_group_ref === "ops-primary-oncall" &&
+        deliveredDeliveryBody.attempt_no === 2 &&
+        deliveredDeliveryBody.metadata.provider_region === "ap-northeast-2",
+      deliveredDelivery.body);
+
+    const deliveredDeliveryReplay = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "delivery-bot-pool-delivered-1" },
+      payload: {
+        channel: "teams",
+        provider_alias: "teams-primary",
+        status: "delivered",
+        receipt_id: "teams-receipt-1",
+        receipt_at: deliveredReceiptAt,
+        endpoint_secret_ref: "secret://tenant-a/notification/teams/primary",
+        credential_secret_ref: "secret://tenant-a/notification/teams/credential",
+        route_policy_ref: "ops-alerts-primary",
+        recipient_group_ref: "ops-primary-oncall",
+        attempt_no: 2,
+        summary: "Provider accepted and delivered the drill alert.",
+        metadata: { provider_region: "ap-northeast-2" },
+      },
+    });
+    check("ops alert delivery idempotency replays recorded receipt",
+      deliveredDeliveryReplay.statusCode === 201 &&
+        (deliveredDeliveryReplay.json() as { delivery_id: string }).delivery_id === deliveredDeliveryBody.delivery_id,
+      deliveredDeliveryReplay.body);
+
+    const queuedWebhook = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries/send-webhook`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "delivery-webhook-send-1" },
+      payload: {
+        provider_alias: "webhook-primary",
+        endpoint_secret_ref: "secret://rpa/test/notification-sender/notification/webhook/ops-primary",
+        callback_signature_secret_ref: OPS_CALLBACK_SIGNATURE_SECRET_REF,
+        route_policy_ref: "ops-alerts-webhook-primary",
+        recipient_group_ref: "ops-primary-oncall",
+        allowed_hosts: ["hooks.example.com"],
+        summary: "Queue webhook delivery for the drill alert.",
+        metadata: { provider_region: "ap-northeast-2" },
+      },
+    });
+    const queuedWebhookBody = queuedWebhook.json() as {
+      attempt_id: string;
+      status: string;
+      channel: string;
+      allowed_hosts: string[];
+      recipient_group_ref: string | null;
+      endpoint_secret_ref: string;
+      receipt_id: string | null;
+      callback_signature_secret_ref: string | null;
+    };
+    check("admin queues SecretRef-backed webhook notification attempt",
+      queuedWebhook.statusCode === 202 &&
+        queuedWebhookBody.status === "pending" &&
+        queuedWebhookBody.channel === "webhook" &&
+        queuedWebhookBody.allowed_hosts[0] === "hooks.example.com" &&
+        queuedWebhookBody.recipient_group_ref === "ops-primary-oncall" &&
+        queuedWebhookBody.endpoint_secret_ref === "secret://rpa/test/notification-sender/notification/webhook/ops-primary" &&
+        queuedWebhookBody.callback_signature_secret_ref === OPS_CALLBACK_SIGNATURE_SECRET_REF &&
+        queuedWebhookBody.receipt_id === null &&
+        enqueuedNotifications.length === 1 &&
+        enqueuedNotifications[0]?.attemptId === queuedWebhookBody.attempt_id,
+      queuedWebhook.body);
+
+    const queuedWebhookReplay = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries/send-webhook`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "delivery-webhook-send-1" },
+      payload: {
+        provider_alias: "webhook-primary",
+        endpoint_secret_ref: "secret://rpa/test/notification-sender/notification/webhook/ops-primary",
+        callback_signature_secret_ref: OPS_CALLBACK_SIGNATURE_SECRET_REF,
+        route_policy_ref: "ops-alerts-webhook-primary",
+        recipient_group_ref: "ops-primary-oncall",
+        allowed_hosts: ["hooks.example.com"],
+        summary: "Queue webhook delivery for the drill alert.",
+        metadata: { provider_region: "ap-northeast-2" },
+      },
+    });
+    check("webhook notification enqueue idempotency replays without duplicate job",
+      queuedWebhookReplay.statusCode === 202 &&
+        (queuedWebhookReplay.json() as { attempt_id: string }).attempt_id === queuedWebhookBody.attempt_id &&
+        enqueuedNotifications.length === 1,
+      queuedWebhookReplay.body);
+
+    await withTenantTx(pool, TENANT_A, async (client) => {
+      await client.query(
+        `UPDATE ops_notification_attempts
+            SET status='sent',
+                receipt_id='webhook-sent-receipt-1',
+                receipt_at=now(),
+                completed_at=now()
+          WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+        [TENANT_A, queuedWebhookBody.attempt_id],
+      );
+    });
+    const callbackBody = {
+      receipt_id: "webhook-delivered-receipt-1",
+      status: "delivered",
+      metadata: { provider_region: "ap-northeast-2" },
+    };
+    const signedCallback = await app.inject({
+      method: "POST",
+      url: `/v1/webhooks/ops-alerts/${TENANT_A}/${queuedWebhookBody.attempt_id}`,
+      headers: signedOpsNotificationCallbackHeaders("webhook-delivered-receipt-1", callbackBody),
+      payload: callbackBody,
+    });
+    const signedCallbackBody = signedCallback.json() as {
+      status: string;
+      receipt_id: string | null;
+      recorded_by: string;
+      callback_signature_secret_ref: string | null;
+      metadata: { notification_attempt_id?: string; callback_received?: boolean; provider_region?: string };
+    };
+    check("signed provider webhook callback records delivered receipt without JWT",
+      signedCallback.statusCode === 202 &&
+        signedCallbackBody.status === "delivered" &&
+        signedCallbackBody.receipt_id === "webhook-delivered-receipt-1" &&
+        signedCallbackBody.recorded_by === "provider-callback" &&
+        signedCallbackBody.callback_signature_secret_ref === OPS_CALLBACK_SIGNATURE_SECRET_REF &&
+        signedCallbackBody.metadata.notification_attempt_id === queuedWebhookBody.attempt_id &&
+        signedCallbackBody.metadata.callback_received === true &&
+        signedCallbackBody.metadata.provider_region === "ap-northeast-2",
+      signedCallback.body);
+    check(
+      "ops notification callback resolves signing SecretRef through notification boundary",
+      opsCallbackBoundaryCalls.some((call) =>
+        call.ref === OPS_CALLBACK_SIGNATURE_SECRET_REF &&
+        call.purpose === "notification" &&
+        call.tenantId === TENANT_A &&
+        call.connectorId === "ops-alerts-webhook-primary",
+      ),
+      JSON.stringify(opsCallbackBoundaryCalls),
+    );
+
+    const callbackReplay = await app.inject({
+      method: "POST",
+      url: `/v1/webhooks/ops-alerts/${TENANT_A}/${queuedWebhookBody.attempt_id}`,
+      headers: signedOpsNotificationCallbackHeaders("webhook-delivered-receipt-1", callbackBody),
+      payload: callbackBody,
+    });
+    check("same provider callback receipt replays without duplicate delivery row",
+      callbackReplay.statusCode === 202 &&
+        (callbackReplay.json() as { receipt_id: string }).receipt_id === "webhook-delivered-receipt-1" &&
+        (await deliveryReceiptCount(pool, TENANT_A, "bot_pool:browser-default")) === 3,
+      callbackReplay.body);
+
+    const nextGenerationAttemptId = randomUUID();
+    await withTenantTx(pool, TENANT_A, async (client) => {
+      await client.query(
+        `INSERT INTO ops_notification_attempts (
+           id, tenant_id, alert_id, detected_at, source, subject_type, subject_id,
+           channel, provider_alias, status, endpoint_secret_ref, credential_secret_ref,
+           callback_signature_secret_ref, route_policy_ref, recipient_group_ref, allowed_hosts,
+           attempt_no, max_attempts, next_attempt_at, payload, summary, error_code,
+           receipt_id, receipt_at, metadata, requested_by, requested_at, started_at,
+           completed_at, lease_token, retention_until, legal_hold
+         )
+         SELECT $3::uuid, tenant_id, alert_id, detected_at + interval '1 minute', source, subject_type, subject_id,
+                channel, provider_alias, 'sent', endpoint_secret_ref, credential_secret_ref,
+                callback_signature_secret_ref, route_policy_ref, recipient_group_ref, allowed_hosts,
+                attempt_no + 1, max_attempts, now(), payload, summary, NULL,
+                'webhook-sent-receipt-generation-2', now(), metadata, requested_by, requested_at, now(),
+                now(), NULL, retention_until, legal_hold
+           FROM ops_notification_attempts
+          WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+        [TENANT_A, queuedWebhookBody.attempt_id, nextGenerationAttemptId],
+      );
+    });
+    const nextGenerationCallback = await app.inject({
+      method: "POST",
+      url: `/v1/webhooks/ops-alerts/${TENANT_A}/${nextGenerationAttemptId}`,
+      headers: signedOpsNotificationCallbackHeaders("webhook-delivered-receipt-1", callbackBody),
+      payload: callbackBody,
+    });
+    const nextGenerationCallbackBody = nextGenerationCallback.json() as {
+      receipt_id: string | null;
+      metadata: { notification_attempt_id?: string };
+    };
+    check("same provider receipt id is scoped to alert generation",
+      nextGenerationCallback.statusCode === 202 &&
+        nextGenerationCallbackBody.receipt_id === "webhook-delivered-receipt-1" &&
+        nextGenerationCallbackBody.metadata.notification_attempt_id === nextGenerationAttemptId &&
+        (await deliveryReceiptCount(pool, TENANT_A, "bot_pool:browser-default")) === 4,
+      nextGenerationCallback.body);
+
+    const mismatchCallbackBody = { ...callbackBody, status: "failed", error_code: "PROVIDER_DELIVERY_FAILED" };
+    const mismatchCallback = await app.inject({
+      method: "POST",
+      url: `/v1/webhooks/ops-alerts/${TENANT_A}/${queuedWebhookBody.attempt_id}`,
+      headers: signedOpsNotificationCallbackHeaders("webhook-delivered-receipt-1", mismatchCallbackBody),
+      payload: mismatchCallbackBody,
+    });
+    check("same provider callback receipt with mismatched status is rejected",
+      mismatchCallback.statusCode === 412 &&
+        mismatchCallback.json().code === "SCENARIO_VERSION_CONFLICT",
+      mismatchCallback.body);
+
+    const badCallbackSignature = await app.inject({
+      method: "POST",
+      url: `/v1/webhooks/ops-alerts/${TENANT_A}/${queuedWebhookBody.attempt_id}`,
+      headers: {
+        ...signedOpsNotificationCallbackHeaders("webhook-bad-signature", { ...callbackBody, receipt_id: "webhook-bad-signature" }),
+        "x-rpa-ops-notification-signature": "sha256=0000000000000000000000000000000000000000000000000000000000000000",
+      },
+      payload: { ...callbackBody, receipt_id: "webhook-bad-signature" },
+    });
+    check("bad provider webhook callback signature rejected -> 401",
+      badCallbackSignature.statusCode === 401 && badCallbackSignature.json().code === "UNAUTHENTICATED",
+      badCallbackSignature.body);
+
+    const rawAllowedHost = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries/send-webhook`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "delivery-webhook-raw-host-rejected" },
+      payload: {
+        endpoint_secret_ref: "secret://rpa/test/notification-sender/notification/webhook/ops-primary",
+        route_policy_ref: "ops-alerts-webhook-primary",
+        allowed_hosts: ["https://hooks.example.com/services/T000"],
+      },
+    });
+    check("webhook notification allowed_hosts rejects raw endpoint URL",
+      rawAllowedHost.statusCode === 422 && rawAllowedHost.json().code === "IR_SCHEMA_INVALID",
+      rawAllowedHost.body);
+
+    const deliveryList = await app.inject({
+      method: "GET",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries?limit=10`,
+      headers: { authorization: `Bearer ${viewer}` },
+    });
+    const deliveryListBody = deliveryList.json() as { items: Array<{ status: string; receipt_id: string | null; error_code: string | null; recipient_group_ref: string | null }>; next_cursor: string | null };
+    check("viewer lists metadata-only ops alert delivery receipts",
+      deliveryList.statusCode === 200 &&
+        deliveryListBody.items.length === 4 &&
+        deliveryListBody.items[0]?.status === "delivered" &&
+        deliveryListBody.items[0]?.recipient_group_ref === "ops-primary-oncall" &&
+        deliveryListBody.items.some((item) => item.status === "delivered" && item.receipt_id === "webhook-delivered-receipt-1") &&
+        deliveryListBody.items.some((item) => item.status === "failed" && item.error_code === "PROVIDER_5XX") &&
+        deliveryListBody.next_cursor === null,
+      deliveryList.body);
+
+    const secretBearingDelivery = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent("bot_pool:browser-default")}/deliveries`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "delivery-secret-rejected" },
+      payload: {
+        channel: "slack",
+        provider_alias: "slack-primary",
+        status: "delivered",
+        receipt_id: "slack-receipt-1",
+        receipt_at: isoMinutesFromNow(-1),
+        endpoint_secret_ref: "secret://tenant-a/notification/slack/primary",
+        summary: "Provider accepted receipt.",
+        metadata: { endpoint_url: "https://hooks.slack.com/services/T000/B000/secret" },
+      },
+    });
+    check("ops alert delivery metadata rejects raw endpoint material",
+      secretBearingDelivery.statusCode === 422 && secretBearingDelivery.json().code === "IR_SCHEMA_INVALID",
+      secretBearingDelivery.body);
 
     const ack = await app.inject({
       method: "POST",

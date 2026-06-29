@@ -21,14 +21,20 @@ interface RoiEstimateRow {
   exception_rate: string;
   hourly_cost: string;
   implementation_effort: string;
+  platform_monthly_cost: string;
+  avoided_license_cost: string;
   monthly_hours_saved: string;
   estimated_monthly_value: string;
+  monthly_value: string;
   payback_months: string | null;
+  viability: RoiViability;
   confidence: RoiConfidence;
   created_by: string;
   created_at: Date;
   updated_at: Date;
 }
+
+type RoiViability = "viable" | "not_viable";
 
 interface RoiCreateBody {
   frequency_per_month: number;
@@ -36,6 +42,8 @@ interface RoiCreateBody {
   exception_rate: number;
   hourly_cost: number;
   implementation_effort: number;
+  platform_monthly_cost: number;
+  avoided_license_cost: number;
   confidence: RoiConfidence;
 }
 
@@ -85,29 +93,37 @@ async function upsertRoiEstimate(
   await assertIdeaExists(client, ideaId);
   const monthlyHoursSaved = (body.frequency_per_month * body.minutes_per_case * (1 - body.exception_rate)) / 60;
   const estimatedMonthlyValue = monthlyHoursSaved * body.hourly_cost;
-  const paybackMonths = estimatedMonthlyValue > 0 ? body.implementation_effort / estimatedMonthlyValue : null;
+  const monthlyValue = estimatedMonthlyValue + body.avoided_license_cost - body.platform_monthly_cost;
+  const paybackMonths = monthlyValue > 0 ? body.implementation_effort / monthlyValue : null;
+  const viability: RoiViability = monthlyValue > 0 ? "viable" : "not_viable";
   assertRoiMetricInRange(monthlyHoursSaved, "monthly_hours_saved", MAX_NUMERIC_12_2);
   assertRoiMetricInRange(estimatedMonthlyValue, "estimated_monthly_value", MAX_NUMERIC_14_2);
+  assertRoiSignedMetricInRange(monthlyValue, "monthly_value", MAX_NUMERIC_14_2);
   if (paybackMonths !== null) assertRoiMetricInRange(paybackMonths, "payback_months", MAX_NUMERIC_10_2);
   const result = await client.query<RoiEstimateRow>(
     `INSERT INTO roi_estimates
        (id, tenant_id, automation_idea_id, frequency_per_month, minutes_per_case, exception_rate, hourly_cost,
-        implementation_effort, monthly_hours_saved, estimated_monthly_value, payback_months, confidence, created_by)
-     VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        implementation_effort, platform_monthly_cost, avoided_license_cost, monthly_hours_saved, estimated_monthly_value,
+        monthly_value, payback_months, viability, confidence, created_by)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
      ON CONFLICT (tenant_id, automation_idea_id)
      DO UPDATE SET frequency_per_month=EXCLUDED.frequency_per_month,
                    minutes_per_case=EXCLUDED.minutes_per_case,
                    exception_rate=EXCLUDED.exception_rate,
                    hourly_cost=EXCLUDED.hourly_cost,
                    implementation_effort=EXCLUDED.implementation_effort,
+                   platform_monthly_cost=EXCLUDED.platform_monthly_cost,
+                   avoided_license_cost=EXCLUDED.avoided_license_cost,
                    monthly_hours_saved=EXCLUDED.monthly_hours_saved,
                    estimated_monthly_value=EXCLUDED.estimated_monthly_value,
+                   monthly_value=EXCLUDED.monthly_value,
                    payback_months=EXCLUDED.payback_months,
+                   viability=EXCLUDED.viability,
                    confidence=EXCLUDED.confidence,
                    updated_at=now()
      RETURNING id, automation_idea_id, frequency_per_month, minutes_per_case, exception_rate, hourly_cost,
-               implementation_effort, monthly_hours_saved, estimated_monthly_value, payback_months, confidence,
-               created_by, created_at, updated_at`,
+               implementation_effort, platform_monthly_cost, avoided_license_cost, monthly_hours_saved,
+               estimated_monthly_value, monthly_value, payback_months, viability, confidence, created_by, created_at, updated_at`,
     [
       randomUUID(),
       tenantId,
@@ -117,9 +133,13 @@ async function upsertRoiEstimate(
       body.exception_rate,
       body.hourly_cost,
       body.implementation_effort,
+      body.platform_monthly_cost,
+      body.avoided_license_cost,
       monthlyHoursSaved,
       estimatedMonthlyValue,
+      monthlyValue,
       paybackMonths,
+      viability,
       body.confidence,
       requirePrincipal(request).subjectId,
     ],
@@ -130,8 +150,8 @@ async function upsertRoiEstimate(
 async function selectRoiEstimate(client: PoolClient, ideaId: string): Promise<RoiEstimateRow | null> {
   const result = await client.query<RoiEstimateRow>(
     `SELECT id, automation_idea_id, frequency_per_month, minutes_per_case, exception_rate, hourly_cost,
-            implementation_effort, monthly_hours_saved, estimated_monthly_value, payback_months, confidence,
-            created_by, created_at, updated_at
+            implementation_effort, platform_monthly_cost, avoided_license_cost, monthly_hours_saved,
+            estimated_monthly_value, monthly_value, payback_months, viability, confidence, created_by, created_at, updated_at
        FROM roi_estimates
       WHERE automation_idea_id=$1::uuid`,
     [ideaId],
@@ -140,13 +160,24 @@ async function selectRoiEstimate(client: PoolClient, ideaId: string): Promise<Ro
 }
 
 function parseRoiBody(raw: unknown): RoiCreateBody {
-  const body = parseKnownBody(raw, ["frequency_per_month", "minutes_per_case", "exception_rate", "hourly_cost", "implementation_effort", "confidence"]);
+  const body = parseKnownBody(raw, [
+    "frequency_per_month",
+    "minutes_per_case",
+    "exception_rate",
+    "hourly_cost",
+    "implementation_effort",
+    "platform_monthly_cost",
+    "avoided_license_cost",
+    "confidence",
+  ]);
   const parsed: RoiCreateBody = {
     frequency_per_month: requireNonNegativeInteger(body.frequency_per_month, "frequency_per_month", MAX_INT4),
     minutes_per_case: requireNonNegativeNumber(body.minutes_per_case, "minutes_per_case", MAX_NUMERIC_10_2),
     exception_rate: requireRate(body.exception_rate),
     hourly_cost: requireNonNegativeNumber(body.hourly_cost, "hourly_cost", MAX_NUMERIC_12_2),
     implementation_effort: requireNonNegativeNumber(body.implementation_effort, "implementation_effort", MAX_NUMERIC_12_2),
+    platform_monthly_cost: optionalNonNegativeNumber(body.platform_monthly_cost, "platform_monthly_cost", MAX_NUMERIC_14_2) ?? 0,
+    avoided_license_cost: optionalNonNegativeNumber(body.avoided_license_cost, "avoided_license_cost", MAX_NUMERIC_14_2) ?? 0,
     confidence: optionalConfidence(body.confidence) ?? "medium",
   };
   assertRoiCalculatedMetricsInRange(parsed);
@@ -163,6 +194,11 @@ function requireNonNegativeNumber(value: unknown, field: string, max: number): n
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
 }
 
+function optionalNonNegativeNumber(value: unknown, field: string, max: number): number | undefined {
+  if (value === undefined) return undefined;
+  return requireNonNegativeNumber(value, field, max);
+}
+
 function requireRate(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Math.min(1, MAX_NUMERIC_5_4)) return value;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_exception_rate" });
@@ -173,12 +209,19 @@ function assertRoiMetricInRange(value: number, metric: string, max: number): voi
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "roi_metric_out_of_range", metric });
 }
 
+function assertRoiSignedMetricInRange(value: number, metric: string, max: number): void {
+  if (Number.isFinite(value) && Math.abs(value) <= max) return;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "roi_metric_out_of_range", metric });
+}
+
 function assertRoiCalculatedMetricsInRange(body: RoiCreateBody): void {
   const monthlyHoursSaved = (body.frequency_per_month * body.minutes_per_case * (1 - body.exception_rate)) / 60;
   const estimatedMonthlyValue = monthlyHoursSaved * body.hourly_cost;
-  const paybackMonths = estimatedMonthlyValue > 0 ? body.implementation_effort / estimatedMonthlyValue : null;
+  const monthlyValue = estimatedMonthlyValue + body.avoided_license_cost - body.platform_monthly_cost;
+  const paybackMonths = monthlyValue > 0 ? body.implementation_effort / monthlyValue : null;
   assertRoiMetricInRange(monthlyHoursSaved, "monthly_hours_saved", MAX_NUMERIC_12_2);
   assertRoiMetricInRange(estimatedMonthlyValue, "estimated_monthly_value", MAX_NUMERIC_14_2);
+  assertRoiSignedMetricInRange(monthlyValue, "monthly_value", MAX_NUMERIC_14_2);
   if (paybackMonths !== null) assertRoiMetricInRange(paybackMonths, "payback_months", MAX_NUMERIC_10_2);
 }
 
@@ -197,9 +240,13 @@ function mapRoi(row: RoiEstimateRow): Record<string, unknown> {
     exception_rate: Number(row.exception_rate),
     hourly_cost: Number(row.hourly_cost),
     implementation_effort: Number(row.implementation_effort),
+    platform_monthly_cost: Number(row.platform_monthly_cost),
+    avoided_license_cost: Number(row.avoided_license_cost),
     monthly_hours_saved: Number(row.monthly_hours_saved),
     estimated_monthly_value: Number(row.estimated_monthly_value),
+    monthly_value: Number(row.monthly_value),
     payback_months: row.payback_months === null ? null : Number(row.payback_months),
+    viability: row.viability,
     confidence: row.confidence,
     created_by: row.created_by,
     created_at: row.created_at.toISOString(),

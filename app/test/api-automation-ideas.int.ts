@@ -101,6 +101,20 @@ async function roiCount(pool: Pool, tenant: string): Promise<number> {
   });
 }
 
+async function roiActualCount(pool: Pool, tenant: string): Promise<number> {
+  return withTenantTx(pool, tenant, async (c) => {
+    const r = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM roi_actual_evidence`);
+    return r.rows[0]?.n ?? 0;
+  });
+}
+
+async function adoptionEvidenceCount(pool: Pool, tenant: string): Promise<number> {
+  return withTenantTx(pool, tenant, async (c) => {
+    const r = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM automation_adoption_evidence`);
+    return r.rows[0]?.n ?? 0;
+  });
+}
+
 async function idempotencyCount(pool: Pool, tenant: string, endpoint: string, key: string): Promise<number> {
   return withTenantTx(pool, tenant, async (c) => {
     const r = await c.query<{ n: number }>(
@@ -262,6 +276,140 @@ async function main(): Promise<void> {
       });
       check("approver transition assess -> approved -> 200", approved.statusCode === 200 && approved.json().stage === "approved", approved.body);
 
+      const adoptionEvidencePayload = {
+        evidence_type: "pilot_charter_signoff",
+        status: "valid",
+        evidence_at: "2026-06-28T00:00:00.000Z",
+        expires_at: "2026-12-31T00:00:00.000Z",
+        summary: "Pilot charter approved for finance portal exception routing.",
+        evidence_ref: "ticket:PILOT-CHARTER-1",
+        metadata: {
+          business_owner_ref: "group:finance-ops",
+          platform_owner_ref: "group:rpa-platform",
+          success_criteria_ref: "criteria:pilot-1",
+        },
+      };
+      const adoptionEvidence = await command(
+        "POST",
+        `/v1/automation-ideas/${ideaId}/adoption-evidence`,
+        operator,
+        "adoption-evidence-1",
+        adoptionEvidencePayload,
+      );
+      check("operator record adoption evidence -> 201", adoptionEvidence.statusCode === 201, adoptionEvidence.body);
+      check(
+        "adoption evidence stores pilot charter metadata",
+        adoptionEvidence.json().evidence_type === "pilot_charter_signoff" &&
+          adoptionEvidence.json().status === "valid" &&
+          adoptionEvidence.json().evidence_ref === "ticket:PILOT-CHARTER-1",
+        adoptionEvidence.body,
+      );
+
+      const adoptionEvidenceReplay = await command(
+        "POST",
+        `/v1/automation-ideas/${ideaId}/adoption-evidence`,
+        operator,
+        "adoption-evidence-1",
+        adoptionEvidencePayload,
+      );
+      check(
+        "adoption evidence replay returns same evidence",
+        adoptionEvidenceReplay.statusCode === 201 && adoptionEvidenceReplay.json().evidence_id === adoptionEvidence.json().evidence_id,
+        adoptionEvidenceReplay.body,
+      );
+      check("adoption evidence replay does not duplicate rows", (await adoptionEvidenceCount(pool, TENANT_A)) === 1);
+
+      const adoptionEvidenceList = await app.inject({
+        method: "GET",
+        url: `/v1/automation-ideas/${ideaId}/adoption-evidence?evidence_type=pilot_charter_signoff&status=valid`,
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check(
+        "viewer list adoption evidence -> 200",
+        adoptionEvidenceList.statusCode === 200 && adoptionEvidenceList.json().items?.[0]?.evidence_id === adoptionEvidence.json().evidence_id,
+        adoptionEvidenceList.body,
+      );
+
+      const tenantBAdoptionEvidenceList = await app.inject({
+        method: "GET",
+        url: `/v1/automation-ideas/${ideaId}/adoption-evidence`,
+        headers: { authorization: `Bearer ${operatorB}` },
+      });
+      check("tenant B cannot list tenant A adoption evidence -> 404", tenantBAdoptionEvidenceList.statusCode === 404, tenantBAdoptionEvidenceList.body);
+
+      const adoptionEvidenceMissingRef = await command(
+        "POST",
+        `/v1/automation-ideas/${ideaId}/adoption-evidence`,
+        operator,
+        "adoption-evidence-missing-ref",
+        {
+          evidence_type: "raci_signoff",
+          status: "valid",
+          evidence_at: "2026-06-28T00:00:00.000Z",
+          expires_at: "2026-12-31T00:00:00.000Z",
+          summary: "RACI valid evidence must carry an opaque evidence ref.",
+        },
+      );
+      check(
+        "valid adoption evidence requires evidence ref",
+        adoptionEvidenceMissingRef.statusCode === 422 && adoptionEvidenceMissingRef.json().details?.reason === "valid_adoption_evidence_ref_required",
+        adoptionEvidenceMissingRef.body,
+      );
+      check(
+        "invalid adoption evidence did not reserve idempotency",
+        (await idempotencyCount(pool, TENANT_A, "recordAutomationAdoptionEvidence", "adoption-evidence-missing-ref")) === 0,
+      );
+
+      const adoptionEvidenceSecretDenied = await command(
+        "POST",
+        `/v1/automation-ideas/${ideaId}/adoption-evidence`,
+        operator,
+        "adoption-evidence-secret-denied",
+        {
+          evidence_type: "training_completion",
+          status: "valid",
+          evidence_at: "2026-06-28T00:00:00.000Z",
+          expires_at: "2026-12-31T00:00:00.000Z",
+          summary: "Training completion reconciled.",
+          evidence_ref: "ticket:TRAINING-1",
+          metadata: { training_roster: "raw user roster must not be stored" },
+        },
+      );
+      check(
+        "adoption evidence forbids raw roster metadata",
+        adoptionEvidenceSecretDenied.statusCode === 422 && adoptionEvidenceSecretDenied.json().details?.reason === "metadata_secret_or_endpoint_key_forbidden",
+        adoptionEvidenceSecretDenied.body,
+      );
+
+      const adoptionEvidenceUrlDenied = await command(
+        "POST",
+        `/v1/automation-ideas/${ideaId}/adoption-evidence`,
+        operator,
+        "adoption-evidence-url-denied",
+        {
+          ...adoptionEvidencePayload,
+          evidence_ref: "https://example.invalid/pilot-secret",
+        },
+      );
+      check(
+        "adoption evidence forbids raw endpoint refs",
+        adoptionEvidenceUrlDenied.statusCode === 422 && adoptionEvidenceUrlDenied.json().details?.reason === "raw_endpoint_url_forbidden",
+        adoptionEvidenceUrlDenied.body,
+      );
+
+      const viewerAdoptionEvidenceDenied = await command(
+        "POST",
+        `/v1/automation-ideas/${ideaId}/adoption-evidence`,
+        viewer,
+        "viewer-adoption-evidence-denied",
+        adoptionEvidencePayload,
+      );
+      check("viewer record adoption evidence denied -> 403", viewerAdoptionEvidenceDenied.statusCode === 403 && viewerAdoptionEvidenceDenied.json().code === "AUTHZ_FORBIDDEN", viewerAdoptionEvidenceDenied.body);
+      check(
+        "viewer denied adoption evidence did not reserve idempotency",
+        (await idempotencyCount(pool, TENANT_A, "recordAutomationAdoptionEvidence", "viewer-adoption-evidence-denied")) === 0,
+      );
+
       const roi = await command("POST", `/v1/automation-ideas/${ideaId}/roi-estimate`, operator, "roi-upsert-1", {
         frequency_per_month: 120,
         minutes_per_case: 8,
@@ -272,7 +420,15 @@ async function main(): Promise<void> {
       });
       check("operator upsert ROI -> 200", roi.statusCode === 200, roi.body);
       const roiBody = roi.json();
-      check("ROI monthly hours/value/payback calculated", roiBody.monthly_hours_saved === 14.4 && roiBody.estimated_monthly_value === 576000 && Math.abs(roiBody.payback_months - 5.56) < 0.001, roi.body);
+      check(
+        "ROI monthly hours/value/payback calculated",
+        roiBody.monthly_hours_saved === 14.4 &&
+          roiBody.estimated_monthly_value === 576000 &&
+          roiBody.monthly_value === 576000 &&
+          roiBody.viability === "viable" &&
+          Math.abs(roiBody.payback_months - 5.56) < 0.001,
+        roi.body,
+      );
 
       const roiReplay = await command("POST", `/v1/automation-ideas/${ideaId}/roi-estimate`, operator, "roi-upsert-1", {
         frequency_per_month: 120,
@@ -284,6 +440,27 @@ async function main(): Promise<void> {
       });
       check("ROI replay returns same estimate", roiReplay.statusCode === 200 && roiReplay.json().roi_estimate_id === roiBody.roi_estimate_id, roiReplay.body);
       check("ROI replay does not duplicate rows", (await roiCount(pool, TENANT_A)) === 1);
+
+      const roiNotViable = await command("POST", `/v1/automation-ideas/${ideaId}/roi-estimate`, operator, "roi-not-viable-1", {
+        frequency_per_month: 10,
+        minutes_per_case: 6,
+        exception_rate: 0,
+        hourly_cost: 10000,
+        implementation_effort: 1200000,
+        platform_monthly_cost: 200000,
+        avoided_license_cost: 0,
+        confidence: "low",
+      });
+      check("ROI net negative is not viable without payback", roiNotViable.statusCode === 200, roiNotViable.body);
+      const roiNotViableBody = roiNotViable.json();
+      check(
+        "ROI monthly_value <= 0 returns null payback and not_viable",
+        roiNotViableBody.estimated_monthly_value === 10000 &&
+          roiNotViableBody.monthly_value === -190000 &&
+          roiNotViableBody.payback_months === null &&
+          roiNotViableBody.viability === "not_viable",
+        roiNotViable.body,
+      );
 
       const roiOverflow = await command("POST", `/v1/automation-ideas/${ideaId}/roi-estimate`, operator, "roi-overflow-denied", {
         frequency_per_month: 1_000_000,
@@ -308,6 +485,80 @@ async function main(): Promise<void> {
         headers: { authorization: `Bearer ${viewer}` },
       });
       check("viewer get ROI -> 200", roiGet.statusCode === 200 && roiGet.json().automation_idea_id === ideaId, roiGet.body);
+
+      const roiActual = await command("POST", `/v1/automation-ideas/${ideaId}/roi-actuals`, operator, "roi-actual-1", {
+        period_start: "2026-06-01",
+        period_end: "2026-06-28",
+        actual_transaction_count: 420,
+        actual_failure_rate: 0.07,
+        human_intervention_minutes: 180,
+        reprocessing_minutes: 45,
+        evidence_ref: "ticket:ROI-ACTUAL-1",
+        summary: "Pilot actuals reconciled from run, review, and reprocessing evidence.",
+        metadata: { measurement_method: "pilot_reconciliation" },
+      });
+      check("operator record ROI actual evidence -> 201", roiActual.statusCode === 201, roiActual.body);
+      check(
+        "ROI actual evidence separates actual pilot metrics",
+        roiActual.json().actual_transaction_count === 420 &&
+          roiActual.json().actual_failure_rate === 0.07 &&
+          roiActual.json().human_intervention_minutes === 180 &&
+          roiActual.json().reprocessing_minutes === 45,
+        roiActual.body,
+      );
+      const roiActualReplay = await command("POST", `/v1/automation-ideas/${ideaId}/roi-actuals`, operator, "roi-actual-1", {
+        period_start: "2026-06-01",
+        period_end: "2026-06-28",
+        actual_transaction_count: 420,
+        actual_failure_rate: 0.07,
+        human_intervention_minutes: 180,
+        reprocessing_minutes: 45,
+        evidence_ref: "ticket:ROI-ACTUAL-1",
+        summary: "Pilot actuals reconciled from run, review, and reprocessing evidence.",
+        metadata: { measurement_method: "pilot_reconciliation" },
+      });
+      check("ROI actual replay returns same evidence", roiActualReplay.statusCode === 201 && roiActualReplay.json().roi_actual_id === roiActual.json().roi_actual_id, roiActualReplay.body);
+      check("ROI actual replay does not duplicate rows", (await roiActualCount(pool, TENANT_A)) === 1);
+
+      const roiActualList = await app.inject({
+        method: "GET",
+        url: `/v1/automation-ideas/${ideaId}/roi-actuals`,
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("viewer list ROI actual evidence -> 200", roiActualList.statusCode === 200 && roiActualList.json().items?.length === 1, roiActualList.body);
+
+      const tenantBRoiActualList = await app.inject({
+        method: "GET",
+        url: `/v1/automation-ideas/${ideaId}/roi-actuals`,
+        headers: { authorization: `Bearer ${operatorB}` },
+      });
+      check("tenant B cannot list tenant A ROI actual evidence -> 404", tenantBRoiActualList.statusCode === 404, tenantBRoiActualList.body);
+
+      const roiActualSecretDenied = await command("POST", `/v1/automation-ideas/${ideaId}/roi-actuals`, operator, "roi-actual-secret-denied", {
+        period_start: "2026-06-01",
+        period_end: "2026-06-28",
+        actual_transaction_count: 1,
+        actual_failure_rate: 0,
+        human_intervention_minutes: 0,
+        reprocessing_minutes: 0,
+        evidence_ref: "ticket:ROI-ACTUAL-SECRET",
+        summary: "See https://hooks.example.invalid/secret",
+      });
+      check("ROI actual secret-like summary rejected -> 422", roiActualSecretDenied.statusCode === 422 && roiActualSecretDenied.json().code === "IR_SCHEMA_INVALID", roiActualSecretDenied.body);
+      check("ROI actual invalid evidence did not reserve idempotency", (await idempotencyCount(pool, TENANT_A, "recordRoiActualEvidence", "roi-actual-secret-denied")) === 0);
+
+      const viewerRoiActualDenied = await command("POST", `/v1/automation-ideas/${ideaId}/roi-actuals`, viewer, "viewer-roi-actual-denied", {
+        period_start: "2026-06-01",
+        period_end: "2026-06-28",
+        actual_transaction_count: 1,
+        actual_failure_rate: 0,
+        human_intervention_minutes: 0,
+        reprocessing_minutes: 0,
+        evidence_ref: "ticket:ROI-ACTUAL-VIEWER",
+        summary: "Viewer must not record actuals.",
+      });
+      check("viewer record ROI actual denied -> 403", viewerRoiActualDenied.statusCode === 403 && viewerRoiActualDenied.json().code === "AUTHZ_FORBIDDEN", viewerRoiActualDenied.body);
+      check("viewer denied ROI actual did not reserve idempotency", (await idempotencyCount(pool, TENANT_A, "recordRoiActualEvidence", "viewer-roi-actual-denied")) === 0);
 
       const viewerRoiDenied = await command("POST", `/v1/automation-ideas/${ideaId}/roi-estimate`, viewer, "viewer-roi-denied", {
         frequency_per_month: 1,

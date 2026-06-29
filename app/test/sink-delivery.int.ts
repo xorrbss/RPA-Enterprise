@@ -59,6 +59,18 @@ class FakeSinkPort implements SinkDeliveryPort {
   }
 }
 
+class ThrowingSinkPort implements SinkDeliveryPort {
+  readonly binding = {
+    kind: "test_fake" as const,
+    backendAlias: "local-test-fake" as const,
+    evidenceSchemaRef: SINK_DELIVERY_LOCAL_TEST_SCHEMA_REF,
+    testOnly: true as const,
+  };
+  async deliver(_input: SinkDeliveryRequest): Promise<SinkDeliveryDecision> {
+    throw new Error("port unavailable");
+  }
+}
+
 async function seedNormalized(
   pool: ReturnType<typeof createPool>,
   tenant: string,
@@ -127,6 +139,13 @@ async function main(): Promise<void> {
     check("attempt_no = 1", out1.attemptNo === 1);
     check("idempotency key composition", out1.sinkIdempotencyKey === `${TENANT}:${SINK_CONFIG}:${SCHEMA_REF}:nk-deliver`);
     check("port received same idempotency key", okPort.calls[0]?.sinkIdempotencyKey === expectedKey);
+    check(
+      "port received DB-authority normalized payload",
+      okPort.calls[0]?.schemaRef === SCHEMA_REF &&
+        okPort.calls[0]?.naturalKey === "nk-deliver" &&
+        (okPort.calls[0]?.record as { nk?: string } | undefined)?.nk === "nk-deliver",
+      JSON.stringify(okPort.calls[0]),
+    );
     const rows1 = await statusRows(pool, nr1);
     check("1 delivered row", rows1.length === 1 && rows1[0]!.status === "delivered");
     check("sink.delivered emitted", (await eventCount(pool, "sink.delivered")) === 1);
@@ -161,7 +180,19 @@ async function main(): Promise<void> {
     check("attempt rows statuses failed→dead_letter", rows2[0]!.status === "failed" && rows2[1]!.status === "dead_letter");
     check("sink.dead_lettered emitted once", (await eventCount(pool, "sink.dead_lettered")) === 1);
 
-    // 4) cross-tenant: OTHER_TENANT로 TENANT 레코드 전달 시도 → tenant-scoped 행 미존재 fail-closed(throw)
+    // 4) port 예외도 pending 방치 없이 failed/dead_letter로 finalize.
+    const nr3 = await seedNormalized(pool, TENANT, "nk-throw");
+    const throwOut = await deliverNormalizedRecord({ pool, port: new ThrowingSinkPort(), policy }, {
+      tenantId: TENANT, normalizedRecordId: nr3, sinkConfigId: SINK_CONFIG, correlationId: CORR,
+    });
+    const rows3 = await statusRows(pool, nr3);
+    check(
+      "port exception finalizes attempt as failed, not pending",
+      throwOut.status === "failed" && rows3.length === 1 && rows3[0]!.status === "failed",
+      JSON.stringify({ throwOut, rows3 }),
+    );
+
+    // 5) cross-tenant: OTHER_TENANT로 TENANT 레코드 전달 시도 → tenant-scoped 행 미존재 fail-closed(throw)
     let crossThrew = false;
     try {
       await deliverNormalizedRecord({ pool, port: okPort, policy }, {

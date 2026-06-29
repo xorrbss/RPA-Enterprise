@@ -72,12 +72,17 @@ export type RbacAction =
   | "trigger.manage"
   | "ops_alert.read"
   | "ops_alert.ack"
+  | "ops_alert.deliver"
+  | "ops_readiness.manage"
   | "automation_idea.read"
   | "automation_idea.manage"
   | "automation_idea.approve"
   | "document_job.read"
   | "document_job.manage"
   | "audit.read"
+  | "audit.verify"
+  | "ai_governance.read"
+  | "ai_governance.manage"
   | "workitem.read"
   | "human_task.read"
   | "principal.read"
@@ -98,6 +103,7 @@ export type RbacAction =
   | "scenario.update"
   | "scenario.promote"
   | "scenario.promote.approve"
+  | "scenario.certify"
   | "scenario_release.read"
   | "scenario_release.submit"
   | "scenario_release.approve"
@@ -115,6 +121,7 @@ export type RbacAction =
   | "worker_pool.manage"
   | "connector.read"
   | "connector.enable"
+  | "integration.handoff"
   | "gateway_policy.read"
   | "gateway_policy.edit"
   | "network_policy.edit"
@@ -156,6 +163,7 @@ export interface AuthorizationCheck {
       | "principal"
       | "role_assignment"
       | "audit_log"
+      | "ai_governance_evidence"
       | "scenario_release"
       | "gateway_policy"
       | "network_policy";
@@ -198,7 +206,14 @@ export interface SecretAccessRequest {
    * (browser_sessions.ciphertext), kept distinct from `executor` credential-fill so a
    * session-key compromise is isolated from live credential traffic — see browser-session-store.ts.
    */
-  purpose: "executor" | "connector" | "resume_token_hmac" | "gateway_policy" | "object_store" | "browser_session";
+  purpose:
+    | "executor"
+    | "connector"
+    | "notification"
+    | "resume_token_hmac"
+    | "gateway_policy"
+    | "object_store"
+    | "browser_session";
   runId?: RunId;
   connectorId?: string;
 }
@@ -424,6 +439,8 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "secret.resolve",
   "connector.enable",
   "connector.install",
+  "scenario.certify",
+  "scenario.decertify",
   "scenario_release.create",
   "scenario_release.submit",
   "scenario_release.approve",
@@ -441,6 +458,7 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "scim.sync",
   "network.request",
   "prompt.inspect",
+  "ai_governance.manage",
   "bypassrls.use",
 ] as const;
 

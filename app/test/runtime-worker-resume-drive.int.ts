@@ -12,11 +12,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import type { ExecutorPlugin, RunContext } from "../../ts/core-types";
 import type { CorrelationId, RunId, TenantId } from "../../ts/security-middleware-contract";
 import type { ResumeTokenEnvelope, SessionRestoreResult, SessionRestorer } from "../../ts/runtime-contract";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { FakeCdpSession, TestFakeBrowserSessionProvider } from "../src/executor/browser-session-provider";
+import { UtilityExecutor } from "../src/executor/utility-executor";
 import { PgRuntimeWorker, type BrowserLeasePlanResolver } from "../src/worker/runtime-worker";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -34,6 +36,7 @@ const SVER = "70000000-0000-0000-0000-0000000000f2";
 const RUN_DRIVE = "71000000-0000-0000-0000-0000000000f1";
 const RUN_NODRIVE = "71000000-0000-0000-0000-0000000000f2";
 const CORRELATION = "20000000-0000-0000-0000-0000000000f1";
+const CREDENTIAL_REF_EXECUTOR = "secret://tenant-a/credential/resume-main";
 // resume 재진입 노드 — scenario.start("preamble")가 아닌 중간 노드. driveResumedRun 이 startNode 로 사용.
 const RESUME_NODE = "step2";
 
@@ -55,6 +58,7 @@ const planResolver: BrowserLeasePlanResolver = async (_client, input) =>
 // resumeNodeId="step2" 면 preamble 을 건너뛰고 step2→done 만 실행(goto 1회).
 const scenarioIr = {
   meta: { name: "resume-drive-test", version: 1 },
+  assets: [CREDENTIAL_REF_EXECUTOR],
   start: "preamble",
   nodes: {
     preamble: { what: [{ action: "navigate", url_ref: "pre_url" }], next: "step2" },
@@ -97,6 +101,45 @@ async function eventCount(pool: ReturnType<typeof createPool>, runId: string, ev
     );
     return r.rows[0]?.n ?? -1;
   });
+}
+
+async function activeCredentialLeaseCount(
+  pool: ReturnType<typeof createPool>,
+  credentialRef: string,
+  siteProfileId: string,
+  runId: string,
+): Promise<number> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const r = await c.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM credential_leases
+        WHERE tenant_id=$1::uuid
+          AND credential_ref=$2
+          AND site_profile_id=$3::uuid
+          AND run_id=$4::uuid
+          AND status='active'
+          AND locked_until >= now()`,
+      [TENANT, credentialRef, siteProfileId, runId],
+    );
+    return r.rows[0]?.n ?? -1;
+  });
+}
+
+function observeCredentialLeaseExecutor(
+  pool: ReturnType<typeof createPool>,
+  observed: { calls: number; activeDuringExecute: boolean },
+  inner: ExecutorPlugin,
+): ExecutorPlugin {
+  return {
+    capabilities: () => inner.capabilities(),
+    async execute(stepId: string, action: unknown, ctx: RunContext) {
+      observed.calls += 1;
+      observed.activeDuringExecute =
+        (await activeCredentialLeaseCount(pool, CREDENTIAL_REF_EXECUTOR, ctx.siteProfileId, ctx.runId)) === 1;
+      return inner.execute(stepId, action, ctx);
+    },
+    verify: (criteria, ctx) => inner.verify(criteria, ctx),
+  };
 }
 
 async function seedRun(pool: ReturnType<typeof createPool>, runId: string): Promise<void> {
@@ -149,6 +192,11 @@ async function main(): Promise<void> {
          VALUES ($1,$2,ARRAY['ok.example','ok2.example'])`,
         [NETWORK_POLICY, TENANT],
       );
+      await c.query(
+        `INSERT INTO credential_concurrency_policies (tenant_id, credential_ref, site_profile_id, max_concurrency, status)
+         VALUES ($1,$2,$3,1,'active')`,
+        [TENANT, CREDENTIAL_REF_EXECUTOR, SITE],
+      );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'resume-drive')`, [SCEN, TENANT]);
       await c.query(
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
@@ -167,12 +215,15 @@ async function main(): Promise<void> {
         return driveSession;
       },
     });
+    const credentialObserved = { calls: 0, activeDuringExecute: false };
     const driving = new PgRuntimeWorker(pool, {
       workerId: WORKER,
       browserLeasePlanResolver: planResolver,
       browserSessionProvider: sessionProvider,
       allowTestBrowserSessionProvider: true,
       sessionRestorer: restorer,
+      executorFactory: (provider) =>
+        observeCredentialLeaseExecutor(pool, credentialObserved, new UtilityExecutor(provider)),
     });
     const driven = await driving.handle({
       kind: "run_resume",
@@ -192,6 +243,12 @@ async function main(): Promise<void> {
     check("세션 release(close) 호출됨", driveSession !== null && (driveSession as FakeCdpSession).closeCalls === 1, `closeCalls=${driveSession === null ? "no-session" : (driveSession as FakeCdpSession).closeCalls}`);
 
     // 2) provider 미주입 → R18(running)까지만(Phase C 게이트 off — 회귀: 기존 동작 보존, 구동 안 함).
+    check("resume executor sees active credential lease", credentialObserved.calls === 1 && credentialObserved.activeDuringExecute, JSON.stringify(credentialObserved));
+    check(
+      "resume credential lease released after terminal drive",
+      (await activeCredentialLeaseCount(pool, CREDENTIAL_REF_EXECUTOR, SITE, RUN_DRIVE)) === 0,
+    );
+
     const resumeOnly = new PgRuntimeWorker(pool, {
       workerId: WORKER,
       browserLeasePlanResolver: planResolver,

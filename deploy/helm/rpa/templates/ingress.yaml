@@ -1,0 +1,33 @@
+{{- if .Values.ingress.enabled }}
+{{- if or (not .Values.ingress.className) (not .Values.ingress.host) (not .Values.ingress.tls.secretName) }}
+{{- fail "ingress.enabled requires owner-approved ingress.className, ingress.host, and ingress.tls.secretName" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rpa-api
+  namespace: {{ include "rpa.namespace" . }}
+  labels:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: rpa-enterprise
+  annotations:
+{{ toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rpa-api
+                port:
+                  name: http
+{{- end }}

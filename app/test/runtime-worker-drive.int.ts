@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { ArtifactRef } from "../../ts/core-types";
+import type { ArtifactRef, ExecutorPlugin, RunContext, StepResult, VerifyResult } from "../../ts/core-types";
 import type { RuntimeWorkerJob } from "../../ts/runtime-contract";
 import type { CorrelationId, RunId, TenantId } from "../../ts/security-middleware-contract";
 import { compileScenario } from "../src/api/compile-pipeline";
@@ -40,17 +40,27 @@ const IDENTITY4 = "40000000-0000-0000-0000-0000000000e9";
 // C3 좀비-run 폴백 검증 run — 별도 site/identity.
 const SITE5 = "40000000-0000-0000-0000-0000000000ea";
 const IDENTITY5 = "40000000-0000-0000-0000-0000000000eb";
+const SITE_CRED = "40000000-0000-0000-0000-0000000000ec";
+const IDENTITY_CRED = "40000000-0000-0000-0000-0000000000ed";
+const SITE_CRED_CONFLICT = "40000000-0000-0000-0000-0000000000ee";
+const IDENTITY_CRED_CONFLICT = "40000000-0000-0000-0000-0000000000ef";
 const SCEN = "70000000-0000-0000-0000-0000000000e1";
 const SVER = "70000000-0000-0000-0000-0000000000e2";
 const SCEN_VIDEO = "70000000-0000-0000-0000-0000000000e3";
 const SVER_VIDEO = "70000000-0000-0000-0000-0000000000e4";
+const SCEN_CRED = "70000000-0000-0000-0000-0000000000e6";
+const SVER_CRED = "70000000-0000-0000-0000-0000000000e7";
 const RUN_DRIVE = "71000000-0000-0000-0000-0000000000e1";
 const RUN_NODRIVE = "71000000-0000-0000-0000-0000000000e2";
 const RUN_VIDEO = "71000000-0000-0000-0000-0000000000e3";
 const RUN_WORKITEM = "71000000-0000-0000-0000-0000000000e4";
 const RUN_ZOMBIE = "71000000-0000-0000-0000-0000000000e5";
+const RUN_CREDENTIAL_OK = "71000000-0000-0000-0000-0000000000e6";
+const RUN_CREDENTIAL_CONFLICT = "71000000-0000-0000-0000-0000000000e7";
+const RUN_CREDENTIAL_HOLDER = "71000000-0000-0000-0000-0000000000e8";
 const WORKITEM_OK = "72000000-0000-0000-0000-0000000000e1";
 const WORKITEM_FAIL = "72000000-0000-0000-0000-0000000000e2";
+const CREDENTIAL_REF_EXECUTOR = "secret://tenant-a/credential/executor-main";
 // 유효 FK·유효 ir, 그러나 compiled_ast 가 비-JSON → driveScenario 가 R2(running) 이후 throw(좀비 트리거).
 const SVER_BAD = "70000000-0000-0000-0000-0000000000e5";
 const CORRELATION = "20000000-0000-0000-0000-0000000000e1";
@@ -73,7 +83,11 @@ const planResolver: BrowserLeasePlanResolver = async (_client, input) =>
         ? { siteProfileId: SITE4, browserIdentityId: IDENTITY4, networkPolicyId: NETWORK_POLICY }
         : input.runId === RUN_ZOMBIE
           ? { siteProfileId: SITE5, browserIdentityId: IDENTITY5, networkPolicyId: NETWORK_POLICY }
-    : { siteProfileId: SITE, browserIdentityId: IDENTITY, networkPolicyId: NETWORK_POLICY };
+          : input.runId === RUN_CREDENTIAL_OK
+            ? { siteProfileId: SITE_CRED, browserIdentityId: IDENTITY_CRED, networkPolicyId: NETWORK_POLICY }
+            : input.runId === RUN_CREDENTIAL_CONFLICT
+              ? { siteProfileId: SITE_CRED_CONFLICT, browserIdentityId: IDENTITY_CRED_CONFLICT, networkPolicyId: NETWORK_POLICY }
+              : { siteProfileId: SITE, browserIdentityId: IDENTITY, networkPolicyId: NETWORK_POLICY };
 
 // navigate → next → terminal success. on[]/observe 없음 → pageState 해소 불요(FakeCdpSession no-op goto 로 충분).
 const scenarioIr = {
@@ -88,6 +102,12 @@ const scenarioIr = {
 const scenarioVideoIr = {
   ...scenarioIr,
   meta: { name: "drive-worker-video-test", version: 1, evidence: { screenshot: "never", video: "always" } },
+};
+
+const scenarioCredentialIr = {
+  ...scenarioIr,
+  meta: { name: "drive-worker-credential-lease-test", version: 1 },
+  assets: [CREDENTIAL_REF_EXECUTOR],
 };
 
 async function runStatus(pool: ReturnType<typeof createPool>, runId: string): Promise<string | null> {
@@ -134,6 +154,80 @@ async function workitemEventTypes(pool: ReturnType<typeof createPool>, workitemI
   });
 }
 
+async function activeCredentialLeaseCount(
+  pool: ReturnType<typeof createPool>,
+  credentialRef: string,
+  siteProfileId: string,
+  runId?: string,
+): Promise<number> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const r = await c.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM credential_leases
+        WHERE tenant_id=$1::uuid
+          AND credential_ref=$2
+          AND site_profile_id=$3::uuid
+          AND status='active'
+          AND locked_until >= now()
+          AND ($4::uuid IS NULL OR run_id=$4::uuid)`,
+      [TENANT, credentialRef, siteProfileId, runId ?? null],
+    );
+    return r.rows[0]?.n ?? -1;
+  });
+}
+
+async function activeBrowserLeaseCount(
+  pool: ReturnType<typeof createPool>,
+  siteProfileId: string,
+  browserIdentityId: string,
+): Promise<number> {
+  return withTenantTx(pool, TENANT, async (c) => {
+    const r = await c.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM browser_leases
+        WHERE tenant_id=$1::uuid
+          AND site_profile_id=$2::uuid
+          AND browser_identity_id=$3::uuid
+          AND state IN ('reserved','active')
+          AND expires_at >= now()`,
+      [TENANT, siteProfileId, browserIdentityId],
+    );
+    return r.rows[0]?.n ?? -1;
+  });
+}
+
+function credentialLeaseAssertingExecutor(
+  pool: ReturnType<typeof createPool>,
+  observed: { calls: number; activeDuringExecute: boolean },
+): ExecutorPlugin {
+  return {
+    capabilities() {
+      return { dom: false, vision: false, utility: true };
+    },
+    async execute(stepId: string, _action: unknown, ctx: RunContext): Promise<StepResult> {
+      observed.calls += 1;
+      observed.activeDuringExecute =
+        (await activeCredentialLeaseCount(pool, CREDENTIAL_REF_EXECUTOR, ctx.siteProfileId, ctx.runId)) === 1;
+      const now = new Date().toISOString();
+      return {
+        stepId,
+        action: "navigate",
+        status: "success",
+        output: { credentialLeaseActive: observed.activeDuringExecute },
+        pageStateBefore: "page-state://credential-before",
+        pageStateAfter: "page-state://credential-after",
+        artifacts: [],
+        cache: { mode: "bypass" },
+        sideEffect: { kind: "read_only", committed: true },
+        timings: { startedAt: now, endedAt: now, durationMs: 0 },
+      };
+    },
+    async verify(): Promise<VerifyResult> {
+      return { status: "pass", confidence: 1, failedCriteria: [], evidenceRefs: [], recommendation: "continue" };
+    },
+  };
+}
+
 async function caught(p: Promise<unknown>): Promise<unknown> {
   try {
     await p;
@@ -168,6 +262,13 @@ async function main(): Promise<void> {
     const compiledVideo = compileScenario(scenarioVideoIr, {});
     check("video scenario compiles", compiledVideo.ok, compiledVideo.ok ? "" : JSON.stringify(compiledVideo.details));
     if (!compiledVideo.ok) throw new Error("video scenario did not compile");
+    const compiledCredential = compileScenario(scenarioCredentialIr, {});
+    check(
+      "credential scenario compiles",
+      compiledCredential.ok,
+      compiledCredential.ok ? "" : JSON.stringify(compiledCredential.details),
+    );
+    if (!compiledCredential.ok) throw new Error("credential scenario did not compile");
 
     await withTenantTx(pool, TENANT, async (c) => {
       await c.query(
@@ -195,19 +296,43 @@ async function main(): Promise<void> {
          VALUES ($1,$2,'ok5','https://ok5.example/*','green',true,'{"flags":{}}'::jsonb)`,
         [SITE5, TENANT],
       );
+      await c.query(
+        `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, page_state_selectors)
+         VALUES ($1,$2,'ok6','https://ok6.example/*','green',true,'{"flags":{}}'::jsonb),
+                ($3,$2,'ok7','https://ok7.example/*','green',true,'{"flags":{}}'::jsonb)`,
+        [SITE_CRED, TENANT, SITE_CRED_CONFLICT],
+      );
       // IDENTITY(RUN_DRIVE 용) version=7(비기본) — executorFactory seam 이 browser_identity.version JOIN 결과를 받는지 핀고정.
       await c.query(
         `INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version)
-         VALUES ($1,$2,$3,'ok',7), ($4,$2,$5,'ok2',1), ($6,$2,$7,'ok3',1), ($8,$2,$9,'ok4',1), ($10,$2,$11,'ok5',1)`,
-        [IDENTITY, TENANT, SITE, IDENTITY2, SITE2, IDENTITY3, SITE3, IDENTITY4, SITE4, IDENTITY5, SITE5],
+         VALUES ($1,$2,$3,'ok',7), ($4,$2,$5,'ok2',1), ($6,$2,$7,'ok3',1), ($8,$2,$9,'ok4',1), ($10,$2,$11,'ok5',1),
+                ($12,$2,$13,'ok6',1), ($14,$2,$15,'ok7',1)`,
+        [
+          IDENTITY,
+          TENANT,
+          SITE,
+          IDENTITY2,
+          SITE2,
+          IDENTITY3,
+          SITE3,
+          IDENTITY4,
+          SITE4,
+          IDENTITY5,
+          SITE5,
+          IDENTITY_CRED,
+          SITE_CRED,
+          IDENTITY_CRED_CONFLICT,
+          SITE_CRED_CONFLICT,
+        ],
       );
       await c.query(
         `INSERT INTO network_policies (id, tenant_id, allowed_domains)
-         VALUES ($1,$2,ARRAY['ok.example','ok2.example','ok3.example','ok4.example','ok5.example'])`,
+         VALUES ($1,$2,ARRAY['ok.example','ok2.example','ok3.example','ok4.example','ok5.example','ok6.example','ok7.example'])`,
         [NETWORK_POLICY, TENANT],
       );
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'drive')`, [SCEN, TENANT]);
       await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'drive-video')`, [SCEN_VIDEO, TENANT]);
+      await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'drive-credential')`, [SCEN_CRED, TENANT]);
       await c.query(
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
          VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
@@ -217,6 +342,11 @@ async function main(): Promise<void> {
         `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
          VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
         [SVER_VIDEO, TENANT, SCEN_VIDEO, JSON.stringify(compiledVideo.ir), compiledVideo.compiledAst],
+      );
+      await c.query(
+        `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+         VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+        [SVER_CRED, TENANT, SCEN_CRED, JSON.stringify(compiledCredential.ir), compiledCredential.compiledAst],
       );
       for (const rid of [RUN_DRIVE, RUN_NODRIVE]) {
         await c.query(
@@ -230,6 +360,23 @@ async function main(): Promise<void> {
         `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, params)
          VALUES ($1,$2,$3,'queued',$4,'{"entry_url":"https://ok3.example/landing"}'::jsonb)`,
         [RUN_VIDEO, TENANT, SVER_VIDEO, CORRELATION],
+      );
+      await c.query(
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, params)
+         VALUES ($1,$2,$3,'queued',$4,'{"entry_url":"https://ok6.example/landing"}'::jsonb),
+                ($5,$2,$3,'queued',$4,'{"entry_url":"https://ok7.example/landing"}'::jsonb),
+                ($6,$2,$3,'running',$4,'{"entry_url":"https://ok7.example/holder"}'::jsonb)`,
+        [RUN_CREDENTIAL_OK, TENANT, SVER_CRED, CORRELATION, RUN_CREDENTIAL_CONFLICT, RUN_CREDENTIAL_HOLDER],
+      );
+      await c.query(
+        `INSERT INTO credential_concurrency_policies (tenant_id, credential_ref, site_profile_id, max_concurrency, status)
+         VALUES ($1,$2,$3,1,'active'), ($1,$2,$4,1,'active')`,
+        [TENANT, CREDENTIAL_REF_EXECUTOR, SITE_CRED, SITE_CRED_CONFLICT],
+      );
+      await c.query(
+        `INSERT INTO credential_leases (tenant_id, credential_ref, site_profile_id, slot_no, run_id, status, locked_until)
+         VALUES ($1,$2,$3,0,$4,'active', now() + interval '5 minutes')`,
+        [TENANT, CREDENTIAL_REF_EXECUTOR, SITE_CRED_CONFLICT, RUN_CREDENTIAL_HOLDER],
       );
       // workitem-연결 drive run: checkout(W1)으로 processing 인 workitem 에 run 을 연결 → driveClaimedRun 종결 시 W2 정산 검증.
       await c.query(
@@ -411,6 +558,64 @@ async function main(): Promise<void> {
       JSON.stringify(videoLifecycleJobs),
     );
     check("video drive releases session", videoSession !== null && (videoSession as FakeCdpSession).closeCalls === 1);
+
+    const credentialObserved = { calls: 0, activeDuringExecute: false };
+    const credentialProvider = new TestFakeBrowserSessionProvider({
+      makeSession: (downloadDir) => new FakeCdpSession(downloadDir),
+    });
+    const drivingWithCredentialLease = new PgRuntimeWorker(pool, {
+      workerId: WORKER,
+      browserLeasePlanResolver: planResolver,
+      browserSessionProvider: credentialProvider,
+      allowTestBrowserSessionProvider: true,
+      executorFactory: () => credentialLeaseAssertingExecutor(pool, credentialObserved),
+    });
+    const credentialDriven = await drivingWithCredentialLease.handle({
+      kind: "run_claim",
+      tenantId: TENANT as TenantId,
+      runId: RUN_CREDENTIAL_OK as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check("credential run_claim+drive job completed", credentialDriven.kind === "completed", JSON.stringify(credentialDriven));
+    check("credential run completed", (await runStatus(pool, RUN_CREDENTIAL_OK)) === "completed", String(await runStatus(pool, RUN_CREDENTIAL_OK)));
+    check("executor sees active credential lease before action", credentialObserved.calls === 1 && credentialObserved.activeDuringExecute, JSON.stringify(credentialObserved));
+    check(
+      "credential lease released after terminal drive",
+      (await activeCredentialLeaseCount(pool, CREDENTIAL_REF_EXECUTOR, SITE_CRED, RUN_CREDENTIAL_OK)) === 0,
+    );
+
+    let conflictExecutorFactoryCalls = 0;
+    const conflictWorker = new PgRuntimeWorker(pool, {
+      workerId: WORKER,
+      browserLeasePlanResolver: planResolver,
+      browserSessionProvider: new TestFakeBrowserSessionProvider(),
+      allowTestBrowserSessionProvider: true,
+      executorFactory: () => {
+        conflictExecutorFactoryCalls += 1;
+        return credentialLeaseAssertingExecutor(pool, { calls: 0, activeDuringExecute: false });
+      },
+    });
+    const credentialConflict = await conflictWorker.handle({
+      kind: "run_claim",
+      tenantId: TENANT as TenantId,
+      runId: RUN_CREDENTIAL_CONFLICT as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check(
+      "credential conflict defers with SESSION_LOCKED",
+      credentialConflict.kind === "deferred" && credentialConflict.code === "SESSION_LOCKED",
+      JSON.stringify(credentialConflict),
+    );
+    check("credential conflict leaves run queued", (await runStatus(pool, RUN_CREDENTIAL_CONFLICT)) === "queued", String(await runStatus(pool, RUN_CREDENTIAL_CONFLICT)));
+    check("credential conflict does not bind executor", conflictExecutorFactoryCalls === 0, String(conflictExecutorFactoryCalls));
+    check(
+      "credential conflict deletes newly reserved browser lease",
+      (await activeBrowserLeaseCount(pool, SITE_CRED_CONFLICT, IDENTITY_CRED_CONFLICT)) === 0,
+    );
+    check(
+      "credential conflict preserves holder lease",
+      (await activeCredentialLeaseCount(pool, CREDENTIAL_REF_EXECUTOR, SITE_CRED_CONFLICT, RUN_CREDENTIAL_HOLDER)) === 1,
+    );
 
     const claimOnly = new PgRuntimeWorker(pool, { workerId: WORKER, browserLeasePlanResolver: planResolver });
     const claimed = await claimOnly.handle({

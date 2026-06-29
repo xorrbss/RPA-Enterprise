@@ -8,6 +8,8 @@
  */
 import { createHash } from "node:crypto";
 
+import type { PoolClient } from "pg";
+
 import { withTenantTx, type PgPool } from "../db/pool";
 
 /** hash canonical 입력 — audit_log 영속 컬럼만(id/created_at/legal_hold/deleted_at 은 hash 외 가변 메타). */
@@ -72,6 +74,8 @@ export interface AuditChainVerification {
   readonly tenantId: string;
   readonly rowsChecked: number;
   readonly valid: boolean;
+  readonly checkedFromSequence: number | null;
+  readonly checkedToSequence: number | null;
   readonly violations: readonly AuditChainViolation[];
 }
 
@@ -97,18 +101,23 @@ interface AuditChainRow {
  * 예방(UPDATE/DELETE 차단)이라면 이것은 탐지(트리거 우회한 superuser/BYPASSRLS·외부 WORM 미러 검증). RLS 경유.
  */
 export async function verifyAuditChain(pool: PgPool, tenantId: string): Promise<AuditChainVerification> {
-  const rows = await withTenantTx(pool, tenantId, async (client) => {
-    const r = await client.query<AuditChainRow>(
-      `SELECT id::text AS id, sequence_no, actor, action, outcome, reason, correlation_id,
-              idempotency_key, occurred_at, retention_until, payload_schema_ref, payload,
-              previous_hash, hash
-         FROM audit_log
-        WHERE tenant_id = $1::uuid AND deleted_at IS NULL
-        ORDER BY sequence_no ASC`,
-      [tenantId],
-    );
-    return r.rows;
-  });
+  return withTenantTx(pool, tenantId, (client) => verifyAuditChainInTenantTx(client, tenantId));
+}
+
+export async function verifyAuditChainInTenantTx(
+  client: PoolClient,
+  tenantId: string,
+): Promise<AuditChainVerification> {
+  const r = await client.query<AuditChainRow>(
+    `SELECT id::text AS id, sequence_no, actor, action, outcome, reason, correlation_id,
+            idempotency_key, occurred_at, retention_until, payload_schema_ref, payload,
+            previous_hash, hash
+       FROM audit_log
+      WHERE tenant_id = $1::uuid AND deleted_at IS NULL
+      ORDER BY sequence_no ASC`,
+    [tenantId],
+  );
+  const rows = r.rows;
 
   const violations: AuditChainViolation[] = [];
   let expectedSeq = 1;
@@ -148,5 +157,12 @@ export async function verifyAuditChain(pool: PgPool, tenantId: string): Promise<
     expectedSeq += 1;
   }
 
-  return { tenantId, rowsChecked: rows.length, valid: violations.length === 0, violations };
+  return {
+    tenantId,
+    rowsChecked: rows.length,
+    valid: violations.length === 0,
+    checkedFromSequence: rows.length === 0 ? null : Number(rows[0]!.sequence_no),
+    checkedToSequence: rows.length === 0 ? null : Number(rows[rows.length - 1]!.sequence_no),
+    violations,
+  };
 }

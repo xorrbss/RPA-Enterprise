@@ -74,9 +74,12 @@ field names a dry-run alias rather than an external staging fact.
 - SecretStore alias/path            : Vault KV v2 mount `secret/`, intended staging base `secret/data/rpa/staging/<runtime>/<purpose>/<name>`; local-pilot alias=[local-vault-plan-1]; values omitted
 - namespace / identity map          : D8-A12 local dry-run identity map aliases [local-runtime-worker-1], [local-browser-worker-1], [local-artifact-lifecycle-1], [local-llm-gateway-1]
 - SecretRef inventory               : D8-A12 identifier-only local inventory [local-secretref-inventory-1]; no resolved material
-- runtime artifact object-store env : local dry-run uses `ARTIFACT_OBJECT_STORE_REF=rpa/local/artifact-lifecycle/object_store/fs`; intended staging alias=[staging-object-store-ref-1]
+- runtime artifact object-store env : local dry-run uses `ARTIFACT_OBJECT_STORE_REF=rpa/local/artifact-lifecycle/object_store/fs`; intended staging S3 shape `GATEWAY_ARTIFACT_STORE_MODE=s3`, `GATEWAY_ARTIFACT_OBJECT_STORE_REF=rpa/staging/runtime-worker/object_store/s3-producer`, `ARTIFACT_OBJECT_STORE_REF=rpa/staging/artifact-lifecycle/object_store/s3`; aliases=[staging-gateway-object-store-ref-1], [staging-object-store-ref-1]
 - artifact store topology preflight  : run `npm --prefix app run preflight:artifact-store -- --topology split-worker-lifecycle`; PASS with RPA_ENV=local/local_fs; evidence=[local-preflight-1]
 - retention policy                  : D8-A11/D8-A14 and ops-defaults section 6.1 rehearsed locally; DB alias=[local-pg-1]
+- controlled-prod readiness snapshot : GET /v1/ops/production-readiness local rehearsal; controlled_prod_ready=false; blocker_count=0; deferred_count=5; external_alert_delivery=deferred; support_training_completion=deferred; observability_telemetry_wiring=deferred; evidence=production_readiness_evidence [local-readiness-snapshot-1]; no production open claimed
+- external alert delivery evidence : evidence_type=external_alert_delivery; status=deferred local rehearsal; metadata.channel=[local-external-alert-channel-pending]; metadata.provider_alias=[local-external-alert-provider-pending]; metadata.receipt_id=[local-external-alert-receipt-pending]; metadata.receipt_at=[local-external-alert-receipt-at-pending]; metadata.delivery_status=delivered required before production open; evidence=production_readiness_evidence [local-external-alert-delivery-pending-1]; no endpoint_url/token/webhook_secret
+- ops webhook sender evidence : POST /v1/ops-alerts/{alert_id}/deliveries/send-webhook local rehearsal; ops_notification_attempts=[local-ops-webhook-attempts-1]; ops_notification_deliveries=[local-ops-webhook-deliveries-1]; endpoint_secret_ref=SecretRef alias [local-ops-webhook-secretref-1]; route_policy_ref=[local-ops-webhook-route-policy-1]; allowed_hosts=public_dns [local-ops-webhook-host-policy-1]; status=sent; local rehearsal; no webhook_url/token
 - live D5 evidence                  : row 50 existing packet aliases [codex-staging-1]/[model-a]; local pilot creates no new live D5 run; evidence=[d5-live-alias-only-1]
 - secret.resolve audit sample       : seq#1/hash#[local-audit-hash-1], no material
 - negative control proof            : secret-scan rejects GitHub `secrets` context, environment: staging binding, env dump commands, and xtrace; evidence=[local-negative-control-1]
@@ -102,5 +105,9 @@ alias with owner-controlled external evidence from:
 - Vault KV v2 staging paths, D8-A12 identity map, and identifier-only SecretRef
   inventory.
 - Final deploy-env `preflight:artifact-store` PASS evidence.
+- Controlled-prod readiness snapshot, `external_alert_delivery` owner receipt
+  evidence, `support_training_completion` owner training evidence, and ops
+  webhook sender attempt/delivery aliases with no endpoint URLs, webhook URLs,
+  training-document URLs, tokens, or resolved secret material.
 - Live row 50 D5 aliases and negative-control evidence with no env dump, xtrace,
   or resolved secret material.

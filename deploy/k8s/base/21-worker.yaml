@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rpa-worker
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: rpa-enterprise
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rpa-worker
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rpa-worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: rpa-enterprise
+    spec:
+      serviceAccountName: rpa-worker
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rpa-worker
+              app.kubernetes.io/component: worker
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: rpa-worker
+                    app.kubernetes.io/component: worker
+                topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: ghcr.io/example/rpa-runtime:replace-me
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: health
+              containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: rpa-runtime-config
+          env:
+            - name: RUN_MODE
+              value: worker
+            - name: PGUSER
+              value: rpa_app
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: RPA_APP_DB_PASSWORD
+            - name: MAINTENANCE_LIFECYCLE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: MAINTENANCE_LIFECYCLE_DATABASE_URL
+            - name: CODEX_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: CODEX_BASE_URL
+            - name: CODEX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: CODEX_API_KEY
+            - name: CODEX_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: CODEX_MODEL
+            - name: VAULT_RUNTIME_WORKER_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: VAULT_RUNTIME_WORKER_ROLE_ID
+            - name: VAULT_RUNTIME_WORKER_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: VAULT_RUNTIME_WORKER_SECRET_ID
+            - name: VAULT_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: VAULT_ADDR
+            - name: VAULT_MOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: rpa-runtime-secrets
+                  key: VAULT_MOUNT
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]

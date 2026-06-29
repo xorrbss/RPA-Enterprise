@@ -9,6 +9,8 @@ import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
 import { appendGovernanceAudit } from "./role-assignments";
+import { readProductionReadiness } from "./production-readiness";
+import { assertScenarioVersionCertifiedForProd, mapScenarioCertification, type ScenarioCertificationRow } from "./scenario-certification";
 import { parseIfMatch, signedCommandRefsFor, UUID_RE } from "./scenarios-support";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 
@@ -16,7 +18,7 @@ type ScenarioEnvironment = "dev" | "staging" | "prod";
 type ReleaseTargetEnvironment = Extract<ScenarioEnvironment, "staging" | "prod">;
 type ReleaseStatus = "draft" | "submitted" | "approved" | "rejected" | "deployed" | "rolled_back" | "cancelled";
 
-interface ReleaseRow {
+interface ReleaseRow extends ScenarioCertificationRow {
   id: string;
   scenario_id: string;
   source_version_id: string;
@@ -61,7 +63,7 @@ interface ReleaseEventRow {
   created_at: Date;
 }
 
-interface ScenarioVersionRow {
+interface ScenarioVersionRow extends ScenarioCertificationRow {
   scenario_id: string;
   scenario_name: string;
   version_id: string;
@@ -321,6 +323,10 @@ async function transitionRelease(
   if (next === "approved" && release.requested_by === actor.subjectId) {
     throw new ApiResponseError("AUTHZ_FORBIDDEN", { reason: "maker_checker_violation" });
   }
+  if (next === "approved" && release.target_environment === "prod") {
+    await assertScenarioVersionCertifiedForProd(client, tenantId, release.scenario_id, release.source_version_id);
+    await assertControlledProdReady(client, tenantId);
+  }
   const eventType = next === "approved" ? "approved" : next === "rejected" ? "rejected" : "submitted";
   const auditAction = next === "approved"
     ? "scenario_release.approve"
@@ -371,6 +377,10 @@ async function deployRelease(
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "release_not_approved", status: release.status });
   }
   const source = await loadScenarioVersionById(client, tenantId, release.scenario_id, release.source_version_id);
+  if (release.target_environment === "prod") {
+    await assertScenarioVersionCertifiedForProd(client, tenantId, release.scenario_id, release.source_version_id);
+    await assertControlledProdReady(client, tenantId);
+  }
   await assertLatestVersion(client, tenantId, release.scenario_id, expectedVersion);
   const outcome = compileScenario(source.ir, { promote: true, signedCommandRefs });
   if (!outcome.ok) throw new ApiResponseError(outcome.code, outcome.details);
@@ -422,6 +432,9 @@ async function rollbackRelease(
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "rollback_target_missing" });
   }
   const source = await loadScenarioVersionById(client, tenantId, release.scenario_id, previousVersionId);
+  if (release.target_environment === "prod") {
+    await assertScenarioVersionCertifiedForProd(client, tenantId, release.scenario_id, previousVersionId);
+  }
   const outcome = compileScenario(source.ir, { promote: true, signedCommandRefs });
   if (!outcome.ok) throw new ApiResponseError(outcome.code, outcome.details);
   const packageHash = packageHashFor({
@@ -462,6 +475,26 @@ async function rollbackRelease(
     package_hash: packageHash,
   });
   return { status: 201, body: await releaseDetail(client, tenantId, rollbackId, true) };
+}
+
+async function assertControlledProdReady(client: PoolClient, tenantId: string): Promise<void> {
+  const readiness = await readProductionReadiness(client, tenantId);
+  if (readiness.summary.controlled_prod_ready) return;
+  const blockingGateIds = readiness.gates
+    .filter((gate) => gate.status === "blocked")
+    .map((gate) => gate.gate_id);
+  const deferredGateIds = readiness.gates
+    .filter((gate) => gate.status === "deferred")
+    .map((gate) => gate.gate_id);
+  throw new ApiResponseError("IR_SCHEMA_INVALID", {
+    reason: "controlled_prod_readiness_required",
+    status: readiness.summary.status,
+    blocker_count: readiness.summary.blocker_count,
+    warning_count: readiness.summary.warning_count,
+    deferred_count: readiness.summary.deferred_count,
+    blocking_gate_ids: blockingGateIds,
+    deferred_gate_ids: deferredGateIds,
+  });
 }
 
 async function applyEnvironmentBinding(
@@ -542,7 +575,12 @@ async function withRelease<T>(
 
 async function loadScenarioVersion(client: PoolClient, tenantId: string, scenarioId: string, version: number): Promise<ScenarioVersionRow> {
   const result = await client.query<ScenarioVersionRow>(
-    `SELECT s.id::text AS scenario_id, s.name AS scenario_name, sv.id::text AS version_id, sv.version, sv.ir
+    `SELECT s.id::text AS scenario_id, s.name AS scenario_name, sv.id::text AS version_id, sv.version, sv.ir,
+            sv.certification_status, sv.certified_by, sv.certified_at, sv.certification_expires_at,
+            sv.certification_reason, sv.certification_revoked_by, sv.certification_revoked_at,
+            sv.certification_revoke_reason, sv.governance_stage, sv.governance_reason,
+            sv.governance_evidence_ref, sv.governance_metadata, sv.governance_updated_by,
+            sv.governance_updated_at
        FROM scenarios s
        JOIN scenario_versions sv ON sv.tenant_id=s.tenant_id AND sv.scenario_id=s.id
       WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid AND s.archived_at IS NULL AND sv.version=$3`,
@@ -555,7 +593,12 @@ async function loadScenarioVersion(client: PoolClient, tenantId: string, scenari
 
 async function loadScenarioVersionById(client: PoolClient, tenantId: string, scenarioId: string, versionId: string): Promise<ScenarioVersionRow> {
   const result = await client.query<ScenarioVersionRow>(
-    `SELECT s.id::text AS scenario_id, s.name AS scenario_name, sv.id::text AS version_id, sv.version, sv.ir
+    `SELECT s.id::text AS scenario_id, s.name AS scenario_name, sv.id::text AS version_id, sv.version, sv.ir,
+            sv.certification_status, sv.certified_by, sv.certified_at, sv.certification_expires_at,
+            sv.certification_reason, sv.certification_revoked_by, sv.certification_revoked_at,
+            sv.certification_revoke_reason, sv.governance_stage, sv.governance_reason,
+            sv.governance_evidence_ref, sv.governance_metadata, sv.governance_updated_by,
+            sv.governance_updated_at
        FROM scenarios s
        JOIN scenario_versions sv ON sv.tenant_id=s.tenant_id AND sv.scenario_id=s.id
       WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid AND s.archived_at IS NULL AND sv.id=$3::uuid`,
@@ -629,6 +672,11 @@ async function releaseDetail(client: PoolClient, tenantId: string, releaseId: st
 function releaseSelectSql(): string {
   return `SELECT r.id::text AS id, r.scenario_id::text AS scenario_id, r.source_version_id::text AS source_version_id,
                  sv.version AS source_version, r.target_environment, r.status, r.package_hash, r.validation_report,
+                 sv.certification_status, sv.certified_by, sv.certified_at, sv.certification_expires_at,
+                  sv.certification_reason, sv.certification_revoked_by, sv.certification_revoked_at,
+                  sv.certification_revoke_reason, sv.governance_stage, sv.governance_reason,
+                  sv.governance_evidence_ref, sv.governance_metadata, sv.governance_updated_by,
+                  sv.governance_updated_at,
                  r.requested_by, r.requested_at, r.submitted_at, r.approved_by, r.approved_at,
                  r.rejected_by, r.rejected_at, r.rejection_reason, r.deployed_by, r.deployed_at,
                  r.rollback_of_release_id::text AS rollback_of_release_id, r.reason,
@@ -662,6 +710,7 @@ function mapRelease(row: ReleaseRow): Record<string, unknown> {
     status: row.status,
     package_hash: row.package_hash,
     validation_report: row.validation_report,
+    certification: mapScenarioCertification(row),
     requested_by: row.requested_by,
     requested_at: row.requested_at.toISOString(),
     submitted_at: row.submitted_at?.toISOString() ?? null,

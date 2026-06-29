@@ -180,6 +180,13 @@ class PromptRunFakeCdpSession implements CdpSession {
     return { nodes: [{ role: { value: "main" }, name: { value: "Notices" } }] } as T;
   }
 
+  async installNetworkGuard(): Promise<{ assertNoViolation(): void; dispose(): Promise<void> }> {
+    return {
+      assertNoViolation: () => undefined,
+      dispose: async () => undefined,
+    };
+  }
+
   async click(): Promise<void> {}
   async fill(): Promise<void> {}
   async selectOption(): Promise<void> {}

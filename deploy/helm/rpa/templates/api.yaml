@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rpa-api
+  namespace: {{ include "rpa.namespace" . }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rpa-api
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rpa-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: rpa-enterprise
+    spec:
+      serviceAccountName: rpa-api
+      automountServiceAccountToken: false
+{{ with .Values.api.topologySpreadConstraints }}
+      topologySpreadConstraints:
+{{ toYaml . | nindent 8 }}
+{{ end }}
+{{ with .Values.api.affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+{{ end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: {{ include "rpa.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: rpa-runtime-config
+          env:
+            - name: RUN_MODE
+              value: api
+            - name: PGUSER
+              value: {{ .Values.database.appUser | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | quote }}
+                  key: {{ .Values.secrets.keys.appPassword | quote }}
+            - name: JWT_HS256_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | quote }}
+                  key: {{ .Values.secrets.keys.jwtSecret | quote }}
+            - name: VAULT_API_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | quote }}
+                  key: {{ .Values.secrets.keys.vaultApiRoleId | quote }}
+            - name: VAULT_API_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | quote }}
+                  key: {{ .Values.secrets.keys.vaultApiSecretId | quote }}
+            - name: VAULT_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | quote }}
+                  key: {{ .Values.secrets.keys.vaultAddr | quote }}
+            - name: VAULT_MOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | quote }}
+                  key: {{ .Values.secrets.keys.vaultMount | quote }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rpa-api
+  namespace: {{ include "rpa.namespace" . }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rpa-api
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

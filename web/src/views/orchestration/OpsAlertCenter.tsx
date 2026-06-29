@@ -1,6 +1,19 @@
-import type { OpsAlertItem } from "../../api/types";
+import { useState, type FormEvent } from "react";
+
+import type { OpsAlertItem, OpsNotificationAttempt, OpsNotificationDelivery } from "../../api/types";
 import { formatDateTime } from "./format";
 import type { AlertSeverityFilter, AlertSourceFilter } from "./trigger-helpers";
+
+export interface OpsWebhookSendDraft {
+  readonly endpointSecretRef: string;
+  readonly callbackSignatureSecretRef: string | null;
+  readonly routePolicyRef: string;
+  readonly recipientGroupRef: string | null;
+  readonly allowedHosts: readonly string[];
+  readonly providerAlias: string | null;
+  readonly summary: string | null;
+  readonly legalHold: boolean;
+}
 
 export function OpsAlertCenter({
   alerts,
@@ -13,6 +26,20 @@ export function OpsAlertCenter({
   onLoadMore,
   onSeverityChange,
   onSourceChange,
+  canAck,
+  ackingAlertId,
+  ackErrorAlertId,
+  onAck,
+  deliveryAlertId,
+  deliveryReceipts,
+  isDeliveryLoading,
+  isDeliveryError,
+  onToggleDeliveries,
+  canSendWebhook,
+  sendingWebhookAlertId,
+  webhookSendErrorAlertId,
+  queuedWebhookAttempt,
+  onSendWebhook,
 }: {
   alerts: readonly OpsAlertItem[];
   isError: boolean;
@@ -24,7 +51,23 @@ export function OpsAlertCenter({
   onLoadMore: (cursor: string) => void;
   onSeverityChange: (severity: AlertSeverityFilter) => void;
   onSourceChange: (source: AlertSourceFilter) => void;
+  canAck: boolean;
+  ackingAlertId: string | null;
+  ackErrorAlertId: string | null;
+  onAck: (alert: OpsAlertItem) => void;
+  deliveryAlertId: string | null;
+  deliveryReceipts: readonly OpsNotificationDelivery[];
+  isDeliveryLoading: boolean;
+  isDeliveryError: boolean;
+  onToggleDeliveries: (alert: OpsAlertItem) => void;
+  canSendWebhook: boolean;
+  sendingWebhookAlertId: string | null;
+  webhookSendErrorAlertId: string | null;
+  queuedWebhookAttempt: OpsNotificationAttempt | null;
+  onSendWebhook: (alert: OpsAlertItem, draft: OpsWebhookSendDraft) => void;
 }): JSX.Element {
+  const [webhookFormAlertId, setWebhookFormAlertId] = useState<string | null>(null);
+
   return (
     <div className="ops-column ops-alert-center">
       <div className="ops-alert-center-head">
@@ -50,6 +93,10 @@ export function OpsAlertCenter({
             <option value="trigger_fire">트리거 발화</option>
             <option value="failure_spike">실패 급증</option>
             <option value="dlq">재처리 대기</option>
+            <option value="bot_pool">Bot Pool</option>
+            <option value="scim_secret_rotation">SCIM SecretRef</option>
+            <option value="readiness_evidence">Production readiness</option>
+            <option value="audit_verifier">감사 체인</option>
           </select>
         </label>
       </div>
@@ -78,10 +125,50 @@ export function OpsAlertCenter({
                 <span className="ops-alert-action">권장 조치: {alert.recommended_action}</span>
                 <span className="subtle">{opsAlertTiming(alert)}</span>
               </div>
-              {alert.route !== null && (
-                <button className="linklike" type="button" onClick={() => navigateAlertRoute(alert.route)}>
-                  {opsAlertActionLabel(alert)}
+              <div className="inline-actions">
+                {alert.route !== null && (
+                  <button className="linklike" type="button" onClick={() => navigateAlertRoute(alert.route)}>
+                    {opsAlertActionLabel(alert)}
+                  </button>
+                )}
+                <button className="linklike" type="button" onClick={() => onToggleDeliveries(alert)}>
+                  {deliveryAlertId === alert.alert_id ? "Hide receipts" : "Delivery receipts"}
                 </button>
+                {canSendWebhook && (
+                  <button
+                    className="linklike"
+                    type="button"
+                    onClick={() => setWebhookFormAlertId((current) => (current === alert.alert_id ? null : alert.alert_id))}
+                  >
+                    {webhookFormAlertId === alert.alert_id ? "웹훅 닫기" : "웹훅 발송"}
+                  </button>
+                )}
+                {alert.status === "acknowledged" && alert.ack !== null ? (
+                  <span className="badge muted" title={`확인자: ${alert.ack.acknowledged_by} · ${formatDateTime(alert.ack.acknowledged_at)}`}>
+                    확인됨
+                  </span>
+                ) : canAck ? (
+                  <button className="btn" type="button" disabled={ackingAlertId === alert.alert_id} onClick={() => onAck(alert)}>
+                    {ackingAlertId === alert.alert_id ? "확인 중" : "확인"}
+                  </button>
+                ) : null}
+                {ackErrorAlertId === alert.alert_id && (
+                  <span className="form-alert red" role="alert">
+                    확인 처리 실패
+                  </span>
+                )}
+              </div>
+              {deliveryAlertId === alert.alert_id && (
+                <DeliveryReceiptPanel receipts={deliveryReceipts} isLoading={isDeliveryLoading} isError={isDeliveryError} />
+              )}
+              {webhookFormAlertId === alert.alert_id && (
+                <WebhookSendPanel
+                  alert={alert}
+                  isSending={sendingWebhookAlertId === alert.alert_id}
+                  hasError={webhookSendErrorAlertId === alert.alert_id}
+                  queuedAttempt={queuedWebhookAttempt?.alert_id === alert.alert_id ? queuedWebhookAttempt : null}
+                  onSend={onSendWebhook}
+                />
               )}
             </li>
           ))}
@@ -97,6 +184,252 @@ export function OpsAlertCenter({
       )}
     </div>
   );
+}
+
+function WebhookSendPanel({
+  alert,
+  isSending,
+  hasError,
+  queuedAttempt,
+  onSend,
+}: {
+  alert: OpsAlertItem;
+  isSending: boolean;
+  hasError: boolean;
+  queuedAttempt: OpsNotificationAttempt | null;
+  onSend: (alert: OpsAlertItem, draft: OpsWebhookSendDraft) => void;
+}): JSX.Element {
+  const [endpointSecretRef, setEndpointSecretRef] = useState("");
+  const [callbackSignatureSecretRef, setCallbackSignatureSecretRef] = useState("");
+  const [routePolicyRef, setRoutePolicyRef] = useState("ops-alerts-primary");
+  const [recipientGroupRef, setRecipientGroupRef] = useState("ops-primary-oncall");
+  const [allowedHosts, setAllowedHosts] = useState("");
+  const [providerAlias, setProviderAlias] = useState("webhook-primary");
+  const [summary, setSummary] = useState(alert.title);
+  const [legalHold, setLegalHold] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  function submit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const endpoint = endpointSecretRef.trim();
+    const callbackSignatureRef = callbackSignatureSecretRef.trim();
+    const routePolicy = routePolicyRef.trim();
+    const hosts = parseAllowedHosts(allowedHosts);
+    if (!isSecretRef(endpoint)) {
+      setValidationError("Endpoint SecretRef must start with secret://");
+      return;
+    }
+    if (callbackSignatureRef.length > 0 && !isSecretRef(callbackSignatureRef)) {
+      setValidationError("Callback signing SecretRef must start with secret://");
+      return;
+    }
+    if (endpoint.length === 0) {
+      setValidationError("Endpoint SecretRef를 입력하세요.");
+      return;
+    }
+    if (routePolicy.length === 0) {
+      setValidationError("Route policy ref를 입력하세요.");
+      return;
+    }
+    if (hosts.length === 0) {
+      setValidationError("허용 호스트를 하나 이상 입력하세요.");
+      return;
+    }
+    if (hosts.some((host) => !isDnsHost(host))) {
+      setValidationError("허용 호스트는 DNS 호스트명만 입력하세요.");
+      return;
+    }
+    setValidationError(null);
+    onSend(alert, {
+      endpointSecretRef: endpoint,
+      callbackSignatureSecretRef: callbackSignatureRef === "" ? null : callbackSignatureRef,
+      routePolicyRef: routePolicy,
+      recipientGroupRef: recipientGroupRef.trim() === "" ? null : recipientGroupRef.trim(),
+      allowedHosts: hosts,
+      providerAlias: providerAlias.trim() === "" ? null : providerAlias.trim(),
+      summary: summary.trim() === "" ? null : summary.trim(),
+      legalHold,
+    });
+  }
+
+  return (
+    <form className="ops-webhook-form" onSubmit={submit}>
+      <div className="ops-delivery-panel-head">
+        <strong>웹훅 발송 큐</strong>
+        {queuedAttempt !== null && <span className={`badge ${attemptStatusTone(queuedAttempt.status)}`}>{queuedAttempt.status}</span>}
+      </div>
+      <div className="form-grid ops-webhook-grid">
+        <label className="field">
+          Endpoint SecretRef
+          <input
+            aria-label="Endpoint SecretRef"
+            value={endpointSecretRef}
+            onChange={(event) => setEndpointSecretRef(event.target.value)}
+            placeholder="secret://rpa/staging/notification-sender/notification/webhook/ops-primary"
+          />
+        </label>
+        <label className="field">
+          Callback signing SecretRef alias
+          <input
+            aria-label="Callback signing SecretRef"
+            value={callbackSignatureSecretRef}
+            onChange={(event) => setCallbackSignatureSecretRef(event.target.value)}
+            placeholder="secret://rpa/staging/notification-sender/signing/webhook-callback"
+          />
+        </label>
+        <label className="field">
+          Route policy ref
+          <input
+            aria-label="Route policy ref"
+            value={routePolicyRef}
+            onChange={(event) => setRoutePolicyRef(event.target.value)}
+            placeholder="ops-alerts-primary"
+          />
+        </label>
+        <label className="field">
+          Allowed hosts
+          <input
+            aria-label="Allowed hosts"
+            value={allowedHosts}
+            onChange={(event) => setAllowedHosts(event.target.value)}
+            placeholder="hooks.slack.com, example.webhook.office.com"
+          />
+        </label>
+        <label className="field">
+          Recipient group ref
+          <input
+            aria-label="Recipient group ref"
+            value={recipientGroupRef}
+            onChange={(event) => setRecipientGroupRef(event.target.value)}
+            placeholder="ops-primary-oncall"
+          />
+        </label>
+        <label className="field">
+          Provider alias
+          <input
+            aria-label="Provider alias"
+            value={providerAlias}
+            onChange={(event) => setProviderAlias(event.target.value)}
+            placeholder="webhook-primary"
+          />
+        </label>
+        <label className="field ops-webhook-summary">
+          Summary
+          <input
+            aria-label="Webhook summary"
+            value={summary}
+            onChange={(event) => setSummary(event.target.value)}
+            placeholder="Ops alert webhook notification"
+          />
+        </label>
+      </div>
+      <div className="inline-actions">
+        <label className="checkbox-inline">
+          <input type="checkbox" checked={legalHold} onChange={(event) => setLegalHold(event.target.checked)} />
+          법적 보존
+        </label>
+        <button className="btn" type="submit" disabled={isSending}>
+          {isSending ? "큐 등록 중" : "발송 큐잉"}
+        </button>
+        {queuedAttempt !== null && (
+          <span className="subtle">attempt {queuedAttempt.attempt_no}/{queuedAttempt.max_attempts} · {formatDateTime(queuedAttempt.next_attempt_at)}</span>
+        )}
+        {validationError !== null && <span className="form-alert red" role="alert">{validationError}</span>}
+        {hasError && <span className="form-alert red" role="alert">웹훅 발송 요청 실패</span>}
+      </div>
+    </form>
+  );
+}
+
+function DeliveryReceiptPanel({
+  receipts,
+  isLoading,
+  isError,
+}: {
+  receipts: readonly OpsNotificationDelivery[];
+  isLoading: boolean;
+  isError: boolean;
+}): JSX.Element {
+  if (isError) {
+    return (
+      <div className="ops-delivery-panel" role="status">
+        <strong>Delivery receipts unavailable</strong>
+        <span className="subtle">Provider receipt evidence could not be loaded.</span>
+      </div>
+    );
+  }
+  if (isLoading) {
+    return (
+      <div className="ops-delivery-panel" role="status">
+        <strong>Loading delivery receipts</strong>
+      </div>
+    );
+  }
+  if (receipts.length === 0) {
+    return (
+      <div className="ops-delivery-panel" role="status">
+        <strong>No provider receipts recorded</strong>
+        <span className="subtle">Console ack is separate and does not prove external delivery.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="ops-delivery-panel">
+      <div className="ops-delivery-panel-head">
+        <strong>Provider delivery receipts</strong>
+        <span className="badge muted">{receipts.length} shown</span>
+      </div>
+      <ul className="ops-delivery-list">
+        {receipts.map((receipt) => (
+          <li key={receipt.delivery_id}>
+            <div className="ops-alert-badges">
+              <span className={`badge ${deliveryStatusTone(receipt.status)}`}>{receipt.status}</span>
+              <span className="subtle">{receipt.channel} / {receipt.provider_alias}</span>
+            </div>
+            <span className="subtle">{formatDateTime(receipt.receipt_at)} · attempt {receipt.attempt_no}</span>
+            <span>{receipt.summary}</span>
+            <span className="subtle">
+              {receipt.receipt_id !== null ? `receipt ${receipt.receipt_id}` : `error ${receipt.error_code ?? "unknown"}`} · endpoint {receipt.endpoint_secret_ref}
+            </span>
+            {receipt.recipient_group_ref !== null && <span className="subtle">recipient group {receipt.recipient_group_ref}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function parseAllowedHosts(value: string): string[] {
+  return [...new Set(value.split(/[\s,]+/).map((part) => part.trim().toLowerCase()).filter(Boolean))];
+}
+
+function isDnsHost(host: string): boolean {
+  if (host === "localhost" || host.includes("/") || host.includes(":")) return false;
+  const labels = host.split(".");
+  return labels.length >= 2 && labels.every((label) =>
+    label.length > 0 &&
+    label.length <= 63 &&
+    /^[a-z0-9-]+$/i.test(label) &&
+    !label.startsWith("-") &&
+    !label.endsWith("-"),
+  );
+}
+
+function isSecretRef(value: string): boolean {
+  return value.startsWith("secret://") && value.length > "secret://".length;
+}
+
+function attemptStatusTone(status: OpsNotificationAttempt["status"]): "green" | "amber" | "red" | "blue" {
+  if (status === "sent") return "green";
+  if (status === "dead_letter") return "red";
+  if (status === "failed") return "amber";
+  return "blue";
+}
+
+function deliveryStatusTone(status: OpsNotificationDelivery["status"]): "green" | "amber" | "red" {
+  if (status === "delivered") return "green";
+  if (status === "failed") return "red";
+  return "amber";
 }
 
 function navigateAlertRoute(route: string | null): void {
@@ -124,6 +457,9 @@ function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
   if (source === "trigger_fire") return "트리거 발화";
   if (source === "failure_spike") return "실패 급증";
   if (source === "bot_pool") return "Bot Pool";
+  if (source === "scim_secret_rotation") return "SCIM SecretRef";
+  if (source === "readiness_evidence") return "Production readiness";
+  if (source === "audit_verifier") return "감사 체인";
   return "재처리 대기";
 }
 
@@ -146,6 +482,12 @@ function opsAlertActionLabel(alert: OpsAlertItem): string {
       return "재처리 대기 보기";
     case "bot_pool":
       return "Bot Pool 보기";
+    case "scim_provider":
+      return "SCIM 설정 보기";
+    case "readiness_evidence":
+      return "Production readiness";
+    case "audit_verifier":
+      return "감사 검증 보기";
     default:
       return "자세히 보기";
   }

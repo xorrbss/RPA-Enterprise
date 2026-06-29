@@ -56,6 +56,7 @@ const LEASE_MULTI_B = "50000000-0000-0000-0000-000000000007";
 const LEASE_DUPLICATE = "50000000-0000-0000-0000-000000000008";
 const LEASE_EXPIRED = "50000000-0000-0000-0000-000000000009";
 const LEASE_NO_DRAIN_ACTIVE = "50000000-0000-0000-0000-00000000000a";
+const CREDENTIAL_REF_ABORT = "secret://tenant-a/credential/abort-main";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -173,6 +174,22 @@ async function leaseState(pool: ReturnType<typeof createPool>, leaseId: string):
   });
 }
 
+async function credentialLeaseStatus(pool: ReturnType<typeof createPool>, runId: string): Promise<string | null> {
+  return withTenantTx(pool, TENANT_A, async (c) => {
+    const row = await c.query<{ status: string }>(
+      `SELECT status
+         FROM credential_leases
+        WHERE tenant_id=$1::uuid
+          AND credential_ref=$2
+          AND site_profile_id=$3::uuid
+          AND run_id=$4::uuid
+          AND slot_no=0`,
+      [TENANT_A, CREDENTIAL_REF_ABORT, SITE, runId],
+    );
+    return row.rows[0]?.status ?? null;
+  });
+}
+
 function drainCallCount(calls: readonly RunAbortDrainInput[], runId: string): number {
   return calls.filter((call) => call.runId === (runId as RunId)).length;
 }
@@ -242,6 +259,18 @@ async function main(): Promise<void> {
     await seedLease(pool, LEASE_DUPLICATE, RUN_DUPLICATE);
     await seedLease(pool, LEASE_EXPIRED, RUN_EXPIRED_LEASE, WORKER, "expired");
     await seedLease(pool, LEASE_NO_DRAIN_ACTIVE, RUN_NO_DRAIN_ACTIVE_LEASE);
+    await withTenantTx(pool, TENANT_A, async (c) => {
+      await c.query(
+        `INSERT INTO credential_concurrency_policies (tenant_id, credential_ref, site_profile_id, max_concurrency, status)
+         VALUES ($1,$2,$3,1,'active')`,
+        [TENANT_A, CREDENTIAL_REF_ABORT, SITE],
+      );
+      await c.query(
+        `INSERT INTO credential_leases (tenant_id, credential_ref, site_profile_id, slot_no, run_id, status, locked_until)
+         VALUES ($1,$2,$3,0,$4,'active', now() + interval '5 minutes')`,
+        [TENANT_A, CREDENTIAL_REF_ABORT, SITE, RUN_DRAIN],
+      );
+    });
     console.log("seeded runtime abort finalization fixtures");
 
     const worker = new PgRuntimeWorker(pool, { workerId: WORKER, runAbortDrainer: drainer, runAbortTimeoutMs: 4321 });
@@ -256,6 +285,7 @@ async function main(): Promise<void> {
     check("run_abort drained -> cancelled", (await runStatus(pool, RUN_DRAIN)) === "cancelled");
     check("run_abort drained emits run.cancelled once", (await eventCount(pool, RUN_DRAIN)) === 1);
     check("run_abort drained expires lease", (await leaseState(pool, LEASE_DRAIN)) === "expired");
+    check("run_abort drained releases credential lease", (await credentialLeaseStatus(pool, RUN_DRAIN)) === "released");
     check("run_abort drainer sees timeout", drainCalls[0]?.timeoutMs === 4321, JSON.stringify(drainCalls[0]));
 
     const repeat = await worker.handle({

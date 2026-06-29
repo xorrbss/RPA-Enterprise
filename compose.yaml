@@ -1,0 +1,189 @@
+name: rpa-enterprise
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rpa}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD for the local compose database}
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-rpa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - rpa_pgdata:/var/lib/postgresql/data
+
+  role-bootstrap:
+    image: rpa-runtime:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-rpa}
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      RPA_MIGRATOR_DB_USER: ${RPA_MIGRATOR_DB_USER:-rpa_migrator}
+      RPA_MIGRATOR_DB_PASSWORD: ${RPA_MIGRATOR_DB_PASSWORD:?set RPA_MIGRATOR_DB_PASSWORD}
+      RPA_APP_DB_USER: ${RPA_APP_DB_USER:-rpa_app}
+      RPA_APP_DB_PASSWORD: ${RPA_APP_DB_PASSWORD:?set RPA_APP_DB_PASSWORD}
+      RPA_LIFECYCLE_BYPASS_DB_USER: ${RPA_LIFECYCLE_BYPASS_DB_USER:-rpa_lifecycle_bypass}
+      RPA_LIFECYCLE_BYPASS_DB_PASSWORD: ${RPA_LIFECYCLE_BYPASS_DB_PASSWORD:?set RPA_LIFECYCLE_BYPASS_DB_PASSWORD}
+    command:
+      - sh
+      - -ec
+      - |
+        psql -v ON_ERROR_STOP=1 -f db/roles.sql
+        psql -v ON_ERROR_STOP=1 \
+          -v migrator_user="$$RPA_MIGRATOR_DB_USER" \
+          -v migrator_password="$$RPA_MIGRATOR_DB_PASSWORD" \
+          -v app_user="$$RPA_APP_DB_USER" \
+          -v app_password="$$RPA_APP_DB_PASSWORD" \
+          -v lifecycle_user="$$RPA_LIFECYCLE_BYPASS_DB_USER" \
+          -v lifecycle_password="$$RPA_LIFECYCLE_BYPASS_DB_PASSWORD" \
+          -c "ALTER ROLE :\"migrator_user\" LOGIN PASSWORD :'migrator_password'; ALTER ROLE :\"app_user\" LOGIN PASSWORD :'app_password'; ALTER ROLE :\"lifecycle_user\" LOGIN PASSWORD :'lifecycle_password';"
+    restart: "no"
+
+  migrate:
+    image: rpa-runtime:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      role-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-rpa}
+      PGUSER: ${RPA_MIGRATOR_DB_USER:-rpa_migrator}
+      PGPASSWORD: ${RPA_MIGRATOR_DB_PASSWORD:?set RPA_MIGRATOR_DB_PASSWORD}
+    command: ["node", "scripts/db-migrate.mjs", "--baseline-existing", "--graphile-worker", "--smoke", "--require-non-bypass"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rpa-runtime:local
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      RUN_MODE: api
+      RPA_ENV: ${RPA_ENV:-local}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-rpa}
+      PGUSER: ${RPA_APP_DB_USER:-rpa_app}
+      PGPASSWORD: ${RPA_APP_DB_PASSWORD:?set RPA_APP_DB_PASSWORD}
+      PORT: "8080"
+      HEALTH_PORT: "8081"
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET:?set JWT_HS256_SECRET to at least 32 characters}
+      SIGNED_COMMAND_REGISTRY_MODE: ${SIGNED_COMMAND_REGISTRY_MODE:-deny_all}
+      API_LOG_LEVEL: ${API_LOG_LEVEL:-info}
+      OTEL_EXPORTER: ${OTEL_EXPORTER:-console}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}
+      SCENARIO_GENERATION_LLM_V1_ENABLED: ${SCENARIO_GENERATION_LLM_V1_ENABLED:-false}
+      VISUAL_EVIDENCE_VIDEO_ENABLED: ${VISUAL_EVIDENCE_VIDEO_ENABLED:-false}
+      GATEWAY_ARTIFACT_DIR: /var/lib/rpa/artifacts
+    ports:
+      - "${RPA_API_PORT:-8080}:8080"
+      - "${RPA_HEALTH_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8081/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - rpa_artifacts:/var/lib/rpa/artifacts
+
+  worker:
+    profiles: ["worker"]
+    image: rpa-runtime:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      lifecycle-worker:
+        condition: service_started
+    environment:
+      RUN_MODE: worker
+      ARTIFACT_LIFECYCLE_CONSUMER: external
+      RPA_ENV: ${RPA_ENV:-local}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-rpa}
+      PGUSER: ${RPA_APP_DB_USER:-rpa_app}
+      PGPASSWORD: ${RPA_APP_DB_PASSWORD:?set RPA_APP_DB_PASSWORD}
+      MAINTENANCE_LIFECYCLE_DATABASE_URL: postgresql://${RPA_LIFECYCLE_BYPASS_DB_USER:-rpa_lifecycle_bypass}:${RPA_LIFECYCLE_BYPASS_DB_PASSWORD:?set RPA_LIFECYCLE_BYPASS_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-rpa}
+      GRAPHILE_MIGRATIONS_MODE: external
+      OTEL_EXPORTER: ${OTEL_EXPORTER:-console}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}
+      WORKER_ID: ${WORKER_ID:-10000000-0000-4000-8000-0000000000aa}
+      WORKER_POOL_KEYS: ${WORKER_POOL_KEYS:-}
+      MAINTENANCE_TENANT_IDS: ${MAINTENANCE_TENANT_IDS:-}
+      GRAPHILE_CONCURRENCY: ${GRAPHILE_CONCURRENCY:-1}
+      CHROME_EXECUTABLE_PATH: /usr/bin/chromium
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
+      CODEX_BASE_URL: ${CODEX_BASE_URL:-}
+      CODEX_API_KEY: ${CODEX_API_KEY:-}
+      CODEX_MODEL: ${CODEX_MODEL:-}
+      GATEWAY_ARTIFACT_STORE_MODE: fs
+      GATEWAY_ARTIFACT_DIR: /var/lib/rpa/artifacts
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_MOUNT: ${VAULT_MOUNT:-secret}
+      VAULT_RUNTIME_WORKER_ROLE_ID: ${VAULT_RUNTIME_WORKER_ROLE_ID:-}
+      VAULT_RUNTIME_WORKER_SECRET_ID: ${VAULT_RUNTIME_WORKER_SECRET_ID:-}
+      VISUAL_EVIDENCE_VIDEO_ENABLED: ${VISUAL_EVIDENCE_VIDEO_ENABLED:-false}
+    volumes:
+      - rpa_artifacts:/var/lib/rpa/artifacts
+
+  lifecycle-worker:
+    profiles: ["worker"]
+    image: rpa-runtime:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      RUN_MODE: lifecycle-worker
+      RPA_ENV: ${RPA_ENV:-local}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-rpa}
+      PGUSER: ${RPA_APP_DB_USER:-rpa_app}
+      PGPASSWORD: ${RPA_APP_DB_PASSWORD:?set RPA_APP_DB_PASSWORD}
+      ARTIFACT_LIFECYCLE_DATABASE_URL: postgresql://${RPA_LIFECYCLE_BYPASS_DB_USER:-rpa_lifecycle_bypass}:${RPA_LIFECYCLE_BYPASS_DB_PASSWORD:?set RPA_LIFECYCLE_BYPASS_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-rpa}
+      OTEL_EXPORTER: ${OTEL_EXPORTER:-console}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}
+      ARTIFACT_LIFECYCLE_WORKER_ID: ${ARTIFACT_LIFECYCLE_WORKER_ID:-20000000-0000-4000-8000-0000000000aa}
+      ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: local_fs
+      ARTIFACT_OBJECT_STORE_REF: rpa/${RPA_ENV:-local}/artifact-lifecycle/object_store/local-fs
+      ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: fs-local
+      GATEWAY_ARTIFACT_DIR: /var/lib/rpa/artifacts
+      GRAPHILE_CONCURRENCY: ${ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY:-1}
+    volumes:
+      - rpa_artifacts:/var/lib/rpa/artifacts
+
+volumes:
+  rpa_pgdata:
+  rpa_artifacts:

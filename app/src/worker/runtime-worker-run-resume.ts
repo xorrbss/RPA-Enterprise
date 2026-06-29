@@ -15,6 +15,10 @@ import {
   startBrowserLeaseHeartbeat,
 } from "./runtime-worker-browser-lease";
 import {
+  acquireCredentialLeasesForRun,
+  releaseCredentialLeasesForRun,
+} from "./runtime-worker-credential-lease";
+import {
   isOnlyRestoreSessionPending,
   parseResumeTokenEnvelope,
   requireString,
@@ -50,7 +54,7 @@ import { gateBrowserSessionProvider } from "../executor/browser-session-provider
 import type { ExecutorPlugin } from "../../../ts/core-types";
 import type { PgRuntimeWorkerOptions } from "./runtime-worker";
 
-type RunResumeRow = RunRow & { resume_token: unknown };
+type RunResumeRow = RunRow & { resume_token: unknown; scenario_version_id: string };
 type RunResumeIntent = SessionRestoreInput;
 type RunResumeTxAResult =
   | { kind: "ready"; intent: RunResumeIntent }
@@ -81,10 +85,14 @@ export class WorkerRunResume {
     if (sessionRestorer === undefined) {
       throw new Error("RuntimeWorker: run_resume requires an explicit SessionRestorer");
     }
+    const sessionProvider = gateBrowserSessionProvider(
+      this.options.browserSessionProvider,
+      this.options.allowTestBrowserSessionProvider === true,
+    );
 
     const txA = await withTenantTx(this.pool, tenantId, async (client): Promise<RunResumeTxAResult> => {
       const run = await client.query<RunResumeRow>(
-        `SELECT status, correlation_id::text, resume_token
+        `SELECT status, correlation_id::text, resume_token, scenario_version_id::text AS scenario_version_id
            FROM runs
           WHERE tenant_id = $1::uuid AND id = $2::uuid
           FOR UPDATE`,
@@ -109,11 +117,13 @@ export class WorkerRunResume {
         };
       }
 
+      const plan = await leasePlanResolver(client, { tenantId, runId });
       let lease = await findActiveBrowserLeaseForRun(client, {
         tenantId,
         runId,
         workerId,
       });
+      let acquiredNewLeaseId: string | undefined;
       // 적대리뷰 B4: lease 재사용 분기는 acquireBrowserLease(유일한 서킷 게이트)를 건너뛴다 — resume 도 worker 서킷
       //   격리를 적용한다(open+cooldown 이면 거부). null 분기는 아래 acquireBrowserLease 가 동일 게이트를 수행.
       if (lease !== null && !(await this.runSupport.checkWorkerCircuit(client, workerId))) {
@@ -126,12 +136,27 @@ export class WorkerRunResume {
           run_id: runId,
           correlation_id: job.correlationId ?? row.correlation_id,
         };
-        const acquired = await withSpan(SPAN.browserLeaseAcquire, resumeCommon, {}, async () => {
-          const plan = await leasePlanResolver(client, { tenantId, runId });
-          return this.runSupport.acquireBrowserLease(client, { tenantId, runId, workerId, plan });
-        });
+        const acquired = await withSpan(SPAN.browserLeaseAcquire, resumeCommon, {}, async () =>
+          this.runSupport.acquireBrowserLease(client, { tenantId, runId, workerId, plan }),
+        );
         if (acquired.kind !== "acquired") return { kind: "job_result", result: acquired };
         lease = acquired.leaseId;
+        acquiredNewLeaseId = acquired.leaseId;
+      }
+
+      if (sessionProvider !== undefined && plan !== null) {
+        const credentialLease = await acquireCredentialLeasesForRun(client, {
+          tenantId,
+          runId,
+          scenarioVersionId: row.scenario_version_id,
+          siteProfileId: plan.siteProfileId,
+        });
+        if (credentialLease.kind !== "acquired") {
+          if (acquiredNewLeaseId !== undefined) {
+            await deleteInitReservedBrowserLease(client, { tenantId, leaseId: acquiredNewLeaseId, workerId });
+          }
+          return { kind: "job_result", result: credentialLease };
+        }
       }
 
       if (row.status === "resume_requested") {
@@ -192,6 +217,7 @@ export class WorkerRunResume {
     });
 
     if (txA.kind === "job_result") return txA.result;
+    try {
 
     // 클러스터 C(resume_token reissue): suspend 시 발행한 토큰이 인간 승인 대기(>ttl) 동안 만료됐어도, resume_requested 도달은
     //   R13(human_task.resolved, RBAC 인증 resolve)로만 가능하므로 진본(hmac-valid)·만료 토큰을 fresh TTL 로 재발행해 restore 를
@@ -283,10 +309,6 @@ export class WorkerRunResume {
 
     // Phase C: resume 구동(tx 밖 — 브라우저 작업이 DB 커넥션 점유 금지). handleRunClaim Phase B 와 동일 패턴.
     //   R18/R19 로 running 도달 + provider 주입 시에만 resumeNodeId 부터 재진입 구동. R20(failed_system)·provider 미주입은 전이만.
-    const sessionProvider = gateBrowserSessionProvider(
-      this.options.browserSessionProvider,
-      this.options.allowTestBrowserSessionProvider === true,
-    );
     if (result.kind !== "completed" || sessionProvider === undefined) return result;
     const drive = await withTenantTx(this.pool, tenantId, async (client): Promise<RunClaimDriveInputs | null> => {
       // R18(restore_ok)·R19(login_bypass) 면 running. R20(restore 실패·bypass 불가)은 failed_system — 구동하지 않는다.
@@ -326,10 +348,13 @@ export class WorkerRunResume {
       );
       boundForInitCleanup = await sessionProvider.bind({
         tenantId,
+        runId,
+        correlationId: drive.correlationId,
         leaseId: drive.leaseId,
         siteProfileId: drive.siteProfileId,
         browserIdentityId: drive.browserIdentityId,
         networkPolicyId: drive.networkPolicyId,
+        networkAllowedDomains: drive.networkAllowedDomains,
         isolation: drive.isolation,
         cleanupPolicy: drive.cleanupPolicy,
       });
@@ -428,6 +453,11 @@ export class WorkerRunResume {
       );
     }
     return result;
+    } finally {
+      await withTenantTx(this.pool, tenantId, (c) => releaseCredentialLeasesForRun(c, { tenantId, runId })).catch((e) =>
+        workerLog("error", { at: "runtime-worker", msg: "credential lease release failed after run_resume", run_id: runId, correlation_id: txA.intent.correlationId, tenant_id: tenantId, worker_id: workerId, error: errText(e) }),
+      );
+    }
   }
 
   /**

@@ -1,0 +1,49 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpa-owner-approved-egress
+  namespace: rpa-system
+  labels:
+    app.kubernetes.io/name: rpa-egress
+    app.kubernetes.io/part-of: rpa-enterprise
+  annotations:
+    rpa.example.com/owner-decision-required: managed-postgresql,vault,object-store,otlp-collector,llm-provider,cidr-and-port-approval
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: rpa-enterprise
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: OWNER_DECISION_REQUIRED_MANAGED_POSTGRES_CIDR
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - ipBlock:
+            cidr: OWNER_DECISION_REQUIRED_VAULT_CIDR
+      ports:
+        - protocol: TCP
+          port: 8200
+    - to:
+        - ipBlock:
+            cidr: OWNER_DECISION_REQUIRED_OBJECT_STORE_CIDR
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: OWNER_DECISION_REQUIRED_OTLP_COLLECTOR_CIDR
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - to:
+        - ipBlock:
+            cidr: OWNER_DECISION_REQUIRED_LLM_PROVIDER_CIDR
+      ports:
+        - protocol: TCP
+          port: 443
