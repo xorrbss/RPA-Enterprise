@@ -19,6 +19,7 @@ import { SITE_RISKS } from "./filters";
 import type { SiteItem } from "../api/types";
 import { AuthReadinessPanel } from "./security/AuthReadinessPanel";
 import { AiGovernanceEvidencePanel } from "./security/AiGovernanceEvidencePanel";
+import { AiGovernanceRuntimePolicyPanel } from "./security/AiGovernanceRuntimePolicyPanel";
 import { RbacMatrixPanel } from "./security/RbacMatrixPanel";
 import { ConcurrencyPolicyPanel } from "./security/ConcurrencyPolicyPanel";
 import { WorkerPoolPanel } from "./security/WorkerPoolPanel";
@@ -45,6 +46,7 @@ export function SecurityView(): JSX.Element {
     <>
     <AuthReadinessPanel />
     <RbacMatrixPanel />
+    {can("ai_governance.read") && <AiGovernanceRuntimePolicyPanel />}
     {can("ai_governance.read") && <AiGovernanceEvidencePanel />}
     {can("ops_alert.read") && <ConcurrencyPolicyPanel />}
     {can("worker_pool.manage") && <WorkerPoolPanel />}

@@ -1,6 +1,9 @@
 image:
-  repository: ghcr.io/example/rpa-runtime
-  tag: replace-me
+  # Fail-closed chart defaults. Release values must set repository plus an
+  # immutable sha256 digest after SBOM/provenance/signature verification.
+  repository: ""
+  tag: ""
+  digest: ""
   pullPolicy: IfNotPresent
 
 namespaceOverride: ""

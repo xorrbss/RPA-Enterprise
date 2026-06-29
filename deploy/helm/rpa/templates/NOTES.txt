@@ -1,8 +1,10 @@
 RPA Enterprise chart rendered.
 
 Before install:
+- Render with release values that set image.repository and image.digest; digest must be immutable sha256 and tied to the approved release artifact.
+- Verify SBOM, provenance attestation, and image signature before promoting the values file into a platform-owned deployment repository.
 - Create the Secret named {{ .Values.secrets.existingSecret }} (default: rpa-runtime-secrets) from an external SecretStore or platform secret manager.
 - Apply db/roles.sql out-of-band and provision rpa_migrator, rpa_app, and rpa_lifecycle_bypass credentials.
 - Run the rpa-migrate Job before allowing API/worker readiness.
 - Keep ingress.enabled=false until the platform owner supplies className, host, TLS secret, and matching NetworkPolicy source approval.
-- Default egress is deny-all plus DNS. Populate networkPolicy.egress.ownerApprovedCidrs only with owner-approved destination CIDRs and ports for PostgreSQL, Vault, object storage, OTLP, and LLM providers.
+- Default egress is deny-all plus DNS. Populate networkPolicy.egress.ownerApprovedCidrs only with owner-approved destination CIDRs and ports for PostgreSQL, Vault, object storage, OTLP, and LLM providers; never use broad internet CIDRs.

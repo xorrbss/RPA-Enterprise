@@ -204,6 +204,7 @@ export async function persistGenerationRun(
       asOf,
       correlationId,
       model,
+      configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
     });
     nextStatus = "run_queued";
   }
@@ -311,6 +312,7 @@ export async function persistGeneration(
         asOf,
         correlationId,
         model: plan.request.model ?? null,
+        configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
       });
       status = "run_queued";
     } else {
@@ -417,4 +419,3 @@ export function mapGenerationRow(row: ScenarioGenerationRow): Record<string, unk
 export function encodeListCursor(row: ScenarioGenerationRow): string {
   return Buffer.from(JSON.stringify({ created_at: row.created_at, id: row.id }), "utf8").toString("base64url");
 }
-

@@ -41,6 +41,7 @@ const baselineCoreTables = [
   "network_policies",
   "gateway_policies",
   "ai_governance_evidence",
+  "ai_runtime_policies",
   "control_plane_idempotency_keys",
   "scenarios",
   "scenario_versions",

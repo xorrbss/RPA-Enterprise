@@ -788,7 +788,9 @@ function assertSafeMetadata(value: unknown, field: string, depth: number): void 
     const entries = Object.entries(value);
     if (entries.length > 50) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_object_too_large", field });
     for (const [key, child] of entries) {
-      assertSafeString(key, `${field}.key`);
+      if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key) || forbiddenEvidenceKey(key)) {
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_secret_or_endpoint_key_forbidden", field: `${field}.${key}` });
+      }
       assertSafeMetadata(child, `${field}.${key}`, depth + 1);
     }
   }
@@ -823,6 +825,10 @@ function assertSafeString(value: string, field: string): void {
   if (/\bbearer\s+[a-z0-9._~+/=-]{8,}/i.test(value) || /\b(token|password|secret)=/i.test(value)) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "secret_material_forbidden", field });
   }
+}
+
+function forbiddenEvidenceKey(key: string): boolean {
+  return /(^|[_.-])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization|cookie|webhook_url|endpoint_url|url|dsn|smtp|raw_payload|request_payload|response_payload|payload|body|raw_body|provider_response|provider_body)([_.-]|$)/i.test(key);
 }
 
 function requireIdempotencyHeader(raw: unknown): string {

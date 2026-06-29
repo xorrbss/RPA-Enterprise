@@ -35,6 +35,7 @@ type Transport = "sse" | "sync";
 type Usage = LLMResponse["usage"];
 type FinishReason = LLMResponse["finishReason"];
 const PROMPT_INSPECT_AUDIT_RETENTION_DAYS = 90;
+const AI_GOVERNANCE_AUDIT_RETENTION_DAYS = 365;
 
 /** §5 structured output 검증 포트(ajv 등 실제 검증기 주입 — 재구현 금지). */
 export interface StructuredOutputValidator {
@@ -54,6 +55,19 @@ export interface LlmGatewayConfig {
   repairAttempts: number; // ops llm.repair_attempts (1): MALFORMED/스키마 불일치 repair
 }
 
+export interface AiGovernanceGatewayDecision {
+  readonly kind: "allow" | "warn" | "block";
+  readonly mode: "observe" | "warn" | "block" | "not_configured" | "not_applicable";
+  readonly reason: string;
+  readonly evidenceRefs: readonly string[];
+  readonly policyDecisionRef?: string;
+  readonly blockingRequirements: readonly string[];
+}
+
+export interface AiGovernanceGatewayGuard {
+  evaluate(req: LLMRequest): Promise<AiGovernanceGatewayDecision>;
+}
+
 export interface LlmGatewayDeps {
   primary: LLMBackendAdapter;
   fallback?: LLMBackendAdapter;
@@ -64,6 +78,7 @@ export interface LlmGatewayDeps {
   securityAudit: DurableSecurityAuditDecisionWriter;
   /** security-contracts §4 step2(차단 지점, Gateway 소유): adapter 호출 전 user 메시지 redaction + §3 injection 탐지. */
   redactionBoundary: GatewayRedactionBoundary;
+  aiGovernance?: AiGovernanceGatewayGuard;
   config: LlmGatewayConfig;
 }
 
@@ -149,6 +164,14 @@ export class LlmGateway {
     const meta = req.metadata;
     const common: CommonSpanAttrs = { tenant_id: meta.tenantId, run_id: meta.runId, correlation_id: meta.correlationId };
     try {
+      if (this.deps.aiGovernance !== undefined) {
+        const aiGovernanceDecision = await this.deps.aiGovernance.evaluate(req);
+        await this.recordAiGovernanceDecision(req, aiGovernanceDecision);
+        if (aiGovernanceDecision.kind === "block") {
+          throw new GatewayError("AI_GOVERNANCE_POLICY_BLOCKED", `AI governance blocked: ${aiGovernanceDecision.reason}`);
+        }
+      }
+
       return await withSpan(
         SPAN.llmGatewayCall,
         common,
@@ -169,8 +192,10 @@ export class LlmGateway {
         },
       );
     } catch (e) {
-      if (idem && callId && e instanceof GatewayError) {
-        await idem.fail(callId, e.adapterCode ?? "BACKEND_ERROR");
+      if (idem && callId) {
+        await idem.fail(callId, e instanceof GatewayError ? e.adapterCode ?? "BACKEND_ERROR" : "BACKEND_ERROR");
+      }
+      if (e instanceof GatewayError) {
         if (e.stagehandCallId === undefined) {
           throw new GatewayError(e.code, e.message, e.adapterCode, callId);
         }
@@ -425,6 +450,51 @@ export class LlmGateway {
       );
     } catch {
       throw new GatewayError("CONTROL_PLANE_INTERNAL_ERROR", "prompt inspect audit append failed closed");
+    }
+  }
+
+  private async recordAiGovernanceDecision(
+    req: LLMRequest,
+    result: AiGovernanceGatewayDecision,
+  ): Promise<void> {
+    const occurredAt = new Date();
+    const actor = req.metadata.auditActor ?? runtimePromptInspectActor();
+    const outcome = result.kind === "block" ? "blocked" : "allow";
+    try {
+      await this.deps.securityAudit.recordDecision(
+        {
+          tenantId: req.metadata.tenantId,
+          actor,
+          action: "ai_governance.enforce",
+          outcome,
+          resource: { kind: "run", id: req.metadata.runId },
+          reason: result.reason,
+          correlationId: req.metadata.correlationId as CorrelationId,
+          idempotencyKey: randomUUID() as IdempotencyKey,
+          occurredAt: occurredAt.toISOString() as IsoDateTime,
+          retentionUntil: new Date(
+            occurredAt.getTime() + AI_GOVERNANCE_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+          ).toISOString() as IsoDateTime,
+          payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+          failClosed: true,
+          payload: {
+            decision_kind: "ai_governance.enforce",
+            enforcement_result: result.kind,
+            mode: result.mode,
+            primitive: req.metadata.primitive,
+            step_id: req.metadata.stepId,
+            attempt: req.metadata.attempt,
+            prompt_template_version: req.promptTemplateVersion,
+            model: req.model,
+            evidence_refs: result.evidenceRefs,
+            blocking_requirements: result.blockingRequirements,
+            policy_decision_ref: result.policyDecisionRef ?? null,
+          },
+        },
+        { ai_governance: result.kind, mode: result.mode },
+      );
+    } catch {
+      throw new GatewayError("CONTROL_PLANE_INTERNAL_ERROR", "AI governance audit append failed closed");
     }
   }
 }

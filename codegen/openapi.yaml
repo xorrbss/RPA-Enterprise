@@ -61,6 +61,8 @@ tags:
     description: 산출물 조회 — redaction + RBAC 게이트 (api-surface §5)
   - name: GatewayPolicy
     description: LLM 게이트웨이 정책 (api-surface §6)
+  - name: AIGovernance
+    description: Metadata-only AI governance evidence and runtime enforcement policy.
   - name: Sites
     description: 사이트 risk 승인 (api-surface §7)
 
@@ -85,6 +87,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthReadiness'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ai-governance/runtime-policy:
+    get:
+      tags: [AIGovernance]
+      operationId: getAiRuntimePolicy
+      summary: Get AI runtime enforcement policy
+      description: >
+        Return the tenant AI runtime enforcement policy. References are opaque metadata only; raw prompts,
+        model outputs, endpoint URLs, tokens, passwords, provider credentials, and resolved SecretRef values
+        are never returned.
+      responses:
+        '200':
+          description: AI runtime policy envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiRuntimePolicyEnvelope'
+        default:
+          $ref: '#/components/responses/Error'
+    put:
+      tags: [AIGovernance]
+      operationId: upsertAiRuntimePolicy
+      summary: Upsert AI runtime enforcement policy
+      description: >
+        Configure tenant AI runtime enforcement as observe, warn, or block. Block mode fails closed at run
+        creation and LLM Gateway call time when required model, prompt, eval, or cost-control evidence is
+        missing, expired, deferred, or failed outside an approved grace window.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiRuntimePolicyRequest'
+      responses:
+        '200':
+          description: AI runtime policy updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiRuntimePolicy'
+        '201':
+          description: AI runtime policy created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiRuntimePolicy'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
 
@@ -3781,7 +3839,7 @@ components:
     ErrorCode:
       type: string
       description: >
-        ts/error-catalog.ts ErrorCode(48개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
+        ts/error-catalog.ts ErrorCode(49개). DEAD_LETTER는 enum에 포함되나 상태 통지 전용으로
         ApiError 응답 code로는 반환되지 않는다(api-surface §0.2).
       enum:
         - RUN_NOT_FOUND
@@ -3814,6 +3872,7 @@ components:
         - LLM_RATE_LIMITED
         - LLM_BACKEND_UNAVAILABLE
         - LLM_CONNECTION_FAILED
+        - AI_GOVERNANCE_POLICY_BLOCKED
         - EXTRACT_SCHEMA_INVALID
         - VERIFY_FAILED
         - EMPTY_RESULT_NO_WITNESS
@@ -5174,6 +5233,84 @@ components:
           type: integer
           minimum: 1
           maximum: 100
+    AiRuntimePolicyMode:
+      type: string
+      enum: [observe, warn, block]
+    AiRuntimePolicy:
+      type: object
+      additionalProperties: false
+      required: [policy_id, mode, subject_mapping_ref, grace_until, emergency_override_owner_ref, audit_action, policy_decision_ref, evidence_ref, updated_by, created_at, updated_at]
+      properties:
+        policy_id:
+          type: string
+          minLength: 1
+        mode:
+          $ref: '#/components/schemas/AiRuntimePolicyMode'
+        subject_mapping_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        grace_until:
+          type: [string, "null"]
+          format: date-time
+        emergency_override_owner_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        audit_action:
+          type: string
+          const: ai_governance.enforce
+        policy_decision_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        evidence_ref:
+          type: [string, "null"]
+          maxLength: 500
+        updated_by:
+          type: string
+          minLength: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AiRuntimePolicyEnvelope:
+      type: object
+      additionalProperties: false
+      required: [configured]
+      properties:
+        configured:
+          type: boolean
+        policy:
+          $ref: '#/components/schemas/AiRuntimePolicy'
+    AiRuntimePolicyRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, subject_mapping_ref, emergency_override_owner_ref, policy_decision_ref]
+      properties:
+        mode:
+          $ref: '#/components/schemas/AiRuntimePolicyMode'
+        subject_mapping_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+          description: Opaque mapping reference only; raw URLs and secrets are forbidden.
+        grace_until:
+          type: [string, "null"]
+          format: date-time
+        emergency_override_owner_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        policy_decision_ref:
+          type: string
+          minLength: 1
+          maxLength: 300
+        evidence_ref:
+          type: [string, "null"]
+          maxLength: 500
     AiGovernanceEvidenceType:
       type: string
       description: >
@@ -5459,7 +5596,7 @@ components:
         gate_id:
           type: string
           description: >
-            Gate identifier. Owner evidence gates include `external_alert_delivery`,
+            Gate identifier. Required gates include `auth_sso_readiness`. Owner evidence gates include `external_alert_delivery`,
             `managed_backup_restore_drill`, `slo_oncall_signoff`, `support_training_completion`, and
             `observability_telemetry_wiring`.
           minLength: 1
@@ -5487,7 +5624,7 @@ components:
         controlled_prod_ready:
           type: boolean
           description: >
-            True only when all runtime and owner/platform gates pass, including support training completion.
+            True only when all runtime and owner/platform gates pass, including auth SSO readiness and support training completion.
         status:
           $ref: '#/components/schemas/ProductionReadinessStatus'
         blocker_count:
@@ -5580,10 +5717,55 @@ components:
           minimum: 0
         stale:
           type: boolean
+    ProductionReadinessAiGovernanceRequirementSignal:
+      type: object
+      additionalProperties: false
+      required: [evidence_type, subject_ref, status]
+      properties:
+        evidence_type:
+          type: string
+          enum: [model_registry, prompt_registry, eval_result, cost_control]
+        subject_ref:
+          type: string
+        status:
+          type: string
+          enum: [valid, missing, failed, expired, deferred]
+    ProductionReadinessAiGovernanceSignal:
+      type: object
+      additionalProperties: false
+      required: [ai_runtime_enabled, models, configured_models, prompt_template_versions, configured_prompt_template_versions]
+      properties:
+        ai_runtime_enabled:
+          type: boolean
+        policy_mode:
+          type: [string, "null"]
+          enum: [observe, warn, block, null]
+        grace_active:
+          type: boolean
+        models:
+          type: array
+          items:
+            type: string
+        configured_models:
+          type: array
+          items:
+            type: string
+        prompt_template_versions:
+          type: array
+          items:
+            type: string
+        configured_prompt_template_versions:
+          type: array
+          items:
+            type: string
+        requirements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductionReadinessAiGovernanceRequirementSignal'
     ProductionReadinessSignals:
       type: object
       additionalProperties: false
-      required: [ops_health, bot_pool, audit_verifier]
+      required: [ops_health, bot_pool, audit_verifier, ai_governance]
       properties:
         ops_health:
           $ref: '#/components/schemas/OpsHealth'
@@ -5591,6 +5773,8 @@ components:
           $ref: '#/components/schemas/ProductionReadinessBotPoolSignal'
         audit_verifier:
           $ref: '#/components/schemas/ProductionReadinessAuditVerifierSignal'
+        ai_governance:
+          $ref: '#/components/schemas/ProductionReadinessAiGovernanceSignal'
     ProductionReadiness:
       type: object
       additionalProperties: false

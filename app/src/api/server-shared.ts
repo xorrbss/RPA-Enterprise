@@ -144,6 +144,8 @@ export interface ApiServerDeps {
   selectorProbe?: SelectorProbeProvider;
   /** Public auth readiness metadata for security review surfaces. Secrets are never exposed. */
   authReadiness?: AuthReadinessConfig;
+  aiGovernanceConfiguredModels?: readonly string[];
+  aiGovernanceConfiguredPromptVersions?: readonly string[];
   /**
    * Fastify 구조화 로거 설정(선택). 미지정 시 `false`(무음) — 테스트/내장 경계는 조용히 유지된다. 프로덕션(main.ts)은
    * pino 설정을 주입해 authz 거부·미분류 에러 경로의 request.log.warn/error(correlation_id·code 포함)를 실제로 방출한다.

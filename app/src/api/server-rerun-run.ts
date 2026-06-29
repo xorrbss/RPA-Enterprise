@@ -105,6 +105,7 @@ export async function rerunRun(
         asOf,
         correlationId: request.correlationId,
         model: row.model,
+        configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
       });
       await client.query(
         `INSERT INTO run_reruns

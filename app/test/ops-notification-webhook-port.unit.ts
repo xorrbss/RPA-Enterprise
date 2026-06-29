@@ -130,6 +130,30 @@ async function main(): Promise<void> {
     redirect.kind === "permanent_failed" && redirect.reason === "webhook_host_not_allowed" && redirectCalls.length === 1,
     JSON.stringify({ redirect, redirectCalls }));
 
+  const queryCalls: typeof calls = [];
+  const queryPort = new SecretRefWebhookNotificationPort({
+    secrets: new FakeSecretBoundary("https://hooks.example.com/services/T000?token=inline"),
+    fetchImpl: async (url, init) => {
+      queryCalls.push({ url, init });
+      return { status: 202, headers: headers({}) };
+    },
+  });
+  const queryEndpoint = await queryPort.deliver({
+    tenantId: "00000000-0000-4000-8000-000000000001" as never,
+    correlationId: "00000000-0000-4000-8000-000000000002" as never,
+    attemptId: "10000000-0000-4000-8000-000000000004",
+    alertId: "bot_pool:browser-default",
+    endpointSecretRef: "secret://rpa/test/notification-sender/notification/webhook/ops-primary" as SecretRef,
+    routePolicyRef: "ops-alerts-webhook-primary",
+    recipientGroupRef: "ops-primary-oncall",
+    allowedHosts: ["hooks.example.com"],
+    payload: { alert_id: "bot_pool:browser-default" },
+    attemptNo: 1,
+  });
+  check("resolved webhook endpoint query string fails before fetch",
+    queryEndpoint.kind === "permanent_failed" && queryEndpoint.reason === "webhook_endpoint_invalid" && queryCalls.length === 0,
+    JSON.stringify({ queryEndpoint, queryCalls }));
+
   if (failures > 0) {
     console.error(`FAIL: ${failures} ops notification webhook port check(s) failed`);
     process.exit(1);

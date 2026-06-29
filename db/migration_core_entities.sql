@@ -296,6 +296,39 @@ CREATE INDEX idx_ai_governance_evidence_retention
   ON ai_governance_evidence (retention_until)
   WHERE legal_hold = false AND deleted_at IS NULL;
 
+-- ai_runtime_policies -- tenant-scoped enforcement mode for AI/LLM runtime use.
+--   This closes the policy decision required by api-surface/security-contracts:
+--   observe/warn/block, subject mapping, grace, override owner, and audit action.
+CREATE TABLE ai_runtime_policies (
+  id                           uuid        PRIMARY KEY,
+  tenant_id                    uuid        NOT NULL,
+  mode                         text        NOT NULL CHECK (mode IN ('observe','warn','block')),
+  subject_mapping_ref          text        NOT NULL CHECK (length(trim(subject_mapping_ref)) > 0 AND length(subject_mapping_ref) <= 300),
+  grace_until                  timestamptz,
+  emergency_override_owner_ref text        NOT NULL CHECK (length(trim(emergency_override_owner_ref)) > 0 AND length(emergency_override_owner_ref) <= 300),
+  audit_action                 text        NOT NULL DEFAULT 'ai_governance.enforce'
+                                         CHECK (audit_action = 'ai_governance.enforce'),
+  policy_decision_ref          text        NOT NULL CHECK (length(trim(policy_decision_ref)) > 0 AND length(policy_decision_ref) <= 300),
+  evidence_ref                 text        CHECK (evidence_ref IS NULL OR (length(trim(evidence_ref)) > 0 AND length(evidence_ref) <= 500)),
+  updated_by                   text        NOT NULL CHECK (length(trim(updated_by)) > 0),
+  created_at                   timestamptz NOT NULL DEFAULT now(),
+  updated_at                   timestamptz NOT NULL DEFAULT now(),
+  deleted_at                   timestamptz,
+  CHECK (grace_until IS NULL OR grace_until > updated_at),
+  CHECK (
+    subject_mapping_ref !~* '(https?://|hooks\.slack\.com|bearer[[:space:]]+[a-z0-9._~+/=-]{8,}|(^|[^a-z0-9_])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:]]{4,})'
+    AND emergency_override_owner_ref !~* '(https?://|hooks\.slack\.com|bearer[[:space:]]+[a-z0-9._~+/=-]{8,}|(^|[^a-z0-9_])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:]]{4,})'
+    AND policy_decision_ref !~* '(https?://|hooks\.slack\.com|bearer[[:space:]]+[a-z0-9._~+/=-]{8,}|(^|[^a-z0-9_])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:]]{4,})'
+    AND COALESCE(evidence_ref, '') !~* '(https?://|hooks\.slack\.com|bearer[[:space:]]+[a-z0-9._~+/=-]{8,}|(^|[^a-z0-9_])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[[:space:]]*[:=][[:space:]]*[^[:space:]]{4,})'
+  )
+);
+CREATE UNIQUE INDEX uq_ai_runtime_policies_active_tenant
+  ON ai_runtime_policies (tenant_id)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_ai_runtime_policies_tenant_updated
+  ON ai_runtime_policies (tenant_id, updated_at DESC)
+  WHERE deleted_at IS NULL;
+
 CREATE TABLE control_plane_idempotency_keys (
   id               uuid        PRIMARY KEY,
   tenant_id        uuid        NOT NULL,
@@ -1836,6 +1869,7 @@ ALTER TABLE ops_notification_deliveries ADD CONSTRAINT uq_ops_notification_deliv
 ALTER TABLE ops_notification_attempts ADD CONSTRAINT uq_ops_notification_attempts_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE automation_adoption_evidence ADD CONSTRAINT uq_automation_adoption_evidence_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE ai_governance_evidence ADD CONSTRAINT uq_ai_governance_evidence_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE ai_runtime_policies ADD CONSTRAINT uq_ai_runtime_policies_tenant_id_id UNIQUE (tenant_id, id);
 
 ALTER TABLE integration_handoff_receipts
   ADD CONSTRAINT fk_integration_handoff_receipts_handoff_tenant
@@ -2123,6 +2157,7 @@ BEGIN
     'ops_notification_attempts',
     'production_readiness_evidence',
     'ai_governance_evidence',
+    'ai_runtime_policies',
     'dead_letter',
     'action_plan_cache',
     'stagehand_calls',

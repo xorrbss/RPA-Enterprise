@@ -1,5 +1,10 @@
 import type { ApiClient } from "../src/api/client";
-import type { AiGovernanceEvidence, AutomationPerformanceRoiSourceLineage, ScenarioCertification } from "../src/api/types";
+import type {
+  AiGovernanceEvidence,
+  AiGovernanceRuntimePolicy,
+  AutomationPerformanceRoiSourceLineage,
+  ScenarioCertification,
+} from "../src/api/types";
 
 const automationPerformanceRoiSourceLineage: AutomationPerformanceRoiSourceLineage = {
   idea_count: 2,
@@ -43,6 +48,20 @@ const certifiedScenarioVersion: ScenarioCertification = {
   revoked_at: null,
   revoke_reason: null,
   valid_for_prod: true,
+};
+
+const aiGovernanceRuntimePolicy: AiGovernanceRuntimePolicy = {
+  policy_id: "ai-runtime-policy-default",
+  mode: "warn",
+  subject_mapping_ref: "subject-map:ai-runtime/default",
+  grace_until: "2026-09-27T00:00:00.000Z",
+  emergency_override_owner_ref: "team:ai-governance-oncall",
+  audit_action: "ai_governance.enforce",
+  policy_decision_ref: "policy-decision:ai-governance/runtime-enforcement",
+  evidence_ref: "artifact:ai-governance/runtime-policy",
+  updated_by: "admin-a",
+  created_at: "2026-06-29T00:00:00.000Z",
+  updated_at: "2026-06-29T00:01:00.000Z",
 };
 
 // 테스트용 fake ApiClient(백엔드 무의존). 뷰는 동일 포트로 주입되므로 fixture만 갈아끼운다.
@@ -527,6 +546,20 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       recorded_by: "admin-a",
       recorded_at: "2026-06-29T00:10:00.000Z",
       legal_hold: body.legal_hold ?? false,
+    }),
+    getAiGovernanceRuntimePolicy: async () => ({ configured: true, policy: aiGovernanceRuntimePolicy }),
+    upsertAiGovernanceRuntimePolicy: async (body) => ({
+      policy_id: aiGovernanceRuntimePolicy.policy_id,
+      mode: body.mode,
+      subject_mapping_ref: body.subject_mapping_ref,
+      grace_until: body.grace_until ?? null,
+      emergency_override_owner_ref: body.emergency_override_owner_ref,
+      audit_action: "ai_governance.enforce",
+      policy_decision_ref: body.policy_decision_ref,
+      evidence_ref: body.evidence_ref ?? null,
+      updated_by: "admin-a",
+      created_at: aiGovernanceRuntimePolicy.created_at,
+      updated_at: "2026-06-29T00:10:00.000Z",
     }),
     listBotPools: async () => ({
       items: [

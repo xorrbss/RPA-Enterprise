@@ -9,7 +9,7 @@ import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
 import { appendGovernanceAudit } from "./role-assignments";
-import { readProductionReadiness } from "./production-readiness";
+import { readProductionReadiness, type ProductionReadinessConfig } from "./production-readiness";
 import { assertScenarioVersionCertifiedForProd, mapScenarioCertification, type ScenarioCertificationRow } from "./scenario-certification";
 import { parseIfMatch, signedCommandRefsFor, UUID_RE } from "./scenarios-support";
 import { requirePrincipal, type ApiServerDeps } from "./server";
@@ -86,6 +86,8 @@ interface RejectBody {
 }
 
 export function registerScenarioReleaseRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
+  const readinessConfig = productionReadinessConfig(deps);
+
   app.get<{ Params: { scenarioId: string } }>(
     "/v1/scenarios/:scenarioId/environment-bindings",
     { config: { rbacAction: "scenario_release.read" } },
@@ -181,7 +183,7 @@ export function registerScenarioReleaseRoutes(app: FastifyInstance, deps: ApiSer
         request,
         "submitScenarioRelease",
         `/v1/scenario-releases/${releaseId}/submit`,
-        (client, tenantId) => transitionRelease(client, request, tenantId, releaseId, "submitted", body.reason),
+        (client, tenantId) => transitionRelease(client, request, tenantId, releaseId, "submitted", body.reason, readinessConfig),
       );
       reply.code(result.status).send(result.body);
     },
@@ -199,7 +201,7 @@ export function registerScenarioReleaseRoutes(app: FastifyInstance, deps: ApiSer
         request,
         "approveScenarioRelease",
         `/v1/scenario-releases/${releaseId}/approve`,
-        (client, tenantId) => transitionRelease(client, request, tenantId, releaseId, "approved", body.reason),
+        (client, tenantId) => transitionRelease(client, request, tenantId, releaseId, "approved", body.reason, readinessConfig),
       );
       reply.code(result.status).send(result.body);
     },
@@ -217,7 +219,7 @@ export function registerScenarioReleaseRoutes(app: FastifyInstance, deps: ApiSer
         request,
         "rejectScenarioRelease",
         `/v1/scenario-releases/${releaseId}/reject`,
-        (client, tenantId) => transitionRelease(client, request, tenantId, releaseId, "rejected", body.reason),
+        (client, tenantId) => transitionRelease(client, request, tenantId, releaseId, "rejected", body.reason, readinessConfig),
       );
       reply.code(result.status).send(result.body);
     },
@@ -237,7 +239,7 @@ export function registerScenarioReleaseRoutes(app: FastifyInstance, deps: ApiSer
         request,
         "deployScenarioRelease",
         `/v1/scenario-releases/${releaseId}/deploy`,
-        (client, tenantId) => deployRelease(client, request, tenantId, releaseId, expectedVersion, signedCommandRefs),
+        (client, tenantId) => deployRelease(client, request, tenantId, releaseId, expectedVersion, signedCommandRefs, readinessConfig),
       );
       reply.code(result.status).send(result.body);
     },
@@ -311,6 +313,7 @@ async function transitionRelease(
   releaseId: string,
   next: Extract<ReleaseStatus, "submitted" | "approved" | "rejected">,
   reason: string | null,
+  readinessConfig: ProductionReadinessConfig,
 ): Promise<CommandResponse> {
   const actor = requirePrincipal(request);
   const release = await loadRelease(client, tenantId, releaseId);
@@ -325,7 +328,7 @@ async function transitionRelease(
   }
   if (next === "approved" && release.target_environment === "prod") {
     await assertScenarioVersionCertifiedForProd(client, tenantId, release.scenario_id, release.source_version_id);
-    await assertControlledProdReady(client, tenantId);
+    await assertControlledProdReady(client, tenantId, readinessConfig);
   }
   const eventType = next === "approved" ? "approved" : next === "rejected" ? "rejected" : "submitted";
   const auditAction = next === "approved"
@@ -370,6 +373,7 @@ async function deployRelease(
   releaseId: string,
   expectedVersion: number,
   signedCommandRefs: readonly string[] | undefined,
+  readinessConfig: ProductionReadinessConfig,
 ): Promise<CommandResponse> {
   const actor = requirePrincipal(request);
   const release = await loadRelease(client, tenantId, releaseId);
@@ -379,7 +383,7 @@ async function deployRelease(
   const source = await loadScenarioVersionById(client, tenantId, release.scenario_id, release.source_version_id);
   if (release.target_environment === "prod") {
     await assertScenarioVersionCertifiedForProd(client, tenantId, release.scenario_id, release.source_version_id);
-    await assertControlledProdReady(client, tenantId);
+    await assertControlledProdReady(client, tenantId, readinessConfig);
   }
   await assertLatestVersion(client, tenantId, release.scenario_id, expectedVersion);
   const outcome = compileScenario(source.ir, { promote: true, signedCommandRefs });
@@ -477,8 +481,12 @@ async function rollbackRelease(
   return { status: 201, body: await releaseDetail(client, tenantId, rollbackId, true) };
 }
 
-async function assertControlledProdReady(client: PoolClient, tenantId: string): Promise<void> {
-  const readiness = await readProductionReadiness(client, tenantId);
+async function assertControlledProdReady(
+  client: PoolClient,
+  tenantId: string,
+  readinessConfig: ProductionReadinessConfig,
+): Promise<void> {
+  const readiness = await readProductionReadiness(client, tenantId, readinessConfig);
   if (readiness.summary.controlled_prod_ready) return;
   const blockingGateIds = readiness.gates
     .filter((gate) => gate.status === "blocked")
@@ -495,6 +503,14 @@ async function assertControlledProdReady(client: PoolClient, tenantId: string): 
     blocking_gate_ids: blockingGateIds,
     deferred_gate_ids: deferredGateIds,
   });
+}
+
+function productionReadinessConfig(deps: ApiServerDeps): ProductionReadinessConfig {
+  return {
+    authReadiness: deps.authReadiness,
+    aiGovernanceConfiguredModels: deps.aiGovernanceConfiguredModels,
+    aiGovernanceConfiguredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
+  };
 }
 
 async function applyEnvironmentBinding(

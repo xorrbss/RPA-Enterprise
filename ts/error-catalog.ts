@@ -42,6 +42,7 @@ export type ErrorCode =
   | "LLM_RATE_LIMITED"                  // adapter RATE_LIMIT 재시도 소진
   | "LLM_BACKEND_UNAVAILABLE"           // adapter BACKEND_ERROR(5xx) 재시도 소진
   | "LLM_CONNECTION_FAILED"             // adapter CONNECTION_FAILED 재시도/fallback 소진
+  | "AI_GOVERNANCE_POLICY_BLOCKED"
   // --- Extract / Verify ---
   | "EXTRACT_SCHEMA_INVALID"           // business
   | "VERIFY_FAILED"
@@ -79,6 +80,7 @@ export interface ErrorMeta {
 }
 
 export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
+  AI_GOVERNANCE_POLICY_BLOCKED: { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "AI governance policy blocked the request.", operatorAction: "Check ai_runtime_policies and model/prompt/eval/cost evidence." },
   RUN_NOT_FOUND:               { retryable: false, httpStatus: 404, exceptionClass: "none",     userMessage: "실행을 찾을 수 없습니다.", operatorAction: "run_id 확인" },
   RESOURCE_NOT_FOUND:          { retryable: false, httpStatus: 404, exceptionClass: "none",     userMessage: "대상을 찾을 수 없습니다.", operatorAction: "리소스 id/종류 확인(api-surface.md)" },
   RUN_ALREADY_TERMINAL:        { retryable: false, httpStatus: 409, exceptionClass: "none",     userMessage: "이미 종료된 실행입니다.", operatorAction: "상태 확인 후 새 실행" },

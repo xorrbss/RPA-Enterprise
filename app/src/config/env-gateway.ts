@@ -59,12 +59,61 @@ export interface ScenarioGenerationLlmV1Config {
   readonly promptTemplateVersion: string;
 }
 
+export interface AiGovernanceReadinessEnvConfig {
+  readonly configuredModels: readonly string[];
+  readonly configuredPromptVersions: readonly string[];
+}
+
+export function loadAiGovernanceReadinessEnvConfig(): AiGovernanceReadinessEnvConfig {
+  const configuredModels = safeRuntimeRefList("AI_GOVERNANCE_CONFIGURED_MODELS", opt("CODEX_MODEL") === undefined ? [] : [opt("CODEX_MODEL") as string]);
+  const configuredPromptVersions = safeRuntimeRefList("AI_GOVERNANCE_CONFIGURED_PROMPT_VERSIONS", [
+    opt("PROMPT_TEMPLATE_VERSION") ?? "dom-executor@1",
+    ...(strictBool("SCENARIO_GENERATION_LLM_V1_ENABLED", false)
+      ? [opt("SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION") ?? "scenario-planner@2"]
+      : []),
+  ]);
+  return { configuredModels, configuredPromptVersions };
+}
+
 export function loadScenarioGenerationLlmV1Config(): ScenarioGenerationLlmV1Config | undefined {
   if (!strictBool("SCENARIO_GENERATION_LLM_V1_ENABLED", false)) return undefined;
   return {
     gateway: loadGatewayConfig(),
     promptTemplateVersion: opt("SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION") ?? "scenario-planner@2",
   };
+}
+
+function safeRuntimeRefList(name: string, defaults: readonly string[]): string[] {
+  const configured = opt(name);
+  const values = configured === undefined
+    ? defaults
+    : [...defaults, ...configured.split(",").map((part) => part.trim())];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = safeRuntimeRef(name, value);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+function safeRuntimeRef(name: string, value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 300 || !/^[A-Za-z0-9][A-Za-z0-9_.:/@# -]*$/.test(trimmed)) {
+    throw new Error(`env ${name} contains invalid runtime reference ${JSON.stringify(value)}`);
+  }
+  if (
+    /https?:\/\//i.test(trimmed) ||
+    /hooks\.slack\.com/i.test(trimmed) ||
+    /\bbearer\s+[a-z0-9._~+/=-]{8,}/i.test(trimmed) ||
+    /\b(token|password|secret)=/i.test(trimmed) ||
+    /\b(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)\s*[:=]\s*\S{4,}/i.test(trimmed)
+  ) {
+    throw new Error(`env ${name} must not contain endpoints or secret material`);
+  }
+  return trimmed;
 }
 
 /**

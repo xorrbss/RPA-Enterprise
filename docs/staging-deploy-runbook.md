@@ -56,6 +56,25 @@ before cluster dry-run or install:
 npm --prefix codegen run k8s:static-smoke
 ```
 
+#### Kubernetes release overlay gate
+
+Treat `deploy/k8s/base/` as a fail-closed template only. For cluster review,
+start from `deploy/k8s/overlays/staging-sample/`, then copy the overlay into the
+platform-owned deployment repository before replacing documentation-only values.
+The owner-approved overlay must provide an immutable runtime image digest,
+approved destination CIDRs for PostgreSQL, Vault, object storage, OTLP, and LLM
+egress, and the SecretStore-backed runtime Secret. SBOM, provenance, and image
+signature verification evidence must be retained with the release packet before
+`kubectl apply` or server-side dry-run is used as release evidence.
+
+#### Helm release values gate
+
+Render the chart only with a release values file that sets `image.repository`
+and `image.digest`. The default chart values intentionally omit the image
+identity so a plain render fails closed. `deploy/helm/rpa/values.release.example.yaml`
+is sample evidence only; owner-approved release values must replace the sample
+registry, immutable digest, and egress CIDRs outside this contract repository.
+
 The preflight accepts `fs + local_fs` for local/dev shared-volume deployments and
 `s3 + s3` for staging when producer and lifecycle endpoint/region/bucket/path-style
 match. It rejects mixed `fs + s3`, `s3 + local_fs`, and S3 target drift.

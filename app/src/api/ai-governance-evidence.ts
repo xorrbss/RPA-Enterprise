@@ -5,6 +5,7 @@ import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
+import { parseAiRuntimePolicyRequest, readAiRuntimePolicy, upsertAiRuntimePolicy } from "./ai-governance-enforcement";
 import { ApiResponseError } from "./errors";
 import { parseLimit } from "./list-query";
 import { requirePrincipal, type ApiServerDeps } from "./server";
@@ -46,6 +47,27 @@ interface AiGovernanceEvidenceInput {
 const AI_GOVERNANCE_EVIDENCE_RETENTION_DAYS = 365;
 
 export function registerAiGovernanceEvidenceRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
+  app.get("/v1/ai-governance/runtime-policy", { config: { rbacAction: "ai_governance.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const policy = await withTenantTx(deps.pool, principal.tenantId, (client) =>
+      readAiRuntimePolicy(client, principal.tenantId),
+    );
+    reply.code(200).send(policy === null ? { configured: false } : { configured: true, policy });
+  });
+
+  app.put("/v1/ai-governance/runtime-policy", { config: { rbacAction: "ai_governance.manage" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const body = parseAiRuntimePolicyRequest(request.body);
+    const response = await runIdempotentCommand(
+      deps,
+      request,
+      "upsertAiRuntimePolicy",
+      "/v1/ai-governance/runtime-policy",
+      (client, tenantId) => upsertAiRuntimePolicy(client, tenantId, principal.subjectId, body),
+    );
+    reply.code(response.status).send(response.body);
+  });
+
   app.get("/v1/ai-governance/evidence", { config: { rbacAction: "ai_governance.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
     const query = request.query as Record<string, unknown>;

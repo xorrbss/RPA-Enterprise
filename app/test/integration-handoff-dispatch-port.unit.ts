@@ -119,6 +119,31 @@ async function main(): Promise<void> {
     JSON.stringify({ mismatch, mismatchCalls }),
   );
 
+  const queryCalls: typeof calls = [];
+  const queryPort = new SecretRefIntegrationHandoffDispatchPort({
+    secrets: new FakeSecretBoundary("https://uipath.example.com/jobs?token=inline"),
+    fetchImpl: async (url, init) => {
+      queryCalls.push({ url, init });
+      return { status: 202, headers: headers({}) };
+    },
+  });
+  const queryEndpoint = await queryPort.dispatch({
+    tenantId: "00000000-0000-4000-8000-000000000001" as never,
+    correlationId: "00000000-0000-4000-8000-000000000002" as never,
+    attemptId: "10000000-0000-4000-8000-000000000003",
+    handoffId: "20000000-0000-4000-8000-000000000001",
+    providerAlias: "uipath-primary",
+    endpointSecretRef: "secret://rpa/test/integration/uipath/dispatch-endpoint" as SecretRef,
+    allowedHosts: ["uipath.example.com"],
+    payload: { handoff_id: "20000000-0000-4000-8000-000000000001" },
+    attemptNo: 1,
+  });
+  check(
+    "resolved endpoint query string fails before fetch",
+    queryEndpoint.kind === "permanent_failed" && queryEndpoint.reason === "handoff_endpoint_invalid" && queryCalls.length === 0,
+    JSON.stringify({ queryEndpoint, queryCalls }),
+  );
+
   if (failures > 0) {
     console.error(`FAIL: ${failures} integration handoff dispatch port check(s) failed`);
     process.exit(1);

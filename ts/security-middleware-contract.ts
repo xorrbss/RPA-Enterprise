@@ -459,6 +459,7 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "network.request",
   "prompt.inspect",
   "ai_governance.manage",
+  "ai_governance.enforce",
   "bypassrls.use",
 ] as const;
 

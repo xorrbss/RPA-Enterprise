@@ -8,6 +8,7 @@
 import {
   assertArtifactStoreTopologyCompatibility,
   assertArtifactStoreStartupCompatibility,
+  loadAiGovernanceReadinessEnvConfig,
   loadApiConfig,
   loadApiLogLevel,
   loadArtifactLifecycleConsumer,
@@ -66,6 +67,7 @@ const CLEAR = [
   "GATEWAY_ARTIFACT_OBJECT_STORE_S3_BUCKET", "GATEWAY_ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID",
   "GATEWAY_ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE",
   "API_ARTIFACT_DIR", "GATEWAY_ARTIFACT_DIR", "GATEWAY_ARTIFACT_RETENTION_DAYS", "PROMPT_TEMPLATE_VERSION",
+  "AI_GOVERNANCE_CONFIGURED_MODELS", "AI_GOVERNANCE_CONFIGURED_PROMPT_VERSIONS",
   "SCENARIO_GENERATION_LLM_V1_ENABLED", "SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION",
   "JWKS_URL", "JWT_ISSUER", "JWT_AUDIENCE", "JWT_SUBJECT_CLAIM", "JWT_TENANT_CLAIM", "JWT_ROLES_CLAIM",
   "JWT_DISPLAY_NAME_CLAIM", "JWT_EMAIL_CLAIM", "JWT_ROLE_MAP",
@@ -105,6 +107,7 @@ const FULL: Record<string, string> = {
   SIGNED_COMMAND_REGISTRY_MODE: "deny_all",
 };
 const API_COMMON: CommonConfig = { rpaEnv: "staging", connectionString: "x", healthPort: 8081, telemetryExporter: "none" };
+const API_PROD_COMMON: CommonConfig = { rpaEnv: "prod", connectionString: "x", healthPort: 8081, telemetryExporter: "none" };
 
 function main(): void {
   // RUN_MODE
@@ -295,7 +298,7 @@ function main(): void {
     );
   });
 
-  // ApiConfig — JWKS/RS256 mode: JWKS_URL present selects jwks (HS256 secret NOT required); https-forced; iss/aud optional.
+  // ApiConfig: JWKS/RS256 mode selects jwks; issuer/audience are optional outside prod, required in prod.
   const JWKS = "https://idp.example/.well-known/jwks.json";
   withEnv({ PORT: "8080", JWKS_URL: JWKS, SIGNED_COMMAND_REGISTRY_MODE: "deny_all" }, () => {
     const a = loadApiConfig(API_COMMON);
@@ -307,6 +310,16 @@ function main(): void {
     const a = loadApiConfig(API_COMMON);
     check("api jwks issuer carried", a.jwt.mode === "jwks" && a.jwt.issuer === "https://idp.example/");
     check("api jwks audience carried", a.jwt.mode === "jwks" && a.jwt.audience === "rpa-control-plane");
+  });
+  withEnv({ JWKS_URL: JWKS, SIGNED_COMMAND_REGISTRY_MODE: "deny_all" }, () =>
+    expectThrow("prod jwks requires issuer and audience", () => loadApiConfig(API_PROD_COMMON)));
+  withEnv({ JWKS_URL: JWKS, JWT_ISSUER: "https://idp.example/", SIGNED_COMMAND_REGISTRY_MODE: "deny_all" }, () =>
+    expectThrow("prod jwks requires audience", () => loadApiConfig(API_PROD_COMMON)));
+  withEnv({ JWKS_URL: JWKS, JWT_AUDIENCE: "rpa-control-plane", SIGNED_COMMAND_REGISTRY_MODE: "deny_all" }, () =>
+    expectThrow("prod jwks requires issuer", () => loadApiConfig(API_PROD_COMMON)));
+  withEnv({ JWKS_URL: JWKS, JWT_ISSUER: "https://idp.example/", JWT_AUDIENCE: "rpa-control-plane", SIGNED_COMMAND_REGISTRY_MODE: "deny_all" }, () => {
+    const a = loadApiConfig(API_PROD_COMMON);
+    check("prod jwks carries issuer/audience", a.jwt.mode === "jwks" && a.jwt.issuer === "https://idp.example/" && a.jwt.audience === "rpa-control-plane");
   });
   withEnv({
     JWKS_URL: JWKS,
@@ -722,6 +735,34 @@ function main(): void {
     check("gateway retention default 90", g.artifactRetentionDays === 90);
     check("gateway promptTemplateVersion default", g.promptTemplateVersion === "dom-executor@1");
   });
+  withEnv({}, () => {
+    const readiness = loadAiGovernanceReadinessEnvConfig();
+    check(
+      "AI governance readiness env includes DOM prompt default without CODEX secrets",
+      readiness.configuredModels.length === 0 &&
+        readiness.configuredPromptVersions.length === 1 &&
+        readiness.configuredPromptVersions[0] === "dom-executor@1",
+      JSON.stringify(readiness),
+    );
+  });
+  withEnv({
+    CODEX_MODEL: "codex-prod-primary",
+    PROMPT_TEMPLATE_VERSION: "dom-executor@3",
+    SCENARIO_GENERATION_LLM_V1_ENABLED: "true",
+    SCENARIO_GENERATION_LLM_PROMPT_TEMPLATE_VERSION: "scenario-planner@4",
+    AI_GOVERNANCE_CONFIGURED_MODELS: "codex-prod-primary, fallback-model",
+    AI_GOVERNANCE_CONFIGURED_PROMPT_VERSIONS: "dom-executor@3, shared-review@1",
+  }, () => {
+    const readiness = loadAiGovernanceReadinessEnvConfig();
+    check(
+      "AI governance readiness env merges configured model/prompt refs",
+      readiness.configuredModels.join("|") === "codex-prod-primary|fallback-model" &&
+        readiness.configuredPromptVersions.join("|") === "dom-executor@3|scenario-planner@4|shared-review@1",
+      JSON.stringify(readiness),
+    );
+  });
+  withEnv({ AI_GOVERNANCE_CONFIGURED_PROMPT_VERSIONS: "https://example.invalid/prompt?token=raw" }, () =>
+    expectThrow("AI governance readiness env rejects raw URL prompt refs", () => loadAiGovernanceReadinessEnvConfig()));
   withEnv({ ...FULL, ...GW_S3_REQ, GATEWAY_ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: "s3-producer", GATEWAY_ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE: "false" }, () => {
     const g = loadGatewayConfig();
     check("gateway artifact store s3 mode carried", g.artifactStore.mode === "s3");

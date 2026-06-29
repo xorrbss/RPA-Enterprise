@@ -168,6 +168,43 @@ async function main(): Promise<void> {
     check("call: happy path returns outputRef+usage", res.outputRef === "art://ref" && res.finishReason === "stop" && res.usage.outputTokens === 1);
   }
 
+  // AI runtime governance block: fail closed before adapter side effects and append immutable audit evidence.
+  {
+    const qa = queueAdapter([textDone("must-not-call")]);
+    const audit = new MemorySecurityAuditWriter();
+    let failedId: string | undefined;
+    let completedId: string | undefined;
+    const err = await caught(gateway({
+      primary: qa.adapter,
+      securityAudit: audit,
+      idempotency: {
+        reserve: async () => ({ kind: "reserved", callId: "ai-block-call", idempotencyKey: "idem" as never }),
+        complete: async (id) => { completedId = id; },
+        fail: async (id) => { failedId = id; },
+      },
+      aiGovernance: {
+        evaluate: async () => ({
+          kind: "block",
+          mode: "block",
+          reason: "ai_governance_evidence_incomplete",
+          evidenceRefs: [],
+          policyDecisionRef: "policy:ai-runtime-prod",
+          blockingRequirements: ["model_registry:model:codex:missing"],
+        }),
+      },
+    }).call(makeReq(), sig()));
+    check("ai governance: block maps to AI_GOVERNANCE_POLICY_BLOCKED", err?.code === "AI_GOVERNANCE_POLICY_BLOCKED");
+    check("ai governance: adapter not called after block", qa.calls() === 0);
+    check("ai governance: block closes reserved idempotency row", failedId === "ai-block-call" && completedId === undefined);
+    check(
+      "ai governance: audit action appended before block",
+      audit.inputs.length === 1 &&
+        audit.inputs[0]?.action === "ai_governance.enforce" &&
+        audit.inputs[0]?.outcome === "blocked" &&
+        audit.inputs[0]?.failClosed === true,
+    );
+  }
+
   // 멱등 store가 callId를 예약하면 응답에도 durable stagehand call id가 실린다.
   {
     let completedId: string | undefined;
@@ -208,6 +245,82 @@ async function main(): Promise<void> {
     check(
       "span: replay emits no llm_gateway.call span",
       spanExporter.getFinishedSpans().find((s) => s.name === "llm_gateway.call") === undefined,
+    );
+
+    let governanceEvaluations = 0;
+    const replayAudit = new MemorySecurityAuditWriter();
+    await gateway({
+      securityAudit: replayAudit,
+      idempotency: { reserve: async () => ({ kind: "replay", response: cached }), complete: async () => {}, fail: async () => {} },
+      aiGovernance: {
+        evaluate: async () => {
+          governanceEvaluations += 1;
+          return {
+            kind: "allow",
+            mode: "block",
+            reason: "should_not_run_on_replay",
+            evidenceRefs: [],
+            blockingRequirements: [],
+          };
+        },
+      },
+    }).call(makeReq(), sig());
+    check(
+      "ai governance: idempotency replay has no new governance/audit side effects",
+      governanceEvaluations === 0 && replayAudit.inputs.length === 0,
+    );
+
+    for (const [label, reservation, expectedCode] of [
+      ["in-flight", { kind: "in_flight", callId: "existing-call" }, "WORKITEM_CHECKOUT_CONFLICT"],
+      ["hash mismatch", { kind: "blocked", reason: "request_hash_mismatch" }, "SCENARIO_VERSION_CONFLICT"],
+    ] as const) {
+      let evaluated = 0;
+      const audit = new MemorySecurityAuditWriter();
+      const err = await caught(gateway({
+        securityAudit: audit,
+        idempotency: {
+          reserve: async () => reservation as never,
+          complete: async () => {},
+          fail: async () => {},
+        },
+        aiGovernance: {
+          evaluate: async () => {
+            evaluated += 1;
+            return { kind: "allow", mode: "block", reason: "should_not_run", evidenceRefs: [], blockingRequirements: [] };
+          },
+        },
+      }).call(makeReq(), sig()));
+      check(
+        `ai governance: ${label} idempotency result bypasses governance/audit`,
+        err?.code === expectedCode && evaluated === 0 && audit.inputs.length === 0,
+      );
+    }
+
+    const qaAuditFail = queueAdapter([textDone("must-not-call")]);
+    let auditFailClosedId: string | undefined;
+    const auditFailErr = await caught(gateway({
+      primary: qaAuditFail.adapter,
+      securityAudit: new MemorySecurityAuditWriter(true),
+      idempotency: {
+        reserve: async () => ({ kind: "reserved", callId: "audit-fail-call", idempotencyKey: "idem" as never }),
+        complete: async () => {},
+        fail: async (id) => { auditFailClosedId = id; },
+      },
+      aiGovernance: {
+        evaluate: async () => ({
+          kind: "warn",
+          mode: "warn",
+          reason: "ai_governance_evidence_incomplete",
+          evidenceRefs: [],
+          blockingRequirements: ["prompt_registry:prompt:v1:missing"],
+        }),
+      },
+    }).call(makeReq(), sig()));
+    check(
+      "ai governance: audit append failure fails closed before adapter and closes reservation",
+      auditFailErr?.code === "CONTROL_PLANE_INTERNAL_ERROR" &&
+        qaAuditFail.calls() === 0 &&
+        auditFailClosedId === "audit-fail-call",
     );
   }
 

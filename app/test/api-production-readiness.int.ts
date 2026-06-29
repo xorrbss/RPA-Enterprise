@@ -43,6 +43,13 @@ const DELIVERY_OK_A = "83000000-0000-4000-8000-000000000202";
 const DELIVERY_SENT_A = "83000000-0000-4000-8000-000000000203";
 
 const SECRET = new TextEncoder().encode("production-readiness-int-secret-do-not-use-in-prod-0123456789");
+const SSO_READY = {
+  mode: "jwks",
+  configurationSource: "deployment_config",
+  jwksUrl: "https://idp.example.com/.well-known/jwks.json",
+  issuer: "https://idp.example.com/",
+  audience: "rpa-control-plane",
+} as const;
 
 const signedCommandRegistry: SignedCommandRegistry = {
   async listAllowedCommandRefs() {
@@ -157,6 +164,7 @@ async function main(): Promise<void> {
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} } as RunEnqueuer,
     signedCommandRegistry,
+    authReadiness: SSO_READY,
   });
   try {
     const setup = await pool.connect();
@@ -200,17 +208,58 @@ async function main(): Promise<void> {
         body.summary.deferred_count === 5 &&
         body.summary.controlled_prod_ready === false,
       ready.body);
-    check("database/queue/browser/audit gates pass",
+    check("database/queue/browser/audit/auth gates pass",
       gate("database_migrations")?.status === "pass" &&
         gate("graphile_queue")?.status === "pass" &&
         gate("browser_pool_ha")?.status === "pass" &&
-        gate("audit_chain_evidence")?.status === "pass",
+        gate("audit_chain_evidence")?.status === "pass" &&
+        gate("auth_sso_readiness")?.status === "pass" &&
+        gate("ai_governance_runtime")?.status === "pass",
       ready.body);
     check("browser pool and audit evidence are returned as metadata",
       body.signals.bot_pool.capacity_slots === 2 &&
         body.signals.bot_pool.workers.active === 2 &&
         body.signals.audit_verifier.latest_status === "valid",
       ready.body);
+
+    const missingAudienceApp = buildServer({
+      pool,
+      auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+      rbac: new RoleMatrixRbacMiddleware(),
+      idempotency: new PgControlPlaneIdempotencyStore(pool),
+      enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} } as RunEnqueuer,
+      signedCommandRegistry,
+      authReadiness: {
+        mode: "jwks",
+        configurationSource: "deployment_config",
+        jwksUrl: "https://idp.example.com/.well-known/jwks.json",
+        issuer: "https://idp.example.com/",
+      },
+    });
+    await missingAudienceApp.ready();
+    try {
+      const blockedByAuth = await missingAudienceApp.inject({
+        method: "GET",
+        url: "/v1/ops/production-readiness",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      const blockedByAuthBody = blockedByAuth.json() as {
+        status: string;
+        summary: { blocker_count: number; controlled_prod_ready: boolean };
+        gates: Array<{ gate_id: string; status: string; reason_code: string | null }>;
+      };
+      const authGate = blockedByAuthBody.gates.find((item) => item.gate_id === "auth_sso_readiness");
+      check("JWKS readiness without audience blocks controlled-prod readiness",
+        blockedByAuth.statusCode === 200 &&
+          blockedByAuthBody.status === "blocked" &&
+          blockedByAuthBody.summary.blocker_count === 1 &&
+          blockedByAuthBody.summary.controlled_prod_ready === false &&
+          authGate?.status === "blocked" &&
+          authGate.reason_code === "auth_sso_audience_missing",
+        blockedByAuth.body);
+    } finally {
+      await missingAudienceApp.close();
+    }
 
     const failedReceiptAt = new Date(Date.now() - 4 * 60 * 1000).toISOString();
     const deliveredReceiptAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
@@ -763,6 +812,109 @@ async function main(): Promise<void> {
         gateWithOwnerEvidence("observability_telemetry_wiring")?.status === "pass" &&
         gateWithOwnerEvidence("support_training_completion")?.status === "pass",
       readyWithOwnerEvidence.body);
+
+    await withTenantTx(pool, TENANT_A, async (client) => {
+      await client.query(
+        `INSERT INTO ai_runtime_policies (
+           id, tenant_id, mode, subject_mapping_ref, emergency_override_owner_ref,
+           policy_decision_ref, evidence_ref, updated_by
+         )
+         VALUES (
+           '83000000-0000-4000-8000-0000000008a1'::uuid,
+           $1::uuid,
+           'block',
+           'policy:ai-subject-map',
+           'group:ai-override-owners',
+           'policy-decision:ai-runtime-block',
+           'artifact:ai-runtime-policy',
+           'admin-a'
+         )`,
+        [TENANT_A],
+      );
+    });
+    const configuredPromptApp = buildServer({
+      pool,
+      auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+      rbac: new RoleMatrixRbacMiddleware(),
+      idempotency: new PgControlPlaneIdempotencyStore(pool),
+      enqueuer: { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} } as RunEnqueuer,
+      signedCommandRegistry,
+      authReadiness: SSO_READY,
+      aiGovernanceConfiguredModels: ["codex-configured"],
+      aiGovernanceConfiguredPromptVersions: ["dom-executor@configured"],
+    });
+    await configuredPromptApp.ready();
+    try {
+      const configuredPromptReadiness = await configuredPromptApp.inject({
+        method: "GET",
+        url: "/v1/ops/production-readiness",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      const configuredPromptBody = configuredPromptReadiness.json() as {
+        status: string;
+        gates: Array<{ gate_id: string; status: string; reason_code: string | null; evidence: string[] }>;
+        signals: {
+          ai_governance: {
+            configured_models?: string[];
+            prompt_template_versions?: string[];
+            requirements?: Array<{ evidence_type: string; subject_ref: string; status: string }>;
+          };
+        };
+      };
+      const configuredPromptGate = configuredPromptBody.gates.find((item) => item.gate_id === "ai_governance_runtime");
+      const requirements = configuredPromptBody.signals.ai_governance.requirements ?? [];
+      check("configured model and prompt version block AI readiness before any observed LLM call",
+        configuredPromptReadiness.statusCode === 200 &&
+          configuredPromptBody.status === "blocked" &&
+          configuredPromptGate?.status === "blocked" &&
+          configuredPromptGate.reason_code === "ai_governance_block_missing_evidence" &&
+          configuredPromptBody.signals.ai_governance.configured_models?.includes("codex-configured") === true &&
+          configuredPromptBody.signals.ai_governance.prompt_template_versions?.includes("dom-executor@configured") === true &&
+          requirements.some((item) => item.evidence_type === "model_registry" && item.subject_ref === "model:codex-configured" && item.status === "missing") &&
+          requirements.some((item) => item.evidence_type === "cost_control" && item.subject_ref === `tenant:${TENANT_A}:ai_cost_control` && item.status === "missing") &&
+          requirements.some((item) => item.evidence_type === "prompt_registry" && item.subject_ref === "prompt:dom-executor@configured" && item.status === "missing") &&
+          requirements.some((item) => item.evidence_type === "eval_result" && item.subject_ref === "prompt:dom-executor@configured" && item.status === "missing"),
+        configuredPromptReadiness.body);
+    } finally {
+      await configuredPromptApp.close();
+      await withTenantTx(pool, TENANT_A, async (client) => {
+        await client.query(`UPDATE ai_runtime_policies SET deleted_at = now() WHERE tenant_id = $1::uuid`, [TENANT_A]);
+      });
+    }
+
+    await withTenantTx(pool, TENANT_A, async (client) => {
+      await client.query(
+        `INSERT INTO gateway_policies (id, tenant_id, model, capabilities, budget, is_default)
+         VALUES (
+           '83000000-0000-4000-8000-000000000901'::uuid,
+           $1::uuid,
+           'codex-prod-primary',
+           '{"domReasoning":true,"vision":false,"jsonMode":false,"toolCall":false,"sse":true,"maxContextTokens":8000}'::jsonb,
+           '{"maxInputTokens":10000,"maxOutputTokens":2000,"maxCost":10}'::jsonb,
+           true
+         )`,
+        [TENANT_A],
+      );
+    });
+    const aiPolicyMissingReadiness = await app.inject({
+      method: "GET",
+      url: "/v1/ops/production-readiness",
+      headers: { authorization: `Bearer ${viewer}` },
+    });
+    const aiPolicyMissingBody = aiPolicyMissingReadiness.json() as {
+      status: string;
+      summary: { deferred_count: number; controlled_prod_ready: boolean };
+      gates: Array<{ gate_id: string; status: string; reason_code: string | null }>;
+    };
+    const aiGate = aiPolicyMissingBody.gates.find((item) => item.gate_id === "ai_governance_runtime");
+    check("AI runtime use without policy defers controlled-prod readiness",
+      aiPolicyMissingReadiness.statusCode === 200 &&
+        aiPolicyMissingBody.status === "warning" &&
+        aiPolicyMissingBody.summary.deferred_count === 1 &&
+        aiPolicyMissingBody.summary.controlled_prod_ready === false &&
+        aiGate?.status === "deferred" &&
+        aiGate.reason_code === "ai_runtime_policy_missing",
+      aiPolicyMissingReadiness.body);
 
     const tenantB = await app.inject({
       method: "GET",

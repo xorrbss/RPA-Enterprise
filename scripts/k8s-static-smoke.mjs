@@ -28,9 +28,19 @@ const baseOptionalFiles = [
 
 const baseFiles = [...baseResourceFiles, ...baseOptionalFiles];
 
+const k8sOverlayFiles = [
+  "deploy/k8s/overlays/staging-sample/kustomization.yaml",
+];
+
+const ownerDecisionNoteFiles = [
+  "deploy/k8s/overlays/staging-sample/owner-decisions.txt",
+  "deploy/helm/rpa/OWNER_DECISIONS.txt",
+];
+
 const helmFiles = [
   "deploy/helm/rpa/Chart.yaml",
   "deploy/helm/rpa/values.yaml",
+  "deploy/helm/rpa/values.release.example.yaml",
   "deploy/helm/rpa/templates/_helpers.tpl",
   "deploy/helm/rpa/templates/configmap.yaml",
   "deploy/helm/rpa/templates/serviceaccounts.yaml",
@@ -45,18 +55,35 @@ const helmFiles = [
   "deploy/helm/rpa/templates/NOTES.txt",
 ];
 
+const docFiles = [
+  "deploy/k8s/README.md",
+  "docs/deploy/controlled-prod-packaging.md",
+  "docs/staging-deploy-runbook.md",
+];
+
 const base = Object.fromEntries(baseFiles.map((path) => [path, readRequired(path)]));
+const overlays = Object.fromEntries(k8sOverlayFiles.map((path) => [path, readRequired(path)]));
+const ownerDecisionNotes = Object.fromEntries(ownerDecisionNoteFiles.map((path) => [path, readRequired(path)]));
 const helm = Object.fromEntries(helmFiles.map((path) => [path, readRequired(path)]));
+const docs = Object.fromEntries(docFiles.map((path) => [path, readRequired(path)]));
 const baseAll = Object.values(base).join("\n");
+const overlayAll = Object.values(overlays).join("\n");
+const ownerDecisionAll = Object.values(ownerDecisionNotes).join("\n");
 const helmAll = Object.values(helm).join("\n");
 const values = helm["deploy/helm/rpa/values.yaml"];
+const releaseValues = helm["deploy/helm/rpa/values.release.example.yaml"];
 const runLocalGates = readRequired("scripts/run-local-gates.mjs");
 const codegenPackage = readRequired("codegen/package.json");
 
-checkBaseYamlParse();
+checkKubernetesYamlParse();
+checkReleasePlaceholderBoundaries();
 checkKustomizeBase();
 checkBaseRuntimeContract();
+checkK8sStagingSampleOverlay();
 checkHelmRuntimeContract();
+checkHelmReleaseValues();
+checkOwnerDecisionNotes();
+checkPackagingDocs();
 checkSmokeWiring();
 
 if (failures.length > 0) {
@@ -66,14 +93,16 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `k8s static smoke: ${baseResourceFiles.length} kustomize base files, ${baseOptionalFiles.length} optional base templates, and ${helmFiles.length} Helm chart files checked`,
+  `k8s static smoke: ${baseResourceFiles.length} kustomize base files, ${baseOptionalFiles.length} optional base templates, ${k8sOverlayFiles.length} sample overlay, ${ownerDecisionNoteFiles.length} owner-decision note files, and ${helmFiles.length} Helm chart files checked`,
 );
 console.log(
   "k8s static smoke coverage: non-root pods, split DB roles, external Graphile migrations, SecretRef-only credentials, S3 artifact stores, readiness/liveness probes, API HPA, topology/anti-affinity, fail-closed ingress and egress NetworkPolicy",
 );
 
-function checkBaseYamlParse() {
-  const files = baseFiles.map((path) => join(ROOT, ...path.split("/")));
+function checkKubernetesYamlParse() {
+  const files = [...baseFiles, ...k8sOverlayFiles, "deploy/helm/rpa/values.release.example.yaml"].map((path) =>
+    join(ROOT, ...path.split("/")),
+  );
   const script = [
     "import sys",
     "from pathlib import Path",
@@ -96,12 +125,33 @@ function checkBaseYamlParse() {
 
   const result = runPython(["-c", script, ...files]);
   if (result.status !== 0) {
-    failures.push(`kustomize base YAML parse failed: ${(result.stderr || result.stdout || "").trim()}`);
+    failures.push(`Kubernetes/sample YAML parse failed: ${(result.stderr || result.stdout || "").trim()}`);
   }
+}
+
+function checkReleasePlaceholderBoundaries() {
+  const replaceMeAllowedFiles = new Set([
+    "deploy/k8s/base/10-migrate-job.yaml",
+    "deploy/k8s/base/20-api.yaml",
+    "deploy/k8s/base/21-worker.yaml",
+    "deploy/k8s/base/22-lifecycle-worker.yaml",
+  ]);
+  for (const [path, source] of Object.entries({ ...base, ...overlays, ...helm })) {
+    if (!source.includes("replace-me")) continue;
+    if (replaceMeAllowedFiles.has(path)) continue;
+    failures.push(`${path}: image placeholder replace-me is allowed only in fail-closed base workload templates`);
+  }
+  for (const path of replaceMeAllowedFiles) {
+    requireRegex(`${path} keeps fail-closed base image placeholder`, base[path], /ghcr\.io\/example\/rpa-runtime:replace-me/);
+  }
+  rejectRegex("sample overlay must not contain replace-me", overlayAll, /replace-me/i);
+  rejectRegex("Helm release example values must not contain replace-me", releaseValues, /replace-me/i);
+  rejectRegex("Helm default values must not contain replace-me", values, /replace-me/i);
 }
 
 function checkKustomizeBase() {
   const kustomization = base["deploy/k8s/base/kustomization.yaml"];
+  requireRegex("base kustomization declares fail-closed template boundary", kustomization, /Fail-closed template only/i);
   for (const file of baseResourceFiles.filter((path) => !path.endsWith("kustomization.yaml"))) {
     requireIn("kustomization resource list", kustomization, file.replace("deploy/k8s/base/", ""));
   }
@@ -203,8 +253,30 @@ function checkBaseRuntimeContract() {
   rejectRegex("base runtime must not use postgres superuser", [api, worker, lifecycle].join("\n"), /\bPOSTGRES_USER\b|PGUSER:[\s\S]{0,80}postgres|postgresql:\/\/postgres/i);
 }
 
+function checkK8sStagingSampleOverlay() {
+  const overlay = overlays["deploy/k8s/overlays/staging-sample/kustomization.yaml"];
+
+  requireRegex("staging sample overlay points at base", overlay, /resources:[\s\S]*-\s*\.\.\/\.\.\/base/i);
+  requireRegex(
+    "staging sample overlay includes owner egress optional template",
+    overlay,
+    /resources:[\s\S]*32-egress-owner-allowlist\.optional\.yaml/i,
+  );
+  requireRegex("staging sample overlay sets staging namespace", overlay, /namespace:\s*rpa-staging/i);
+  requireRegex("staging sample overlay is marked non-release", overlay, /rpa\.example\.com\/release-artifact:\s*"false"/i);
+  requireRegex("staging sample overlay replaces base image repository", overlay, /newName:\s*registry\.owner-approved\.invalid\/rpa-runtime/i);
+  requireRegex("staging sample overlay uses immutable image digest", overlay, /digest:\s*sha256:[a-f0-9]{64}/i);
+  rejectRegex("staging sample overlay must not carry unresolved owner placeholders", overlay, /OWNER_DECISION_REQUIRED_/);
+  for (const cidr of ["192.0.2.10/32", "192.0.2.20/32", "198.51.100.10/32", "198.51.100.20/32", "203.0.113.10/32"]) {
+    requireIn("staging sample overlay documentation CIDR", overlay, cidr);
+  }
+  rejectRegex("staging sample overlay must not allow all IPv4", overlay, /0\.0\.0\.0\/0/);
+  rejectRegex("staging sample overlay must not allow all IPv6", overlay, /::\/0/);
+}
+
 function checkHelmRuntimeContract() {
   const chart = helm["deploy/helm/rpa/Chart.yaml"];
+  const helpers = helm["deploy/helm/rpa/templates/_helpers.tpl"];
   const migrate = helm["deploy/helm/rpa/templates/migrate-job.yaml"];
   const api = helm["deploy/helm/rpa/templates/api.yaml"];
   const worker = helm["deploy/helm/rpa/templates/worker.yaml"];
@@ -218,6 +290,14 @@ function checkHelmRuntimeContract() {
   const notes = helm["deploy/helm/rpa/templates/NOTES.txt"];
 
   requireRegex("Helm chart v2", chart, /^apiVersion:\s*v2$/m);
+  requireRegex("Helm default image repository is empty", values, /image:[\s\S]*?repository:\s*""/i);
+  requireRegex("Helm default image tag is empty", values, /image:[\s\S]*?tag:\s*""/i);
+  requireRegex("Helm default image digest is empty", values, /image:[\s\S]*?digest:\s*""/i);
+  requireRegex("Helm image helper requires repository", helpers, /image\.repository is required/i);
+  requireRegex("Helm image helper renders digest reference", helpers, /printf\s+"%s@%s"/i);
+  requireRegex("Helm image helper validates sha256 digest", helpers, /regexMatch\s+"\^sha256:\[a-f0-9\]\{64\}\$"/i);
+  requireRegex("Helm image helper rejects latest tag", helpers, /image\.tag must not be latest/i);
+  requireRegex("Helm image helper rejects replace-me-like tags", helpers, /\^replace\.\?me\$/i);
   requireRegex("Helm default existing secret", values, /existingSecret:\s*rpa-runtime-secrets/i);
   requireRegex("Helm default migrator role", values, /migratorUser:\s*rpa_migrator/i);
   requireRegex("Helm default app role", values, /appUser:\s*rpa_app/i);
@@ -298,10 +378,58 @@ function checkHelmRuntimeContract() {
   requireRegex("Helm api PDB", pdb, /kind:\s*PodDisruptionBudget[\s\S]*?name:\s*rpa-api[\s\S]*?minAvailable:\s*1/i);
   requireRegex("Helm notes mention out-of-band DB roles", notes, /roles\.sql/i);
   requireRegex("Helm notes mention existing Secret", notes, /rpa-runtime-secrets/i);
+  requireRegex("Helm notes mention immutable digest", notes, /image\.digest[\s\S]*immutable sha256/i);
+  requireRegex("Helm notes mention SBOM signing", notes, /SBOM[\s\S]*signature/i);
   requireRegex("Helm notes mention ingress owner decisions", notes, /ingress\.enabled=false[\s\S]*className[\s\S]*TLS secret/i);
   requireRegex("Helm notes mention egress owner decisions", notes, /Default egress is deny-all[\s\S]*ownerApprovedCidrs/i);
   rejectRegex("Helm templates must not render repository secrets", helmAll, /kind:\s*Secret|stringData:/i);
   rejectRegex("Helm runtime must not use postgres superuser", [api, worker, lifecycle].join("\n"), /\bPOSTGRES_USER\b|PGUSER:[\s\S]{0,80}postgres|postgresql:\/\/postgres/i);
+}
+
+function checkHelmReleaseValues() {
+  requireRegex("Helm release example uses owner-approved repository sample", releaseValues, /repository:\s*registry\.owner-approved\.invalid\/rpa-runtime/i);
+  requireRegex("Helm release example uses immutable digest", releaseValues, /digest:\s*sha256:[a-f0-9]{64}/i);
+  requireRegex("Helm release example keeps tag empty", releaseValues, /tag:\s*""/i);
+  requireRegex("Helm release example sets staging namespace", releaseValues, /namespaceOverride:\s*rpa-staging/i);
+  requireRegex("Helm release example includes owner-approved egress list", releaseValues, /ownerApprovedCidrs:[\s\S]*name:\s*managed-postgresql[\s\S]*name:\s*llm-provider/i);
+  for (const cidr of ["192.0.2.10/32", "192.0.2.20/32", "198.51.100.10/32", "198.51.100.20/32", "203.0.113.10/32"]) {
+    requireIn("Helm release example documentation CIDR", releaseValues, cidr);
+  }
+  rejectRegex("Helm release example must not carry unresolved owner placeholders", releaseValues, /OWNER_DECISION_REQUIRED_/);
+  rejectRegex("Helm release example must not allow all IPv4", releaseValues, /0\.0\.0\.0\/0/);
+  rejectRegex("Helm release example must not allow all IPv6", releaseValues, /::\/0/);
+}
+
+function checkOwnerDecisionNotes() {
+  for (const [path, source] of Object.entries(ownerDecisionNotes)) {
+    requireRegex(`${path} records blocked required decisions`, source, /TODO: \[BLOCKED\] Required decision:/);
+  }
+  requireRegex("owner decision notes require image digest approval", ownerDecisionAll, /image repository[\s\S]*immutable sha256 digest/i);
+  requireRegex("owner decision notes require SBOM/provenance/signature", ownerDecisionAll, /SBOM[\s\S]*provenance[\s\S]*signature/i);
+  requireRegex("owner decision notes require approved egress CIDRs", ownerDecisionAll, /destination CIDRs[\s\S]*managed PostgreSQL[\s\S]*LLM provider/i);
+}
+
+function checkPackagingDocs() {
+  const k8sReadme = docs["deploy/k8s/README.md"];
+  const prodPackaging = docs["docs/deploy/controlled-prod-packaging.md"];
+  const runbook = docs["docs/staging-deploy-runbook.md"];
+
+  requireRegex("K8s README calls base a fail-closed template", k8sReadme, /base\/`?\s+is a fail-closed template/i);
+  requireRegex("K8s README names staging sample overlay", k8sReadme, /overlays\/staging-sample/i);
+  requireRegex("K8s README requires immutable digest", k8sReadme, /immutable sha256 digest/i);
+  requireRegex("K8s README requires SBOM signing evidence", k8sReadme, /SBOM[\s\S]*signing/i);
+  requireRegex("K8s README requires owner approved egress CIDRs", k8sReadme, /owner-approved destination CIDRs/i);
+
+  requireRegex("controlled prod doc records base fail-closed boundary", prodPackaging, /fail-closed template/i);
+  requireRegex("controlled prod doc records Helm release example", prodPackaging, /values\.release\.example\.yaml/i);
+  requireRegex("controlled prod doc records immutable digest", prodPackaging, /immutable sha256 digest/i);
+  requireRegex("controlled prod doc records SBOM signing", prodPackaging, /SBOM[\s\S]*signing/i);
+  requireRegex("controlled prod doc records owner-approved egress CIDR", prodPackaging, /owner-approved CIDRs/i);
+
+  requireRegex("staging runbook records Kubernetes release overlay gate", runbook, /Kubernetes release overlay gate/i);
+  requireRegex("staging runbook records Helm release values gate", runbook, /Helm release values gate/i);
+  requireRegex("staging runbook records image digest requirement", runbook, /image\.digest/i);
+  requireRegex("staging runbook records SBOM signing requirement", runbook, /SBOM[\s\S]*signature/i);
 }
 
 function checkSmokeWiring() {

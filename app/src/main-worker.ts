@@ -8,6 +8,7 @@
 import { run, runMigrations, type Runner } from "graphile-worker";
 
 import { PgGraphileRunEnqueuer } from "./api/run-queue";
+import { PgAiGovernanceGatewayGuard } from "./api/ai-governance-enforcement";
 import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { loadApiSessionEncryption, loadArtifactLifecycleWorkerConfig, loadBrowserConfig, loadGatewayConfig, loadWorkerConfig, type ArtifactLifecycleWorkerConfig, type CommonConfig, type GatewayConfig } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
@@ -98,6 +99,7 @@ function buildExecutorFactory(
     idempotency: new PgLlmCallIdempotencyStore(pool),
     securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
+    aiGovernance: new PgAiGovernanceGatewayGuard(pool),
     config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
   });
   return createDomUtilityExecutorFactory(gateway, {

@@ -1,0 +1,6 @@
+This Helm chart is a packaging surface, not production approval. The default
+values intentionally do not include a runtime image repository or tag.
+
+TODO: [BLOCKED] Required decision: approve the release image repository and immutable sha256 digest after SBOM, provenance, and signature verification.
+TODO: [BLOCKED] Required decision: approve exact egress CIDRs and ports before setting networkPolicy.egress.ownerApprovedCidrs.
+TODO: [BLOCKED] Required decision: approve ingress class, host, TLS secret, and source policy before setting ingress.enabled=true.

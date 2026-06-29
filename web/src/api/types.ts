@@ -1115,6 +1115,36 @@ export interface AiGovernanceEvidenceListParams extends ListParams {
   readonly subject_ref?: string;
 }
 
+export type AiGovernanceRuntimePolicyMode = "observe" | "warn" | "block";
+
+export interface AiGovernanceRuntimePolicy {
+  readonly policy_id: string;
+  readonly mode: AiGovernanceRuntimePolicyMode;
+  readonly subject_mapping_ref: string;
+  readonly grace_until: string | null;
+  readonly emergency_override_owner_ref: string;
+  readonly audit_action: "ai_governance.enforce";
+  readonly policy_decision_ref: string;
+  readonly evidence_ref: string | null;
+  readonly updated_by: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface AiGovernanceRuntimePolicyEnvelope {
+  readonly configured: boolean;
+  readonly policy?: AiGovernanceRuntimePolicy;
+}
+
+export interface AiGovernanceRuntimePolicyRequest {
+  readonly mode: AiGovernanceRuntimePolicyMode;
+  readonly subject_mapping_ref: string;
+  readonly grace_until?: string | null;
+  readonly emergency_override_owner_ref: string;
+  readonly policy_decision_ref: string;
+  readonly evidence_ref?: string | null;
+}
+
 export type BotPoolHealth = "ok" | "warning" | "critical";
 
 export interface BotPoolItem {

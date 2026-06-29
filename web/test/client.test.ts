@@ -400,6 +400,66 @@ describe("HttpApiClient 계약", () => {
     expect(postHarness.calls[0]?.headers.get("idempotency-key")).toBe("readiness-evidence-1");
   });
 
+  test("AI governance runtime policy get and upsert routes", async () => {
+    const getHarness = harness({
+      body: {
+        configured: true,
+        policy: {
+          policy_id: "ai-runtime-policy-prod",
+          mode: "warn",
+          subject_mapping_ref: "subject-map:ai-runtime/prod",
+          grace_until: null,
+          emergency_override_owner_ref: "team:ai-governance-oncall",
+          audit_action: "ai_governance.enforce",
+          policy_decision_ref: "policy-decision:ai-governance/runtime-enforcement",
+          evidence_ref: "artifact:ai-governance/runtime-policy-prod",
+          updated_by: "admin-a",
+          created_at: "2026-06-29T00:00:00.000Z",
+          updated_at: "2026-06-29T00:01:00.000Z",
+        },
+      },
+    });
+    const envelope = await getHarness.client.getAiGovernanceRuntimePolicy();
+    expect(envelope.configured).toBe(true);
+    expect(getHarness.calls[0]?.method).toBe("GET");
+    expect(getHarness.calls[0]?.url).toBe("http://api.test/v1/ai-governance/runtime-policy");
+
+    const putHarness = harness({
+      body: {
+        policy_id: "ai-runtime-policy-prod",
+        mode: "block",
+        subject_mapping_ref: "subject-map:ai-runtime/prod",
+        grace_until: null,
+        emergency_override_owner_ref: "team:ai-governance-oncall",
+        audit_action: "ai_governance.enforce",
+        policy_decision_ref: "policy-decision:ai-governance/runtime-enforcement",
+        evidence_ref: "artifact:ai-governance/runtime-policy-prod",
+        updated_by: "admin-a",
+        created_at: "2026-06-29T00:00:00.000Z",
+        updated_at: "2026-06-29T00:10:00.000Z",
+      },
+    });
+    await putHarness.client.upsertAiGovernanceRuntimePolicy({
+      mode: "block",
+      subject_mapping_ref: "subject-map:ai-runtime/prod",
+      grace_until: null,
+      emergency_override_owner_ref: "team:ai-governance-oncall",
+      policy_decision_ref: "policy-decision:ai-governance/runtime-enforcement",
+      evidence_ref: "artifact:ai-governance/runtime-policy-prod",
+    }, "ai-runtime-policy-upsert-1");
+    expect(putHarness.calls[0]?.method).toBe("PUT");
+    expect(putHarness.calls[0]?.url).toBe("http://api.test/v1/ai-governance/runtime-policy");
+    expect(putHarness.calls[0]?.headers.get("idempotency-key")).toBe("ai-runtime-policy-upsert-1");
+    expect(putHarness.calls[0]?.body).toEqual({
+      mode: "block",
+      subject_mapping_ref: "subject-map:ai-runtime/prod",
+      grace_until: null,
+      emergency_override_owner_ref: "team:ai-governance-oncall",
+      policy_decision_ref: "policy-decision:ai-governance/runtime-enforcement",
+      evidence_ref: "artifact:ai-governance/runtime-policy-prod",
+    });
+  });
+
   test("automation adoption evidence list and record routes", async () => {
     const listHarness = harness({ body: { items: [], next_cursor: null } });
     await listHarness.client.listAutomationAdoptionEvidence("idea-123", {

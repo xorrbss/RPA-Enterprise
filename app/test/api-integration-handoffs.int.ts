@@ -350,6 +350,26 @@ async function main(): Promise<void> {
       (await idempotencyCount(pool, TENANT_A, "dispatchIntegrationHandoff", "handoff-dispatch-raw-endpoint")) === 0,
     );
 
+    const dispatchEndpointMetadata = await app.inject({
+      method: "POST",
+      url: `/v1/integration-handoffs/${createdBody.handoff_id}/dispatch`,
+      headers: { authorization: `Bearer ${operator}`, "idempotency-key": "handoff-dispatch-endpoint-metadata" },
+      payload: {
+        endpoint_secret_ref: DISPATCH_ENDPOINT_SECRET_REF,
+        allowed_hosts: ["uipath.example.com"],
+        metadata: { endpoint_url: "redacted" },
+      },
+    });
+    check(
+      "dispatch metadata endpoint-like key rejected -> 422",
+      dispatchEndpointMetadata.statusCode === 422 && dispatchEndpointMetadata.json().code === "IR_SCHEMA_INVALID",
+      dispatchEndpointMetadata.body,
+    );
+    check(
+      "dispatch metadata key rejection did not reserve idempotency",
+      (await idempotencyCount(pool, TENANT_A, "dispatchIntegrationHandoff", "handoff-dispatch-endpoint-metadata")) === 0,
+    );
+
     const dispatchLocalhost = await app.inject({
       method: "POST",
       url: `/v1/integration-handoffs/${createdBody.handoff_id}/dispatch`,

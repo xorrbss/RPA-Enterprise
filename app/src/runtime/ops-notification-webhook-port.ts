@@ -179,6 +179,7 @@ function parseRedirectLocation(current: URL, location: string): URL | null {
 function webhookEndpointUrlDenial(url: URL): string | null {
   if (url.protocol !== "https:") return "webhook_endpoint_requires_https";
   if (url.username !== "" || url.password !== "") return "webhook_endpoint_credentials_forbidden";
+  if (url.search !== "") return "webhook_endpoint_query_forbidden";
   if (url.hash !== "") return "webhook_endpoint_fragment_forbidden";
   if (url.hostname.length === 0) return "webhook_endpoint_host_required";
   return null;

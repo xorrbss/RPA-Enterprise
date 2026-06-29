@@ -4,13 +4,15 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
+import { readAiGovernanceReadiness, type AiGovernanceReadinessSnapshot } from "./ai-governance-enforcement";
+import { DEFAULT_AUTH_READINESS_CONFIG, evaluateAuthSsoReadiness } from "./auth-readiness";
 import { readBrowserBotPool } from "./bot-pools";
 import { runIdempotentCommand, isRecord } from "./command";
 import { ApiResponseError } from "./errors";
 import { parseLimit } from "./list-query";
 import { readOpsHealth } from "./ops-health";
 import { readLatestOpsNotificationDelivery, type OpsNotificationDelivery } from "./ops-alerts";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps, type AuthReadinessConfig } from "./server-shared";
 
 export type ProductionReadinessStatus = "ready" | "warning" | "blocked";
 export type ProductionReadinessGateStatus = "pass" | "warning" | "blocked" | "deferred";
@@ -21,6 +23,12 @@ export type ProductionReadinessEvidenceType =
   | "observability_telemetry_wiring"
   | "support_training_completion";
 export type ProductionReadinessEvidenceStatus = "valid" | "failed";
+
+export interface ProductionReadinessConfig {
+  readonly authReadiness?: AuthReadinessConfig;
+  readonly aiGovernanceConfiguredModels?: readonly string[];
+  readonly aiGovernanceConfiguredPromptVersions?: readonly string[];
+}
 
 interface ProductionReadinessGate {
   readonly gate_id: string;
@@ -105,7 +113,11 @@ export function registerProductionReadinessRoutes(app: FastifyInstance, deps: Ap
   app.get("/v1/ops/production-readiness", { config: { rbacAction: "ops_alert.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
     const readiness = await withTenantTx(deps.pool, principal.tenantId, async (client) =>
-      readProductionReadiness(client, principal.tenantId),
+      readProductionReadiness(client, principal.tenantId, {
+        authReadiness: deps.authReadiness,
+        aiGovernanceConfiguredModels: deps.aiGovernanceConfiguredModels,
+        aiGovernanceConfiguredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
+      }),
     );
     reply.code(200).send(readiness);
   });
@@ -138,14 +150,24 @@ export function registerProductionReadinessRoutes(app: FastifyInstance, deps: Ap
   });
 }
 
-export async function readProductionReadiness(client: PoolClient, tenantId: string) {
+export async function readProductionReadiness(
+  client: PoolClient,
+  tenantId: string,
+  config: ProductionReadinessConfig = {},
+) {
   const health = await readOpsHealth(client, tenantId);
   const botPool = await readBrowserBotPool(client, tenantId);
   const audit = await readAuditVerifierEvidence(client, tenantId);
   const migrations = await readMigrationEvidence(client);
   const ownerEvidence = await readLatestOwnerEvidence(client, tenantId);
   const externalDelivery = await readLatestOpsNotificationDelivery(client, tenantId);
+  const aiGovernance = await readAiGovernanceReadiness(client, tenantId, {
+    configuredModels: config.aiGovernanceConfiguredModels,
+    configuredPromptVersions: config.aiGovernanceConfiguredPromptVersions,
+  });
   const gates: ProductionReadinessGate[] = [
+    authSsoReadinessGate(config.authReadiness),
+    aiGovernanceRuntimeGate(aiGovernance),
     migrationGate(migrations),
     graphileQueueGate(health.queue),
     browserPoolHaGate(botPool),
@@ -179,8 +201,75 @@ export async function readProductionReadiness(client: PoolClient, tenantId: stri
         health: botPool.health,
       },
       audit_verifier: audit,
+      ai_governance: aiGovernance.signals,
     },
   };
+}
+
+function authSsoReadinessGate(config: AuthReadinessConfig | undefined): ProductionReadinessGate {
+  const effectiveConfig = config ?? DEFAULT_AUTH_READINESS_CONFIG;
+  const readiness = evaluateAuthSsoReadiness(effectiveConfig);
+  const evidence = [
+    `provider_mode=${effectiveConfig.mode}`,
+    `configuration_source=${effectiveConfig.configurationSource}`,
+    `jwks_url_configured=${readiness.jwksConfigured}`,
+    `jwks_host=${readiness.jwksHost ?? "none"}`,
+    `issuer_configured=${readiness.issuerConfigured}`,
+    `audience_configured=${readiness.audienceConfigured}`,
+  ];
+
+  if (readiness.enterpriseSsoReady) {
+    return gate(
+      "auth_sso_readiness",
+      "Auth/SSO readiness",
+      "pass",
+      null,
+      "JWT verification uses RS256/JWKS with issuer and audience checks configured.",
+      evidence,
+      null,
+    );
+  }
+
+  const missing = [
+    effectiveConfig.mode !== "jwks" ? "jwks_mode" : null,
+    !readiness.jwksConfigured ? "jwks_url" : null,
+    !readiness.issuerConfigured ? "issuer" : null,
+    !readiness.audienceConfigured ? "audience" : null,
+  ].filter((item): item is string => item !== null);
+
+  return gate(
+    "auth_sso_readiness",
+    "Auth/SSO readiness",
+    "blocked",
+    authSsoReadinessReason(effectiveConfig, readiness),
+    `Controlled production requires enterprise SSO readiness; missing ${missing.join(", ")}.`,
+    evidence,
+    "Configure RS256/JWKS auth with explicit JWT_ISSUER and JWT_AUDIENCE before controlled production open.",
+  );
+}
+
+function authSsoReadinessReason(
+  config: AuthReadinessConfig,
+  readiness: ReturnType<typeof evaluateAuthSsoReadiness>,
+): string {
+  if (config.mode !== "jwks") return "auth_sso_jwks_required";
+  if (!readiness.jwksConfigured) return "auth_sso_jwks_url_missing";
+  if (!readiness.issuerConfigured && !readiness.audienceConfigured) return "auth_sso_issuer_audience_missing";
+  if (!readiness.issuerConfigured) return "auth_sso_issuer_missing";
+  if (!readiness.audienceConfigured) return "auth_sso_audience_missing";
+  return "auth_sso_not_ready";
+}
+
+function aiGovernanceRuntimeGate(snapshot: AiGovernanceReadinessSnapshot): ProductionReadinessGate {
+  return gate(
+    "ai_governance_runtime",
+    "AI governance runtime",
+    snapshot.status,
+    snapshot.reasonCode,
+    snapshot.detail,
+    snapshot.evidence,
+    snapshot.requiredAction,
+  );
 }
 
 function summarize(gates: readonly ProductionReadinessGate[]) {

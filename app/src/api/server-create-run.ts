@@ -11,6 +11,7 @@ import { ERROR_CATALOG } from "../../../ts/error-catalog";
 import type { CanonicalRequestHash, IdempotencyKey } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "../runtime/outbox";
+import { assertAiGovernanceRuntimeAllowed, evaluateAiGovernanceRuntime } from "./ai-governance-enforcement";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import type { RunEnqueuer, RunPriority } from "./run-queue";
@@ -129,6 +130,7 @@ export async function createRun(deps: ApiServerDeps, request: FastifyRequest): P
         correlationId: request.correlationId,
         workitemId,
         model,
+        configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
         priority,
       });
       // 멱등 성공 기록을 동일 tx에 원자화(작업 커밋 == 'succeeded' 커밋). 별도 tx 불일치 창 제거.
@@ -159,6 +161,7 @@ export interface CreateRunInTxInput {
   readonly workitemId?: string | null;
   /** 명시 model(미지정/null → default·단일정책 자동해소; 0건 → null). */
   readonly model?: string | null;
+  readonly configuredPromptVersions?: readonly string[];
   readonly priority?: RunPriority;
   /** 미지정 시 생성(POST /v1/runs 는 응답에 미리 쓴 runId 를 주입). */
   readonly runId?: string;
@@ -184,8 +187,11 @@ export async function createRunInTx(
   // scenario_version 존재 확인(RLS 스코프) + 아카이브된 시나리오 거부(origin 머지). 부재/archived → IR_SCHEMA_INVALID(FK 500 회피).
   const sv = await client.query<{ target: unknown }>(
     `SELECT sv.ir -> 'target' AS target FROM scenario_versions sv JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
-      WHERE sv.id = $1::uuid AND s.archived_at IS NULL`,
-    [input.scenarioVersionId],
+      WHERE sv.tenant_id = $1::uuid
+        AND sv.id = $2::uuid
+        AND s.tenant_id = $1::uuid
+        AND s.archived_at IS NULL`,
+    [input.tenantId, input.scenarioVersionId],
   );
   if (sv.rowCount === 0) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_version_not_found" });
@@ -212,17 +218,23 @@ export async function createRunInTx(
   let resolvedModel: string | null = null;
   const model = input.model ?? null;
   if (model !== null) {
-    const m = await client.query(`SELECT 1 FROM gateway_policies WHERE model = $1`, [model]);
+    const m = await client.query(`SELECT 1 FROM gateway_policies WHERE tenant_id = $1::uuid AND model = $2`, [input.tenantId, model]);
     if (m.rowCount === 0) {
       throw new ApiResponseError("RESOURCE_NOT_FOUND", { reason: "model_policy_not_found", model });
     }
     resolvedModel = model;
   } else {
-    const def = await client.query<{ model: string }>(`SELECT model FROM gateway_policies WHERE is_default = true`);
+    const def = await client.query<{ model: string }>(
+      `SELECT model FROM gateway_policies WHERE tenant_id = $1::uuid AND is_default = true`,
+      [input.tenantId],
+    );
     if (def.rowCount === 1) {
       resolvedModel = def.rows[0].model;
     } else {
-      const all = await client.query<{ model: string }>(`SELECT model FROM gateway_policies`);
+      const all = await client.query<{ model: string }>(
+        `SELECT model FROM gateway_policies WHERE tenant_id = $1::uuid`,
+        [input.tenantId],
+      );
       if (all.rowCount === 1) {
         resolvedModel = all.rows[0].model;
       } else if (all.rowCount !== 0) {
@@ -230,12 +242,26 @@ export async function createRunInTx(
       }
     }
   }
+  if (resolvedModel !== null) {
+    const promptVersions = input.configuredPromptVersions?.length ? input.configuredPromptVersions : [null];
+    for (const promptTemplateVersion of promptVersions) {
+      const aiGovernanceDecision = await evaluateAiGovernanceRuntime(client, {
+        tenantId: input.tenantId,
+        model: resolvedModel,
+        promptTemplateVersion,
+      });
+      assertAiGovernanceRuntimeAllowed(aiGovernanceDecision);
+    }
+  }
   if (workitemId !== null) {
-    const wi = await client.query(`SELECT 1 FROM workitems WHERE id = $1::uuid`, [workitemId]);
+    const wi = await client.query(`SELECT 1 FROM workitems WHERE tenant_id = $1::uuid AND id = $2::uuid`, [input.tenantId, workitemId]);
     if (wi.rowCount === 0) {
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "workitem_not_found" });
     }
-    const existingRun = await client.query(`SELECT 1 FROM runs WHERE workitem_id = $1::uuid LIMIT 1`, [workitemId]);
+    const existingRun = await client.query(
+      `SELECT 1 FROM runs WHERE tenant_id = $1::uuid AND workitem_id = $2::uuid LIMIT 1`,
+      [input.tenantId, workitemId],
+    );
     if (existingRun.rowCount !== 0) {
       throw new ApiResponseError("WORKITEM_CHECKOUT_CONFLICT", { reason: "workitem_run_exists" });
     }

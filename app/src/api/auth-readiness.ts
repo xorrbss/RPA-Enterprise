@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import type { AuthenticatedPrincipal } from "../../../ts/security-middleware-contract";
 import { DEFAULT_JWT_CLAIM_MAPPING, normalizeJwtClaimMapping, readJwtClaim, type JwtClaimMapping } from "./auth";
-import { requirePrincipal, type ApiServerDeps, type AuthReadinessConfig } from "./server";
+import { requirePrincipal, type ApiServerDeps, type AuthReadinessConfig } from "./server-shared";
 
 type ReadinessStatus = "ok" | "warning" | "blocked";
 
@@ -14,41 +14,61 @@ interface ClaimReadiness {
   readonly mapped_to: string;
 }
 
-const DEFAULT_READINESS: AuthReadinessConfig = {
+export const DEFAULT_AUTH_READINESS_CONFIG: AuthReadinessConfig = {
   mode: "hs256",
   configurationSource: "test_default",
   claimMapping: DEFAULT_JWT_CLAIM_MAPPING,
 };
 
+export interface AuthSsoReadiness {
+  readonly enterpriseSsoReady: boolean;
+  readonly jwksConfigured: boolean;
+  readonly jwksHost: string | null;
+  readonly issuerConfigured: boolean;
+  readonly audienceConfigured: boolean;
+  readonly gaps: readonly string[];
+}
+
+export function evaluateAuthSsoReadiness(config: AuthReadinessConfig): AuthSsoReadiness {
+  const issuerConfigured = nonEmpty(config.issuer);
+  const audienceConfigured = nonEmpty(config.audience);
+  const jwksConfigured = config.mode === "jwks" && nonEmpty(config.jwksUrl);
+  const enterpriseSsoReady = config.mode === "jwks" && jwksConfigured && issuerConfigured && audienceConfigured;
+  return {
+    enterpriseSsoReady,
+    jwksConfigured,
+    jwksHost: jwksHost(config.jwksUrl),
+    issuerConfigured,
+    audienceConfigured,
+    gaps: readinessGaps(config, { jwksConfigured, issuerConfigured, audienceConfigured }),
+  };
+}
+
 export function registerAuthReadinessRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get(
     "/v1/auth/readiness",
     { config: { rbacAction: "principal.read" } },
-    async (request) => authReadinessResponse(requirePrincipal(request), deps.authReadiness ?? DEFAULT_READINESS),
+    async (request) => authReadinessResponse(requirePrincipal(request), deps.authReadiness ?? DEFAULT_AUTH_READINESS_CONFIG),
   );
 }
 
 function authReadinessResponse(principal: AuthenticatedPrincipal, config: AuthReadinessConfig) {
   const claimMapping = normalizeJwtClaimMapping(config.claimMapping);
   const roleMapEntries = Object.keys(config.roleMap ?? {}).length;
-  const issuerConfigured = nonEmpty(config.issuer);
-  const audienceConfigured = nonEmpty(config.audience);
-  const jwksConfigured = config.mode === "jwks" && nonEmpty(config.jwksUrl);
-  const enterpriseSsoReady = config.mode === "jwks" && jwksConfigured && issuerConfigured && audienceConfigured;
-  const gaps = readinessGaps(config, { jwksConfigured, issuerConfigured, audienceConfigured });
+  const readiness = evaluateAuthSsoReadiness(config);
 
   return {
-    status: readinessStatus(enterpriseSsoReady, gaps),
-    enterprise_sso_ready: enterpriseSsoReady,
+    status: readinessStatus(readiness.enterpriseSsoReady, readiness.gaps),
+    enterprise_sso_ready: readiness.enterpriseSsoReady,
     provider: {
       mode: config.mode,
       configuration_source: config.configurationSource,
       algorithm: config.mode === "jwks" ? "RS256" : "HS256",
-      jwks_url_configured: jwksConfigured,
-      jwks_host: jwksHost(config.jwksUrl),
-      issuer_configured: issuerConfigured,
+      jwks_url_configured: readiness.jwksConfigured,
+      jwks_host: readiness.jwksHost,
+      issuer_configured: readiness.issuerConfigured,
       issuer: config.issuer ?? null,
-      audience_configured: audienceConfigured,
+      audience_configured: readiness.audienceConfigured,
       audience: config.audience ?? null,
     },
     claim_mapping: {
@@ -72,7 +92,7 @@ function authReadinessResponse(principal: AuthenticatedPrincipal, config: AuthRe
       display_name: stringClaim(principal, claimMapping.displayNameClaim),
       email: stringClaim(principal, claimMapping.emailClaim),
     },
-    operational_gaps: gaps,
+    operational_gaps: readiness.gaps,
   };
 }
 

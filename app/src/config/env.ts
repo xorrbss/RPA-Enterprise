@@ -23,10 +23,10 @@ import {
   type VaultIdentityConfig,
 } from "./env-primitives";
 import { loadArtifactLifecycleWorkerConfig } from "./env-artifact-lifecycle";
-import { loadGatewayConfig, loadScenarioGenerationLlmV1Config } from "./env-gateway";
+import { loadAiGovernanceReadinessEnvConfig, loadGatewayConfig, loadScenarioGenerationLlmV1Config } from "./env-gateway";
 
-export { loadGatewayConfig, loadScenarioGenerationLlmV1Config };
-export type { GatewayConfig, ScenarioGenerationLlmV1Config } from "./env-gateway";
+export { loadAiGovernanceReadinessEnvConfig, loadGatewayConfig, loadScenarioGenerationLlmV1Config };
+export type { AiGovernanceReadinessEnvConfig, GatewayConfig, ScenarioGenerationLlmV1Config } from "./env-gateway";
 
 export { loadArtifactLifecycleWorkerConfig };
 export type {
@@ -175,8 +175,9 @@ function buildPgConnString(): string {
 
 /**
  * JWT verification config. `JWKS_URL` selects the production RS256/JWKS verifier (keys fetched from the IdP);
- * absent ??the v1 HS256 shared-secret default (dev/tests). Each mode is fail-closed on its own required value;
- * the algorithm/issuer/JWKS endpoint are deploy-config (auth-rbac.md fixes only the claims, not the algorithm).
+ * absent ??the v1 HS256 shared-secret default (dev/tests). Each mode is fail-closed on its own required value.
+ * RPA_ENV=prod additionally requires issuer and audience so JWKS cannot pass production readiness without
+ * token-confusion defenses.
  */
 export type ApiJwtConfig =
   | ({ readonly mode: "hs256"; readonly secret: string } & ApiJwtCommonConfig)
@@ -216,7 +217,7 @@ export interface ApiArtifactObjectStoreConfig {
   readonly vaultApi: VaultIdentityConfig;
 }
 
-function loadApiJwtConfig(): ApiJwtConfig {
+function loadApiJwtConfig(rpaEnv: string): ApiJwtConfig {
   const claimMapping = loadJwtClaimMapping();
   const roleMap = loadJwtRoleMap();
   const jwksUrl = opt("JWKS_URL");
@@ -224,6 +225,14 @@ function loadApiJwtConfig(): ApiJwtConfig {
     // RS256/JWKS mode: https-forced (IdP keys must not be fetched over cleartext).
     const issuer = opt("JWT_ISSUER");
     const audience = opt("JWT_AUDIENCE");
+    if (rpaEnv.toLowerCase() === "prod") {
+      if (issuer === undefined) {
+        throw new Error("RPA_ENV=prod with JWKS_URL requires JWT_ISSUER (fail-closed auth readiness)");
+      }
+      if (audience === undefined) {
+        throw new Error("RPA_ENV=prod with JWKS_URL requires JWT_AUDIENCE (fail-closed auth readiness)");
+      }
+    }
     return {
       mode: "jwks",
       jwksUrl: assertHttpsUrl("JWKS_URL", jwksUrl),
@@ -308,7 +317,7 @@ export function loadApiConfig(common: CommonConfig, options: { readonly runMode?
   }
   return {
     port: num("PORT", 8080),
-    jwt: loadApiJwtConfig(),
+    jwt: loadApiJwtConfig(common.rpaEnv),
     signedCommandRegistry: loadSignedCommandRegistryConfig(common),
     corsOrigins: origins
       ? origins.split(",").map((s) => s.trim()).filter((s) => s.length > 0)

@@ -82,6 +82,20 @@ async function seedPolicy(pool: ReturnType<typeof createPool>, tenant: string, m
   });
 }
 
+async function seedAiRuntimeBlockPolicy(pool: ReturnType<typeof createPool>, tenant: string): Promise<void> {
+  await withTenantTx(pool, tenant, async (c) => {
+    await c.query(
+      `INSERT INTO ai_runtime_policies (
+         id, tenant_id, mode, subject_mapping_ref, emergency_override_owner_ref,
+         policy_decision_ref, evidence_ref, updated_by
+       )
+       VALUES ($1::uuid,$2::uuid,'block','policy:ai-subject-map','group:ai-override-owners',
+               'policy-decision:ai-runtime-block','artifact:ai-runtime-policy','admin-a')`,
+      [randomUUID(), tenant],
+    );
+  });
+}
+
 async function runModel(pool: ReturnType<typeof createPool>, tenant: string, runId: string): Promise<string | null> {
   return withTenantTx(pool, tenant, async (c) => {
     const r = await c.query<{ model: string | null }>(`SELECT model FROM runs WHERE id = $1::uuid`, [runId]);
@@ -175,6 +189,11 @@ async function main(): Promise<void> {
       const sameRun = r1.json().run_id === r1replay.json().run_id;
       const r1replayModel = await runModel(pool, T1, r1replay.json().run_id);
       check("replay 동일 키 → 동일 run_id + runs.model='codex' 동결(결정성)", r1replay.statusCode === 201 && sameRun && r1replayModel === "codex", `${r1replay.statusCode} same=${sameRun} model=${String(r1replayModel)}`);
+      await seedAiRuntimeBlockPolicy(pool, T1);
+      const aiBlocked = await create(T1, tok1, SV1, "m-ai-governance-block");
+      check("AI runtime block policy without model/cost evidence rejects run creation",
+        aiBlocked.statusCode === 403 && aiBlocked.json().code === "AI_GOVERNANCE_POLICY_BLOCKED",
+        `${aiBlocked.statusCode} ${aiBlocked.body}`);
     } finally {
       await app.close();
     }

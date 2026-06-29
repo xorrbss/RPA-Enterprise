@@ -1,0 +1,9 @@
+This sample overlay is review evidence only. It is intentionally not a release
+artifact and must be copied into a platform-owned deployment repository only
+after the project owner replaces every documentation-only value below.
+
+TODO: [BLOCKED] Required decision: approve the staging runtime image repository and immutable sha256 digest produced by the release pipeline.
+TODO: [BLOCKED] Required decision: verify and retain the runtime image SBOM, provenance attestation, and signing evidence before any cluster apply.
+TODO: [BLOCKED] Required decision: approve exact destination CIDRs and ports for managed PostgreSQL, Vault, object storage, OTLP collector, and LLM provider egress.
+TODO: [BLOCKED] Required decision: approve the staging namespace, SecretStore alias/path, SecretRef inventory, and runtime identities before creating the runtime Secret.
+TODO: [BLOCKED] Required decision: if ingress is enabled, approve ingress class, host, TLS secret, and source NetworkPolicy before adding the optional ingress template.

@@ -154,6 +154,7 @@ async function applyDecide(
     params,
     asOf: new Date().toISOString(),
     correlationId,
+    configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
   });
 
   // 5) spawned_run_id 갱신(결정 ↔ 처리 run 연결, 콘솔 폴링·딥링크용).

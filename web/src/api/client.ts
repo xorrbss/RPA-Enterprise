@@ -4,6 +4,9 @@ import {
   type AiGovernanceEvidence,
   type AiGovernanceEvidenceListParams,
   type AiGovernanceEvidenceRequest,
+  type AiGovernanceRuntimePolicy,
+  type AiGovernanceRuntimePolicyEnvelope,
+  type AiGovernanceRuntimePolicyRequest,
   type BrowserRecordingAppendEventsBody,
   type BrowserRecordingAppendResult,
   type BrowserRecordingEvent,
@@ -173,6 +176,8 @@ export interface ApiClient {
   recordProductionReadinessEvidence(body: ProductionReadinessEvidenceRequest, idempotencyKey: string): Promise<ProductionReadinessEvidence>;
   listAiGovernanceEvidence(p?: AiGovernanceEvidenceListParams): Promise<Paginated<AiGovernanceEvidence>>;
   recordAiGovernanceEvidence(body: AiGovernanceEvidenceRequest, idempotencyKey: string): Promise<AiGovernanceEvidence>;
+  getAiGovernanceRuntimePolicy(): Promise<AiGovernanceRuntimePolicyEnvelope>;
+  upsertAiGovernanceRuntimePolicy(body: AiGovernanceRuntimePolicyRequest, idempotencyKey: string): Promise<AiGovernanceRuntimePolicy>;
   listBotPools(p?: ListParams): Promise<Paginated<BotPoolItem>>;
   getAutomationPerformanceReport(month?: string): Promise<AutomationPerformanceReport>;
   exportAutomationPerformanceReportCsv(month?: string): Promise<string>;
@@ -627,6 +632,9 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     recordProductionReadinessEvidence: (body, idempotencyKey) => post(`/v1/ops/production-readiness/evidence`, idempotencyKey, body),
     listAiGovernanceEvidence: (p) => get(`/v1/ai-governance/evidence${queryString(p)}`),
     recordAiGovernanceEvidence: (body, idempotencyKey) => post(`/v1/ai-governance/evidence`, idempotencyKey, body),
+    getAiGovernanceRuntimePolicy: () => get(`/v1/ai-governance/runtime-policy`),
+    upsertAiGovernanceRuntimePolicy: (body, idempotencyKey) =>
+      send("PUT", `/v1/ai-governance/runtime-policy`, body, { "Idempotency-Key": idempotencyKey }),
     listBotPools: (p) => get(`/v1/bot-pools${queryString(p)}`),
     getAutomationPerformanceReport: (month) =>
       get(`/v1/reports/automation-performance${queryString(month !== undefined ? { month } : undefined)}`),

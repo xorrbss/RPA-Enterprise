@@ -36,6 +36,7 @@ import { ConsoleMetricExporter, PeriodicExportingMetricReader } from "@opentelem
 import { ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 
 import { hmacJwtVerifier, jwksRs256Verifier, JwtAuthenticationBoundary } from "./api/auth";
+import { PgAiGovernanceGatewayGuard } from "./api/ai-governance-enforcement";
 import { buildApiArtifactObjectReader } from "./api/artifact-object-reader-binding";
 import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
 import { createLlmScenarioPlanner, LlmGatewayScenarioPlannerClient } from "./api/llm-scenario-planner";
@@ -52,7 +53,7 @@ import {
 import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { buildServer } from "./api/server";
 import { DenyAllSignedCommandRegistry, SecretStoreSignedCommandRegistry } from "./api/signed-command-registry";
-import { assertArtifactStoreStartupCompatibility, loadApiConfig, loadApiLogLevel, loadArtifactLifecycleConsumer, loadCommonConfig, loadRunMode, loadScenarioGenerationLlmV1Config, type ApiConfig, type CommonConfig, type ScenarioGenerationLlmV1Config } from "./config/env";
+import { assertArtifactStoreStartupCompatibility, loadAiGovernanceReadinessEnvConfig, loadApiConfig, loadApiLogLevel, loadArtifactLifecycleConsumer, loadCommonConfig, loadRunMode, loadScenarioGenerationLlmV1Config, type ApiConfig, type CommonConfig, type ScenarioGenerationLlmV1Config } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
 import { bootstrapMetrics, bootstrapTracing } from "./observability/bootstrap";
 import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
@@ -243,6 +244,7 @@ async function buildScenarioGenerationPlannerBinding(
     idempotency: llmCalls,
     securityAudit,
     redactionBoundary: new DeterministicGatewayRedactionBoundary(),
+    aiGovernance: new PgAiGovernanceGatewayGuard(pool),
     config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
   });
   return {
@@ -319,6 +321,7 @@ function apiObjectStorePrincipal(): AuthenticatedPrincipal {
 
 async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMode()): Promise<FastifyInstance> {
   const cfg = loadApiConfig(common, { runMode });
+  const aiGovernanceReadiness = loadAiGovernanceReadinessEnvConfig();
   const scenarioGenerationLlmV1 = loadScenarioGenerationLlmV1Config();
   const securityAudit = new PgDurableSecurityAuditDecisionWriter(pool);
   const artifactObjectReader = await buildApiArtifactObjectReader(cfg);
@@ -364,6 +367,8 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
           claimMapping: cfg.jwt.claimMapping,
           roleMap: cfg.jwt.roleMap,
         },
+    aiGovernanceConfiguredModels: aiGovernanceReadiness.configuredModels,
+    aiGovernanceConfiguredPromptVersions: aiGovernanceReadiness.configuredPromptVersions,
     rbac: new RoleMatrixRbacMiddleware(),
     idempotency: new PgControlPlaneIdempotencyStore(pool),
     enqueuer: new PgGraphileRunEnqueuer(),

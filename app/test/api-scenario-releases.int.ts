@@ -8,7 +8,7 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
-import { buildServer } from "../src/api/server";
+import { buildServer, type AuthReadinessConfig } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
@@ -19,6 +19,13 @@ const TENANT = "00000000-0000-0000-0000-0000000000a1";
 const WORKER_A = "85000000-0000-4000-8000-000000000101";
 const WORKER_B = "85000000-0000-4000-8000-000000000102";
 const SECRET = new TextEncoder().encode("scenario-releases-int-secret-do-not-use-in-prod-0123456789");
+const SSO_READY: AuthReadinessConfig = {
+  mode: "jwks",
+  configurationSource: "deployment_config",
+  jwksUrl: "https://idp.example.com/.well-known/jwks.json",
+  issuer: "https://idp.example.com/",
+  audience: "rpa-control-plane",
+};
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -253,6 +260,7 @@ async function main(): Promise<void> {
       enqueuer,
       signedCommandRegistry,
       enforceAlmMakerChecker: true,
+      authReadiness: SSO_READY,
     });
     await app.ready();
     try {
@@ -385,6 +393,216 @@ async function main(): Promise<void> {
       );
 
       await seedControlledProdReadiness(pool);
+
+      const missingAudienceApp = buildServer({
+        pool,
+        auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+        rbac: new RoleMatrixRbacMiddleware(),
+        idempotency: new PgControlPlaneIdempotencyStore(pool),
+        enqueuer,
+        signedCommandRegistry,
+        enforceAlmMakerChecker: true,
+        authReadiness: {
+          mode: "jwks",
+          configurationSource: "deployment_config",
+          jwksUrl: "https://idp.example.com/.well-known/jwks.json",
+          issuer: "https://idp.example.com/",
+        },
+      });
+      await missingAudienceApp.ready();
+      try {
+        const authBlocked = await missingAudienceApp.inject({
+          method: "POST",
+          url: `/v1/scenarios/${scenarioId}/releases`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "auth-readiness-blocked-create" },
+          payload: { source_version: 1, target_environment: "prod", reason: "auth readiness negative" },
+        });
+        check("auth readiness negative prod release can be drafted",
+          authBlocked.statusCode === 201 && authBlocked.json().status === "draft",
+          authBlocked.body);
+        const authBlockedReleaseId = authBlocked.json().release_id as string;
+        await missingAudienceApp.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${authBlockedReleaseId}/submit`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "auth-readiness-blocked-submit" },
+          payload: {},
+        });
+        const authBlockedApprove = await missingAudienceApp.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${authBlockedReleaseId}/approve`,
+          headers: { authorization: `Bearer ${admin}`, "idempotency-key": "auth-readiness-blocked-approve" },
+          payload: { reason: "should block until SSO audience is configured" },
+        });
+        check("prod approval blocked by auth SSO readiness",
+          authBlockedApprove.statusCode === 422 &&
+            authBlockedApprove.json().details?.reason === "controlled_prod_readiness_required" &&
+            authBlockedApprove.json().details?.blocking_gate_ids?.includes("auth_sso_readiness"),
+          authBlockedApprove.body);
+      } finally {
+        await missingAudienceApp.close();
+      }
+
+      const configuredModelReleaseApp = buildServer({
+        pool,
+        auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+        rbac: new RoleMatrixRbacMiddleware(),
+        idempotency: new PgControlPlaneIdempotencyStore(pool),
+        enqueuer,
+        signedCommandRegistry,
+        enforceAlmMakerChecker: true,
+        authReadiness: SSO_READY,
+        aiGovernanceConfiguredModels: ["codex-release-gate"],
+      });
+      await configuredModelReleaseApp.ready();
+      try {
+        const aiModelBlocked = await configuredModelReleaseApp.inject({
+          method: "POST",
+          url: `/v1/scenarios/${scenarioId}/releases`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ai-model-readiness-blocked-create" },
+          payload: { source_version: 1, target_environment: "prod", reason: "configured model readiness negative" },
+        });
+        check("configured model readiness negative prod release can be drafted",
+          aiModelBlocked.statusCode === 201 && aiModelBlocked.json().status === "draft",
+          aiModelBlocked.body);
+        const aiModelBlockedReleaseId = aiModelBlocked.json().release_id as string;
+        await configuredModelReleaseApp.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiModelBlockedReleaseId}/submit`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ai-model-readiness-blocked-submit" },
+          payload: {},
+        });
+        const aiModelBlockedApprove = await configuredModelReleaseApp.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiModelBlockedReleaseId}/approve`,
+          headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-model-readiness-blocked-approve" },
+          payload: { reason: "should block until AI model governance policy is configured" },
+        });
+        check("prod approval blocked by configured AI model readiness",
+          aiModelBlockedApprove.statusCode === 422 &&
+            aiModelBlockedApprove.json().details?.reason === "controlled_prod_readiness_required" &&
+            aiModelBlockedApprove.json().details?.deferred_gate_ids?.includes("ai_governance_runtime"),
+          aiModelBlockedApprove.body);
+
+        const aiModelDeploy = await app.inject({
+          method: "POST",
+          url: `/v1/scenarios/${scenarioId}/releases`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ai-model-deploy-blocked-create" },
+          payload: { source_version: 1, target_environment: "prod", reason: "configured model deploy gate negative" },
+        });
+        check("configured model deploy regression release can be drafted by ready app",
+          aiModelDeploy.statusCode === 201 && aiModelDeploy.json().status === "draft",
+          aiModelDeploy.body);
+        const aiModelDeployReleaseId = aiModelDeploy.json().release_id as string;
+        await app.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiModelDeployReleaseId}/submit`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ai-model-deploy-blocked-submit" },
+          payload: {},
+        });
+        const aiModelDeployApprove = await app.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiModelDeployReleaseId}/approve`,
+          headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-model-deploy-blocked-approve" },
+          payload: { reason: "ready app approval" },
+        });
+        check("configured model deploy regression release can be approved by ready app",
+          aiModelDeployApprove.statusCode === 200 && aiModelDeployApprove.json().status === "approved",
+          aiModelDeployApprove.body);
+        const aiModelDeployBlocked = await configuredModelReleaseApp.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiModelDeployReleaseId}/deploy`,
+          headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-model-deploy-blocked-deploy", "if-match": "1" },
+          payload: {},
+        });
+        check("prod deploy blocked by configured AI model readiness",
+          aiModelDeployBlocked.statusCode === 422 &&
+            aiModelDeployBlocked.json().details?.reason === "controlled_prod_readiness_required" &&
+            aiModelDeployBlocked.json().details?.deferred_gate_ids?.includes("ai_governance_runtime"),
+          aiModelDeployBlocked.body);
+      } finally {
+        await configuredModelReleaseApp.close();
+      }
+
+      const configuredPromptReleaseApp = buildServer({
+        pool,
+        auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
+        rbac: new RoleMatrixRbacMiddleware(),
+        idempotency: new PgControlPlaneIdempotencyStore(pool),
+        enqueuer,
+        signedCommandRegistry,
+        enforceAlmMakerChecker: true,
+        authReadiness: SSO_READY,
+        aiGovernanceConfiguredPromptVersions: ["dom-executor@release-gate"],
+      });
+      await configuredPromptReleaseApp.ready();
+      try {
+        const aiPromptBlocked = await configuredPromptReleaseApp.inject({
+          method: "POST",
+          url: `/v1/scenarios/${scenarioId}/releases`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ai-prompt-readiness-blocked-create" },
+          payload: { source_version: 1, target_environment: "prod", reason: "configured prompt readiness negative" },
+        });
+        check("configured prompt readiness negative prod release can be drafted",
+          aiPromptBlocked.statusCode === 201 && aiPromptBlocked.json().status === "draft",
+          aiPromptBlocked.body);
+        const aiPromptBlockedReleaseId = aiPromptBlocked.json().release_id as string;
+        await configuredPromptReleaseApp.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiPromptBlockedReleaseId}/submit`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ai-prompt-readiness-blocked-submit" },
+          payload: {},
+        });
+        const aiPromptBlockedApprove = await configuredPromptReleaseApp.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiPromptBlockedReleaseId}/approve`,
+          headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-prompt-readiness-blocked-approve" },
+          payload: { reason: "should block until AI prompt governance policy is configured" },
+        });
+        check("prod approval blocked by configured AI prompt readiness",
+          aiPromptBlockedApprove.statusCode === 422 &&
+            aiPromptBlockedApprove.json().details?.reason === "controlled_prod_readiness_required" &&
+            aiPromptBlockedApprove.json().details?.deferred_gate_ids?.includes("ai_governance_runtime"),
+          aiPromptBlockedApprove.body);
+
+        const aiPromptDeploy = await app.inject({
+          method: "POST",
+          url: `/v1/scenarios/${scenarioId}/releases`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ai-prompt-deploy-blocked-create" },
+          payload: { source_version: 1, target_environment: "prod", reason: "configured prompt deploy gate negative" },
+        });
+        check("configured prompt deploy regression release can be drafted by ready app",
+          aiPromptDeploy.statusCode === 201 && aiPromptDeploy.json().status === "draft",
+          aiPromptDeploy.body);
+        const aiPromptDeployReleaseId = aiPromptDeploy.json().release_id as string;
+        await app.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiPromptDeployReleaseId}/submit`,
+          headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ai-prompt-deploy-blocked-submit" },
+          payload: {},
+        });
+        const aiPromptDeployApprove = await app.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiPromptDeployReleaseId}/approve`,
+          headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-prompt-deploy-blocked-approve" },
+          payload: { reason: "ready app approval" },
+        });
+        check("configured prompt deploy regression release can be approved by ready app",
+          aiPromptDeployApprove.statusCode === 200 && aiPromptDeployApprove.json().status === "approved",
+          aiPromptDeployApprove.body);
+        const aiPromptDeployBlocked = await configuredPromptReleaseApp.inject({
+          method: "POST",
+          url: `/v1/scenario-releases/${aiPromptDeployReleaseId}/deploy`,
+          headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-prompt-deploy-blocked-deploy", "if-match": "1" },
+          payload: {},
+        });
+        check("prod deploy blocked by configured AI prompt readiness",
+          aiPromptDeployBlocked.statusCode === 422 &&
+            aiPromptDeployBlocked.json().details?.reason === "controlled_prod_readiness_required" &&
+            aiPromptDeployBlocked.json().details?.deferred_gate_ids?.includes("ai_governance_runtime"),
+          aiPromptDeployBlocked.body);
+      } finally {
+        await configuredPromptReleaseApp.close();
+      }
 
       const deployBlocked = await app.inject({
         method: "POST",

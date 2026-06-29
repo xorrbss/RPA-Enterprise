@@ -148,6 +148,85 @@ async function main(): Promise<void> {
     const admin = await mint(["admin"], TENANT_A, "admin-a");
     const viewerB = await mint(["viewer"], TENANT_B, "viewer-b");
 
+    const missingPolicy = await app.inject({
+      method: "GET",
+      url: "/v1/ai-governance/runtime-policy",
+      headers: { authorization: `Bearer ${viewer}` },
+    });
+    check("viewer reads missing AI runtime policy envelope",
+      missingPolicy.statusCode === 200 && missingPolicy.json().configured === false,
+      missingPolicy.body);
+
+    const deniedPolicyPut = await app.inject({
+      method: "PUT",
+      url: "/v1/ai-governance/runtime-policy",
+      headers: { authorization: `Bearer ${viewer}`, "idempotency-key": "ai-runtime-policy-viewer-denied" },
+      payload: {
+        mode: "block",
+        subject_mapping_ref: "policy:ai-subject-map",
+        emergency_override_owner_ref: "group:ai-override-owners",
+        policy_decision_ref: "policy-decision:ai-runtime-prod",
+      },
+    });
+    check("viewer cannot upsert AI runtime policy",
+      deniedPolicyPut.statusCode === 403 && deniedPolicyPut.json().code === "AUTHZ_FORBIDDEN",
+      deniedPolicyPut.body);
+
+    const runtimePolicyPayload = {
+      mode: "block",
+      subject_mapping_ref: "policy:ai-subject-map-2026-06",
+      grace_until: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      emergency_override_owner_ref: "group:ai-override-owners",
+      policy_decision_ref: "policy-decision:ai-runtime-prod-2026-06",
+      evidence_ref: "artifact:ai-runtime-policy-2026-06",
+    };
+    const createdPolicy = await app.inject({
+      method: "PUT",
+      url: "/v1/ai-governance/runtime-policy",
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-runtime-policy-1" },
+      payload: runtimePolicyPayload,
+    });
+    const createdPolicyBody = createdPolicy.json() as { policy_id: string; mode: string; audit_action: string };
+    check("admin upserts AI runtime policy",
+      createdPolicy.statusCode === 201 &&
+        createdPolicyBody.mode === "block" &&
+        createdPolicyBody.audit_action === "ai_governance.enforce",
+      createdPolicy.body);
+
+    const replayPolicy = await app.inject({
+      method: "PUT",
+      url: "/v1/ai-governance/runtime-policy",
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-runtime-policy-1" },
+      payload: runtimePolicyPayload,
+    });
+    check("AI runtime policy upsert idempotency replays first response",
+      replayPolicy.statusCode === 201 && (replayPolicy.json() as { policy_id: string }).policy_id === createdPolicyBody.policy_id,
+      replayPolicy.body);
+
+    const configuredPolicy = await app.inject({
+      method: "GET",
+      url: "/v1/ai-governance/runtime-policy",
+      headers: { authorization: `Bearer ${viewer}` },
+    });
+    check("viewer reads configured AI runtime policy",
+      configuredPolicy.statusCode === 200 &&
+        configuredPolicy.json().configured === true &&
+        configuredPolicy.json().policy.policy_id === createdPolicyBody.policy_id,
+      configuredPolicy.body);
+
+    const unsafePolicyRef = await app.inject({
+      method: "PUT",
+      url: "/v1/ai-governance/runtime-policy",
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "ai-runtime-policy-unsafe-ref" },
+      payload: {
+        ...runtimePolicyPayload,
+        policy_decision_ref: "https://example.invalid/raw-policy-decision",
+      },
+    });
+    check("AI runtime policy rejects raw URL references",
+      unsafePolicyRef.statusCode === 422 && unsafePolicyRef.json().code === "IR_SCHEMA_INVALID",
+      unsafePolicyRef.body);
+
     const empty = await app.inject({
       method: "GET",
       url: "/v1/ai-governance/evidence",
