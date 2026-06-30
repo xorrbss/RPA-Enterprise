@@ -32,8 +32,13 @@ import {
   type AutomationIdeaUpdateBody,
   type ArtifactDetail,
   type CaptureSessionItem,
+  type ConnectorCertification,
+  type ConnectorCertificationRequest,
   type ConnectorCatalogItem,
   type ConnectorCatalogListParams,
+  type ConnectorProfile,
+  type ConnectorProfileCreateRequest,
+  type ConnectorProfileListParams,
   type CreateRunBody,
   type CreateRunResult,
   type DecideApprovalBody,
@@ -73,6 +78,7 @@ import {
   type ProductionReadinessEvidence,
   type ProductionReadinessEvidenceRequest,
   type ProductionReadinessEvidenceType,
+  type PromoteRecordingToStudioResult,
   type PromoteFromRunResult,
   type PrincipalItem,
   type PrioritizeRunBody,
@@ -191,6 +197,9 @@ export interface ApiClient {
   getAuthReadiness(): Promise<AuthReadiness>;
   listConnectors(p?: ConnectorCatalogListParams): Promise<Paginated<ConnectorCatalogItem>>;
   listTemplates(p?: TemplateCatalogListParams): Promise<Paginated<TemplateCatalogItem>>;
+  listConnectorProfiles(p?: ConnectorProfileListParams): Promise<Paginated<ConnectorProfile>>;
+  createConnectorProfile(body: ConnectorProfileCreateRequest, idempotencyKey: string): Promise<ConnectorProfile>;
+  certifyConnectorProfile(profileId: string, body: ConnectorCertificationRequest, idempotencyKey: string): Promise<ConnectorCertification>;
   listIntegrationHandoffs(p?: IntegrationHandoffListParams): Promise<Paginated<IntegrationHandoff>>;
   createIntegrationHandoff(body: IntegrationHandoffCreateRequest, idempotencyKey: string): Promise<IntegrationHandoff>;
   dispatchIntegrationHandoff(handoffId: string, body: IntegrationHandoffDispatchRequest, idempotencyKey: string): Promise<IntegrationHandoffDispatchAttempt>;
@@ -232,6 +241,7 @@ export interface ApiClient {
     idempotencyKey: string,
   ): Promise<BrowserRecordingAppendResult>;
   completeBrowserRecording(siteId: string, recordingId: string, idempotencyKey: string): Promise<BrowserRecordingSession>;
+  promoteRecordingToStudio(siteId: string, recordingId: string, idempotencyKey: string): Promise<PromoteRecordingToStudioResult>;
   listSessionCaptures(siteId: string): Promise<Paginated<CaptureSessionItem>>;
   listGatewayPolicies(): Promise<Paginated<GatewayPolicy>>;
   getGatewayPolicy(model?: string): Promise<GatewayPolicy>;
@@ -658,6 +668,10 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     getAuthReadiness: () => get(`/v1/auth/readiness`),
     listConnectors: (p) => get(`/v1/connectors${queryString(p)}`),
     listTemplates: (p) => get(`/v1/templates${queryString(p)}`),
+    listConnectorProfiles: (p) => get(`/v1/connector-profiles${queryString(p)}`),
+    createConnectorProfile: (body, key) => post(`/v1/connector-profiles`, key, body),
+    certifyConnectorProfile: (profileId, body, key) =>
+      post(`/v1/connector-profiles/${encodeURIComponent(profileId)}/certifications`, key, body),
     listIntegrationHandoffs: (p) => get(`/v1/integration-handoffs${queryString(p)}`),
     createIntegrationHandoff: (body, key) => post(`/v1/integration-handoffs`, key, body),
     dispatchIntegrationHandoff: (handoffId, body, key) => post(`/v1/integration-handoffs/${handoffId}/dispatch`, key, body),
@@ -699,6 +713,8 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/sites/${siteId}/recordings/${recordingId}/events`, key, body),
     completeBrowserRecording: (siteId, recordingId, key) =>
       post(`/v1/sites/${siteId}/recordings/${recordingId}/complete`, key),
+    promoteRecordingToStudio: (siteId, recordingId, key) =>
+      post(`/v1/sites/${siteId}/recordings/${recordingId}/promote-to-studio`, key),
     listSessionCaptures: (siteId) => get(`/v1/sites/${siteId}/session/capture`),
     listGatewayPolicies: () => get(`/v1/gateway/policies`),
     getGatewayCallSummary: (days) => get<GatewayCallSummary>(`/v1/gateway/call-summary${days !== undefined ? `?days=${days}` : ""}`),

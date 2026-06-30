@@ -131,6 +131,18 @@ async function idempotencyCount(pool: Pool, tenant: string, endpoint: string, ke
   });
 }
 
+async function studioGraphVersionCount(pool: Pool, tenantId: string, recordingId: string): Promise<number> {
+  return withTenantTx(pool, tenantId, async (client) => {
+    const result = await client.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM studio_graph_versions
+        WHERE tenant_id=$1::uuid AND source_recording_session_id=$2::uuid`,
+      [tenantId, recordingId],
+    );
+    return Number(result.rows[0]?.count ?? "0");
+  });
+}
+
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
   try {
@@ -190,6 +202,13 @@ async function main(): Promise<void> {
         app.inject({
           method: "POST",
           url: `/v1/sites/${siteId}/recordings/${recordingId}/complete`,
+          headers: { authorization: `Bearer ${token}`, ...(key !== undefined ? { "idempotency-key": key } : {}) },
+          payload: {},
+        });
+      const promoteToStudio = (token: string, recordingId: string, key?: string, siteId = SITE_A) =>
+        app.inject({
+          method: "POST",
+          url: `/v1/sites/${siteId}/recordings/${recordingId}/promote-to-studio`,
           headers: { authorization: `Bearer ${token}`, ...(key !== undefined ? { "idempotency-key": key } : {}) },
           payload: {},
         });
@@ -267,11 +286,14 @@ async function main(): Promise<void> {
         status: string;
         event_count: number;
         draft_ir: { start: string; nodes: Record<string, unknown> };
-        validation_report: { errors: unknown[]; warnings: unknown[] };
+        validation_report: { errors: unknown[]; warnings: unknown[]; stages?: unknown[] };
+        review_status: string;
+        review_report: { blockers: unknown[]; selector_confidence: unknown[]; repair_suggestions: unknown[] };
       };
       check("complete recording -> 200", completed.statusCode === 200 && completedBody.status === "completed", completed.body);
       check("complete includes draft ir", completedBody.draft_ir.start === "step_01" && completed.body.includes("click_selector") && completed.body.includes("fill_selector"), completed.body);
       check("complete includes static validation report", Array.isArray(completedBody.validation_report.errors) && Array.isArray(completedBody.validation_report.warnings), completed.body);
+      check("complete includes recorder review report", completedBody.review_status === "ready_for_studio" && completedBody.review_report.selector_confidence.length === 2, completed.body);
       check("complete prefers object repository selector", completed.body.includes("button.repo-submit") && completed.body.includes("input.repo-customer"), completed.body);
       check("complete does not use cross-tenant object selector", !completed.body.includes("button.wrong-tenant"), completed.body);
       check("complete persists event_count", completedBody.event_count === 3, completed.body);
@@ -290,6 +312,22 @@ async function main(): Promise<void> {
         submitUsageAfterReplay === 1 && customerUsageAfterReplay === 1,
         `submit=${submitUsageAfterReplay} customer=${customerUsageAfterReplay}`,
       );
+
+      const promoted = await promoteToStudio(operator, createdBody.recording_session_id, "rec-promote-studio-1");
+      const promotedBody = JSON.parse(promoted.body) as {
+        recording_session_id: string;
+        scenario_id: string;
+        version: number;
+        studio_project_id: string;
+        studio_graph_version: number;
+        promotion_status: string;
+      };
+      check("promote completed recording to Studio draft -> 201", promoted.statusCode === 201 && promotedBody.recording_session_id === createdBody.recording_session_id, promoted.body);
+      check("promote returns draft scenario reference", promotedBody.scenario_id.length === 36 && promotedBody.version === 1 && promotedBody.promotion_status === "draft", promoted.body);
+      check("promote creates studio graph ledger", (await studioGraphVersionCount(pool, TENANT_A, createdBody.recording_session_id)) === 1, promoted.body);
+
+      const promoteReplay = await promoteToStudio(operator, createdBody.recording_session_id, "rec-promote-studio-1");
+      check("promote replay returns same Studio draft", promoteReplay.statusCode === 201 && JSON.parse(promoteReplay.body).scenario_id === promotedBody.scenario_id, promoteReplay.body);
 
       const selectorRecording = await start(operator, "rec-start-selector", { name: "Selector only recording" });
       const selectorRecordingId = String(JSON.parse(selectorRecording.body).recording_session_id);

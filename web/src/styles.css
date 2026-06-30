@@ -427,6 +427,13 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .catalog-facts dd { margin: 0; overflow-wrap: anywhere; }
 .catalog-permissions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .catalog-notes { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--muted); }
+.connector-profile-ledger { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
+.connector-profile-list { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.connector-profile-list li { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 10px; min-width: 0; }
+.connector-profile-form { display: grid; gap: 10px; }
+.connector-profile-form label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.connector-profile-form input,
+.connector-profile-form textarea { width: 100%; }
 .catalog-ref-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .catalog-ref { border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); padding: 2px 7px; }
 .select-compact { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 600; }
@@ -1305,16 +1312,45 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   display: grid;
   gap: 8px;
 }
+.browser-recorder-review {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+.browser-recorder-review > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .browser-recorder-validation ul {
   margin: 6px 0 0;
   padding-left: 18px;
 }
-.browser-recorder-validation li {
+.browser-recorder-validation li,
+.browser-recorder-review li {
   margin-bottom: 5px;
   display: flex;
   gap: 6px;
   align-items: baseline;
   flex-wrap: wrap;
+}
+.browser-recorder-review ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.browser-recorder-confidence,
+.browser-recorder-repairs {
+  display: grid;
+  gap: 4px;
+}
+.browser-recorder-confidence code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .browser-recorder-draft-summary {
   margin-top: 10px;

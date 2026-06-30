@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import type {
   CatalogStatus,
   ConnectorCatalogItem,
   ConnectorCatalogKind,
+  ConnectorProfile,
   TemplateCatalogItem,
   TemplateCatalogKind,
 } from "../api/types";
@@ -61,6 +62,28 @@ function priorityLabel(priority: ConnectorCatalogItem["priority"] | TemplateCata
 
 function listLabel(values: readonly string[]): string {
   return values.length > 0 ? values.join(", ") : "-";
+}
+
+function splitMetadataLines(value: string): string[] {
+  return value
+    .split(/[\n,]+/u)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function profileStatusTone(status: ConnectorProfile["status"]): string {
+  if (status === "certified" || status === "enabled") return "green";
+  if (status === "draft" || status === "security_review") return "amber";
+  return "red";
+}
+
+function profileStatusLabel(status: ConnectorProfile["status"]): string {
+  if (status === "draft") return "준비 중";
+  if (status === "security_review") return "보안 검토";
+  if (status === "certified") return "인증됨";
+  if (status === "enabled") return "활성";
+  if (status === "disabled") return "비활성";
+  return "폐기됨";
 }
 
 function appendUniqueConnectors(
@@ -302,6 +325,11 @@ export function ConnectorCatalogView(): JSX.Element {
   const [templateCursor, setTemplateCursor] = useState<string | null>(null);
   const [nextTemplateCursor, setNextTemplateCursor] = useState<string | null>(null);
   const [templateItems, setTemplateItems] = useState<TemplateCatalogItem[]>([]);
+  const [profileName, setProfileName] = useState("");
+  const [profileSecretRefs, setProfileSecretRefs] = useState("");
+  const [profileAllowedHosts, setProfileAllowedHosts] = useState("");
+  const [profileOwnerRef, setProfileOwnerRef] = useState("");
+  const [profileSupportOwnerRef, setProfileSupportOwnerRef] = useState("");
 
   const connectorParams = useMemo(
     () => ({
@@ -352,6 +380,49 @@ export function ConnectorCatalogView(): JSX.Element {
     queryKey: ["template-catalog", templateParams],
     queryFn: () => api.listTemplates(templateParams),
     enabled: !connectorQuery.isLoading,
+  });
+
+  const profileQuery = useQuery({
+    queryKey: ["connector-profiles", selectedConnector?.connector_id ?? null],
+    queryFn: () =>
+      api.listConnectorProfiles({
+        limit: 20,
+        ...(selectedConnector !== null ? { connector_id: selectedConnector.connector_id } : {}),
+      }),
+    enabled: selectedConnector !== null,
+  });
+
+  const selectedProfiles = useMemo(
+    () => (profileQuery.data?.items ?? []).filter((item) => selectedConnector !== null && item.connector_id === selectedConnector.connector_id),
+    [profileQuery.data?.items, selectedConnector],
+  );
+  const selectedConnectorCanCreateProfile = selectedConnector?.status === "available" || selectedConnector?.status === "requires_admin";
+
+  const createProfileMutation = useMutation({
+    mutationFn: () => {
+      if (selectedConnector === null) throw new Error("connector not selected");
+      return api.createConnectorProfile(
+        {
+          connector_id: selectedConnector.connector_id,
+          profile_name: profileName.trim(),
+          environment: "staging",
+          secret_refs: splitMetadataLines(profileSecretRefs),
+          allowed_hosts: splitMetadataLines(profileAllowedHosts),
+          owner_ref: profileOwnerRef.trim(),
+          support_owner_ref: profileSupportOwnerRef.trim() || null,
+          metadata: { source: "connector_catalog_setup" },
+        },
+        crypto.randomUUID(),
+      );
+    },
+    onSuccess: () => {
+      setProfileName("");
+      setProfileSecretRefs("");
+      setProfileAllowedHosts("");
+      setProfileOwnerRef("");
+      setProfileSupportOwnerRef("");
+      void profileQuery.refetch();
+    },
   });
 
   const templates = templateItems;
@@ -563,6 +634,81 @@ export function ConnectorCatalogView(): JSX.Element {
                   <li key={note}>{securityNoteLabel(note)}</li>
                 ))}
               </ul>
+              <div className="connector-profile-ledger" aria-label="커넥터 프로파일 원장">
+                <div className="panel-head">
+                  <h3>프로파일 원장</h3>
+                  <button className="btn" type="button" onClick={() => void profileQuery.refetch()} disabled={profileQuery.isFetching}>
+                    새로고침
+                  </button>
+                </div>
+                {profileQuery.isLoading ? (
+                  <p className="subtle">불러오는 중</p>
+                ) : selectedProfiles.length === 0 ? (
+                  <p className="subtle">등록된 프로파일 없음</p>
+                ) : (
+                  <ul className="connector-profile-list">
+                    {selectedProfiles.map((profile) => (
+                      <li key={profile.profile_id}>
+                        <div>
+                          <strong>{profile.profile_name}</strong>
+                          <span className="subtle">{profile.owner_ref}</span>
+                        </div>
+                        <div className="inline-facts">
+                          <span className={`badge ${profileStatusTone(profile.status)}`}>{profileStatusLabel(profile.status)}</span>
+                          <span className="badge muted">{profile.environment}</span>
+                          <span className="badge blue">보안 연결 {profile.secret_refs.length}개</span>
+                          <span className="badge muted">host {profile.allowed_hosts.length}개</span>
+                        </div>
+                        {profile.latest_certification !== null && (
+                          <span className="subtle">
+                            인증 증거: {profile.latest_certification.security_review_ref ?? profile.latest_certification.manifest_ref ?? profile.latest_certification.reason}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {selectedConnectorCanCreateProfile ? (
+                  <form
+                    className="connector-profile-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      createProfileMutation.mutate();
+                    }}
+                  >
+                    <label>
+                      <span>프로파일 이름</span>
+                      <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder={`${selectedConnector.name} staging`} />
+                    </label>
+                    <label>
+                      <span>SecretRef</span>
+                      <textarea value={profileSecretRefs} onChange={(event) => setProfileSecretRefs(event.target.value)} rows={2} placeholder="secret://tenant/connector/name/key" />
+                    </label>
+                    <label>
+                      <span>허용 host</span>
+                      <textarea value={profileAllowedHosts} onChange={(event) => setProfileAllowedHosts(event.target.value)} rows={2} placeholder="api.vendor.example" />
+                    </label>
+                    <label>
+                      <span>Owner ref</span>
+                      <input value={profileOwnerRef} onChange={(event) => setProfileOwnerRef(event.target.value)} placeholder="team:business-owner" />
+                    </label>
+                    <label>
+                      <span>Support ref</span>
+                      <input value={profileSupportOwnerRef} onChange={(event) => setProfileSupportOwnerRef(event.target.value)} placeholder="team:rpa-ops" />
+                    </label>
+                    <button
+                      className="btn primary"
+                      type="submit"
+                      disabled={profileName.trim() === "" || profileOwnerRef.trim() === "" || createProfileMutation.isPending}
+                    >
+                      {createProfileMutation.isPending ? "저장 중" : "프로파일 저장"}
+                    </button>
+                    {createProfileMutation.isError && <span className="error-text">프로파일 저장 실패</span>}
+                  </form>
+                ) : (
+                  <p className="subtle">후보 또는 차단 상태는 프로파일 생성 없이 검토용으로만 표시됩니다.</p>
+                )}
+              </div>
             </div>
           )}
         </section>

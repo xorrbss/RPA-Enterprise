@@ -14,6 +14,7 @@ type ElementType = "button" | "input" | "link" | "table" | "row" | "field" | "me
 type ElementStability = "stable" | "review_needed" | "broken";
 type ElementSource = "manual" | "pbd" | "capture" | "imported";
 type ElementProbeStatus = "matched" | "not_found" | "invalid_selector" | "failed" | "not_run";
+type ElementConfidence = "high" | "medium" | "low" | "unknown";
 
 interface SiteElementRow {
   id: string;
@@ -23,8 +24,10 @@ interface SiteElementRow {
   selector: string;
   element_type: ElementType;
   stability: ElementStability;
+  confidence: ElementConfidence;
   source: ElementSource;
   sample_url: string | null;
+  last_probe_result: unknown;
   notes: string | null;
   usage_count: number;
   last_verified_at: Date | null;
@@ -79,7 +82,7 @@ export function registerSiteElementRoutes(app: FastifyInstance, deps: ApiServerD
         await assertSiteExists(client, siteId);
         const result = await client.query<SiteElementRow>(
           `SELECT id::text AS id, site_profile_id::text AS site_profile_id, element_key, label, selector,
-                  element_type, stability, source, sample_url, notes, usage_count, last_verified_at,
+                  element_type, stability, confidence, source, sample_url, last_probe_result, notes, usage_count, last_verified_at,
                   updated_by::text AS updated_by, created_at, updated_at, updated_at::text AS cursor_at
              FROM site_element_repository
             WHERE tenant_id = $1::uuid
@@ -172,7 +175,7 @@ async function createElement(
          (id, tenant_id, site_profile_id, element_key, label, selector, element_type, stability, source, sample_url, notes, updated_by)
        VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12::uuid)
        RETURNING id::text AS id, site_profile_id::text AS site_profile_id, element_key, label, selector,
-                 element_type, stability, source, sample_url, notes, usage_count, last_verified_at,
+                 element_type, stability, confidence, source, sample_url, last_probe_result, notes, usage_count, last_verified_at,
                  updated_by::text AS updated_by, created_at, updated_at, updated_at::text AS cursor_at`,
       [
         randomUUID(),
@@ -218,7 +221,7 @@ async function updateElement(
             updated_at = now()
       WHERE id = $10::uuid AND site_profile_id = $11::uuid
       RETURNING id::text AS id, site_profile_id::text AS site_profile_id, element_key, label, selector,
-                element_type, stability, source, sample_url, notes, usage_count, last_verified_at,
+                element_type, stability, confidence, source, sample_url, last_probe_result, notes, usage_count, last_verified_at,
                 updated_by::text AS updated_by, created_at, updated_at, updated_at::text AS cursor_at`,
     [
       body.label ?? null,
@@ -252,7 +255,7 @@ async function probeElement(
   await assertSiteExists(client, siteId);
   const existing = await client.query<SiteElementRow>(
     `SELECT id::text AS id, site_profile_id::text AS site_profile_id, element_key, label, selector,
-            element_type, stability, source, sample_url, notes, usage_count, last_verified_at,
+            element_type, stability, confidence, source, sample_url, last_probe_result, notes, usage_count, last_verified_at,
             updated_by::text AS updated_by, created_at, updated_at, updated_at::text AS cursor_at
        FROM site_element_repository
       WHERE id = $1::uuid AND site_profile_id = $2::uuid
@@ -303,20 +306,30 @@ async function probeElement(
   }
 
   const nextStability = stabilityFromProbe(status, element.stability);
+  const lastProbeResult = {
+    status,
+    match_count: matchCount,
+    reason_code: reasonCode,
+    checked_at: checkedAt.toISOString(),
+  };
   const update = await client.query<SiteElementRow>(
     `UPDATE site_element_repository
         SET stability = $1,
-            sample_url = $2,
-            last_verified_at = CASE WHEN $3::boolean THEN $4::timestamptz ELSE last_verified_at END,
-            updated_by = $5::uuid,
+            confidence = $2,
+            sample_url = $3,
+            last_probe_result = $4::jsonb,
+            last_verified_at = CASE WHEN $5::boolean THEN $6::timestamptz ELSE last_verified_at END,
+            updated_by = $7::uuid,
             updated_at = now()
-      WHERE id = $6::uuid AND site_profile_id = $7::uuid
+      WHERE id = $8::uuid AND site_profile_id = $9::uuid
       RETURNING id::text AS id, site_profile_id::text AS site_profile_id, element_key, label, selector,
-                element_type, stability, source, sample_url, notes, usage_count, last_verified_at,
+                element_type, stability, confidence, source, sample_url, last_probe_result, notes, usage_count, last_verified_at,
                 updated_by::text AS updated_by, created_at, updated_at, updated_at::text AS cursor_at`,
     [
       nextStability,
+      confidenceFromProbe(status),
       sampleUrl,
+      JSON.stringify(lastProbeResult),
       status !== "failed",
       checkedAt.toISOString(),
       updatedBy,
@@ -413,8 +426,10 @@ function mapElement(row: SiteElementRow): Record<string, unknown> {
     selector: row.selector,
     element_type: row.element_type,
     stability: row.stability,
+    confidence: row.confidence,
     source: row.source,
     sample_url: row.sample_url,
+    last_probe_result: row.last_probe_result,
     notes: row.notes,
     usage_count: row.usage_count,
     last_verified_at: row.last_verified_at !== null ? row.last_verified_at.toISOString() : null,
@@ -462,6 +477,12 @@ function stabilityFromProbe(status: ElementProbeStatus, current: ElementStabilit
   if (status === "not_found") return "review_needed";
   if (status === "invalid_selector") return "broken";
   return current;
+}
+
+function confidenceFromProbe(status: ElementProbeStatus): ElementConfidence {
+  if (status === "matched") return "high";
+  if (status === "not_found" || status === "invalid_selector") return "low";
+  return "unknown";
 }
 
 function validateUuid(value: string): string {

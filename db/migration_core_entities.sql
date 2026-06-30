@@ -45,6 +45,7 @@ CREATE TABLE site_profiles (
   circuit_until   timestamptz,                              -- open cooldown 만료 — ops-defaults §3 site.circuit.open_duration
   page_state_selectors jsonb,                                -- D3 executor PageState 산출 규칙(SitePageStateConfig: authenticatedWhen?·flags{닫힌 6키:present/absent/min_count}). 마커 없는 실 사이트에서 닫힌 flags 산출 근거(executor/site-page-state-config). null=미설정 → 해당 사이트 비-마커 실행 시 PAGE_STATE_UNRESOLVED.
   created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id),
   UNIQUE (tenant_id, name)
 );
 CREATE INDEX idx_site_profiles_tenant ON site_profiles (tenant_id);
@@ -88,9 +89,13 @@ CREATE TABLE site_element_repository (
                     CHECK (element_type IN ('button','input','link','table','row','field','message','other')),
   stability       text        NOT NULL DEFAULT 'stable'
                     CHECK (stability IN ('stable','review_needed','broken')),
+  confidence      text        NOT NULL DEFAULT 'unknown'
+                    CHECK (confidence IN ('high','medium','low','unknown')),
   source          text        NOT NULL DEFAULT 'manual'
                     CHECK (source IN ('manual','pbd','capture','imported')),
   sample_url      text,
+  last_probe_result jsonb     NOT NULL DEFAULT '{}'::jsonb,
+  replacement_candidate_of uuid,
   notes           text,
   usage_count     int         NOT NULL DEFAULT 0 CHECK (usage_count >= 0),
   last_verified_at timestamptz,
@@ -117,12 +122,20 @@ CREATE TABLE browser_recording_sessions (
   event_count     int         NOT NULL DEFAULT 0 CHECK (event_count >= 0),
   draft_ir        jsonb,
   validation_report jsonb,
+  review_status   text        NOT NULL DEFAULT 'not_started'
+                    CHECK (review_status IN ('not_started','review_needed','ready_for_studio','promoted_to_studio','discarded')),
+  review_report   jsonb,
+  promoted_scenario_id uuid,
+  promoted_scenario_version int CHECK (promoted_scenario_version IS NULL OR promoted_scenario_version >= 1),
+  promoted_studio_project_id uuid,
+  promoted_studio_graph_version int CHECK (promoted_studio_graph_version IS NULL OR promoted_studio_graph_version >= 1),
   updated_by      uuid,
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_browser_recording_sessions_site ON browser_recording_sessions (tenant_id, site_profile_id, updated_at DESC);
 CREATE INDEX idx_browser_recording_sessions_status ON browser_recording_sessions (tenant_id, status, updated_at DESC);
+CREATE INDEX idx_browser_recording_sessions_review ON browser_recording_sessions (tenant_id, review_status, updated_at DESC);
 
 CREATE TABLE browser_recording_events (
   id              uuid        PRIMARY KEY,
@@ -140,6 +153,119 @@ CREATE TABLE browser_recording_events (
   UNIQUE (tenant_id, recording_session_id, seq)
 );
 CREATE INDEX idx_browser_recording_events_session ON browser_recording_events (tenant_id, recording_session_id, seq);
+
+-- studio_projects / studio_graph_versions / studio_validation_runs -- Studio v0.4 authoring ledger.
+--   Recorder 초안이 운영(prod)으로 바로 승격되지 않도록 Studio draft graph/version 원장과 검증 원장을 분리한다.
+--   graph/IR hash는 UI diff·감사·release package evidence의 불변 참조이며 raw secret/endpoint material을 저장하지 않는다.
+CREATE TABLE studio_projects (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  name            text        NOT NULL CHECK (length(trim(name)) > 0),
+  source_kind     text        NOT NULL DEFAULT 'manual'
+                    CHECK (source_kind IN ('manual','recording','import')),
+  source_recording_session_id uuid,
+  status          text        NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft','archived')),
+  created_by      uuid,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, name)
+);
+CREATE INDEX idx_studio_projects_tenant ON studio_projects (tenant_id, updated_at DESC);
+CREATE INDEX idx_studio_projects_recording ON studio_projects (tenant_id, source_recording_session_id)
+  WHERE source_recording_session_id IS NOT NULL;
+
+CREATE TABLE studio_graph_versions (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  studio_project_id uuid      NOT NULL,
+  version         int         NOT NULL CHECK (version >= 1),
+  compiler_version text       NOT NULL CHECK (compiler_version = 'studio-graph@1'),
+  graph           jsonb       NOT NULL,
+  graph_hash      text        NOT NULL CHECK (length(graph_hash) = 64),
+  compiled_ir_hash text       NOT NULL CHECK (length(compiled_ir_hash) = 64),
+  scenario_id     uuid,
+  scenario_version int        CHECK (scenario_version IS NULL OR scenario_version >= 1),
+  source_recording_session_id uuid,
+  validation_stages jsonb     NOT NULL DEFAULT '[]'::jsonb,
+  created_by      uuid,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, studio_project_id, version)
+);
+CREATE INDEX idx_studio_graph_versions_project ON studio_graph_versions (tenant_id, studio_project_id, version DESC);
+CREATE INDEX idx_studio_graph_versions_scenario ON studio_graph_versions (tenant_id, scenario_id, scenario_version)
+  WHERE scenario_id IS NOT NULL;
+
+CREATE TABLE studio_validation_runs (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  studio_project_id uuid      NOT NULL,
+  studio_graph_version_id uuid NOT NULL,
+  stage           text        NOT NULL CHECK (stage IN ('well_formed','runnable','operable','prod_ready')),
+  status          text        NOT NULL CHECK (status IN ('pass','failed','blocked','not_run')),
+  reason_code     text        NOT NULL CHECK (reason_code ~ '^[a-z0-9_]{1,80}$'),
+  detail          text        NOT NULL CHECK (length(trim(detail)) > 0),
+  report          jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_studio_validation_runs_graph ON studio_validation_runs (tenant_id, studio_graph_version_id, created_at DESC);
+
+-- connector_profiles / connector_certifications -- Core marketplace profile and certification ledger.
+--   Profiles are tenant-scoped metadata records only: SecretRef identifiers, allowed host names,
+--   owner/support references, and certification evidence. They do not enable external dispatch by
+--   themselves, and must not store raw endpoints, tokens, Authorization headers, or resolved secrets.
+CREATE TABLE connector_profiles (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  connector_id    text        NOT NULL CHECK (connector_id ~ '^[a-z0-9][a-z0-9_.-]{1,120}$'),
+  profile_name    text        NOT NULL CHECK (length(trim(profile_name)) > 0),
+  status          text        NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft','security_review','certified','enabled','disabled','deprecated')),
+  environment     text        NOT NULL DEFAULT 'dev'
+                    CHECK (environment IN ('dev','staging','prod')),
+  secret_refs     text[]      NOT NULL DEFAULT ARRAY[]::text[],
+  allowed_hosts   text[]      NOT NULL DEFAULT ARRAY[]::text[],
+  owner_ref       text        NOT NULL CHECK (length(trim(owner_ref)) > 0),
+  support_owner_ref text,
+  profile_metadata jsonb      NOT NULL DEFAULT '{}'::jsonb,
+  latest_certification_id uuid,
+  created_by      text        NOT NULL,
+  updated_by      text,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, connector_id, profile_name)
+);
+CREATE INDEX idx_connector_profiles_tenant ON connector_profiles (tenant_id, updated_at DESC);
+CREATE INDEX idx_connector_profiles_connector ON connector_profiles (tenant_id, connector_id, status, updated_at DESC);
+
+CREATE TABLE connector_certifications (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  profile_id      uuid        NOT NULL,
+  connector_id    text        NOT NULL CHECK (connector_id ~ '^[a-z0-9][a-z0-9_.-]{1,120}$'),
+  status          text        NOT NULL
+                    CHECK (status IN ('security_review','certified','blocked','revoked')),
+  reason          text        NOT NULL CHECK (length(trim(reason)) > 0),
+  manifest_ref    text,
+  security_review_ref text,
+  test_evidence_ref text,
+  owner_evidence_ref text,
+  receipt_semantics jsonb     NOT NULL DEFAULT '{}'::jsonb,
+  metadata         jsonb      NOT NULL DEFAULT '{}'::jsonb,
+  certified_by     text       NOT NULL,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id)
+);
+ALTER TABLE connector_certifications
+  ADD CONSTRAINT fk_connector_certifications_profile_tenant
+  FOREIGN KEY (tenant_id, profile_id) REFERENCES connector_profiles(tenant_id, id);
+ALTER TABLE connector_profiles
+  ADD CONSTRAINT connector_profiles_latest_certification_fk
+  FOREIGN KEY (tenant_id, latest_certification_id) REFERENCES connector_certifications(tenant_id, id);
+CREATE INDEX idx_connector_certifications_profile ON connector_certifications (tenant_id, profile_id, created_at DESC);
 
 -- ------------------------------------------------------------
 -- workers — 실행기 생존(heartbeat) + 워커 서킷 상태 레지스트리.
@@ -1901,6 +2027,24 @@ ALTER TABLE browser_recording_events
   ADD CONSTRAINT fk_browser_recording_events_session_tenant
   FOREIGN KEY (tenant_id, recording_session_id) REFERENCES browser_recording_sessions(tenant_id, id) ON DELETE CASCADE;
 
+ALTER TABLE studio_projects
+  ADD CONSTRAINT fk_studio_projects_recording_session_tenant
+  FOREIGN KEY (tenant_id, source_recording_session_id) REFERENCES browser_recording_sessions(tenant_id, id);
+
+ALTER TABLE studio_graph_versions
+  ADD CONSTRAINT fk_studio_graph_versions_project_tenant
+  FOREIGN KEY (tenant_id, studio_project_id) REFERENCES studio_projects(tenant_id, id) ON DELETE CASCADE,
+  ADD CONSTRAINT fk_studio_graph_versions_recording_session_tenant
+  FOREIGN KEY (tenant_id, source_recording_session_id) REFERENCES browser_recording_sessions(tenant_id, id),
+  ADD CONSTRAINT fk_studio_graph_versions_scenario_version_tenant
+  FOREIGN KEY (tenant_id, scenario_id, scenario_version) REFERENCES scenario_versions(tenant_id, scenario_id, version);
+
+ALTER TABLE studio_validation_runs
+  ADD CONSTRAINT fk_studio_validation_runs_project_tenant
+  FOREIGN KEY (tenant_id, studio_project_id) REFERENCES studio_projects(tenant_id, id) ON DELETE CASCADE,
+  ADD CONSTRAINT fk_studio_validation_runs_graph_tenant
+  FOREIGN KEY (tenant_id, studio_graph_version_id) REFERENCES studio_graph_versions(tenant_id, id) ON DELETE CASCADE;
+
 ALTER TABLE browser_identities
   ADD CONSTRAINT fk_browser_identities_site_tenant
   FOREIGN KEY (tenant_id, site_profile_id) REFERENCES site_profiles(tenant_id, id);
@@ -2118,6 +2262,11 @@ BEGIN
     'site_element_repository',
     'browser_recording_sessions',
     'browser_recording_events',
+    'studio_projects',
+    'studio_graph_versions',
+    'studio_validation_runs',
+    'connector_profiles',
+    'connector_certifications',
     'approval_decisions',
     'browser_identities',
     'network_policies',

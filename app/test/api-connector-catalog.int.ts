@@ -5,6 +5,7 @@
  *   npm --prefix app exec tsx -- app/test/api-connector-catalog.int.ts
  */
 import { SignJWT } from "jose";
+import { readFileSync } from "node:fs";
 
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
@@ -16,6 +17,8 @@ import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
 const TENANT_A = "00000000-0000-4000-8000-0000000000a1";
+const ROOT = `${process.cwd()}/`;
+const SCHEMA = "api_connector_catalog_int";
 const SECRET = new TextEncoder().encode("connector-catalog-int-secret-do-not-use-in-prod-0123456789");
 
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -42,7 +45,7 @@ function mint(roles: string[], sub = "viewer-a"): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const pool = createPool();
+  const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
   const app = buildServer({
     pool,
     auth: new JwtAuthenticationBoundary(hmacJwtVerifier(SECRET)),
@@ -52,8 +55,22 @@ async function main(): Promise<void> {
     signedCommandRegistry,
   });
   try {
+    const concurrencySql = readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8");
+    const coreSql = readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8");
+    const setup = await pool.connect();
+    try {
+      await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+      await setup.query(`CREATE SCHEMA ${SCHEMA}`);
+      await setup.query(`SET search_path = ${SCHEMA}, public`);
+      await setup.query(concurrencySql);
+      await setup.query(coreSql);
+    } finally {
+      setup.release();
+    }
+
     await app.ready();
     const viewer = await mint(["viewer"]);
+    const admin = await mint(["admin"], "admin-a");
     const noRole = await mint([]);
 
     const connectors = await app.inject({ method: "GET", url: "/v1/connectors?kind=browser", headers: { authorization: `Bearer ${viewer}` } });
@@ -79,9 +96,16 @@ async function main(): Promise<void> {
     const notificationConnectorBody = JSON.parse(notificationConnectors.body) as {
       items: Array<{ connector_id: string; status: string; supported_actions: string[]; required_secret_refs: string[]; implementation_state: string }>;
     };
-    const teamsConnector = notificationConnectorBody.items.find((item) => item.connector_id === "teams-webhook");
-    check("external notification connector is future/blocked", teamsConnector !== undefined && teamsConnector.status === "blocked" && teamsConnector.implementation_state.includes("P2/future"), notificationConnectors.body);
-    check("external notification connector does not advertise webhook dispatch secrets in P1", teamsConnector !== undefined && teamsConnector.required_secret_refs.length === 0 && teamsConnector.supported_actions.every((action) => action !== "webhook" && action !== "notify"), notificationConnectors.body);
+    const opsWebhookConnector = notificationConnectorBody.items.find((item) => item.connector_id === "ops-webhook-sender");
+    check(
+      "ops webhook connector is implemented and SecretRef-backed",
+      opsWebhookConnector !== undefined &&
+        opsWebhookConnector.status === "available" &&
+        opsWebhookConnector.required_secret_refs.every((ref) => ref.startsWith("secret://")) &&
+        opsWebhookConnector.supported_actions.includes("notify") &&
+        opsWebhookConnector.implementation_state.includes("/v1/ops-alerts"),
+      notificationConnectors.body,
+    );
 
     const templates = await app.inject({ method: "GET", url: "/v1/templates?connector_id=sap-web", headers: { authorization: `Bearer ${viewer}` } });
     check("viewer list templates -> 200", templates.statusCode === 200, templates.body);
@@ -149,10 +173,140 @@ async function main(): Promise<void> {
       idpScimTemplates.body,
     );
 
-    const notificationTemplates = await app.inject({ method: "GET", url: "/v1/templates?connector_id=teams-webhook", headers: { authorization: `Bearer ${viewer}` } });
+    const notificationTemplates = await app.inject({ method: "GET", url: "/v1/templates?connector_id=ops-webhook-sender", headers: { authorization: `Bearer ${viewer}` } });
     check("viewer list notification templates -> 200", notificationTemplates.statusCode === 200, notificationTemplates.body);
     const notificationTemplateBody = JSON.parse(notificationTemplates.body) as { items: Array<{ template_id: string; status: string; required_secret_refs: string[]; produced_ir_pattern: string; success_criteria: string }> };
-    check("notification template is console-alert only in P1", notificationTemplateBody.items.some((item) => item.template_id === "ops-failure-alert" && item.status === "blocked" && item.required_secret_refs.length === 0 && item.produced_ir_pattern.includes("/v1/ops-alerts") && item.success_criteria.includes("future notification contract")), notificationTemplates.body);
+    check(
+      "notification template records receipt semantics instead of delivered synthesis",
+      notificationTemplateBody.items.some((item) =>
+        item.template_id === "ops-failure-alert" &&
+        item.status === "available" &&
+        item.required_secret_refs.every((ref) => ref.startsWith("secret://")) &&
+        item.produced_ir_pattern.includes("/v1/ops-alerts") &&
+        item.success_criteria.includes("delivered requires provider receipt"),
+      ),
+      notificationTemplates.body,
+    );
+
+    const emptyProfiles = await app.inject({ method: "GET", url: "/v1/connector-profiles", headers: { authorization: `Bearer ${viewer}` } });
+    check("viewer list connector profiles -> 200", emptyProfiles.statusCode === 200, emptyProfiles.body);
+    check("connector profiles initially empty", (JSON.parse(emptyProfiles.body) as { items: unknown[] }).items.length === 0, emptyProfiles.body);
+
+    const viewerCreateProfile = await app.inject({
+      method: "POST",
+      url: "/v1/connector-profiles",
+      headers: { authorization: `Bearer ${viewer}`, "idempotency-key": "connector-profile-viewer-denied" },
+      payload: {
+        connector_id: "http-api",
+        profile_name: "Finance API",
+        secret_refs: ["secret://tenant-a/connector/http-api/bearer"],
+        allowed_hosts: ["api.vendor.example"],
+        owner_ref: "team:finance-platform",
+      },
+    });
+    check("viewer cannot create connector profile -> 403", viewerCreateProfile.statusCode === 403, viewerCreateProfile.body);
+
+    const createProfilePayload = {
+      connector_id: "http-api",
+      profile_name: "Finance API",
+      environment: "staging",
+      secret_refs: ["secret://tenant-a/connector/http-api/bearer"],
+      allowed_hosts: ["api.vendor.example"],
+      owner_ref: "team:finance-platform",
+      support_owner_ref: "team:rpa-ops",
+      metadata: { profile_ref: "ticket:CONN-1", rotation_owner: "team:finance-platform" },
+    };
+    const createdProfile = await app.inject({
+      method: "POST",
+      url: "/v1/connector-profiles",
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "connector-profile-create-1" },
+      payload: createProfilePayload,
+    });
+    check("admin create connector profile -> 201", createdProfile.statusCode === 201, createdProfile.body);
+    const createdProfileBody = JSON.parse(createdProfile.body) as {
+      profile_id: string;
+      connector_id: string;
+      status: string;
+      secret_refs: string[];
+      allowed_hosts: string[];
+      latest_certification: unknown;
+    };
+    check("connector profile records draft http-api metadata", createdProfileBody.connector_id === "http-api" && createdProfileBody.status === "draft", createdProfile.body);
+    check("connector profile stays SecretRef/host metadata only", createdProfileBody.secret_refs[0]?.startsWith("secret://") === true && createdProfileBody.allowed_hosts[0] === "api.vendor.example" && !createdProfile.body.includes("Bearer "), createdProfile.body);
+
+    const replayProfile = await app.inject({
+      method: "POST",
+      url: "/v1/connector-profiles",
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "connector-profile-create-1" },
+      payload: createProfilePayload,
+    });
+    check("connector profile create idempotency replay -> 201", replayProfile.statusCode === 201, replayProfile.body);
+    check("connector profile create idempotency returns same profile", JSON.parse(replayProfile.body).profile_id === createdProfileBody.profile_id, replayProfile.body);
+
+    const rawEndpointProfile = await app.inject({
+      method: "POST",
+      url: "/v1/connector-profiles",
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "connector-profile-create-raw-endpoint" },
+      payload: {
+        ...createProfilePayload,
+        profile_name: "Unsafe API",
+        metadata: { endpoint_url: "https://api.vendor.example/token" },
+      },
+    });
+    check("connector profile rejects raw endpoint metadata -> 422", rawEndpointProfile.statusCode === 422, rawEndpointProfile.body);
+
+    const candidateProfile = await app.inject({
+      method: "POST",
+      url: "/v1/connector-profiles",
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "connector-profile-create-candidate" },
+      payload: {
+        connector_id: "sap-web",
+        profile_name: "SAP Candidate",
+        secret_refs: ["secret://tenant-a/connector/sap-web/session"],
+        owner_ref: "team:sap-owner",
+      },
+    });
+    check("candidate connector cannot be profiled as enabled -> 422", candidateProfile.statusCode === 422, candidateProfile.body);
+
+    const missingEvidenceCertification = await app.inject({
+      method: "POST",
+      url: `/v1/connector-profiles/${createdProfileBody.profile_id}/certifications`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "connector-profile-cert-missing-evidence" },
+      payload: { status: "certified", reason: "missing evidence should fail" },
+    });
+    check("connector certification requires evidence for certified -> 422", missingEvidenceCertification.statusCode === 422, missingEvidenceCertification.body);
+
+    const certifiedProfile = await app.inject({
+      method: "POST",
+      url: `/v1/connector-profiles/${createdProfileBody.profile_id}/certifications`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "connector-profile-certify-1" },
+      payload: {
+        status: "certified",
+        reason: "Security review, owner evidence, and contract tests accepted.",
+        manifest_ref: "artifact://connector/http-api/manifest-v1",
+        security_review_ref: "ticket:SEC-123",
+        test_evidence_ref: "artifact://connector/http-api/test-report",
+        owner_evidence_ref: "ticket:OWNER-456",
+        receipt_semantics: {
+          sent: "metadata_only",
+          accepted: "provider_receipt_required",
+          delivered: "provider_receipt_required",
+          completed: "business_receipt_required",
+        },
+      },
+    });
+    check("admin certifies connector profile -> 201", certifiedProfile.statusCode === 201, certifiedProfile.body);
+    const certifiedProfileBody = JSON.parse(certifiedProfile.body) as { status: string; receipt_semantics: { delivered: string } };
+    check("connector certification records explicit receipt semantics", certifiedProfileBody.status === "certified" && certifiedProfileBody.receipt_semantics.delivered === "provider_receipt_required", certifiedProfile.body);
+
+    const listedProfiles = await app.inject({ method: "GET", url: "/v1/connector-profiles?connector_id=http-api", headers: { authorization: `Bearer ${viewer}` } });
+    check("viewer lists certified connector profile -> 200", listedProfiles.statusCode === 200, listedProfiles.body);
+    const listedProfileBody = JSON.parse(listedProfiles.body) as { items: Array<{ profile_id: string; status: string; latest_certification: { status: string } | null }> };
+    check(
+      "certified profile list includes latest certification metadata",
+      listedProfileBody.items.some((item) => item.profile_id === createdProfileBody.profile_id && item.status === "certified" && item.latest_certification?.status === "certified"),
+      listedProfiles.body,
+    );
 
     const badKind = await app.inject({ method: "GET", url: "/v1/connectors?kind=desktop", headers: { authorization: `Bearer ${viewer}` } });
     check("invalid connector kind -> 422", badKind.statusCode === 422, badKind.body);

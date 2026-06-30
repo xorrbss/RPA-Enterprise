@@ -261,6 +261,52 @@ export interface MinimalTemplateCatalogItem {
   status: "available" | "candidate" | "requires_admin" | "blocked";
 }
 
+export type MinimalConnectorProfileStatus = "draft" | "security_review" | "certified" | "enabled" | "disabled" | "deprecated";
+export type MinimalConnectorCertificationStatus = "security_review" | "certified" | "blocked" | "revoked";
+export type MinimalConnectorProfileEnvironment = "dev" | "staging" | "prod";
+
+export interface MinimalConnectorReceiptSemantics {
+  sent: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  accepted: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  delivered: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  completed: "not_applicable" | "metadata_only" | "business_receipt_required";
+}
+
+export interface MinimalConnectorCertification {
+  certification_id: string;
+  profile_id: string;
+  connector_id: string;
+  status: MinimalConnectorCertificationStatus;
+  reason: string;
+  manifest_ref: string | null;
+  security_review_ref: string | null;
+  test_evidence_ref: string | null;
+  owner_evidence_ref: string | null;
+  receipt_semantics: MinimalConnectorReceiptSemantics;
+  metadata: Readonly<Record<string, unknown>>;
+  certified_by: string;
+  created_at: string;
+}
+
+export interface MinimalConnectorProfile {
+  profile_id: string;
+  tenant_id: string;
+  connector_id: string;
+  profile_name: string;
+  status: MinimalConnectorProfileStatus;
+  environment: MinimalConnectorProfileEnvironment;
+  secret_refs: readonly string[];
+  allowed_hosts: readonly string[];
+  owner_ref: string;
+  support_owner_ref: string | null;
+  profile_metadata: Readonly<Record<string, unknown>>;
+  latest_certification: MinimalConnectorCertification | null;
+  created_by: string;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface MinimalIntegrationHandoff {
   handoff_id: string;
   tenant_id: string;
@@ -471,6 +517,7 @@ export interface MinimalControlPlaneSeed {
   auditLog?: readonly MinimalAuditLogItem[];
   connectors?: readonly MinimalConnectorCatalogItem[];
   templates?: readonly MinimalTemplateCatalogItem[];
+  connectorProfiles?: readonly MinimalConnectorProfile[];
   integrationHandoffs?: readonly MinimalIntegrationHandoff[];
   documentJobs?: readonly MinimalDocumentJob[];
   documentExtractions?: readonly MinimalDocumentExtraction[];
@@ -524,6 +571,9 @@ export interface MinimalControlPlaneServices {
   exportAuditLog(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listConnectors(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listTemplates(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listConnectorProfiles(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  createConnectorProfile(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  certifyConnectorProfile(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listIntegrationHandoffs(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   createIntegrationHandoff(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   dispatchIntegrationHandoff(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -607,6 +657,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private readonly auditLog: MinimalAuditLogItem[] = [];
   private readonly connectors: MinimalConnectorCatalogItem[] = [];
   private readonly templates: MinimalTemplateCatalogItem[] = [];
+  private readonly connectorProfiles = new Map<string, MinimalConnectorProfile>();
   private readonly integrationHandoffs = new Map<string, MinimalIntegrationHandoff>();
   private readonly integrationHandoffDispatchAttempts = new Map<string, MinimalIntegrationHandoffDispatchAttempt>();
   private readonly documentJobs = new Map<string, MinimalDocumentJob>();
@@ -647,6 +698,9 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     this.auditLog.push(...(seed.auditLog ?? []).map((row) => ({ ...row })));
     this.connectors.push(...(seed.connectors ?? []).map((row) => ({ ...row })));
     this.templates.push(...(seed.templates ?? []).map((row) => ({ ...row })));
+    for (const profile of seed.connectorProfiles ?? []) {
+      this.connectorProfiles.set(key(profile.tenant_id, profile.profile_id), { ...profile });
+    }
     for (const handoff of seed.integrationHandoffs ?? []) {
       this.integrationHandoffs.set(key(handoff.tenant_id, handoff.handoff_id), { ...handoff });
     }
@@ -1437,6 +1491,75 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       && (connectorId === undefined || row.connector_id === connectorId),
     );
     return page(items);
+  }
+
+  async listConnectorProfiles(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const connectorId = optionalQueryString(ctx, "connector_id");
+    const status = optionalQueryString(ctx, "status");
+    const items = [...this.connectorProfiles.values()].filter((row) =>
+      row.tenant_id === tenant(ctx)
+      && (connectorId === undefined || row.connector_id === connectorId)
+      && (status === undefined || row.status === status),
+    );
+    return page(items);
+  }
+
+  async createConnectorProfile(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const profileSequence = String(this.connectorProfiles.size + 1).padStart(12, "0");
+    const profile: MinimalConnectorProfile = {
+      profile_id: `00000000-0000-4000-8000-${profileSequence}`,
+      tenant_id: tenant(ctx),
+      connector_id: requireString(body, "connector_id"),
+      profile_name: requireString(body, "profile_name"),
+      status: "draft",
+      environment: optionalConnectorEnvironment(body) ?? "dev",
+      secret_refs: optionalStringArray(body, "secret_refs") ?? [],
+      allowed_hosts: optionalStringArray(body, "allowed_hosts") ?? [],
+      owner_ref: requireString(body, "owner_ref"),
+      support_owner_ref: optionalString(body, "support_owner_ref") ?? null,
+      profile_metadata: isRecord(body.metadata) ? body.metadata : {},
+      latest_certification: null,
+      created_by: ctx.principal.subjectId,
+      updated_by: null,
+      created_at: now,
+      updated_at: now,
+    };
+    this.connectorProfiles.set(key(profile.tenant_id, profile.profile_id), profile);
+    return { status: 201, body: profile };
+  }
+
+  async certifyConnectorProfile(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const profile = this.connectorProfiles.get(key(tenant(ctx), requireParam(ctx, "profile_id")));
+    if (profile === undefined) throw new ApiResponseException("RESOURCE_NOT_FOUND");
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const status = optionalConnectorCertificationStatus(body) ?? "security_review";
+    const certification: MinimalConnectorCertification = {
+      certification_id: `certification-${this.connectorProfiles.size}-${now}`,
+      profile_id: profile.profile_id,
+      connector_id: profile.connector_id,
+      status,
+      reason: requireString(body, "reason"),
+      manifest_ref: optionalString(body, "manifest_ref") ?? null,
+      security_review_ref: optionalString(body, "security_review_ref") ?? null,
+      test_evidence_ref: optionalString(body, "test_evidence_ref") ?? null,
+      owner_evidence_ref: optionalString(body, "owner_evidence_ref") ?? null,
+      receipt_semantics: connectorReceiptSemantics(body.receipt_semantics),
+      metadata: isRecord(body.metadata) ? body.metadata : {},
+      certified_by: ctx.principal.subjectId,
+      created_at: now,
+    };
+    const updated: MinimalConnectorProfile = {
+      ...profile,
+      status: profileStatusFromCertification(status),
+      latest_certification: certification,
+      updated_by: ctx.principal.subjectId,
+      updated_at: now,
+    };
+    this.connectorProfiles.set(key(updated.tenant_id, updated.profile_id), updated);
+    return { status: 201, body: certification };
   }
 
   async listIntegrationHandoffs(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -2516,6 +2639,9 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     exportAuditLog: bind(services.exportAuditLog),
     listConnectors: bind(services.listConnectors),
     listTemplates: bind(services.listTemplates),
+    listConnectorProfiles: bind(services.listConnectorProfiles),
+    createConnectorProfile: bind(services.createConnectorProfile),
+    certifyConnectorProfile: bind(services.certifyConnectorProfile),
     listIntegrationHandoffs: bind(services.listIntegrationHandoffs),
     createIntegrationHandoff: bind(services.createIntegrationHandoff),
     dispatchIntegrationHandoff: bind(services.dispatchIntegrationHandoff),
@@ -2581,6 +2707,47 @@ function tenant(ctx: ControlPlaneRequestContext): string {
 
 function page(items: readonly unknown[]): ControlPlaneResponse {
   return { status: 200, body: { items, next_cursor: null } };
+}
+
+function optionalConnectorEnvironment(record: Readonly<Record<string, unknown>>): MinimalConnectorProfileEnvironment | undefined {
+  const value = record.environment;
+  if (value === undefined) return undefined;
+  if (value === "dev" || value === "staging" || value === "prod") return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_connector_profile_environment" });
+}
+
+function optionalConnectorCertificationStatus(record: Readonly<Record<string, unknown>>): MinimalConnectorCertificationStatus | undefined {
+  const value = record.status;
+  if (value === undefined) return undefined;
+  if (value === "security_review" || value === "certified" || value === "blocked" || value === "revoked") return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_connector_certification_status" });
+}
+
+function connectorReceiptSemantics(raw: unknown): MinimalConnectorReceiptSemantics {
+  const value = isRecord(raw) ? raw : {};
+  return {
+    sent: connectorProviderReceiptLeg(value.sent),
+    accepted: connectorProviderReceiptLeg(value.accepted),
+    delivered: connectorProviderReceiptLeg(value.delivered),
+    completed: connectorCompletionReceiptLeg(value.completed),
+  };
+}
+
+function connectorProviderReceiptLeg(raw: unknown): MinimalConnectorReceiptSemantics["sent"] {
+  if (raw === "not_applicable" || raw === "metadata_only" || raw === "provider_receipt_required") return raw;
+  return "metadata_only";
+}
+
+function connectorCompletionReceiptLeg(raw: unknown): MinimalConnectorReceiptSemantics["completed"] {
+  if (raw === "not_applicable" || raw === "metadata_only" || raw === "business_receipt_required") return raw;
+  return "metadata_only";
+}
+
+function profileStatusFromCertification(status: MinimalConnectorCertificationStatus): MinimalConnectorProfileStatus {
+  if (status === "certified") return "certified";
+  if (status === "blocked") return "disabled";
+  if (status === "revoked") return "deprecated";
+  return "security_review";
 }
 
 function minimalAuthReadiness(ctx: ControlPlaneRequestContext): Record<string, unknown> {

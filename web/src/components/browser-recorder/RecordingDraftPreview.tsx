@@ -1,7 +1,14 @@
 import { useState } from "react";
 
 import { navigate } from "../../router";
-import type { BrowserRecordingSession, BrowserRecordingValidationIssue, ScenarioMutationResult } from "../../api/types";
+import type {
+  BrowserRecordingRepairSuggestion,
+  BrowserRecordingSelectorConfidence,
+  BrowserRecordingSession,
+  BrowserRecordingValidationIssue,
+  ScenarioMutationResult,
+  SelectorConfidence,
+} from "../../api/types";
 import { StudioValidationStages } from "../StudioValidationStages";
 import { draftStartLabel, draftSummary, recordingIssueSummary } from "./helpers";
 
@@ -14,14 +21,19 @@ export function RecordingDraftPreview(props: {
 }): JSX.Element {
   const { session } = props;
   const report = session.validation_report;
+  const review = session.review_report;
   const errors = report?.errors ?? [];
   const warnings = report?.warnings ?? [];
+  const reviewBlockers = review?.blockers.filter((blocker) => blocker.severity === "blocker") ?? [];
   const saveDisabled =
     !props.canSave ||
     props.saving ||
     session.draft_ir === null ||
     report === null ||
-    errors.length > 0;
+    review === null ||
+    errors.length > 0 ||
+    reviewBlockers.length > 0 ||
+    session.review_status === "promoted_to_studio";
   const tone =
     errors.length > 0
       ? "red"
@@ -61,6 +73,30 @@ export function RecordingDraftPreview(props: {
               상태와 입력값은 첫 실행에서 다시 확인해야 합니다.
             </p>
           )}
+        </div>
+      )}
+      {review !== null && (
+        <div className="browser-recorder-review" role={reviewBlockers.length > 0 ? "alert" : "status"}>
+          <div>
+            <strong>Recorder 검토</strong>
+            <span className={`badge ${reviewBlockers.length > 0 ? "red" : "green"}`}>
+              {reviewBlockers.length > 0 ? `blocker ${reviewBlockers.length}건` : "Studio 준비됨"}
+            </span>
+          </div>
+          {review.blockers.length > 0 && (
+            <ul>
+              {review.blockers.map((blocker, index) => (
+                <li key={`${blocker.code}-${blocker.event_seq ?? index}`}>
+                  <span className={`badge ${blocker.severity === "blocker" ? "red" : "amber"}`}>
+                    {blocker.stage}
+                  </span>
+                  <span>{blocker.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <SelectorConfidenceList items={review.selector_confidence} />
+          <RepairSuggestionList items={review.repair_suggestions} />
         </div>
       )}
       <div className="browser-recorder-draft-summary" aria-label="자동화 요약">
@@ -169,9 +205,62 @@ export function RecordingDraftPreview(props: {
         {errors.length > 0 && (
           <span className="badge red">검사 오류 수정 필요</span>
         )}
+        {reviewBlockers.length > 0 && (
+          <span className="badge red">Recorder blocker 해결 필요</span>
+        )}
       </div>
     </details>
   );
+}
+
+function SelectorConfidenceList(props: { items: readonly BrowserRecordingSelectorConfidence[] }): JSX.Element | null {
+  if (props.items.length === 0) return null;
+  return (
+    <div className="browser-recorder-confidence">
+      <strong>Selector confidence</strong>
+      <ul>
+        {props.items.map((item) => (
+          <li key={`${item.event_seq}-${item.node_id}`}>
+            <span className={`badge ${confidenceTone(item.confidence)}`}>{confidenceLabel(item.confidence)}</span>
+            <span>{item.label}</span>
+            <code>{item.selector}</code>
+            <small className="subtle">{item.source === "object_repository" ? "Object Repository" : "녹화 selector"}</small>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RepairSuggestionList(props: { items: readonly BrowserRecordingRepairSuggestion[] }): JSX.Element | null {
+  if (props.items.length === 0) return null;
+  return (
+    <div className="browser-recorder-repairs">
+      <strong>Repair suggestions</strong>
+      <ul>
+        {props.items.map((item, index) => (
+          <li key={`${item.code}-${item.event_seq ?? index}`}>
+            <span className="badge amber">{item.code}</span>
+            <span>{item.message}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function confidenceTone(value: SelectorConfidence): "green" | "amber" | "red" | "muted" {
+  if (value === "high") return "green";
+  if (value === "medium") return "amber";
+  if (value === "low") return "red";
+  return "muted";
+}
+
+function confidenceLabel(value: SelectorConfidence): string {
+  if (value === "high") return "high";
+  if (value === "medium") return "medium";
+  if (value === "low") return "low";
+  return "unknown";
 }
 
 function ValidationIssueList(props: {

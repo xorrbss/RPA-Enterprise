@@ -1,21 +1,24 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 
-import type { StudioValidationStage, ValidationReport } from "../../../codegen/types";
+import type { IRScenario, StudioGraph, StudioValidationStage, ValidationReport } from "../../../codegen/types";
+import { validateStudioGraph } from "../../../codegen/validators";
 import { withTenantTx } from "../db/pool";
 import { originOf } from "../runtime/site-resolution";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { compileScenario, studioValidationStagesFromCompile } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
 import { paginate, parseLimit, parsePageParams } from "./list-query";
-import { signedCommandRefsFor } from "./scenarios-support";
+import { resolveRunTargetForIr, signedCommandRefsFor } from "./scenarios-support";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 import { UUID_RE } from "./server-shared";
 
 type RecordingStatus = "recording" | "completed" | "discarded" | "failed";
+type RecordingReviewStatus = "not_started" | "review_needed" | "ready_for_studio" | "promoted_to_studio" | "discarded";
 type RecordingEventType = "navigate" | "click" | "input" | "select" | "submit" | "wait";
+type SelectorConfidence = "high" | "medium" | "low" | "unknown";
 
 interface RecordingRow {
   id: string;
@@ -26,6 +29,12 @@ interface RecordingRow {
   event_count: number;
   draft_ir: unknown | null;
   validation_report: unknown | null;
+  review_status: RecordingReviewStatus;
+  review_report: unknown | null;
+  promoted_scenario_id: string | null;
+  promoted_scenario_version: number | null;
+  promoted_studio_project_id: string | null;
+  promoted_studio_graph_version: number | null;
   updated_by: string | null;
   created_at: Date;
   updated_at: Date;
@@ -50,6 +59,63 @@ interface SiteElementLookupRow {
   element_key: string;
   label: string;
   selector: string;
+  stability: "stable" | "review_needed" | "broken";
+  confidence: SelectorConfidence;
+  last_probe_result: unknown;
+}
+
+interface RecordingReviewBlocker {
+  readonly code: string;
+  readonly severity: "blocker" | "warning";
+  readonly stage: "well_formed" | "runnable" | "operable" | "prod_ready";
+  readonly event_seq?: number;
+  readonly node_id?: string;
+  readonly message: string;
+}
+
+interface RecordingSelectorConfidence {
+  readonly event_seq: number;
+  readonly node_id: string;
+  readonly label: string;
+  readonly selector: string;
+  readonly element_key: string | null;
+  readonly source: "object_repository" | "recorded_selector";
+  readonly confidence: SelectorConfidence;
+  readonly reason_code: string;
+  readonly candidates: readonly {
+    readonly element_key: string;
+    readonly label: string;
+    readonly selector: string;
+    readonly confidence: SelectorConfidence;
+  }[];
+}
+
+interface RecordingRepairSuggestion {
+  readonly code: string;
+  readonly event_seq?: number;
+  readonly node_id?: string;
+  readonly message: string;
+}
+
+interface RecordingObjectRepoChangeset {
+  readonly action: "reuse" | "candidate_create";
+  readonly event_seq: number;
+  readonly element_key: string | null;
+  readonly label: string;
+  readonly selector: string;
+}
+
+interface RecordingReviewReport {
+  readonly review_status: Exclude<RecordingReviewStatus, "not_started" | "promoted_to_studio" | "discarded">;
+  readonly blockers: readonly RecordingReviewBlocker[];
+  readonly selector_confidence: readonly RecordingSelectorConfidence[];
+  readonly repair_suggestions: readonly RecordingRepairSuggestion[];
+  readonly object_repo_changeset: readonly RecordingObjectRepoChangeset[];
+  readonly evidence: {
+    readonly recording_session_id: string;
+    readonly validation_stage_count: number;
+    readonly event_count: number;
+  };
 }
 
 interface StartRecordingBody {
@@ -94,7 +160,10 @@ export function registerBrowserRecordingRoutes(app: FastifyInstance, deps: ApiSe
         await assertSiteExists(client, siteId);
         const result = await client.query<RecordingRow>(
           `SELECT id::text AS id, site_profile_id::text AS site_profile_id, name, start_url, status,
-                  event_count, draft_ir, validation_report, updated_by::text AS updated_by, created_at, updated_at,
+                  event_count, draft_ir, validation_report, review_status, review_report,
+                  promoted_scenario_id::text AS promoted_scenario_id, promoted_scenario_version,
+                  promoted_studio_project_id::text AS promoted_studio_project_id, promoted_studio_graph_version,
+                  updated_by::text AS updated_by, created_at, updated_at,
                   updated_at::text AS cursor_at
              FROM browser_recording_sessions
             WHERE tenant_id = $1::uuid
@@ -198,6 +267,33 @@ export function registerBrowserRecordingRoutes(app: FastifyInstance, deps: ApiSe
       reply.code(result.status).send(result.body);
     },
   );
+
+  app.post<{ Params: { siteId: string; recordingId: string } }>(
+    "/v1/sites/:siteId/recordings/:recordingId/promote-to-studio",
+    { config: { rbacAction: "scenario.create" } },
+    async (request: FastifyRequest<{ Params: { siteId: string; recordingId: string } }>, reply) => {
+      const principal = requirePrincipal(request);
+      const signedCommandRefs = await signedCommandRefsFor(deps, principal, "scenario.save");
+      const siteId = validateUuid(request.params.siteId);
+      const recordingId = validateUuid(request.params.recordingId);
+      const result = await runIdempotentCommand(
+        deps,
+        request,
+        "promoteBrowserRecordingToStudio",
+        `/v1/sites/${siteId}/recordings/${recordingId}/promote-to-studio`,
+        (client, tenantId) =>
+          promoteRecordingToStudio(
+            client,
+            tenantId,
+            siteId,
+            recordingId,
+            UUID_RE.test(principal.subjectId) ? principal.subjectId : null,
+            signedCommandRefs,
+          ),
+      );
+      reply.code(result.status).send(result.body);
+    },
+  );
 }
 
 async function startRecording(
@@ -237,7 +333,10 @@ async function startRecording(
        (id, tenant_id, site_profile_id, browser_identity_id, name, start_url, updated_by)
      VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7::uuid)
      RETURNING id::text AS id, site_profile_id::text AS site_profile_id, name, start_url, status,
-               event_count, draft_ir, validation_report, updated_by::text AS updated_by, created_at, updated_at,
+               event_count, draft_ir, validation_report, review_status, review_report,
+               promoted_scenario_id::text AS promoted_scenario_id, promoted_scenario_version,
+               promoted_studio_project_id::text AS promoted_studio_project_id, promoted_studio_graph_version,
+               updated_by::text AS updated_by, created_at, updated_at,
                updated_at::text AS cursor_at`,
     [recordingId, tenantId, siteId, identity.rows[0]?.id ?? null, body.name, startUrl, updatedBy],
   );
@@ -302,25 +401,204 @@ async function completeRecording(
   signedCommandRefs: readonly string[] | undefined,
 ): Promise<CommandResponse> {
   const recording = await getRecordingForUpdate(client, tenantId, siteId, recordingId);
-  if (recording.status === "completed" && recording.draft_ir !== null && recording.validation_report !== null) {
+  if (
+    recording.status === "completed" &&
+    recording.draft_ir !== null &&
+    recording.validation_report !== null &&
+    recording.review_report !== null
+  ) {
     return { status: 200, body: mapRecording(recording) };
   }
   if (recording.status === "completed" && recording.draft_ir !== null) {
+    const events = await loadRecordingEvents(client, tenantId, recordingId);
+    const elementLookup = await loadElementLookup(client, tenantId, siteId, events);
     const validation = validateDraftIr(recording.draft_ir, signedCommandRefs);
+    const review = assessRecordingReview(recordingId, events, elementLookup, validation.report);
     const updatedCompleted = await client.query<RecordingRow>(
       `UPDATE browser_recording_sessions
-          SET validation_report=$1::jsonb, updated_by=$2::uuid, updated_at=now()
-        WHERE tenant_id=$3::uuid AND id=$4::uuid
+          SET validation_report=$1::jsonb, review_status=$2, review_report=$3::jsonb, updated_by=$4::uuid, updated_at=now()
+        WHERE tenant_id=$5::uuid AND id=$6::uuid
         RETURNING id::text AS id, site_profile_id::text AS site_profile_id, name, start_url, status,
-                  event_count, draft_ir, validation_report, updated_by::text AS updated_by, created_at, updated_at,
+                  event_count, draft_ir, validation_report, review_status, review_report,
+                  promoted_scenario_id::text AS promoted_scenario_id, promoted_scenario_version,
+                  promoted_studio_project_id::text AS promoted_studio_project_id, promoted_studio_graph_version,
+                  updated_by::text AS updated_by, created_at, updated_at,
                   updated_at::text AS cursor_at`,
-      [JSON.stringify(validation.report), updatedBy, tenantId, recordingId],
+      [JSON.stringify(validation.report), review.review_status, JSON.stringify(review), updatedBy, tenantId, recordingId],
     );
     return { status: 200, body: mapRecording(updatedCompleted.rows[0]) };
   }
   if (recording.status !== "recording") {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "recording_not_active", status: recording.status });
   }
+  const events = await loadRecordingEvents(client, tenantId, recordingId);
+  if (events.length === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "no_recorded_events" });
+  }
+  const elementLookup = await loadElementLookup(client, tenantId, siteId, events);
+  await incrementElementUsage(client, tenantId, siteId, [...elementLookup.values()].map((row) => row.element_key));
+  const draftIr = buildDraftIr(recording.name, events, elementLookup);
+  const validation = validateDraftIr(draftIr, signedCommandRefs);
+  const review = assessRecordingReview(recordingId, events, elementLookup, validation.report);
+  const updated = await client.query<RecordingRow>(
+    `UPDATE browser_recording_sessions
+        SET status='completed', event_count=$1, draft_ir=$2::jsonb, validation_report=$3::jsonb,
+            review_status=$4, review_report=$5::jsonb, updated_by=$6::uuid, updated_at=now()
+      WHERE tenant_id=$7::uuid AND id=$8::uuid
+      RETURNING id::text AS id, site_profile_id::text AS site_profile_id, name, start_url, status,
+                event_count, draft_ir, validation_report, review_status, review_report,
+                promoted_scenario_id::text AS promoted_scenario_id, promoted_scenario_version,
+                promoted_studio_project_id::text AS promoted_studio_project_id, promoted_studio_graph_version,
+                updated_by::text AS updated_by, created_at, updated_at,
+                updated_at::text AS cursor_at`,
+    [events.length, JSON.stringify(draftIr), JSON.stringify(validation.report), review.review_status, JSON.stringify(review), updatedBy, tenantId, recordingId],
+  );
+  return { status: 200, body: mapRecording(updated.rows[0]) };
+}
+
+async function promoteRecordingToStudio(
+  client: PoolClient,
+  tenantId: string,
+  siteId: string,
+  recordingId: string,
+  updatedBy: string | null,
+  signedCommandRefs: readonly string[] | undefined,
+): Promise<CommandResponse> {
+  const recording = await getRecordingForUpdate(client, tenantId, siteId, recordingId);
+  if (
+    recording.promoted_scenario_id !== null &&
+    recording.promoted_scenario_version !== null &&
+    recording.promoted_studio_project_id !== null &&
+    recording.promoted_studio_graph_version !== null
+  ) {
+    return {
+      status: 200,
+      body: promotedRecordingBody(recording, recording.promoted_studio_project_id, null),
+    };
+  }
+  if (recording.status !== "completed" || recording.draft_ir === null) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "recording_not_completed" });
+  }
+
+  const events = await loadRecordingEvents(client, tenantId, recordingId);
+  const elementLookup = await loadElementLookup(client, tenantId, siteId, events);
+  const validation = validateDraftIr(recording.draft_ir, signedCommandRefs);
+  const review = assessRecordingReview(recordingId, events, elementLookup, validation.report);
+  const blockers = review.blockers.filter((blocker) => blocker.severity === "blocker");
+  if (blockers.length > 0 || !validation.valid) {
+    await client.query(
+      `UPDATE browser_recording_sessions
+          SET review_status='review_needed', validation_report=$1::jsonb, review_report=$2::jsonb,
+              updated_by=$3::uuid, updated_at=now()
+        WHERE tenant_id=$4::uuid AND id=$5::uuid`,
+      [JSON.stringify(validation.report), JSON.stringify(review), updatedBy, tenantId, recordingId],
+    );
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "recording_review_blocked", blockers });
+  }
+
+  const irForStudio = withStudioMode(recording.draft_ir, recording.name, 1, "visual");
+  const compile = compileScenario(irForStudio, { signedCommandRefs });
+  if (!compile.ok) throw new ApiResponseError(compile.code, compile.details);
+  const inferredTarget = await resolveRunTargetForIr(client, tenantId, compile.ir);
+  const irToStore = inferredTarget !== undefined ? { ...compile.ir, target: inferredTarget } : compile.ir;
+  const scenario = await client.query<{ id: string }>(
+    `INSERT INTO scenarios (id, tenant_id, name) VALUES ($1::uuid, $2::uuid, $3)
+     ON CONFLICT (tenant_id, name) WHERE archived_at IS NULL DO NOTHING RETURNING id::text AS id`,
+    [randomUUID(), tenantId, compile.ir.meta.name],
+  );
+  if (scenario.rowCount !== 1 || scenario.rows[0] === undefined) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_name_in_use", name: compile.ir.meta.name });
+  }
+  const scenarioId = scenario.rows[0].id;
+  await client.query(
+    `INSERT INTO scenario_versions
+       (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast, params_schema)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)`,
+    [
+      randomUUID(),
+      tenantId,
+      scenarioId,
+      compile.ir.meta.version,
+      JSON.stringify(irToStore),
+      compile.compiledAst,
+      compile.ir.params_schema !== undefined ? JSON.stringify(compile.ir.params_schema) : null,
+    ],
+  );
+
+  const projectId = randomUUID();
+  await client.query(
+    `INSERT INTO studio_projects
+       (id, tenant_id, name, source_kind, source_recording_session_id, created_by)
+     VALUES ($1::uuid, $2::uuid, $3, 'recording', $4::uuid, $5::uuid)`,
+    [projectId, tenantId, recording.name, recordingId, updatedBy],
+  );
+
+  const graph = studioGraphFromIr(projectId, recording.name, compile.ir, scenarioId, compile.ir.meta.version, validation.report.stages);
+  const graphValidation = validateStudioGraph(graph);
+  if (!graphValidation.valid) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "studio_graph_invalid", errors: graphValidation.errors });
+  }
+  const graphVersionId = randomUUID();
+  const graphHash = sha256Hex(graph);
+  const compiledIrHash = sha256Hex(irToStore);
+  await client.query(
+    `INSERT INTO studio_graph_versions
+       (id, tenant_id, studio_project_id, version, compiler_version, graph, graph_hash, compiled_ir_hash,
+        scenario_id, scenario_version, source_recording_session_id, validation_stages, created_by)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'studio-graph@1', $4::jsonb, $5, $6,
+             $7::uuid, $8, $9::uuid, $10::jsonb, $11::uuid)`,
+    [
+      graphVersionId,
+      tenantId,
+      projectId,
+      JSON.stringify(graph),
+      graphHash,
+      compiledIrHash,
+      scenarioId,
+      compile.ir.meta.version,
+      recordingId,
+      JSON.stringify(validation.report.stages),
+      updatedBy,
+    ],
+  );
+  for (const stage of validation.report.stages) {
+    await client.query(
+      `INSERT INTO studio_validation_runs
+         (id, tenant_id, studio_project_id, studio_graph_version_id, stage, status, reason_code, detail, report)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9::jsonb)`,
+      [
+        randomUUID(),
+        tenantId,
+        projectId,
+        graphVersionId,
+        stage.stage,
+        stage.status,
+        stage.reason_code,
+        stage.detail,
+        JSON.stringify(validation.report),
+      ],
+    );
+  }
+
+  const updated = await client.query<RecordingRow>(
+    `UPDATE browser_recording_sessions
+        SET review_status='promoted_to_studio', review_report=$1::jsonb,
+            promoted_scenario_id=$2::uuid, promoted_scenario_version=$3,
+            promoted_studio_project_id=$4::uuid, promoted_studio_graph_version=1,
+            updated_by=$5::uuid, updated_at=now()
+      WHERE tenant_id=$6::uuid AND id=$7::uuid
+      RETURNING id::text AS id, site_profile_id::text AS site_profile_id, name, start_url, status,
+                event_count, draft_ir, validation_report, review_status, review_report,
+                promoted_scenario_id::text AS promoted_scenario_id, promoted_scenario_version,
+                promoted_studio_project_id::text AS promoted_studio_project_id, promoted_studio_graph_version,
+                updated_by::text AS updated_by, created_at, updated_at,
+                updated_at::text AS cursor_at`,
+    [JSON.stringify(review), scenarioId, compile.ir.meta.version, projectId, updatedBy, tenantId, recordingId],
+  );
+  return { status: 201, body: promotedRecordingBody(updated.rows[0], projectId, graphVersionId) };
+}
+
+async function loadRecordingEvents(client: PoolClient, tenantId: string, recordingId: string): Promise<RecordingEventRow[]> {
   const events = await client.query<RecordingEventRow>(
     `SELECT id::text AS id, recording_session_id::text AS recording_session_id, seq, recording_event_type AS event_type,
             selector, element_key, label, url, value_preview, captured_at, created_at
@@ -329,23 +607,7 @@ async function completeRecording(
       ORDER BY seq ASC`,
     [tenantId, recordingId],
   );
-  if (events.rows.length === 0) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "no_recorded_events" });
-  }
-  const elementLookup = await loadElementLookup(client, tenantId, siteId, events.rows);
-  await incrementElementUsage(client, tenantId, siteId, [...elementLookup.values()].map((row) => row.element_key));
-  const draftIr = buildDraftIr(recording.name, events.rows, elementLookup);
-  const validation = validateDraftIr(draftIr, signedCommandRefs);
-  const updated = await client.query<RecordingRow>(
-    `UPDATE browser_recording_sessions
-        SET status='completed', event_count=$1, draft_ir=$2::jsonb, validation_report=$3::jsonb, updated_by=$4::uuid, updated_at=now()
-      WHERE tenant_id=$5::uuid AND id=$6::uuid
-      RETURNING id::text AS id, site_profile_id::text AS site_profile_id, name, start_url, status,
-                event_count, draft_ir, validation_report, updated_by::text AS updated_by, created_at, updated_at,
-                updated_at::text AS cursor_at`,
-    [events.rows.length, JSON.stringify(draftIr), JSON.stringify(validation.report), updatedBy, tenantId, recordingId],
-  );
-  return { status: 200, body: mapRecording(updated.rows[0]) };
+  return events.rows;
 }
 
 async function assertSiteExists(client: PoolClient, siteId: string): Promise<void> {
@@ -364,7 +626,10 @@ async function assertRecordingExists(client: PoolClient, siteId: string, recordi
 async function getRecordingForUpdate(client: PoolClient, tenantId: string, siteId: string, recordingId: string): Promise<RecordingRow> {
   const result = await client.query<RecordingRow>(
     `SELECT id::text AS id, site_profile_id::text AS site_profile_id, name, start_url, status,
-            event_count, draft_ir, validation_report, updated_by::text AS updated_by, created_at, updated_at,
+            event_count, draft_ir, validation_report, review_status, review_report,
+            promoted_scenario_id::text AS promoted_scenario_id, promoted_scenario_version,
+            promoted_studio_project_id::text AS promoted_studio_project_id, promoted_studio_graph_version,
+            updated_by::text AS updated_by, created_at, updated_at,
             updated_at::text AS cursor_at
        FROM browser_recording_sessions
       WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid AND id=$3::uuid
@@ -387,7 +652,7 @@ async function loadElementLookup(
   const labels = [...new Set(events.map((event) => event.label).filter((label): label is string => label !== null))];
   if (keys.length === 0 && selectors.length === 0 && labels.length === 0) return new Map();
   const result = await client.query<SiteElementLookupRow>(
-    `SELECT element_key, label, selector
+    `SELECT element_key, label, selector, stability, confidence, last_probe_result
        FROM site_element_repository
       WHERE tenant_id=$1::uuid
         AND site_profile_id=$2::uuid
@@ -429,6 +694,281 @@ async function incrementElementUsage(
         AND element_key = ANY($3::text[])`,
     [tenantId, siteId, keys],
   );
+}
+
+function assessRecordingReview(
+  recordingId: string,
+  events: readonly RecordingEventRow[],
+  elementLookup: ReadonlyMap<string, SiteElementLookupRow>,
+  validationReport: ValidationReport & { readonly stages: readonly StudioValidationStage[] },
+): RecordingReviewReport {
+  const blockers: RecordingReviewBlocker[] = validationReport.errors.map((issue, index) => ({
+    code: "compile_error",
+    severity: "blocker",
+    stage: "well_formed",
+    message: `Static validation error ${issue.rule ?? issue.code ?? index + 1}`,
+    ...(typeof issue.nodeId === "string" ? { node_id: issue.nodeId } : {}),
+  }));
+  const selectorConfidence: RecordingSelectorConfidence[] = [];
+  const repairSuggestions: RecordingRepairSuggestion[] = [];
+  const objectRepoChangeset: RecordingObjectRepoChangeset[] = [];
+
+  for (const event of events) {
+    if (!eventNeedsSelector(event.event_type)) continue;
+    const nodeId = nodeIdForSeq(event.seq);
+    const element = elementLookup.get(event.id);
+    const selector = element?.selector ?? event.selector;
+    const label = element?.label ?? event.label ?? event.element_key ?? event.event_type;
+    if (selector === null || selector === undefined || selector.trim() === "") {
+      blockers.push({
+        code: "selector_missing",
+        severity: "blocker",
+        stage: "runnable",
+        event_seq: event.seq,
+        node_id: nodeId,
+        message: "Recorded action is missing a DOM selector.",
+      });
+      repairSuggestions.push({
+        code: "record_step_again",
+        event_seq: event.seq,
+        node_id: nodeId,
+        message: "Record this step again or bind it to an Object Repository element before Studio promotion.",
+      });
+      continue;
+    }
+
+    if (element !== undefined) {
+      const confidence = confidenceForElement(element);
+      selectorConfidence.push({
+        event_seq: event.seq,
+        node_id: nodeId,
+        label,
+        selector,
+        element_key: element.element_key,
+        source: "object_repository",
+        confidence,
+        reason_code: confidence === "high" ? "object_repository_stable" : "object_repository_needs_probe",
+        candidates: [{ element_key: element.element_key, label: element.label, selector: element.selector, confidence }],
+      });
+      objectRepoChangeset.push({
+        action: "reuse",
+        event_seq: event.seq,
+        element_key: element.element_key,
+        label: element.label,
+        selector: element.selector,
+      });
+      if (confidence === "low" || confidence === "unknown") {
+        blockers.push({
+          code: "selector_confidence_low",
+          severity: "blocker",
+          stage: "runnable",
+          event_seq: event.seq,
+          node_id: nodeId,
+          message: "Object Repository selector is broken or unverified.",
+        });
+      }
+      continue;
+    }
+
+    selectorConfidence.push({
+      event_seq: event.seq,
+      node_id: nodeId,
+      label,
+      selector,
+      element_key: event.element_key,
+      source: "recorded_selector",
+      confidence: "medium",
+      reason_code: "recorded_selector_not_in_repository",
+      candidates: [],
+    });
+    objectRepoChangeset.push({
+      action: "candidate_create",
+      event_seq: event.seq,
+      element_key: event.element_key,
+      label,
+      selector,
+    });
+    repairSuggestions.push({
+      code: "promote_selector_to_object_repository",
+      event_seq: event.seq,
+      node_id: nodeId,
+      message: "Add this recorded selector to the Object Repository and run a probe to raise confidence.",
+    });
+  }
+
+  return {
+    review_status: blockers.some((blocker) => blocker.severity === "blocker") ? "review_needed" : "ready_for_studio",
+    blockers,
+    selector_confidence: selectorConfidence,
+    repair_suggestions: repairSuggestions,
+    object_repo_changeset: objectRepoChangeset,
+    evidence: {
+      recording_session_id: recordingId,
+      validation_stage_count: validationReport.stages.length,
+      event_count: events.length,
+    },
+  };
+}
+
+function eventNeedsSelector(eventType: RecordingEventType): boolean {
+  return eventType === "click" || eventType === "input" || eventType === "select" || eventType === "submit";
+}
+
+function nodeIdForSeq(seq: number): string {
+  return `step_${String(seq).padStart(2, "0")}`;
+}
+
+function confidenceForElement(element: SiteElementLookupRow): SelectorConfidence {
+  if (element.confidence !== "unknown") return element.confidence;
+  if (element.stability === "stable") return "high";
+  if (element.stability === "review_needed") return "medium";
+  return "low";
+}
+
+function withStudioMode(value: unknown, name: string, version: number, studioMode: "visual"): unknown {
+  if (!isRecord(value)) return value;
+  const meta = isRecord(value.meta) ? value.meta : {};
+  return {
+    ...value,
+    meta: {
+      ...meta,
+      name: typeof meta.name === "string" && meta.name.trim() !== "" ? meta.name : name,
+      version: typeof meta.version === "number" && Number.isInteger(meta.version) && meta.version >= 1 ? meta.version : version,
+      studio_mode: studioMode,
+    },
+  };
+}
+
+function studioGraphFromIr(
+  projectId: string,
+  name: string,
+  ir: IRScenario,
+  scenarioId: string,
+  scenarioVersion: number,
+  stages: readonly StudioValidationStage[],
+): StudioGraph {
+  const graphNodeIds = new Set(
+    Object.entries(ir.nodes)
+      .filter(([, node]) => !("terminal" in node))
+      .map(([nodeId]) => nodeId),
+  );
+  const nodes = [...graphNodeIds].map((nodeId, index) => {
+    const node = ir.nodes[nodeId]!;
+    const action = Array.isArray(node.what)
+      ? node.what.find((candidate) => isRecord(candidate)) as Record<string, unknown> | undefined
+      : undefined;
+    const label = studioNodeLabel(nodeId, action);
+    return studioNodeFromAction(nodeId, label, { x: 80 + index * 220, y: 120 }, action);
+  });
+  const edges = Object.entries(ir.nodes).flatMap(([nodeId, node]) => {
+    if (!graphNodeIds.has(nodeId) || !("next" in node) || typeof node.next !== "string" || !graphNodeIds.has(node.next)) return [];
+    return [{ id: `${nodeId}_to_${node.next}`, source: nodeId, target: node.next, type: "next" as const }];
+  });
+  return {
+    graph_id: `studio_${projectId.replace(/-/g, "_")}`,
+    name,
+    version: 1,
+    compiler_version: "studio-graph@1",
+    start_node_id: graphNodeIds.has(ir.start) ? ir.start : nodes[0]?.id ?? "start",
+    nodes,
+    edges,
+    validation_stages: [...stages],
+    compiled_ir_ref: { scenario_id: scenarioId, version: scenarioVersion },
+  };
+}
+
+function studioNodeLabel(nodeId: string, action: Record<string, unknown> | undefined): string {
+  const instruction = typeof action?.instruction === "string" && action.instruction.trim() !== "" ? action.instruction : null;
+  return instruction ?? nodeId;
+}
+
+function studioNodeFromAction(
+  id: string,
+  label: string,
+  position: { x: number; y: number },
+  action: Record<string, unknown> | undefined,
+): StudioGraph["nodes"][number] {
+  if (action?.action === "navigate") {
+    return {
+      id,
+      type: "navigate",
+      label,
+      position,
+      config: { url_ref: typeof action.url_ref === "string" ? action.url_ref : "entry_url", wait_until: "load" },
+    };
+  }
+  if (action?.action === "observe") {
+    const selectorRef = selectorRefFromAction(action);
+    return {
+      id,
+      type: "extract",
+      label,
+      position,
+      config: {
+        instruction: label,
+        schema_ref: "recording_observation",
+        ...(selectorRef !== undefined ? { selector_ref: selectorRef } : {}),
+      },
+    };
+  }
+  const selectorRef = selectorRefFromAction(action);
+  const valueRef = isRecord(action?.args) && typeof action.args.value_ref === "string" ? action.args.value_ref : undefined;
+  const actionKind = actionKindFromAction(action);
+  return {
+    id,
+    type: "act",
+    label,
+    position,
+    config: {
+      intent: label,
+      ...(selectorRef !== undefined ? { selector_ref: selectorRef } : {}),
+      ...(valueRef !== undefined ? { value_ref: valueRef } : {}),
+      ...(actionKind !== undefined ? { action_kind: actionKind } : {}),
+    },
+  };
+}
+
+function selectorRefFromAction(action: Record<string, unknown> | undefined): string | undefined {
+  const args = isRecord(action?.args) ? action.args : {};
+  for (const key of ["click_selector", "fill_selector", "select_selector", "selector"]) {
+    const value = args[key] ?? action?.[key];
+    if (typeof value === "string" && value.trim() !== "") return value;
+  }
+  return undefined;
+}
+
+function actionKindFromAction(action: Record<string, unknown> | undefined): "click" | "fill" | "select" | "submit" | undefined {
+  const args = isRecord(action?.args) ? action.args : {};
+  if (typeof args.fill_selector === "string") return "fill";
+  if (typeof args.select_selector === "string") return "select";
+  return "click";
+}
+
+function sha256Hex(value: unknown): string {
+  return createHash("sha256").update(stableJson(value)).digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`)
+    .join(",")}}`;
+}
+
+function promotedRecordingBody(row: RecordingRow, studioProjectId: string, studioGraphVersionId: string | null): Record<string, unknown> {
+  return {
+    recording_session_id: row.id,
+    site_profile_id: row.site_profile_id,
+    studio_project_id: studioProjectId,
+    studio_graph_version_id: studioGraphVersionId,
+    studio_graph_version: row.promoted_studio_graph_version ?? 1,
+    scenario_id: row.promoted_scenario_id,
+    version: row.promoted_scenario_version,
+    promotion_status: "draft",
+    review_status: row.review_status,
+  };
 }
 
 function validateDraftIr(
@@ -621,6 +1161,12 @@ function mapRecording(row: RecordingRow): Record<string, unknown> {
     event_count: row.event_count,
     draft_ir: row.draft_ir,
     validation_report: row.validation_report,
+    review_status: row.review_status,
+    review_report: row.review_report,
+    promoted_scenario_id: row.promoted_scenario_id,
+    promoted_scenario_version: row.promoted_scenario_version,
+    promoted_studio_project_id: row.promoted_studio_project_id,
+    promoted_studio_graph_version: row.promoted_studio_graph_version,
     updated_by: row.updated_by,
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),

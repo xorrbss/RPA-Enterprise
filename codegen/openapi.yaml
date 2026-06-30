@@ -1536,6 +1536,84 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /connector-profiles:
+    get:
+      tags: [ConnectorCatalog]
+      operationId: listConnectorProfiles
+      summary: List tenant connector profiles
+      description: List tenant-scoped connector setup profiles. Secret values, raw endpoints, provider tokens, Authorization headers, and resolved SecretRef material are never returned.
+      parameters:
+        - name: connector_id
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ConnectorProfileStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Connector profile page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorProfilePage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [ConnectorCatalog]
+      operationId: createConnectorProfile
+      summary: Create a tenant connector setup profile
+      description: Creates metadata-only connector setup evidence. This does not enable runtime connector execution; candidate and blocked catalog items cannot be profiled as enabled.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectorProfileCreateRequest'
+      responses:
+        '201':
+          description: Created connector profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorProfile'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /connector-profiles/{profile_id}/certifications:
+    post:
+      tags: [ConnectorCatalog]
+      operationId: certifyConnectorProfile
+      summary: Record connector certification evidence
+      description: Records profile certification evidence and explicit receipt semantics. Certified profiles require manifest, security review, test, and owner evidence refs.
+      parameters:
+        - name: profile_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectorCertificationRequest'
+      responses:
+        '201':
+          description: Recorded connector certification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorCertification'
+        default:
+          $ref: '#/components/responses/Error'
+
   /integration-handoffs:
     get:
       tags: [IntegrationHandoffs]
@@ -3589,6 +3667,44 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /sites/{site_profile_id}/recordings/{recording_session_id}/promote-to-studio:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+      - name: recording_session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Sites]
+      operationId: promoteBrowserRecordingToStudio
+      description: Promote a completed, blocker-free Browser Recorder draft into a Studio graph version and scenario draft. This never promotes to prod.
+      summary: Browser Recorder 초안을 Studio draft로 고정
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Studio project/graph version and scenario draft created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromoteBrowserRecordingToStudioResponse'
+        '200':
+          description: Existing promoted Studio draft returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromoteBrowserRecordingToStudioResponse'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   /sites/{site_profile_id}/approve:
     parameters:
       - $ref: '#/components/parameters/SiteProfileId'
@@ -4798,6 +4914,94 @@ components:
         - api_workflow
         - file_workflow
         - notification_workflow
+    ConnectorProfileStatus:
+      type: string
+      enum:
+        - draft
+        - security_review
+        - certified
+        - enabled
+        - disabled
+        - deprecated
+    ConnectorCertificationStatus:
+      type: string
+      enum:
+        - security_review
+        - certified
+        - blocked
+        - revoked
+    ConnectorProfileEnvironment:
+      type: string
+      enum:
+        - dev
+        - staging
+        - prod
+    ConnectorReceiptSemanticsProviderLeg:
+      type: string
+      enum:
+        - not_applicable
+        - metadata_only
+        - provider_receipt_required
+    ConnectorReceiptSemanticsCompletionLeg:
+      type: string
+      enum:
+        - not_applicable
+        - metadata_only
+        - business_receipt_required
+    ConnectorCatalogListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          $ref: '#/components/schemas/ConnectorCatalogKind'
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
+    TemplateCatalogListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        connector_id:
+          type: string
+          minLength: 1
+        kind:
+          $ref: '#/components/schemas/TemplateCatalogKind'
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
+    ConnectorProfilePathParams:
+      type: object
+      additionalProperties: false
+      required: [profile_id]
+      properties:
+        profile_id:
+          type: string
+          format: uuid
+    ConnectorProfileListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        connector_id:
+          type: string
+          minLength: 1
+        status:
+          $ref: '#/components/schemas/ConnectorProfileStatus'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
     WorkitemState:
       type: string
       enum:
@@ -5981,6 +6185,15 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/ConnectorCatalogItem' }
+        next_cursor:
+          type: [string, "null"]
+    ConnectorProfilePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConnectorProfile' }
         next_cursor:
           type: [string, "null"]
     TemplateCatalogPage:
@@ -7596,6 +7809,142 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    ConnectorReceiptSemantics:
+      type: object
+      additionalProperties: false
+      required: [sent, accepted, delivered, completed]
+      properties:
+        sent:
+          $ref: '#/components/schemas/ConnectorReceiptSemanticsProviderLeg'
+        accepted:
+          $ref: '#/components/schemas/ConnectorReceiptSemanticsProviderLeg'
+        delivered:
+          $ref: '#/components/schemas/ConnectorReceiptSemanticsProviderLeg'
+        completed:
+          $ref: '#/components/schemas/ConnectorReceiptSemanticsCompletionLeg'
+
+    ConnectorCertification:
+      type: object
+      additionalProperties: false
+      description: Metadata-only connector certification evidence. Evidence refs must not contain raw endpoints, tokens, secrets, provider bodies, or resolved SecretRef material.
+      required:
+        - certification_id
+        - profile_id
+        - connector_id
+        - status
+        - reason
+        - manifest_ref
+        - security_review_ref
+        - test_evidence_ref
+        - owner_evidence_ref
+        - receipt_semantics
+        - metadata
+        - certified_by
+        - created_at
+      properties:
+        certification_id: { type: string, format: uuid }
+        profile_id: { type: string, format: uuid }
+        connector_id: { type: string, minLength: 1 }
+        status:
+          $ref: '#/components/schemas/ConnectorCertificationStatus'
+        reason: { type: string, minLength: 1 }
+        manifest_ref: { type: [string, "null"] }
+        security_review_ref: { type: [string, "null"] }
+        test_evidence_ref: { type: [string, "null"] }
+        owner_evidence_ref: { type: [string, "null"] }
+        receipt_semantics:
+          $ref: '#/components/schemas/ConnectorReceiptSemantics'
+        metadata:
+          type: object
+        certified_by: { type: string, minLength: 1 }
+        created_at: { type: string, format: date-time }
+
+    ConnectorProfile:
+      type: object
+      additionalProperties: false
+      description: Tenant connector setup profile. Profiles are setup/evidence ledgers, not implicit runtime enablement.
+      required:
+        - profile_id
+        - connector_id
+        - profile_name
+        - status
+        - environment
+        - secret_refs
+        - allowed_hosts
+        - owner_ref
+        - support_owner_ref
+        - profile_metadata
+        - latest_certification
+        - created_by
+        - updated_by
+        - created_at
+        - updated_at
+      properties:
+        profile_id: { type: string, format: uuid }
+        connector_id: { type: string, minLength: 1 }
+        profile_name: { type: string, minLength: 1 }
+        status:
+          $ref: '#/components/schemas/ConnectorProfileStatus'
+        environment:
+          $ref: '#/components/schemas/ConnectorProfileEnvironment'
+        secret_refs:
+          type: array
+          items: { type: string, pattern: '^secret://.+' }
+        allowed_hosts:
+          type: array
+          items: { type: string }
+        owner_ref: { type: string, minLength: 1 }
+        support_owner_ref: { type: [string, "null"] }
+        profile_metadata:
+          type: object
+        latest_certification:
+          oneOf:
+            - $ref: '#/components/schemas/ConnectorCertification'
+            - type: "null"
+        created_by: { type: string, minLength: 1 }
+        updated_by: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ConnectorProfileCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [connector_id, profile_name, owner_ref]
+      properties:
+        connector_id: { type: string, minLength: 1 }
+        profile_name: { type: string, minLength: 1, maxLength: 120 }
+        environment:
+          $ref: '#/components/schemas/ConnectorProfileEnvironment'
+        secret_refs:
+          type: array
+          maxItems: 20
+          items: { type: string, pattern: '^secret://.+' }
+        allowed_hosts:
+          type: array
+          maxItems: 20
+          items: { type: string }
+        owner_ref: { type: string, minLength: 1, maxLength: 500 }
+        support_owner_ref: { type: [string, "null"], maxLength: 500 }
+        metadata:
+          type: object
+
+    ConnectorCertificationRequest:
+      type: object
+      additionalProperties: false
+      required: [status, reason]
+      properties:
+        status:
+          $ref: '#/components/schemas/ConnectorCertificationStatus'
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        manifest_ref: { type: [string, "null"], maxLength: 500 }
+        security_review_ref: { type: [string, "null"], maxLength: 500 }
+        test_evidence_ref: { type: [string, "null"], maxLength: 500 }
+        owner_evidence_ref: { type: [string, "null"], maxLength: 500 }
+        receipt_semantics:
+          $ref: '#/components/schemas/ConnectorReceiptSemantics'
+        metadata:
+          type: object
+
     DocumentFieldSchema:
       type: object
       additionalProperties: false
@@ -8299,11 +8648,9 @@ components:
       additionalProperties: false
       properties:
         stage:
-          type: string
-          enum: [well_formed, runnable, operable, prod_ready]
+          $ref: '#/components/schemas/StudioValidationStageName'
         status:
-          type: string
-          enum: [pass, failed, blocked, not_run]
+          $ref: '#/components/schemas/StudioValidationStageStatus'
         reason_code:
           type: string
           pattern: '^[a-z0-9_]{1,80}$'
@@ -8311,6 +8658,14 @@ components:
           type: string
           minLength: 1
           maxLength: 500
+
+    StudioValidationStageName:
+      type: string
+      enum: [well_formed, runnable, operable, prod_ready]
+
+    StudioValidationStageStatus:
+      type: string
+      enum: [pass, failed, blocked, not_run]
 
     ValidationIssue:
       type: object
@@ -8999,6 +9354,12 @@ components:
         - event_count
         - draft_ir
         - validation_report
+        - review_status
+        - review_report
+        - promoted_scenario_id
+        - promoted_scenario_version
+        - promoted_studio_project_id
+        - promoted_studio_graph_version
         - updated_by
         - created_at
         - updated_at
@@ -9026,6 +9387,24 @@ components:
           oneOf:
             - $ref: '#/components/schemas/ValidationReport'
             - type: "null"
+        review_status:
+          $ref: '#/components/schemas/BrowserRecordingReviewStatus'
+        review_report:
+          oneOf:
+            - $ref: '#/components/schemas/BrowserRecordingReviewReport'
+            - type: "null"
+        promoted_scenario_id:
+          type: [string, "null"]
+          format: uuid
+        promoted_scenario_version:
+          type: [integer, "null"]
+          minimum: 1
+        promoted_studio_project_id:
+          type: [string, "null"]
+          format: uuid
+        promoted_studio_graph_version:
+          type: [integer, "null"]
+          minimum: 1
         updated_by:
           type: [string, "null"]
         created_at:
@@ -9034,6 +9413,174 @@ components:
         updated_at:
           type: string
           format: date-time
+      additionalProperties: false
+
+    BrowserRecordingReviewStatus:
+      type: string
+      enum: [not_started, review_needed, ready_for_studio, promoted_to_studio, discarded]
+
+    SelectorConfidence:
+      type: string
+      enum: [high, medium, low, unknown]
+
+    BrowserRecordingReviewReport:
+      type: object
+      required: [review_status, blockers, selector_confidence, repair_suggestions, object_repo_changeset, evidence]
+      properties:
+        review_status:
+          type: string
+          enum: [review_needed, ready_for_studio]
+        blockers:
+          type: array
+          items:
+            type: object
+            required: [code, severity, stage, message]
+            properties:
+              code:
+                type: string
+              severity:
+                type: string
+                enum: [blocker, warning]
+              stage:
+                $ref: '#/components/schemas/StudioValidationStageName'
+              event_seq:
+                type: integer
+                minimum: 1
+              node_id:
+                type: string
+              message:
+                type: string
+            additionalProperties: false
+        selector_confidence:
+          type: array
+          items:
+            type: object
+            required: [event_seq, node_id, label, selector, element_key, source, confidence, reason_code, candidates]
+            properties:
+              event_seq:
+                type: integer
+                minimum: 1
+              node_id:
+                type: string
+              label:
+                type: string
+              selector:
+                type: string
+              element_key:
+                type: [string, "null"]
+              source:
+                type: string
+                enum: [object_repository, recorded_selector]
+              confidence:
+                $ref: '#/components/schemas/SelectorConfidence'
+              reason_code:
+                type: string
+              candidates:
+                type: array
+                items:
+                  type: object
+                  required: [element_key, label, selector, confidence]
+                  properties:
+                    element_key:
+                      type: string
+                    label:
+                      type: string
+                    selector:
+                      type: string
+                    confidence:
+                      $ref: '#/components/schemas/SelectorConfidence'
+                  additionalProperties: false
+            additionalProperties: false
+        repair_suggestions:
+          type: array
+          items:
+            type: object
+            required: [code, message]
+            properties:
+              code:
+                type: string
+              event_seq:
+                type: integer
+                minimum: 1
+              node_id:
+                type: string
+              message:
+                type: string
+            additionalProperties: false
+        object_repo_changeset:
+          type: array
+          items:
+            type: object
+            required: [action, event_seq, element_key, label, selector]
+            properties:
+              action:
+                type: string
+                enum: [reuse, candidate_create]
+              event_seq:
+                type: integer
+                minimum: 1
+              element_key:
+                type: [string, "null"]
+              label:
+                type: string
+              selector:
+                type: string
+            additionalProperties: false
+        evidence:
+          type: object
+          required: [recording_session_id, validation_stage_count, event_count]
+          properties:
+            recording_session_id:
+              type: string
+              format: uuid
+            validation_stage_count:
+              type: integer
+              minimum: 0
+            event_count:
+              type: integer
+              minimum: 0
+          additionalProperties: false
+      additionalProperties: false
+
+    PromoteBrowserRecordingToStudioResponse:
+      type: object
+      required:
+        - recording_session_id
+        - site_profile_id
+        - studio_project_id
+        - studio_graph_version_id
+        - studio_graph_version
+        - scenario_id
+        - version
+        - promotion_status
+        - review_status
+      properties:
+        recording_session_id:
+          type: string
+          format: uuid
+        site_profile_id:
+          type: string
+          format: uuid
+        studio_project_id:
+          type: string
+          format: uuid
+        studio_graph_version_id:
+          type: [string, "null"]
+          format: uuid
+        studio_graph_version:
+          type: integer
+          minimum: 1
+        scenario_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        promotion_status:
+          type: string
+          enum: [draft]
+        review_status:
+          $ref: '#/components/schemas/BrowserRecordingReviewStatus'
       additionalProperties: false
 
     BrowserRecordingPage:

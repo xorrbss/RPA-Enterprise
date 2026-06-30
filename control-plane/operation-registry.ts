@@ -57,6 +57,9 @@ export type SupportedControlPlaneOperationId = Extract<
   | "exportAuditLog"
   | "listConnectors"
   | "listTemplates"
+  | "listConnectorProfiles"
+  | "createConnectorProfile"
+  | "certifyConnectorProfile"
   | "listIntegrationHandoffs"
   | "createIntegrationHandoff"
   | "dispatchIntegrationHandoff"
@@ -412,6 +415,35 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     querySchemaRef: "#/components/schemas/TemplateCatalogListQuery",
     responseSchemaRef: "#/components/schemas/TemplateCatalogPage",
     rbacAction: "connector.read",
+  }),
+  operation({
+    operationId: "listConnectorProfiles",
+    method: "GET",
+    path: "/v1/connector-profiles",
+    querySchemaRef: "#/components/schemas/ConnectorProfileListQuery",
+    responseSchemaRef: "#/components/schemas/ConnectorProfilePage",
+    rbacAction: "connector.read",
+  }),
+  operation({
+    operationId: "createConnectorProfile",
+    method: "POST",
+    path: "/v1/connector-profiles",
+    requestBodySchemaRef: "#/components/schemas/ConnectorProfileCreateRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/ConnectorProfile",
+    rbacAction: "connector.enable",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "certifyConnectorProfile",
+    method: "POST",
+    path: "/v1/connector-profiles/{profile_id}/certifications",
+    requestBodySchemaRef: "#/components/schemas/ConnectorCertificationRequest",
+    requestBodyRequired: true,
+    paramsSchemaRef: "#/components/schemas/ConnectorProfilePathParams",
+    responseSchemaRef: "#/components/schemas/ConnectorCertification",
+    rbacAction: "connector.enable",
+    requiresIdempotencyKey: true,
   }),
   operation({
     operationId: "listIntegrationHandoffs",
@@ -1937,6 +1969,8 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
   ["upsertRoiEstimate", requireObject("#/components/schemas/RoiEstimateRequest")],
   ["recordRoiActualEvidence", requireRoiActualEvidenceBody("#/components/schemas/RoiActualEvidenceRequest")],
   ["recordAutomationAdoptionEvidence", requireAutomationAdoptionEvidenceBody("#/components/schemas/AutomationAdoptionEvidenceRequest")],
+  ["createConnectorProfile", requireObject("#/components/schemas/ConnectorProfileCreateRequest", ["connector_id", "profile_name", "owner_ref"])],
+  ["certifyConnectorProfile", requireObject("#/components/schemas/ConnectorCertificationRequest", ["status", "reason"])],
   ["createIntegrationHandoff", requireObject("#/components/schemas/IntegrationHandoffCreateRequest", ["provider_alias", "job_ref", "payload_ref"])],
   ["dispatchIntegrationHandoff", requireIntegrationHandoffDispatchBody("#/components/schemas/IntegrationHandoffDispatchRequest")],
   ["recordIntegrationHandoffCallback", requireObject("#/components/schemas/IntegrationHandoffCallbackRequest", ["external_job_id", "status", "receipt_id"])],
@@ -1991,6 +2025,7 @@ const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Op
   ["recordRoiActualEvidence", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
   ["listAutomationAdoptionEvidence", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
   ["recordAutomationAdoptionEvidence", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
+  ["certifyConnectorProfile", requireParams("#/components/schemas/ConnectorProfilePathParams", ["profile_id"])],
   ["dispatchIntegrationHandoff", requireParams("#/components/schemas/IntegrationHandoffPathParams", ["handoff_id"])],
   ["recordIntegrationHandoffCallback", requireParams("#/components/schemas/IntegrationHandoffPathParams", ["handoff_id"])],
   ["validateScenario", requireParams("#/components/schemas/ScenarioPathParams", ["scenario_id"])],
@@ -2049,6 +2084,7 @@ const queryValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Ope
   ["exportAuditLog", passQuery("#/components/schemas/AuditLogExportQuery")],
   ["listConnectors", passQuery("#/components/schemas/ConnectorCatalogListQuery")],
   ["listTemplates", passQuery("#/components/schemas/TemplateCatalogListQuery")],
+  ["listConnectorProfiles", passQuery("#/components/schemas/ConnectorProfileListQuery")],
   ["listIntegrationHandoffs", passQuery("#/components/schemas/IntegrationHandoffListQuery")],
   ["listHumanTasks", passQuery("#/components/schemas/HumanTaskListQuery")],
   ["listWorkitems", passQuery("#/components/schemas/WorkitemListQuery")],

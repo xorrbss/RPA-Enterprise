@@ -50,6 +50,44 @@ async function startRecordingAndFindActionSelect(): Promise<HTMLElement> {
   return within(workbench).findByLabelText("녹화 동작", undefined, { timeout: 5000 });
 }
 
+function recordingLifecycleFields(
+  recordingId: string,
+  reviewStatus: "not_started" | "ready_for_studio",
+  eventCount = 0,
+) {
+  return {
+    review_status: reviewStatus,
+    review_report: reviewStatus === "ready_for_studio"
+      ? {
+          review_status: "ready_for_studio" as const,
+          blockers: [],
+          selector_confidence: [
+            {
+              event_seq: 1,
+              node_id: "step_01",
+              label: "승인 버튼",
+              selector: "button.approve",
+              element_key: "ApproveButton",
+              source: "object_repository" as const,
+              confidence: "high" as const,
+              reason_code: "object_repository_stable",
+              candidates: [
+                { element_key: "ApproveButton", label: "승인 버튼", selector: "button.approve", confidence: "high" as const },
+              ],
+            },
+          ],
+          repair_suggestions: [],
+          object_repo_changeset: [],
+          evidence: { recording_session_id: recordingId, validation_stage_count: 4, event_count: eventCount },
+        }
+      : null,
+    promoted_scenario_id: null,
+    promoted_scenario_version: null,
+    promoted_studio_project_id: null,
+    promoted_studio_graph_version: null,
+  };
+}
+
 describe("browser recorder panel", () => {
   beforeEach(() => {
     location.hash = "#scenarioStudio";
@@ -61,7 +99,7 @@ describe("browser recorder panel", () => {
     let startedName = "";
     let startedUrl = "";
     let completedRecordingId = "";
-    let createdIr: unknown = null;
+    let promotedRecordingId = "";
     const events: BrowserRecordingEvent[] = [];
     const client = fakeClient({
       listSites: async () => ({
@@ -93,8 +131,10 @@ describe("browser recorder panel", () => {
             selector: "button.approve",
             element_type: "button",
             stability: "stable",
+            confidence: "high",
             source: "manual",
             sample_url: "https://portal.example.com/invoices",
+            last_probe_result: {},
             notes: null,
             usage_count: 2,
             last_verified_at: null,
@@ -117,6 +157,7 @@ describe("browser recorder panel", () => {
           event_count: 0,
           draft_ir: null,
           validation_report: null,
+          ...recordingLifecycleFields("94000000-0000-4000-8000-000000000001", "not_started"),
           updated_by: "operator",
           created_at: "2026-06-23T00:00:00.000Z",
           updated_at: "2026-06-23T00:00:00.000Z",
@@ -188,17 +229,24 @@ describe("browser recorder panel", () => {
               { stage: "prod_ready", status: "not_run", reason_code: "release_gate_not_run", detail: "release not run" },
             ],
           },
+          ...recordingLifecycleFields(recordingId, "ready_for_studio", events.length),
           updated_by: "operator",
           created_at: "2026-06-23T00:00:00.000Z",
           updated_at: "2026-06-23T00:00:02.000Z",
         };
       },
-      createScenario: async (ir) => {
-        createdIr = ir;
+      promoteRecordingToStudio: async (siteId, recordingId) => {
+        promotedRecordingId = recordingId;
         return {
           scenario_id: "96000000-0000-4000-8000-000000000001",
+          recording_session_id: recordingId,
+          site_profile_id: siteId,
+          studio_project_id: "97000000-0000-4000-8000-000000000001",
+          studio_graph_version_id: "97000000-0000-4000-8000-000000000101",
+          studio_graph_version: 1,
           version: 1,
           promotion_status: "draft",
+          review_status: "promoted_to_studio",
         };
       },
     });
@@ -287,7 +335,7 @@ describe("browser recorder panel", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/step_01/)).toBeNull();
-    expect(screen.queryByText(/button\.approve/)).toBeNull();
+    expect(screen.getByText(/button\.approve/)).toBeInTheDocument();
     expect(screen.queryByText("원문 초안 보기")).toBeNull();
     expect(screen.getByText("고급 세부 정보 보기")).toBeInTheDocument();
     fireEvent.click(screen.getByText("고급 세부 정보 보기"));
@@ -296,7 +344,7 @@ describe("browser recorder panel", () => {
     expect(screen.getByText("실행 가능성")).toBeInTheDocument();
     expect(screen.getAllByText("미실행").length).toBeGreaterThanOrEqual(1);
     fireEvent.click(screen.getByRole("button", { name: "Studio 초안으로 보내기" }));
-    await waitFor(() => expect(createdIr).toMatchObject({ start: "step_01" }));
+    await waitFor(() => expect(promotedRecordingId).toBe(completedRecordingId));
     expect(
       await screen.findByText("Studio 초안으로 보냈습니다. v1"),
     ).toBeInTheDocument();
@@ -345,6 +393,7 @@ describe("browser recorder panel", () => {
         event_count: 1,
         draft_ir: null,
         validation_report: null,
+        ...recordingLifecycleFields("94000000-0000-4000-8000-000000000002", "not_started"),
         updated_by: "operator",
         created_at: "2026-06-23T00:00:00.000Z",
         updated_at: "2026-06-23T00:00:00.000Z",
@@ -377,6 +426,27 @@ describe("browser recorder panel", () => {
             ],
             warnings: [],
           },
+          review_status: "review_needed",
+          review_report: {
+            review_status: "review_needed",
+            blockers: [
+              {
+                code: "compile_error",
+                severity: "blocker",
+                stage: "well_formed",
+                node_id: "step_01",
+                message: "Static validation error V3",
+              },
+            ],
+            selector_confidence: [],
+            repair_suggestions: [],
+            object_repo_changeset: [],
+            evidence: { recording_session_id: recordingId, validation_stage_count: 0, event_count: 1 },
+          },
+          promoted_scenario_id: null,
+          promoted_scenario_version: null,
+          promoted_studio_project_id: null,
+          promoted_studio_graph_version: null,
           updated_by: "operator",
           created_at: "2026-06-23T00:00:00.000Z",
           updated_at: "2026-06-23T00:00:02.000Z",
@@ -483,6 +553,7 @@ describe("browser recorder panel", () => {
         event_count: 0,
         draft_ir: null,
         validation_report: null,
+        ...recordingLifecycleFields("94000000-0000-4000-8000-000000000003", "not_started"),
         updated_by: "operator",
         created_at: "2026-06-23T00:00:00.000Z",
         updated_at: "2026-06-23T00:00:00.000Z",
@@ -537,6 +608,7 @@ describe("browser recorder panel", () => {
         event_count: 0,
         draft_ir: null,
         validation_report: null,
+        ...recordingLifecycleFields("94000000-0000-4000-8000-000000000004", "not_started"),
         updated_by: "operator",
         created_at: "2026-06-23T00:00:00.000Z",
         updated_at: "2026-06-23T00:00:00.000Z",

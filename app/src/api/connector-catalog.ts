@@ -1,12 +1,21 @@
+import { randomUUID } from "node:crypto";
+
 import type { FastifyInstance } from "fastify";
+import type { PoolClient } from "pg";
 
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
+import { withTenantTx } from "../db/pool";
+import { isRecord, runIdempotentCommand } from "./command";
 import { requirePrincipal, type ApiServerDeps } from "./server";
+import { UUID_RE } from "./server-shared";
 
 type ConnectorKind = "browser" | "api" | "file" | "notification" | "data";
 type CatalogStatus = "available" | "candidate" | "requires_admin" | "blocked";
 type TemplateKind = "browser_workflow" | "api_workflow" | "file_workflow" | "notification_workflow";
+type ConnectorProfileStatus = "draft" | "security_review" | "certified" | "enabled" | "disabled" | "deprecated";
+type ConnectorCertificationStatus = "security_review" | "certified" | "blocked" | "revoked";
+type ConnectorEnvironment = "dev" | "staging" | "prod";
 
 interface ConnectorCatalogItem {
   catalog_id: string;
@@ -50,6 +59,114 @@ interface TemplateCatalogItem {
   success_criteria: string;
   created_at: string;
   updated_at: string;
+}
+
+interface ConnectorProfile {
+  readonly profile_id: string;
+  readonly connector_id: string;
+  readonly profile_name: string;
+  readonly status: ConnectorProfileStatus;
+  readonly environment: ConnectorEnvironment;
+  readonly secret_refs: readonly string[];
+  readonly allowed_hosts: readonly string[];
+  readonly owner_ref: string;
+  readonly support_owner_ref: string | null;
+  readonly profile_metadata: Readonly<Record<string, unknown>>;
+  readonly latest_certification: ConnectorCertification | null;
+  readonly created_by: string;
+  readonly updated_by: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+interface ConnectorCertification {
+  readonly certification_id: string;
+  readonly profile_id: string;
+  readonly connector_id: string;
+  readonly status: ConnectorCertificationStatus;
+  readonly reason: string;
+  readonly manifest_ref: string | null;
+  readonly security_review_ref: string | null;
+  readonly test_evidence_ref: string | null;
+  readonly owner_evidence_ref: string | null;
+  readonly receipt_semantics: ConnectorReceiptSemantics;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly certified_by: string;
+  readonly created_at: string;
+}
+
+interface ConnectorReceiptSemantics {
+  readonly sent: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  readonly accepted: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  readonly delivered: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  readonly completed: "not_applicable" | "metadata_only" | "business_receipt_required";
+}
+
+interface ConnectorProfileRow {
+  readonly id: string;
+  readonly connector_id: string;
+  readonly profile_name: string;
+  readonly status: ConnectorProfileStatus;
+  readonly environment: ConnectorEnvironment;
+  readonly secret_refs: string[];
+  readonly allowed_hosts: string[];
+  readonly owner_ref: string;
+  readonly support_owner_ref: string | null;
+  readonly profile_metadata: Readonly<Record<string, unknown>>;
+  readonly created_by: string;
+  readonly updated_by: string | null;
+  readonly created_at: Date;
+  readonly updated_at: Date;
+  readonly cursor_at: string;
+  readonly certification_id: string | null;
+  readonly certification_status: ConnectorCertificationStatus | null;
+  readonly certification_reason: string | null;
+  readonly manifest_ref: string | null;
+  readonly security_review_ref: string | null;
+  readonly test_evidence_ref: string | null;
+  readonly owner_evidence_ref: string | null;
+  readonly receipt_semantics: ConnectorReceiptSemantics | null;
+  readonly certification_metadata: Readonly<Record<string, unknown>> | null;
+  readonly certified_by: string | null;
+  readonly certified_at: Date | null;
+}
+
+interface ConnectorCertificationRow {
+  readonly id: string;
+  readonly profile_id: string;
+  readonly connector_id: string;
+  readonly status: ConnectorCertificationStatus;
+  readonly reason: string;
+  readonly manifest_ref: string | null;
+  readonly security_review_ref: string | null;
+  readonly test_evidence_ref: string | null;
+  readonly owner_evidence_ref: string | null;
+  readonly receipt_semantics: ConnectorReceiptSemantics;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly certified_by: string;
+  readonly created_at: Date;
+}
+
+interface ConnectorProfileCreateInput {
+  readonly connectorId: string;
+  readonly profileName: string;
+  readonly environment: ConnectorEnvironment;
+  readonly secretRefs: readonly string[];
+  readonly allowedHosts: readonly string[];
+  readonly ownerRef: string;
+  readonly supportOwnerRef: string | null;
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+interface ConnectorCertificationInput {
+  readonly status: ConnectorCertificationStatus;
+  readonly reason: string;
+  readonly manifestRef: string | null;
+  readonly securityReviewRef: string | null;
+  readonly testEvidenceRef: string | null;
+  readonly ownerEvidenceRef: string | null;
+  readonly receiptSemantics: ConnectorReceiptSemantics;
+  readonly metadata: Readonly<Record<string, unknown>>;
 }
 
 const CONNECTORS: readonly ConnectorCatalogItem[] = [
@@ -592,6 +709,15 @@ const STATUS_SET: Record<CatalogStatus, true> = {
   blocked: true,
 };
 
+const PROFILE_STATUS_SET: Record<ConnectorProfileStatus, true> = {
+  draft: true,
+  security_review: true,
+  certified: true,
+  enabled: true,
+  disabled: true,
+  deprecated: true,
+};
+
 const TEMPLATE_KIND_SET: Record<TemplateKind, true> = {
   browser_workflow: true,
   api_workflow: true,
@@ -618,7 +744,7 @@ function orderByCreated<Item extends { created_at: string; catalog_id: string }>
   });
 }
 
-export function registerConnectorCatalogRoutes(app: FastifyInstance, _deps: ApiServerDeps): void {
+export function registerConnectorCatalogRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get("/v1/connectors", { config: { rbacAction: "connector.read" } }, async (request, reply) => {
     requirePrincipal(request);
     const query = request.query as Record<string, unknown>;
@@ -652,4 +778,532 @@ export function registerConnectorCatalogRoutes(app: FastifyInstance, _deps: ApiS
 
     reply.code(200).send(paginate(rows, limit, (item) => ({ createdAt: item.created_at, id: item.catalog_id }), (item) => item));
   });
+
+  app.get("/v1/connector-profiles", { config: { rbacAction: "connector.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const query = request.query as Record<string, unknown>;
+    const { limit, cursor } = parsePageParams(query);
+    const connectorId = textFilter(query.connector_id, "invalid_connector_id");
+    const status = enumFilter(query.status, PROFILE_STATUS_SET, "invalid_connector_profile_status");
+    const rows = await withTenantTx(deps.pool, principal.tenantId, (client) =>
+      listConnectorProfiles(client, principal.tenantId, limit, cursor, connectorId, status),
+    );
+    reply.code(200).send(paginate(rows, limit, (row) => ({ createdAt: row.cursor_at, id: row.id }), mapConnectorProfile));
+  });
+
+  app.post("/v1/connector-profiles", { config: { rbacAction: "connector.enable" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const body = parseConnectorProfileCreateRequest(request.body);
+    const response = await runIdempotentCommand(
+      deps,
+      request,
+      "createConnectorProfile",
+      "/v1/connector-profiles",
+      async (client, tenantId) => {
+        const item = await insertConnectorProfile(client, tenantId, principal.subjectId, body);
+        return { status: 201, body: item };
+      },
+    );
+    reply.code(response.status).send(response.body);
+  });
+
+  app.post<{ Params: { profile_id: string } }>(
+    "/v1/connector-profiles/:profile_id/certifications",
+    { config: { rbacAction: "connector.enable" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const profileId = parseUuid(request.params.profile_id, "profile_id");
+      const body = parseConnectorCertificationRequest(request.body);
+      const response = await runIdempotentCommand(
+        deps,
+        request,
+        "certifyConnectorProfile",
+        `/v1/connector-profiles/${profileId}/certifications`,
+        async (client, tenantId) => {
+          const item = await insertConnectorCertification(client, tenantId, profileId, principal.subjectId, body);
+          return { status: 201, body: item };
+        },
+      );
+      reply.code(response.status).send(response.body);
+    },
+  );
+}
+
+async function listConnectorProfiles(
+  client: PoolClient,
+  tenantId: string,
+  limit: number,
+  cursor: { readonly createdAt: string; readonly id: string } | null,
+  connectorId: string | undefined,
+  status: ConnectorProfileStatus | undefined,
+): Promise<ConnectorProfileRow[]> {
+  const values: unknown[] = [tenantId];
+  const where = ["p.tenant_id = $1::uuid"];
+  if (connectorId !== undefined) {
+    values.push(connectorId);
+    where.push(`p.connector_id = $${values.length}`);
+  }
+  if (status !== undefined) {
+    values.push(status);
+    where.push(`p.status = $${values.length}`);
+  }
+  if (cursor !== null) {
+    values.push(cursor.createdAt, cursor.id);
+    where.push(`(p.updated_at, p.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+  }
+  values.push(limit + 1);
+  const result = await client.query<ConnectorProfileRow>(
+    `SELECT p.id, p.connector_id, p.profile_name, p.status, p.environment,
+            p.secret_refs, p.allowed_hosts, p.owner_ref, p.support_owner_ref,
+            p.profile_metadata, p.created_by, p.updated_by,
+            p.created_at, p.updated_at, p.updated_at::text AS cursor_at,
+            c.id AS certification_id,
+            c.status AS certification_status,
+            c.reason AS certification_reason,
+            c.manifest_ref,
+            c.security_review_ref,
+            c.test_evidence_ref,
+            c.owner_evidence_ref,
+            c.receipt_semantics,
+            c.metadata AS certification_metadata,
+            c.certified_by,
+            c.created_at AS certified_at
+       FROM connector_profiles p
+       LEFT JOIN connector_certifications c
+         ON c.tenant_id = p.tenant_id
+        AND c.id = p.latest_certification_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY p.updated_at DESC, p.id DESC
+      LIMIT $${values.length}`,
+    values,
+  );
+  return result.rows;
+}
+
+async function insertConnectorProfile(
+  client: PoolClient,
+  tenantId: string,
+  actor: string,
+  input: ConnectorProfileCreateInput,
+): Promise<ConnectorProfile> {
+  const catalogItem = findConnector(input.connectorId);
+  assertConnectorProfileAllowed(catalogItem);
+  if (catalogItem.required_secret_refs.length > 0 && input.secretRefs.length === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "connector_profile_secret_ref_required", connector_id: input.connectorId });
+  }
+  const result = await client.query<ConnectorProfileRow>(
+    `INSERT INTO connector_profiles
+       (id, tenant_id, connector_id, profile_name, environment, secret_refs, allowed_hosts,
+        owner_ref, support_owner_ref, profile_metadata, created_by)
+     VALUES
+       ($1::uuid, $2::uuid, $3, $4, $5, $6::text[], $7::text[], $8, $9, $10::jsonb, $11)
+     ON CONFLICT (tenant_id, connector_id, profile_name) DO UPDATE
+        SET updated_at = connector_profiles.updated_at
+     RETURNING id, connector_id, profile_name, status, environment, secret_refs, allowed_hosts,
+               owner_ref, support_owner_ref, profile_metadata, created_by, updated_by,
+               created_at, updated_at, updated_at::text AS cursor_at,
+               NULL::uuid AS certification_id, NULL::text AS certification_status,
+               NULL::text AS certification_reason, NULL::text AS manifest_ref,
+               NULL::text AS security_review_ref, NULL::text AS test_evidence_ref,
+               NULL::text AS owner_evidence_ref, NULL::jsonb AS receipt_semantics,
+               NULL::jsonb AS certification_metadata, NULL::text AS certified_by,
+               NULL::timestamptz AS certified_at`,
+    [
+      randomUUID(),
+      tenantId,
+      input.connectorId,
+      input.profileName,
+      input.environment,
+      input.secretRefs,
+      input.allowedHosts,
+      input.ownerRef,
+      input.supportOwnerRef,
+      JSON.stringify(input.metadata),
+      actor,
+    ],
+  );
+  return mapConnectorProfile(requireOne(result.rows[0], "connector_profile_missing_after_insert"));
+}
+
+async function insertConnectorCertification(
+  client: PoolClient,
+  tenantId: string,
+  profileId: string,
+  actor: string,
+  input: ConnectorCertificationInput,
+): Promise<ConnectorCertification> {
+  const profile = await selectConnectorProfileForUpdate(client, tenantId, profileId);
+  if (profile === undefined) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND", { reason: "connector_profile_not_found" });
+  }
+  findConnector(profile.connector_id);
+  assertCertificationEvidence(input);
+  const certificationId = randomUUID();
+  const result = await client.query<ConnectorCertificationRow>(
+    `INSERT INTO connector_certifications
+       (id, tenant_id, profile_id, connector_id, status, reason, manifest_ref, security_review_ref,
+        test_evidence_ref, owner_evidence_ref, receipt_semantics, metadata, certified_by)
+     VALUES
+       ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13)
+     RETURNING id, profile_id, connector_id, status, reason, manifest_ref, security_review_ref,
+               test_evidence_ref, owner_evidence_ref, receipt_semantics, metadata, certified_by, created_at`,
+    [
+      certificationId,
+      tenantId,
+      profileId,
+      profile.connector_id,
+      input.status,
+      input.reason,
+      input.manifestRef,
+      input.securityReviewRef,
+      input.testEvidenceRef,
+      input.ownerEvidenceRef,
+      JSON.stringify(input.receiptSemantics),
+      JSON.stringify(input.metadata),
+      actor,
+    ],
+  );
+  const nextProfileStatus = profileStatusFromCertification(input.status);
+  await client.query(
+    `UPDATE connector_profiles
+        SET status = $4,
+            latest_certification_id = $5::uuid,
+            updated_by = $3,
+            updated_at = now()
+      WHERE tenant_id = $1::uuid
+        AND id = $2::uuid`,
+    [tenantId, profileId, actor, nextProfileStatus, certificationId],
+  );
+  return mapConnectorCertification(requireOne(result.rows[0], "connector_certification_missing_after_insert"));
+}
+
+async function selectConnectorProfileForUpdate(
+  client: PoolClient,
+  tenantId: string,
+  profileId: string,
+): Promise<{ readonly id: string; readonly connector_id: string; readonly status: ConnectorProfileStatus } | undefined> {
+  const result = await client.query<{ id: string; connector_id: string; status: ConnectorProfileStatus }>(
+    `SELECT id, connector_id, status
+       FROM connector_profiles
+      WHERE tenant_id = $1::uuid
+        AND id = $2::uuid
+      FOR UPDATE`,
+    [tenantId, profileId],
+  );
+  return result.rows[0];
+}
+
+function mapConnectorProfile(row: ConnectorProfileRow): ConnectorProfile {
+  return {
+    profile_id: row.id,
+    connector_id: row.connector_id,
+    profile_name: row.profile_name,
+    status: row.status,
+    environment: row.environment,
+    secret_refs: row.secret_refs,
+    allowed_hosts: row.allowed_hosts,
+    owner_ref: row.owner_ref,
+    support_owner_ref: row.support_owner_ref,
+    profile_metadata: row.profile_metadata,
+    latest_certification: row.certification_id === null
+      ? null
+      : {
+          certification_id: row.certification_id,
+          profile_id: row.id,
+          connector_id: row.connector_id,
+          status: requireOne(row.certification_status, "connector_certification_status_missing"),
+          reason: requireOne(row.certification_reason, "connector_certification_reason_missing"),
+          manifest_ref: row.manifest_ref,
+          security_review_ref: row.security_review_ref,
+          test_evidence_ref: row.test_evidence_ref,
+          owner_evidence_ref: row.owner_evidence_ref,
+          receipt_semantics: row.receipt_semantics ?? defaultReceiptSemantics(),
+          metadata: row.certification_metadata ?? {},
+          certified_by: requireOne(row.certified_by, "connector_certification_actor_missing"),
+          created_at: requireOne(row.certified_at, "connector_certification_created_at_missing").toISOString(),
+        },
+    created_by: row.created_by,
+    updated_by: row.updated_by,
+    created_at: row.created_at.toISOString(),
+    updated_at: row.updated_at.toISOString(),
+  };
+}
+
+function mapConnectorCertification(row: ConnectorCertificationRow): ConnectorCertification {
+  return {
+    certification_id: row.id,
+    profile_id: row.profile_id,
+    connector_id: row.connector_id,
+    status: row.status,
+    reason: row.reason,
+    manifest_ref: row.manifest_ref,
+    security_review_ref: row.security_review_ref,
+    test_evidence_ref: row.test_evidence_ref,
+    owner_evidence_ref: row.owner_evidence_ref,
+    receipt_semantics: row.receipt_semantics,
+    metadata: row.metadata,
+    certified_by: row.certified_by,
+    created_at: row.created_at.toISOString(),
+  };
+}
+
+function parseConnectorProfileCreateRequest(raw: unknown): ConnectorProfileCreateInput {
+  if (!isRecord(raw)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "connector_profile_body_expected_object" });
+  assertAllowedKeys(raw, ["connector_id", "profile_name", "environment", "secret_refs", "allowed_hosts", "owner_ref", "support_owner_ref", "metadata"]);
+  const connectorId = parseConnectorId(raw.connector_id);
+  return {
+    connectorId,
+    profileName: parseSafeText(raw.profile_name, "profile_name", 1, 120),
+    environment: parseEnvironment(raw.environment),
+    secretRefs: parseSecretRefs(raw.secret_refs),
+    allowedHosts: parseAllowedHosts(raw.allowed_hosts),
+    ownerRef: requireOne(parseEvidenceRef(raw.owner_ref, "owner_ref", true), "connector_profile_owner_ref_missing"),
+    supportOwnerRef: parseEvidenceRef(raw.support_owner_ref, "support_owner_ref", false),
+    metadata: parseSafeMetadata(raw.metadata),
+  };
+}
+
+function parseConnectorCertificationRequest(raw: unknown): ConnectorCertificationInput {
+  if (!isRecord(raw)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "connector_certification_body_expected_object" });
+  assertAllowedKeys(raw, [
+    "status",
+    "reason",
+    "manifest_ref",
+    "security_review_ref",
+    "test_evidence_ref",
+    "owner_evidence_ref",
+    "receipt_semantics",
+    "metadata",
+  ]);
+  return {
+    status: parseCertificationStatus(raw.status),
+    reason: parseSafeText(raw.reason, "reason", 1, 500),
+    manifestRef: parseEvidenceRef(raw.manifest_ref, "manifest_ref", false),
+    securityReviewRef: parseEvidenceRef(raw.security_review_ref, "security_review_ref", false),
+    testEvidenceRef: parseEvidenceRef(raw.test_evidence_ref, "test_evidence_ref", false),
+    ownerEvidenceRef: parseEvidenceRef(raw.owner_evidence_ref, "owner_evidence_ref", false),
+    receiptSemantics: parseReceiptSemantics(raw.receipt_semantics),
+    metadata: parseSafeMetadata(raw.metadata),
+  };
+}
+
+function parseConnectorId(raw: unknown): string {
+  const value = parseSafeText(raw, "connector_id", 1, 120);
+  if (!/^[a-z0-9][a-z0-9_.-]{1,120}$/.test(value)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_connector_id" });
+  }
+  return value;
+}
+
+function parseEnvironment(raw: unknown): ConnectorEnvironment {
+  if (raw === undefined) return "dev";
+  if (raw === "dev" || raw === "staging" || raw === "prod") return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_connector_profile_environment" });
+}
+
+function parseCertificationStatus(raw: unknown): ConnectorCertificationStatus {
+  if (raw === "security_review" || raw === "certified" || raw === "blocked" || raw === "revoked") return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_connector_certification_status" });
+}
+
+function parseSecretRefs(raw: unknown): readonly string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > 20) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_connector_profile_secret_refs" });
+  }
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  for (const item of raw) {
+    const ref = parseSecretRef(item, "secret_refs");
+    if (!seen.has(ref)) {
+      seen.add(ref);
+      refs.push(ref);
+    }
+  }
+  return refs;
+}
+
+function parseSecretRef(raw: unknown, field: string): string {
+  if (typeof raw !== "string" || !raw.startsWith("secret://") || raw.length <= "secret://".length || raw.length > 500) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
+  }
+  assertNoRawSecretOrEndpoint(raw, field);
+  return raw;
+}
+
+function parseAllowedHosts(raw: unknown): readonly string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > 20) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_connector_profile_allowed_hosts" });
+  }
+  const seen = new Set<string>();
+  const hosts: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_allowed_host" });
+    const host = item.trim().toLowerCase();
+    if (
+      host.length === 0 ||
+      host.length > 253 ||
+      host.includes("/") ||
+      host.includes(":") ||
+      host.includes("*") ||
+      host === "localhost" ||
+      host.endsWith(".localhost") ||
+      /^[0-9.]+$/.test(host) ||
+      !/^[a-z0-9.-]+$/.test(host) ||
+      host.startsWith(".") ||
+      host.endsWith(".")
+    ) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_allowed_host", host: item });
+    }
+    if (!seen.has(host)) {
+      seen.add(host);
+      hosts.push(host);
+    }
+  }
+  return hosts;
+}
+
+function parseEvidenceRef(raw: unknown, field: string, required: boolean): string | null {
+  if (raw === undefined || raw === null || raw === "") {
+    if (required) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `${field}_required` });
+    return null;
+  }
+  return parseSafeText(raw, field, 1, 500);
+}
+
+function parseSafeMetadata(raw: unknown): Readonly<Record<string, unknown>> {
+  if (raw === undefined) return {};
+  if (!isRecord(raw)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_connector_metadata" });
+  assertSafeMetadata(raw, "metadata", 0);
+  return raw;
+}
+
+function parseReceiptSemantics(raw: unknown): ConnectorReceiptSemantics {
+  if (raw === undefined) return defaultReceiptSemantics();
+  if (!isRecord(raw)) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_receipt_semantics" });
+  assertAllowedKeys(raw, ["sent", "accepted", "delivered", "completed"]);
+  return {
+    sent: parseReceiptLeg(raw.sent, "sent", ["not_applicable", "metadata_only", "provider_receipt_required"]),
+    accepted: parseReceiptLeg(raw.accepted, "accepted", ["not_applicable", "metadata_only", "provider_receipt_required"]),
+    delivered: parseReceiptLeg(raw.delivered, "delivered", ["not_applicable", "metadata_only", "provider_receipt_required"]),
+    completed: parseReceiptLeg(raw.completed, "completed", ["not_applicable", "metadata_only", "business_receipt_required"]),
+  };
+}
+
+function parseReceiptLeg<T extends string>(raw: unknown, field: string, allowed: readonly T[]): T {
+  if (typeof raw !== "string" || !allowed.includes(raw as T)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_receipt_semantics_${field}` });
+  }
+  return raw as T;
+}
+
+function defaultReceiptSemantics(): ConnectorReceiptSemantics {
+  return {
+    sent: "metadata_only",
+    accepted: "provider_receipt_required",
+    delivered: "provider_receipt_required",
+    completed: "business_receipt_required",
+  };
+}
+
+function assertCertificationEvidence(input: ConnectorCertificationInput): void {
+  if (input.status !== "certified") return;
+  if (
+    input.manifestRef === null ||
+    input.securityReviewRef === null ||
+    input.testEvidenceRef === null ||
+    input.ownerEvidenceRef === null
+  ) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "connector_certification_evidence_required" });
+  }
+}
+
+function profileStatusFromCertification(status: ConnectorCertificationStatus): ConnectorProfileStatus {
+  if (status === "certified") return "certified";
+  if (status === "revoked") return "disabled";
+  return "security_review";
+}
+
+function findConnector(connectorId: string): ConnectorCatalogItem {
+  const connector = CONNECTORS.find((item) => item.connector_id === connectorId);
+  if (connector === undefined) {
+    throw new ApiResponseError("RESOURCE_NOT_FOUND", { reason: "connector_catalog_item_not_found" });
+  }
+  return connector;
+}
+
+function assertConnectorProfileAllowed(connector: ConnectorCatalogItem): void {
+  if (connector.status === "available" || connector.status === "requires_admin") return;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", {
+    reason: "connector_profile_not_allowed_for_catalog_status",
+    connector_id: connector.connector_id,
+    status: connector.status,
+  });
+}
+
+function parseUuid(raw: unknown, field: string): string {
+  if (typeof raw === "string" && UUID_RE.test(raw)) return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
+}
+
+function parseSafeText(raw: unknown, field: string, min: number, max: number): string {
+  if (typeof raw !== "string") throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
+  const value = raw.trim();
+  if (value.length < min || value.length > max) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: `invalid_${field}` });
+  assertNoRawSecretOrEndpoint(value, field);
+  return value;
+}
+
+function assertAllowedKeys(raw: Record<string, unknown>, allowed: readonly string[]): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(raw)) {
+    if (!allowedSet.has(key)) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "connector_unknown_field", field: key });
+    }
+  }
+}
+
+function assertSafeMetadata(value: unknown, field: string, depth: number): void {
+  if (depth > 4) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_too_deep", field });
+  if (typeof value === "string") {
+    assertNoRawSecretOrEndpoint(value, field);
+    return;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return;
+  if (Array.isArray(value)) {
+    if (value.length > 50) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_array_too_large", field });
+    value.forEach((item, index) => assertSafeMetadata(item, `${field}.${index}`, depth + 1));
+    return;
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    if (entries.length > 50) throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "metadata_object_too_large", field });
+    for (const [key, child] of entries) {
+      if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key) || forbiddenConnectorKey(key)) {
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "connector_metadata_secret_or_endpoint_key_forbidden", field: `${field}.${key}` });
+      }
+      assertSafeMetadata(child, `${field}.${key}`, depth + 1);
+    }
+  }
+}
+
+function assertNoRawSecretOrEndpoint(value: string, field: string): void {
+  if (/https?:\/\//i.test(value) || /hooks\.slack\.com/i.test(value)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "raw_endpoint_url_forbidden", field });
+  }
+  if (/\bauthorization\b/i.test(value) || /\bbearer\s+[a-z0-9._~+/=-]{8,}/i.test(value) || /\b(token|password|secret)=/i.test(value)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "secret_material_forbidden", field });
+  }
+}
+
+function forbiddenConnectorKey(key: string): boolean {
+  return /(^|[_.-])(api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization|cookie|webhook_url|endpoint_url|url|dsn|smtp|raw_payload|request_payload|response_payload|payload|body|raw_body|provider_response|provider_body)([_.-]|$)/i.test(key);
+}
+
+function requireOne<T>(row: T | undefined | null, reason: string): T {
+  if (row === undefined || row === null) {
+    throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", { reason });
+  }
+  return row;
 }

@@ -1406,6 +1406,9 @@ export interface AuditVerificationRunListParams extends ListParams {
 export type ConnectorCatalogKind = "browser" | "api" | "file" | "notification" | "data";
 export type CatalogStatus = "available" | "candidate" | "requires_admin" | "blocked";
 export type TemplateCatalogKind = "browser_workflow" | "api_workflow" | "file_workflow" | "notification_workflow";
+export type ConnectorProfileStatus = "draft" | "security_review" | "certified" | "enabled" | "disabled" | "deprecated";
+export type ConnectorCertificationStatus = "security_review" | "certified" | "blocked" | "revoked";
+export type ConnectorProfileEnvironment = "dev" | "staging" | "prod";
 
 export interface ConnectorManifestPermissions {
   readonly api: readonly ("migrateSchema" | "registerTargets" | "readConfig")[];
@@ -1462,6 +1465,74 @@ export interface TemplateCatalogListParams extends ListParams {
   readonly connector_id?: string;
   readonly kind?: TemplateCatalogKind;
   readonly status?: CatalogStatus;
+}
+
+export interface ConnectorReceiptSemantics {
+  readonly sent: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  readonly accepted: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  readonly delivered: "not_applicable" | "metadata_only" | "provider_receipt_required";
+  readonly completed: "not_applicable" | "metadata_only" | "business_receipt_required";
+}
+
+export interface ConnectorCertification {
+  readonly certification_id: string;
+  readonly profile_id: string;
+  readonly connector_id: string;
+  readonly status: ConnectorCertificationStatus;
+  readonly reason: string;
+  readonly manifest_ref: string | null;
+  readonly security_review_ref: string | null;
+  readonly test_evidence_ref: string | null;
+  readonly owner_evidence_ref: string | null;
+  readonly receipt_semantics: ConnectorReceiptSemantics;
+  readonly metadata: Record<string, unknown>;
+  readonly certified_by: string;
+  readonly created_at: string;
+}
+
+export interface ConnectorProfile {
+  readonly profile_id: string;
+  readonly connector_id: string;
+  readonly profile_name: string;
+  readonly status: ConnectorProfileStatus;
+  readonly environment: ConnectorProfileEnvironment;
+  readonly secret_refs: readonly string[];
+  readonly allowed_hosts: readonly string[];
+  readonly owner_ref: string;
+  readonly support_owner_ref: string | null;
+  readonly profile_metadata: Record<string, unknown>;
+  readonly latest_certification: ConnectorCertification | null;
+  readonly created_by: string;
+  readonly updated_by: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface ConnectorProfileListParams extends ListParams {
+  readonly connector_id?: string;
+  readonly status?: ConnectorProfileStatus;
+}
+
+export interface ConnectorProfileCreateRequest {
+  readonly connector_id: string;
+  readonly profile_name: string;
+  readonly environment?: ConnectorProfileEnvironment;
+  readonly secret_refs?: readonly string[];
+  readonly allowed_hosts?: readonly string[];
+  readonly owner_ref: string;
+  readonly support_owner_ref?: string | null;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface ConnectorCertificationRequest {
+  readonly status: ConnectorCertificationStatus;
+  readonly reason: string;
+  readonly manifest_ref?: string | null;
+  readonly security_review_ref?: string | null;
+  readonly test_evidence_ref?: string | null;
+  readonly owner_evidence_ref?: string | null;
+  readonly receipt_semantics?: ConnectorReceiptSemantics;
+  readonly metadata?: Record<string, unknown>;
 }
 
 export type DocumentJobStatus = "created" | "extracted" | "validation_required" | "validated" | "failed";
@@ -1585,6 +1656,7 @@ export interface SitePageStateUpdateResult {
 
 export type SiteElementType = "button" | "input" | "link" | "table" | "row" | "field" | "message" | "other";
 export type SiteElementStability = "stable" | "review_needed" | "broken";
+export type SiteElementConfidence = "high" | "medium" | "low" | "unknown";
 export type SiteElementSource = "manual" | "pbd" | "capture" | "imported";
 
 export interface SiteElementItem {
@@ -1595,8 +1667,10 @@ export interface SiteElementItem {
   readonly selector: string;
   readonly element_type: SiteElementType;
   readonly stability: SiteElementStability;
+  readonly confidence?: SiteElementConfidence;
   readonly source: SiteElementSource;
   readonly sample_url: string | null;
+  readonly last_probe_result?: unknown;
   readonly notes: string | null;
   readonly usage_count: number;
   readonly last_verified_at: string | null;
@@ -1655,7 +1729,14 @@ export interface SiteElementDeleteResult {
 }
 
 export type BrowserRecordingStatus = "recording" | "completed" | "discarded" | "failed";
+export type BrowserRecordingReviewStatus =
+  | "not_started"
+  | "review_needed"
+  | "ready_for_studio"
+  | "promoted_to_studio"
+  | "discarded";
 export type BrowserRecordingEventType = "navigate" | "click" | "input" | "select" | "submit" | "wait";
+export type SelectorConfidence = "high" | "medium" | "low" | "unknown";
 
 export interface BrowserRecordingValidationIssue {
   readonly rule?: string;
@@ -1687,6 +1768,60 @@ export interface BrowserRecordingValidationReport {
   readonly stages?: readonly StudioValidationStage[];
 }
 
+export interface BrowserRecordingReviewBlocker {
+  readonly code: string;
+  readonly severity: "blocker" | "warning";
+  readonly stage: StudioValidationStageName;
+  readonly event_seq?: number;
+  readonly node_id?: string;
+  readonly message: string;
+}
+
+export interface BrowserRecordingSelectorConfidence {
+  readonly event_seq: number;
+  readonly node_id: string;
+  readonly label: string;
+  readonly selector: string;
+  readonly element_key: string | null;
+  readonly source: "object_repository" | "recorded_selector";
+  readonly confidence: SelectorConfidence;
+  readonly reason_code: string;
+  readonly candidates: readonly {
+    readonly element_key: string;
+    readonly label: string;
+    readonly selector: string;
+    readonly confidence: SelectorConfidence;
+  }[];
+}
+
+export interface BrowserRecordingRepairSuggestion {
+  readonly code: string;
+  readonly event_seq?: number;
+  readonly node_id?: string;
+  readonly message: string;
+}
+
+export interface BrowserRecordingObjectRepoChangeset {
+  readonly action: "reuse" | "candidate_create";
+  readonly event_seq: number;
+  readonly element_key: string | null;
+  readonly label: string;
+  readonly selector: string;
+}
+
+export interface BrowserRecordingReviewReport {
+  readonly review_status: "review_needed" | "ready_for_studio";
+  readonly blockers: readonly BrowserRecordingReviewBlocker[];
+  readonly selector_confidence: readonly BrowserRecordingSelectorConfidence[];
+  readonly repair_suggestions: readonly BrowserRecordingRepairSuggestion[];
+  readonly object_repo_changeset: readonly BrowserRecordingObjectRepoChangeset[];
+  readonly evidence: {
+    readonly recording_session_id: string;
+    readonly validation_stage_count: number;
+    readonly event_count: number;
+  };
+}
+
 export interface BrowserRecordingSession {
   readonly recording_session_id: string;
   readonly site_profile_id: string;
@@ -1696,6 +1831,12 @@ export interface BrowserRecordingSession {
   readonly event_count: number;
   readonly draft_ir: Record<string, unknown> | null;
   readonly validation_report: BrowserRecordingValidationReport | null;
+  readonly review_status: BrowserRecordingReviewStatus;
+  readonly review_report: BrowserRecordingReviewReport | null;
+  readonly promoted_scenario_id: string | null;
+  readonly promoted_scenario_version: number | null;
+  readonly promoted_studio_project_id: string | null;
+  readonly promoted_studio_graph_version: number | null;
   readonly updated_by: string | null;
   readonly created_at: string;
   readonly updated_at: string;
@@ -1741,6 +1882,15 @@ export interface BrowserRecordingAppendResult {
   readonly recording_session_id: string;
   readonly appended: number;
   readonly event_count: number;
+}
+
+export interface PromoteRecordingToStudioResult extends ScenarioMutationResult {
+  readonly recording_session_id: string;
+  readonly site_profile_id: string;
+  readonly studio_project_id: string;
+  readonly studio_graph_version_id: string | null;
+  readonly studio_graph_version: number;
+  readonly review_status: BrowserRecordingReviewStatus;
 }
 
 export type CaptureSessionStatus = "launching" | "awaiting_login" | "capturing" | "captured" | "failed" | "expired";

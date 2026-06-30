@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { RenderResult } from "@testing-library/react";
 
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
-import type { ConnectorCatalogItem, TemplateCatalogItem } from "../src/api/types";
+import type { ConnectorCatalogItem, ConnectorProfileCreateRequest, TemplateCatalogItem } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 function jwt(roles: readonly string[]): string {
@@ -13,9 +14,9 @@ function jwt(roles: readonly string[]): string {
   return `e30.${payload}.sig`;
 }
 
-function renderApp(client: ApiClient = fakeClient()): void {
+function renderApp(client: ApiClient = fakeClient()): RenderResult {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  return render(
     <QueryClientProvider client={qc}>
       <ApiClientProvider client={client}>
         <App />
@@ -97,6 +98,46 @@ describe("connector catalog view", () => {
     expect(screen.queryByTitle(/secret:\/\//)).not.toBeInTheDocument();
     expect(screen.queryByText("super-secret")).not.toBeInTheDocument();
     expect(screen.queryByText("password")).not.toBeInTheDocument();
+  });
+
+  test("shows connector profiles and submits SecretRef-only profile setup", async () => {
+    const createdProfiles: Array<{ body: ConnectorProfileCreateRequest; key: string }> = [];
+    const baseClient = fakeClient();
+    renderApp(fakeClient({
+      createConnectorProfile: async (body, key) => {
+        createdProfiles.push({ body, key });
+        return baseClient.createConnectorProfile(body, key);
+      },
+    }));
+
+    const apiRow = (await screen.findByText("HTTP API")).closest("tr") as HTMLTableRowElement;
+    fireEvent.click(within(apiRow).getByRole("button"));
+
+    expect(await screen.findByText("Finance API")).toBeInTheDocument();
+    expect(screen.getByText("team:finance-platform")).toBeInTheDocument();
+    expect(screen.queryByText("secret://tenant-a/connector/http-api/bearer")).not.toBeInTheDocument();
+
+    const form = document.querySelector(".connector-profile-form") as HTMLFormElement;
+    fireEvent.change(within(form).getByPlaceholderText("HTTP API staging"), { target: { value: "Ops API" } });
+    fireEvent.change(within(form).getByPlaceholderText("secret://tenant/connector/name/key"), {
+      target: { value: "secret://tenant-a/connector/http-api/ops" },
+    });
+    fireEvent.change(within(form).getByPlaceholderText("api.vendor.example"), { target: { value: "ops.vendor.example" } });
+    fireEvent.change(within(form).getByPlaceholderText("team:business-owner"), { target: { value: "team:ops-platform" } });
+    fireEvent.change(within(form).getByPlaceholderText("team:rpa-ops"), { target: { value: "team:rpa-ops" } });
+    fireEvent.click(within(form).getByRole("button"));
+
+    await waitFor(() => expect(createdProfiles).toHaveLength(1));
+    expect(createdProfiles[0]?.body).toMatchObject({
+      connector_id: "http-api",
+      profile_name: "Ops API",
+      environment: "staging",
+      secret_refs: ["secret://tenant-a/connector/http-api/ops"],
+      allowed_hosts: ["ops.vendor.example"],
+      owner_ref: "team:ops-platform",
+      support_owner_ref: "team:rpa-ops",
+    });
+    expect(createdProfiles[0]?.key).toMatch(/[0-9a-f-]{36}/i);
   });
 
   test("shows existing RPA vendors as metadata-only handoff profiles", async () => {

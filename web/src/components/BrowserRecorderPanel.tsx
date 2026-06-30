@@ -160,7 +160,7 @@ export function BrowserRecorderPanel(): JSX.Element {
   const saveDraftMutation = useMutation({
     mutationFn: (session: BrowserRecordingSession) => {
       if (session.draft_ir === null) throw new Error("draft_ir_required");
-      return api.createScenario(session.draft_ir);
+      return api.promoteRecordingToStudio(siteId, session.recording_session_id, idempotencyKey());
     },
     onSuccess: (result) => {
       setSavedScenario(result);

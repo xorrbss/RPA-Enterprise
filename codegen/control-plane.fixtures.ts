@@ -419,6 +419,9 @@ for (const operationId of [
   "exportAuditLog",
   "listConnectors",
   "listTemplates",
+  "listConnectorProfiles",
+  "createConnectorProfile",
+  "certifyConnectorProfile",
   "listIntegrationHandoffs",
   "createIntegrationHandoff",
   "dispatchIntegrationHandoff",
@@ -549,6 +552,9 @@ assert.equal(staticRbacAction("listAuditLog"), "audit.read");
 assert.equal(staticRbacAction("exportAuditLog"), "audit.read");
 assert.equal(staticRbacAction("listConnectors"), "connector.read");
 assert.equal(staticRbacAction("listTemplates"), "connector.read");
+assert.equal(staticRbacAction("listConnectorProfiles"), "connector.read");
+assert.equal(staticRbacAction("createConnectorProfile"), "connector.enable");
+assert.equal(staticRbacAction("certifyConnectorProfile"), "connector.enable");
 assert.equal(staticRbacAction("listIntegrationHandoffs"), "integration.handoff");
 assert.equal(staticRbacAction("createIntegrationHandoff"), "integration.handoff");
 assert.equal(staticRbacAction("dispatchIntegrationHandoff"), "integration.handoff");
@@ -1173,6 +1179,28 @@ assert.equal(registry.getQueryValidator("listAuditLog")?.validate({ action: "art
 assert.equal(registry.getQueryValidator("exportAuditLog")?.validate({ action: "artifact.read", outcome: "allow", format: "csv" }).valid, true);
 assert.equal(registry.getQueryValidator("listConnectors")?.validate({ kind: "browser", status: "candidate" }).valid, true);
 assert.equal(registry.getQueryValidator("listTemplates")?.validate({ connector_id: "sap-web" }).valid, true);
+assert.equal(registry.getQueryValidator("listConnectorProfiles")?.validate({ connector_id: "http-api", status: "certified" }).valid, true);
+assert.equal(registry.getBodyValidator("createConnectorProfile")?.validate({
+  connector_id: "http-api",
+  profile_name: "Finance API",
+  owner_ref: "team:finance-platform",
+  secret_refs: ["secret://tenant-a/connector/http-api/bearer"],
+  allowed_hosts: ["api.vendor.example"],
+}).valid, true);
+assert.equal(registry.getBodyValidator("certifyConnectorProfile")?.validate({
+  status: "certified",
+  reason: "Connector evidence accepted.",
+  manifest_ref: "artifact://connector/http-api/manifest-v1",
+  security_review_ref: "ticket:SEC-123",
+  test_evidence_ref: "artifact://connector/http-api/test-report",
+  owner_evidence_ref: "ticket:OWNER-456",
+  receipt_semantics: {
+    sent: "metadata_only",
+    accepted: "provider_receipt_required",
+    delivered: "provider_receipt_required",
+    completed: "business_receipt_required",
+  },
+}).valid, true);
 assert.equal(registry.getQueryValidator("listSiteElements")?.validate({ stability: "stable", search: "submit" }).valid, true);
 assert.equal(registry.getQueryValidator("listBrowserRecordings")?.validate({ status: "recording" }).valid, true);
 assert.equal(registry.getQueryValidator("listBrowserRecordingEvents")?.validate({}).valid, true);
