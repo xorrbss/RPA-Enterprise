@@ -30,6 +30,9 @@ import {
   type AutomationIdeaListParams,
   type AutomationIdeaStage,
   type AutomationIdeaUpdateBody,
+  type ProcessMiningImportCreateBody,
+  type ProcessMiningImportItem,
+  type ProcessMiningImportListParams,
   type ArtifactDetail,
   type CaptureSessionItem,
   type ConnectorCertification,
@@ -189,6 +192,8 @@ export interface ApiClient {
   exportAutomationPerformanceReportCsv(month?: string): Promise<string>;
   exportAutomationPerformanceReportXlsx?(month?: string): Promise<Blob>;
   exportAutomationPerformanceReportPocMarkdown?(month?: string): Promise<string>;
+  listProcessMiningImports(p?: ProcessMiningImportListParams): Promise<Paginated<ProcessMiningImportItem>>;
+  createProcessMiningImport(body: ProcessMiningImportCreateBody, idempotencyKey: string): Promise<ProcessMiningImportItem>;
   listAutomationIdeas(p?: AutomationIdeaListParams): Promise<Paginated<AutomationIdeaItem>>;
   listAuditLog(p?: AuditLogListParams): Promise<Paginated<AuditLogItem>>;
   exportAuditLogCsv(p?: AuditLogExportParams): Promise<string>;
@@ -660,6 +665,8 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
         `/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), format: "poc_markdown" })}`,
         "text/markdown",
       ),
+    listProcessMiningImports: (p) => get(`/v1/process-mining/imports${queryString(p)}`),
+    createProcessMiningImport: (body, key) => post(`/v1/process-mining/imports`, key, body),
     listAutomationIdeas: (p) => get(`/v1/automation-ideas${queryString(p)}`),
     listAuditLog: (p) => get(`/v1/audit-log${queryString(p)}`),
     exportAuditLogCsv: (p) => getText(`/v1/audit-log/export${queryString({ ...p, format: "csv" })}`, "text/csv"),

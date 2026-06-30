@@ -404,6 +404,8 @@ for (const operationId of [
   "recordProductionReadinessEvidence",
   "listAiGovernanceEvidence",
   "recordAiGovernanceEvidence",
+  "listProcessMiningImports",
+  "createProcessMiningImport",
   "listAutomationIdeas",
   "createAutomationIdea",
   "getAutomationIdea",
@@ -488,6 +490,7 @@ assert.equal(registry.getOperation("recordOpsAlertDelivery").requiresIdempotency
 assert.equal(registry.getOperation("sendOpsAlertWebhookDelivery").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("recordProductionReadinessEvidence").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("recordAiGovernanceEvidence").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("createProcessMiningImport").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("createIntegrationHandoff").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("dispatchIntegrationHandoff").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("recordExternalDocumentExtraction").requiresIdempotencyKey, true);
@@ -538,6 +541,8 @@ assert.equal(staticRbacAction("recordProductionReadinessEvidence"), "ops_readine
 assert.equal(staticRbacAction("listAiGovernanceEvidence"), "ai_governance.read");
 assert.equal(staticRbacAction("recordAiGovernanceEvidence"), "ai_governance.manage");
 assert.equal(staticRbacAction("listAutomationIdeas"), "automation_idea.read");
+assert.equal(staticRbacAction("listProcessMiningImports"), "automation_idea.read");
+assert.equal(staticRbacAction("createProcessMiningImport"), "automation_idea.manage");
 assert.equal(staticRbacAction("createAutomationIdea"), "automation_idea.manage");
 assert.equal(staticRbacAction("getAutomationIdea"), "automation_idea.read");
 assert.equal(staticRbacAction("updateAutomationIdea"), "automation_idea.manage");
@@ -646,6 +651,19 @@ assert.equal(registry.getBodyValidator("createRunTrigger")?.validate({
   cron_expression: "0 9 * * 1-5",
 }).valid, false);
 assert.equal(registry.getBodyValidator("createAutomationIdea")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createProcessMiningImport")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createProcessMiningImport")?.validate({
+  source_type: "process_mining",
+  source_system: "celonis-export",
+  source_owner_ref: "group:process-owner",
+  schema_version: "2026-06",
+  import_evidence_ref: "artifact:pm-import-1",
+  lineage_ref: "lineage:pm-import-1",
+  row_count: 120,
+  candidate_count: 4,
+  schema_mapping: { case_id: "case_alias", activity: "activity_name", timestamp: "event_at" },
+  import_summary: "Aggregated process mining export from customer-owned monitoring.",
+}).valid, true);
 assert.equal(registry.getBodyValidator("createAutomationIdea")?.validate({
   title: "Portal invoice triage",
   description: "Prioritize invoice exceptions from a browser portal.",
@@ -1515,6 +1533,30 @@ assert.equal(handoffReceipt.status, 200);
 assert.equal((handoffReceipt.body as { status: string }).status, "completed");
 assert.equal((handoffReceipt.body as { latest_receipt_id: string }).latest_receipt_id, "uipath-receipt-123");
 
+const processImportCreated = await handlers.createProcessMiningImport!(ctx("createProcessMiningImport", {
+  method: "POST",
+  path: "/v1/process-mining/imports",
+  body: {
+    source_type: "process_mining",
+    source_system: "celonis-export",
+    source_owner_ref: "group:process-owner",
+    schema_version: "2026-06",
+    import_evidence_ref: "artifact:pm-import-1",
+    lineage_ref: "lineage:pm-import-1",
+    row_count: 120,
+    candidate_count: 4,
+    schema_mapping: { case_id: "case_alias", activity: "activity_name", timestamp: "event_at" },
+    import_summary: "Aggregated process mining export from customer-owned monitoring.",
+  },
+}));
+assert.equal(processImportCreated.status, 201);
+const processImportList = await handlers.listProcessMiningImports!(ctx("listProcessMiningImports", {
+  method: "GET",
+  path: "/v1/process-mining/imports",
+  query: { source_type: "process_mining" },
+}));
+assert.equal((processImportList.body as { items: unknown[] }).items.length, 1);
+
 const ideaList = await handlers.listAutomationIdeas!(ctx("listAutomationIdeas", {
   method: "GET",
   path: "/v1/automation-ideas",
@@ -1535,6 +1577,28 @@ const ideaCreated = await handlers.createAutomationIdea!(ctx("createAutomationId
 }));
 assert.equal(ideaCreated.status, 201);
 const ideaId = (ideaCreated.body as { id: string }).id;
+const processIdeaCreated = await handlers.createAutomationIdea!(ctx("createAutomationIdea", {
+  method: "POST",
+  path: "/v1/automation-ideas",
+  body: {
+    title: "Process mining vendor status candidate",
+    description: "Evaluate a mined browser-portal exception pattern.",
+    business_owner: "finance-ops",
+    department: "Finance",
+    source: "process_mining",
+    priority: "high",
+    score: 86,
+    source_import_id: (processImportCreated.body as { import_id: string }).import_id,
+    source_item_ref: "candidate:vendor-status",
+    source_lineage: {
+      source_system: "celonis-export",
+      import_evidence_ref: "artifact:pm-import-1",
+      lineage_ref: "lineage:pm-import-1",
+    },
+  },
+}));
+assert.equal(processIdeaCreated.status, 201);
+assert.equal((processIdeaCreated.body as { source_import_id: string }).source_import_id, (processImportCreated.body as { import_id: string }).import_id);
 const ideaTransitioned = await handlers.transitionAutomationIdea!(ctx("transitionAutomationIdea", {
   method: "POST",
   path: "/v1/automation-ideas/{idea_id}/transition",

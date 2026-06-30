@@ -40,6 +40,7 @@ import { registerAiGovernanceEvidenceRoutes } from "./ai-governance-evidence";
 import { registerAutomationAdoptionEvidenceRoutes } from "./automation-adoption-evidence";
 import { registerAutomationIdeaRoutes } from "./automation-ideas";
 import { registerAutomationPerformanceReportRoutes } from "./automation-performance-report";
+import { registerProcessMiningImportRoutes } from "./process-mining-imports";
 import { registerRoiActualRoutes } from "./roi-actuals";
 import { registerRoiEstimateRoutes } from "./roi-estimate";
 import { registerBrowserRecordingRoutes } from "./browser-recordings";
@@ -284,6 +285,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerScenarioReleaseRoutes(app, deps);
   registerScenarioRoutes(app, deps);
   registerAutomationIdeaRoutes(app, deps);
+  registerProcessMiningImportRoutes(app, deps);
   registerAutomationAdoptionEvidenceRoutes(app, deps);
   registerRoiEstimateRoutes(app, deps);
   registerRoiActualRoutes(app, deps);

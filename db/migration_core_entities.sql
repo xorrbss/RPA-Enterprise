@@ -1,7 +1,7 @@
 -- ============================================================
 -- Migration: 핵심 엔티티 DDL (Phase 2 — README §외부 의존 맵 잔여 TODO 해소)
 -- 대상: runs, run_steps, workitems, human_tasks, scenarios,
---       scenario_versions, automation_ideas, roi_estimates, run_triggers, run_trigger_fires, artifacts, events_outbox,
+--       scenario_versions, process_mining_imports, automation_ideas, roi_estimates, run_triggers, run_trigger_fires, artifacts, events_outbox,
 --       ops_alert_acknowledgements, ops_notification_deliveries, dead_letter,
 --       stagehand_calls, action_plan_cache, site_profiles,
 --       site_profile_approvals, site_block_samples, browser_identities, network_policies,
@@ -673,9 +673,38 @@ CREATE INDEX idx_scenario_release_events_release ON scenario_release_events (ten
 
 -- ============================================================
 -- ============================================================
--- 2a-1. automation_ideas / roi_estimates
+-- 2a-1. process_mining_imports / automation_ideas / roi_estimates
 --    CoE/ROI automation discovery pipeline. Browser-RPA scope only; desktop automation is out-of-scope.
 -- ============================================================
+
+CREATE TABLE process_mining_imports (
+  id                   uuid        PRIMARY KEY,
+  tenant_id            uuid        NOT NULL,
+  source_type          text        NOT NULL
+                         CHECK (source_type IN ('process_mining','task_mining','monitoring_export','api_import')),
+  source_system        text        NOT NULL CHECK (length(trim(source_system)) > 0),
+  source_owner_ref     text        NOT NULL CHECK (length(trim(source_owner_ref)) > 0),
+  schema_version       text        NOT NULL CHECK (length(trim(schema_version)) > 0),
+  import_evidence_ref  text        NOT NULL CHECK (length(trim(import_evidence_ref)) > 0),
+  lineage_ref          text        NOT NULL CHECK (length(trim(lineage_ref)) > 0),
+  row_count            int         NOT NULL CHECK (row_count >= 1),
+  candidate_count      int         NOT NULL DEFAULT 0 CHECK (candidate_count >= 0),
+  anonymization_mode   text        NOT NULL DEFAULT 'aggregated_alias'
+                         CHECK (anonymization_mode IN ('aggregated_alias','pseudonymized','not_applicable')),
+  schema_mapping       jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  import_summary       text        NOT NULL CHECK (length(trim(import_summary)) > 0),
+  status               text        NOT NULL DEFAULT 'received'
+                         CHECK (status IN ('received','processed','blocked')),
+  blocked_reason       text,
+  created_by           text        NOT NULL,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now(),
+  CHECK (source_system !~* 'https?://' AND import_evidence_ref !~* 'https?://' AND lineage_ref !~* 'https?://')
+);
+CREATE INDEX idx_process_mining_imports_source
+  ON process_mining_imports (tenant_id, source_type, created_at DESC);
+CREATE INDEX idx_process_mining_imports_status
+  ON process_mining_imports (tenant_id, status, created_at DESC);
 
 CREATE TABLE automation_ideas (
   id              uuid        PRIMARY KEY,
@@ -693,13 +722,28 @@ CREATE TABLE automation_ideas (
   score           int         NOT NULL DEFAULT 0 CHECK (score >= 0 AND score <= 100),
   scenario_id     uuid        REFERENCES scenarios(id),
   run_trigger_id  uuid,
+  source_import_id uuid,
+  source_item_ref text,
+  source_lineage jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_by      text        NOT NULL,
   created_at      timestamptz NOT NULL DEFAULT now(),
-  updated_at      timestamptz NOT NULL DEFAULT now()
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    source NOT IN ('process_mining','task_mining')
+    OR (
+      source_import_id IS NOT NULL
+      AND source_item_ref IS NOT NULL
+      AND length(trim(source_item_ref)) > 0
+      AND jsonb_typeof(source_lineage) = 'object'
+      AND source_lineage <> '{}'::jsonb
+    )
+  )
 );
 CREATE INDEX idx_automation_ideas_stage ON automation_ideas (tenant_id, stage, updated_at DESC);
 CREATE INDEX idx_automation_ideas_owner ON automation_ideas (tenant_id, business_owner);
 CREATE INDEX idx_automation_ideas_department ON automation_ideas (tenant_id, department);
+CREATE INDEX idx_automation_ideas_source_import ON automation_ideas (tenant_id, source_import_id)
+  WHERE source_import_id IS NOT NULL;
 
 CREATE TABLE roi_estimates (
   id                      uuid          PRIMARY KEY,
@@ -1966,6 +2010,7 @@ ALTER TABLE scenario_versions   ADD CONSTRAINT uq_scenario_versions_tenant_id_id
 ALTER TABLE scenario_releases   ADD CONSTRAINT uq_scenario_releases_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenario_environment_bindings ADD CONSTRAINT uq_scenario_environment_bindings_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenario_release_events ADD CONSTRAINT uq_scenario_release_events_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE process_mining_imports ADD CONSTRAINT uq_process_mining_imports_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE automation_ideas    ADD CONSTRAINT uq_automation_ideas_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE roi_estimates       ADD CONSTRAINT uq_roi_estimates_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE roi_actual_evidence ADD CONSTRAINT uq_roi_actual_evidence_tenant_id_id UNIQUE (tenant_id, id);
@@ -2101,7 +2146,9 @@ ALTER TABLE automation_ideas
   ADD CONSTRAINT fk_automation_ideas_scenario_tenant
   FOREIGN KEY (tenant_id, scenario_id) REFERENCES scenarios(tenant_id, id),
   ADD CONSTRAINT fk_automation_ideas_run_trigger_tenant
-  FOREIGN KEY (tenant_id, run_trigger_id) REFERENCES run_triggers(tenant_id, id);
+  FOREIGN KEY (tenant_id, run_trigger_id) REFERENCES run_triggers(tenant_id, id),
+  ADD CONSTRAINT fk_automation_ideas_source_import_tenant
+  FOREIGN KEY (tenant_id, source_import_id) REFERENCES process_mining_imports(tenant_id, id);
 
 ALTER TABLE roi_estimates
   ADD CONSTRAINT fk_roi_estimates_automation_idea_tenant
@@ -2273,10 +2320,11 @@ BEGIN
     'gateway_policies',
 	    'control_plane_idempotency_keys',
 	    'scenarios',
-	    'scenario_versions',
-	    'scenario_releases',
-	    'scenario_environment_bindings',
+    'scenario_versions',
+    'scenario_releases',
+    'scenario_environment_bindings',
     'scenario_release_events',
+    'process_mining_imports',
     'automation_ideas',
     'roi_estimates',
     'roi_actual_evidence',

@@ -507,6 +507,59 @@ describe("HttpApiClient 계약", () => {
     });
   });
 
+  test("process mining import list and create routes", async () => {
+    const listHarness = harness({ body: { items: [], next_cursor: null } });
+    await listHarness.client.listProcessMiningImports({
+      source_type: "process_mining",
+      status: "processed",
+      limit: 10,
+    });
+    expect(listHarness.calls[0]?.method).toBe("GET");
+    expect(listHarness.calls[0]?.url).toBe("http://api.test/v1/process-mining/imports?source_type=process_mining&status=processed&limit=10");
+
+    const postHarness = harness({
+      body: {
+        import_id: "63000000-0000-4000-8000-000000000001",
+        source_type: "process_mining",
+        source_system: "celonis-export",
+        source_owner_ref: "group:process-owner",
+        schema_version: "2026-06",
+        import_evidence_ref: "artifact:pm-import-1",
+        lineage_ref: "lineage:pm-import-1",
+        row_count: 120,
+        candidate_count: 4,
+        anonymization_mode: "aggregated_alias",
+        schema_mapping: { case_id: "case_alias", activity: "activity_name", timestamp: "event_at" },
+        import_summary: "Aggregated process mining export.",
+        status: "received",
+        blocked_reason: null,
+        created_by: "operator-a",
+        created_at: "2026-06-30T00:00:00.000Z",
+        updated_at: "2026-06-30T00:00:00.000Z",
+      },
+    });
+    await postHarness.client.createProcessMiningImport({
+      source_type: "process_mining",
+      source_system: "celonis-export",
+      source_owner_ref: "group:process-owner",
+      schema_version: "2026-06",
+      import_evidence_ref: "artifact:pm-import-1",
+      lineage_ref: "lineage:pm-import-1",
+      row_count: 120,
+      candidate_count: 4,
+      schema_mapping: { case_id: "case_alias", activity: "activity_name", timestamp: "event_at" },
+      import_summary: "Aggregated process mining export.",
+    }, "process-import-1");
+    expect(postHarness.calls[0]?.method).toBe("POST");
+    expect(postHarness.calls[0]?.url).toBe("http://api.test/v1/process-mining/imports");
+    expect(postHarness.calls[0]?.headers.get("idempotency-key")).toBe("process-import-1");
+    expect(postHarness.calls[0]?.body).toMatchObject({
+      source_type: "process_mining",
+      import_evidence_ref: "artifact:pm-import-1",
+      lineage_ref: "lineage:pm-import-1",
+    });
+  });
+
   test("automation performance report JSON/CSV/XLSX/PoC Markdown routes", async () => {
     const jsonHarness = harness({
       body: {

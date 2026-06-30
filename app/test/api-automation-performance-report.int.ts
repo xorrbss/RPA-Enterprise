@@ -47,6 +47,7 @@ const CALL_FAILED_SYSTEM = "43000000-0000-4000-8000-000000000203";
 const CALL_RERUN_CHILD = "43000000-0000-4000-8000-000000000204";
 const CALL_TENANT_B = "44000000-0000-4000-8000-000000000201";
 const IDEA_A1 = "45000000-0000-4000-8000-000000000001";
+const IMPORT_A1 = "45000000-0000-4000-8000-000000000031";
 const ROI_A1 = "45000000-0000-4000-8000-000000000011";
 const ROI_ACTUAL_A1 = "45000000-0000-4000-8000-000000000021";
 const ROI_ACTUAL_A1_SPANNING = "45000000-0000-4000-8000-000000000024";
@@ -54,8 +55,10 @@ const IDEA_A2 = "45000000-0000-4000-8000-000000000002";
 const ROI_A2 = "45000000-0000-4000-8000-000000000012";
 const ROI_ACTUAL_A2 = "45000000-0000-4000-8000-000000000022";
 const IDEA_A3 = "45000000-0000-4000-8000-000000000003";
+const IMPORT_A3 = "45000000-0000-4000-8000-000000000033";
 const ROI_ACTUAL_A3 = "45000000-0000-4000-8000-000000000023";
 const IDEA_B = "46000000-0000-4000-8000-000000000001";
+const IMPORT_B = "46000000-0000-4000-8000-000000000031";
 const ROI_B = "46000000-0000-4000-8000-000000000011";
 const ROI_ACTUAL_B = "46000000-0000-4000-8000-000000000021";
 const RERUN_ID = "47000000-0000-4000-8000-000000000001";
@@ -148,12 +151,33 @@ async function seed(pool: Pool): Promise<void> {
       [RERUN_ID, TENANT_A, RUN_FAILED_SYSTEM, RUN_RERUN_CHILD],
     );
     await client.query(
-      `INSERT INTO automation_ideas (id, tenant_id, title, description, business_owner, department, source, stage, scenario_id, created_by)
+      `INSERT INTO process_mining_imports
+         (id, tenant_id, source_type, source_system, source_owner_ref, schema_version,
+          import_evidence_ref, lineage_ref, row_count, candidate_count, anonymization_mode,
+          schema_mapping, import_summary, status, created_by)
        VALUES
-         ($1::uuid, $2::uuid, 'invoice lookup', 'lookup', 'finance owner', 'finance', 'process_mining', 'operate', $3::uuid, 'operator-a'),
-         ($4::uuid, $2::uuid, 'formula workflow', 'guard csv', 'ops owner', 'ops', 'manual', 'approved', $5::uuid, 'operator-a'),
-         ($6::uuid, $2::uuid, 'actual only pilot', 'actuals without estimate', 'coe owner', 'coe', 'task_mining', 'operate', $7::uuid, 'operator-a')`,
-      [IDEA_A1, TENANT_A, SCENARIO_A1, IDEA_A2, SCENARIO_A2, IDEA_A3, SCENARIO_A3],
+         ($1::uuid, $2::uuid, 'process_mining', 'celonis-export', 'group:finance-owner', '2026-06',
+          'artifact:pm-import-a1', 'lineage:pm-import-a1', 120, 2, 'aggregated_alias',
+          '{"case_id":"case_alias","activity":"activity_name","timestamp":"event_at"}'::jsonb,
+          'Aggregated finance process export.', 'processed', 'operator-a'),
+         ($3::uuid, $2::uuid, 'task_mining', 'customer-task-mining-export', 'group:coe-owner', '2026-06',
+          'artifact:tm-import-a3', 'lineage:tm-import-a3', 40, 1, 'aggregated_alias',
+          '{"task_name":"task_alias","application_alias":"application_alias","timestamp":"event_at"}'::jsonb,
+          'Aggregated task mining export.', 'processed', 'operator-a')`,
+      [IMPORT_A1, TENANT_A, IMPORT_A3],
+    );
+    await client.query(
+      `INSERT INTO automation_ideas
+         (id, tenant_id, title, description, business_owner, department, source, stage, scenario_id,
+          source_import_id, source_item_ref, source_lineage, created_by)
+       VALUES
+         ($1::uuid, $2::uuid, 'invoice lookup', 'lookup', 'finance owner', 'finance', 'process_mining', 'operate', $3::uuid,
+          $4::uuid, 'candidate:invoice-lookup', '{"lineage_ref":"lineage:pm-import-a1"}'::jsonb, 'operator-a'),
+         ($5::uuid, $2::uuid, 'formula workflow', 'guard csv', 'ops owner', 'ops', 'manual', 'approved', $6::uuid,
+          NULL, NULL, '{}'::jsonb, 'operator-a'),
+         ($7::uuid, $2::uuid, 'actual only pilot', 'actuals without estimate', 'coe owner', 'coe', 'task_mining', 'operate', $8::uuid,
+          $9::uuid, 'candidate:actual-only', '{"lineage_ref":"lineage:tm-import-a3"}'::jsonb, 'operator-a')`,
+      [IDEA_A1, TENANT_A, SCENARIO_A1, IMPORT_A1, IDEA_A2, SCENARIO_A2, IDEA_A3, SCENARIO_A3, IMPORT_A3],
     );
     await client.query(
       `INSERT INTO roi_estimates
@@ -202,9 +226,23 @@ async function seed(pool: Pool): Promise<void> {
       [CALL_TENANT_B, TENANT_B, RUN_TENANT_B],
     );
     await client.query(
-      `INSERT INTO automation_ideas (id, tenant_id, title, description, business_owner, department, source, stage, scenario_id, created_by)
-       VALUES ($1::uuid, $2::uuid, 'hidden', 'hidden', 'b owner', 'b dept', 'task_mining', 'operate', $3::uuid, 'operator-b')`,
-      [IDEA_B, TENANT_B, SCENARIO_B],
+      `INSERT INTO process_mining_imports
+         (id, tenant_id, source_type, source_system, source_owner_ref, schema_version,
+          import_evidence_ref, lineage_ref, row_count, candidate_count, anonymization_mode,
+          schema_mapping, import_summary, status, created_by)
+       VALUES ($1::uuid, $2::uuid, 'task_mining', 'tenant-b-task-export', 'group:b-owner', '2026-06',
+          'artifact:tm-import-b', 'lineage:tm-import-b', 10, 1, 'aggregated_alias',
+          '{"task_name":"task_alias","application_alias":"application_alias","timestamp":"event_at"}'::jsonb,
+          'Tenant B task mining export.', 'processed', 'operator-b')`,
+      [IMPORT_B, TENANT_B],
+    );
+    await client.query(
+      `INSERT INTO automation_ideas
+         (id, tenant_id, title, description, business_owner, department, source, stage, scenario_id,
+          source_import_id, source_item_ref, source_lineage, created_by)
+       VALUES ($1::uuid, $2::uuid, 'hidden', 'hidden', 'b owner', 'b dept', 'task_mining', 'operate', $3::uuid,
+          $4::uuid, 'candidate:hidden', '{"lineage_ref":"lineage:tm-import-b"}'::jsonb, 'operator-b')`,
+      [IDEA_B, TENANT_B, SCENARIO_B, IMPORT_B],
     );
     await client.query(
       `INSERT INTO roi_estimates

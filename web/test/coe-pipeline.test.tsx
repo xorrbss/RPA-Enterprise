@@ -42,6 +42,9 @@ function ideaFixture(stage: AutomationIdeaStage = "assess"): AutomationIdeaItem 
     score: 91,
     scenario_id: null,
     run_trigger_id: null,
+    source_import_id: null,
+    source_item_ref: null,
+    source_lineage: {},
     created_by: "operator",
     created_at: "2026-06-23T00:00:00.000Z",
     updated_at: "2026-06-23T00:00:00.000Z",
@@ -104,11 +107,17 @@ describe("coe pipeline view", () => {
     renderApp(fakeClient({ createAutomationIdea }));
 
     await screen.findByRole("heading", { name: "자동화 후보 접수" });
+    await screen.findByText("celonis-export");
     fireEvent.change(screen.getByLabelText("발굴 출처"), { target: { value: "process_mining" } });
     fireEvent.click(screen.getByRole("button", { name: "후보 등록" }));
 
     await waitFor(() => expect(createAutomationIdea).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "process_mining" }),
+      expect.objectContaining({
+        source: "process_mining",
+        source_import_id: "63000000-0000-4000-8000-000000000001",
+        source_item_ref: "candidate:vendor-status",
+        source_lineage: expect.objectContaining({ source_system: "celonis-export" }),
+      }),
       expect.any(String),
     ));
   });
@@ -208,6 +217,9 @@ describe("coe pipeline view", () => {
               score: 91,
               scenario_id: "scenario-linked",
               run_trigger_id: "trigger-linked",
+              source_import_id: null,
+              source_item_ref: null,
+              source_lineage: {},
               created_by: "operator",
               created_at: "2026-06-23T00:00:00.000Z",
               updated_at: "2026-06-23T00:00:00.000Z",
@@ -262,6 +274,9 @@ describe("coe pipeline view", () => {
               score: 91,
               scenario_id: "scenario-linked",
               run_trigger_id: "trigger-linked",
+              source_import_id: null,
+              source_item_ref: null,
+              source_lineage: {},
               created_by: "operator",
               created_at: "2026-06-23T00:00:00.000Z",
               updated_at: "2026-06-23T00:00:00.000Z",
@@ -334,6 +349,9 @@ describe("coe pipeline view", () => {
                 score: 42,
                 scenario_id: null,
                 run_trigger_id: null,
+                source_import_id: null,
+                source_item_ref: null,
+                source_lineage: {},
                 created_by: "operator",
                 created_at: "2026-06-23T00:00:00.000Z",
                 updated_at: "2026-06-23T00:00:00.000Z",
@@ -350,6 +368,9 @@ describe("coe pipeline view", () => {
                 score: 94,
                 scenario_id: null,
                 run_trigger_id: null,
+                source_import_id: null,
+                source_item_ref: null,
+                source_lineage: {},
                 created_by: "operator",
                 created_at: "2026-06-23T00:00:00.000Z",
                 updated_at: "2026-06-23T00:00:01.000Z",
@@ -444,6 +465,9 @@ describe("coe pipeline view", () => {
               score: 88,
               scenario_id: null,
               run_trigger_id: null,
+              source_import_id: null,
+              source_item_ref: null,
+              source_lineage: {},
               created_by: "operator",
               created_at: "2026-06-23T00:00:00.000Z",
               updated_at: "2026-06-23T00:00:00.000Z",
@@ -504,6 +528,9 @@ describe("coe pipeline view", () => {
               score: 80,
               scenario_id: null,
               run_trigger_id: null,
+              source_import_id: null,
+              source_item_ref: null,
+              source_lineage: {},
               created_by: "operator",
               created_at: "2026-06-23T00:00:00.000Z",
               updated_at: "2026-06-23T00:00:00.000Z",

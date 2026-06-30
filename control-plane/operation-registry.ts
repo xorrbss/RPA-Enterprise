@@ -42,6 +42,8 @@ export type SupportedControlPlaneOperationId = Extract<
   | "recordProductionReadinessEvidence"
   | "listAiGovernanceEvidence"
   | "recordAiGovernanceEvidence"
+  | "listProcessMiningImports"
+  | "createProcessMiningImport"
   | "listAutomationIdeas"
   | "createAutomationIdea"
   | "getAutomationIdea"
@@ -374,6 +376,24 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     requestBodyRequired: true,
     responseSchemaRef: "#/components/schemas/AiGovernanceEvidence",
     rbacAction: "ai_governance.manage",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "listProcessMiningImports",
+    method: "GET",
+    path: "/v1/process-mining/imports",
+    querySchemaRef: "#/components/schemas/ProcessMiningImportListQuery",
+    responseSchemaRef: "#/components/schemas/ProcessMiningImportPage",
+    rbacAction: "automation_idea.read",
+  }),
+  operation({
+    operationId: "createProcessMiningImport",
+    method: "POST",
+    path: "/v1/process-mining/imports",
+    requestBodySchemaRef: "#/components/schemas/ProcessMiningImportCreateRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/ProcessMiningImport",
+    rbacAction: "automation_idea.manage",
     requiresIdempotencyKey: true,
   }),
   operation({
@@ -1047,6 +1067,67 @@ const requireObject =
       return { valid: true, value: input };
     },
   });
+
+const requireProcessMiningImportBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+
+    for (const prop of ["source_system", "source_owner_ref", "schema_version", "import_evidence_ref", "lineage_ref", "import_summary"] as const) {
+      if (typeof input[prop] !== "string" || input[prop].length === 0) {
+        return validationFailure({ schemaRef, reason: "missing_required_string", prop });
+      }
+    }
+
+    const sourceType = input.source_type;
+    if (sourceType !== "process_mining" && sourceType !== "task_mining" && sourceType !== "monitoring_export" && sourceType !== "api_import") {
+      return validationFailure({ schemaRef, reason: "invalid_source_type", prop: "source_type" });
+    }
+    if (input.status !== undefined && input.status !== "received" && input.status !== "processed" && input.status !== "blocked") {
+      return validationFailure({ schemaRef, reason: "invalid_import_status", prop: "status" });
+    }
+    if (
+      input.anonymization_mode !== undefined &&
+      input.anonymization_mode !== "aggregated_alias" &&
+      input.anonymization_mode !== "pseudonymized" &&
+      input.anonymization_mode !== "not_applicable"
+    ) {
+      return validationFailure({ schemaRef, reason: "invalid_anonymization_mode", prop: "anonymization_mode" });
+    }
+    if (input.status === "blocked" && (typeof input.blocked_reason !== "string" || input.blocked_reason.length === 0)) {
+      return validationFailure({ schemaRef, reason: "blocked_reason_required", prop: "blocked_reason" });
+    }
+    if (input.status !== undefined && input.status !== "blocked" && input.blocked_reason !== undefined) {
+      return validationFailure({ schemaRef, reason: "blocked_reason_requires_blocked_status", prop: "blocked_reason" });
+    }
+    if (typeof input.row_count !== "number" || !Number.isInteger(input.row_count) || input.row_count < 1) {
+      return validationFailure({ schemaRef, reason: "invalid_row_count", prop: "row_count" });
+    }
+    if (
+      typeof input.candidate_count !== "number" ||
+      !Number.isInteger(input.candidate_count) ||
+      input.candidate_count < 0 ||
+      input.candidate_count > input.row_count
+    ) {
+      return validationFailure({ schemaRef, reason: "invalid_candidate_count", prop: "candidate_count" });
+    }
+    if (!isRecord(input.schema_mapping)) {
+      return validationFailure({ schemaRef, reason: "schema_mapping_required", prop: "schema_mapping" });
+    }
+    const requiredMappingKeys = sourceType === "task_mining"
+      ? ["task_name", "application_alias", "timestamp"]
+      : ["case_id", "activity", "timestamp"];
+    for (const prop of requiredMappingKeys) {
+      if (typeof input.schema_mapping[prop] !== "string" || input.schema_mapping[prop].length === 0) {
+        return validationFailure({ schemaRef, reason: "schema_mapping_required_key_missing", prop: `schema_mapping.${prop}` });
+      }
+    }
+
+    return { valid: true, value: input };
+  },
+});
 
 const requireIntegrationHandoffDispatchBody = (schemaRef: string): BoundaryValidator => ({
   schemaRef,
@@ -1959,6 +2040,7 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
   ["sendOpsAlertWebhookDelivery", requireOpsNotificationWebhookSendBody("#/components/schemas/OpsNotificationWebhookSendRequest")],
   ["recordProductionReadinessEvidence", requireProductionReadinessEvidenceBody("#/components/schemas/ProductionReadinessEvidenceRequest")],
   ["recordAiGovernanceEvidence", requireAiGovernanceEvidenceBody("#/components/schemas/AiGovernanceEvidenceRequest")],
+  ["createProcessMiningImport", requireProcessMiningImportBody("#/components/schemas/ProcessMiningImportCreateRequest")],
   ["createAutomationIdea", requireObject("#/components/schemas/AutomationIdeaCreateRequest", ["title", "description", "business_owner", "department"])],
   ["createDocumentJob", requireDocumentJobCreateBody("#/components/schemas/DocumentJobCreateRequest")],
   ["extractDocumentJob", requireObject("#/components/schemas/DocumentJobCommandRequest", [], true)],
@@ -2076,6 +2158,7 @@ const queryValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Ope
   ["listOpsAlertDeliveries", passQuery("#/components/schemas/OpsAlertDeliveryListQuery")],
   ["listProductionReadinessEvidence", requireProductionReadinessEvidenceQuery("#/components/schemas/ProductionReadinessEvidenceListQuery")],
   ["listAiGovernanceEvidence", requireAiGovernanceEvidenceQuery("#/components/schemas/AiGovernanceEvidenceListQuery")],
+  ["listProcessMiningImports", passQuery("#/components/schemas/ProcessMiningImportListQuery")],
   ["listAutomationIdeas", passQuery("#/components/schemas/AutomationIdeaListQuery")],
   ["listRoiActualEvidence", passQuery("#/components/schemas/RoiActualEvidenceListQuery")],
   ["listAutomationAdoptionEvidence", passQuery("#/components/schemas/AutomationAdoptionEvidenceListQuery")],

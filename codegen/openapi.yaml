@@ -1011,6 +1011,57 @@ paths:
   # ============================================================
   # 1.6 Automation Ideas / CoE ROI
   # ============================================================
+  /process-mining/imports:
+    get:
+      tags: [AutomationIdeas]
+      operationId: listProcessMiningImports
+      description: List metadata-only process/task mining imports from customer-owned exports or approved API import results.
+      summary: List process mining imports
+      parameters:
+        - name: source_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ProcessMiningImportSourceType'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ProcessMiningImportStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Tenant-scoped process/task mining import page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessMiningImportPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [AutomationIdeas]
+      operationId: createProcessMiningImport
+      summary: Create process mining import
+      description: Records safe source authority, schema mapping, evidence reference, and lineage metadata without raw endpoint URLs, tokens, auth headers, or user activity payloads.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessMiningImportCreateRequest'
+      responses:
+        '201':
+          description: Created process/task mining import.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessMiningImport'
+        default:
+          $ref: '#/components/responses/Error'
+
   /automation-ideas:
     get:
       tags: [AutomationIdeas]
@@ -4840,6 +4891,25 @@ components:
         - process_mining
         - task_mining
         - imported
+    ProcessMiningImportSourceType:
+      type: string
+      enum:
+        - process_mining
+        - task_mining
+        - monitoring_export
+        - api_import
+    ProcessMiningImportStatus:
+      type: string
+      enum:
+        - received
+        - processed
+        - blocked
+    ProcessMiningImportAnonymizationMode:
+      type: string
+      enum:
+        - aggregated_alias
+        - pseudonymized
+        - not_applicable
     AutomationAdoptionEvidenceType:
       type: string
       enum:
@@ -6155,6 +6225,25 @@ components:
     AuditLogExportCsv:
       type: string
       description: CSV audit export. Raw audit payload bodies are intentionally omitted.
+    ProcessMiningImportPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ProcessMiningImport' }
+        next_cursor:
+          type: [string, "null"]
+    ProcessMiningImportListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        source_type:
+          $ref: '#/components/schemas/ProcessMiningImportSourceType'
+        status:
+          $ref: '#/components/schemas/ProcessMiningImportStatus'
+        limit: { type: integer, minimum: 1 }
+        cursor: { type: string, minLength: 1 }
     AuditVerificationRunPage:
       type: object
       required: [items, next_cursor]
@@ -6683,6 +6772,86 @@ components:
         due_at:
           type: [string, "null"]
           format: date-time
+    ProcessMiningImport:
+      type: object
+      additionalProperties: false
+      required:
+        - import_id
+        - source_type
+        - source_system
+        - source_owner_ref
+        - schema_version
+        - import_evidence_ref
+        - lineage_ref
+        - row_count
+        - candidate_count
+        - anonymization_mode
+        - schema_mapping
+        - import_summary
+        - status
+        - blocked_reason
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        import_id: { type: string, format: uuid }
+        source_type:
+          $ref: '#/components/schemas/ProcessMiningImportSourceType'
+        source_system: { type: string, minLength: 1, maxLength: 120 }
+        source_owner_ref: { type: string, minLength: 1, maxLength: 160 }
+        schema_version: { type: string, minLength: 1, maxLength: 80 }
+        import_evidence_ref: { type: string, minLength: 1, maxLength: 500 }
+        lineage_ref: { type: string, minLength: 1, maxLength: 500 }
+        row_count: { type: integer, minimum: 1 }
+        candidate_count: { type: integer, minimum: 0 }
+        anonymization_mode:
+          $ref: '#/components/schemas/ProcessMiningImportAnonymizationMode'
+        schema_mapping:
+          type: object
+          additionalProperties: true
+        import_summary: { type: string, minLength: 1, maxLength: 1000 }
+        status:
+          $ref: '#/components/schemas/ProcessMiningImportStatus'
+        blocked_reason: { type: [string, "null"], minLength: 1, maxLength: 1000 }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ProcessMiningImportCreateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - source_type
+        - source_system
+        - source_owner_ref
+        - schema_version
+        - import_evidence_ref
+        - lineage_ref
+        - row_count
+        - candidate_count
+        - schema_mapping
+        - import_summary
+      properties:
+        source_type:
+          $ref: '#/components/schemas/ProcessMiningImportSourceType'
+        source_system: { type: string, minLength: 1, maxLength: 120 }
+        source_owner_ref: { type: string, minLength: 1, maxLength: 160 }
+        schema_version: { type: string, minLength: 1, maxLength: 80 }
+        import_evidence_ref: { type: string, minLength: 1, maxLength: 500 }
+        lineage_ref: { type: string, minLength: 1, maxLength: 500 }
+        row_count: { type: integer, minimum: 1 }
+        candidate_count: { type: integer, minimum: 0 }
+        anonymization_mode:
+          $ref: '#/components/schemas/ProcessMiningImportAnonymizationMode'
+        schema_mapping:
+          type: object
+          minProperties: 1
+          additionalProperties: true
+        import_summary: { type: string, minLength: 1, maxLength: 1000 }
+        status:
+          $ref: '#/components/schemas/ProcessMiningImportStatus'
+        blocked_reason: { type: [string, "null"], minLength: 1, maxLength: 1000 }
+
     AutomationIdea:
       type: object
       additionalProperties: false
@@ -6698,6 +6867,9 @@ components:
         - score
         - scenario_id
         - run_trigger_id
+        - source_import_id
+        - source_item_ref
+        - source_lineage
         - created_by
         - created_at
         - updated_at
@@ -6719,6 +6891,11 @@ components:
           maximum: 100
         scenario_id: { type: [string, "null"], format: uuid }
         run_trigger_id: { type: [string, "null"], format: uuid }
+        source_import_id: { type: [string, "null"], format: uuid }
+        source_item_ref: { type: [string, "null"], minLength: 1, maxLength: 200 }
+        source_lineage:
+          type: object
+          additionalProperties: true
         created_by: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -6741,6 +6918,11 @@ components:
           minimum: 0
           maximum: 100
           default: 0
+        source_import_id: { type: string, format: uuid }
+        source_item_ref: { type: string, minLength: 1, maxLength: 200 }
+        source_lineage:
+          type: object
+          additionalProperties: true
 
     AutomationIdeaUpdateRequest:
       type: object

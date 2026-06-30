@@ -29,7 +29,6 @@ const SCENARIO_B = "51000000-0000-4000-8000-0000000000b1";
 const SVER_B = "51000000-0000-4000-8000-0000000000b2";
 const TRIGGER_A = "52000000-0000-4000-8000-0000000000a1";
 const TRIGGER_B = "52000000-0000-4000-8000-0000000000b1";
-
 const SECRET = new TextEncoder().encode("automation-ideas-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
   async listAllowedCommandRefs() {
@@ -90,6 +89,13 @@ async function seedScenarioAndTrigger(
 async function ideaCount(pool: Pool, tenant: string): Promise<number> {
   return withTenantTx(pool, tenant, async (c) => {
     const r = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM automation_ideas`);
+    return r.rows[0]?.n ?? 0;
+  });
+}
+
+async function processImportCount(pool: Pool, tenant: string): Promise<number> {
+  return withTenantTx(pool, tenant, async (c) => {
+    const r = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM process_mining_imports`);
     return r.rows[0]?.n ?? 0;
   });
 }
@@ -175,6 +181,13 @@ async function main(): Promise<void> {
           headers: { authorization: `Bearer ${token}`, ...(key !== undefined ? { "idempotency-key": key } : {}) },
           payload: payload as object | undefined,
         });
+      const createProcessImport = (token: string, key?: string, payload?: unknown) =>
+        app.inject({
+          method: "POST",
+          url: "/v1/process-mining/imports",
+          headers: { authorization: `Bearer ${token}`, ...(key !== undefined ? { "idempotency-key": key } : {}) },
+          payload: payload as object | undefined,
+        });
       const command = (method: "POST" | "PATCH", url: string, token: string, key: string, payload?: unknown) =>
         app.inject({
           method,
@@ -182,6 +195,59 @@ async function main(): Promise<void> {
           headers: { authorization: `Bearer ${token}`, "idempotency-key": key },
           payload: payload as object | undefined,
         });
+
+      const processImport = await createProcessImport(operator, "process-import-create-1", {
+        source_type: "process_mining",
+        source_system: "celonis-export",
+        source_owner_ref: "group:process-owner",
+        schema_version: "2026-06",
+        import_evidence_ref: "artifact:pm-import-1",
+        lineage_ref: "lineage:pm-import-1",
+        row_count: 120,
+        candidate_count: 4,
+        schema_mapping: { case_id: "case_alias", activity: "activity_name", timestamp: "event_at" },
+        import_summary: "Aggregated process mining export from customer-owned monitoring.",
+      });
+      check("operator create process mining import -> 201", processImport.statusCode === 201, processImport.body);
+      const processImportId = String(processImport.json().import_id);
+      check("process import authority metadata round-trip", processImport.json().source_system === "celonis-export" && processImport.json().row_count === 120, processImport.body);
+
+      const processImportList = await app.inject({
+        method: "GET",
+        url: "/v1/process-mining/imports?source_type=process_mining&limit=5",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("viewer list process imports -> 200", processImportList.statusCode === 200 && processImportList.json().items?.length === 1, processImportList.body);
+
+      const rawEndpointImport = await createProcessImport(operator, "process-import-raw-url-denied", {
+        source_type: "process_mining",
+        source_system: "https://mining.example.com/export",
+        source_owner_ref: "group:process-owner",
+        schema_version: "2026-06",
+        import_evidence_ref: "artifact:pm-import-raw",
+        lineage_ref: "lineage:pm-import-raw",
+        row_count: 1,
+        candidate_count: 0,
+        schema_mapping: { case_id: "case_alias", activity: "activity_name", timestamp: "event_at" },
+        import_summary: "Raw endpoint should be rejected.",
+      });
+      check("process import raw endpoint rejected before idempotency -> 422", rawEndpointImport.statusCode === 422 && rawEndpointImport.json().code === "IR_SCHEMA_INVALID", rawEndpointImport.body);
+      check("raw endpoint import did not reserve idempotency", (await idempotencyCount(pool, TENANT_A, "createProcessMiningImport", "process-import-raw-url-denied")) === 0);
+
+      const viewerImportDenied = await createProcessImport(viewer, "viewer-process-import-denied", {
+        source_type: "process_mining",
+        source_system: "celonis-export",
+        source_owner_ref: "group:process-owner",
+        schema_version: "2026-06",
+        import_evidence_ref: "artifact:pm-import-viewer",
+        lineage_ref: "lineage:pm-import-viewer",
+        row_count: 1,
+        candidate_count: 0,
+        schema_mapping: { case_id: "case_alias", activity: "activity_name", timestamp: "event_at" },
+        import_summary: "Viewer must not create imports.",
+      });
+      check("viewer create process import denied -> 403", viewerImportDenied.statusCode === 403 && viewerImportDenied.json().code === "AUTHZ_FORBIDDEN", viewerImportDenied.body);
+      check("viewer import denied did not reserve idempotency", (await idempotencyCount(pool, TENANT_A, "createProcessMiningImport", "viewer-process-import-denied")) === 0);
 
       const created = await createIdea(operator, "idea-create-1", {
         title: "Vendor portal payment check",
@@ -207,6 +273,32 @@ async function main(): Promise<void> {
       });
       check("create replay returns same idea", replay.statusCode === 201 && replay.json().idea_id === ideaId, replay.body);
       check("create replay does not duplicate rows", (await ideaCount(pool, TENANT_A)) === 1);
+      check("process import row exists only once", (await processImportCount(pool, TENANT_A)) === 1);
+
+      const processIdea = await createIdea(operator, "idea-create-process-1", {
+        title: "Vendor portal mining candidate",
+        description: "Candidate from aggregated process mining lineage.",
+        business_owner: "finance-ops",
+        department: "Finance",
+        source: "process_mining",
+        priority: "high",
+        score: 88,
+        source_import_id: processImportId,
+        source_item_ref: "candidate:vendor-status",
+        source_lineage: { source_system: "celonis-export", lineage_ref: "lineage:pm-import-1" },
+      });
+      check("process mining idea requires and stores import lineage -> 201", processIdea.statusCode === 201, processIdea.body);
+      check("process idea lineage round-trip", processIdea.json().source_import_id === processImportId && processIdea.json().source_item_ref === "candidate:vendor-status", processIdea.body);
+
+      const processIdeaMissingLineage = await createIdea(operator, "idea-create-process-missing-lineage", {
+        title: "Missing lineage",
+        description: "Mining source must not be accepted without import lineage.",
+        business_owner: "finance-ops",
+        department: "Finance",
+        source: "process_mining",
+      });
+      check("process mining idea without lineage rejected -> 422", processIdeaMissingLineage.statusCode === 422 && processIdeaMissingLineage.json().code === "IR_SCHEMA_INVALID", processIdeaMissingLineage.body);
+      check("missing lineage idea did not reserve idempotency", (await idempotencyCount(pool, TENANT_A, "createAutomationIdea", "idea-create-process-missing-lineage")) === 0);
 
       const noKey = await createIdea(operator, undefined, {
         title: "No key",
@@ -231,7 +323,14 @@ async function main(): Promise<void> {
         headers: { authorization: `Bearer ${viewer}` },
       });
       check("viewer list ideas -> 200", listed.statusCode === 200, listed.body);
-      check("list returns tenant A idea only", listed.json().items?.length === 1 && listed.json().items[0].idea_id === ideaId, listed.body);
+      const listedIdeas = listed.json().items ?? [];
+      check(
+        "list returns tenant A ideas only",
+        listedIdeas.length === 2
+          && listedIdeas.some((item: { idea_id?: string }) => item.idea_id === ideaId)
+          && listedIdeas.some((item: { source?: string; source_import_id?: string }) => item.source === "process_mining" && item.source_import_id === processImportId),
+        listed.body,
+      );
 
       const tenantBGet = await app.inject({
         method: "GET",

@@ -48,6 +48,7 @@ const baselineCoreTables = [
   "scenario_releases",
   "scenario_environment_bindings",
   "scenario_release_events",
+  "process_mining_imports",
   "automation_ideas",
   "roi_estimates",
   "run_triggers",

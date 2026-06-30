@@ -1193,6 +1193,9 @@ export interface BotPoolItem {
 export type AutomationIdeaStage = "intake" | "assess" | "approved" | "build" | "operate" | "rejected" | "archived";
 export type AutomationIdeaPriority = "low" | "medium" | "high" | "critical";
 export type AutomationIdeaSource = "manual" | "process_mining" | "task_mining" | "imported";
+export type ProcessMiningImportSourceType = "process_mining" | "task_mining" | "monitoring_export" | "api_import";
+export type ProcessMiningImportStatus = "received" | "processed" | "blocked";
+export type ProcessMiningImportAnonymizationMode = "aggregated_alias" | "pseudonymized" | "not_applicable";
 export type AutomationAdoptionEvidenceType = "pilot_charter_signoff" | "raci_signoff" | "training_completion" | "support_model_signoff";
 export type AutomationAdoptionEvidenceStatus = "valid" | "failed" | "deferred";
 export type RoiConfidence = "low" | "medium" | "high";
@@ -1210,6 +1213,9 @@ export interface AutomationIdeaItem {
   readonly score: number;
   readonly scenario_id: string | null;
   readonly run_trigger_id: string | null;
+  readonly source_import_id: string | null;
+  readonly source_item_ref: string | null;
+  readonly source_lineage: Readonly<Record<string, unknown>>;
   readonly created_by: string;
   readonly created_at: string;
   readonly updated_at: string;
@@ -1229,6 +1235,9 @@ export interface AutomationIdeaCreateBody {
   readonly source?: AutomationIdeaSource;
   readonly priority?: AutomationIdeaPriority;
   readonly score?: number;
+  readonly source_import_id?: string;
+  readonly source_item_ref?: string;
+  readonly source_lineage?: Readonly<Record<string, unknown>>;
 }
 
 export interface AutomationIdeaUpdateBody {
@@ -1240,6 +1249,47 @@ export interface AutomationIdeaUpdateBody {
   readonly score?: number;
   readonly scenario_id?: string | null;
   readonly run_trigger_id?: string | null;
+}
+
+export interface ProcessMiningImportItem {
+  readonly import_id: string;
+  readonly source_type: ProcessMiningImportSourceType;
+  readonly source_system: string;
+  readonly source_owner_ref: string;
+  readonly schema_version: string;
+  readonly import_evidence_ref: string;
+  readonly lineage_ref: string;
+  readonly row_count: number;
+  readonly candidate_count: number;
+  readonly anonymization_mode: ProcessMiningImportAnonymizationMode;
+  readonly schema_mapping: Readonly<Record<string, unknown>>;
+  readonly import_summary: string;
+  readonly status: ProcessMiningImportStatus;
+  readonly blocked_reason: string | null;
+  readonly created_by: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface ProcessMiningImportListParams extends ListParams {
+  readonly source_type?: ProcessMiningImportSourceType;
+  readonly status?: ProcessMiningImportStatus;
+}
+
+export interface ProcessMiningImportCreateBody {
+  readonly source_type: ProcessMiningImportSourceType;
+  readonly source_system: string;
+  readonly source_owner_ref: string;
+  readonly schema_version: string;
+  readonly import_evidence_ref: string;
+  readonly lineage_ref: string;
+  readonly row_count: number;
+  readonly candidate_count: number;
+  readonly anonymization_mode?: ProcessMiningImportAnonymizationMode;
+  readonly schema_mapping: Readonly<Record<string, unknown>>;
+  readonly import_summary: string;
+  readonly status?: ProcessMiningImportStatus;
+  readonly blocked_reason?: string | null;
 }
 
 export interface AutomationAdoptionEvidenceItem {

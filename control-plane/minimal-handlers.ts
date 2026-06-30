@@ -146,6 +146,30 @@ export interface MinimalAutomationIdea {
   score: number;
   scenario_id?: string | null;
   run_trigger_id?: string | null;
+  source_import_id?: string | null;
+  source_item_ref?: string | null;
+  source_lineage?: Readonly<Record<string, unknown>>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MinimalProcessMiningImport {
+  import_id: string;
+  tenant_id: string;
+  source_type: "process_mining" | "task_mining" | "monitoring_export" | "api_import";
+  source_system: string;
+  source_owner_ref: string;
+  schema_version: string;
+  import_evidence_ref: string;
+  lineage_ref: string;
+  row_count: number;
+  candidate_count: number;
+  anonymization_mode: "aggregated_alias" | "pseudonymized" | "not_applicable";
+  schema_mapping: Readonly<Record<string, unknown>>;
+  import_summary: string;
+  status: "received" | "processed" | "blocked";
+  blocked_reason: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -509,6 +533,7 @@ export interface MinimalControlPlaneSeed {
   runSteps?: readonly MinimalRunStep[];
   runTriggers?: readonly MinimalRunTrigger[];
   runTriggerFires?: readonly MinimalRunTriggerFire[];
+  processMiningImports?: readonly MinimalProcessMiningImport[];
   automationIdeas?: readonly MinimalAutomationIdea[];
   roiEstimates?: readonly MinimalRoiEstimate[];
   roiActualEvidence?: readonly MinimalRoiActualEvidence[];
@@ -554,6 +579,8 @@ export interface MinimalControlPlaneServices {
   getProductionReadiness(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listProductionReadinessEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   recordProductionReadinessEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listProcessMiningImports(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  createProcessMiningImport(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listAutomationIdeas(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   createAutomationIdea(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getAutomationIdea(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -627,6 +654,7 @@ export interface MinimalControlPlaneServices {
 export class InMemoryControlPlaneServices implements MinimalControlPlaneServices {
   private runSequence = 0;
   private triggerSequence = 0;
+  private processMiningImportSequence = 0;
   private ideaSequence = 0;
   private roiSequence = 0;
   private roiActualSequence = 0;
@@ -649,6 +677,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private readonly runSteps: MinimalRunStep[] = [];
   private readonly runTriggers = new Map<string, MinimalRunTrigger>();
   private readonly runTriggerFires: MinimalRunTriggerFire[] = [];
+  private readonly processMiningImports = new Map<string, MinimalProcessMiningImport>();
   private readonly automationIdeas = new Map<string, MinimalAutomationIdea>();
   private readonly roiEstimates = new Map<string, MinimalRoiEstimate>();
   private readonly roiActualEvidence: MinimalRoiActualEvidence[] = [];
@@ -686,6 +715,9 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       this.runTriggers.set(key(trigger.tenant_id, trigger.trigger_id), { ...trigger });
     }
     this.runTriggerFires.push(...(seed.runTriggerFires ?? []).map((fire) => ({ ...fire })));
+    for (const item of seed.processMiningImports ?? []) {
+      this.processMiningImports.set(key(item.tenant_id, item.import_id), { ...item });
+    }
     for (const idea of seed.automationIdeas ?? []) {
       this.automationIdeas.set(key(idea.tenant_id, idea.id), { ...idea });
     }
@@ -1262,9 +1294,66 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     return page(items);
   }
 
+  async listProcessMiningImports(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const sourceType = optionalQueryString(ctx, "source_type");
+    const status = optionalQueryString(ctx, "status");
+    const items = [...this.processMiningImports.values()].filter((item) =>
+      item.tenant_id === tenant(ctx)
+      && (sourceType === undefined || item.source_type === sourceType)
+      && (status === undefined || item.status === status),
+    );
+    return page(items);
+  }
+
+  async createProcessMiningImport(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const sourceType = requireProcessMiningImportSourceType(body);
+    const status = optionalImportStatus(body) ?? "received";
+    const rowCount = requirePositiveInteger(body, "row_count");
+    const candidateCount = requireNonNegativeInteger(body, "candidate_count");
+    const blockedReason = optionalString(body, "blocked_reason") ?? null;
+    if (candidateCount > rowCount) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "candidate_count_exceeds_row_count" });
+    }
+    if (status === "blocked" && blockedReason === null) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "blocked_reason_required" });
+    }
+    if (status !== "blocked" && blockedReason !== null) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "blocked_reason_requires_blocked_status" });
+    }
+    const item: MinimalProcessMiningImport = {
+      import_id: `process-import-${++this.processMiningImportSequence}`,
+      tenant_id: tenant(ctx),
+      source_type: sourceType,
+      source_system: requireString(body, "source_system"),
+      source_owner_ref: requireString(body, "source_owner_ref"),
+      schema_version: requireString(body, "schema_version"),
+      import_evidence_ref: requireString(body, "import_evidence_ref"),
+      lineage_ref: requireString(body, "lineage_ref"),
+      row_count: rowCount,
+      candidate_count: candidateCount,
+      anonymization_mode: optionalAnonymizationMode(body) ?? "aggregated_alias",
+      schema_mapping: requireProcessMiningSchemaMapping(body, sourceType),
+      import_summary: requireString(body, "import_summary"),
+      status,
+      blocked_reason: blockedReason,
+      created_by: ctx.principal.subjectId,
+      created_at: now,
+      updated_at: now,
+    };
+    this.processMiningImports.set(key(item.tenant_id, item.import_id), item);
+    return { status: 201, body: item };
+  }
+
   async createAutomationIdea(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
     const body = requireBody(ctx);
     const now = new Date().toISOString();
+    const source = optionalAutomationSource(body) ?? "manual";
+    const sourceImportId = optionalString(body, "source_import_id") ?? null;
+    const sourceItemRef = optionalString(body, "source_item_ref") ?? null;
+    const sourceLineage = optionalRecord(body, "source_lineage") ?? {};
+    assertAutomationIdeaImportLineage(tenant(ctx), source, sourceImportId, sourceItemRef, sourceLineage, this.processMiningImports);
     const idea: MinimalAutomationIdea = {
       id: `idea-${++this.ideaSequence}`,
       tenant_id: tenant(ctx),
@@ -1272,12 +1361,15 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       description: requireString(body, "description"),
       business_owner: requireString(body, "business_owner"),
       department: requireString(body, "department"),
-      source: optionalAutomationSource(body) ?? "manual",
+      source,
       stage: "intake",
       priority: optionalAutomationPriority(body) ?? "medium",
       score: optionalScore(body) ?? 0,
       scenario_id: optionalString(body, "scenario_id") ?? null,
       run_trigger_id: optionalString(body, "run_trigger_id") ?? null,
+      source_import_id: sourceImportId,
+      source_item_ref: sourceItemRef,
+      source_lineage: sourceLineage,
       created_by: ctx.principal.subjectId,
       created_at: now,
       updated_at: now,
@@ -2622,6 +2714,8 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     getProductionReadiness: bind(services.getProductionReadiness),
     listProductionReadinessEvidence: bind(services.listProductionReadinessEvidence),
     recordProductionReadinessEvidence: bind(services.recordProductionReadinessEvidence),
+    listProcessMiningImports: bind(services.listProcessMiningImports),
+    createProcessMiningImport: bind(services.createProcessMiningImport),
     listAutomationIdeas: bind(services.listAutomationIdeas),
     createAutomationIdea: bind(services.createAutomationIdea),
     getAutomationIdea: bind(services.getAutomationIdea),
@@ -2889,6 +2983,13 @@ function requireString(record: Readonly<Record<string, unknown>>, keyName: strin
   return value;
 }
 
+function optionalRecord(record: Readonly<Record<string, unknown>>, keyName: string): Readonly<Record<string, unknown>> | undefined {
+  const value = record[keyName];
+  if (value === undefined) return undefined;
+  if (isRecord(value)) return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_optional_object", key: keyName });
+}
+
 function requireScenarioGovernanceStage(record: Readonly<Record<string, unknown>>): "review" | "pilot" | "deprecated" {
   const value = requireString(record, "stage");
   if (value === "review" || value === "pilot" || value === "deprecated") return value;
@@ -3018,6 +3119,86 @@ function optionalAutomationSource(
   if (value === undefined) return undefined;
   if (value === "manual" || value === "process_mining" || value === "task_mining" || value === "imported") return value;
   throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_automation_idea_source" });
+}
+
+function requireProcessMiningImportSourceType(
+  record: Readonly<Record<string, unknown>>,
+): "process_mining" | "task_mining" | "monitoring_export" | "api_import" {
+  const value = record.source_type;
+  if (value === "process_mining" || value === "task_mining" || value === "monitoring_export" || value === "api_import") return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_process_mining_import_source_type" });
+}
+
+function optionalImportStatus(
+  record: Readonly<Record<string, unknown>>,
+): "received" | "processed" | "blocked" | undefined {
+  const value = record.status;
+  if (value === undefined) return undefined;
+  if (value === "received" || value === "processed" || value === "blocked") return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_process_mining_import_status" });
+}
+
+function optionalAnonymizationMode(
+  record: Readonly<Record<string, unknown>>,
+): "aggregated_alias" | "pseudonymized" | "not_applicable" | undefined {
+  const value = record.anonymization_mode;
+  if (value === undefined) return undefined;
+  if (value === "aggregated_alias" || value === "pseudonymized" || value === "not_applicable") return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_anonymization_mode" });
+}
+
+function requireProcessMiningSchemaMapping(
+  record: Readonly<Record<string, unknown>>,
+  sourceType: MinimalProcessMiningImport["source_type"],
+): Readonly<Record<string, unknown>> {
+  const mapping = requireRecord(record, "schema_mapping");
+  const requiredKeys = sourceType === "task_mining"
+    ? ["task_name", "application_alias", "timestamp"]
+    : ["case_id", "activity", "timestamp"];
+  for (const keyName of requiredKeys) {
+    if (typeof mapping[keyName] !== "string" || mapping[keyName].length === 0) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "schema_mapping_required_key_missing", key: keyName });
+    }
+  }
+  return mapping;
+}
+
+function assertAutomationIdeaImportLineage(
+  tenantId: string,
+  source: MinimalAutomationIdea["source"],
+  sourceImportId: string | null,
+  sourceItemRef: string | null,
+  sourceLineage: Readonly<Record<string, unknown>>,
+  imports: ReadonlyMap<string, MinimalProcessMiningImport>,
+): void {
+  const hasLineage = Object.keys(sourceLineage).length > 0;
+  if (source === "manual" && (sourceImportId !== null || sourceItemRef !== null || hasLineage)) {
+    throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "manual_source_must_not_have_import_lineage" });
+  }
+  if ((source === "process_mining" || source === "task_mining") && (sourceImportId === null || sourceItemRef === null || !hasLineage)) {
+    throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "import_lineage_required_for_mining_source" });
+  }
+  if (source === "imported") {
+    const hasAnyImportLineage = sourceImportId !== null || sourceItemRef !== null || hasLineage;
+    const hasCompleteImportLineage = sourceImportId !== null && sourceItemRef !== null && hasLineage;
+    if (hasAnyImportLineage && !hasCompleteImportLineage) {
+      throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "imported_lineage_incomplete" });
+    }
+  }
+  if (sourceImportId === null) return;
+
+  const sourceImport = imports.get(key(tenantId, sourceImportId));
+  if (sourceImport === undefined) throw new ApiResponseException("RESOURCE_NOT_FOUND", { reason: "source_import_not_found" });
+  if (sourceImport.status === "blocked") throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "source_import_blocked" });
+  if (source === "process_mining" && sourceImport.source_type !== "process_mining") {
+    throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "source_import_type_mismatch" });
+  }
+  if (source === "task_mining" && sourceImport.source_type !== "task_mining") {
+    throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "source_import_type_mismatch" });
+  }
+  if (source === "imported" && sourceImport.source_type !== "monitoring_export" && sourceImport.source_type !== "api_import") {
+    throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "source_import_type_mismatch" });
+  }
 }
 
 function optionalAutomationPriority(
@@ -3167,6 +3348,18 @@ function optionalPositiveInteger(record: Readonly<Record<string, unknown>>, keyN
   if (value === undefined) return undefined;
   if (typeof value === "number" && Number.isInteger(value) && value >= 1) return value;
   throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_positive_integer", key: keyName });
+}
+
+function requirePositiveInteger(record: Readonly<Record<string, unknown>>, keyName: string): number {
+  const value = optionalPositiveInteger(record, keyName);
+  if (value !== undefined) return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "missing_required_positive_integer", key: keyName });
+}
+
+function requireNonNegativeInteger(record: Readonly<Record<string, unknown>>, keyName: string): number {
+  const value = record[keyName];
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "missing_required_non_negative_integer", key: keyName });
 }
 
 function scenarioIdFromVersionId(scenarioVersionId: string): string {

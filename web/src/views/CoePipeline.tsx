@@ -10,6 +10,9 @@ import {
   type AutomationIdeaPriority,
   type AutomationIdeaSource,
   type AutomationIdeaStage,
+  type ProcessMiningImportItem,
+  type ProcessMiningImportSourceType,
+  type ProcessMiningImportStatus,
   type RoiActualEvidence,
   type RoiEstimate,
   type RunTriggerItem,
@@ -23,6 +26,7 @@ import { navigate, useHashParam } from "../router";
 const STAGES: readonly AutomationIdeaStage[] = ["intake", "assess", "approved", "build", "operate", "rejected", "archived"];
 const PRIORITIES: readonly AutomationIdeaPriority[] = ["low", "medium", "high", "critical"];
 const SOURCES: readonly AutomationIdeaSource[] = ["manual", "process_mining", "task_mining", "imported"];
+const PROCESS_IMPORT_SOURCE_TYPES: readonly ProcessMiningImportSourceType[] = ["process_mining", "task_mining", "monitoring_export", "api_import"];
 const ADOPTION_EVIDENCE_TYPES: readonly AutomationAdoptionEvidenceType[] = [
   "pilot_charter_signoff",
   "raci_signoff",
@@ -52,6 +56,19 @@ const SOURCE_LABEL: Record<AutomationIdeaSource, string> = {
   process_mining: "프로세스 분석 발굴",
   task_mining: "작업 분석 발굴",
   imported: "외부 후보 등록",
+};
+
+const PROCESS_IMPORT_SOURCE_LABEL: Record<ProcessMiningImportSourceType, string> = {
+  process_mining: "Process mining export",
+  task_mining: "Task mining export",
+  monitoring_export: "Monitoring export",
+  api_import: "API import result",
+};
+
+const PROCESS_IMPORT_STATUS_LABEL: Record<ProcessMiningImportStatus, string> = {
+  received: "Received",
+  processed: "Processed",
+  blocked: "Blocked",
 };
 
 const TRIGGER_STATUS_LABEL: Record<RunTriggerItem["status"], string> = {
@@ -274,6 +291,18 @@ interface AdoptionEvidenceFormState {
   summary: string;
 }
 
+interface ProcessMiningImportFormState {
+  source_type: ProcessMiningImportSourceType;
+  source_system: string;
+  source_owner_ref: string;
+  schema_version: string;
+  import_evidence_ref: string;
+  lineage_ref: string;
+  row_count: string;
+  candidate_count: string;
+  import_summary: string;
+}
+
 async function readRoi(api: ReturnType<typeof useApiClient>, ideaId: string): Promise<RoiEstimate | null> {
   try {
     return await api.getRoiEstimate(ideaId);
@@ -307,6 +336,20 @@ function adoptionEvidenceDefaults(): AdoptionEvidenceFormState {
   };
 }
 
+function processMiningImportDefaults(): ProcessMiningImportFormState {
+  return {
+    source_type: "process_mining",
+    source_system: "celonis-export",
+    source_owner_ref: "group:process-owner",
+    schema_version: "2026-06",
+    import_evidence_ref: "artifact:pm-import-1",
+    lineage_ref: "lineage:pm-import-1",
+    row_count: "120",
+    candidate_count: "4",
+    import_summary: "Aggregated process mining export from customer-owned monitoring.",
+  };
+}
+
 function dateOnly(value: Date): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -334,6 +377,44 @@ function adoptionEvidenceValidationMessage(input: AdoptionEvidenceFormState): st
   if (input.evidence_ref.trim().length === 0) return "Pilot evidence ref is required.";
   if (input.summary.trim().length === 0) return "Pilot evidence summary is required.";
   return null;
+}
+
+function processImportValidationMessage(input: ProcessMiningImportFormState): string | null {
+  if (input.source_system.trim().length === 0) return "Source system is required.";
+  if (input.source_owner_ref.trim().length === 0) return "Source owner is required.";
+  if (input.schema_version.trim().length === 0) return "Schema version is required.";
+  if (input.import_evidence_ref.trim().length === 0) return "Import evidence ref is required.";
+  if (input.lineage_ref.trim().length === 0) return "Lineage ref is required.";
+  const rowCount = Number(input.row_count);
+  if (!Number.isInteger(rowCount) || rowCount < 1) return "Row count must be at least 1.";
+  const candidateCount = Number(input.candidate_count);
+  if (!Number.isInteger(candidateCount) || candidateCount < 0 || candidateCount > rowCount) return "Candidate count must be 0 through row count.";
+  if (input.import_summary.trim().length === 0) return "Import summary is required.";
+  return null;
+}
+
+function schemaMappingForSource(sourceType: ProcessMiningImportSourceType): Readonly<Record<string, unknown>> {
+  if (sourceType === "task_mining") {
+    return { task_name: "task_alias", application_alias: "application_alias", timestamp: "event_at" };
+  }
+  return { case_id: "case_alias", activity: "activity_name", timestamp: "event_at" };
+}
+
+function ideaSourceRequiresImport(source: AutomationIdeaSource): boolean {
+  return source === "process_mining" || source === "task_mining" || source === "imported";
+}
+
+function importMatchesIdeaSource(source: AutomationIdeaSource, item: ProcessMiningImportItem): boolean {
+  if (source === "process_mining") return item.source_type === "process_mining";
+  if (source === "task_mining") return item.source_type === "task_mining";
+  if (source === "imported") return item.source_type === "monitoring_export" || item.source_type === "api_import";
+  return false;
+}
+
+function importStatusTone(status: ProcessMiningImportStatus): string {
+  if (status === "blocked") return "red";
+  if (status === "processed") return "green";
+  return "blue";
 }
 
 function appendUniqueIdeas(
@@ -369,6 +450,9 @@ export function CoePipelineView(): JSX.Element {
   const [source, setSource] = useState<AutomationIdeaSource>("manual");
   const [priority, setPriority] = useState<AutomationIdeaPriority>("high");
   const [score, setScore] = useState("82");
+  const [processImportInput, setProcessImportInput] = useState<ProcessMiningImportFormState>(() => processMiningImportDefaults());
+  const [selectedImportId, setSelectedImportId] = useState("");
+  const [sourceItemRef, setSourceItemRef] = useState("candidate:vendor-status");
   const [scenarioId, setScenarioId] = useState("");
   const [appliedScenarioParam, setAppliedScenarioParam] = useState<string | null>(null);
   const [triggerId, setTriggerId] = useState("");
@@ -399,6 +483,11 @@ export function CoePipelineView(): JSX.Element {
     }),
     refetchInterval: 10_000,
   });
+  const processImports = useQuery({
+    queryKey: ["process-mining-imports"],
+    queryFn: () => api.listProcessMiningImports({ limit: 50 }),
+    refetchInterval: 30_000,
+  });
   const scenarios = useQuery({ queryKey: ["scenarios"], queryFn: () => api.listScenarios({ limit: 50 }) });
   const triggers = useQuery({ queryKey: ["run-triggers"], queryFn: () => api.listRunTriggers({ limit: 50 }) });
   const scenarioItems = scenarios.data?.items ?? [];
@@ -411,6 +500,15 @@ export function CoePipelineView(): JSX.Element {
   const selected = useMemo(
     () => ideaItems.find((item) => item.idea_id === selectedId) ?? ideaItems[0] ?? null,
     [ideaItems, selectedId],
+  );
+  const processImportItems = processImports.data?.items ?? [];
+  const eligibleImports = useMemo(
+    () => processImportItems.filter((item) => item.status !== "blocked" && importMatchesIdeaSource(source, item)),
+    [processImportItems, source],
+  );
+  const selectedSourceImport = useMemo(
+    () => eligibleImports.find((item) => item.import_id === selectedImportId) ?? eligibleImports[0] ?? null,
+    [eligibleImports, selectedImportId],
   );
   const canManageIdeas = can("automation_idea.manage");
   const canApproveIdeas = can("automation_idea.approve");
@@ -455,6 +553,16 @@ export function CoePipelineView(): JSX.Element {
         : appendUniqueIdeas(current, ideas.data.items),
     );
   }, [ideaCursor, ideas.data]);
+
+  useEffect(() => {
+    if (!ideaSourceRequiresImport(source)) {
+      if (selectedImportId.length > 0) setSelectedImportId("");
+      return;
+    }
+    if (selectedSourceImport !== null && selectedSourceImport.import_id !== selectedImportId) {
+      setSelectedImportId(selectedSourceImport.import_id);
+    }
+  }, [selectedImportId, selectedSourceImport, source]);
 
   useEffect(() => {
     if (selected === null) {
@@ -532,7 +640,28 @@ export function CoePipelineView(): JSX.Element {
   const createIdea = useMutation({
     mutationFn: () =>
       api.createAutomationIdea(
-        { title, description, business_owner: owner, department, source, priority, score: Number(score) },
+        {
+          title,
+          description,
+          business_owner: owner,
+          department,
+          source,
+          priority,
+          score: Number(score),
+          ...(selectedSourceImport !== null && ideaSourceRequiresImport(source)
+            ? {
+              source_import_id: selectedSourceImport.import_id,
+              source_item_ref: sourceItemRef.trim(),
+              source_lineage: {
+                source_system: selectedSourceImport.source_system,
+                source_owner_ref: selectedSourceImport.source_owner_ref,
+                schema_version: selectedSourceImport.schema_version,
+                import_evidence_ref: selectedSourceImport.import_evidence_ref,
+                lineage_ref: selectedSourceImport.lineage_ref,
+              },
+            }
+            : {}),
+        },
         idempotencyKey("automation-idea"),
       ),
     onSuccess: async (idea) => {
@@ -541,6 +670,30 @@ export function CoePipelineView(): JSX.Element {
       setIdeaItems([]);
       setSelectedId(idea.idea_id);
       await queryClient.invalidateQueries({ queryKey: ["automation-ideas"] });
+    },
+  });
+
+  const createProcessImport = useMutation({
+    mutationFn: () =>
+      api.createProcessMiningImport(
+        {
+          source_type: processImportInput.source_type,
+          source_system: processImportInput.source_system.trim(),
+          source_owner_ref: processImportInput.source_owner_ref.trim(),
+          schema_version: processImportInput.schema_version.trim(),
+          import_evidence_ref: processImportInput.import_evidence_ref.trim(),
+          lineage_ref: processImportInput.lineage_ref.trim(),
+          row_count: Number(processImportInput.row_count),
+          candidate_count: Number(processImportInput.candidate_count),
+          anonymization_mode: "aggregated_alias",
+          schema_mapping: schemaMappingForSource(processImportInput.source_type),
+          import_summary: processImportInput.import_summary.trim(),
+        },
+        idempotencyKey("process-mining-import"),
+      ),
+    onSuccess: async (item) => {
+      setSelectedImportId(item.import_id);
+      await queryClient.invalidateQueries({ queryKey: ["process-mining-imports"] });
     },
   });
 
@@ -641,6 +794,11 @@ export function CoePipelineView(): JSX.Element {
   const loadedMetricHint = hasMoreIdeas ? "불러온 범위 기준" : "전체 필터 결과";
   const ideaPageLoading = ideas.isLoading && ideaCursor === null;
   const ideaPageFetchingMore = ideas.isFetching && ideaCursor !== null;
+  const importInvalidReason = processImportValidationMessage(processImportInput);
+  const requiresImportLineage = ideaSourceRequiresImport(source);
+  const canCreateIdea = canManageIdeas
+    && !createIdea.isPending
+    && (!requiresImportLineage || (selectedSourceImport !== null && sourceItemRef.trim().length > 0));
 
   const roiInvalidReason = roiValidationMessage(roiInput);
   const canSaveRoi = canManageIdeas && selected !== null && roiInvalidReason === null && !saveRoi.isPending;
@@ -717,6 +875,28 @@ export function CoePipelineView(): JSX.Element {
               {SOURCES.map((value) => <option key={value} value={value}>{SOURCE_LABEL[value]}</option>)}
             </select>
           </label>
+          {requiresImportLineage && (
+            <>
+              <label className="field">
+                <span>Source import</span>
+                <select value={selectedSourceImport?.import_id ?? ""} onChange={(event) => setSelectedImportId(event.target.value)}>
+                  {eligibleImports.length === 0 ? (
+                    <option value="">No usable import</option>
+                  ) : (
+                    eligibleImports.map((item) => (
+                      <option key={item.import_id} value={item.import_id}>
+                        {PROCESS_IMPORT_SOURCE_LABEL[item.source_type]} · {item.source_system} · {item.schema_version}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+              <label className="field">
+                <span>Source item ref</span>
+                <input value={sourceItemRef} onChange={(event) => setSourceItemRef(event.target.value)} />
+              </label>
+            </>
+          )}
           <label className="field">
             <span>우선순위</span>
             <select value={priority} onChange={(event) => setPriority(event.target.value as AutomationIdeaPriority)}>
@@ -733,13 +913,107 @@ export function CoePipelineView(): JSX.Element {
           </label>
         </div>
         <div className="inline-actions coe-actions">
-          <button className="btn primary" type="button" onClick={() => createIdea.mutate()} disabled={!canManageIdeas || createIdea.isPending}>
+          <button className="btn primary" type="button" onClick={() => createIdea.mutate()} disabled={!canCreateIdea}>
             {createIdea.isPending ? "등록 중" : "후보 등록"}
           </button>
+          {requiresImportLineage && selectedSourceImport === null && <span className="badge amber">Import lineage required</span>}
           <button className="btn" type="button" onClick={() => navigate("scenarioStudio")}>자동화 설계안 만들기</button>
           <button className="btn" type="button" onClick={() => navigate("automationOps")}>운영 예약 만들기</button>
           {createIdea.isError && <span className="badge red">등록 실패</span>}
         </div>
+      </section>
+
+      <section className="panel coe-imports" aria-label="Process and task mining imports">
+        <div className="panel-head">
+          <h2>Import lineage</h2>
+          <span className="badge blue">{processImportItems.length} sources</span>
+        </div>
+        <div className="form-grid coe-form">
+          <label className="field">
+            <span>Import type</span>
+            <select
+              value={processImportInput.source_type}
+              onChange={(event) =>
+                setProcessImportInput({ ...processImportInput, source_type: event.target.value as ProcessMiningImportSourceType })}
+            >
+              {PROCESS_IMPORT_SOURCE_TYPES.map((value) => (
+                <option key={value} value={value}>{PROCESS_IMPORT_SOURCE_LABEL[value]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Source system</span>
+            <input value={processImportInput.source_system} onChange={(event) => setProcessImportInput({ ...processImportInput, source_system: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Source owner</span>
+            <input value={processImportInput.source_owner_ref} onChange={(event) => setProcessImportInput({ ...processImportInput, source_owner_ref: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Schema version</span>
+            <input value={processImportInput.schema_version} onChange={(event) => setProcessImportInput({ ...processImportInput, schema_version: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Evidence ref</span>
+            <input value={processImportInput.import_evidence_ref} onChange={(event) => setProcessImportInput({ ...processImportInput, import_evidence_ref: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Lineage ref</span>
+            <input value={processImportInput.lineage_ref} onChange={(event) => setProcessImportInput({ ...processImportInput, lineage_ref: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Rows</span>
+            <input type="number" min={1} value={processImportInput.row_count} onChange={(event) => setProcessImportInput({ ...processImportInput, row_count: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Candidates</span>
+            <input type="number" min={0} value={processImportInput.candidate_count} onChange={(event) => setProcessImportInput({ ...processImportInput, candidate_count: event.target.value })} />
+          </label>
+          <label className="field coe-description">
+            <span>Summary</span>
+            <textarea value={processImportInput.import_summary} onChange={(event) => setProcessImportInput({ ...processImportInput, import_summary: event.target.value })} rows={2} />
+          </label>
+        </div>
+        <div className="inline-actions coe-actions">
+          <button
+            className="btn"
+            type="button"
+            onClick={() => importInvalidReason === null && createProcessImport.mutate()}
+            disabled={!canManageIdeas || importInvalidReason !== null || createProcessImport.isPending}
+          >
+            {createProcessImport.isPending ? "Registering" : "Register import"}
+          </button>
+          {importInvalidReason !== null && <span className="badge red" role="alert">{importInvalidReason}</span>}
+          {createProcessImport.isError && <span className="badge red">Import rejected</span>}
+        </div>
+        {processImports.isError ? (
+          <ErrorState message="Import lineage could not be loaded." onRetry={() => void processImports.refetch()} />
+        ) : (
+          <div className="coe-priority-list" aria-label="Import lineage list">
+            {processImportItems.length === 0 ? (
+              <p className="subtle">No import lineage registered.</p>
+            ) : (
+              processImportItems.slice(0, 4).map((item) => (
+                <button
+                  key={item.import_id}
+                  className="coe-priority-item"
+                  type="button"
+                  onClick={() => {
+                    setSource(item.source_type === "process_mining" || item.source_type === "task_mining" ? item.source_type : "imported");
+                    setSelectedImportId(item.import_id);
+                  }}
+                >
+                  <span className={`badge ${importStatusTone(item.status)}`}>{PROCESS_IMPORT_STATUS_LABEL[item.status]}</span>
+                  <span>
+                    <strong>{item.source_system}</strong>
+                    <small>{PROCESS_IMPORT_SOURCE_LABEL[item.source_type]} · {item.source_owner_ref} · {item.schema_version}</small>
+                  </span>
+                  <span className="mono">{item.candidate_count}/{item.row_count}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
       </section>
 
       <section className="panel coe-filters" aria-label="자동화 후보 필터와 우선순위">
@@ -867,6 +1141,8 @@ export function CoePipelineView(): JSX.Element {
                 <div className="inline-facts">
                   <span className="badge blue">{PRIORITY_LABEL[selected.priority]}</span>
                   <span className="badge muted">{SOURCE_LABEL[selected.source]}</span>
+                  {selected.source_import_id !== null && <span className="badge green">Import lineage</span>}
+                  {selected.source_item_ref !== null && <span className="badge muted">{selected.source_item_ref}</span>}
                   <span className="badge muted">우선순위 점수 {selected.score}</span>
                   <span className="badge muted">{selected.department}</span>
                 </div>
