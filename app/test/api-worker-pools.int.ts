@@ -104,6 +104,7 @@ async function main(): Promise<void> {
     const setup = await pool.connect();
     try {
       await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+      await setup.query(`DROP SCHEMA IF EXISTS graphile_worker CASCADE`);
       await setup.query(`CREATE SCHEMA ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));

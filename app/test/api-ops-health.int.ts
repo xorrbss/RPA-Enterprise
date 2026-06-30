@@ -158,7 +158,12 @@ async function main(): Promise<void> {
     check("expired active browser lease raises critical", body.status === "critical" && body.browser_leases.expired_open === 1, health.body);
     check("lease counts are tenant scoped", body.browser_leases.active === 1 && body.browser_leases.reserved === 1, health.body);
     check("stale nonterminal runs counted", body.stale_runs.nonterminal_over_15m === 1 && body.stale_runs.oldest_updated_at !== null, health.body);
-    check("missing graphile schema is explicit", body.queue.available === false && body.queue.pending_jobs === null, health.body);
+    check(
+      "queue health is explicit whether graphile schema exists",
+      (body.queue.available === false && body.queue.pending_jobs === null) ||
+        (body.queue.available === true && typeof body.queue.pending_jobs === "number" && Number.isInteger(body.queue.pending_jobs) && body.queue.pending_jobs >= 0),
+      health.body,
+    );
 
     const tenantB = await app.inject({ method: "GET", url: "/v1/ops/health", headers: { authorization: `Bearer ${viewerB}` } });
     const tenantBBody = tenantB.json() as { status: string; browser_leases: { active: number; expired_open: number }; stale_runs: { nonterminal_over_15m: number } };

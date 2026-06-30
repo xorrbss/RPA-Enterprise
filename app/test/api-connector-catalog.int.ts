@@ -6,6 +6,7 @@
  */
 import { SignJWT } from "jose";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
@@ -17,7 +18,7 @@ import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
 const TENANT_A = "00000000-0000-4000-8000-0000000000a1";
-const ROOT = `${process.cwd()}/`;
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "api_connector_catalog_int";
 const SECRET = new TextEncoder().encode("connector-catalog-int-secret-do-not-use-in-prod-0123456789");
 
