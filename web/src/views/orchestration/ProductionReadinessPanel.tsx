@@ -213,7 +213,7 @@ export function ProductionReadinessPanel({
         />
         <ReadinessTile
           title="감사 검증"
-          value={auditVerifier?.latest_status ?? "-"}
+          value={auditVerifierStatusLabel(auditVerifier?.latest_status)}
           detail={latestAuditCompletedAt !== null ? formatDateTime(latestAuditCompletedAt) : "최신 증빙 없음"}
           tone={auditVerifierFresh ? "green" : "amber"}
         />
@@ -223,8 +223,8 @@ export function ProductionReadinessPanel({
           <li key={gate.gate_id}>
             <span className={`badge ${gateTone(gate.status)}`}>{gateStatusLabel(gate.status)}</span>
             <div>
-              <strong>{gate.label}</strong>
-              <span className="subtle">{gate.reason_code ?? gate.detail}</span>
+              <strong>{readinessGateLabel(gate)}</strong>
+              <span className="subtle">{readinessGateMessage(gate)}</span>
             </div>
           </li>
         ))}
@@ -344,36 +344,36 @@ function ExternalAlertEvidenceRecorder({
       </div>
       <div className="production-readiness-record-grid">
         <label>
-          Alert evidence ref
-          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="ticket:OPS-123" />
+          알림 증빙 참조
+          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="증빙:OPS-123" />
         </label>
         <label>
-          Alert evidence summary
-          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Provider delivered the controlled-prod drill alert" />
+          알림 증빙 요약
+          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="제공자가 리허설 알림 전달을 완료했습니다." />
         </label>
         <label>
-          Notification channel
+          알림 채널
           <select value={channel} onChange={(event) => setChannel(event.target.value as ExternalAlertEvidenceRecordDraft["channel"])}>
-            <option value="webhook">Webhook</option>
+            <option value="webhook">웹훅</option>
             <option value="teams">Teams</option>
             <option value="slack">Slack</option>
-            <option value="email">Email</option>
+            <option value="email">이메일</option>
           </select>
         </label>
         <label>
-          Provider alias
+          제공자 별칭
           <input value={providerAlias} onChange={(event) => setProviderAlias(event.target.value)} placeholder="webhook-primary" />
         </label>
         <label>
-          Receipt id
-          <input value={receiptId} onChange={(event) => setReceiptId(event.target.value)} placeholder="receipt-123" />
+          접수 번호
+          <input value={receiptId} onChange={(event) => setReceiptId(event.target.value)} placeholder="전달-접수-123" />
         </label>
         <label>
-          Receipt at
+          접수 시각
           <input value={receiptAt} onChange={(event) => setReceiptAt(event.target.value)} placeholder="2026-06-29T00:05:30.000Z" />
         </label>
         <label>
-          Alert evidence expires on
+          알림 증빙 만료일
           <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
         </label>
       </div>
@@ -442,35 +442,35 @@ function SloEvidenceRecorder({
       </div>
       <div className="production-readiness-record-grid">
         <label>
-          Evidence ref
-          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="ticket:SRE-456" />
+          SLO 증빙 참조
+          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="증빙:SRE-456" />
         </label>
         <label>
-          Summary
-          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="SLO and on-call sign-off approved" />
+          SLO 증빙 요약
+          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="SLO와 당직 승인이 완료되었습니다." />
         </label>
         <label>
-          SLO dashboard
+          SLO 대시보드
           <input value={sloDashboard} onChange={(event) => setSloDashboard(event.target.value)} placeholder="grafana-folder-rpa" />
         </label>
         <label>
-          Severity model
+          심각도 모델
           <input value={severityModel} onChange={(event) => setSeverityModel(event.target.value)} placeholder="sev1-sev4" />
         </label>
         <label>
-          On-call rota
+          당직 로테이션
           <input value={oncallRota} onChange={(event) => setOncallRota(event.target.value)} placeholder="primary-secondary" />
         </label>
         <label>
-          RACI ref
+          RACI 참조
           <input value={raciRef} onChange={(event) => setRaciRef(event.target.value)} placeholder="raci:SRE-RPA" />
         </label>
         <label>
-          Support hours
+          지원 시간
           <input value={supportHours} onChange={(event) => setSupportHours(event.target.value)} placeholder="24x7" />
         </label>
         <label>
-          Expires on
+          SLO 증빙 만료일
           <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
         </label>
       </div>
@@ -544,39 +544,39 @@ function SupportTrainingEvidenceRecorder({
       </div>
       <div className="production-readiness-record-grid">
         <label>
-          Support evidence ref
-          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="ticket:TRAIN-123" />
+          지원 증빙 참조
+          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="증빙:TRAIN-123" />
         </label>
         <label>
-          Support summary
-          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Support model and training completion approved" />
+          지원 증빙 요약
+          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="지원 모델과 교육 완료가 승인되었습니다." />
         </label>
         <label>
-          Support model ref
+          지원 모델 참조
           <input value={supportModelRef} onChange={(event) => setSupportModelRef(event.target.value)} placeholder="support-model:L1-L3" />
         </label>
         <label>
-          Training completion ref
+          교육 완료 참조
           <input value={trainingCompletionRef} onChange={(event) => setTrainingCompletionRef(event.target.value)} placeholder="training:completion-2026-06" />
         </label>
         <label>
-          Trained role count
+          교육 완료 역할 수
           <input type="number" min="1" step="1" value={trainedRoleCount} onChange={(event) => setTrainedRoleCount(event.target.value)} placeholder="3" />
         </label>
         <label>
-          Trained user count
+          교육 완료 사용자 수
           <input type="number" min="1" step="1" value={trainedUserCount} onChange={(event) => setTrainedUserCount(event.target.value)} placeholder="18" />
         </label>
         <label>
-          Coverage percent
+          교육 이수율
           <input type="number" min="1" max="100" step="0.1" value={coveragePercent} onChange={(event) => setCoveragePercent(event.target.value)} placeholder="95" />
         </label>
         <label>
-          Completed at
+          교육 완료 시각
           <input value={completedAt} onChange={(event) => setCompletedAt(event.target.value)} placeholder="2026-06-29T00:45:00.000Z" />
         </label>
         <label>
-          Support training expires on
+          지원·교육 증빙 만료일
           <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
         </label>
       </div>
@@ -643,38 +643,38 @@ function ObservabilityEvidenceRecorder({
       </div>
       <div className="production-readiness-record-grid">
         <label>
-          Telemetry evidence ref
-          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="ticket:OBS-124" />
+          관측성 증빙 참조
+          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="증빙:OBS-124" />
         </label>
         <label>
-          Telemetry summary
-          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="OTLP collector, dashboard, and alert route approved" />
+          관측성 증빙 요약
+          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="수집기, 대시보드, 알림 경로가 승인되었습니다." />
         </label>
         <label>
-          Telemetry exporter
+          텔레메트리 방식
           <select value={exporter} onChange={(event) => setExporter(event.target.value as ObservabilityEvidenceRecordDraft["exporter"])}>
             <option value="otlp">OTLP</option>
             <option value="prometheus">Prometheus</option>
           </select>
         </label>
         <label>
-          Collector ref
+          수집기 참조
           <input value={collectorRef} onChange={(event) => setCollectorRef(event.target.value)} placeholder="otel-collector:rpa-prod" />
         </label>
         <label>
-          Dashboard ref
+          대시보드 참조
           <input value={dashboardRef} onChange={(event) => setDashboardRef(event.target.value)} placeholder="grafana-folder-rpa" />
         </label>
         <label>
-          Alert route ref
+          알림 경로 참조
           <input value={alertRouteRef} onChange={(event) => setAlertRouteRef(event.target.value)} placeholder="alert-route:rpa-sev" />
         </label>
         <label>
-          Sampled at
+          샘플링 시각
           <input value={sampledAt} onChange={(event) => setSampledAt(event.target.value)} placeholder="2026-06-29T00:16:30.000Z" />
         </label>
         <label>
-          Telemetry evidence expires on
+          관측성 증빙 만료일
           <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
         </label>
       </div>
@@ -744,35 +744,35 @@ function BackupEvidenceRecorder({
       </div>
       <div className="production-readiness-record-grid">
         <label>
-          Backup evidence ref
-          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="drill:PITR-2026-06-29" />
+          백업 증빙 참조
+          <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="복구리허설:PITR-2026-06-29" />
         </label>
         <label>
-          Backup summary
-          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="PITR restore completed within target" />
+          백업 증빙 요약
+          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="PITR 복구가 목표 시간 안에 완료되었습니다." />
         </label>
         <label>
-          Backup policy ref
+          백업 정책 참조
           <input value={backupPolicyRef} onChange={(event) => setBackupPolicyRef(event.target.value)} placeholder="backup-policy:managed-pg-prod" />
         </label>
         <label>
-          Restore scope
+          복구 범위
           <input value={restoreScope} onChange={(event) => setRestoreScope(event.target.value)} placeholder="tenant-a-control-plane" />
         </label>
         <label>
-          Restore completed at
+          복구 완료 시각
           <input value={restoreCompletedAt} onChange={(event) => setRestoreCompletedAt(event.target.value)} placeholder="2026-06-29T00:30:00.000Z" />
         </label>
         <label>
-          RTO minutes
+          목표 복구 시간(분)
           <input type="number" min="1" max="120" value={rtoMinutes} onChange={(event) => setRtoMinutes(event.target.value)} placeholder="20" />
         </label>
         <label>
-          RPO minutes
+          목표 복구 시점(분)
           <input type="number" min="1" max="15" value={rpoMinutes} onChange={(event) => setRpoMinutes(event.target.value)} placeholder="5" />
         </label>
         <label>
-          Backup expires on
+          백업 증빙 만료일
           <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
         </label>
       </div>
@@ -831,15 +831,15 @@ function BackupEvidenceList({
               <span className={`badge ${evidenceStatusTone(item.status)}`}>{evidenceStatusLabel(item.status)}</span>
               <span className="subtle">{formatDateTime(item.evidence_at)}</span>
             </div>
-            <strong>{item.summary}</strong>
-            <span className="subtle">{item.evidence_ref ?? "no evidence ref"}</span>
+            <strong>{evidenceSummaryText(item.summary)}</strong>
+            <span className="subtle">{evidenceRefText(item.evidence_ref)}</span>
             <span className="subtle">
-              policy {metadataText(item.metadata.backup_policy_ref)} / scope {metadataText(item.metadata.restore_scope)}
+              정책 {metadataText(item.metadata.backup_policy_ref)} · 범위 {metadataText(item.metadata.restore_scope)}
             </span>
             <span className="subtle">
-              RTO {metadataText(item.metadata.rto_minutes)}m / RPO {metadataText(item.metadata.rpo_minutes)}m / restored {metadataText(item.metadata.restore_completed_at)}
+              목표 복구 시간 {metadataText(item.metadata.rto_minutes)}분 · 목표 복구 시점 {metadataText(item.metadata.rpo_minutes)}분 · 복구 완료 {metadataText(item.metadata.restore_completed_at)}
             </span>
-            <span className="subtle">expires {item.expires_at === null ? "not set" : formatDateTime(item.expires_at)}</span>
+            <span className="subtle">{expiresText(item.expires_at)}</span>
           </li>
         ))}
       </ul>
@@ -893,15 +893,15 @@ function ExternalAlertEvidenceList({
               <span className={`badge ${evidenceStatusTone(item.status)}`}>{evidenceStatusLabel(item.status)}</span>
               <span className="subtle">{formatDateTime(item.evidence_at)}</span>
             </div>
-            <strong>{item.summary}</strong>
-            <span className="subtle">{item.evidence_ref ?? "no evidence ref"}</span>
+            <strong>{evidenceSummaryText(item.summary)}</strong>
+            <span className="subtle">{evidenceRefText(item.evidence_ref)}</span>
             <span className="subtle">
-              {metadataText(item.metadata.channel)} / {metadataText(item.metadata.provider_alias)} / {metadataText(item.metadata.delivery_status)}
+              채널 {metadataText(item.metadata.channel)} · 제공자 {metadataText(item.metadata.provider_alias)} · 상태 {deliveryStatusText(item.metadata.delivery_status)}
             </span>
             <span className="subtle">
-              receipt {metadataText(item.metadata.receipt_id)} at {metadataText(item.metadata.receipt_at)}
+              접수 번호 {metadataText(item.metadata.receipt_id)} · 접수 시각 {metadataText(item.metadata.receipt_at)}
             </span>
-            <span className="subtle">expires {item.expires_at === null ? "not set" : formatDateTime(item.expires_at)}</span>
+            <span className="subtle">{expiresText(item.expires_at)}</span>
           </li>
         ))}
       </ul>
@@ -955,15 +955,15 @@ function SloEvidenceList({
               <span className={`badge ${evidenceStatusTone(item.status)}`}>{evidenceStatusLabel(item.status)}</span>
               <span className="subtle">{formatDateTime(item.evidence_at)}</span>
             </div>
-            <strong>{item.summary}</strong>
-            <span className="subtle">{item.evidence_ref ?? "no evidence ref"}</span>
+            <strong>{evidenceSummaryText(item.summary)}</strong>
+            <span className="subtle">{evidenceRefText(item.evidence_ref)}</span>
             <span className="subtle">
-              dashboard {metadataText(item.metadata.slo_dashboard)} / severity {metadataText(item.metadata.severity_model)} / rota {metadataText(item.metadata.oncall_rota)}
+              대시보드 {metadataText(item.metadata.slo_dashboard)} · 심각도 {metadataText(item.metadata.severity_model)} · 당직 {metadataText(item.metadata.oncall_rota)}
             </span>
             <span className="subtle">
-              RACI {metadataText(item.metadata.raci_ref)} / support {metadataText(item.metadata.support_hours)}
+              RACI {metadataText(item.metadata.raci_ref)} · 지원 시간 {metadataText(item.metadata.support_hours)}
             </span>
-            <span className="subtle">expires {item.expires_at === null ? "not set" : formatDateTime(item.expires_at)}</span>
+            <span className="subtle">{expiresText(item.expires_at)}</span>
           </li>
         ))}
       </ul>
@@ -1017,16 +1017,16 @@ function SupportTrainingEvidenceList({
               <span className={`badge ${evidenceStatusTone(item.status)}`}>{evidenceStatusLabel(item.status)}</span>
               <span className="subtle">{formatDateTime(item.evidence_at)}</span>
             </div>
-            <strong>{item.summary}</strong>
-            <span className="subtle">{item.evidence_ref ?? "no evidence ref"}</span>
+            <strong>{evidenceSummaryText(item.summary)}</strong>
+            <span className="subtle">{evidenceRefText(item.evidence_ref)}</span>
             <span className="subtle">
-              model {metadataText(item.metadata.support_model_ref)} / training {metadataText(item.metadata.training_completion_ref)}
+              지원 모델 {metadataText(item.metadata.support_model_ref)} · 교육 완료 {metadataText(item.metadata.training_completion_ref)}
             </span>
             <span className="subtle">
-              roles {metadataText(item.metadata.trained_role_count)} / users {metadataText(item.metadata.trained_user_count)} / coverage {metadataPercentText(item.metadata.coverage_percent)}
+              역할 {metadataText(item.metadata.trained_role_count)}개 · 사용자 {metadataText(item.metadata.trained_user_count)}명 · 이수율 {metadataPercentText(item.metadata.coverage_percent)}
             </span>
-            <span className="subtle">completed {metadataText(item.metadata.completed_at)}</span>
-            <span className="subtle">expires {item.expires_at === null ? "not set" : formatDateTime(item.expires_at)}</span>
+            <span className="subtle">완료 시각 {metadataText(item.metadata.completed_at)}</span>
+            <span className="subtle">{expiresText(item.expires_at)}</span>
           </li>
         ))}
       </ul>
@@ -1080,16 +1080,16 @@ function ObservabilityEvidenceList({
               <span className={`badge ${evidenceStatusTone(item.status)}`}>{evidenceStatusLabel(item.status)}</span>
               <span className="subtle">{formatDateTime(item.evidence_at)}</span>
             </div>
-            <strong>{item.summary}</strong>
-            <span className="subtle">{item.evidence_ref ?? "no evidence ref"}</span>
+            <strong>{evidenceSummaryText(item.summary)}</strong>
+            <span className="subtle">{evidenceRefText(item.evidence_ref)}</span>
             <span className="subtle">
-              exporter {metadataText(item.metadata.exporter)} / collector {metadataText(item.metadata.collector_ref)}
+              내보내기 {metadataText(item.metadata.exporter)} · 수집기 {metadataText(item.metadata.collector_ref)}
             </span>
             <span className="subtle">
-              dashboard {metadataText(item.metadata.dashboard_ref)} / alert route {metadataText(item.metadata.alert_route_ref)}
+              대시보드 {metadataText(item.metadata.dashboard_ref)} · 알림 경로 {metadataText(item.metadata.alert_route_ref)}
             </span>
-            <span className="subtle">sampled {metadataText(item.metadata.sampled_at)}</span>
-            <span className="subtle">expires {item.expires_at === null ? "not set" : formatDateTime(item.expires_at)}</span>
+            <span className="subtle">샘플링 {metadataText(item.metadata.sampled_at)}</span>
+            <span className="subtle">{expiresText(item.expires_at)}</span>
           </li>
         ))}
       </ul>
@@ -1145,6 +1145,38 @@ function gateStatusLabel(status: ProductionReadinessGate["status"]): string {
   return "유예";
 }
 
+function readinessGateLabel(gate: ProductionReadinessGate): string {
+  if (gate.gate_id === "database_migrations") return "DB 변경 적용";
+  if (gate.gate_id === "browser_pool_ha") return "브라우저 워커 이중화";
+  if (gate.gate_id === "audit_chain_evidence") return "감사 체인 증빙";
+  if (gate.gate_id === "external_alert_delivery") return "외부 알림 전달";
+  if (gate.gate_id === "managed_backup_restore_drill") return "백업 복구 리허설";
+  if (gate.gate_id === "slo_oncall_signoff") return "SLO·당직 승인";
+  if (gate.gate_id === "support_training_completion") return "지원·교육 완료";
+  if (gate.gate_id === "observability_telemetry_wiring") return "관측성 연결";
+  return gate.label;
+}
+
+function readinessGateMessage(gate: ProductionReadinessGate): string {
+  if (gate.reason_code === "external_delivery_contract_not_open") return "외부 채널 전달 증빙을 추가해야 합니다.";
+  if (gate.reason_code === "owner_controlled_pitr_evidence_missing") return "백업/PITR 복구 리허설 증빙을 추가해야 합니다.";
+  if (gate.reason_code === "slo_oncall_signoff_missing") return "SLO와 당직 승인 증빙을 추가해야 합니다.";
+  if (gate.reason_code === "support_training_completion_missing") return "지원 모델과 교육 완료 증빙을 추가해야 합니다.";
+  if (gate.reason_code === "observability_telemetry_evidence_missing") return "수집기, 대시보드, 알림 경로 증빙을 추가해야 합니다.";
+  if (gate.status !== "pass") return gate.detail;
+  if (gate.gate_id === "database_migrations") return "필수 DB 변경이 적용되어 있습니다.";
+  if (gate.gate_id === "browser_pool_ha") return "브라우저 워커가 이중화되어 있습니다.";
+  if (gate.gate_id === "audit_chain_evidence") return "최근 감사 검증 증빙이 정상입니다.";
+  return gate.detail;
+}
+
+function auditVerifierStatusLabel(status: unknown): string {
+  if (status === "valid") return "정상";
+  if (status === "invalid") return "오류";
+  if (status === "missing") return "증빙 없음";
+  return typeof status === "string" && status.trim().length > 0 ? status : "-";
+}
+
 function evidenceStatusTone(status: ProductionReadinessEvidenceStatus): "green" | "red" {
   return status === "valid" ? "green" : "red";
 }
@@ -1153,15 +1185,40 @@ function evidenceStatusLabel(status: ProductionReadinessEvidenceStatus): string 
   return status === "valid" ? "유효" : "실패";
 }
 
+function evidenceSummaryText(summary: string): string {
+  if (summary === "Provider delivered the controlled-prod alert drill.") return "제공자 알림 전달 리허설이 완료되었습니다.";
+  if (summary === "Managed backup PITR restore completed within controlled-prod target.") return "관리형 백업/PITR 복구 리허설이 목표 시간 안에 완료되었습니다.";
+  if (summary === "SLO dashboard, severity policy, and on-call/RACI sign-off approved.") return "SLO 대시보드, 심각도 정책, 당직/RACI 승인이 완료되었습니다.";
+  if (summary === "Support model and training completion evidence approved.") return "지원 모델과 교육 완료 증빙이 승인되었습니다.";
+  if (summary === "OTLP collector, dashboard, and alert route evidence approved.") return "관측성 수집기·대시보드·알림 경로 증빙이 승인되었습니다.";
+  return summary;
+}
+
+function evidenceRefText(value: string | null): string {
+  return value === null || value.trim().length === 0 ? "증빙 참조 없음" : value;
+}
+
+function deliveryStatusText(value: unknown): string {
+  if (value === "delivered") return "전달됨";
+  if (value === "sent") return "전송됨";
+  if (value === "queued") return "대기";
+  if (value === "failed") return "실패";
+  return metadataText(value);
+}
+
+function expiresText(expiresAt: string | null): string {
+  return expiresAt === null ? "만료일 미설정" : `만료 ${formatDateTime(expiresAt)}`;
+}
+
 function metadataText(value: unknown): string {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "boolean") return String(value);
-  return typeof value === "string" && value.trim().length > 0 ? value : "missing";
+  if (typeof value === "boolean") return value ? "예" : "아니오";
+  return typeof value === "string" && value.trim().length > 0 ? value : "미입력";
 }
 
 function metadataPercentText(value: unknown): string {
   const text = metadataText(value);
-  return text === "missing" ? text : `${text}%`;
+  return text === "미입력" ? text : `${text}%`;
 }
 
 function supportTrainingEvidenceIdempotencyKey(draft: SupportTrainingEvidenceRecordDraft): string {

@@ -1,26 +1,29 @@
+import { lazy, Suspense } from "react";
+
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
 import { TokenGate } from "./components/TokenGate";
 import { useHashRoute, type ViewKey } from "./router";
-import { DashboardView } from "./views/Dashboard";
-import { CoePipelineView } from "./views/CoePipeline";
-import { ConnectorCatalogView } from "./views/ConnectorCatalog";
-import { SiteElementsView } from "./views/SiteElements";
-import { OrchestrationView } from "./views/Orchestration";
-import { DocumentIdpView } from "./views/DocumentIdp";
-import { RunTraceView } from "./views/RunTrace";
-import { WorkitemsView } from "./views/Workitems";
-import { HumanTasksView } from "./views/HumanTasks";
-import { ApprovalInboxView } from "./views/ApprovalInbox";
-import { AuditExplorerView } from "./views/AuditExplorer";
-import { SecurityView } from "./views/Security";
-import { GatewayView } from "./views/Gateway";
-import { ScenariosView } from "./views/Scenarios";
-import { IrValidationView } from "./views/IrValidation";
-import { PlaygroundView } from "./views/Playground";
-import { OpenGateView } from "./views/OpenGate";
-import { IdempotencyView } from "./views/Idempotency";
 import { PlaceholderView } from "./views/Placeholder";
+
+const DashboardView = lazy(() => import("./views/Dashboard").then((module) => ({ default: module.DashboardView })));
+const CoePipelineView = lazy(() => import("./views/CoePipeline").then((module) => ({ default: module.CoePipelineView })));
+const ConnectorCatalogView = lazy(() => import("./views/ConnectorCatalog").then((module) => ({ default: module.ConnectorCatalogView })));
+const SiteElementsView = lazy(() => import("./views/SiteElements").then((module) => ({ default: module.SiteElementsView })));
+const OrchestrationView = lazy(() => import("./views/Orchestration").then((module) => ({ default: module.OrchestrationView })));
+const DocumentIdpView = lazy(() => import("./views/DocumentIdp").then((module) => ({ default: module.DocumentIdpView })));
+const RunTraceView = lazy(() => import("./views/RunTrace").then((module) => ({ default: module.RunTraceView })));
+const WorkitemsView = lazy(() => import("./views/Workitems").then((module) => ({ default: module.WorkitemsView })));
+const HumanTasksView = lazy(() => import("./views/HumanTasks").then((module) => ({ default: module.HumanTasksView })));
+const ApprovalInboxView = lazy(() => import("./views/ApprovalInbox").then((module) => ({ default: module.ApprovalInboxView })));
+const AuditExplorerView = lazy(() => import("./views/AuditExplorer").then((module) => ({ default: module.AuditExplorerView })));
+const SecurityView = lazy(() => import("./views/Security").then((module) => ({ default: module.SecurityView })));
+const GatewayView = lazy(() => import("./views/Gateway").then((module) => ({ default: module.GatewayView })));
+const ScenariosView = lazy(() => import("./views/Scenarios").then((module) => ({ default: module.ScenariosView })));
+const IrValidationView = lazy(() => import("./views/IrValidation").then((module) => ({ default: module.IrValidationView })));
+const PlaygroundView = lazy(() => import("./views/Playground").then((module) => ({ default: module.PlaygroundView })));
+const OpenGateView = lazy(() => import("./views/OpenGate").then((module) => ({ default: module.OpenGateView })));
+const IdempotencyView = lazy(() => import("./views/Idempotency").then((module) => ({ default: module.IdempotencyView })));
 
 // 라우트 → 뷰. read 백엔드가 있는 뷰는 실 연결, 그 외는 정직한 placeholder(D7.2+ 워크플로우 대상).
 function renderView(view: ViewKey): JSX.Element {
@@ -72,7 +75,11 @@ export function App(): JSX.Element {
     <TokenGate>
       <Layout view={view}>
         {/* view 단위 key: 한 화면의 렌더 예외가 셸(내비/탑바)을 백지로 만들지 않고, 화면 이동 시 초기화 */}
-        <ErrorBoundary key={view}>{renderView(view)}</ErrorBoundary>
+        <ErrorBoundary key={view}>
+          <Suspense fallback={<PlaceholderView title="화면 불러오는 중" note="잠시만 기다려 주세요." />}>
+            {renderView(view)}
+          </Suspense>
+        </ErrorBoundary>
       </Layout>
     </TokenGate>
   );

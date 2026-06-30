@@ -77,6 +77,26 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.account-menu { position: relative; display: inline-flex; flex: 0 0 auto; }
+.account-menu-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 8px;
+  width: min(280px, calc(100vw - 28px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.account-menu-popover .subject-chip,
+.account-menu-popover .roles-chip {
+  max-width: 100%;
+}
+.account-menu-logout { justify-content: center; }
 
 .content { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
@@ -903,11 +923,9 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   .sidebar { display: none; }
   .topbar { padding: 12px 14px; flex-wrap: wrap; gap: 10px; }
   .topbar-main { flex: 1 1 220px; }
-  .topbar-actions { flex: 1 1 100%; gap: 8px; flex-wrap: nowrap; overflow: hidden; }
-  .topbar-actions .subject-chip { flex: 1 1 90px; max-width: none; }
-  .topbar-actions .roles-chip,
+  .topbar-actions { flex: 0 0 auto; gap: 8px; flex-wrap: nowrap; margin-left: auto; }
   .topbar-actions .btn { flex: 0 0 auto; }
-  .topbar-actions .freshness { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-actions .freshness { flex: 0 1 auto; min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
   .content { padding: 14px; }
   .panel-head { flex-direction: column; align-items: flex-start; }
   .orchestration-layout, .orchestration-grid, .ops-health-grid, .performance-compact-visuals, .performance-report-grid, .coe-layout, .coe-roi-summary, .coe-filter-grid, .coe-priority-list, .catalog-layout, .mini-table-row { grid-template-columns: 1fr; }
@@ -919,11 +937,8 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   .compact-bar-legend, .model-cost-mini { grid-template-columns: 1fr; }
   .topbar-actions { gap: 6px; }
   .topbar-actions .btn { padding: 7px; }
-  .topbar-action-text,
-  .topbar-actions .subject-chip .subtle { display: none; }
-  .topbar-actions .subject-chip { max-width: 116px; }
-  .topbar-actions .freshness { max-width: 88px; }
-  .topbar-actions .roles-chip .badge { padding: 2px 6px; }
+  .topbar-action-text { display: none; }
+  .topbar-actions .freshness { max-width: 104px; }
 }
 
 /* 말로 설명해 만들기 — 고급 설정(점진적 노출) */

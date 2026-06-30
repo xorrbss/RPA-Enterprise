@@ -29,6 +29,12 @@ const DEFAULT_POLICY: HumanTaskPolicySnapshot = {
 };
 
 const RUN_PRIORITIES: readonly RunPriority[] = ["low", "medium", "high", "critical"];
+const RUN_PRIORITY_LABELS: Record<RunPriority, string> = {
+  low: "낮음",
+  medium: "보통",
+  high: "높음",
+  critical: "긴급",
+};
 
 export function WebAttendedPanel({
   runRequests,
@@ -67,8 +73,8 @@ export function WebAttendedPanel({
   return (
     <div className="ops-column">
       <div className="ops-alert-center-head">
-        <h3>Web Attended</h3>
-        <span className="badge muted">{isLoading ? "Loading" : `${runRequests.length + resumeRequests.length} ledger rows`}</span>
+        <h3>사람 확인 실행</h3>
+        <span className="badge muted">{isLoading ? "확인 중" : `${runRequests.length + resumeRequests.length}건`}</span>
       </div>
       <PolicySummary policy={policy} />
       {canCreate && (
@@ -117,7 +123,7 @@ function WebAttendedRunCreateForm({
   const [model, setModel] = useState("");
   const [priority, setPriority] = useState<RunPriority>("medium");
   const [humanTaskId, setHumanTaskId] = useState("");
-  const [consentSummary, setConsentSummary] = useState("Business owner approved this web-attended launch.");
+  const [consentSummary, setConsentSummary] = useState("업무 담당자가 사람 확인 실행을 승인했습니다.");
   const [consentEvidenceRef, setConsentEvidenceRef] = useState("ticket:RPA-ATT-1001");
   const [inputRefsCsv, setInputRefsCsv] = useState("artifact://web-attended/input-001");
   const [legalHold, setLegalHold] = useState(false);
@@ -131,13 +137,13 @@ function WebAttendedRunCreateForm({
     const humanTask = humanTaskId.trim();
     const selectedModel = model.trim();
     if (scenario.length === 0 || consent.length === 0) {
-      setValidationError("Scenario version and consent summary are required.");
+      setValidationError("자동화 버전 ID와 실행 동의 요약을 입력하세요.");
       return;
     }
     try {
       JSON.parse(paramsJson);
     } catch {
-      setValidationError("Params must be valid JSON.");
+      setValidationError("실행 파라미터는 올바른 JSON이어야 합니다.");
       return;
     }
     setValidationError(null);
@@ -158,52 +164,52 @@ function WebAttendedRunCreateForm({
     <form className="ops-webhook-form" onSubmit={submit}>
       <div className="form-grid ops-webhook-grid">
         <label className="field">
-          Scenario version id
-          <input aria-label="Web Attended scenario version id" value={scenarioVersionId} onChange={(event) => setScenarioVersionId(event.target.value)} />
+          자동화 버전 ID
+          <input aria-label="사람 확인 실행 자동화 버전 ID" value={scenarioVersionId} onChange={(event) => setScenarioVersionId(event.target.value)} />
         </label>
         <label className="field">
-          Priority
-          <select aria-label="Web Attended priority" value={priority} onChange={(event) => setPriority(event.target.value as RunPriority)}>
+          우선순위
+          <select aria-label="사람 확인 실행 우선순위" value={priority} onChange={(event) => setPriority(event.target.value as RunPriority)}>
             {RUN_PRIORITIES.map((item) => (
-              <option key={item} value={item}>{item}</option>
+              <option key={item} value={item}>{RUN_PRIORITY_LABELS[item]}</option>
             ))}
           </select>
         </label>
         <label className="field">
-          Model
-          <input aria-label="Web Attended model" value={model} onChange={(event) => setModel(event.target.value)} />
+          모델
+          <input aria-label="사람 확인 실행 모델" value={model} onChange={(event) => setModel(event.target.value)} />
         </label>
         <label className="field">
-          Human task id
-          <input aria-label="Web Attended human task id" value={humanTaskId} onChange={(event) => setHumanTaskId(event.target.value)} />
+          사람 확인 작업 ID
+          <input aria-label="사람 확인 작업 ID" value={humanTaskId} onChange={(event) => setHumanTaskId(event.target.value)} />
         </label>
         <label className="field ops-webhook-summary">
-          Params JSON
-          <textarea aria-label="Web Attended params JSON" rows={4} value={paramsJson} onChange={(event) => setParamsJson(event.target.value)} />
+          실행 파라미터(JSON)
+          <textarea aria-label="사람 확인 실행 파라미터 JSON" rows={4} value={paramsJson} onChange={(event) => setParamsJson(event.target.value)} />
         </label>
         <label className="field ops-webhook-summary">
-          Consent summary
-          <textarea aria-label="Web Attended consent summary" rows={2} value={consentSummary} onChange={(event) => setConsentSummary(event.target.value)} />
+          실행 동의 요약
+          <textarea aria-label="사람 확인 실행 동의 요약" rows={2} value={consentSummary} onChange={(event) => setConsentSummary(event.target.value)} />
         </label>
         <label className="field">
-          Consent evidence ref
-          <input aria-label="Web Attended consent evidence ref" value={consentEvidenceRef} onChange={(event) => setConsentEvidenceRef(event.target.value)} />
+          동의 증빙 참조
+          <input aria-label="사람 확인 실행 동의 증빙 참조" value={consentEvidenceRef} onChange={(event) => setConsentEvidenceRef(event.target.value)} />
         </label>
         <label className="field">
-          Input refs
-          <input aria-label="Web Attended input refs" value={inputRefsCsv} onChange={(event) => setInputRefsCsv(event.target.value)} />
+          입력 증빙 참조
+          <input aria-label="사람 확인 실행 입력 증빙 참조" value={inputRefsCsv} onChange={(event) => setInputRefsCsv(event.target.value)} />
         </label>
       </div>
       <div className="inline-actions">
         <label className="checkbox-inline">
           <input type="checkbox" checked={legalHold} onChange={(event) => setLegalHold(event.target.checked)} />
-          Legal hold
+          법적 보존
         </label>
         <button className="btn" type="submit" disabled={isCreating}>
-          {isCreating ? "Requesting" : "Request run"}
+          {isCreating ? "요청 중" : "실행 요청"}
         </button>
         {validationError !== null && <span className="form-alert red" role="alert">{validationError}</span>}
-        {hasError && <span className="form-alert red" role="alert">Web Attended request failed</span>}
+        {hasError && <span className="form-alert red" role="alert">사람 확인 실행 요청에 실패했습니다.</span>}
       </div>
     </form>
   );
@@ -219,16 +225,16 @@ function WebAttendedRunRequestList({
   if (isError) {
     return (
       <div className="ops-alert-empty" role="status">
-        <strong>Web Attended ledger unavailable</strong>
-        <span className="subtle">Run requests could not be loaded.</span>
+        <strong>실행 요청 장부를 불러오지 못했습니다.</strong>
+        <span className="subtle">실행 요청 목록을 확인할 수 없습니다.</span>
       </div>
     );
   }
   if (requests.length === 0) {
     return (
       <div className="ops-alert-empty" role="status">
-        <strong>No Web Attended requests</strong>
-        <span className="subtle">No request rows match the current tenant.</span>
+        <strong>실행 요청 없음</strong>
+        <span className="subtle">현재 테넌트에 요청 행이 없습니다.</span>
       </div>
     );
   }
@@ -242,9 +248,9 @@ function WebAttendedRunRequestList({
               <span className="subtle">{formatDateTime(request.requested_at)}</span>
             </div>
             <strong>{request.scenario_version_id}</strong>
-            <span className="subtle">run {request.run_id ?? "-"}</span>
+            <span className="subtle">실행 {request.run_id ?? "-"}</span>
             <span className="subtle">{request.consent_summary}</span>
-            {request.consent_evidence_ref !== null && <span className="subtle">evidence {request.consent_evidence_ref}</span>}
+            {request.consent_evidence_ref !== null && <span className="subtle">증빙 {request.consent_evidence_ref}</span>}
           </div>
         </li>
       ))}
@@ -268,8 +274,8 @@ function SuspendedRunList({
   if (runs.length === 0) {
     return (
       <div className="ops-alert-empty" role="status">
-        <strong>No suspended runs</strong>
-        <span className="subtle">Resume queue is empty.</span>
+        <strong>일시 중단 실행 없음</strong>
+        <span className="subtle">재개 대기열이 비어 있습니다.</span>
       </div>
     );
   }
@@ -280,15 +286,15 @@ function SuspendedRunList({
           <div className="ops-delivery-panel-head">
             <div>
               <strong>{run.run_id}</strong>
-              <span className="subtle">{run.current_node ?? "no current node"} / {formatDateTime(run.updated_at ?? run.as_of)}</span>
+              <span className="subtle">{run.current_node ?? "현재 노드 없음"} / {formatDateTime(run.updated_at ?? run.as_of)}</span>
             </div>
             {canResume && (
               <button className="linklike" type="button" disabled={resumingRunId === run.run_id} onClick={() => onResume(run)}>
-                {resumingRunId === run.run_id ? "Resuming" : "Resume"}
+                {resumingRunId === run.run_id ? "재개 중" : "재개"}
               </button>
             )}
           </div>
-          {resumeErrorRunId === run.run_id && <span className="form-alert red" role="alert">Resume failed</span>}
+          {resumeErrorRunId === run.run_id && <span className="form-alert red" role="alert">재개에 실패했습니다.</span>}
         </li>
       ))}
     </ul>
@@ -305,16 +311,16 @@ function RunResumeRequestList({
   if (isError) {
     return (
       <div className="ops-alert-empty" role="status">
-        <strong>Resume ledger unavailable</strong>
-        <span className="subtle">Resume requests could not be loaded.</span>
+        <strong>재개 요청 장부를 불러오지 못했습니다.</strong>
+        <span className="subtle">재개 요청 목록을 확인할 수 없습니다.</span>
       </div>
     );
   }
   if (requests.length === 0) {
     return (
       <div className="ops-alert-empty" role="status">
-        <strong>No resume requests</strong>
-        <span className="subtle">No resume rows match the current tenant.</span>
+        <strong>재개 요청 없음</strong>
+        <span className="subtle">현재 테넌트에 재개 요청 행이 없습니다.</span>
       </div>
     );
   }
@@ -327,8 +333,8 @@ function RunResumeRequestList({
             <span className="subtle">{request.previous_run_status}</span>
           </div>
           <strong>{request.run_id}</strong>
-          <span className="subtle">{request.reason ?? "no reason"} / {formatDateTime(request.requested_at)}</span>
-          {request.human_task_id !== null && <span className="subtle">human task {request.human_task_id}</span>}
+          <span className="subtle">{request.reason ?? "사유 없음"} / {formatDateTime(request.requested_at)}</span>
+          {request.human_task_id !== null && <span className="subtle">사람 확인 작업 {request.human_task_id}</span>}
         </li>
       ))}
     </ul>

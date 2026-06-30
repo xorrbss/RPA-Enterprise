@@ -33,10 +33,10 @@ describe("AI 생성기 예시 프롬프트 칩", () => {
     location.hash = "#scenarioStudio";
   });
 
-  test("칩 클릭 시 자연어 요청 textarea가 예시 문장으로 채워진다", () => {
+  test("칩 클릭 시 자연어 요청 textarea가 예시 문장으로 채워진다", async () => {
     renderApp();
 
-    const textarea = screen.getByRole("textbox", { name: "자연어 요청" }) as HTMLTextAreaElement;
+    const textarea = await screen.findByRole("textbox", { name: "자연어 요청" }) as HTMLTextAreaElement;
     expect(textarea.value).toBe("");
 
     const chip = screen.getByRole("button", { name: "예시 프롬프트 채우기: 결재 처리" });
@@ -49,7 +49,7 @@ describe("AI 생성기 예시 프롬프트 칩", () => {
 
   test("예시 칩 그룹에 접근성 위반이 없다", async () => {
     const container = renderApp();
-    const group = screen.getByRole("group", { name: "예시 프롬프트" });
+    const group = await screen.findByRole("group", { name: "예시 프롬프트" });
     expect(group).toBeInTheDocument();
     const results = await axe(container);
     expect(results.violations).toEqual([]);

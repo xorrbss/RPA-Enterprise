@@ -2,7 +2,7 @@ import {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
   Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow, Stamp,
   CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
-  HelpCircle, LogOut, Menu, Search, X,
+  HelpCircle, LogOut, Menu, Search, UserCircle, X,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
@@ -156,6 +156,29 @@ function SubjectChip(): JSX.Element {
   );
 }
 
+function SearchButton({ onClick }: { onClick: () => void }): JSX.Element {
+  return (
+    <button
+      className="btn palette-trigger"
+      type="button"
+      aria-label="전역 검색"
+      aria-keyshortcuts="Control+K Meta+K"
+      title="전역 검색·화면 이동 (Ctrl/⌘+K)"
+      onClick={onClick}
+    >
+      <Search size={14} aria-hidden="true" /> <span className="topbar-action-text">검색</span>
+    </button>
+  );
+}
+
+function LogoutButton({ className = "btn" }: { className?: string }): JSX.Element {
+  return (
+    <button className={className} type="button" aria-label="로그아웃" title="로그아웃" onClick={clearToken}>
+      <LogOut size={14} aria-hidden="true" /> <span className="topbar-action-text">로그아웃</span>
+    </button>
+  );
+}
+
 export function Layout({ view, children }: { view: ViewKey; children: ReactNode }): JSX.Element {
   const meta = VIEW_META[view];
   const roles = useMemo(() => decodeRoles(localStorage.getItem("rpa.token")), []);
@@ -171,12 +194,14 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
   const helpId = useId();
   const drawerId = useId();
   const drawerTitleId = useId();
+  const accountMenuId = useId();
   // 화면을 바꾸면 이전 화면의 도움말은 닫는다(맥락 불일치 방지).
   useEffect(() => setShowHelp(false), [view]);
   const helpText = meta.helpText ?? meta.subtitle;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const isMobileNav = useMediaQuery(MOBILE_NAV_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -200,7 +225,15 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
 
   useEffect(() => {
     setDrawerOpen(false);
+    setAccountOpen(false);
   }, [view]);
+
+  useEffect(() => {
+    if (!isMobileNav) {
+      setDrawerOpen(false);
+      setAccountOpen(false);
+    }
+  }, [isMobileNav]);
 
   useEffect(() => {
     if (!drawerOpen) return;
@@ -223,6 +256,7 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
 
   function openDrawer(): void {
     restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : mobileMenuButtonRef.current;
+    setAccountOpen(false);
     setDrawerOpen(true);
   }
 
@@ -248,6 +282,12 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
       event.preventDefault();
       first.focus();
     }
+  }
+
+  function onAccountKeyDown(event: ReactKeyboardEvent<HTMLSpanElement>): void {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    setAccountOpen(false);
   }
 
   return (
@@ -297,22 +337,39 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
             )}
           </div>
           <span className="topbar-actions">
-            <SubjectChip />
-            <RolesChip roles={roles} />
-            <Freshness />
-            <button
-              className="btn palette-trigger"
-              type="button"
-              aria-label="전역 검색"
-              aria-keyshortcuts="Control+K Meta+K"
-              title="전역 검색·화면 이동 (Ctrl/⌘+K)"
-              onClick={() => setPaletteOpen(true)}
-            >
-              <Search size={14} aria-hidden="true" /> <span className="topbar-action-text">검색</span>
-            </button>
-            <button className="btn" type="button" aria-label="로그아웃" title="로그아웃" onClick={clearToken}>
-              <LogOut size={14} aria-hidden="true" /> <span className="topbar-action-text">로그아웃</span>
-            </button>
+            {isMobileNav ? (
+              <>
+                <Freshness />
+                <SearchButton onClick={() => setPaletteOpen(true)} />
+                <span className="account-menu" onKeyDown={onAccountKeyDown}>
+                  <button
+                    className="btn icon-btn mobile-account-button"
+                    type="button"
+                    aria-label="계정 메뉴"
+                    aria-expanded={accountOpen}
+                    aria-controls={accountMenuId}
+                    onClick={() => setAccountOpen((current) => !current)}
+                  >
+                    <UserCircle size={16} aria-hidden="true" />
+                  </button>
+                  {accountOpen && (
+                    <div id={accountMenuId} className="account-menu-popover" role="region" aria-label="계정 및 역할">
+                      <SubjectChip />
+                      <RolesChip roles={roles} />
+                      <LogoutButton className="btn account-menu-logout" />
+                    </div>
+                  )}
+                </span>
+              </>
+            ) : (
+              <>
+                <SubjectChip />
+                <RolesChip roles={roles} />
+                <Freshness />
+                <SearchButton onClick={() => setPaletteOpen(true)} />
+                <LogoutButton />
+              </>
+            )}
           </span>
         </header>
         <main className="content">{children}</main>

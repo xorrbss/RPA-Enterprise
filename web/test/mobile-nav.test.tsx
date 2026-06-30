@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -16,21 +16,58 @@ function jwt(roles: readonly string[]): string {
   return `e30.${payload}.sig`;
 }
 
-function installMatchMedia(matches: boolean): void {
+type MediaListener = (event: MediaQueryListEvent) => void;
+
+function installMatchMedia(matches: boolean): { setMatches: (next: boolean) => void } {
+  let currentMatches = matches;
+  const records: Array<{
+    media: string;
+    listeners: Set<MediaListener>;
+    onchange: MediaListener | null;
+  }> = [];
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     writable: true,
-    value: vi.fn().mockImplementation((query: string) => ({
-      matches,
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })),
+    value: vi.fn().mockImplementation((query: string) => {
+      const record: {
+        media: string;
+        listeners: Set<MediaListener>;
+        onchange: MediaListener | null;
+      } = { media: query, listeners: new Set<MediaListener>(), onchange: null };
+      records.push(record);
+      return {
+        get matches() {
+          return currentMatches;
+        },
+        media: query,
+        get onchange() {
+          return record.onchange;
+        },
+        set onchange(listener: MediaListener | null) {
+          record.onchange = listener;
+        },
+        addEventListener: vi.fn((type: string, listener: MediaListener) => {
+          if (type === "change") record.listeners.add(listener);
+        }),
+        removeEventListener: vi.fn((type: string, listener: MediaListener) => {
+          if (type === "change") record.listeners.delete(listener);
+        }),
+        addListener: vi.fn((listener: MediaListener) => record.listeners.add(listener)),
+        removeListener: vi.fn((listener: MediaListener) => record.listeners.delete(listener)),
+        dispatchEvent: vi.fn(() => true),
+      } as unknown as MediaQueryList;
+    }),
   });
+  return {
+    setMatches(next: boolean): void {
+      currentMatches = next;
+      for (const record of records) {
+        const event = { matches: next, media: record.media } as MediaQueryListEvent;
+        record.onchange?.(event);
+        for (const listener of record.listeners) listener(event);
+      }
+    },
+  };
 }
 
 function renderApp(): void {
@@ -75,6 +112,39 @@ describe("mobile drawer navigation", () => {
     expect(screen.queryByRole("dialog", { name: "주 메뉴" })).toBeNull();
   });
 
+  test("mobile folds account and role controls into an account menu", () => {
+    renderApp();
+
+    expect(screen.queryByLabelText("현재 접속 계정 u")).toBeNull();
+    expect(screen.queryByText("운영자")).toBeNull();
+    const account = screen.getByRole("button", { name: "계정 메뉴" });
+    expect(account).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(account);
+
+    expect(account).toHaveAttribute("aria-expanded", "true");
+    const panel = screen.getByRole("region", { name: "계정 및 역할" });
+    expect(within(panel).getByLabelText("현재 접속 계정 u")).toBeInTheDocument();
+    expect(within(panel).getByText("운영자")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
+
+    fireEvent.keyDown(account.parentElement as HTMLElement, { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "계정 및 역할" })).toBeNull();
+    expect(account).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("opening drawer closes the account menu", () => {
+    renderApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
+    expect(screen.getByRole("region", { name: "계정 및 역할" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "메뉴" }));
+
+    expect(screen.queryByRole("region", { name: "계정 및 역할" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "주 메뉴" })).toBeInTheDocument();
+  });
+
   test("drawer opens with role-filtered nav", () => {
     renderApp();
     const menu = screen.getByRole("button", { name: "메뉴" });
@@ -87,6 +157,30 @@ describe("mobile drawer navigation", () => {
     expect(drawerNavItemCount(dialog)).toBe(8);
     expect(within(dialog).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "보안/개인정보" })).toBeNull();
+  });
+
+  test("drawer closes when viewport leaves mobile navigation", async () => {
+    const media = installMatchMedia(true);
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "메뉴" }));
+    expect(screen.getByRole("dialog", { name: "주 메뉴" })).toBeInTheDocument();
+
+    act(() => media.setMatches(false));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "주 메뉴" })).toBeNull());
+    expect(screen.getByRole("navigation", { name: "주 메뉴" })).toBeInTheDocument();
+  });
+
+  test("hidden direct URL renders the view but stays out of the mobile drawer", () => {
+    location.hash = "#idempotency";
+    renderApp();
+    expect(screen.getByRole("heading", { level: 1, name: "중복 방지" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "메뉴" }));
+    const dialog = screen.getByRole("dialog", { name: "주 메뉴" });
+
+    expect(within(dialog).queryByRole("button", { name: "중복 방지" })).toBeNull();
+    expect(drawerNavItemCount(dialog)).toBe(8);
   });
 
   test("Escape closes drawer and restores focus", async () => {

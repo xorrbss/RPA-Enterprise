@@ -47,6 +47,13 @@ const FLAG_KIND_LABELS: Record<FlagRow["kind"], string> = {
   absent: "화면에 없으면 참",
   min_count: "최소 개수 이상",
 };
+const PAGE_STATE_JSON_EXAMPLE = `{
+  "loginUrl": "https://login.example.com",
+  "authenticatedWhen": { "selector": ".user-menu" },
+  "flags": {
+    "reviews_visible": { "kind": "min_count", "selector": ".review-item", "n": 1 }
+  }
+}`;
 
 export interface CreatedSite {
   readonly site_profile_id: string;
@@ -84,6 +91,61 @@ function httpOrigin(value: string | undefined): string {
   } catch {
     return "";
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFlagKey(key: string): key is FlagRow["key"] {
+  return (FLAG_KEYS as readonly string[]).includes(key);
+}
+
+function validatePageStateSelectors(value: unknown): string | null {
+  if (!isRecord(value)) return "page_state_selectors JSON은 객체여야 합니다.";
+  if (value.loginUrl !== undefined && (typeof value.loginUrl !== "string" || !isHttpUrl(value.loginUrl))) {
+    return "loginUrl은 http(s) 주소여야 합니다.";
+  }
+  if (value.authenticatedWhen !== undefined) {
+    const authenticatedWhen = value.authenticatedWhen;
+    if (
+      !isRecord(authenticatedWhen)
+      || typeof authenticatedWhen.selector !== "string"
+      || authenticatedWhen.selector.trim() === ""
+    ) {
+      return "authenticatedWhen.selector는 비어 있지 않은 문자열이어야 합니다.";
+    }
+  }
+  if (!isRecord(value.flags)) return "flags 객체가 필요합니다.";
+  for (const [key, rule] of Object.entries(value.flags)) {
+    if (!isFlagKey(key)) return `flags.${key}는 지원하지 않는 판정 항목입니다.`;
+    if (!isRecord(rule)) return `flags.${key}는 객체여야 합니다.`;
+    if (typeof rule.selector !== "string" || rule.selector.trim() === "") {
+      return `flags.${key}.selector는 비어 있지 않은 문자열이어야 합니다.`;
+    }
+    if (rule.kind === "present" || rule.kind === "absent") continue;
+    if (rule.kind === "min_count") {
+      if (typeof rule.n !== "number" || !Number.isInteger(rule.n) || rule.n < 0) {
+        return `flags.${key}.n은 0 이상의 정수여야 합니다.`;
+      }
+      continue;
+    }
+    return `flags.${key}.kind는 present, absent, min_count 중 하나여야 합니다.`;
+  }
+  return null;
+}
+
+function parsePageStateSelectorsJson(text: string): { ok: true; value?: unknown } | { ok: false; message: string } {
+  const trimmed = text.trim();
+  if (trimmed === "") return { ok: true };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch {
+    return { ok: false, message: "page_state_selectors JSON 문법을 확인하세요." };
+  }
+  const validationError = validatePageStateSelectors(parsed);
+  return validationError === null ? { ok: true, value: parsed } : { ok: false, message: validationError };
 }
 
 function createdSiteFromResponse(value: unknown): CreatedSite | null {
@@ -125,9 +187,12 @@ export function SiteCreateForm({
   const [authenticatedSelector, setAuthenticatedSelector] = useState("");
   const [reviewsSelector, setReviewsSelector] = useState("");
   const [flagRows, setFlagRows] = useState<FlagRow[]>([]);
+  const [pageStateJson, setPageStateJson] = useState("");
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
 
   function pageStateSelectors(): unknown | undefined {
+    const parsedJson = parsePageStateSelectorsJson(pageStateJson);
+    if (parsedJson.ok && parsedJson.value !== undefined) return parsedJson.value;
     const login = loginUrl.trim();
     const auth = authenticatedSelector.trim();
     const reviews = reviewsSelector.trim();
@@ -167,6 +232,7 @@ export function SiteCreateForm({
       setAuthenticatedSelector("");
       setReviewsSelector("");
       setFlagRows([]);
+      setPageStateJson("");
       setOpen(false);
       void qc.invalidateQueries({ queryKey: ["sites"] });
       if (!embedded) {
@@ -218,7 +284,12 @@ export function SiteCreateForm({
     });
   };
 
-  const invalid = name.trim() === "" || !isHttpUrl(url) || (loginUrl.trim() !== "" && !isHttpUrl(loginUrl));
+  const parsedPageStateJson = parsePageStateSelectorsJson(pageStateJson);
+  const usesPageStateJson = pageStateJson.trim() !== "";
+  const invalid = name.trim() === ""
+    || !isHttpUrl(url)
+    || (!usesPageStateJson && loginUrl.trim() !== "" && !isHttpUrl(loginUrl))
+    || !parsedPageStateJson.ok;
   return (
     <section className={embedded ? "site-create-inline" : "panel"} style={{ padding: embedded ? undefined : 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -280,6 +351,21 @@ export function SiteCreateForm({
             <summary className="subtle">판정 기준 보기</summary>
             <code>화면 판정 조건 · 리뷰 목록 표시 · 최소 개수</code>
           </details>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span className="subtle">page_state_selectors JSON (선택)</span>
+            <textarea
+              aria-label="page_state_selectors JSON"
+              value={pageStateJson}
+              onChange={(e) => setPageStateJson(e.target.value)}
+              placeholder={PAGE_STATE_JSON_EXAMPLE}
+              rows={7}
+              spellCheck={false}
+              style={{ fontFamily: "monospace", resize: "vertical" }}
+            />
+          </label>
+          {!parsedPageStateJson.ok && (
+            <span className="badge red" role="alert">{parsedPageStateJson.message}</span>
+          )}
           <div className={embedded ? "site-create-flags" : "panel"} style={{ padding: 10, display: "grid", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
               <span className="subtle">추가 화면 상태 판정</span>

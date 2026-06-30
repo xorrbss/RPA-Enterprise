@@ -12,3 +12,23 @@ configure({ asyncUtilTimeout: 15000 });
 
 // jsdom 문서에 lang 부여(index.html의 lang="ko"와 동치) — axe html-has-lang 정합.
 document.documentElement.lang = "ko";
+
+// axe-core가 아이콘 ligature/contrast 판정 중 canvas와 pseudo-element style을 조회한다. jsdom은 두 경로를
+// 완전히 구현하지 않으므로 a11y 테스트마다 "Not implemented" 경고가 stderr에 찍힌다.
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value: function getContext(this: HTMLCanvasElement, contextId: string): CanvasRenderingContext2D | null {
+    if (contextId !== "2d") return null;
+    return {
+      canvas: this,
+      fillText: () => undefined,
+      measureText: () => ({ width: 0 }),
+    } as unknown as CanvasRenderingContext2D;
+  } as HTMLCanvasElement["getContext"],
+});
+
+const getComputedStyleWithoutPseudo = window.getComputedStyle.bind(window);
+Object.defineProperty(window, "getComputedStyle", {
+  configurable: true,
+  value: ((element: Element) => getComputedStyleWithoutPseudo(element)) as typeof window.getComputedStyle,
+});

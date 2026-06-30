@@ -8,6 +8,10 @@ import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
 import { fakeClient } from "./fake-client";
 
+const POLICY_FILTERED_MESSAGE = "현재 역할/메뉴 모드에서 표시되지 않는 항목입니다.";
+const LOOKUP_FAILURE_MESSAGE = "데이터 검색을 불러오지 못했습니다. 화면 이동 결과는 계속 사용할 수 있습니다.";
+const NO_RESULTS_MESSAGE = "검색 결과가 없습니다.";
+
 function renderApp(client: ApiClient = fakeClient()): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -57,6 +61,8 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     const dialog = await screen.findByRole("dialog", { name: "전역 검색 및 화면 이동" });
     fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "중복 방지" } });
     expect(within(dialog).queryByText("중복 방지")).toBeNull();
+    expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
   });
 
   test("admin은 중복 방지 화면을 검색해 이동할 수 있다", async () => {
@@ -124,6 +130,28 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     }
   });
 
+  test("standard operator가 숨김 화면을 검색하면 일반 no-result와 구분되는 정책 안내를 본다", async () => {
+    renderApp();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const dialog = await screen.findByRole("dialog", { name: "전역 검색 및 화면 이동" });
+    const input = within(dialog).getByRole("combobox");
+
+    for (const query of ["Product-open", "중복 방지"] as const) {
+      fireEvent.change(input, { target: { value: query } });
+      expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
+      expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
+      expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
+    }
+  });
+
+  test("허용 범위 검색에서 결과가 없으면 일반 no-result 문구를 표시한다", async () => {
+    const dialog = await openPaletteWithQuery("not-found-query");
+
+    expect(await within(dialog).findByText(NO_RESULTS_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).queryByText(POLICY_FILTERED_MESSAGE)).toBeNull();
+    expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
+  });
+
   test("정책상 숨긴 화면 검색은 데이터 오류보다 역할/모드 안내를 우선 표시한다", async () => {
     const dialog = await openPaletteWithQuery(
       "Product-open",
@@ -143,8 +171,9 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
       }),
     );
 
-    expect(await within(dialog).findByText("현재 역할/메뉴 모드에서 검색 가능한 결과가 없습니다.")).toBeInTheDocument();
-    expect(within(dialog).queryByText("일부 데이터 검색을 불러오지 못했습니다. 화면 이동 결과는 계속 사용할 수 있습니다.")).toBeNull();
+    expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
+    expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
   });
 
   test("허용 범위 검색에서 데이터 조회가 실패하면 화면 이동 가능성을 안내한다", async () => {
@@ -166,7 +195,9 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
       }),
     );
 
-    expect(await within(dialog).findByText("일부 데이터 검색을 불러오지 못했습니다. 화면 이동 결과는 계속 사용할 수 있습니다.")).toBeInTheDocument();
+    expect(await within(dialog).findByText(LOOKUP_FAILURE_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).queryByText(POLICY_FILTERED_MESSAGE)).toBeNull();
+    expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
   });
 
   test("admin + internal flag에서는 Product-open 점검을 검색할 수 있다", async () => {

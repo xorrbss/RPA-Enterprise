@@ -620,27 +620,27 @@ describe("automation ops view", () => {
       resumeRun,
     }));
 
-    await screen.findByRole("heading", { name: "Web Attended" });
+    await screen.findByRole("heading", { name: "사람 확인 실행" });
     expect(screen.getByText("30m")).toBeInTheDocument();
     expect(await screen.findByText("Finance owner approved web-attended launch.")).toBeInTheDocument();
     expect(await screen.findByText(/business approval resolved/)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Web Attended scenario version id"), {
+    fireEvent.change(screen.getByLabelText("사람 확인 실행 자동화 버전 ID"), {
       target: { value: "00000000-0000-4000-8000-000000000202" },
     });
-    fireEvent.change(screen.getByLabelText("Web Attended params JSON"), {
+    fireEvent.change(screen.getByLabelText("사람 확인 실행 파라미터 JSON"), {
       target: { value: "{\"as_of\":\"2026-06-30T00:00:00.000Z\",\"case_id\":\"ATT-42\"}" },
     });
-    fireEvent.change(screen.getByLabelText("Web Attended consent summary"), {
+    fireEvent.change(screen.getByLabelText("사람 확인 실행 동의 요약"), {
       target: { value: "Controller approved attended launch." },
     });
-    fireEvent.change(screen.getByLabelText("Web Attended consent evidence ref"), {
+    fireEvent.change(screen.getByLabelText("사람 확인 실행 동의 증빙 참조"), {
       target: { value: "ticket:ATT-42" },
     });
-    fireEvent.change(screen.getByLabelText("Web Attended input refs"), {
+    fireEvent.change(screen.getByLabelText("사람 확인 실행 입력 증빙 참조"), {
       target: { value: "artifact://input/a, artifact://input/a, artifact://input/b" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Request run" }));
+    fireEvent.click(screen.getByRole("button", { name: "실행 요청" }));
 
     await waitFor(() => expect(createWebAttendedRunRequest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -656,7 +656,7 @@ describe("automation ops view", () => {
       expect.stringMatching(/^web-attended-00000000-0000-4000-8000-000000000202-ticket:ATT-42-\d+$/),
     ));
 
-    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    fireEvent.click(screen.getByRole("button", { name: "재개" }));
     await waitFor(() => expect(resumeRun).toHaveBeenCalledWith(
       "run-suspended-1",
       expect.stringMatching(/^web-attended-resume-run-suspended-1-/),
@@ -1007,7 +1007,7 @@ describe("automation ops view", () => {
     expect(staleTile).not.toHaveTextContent("가장 오래된 시작");
   });
 
-  test("controlled-prod readiness panel shows runtime blockers and deferred external evidence", async () => {
+  test("운영 전환 준비 패널은 operator-visible 문구를 운영자 언어로 표시한다", async () => {
     const listProductionReadinessEvidence = vi.fn(async (params) => {
       if (params?.evidence_type === "external_alert_delivery") {
         return {
@@ -1153,44 +1153,52 @@ describe("automation ops view", () => {
     expect(externalTile).toHaveTextContent("5");
     expect(externalTile).toHaveTextContent("담당자 증빙 필요");
     expect(capacityTile).toHaveTextContent("활성 2");
-    expect(auditTile).toHaveTextContent("valid");
-    expect(screen.getByText("External alert delivery")).toBeInTheDocument();
-    expect(screen.getByText("Managed backup restore drill")).toBeInTheDocument();
-    expect(screen.getByText("SLO/on-call sign-off")).toBeInTheDocument();
-    expect(screen.getByText("Support/training completion")).toBeInTheDocument();
-    expect(screen.getByText("Observability telemetry wiring")).toBeInTheDocument();
+    expect(auditTile).toHaveTextContent("정상");
+    expect(screen.getByText("외부 알림 전달")).toBeInTheDocument();
+    expect(screen.getByText("백업 복구 리허설")).toBeInTheDocument();
+    expect(screen.getByText("SLO·당직 승인")).toBeInTheDocument();
+    expect(screen.getByText("지원·교육 완료")).toBeInTheDocument();
+    expect(screen.getByText("관측성 연결")).toBeInTheDocument();
     await waitFor(() => expect(listProductionReadinessEvidence).toHaveBeenCalledWith({ evidence_type: "external_alert_delivery", limit: 3 }));
     await waitFor(() => expect(listProductionReadinessEvidence).toHaveBeenCalledWith({ evidence_type: "managed_backup_restore_drill", limit: 3 }));
     await waitFor(() => expect(listProductionReadinessEvidence).toHaveBeenCalledWith({ evidence_type: "slo_oncall_signoff", limit: 3 }));
     await waitFor(() => expect(listProductionReadinessEvidence).toHaveBeenCalledWith({ evidence_type: "support_training_completion", limit: 3 }));
     await waitFor(() => expect(listProductionReadinessEvidence).toHaveBeenCalledWith({ evidence_type: "observability_telemetry_wiring", limit: 3 }));
     expect(await screen.findByText("외부 알림 증빙")).toBeInTheDocument();
-    expect(screen.getByText("Provider delivered the controlled-prod alert drill.")).toBeInTheDocument();
+    expect(screen.getByText("제공자 알림 전달 리허설이 완료되었습니다.")).toBeInTheDocument();
     expect(screen.getByText("ticket:OPS-123")).toBeInTheDocument();
-    expect(screen.getByText(/webhook \/ webhook-primary \/ delivered/)).toBeInTheDocument();
-    expect(screen.getByText(/receipt receipt-123 at 2026-06-23T09:04:30.000Z/)).toBeInTheDocument();
+    expect(screen.getByText(/채널 webhook · 제공자 webhook-primary · 상태 전달됨/)).toBeInTheDocument();
+    expect(screen.getByText(/접수 번호 receipt-123 · 접수 시각 2026-06-23T09:04:30.000Z/)).toBeInTheDocument();
     expect(await screen.findByText("백업/PITR 증빙")).toBeInTheDocument();
-    expect(screen.getByText("Managed backup PITR restore completed within controlled-prod target.")).toBeInTheDocument();
+    expect(screen.getByText("관리형 백업/PITR 복구 리허설이 목표 시간 안에 완료되었습니다.")).toBeInTheDocument();
     expect(screen.getByText("drill:PITR-2026-06-23")).toBeInTheDocument();
-    expect(screen.getByText(/policy backup-policy:managed-pg-prod \/ scope tenant-a-control-plane/)).toBeInTheDocument();
-    expect(screen.getByText(/RTO 20m \/ RPO 5m \/ restored 2026-06-23T09:25:00.000Z/)).toBeInTheDocument();
+    expect(screen.getByText(/정책 backup-policy:managed-pg-prod · 범위 tenant-a-control-plane/)).toBeInTheDocument();
+    expect(screen.getByText(/목표 복구 시간 20분 · 목표 복구 시점 5분 · 복구 완료 2026-06-23T09:25:00.000Z/)).toBeInTheDocument();
     expect(await screen.findByText("SLO·당직 증빙")).toBeInTheDocument();
-    expect(screen.getByText("SLO dashboard, severity policy, and on-call/RACI sign-off approved.")).toBeInTheDocument();
+    expect(screen.getByText("SLO 대시보드, 심각도 정책, 당직/RACI 승인이 완료되었습니다.")).toBeInTheDocument();
     expect(screen.getByText("ticket:SRE-456")).toBeInTheDocument();
-    expect(screen.getByText(/dashboard grafana-folder-rpa \/ severity sev1-sev4 \/ rota primary-secondary/)).toBeInTheDocument();
-    expect(screen.getByText(/RACI raci:SRE-RPA \/ support 24x7/)).toBeInTheDocument();
+    expect(screen.getByText(/대시보드 grafana-folder-rpa · 심각도 sev1-sev4 · 당직 primary-secondary/)).toBeInTheDocument();
+    expect(screen.getByText(/RACI raci:SRE-RPA · 지원 시간 24x7/)).toBeInTheDocument();
     expect(await screen.findByText("지원·교육 증빙")).toBeInTheDocument();
-    expect(screen.getByText("Support model and training completion evidence approved.")).toBeInTheDocument();
+    expect(screen.getByText("지원 모델과 교육 완료 증빙이 승인되었습니다.")).toBeInTheDocument();
     expect(screen.getByText("ticket:TRAIN-123")).toBeInTheDocument();
-    expect(screen.getByText(/model support-model:L1-L3 \/ training training:completion-2026-06/)).toBeInTheDocument();
-    expect(screen.getByText(/roles 3 \/ users 18 \/ coverage 95%/)).toBeInTheDocument();
-    expect(screen.getByText(/completed 2026-06-23T09:08:30.000Z/)).toBeInTheDocument();
+    expect(screen.getByText(/지원 모델 support-model:L1-L3 · 교육 완료 training:completion-2026-06/)).toBeInTheDocument();
+    expect(screen.getByText(/역할 3개 · 사용자 18명 · 이수율 95%/)).toBeInTheDocument();
+    expect(screen.getByText(/완료 시각 2026-06-23T09:08:30.000Z/)).toBeInTheDocument();
     expect(await screen.findByText("관측성 증빙")).toBeInTheDocument();
-    expect(screen.getByText("OTLP collector, dashboard, and alert route evidence approved.")).toBeInTheDocument();
+    expect(screen.getByText("관측성 수집기·대시보드·알림 경로 증빙이 승인되었습니다.")).toBeInTheDocument();
     expect(screen.getByText("ticket:OBS-124")).toBeInTheDocument();
-    expect(screen.getByText(/exporter otlp \/ collector otel-collector:rpa-prod/)).toBeInTheDocument();
-    expect(screen.getByText(/dashboard grafana-folder-rpa \/ alert route alert-route:rpa-sev/)).toBeInTheDocument();
-    expect(screen.getByText(/sampled 2026-06-23T09:06:30.000Z/)).toBeInTheDocument();
+    expect(screen.getByText(/내보내기 otlp · 수집기 otel-collector:rpa-prod/)).toBeInTheDocument();
+    expect(screen.getByText(/대시보드 grafana-folder-rpa · 알림 경로 alert-route:rpa-sev/)).toBeInTheDocument();
+    expect(screen.getByText(/샘플링 2026-06-23T09:06:30.000Z/)).toBeInTheDocument();
+    expect(screen.queryByText(/Controlled-prod readiness/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Production readiness evidence could not be loaded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/controlled-prod/)).not.toBeInTheDocument();
+    expect(screen.queryByText("External alert delivery")).not.toBeInTheDocument();
+    expect(screen.queryByText("Managed backup restore drill")).not.toBeInTheDocument();
+    expect(screen.queryByText("SLO/on-call sign-off")).not.toBeInTheDocument();
+    expect(screen.queryByText("Support/training completion")).not.toBeInTheDocument();
+    expect(screen.queryByText("Observability telemetry wiring")).not.toBeInTheDocument();
   });
 
   test("admin records external alert delivery readiness evidence from the readiness panel", async () => {
@@ -1214,13 +1222,13 @@ describe("automation ops view", () => {
     }));
 
     expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Alert evidence ref"), { target: { value: "ticket:OPS-123" } });
-    fireEvent.change(screen.getByLabelText("Alert evidence summary"), { target: { value: "Provider delivered the drill alert." } });
-    fireEvent.change(screen.getByLabelText("Notification channel"), { target: { value: "webhook" } });
-    fireEvent.change(screen.getByLabelText("Provider alias"), { target: { value: "webhook-primary" } });
-    fireEvent.change(screen.getByLabelText("Receipt id"), { target: { value: "receipt-123" } });
-    fireEvent.change(screen.getByLabelText("Receipt at"), { target: { value: "2026-06-29T00:05:30.000Z" } });
-    fireEvent.change(screen.getByLabelText("Alert evidence expires on"), { target: { value: "2026-09-29" } });
+    fireEvent.change(screen.getByLabelText("알림 증빙 참조"), { target: { value: "ticket:OPS-123" } });
+    fireEvent.change(screen.getByLabelText("알림 증빙 요약"), { target: { value: "제공자가 리허설 알림 전달을 완료했습니다." } });
+    fireEvent.change(screen.getByLabelText("알림 채널"), { target: { value: "webhook" } });
+    fireEvent.change(screen.getByLabelText("제공자 별칭"), { target: { value: "webhook-primary" } });
+    fireEvent.change(screen.getByLabelText("접수 번호"), { target: { value: "receipt-123" } });
+    fireEvent.change(screen.getByLabelText("접수 시각"), { target: { value: "2026-06-29T00:05:30.000Z" } });
+    fireEvent.change(screen.getByLabelText("알림 증빙 만료일"), { target: { value: "2026-09-29" } });
     fireEvent.click(screen.getByRole("button", { name: "알림 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
@@ -1229,7 +1237,7 @@ describe("automation ops view", () => {
         evidence_type: "external_alert_delivery",
         status: "valid",
         expires_at: "2026-09-29T23:59:59.000Z",
-        summary: "Provider delivered the drill alert.",
+        summary: "제공자가 리허설 알림 전달을 완료했습니다.",
         evidence_ref: "ticket:OPS-123",
         metadata: {
           channel: "webhook",
@@ -1265,14 +1273,14 @@ describe("automation ops view", () => {
     }));
 
     expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Evidence ref"), { target: { value: "ticket:SRE-789" } });
-    fireEvent.change(screen.getByLabelText("Summary"), { target: { value: "SLO and on-call sign-off approved." } });
-    fireEvent.change(screen.getByLabelText("SLO dashboard"), { target: { value: "grafana-folder-rpa" } });
-    fireEvent.change(screen.getByLabelText("Severity model"), { target: { value: "sev1-sev4" } });
-    fireEvent.change(screen.getByLabelText("On-call rota"), { target: { value: "primary-secondary" } });
-    fireEvent.change(screen.getByLabelText("RACI ref"), { target: { value: "raci:SRE-RPA" } });
-    fireEvent.change(screen.getByLabelText("Support hours"), { target: { value: "24x7" } });
-    fireEvent.change(screen.getByLabelText("Expires on"), { target: { value: "2026-09-29" } });
+    fireEvent.change(screen.getByLabelText("SLO 증빙 참조"), { target: { value: "ticket:SRE-789" } });
+    fireEvent.change(screen.getByLabelText("SLO 증빙 요약"), { target: { value: "SLO와 당직 승인이 완료되었습니다." } });
+    fireEvent.change(screen.getByLabelText("SLO 대시보드"), { target: { value: "grafana-folder-rpa" } });
+    fireEvent.change(screen.getByLabelText("심각도 모델"), { target: { value: "sev1-sev4" } });
+    fireEvent.change(screen.getByLabelText("당직 로테이션"), { target: { value: "primary-secondary" } });
+    fireEvent.change(screen.getByLabelText("RACI 참조"), { target: { value: "raci:SRE-RPA" } });
+    fireEvent.change(screen.getByLabelText("지원 시간"), { target: { value: "24x7" } });
+    fireEvent.change(screen.getByLabelText("SLO 증빙 만료일"), { target: { value: "2026-09-29" } });
     fireEvent.click(screen.getByRole("button", { name: "SLO 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
@@ -1281,7 +1289,7 @@ describe("automation ops view", () => {
         evidence_type: "slo_oncall_signoff",
         status: "valid",
         expires_at: "2026-09-29T23:59:59.000Z",
-        summary: "SLO and on-call sign-off approved.",
+        summary: "SLO와 당직 승인이 완료되었습니다.",
         evidence_ref: "ticket:SRE-789",
         metadata: {
           slo_dashboard: "grafana-folder-rpa",
@@ -1317,15 +1325,15 @@ describe("automation ops view", () => {
     }));
 
     expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Support evidence ref"), { target: { value: "ticket:TRAIN-123" } });
-    fireEvent.change(screen.getByLabelText("Support summary"), { target: { value: "Support model and training completion approved." } });
-    fireEvent.change(screen.getByLabelText("Support model ref"), { target: { value: "support-model:L1-L3" } });
-    fireEvent.change(screen.getByLabelText("Training completion ref"), { target: { value: "training:completion-2026-06" } });
-    fireEvent.change(screen.getByLabelText("Trained role count"), { target: { value: "3" } });
-    fireEvent.change(screen.getByLabelText("Trained user count"), { target: { value: "18" } });
-    fireEvent.change(screen.getByLabelText("Coverage percent"), { target: { value: "95" } });
-    fireEvent.change(screen.getByLabelText("Completed at"), { target: { value: "2026-06-29T00:45:00.000Z" } });
-    fireEvent.change(screen.getByLabelText("Support training expires on"), { target: { value: "2026-09-29" } });
+    fireEvent.change(screen.getByLabelText("지원 증빙 참조"), { target: { value: "ticket:TRAIN-123" } });
+    fireEvent.change(screen.getByLabelText("지원 증빙 요약"), { target: { value: "지원 모델과 교육 완료가 승인되었습니다." } });
+    fireEvent.change(screen.getByLabelText("지원 모델 참조"), { target: { value: "support-model:L1-L3" } });
+    fireEvent.change(screen.getByLabelText("교육 완료 참조"), { target: { value: "training:completion-2026-06" } });
+    fireEvent.change(screen.getByLabelText("교육 완료 역할 수"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("교육 완료 사용자 수"), { target: { value: "18" } });
+    fireEvent.change(screen.getByLabelText("교육 이수율"), { target: { value: "95" } });
+    fireEvent.change(screen.getByLabelText("교육 완료 시각"), { target: { value: "2026-06-29T00:45:00.000Z" } });
+    fireEvent.change(screen.getByLabelText("지원·교육 증빙 만료일"), { target: { value: "2026-09-29" } });
     fireEvent.click(screen.getByRole("button", { name: "지원 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
@@ -1334,7 +1342,7 @@ describe("automation ops view", () => {
         evidence_type: "support_training_completion",
         status: "valid",
         expires_at: "2026-09-29T23:59:59.000Z",
-        summary: "Support model and training completion approved.",
+        summary: "지원 모델과 교육 완료가 승인되었습니다.",
         evidence_ref: "ticket:TRAIN-123",
         metadata: {
           support_model_ref: "support-model:L1-L3",
@@ -1371,14 +1379,14 @@ describe("automation ops view", () => {
     }));
 
     expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Telemetry evidence ref"), { target: { value: "ticket:OBS-124" } });
-    fireEvent.change(screen.getByLabelText("Telemetry summary"), { target: { value: "OTLP collector, dashboard, and alert route approved." } });
-    fireEvent.change(screen.getByLabelText("Telemetry exporter"), { target: { value: "otlp" } });
-    fireEvent.change(screen.getByLabelText("Collector ref"), { target: { value: "otel-collector:rpa-prod" } });
-    fireEvent.change(screen.getByLabelText("Dashboard ref"), { target: { value: "grafana-folder-rpa" } });
-    fireEvent.change(screen.getByLabelText("Alert route ref"), { target: { value: "alert-route:rpa-sev" } });
-    fireEvent.change(screen.getByLabelText("Sampled at"), { target: { value: "2026-06-29T00:16:30.000Z" } });
-    fireEvent.change(screen.getByLabelText("Telemetry evidence expires on"), { target: { value: "2026-09-29" } });
+    fireEvent.change(screen.getByLabelText("관측성 증빙 참조"), { target: { value: "ticket:OBS-124" } });
+    fireEvent.change(screen.getByLabelText("관측성 증빙 요약"), { target: { value: "수집기, 대시보드, 알림 경로가 승인되었습니다." } });
+    fireEvent.change(screen.getByLabelText("텔레메트리 방식"), { target: { value: "otlp" } });
+    fireEvent.change(screen.getByLabelText("수집기 참조"), { target: { value: "otel-collector:rpa-prod" } });
+    fireEvent.change(screen.getByLabelText("대시보드 참조"), { target: { value: "grafana-folder-rpa" } });
+    fireEvent.change(screen.getByLabelText("알림 경로 참조"), { target: { value: "alert-route:rpa-sev" } });
+    fireEvent.change(screen.getByLabelText("샘플링 시각"), { target: { value: "2026-06-29T00:16:30.000Z" } });
+    fireEvent.change(screen.getByLabelText("관측성 증빙 만료일"), { target: { value: "2026-09-29" } });
     fireEvent.click(screen.getByRole("button", { name: "관측성 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
@@ -1387,7 +1395,7 @@ describe("automation ops view", () => {
         evidence_type: "observability_telemetry_wiring",
         status: "valid",
         expires_at: "2026-09-29T23:59:59.000Z",
-        summary: "OTLP collector, dashboard, and alert route approved.",
+        summary: "수집기, 대시보드, 알림 경로가 승인되었습니다.",
         evidence_ref: "ticket:OBS-124",
         metadata: {
           exporter: "otlp",
@@ -1423,14 +1431,14 @@ describe("automation ops view", () => {
     }));
 
     expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Backup evidence ref"), { target: { value: "drill:PITR-2026-06-29" } });
-    fireEvent.change(screen.getByLabelText("Backup summary"), { target: { value: "PITR restore completed within target." } });
-    fireEvent.change(screen.getByLabelText("Backup policy ref"), { target: { value: "backup-policy:managed-pg-prod" } });
-    fireEvent.change(screen.getByLabelText("Restore scope"), { target: { value: "tenant-a-control-plane" } });
-    fireEvent.change(screen.getByLabelText("Restore completed at"), { target: { value: "2026-06-29T00:30:00.000Z" } });
-    fireEvent.change(screen.getByLabelText("RTO minutes"), { target: { value: "20" } });
-    fireEvent.change(screen.getByLabelText("RPO minutes"), { target: { value: "5" } });
-    fireEvent.change(screen.getByLabelText("Backup expires on"), { target: { value: "2026-09-29" } });
+    fireEvent.change(screen.getByLabelText("백업 증빙 참조"), { target: { value: "drill:PITR-2026-06-29" } });
+    fireEvent.change(screen.getByLabelText("백업 증빙 요약"), { target: { value: "PITR 복구가 목표 시간 안에 완료되었습니다." } });
+    fireEvent.change(screen.getByLabelText("백업 정책 참조"), { target: { value: "backup-policy:managed-pg-prod" } });
+    fireEvent.change(screen.getByLabelText("복구 범위"), { target: { value: "tenant-a-control-plane" } });
+    fireEvent.change(screen.getByLabelText("복구 완료 시각"), { target: { value: "2026-06-29T00:30:00.000Z" } });
+    fireEvent.change(screen.getByLabelText("목표 복구 시간(분)"), { target: { value: "20" } });
+    fireEvent.change(screen.getByLabelText("목표 복구 시점(분)"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("백업 증빙 만료일"), { target: { value: "2026-09-29" } });
     fireEvent.click(screen.getByRole("button", { name: "백업 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
@@ -1439,7 +1447,7 @@ describe("automation ops view", () => {
         evidence_type: "managed_backup_restore_drill",
         status: "valid",
         expires_at: "2026-09-29T23:59:59.000Z",
-        summary: "PITR restore completed within target.",
+        summary: "PITR 복구가 목표 시간 안에 완료되었습니다.",
         evidence_ref: "drill:PITR-2026-06-29",
         metadata: {
           backup_policy_ref: "backup-policy:managed-pg-prod",

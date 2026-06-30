@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "../src/App";
@@ -67,7 +67,7 @@ describe("security SecretRef audit panel", () => {
     renderApp(fakeClient({ listAuditLog }));
 
     expect(await screen.findByRole("heading", { name: "SecretRef 감사 요약" })).toBeInTheDocument();
-    expect(listAuditLog).toHaveBeenCalledWith({ action: "secret.resolve", limit: 100 });
+    await waitFor(() => expect(listAuditLog).toHaveBeenCalledWith({ action: "secret.resolve", limit: 100 }));
     expect(await screen.findByText("최근 3건")).toBeInTheDocument();
     expect(screen.getByText("거부·차단")).toBeInTheDocument();
     expect(screen.getAllByText("오류").length).toBeGreaterThan(0);

@@ -12,6 +12,9 @@ const LOOKUP_LIMIT = 50;
 const SEARCH_STALE_MS = 30_000;
 const MIN_ENTITY_QUERY_LENGTH = 2;
 const GROUP_LIMIT = 6;
+const POLICY_FILTERED_EMPTY_MESSAGE = "현재 역할/메뉴 모드에서 표시되지 않는 항목입니다.";
+const LOOKUP_FAILURE_EMPTY_MESSAGE = "데이터 검색을 불러오지 못했습니다. 화면 이동 결과는 계속 사용할 수 있습니다.";
+const NO_RESULTS_EMPTY_MESSAGE = "검색 결과가 없습니다.";
 
 interface PaletteItem {
   readonly id: string;
@@ -388,15 +391,16 @@ export function CommandPalette({
     (globalSearch.isFetching || runs.isFetching || humanTasks.isFetching || principals.isFetching || scenarios.isFetching || credentials.isFetching);
   const hasLookupError =
     lookupEnabled && (globalSearch.isError || runs.isError || humanTasks.isError || principals.isError || scenarios.isError || credentials.isError);
-  const emptyMessage = isSearching
-    ? "검색 중..."
-    : hiddenPolicyMatch
-      ? "현재 역할/메뉴 모드에서 검색 가능한 결과가 없습니다."
-    : hasLookupError
-      ? "일부 데이터 검색을 불러오지 못했습니다. 화면 이동 결과는 계속 사용할 수 있습니다."
-    : q.length > 0 && q.length < MIN_ENTITY_QUERY_LENGTH
-      ? "조금 더 입력해 주세요."
-      : "불러온 결과에서 찾지 못했습니다.";
+  let emptyMessage = NO_RESULTS_EMPTY_MESSAGE;
+  if (hiddenPolicyMatch) {
+    emptyMessage = POLICY_FILTERED_EMPTY_MESSAGE;
+  } else if (isSearching) {
+    emptyMessage = "검색 중...";
+  } else if (hasLookupError) {
+    emptyMessage = LOOKUP_FAILURE_EMPTY_MESSAGE;
+  } else if (q.length > 0 && q.length < MIN_ENTITY_QUERY_LENGTH) {
+    emptyMessage = "조금 더 입력해 주세요.";
+  }
 
   return (
     <div

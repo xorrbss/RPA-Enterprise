@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -133,6 +133,25 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", jwt(["operator"]));
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test("role workbench keeps Product-open out of operator quick actions but available to admin internal", async () => {
+    renderApp(dashboardClient());
+    const operatorWorkbench = await screen.findByRole("region", { name: "역할별 작업대" });
+    expect(within(operatorWorkbench).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
+
+    vi.stubEnv("VITE_SHOW_INTERNAL_OPEN_GATE", "true");
+    localStorage.setItem("rpa.token", jwt(["admin"]));
+    renderApp(dashboardClient());
+    const workbenches = await screen.findAllByRole("region", { name: "역할별 작업대" });
+    const adminWorkbench = workbenches[workbenches.length - 1];
+    if (adminWorkbench === undefined) throw new Error("admin workbench not found");
+    expect(within(adminWorkbench).getByRole("button", { name: "Product-open 점검" })).toBeInTheDocument();
   });
 
   // (a) run outcome 정확 집계: 카드 값은 getRunSummary.by_status에서 온다(서버 GROUP BY, 클라 50건 필터 아님).

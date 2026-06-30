@@ -92,12 +92,12 @@ describe("site onboarding to scenario studio", () => {
     expect(params.get("start_url")).toBe("https://login.office.hiworks.com");
     expect(params.get("browser_identity")).toBe("browser-new");
     expect(params.get("network_policy")).toBe("network-new");
-    expect(await screen.findByLabelText("시작 주소")).toHaveValue("https://login.office.hiworks.com");
-    expect(screen.getByLabelText("사이트")).toHaveValue("site-new");
-    expect(screen.getByLabelText("로그인 세션 선택값")).toHaveValue("browser-new");
-    expect(screen.getByLabelText("보안 정책 선택값")).toHaveValue("network-new");
+    await waitFor(() => expect(screen.getByLabelText("시작 주소")).toHaveValue("https://login.office.hiworks.com"));
+    await waitFor(() => expect(screen.getByLabelText("사이트")).toHaveValue("site-new"));
+    await waitFor(() => expect(screen.getByLabelText("로그인 세션 선택값")).toHaveValue("browser-new"));
+    await waitFor(() => expect(screen.getByLabelText("보안 정책 선택값")).toHaveValue("network-new"));
 
-    fireEvent.change(screen.getByLabelText("자연어 요청"), { target: { value: "오늘 결재함을 확인해줘" } });
+    fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "오늘 결재함을 확인해줘" } });
     screen.getByRole("button", { name: "저장 후 실행" }).click();
     await waitFor(() => expect(generated).toHaveLength(1));
     expect(generated[0]).toMatchObject({
