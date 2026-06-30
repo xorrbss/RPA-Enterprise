@@ -333,14 +333,22 @@ async function main(): Promise<void> {
   console.log("────────────────────────────────────────────────────────\n");
 
   // dev 런타임 루프: queued run을 claim→실행기 구동(실 Chrome). 마커 픽스처 데모 시나리오만 completed까지 간다.
-  const runLoop: RunLoop | null = await startRunLoop(
-    pool,
-    TENANT,
-    2000,
-    new DevVisibleGatewayArtifactSink(pool, artifactStore, { type: "llm_output", retentionDays: devArtifactRetentionDays() }),
-    // extract.rowAnchor 로 결정형 강화된 결재 행을 인박스용 typed artifact 로 영속(인박스가 approval_inbox 를 우선 채택).
-    new DevVisibleGatewayArtifactSink(pool, artifactStore, { type: "approval_inbox", retentionDays: devArtifactRetentionDays() }),
-  );
+  // DEV_DISABLE_RUN_LOOP=1 이면 실 Chrome 루프를 띄우지 않는다(UI/API 단독 테스트 모드). Stagehand/Chrome 수명
+  // 종료가 dev 서버 프로세스를 함께 내리는 불안정성을 피해, 화면·엔드포인트 점검 중 서버를 무한정 안정시킨다.
+  const disableRunLoop = /^(1|true|yes)$/i.test(process.env.DEV_DISABLE_RUN_LOOP?.trim() ?? "");
+  let runLoop: RunLoop | null = null;
+  if (disableRunLoop) {
+    console.log("run-loop: DEV_DISABLE_RUN_LOOP 설정 → 실 Chrome 루프 비활성(UI/API 테스트 모드; 만든 run은 queued 유지).");
+  } else {
+    runLoop = await startRunLoop(
+      pool,
+      TENANT,
+      2000,
+      new DevVisibleGatewayArtifactSink(pool, artifactStore, { type: "llm_output", retentionDays: devArtifactRetentionDays() }),
+      // extract.rowAnchor 로 결정형 강화된 결재 행을 인박스용 typed artifact 로 영속(인박스가 approval_inbox 를 우선 채택).
+      new DevVisibleGatewayArtifactSink(pool, artifactStore, { type: "approval_inbox", retentionDays: devArtifactRetentionDays() }),
+    );
+  }
   // dev 캡처 폴러: 콘솔 '세션 등록'(capture_sessions launching)을 폴링해 별도 headful 로그인창을 띄운다(run-loop 의 공유 세션과 무관).
   const captureLoop: CaptureLoop | null = await startCaptureLoop(pool, TENANT);
   // dev 녹화 폴러: 콘솔 '브라우저 녹화로 만들기'의 녹화 시작(status=recording)을 폴링해 headful Chrome 을 띄워 DOM 동작을 캡처한다
