@@ -32,7 +32,7 @@ export function QueryPanel<T>(props: {
         {query.isLoading ? (
           <Loading />
         ) : query.isError ? (
-          <ErrorState message={errorLabel(query.error)} onRetry={() => void query.refetch()} />
+          <ErrorState message={`${title} 데이터를 불러오지 못했습니다. ${errorLabel(query.error)}`} onRetry={() => void query.refetch()} />
         ) : (query.data?.items.length ?? 0) === 0 ? (
           <EmptyState message={emptyMessage} action={emptyAction} />
         ) : (

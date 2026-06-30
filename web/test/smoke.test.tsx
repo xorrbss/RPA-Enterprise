@@ -355,10 +355,12 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.queryByRole("navigation", { name: "주 메뉴" })).toBeNull();
   });
 
-  test("사이드바 + 18 nav item 렌더", () => {
+  test("사이드바는 역할 정책으로 필터된 nav item을 렌더", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(within(nav).getAllByRole("button")).toHaveLength(18);
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(17);
+    expect(within(nav).getByRole("button", { name: "보안/개인정보" })).toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
 
   test("기본 라우트 = dashboard (지표 + 최근 실행)", async () => {

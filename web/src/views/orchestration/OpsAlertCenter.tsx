@@ -95,7 +95,7 @@ export function OpsAlertCenter({
             <option value="dlq">재처리 대기</option>
             <option value="bot_pool">Bot Pool</option>
             <option value="scim_secret_rotation">SCIM SecretRef</option>
-            <option value="readiness_evidence">Production readiness</option>
+            <option value="readiness_evidence">운영 전환 준비</option>
             <option value="audit_verifier">감사 체인</option>
           </select>
         </label>
@@ -132,7 +132,7 @@ export function OpsAlertCenter({
                   </button>
                 )}
                 <button className="linklike" type="button" onClick={() => onToggleDeliveries(alert)}>
-                  {deliveryAlertId === alert.alert_id ? "Hide receipts" : "Delivery receipts"}
+                  {deliveryAlertId === alert.alert_id ? "전달 증빙 닫기" : "전달 증빙"}
                 </button>
                 {canSendWebhook && (
                   <button
@@ -353,31 +353,31 @@ function DeliveryReceiptPanel({
   if (isError) {
     return (
       <div className="ops-delivery-panel" role="status">
-        <strong>Delivery receipts unavailable</strong>
-        <span className="subtle">Provider receipt evidence could not be loaded.</span>
+        <strong>전달 증빙을 불러오지 못했습니다.</strong>
+        <span className="subtle">외부 제공자 수신 증빙을 확인할 수 없습니다.</span>
       </div>
     );
   }
   if (isLoading) {
     return (
       <div className="ops-delivery-panel" role="status">
-        <strong>Loading delivery receipts</strong>
+        <strong>전달 증빙 확인 중</strong>
       </div>
     );
   }
   if (receipts.length === 0) {
     return (
       <div className="ops-delivery-panel" role="status">
-        <strong>No provider receipts recorded</strong>
-        <span className="subtle">Console ack is separate and does not prove external delivery.</span>
+        <strong>제공자 수신 증빙이 없습니다.</strong>
+        <span className="subtle">콘솔 확인과 외부 전달 증빙은 별도로 기록됩니다.</span>
       </div>
     );
   }
   return (
     <div className="ops-delivery-panel">
       <div className="ops-delivery-panel-head">
-        <strong>Provider delivery receipts</strong>
-        <span className="badge muted">{receipts.length} shown</span>
+        <strong>제공자 전달 증빙</strong>
+        <span className="badge muted">{receipts.length}건 표시</span>
       </div>
       <ul className="ops-delivery-list">
         {receipts.map((receipt) => (
@@ -458,7 +458,7 @@ function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
   if (source === "failure_spike") return "실패 급증";
   if (source === "bot_pool") return "Bot Pool";
   if (source === "scim_secret_rotation") return "SCIM SecretRef";
-  if (source === "readiness_evidence") return "Production readiness";
+  if (source === "readiness_evidence") return "운영 전환 준비";
   if (source === "audit_verifier") return "감사 체인";
   return "재처리 대기";
 }
@@ -485,7 +485,7 @@ function opsAlertActionLabel(alert: OpsAlertItem): string {
     case "scim_provider":
       return "SCIM 설정 보기";
     case "readiness_evidence":
-      return "Production readiness";
+      return "운영 전환 준비";
     case "audit_verifier":
       return "감사 검증 보기";
     default:

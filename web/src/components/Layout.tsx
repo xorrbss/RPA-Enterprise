@@ -2,13 +2,23 @@ import {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
   Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow, Stamp,
   CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
-  HelpCircle, Search,
+  HelpCircle, LogOut, Menu, Search, X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
-import { NAV_GROUPS, navigate, type ViewKey } from "../router";
+import { navigate, type ViewKey } from "../router";
 import { decodeRoles, decodeSubject, ROLE_LABELS } from "../api/permissions";
+import {
+  getInternalNavFlags,
+  getVisibleNavGroups,
+  hasAdvancedNav,
+  readStoredNavMode,
+  writeStoredNavMode,
+  type NavMode,
+  type NavPolicyFlags,
+  type VisibleNavGroup,
+} from "../navPolicy";
 import { VIEW_META } from "../views/meta";
 import { CommandPalette } from "./CommandPalette";
 import { Freshness } from "./Freshness";
@@ -19,14 +29,45 @@ const ICONS: Record<string, LucideIcon> = {
   Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Stamp, CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
 };
 
-function NavItem({ viewKey, active }: { viewKey: ViewKey; active: boolean }): JSX.Element {
+const MOBILE_NAV_QUERY = "(max-width: 900px)";
+
+function mediaQueryMatches(query: string): boolean {
+  return typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => mediaQueryMatches(query));
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const queryList = window.matchMedia(query);
+    const onChange = (): void => setMatches(queryList.matches);
+    onChange();
+    if (typeof queryList.addEventListener === "function") {
+      queryList.addEventListener("change", onChange);
+      return () => queryList.removeEventListener("change", onChange);
+    }
+    queryList.addListener(onChange);
+    return () => queryList.removeListener(onChange);
+  }, [query]);
+  return matches;
+}
+
+function getFocusable(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+    .filter((el) => !el.hasAttribute("disabled") && el.tabIndex !== -1);
+}
+
+function NavItem({ viewKey, active, onNavigate }: { viewKey: ViewKey; active: boolean; onNavigate?: () => void }): JSX.Element {
   const Icon = ICONS[VIEW_META[viewKey].icon] ?? LayoutDashboard;
   return (
     <button
       type="button"
       className={`nav-item${active ? " active" : ""}`}
       aria-current={active ? "page" : undefined}
-      onClick={() => navigate(viewKey)}
+      onClick={() => {
+        navigate(viewKey);
+        onNavigate?.();
+      }}
     >
       <Icon size={16} aria-hidden="true" />
       <span>{VIEW_META[viewKey].title}</span>
@@ -34,10 +75,56 @@ function NavItem({ viewKey, active }: { viewKey: ViewKey; active: boolean }): JS
   );
 }
 
+function NavGroups({ groups, activeView, onNavigate }: { groups: readonly VisibleNavGroup[]; activeView: ViewKey; onNavigate?: () => void }): JSX.Element {
+  return (
+    <>
+      {groups.map((group) => (
+        <div key={group.label} className="nav-group" role="group" aria-label={group.label}>
+          <div className="nav-group-label" aria-hidden="true">{group.label}</div>
+          {group.keys.map((key) => (
+            <NavItem key={key} viewKey={key} active={key === activeView} onNavigate={onNavigate} />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function NavModeControl({
+  mode,
+  onChange,
+}: {
+  mode: NavMode;
+  onChange: (mode: NavMode) => void;
+}): JSX.Element {
+  return (
+    <div className="nav-mode" role="group" aria-label="메뉴 표시 모드">
+      <span className="nav-mode-label">메뉴 모드</span>
+      <div className="nav-mode-options">
+        <button
+          type="button"
+          className={`nav-mode-option${mode === "standard" ? " active" : ""}`}
+          aria-pressed={mode === "standard"}
+          onClick={() => onChange("standard")}
+        >
+          기본
+        </button>
+        <button
+          type="button"
+          className={`nav-mode-option${mode === "advanced" ? " active" : ""}`}
+          aria-pressed={mode === "advanced"}
+          onClick={() => onChange("advanced")}
+        >
+          고급
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // 현재 접속 권한 칩(신뢰감/맥락). 로그아웃은 페이지 reload이므로 mount 1회 디코드로 충분(useCan과 동일 가정).
 // 테넌트 칩은 의도적으로 제외 — 프론트가 tenant_id를 검증하지 않으므로 과대표시를 피한다.
-function RolesChip(): JSX.Element {
-  const roles = useMemo(() => decodeRoles(localStorage.getItem("rpa.token")), []);
+function RolesChip({ roles }: { roles: readonly string[] }): JSX.Element {
   if (roles.length === 0)
     return (
       <span
@@ -48,7 +135,7 @@ function RolesChip(): JSX.Element {
       </span>
     );
   return (
-    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }} aria-label="현재 역할">
+    <span className="roles-chip" aria-label="현재 역할">
       {roles.map((r) => (
         <span key={r} className="badge blue">{ROLE_LABELS[r] ?? r}</span>
       ))}
@@ -71,13 +158,34 @@ function SubjectChip(): JSX.Element {
 
 export function Layout({ view, children }: { view: ViewKey; children: ReactNode }): JSX.Element {
   const meta = VIEW_META[view];
+  const roles = useMemo(() => decodeRoles(localStorage.getItem("rpa.token")), []);
+  const flags = useMemo<NavPolicyFlags>(() => getInternalNavFlags(), []);
+  const [navMode, setNavMode] = useState<NavMode>(() => readStoredNavMode());
+  const advancedAvailable = useMemo(() => hasAdvancedNav({ roles, flags }), [roles, flags]);
+  const visibleNavGroups = useMemo(
+    () => getVisibleNavGroups({ roles, mode: navMode, flags }),
+    [roles, navMode, flags],
+  );
   // '?' 도움말 토글 — title 툴팁은 터치/스크린리더에 안 닿으므로 클릭 시 본문을 화면에 펼친다.
   const [showHelp, setShowHelp] = useState(false);
   const helpId = useId();
+  const drawerId = useId();
+  const drawerTitleId = useId();
   // 화면을 바꾸면 이전 화면의 도움말은 닫는다(맥락 불일치 방지).
   useEffect(() => setShowHelp(false), [view]);
   const helpText = meta.helpText ?? meta.subtitle;
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const isMobileNav = useMediaQuery(MOBILE_NAV_QUERY);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!advancedAvailable && navMode !== "standard") {
+      setNavMode("standard");
+      writeStoredNavMode("standard");
+    }
+  }, [advancedAvailable, navMode]);
   // 전역 단축키 Ctrl/⌘+K → 커맨드 팔레트(어느 화면에서나 검색·이동 진입점).
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
@@ -89,24 +197,84 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [view]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const timer = setTimeout(() => {
+      const drawer = drawerRef.current;
+      if (drawer === null) return;
+      const focusables = getFocusable(drawer);
+      (focusables[0] ?? drawer).focus();
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      restoreFocusRef.current?.focus();
+    };
+  }, [drawerOpen]);
+
+  function changeNavMode(mode: NavMode): void {
+    setNavMode(mode);
+    writeStoredNavMode(mode);
+  }
+
+  function openDrawer(): void {
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : mobileMenuButtonRef.current;
+    setDrawerOpen(true);
+  }
+
+  function closeDrawer(): void {
+    setDrawerOpen(false);
+  }
+
+  function onDrawerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDrawer();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusables = getFocusable(event.currentTarget);
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (first === undefined || last === undefined) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
     <div className="app">
-      <nav className="sidebar" aria-label="주 메뉴">
+      <nav className="sidebar" aria-label="주 메뉴" aria-hidden={isMobileNav ? "true" : undefined}>
         <div className="brand">
           <Workflow size={18} aria-hidden="true" /> RPA 운영 콘솔
         </div>
-        {NAV_GROUPS.map((group) => (
-          <div key={group.label} className="nav-group" role="group" aria-label={group.label}>
-            <div className="nav-group-label" aria-hidden="true">{group.label}</div>
-            {group.keys.map((key) => (
-              <NavItem key={key} viewKey={key} active={key === view} />
-            ))}
-          </div>
-        ))}
+        <NavGroups groups={visibleNavGroups} activeView={view} />
+        {advancedAvailable && <NavModeControl mode={navMode} onChange={changeNavMode} />}
       </nav>
       <div className="main">
         <header className="topbar">
-          <div>
+          {isMobileNav && (
+            <button
+              ref={mobileMenuButtonRef}
+              type="button"
+              className="btn mobile-menu-button"
+              aria-expanded={drawerOpen}
+              aria-controls={drawerId}
+              onClick={openDrawer}
+            >
+              <Menu size={16} aria-hidden="true" />
+              메뉴
+            </button>
+          )}
+          <div className="topbar-main">
             <div className="topbar-heading">
               <h1>{meta.title}</h1>
               <button
@@ -128,27 +296,60 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
               </div>
             )}
           </div>
-          <span style={{ display: "inline-flex", gap: 12, alignItems: "center" }}>
+          <span className="topbar-actions">
             <SubjectChip />
-            <RolesChip />
+            <RolesChip roles={roles} />
             <Freshness />
             <button
               className="btn palette-trigger"
               type="button"
+              aria-label="전역 검색"
               aria-keyshortcuts="Control+K Meta+K"
               title="전역 검색·화면 이동 (Ctrl/⌘+K)"
               onClick={() => setPaletteOpen(true)}
             >
-              <Search size={14} aria-hidden="true" /> 검색
+              <Search size={14} aria-hidden="true" /> <span className="topbar-action-text">검색</span>
             </button>
-            <button className="btn" type="button" onClick={clearToken}>
-              로그아웃
+            <button className="btn" type="button" aria-label="로그아웃" title="로그아웃" onClick={clearToken}>
+              <LogOut size={14} aria-hidden="true" /> <span className="topbar-action-text">로그아웃</span>
             </button>
           </span>
         </header>
         <main className="content">{children}</main>
       </div>
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} roles={roles} navMode={navMode} flags={flags} />
+      {drawerOpen && (
+        <div
+          className="nav-drawer-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeDrawer();
+          }}
+        >
+          <div
+            id={drawerId}
+            ref={drawerRef}
+            className="nav-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="주 메뉴"
+            tabIndex={-1}
+            onKeyDown={onDrawerKeyDown}
+          >
+            <div className="nav-drawer-head">
+              <div id={drawerTitleId} className="brand">
+                <Workflow size={18} aria-hidden="true" /> RPA 운영 콘솔
+              </div>
+              <button className="btn icon-btn" type="button" aria-label="메뉴 닫기" onClick={closeDrawer}>
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <nav className="nav-drawer-nav" aria-label="모바일 주 메뉴">
+              <NavGroups groups={visibleNavGroups} activeView={view} onNavigate={closeDrawer} />
+            </nav>
+            {advancedAvailable && <NavModeControl mode={navMode} onChange={changeNavMode} />}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

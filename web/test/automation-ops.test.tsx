@@ -426,7 +426,7 @@ describe("automation ops view", () => {
   test("큐 운영 수치를 기존 run summary와 대기 목록에서 표시한다", async () => {
     renderApp(clientWithOpsData());
 
-    expect(await screen.findByRole("heading", { name: "운영 오케스트레이션" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "예약·큐 운영" })).toBeInTheDocument();
     const queuedRow = (await screen.findByText("대기 실행")).closest("tr") as HTMLTableRowElement;
     const runningRow = screen.getByText("실행 중").closest("tr") as HTMLTableRowElement;
     const humanRow = screen.getByText("사람 확인 대기").closest("tr") as HTMLTableRowElement;
@@ -1049,18 +1049,18 @@ describe("automation ops view", () => {
     });
     renderApp(clientWithOpsData({ listProductionReadinessEvidence }));
 
-    expect(await screen.findByRole("heading", { name: "Controlled-prod readiness" })).toBeInTheDocument();
-    await screen.findByText("No runtime blockers");
-    const runtimeTile = screen.getByText("Runtime blockers").closest(".ops-health-tile") as HTMLElement;
-    const externalTile = screen.getByText("External evidence").closest(".ops-health-tile") as HTMLElement;
-    const capacityTile = screen.getByText("Browser capacity").closest(".ops-health-tile") as HTMLElement;
-    const auditTile = screen.getByText("Audit verifier").closest(".ops-health-tile") as HTMLElement;
+    expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
+    await screen.findByText("차단 없음");
+    const runtimeTile = screen.getByText("실행 차단 요인").closest(".ops-health-tile") as HTMLElement;
+    const externalTile = screen.getByText("외부 증빙").closest(".ops-health-tile") as HTMLElement;
+    const capacityTile = screen.getByText("브라우저 용량").closest(".ops-health-tile") as HTMLElement;
+    const auditTile = screen.getByText("감사 검증").closest(".ops-health-tile") as HTMLElement;
 
     expect(runtimeTile).toHaveTextContent("0");
-    expect(runtimeTile).toHaveTextContent("No runtime blockers");
+    expect(runtimeTile).toHaveTextContent("차단 없음");
     expect(externalTile).toHaveTextContent("5");
-    expect(externalTile).toHaveTextContent("Owner evidence needed");
-    expect(capacityTile).toHaveTextContent("active 2");
+    expect(externalTile).toHaveTextContent("담당자 증빙 필요");
+    expect(capacityTile).toHaveTextContent("활성 2");
     expect(auditTile).toHaveTextContent("valid");
     expect(screen.getByText("External alert delivery")).toBeInTheDocument();
     expect(screen.getByText("Managed backup restore drill")).toBeInTheDocument();
@@ -1072,28 +1072,28 @@ describe("automation ops view", () => {
     await waitFor(() => expect(listProductionReadinessEvidence).toHaveBeenCalledWith({ evidence_type: "slo_oncall_signoff", limit: 3 }));
     await waitFor(() => expect(listProductionReadinessEvidence).toHaveBeenCalledWith({ evidence_type: "support_training_completion", limit: 3 }));
     await waitFor(() => expect(listProductionReadinessEvidence).toHaveBeenCalledWith({ evidence_type: "observability_telemetry_wiring", limit: 3 }));
-    expect(await screen.findByText("External alert evidence")).toBeInTheDocument();
+    expect(await screen.findByText("외부 알림 증빙")).toBeInTheDocument();
     expect(screen.getByText("Provider delivered the controlled-prod alert drill.")).toBeInTheDocument();
     expect(screen.getByText("ticket:OPS-123")).toBeInTheDocument();
     expect(screen.getByText(/webhook \/ webhook-primary \/ delivered/)).toBeInTheDocument();
     expect(screen.getByText(/receipt receipt-123 at 2026-06-23T09:04:30.000Z/)).toBeInTheDocument();
-    expect(await screen.findByText("Backup/PITR evidence")).toBeInTheDocument();
+    expect(await screen.findByText("백업/PITR 증빙")).toBeInTheDocument();
     expect(screen.getByText("Managed backup PITR restore completed within controlled-prod target.")).toBeInTheDocument();
     expect(screen.getByText("drill:PITR-2026-06-23")).toBeInTheDocument();
     expect(screen.getByText(/policy backup-policy:managed-pg-prod \/ scope tenant-a-control-plane/)).toBeInTheDocument();
     expect(screen.getByText(/RTO 20m \/ RPO 5m \/ restored 2026-06-23T09:25:00.000Z/)).toBeInTheDocument();
-    expect(await screen.findByText("SLO/on-call evidence")).toBeInTheDocument();
+    expect(await screen.findByText("SLO·당직 증빙")).toBeInTheDocument();
     expect(screen.getByText("SLO dashboard, severity policy, and on-call/RACI sign-off approved.")).toBeInTheDocument();
     expect(screen.getByText("ticket:SRE-456")).toBeInTheDocument();
     expect(screen.getByText(/dashboard grafana-folder-rpa \/ severity sev1-sev4 \/ rota primary-secondary/)).toBeInTheDocument();
     expect(screen.getByText(/RACI raci:SRE-RPA \/ support 24x7/)).toBeInTheDocument();
-    expect(await screen.findByText("Support/training evidence")).toBeInTheDocument();
+    expect(await screen.findByText("지원·교육 증빙")).toBeInTheDocument();
     expect(screen.getByText("Support model and training completion evidence approved.")).toBeInTheDocument();
     expect(screen.getByText("ticket:TRAIN-123")).toBeInTheDocument();
     expect(screen.getByText(/model support-model:L1-L3 \/ training training:completion-2026-06/)).toBeInTheDocument();
     expect(screen.getByText(/roles 3 \/ users 18 \/ coverage 95%/)).toBeInTheDocument();
     expect(screen.getByText(/completed 2026-06-23T09:08:30.000Z/)).toBeInTheDocument();
-    expect(await screen.findByText("Observability evidence")).toBeInTheDocument();
+    expect(await screen.findByText("관측성 증빙")).toBeInTheDocument();
     expect(screen.getByText("OTLP collector, dashboard, and alert route evidence approved.")).toBeInTheDocument();
     expect(screen.getByText("ticket:OBS-124")).toBeInTheDocument();
     expect(screen.getByText(/exporter otlp \/ collector otel-collector:rpa-prod/)).toBeInTheDocument();
@@ -1121,7 +1121,7 @@ describe("automation ops view", () => {
       recordProductionReadinessEvidence,
     }));
 
-    expect(await screen.findByRole("heading", { name: "Controlled-prod readiness" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Alert evidence ref"), { target: { value: "ticket:OPS-123" } });
     fireEvent.change(screen.getByLabelText("Alert evidence summary"), { target: { value: "Provider delivered the drill alert." } });
     fireEvent.change(screen.getByLabelText("Notification channel"), { target: { value: "webhook" } });
@@ -1129,7 +1129,7 @@ describe("automation ops view", () => {
     fireEvent.change(screen.getByLabelText("Receipt id"), { target: { value: "receipt-123" } });
     fireEvent.change(screen.getByLabelText("Receipt at"), { target: { value: "2026-06-29T00:05:30.000Z" } });
     fireEvent.change(screen.getByLabelText("Alert evidence expires on"), { target: { value: "2026-09-29" } });
-    fireEvent.click(screen.getByRole("button", { name: "Record alert evidence" }));
+    fireEvent.click(screen.getByRole("button", { name: "알림 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
     expect(recordProductionReadinessEvidence).toHaveBeenCalledWith(
@@ -1172,7 +1172,7 @@ describe("automation ops view", () => {
       recordProductionReadinessEvidence,
     }));
 
-    expect(await screen.findByRole("heading", { name: "Controlled-prod readiness" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Evidence ref"), { target: { value: "ticket:SRE-789" } });
     fireEvent.change(screen.getByLabelText("Summary"), { target: { value: "SLO and on-call sign-off approved." } });
     fireEvent.change(screen.getByLabelText("SLO dashboard"), { target: { value: "grafana-folder-rpa" } });
@@ -1181,7 +1181,7 @@ describe("automation ops view", () => {
     fireEvent.change(screen.getByLabelText("RACI ref"), { target: { value: "raci:SRE-RPA" } });
     fireEvent.change(screen.getByLabelText("Support hours"), { target: { value: "24x7" } });
     fireEvent.change(screen.getByLabelText("Expires on"), { target: { value: "2026-09-29" } });
-    fireEvent.click(screen.getByRole("button", { name: "Record SLO evidence" }));
+    fireEvent.click(screen.getByRole("button", { name: "SLO 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
     expect(recordProductionReadinessEvidence).toHaveBeenCalledWith(
@@ -1224,7 +1224,7 @@ describe("automation ops view", () => {
       recordProductionReadinessEvidence,
     }));
 
-    expect(await screen.findByRole("heading", { name: "Controlled-prod readiness" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Support evidence ref"), { target: { value: "ticket:TRAIN-123" } });
     fireEvent.change(screen.getByLabelText("Support summary"), { target: { value: "Support model and training completion approved." } });
     fireEvent.change(screen.getByLabelText("Support model ref"), { target: { value: "support-model:L1-L3" } });
@@ -1234,7 +1234,7 @@ describe("automation ops view", () => {
     fireEvent.change(screen.getByLabelText("Coverage percent"), { target: { value: "95" } });
     fireEvent.change(screen.getByLabelText("Completed at"), { target: { value: "2026-06-29T00:45:00.000Z" } });
     fireEvent.change(screen.getByLabelText("Support training expires on"), { target: { value: "2026-09-29" } });
-    fireEvent.click(screen.getByRole("button", { name: "Record support evidence" }));
+    fireEvent.click(screen.getByRole("button", { name: "지원 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
     expect(recordProductionReadinessEvidence).toHaveBeenCalledWith(
@@ -1278,7 +1278,7 @@ describe("automation ops view", () => {
       recordProductionReadinessEvidence,
     }));
 
-    expect(await screen.findByRole("heading", { name: "Controlled-prod readiness" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Telemetry evidence ref"), { target: { value: "ticket:OBS-124" } });
     fireEvent.change(screen.getByLabelText("Telemetry summary"), { target: { value: "OTLP collector, dashboard, and alert route approved." } });
     fireEvent.change(screen.getByLabelText("Telemetry exporter"), { target: { value: "otlp" } });
@@ -1287,7 +1287,7 @@ describe("automation ops view", () => {
     fireEvent.change(screen.getByLabelText("Alert route ref"), { target: { value: "alert-route:rpa-sev" } });
     fireEvent.change(screen.getByLabelText("Sampled at"), { target: { value: "2026-06-29T00:16:30.000Z" } });
     fireEvent.change(screen.getByLabelText("Telemetry evidence expires on"), { target: { value: "2026-09-29" } });
-    fireEvent.click(screen.getByRole("button", { name: "Record telemetry evidence" }));
+    fireEvent.click(screen.getByRole("button", { name: "관측성 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
     expect(recordProductionReadinessEvidence).toHaveBeenCalledWith(
@@ -1330,7 +1330,7 @@ describe("automation ops view", () => {
       recordProductionReadinessEvidence,
     }));
 
-    expect(await screen.findByRole("heading", { name: "Controlled-prod readiness" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Backup evidence ref"), { target: { value: "drill:PITR-2026-06-29" } });
     fireEvent.change(screen.getByLabelText("Backup summary"), { target: { value: "PITR restore completed within target." } });
     fireEvent.change(screen.getByLabelText("Backup policy ref"), { target: { value: "backup-policy:managed-pg-prod" } });
@@ -1339,7 +1339,7 @@ describe("automation ops view", () => {
     fireEvent.change(screen.getByLabelText("RTO minutes"), { target: { value: "20" } });
     fireEvent.change(screen.getByLabelText("RPO minutes"), { target: { value: "5" } });
     fireEvent.change(screen.getByLabelText("Backup expires on"), { target: { value: "2026-09-29" } });
-    fireEvent.click(screen.getByRole("button", { name: "Record backup evidence" }));
+    fireEvent.click(screen.getByRole("button", { name: "백업 증빙 기록" }));
 
     await waitFor(() => expect(recordProductionReadinessEvidence).toHaveBeenCalledTimes(1));
     expect(recordProductionReadinessEvidence).toHaveBeenCalledWith(
@@ -1932,12 +1932,12 @@ describe("automation ops view", () => {
     }));
     renderApp(clientWithOpsData({ listOpsAlertDeliveries }));
 
-    const receiptButtons = await screen.findAllByRole("button", { name: "Delivery receipts" });
+    const receiptButtons = await screen.findAllByRole("button", { name: "전달 증빙" });
     const alertRow = (receiptButtons[0] as HTMLButtonElement).closest("li") as HTMLLIElement;
     fireEvent.click(receiptButtons[0] as HTMLButtonElement);
 
     await waitFor(() => expect(listOpsAlertDeliveries).toHaveBeenCalledWith("alert-run-sla-1", { limit: 5 }));
-    expect(await within(alertRow).findByText("Provider delivery receipts")).toBeInTheDocument();
+    expect(await within(alertRow).findByText("제공자 전달 증빙")).toBeInTheDocument();
     expect(within(alertRow).getByText("teams / teams-primary")).toBeInTheDocument();
     expect(within(alertRow).getByText(/receipt teams-receipt-1/)).toBeInTheDocument();
     expect(within(alertRow).getByText(/secret:\/\/tenant-a\/notification\/teams\/primary/)).toBeInTheDocument();

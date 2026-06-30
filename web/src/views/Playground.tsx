@@ -133,7 +133,7 @@ export function PlaygroundView(): JSX.Element {
       {list.query.isLoading ? (
         <Loading />
       ) : list.query.isError ? (
-        <ErrorState message="자동화 목록을 불러오지 못했습니다." onRetry={() => void list.query.refetch()} />
+        <ErrorState message="자동화 목록을 불러오지 못했습니다. 자동화가 아직 없으면 자동화 만들기에서 먼저 생성하세요. 계속 실패하면 API 연결 또는 권한을 확인하세요." onRetry={() => void list.query.refetch()} />
       ) : (
         <>
           <label style={{ display: "block", marginBottom: 12 }}>
@@ -181,7 +181,7 @@ export function PlaygroundView(): JSX.Element {
               {detail.isLoading ? (
                 <Loading />
               ) : detail.isError ? (
-                <ErrorState message="자동화 정보를 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
+                <ErrorState message="선택한 자동화 정보를 불러오지 못했습니다. 목록을 새로고침하거나 다른 자동화를 선택하세요." onRetry={() => void detail.refetch()} />
               ) : (
                 <Plan ir={detail.data?.ir} />
               )}

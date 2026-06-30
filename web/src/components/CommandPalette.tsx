@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { ApiClient } from "../api/client";
 import { useApiClient } from "../api/context";
-import { VIEW_KEYS, navigate, type ViewKey } from "../router";
+import { navigate, type ViewKey } from "../router";
+import { getVisibleViews, type NavMode, type NavPolicyFlags } from "../navPolicy";
 import { VIEW_META } from "../views/meta";
 import type { ConcurrencyPolicy, GlobalSearchItem, HumanTaskItem, RunItem, ScenarioItem } from "../api/types";
 
@@ -126,9 +127,28 @@ function navigateSearchItem(item: GlobalSearchItem): void {
   }
 }
 
+function searchItemView(item: GlobalSearchItem): ViewKey {
+  if (item.type === "run") return "runTrace";
+  if (item.type === "scenario") return "playground";
+  if (item.type === "human_task") return "humanTasks";
+  return "security";
+}
+
 // 전역 커맨드 팔레트(Ctrl/⌘+K) — 화면 이동 + 최근 실행/업무/담당자/Credential/자동화 검색. 입력 포커스 유지 + ↑↓ 하이라이트
 // (aria-activedescendant), Enter 실행, Esc·배경 클릭 닫기. 열기 직전 포커스를 닫을 때 복원한다(접근성).
-export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element | null {
+export function CommandPalette({
+  open,
+  onClose,
+  roles,
+  navMode,
+  flags,
+}: {
+  open: boolean;
+  onClose: () => void;
+  roles: readonly string[];
+  navMode: NavMode;
+  flags: NavPolicyFlags;
+}): JSX.Element | null {
   const api = useApiClient();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -136,6 +156,22 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const restoreRef = useRef<HTMLElement | null>(null);
   const q = query.trim().toLowerCase();
   const lookupEnabled = open && q.length >= MIN_ENTITY_QUERY_LENGTH;
+  const visibleViews = useMemo(() => getVisibleViews({ roles, mode: navMode, flags }), [roles, navMode, flags]);
+  const visibleViewSet = useMemo(() => new Set<ViewKey>(visibleViews), [visibleViews]);
+  const hiddenPolicyMatch = useMemo(() => {
+    if (q.length < MIN_ENTITY_QUERY_LENGTH) return false;
+    const hiddenViewMatch = Object.keys(VIEW_META).some((key) => {
+      const viewKey = key as ViewKey;
+      const meta = VIEW_META[viewKey];
+      return !visibleViewSet.has(viewKey) && includesQuery(q, [meta.title, meta.subtitle]);
+    });
+    const hiddenQuickActionMatch = QUICK_ACTIONS.some((action) =>
+      !visibleViewSet.has(action.view) && includesQuery(q, [action.label, action.hint, ...action.keywords]),
+    );
+    return hiddenViewMatch || hiddenQuickActionMatch;
+  }, [q, visibleViewSet]);
+  const securityVisible = visibleViewSet.has("security");
+  const playgroundVisible = visibleViewSet.has("playground");
 
   const globalSearch = useQuery({
     queryKey: ["palette-global-search", q],
@@ -161,21 +197,21 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const principals = useQuery({
     queryKey: ["palette-principals"],
     queryFn: async () => (await api.listPrincipals({ limit: LOOKUP_LIMIT })).items,
-    enabled: lookupEnabled,
+    enabled: lookupEnabled && securityVisible,
     staleTime: SEARCH_STALE_MS,
   });
 
   const scenarios = useQuery({
     queryKey: ["palette-scenarios"],
     queryFn: () => listPaletteScenarios(api),
-    enabled: lookupEnabled,
+    enabled: lookupEnabled && playgroundVisible,
     staleTime: SEARCH_STALE_MS,
   });
 
   const credentials = useQuery({
     queryKey: ["palette-credentials"],
     queryFn: async () => (await api.listConcurrencyPolicies()).items,
-    enabled: lookupEnabled,
+    enabled: lookupEnabled && securityVisible,
     staleTime: SEARCH_STALE_MS,
   });
 
@@ -195,18 +231,21 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     const globalItems: PaletteItem[] =
       q.length < MIN_ENTITY_QUERY_LENGTH
         ? []
-        : (globalSearch.data ?? []).slice(0, GROUP_LIMIT * 2).map((item) => ({
-            id: `global:${item.type}:${item.id}`,
-            group: "통합 검색",
-            label: item.label,
-            hint: item.description ?? item.matched_field,
-            run: () => {
-              navigateSearchItem(item);
-              onClose();
-            },
-          }));
+        : (globalSearch.data ?? [])
+            .filter((item) => visibleViewSet.has(searchItemView(item)))
+            .slice(0, GROUP_LIMIT * 2)
+            .map((item) => ({
+              id: `global:${item.type}:${item.id}`,
+              group: "통합 검색",
+              label: item.label,
+              hint: item.description ?? item.matched_field,
+              run: () => {
+                navigateSearchItem(item);
+                onClose();
+              },
+            }));
     const quickActions: PaletteItem[] = QUICK_ACTIONS.filter((action) =>
-      q === "" || includesQuery(q, [action.label, action.hint, ...action.keywords]),
+      visibleViewSet.has(action.view) && (q === "" || includesQuery(q, [action.label, action.hint, ...action.keywords])),
     ).map((action) => ({
       id: `quick:${action.id}`,
       group: "빠른 작업",
@@ -217,7 +256,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         onClose();
       },
     }));
-    const views: PaletteItem[] = VIEW_KEYS.filter(
+    const views: PaletteItem[] = visibleViews.filter(
       (k) => q === "" || VIEW_META[k].title.toLowerCase().includes(q) || VIEW_META[k].subtitle.toLowerCase().includes(q),
     ).map((k) => ({
       id: `view:${k}`,
@@ -320,7 +359,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               },
             }));
     return [...globalItems, ...quickActions, ...views, ...runItems, ...humanTaskItems, ...principalItems, ...scenarioItems, ...credentialItems];
-  }, [q, globalSearch.data, runs.data, humanTasks.data, principals.data, scenarios.data, credentials.data, onClose]);
+  }, [q, globalSearch.data, runs.data, humanTasks.data, principals.data, scenarios.data, credentials.data, onClose, visibleViews, visibleViewSet]);
 
   useEffect(() => {
     setActive((a) => (items.length === 0 ? 0 : Math.max(0, Math.min(a, items.length - 1))));
@@ -350,9 +389,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const hasLookupError =
     lookupEnabled && (globalSearch.isError || runs.isError || humanTasks.isError || principals.isError || scenarios.isError || credentials.isError);
   const emptyMessage = isSearching
-    ? "검색 중…"
+    ? "검색 중..."
+    : hiddenPolicyMatch
+      ? "현재 역할/메뉴 모드에서 검색 가능한 결과가 없습니다."
     : hasLookupError
-      ? "일부 결과를 불러오지 못했습니다."
+      ? "일부 데이터 검색을 불러오지 못했습니다. 화면 이동 결과는 계속 사용할 수 있습니다."
     : q.length > 0 && q.length < MIN_ENTITY_QUERY_LENGTH
       ? "조금 더 입력해 주세요."
       : "불러온 결과에서 찾지 못했습니다.";

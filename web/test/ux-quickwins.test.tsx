@@ -354,20 +354,22 @@ describe("UX quick-wins (A)", () => {
     expect(details?.open).toBe(false);
   });
 
-  // A6 — 셸 신뢰감: 역할 칩 + 사이드바 3그룹.
+  // A6 — 셸 신뢰감: 역할 칩 + 정책 기반 사이드바.
   test("A6: 탑바 역할 칩 표시(한국어 라벨)", async () => {
     renderApp();
     expect(await screen.findByText("관리자")).toBeInTheDocument(); // admin ∈ ALL_ROLES
     expect(screen.getByText("운영자")).toBeInTheDocument(); // operator
   });
 
-  test("A6: 사이드바 3그룹 헤딩 + 18 nav item 유지", async () => {
+  test("A6: 사이드바는 라우팅 목록과 분리된 정책 기반 메뉴를 렌더", async () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(within(nav).getByText("제작")).toBeInTheDocument();
+    expect(within(nav).getByText("내 작업")).toBeInTheDocument();
+    expect(within(nav).getByText("만들기")).toBeInTheDocument();
     expect(within(nav).getByText("운영")).toBeInTheDocument();
-    expect(within(nav).getByText("고급 설정")).toBeInTheDocument();
-    expect(within(nav).getAllByRole("button")).toHaveLength(18); // 그룹화 후에도 전 뷰 유지
+    expect(within(nav).getByText("관리")).toBeInTheDocument();
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(17); // openGate는 internal flag 없으면 숨김
+    expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
 
   // A6 회귀 가드: 그룹이 모든 뷰를 정확히 한 번씩 덮어야 한다(누락/중복 시 nav에서 사라짐).

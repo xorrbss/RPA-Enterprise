@@ -7,6 +7,7 @@ import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
 import { Sparkline, type SparklinePoint } from "../components/Sparkline";
 import { StatusBadge, errorCodeLabel, kindLabel } from "../components/badges";
+import { getInternalNavFlags, type NavPolicyFlags } from "../navPolicy";
 import { navigate, type ViewKey } from "../router";
 import type {
   AutomationPerformanceReport,
@@ -190,18 +191,19 @@ type ActionItem = {
   readonly params?: Record<string, string>;
 };
 
-function roleFocus(roles: readonly string[], can: (a: string) => boolean): { title: string; note: string; actions: readonly { label: string; view: ViewKey; params?: Record<string, string> }[] } {
+function roleFocus(roles: readonly string[], can: (a: string) => boolean, flags: NavPolicyFlags): { title: string; note: string; actions: readonly { label: string; view: ViewKey; params?: Record<string, string> }[] } {
   const known = roles.map((r) => ROLE_LABELS[r] ?? r);
   const roleText = known.length > 0 ? known.join(" · ") : "권한 미확인";
   if (roles.includes("admin")) {
+    const actions: { label: string; view: ViewKey; params?: Record<string, string> }[] = [
+      { label: "사이트 접근 정책", view: "security" },
+      { label: "AI 모델 정책", view: "llmGateway" },
+    ];
+    if (flags.showInternalOpenGate) actions.push({ label: "Product-open 점검", view: "openGate" });
     return {
       title: `관리자 작업대 · ${roleText}`,
       note: "정책 충돌, 사이트 승인, 모델 기본값처럼 운영 전체를 막을 수 있는 설정을 먼저 확인합니다.",
-      actions: [
-        { label: "AI 모델 정책", view: "llmGateway" },
-        { label: "사이트 접근 정책", view: "security" },
-        { label: "Product-open 점검", view: "openGate" },
-      ],
+      actions,
     };
   }
   if (roles.includes("approver")) {
@@ -211,7 +213,7 @@ function roleFocus(roles: readonly string[], can: (a: string) => boolean): { tit
       actions: [
         { label: "결재 인박스", view: "approvalInbox" },
         { label: "사람 확인", view: "humanTasks" },
-        { label: "사이트 승인", view: "security" },
+        { label: "감사 이력", view: "auditExplorer" },
       ],
     };
   }
@@ -247,7 +249,7 @@ function roleFocus(roles: readonly string[], can: (a: string) => boolean): { tit
 }
 
 function RoleWorkbench({ roles, can }: { roles: readonly string[]; can: (a: string) => boolean }): JSX.Element {
-  const focus = roleFocus(roles, can);
+  const focus = roleFocus(roles, can, getInternalNavFlags());
   return (
     <section className="panel role-workbench" aria-label="역할별 작업대">
       <div>

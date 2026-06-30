@@ -345,9 +345,9 @@ export function OrchestrationView(): JSX.Element {
 
   return (
     <div className="orchestration-view">
-      <section className="panel orchestration-toolbar" aria-label="오케스트레이션 빠른 이동">
+      <section className="panel orchestration-toolbar" aria-label="실행 예약·알림 빠른 이동">
         <div>
-          <h2>운영 오케스트레이션</h2>
+          <h2>예약·큐 운영</h2>
           <p className="subtle">예약 실행, 큐 상태, 사람 개입, 실패 복구를 한 화면에서 관리합니다.</p>
         </div>
         <div className="quick-actions">

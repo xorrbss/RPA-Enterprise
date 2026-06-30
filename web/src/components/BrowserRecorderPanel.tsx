@@ -199,7 +199,7 @@ export function BrowserRecorderPanel(): JSX.Element {
         <Loading />
       ) : sitesQuery.isError ? (
         <ErrorState
-          message="사이트 목록을 불러오지 못했습니다."
+          message="녹화할 사이트 목록을 불러오지 못했습니다. 사이트가 없으면 보안/개인정보 화면에서 먼저 등록하고, 계속 실패하면 API 연결 또는 권한을 확인하세요."
           onRetry={() => void sitesQuery.refetch()}
         />
       ) : sites.length === 0 ? (
@@ -310,7 +310,7 @@ export function BrowserRecorderPanel(): JSX.Element {
               </div>
               {recordingsQuery.isError ? (
                 <ErrorState
-                  message="녹화 기록을 불러오지 못했습니다."
+                  message="선택한 사이트의 녹화 기록을 불러오지 못했습니다. 새로고침 후 다시 시도하세요."
                   onRetry={() => void recordingsQuery.refetch()}
                 />
               ) : sessions.length === 0 ? (

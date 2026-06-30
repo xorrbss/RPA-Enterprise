@@ -167,12 +167,12 @@ export function ProductionReadinessPanel({
 
   if (isError) {
     return (
-      <section className="panel production-readiness" aria-label="Controlled production readiness">
+      <section className="panel production-readiness" aria-label="운영 전환 준비 상태">
         <div className="panel-head">
-          <h2>Controlled-prod readiness</h2>
-          <span className="badge red">Load failed</span>
+          <h2>운영 전환 준비 상태</h2>
+          <span className="badge red">불러오기 실패</span>
         </div>
-        <p className="empty-state">Production readiness evidence could not be loaded.</p>
+        <p className="empty-state">운영 전환 증빙을 불러오지 못했습니다.</p>
       </section>
     );
   }
@@ -182,39 +182,39 @@ export function ProductionReadinessPanel({
   const latestAuditCompletedAt = auditVerifier?.latest_completed_at ?? null;
   const auditVerifierFresh = auditVerifier?.latest_status === "valid" && auditVerifier.stale === false;
   return (
-    <section className="panel production-readiness" aria-label="Controlled production readiness">
+    <section className="panel production-readiness" aria-label="운영 전환 준비 상태">
       <div className="panel-head">
         <div>
-          <h2>Controlled-prod readiness</h2>
+          <h2>운영 전환 준비 상태</h2>
           <p className="subtle">
-            {readiness === undefined ? (isLoading ? "Checking evidence" : "No snapshot") : formatDateTime(readiness.evaluated_at)}
+            {readiness === undefined ? (isLoading ? "증빙 확인 중" : "스냅샷 없음") : formatDateTime(readiness.evaluated_at)}
           </p>
         </div>
         <span className={`badge ${readinessTone(readiness?.status)}`}>{readinessLabel(readiness?.status, isLoading)}</span>
       </div>
       <div className="ops-health-grid">
         <ReadinessTile
-          title="Runtime blockers"
+          title="실행 차단 요인"
           value={readiness === undefined ? "-" : String(readiness.summary.blocker_count)}
-          detail={readiness === undefined ? "Evidence pending" : readiness.summary.blocker_count === 0 ? "No runtime blockers" : "Must close"}
+          detail={readiness === undefined ? "증빙 대기" : readiness.summary.blocker_count === 0 ? "차단 없음" : "조치 필요"}
           tone={readiness !== undefined && readiness.summary.blocker_count > 0 ? "red" : "green"}
         />
         <ReadinessTile
-          title="External evidence"
+          title="외부 증빙"
           value={readiness === undefined ? "-" : String(readiness.summary.deferred_count)}
-          detail={readiness === undefined ? "Evidence pending" : readiness.summary.deferred_count === 0 ? "Attached" : "Owner evidence needed"}
+          detail={readiness === undefined ? "증빙 대기" : readiness.summary.deferred_count === 0 ? "등록됨" : "담당자 증빙 필요"}
           tone={readiness !== undefined && readiness.summary.deferred_count > 0 ? "amber" : "green"}
         />
         <ReadinessTile
-          title="Browser capacity"
+          title="브라우저 용량"
           value={readiness === undefined ? "-" : String(readiness.signals.bot_pool.capacity_slots)}
-          detail={readiness === undefined ? "Workers pending" : `active ${readiness.signals.bot_pool.workers.active}`}
+          detail={readiness === undefined ? "워커 확인 중" : `활성 ${readiness.signals.bot_pool.workers.active}`}
           tone={readiness !== undefined && readiness.signals.bot_pool.workers.active >= 2 ? "green" : "amber"}
         />
         <ReadinessTile
-          title="Audit verifier"
+          title="감사 검증"
           value={auditVerifier?.latest_status ?? "-"}
-          detail={latestAuditCompletedAt !== null ? formatDateTime(latestAuditCompletedAt) : "No fresh proof"}
+          detail={latestAuditCompletedAt !== null ? formatDateTime(latestAuditCompletedAt) : "최신 증빙 없음"}
           tone={auditVerifierFresh ? "green" : "amber"}
         />
       </div>
@@ -339,8 +339,8 @@ function ExternalAlertEvidenceRecorder({
   return (
     <form className="production-readiness-record" onSubmit={submit}>
       <div className="production-readiness-evidence-head">
-        <strong>Record alert delivery evidence</strong>
-        {hasError ? <span className="badge red">Record failed</span> : null}
+        <strong>알림 전달 증빙 기록</strong>
+        {hasError ? <span className="badge red">기록 실패</span> : null}
       </div>
       <div className="production-readiness-record-grid">
         <label>
@@ -379,7 +379,7 @@ function ExternalAlertEvidenceRecorder({
       </div>
       <div className="form-actions">
         <button className="btn primary" type="submit" disabled={!canSubmit || isRecording}>
-          {isRecording ? "Recording" : "Record alert evidence"}
+          {isRecording ? "기록 중" : "알림 증빙 기록"}
         </button>
       </div>
     </form>
@@ -437,8 +437,8 @@ function SloEvidenceRecorder({
   return (
     <form className="production-readiness-record" onSubmit={submit}>
       <div className="production-readiness-evidence-head">
-        <strong>Record SLO sign-off</strong>
-        {hasError ? <span className="badge red">Record failed</span> : null}
+        <strong>SLO·당직 승인 증빙 기록</strong>
+        {hasError ? <span className="badge red">기록 실패</span> : null}
       </div>
       <div className="production-readiness-record-grid">
         <label>
@@ -476,7 +476,7 @@ function SloEvidenceRecorder({
       </div>
       <div className="form-actions">
         <button className="btn primary" type="submit" disabled={!canSubmit || isRecording}>
-          {isRecording ? "Recording" : "Record SLO evidence"}
+          {isRecording ? "기록 중" : "SLO 증빙 기록"}
         </button>
       </div>
     </form>
@@ -539,8 +539,8 @@ function SupportTrainingEvidenceRecorder({
   return (
     <form className="production-readiness-record" onSubmit={submit}>
       <div className="production-readiness-evidence-head">
-        <strong>Record support/training evidence</strong>
-        {hasError ? <span className="badge red">Record failed</span> : null}
+        <strong>지원·교육 증빙 기록</strong>
+        {hasError ? <span className="badge red">기록 실패</span> : null}
       </div>
       <div className="production-readiness-record-grid">
         <label>
@@ -582,7 +582,7 @@ function SupportTrainingEvidenceRecorder({
       </div>
       <div className="form-actions">
         <button className="btn primary" type="submit" disabled={!canSubmit || isRecording}>
-          {isRecording ? "Recording" : "Record support evidence"}
+          {isRecording ? "기록 중" : "지원 증빙 기록"}
         </button>
       </div>
     </form>
@@ -638,8 +638,8 @@ function ObservabilityEvidenceRecorder({
   return (
     <form className="production-readiness-record" onSubmit={submit}>
       <div className="production-readiness-evidence-head">
-        <strong>Record telemetry evidence</strong>
-        {hasError ? <span className="badge red">Record failed</span> : null}
+        <strong>관측성 증빙 기록</strong>
+        {hasError ? <span className="badge red">기록 실패</span> : null}
       </div>
       <div className="production-readiness-record-grid">
         <label>
@@ -680,7 +680,7 @@ function ObservabilityEvidenceRecorder({
       </div>
       <div className="form-actions">
         <button className="btn primary" type="submit" disabled={!canSubmit || isRecording}>
-          {isRecording ? "Recording" : "Record telemetry evidence"}
+          {isRecording ? "기록 중" : "관측성 증빙 기록"}
         </button>
       </div>
     </form>
@@ -739,8 +739,8 @@ function BackupEvidenceRecorder({
   return (
     <form className="production-readiness-record" onSubmit={submit}>
       <div className="production-readiness-evidence-head">
-        <strong>Record backup drill</strong>
-        {hasError ? <span className="badge red">Record failed</span> : null}
+        <strong>백업 복구 리허설 증빙 기록</strong>
+        {hasError ? <span className="badge red">기록 실패</span> : null}
       </div>
       <div className="production-readiness-record-grid">
         <label>
@@ -778,7 +778,7 @@ function BackupEvidenceRecorder({
       </div>
       <div className="form-actions">
         <button className="btn primary" type="submit" disabled={!canSubmit || isRecording}>
-          {isRecording ? "Recording" : "Record backup evidence"}
+          {isRecording ? "기록 중" : "백업 증빙 기록"}
         </button>
       </div>
     </form>
@@ -797,32 +797,32 @@ function BackupEvidenceList({
   if (isError) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Backup/PITR evidence</strong>
-        <span className="subtle">Evidence ledger unavailable</span>
+        <strong>백업/PITR 증빙</strong>
+        <span className="subtle">증빙 장부를 불러오지 못했습니다.</span>
       </div>
     );
   }
   if (isLoading) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Backup/PITR evidence</strong>
-        <span className="subtle">Checking owner evidence</span>
+        <strong>백업/PITR 증빙</strong>
+        <span className="subtle">담당자 증빙 확인 중</span>
       </div>
     );
   }
   if (items.length === 0) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Backup/PITR evidence</strong>
-        <span className="subtle">No restore drill evidence recorded</span>
+        <strong>백업/PITR 증빙</strong>
+        <span className="subtle">복구 리허설 증빙이 아직 없습니다.</span>
       </div>
     );
   }
   return (
     <div className="production-readiness-evidence">
       <div className="production-readiness-evidence-head">
-        <strong>Backup/PITR evidence</strong>
-        <span className="subtle">latest {items.length}</span>
+        <strong>백업/PITR 증빙</strong>
+        <span className="subtle">최근 {items.length}건</span>
       </div>
       <ul className="production-readiness-evidence-list">
         {items.map((item) => (
@@ -859,32 +859,32 @@ function ExternalAlertEvidenceList({
   if (isError) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>External alert evidence</strong>
-        <span className="subtle">Evidence ledger unavailable</span>
+        <strong>외부 알림 증빙</strong>
+        <span className="subtle">증빙 장부를 불러오지 못했습니다.</span>
       </div>
     );
   }
   if (isLoading) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>External alert evidence</strong>
-        <span className="subtle">Checking provider delivery evidence</span>
+        <strong>외부 알림 증빙</strong>
+        <span className="subtle">제공자 전달 증빙 확인 중</span>
       </div>
     );
   }
   if (items.length === 0) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>External alert evidence</strong>
-        <span className="subtle">No provider delivered drill evidence recorded</span>
+        <strong>외부 알림 증빙</strong>
+        <span className="subtle">전달 리허설 증빙이 아직 없습니다.</span>
       </div>
     );
   }
   return (
     <div className="production-readiness-evidence">
       <div className="production-readiness-evidence-head">
-        <strong>External alert evidence</strong>
-        <span className="subtle">latest {items.length}</span>
+        <strong>외부 알림 증빙</strong>
+        <span className="subtle">최근 {items.length}건</span>
       </div>
       <ul className="production-readiness-evidence-list">
         {items.map((item) => (
@@ -921,32 +921,32 @@ function SloEvidenceList({
   if (isError) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>SLO/on-call evidence</strong>
-        <span className="subtle">Evidence ledger unavailable</span>
+        <strong>SLO·당직 증빙</strong>
+        <span className="subtle">증빙 장부를 불러오지 못했습니다.</span>
       </div>
     );
   }
   if (isLoading) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>SLO/on-call evidence</strong>
-        <span className="subtle">Checking owner evidence</span>
+        <strong>SLO·당직 증빙</strong>
+        <span className="subtle">담당자 증빙 확인 중</span>
       </div>
     );
   }
   if (items.length === 0) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>SLO/on-call evidence</strong>
-        <span className="subtle">No owner sign-off evidence recorded</span>
+        <strong>SLO·당직 증빙</strong>
+        <span className="subtle">담당자 승인 증빙이 아직 없습니다.</span>
       </div>
     );
   }
   return (
     <div className="production-readiness-evidence">
       <div className="production-readiness-evidence-head">
-        <strong>SLO/on-call evidence</strong>
-        <span className="subtle">latest {items.length}</span>
+        <strong>SLO·당직 증빙</strong>
+        <span className="subtle">최근 {items.length}건</span>
       </div>
       <ul className="production-readiness-evidence-list">
         {items.map((item) => (
@@ -983,32 +983,32 @@ function SupportTrainingEvidenceList({
   if (isError) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Support/training evidence</strong>
-        <span className="subtle">Evidence ledger unavailable</span>
+        <strong>지원·교육 증빙</strong>
+        <span className="subtle">증빙 장부를 불러오지 못했습니다.</span>
       </div>
     );
   }
   if (isLoading) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Support/training evidence</strong>
-        <span className="subtle">Checking support readiness evidence</span>
+        <strong>지원·교육 증빙</strong>
+        <span className="subtle">지원 준비 증빙 확인 중</span>
       </div>
     );
   }
   if (items.length === 0) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Support/training evidence</strong>
-        <span className="subtle">No support model or training completion evidence recorded</span>
+        <strong>지원·교육 증빙</strong>
+        <span className="subtle">지원 모델 또는 교육 완료 증빙이 아직 없습니다.</span>
       </div>
     );
   }
   return (
     <div className="production-readiness-evidence">
       <div className="production-readiness-evidence-head">
-        <strong>Support/training evidence</strong>
-        <span className="subtle">latest {items.length}</span>
+        <strong>지원·교육 증빙</strong>
+        <span className="subtle">최근 {items.length}건</span>
       </div>
       <ul className="production-readiness-evidence-list">
         {items.map((item) => (
@@ -1046,32 +1046,32 @@ function ObservabilityEvidenceList({
   if (isError) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Observability evidence</strong>
-        <span className="subtle">Evidence ledger unavailable</span>
+        <strong>관측성 증빙</strong>
+        <span className="subtle">증빙 장부를 불러오지 못했습니다.</span>
       </div>
     );
   }
   if (isLoading) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Observability evidence</strong>
-        <span className="subtle">Checking telemetry evidence</span>
+        <strong>관측성 증빙</strong>
+        <span className="subtle">텔레메트리 증빙 확인 중</span>
       </div>
     );
   }
   if (items.length === 0) {
     return (
       <div className="production-readiness-evidence" role="status">
-        <strong>Observability evidence</strong>
-        <span className="subtle">No telemetry wiring evidence recorded</span>
+        <strong>관측성 증빙</strong>
+        <span className="subtle">텔레메트리 연결 증빙이 아직 없습니다.</span>
       </div>
     );
   }
   return (
     <div className="production-readiness-evidence">
       <div className="production-readiness-evidence-head">
-        <strong>Observability evidence</strong>
-        <span className="subtle">latest {items.length}</span>
+        <strong>관측성 증빙</strong>
+        <span className="subtle">최근 {items.length}건</span>
       </div>
       <ul className="production-readiness-evidence-list">
         {items.map((item) => (
@@ -1125,10 +1125,10 @@ function readinessTone(status: ProductionReadinessStatus | undefined): "green" |
 }
 
 function readinessLabel(status: ProductionReadinessStatus | undefined, isLoading: boolean): string {
-  if (status === "ready") return "Ready";
-  if (status === "warning") return "Evidence needed";
-  if (status === "blocked") return "Blocked";
-  return isLoading ? "Checking" : "Unknown";
+  if (status === "ready") return "준비 완료";
+  if (status === "warning") return "증빙 필요";
+  if (status === "blocked") return "차단";
+  return isLoading ? "확인 중" : "알 수 없음";
 }
 
 function gateTone(status: ProductionReadinessGateStatus): "green" | "amber" | "red" | "muted" {
@@ -1139,10 +1139,10 @@ function gateTone(status: ProductionReadinessGateStatus): "green" | "amber" | "r
 }
 
 function gateStatusLabel(status: ProductionReadinessGate["status"]): string {
-  if (status === "pass") return "Pass";
-  if (status === "blocked") return "Blocked";
-  if (status === "warning") return "Warning";
-  return "Deferred";
+  if (status === "pass") return "통과";
+  if (status === "blocked") return "차단";
+  if (status === "warning") return "주의";
+  return "유예";
 }
 
 function evidenceStatusTone(status: ProductionReadinessEvidenceStatus): "green" | "red" {
@@ -1150,7 +1150,7 @@ function evidenceStatusTone(status: ProductionReadinessEvidenceStatus): "green" 
 }
 
 function evidenceStatusLabel(status: ProductionReadinessEvidenceStatus): string {
-  return status === "valid" ? "Valid" : "Failed";
+  return status === "valid" ? "유효" : "실패";
 }
 
 function metadataText(value: unknown): string {

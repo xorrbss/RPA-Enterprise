@@ -10,7 +10,7 @@ export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon:
   scenarioStudio: { title: "자동화 만들기", subtitle: "업무를 한 번 보여주고 반복 실행할 자동화로 정리", icon: "Video", helpText: "업무 절차를 정리해 반복 실행할 자동화로 만드는 화면입니다. 말로 설명하거나 쉬운 양식으로 만들 수 있습니다." },
   playground: { title: "테스트 실행", subtitle: "만든 자동화를 안전하게 시험 실행하고 실제 실행 전 결과를 확인", icon: "PlaySquare", helpText: "만든 자동화를 실제 운영에 올리기 전에, 안전한 시험 실행으로 결과를 미리 확인합니다." },
   dashboard: { title: "RPA 운영 대시보드", subtitle: "실행 상태, 사람 확인, 실패, 작업 항목·외부 전달 재처리 대기를 통합 모니터링", icon: "LayoutDashboard", helpText: "지금 실행 중인 자동화, 사람 확인 대기, 실패, 재처리 대기를 한눈에 모아 보는 운영 시작 화면입니다." },
-  automationOps: { title: "오케스트레이션", subtitle: "실행 예약, 트리거, 큐, 알림 운영을 한 곳에서 점검", icon: "CalendarClock", helpText: "자동화의 실행 예약·트리거·대기 큐·알림 같은 운영 설정을 한 곳에서 점검합니다." },
+  automationOps: { title: "실행 예약·알림", subtitle: "실행 예약, 트리거, 큐, 알림 운영을 한 곳에서 점검", icon: "CalendarClock", helpText: "자동화의 실행 예약·트리거·대기 큐·알림 같은 운영 설정을 한 곳에서 점검합니다." },
   documentIdp: { title: "문서 자동화", subtitle: "브라우저 산출물의 필드 추출, 검증 큐, 증빙 연결을 관리", icon: "FileSearch", helpText: "자동화가 만들어 낸 문서에서 필요한 값을 뽑아내고, 검증 대기 건과 증빙 연결을 관리합니다." },
   openGate: { title: "Product-open 점검", subtitle: "계약 기준으로 화면, 액션, 보안 gate가 검증 가능한지 확인", icon: "ClipboardCheck", helpText: "정식 오픈 전, 계약 문서 기준으로 화면·액션·보안 통제가 검증 가능한 상태인지 점검하는 문서형 화면입니다." },
   workitems: { title: "작업 목록", subtitle: "대기, 재시도, 실패, 외부 전달 상태를 추적", icon: "ListChecks", helpText: "자동화가 처리하는 개별 작업이 대기·재시도·실패·외부 전달 중 어디에 있는지 추적합니다." },
