@@ -1667,9 +1667,24 @@ export interface BrowserRecordingValidationIssue {
   readonly message?: string;
 }
 
+export type StudioValidationStageName =
+  | "well_formed"
+  | "runnable"
+  | "operable"
+  | "prod_ready";
+export type StudioValidationStageStatus = "pass" | "failed" | "blocked" | "not_run";
+
+export interface StudioValidationStage {
+  readonly stage: StudioValidationStageName;
+  readonly status: StudioValidationStageStatus;
+  readonly reason_code: string;
+  readonly detail: string;
+}
+
 export interface BrowserRecordingValidationReport {
   readonly errors: readonly BrowserRecordingValidationIssue[];
   readonly warnings: readonly BrowserRecordingValidationIssue[];
+  readonly stages?: readonly StudioValidationStage[];
 }
 
 export interface BrowserRecordingSession {
@@ -1861,6 +1876,7 @@ export interface ScenarioVersionItem {
 export interface ValidationResult {
   readonly valid: boolean;
   readonly report: unknown;
+  readonly stages?: readonly StudioValidationStage[];
 }
 
 /** scenario 생성(POST)·편집(PUT) 응답. */

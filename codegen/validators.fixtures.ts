@@ -3,13 +3,13 @@
  * validators.ts(validateIR/validateVerify/validateEvent)를 실제 실행해 계약 스키마 검증 동작을 in-repo로 고정.
  * 실행: npm --prefix codegen run validators (tsx). 테스트 러너 비종속.
  */
-import { validateIR, validateVerify, validateEvent, validators } from "./validators";
+import { validateIR, validateVerify, validateEvent, validateStudioGraph, validators } from "./validators";
 import { compileScenarioStatic, validateScenarioStatic } from "./static-validation";
 import {
   EVENT_PAYLOAD_SCHEMA_REFS,
   EVENT_PAYLOAD_SCHEMAS,
 } from "./event-payload-registry";
-import { EVENT_TYPES, type EventType, type IRScenario } from "./types";
+import { EVENT_TYPES, type EventType, type IRScenario, type StudioGraph } from "./types";
 
 type Case = { name: string; fn: (d: unknown) => { valid: boolean }; data: unknown; expect: boolean };
 type StaticCase = {
@@ -25,6 +25,47 @@ const VALID_IR: IRScenario = {
   meta: { name: "t", version: 1 },
   start: "n1",
   nodes: { n1: { terminal: "success" } },
+};
+const VALID_STUDIO_GRAPH: StudioGraph = {
+  graph_id: "invoice_approval",
+  name: "Invoice approval",
+  version: 1,
+  compiler_version: "studio-graph@1",
+  start_node_id: "open_portal",
+  nodes: [
+    {
+      id: "open_portal",
+      type: "navigate",
+      label: "Open portal",
+      config: { url_ref: "start_url", wait_until: "domcontentloaded" },
+    },
+    {
+      id: "approve",
+      type: "human_task",
+      label: "Manager approval",
+      config: { kind: "approval", assignee_role: "finance_manager" },
+    },
+    {
+      id: "notify",
+      type: "api_call",
+      label: "Send notification",
+      config: {
+        url_ref: "ops_notification_url",
+        method: "POST",
+        auth: { type: "secret_ref_bearer", secret_ref: "secret://prod/connector/ops/token" },
+        body_ref: "approval_notice",
+        idempotency_key: "studio:${graph_id}:${version}:notify",
+      },
+    },
+  ],
+  edges: [
+    { id: "e_open_approve", source: "open_portal", target: "approve", type: "next" },
+    { id: "e_approve_notify", source: "approve", target: "notify", type: "decision", condition: "approved" },
+  ],
+  validation_stages: [
+    { stage: "well_formed", status: "pass", reason_code: "schema_valid", detail: "Graph schema and node shapes are valid." },
+    { stage: "runnable", status: "not_run", reason_code: "canonical_compile_not_run", detail: "Canonical IR compile has not been executed yet." },
+  ],
 };
 const STEP_EVENT_TYPES = new Set<EventType>(["step.started", "step.completed", "step.verify.failed"]);
 
@@ -53,6 +94,8 @@ const CASES: Case[] = [
     data: { meta: { name: "t", version: 1 }, start: "n1", nodes: { n1: { terminal: "success" } } } },
   { name: "IR valid: studio_mode meta 보존", fn: validateIR, expect: true,
     data: { meta: { name: "t", version: 1, studio_mode: "easy" }, start: "n1", nodes: { n1: { terminal: "success" } } } },
+  { name: "IR valid: studio_mode visual", fn: validateIR, expect: true,
+    data: { meta: { name: "t", version: 1, studio_mode: "visual" }, start: "n1", nodes: { n1: { terminal: "success" } } } },
   { name: "IR valid: meta evidence policy", fn: validateIR, expect: true,
     data: { meta: { name: "t", version: 1, evidence: { screenshot: "each_step", video: "never" } }, start: "n1", nodes: { n1: { terminal: "success" } } } },
   { name: "IR invalid: 흐름키 2개(oneOf 위반)", fn: validateIR, expect: false,
@@ -107,6 +150,16 @@ const CASES: Case[] = [
     data: { meta: { name: "t", version: 1 }, start: "n1", nodes: { n1: { side_effect: { kind: "submit", idempotency_key: "" }, terminal: "success" } } } },
   { name: "IR invalid: params_schema 자체가 JSON Schema가 아님", fn: validateIR, expect: false,
     data: { meta: { name: "t", version: 1 }, params_schema: { type: 1 }, start: "n1", nodes: { n1: { terminal: "success" } } } },
+
+  // --- Studio Graph (studio-graph.schema.json) ---
+  { name: "StudioGraph valid: visual authoring graph with staged not_run", fn: validateStudioGraph, expect: true,
+    data: VALID_STUDIO_GRAPH },
+  { name: "StudioGraph invalid: api_call raw Authorization header", fn: validateStudioGraph, expect: false,
+    data: { ...VALID_STUDIO_GRAPH, nodes: [{ id: "n1", type: "api_call", label: "call", config: { url_ref: "api_url", method: "GET", headers: { Authorization: "Bearer raw" }, auth: { type: "none" } } }] } },
+  { name: "StudioGraph invalid: api_call mutation idempotency_key required", fn: validateStudioGraph, expect: false,
+    data: { ...VALID_STUDIO_GRAPH, nodes: [{ id: "n1", type: "api_call", label: "call", config: { url_ref: "api_url", method: "POST", auth: { type: "none" }, body_ref: "payload" } }] } },
+  { name: "StudioGraph invalid: unknown validation status", fn: validateStudioGraph, expect: false,
+    data: { ...VALID_STUDIO_GRAPH, validation_stages: [{ stage: "runnable", status: "unknown", reason_code: "bad_status", detail: "Unknown must not pass." }] } },
 
   // --- Verify (verify.schema.json) ---
   { name: "Verify valid: min_rows>=1", fn: validateVerify, expect: true,

@@ -26,6 +26,114 @@ import type { IRActionType, SideEffectKind } from "../ts/core-types";
 export type { IRActionType, SideEffectKind } from "../ts/core-types";
 
 /* ========================================================================
+ * Studio Graph v1  (schema/studio-graph.schema.json)
+ * ====================================================================== */
+
+export type StudioGraphNodeType =
+  | "navigate"
+  | "act"
+  | "extract"
+  | "condition"
+  | "human_task"
+  | "api_call";
+
+export type StudioGraphEdgeType = "next" | "true" | "false" | "decision" | "error";
+
+export type StudioValidationStageName =
+  | "well_formed"
+  | "runnable"
+  | "operable"
+  | "prod_ready";
+
+export type StudioValidationStageStatus = "pass" | "failed" | "blocked" | "not_run";
+
+export interface StudioValidationStage {
+  stage: StudioValidationStageName;
+  status: StudioValidationStageStatus;
+  reason_code: string;
+  detail: string;
+}
+
+export interface StudioGraph {
+  graph_id: string;
+  name: string;
+  version: number;
+  compiler_version: "studio-graph@1";
+  start_node_id: string;
+  nodes: StudioGraphNode[];
+  edges: StudioGraphEdge[];
+  validation_stages?: StudioValidationStage[];
+  compiled_ir_ref?: {
+    scenario_id: string;
+    version: number;
+  };
+}
+
+export interface StudioGraphNodeBase {
+  id: string;
+  type: StudioGraphNodeType;
+  label: string;
+  position?: { x: number; y: number };
+}
+
+export type StudioGraphNode =
+  | (StudioGraphNodeBase & { type: "navigate"; config: StudioNavigateConfig })
+  | (StudioGraphNodeBase & { type: "act"; config: StudioActConfig })
+  | (StudioGraphNodeBase & { type: "extract"; config: StudioExtractConfig })
+  | (StudioGraphNodeBase & { type: "condition"; config: StudioConditionConfig })
+  | (StudioGraphNodeBase & { type: "human_task"; config: StudioHumanTaskConfig })
+  | (StudioGraphNodeBase & { type: "api_call"; config: StudioApiCallConfig });
+
+export interface StudioNavigateConfig {
+  url_ref: string;
+  wait_until?: "load" | "domcontentloaded" | "networkidle";
+}
+
+export interface StudioActConfig {
+  intent: string;
+  selector_ref?: string;
+  value_ref?: string;
+  action_kind?: "click" | "fill" | "select" | "submit";
+}
+
+export interface StudioExtractConfig {
+  instruction: string;
+  schema_ref: string;
+  selector_ref?: string;
+}
+
+export interface StudioConditionConfig {
+  expression: string;
+}
+
+export interface StudioHumanTaskConfig {
+  kind: "approval" | "validation" | "exception";
+  assignee_role: string;
+  business_form_v1?: {
+    schema_ref: string;
+  };
+}
+
+export interface StudioApiCallConfig {
+  url_ref: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  headers?: Record<string, string>;
+  auth:
+    | { type: "none" }
+    | { type: "secret_ref_bearer"; secret_ref: string };
+  body_ref?: string;
+  idempotency_key?: string;
+}
+
+export interface StudioGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: StudioGraphEdgeType;
+  condition?: string;
+}
+
+/* ========================================================================
  * IR v1  (schema/ir.schema.json — "RPA Scenario IR v1")
  * ====================================================================== */
 
@@ -60,7 +168,7 @@ export interface IRMeta {
   /** const "1.x" */
   ir_version?: "1.x";
   /** 콘솔 시나리오 스튜디오 편집 모드 보존. */
-  studio_mode?: "easy" | "form" | "ir";
+  studio_mode?: "easy" | "form" | "visual" | "ir";
   /** Natural-language generation evidence request; server-normalized into node recording policy, video is run-level. */
   evidence?: {
     screenshot?: "never" | "failure" | "each_step";

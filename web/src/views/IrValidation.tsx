@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useApiClient } from "../api/context";
 import { type ValidationResult } from "../api/types";
 import { errorLabel } from "../components/badges";
+import { StudioValidationStages } from "../components/StudioValidationStages";
 import { navigate } from "../router";
 
 // 시나리오 검증 — POST /v1/scenarios/{id}/validate(비변이)로 V1–V11 정적검증 dry-run, ValidationReport 렌더.
@@ -240,6 +241,7 @@ export function IrValidationView(): JSX.Element {
             <span className={`badge ${mut.data.valid ? "green" : "red"}`}>
               {mut.data.valid ? "자동화 정의 검사 통과" : "검증 실패"}
             </span>
+            <StudioValidationStages stages={mut.data.stages} />
             {mut.data.valid && (
               <p className="subtle" style={{ marginTop: 8 }}>
                 이 결과는 자동화 문서 구조, 조건식, 단계 연결만 확인합니다.

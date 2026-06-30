@@ -166,7 +166,7 @@ export function BrowserRecorderPanel(): JSX.Element {
       setSavedScenario(result);
       setMessage({
         tone: "green",
-        text: `자동화로 저장했습니다. 변경 ${result.version}`,
+        text: `Studio 초안으로 보냈습니다. v${result.version}`,
       });
       void qc.invalidateQueries({ queryKey: ["scenarios"] });
     },

@@ -22,6 +22,7 @@ import Ajv2020, { ErrorObject, ValidateFunction } from "ajv/dist/2020";
 import irSchema from "../schema/ir.schema.json";
 import verifySchema from "../schema/verify.schema.json";
 import eventEnvelopeSchema from "../schema/event-envelope.schema.json";
+import studioGraphSchema from "../schema/studio-graph.schema.json";
 import {
   EVENT_PAYLOAD_SCHEMA_REFS,
   EVENT_PAYLOAD_SCHEMAS,
@@ -96,6 +97,7 @@ ajv.addSchema(verifySchema, verifySchema.$id);
 const irValidate: ValidateFunction = ajv.compile(irSchema);
 const verifyValidate: ValidateFunction = ajv.getSchema(verifySchema.$id) as ValidateFunction;
 const eventValidate: ValidateFunction = ajv.compile(eventEnvelopeSchema);
+const studioGraphValidate: ValidateFunction = ajv.compile(studioGraphSchema);
 const eventPayloadValidators = Object.fromEntries(
   Object.entries(EVENT_PAYLOAD_SCHEMAS).map(([eventType, schema]) => [
     eventType,
@@ -196,11 +198,17 @@ export function validateEvent(data: unknown): ValidationResult {
   };
 }
 
+/** Studio Graph(studio-graph.schema.json) authoring contract validation. */
+export function validateStudioGraph(data: unknown): ValidationResult {
+  return run(studioGraphValidate, data);
+}
+
 /** 진단/테스트용 원시 Ajv validators. Event는 envelope-only이므로 public boundary로 쓰지 않는다. */
 export const rawValidators = {
   ir: irValidate,
   verify: verifyValidate,
   eventEnvelope: eventValidate,
+  studioGraph: studioGraphValidate,
 } as const;
 
 /** Public boundary validators. event는 payload registry 검증까지 포함한다. */
@@ -208,4 +216,5 @@ export const validators = {
   ir: irValidate,
   verify: verifyValidate,
   event: (data: unknown): boolean => validateEvent(data).valid,
+  studioGraph: studioGraphValidate,
 } as const;

@@ -178,7 +178,16 @@ describe("browser recorder panel", () => {
               done: { terminal: "success" },
             },
           },
-          validation_report: { errors: [], warnings: [] },
+          validation_report: {
+            errors: [],
+            warnings: [],
+            stages: [
+              { stage: "well_formed", status: "pass", reason_code: "canonical_ir_compile_passed", detail: "compile ok" },
+              { stage: "runnable", status: "not_run", reason_code: "runtime_readiness_not_run", detail: "probes not run" },
+              { stage: "operable", status: "not_run", reason_code: "ops_readiness_not_run", detail: "ops not run" },
+              { stage: "prod_ready", status: "not_run", reason_code: "release_gate_not_run", detail: "release not run" },
+            ],
+          },
           updated_by: "operator",
           created_at: "2026-06-23T00:00:00.000Z",
           updated_at: "2026-06-23T00:00:02.000Z",
@@ -284,13 +293,15 @@ describe("browser recorder panel", () => {
     fireEvent.click(screen.getByText("고급 세부 정보 보기"));
     expect(screen.getByText(/step_01/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "자동화로 저장" }));
+    expect(screen.getByText("실행 가능성")).toBeInTheDocument();
+    expect(screen.getAllByText("미실행").length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByRole("button", { name: "Studio 초안으로 보내기" }));
     await waitFor(() => expect(createdIr).toMatchObject({ start: "step_01" }));
     expect(
-      await screen.findByText("자동화로 저장했습니다. 변경 1"),
+      await screen.findByText("Studio 초안으로 보냈습니다. v1"),
     ).toBeInTheDocument();
-    expect(screen.getByText("저장됨: 변경 1")).toBeInTheDocument();
-    expect(screen.queryByText(/v1/)).toBeNull();
+    expect(screen.getByText("Studio 초안 v1")).toBeInTheDocument();
+    expect(screen.getAllByText(/v1/).length).toBeGreaterThanOrEqual(1);
     expect(
       screen.getByRole("button", { name: "CoE 연결" }),
     ).toBeInTheDocument();
@@ -392,7 +403,7 @@ describe("browser recorder panel", () => {
       screen.getByText("고급 검사 정보 보기").closest("details"),
     ).not.toHaveAttribute("open");
     expect(
-      screen.getByRole("button", { name: "자동화로 저장" }),
+      screen.getByRole("button", { name: "Studio 초안으로 보내기" }),
     ).toBeDisabled();
   });
 

@@ -10,7 +10,7 @@
  * or promote; promote also blocks warnings per ir-static-validation section 3.
  */
 import { compileScenarioStatic } from "../../../codegen/static-validation";
-import type { IRScenario, ValidationIssue, ValidationReport } from "../../../codegen/types";
+import type { IRScenario, StudioValidationStage, ValidationIssue, ValidationReport } from "../../../codegen/types";
 import { validateIR } from "../../../codegen/validators";
 
 export type CompileErrorCode = "IR_SCHEMA_INVALID" | "IR_EXPRESSION_COMPILE_ERROR";
@@ -49,4 +49,60 @@ export function compileScenario(irDoc: unknown, options: CompileOptions = {}): C
   }
 
   return { ok: true, ir, report, compiledAst: JSON.stringify(staticResult.compiledAst) };
+}
+
+export function studioValidationStagesFromCompile(outcome: CompileOutcome): readonly StudioValidationStage[] {
+  const wellFormedPassed = outcome.ok || (outcome.report !== undefined && outcome.report.errors.length === 0);
+  const wellFormed: StudioValidationStage = wellFormedPassed
+    ? {
+        stage: "well_formed",
+        status: "pass",
+        reason_code: "canonical_ir_compile_passed",
+        detail: "Canonical IR schema and static compile gates passed.",
+      }
+    : {
+        stage: "well_formed",
+        status: "failed",
+        reason_code: outcome.report === undefined ? "ir_schema_invalid" : "ir_static_validation_failed",
+        detail: "Canonical IR schema or static compile gates failed.",
+      };
+
+  const runnable: StudioValidationStage = wellFormedPassed
+    ? {
+        stage: "runnable",
+        status: "not_run",
+        reason_code: "runtime_readiness_not_run",
+        detail: "Target, identity, parameter, selector, and site readiness probes have not run.",
+      }
+    : {
+        stage: "runnable",
+        status: "blocked",
+        reason_code: "canonical_ir_not_well_formed",
+        detail: "Runtime readiness is blocked until canonical IR compile issues are fixed.",
+      };
+
+  const operable: StudioValidationStage = wellFormedPassed
+    ? {
+        stage: "operable",
+        status: "not_run",
+        reason_code: "ops_readiness_not_run",
+        detail: "Worker, browser pool, credential, audit, and redaction readiness have not run.",
+      }
+    : {
+        stage: "operable",
+        status: "blocked",
+        reason_code: "canonical_ir_not_well_formed",
+        detail: "Operational readiness is blocked until canonical IR compile issues are fixed.",
+      };
+
+  const prodReady: StudioValidationStage = {
+    stage: "prod_ready",
+    status: wellFormedPassed ? "not_run" : "blocked",
+    reason_code: wellFormedPassed ? "release_gate_not_run" : "canonical_ir_not_well_formed",
+    detail: wellFormedPassed
+      ? "Certification, maker-checker, alerting, backup, and controlled-production evidence have not run."
+      : "Production readiness is blocked until canonical IR compile issues are fixed.",
+  };
+
+  return [wellFormed, runnable, operable, prodReady];
 }

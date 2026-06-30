@@ -7,6 +7,8 @@ import { errorLabel } from "./badges";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { StepBuilder, stepBuilderInitialFromIr, stepBuilderRepresentable } from "./StepBuilder";
 import { OperatorWizard, wizardInitialFromIr } from "./OperatorWizard";
+import { StudioValidationStages } from "./StudioValidationStages";
+import { VisualFlowCanvas } from "./VisualFlowCanvas";
 
 // 자동화(시나리오) 작성/편집 폼. 자동화 정의 원문(ir.schema)을 입력 → 저장 시 백엔드 컴파일 파이프라인
 // (ajv→IREL→V1–V11)이 검증. 편집은 GET으로 직전 IR을 불러와 prefill하고 [검증](dry-run) 후
@@ -20,7 +22,7 @@ export type ScenarioFormMode =
       readonly name: string;
       readonly version: number;
     };
-type EditorMode = "easy" | "form" | "ir";
+type EditorMode = "easy" | "form" | "visual" | "ir";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -67,6 +69,7 @@ function studioModeFromIr(ir: unknown): EditorMode {
   if (!isRecord(ir) || !isRecord(ir.meta)) return "ir";
   return ir.meta.studio_mode === "easy" ||
     ir.meta.studio_mode === "form" ||
+    ir.meta.studio_mode === "visual" ||
     ir.meta.studio_mode === "ir"
     ? ir.meta.studio_mode
     : "ir";
@@ -454,6 +457,15 @@ export function ScenarioForm({
             <button
               className="btn"
               type="button"
+              aria-pressed={editor === "visual"}
+              onClick={() => switchEditor("visual")}
+              disabled={busy}
+            >
+              시각 캔버스
+            </button>
+            <button
+              className="btn"
+              type="button"
               aria-pressed={editor === "ir"}
               onClick={() => switchEditor("ir")}
             >
@@ -482,6 +494,8 @@ export function ScenarioForm({
           initial={stepInitial}
           version={currentVersion}
         />
+      ) : editor === "visual" ? (
+        <VisualFlowCanvas ir={parsedIr} />
       ) : (
         <textarea
           value={text ?? ""}
@@ -536,6 +550,12 @@ export function ScenarioForm({
         >
           {error}
         </p>
+      )}
+      {report !== null && (
+        <div className="scenario-validation-summary" role="status" aria-label="검증 단계">
+          <strong>검증 단계</strong>
+          <StudioValidationStages stages={report.stages} />
+        </div>
       )}
       {report !== null && !report.valid && (
         <div

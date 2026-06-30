@@ -17,7 +17,7 @@
         "ir_version": { "type": "string", "const": "1.x" },
         "studio_mode": {
           "type": "string",
-          "enum": ["easy", "form", "ir"],
+          "enum": ["easy", "form", "visual", "ir"],
           "description": "콘솔 시나리오 스튜디오 편집 모드 보존. 편집 진입 시 같은 저코드/IR 모드로 복원한다."
         },
         "evidence": {

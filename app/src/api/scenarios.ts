@@ -12,7 +12,7 @@ import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
 import { runIdempotentCommand } from "./command";
-import { compileScenario } from "./compile-pipeline";
+import { compileScenario, studioValidationStagesFromCompile } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
 import { appendGovernanceAudit } from "./role-assignments";
 import { mapScenarioCertification } from "./scenario-certification";
@@ -281,13 +281,14 @@ export function registerScenarioRoutes(app: FastifyInstance, deps: ApiServerDeps
       const principal = requirePrincipal(request);
       const signedCommandRefs = await signedCommandRefsFor(deps, principal, "scenario.validate");
       const outcome = compileScenario(request.body, { signedCommandRefs });
+      const stages = studioValidationStagesFromCompile(outcome);
       if (!outcome.ok) {
         if (outcome.report === undefined) {
           throw new ApiResponseError(outcome.code, outcome.details);
         }
-        return { valid: false, report: outcome.report };
+        return { valid: false, report: outcome.report, stages };
       }
-      return { valid: true, report: outcome.report };
+      return { valid: true, report: outcome.report, stages };
     },
   );
 

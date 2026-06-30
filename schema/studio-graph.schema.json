@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "studio-graph.schema.json",
+  "title": "Studio Graph v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["graph_id", "name", "version", "compiler_version", "start_node_id", "nodes", "edges"],
+  "properties": {
+    "graph_id": { "type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_.-]{0,127}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "version": { "type": "integer", "minimum": 1 },
+    "compiler_version": { "type": "string", "enum": ["studio-graph@1"] },
+    "start_node_id": { "$ref": "#/$defs/nodeId" },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    },
+    "validation_stages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/validationStage" }
+    },
+    "compiled_ir_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scenario_id", "version"],
+      "properties": {
+        "scenario_id": { "type": "string", "pattern": "^[0-9a-fA-F-]{36}$" },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "nodeId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z_][a-zA-Z0-9_]{0,63}$"
+    },
+    "edgeId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z_][a-zA-Z0-9_.-]{0,127}$"
+    },
+    "nodeType": {
+      "type": "string",
+      "enum": ["navigate", "act", "extract", "condition", "human_task", "api_call"]
+    },
+    "edgeType": {
+      "type": "string",
+      "enum": ["next", "true", "false", "decision", "error"]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "label", "config"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nodeId" },
+        "type": { "$ref": "#/$defs/nodeType" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "position": { "$ref": "#/$defs/position" },
+        "config": { "$ref": "#/$defs/nodeConfig" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "navigate" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/navigateConfig" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "act" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/actConfig" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "extract" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/extractConfig" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "condition" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/conditionConfig" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "human_task" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/humanTaskConfig" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "api_call" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/apiCallConfig" } } }
+        }
+      ]
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "nodeConfig": {
+      "type": "object"
+    },
+    "navigateConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url_ref"],
+      "properties": {
+        "url_ref": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "wait_until": { "type": "string", "enum": ["load", "domcontentloaded", "networkidle"] }
+      }
+    },
+    "actConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["intent"],
+      "properties": {
+        "intent": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "selector_ref": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "value_ref": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "action_kind": { "type": "string", "enum": ["click", "fill", "select", "submit"] }
+      }
+    },
+    "extractConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instruction", "schema_ref"],
+      "properties": {
+        "instruction": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "schema_ref": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "selector_ref": { "type": "string", "minLength": 1, "maxLength": 160 }
+      }
+    },
+    "conditionConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression"],
+      "properties": {
+        "expression": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "humanTaskConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "assignee_role"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["approval", "validation", "exception"] },
+        "assignee_role": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "business_form_v1": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema_ref"],
+          "properties": {
+            "schema_ref": { "type": "string", "minLength": 1, "maxLength": 160 }
+          }
+        }
+      }
+    },
+    "apiCallConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url_ref", "method", "auth"],
+      "properties": {
+        "url_ref": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "headers": {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "^([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Xx]-[Aa][Pp][Ii]-[Kk][Ee][Yy])$"
+            }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "auth": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type"],
+              "properties": {
+                "type": { "const": "none" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "secret_ref"],
+              "properties": {
+                "type": { "const": "secret_ref_bearer" },
+                "secret_ref": { "type": "string", "pattern": "^secret://.+" }
+              }
+            }
+          ]
+        },
+        "body_ref": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 240 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "method": { "enum": ["POST", "PUT", "PATCH", "DELETE"] }
+            }
+          },
+          "then": { "required": ["idempotency_key"] }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "target", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/edgeId" },
+        "source": { "$ref": "#/$defs/nodeId" },
+        "target": { "$ref": "#/$defs/nodeId" },
+        "type": { "$ref": "#/$defs/edgeType" },
+        "condition": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "validationStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "status", "reason_code", "detail"],
+      "properties": {
+        "stage": {
+          "type": "string",
+          "enum": ["well_formed", "runnable", "operable", "prod_ready"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "failed", "blocked", "not_run"]
+        },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,80}$"
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    }
+  }
+}

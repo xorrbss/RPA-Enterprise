@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 
-import type { ValidationReport } from "../../../codegen/types";
+import type { StudioValidationStage, ValidationReport } from "../../../codegen/types";
 import { withTenantTx } from "../db/pool";
 import { originOf } from "../runtime/site-resolution";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
-import { compileScenario } from "./compile-pipeline";
+import { compileScenario, studioValidationStagesFromCompile } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
 import { paginate, parseLimit, parsePageParams } from "./list-query";
 import { signedCommandRefsFor } from "./scenarios-support";
@@ -434,10 +434,11 @@ async function incrementElementUsage(
 function validateDraftIr(
   draftIr: unknown,
   signedCommandRefs: readonly string[] | undefined,
-): { readonly valid: boolean; readonly report: ValidationReport } {
+): { readonly valid: boolean; readonly report: ValidationReport & { readonly stages: readonly StudioValidationStage[] } } {
   const outcome = compileScenario(draftIr, { signedCommandRefs });
-  if (outcome.ok) return { valid: true, report: outcome.report };
-  if (outcome.report !== undefined) return { valid: false, report: outcome.report };
+  const stages = studioValidationStagesFromCompile(outcome);
+  if (outcome.ok) return { valid: true, report: { ...outcome.report, stages } };
+  if (outcome.report !== undefined) return { valid: false, report: { ...outcome.report, stages } };
   return {
     valid: false,
     report: {
@@ -448,6 +449,7 @@ function validateDraftIr(
         detail: safeDetail(outcome.details),
       }],
       warnings: [],
+      stages,
     },
   };
 }

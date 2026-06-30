@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { navigate } from "../../router";
 import type { BrowserRecordingSession, BrowserRecordingValidationIssue, ScenarioMutationResult } from "../../api/types";
+import { StudioValidationStages } from "../StudioValidationStages";
 import { draftStartLabel, draftSummary, recordingIssueSummary } from "./helpers";
 
 export function RecordingDraftPreview(props: {
@@ -51,6 +52,7 @@ export function RecordingDraftPreview(props: {
           className="browser-recorder-validation"
           role={errors.length > 0 ? "alert" : "status"}
         >
+          <StudioValidationStages stages={report.stages} compact />
           <ValidationIssueList title="오류" items={errors} tone="red" />
           <ValidationIssueList title="경고" items={warnings} tone="amber" />
           {errors.length === 0 && warnings.length === 0 && (
@@ -119,12 +121,12 @@ export function RecordingDraftPreview(props: {
           disabled={saveDisabled}
           onClick={props.onSave}
         >
-          {props.saving ? "저장 중" : "자동화로 저장"}
+          {props.saving ? "전송 중" : "Studio 초안으로 보내기"}
         </button>
         {props.savedScenario !== null && (
           <>
             <span className="badge green">
-              저장됨: 변경 {props.savedScenario.version}
+              Studio 초안 v{props.savedScenario.version}
             </span>
             <button
               className="btn"

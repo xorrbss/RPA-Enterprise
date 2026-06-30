@@ -2239,7 +2239,7 @@ paths:
       summary: 시나리오 검증(dry-run)
       description: >
         부작용 없는 dry-run(저장하지 않음). body는 검증할 IR 또는 기존 version 참조.
-        ValidationReport 반환(ir-static-validation.md V1..V11). 컴파일 에러는
+        ValidationReport와 Studio validation stages 반환(ir-static-validation.md V1..V11). 컴파일 에러는
         IR_EXPRESSION_COMPILE_ERROR(422), 그래프 검증 실패는 IR_SCHEMA_INVALID(422, details=reason).
       requestBody:
         required: true
@@ -2249,11 +2249,11 @@ paths:
               $ref: '#/components/schemas/ValidateRequest'
       responses:
         '200':
-          description: ValidationReport.
+          description: Validation response with separated Studio readiness stages.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValidationReport'
+                $ref: '#/components/schemas/ValidationResponse'
         '422':
           $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
         default:
@@ -5738,8 +5738,10 @@ components:
         ai_runtime_enabled:
           type: boolean
         policy_mode:
-          type: [string, "null"]
-          enum: [observe, warn, block, null]
+          oneOf:
+            - type: string
+              enum: [observe, warn, block]
+            - type: "null"
         grace_active:
           type: boolean
         models:
@@ -8272,6 +8274,43 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ValidationIssue'
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudioValidationStage'
+
+    ValidationResponse:
+      type: object
+      required: [valid, report, stages]
+      additionalProperties: false
+      properties:
+        valid:
+          type: boolean
+        report:
+          $ref: '#/components/schemas/ValidationReport'
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudioValidationStage'
+
+    StudioValidationStage:
+      type: object
+      required: [stage, status, reason_code, detail]
+      additionalProperties: false
+      properties:
+        stage:
+          type: string
+          enum: [well_formed, runnable, operable, prod_ready]
+        status:
+          type: string
+          enum: [pass, failed, blocked, not_run]
+        reason_code:
+          type: string
+          pattern: '^[a-z0-9_]{1,80}$'
+        detail:
+          type: string
+          minLength: 1
+          maxLength: 500
 
     ValidationIssue:
       type: object
