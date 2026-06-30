@@ -1,7 +1,7 @@
 /**
  * 헤드풀 로그인 대기 → origin-scoped 쿠키 캡처 코어. **dev 캡처 폴러(dev/capture-loop)와 운영자-로컬 캡처
- * 에이전트(src/agent/capture-agent)가 공유**한다. store/DB 의존이 없어 레이어 중립 — 쿠키 배열만 반환하고
- * (null=로그인 데드라인 초과) 저장(dev=store.save)·전송(agent=POST)은 호출자 책임이다.
+ * helper(src/browser-helper/session-capture-helper)가 공유**한다. store/DB 의존이 없어 레이어 중립 — 쿠키 배열만 반환하고
+ * (null=로그인 데드라인 초과) 저장(dev=store.save)·전송(helper=POST)은 호출자 책임이다.
  *
  * 보안: 반환 쿠키는 인증 자료(PlainSecret급) — 단명 지역변수로만 다루고 로그/직렬화/파일에 절대 흘리지 않는다.
  */

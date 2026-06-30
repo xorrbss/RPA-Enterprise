@@ -111,7 +111,7 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ApiServerDeps)
     },
   );
 
-  // POST /v1/sites/{id}/session/capture/complete (P3, rbacAction=session.capture, 멱등): 운영자-로컬 캡처 에이전트가
+  // POST /v1/sites/{id}/session/capture/complete (P3, rbacAction=session.capture, 멱등): 운영자 브라우저 캡처 helper가
   //   headful MFA 로 캡처한 origin-scoped 쿠키를 받아, **중앙 API 가 신뢰경계에서** 봉투암호화(주입된 encryptor)하고
   //   browser_sessions 에 저장(세션 재사용 키 = capture_sessions 행의 site/browser_identity, 바디 불신)한 뒤 status CAS=captured.
   //   sessionStore 주입 시에만 등록(미주입=미등록, fail-closed). 쿠키 평문은 단명 — 로그/직렬화/이벤트 금지(암호화기로만).
@@ -239,8 +239,8 @@ async function applyCaptureStart(
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "no_login_url_configured" });
   }
   assertHttpUrl(loginUrl);
-  // auth_selector — 운영자-로컬 캡처 에이전트가 로그인 완료를 감지할 셀렉터(site 설정 authenticatedWhen.selector). 비밀 아님.
-  //   미설정이면 응답에서 생략(JSON 직렬화가 undefined 필드 제거) → 에이전트가 명시적 실패(자동 감지 불가). dev 폴러는 별도 late-fail.
+  // auth_selector — 운영자 브라우저 캡처 helper가 로그인 완료를 감지할 셀렉터(site 설정 authenticatedWhen.selector). 비밀 아님.
+  //   미설정이면 응답에서 생략(JSON 직렬화가 undefined 필드 제거) → helper가 명시적 실패(자동 감지 불가). dev 폴러는 별도 late-fail.
   const authSelector =
     isRecord(cfg.authenticatedWhen) && typeof (cfg.authenticatedWhen as { selector?: unknown }).selector === "string"
       ? (cfg.authenticatedWhen as { selector: string }).selector

@@ -61,7 +61,7 @@ function captureCtx(tenantId: string, siteProfileId: string, browserIdentityId: 
 
 /**
  * 운영자 로그인 대기 → 인증 감지 시 origin-scoped 쿠키 캡처·**저장**. 반환='captured'|'expired'(typed). 캡처/재사용
- * 동일 sessionKey. 대기·캡처 코어는 awaitLoginCookies(src/executor/login-capture, agent 와 공유); 본 함수는 그 결과를
+ * 동일 sessionKey. 대기·캡처 코어는 awaitLoginCookies(src/executor/login-capture, browser helper 와 공유); 본 함수는 그 결과를
  * store.save 로 영속하는 dev 폴러 어댑터다(expired 시 미저장 — 조용한 캡처 금지). 별도 export — 단위검증이 동일 코어를 호출.
  */
 export async function awaitLoginAndCapture(

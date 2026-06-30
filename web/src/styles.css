@@ -1206,7 +1206,7 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
 }
 .browser-recorder-sessions,
 .browser-recorder-workbench { min-width: 0; display: grid; gap: 8px; }
-.browser-recorder-agent {
+.browser-recorder-helper {
   display: grid;
   gap: 8px;
   border: 1px solid var(--line);
@@ -1214,15 +1214,15 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   background: var(--surface-2);
   padding: 10px;
 }
-.browser-recorder-agent > div:first-child {
+.browser-recorder-helper > div:first-child {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
 }
-.browser-recorder-agent p { margin: 0; }
-.browser-recorder-agent pre {
+.browser-recorder-helper p { margin: 0; }
+.browser-recorder-helper pre {
   margin: 0;
   max-height: 132px;
   overflow: auto;
@@ -1233,7 +1233,7 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.browser-recorder-agent code {
+.browser-recorder-helper code {
   font-size: 12px;
   line-height: 1.45;
 }

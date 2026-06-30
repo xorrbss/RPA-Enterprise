@@ -18,7 +18,7 @@ function resolveApiBase(): string {
 export function CaptureGuide({ site, onClose }: { site: SiteItem; onClose: () => void }): JSX.Element {
   const [copied, setCopied] = useState(false);
   const name = site.name ?? "사이트명 미정";
-  const command = `RPA_OPERATOR_TOKEN=<본인 접속 코드> capture-agent --api ${resolveApiBase()} --site ${site.site_profile_id}`;
+  const command = `RPA_OPERATOR_TOKEN=<본인 접속 코드> npm --prefix app run session:capture-helper -- --api ${resolveApiBase()} --site ${site.site_profile_id}`;
 
   async function copy(): Promise<void> {
     try {

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApiClient } from "../../api/context";
 import type { BrowserRecordingAppendEvent, BrowserRecordingEvent, BrowserRecordingSession, SiteElementItem } from "../../api/types";
 import { errorLabel } from "../badges";
-import { AgentLaunchCommand } from "./AgentLaunchCommand";
+import { RecorderLaunchCommand } from "./RecorderLaunchCommand";
 import { EventForm } from "./EventForm";
 import { EventList, QueuedEventList } from "./EventLists";
 import {
@@ -203,7 +203,7 @@ export function RecordingWorkbench({
         <p className="empty-state">녹화 기록을 선택하거나 새로 시작하세요.</p>
       ) : (
         <>
-          <AgentLaunchCommand siteId={siteId} session={selectedSession} />
+          <RecorderLaunchCommand siteId={siteId} session={selectedSession} />
           <EventForm
             value={eventDraft}
             onChange={setEventDraft}

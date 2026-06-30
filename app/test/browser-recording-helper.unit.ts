@@ -1,11 +1,11 @@
 import {
   appendRecordingEvents,
-  BrowserRecordingAgentError,
+  BrowserRecordingHelperError,
   isSensitiveRecordingTarget,
-  runBrowserRecordingAgent,
+  runBrowserRecordingHelper,
   sanitizePageEvent,
-  type BrowserRecordingAgentDeps,
-} from "../src/agent/browser-recording-agent";
+  type BrowserRecordingHelperDeps,
+} from "../src/browser-helper/browser-recording-helper";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {
@@ -112,10 +112,10 @@ async function main(): Promise<void> {
     },
     [{ event_type: "click", selector: "button.approve" }],
   ));
-  check("remote http api base is rejected before fetch", insecure instanceof BrowserRecordingAgentError && !fetchCalled);
+  check("remote http api base is rejected before fetch", insecure instanceof BrowserRecordingHelperError && !fetchCalled);
 
   const runCalls: FetchCall[] = [];
-  const deps: BrowserRecordingAgentDeps = {
+  const deps: BrowserRecordingHelperDeps = {
     fetchImpl: recordingFetch(runCalls),
     newKey: (() => {
       let n = 0;
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
       };
     },
   };
-  const result = await runBrowserRecordingAgent({
+  const result = await runBrowserRecordingHelper({
     apiBase: "https://rpa.example",
     siteId: "30000000-0000-4000-8000-000000000001",
     recordingId: "94000000-0000-4000-8000-000000000001",
@@ -145,13 +145,13 @@ async function main(): Promise<void> {
   check("run does not place bearer token in append body", !sentBodies.includes("jwt-operator"), sentBodies);
 
   if (failures > 0) {
-    console.error(`\nFAIL: ${failures} browser recording agent unit check(s) failed`);
+    console.error(`\nFAIL: ${failures} browser recording helper unit check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: browser recording agent unit green");
+  console.log("\nPASS: browser recording helper unit green");
 }
 
 main().catch((error) => {
-  console.error("browser recording agent unit fatal:", error);
+  console.error("browser recording helper unit fatal:", error);
   process.exit(1);
 });

@@ -1,10 +1,10 @@
 /**
- * 통합 — 운영자-로컬 캡처 에이전트(src/agent/capture-agent) end-to-end. 실 PostgreSQL + 실 listen 서버.
+ * 통합 — 운영자 브라우저 세션 캡처 helper(src/browser-helper/session-capture-helper) end-to-end. 실 PostgreSQL + 실 listen 서버.
  *
  * 실행(temp PG15 게이트):
- *   node scripts/db-temp-postgres-gate.mjs -- npx tsx app/test/capture-agent.int.ts
+ *   node scripts/db-temp-postgres-gate.mjs -- npx tsx app/test/session-capture-helper.int.ts
  * 검증: capture-start → (fake 헤드풀 캡처) → capture-complete 왕복으로 browser_sessions 봉투 저장 + capture_sessions
- *       status=captured. 에이전트가 서버에서 받은 login_url/auth_selector 를 캡처 코어로 전달. 로그인 타임아웃(null)→
+ *       status=captured. helper가 서버에서 받은 login_url/auth_selector 를 캡처 코어로 전달. 로그인 타임아웃(null)→
  *       login_timeout 결과·capture-complete 미호출·세션 미저장. auth_selector 미설정 사이트→loud throw.
  *
  * 헤드풀 Chrome 캡처 코어(awaitLoginCookies)는 capture-core.unit + 실 하이웍스 e2e 로 별도 증명됨 — 본 테스트는 신규 위험인
@@ -21,14 +21,14 @@ import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
-import { runCaptureAgent, type CaptureAgentDeps } from "../src/agent/capture-agent";
+import { runSessionCaptureHelper, type SessionCaptureHelperDeps } from "../src/browser-helper/session-capture-helper";
 import type { RawCookie } from "../src/executor/raw-cdp";
 import { PgBrowserSessionStore, DevPlaintextSessionEncryptor, sessionKey } from "../src/runtime/browser-session-store";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const SCHEMA = "rpa_capture_agent_int";
+const SCHEMA = "rpa_session_capture_helper_int";
 const TENANT = "00000000-0000-0000-0000-0000000000a1";
 const SITE = "70000000-0000-0000-0000-0000000000c1"; // auth_selector 있음
 const SITE_NOAUTH = "70000000-0000-0000-0000-0000000000c9"; // auth_selector 없음
@@ -37,7 +37,7 @@ const BID2 = "9b000000-0000-0000-0000-0000000000ca";
 const LOGIN_URL = "https://login.x.example/signin";
 const AUTH_SELECTOR = ".user-menu";
 
-const SECRET = new TextEncoder().encode("capture-agent-int-secret-do-not-use-in-prod-0123456789");
+const SECRET = new TextEncoder().encode("session-capture-helper-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
   async listAllowedCommandRefs() {
     return { kind: "available", snapshot: { sourceRef: "secret://staging/registry" as SecretRef, commands: [] } };
@@ -105,15 +105,15 @@ async function main(): Promise<void> {
 
       // 1) captured 경로 — fake 가 받은 login_url/auth_selector 기록 + CANNED 반환.
       let seen: { loginUrl: string; authSelector: string } | undefined;
-      const okDeps: CaptureAgentDeps = {
+      const okDeps: SessionCaptureHelperDeps = {
         async captureCookies(loginUrl, authSelector) {
           seen = { loginUrl, authSelector };
           return CANNED;
         },
       };
-      const r1 = await runCaptureAgent({ apiBase, siteId: SITE, token }, okDeps);
+      const r1 = await runSessionCaptureHelper({ apiBase, siteId: SITE, token }, okDeps);
       check("captured 결과 + cookieCount=2", r1.kind === "captured" && r1.cookieCount === 2, JSON.stringify(r1));
-      check("에이전트가 서버 login_url/auth_selector 를 캡처 코어로 전달", seen?.loginUrl === LOGIN_URL && seen?.authSelector === AUTH_SELECTOR, JSON.stringify(seen));
+      check("helper가 서버 login_url/auth_selector 를 캡처 코어로 전달", seen?.loginUrl === LOGIN_URL && seen?.authSelector === AUTH_SELECTOR, JSON.stringify(seen));
 
       // 2) browser_sessions 봉투 저장 + load 라운드트립.
       const loaded = await withTenantTx(pool, TENANT, () => store.load(sessionKey(TENANT, SITE, BID)));
@@ -124,8 +124,8 @@ async function main(): Promise<void> {
       check("capture_sessions status=captured", st === "captured", st);
 
       // 4) 로그인 타임아웃(null) → login_timeout, capture-complete 미호출(세션 미저장·새 행 active 유지).
-      const timeoutDeps: CaptureAgentDeps = { async captureCookies() { return null; } };
-      const r2 = await runCaptureAgent({ apiBase, siteId: SITE, token }, timeoutDeps);
+      const timeoutDeps: SessionCaptureHelperDeps = { async captureCookies() { return null; } };
+      const r2 = await runSessionCaptureHelper({ apiBase, siteId: SITE, token }, timeoutDeps);
       check("login_timeout 결과", r2.kind === "login_timeout", JSON.stringify(r2));
       const st2 = await withTenantTx(pool, TENANT, async (c) => (await c.query<{ status: string }>(`SELECT status FROM capture_sessions WHERE site_profile_id=$1::uuid ORDER BY created_at DESC LIMIT 1`, [SITE])).rows[0]?.status);
       check("타임아웃 → 새 capture_session active 유지(captured 아님)", st2 !== "captured", st2);
@@ -135,7 +135,7 @@ async function main(): Promise<void> {
       // 5) auth_selector 미설정 사이트 → loud throw(자동 감지 불가).
       let threw = false;
       try {
-        await runCaptureAgent({ apiBase, siteId: SITE_NOAUTH, token }, okDeps);
+        await runSessionCaptureHelper({ apiBase, siteId: SITE_NOAUTH, token }, okDeps);
       } catch (e) {
         threw = e instanceof Error && e.message.includes("authenticatedWhen");
       }
@@ -145,7 +145,7 @@ async function main(): Promise<void> {
       let httpsGuard = false;
       let captureCalled = false;
       try {
-        await runCaptureAgent({ apiBase: "http://remote.example", siteId: SITE, token }, { async captureCookies() { captureCalled = true; return CANNED; } });
+        await runSessionCaptureHelper({ apiBase: "http://remote.example", siteId: SITE, token }, { async captureCookies() { captureCalled = true; return CANNED; } });
       } catch (e) {
         httpsGuard = e instanceof Error && e.message.includes("https");
       }
@@ -156,15 +156,15 @@ async function main(): Promise<void> {
 
     if (failures > 0) {
       console.error(`\nFAIL: ${failures} check(s) failed`);
-      throw new Error(`${failures} capture-agent integration check(s) failed`);
+      throw new Error(`${failures} session-capture-helper integration check(s) failed`);
     }
-    console.log("\nPASS: 운영자-로컬 캡처 에이전트 통합 green");
+    console.log("\nPASS: 운영자 브라우저 세션 캡처 helper 통합 green");
   } finally {
     await pool.end().catch(() => undefined);
   }
 }
 
 main().catch((e) => {
-  console.error("capture-agent int fatal:", e);
+  console.error("session-capture-helper int fatal:", e);
   process.exitCode = 1;
 });

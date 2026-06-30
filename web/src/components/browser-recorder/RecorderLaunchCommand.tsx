@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 
 import type { BrowserRecordingSession } from "../../api/types";
-import { agentApiBase, psQuote } from "./helpers";
+import { recorderApiBase, psQuote } from "./helpers";
 
-export function AgentLaunchCommand({
+export function RecorderLaunchCommand({
   siteId,
   session,
 }: {
@@ -13,10 +13,10 @@ export function AgentLaunchCommand({
   const [copied, setCopied] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const command = useMemo(() => {
-    const apiBase = agentApiBase();
+    const apiBase = recorderApiBase();
     return [
       `$env:RPA_OPERATOR_TOKEN=${psQuote("<paste operator JWT>")}`,
-      `npm --prefix app run record:browser -- --api ${psQuote(apiBase)} --site ${psQuote(siteId)} --recording ${psQuote(session.recording_session_id)} --start-url ${psQuote(session.start_url)}`,
+      `npm --prefix app run browser:record-helper -- --api ${psQuote(apiBase)} --site ${psQuote(siteId)} --recording ${psQuote(session.recording_session_id)} --start-url ${psQuote(session.start_url)}`,
     ].join("\n");
   }, [session.recording_session_id, session.start_url, siteId]);
 
@@ -30,7 +30,7 @@ export function AgentLaunchCommand({
   };
 
   return (
-    <div className="browser-recorder-agent">
+    <div className="browser-recorder-helper">
       <div>
         <strong>내 PC 브라우저 녹화 도우미</strong>
         <span className="badge blue">내 PC Chrome</span>

@@ -272,7 +272,7 @@ describe("browser recorder panel", () => {
     expect(
       await screen.findByText("내 PC 브라우저 녹화 도우미"),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/record:browser/)).toBeNull();
+    expect(screen.queryByText(/browser:record-helper/)).toBeNull();
     expect(screen.queryByText(/94000000-0000-4000-8000/)).toBeNull();
 
     fireEvent.change(await screen.findByLabelText(/저장된 화면 설명/), {

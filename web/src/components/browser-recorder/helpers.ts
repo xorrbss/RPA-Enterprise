@@ -255,7 +255,7 @@ export function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
 
-export function agentApiBase(): string {
+export function recorderApiBase(): string {
   const configured = import.meta.env.VITE_API_BASE_URL;
   if (typeof configured === "string" && /^https?:\/\//i.test(configured))
     return configured.replace(/\/+$/, "");

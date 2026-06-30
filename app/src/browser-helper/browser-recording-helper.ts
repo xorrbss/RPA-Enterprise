@@ -8,10 +8,10 @@ import puppeteer, { type Browser, type Page } from "puppeteer-core";
 
 import { findChrome } from "../executor/login-capture";
 
-export class BrowserRecordingAgentError extends Error {
+export class BrowserRecordingHelperError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "BrowserRecordingAgentError";
+    this.name = "BrowserRecordingHelperError";
   }
 }
 
@@ -25,7 +25,7 @@ export interface SanitizedRecordingEvent {
   readonly value_preview?: string;
 }
 
-export interface BrowserRecordingAgentOptions {
+export interface BrowserRecordingHelperOptions {
   readonly apiBase: string;
   readonly siteId: string;
   readonly recordingId: string;
@@ -47,7 +47,7 @@ export interface BrowserRecordingLaunchHandle {
   close(): Promise<void>;
 }
 
-export interface BrowserRecordingAgentDeps {
+export interface BrowserRecordingHelperDeps {
   readonly fetchImpl?: typeof fetch;
   readonly launchBrowser?: (input: BrowserRecordingLaunchInput) => Promise<BrowserRecordingLaunchHandle>;
   readonly newKey?: () => string;
@@ -81,12 +81,12 @@ function assertSecureBase(apiBase: string): void {
   try {
     parsed = new URL(apiBase);
   } catch {
-    throw new BrowserRecordingAgentError(`Invalid --api URL: ${apiBase}`);
+    throw new BrowserRecordingHelperError(`Invalid --api URL: ${apiBase}`);
   }
   const isLoopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1" || parsed.hostname === "[::1]";
   if (parsed.protocol === "https:") return;
   if (parsed.protocol === "http:" && isLoopback) return;
-  throw new BrowserRecordingAgentError(`Security guard: --api must be https, except loopback dev URLs. Received ${parsed.protocol}//${parsed.hostname}`);
+  throw new BrowserRecordingHelperError(`Security guard: --api must be https, except loopback dev URLs. Received ${parsed.protocol}//${parsed.hostname}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -166,8 +166,8 @@ export function sanitizePageEvent(raw: unknown): SanitizedRecordingEvent | null 
 }
 
 export async function appendRecordingEvents(
-  opts: Pick<BrowserRecordingAgentOptions, "apiBase" | "siteId" | "recordingId" | "token">,
-  deps: Pick<BrowserRecordingAgentDeps, "fetchImpl" | "newKey">,
+  opts: Pick<BrowserRecordingHelperOptions, "apiBase" | "siteId" | "recordingId" | "token">,
+  deps: Pick<BrowserRecordingHelperDeps, "fetchImpl" | "newKey">,
   events: readonly SanitizedRecordingEvent[],
 ): Promise<void> {
   if (events.length === 0) return;
@@ -190,13 +190,13 @@ export async function appendRecordingEvents(
     } catch {
       body = "<no body>";
     }
-    throw new BrowserRecordingAgentError(`append recording events failed: HTTP ${res.status} ${body}`);
+    throw new BrowserRecordingHelperError(`append recording events failed: HTTP ${res.status} ${body}`);
   }
 }
 
-export async function runBrowserRecordingAgent(
-  opts: BrowserRecordingAgentOptions,
-  deps: BrowserRecordingAgentDeps = {},
+export async function runBrowserRecordingHelper(
+  opts: BrowserRecordingHelperOptions,
+  deps: BrowserRecordingHelperDeps = {},
 ): Promise<{ readonly appended: number }> {
   assertSecureBase(opts.apiBase);
   const log = deps.log ?? (() => undefined);
@@ -245,7 +245,7 @@ export async function runBrowserRecordingAgent(
 export async function defaultLaunchBrowser(input: BrowserRecordingLaunchInput): Promise<BrowserRecordingLaunchHandle> {
   const chrome = input.chromePath ?? findChrome();
   if (chrome === null) {
-    throw new BrowserRecordingAgentError("Chrome not found. Pass --chrome <path> or set CHROME_PATH.");
+    throw new BrowserRecordingHelperError("Chrome not found. Pass --chrome <path> or set CHROME_PATH.");
   }
   const userDataDir = mkdtempSync(join(tmpdir(), "op-browser-recorder-"));
   let browser: Browser | undefined;
@@ -410,7 +410,7 @@ function parseArgs(argv: readonly string[]): CliArgs {
     const arg = argv[i];
     const next = (): string => {
       const value = argv[i + 1];
-      if (value === undefined) throw new BrowserRecordingAgentError(`${arg} requires a value`);
+      if (value === undefined) throw new BrowserRecordingHelperError(`${arg} requires a value`);
       i += 1;
       return value;
     };
@@ -424,7 +424,7 @@ function parseArgs(argv: readonly string[]): CliArgs {
 }
 
 const USAGE =
-  "Usage: RPA_OPERATOR_TOKEN=<operator JWT> tsx src/agent/browser-recording-agent.ts --api <base-url> --site <uuid> --recording <uuid> --start-url <url> [--chrome <path>]";
+  "Usage: RPA_OPERATOR_TOKEN=<operator JWT> tsx src/browser-helper/browser-recording-helper.ts --api <base-url> --site <uuid> --recording <uuid> --start-url <url> [--chrome <path>]";
 
 async function cli(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -435,7 +435,7 @@ async function cli(): Promise<void> {
     return;
   }
   console.log(`Starting browser recorder for recording=${args.recording.slice(0, 8)} site=${args.site.slice(0, 8)}.`);
-  const result = await runBrowserRecordingAgent({
+  const result = await runBrowserRecordingHelper({
     apiBase: args.api,
     siteId: args.site,
     recordingId: args.recording,
@@ -452,7 +452,7 @@ const invoked = process.argv[1];
 if (invoked !== undefined && import.meta.url === pathToFileURL(invoked).href) {
   cli().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`browser recording agent error: ${message}`);
+    console.error(`browser recording helper error: ${message}`);
     process.exit(1);
   });
 }

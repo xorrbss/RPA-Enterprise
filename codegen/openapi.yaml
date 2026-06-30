@@ -3599,7 +3599,7 @@ paths:
     post:
       tags: [Sites]
       operationId: startBrowserRecording
-      description: Start a browser recorder session for DOM event metadata capture. The external local agent sends events through append APIs rather than exposing browser secrets.
+      description: Start a browser recorder session for DOM event metadata capture. The operator-launched browser helper sends events through append APIs rather than exposing browser secrets.
       summary: Browser Recorder 세션 시작
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -9391,7 +9391,7 @@ components:
           type: string
         auth_selector:
           type: string
-          description: Non-secret selector used by the local capture agent to detect authenticated state.
+          description: Non-secret selector used by the operator-launched browser capture helper to detect authenticated state.
       additionalProperties: false
 
     CaptureSession:
