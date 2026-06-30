@@ -37,3 +37,18 @@ Recommendations:
 4. Fold `자동화 검사` into `자동화 만들기` as a validation tab/action.
 5. Rename `오케스트레이션` to `실행 예약·알림` or `예약·큐 운영`.
 6. Add a mobile collapsed navigation pattern before shipping mobile/tablet review.
+
+Phase 15 post-implementation smoke:
+- Dev server: `DEV_DISABLE_RUN_LOOP=1`, `DEV_CONSOLE_PORT=18080`, disposable PostgreSQL gate.
+- HTTP smoke: `http://127.0.0.1:18080/?role=operator` returned 200.
+- Desktop operator 1280x720: `.sidebar .nav-item` count was 8.
+- Mobile operator 390x844: menu button was visible, `.sidebar` display was `none`, and `main .nav-item` count was 0.
+- Mobile drawer open: `.nav-drawer .nav-item` count was 8 and the trigger had `aria-expanded="true"`.
+- Screenshots:
+  - `phase15-smoke/operator-desktop-1280x720.png`
+  - `phase15-smoke/operator-mobile-390x844.png`
+  - `phase15-smoke/operator-mobile-drawer-390x844.png`
+
+Residual risks:
+- The smoke used headless Chrome/CDP rather than a full manual browser walkthrough.
+- Existing frontend validation still emits known jsdom canvas/React act warnings, and the Vite build keeps its chunk-size advisory.
