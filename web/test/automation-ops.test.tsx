@@ -572,6 +572,98 @@ describe("automation ops view", () => {
     ));
   });
 
+  test("operator requests Web Attended launch and resumes a suspended run from the ledger panel", async () => {
+    const createWebAttendedRunRequest = vi.fn(async (
+      body: Parameters<ApiClient["createWebAttendedRunRequest"]>[0],
+      idempotencyKey: Parameters<ApiClient["createWebAttendedRunRequest"]>[1],
+    ) => ({
+      request_id: "web-attended-created",
+      scenario_version_id: body.scenario_version_id,
+      run_id: "run-web-attended-created",
+      human_task_id: body.human_task_id ?? null,
+      status: "run_queued" as const,
+      requested_by: "operator-a",
+      request_idempotency_key: idempotencyKey,
+      consent_summary: body.consent.summary,
+      consent_evidence_ref: body.consent.evidence_ref ?? null,
+      input_refs: body.consent.input_refs ?? [],
+      human_task_policy: {
+        source: "ops-defaults.md#human_task.default_timeout",
+        default_timeout_ms: 1800000,
+        on_timeout: "fail" as const,
+        allowed_kinds: ["approval", "validation", "exception", "captcha", "mfa"],
+      },
+      metadata: body.metadata ?? {},
+      requested_at: "2026-06-30T00:00:00.000Z",
+      updated_at: "2026-06-30T00:00:00.000Z",
+      legal_hold: body.legal_hold ?? false,
+    }));
+    const resumeRun = vi.fn(async (runId: string) => ({
+      run_id: runId,
+      status: "resume_requested" as const,
+      previous_status: "suspended" as const,
+    }));
+    renderApp(clientWithOpsData({
+      listRuns: async (params) => params?.status === "suspended" ? ({
+        items: [{
+          run_id: "run-suspended-1",
+          status: "suspended",
+          priority: "medium" as const,
+          current_node: "approval",
+          as_of: "2026-06-30T00:00:00.000Z",
+          updated_at: "2026-06-30T00:01:00.000Z",
+          failure_reason: null,
+        }],
+        next_cursor: null,
+      }) : fakeClient().listRuns(params),
+      createWebAttendedRunRequest,
+      resumeRun,
+    }));
+
+    await screen.findByRole("heading", { name: "Web Attended" });
+    expect(screen.getByText("30m")).toBeInTheDocument();
+    expect(await screen.findByText("Finance owner approved web-attended launch.")).toBeInTheDocument();
+    expect(await screen.findByText(/business approval resolved/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Web Attended scenario version id"), {
+      target: { value: "00000000-0000-4000-8000-000000000202" },
+    });
+    fireEvent.change(screen.getByLabelText("Web Attended params JSON"), {
+      target: { value: "{\"as_of\":\"2026-06-30T00:00:00.000Z\",\"case_id\":\"ATT-42\"}" },
+    });
+    fireEvent.change(screen.getByLabelText("Web Attended consent summary"), {
+      target: { value: "Controller approved attended launch." },
+    });
+    fireEvent.change(screen.getByLabelText("Web Attended consent evidence ref"), {
+      target: { value: "ticket:ATT-42" },
+    });
+    fireEvent.change(screen.getByLabelText("Web Attended input refs"), {
+      target: { value: "artifact://input/a, artifact://input/a, artifact://input/b" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Request run" }));
+
+    await waitFor(() => expect(createWebAttendedRunRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenario_version_id: "00000000-0000-4000-8000-000000000202",
+        params: { as_of: "2026-06-30T00:00:00.000Z", case_id: "ATT-42" },
+        consent: {
+          summary: "Controller approved attended launch.",
+          evidence_ref: "ticket:ATT-42",
+          input_refs: ["artifact://input/a", "artifact://input/b"],
+        },
+        metadata: { requested_from: "admin_console" },
+      }),
+      expect.stringMatching(/^web-attended-00000000-0000-4000-8000-000000000202-ticket:ATT-42-\d+$/),
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(resumeRun).toHaveBeenCalledWith(
+      "run-suspended-1",
+      expect.stringMatching(/^web-attended-resume-run-suspended-1-/),
+      "web attended resume from operations console",
+    ));
+  });
+
   test("operator selects handoff provider profiles without exposing raw callback URLs", async () => {
     const createIntegrationHandoff = vi.fn();
     renderApp(clientWithOpsData({ createIntegrationHandoff }));

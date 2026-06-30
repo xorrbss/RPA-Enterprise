@@ -24,6 +24,9 @@ export type SupportedControlPlaneOperationId = Extract<
   | "listRunArtifacts"
   | "listRuns"
   | "abortRun"
+  | "listRunResumeRequests"
+  | "listWebAttendedRunRequests"
+  | "createWebAttendedRunRequest"
   | "listRunTriggers"
   | "createRunTrigger"
   | "getRunTrigger"
@@ -208,6 +211,32 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     requestBodyRequired: false,
     responseSchemaRef: "#/components/schemas/Run",
     rbacAction: "run.abort",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "listRunResumeRequests",
+    method: "GET",
+    path: "/v1/run-resume-requests",
+    querySchemaRef: "#/components/schemas/RunResumeRequestListQuery",
+    responseSchemaRef: "#/components/schemas/RunResumeRequestPage",
+    rbacAction: "run.read",
+  }),
+  operation({
+    operationId: "listWebAttendedRunRequests",
+    method: "GET",
+    path: "/v1/web-attended/run-requests",
+    querySchemaRef: "#/components/schemas/WebAttendedRunRequestListQuery",
+    responseSchemaRef: "#/components/schemas/WebAttendedRunRequestPage",
+    rbacAction: "run.read",
+  }),
+  operation({
+    operationId: "createWebAttendedRunRequest",
+    method: "POST",
+    path: "/v1/web-attended/run-requests",
+    requestBodySchemaRef: "#/components/schemas/WebAttendedRunRequestCreate",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/WebAttendedRunRequest",
+    rbacAction: "run.create",
     requiresIdempotencyKey: true,
   }),
   operation({
@@ -1895,6 +1924,63 @@ const requireRunCreateBody = (schemaRef: string): BoundaryValidator => ({
   },
 });
 
+const requireWebAttendedRunRequestCreateBody = (schemaRef: string): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    const allowed = new Set(["scenario_version_id", "params", "model", "priority", "human_task_id", "consent", "metadata", "legal_hold"]);
+    for (const key of Object.keys(input)) {
+      if (!allowed.has(key)) {
+        return validationFailure({ schemaRef, reason: "additional_property", key });
+      }
+    }
+    if (typeof input.scenario_version_id !== "string" || input.scenario_version_id.length === 0) {
+      return validationFailure({ schemaRef, reason: "missing_required_string", prop: "scenario_version_id" });
+    }
+    if (!isRecord(input.params)) {
+      return validationFailure({ schemaRef, reason: "missing_required_object", prop: "params" });
+    }
+    if (input.model !== undefined && input.model !== null && (typeof input.model !== "string" || input.model.length === 0)) {
+      return validationFailure({ schemaRef, reason: "invalid_optional_string", prop: "model" });
+    }
+    if (input.priority !== undefined && input.priority !== "low" && input.priority !== "medium" && input.priority !== "high" && input.priority !== "critical") {
+      return validationFailure({ schemaRef, reason: "invalid_priority" });
+    }
+    if (input.human_task_id !== undefined && input.human_task_id !== null && (typeof input.human_task_id !== "string" || input.human_task_id.length === 0)) {
+      return validationFailure({ schemaRef, reason: "invalid_optional_string", prop: "human_task_id" });
+    }
+    if (!isRecord(input.consent)) {
+      return validationFailure({ schemaRef, reason: "missing_required_object", prop: "consent" });
+    }
+    const consent = input.consent;
+    for (const key of Object.keys(consent)) {
+      if (key !== "summary" && key !== "evidence_ref" && key !== "input_refs") {
+        return validationFailure({ schemaRef, reason: "additional_property", prop: "consent", key });
+      }
+    }
+    if (typeof consent.summary !== "string" || consent.summary.length === 0) {
+      return validationFailure({ schemaRef, reason: "missing_required_string", prop: "consent.summary" });
+    }
+    if (consent.evidence_ref !== undefined && consent.evidence_ref !== null && (typeof consent.evidence_ref !== "string" || consent.evidence_ref.length === 0)) {
+      return validationFailure({ schemaRef, reason: "invalid_optional_string", prop: "consent.evidence_ref" });
+    }
+    if (consent.input_refs !== undefined) {
+      if (!Array.isArray(consent.input_refs) || consent.input_refs.some((item) => typeof item !== "string" || item.length === 0)) {
+        return validationFailure({ schemaRef, reason: "invalid_optional_array", prop: "consent.input_refs" });
+      }
+    }
+    if (input.metadata !== undefined && !isRecord(input.metadata)) {
+      return validationFailure({ schemaRef, reason: "invalid_optional_object", prop: "metadata" });
+    }
+    if (input.legal_hold !== undefined && typeof input.legal_hold !== "boolean") {
+      return validationFailure({ schemaRef, reason: "invalid_optional_boolean", prop: "legal_hold" });
+    }
+    return { valid: true, value: input };
+  },
+});
+
 const requireRunTriggerCreateBody = (schemaRef: string): BoundaryValidator => ({
   schemaRef,
   validate(input: unknown): BoundaryValidationResult {
@@ -2031,6 +2117,7 @@ const requireBrowserRecordingAppendEventsBody = (schemaRef: string): BoundaryVal
 const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<OperationId, BoundaryValidator>([
   ["createRun", requireRunCreateBody("#/components/schemas/RunCreateRequest")],
   ["abortRun", requireObject("#/components/schemas/AbortRequest", [], true)],
+  ["createWebAttendedRunRequest", requireWebAttendedRunRequestCreateBody("#/components/schemas/WebAttendedRunRequestCreate")],
   ["createRunTrigger", requireRunTriggerCreateBody("#/components/schemas/RunTriggerCreateRequest")],
   ["updateRunTrigger", requireObject("#/components/schemas/RunTriggerUpdateRequest")],
   ["pauseRunTrigger", requireObject("#/components/schemas/RunTriggerCommandRequest", [], true)],
@@ -2152,6 +2239,8 @@ const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Op
 
 const queryValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<OperationId, BoundaryValidator>([
   ["listRuns", passQuery("#/components/schemas/RunListQuery")],
+  ["listRunResumeRequests", passQuery("#/components/schemas/RunResumeRequestListQuery")],
+  ["listWebAttendedRunRequests", passQuery("#/components/schemas/WebAttendedRunRequestListQuery")],
   ["listRunTriggers", passQuery("#/components/schemas/RunTriggerListQuery")],
   ["listRunTriggerFires", passQuery("#/components/schemas/RunTriggerFireListQuery")],
   ["listOpsAlerts", passQuery("#/components/schemas/OpsAlertListQuery")],

@@ -2131,6 +2131,80 @@ export interface ResumeRunResult {
   readonly previous_status: "suspended" | "resume_requested";
 }
 
+export interface HumanTaskPolicySnapshot {
+  readonly source: string;
+  readonly default_timeout_ms: number;
+  readonly on_timeout: "fail" | "escalate";
+  readonly allowed_kinds: readonly string[];
+}
+
+export type WebAttendedRunRequestStatus = "requested" | "run_queued" | "blocked" | "cancelled";
+export type RunResumeRequestStatus = "requested" | "reenqueued";
+
+export interface WebAttendedRunRequestConsent {
+  readonly summary: string;
+  readonly evidence_ref?: string | null;
+  readonly input_refs?: readonly string[];
+}
+
+export interface WebAttendedRunRequestCreate {
+  readonly scenario_version_id: string;
+  readonly params: Record<string, unknown>;
+  readonly model?: string | null;
+  readonly priority?: RunPriority;
+  readonly human_task_id?: string | null;
+  readonly consent: WebAttendedRunRequestConsent;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly legal_hold?: boolean;
+}
+
+export interface WebAttendedRunRequest {
+  readonly request_id: string;
+  readonly scenario_version_id: string;
+  readonly run_id: string | null;
+  readonly human_task_id: string | null;
+  readonly status: WebAttendedRunRequestStatus;
+  readonly requested_by: string;
+  readonly request_idempotency_key: string;
+  readonly consent_summary: string;
+  readonly consent_evidence_ref: string | null;
+  readonly input_refs: readonly string[];
+  readonly human_task_policy: HumanTaskPolicySnapshot;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly requested_at: string;
+  readonly updated_at: string;
+  readonly legal_hold: boolean;
+}
+
+export interface WebAttendedRunRequestListParams extends ListParams {
+  readonly status?: WebAttendedRunRequestStatus;
+  readonly run_id?: string;
+  readonly human_task_id?: string;
+}
+
+export interface RunResumeRequest {
+  readonly request_id: string;
+  readonly run_id: string;
+  readonly human_task_id: string | null;
+  readonly status: RunResumeRequestStatus;
+  readonly previous_run_status: "suspended" | "resume_requested";
+  readonly requested_by: string;
+  readonly reason: string | null;
+  readonly input_refs: readonly string[];
+  readonly human_task_policy: HumanTaskPolicySnapshot;
+  readonly audit_correlation_id: string;
+  readonly request_idempotency_key: string;
+  readonly requested_at: string;
+  readonly updated_at: string;
+  readonly legal_hold: boolean;
+}
+
+export interface RunResumeRequestListParams extends ListParams {
+  readonly status?: RunResumeRequestStatus;
+  readonly run_id?: string;
+  readonly human_task_id?: string;
+}
+
 export interface PrioritizeRunBody {
   readonly priority: RunPriority;
   readonly reason?: string | null;

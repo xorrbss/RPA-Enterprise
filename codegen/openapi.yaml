@@ -47,6 +47,8 @@ tags:
     description: Browser RPA connector and template catalog metadata.
   - name: IntegrationHandoffs
     description: Existing RPA product handoff ledger and provider receipt metadata.
+  - name: WebAttended
+    description: Web-console attended run launch and run-resume metadata ledgers.
   - name: DocumentIDP
     description: Deterministic text/CSV/JSON document extraction and human validation queue.
   - name: Scenarios
@@ -421,6 +423,108 @@ paths:
   # ============================================================
   # 1.5 Run Triggers (예약 실행 / orchestration)
   # ============================================================
+  /run-resume-requests:
+    get:
+      tags: [Runs, WebAttended]
+      operationId: listRunResumeRequests
+      summary: List run resume request ledger
+      description: >
+        Tenant-scoped metadata ledger for operator resume requests. Rows are written by
+        POST /runs/{run_id}/resume and reuse the current human-task policy defaults.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RunResumeRequestStatus'
+        - name: run_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: human_task_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Tenant-scoped run resume request page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResumeRequestPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /web-attended/run-requests:
+    get:
+      tags: [WebAttended]
+      operationId: listWebAttendedRunRequests
+      summary: List Web Attended run requests
+      description: >
+        Tenant-scoped metadata ledger for user-approved web-console attended run launch.
+        No local attended client, raw browser session material, credentials, or resolved
+        SecretRef material is exposed.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/WebAttendedRunRequestStatus'
+        - name: run_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: human_task_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Tenant-scoped Web Attended run request page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebAttendedRunRequestPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [WebAttended]
+      operationId: createWebAttendedRunRequest
+      summary: Create Web Attended run request
+      description: >
+        Creates a queued run and records the user consent/approval ledger in one
+        idempotent command. The human_task_policy field snapshots the current
+        human-task defaults rather than creating a separate attended policy.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebAttendedRunRequestCreate'
+      responses:
+        '201':
+          description: Web Attended request accepted and linked run queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebAttendedRunRequest'
+        default:
+          $ref: '#/components/responses/Error'
+
   /run-triggers:
     get:
       tags: [RunTriggers]
@@ -5118,6 +5222,206 @@ components:
           items: { $ref: '#/components/schemas/Run' }
         next_cursor:
           type: [string, "null"]
+    WebAttendedRunRequestStatus:
+      type: string
+      enum: [requested, run_queued, blocked, cancelled]
+    RunResumeRequestStatus:
+      type: string
+      enum: [requested, reenqueued]
+    HumanTaskPolicySnapshot:
+      type: object
+      additionalProperties: false
+      required: [source, default_timeout_ms, on_timeout, allowed_kinds]
+      properties:
+        source:
+          type: string
+        default_timeout_ms:
+          type: integer
+          minimum: 1
+        on_timeout:
+          type: string
+          enum: [fail, escalate]
+        allowed_kinds:
+          type: array
+          items:
+            $ref: '#/components/schemas/HumanTaskKind'
+    WebAttendedRunRequestConsent:
+      type: object
+      additionalProperties: false
+      required: [summary]
+      properties:
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        evidence_ref:
+          type: string
+          minLength: 1
+          maxLength: 500
+        input_refs:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            minLength: 1
+            maxLength: 300
+    WebAttendedRunRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [scenario_version_id, params, consent]
+      properties:
+        scenario_version_id:
+          type: string
+          format: uuid
+        params:
+          type: object
+        model:
+          type: [string, "null"]
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        human_task_id:
+          type: [string, "null"]
+          format: uuid
+        consent:
+          $ref: '#/components/schemas/WebAttendedRunRequestConsent'
+        metadata:
+          type: object
+        legal_hold:
+          type: boolean
+    WebAttendedRunRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - scenario_version_id
+        - run_id
+        - human_task_id
+        - status
+        - requested_by
+        - request_idempotency_key
+        - consent_summary
+        - consent_evidence_ref
+        - input_refs
+        - human_task_policy
+        - metadata
+        - requested_at
+        - updated_at
+        - legal_hold
+      properties:
+        request_id: { type: string, format: uuid }
+        scenario_version_id: { type: string, format: uuid }
+        run_id: { type: [string, "null"], format: uuid }
+        human_task_id: { type: [string, "null"], format: uuid }
+        status:
+          $ref: '#/components/schemas/WebAttendedRunRequestStatus'
+        requested_by: { type: string }
+        request_idempotency_key: { type: string }
+        consent_summary: { type: string }
+        consent_evidence_ref: { type: [string, "null"] }
+        input_refs:
+          type: array
+          items: { type: string }
+        human_task_policy:
+          $ref: '#/components/schemas/HumanTaskPolicySnapshot'
+        metadata:
+          type: object
+        requested_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        legal_hold: { type: boolean }
+    WebAttendedRunRequestPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebAttendedRunRequest'
+        next_cursor:
+          type: [string, "null"]
+    RunResumeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - run_id
+        - human_task_id
+        - status
+        - previous_run_status
+        - requested_by
+        - reason
+        - input_refs
+        - human_task_policy
+        - audit_correlation_id
+        - request_idempotency_key
+        - requested_at
+        - updated_at
+        - legal_hold
+      properties:
+        request_id: { type: string, format: uuid }
+        run_id: { type: string, format: uuid }
+        human_task_id: { type: [string, "null"], format: uuid }
+        status:
+          $ref: '#/components/schemas/RunResumeRequestStatus'
+        previous_run_status:
+          type: string
+          enum: [suspended, resume_requested]
+        requested_by: { type: string }
+        reason: { type: [string, "null"] }
+        input_refs:
+          type: array
+          items: { type: string }
+        human_task_policy:
+          $ref: '#/components/schemas/HumanTaskPolicySnapshot'
+        audit_correlation_id: { type: string, format: uuid }
+        request_idempotency_key: { type: string }
+        requested_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        legal_hold: { type: boolean }
+    RunResumeRequestPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunResumeRequest'
+        next_cursor:
+          type: [string, "null"]
+    WebAttendedRunRequestListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          $ref: '#/components/schemas/WebAttendedRunRequestStatus'
+        run_id:
+          type: string
+          format: uuid
+        human_task_id:
+          type: string
+          format: uuid
+        limit:
+          type: integer
+        cursor:
+          type: string
+    RunResumeRequestListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          $ref: '#/components/schemas/RunResumeRequestStatus'
+        run_id:
+          type: string
+          format: uuid
+        human_task_id:
+          type: string
+          format: uuid
+        limit:
+          type: integer
+        cursor:
+          type: string
     RunTriggerPage:
       type: object
       required: [items, next_cursor]

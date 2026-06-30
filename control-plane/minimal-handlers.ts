@@ -17,6 +17,13 @@ import type {
 import type { HumanTaskKind, HumanTaskState, RunState, WorkitemState } from "../ts/state-machine-types";
 import { HUMANTASK_TERMINAL, RUN_TERMINAL } from "../ts/state-machine-types";
 
+const HUMAN_TASK_POLICY_DEFAULTS = {
+  source: "ops-defaults.md#human_task.default_timeout",
+  default_timeout_ms: 30 * 60 * 1000,
+  on_timeout: "fail",
+  allowed_kinds: ["approval", "validation", "exception", "captcha", "mfa"],
+} as const;
+
 export interface MinimalRun {
   run_id: string;
   tenant_id: string;
@@ -351,6 +358,43 @@ export interface MinimalIntegrationHandoff {
   legal_hold: boolean;
 }
 
+export interface MinimalWebAttendedRunRequest {
+  request_id: string;
+  tenant_id: string;
+  scenario_version_id: string;
+  run_id: string | null;
+  human_task_id: string | null;
+  status: "requested" | "run_queued" | "blocked" | "cancelled";
+  requested_by: string;
+  request_idempotency_key: string;
+  consent_summary: string;
+  consent_evidence_ref: string | null;
+  input_refs: readonly string[];
+  human_task_policy: Readonly<Record<string, unknown>>;
+  metadata: Readonly<Record<string, unknown>>;
+  requested_at: string;
+  updated_at: string;
+  legal_hold: boolean;
+}
+
+export interface MinimalRunResumeRequest {
+  request_id: string;
+  tenant_id: string;
+  run_id: string;
+  human_task_id: string | null;
+  status: "requested" | "reenqueued";
+  previous_run_status: "suspended" | "resume_requested";
+  requested_by: string;
+  reason: string | null;
+  input_refs: readonly string[];
+  human_task_policy: Readonly<Record<string, unknown>>;
+  audit_correlation_id: string;
+  request_idempotency_key: string;
+  requested_at: string;
+  updated_at: string;
+  legal_hold: boolean;
+}
+
 export interface MinimalIntegrationHandoffDispatchAttempt {
   attempt_id: string;
   handoff_id: string;
@@ -544,6 +588,8 @@ export interface MinimalControlPlaneSeed {
   templates?: readonly MinimalTemplateCatalogItem[];
   connectorProfiles?: readonly MinimalConnectorProfile[];
   integrationHandoffs?: readonly MinimalIntegrationHandoff[];
+  webAttendedRunRequests?: readonly MinimalWebAttendedRunRequest[];
+  runResumeRequests?: readonly MinimalRunResumeRequest[];
   documentJobs?: readonly MinimalDocumentJob[];
   documentExtractions?: readonly MinimalDocumentExtraction[];
   gatewayPolicies?: readonly MinimalGatewayPolicy[];
@@ -563,6 +609,9 @@ export interface MinimalControlPlaneServices {
   streamRunSteps(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listRunArtifacts(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   abortRun(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listRunResumeRequests(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listWebAttendedRunRequests(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  createWebAttendedRunRequest(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listRunTriggers(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   createRunTrigger(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getRunTrigger(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -664,6 +713,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private documentExtractionSequence = 0;
   private documentTaskSequence = 0;
   private integrationHandoffSequence = 0;
+  private webAttendedRunRequestSequence = 0;
   private recordingSequence = 0;
   private recordingEventSequence = 0;
   private readinessEvidenceSequence = 0;
@@ -688,6 +738,8 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private readonly templates: MinimalTemplateCatalogItem[] = [];
   private readonly connectorProfiles = new Map<string, MinimalConnectorProfile>();
   private readonly integrationHandoffs = new Map<string, MinimalIntegrationHandoff>();
+  private readonly webAttendedRunRequests = new Map<string, MinimalWebAttendedRunRequest>();
+  private readonly runResumeRequests = new Map<string, MinimalRunResumeRequest>();
   private readonly integrationHandoffDispatchAttempts = new Map<string, MinimalIntegrationHandoffDispatchAttempt>();
   private readonly documentJobs = new Map<string, MinimalDocumentJob>();
   private readonly documentExtractions = new Map<string, MinimalDocumentExtraction>();
@@ -735,6 +787,12 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     }
     for (const handoff of seed.integrationHandoffs ?? []) {
       this.integrationHandoffs.set(key(handoff.tenant_id, handoff.handoff_id), { ...handoff });
+    }
+    for (const request of seed.webAttendedRunRequests ?? []) {
+      this.webAttendedRunRequests.set(key(request.tenant_id, request.request_id), { ...request });
+    }
+    for (const request of seed.runResumeRequests ?? []) {
+      this.runResumeRequests.set(key(request.tenant_id, request.request_id), { ...request });
     }
     for (const job of seed.documentJobs ?? []) {
       this.documentJobs.set(key(job.tenant_id, job.document_job_id), { ...job });
@@ -884,6 +942,78 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
     run.status = "cancelled";
     this.runs.set(key(run.tenant_id, run.run_id), run);
     return { status: 202, body: run };
+  }
+
+  async listRunResumeRequests(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const status = optionalQueryString(ctx, "status");
+    const runId = optionalQueryString(ctx, "run_id");
+    const humanTaskId = optionalQueryString(ctx, "human_task_id");
+    const items = [...this.runResumeRequests.values()].filter((row) =>
+      row.tenant_id === tenant(ctx)
+      && (status === undefined || row.status === status)
+      && (runId === undefined || row.run_id === runId)
+      && (humanTaskId === undefined || row.human_task_id === humanTaskId),
+    );
+    return page(items);
+  }
+
+  async listWebAttendedRunRequests(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const status = optionalQueryString(ctx, "status");
+    const runId = optionalQueryString(ctx, "run_id");
+    const humanTaskId = optionalQueryString(ctx, "human_task_id");
+    const items = [...this.webAttendedRunRequests.values()].filter((row) =>
+      row.tenant_id === tenant(ctx)
+      && (status === undefined || row.status === status)
+      && (runId === undefined || row.run_id === runId)
+      && (humanTaskId === undefined || row.human_task_id === humanTaskId),
+    );
+    return page(items);
+  }
+
+  async createWebAttendedRunRequest(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const params = requireRecord(body, "params");
+    const consent = requireRecord(body, "consent");
+    const humanTaskId = optionalString(body, "human_task_id") ?? null;
+    if (humanTaskId !== null && this.humanTasks.get(key(tenant(ctx), humanTaskId)) === undefined) {
+      throw new ApiResponseException("RESOURCE_NOT_FOUND");
+    }
+    const now = new Date().toISOString();
+    const scenarioVersionId = requireString(body, "scenario_version_id");
+    const runId = `web-attended-run-${++this.runSequence}`;
+    const run: MinimalRun = {
+      run_id: runId,
+      tenant_id: tenant(ctx),
+      scenario_id: scenarioIdFromVersionId(scenarioVersionId),
+      scenario_version_id: scenarioVersionId,
+      status: "queued",
+      attempts: 0,
+      as_of: typeof params.as_of === "string" ? params.as_of : now,
+      worker_id: null,
+      progress_node: null,
+    };
+    this.runs.set(key(run.tenant_id, run.run_id), run);
+    const requestSequence = String(++this.webAttendedRunRequestSequence).padStart(12, "0");
+    const item: MinimalWebAttendedRunRequest = {
+      request_id: `20000000-0000-4000-8000-${requestSequence}`,
+      tenant_id: tenant(ctx),
+      scenario_version_id: scenarioVersionId,
+      run_id: runId,
+      human_task_id: humanTaskId,
+      status: "run_queued",
+      requested_by: ctx.principal.subjectId,
+      request_idempotency_key: ctx.headers["idempotency-key"] ?? "fixture-idempotency-key",
+      consent_summary: requireString(consent, "summary"),
+      consent_evidence_ref: optionalString(consent, "evidence_ref") ?? null,
+      input_refs: optionalStringArray(consent, "input_refs") ?? [],
+      human_task_policy: HUMAN_TASK_POLICY_DEFAULTS,
+      metadata: isRecord(body.metadata) ? body.metadata : {},
+      requested_at: now,
+      updated_at: now,
+      legal_hold: Boolean(body.legal_hold),
+    };
+    this.webAttendedRunRequests.set(key(item.tenant_id, item.request_id), item);
+    return { status: 201, body: item };
   }
 
   async listRunTriggers(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -2698,6 +2828,9 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     streamRunSteps: bind(services.streamRunSteps),
     listRunArtifacts: bind(services.listRunArtifacts),
     abortRun: bind(services.abortRun),
+    listRunResumeRequests: bind(services.listRunResumeRequests),
+    listWebAttendedRunRequests: bind(services.listWebAttendedRunRequests),
+    createWebAttendedRunRequest: bind(services.createWebAttendedRunRequest),
     listRunTriggers: bind(services.listRunTriggers),
     createRunTrigger: bind(services.createRunTrigger),
     getRunTrigger: bind(services.getRunTrigger),

@@ -246,3 +246,7 @@ CoE certification lifecycle:
 ## Addendum: Ops Alert Delivery Receipt RBAC
 
 `ops_alert.deliver` is admin-only. It gates `POST /v1/ops-alerts/{alert_id}/deliveries`, which records metadata-only provider delivery receipts with an `Idempotency-Key`. `viewer`, `operator`, `reviewer`, and `approver` must receive `AUTHZ_FORBIDDEN`; `operator` retains `ops_alert.ack` for console acknowledgement but cannot record external delivery evidence. `GET /v1/ops-alerts/{alert_id}/deliveries` remains `ops_alert.read` for the existing read roles.
+
+## Addendum: Web Attended / Run Resume Ledger RBAC
+
+Web Attended does not introduce a new role or action in Product Open v1. `POST /v1/web-attended/run-requests` is gated by the existing `run.create` action. `GET /v1/web-attended/run-requests` and `GET /v1/run-resume-requests` are gated by `run.read`. `POST /v1/runs/{run_id}/resume` remains gated by `run.resume`; writing the `run_resume_requests` ledger row is part of that same command boundary and must not be exposed as a separate write permission.

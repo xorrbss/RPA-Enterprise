@@ -170,6 +170,8 @@ Worker heartbeat startup rule:
 
 ---
 
+Web Attended uses the same human-task defaults. `web_attended_run_requests.human_task_policy` and `run_resume_requests.human_task_policy` are snapshots of `human_task.default_timeout=30m`, `on_timeout=fail`, and the existing allowed human task kinds (`approval`, `validation`, `exception`, `captcha`, `mfa`). There is no separate Web Attended timeout or escalation default in Product Open v1.
+
 ## 8. Sink delivery (D6 — db sink_deliveries, 데이터평면 외부 전달)
 
 > sink_deliveries 테이블은 존재하나 v1.6 시점엔 전달 상한이 미정의였다. D6 빌드가 failed→dead_letter

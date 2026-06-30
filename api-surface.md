@@ -235,6 +235,18 @@ Bot pool(v1)은 운영 용량 표면용 read model이다. `capacity_slots`는 �
 
 ---
 
+### 1.1 Web Attended / run-resume ledgers
+
+Web Attended is a web-console HITL surface, not a local execution client. It reuses the existing run create/resume and human-task policy contracts. No raw credentials, raw browser session material, bearer values, or resolved SecretRef material may be stored in consent, input refs, metadata, or ledger summaries.
+
+| Method | Path | Request summary | Response summary | Main ErrorCode |
+|---|---|---|---|---|
+| POST | `/v1/web-attended/run-requests` | `Idempotency-Key`. body: `scenario_version_id`, `params`, `consent.summary`, optional `consent.evidence_ref`, optional `consent.input_refs[]`, optional `model`, `priority`, `human_task_id`, `metadata`, `legal_hold`. Requires `run.create`. Uses the same create-run `params.as_of` freeze and model resolution rules as `POST /v1/runs` | 201 + a `web_attended_run_requests` item with linked `run_id`, `status=run_queued`, consent summary/evidence ref, metadata-only input refs, and `human_task_policy` copied from the current human-task defaults | `IR_SCHEMA_INVALID`, `RESOURCE_NOT_FOUND`, `SCENARIO_VERSION_CONFLICT`, `AUTHZ_FORBIDDEN`, `SITE_PROFILE_BLOCKED` |
+| GET | `/v1/web-attended/run-requests` | query: optional `status=requested|run_queued|blocked|cancelled`, `run_id`, `human_task_id`, `limit`, `cursor`. Requires `run.read` | 200 + `{ items, next_cursor }` from the tenant-scoped metadata ledger | `IR_SCHEMA_INVALID`, `AUTHZ_FORBIDDEN` |
+| GET | `/v1/run-resume-requests` | query: optional `status=requested|reenqueued`, `run_id`, `human_task_id`, `limit`, `cursor`. Requires `run.read` | 200 + `{ items, next_cursor }` from the tenant-scoped resume ledger | `IR_SCHEMA_INVALID`, `AUTHZ_FORBIDDEN` |
+
+`POST /v1/runs/{run_id}/resume` remains the only resume command. It writes one `run_resume_requests` row inside the same idempotent tenant transaction: `status=requested` for `suspended -> resume_requested`, and `status=reenqueued` when an existing `resume_requested` run is re-enqueued. The row stores `reason`, actor, audit correlation id, linked latest resolved human task if present, input refs, and the same `human_task_policy` defaults used by runtime human tasks. Idempotency replay must not insert another resume ledger row.
+
 ## 2. Scenarios (시나리오 CRUD · 검증 · 승격)
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |

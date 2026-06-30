@@ -11,6 +11,10 @@ import type {
   OpsNotificationDelivery,
   OpsNotificationWebhookSendRequest,
   ProductionReadinessEvidence,
+  RunItem,
+  RunResumeRequest,
+  WebAttendedRunRequest,
+  WebAttendedRunRequestCreate,
 } from "../api/types";
 import { OpsHealthSummary } from "./orchestration/OpsHealthSummary";
 import { TriggerScheduler } from "./orchestration/TriggerScheduler";
@@ -24,6 +28,7 @@ import {
   type IntegrationHandoffDispatchDraft,
   type IntegrationHandoffReceiptDraft,
 } from "./orchestration/IntegrationHandoffPanel";
+import { WebAttendedPanel, type WebAttendedRunCreateDraft } from "./orchestration/WebAttendedPanel";
 import {
   ProductionReadinessPanel,
   type BackupEvidenceRecordDraft,
@@ -70,6 +75,21 @@ export function OrchestrationView(): JSX.Element {
     queryFn: () => api.listIntegrationHandoffs({ limit: 5 }),
     refetchInterval: 30_000,
   });
+  const webAttendedRunRequests = useQuery({
+    queryKey: ["web-attended-run-requests"],
+    queryFn: () => api.listWebAttendedRunRequests({ limit: 5 }),
+    refetchInterval: 30_000,
+  });
+  const runResumeRequests = useQuery({
+    queryKey: ["run-resume-requests"],
+    queryFn: () => api.listRunResumeRequests({ limit: 5 }),
+    refetchInterval: 30_000,
+  });
+  const suspendedRuns = useQuery({
+    queryKey: ["runs", "suspended"],
+    queryFn: () => api.listRuns({ status: "suspended", limit: 5 }),
+    refetchInterval: 10_000,
+  });
 
   const [alertSeverity, setAlertSeverity] = useState<AlertSeverityFilter>("all");
   const [alertSource, setAlertSource] = useState<AlertSourceFilter>("all");
@@ -81,6 +101,7 @@ export function OrchestrationView(): JSX.Element {
   const [queuedWebhookAttempt, setQueuedWebhookAttempt] = useState<OpsNotificationAttempt | null>(null);
   const [dispatchErrorHandoffId, setDispatchErrorHandoffId] = useState<string | null>(null);
   const [receiptErrorHandoffId, setReceiptErrorHandoffId] = useState<string | null>(null);
+  const [resumeErrorRunId, setResumeErrorRunId] = useState<string | null>(null);
   const alertBaseParams = useMemo(
     () => ({
       limit: 20,
@@ -287,6 +308,27 @@ export function OrchestrationView(): JSX.Element {
       setReceiptErrorHandoffId(variables.handoff.handoff_id);
     },
   });
+  const createWebAttendedRunRequestMutation = useMutation({
+    mutationFn: (draft: WebAttendedRunCreateDraft) =>
+      api.createWebAttendedRunRequest(webAttendedRequestBody(draft), webAttendedIdempotencyKey(draft)),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["web-attended-run-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+  const resumeSuspendedRunMutation = useMutation({
+    mutationFn: (run: RunItem) => api.resumeRun(run.run_id, runResumeIdempotencyKey(run), "web attended resume from operations console"),
+    onMutate: () => {
+      setResumeErrorRunId(null);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["run-resume-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+    },
+    onError: (_error, run) => {
+      setResumeErrorRunId(run.run_id);
+    },
+  });
   useEffect(() => {
     if (opsAlerts.data === undefined) return;
     setAlertItems((current) => {
@@ -321,6 +363,8 @@ export function OrchestrationView(): JSX.Element {
     { label: "사람 확인 대기", value: human.data === undefined ? "-" : String(human.data.items.length), action: () => navigate("humanTasks") },
     { label: "작업 항목 재처리 대기", value: workDlq.data === undefined ? "-" : String(workDlq.data.items.length), action: () => navigate("workitems") },
   ];
+
+  const suspendedRunItems = (suspendedRuns.data?.items ?? []).filter((run) => run.status === "suspended");
 
   const queuePanel = (
     <section className="panel orchestration-status" aria-label="큐 운영 상태">
@@ -436,6 +480,25 @@ export function OrchestrationView(): JSX.Element {
             receiptErrorHandoffId={receiptErrorHandoffId}
             onRecordReceipt={(handoff, draft) => recordIntegrationHandoffReceiptMutation.mutate({ handoff, draft })}
           />
+          <WebAttendedPanel
+            runRequests={webAttendedRunRequests.data?.items ?? ([] as WebAttendedRunRequest[])}
+            resumeRequests={runResumeRequests.data?.items ?? ([] as RunResumeRequest[])}
+            suspendedRuns={suspendedRunItems}
+            isLoading={
+              (webAttendedRunRequests.data === undefined && webAttendedRunRequests.isFetching) ||
+              (runResumeRequests.data === undefined && runResumeRequests.isFetching) ||
+              (suspendedRuns.data === undefined && suspendedRuns.isFetching)
+            }
+            isError={webAttendedRunRequests.isError || runResumeRequests.isError}
+            canCreate={can("run.create")}
+            isCreating={createWebAttendedRunRequestMutation.isPending}
+            createError={createWebAttendedRunRequestMutation.isError}
+            onCreate={(draft) => createWebAttendedRunRequestMutation.mutate(draft)}
+            canResume={can("run.resume")}
+            resumingRunId={resumeSuspendedRunMutation.isPending ? resumeSuspendedRunMutation.variables?.run_id ?? null : null}
+            resumeErrorRunId={resumeErrorRunId}
+            onResume={(run) => resumeSuspendedRunMutation.mutate(run)}
+          />
           <OpsAlertCenter
             alerts={alertItems}
             isError={opsAlerts.isError}
@@ -524,6 +587,62 @@ function opsAlertWebhookIdempotencyKey(alert: OpsAlertItem, draft: OpsWebhookSen
 
 function stableIdempotencyPart(value: string): string {
   return value.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 80);
+}
+
+function webAttendedRequestBody(draft: WebAttendedRunCreateDraft): WebAttendedRunRequestCreate {
+  return {
+    scenario_version_id: draft.scenarioVersionId.trim(),
+    params: parseJsonObject(draft.paramsJson),
+    model: draft.model,
+    priority: draft.priority,
+    human_task_id: draft.humanTaskId,
+    consent: {
+      summary: draft.consentSummary.trim(),
+      evidence_ref: draft.consentEvidenceRef,
+      input_refs: parseCsvRefs(draft.inputRefsCsv),
+    },
+    metadata: { requested_from: "admin_console" },
+    legal_hold: draft.legalHold,
+  };
+}
+
+function parseJsonObject(value: string): Record<string, unknown> {
+  const parsed = JSON.parse(value) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("params_json_object_required");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseCsvRefs(value: string): readonly string[] {
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value.split(",")) {
+    const ref = item.trim();
+    if (ref.length > 0 && !seen.has(ref)) {
+      seen.add(ref);
+      refs.push(ref);
+    }
+  }
+  return refs;
+}
+
+function webAttendedIdempotencyKey(draft: WebAttendedRunCreateDraft): string {
+  return [
+    "web-attended",
+    stableIdempotencyPart(draft.scenarioVersionId),
+    stableIdempotencyPart(draft.consentEvidenceRef ?? draft.consentSummary),
+    Date.now(),
+  ].join("-");
+}
+
+function runResumeIdempotencyKey(run: RunItem): string {
+  return [
+    "web-attended-resume",
+    stableIdempotencyPart(run.run_id),
+    stableIdempotencyPart(run.updated_at ?? run.as_of ?? "unknown"),
+    Date.now(),
+  ].join("-");
 }
 
 function sloEvidenceIdempotencyKey(draft: SloEvidenceRecordDraft): string {

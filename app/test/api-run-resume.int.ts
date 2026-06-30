@@ -100,6 +100,39 @@ async function auditReasonCount(pool: ReturnType<typeof createPool>, reason: str
   });
 }
 
+interface RunResumeLedgerRow {
+  readonly status: string;
+  readonly previous_run_status: string;
+  readonly requested_by: string;
+  readonly reason: string | null;
+  readonly input_refs: unknown;
+  readonly human_task_policy: unknown;
+  readonly request_idempotency_key: string;
+}
+
+async function runResumeLedgerRows(pool: ReturnType<typeof createPool>, runId: string): Promise<RunResumeLedgerRow[]> {
+  return withTenantTx(pool, TENANT_A, async (client) => {
+    const result = await client.query<RunResumeLedgerRow>(
+      `SELECT status, previous_run_status, requested_by, reason, input_refs, human_task_policy, request_idempotency_key
+         FROM run_resume_requests
+        WHERE run_id = $1::uuid
+        ORDER BY created_at ASC`,
+      [runId],
+    );
+    return result.rows;
+  });
+}
+
+function humanTaskPolicyDefaults(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  return record.default_timeout_ms === 1_800_000 &&
+    record.on_timeout === "fail" &&
+    Array.isArray(record.allowed_kinds) &&
+    record.allowed_kinds.includes("approval") &&
+    record.allowed_kinds.includes("mfa");
+}
+
 async function outboxCount(pool: ReturnType<typeof createPool>, runId: string, eventType: string): Promise<number> {
   return withTenantTx(pool, TENANT_A, async (client) => {
     const row = await client.query<{ n: number }>(
@@ -186,15 +219,41 @@ async function main(): Promise<void> {
     check("resume enqueued", resumeEnqueued.length === 1 && resumeEnqueued[0]?.runId === RUN_SUSPENDED, JSON.stringify(resumeEnqueued));
     check("run.resume_requested event emitted", (await outboxCount(pool, RUN_SUSPENDED, "run.resume_requested")) === 1);
     check("run.resume audit appended", (await auditReasonCount(pool, "run_resume_requested")) === 1);
+    const suspendedLedger = await runResumeLedgerRows(pool, RUN_SUSPENDED);
+    check(
+      "run_resume_requests records suspended resume with shared human-task policy defaults",
+      suspendedLedger.length === 1 &&
+        suspendedLedger[0]?.status === "requested" &&
+        suspendedLedger[0]?.previous_run_status === "suspended" &&
+        suspendedLedger[0]?.requested_by === "operator-a" &&
+        suspendedLedger[0]?.reason === "operator repair" &&
+        suspendedLedger[0]?.request_idempotency_key === "resume-suspended" &&
+        Array.isArray(suspendedLedger[0]?.input_refs) &&
+        (suspendedLedger[0]?.input_refs as readonly unknown[]).length === 0 &&
+        humanTaskPolicyDefaults(suspendedLedger[0]?.human_task_policy),
+      JSON.stringify(suspendedLedger),
+    );
 
     const replay = await postResume(operator, RUN_SUSPENDED, "resume-suspended", { reason: "operator repair" });
     check("same idempotency key replays", replay.statusCode === 202 && replay.json().previous_status === "suspended", replay.body);
     check("replay does not enqueue again", resumeEnqueued.length === 1, JSON.stringify(resumeEnqueued));
+    check("resume replay does not duplicate ledger", (await runResumeLedgerRows(pool, RUN_SUSPENDED)).length === 1);
 
     const reenqueued = await postResume(operator, RUN_RESUME_REQUESTED, "resume-reenqueue", { reason: "lost job repair" });
     check("resume_requested resume re-enqueues -> 202", reenqueued.statusCode === 202 && reenqueued.json().previous_status === "resume_requested", reenqueued.body);
     check("resume_requested re-enqueue recorded", resumeEnqueued.length === 2 && resumeEnqueued[1]?.runId === RUN_RESUME_REQUESTED, JSON.stringify(resumeEnqueued));
     check("run.resume reenqueue audit appended", (await auditReasonCount(pool, "run_resume_reenqueued")) === 1);
+    const reenqueueLedger = await runResumeLedgerRows(pool, RUN_RESUME_REQUESTED);
+    check(
+      "run_resume_requests records reenqueued resume with shared policy defaults",
+      reenqueueLedger.length === 1 &&
+        reenqueueLedger[0]?.status === "reenqueued" &&
+        reenqueueLedger[0]?.previous_run_status === "resume_requested" &&
+        reenqueueLedger[0]?.reason === "lost job repair" &&
+        reenqueueLedger[0]?.request_idempotency_key === "resume-reenqueue" &&
+        humanTaskPolicyDefaults(reenqueueLedger[0]?.human_task_policy),
+      JSON.stringify(reenqueueLedger),
+    );
 
     const unresolved = await postResume(operator, RUN_UNRESOLVED, "resume-unresolved", { reason: "skip review" });
     check("unresolved human task blocks resume -> 409", unresolved.statusCode === 409 && unresolved.json().details?.reason === "human_task_unresolved", unresolved.body);

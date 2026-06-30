@@ -127,6 +127,8 @@ assertOpenApiSchemaContains("ScenarioGeneration", "        - params_context");
 assertOpenApiSchemaContains("ScenarioGeneration", "        params_context:\n          type: object");
 assertOpenApiPath("/runs/{run_id}/steps");
 assertOpenApiPath("/runs/{run_id}/artifacts");
+assertOpenApiPath("/run-resume-requests");
+assertOpenApiPath("/web-attended/run-requests");
 assertOpenApiPath("/run-triggers");
 assertOpenApiPath("/run-triggers/{trigger_id}");
 assertOpenApiPath("/run-triggers/{trigger_id}/pause");
@@ -168,6 +170,8 @@ assertOpenApiPath("/sites/{site_profile_id}/recordings/{recording_session_id}/ev
 assertOpenApiPath("/sites/{site_profile_id}/recordings/{recording_session_id}/complete");
 assertControlPlanePath("/v1/runs/{run_id}/steps");
 assertControlPlanePath("/v1/runs/{run_id}/artifacts");
+assertControlPlanePath("/v1/run-resume-requests");
+assertControlPlanePath("/v1/web-attended/run-requests");
 assertControlPlanePath("/v1/run-triggers");
 assertControlPlanePath("/v1/run-triggers/{trigger_id}");
 assertControlPlanePath("/v1/run-triggers/{trigger_id}/pause");
@@ -201,6 +205,9 @@ assertControlPlanePath("/v1/sites/{site_profile_id}/recordings/{recording_sessio
 assertControlPlanePath("/v1/sites/{site_profile_id}/recordings/{recording_session_id}/complete");
 assertOperationId("listRunSteps");
 assertOperationId("listRunArtifacts");
+assertOperationId("listRunResumeRequests");
+assertOperationId("listWebAttendedRunRequests");
+assertOperationId("createWebAttendedRunRequest");
 assertOperationId("listRunTriggers");
 assertOperationId("createRunTrigger");
 assertOperationId("getRunTrigger");

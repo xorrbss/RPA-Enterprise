@@ -46,6 +46,7 @@ import { registerRoiEstimateRoutes } from "./roi-estimate";
 import { registerBrowserRecordingRoutes } from "./browser-recordings";
 import { registerConnectorCatalogRoutes } from "./connector-catalog";
 import { registerIntegrationHandoffRoutes } from "./integration-handoffs";
+import { registerWebAttendedRoutes } from "./web-attended";
 import { registerDocumentJobRoutes } from "./document-jobs";
 import { registerAuthReadinessRoutes } from "./auth-readiness";
 import { registerOpsAlertRoutes } from "./ops-alerts";
@@ -307,6 +308,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerAuditLogRoutes(app, deps);
   registerConnectorCatalogRoutes(app, deps);
   registerIntegrationHandoffRoutes(app, deps);
+  registerWebAttendedRoutes(app, deps);
   registerDocumentJobRoutes(app, deps);
   registerOpsAlertRoutes(app, deps);
   registerOpsHealthRoutes(app, deps);

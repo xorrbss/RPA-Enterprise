@@ -93,6 +93,8 @@ import {
   type RerunRunBody,
   type RerunRunResult,
   type ResumeRunResult,
+  type RunResumeRequest,
+  type RunResumeRequestListParams,
   type RunDetail,
   type RunTriggerCreateBody,
   type RunTriggerFireItem,
@@ -147,6 +149,9 @@ import {
   type TemplateCatalogItem,
   type TemplateCatalogListParams,
   type ValidationResult,
+  type WebAttendedRunRequest,
+  type WebAttendedRunRequestCreate,
+  type WebAttendedRunRequestListParams,
   type WorkitemItem,
   type ScimProviderDecommissionBody,
   type ScimProviderDecommissionResult,
@@ -209,6 +214,9 @@ export interface ApiClient {
   createIntegrationHandoff(body: IntegrationHandoffCreateRequest, idempotencyKey: string): Promise<IntegrationHandoff>;
   dispatchIntegrationHandoff(handoffId: string, body: IntegrationHandoffDispatchRequest, idempotencyKey: string): Promise<IntegrationHandoffDispatchAttempt>;
   recordIntegrationHandoffCallback(handoffId: string, body: IntegrationHandoffCallbackRequest): Promise<IntegrationHandoff>;
+  listRunResumeRequests(p?: RunResumeRequestListParams): Promise<Paginated<RunResumeRequest>>;
+  listWebAttendedRunRequests(p?: WebAttendedRunRequestListParams): Promise<Paginated<WebAttendedRunRequest>>;
+  createWebAttendedRunRequest(body: WebAttendedRunRequestCreate, idempotencyKey: string): Promise<WebAttendedRunRequest>;
   listDocumentJobs(p?: DocumentJobListParams): Promise<Paginated<DocumentJobItem>>;
   createDocumentJob(body: DocumentJobCreateBody, idempotencyKey: string): Promise<DocumentJobItem>;
   getDocumentJob(jobId: string): Promise<DocumentJobItem>;
@@ -683,6 +691,9 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     createIntegrationHandoff: (body, key) => post(`/v1/integration-handoffs`, key, body),
     dispatchIntegrationHandoff: (handoffId, body, key) => post(`/v1/integration-handoffs/${handoffId}/dispatch`, key, body),
     recordIntegrationHandoffCallback: (handoffId, body) => send("POST", `/v1/integration-handoffs/${handoffId}/callback`, body),
+    listRunResumeRequests: (p) => get(`/v1/run-resume-requests${queryString(p)}`),
+    listWebAttendedRunRequests: (p) => get(`/v1/web-attended/run-requests${queryString(p)}`),
+    createWebAttendedRunRequest: (body, key) => post(`/v1/web-attended/run-requests`, key, body),
     listDocumentJobs: (p) => get(`/v1/document-jobs${queryString(p)}`),
     createDocumentJob: (body, key) => post(`/v1/document-jobs`, key, body),
     getDocumentJob: (jobId) => get(`/v1/document-jobs/${jobId}`),

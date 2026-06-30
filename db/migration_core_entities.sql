@@ -995,6 +995,77 @@ CREATE UNIQUE INDEX idx_run_pause_requests_one_open
   WHERE status IN ('requested','accepted');
 CREATE INDEX idx_run_pause_requests_run ON run_pause_requests (tenant_id, run_id, created_at DESC);
 
+CREATE TABLE web_attended_run_requests (
+  id                      uuid        PRIMARY KEY,
+  tenant_id               uuid        NOT NULL,
+  scenario_version_id     uuid        NOT NULL REFERENCES scenario_versions(id),
+  run_id                  uuid        REFERENCES runs(id),
+  human_task_id           uuid,
+  status                  text        NOT NULL DEFAULT 'run_queued'
+                                       CHECK (status IN ('requested','run_queued','blocked','cancelled')),
+  requested_by            text        NOT NULL CHECK (length(requested_by) > 0),
+  request_idempotency_key text        NOT NULL CHECK (length(request_idempotency_key) > 0),
+  consent_summary         text        NOT NULL CHECK (length(trim(consent_summary)) > 0 AND length(consent_summary) <= 1000),
+  consent_evidence_ref    text        CHECK (consent_evidence_ref IS NULL OR length(trim(consent_evidence_ref)) > 0),
+  input_refs              jsonb       NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(input_refs) = 'array'),
+  human_task_policy       jsonb       NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(human_task_policy) = 'object'),
+  request_metadata        jsonb       NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(request_metadata) = 'object'),
+  retention_until         timestamptz NOT NULL DEFAULT (now() + interval '90 days'),
+  legal_hold              boolean     NOT NULL DEFAULT false,
+  deleted_at              timestamptz,
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  updated_at              timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, request_idempotency_key)
+);
+CREATE UNIQUE INDEX idx_web_attended_run_requests_one_per_run
+  ON web_attended_run_requests (tenant_id, run_id)
+  WHERE run_id IS NOT NULL;
+CREATE INDEX idx_web_attended_run_requests_latest
+  ON web_attended_run_requests (tenant_id, created_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_web_attended_run_requests_run
+  ON web_attended_run_requests (tenant_id, run_id)
+  WHERE run_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX idx_web_attended_run_requests_human_task
+  ON web_attended_run_requests (tenant_id, human_task_id)
+  WHERE human_task_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX idx_web_attended_run_requests_retention
+  ON web_attended_run_requests (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
+CREATE TABLE run_resume_requests (
+  id                      uuid        PRIMARY KEY,
+  tenant_id               uuid        NOT NULL,
+  run_id                  uuid        NOT NULL REFERENCES runs(id),
+  human_task_id           uuid,
+  status                  text        NOT NULL CHECK (status IN ('requested','reenqueued')),
+  previous_run_status     text        NOT NULL CHECK (previous_run_status IN ('suspended','resume_requested')),
+  requested_by            text        NOT NULL CHECK (length(requested_by) > 0),
+  reason                  text,
+  input_refs              jsonb       NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(input_refs) = 'array'),
+  human_task_policy       jsonb       NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(human_task_policy) = 'object'),
+  audit_correlation_id    uuid        NOT NULL,
+  request_idempotency_key text        NOT NULL CHECK (length(request_idempotency_key) > 0),
+  retention_until         timestamptz NOT NULL DEFAULT (now() + interval '90 days'),
+  legal_hold              boolean     NOT NULL DEFAULT false,
+  deleted_at              timestamptz,
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  updated_at              timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, request_idempotency_key)
+);
+CREATE INDEX idx_run_resume_requests_latest
+  ON run_resume_requests (tenant_id, created_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_run_resume_requests_run
+  ON run_resume_requests (tenant_id, run_id, created_at DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_run_resume_requests_human_task
+  ON run_resume_requests (tenant_id, human_task_id)
+  WHERE human_task_id IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX idx_run_resume_requests_retention
+  ON run_resume_requests (retention_until)
+  WHERE legal_hold = false AND deleted_at IS NULL;
+
 CREATE TABLE run_trigger_fires (
   id             uuid        PRIMARY KEY,
   tenant_id      uuid        NOT NULL,
@@ -1120,6 +1191,7 @@ CREATE TABLE human_tasks (
   resolved_at   timestamptz,
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE human_tasks ADD CONSTRAINT uq_human_tasks_tenant_id_id UNIQUE (tenant_id, id);
 CREATE INDEX idx_human_tasks_run ON human_tasks (run_id);
 CREATE INDEX idx_human_tasks_state ON human_tasks (tenant_id, state);
 CREATE INDEX idx_human_tasks_expiry ON human_tasks (expires_at)
@@ -2020,6 +2092,8 @@ ALTER TABLE workitems           ADD CONSTRAINT uq_workitems_tenant_id_id UNIQUE 
 ALTER TABLE runs                ADD CONSTRAINT uq_runs_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE run_reruns          ADD CONSTRAINT uq_run_reruns_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE run_pause_requests  ADD CONSTRAINT uq_run_pause_requests_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE web_attended_run_requests ADD CONSTRAINT uq_web_attended_run_requests_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE run_resume_requests ADD CONSTRAINT uq_run_resume_requests_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE scenario_generations ADD CONSTRAINT uq_scenario_generations_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE raw_items           ADD CONSTRAINT uq_raw_items_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE normalized_records  ADD CONSTRAINT uq_normalized_records_tenant_id_id UNIQUE (tenant_id, id);
@@ -2049,6 +2123,20 @@ ALTER TABLE integration_handoff_receipts
 ALTER TABLE integration_handoff_dispatch_attempts
   ADD CONSTRAINT fk_integration_handoff_dispatch_attempts_handoff_tenant
   FOREIGN KEY (tenant_id, handoff_id) REFERENCES integration_handoffs(tenant_id, id);
+
+ALTER TABLE web_attended_run_requests
+  ADD CONSTRAINT fk_web_attended_run_requests_scenario_version_tenant
+  FOREIGN KEY (tenant_id, scenario_version_id) REFERENCES scenario_versions(tenant_id, id),
+  ADD CONSTRAINT fk_web_attended_run_requests_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_web_attended_run_requests_human_task_tenant
+  FOREIGN KEY (tenant_id, human_task_id) REFERENCES human_tasks(tenant_id, id);
+
+ALTER TABLE run_resume_requests
+  ADD CONSTRAINT fk_run_resume_requests_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_run_resume_requests_human_task_tenant
+  FOREIGN KEY (tenant_id, human_task_id) REFERENCES human_tasks(tenant_id, id);
 
 ALTER TABLE site_profile_approvals
   ADD CONSTRAINT fk_site_profile_approvals_site_tenant
@@ -2335,6 +2423,8 @@ BEGIN
     'runs',
     'run_reruns',
     'run_pause_requests',
+    'web_attended_run_requests',
+    'run_resume_requests',
 	    'scenario_generations',
     'run_steps',
 	    'human_tasks',

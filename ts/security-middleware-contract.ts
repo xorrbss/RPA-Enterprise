@@ -447,6 +447,7 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "scenario_release.reject",
   "scenario_release.deploy",
   "scenario_release.rollback",
+  "run.create",
   "run.rerun",
   "run.resume",
   "run.pause",

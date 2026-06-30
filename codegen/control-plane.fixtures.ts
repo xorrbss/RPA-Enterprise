@@ -228,6 +228,28 @@ const services = new InMemoryControlPlaneServices(new FixtureArtifactGate(), {
     scheduled_for: "2026-06-24T00:00:00.000Z",
     run_id: "run-existing",
   }],
+  runResumeRequests: [{
+    request_id: "33333333-3333-4333-8333-333333333301",
+    tenant_id: tenantId,
+    run_id: "run-existing",
+    human_task_id: "task-open",
+    status: "requested",
+    previous_run_status: "suspended",
+    requested_by: "principal-1",
+    reason: "operator repair",
+    input_refs: ["human_task:task-open"],
+    human_task_policy: {
+      source: "ops-defaults.md#human_task.default_timeout",
+      default_timeout_ms: 1800000,
+      on_timeout: "fail",
+      allowed_kinds: ["approval", "validation", "exception", "captcha", "mfa"],
+    },
+    audit_correlation_id: "11111111-1111-4111-8111-111111111199",
+    request_idempotency_key: "resume-ledger-fixture-1",
+    requested_at: "2026-06-13T00:00:00.000Z",
+    updated_at: "2026-06-13T00:00:00.000Z",
+    legal_hold: false,
+  }],
   automationIdeas: [{
     id: "idea-existing",
     tenant_id: tenantId,
@@ -386,6 +408,9 @@ for (const operationId of [
   "listRunArtifacts",
   "listRuns",
   "abortRun",
+  "listRunResumeRequests",
+  "listWebAttendedRunRequests",
+  "createWebAttendedRunRequest",
   "listRunTriggers",
   "createRunTrigger",
   "getRunTrigger",
@@ -480,6 +505,7 @@ assert.equal(registry.getOperation("createRun").requiresAuth, true);
 assert.equal(registry.getOperation("getAuthReadiness").requiresAuth, true);
 assert.equal(registry.getOperation("createRun").requiresTenantBinding, true);
 assert.equal(registry.getOperation("createRun").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("createWebAttendedRunRequest").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("promoteScenario").ifMatch?.entity, "scenario_version");
 assert.equal(registry.getOperation("promoteScenarioFromRun").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("createRunTrigger").requiresIdempotencyKey, true);
@@ -521,6 +547,9 @@ assert.equal(registry.getOperation("completeBrowserRecording").requiresIdempoten
 assert.equal(staticRbacAction("createRun"), "run.create");
 assert.equal(staticRbacAction("getAuthReadiness"), "principal.read");
 assert.equal(staticRbacAction("abortRun"), "run.abort");
+assert.equal(staticRbacAction("listRunResumeRequests"), "run.read");
+assert.equal(staticRbacAction("listWebAttendedRunRequests"), "run.read");
+assert.equal(staticRbacAction("createWebAttendedRunRequest"), "run.create");
 assert.equal(staticRbacAction("listRunSteps"), "run.read");
 assert.equal(staticRbacAction("streamRunSteps"), "run.read");
 assert.equal(staticRbacAction("listRunArtifacts"), "artifact.read");
@@ -601,6 +630,12 @@ assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini" }).valid, true);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, tenant_id: "t1" }).valid, false);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini", tenant_id: "t1" }).valid, false);
+assert.equal(registry.getBodyValidator("createWebAttendedRunRequest")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createWebAttendedRunRequest")?.validate({
+  scenario_version_id: "11111111-1111-4111-8111-111111111122",
+  params: {},
+  consent: { summary: "Operator approved attended launch." },
+}).valid, true);
 assert.equal(registry.getBodyValidator("promoteScenarioFromRun")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("promoteScenarioFromRun")?.validate({ run_id: "run-completed" }).valid, true);
 assert.equal(registry.getBodyValidator("setScenarioVersionGovernanceStage")?.validate({}).valid, false);
@@ -1532,6 +1567,40 @@ const handoffReceipt = await handlers.recordIntegrationHandoffCallback!(ctx("rec
 assert.equal(handoffReceipt.status, 200);
 assert.equal((handoffReceipt.body as { status: string }).status, "completed");
 assert.equal((handoffReceipt.body as { latest_receipt_id: string }).latest_receipt_id, "uipath-receipt-123");
+
+const resumeLedgerList = await handlers.listRunResumeRequests!(ctx("listRunResumeRequests", {
+  method: "GET",
+  path: "/v1/run-resume-requests",
+  query: { run_id: "run-existing" },
+}));
+assert.equal((resumeLedgerList.body as { items: unknown[] }).items.length, 1);
+assert.equal(((resumeLedgerList.body as { items: Array<{ status: string }> }).items[0]?.status), "requested");
+
+const attendedCreated = await handlers.createWebAttendedRunRequest!(ctx("createWebAttendedRunRequest", {
+  method: "POST",
+  path: "/v1/web-attended/run-requests",
+  headers: { "idempotency-key": "web-attended-fixture-1" as IdempotencyKey },
+  body: {
+    scenario_version_id: "sv-1",
+    params: { as_of: "2026-06-30T00:00:00.000Z" },
+    consent: {
+      summary: "Operator approved web attended run launch.",
+      evidence_ref: "audit:attended-consent-1",
+      input_refs: ["form:attended-input-1"],
+    },
+  },
+}));
+assert.equal(attendedCreated.status, 201);
+assert.equal((attendedCreated.body as { status: string }).status, "run_queued");
+assert.equal((attendedCreated.body as { request_idempotency_key: string }).request_idempotency_key, "web-attended-fixture-1");
+assert.equal((attendedCreated.body as { human_task_policy: { default_timeout_ms: number; on_timeout: string } }).human_task_policy.default_timeout_ms, 1800000);
+assert.equal((attendedCreated.body as { human_task_policy: { on_timeout: string } }).human_task_policy.on_timeout, "fail");
+const attendedList = await handlers.listWebAttendedRunRequests!(ctx("listWebAttendedRunRequests", {
+  method: "GET",
+  path: "/v1/web-attended/run-requests",
+  query: { status: "run_queued" },
+}));
+assert.equal((attendedList.body as { items: unknown[] }).items.length, 1);
 
 const processImportCreated = await handlers.createProcessMiningImport!(ctx("createProcessMiningImport", {
   method: "POST",

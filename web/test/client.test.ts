@@ -1009,6 +1009,67 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.body).toEqual({ reason: "operator repair" });
   });
 
+  test("Web Attended and run-resume ledger routes use contract paths and idempotency", async () => {
+    const listHarness = harness({ body: { items: [], next_cursor: null } });
+    await listHarness.client.listRunResumeRequests({ status: "requested", run_id: "run-1", limit: 5 });
+    await listHarness.client.listWebAttendedRunRequests({ status: "run_queued", human_task_id: "task-1", limit: 5 });
+
+    expect(listHarness.calls[0]?.method).toBe("GET");
+    expect(listHarness.calls[0]?.url).toBe("http://api.test/v1/run-resume-requests?status=requested&run_id=run-1&limit=5");
+    expect(listHarness.calls[1]?.method).toBe("GET");
+    expect(listHarness.calls[1]?.url).toBe("http://api.test/v1/web-attended/run-requests?status=run_queued&human_task_id=task-1&limit=5");
+
+    const createHarness = harness({
+      status: 201,
+      body: {
+        request_id: "web-attended-1",
+        scenario_version_id: "00000000-0000-4000-8000-000000000101",
+        run_id: "run-web-1",
+        human_task_id: null,
+        status: "run_queued",
+        requested_by: "operator-a",
+        request_idempotency_key: "idem-web-attended",
+        consent_summary: "Approved launch.",
+        consent_evidence_ref: "ticket:RPA-1",
+        input_refs: ["artifact://input-1"],
+        human_task_policy: {
+          source: "ops-defaults.md#human_task.default_timeout",
+          default_timeout_ms: 1800000,
+          on_timeout: "fail",
+          allowed_kinds: ["approval", "validation", "exception", "captcha", "mfa"],
+        },
+        metadata: { requested_from: "admin_console" },
+        requested_at: "2026-06-30T00:00:00.000Z",
+        updated_at: "2026-06-30T00:00:00.000Z",
+        legal_hold: false,
+      },
+    });
+    await createHarness.client.createWebAttendedRunRequest(
+      {
+        scenario_version_id: "00000000-0000-4000-8000-000000000101",
+        params: { as_of: "2026-06-30T00:00:00.000Z" },
+        priority: "medium",
+        human_task_id: null,
+        consent: {
+          summary: "Approved launch.",
+          evidence_ref: "ticket:RPA-1",
+          input_refs: ["artifact://input-1"],
+        },
+        metadata: { requested_from: "admin_console" },
+        legal_hold: false,
+      },
+      "idem-web-attended",
+    );
+
+    expect(createHarness.calls[0]?.method).toBe("POST");
+    expect(createHarness.calls[0]?.url).toBe("http://api.test/v1/web-attended/run-requests");
+    expect(createHarness.calls[0]?.headers.get("idempotency-key")).toBe("idem-web-attended");
+    expect(createHarness.calls[0]?.body).toMatchObject({
+      scenario_version_id: "00000000-0000-4000-8000-000000000101",
+      consent: { evidence_ref: "ticket:RPA-1" },
+    });
+  });
+
   test("promoteScenario → POST .../promote + If-Match + body{target:prod}", async () => {
     const { calls, client } = harness({ body: { version: 3 } });
     await client.promoteScenario("scn-1", 3, "idem-xyz");
