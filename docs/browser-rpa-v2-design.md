@@ -641,6 +641,8 @@ HTTP action executor:
 
 ### 새 메뉴 구조
 
+Implementation note (2026-06-30): 아래 V2 메뉴 방향은 제품군 수준 IA이며, 실제 `web/` 콘솔의 역할별 기본 노출, 전문가 모드, 내부 점검 숨김, 모바일 drawer 수락 기준은 [Phase 15: RPA 콘솔 단순 IA 설계](rpa-console-simplified-ia-phase15-design-2026-06-30.md)를 따른다.
+
 기존:
 
 - 제작: 자동화 만들기, 테스트 실행, 시나리오 검증
