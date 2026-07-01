@@ -16,7 +16,6 @@ export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon:
   openGate: { title: "Product-open 점검", subtitle: "계약 기준으로 화면, 액션, 보안 gate가 검증 가능한지 확인", icon: "ClipboardCheck", helpText: "정식 오픈 전, 계약 문서 기준으로 화면·액션·보안 통제가 검증 가능한 상태인지 점검하는 문서형 화면입니다." },
   workitems: { title: "작업 목록", subtitle: "대기, 재시도, 실패, 외부 전달 상태를 추적", icon: "ListChecks", helpText: "자동화가 처리하는 개별 작업이 대기·재시도·실패·외부 전달 중 어디에 있는지 추적합니다." },
   humanTasks: { title: "사람 확인", subtitle: "보안문자, 추가 인증, 승인, 검증 업무를 담당자 기준으로 처리", icon: "Inbox", helpText: "보안문자·추가 인증·승인·검증처럼 사람이 직접 처리해야 하는 작업을 담당자별로 모아 처리합니다." },
-  approvalInbox: { title: "결재 인박스", subtitle: "하이웍스 결재 목록을 수집·요약하고 건별로 승인/반려", icon: "Stamp", helpText: "하이웍스 결재 목록을 모아 요약하고, 한 건씩 검토해 승인하거나 반려합니다." },
   runTrace: { title: "실행 기록", subtitle: "자동화가 어떤 순서로 판단하고 실행했는지 조회", icon: "Route", helpText: "특정 실행이 어떤 순서로 판단하고 무엇을 실행했는지 단계별로 되짚어 보는 화면입니다." },
   auditExplorer: { title: "감사 이력", subtitle: "보안 판단, 처리자, 결과, 추적 번호를 조회", icon: "ScrollText", helpText: "누가·언제·무엇을 했고 보안 판단 결과가 어땠는지, 추적 번호로 조회하는 감사 기록 화면입니다." },
   irValidation: { title: "자동화 검사", subtitle: "자동화 정의의 문법, 연결, 성공 기준을 배포 전에 검사", icon: "FileCode2", helpText: "자동화 정의를 배포하기 전에 문법·연결·성공 기준이 올바른지 미리 검사합니다(저장은 하지 않습니다)." },

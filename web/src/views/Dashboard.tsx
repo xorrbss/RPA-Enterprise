@@ -509,8 +509,7 @@ function roleFocus(roles: readonly string[], can: (a: string) => boolean, flags:
       title: `승인자 작업대 · ${roleText}`,
       note: "결재, 고위험 사이트 승인, 사람 확인 대기를 먼저 처리해 자동화 재개 시간을 줄입니다.",
       actions: [
-        { label: "결재 인박스", view: "approvalInbox" },
-        { label: "사람 확인", view: "humanTasks" },
+        { label: "사람 확인", view: "humanTasks" }, // 결재 목록도 사람 확인의 결재 탭으로 통합됨(구 결재 인박스 흡수).
         { label: "감사 이력", view: "auditExplorer" },
       ],
     };

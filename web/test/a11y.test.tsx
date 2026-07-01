@@ -76,7 +76,7 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
     expect(await axe(document.body, AXE_OPTS)).toHaveNoViolations();
   });
 
-  for (const view of ["automationOps", "documentIdp", "coePipeline", "connectorCatalog", "objectRepository", "auditExplorer", "workitems", "humanTasks", "runTrace", "security", "scenarioStudio", "playground", "approvalInbox"] as ViewKey[]) {
+  for (const view of ["myWork", "automationOps", "documentIdp", "coePipeline", "connectorCatalog", "objectRepository", "auditExplorer", "workitems", "humanTasks", "runTrace", "security", "scenarioStudio", "playground"] as ViewKey[]) {
     test(`${view} 뷰 axe 위반 없음`, async () => {
       renderApp();
       navigate(view);
@@ -87,6 +87,16 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
       expect(results).toHaveNoViolations();
     });
   }
+
+  // 통합 '사람 확인'의 결재 목록 탭(구 결재 인박스 흡수) — 레거시 #approvalInbox 리다이렉트 경유로 axe 스캔.
+  test("사람 확인 결재 목록 탭 axe 위반 없음 (레거시 해시 리다이렉트 포함)", async () => {
+    renderApp();
+    location.hash = "#approvalInbox"; // 은퇴한 해시 → #humanTasks?source=approvals 로 정규화되어야 한다.
+    await waitFor(() => expect(location.hash).toBe("#humanTasks?source=approvals"));
+    await waitFor(() => expect(screen.getByRole("main")).toBeInTheDocument());
+    await waitFor(() => expect(document.querySelector(".skeleton")).toBeNull());
+    expect(await axe(document.body, AXE_OPTS)).toHaveNoViolations();
+  });
 
   // StepTrace(단계 트레이스)는 run 선택 시에만 마운트 — 카드/표 두 보기 모두 axe 스캔(가장 복잡한 신규 a11y 표면).
   test("실행 상세 단계 트레이스(카드+표) axe 위반 없음", async () => {

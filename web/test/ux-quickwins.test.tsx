@@ -364,11 +364,11 @@ describe("UX quick-wins (A)", () => {
   test("A6: 사이드바는 라우팅 목록과 분리된 정책 기반 메뉴를 렌더", async () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(within(nav).getByText("내 작업")).toBeInTheDocument();
-    expect(within(nav).getByText("만들기")).toBeInTheDocument();
-    expect(within(nav).getByText("운영")).toBeInTheDocument();
-    expect(within(nav).getByText("관리")).toBeInTheDocument();
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(18); // openGate는 internal flag 없으면 숨김
+    expect(within(nav).getByText("내 업무")).toBeInTheDocument();
+    expect(within(nav).getByText("자동화")).toBeInTheDocument();
+    expect(within(nav).getByText("현황")).toBeInTheDocument();
+    expect(within(nav).getByText("설정·점검")).toBeInTheDocument();
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(17); // openGate는 internal flag 없으면 숨김
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
 

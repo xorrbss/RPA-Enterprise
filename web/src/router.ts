@@ -14,7 +14,6 @@ export const VIEW_KEYS = [
   "openGate",
   "workitems",
   "humanTasks",
-  "approvalInbox",
   "runTrace",
   "auditExplorer",
   "irValidation",
@@ -29,7 +28,7 @@ export type ViewKey = (typeof VIEW_KEYS)[number];
 // 모든 VIEW_KEYS가 정확히 한 그룹에 속해야 한다(router.test가 강제). nav 순서는 그룹 순서를 따른다.
 export const NAV_GROUPS: readonly { readonly label: string; readonly keys: readonly ViewKey[] }[] = [
   { label: "제작", keys: ["coePipeline", "connectorCatalog", "objectRepository", "scenarioStudio", "playground", "irValidation"] },
-  { label: "운영", keys: ["myWork", "dashboard", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "approvalInbox", "auditExplorer"] },
+  { label: "운영", keys: ["myWork", "dashboard", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "auditExplorer"] },
   { label: "고급 설정", keys: ["llmGateway", "security", "idempotency", "openGate"] },
 ];
 
@@ -61,10 +60,29 @@ export function mergeParams(updates: Record<string, string | null>): void {
 }
 
 /** 현재 라우트(해시) 구독. 잘못된 해시는 dashboard로 폴백(조용한 빈화면 금지). */
+// 은퇴한 뷰 키의 레거시 해시 → 새 목적지(북마크 보존). approvalInbox(결재 인박스)는 '사람 확인'의 결재 목록 탭으로 흡수됨.
+const LEGACY_HASH_REDIRECTS: Record<string, string> = { approvalInbox: "humanTasks?source=approvals" };
+
+/** 레거시 해시면 새 목적지로 치환(true 반환 — 치환이 다시 hashchange 를 발화하므로 호출측은 그 이벤트에 맡긴다). */
+function normalizeLegacyHash(): boolean {
+  const key = location.hash.replace(/^#/, "").split("?")[0] ?? "";
+  const target = LEGACY_HASH_REDIRECTS[key];
+  if (target === undefined) return false;
+  location.hash = `#${target}`;
+  return true;
+}
+
 export function useHashRoute(): ViewKey {
-  const [view, setView] = useState<ViewKey>(() => viewFromHash(location.hash));
+  // location.hash 대입은 동기라 초기 상태 계산 전에 레거시를 정규화하면 첫 렌더부터 새 목적지로 보인다(빈화면/플래시 없음).
+  const [view, setView] = useState<ViewKey>(() => {
+    normalizeLegacyHash();
+    return viewFromHash(location.hash);
+  });
   useEffect(() => {
-    const onChange = (): void => setView(viewFromHash(location.hash));
+    const onChange = (): void => {
+      if (normalizeLegacyHash()) return; // 치환이 재차 hashchange 발화 → 다음 이벤트가 새 해시로 setView.
+      setView(viewFromHash(location.hash));
+    };
     window.addEventListener("hashchange", onChange);
     if (location.hash === "") location.hash = `#${DEFAULT_VIEW}`;
     return () => window.removeEventListener("hashchange", onChange);

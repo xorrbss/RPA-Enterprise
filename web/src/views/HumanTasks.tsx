@@ -14,6 +14,7 @@ import { StatusBadge, kindLabel, statusLabel } from "../components/badges";
 import { ErrorState, Loading, desktopStateForError } from "../components/states";
 import { mergeParams, navigate, useHashIdParam, useHashParam } from "../router";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
+import { ApprovalInboxView } from "./ApprovalInbox";
 import type { HumanTaskItem } from "../api/types";
 
 const KEYS = [["human-tasks"]] as const;
@@ -169,7 +170,28 @@ function HumanTaskActions({
   );
 }
 
+// 통합 '사람 확인' 인박스 — 소스 탭: 확인 업무(@human_task 스트림) / 결재 목록(수집 아티팩트 리스트, 구 '결재 인박스' 메뉴 흡수).
+// 탭 상태는 해시 파라미터(source)로 보존 → 딥링크·뒤로가기·레거시 #approvalInbox 리다이렉트(#humanTasks?source=approvals) 대응.
+// 소스별 화면은 자식 컴포넌트로 분리(탭 전환 시 훅 순서 불변 — 조건부 훅 금지).
 export function HumanTasksView(): JSX.Element {
+  const source = useHashParam("source");
+  const approvals = source === "approvals";
+  return (
+    <>
+      <div className="quick-actions" style={{ marginBottom: 12 }} aria-label="사람 확인 소스 선택">
+        <button className="btn" type="button" aria-pressed={!approvals} onClick={() => mergeParams({ source: null, ht: null })}>
+          확인 업무
+        </button>
+        <button className="btn" type="button" aria-pressed={approvals} onClick={() => mergeParams({ source: "approvals", ht: null })}>
+          결재 목록
+        </button>
+      </div>
+      {approvals ? <ApprovalInboxView /> : <HumanTaskStreamView />}
+    </>
+  );
+}
+
+function HumanTaskStreamView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const subject = useSubject();

@@ -1,6 +1,6 @@
 import {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
-  Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow, Stamp,
+  Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow,
   CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
   HelpCircle, LogOut, Menu, Search, UserCircle, X,
   type LucideIcon,
@@ -26,7 +26,7 @@ import { clearToken } from "./TokenGate";
 
 const ICONS: Record<string, LucideIcon> = {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
-  Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Stamp, CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
+  Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
 };
 
 const MOBILE_NAV_QUERY = "(max-width: 900px)";

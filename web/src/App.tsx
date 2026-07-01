@@ -16,7 +16,6 @@ const RunTraceView = lazy(() => import("./views/RunTrace").then((module) => ({ d
 const WorkitemsView = lazy(() => import("./views/Workitems").then((module) => ({ default: module.WorkitemsView })));
 const HumanTasksView = lazy(() => import("./views/HumanTasks").then((module) => ({ default: module.HumanTasksView })));
 const MyWorkView = lazy(() => import("./views/MyWork").then((module) => ({ default: module.MyWorkView })));
-const ApprovalInboxView = lazy(() => import("./views/ApprovalInbox").then((module) => ({ default: module.ApprovalInboxView })));
 const AuditExplorerView = lazy(() => import("./views/AuditExplorer").then((module) => ({ default: module.AuditExplorerView })));
 const SecurityView = lazy(() => import("./views/Security").then((module) => ({ default: module.SecurityView })));
 const GatewayView = lazy(() => import("./views/Gateway").then((module) => ({ default: module.GatewayView })));
@@ -49,8 +48,6 @@ function renderView(view: ViewKey): JSX.Element {
       return <WorkitemsView />;
     case "humanTasks":
       return <HumanTasksView />;
-    case "approvalInbox":
-      return <ApprovalInboxView />;
     case "auditExplorer":
       return <AuditExplorerView />;
     case "security":
