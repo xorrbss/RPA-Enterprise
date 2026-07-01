@@ -64,7 +64,7 @@ function savedPolicy(body: AiGovernanceRuntimePolicyRequest): AiGovernanceRuntim
 describe("AI governance runtime policy panel", () => {
   beforeEach(() => {
     localStorage.clear();
-    location.hash = "#security";
+    location.hash = "#security?section=ai";
   });
 
   test("viewer sees current runtime policy without manage controls", async () => {

@@ -111,7 +111,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     localStorage.setItem("rpa.token", jwt(["admin"]));
     const dialog = await openPaletteWithQuery("자격증명");
     await clickPaletteResult(dialog, "Credential 관리 열기");
-    await waitFor(() => expect(location.hash).toBe("#security?focus=credentials"));
+    await waitFor(() => expect(location.hash).toBe("#security?section=secrets&focus=credentials"));
   });
 
   test("standard operator 검색 결과에 내부·관리 화면이 나오지 않는다", async () => {
@@ -283,7 +283,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
       }),
     );
     await clickPaletteResult(dialog, "홍길동");
-    await waitFor(() => expect(location.hash).toBe("#security?principal=principal-pal-1"));
+    await waitFor(() => expect(location.hash).toBe("#security?section=access&principal=principal-pal-1"));
   });
 
   test("Credential 결과 클릭 → 보안 화면 credential 포커스로 이동", async () => {
@@ -309,7 +309,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
       }),
     );
     await clickPaletteResult(dialog, "하이웍스 운영 계정");
-    const qs = new URLSearchParams({ credential: credentialRef, credential_site: "site-hiworks" }).toString();
+    const qs = new URLSearchParams({ section: "secrets", credential: credentialRef, credential_site: "site-hiworks" }).toString();
     await waitFor(() => expect(location.hash).toBe(`#security?${qs}`));
   });
 

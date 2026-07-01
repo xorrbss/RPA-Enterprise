@@ -231,6 +231,7 @@ describe("PromptScenarioGenerator correction run", () => {
       target: { value: "always" },
     });
     const submitButton = screen.getByRole("button", { name: "저장 후 실행" });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
     fireEvent.click(submitButton);
 
     await waitFor(() => expect(generateCalls).toHaveLength(1));

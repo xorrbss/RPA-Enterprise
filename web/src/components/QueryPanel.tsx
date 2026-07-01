@@ -1,8 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
-import { EmptyState, ErrorState, Loading } from "./states";
-import { errorLabel } from "./badges";
+import { EmptyState, ErrorState, Loading, desktopStateForError } from "./states";
 import type { Pager } from "../api/useListView";
 
 export interface Column<T> {
@@ -16,12 +15,14 @@ export function QueryPanel<T>(props: {
   query: UseQueryResult<{ items: readonly T[]; next_cursor: string | null }>;
   columns: readonly Column<T>[];
   rowKey: (row: T) => string;
+  emptyTitle?: string;
   emptyMessage: string;
   emptyAction?: ReactNode;
   actions?: ReactNode;
   pager?: Pager;
 }): JSX.Element {
-  const { title, query, columns, rowKey, emptyMessage, emptyAction, actions, pager } = props;
+  const { title, query, columns, rowKey, emptyTitle, emptyMessage, emptyAction, actions, pager } = props;
+  const errorState = query.isError ? desktopStateForError(query.error) : null;
   return (
     <section className="panel">
       <div className="panel-head">
@@ -32,9 +33,14 @@ export function QueryPanel<T>(props: {
         {query.isLoading ? (
           <Loading />
         ) : query.isError ? (
-          <ErrorState message={`${title} 데이터를 불러오지 못했습니다. ${errorLabel(query.error)}`} onRetry={() => void query.refetch()} />
+          <ErrorState
+            title={errorState?.title}
+            message={`${title} 데이터를 확인하지 못했습니다. ${errorState?.message ?? ""}`}
+            details={errorState?.details}
+            onRetry={() => void query.refetch()}
+          />
         ) : (query.data?.items.length ?? 0) === 0 ? (
-          <EmptyState message={emptyMessage} action={emptyAction} />
+          <EmptyState title={emptyTitle} message={emptyMessage} action={emptyAction} />
         ) : (
           <div className="table-wrap">
             <table>

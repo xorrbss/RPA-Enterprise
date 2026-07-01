@@ -363,7 +363,7 @@ function SessionHintBanner({
       <button
         className="linklike"
         type="button"
-        onClick={() => navigate("security")}
+        onClick={() => navigate("security", { section: "sites" })}
       >
         세션 등록하러 가기 <span aria-hidden="true">→</span>
       </button>

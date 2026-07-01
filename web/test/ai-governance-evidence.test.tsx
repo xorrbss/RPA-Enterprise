@@ -106,7 +106,7 @@ function recordedEvidence(body: AiGovernanceEvidenceRequest): AiGovernanceEviden
 describe("AI governance evidence panel", () => {
   beforeEach(() => {
     localStorage.clear();
-    location.hash = "#security";
+    location.hash = "#security?section=ai";
   });
 
   test("viewer filters AI governance evidence by status and subject", async () => {

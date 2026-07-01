@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
-import type { AutomationPerformanceRoiSourceLineage, DeadLetterItem, Paginated } from "../src/api/types";
+import type { AuthReadiness, AutomationPerformanceRoiSourceLineage, DeadLetterItem, Paginated } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 // 대시보드 관찰성 지표: run outcome 정확 집계(getRunSummary by_status) + run_success_rate + 절단 정직성(여전히
@@ -54,6 +54,49 @@ const automationPerformanceRoiSourceLineage: AutomationPerformanceRoiSourceLinea
       business_owner: "Joon Park",
     },
   ],
+};
+
+const AUTH_SETUP_NEEDED: AuthReadiness = {
+  status: "warning",
+  enterprise_sso_ready: false,
+  provider: {
+    mode: "hs256",
+    configuration_source: "deployment_config",
+    algorithm: "HS256",
+    jwks_url_configured: false,
+    jwks_host: null,
+    issuer_configured: false,
+    issuer: null,
+    audience_configured: false,
+    audience: null,
+  },
+  claim_mapping: {
+    subject_claim: "sub",
+    tenant_claim: "tenant_id",
+    roles_claim: "roles",
+    expiry_claim: "exp",
+    display_name_claim: "name",
+    email_claim: "email",
+  },
+  role_mapping: {
+    configured: false,
+    mapped_values: 0,
+  },
+  required_claims: [
+    { claim: "sub", label: "처리자 식별", required: true, present: true, mapped_to: "current_principal.subject_id" },
+    { claim: "tenant_id", label: "테넌트 경계", required: true, present: true, mapped_to: "current_principal.tenant_id" },
+    { claim: "roles", label: "역할 매핑", required: true, present: true, mapped_to: "current_principal.roles" },
+    { claim: "exp", label: "만료 시간", required: true, present: true, mapped_to: "인증 만료 검증" },
+  ],
+  current_principal: {
+    subject_id: "viewer-a",
+    tenant_id: "tenant-a",
+    roles: ["viewer"],
+    source: "jwt",
+    display_name: null,
+    email: null,
+  },
+  operational_gaps: ["SSO 설정 확인 필요"],
 };
 
 function dashboardClient(overrides: Partial<ApiClient> = {}): ApiClient {
@@ -152,6 +195,37 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     const adminWorkbench = workbenches[workbenches.length - 1];
     if (adminWorkbench === undefined) throw new Error("admin workbench not found");
     expect(within(adminWorkbench).getByRole("button", { name: "Product-open 점검" })).toBeInTheDocument();
+  });
+
+  test("adoption-readiness shows every gate without optimistic success or unauthorized setup CTAs", async () => {
+    localStorage.setItem("rpa.token", jwt(["viewer"]));
+    renderApp(dashboardClient({
+      getAuthReadiness: async () => AUTH_SETUP_NEEDED,
+      listSites: async () => ({ items: [], next_cursor: null }),
+      listScenarios: async () => ({ items: [], next_cursor: null }),
+      listRuns: async () => ({ items: [], next_cursor: null }),
+      getRunSummary: async () => ({ by_status: {}, success_rate: null, total: 0, cache: { by_mode: {}, hit_rate: null } }),
+    }));
+
+    const panel = await screen.findByRole("region", { name: "파일럿 준비 상태" });
+    for (const label of ["SSO", "RBAC", "사이트", "브라우저 세션", "첫 자동화", "테스트 실행", "증거", "지원 체계", "ROI"]) {
+      expect(within(panel).getByText(label)).toBeInTheDocument();
+    }
+    await within(panel).findByText("SSO 설정 확인 필요");
+    await waitFor(() => expect(within(panel).getAllByText("확인 필요").length).toBeGreaterThanOrEqual(3));
+    await waitFor(() => expect(within(panel).getAllByText("보류").length).toBeGreaterThanOrEqual(2));
+    expect(panel).not.toHaveTextContent("9/9 준비");
+
+    for (const gate of within(panel).getAllByRole("listitem")) {
+      expect(within(gate).queryAllByRole("button").length).toBeLessThanOrEqual(1);
+    }
+    expect(within(panel).queryByRole("button", { name: "접속 설정 확인" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "역할 매핑 확인" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "사이트 등록" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "자동화 초안 만들기" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "테스트 실행" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "운영 증빙 확인" })).toBeNull();
+    expect(within(panel).getAllByText("권한 있는 담당자에게 요청").length).toBeGreaterThanOrEqual(5);
   });
 
   // (a) run outcome 정확 집계: 카드 값은 getRunSummary.by_status에서 온다(서버 GROUP BY, 클라 50건 필터 아님).

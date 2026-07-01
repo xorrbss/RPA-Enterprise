@@ -82,6 +82,24 @@ describe("document IDP view", () => {
     expect(await screen.findByText("문서 추출 작업을 만들었습니다.")).toBeInTheDocument();
   });
 
+  test("document-idp-desktop-workflow keeps field editor hidden until a source or template edit is chosen", async () => {
+    renderApp(fakeClient({
+      listRuns: async () => ({ items: [], next_cursor: null }),
+    }));
+
+    expect((await screen.findAllByRole("heading", { name: "문서 자동화" })).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("소스 필요")).toBeInTheDocument();
+    expect(screen.getByText("설정 필요")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "실행 산출물 찾기" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("추출 필드 편집")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "템플릿 편집" }));
+
+    expect(await screen.findByLabelText("추출 필드 편집")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "필드 추가" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "템플릿 편집 닫기" })).toBeInTheDocument();
+  });
+
   test("edits extraction fields as business form rows before creating a job", async () => {
     const calls: DocumentJobCreateBody[] = [];
     renderApp(fakeClient({
@@ -383,7 +401,9 @@ describe("document IDP view", () => {
     const invoiceButton = await screen.findByRole("button", { name: "송장" });
     fireEvent.click(within(invoiceButton.closest("tr") as HTMLTableRowElement).getByRole("button", { name: "결과 보기" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("추출 결과를 불러오지 못했습니다.");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("운영 실패");
+    expect(alert).toHaveTextContent("추출 결과를 확인하지 못했습니다.");
     expect(screen.queryByText("아직 저장된 추출 결과가 없습니다.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
   });

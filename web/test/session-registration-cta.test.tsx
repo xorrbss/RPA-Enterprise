@@ -171,7 +171,7 @@ describe("로그인 세션 등록 안내/진입", () => {
     fireEvent.click(await screen.findByRole("button", { name: "실행" }));
     const cta = await screen.findByRole("button", { name: "세션 등록하러 가기" });
     fireEvent.click(cta);
-    await waitFor(() => expect(location.hash).toBe(`#security?site=${LOGIN_SITE.site_profile_id}`));
+    await waitFor(() => expect(location.hash).toBe(`#security?section=sites&site=${LOGIN_SITE.site_profile_id}`));
   });
 
   test("실행 상세 — navigate 단계 실패 시 세션 재등록 힌트 + 보안으로 이동", async () => {
@@ -195,6 +195,6 @@ describe("로그인 세션 등록 안내/진입", () => {
     const banner = await screen.findByRole("status", { name: "세션 등록 안내" });
     expect(within(banner).getByText(/세션이 만료됐을 수 있어요/)).toBeInTheDocument();
     fireEvent.click(within(banner).getByRole("button", { name: /세션 등록하러 가기/ }));
-    await waitFor(() => expect(location.hash).toBe("#security"));
+    await waitFor(() => expect(location.hash).toBe("#security?section=sites"));
   });
 });

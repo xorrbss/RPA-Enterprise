@@ -356,6 +356,12 @@ function clientWithOpsData(overrides: Partial<ApiClient> = {}): ApiClient {
   });
 }
 
+type OpsSection = "today" | "schedule" | "queue" | "alerts" | "readiness" | "external";
+
+function openAutomationOpsSection(section: OpsSection): void {
+  location.hash = `#automationOps?section=${section}`;
+}
+
 function notificationConnector(
   connectorId: string,
   name: string,
@@ -423,6 +429,38 @@ describe("automation ops view", () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
   });
 
+  test("automation-ops-desktop-sections keep dense operations behind local sections", async () => {
+    renderApp(clientWithOpsData());
+
+    const sections = await screen.findByRole("region", { name: "Automation Ops 섹션" });
+    const sectionTab = (label: string): HTMLButtonElement => {
+      const button = within(sections).getAllByRole("button").find((candidate) => within(candidate).queryByText(label) !== null);
+      if (!(button instanceof HTMLButtonElement)) throw new Error(`section tab not found: ${label}`);
+      return button;
+    };
+    expect(sectionTab("오늘 필요한 조치")).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("heading", { name: "운영 헬스" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "실행 예약" })).toBeNull();
+
+    fireEvent.click(sectionTab("예약"));
+    await waitFor(() => expect(location.hash).toBe("#automationOps?section=schedule"));
+    expect(await screen.findByRole("heading", { name: "실행 예약" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "운영 헬스" })).toBeNull();
+
+    fireEvent.click(sectionTab("큐"));
+    expect(await screen.findByRole("heading", { name: "용량" })).toBeInTheDocument();
+
+    fireEvent.click(sectionTab("알림"));
+    expect(await screen.findByRole("heading", { name: "알림 라우팅" })).toBeInTheDocument();
+
+    fireEvent.click(sectionTab("운영 전환 증빙"));
+    expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
+
+    fireEvent.click(sectionTab("외부 전달"));
+    expect(await screen.findByRole("heading", { name: "Existing RPA handoff" })).toBeInTheDocument();
+    expect(location.hash).toBe("#automationOps?section=external");
+  });
+
   test("큐 운영 수치를 기존 run summary와 대기 목록에서 표시한다", async () => {
     renderApp(clientWithOpsData());
 
@@ -471,6 +509,7 @@ describe("automation ops view", () => {
   });
 
   test("알림 라우팅 준비도는 활성 웹훅 발송 경로와 SecretRef 요구사항을 표시한다", async () => {
+    openAutomationOpsSection("alerts");
     renderApp(clientWithOpsData());
 
     expect(await screen.findByRole("heading", { name: "알림 라우팅" })).toBeInTheDocument();
@@ -485,6 +524,7 @@ describe("automation ops view", () => {
 
   test("알림 라우팅 준비도는 provider별 후보를 owner/provider 증거 필요 상태로 분리한다", async () => {
     const endpointRef = "secret://<tenant>/notification-sender/webhook/<route_alias>/endpoint";
+    openAutomationOpsSection("alerts");
     renderApp(clientWithOpsData({
       listConnectors: async (params) => params?.kind === "notification" ? ({
         items: [
@@ -549,6 +589,7 @@ describe("automation ops view", () => {
       callback_received_at: null,
       legal_hold: body.legal_hold ?? false,
     }));
+    openAutomationOpsSection("external");
     renderApp(clientWithOpsData({ createIntegrationHandoff }));
 
     await screen.findByRole("heading", { name: "Existing RPA handoff" });
@@ -603,6 +644,7 @@ describe("automation ops view", () => {
       status: "resume_requested" as const,
       previous_status: "suspended" as const,
     }));
+    openAutomationOpsSection("queue");
     renderApp(clientWithOpsData({
       listRuns: async (params) => params?.status === "suspended" ? ({
         items: [{
@@ -666,6 +708,7 @@ describe("automation ops view", () => {
 
   test("operator selects handoff provider profiles without exposing raw callback URLs", async () => {
     const createIntegrationHandoff = vi.fn();
+    openAutomationOpsSection("external");
     renderApp(clientWithOpsData({ createIntegrationHandoff }));
 
     await screen.findByRole("heading", { name: "Existing RPA handoff" });
@@ -736,6 +779,7 @@ describe("automation ops view", () => {
       updated_at: "2026-06-29T00:00:01.500Z",
       legal_hold: body.legal_hold ?? false,
     }));
+    openAutomationOpsSection("external");
     renderApp(clientWithOpsData({ listIntegrationHandoffs, dispatchIntegrationHandoff }));
 
     expect(await screen.findByText("queue:bot-dispatch")).toBeInTheDocument();
@@ -811,6 +855,7 @@ describe("automation ops view", () => {
       callback_received_at: "2026-06-29T00:00:02.000Z",
       legal_hold: body.legal_hold ?? false,
     }));
+    openAutomationOpsSection("external");
     renderApp(clientWithOpsData({ listIntegrationHandoffs, recordIntegrationHandoffCallback }));
 
     expect(await screen.findByText("queue:invoice-posting")).toBeInTheDocument();
@@ -967,10 +1012,7 @@ describe("automation ops view", () => {
     expect(await screen.findByRole("heading", { name: "운영 헬스" })).toBeInTheDocument();
     expect(await screen.findByText("위험")).toBeInTheDocument();
     expect(await screen.findByText("미연결")).toBeInTheDocument();
-    expect(screen.getByText("예약 스케줄러")).toBeInTheDocument();
     expect(screen.getAllByText("작업 큐 미연결").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("큐 연결 확인")).toBeInTheDocument();
-    expect(screen.getByText(/실제 정기 실행은 아직 시작되지 않습니다/)).toBeInTheDocument();
     // 브라우저 세션 타일: 만료 미회수 건수 + 다음 만료 시각(next_expiry_at) 표면화.
     const browserTile = screen.getByText("브라우저 세션").closest(".ops-health-tile") as HTMLElement;
     expect(browserTile).toHaveTextContent("만료 미회수 1건");
@@ -1139,6 +1181,7 @@ describe("automation ops view", () => {
         next_cursor: null,
       };
     });
+    openAutomationOpsSection("readiness");
     renderApp(clientWithOpsData({ listProductionReadinessEvidence }));
 
     expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
@@ -1216,6 +1259,7 @@ describe("automation ops view", () => {
       recorded_at: "2026-06-23T09:11:00.000Z",
       legal_hold: body.legal_hold ?? false,
     }));
+    openAutomationOpsSection("readiness");
     renderApp(clientWithOpsData({
       listProductionReadinessEvidence: async () => ({ items: [], next_cursor: null }),
       recordProductionReadinessEvidence,
@@ -1267,6 +1311,7 @@ describe("automation ops view", () => {
       recorded_at: "2026-06-23T09:11:00.000Z",
       legal_hold: body.legal_hold ?? false,
     }));
+    openAutomationOpsSection("readiness");
     renderApp(clientWithOpsData({
       listProductionReadinessEvidence: async () => ({ items: [], next_cursor: null }),
       recordProductionReadinessEvidence,
@@ -1319,6 +1364,7 @@ describe("automation ops view", () => {
       recorded_at: "2026-06-23T09:11:00.000Z",
       legal_hold: body.legal_hold ?? false,
     }));
+    openAutomationOpsSection("readiness");
     renderApp(clientWithOpsData({
       listProductionReadinessEvidence: async () => ({ items: [], next_cursor: null }),
       recordProductionReadinessEvidence,
@@ -1373,6 +1419,7 @@ describe("automation ops view", () => {
       recorded_at: "2026-06-23T09:11:00.000Z",
       legal_hold: body.legal_hold ?? false,
     }));
+    openAutomationOpsSection("readiness");
     renderApp(clientWithOpsData({
       listProductionReadinessEvidence: async () => ({ items: [], next_cursor: null }),
       recordProductionReadinessEvidence,
@@ -1425,6 +1472,7 @@ describe("automation ops view", () => {
       recorded_at: "2026-06-23T09:11:00.000Z",
       legal_hold: body.legal_hold ?? false,
     }));
+    openAutomationOpsSection("readiness");
     renderApp(clientWithOpsData({
       listProductionReadinessEvidence: async () => ({ items: [], next_cursor: null }),
       recordProductionReadinessEvidence,
@@ -1463,6 +1511,7 @@ describe("automation ops view", () => {
   });
 
   test("봇 풀 용량 패널은 worker/lease/대기 실행 집계를 표시한다", async () => {
+    openAutomationOpsSection("queue");
     renderApp(clientWithOpsData());
 
     expect(await screen.findByRole("heading", { name: "용량" })).toBeInTheDocument();
@@ -1487,6 +1536,7 @@ describe("automation ops view", () => {
   });
 
   test("예약 저장은 Run Trigger API를 호출하고 저장 결과를 표시한다", async () => {
+    openAutomationOpsSection("schedule");
     const createRunTrigger = vi.fn(async () => ({
       trigger_id: "00000000-0000-0000-0000-00000000f002",
       scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
@@ -1521,6 +1571,7 @@ describe("automation ops view", () => {
   });
 
   test("viewer role cannot create, pause, or edit run triggers", async () => {
+    openAutomationOpsSection("schedule");
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     const createRunTrigger = vi.fn(async () => ({
       trigger_id: "00000000-0000-0000-0000-00000000f002",
@@ -1554,7 +1605,7 @@ describe("automation ops view", () => {
   });
 
   test("scenario 딥링크는 예약 생성 대상 시나리오를 자동 선택한다", async () => {
-    location.hash = "#automationOps?scenario=scenario-linked";
+    location.hash = "#automationOps?section=schedule&scenario=scenario-linked";
     const createRunTrigger = vi.fn(async () => ({
       trigger_id: "00000000-0000-0000-0000-00000000f009",
       scenario_version_id: "scenario-version-linked",
@@ -1606,6 +1657,7 @@ describe("automation ops view", () => {
   });
 
   test("예약 저장 실패는 백엔드 details reason을 함께 표시한다", async () => {
+    openAutomationOpsSection("schedule");
     const createRunTrigger = vi.fn(async () => {
       throw new ApiError(422, "IR_SCHEMA_INVALID", {
         code: "IR_SCHEMA_INVALID",
@@ -1623,6 +1675,7 @@ describe("automation ops view", () => {
   });
 
   test("예약 저장은 동시 실행 제한과 누락 실행 정책을 payload에 포함한다", async () => {
+    openAutomationOpsSection("schedule");
     const createRunTrigger = vi.fn(async () => ({
       trigger_id: "00000000-0000-0000-0000-00000000f004",
       scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
@@ -1656,6 +1709,7 @@ describe("automation ops view", () => {
   });
 
   test("외부 이벤트 트리거는 보안 연결 이름을 보호 참조 payload로 저장한다", async () => {
+    openAutomationOpsSection("schedule");
     const createRunTrigger = vi.fn(async () => ({
       trigger_id: "00000000-0000-0000-0000-00000000f003",
       scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
@@ -1696,6 +1750,7 @@ describe("automation ops view", () => {
   });
 
   test("등록된 예약은 일시정지 버튼으로 관리할 수 있다", async () => {
+    openAutomationOpsSection("schedule");
     const pauseRunTrigger = vi.fn(async (triggerId: string) => ({
       trigger_id: triggerId,
       scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
@@ -1722,6 +1777,7 @@ describe("automation ops view", () => {
   });
 
   test("등록된 예약은 수정 패널에서 cron과 운영 파라미터를 변경한다", async () => {
+    openAutomationOpsSection("schedule");
     const updateRunTrigger = vi.fn(async (triggerId: string) => ({
       trigger_id: triggerId,
       scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
@@ -1764,6 +1820,7 @@ describe("automation ops view", () => {
   });
 
   test("최근 발화 이력은 실패/스킵 사유와 실행 딥링크를 보여준다", async () => {
+    openAutomationOpsSection("schedule");
     renderApp(clientWithOpsData());
 
     expect(await screen.findByText("내부 오류가 발생했습니다.")).toBeInTheDocument();
@@ -1778,6 +1835,7 @@ describe("automation ops view", () => {
   });
 
   test("최근 발화 이력은 failure_reason details reason을 함께 보여준다", async () => {
+    openAutomationOpsSection("schedule");
     renderApp(clientWithOpsData({
       listRunTriggerFires: async () => ({
         items: [
@@ -1804,6 +1862,7 @@ describe("automation ops view", () => {
   });
 
   test("등록된 예약의 이력 버튼은 trigger 딥링크와 발화 이력을 동기화한다", async () => {
+    openAutomationOpsSection("schedule");
     const listRunTriggerFires = vi.fn(async (triggerId: string) => ({
       items: [
         {
@@ -1863,14 +1922,14 @@ describe("automation ops view", () => {
     const secondRow = (await screen.findByText("매일 10:00")).closest("tr") as HTMLTableRowElement;
     fireEvent.click(within(secondRow).getByRole("button", { name: "이력" }));
 
-    expect(location.hash).toBe("#automationOps?trigger=trigger-second");
+    expect(location.hash).toBe("#automationOps?section=schedule&trigger=trigger-second");
     await waitFor(() => expect(listRunTriggerFires).toHaveBeenCalledWith("trigger-second", { limit: 10 }));
     expect(await screen.findByText("실행 생성")).toBeInTheDocument();
     expect(screen.queryByText("2026-06-23T10:00:00.000Z")).toBeNull();
   });
 
   test("trigger 딥링크는 해당 예약의 발화 이력을 선택한다", async () => {
-    location.hash = "#automationOps?trigger=trigger-linked";
+    location.hash = "#automationOps?section=schedule&trigger=trigger-linked";
     const listRunTriggerFires = vi.fn(async () => ({
       items: [
         {
@@ -1933,7 +1992,7 @@ describe("automation ops view", () => {
   });
 
   test("trigger 딥링크가 목록 밖 예약이면 by-id로 복원해 해당 발화 이력을 조회한다", async () => {
-    location.hash = "#automationOps?trigger=trigger-linked";
+    location.hash = "#automationOps?section=schedule&trigger=trigger-linked";
     const getRunTrigger = vi.fn(async () => ({
       trigger_id: "trigger-linked",
       scenario_version_id: "scenario-version-linked",

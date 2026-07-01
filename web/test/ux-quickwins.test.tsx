@@ -239,19 +239,19 @@ describe("UX quick-wins (A)", () => {
     ).toBeInTheDocument();
   });
 
-  // A4 — 빈 상태 진입 CTA: 권한 있으면 빈 목록 안에서 첫 자동화 만들기 유도, 클릭 시 작성 폼 오픈.
-  test("A4: 빈 시나리오 목록의 CTA → 작성 폼 오픈(권한 있을 때)", async () => {
+  // A4 — 빈 상태 진입 CTA: 권한 있으면 자연어 기반 첫 자동화 초안 작성으로 유도한다.
+  test("A4: 빈 시나리오 목록의 CTA → 자연어 초안 입력 포커스(권한 있을 때)", async () => {
     renderApp(); // 기본 fake listScenarios = 빈 목록
     location.hash = "#scenarioStudio";
-    const cta = await screen.findByRole("button", {
-      name: "+ 첫 자동화 만들기",
+    const ctas = await screen.findAllByRole("button", {
+      name: "자동화 초안 만들기",
     });
-    cta.click();
+    fireEvent.click(ctas[0] as HTMLButtonElement);
     await waitFor(() =>
       expect(
-        screen.getByRole("region", { name: "자동화 작성" }),
-      ).toBeInTheDocument(),
-    ); // ScenarioForm 작성 폼 오픈
+        screen.getByLabelText("자연어 요청"),
+      ).toHaveFocus(),
+    );
   });
 
   test("A4: viewer는 빈 상태 CTA 미노출(RBAC)", async () => {
@@ -264,7 +264,7 @@ describe("UX quick-wins (A)", () => {
       ).toBeInTheDocument(),
     );
     expect(
-      screen.queryByRole("button", { name: "+ 첫 자동화 만들기" }),
+      screen.queryByRole("button", { name: "자동화 초안 만들기" }),
     ).toBeNull();
   });
 
@@ -284,7 +284,7 @@ describe("UX quick-wins (A)", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    (await screen.findByRole("button", { name: "+ 첫 자동화 만들기" })).click();
+    (await screen.findByRole("button", { name: "+ 새 자동화 만들기" })).click();
     const form = await screen.findByRole("region", { name: "자동화 작성" });
     within(form).getByRole("button", { name: "저장" }).click();
 

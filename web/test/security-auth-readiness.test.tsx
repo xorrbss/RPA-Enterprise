@@ -76,7 +76,7 @@ const HS256_WARNING: AuthReadiness = {
 
 describe("security auth readiness", () => {
   beforeEach(() => {
-    location.hash = "#security";
+    location.hash = "#security?section=access";
     localStorage.setItem("rpa.token", jwt(["viewer"]));
   });
 

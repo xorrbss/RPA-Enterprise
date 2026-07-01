@@ -513,11 +513,11 @@ function ReadinessCard({
         detail={site.detail}
         action={
           site.sessionSiteId !== undefined ? (
-            <button className="linklike" type="button" onClick={() => navigate("security", { site: site.sessionSiteId as string })}>
+            <button className="linklike" type="button" onClick={() => navigate("security", { section: "sites", site: site.sessionSiteId as string })}>
               세션 등록하러 가기
             </button>
           ) : targetUrls.length > 0 ? (
-            <button className="linklike" type="button" onClick={() => navigate("security")}>
+            <button className="linklike" type="button" onClick={() => navigate("security", { section: "sites" })}>
               사이트 보기
             </button>
           ) : undefined

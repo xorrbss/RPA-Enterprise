@@ -253,7 +253,7 @@ describe("browser recorder panel", () => {
     renderApp(client);
 
     expect(
-      await screen.findByText("브라우저 녹화로 만들기"),
+      await screen.findByRole("heading", { name: "브라우저 녹화로 만들기" }),
     ).toBeInTheDocument();
     fireEvent.change(await screen.findByLabelText("녹화 이름"), {
       target: { value: "협력사 송장 상태 확인" },

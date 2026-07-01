@@ -85,7 +85,7 @@ describe("goal UX improvements", () => {
 
     expect(await screen.findByRole("region", { name: "역할별 작업대" })).toHaveTextContent("관리자 작업대");
     const queue = await screen.findByRole("region", { name: "지금 처리해야 할 Top 5" });
-    expect(queue).toHaveTextContent("시스템 실패 실행");
+    await waitFor(() => expect(queue).toHaveTextContent("시스템 실패 실행"));
     expect(queue).toHaveTextContent("실패 사유 확인 필요");
     expect(queue).not.toHaveTextContent("SYS_DOWN");
 

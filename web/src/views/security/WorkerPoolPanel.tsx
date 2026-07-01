@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../../api/context";
+import { useCan } from "../../api/permissions";
 import type { WorkerPoolItem, WorkerPoolList, WorkerPoolPriority, WorkerPoolStatus } from "../../api/types";
 import { ActionButton } from "../../components/ActionButton";
 import { errorLabel } from "../../components/badges";
@@ -16,11 +17,15 @@ const STUCK_QUEUE_MS = 5 * 60 * 1000;
 
 export function WorkerPoolPanel(): JSX.Element | null {
   const api = useApiClient();
+  const can = useCan();
+  const canManageWorkerPools = can("worker_pool.manage");
   const q = useQuery({
     queryKey: ["worker-pools"],
     queryFn: () => api.listWorkerPools(),
+    enabled: canManageWorkerPools,
     refetchInterval: 15_000,
   });
+  if (!canManageWorkerPools) return null;
   if (q.isLoading || q.data === undefined) return null;
   const { items, assigned_pool_key, pending } = q.data;
   const oldestQueuedMs = queuedAgeMs(pending.oldest_queued_at);

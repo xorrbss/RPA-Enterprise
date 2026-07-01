@@ -107,7 +107,7 @@ describe("SCIM provider admin panel", () => {
       createScimProvider,
       createScimGroupRoleMapping,
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     const okta = await screen.findByText("Okta");
     const panel = okta.closest("section");
@@ -159,7 +159,7 @@ describe("SCIM provider admin panel", () => {
       listScimGroupRoleMappings: async () => ({ items: [], next_cursor: null }),
       updateScimProvider,
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     await screen.findByText("Okta");
     fireEvent.click(await screen.findByRole("button", { name: "Rotate SecretRef for okta" }));
@@ -189,7 +189,7 @@ describe("SCIM provider admin panel", () => {
       }),
       listScimGroupRoleMappings: async () => ({ items: [], next_cursor: null }),
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     const okta = await screen.findByText("Okta");
     const panel = okta.closest("section");
@@ -215,7 +215,7 @@ describe("SCIM provider admin panel", () => {
       listScimGroupRoleMappings: async () => ({ items: [], next_cursor: null }),
       updateScimProvider,
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     await screen.findByText("Okta");
     fireEvent.change(await screen.findByLabelText("Secret rotation policy for okta"), {
@@ -249,7 +249,7 @@ describe("SCIM provider admin panel", () => {
       listScimGroupRoleMappings: async () => ({ items: [], next_cursor: null }),
       decommissionScimProvider,
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     await screen.findByText("Okta");
     fireEvent.click(await screen.findByRole("button", { name: "Decommission okta" }));
@@ -280,7 +280,7 @@ describe("SCIM provider admin panel", () => {
       listScimGroupRoleMappings: async () => ({ items: [], next_cursor: null }),
       importScimGroupRoleMappings,
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     const input = await screen.findByLabelText("Mapping import CSV for okta");
     fireEvent.change(input, {
@@ -317,7 +317,7 @@ describe("SCIM provider admin panel", () => {
       listScimGroupRoleMappings: async () => ({ items: [], next_cursor: null }),
       importScimGroupRoleMappings,
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     fireEvent.change(await screen.findByLabelText("Mapping import mode for okta"), { target: { value: "replace_active" } });
     fireEvent.change(screen.getByLabelText("Mapping import CSV for okta"), { target: { value: "grp-rpa-reviewers,reviewer" } });
@@ -336,7 +336,7 @@ describe("SCIM provider admin panel", () => {
       listScimGroupRoleMappings: async () => ({ items: [], next_cursor: null }),
       importScimGroupRoleMappings,
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     const input = await screen.findByLabelText("Mapping import CSV for okta");
     fireEvent.change(input, { target: { value: "grp-rpa-admins,owner" } });
@@ -379,7 +379,7 @@ describe("SCIM provider admin panel", () => {
         next_cursor: null,
       }),
     }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     expect(await screen.findByText("Provider decommission")).toBeInTheDocument();
     expect(await screen.findByText("rotation decommissioned")).toBeInTheDocument();
@@ -396,7 +396,7 @@ describe("SCIM provider admin panel", () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
     location.hash = "";
     renderApp(fakeClient());
-    location.hash = "#security";
+    location.hash = "#security?section=access";
     await waitFor(() => expect(screen.queryByTitle("Create SCIM provider")).toBeNull());
   });
 });

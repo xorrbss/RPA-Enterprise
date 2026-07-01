@@ -42,7 +42,7 @@ describe("담당자 디렉터리 관리(admin)", () => {
       lifecycle_source: "local" as const,
     }));
     renderApp(fakeClient({ listPrincipals: async () => ({ items: PRINCIPALS, next_cursor: null }), createPrincipal }));
-    location.hash = "#security";
+    location.hash = "#security?section=access";
 
     // 디렉터리 목록(이름·식별자) 렌더.
     expect(await screen.findByText("담당자 디렉터리")).toBeInTheDocument();
@@ -66,9 +66,9 @@ describe("담당자 디렉터리 관리(admin)", () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
     location.hash = "";
     renderApp(fakeClient({ listPrincipals: async () => ({ items: PRINCIPALS, next_cursor: null }) }));
-    location.hash = "#security";
-    // 사이트 패널은 보이되, 담당자 디렉터리 관리 패널은 숨김(principal.manage 미보유).
-    await screen.findByText("사이트 접근 정책");
+    location.hash = "#security?section=access";
+    // 접속·권한 섹션은 보이되, 담당자 디렉터리 관리 패널은 숨김(principal.manage 미보유).
+    await screen.findByText("SSO/IdP 준비도");
     expect(screen.queryByText("담당자 디렉터리")).toBeNull();
   });
 });

@@ -47,14 +47,14 @@ const PA: WorkerPoolItem = workerPool({ pool_key: "pa" });
 
 describe("전용 워커 풀 패널 (DG-3b)", () => {
   beforeEach(() => {
-    location.hash = "#security";
+    location.hash = "#security?section=infra";
     localStorage.clear();
   });
 
   test("operator 는 워커 풀 패널 미노출(worker_pool.manage admin 전용)", async () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
     renderApp(fakeClient({ listWorkerPools: async () => wpList([PA], null) }));
-    expect(await screen.findByRole("region", { name: "자격증명 동시성 정책" })).toBeInTheDocument();
+    expect(await screen.findByText("권한 확인 필요")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "전용 워커 풀" })).toBeNull();
   });
 

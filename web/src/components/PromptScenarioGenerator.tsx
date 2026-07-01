@@ -559,6 +559,7 @@ export function PromptScenarioGenerator(): JSX.Element {
         <label className="field field-wide">
           <span>자연어 요청</span>
           <textarea
+            id="scenario-natural-language-request"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             rows={4}
@@ -679,9 +680,16 @@ export function PromptScenarioGenerator(): JSX.Element {
           </div>
         )}
         <div className="generator-actions">
-          <button className="btn primary" type="button" onClick={submit} disabled={mutation.isPending || needModel || evidenceSettingsLoading}>
+          <button
+            className="btn primary"
+            type="button"
+            aria-label={actionLabel}
+            title={actionLabel}
+            onClick={submit}
+            disabled={mutation.isPending || needModel || evidenceSettingsLoading}
+          >
             <Play size={15} aria-hidden="true" />
-            {mutation.isPending ? "생성 중…" : evidenceSettingsLoading ? "증거 설정 확인 중…" : actionLabel}
+            {mutation.isPending ? "생성 중…" : evidenceSettingsLoading ? "증거 설정 확인 중…" : "자동화 초안 만들기"}
           </button>
           <span className="evidence-chip">
             <Image size={14} aria-hidden="true" />

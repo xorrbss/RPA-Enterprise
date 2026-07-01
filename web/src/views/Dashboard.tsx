@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useState, type ComponentProps } from "react";
 
 import { useApiClient } from "../api/context";
@@ -6,6 +6,7 @@ import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { QueryPanel } from "../components/QueryPanel";
 import { Sparkline, type SparklinePoint } from "../components/Sparkline";
+import { EmptyState, ErrorState, desktopStateForError } from "../components/states";
 import { StatusBadge, errorCodeLabel, kindLabel } from "../components/badges";
 import { getInternalNavFlags, type NavPolicyFlags } from "../navPolicy";
 import { navigate, type ViewKey } from "../router";
@@ -15,14 +16,18 @@ import type {
   AutomationPerformanceRoiSource,
   AutomationPerformanceRoiSourceLineage,
   AutomationPerformanceRoiStage,
+  AuthReadiness,
   DeadLetterItem,
   HumanTaskItem,
   OpsAlertItem,
   OpsHealth,
+  Paginated,
+  ProductionReadiness,
   RunItem,
   RunSummary,
   RunTrendPoint,
   RunTrends,
+  ScenarioItem,
   SiteItem,
 } from "../api/types";
 
@@ -39,6 +44,290 @@ function onboardingProps(can: (a: string) => boolean, roles: readonly string[]):
   if (roles.length === 0) return { message: "현재 역할을 확인할 수 없어 화면이 비어 보일 수 있습니다. IT 담당자에게 접근 권한을 요청하세요." };
   if (can("run.create")) return { message: "첫 실행을 시작해 보세요.", cta: { label: "자동화 화면으로 가기", view: "scenarioStudio" } };
   return { message: "아직 등록된 실행이 없습니다. 권한이 있는 담당자가 첫 실행을 시작할 수 있습니다." };
+}
+
+type GateStatus = "ready" | "needs" | "blocked" | "deferred";
+
+interface ReadinessAction {
+  readonly label: string;
+  readonly view: ViewKey;
+  readonly params?: Record<string, string>;
+  readonly requiredAction?: string;
+}
+
+interface ReadinessGate {
+  readonly key: string;
+  readonly label: string;
+  readonly status: GateStatus;
+  readonly detail: string;
+  readonly action?: ReadinessAction;
+}
+
+const GATE_LABELS: Readonly<Record<GateStatus, string>> = {
+  ready: "준비됨",
+  needs: "확인 필요",
+  blocked: "차단",
+  deferred: "보류",
+};
+
+function gateTone(status: GateStatus): "green" | "amber" | "red" | "muted" {
+  if (status === "ready") return "green";
+  if (status === "blocked") return "red";
+  if (status === "needs") return "amber";
+  return "muted";
+}
+
+function queryPendingDetail(query: { readonly isFetching: boolean; readonly data: unknown }): string {
+  return query.isFetching && query.data === undefined ? "확인 중입니다." : "아직 판단할 수 있는 데이터가 없습니다.";
+}
+
+function queryErrorDetail(error: unknown): string {
+  const state = desktopStateForError(error);
+  return `${state.title}: ${state.message}`;
+}
+
+function buildReadinessGates(args: {
+  readonly auth: UseQueryResult<AuthReadiness>;
+  readonly production: UseQueryResult<ProductionReadiness>;
+  readonly sites: UseQueryResult<Paginated<SiteItem>>;
+  readonly scenarios: UseQueryResult<Paginated<ScenarioItem>>;
+  readonly summary: UseQueryResult<RunSummary>;
+  readonly recent: UseQueryResult<Paginated<RunItem>>;
+  readonly performance: UseQueryResult<AutomationPerformanceReport>;
+}): readonly ReadinessGate[] {
+  const gates: ReadinessGate[] = [];
+  const auth = args.auth.data;
+  const sites = args.sites.data?.items ?? [];
+  const scenarios = args.scenarios.data?.items ?? [];
+  const loginSites = sites.filter((site) => site.login_capable === true);
+  const missingSession = loginSites.find((site) => site.session_ready !== true);
+  const roiEvidenceCount = args.performance.data?.summary.roi_actuals.evidence_count ?? 0;
+
+  gates.push(
+    args.auth.isError
+      ? { key: "sso", label: "SSO", status: "needs", detail: queryErrorDetail(args.auth.error), action: { label: "접속 설정 확인", view: "security", params: { section: "access" }, requiredAction: "rbac.grant" } }
+      : auth === undefined
+        ? { key: "sso", label: "SSO", status: "deferred", detail: queryPendingDetail(args.auth) }
+        : auth.enterprise_sso_ready
+          ? { key: "sso", label: "SSO", status: "ready", detail: "엔터프라이즈 SSO 설정이 준비되어 있습니다." }
+          : {
+              key: "sso",
+              label: "SSO",
+              status: auth.status === "blocked" ? "blocked" : "needs",
+              detail: auth.operational_gaps.length > 0 ? auth.operational_gaps.join(", ") : "SSO 설정 확인이 필요합니다.",
+              action: { label: "접속 설정 확인", view: "security", params: { section: "access" }, requiredAction: "rbac.grant" },
+            },
+  );
+
+  gates.push(
+    args.auth.isError
+      ? { key: "rbac", label: "RBAC", status: "needs", detail: queryErrorDetail(args.auth.error), action: { label: "역할 매핑 확인", view: "security", params: { section: "access" }, requiredAction: "rbac.grant" } }
+      : auth === undefined
+        ? { key: "rbac", label: "RBAC", status: "deferred", detail: queryPendingDetail(args.auth) }
+        : auth.role_mapping.configured && auth.role_mapping.mapped_values > 0
+          ? { key: "rbac", label: "RBAC", status: "ready", detail: `${auth.role_mapping.mapped_values}개 역할 매핑이 적용되어 있습니다.` }
+          : {
+              key: "rbac",
+              label: "RBAC",
+              status: "needs",
+              detail: "역할 매핑 또는 현재 사용자 역할 확인이 필요합니다.",
+              action: { label: "역할 매핑 확인", view: "security", params: { section: "access" }, requiredAction: "rbac.grant" },
+            },
+  );
+
+  gates.push(
+    args.sites.isError
+      ? { key: "sites", label: "사이트", status: "needs", detail: queryErrorDetail(args.sites.error), action: { label: "사이트 등록", view: "security", params: { section: "sites" }, requiredAction: "site.create" } }
+      : args.sites.data === undefined
+        ? { key: "sites", label: "사이트", status: "deferred", detail: queryPendingDetail(args.sites) }
+        : sites.length > 0
+          ? { key: "sites", label: "사이트", status: "ready", detail: `${sites.length}개 사이트가 등록되어 있습니다.` }
+          : {
+              key: "sites",
+              label: "사이트",
+              status: "needs",
+              detail: "파일럿 대상 사이트를 등록해야 합니다.",
+              action: { label: "사이트 등록", view: "security", params: { section: "sites" }, requiredAction: "site.create" },
+            },
+  );
+
+  gates.push(
+    args.sites.isError
+      ? { key: "sessions", label: "브라우저 세션", status: "needs", detail: queryErrorDetail(args.sites.error), action: { label: "세션 확인", view: "security", params: { section: "sites" }, requiredAction: "session.capture" } }
+      : args.sites.data === undefined
+        ? { key: "sessions", label: "브라우저 세션", status: "deferred", detail: queryPendingDetail(args.sites) }
+        : sites.length === 0
+          ? { key: "sessions", label: "브라우저 세션", status: "deferred", detail: "사이트 등록 후 확인합니다.", action: { label: "사이트 등록", view: "security", params: { section: "sites" }, requiredAction: "site.create" } }
+          : loginSites.length === 0
+            ? { key: "sessions", label: "브라우저 세션", status: "deferred", detail: "로그인 세션이 필요한 사이트가 아직 없습니다." }
+            : missingSession === undefined
+              ? { key: "sessions", label: "브라우저 세션", status: "ready", detail: "로그인 필요 사이트의 세션이 준비되어 있습니다." }
+              : {
+                  key: "sessions",
+                  label: "브라우저 세션",
+                  status: "needs",
+                  detail: `${missingSession.name ?? "대상 사이트"} 세션 등록이 필요합니다.`,
+                  action: { label: "세션 등록", view: "security", params: { section: "sites", site: missingSession.site_profile_id }, requiredAction: "session.capture" },
+                },
+  );
+
+  gates.push(
+    args.scenarios.isError
+      ? { key: "automation", label: "첫 자동화", status: "needs", detail: queryErrorDetail(args.scenarios.error), action: { label: "자동화 초안 만들기", view: "scenarioStudio", requiredAction: "scenario.create" } }
+      : args.scenarios.data === undefined
+        ? { key: "automation", label: "첫 자동화", status: "deferred", detail: queryPendingDetail(args.scenarios) }
+        : scenarios.length > 0
+          ? { key: "automation", label: "첫 자동화", status: "ready", detail: `${scenarios.length}개 자동화가 등록되어 있습니다.` }
+          : {
+              key: "automation",
+              label: "첫 자동화",
+              status: "needs",
+              detail: "첫 자동화 초안이 아직 없습니다.",
+              action: { label: "자동화 초안 만들기", view: "scenarioStudio", requiredAction: "scenario.create" },
+            },
+  );
+
+  gates.push(
+    args.summary.isError
+      ? { key: "test-run", label: "테스트 실행", status: "needs", detail: queryErrorDetail(args.summary.error), action: { label: "테스트 실행", view: "playground", requiredAction: "run.create" } }
+      : args.summary.data === undefined
+        ? { key: "test-run", label: "테스트 실행", status: "deferred", detail: queryPendingDetail(args.summary) }
+        : args.summary.data.total > 0
+          ? { key: "test-run", label: "테스트 실행", status: "ready", detail: `${args.summary.data.total}건의 실행 기록이 있습니다.` }
+          : {
+              key: "test-run",
+              label: "테스트 실행",
+              status: "deferred",
+              detail: "자동화 초안 생성 후 테스트 실행을 시작합니다.",
+              action: { label: "테스트 실행", view: "playground", requiredAction: "run.create" },
+            },
+  );
+
+  gates.push(
+    args.recent.isError
+      ? { key: "evidence", label: "증거", status: "needs", detail: queryErrorDetail(args.recent.error), action: { label: "실행 증거 보기", view: "runTrace" } }
+      : args.recent.data === undefined
+        ? { key: "evidence", label: "증거", status: "deferred", detail: queryPendingDetail(args.recent) }
+        : args.recent.data.items.length > 0
+          ? { key: "evidence", label: "증거", status: "ready", detail: "최근 실행 증거가 연결되어 있습니다.", action: { label: "실행 증거 보기", view: "runTrace" } }
+          : { key: "evidence", label: "증거", status: "deferred", detail: "실행이 생기면 증거를 확인합니다.", action: { label: "실행 증거 보기", view: "runTrace" } },
+  );
+
+  gates.push(
+    args.production.isError
+      ? { key: "support", label: "지원 체계", status: "needs", detail: queryErrorDetail(args.production.error), action: { label: "운영 증빙 확인", view: "automationOps", params: { section: "readiness" }, requiredAction: "ops_readiness.manage" } }
+      : args.production.data === undefined
+        ? { key: "support", label: "지원 체계", status: "deferred", detail: queryPendingDetail(args.production) }
+        : {
+            key: "support",
+            label: "지원 체계",
+            status: args.production.data.status === "ready" ? "ready" : args.production.data.status === "blocked" ? "blocked" : "needs",
+            detail:
+              args.production.data.status === "ready"
+                ? "운영 전환 증빙이 준비되어 있습니다."
+                : `차단 ${args.production.data.summary.blocker_count}건, 보류 ${args.production.data.summary.deferred_count}건`,
+            action:
+              args.production.data.status === "ready"
+                ? { label: "운영 증빙 보기", view: "automationOps", params: { section: "readiness" } }
+                : { label: "운영 증빙 확인", view: "automationOps", params: { section: "readiness" }, requiredAction: "ops_readiness.manage" },
+          },
+  );
+
+  gates.push(
+    args.performance.isError
+      ? { key: "roi", label: "ROI", status: "needs", detail: queryErrorDetail(args.performance.error), action: { label: "성과 리포트 보기", view: "dashboard", params: { focus: "automation-report" } } }
+      : args.performance.data === undefined
+        ? { key: "roi", label: "ROI", status: "deferred", detail: queryPendingDetail(args.performance) }
+        : roiEvidenceCount > 0
+          ? { key: "roi", label: "ROI", status: "ready", detail: `${roiEvidenceCount}건의 ROI 실적 증거가 있습니다.`, action: { label: "성과 리포트 보기", view: "dashboard", params: { focus: "automation-report" } } }
+          : { key: "roi", label: "ROI", status: "deferred", detail: "실적 증거가 없어 확장 판단은 보류입니다.", action: { label: "성과 리포트 보기", view: "dashboard", params: { focus: "automation-report" } } },
+  );
+
+  return gates;
+}
+
+function AdoptionReadinessPanel(props: {
+  readonly auth: UseQueryResult<AuthReadiness>;
+  readonly production: UseQueryResult<ProductionReadiness>;
+  readonly sites: UseQueryResult<Paginated<SiteItem>>;
+  readonly scenarios: UseQueryResult<Paginated<ScenarioItem>>;
+  readonly summary: UseQueryResult<RunSummary>;
+  readonly recent: UseQueryResult<Paginated<RunItem>>;
+  readonly performance: UseQueryResult<AutomationPerformanceReport>;
+  readonly can: (action: string) => boolean;
+}): JSX.Element {
+  const gates = buildReadinessGates(props);
+  const readyCount = gates.filter((gate) => gate.status === "ready").length;
+  const blockedCount = gates.filter((gate) => gate.status === "blocked").length;
+  const needsCount = gates.filter((gate) => gate.status === "needs").length;
+  return (
+    <section className="panel adoption-readiness" aria-label="파일럿 준비 상태">
+      <div className="panel-head">
+        <div>
+          <h2>파일럿 준비 상태</h2>
+          <p className="subtle">필수 관문은 실제 응답 기준으로만 표시합니다. 알 수 없는 항목은 준비로 간주하지 않습니다.</p>
+        </div>
+        <span className={`badge ${blockedCount > 0 ? "red" : needsCount > 0 ? "amber" : "green"}`}>
+          {readyCount}/{gates.length} 준비
+        </span>
+      </div>
+      <ul className="adoption-gates">
+        {gates.map((gate) => {
+          const actionAllowed = gate.action !== undefined && (gate.action.requiredAction === undefined || props.can(gate.action.requiredAction));
+          return (
+            <li key={gate.key}>
+              <span className={`badge ${gateTone(gate.status)}`}>{GATE_LABELS[gate.status]}</span>
+              <div>
+                <strong>{gate.label}</strong>
+                <span className="subtle">{gate.detail}</span>
+              </div>
+              {actionAllowed ? (
+                <button className="btn" type="button" onClick={() => navigate(gate.action!.view, gate.action!.params)}>
+                  {gate.action!.label}
+                </button>
+              ) : gate.action !== undefined ? (
+                <span className="subtle">권한 있는 담당자에게 요청</span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function DashboardEnvironmentState(props: {
+  readonly isEmptyTenant: boolean;
+  readonly errors: readonly { readonly label: string; readonly error: unknown }[];
+  readonly can: (action: string) => boolean;
+}): JSX.Element | null {
+  if (props.errors.length > 0) {
+    const first = props.errors[0]!;
+    const state = desktopStateForError(first.error);
+    return (
+      <ErrorState
+        title={state.title}
+        message={`${first.label} 데이터를 확인하지 못했습니다. ${props.errors.length > 1 ? `${props.errors.length}개 영역에서 확인이 필요합니다. ` : ""}${state.message}`}
+        details={state.details}
+      />
+    );
+  }
+  if (props.isEmptyTenant) {
+    return (
+      <EmptyState
+        title="첫 실행 전"
+        message="아직 실행 기록이 없습니다. 첫 자동화 초안과 테스트 실행을 준비하세요."
+        action={
+          props.can("scenario.create") ? (
+            <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>
+              자동화 초안 만들기
+            </button>
+          ) : undefined
+        }
+      />
+    );
+  }
+  return null;
 }
 
 // 지표 카드 — 클릭 시 해당 목록 화면으로 드릴다운(죽은 대시보드 → 진입점). 카드 자체가 버튼이라 키보드 포커스/Enter 동작.
@@ -72,12 +361,14 @@ function exactCount(s: RunSummary | undefined, status: string): string {
 // run_success_rate(§E) — completed/(completed+failed_business+failed_system). 분모 0이면 success_rate=null →
 // '—'(0/0을 100%/0%로 단정하지 않음, "조용한 false 금지"). 정수 %로 표기.
 function successRateLabel(s: RunSummary | undefined): string {
+  if (s !== undefined && s.total === 0) return "첫 실행 전";
   if (s === undefined || typeof s.success_rate !== "number") return "—";
   return `${Math.round(s.success_rate * 100)}%`;
 }
 
 // cache_hit_rate(§E) — ActionPlanCache 조회 적중률(서버 집계). 조회 0(분모 0) → null → '—'(0/0 단정 금지).
 function cacheHitRateLabel(s: RunSummary | undefined): string {
+  if (s !== undefined && s.total === 0) return "첫 실행 전";
   if (s === undefined || s.cache === undefined || typeof s.cache.hit_rate !== "number") return "—";
   return `${Math.round(s.cache.hit_rate * 100)}%`;
 }
@@ -138,14 +429,17 @@ function RunTrendsPanel({
   trends,
   isLoading,
   isError,
+  error,
 }: {
   trends: RunTrends | undefined;
   isLoading: boolean;
   isError: boolean;
+  error?: unknown;
 }): JSX.Element {
   // points 가 배열이 아니면(미도착/계약 위반 응답) 빈 시리즈로 — 패널 크래시 대신 정직한 빈 상태(white-screen 방지).
   const points: readonly RunTrendPoint[] = trends !== undefined && Array.isArray(trends.points) ? trends.points : [];
   const rate = latestSuccessRate(points);
+  const errorState = isError ? desktopStateForError(error) : null;
   return (
     <section className="panel run-trends-panel" aria-label="실행 추세">
       <div className="panel-head">
@@ -153,11 +447,15 @@ function RunTrendsPanel({
         {trends !== undefined && <span className="subtle">{trends.window_days}일 · {trends.timezone}</span>}
       </div>
       {isError ? (
-        <p className="empty-state">추세를 불러오지 못했습니다.</p>
+        <ErrorState
+          title={errorState?.title}
+          message={`실행 추세를 확인하지 못했습니다. ${errorState?.message ?? ""}`}
+          details={errorState?.details}
+        />
       ) : isLoading ? (
-        <p className="empty-state">추세를 동기화하는 중입니다.</p>
+        <EmptyState title="확인 필요" message="추세를 동기화하는 중입니다." />
       ) : trends === undefined || points.length === 0 ? (
-        <p className="empty-state">표시할 추세 데이터가 없습니다.</p>
+        <EmptyState title="첫 실행 전" message="표시할 추세 데이터가 없습니다." />
       ) : (
         <div>
           <TrendRow
@@ -386,13 +684,16 @@ function OpsSignalPanel({
   alerts,
   isLoading,
   isError,
+  error,
 }: {
   health: OpsHealth | undefined;
   alerts: readonly OpsAlertItem[];
   isLoading: boolean;
   isError: boolean;
+  error?: unknown;
 }): JSX.Element {
   const topAlerts = alerts.slice(0, 3);
+  const errorState = isError ? desktopStateForError(error) : null;
   return (
     <section className="panel ops-signal-panel" aria-label="운영 헬스와 긴급 알림">
       <div className="panel-head">
@@ -403,7 +704,11 @@ function OpsSignalPanel({
         <span className={`badge ${opsHealthTone(health?.status, isError)}`}>{opsHealthLabel(health?.status, isLoading, isError)}</span>
       </div>
       {isError ? (
-        <p className="empty-state">운영 알림 스냅샷을 불러오지 못했습니다.</p>
+        <ErrorState
+          title={errorState?.title}
+          message={`운영 알림 스냅샷을 확인하지 못했습니다. ${errorState?.message ?? ""}`}
+          details={errorState?.details}
+        />
       ) : (
         <div className="ops-signal-body">
           <div className="ops-signal-facts">
@@ -873,6 +1178,7 @@ function AutomationPerformancePanel({
   exportFormat,
   isLoading,
   isError,
+  error,
   onMonthChange,
   onRetry,
   onExportCsv,
@@ -887,6 +1193,7 @@ function AutomationPerformancePanel({
   exportFormat: ReportExportFormat | null;
   isLoading: boolean;
   isError: boolean;
+  error?: unknown;
   onMonthChange: (month: string) => void;
   onRetry: () => void;
   onExportCsv: () => void;
@@ -899,6 +1206,7 @@ function AutomationPerformancePanel({
   const recentTrends = report?.trends.slice(-7) ?? [];
   const topCostModels = report?.cost_by_model.slice(0, 3) ?? [];
   const recentModelCostTrends = report?.model_cost_trends.slice(-7) ?? [];
+  const errorState = isError ? desktopStateForError(error) : null;
   return (
     <section className="panel performance-report-panel" aria-label="월간 자동화 성과 리포트">
       <div className="panel-head">
@@ -926,11 +1234,16 @@ function AutomationPerformancePanel({
       {exportState === "success" && <p className="notice success" role="status">성과 리포트 {exportFormat?.toUpperCase() ?? "export"}를 준비했습니다.</p>}
       {exportState === "error" && <p className="form-alert red" role="alert">성과 리포트 {exportFormat?.toUpperCase() ?? "export"}를 준비하지 못했습니다.</p>}
       {isError ? (
-        <p className="empty-state">성과 리포트를 불러오지 못했습니다.</p>
+        <ErrorState
+          title={errorState?.title}
+          message={`성과 리포트를 확인하지 못했습니다. ${errorState?.message ?? ""}`}
+          details={errorState?.details}
+          onRetry={onRetry}
+        />
       ) : isLoading ? (
-        <p className="empty-state">성과 리포트를 동기화하는 중입니다.</p>
+        <EmptyState title="확인 필요" message="성과 리포트를 동기화하는 중입니다." />
       ) : report === undefined ? (
-        <p className="empty-state">성과 리포트 데이터가 없습니다.</p>
+        <EmptyState title="보류" message="성과 리포트 데이터가 없습니다." />
       ) : (
         <>
           <div className="summary-grid performance-summary">
@@ -1135,6 +1448,10 @@ export function DashboardView(): JSX.Element {
   });
   const opsHealth = useQuery({ queryKey: ["ops-health", "dashboard"], queryFn: () => api.getOpsHealth(), refetchInterval: 5_000 });
   const opsAlerts = useQuery({ queryKey: ["ops-alerts", "dashboard"], queryFn: () => api.listOpsAlerts({ limit: 3 }), refetchInterval: 5_000 });
+  const readinessSites = useQuery({ queryKey: ["sites", "adoption-readiness"], queryFn: () => api.listSites({ limit: 50 }), refetchInterval: 30_000 });
+  const readinessScenarios = useQuery({ queryKey: ["scenarios", "adoption-readiness"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 30_000 });
+  const authReadiness = useQuery({ queryKey: ["auth-readiness", "dashboard"], queryFn: () => api.getAuthReadiness(), refetchInterval: 60_000 });
+  const productionReadiness = useQuery({ queryKey: ["production-readiness", "dashboard"], queryFn: () => api.getProductionReadiness(), refetchInterval: 60_000 });
 
   async function exportPerformanceReportCsv(): Promise<void> {
     setReportExportState("pending");
@@ -1178,16 +1495,36 @@ export function DashboardView(): JSX.Element {
   // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
   // isLoading/isError 중에는 미표시(데이터 도착 전 단정 금지). 실행이 1건이라도 생기면 자동 소멸.
   const isEmptyTenant = recent.isSuccess && recent.data.items.length === 0 && recent.data.next_cursor === null;
+  const dashboardErrors: { label: string; error: unknown }[] = [];
+  if (summary.isError) dashboardErrors.push({ label: "실행 요약", error: summary.error });
+  if (recent.isError) dashboardErrors.push({ label: "최근 실행", error: recent.error });
+  if (human.isError) dashboardErrors.push({ label: "사람 확인", error: human.error });
+  if (wiDlq.isError) dashboardErrors.push({ label: "작업 항목 재처리", error: wiDlq.error });
+  if (sinkDlq.isError) dashboardErrors.push({ label: "외부 전달 재처리", error: sinkDlq.error });
+  if (opsHealth.isError) dashboardErrors.push({ label: "운영 헬스", error: opsHealth.error });
+  if (opsAlerts.isError) dashboardErrors.push({ label: "운영 알림", error: opsAlerts.error });
 
   return (
     <>
       {isEmptyTenant && <OnboardingBanner {...onboardingProps(can, roles)} />}
+      <DashboardEnvironmentState isEmptyTenant={isEmptyTenant} errors={dashboardErrors} can={can} />
+      <AdoptionReadinessPanel
+        auth={authReadiness}
+        production={productionReadiness}
+        sites={readinessSites}
+        scenarios={readinessScenarios}
+        summary={summary}
+        recent={recent}
+        performance={performanceReport}
+        can={can}
+      />
       <RoleWorkbench roles={roles} can={can} />
       <OpsSignalPanel
         health={opsHealth.data}
         alerts={opsAlerts.data?.items ?? []}
         isLoading={(opsHealth.data === undefined && opsHealth.isFetching) || (opsAlerts.data === undefined && opsAlerts.isFetching)}
         isError={opsHealth.isError || opsAlerts.isError}
+        error={opsHealth.error ?? opsAlerts.error}
       />
       <div className="metrics">
         <Metric label="실행 성공률" value={successRateLabel(summary.data)} view="runTrace" params={{ status: "completed" }} hint="완료 실행" />
@@ -1206,6 +1543,7 @@ export function DashboardView(): JSX.Element {
         trends={trends.data}
         isLoading={trends.data === undefined && trends.isFetching}
         isError={trends.isError}
+        error={trends.error}
       />
       <AutomationPerformancePanel
         report={performanceReport.data}
@@ -1214,6 +1552,7 @@ export function DashboardView(): JSX.Element {
         exportFormat={reportExportFormat}
         isLoading={performanceReport.data === undefined && performanceReport.isFetching}
         isError={performanceReport.isError}
+        error={performanceReport.error}
         onMonthChange={(month) => {
           setReportMonth(month);
           setReportExportState("idle");
@@ -1245,6 +1584,7 @@ export function DashboardView(): JSX.Element {
         title="최근 실행"
         query={recent}
         rowKey={(r) => r.run_id}
+        emptyTitle="첫 실행 전"
         emptyMessage="아직 실행이 없습니다."
         columns={[
           {

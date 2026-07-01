@@ -25,9 +25,9 @@ function jwt(roles: readonly string[]): string {
 
 describe("Credential concurrency panel", () => {
   beforeEach(() => {
-    location.hash = "#security";
+    location.hash = "#security?section=secrets";
     localStorage.clear();
-    localStorage.setItem("rpa.token", jwt(["operator"]));
+    localStorage.setItem("rpa.token", jwt(["admin"]));
   });
 
   test("renders policy rows with capacity and lifecycle metadata", async () => {
@@ -77,7 +77,7 @@ describe("Credential concurrency panel", () => {
 
 describe("Credential reference lifecycle actions", () => {
   beforeEach(() => {
-    location.hash = "#security";
+    location.hash = "#security?section=secrets";
     localStorage.clear();
   });
 
@@ -99,10 +99,12 @@ describe("Credential reference lifecycle actions", () => {
         }),
       }),
     );
-    const region = await screen.findByRole("region", { name: "자격증명 동시성 정책" });
-    expect(within(region).queryByRole("button", { name: "참조 등록" })).toBeNull();
-    expect(within(region).queryByRole("button", { name: "회전" })).toBeNull();
-    expect(within(region).queryByRole("button", { name: "폐기" })).toBeNull();
+    expect(await screen.findByRole("status", { name: "Credential 운영 권한 안내" })).toBeInTheDocument();
+    expect(screen.getByText("권한 확인 필요")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "자격증명 동시성 정책" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "참조 등록" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "회전" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "폐기" })).toBeNull();
   });
 
   test("admin registers a SecretRef path without any secret value field", async () => {

@@ -218,7 +218,7 @@ export function TriggerScheduler({
 
   function selectFireHistory(triggerId: string): void {
     setFireTriggerId(triggerId);
-    navigate("automationOps", { trigger: triggerId });
+    navigate("automationOps", { section: "schedule", trigger: triggerId });
   }
 
   return (

@@ -452,7 +452,11 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     await waitFor(() =>
-      expect(screen.getByText("불러오지 못했습니다")).toBeInTheDocument(),
+      expect(
+        screen
+          .getAllByRole("alert")
+          .some((alert) => alert.textContent?.includes("운영 실패") ?? false),
+      ).toBe(true),
     );
   });
 
@@ -1087,9 +1091,10 @@ describe("D7 운영 콘솔 shell", () => {
     });
 
     const pendingButton = await screen.findByRole("button", {
-      name: "증거 설정 확인 중…",
+      name: "저장 후 실행",
     });
     expect(pendingButton).toBeDisabled();
+    expect(pendingButton).toHaveTextContent("증거 설정 확인 중…");
     fireEvent.click(pendingButton);
     expect(calls).toHaveLength(0);
 

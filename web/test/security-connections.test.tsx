@@ -28,7 +28,7 @@ function jwt(roles: readonly string[]): string {
 
 describe("security connections panel", () => {
   beforeEach(() => {
-    location.hash = "#security";
+    location.hash = "#security?section=secrets";
     localStorage.setItem("rpa.token", jwt(["operator"]));
   });
 

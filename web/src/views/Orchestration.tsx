@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
-import { navigate } from "../router";
+import { mergeParams, navigate, useHashParam } from "../router";
 import type {
   IntegrationHandoff,
   OpsAlertItem,
@@ -38,10 +38,49 @@ import {
 } from "./orchestration/ProductionReadinessPanel";
 import { countLabel, type AlertSeverityFilter, type AlertSourceFilter } from "./orchestration/trigger-helpers";
 
+type OpsSectionKey = "today" | "schedule" | "queue" | "alerts" | "readiness" | "external";
+
+const OPS_SECTIONS: readonly { readonly key: OpsSectionKey; readonly label: string; readonly purpose: string }[] = [
+  { key: "today", label: "오늘 필요한 조치", purpose: "헬스, 대기열, 긴급 알림" },
+  { key: "schedule", label: "예약", purpose: "시간·이벤트 트리거" },
+  { key: "queue", label: "큐", purpose: "대기, 사람 개입, 브라우저 실행" },
+  { key: "alerts", label: "알림", purpose: "라우팅, 발송, 확인" },
+  { key: "readiness", label: "운영 전환 증빙", purpose: "전환 증빙·리허설" },
+  { key: "external", label: "외부 전달", purpose: "외부 RPA/IDP handoff" },
+];
+
+function isOpsSection(value: string | null): value is OpsSectionKey {
+  return value === "today" || value === "schedule" || value === "queue" || value === "alerts" || value === "readiness" || value === "external";
+}
+
+function OpsSectionSelector({ active }: { active: OpsSectionKey }): JSX.Element {
+  return (
+    <section className="panel ops-section-selector" aria-label="Automation Ops 섹션">
+      <div className="section-tabs" role="list" aria-label="Automation Ops 로컬 섹션">
+        {OPS_SECTIONS.map((section) => (
+          <button
+            key={section.key}
+            type="button"
+            className={`section-tab${section.key === active ? " active" : ""}`}
+            aria-pressed={section.key === active}
+            aria-current={section.key === active ? "true" : undefined}
+            onClick={() => mergeParams({ section: section.key })}
+          >
+            <strong>{section.label}</strong>
+            <span>{section.purpose}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function OrchestrationView(): JSX.Element {
   const api = useApiClient();
   const queryClient = useQueryClient();
   const can = useCan();
+  const sectionParam = useHashParam("section");
+  const activeSection = isOpsSection(sectionParam) ? sectionParam : "today";
   const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
   const human = useQuery({ queryKey: ["human-tasks"], queryFn: () => api.listHumanTasks({ limit: 50 }), refetchInterval: 5_000 });
   const workDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 10_000 });
@@ -387,6 +426,142 @@ export function OrchestrationView(): JSX.Element {
     </section>
   );
 
+  const opsHealthSummary = (
+    <OpsHealthSummary
+      health={opsHealth.data}
+      isLoading={opsHealth.data === undefined && opsHealth.isFetching}
+      isError={opsHealth.isError}
+    />
+  );
+
+  const productionReadinessPanel = (
+    <ProductionReadinessPanel
+      readiness={productionReadiness.data}
+      isLoading={productionReadiness.data === undefined && productionReadiness.isFetching}
+      isError={productionReadiness.isError}
+      externalAlertEvidence={externalAlertReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
+      isExternalAlertEvidenceLoading={externalAlertReadinessEvidence.data === undefined && externalAlertReadinessEvidence.isFetching}
+      isExternalAlertEvidenceError={externalAlertReadinessEvidence.isError}
+      backupEvidence={backupReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
+      isBackupEvidenceLoading={backupReadinessEvidence.data === undefined && backupReadinessEvidence.isFetching}
+      isBackupEvidenceError={backupReadinessEvidence.isError}
+      sloEvidence={sloReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
+      isSloEvidenceLoading={sloReadinessEvidence.data === undefined && sloReadinessEvidence.isFetching}
+      isSloEvidenceError={sloReadinessEvidence.isError}
+      observabilityEvidence={observabilityReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
+      isObservabilityEvidenceLoading={observabilityReadinessEvidence.data === undefined && observabilityReadinessEvidence.isFetching}
+      isObservabilityEvidenceError={observabilityReadinessEvidence.isError}
+      canRecordBackupEvidence={can("ops_readiness.manage")}
+      isRecordingBackupEvidence={recordBackupEvidenceMutation.isPending}
+      recordBackupEvidenceError={recordBackupEvidenceMutation.isError}
+      onRecordBackupEvidence={(draft) => recordBackupEvidenceMutation.mutate(draft)}
+      canRecordExternalAlertEvidence={can("ops_readiness.manage")}
+      isRecordingExternalAlertEvidence={recordExternalAlertEvidenceMutation.isPending}
+      recordExternalAlertEvidenceError={recordExternalAlertEvidenceMutation.isError}
+      onRecordExternalAlertEvidence={(draft) => recordExternalAlertEvidenceMutation.mutate(draft)}
+      canRecordSloEvidence={can("ops_readiness.manage")}
+      isRecordingSloEvidence={recordSloEvidenceMutation.isPending}
+      recordSloEvidenceError={recordSloEvidenceMutation.isError}
+      onRecordSloEvidence={(draft) => recordSloEvidenceMutation.mutate(draft)}
+      canRecordObservabilityEvidence={can("ops_readiness.manage")}
+      isRecordingObservabilityEvidence={recordObservabilityEvidenceMutation.isPending}
+      recordObservabilityEvidenceError={recordObservabilityEvidenceMutation.isError}
+      onRecordObservabilityEvidence={(draft) => recordObservabilityEvidenceMutation.mutate(draft)}
+    />
+  );
+
+  const triggerScheduler = <TriggerScheduler schedulerQueueUnavailable={schedulerQueueUnavailable} queuePanel={queuePanel} />;
+
+  const notificationRouting = (
+    <NotificationRoutingReadiness
+      connectors={notificationConnectors.data?.items ?? []}
+      templates={notificationTemplates.data?.items ?? []}
+      isLoading={(notificationConnectors.data === undefined && notificationConnectors.isFetching) || (notificationTemplates.data === undefined && notificationTemplates.isFetching)}
+      isError={notificationConnectors.isError || notificationTemplates.isError}
+    />
+  );
+
+  const integrationHandoffPanel = (
+    <IntegrationHandoffPanel
+      handoffs={integrationHandoffs.data?.items ?? []}
+      isLoading={integrationHandoffs.data === undefined && integrationHandoffs.isFetching}
+      isError={integrationHandoffs.isError}
+      canCreate={can("integration.handoff")}
+      isCreating={createIntegrationHandoffMutation.isPending}
+      createError={createIntegrationHandoffMutation.isError}
+      onCreate={(draft) => createIntegrationHandoffMutation.mutate(draft)}
+      canDispatch={can("integration.handoff")}
+      dispatchingHandoffId={dispatchIntegrationHandoffMutation.isPending ? dispatchIntegrationHandoffMutation.variables?.handoff.handoff_id ?? null : null}
+      dispatchErrorHandoffId={dispatchErrorHandoffId}
+      onDispatch={(handoff, draft) => dispatchIntegrationHandoffMutation.mutate({ handoff, draft })}
+      canRecordReceipt={can("integration.handoff")}
+      recordingHandoffId={recordIntegrationHandoffReceiptMutation.isPending ? recordIntegrationHandoffReceiptMutation.variables?.handoff.handoff_id ?? null : null}
+      receiptErrorHandoffId={receiptErrorHandoffId}
+      onRecordReceipt={(handoff, draft) => recordIntegrationHandoffReceiptMutation.mutate({ handoff, draft })}
+    />
+  );
+
+  const webAttendedPanel = (
+    <WebAttendedPanel
+      runRequests={webAttendedRunRequests.data?.items ?? ([] as WebAttendedRunRequest[])}
+      resumeRequests={runResumeRequests.data?.items ?? ([] as RunResumeRequest[])}
+      suspendedRuns={suspendedRunItems}
+      isLoading={
+        (webAttendedRunRequests.data === undefined && webAttendedRunRequests.isFetching) ||
+        (runResumeRequests.data === undefined && runResumeRequests.isFetching) ||
+        (suspendedRuns.data === undefined && suspendedRuns.isFetching)
+      }
+      isError={webAttendedRunRequests.isError || runResumeRequests.isError}
+      canCreate={can("run.create")}
+      isCreating={createWebAttendedRunRequestMutation.isPending}
+      createError={createWebAttendedRunRequestMutation.isError}
+      onCreate={(draft) => createWebAttendedRunRequestMutation.mutate(draft)}
+      canResume={can("run.resume")}
+      resumingRunId={resumeSuspendedRunMutation.isPending ? resumeSuspendedRunMutation.variables?.run_id ?? null : null}
+      resumeErrorRunId={resumeErrorRunId}
+      onResume={(run) => resumeSuspendedRunMutation.mutate(run)}
+    />
+  );
+
+  const opsAlertCenter = (
+    <OpsAlertCenter
+      alerts={alertItems}
+      isError={opsAlerts.isError}
+      isLoading={opsAlerts.data === undefined && opsAlerts.isFetching}
+      isFetchingMore={alertCursor !== null && opsAlerts.isFetching}
+      nextCursor={opsAlerts.data?.next_cursor ?? null}
+      severity={alertSeverity}
+      source={alertSource}
+      onLoadMore={(cursor) => setAlertCursor(cursor)}
+      onSeverityChange={changeAlertSeverity}
+      onSourceChange={changeAlertSource}
+      canAck={can("ops_alert.ack")}
+      ackingAlertId={ackMutation.isPending ? ackMutation.variables?.alert_id ?? null : null}
+      ackErrorAlertId={ackErrorAlertId}
+      onAck={(alert) => ackMutation.mutate(alert)}
+      deliveryAlertId={deliveryAlertId}
+      deliveryReceipts={deliveryReceipts.data?.items ?? []}
+      isDeliveryLoading={deliveryAlertId !== null && deliveryReceipts.isFetching && deliveryReceipts.data === undefined}
+      isDeliveryError={deliveryReceipts.isError}
+      onToggleDeliveries={(alert) => setDeliveryAlertId((current) => (current === alert.alert_id ? null : alert.alert_id))}
+      canSendWebhook={can("ops_alert.deliver")}
+      sendingWebhookAlertId={sendWebhookMutation.isPending ? sendWebhookMutation.variables?.alert.alert_id ?? null : null}
+      webhookSendErrorAlertId={webhookSendErrorAlertId}
+      queuedWebhookAttempt={queuedWebhookAttempt}
+      onSendWebhook={(alert, draft) => sendWebhookMutation.mutate({ alert, draft })}
+    />
+  );
+
+  const botPoolCapacityPanel = (
+    <BotPoolCapacityPanel
+      pools={botPools.data?.items ?? []}
+      isLoading={botPools.data === undefined && botPools.isFetching}
+      isError={botPools.isError}
+      retryQueueStatus={workDlq.data !== undefined && workDlq.data.items.length > 0 ? "확인 필요" : "정상"}
+      retryQueueTone={workDlq.data !== undefined && workDlq.data.items.length > 0 ? "red" : "green"}
+    />
+  );
+
   return (
     <div className="orchestration-view">
       <section className="panel orchestration-toolbar" aria-label="실행 예약·알림 빠른 이동">
@@ -401,139 +576,63 @@ export function OrchestrationView(): JSX.Element {
         </div>
       </section>
 
-      <OpsHealthSummary
-        health={opsHealth.data}
-        isLoading={opsHealth.data === undefined && opsHealth.isFetching}
-        isError={opsHealth.isError}
-      />
-      <ProductionReadinessPanel
-        readiness={productionReadiness.data}
-        isLoading={productionReadiness.data === undefined && productionReadiness.isFetching}
-        isError={productionReadiness.isError}
-        externalAlertEvidence={externalAlertReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
-        isExternalAlertEvidenceLoading={externalAlertReadinessEvidence.data === undefined && externalAlertReadinessEvidence.isFetching}
-        isExternalAlertEvidenceError={externalAlertReadinessEvidence.isError}
-        backupEvidence={backupReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
-        isBackupEvidenceLoading={backupReadinessEvidence.data === undefined && backupReadinessEvidence.isFetching}
-        isBackupEvidenceError={backupReadinessEvidence.isError}
-        sloEvidence={sloReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
-        isSloEvidenceLoading={sloReadinessEvidence.data === undefined && sloReadinessEvidence.isFetching}
-        isSloEvidenceError={sloReadinessEvidence.isError}
-        observabilityEvidence={observabilityReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
-        isObservabilityEvidenceLoading={observabilityReadinessEvidence.data === undefined && observabilityReadinessEvidence.isFetching}
-        isObservabilityEvidenceError={observabilityReadinessEvidence.isError}
-        canRecordBackupEvidence={can("ops_readiness.manage")}
-        isRecordingBackupEvidence={recordBackupEvidenceMutation.isPending}
-        recordBackupEvidenceError={recordBackupEvidenceMutation.isError}
-        onRecordBackupEvidence={(draft) => recordBackupEvidenceMutation.mutate(draft)}
-        canRecordExternalAlertEvidence={can("ops_readiness.manage")}
-        isRecordingExternalAlertEvidence={recordExternalAlertEvidenceMutation.isPending}
-        recordExternalAlertEvidenceError={recordExternalAlertEvidenceMutation.isError}
-        onRecordExternalAlertEvidence={(draft) => recordExternalAlertEvidenceMutation.mutate(draft)}
-        canRecordSloEvidence={can("ops_readiness.manage")}
-        isRecordingSloEvidence={recordSloEvidenceMutation.isPending}
-        recordSloEvidenceError={recordSloEvidenceMutation.isError}
-        onRecordSloEvidence={(draft) => recordSloEvidenceMutation.mutate(draft)}
-        canRecordObservabilityEvidence={can("ops_readiness.manage")}
-        isRecordingObservabilityEvidence={recordObservabilityEvidenceMutation.isPending}
-        recordObservabilityEvidenceError={recordObservabilityEvidenceMutation.isError}
-        onRecordObservabilityEvidence={(draft) => recordObservabilityEvidenceMutation.mutate(draft)}
-      />
+      <OpsSectionSelector active={activeSection} />
 
-      <TriggerScheduler schedulerQueueUnavailable={schedulerQueueUnavailable} queuePanel={queuePanel} />
+      {activeSection === "today" && (
+        <>
+          {opsHealthSummary}
+          {queuePanel}
+          {opsAlertCenter}
+        </>
+      )}
 
-      <section className="panel" aria-label="트리거와 알림">
-        <div className="panel-head">
-          <h2>트리거·알림</h2>
-        </div>
-        <div className="orchestration-grid">
-          <StatusColumn
-            title="트리거"
-            caption="현재 지원 범위 안내 — 실시간 상태가 아닙니다."
-            rows={[
-              { name: "시간 예약", status: "저장 가능", tone: "green", action: "cron 기반" },
-              { name: "외부 이벤트", status: "저장 가능", tone: "green", action: "서명 검증 + 이벤트 중복 방지" },
-              { name: "파일 도착", status: "준비 중", tone: "amber", action: "후속 설계" },
-              { name: "큐 적재", status: "준비 중", tone: "amber", action: "후속 설계" },
-            ]}
-          />
-          <NotificationRoutingReadiness
-            connectors={notificationConnectors.data?.items ?? []}
-            templates={notificationTemplates.data?.items ?? []}
-            isLoading={(notificationConnectors.data === undefined && notificationConnectors.isFetching) || (notificationTemplates.data === undefined && notificationTemplates.isFetching)}
-            isError={notificationConnectors.isError || notificationTemplates.isError}
-          />
-          <IntegrationHandoffPanel
-            handoffs={integrationHandoffs.data?.items ?? []}
-            isLoading={integrationHandoffs.data === undefined && integrationHandoffs.isFetching}
-            isError={integrationHandoffs.isError}
-            canCreate={can("integration.handoff")}
-            isCreating={createIntegrationHandoffMutation.isPending}
-            createError={createIntegrationHandoffMutation.isError}
-            onCreate={(draft) => createIntegrationHandoffMutation.mutate(draft)}
-            canDispatch={can("integration.handoff")}
-            dispatchingHandoffId={dispatchIntegrationHandoffMutation.isPending ? dispatchIntegrationHandoffMutation.variables?.handoff.handoff_id ?? null : null}
-            dispatchErrorHandoffId={dispatchErrorHandoffId}
-            onDispatch={(handoff, draft) => dispatchIntegrationHandoffMutation.mutate({ handoff, draft })}
-            canRecordReceipt={can("integration.handoff")}
-            recordingHandoffId={recordIntegrationHandoffReceiptMutation.isPending ? recordIntegrationHandoffReceiptMutation.variables?.handoff.handoff_id ?? null : null}
-            receiptErrorHandoffId={receiptErrorHandoffId}
-            onRecordReceipt={(handoff, draft) => recordIntegrationHandoffReceiptMutation.mutate({ handoff, draft })}
-          />
-          <WebAttendedPanel
-            runRequests={webAttendedRunRequests.data?.items ?? ([] as WebAttendedRunRequest[])}
-            resumeRequests={runResumeRequests.data?.items ?? ([] as RunResumeRequest[])}
-            suspendedRuns={suspendedRunItems}
-            isLoading={
-              (webAttendedRunRequests.data === undefined && webAttendedRunRequests.isFetching) ||
-              (runResumeRequests.data === undefined && runResumeRequests.isFetching) ||
-              (suspendedRuns.data === undefined && suspendedRuns.isFetching)
-            }
-            isError={webAttendedRunRequests.isError || runResumeRequests.isError}
-            canCreate={can("run.create")}
-            isCreating={createWebAttendedRunRequestMutation.isPending}
-            createError={createWebAttendedRunRequestMutation.isError}
-            onCreate={(draft) => createWebAttendedRunRequestMutation.mutate(draft)}
-            canResume={can("run.resume")}
-            resumingRunId={resumeSuspendedRunMutation.isPending ? resumeSuspendedRunMutation.variables?.run_id ?? null : null}
-            resumeErrorRunId={resumeErrorRunId}
-            onResume={(run) => resumeSuspendedRunMutation.mutate(run)}
-          />
-          <OpsAlertCenter
-            alerts={alertItems}
-            isError={opsAlerts.isError}
-            isLoading={opsAlerts.data === undefined && opsAlerts.isFetching}
-            isFetchingMore={alertCursor !== null && opsAlerts.isFetching}
-            nextCursor={opsAlerts.data?.next_cursor ?? null}
-            severity={alertSeverity}
-            source={alertSource}
-            onLoadMore={(cursor) => setAlertCursor(cursor)}
-            onSeverityChange={changeAlertSeverity}
-            onSourceChange={changeAlertSource}
-            canAck={can("ops_alert.ack")}
-            ackingAlertId={ackMutation.isPending ? ackMutation.variables?.alert_id ?? null : null}
-            ackErrorAlertId={ackErrorAlertId}
-            onAck={(alert) => ackMutation.mutate(alert)}
-            deliveryAlertId={deliveryAlertId}
-            deliveryReceipts={deliveryReceipts.data?.items ?? []}
-            isDeliveryLoading={deliveryAlertId !== null && deliveryReceipts.isFetching && deliveryReceipts.data === undefined}
-            isDeliveryError={deliveryReceipts.isError}
-            onToggleDeliveries={(alert) => setDeliveryAlertId((current) => (current === alert.alert_id ? null : alert.alert_id))}
-            canSendWebhook={can("ops_alert.deliver")}
-            sendingWebhookAlertId={sendWebhookMutation.isPending ? sendWebhookMutation.variables?.alert.alert_id ?? null : null}
-            webhookSendErrorAlertId={webhookSendErrorAlertId}
-            queuedWebhookAttempt={queuedWebhookAttempt}
-            onSendWebhook={(alert, draft) => sendWebhookMutation.mutate({ alert, draft })}
-          />
-          <BotPoolCapacityPanel
-            pools={botPools.data?.items ?? []}
-            isLoading={botPools.data === undefined && botPools.isFetching}
-            isError={botPools.isError}
-            retryQueueStatus={workDlq.data !== undefined && workDlq.data.items.length > 0 ? "확인 필요" : "정상"}
-            retryQueueTone={workDlq.data !== undefined && workDlq.data.items.length > 0 ? "red" : "green"}
-          />
-        </div>
-      </section>
+      {activeSection === "schedule" && triggerScheduler}
+
+      {activeSection === "queue" && (
+        <section className="panel" aria-label="큐와 브라우저 실행">
+          <div className="panel-head">
+            <h2>큐</h2>
+          </div>
+          <div className="orchestration-grid">
+            {queuePanel}
+            {webAttendedPanel}
+            {botPoolCapacityPanel}
+          </div>
+        </section>
+      )}
+
+      {activeSection === "alerts" && (
+        <section className="panel" aria-label="알림 운영">
+          <div className="panel-head">
+            <h2>알림</h2>
+          </div>
+          <div className="orchestration-grid">
+            <StatusColumn
+              title="트리거"
+              caption="현재 지원 범위 안내 — 실시간 상태가 아닙니다."
+              rows={[
+                { name: "시간 예약", status: "저장 가능", tone: "green", action: "cron 기반" },
+                { name: "외부 이벤트", status: "저장 가능", tone: "green", action: "서명 검증 + 이벤트 중복 방지" },
+                { name: "파일 도착", status: "준비 중", tone: "amber", action: "후속 설계" },
+                { name: "큐 적재", status: "준비 중", tone: "amber", action: "후속 설계" },
+              ]}
+            />
+            {notificationRouting}
+            {opsAlertCenter}
+          </div>
+        </section>
+      )}
+
+      {activeSection === "readiness" && productionReadinessPanel}
+
+      {activeSection === "external" && (
+        <section className="panel" aria-label="외부 전달">
+          <div className="panel-head">
+            <h2>외부 전달</h2>
+          </div>
+          <div className="orchestration-grid">{integrationHandoffPanel}</div>
+        </section>
+      )}
     </div>
   );
 }

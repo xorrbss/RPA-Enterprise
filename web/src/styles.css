@@ -166,7 +166,27 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .empty-state .es-icon, .error-state .es-icon { width: 40px; height: 40px; border-radius: 999px; display: grid; place-items: center; background: var(--soft); }
 .error-state .es-icon { background: var(--red-soft); color: var(--red); }
 .empty-state strong, .error-state strong { color: var(--text); font-size: 14px; }
+.technical-details { width: min(640px, 100%); text-align: left; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 8px 10px; }
+.technical-details summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; }
+.technical-details pre { margin: 8px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .skeleton { padding: 24px 16px; color: var(--muted); }
+
+.section-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; padding: 12px 16px; }
+.section-tab { min-width: 0; text-align: left; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--text); padding: 10px 12px; display: grid; gap: 4px; cursor: pointer; }
+.section-tab:hover { border-color: var(--blue); background: var(--blue-soft); }
+.section-tab.active { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); background: var(--surface); }
+.section-tab strong, .section-tab span { overflow-wrap: anywhere; }
+.section-tab span { color: var(--muted); font-size: 12px; }
+
+.security-view { display: grid; gap: 12px; }
+.security-hub .panel-head { border-bottom: 0; }
+.security-section-summary, .section-access-notice { padding: 12px 16px; display: grid; gap: 5px; }
+.security-section-summary p, .section-access-notice p { margin: 0; }
+
+.adoption-readiness { overflow: hidden; }
+.adoption-gates { list-style: none; margin: 0; padding: 0 16px 16px; display: grid; gap: 8px; }
+.adoption-gates li { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 10px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.adoption-gates strong, .adoption-gates span { overflow-wrap: anywhere; }
 
 /* 지표 카드 = 드릴다운 버튼(죽은 대시보드 → 진입점). .metric 카드 외형 + 버튼 리셋 + 호버 강조 */
 .metric-link { display: flex; flex-direction: column; align-items: flex-start; width: 100%; text-align: left; font: inherit; color: var(--text); cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
@@ -520,6 +540,8 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 }
 @media (max-width: 760px) {
   .page-state-row { grid-template-columns: 1fr; }
+  .adoption-gates li { grid-template-columns: 1fr; align-items: start; }
+  .section-tabs { grid-template-columns: 1fr; }
 }
 
 .slide-over { position: fixed; top: 73px; right: 16px; bottom: 16px; width: min(720px, calc(100vw - 32px)); z-index: 30; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: 0 20px 60px rgba(15, 23, 42, .18); display: flex; flex-direction: column; overflow: hidden; }
@@ -571,6 +593,10 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .policy-fields .check-field { display: inline-flex; grid-template-columns: none; align-items: center; gap: 8px; }
 
 .scenario-generator { margin-bottom: 12px; }
+.scenario-create-strip { padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.scenario-create-strip h2 { font-size: 16px; margin: 0 0 4px; }
+.scenario-create-strip p { margin: 0; }
+.scenario-create-actions { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .scenario-generator-body { padding: 14px 16px 16px; display: grid; gap: 12px; }
 .prompt-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .prompt-example-chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
@@ -608,6 +634,7 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .notice.warning { background: var(--amber-soft); color: var(--amber-ink); }
 .document-idp .panel-body { display: grid; gap: 12px; padding: 12px 16px 16px; }
 .document-idp h3 { margin: 2px 0 0; font-size: 13px; }
+.document-source-flow { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 10px 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .document-field-editor { display: grid; gap: 10px; }
 .document-field-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .document-field-editor-head > div { display: grid; gap: 3px; }

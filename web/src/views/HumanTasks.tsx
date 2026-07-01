@@ -11,7 +11,7 @@ import { FilterSelect } from "../components/FilterSelect";
 import { HumanTaskReviewPanel } from "../components/HumanTaskReviewPanel";
 import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, kindLabel, statusLabel } from "../components/badges";
-import { ErrorState, Loading } from "../components/states";
+import { ErrorState, Loading, desktopStateForError } from "../components/states";
 import { mergeParams, navigate, useHashIdParam, useHashParam } from "../router";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
 import type { HumanTaskItem } from "../api/types";
@@ -374,12 +374,18 @@ function HumanTaskDetailPanel({
   principalOptions: readonly { value: string; label?: string }[];
   onClose: () => void;
 }): JSX.Element {
+  const errorState = detail.isError ? desktopStateForError(detail.error) : null;
   return (
     <SlideOver title={`검토 업무 상세 — ${humanTaskRef(humanTaskId)}`} onClose={onClose}>
       {detail.isLoading ? (
         <Loading />
       ) : detail.isError ? (
-        <ErrorState message="검토 업무를 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
+        <ErrorState
+          title={errorState?.title}
+          message={`검토 업무를 확인하지 못했습니다. ${errorState?.message ?? ""}`}
+          details={errorState?.details}
+          onRetry={() => void detail.refetch()}
+        />
       ) : detail.data !== undefined ? (
         <>
           <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", margin: 0 }}>

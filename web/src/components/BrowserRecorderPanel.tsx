@@ -7,13 +7,14 @@ import {
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
+import { navigate } from "../router";
 import type {
   BrowserRecordingSession,
   ScenarioMutationResult,
   SiteItem,
 } from "../api/types";
 import { errorLabel } from "./badges";
-import { ErrorState, Loading } from "./states";
+import { EmptyState, ErrorState, Loading, desktopStateForError } from "./states";
 import { RecordingDraftPreview } from "./browser-recorder/RecordingDraftPreview";
 import { RecordingWorkbench } from "./browser-recorder/RecordingWorkbench";
 import {
@@ -178,6 +179,7 @@ export function BrowserRecorderPanel(): JSX.Element {
     (selectedSession !== null && selectedSession.draft_ir !== null
       ? selectedSession
       : null);
+  const siteErrorState = sitesQuery.isError ? desktopStateForError(sitesQuery.error) : null;
 
   return (
     <section
@@ -199,13 +201,21 @@ export function BrowserRecorderPanel(): JSX.Element {
         <Loading />
       ) : sitesQuery.isError ? (
         <ErrorState
-          message="녹화할 사이트 목록을 불러오지 못했습니다. 사이트가 없으면 보안/개인정보 화면에서 먼저 등록하고, 계속 실패하면 API 연결 또는 권한을 확인하세요."
+          title={siteErrorState?.title}
+          message={`녹화할 사이트 목록을 확인하지 못했습니다. ${siteErrorState?.message ?? ""}`}
+          details={siteErrorState?.details}
           onRetry={() => void sitesQuery.refetch()}
         />
       ) : sites.length === 0 ? (
-        <p className="empty-state">
-          먼저 보안 메뉴에서 자동화할 웹 사이트를 등록하세요.
-        </p>
+        <EmptyState
+          title="설정 필요"
+          message="녹화할 웹 사이트가 아직 등록되지 않았습니다."
+          action={
+            <button className="btn primary" type="button" onClick={() => navigate("security", { section: "sites" })}>
+              사이트 등록하러 가기
+            </button>
+          }
+        />
       ) : (
         <>
           <div className="browser-recorder-grid">

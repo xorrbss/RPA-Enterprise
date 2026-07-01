@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -12,7 +12,7 @@ import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
 import { errorLabel } from "../components/badges";
-import { navigate, useHashParam } from "../router";
+import { navigate } from "../router";
 import type {
   ScenarioCertification,
   ScenarioEnvironmentBinding,
@@ -38,30 +38,45 @@ export function ScenariosView(): JSX.Element {
   const [form, setForm] = useState<ScenarioFormMode | null>(null);
   const [versionsFor, setVersionsFor] = useState<ScenarioItem | null>(null);
   const [releasesFor, setReleasesFor] = useState<ScenarioItem | null>(null);
-  // 'AI로 설명해서 만들기'(자연어 생성기) 펼침 — 기본 진입은 '+ 새 자동화 만들기'(쉬운 만들기), AI 생성기는 접어 둔다.
-  // 단 사이트 등록→생성 prefill·Playground 'AI로 만들기' 딥링크로 들어오면 자동 펼침(접힌 채면 prefill이 묻혀 dead-end).
-  const prefillSite = useHashParam("site");
-  const prefillStartUrl = useHashParam("start_url");
-  const prefillBrowser = useHashParam("browser_identity");
-  const prefillNetwork = useHashParam("network_policy");
-  const prefillCreator = useHashParam("creator");
-  const aiDeepLinked =
-    prefillSite !== null || prefillStartUrl !== null || prefillBrowser !== null || prefillNetwork !== null || prefillCreator === "ai";
-  const [aiOpen, setAiOpen] = useState(aiDeepLinked);
-  useEffect(() => {
-    if (aiDeepLinked) setAiOpen(true);
-  }, [aiDeepLinked]);
+  const recorderRef = useRef<HTMLDivElement | null>(null);
+
+  function focusNaturalLanguageInput(): void {
+    const target = document.getElementById("scenario-natural-language-request");
+    target?.focus();
+    target?.scrollIntoView?.({ block: "center" });
+  }
+
+  function focusRecorder(): void {
+    recorderRef.current?.scrollIntoView?.({ block: "start" });
+  }
 
   return (
     <div>
       {can("scenario.promote.approve") && <PromotionInbox />}
       {can("scenario.create") && (
-        <details className="ai-creator" open={aiOpen} onToggle={(event) => setAiOpen((event.currentTarget as HTMLDetailsElement).open)}>
-          <summary>AI로 설명해서 만들기 — 하고 싶은 일을 문장으로 적으면 자동으로 만들어 줍니다</summary>
+        <>
+          <section className="panel scenario-create-strip" aria-label="자동화 제작 시작">
+            <div>
+              <h2>자동화 제작 시작</h2>
+              <p className="subtle">말로 시작해 초안을 만들고, 필요하면 로컬 브라우저 녹화로 보완합니다.</p>
+            </div>
+            <span className="scenario-create-actions">
+              <button className="btn primary" type="button" onClick={focusNaturalLanguageInput}>
+                자동화 초안 만들기
+              </button>
+              <button className="btn" type="button" onClick={focusRecorder}>
+                브라우저 녹화로 만들기
+              </button>
+            </span>
+          </section>
           <PromptScenarioGenerator />
-        </details>
+        </>
       )}
-      {can("scenario.create") && <BrowserRecorderPanel />}
+      {can("scenario.create") && (
+        <div ref={recorderRef}>
+          <BrowserRecorderPanel />
+        </div>
+      )}
       {can("scenario.create") && (
         <div style={{ marginBottom: 12 }}>
           <button className="btn" type="button" onClick={() => setForm({ kind: "create" })} disabled={form?.kind === "create"}>
@@ -75,11 +90,12 @@ export function ScenariosView(): JSX.Element {
         query={scenarioList.query}
         pager={scenarioList.pager}
         rowKey={(r) => r.scenario_id}
-        emptyMessage="저장된 자동화가 없습니다. ‘새 자동화 만들기’로 시작하세요."
+        emptyTitle="첫 실행 전"
+        emptyMessage="저장된 자동화가 없습니다. 문장으로 초안을 만든 뒤 테스트 실행까지 이어가세요."
         emptyAction={
           can("scenario.create") ? (
-            <button className="btn primary" type="button" onClick={() => setForm({ kind: "create" })} disabled={form?.kind === "create"}>
-              + 첫 자동화 만들기
+            <button className="btn primary" type="button" onClick={focusNaturalLanguageInput}>
+              자동화 초안 만들기
             </button>
           ) : undefined
         }

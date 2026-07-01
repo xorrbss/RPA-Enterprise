@@ -7,7 +7,7 @@ import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, statusLabel, errorCodeLabel } from "../components/badges";
-import { ErrorState, Loading } from "../components/states";
+import { ErrorState, Loading, desktopStateForError } from "../components/states";
 import { mergeParams, navigate, useHashIdParam } from "../router";
 import { WORKITEM_STATES } from "./filters";
 import type { DeadLetterItem, WorkitemItem } from "../api/types";
@@ -173,12 +173,18 @@ function WorkitemDetailPanel({
   detail: UseQueryResult<WorkitemItem>;
   onClose: () => void;
 }): JSX.Element {
+  const errorState = detail.isError ? desktopStateForError(detail.error) : null;
   return (
     <SlideOver title="작업항목 상세" onClose={onClose}>
       {detail.isLoading ? (
         <Loading />
       ) : detail.isError ? (
-        <ErrorState message="작업 항목을 불러오지 못했습니다." onRetry={() => void detail.refetch()} />
+        <ErrorState
+          title={errorState?.title}
+          message={`작업 항목을 확인하지 못했습니다. ${errorState?.message ?? ""}`}
+          details={errorState?.details}
+          onRetry={() => void detail.refetch()}
+        />
       ) : detail.data !== undefined ? (
         <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", margin: 0 }}>
           <dt className="subtle">상태</dt>

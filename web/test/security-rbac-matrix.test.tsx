@@ -28,7 +28,7 @@ function jwt(roles: readonly string[]): string {
 
 describe("security RBAC matrix panel", () => {
   beforeEach(() => {
-    location.hash = "#security";
+    location.hash = "#security?section=access";
     localStorage.setItem("rpa.token", jwt(["operator", "legacy_role"]));
   });
 

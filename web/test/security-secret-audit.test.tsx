@@ -50,7 +50,7 @@ function auditItem(overrides: Partial<AuditLogItem>): AuditLogItem {
 
 describe("security SecretRef audit panel", () => {
   beforeEach(() => {
-    location.hash = "#security";
+    location.hash = "#security?section=secrets";
     localStorage.setItem("rpa.token", jwt(["operator"]));
   });
 

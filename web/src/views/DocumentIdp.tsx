@@ -19,8 +19,7 @@ import {
 } from "../api/types";
 import { useListView } from "../api/useListView";
 import { mergeParams, navigate, useHashIdParam } from "../router";
-import { errorLabel } from "../components/badges";
-import { EmptyState, ErrorState, Loading } from "../components/states";
+import { EmptyState, ErrorState, Loading, desktopStateForError } from "../components/states";
 
 type FieldPreset = "invoice" | "contract";
 type PickerPage<T> = { readonly items: readonly T[]; readonly truncated: boolean };
@@ -55,6 +54,11 @@ const STATUS_FILTERS: readonly { value: "" | DocumentJobStatus; label: string }[
   { value: "validated", label: "검증 완료" },
   { value: "failed", label: "실패" },
 ];
+
+function ClassifiedErrorState({ error, message, onRetry }: { error: unknown; message: string; onRetry?: () => void }): JSX.Element {
+  const state = desktopStateForError(error);
+  return <ErrorState title={state.title} message={`${message} ${state.message}`} details={state.details} onRetry={onRetry} />;
+}
 
 async function collectPickerPages<T>(
   fetcher: (params: ListParams) => Promise<{ items: readonly T[]; next_cursor: string | null }>,
@@ -94,6 +98,7 @@ export function DocumentIdpView(): JSX.Element {
   const [preset, setPreset] = useState<FieldPreset>("invoice");
   const [fields, setFields] = useState<DocumentFieldSchema[]>(() => cloneFields(FIELD_PRESETS.invoice));
   const [message, setMessage] = useState<string | null>(null);
+  const [templateMode, setTemplateMode] = useState(false);
 
   const recentRuns = useQuery({
     queryKey: ["document-idp", "runs"],
@@ -188,6 +193,7 @@ export function DocumentIdpView(): JSX.Element {
     && sourceArtifactId.trim().length > 0
     && !runArtifacts.isError
     && fieldValidation === null;
+  const fieldEditorVisible = templateMode || sourceArtifactId.trim().length > 0;
 
   const extractJob = useMutation({
     mutationFn: (jobId: string) => api.extractDocumentJob(jobId, crypto.randomUUID()),
@@ -228,6 +234,9 @@ export function DocumentIdpView(): JSX.Element {
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn" type="button" onClick={() => navigate("connectorCatalog")}>템플릿 보기</button>
+            <button className="btn" type="button" onClick={() => setTemplateMode((value) => !value)}>
+              {templateMode ? "템플릿 편집 닫기" : "템플릿 편집"}
+            </button>
             <button className="btn" type="button" onClick={() => navigate("humanTasks")}>검증 큐</button>
           </div>
         </div>
@@ -294,10 +303,34 @@ export function DocumentIdpView(): JSX.Element {
               </button>
             </div>
           </div>
-          <FieldSchemaEditor fields={fields} onChange={setFields} />
-          {fieldValidation !== null && <p className="notice warning" role="alert">{fieldValidation}</p>}
+          <div className="document-source-flow" aria-label="문서 소스 기반 추출 설정">
+            <span className={`badge ${sourceArtifactId.trim().length > 0 ? "green" : "amber"}`}>
+              {sourceArtifactId.trim().length > 0 ? "소스 선택됨" : "소스 필요"}
+            </span>
+            <span className="subtle">
+              {sourceArtifactId.trim().length > 0
+                ? "선택한 실행 산출물 기준으로 필드 템플릿을 조정합니다."
+                : "실행 산출물을 선택하면 필드 편집기가 열립니다."}
+            </span>
+          </div>
+          {fieldEditorVisible ? (
+            <>
+              <FieldSchemaEditor fields={fields} onChange={setFields} />
+              {fieldValidation !== null && <p className="notice warning" role="alert">{fieldValidation}</p>}
+            </>
+          ) : (
+            <EmptyState
+              title="설정 필요"
+              message="문서 소스 산출물을 먼저 선택하세요. 기존 템플릿만 수정하려면 템플릿 편집을 여세요."
+              action={
+                <button className="btn" type="button" onClick={() => navigate("runTrace")}>
+                  실행 산출물 찾기
+                </button>
+              }
+            />
+          )}
           {message !== null && <p className="notice success" role="status">{message}</p>}
-          {createJob.isError && <ErrorState message={errorLabel(createJob.error)} />}
+          {createJob.isError && <ClassifiedErrorState error={createJob.error} message="문서 추출 작업을 만들지 못했습니다." />}
         </div>
       </section>
 
@@ -317,9 +350,9 @@ export function DocumentIdpView(): JSX.Element {
           {list.query.isLoading ? (
             <Loading />
           ) : list.query.isError ? (
-            <ErrorState message={errorLabel(list.query.error)} onRetry={() => void list.query.refetch()} />
+            <ClassifiedErrorState error={list.query.error} message="문서 작업 목록을 확인하지 못했습니다." onRetry={() => void list.query.refetch()} />
           ) : (list.query.data?.items.length ?? 0) === 0 ? (
-            <EmptyState message="문서 작업이 없습니다." />
+            <EmptyState title="첫 실행 전" message="문서 작업이 없습니다." />
           ) : (
             <div className="table-wrap">
               <table className="ops-table">
@@ -559,9 +592,9 @@ function DocumentDetail(props: {
         </div>
         <h3>추출 결과</h3>
         {props.extractionError !== null && isExtractionNotFound(props.extractionError) ? (
-          <EmptyState message="아직 저장된 추출 결과가 없습니다." action={<button className="btn" type="button" onClick={() => props.onExtract(props.job!.document_job_id)}>지금 추출</button>} />
+          <EmptyState title="첫 실행 전" message="아직 저장된 추출 결과가 없습니다." action={<button className="btn" type="button" onClick={() => props.onExtract(props.job!.document_job_id)}>지금 추출</button>} />
         ) : props.extractionError !== null ? (
-          <ErrorState message={`추출 결과를 불러오지 못했습니다. ${errorLabel(props.extractionError)}`} onRetry={props.onRetryExtraction} />
+          <ClassifiedErrorState error={props.extractionError} message="추출 결과를 확인하지 못했습니다." onRetry={props.onRetryExtraction} />
         ) : props.extraction === null ? (
           <Loading />
         ) : (
@@ -727,7 +760,7 @@ function ExternalExtractionForm(props: {
         </table>
       </div>
       {shouldShowValidationMessage && <p className="notice warning" role="alert">{validationMessage}</p>}
-      {props.error !== null && <ErrorState message={errorLabel(props.error)} />}
+      {props.error !== null && <ClassifiedErrorState error={props.error} message="외부 IDP 결과를 등록하지 못했습니다." />}
       <div>
         <button className="btn primary" type="submit" disabled={!canSubmit}>
           {props.isPending ? "등록 중" : "외부 결과 등록"}

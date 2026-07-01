@@ -70,7 +70,7 @@ const QUICK_ACTIONS: readonly QuickActionSpec[] = [
     label: "Credential 관리 열기",
     hint: "보안 화면의 Credential 관리 영역으로 이동",
     view: "security",
-    params: { focus: "credentials" },
+    params: { section: "secrets", focus: "credentials" },
     keywords: ["credential", "credentials", "secret", "secrets", "password", "자격증명", "비밀", "시크릿", "계정", "보안"],
   },
   {
@@ -78,7 +78,7 @@ const QUICK_ACTIONS: readonly QuickActionSpec[] = [
     label: "Worker Pool 관리 열기",
     hint: "보안 화면의 Worker Pool 관리 영역으로 이동",
     view: "security",
-    params: { focus: "worker-pools" },
+    params: { section: "infra", focus: "worker-pools" },
     keywords: ["worker pool", "worker pools", "pool", "workers", "bot pool", "워커", "풀", "작업자", "봇풀", "보안"],
   },
   {
@@ -122,11 +122,11 @@ function navigateSearchItem(item: GlobalSearchItem): void {
   if (item.type === "run") navigate("runTrace", { run: item.id });
   else if (item.type === "scenario") navigate("playground", { scenario: item.id });
   else if (item.type === "human_task") navigate("humanTasks", { ht: item.id });
-  else if (item.type === "principal") navigate("security", { principal: item.id });
+  else if (item.type === "principal") navigate("security", { section: "access", principal: item.id });
   else if (item.type === "credential") {
     const [siteProfileId, ...rest] = item.id.split(":");
     if (siteProfileId === undefined) return;
-    navigate("security", { credential_site: siteProfileId, credential: rest.join(":") });
+    navigate("security", { section: "secrets", credential_site: siteProfileId, credential: rest.join(":") });
   }
 }
 
@@ -315,7 +315,7 @@ export function CommandPalette({
               label: p.display_name,
               hint: p.email ?? p.sub,
               run: () => {
-                navigate("security", { principal: p.principal_id });
+                navigate("security", { section: "access", principal: p.principal_id });
                 onClose();
               },
             }));
@@ -357,7 +357,7 @@ export function CommandPalette({
               label: credentialLabel(c),
               hint: c.site_name ?? c.site_profile_id,
               run: () => {
-                navigate("security", { credential: c.credential_ref, credential_site: c.site_profile_id });
+                navigate("security", { section: "secrets", credential: c.credential_ref, credential_site: c.site_profile_id });
                 onClose();
               },
             }));
