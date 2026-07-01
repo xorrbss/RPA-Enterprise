@@ -243,6 +243,53 @@ function apiFixture(url: URL): unknown {
       ],
     };
   }
+  // 도입 준비 게이트(Dashboard adoption-readiness) — auth/production readiness 를 '준비됨'으로 스텁.
+  // (미스텁 시 폴백 {items:[]} 이 반환돼 auth.operational_gaps / production.summary 를 읽다 Dashboard 가 크래시)
+  if (pathname === "/api/v1/auth/readiness") {
+    return {
+      status: "ok",
+      enterprise_sso_ready: true,
+      provider: {
+        mode: "hs256",
+        configuration_source: "test_default",
+        algorithm: "HS256",
+        jwks_url_configured: false,
+        jwks_host: null,
+        issuer_configured: true,
+        issuer: "rpa-e2e",
+        audience_configured: true,
+        audience: "rpa-console",
+      },
+      claim_mapping: {
+        subject_claim: "sub",
+        tenant_claim: "tenant_id",
+        roles_claim: "roles",
+        expiry_claim: "exp",
+        display_name_claim: "name",
+        email_claim: "email",
+      },
+      role_mapping: { configured: true, mapped_values: 5 },
+      required_claims: [],
+      current_principal: {
+        subject_id: "e2e-subject",
+        tenant_id: "00000000-0000-4000-8000-0000000000a1",
+        roles: ["admin"],
+        source: "jwt",
+        display_name: null,
+        email: null,
+      },
+      operational_gaps: [],
+    };
+  }
+  if (pathname === "/api/v1/ops/production-readiness") {
+    return {
+      status: "ready",
+      evaluated_at: "2026-06-24T09:00:00.000Z",
+      environment: { target: "controlled_prod", tenant_id: "00000000-0000-4000-8000-0000000000a1" },
+      summary: { controlled_prod_ready: true, status: "ready", blocker_count: 0, warning_count: 0, deferred_count: 0 },
+      gates: [],
+    };
+  }
   // human-tasks / dlq / sites / scenarios 등 → 빈 페이지(정직)
   return { items: [], next_cursor: null };
 }
@@ -290,8 +337,10 @@ async function waitForDashboardSeed(
         const body = document.body.innerText;
         if (body.includes("화면을 표시하지 못했습니다")) return "error-boundary";
 
+        // 패널 제목(h2)이 정확히 '최근 실행'인 QueryPanel 을 잡는다. 도입 준비 패널의 본문 문구
+        //   ('최근 실행 증거가 연결되어 있습니다')가 substring 매칭에 먼저 걸리는 오탐을 피한다.
         const recentPanel = Array.from(document.querySelectorAll("section"))
-          .find((section) => (section.textContent ?? "").includes("최근 실행"));
+          .find((section) => (section.querySelector(".panel-head h2, h2")?.textContent ?? "").trim() === "최근 실행");
         if (recentPanel === undefined) return false;
 
         const panelText = recentPanel.textContent ?? "";
@@ -402,16 +451,24 @@ async function main(): Promise<void> {
       }
     });
 
-    // 1) 기본 라우트(dashboard) 부팅 + 시드 실행 렌더
+    // 1) 부팅 → 로그인 랜딩은 '내 할 일'(myWork).
     await page.goto(`${base}/`, { waitUntil: "networkidle0", timeout: 30_000 });
     await page.waitForSelector("h1", { timeout: 15_000 });
+    const landingTitle = await page.$eval("h1", (el) => el.textContent ?? "");
+    check("부팅 랜딩 = 내 할 일(myWork)", landingTitle === "내 할 일", landingTitle);
+
+    // 1b) #dashboard 로 전체 이동 → 시드 실행 렌더(대시보드는 더 이상 기본 랜딩이 아니라 명시 이동).
+    await page.goto(`${base}/#dashboard`, { waitUntil: "networkidle0", timeout: 30_000 });
     await waitForDashboardSeed(page, apiRequests, pageErrors, consoleErrors);
     const dash = await page.evaluate(() => document.body.innerText);
     const dashboardTitle = await page.$eval("h1", (el) => el.textContent ?? "");
     check("dashboard 부팅 + 운영 대시보드 제목", dashboardTitle === "RPA 운영 대시보드", dashboardTitle);
     check("dashboard 최근 실행 행 렌더", dash.includes("상세 보기") || dash.includes(SEEDED_RUN_ID.slice(0, 8)), dash.slice(0, 300));
     check("시드 실행이 '실행 중'으로 표시(StatusBadge 한국어 라벨)", dash.includes("실행 중"), dash.slice(0, 200));
-    check("사이드바 18 nav 렌더", await page.$$eval("nav.sidebar button", (b) => b.length) === 18);
+    // e2e-token 은 역할 클레임이 없어(roles=[]) 역할 스코프 nav(Phase 15)가 viewer 폴백을 렌더한다:
+    //   내 할 일·사람 확인·작업 목록·실행 기록·대시보드 = 5개(생명주기 그룹 재편 후). 로그인 랜딩은 myWork.
+    const navBtnCount = await page.$$eval("nav.sidebar button", (b) => b.length);
+    check("사이드바 역할 스코프 nav 렌더(viewer 5개)", navBtnCount === 5, String(navBtnCount));
 
     // 2) 해시 라우팅 → workitems, 시드 작업항목 렌더
     await page.evaluate(() => {

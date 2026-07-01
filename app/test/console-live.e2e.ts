@@ -241,8 +241,9 @@ async function main(): Promise<void> {
       }
     }, token);
 
-    // dashboard: 실 API에서 시드 run(running) 렌더 — StatusBadge가 한국어 라벨('실행 중')로 표시
-    await page.goto(`${base}/`, { waitUntil: "networkidle0", timeout: 30_000 });
+    // dashboard: 실 API에서 시드 run(running) 렌더 — StatusBadge가 한국어 라벨('실행 중')로 표시.
+    // 로그인 랜딩은 '내 할 일'(myWork)이라 대시보드는 #dashboard 로 명시 이동.
+    await page.goto(`${base}/#dashboard`, { waitUntil: "networkidle0", timeout: 30_000 });
     await page.waitForFunction(() => document.body.innerText.includes("실행 중"), { timeout: 15_000 });
     check("실 API read → 시드 run('실행 중') 렌더", (await page.evaluate(() => document.body.innerText)).includes("실행 중"));
 
