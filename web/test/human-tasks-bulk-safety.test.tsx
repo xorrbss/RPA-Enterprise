@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -66,5 +66,32 @@ describe("HumanTasks 일괄 동작 안전성", () => {
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
 
     expect(await screen.findByText("1건 지정 실패 — 1건은 처리됨")).toBeInTheDocument();
+  });
+
+  test("일괄 승인: 구조화 검토·타인 배정 업무는 제외하고, 배정→시작→승인(decision=approve) 체인으로 처리", async () => {
+    // 대상 = PLAIN(open, 양식/증빙 없음) + MINE(in_progress, 내게 배정). DOC(증빙=구조화)와 OTHER(타인 배정)는 제외 → 2건.
+    const MINE = { human_task_id: "73000000-0000-0000-0000-0000000000b3", state: "in_progress", kind: "approval", assignee: "u", timeout: null, on_timeout: "escalate", run_id: null };
+    const OTHER = { human_task_id: "73000000-0000-0000-0000-0000000000c4", state: "in_progress", kind: "approval", assignee: "someone-else", timeout: null, on_timeout: "escalate", run_id: null };
+    const calls: string[] = [];
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({ items: [DOC_TASK, PLAIN_TASK, MINE, OTHER], next_cursor: null }),
+        assignHumanTask: async (id, assignee) => { calls.push(`assign:${id}:${assignee}`); return { human_task_id: id, state: "assigned" }; },
+        startHumanTask: async (id) => { calls.push(`start:${id}`); return { human_task_id: id, state: "in_progress" }; },
+        resolveHumanTask: async (id, _key, result) => { calls.push(`resolve:${id}:${(result as { decision?: string } | undefined)?.decision ?? "none"}`); return {}; },
+      }),
+    );
+    location.hash = "#humanTasks";
+
+    fireEvent.click(await screen.findByRole("button", { name: "현재 목록 2건 일괄 승인" }));
+    fireEvent.click(await screen.findByRole("button", { name: "확인" }));
+
+    // PLAIN(open): 내게 배정(sub=u) → 시작 → 승인. MINE(in_progress): 바로 승인. decision=approve 가 재개 분기에 전달된다.
+    await waitFor(() => expect(calls.filter((c) => c.startsWith("resolve:"))).toHaveLength(2));
+    expect(calls).toContain(`assign:${PLAIN_TASK.human_task_id}:u`);
+    expect(calls).toContain(`start:${PLAIN_TASK.human_task_id}`);
+    expect(calls).toContain(`resolve:${PLAIN_TASK.human_task_id}:approve`);
+    expect(calls).toContain(`resolve:${MINE.human_task_id}:approve`);
+    expect(calls.filter((c) => c.startsWith("resolve:"))).toHaveLength(2); // DOC/OTHER 미승인(제외 확인)
   });
 });

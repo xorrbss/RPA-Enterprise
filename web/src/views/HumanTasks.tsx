@@ -215,6 +215,16 @@ export function HumanTasksView(): JSX.Element {
   // pageItems(필터 미반영) 기준이면 '현재 목록 N건' 라벨과 처리 범위가 어긋나 보이지 않는 업무까지 배정/이관된다(안전 직결).
   const bulkAssignable = visibleItems.filter((t) => t.state === "open" || t.state === "escalated");
   const bulkEscalatable = visibleItems.filter((t) => t.state === "open" || t.state === "assigned" || t.state === "in_progress");
+  // 일괄 승인 대상 — **구조화 검토가 필요 없는**(입력 양식/증빙 없는) 업무만: 양식 검토를 안 보고 blanket 승인하는 것을 차단.
+  //   resolve 는 assignee-identity 스코프(리졸버 sub=assignee 여야 200)라, 미배정(open/escalated)은 체인에서 self-assign 하고
+  //   이미 배정된 업무(assigned/in_progress)는 **내게 배정된 것만** 포함(타인 업무 가로채기 방지). 권한은 kind 별 resolve 로 프리필터.
+  const bulkApprovable = visibleItems.filter(
+    (t) =>
+      !TERMINAL.has(t.state) &&
+      !requiresStructuredReviewInput(t) &&
+      can(`human_task.resolve.${t.kind}`) &&
+      (t.state === "open" || t.state === "escalated" || ((t.state === "assigned" || t.state === "in_progress") && t.assignee === subject)),
+  );
   const canFilterMine = subject !== null && subject.length > 0;
   return (
     <>
@@ -308,6 +318,37 @@ export function HumanTasksView(): JSX.Element {
                 if (failedCount > 0) {
                   const succeededCount = bulkEscalatable.length - failedCount;
                   throw new Error(`${failedCount}건 이관 실패${succeededCount > 0 ? ` — ${succeededCount}건은 처리됨` : ""}`);
+                }
+              }}
+              invalidateKeys={KEYS}
+            />
+          )}
+          {canFilterMine && bulkApprovable.length > 0 && (
+            <ActionButton
+              label={`현재 목록 ${bulkApprovable.length}건 일괄 승인`}
+              action="human_task.assign"
+              confirmText={`선택 없이 현재 목록의 단순 확인 업무 ${bulkApprovable.length}건을 모두 승인 처리합니다. 승인하면 자동화가 이어서 실제 동작을 진행하며 되돌릴 수 없습니다.`}
+              run={async (key) => {
+                // 상태머신 체인(H1→H2→H3): 미배정은 내게 배정 후 시작, 배정됨은 시작, 진행중은 바로 승인. resolve 는
+                //   assignee-identity 스코프라 self-assign 이 선행 필수. 부분 실패 집계 표면화(조용한 false 금지),
+                //   단계별 멱등키(task+step 결정형) → 재시도 안전(이미 지난 단계는 replay/422 로 무해).
+                let failedCount = 0;
+                for (const task of bulkApprovable) {
+                  try {
+                    if (task.state === "open" || task.state === "escalated") {
+                      await api.assignHumanTask(task.human_task_id, subject as string, `${key}:a:${task.human_task_id}`);
+                      await api.startHumanTask(task.human_task_id, `${key}:s:${task.human_task_id}`);
+                    } else if (task.state === "assigned") {
+                      await api.startHumanTask(task.human_task_id, `${key}:s:${task.human_task_id}`);
+                    }
+                    await api.resolveHumanTask(task.human_task_id, `${key}:r:${task.human_task_id}`, { decision: "approve" });
+                  } catch {
+                    failedCount += 1;
+                  }
+                }
+                if (failedCount > 0) {
+                  const succeededCount = bulkApprovable.length - failedCount;
+                  throw new Error(`${failedCount}건 승인 실패${succeededCount > 0 ? ` — ${succeededCount}건은 승인됨` : ""}`);
                 }
               }}
               invalidateKeys={KEYS}
