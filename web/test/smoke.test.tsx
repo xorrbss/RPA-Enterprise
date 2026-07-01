@@ -363,17 +363,13 @@ describe("D7 운영 콘솔 shell", () => {
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
 
-  test("기본 라우트 = dashboard (지표 + 최근 실행)", async () => {
+  test("기본 라우트 = myWork (내 할 일 랜딩)", async () => {
     renderApp();
     expect(
-      screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" }),
+      screen.getByRole("heading", { level: 1, name: "내 할 일" }),
     ).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByText("최근 실행")).toBeInTheDocument(),
-    );
-    // fake 실행이 running 상태로 표시(StatusBadge 한국어 라벨)
-    await waitFor(() =>
-      expect(screen.getByText("실행 중")).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: "자동화 만들기" })).toBeInTheDocument(),
     );
   });
 
@@ -393,12 +389,12 @@ describe("D7 운영 콘솔 shell", () => {
     );
   });
 
-  test("잘못된 해시 → dashboard 폴백", async () => {
+  test("잘못된 해시 → myWork 폴백", async () => {
     renderApp();
     location.hash = "#nonsense";
     await waitFor(() =>
       expect(
-        screen.getByRole("heading", { level: 1, name: "RPA 운영 대시보드" }),
+        screen.getByRole("heading", { level: 1, name: "내 할 일" }),
       ).toBeInTheDocument(),
     );
   });
@@ -444,6 +440,7 @@ describe("D7 운영 콘솔 shell", () => {
   });
 
   test("오류 상태 표면화 (조용한 빈화면 금지)", async () => {
+    location.hash = "#dashboard"; // 대시보드의 listRuns 오류 표면화 테스트 — 랜딩 디폴트=myWork 이므로 명시 이동.
     renderApp(
       fakeClient({
         listRuns: async () => {

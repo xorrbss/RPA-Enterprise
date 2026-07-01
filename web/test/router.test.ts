@@ -25,10 +25,10 @@ describe("viewFromHash — 딥링크 쿼리 파라미터 지원", () => {
     expect(viewFromHash("#workitems?foo=bar")).toBe("workitems");
   });
 
-  test("알 수 없는/빈 해시 → dashboard 폴백(조용한 빈화면 금지)", () => {
-    expect(viewFromHash("#nope")).toBe("dashboard");
-    expect(viewFromHash("")).toBe("dashboard");
-    expect(viewFromHash("#?run=x")).toBe("dashboard");
+  test("알 수 없는/빈 해시 → myWork(디폴트 랜딩) 폴백(조용한 빈화면 금지)", () => {
+    expect(viewFromHash("#nope")).toBe("myWork");
+    expect(viewFromHash("")).toBe("myWork");
+    expect(viewFromHash("#?run=x")).toBe("myWork");
   });
 });
 

@@ -33,6 +33,7 @@ const CREATOR_ROLES: readonly ConsoleRole[] = ["operator", "reviewer", "approver
 const ADVANCED_NON_VIEWER_ROLES: readonly ConsoleRole[] = ["operator", "reviewer", "approver", "admin"];
 
 const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
+  myWork: { standardRoles: ALL_ROLES },
   dashboard: { standardRoles: ALL_ROLES },
   runTrace: { standardRoles: ALL_ROLES },
   workitems: { standardRoles: ALL_ROLES },
@@ -43,7 +44,6 @@ const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
   automationOps: { standardRoles: ["operator", "admin"] },
   documentIdp: { standardRoles: ["operator", "admin"] },
 
-  approvalInbox: { standardRoles: ["reviewer", "approver", "admin"] },
   auditExplorer: { standardRoles: ["approver", "admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
 
   coePipeline: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
@@ -57,14 +57,13 @@ const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
   openGate: { standardRoles: ["admin"], advancedRoles: ["admin"], internalOnly: true },
 };
 
+// 자동화 생명주기 순의 4그룹(내 업무→자동화→현황→설정·점검) — "등록하면 알아서 돌고, 확인할 때만 내 인박스" 멘탈모델을
+// 메뉴 구조로. 결재 인박스는 '사람 확인'의 결재 목록 탭으로 흡수(별도 메뉴 은퇴). 가시성 정책(VIEW_VISIBILITY)은 불변 — 묶음만 재편.
 const NAV_POLICY_GROUPS: readonly VisibleNavGroup[] = [
-  { label: "내 작업", keys: ["dashboard", "humanTasks", "workitems", "approvalInbox"] },
-  { label: "만들기", keys: ["scenarioStudio", "playground"] },
-  { label: "운영", keys: ["runTrace", "automationOps", "documentIdp"] },
-  { label: "고급 제작 도구", keys: ["coePipeline", "connectorCatalog", "objectRepository", "irValidation"] },
-  { label: "확인", keys: ["auditExplorer"] },
-  { label: "관리", keys: ["llmGateway", "security"] },
-  { label: "내부 점검", keys: ["idempotency", "openGate"] },
+  { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
+  { label: "자동화", keys: ["scenarioStudio", "playground", "runTrace", "automationOps", "documentIdp"] },
+  { label: "현황", keys: ["dashboard"] },
+  { label: "설정·점검", keys: ["coePipeline", "connectorCatalog", "objectRepository", "irValidation", "auditExplorer", "llmGateway", "security", "idempotency", "openGate"] },
 ];
 
 function isConsoleRole(role: string): role is ConsoleRole {

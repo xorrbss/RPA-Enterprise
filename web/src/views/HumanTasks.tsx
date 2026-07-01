@@ -2,7 +2,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useApiClient } from "../api/context";
-import { isUuid, useCan, useSubject } from "../api/permissions";
+import { useCan, useSubject } from "../api/permissions";
 import type { ApiClient } from "../api/client";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
@@ -14,6 +14,7 @@ import { StatusBadge, kindLabel, statusLabel } from "../components/badges";
 import { ErrorState, Loading, desktopStateForError } from "../components/states";
 import { mergeParams, navigate, useHashIdParam, useHashParam } from "../router";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
+import { ApprovalInboxView } from "./ApprovalInbox";
 import type { HumanTaskItem } from "../api/types";
 
 const KEYS = [["human-tasks"]] as const;
@@ -97,10 +98,9 @@ function HumanTaskActions({
   const id = task.human_task_id;
   const subject = useSubject();
   // '내 담당으로 지정' 단축 — 현재 토큰 sub로 self-assign(직접입력 없이 가장 흔한 케이스). 검증은 백엔드가 최종 강제.
-  // ⚠ sub는 비-UUID OIDC 식별자(auth0|…·이메일)일 수 있다. 현재는 보수적으로 sub가 UUID일 때만 렌더(isUuid) —
-  //   비-UUID sub의 self-assign 허용은 selfAssign 한정 별개 변경이라 본 PR(담당자 picker) 범위 밖. 비-UUID/부재면
-  //   '담당자 지정'(아래)에서 picker/직접입력으로 처리(조용한 false 금지).
-  const selfAssign = isUuid(subject) ? (
+  //   sub는 비-UUID OIDC 식별자(auth0|…·이메일)여도 무방 — human_tasks.assignee 는 text 컬럼이고 필터도 `= $4::text`
+  //   (uuid 캐스트 없음, principalIdFilter 는 임의 문자열 허용). 과거의 isUuid 보수 가드는 불필요라 제거(비-UUID 실증 테스트 동반).
+  const selfAssign = subject !== null && subject.length > 0 ? (
     <ActionButton
       label="내 담당으로 지정"
       action="human_task.assign"
@@ -170,7 +170,28 @@ function HumanTaskActions({
   );
 }
 
+// 통합 '사람 확인' 인박스 — 소스 탭: 확인 업무(@human_task 스트림) / 결재 목록(수집 아티팩트 리스트, 구 '결재 인박스' 메뉴 흡수).
+// 탭 상태는 해시 파라미터(source)로 보존 → 딥링크·뒤로가기·레거시 #approvalInbox 리다이렉트(#humanTasks?source=approvals) 대응.
+// 소스별 화면은 자식 컴포넌트로 분리(탭 전환 시 훅 순서 불변 — 조건부 훅 금지).
 export function HumanTasksView(): JSX.Element {
+  const source = useHashParam("source");
+  const approvals = source === "approvals";
+  return (
+    <>
+      <div className="quick-actions" style={{ marginBottom: 12 }} aria-label="사람 확인 소스 선택">
+        <button className="btn" type="button" aria-pressed={!approvals} onClick={() => mergeParams({ source: null, ht: null })}>
+          확인 업무
+        </button>
+        <button className="btn" type="button" aria-pressed={approvals} onClick={() => mergeParams({ source: "approvals", ht: null })}>
+          결재 목록
+        </button>
+      </div>
+      {approvals ? <ApprovalInboxView /> : <HumanTaskStreamView />}
+    </>
+  );
+}
+
+function HumanTaskStreamView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const subject = useSubject();
@@ -192,7 +213,8 @@ export function HumanTasksView(): JSX.Element {
   const lv = useListView<HumanTaskItem>(
     ["human-tasks"],
     (p) => api.listHumanTasks(p),
-    { refetchInterval: 5_000, initialFilter: runParam !== null ? { run_id: runParam } : undefined },
+    // 디폴트 = 내게 배정(내 업무 먼저). run_id 딥링크가 있으면 그 우선. sub 부재(미로그인)면 필터 없음.
+    { refetchInterval: 5_000, initialFilter: runParam !== null ? { run_id: runParam } : (subject !== null && subject.length > 0 ? { assignee: subject } : undefined) },
   );
   // 선택 사람확인 업무를 해시(`#humanTasks?ht=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
   const sel = useHashIdParam("ht");
@@ -215,7 +237,17 @@ export function HumanTasksView(): JSX.Element {
   // pageItems(필터 미반영) 기준이면 '현재 목록 N건' 라벨과 처리 범위가 어긋나 보이지 않는 업무까지 배정/이관된다(안전 직결).
   const bulkAssignable = visibleItems.filter((t) => t.state === "open" || t.state === "escalated");
   const bulkEscalatable = visibleItems.filter((t) => t.state === "open" || t.state === "assigned" || t.state === "in_progress");
-  const canFilterMine = isUuid(subject);
+  // 일괄 승인 대상 — **구조화 검토가 필요 없는**(입력 양식/증빙 없는) 업무만: 양식 검토를 안 보고 blanket 승인하는 것을 차단.
+  //   resolve 는 assignee-identity 스코프(리졸버 sub=assignee 여야 200)라, 미배정(open/escalated)은 체인에서 self-assign 하고
+  //   이미 배정된 업무(assigned/in_progress)는 **내게 배정된 것만** 포함(타인 업무 가로채기 방지). 권한은 kind 별 resolve 로 프리필터.
+  const bulkApprovable = visibleItems.filter(
+    (t) =>
+      !TERMINAL.has(t.state) &&
+      !requiresStructuredReviewInput(t) &&
+      can(`human_task.resolve.${t.kind}`) &&
+      (t.state === "open" || t.state === "escalated" || ((t.state === "assigned" || t.state === "in_progress") && t.assignee === subject)),
+  );
+  const canFilterMine = subject !== null && subject.length > 0;
   return (
     <>
       {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} principalOptions={principalOptions} onClose={() => { mergeParams({ ht: null }); }} />}
@@ -246,15 +278,15 @@ export function HumanTasksView(): JSX.Element {
             className="btn"
             type="button"
             disabled={!canFilterMine}
-            title={canFilterMine ? undefined : "현재 로그인 식별자는 담당자 필터 형식으로 사용할 수 없습니다."}
+            title={canFilterMine ? undefined : "로그인이 필요합니다."}
             onClick={() => {
-              // sub가 UUID일 때만(버튼 disabled 가드와 동치) — 비-UUID sub를 assignee 필터로 보내면 백엔드 uuidFilter가 422로 목록을 깨뜨린다.
+              // assignee 필터는 `= $4::text`(any 문자열) — 비-UUID sub 도 안전. 토글: 내게 배정 ↔ 전체.
               if (canFilterMine) lv.setFilter({ ...lv.filter, assignee: lv.filter.assignee === subject ? undefined : subject });
             }}
           >
             {lv.filter.assignee === subject ? "전체 업무 보기" : "내 업무만 보기"}
           </button>
-          {!canFilterMine && <span className="badge amber">내 업무 필터를 쓰려면 담당자 디렉터리 매핑이 필요합니다.</span>}
+          {!canFilterMine && <span className="badge amber">로그인이 필요합니다.</span>}
           <button className="btn" type="button" aria-pressed={dueOnly} onClick={() => setDueOnly((v) => !v)}>
             마감 임박 {dueItems.length}
           </button>
@@ -308,6 +340,37 @@ export function HumanTasksView(): JSX.Element {
                 if (failedCount > 0) {
                   const succeededCount = bulkEscalatable.length - failedCount;
                   throw new Error(`${failedCount}건 이관 실패${succeededCount > 0 ? ` — ${succeededCount}건은 처리됨` : ""}`);
+                }
+              }}
+              invalidateKeys={KEYS}
+            />
+          )}
+          {canFilterMine && bulkApprovable.length > 0 && (
+            <ActionButton
+              label={`현재 목록 ${bulkApprovable.length}건 일괄 승인`}
+              action="human_task.assign"
+              confirmText={`선택 없이 현재 목록의 단순 확인 업무 ${bulkApprovable.length}건을 모두 승인 처리합니다. 승인하면 자동화가 이어서 실제 동작을 진행하며 되돌릴 수 없습니다.`}
+              run={async (key) => {
+                // 상태머신 체인(H1→H2→H3): 미배정은 내게 배정 후 시작, 배정됨은 시작, 진행중은 바로 승인. resolve 는
+                //   assignee-identity 스코프라 self-assign 이 선행 필수. 부분 실패 집계 표면화(조용한 false 금지),
+                //   단계별 멱등키(task+step 결정형) → 재시도 안전(이미 지난 단계는 replay/422 로 무해).
+                let failedCount = 0;
+                for (const task of bulkApprovable) {
+                  try {
+                    if (task.state === "open" || task.state === "escalated") {
+                      await api.assignHumanTask(task.human_task_id, subject as string, `${key}:a:${task.human_task_id}`);
+                      await api.startHumanTask(task.human_task_id, `${key}:s:${task.human_task_id}`);
+                    } else if (task.state === "assigned") {
+                      await api.startHumanTask(task.human_task_id, `${key}:s:${task.human_task_id}`);
+                    }
+                    await api.resolveHumanTask(task.human_task_id, `${key}:r:${task.human_task_id}`, { decision: "approve" });
+                  } catch {
+                    failedCount += 1;
+                  }
+                }
+                if (failedCount > 0) {
+                  const succeededCount = bulkApprovable.length - failedCount;
+                  throw new Error(`${failedCount}건 승인 실패${succeededCount > 0 ? ` — ${succeededCount}건은 승인됨` : ""}`);
                 }
               }}
               invalidateKeys={KEYS}

@@ -22,50 +22,52 @@ function visible(roles: readonly string[], mode: "standard" | "advanced" = "stan
 
 describe("Phase 15 nav policy", () => {
   test("viewer standard nav is read-only and compact", () => {
-    expect(visible(["viewer"])).toEqual(["dashboard", "humanTasks", "workitems", "runTrace"]);
+    // 생명주기 그룹 순서: 내 업무(myWork/humanTasks/workitems) → 자동화(runTrace) → 현황(dashboard).
+    expect(visible(["viewer"])).toEqual(["myWork", "humanTasks", "workitems", "runTrace", "dashboard"]);
   });
 
-  test("operator standard nav exposes the Phase 15 eight-item IA", () => {
+  test("operator standard nav exposes the lifecycle IA (내 업무→자동화→현황)", () => {
     expect(getVisibleNavGroups(ctx(["operator"]))).toEqual([
-      { label: "내 작업", keys: ["dashboard", "humanTasks", "workitems"] },
-      { label: "만들기", keys: ["scenarioStudio", "playground"] },
-      { label: "운영", keys: ["runTrace", "automationOps", "documentIdp"] },
+      { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
+      { label: "자동화", keys: ["scenarioStudio", "playground", "runTrace", "automationOps", "documentIdp"] },
+      { label: "현황", keys: ["dashboard"] },
     ]);
   });
 
   test("reviewer and approver standard nav stay role-scoped", () => {
+    // 결재 인박스 메뉴는 은퇴 — 결재 목록은 '사람 확인'의 소스 탭으로 흡수(별도 뷰키 없음).
     expect(visible(["reviewer"])).toEqual([
-      "dashboard",
+      "myWork",
       "humanTasks",
       "workitems",
-      "approvalInbox",
       "scenarioStudio",
       "playground",
       "runTrace",
+      "dashboard",
     ]);
     expect(visible(["approver"])).toEqual([
-      "dashboard",
+      "myWork",
       "humanTasks",
       "workitems",
-      "approvalInbox",
       "scenarioStudio",
       "playground",
       "runTrace",
+      "dashboard",
       "auditExplorer",
     ]);
   });
 
   test("admin sees management and diagnostic views, except internal open gate without flag", () => {
     expect(visible(["admin"])).toEqual([
-      "dashboard",
+      "myWork",
       "humanTasks",
       "workitems",
-      "approvalInbox",
       "scenarioStudio",
       "playground",
       "runTrace",
       "automationOps",
       "documentIdp",
+      "dashboard",
       "coePipeline",
       "connectorCatalog",
       "objectRepository",
@@ -104,7 +106,7 @@ describe("Phase 15 nav policy", () => {
     expect(hasAdvancedNav({ roles: ["operator"], flags })).toBe(true);
     const views = visible(["operator"], "advanced");
     expect(views).toEqual([
-      "dashboard",
+      "myWork",
       "humanTasks",
       "workitems",
       "scenarioStudio",
@@ -112,6 +114,7 @@ describe("Phase 15 nav policy", () => {
       "runTrace",
       "automationOps",
       "documentIdp",
+      "dashboard",
       "coePipeline",
       "connectorCatalog",
       "objectRepository",

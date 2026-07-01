@@ -20,7 +20,7 @@ const RBAC_ACTION_LABELS: Partial<Record<RbacActionKey, string>> = {
   "human_task.resolve.validation": "검증 업무 완료",
   "human_task.resolve.approval": "승인 업무 완료",
   "site.approve": "고위험 사이트 승인",
-  "approval.decide": "결재 인박스 처리",
+  "approval.decide": "결재 목록 처리",
   "scenario.create": "시나리오 작성",
   "scenario.promote": "운영 버전 승격",
   "scenario_release.read": "릴리스 조회",

@@ -15,7 +15,7 @@ const DocumentIdpView = lazy(() => import("./views/DocumentIdp").then((module) =
 const RunTraceView = lazy(() => import("./views/RunTrace").then((module) => ({ default: module.RunTraceView })));
 const WorkitemsView = lazy(() => import("./views/Workitems").then((module) => ({ default: module.WorkitemsView })));
 const HumanTasksView = lazy(() => import("./views/HumanTasks").then((module) => ({ default: module.HumanTasksView })));
-const ApprovalInboxView = lazy(() => import("./views/ApprovalInbox").then((module) => ({ default: module.ApprovalInboxView })));
+const MyWorkView = lazy(() => import("./views/MyWork").then((module) => ({ default: module.MyWorkView })));
 const AuditExplorerView = lazy(() => import("./views/AuditExplorer").then((module) => ({ default: module.AuditExplorerView })));
 const SecurityView = lazy(() => import("./views/Security").then((module) => ({ default: module.SecurityView })));
 const GatewayView = lazy(() => import("./views/Gateway").then((module) => ({ default: module.GatewayView })));
@@ -28,6 +28,8 @@ const IdempotencyView = lazy(() => import("./views/Idempotency").then((module) =
 // 라우트 → 뷰. read 백엔드가 있는 뷰는 실 연결, 그 외는 정직한 placeholder(D7.2+ 워크플로우 대상).
 function renderView(view: ViewKey): JSX.Element {
   switch (view) {
+    case "myWork":
+      return <MyWorkView />;
     case "coePipeline":
       return <CoePipelineView />;
     case "connectorCatalog":
@@ -46,8 +48,6 @@ function renderView(view: ViewKey): JSX.Element {
       return <WorkitemsView />;
     case "humanTasks":
       return <HumanTasksView />;
-    case "approvalInbox":
-      return <ApprovalInboxView />;
     case "auditExplorer":
       return <AuditExplorerView />;
     case "security":

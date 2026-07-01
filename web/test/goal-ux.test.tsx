@@ -55,7 +55,7 @@ function inboxClient(rows: readonly Record<string, unknown>[]): ApiClient {
 
 describe("goal UX improvements", () => {
   beforeEach(() => {
-    location.hash = "";
+    location.hash = "#dashboard";
     localStorage.setItem("rpa.token", jwt(["operator", "approver", "admin"]));
   });
 
@@ -253,8 +253,8 @@ describe("goal UX improvements", () => {
     expect(assigned[0]).toEqual({ id: "ht-self", assignee: SUB });
   });
 
-  test("'내 담당으로 지정'·'내 업무만 보기' off when sub is non-UUID (OIDC auth0|…) — 가정 금지, uuid 배정 폴백 유지", async () => {
-    localStorage.setItem("rpa.token", jwt(["operator"], "auth0|abc")); // 비-UUID sub: assignee(uuid)로 못 씀 → 백엔드 422
+  test("비-UUID sub(OIDC auth0|…)도 self-assign·내 업무만 지원 (assignee=text 컬럼·필터=::text, uuid 강제 폐지)", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"], "auth0|abc")); // 비-UUID sub — human_tasks.assignee 는 text 라 무방
     renderApp(
       fakeClient({
         listHumanTasks: async () => ({
@@ -265,9 +265,11 @@ describe("goal UX improvements", () => {
     );
     location.hash = "#humanTasks";
     const table = await screen.findByRole("table");
-    expect(within(table).queryByRole("button", { name: "내 담당으로 지정" })).toBeNull(); // 자가배정 숨김(비-UUID는 백엔드 422)
-    expect(within(table).getByRole("button", { name: "담당자 지정" })).toBeInTheDocument(); // uuid 직접입력 폴백 유지
-    expect(screen.getByRole("button", { name: "내 업무만 보기" })).toBeDisabled(); // 자가필터도 비활성(목록 422 방지)
+    // 백엔드가 비-UUID assignee 를 지원(text 컬럼 + `= $4::text` 필터)하므로 self-assign 노출 + 내 업무 필터 활성.
+    expect(within(table).getByRole("button", { name: "내 담당으로 지정" })).toBeInTheDocument();
+    expect(within(table).getByRole("button", { name: "담당자 지정" })).toBeInTheDocument();
+    // 디폴트가 '내게 배정'이라 토글 버튼은 '전체 업무 보기'(끄기)로 표시되고 활성.
+    expect(screen.getByRole("button", { name: "전체 업무 보기" })).not.toBeDisabled();
   });
 
   test("재처리 대기 panel: 페이저 + 전체 일괄 재처리(서버측 단일 호출, 페이지 한도 없음)", async () => {

@@ -4,6 +4,7 @@ import type { ViewKey } from "../router";
 // helpText — 도입 담당자용 '?' 맥락 도움말. 각 화면이 '언제·무엇을 위해' 쓰는지 운영자 문장으로 설명한다.
 //            (각 view 컴포넌트 주석의 화면 의도를 옮긴 것 — 없는 기능은 만들지 않는다. 없으면 subtitle 폴백)
 export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon: string; helpText?: string }> = {
+  myWork: { title: "내 할 일", subtitle: "지금 내가 확인할 업무와 내 자동화 현황을 한 곳에서", icon: "Inbox", helpText: "로그인하면 먼저 보이는 화면입니다. 내가 확인해야 할 사람-확인 업무와, 내가 등록한 자동화의 실행 현황을 모아 봅니다." },
   coePipeline: { title: "업무 발굴/ROI", subtitle: "자동화 후보, 승인 단계, 예상 절감효과를 CoE 관점에서 관리", icon: "Lightbulb", helpText: "자동화로 만들 업무를 발굴하고, 승인 단계를 거쳐 예상 절감효과(ROI)를 비교·관리하는 화면입니다." },
   connectorCatalog: { title: "커넥터/템플릿", subtitle: "브라우저 RPA 중심 재사용 커넥터와 업무 템플릿 후보를 검토", icon: "Plug", helpText: "이미 만들어 둔 재사용 커넥터와 업무 템플릿을 둘러보고, 새 자동화의 출발점으로 고를 때 사용합니다." },
   objectRepository: { title: "화면 요소 저장소", subtitle: "사이트별 버튼, 필드, 테이블 조건을 재사용 가능한 업무 요소로 관리", icon: "MousePointerClick", helpText: "사이트마다 반복해서 쓰는 버튼·입력칸·표 같은 화면 요소를 등록해 여러 자동화에서 재사용합니다." },
@@ -15,7 +16,6 @@ export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon:
   openGate: { title: "Product-open 점검", subtitle: "계약 기준으로 화면, 액션, 보안 gate가 검증 가능한지 확인", icon: "ClipboardCheck", helpText: "정식 오픈 전, 계약 문서 기준으로 화면·액션·보안 통제가 검증 가능한 상태인지 점검하는 문서형 화면입니다." },
   workitems: { title: "작업 목록", subtitle: "대기, 재시도, 실패, 외부 전달 상태를 추적", icon: "ListChecks", helpText: "자동화가 처리하는 개별 작업이 대기·재시도·실패·외부 전달 중 어디에 있는지 추적합니다." },
   humanTasks: { title: "사람 확인", subtitle: "보안문자, 추가 인증, 승인, 검증 업무를 담당자 기준으로 처리", icon: "Inbox", helpText: "보안문자·추가 인증·승인·검증처럼 사람이 직접 처리해야 하는 작업을 담당자별로 모아 처리합니다." },
-  approvalInbox: { title: "결재 인박스", subtitle: "하이웍스 결재 목록을 수집·요약하고 건별로 승인/반려", icon: "Stamp", helpText: "하이웍스 결재 목록을 모아 요약하고, 한 건씩 검토해 승인하거나 반려합니다." },
   runTrace: { title: "실행 기록", subtitle: "자동화가 어떤 순서로 판단하고 실행했는지 조회", icon: "Route", helpText: "특정 실행이 어떤 순서로 판단하고 무엇을 실행했는지 단계별로 되짚어 보는 화면입니다." },
   auditExplorer: { title: "감사 이력", subtitle: "보안 판단, 처리자, 결과, 추적 번호를 조회", icon: "ScrollText", helpText: "누가·언제·무엇을 했고 보안 판단 결과가 어땠는지, 추적 번호로 조회하는 감사 기록 화면입니다." },
   irValidation: { title: "자동화 검사", subtitle: "자동화 정의의 문법, 연결, 성공 기준을 배포 전에 검사", icon: "FileCode2", helpText: "자동화 정의를 배포하기 전에 문법·연결·성공 기준이 올바른지 미리 검사합니다(저장은 하지 않습니다)." },

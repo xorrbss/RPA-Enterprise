@@ -37,6 +37,10 @@ export const HIWORKS_COLLECT_SVER = "70000000-0000-0000-0000-00000000d505";
 // params{doc_ref, decision:"approve"|"reject", reason?}. navigate(doc_ref)→분기(결재 클릭/사유 fill+반려)→처리 판정.
 export const HIWORKS_DECIDE_SCEN = "70000000-0000-0000-0000-00000000d507";
 export const HIWORKS_DECIDE_SVER = "70000000-0000-0000-0000-00000000d508";
+// 결재 검토·승인(단일-run @human_task) — 범용 사람-확인 인박스 통합판. review(@human_task, 문서정보 payload)→승인 대기→
+// 사람이 승인/반려(node.review.decision)→resume→navigate(doc_ref)→결재 레이어→승인/반려 결정형 클릭→커밋 witness. Model-A /decide 대체.
+export const HIWORKS_REVIEW_SCEN = "70000000-0000-0000-0000-00000000d509";
+export const HIWORKS_REVIEW_SVER = "70000000-0000-0000-0000-00000000d50a";
 // 하이웍스 결재(approval)는 office(dashboard)와 다른 서브도메인 — 결재함 URL: approval.office.hiworks.com/.../approval/document/lists/W.
 // 별도 site_profile 필요(매칭=URL.origin 동일성). 로그인은 동일 login.office.hiworks.com(SSO). 세션 SSO 전파는 recon으로 확인.
 export const HIWORKS_APPROVAL_SITE = "70000000-0000-4000-8000-00000000d506";

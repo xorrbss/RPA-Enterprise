@@ -18,6 +18,8 @@ import {
   HIWORKS_COLLECT_SVER,
   HIWORKS_DECIDE_SCEN,
   HIWORKS_DECIDE_SVER,
+  HIWORKS_REVIEW_SCEN,
+  HIWORKS_REVIEW_SVER,
 } from "./dev-constants";
 
 function runtimeTarget(siteProfileId: string, browserIdentityId: string, networkPolicyId: string): {
@@ -233,5 +235,114 @@ export async function seedHiworksApproval(c: PgClient): Promise<void> {
     );
   } else {
     console.error("HIWORKS DECIDE scenario compile FAILED:", JSON.stringify(decide));
+  }
+
+  // 하이웍스 결재 검토·승인(단일-run @human_task — 범용 사람-확인 인박스 통합판, Model-A /decide 대체). params 는 수집 행의
+  //   문서정보. review(@human_task, kind=approval, 문서정보 payload)가 먼저 suspend → 범용 인박스에서 approver 가 [문서정보+원문
+  //   링크] 확인·승인/반려 → resume(open) → navigate(doc_ref) → 결재 레이어 열기 → node.review.decision 분기 → 승인/반려 결정형
+  //   클릭(+반려 사유 결정형 fill: fill_selector+value_from_node review.reason) → 확인(커밋, 비가역) → 결재버튼 소멸 witness.
+  //   승인 클릭은 사람이 인박스에서 승인할 때만 일어난다(휴먼 게이트). 반려 의견칸은 recon 확정 textarea#approvalReasonMessage 결정형화.
+  const review = compileScenario(
+    {
+      meta: { name: "하이웍스 결재 검토·승인", version: 1 },
+      target: runtimeTarget(HIWORKS_APPROVAL_SITE, HIWORKS_APPROVAL_BID, HIWORKS_APPROVAL_NETWORK_POLICY),
+      params_schema: {
+        type: "object",
+        properties: {
+          doc_ref: { type: "string", title: "문서 원문 URL" },
+          approval_id: { type: "string", title: "문서 번호" },
+          drafter: { type: "string", title: "기안자" },
+          doc_type: { type: "string", title: "구분" },
+          title: { type: "string", title: "제목" },
+          drafted_at: { type: "string", title: "기안일" },
+        },
+        required: ["doc_ref", "approval_id", "drafter", "doc_type", "title"],
+      },
+      start: "review",
+      nodes: {
+        // 사람 승인 게이트(범용 인박스) — payload 로 문서정보+원문링크 표시. reason(반려 사유) business_form 필드는 반려 시 입력.
+        review: {
+          what: [],
+          next: {
+            handler: "@human_task",
+            input: {
+              kind: "approval",
+              assignee_role: "approver",
+              payload: {
+                문서번호: { from_param: "approval_id" },
+                기안자: { from_param: "drafter" },
+                유형: { from_param: "doc_type" },
+                제목: { from_param: "title" },
+                기안일: { from_param: "drafted_at" },
+                원문링크: { from_param: "doc_ref" },
+              },
+              result_schema: {
+                version: "business_form_v1",
+                fields: [{ key: "reason", label: "반려 사유(반려 시 입력)", type: "textarea", required: false, help_text: "반려하는 경우 사유를 입력하세요. 승인은 사유 불필요." }],
+              },
+            },
+            return_node: "open",
+          },
+        },
+        open: { what: [{ action: "navigate", url_ref: "doc_ref" }], next: "check" },
+        check: {
+          what: [{ action: "observe" }],
+          on: [
+            { when: "flags.login_required", target: "session_expired", priority: 2 },
+            { when: "true", target: "open_layer", priority: 1 },
+          ],
+        },
+        open_layer: { what: [{ action: "act", instruction: "결재(승인 레이어 열기) 버튼 클릭", args: { click_selector: APPROVAL_BTN } }], next: "decide_action" },
+        // 사람 판정 분기(node.review.decision): 승인/반려만 커밋 진행, 그 외(수정/재시도)는 declined(비커밋).
+        decide_action: {
+          on: [
+            { when: 'node.review.decision == "approve"', target: "approve_select", priority: 3 },
+            { when: 'node.review.decision == "reject"', target: "reject_select", priority: 2 },
+            { when: "true", target: "declined", priority: 1 },
+          ],
+        },
+        approve_select: {
+          what: [{ action: "act", instruction: "승인 라디오 선택", args: { click_selector: 'input[name="approval_value"][value="2"]' } }],
+          next: "confirm",
+        },
+        reject_select: {
+          what: [{ action: "act", instruction: "반려 라디오 선택", args: { click_selector: 'input[name="approval_value"][value="4"]' } }],
+          next: "reject_reason",
+        },
+        // 반려 의견 결정형 fill(fill_selector 셀렉터 + value_from_node review.reason=사람이 인박스에서 입력한 사유). LLM 미경유.
+        reject_reason: {
+          what: [{ action: "act", instruction: "반려 의견 입력", args: { fill_selector: "textarea#approvalReasonMessage", value_from_node: { node: "review", key: "reason" } } }],
+          next: "confirm",
+        },
+        confirm: {
+          what: [{ action: "act", instruction: "확인(제출) 버튼 클릭 — 결재 커밋", args: { click_selector: CONFIRM_BTN } }],
+          side_effect: { kind: "submit", idempotency_key: "hiworks-review-confirm" },
+          next: "recheck",
+        },
+        recheck: {
+          what: [{ action: "observe" }],
+          on: [
+            { when: "flags.login_required", target: "submit_failed", priority: 2 },
+            { when: "true", target: "verify_committed", priority: 1 },
+          ],
+        },
+        verify_committed: { what: [{ action: "act", instruction: "결재 커밋 witness — 결재 버튼 소멸 확인", args: { assert_absent: APPROVAL_BTN } }], next: "done" },
+        done: { terminal: "success" },
+        declined: { terminal: "fail_business" }, // 사람이 승인/반려 외 판정 → 커밋 없이 종료.
+        session_expired: { terminal: "fail_business" },
+        submit_failed: { terminal: "fail_business" },
+      },
+    },
+    {},
+  );
+  if (review.ok) {
+    await c.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'하이웍스 결재 검토·승인')`, [HIWORKS_REVIEW_SCEN, TENANT]);
+    await c.query(
+      `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast)
+       VALUES ($1,$2,$3,1,'prod',$4::jsonb,$5)`,
+      [HIWORKS_REVIEW_SVER, TENANT, HIWORKS_REVIEW_SCEN, JSON.stringify(review.ir), review.compiledAst],
+    );
+  } else {
+    console.error("HIWORKS REVIEW scenario compile FAILED:", JSON.stringify(review));
   }
 }

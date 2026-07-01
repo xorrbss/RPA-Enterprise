@@ -214,9 +214,11 @@ async function seedBrowserSession(pool: Pool, tenant: string, siteId: string, id
       [identityId, tenant, siteId],
     );
     await c.query(
+      // 세션 만료는 먼 미래 고정 — session_ready=true 를 시간에 무관하게 보장(과거 하드코딩 날짜가 지나면 만료로
+      //   판정돼 'Site shape' 체크가 깨지던 시한폭탄 제거).
       `INSERT INTO browser_sessions (
          tenant_id, site_profile_id, browser_identity_id, identity_key, ciphertext, enc_kid, expires_at
-       ) VALUES ($1,$2,$3,'',decode('00','hex'),'kid-test','2026-07-01T00:00:00Z')`,
+       ) VALUES ($1,$2,$3,'',decode('00','hex'),'kid-test','2099-12-31T00:00:00Z')`,
       [tenant, siteId, identityId],
     );
   });
@@ -706,7 +708,7 @@ async function main(): Promise<void> {
         sites.json().items.some((s: { site_profile_id: string; url_pattern: string; risk: string; approval_status: string; circuit_status: string; session_ready: boolean; session_expires_at: string | null; default_browser_identity_id: string | null; default_network_policy_id: string | null }) =>
           s.site_profile_id === SITE_GREEN && s.url_pattern === "https://green-site.example/*" &&
           s.risk === "green" && s.approval_status === "pending" && s.circuit_status === "closed" &&
-          s.session_ready === true && s.session_expires_at === "2026-07-01T00:00:00.000Z" &&
+          s.session_ready === true && s.session_expires_at === "2099-12-31T00:00:00.000Z" &&
           s.default_browser_identity_id === "7a100000-0000-0000-0000-000000000002" &&
           s.default_network_policy_id === NETWORK_A),
         JSON.stringify(sites.json().items));

@@ -40,8 +40,8 @@ describe("layout nav policy", () => {
   test("operator standard nav hides advanced and admin surfaces", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(navItemCount(nav)).toBe(8);
-    for (const label of ["RPA 운영 대시보드", "사람 확인", "작업 목록", "자동화 만들기", "테스트 실행", "실행 기록", "실행 예약·알림", "문서 자동화"]) {
+    expect(navItemCount(nav)).toBe(9);
+    for (const label of ["내 할 일", "RPA 운영 대시보드", "사람 확인", "작업 목록", "자동화 만들기", "테스트 실행", "실행 기록", "실행 예약·알림", "문서 자동화"]) {
       expect(within(nav).getByRole("button", { name: label })).toBeInTheDocument();
     }
     for (const hidden of ["Product-open 점검", "중복 방지", "보안/개인정보", "AI 모델 설정", "자동화 검사"]) {

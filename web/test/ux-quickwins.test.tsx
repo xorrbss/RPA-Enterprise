@@ -48,7 +48,7 @@ function installObjectUrlMock(): void {
 
 describe("UX quick-wins (A)", () => {
   beforeEach(() => {
-    location.hash = "";
+    location.hash = "#dashboard";
     localStorage.setItem("rpa.token", jwt(ALL_ROLES));
   });
 
@@ -364,10 +364,10 @@ describe("UX quick-wins (A)", () => {
   test("A6: 사이드바는 라우팅 목록과 분리된 정책 기반 메뉴를 렌더", async () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(within(nav).getByText("내 작업")).toBeInTheDocument();
-    expect(within(nav).getByText("만들기")).toBeInTheDocument();
-    expect(within(nav).getByText("운영")).toBeInTheDocument();
-    expect(within(nav).getByText("관리")).toBeInTheDocument();
+    expect(within(nav).getByText("내 업무")).toBeInTheDocument();
+    expect(within(nav).getByText("자동화")).toBeInTheDocument();
+    expect(within(nav).getByText("현황")).toBeInTheDocument();
+    expect(within(nav).getByText("설정·점검")).toBeInTheDocument();
     expect(nav.querySelectorAll(".nav-item")).toHaveLength(17); // openGate는 internal flag 없으면 숨김
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
@@ -529,7 +529,7 @@ describe("UX quick-wins (A)", () => {
 // 판정 키 = recent(무필터 listRuns).items.length===0 && next_cursor===null(진짜 0). RBAC로 CTA 분기.
 describe("Phase 2 온보딩", () => {
   beforeEach(() => {
-    location.hash = "";
+    location.hash = "#dashboard";
     localStorage.setItem("rpa.token", jwt(ALL_ROLES));
   });
 
