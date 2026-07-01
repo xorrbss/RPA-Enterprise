@@ -359,6 +359,12 @@ async function main(): Promise<void> {
       const a5drow = await taskRow(pool, TENANT_A, HT_OIDC);
       check("assign non-uuid sub → DB assignee text 보존", a5drow?.state === "assigned" && a5drow?.assignee === "auth0|abc123", JSON.stringify(a5drow));
 
+      // 5c) 비-UUID assignee 로 목록 필터 → 그 sub 배정 업무 반환. web '내 업무 먼저'(내게 배정 디폴트)가 비-UUID OIDC sub
+      //   에도 동작함을 실증(assignee 는 text 컬럼 + `= $4::text` 필터라 uuid 강제 불요 — web isUuid 보수 가드 완화 근거).
+      const a5e = await app.inject({ method: "GET", url: `/v1/human-tasks?assignee=${encodeURIComponent("auth0|abc123")}`, headers: { authorization: `Bearer ${op}` } });
+      check("list?assignee=non-uuid → 200", a5e.statusCode === 200, a5e.body);
+      check("list?assignee=non-uuid → 해당 업무 반환(내 업무 필터가 비-UUID sub 지원)", JSON.stringify(a5e.json()).includes(HT_OIDC), a5e.body);
+
       // 6) 부재 → 404, cross-tenant → 404(RLS).
       const a6 = await assign(ABSENT, "assign-absent");
       check("assign absent → 404 RESOURCE_NOT_FOUND", a6.statusCode === 404 && a6.json().code === "RESOURCE_NOT_FOUND", a6.body);

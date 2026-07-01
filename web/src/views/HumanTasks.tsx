@@ -2,7 +2,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useApiClient } from "../api/context";
-import { isUuid, useCan, useSubject } from "../api/permissions";
+import { useCan, useSubject } from "../api/permissions";
 import type { ApiClient } from "../api/client";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
@@ -97,10 +97,9 @@ function HumanTaskActions({
   const id = task.human_task_id;
   const subject = useSubject();
   // '내 담당으로 지정' 단축 — 현재 토큰 sub로 self-assign(직접입력 없이 가장 흔한 케이스). 검증은 백엔드가 최종 강제.
-  // ⚠ sub는 비-UUID OIDC 식별자(auth0|…·이메일)일 수 있다. 현재는 보수적으로 sub가 UUID일 때만 렌더(isUuid) —
-  //   비-UUID sub의 self-assign 허용은 selfAssign 한정 별개 변경이라 본 PR(담당자 picker) 범위 밖. 비-UUID/부재면
-  //   '담당자 지정'(아래)에서 picker/직접입력으로 처리(조용한 false 금지).
-  const selfAssign = isUuid(subject) ? (
+  //   sub는 비-UUID OIDC 식별자(auth0|…·이메일)여도 무방 — human_tasks.assignee 는 text 컬럼이고 필터도 `= $4::text`
+  //   (uuid 캐스트 없음, principalIdFilter 는 임의 문자열 허용). 과거의 isUuid 보수 가드는 불필요라 제거(비-UUID 실증 테스트 동반).
+  const selfAssign = subject !== null && subject.length > 0 ? (
     <ActionButton
       label="내 담당으로 지정"
       action="human_task.assign"
@@ -192,7 +191,8 @@ export function HumanTasksView(): JSX.Element {
   const lv = useListView<HumanTaskItem>(
     ["human-tasks"],
     (p) => api.listHumanTasks(p),
-    { refetchInterval: 5_000, initialFilter: runParam !== null ? { run_id: runParam } : undefined },
+    // 디폴트 = 내게 배정(내 업무 먼저). run_id 딥링크가 있으면 그 우선. sub 부재(미로그인)면 필터 없음.
+    { refetchInterval: 5_000, initialFilter: runParam !== null ? { run_id: runParam } : (subject !== null && subject.length > 0 ? { assignee: subject } : undefined) },
   );
   // 선택 사람확인 업무를 해시(`#humanTasks?ht=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
   const sel = useHashIdParam("ht");
@@ -215,7 +215,7 @@ export function HumanTasksView(): JSX.Element {
   // pageItems(필터 미반영) 기준이면 '현재 목록 N건' 라벨과 처리 범위가 어긋나 보이지 않는 업무까지 배정/이관된다(안전 직결).
   const bulkAssignable = visibleItems.filter((t) => t.state === "open" || t.state === "escalated");
   const bulkEscalatable = visibleItems.filter((t) => t.state === "open" || t.state === "assigned" || t.state === "in_progress");
-  const canFilterMine = isUuid(subject);
+  const canFilterMine = subject !== null && subject.length > 0;
   return (
     <>
       {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} principalOptions={principalOptions} onClose={() => { mergeParams({ ht: null }); }} />}
@@ -246,15 +246,15 @@ export function HumanTasksView(): JSX.Element {
             className="btn"
             type="button"
             disabled={!canFilterMine}
-            title={canFilterMine ? undefined : "현재 로그인 식별자는 담당자 필터 형식으로 사용할 수 없습니다."}
+            title={canFilterMine ? undefined : "로그인이 필요합니다."}
             onClick={() => {
-              // sub가 UUID일 때만(버튼 disabled 가드와 동치) — 비-UUID sub를 assignee 필터로 보내면 백엔드 uuidFilter가 422로 목록을 깨뜨린다.
+              // assignee 필터는 `= $4::text`(any 문자열) — 비-UUID sub 도 안전. 토글: 내게 배정 ↔ 전체.
               if (canFilterMine) lv.setFilter({ ...lv.filter, assignee: lv.filter.assignee === subject ? undefined : subject });
             }}
           >
             {lv.filter.assignee === subject ? "전체 업무 보기" : "내 업무만 보기"}
           </button>
-          {!canFilterMine && <span className="badge amber">내 업무 필터를 쓰려면 담당자 디렉터리 매핑이 필요합니다.</span>}
+          {!canFilterMine && <span className="badge amber">로그인이 필요합니다.</span>}
           <button className="btn" type="button" aria-pressed={dueOnly} onClick={() => setDueOnly((v) => !v)}>
             마감 임박 {dueItems.length}
           </button>
