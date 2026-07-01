@@ -22,12 +22,12 @@ function visible(roles: readonly string[], mode: "standard" | "advanced" = "stan
 
 describe("Phase 15 nav policy", () => {
   test("viewer standard nav is read-only and compact", () => {
-    expect(visible(["viewer"])).toEqual(["dashboard", "humanTasks", "workitems", "runTrace"]);
+    expect(visible(["viewer"])).toEqual(["myWork", "dashboard", "humanTasks", "workitems", "runTrace"]);
   });
 
   test("operator standard nav exposes the Phase 15 eight-item IA", () => {
     expect(getVisibleNavGroups(ctx(["operator"]))).toEqual([
-      { label: "내 작업", keys: ["dashboard", "humanTasks", "workitems"] },
+      { label: "내 작업", keys: ["myWork", "dashboard", "humanTasks", "workitems"] },
       { label: "만들기", keys: ["scenarioStudio", "playground"] },
       { label: "운영", keys: ["runTrace", "automationOps", "documentIdp"] },
     ]);
@@ -35,6 +35,7 @@ describe("Phase 15 nav policy", () => {
 
   test("reviewer and approver standard nav stay role-scoped", () => {
     expect(visible(["reviewer"])).toEqual([
+      "myWork",
       "dashboard",
       "humanTasks",
       "workitems",
@@ -44,6 +45,7 @@ describe("Phase 15 nav policy", () => {
       "runTrace",
     ]);
     expect(visible(["approver"])).toEqual([
+      "myWork",
       "dashboard",
       "humanTasks",
       "workitems",
@@ -57,6 +59,7 @@ describe("Phase 15 nav policy", () => {
 
   test("admin sees management and diagnostic views, except internal open gate without flag", () => {
     expect(visible(["admin"])).toEqual([
+      "myWork",
       "dashboard",
       "humanTasks",
       "workitems",
@@ -104,6 +107,7 @@ describe("Phase 15 nav policy", () => {
     expect(hasAdvancedNav({ roles: ["operator"], flags })).toBe(true);
     const views = visible(["operator"], "advanced");
     expect(views).toEqual([
+      "myWork",
       "dashboard",
       "humanTasks",
       "workitems",

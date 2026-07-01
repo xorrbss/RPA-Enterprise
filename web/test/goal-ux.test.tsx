@@ -55,7 +55,7 @@ function inboxClient(rows: readonly Record<string, unknown>[]): ApiClient {
 
 describe("goal UX improvements", () => {
   beforeEach(() => {
-    location.hash = "";
+    location.hash = "#dashboard";
     localStorage.setItem("rpa.token", jwt(["operator", "approver", "admin"]));
   });
 

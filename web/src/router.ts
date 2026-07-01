@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 // 해시 라우터 — HTML 콘솔의 navigate/hashchange 미러.
 export const VIEW_KEYS = [
+  "myWork",
   "coePipeline",
   "connectorCatalog",
   "objectRepository",
@@ -28,11 +29,11 @@ export type ViewKey = (typeof VIEW_KEYS)[number];
 // 모든 VIEW_KEYS가 정확히 한 그룹에 속해야 한다(router.test가 강제). nav 순서는 그룹 순서를 따른다.
 export const NAV_GROUPS: readonly { readonly label: string; readonly keys: readonly ViewKey[] }[] = [
   { label: "제작", keys: ["coePipeline", "connectorCatalog", "objectRepository", "scenarioStudio", "playground", "irValidation"] },
-  { label: "운영", keys: ["dashboard", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "approvalInbox", "auditExplorer"] },
+  { label: "운영", keys: ["myWork", "dashboard", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "approvalInbox", "auditExplorer"] },
   { label: "고급 설정", keys: ["llmGateway", "security", "idempotency", "openGate"] },
 ];
 
-const DEFAULT_VIEW: ViewKey = "dashboard";
+const DEFAULT_VIEW: ViewKey = "myWork";
 
 export function viewFromHash(hash: string): ViewKey {
   // `#viewKey` 또는 `#viewKey?param=...` — 뷰 키는 `?` 이전 부분(드릴다운 딥링크가 쿼리 파라미터를 붙임).

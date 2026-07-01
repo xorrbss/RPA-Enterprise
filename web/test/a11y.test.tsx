@@ -30,6 +30,7 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
   });
 
   test("대시보드 axe 위반 없음", async () => {
+    location.hash = "#dashboard"; // 랜딩 디폴트=myWork 이므로 대시보드는 명시 이동.
     renderApp();
     await waitFor(() => expect(screen.getByText("최근 실행")).toBeInTheDocument());
     const results = await axe(document.body, AXE_OPTS);
@@ -40,6 +41,7 @@ describe("D7 운영 콘솔 a11y (axe)", () => {
   test("빈 테넌트 대시보드(온보딩 배너) axe 위반 없음", async () => {
     const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles: ["operator"] })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     localStorage.setItem("rpa.token", `e30.${payload}.sig`);
+    location.hash = "#dashboard";
     renderApp(fakeClient({ listRuns: async () => ({ items: [], next_cursor: null }) }));
     await waitFor(() => expect(screen.getByText("첫 실행을 시작해 보세요.")).toBeInTheDocument());
     const results = await axe(document.body, AXE_OPTS);

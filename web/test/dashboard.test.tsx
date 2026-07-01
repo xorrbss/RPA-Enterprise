@@ -174,7 +174,7 @@ async function findMetricButton(name: RegExp): Promise<HTMLButtonElement> {
 
 describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => {
   beforeEach(() => {
-    location.hash = "";
+    location.hash = "#dashboard"; // 랜딩 디폴트가 myWork 로 바뀌어 대시보드 콘텐츠 테스트는 명시 이동.
     localStorage.setItem("rpa.token", jwt(["operator"]));
     vi.unstubAllEnvs();
   });

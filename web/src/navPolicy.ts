@@ -33,6 +33,7 @@ const CREATOR_ROLES: readonly ConsoleRole[] = ["operator", "reviewer", "approver
 const ADVANCED_NON_VIEWER_ROLES: readonly ConsoleRole[] = ["operator", "reviewer", "approver", "admin"];
 
 const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
+  myWork: { standardRoles: ALL_ROLES },
   dashboard: { standardRoles: ALL_ROLES },
   runTrace: { standardRoles: ALL_ROLES },
   workitems: { standardRoles: ALL_ROLES },
@@ -58,7 +59,7 @@ const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
 };
 
 const NAV_POLICY_GROUPS: readonly VisibleNavGroup[] = [
-  { label: "내 작업", keys: ["dashboard", "humanTasks", "workitems", "approvalInbox"] },
+  { label: "내 작업", keys: ["myWork", "dashboard", "humanTasks", "workitems", "approvalInbox"] },
   { label: "만들기", keys: ["scenarioStudio", "playground"] },
   { label: "운영", keys: ["runTrace", "automationOps", "documentIdp"] },
   { label: "고급 제작 도구", keys: ["coePipeline", "connectorCatalog", "objectRepository", "irValidation"] },
