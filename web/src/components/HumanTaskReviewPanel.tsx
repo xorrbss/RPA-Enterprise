@@ -382,6 +382,11 @@ export function HumanTaskReviewPanel({ api, task }: { api: ApiClient; task: Huma
               setMessage({ tone: "red", text: correctionError });
               return;
             }
+            // 반려는 사유 필수(조용한 반려 방지 — 재개 분기/감사에서 사유 유실 차단).
+            if (decision === "reject" && reason.trim() === "") {
+              setMessage({ tone: "red", text: "반려 사유를 입력하세요." });
+              return;
+            }
             const builtCorrections = formSchema !== null ? buildFormCorrections(formSchema, formValues) : buildCorrections(corrections);
             mutation.mutate({
               decision,
@@ -475,20 +480,27 @@ export function HumanTaskReviewPanel({ api, task }: { api: ApiClient; task: Huma
             </div>
           )}
 
-          <div className="form-grid">
-            <label className="field">
-              <span>처리 사유</span>
-              <input value={reason} onChange={(event) => setReason(event.target.value)} />
-            </label>
-            <label className="field">
-              <span>확신도</span>
-              <input inputMode="decimal" placeholder="0.0 - 1.0" value={confidence} onChange={(event) => setConfidence(event.target.value)} />
-            </label>
+          {/* 처리 사유: 반려/수정 판정에만 노출(승인은 사유 불필요). 반려는 필수(조용한 반려 방지). */}
+          {(decision === "reject" || decision === "correct") && (
             <label className="field field-wide">
-              <span>검토 메모</span>
-              <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
+              <span>처리 사유{decision === "reject" ? " *" : ""}</span>
+              <input aria-label="처리 사유" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={decision === "reject" ? "반려 사유를 입력하세요" : "수정 사유 (선택)"} />
             </label>
-          </div>
+          )}
+          {/* 확신도·검토 메모: 계약상 optional — 기본 접기(점진 공개). 삭제 아닌 노출 지연이라 검증·전송 로직은 그대로 유지. */}
+          <details className="developer-details">
+            <summary>검토 기록 남기기 (선택 — 확신도·메모)</summary>
+            <div className="form-grid">
+              <label className="field">
+                <span>확신도</span>
+                <input inputMode="decimal" placeholder="0.0 - 1.0" value={confidence} onChange={(event) => setConfidence(event.target.value)} />
+              </label>
+              <label className="field field-wide">
+                <span>검토 메모</span>
+                <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
+              </label>
+            </div>
+          </details>
 
           <div className="human-review-actions">
             <button className="btn primary" type="submit" disabled={!canResolve || mutation.isPending || formSchemaError !== null}>
