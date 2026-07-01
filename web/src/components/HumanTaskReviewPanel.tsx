@@ -44,20 +44,24 @@ const DECISIONS: readonly { value: HumanTaskResolution["decision"]; label: strin
 
 function valueLabel(value: unknown): string {
   if (value === null || value === undefined) return "없음";
-  if (typeof value === "string") return value.length > 80 ? `${value.slice(0, 80)}...` : value;
+  // 범용 인박스: 메일 원문/문서 등 긴 검토 텍스트도 사람이 읽을 수 있게 넉넉히 표시(폭주 방지 상한만 유지).
+  if (typeof value === "string") return value.length > 2000 ? `${value.slice(0, 2000)}…` : value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) return `${value.length}개 항목`;
   if (typeof value === "object") return "세부 정보 있음";
   return String(value);
 }
 
-function payloadSummaryItems(value: unknown): readonly SummaryItem[] {
+// 범용 사람-확인 인박스: 임의 자동화의 payload 를 표시한다. 알려진 키는 한국어 라벨로, 그 외는 시나리오 작성자가 고른
+//   키(예 제목/보낸사람/원문)를 그대로 라벨로 쓴다("추가 정보 N" 익명화 대신 — 새 자동화도 데이터만으로 의미 있게 표시).
+//   form 필드로 편집되는 키(formFieldKeys)는 아래 입력 양식에서 보이므로 읽기전용 요약에서는 제외(중복 방지).
+function payloadSummaryItems(value: unknown, formFieldKeys: ReadonlySet<string>): readonly SummaryItem[] {
   if (value === null || value === undefined) return [{ label: "내용", value: "없음" }];
   if (typeof value !== "object" || Array.isArray(value)) return [{ label: "내용", value: valueLabel(value) }];
   const items = Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => !TECHNICAL_SUMMARY_KEYS.has(key))
-    .slice(0, 6)
-    .map(([key, item], index) => ({ label: SUMMARY_KEY_LABELS[key] ?? `추가 정보 ${index + 1}`, value: valueLabel(item) }));
+    .filter(([key]) => !TECHNICAL_SUMMARY_KEYS.has(key) && !formFieldKeys.has(key))
+    .slice(0, 8)
+    .map(([key, item]) => ({ label: SUMMARY_KEY_LABELS[key] ?? key, value: valueLabel(item) }));
   return items.length > 0 ? items : [{ label: "업무 데이터", value: "요약 가능한 값 없음" }];
 }
 
@@ -267,7 +271,8 @@ export function HumanTaskReviewPanel({ api, task }: { api: ApiClient; task: Huma
   const [message, setMessage] = useState<{ tone: "green" | "red"; text: string } | null>(null);
   const action = `human_task.resolve.${task.kind}`;
   const canResolve = can(action);
-  const payloadItems = useMemo(() => payloadSummaryItems(task.payload ?? null), [task.payload]);
+  const formFieldKeys = useMemo(() => new Set((formSchema?.fields ?? []).map((field) => field.key)), [formSchema]);
+  const payloadItems = useMemo(() => payloadSummaryItems(task.payload ?? null, formFieldKeys), [task.payload, formFieldKeys]);
   const schemaItems = useMemo(() => schemaDetailItems(formSchema), [formSchema]);
   const artifactRefs = task.artifact_refs ?? [];
 
@@ -388,7 +393,7 @@ export function HumanTaskReviewPanel({ api, task }: { api: ApiClient; task: Huma
           }}
         >
           <p className="form-alert amber" role="note">
-            현재 런타임은 resolve 신호로 자동화를 재개합니다. 반려, 수정, 재시도 판정과 입력값은 감사·후속 검토 기록으로 저장되며 재개 분기에는 자동 반영되지 않습니다.
+            판정(승인/반려/수정/재시도)에 따라 자동화가 재개·분기됩니다. 입력·수정한 값은 검토 기록으로 저장되며, 자동화가 그 값을 사용하도록 설계된 항목은 재개된 동작에 그대로 반영됩니다(예: 답장 내용을 편집·승인하면 그 내용으로 실제 발송).
           </p>
           <label className="field">
             <span>판정</span>

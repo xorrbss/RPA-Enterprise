@@ -83,7 +83,11 @@ export type DomAction =
   // selectSelector+selectValue: 결정형 select(IR act.args.select_selector + select_value). 선언되면 LLM 을 **전혀** 경유하지
   //   않고 그 셀렉터의 옵션을 그 값으로 고른다(드롭다운 셀렉터·옵션 환각 차단). select 옵션은 보통 고정 선택(데모한 값)이라
   //   selector·value 둘 다 IR 에 베이킹한다(fill 의 동적 값과 달리 값 출처 메커니즘 불필요). 둘 다 필수(ir-translate 강제).
-  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; value?: string; clickSelector?: string; clickText?: string; assertAbsent?: string; fillSelector?: string; selectSelector?: string; selectValue?: string }
+  // valueFromNode: 비-secret 결정형 fill 의 INTENT 마커(IR act.args.value_from_node = {node, key}). valueRef 와 동형이되 값
+  //   출처가 run params 가 아니라 **소유 @human_task 노드의 correction[key]**(사람이 검토·편집한 값)다. 인터프리터가 dispatch
+  //   전 nodeScope 에서 해소해 a.value 로 고정하므로, 실행기 관점에선 valueRef 와 동일하게 selector 만 LLM/결정형에 맡기고
+  //   value 로 채운다(override·캐시-스트립 동형). value 미해소면 loud(조용한 false 금지).
+  | { type: "act"; instruction: string; sideEffect?: SideEffectKind; secretRef?: string; valueRef?: string; valueFromNode?: { node: string; key: string }; value?: string; clickSelector?: string; clickText?: string; assertAbsent?: string; fillSelector?: string; richBodyFrame?: string; selectSelector?: string; selectValue?: string }
   | { type: "observe"; instruction: string }
   | { type: "extract"; instruction: string; output: { schemaRef: string; schemaVersion: string; strict: boolean; schema?: Record<string, unknown> }; rowAnchor?: ExtractRowAnchor };
 
@@ -221,6 +225,11 @@ export class StagehandDomExecutor implements ExecutorPlugin {
     if (a.assertAbsent !== undefined) {
       return this.executeAssertAbsent(stepId, a.assertAbsent, a.sideEffect, ctx, session, before, startedAt);
     }
+    // 결정형 리치 본문 fill(rich_body_frame): iframe 내부 contenteditable 본문을 focus 후 CDP Input.insertText 로 채운다
+    //   (main-frame fill 이 못 미치는 리치에디터 전용). 값은 valueRef→params 결정형(LLM 미경유). 미해소면 loud.
+    if (a.richBodyFrame !== undefined) {
+      return this.executeRichBodyFill(stepId, a.richBodyFrame, a.value, a.sideEffect, ctx, session, before, startedAt);
+    }
     let plan: ActionPlan | undefined;
     let cacheMode: StepResult["cache"]["mode"] = "bypass";
     let callIds: string[] = [];
@@ -308,30 +317,31 @@ export class StagehandDomExecutor implements ExecutorPlugin {
         );
       }
       plan = { operation: "fill", selector: plan.selector, valueRef: a.secretRef };
-    } else if (a.valueRef !== undefined) {
-      // 비-secret 결정형 fill(intent=valueRef): 채울 값을 IR/params 의 a.value 로 고정(LLM 추측 value 무시).
-      //   LLM 은 selector 만 책임진다. fill 이 아니면 loud(조용한 무시 금지). value 미해소(run params 부재)면 LLM/캐시 값으로
-      //   무음 fill 하지 않고 loud throw — 결정형 슬롯 보장("조용한 false 금지", break-it finding). 캐시 hit 에도 현재 run 의
-      //   a.value 로 재고정(params 가변; selector 만 캐시 재사용). value 는 비밀 아님(평문 경로 허용).
+    } else if (a.valueRef !== undefined || a.valueFromNode !== undefined) {
+      // 비-secret 결정형 fill(intent=valueRef 또는 valueFromNode): 채울 값을 a.value 로 고정(LLM 추측 value 무시).
+      //   valueRef=run params 출처, valueFromNode=소유 @human_task correction 출처(인터프리터가 dispatch 전 a.value 로 해소).
+      //   LLM 은 selector 만 책임진다. fill 이 아니면 loud(조용한 무시 금지). value 미해소면 LLM/캐시 값으로 무음 fill 하지 않고
+      //   loud throw — 결정형 슬롯 보장("조용한 false 금지"). 캐시 hit 에도 현재 run 의 a.value 로 재고정(값 가변; selector 만 재사용).
+      const src = a.valueRef !== undefined ? `valueRef='${a.valueRef}'` : `valueFromNode={${a.valueFromNode?.node}.${a.valueFromNode?.key}}`;
       if (plan.operation !== "fill") {
         throw new StagehandDomExecutorError(
           "IR_SCHEMA_INVALID",
-          `step '${stepId}' value act(valueRef='${a.valueRef}') must yield a 'fill' plan, got '${plan.operation}'`,
+          `step '${stepId}' value act(${src}) must yield a 'fill' plan, got '${plan.operation}'`,
         );
       }
       if (a.value === undefined) {
         throw new StagehandDomExecutorError(
           "IR_SCHEMA_INVALID",
-          `step '${stepId}' value act(valueRef='${a.valueRef}') has no resolved value from run params — refusing LLM/cache value (deterministic fill)`,
+          `step '${stepId}' value act(${src}) has no resolved value — refusing LLM/cache value (deterministic fill)`,
         );
       }
       plan = { operation: "fill", selector: plan.selector, value: a.value };
     }
 
-    // miss(LLM 해석)만 캐시에 저장. 평문 미저장: secretRef=ref-bearing({fill,selector,valueRef}), valueRef(비-secret)=
+    // miss(LLM 해석)만 캐시에 저장. 평문 미저장: secretRef=ref-bearing({fill,selector,valueRef}), valueRef/valueFromNode(비-secret)=
     //   selector-only(value 스트립 — 매 실행 override 가 현재 run value 로 재고정하므로 캐시 value 불요; 평문 영속·stale 재생 차단).
     if (fromLlm && this.cache && cacheKey !== undefined) {
-      const cachePlan: ActionPlan = a.valueRef !== undefined ? { operation: "fill", selector: plan.selector } : plan;
+      const cachePlan: ActionPlan = a.valueRef !== undefined || a.valueFromNode !== undefined ? { operation: "fill", selector: plan.selector } : plan;
       await this.cache.put(cacheKey, cachePlan);
     }
 
@@ -490,6 +500,115 @@ export class StagehandDomExecutor implements ExecutorPlugin {
       action: "act",
       status: "success",
       output: { plan: { operation: "click", selector: `[data-rpa-ct] (click_text: ${text})` } },
+      pageStateBefore: before,
+      pageStateAfter: before,
+      artifacts: [],
+      stagehandCallIds: [],
+      cache: { mode: "bypass" },
+      sideEffect: { kind: sideEffect ?? "update", committed: true },
+      timings: { startedAt, endedAt, durationMs: Date.parse(endedAt) - Date.parse(startedAt) },
+    };
+  }
+
+  /**
+   * 결정형 리치 본문 fill(rich_body_frame) — SmartEditor 등 리치에디터의 **iframe 내부 contenteditable 본문**을 채운다.
+   * main-frame 대상 session.fill 은 iframe 내부에 못 미치므로, same-origin iframe 본문을 focus(+커서 최상단) 한 뒤
+   * CDP Input.insertText 로 값을 삽입한다(사용자 타이핑과 동일한 beforeinput/input 이벤트 → 에디터 모델 동기화). 값은
+   * valueRef→params 로 결정형 해소(LLM 미경유); 미해소면 loud(조용한 빈 본문 금지). 삽입 후 본문에 값이 반영됐는지
+   * witness 검증(미반영 시 loud — 전송돼도 빈 본문 나가는 것을 success 로 은폐 금지).
+   */
+  private async executeRichBodyFill(
+    stepId: string,
+    frameSelector: string,
+    value: string | undefined,
+    sideEffect: SideEffectKind | undefined,
+    ctx: RunContext,
+    session: CdpSession,
+    before: ReturnType<typeof pageStateRef>,
+    startedAt: string,
+  ): Promise<StepResult> {
+    if (typeof value !== "string" || value.length === 0) {
+      // valueRef 선언됐으나 params 미해소 → LLM/캐시 값 무음 fill 금지(fill_selector 와 동일 규율).
+      throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' rich_body_frame 은 value_ref 해소값 필요(빈/미해소 본문 금지)`);
+    }
+    // 리치에디터 본문 삽입 — 에디터 종류별 adapter. 값 출처는 결정형(value_ref/value_from_node), LLM 미경유.
+    //   (1) SynapEditor(사이냅 에디터 — 하이웍스 등 상용): iframe 본문이 non-editable 이고 **제출은 에디터 내부 모델에서
+    //       직렬화**되므로 DOM 직접 삽입(execCommand/prepend)은 렌더는 되어도 제출 본문에 반영되지 않는다(실 하이웍스에서
+    //       전송 메일에 인용문만 남던 회귀 — recon 으로 확정). 인스턴스 API `insertHTML` 로 삽입해야 모델+렌더 iframe 에 반영된다.
+    //       인스턴스 초기화 전이면 'synap-init'(재시도). (2) 그 외 일반 contenteditable iframe(픽스처 등): 본문 직접 삽입.
+    //   반영 witness(probe)까지 한 스크립트에서(미반영=빈 본문 전송 은폐 금지). 교차출처면 접근 불가 → loud. 재시도 idempotent.
+    const probe = value.slice(0, Math.min(24, value.length));
+    const insertScript = `(function(sel, val, probe){
+      try {
+        if (window.SynapEditor && typeof window.SynapEditor.getEditors === 'function') {
+          var eds = window.SynapEditor.getEditors();
+          var wrap = eds && typeof eds === 'object' ? (Array.isArray(eds) ? eds[0] : Object.values(eds)[0]) : null;
+          var ed = wrap && wrap.editor ? wrap.editor : wrap;
+          if (!ed || typeof ed.insertHTML !== 'function') return 'synap-init';
+          var fr = document.querySelector(sel);
+          var present = false;
+          try { present = fr && fr.contentDocument && (fr.contentDocument.body.textContent||'').indexOf(probe)!==-1; } catch(e){}
+          if (!present) {
+            var esc = val.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\r?\\n/g,'<br>');
+            try { ed.insertHTML('<div>'+esc+'</div>'); } catch(e){ return 'synap-insert-err'; }
+          }
+          try { var fd = document.querySelector(sel); if (fd && fd.contentDocument && (fd.contentDocument.body.textContent||'').indexOf(probe)!==-1) return 'ok'; } catch(e){}
+          return 'synap-not-reflected';
+        }
+      } catch(e) { /* SynapEditor 부재/오류 → 일반 contenteditable 경로 */ }
+      var f=document.querySelector(sel);
+      if(!f) return 'no-frame';
+      var d; try{ d=f.contentDocument; }catch(e){ return 'cross-origin'; }
+      if(!d||!d.body) return 'no-body';
+      var b=d.body;
+      if((b.textContent||'').indexOf(probe)!==-1) return 'ok'; // 재시도 idempotent(이미 삽입됨)
+      try{ b.focus(); var r=d.createRange(); r.setStart(b,0); r.collapse(true); var s=d.getSelection(); s.removeAllRanges(); s.addRange(r); }catch(e){}
+      try{ d.execCommand('insertText', false, val); }catch(e){}
+      if((b.textContent||'').indexOf(probe)===-1){
+        try{ var p2=d.createElement('div'); p2.textContent=val; b.insertBefore(p2, b.firstChild); b.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){}
+      }
+      return ((b.textContent||'').indexOf(probe)!==-1) ? 'ok' : 'not-reflected';
+    })(${JSON.stringify(frameSelector)}, ${JSON.stringify(value)}, ${JSON.stringify(probe)})`;
+    const deadline = Date.now() + clickSettleMs();
+    // 실 리치에디터(예 하이웍스 답장 작성창 SmartEditor)는 인용 템플릿("Original Message")을 **비동기로 늦게** 로드해
+    //   먼저 삽입한 본문을 덮어쓴다 — 단발 witness 는 삽입 직후 통과해도 이후 덮어써져 **빈/인용문만 있는 본문**이 전송된다
+    //   (실 하이웍스 회귀: 전송 메일에 인용문만 남고 초안 본문 소실). 삽입값(probe)이 STABLE_MS 동안 **연속 유지**될 때만
+    //   정착으로 보고 진행한다. 사라지면 insertScript 가 다음 폴에서 재삽입하고 안정 타이머를 리셋한다(안정될 때까지 반복).
+    const STABLE_MS = 2000;
+    let status = "";
+    let okSince = 0; // probe 가 연속 present 하기 시작한 시각(0=아직/방금 덮어써짐).
+    for (;;) {
+      if (ctx.abortSignal.aborted) {
+        throw new StagehandDomExecutorError("RUN_ABORTED", `step '${stepId}' aborted while filling rich body frame '${frameSelector}'`);
+      }
+      try {
+        status = await session.evaluate<string>(insertScript);
+      } catch {
+        status = ""; // 네비게이션/일시 단절 — 다음 폴에서 재시도(안정 리셋).
+      }
+      if (status === "cross-origin") {
+        throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' rich_body_frame '${frameSelector}' 는 교차 출처라 본문 접근 불가`);
+      }
+      if (status === "ok") {
+        if (okSince === 0) okSince = Date.now();
+        if (Date.now() - okSince >= STABLE_MS) break; // 삽입값이 STABLE_MS 연속 유지 → 정착(늦은 덮어쓰기 없음).
+      } else {
+        okSince = 0; // 미반영/덮어써짐 → 안정 타이머 리셋(insertScript 가 재삽입).
+      }
+      if (Date.now() >= deadline) {
+        throw new StagehandDomExecutorError(
+          "IR_SCHEMA_INVALID",
+          `step '${stepId}' rich_body_frame '${frameSelector}' 본문 채움 정착 실패(마지막 상태: ${status || "none"}, settle ${clickSettleMs()}ms 초과) — 빈 본문 전송 방지(조용한 false 금지)`,
+        );
+      }
+      await sleep(CLICK_POLL_MS);
+    }
+    const endedAt = nowIso();
+    return {
+      stepId,
+      action: "act",
+      status: "success",
+      output: { plan: { operation: "fill", selector: `${frameSelector} (rich_body_frame)` } },
       pageStateBefore: before,
       pageStateAfter: before,
       artifacts: [],

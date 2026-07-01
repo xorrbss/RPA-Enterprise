@@ -6,6 +6,8 @@ import { withTenantTx, type PgClient, type PgPool } from "../src/db/pool";
 import { compileScenario } from "../src/api/compile-pipeline";
 import { DEV_BROWSER_IDENTITY_ID } from "./run-loop";
 import { seedHiworksApproval } from "./seed-hiworks-approval";
+import { seedEmailReply } from "./seed-email-reply";
+import { seedHiworksMail } from "./seed-hiworks-mail";
 import {
   PORT,
   TENANT,
@@ -411,6 +413,13 @@ export async function seedScenarios(pool: PgPool): Promise<void> {
 
       // 하이웍스 결재(approval) — site_profile + 수집/처리 시나리오. 의미 단위 분리(파일 500라인 규칙 #7, 선례 41c2d3a3).
       await seedHiworksApproval(c);
+
+      // 메일 답장 데모(Model A) — 수집(로그인+목록+LLM 초안)/회신 처리(navigate→답장→fill(value_ref:body)→전송). DEMO_SITE 재사용.
+      await seedEmailReply(c);
+
+      // 실 하이웍스 메일(mails.office.hiworks.com) — "메일 답장 수집" + "메일 답장 검토·전송(하이웍스)"(단일 run @human_task,
+      //   범용 사람-확인 인박스). 목록 row_anchor(→작성창 URL) + rich_body_frame(SmartEditor iframe) + click_text 보내기. 세션 재사용 전제.
+      await seedHiworksMail(c);
 
       // 삼성디스플레이 공지 수집(route B 데모) — navigate(bbsHPNO.do) → observe(그리드 렌더 대기) → extract. 봇차단/로그인 없음(실측).
       const samsung = compileScenario(

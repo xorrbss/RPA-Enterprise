@@ -317,11 +317,13 @@ export function assertDomAction(stepId: string, action: unknown): DomAction {
     const se = (action as { sideEffect?: unknown }).sideEffect;
     const sr = (action as { secretRef?: unknown }).secretRef;
     const vr = (action as { valueRef?: unknown }).valueRef;
+    const vfn = (action as { valueFromNode?: unknown }).valueFromNode;
     const val = (action as { value?: unknown }).value;
     const cs = (action as { clickSelector?: unknown }).clickSelector;
     const ct = (action as { clickText?: unknown }).clickText;
     const aa = (action as { assertAbsent?: unknown }).assertAbsent;
     const fs = (action as { fillSelector?: unknown }).fillSelector;
+    const rbf = (action as { richBodyFrame?: unknown }).richBodyFrame;
     const ss = (action as { selectSelector?: unknown }).selectSelector;
     const sv = (action as { selectValue?: unknown }).selectValue;
     return {
@@ -330,11 +332,17 @@ export function assertDomAction(stepId: string, action: unknown): DomAction {
       ...(typeof se === "string" ? { sideEffect: se as SideEffectKind } : {}),
       ...(typeof sr === "string" && sr.length > 0 ? { secretRef: sr } : {}),
       ...(typeof vr === "string" && vr.length > 0 ? { valueRef: vr } : {}),
+      ...(typeof vfn === "object" && vfn !== null &&
+        typeof (vfn as { node?: unknown }).node === "string" && ((vfn as { node: string }).node).length > 0 &&
+        typeof (vfn as { key?: unknown }).key === "string" && ((vfn as { key: string }).key).length > 0
+        ? { valueFromNode: { node: (vfn as { node: string }).node, key: (vfn as { key: string }).key } }
+        : {}),
       ...(typeof val === "string" ? { value: val } : {}),
       ...(typeof cs === "string" && cs.length > 0 ? { clickSelector: cs } : {}),
       ...(typeof ct === "string" && ct.length > 0 ? { clickText: ct } : {}),
       ...(typeof aa === "string" && aa.length > 0 ? { assertAbsent: aa } : {}),
       ...(typeof fs === "string" && fs.length > 0 ? { fillSelector: fs } : {}),
+      ...(typeof rbf === "string" && rbf.length > 0 ? { richBodyFrame: rbf } : {}),
       ...(typeof ss === "string" && ss.length > 0 ? { selectSelector: ss } : {}),
       ...(typeof sv === "string" ? { selectValue: sv } : {}),
     };
