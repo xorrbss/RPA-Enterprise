@@ -39,6 +39,7 @@ import { GatewayError, LlmGateway } from "../src/gateway/llm-gateway";
 import type { GatewayArtifactSink } from "../src/gateway/llm-gateway";
 import { CodexSseAdapter } from "../src/gateway/codex-sse-adapter";
 import { FetchCodexSseTransport } from "../src/gateway/codex-sse-transport";
+import { PgLlmCallIdempotencyStore } from "../src/gateway/pg-llm-call-idempotency-store";
 import { SafeCapabilityGate } from "../src/gateway/capability-gate";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
 import { VaultSecretStoreBoundary } from "../src/secrets/vault-secret-store-boundary";
@@ -70,7 +71,7 @@ const DEV_RESUME_SIGNING_KEY_REF = "resume.signing" as SecretRef;
  * 실 Codex 게이트웨이 조립(CODEX_* env 필수). 미설정 시 null → dom 실행기 비활성(navigate/observe 만).
  * validator 는 POC pass-through(실 ajv schemaRef 레지스트리는 후속 갭). redaction 경계가 user 메시지(DOM 포함)를 redact.
  */
-function buildCodexGateway(artifactSink?: GatewayArtifactSink): LlmGatewayCaller | null {
+function buildCodexGateway(pool: Pool, artifactSink?: GatewayArtifactSink): LlmGatewayCaller | null {
   const apiKey = process.env.CODEX_API_KEY?.trim();
   const baseUrl = process.env.CODEX_BASE_URL?.trim();
   const model = process.env.CODEX_MODEL?.trim();
@@ -91,6 +92,9 @@ function buildCodexGateway(artifactSink?: GatewayArtifactSink): LlmGatewayCaller
     primary: adapter,
     gate: new SafeCapabilityGate(),
     validator: { validate: () => ({ ok: true }) },
+    // LLM 호출을 stagehand_calls(parsed_json, stream_status='done')로 영속 — '봇으로 굳히기'(promote-from-run)가
+    //   LLM-계획 act 를 결정형으로 승격하려면 이 기록이 필수(미주입 시 no_plans_to_promote). prod runtime-worker 와 동형.
+    idempotency: new PgLlmCallIdempotencyStore(pool),
     sink: {
       // dev 가시화: 게이트웨이가 sink.put(응답텍스트, meta) 로 LLM 출력(extract 결과 AND act 액션플랜 둘 다)을 넘긴다.
       // dev sink는 즉시 조회를 위해 run-level artifact로 저장하고, StepRecordingExecutor가 반환된 UUID ref를 run_steps에 보존한다.
@@ -196,7 +200,7 @@ export async function startRunLoop(
   const downloadDir = mkdtempSync(join(tmpdir(), "dev-runloop-"));
   // 단일 세션 — 행(hang) 워치독이 wedge 된 세션을 교체(recreateSession)할 수 있도록 mutable 바인딩.
   let session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: true });
-  const gateway = buildCodexGateway(artifactSink);
+  const gateway = buildCodexGateway(pool, artifactSink);
   const loggedGateway: LlmGatewayCaller | null =
     gateway === null
       ? null

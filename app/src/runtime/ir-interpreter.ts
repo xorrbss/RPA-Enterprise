@@ -133,6 +133,32 @@ function failureTerminal(status: StepStatus): string | null {
   return null;
 }
 
+/**
+ * act.value_from_node = {node, key} 를 dispatch 직전 소유 노드의 correction[key](사람이 검토·편집한 값)로 해소해 a.value 로
+ * 고정한다. nodeScope 는 런타임(traverse)에서만 존재하므로 compiledScenarioFrom(정적·params-only)이 아닌 여기서 해소한다.
+ * 미해소(노드 미방문/correction 부재/키 부재/비-문자열)면 loud throw — LLM/캐시 값으로 무음 fill 하지 않는다("조용한 false 금지").
+ * value_from_node 가 없거나 act 가 아니면 원본 그대로 반환(투명).
+ */
+function resolveActionValueFromNode(action: unknown, nodeScope: Record<string, NodeOutput>): unknown {
+  if (typeof action !== "object" || action === null) return action;
+  const a = action as { type?: unknown; valueFromNode?: unknown };
+  if (a.type !== "act" || a.valueFromNode === undefined) return action;
+  const vfn = a.valueFromNode as { node?: unknown; key?: unknown };
+  if (typeof vfn.node !== "string" || typeof vfn.key !== "string") {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `interpreter: value_from_node 는 {node,key} 문자열 필요`);
+  }
+  const owner = nodeScope[vfn.node];
+  const correction = owner?.correction;
+  const v = correction !== undefined ? correction[vfn.key] : undefined;
+  if (typeof v !== "string") {
+    throw new InterpreterError(
+      "IR_SCHEMA_INVALID",
+      `interpreter: value_from_node {${vfn.node}.${vfn.key}} 미해소 — 소유 노드 correction 에 문자열 값 없음(사람 검토값 부재; 조용한 fill 금지)`,
+    );
+  }
+  return { ...(action as object), value: v };
+}
+
 /** 순회 공유 가변 상태 — fallback 티어 sub-traversal 이 nodeScope/loopState/steps/visited/budget 을 공유한다. */
 interface TraversalState {
   readonly scenario: CompiledScenario;
@@ -191,9 +217,38 @@ function isFailureTerminal(terminal: string): boolean {
  * 미포함, payload_ref 만) · timeout→expires_at 은 human_task timeout 스위퍼(H4/H8)가 미구현이라 발화 소비자 없음
  * (challenge 경로도 expires_at 미설정 동일). 스위퍼 증분에서 timeout 파싱+expires_at+payload_ref 를 함께 배선.
  */
+/**
+ * @human_task payload 의 한 **VALUE**를 해소한다 — {from_param:"key"} 리프면 run params 값으로 치환(리뷰어가 **하나의
+ * 사람-확인 인박스**에서 이 run 의 실제 데이터를 보고 business_form 필드가 payload[field.key]로 pre-fill 되게,
+ * HumanTaskReviewPanel.initialFormValues). url_ref/value_ref(params 참조)와 동형이되 payload 는 중첩 레코드라 리프 마커로
+ * 리터럴과 구분한다. 미해소(키 부재/비-스칼라)는 loud throw("조용한 false 금지"). 마커가 아니면 그대로/재귀. 호출부는 루트
+ * 레코드의 각 VALUE 에만 적용해(루트 자체는 표시용 레코드로 보존) 루트가 마커로 collapse 되지 않게 한다(PAYLOAD-02).
+ */
+function resolvePayloadParams(value: unknown, params: Record<string, unknown> | undefined, nodeId: string): unknown {
+  if (Array.isArray(value)) return value.map((v) => resolvePayloadParams(v, params, nodeId));
+  if (value !== null && typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    const keys = Object.keys(rec);
+    if (keys.length === 1 && keys[0] === "from_param" && typeof rec.from_param === "string") {
+      const pk = rec.from_param;
+      const pv = params?.[pk];
+      if (typeof pv !== "string" && typeof pv !== "number" && typeof pv !== "boolean") {
+        throw new InterpreterError(
+          "IR_SCHEMA_INVALID",
+          `@human_task node '${nodeId}': payload from_param '${pk}' 미해소 — run params 에 스칼라 값 없음(리뷰어 컨텍스트 유실; 조용한 false 금지)`,
+        );
+      }
+      return pv;
+    }
+    return Object.fromEntries(keys.map((k) => [k, resolvePayloadParams(rec[k], params, nodeId)]));
+  }
+  return value;
+}
+
 function parseHumanTaskInput(
   nodeId: string,
   input: Record<string, unknown>,
+  params: Record<string, unknown> | undefined,
 ): {
   humanTaskKind: "approval" | "validation" | "exception";
   assigneeRole: string;
@@ -240,7 +295,12 @@ function parseHumanTaskInput(
     }
     timeoutMs = parsed;
   }
-  const payload = optionalRecordInput(nodeId, input.payload, "payload");
+  const payloadRaw = optionalRecordInput(nodeId, input.payload, "payload");
+  // payload 는 항상 표시용 레코드(displayKey→value) — 루트 자체를 {from_param} 마커로 오인해 스칼라로 collapse 시키지 않도록
+  //   각 VALUE 만 해소한다(루트 collapse + unsound cast 로 jsonb 에 문자열 영속되던 PAYLOAD-02 방지). 마커는 값 위치에서만 유효.
+  const payload = payloadRaw !== undefined
+    ? Object.fromEntries(Object.entries(payloadRaw).map(([k, v]) => [k, resolvePayloadParams(v, params, nodeId)]))
+    : undefined;
   const resultSchema = optionalRecordInput(nodeId, input.result_schema, "result_schema");
   const artifactRefs = optionalStringArrayInput(nodeId, input.artifact_refs, "artifact_refs");
   return {
@@ -345,13 +405,16 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
       let nodeCommittedSideEffect = false;
       for (let k = 0; k < node.what.length; k += 1) {
         const stepId = `${nodeId}.${k}`;
+        // act.value_from_node(사람 검토·편집값)를 dispatch 직전 nodeScope 에서 해소해 결정형 value 로 고정(span 밖 — 해소
+        //   실패는 executor span 이 아니라 authoring/데이터 무결성 오류). value_from_node 없으면 원본 그대로(투명).
+        const dispatchAction = resolveActionValueFromNode(node.what[k], state.nodeScope);
         // §E 필수 span: executor.execute. 예외는 withSpan 이 record+ERROR 후 재던져 driveScenario system-failsafe 가 흡수.
         const res = await withSpan(
           SPAN.executorExecute,
           spanCommonFromContext(execCtx),
           { node_id: nodeId, executor: executorCapabilityLabel(state.deps.executor.capabilities()) },
           async (span) => {
-            const r = await state.deps.executor.execute(stepId, node.what[k], execCtx);
+            const r = await state.deps.executor.execute(stepId, dispatchAction, execCtx);
             span.setAttribute("action", r.action);
             span.setAttribute("status", r.status);
             return r;
@@ -504,7 +567,8 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
         );
       }
       // R5(트리거 ii): @human_task → 항상 suspend. kind/assignee_role/on_timeout 을 input 에서 파싱(하드코딩 금지, reserved-handlers).
-      const ht = parseHumanTaskInput(nodeId, rh.input);
+      //   payload from_param 은 이 run 의 params 로 해소(리뷰어가 실제 데이터 확인 + form pre-fill).
+      const ht = parseHumanTaskInput(nodeId, rh.input, state.deps.params);
       // pageStateRef: what 실행 시 마지막 StepResult.pageStateAfter(challenge 와 동일 출처), what-less 면 현 페이지뷰 ref
       //   (page-state-resolver.pageStateRef 규약 `ps_${structuralHash}` 와 일치 — resume 검증이 양측 일치 의존).
       const pageRef = lastResult !== undefined ? lastResult.pageStateAfter : `ps_${ctx.pageState.dom.structuralHash}`;

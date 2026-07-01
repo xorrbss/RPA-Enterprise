@@ -49,7 +49,8 @@ import { startCaptureLoop, type CaptureLoop } from "./capture-loop";
 import { startRecordingLoop, type RecordingLoop } from "./recording-loop";
 import { DevVisibleGatewayArtifactSink } from "./dev-gateway-artifact-sink";
 import { seed } from "./seed";
-import { DEV_PRINCIPAL_SUBJECT, PORT, TENANT, FIXTURE_PATH, LOGIN_FIXTURE_PATH } from "./dev-constants";
+import { DEV_PRINCIPAL_SUBJECT, PORT, TENANT, FIXTURE_PATH, LOGIN_FIXTURE_PATH, MAIL_FIXTURE_PATH, MAIL_SEND_PATH } from "./dev-constants";
+import { mailFixturePage, MailSendStore } from "./fixture-mail";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -274,6 +275,7 @@ async function main(): Promise<void> {
   for (const [name, roles] of Object.entries(ROLE_SETS)) htmlByRole[name] = injectHtml(name, await mintToken(roles));
   const indexHtml = htmlByRole.all ?? injectHtml("all", await mintToken(ROLE_SETS.all ?? []));
 
+  const mailSendStore = new MailSendStore(); // 메일 답장 전송 기록(프로세스 메모리, dev 데모 증명용).
   const server = http.createServer((req, res) => {
     const reqUrl = req.url ?? "/";
     if (reqUrl.startsWith("/api/")) {
@@ -304,6 +306,31 @@ async function main(): Promise<void> {
       // 로그인 자동화 픽스처(act fill→submit→authenticatedWhen 전이).
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(LOGIN_FIXTURE_HTML);
+      return;
+    }
+    if ((reqUrl.split("?")[0] ?? "") === MAIL_SEND_PATH && req.method === "POST") {
+      // 메일 답장 전송 기록(회신 run 의 전송 커밋) — 프로세스 메모리. "실제 전송" 증명(비-발신, dev 전용).
+      const id = new URLSearchParams(reqUrl.split("?")[1] ?? "").get("id") ?? "";
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        mailSendStore.record(id, body, new Date().toISOString());
+        console.log(`fixture-mail: 답장 전송 기록 id=${id} len=${body.length}`);
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("ok");
+      });
+      return;
+    }
+    if ((reqUrl.split("?")[0] ?? "") === `${MAIL_FIXTURE_PATH}/sent`) {
+      // 전송 기록 조회(증명용 JSON).
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ sent: mailSendStore.all() }));
+      return;
+    }
+    if ((reqUrl.split("?")[0] ?? "") === MAIL_FIXTURE_PATH) {
+      // 메일 답장 데모 픽스처(로그인 → 목록 → 열기 → 답장 → 전송). ?view=<id> 상세.
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(mailFixturePage(`http://127.0.0.1:${PORT}`));
       return;
     }
     const [pathPart, queryPart] = reqUrl.split("?");

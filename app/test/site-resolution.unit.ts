@@ -78,6 +78,19 @@ check(
   }) === "http://c.example/z",
 );
 
+// 4b) BFS reserved_handler return_node: start가 @human_task(객체형 next) → return_node 뒤 navigate 도달('승인 후 처리' 단일-run 템플릿).
+check(
+  "BFS return_node: @human_task-first → return_node 뒤 navigate 도달",
+  extractEntryNavigateUrlRef({
+    start: "review",
+    nodes: {
+      review: { what: [], next: { handler: "@human_task", input: { kind: "validation", assignee_role: "reviewer" }, return_node: "open" } },
+      open: { what: [{ action: "navigate", url_ref: "msg_ref" }], next: "done" },
+      done: { terminal: "success" },
+    },
+  }) === "msg_ref",
+);
+
 // 5) navigate 부재 → IR_SCHEMA_INVALID
 throwsCode(
   "navigate 부재 → IR_SCHEMA_INVALID",

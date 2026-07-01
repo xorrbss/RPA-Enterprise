@@ -132,7 +132,7 @@ export function compiledScenarioFrom(
  * 비빈 문자열 + pattern 정규식 유효성. 미선언은 undefined(옵션). 부분/오타는 compile-time loud(조용한 false 금지 — 잘못된
  * 결정형 추출 설정을 저장 시점에 거부). 실행기 assertDomAction(coerceRowAnchor)이 런타임 권위 경계로 재검증한다.
  */
-function parseRowAnchor(raw: unknown, nodeId: string): Record<string, string> | undefined {
+function parseRowAnchor(raw: unknown, nodeId: string): Record<string, string | boolean> | undefined {
   if (raw === undefined) return undefined;
   if (!isRec(raw)) {
     throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.args.row_anchor 는 객체여야 함`);
@@ -150,13 +150,24 @@ function parseRowAnchor(raw: unknown, nodeId: string): Record<string, string> | 
   } catch {
     throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.args.row_anchor.pattern 정규식 무효`);
   }
+  // text_selector 는 옵션(앵커 하위 조인키 셀렉터) — 선언 시 비빈 문자열이라야 한다.
+  const ts = raw.text_selector;
+  if (ts !== undefined && (typeof ts !== "string" || ts.trim().length === 0)) {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.args.row_anchor.text_selector 는 선언 시 비빈 문자열`);
+  }
+  const rfc = raw.require_full_coverage;
+  if (rfc !== undefined && typeof rfc !== "boolean") {
+    throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' extract.args.row_anchor.require_full_coverage 는 boolean`);
+  }
   return {
     selector: need("selector"),
+    ...(typeof ts === "string" ? { textSelector: ts } : {}),
     matchField: need("match_field"),
     field: need("field"),
     attribute: need("attribute"),
     pattern,
     template: need("template"),
+    ...(typeof rfc === "boolean" ? { requireFullCoverage: rfc } : {}),
   };
 }
 
@@ -267,6 +278,30 @@ function mapAction(
     // 결정형 fill 타깃: act.args.fill_selector(LLM 미경유 fill). click 모드와 달리 값 출처(value_ref/vars)와 **결합**한다
     //   (셀렉터·값 둘 다 결정형). 클릭/부재단언 모드와는 상호배타. PbD 승격이 성공 run 셀렉터를 여기에 베이킹한다.
     const fillSelector = isRec(a.args) && typeof a.args.fill_selector === "string" && a.args.fill_selector.length > 0 ? a.args.fill_selector : undefined;
+    // 결정형 리치 본문 fill: act.args.rich_body_frame(리치에디터 iframe 셀렉터, 예 SmartEditor 'iframe.se-contents-edit').
+    //   일반 fill_selector 는 main-frame input/textarea 만 채우므로 iframe 내부 contenteditable 본문에 못 미친다 →
+    //   실행기가 iframe 본문(same-origin)을 focus 하고 CDP Input.insertText 로 값을 삽입한다(사용자 타이핑과 동일 이벤트).
+    //   값 출처는 fill_selector 와 동형(value_ref/params 결정형). 셀렉터·클릭·select 모드와 상호배타.
+    const richBodyFrame = isRec(a.args) && typeof a.args.rich_body_frame === "string" && a.args.rich_body_frame.length > 0 ? a.args.rich_body_frame : undefined;
+    // 비-secret 결정형 fill(node-scope 출처): act.args.value_from_node = {node, key} — 채울 값을 **소유 @human_task 노드의
+    //   correction.<key>**(사람이 검토·편집한 값)에서 가져온다. value_ref(run params)와 달리 nodeScope 는 런타임(traverse)에서만
+    //   존재하므로(compiledScenarioFrom 은 params-only·정적) 여기선 intent 마커만 스레드하고 값 해소는 인터프리터가 한다
+    //   (state.nodeScope[node].correction[key], 미해소 시 loud). secretRef/valueRef 와 상호배타(단일 fill 소스 불변식).
+    const vfnRaw = isRec(a.args) ? a.args.value_from_node : undefined;
+    let valueFromNode: { node: string; key: string } | undefined;
+    if (vfnRaw !== undefined) {
+      if (!isRec(vfnRaw) || typeof vfnRaw.node !== "string" || vfnRaw.node.length === 0 || typeof vfnRaw.key !== "string" || vfnRaw.key.length === 0) {
+        throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' act.args.value_from_node 는 {node:비빈문자열, key:비빈문자열} 이어야 함`);
+      }
+      valueFromNode = { node: vfnRaw.node, key: vfnRaw.key };
+    }
+    // 단일 fill-값 소스 불변식(3-way XOR): secretRef(vars) / valueRef(params) / valueFromNode(node correction) 중 최대 하나.
+    if ([secretRef, valueRef, valueFromNode].filter((x) => x !== undefined).length > 1) {
+      throw new InterpreterError(
+        "IR_SCHEMA_INVALID",
+        `compiledScenarioFrom: node '${nodeId}' act 는 vars(secret)/args.value_ref/args.value_from_node 중 하나만 사용 가능(단일 fill 값 소스)`,
+      );
+    }
     // 결정형 select: act.args.select_selector + select_value(드롭다운 셀렉터·옵션 모두 LLM 미경유로 고정). 둘 다 필수.
     //   PbD 승격이 성공 run 의 select ActionPlan(selector+value)을 여기에 베이킹한다. select_value 는 빈 옵션("") 허용.
     const selectSelector = isRec(a.args) && typeof a.args.select_selector === "string" && a.args.select_selector.length > 0 ? a.args.select_selector : undefined;
@@ -279,7 +314,7 @@ function mapAction(
         `compiledScenarioFrom: node '${nodeId}' act 는 click_selector/click_text/assert_absent 중 하나만 사용 가능(결정형 모드 상호배타)`,
       );
     }
-    const hasFill = valueRef !== undefined || secretRef !== undefined || fillSelector !== undefined;
+    const hasFill = valueRef !== undefined || secretRef !== undefined || fillSelector !== undefined || richBodyFrame !== undefined || valueFromNode !== undefined;
     const hasSelect = selectSelector !== undefined || selectValue !== undefined;
     // click / fill / select 은 서로 다른 결정형 모드 그룹 — 한 노드는 하나의 그룹만 쓸 수 있다(상호배타).
     const modeGroups = [clickModes > 0, hasFill, hasSelect].filter((x) => x).length;
@@ -289,12 +324,21 @@ function mapAction(
         `compiledScenarioFrom: node '${nodeId}' act 는 click/fill/select 결정형 모드를 함께 쓸 수 없음(상호배타)`,
       );
     }
-    // fill_selector(결정형 셀렉터)는 채울 값 출처(value_ref 또는 vars[secret])가 반드시 있어야 한다(빈 fill 금지, 조용한 false 금지).
-    if (fillSelector !== undefined && valueRef === undefined && secretRef === undefined) {
+    // fill_selector(결정형 셀렉터)는 채울 값 출처(value_ref/vars[secret]/value_from_node)가 반드시 있어야 한다(빈 fill 금지, 조용한 false 금지).
+    if (fillSelector !== undefined && valueRef === undefined && secretRef === undefined && valueFromNode === undefined) {
       throw new InterpreterError(
         "IR_SCHEMA_INVALID",
-        `compiledScenarioFrom: node '${nodeId}' act.args.fill_selector 는 채울 값 출처(args.value_ref 또는 vars[secret])가 필요`,
+        `compiledScenarioFrom: node '${nodeId}' act.args.fill_selector 는 채울 값 출처(args.value_ref / vars[secret] / args.value_from_node)가 필요`,
       );
+    }
+    // rich_body_frame 은 비-secret 결정형 값(value_ref 또는 value_from_node)만 받고, fill_selector/secret 와 함께 못 쓴다(iframe 본문 전용 fill 모드).
+    if (richBodyFrame !== undefined) {
+      if (valueRef === undefined && valueFromNode === undefined) {
+        throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' act.args.rich_body_frame 는 채울 값 출처(args.value_ref 또는 args.value_from_node) 필요`);
+      }
+      if (fillSelector !== undefined || secretRef !== undefined) {
+        throw new InterpreterError("IR_SCHEMA_INVALID", `compiledScenarioFrom: node '${nodeId}' act.args.rich_body_frame 는 fill_selector/vars(secret) 와 함께 쓸 수 없음`);
+      }
     }
     // AUD-4/SSB-01: 자격증명 fill(secretRef)은 셀렉터가 **기본 결정형 필수** — LLM-선택 셀렉터면 환각 시 비밀번호가
     //   엉뚱한 필드(가시·로그·제출 대상)로 채워질 수 있다(AUD-1 으로 prod fill 배선 후 도달 가능). 알려진 사이트는
@@ -320,11 +364,13 @@ function mapAction(
       ...(nodeSideEffect !== undefined ? { sideEffect: nodeSideEffect } : {}),
       ...(secretRef !== undefined ? { secretRef } : {}),
       ...(valueRef !== undefined ? { valueRef } : {}),
+      ...(valueFromNode !== undefined ? { valueFromNode } : {}),
       ...(value !== undefined ? { value } : {}),
       ...(clickSelector !== undefined ? { clickSelector } : {}),
       ...(clickText !== undefined ? { clickText } : {}),
       ...(assertAbsent !== undefined ? { assertAbsent } : {}),
       ...(fillSelector !== undefined ? { fillSelector } : {}),
+      ...(richBodyFrame !== undefined ? { richBodyFrame } : {}),
       ...(selectSelector !== undefined ? { selectSelector } : {}),
       ...(selectValue !== undefined ? { selectValue } : {}),
     }, nodeRecording);

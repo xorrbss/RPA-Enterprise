@@ -88,8 +88,10 @@ interface IrNodeLike {
 }
 
 /**
- * ir.start에서 도달 가능한(next + on[].target BFS) 첫 navigate의 url_ref를 반환.
+ * ir.start에서 도달 가능한(next + on[].target + reserved_handler return_node BFS) 첫 navigate의 url_ref를 반환.
  * navigate 부재/url_ref 누락 → IR_SCHEMA_INVALID. 멀티-오리진(시나리오 내 다중 사이트)은 entry만 바인딩(연기).
+ * ⚠ @human_task-first 시나리오(start 가 @human_task, entry navigate 가 return_node 뒤)는 next 가 객체형
+ *   {handler, input, return_node} 이므로 return_node 를 이어 탐색해야 navigate 에 도달한다(승인 후 처리 템플릿).
  */
 export function extractEntryNavigateUrlRef(ir: unknown): string {
   const root = ir as { start?: unknown; nodes?: unknown };
@@ -120,6 +122,12 @@ export function extractEntryNavigateUrlRef(ir: unknown): string {
     }
 
     if (typeof node.next === "string") queue.push(node.next);
+    else if (node.next !== null && typeof node.next === "object") {
+      // reserved_handler(@human_task/@challenge): 재개는 return_node 로 이어지므로 그 노드부터 BFS 지속(entry navigate 가
+      //   승인 게이트 뒤에 오는 '승인 후 처리' 단일-run 템플릿 지원). return_node 없으면(형식 오류) 이 분기는 무시.
+      const rn = (node.next as { return_node?: unknown }).return_node;
+      if (typeof rn === "string") queue.push(rn);
+    }
     if (Array.isArray(node.on)) {
       for (const branch of node.on) {
         const target = branch !== null && typeof branch === "object" ? (branch as { target?: unknown }).target : undefined;

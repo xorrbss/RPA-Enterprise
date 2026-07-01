@@ -453,7 +453,7 @@ describe("작업항목·사람확인 상세 드릴다운", () => {
     const workbench = await within(panel).findByRole("region", { name: "검증/교정 워크벤치" });
     expect(within(workbench).getByText("구조화 양식")).toBeInTheDocument();
     expect(within(workbench).getByLabelText(/Invoice ID/)).toHaveValue("INV-7");
-    expect(within(workbench).getByText(/감사·후속 검토 기록으로 저장/)).toBeInTheDocument();
+    expect(within(workbench).getByText(/재개된 동작에 그대로 반영/)).toBeInTheDocument();
 
     fireEvent.change(within(workbench).getByLabelText("판정"), { target: { value: "correct" } });
     fireEvent.change(within(workbench).getByLabelText(/Total/), { target: { value: "125000" } });

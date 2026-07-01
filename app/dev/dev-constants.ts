@@ -5,6 +5,9 @@
 export const PORT = Number(process.env.DEV_CONSOLE_PORT ?? 8080);
 export const FIXTURE_PATH = "/fixture/reviews";
 export const LOGIN_FIXTURE_PATH = "/fixture/login";
+// 메일 답장 데모 픽스처(로그인 → 메일 목록 → 열기 → 답장 → 전송). 실 하이웍스 발신 전 전체 흐름을 안전하게 증명한다.
+export const MAIL_FIXTURE_PATH = "/fixture/mail";
+export const MAIL_SEND_PATH = "/fixture/mail/send";
 
 export const TENANT = "00000000-0000-0000-0000-0000000000d1";
 export const DEV_PRINCIPAL_SUBJECT = "00000000-0000-0000-0000-0000000000de";
@@ -50,5 +53,22 @@ export const SAMSUNG_SCEN = "70000000-0000-0000-0000-00000000d602";
 export const SAMSUNG_SVER = "70000000-0000-0000-0000-00000000d603";
 export const SAMSUNG_NOTICE_URL = "https://guest.samsungdisplay.com/bbs/bbsHPNO.do";
 export const SAMSUNG_ORIGIN = "https://guest.samsungdisplay.com";
+// 메일 답장 데모: 수집(로그인+목록+LLM 초안) / "메일 답장 검토·전송"(단일 run @human_task → 범용 사람-확인 인박스에서
+//   검토·편집·승인 → value_from_node 로 편집값 주입 → 전송). DEMO_SITE(127.0.0.1) 재사용 — 픽스처가 같은 origin.
+export const EMAIL_COLLECT_SCEN = "70000000-0000-0000-0000-00000000d701";
+export const EMAIL_COLLECT_SVER = "70000000-0000-0000-0000-00000000d702";
+export const EMAIL_REPLY_SCEN = "70000000-0000-0000-0000-00000000d703";
+export const EMAIL_REPLY_SVER = "70000000-0000-0000-0000-00000000d704";
+// 실 하이웍스 메일(mails.office.hiworks.com) — 별도 origin site_profile. 목록 행=<a href="/view/inbox/{id}">,
+// 작성창=/write?mode=reply&mail_no={id}(iframe.se-contents-edit SmartEditor), 전송="보내기"(click_text). SSO=login.office.hiworks.com.
+export const HIWORKS_MAIL_SITE = "70000000-0000-4000-8000-00000000d801";
+export const HIWORKS_MAIL_BID = "9b000000-0000-4000-8000-0000000000b5";
+export const HIWORKS_MAIL_NETWORK_POLICY = "9c000000-0000-4000-8000-00000000d801";
+export const HIWORKS_MAIL_ORIGIN = "https://mails.office.hiworks.com";
+export const HIWORKS_MAIL_INBOX_URL = "https://mails.office.hiworks.com/list/inbox?page=1";
+export const HIWORKS_MAIL_COLLECT_SCEN = "70000000-0000-0000-0000-00000000d802";
+export const HIWORKS_MAIL_COLLECT_SVER = "70000000-0000-0000-0000-00000000d803";
+export const HIWORKS_MAIL_REPLY_SCEN = "70000000-0000-0000-0000-00000000d804";
+export const HIWORKS_MAIL_REPLY_SVER = "70000000-0000-0000-0000-00000000d805";
 
 export const ts = (i: number): string => `2026-06-15T10:0${i}:00Z`;

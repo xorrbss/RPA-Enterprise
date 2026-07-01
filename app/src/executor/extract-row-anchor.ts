@@ -17,8 +17,12 @@ import type { CdpSession } from "./cdp-session";
 import { StagehandDomExecutorError } from "./dom-executor-error";
 
 export interface ExtractRowAnchor {
-  /** 행별 앵커 요소 셀렉터(예 "td.docu-num"). textContent 가 조인 키. */
+  /** 행별 앵커 요소 셀렉터(예 "td.docu-num"). textContent 가 조인 키(textSelector 미지정 시). */
   selector: string;
+  /** (옵션) 조인 키 텍스트를 읽을 **앵커 하위** 셀렉터. 앵커가 attribute(예 href)는 갖지만 textContent 가 여러 값의
+   *  연결(발신자+제목+시간 등)이라 matchField 와 정확 매칭 안 될 때, 제목만 담은 자식(예 [class*="subject__"])을 조인키로.
+   *  미지정 시 앵커 자신의 textContent 를 키로 쓴다(기존 동작 무변경). */
+  textSelector?: string;
   /** 각 LLM 행에서 앵커 textContent 와 매칭할 필드명(예 "approval_id"). */
   matchField: string;
   /** 결정형으로 세팅할 행 필드명(예 "doc_ref"). */
@@ -29,6 +33,10 @@ export interface ExtractRowAnchor {
   pattern: string;
   /** field 값 템플릿 — "$1" 가 캡처 id 로 리터럴 치환($ 시퀀스 미해석). */
   template: string;
+  /** (옵션, 기본 true) 모든 권위 앵커가 LLM 행으로 커버돼야 하는가. 결재(완전 인박스—누락=진성 결함)는 true(기본).
+   *  메일 받은편지함처럼 수십 건 중 일부만 초안 대상인 경우 false 로 두면 미커버 앵커를 loud 하지 않고 매칭분만 유지한다
+   *  (ambiguous/미해소는 WRONG 값 위험이라 여전히 배제·drop; 부분 추출 자체는 정상). */
+  requireFullCoverage?: boolean;
 }
 
 // ReDoS 방어(defense-in-depth) — 정규식 exec 입력(외부 DOM 속성값)을 상한으로 절단해 파국적 백트래킹의 hang 시간을 bound.
@@ -60,13 +68,24 @@ export function coerceRowAnchor(raw: unknown, stepId: string): ExtractRowAnchor 
   } catch {
     throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.rowAnchor.pattern is not a valid RegExp`);
   }
+  // textSelector 는 옵션 — 선언 시 비빈 문자열이라야 한다(오타 방치 금지).
+  const ts = r.textSelector;
+  if (ts !== undefined && (typeof ts !== "string" || ts.trim().length === 0)) {
+    throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.rowAnchor.textSelector must be a non-empty string when present`);
+  }
+  const rfc = r.requireFullCoverage;
+  if (rfc !== undefined && typeof rfc !== "boolean") {
+    throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.rowAnchor.requireFullCoverage must be a boolean when present`);
+  }
   return {
     selector: need("selector"),
+    ...(typeof ts === "string" ? { textSelector: ts } : {}),
     matchField: need("matchField"),
     field: need("field"),
     attribute: need("attribute"),
     pattern,
     template: need("template"),
+    ...(typeof rfc === "boolean" ? { requireFullCoverage: rfc } : {}),
   };
 }
 
@@ -85,10 +104,15 @@ export async function applyRowAnchor(
   if (!Array.isArray(rows)) {
     throw new StagehandDomExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' extract.row_anchor: 출력 봉투에 rows 배열 없음`);
   }
-  // 결정형 DOM 읽기: 앵커 요소별 {k:textContent(공백정규화), v:attribute}. 동일 lease 세션, read-only.
+  // 결정형 DOM 읽기: 앵커 요소별 {k:조인키텍스트(공백정규화), v:attribute}. 동일 lease 세션, read-only.
+  //   textSelector 지정 시 조인키는 앵커 하위 요소(제목만) 텍스트, 미지정 시 앵커 자신의 textContent(기존 동작).
+  const keyExpr =
+    anchor.textSelector !== undefined
+      ? `(function(el){var c=el.querySelector(${JSON.stringify(anchor.textSelector)});return ((c&&c.textContent)||"");})(e)`
+      : `(e.textContent||"")`;
   const expr =
     `[...document.querySelectorAll(${JSON.stringify(anchor.selector)})]` +
-    `.map(function(e){return {k:(e.textContent||"").replace(/\\s+/g," ").trim(), v:e.getAttribute(${JSON.stringify(anchor.attribute)})};})`;
+    `.map(function(e){return {k:${keyExpr}.replace(/\\s+/g," ").trim(), v:e.getAttribute(${JSON.stringify(anchor.attribute)})};})`;
   const pairs = await session.evaluate<Array<{ k: string; v: string | null }>>(expr);
   if (!Array.isArray(pairs) || pairs.length === 0) {
     throw new StagehandDomExecutorError(
@@ -169,10 +193,13 @@ export async function applyRowAnchor(
   //  · 미해소앵커(unresolvableAnchors): href 부재/과대/pattern miss/빈 조인키로 doc_ref 산출 불가 → 배제 → 손실.
   const uncovered = byKey.size - matchedKeys.size;
   const lostAnchors = uncovered + ambiguous.size + unresolvableAnchors;
-  if (lostAnchors > 0) {
+  // requireFullCoverage=false(예 메일 받은편지함 부분 추출)면 미커버 앵커를 loud 하지 않는다. 단 kept 가 0 이면(전면
+  //   조인 실패) 여전히 loud — 빈 인박스 은폐 금지는 유지. 기본(미지정/true)은 결재처럼 완전 커버리지 강제(무변경).
+  const requireFullCoverage = anchor.requireFullCoverage !== false;
+  if (lostAnchors > 0 && (requireFullCoverage || kept.length === 0)) {
     throw new StagehandDomExecutorError(
       "IR_SCHEMA_INVALID",
-      `step '${stepId}' extract.row_anchor: 권위 앵커 손실 ${lostAnchors}건(LLM 미커버 ${uncovered} / 모호키 ${ambiguous.size} / 미해소앵커 ${unresolvableAnchors}) — 실 결재 조용한 누락 금지`,
+      `step '${stepId}' extract.row_anchor: 권위 앵커 손실 ${lostAnchors}건(LLM 미커버 ${uncovered} / 모호키 ${ambiguous.size} / 미해소앵커 ${unresolvableAnchors}) — 조용한 누락 금지`,
     );
   }
   return { ...parsed, rows: kept };
