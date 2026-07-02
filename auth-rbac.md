@@ -93,6 +93,7 @@ export type Role =
 | 감사 체인 검증 이력 조회 | api-surface §9 `GET /v1/audit-log/verification-runs` (`audit.read`; payload 본문 미노출, metadata-only violations) | ✓ | ✓ | ✓ | ✓ | ✓ | `AUTHZ_FORBIDDEN` |
 | 감사 체인 수동 검증 실행 | api-surface §9 `POST /v1/audit-log/verification-runs/verify` (`audit.verify`; 90일 verifier evidence 저장) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | tenant offboarding metadata export | api-surface `GET /v1/offboarding/export` (`tenant_data.export`; runs/human_tasks/artifacts CSV, metadata-only, no params/payload/result/object_ref/sha256/content) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| tenant offboarding raw export | api-surface §9 `GET /v1/offboarding/export/raw` (`tenant_data.export`; runs.params + human task payload/result 원문 JSONL, keyset 커서. resume_token/bookmark/자격증명/쿠키/SecretRef 해석값 미포함. 요청마다 fail-closed security-audit) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | network policy 편집(allowed_domains) | security-contracts §6 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | RBAC 역할 부여/회수 | 본 문서 §1 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | SCIM provider 관리 및 동기화(`/v1/scim/providers`, `POST /v1/scim/principals`) | 본 문서 §2 비고(SCIM) + security-contracts §12. provider/mapping 관리는 SecretRef만 저장하고, inbound sync는 registered provider·schema version·signed request를 통과해야 함 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |

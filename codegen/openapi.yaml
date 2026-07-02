@@ -1818,6 +1818,63 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /offboarding/export/raw:
+    get:
+      tags: [Offboarding]
+      operationId: exportOffboardingRawData
+      summary: Export offboarding raw data as JSON Lines
+      description: >
+        Export tenant-scoped raw business data for customer offboarding as JSON Lines
+        (one JSON object per line, machine re-importable). The runs section carries the
+        original runs.params; the human_tasks section carries the original payload/result.
+        Credentials, cookies, resolved SecretRef values, resume_token, and bookmark are
+        never included in any export. Artifact bodies are not served here; reuse
+        GET /artifacts/{id}/blob (RLS redaction gate + per-read audit). Every request is
+        recorded as a fail-closed tenant_data.export security audit decision before the
+        body is returned.
+      parameters:
+        - name: section
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/OffboardingRawExportSection'
+        - name: created_at_from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive lower bound for row created_at.
+        - name: created_at_to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive upper bound for row created_at.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Page size (default 1000; values above 5000 are capped to 5000).
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: >
+            JSON Lines page ordered by (created_at, id) DESC. The body contains data rows
+            only; when another page exists the opaque keyset cursor is returned in the
+            x-next-cursor response header (absent on the last page).
+          headers:
+            x-next-cursor:
+              required: false
+              description: Opaque cursor for the next page. Pass as the cursor query parameter.
+              schema:
+                type: string
+          content:
+            application/x-ndjson:
+              schema:
+                $ref: '#/components/schemas/OffboardingRawExportJsonl'
+        default:
+          $ref: '#/components/responses/Error'
+
   /audit-log/verification-runs:
     get:
       tags: [AuditLog]
@@ -7052,6 +7109,18 @@ components:
         Metadata-only offboarding CSV with manifest, runs, human_tasks, and artifacts sections.
         Execution params, human task payload/result data, artifact object references, hashes,
         and content bodies are intentionally omitted.
+    OffboardingRawExportSection:
+      type: string
+      enum: [runs, human_tasks]
+    OffboardingRawExportJsonl:
+      type: string
+      description: >
+        JSON Lines raw export page. runs rows carry
+        { run_id, scenario_id, scenario_name, created_at, params };
+        human_tasks rows carry
+        { human_task_id, run_id, kind, state, created_at, resolved_at, payload, result,
+        result_schema, payload_ref }. resume_token, bookmark, failure_reason.message,
+        credentials, cookies, and resolved SecretRef values are never included.
     ProcessMiningImportPage:
       type: object
       required: [items, next_cursor]
