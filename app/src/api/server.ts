@@ -42,6 +42,7 @@ import { registerAutomationIdeaRoutes } from "./automation-ideas";
 import { registerAutomationPerformanceReportRoutes } from "./automation-performance-report";
 import { registerProcessMiningImportRoutes } from "./process-mining-imports";
 import { registerOffboardingExportRoutes } from "./offboarding-export";
+import { registerOffboardingRawExportRoutes } from "./offboarding-export-raw";
 import { registerRoiActualRoutes } from "./roi-actuals";
 import { registerRoiEstimateRoutes } from "./roi-estimate";
 import { registerBrowserRecordingRoutes } from "./browser-recordings";
@@ -307,6 +308,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerRoiActualRoutes(app, deps);
   registerAutomationPerformanceReportRoutes(app, deps);
   registerOffboardingExportRoutes(app, deps);
+  registerOffboardingRawExportRoutes(app, deps);
   registerAuthReadinessRoutes(app, deps);
   registerRunTriggerRoutes(app, deps);
   registerWebhookTriggerRoutes(app, deps);

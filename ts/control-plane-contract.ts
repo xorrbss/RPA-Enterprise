@@ -66,6 +66,7 @@ export type ControlPlanePath =
   | "/v1/reports/automation-performance"
   | "/v1/reports/automation-performance/export"
   | "/v1/offboarding/export"
+  | "/v1/offboarding/export/raw"
   | "/v1/process-mining/imports"
   | "/v1/automation-ideas"
   | "/v1/automation-ideas/{idea_id}"

@@ -458,6 +458,7 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "rbac.grant",
   "rbac.revoke",
   "scim.sync",
+  "tenant_data.export",
   "network.request",
   "prompt.inspect",
   "ai_governance.manage",
