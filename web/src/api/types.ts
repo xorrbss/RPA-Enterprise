@@ -2332,6 +2332,7 @@ export interface FanOutApprovalsResult {
   readonly skipped: ReadonlyArray<{ readonly doc_ref: string; readonly reason: string }>;
   readonly skipped_count: number;
   readonly total: number;
+  readonly auto_enabled?: boolean; // enable_auto 요청 시 이 수집 시나리오의 자동 fan-out 을 켰음(②).
 }
 
 export interface GatewayPolicy {

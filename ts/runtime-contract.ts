@@ -1020,6 +1020,7 @@ export interface RuntimeWorkerJob {
     | "lease_sweeper"
     | "workitem_checkout_sweeper"
     | "human_task_timeout_sweeper"
+    | "approval_fan_out_sweeper"
     | "artifact_redaction"
     | "artifact_retention"
     | "artifact_integrity"

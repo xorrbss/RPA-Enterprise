@@ -223,6 +223,17 @@ async function main(): Promise<void> {
       const c3 = await counts(pool);
       check("재-fanout: claim/스폰 그대로(2/2)", c3.claims === 2 && c3.spawned === 2, JSON.stringify(c3));
 
+      // 3b) enable_auto=true → auto_enabled=true + 수집 시나리오 auto_fan_out 켜짐(②: 이후 완료 run 은 sweeper 가 자동 fan-out).
+      //     행은 이미 claim 되어 spawned 0 이지만 플래그는 켜진다(멱등 + 자동 활성 분리).
+      const before = await withTenantTx(pool, TENANT_A, (c) => c.query<{ f: boolean }>(`SELECT auto_fan_out AS f FROM scenarios WHERE id=$1::uuid`, [SCEN_A]));
+      check("enable_auto 전: scenarios.auto_fan_out=false", before.rows[0]?.f === false, JSON.stringify(before.rows));
+      const auto = await post(approver, "k-auto", { source_run_id: SOURCE_RUN_A, enable_auto: true });
+      check("enable_auto=true → 201 auto_enabled=true", auto.statusCode === 201 && auto.json().auto_enabled === true, auto.body);
+      const after = await withTenantTx(pool, TENANT_A, (c) => c.query<{ f: boolean }>(`SELECT auto_fan_out AS f FROM scenarios WHERE id=$1::uuid`, [SCEN_A]));
+      check("enable_auto 후: scenarios.auto_fan_out=true", after.rows[0]?.f === true, JSON.stringify(after.rows));
+      const badAuto = await post(approver, "k-ba", { source_run_id: SOURCE_RUN_A, enable_auto: "yes" });
+      check("enable_auto 비-boolean → 422", badAuto.statusCode === 422, badAuto.body);
+
       // 4) RBAC: viewer/operator → 403.
       const vDeny = await post(viewer, "k-v", { source_run_id: SOURCE_RUN_A });
       check("viewer fan-out → 403 AUTHZ_FORBIDDEN", vDeny.statusCode === 403 && vDeny.json().code === "AUTHZ_FORBIDDEN", vDeny.body);

@@ -33,8 +33,8 @@ const nextCorrelation = (): string => `20000000-0000-4000-8000-${String(++seq).p
 
 const pollJobs = buildMaintenancePollJobs([TENANT_A, TENANT_B], nextCorrelation);
 check(
-  "maintenance poll fanout enqueues lease + human task timeout + checkout sweeper + redaction per tenant",
-  pollJobs.length === 8 &&
+  "maintenance poll fanout enqueues lease + human task timeout + checkout + approval fan-out + redaction per tenant",
+  pollJobs.length === 10 &&
     pollJobs[0]?.kind === "lease_sweeper" &&
     pollJobs[0]?.tenantId === TENANT_A &&
     pollJobs[1]?.kind === "human_task_timeout_sweeper" &&
@@ -43,26 +43,31 @@ check(
     pollJobs[2]?.kind === "workitem_checkout_sweeper" &&
     pollJobs[2]?.tenantId === TENANT_A &&
     pollJobs[2]?.correlationId === "20000000-0000-4000-8000-000000000002" &&
-    pollJobs[3]?.kind === "artifact_redaction" &&
+    pollJobs[3]?.kind === "approval_fan_out_sweeper" &&
     pollJobs[3]?.tenantId === TENANT_A &&
     pollJobs[3]?.correlationId === "20000000-0000-4000-8000-000000000003" &&
-    pollJobs[3]?.runId === undefined &&
-    pollJobs[3]?.artifactId === undefined &&
-    pollJobs[3]?.generationId === undefined &&
-    pollJobs[4]?.kind === "lease_sweeper" &&
-    pollJobs[4]?.tenantId === TENANT_B &&
-    pollJobs[5]?.kind === "human_task_timeout_sweeper" &&
+    pollJobs[4]?.kind === "artifact_redaction" &&
+    pollJobs[4]?.tenantId === TENANT_A &&
+    pollJobs[4]?.correlationId === "20000000-0000-4000-8000-000000000004" &&
+    pollJobs[4]?.runId === undefined &&
+    pollJobs[4]?.artifactId === undefined &&
+    pollJobs[4]?.generationId === undefined &&
+    pollJobs[5]?.kind === "lease_sweeper" &&
     pollJobs[5]?.tenantId === TENANT_B &&
-    pollJobs[6]?.kind === "workitem_checkout_sweeper" &&
+    pollJobs[6]?.kind === "human_task_timeout_sweeper" &&
     pollJobs[6]?.tenantId === TENANT_B &&
-    pollJobs[7]?.kind === "artifact_redaction" &&
+    pollJobs[7]?.kind === "workitem_checkout_sweeper" &&
     pollJobs[7]?.tenantId === TENANT_B &&
-    pollJobs[7]?.artifactId === undefined &&
-    pollJobs[7]?.generationId === undefined,
+    pollJobs[8]?.kind === "approval_fan_out_sweeper" &&
+    pollJobs[8]?.tenantId === TENANT_B &&
+    pollJobs[9]?.kind === "artifact_redaction" &&
+    pollJobs[9]?.tenantId === TENANT_B &&
+    pollJobs[9]?.artifactId === undefined &&
+    pollJobs[9]?.generationId === undefined,
   JSON.stringify(pollJobs),
 );
 
-// pollJobs 가 4회 correlation()을 소비(테넌트당 checkout_sweeper+redaction) → 다음은 005.
+// pollJobs 가 8회 correlation()을 소비(테넌트당 human_task+checkout+approval_fan_out+redaction=4 × 2) → 다음은 009.
 {
   let auditSeq = 0;
   const auditCorrelation = (): string => `21000000-0000-4000-8000-${String(++auditSeq).padStart(12, "0")}`;
@@ -86,7 +91,7 @@ check(
   retentionJobs.length === 1 &&
     retentionJobs[0]?.kind === "artifact_retention" &&
     retentionJobs[0]?.tenantId === TENANT_A &&
-    retentionJobs[0]?.correlationId === "20000000-0000-4000-8000-000000000007",
+    retentionJobs[0]?.correlationId === "20000000-0000-4000-8000-000000000009",
   JSON.stringify(retentionJobs),
 );
 
