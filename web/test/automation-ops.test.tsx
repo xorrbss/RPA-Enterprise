@@ -974,7 +974,7 @@ describe("automation ops view", () => {
         expect.stringMatching(/^ops-alert-webhook-/),
       ),
     );
-    expect(await within(alertRow).findByText("pending")).toBeInTheDocument();
+    expect(await within(alertRow).findByText("발송 대기")).toBeInTheDocument();
     expect(within(alertRow).getByText(/attempt 1\/3/)).toBeInTheDocument();
   });
 
@@ -1535,6 +1535,74 @@ describe("automation ops view", () => {
     expect(screen.getByText("SLA, 트리거, 재처리 대기 감시는 현재 정상 범위입니다.")).toBeInTheDocument();
   });
 
+  test("알림 센터는 동일 subject type/source 알림을 대표 행으로 묶고 상태 enum을 운영자 라벨로 표시한다", async () => {
+    const ackOpsAlert = vi.fn(async (alertId: string) => ({
+      alert_id: alertId,
+      severity: "critical" as const,
+      source: "run_sla" as const,
+      title: "실행 SLA 묶음 대표",
+      detail: "queued 상태 실행이 SLA 임계치를 넘었습니다.",
+      subject_type: "run" as const,
+      subject_id: "run-group-1",
+      status: "acknowledged" as const,
+      delivery: { channel: "console" as const, status: "delivered" as const, delivered_at: "2026-06-23T09:01:00.000Z", external_delivery: false as const },
+      ack: { acknowledged_by: "operator-a", acknowledged_at: "2026-06-23T09:05:00.000Z", comment: null },
+      recommended_action: "running 상태 실행 기록을 확인하세요.",
+      route: "#runTrace?status=running",
+      detected_at: "2026-06-23T09:01:00.000Z",
+      due_at: "2026-06-23T08:49:00.000Z",
+    }));
+    renderApp(clientWithOpsData({
+      ackOpsAlert,
+      listOpsAlerts: async () => ({
+        items: [
+          {
+            alert_id: "alert-run-group-1",
+            severity: "critical" as const,
+            source: "run_sla" as const,
+            title: "실행 SLA 묶음 대표",
+            detail: "queued 상태 실행이 SLA 임계치를 넘었습니다.",
+            subject_type: "run" as const,
+            subject_id: "run-group-1",
+            status: "open" as const,
+            delivery: { channel: "console" as const, status: "delivered" as const, delivered_at: "2026-06-23T09:01:00.000Z", external_delivery: false as const },
+            ack: null,
+            recommended_action: "running 상태 실행 기록을 확인하세요.",
+            route: "#runTrace?status=running",
+            detected_at: "2026-06-23T09:01:00.000Z",
+            due_at: "2026-06-23T08:49:00.000Z",
+          },
+          {
+            alert_id: "alert-run-group-2",
+            severity: "warning" as const,
+            source: "run_sla" as const,
+            title: "두 번째 실행 SLA",
+            detail: "다른 실행도 SLA 임계치를 넘었습니다.",
+            subject_type: "run" as const,
+            subject_id: "run-group-2",
+            status: "open" as const,
+            delivery: { channel: "console" as const, status: "delivered" as const, delivered_at: "2026-06-23T09:02:00.000Z", external_delivery: false as const },
+            ack: null,
+            recommended_action: "실행 기록에서 확인하세요.",
+            route: "#runTrace?status=running",
+            detected_at: "2026-06-23T09:02:00.000Z",
+            due_at: null,
+          },
+        ],
+        next_cursor: null,
+      }),
+    }));
+
+    const representative = (await screen.findByText("실행 SLA 묶음 대표")).closest("li") as HTMLLIElement;
+    expect(screen.queryByText("두 번째 실행 SLA")).toBeNull();
+    expect(within(representative).getByText("외 1건")).toBeInTheDocument();
+    expect(within(representative).getByText("대기 상태 실행이 SLA 임계치를 넘었습니다.")).toBeInTheDocument();
+    expect(within(representative).getByText("권장 조치: 실행 중 상태 실행 기록을 확인하세요.")).toBeInTheDocument();
+
+    fireEvent.click(within(representative).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(ackOpsAlert).toHaveBeenCalledWith("alert-run-group-1", expect.stringMatching(/^ops-alert-ack-/)));
+  });
+
   test("예약 저장은 Run Trigger API를 호출하고 저장 결과를 표시한다", async () => {
     openAutomationOpsSection("schedule");
     const createRunTrigger = vi.fn(async () => ({
@@ -1656,6 +1724,22 @@ describe("automation ops view", () => {
     );
   });
 
+  test("scenario 딥링크는 section 없이도 예약 섹션으로 열린다", async () => {
+    location.hash = "#automationOps?scenario=scenario-month-end";
+    renderApp(clientWithOpsData());
+
+    expect(await screen.findByRole("heading", { name: "실행 예약" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "운영 헬스" })).toBeNull();
+  });
+
+  test("trigger 딥링크는 section 없이도 예약 섹션과 발화 이력을 연다", async () => {
+    location.hash = "#automationOps?trigger=00000000-0000-0000-0000-00000000f001";
+    renderApp(clientWithOpsData());
+
+    expect(await screen.findByRole("heading", { name: "최근 발화 이력" })).toBeInTheDocument();
+    expect(await screen.findByText("내부 오류가 발생했습니다.")).toBeInTheDocument();
+  });
+
   test("예약 저장 실패는 백엔드 details reason을 함께 표시한다", async () => {
     openAutomationOpsSection("schedule");
     const createRunTrigger = vi.fn(async () => {
@@ -1706,6 +1790,42 @@ describe("automation ops view", () => {
       }),
       expect.any(String),
     );
+  });
+
+  test("예약 주기 선택은 평일과 지정 요일을 cron 표현식으로 저장한다", async () => {
+    openAutomationOpsSection("schedule");
+    const createRunTrigger = vi.fn(async () => ({
+      trigger_id: "00000000-0000-0000-0000-00000000f005",
+      scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
+      trigger_type: "cron" as const,
+      status: "enabled" as const,
+      cron_expression: "30 8 * * 1-5",
+      timezone: "Asia/Seoul",
+      webhook_secret_ref: null,
+      params: {},
+      catchup_policy: "skip_missed" as const,
+      max_concurrent_runs: 1,
+      next_fire_at: null,
+      created_by: "operator",
+      created_at: "2026-06-23T00:00:00.000Z",
+      updated_at: "2026-06-23T00:00:00.000Z",
+    }));
+    renderApp(clientWithOpsData({ createRunTrigger }));
+
+    fireEvent.change(await screen.findByLabelText("주기"), { target: { value: "weekdays" } });
+    fireEvent.change(screen.getByLabelText("시각"), { target: { value: "08:30" } });
+    fireEvent.click(screen.getByRole("button", { name: "예약 저장" }));
+    await waitFor(() => expect(createRunTrigger).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cron_expression: "30 8 * * 1-5" }),
+      expect.any(String),
+    ));
+
+    fireEvent.change(screen.getByLabelText("주기"), { target: { value: "weekly_4" } });
+    fireEvent.click(screen.getByRole("button", { name: "예약 저장" }));
+    await waitFor(() => expect(createRunTrigger).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cron_expression: "30 8 * * 4" }),
+      expect.any(String),
+    ));
   });
 
   test("외부 이벤트 트리거는 보안 연결 이름을 보호 참조 payload로 저장한다", async () => {

@@ -10,6 +10,7 @@ import { FilterSelect } from "../components/FilterSelect";
 import { StatusBadge, statusLabel, errorCodeLabel } from "../components/badges";
 import { RUN_STATES } from "./filters";
 import { mergeParams, useHashIdParam, useHashParam } from "../router";
+import { formatDateTime } from "../util/time";
 import type { RunItem, RunPriority, ScenarioGenerationResult } from "../api/types";
 import { POLL_MS, TERMINAL, runDetailRefetchInterval } from "./runtrace/constants";
 import { RunDetailPanel } from "./runtrace/RunDetailPanel";
@@ -168,7 +169,7 @@ export function RunTraceView(): JSX.Element {
               </span>
             ),
           },
-          { header: "기준 시각", render: (r) => r.as_of ?? "—" },
+          { header: "기준 시각", render: (r) => formatDateTime(r.as_of) },
           { header: "우선순위", render: (r) => <RunPriorityControl run={r} /> },
           {
             header: "작업",

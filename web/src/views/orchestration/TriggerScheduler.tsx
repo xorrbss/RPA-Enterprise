@@ -260,7 +260,14 @@ export function TriggerScheduler({
                   <span>주기</span>
                   <select value={cadence} onChange={(event) => setCadence(event.target.value as Cadence)}>
                     <option value="daily">매일</option>
-                    <option value="weekly">매주 월요일</option>
+                    <option value="weekdays">평일</option>
+                    <option value="weekly_1">매주 월요일</option>
+                    <option value="weekly_2">매주 화요일</option>
+                    <option value="weekly_3">매주 수요일</option>
+                    <option value="weekly_4">매주 목요일</option>
+                    <option value="weekly_5">매주 금요일</option>
+                    <option value="weekly_6">매주 토요일</option>
+                    <option value="weekly_0">매주 일요일</option>
                     <option value="monthly">매월 1일</option>
                   </select>
                 </label>

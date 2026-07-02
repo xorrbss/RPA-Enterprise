@@ -9,6 +9,7 @@ import { StepTrace } from "../../components/StepTrace";
 import { GenerationArtifactsPanel } from "../../components/GenerationArtifactsPanel";
 import { StatusBadge, errorCodeLabel, errorLabel } from "../../components/badges";
 import { ErrorState, Loading } from "../../components/states";
+import { formatDateTime } from "../../util/time";
 import type { PromoteFromRunResult, RunDetail, ScenarioGenerationResult } from "../../api/types";
 import { HUMAN_TASK_TERMINAL, SUSPENDED, arrivalTone } from "./constants";
 import { RerunControls } from "./RerunControls";
@@ -127,7 +128,7 @@ export function RunDetailPanel({
             <dt className="subtle">시도 횟수</dt>
             <dd style={{ margin: 0 }}>{detail.data.attempts}</dd>
             <dt className="subtle">기준 시각</dt>
-            <dd style={{ margin: 0 }}>{detail.data.as_of ?? "—"}</dd>
+            <dd style={{ margin: 0 }}>{formatDateTime(detail.data.as_of)}</dd>
           </dl>
           {SUSPENDED.has(detail.data.status) && (
             <p

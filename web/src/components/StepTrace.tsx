@@ -5,7 +5,7 @@ import { RefreshCw } from "lucide-react";
 import { useApiClient } from "../api/context";
 import { StatusBadge, actionLabel, cacheLabel, errorCodeLabel, isStreamWarning, streamStatusLabel } from "./badges";
 import { ErrorState, Loading } from "./states";
-import { hhmmss } from "../util/time";
+import { formatDateTime, hhmmss } from "../util/time";
 import { mergeParams, useHashParam } from "../router";
 import type { StagehandCallSummary, StepSummary } from "../api/types";
 
@@ -48,6 +48,18 @@ function StepTechnicalDetails({ step }: { step: StepSummary }): JSX.Element {
         <dd style={{ margin: 0 }}><code>{step.attempt}</code></dd>
       </dl>
     </details>
+  );
+}
+
+function StepTimes({ step }: { step: StepSummary }): JSX.Element {
+  const started = formatDateTime(step.started_at);
+  const ended = formatDateTime(step.ended_at);
+  if (started === "-" && ended === "-") return <span className="subtle">-</span>;
+  return (
+    <span title={`started_at: ${step.started_at ?? "-"} / ended_at: ${step.ended_at ?? "-"}`}>
+      {started}
+      {ended !== "-" ? ` → ${ended}` : ""}
+    </span>
   );
 }
 
@@ -227,6 +239,10 @@ function StepCard({
         )}
         <StatusBadge status={s.status} />
       </div>
+      <div className="step-line">
+        <span className="subtle">시각</span>
+        <StepTimes step={s} />
+      </div>
       <DurationBar durationMs={s.duration_ms} maxDuration={maxDuration} />
       <AiJudgment calls={s.stagehand_calls} cacheMode={s.cache_mode} />
       {s.exception !== null && (
@@ -365,7 +381,7 @@ function StepTable({
       <table>
         <thead>
           <tr>
-            <th>#</th><th>단계</th><th>동작</th><th>상태</th><th>캐시</th><th>소요</th><th>AI 판단</th><th>증빙</th>
+            <th>#</th><th>단계</th><th>동작</th><th>시각</th><th>상태</th><th>캐시</th><th>소요</th><th>AI 판단</th><th>증빙</th>
           </tr>
         </thead>
         <tbody>
@@ -386,6 +402,7 @@ function StepTable({
                   <StepTechnicalDetails step={s} />
                 </td>
                 <td>{actionLabel(s.action)}</td>
+                <td><StepTimes step={s} /></td>
                 <td>
                   <StatusBadge status={s.status} />
                   {s.exception !== null && <span className="subtle"> {errorCodeLabel(s.exception.code)}</span>}

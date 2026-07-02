@@ -9,6 +9,7 @@ import { StatusBadge, errorLabel } from "../components/badges";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import type { ApprovalRow, RunArtifactItem, RunDetail, ScenarioItem } from "../api/types";
+import { formatDateTime } from "../util/time";
 
 // 결재 처리 자동화 실행의 종결 상태(폴링 중단 기준). state-machine §1.
 const RUN_TERMINAL: ReadonlySet<string> = new Set(["completed", "cancelled", "failed_business", "failed_system"]);
@@ -91,7 +92,7 @@ export function ApprovalInboxView(): JSX.Element {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <p className="subtle" style={{ margin: 0 }}>
-          최근 수집된 하이웍스 결재 목록입니다{latestRun?.as_of ? ` · 기준 ${latestRun.as_of}` : ""}. 결재 권한이 있으면 행별로 승인/반려하거나, 전체를 검토 인박스로 보낼 수 있습니다.
+          최근 수집된 하이웍스 결재 목록입니다{latestRun?.as_of ? ` · 기준 ${formatDateTime(latestRun.as_of)}` : ""}. 결재 권한이 있으면 행별로 승인/반려하거나, 전체를 검토 인박스로 보낼 수 있습니다.
         </p>
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {can("approval.decide") && latestRun !== undefined && <FanOutButton sourceRunId={latestRun.run_id} />}

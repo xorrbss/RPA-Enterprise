@@ -7,6 +7,7 @@ import { useHashParam } from "../../router";
 import type { ConcurrencyPolicy } from "../../api/types";
 import { ActionButton } from "../../components/ActionButton";
 import { errorLabel } from "../../components/badges";
+import { formatShortDateTime } from "../../util/time";
 
 const ROTATION_POLICIES = [
   { value: "manual", label: "수동" },
@@ -81,10 +82,10 @@ export function ConcurrencyPolicyPanel(): JSX.Element | null {
                       <code className="subtle">{p.credential_ref}</code>
                       <div className="subtle" style={{ fontSize: 11 }}>
                         소유자: {p.owner_sub ?? "-"} · 등록: {p.registered_by ?? "-"}
-                        {p.registered_at != null ? ` · ${dateShort(p.registered_at)}` : ""}
+                        {p.registered_at != null ? ` · ${formatShortDateTime(p.registered_at)}` : ""}
                       </div>
                       <div className="subtle" style={{ fontSize: 11 }}>
-                        회전: {rotationLabel(p.rotation_policy)} · 마지막 사용: {dateShort(p.last_used_at)}
+                        회전: {rotationLabel(p.rotation_policy)} · 마지막 사용: {formatShortDateTime(p.last_used_at)}
                       </div>
                       {p.replaced_by_credential_ref != null && (
                         <div className="subtle" style={{ fontSize: 11 }}>
@@ -341,10 +342,6 @@ function CredentialRotateForm(props: { policy: ConcurrencyPolicy }): JSX.Element
 
 function looksLikeCredentialRef(value: string): boolean {
   return value.startsWith("rpa/") && value.split("/").length >= 5 && !value.includes("%");
-}
-
-function dateShort(value: string | null | undefined): string {
-  return value == null || value === "" ? "-" : value.slice(0, 10);
 }
 
 function rotationLabel(value: ConcurrencyPolicy["rotation_policy"]): string {

@@ -1,13 +1,7 @@
 // Orchestration 공유 포맷·에러 헬퍼 — 패널(TriggerFireHistory)·뷰·폼이 공유한다.
 import { ApiError } from "../../api/types";
 import { errorCodeLabel, errorLabel } from "../../components/badges";
-
-export function formatDateTime(value: string | null | undefined): string {
-  if (value === null || value === undefined) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" }).format(date);
-}
+export { formatDateTime } from "../../util/time";
 
 function detailValue(value: unknown): string | null {
   if (typeof value === "string") return value.trim().length > 0 ? value.trim() : null;

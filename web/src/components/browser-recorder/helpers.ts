@@ -6,6 +6,7 @@ import type {
   BrowserRecordingValidationIssue,
   SiteElementItem,
 } from "../../api/types";
+export { formatDateTime } from "../../util/time";
 
 export const EVENT_TYPES: readonly BrowserRecordingEventType[] = [
   "navigate",
@@ -247,12 +248,6 @@ function siteElementStabilityLabel(stability: SiteElementItem["stability"]): str
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat("ko-KR").format(value);
-}
-
-export function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
 
 export function recorderApiBase(): string {

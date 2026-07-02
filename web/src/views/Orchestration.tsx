@@ -53,6 +53,12 @@ function isOpsSection(value: string | null): value is OpsSectionKey {
   return value === "today" || value === "schedule" || value === "queue" || value === "alerts" || value === "readiness" || value === "external";
 }
 
+function resolveOpsSection(section: string | null, scenario: string | null, trigger: string | null): OpsSectionKey {
+  if (isOpsSection(section)) return section;
+  if (scenario !== null || trigger !== null) return "schedule";
+  return "today";
+}
+
 function OpsSectionSelector({ active }: { active: OpsSectionKey }): JSX.Element {
   return (
     <section className="panel ops-section-selector" aria-label="Automation Ops 섹션">
@@ -80,7 +86,9 @@ export function OrchestrationView(): JSX.Element {
   const queryClient = useQueryClient();
   const can = useCan();
   const sectionParam = useHashParam("section");
-  const activeSection = isOpsSection(sectionParam) ? sectionParam : "today";
+  const scenarioParam = useHashParam("scenario");
+  const triggerParam = useHashParam("trigger");
+  const activeSection = resolveOpsSection(sectionParam, scenarioParam, triggerParam);
   const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
   const human = useQuery({ queryKey: ["human-tasks"], queryFn: () => api.listHumanTasks({ limit: 50 }), refetchInterval: 5_000 });
   const workDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 10_000 });

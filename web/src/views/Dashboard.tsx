@@ -10,6 +10,7 @@ import { EmptyState, ErrorState, desktopStateForError } from "../components/stat
 import { StatusBadge, errorCodeLabel, kindLabel } from "../components/badges";
 import { getInternalNavFlags, type NavPolicyFlags } from "../navPolicy";
 import { navigate, type ViewKey } from "../router";
+import { formatDeadline } from "../util/time";
 import type {
   AutomationPerformanceReport,
   AutomationPerformanceReportExportFormat,
@@ -596,10 +597,13 @@ function failedRunTraceTitle(run: RunItem): string {
   return parts.join(" · ");
 }
 
-function humanTaskMeta(task: HumanTaskItem): string {
-  if (task.timeout !== null) return `마감 ${task.timeout}`;
+function humanTaskMeta(task: HumanTaskItem): { meta: string; tone: ActionItem["tone"] } {
+  if (task.timeout !== null) {
+    const deadline = formatDeadline(task.timeout);
+    return { meta: `마감 ${deadline.text}`, tone: deadline.overdue ? "red" : "amber" };
+  }
   const label = kindLabel(task.kind);
-  return label === task.kind ? "확인 대기" : `${label} 확인 대기`;
+  return { meta: label === task.kind ? "확인 대기" : `${label} 확인 대기`, tone: "blue" };
 }
 
 function workitemRetryMeta(item: DeadLetterItem): string {
@@ -634,7 +638,8 @@ function collectActionItems(args: {
     out.push({ key: `fb-${r.run_id}`, tone: "red", title: withRunIdentity("업무 실패 실행", r), meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
   }
   for (const h of [...args.human].sort(bySoonestTimeout).slice(0, 3)) {
-    out.push({ key: `h-${h.human_task_id}`, tone: h.timeout !== null ? "amber" : "blue", title: `사람 확인 대기 · 접수번호 #${h.human_task_id.slice(0, 8)}`, meta: humanTaskMeta(h), traceTitle: `사람 확인 추적 번호: ${h.human_task_id}`, view: "humanTasks", params: { ht: h.human_task_id } });
+    const humanMeta = humanTaskMeta(h);
+    out.push({ key: `h-${h.human_task_id}`, tone: humanMeta.tone, title: `사람 확인 대기 · 접수번호 #${h.human_task_id.slice(0, 8)}`, meta: humanMeta.meta, traceTitle: `사람 확인 추적 번호: ${h.human_task_id}`, view: "humanTasks", params: { ht: h.human_task_id } });
   }
   for (const d of args.wiDlq.slice(0, 2)) {
     out.push({ key: `wd-${d.dead_letter_id}`, tone: "red", title: "작업 항목 재처리 대기", meta: workitemRetryMeta(d), traceTitle: workitemTraceTitle(d), view: "workitems" });
