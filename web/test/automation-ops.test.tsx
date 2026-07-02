@@ -120,7 +120,8 @@ function clientWithOpsData(overrides: Partial<ApiClient> = {}): ApiClient {
           severity: "warning" as const,
           source: "human_task_sla" as const,
           title: "결재 확인 지연",
-          detail: "사람 작업 ht-1이 SLA 임계치에 접근했습니다.",
+          // ops-alerts.ts detail 실제 형식: `${kind}/${state}${assignee}. …` — raw enum 이 문장에 박힌다.
+          detail: "exception/open 미배정. 2423분 초과.",
           subject_type: "human_task" as const,
           subject_id: "ht-1",
           status: "open" as const,
@@ -506,6 +507,9 @@ describe("automation ops view", () => {
     expect(within(humanAlert).getByRole("button", { name: "사람 작업 보기" })).toBeInTheDocument();
     expect(within(spikeAlert).getByRole("button", { name: "실패 기록 보기" })).toBeInTheDocument();
     expect(within(auditAlert).getByRole("button", { name: "감사 검증 보기" })).toBeInTheDocument();
+    // 알림 문장 내 raw enum(사람 확인 종류 kind + 상태 state)은 운영자 한국어로 치환된다(영문 잔존 금지).
+    expect(within(humanAlert).getByText("예외 확인/열림 미배정. 2423분 초과.")).toBeInTheDocument();
+    expect(within(humanAlert).queryByText(/exception|open/)).toBeNull();
   });
 
   test("알림 라우팅 준비도는 활성 웹훅 발송 경로와 SecretRef 요구사항을 표시한다", async () => {
