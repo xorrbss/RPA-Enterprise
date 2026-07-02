@@ -285,6 +285,11 @@ export function ArtifactLookup({
 
   // 해시의 artifact 파라미터(ArtifactRef 클릭 → `#runTrace?run=...&artifact=<uuid>`)로 자동 입력·조회.
   const hashArtifact = useHashParam("artifact");
+  const hasHashArtifact = consumeHashParam && hashArtifact !== null && UUID_RE.test(hashArtifact);
+  const [lookupOpen, setLookupOpen] = useState(hasHashArtifact);
+  useEffect(() => {
+    if (hasHashArtifact) setLookupOpen(true);
+  }, [hasHashArtifact]);
   useEffect(() => {
     if (!consumeHashParam) return;
     if (hashArtifact === null || !UUID_RE.test(hashArtifact)) return;
@@ -334,24 +339,26 @@ export function ArtifactLookup({
     }
   }
 
-  return (
+  const lookup = (
     <section
       ref={sectionRef}
       className={
         embedded
           ? "artifact-lookup artifact-lookup-embedded"
-          : "panel artifact-lookup"
+          : "artifact-lookup"
       }
-      style={{ marginBottom: embedded ? 0 : 16, padding: embedded ? 12 : 16 }}
+      style={{ marginBottom: 0, padding: embedded ? 12 : 0 }}
       aria-label="증빙 조회"
     >
-      <header style={{ marginBottom: 8 }}>
-        <strong>증빙 조회</strong>
-        <span className="subtle" style={{ marginLeft: 8 }}>
-          실행·검토 증빙을 증빙 번호로 조회합니다. 결과는 권한과 처리 상태를
-          통과한 경우에만 표시됩니다.
-        </span>
-      </header>
+      {embedded && (
+        <header style={{ marginBottom: 8 }}>
+          <strong>증빙 조회</strong>
+          <span className="subtle" style={{ marginLeft: 8 }}>
+            실행·검토 증빙을 증빙 번호로 조회합니다. 결과는 권한과 처리 상태를
+            통과한 경우에만 표시됩니다.
+          </span>
+        </header>
+      )}
       <div
         style={{
           display: "flex",
@@ -413,5 +420,24 @@ export function ArtifactLookup({
         </div>
       )}
     </section>
+  );
+
+  if (embedded) return lookup;
+
+  return (
+    <details
+      className="panel artifact-lookup-shell"
+      style={{ marginBottom: 16, padding: 16 }}
+      open={lookupOpen}
+      onToggle={(event) => setLookupOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <strong>증빙 조회</strong>
+        <span className="subtle" style={{ marginLeft: 8 }}>
+          실행·검토 증빙을 증빙 번호로 조회합니다.
+        </span>
+      </summary>
+      <div style={{ marginTop: 12 }}>{lookup}</div>
+    </details>
   );
 }

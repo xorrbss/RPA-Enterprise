@@ -7,35 +7,43 @@ export const ROLE_LABELS: Readonly<Record<string, string>> = RBAC_ROLE_LABELS;
 
 const DEFAULT_ROLES_CLAIM = "roles";
 
-export function decodeRoles(token: string | null): string[] {
-  if (token === null || token === "") return [];
+function decodeJwtPayload(token: string | null): Record<string, unknown> | null {
+  if (token === null || token === "") return null;
   const payloadPart = token.split(".")[1];
-  if (payloadPart === undefined) return [];
+  if (payloadPart === undefined) return null;
   try {
     const b64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
     const padded = b64.length % 4 === 0 ? b64 : b64 + "=".repeat(4 - (b64.length % 4));
-    const payload = JSON.parse(atob(padded)) as Record<string, unknown>;
-    const rawRoles = readClaim(payload, rolesClaimPath());
-    const values = Array.isArray(rawRoles)
-      ? rawRoles
-      : typeof rawRoles === "string" && rawRoles.length > 0
-        ? [rawRoles]
-        : [];
-    const roleMap = parseRoleMap();
-    const roles: string[] = [];
-    const seen = new Set<string>();
-    for (const value of values) {
-      if (typeof value !== "string" || value.length === 0) continue;
-      const mapped = roleMap[value] ?? value;
-      if (!seen.has(mapped)) {
-        seen.add(mapped);
-        roles.push(mapped);
-      }
-    }
-    return roles;
+    const payload = JSON.parse(atob(padded)) as unknown;
+    return typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
   } catch {
-    return [];
+    return null;
   }
+}
+
+export function decodeRoles(token: string | null): string[] {
+  const payload = decodeJwtPayload(token);
+  if (payload === null) return [];
+  const rawRoles = readClaim(payload, rolesClaimPath());
+  const values = Array.isArray(rawRoles)
+    ? rawRoles
+    : typeof rawRoles === "string" && rawRoles.length > 0
+      ? [rawRoles]
+      : [];
+  const roleMap = parseRoleMap();
+  const roles: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string" || value.length === 0) continue;
+    const mapped = roleMap[value] ?? value;
+    if (!seen.has(mapped)) {
+      seen.add(mapped);
+      roles.push(mapped);
+    }
+  }
+  return roles;
 }
 
 function rolesClaimPath(): string {
@@ -79,17 +87,16 @@ export function rolesCan(roles: readonly string[], action: string): boolean {
 }
 
 export function decodeSubject(token: string | null): string | null {
-  if (token === null || token === "") return null;
-  const payloadPart = token.split(".")[1];
-  if (payloadPart === undefined) return null;
-  try {
-    const b64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = b64.length % 4 === 0 ? b64 : b64 + "=".repeat(4 - (b64.length % 4));
-    const payload = JSON.parse(atob(padded)) as { sub?: unknown };
-    return typeof payload.sub === "string" && payload.sub.length > 0 ? payload.sub : null;
-  } catch {
-    return null;
-  }
+  const payload = decodeJwtPayload(token);
+  if (payload === null) return null;
+  return typeof payload.sub === "string" && payload.sub.length > 0 ? payload.sub : null;
+}
+
+export function decodeTokenExpiration(token: string | null): number | null {
+  const payload = decodeJwtPayload(token);
+  const exp = payload?.exp;
+  if (typeof exp !== "number" || !Number.isFinite(exp) || exp <= 0) return null;
+  return exp * 1000;
 }
 
 // principal sub가 assignee(human_tasks.assignee = uuid 컬럼)로 쓸 수 있는 UUID 형식인지. 백엔드 UUID_RE(auth.ts·dlq.ts) 미러.

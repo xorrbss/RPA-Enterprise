@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
 import { useApiClient } from "../api/context";
@@ -81,9 +81,14 @@ function formatCost(calls: readonly StagehandCallSummary[]): string | null {
 export function StepTrace({ runId }: { runId: string }): JSX.Element {
   const api = useApiClient();
   const queryClient = useQueryClient();
-  const q = useQuery({
-    queryKey: ["run-steps", runId],
-    queryFn: () => api.listRunSteps(runId, { limit: 100 }),
+  const q = useInfiniteQuery({
+    queryKey: ["run-steps", runId, "paged"],
+    queryFn: ({ pageParam }) => api.listRunSteps(runId, {
+      limit: 100,
+      ...(typeof pageParam === "string" ? { cursor: pageParam } : {}),
+    }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     refetchInterval: POLL_MS,
   });
   useEffect(() => {
@@ -93,14 +98,14 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
     });
   }, [api, queryClient, runId]);
   const [view, setView] = useState<"cards" | "table">("cards");
-  const items: readonly StepSummary[] = q.data?.items ?? [];
+  const items: readonly StepSummary[] = q.data?.pages.flatMap((page) => page.items) ?? [];
   const focusStep = useHashParam("step");
   const focusAttemptParam = useHashParam("attempt");
   const focusAttempt =
     focusAttemptParam !== null && /^\d+$/.test(focusAttemptParam) ? Number(focusAttemptParam) : null;
   // 절단 정직성(Dashboard.pageCount와 동일 규율): limit:100 페치라 100단계 초과 run은 next_cursor가 남는다.
   // 이때 페이지 길이를 총계처럼 보이지 않게 `N+` 하한으로 표기한다(조용한 false 금지). 비절단이면 정확한 N.
-  const truncated = (q.data?.next_cursor ?? null) !== null;
+  const truncated = q.hasNextPage;
   // 상대 길이 바 기준 = 최대 소요시간(0 division 방지).
   const maxDuration = Math.max(1, ...items.map((s) => s.duration_ms ?? 0));
   // 현재 실행 중인 단계(F1) — run_steps.status CHECK에서 비-터미널은 'started' 단 하나(migration_core_entities.sql:260-261).
@@ -149,15 +154,48 @@ export function StepTrace({ runId }: { runId: string }): JSX.Element {
           기록된 단계가 없습니다. 실행이 아직 시작 전이거나 단계 기록이 없는 외부/초기 경로일 수 있습니다.
         </p>
       ) : view === "cards" ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-          {items.map((s, i) => {
-            const key = `${s.step_id}:${s.attempt}`;
-            return <StepCard key={key} step={s} index={i} maxDuration={maxDuration} isCurrent={key === currentKey} isFocused={key === focusedKey} />;
-          })}
-        </div>
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+            {items.map((s, i) => {
+              const key = `${s.step_id}:${s.attempt}`;
+              return <StepCard key={key} step={s} index={i} maxDuration={maxDuration} isCurrent={key === currentKey} isFocused={key === focusedKey} />;
+            })}
+          </div>
+          <MoreStepsButton query={q} />
+        </>
       ) : (
-        <StepTable items={items} maxDuration={maxDuration} currentKey={currentKey} focusedKey={focusedKey} />
+        <>
+          <StepTable items={items} maxDuration={maxDuration} currentKey={currentKey} focusedKey={focusedKey} />
+          <MoreStepsButton query={q} />
+        </>
       )}
+    </div>
+  );
+}
+
+function MoreStepsButton({
+  query,
+}: {
+  query: {
+    readonly hasNextPage: boolean;
+    readonly isFetchingNextPage: boolean;
+    readonly fetchNextPage: () => Promise<unknown>;
+  };
+}): JSX.Element | null {
+  if (!query.hasNextPage) return null;
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+      <button
+        className="btn"
+        type="button"
+        onClick={() => {
+          void query.fetchNextPage();
+        }}
+        disabled={query.isFetchingNextPage}
+      >
+        {query.isFetchingNextPage ? "불러오는 중" : "더 보기"}
+      </button>
+      <span className="subtle">100개 이후 단계가 더 있습니다.</span>
     </div>
   );
 }
@@ -293,10 +331,23 @@ function AiTechnicalDetails({
   firstCall: StagehandCallSummary | null;
 }): JSX.Element {
   const models = [...new Set(calls.map((c) => c.model))].join(", ");
+  const actionSummaries = calls
+    .map((c) => c.action_summary ?? null)
+    .filter((value): value is string => value !== null && value.trim().length > 0);
   return (
     <details className="developer-details">
       <summary>AI 판단 상세</summary>
       <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px", margin: "8px 0 0" }}>
+        {actionSummaries.length > 0 && (
+          <>
+            <dt className="subtle">결정한 동작</dt>
+            <dd style={{ margin: 0 }}>
+              {actionSummaries.map((summary) => (
+                <div key={summary}><code>{summary}</code></div>
+              ))}
+            </dd>
+          </>
+        )}
         <dt className="subtle">사용 모델</dt>
         <dd style={{ margin: 0 }}><code>{models}</code></dd>
         <dt className="subtle">입력량</dt>

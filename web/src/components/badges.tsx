@@ -93,7 +93,7 @@ export function isStreamWarning(status: string | null): boolean {
 
 // 사람 확인 종류 → 한국어. 출처: filters HUMANTASK_KINDS. 미매핑은 raw 폴백.
 const KIND_LABELS: Record<string, string> = {
-  approval: "승인", validation: "검증", exception: "예외 처리", captcha: "보안문자", mfa: "추가 인증",
+  approval: "승인 요청", validation: "문서 검증", exception: "예외 확인", captcha: "보안문자 입력", mfa: "추가 인증",
 };
 export function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind;
@@ -106,34 +106,61 @@ const TERMINAL_LABELS: Record<string, string> = {
 };
 export function terminalLabel(t: string): string { return TERMINAL_LABELS[t] ?? t; }
 
-// 에러 코드 → 비기술 한국어. 출처: 계약 ts/error-catalog.ts ERROR_CATALOG[code].userMessage(73행 주석 '외부 노출(민감정보 없음)')를
-// 글자 그대로 미러(STATUS_LABELS가 state-machine enum을 미러하는 것과 동일 정당성). web/tsconfig include는 src/test뿐이라
-// 계약 ts를 직접 import할 수 없어 손-미러 + 완전성 테스트(error-label.test.ts)가 드리프트를 막는다(badges 선례).
-// 운영자 표면화에 실제로 흐르는 4xx/표면 코드를 매핑. 미매핑 코드는 raw code로 폴백(조용한 공백 금지).
+// 에러 코드 → 비기술 한국어. 출처: 계약 ts/error-catalog.ts ERROR_CATALOG[code].userMessage(외부 노출).
+// web/tsconfig include는 src/test뿐이라 계약 ts를 직접 import할 수 없어 손-미러 + 완전성 테스트가 드리프트를 막는다.
+// 영어 계약 메시지는 S9 언어 정리 범위에서 web 표면용 한국어로 현지화한다. 미매핑 코드는 raw code로 폴백(조용한 공백 금지).
 const ERROR_LABELS: Record<string, string> = {
+  AI_GOVERNANCE_POLICY_BLOCKED: "AI 운영 정책으로 요청이 차단되었습니다.",
   RUN_NOT_FOUND: "실행을 찾을 수 없습니다.",
   RESOURCE_NOT_FOUND: "대상을 찾을 수 없습니다.",
   RUN_ALREADY_TERMINAL: "이미 종료된 실행입니다.",
   RUN_ABORTED: "실행이 중단되었습니다.",
   SCENARIO_VERSION_CONFLICT: "버전 충돌. 최신본을 다시 불러오세요.",
   POLICY_VERSION_CONFLICT: "정책 버전 충돌. 최신 정책을 다시 불러오세요.",
-  IR_SCHEMA_INVALID: "자동화 정의 오류.",
+  IR_SCHEMA_INVALID: "시나리오 정의 오류.",
   IR_EXPRESSION_COMPILE_ERROR: "조건식 오류.",
+  IR_EXPRESSION_RUNTIME: "일시 오류.",
   SITE_PROFILE_BLOCKED: "해당 사이트는 승인이 필요합니다.",
   SITE_CIRCUIT_OPEN: "일시적으로 수집이 중단되었습니다.",
   SESSION_LOCKED: "잠시 후 재시도됩니다.",
+  SESSION_GENERATION_CONFLICT: "세션 갱신 충돌.",
   SESSION_REGISTRATION_REQUIRED: "로그인 세션 등록이 필요합니다.",
   IR_NO_BRANCH_MATCHED: "페이지 상태에 맞는 다음 단계를 찾지 못했습니다.",
   CHALLENGE_UNRESOLVED: "추가 인증이 필요합니다.",
   RATE_BUDGET_EXCEEDED: "요청 한도 초과. 다음 윈도우에 처리됩니다.",
-  AUTHZ_FORBIDDEN: "권한이 없습니다.",
-  UNAUTHENTICATED: "인증이 필요합니다.",
-  SECRET_ACCESS_DENIED: "권한이 없습니다.",
-  LLM_CAPABILITY_MISMATCH: "모델 미지원 작업.",
+  BROWSER_LEASE_EXPIRED: "재시도됩니다.",
+  BROWSER_CRASH: "재시도됩니다.",
+  CDP_DISCONNECTED: "재시도됩니다.",
+  NAVIGATION_TIMEOUT: "페이지 응답이 지연되어 재시도됩니다.",
   LLM_BUDGET_EXCEEDED: "처리 한도 초과.",
-  HUMAN_TASK_EXPIRED: "처리 기한 만료.",
-  WORKITEM_CHECKOUT_CONFLICT: "재시도됩니다.",
+  LLM_CAPABILITY_MISMATCH: "모델 미지원 작업.",
+  LLM_STREAM_TIMEOUT: "응답 지연.",
+  LLM_STREAM_IDLE_TIMEOUT: "재시도됩니다.",
+  LLM_MALFORMED_OUTPUT: "재시도됩니다.",
+  LLM_CONTENT_FILTERED: "처리할 수 없는 콘텐츠.",
+  LLM_RATE_LIMITED: "잠시 후 재시도됩니다.",
+  LLM_BACKEND_UNAVAILABLE: "재시도됩니다.",
+  LLM_CONNECTION_FAILED: "재시도됩니다.",
+  EXTRACT_SCHEMA_INVALID: "데이터 형식 오류.",
+  VERIFY_FAILED: "재시도됩니다.",
+  EMPTY_RESULT_NO_WITNESS: "결과 확인 불가.",
+  SECRET_ACCESS_DENIED: "권한이 없습니다.",
+  DOMAIN_POLICY_VIOLATION: "허용되지 않은 이동.",
+  PROMPT_INJECTION_DETECTED: "비정상 콘텐츠 감지.",
+  ARTIFACT_NOT_REDACTED: "준비 중입니다.",
+  SHELL_COMMAND_NOT_ALLOWED: "허용되지 않은 명령입니다.",
+  UNAUTHENTICATED: "인증이 필요합니다.",
+  AUTHZ_FORBIDDEN: "권한이 없습니다.",
+  CONNECTOR_PERMISSION_DENIED: "커넥터 권한 위반.",
+  CONNECTOR_INCOMPATIBLE: "버전 비호환.",
+  CONNECTOR_HOOK_FAILED: "커넥터 설치 오류.",
+  SINK_DELIVERY_FAILED: "전달 재시도 중.",
+  RAW_PERSIST_FAILED: "재시도됩니다.",
   CONTROL_PLANE_INTERNAL_ERROR: "내부 오류가 발생했습니다.",
+  HUMAN_TASK_EXPIRED: "처리 기한 만료.",
+  APPROVAL_ALREADY_DECIDED: "이미 처리된 결재입니다.",
+  WORKITEM_CHECKOUT_CONFLICT: "재시도됩니다.",
+  DEAD_LETTER: "수동 재처리 대기.",
 };
 
 // 에러 코드 문자열 → 비기술 한국어(ApiError가 아닌 bare code 호출부용: failure_reason.code / exception.code).
@@ -142,7 +169,67 @@ export function errorCodeLabel(code: string): string {
   return ERROR_LABELS[code] ?? code;
 }
 
-// 운영자 표면 에러 메시지 단일 출처(8곳 raw enum 덤프 통일). ApiError면 계약 userMessage 미러,
+// 계약 operatorAction → 운영자 조치 안내. 세부 contract/code 식별자는 괄호에 보존하되, 버튼/배지 표면에 raw 영문 액션이
+// 그대로 나오지 않도록 한국어로 설명한다. 미매핑은 raw code 폴백(조용한 공백 금지).
+const ERROR_OPERATOR_ACTION_LABELS: Record<string, string> = {
+  AI_GOVERNANCE_POLICY_BLOCKED: "AI 실행 정책과 모델·프롬프트·평가·비용 근거를 확인하세요(ai_runtime_policies).",
+  RUN_NOT_FOUND: "실행 ID(run_id)를 확인하세요.",
+  RESOURCE_NOT_FOUND: "대상 ID와 종류를 확인하세요(api-surface.md).",
+  RUN_ALREADY_TERMINAL: "상태를 확인한 뒤 새 실행을 시작하세요.",
+  RUN_ABORTED: "이미 취소된 실행입니다. 추가 조치는 필요하지 않습니다.",
+  SCENARIO_VERSION_CONFLICT: "최신본을 다시 불러온 뒤 저장하세요(If-Match).",
+  POLICY_VERSION_CONFLICT: "최신 정책을 다시 불러온 뒤 저장하세요(gateway_policies.version, If-Match).",
+  IR_SCHEMA_INVALID: "시나리오 정의 검증 결과(IR schema)를 확인하세요.",
+  IR_EXPRESSION_COMPILE_ERROR: "조건식(IREL) 오류 위치를 확인하세요.",
+  IR_EXPRESSION_RUNTIME: "선행 단계 건너뜀(skip) 여부를 확인하세요.",
+  IR_NO_BRANCH_MATCHED: "분기 조건(on[])과 페이지 상태(PageState flags)를 확인하세요.",
+  SITE_PROFILE_BLOCKED: "사이트 위험도 승인 절차를 진행하세요(site risk=red).",
+  SITE_CIRCUIT_OPEN: "차단율과 수집 재개 윈도우를 확인하세요.",
+  SESSION_LOCKED: "같은 자격 증명의 동시 실행 한도를 확인하세요.",
+  SESSION_GENERATION_CONFLICT: "세션을 다시 조회한 뒤 재시도하세요.",
+  SESSION_REGISTRATION_REQUIRED: "보안·개인정보에서 로그인 세션을 등록한 뒤 다시 실행하세요.",
+  CHALLENGE_UNRESOLVED: "사람 확인 인박스에서 추가 인증을 처리하세요.",
+  RATE_BUDGET_EXCEEDED: "일일 예산과 처리 윈도우를 조정하세요.",
+  BROWSER_LEASE_EXPIRED: "브라우저 lease 정리 작업 상태를 확인하세요.",
+  BROWSER_CRASH: "브라우저 메모리와 재생성 상태를 확인하세요.",
+  CDP_DISCONNECTED: "CDP 연결 상태를 확인하세요.",
+  NAVIGATION_TIMEOUT: "대상 사이트 응답, 로그인 세션, 네트워크 상태를 확인하세요.",
+  LLM_BUDGET_EXCEEDED: "토큰 예산을 늘리거나 시나리오 단계를 줄이세요.",
+  LLM_CAPABILITY_MISMATCH: "모델 정책과 지원 기능(capabilities)을 확인하세요.",
+  LLM_STREAM_TIMEOUT: "모델 백엔드 상태를 확인하세요.",
+  LLM_STREAM_IDLE_TIMEOUT: "대체 모델(fallback) 동작을 확인하세요.",
+  LLM_MALFORMED_OUTPUT: "반복되면 프롬프트와 출력 스키마를 점검하세요.",
+  LLM_CONTENT_FILTERED: "입력 내용을 검토하세요.",
+  LLM_RATE_LIMITED: "모델 호출 제한입니다. 백오프, 동시성, 예산을 확인하세요.",
+  LLM_BACKEND_UNAVAILABLE: "모델 백엔드 상태와 대체 모델을 확인하세요.",
+  LLM_CONNECTION_FAILED: "모델 엔드포인트와 네트워크 연결을 확인하세요.",
+  EXTRACT_SCHEMA_INVALID: "출력 스키마와 페이지 변경 여부를 확인하세요.",
+  VERIFY_FAILED: "검증 기준과 취약한 단계를 확인하세요.",
+  EMPTY_RESULT_NO_WITNESS: "빈 결과 허용 근거(empty_result_allowed witness)를 추가하세요.",
+  SECRET_ACCESS_DENIED: "RBAC와 Vault 정책을 확인하세요.",
+  DOMAIN_POLICY_VIOLATION: "허용 도메인 목록을 점검하세요.",
+  PROMPT_INJECTION_DETECTED: "페이지 출처와 공격 가능성을 검토하세요.",
+  ARTIFACT_NOT_REDACTED: "민감정보 제거 작업(redaction job) 상태를 확인하세요.",
+  SHELL_COMMAND_NOT_ALLOWED: "서명된 명령 등록부에 명령을 등록하세요(security-contracts.md §shell).",
+  UNAUTHENTICATED: "유효한 Bearer JWT를 제시하세요(auth-rbac.md §3).",
+  AUTHZ_FORBIDDEN: "역할/권한 매트릭스를 확인하세요(auth-rbac.md §2).",
+  CONNECTOR_PERMISSION_DENIED: "커넥터 manifest permissions를 확인하세요.",
+  CONNECTOR_INCOMPATIBLE: "runtime/IR 버전 호환성을 확인하세요.",
+  CONNECTOR_HOOK_FAILED: "커넥터 hook 로그를 확인하고 필요하면 되돌리세요.",
+  SINK_DELIVERY_FAILED: "전달 실패 큐(DLQ) 재처리를 확인하세요.",
+  RAW_PERSIST_FAILED: "스토리지 상태를 확인하세요.",
+  CONTROL_PLANE_INTERNAL_ERROR: "control-plane 오류 로그와 correlation_id를 확인하세요.",
+  HUMAN_TASK_EXPIRED: "재처리하거나 상위 이관하세요.",
+  APPROVAL_ALREADY_DECIDED: "결재 상태를 확인하세요.",
+  WORKITEM_CHECKOUT_CONFLICT: "중복 참조(unique_reference)를 확인하세요.",
+  DEAD_LETTER: "실패 보관함(DLQ) 재처리 API를 확인하세요.",
+};
+
+export function errorOperatorActionLabel(code: string): string {
+  return ERROR_OPERATOR_ACTION_LABELS[code] ?? code;
+}
+
+// 운영자 표면 에러 메시지 단일 출처(8곳 raw enum 덤프 통일). ApiError면 web 표면 라벨,
 // 미매핑이면 raw code 폴백(조용한 공백 금지). 비-ApiError는 아래 분기로 처리.
 // correlation_id는 실 응답 필드(types.ts ApiErrorBody)가 있을 때만 부가(없는 추적ID 창작 금지).
 export function errorLabel(err: unknown): string {

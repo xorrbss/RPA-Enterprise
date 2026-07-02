@@ -53,7 +53,6 @@ export function ScenariosView(): JSX.Element {
 
   return (
     <div>
-      {can("scenario.promote.approve") && <PromotionInbox />}
       {can("scenario.create") && (
         <>
           <section className="panel scenario-create-strip" aria-label="자동화 제작 시작">
@@ -79,12 +78,12 @@ export function ScenariosView(): JSX.Element {
         </div>
       )}
       {can("scenario.create") && (
-        <div style={{ marginBottom: 12 }}>
-          <button className="btn" type="button" onClick={() => setForm({ kind: "create" })} disabled={form?.kind === "create"}>
-            + 새 자동화 만들기
-          </button>
-        </div>
+        <ManualScenarioCreateDetails
+          disabled={form?.kind === "create"}
+          onCreate={() => setForm({ kind: "create" })}
+        />
       )}
+      {can("scenario.promote.approve") && <PromotionInbox />}
       {form !== null && <ScenarioForm mode={form} onClose={() => setForm(null)} />}
       <QueryPanel<ScenarioItem>
         title="자동화 목록"
@@ -101,13 +100,10 @@ export function ScenariosView(): JSX.Element {
           ) : undefined
         }
         columns={[
-          { header: "이름", render: (r) => r.name },
-          // 식별값(scenario_id) 노출 — 자동화 검사 화면이 "자동화 목록에서 복사한 식별값"을 요구하므로
-          // 그 출처를 실제로 보여준다(개발자도구를 열어야 하던 dead-end 해소). code 요소라 선택·복사 가능.
-          { header: "식별값", render: (r) => <code className="subtle">{r.scenario_id}</code> },
+          { header: "이름", render: (r) => <ScenarioNameCell scenario={r} /> },
           { header: "버전", render: (r) => `v${r.version}` },
           {
-            header: "운영",
+            header: "운영 기준",
             render: (r) => (
               <span className={`badge ${r.promotion_status === "prod" ? "green" : "muted"}`}>
                 {r.promotion_status === "prod" ? "운영 기준" : "초안"}
@@ -116,9 +112,9 @@ export function ScenariosView(): JSX.Element {
           },
           { header: "실행 기준", render: (r) => <span className="badge muted">v{r.version} 준비됨</span> },
           {
-            header: "작업",
+            header: "주요 작업",
             render: (r) => (
-              <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                 <RunScenarioButton scenario={r} />
                 <button className="btn" type="button" onClick={() => navigate("playground", { scenario: r.scenario_id })}>
                   미리보기
@@ -132,45 +128,50 @@ export function ScenariosView(): JSX.Element {
                     편집
                   </button>
                 )}
-                <button className="btn" type="button" onClick={() => setVersionsFor(r)}>
-                  이력
-                </button>
-                <button className="btn" type="button" onClick={() => setReleasesFor(r)}>
-                  릴리스
-                </button>
-                <ActionButton
-                  label={r.promotion_status === "prod" ? "운영 해제" : "운영 지정"}
-                  action="scenario.promote"
-                  title="운영 지정은 실행에 꼭 필요한 단계가 아니라 운영 기준 표시를 위한 보조 작업입니다."
-                  confirmText={
-                    r.promotion_status === "prod"
-                      ? `${r.name} v${r.version}을(를) 운영 기준에서 내릴까요? 실행 이력은 보존됩니다.`
-                      : `${r.name} v${r.version}을(를) 운영 기준으로 지정할까요? 실행에 꼭 필요한 단계는 아니며, 운영 기준 표시를 위한 보조 작업입니다. 자동화 검사를 통과하고 사이트 승인·세션이 준비되어야 실제로 실행됩니다.`
-                  }
-                  run={(key) => api.setScenarioPromotion(r.scenario_id, r.version, r.promotion_status === "prod" ? "draft" : "prod", key)}
-                  invalidateKeys={[["scenarios"]]}
-                  successText={null}
-                />
-                {r.promotion_status !== "prod" && !can("scenario.promote") && (
-                  <ActionButton
-                    label="승격 요청"
-                    action="scenario.update"
-                    inputLabel="승격 사유"
-                    title="운영(prod) 승격을 승인자에게 요청합니다. 요청자와 다른 승인자가 승인해야 적용됩니다."
-                    confirmText={`${r.name} v${r.version}을(를) 운영 기준으로 승격 요청할까요? 승인자 검토 후 적용됩니다.`}
-                    run={(key, reason) => api.createPromotionRequest(r.scenario_id, r.version, reason ?? "", key)}
-                    invalidateKeys={[["promotion-requests"]]}
-                    successText="요청됨"
-                  />
-                )}
-                <ActionButton
-                  label="보관"
-                  action="scenario.update"
-                  confirmText={`${r.name}을(를) 보관할까요? 목록과 실행 생성 동선에서 제외됩니다.`}
-                  run={(key) => api.archiveScenario(r.scenario_id, r.version, key)}
-                  invalidateKeys={[["scenarios"]]}
-                />
-              </span>
+                <details className="developer-details" style={{ display: "inline-block", minWidth: 120 }}>
+                  <summary>관리 작업</summary>
+                  <div style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+                    <button className="btn" type="button" onClick={() => setVersionsFor(r)}>
+                      이력
+                    </button>
+                    <button className="btn" type="button" onClick={() => setReleasesFor(r)}>
+                      배포
+                    </button>
+                    <ActionButton
+                      label={r.promotion_status === "prod" ? "운영 기준 해제" : "운영 기준 지정"}
+                      action="scenario.promote"
+                      title="운영 기준 지정은 실행 필수 단계가 아니라 운영 표준 버전을 표시하는 보조 작업입니다."
+                      confirmText={
+                        r.promotion_status === "prod"
+                          ? `${r.name} v${r.version}을(를) 운영 기준에서 내릴까요? 실행 이력은 보존됩니다.`
+                          : `${r.name} v${r.version}을(를) 운영 기준으로 지정할까요? 실행에 꼭 필요한 단계는 아니며, 자동화 검사 통과와 사이트 승인·세션 준비는 별도로 확인됩니다.`
+                      }
+                      run={(key) => api.setScenarioPromotion(r.scenario_id, r.version, r.promotion_status === "prod" ? "draft" : "prod", key)}
+                      invalidateKeys={[["scenarios"]]}
+                      successText={null}
+                    />
+                    {r.promotion_status !== "prod" && !can("scenario.promote") && (
+                      <ActionButton
+                        label="운영 기준 승인 요청"
+                        action="scenario.update"
+                        inputLabel="요청 사유"
+                        title="운영 기준 지정을 승인자에게 요청합니다. 요청자와 다른 승인자가 승인해야 적용됩니다."
+                        confirmText={`${r.name} v${r.version}을(를) 운영 기준으로 승인 요청할까요? 승인자 검토 후 적용됩니다.`}
+                        run={(key, reason) => api.createPromotionRequest(r.scenario_id, r.version, reason ?? "", key)}
+                        invalidateKeys={[["promotion-requests"]]}
+                        successText="요청됨"
+                      />
+                    )}
+                    <ActionButton
+                      label="보관"
+                      action="scenario.update"
+                      confirmText={`${r.name}을(를) 보관할까요? 목록과 실행 생성 동선에서 제외됩니다.`}
+                      run={(key) => api.archiveScenario(r.scenario_id, r.version, key)}
+                      invalidateKeys={[["scenarios"]]}
+                    />
+                  </div>
+                </details>
+              </div>
             ),
           },
         ]}
@@ -181,7 +182,49 @@ export function ScenariosView(): JSX.Element {
   );
 }
 
-// approver 승격 인박스(maker-checker, D4) — pending prod 승격 요청을 승인/반려. 요청자≠승인자는 백엔드가 강제(SoD).
+function ManualScenarioCreateDetails(props: { disabled: boolean; onCreate: () => void }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className="developer-details"
+      open={open}
+      style={{ marginBottom: 12 }}
+    >
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+      >
+        양식으로 직접 만들기
+      </summary>
+      {open && (
+        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+          <p className="subtle" style={{ margin: 0 }}>
+            문장으로 초안을 만들 수 없는 예외 상황에서만 직접 입력 양식을 엽니다.
+          </p>
+          <button className="btn" type="button" onClick={props.onCreate} disabled={props.disabled} style={{ justifySelf: "start" }}>
+            + 새 자동화 만들기
+          </button>
+        </div>
+      )}
+    </details>
+  );
+}
+
+function ScenarioNameCell(props: { scenario: ScenarioItem }): JSX.Element {
+  return (
+    <div style={{ display: "grid", gap: 4 }}>
+      <strong>{props.scenario.name}</strong>
+      <details className="developer-details" style={{ marginTop: 0 }}>
+        <summary>식별값 보기</summary>
+        <code className="subtle">{props.scenario.scenario_id}</code>
+      </details>
+    </div>
+  );
+}
+
+// approver 운영 기준 인박스(maker-checker, D4) — pending 운영 기준 요청을 승인/반려. 요청자≠승인자는 백엔드가 강제(SoD).
 function PromotionInbox(): JSX.Element | null {
   const api = useApiClient();
   const inbox = useQuery({ queryKey: ["promotion-requests"], queryFn: () => api.listPromotionRequests(), refetchInterval: 15_000 });
@@ -189,15 +232,15 @@ function PromotionInbox(): JSX.Element | null {
   const items = inbox.data.items;
   return (
     <section
-      aria-label="승격 승인 대기"
+      aria-label="운영 기준 승인 대기"
       style={{ border: "1px solid var(--border, #e2e8f0)", borderRadius: 8, padding: 12, marginBottom: 12 }}
     >
-      <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>승격 승인 대기{items.length > 0 ? ` (${items.length})` : ""}</h2>
+      <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>운영 기준 승인 대기{items.length > 0 ? ` (${items.length})` : ""}</h2>
       <p className="subtle" style={{ margin: "0 0 8px" }}>
-        운영자가 요청한 운영(prod) 승격입니다. 요청자와 다른 승인자가 승인해야 실제로 적용됩니다.
+        운영자가 요청한 운영 기준 변경입니다. 요청자와 다른 승인자가 승인해야 실제로 적용됩니다.
       </p>
       {items.length === 0 ? (
-        <p className="subtle" style={{ margin: 0 }}>대기 중인 승격 요청이 없습니다.</p>
+        <p className="subtle" style={{ margin: 0 }}>대기 중인 운영 기준 요청이 없습니다.</p>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
           {items.map((req) => (
@@ -213,17 +256,17 @@ function PromotionInbox(): JSX.Element | null {
                 <ActionButton
                   label="승인"
                   action="scenario.promote.approve"
-                  confirmText={`${req.scenario_name} v${req.version}을(를) 운영 기준으로 승격할까요? 요청자: ${req.requested_by}`}
+                  confirmText={`${req.scenario_name} v${req.version}을(를) 운영 기준으로 지정할까요? 요청자: ${req.requested_by}`}
                   run={(key) => api.decidePromotionRequest(req.scenario_id, req.request_id, "approve", undefined, key)}
                   invalidateKeys={[["promotion-requests"], ["scenarios"]]}
-                  successText="승격됨"
+                  successText="승인됨"
                 />
                 <ActionButton
                   label="반려"
                   action="scenario.promote.approve"
                   inputLabel="반려 사유(선택)"
                   inputOptional={true}
-                  confirmText={`${req.scenario_name} v${req.version} 승격 요청을 반려할까요?`}
+                  confirmText={`${req.scenario_name} v${req.version} 운영 기준 요청을 반려할까요?`}
                   run={(key, reason) => api.decidePromotionRequest(req.scenario_id, req.request_id, "reject", reason, key)}
                   invalidateKeys={[["promotion-requests"]]}
                   successText="반려됨"
@@ -257,8 +300,8 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
         emptyMessage="저장된 버전이 없습니다."
         columns={[
           { header: "버전", render: (r) => `v${r.version}` },
-          { header: "인증", render: (r) => <CertificationBadge certification={r.certification} /> },
-          { header: "거버넌스", render: (r) => <GovernanceStageBadge certification={r.certification} /> },
+          { header: "운영 인증", render: (r) => <CertificationBadge certification={r.certification} /> },
+          { header: "검토 단계", render: (r) => <GovernanceStageBadge certification={r.certification} /> },
           {
             header: "상태",
             render: (r) => (
@@ -268,7 +311,7 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
             ),
           },
           { header: "작성", render: (r) => formatDateTime(r.created_at) },
-          { header: "승격", render: (r) => (r.promoted_at !== null ? formatDateTime(r.promoted_at) : "-") },
+          { header: "운영 기준 지정", render: (r) => (r.promoted_at !== null ? formatDateTime(r.promoted_at) : "-") },
           {
             header: "작업",
             render: (r) => (
@@ -304,7 +347,7 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
                     label="인증"
                     action="scenario.certify"
                     inputLabel="인증 사유"
-                    confirmText={`${props.scenario.name} v${r.version}을 운영 인증할까요? prod 릴리스 승인은 인증 이후에만 가능합니다.`}
+                    confirmText={`${props.scenario.name} v${r.version}을 운영 인증할까요? 운영 배포 승인은 인증 이후에만 가능합니다.`}
                     run={(key, reason) => api.certifyScenarioVersion(props.scenario.scenario_id, r.version, reason ?? "", null, key)}
                     invalidateKeys={[["scenarios"], ["scenario-versions", props.scenario.scenario_id], ["scenario-releases", props.scenario.scenario_id]]}
                   />
@@ -314,7 +357,7 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
                     label="인증 취소"
                     action="scenario.certify"
                     inputLabel="취소 사유"
-                    confirmText={`${props.scenario.name} v${r.version}의 운영 인증을 취소할까요? 이후 prod 승인과 배포가 차단됩니다.`}
+                    confirmText={`${props.scenario.name} v${r.version}의 운영 인증을 취소할까요? 이후 운영 승인과 배포가 차단됩니다.`}
                     run={(key, reason) => api.revokeScenarioCertification(props.scenario.scenario_id, r.version, reason ?? "", key)}
                     invalidateKeys={[["scenarios"], ["scenario-versions", props.scenario.scenario_id], ["scenario-releases", props.scenario.scenario_id]]}
                   />
@@ -349,14 +392,14 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
           <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
             <span className="label">대상</span>
             <select value={target} onChange={(event) => setTarget(event.target.value as ScenarioReleaseTarget)}>
-              <option value="prod">prod</option>
-              <option value="staging">staging</option>
+              <option value="prod">운영</option>
+              <option value="staging">스테이징</option>
             </select>
           </label>
           <ActionButton
             label="릴리스 요청"
             action="scenario_release.submit"
-            confirmText={`${props.scenario.name} v${props.scenario.version}을(를) ${target} 릴리스 후보로 만들까요?`}
+            confirmText={`${props.scenario.name} v${props.scenario.version}을(를) ${environmentLabel(target)} 배포 후보로 만들까요?`}
             run={(key) => api.createScenarioRelease(props.scenario.scenario_id, { source_version: props.scenario.version, target_environment: target, reason: "console release request" }, key)}
             invalidateKeys={invalidate}
           />
@@ -369,7 +412,7 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
         rowKey={(r) => r.binding_id}
         emptyMessage="아직 활성화된 환경 기준이 없습니다."
         columns={[
-          { header: "환경", render: (r) => <span className={`badge ${r.environment === "prod" ? "green" : "muted"}`}>{r.environment}</span> },
+          { header: "환경", render: (r) => <span className={`badge ${r.environment === "prod" ? "green" : "muted"}`}>{environmentLabel(r.environment)}</span> },
           { header: "버전", render: (r) => `v${r.version}` },
           { header: "활성화", render: (r) => formatDateTime(r.activated_at) },
           { header: "처리자", render: (r) => <code className="subtle">{r.activated_by}</code> },
@@ -381,12 +424,20 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
         rowKey={(r) => r.release_id}
         emptyMessage="릴리스 요청이 없습니다."
         columns={[
-          { header: "대상", render: (r) => <span className={`badge ${r.target_environment === "prod" ? "green" : "muted"}`}>{r.target_environment}</span> },
+          { header: "대상", render: (r) => <span className={`badge ${r.target_environment === "prod" ? "green" : "muted"}`}>{environmentLabel(r.target_environment)}</span> },
           { header: "버전", render: (r) => `v${r.source_version}` },
           { header: "인증", render: (r) => <CertificationBadge certification={r.certification} /> },
           { header: "상태", render: (r) => <span className={`badge ${releaseTone(r.status)}`}>{releaseLabel(r.status)}</span> },
           { header: "요청자", render: (r) => <code className="subtle">{r.requested_by}</code> },
-          { header: "패키지", render: (r) => <code className="subtle">{r.package_hash.slice(0, 18)}…</code> },
+          {
+            header: "패키지",
+            render: (r) => (
+              <details className="developer-details" style={{ marginTop: 0 }}>
+                <summary>패키지 식별값 보기</summary>
+                <code className="subtle">{r.package_hash}</code>
+              </details>
+            ),
+          },
           {
             header: "작업",
             render: (r) => (
@@ -395,7 +446,7 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
                   <ActionButton
                     label="제출"
                     action="scenario_release.submit"
-                    confirmText={`v${r.source_version} ${r.target_environment} 릴리스를 제출할까요?`}
+                    confirmText={`v${r.source_version} ${environmentLabel(r.target_environment)} 배포 요청을 제출할까요?`}
                     run={(key) => api.submitScenarioRelease(r.release_id, key)}
                     invalidateKeys={invalidate}
                   />
@@ -404,7 +455,7 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
                   <ActionButton
                     label="승인"
                     action="scenario_release.approve"
-                    confirmText={`v${r.source_version} ${r.target_environment} 릴리스를 승인할까요?`}
+                    confirmText={`v${r.source_version} ${environmentLabel(r.target_environment)} 배포 요청을 승인할까요?`}
                     run={(key) => api.approveScenarioRelease(r.release_id, null, key)}
                     invalidateKeys={invalidate}
                   />
@@ -413,7 +464,7 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
                   <ActionButton
                     label="반려"
                     action="scenario_release.approve"
-                    confirmText={`v${r.source_version} ${r.target_environment} 릴리스를 반려할까요?`}
+                    confirmText={`v${r.source_version} ${environmentLabel(r.target_environment)} 배포 요청을 반려할까요?`}
                     inputLabel="반려 사유"
                     run={(key, reason) => api.rejectScenarioRelease(r.release_id, reason ?? "", key)}
                     invalidateKeys={invalidate}
@@ -423,7 +474,7 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
                   <ActionButton
                     label="배포"
                     action="scenario_release.deploy"
-                    confirmText={`v${r.source_version}을(를) ${r.target_environment} 기준으로 배포할까요?`}
+                    confirmText={`v${r.source_version}을(를) ${environmentLabel(r.target_environment)} 기준으로 배포할까요?`}
                     run={(key) => api.deployScenarioRelease(r.release_id, props.scenario.version, key)}
                     invalidateKeys={invalidate}
                   />
@@ -432,7 +483,7 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
                   <ActionButton
                     label="롤백"
                     action="scenario_release.rollback"
-                    confirmText={`${r.target_environment} 기준을 직전 배포 버전으로 롤백할까요?`}
+                    confirmText={`${environmentLabel(r.target_environment)} 기준을 직전 배포 버전으로 롤백할까요?`}
                     run={(key) => api.rollbackScenarioRelease(r.release_id, props.scenario.version, key)}
                     invalidateKeys={invalidate}
                   />
@@ -452,18 +503,18 @@ function GovernanceStageBadge(props: { certification?: ScenarioCertification | n
   const details = [
     certification?.governance_reason ?? null,
     certification?.governance_evidence_ref !== null && certification?.governance_evidence_ref !== undefined
-      ? `evidence ${certification.governance_evidence_ref}`
+      ? `근거 ${certification.governance_evidence_ref}`
       : null,
     certification?.governance_updated_by !== null && certification?.governance_updated_by !== undefined
-      ? `by ${certification.governance_updated_by}`
+      ? `처리자 ${certification.governance_updated_by}`
       : null,
     certification?.governance_updated_at !== null && certification?.governance_updated_at !== undefined
       ? formatDateTime(certification.governance_updated_at)
       : null,
   ].filter((value): value is string => value !== null && value.length > 0);
   return (
-    <span className={`badge ${governanceStageTone(stage)}`} title={details.length > 0 ? details.join(" / ") : "governance stage"}>
-      {stage}
+    <span className={`badge ${governanceStageTone(stage)}`} title={details.length > 0 ? details.join(" / ") : "운영 검토 단계"}>
+      {governanceStageLabel(stage)}
     </span>
   );
 }
@@ -482,6 +533,7 @@ function GovernanceStageButton(props: {
   const [evidenceRef, setEvidenceRef] = useState("");
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
   const invalidateKeys = [["scenarios"], ["scenario-versions", props.scenario.scenario_id], ["scenario-releases", props.scenario.scenario_id]] as const;
+  const targetLabel = governanceStageTransitionLabel(props.targetStage);
   const mut = useMutation({
     mutationFn: (body: { reason: string; evidence_ref: string }) =>
       api.setScenarioVersionGovernanceStage(
@@ -491,7 +543,7 @@ function GovernanceStageButton(props: {
         crypto.randomUUID(),
       ),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "saved" });
+      setMsg({ tone: "green", text: "단계 변경됨" });
       for (const key of invalidateKeys) void qc.invalidateQueries({ queryKey: key });
     },
     onError: (e) => setMsg({ tone: "red", text: errorLabel(e) }),
@@ -504,7 +556,7 @@ function GovernanceStageButton(props: {
       <button
         className="btn"
         type="button"
-        title="Governance stage only; prod certification is unchanged."
+        title="운영 검토 단계만 변경합니다. 운영 인증과 배포 승인은 별도입니다."
         disabled={props.currentStage === props.targetStage || mut.isPending}
         onClick={() => {
           setReason("");
@@ -513,12 +565,12 @@ function GovernanceStageButton(props: {
           setConfirming(true);
         }}
       >
-        {mut.isPending ? "처리 중…" : `stage: ${props.targetStage}`}
+        {mut.isPending ? "변경 중…" : targetLabel}
       </button>
       {msg !== null && <span className={`badge ${msg.tone}`} role={msg.tone === "green" ? "status" : "alert"}>{msg.text}</span>}
       {confirming && (
         <ConfirmDialog
-          title={`${props.scenario.name} v${props.version} governance stage: ${props.targetStage}`}
+          title={`${props.scenario.name} v${props.version} 운영 검토 단계: ${governanceStageLabel(props.targetStage)}`}
           confirmDisabled={reason.trim() === "" || evidenceRef.trim() === "" || mut.isPending}
           onCancel={() => setConfirming(false)}
           onConfirm={() => {
@@ -528,12 +580,12 @@ function GovernanceStageButton(props: {
           }}
         >
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="label">Reason</span>
+            <span className="label">변경 사유</span>
             <input value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="label">Evidence ref</span>
-            <input value={evidenceRef} onChange={(e) => setEvidenceRef(e.target.value)} placeholder="ticket:GOV-123" />
+            <span className="label">근거 링크/문서</span>
+            <input value={evidenceRef} onChange={(e) => setEvidenceRef(e.target.value)} placeholder="예: 결재 GOV-123 또는 감사 문서 링크" />
           </label>
         </ConfirmDialog>
       )}
@@ -543,6 +595,26 @@ function GovernanceStageButton(props: {
 
 function governanceStage(certification?: ScenarioCertification | null): ScenarioGovernanceStage {
   return certification?.governance_stage ?? (certification?.status === "certified" && certification.valid_for_prod ? "certified" : "dev");
+}
+
+function governanceStageLabel(stage: ScenarioGovernanceStage): string {
+  const labels: Record<ScenarioGovernanceStage, string> = {
+    dev: "초안 검토 전",
+    review: "검토 중",
+    pilot: "파일럿 운영",
+    certified: "운영 인증",
+    deprecated: "사용 중단",
+  };
+  return labels[stage];
+}
+
+function governanceStageTransitionLabel(stage: ScenarioGovernanceTransitionStage): string {
+  const labels: Record<ScenarioGovernanceTransitionStage, string> = {
+    review: "검토로 보내기",
+    pilot: "파일럿으로 지정",
+    deprecated: "사용 중단 표시",
+  };
+  return labels[stage];
 }
 
 function governanceStageTone(stage: ScenarioGovernanceStage): "green" | "amber" | "red" | "blue" | "muted" {
@@ -576,6 +648,15 @@ function CertificationBadge(props: { certification?: ScenarioCertification | nul
     return <span className="badge red" title={certification.revoke_reason ?? "운영 인증 취소됨"}>취소됨</span>;
   }
   return <span className="badge muted">미인증</span>;
+}
+
+function environmentLabel(environment: string): string {
+  const labels: Record<string, string> = {
+    dev: "개발",
+    staging: "스테이징",
+    prod: "운영",
+  };
+  return labels[environment] ?? environment;
 }
 
 function releaseLabel(status: string): string {

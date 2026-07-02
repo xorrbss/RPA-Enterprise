@@ -6,6 +6,14 @@ import { ApiError } from "../src/api/types";
 
 const KEY = "rpa.token";
 
+function jwtPayload(payload: Record<string, unknown>): string {
+  const body = btoa(JSON.stringify(payload))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  return `e30.${body}.sig`;
+}
+
 beforeEach(() => {
   localStorage.removeItem(KEY);
   window.history.replaceState(null, "", "/");
@@ -104,5 +112,29 @@ describe("TokenGate — 접속/온보딩 + 세션 만료", () => {
     expect(screen.queryByText("APP")).toBeNull();
     expect(screen.getByText(/세션이 만료되었거나 접속 권한을 확인할 수 없습니다/)).toBeInTheDocument();
     expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  test("JWT exp가 임박하면 상단 만료 경고를 표시하고 앱 입력은 유지한다", () => {
+    localStorage.setItem(KEY, jwtPayload({ exp: Math.floor((Date.now() + 9 * 60 * 1000) / 1000) }));
+    render(
+      <TokenGate>
+        <div>APP</div>
+      </TokenGate>,
+    );
+    expect(screen.getByText("APP")).toBeInTheDocument();
+    expect(screen.getByText(/접속 코드가 약 \d+분 후 만료됩니다/)).toBeInTheDocument();
+    expect(localStorage.getItem(KEY)).not.toBeNull();
+  });
+
+  test("JWT exp가 이미 지났으면 새 접속 코드 안내를 표시하되 401 전까지 저장값은 임의 삭제하지 않는다", () => {
+    localStorage.setItem(KEY, jwtPayload({ exp: Math.floor((Date.now() - 60_000) / 1000) }));
+    render(
+      <TokenGate>
+        <div>APP</div>
+      </TokenGate>,
+    );
+    expect(screen.getByText("APP")).toBeInTheDocument();
+    expect(screen.getByText(/접속 코드가 만료되었습니다/)).toBeInTheDocument();
+    expect(localStorage.getItem(KEY)).not.toBeNull();
   });
 });

@@ -17,11 +17,22 @@ const PROVIDERS_KEY = ["scim-providers"];
 const ROLES = ["viewer", "operator", "reviewer", "approver", "admin"] as const;
 const DEFAULT_SECRET_ROTATION_POLICY: ScimProviderSecretRotationPolicy = "periodic_90d";
 const SECRET_ROTATION_POLICIES: readonly { readonly value: ScimProviderSecretRotationPolicy; readonly label: string }[] = [
-  { value: "manual", label: "manual" },
-  { value: "periodic_30d", label: "periodic_30d" },
-  { value: "periodic_60d", label: "periodic_60d" },
-  { value: "periodic_90d", label: "periodic_90d" },
+  { value: "manual", label: "수동" },
+  { value: "periodic_30d", label: "30일마다" },
+  { value: "periodic_60d", label: "60일마다" },
+  { value: "periodic_90d", label: "90일마다" },
 ];
+const IMPORT_MODES: readonly { readonly value: ScimGroupRoleMappingImportBody["mode"]; readonly label: string }[] = [
+  { value: "upsert_only", label: "추가/갱신만" },
+  { value: "replace_active", label: "현재 목록 교체" },
+];
+const ROLE_LABELS: Record<(typeof ROLES)[number], string> = {
+  viewer: "보기 전용",
+  operator: "운영자",
+  reviewer: "검토자",
+  approver: "승인자",
+  admin: "관리자",
+};
 
 export function ScimProviderPanel(): JSX.Element | null {
   const can = useCan();
@@ -43,22 +54,22 @@ function ScimProviderPanelInner(): JSX.Element {
     <section className="panel" style={{ padding: 12, marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
         <strong>SCIM IdP 연결</strong>
-        <span className="subtle">provider SecretRef와 외부 그룹 역할 매핑</span>
+        <span className="subtle">IdP 서명 경로와 외부 그룹 역할 연결을 관리합니다. 계약 키(provider_key)는 세부 정보에 보존됩니다.</span>
       </div>
       <ScimProviderCreateForm />
       {providers.isError && <p className="badge red">{errorLabel(providers.error)}</p>}
       {items.length === 0 ? (
-        <p className="subtle" style={{ marginTop: 10 }}>등록된 SCIM provider가 없습니다.</p>
+        <p className="subtle" style={{ marginTop: 10 }}>등록된 SCIM 연결이 없습니다.</p>
       ) : (
         <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
           <table className="table">
             <thead>
               <tr>
-                <th>Provider</th>
+                <th>연결</th>
                 <th>상태</th>
-                <th>SecretRef</th>
-                <th>Skew</th>
-                <th>Evidence</th>
+                <th>서명 SecretRef</th>
+                <th>허용 시계 차이</th>
+                <th>근거</th>
                 <th>작업</th>
               </tr>
             </thead>
@@ -73,7 +84,7 @@ function ScimProviderPanelInner(): JSX.Element {
                   </td>
                   <td><span className={`badge ${providerStatusTone(provider)}`}>{providerStatusLabel(provider)}</span></td>
                   <td><code>{provider.signature_secret_ref}</code></td>
-                  <td>{provider.clock_skew_seconds}s</td>
+                  <td>{provider.clock_skew_seconds}초</td>
                   <td><ScimProviderEvidence provider={provider} /></td>
                   <td><ScimProviderActions provider={provider} /></td>
                 </tr>
@@ -108,7 +119,7 @@ function ScimProviderCreateForm(): JSX.Element {
         crypto.randomUUID(),
       ),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "provider 등록됨" });
+      setMsg({ tone: "green", text: "SCIM 연결이 등록되었습니다." });
       setProviderKey("");
       setDisplayName("");
       setSecretRef("");
@@ -122,7 +133,7 @@ function ScimProviderCreateForm(): JSX.Element {
     <div style={{ display: "grid", gap: 8, maxWidth: 1080 }}>
       <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) minmax(160px, 1fr) minmax(240px, 2fr) minmax(150px, 1fr) auto", gap: 8, alignItems: "end" }}>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="subtle">provider_key</span>
+          <span className="subtle">연결 키 <span aria-hidden="true">(provider_key)</span></span>
           <input value={providerKey} onChange={(e) => setProviderKey(e.target.value)} placeholder="okta" />
         </label>
         <label style={{ display: "grid", gap: 4 }}>
@@ -134,9 +145,9 @@ function ScimProviderCreateForm(): JSX.Element {
           <input value={secretRef} onChange={(e) => setSecretRef(e.target.value)} placeholder="secret://tenant/scim/okta/signing" />
         </label>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="subtle">rotation policy</span>
+          <span className="subtle">키 교체 주기</span>
           <select
-            aria-label="Rotation policy for new SCIM provider"
+            aria-label="새 SCIM 연결의 키 교체 주기"
             value={rotationPolicy}
             onChange={(e) => setRotationPolicy(e.target.value as ScimProviderSecretRotationPolicy)}
           >
@@ -144,9 +155,9 @@ function ScimProviderCreateForm(): JSX.Element {
           </select>
         </label>
         <button
-          aria-label="SCIM provider 등록"
+          aria-label="SCIM 연결 등록"
           className="btn primary"
-          title="Create SCIM provider"
+          title="SCIM 연결 등록"
           type="button"
           disabled={invalid || create.isPending}
           onClick={() => create.mutate()}
@@ -167,15 +178,15 @@ function ScimProviderEvidence({ provider }: { provider: ScimProviderItem }): JSX
     <div style={{ display: "grid", gap: 4, minWidth: 220 }}>
       <div>
         <span className={`badge ${rotationStatusTone(rotationStatus)}`}>
-          rotation {rotationStatusLabel(rotationStatus)}
+          서명 키 교체: {rotationStatusLabel(rotationStatus)}
         </span>
         <div className="subtle" style={{ fontSize: 11 }}>
-          policy: {secretRotationPolicyLabel(provider.secret_rotation_policy)} / due: {formatProviderTime(provider.rotation_due_at)}
+          주기: {secretRotationPolicyLabel(provider.secret_rotation_policy)} / 다음 교체: {formatProviderTime(provider.rotation_due_at)}
         </div>
       </div>
       {hasRotation && (
         <div>
-          <span className="badge blue">SecretRef rotation</span>
+          <span className="badge blue">서명 경로 교체 완료</span>
           <div className="subtle" style={{ fontSize: 11 }}>
             {formatProviderTime(provider.last_secret_rotated_at)} / {provider.last_secret_rotated_by ?? "-"}
           </div>
@@ -183,13 +194,13 @@ function ScimProviderEvidence({ provider }: { provider: ScimProviderItem }): JSX
       )}
       {hasDecommission && (
         <div>
-          <span className="badge red">Provider decommission</span>
+          <span className="badge red">연결 사용 중지</span>
           <div className="subtle" style={{ fontSize: 11 }}>
             {formatProviderTime(provider.decommissioned_at)} / {provider.decommissioned_by ?? "-"}
           </div>
           {provider.decommission_reason !== null && provider.decommission_reason.trim() !== "" && (
             <div className="subtle" style={{ fontSize: 11 }}>
-              reason: {provider.decommission_reason}
+              사유: {provider.decommission_reason}
             </div>
           )}
         </div>
@@ -226,7 +237,7 @@ function ScimSecretRotationPolicyForm({ provider }: { provider: ScimProviderItem
         crypto.randomUUID(),
       ),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "rotation policy updated" });
+      setMsg({ tone: "green", text: "키 교체 주기가 저장되었습니다." });
       void qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
     },
     onError: (err) => setMsg({ tone: "red", text: errorLabel(err) }),
@@ -235,9 +246,9 @@ function ScimSecretRotationPolicyForm({ provider }: { provider: ScimProviderItem
     <div style={{ display: "grid", gap: 6 }}>
       <div style={{ display: "grid", gridTemplateColumns: "minmax(150px, 1fr) auto", gap: 6, alignItems: "end" }}>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="subtle">rotation policy</span>
+          <span className="subtle">키 교체 주기</span>
           <select
-            aria-label={`Secret rotation policy for ${provider.provider_key}`}
+            aria-label={`${provider.provider_key} 키 교체 주기`}
             value={policy}
             disabled={update.isPending}
             onChange={(e) => {
@@ -251,11 +262,11 @@ function ScimSecretRotationPolicyForm({ provider }: { provider: ScimProviderItem
         <button
           className="btn"
           type="button"
-          aria-label={`Update rotation policy for ${provider.provider_key}`}
+          aria-label={`${provider.provider_key} 키 교체 주기 저장`}
           disabled={policy === provider.secret_rotation_policy || update.isPending}
           onClick={() => update.mutate()}
         >
-          update
+          저장
         </button>
       </div>
       {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
@@ -273,8 +284,8 @@ function ScimProviderStatusButton({ provider }: { provider: ScimProviderItem }):
   });
   if (isProviderDecommissioned(provider)) {
     return (
-      <button className="btn" type="button" disabled aria-label={`Status locked for ${provider.provider_key}`}>
-        decommissioned
+      <button className="btn" type="button" disabled aria-label={`${provider.provider_key} 상태는 사용 중지되어 잠김`}>
+        사용 중지됨
       </button>
     );
   }
@@ -282,7 +293,7 @@ function ScimProviderStatusButton({ provider }: { provider: ScimProviderItem }):
     <button
       className="btn"
       type="button"
-      aria-label={`${next === "disabled" ? "Disable" : "Activate"} ${provider.provider_key}`}
+      aria-label={`${provider.provider_key} ${next === "disabled" ? "비활성화" : "활성화"}`}
       disabled={update.isPending}
       onClick={() => update.mutate()}
     >
@@ -306,7 +317,7 @@ function ScimSecretRefRotateForm({ provider }: { provider: ScimProviderItem }): 
         crypto.randomUUID(),
       ),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "SecretRef rotated" });
+      setMsg({ tone: "green", text: "서명 SecretRef가 교체되었습니다." });
       setSecretRef("");
       setOpen(false);
       void qc.invalidateQueries({ queryKey: PROVIDERS_KEY });
@@ -321,21 +332,21 @@ function ScimSecretRefRotateForm({ provider }: { provider: ScimProviderItem }): 
         <button
           className="btn"
           type="button"
-          aria-label={`Rotate SecretRef for ${provider.provider_key}`}
+          aria-label={`${provider.provider_key} 서명 SecretRef 바꾸기`}
           disabled={decommissioned || rotate.isPending}
           onClick={() => {
             setMsg(null);
             setOpen((value) => !value);
           }}
         >
-          Rotate SecretRef
+          서명 SecretRef 바꾸기
         </button>
         {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
       </span>
       {open && (
         <div style={{ display: "grid", gap: 6 }}>
           <input
-            aria-label={`New SecretRef for ${provider.provider_key}`}
+            aria-label={`${provider.provider_key} 새 서명 SecretRef`}
             value={secretRef}
             onChange={(e) => setSecretRef(e.target.value)}
             placeholder="secret://tenant/scim/provider/signing-v2"
@@ -344,11 +355,11 @@ function ScimSecretRefRotateForm({ provider }: { provider: ScimProviderItem }): 
           <button
             className="btn primary"
             type="button"
-            aria-label={`Confirm SecretRef rotation for ${provider.provider_key}`}
+            aria-label={`${provider.provider_key} 서명 SecretRef 교체 확정`}
             disabled={invalid || rotate.isPending}
             onClick={() => rotate.mutate()}
           >
-            confirm rotation
+            교체 확정
           </button>
         </div>
       )}
@@ -373,7 +384,7 @@ function ScimProviderDecommissionForm({ provider }: { provider: ScimProviderItem
     onSuccess: (result) => {
       setMsg({
         tone: "green",
-        text: `decommissioned: ${result.disabled_mappings} mappings, ${result.revoked_assignments} assignments`,
+        text: `연결 사용 중지: 그룹 연결 ${result.disabled_mappings}개 비활성, 역할 부여 ${result.revoked_assignments}개 회수`,
       });
       setReason("");
       setOpen(false);
@@ -389,33 +400,33 @@ function ScimProviderDecommissionForm({ provider }: { provider: ScimProviderItem
         <button
           className="btn"
           type="button"
-          aria-label={`Decommission ${provider.provider_key}`}
+          aria-label={`${provider.provider_key} 연결 사용 중지`}
           disabled={decommissioned || decommission.isPending}
           onClick={() => {
             setMsg(null);
             setOpen((value) => !value);
           }}
         >
-          Decommission
+          연결 사용 중지
         </button>
         {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
       </span>
       {open && (
         <div style={{ display: "grid", gap: 6 }}>
           <input
-            aria-label={`Decommission reason for ${provider.provider_key}`}
+            aria-label={`${provider.provider_key} 사용 중지 사유`}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="reason"
+            placeholder="사용 중지 사유"
           />
           <button
             className="btn primary"
             type="button"
-            aria-label={`Confirm decommission for ${provider.provider_key}`}
+            aria-label={`${provider.provider_key} 사용 중지 확정`}
             disabled={invalid || decommission.isPending}
             onClick={() => decommission.mutate()}
           >
-            confirm decommission
+            사용 중지 확정
           </button>
         </div>
       )}
@@ -434,20 +445,20 @@ function ScimMappingPanel({ provider }: { provider: ScimProviderItem }): JSX.Ele
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <strong>{provider.provider_key} group mapping</strong>
-        {locked && <span className="badge red">mapping mutations locked</span>}
+        <strong>{provider.provider_key} 외부 그룹 역할 연결</strong>
+        {locked && <span className="badge red">연결이 잠겨 변경할 수 없음</span>}
       </div>
       <ScimMappingCreateForm provider={provider} />
       <ScimMappingImportForm provider={provider} />
       {mappings.isError && <span className="badge red">{errorLabel(mappings.error)}</span>}
       {items.length === 0 ? (
-        <p className="subtle">등록된 group mapping이 없습니다.</p>
+        <p className="subtle">등록된 외부 그룹 연결이 없습니다.</p>
       ) : (
         <table className="table">
           <thead>
             <tr>
-              <th>External group</th>
-              <th>Role</th>
+              <th>외부 그룹</th>
+              <th>역할</th>
               <th>상태</th>
               <th>설명</th>
               <th>작업</th>
@@ -457,8 +468,8 @@ function ScimMappingPanel({ provider }: { provider: ScimProviderItem }): JSX.Ele
             {items.map((mapping) => (
               <tr key={mapping.mapping_id}>
                 <td>{mapping.external_group}</td>
-                <td>{mapping.role}</td>
-                <td><span className={`badge ${mapping.status === "active" ? "green" : "amber"}`}>{mapping.status}</span></td>
+                <td>{roleLabel(mapping.role)}</td>
+                <td><span className={`badge ${mapping.status === "active" ? "green" : "amber"}`}>{mappingStatusLabel(mapping.status)}</span></td>
                 <td>{mapping.description ?? <span className="subtle">-</span>}</td>
                 <td><ScimMappingStatusButton provider={provider} mapping={mapping} /></td>
               </tr>
@@ -487,7 +498,7 @@ function ScimMappingCreateForm({ provider }: { provider: ScimProviderItem }): JS
         crypto.randomUUID(),
       ),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "mapping 등록됨" });
+      setMsg({ tone: "green", text: "외부 그룹 연결이 추가되었습니다." });
       setExternalGroup("");
       setDescription("");
       void qc.invalidateQueries({ queryKey: mappingKey(providerKey) });
@@ -497,7 +508,7 @@ function ScimMappingCreateForm({ provider }: { provider: ScimProviderItem }): JS
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 2fr) minmax(120px, 1fr) minmax(180px, 2fr) auto", gap: 8, alignItems: "end" }}>
       <label style={{ display: "grid", gap: 4 }}>
-        <span className="subtle">external_group</span>
+        <span className="subtle">외부 그룹 <span aria-hidden="true">(external_group)</span></span>
         <input
           value={externalGroup}
           onChange={(e) => setExternalGroup(e.target.value)}
@@ -506,23 +517,23 @@ function ScimMappingCreateForm({ provider }: { provider: ScimProviderItem }): JS
         />
       </label>
       <label style={{ display: "grid", gap: 4 }}>
-        <span className="subtle">role</span>
+        <span className="subtle">부여할 역할</span>
         <select value={role} onChange={(e) => setRole(e.target.value as (typeof ROLES)[number])} disabled={locked}>
-          {ROLES.map((item) => <option key={item} value={item}>{item}</option>)}
+          {ROLES.map((item) => <option key={item} value={item}>{roleLabel(item)}</option>)}
         </select>
       </label>
       <label style={{ display: "grid", gap: 4 }}>
         <span className="subtle">설명</span>
-        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="optional" disabled={locked} />
+        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="선택 사항" disabled={locked} />
       </label>
       <button
-        aria-label="Create SCIM group mapping"
+        aria-label="SCIM 외부 그룹 연결 추가"
         className="btn"
         type="button"
         disabled={locked || externalGroup.trim() === "" || create.isPending}
         onClick={() => create.mutate()}
       >
-        {locked ? "locked" : "추가"}
+        {locked ? "잠김" : "추가"}
       </button>
       {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
     </div>
@@ -543,7 +554,7 @@ function ScimMappingImportForm({ provider }: { provider: ScimProviderItem }): JS
       api.importScimGroupRoleMappings(providerKey, body, crypto.randomUUID()),
     onSuccess: (nextResult) => {
       setResult(nextResult);
-      setMsg({ tone: "green", text: "mapping import completed" });
+      setMsg({ tone: "green", text: "외부 그룹 연결 가져오기가 완료되었습니다." });
       void qc.invalidateQueries({ queryKey: mappingKey(providerKey) });
     },
     onError: (err) => setMsg({ tone: "red", text: errorLabel(err) }),
@@ -562,47 +573,46 @@ function ScimMappingImportForm({ provider }: { provider: ScimProviderItem }): JS
     <div style={{ display: "grid", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
       <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) minmax(260px, 1fr) auto", gap: 8, alignItems: "end" }}>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="subtle">import mode</span>
+          <span className="subtle">가져오기 방식</span>
           <select
-            aria-label={`Mapping import mode for ${providerKey}`}
+            aria-label={`${providerKey} 외부 그룹 가져오기 방식`}
             value={mode}
             disabled={locked || importMappings.isPending}
             onChange={(e) => setMode(e.target.value as ScimGroupRoleMappingImportBody["mode"])}
           >
-            <option value="upsert_only">upsert_only</option>
-            <option value="replace_active">replace_active</option>
+            {IMPORT_MODES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </label>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="subtle">mapping import/reconcile</span>
+          <span className="subtle">CSV로 그룹 연결 가져오기</span>
           <textarea
-            aria-label={`Mapping import CSV for ${providerKey}`}
+            aria-label={`${providerKey} 외부 그룹 연결 CSV`}
             value={csv}
             disabled={locked}
             onChange={(e) => setCsv(e.target.value)}
-            placeholder={"external_group,role,description\ngrp-rpa-operators,operator,Ops group"}
+            placeholder={"external_group,role,description\ngrp-rpa-operators,operator,운영 그룹"}
             rows={3}
             style={{ fontFamily: "monospace", resize: "vertical" }}
           />
         </label>
         <button
-          aria-label={`Import SCIM group mappings for ${providerKey}`}
+          aria-label={`${providerKey} SCIM 외부 그룹 연결 가져오기`}
           className="btn"
           type="button"
           disabled={locked || csv.trim() === "" || importMappings.isPending}
           onClick={runImport}
         >
-          {locked ? "locked" : importMappings.isPending ? "importing" : "import"}
+          {locked ? "잠김" : importMappings.isPending ? "가져오는 중" : "가져오기"}
         </button>
       </div>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
         {result !== null && (
-          <span aria-label={`Mapping import result for ${providerKey}`} style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-            <span className="badge blue">imported {result.imported}</span>
-            <span className="badge blue">updated {result.updated}</span>
-            <span className="badge blue">unchanged {result.unchanged}</span>
-            <span className="badge amber">disabled {result.disabled}</span>
+          <span aria-label={`${providerKey} 외부 그룹 가져오기 결과`} style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+            <span className="badge blue">가져옴 {result.imported}</span>
+            <span className="badge blue">업데이트 {result.updated}</span>
+            <span className="badge blue">변경 없음 {result.unchanged}</span>
+            <span className="badge amber">비활성 {result.disabled}</span>
           </span>
         )}
       </div>
@@ -621,13 +631,13 @@ function ScimMappingStatusButton({ provider, mapping }: { provider: ScimProvider
   });
   return (
     <button
-      aria-label={locked ? `Mapping status locked for ${mapping.external_group}` : undefined}
+      aria-label={locked ? `${mapping.external_group} 외부 그룹 연결은 잠김` : undefined}
       className="btn"
       type="button"
       disabled={locked || update.isPending}
       onClick={() => update.mutate()}
     >
-      {locked ? "locked" : next === "disabled" ? "비활성" : "활성"}
+      {locked ? "잠김" : next === "disabled" ? "비활성" : "활성"}
     </button>
   );
 }
@@ -641,7 +651,7 @@ function parseScimMappingCsv(input: string): ParsedScimMappingCsv {
     .split(/\r?\n/)
     .map((line, index) => ({ line: line.trim(), lineNo: index + 1 }))
     .filter((row) => row.line !== "");
-  if (rows.length === 0) return { ok: false, error: "mapping import requires at least one row" };
+  if (rows.length === 0) return { ok: false, error: "가져올 행이 1개 이상 필요합니다." };
 
   const mappings: ScimGroupRoleMappingImportBody["mappings"][number][] = [];
   const seen = new Set<string>();
@@ -655,14 +665,14 @@ function parseScimMappingCsv(input: string): ParsedScimMappingCsv {
       continue;
     }
     if (columns.length < 2 || columns.length > 3) {
-      return { ok: false, error: `Line ${row.lineNo}: expected external_group,role,description` };
+      return { ok: false, error: `${row.lineNo}행: external_group,role,description 형식이어야 합니다.` };
     }
     const externalGroup = columns[0] ?? "";
     const role = (columns[1] ?? "").toLowerCase();
     const description = columns[2] ?? "";
-    if (externalGroup === "") return { ok: false, error: `Line ${row.lineNo}: external_group is required` };
-    if (!isScimRole(role)) return { ok: false, error: `Line ${row.lineNo}: invalid role ${columns[1] ?? ""}` };
-    if (seen.has(externalGroup)) return { ok: false, error: `Line ${row.lineNo}: duplicate external_group ${externalGroup}` };
+    if (externalGroup === "") return { ok: false, error: `${row.lineNo}행: external_group 값이 필요합니다.` };
+    if (!isScimRole(role)) return { ok: false, error: `${row.lineNo}행: 허용되지 않은 역할 ${columns[1] ?? ""}` };
+    if (seen.has(externalGroup)) return { ok: false, error: `${row.lineNo}행: external_group ${externalGroup}가 중복되었습니다.` };
     seen.add(externalGroup);
     mappings.push({
       external_group: externalGroup,
@@ -670,8 +680,8 @@ function parseScimMappingCsv(input: string): ParsedScimMappingCsv {
       description: description === "" ? null : description,
     });
   }
-  if (mappings.length === 0) return { ok: false, error: "mapping import requires at least one row" };
-  if (mappings.length > 500) return { ok: false, error: "mapping import supports up to 500 rows" };
+  if (mappings.length === 0) return { ok: false, error: "가져올 행이 1개 이상 필요합니다." };
+  if (mappings.length > 500) return { ok: false, error: "가져오기는 최대 500행까지 지원합니다." };
   return { ok: true, mappings };
 }
 
@@ -684,8 +694,8 @@ function isProviderDecommissioned(provider: ScimProviderItem): boolean {
 }
 
 function providerStatusLabel(provider: ScimProviderItem): string {
-  if (isProviderDecommissioned(provider)) return "decommissioned";
-  return provider.status;
+  if (isProviderDecommissioned(provider)) return "사용 중지됨";
+  return provider.status === "active" ? "활성" : "비활성";
 }
 
 function providerStatusTone(provider: ScimProviderItem): "green" | "amber" | "red" {
@@ -694,11 +704,16 @@ function providerStatusTone(provider: ScimProviderItem): "green" | "amber" | "re
 }
 
 function secretRotationPolicyLabel(policy: ScimProviderSecretRotationPolicy | undefined): string {
-  return policy ?? DEFAULT_SECRET_ROTATION_POLICY;
+  const value = policy ?? DEFAULT_SECRET_ROTATION_POLICY;
+  return SECRET_ROTATION_POLICIES.find((item) => item.value === value)?.label ?? value;
 }
 
 function rotationStatusLabel(status: ScimProviderItem["rotation_status"] | undefined): string {
-  return status ?? "manual";
+  if (status === "current") return "정상";
+  if (status === "due_soon") return "곧 필요";
+  if (status === "overdue") return "기한 초과";
+  if (status === "decommissioned") return "사용 중지됨";
+  return "수동";
 }
 
 function rotationStatusTone(status: ScimProviderItem["rotation_status"] | undefined): "green" | "amber" | "red" | "blue" {
@@ -717,4 +732,12 @@ function formatProviderTime(value: string | null): string {
 
 function mappingKey(providerKey: string): readonly string[] {
   return ["scim-provider-mappings", providerKey];
+}
+
+function roleLabel(role: RoleAssignmentRole): string {
+  return `${ROLE_LABELS[role] ?? role} (${role})`;
+}
+
+function mappingStatusLabel(status: ScimGroupRoleMappingItem["status"]): string {
+  return status === "active" ? "활성" : "비활성";
 }

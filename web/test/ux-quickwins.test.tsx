@@ -26,6 +26,12 @@ function renderApp(client: ApiClient = fakeClient()): void {
   );
 }
 
+async function openArtifactLookup(): Promise<void> {
+  const summary = (await screen.findByText("증빙 조회")).closest("summary") as HTMLElement | null;
+  expect(summary).not.toBeNull();
+  fireEvent.click(summary as HTMLElement);
+}
+
 function jwt(roles: readonly string[]): string {
   const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles }))
     .replace(/\+/g, "-")
@@ -143,6 +149,7 @@ describe("UX quick-wins (A)", () => {
     await waitFor(() => expect(location.hash).toContain("status=running"));
     expect(location.hash).toContain("run=");
     const uuid = "72000000-0000-0000-0000-000000000001";
+    await openArtifactLookup();
     fireEvent.change(screen.getByLabelText("증빙 번호"), {
       target: { value: uuid },
     });
@@ -211,6 +218,8 @@ describe("UX quick-wins (A)", () => {
     await waitFor(() =>
       expect(fetched).toContain("72000000-0000-0000-0000-000000000001"),
     ); // 8자리 축약 아닌 전체 uuid
+    const shell = screen.getByText("증빙 조회").closest("details") as HTMLDetailsElement | null;
+    expect(shell?.open).toBe(true);
     const lookup = screen.getByRole("region", { name: "증빙 조회" });
     expect(await within(lookup).findByText("추출 결과")).toBeInTheDocument();
     expect(within(lookup).getByText("조회 가능")).toBeInTheDocument();
@@ -284,12 +293,15 @@ describe("UX quick-wins (A)", () => {
       }),
     );
     location.hash = "#scenarioStudio";
+    const directCreate = (await screen.findByText("양식으로 직접 만들기")).closest("summary") as HTMLElement | null;
+    expect(directCreate).not.toBeNull();
+    directCreate?.click();
     (await screen.findByRole("button", { name: "+ 새 자동화 만들기" })).click();
     const form = await screen.findByRole("region", { name: "자동화 작성" });
     within(form).getByRole("button", { name: "저장" }).click();
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("자동화 정의 오류.");
+    expect(alert).toHaveTextContent("시나리오 정의 오류.");
     expect(alert).toHaveTextContent("항목: nodes.n1.what.0.action");
     expect(alert).toHaveTextContent("사유: 지원하지 않는 동작입니다.");
     expect(alert).not.toHaveTextContent("{");
@@ -410,8 +422,8 @@ describe("UX quick-wins (A)", () => {
     );
     location.hash = "#humanTasks";
     await waitFor(() =>
-      expect(screen.getByText("보안문자")).toBeInTheDocument(),
-    ); // captcha → 보안문자 (필터 드롭다운 option의 raw enum은 별개)
+      expect(screen.getByText("보안문자 입력")).toBeInTheDocument(),
+    ); // captcha → 보안문자 입력 (필터 드롭다운 option의 raw enum은 별개)
   });
 
   // A3 — 수동 입력 조회(전체 uuid, 원래 1차 기능).
@@ -434,6 +446,7 @@ describe("UX quick-wins (A)", () => {
       }),
     );
     location.hash = "#runTrace";
+    await openArtifactLookup();
     fireEvent.change(await screen.findByLabelText("증빙 번호"), {
       target: { value: uuid },
     });
@@ -445,12 +458,15 @@ describe("UX quick-wins (A)", () => {
   test("A3: 무효 uuid artifact 해시는 입력을 시드하지 않음", async () => {
     renderApp();
     location.hash = "#runTrace?artifact=not-a-uuid";
-    const input = await screen.findByLabelText("증빙 번호");
     await waitFor(() =>
       expect(
         screen.getByRole("heading", { level: 1, name: "실행 기록" }),
       ).toBeInTheDocument(),
     );
+    const shell = screen.getByText("증빙 조회").closest("details") as HTMLDetailsElement | null;
+    expect(shell?.open).toBe(false);
+    await openArtifactLookup();
+    const input = await screen.findByLabelText("증빙 번호");
     expect(input).toHaveValue(""); // 무효 → 시드 안 됨
   });
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -41,5 +41,45 @@ describe("security-section-nav", () => {
     const activeTab = await screen.findByRole("button", { name: new RegExp(sectionLabel) });
     expect(activeTab).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+  });
+
+  test("defaults to sites without rendering the other section panels", async () => {
+    location.hash = "#security";
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "사이트 접근 정책" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "SSO/IdP 준비도" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "보안 연결 사용 현황" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /AI (runtime policy|운영 정책)/ })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "전용 워커 풀" })).toBeNull();
+  });
+
+  test("clicking a section tab updates the security hash", async () => {
+    location.hash = "#security";
+    renderApp();
+
+    fireEvent.click(await screen.findByRole("button", { name: /비밀·연결·감사/ }));
+
+    expect(location.hash).toBe("#security?section=secrets");
+    expect(await screen.findByRole("heading", { name: "보안 연결 사용 현황" })).toBeInTheDocument();
+  });
+
+  test("section tabs are focusable buttons with pressed and current state", async () => {
+    location.hash = "#security?section=access";
+    renderApp();
+
+    const tabList = await screen.findByRole("list", { name: "보안/개인정보 섹션" });
+    const tabs = within(tabList).getAllByRole("button");
+    expect(tabs.length).toBeGreaterThanOrEqual(5);
+
+    const accessTab = within(tabList).getByRole("button", { name: /접속·권한/ });
+    const sitesTab = within(tabList).getByRole("button", { name: /사이트·브라우저 세션/ });
+    expect(accessTab).toHaveAttribute("aria-pressed", "true");
+    expect(accessTab).toHaveAttribute("aria-current", "true");
+    expect(sitesTab).toHaveAttribute("aria-pressed", "false");
+    expect(sitesTab).not.toHaveAttribute("aria-current");
+
+    accessTab.focus();
+    expect(document.activeElement).toBe(accessTab);
   });
 });

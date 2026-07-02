@@ -716,6 +716,7 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .form-alert { border-radius: var(--radius); padding: 9px 10px; font-size: 13px; }
 .form-alert.amber { background: var(--amber-soft); color: var(--amber-ink); }
 .form-alert.red { background: var(--red-soft); color: var(--red-ink); }
+.form-alert.green { background: var(--green-soft); color: var(--green-ink); }
 .generation-result { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 10px; }
 .result-grid { display: grid; grid-template-columns: repeat(4, auto minmax(0, 1fr)); gap: 6px 10px; align-items: center; }
 .result-grid code { overflow-wrap: anywhere; }

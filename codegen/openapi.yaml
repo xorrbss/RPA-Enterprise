@@ -9579,6 +9579,7 @@ components:
         input_tokens: { type: [integer, "null"], minimum: 0 }
         output_tokens: { type: [integer, "null"], minimum: 0 }
         cost: { type: [string, "null"] }
+        action_summary: { type: [string, "null"] }
 
     StepExceptionSummary:
       type: object

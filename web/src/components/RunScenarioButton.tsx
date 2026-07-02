@@ -518,7 +518,7 @@ function ReadinessCard({
             </button>
           ) : targetUrls.length > 0 ? (
             <button className="linklike" type="button" onClick={() => navigate("security", { section: "sites" })}>
-              사이트 보기
+              사이트·세션 설정
             </button>
           ) : undefined
         }
@@ -548,13 +548,13 @@ function siteReadiness(
   const siteItems = sites.data?.items ?? [];
   const matched = origins.map((origin) => siteItems.find((site) => originOf(site.url_pattern ?? "") === origin));
   if (matched.some((site) => site === undefined)) {
-    return { tone: "amber", detail: "등록된 사이트와 매칭되지 않는 실행 주소가 있습니다." };
+    return { tone: "amber", detail: "등록된 사이트와 매칭되지 않는 실행 주소가 있습니다. 사이트·세션 설정에서 대상 사이트를 등록하세요." };
   }
   const concrete = matched.filter((site): site is SiteItem => site !== undefined);
   const pendingRed = concrete.find((site) => site.risk === "red" && site.approval_status !== "approved");
   if (pendingRed !== undefined) return { tone: "red", detail: `${pendingRed.name ?? "고위험 사이트"} 승인 후 실행할 수 있습니다.` };
   const openCircuit = concrete.find((site) => site.circuit_status !== "closed");
-  if (openCircuit !== undefined) return { tone: "amber", detail: `${openCircuit.name ?? "대상 사이트"} 자동 차단 상태가 ${openCircuit.circuit_status}입니다.` };
+  if (openCircuit !== undefined) return { tone: "amber", detail: `${openCircuit.name ?? "대상 사이트"} 자동 차단 상태가 ${circuitStatusLabel(openCircuit.circuit_status)}입니다.` };
   const needsSession = concrete.find((site) => site.login_capable === true && site.session_ready !== true);
   if (needsSession !== undefined) {
     return {
@@ -564,4 +564,13 @@ function siteReadiness(
     };
   }
   return { tone: "green", detail: "대상 사이트 승인, 자동 차단, 세션 상태가 준비되어 있습니다." };
+}
+
+function circuitStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    closed: "정상",
+    open: "차단 중",
+    half_open: "복구 확인 중",
+  };
+  return labels[status] ?? "확인 필요";
 }

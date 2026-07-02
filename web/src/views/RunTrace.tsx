@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
+import { DashboardEnvironmentState, environmentErrorKind, type DashboardEnvironmentError } from "../components/DashboardEnvironmentState";
 import { ActionButton } from "../components/ActionButton";
 import { ArtifactLookup } from "../components/ArtifactLookup";
 import { FilterSelect } from "../components/FilterSelect";
@@ -87,9 +88,14 @@ export function RunTraceView(): JSX.Element {
     },
     enabled: sel !== null,
   });
+  const pageErrors: DashboardEnvironmentError[] = [];
+  if (lv.query.isError) pageErrors.push({ label: "실행 기록", error: lv.query.error, onRetry: () => void lv.query.refetch() });
+  if (scenariosForFilter.isError) pageErrors.push({ label: "자동화 필터", error: scenariosForFilter.error, onRetry: () => void scenariosForFilter.refetch() });
+  const pageErrorKind = environmentErrorKind(pageErrors);
 
   return (
     <div>
+      <DashboardEnvironmentState errors={pageErrors} />
       <ArtifactLookup consumeHashParam={sel === null || !focusArtifacts} />
       {sel !== null && (
         <RunDetailPanel
@@ -113,6 +119,7 @@ export function RunTraceView(): JSX.Element {
         title="실행 기록"
         query={lv.query}
         pager={lv.pager}
+        collapsedErrorKind={pageErrorKind}
         actions={
           <>
             <FilterSelect

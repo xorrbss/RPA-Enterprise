@@ -228,6 +228,53 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(within(panel).getAllByText("권한 있는 담당자에게 요청").length).toBeGreaterThanOrEqual(5);
   });
 
+  test("adoption-readiness collapses gate details when all checks are ready", async () => {
+    renderApp(dashboardClient({
+      getAuthReadiness: async () => ({
+        ...AUTH_SETUP_NEEDED,
+        status: "ok",
+        enterprise_sso_ready: true,
+        role_mapping: { configured: true, mapped_values: 5 },
+        operational_gaps: [],
+      }),
+      getProductionReadiness: async () => {
+        const base = await fakeClient().getProductionReadiness();
+        return {
+          ...base,
+          status: "ready",
+          summary: { controlled_prod_ready: true, status: "ready", blocker_count: 0, warning_count: 0, deferred_count: 0 },
+          gates: base.gates.map((gate) => ({ ...gate, status: "pass" as const, reason_code: null, detail: "ready", required_action: null })),
+        };
+      },
+      listSites: async () => ({
+        items: [{
+          site_profile_id: "site-login",
+          name: "Login Site",
+          risk: "green",
+          approval_status: "approved",
+          circuit_status: "closed",
+          login_capable: true,
+          session_ready: true,
+        }],
+        next_cursor: null,
+      }),
+      listScenarios: async () => ({
+        items: [{ scenario_id: "scenario-ready", name: "Invoice lookup", version: 3, latest_version_id: "version-ready", promotion_status: "approved" }],
+        next_cursor: null,
+      }),
+      listRuns: async () => ({
+        items: [{ run_id: "run-ready", status: "completed", scenario_name: "Invoice lookup", current_node: null, as_of: "2026-06-30T03:00:00.000Z", failure_reason: null }],
+        next_cursor: null,
+      }),
+      getRunSummary: async () => ({ by_status: { completed: 1 }, success_rate: 1, total: 1, cache: { by_mode: { hit: 1 }, hit_rate: 1 } }),
+    }));
+
+    const panel = await screen.findByRole("region", { name: "파일럿 준비 상태" });
+    await waitFor(() => expect(panel).toHaveTextContent("9/9 준비"));
+    expect(within(panel).getByText("모든 필수 관문이 준비되었습니다. 운영 전환 패킷과 최근 실행 증거를 기준으로 계속 모니터링하세요.")).toBeInTheDocument();
+    expect(within(panel).queryAllByRole("listitem")).toHaveLength(0);
+  });
+
   test("adoption evidence packet summarizes metadata without raw secret or audit payload", async () => {
     renderApp(dashboardClient({
       listSites: async () => ({
@@ -608,16 +655,16 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(await within(panel).findByText("Vendor invoice lookup")).toBeInTheDocument();
     expect(within(panel).getByText("SITE_SELECTOR_MISSING")).toBeInTheDocument();
     expect(within(panel).getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
-    expect(within(panel).getByRole("img", { name: /ROI source mix chart/ })).toBeInTheDocument();
-    expect(within(panel).getByRole("img", { name: /ROI stage mix chart/ })).toBeInTheDocument();
-    expect(within(panel).getByRole("img", { name: /Model cost trend chart/ })).toBeInTheDocument();
-    expect(within(panel).getByRole("table", { name: "Model cost daily trends" })).toBeInTheDocument();
+    expect(within(panel).getByRole("img", { name: /ROI 근거 출처 차트/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("img", { name: /ROI 단계 구성 차트/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("img", { name: /모델 비용 추이 차트/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("table", { name: "모델 비용 일별 추이" })).toBeInTheDocument();
     expect(within(panel).getByText("2026-06-03")).toBeInTheDocument();
-    expect(within(panel).getAllByText("Hold").length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText("보류").length).toBeGreaterThan(0);
     expect(within(panel).getAllByText("순가치").length).toBeGreaterThan(0);
-    expect(within(panel).getAllByText("process mining 1 · manual 1").length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText("프로세스 마이닝 1 · 수기 등록 1").length).toBeGreaterThan(0);
     expect(within(panel).getAllByText("부서 Finance, Procurement · 오너 Mina Kim, Joon Park").length).toBeGreaterThan(0);
-    expect(within(panel).getAllByText("98/110 tx").length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText("98/110건").length).toBeGreaterThan(0);
     expect(within(panel).getByText("18.5h")).toBeInTheDocument();
     expect(within(panel).getAllByText("75%").length).toBeGreaterThan(0);
 
@@ -629,7 +676,7 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:performance-csv");
     expect(await within(panel).findByText("성과 리포트 CSV를 준비했습니다.")).toBeInTheDocument();
 
-    fireEvent.click(within(panel).getByRole("button", { name: "PoC MD" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "PoC 문서" }));
 
     await waitFor(() => expect(pocExportMonths).toEqual(["2026-06"]));
     expect(createObjectURL).toHaveBeenCalledTimes(2);
