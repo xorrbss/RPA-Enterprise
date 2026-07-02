@@ -1803,6 +1803,11 @@ CREATE TABLE ops_notification_attempts (
 CREATE INDEX idx_ops_notification_attempts_alert
   ON ops_notification_attempts (tenant_id, alert_id, detected_at DESC, attempt_no DESC, id DESC)
   WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX uq_ops_notification_attempts_auto_fire_generation
+  ON ops_notification_attempts (tenant_id, alert_id, detected_at, provider_alias)
+  WHERE deleted_at IS NULL
+    AND attempt_no = 1
+    AND requested_by = 'system:ops-alert-auto-fire';
 CREATE INDEX idx_ops_notification_attempts_pending
   ON ops_notification_attempts (tenant_id, next_attempt_at, id)
   WHERE status = 'pending' AND deleted_at IS NULL;

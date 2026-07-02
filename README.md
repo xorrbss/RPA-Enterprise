@@ -771,19 +771,19 @@
 > 스플라이싱·dev↔prod 혼동(unknown kid)을 throw 로 탐지(조용한 잘못된 세션 금지).
 > **백엔드**: `POST /v1/sites/{id}/session/capture/complete`(operator+·멱등·RLS; 재사용키는 capture_sessions 행에서
 > 도출=바디 불신; 쿠키 평문은 store.save[암호화기]로만·멱등 저장소는 SHA-256 requestHash 단방향만 영속) · capture-start
-> 응답에 login_url+auth_selector(비밀 아님) 추가 · 운영자-로컬 CLI `src/agent/capture-agent.ts`(DB/키 무접근·토큰 env·
+> 응답에 login_url+auth_selector(비밀 아님) 추가 · 운영자-로컬 helper `src/browser-helper/session-capture-helper.ts`(DB/키 무접근·토큰 env·
 > https 강제·쿠키 단명) · 캡처 코어 `src/executor/login-capture.ts` 추출(dev 폴러·에이전트 공유). prod `startApi` 는
 > KEK(`rpa/<env>/api/browser_session/active`) 프로비저닝 시에만 등록(`VAULT_API_ROLE_ID` 게이트, 미설정=미등록 fail-closed).
 > **검증**: app/codegen typecheck 0 · codegen consistency green · KMS 단위 18/18(roundtrip·위변조·kid 회전·빌더 검증·
 > fail-closed) · boundary 매트릭스 단위(browser_session ALLOW api/worker·DENY gateway/lifecycle) · capture-complete 통합
-> 11/11 · capture-agent 통합 9/9(실 listen+temp-PG). **⚠ 배포 항목(오너)**: api AppRole + KEK 프로비저닝(미설정 시 안전한 성능저하).
+> 11/11 · session-capture-helper 통합 9/9(실 listen+temp-PG). **⚠ 배포 항목(오너)**: api AppRole + KEK 프로비저닝(미설정 시 안전한 성능저하).
 
 | 항목 | 조치 |
 |---|---|
 | 계약 | `security-middleware-contract.ts`(`browser_session` purpose) · `control-plane-contract.ts`(captureSessionComplete) |
 | 암호화기/보안 | `browser-session-store.ts`(KmsEnvelopeSessionEncryptor+buildKmsSessionEncryptor) · `vault-secret-store-boundary.ts`(RESOLVE_MATRIX browser_session) |
-| 백엔드 | `api/sessions.ts`(capture/complete+start login_url/auth_selector) · `agent/capture-agent.ts` · `executor/login-capture.ts` · `config/env.ts`(loadApiSessionEncryption) · `main.ts`(buildApiSessionStore 게이트 배선) · `dev/serve.ts`(DevPlaintext 등록) |
-| 테스트 | `test/session-encryptor-kms.unit.ts`(18) · `test/api-sessions-capture-complete.int.ts`(11) · `test/capture-agent.int.ts`(9) · `test/vault-secret-store-boundary.unit.ts`(browser_session 쌍) |
+| 백엔드 | `api/sessions.ts`(capture/complete+start login_url/auth_selector) · `browser-helper/session-capture-helper.ts` · `executor/login-capture.ts` · `config/env.ts`(loadApiSessionEncryption) · `main.ts`(buildApiSessionStore 게이트 배선) · `dev/serve.ts`(DevPlaintext 등록) |
+| 테스트 | `test/session-encryptor-kms.unit.ts`(18) · `test/api-sessions-capture-complete.int.ts`(11) · `test/session-capture-helper.int.ts`(9) · `test/vault-secret-store-boundary.unit.ts`(browser_session 쌍) |
 | 비도입(오너/후속) | api AppRole+KEK 프로비저닝(배포) · 회전 grace 다중-kid 자동로드 · 워커 세션복원 prod 배선 |
 
 ## v2.26 패치 로그 (자연어 generation 보정 실행 — start_url 단독 target 추론)

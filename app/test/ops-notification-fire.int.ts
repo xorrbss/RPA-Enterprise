@@ -17,6 +17,11 @@ import type { OpsNotificationSendEnqueueInput } from "../src/api/run-queue";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { runOpsNotificationFire, type OpsNotificationFireEnqueuer } from "../src/worker/ops-notification-fire";
 import type { OpsAlertRoute } from "../src/api/ops-alert-routes";
+import {
+  insertOpsNotificationAttempt,
+  type ComputedOpsAlert,
+  type OpsNotificationWebhookSendInput,
+} from "../src/api/ops-alerts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_ops_fire_int";
@@ -68,10 +73,10 @@ function capturingEnqueuer(sink: OpsNotificationSendEnqueueInput[]): OpsNotifica
   };
 }
 
-async function attemptRows(pool: Pool): Promise<Array<{ alert_id: string; provider_alias: string; status: string; endpoint_secret_ref: string; allowed_hosts: string[]; requested_by: string; metadata: Record<string, unknown> }>> {
+async function attemptRows(pool: Pool): Promise<Array<{ id: string; alert_id: string; detected_at: Date; provider_alias: string; status: string; endpoint_secret_ref: string; allowed_hosts: string[]; requested_by: string; metadata: Record<string, unknown> }>> {
   return withTenantTx(pool, TENANT_A, async (client) => {
     const result = await client.query(
-      `SELECT alert_id, provider_alias, status, endpoint_secret_ref, allowed_hosts, requested_by, metadata
+      `SELECT id::text, alert_id, detected_at, provider_alias, status, endpoint_secret_ref, allowed_hosts, requested_by, metadata
          FROM ops_notification_attempts WHERE tenant_id=$1::uuid AND deleted_at IS NULL
         ORDER BY provider_alias`,
       [TENANT_A],
@@ -156,7 +161,39 @@ async function main(): Promise<void> {
       && rows1[0]!.metadata?.auto_fired === true, JSON.stringify(rows1[0]?.metadata));
     check("enqueued attempt id matches persisted row (delivery consumer will pick it up)", rows1.length === 1);
 
-    // 4) 두 번째 틱 → 같은 세대 멱등, 재발화 없음(폭주 방지).
+    // 4) DB 하드닝 — SELECT guard 를 뚫고 같은 세대 insert 가 재시도되어도 unique+ON CONFLICT 가 기존 attempt 를 반환한다.
+    const duplicateAttempt = await withTenantTx(pool, TENANT_A, async (client) => {
+      const duplicateAlert: ComputedOpsAlert = {
+        alert_id: rows1[0]!.alert_id,
+        severity: "critical",
+        source: "run_sla",
+        title: "장시간 실행 위험",
+        detail: "same generation race simulation",
+        subject_type: "run",
+        subject_id: RUN_STUCK,
+        recommended_action: "실행 기록에서 단계 지연과 마지막 업데이트를 확인하세요.",
+        route: `#runTrace?run=${RUN_STUCK}`,
+        detected_at: rows1[0]!.detected_at.toISOString(),
+        due_at: null,
+      };
+      const duplicateInput: OpsNotificationWebhookSendInput = {
+        providerAlias: "oncall-webhook",
+        endpointSecretRef: "secret://ops/oncall-webhook",
+        callbackSignatureSecretRef: "secret://ops/oncall-callback",
+        routePolicyRef: "route:oncall",
+        recipientGroupRef: null,
+        allowedHosts: ["hooks.example.com"],
+        summary: null,
+        metadata: { auto_fired: true, severity: "critical", source: "run_sla" },
+        legalHold: false,
+      };
+      return insertOpsNotificationAttempt(client, TENANT_A, duplicateAlert, "system:ops-alert-auto-fire", duplicateInput);
+    });
+    check("same generation insert conflict returns existing attempt", duplicateAttempt.attempt_id === rows1[0]!.id, JSON.stringify(duplicateAttempt));
+    check("same generation insert conflict does not mutate requested_by", (await attemptRows(pool))[0]!.requested_by === "system:ops-alert-auto-fire");
+    check("same generation insert conflict leaves exactly 1 attempt", (await attemptRows(pool)).length === 1);
+
+    // 5) 두 번째 틱 → 같은 세대 멱등, 재발화 없음(폭주 방지).
     const enqueued2: OpsNotificationSendEnqueueInput[] = [];
     const fire2 = await runOpsNotificationFire(pool, {
       tenantIds: [TENANT_A],
@@ -168,7 +205,7 @@ async function main(): Promise<void> {
     check("second tick → no new enqueue", enqueued2.length === 0);
     check("still exactly 1 attempt (no flood)", (await attemptRows(pool)).length === 1);
 
-    // 5) min_severity 필터 — critical-only 라우트를 별도 provider 로 적용. run_sla 는 240분 초과라 critical → 발화됨.
+    // 6) min_severity 필터 — critical-only 라우트를 별도 provider 로 적용. run_sla 는 240분 초과라 critical → 발화됨.
     //    이 라우트가 매칭돼 새 provider 로 1건 추가되면 severity 게이트가 동작함을 증명(warning 알림이었다면 skip).
     const enqueued3: OpsNotificationSendEnqueueInput[] = [];
     const fire3 = await runOpsNotificationFire(pool, {
