@@ -1329,15 +1329,20 @@ export async function insertOpsNotificationAttempt(
        route_policy_ref, recipient_group_ref, allowed_hosts, attempt_no, max_attempts, next_attempt_at,
        payload, summary, metadata, requested_by, retention_until, legal_hold
      )
-     VALUES (
-       $1::uuid,$2::uuid,$3,$4::timestamptz,$5,$6,$7,
-       'webhook',$8,'pending',$9,NULL,$10,
-       $11,$12,$13::text[],1,$14,now(),
-       $15::jsonb,$16,$17::jsonb,$18,$19::timestamptz,$20
-     )
-     RETURNING id::text, alert_id, detected_at, source, subject_type, subject_id,
-               channel, provider_alias, status, endpoint_secret_ref, callback_signature_secret_ref, route_policy_ref,
-               recipient_group_ref, allowed_hosts, attempt_no, max_attempts, next_attempt_at, summary,
+      VALUES (
+        $1::uuid,$2::uuid,$3,$4::timestamptz,$5,$6,$7,
+        'webhook',$8,'pending',$9,NULL,$10,
+        $11,$12,$13::text[],1,$14,now(),
+        $15::jsonb,$16,$17::jsonb,$18,$19::timestamptz,$20
+      )
+      ON CONFLICT (tenant_id, alert_id, detected_at, provider_alias)
+      WHERE deleted_at IS NULL
+        AND attempt_no = 1
+        AND requested_by = 'system:ops-alert-auto-fire'
+      DO NOTHING
+      RETURNING id::text, alert_id, detected_at, source, subject_type, subject_id,
+                channel, provider_alias, status, endpoint_secret_ref, callback_signature_secret_ref, route_policy_ref,
+                recipient_group_ref, allowed_hosts, attempt_no, max_attempts, next_attempt_at, summary,
                error_code, receipt_id, receipt_at, metadata, requested_by, requested_at, legal_hold`,
     [
       attemptId,
@@ -1362,7 +1367,51 @@ export async function insertOpsNotificationAttempt(
       input.legalHold,
     ],
   );
+  if (result.rows[0] === undefined) {
+    const existing = await selectExistingOpsNotificationAttemptGeneration(
+      client,
+      tenantId,
+      alert.alert_id,
+      alert.detected_at,
+      input.providerAlias,
+      1,
+      requestedBy,
+    );
+    if (existing === null) {
+      throw new Error("ops notification attempt conflict was reported but existing generation was not visible");
+    }
+    return mapOpsNotificationAttempt(existing);
+  }
   return mapOpsNotificationAttempt(result.rows[0]);
+}
+
+async function selectExistingOpsNotificationAttemptGeneration(
+  client: PoolClient,
+  tenantId: string,
+  alertId: string,
+  detectedAt: string,
+  providerAlias: string,
+  attemptNo: number,
+  requestedBy: string,
+): Promise<OpsNotificationAttemptRow | null> {
+  const result = await client.query<OpsNotificationAttemptRow>(
+    `SELECT id::text, alert_id, detected_at, source, subject_type, subject_id,
+            channel, provider_alias, status, endpoint_secret_ref, callback_signature_secret_ref, route_policy_ref,
+            recipient_group_ref, allowed_hosts, attempt_no, max_attempts, next_attempt_at, summary,
+            error_code, receipt_id, receipt_at, metadata, requested_by, requested_at, legal_hold
+       FROM ops_notification_attempts
+      WHERE tenant_id = $1::uuid
+        AND alert_id = $2
+        AND detected_at = $3::timestamptz
+        AND provider_alias = $4
+        AND attempt_no = $5::int
+        AND requested_by = $6
+        AND deleted_at IS NULL
+      ORDER BY requested_at ASC, id ASC
+      LIMIT 1`,
+    [tenantId, alertId, detectedAt, providerAlias, attemptNo, requestedBy],
+  );
+  return result.rows[0] ?? null;
 }
 
 async function selectOpsNotificationAttemptForCallbackAuth(
