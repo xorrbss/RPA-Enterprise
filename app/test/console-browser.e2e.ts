@@ -466,9 +466,9 @@ async function main(): Promise<void> {
     check("dashboard 최근 실행 행 렌더", dash.includes("상세 보기") || dash.includes(SEEDED_RUN_ID.slice(0, 8)), dash.slice(0, 300));
     check("시드 실행이 '실행 중'으로 표시(StatusBadge 한국어 라벨)", dash.includes("실행 중"), dash.slice(0, 200));
     // e2e-token 은 역할 클레임이 없어(roles=[]) 역할 스코프 nav(Phase 15)가 viewer 폴백을 렌더한다:
-    //   내 할 일·사람 확인·작업 목록·실행 기록·대시보드 = 5개(생명주기 그룹 재편 후). 로그인 랜딩은 myWork.
+    //   내 할 일·사람 확인·작업 목록·실행 기록·대시보드·감사 이력 = 6개. 로그인 랜딩은 myWork.
     const navBtnCount = await page.$$eval("nav.sidebar button", (b) => b.length);
-    check("사이드바 역할 스코프 nav 렌더(viewer 5개)", navBtnCount === 5, String(navBtnCount));
+    check("사이드바 역할 스코프 nav 렌더(viewer 6개)", navBtnCount === 6, String(navBtnCount));
 
     // 2) 해시 라우팅 → workitems, 시드 작업항목 렌더
     await page.evaluate(() => {

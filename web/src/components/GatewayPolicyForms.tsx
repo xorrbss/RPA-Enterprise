@@ -93,6 +93,12 @@ export function PolicyReadout({
           </pre>
         </details>
       </div>
+      <div className="metric">
+        <div className="label">데이터 반출 경계</div>
+        <p className="subtle" style={{ margin: "6px 0 0" }}>
+          Gateway 전송 전 마스킹 경계를 적용합니다. 시크릿 값은 LLM으로 보내지 않고 CDP 주입 경로를 사용합니다. 실행별 redaction proof는 S11에서 다룹니다.
+        </p>
+      </div>
     </dl>
   );
 }

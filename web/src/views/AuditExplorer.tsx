@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan } from "../api/permissions";
-import type { AuditLogExportParams, AuditOutcome, AuditVerificationRun } from "../api/types";
+import type { AuditLogItem, AuditLogListParams, AuditOutcome, AuditVerificationRun } from "../api/types";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, useHashParam } from "../router";
 import { formatShortDateTime } from "../util/time";
@@ -94,10 +94,14 @@ export function AuditExplorerView(): JSX.Element {
   const hashOutcome = useHashParam("outcome");
   const hashActor = useHashParam("actor");
   const hashCorrelationId = useHashParam("correlation_id");
+  const hashOccurredAtFrom = useHashParam("occurred_at_from");
+  const hashOccurredAtTo = useHashParam("occurred_at_to");
   const [action, setAction] = useState(() => actionFilterText(hashAction));
   const [outcome, setOutcome] = useState<"all" | AuditOutcome>(() => outcomeFromHash(hashOutcome));
   const [actor, setActor] = useState(hashActor ?? "");
   const [correlationId, setCorrelationId] = useState(hashCorrelationId ?? "");
+  const [occurredAtFrom, setOccurredAtFrom] = useState(hashOccurredAtFrom ?? "");
+  const [occurredAtTo, setOccurredAtTo] = useState(hashOccurredAtTo ?? "");
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [exportState, setExportState] = useState<"idle" | "pending" | "success" | "error">("idle");
   const [verifyState, setVerifyState] = useState<"idle" | "pending" | "success" | "error">("idle");
@@ -112,9 +116,11 @@ export function AuditExplorerView(): JSX.Element {
         ...(outcome !== "all" ? { outcome } : {}),
         ...(actor.trim().length > 0 ? { actor: actor.trim() } : {}),
         ...(correlationId.trim().length > 0 ? { correlation_id: correlationId.trim() } : {}),
+        ...(occurredAtFrom.trim().length > 0 ? { occurred_at_from: occurredAtFrom.trim() } : {}),
+        ...(occurredAtTo.trim().length > 0 ? { occurred_at_to: occurredAtTo.trim() } : {}),
       };
     },
-    [action, actor, correlationId, cursor, outcome],
+    [action, actor, correlationId, cursor, occurredAtFrom, occurredAtTo, outcome],
   );
 
   const q = useQuery({
@@ -133,43 +139,48 @@ export function AuditExplorerView(): JSX.Element {
   const verificationRuns = verificationQ.data?.items ?? [];
   const latestVerification = verificationRuns[0];
 
-  const exportParams = useMemo<AuditLogExportParams>(
+  const exportParams = useMemo<AuditLogListParams>(
     () => {
       const actionValue = actionFilterValue(action);
       return {
         limit: 200,
-        format: "csv",
         ...(actionValue.length > 0 ? { action: actionValue } : {}),
         ...(outcome !== "all" ? { outcome } : {}),
         ...(actor.trim().length > 0 ? { actor: actor.trim() } : {}),
         ...(correlationId.trim().length > 0 ? { correlation_id: correlationId.trim() } : {}),
+        ...(occurredAtFrom.trim().length > 0 ? { occurred_at_from: occurredAtFrom.trim() } : {}),
+        ...(occurredAtTo.trim().length > 0 ? { occurred_at_to: occurredAtTo.trim() } : {}),
       };
     },
-    [action, actor, correlationId, outcome],
+    [action, actor, correlationId, occurredAtFrom, occurredAtTo, outcome],
   );
 
   function resetCursor(): void {
     setCursor(undefined);
   }
 
-  function setFilter(next: { action?: string; outcome?: "all" | AuditOutcome; actor?: string; correlationId?: string }): void {
+  function setFilter(next: { action?: string; outcome?: "all" | AuditOutcome; actor?: string; correlationId?: string; occurredAtFrom?: string; occurredAtTo?: string }): void {
     if (next.action !== undefined) setAction(next.action);
     if (next.outcome !== undefined) setOutcome(next.outcome);
     if (next.actor !== undefined) setActor(next.actor);
     if (next.correlationId !== undefined) setCorrelationId(next.correlationId);
+    if (next.occurredAtFrom !== undefined) setOccurredAtFrom(next.occurredAtFrom);
+    if (next.occurredAtTo !== undefined) setOccurredAtTo(next.occurredAtTo);
     resetCursor();
     mergeParams({
       ...(next.action !== undefined ? { action: next.action.trim().length > 0 ? next.action.trim() : null } : {}),
       ...(next.outcome !== undefined ? { outcome: next.outcome !== "all" ? next.outcome : null } : {}),
       ...(next.actor !== undefined ? { actor: next.actor.trim().length > 0 ? next.actor.trim() : null } : {}),
       ...(next.correlationId !== undefined ? { correlation_id: next.correlationId.trim().length > 0 ? next.correlationId.trim() : null } : {}),
+      ...(next.occurredAtFrom !== undefined ? { occurred_at_from: next.occurredAtFrom.trim().length > 0 ? next.occurredAtFrom.trim() : null } : {}),
+      ...(next.occurredAtTo !== undefined ? { occurred_at_to: next.occurredAtTo.trim().length > 0 ? next.occurredAtTo.trim() : null } : {}),
     });
   }
 
   async function exportCsv(): Promise<void> {
     setExportState("pending");
     try {
-      const csv = await api.exportAuditLogCsv(exportParams);
+      const csv = await exportAuditPeriodCsv(api.listAuditLog, exportParams);
       downloadCsv(csv, `audit-log-${new Date().toISOString().slice(0, 10)}.csv`);
       setExportState("success");
     } catch {
@@ -219,6 +230,22 @@ export function AuditExplorerView(): JSX.Element {
       resetCursor();
     }
   }, [hashCorrelationId]);
+
+  useEffect(() => {
+    const next = hashOccurredAtFrom ?? "";
+    if (next !== occurredAtFrom) {
+      setOccurredAtFrom(next);
+      resetCursor();
+    }
+  }, [hashOccurredAtFrom]);
+
+  useEffect(() => {
+    const next = hashOccurredAtTo ?? "";
+    if (next !== occurredAtTo) {
+      setOccurredAtTo(next);
+      resetCursor();
+    }
+  }, [hashOccurredAtTo]);
 
   return (
     <div className="audit-view">
@@ -311,6 +338,14 @@ export function AuditExplorerView(): JSX.Element {
             <span>추적 번호</span>
             <input value={correlationId} placeholder="예: 요청-123" onChange={(event) => { setFilter({ correlationId: event.target.value }); }} />
           </label>
+          <label className="field">
+            <span>시작 시각</span>
+            <input type="datetime-local" value={occurredAtFrom} onChange={(event) => { setFilter({ occurredAtFrom: event.target.value }); }} />
+          </label>
+          <label className="field">
+            <span>종료 시각</span>
+            <input type="datetime-local" value={occurredAtTo} onChange={(event) => { setFilter({ occurredAtTo: event.target.value }); }} />
+          </label>
         </div>
       </section>
 
@@ -320,14 +355,14 @@ export function AuditExplorerView(): JSX.Element {
           <div className="inline-actions">
             <button className="btn" type="button" onClick={() => void q.refetch()}>새로고침</button>
             <button className="btn" type="button" disabled={exportState === "pending"} onClick={() => void exportCsv()}>
-              {exportState === "pending" ? "준비 중" : "CSV 내보내기(최대 200건)"}
+              {exportState === "pending" ? "준비 중" : "기간 전체 CSV 내보내기"}
             </button>
             <button className="btn" type="button" disabled={q.data?.next_cursor === null || q.data?.next_cursor === undefined} onClick={() => setCursor(q.data?.next_cursor ?? undefined)}>
               다음
             </button>
           </div>
         </div>
-        {exportState === "success" && <p className="notice success" role="status">감사 기록 CSV를 준비했습니다. 현재 필터 기준 최대 200건입니다.</p>}
+        {exportState === "success" && <p className="notice success" role="status">감사 기록 기간 CSV를 준비했습니다. 현재 필터와 기간 기준 전체 페이지를 이어받았습니다.</p>}
         {exportState === "error" && <p className="form-alert red" role="alert">감사 기록 CSV를 준비하지 못했습니다.</p>}
         {q.isLoading ? (
           <Loading />
@@ -413,6 +448,65 @@ export function AuditExplorerView(): JSX.Element {
       </section>
     </div>
   );
+}
+
+async function exportAuditPeriodCsv(
+  listAuditLog: (params?: AuditLogListParams) => Promise<{ readonly items: readonly AuditLogItem[]; readonly next_cursor: string | null }>,
+  params: AuditLogListParams,
+): Promise<string> {
+  const rows: AuditLogItem[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await listAuditLog({ ...params, limit: 200, ...(cursor !== undefined ? { cursor } : {}) });
+    rows.push(...page.items);
+    cursor = page.next_cursor ?? undefined;
+  } while (cursor !== undefined);
+  return auditItemsToCsv(rows);
+}
+
+function auditItemsToCsv(rows: readonly AuditLogItem[]): string {
+  const header = [
+    "audit_id",
+    "sequence_no",
+    "actor_subject_id",
+    "actor_roles",
+    "action",
+    "outcome",
+    "reason",
+    "correlation_id",
+    "idempotency_key",
+    "occurred_at",
+    "payload_schema_ref",
+    "retention_until",
+    "legal_hold",
+    "previous_hash",
+    "hash",
+    "created_at",
+  ];
+  const lines = rows.map((row) => [
+    row.audit_id,
+    String(row.sequence_no),
+    row.actor.subject_id ?? "",
+    row.actor.roles.join(";"),
+    row.action,
+    row.outcome,
+    row.reason ?? "",
+    row.correlation_id,
+    row.idempotency_key,
+    row.occurred_at,
+    row.payload_schema_ref,
+    row.retention_until ?? "",
+    String(row.legal_hold),
+    row.previous_hash ?? "",
+    row.hash,
+    row.created_at,
+  ].map(csvCell).join(","));
+  return [header.join(","), ...lines].join("\n");
+}
+
+function csvCell(value: string): string {
+  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return `"${guarded.replace(/"/g, "\"\"")}"`;
 }
 
 function downloadCsv(csv: string, filename: string): void {

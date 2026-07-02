@@ -1931,6 +1931,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       promotion_status: "draft",
       review_status: "promoted_to_studio",
     }),
+    getCapabilities: async () => ({ session_capture: { server: { mode: "off", enabled: false } } }),
     listSites: empty,
     listSessionCaptures: empty,
     listGatewayPolicies: async () => ({

@@ -7,6 +7,13 @@ image:
   digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
   pullPolicy: IfNotPresent
 
+console:
+  image:
+    repository: registry.owner-approved.invalid/rpa-console
+    tag: ""
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+    pullPolicy: IfNotPresent
+
 namespaceOverride: rpa-staging
 
 networkPolicy:

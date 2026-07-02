@@ -8,6 +8,9 @@ images:
   - name: ghcr.io/example/rpa-runtime
     newName: registry.owner-approved.invalid/rpa-runtime
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  - name: ghcr.io/example/rpa-console
+    newName: registry.owner-approved.invalid/rpa-console
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
 commonAnnotations:
   rpa.example.com/sample-overlay: "true"
   rpa.example.com/release-artifact: "false"

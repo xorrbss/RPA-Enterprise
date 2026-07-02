@@ -1420,6 +1420,8 @@ export interface AuditLogListParams extends ListParams {
   readonly outcome?: AuditOutcome;
   readonly actor?: string;
   readonly correlation_id?: string;
+  readonly occurred_at_from?: string;
+  readonly occurred_at_to?: string;
 }
 
 export interface AuditLogExportParams extends AuditLogListParams {
@@ -1687,6 +1689,7 @@ export interface SiteItem {
   readonly login_capable?: boolean;
   readonly session_ready?: boolean;
   readonly session_expires_at?: string | null;
+  readonly enc_kid?: string | null;
   readonly default_browser_identity_id?: string | null;
   readonly default_network_policy_id?: string | null;
   readonly page_state_summary?: SitePageStateSummary;
@@ -1705,6 +1708,15 @@ export interface SitePageStateUpdateResult {
   readonly site_profile_id: string;
   readonly page_state_selectors: unknown | null;
   readonly page_state_summary: SitePageStateSummary;
+}
+
+export interface RuntimeCapabilities {
+  readonly session_capture?: {
+    readonly server?: {
+      readonly mode?: "dev" | "off";
+      readonly enabled?: boolean;
+    };
+  };
 }
 
 export type SiteElementType = "button" | "input" | "link" | "table" | "row" | "field" | "message" | "other";

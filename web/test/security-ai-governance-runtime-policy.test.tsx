@@ -77,10 +77,10 @@ describe("AI governance runtime policy panel", () => {
 
     const panel = await screen.findByRole("region", { name: "AI runtime policy" });
     expect(await within(panel).findByText("AI runtime policy")).toBeInTheDocument();
-    expect(within(panel).getByText("subject subject-map:ai-runtime/prod")).toBeInTheDocument();
-    expect(within(panel).getByText("owner team:ai-governance-oncall")).toBeInTheDocument();
-    expect(within(panel).getByText("decision policy-decision:ai-governance/runtime-enforcement")).toBeInTheDocument();
-    expect(within(panel).getAllByText("ai_governance.enforce").length).toBeGreaterThan(0);
+    expect(await within(panel).findByText("subject subject-map:ai-runtime/prod")).toBeInTheDocument();
+    expect(await within(panel).findByText("owner team:ai-governance-oncall")).toBeInTheDocument();
+    expect(await within(panel).findByText("decision policy-decision:ai-governance/runtime-enforcement")).toBeInTheDocument();
+    expect((await within(panel).findAllByText("ai_governance.enforce")).length).toBeGreaterThan(0);
     expect(within(panel).getByText("Admin role is required to manage AI runtime policy.")).toBeInTheDocument();
     expect(within(panel).queryByRole("button", { name: "Save runtime policy" })).toBeNull();
     expect(getAiGovernanceRuntimePolicy).toHaveBeenCalled();

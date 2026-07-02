@@ -13,17 +13,20 @@ const site = {
 } as unknown as SiteItem;
 
 describe("CaptureGuide (P3.3 운영자-로컬 캡처 안내)", () => {
-  test("명령은 --api/--site 실 플래그 + 접속 코드 자리표시자를 안내", () => {
+  test("명령은 PowerShell 형식의 --api/--site 실 플래그 + 접속 코드 자리표시자를 안내", () => {
     const { container } = render(<CaptureGuide site={site} onClose={() => {}} />);
     const text = container.textContent ?? "";
     expect(text).toContain("--site 70000000-0000-0000-0000-000000000abc");
     expect(text).toContain("--api");
-    expect(text).toContain("RPA_OPERATOR_TOKEN=<본인 접속 코드>");
-    const summary = screen.getByText("고급 실행 방법 보기");
+    expect(text).toContain('$env:RPA_OPERATOR_TOKEN="<본인 접속 코드>"');
+    expect(text).toContain("저장소가 체크아웃");
+    expect(text).toContain("IT 담당자에게 이 명령을 전달하세요");
+    expect(text).toContain("등록 후 이 사이트는 “세션 등록됨”으로 표시됩니다.");
+    const summary = screen.getByText("Windows PowerShell 실행 방법 보기");
     const details = summary.closest("details");
     expect(details).not.toBeNull();
     expect((details as HTMLDetailsElement).open).toBe(false);
-    expect(screen.getByRole("button", { name: "등록 도구 실행 명령 복사" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "PowerShell 실행 명령 복사" })).toBeInTheDocument();
   });
 
   test("보안 불변: 실 접속 코드(JWT)를 임베드하지 않는다 — 플레이스홀더만, 경고 노출", () => {

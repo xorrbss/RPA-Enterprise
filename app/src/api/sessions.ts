@@ -21,9 +21,31 @@ import { ApiResponseError } from "./errors";
 import { type ApiServerDeps, requirePrincipal } from "./server";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CAPTURE_LAUNCHING_EXPIRES_AFTER_MS = 10 * 60 * 1000;
+const EXPIRED_LAUNCH_DETAIL = "launching_expired_operator_pc_registration_required";
 
 interface CaptureBody {
   loginUrl?: string; // 미지정 시 site_profile.page_state_selectors.loginUrl 에서 해소(사이트별 로그인 URL 설정).
+}
+
+export function isLaunchingCaptureExpired(createdAt: Date, now: Date = new Date()): boolean {
+  return now.getTime() - createdAt.getTime() >= CAPTURE_LAUNCHING_EXPIRES_AFTER_MS;
+}
+
+async function expireStaleLaunchingCaptures(
+  client: import("pg").PoolClient,
+  tenantId: string,
+  siteId: string,
+): Promise<void> {
+  await client.query(
+    `UPDATE capture_sessions
+        SET status='expired', detail=$3, updated_at=now()
+      WHERE tenant_id=$1::uuid
+        AND site_profile_id=$2::uuid
+        AND status='launching'
+        AND created_at <= now() - interval '10 minutes'`,
+    [tenantId, siteId, EXPIRED_LAUNCH_DETAIL],
+  );
 }
 
 /** 절대 http(s) URL 검증. */
@@ -97,6 +119,7 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ApiServerDeps)
         if (site.rows[0] === undefined) {
           throw new ApiResponseError("RESOURCE_NOT_FOUND");
         }
+        await expireStaleLaunchingCaptures(c, String(principal.tenantId), id);
         const r = await c.query<{ capture_session_id: string; status: string; detail: string | null; updated_at: Date }>(
           `SELECT id::text AS capture_session_id, status, detail, updated_at
              FROM capture_sessions
@@ -247,6 +270,7 @@ async function applyCaptureStart(
       : undefined;
 
   // 2) in-flight 가드 — 같은 (tenant,site) 비종결 캡처가 있으면 새로 launch 하지 않고 그 행 재반환(이중 headful 브라우저 방지).
+  await expireStaleLaunchingCaptures(client, tenantId, siteId);
   const inflight = await client.query<{ id: string; status: string; login_url: string }>(
     `SELECT id::text AS id, status, login_url FROM capture_sessions
       WHERE tenant_id=$1::uuid AND site_profile_id=$2::uuid AND status IN ('launching','awaiting_login','capturing')

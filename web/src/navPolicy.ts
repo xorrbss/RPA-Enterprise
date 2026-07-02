@@ -44,7 +44,7 @@ const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
   automationOps: { standardRoles: ["operator", "admin"] },
   documentIdp: { standardRoles: ["operator", "admin"] },
 
-  auditExplorer: { standardRoles: ["approver", "admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
+  auditExplorer: { standardRoles: ALL_ROLES, advancedRoles: ALL_ROLES },
 
   coePipeline: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
   connectorCatalog: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },

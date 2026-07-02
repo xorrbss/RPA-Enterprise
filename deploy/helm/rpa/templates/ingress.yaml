@@ -5,11 +5,11 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: rpa-api
+  name: rpa-console
   namespace: {{ include "rpa.namespace" . }}
   labels:
-    app.kubernetes.io/name: rpa-api
-    app.kubernetes.io/component: api
+    app.kubernetes.io/name: rpa-console
+    app.kubernetes.io/component: console
     app.kubernetes.io/part-of: rpa-enterprise
   annotations:
 {{ toYaml .Values.ingress.annotations | nindent 4 }}
@@ -27,7 +27,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: rpa-api
+                name: rpa-console
                 port:
                   name: http
 {{- end }}

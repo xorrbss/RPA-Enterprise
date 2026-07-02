@@ -13,11 +13,13 @@ export interface SessionRenewalQueueItem {
 export function SessionRenewalQueue({
   items,
   canCapture,
+  serverCaptureEnabled,
   onOpenGuide,
   captureSession,
 }: {
   items: readonly SessionRenewalQueueItem[];
   canCapture: boolean;
+  serverCaptureEnabled: boolean;
   onOpenGuide: (site: SiteItem) => void;
   captureSession: (siteId: string, key: string) => Promise<unknown>;
 }): JSX.Element {
@@ -38,15 +40,17 @@ export function SessionRenewalQueue({
               </div>
               <span className={`badge ${item.status === "expired" ? "red" : "amber"}`}>{sessionRenewalStatusLabel(item.status)}</span>
               <div className="inline-actions">
-                <ActionButton
-                  label="세션 등록"
-                  action="session.capture"
-                  confirmText={`${label}에 로그인 창을 엽니다. 창에서 직접 로그인하시면 세션이 저장되어 이후 자동 실행이 재사용합니다.`}
-                  run={(key) => captureSession(item.site.site_profile_id, key)}
-                  invalidateKeys={[["sites"], ["capture-sessions", item.site.site_profile_id]]}
-                />
+                {serverCaptureEnabled && (
+                  <ActionButton
+                    label="세션 등록"
+                    action="session.capture"
+                    confirmText={`${label}에 서버 캡처용 로그인 창을 요청합니다. 창에서 직접 로그인하시면 세션이 저장되어 이후 자동 실행이 재사용합니다.`}
+                    run={(key) => captureSession(item.site.site_profile_id, key)}
+                    invalidateKeys={[["sites"], ["capture-sessions", item.site.site_profile_id]]}
+                  />
+                )}
                 {canCapture && (
-                  <button className="btn" type="button" onClick={() => onOpenGuide(item.site)}>
+                  <button className={serverCaptureEnabled ? "btn" : "btn primary"} type="button" onClick={() => onOpenGuide(item.site)}>
                     운영자 PC 등록
                   </button>
                 )}

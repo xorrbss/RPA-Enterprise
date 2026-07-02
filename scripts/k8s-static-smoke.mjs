@@ -16,6 +16,7 @@ const baseResourceFiles = [
   "deploy/k8s/base/20-api.yaml",
   "deploy/k8s/base/21-worker.yaml",
   "deploy/k8s/base/22-lifecycle-worker.yaml",
+  "deploy/k8s/base/23-console.yaml",
   "deploy/k8s/base/30-policies.yaml",
   "deploy/k8s/base/31-api-hpa.yaml",
   "deploy/k8s/base/kustomization.yaml",
@@ -46,6 +47,7 @@ const helmFiles = [
   "deploy/helm/rpa/templates/serviceaccounts.yaml",
   "deploy/helm/rpa/templates/migrate-job.yaml",
   "deploy/helm/rpa/templates/api.yaml",
+  "deploy/helm/rpa/templates/console.yaml",
   "deploy/helm/rpa/templates/worker.yaml",
   "deploy/helm/rpa/templates/lifecycle-worker.yaml",
   "deploy/helm/rpa/templates/pdb.yaml",
@@ -61,6 +63,14 @@ const docFiles = [
   "docs/staging-deploy-runbook.md",
 ];
 
+const deploymentFiles = [
+  "Dockerfile",
+  "compose.yaml",
+  "deploy/docker.env.example",
+  "deploy/nginx/console.conf.template",
+];
+
+const deployment = Object.fromEntries(deploymentFiles.map((path) => [path, readRequired(path)]));
 const base = Object.fromEntries(baseFiles.map((path) => [path, readRequired(path)]));
 const overlays = Object.fromEntries(k8sOverlayFiles.map((path) => [path, readRequired(path)]));
 const ownerDecisionNotes = Object.fromEntries(ownerDecisionNoteFiles.map((path) => [path, readRequired(path)]));
@@ -75,6 +85,7 @@ const releaseValues = helm["deploy/helm/rpa/values.release.example.yaml"];
 const runLocalGates = readRequired("scripts/run-local-gates.mjs");
 const codegenPackage = readRequired("codegen/package.json");
 
+checkConsoleDockerComposeContract();
 checkKubernetesYamlParse();
 checkReleasePlaceholderBoundaries();
 checkKustomizeBase();
@@ -96,8 +107,46 @@ console.log(
   `k8s static smoke: ${baseResourceFiles.length} kustomize base files, ${baseOptionalFiles.length} optional base templates, ${k8sOverlayFiles.length} sample overlay, ${ownerDecisionNoteFiles.length} owner-decision note files, and ${helmFiles.length} Helm chart files checked`,
 );
 console.log(
-  "k8s static smoke coverage: non-root pods, split DB roles, external Graphile migrations, SecretRef-only credentials, S3 artifact stores, readiness/liveness probes, API HPA, topology/anti-affinity, fail-closed ingress and egress NetworkPolicy",
+  "k8s static smoke coverage: non-root pods, split DB roles, console nginx same-origin proxy, external Graphile migrations, SecretRef-only credentials, S3 artifact stores, readiness/liveness probes, API HPA, topology/anti-affinity, fail-closed ingress and egress NetworkPolicy",
 );
+
+function checkConsoleDockerComposeContract() {
+  const dockerfile = deployment["Dockerfile"];
+  const compose = deployment["compose.yaml"];
+  const dockerEnv = deployment["deploy/docker.env.example"];
+  const nginx = deployment["deploy/nginx/console.conf.template"];
+
+  requireRegex("Dockerfile has web dependency stage", dockerfile, /FROM node:\$\{NODE_VERSION\} AS web-deps/i);
+  requireRegex("Dockerfile installs web with npm ci", dockerfile, /npm --prefix web ci/i);
+  requireRegex("Dockerfile has web build stage", dockerfile, /FROM web-deps AS web-build/i);
+  requireRegex("Dockerfile exposes VITE_API_BASE_URL build arg", dockerfile, /ARG VITE_API_BASE_URL=\/api/i);
+  requireRegex("Dockerfile exposes VITE_OIDC_AUTH_URL build arg", dockerfile, /ARG VITE_OIDC_AUTH_URL=/i);
+  requireRegex("Dockerfile runs web build", dockerfile, /npm --prefix web run build/i);
+  requireRegex("Dockerfile has nginx console runtime target", dockerfile, /FROM nginxinc\/nginx-unprivileged:1\.27-alpine AS console-runtime/i);
+  requireRegex("Dockerfile copies nginx console template", dockerfile, /deploy\/nginx\/console\.conf\.template/i);
+  requireRegex("Dockerfile copies web dist into nginx root", dockerfile, /COPY --from=web-build \/workspace\/web\/dist \/usr\/share\/nginx\/html/i);
+
+  const web = serviceBlock(compose, "web");
+  requireRegex("compose web service exists", compose, /\n  web:\n/i);
+  requireRegex("compose web builds console runtime target", web, /target:\s+console-runtime/i);
+  requireRegex("compose web passes VITE_API_BASE_URL build arg", web, /VITE_API_BASE_URL:\s+\$\{VITE_API_BASE_URL:-\/api\}/i);
+  requireRegex("compose web passes VITE_OIDC_AUTH_URL build arg", web, /VITE_OIDC_AUTH_URL:\s+\$\{VITE_OIDC_AUTH_URL:-\}/i);
+  requireRegex("compose web depends on healthy api", web, /api:[\s\S]*?condition:\s+service_healthy/i);
+  requireRegex("compose web exposes console port", web, /\$\{RPA_CONSOLE_PORT:-8088\}:8080/i);
+  requireRegex("compose web points nginx at api service", web, /RPA_API_UPSTREAM:\s+http:\/\/api:8080/i);
+
+  requireRegex("docker env documents console port", dockerEnv, /^RPA_CONSOLE_PORT=8088$/m);
+  requireRegex("docker env defaults console API base to /api", dockerEnv, /^VITE_API_BASE_URL=\/api$/m);
+  requireRegex("docker env includes OIDC auth URL setting", dockerEnv, /^VITE_OIDC_AUTH_URL=$/m);
+
+  requireRegex("nginx listens on unprivileged port", nginx, /listen\s+8080;/i);
+  requireRegex("nginx health endpoint", nginx, /location = \/healthz[\s\S]*?default_type text\/plain;[\s\S]*?return 200 "ok\\n";/i);
+  requireRegex("nginx handles /api prefix", nginx, /location \/api\//i);
+  requireRegex("nginx strips /api before proxying", nginx, /rewrite \^\/api\/\(\.\*\)\$ \/\$1 break;/i);
+  requireRegex("nginx proxy uses API upstream env", nginx, /proxy_pass \${RPA_API_UPSTREAM};/i);
+  requireRegex("nginx has SPA fallback", nginx, /try_files \$uri \$uri\/ \/index\.html;/i);
+  rejectRegex("nginx must not expose a browser /v1 proxy", nginx, /location\s+(=|~|\^~)?\s*\/v1\b/i);
+}
 
 function checkKubernetesYamlParse() {
   const files = [...baseFiles, ...k8sOverlayFiles, "deploy/helm/rpa/values.release.example.yaml"].map((path) =>
@@ -135,6 +184,7 @@ function checkReleasePlaceholderBoundaries() {
     "deploy/k8s/base/20-api.yaml",
     "deploy/k8s/base/21-worker.yaml",
     "deploy/k8s/base/22-lifecycle-worker.yaml",
+    "deploy/k8s/base/23-console.yaml",
   ]);
   for (const [path, source] of Object.entries({ ...base, ...overlays, ...helm })) {
     if (!source.includes("replace-me")) continue;
@@ -142,7 +192,8 @@ function checkReleasePlaceholderBoundaries() {
     failures.push(`${path}: image placeholder replace-me is allowed only in fail-closed base workload templates`);
   }
   for (const path of replaceMeAllowedFiles) {
-    requireRegex(`${path} keeps fail-closed base image placeholder`, base[path], /ghcr\.io\/example\/rpa-runtime:replace-me/);
+    const imageName = path.endsWith("23-console.yaml") ? "rpa-console" : "rpa-runtime";
+    requireRegex(`${path} keeps fail-closed base image placeholder`, base[path], new RegExp(`ghcr\\.io\\/example\\/${imageName}:replace-me`));
   }
   rejectRegex("sample overlay must not contain replace-me", overlayAll, /replace-me/i);
   rejectRegex("Helm release example values must not contain replace-me", releaseValues, /replace-me/i);
@@ -164,7 +215,7 @@ function checkKustomizeBase() {
   }
 
   const serviceAccounts = base["deploy/k8s/base/01-serviceaccounts.yaml"];
-  for (const name of ["rpa-api", "rpa-worker", "rpa-lifecycle-worker", "rpa-migrate"]) {
+  for (const name of ["rpa-api", "rpa-worker", "rpa-lifecycle-worker", "rpa-console", "rpa-migrate"]) {
     requireRegex(
       `base service account ${name} automount disabled`,
       serviceAccounts,
@@ -180,6 +231,7 @@ function checkBaseRuntimeContract() {
   const api = base["deploy/k8s/base/20-api.yaml"];
   const worker = base["deploy/k8s/base/21-worker.yaml"];
   const lifecycle = base["deploy/k8s/base/22-lifecycle-worker.yaml"];
+  const console = base["deploy/k8s/base/23-console.yaml"];
   const policies = base["deploy/k8s/base/30-policies.yaml"];
   const hpa = base["deploy/k8s/base/31-api-hpa.yaml"];
   const ownerEgress = base["deploy/k8s/base/32-egress-owner-allowlist.optional.yaml"];
@@ -224,9 +276,11 @@ function checkBaseRuntimeContract() {
     "VAULT_ADDR",
     "VAULT_MOUNT",
   ]);
+  requireConsoleDeploymentContract("base console", console, /replicas:\s*2/i);
   requireTopologyContract("base api", api, "rpa-api", "api", true);
   requireTopologyContract("base worker", worker, "rpa-worker", "worker", false);
   requireTopologyContract("base lifecycle worker", lifecycle, "rpa-lifecycle-worker", "lifecycle-worker", false);
+  requireTopologyContract("base console", console, "rpa-console", "console", false);
 
   requireRegex("base api HPA", hpa, /kind:\s*HorizontalPodAutoscaler[\s\S]*?name:\s*rpa-api/i);
   requireRegex("base api HPA targets deployment", hpa, /scaleTargetRef:[\s\S]*?kind:\s*Deployment[\s\S]*?name:\s*rpa-api/i);
@@ -236,7 +290,10 @@ function checkBaseRuntimeContract() {
   requireRegex("base api HPA memory metric", hpa, /name:\s*memory[\s\S]*?averageUtilization:\s*80/i);
   requireRegex("base api PDB", policies, /kind:\s*PodDisruptionBudget[\s\S]*?name:\s*rpa-api[\s\S]*?minAvailable:\s*1/i);
   requireRegex("base api network policy", policies, /kind:\s*NetworkPolicy[\s\S]*?podSelector:[\s\S]*?app\.kubernetes\.io\/name:\s*rpa-api/i);
+  requireRegex("base api allows console ingress", policies, /name:\s*rpa-api-ingress[\s\S]*?app\.kubernetes\.io\/name:\s*rpa-console[\s\S]*?app\.kubernetes\.io\/component:\s*console/i);
   requireRegex("base api ingress requires approved namespace label", policies, /namespaceSelector:[\s\S]*?matchLabels:[\s\S]*?rpa-ingress-approved:\s*"true"/i);
+  requireRegex("base console ingress policy", policies, /kind:\s*NetworkPolicy[\s\S]*?name:\s*rpa-console-ingress[\s\S]*?app\.kubernetes\.io\/name:\s*rpa-console/i);
+  requireRegex("base console egress to api policy", policies, /kind:\s*NetworkPolicy[\s\S]*?name:\s*rpa-console-to-api-egress[\s\S]*?app\.kubernetes\.io\/name:\s*rpa-api[\s\S]*?port:\s*8080/i);
   rejectRegex("base api ingress must not allow every namespace", policies, /namespaceSelector:\s*\{\}/i);
   requireRegex("base default deny egress", policies, /kind:\s*NetworkPolicy[\s\S]*?name:\s*rpa-default-deny-egress[\s\S]*?policyTypes:[\s\S]*?-\s*Egress[\s\S]*?egress:\s*\[\]/i);
   requireRegex("base DNS egress only policy", policies, /name:\s*rpa-dns-egress[\s\S]*?kubernetes\.io\/metadata\.name:\s*kube-system[\s\S]*?k8s-app:\s*kube-dns[\s\S]*?port:\s*53/i);
@@ -247,6 +304,7 @@ function checkBaseRuntimeContract() {
   requireRegex("base owner egress template keeps object store CIDR blocked", ownerEgress, /OWNER_DECISION_REQUIRED_OBJECT_STORE_CIDR/);
   requireRegex("base owner egress template keeps OTLP collector CIDR blocked", ownerEgress, /OWNER_DECISION_REQUIRED_OTLP_COLLECTOR_CIDR/);
   requireRegex("base owner egress template keeps LLM provider CIDR blocked", ownerEgress, /OWNER_DECISION_REQUIRED_LLM_PROVIDER_CIDR/);
+  requireRegex("base optional ingress targets console", ingress, /kind:\s*Ingress[\s\S]*?name:\s*rpa-console[\s\S]*?service:[\s\S]*?name:\s*rpa-console/i);
   requireRegex("base optional ingress keeps host blocked", ingress, /kind:\s*Ingress[\s\S]*?OWNER_DECISION_REQUIRED_HOST/i);
   requireRegex("base optional ingress keeps TLS blocked", ingress, /secretName:\s*OWNER_DECISION_REQUIRED_TLS_SECRET/i);
   requireRegex("base optional ingress keeps class blocked", ingress, /ingressClassName:\s*OWNER_DECISION_REQUIRED_INGRESS_CLASS/i);
@@ -266,6 +324,7 @@ function checkK8sStagingSampleOverlay() {
   requireRegex("staging sample overlay is marked non-release", overlay, /rpa\.example\.com\/release-artifact:\s*"false"/i);
   requireRegex("staging sample overlay replaces base image repository", overlay, /newName:\s*registry\.owner-approved\.invalid\/rpa-runtime/i);
   requireRegex("staging sample overlay uses immutable image digest", overlay, /digest:\s*sha256:[a-f0-9]{64}/i);
+  requireRegex("staging sample overlay replaces console image repository", overlay, /newName:\s*registry\.owner-approved\.invalid\/rpa-console/i);
   rejectRegex("staging sample overlay must not carry unresolved owner placeholders", overlay, /OWNER_DECISION_REQUIRED_/);
   for (const cidr of ["192.0.2.10/32", "192.0.2.20/32", "198.51.100.10/32", "198.51.100.20/32", "203.0.113.10/32"]) {
     requireIn("staging sample overlay documentation CIDR", overlay, cidr);
@@ -279,6 +338,7 @@ function checkHelmRuntimeContract() {
   const helpers = helm["deploy/helm/rpa/templates/_helpers.tpl"];
   const migrate = helm["deploy/helm/rpa/templates/migrate-job.yaml"];
   const api = helm["deploy/helm/rpa/templates/api.yaml"];
+  const console = helm["deploy/helm/rpa/templates/console.yaml"];
   const worker = helm["deploy/helm/rpa/templates/worker.yaml"];
   const lifecycle = helm["deploy/helm/rpa/templates/lifecycle-worker.yaml"];
   const pdb = helm["deploy/helm/rpa/templates/pdb.yaml"];
@@ -293,11 +353,18 @@ function checkHelmRuntimeContract() {
   requireRegex("Helm default image repository is empty", values, /image:[\s\S]*?repository:\s*""/i);
   requireRegex("Helm default image tag is empty", values, /image:[\s\S]*?tag:\s*""/i);
   requireRegex("Helm default image digest is empty", values, /image:[\s\S]*?digest:\s*""/i);
+  requireRegex("Helm default console enabled", values, /console:[\s\S]*?enabled:\s*true/i);
+  requireRegex("Helm default console image repository is empty", values, /console:[\s\S]*?image:[\s\S]*?repository:\s*""/i);
+  requireRegex("Helm default console API upstream", values, /apiUpstream:\s*http:\/\/rpa-api:8080/i);
+  requireRegex("Helm default console topology spread", values, /console:[\s\S]*?topologySpreadConstraints:[\s\S]*?topologyKey:\s*kubernetes\.io\/hostname/i);
+  requireRegex("Helm default console preferred anti-affinity", values, /console:[\s\S]*?preferredDuringSchedulingIgnoredDuringExecution/i);
   requireRegex("Helm image helper requires repository", helpers, /image\.repository is required/i);
   requireRegex("Helm image helper renders digest reference", helpers, /printf\s+"%s@%s"/i);
   requireRegex("Helm image helper validates sha256 digest", helpers, /regexMatch\s+"\^sha256:\[a-f0-9\]\{64\}\$"/i);
   requireRegex("Helm image helper rejects latest tag", helpers, /image\.tag must not be latest/i);
   requireRegex("Helm image helper rejects replace-me-like tags", helpers, /\^replace\.\?me\$/i);
+  requireRegex("Helm console image helper requires repository", helpers, /console\.image\.repository is required/i);
+  requireRegex("Helm console image helper validates sha256 digest", helpers, /console\.image\.digest must be an immutable sha256 digest/i);
   requireRegex("Helm default existing secret", values, /existingSecret:\s*rpa-runtime-secrets/i);
   requireRegex("Helm default migrator role", values, /migratorUser:\s*rpa_migrator/i);
   requireRegex("Helm default app role", values, /appUser:\s*rpa_app/i);
@@ -322,7 +389,7 @@ function checkHelmRuntimeContract() {
   requireRegex("Helm default lifecycle topology spread", values, /lifecycleWorker:[\s\S]*?topologySpreadConstraints:[\s\S]*?topologyKey:\s*kubernetes\.io\/hostname/i);
   requireRegex("Helm default lifecycle preferred anti-affinity", values, /lifecycleWorker:[\s\S]*?preferredDuringSchedulingIgnoredDuringExecution/i);
 
-  for (const name of ["rpa-api", "rpa-worker", "rpa-lifecycle-worker", "rpa-migrate"]) {
+  for (const name of ["rpa-api", "rpa-worker", "rpa-lifecycle-worker", "rpa-console", "rpa-migrate"]) {
     requireRegex(
       `Helm service account ${name} automount disabled`,
       serviceAccounts,
@@ -359,9 +426,11 @@ function checkHelmRuntimeContract() {
     "VAULT_ADDR",
     "VAULT_MOUNT",
   ]);
+  requireConsoleDeploymentContract("Helm console", console, /\.Values\.console\.replicas/i);
   requireTopologyContract("Helm api", api, "rpa-api", "api", true);
   requireTopologyContract("Helm worker", worker, "rpa-worker", "worker", false);
   requireTopologyContract("Helm lifecycle worker", lifecycle, "rpa-lifecycle-worker", "lifecycle-worker", false);
+  requireTopologyContract("Helm console", console, "rpa-console", "console", false);
 
   requireRegex("Helm api HPA template", hpa, /\.Values\.api\.autoscaling\.enabled[\s\S]*?kind:\s*HorizontalPodAutoscaler/i);
   requireRegex("Helm api HPA min values", hpa, /\.Values\.api\.autoscaling\.minReplicas/i);
@@ -369,7 +438,11 @@ function checkHelmRuntimeContract() {
   requireRegex("Helm ingress is gated", ingress, /if\s+\.Values\.ingress\.enabled/i);
   requireRegex("Helm ingress requires owner decisions", ingress, /fail\s+"ingress\.enabled requires owner-approved ingress\.className, ingress\.host, and ingress\.tls\.secretName"/i);
   requireRegex("Helm ingress renders TLS only from values", ingress, /\.Values\.ingress\.tls\.secretName/i);
+  requireRegex("Helm ingress targets console service", ingress, /service:[\s\S]*?name:\s*rpa-console/i);
   requireRegex("Helm network policy api ingress", networkPolicy, /kind:\s*NetworkPolicy[\s\S]*?name:\s*rpa-api-ingress[\s\S]*?\.Values\.networkPolicy\.apiIngress\.ingressNamespaceLabel/i);
+  requireRegex("Helm network policy api allows console", networkPolicy, /name:\s*rpa-api-ingress[\s\S]*?app\.kubernetes\.io\/name:\s*rpa-console[\s\S]*?app\.kubernetes\.io\/component:\s*console/i);
+  requireRegex("Helm network policy console ingress", networkPolicy, /name:\s*rpa-console-ingress[\s\S]*?app\.kubernetes\.io\/name:\s*rpa-console/i);
+  requireRegex("Helm network policy console egress to api", networkPolicy, /name:\s*rpa-console-to-api-egress[\s\S]*?app\.kubernetes\.io\/name:\s*rpa-api[\s\S]*?port:\s*8080/i);
   requireRegex("Helm network policy egress default deny", networkPolicy, /name:\s*rpa-default-deny-egress[\s\S]*?egress:\s*\[\]/i);
   requireRegex("Helm network policy DNS egress", networkPolicy, /name:\s*rpa-dns-egress[\s\S]*?\.Values\.networkPolicy\.egress\.dnsNamespaceLabel[\s\S]*?port:\s*53/i);
   requireRegex("Helm network policy owner CIDRs", networkPolicy, /\.Values\.networkPolicy\.egress\.ownerApprovedCidrs/i);
@@ -379,6 +452,8 @@ function checkHelmRuntimeContract() {
   requireRegex("Helm notes mention out-of-band DB roles", notes, /roles\.sql/i);
   requireRegex("Helm notes mention existing Secret", notes, /rpa-runtime-secrets/i);
   requireRegex("Helm notes mention immutable digest", notes, /image\.digest[\s\S]*immutable sha256/i);
+  requireRegex("Helm notes mention console image digest", notes, /console\.image\.repository[\s\S]*console\.image\.digest/i);
+  requireRegex("Helm notes mention console /api strip proxy", notes, /\/api\/\*[\s\S]*stripping \/api/i);
   requireRegex("Helm notes mention SBOM signing", notes, /SBOM[\s\S]*signature/i);
   requireRegex("Helm notes mention ingress owner decisions", notes, /ingress\.enabled=false[\s\S]*className[\s\S]*TLS secret/i);
   requireRegex("Helm notes mention egress owner decisions", notes, /Default egress is deny-all[\s\S]*ownerApprovedCidrs/i);
@@ -389,6 +464,7 @@ function checkHelmRuntimeContract() {
 function checkHelmReleaseValues() {
   requireRegex("Helm release example uses owner-approved repository sample", releaseValues, /repository:\s*registry\.owner-approved\.invalid\/rpa-runtime/i);
   requireRegex("Helm release example uses immutable digest", releaseValues, /digest:\s*sha256:[a-f0-9]{64}/i);
+  requireRegex("Helm release example uses owner-approved console repository sample", releaseValues, /repository:\s*registry\.owner-approved\.invalid\/rpa-console/i);
   requireRegex("Helm release example keeps tag empty", releaseValues, /tag:\s*""/i);
   requireRegex("Helm release example sets staging namespace", releaseValues, /namespaceOverride:\s*rpa-staging/i);
   requireRegex("Helm release example includes owner-approved egress list", releaseValues, /ownerApprovedCidrs:[\s\S]*name:\s*managed-postgresql[\s\S]*name:\s*llm-provider/i);
@@ -430,6 +506,11 @@ function checkPackagingDocs() {
   requireRegex("staging runbook records Helm release values gate", runbook, /Helm release values gate/i);
   requireRegex("staging runbook records image digest requirement", runbook, /image\.digest/i);
   requireRegex("staging runbook records SBOM signing requirement", runbook, /SBOM[\s\S]*signature/i);
+  requireRegex("staging runbook records console deployment", runbook, /Console deployment/i);
+  requireRegex("staging runbook records console VITE_API_BASE_URL", runbook, /VITE_API_BASE_URL[\s\S]*\/api/i);
+  requireRegex("staging runbook records console VITE_OIDC_AUTH_URL", runbook, /VITE_OIDC_AUTH_URL/i);
+  requireRegex("staging runbook records console /api strip proxy", runbook, /strips the[\s\S]*\/api[\s\S]*\/v1/i);
+  requireRegex("staging runbook records HTTPS secure-context guidance", runbook, /Use HTTPS[\s\S]*secure-context/i);
 }
 
 function checkSmokeWiring() {
@@ -460,6 +541,20 @@ function requireDeploymentContract(label, source, runMode, replicasPattern, secr
   }
 }
 
+function requireConsoleDeploymentContract(label, source, replicasPattern) {
+  requireRegex(`${label} replicas`, source, replicasPattern);
+  requireRegex(`${label} service account`, source, /serviceAccountName:\s*rpa-console/i);
+  requireRegex(`${label} automount disabled`, source, /automountServiceAccountToken:\s*false/i);
+  requireRegex(`${label} non-root`, source, /runAsNonRoot:\s*true/i);
+  requireRegex(`${label} nginx non-root uid`, source, /runAsUser:\s*101/i);
+  requireRegex(`${label} no privilege escalation`, source, /allowPrivilegeEscalation:\s*false/i);
+  requireRegex(`${label} http port`, source, /name:\s*http[\s\S]*?containerPort:\s*8080/i);
+  requireRegex(`${label} readiness probe`, source, /readinessProbe:[\s\S]*?path:\s*\/healthz[\s\S]*?port:\s*http/i);
+  requireRegex(`${label} liveness probe`, source, /livenessProbe:[\s\S]*?path:\s*\/healthz[\s\S]*?port:\s*http/i);
+  requireRegex(`${label} API upstream env`, source, /name:\s*RPA_API_UPSTREAM[\s\S]*?(http:\/\/rpa-api:8080|\.Values\.console\.apiUpstream)/i);
+  requireRegex(`${label} service`, source, /kind:\s*Service[\s\S]*?name:\s*rpa-console[\s\S]*?targetPort:\s*http/i);
+}
+
 function requireTopologyContract(label, source, _name, _component, requiresHardAntiAffinity) {
   requireRegex(`${label} topology spread`, source, /topologySpreadConstraints/i);
   requireRegex(`${label} hostname topology key`, source, /topologyKey:\s*kubernetes\.io\/hostname|\.Values\.[A-Za-z.]+\.topologySpreadConstraints/i);
@@ -475,7 +570,7 @@ function requireTopologyContract(label, source, _name, _component, requiresHardA
     requireRegex(
       `${label} preferred anti-affinity`,
       source,
-      /preferredDuringSchedulingIgnoredDuringExecution|\.Values\.(worker|lifecycleWorker)\.affinity/i,
+      /preferredDuringSchedulingIgnoredDuringExecution|\.Values\.(worker|lifecycleWorker|console)\.affinity/i,
     );
   }
 }
@@ -517,4 +612,14 @@ function rejectRegex(label, source, pattern) {
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function serviceBlock(source, serviceName) {
+  const pattern = new RegExp(`\\n  ${escapeRegex(serviceName)}:\\n([\\s\\S]*?)(?=\\n  [A-Za-z0-9_-]+:\\n|\\nvolumes:\\n|$)`);
+  const match = pattern.exec(source);
+  if (match === null) {
+    failures.push(`compose.yaml missing service block ${serviceName}`);
+    return "";
+  }
+  return match[0];
 }

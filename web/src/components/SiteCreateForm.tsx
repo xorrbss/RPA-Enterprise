@@ -148,6 +148,22 @@ function parsePageStateSelectorsJson(text: string): { ok: true; value?: unknown 
   return validationError === null ? { ok: true, value: parsed } : { ok: false, message: validationError };
 }
 
+function selectorsHaveLoginUrl(value: unknown): boolean {
+  return isRecord(value) && typeof value.loginUrl === "string" && value.loginUrl.trim() !== "";
+}
+
+function selectorWarning(value: string): string | null {
+  if (value.length === 0) return null;
+  if (value !== value.trim()) return "앞뒤 공백이 포함되어 있습니다. CSS selector를 복사했다면 공백을 제거하세요.";
+  if (/[가-힣]/.test(value)) return "한글 설명처럼 보입니다. 개발자도구에서 복사한 CSS selector 예: .user-menu 를 입력하세요.";
+  return null;
+}
+
+function SelectorWarning({ value }: { value: string }): JSX.Element | null {
+  const warning = selectorWarning(value);
+  return warning === null ? null : <span className="badge amber">{warning}</span>;
+}
+
 function createdSiteFromResponse(value: unknown): CreatedSite | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -189,6 +205,7 @@ export function SiteCreateForm({
   const [flagRows, setFlagRows] = useState<FlagRow[]>([]);
   const [pageStateJson, setPageStateJson] = useState("");
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
+  const [nextStep, setNextStep] = useState<{ href: string } | null>(null);
 
   function pageStateSelectors(): unknown | undefined {
     const parsedJson = parsePageStateSelectorsJson(pageStateJson);
@@ -224,7 +241,15 @@ export function SiteCreateForm({
     onSuccess: (created) => {
       const createdSite = createdSiteFromResponse(created);
       if (createdSite !== null) onCreated?.(createdSite);
-      setMsg({ tone: "green", text: "사이트 등록됨" });
+      const selectors = pageStateSelectors();
+      const needsSessionRegistration = selectorsHaveLoginUrl(selectors);
+      if (needsSessionRegistration) {
+        setMsg({ tone: "green", text: "사이트 등록됨 · 다음: 로그인 세션 등록" });
+        setNextStep({ href: `#security?section=sites&site=${encodeURIComponent(created.site_profile_id)}` });
+      } else {
+        setMsg({ tone: "green", text: "사이트 등록됨" });
+        setNextStep(null);
+      }
       setName("");
       setUrl("");
       setRisk("green");
@@ -235,7 +260,7 @@ export function SiteCreateForm({
       setPageStateJson("");
       setOpen(false);
       void qc.invalidateQueries({ queryKey: ["sites"] });
-      if (!embedded) {
+      if (!embedded && !needsSessionRegistration) {
         navigate("scenarioStudio", {
           site: created.site_profile_id,
           start_url: created.url_pattern,
@@ -274,6 +299,7 @@ export function SiteCreateForm({
 
   const toggleOpen = () => {
     setMsg(null);
+    setNextStep(null);
     setOpen((current) => {
       const next = !current;
       if (next && url.trim() === "") {
@@ -296,6 +322,11 @@ export function SiteCreateForm({
         <strong>{title}</strong>
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
+          {nextStep !== null && (
+            <a className="btn" href={nextStep.href}>
+              다음: 로그인 세션 등록
+            </a>
+          )}
           <button className="btn" type="button" onClick={toggleOpen}>
             {open ? "닫기" : triggerLabel}
           </button>
@@ -330,22 +361,28 @@ export function SiteCreateForm({
             />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">로그인 완료 확인 조건 (선택)</span>
+            <span className="subtle">로그인 완료 CSS selector (선택)</span>
             <input
+              aria-label="로그인 완료 확인 조건 (선택)"
               value={authenticatedSelector}
               onChange={(e) => setAuthenticatedSelector(e.target.value)}
-              placeholder="예: 사용자 메뉴"
+              placeholder="예: .user-menu"
               style={{ fontFamily: "monospace" }}
             />
+            <span className="subtle">개발자도구에서 로그인 후 보이는 요소의 CSS selector를 복사하세요.</span>
+            <SelectorWarning value={authenticatedSelector} />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">리뷰 목록 확인 조건 (선택)</span>
+            <span className="subtle">리뷰 목록 CSS selector (선택)</span>
             <input
+              aria-label="리뷰 목록 확인 조건 (선택)"
               value={reviewsSelector}
               onChange={(e) => setReviewsSelector(e.target.value)}
-              placeholder="예: 리뷰 카드"
+              placeholder="예: .review-item"
               style={{ fontFamily: "monospace" }}
             />
+            <span className="subtle">목록 행이나 카드처럼 반복되는 화면 요소의 CSS selector를 입력하세요.</span>
+            <SelectorWarning value={reviewsSelector} />
           </label>
           <details style={{ fontSize: 12 }}>
             <summary className="subtle">판정 기준 보기</summary>
@@ -390,9 +427,10 @@ export function SiteCreateForm({
                     aria-label="화면 확인 조건"
                     value={row.selector}
                     onChange={(e) => updateFlagRow(row.id, { selector: e.target.value })}
-                    placeholder="예: 다음 버튼 비활성"
+                    placeholder="예: .next.disabled"
                     style={{ fontFamily: "monospace", minWidth: 0 }}
                   />
+                  <SelectorWarning value={row.selector} />
                   <input
                     aria-label="최소 개수"
                     type="number"

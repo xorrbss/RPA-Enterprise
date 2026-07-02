@@ -30,6 +30,7 @@ const SITE = "70000000-0000-0000-0000-0000000000c1";
 const BID = "9b000000-0000-0000-0000-0000000000c2";
 const CAP = "c0000000-0000-0000-0000-0000000000c3";
 const CAP_EXPIRED = "c0000000-0000-0000-0000-0000000000c4";
+const CAP_STALE_LAUNCHING = "c0000000-0000-0000-0000-0000000000c5";
 
 const SECRET = new TextEncoder().encode("capture-complete-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -71,6 +72,11 @@ async function main(): Promise<void> {
       await c.query(`INSERT INTO browser_identities (id, tenant_id, site_profile_id, label, version) VALUES ($1,$2,$3,'id',1)`, [BID, TENANT_A, SITE]);
       await c.query(`INSERT INTO capture_sessions (id, tenant_id, site_profile_id, browser_identity_id, login_url, status) VALUES ($1,$2,$3,$4,'https://login.x','awaiting_login')`, [CAP, TENANT_A, SITE, BID]);
       await c.query(`INSERT INTO capture_sessions (id, tenant_id, site_profile_id, browser_identity_id, login_url, status) VALUES ($1,$2,$3,$4,'https://login.x','expired')`, [CAP_EXPIRED, TENANT_A, SITE, BID]);
+      await c.query(
+        `INSERT INTO capture_sessions (id, tenant_id, site_profile_id, browser_identity_id, login_url, status, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,'https://login.x','launching', now() - interval '11 minutes', now() - interval '11 minutes')`,
+        [CAP_STALE_LAUNCHING, TENANT_A, SITE, BID],
+      );
     });
 
     const noopEnqueuer: RunEnqueuer = { async enqueueRunClaim() {}, async enqueueRunAbort() {}, async enqueueSinkDeliver() {} };
@@ -129,6 +135,12 @@ async function main(): Promise<void> {
       check("GET capture status → 200 + captured row", statusList.statusCode === 200 && statusBody.items.some((item) => item.capture_session_id === CAP && item.status === "captured"), `${statusList.statusCode} ${statusList.body}`);
       check("GET capture status → next_cursor null", statusBody.next_cursor === null);
       check("GET capture status → 쿠키/로그인 URL 미노출", !statusList.body.includes("secret-cookie-val") && !Object.prototype.hasOwnProperty.call(statusBody.items[0] ?? {}, "login_url"), statusList.body);
+      check("GET capture status → stale launching lazy-expired",
+        statusBody.items.some((item) =>
+          item.capture_session_id === CAP_STALE_LAUNCHING &&
+          item.status === "expired" &&
+          item.detail === "launching_expired_operator_pc_registration_required"),
+        statusList.body);
 
       // 5) 미존재 capture → 404.
       const r404 = await post(operator, app, "key2", { capture_session_id: "c0000000-0000-0000-0000-0000000000ff", cookies });

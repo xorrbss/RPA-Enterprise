@@ -1,11 +1,11 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: rpa-api
+  name: rpa-console
   namespace: rpa-system
   labels:
-    app.kubernetes.io/name: rpa-api
-    app.kubernetes.io/component: api
+    app.kubernetes.io/name: rpa-console
+    app.kubernetes.io/component: console
     app.kubernetes.io/part-of: rpa-enterprise
   annotations:
     rpa.example.com/owner-decision-required: ingress-class,host,tls-secret,source-network-policy
@@ -23,6 +23,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: rpa-api
+                name: rpa-console
                 port:
                   name: http

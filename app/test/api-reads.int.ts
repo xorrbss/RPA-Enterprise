@@ -396,6 +396,30 @@ async function main(): Promise<void> {
       const get = (url: string, token = viewer) =>
         app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
 
+      // ===== runtime capabilities =====
+      const previousSessionCaptureMode = process.env.SESSION_CAPTURE_SERVER_MODE;
+      try {
+        delete process.env.SESSION_CAPTURE_SERVER_MODE;
+        const capOff = await get("/v1/capabilities");
+        check("capabilities default → session_capture.server off",
+          capOff.statusCode === 200 &&
+          capOff.json().session_capture?.server?.mode === "off" &&
+          capOff.json().session_capture?.server?.enabled === false,
+          capOff.body);
+        process.env.SESSION_CAPTURE_SERVER_MODE = "dev";
+        const capDev = await get("/v1/capabilities");
+        check("capabilities dev → session_capture.server enabled",
+          capDev.statusCode === 200 &&
+          capDev.json().session_capture?.server?.mode === "dev" &&
+          capDev.json().session_capture?.server?.enabled === true,
+          capDev.body);
+        const capNoRole = await get("/v1/capabilities", noRole);
+        check("no-role capabilities → 403", capNoRole.statusCode === 403 && capNoRole.json().code === "AUTHZ_FORBIDDEN", capNoRole.body);
+      } finally {
+        if (previousSessionCaptureMode === undefined) delete process.env.SESSION_CAPTURE_SERVER_MODE;
+        else process.env.SESSION_CAPTURE_SERVER_MODE = previousSessionCaptureMode;
+      }
+
       // ===== listRuns =====
       // 1) 전체: 5건, created_at DESC(최신=run5..run1), current_node=null, as_of/failure_reason round-trip.
       const all = await get("/v1/runs");
@@ -767,10 +791,11 @@ async function main(): Promise<void> {
       const sites = await get("/v1/sites");
       check("listSites → 200, 3 items", sites.statusCode === 200 && sites.json().items.length === 3, sites.body);
       check("Site shape (url_pattern/risk/approval_status/circuit_status/session meta)",
-        sites.json().items.some((s: { site_profile_id: string; url_pattern: string; risk: string; approval_status: string; circuit_status: string; session_ready: boolean; session_expires_at: string | null; default_browser_identity_id: string | null; default_network_policy_id: string | null }) =>
+        sites.json().items.some((s: { site_profile_id: string; url_pattern: string; risk: string; approval_status: string; circuit_status: string; session_ready: boolean; session_expires_at: string | null; enc_kid: string | null; default_browser_identity_id: string | null; default_network_policy_id: string | null }) =>
           s.site_profile_id === SITE_GREEN && s.url_pattern === "https://green-site.example/*" &&
           s.risk === "green" && s.approval_status === "pending" && s.circuit_status === "closed" &&
           s.session_ready === true && s.session_expires_at === "2099-12-31T00:00:00.000Z" &&
+          s.enc_kid === "kid-test" &&
           s.default_browser_identity_id === "7a100000-0000-0000-0000-000000000002" &&
           s.default_network_policy_id === NETWORK_A),
         JSON.stringify(sites.json().items));
@@ -781,6 +806,7 @@ async function main(): Promise<void> {
       const siteDetail = await get(`/v1/sites/${SITE_GREEN}`);
       check("getSite → 200 (approval_status pending, circuit closed)",
         siteDetail.statusCode === 200 && siteDetail.json().approval_status === "pending" && siteDetail.json().circuit_status === "closed" &&
+        siteDetail.json().enc_kid === "kid-test" &&
         siteDetail.json().default_browser_identity_id === "7a100000-0000-0000-0000-000000000002" &&
         siteDetail.json().default_network_policy_id === NETWORK_A, siteDetail.body);
       const siteAbsent = await get(`/v1/sites/${ABSENT}`);

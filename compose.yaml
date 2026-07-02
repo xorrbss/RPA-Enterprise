@@ -108,6 +108,23 @@ services:
     volumes:
       - rpa_artifacts:/var/lib/rpa/artifacts
 
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: console-runtime
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+        VITE_OIDC_AUTH_URL: ${VITE_OIDC_AUTH_URL:-}
+    image: rpa-console:local
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      RPA_API_UPSTREAM: http://api:8080
+    ports:
+      - "${RPA_CONSOLE_PORT:-8088}:8080"
+
   worker:
     profiles: ["worker"]
     image: rpa-runtime:local

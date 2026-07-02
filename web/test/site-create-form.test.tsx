@@ -123,4 +123,34 @@ describe("SiteCreateForm page_state_selectors JSON", () => {
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.page_state_selectors).toEqual(selectors);
   });
+
+  test("로그인 주소가 있으면 생성 성공 후 세션 등록 딥링크를 보여준다", async () => {
+    renderForm(
+      fakeClient({
+        createSite: async (body) => siteCreateResult(body),
+      }),
+    );
+
+    fillRequiredFields();
+    fireEvent.change(screen.getByLabelText("로그인 주소 (선택)"), { target: { value: "https://login.office.hiworks.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "등록" }));
+
+    const next = await screen.findByRole("link", { name: "다음: 로그인 세션 등록" });
+    expect(next).toHaveAttribute("href", "#security?section=sites&site=site-new");
+    expect(screen.getByText("사이트 등록됨 · 다음: 로그인 세션 등록")).toBeInTheDocument();
+  });
+
+  test("selector 입력은 CSS 예시와 한글/앞뒤 공백 경고를 표시한다", () => {
+    renderForm(fakeClient());
+
+    fillRequiredFields();
+    expect(screen.getByPlaceholderText("예: .user-menu")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("예: .review-item")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("로그인 완료 확인 조건 (선택)"), { target: { value: "사용자 메뉴" } });
+    expect(screen.getByText(/한글 설명처럼 보입니다/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("로그인 완료 확인 조건 (선택)"), { target: { value: " .user-menu " } });
+    expect(screen.getByText(/앞뒤 공백이 포함/)).toBeInTheDocument();
+  });
 });

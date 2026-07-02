@@ -302,6 +302,14 @@ Release audit:
 
 ---
 
+## 2.4 Runtime Capabilities (read-only)
+
+| Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
+|---|---|---|---|---|
+| GET | `/v1/capabilities` | `site.read` 권한. 콘솔이 배포별 사용 가능한 런타임 경로를 read-only로 확인 | 200 + `{ session_capture: { server: { mode:"dev"|"off", enabled:boolean } } }`. `SESSION_CAPTURE_SERVER_MODE=dev`일 때만 서버가 콘솔 `세션 등록` 요청을 소비해 headful 로그인 창을 띄울 수 있음을 뜻한다. 기본값/미지정/그 외 값은 `off`로 fail-closed이며, 이 경우 콘솔은 서버측 세션 등록 dead-path를 숨기고 운영자 PC 등록을 안내해야 한다. 운영자 PC helper가 `POST /session/capture`로 capture_session을 생성하는 경로와는 별개다. | `AUTHZ_FORBIDDEN`(403) |
+
+---
+
 ## 2.5 Scenario Generations (자연어 → IR 저장 · 선택 실행)
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
@@ -441,7 +449,7 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| GET | `/v1/sites` | 쿼리: `?risk=red|amber|green&limit=&cursor=` | 200 + `{ items, next_cursor }` (site_profiles 요약: `url_pattern`, risk, 승인/circuit 상태, `session_ready`/`session_expires_at`, `default_browser_identity_id`, `default_network_policy_id`) | — |
+| GET | `/v1/sites` | 쿼리: `?risk=red|amber|green&limit=&cursor=` | 200 + `{ items, next_cursor }` (site_profiles 요약: `url_pattern`, risk, 승인/circuit 상태, `session_ready`/`session_expires_at`, latest session `enc_kid`, `default_browser_identity_id`, `default_network_policy_id`) | — |
 | GET | `/v1/sites/{site_profile_id}` | — | 200 + 사이트 상세(`url_pattern`, risk, 승인 상태, circuit 상태, 세션 준비 메타) | `RESOURCE_NOT_FOUND`(404) |
 | POST | `/v1/sites` | `Idempotency-Key`. 생성 권한(`site.create`) 필요. body: `name`(필수)·`url_pattern`(필수, http(s) origin)·optional `risk`(green default/amber/red)·optional `page_state_selectors` | 201 + 생성된 site 요약(`site_profile_id`/`name`/`url_pattern`/`risk`/`approved`/`default_browser_identity_id`/`default_network_policy_id`). 서버는 생성 tx 안에서 기본 `browser_identity`(site scoped)와 origin-host `network_policy`를 같이 만들어 자연어 생성 target 자동 채움에 사용한다. | `AUTHZ_FORBIDDEN`(403)⁴, `IR_SCHEMA_INVALID`(422)⁵ |
 | PATCH | `/v1/sites/{site_profile_id}` | `Idempotency-Key`. 수정 권한(`site.update`) 필요. body: `name`(필수) | 200 + 갱신된 site 요약(`site_profile_id`/`name`) | `AUTHZ_FORBIDDEN`(403)⁴, `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422; 중복 name reason=`site_name_already_exists`) |
@@ -459,7 +467,7 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 | POST | `/v1/sites/{site_profile_id}/recordings/{recording_session_id}/promote-to-studio` | `Idempotency-Key`. 작성 권한(`scenario.create`) 필요. body 없음 | 201/200 + `{ recording_session_id, studio_project_id, studio_graph_version_id, studio_graph_version, scenario_id, version, promotion_status:"draft", review_status }`. `review_report.blockers(severity=blocker)` 또는 compile error가 있으면 Studio draft를 만들지 않고 `IR_SCHEMA_INVALID(reason=recording_review_blocked)`로 거부한다. 성공 시 `studio_projects`, `studio_graph_versions`, `studio_validation_runs` 원장에 graph hash, compiled IR hash, validation stages를 남기며 prod 승격은 하지 않는다. | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `IR_SCHEMA_INVALID`(422) |
 | POST | `/v1/sites/{site_profile_id}/approve` | `Idempotency-Key`. 승인 권한 필요. body: optional `reason`/`expires_at` | 200 + 승인 반영(risk=red 사이트 실행 허용) | `AUTHZ_FORBIDDEN`(403)⁴ |
 | POST | `/v1/sites/{site_profile_id}/session/capture` | `Idempotency-Key`. 세션 등록 권한(`session.capture`) 필요. body: optional `login_url`(미지정 시 사이트 `page_state_selectors.loginUrl`) | 201/200 + `{ capture_session_id, site_profile_id, status, login_url, auth_selector? }`. 동일 사이트 active 캡처가 있으면 새로 띄우지 않고 기존 행 반환 | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404), `SITE_PROFILE_BLOCKED`(403), `IR_SCHEMA_INVALID`(422) |
-| GET | `/v1/sites/{site_profile_id}/session/capture` | 세션 등록 권한(`session.capture`) 필요. 최근 10개 캡처 상태 조회 | 200 + `{ items: [{ capture_session_id, status, detail, updated_at }], next_cursor: null }`. 쿠키/자격증명/토큰/로그인 입력값은 절대 반환하지 않음 | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404) |
+| GET | `/v1/sites/{site_profile_id}/session/capture` | 세션 등록 권한(`session.capture`) 필요. 최근 10개 캡처 상태 조회 | 200 + `{ items: [{ capture_session_id, status, detail, updated_at }], next_cursor: null }`. 쿠키/자격증명/토큰/로그인 입력값은 절대 반환하지 않음. 조회 시 `launching`이 10분 이상 미소비이면 기존 `expired` 상태로 lazy-expire하고 `detail=launching_expired_operator_pc_registration_required`를 남긴다. | `AUTHZ_FORBIDDEN`(403), `RESOURCE_NOT_FOUND`(404) |
 
 - `site risk=red`는 미승인 시 실행 차단(`SITE_PROFILE_BLOCKED`, 403, error-catalog operatorAction="site risk=red 승인 워크플로우"). 본 엔드포인트가 그 승인 워크플로우의 제어평면 진입점.
 - 세션 캡처 상태 목록은 운영자 피드백용 메타데이터다. 상태 예: `launching`(창 열기), `awaiting_login`(운영자 로그인 대기), `capturing`(저장 중), `captured`(등록 완료), `failed`, `expired`.
@@ -508,7 +516,7 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| GET | `/v1/audit-log` | 쿼리: `?action=&outcome=allow\|deny\|blocked\|error&actor=&correlation_id=&limit=&cursor=`. 조회 권한(`audit.read`) 필요 | 200 + `{ items, next_cursor }`. 항목은 `audit_id`, `sequence_no`, `actor(subject_id, roles)`, `action`, `outcome`, `reason`, `correlation_id`, `idempotency_key`, `occurred_at`, `payload_schema_ref`, `retention_until`, `legal_hold`, `previous_hash`, `hash`, `created_at`만 포함. `payload` 본문은 의도적으로 미노출 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
+| GET | `/v1/audit-log` | 쿼리: `?action=&outcome=allow\|deny\|blocked\|error&actor=&correlation_id=&occurred_at_from=&occurred_at_to=&limit=&cursor=`. `occurred_at_from/to`는 ISO-8601 timestamptz(포함 범위) additive filter. 조회 권한(`audit.read`) 필요 | 200 + `{ items, next_cursor }`. 항목은 `audit_id`, `sequence_no`, `actor(subject_id, roles)`, `action`, `outcome`, `reason`, `correlation_id`, `idempotency_key`, `occurred_at`, `payload_schema_ref`, `retention_until`, `legal_hold`, `previous_hash`, `hash`, `created_at`만 포함. `payload` 본문은 의도적으로 미노출 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
 | GET | `/v1/audit-log/export` | 쿼리: list와 동일 + optional `format=csv`(기본 csv). 조회 권한(`audit.read`) 필요 | 200 `text/csv`. CSV 컬럼은 list 항목과 동일한 비민감 요약 필드만 포함하며 `payload` 본문은 미노출 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422; `invalid_export_format`) |
 | GET | `/v1/audit-log/verification-runs` | 쿼리: optional `status=valid\|invalid\|failed`, `limit`, `cursor`. 조회 권한(`audit.read`) 필요 | 200 + `{ items, next_cursor }`. 항목은 `verification_run_id`, `status`, `rows_checked`, `violation_count`, `violations[]`(`sequenceNo`, `id`, `kind`, `detail`), checked sequence range, `started_at`, `completed_at`, `correlation_id`, `triggered_by`, `trigger_kind`, `retention_until`, `legal_hold`만 포함. audit payload 본문은 미노출 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |
 | POST | `/v1/audit-log/verification-runs/verify` | `Idempotency-Key`. optional body `{ legal_hold?: boolean }`. 관리자 권한(`audit.verify`) 필요 | 201 + 저장된 verification run. 현재 tenant의 `audit_log` hash-chain을 재계산하고 `audit_verifier_runs`에 90일 보존 evidence로 기록한다. 변조가 있어도 201로 evidence를 남기며 `status=invalid`, `violations[]`에 metadata-only 위반을 반환한다 | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422), idempotency conflict |

@@ -48,6 +48,8 @@ interface AuditLogFilters {
   readonly outcome?: AuditOutcome;
   readonly actorSub?: string;
   readonly correlationId?: string;
+  readonly occurredAtFrom?: Date;
+  readonly occurredAtTo?: Date;
 }
 
 interface VerificationRunFilters {
@@ -129,6 +131,8 @@ function parseAuditLogFilters(query: Record<string, unknown>): AuditLogFilters {
     outcome: auditOutcomeFilter(query.outcome),
     actorSub: principalIdFilter(query.actor, "invalid_actor"),
     correlationId: uuidFilter(query.correlation_id, "invalid_correlation_id"),
+    occurredAtFrom: dateTimeFilter(query.occurred_at_from, "invalid_occurred_at_from"),
+    occurredAtTo: dateTimeFilter(query.occurred_at_to, "invalid_occurred_at_to"),
   };
 }
 
@@ -152,15 +156,19 @@ async function selectAuditLogRows(
           AND ($3::text IS NULL OR outcome = $3)
           AND ($4::text IS NULL OR actor->>'subjectId' = $4)
           AND ($5::uuid IS NULL OR correlation_id = $5::uuid)
-          AND ($6::timestamptz IS NULL OR (occurred_at, id) < ($6::timestamptz, $7::uuid))
+          AND ($6::timestamptz IS NULL OR occurred_at >= $6::timestamptz)
+          AND ($7::timestamptz IS NULL OR occurred_at <= $7::timestamptz)
+          AND ($8::timestamptz IS NULL OR (occurred_at, id) < ($8::timestamptz, $9::uuid))
         ORDER BY occurred_at DESC, id DESC
-        LIMIT $8`,
+        LIMIT $10`,
       [
         tenantId,
         filters.action ?? null,
         filters.outcome ?? null,
         filters.actorSub ?? null,
         filters.correlationId ?? null,
+        filters.occurredAtFrom?.toISOString() ?? null,
+        filters.occurredAtTo?.toISOString() ?? null,
         cursor?.createdAt ?? null,
         cursor?.id ?? null,
         limit,
@@ -180,6 +188,18 @@ function auditOutcomeFilter(raw: unknown): AuditOutcome | undefined {
   if (raw === undefined) return undefined;
   if (raw === "allow" || raw === "deny" || raw === "blocked" || raw === "error") return raw;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_outcome" });
+}
+
+function dateTimeFilter(raw: unknown, reason: string): Date | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason });
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason });
+  }
+  return date;
 }
 
 function parseVerificationRunFilters(query: Record<string, unknown>): VerificationRunFilters {

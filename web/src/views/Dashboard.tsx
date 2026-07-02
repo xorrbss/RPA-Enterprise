@@ -4,6 +4,7 @@ import { useState, type ComponentProps } from "react";
 import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
+import { AdoptionEvidencePacket } from "../components/AdoptionEvidencePacket";
 import { QueryPanel } from "../components/QueryPanel";
 import { Sparkline, type SparklinePoint } from "../components/Sparkline";
 import { EmptyState, ErrorState, desktopStateForError } from "../components/states";
@@ -25,6 +26,7 @@ import type {
   OpsHealth,
   Paginated,
   ProductionReadiness,
+  RunArtifactItem,
   RunItem,
   RunSummary,
   RunTrendPoint,
@@ -1463,6 +1465,13 @@ export function DashboardView(): JSX.Element {
   const readinessScenarios = useQuery({ queryKey: ["scenarios", "adoption-readiness"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 30_000 });
   const authReadiness = useQuery({ queryKey: ["auth-readiness", "dashboard"], queryFn: () => api.getAuthReadiness(), refetchInterval: 60_000 });
   const productionReadiness = useQuery({ queryKey: ["production-readiness", "dashboard"], queryFn: () => api.getProductionReadiness(), refetchInterval: 60_000 });
+  const latestRunId = recent.data?.items[0]?.run_id;
+  const latestRunArtifacts = useQuery<Paginated<RunArtifactItem>>({
+    queryKey: ["run-artifacts", "adoption-evidence", latestRunId],
+    queryFn: () => api.listRunArtifacts(latestRunId as string, { limit: 50 }),
+    enabled: latestRunId !== undefined,
+    refetchInterval: 30_000,
+  });
 
   async function exportPerformanceReportCsv(): Promise<void> {
     setReportExportState("pending");
@@ -1528,6 +1537,14 @@ export function DashboardView(): JSX.Element {
         recent={recent}
         performance={performanceReport}
         can={can}
+      />
+      <AdoptionEvidencePacket
+        auth={authReadiness}
+        production={productionReadiness}
+        sites={readinessSites}
+        summary={summary}
+        recent={recent}
+        artifacts={latestRunArtifacts}
       />
       <RoleWorkbench roles={roles} can={can} />
       <OpsSignalPanel

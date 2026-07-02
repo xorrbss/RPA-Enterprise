@@ -75,6 +75,35 @@ identity so a plain render fails closed. `deploy/helm/rpa/values.release.example
 is sample evidence only; owner-approved release values must replace the sample
 registry, immutable digest, and egress CIDRs outside this contract repository.
 
+#### Console deployment
+
+The production console artifact is the Dockerfile `console-runtime` target:
+Vite builds `web/dist`, then an nginx stage serves static files and provides the
+same-origin reverse proxy. Keep the browser API base at `/api`; nginx strips the
+`/api` prefix and forwards to the API service, so `/api/v1/runs` reaches the
+upstream as `/v1/runs`. Do not publish a separate `/v1` browser proxy.
+
+| Setting | Where | Required value or note |
+|---|---|---|
+| `VITE_API_BASE_URL` | console image build arg | Default `/api`; use this for same-origin deployments. |
+| `VITE_OIDC_AUTH_URL` | console image build arg | Optional SSO login URL shown on the access screen. |
+| `RPA_API_UPSTREAM` | nginx runtime env | Compose uses `http://api:8080`; Kubernetes/Helm use `http://rpa-api:8080`. |
+| `RPA_CONSOLE_PORT` | compose env | Local host port for the console, default `8088`. |
+
+For Docker Compose, set the required DB/API secrets from `deploy/docker.env.example`
+and run `docker compose up --build web`. The `web` service depends on the API
+healthcheck and exposes the console on `http://127.0.0.1:${RPA_CONSOLE_PORT:-8088}`.
+
+For Kubernetes and Helm, promote the console image separately from the runtime
+image and pin it by immutable sha256 digest (`ghcr.io/example/rpa-console` in
+base templates, `console.image.*` in Helm values). Route ingress to the console
+service, not directly to `rpa-api`, so browser calls remain same-origin.
+
+Use HTTPS for staging and production console access. The console has HTTP-safe
+fallbacks for local review, but browser token storage, OIDC redirect handling,
+and session-capture flows should be treated as secure-context-only operational
+paths outside local development.
+
 The preflight accepts `fs + local_fs` for local/dev shared-volume deployments and
 `s3 + s3` for staging when producer and lifecycle endpoint/region/bucket/path-style
 match. It rejects mixed `fs + s3`, `s3 + local_fs`, and S3 target drift.

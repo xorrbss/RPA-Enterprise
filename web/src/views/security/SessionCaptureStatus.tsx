@@ -76,7 +76,7 @@ function captureDetailSummary(item: CaptureSessionItem): string | null {
     case "failed":
       return "등록 실패 사유를 확인하세요.";
     case "expired":
-      return "등록 시간이 만료됐습니다.";
+      return "만료 — 이 환경에서는 운영자 PC 등록을 사용하세요.";
   }
 }
 

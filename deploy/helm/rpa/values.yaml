@@ -6,6 +6,45 @@ image:
   digest: ""
   pullPolicy: IfNotPresent
 
+console:
+  enabled: true
+  image:
+    # Build from Dockerfile target console-runtime. Release values must set this
+    # separately from the API/worker runtime image.
+    repository: ""
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  apiUpstream: http://rpa-api:8080
+  replicas: 2
+  service:
+    port: 8080
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: rpa-console
+          app.kubernetes.io/component: console
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: rpa-console
+                app.kubernetes.io/component: console
+            topologyKey: kubernetes.io/hostname
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 namespaceOverride: ""
 
 secrets:

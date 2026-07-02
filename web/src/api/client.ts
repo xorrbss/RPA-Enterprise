@@ -104,6 +104,7 @@ import {
   type RunItem,
   type RunSummary,
   type RunTrends,
+  type RuntimeCapabilities,
   type RoleAssignmentItem,
   type ScenarioDetail,
   type ScenarioEnvironmentBinding,
@@ -159,6 +160,7 @@ import {
 } from "./types";
 
 export interface ApiClient {
+  getCapabilities(): Promise<RuntimeCapabilities>;
   listRuns(p?: ListParams): Promise<Paginated<RunItem>>;
   search(query: string, limit?: number): Promise<GlobalSearchResult>;
   // run 하위 단계 트레이스(api-surface §1). 비민감 요약+참조만(본문은 artifact_ids→getArtifact).
@@ -623,6 +625,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
   }
 
   return {
+    getCapabilities: () => get(`/v1/capabilities`),
     listRuns: (p) => get(`/v1/runs${queryString(p)}`),
     search: (q, limit = 20) => get(`/v1/search${queryString({ q, limit })}`),
     listRunSteps: (runId, p) => get(`/v1/runs/${runId}/steps${queryString(p)}`),
