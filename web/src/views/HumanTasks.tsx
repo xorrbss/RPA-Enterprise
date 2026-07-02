@@ -173,7 +173,7 @@ function HumanTaskActions({
         </>
       )}
       {task.state === "escalated" && (<>{selfAssign}{assign}</>)}
-      {["resolved", "expired", "cancelled"].includes(task.state) && "—"}
+      {HUMAN_TASK_TERMINAL_STATES.has(task.state) && "—"}
     </span>
   );
 }
@@ -222,14 +222,15 @@ function HumanTaskStreamView(): JSX.Element {
   const unassignedParam = useHashParam("unassigned");
   const hashStatus = useHashParam("status");
   const activeOnly = terminalParam === "false";
+  const activeFilter = activeOnly ? { terminal: "false" as const } : {};
   const initialFilter = runParam !== null
     ? { run_id: runParam }
     : unassignedParam === "true"
-      ? { unassigned: true }
+      ? { unassigned: true, ...activeFilter }
       : hashStatus !== null && hashStatus.length > 0
         ? { status: hashStatus }
         : activeOnly
-          ? undefined
+          ? activeFilter
           : (subject !== null && subject.length > 0 ? { assignee: subject } : undefined);
   const lv = useListView<HumanTaskItem>(
     ["human-tasks"],
@@ -240,7 +241,7 @@ function HumanTaskStreamView(): JSX.Element {
   // 선택 사람확인 업무를 해시(`#humanTasks?ht=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
   const sel = useHashIdParam("ht");
   const detail = useQuery({ queryKey: ["humantask-detail", sel], queryFn: () => api.getHumanTask(sel as string), enabled: sel !== null });
-  const unassignedQuery = useQuery({ queryKey: ["human-tasks", "unassigned-count"], queryFn: () => api.listHumanTasks({ unassigned: true, limit: 50 }), refetchInterval: 5_000 });
+  const unassignedQuery = useQuery({ queryKey: ["human-tasks", "unassigned-count", "active"], queryFn: () => api.listHumanTasks({ unassigned: true, terminal: "false", limit: 50 }), refetchInterval: 5_000 });
   const pageItems = lv.query.data?.items ?? [];
   const activeItems = useMemo(() => pageItems.filter(isActiveHumanTask), [pageItems]);
   const baseItems = activeOnly ? activeItems : pageItems;

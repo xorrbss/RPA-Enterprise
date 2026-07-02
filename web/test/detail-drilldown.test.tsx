@@ -146,7 +146,7 @@ describe("작업항목·사람확인 상세 드릴다운", () => {
 
     await screen.findByText("접수번호 #ht-all-a");
     await waitFor(() => expect(calls.some((params) => params.assignee === "u")).toBe(false));
-    expect(calls).toContainEqual(expect.objectContaining({ limit: 50 }));
+    expect(calls).toContainEqual(expect.objectContaining({ terminal: "false", limit: 50 }));
   });
 
   // 이관 사유(escalation_reason) 노출 — 재배정될 담당자에게 맥락 전달.

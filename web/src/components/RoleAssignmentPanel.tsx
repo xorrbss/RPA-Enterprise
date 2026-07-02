@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan } from "../api/permissions";
+import { formatDateTime } from "../util/time";
 import { QueryPanel } from "./QueryPanel";
 import { errorLabel } from "./badges";
 import type { PrincipalItem, RoleAssignmentItem, RoleAssignmentRole } from "../api/types";
@@ -117,7 +118,7 @@ export function RoleAssignmentPanel(): JSX.Element {
           { header: "출처", render: (r) => <span className={`badge ${roleAssignmentSourceTone(r.source)}`}>{roleAssignmentSourceLabel(r.source)}</span> },
           { header: "상태", render: (r) => <span className={`badge ${r.status === "active" ? "green" : "muted"}`}>{r.status === "active" ? "활성" : "회수됨"}</span> },
           { header: "부여자", render: (r) => <code className="subtle">{r.granted_by}</code> },
-          { header: "부여", render: (r) => new Date(r.granted_at).toLocaleString() },
+          { header: "부여", render: (r) => formatDateTime(r.granted_at) },
           {
             header: "작업",
             render: (r) => (

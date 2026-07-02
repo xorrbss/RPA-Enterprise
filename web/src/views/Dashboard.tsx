@@ -1439,7 +1439,7 @@ export function DashboardView(): JSX.Element {
   // '실행 중'은 서버 status 필터로 정확히 집계(이전: 전체 50건을 클라에서 status==='running' 필터 → 50건 초과 시 구조적 오집계).
   const running = useQuery({ queryKey: ["runs", "running"], queryFn: () => api.listRuns({ status: "running", limit: 50 }), refetchInterval: 5_000 });
   const recent = useQuery({ queryKey: ["runs"], queryFn: () => api.listRuns({ limit: 50 }), refetchInterval: 5_000 });
-  const human = useQuery({ queryKey: ["human-tasks", "active"], queryFn: () => api.listHumanTasks({ limit: 50 }), refetchInterval: 5_000 });
+  const human = useQuery({ queryKey: ["human-tasks", "active"], queryFn: () => api.listHumanTasks({ terminal: "false", limit: 50 }), refetchInterval: 5_000 });
   const wiDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 5_000 });
   const sinkDlq = useQuery({ queryKey: ["dlq", "sink"], queryFn: () => api.listDlq("sink", { limit: 50 }), refetchInterval: 5_000 });
   // 실패 터미널(failed_business/failed_system)을 서버 status 필터로 각각 정확 집계(클라 필터 아님).

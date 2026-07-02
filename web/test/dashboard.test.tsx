@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
-import type { AuthReadiness, AutomationPerformanceRoiSourceLineage, DeadLetterItem, Paginated } from "../src/api/types";
+import type { AuthReadiness, AutomationPerformanceRoiSourceLineage, DeadLetterItem, ListParams, Paginated } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 // 대시보드 관찰성 지표: run outcome 정확 집계(getRunSummary by_status) + run_success_rate + 절단 정직성(여전히
@@ -341,19 +341,24 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
   });
 
   test("사람 확인 대기 카드와 Top5는 종결 업무를 제외하고 terminal=false로 드릴다운한다", async () => {
+    const humanCalls: ListParams[] = [];
     renderApp(
       fakeClient({
-        listHumanTasks: async () => ({
-          items: [
-            { human_task_id: "ht-open", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null },
-            { human_task_id: "ht-resolved", state: "resolved", kind: "approval", assignee: "u", timeout: "2026-06-01T00:00:00.000Z", on_timeout: "escalate", run_id: null },
-          ],
-          next_cursor: null,
-        }),
+        listHumanTasks: async (params) => {
+          humanCalls.push(params ?? {});
+          return {
+            items: [
+              { human_task_id: "ht-open", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null },
+              { human_task_id: "ht-resolved", state: "resolved", kind: "approval", assignee: "u", timeout: "2026-06-01T00:00:00.000Z", on_timeout: "escalate", run_id: null },
+            ],
+            next_cursor: null,
+          };
+        },
       }),
     );
 
     const humanCard = await screen.findByRole("button", { name: /사람 확인 대기/ });
+    expect(humanCalls).toContainEqual(expect.objectContaining({ terminal: "false", limit: 50 }));
     await waitFor(() => expect(humanCard).toHaveTextContent("1"));
     expect(document.body.textContent ?? "").toContain("ht-open");
     expect(document.body.textContent ?? "").not.toContain("ht-resolv");
