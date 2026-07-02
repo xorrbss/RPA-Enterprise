@@ -431,15 +431,20 @@ export async function resolveMaintenanceTenantIds(
             AND checkout_expires_at IS NOT NULL
             AND checkout_expires_at < $1::timestamptz
          UNION
-         SELECT tenant_id
-           FROM artifacts
-          WHERE redaction_status = 'pending'
-            AND redaction_attempts < $2::int
-            AND deleted_at IS NULL
-            AND quarantine = false
-            AND legal_hold = false
-            AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= $1::timestamptz)
-       )
+          SELECT tenant_id
+            FROM artifacts
+           WHERE redaction_status = 'pending'
+             AND redaction_attempts < $2::int
+             AND deleted_at IS NULL
+             AND quarantine = false
+             AND legal_hold = false
+             AND (lifecycle_claim_id IS NULL OR lifecycle_claim_expires_at <= $1::timestamptz)
+          UNION
+          SELECT tenant_id
+            FROM ops_alert_notification_routes
+           WHERE enabled = true
+             AND deleted_at IS NULL
+        )
        SELECT DISTINCT tenant_id::text AS tenant_id
          FROM due_tenants
         ORDER BY tenant_id`,

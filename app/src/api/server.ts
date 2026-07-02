@@ -51,6 +51,7 @@ import { registerWebAttendedRoutes } from "./web-attended";
 import { registerDocumentJobRoutes } from "./document-jobs";
 import { registerAuthReadinessRoutes } from "./auth-readiness";
 import { registerOpsAlertRoutes } from "./ops-alerts";
+import { registerOpsAlertNotificationRouteRoutes } from "./ops-alert-notification-routes";
 import { registerOpsHealthRoutes } from "./ops-health";
 import { registerProductionReadinessRoutes } from "./production-readiness";
 import { registerBotPoolRoutes } from "./bot-pools";
@@ -323,6 +324,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerWebAttendedRoutes(app, deps);
   registerDocumentJobRoutes(app, deps);
   registerOpsAlertRoutes(app, deps);
+  registerOpsAlertNotificationRouteRoutes(app, deps);
   registerOpsHealthRoutes(app, deps);
   registerProductionReadinessRoutes(app, deps);
   registerAiGovernanceEvidenceRoutes(app, deps);

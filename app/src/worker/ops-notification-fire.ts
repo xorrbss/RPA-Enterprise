@@ -21,6 +21,7 @@ import {
   type OpsAlertSeverity,
   type OpsNotificationWebhookSendInput,
 } from "../api/ops-alerts";
+import { readActiveOpsAlertNotificationRoutes } from "../api/ops-alert-notification-routes";
 import type { OpsNotificationSendEnqueueInput } from "../api/run-queue";
 import { withTenantTx, type PgPool } from "../db/pool";
 import { OPS_ALERT_AUTO_FIRE_SOURCES, type OpsAlertRoute } from "../api/ops-alert-routes";
@@ -113,6 +114,14 @@ async function fireForTenant(
   const enqueueBound = enqueue.bind(input.enqueuer);
 
   return withTenantTx(pool, tenantId, async (client) => {
+    const tenantRoutes = [
+      ...routes,
+      ...(await readActiveOpsAlertNotificationRoutes(client, tenantId)),
+    ];
+    if (tenantRoutes.length === 0) {
+      return { created: 0, skipped: 0 };
+    }
+
     // 자동 발화 대상 소스만 계산(detected_at 안정). source=undefined 로 전 소스 계산 후 allowlist 필터해도 되지만,
     // 소스별 계산 비용을 아끼려 대상 소스만 순회 계산한다.
     const alerts: ComputedOpsAlert[] = [];
@@ -124,7 +133,7 @@ async function fireForTenant(
     let created = 0;
     let skipped = 0;
     for (const alert of alerts) {
-      for (const route of routes) {
+      for (const route of tenantRoutes) {
         if (!routeMatchesAlert(route, alert)) continue;
         const already = await generationAlreadyNotified(
           client,
@@ -165,10 +174,10 @@ export async function runOpsNotificationFire(
   input: OpsNotificationFireInput,
 ): Promise<OpsNotificationFireSummary> {
   const warn = input.onWarn ?? ((message: string) => console.error(JSON.stringify({ at: "ops_notification_fire", warn: message })));
-  if (input.routes.length === 0) {
-    return { created: 0, skipped: 0, tenantsProcessed: 0 };
-  }
   if (input.tenantIds.length === 0) {
+    if (input.routes.length === 0) {
+      return { created: 0, skipped: 0, tenantsProcessed: 0 };
+    }
     warn(
       "OPS_ALERT_ROUTES is configured but no maintenance tenants are set (MAINTENANCE_TENANT_IDS empty): " +
         "automatic ops notifications will NOT fire. Set MAINTENANCE_TENANT_IDS to the tenant(s) to notify.",
