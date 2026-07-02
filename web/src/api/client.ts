@@ -94,6 +94,7 @@ import {
   type PrioritizeRunResult,
   type RoiActualEvidence,
   type RoiActualEvidenceRequest,
+  type RoiActualSuggestion,
   type RoiEstimate,
   type RoiEstimateRequest,
   type RerunRunBody,
@@ -250,6 +251,7 @@ export interface ApiClient {
   ): Promise<AutomationAdoptionEvidenceItem>;
   listRoiActualEvidence(ideaId: string, p?: ListParams): Promise<Paginated<RoiActualEvidence>>;
   recordRoiActualEvidence(ideaId: string, body: RoiActualEvidenceRequest, idempotencyKey: string): Promise<RoiActualEvidence>;
+  getRoiActualSuggestion(ideaId: string, p: { period_start: string; period_end: string }): Promise<RoiActualSuggestion>;
   listSites(p?: ListParams): Promise<Paginated<SiteItem>>;
   listSiteElements(siteId: string, p?: SiteElementListParams): Promise<Paginated<SiteElementItem>>;
   createSiteElement(siteId: string, body: SiteElementCreateBody, idempotencyKey: string): Promise<SiteElementItem>;
@@ -736,6 +738,10 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/automation-ideas/${ideaId}/adoption-evidence`, key, body),
     listRoiActualEvidence: (ideaId, p) => get(`/v1/automation-ideas/${ideaId}/roi-actuals${queryString(p)}`),
     recordRoiActualEvidence: (ideaId, body, key) => post(`/v1/automation-ideas/${ideaId}/roi-actuals`, key, body),
+    getRoiActualSuggestion: (ideaId, p) =>
+      get(
+        `/v1/automation-ideas/${ideaId}/roi-actuals/suggestion?period_start=${encodeURIComponent(p.period_start)}&period_end=${encodeURIComponent(p.period_end)}`,
+      ),
     listSites: (p) => get(`/v1/sites${queryString(p)}`),
     listSiteElements: (siteId, p) => get(`/v1/sites/${siteId}/elements${queryString(p)}`),
     createSiteElement: (siteId, body, key) => post(`/v1/sites/${siteId}/elements`, key, body),

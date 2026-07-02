@@ -1511,6 +1511,41 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /automation-ideas/{idea_id}/roi-actuals/suggestion:
+    parameters:
+      - $ref: '#/components/parameters/AutomationIdeaId'
+    get:
+      tags: [AutomationIdeas]
+      operationId: getRoiActualSuggestion
+      summary: Get ROI actual prefill suggestion from prod run statistics
+      description: >
+        Compute a read-only ROI actual prefill suggestion from prod-mode run statistics of the linked
+        scenario for the requested period (all scenario versions, Asia/Seoul day boundaries). This is a
+        proposal only - it records nothing, and the human-confirmed roi-actuals POST remains the sole
+        evidence write path consumed by performance reports and expand decisions.
+      parameters:
+        - name: period_start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: period_end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: ROI actual prefill suggestion (aggregates null when unlinked or no settled runs).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoiActualSuggestion'
+        default:
+          $ref: '#/components/responses/Error'
+
   /automation-ideas/{idea_id}/adoption-evidence:
     parameters:
       - $ref: '#/components/parameters/AutomationIdeaId'
@@ -7991,6 +8026,60 @@ components:
           type: integer
           minimum: 1
           maximum: 100
+
+    RoiActualSuggestion:
+      type: object
+      additionalProperties: false
+      description: >
+        Read-only ROI actual prefill suggestion computed from prod-mode run statistics of the linked
+        scenario (all versions, Asia/Seoul day boundaries). It is a proposal only - nothing is recorded;
+        the human-confirmed POST to roi-actuals remains the sole evidence write path, so performance
+        reports and expand decisions never consume suggestions. When the idea has no linked scenario or
+        the period has no settled (completed or failed) runs, the aggregate and suggested fields are
+        null instead of fabricated zeros.
+      required:
+        - automation_idea_id
+        - scenario_id
+        - period_start
+        - period_end
+        - run_mode
+        - total_runs
+        - completed_runs
+        - failed_runs
+        - suggested_actual_transaction_count
+        - suggested_actual_failure_rate
+      properties:
+        automation_idea_id:
+          type: string
+          format: uuid
+        scenario_id:
+          type: [string, "null"]
+          format: uuid
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        run_mode:
+          type: string
+          enum: [prod]
+        total_runs:
+          type: [integer, "null"]
+          minimum: 0
+        completed_runs:
+          type: [integer, "null"]
+          minimum: 0
+        failed_runs:
+          type: [integer, "null"]
+          minimum: 0
+        suggested_actual_transaction_count:
+          type: [integer, "null"]
+          minimum: 0
+        suggested_actual_failure_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
 
     AutomationAdoptionEvidenceRequest:
       type: object

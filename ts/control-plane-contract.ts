@@ -72,6 +72,7 @@ export type ControlPlanePath =
   | "/v1/automation-ideas/{idea_id}/transition"
   | "/v1/automation-ideas/{idea_id}/roi-estimate"
   | "/v1/automation-ideas/{idea_id}/roi-actuals"
+  | "/v1/automation-ideas/{idea_id}/roi-actuals/suggestion"
   | "/v1/automation-ideas/{idea_id}/adoption-evidence"
   | "/v1/document-jobs"
   | "/v1/document-jobs/{job_id}"

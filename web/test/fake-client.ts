@@ -1826,6 +1826,18 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       recorded_at: "2026-06-30T00:00:00.000Z",
       legal_hold: body.legal_hold ?? false,
     }),
+    getRoiActualSuggestion: async (ideaId, p) => ({
+      automation_idea_id: ideaId,
+      scenario_id: "00000000-0000-4000-8000-0000000000a1",
+      period_start: p.period_start,
+      period_end: p.period_end,
+      run_mode: "prod",
+      total_runs: 14,
+      completed_runs: 12,
+      failed_runs: 2,
+      suggested_actual_transaction_count: 12,
+      suggested_actual_failure_rate: 0.1429,
+    }),
     listSiteElements: async () => ({
       items: [
         {

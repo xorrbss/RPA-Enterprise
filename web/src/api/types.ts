@@ -1443,6 +1443,23 @@ export interface RoiActualEvidenceRequest {
   readonly legal_hold?: boolean;
 }
 
+/**
+ * ROI 실적 프리필 제안(read-only) — 연결 자동화의 기간 내 prod 실행 통계 기반 **제안일 뿐 증거가 아니다**.
+ * 미연결/종결 0건이면 집계·제안 필드가 null(0으로 합성 금지). 확정은 사람이 실적 저장(POST)할 때만.
+ */
+export interface RoiActualSuggestion {
+  readonly automation_idea_id: string;
+  readonly scenario_id: string | null;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly run_mode: "prod";
+  readonly total_runs: number | null;
+  readonly completed_runs: number | null;
+  readonly failed_runs: number | null;
+  readonly suggested_actual_transaction_count: number | null;
+  readonly suggested_actual_failure_rate: number | null;
+}
+
 export interface RoiActualEvidence {
   readonly roi_actual_id: string;
   readonly automation_idea_id: string;
