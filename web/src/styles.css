@@ -403,6 +403,8 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .stage-rail { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .coe-roi { display: grid; gap: 12px; padding-bottom: 14px; }
 .coe-roi-grid { margin-inline: 16px; }
+.coe-roi-suggestion { margin-inline: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.coe-roi-suggestion .subtle { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .coe-roi-summary {
   margin-inline: 16px;
   display: grid;

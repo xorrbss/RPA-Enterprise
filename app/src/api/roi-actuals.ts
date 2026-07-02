@@ -62,6 +62,33 @@ export function registerRoiActualRoutes(app: FastifyInstance, deps: ApiServerDep
     },
   );
 
+  // ROI 실적 제안값(read-only) — 아이디어에 연결된 자동화(scenario_id)의 기간 내 prod 실행 통계를 실적 폼
+  // 프리필 "제안값"으로 산출한다. **제안일 뿐 증거가 아니다**: 어떤 행도 쓰지 않으며(roi_actual_evidence 미기록),
+  // 확정(POST /roi-actuals)은 사람이 저장할 때만 일어난다 — 성과 리포트/Expand 판단은 확정 증거만 읽는다.
+  // 기간 해석은 성과 리포트와 동일한 KST(Asia/Seoul) 일 경계. run 통계로 도출 불가한 값(개입/재처리 시간)은
+  // 제안하지 않는다(날조 금지 — completed/failed 카운트에서 직접 계산되는 두 값만).
+  app.get<{ Params: { ideaId: string } }>(
+    "/v1/automation-ideas/:ideaId/roi-actuals/suggestion",
+    { config: { rbacAction: "automation_idea.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const ideaId = validateIdeaId(request.params.ideaId);
+      const query = request.query as Record<string, unknown>;
+      const periodStart = parseDateOnly(query.period_start, "period_start");
+      const periodEnd = parseDateOnly(query.period_end, "period_end");
+      if (Date.parse(`${periodEnd}T00:00:00.000Z`) < Date.parse(`${periodStart}T00:00:00.000Z`)) {
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "period_end_before_start" });
+      }
+      if (Date.parse(`${periodEnd}T00:00:00.000Z`) > Date.now() + 24 * 60 * 60 * 1000) {
+        throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "roi_actual_period_in_future" });
+      }
+      const body = await withTenantTx(deps.pool, principal.tenantId, (client) =>
+        readRoiActualSuggestion(client, ideaId, periodStart, periodEnd),
+      );
+      reply.code(200).send(body);
+    },
+  );
+
   app.post<{ Params: { ideaId: string } }>(
     "/v1/automation-ideas/:ideaId/roi-actuals",
     { config: { rbacAction: "automation_idea.manage" } },
@@ -93,6 +120,67 @@ async function readRoiActualEvidence(
     [ideaId, limit],
   );
   return result.rows.map(mapRoiActualEvidence);
+}
+
+/** KST(Asia/Seoul) 일 경계의 UTC 인스턴트 — 성과 리포트의 월 경계(Date.UTC(..., -9h))와 동일 규칙. */
+function kstDayStartUtc(dateOnly: string, addDays: number): Date {
+  const [y, m, d] = dateOnly.split("-").map((part) => Number.parseInt(part, 10));
+  return new Date(Date.UTC(y, m - 1, d + addDays, -9, 0, 0, 0));
+}
+
+async function readRoiActualSuggestion(
+  client: PoolClient,
+  ideaId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<Record<string, unknown>> {
+  const idea = await client.query<{ scenario_id: string | null }>(
+    `SELECT scenario_id::text AS scenario_id FROM automation_ideas WHERE id=$1::uuid`,
+    [ideaId],
+  );
+  const ideaRow = idea.rows[0];
+  if (ideaRow === undefined) throw new ApiResponseError("RESOURCE_NOT_FOUND");
+  const base = {
+    automation_idea_id: ideaId,
+    scenario_id: ideaRow.scenario_id,
+    period_start: periodStart,
+    period_end: periodEnd,
+    run_mode: "prod",
+  };
+  // 자동화 미연결 아이디어 — 집계 자체가 불가. 0 으로 날조하지 않고 null 로 정직 표기(콘솔은 연결 안내).
+  if (ideaRow.scenario_id === null) {
+    return {
+      ...base,
+      total_runs: null,
+      completed_runs: null,
+      failed_runs: null,
+      suggested_actual_transaction_count: null,
+      suggested_actual_failure_rate: null,
+    };
+  }
+  const counts = await client.query<{ total: number; completed: number; failed: number }>(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE r.status = 'completed')::int AS completed,
+            count(*) FILTER (WHERE r.status IN ('failed_business','failed_system'))::int AS failed
+       FROM runs r
+       JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
+      WHERE sv.scenario_id = $1::uuid
+        AND r.run_mode = 'prod'
+        AND r.created_at >= $2::timestamptz
+        AND r.created_at < $3::timestamptz`,
+    [ideaRow.scenario_id, kstDayStartUtc(periodStart, 0).toISOString(), kstDayStartUtc(periodEnd, 1).toISOString()],
+  );
+  const row = counts.rows[0] ?? { total: 0, completed: 0, failed: 0 };
+  const settled = row.completed + row.failed;
+  return {
+    ...base,
+    total_runs: row.total,
+    completed_runs: row.completed,
+    failed_runs: row.failed,
+    // 제안값 = 종결(완료+실패) 실행에서만 도출. 종결 0건이면 제안 없음(null) — "0건 처리" 로 오해 방지.
+    suggested_actual_transaction_count: settled === 0 ? null : row.completed,
+    suggested_actual_failure_rate: settled === 0 ? null : Math.round((row.failed / settled) * 10000) / 10000,
+  };
 }
 
 async function recordRoiActualEvidence(
