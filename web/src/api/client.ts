@@ -416,7 +416,7 @@ export interface ApiClient {
   decideApproval(body: DecideApprovalBody, idempotencyKey: string): Promise<DecideApprovalResult>;
   // 수집 목록 fan-out — 각 행을 검토 run(@human_task)으로 일괄 스폰(approver+). Idempotency-Key + body{source_run_id}.
   //   행별 claim 으로 중복 스폰 차단(재호출 시 already_fanned_out 스킵). 검토 run 은 범용 '사람 확인' 인박스에서 사람 판정 대기.
-  fanOutApprovals(sourceRunId: string, idempotencyKey: string): Promise<FanOutApprovalsResult>;
+  fanOutApprovals(sourceRunId: string, idempotencyKey: string, enableAuto?: boolean): Promise<FanOutApprovalsResult>;
 }
 
 export interface HttpApiClientOptions {
@@ -883,6 +883,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     getScenarioGeneration: (generationId) => get(`/v1/scenario-generations/${generationId}`),
     createRun: (body, key) => post(`/v1/runs`, key, body),
     decideApproval: (body, key) => post(`/v1/approvals/decide`, key, body),
-    fanOutApprovals: (sourceRunId, key) => post(`/v1/approvals/fan-out`, key, { source_run_id: sourceRunId }),
+    fanOutApprovals: (sourceRunId, key, enableAuto) =>
+      post(`/v1/approvals/fan-out`, key, { source_run_id: sourceRunId, ...(enableAuto === true ? { enable_auto: true } : {}) }),
   };
 }

@@ -347,18 +347,20 @@ function FanOutButton({ sourceRunId }: { sourceRunId: string }): JSX.Element {
   const api = useApiClient();
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState(false);
+  const [enableAuto, setEnableAuto] = useState(false); // '앞으로 자동으로'(②) — 이 수집 시나리오 auto_fan_out 켜기.
   const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
 
   const run = useMutation({
-    mutationFn: () => api.fanOutApprovals(sourceRunId, crypto.randomUUID()),
+    mutationFn: () => api.fanOutApprovals(sourceRunId, crypto.randomUUID(), enableAuto),
     onSuccess: (r) => {
       setConfirming(false);
+      const autoNote = r.auto_enabled === true ? " 이후 수집분은 자동으로 보냅니다." : "";
       setMsg({
         tone: "green",
         text:
-          r.spawned_count > 0
+          (r.spawned_count > 0
             ? `${r.spawned_count}건을 검토 인박스로 보냈습니다${r.skipped_count > 0 ? ` (${r.skipped_count}건 제외).` : "."}`
-            : `새로 보낼 항목이 없습니다${r.skipped_count > 0 ? ` (${r.skipped_count}건은 이미 보냈거나 처리 불가).` : "."}`,
+            : `새로 보낼 항목이 없습니다${r.skipped_count > 0 ? ` (${r.skipped_count}건은 이미 보냈거나 처리 불가).` : "."}`) + autoNote,
       });
       void qc.invalidateQueries({ queryKey: ["human-tasks"] });
       void qc.invalidateQueries({ queryKey: ["runs"] });
@@ -372,8 +374,12 @@ function FanOutButton({ sourceRunId }: { sourceRunId: string }): JSX.Element {
   if (run.isPending) return <span className="subtle">검토 인박스로 보내는 중…</span>;
   if (confirming) {
     return (
-      <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span className="subtle">이 목록의 모든 항목을 검토 인박스로 보낼까요?</span>
+        <label className="checkbox-inline" style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+          <input type="checkbox" checked={enableAuto} onChange={(e) => setEnableAuto(e.target.checked)} aria-label="앞으로 자동으로 검토 인박스로 보내기" />
+          <span className="subtle">앞으로 자동으로</span>
+        </label>
         <button className="btn primary" type="button" onClick={() => run.mutate()}>확인</button>
         <button className="btn" type="button" onClick={() => setConfirming(false)}>취소</button>
       </span>

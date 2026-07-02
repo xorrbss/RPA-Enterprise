@@ -974,6 +974,7 @@ export class InMemoryRuntimeWorker implements RuntimeWorker {
       case "workitem_checkout":
       case "workitem_checkout_sweeper":
       case "human_task_timeout_sweeper":
+      case "approval_fan_out_sweeper":
       case "artifact_redaction":
       case "artifact_retention":
       case "artifact_integrity":

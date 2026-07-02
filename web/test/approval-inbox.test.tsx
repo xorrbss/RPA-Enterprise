@@ -289,6 +289,33 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
     expect(capturedSource).toBe("run-c");
   });
 
+  test("approver → '앞으로 자동으로' 체크 → fanOutApprovals(enableAuto=true) → 자동 활성 안내", async () => {
+    localStorage.setItem("rpa.token", jwt(["approver"]));
+    let capturedAuto: boolean | undefined;
+    const client = fakeClient({
+      listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
+      listRuns: async (p) =>
+        p?.scenario_version_id === "ver-c"
+          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          : { items: [], next_cursor: null },
+      listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
+      getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
+      fanOutApprovals: async (sourceRunId, _key, enableAuto) => {
+        capturedAuto = enableAuto;
+        return { source_run_id: sourceRunId, spawned: [{ doc_ref: "d1", run_id: "r1" }], spawned_count: 1, skipped: [], skipped_count: 0, total: 1, auto_enabled: enableAuto === true };
+      },
+    });
+    renderApp(client);
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "검토 인박스로 보내기" }));
+    fireEvent.click(screen.getByLabelText("앞으로 자동으로 검토 인박스로 보내기")); // 체크 → enableAuto
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.getByText(/이후 수집분은 자동으로 보냅니다/)).toBeInTheDocument());
+    expect(capturedAuto).toBe(true);
+  });
+
   test("approver → 2건 선택 → 일괄 승인 → 배치 확인 → decideApproval 2회(approve) → 두 행 처리 상태", async () => {
     localStorage.setItem("rpa.token", jwt(["approver"]));
     const calls: DecideApprovalBody[] = [];

@@ -49,6 +49,12 @@ export function buildMaintenancePollJobs(
       correlationId: correlationId() as CorrelationId,
     },
     {
+      // 결재 fan-out 자동 트리거(②) — auto_fan_out 수집 시나리오 완료 run 을 검토 인박스로 자동 fan-out(멱등).
+      kind: "approval_fan_out_sweeper",
+      tenantId: tenantId as TenantId,
+      correlationId: correlationId() as CorrelationId,
+    },
+    {
       kind: "artifact_redaction",
       tenantId: tenantId as TenantId,
       correlationId: correlationId() as CorrelationId,

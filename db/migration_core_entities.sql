@@ -487,11 +487,14 @@ CREATE INDEX idx_control_plane_idempotency_retention
 -- ============================================================
 
 CREATE TABLE scenarios (
-  id          uuid        PRIMARY KEY,
-  tenant_id   uuid        NOT NULL,
-  name        text        NOT NULL,
-  created_at  timestamptz NOT NULL DEFAULT now(),
-  archived_at timestamptz
+  id           uuid        PRIMARY KEY,
+  tenant_id    uuid        NOT NULL,
+  name         text        NOT NULL,
+  -- 결재 fan-out 자동 트리거(②): true 면 이 수집 시나리오의 완료 run 을 sweeper 가 자동으로 검토 인박스로 fan-out 한다.
+  --   기본 false(수동 버튼만). 켜도 sweeper 는 approval_row_claims 로 멱등(행별 1스폰).
+  auto_fan_out boolean     NOT NULL DEFAULT false,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  archived_at  timestamptz
 );
 CREATE INDEX idx_scenarios_tenant ON scenarios (tenant_id);
 CREATE UNIQUE INDEX uq_scenarios_active_name ON scenarios (tenant_id, name)

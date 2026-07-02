@@ -58,6 +58,8 @@ import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "../
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import type { ExecutorPlugin } from "../../../ts/core-types";
 import type { RunEnqueuer } from "../api/run-queue";
+import type { ArtifactObjectReader } from "../api/server-shared";
+import { fanOutCollectionRun } from "../api/approval-fan-out";
 import { processRunTriggerFireJob } from "./run-trigger-scheduler";
 import { errText, workerLog } from "../observability/log";
 import { DEFAULT_WORKER_CIRCUIT_OPEN_MS } from "./runtime-worker-run-context";
@@ -144,6 +146,9 @@ export interface PgRuntimeWorkerOptions {
   readonly visualEvidenceRecorder?: VisualEvidenceRecorder;
   readonly visualEvidenceVideoRecorderFactory?: RunVideoRecorderFactory;
   readonly mergedExtractArtifactSink?: MergedExtractArtifactSink;
+  // 결재 fan-out 자동 트리거(②): approval_fan_out_sweeper 가 수집 artifact 를 읽을 reader. 미주입 시 sweeper 는
+  //   loud throw(자동 fan-out 스케줄됐는데 reader 미구성=오구성). ObjectStore 가 구조적으로 이 shape(get/getBytes)를 충족.
+  readonly approvalFanOutArtifactReader?: ArtifactObjectReader;
   readonly runtimeJobEnqueuer?: RuntimeJobEnqueuePort;
   // INIT R3a/R3b(state-machine §1): claimed→running 셋업 실패 분기 임계/백오프. 미주입 시 ops-defaults 기본(3 / base 2s·factor 2·max 60s).
   //   테스트 sim 오버라이드(작은 값·고정 jitter). 코드 상수 금지 규약 — 기본값은 run-init-failure.ts 가 ops-defaults 인용.
@@ -212,6 +217,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
       case "human_task_timeout_sweeper":
         return handleHumanTaskTimeoutSweeper(this.pool, job);
+
+      case "approval_fan_out_sweeper":
+        return this.handleApprovalFanOutSweeper(job);
 
       case "workitem_checkout":
         return handleWorkitemCheckout(this.pool, this.options.workerId, job);
@@ -329,6 +337,45 @@ export class PgRuntimeWorker implements RuntimeWorker {
       correlationId: () => correlationId,
     });
 
+    return { kind: "completed", emittedEvents: [] };
+  }
+
+  // 결재 fan-out 자동 트리거(②): auto_fan_out 수집 시나리오의 최근 완료 run 중 아직 fan-out 안 된(claim 없음) 것을
+  //   찾아 검토 인박스로 fan-out. 멱등(approval_row_claims UNIQUE) + 최근-윈도우(무한 재스윕 방지). per-run 격리 tx.
+  private async handleApprovalFanOutSweeper(job: RuntimeWorkerJob): Promise<RuntimeJobResult> {
+    const tenantId = requireString(job.tenantId, "approval_fan_out_sweeper.tenantId");
+    const correlationId = requireString(job.correlationId, "approval_fan_out_sweeper.correlationId");
+    const runtimeJobEnqueuer = this.options.runtimeJobEnqueuer;
+    const artifactReader = this.options.approvalFanOutArtifactReader;
+    if (runtimeJobEnqueuer === undefined || artifactReader === undefined) {
+      // 자동 fan-out 이 스케줄됐는데 reader/enqueuer 미구성 = 오구성 → loud(조용한 no-op 금지). 수동 버튼(API)은 별개 경로.
+      throw new Error("RuntimeWorker: approval_fan_out_sweeper requires approvalFanOutArtifactReader + runtimeJobEnqueuer");
+    }
+    const deps = { artifactStore: artifactReader, enqueuer: runtimeJobEnqueuerAsRunEnqueuer(runtimeJobEnqueuer) };
+    // 대상: 최근(1일) 완료 + auto_fan_out=true + 아직 claim 없음(있으면 이미 fan-out — 멱등). ended_at 윈도우로 무한 재스윕 차단.
+    const candidates = await withTenantTx(this.pool, tenantId, async (c) => {
+      const r = await c.query<{ id: string }>(
+        `SELECT r.id::text AS id
+           FROM runs r
+           JOIN scenario_versions sv ON sv.id = r.scenario_version_id AND sv.tenant_id = r.tenant_id
+           JOIN scenarios s ON s.id = sv.scenario_id AND s.tenant_id = sv.tenant_id
+          WHERE r.tenant_id = $1::uuid AND r.status = 'completed' AND s.auto_fan_out = true
+            AND r.ended_at IS NOT NULL AND r.ended_at > now() - interval '1 day'
+            AND NOT EXISTS (SELECT 1 FROM approval_row_claims cl WHERE cl.tenant_id = r.tenant_id AND cl.source_run_id = r.id)
+          ORDER BY r.ended_at ASC LIMIT 50`,
+        [tenantId],
+      );
+      return r.rows.map((row) => row.id);
+    });
+    const asOf = new Date().toISOString();
+    for (const sourceRunId of candidates) {
+      try {
+        await withTenantTx(this.pool, tenantId, (c) => fanOutCollectionRun(c, tenantId, sourceRunId, correlationId, asOf, deps));
+      } catch (err) {
+        // per-run 격리 — 한 run 의 실패(artifact 부재·검토 시나리오 미시드 등)가 스윕 전체를 멈추지 않게(로그+계속).
+        workerLog("error", { at: "approval_fan_out_sweeper", msg: "run fan-out 실패", tenant_id: tenantId, source_run_id: sourceRunId, correlation_id: correlationId, error: errText(err) });
+      }
+    }
     return { kind: "completed", emittedEvents: [] };
   }
 

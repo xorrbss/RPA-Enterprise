@@ -284,6 +284,8 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
     mergedExtractArtifactSink: new PgMergedExtractArtifactSink(pool, artifactStore, {
       retentionDays: gw.artifactRetentionDays,
     }),
+    // 결재 fan-out 자동 트리거(②) sweeper 가 수집 artifact 를 읽을 reader. ObjectStore 가 get/getBytes 로 ArtifactObjectReader 충족.
+    approvalFanOutArtifactReader: artifactStore,
     sinkDeliveryMaxAttempts: cfg.sinkDeliveryMaxAttempts,
     sinkDeliveryRetryAfterMs: cfg.sinkDeliveryRetryAfterMs,
     ...(cfg.sinkDelivery !== undefined

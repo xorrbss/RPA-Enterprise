@@ -2446,13 +2446,14 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       decision: body.decision,
       spawned_run_id: "00000000-0000-0000-0000-0000000000d9",
     }),
-    fanOutApprovals: async (sourceRunId) => ({
+    fanOutApprovals: async (sourceRunId, _key, enableAuto) => ({
       source_run_id: sourceRunId,
       spawned: [],
       spawned_count: 0,
       skipped: [],
       skipped_count: 0,
       total: 0,
+      auto_enabled: enableAuto === true,
     }),
     ...overrides,
   };
