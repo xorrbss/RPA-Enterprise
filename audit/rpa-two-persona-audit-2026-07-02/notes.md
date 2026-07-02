@@ -156,8 +156,8 @@ Method: dev:serve(temp PG 시드, 포트 8180) + LAN IP HTTP 릴레이(0.0.0.0:8
 
 | ID | P | 제목 | 근거 |
 | --- | --- | --- | --- |
-| `alert-humantask-kind-english` | P3 | 사람 작업 SLA 알림 문구에 human task kind 가 영문 raw("exception/열림 미배정. 2423분 초과.") — status(열림)는 한국어화됐으나 kind(exception) 미매핑 | automationOps 알림 센터 실측(17-automationOps-알림.txt:110). S9 라벨 사전에 human_task kind enum 추가로 해소 가능(badges.tsx 패턴), 후속 위생 |
+| `alert-humantask-kind-english` | P3 | ✅ **해소(PR #394)** — 사람 작업 SLA 알림 문구에 human task kind 가 영문 raw("exception/열림 미배정. 2423분 초과.")였음(status(열림)만 한국어화·kind(exception) 미매핑). `OpsAlertCenter.localizeStatusText` 에 kind enum 치환 추가(badges.tsx `kindLabel` 재사용) → "예외 확인/열림 미배정. 2423분 초과." | automationOps 알림 센터 실측(17-automationOps-알림.txt:110) |
 
 ### 결론
 
-전 슬라이스 + D 5건 머지가 정적/라이브 감사 51+6건의 구조적 해소를 실화면에서 달성. 도입 88 / 사용자 87 로 §8 예상 상단에 안착. 잔여는 P3 위생 1건(알림 kind 영문)과 D 레지스터 보류 1건(오프보딩 원문 반출/삭제 — 오너 결정 대기)뿐. 90+ 는 설계 §8 명시대로 실사용 피드백 루프 전제.
+전 슬라이스 + D 5건 머지가 정적/라이브 감사 51+6건의 구조적 해소를 실화면에서 달성. 도입 88 / 사용자 87 로 §8 예상 상단에 안착. 재감사에서 발견한 P3 위생 1건(알림 kind 영문)은 PR #394 로 해소. 잔여는 D 레지스터 보류 1건(오프보딩 원문 반출/삭제 — 2026-07-03 오너가 이번 범위 제외 유지 결정)뿐. 90+ 는 설계 §8 명시대로 실사용 피드백 루프 전제.

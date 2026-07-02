@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { OpsAlertItem, OpsNotificationAttempt, OpsNotificationDelivery } from "../../api/types";
-import { statusLabel as commonStatusLabel } from "../../components/badges";
+import { statusLabel as commonStatusLabel, kindLabel as commonKindLabel } from "../../components/badges";
 import { formatDateTime } from "./format";
 import { isDnsHost, isSecretRef, parseAllowedHosts, type AlertSeverityFilter, type AlertSourceFilter } from "./trigger-helpers";
 
@@ -426,10 +426,15 @@ function groupOpsAlerts(alerts: readonly OpsAlertItem[]): OpsAlertGroup[] {
 }
 
 function localizeStatusText(value: string): string {
-  return value.replace(
-    /\b(queued|claimed|running|suspending|suspended|resume_requested|resuming|completed|cancelled|failed_business|failed_system|pending|sending|sent|delivered|failed|dead_letter|open|acknowledged)\b/g,
-    (status) => commonStatusLabel(status),
-  );
+  // 알림 detail 문장 내 raw enum → 운영자 한국어. 상태(run/human-task state·발송 상태)에 더해 사람 확인 종류(kind)도
+  // 치환한다: human_task_sla detail 은 `${kind}/${state}` 형식(ops-alerts.ts)이라 state 만 라벨화하면 "exception/열림"
+  // 처럼 kind 가 영문으로 남는다. kind enum(approval/validation/exception/captcha/mfa)은 상태 enum 과 겹치지 않아 안전.
+  return value
+    .replace(
+      /\b(queued|claimed|running|suspending|suspended|resume_requested|resuming|completed|cancelled|failed_business|failed_system|pending|sending|sent|delivered|failed|dead_letter|open|acknowledged)\b/g,
+      (status) => commonStatusLabel(status),
+    )
+    .replace(/\b(approval|validation|exception|captcha|mfa)\b/g, (kind) => commonKindLabel(kind));
 }
 
 function notificationStatusLabel(status: OpsNotificationAttempt["status"] | OpsNotificationDelivery["status"]): string {
