@@ -152,7 +152,12 @@ export async function fanOutCollectionRun(
       [claimId, tenantId, sourceRunId, row.docRef],
     );
     if ((claim.rowCount ?? 0) === 0) {
-      skipped.push({ doc_ref: row.docRef, reason: "already_fanned_out" });
+      // 이미 claim 된 행 — 처리모드로 사유 구분(③): decide=목록 건별 결재로 처리됨(fan-out 제외), review=이미 fan-out 됨(멱등).
+      const existing = await client.query<{ mode: string }>(
+        `SELECT mode FROM approval_row_claims WHERE tenant_id = $1::uuid AND source_run_id = $2::uuid AND doc_ref = $3`,
+        [tenantId, sourceRunId, row.docRef],
+      );
+      skipped.push({ doc_ref: row.docRef, reason: existing.rows[0]?.mode === "decide" ? "already_decided" : "already_fanned_out" });
       continue;
     }
     // 예약 성공 → 검토 run 스폰 후 spawned_run_id 채움(수집 run 의 correlationId 재사용 — 트레이스 연결).
