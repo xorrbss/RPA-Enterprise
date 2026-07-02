@@ -149,7 +149,26 @@ async function applyDecide(
   }
   const decideScenarioVersionId = dec.rows[0].id;
 
+  // 2.5) 처리모드 상호배제(③): approval_row_claims 에 'decide' 예약. 이미 fan-out 검토('review')나 결재('decide')로 claim 된
+  //   행이면 conflict → 한 행은 한 경로로만 처리(이중 승인 방지). 경합-안전(UNIQUE 가 먼저 claim 한 경로를 채택; 스폰 이전 게이트).
+  const claimId = randomUUID();
+  const claim = await client.query(
+    `INSERT INTO approval_row_claims (id, tenant_id, source_run_id, doc_ref, mode, spawned_run_id)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'decide', NULL)
+     ON CONFLICT (tenant_id, source_run_id, doc_ref) DO NOTHING`,
+    [claimId, tenantId, body.sourceRunId, body.docRef],
+  );
+  if ((claim.rowCount ?? 0) === 0) {
+    const existing = await client.query<{ mode: string }>(
+      `SELECT mode FROM approval_row_claims WHERE tenant_id = $1::uuid AND source_run_id = $2::uuid AND doc_ref = $3`,
+      [tenantId, body.sourceRunId, body.docRef],
+    );
+    // 검토 인박스로 이미 보낸('review') 행은 그쪽에서 처리 — 목록 건별 결재 차단(claimed_as 로 구분 표면화).
+    throw new ApiResponseError("APPROVAL_ALREADY_DECIDED", { doc_ref: body.docRef, claimed_as: existing.rows[0]?.mode ?? "unknown" });
+  }
+
   // 3) 결정 INSERT(불변 이력 + 이중결재 방지). UNIQUE(tenant, source_run, doc_ref) 위반(23505) → APPROVAL_ALREADY_DECIDED.
+  //    (2.5 claim 이 1차 게이트지만, ③ 이전 데이터·경합 잔여를 위해 decisions UNIQUE 도 belt 로 유지.)
   const decisionId = randomUUID();
   try {
     await client.query(
@@ -177,10 +196,14 @@ async function applyDecide(
     configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
   });
 
-  // 5) spawned_run_id 갱신(결정 ↔ 처리 run 연결, 콘솔 폴링·딥링크용).
+  // 5) spawned_run_id 갱신(결정 ↔ 처리 run 연결, 콘솔 폴링·딥링크용) + 공유원장 claim 도 스폰 run 연결.
   await client.query(
     `UPDATE approval_decisions SET spawned_run_id = $1::uuid WHERE id = $2::uuid AND tenant_id = $3::uuid`,
     [spawnedRunId, decisionId, tenantId],
+  );
+  await client.query(
+    `UPDATE approval_row_claims SET spawned_run_id = $1::uuid WHERE id = $2::uuid AND tenant_id = $3::uuid`,
+    [spawnedRunId, claimId, tenantId],
   );
 
   return {

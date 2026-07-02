@@ -39,6 +39,9 @@ const ART_A = "70000000-0000-0000-0000-0000000000a8";
 const OBJECT_REF_A = "file://fanout-int/approval-inbox-rows-a" as ObjectRef;
 // tenant A: 두 번째 수집 run — artifact 없음(부재 테스트).
 const SOURCE_RUN_NOART = "70000000-0000-0000-0000-0000000000a9";
+// tenant A: 상호배제(③) 테스트용 수집 run + artifact(내용은 OBJECT_REF_A 재사용 = DOC_A/DOC_B).
+const SOURCE_RUN_MX = "70000000-0000-0000-0000-0000000000aa";
+const ART_MX = "70000000-0000-0000-0000-0000000000ab";
 // tenant B: cross-tenant 격리.
 const SCEN_B = "70000000-0000-0000-0000-0000000000b1";
 const SVER_B = "70000000-0000-0000-0000-0000000000b2";
@@ -96,6 +99,13 @@ async function seed(pool: Pool): Promise<void> {
       `INSERT INTO artifacts (id, tenant_id, run_id, type, media_type, object_ref, redaction_status, retention_until)
        VALUES ($1,$2,$3,'approval_inbox','application/json; charset=utf-8',$4,'redacted','2099-12-31T00:00:00Z')`,
       [ART_A, TENANT_A, SOURCE_RUN_A, OBJECT_REF_A],
+    );
+    // 상호배제(③) 테스트용 run + artifact(내용 OBJECT_REF_A 재사용 = DOC_A/DOC_B). DOC_A 는 아래에서 'decide' claim 선점.
+    await c.query(`INSERT INTO runs (id, tenant_id, scenario_version_id, correlation_id, status) VALUES ($1,$2,$3,$4,'completed')`, [SOURCE_RUN_MX, TENANT_A, SVER_A, SOURCE_RUN_MX]);
+    await c.query(
+      `INSERT INTO artifacts (id, tenant_id, run_id, type, media_type, object_ref, redaction_status, retention_until)
+       VALUES ($1,$2,$3,'approval_inbox','application/json; charset=utf-8',$4,'redacted','2099-12-31T00:00:00Z')`,
+      [ART_MX, TENANT_A, SOURCE_RUN_MX, OBJECT_REF_A],
     );
   });
   await withTenantTx(pool, TENANT_B, async (c) => {
@@ -256,9 +266,26 @@ async function main(): Promise<void> {
       const noKey = await post(approver, undefined, { source_run_id: SOURCE_RUN_A });
       check("missing Idempotency-Key → 422", noKey.statusCode === 422 && noKey.json().code === "IR_SCHEMA_INVALID", noKey.body);
 
-      // 최종 불변: claim 2 / REVIEW run 2 (거부·중복·404·부재 스폰 0).
+      // 최종 불변(SOURCE_RUN_A): claim 2 / REVIEW run 2 (거부·중복·404·부재 스폰 0). MX 는 아래에서 처리(여기선 claim 0).
       const cFinal = await counts(pool);
       check("최종: claim 2 / REVIEW run 2", cFinal.claims === 2 && cFinal.spawned === 2, JSON.stringify(cFinal));
+
+      // 7b) 처리모드 상호배제(③): 이미 'decide'(목록 건별 결재)로 claim 된 행은 fan-out 이 스킵('already_decided'),
+      //     나머지 유효행만 스폰 → 한 행은 한 경로로만(이중 승인 방지).
+      await withTenantTx(pool, TENANT_A, (c) =>
+        c.query(
+          `INSERT INTO approval_row_claims (id, tenant_id, source_run_id, doc_ref, mode, spawned_run_id)
+           VALUES ('70000000-0000-0000-0000-0000000000ec'::uuid, $1::uuid, $2::uuid, $3, 'decide', NULL)`,
+          [TENANT_A, SOURCE_RUN_MX, DOC_A],
+        ),
+      );
+      const mx = await post(approver, "k-mx", { source_run_id: SOURCE_RUN_MX });
+      check(
+        "상호배제: 'decide' claim 된 DOC_A 는 fan-out 스킵('already_decided')",
+        mx.statusCode === 201 && (mx.json().skipped as { doc_ref: string; reason: string }[]).some((s) => s.doc_ref === DOC_A && s.reason === "already_decided"),
+        mx.body,
+      );
+      check("상호배제: 나머지 유효행(DOC_B)만 스폰(spawned_count=1)", mx.json().spawned_count === 1, mx.body);
     } finally {
       await app.close();
     }

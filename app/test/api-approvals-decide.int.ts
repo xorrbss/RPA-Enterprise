@@ -189,6 +189,25 @@ async function main(): Promise<void> {
       const cross = await post(approver, "k-x", { source_run_id: SOURCE_RUN_B, doc_ref: DOC_A, decision: "approve" });
       check("cross-tenant source_run → 404 RESOURCE_NOT_FOUND", cross.statusCode === 404 && cross.json().code === "RESOURCE_NOT_FOUND", cross.body);
 
+      // 7b) 처리모드 상호배제(③): 이미 fan-out 검토('review')로 claim 된 행은 목록 건별 결재 차단(claimed_as=review, 스폰 없음).
+      const REVIEW_DOC = "https://approval.office.hiworks.com/ibizsoftware.net/approval/document/view/990099";
+      await withTenantTx(pool, TENANT_A, (c) =>
+        c.query(
+          `INSERT INTO approval_row_claims (id, tenant_id, source_run_id, doc_ref, mode, spawned_run_id)
+           VALUES ('70000000-0000-0000-0000-0000000000e1'::uuid, $1::uuid, $2::uuid, $3, 'review', NULL)`,
+          [TENANT_A, SOURCE_RUN_A, REVIEW_DOC],
+        ),
+      );
+      const beforeReview = await counts(pool);
+      const inReview = await post(approver, "k-rev", { source_run_id: SOURCE_RUN_A, doc_ref: REVIEW_DOC, decision: "approve" });
+      check(
+        "검토중('review' claim) 행 /decide → 409 APPROVAL_ALREADY_DECIDED (claimed_as=review)",
+        inReview.statusCode === 409 && inReview.json().code === "APPROVAL_ALREADY_DECIDED" && inReview.json().details?.claimed_as === "review",
+        inReview.body,
+      );
+      const afterReview = await counts(pool);
+      check("검토중 행 차단: 결정/스폰 증가 없음", afterReview.decisions === beforeReview.decisions && afterReview.spawned === beforeReview.spawned, JSON.stringify({ beforeReview, afterReview }));
+
       // 8) malformed body / 멱등키 누락 → 422(키 소모 이전).
       const badDec = await post(approver, "k-bd", { source_run_id: SOURCE_RUN_A, doc_ref: DOC_A, decision: "maybe" });
       check("invalid decision → 422", badDec.statusCode === 422, badDec.body);

@@ -1601,7 +1601,8 @@ CREATE INDEX idx_approval_decisions_source ON approval_decisions (tenant_id, sou
 --    행 단위로 1건만 스폰되도록 예약(claim)한다. UNIQUE(tenant, source_run, doc_ref) → 재-fanout/스위퍼 재실행 시
 --    동일 문서 중복 스폰 차단(멱등). approval_decisions 와 동형 구조(runs 복합 FK) — spawned_run_id 는 nullable:
 --    claim 을 먼저 INSERT(행 예약)한 뒤 createRunInTx 로 검토 run 을 스폰하고 UPDATE 로 채운다(경합-안전 예약-후-스폰).
---    mode 는 향후 처리모드 공유원장 확장(decide) 대비 컬럼(현재 'review' 만).
+--    ③ 처리모드 상호배제 공유원장: mode='review'(fan-out 검토 run) / 'decide'(목록 건별 결재). UNIQUE 가 행당 정확히 1모드를
+--    보장 — /decide 와 fan-out 이 같은 행을 이중 처리(이중 승인)하지 못하게 한다(경합-안전, 먼저 claim 한 경로가 이긴다).
 -- ============================================================
 
 CREATE TABLE approval_row_claims (
@@ -1609,7 +1610,7 @@ CREATE TABLE approval_row_claims (
   tenant_id       uuid        NOT NULL,
   source_run_id   uuid        NOT NULL REFERENCES runs(id),   -- 결재 목록을 수집해 인박스에 노출한 run(fan-out 출처)
   doc_ref         text        NOT NULL,                       -- 결재 문서 참조(approval origin 절대 URL)
-  mode            text        NOT NULL DEFAULT 'review' CHECK (mode IN ('review')),  -- 처리모드(현재 검토 run 만)
+  mode            text        NOT NULL DEFAULT 'review' CHECK (mode IN ('review','decide')),  -- 처리모드 공유원장(③): review=fan-out 검토 run, decide=목록 건별 결재. 행당 1모드(UNIQUE)
   spawned_run_id  uuid        REFERENCES runs(id),            -- 스폰한 검토(review) run — 예약 후 UPDATE 로 채움(nullable)
   created_at      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, source_run_id, doc_ref)                  -- 행 단위 1스폰 보장(중복 fan-out 차단)
