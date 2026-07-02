@@ -81,6 +81,7 @@ export type RbacAction =
   | "document_job.manage"
   | "audit.read"
   | "audit.verify"
+  | "tenant_data.export"
   | "ai_governance.read"
   | "ai_governance.manage"
   | "workitem.read"

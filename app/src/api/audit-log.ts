@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
 import { verifyAuditChainInTenantTx } from "./audit-record-hash";
+import { csvCell, csvWithBom } from "./csv";
 import {
   insertAuditVerificationRun,
   mapAuditVerificationRunRow,
@@ -83,7 +84,7 @@ export function registerAuditLogRoutes(app: FastifyInstance, deps: ApiServerDeps
       .header("content-type", "text/csv; charset=utf-8")
       .header("content-disposition", `attachment; filename="${filename}"`)
       // BOM 없으면 Windows Excel 이 CP949 로 열어 한글이 깨진다.
-      .send(`\uFEFF${auditRowsToCsv(rows)}`);
+      .send(csvWithBom(auditRowsToCsv(rows)));
   });
 
   app.get("/v1/audit-log/verification-runs", { config: { rbacAction: "audit.read" } }, async (request, reply) => {
@@ -322,11 +323,4 @@ function auditRowsToCsv(rows: readonly AuditLogRow[]): string {
     ].map((value) => csvCell(String(value))).join(",");
   });
   return [header.join(","), ...lines].join("\n");
-}
-
-// CSV 수식 인젝션 방어(적대감사 #C8): =,+,-,@,탭,CR 로 시작하는 셀은 스프레드시트(Excel/Sheets)에서 수식으로 실행될 수 있다.
-//   actor.subject_id(IdP/사용자-영향 sub)·reason 등 비신뢰 값이 감사 export 로 흐르므로, 위험 접두는 작은따옴표로 무력화한 뒤 인용.
-function csvCell(value: string): string {
-  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  return `"${guarded.replace(/"/g, "\"\"")}"`;
 }

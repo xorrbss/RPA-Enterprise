@@ -643,6 +643,7 @@ export interface MinimalControlPlaneServices {
   recordAutomationAdoptionEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listAiGovernanceEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   recordAiGovernanceEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  exportOffboardingData(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listAuditLog(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   exportAuditLog(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listConnectors(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -1676,6 +1677,26 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       status: 200,
       headers: { "content-type": "text/csv; charset=utf-8" },
       body: auditCsv(this.filteredAuditLog(ctx)),
+    };
+  }
+
+  async exportOffboardingData(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const format = optionalQueryString(ctx, "format");
+    if (format !== undefined && format !== "csv") throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_export_format" });
+    return {
+      status: 200,
+      headers: { "content-type": "text/csv; charset=utf-8" },
+      body: offboardingCsv({
+        tenantId: tenant(ctx),
+        runs: [...this.runs.values()].filter((row) => row.tenant_id === tenant(ctx)),
+        humanTasks: [...this.humanTasks.values()].filter((row) => row.tenant_id === tenant(ctx)),
+        artifacts: [...this.artifacts.values()].filter((row) =>
+          row.tenant_id === tenant(ctx) &&
+          row.deleted_at === undefined &&
+          row.quarantine !== true &&
+          (row.redaction_status === "redacted" || row.redaction_status === "not_required"),
+        ),
+      }),
     };
   }
 
@@ -2862,6 +2883,7 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     recordAutomationAdoptionEvidence: bind(services.recordAutomationAdoptionEvidence),
     listAiGovernanceEvidence: bind(services.listAiGovernanceEvidence),
     recordAiGovernanceEvidence: bind(services.recordAiGovernanceEvidence),
+    exportOffboardingData: bind(services.exportOffboardingData),
     listAuditLog: bind(services.listAuditLog),
     exportAuditLog: bind(services.exportAuditLog),
     listConnectors: bind(services.listConnectors),
@@ -3067,6 +3089,62 @@ function auditCsv(items: readonly MinimalAuditLogItem[]): string {
     item.created_at ?? "",
   ].map(csvCell).join(","));
   return [header.join(","), ...lines].join("\n");
+}
+
+function offboardingCsv(input: {
+  readonly tenantId: string;
+  readonly runs: readonly MinimalRun[];
+  readonly humanTasks: readonly MinimalHumanTask[];
+  readonly artifacts: readonly MinimalArtifact[];
+}): string {
+  return [
+    [
+      ["section", "manifest"],
+      ["key", "value"],
+      ["schema_ref", "offboarding-metadata-export@1"],
+      ["tenant_id", input.tenantId],
+      ["run_count", String(input.runs.length)],
+      ["human_task_count", String(input.humanTasks.length)],
+      ["artifact_count", String(input.artifacts.length)],
+      ["omitted_fields", "params,payload,result,object_ref,sha256,content"],
+    ],
+    [
+      ["section", "runs"],
+      ["run_id", "scenario_id", "scenario_version_id", "status", "attempts", "as_of"],
+      ...input.runs.map((run) => [
+        run.run_id,
+        run.scenario_id,
+        run.scenario_version_id,
+        run.status,
+        String(run.attempts),
+        run.as_of,
+      ]),
+    ],
+    [
+      ["section", "human_tasks"],
+      ["human_task_id", "run_id", "kind", "state", "assignee", "assignee_role"],
+      ...input.humanTasks.map((task) => [
+        task.human_task_id,
+        task.run_id ?? "",
+        task.kind,
+        task.state,
+        task.assignee ?? "",
+        task.assignee_role ?? "",
+      ]),
+    ],
+    [
+      ["section", "artifacts"],
+      ["artifact_id", "run_id", "step_id", "attempt", "type", "redaction_status"],
+      ...input.artifacts.map((artifact) => [
+        artifact.artifact_id,
+        artifact.run_id ?? "",
+        artifact.step_id ?? "",
+        artifact.attempt === null || artifact.attempt === undefined ? "" : String(artifact.attempt),
+        artifact.type ?? "artifact",
+        artifact.redaction_status,
+      ]),
+    ],
+  ].map((section) => section.map((row) => row.map(csvCell).join(",")).join("\n")).join("\n\n");
 }
 
 function csvCell(value: string): string {

@@ -444,6 +444,7 @@ for (const operationId of [
   "recordAutomationAdoptionEvidence",
   "listAuditLog",
   "exportAuditLog",
+  "exportOffboardingData",
   "listConnectors",
   "listTemplates",
   "listConnectorProfiles",
@@ -584,6 +585,7 @@ assert.equal(staticRbacAction("listAutomationAdoptionEvidence"), "automation_ide
 assert.equal(staticRbacAction("recordAutomationAdoptionEvidence"), "automation_idea.manage");
 assert.equal(staticRbacAction("listAuditLog"), "audit.read");
 assert.equal(staticRbacAction("exportAuditLog"), "audit.read");
+assert.equal(staticRbacAction("exportOffboardingData"), "tenant_data.export");
 assert.equal(staticRbacAction("listConnectors"), "connector.read");
 assert.equal(staticRbacAction("listTemplates"), "connector.read");
 assert.equal(staticRbacAction("listConnectorProfiles"), "connector.read");
@@ -1230,6 +1232,7 @@ assert.equal(registry.getQueryValidator("listAutomationIdeas")?.validate({ stage
 assert.equal(registry.getQueryValidator("listAutomationAdoptionEvidence")?.validate({ evidence_type: "training_completion", limit: 10 }).valid, true);
 assert.equal(registry.getQueryValidator("listAuditLog")?.validate({ action: "artifact.read", outcome: "allow" }).valid, true);
 assert.equal(registry.getQueryValidator("exportAuditLog")?.validate({ action: "artifact.read", outcome: "allow", format: "csv" }).valid, true);
+assert.equal(registry.getQueryValidator("exportOffboardingData")?.validate({ created_at_from: "2026-06-01T00:00:00Z", created_at_to: "2026-06-30T23:59:59Z", format: "csv" }).valid, true);
 assert.equal(registry.getQueryValidator("listConnectors")?.validate({ kind: "browser", status: "candidate" }).valid, true);
 assert.equal(registry.getQueryValidator("listTemplates")?.validate({ connector_id: "sap-web" }).valid, true);
 assert.equal(registry.getQueryValidator("listConnectorProfiles")?.validate({ connector_id: "http-api", status: "certified" }).valid, true);
@@ -1766,6 +1769,22 @@ assert.equal(auditExport.status, 200);
 assert.ok(String(auditExport.headers?.["content-type"] ?? "").includes("text/csv"));
 assert.ok(String(auditExport.body).includes("audit_id"));
 assert.equal(String(auditExport.body).split("\n")[0]?.split(",").includes("payload"), false);
+const offboardingExport = await handlers.exportOffboardingData!(ctx("exportOffboardingData", {
+  method: "GET",
+  path: "/v1/offboarding/export",
+  query: { created_at_from: "2026-06-01T00:00:00Z", created_at_to: "2026-06-30T23:59:59Z", format: "csv" },
+}));
+const offboardingCsvBody = String(offboardingExport.body);
+assert.equal(offboardingExport.status, 200);
+assert.ok(String(offboardingExport.headers?.["content-type"] ?? "").includes("text/csv"));
+assert.ok(offboardingCsvBody.includes("offboarding-metadata-export@1"));
+assert.ok(offboardingCsvBody.includes("\"section\",\"runs\""));
+assert.ok(offboardingCsvBody.includes("\"section\",\"human_tasks\""));
+assert.ok(offboardingCsvBody.includes("\"section\",\"artifacts\""));
+assert.ok(offboardingCsvBody.includes("artifact-redacted"));
+assert.equal(offboardingCsvBody.includes("artifact-pending"), false);
+assert.equal(offboardingCsvBody.includes("artifact-quarantined"), false);
+assert.equal(offboardingCsvBody.includes("artifact://redacted"), false);
 const authReadiness = await handlers.getAuthReadiness!(ctx("getAuthReadiness", {
   method: "GET",
   path: "/v1/auth/readiness",

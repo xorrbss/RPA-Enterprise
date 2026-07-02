@@ -43,6 +43,8 @@ tags:
     description: Monthly automation performance, ROI evidence, and adoption decision reports.
   - name: AuditLog
     description: Tenant-scoped immutable audit log explorer without raw payload disclosure.
+  - name: Offboarding
+    description: Tenant-scoped metadata-only exports for customer offboarding and review handoff.
   - name: ConnectorCatalog
     description: Browser RPA connector and template catalog metadata.
   - name: IntegrationHandoffs
@@ -1592,6 +1594,42 @@ paths:
             text/csv:
               schema:
                 $ref: '#/components/schemas/AuditLogExportCsv'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /offboarding/export:
+    get:
+      tags: [Offboarding]
+      operationId: exportOffboardingData
+      summary: Export offboarding metadata
+      description: >
+        Export tenant-scoped runs, human task, and artifact metadata as CSV for customer offboarding.
+        Sensitive execution inputs, human task payload/result data, artifact object references, hashes,
+        and content bodies are intentionally omitted.
+      parameters:
+        - name: created_at_from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive lower bound for each exported section created_at.
+        - name: created_at_to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive upper bound for each exported section created_at.
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [csv]
+      responses:
+        '200':
+          description: Sectioned CSV containing metadata-only manifest, runs, human_tasks, and artifacts sections.
+          content:
+            text/csv:
+              schema:
+                $ref: '#/components/schemas/OffboardingExportCsv'
         default:
           $ref: '#/components/responses/Error'
 
@@ -6590,6 +6628,21 @@ components:
     AuditLogExportCsv:
       type: string
       description: CSV audit export. Raw audit payload bodies are intentionally omitted.
+    OffboardingExportQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        created_at_from: { type: string, format: date-time }
+        created_at_to: { type: string, format: date-time }
+        format:
+          type: string
+          enum: [csv]
+    OffboardingExportCsv:
+      type: string
+      description: >
+        Metadata-only offboarding CSV with manifest, runs, human_tasks, and artifacts sections.
+        Execution params, human task payload/result data, artifact object references, hashes,
+        and content bodies are intentionally omitted.
     ProcessMiningImportPage:
       type: object
       required: [items, next_cursor]
