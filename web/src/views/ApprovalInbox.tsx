@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
@@ -55,6 +55,7 @@ async function findApprovalArtifact(
 // Phase 2c 부터 approval.decide 권한 시 행별 [결재]/[반려] 버튼 노출(DecideButtons) — 되돌릴 수 없는 결재 처리를 위한 자동화 실행 생성(휴먼게이트). 백엔드가 최종 강제.
 export function ApprovalInboxView(): JSX.Element {
   const api = useApiClient();
+  const can = useCan();
 
   const collect = useQuery({
     queryKey: ["scenarios", "approval-inbox-collector"],
@@ -90,9 +91,12 @@ export function ApprovalInboxView(): JSX.Element {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <p className="subtle" style={{ margin: 0 }}>
-          최근 수집된 하이웍스 결재 목록입니다{latestRun?.as_of ? ` · 기준 ${latestRun.as_of}` : ""}. 결재 권한이 있으면 행별로 승인/반려할 수 있습니다.
+          최근 수집된 하이웍스 결재 목록입니다{latestRun?.as_of ? ` · 기준 ${latestRun.as_of}` : ""}. 결재 권한이 있으면 행별로 승인/반려하거나, 전체를 검토 인박스로 보낼 수 있습니다.
         </p>
-        {recollect}
+        <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {can("approval.decide") && latestRun !== undefined && <FanOutButton sourceRunId={latestRun.run_id} />}
+          {recollect}
+        </span>
       </div>
       <Body
         scenarios={collect}
@@ -333,6 +337,55 @@ function Inbox({ rows, sourceRunId }: { rows: readonly ApprovalRow[]; sourceRunI
         </div>
       </section>
     </>
+  );
+}
+
+// fan-out 버튼 — 수집 목록의 각 행을 검토 run(@human_task)으로 일괄 스폰(범용 '사람 확인' 인박스에 뜸). 행별 claim 으로
+//   중복 스폰 차단(재클릭 시 already_fanned_out 스킵). 결정을 내리지 않고 검토 대기만 생성 → 사람이 인박스에서 승인/반려(휴먼 게이트).
+//   N건 run 생성이라 확인 1단계. 결과(스폰/스킵 건수) 명시 표면화(조용한 false 금지).
+function FanOutButton({ sourceRunId }: { sourceRunId: string }): JSX.Element {
+  const api = useApiClient();
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "green" | "red"; text: string } | null>(null);
+
+  const run = useMutation({
+    mutationFn: () => api.fanOutApprovals(sourceRunId, crypto.randomUUID()),
+    onSuccess: (r) => {
+      setConfirming(false);
+      setMsg({
+        tone: "green",
+        text:
+          r.spawned_count > 0
+            ? `${r.spawned_count}건을 검토 인박스로 보냈습니다${r.skipped_count > 0 ? ` (${r.skipped_count}건 제외).` : "."}`
+            : `새로 보낼 항목이 없습니다${r.skipped_count > 0 ? ` (${r.skipped_count}건은 이미 보냈거나 처리 불가).` : "."}`,
+      });
+      void qc.invalidateQueries({ queryKey: ["human-tasks"] });
+      void qc.invalidateQueries({ queryKey: ["runs"] });
+    },
+    onError: (e) => {
+      setConfirming(false);
+      setMsg({ tone: "red", text: e instanceof ApiError ? errorLabel(e) : "검토 인박스 보내기 실패" });
+    },
+  });
+
+  if (run.isPending) return <span className="subtle">검토 인박스로 보내는 중…</span>;
+  if (confirming) {
+    return (
+      <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+        <span className="subtle">이 목록의 모든 항목을 검토 인박스로 보낼까요?</span>
+        <button className="btn primary" type="button" onClick={() => run.mutate()}>확인</button>
+        <button className="btn" type="button" onClick={() => setConfirming(false)}>취소</button>
+      </span>
+    );
+  }
+  return (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      <button className="btn" type="button" onClick={() => { setMsg(null); setConfirming(true); }}>
+        검토 인박스로 보내기
+      </button>
+      {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
+    </span>
   );
 }
 

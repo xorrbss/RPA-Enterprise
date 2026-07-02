@@ -41,6 +41,7 @@ const expectedTables = [
   "connector_profiles",
   "connector_certifications",
   "approval_decisions",
+  "approval_row_claims",
   "workers",
   "browser_identities",
   "network_policies",

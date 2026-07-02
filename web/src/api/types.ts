@@ -2323,6 +2323,17 @@ export interface DecideApprovalResult {
   readonly spawned_run_id: string;
 }
 
+// POST /v1/approvals/fan-out 201 응답 — 수집 목록의 각 행을 검토 run(@human_task)으로 일괄 스폰.
+//   spawned = 새로 스폰된 검토 run(doc_ref↔run_id), skipped = 스폰 못 한 행(already_fanned_out/invalid_doc_ref/missing_approval_id 등).
+export interface FanOutApprovalsResult {
+  readonly source_run_id: string;
+  readonly spawned: ReadonlyArray<{ readonly doc_ref: string; readonly run_id: string }>;
+  readonly spawned_count: number;
+  readonly skipped: ReadonlyArray<{ readonly doc_ref: string; readonly reason: string }>;
+  readonly skipped_count: number;
+  readonly total: number;
+}
+
 export interface GatewayPolicy {
   readonly model: string;
   // 낙관적 동시성 토큰(GET ETag = gateway_policies.version). PUT If-Match에 사용. ETag 부재 시 undefined → 편집 차단.

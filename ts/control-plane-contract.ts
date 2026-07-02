@@ -327,6 +327,8 @@ export type OperationId =
   | "completeBrowserRecording"
   | "promoteBrowserRecordingToStudio"
   | "decideApproval"
+  // fanOutApprovals: POST /v1/approvals/fan-out — 수집 목록의 각 행을 검토 run 으로 스폰(멱등 네임스페이스 파티션).
+  | "fanOutApprovals"
   | "captureSession"
   | "captureSessionComplete";
 

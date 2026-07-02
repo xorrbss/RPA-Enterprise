@@ -254,6 +254,41 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
     expect(link.getAttribute("href")).toBe("#runTrace?run=spawn-9");
   });
 
+  test("operator → '검토 인박스로 보내기' 숨김 (approval.decide 게이트)", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(inboxClient(JSON.stringify({ rows: ROWS })));
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "검토 인박스로 보내기" })).toBeNull();
+  });
+
+  test("approver → '검토 인박스로 보내기' → 확인 → fanOutApprovals(source_run_id) 호출 + 결과 표면화", async () => {
+    localStorage.setItem("rpa.token", jwt(["approver"]));
+    let capturedSource: string | null = null;
+    const client = fakeClient({
+      listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
+      listRuns: async (p) =>
+        p?.scenario_version_id === "ver-c"
+          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          : { items: [], next_cursor: null },
+      listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
+      getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
+      fanOutApprovals: async (sourceRunId) => {
+        capturedSource = sourceRunId;
+        return { source_run_id: sourceRunId, spawned: [{ doc_ref: "d1", run_id: "r1" }, { doc_ref: "d2", run_id: "r2" }, { doc_ref: "d3", run_id: "r3" }], spawned_count: 3, skipped: [], skipped_count: 0, total: 3 };
+      },
+    });
+    renderApp(client);
+    location.hash = "#approvalInbox";
+    await waitFor(() => expect(screen.getByText("연차 신청")).toBeInTheDocument());
+
+    // 보내기 → 확인 1단계 → fanOutApprovals(수집 source run) 호출 + 결과 배지.
+    fireEvent.click(screen.getByRole("button", { name: "검토 인박스로 보내기" }));
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.getByText(/3건을 검토 인박스로 보냈습니다/)).toBeInTheDocument());
+    expect(capturedSource).toBe("run-c");
+  });
+
   test("approver → 2건 선택 → 일괄 승인 → 배치 확인 → decideApproval 2회(approve) → 두 행 처리 상태", async () => {
     localStorage.setItem("rpa.token", jwt(["approver"]));
     const calls: DecideApprovalBody[] = [];
