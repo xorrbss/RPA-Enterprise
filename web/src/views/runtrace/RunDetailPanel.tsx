@@ -7,7 +7,7 @@ import { navigate } from "../../router";
 import { SlideOver } from "../../components/SlideOver";
 import { StepTrace } from "../../components/StepTrace";
 import { GenerationArtifactsPanel } from "../../components/GenerationArtifactsPanel";
-import { StatusBadge, errorCodeLabel, errorLabel } from "../../components/badges";
+import { RunModeBadge, StatusBadge, errorCodeLabel, errorLabel } from "../../components/badges";
 import { ErrorState, Loading } from "../../components/states";
 import { formatDateTime } from "../../util/time";
 import type { PromoteFromRunResult, RunDetail, ScenarioGenerationResult } from "../../api/types";
@@ -120,6 +120,10 @@ export function RunDetailPanel({
             <dt className="subtle">상태</dt>
             <dd style={{ margin: 0 }}>
               <StatusBadge status={detail.data.status} />
+            </dd>
+            <dt className="subtle">실행 구분</dt>
+            <dd style={{ margin: 0 }}>
+              <RunModeBadge runMode={detail.data.run_mode} />
             </dd>
             <dt className="subtle">실행 처리자</dt>
             <dd style={{ margin: 0 }}>

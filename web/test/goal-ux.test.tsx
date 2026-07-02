@@ -43,7 +43,7 @@ function inboxClient(rows: readonly Record<string, unknown>[]): ApiClient {
     }),
     listRuns: async (p) =>
       p?.scenario_version_id === "ver-collect"
-        ? { items: [{ run_id: "run-collect", status: "completed", current_node: null, as_of: "2026-06-18T09:00:00.000Z" }], next_cursor: null }
+        ? { items: [{ run_id: "run-collect", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-18T09:00:00.000Z" }], next_cursor: null }
         : { items: [], next_cursor: null },
     listRunArtifacts: async () => ({
       items: [{ artifact_id: "art-inbox", type: APPROVAL_ARTIFACT_TYPE, redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-18T09:00:01.000Z" }],
@@ -226,7 +226,7 @@ describe("goal UX improvements", () => {
     renderApp(
       fakeClient({
         listRuns: async () => ({ items: [run("run-slide-1", "running")], next_cursor: null }),
-        getRun: async (id) => ({ run_id: id, status: "running", worker_id: "worker-1", attempts: 1, as_of: null }),
+        getRun: async (id) => ({ run_id: id, status: "running", run_mode: "prod", worker_id: "worker-1", attempts: 1, as_of: null }),
       }),
     );
     location.hash = "#runTrace";

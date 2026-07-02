@@ -8,15 +8,17 @@ import { DashboardEnvironmentState, environmentErrorKind, type DashboardEnvironm
 import { ActionButton } from "../components/ActionButton";
 import { ArtifactLookup } from "../components/ArtifactLookup";
 import { FilterSelect } from "../components/FilterSelect";
-import { StatusBadge, statusLabel, errorCodeLabel } from "../components/badges";
+import { RunModeBadge, StatusBadge, statusLabel, errorCodeLabel, runModeLabel } from "../components/badges";
 import { RUN_STATES } from "./filters";
 import { mergeParams, useHashIdParam, useHashParam } from "../router";
 import { formatDateTime } from "../util/time";
-import type { RunItem, RunPriority, ScenarioGenerationResult } from "../api/types";
+import type { RunItem, RunMode, RunPriority, ScenarioGenerationResult } from "../api/types";
 import { POLL_MS, TERMINAL, runDetailRefetchInterval } from "./runtrace/constants";
 import { RunDetailPanel } from "./runtrace/RunDetailPanel";
 
 export { runDetailRefetchInterval } from "./runtrace/constants";
+
+const RUN_MODE_OPTIONS: readonly RunMode[] = ["prod", "test"];
 
 export function RunTraceView(): JSX.Element {
   const api = useApiClient();
@@ -24,13 +26,15 @@ export function RunTraceView(): JSX.Element {
   // 진입 시 필터를 시드 → 진입점의 모집단과 목록이 일치.
   const statusParam = useHashParam("status");
   const scenarioParam = useHashIdParam("scenario");
+  const runModeParam = useHashParam("run_mode");
   const statusFilter =
     statusParam !== null &&
     (RUN_STATES as readonly string[]).includes(statusParam)
       ? statusParam
       : undefined;
   const scenarioFilter = scenarioParam ?? undefined;
-  const initialFilter = buildRunFilter(statusFilter, scenarioFilter);
+  const runModeFilter = isRunMode(runModeParam) ? runModeParam : undefined;
+  const initialFilter = buildRunFilter(statusFilter, scenarioFilter, runModeFilter);
   const lv = useListView<RunItem>(["runs"], (p) => api.listRuns(p), {
     refetchInterval: POLL_MS,
     initialFilter,
@@ -51,17 +55,24 @@ export function RunTraceView(): JSX.Element {
     typeof lv.filter.status === "string" ? lv.filter.status : undefined;
   const currentScenarioFilter =
     typeof lv.filter.scenario_id === "string" ? lv.filter.scenario_id : undefined;
+  const currentRunModeFilter =
+    isRunMode(lv.filter.run_mode) ? lv.filter.run_mode : undefined;
   useEffect(() => {
-    if (statusFilter === currentStatusFilter && scenarioFilter === currentScenarioFilter) return;
-    lv.setFilter(buildRunFilter(statusFilter, scenarioFilter) ?? {});
-  }, [currentStatusFilter, statusFilter, currentScenarioFilter, scenarioFilter]);
+    if (statusFilter === currentStatusFilter && scenarioFilter === currentScenarioFilter && runModeFilter === currentRunModeFilter) return;
+    lv.setFilter(buildRunFilter(statusFilter, scenarioFilter, runModeFilter) ?? {});
+  }, [currentStatusFilter, statusFilter, currentScenarioFilter, scenarioFilter, currentRunModeFilter, runModeFilter]);
   const changeStatusFilter = (value: string | undefined): void => {
-    lv.setFilter(buildRunFilter(value, currentScenarioFilter) ?? {});
+    lv.setFilter(buildRunFilter(value, currentScenarioFilter, currentRunModeFilter) ?? {});
     mergeParams({ status: value ?? null });
   };
   const changeScenarioFilter = (value: string | undefined): void => {
-    lv.setFilter(buildRunFilter(currentStatusFilter, value) ?? {});
+    lv.setFilter(buildRunFilter(currentStatusFilter, value, currentRunModeFilter) ?? {});
     mergeParams({ scenario: value ?? null });
+  };
+  const changeRunModeFilter = (value: string | undefined): void => {
+    const next = isRunMode(value) ? value : undefined;
+    lv.setFilter(buildRunFilter(currentStatusFilter, currentScenarioFilter, next) ?? {});
+    mergeParams({ run_mode: next ?? null });
   };
   // 선택 run을 해시(`#runTrace?run=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(useState 휘발 대체).
   const sel = useHashIdParam("run");
@@ -136,6 +147,13 @@ export function RunTraceView(): JSX.Element {
               labelFor={statusLabel}
               onChange={changeStatusFilter}
             />
+            <FilterSelect
+              label="실행 구분"
+              value={currentRunModeFilter}
+              options={RUN_MODE_OPTIONS}
+              labelFor={runModeLabel}
+              onChange={changeRunModeFilter}
+            />
           </>
         }
         rowKey={(r) => r.run_id}
@@ -175,6 +193,10 @@ export function RunTraceView(): JSX.Element {
                   )}
               </span>
             ),
+          },
+          {
+            header: "구분",
+            render: (r) => <RunModeBadge runMode={r.run_mode} />,
           },
           { header: "기준 시각", render: (r) => formatDateTime(r.as_of) },
           { header: "우선순위", render: (r) => <RunPriorityControl run={r} /> },
@@ -321,11 +343,17 @@ function RunPriorityControl(props: { readonly run: RunItem }): JSX.Element {
 function buildRunFilter(
   status: string | undefined,
   scenarioId: string | undefined,
+  runMode: RunMode | undefined,
 ): Record<string, string> | undefined {
   const filter: Record<string, string> = {};
   if (status !== undefined) filter.status = status;
   if (scenarioId !== undefined) filter.scenario_id = scenarioId;
+  if (runMode !== undefined) filter.run_mode = runMode;
   return Object.keys(filter).length > 0 ? filter : undefined;
+}
+
+function isRunMode(value: unknown): value is RunMode {
+  return value === "prod" || value === "test";
 }
 
 function priorityLabel(priority: RunPriority): string {

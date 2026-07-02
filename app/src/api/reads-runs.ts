@@ -9,11 +9,13 @@ import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams, runStateFilter, uuidFilter } from "./list-query";
 import { UUID_RE } from "./reads-support";
 import { requirePrincipal, type ApiServerDeps } from "./server";
+import type { RunMode } from "./server-create-run";
 
 interface RunListRow {
   id: string;
   status: RunState;
   priority: string;
+  run_mode: RunMode;
   scenario_id: string;
   scenario_name: string;
   scenario_version_id: string;
@@ -25,6 +27,12 @@ interface RunListRow {
   created_at: Date;
   cursor_at: string; // created_at::text(전정밀도) — keyset 커서 전용(PAG-01)
   updated_at: Date;
+}
+
+function runModeFilter(raw: unknown): RunMode | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (raw === "test" || raw === "prod") return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_run_mode" });
 }
 
 interface RunStepRow {
@@ -178,12 +186,13 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
     const query = request.query as Record<string, unknown>;
     const { limit, cursor } = parsePageParams(query);
     const status = runStateFilter(query.status);
+    const runMode = runModeFilter(query.run_mode);
     const scenarioVersionId = uuidFilter(query.scenario_version_id, "invalid_scenario_version_id");
     const scenarioId = uuidFilter(query.scenario_id, "invalid_scenario_id");
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<RunListRow>(
-        `SELECT r.id, r.status, r.priority, sv.scenario_id, s.name AS scenario_name, r.scenario_version_id,
+        `SELECT r.id, r.status, r.priority, r.run_mode, sv.scenario_id, s.name AS scenario_name, r.scenario_version_id,
                 r.worker_id, r.attempts, r.as_of, r.workitem_id, r.failure_reason, r.created_at,
                 r.created_at::text AS cursor_at, r.updated_at
            FROM runs r
@@ -191,14 +200,16 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
            JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
           WHERE r.tenant_id = $1::uuid
             AND ($2::text IS NULL OR r.status = $2)
-            AND ($3::uuid IS NULL OR r.scenario_version_id = $3::uuid)
-            AND ($4::uuid IS NULL OR sv.scenario_id = $4::uuid)
-            AND ($5::timestamptz IS NULL OR (r.created_at, r.id) < ($5::timestamptz, $6::uuid))
+            AND ($3::text IS NULL OR r.run_mode = $3)
+            AND ($4::uuid IS NULL OR r.scenario_version_id = $4::uuid)
+            AND ($5::uuid IS NULL OR sv.scenario_id = $5::uuid)
+            AND ($6::timestamptz IS NULL OR (r.created_at, r.id) < ($6::timestamptz, $7::uuid))
           ORDER BY r.created_at DESC, r.id DESC
-          LIMIT $7`,
+          LIMIT $8`,
         [
           principal.tenantId,
           status ?? null,
+          runMode ?? null,
           scenarioVersionId ?? null,
           scenarioId ?? null,
           cursor?.createdAt ?? null,
@@ -218,6 +229,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
           run_id: r.id,
           status: r.status,
           priority: r.priority,
+          run_mode: r.run_mode,
           scenario_id: r.scenario_id,
           scenario_name: r.scenario_name,
           scenario_version_id: r.scenario_version_id,

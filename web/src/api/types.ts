@@ -218,6 +218,7 @@ export interface AutomationPerformanceTrend {
 
 export interface AutomationPerformanceReport {
   readonly month: string;
+  readonly run_mode: AutomationPerformanceRunMode;
   readonly timezone: "Asia/Seoul";
   readonly period_start: string;
   readonly period_end: string;
@@ -230,13 +231,16 @@ export interface AutomationPerformanceReport {
 }
 
 export type AutomationPerformanceReportExportFormat = "csv" | "xlsx" | "poc_markdown";
+export type AutomationPerformanceRunMode = "prod" | "test" | "all";
 
 export type RunPriority = "low" | "medium" | "high" | "critical";
+export type RunMode = "prod" | "test";
 
 export interface RunItem {
   readonly run_id: string;
   readonly status: string;
   readonly priority?: RunPriority;
+  readonly run_mode?: RunMode;
   // 실행 식별성 — 목록에서 어떤 자동화의 실행인지 식별(서버 scenarios JOIN 투영).
   readonly scenario_id?: string;
   readonly scenario_name?: string;
@@ -1996,6 +2000,7 @@ export interface RunDetail {
   readonly run_id: string;
   readonly status: string;
   readonly priority?: RunPriority;
+  readonly run_mode?: RunMode;
   readonly scenario_id?: string;
   readonly scenario_name?: string;
   readonly scenario_version_id?: string;
@@ -2118,6 +2123,7 @@ export interface CreateRunResult {
   readonly status: string;
   readonly as_of?: string | null;
   readonly priority?: RunPriority;
+  readonly run_mode: RunMode;
 }
 
 export interface CreateRunBody {
@@ -2128,6 +2134,7 @@ export interface CreateRunBody {
   // 다정책+기본없음이면 model_required 422). gateway_policies.model 값.
   readonly model?: string;
   readonly priority?: RunPriority;
+  readonly run_mode?: RunMode;
 }
 
 export interface RerunRunBody {
@@ -2143,6 +2150,7 @@ export interface RerunRunResult {
   readonly status: string;
   readonly mode: "same_input" | "edited_input";
   readonly as_of: string;
+  readonly run_mode: RunMode;
 }
 
 export interface ResumeRunResult {

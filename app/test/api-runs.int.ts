@@ -343,6 +343,14 @@ async function main(): Promise<void> {
       });
       check("POST /runs unknown tenant_id field → 422", unknownField.statusCode === 422, unknownField.body);
       check("unknown field → IR_SCHEMA_INVALID", unknownField.json().code === "IR_SCHEMA_INVALID", unknownField.body);
+      const invalidRunMode = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-invalid-mode" },
+        payload: { scenario_version_id: SVER_A, params: {}, run_mode: "dry_run" },
+      });
+      check("POST /runs invalid run_mode → 422", invalidRunMode.statusCode === 422, invalidRunMode.body);
+      check("invalid run_mode reason", invalidRunMode.json().details?.reason === "invalid_run_mode", invalidRunMode.body);
 
       // 6c) 최초 생성 → 201 queued + as_of 1회 고정 + enqueue 1회.
       const createBody = { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T09:00:00Z" } };
@@ -361,6 +369,7 @@ async function main(): Promise<void> {
       const createdBody = created.json();
       check("created status=queued", createdBody.status === "queued", JSON.stringify(createdBody));
       check("created as_of fixed", createdBody.as_of === "2026-06-14T09:00:00Z", JSON.stringify(createdBody));
+      check("created run_mode defaults prod", createdBody.run_mode === "prod", JSON.stringify(createdBody));
       check("enqueue called once", enqueued.length === 1, `enqueued=${enqueued.length}`);
       check("enqueue correlation_id matches request", enqueued[0]?.correlationId === createCorrelationId, JSON.stringify(enqueued[0]));
       const firstRunId = createdBody.run_id;
@@ -376,6 +385,7 @@ async function main(): Promise<void> {
         createdDetail.statusCode === 200 && createdDetail.json().params?.as_of === "2026-06-14T09:00:00Z",
         createdDetail.body,
       );
+      check("created run detail run_mode prod", createdDetail.json().run_mode === "prod", createdDetail.body);
 
       // 6d) 동일 키+본문 재요청 → 멱등 재생(같은 응답, 새 run/enqueue 없음).
       const replay = await app.inject({
@@ -386,6 +396,37 @@ async function main(): Promise<void> {
       });
       check("replay → 201 same run_id", replay.statusCode === 201 && replay.json().run_id === firstRunId, replay.body);
       check("replay no new enqueue", enqueued.length === 1, `enqueued=${enqueued.length}`);
+
+      const explicitTest = await app.inject({
+        method: "POST",
+        url: "/v1/runs",
+        headers: { authorization: `Bearer ${tokenA}`, "idempotency-key": "run-create-test-mode" },
+        payload: { scenario_version_id: SVER_A, params: { as_of: "2026-06-14T09:30:00Z" }, run_mode: "test" },
+      });
+      check("POST /runs explicit test run_mode → 201", explicitTest.statusCode === 201 && explicitTest.json().run_mode === "test", explicitTest.body);
+      const testRunId = explicitTest.json().run_id;
+      const testModeList = await app.inject({
+        method: "GET",
+        url: "/v1/runs?run_mode=test",
+        headers: { authorization: `Bearer ${tokenA}` },
+      });
+      check(
+        "GET /runs?run_mode=test includes only test run",
+        testModeList.statusCode === 200 &&
+          testModeList.json().items.some((item: { run_id: string; run_mode: string }) => item.run_id === testRunId && item.run_mode === "test") &&
+          testModeList.json().items.every((item: { run_mode: string }) => item.run_mode === "test"),
+        testModeList.body,
+      );
+      const prodModeList = await app.inject({
+        method: "GET",
+        url: "/v1/runs?run_mode=prod",
+        headers: { authorization: `Bearer ${tokenA}` },
+      });
+      check(
+        "GET /runs?run_mode=prod excludes explicit test run",
+        prodModeList.statusCode === 200 && prodModeList.json().items.every((item: { run_id: string; run_mode: string }) => item.run_id !== testRunId && item.run_mode === "prod"),
+        prodModeList.body,
+      );
 
       // 6e) 동일 키 + 다른 본문 → 412 SCENARIO_VERSION_CONFLICT(request_hash mismatch, #7).
       const hashMismatch = await app.inject({
@@ -525,6 +566,7 @@ async function main(): Promise<void> {
       );
 
       // 6h) RBAC: viewer는 run.create 미허용 → 403(멱등 예약 이전 차단; key 오염 금지).
+      const beforeViewerDenyEnqueue = enqueued.length;
       const viewerCreate = await app.inject({
         method: "POST",
         url: "/v1/runs",
@@ -540,7 +582,7 @@ async function main(): Promise<void> {
         payload: { scenario_version_id: SVER_A, params: {} },
       });
       check("viewer run.create replay → 403", viewerReplay.statusCode === 403, viewerReplay.body);
-      check("viewer replay no enqueue", enqueued.length === 1, `enqueued=${enqueued.length}`);
+      check("viewer replay no enqueue", enqueued.length === beforeViewerDenyEnqueue, `enqueued=${enqueued.length}`);
       await withTenantTx(pool, TENANT_A, async (c) => {
         const reservedByViewer = await c.query<{ n: number }>(
           `SELECT count(*)::int AS n
@@ -565,7 +607,7 @@ async function main(): Promise<void> {
         operatorAfterViewerDeny.statusCode === 201,
         operatorAfterViewerDeny.body,
       );
-      check("viewer deny did not poison key", enqueued.length === 2, `enqueued=${enqueued.length}`);
+      check("viewer deny did not poison key", enqueued.length === beforeViewerDenyEnqueue + 1, `enqueued=${enqueued.length}`);
 
       const beforeCrossTenantCommandEnqueue = enqueued.length;
       const crossTenantScenario = await app.inject({

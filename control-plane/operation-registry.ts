@@ -1913,7 +1913,7 @@ const requireRunCreateBody = (schemaRef: string): BoundaryValidator => ({
       return validationFailure({ schemaRef, reason: "expected_object" });
     }
     for (const key of Object.keys(input)) {
-      if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id" && key !== "model") {
+      if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id" && key !== "model" && key !== "run_mode") {
         return validationFailure({ schemaRef, reason: "additional_property", key });
       }
     }
@@ -1928,6 +1928,9 @@ const requireRunCreateBody = (schemaRef: string): BoundaryValidator => ({
     }
     if (input.model !== undefined && (typeof input.model !== "string" || input.model.length === 0)) {
       return validationFailure({ schemaRef, reason: "invalid_optional_string", prop: "model" });
+    }
+    if (input.run_mode !== undefined && input.run_mode !== "test" && input.run_mode !== "prod") {
+      return validationFailure({ schemaRef, reason: "invalid_run_mode" });
     }
     return { valid: true, value: input };
   },

@@ -249,7 +249,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RunCommandResponse'
+                $ref: '#/components/schemas/RunCreateCommandResponse'
         '403':
           $ref: '#/components/responses/Error'        # SITE_PROFILE_BLOCKED
         '422':
@@ -268,6 +268,12 @@ paths:
           required: false
           schema:
             $ref: '#/components/schemas/RunState'
+        - name: run_mode
+          in: query
+          description: 시험/운영 실행 구분 필터. 생략 시 전체 실행.
+          required: false
+          schema:
+            $ref: '#/components/schemas/RunMode'
         - name: scenario_version_id
           in: query
           required: false
@@ -1446,6 +1452,12 @@ paths:
           schema:
             type: string
             pattern: '^\d{4}-\d{2}$'
+        - name: run_mode
+          in: query
+          required: false
+          description: 성과 집계 모집단. 생략 시 운영 실행(prod)만 집계한다.
+          schema:
+            $ref: '#/components/schemas/AutomationPerformanceRunMode'
       responses:
         '200':
           description: Monthly automation performance report.
@@ -1472,6 +1484,12 @@ paths:
           schema:
             type: string
             pattern: '^\d{4}-\d{2}$'
+        - name: run_mode
+          in: query
+          required: false
+          description: 성과 집계 모집단. 생략 시 운영 실행(prod)만 집계한다.
+          schema:
+            $ref: '#/components/schemas/AutomationPerformanceRunMode'
         - name: format
           in: query
           required: false
@@ -4277,6 +4295,10 @@ components:
         - cancelled
         - failed_business
         - failed_system
+    RunMode:
+      type: string
+      description: 시험/운영 실행 구분. 성과 리포트는 기본 prod만 집계한다.
+      enum: [test, prod]
     RunTriggerStatus:
       type: string
       enum:
@@ -5317,6 +5339,24 @@ components:
           items: { $ref: '#/components/schemas/Run' }
         next_cursor:
           type: [string, "null"]
+    RunListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          $ref: '#/components/schemas/RunState'
+        run_mode:
+          $ref: '#/components/schemas/RunMode'
+        scenario_version_id:
+          type: string
+        scenario_id:
+          type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
     WebAttendedRunRequestStatus:
       type: string
       enum: [requested, run_queued, blocked, cancelled]
@@ -6883,6 +6923,7 @@ components:
         - scenario_id
         - scenario_version_id
         - status
+        - run_mode
         - worker_id
         - attempts
         - as_of
@@ -6893,6 +6934,7 @@ components:
         run_id: { type: string }
         scenario_id: { type: string }
         status: { $ref: '#/components/schemas/RunState' }
+        run_mode: { $ref: '#/components/schemas/RunMode' }
         scenario_version_id: { type: string }
         worker_id: { type: [string, "null"] }
         attempts: { type: integer }
@@ -6928,6 +6970,27 @@ components:
           type: [string, "null"]
           format: date-time
           description: Present on createRun responses; omitted on abort responses.
+        run_mode:
+          $ref: '#/components/schemas/RunMode'
+
+    RunCreateCommandResponse:
+      type: object
+      description: Minimal acknowledgement for run creation. run_mode is required so clients do not hide missing execution-environment classification.
+      additionalProperties: false
+      required: [run_id, status, run_mode]
+      properties:
+        run_id: { type: string }
+        status:
+          type: string
+          enum: [queued]
+        as_of:
+          type: [string, "null"]
+          format: date-time
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        run_mode:
+          $ref: '#/components/schemas/RunMode'
 
     RunTrigger:
       type: object
@@ -7719,6 +7782,11 @@ components:
         reason:
           type: string
 
+    AutomationPerformanceRunMode:
+      type: string
+      description: 성과 리포트 집계 모집단. prod는 운영 실행만, test는 시험 실행만, all은 시험 포함 전체다.
+      enum: [prod, test, all]
+
     AutomationPerformanceCostByStatus:
       type: object
       additionalProperties: false
@@ -8108,6 +8176,7 @@ components:
       additionalProperties: false
       required:
         - month
+        - run_mode
         - timezone
         - period_start
         - period_end
@@ -8121,6 +8190,8 @@ components:
         month:
           type: string
           pattern: '^\d{4}-\d{2}$'
+        run_mode:
+          $ref: '#/components/schemas/AutomationPerformanceRunMode'
         timezone:
           type: string
           enum: [Asia/Seoul]
@@ -8779,6 +8850,8 @@ components:
         model:
           type: string
           description: optional. gateway_policies.model override resolved and frozen on run create.
+        run_mode:
+          $ref: '#/components/schemas/RunMode'
       additionalProperties: false
 
     AbortRequest:

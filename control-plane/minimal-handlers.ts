@@ -30,6 +30,7 @@ export interface MinimalRun {
   scenario_id: string;
   scenario_version_id: string;
   status: RunState;
+  run_mode?: "test" | "prod";
   attempts: number;
   as_of: string;
   workitem_id?: string;
@@ -829,6 +830,7 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       scenario_id: scenarioIdFromVersionId(scenarioVersionId),
       scenario_version_id: scenarioVersionId,
       status: "queued",
+      run_mode: optionalRunMode(body),
       attempts: 0,
       as_of: asOf,
       workitem_id: optionalString(body, "workitem_id"),
@@ -847,11 +849,13 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
 
   async listRuns(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
     const status = optionalQueryString(ctx, "status");
+    const runMode = optionalQueryString(ctx, "run_mode");
     const scenarioVersionId = optionalQueryString(ctx, "scenario_version_id");
     const items = [...this.runs.values()].filter(
       (run) =>
         run.tenant_id === tenant(ctx) &&
         (status === undefined || run.status === status) &&
+        (runMode === undefined || (run.run_mode ?? "prod") === runMode) &&
         (scenarioVersionId === undefined || run.scenario_version_id === scenarioVersionId),
     );
     return page(items);
@@ -3314,6 +3318,13 @@ function requireMetadataStrings(record: Readonly<Record<string, unknown>>, reaso
 function optionalString(record: Readonly<Record<string, unknown>>, keyName: string): string | undefined {
   const value = record[keyName];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalRunMode(record: Readonly<Record<string, unknown>>): "test" | "prod" {
+  const value = record.run_mode;
+  if (value === undefined) return "prod";
+  if (value === "test" || value === "prod") return value;
+  throw new ApiResponseException("IR_SCHEMA_INVALID", { reason: "invalid_run_mode" });
 }
 
 function optionalCatchupPolicy(record: Readonly<Record<string, unknown>>): "skip_missed" | "fire_once" | undefined {

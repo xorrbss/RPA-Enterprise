@@ -384,13 +384,13 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
         getRunSummary: async () => ({ by_status: { failed_system: 1, running: 1 }, success_rate: null, total: 2, cache: { by_mode: {}, hit_rate: null } }),
         listRuns: async (params) => {
           if (params?.status === "failed_system") {
-            return { items: [{ run_id: rawRunId, status: "failed_system", current_node: null, as_of: null, failure_reason: { code: "RAW_SYSTEM_ERROR_CODE", message: "raw error" } }], next_cursor: null };
+            return { items: [{ run_id: rawRunId, status: "failed_system", run_mode: "prod", current_node: null, as_of: null, failure_reason: { code: "RAW_SYSTEM_ERROR_CODE", message: "raw error" } }], next_cursor: null };
           }
           if (params?.status === "running") {
-            return { items: [{ run_id: "run-running-raw-87654321", status: "running", current_node: null, as_of: null, updated_at: null, failure_reason: null }], next_cursor: null };
+            return { items: [{ run_id: "run-running-raw-87654321", status: "running", run_mode: "prod", current_node: null, as_of: null, updated_at: null, failure_reason: null }], next_cursor: null };
           }
           if (params?.status === "failed_business") return { items: [], next_cursor: null };
-          return { items: [{ run_id: rawRunId, status: "failed_system", current_node: null, as_of: null, failure_reason: { code: "RAW_SYSTEM_ERROR_CODE", message: "raw error" } }], next_cursor: null };
+          return { items: [{ run_id: rawRunId, status: "failed_system", run_mode: "prod", current_node: null, as_of: null, failure_reason: { code: "RAW_SYSTEM_ERROR_CODE", message: "raw error" } }], next_cursor: null };
         },
         listHumanTasks: async () => ({
           items: [{ human_task_id: "ht-raw-visible-1", state: "open", kind: "raw_human_kind", assignee: null, timeout: null, on_timeout: "escalate", run_id: null }],
@@ -430,11 +430,11 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
   });
 
   // (c) 딥링크 모집단 정합: 각 카드는 자기 단일 status로 드릴다운(카드 모집단↔RunTrace 시드 모집단 일치).
-  test("업무 실패 카드 → #runTrace?status=failed_business", async () => {
+  test("업무 실패 카드 → #runTrace?status=failed_business&run_mode=prod", async () => {
     renderApp(fakeClient());
     const bizCard = await screen.findByRole("button", { name: /업무 실패/ });
     bizCard.click();
-    await waitFor(() => expect(location.hash).toBe("#runTrace?status=failed_business"));
+    await waitFor(() => expect(location.hash).toBe("#runTrace?status=failed_business&run_mode=prod"));
   });
 
   test("사람 확인 대기 카드와 Top5는 종결 업무를 제외하고 terminal=false로 드릴다운한다", async () => {
@@ -468,14 +468,14 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     renderApp(fakeClient());
     const sysCard = await screen.findByRole("button", { name: /시스템 실패/ });
     sysCard.click();
-    await waitFor(() => expect(location.hash).toBe("#runTrace?status=failed_system"));
+    await waitFor(() => expect(location.hash).toBe("#runTrace?status=failed_system&run_mode=prod"));
   });
 
   test("실행 성공률 카드 → #runTrace?status=completed", async () => {
     renderApp(fakeClient());
     const rateCard = await screen.findByRole("button", { name: /실행 성공률/ });
     rateCard.click();
-    await waitFor(() => expect(location.hash).toBe("#runTrace?status=completed"));
+    await waitFor(() => expect(location.hash).toBe("#runTrace?status=completed&run_mode=prod"));
   });
 
   test("첫 화면에 운영 헬스와 상위 알림을 표시하고 알림으로 이동한다", async () => {
@@ -505,9 +505,9 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
   });
 
   test("월간 자동화 성과 리포트가 ROI, 실패 Top N, CSV/XLSX export를 제공한다", async () => {
-    const csvExportMonths: string[] = [];
-    const pocExportMonths: string[] = [];
-    const xlsxExportMonths: string[] = [];
+    const csvExports: string[] = [];
+    const pocExports: string[] = [];
+    const xlsxExports: string[] = [];
     const createObjectURL = vi.fn(() => "blob:performance-csv");
     const revokeObjectURL = vi.fn();
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
@@ -516,8 +516,9 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
 
     renderApp(
       dashboardClient({
-        getAutomationPerformanceReport: async (month) => ({
+        getAutomationPerformanceReport: async (month, runMode = "prod") => ({
           month: month ?? "2026-06",
+          run_mode: runMode,
           timezone: "Asia/Seoul",
           period_start: "2026-05-31T15:00:00.000Z",
           period_end: "2026-06-30T15:00:00.000Z",
@@ -632,16 +633,16 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
           ],
           trends: [],
         }),
-        exportAutomationPerformanceReportCsv: async (month) => {
-          csvExportMonths.push(month ?? "");
+        exportAutomationPerformanceReportCsv: async (month, runMode = "prod") => {
+          csvExports.push(`${month ?? ""}:${runMode}`);
           return "Summary\nmetric,value\nmonth,2026-06\n";
         },
-        exportAutomationPerformanceReportPocMarkdown: async (month) => {
-          pocExportMonths.push(month ?? "");
+        exportAutomationPerformanceReportPocMarkdown: async (month, runMode = "prod") => {
+          pocExports.push(`${month ?? ""}:${runMode}`);
           return "# Automation Performance PoC Report\n\n## Decision Guide\n";
         },
-        exportAutomationPerformanceReportXlsx: async (month) => {
-          xlsxExportMonths.push(month ?? "");
+        exportAutomationPerformanceReportXlsx: async (month, runMode = "prod") => {
+          xlsxExports.push(`${month ?? ""}:${runMode}`);
           return new Blob([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], {
             type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           });
@@ -656,6 +657,7 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(within(panel).getByText("SITE_SELECTOR_MISSING")).toBeInTheDocument();
     expect(within(panel).getAllByText("gpt-4o-mini").length).toBeGreaterThan(0);
     expect(within(panel).getByRole("img", { name: /ROI 근거 출처 차트/ })).toBeInTheDocument();
+    expect(within(panel).getByText("성과·ROI는 운영 실행만 집계합니다. 시험 실행은 포함하지 않습니다.")).toBeInTheDocument();
     expect(within(panel).getByRole("img", { name: /ROI 단계 구성 차트/ })).toBeInTheDocument();
     expect(within(panel).getByRole("img", { name: /모델 비용 추이 차트/ })).toBeInTheDocument();
     expect(within(panel).getByRole("table", { name: "모델 비용 일별 추이" })).toBeInTheDocument();
@@ -670,7 +672,7 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
 
     fireEvent.click(within(panel).getByRole("button", { name: "CSV" }));
 
-    await waitFor(() => expect(csvExportMonths).toEqual(["2026-06"]));
+    await waitFor(() => expect(csvExports).toEqual(["2026-06:prod"]));
     expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:performance-csv");
@@ -678,7 +680,7 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
 
     fireEvent.click(within(panel).getByRole("button", { name: "PoC 문서" }));
 
-    await waitFor(() => expect(pocExportMonths).toEqual(["2026-06"]));
+    await waitFor(() => expect(pocExports).toEqual(["2026-06:prod"]));
     expect(createObjectURL).toHaveBeenCalledTimes(2);
     expect(click).toHaveBeenCalledTimes(2);
     expect(revokeObjectURL).toHaveBeenCalledTimes(2);
@@ -686,7 +688,7 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
 
     fireEvent.click(within(panel).getByRole("button", { name: "XLSX" }));
 
-    await waitFor(() => expect(xlsxExportMonths).toEqual(["2026-06"]));
+    await waitFor(() => expect(xlsxExports).toEqual(["2026-06:prod"]));
     expect(createObjectURL).toHaveBeenCalledTimes(3);
     expect(click).toHaveBeenCalledTimes(3);
     expect(revokeObjectURL).toHaveBeenCalledTimes(3);

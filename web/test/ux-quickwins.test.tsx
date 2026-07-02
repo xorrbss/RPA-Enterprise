@@ -128,7 +128,7 @@ describe("UX quick-wins (A)", () => {
 
   // A2 — 죽은 대시보드 → 진입점: 4개 카드 각각의 드릴다운 대상 검증(손수 적은 to/hash 오타 가드).
   const NAV_CASES = [
-    { name: /실행 중/, hash: "#runTrace?status=running" }, // 카운트(running)와 모집단 일치 딥링크
+    { name: /실행 중/, hash: "#runTrace?status=running&run_mode=prod" }, // 카운트(running)와 모집단 일치 딥링크
     { name: /사람 확인 대기/, hash: "#humanTasks?terminal=false" },
     { name: /작업 항목 재처리 대기/, hash: "#workitems" },
     { name: /외부 전달 재처리 대기/, hash: "#workitems" },
@@ -144,7 +144,7 @@ describe("UX quick-wins (A)", () => {
   // 회귀(break-it): status 딥링크가 상세 드릴다운/증빙 조회 후에도 보존돼야 한다(hashWith 병합 — 주소창이 필터와 어긋나지 않게).
   test("A2: status 딥링크가 상세·증빙 조회에서 보존(hashWith)", async () => {
     renderApp();
-    location.hash = "#runTrace?status=running";
+    location.hash = "#runTrace?status=running&run_mode=prod";
     (await screen.findByRole("button", { name: "실행 추적 상세 보기" })).click(); // run 추가, status 보존
     await waitFor(() => expect(location.hash).toContain("status=running"));
     expect(location.hash).toContain("run=");
@@ -159,7 +159,7 @@ describe("UX quick-wins (A)", () => {
     expect(location.hash).toContain("run=");
   });
 
-  // A1/A2 일관성: '실행 중' 딥링크(#runTrace?status=running)가 RunTrace 목록 필터를 시드 → 카운트와 목록 모집단 일치.
+  // A1/A2 일관성: '실행 중' 딥링크(#runTrace?status=running&run_mode=prod)가 RunTrace 목록 필터를 시드 → 카운트와 목록 모집단 일치.
   test("A2: '실행 중' 딥링크가 RunTrace 상태 필터를 시드", async () => {
     const calls: Array<Record<string, unknown>> = [];
     renderApp(
@@ -170,7 +170,7 @@ describe("UX quick-wins (A)", () => {
         },
       }),
     );
-    location.hash = "#runTrace?status=running";
+    location.hash = "#runTrace?status=running&run_mode=prod";
     await waitFor(() =>
       expect(calls.some((c) => c.status === "running")).toBe(true),
     );

@@ -91,14 +91,15 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
 
   // 핵심 갭 수정: 자동화 선택 → 실제 실행(createRun) 시작이 이 화면에서 가능.
   test("자동화 선택 → '실행 시작'이 createRun(최신 버전) 디스패치", async () => {
-    const calls: Array<{ sver: string; key: string }> = [];
-    renderApp(withScenario({ createRun: async (body, key) => { calls.push({ sver: body.scenario_version_id, key }); return { run_id: "r1", status: "queued" }; } }));
+    const calls: Array<{ sver: string; key: string; runMode: string | undefined }> = [];
+    renderApp(withScenario({ createRun: async (body, key) => { calls.push({ sver: body.scenario_version_id, key, runMode: body.run_mode }); return { run_id: "r1", status: "queued", run_mode: "test" }; } }));
     location.hash = "#playground";
     fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
     (await screen.findByRole("button", { name: "실행" })).click(); // RunScenarioButton 패널 열기
     (await screen.findByRole("button", { name: "실행 시작" })).click(); // url_ref 키 없음 → 바로 실행
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.sver).toBe("ver-9"); // latest_version_id
+    expect(calls[0]?.runMode).toBe("test");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key
   });
 
@@ -188,7 +189,7 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
 
   // P0-1 "시작 → 관찰 직행": 실행 시작 성공 시 그 run의 산출물 중심 라이브 트레이스로 자동 드릴다운(수동 이동·UUID 복붙 제거).
   test("실행 시작 성공 → #runTrace?run=<생성된 run_id>&focus=artifacts 자동 드릴다운", async () => {
-    renderApp(withScenario({ createRun: async () => ({ run_id: "run-xyz", status: "queued" }) }));
+    renderApp(withScenario({ createRun: async () => ({ run_id: "run-xyz", status: "queued", run_mode: "test" }) }));
     location.hash = "#playground";
     fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
     (await screen.findByRole("button", { name: "실행" })).click();

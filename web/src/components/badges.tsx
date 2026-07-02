@@ -58,6 +58,14 @@ export function StatusBadge({ status, kind }: { status: string; kind?: "circuit"
   return <span className={`badge ${tone(status, kind)}`}>{statusLabel(status, kind)}</span>;
 }
 
+export function runModeLabel(runMode: string | null | undefined): string {
+  return runMode === "test" ? "시험 실행" : "운영 실행";
+}
+
+export function RunModeBadge({ runMode }: { readonly runMode: string | null | undefined }): JSX.Element {
+  return <span className={`badge ${runMode === "test" ? "amber" : "blue"}`}>{runModeLabel(runMode)}</span>;
+}
+
 // 동작(IR action verb) → 비기술 한국어. 출처: ts/core-types IRActionType(닫힌 enum). 미매핑은 raw 폴백(조용한 공백 금지).
 const ACTION_LABELS: Record<string, string> = {
   act: "화면 조작", observe: "화면 확인", extract: "데이터 추출", navigate: "페이지 이동",

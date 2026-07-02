@@ -1456,7 +1456,7 @@ describe("실행 취소 즉시 피드백", () => {
     renderApp(
       fakeClient({
         listRuns: async () => ({
-          items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000077", status: "running", current_node: null, as_of: null }],
+          items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000077", status: "running", run_mode: "prod", current_node: null, as_of: null }],
           next_cursor: null,
         }),
         abortRun: async () => ({ run_id: "11111111-aaaa-bbbb-cccc-000000000077", status: "cancelled" }),

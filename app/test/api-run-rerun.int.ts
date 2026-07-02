@@ -98,13 +98,16 @@ async function auditReasonCount(pool: ReturnType<typeof createPool>, reason: str
   });
 }
 
-async function rerunRows(pool: ReturnType<typeof createPool>): Promise<Array<{ source_run_id: string; child_run_id: string; mode: string; params: unknown }>> {
+async function rerunRows(
+  pool: ReturnType<typeof createPool>,
+): Promise<Array<{ source_run_id: string; child_run_id: string; child_run_mode: string; mode: string; params: unknown }>> {
   return withTenantTx(pool, TENANT_A, async (client) => {
-    const rows = await client.query<{ source_run_id: string; child_run_id: string; mode: string; params: unknown }>(
-      `SELECT source_run_id::text, child_run_id::text, mode, params
-         FROM run_reruns
-        WHERE tenant_id = $1::uuid
-        ORDER BY created_at ASC`,
+    const rows = await client.query<{ source_run_id: string; child_run_id: string; child_run_mode: string; mode: string; params: unknown }>(
+      `SELECT rr.source_run_id::text, rr.child_run_id::text, child.run_mode AS child_run_mode, rr.mode, rr.params
+         FROM run_reruns rr
+         JOIN runs child ON child.tenant_id = rr.tenant_id AND child.id = rr.child_run_id
+        WHERE rr.tenant_id = $1::uuid
+        ORDER BY rr.created_at ASC`,
       [TENANT_A],
     );
     return rows.rows;
@@ -146,10 +149,10 @@ async function main(): Promise<void> {
     await seedTenant(pool, TENANT_B, SCENARIO_B, SVER_B);
     await withTenantTx(pool, TENANT_A, async (client) => {
       await client.query(
-        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, params, as_of, model, correlation_id, failure_reason)
+        `INSERT INTO runs (id, tenant_id, scenario_version_id, status, run_mode, params, as_of, model, correlation_id, failure_reason)
          VALUES
-           ($1::uuid, $2::uuid, $3::uuid, 'failed_system', '{"invoice_id":"A-1"}'::jsonb, '2026-06-25T01:02:03Z', 'gpt-4o-mini', $4::uuid, '{"code":"RUN_LOOP_FAILED","message":"navigation failed"}'::jsonb),
-           ($5::uuid, $2::uuid, $3::uuid, 'running', '{"invoice_id":"A-2"}'::jsonb, '2026-06-25T01:02:03Z', 'gpt-4o-mini', $6::uuid, NULL)`,
+           ($1::uuid, $2::uuid, $3::uuid, 'failed_system', 'test', '{"invoice_id":"A-1"}'::jsonb, '2026-06-25T01:02:03Z', 'gpt-4o-mini', $4::uuid, '{"code":"RUN_LOOP_FAILED","message":"navigation failed"}'::jsonb),
+           ($5::uuid, $2::uuid, $3::uuid, 'running', 'prod', '{"invoice_id":"A-2"}'::jsonb, '2026-06-25T01:02:03Z', 'gpt-4o-mini', $6::uuid, NULL)`,
         [RUN_FAILED, TENANT_A, SVER_A, CORR_A, RUN_RUNNING, CORR_B],
       );
     });
@@ -174,16 +177,17 @@ async function main(): Promise<void> {
       });
 
     const same = await postRerun(operator, RUN_FAILED, "rerun-same", { mode: "same_input", reason: "retry after outage" });
-    check("same-input rerun -> 201", same.statusCode === 201 && same.json().status === "queued", same.body);
+    check("same-input rerun -> 201", same.statusCode === 201 && same.json().status === "queued" && same.json().run_mode === "test", same.body);
     const sameChild = same.json().run_id;
     const sameRows = await rerunRows(pool);
     check("same-input rerun row links source and child", sameRows.length === 1 && sameRows[0]?.source_run_id === RUN_FAILED && sameRows[0]?.child_run_id === sameChild, JSON.stringify(sameRows));
+    check("same-input child preserves test run_mode", sameRows[0]?.child_run_mode === "test", JSON.stringify(sameRows[0]));
     check("same-input preserves source params", JSON.stringify(sameRows[0]?.params) === JSON.stringify({ invoice_id: "A-1" }), JSON.stringify(sameRows[0]?.params));
     check("same-input audit appended", (await auditReasonCount(pool, "run_rerun_created")) === 1);
     check("same-input child enqueued", enqueued.some((item) => item.runId === sameChild), JSON.stringify(enqueued));
 
     const replay = await postRerun(operator, RUN_FAILED, "rerun-same", { mode: "same_input", reason: "retry after outage" });
-    check("same idempotency key replays original child", replay.statusCode === 201 && replay.json().run_id === sameChild, replay.body);
+    check("same idempotency key replays original child", replay.statusCode === 201 && replay.json().run_id === sameChild && replay.json().run_mode === "test", replay.body);
     check("idempotency replay does not add rerun row", (await rerunRows(pool)).length === 1);
 
     const edited = await postRerun(operator, RUN_FAILED, "rerun-edited", {
@@ -191,7 +195,7 @@ async function main(): Promise<void> {
       params: { invoice_id: "A-9", as_of: "2026-06-26T00:00:00Z" },
       reason: "operator corrected invoice",
     });
-    check("edited-input rerun -> 201", edited.statusCode === 201 && edited.json().mode === "edited_input", edited.body);
+    check("edited-input rerun -> 201", edited.statusCode === 201 && edited.json().mode === "edited_input" && edited.json().run_mode === "test", edited.body);
     const rowsAfterEdited = await rerunRows(pool);
     const editedParams = rowsAfterEdited[1]?.params as { invoice_id?: unknown; as_of?: unknown } | undefined;
     check(
@@ -201,6 +205,7 @@ async function main(): Promise<void> {
         editedParams.as_of === "2026-06-26T00:00:00Z",
       JSON.stringify(rowsAfterEdited),
     );
+    check("edited-input child preserves test run_mode", rowsAfterEdited[1]?.child_run_mode === "test", JSON.stringify(rowsAfterEdited[1]));
 
     const badMode = await postRerun(operator, RUN_FAILED, "rerun-bad-mode", { mode: "same_input", params: {} });
     check("same_input with params -> 422", badMode.statusCode === 422 && badMode.json().details?.reason === "same_input_params_not_allowed", badMode.body);

@@ -231,7 +231,7 @@ describe("로그인 세션 등록 안내/진입", () => {
     const RUN_ID = "11111111-aaaa-bbbb-cccc-000000000099";
     renderApp(
       fakeClient({
-        getRun: async (id) => ({ run_id: id, status: "failed_system", worker_id: "w1", attempts: 0, as_of: null, failure_reason: null }),
+        getRun: async (id) => ({ run_id: id, status: "failed_system", run_mode: "prod", worker_id: "w1", attempts: 0, as_of: null, failure_reason: null }),
         listRunSteps: async () => ({
           items: [
             {

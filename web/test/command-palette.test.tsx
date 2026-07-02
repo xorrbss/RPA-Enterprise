@@ -227,7 +227,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
       "run-pal",
       fakeClient({
         listRuns: async () => ({
-          items: [{ run_id: "run-pal-1", status: "failed_system", current_node: null, as_of: "2026-06-25T00:00:00.000Z" }],
+          items: [{ run_id: "run-pal-1", status: "failed_system", run_mode: "prod", current_node: null, as_of: "2026-06-25T00:00:00.000Z" }],
           next_cursor: null,
         }),
       }),

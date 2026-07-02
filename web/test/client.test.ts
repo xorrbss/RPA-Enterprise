@@ -564,6 +564,7 @@ describe("HttpApiClient 계약", () => {
     const jsonHarness = harness({
       body: {
         month: "2026-06",
+        run_mode: "prod",
         timezone: "Asia/Seoul",
         period_start: "2026-05-31T15:00:00.000Z",
         period_end: "2026-06-30T15:00:00.000Z",
@@ -647,13 +648,13 @@ describe("HttpApiClient 계약", () => {
     expect(report.summary.total_runs).toBe(1);
     expect(report.summary.roi_source_lineage.source_counts.process_mining).toBe(1);
     expect(report.model_cost_trends[0]?.model).toBe("gpt-4o-mini");
-    expect(jsonHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance?month=2026-06");
+    expect(jsonHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance?month=2026-06&run_mode=prod");
     expect(jsonHarness.calls[0]?.headers.get("accept")).toBe("application/json");
 
     const csvHarness = harness({ body: "Summary\nmetric,value\n", headers: { "content-type": "text/csv" } });
     const csv = await csvHarness.client.exportAutomationPerformanceReportCsv("2026-06");
     expect(csv).toContain("Summary");
-    expect(csvHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&format=csv");
+    expect(csvHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&run_mode=prod&format=csv");
     expect(csvHarness.calls[0]?.headers.get("accept")).toBe("text/csv");
 
     const xlsxHarness = harness({
@@ -662,13 +663,13 @@ describe("HttpApiClient 계약", () => {
     });
     const xlsx = await xlsxHarness.client.exportAutomationPerformanceReportXlsx?.("2026-06");
     expect(xlsx).toBeInstanceOf(Blob);
-    expect(xlsxHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&format=xlsx");
+    expect(xlsxHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&run_mode=prod&format=xlsx");
     expect(xlsxHarness.calls[0]?.headers.get("accept")).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 
     const pocHarness = harness({ body: "# Automation Performance PoC Report\n", headers: { "content-type": "text/markdown" } });
     const poc = await pocHarness.client.exportAutomationPerformanceReportPocMarkdown?.("2026-06");
     expect(poc).toContain("PoC Report");
-    expect(pocHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&format=poc_markdown");
+    expect(pocHarness.calls[0]?.url).toBe("http://api.test/v1/reports/automation-performance/export?month=2026-06&run_mode=prod&format=poc_markdown");
     expect(pocHarness.calls[0]?.headers.get("accept")).toBe("text/markdown");
   });
 
@@ -1224,7 +1225,7 @@ describe("HttpApiClient 계약", () => {
   });
 
   test("detail GET-by-id 경로", async () => {
-    const { calls, client } = harness({ body: { run_id: "r1", status: "running", worker_id: null, attempts: 1, as_of: null } });
+    const { calls, client } = harness({ body: { run_id: "r1", status: "running", run_mode: "prod", worker_id: null, attempts: 1, as_of: null } });
     await client.getRun("r1");
     expect(calls[0]?.method).toBe("GET");
     expect(calls[0]?.url).toBe("http://api.test/v1/runs/r1");
