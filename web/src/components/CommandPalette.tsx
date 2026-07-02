@@ -7,6 +7,8 @@ import { navigate, type ViewKey } from "../router";
 import { getVisibleViews, type NavMode, type NavPolicyFlags } from "../navPolicy";
 import { VIEW_META } from "../views/meta";
 import type { ConcurrencyPolicy, GlobalSearchItem, HumanTaskItem, RunItem, ScenarioItem } from "../api/types";
+import { statusLabel } from "./badges";
+import { formatShortDateTime } from "../util/time";
 
 const LOOKUP_LIMIT = 50;
 const SEARCH_STALE_MS = 30_000;
@@ -281,7 +283,7 @@ export function CommandPalette({
               id: `run:${r.run_id}`,
               group: "실행",
               label: runLabel(r),
-              hint: `${r.status}${r.as_of !== null ? ` · ${r.as_of.slice(0, 10)}` : ""}`,
+              hint: `${statusLabel(r.status)}${r.as_of !== null ? ` · ${formatShortDateTime(r.as_of)}` : ""}`,
               run: () => {
                 navigate("runTrace", { run: r.run_id });
                 onClose();

@@ -20,6 +20,7 @@ import {
 import { useListView } from "../api/useListView";
 import { mergeParams, navigate, useHashIdParam } from "../router";
 import { EmptyState, ErrorState, Loading, desktopStateForError } from "../components/states";
+import { formatDateTime } from "../util/time";
 
 type FieldPreset = "invoice" | "contract";
 type PickerPage<T> = { readonly items: readonly T[]; readonly truncated: boolean };
@@ -1081,8 +1082,4 @@ function artifactPickerHint(runId: string, loading: boolean, failed: boolean, co
   if (count === 0) return "redacted 처리된 JSON, CSV, 텍스트 산출물이 있는 실행을 선택하세요.";
   if (truncated) return "문서 후보 1000건 기준입니다. 필요한 산출물이 없으면 실행 기록에서 직접 열어 확인하세요.";
   return "redacted 처리된 JSON, CSV, 텍스트 산출물만 표시합니다.";
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }

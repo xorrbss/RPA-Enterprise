@@ -13,6 +13,7 @@ import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, kindLabel, statusLabel } from "../components/badges";
 import { ErrorState, Loading, desktopStateForError } from "../components/states";
 import { mergeParams, navigate, useHashIdParam, useHashParam } from "../router";
+import { formatDeadline } from "../util/time";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
 import { ApprovalInboxView } from "./ApprovalInbox";
 import type { HumanTaskItem } from "../api/types";
@@ -55,6 +56,13 @@ function timeoutActionLabel(value: string | null): string {
     default:
       return "처리 정책 확인 필요";
   }
+}
+
+function DeadlineText({ value }: { value: string | null | undefined }): JSX.Element {
+  const deadline = formatDeadline(value);
+  if (deadline.text === "-") return <span className="subtle">-</span>;
+  if (deadline.overdue) return <span className="badge red" title={value ?? undefined}>{deadline.text}</span>;
+  return <span title={value ?? undefined}>{deadline.text}</span>;
 }
 
 function hasBusinessForm(task: HumanTaskItem): boolean {
@@ -395,7 +403,7 @@ function HumanTaskStreamView(): JSX.Element {
           { header: "종류", render: (r) => kindLabel(r.kind) },
           { header: "상태", render: (r) => <StatusBadge status={r.state} /> },
           { header: "담당자", render: (r) => <span title={principalLabel(r.assignee, principalOptions)}>{principalLabel(r.assignee, principalOptions)}</span> },
-          { header: "마감", render: (r) => r.timeout ?? "—" },
+          { header: "마감", render: (r) => <DeadlineText value={r.timeout} /> },
           {
             header: "검토 필요사항",
             render: (r) => (
@@ -463,7 +471,7 @@ function HumanTaskDetailPanel({
               <span title={principalLabel(detail.data.assignee, principalOptions)}>{principalLabel(detail.data.assignee, principalOptions)}</span>
             </dd>
             <dt className="subtle">마감</dt>
-            <dd style={{ margin: 0 }}>{detail.data.timeout ?? "—"}</dd>
+            <dd style={{ margin: 0 }}><DeadlineText value={detail.data.timeout} /></dd>
             <dt className="subtle">만료 시 처리</dt>
             <dd style={{ margin: 0 }}>
               <span title={timeoutActionLabel(detail.data.on_timeout)}>{timeoutActionLabel(detail.data.on_timeout)}</span>

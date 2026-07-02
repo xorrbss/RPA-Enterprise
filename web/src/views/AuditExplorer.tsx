@@ -6,6 +6,7 @@ import { ROLE_LABELS, useCan } from "../api/permissions";
 import type { AuditLogExportParams, AuditOutcome, AuditVerificationRun } from "../api/types";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, useHashParam } from "../router";
+import { formatShortDateTime } from "../util/time";
 
 const OUTCOME_LABEL: Record<AuditOutcome, string> = {
   allow: "허용",
@@ -77,15 +78,7 @@ function hashStateLabel(value: string | null): string {
 }
 
 function dateLabel(value: string | null): string {
-  if (value === null) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return formatShortDateTime(value);
 }
 
 function outcomeFromHash(value: string | null): "all" | AuditOutcome {

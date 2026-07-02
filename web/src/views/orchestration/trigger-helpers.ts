@@ -3,7 +3,7 @@ import type { ApiClient } from "../../api/client";
 import type { OpsAlertSeverity, OpsAlertSource, RunTriggerItem, ScenarioItem } from "../../api/types";
 import { formatDateTime } from "./format";
 
-export type Cadence = "daily" | "weekly" | "monthly";
+export type Cadence = "daily" | "weekdays" | "weekly_0" | "weekly_1" | "weekly_2" | "weekly_3" | "weekly_4" | "weekly_5" | "weekly_6" | "monthly";
 export type TriggerMode = "cron" | "webhook";
 export type AlertSeverityFilter = OpsAlertSeverity | "all";
 export type AlertSourceFilter = OpsAlertSource | "all";
@@ -35,7 +35,8 @@ export function idempotencyKey(prefix: string): string {
 
 export function cronFrom(cadence: Cadence, time: string): string {
   const [hour = "9", minute = "0"] = time.split(":");
-  if (cadence === "weekly") return `${Number(minute)} ${Number(hour)} * * 1`;
+  if (cadence === "weekdays") return `${Number(minute)} ${Number(hour)} * * 1-5`;
+  if (cadence.startsWith("weekly_")) return `${Number(minute)} ${Number(hour)} * * ${cadence.slice("weekly_".length)}`;
   if (cadence === "monthly") return `${Number(minute)} ${Number(hour)} 1 * *`;
   return `${Number(minute)} ${Number(hour)} * * *`;
 }

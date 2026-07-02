@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { OpsAlertItem, OpsNotificationAttempt, OpsNotificationDelivery } from "../../api/types";
+import { statusLabel as commonStatusLabel } from "../../components/badges";
 import { formatDateTime } from "./format";
 import type { AlertSeverityFilter, AlertSourceFilter } from "./trigger-helpers";
 
@@ -67,6 +68,7 @@ export function OpsAlertCenter({
   onSendWebhook: (alert: OpsAlertItem, draft: OpsWebhookSendDraft) => void;
 }): JSX.Element {
   const [webhookFormAlertId, setWebhookFormAlertId] = useState<string | null>(null);
+  const alertGroups = groupOpsAlerts(alerts);
 
   return (
     <div className="ops-column ops-alert-center">
@@ -113,16 +115,19 @@ export function OpsAlertCenter({
       ) : (
         <>
         <ul className="ops-alert-list">
-          {alerts.map((alert) => (
+          {alertGroups.map((group) => {
+            const { representative: alert } = group;
+            return (
             <li key={alert.alert_id}>
               <div className="ops-alert-main">
                 <div className="ops-alert-badges">
                   <span className={`badge ${alertSeverityTone(alert.severity)}`}>{alertSeverityLabel(alert.severity)}</span>
                   <span className="subtle">{opsAlertSourceLabel(alert.source)}</span>
+                  {group.count > 1 && <span className="badge muted">외 {group.count - 1}건</span>}
                 </div>
                 <strong>{alert.title}</strong>
-                <span className="subtle">{alert.detail}</span>
-                <span className="ops-alert-action">권장 조치: {alert.recommended_action}</span>
+                <span className="subtle">{localizeStatusText(alert.detail)}</span>
+                <span className="ops-alert-action">권장 조치: {localizeStatusText(alert.recommended_action)}</span>
                 <span className="subtle">{opsAlertTiming(alert)}</span>
               </div>
               <div className="inline-actions">
@@ -171,7 +176,8 @@ export function OpsAlertCenter({
                 />
               )}
             </li>
-          ))}
+            );
+          })}
         </ul>
         {nextCursor !== null && (
           <div className="inline-actions">
@@ -256,7 +262,7 @@ function WebhookSendPanel({
     <form className="ops-webhook-form" onSubmit={submit}>
       <div className="ops-delivery-panel-head">
         <strong>웹훅 발송 큐</strong>
-        {queuedAttempt !== null && <span className={`badge ${attemptStatusTone(queuedAttempt.status)}`}>{queuedAttempt.status}</span>}
+        {queuedAttempt !== null && <span className={`badge ${attemptStatusTone(queuedAttempt.status)}`}>{notificationStatusLabel(queuedAttempt.status)}</span>}
       </div>
       <div className="form-grid ops-webhook-grid">
         <label className="field">
@@ -383,7 +389,7 @@ function DeliveryReceiptPanel({
         {receipts.map((receipt) => (
           <li key={receipt.delivery_id}>
             <div className="ops-alert-badges">
-              <span className={`badge ${deliveryStatusTone(receipt.status)}`}>{receipt.status}</span>
+              <span className={`badge ${deliveryStatusTone(receipt.status)}`}>{notificationStatusLabel(receipt.status)}</span>
               <span className="subtle">{receipt.channel} / {receipt.provider_alias}</span>
             </div>
             <span className="subtle">{formatDateTime(receipt.receipt_at)} · attempt {receipt.attempt_no}</span>
@@ -417,6 +423,44 @@ function isDnsHost(host: string): boolean {
 
 function isSecretRef(value: string): boolean {
   return value.startsWith("secret://") && value.length > "secret://".length;
+}
+
+interface OpsAlertGroup {
+  readonly representative: OpsAlertItem;
+  readonly count: number;
+}
+
+function groupOpsAlerts(alerts: readonly OpsAlertItem[]): OpsAlertGroup[] {
+  const groups = new Map<string, { representative: OpsAlertItem; count: number }>();
+  alerts.forEach((alert) => {
+    const key = `${alert.subject_type}:${alert.source}`;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, { representative: alert, count: 1 });
+      return;
+    }
+    existing.count += 1;
+  });
+  return [...groups.values()];
+}
+
+function localizeStatusText(value: string): string {
+  return value.replace(
+    /\b(queued|claimed|running|suspending|suspended|resume_requested|resuming|completed|cancelled|failed_business|failed_system|pending|sending|sent|delivered|failed|dead_letter|open|acknowledged)\b/g,
+    (status) => commonStatusLabel(status),
+  );
+}
+
+function notificationStatusLabel(status: OpsNotificationAttempt["status"] | OpsNotificationDelivery["status"]): string {
+  switch (status) {
+    case "pending": return "발송 대기";
+    case "sending": return "발송 중";
+    case "sent": return "발송됨";
+    case "delivered": return "전달됨";
+    case "failed": return "실패";
+    case "dead_letter": return "실패 보관";
+    default: return commonStatusLabel(status);
+  }
 }
 
 function attemptStatusTone(status: OpsNotificationAttempt["status"]): "green" | "amber" | "red" | "blue" {

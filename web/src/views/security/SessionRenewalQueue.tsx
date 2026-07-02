@@ -1,5 +1,6 @@
 import { ActionButton } from "../../components/ActionButton";
 import type { SiteItem } from "../../api/types";
+import { formatDateTime } from "../../util/time";
 
 type SessionRenewalStatus = "missing" | "expiring" | "expired";
 
@@ -95,14 +96,4 @@ function sessionRenewalRank(status: SessionRenewalStatus): number {
 
 function siteLabel(site: SiteItem): string {
   return site.name ?? site.url_pattern ?? site.site_profile_id;
-}
-
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("ko-KR", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "Asia/Seoul",
-  }).format(date);
 }

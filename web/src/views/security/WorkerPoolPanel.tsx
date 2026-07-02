@@ -6,6 +6,7 @@ import { useCan } from "../../api/permissions";
 import type { WorkerPoolItem, WorkerPoolList, WorkerPoolPriority, WorkerPoolStatus } from "../../api/types";
 import { ActionButton } from "../../components/ActionButton";
 import { errorLabel } from "../../components/badges";
+import { formatShortDateTime } from "../../util/time";
 
 const PRIORITIES: readonly { value: WorkerPoolPriority; label: string }[] = [
   { value: "low", label: "낮음" },
@@ -98,7 +99,7 @@ export function WorkerPoolPanel(): JSX.Element | null {
                   <td>
                     <code className="subtle">{p.pool_key}</code>
                     {assigned_pool_key === p.pool_key && <span className="badge green" style={{ marginLeft: 6 }}>배정됨</span>}
-                    <div className="subtle" style={{ fontSize: 11 }}>수정: {p.updated_by ?? "-"} · {dateShort(p.updated_at)}</div>
+                    <div className="subtle" style={{ fontSize: 11 }}>수정: {p.updated_by ?? "-"} · {formatShortDateTime(p.updated_at)}</div>
                   </td>
                   <td><span className={`badge ${statusTone(p.status)}`}>{statusLabel(p.status)}</span></td>
                   <td>{p.max_concurrency}</td>
@@ -383,10 +384,4 @@ function formatQueuedAge(ms: number): string {
   const minutes = Math.floor(ms / 60000);
   if (minutes < 1) return "<1분";
   return `${minutes}분`;
-}
-
-function dateShort(value: string | null | undefined): string {
-  if (value == null) return "-";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toISOString().slice(0, 16).replace("T", " ");
 }

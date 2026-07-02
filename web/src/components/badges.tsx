@@ -38,6 +38,8 @@ const STATUS_LABELS: Record<string, string> = {
   green: "낮음", amber: "중간", red: "높음",
   // 사이트 승인(approval_status)
   pending: "검토 대기", approved: "승인됨", rejected: "거부됨",
+  // 운영 알림 전달 상태
+  sending: "발송 중", sent: "발송됨", delivered: "전달됨", failed: "실패", dead_letter: "실패 보관",
   // 서킷(circuit_status: closed/open/half_open — open은 위 '열림' 공유)
   closed: "정상", half_open: "점검 중",
 };
