@@ -37,7 +37,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
 }
 
 .app { display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: 100vh; }
-.sidebar { background: var(--surface); border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; }
+.sidebar { background: var(--surface); border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; max-height: 100vh; overflow-y: auto; }
 .brand { font-weight: 700; font-size: 15px; padding: 8px 10px 14px; display: flex; align-items: center; gap: 8px; }
 .nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; background: transparent; color: var(--muted); border-radius: var(--radius); cursor: pointer; font-size: 13px; text-align: left; }
 .nav-item:hover { background: var(--soft); color: var(--text); }
@@ -140,7 +140,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--line); }
-th { color: var(--muted); font-weight: 600; font-size: 12px; }
+/* keep-all: 한글 헤더가 좁은 빈 테이블에서 글자 단위 세로 꺾임 되는 것을 방지(어절 단위로만 줄바꿈). */
+th { color: var(--muted); font-weight: 600; font-size: 12px; word-break: keep-all; }
 tbody tr:hover { background: var(--surface-2); }
 
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }

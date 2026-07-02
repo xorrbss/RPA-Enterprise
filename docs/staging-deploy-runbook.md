@@ -21,7 +21,7 @@ API만 띄워 초안 저장을 검증할 때도 아래 값은 fail-closed로 필
 | 모드 | `RUN_MODE=api` 또는 `RUN_MODE=all` |
 | 환경 이름 | `RPA_ENV=staging` |
 | DB | `DATABASE_URL` 또는 `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` |
-| Auth | `JWKS_URL` plus optional `JWT_ISSUER`, `JWT_AUDIENCE`, 또는 v1 `JWT_HS256_SECRET` |
+| Auth | `JWKS_URL` plus optional `JWT_ISSUER`, `JWT_AUDIENCE`, 또는 v1 `JWT_HS256_SECRET`(≥32자). HS256 모드의 최초 접속 토큰 발급은 아래 ‘최초 접속 토큰 발급’ 절 참고 |
 | signed command registry | `SIGNED_COMMAND_REGISTRY_MODE=deny_all` 또는 `vault` plus `VAULT_ADDR`, `VAULT_MOUNT`, `VAULT_API_ROLE_ID`, `VAULT_API_SECRET_ID`, optional `SIGNED_COMMAND_REGISTRY_REF` |
 | artifact read store | FS: optional `API_ARTIFACT_DIR` 또는 shared `GATEWAY_ARTIFACT_DIR`; S3: `ARTIFACT_OBJECT_STORE_KIND=s3`, `ARTIFACT_OBJECT_STORE_REF`, `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, optional `S3_FORCE_PATH_STYLE`, plus `VAULT_API_ROLE_ID`, `VAULT_API_SECRET_ID` |
 
@@ -113,6 +113,29 @@ $env:VISUAL_EVIDENCE_VIDEO_FRAME_INTERVAL_MS="1000" # optional
 $env:VISUAL_EVIDENCE_VIDEO_FPS="1"                  # optional
 ```
 
+### 최초 접속 토큰 발급 (파일럿, IdP 연동 전)
+
+IdP(SSO)를 연동하기 전 파일럿 단계에서는 콘솔 접속 화면의 '접속 코드'로 쓸 JWT를 직접 발급한다. `JWT_HS256_SECRET`(공통 배포 env, HS256 모드)와 동일한 시크릿으로 서명한 토큰만 서버가 검증하므로, 아래 발급기는 그 시크릿을 사용한다. 이 절차는 `JWKS_URL`(RS256/JWKS 운영 모드)로 전환하면 더 이상 필요 없다 — IdP가 토큰을 발급한다.
+
+발급기(`scripts/mint-operator-token.mjs`)는 의존성이 없어 `npm install --prefix app` 없이 실행된다.
+
+```powershell
+$env:JWT_HS256_SECRET = "<서버 기동에 쓰는 것과 동일한 32자 이상 시크릿>"
+node scripts/mint-operator-token.mjs --tenant <tenant-uuid> --sub <접속 주체 식별자> --roles admin
+```
+
+| 클레임 | 의미 | 규칙 |
+|---|---|---|
+| `--tenant` | 테넌트 ID(RLS/인가 경계) | UUID 필수 |
+| `--sub` | 접속 주체(감사 로그 귀속) | 비어 있지 않은 문자열 필수 |
+| `--roles` | 역할 CSV(기본 `admin`) | `viewer,operator,reviewer,approver,admin` 중 |
+| `--expires` | 만료 기간(기본 `12h`) | `<N>s\|m\|h\|d` 또는 초 |
+
+- 발급된 토큰은 stdout 1줄로만 출력된다(복사·파이프용). 진단은 stderr로 나가고 시크릿은 출력하지 않는다.
+- 시크릿 미설정/32자 미만, 무효 tenant/role은 fail-closed(비-0 종료, 토큰 미발급)로 거부된다.
+- 콘솔 접속: 접속 화면의 '접속 코드' 입력란에 stdout 토큰을 붙여넣는다.
+- 만료되면 같은 명령으로 재발급한다(`--expires`로 기간 조정). 토큰은 접속 자격증명이므로 로그/PR/스크린샷에 남기지 않는다.
+
 ### 5. Operator verification
 
 정적/단위 확인:
@@ -136,6 +159,8 @@ npm --prefix app run smoke:video-recorder
 ```
 
 운영 smoke는 토큰과 UUID를 redacted packet에만 기록한다.
+
+`<operator-token>`은 위 ‘최초 접속 토큰 발급’ 절에서 만든 토큰(또는 IdP 발급 토큰)이다.
 
 ```powershell
 $headers = @{

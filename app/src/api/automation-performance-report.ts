@@ -312,7 +312,8 @@ export function registerAutomationPerformanceReportRoutes(app: FastifyInstance, 
       .code(200)
       .header("content-type", "text/csv; charset=utf-8")
       .header("content-disposition", `attachment; filename="automation-performance-${period.month}.csv"`)
-      .send(reportToCsv(report));
+      // BOM 없으면 Windows Excel 이 CP949 로 열어 한글 자동화 이름이 깨진다.
+      .send(`\uFEFF${reportToCsv(report)}`);
   });
 }
 

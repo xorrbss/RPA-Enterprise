@@ -436,6 +436,17 @@ async function main(): Promise<void> {
       const bySver = await get(`/v1/runs?scenario_version_id=${SVER_A2}`);
       check("filter scenario_version_id → 2", bySver.json().items.length === 2, JSON.stringify(bySver.json().items.length));
 
+      // 4b) 실행 식별성(S1): scenarios JOIN 투영 + scenario_id 필터(전 버전 관통 — 버전 승격 후에도 기록 연속).
+      check(
+        "listRuns projects scenario identity (scenario_id/scenario_name)",
+        allBody.items[0].scenario_id === SCEN_A && allBody.items[0].scenario_name === "reads",
+        JSON.stringify(allBody.items[0]),
+      );
+      const byScen = await get(`/v1/runs?scenario_id=${SCEN_A}`);
+      check("filter scenario_id spans all versions → 5", byScen.json().items.length === 5, JSON.stringify(byScen.json().items.length));
+      const badScen = await get("/v1/runs?scenario_id=not-a-uuid");
+      check("invalid scenario_id → 422", badScen.statusCode === 422 && badScen.json().code === "IR_SCHEMA_INVALID", badScen.body);
+
       // 5) 무효 필터/페이지 파라미터 → 422.
       const badStatus = await get("/v1/runs?status=bogus");
       check("invalid status → 422", badStatus.statusCode === 422 && badStatus.json().code === "IR_SCHEMA_INVALID", badStatus.body);

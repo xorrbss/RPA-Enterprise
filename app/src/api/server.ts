@@ -80,10 +80,12 @@ interface RunRow {
   status: string;
   priority: string;
   scenario_id: string;
+  scenario_name: string;
   scenario_version_id: string;
   worker_id: string | null;
   attempts: number;
   as_of: Date | null;
+  params: Record<string, unknown> | null;
   failure_reason: unknown;
   updated_at: Date;
 }
@@ -199,9 +201,11 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     }
     const run = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const result = await client.query<RunRow>(
-        `SELECT r.id, r.status, r.priority, sv.scenario_id, r.scenario_version_id, r.worker_id, r.attempts, r.as_of, r.failure_reason, r.updated_at
+        `SELECT r.id, r.status, r.priority, sv.scenario_id, s.name AS scenario_name, r.scenario_version_id,
+                r.worker_id, r.attempts, r.as_of, r.params, r.failure_reason, r.updated_at
            FROM runs r
            JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
+           JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
           WHERE r.id = $1::uuid`,
         [runId],
       );
@@ -216,10 +220,14 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       status: run.status,
       priority: run.priority,
       scenario_id: run.scenario_id,
+      scenario_name: run.scenario_name,
       scenario_version_id: run.scenario_version_id,
       worker_id: run.worker_id,
       attempts: run.attempts,
       as_of: run.as_of !== null ? run.as_of.toISOString() : null,
+      // 실행 원본 파라미터(params_schema 검증 완료 값) — '수정 입력 재실행' 프리필용. SecretRef 규율상
+      // 비밀값은 params 에 평문으로 오지 않는다(SecretStore 경계).
+      params: run.params,
       failure_reason: normalizeFailureReason(run.failure_reason),
       current_node: null,
       updated_at: run.updated_at.toISOString(),

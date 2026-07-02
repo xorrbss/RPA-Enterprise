@@ -24,8 +24,8 @@ import { requirePrincipal, type ApiServerDeps } from "./server";
 import { UUID_RE } from "./server-shared";
 import { verifyWebhookSignature, webhookSigningPayload } from "./webhook-trigger-auth";
 
-type OpsAlertSeverity = "critical" | "warning" | "info";
-type OpsAlertSource =
+export type OpsAlertSeverity = "critical" | "warning" | "info";
+export type OpsAlertSource =
   | "run_sla"
   | "human_task_sla"
   | "trigger_fire"
@@ -86,7 +86,7 @@ interface OpsAlertItem {
   readonly due_at?: string | null;
 }
 
-type ComputedOpsAlert = Omit<OpsAlertItem, "status" | "delivery" | "ack">;
+export type ComputedOpsAlert = Omit<OpsAlertItem, "status" | "delivery" | "ack">;
 
 export interface OpsNotificationDelivery {
   readonly delivery_id: string;
@@ -214,7 +214,7 @@ interface OpsNotificationAttemptRow {
   readonly legal_hold: boolean;
 }
 
-interface OpsNotificationWebhookSendInput {
+export interface OpsNotificationWebhookSendInput {
   readonly providerAlias: string;
   readonly endpointSecretRef: string;
   readonly callbackSignatureSecretRef: string | null;
@@ -529,7 +529,7 @@ async function readOpsAlerts(
   return hydrateAlerts(client, tenantId, alerts);
 }
 
-async function readComputedOpsAlerts(
+export async function readComputedOpsAlerts(
   client: PoolClient,
   tenantId: string,
   source: OpsAlertSource | undefined,
@@ -1311,7 +1311,7 @@ async function insertOpsNotificationDelivery(
   return mapOpsNotificationDelivery(result.rows[0]);
 }
 
-async function insertOpsNotificationAttempt(
+export async function insertOpsNotificationAttempt(
   client: PoolClient,
   tenantId: string,
   alert: ComputedOpsAlert,

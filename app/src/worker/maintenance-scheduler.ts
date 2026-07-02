@@ -8,6 +8,8 @@ import type { CorrelationId, TenantId } from "../../../ts/security-middleware-co
 import { processDueRunTriggers } from "./run-trigger-scheduler";
 import { ARTIFACT_REDACTION_FAIL_THRESHOLD } from "./runtime-worker-artifact-lifecycle";
 import { assertLifecycleBypassUse } from "./runtime-worker-lifecycle-audit";
+import { runOpsNotificationFire } from "./ops-notification-fire";
+import type { OpsAlertRoute } from "../api/ops-alert-routes";
 
 export const MAINTENANCE_POLL_INTERVAL_MS = 5_000;
 export const AUDIT_VERIFIER_INTERVAL_MS = 60 * 60 * 1000;
@@ -30,6 +32,8 @@ export interface MaintenanceSchedulerOptions {
   readonly now?: () => Date;
   readonly runTriggerBatchLimit?: number;
   readonly onError?: (err: unknown) => void;
+  /** S4a: 무인 운영 알림 자동 발화 라우팅 규칙(env OPS_ALERT_ROUTES). 빈 값이면 자동 발화 없음. */
+  readonly opsAlertRoutes?: readonly OpsAlertRoute[];
 }
 
 export function buildMaintenancePollJobs(
@@ -146,6 +150,15 @@ export function startMaintenanceScheduler(
   let auditVerifierInFlight = false;
   let retentionInFlight = false;
 
+  const opsAlertRoutes = options.opsAlertRoutes ?? [];
+  // 휴면 경고는 poll 마다(5s) 반복하지 않고 한 번만 — 라우트가 설정됐는데 발화 대상 테넌트가 없어 조용히 안 나가는 상태.
+  let warnedOpsFireDormant = false;
+  const onOpsFireWarn = (message: string): void => {
+    if (warnedOpsFireDormant) return;
+    warnedOpsFireDormant = true;
+    console.error(JSON.stringify({ at: "maintenance_scheduler", warn: message }));
+  };
+
   const poll = (): void => {
     if (stopped || pollInFlight) return;
     pollInFlight = true;
@@ -156,6 +169,8 @@ export function startMaintenanceScheduler(
       now,
       lifecycleBypassPool: options.lifecycleBypassPool,
       runTriggerBatchLimit: options.runTriggerBatchLimit,
+      opsAlertRoutes,
+      onOpsFireWarn,
     })
       .catch(onError)
       .finally(() => {
@@ -247,6 +262,8 @@ interface MaintenancePollInput {
   readonly correlationId: () => string;
   readonly now: () => Date;
   readonly runTriggerBatchLimit?: number;
+  readonly opsAlertRoutes?: readonly OpsAlertRoute[];
+  readonly onOpsFireWarn?: (message: string) => void;
 }
 
 async function runMaintenancePoll(pool: PgPool, input: MaintenancePollInput): Promise<void> {
@@ -255,6 +272,17 @@ async function runMaintenancePoll(pool: PgPool, input: MaintenancePollInput): Pr
   });
   if (maintenanceTenantIds.length > 0) {
     await enqueueBatch(pool, input.enqueuer, buildMaintenancePollJobs(maintenanceTenantIds, input.correlationId));
+  }
+  // S4a: 무인 운영 알림 자동 발화 — 계산 알림을 라우트에 매칭해 발송 잡을 인큐(멱등). 스위퍼와 같은 테넌트 집합.
+  const opsAlertRoutes = input.opsAlertRoutes ?? [];
+  if (opsAlertRoutes.length > 0) {
+    await runOpsNotificationFire(pool, {
+      tenantIds: maintenanceTenantIds,
+      routes: opsAlertRoutes,
+      enqueuer: input.enqueuer,
+      correlationId: input.correlationId,
+      ...(input.onOpsFireWarn !== undefined ? { onWarn: input.onOpsFireWarn } : {}),
+    });
   }
   const triggerTenantIds = await resolveRunTriggerTenantIds(pool, input.tenantIds, input.now(), {
     lifecycleBypassPool: input.lifecycleBypassPool,

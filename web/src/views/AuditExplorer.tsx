@@ -424,7 +424,8 @@ export function AuditExplorerView(): JSX.Element {
 
 function downloadCsv(csv: string, filename: string): void {
   if (typeof URL.createObjectURL !== "function") return;
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  // BOM 없으면 Windows Excel 이 CP949 로 열어 한글이 깨진다. 서버 export 가 이미 붙였으면 중복 방지.
+  const blob = new Blob([csv.startsWith("\uFEFF") ? csv : "\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;

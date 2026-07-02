@@ -80,7 +80,8 @@ export function registerAuditLogRoutes(app: FastifyInstance, deps: ApiServerDeps
       .code(200)
       .header("content-type", "text/csv; charset=utf-8")
       .header("content-disposition", `attachment; filename="${filename}"`)
-      .send(auditRowsToCsv(rows));
+      // BOM 없으면 Windows Excel 이 CP949 로 열어 한글이 깨진다.
+      .send(`\uFEFF${auditRowsToCsv(rows)}`);
   });
 
   app.get("/v1/audit-log/verification-runs", { config: { rbacAction: "audit.read" } }, async (request, reply) => {

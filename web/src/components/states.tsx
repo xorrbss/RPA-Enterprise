@@ -119,7 +119,7 @@ export function ErrorState({
       )}
       {details !== undefined && details.trim().length > 0 && (
         <details className="technical-details">
-          <summary>admin/support details</summary>
+          <summary>담당자 전달용 기술 정보</summary>
           <pre>{details}</pre>
         </details>
       )}

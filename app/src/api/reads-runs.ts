@@ -14,6 +14,8 @@ interface RunListRow {
   id: string;
   status: RunState;
   priority: string;
+  scenario_id: string;
+  scenario_name: string;
   scenario_version_id: string;
   worker_id: string | null;
   attempts: number;
@@ -116,28 +118,36 @@ function trendWindowDays(raw: unknown): number {
 }
 
 export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
-  // GET /v1/runs — 커서 페이지(items=Run). filter: status(RunState)·scenario_version_id. RLS 스코프.
+  // GET /v1/runs — 커서 페이지(items=Run). filter: status(RunState)·scenario_version_id·scenario_id(전 버전 관통).
+  //   scenarios JOIN 으로 자동화 이름을 함께 투영(실행 식별성 — 목록에서 어떤 자동화의 실행인지 식별). RLS 스코프.
   app.get("/v1/runs", { config: { rbacAction: "run.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
     const query = request.query as Record<string, unknown>;
     const { limit, cursor } = parsePageParams(query);
     const status = runStateFilter(query.status);
     const scenarioVersionId = uuidFilter(query.scenario_version_id, "invalid_scenario_version_id");
+    const scenarioId = uuidFilter(query.scenario_id, "invalid_scenario_id");
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<RunListRow>(
-        `SELECT id, status, priority, scenario_version_id, worker_id, attempts, as_of, workitem_id, failure_reason, created_at, created_at::text AS cursor_at, updated_at
-           FROM runs
-          WHERE tenant_id = $1::uuid
-            AND ($2::text IS NULL OR status = $2)
-            AND ($3::uuid IS NULL OR scenario_version_id = $3::uuid)
-            AND ($4::timestamptz IS NULL OR (created_at, id) < ($4::timestamptz, $5::uuid))
-          ORDER BY created_at DESC, id DESC
-          LIMIT $6`,
+        `SELECT r.id, r.status, r.priority, sv.scenario_id, s.name AS scenario_name, r.scenario_version_id,
+                r.worker_id, r.attempts, r.as_of, r.workitem_id, r.failure_reason, r.created_at,
+                r.created_at::text AS cursor_at, r.updated_at
+           FROM runs r
+           JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
+           JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
+          WHERE r.tenant_id = $1::uuid
+            AND ($2::text IS NULL OR r.status = $2)
+            AND ($3::uuid IS NULL OR r.scenario_version_id = $3::uuid)
+            AND ($4::uuid IS NULL OR sv.scenario_id = $4::uuid)
+            AND ($5::timestamptz IS NULL OR (r.created_at, r.id) < ($5::timestamptz, $6::uuid))
+          ORDER BY r.created_at DESC, r.id DESC
+          LIMIT $7`,
         [
           principal.tenantId,
           status ?? null,
           scenarioVersionId ?? null,
+          scenarioId ?? null,
           cursor?.createdAt ?? null,
           cursor?.id ?? null,
           limit + 1,
@@ -155,6 +165,8 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
           run_id: r.id,
           status: r.status,
           priority: r.priority,
+          scenario_id: r.scenario_id,
+          scenario_name: r.scenario_name,
           scenario_version_id: r.scenario_version_id,
           worker_id: r.worker_id,
           attempts: r.attempts,

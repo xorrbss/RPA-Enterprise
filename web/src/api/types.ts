@@ -237,6 +237,9 @@ export interface RunItem {
   readonly run_id: string;
   readonly status: string;
   readonly priority?: RunPriority;
+  // 실행 식별성 — 목록에서 어떤 자동화의 실행인지 식별(서버 scenarios JOIN 투영).
+  readonly scenario_id?: string;
+  readonly scenario_name?: string;
   readonly current_node: string | null;
   readonly as_of: string | null;
   readonly updated_at?: string | null;
@@ -1982,10 +1985,13 @@ export interface RunDetail {
   readonly status: string;
   readonly priority?: RunPriority;
   readonly scenario_id?: string;
+  readonly scenario_name?: string;
   readonly scenario_version_id?: string;
   readonly worker_id: string | null;
   readonly attempts: number;
   readonly as_of: string | null;
+  // 실행 원본 파라미터(params_schema 검증 완료 값) — '수정 입력 재실행' 프리필용.
+  readonly params?: Record<string, unknown> | null;
   readonly updated_at?: string | null;
   readonly failure_reason?: FailureReason | null;
 }

@@ -84,6 +84,7 @@ export function TokenGate({ children }: { children: ReactNode }): JSX.Element {
         </p>
         <p style={{ color: "var(--muted)", fontSize: 12, margin: 0 }}>
           접속 코드는 관리자 또는 IT 담당자가 발급합니다. 코드가 없으면 담당자에게 운영 콘솔 접속 권한을 요청하세요.
+          파일럿 초기 설정 중이라면 배포 runbook의 ‘최초 접속 토큰 발급’ 절차를 참고하세요.
         </p>
         {oidcAuthUrl !== null && (
           <a className="btn primary" href={oidcAuthUrl}>

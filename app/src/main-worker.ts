@@ -327,6 +327,7 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
     maintenance = startMaintenanceScheduler(pool, {
       tenantIds: cfg.maintenanceTenantIds,
       ...(maintenanceBypassPool !== undefined ? { lifecycleBypassPool: maintenanceBypassPool } : {}),
+      opsAlertRoutes: cfg.opsAlertRoutes,
     });
     heartbeat = await startWorkerHeartbeat(pool, { workerId: cfg.workerId, kind: "browser" });
     console.log(JSON.stringify({
@@ -335,6 +336,7 @@ export async function startWorker(pool: PgPool, common: CommonConfig): Promise<S
       concurrency: cfg.graphileConcurrency,
       maintenanceTenantCount: cfg.maintenanceTenantIds.length,
       maintenanceLifecycleDiscovery: maintenanceBypassPool !== undefined ? "dedicated_bypassrls_pool" : "configured_tenant_list",
+      opsAlertAutoFireRoutes: cfg.opsAlertRoutes.length,
     }));
     return {
       runner,
