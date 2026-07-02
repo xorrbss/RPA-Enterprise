@@ -51,6 +51,7 @@ import { registerWebAttendedRoutes } from "./web-attended";
 import { registerDocumentJobRoutes } from "./document-jobs";
 import { registerAuthReadinessRoutes } from "./auth-readiness";
 import { registerOpsAlertRoutes } from "./ops-alerts";
+import { registerOpsAlertNotificationRouteRoutes } from "./ops-alert-notification-routes";
 import { registerOpsHealthRoutes } from "./ops-health";
 import { registerProductionReadinessRoutes } from "./production-readiness";
 import { registerBotPoolRoutes } from "./bot-pools";
@@ -93,7 +94,10 @@ interface RunRow {
 }
 
 export function buildServer(deps: ApiServerDeps): FastifyInstance {
-  const app = Fastify({ logger: deps.logger ?? false, genReqId: () => randomUUID() });
+  // maxParamLength: find-my-way 기본 100자는 계약(OpsAlertPathParams.alert_id maxLength 300)보다 짧아,
+  //   100자를 넘는 path param(예: session_expiry:<site uuid>:<identity uuid>:<md5> = 121자)이 라우트에
+  //   매칭되지 않고 404로 떨어진다. 라우터 상한을 계약 상한에 맞춘다(각 라우트의 param 검증은 그대로 fail-closed).
+  const app = Fastify({ logger: deps.logger ?? false, genReqId: () => randomUUID(), maxParamLength: 300 });
 
   // B2/B3 보안(헤더 + opt-in CORS) — 라우트/인증 훅보다 먼저 등록해 CORS preflight가 인증보다 앞서 처리되고
   //   베이스라인 헤더가 모든 응답(에러 포함)에 적용된다(D7 분석 §4.3).
@@ -323,6 +327,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerWebAttendedRoutes(app, deps);
   registerDocumentJobRoutes(app, deps);
   registerOpsAlertRoutes(app, deps);
+  registerOpsAlertNotificationRouteRoutes(app, deps);
   registerOpsHealthRoutes(app, deps);
   registerProductionReadinessRoutes(app, deps);
   registerAiGovernanceEvidenceRoutes(app, deps);

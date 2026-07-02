@@ -71,6 +71,10 @@ import {
   type IntegrationHandoffDispatchRequest,
   type IntegrationHandoffListParams,
   type ListParams,
+  type OpsAlertNotificationRoute,
+  type OpsAlertNotificationRouteCreateRequest,
+  type OpsAlertNotificationRouteDeleteResult,
+  type OpsAlertNotificationRouteUpdateRequest,
   type OpsNotificationAttempt,
   type OpsNotificationDelivery,
   type OpsNotificationDeliveryRequest,
@@ -188,6 +192,10 @@ export interface ApiClient {
   listOpsAlertDeliveries(alertId: string, p?: ListParams): Promise<Paginated<OpsNotificationDelivery>>;
   recordOpsAlertDelivery(alertId: string, body: OpsNotificationDeliveryRequest, idempotencyKey: string): Promise<OpsNotificationDelivery>;
   sendOpsAlertWebhookDelivery(alertId: string, body: OpsNotificationWebhookSendRequest, idempotencyKey: string): Promise<OpsNotificationAttempt>;
+  listOpsAlertNotificationRoutes(p?: ListParams): Promise<Paginated<OpsAlertNotificationRoute>>;
+  createOpsAlertNotificationRoute(body: OpsAlertNotificationRouteCreateRequest, idempotencyKey: string): Promise<OpsAlertNotificationRoute>;
+  updateOpsAlertNotificationRoute(routeId: string, body: OpsAlertNotificationRouteUpdateRequest, idempotencyKey: string): Promise<OpsAlertNotificationRoute>;
+  deleteOpsAlertNotificationRoute(routeId: string, idempotencyKey: string): Promise<OpsAlertNotificationRouteDeleteResult>;
   getOpsHealth(): Promise<OpsHealth>;
   getProductionReadiness(): Promise<ProductionReadiness>;
   listProductionReadinessEvidence(p?: ListParams & { evidence_type?: ProductionReadinessEvidenceType }): Promise<Paginated<ProductionReadinessEvidence>>;
@@ -657,6 +665,12 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/ops-alerts/${encodeURIComponent(alertId)}/deliveries`, idempotencyKey, body),
     sendOpsAlertWebhookDelivery: (alertId, body, idempotencyKey) =>
       post(`/v1/ops-alerts/${encodeURIComponent(alertId)}/deliveries/send-webhook`, idempotencyKey, body),
+    listOpsAlertNotificationRoutes: (p) => get(`/v1/ops-alert-routes${queryString(p)}`),
+    createOpsAlertNotificationRoute: (body, idempotencyKey) => post(`/v1/ops-alert-routes`, idempotencyKey, body),
+    updateOpsAlertNotificationRoute: (routeId, body, idempotencyKey) =>
+      send("PATCH", `/v1/ops-alert-routes/${encodeURIComponent(routeId)}`, body, { "Idempotency-Key": idempotencyKey }),
+    deleteOpsAlertNotificationRoute: (routeId, idempotencyKey) =>
+      send("DELETE", `/v1/ops-alert-routes/${encodeURIComponent(routeId)}`, undefined, { "Idempotency-Key": idempotencyKey }),
     getOpsHealth: () => get(`/v1/ops/health`),
     getProductionReadiness: () => get(`/v1/ops/production-readiness`),
     listProductionReadinessEvidence: (p) => get(`/v1/ops/production-readiness/evidence${queryString(p)}`),

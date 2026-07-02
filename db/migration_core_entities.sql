@@ -1694,8 +1694,8 @@ CREATE TABLE ops_alert_acknowledgements (
   tenant_id         uuid        NOT NULL,
   alert_id          text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
   detected_at       timestamptz NOT NULL,
-  source            text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence')),
-  subject_type      text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence')),
+  source            text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry')),
+  subject_type      text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session')),
   subject_id        text,
   acknowledged_by   text        NOT NULL CHECK (length(acknowledged_by) > 0),
   acknowledged_at   timestamptz NOT NULL DEFAULT now(),
@@ -1717,8 +1717,8 @@ CREATE TABLE ops_notification_deliveries (
   tenant_id             uuid        NOT NULL,
   alert_id              text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
   detected_at           timestamptz NOT NULL,
-  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence')),
-  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence')),
+  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry')),
+  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session')),
   subject_id            text,
   channel               text        NOT NULL CHECK (channel IN ('teams','slack','email','webhook')),
   provider_alias        text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
@@ -1757,6 +1757,38 @@ CREATE INDEX idx_ops_notification_deliveries_retention
   WHERE legal_hold = false AND deleted_at IS NULL;
 
 -- ------------------------------------------------------------
+-- ops_alert_notification_routes -- tenant-managed automatic alert routing.
+--   Stores only SecretRef aliases, allowed host names, and non-secret route
+--   metadata. Raw endpoint URLs, provider tokens, SMTP credentials, webhook
+--   secrets, bearer values, and resolved SecretRef material must not be stored.
+-- ------------------------------------------------------------
+CREATE TABLE ops_alert_notification_routes (
+  id                    uuid        PRIMARY KEY,
+  tenant_id             uuid        NOT NULL,
+  source                text        CHECK (source IS NULL OR source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','session_expiry')),
+  min_severity          text        NOT NULL CHECK (min_severity IN ('warning','critical')),
+  provider_alias        text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
+  endpoint_secret_ref   text        NOT NULL CHECK (endpoint_secret_ref LIKE 'secret://%' AND length(endpoint_secret_ref) > length('secret://') AND length(endpoint_secret_ref) <= 500),
+  callback_signature_secret_ref text CHECK (callback_signature_secret_ref IS NULL OR (callback_signature_secret_ref LIKE 'secret://%' AND length(callback_signature_secret_ref) > length('secret://') AND length(callback_signature_secret_ref) <= 500)),
+  route_policy_ref      text        NOT NULL CHECK (length(route_policy_ref) > 0 AND length(route_policy_ref) <= 200),
+  recipient_group_ref   text        CHECK (recipient_group_ref IS NULL OR (length(recipient_group_ref) > 0 AND length(recipient_group_ref) <= 200)),
+  allowed_hosts         text[]      NOT NULL CHECK (array_length(allowed_hosts, 1) BETWEEN 1 AND 20 AND array_position(allowed_hosts, '') IS NULL AND array_position(allowed_hosts, NULL) IS NULL),
+  enabled               boolean     NOT NULL DEFAULT true,
+  created_by            text        NOT NULL CHECK (length(created_by) > 0),
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_by            text        NOT NULL CHECK (length(updated_by) > 0),
+  updated_at            timestamptz NOT NULL DEFAULT now(),
+  deleted_at            timestamptz,
+  CHECK (updated_at >= created_at)
+);
+CREATE INDEX idx_ops_alert_notification_routes_active
+  ON ops_alert_notification_routes (tenant_id, enabled, source, min_severity, updated_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_ops_alert_notification_routes_list
+  ON ops_alert_notification_routes (tenant_id, updated_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
+
+-- ------------------------------------------------------------
 -- ops_notification_attempts -- durable outbound notification sender work.
 --   This is intentionally separate from ops_notification_deliveries: attempts
 --   own pending/sending/retry/dead_letter state, while deliveries remain
@@ -1770,8 +1802,8 @@ CREATE TABLE ops_notification_attempts (
   tenant_id             uuid        NOT NULL,
   alert_id              text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
   detected_at           timestamptz NOT NULL,
-  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence')),
-  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence')),
+  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry')),
+  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session')),
   subject_id            text,
   channel               text        NOT NULL CHECK (channel IN ('webhook')),
   provider_alias        text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
@@ -2144,6 +2176,7 @@ ALTER TABLE principal_role_assignment_events ADD CONSTRAINT uq_principal_role_as
 ALTER TABLE credential_binding_events ADD CONSTRAINT uq_credential_binding_events_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE production_readiness_evidence ADD CONSTRAINT uq_production_readiness_evidence_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE ops_notification_deliveries ADD CONSTRAINT uq_ops_notification_deliveries_tenant_id_id UNIQUE (tenant_id, id);
+ALTER TABLE ops_alert_notification_routes ADD CONSTRAINT uq_ops_alert_notification_routes_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE ops_notification_attempts ADD CONSTRAINT uq_ops_notification_attempts_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE automation_adoption_evidence ADD CONSTRAINT uq_automation_adoption_evidence_tenant_id_id UNIQUE (tenant_id, id);
 ALTER TABLE ai_governance_evidence ADD CONSTRAINT uq_ai_governance_evidence_tenant_id_id UNIQUE (tenant_id, id);
@@ -2483,6 +2516,7 @@ BEGIN
     'events_outbox',
     'ops_alert_acknowledgements',
     'ops_notification_deliveries',
+    'ops_alert_notification_routes',
     'ops_notification_attempts',
     'production_readiness_evidence',
     'ai_governance_evidence',

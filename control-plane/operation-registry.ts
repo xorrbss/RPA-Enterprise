@@ -39,6 +39,10 @@ export type SupportedControlPlaneOperationId = Extract<
   | "listOpsAlertDeliveries"
   | "recordOpsAlertDelivery"
   | "sendOpsAlertWebhookDelivery"
+  | "listOpsAlertNotificationRoutes"
+  | "createOpsAlertNotificationRoute"
+  | "updateOpsAlertNotificationRoute"
+  | "deleteOpsAlertNotificationRoute"
   | "getOpsHealth"
   | "getProductionReadiness"
   | "listProductionReadinessEvidence"
@@ -355,6 +359,44 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     requestBodySchemaRef: "#/components/schemas/OpsNotificationWebhookSendRequest",
     requestBodyRequired: true,
     responseSchemaRef: "#/components/schemas/OpsNotificationAttempt",
+    rbacAction: "ops_alert.deliver",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "listOpsAlertNotificationRoutes",
+    method: "GET",
+    path: "/v1/ops-alert-routes",
+    querySchemaRef: "#/components/schemas/OpsAlertNotificationRouteListQuery",
+    responseSchemaRef: "#/components/schemas/OpsAlertNotificationRoutePage",
+    rbacAction: "ops_alert.read",
+  }),
+  operation({
+    operationId: "createOpsAlertNotificationRoute",
+    method: "POST",
+    path: "/v1/ops-alert-routes",
+    requestBodySchemaRef: "#/components/schemas/OpsAlertNotificationRouteCreateRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/OpsAlertNotificationRoute",
+    rbacAction: "ops_alert.deliver",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "updateOpsAlertNotificationRoute",
+    method: "PATCH",
+    path: "/v1/ops-alert-routes/{route_id}",
+    paramsSchemaRef: "#/components/schemas/OpsAlertNotificationRoutePathParams",
+    requestBodySchemaRef: "#/components/schemas/OpsAlertNotificationRouteUpdateRequest",
+    requestBodyRequired: true,
+    responseSchemaRef: "#/components/schemas/OpsAlertNotificationRoute",
+    rbacAction: "ops_alert.deliver",
+    requiresIdempotencyKey: true,
+  }),
+  operation({
+    operationId: "deleteOpsAlertNotificationRoute",
+    method: "DELETE",
+    path: "/v1/ops-alert-routes/{route_id}",
+    paramsSchemaRef: "#/components/schemas/OpsAlertNotificationRoutePathParams",
+    responseSchemaRef: "#/components/schemas/OpsAlertNotificationRouteDeleteResponse",
     rbacAction: "ops_alert.deliver",
     requiresIdempotencyKey: true,
   }),
@@ -1305,6 +1347,113 @@ const requireOpsNotificationWebhookSendBody = (schemaRef: string): BoundaryValid
   },
 });
 
+// S4b stored auto-fire routes: source is restricted to auto-fire sources (stable detected_at generations).
+const OPS_ALERT_ROUTE_SOURCES: ReadonlySet<string> = new Set([
+  "run_sla",
+  "human_task_sla",
+  "trigger_fire",
+  "failure_spike",
+  "session_expiry",
+]);
+
+const OPS_ALERT_ROUTE_FIELDS: ReadonlySet<string> = new Set([
+  "source",
+  "min_severity",
+  "provider_alias",
+  "endpoint_secret_ref",
+  "callback_signature_secret_ref",
+  "route_policy_ref",
+  "recipient_group_ref",
+  "allowed_hosts",
+  "enabled",
+]);
+
+const validateOpsAlertRouteAllowedHosts = (value: unknown, schemaRef: string): BoundaryValidationFailure | null => {
+  if (!Array.isArray(value) || value.length === 0) {
+    return validationFailure({ schemaRef, reason: "missing_required_array", prop: "allowed_hosts" });
+  }
+  if (
+    value.length > 20 ||
+    value.some((host) =>
+      typeof host !== "string" ||
+      host.length === 0 ||
+      host.length > 253 ||
+      host.includes("://") ||
+      host.includes("/") ||
+      host.includes(":") ||
+      host === "localhost" ||
+      !opsNotificationHostRe.test(host)
+    )
+  ) {
+    return validationFailure({ schemaRef, reason: "invalid_array_item", prop: "allowed_hosts" });
+  }
+  return null;
+};
+
+const validateOpsAlertRouteField = (input: Record<string, unknown>, prop: string, schemaRef: string): BoundaryValidationFailure | null => {
+  const value = input[prop];
+  switch (prop) {
+    case "source":
+      if (value !== null && (typeof value !== "string" || !OPS_ALERT_ROUTE_SOURCES.has(value))) {
+        return validationFailure({ schemaRef, reason: "invalid_enum_value", prop });
+      }
+      return null;
+    case "min_severity":
+      if (value !== "warning" && value !== "critical") {
+        return validationFailure({ schemaRef, reason: "invalid_enum_value", prop });
+      }
+      return null;
+    case "provider_alias":
+    case "route_policy_ref":
+      return validateOpsNotificationSafeString(value, prop, schemaRef);
+    case "endpoint_secret_ref":
+      return isOpsNotificationSecretRef(value) ? null : validationFailure({ schemaRef, reason: "invalid_secret_ref", prop });
+    case "callback_signature_secret_ref":
+      if (value !== null && !isOpsNotificationSecretRef(value)) {
+        return validationFailure({ schemaRef, reason: "invalid_secret_ref", prop });
+      }
+      return null;
+    case "recipient_group_ref":
+      return value === null ? null : validateOpsNotificationSafeString(value, prop, schemaRef);
+    case "allowed_hosts":
+      return validateOpsAlertRouteAllowedHosts(value, schemaRef);
+    case "enabled":
+      return typeof value === "boolean" ? null : validationFailure({ schemaRef, reason: "invalid_boolean", prop });
+    default:
+      return validationFailure({ schemaRef, reason: "unknown_field", prop });
+  }
+};
+
+const requireOpsAlertNotificationRouteBody = (schemaRef: string, mode: "create" | "update"): BoundaryValidator => ({
+  schemaRef,
+  validate(input: unknown): BoundaryValidationResult {
+    if (!isRecord(input)) {
+      return validationFailure({ schemaRef, reason: "expected_object" });
+    }
+    const keys = Object.keys(input);
+    for (const key of keys) {
+      if (!OPS_ALERT_ROUTE_FIELDS.has(key)) {
+        return validationFailure({ schemaRef, reason: "unknown_field", prop: key });
+      }
+    }
+    if (mode === "create") {
+      for (const prop of ["min_severity", "provider_alias", "endpoint_secret_ref", "route_policy_ref", "allowed_hosts"] as const) {
+        if (input[prop] === undefined) {
+          return validationFailure({ schemaRef, reason: "missing_required_field", prop });
+        }
+      }
+    } else if (keys.length === 0) {
+      return validationFailure({ schemaRef, reason: "empty_patch" });
+    }
+    for (const key of keys) {
+      if (input[key] === undefined) continue;
+      const failure = validateOpsAlertRouteField(input, key, schemaRef);
+      if (failure !== null) return failure;
+    }
+    return { valid: true, value: input };
+  },
+});
+
 const containsProductionEvidenceSecretOrEndpoint = (value: string): boolean =>
   /https?:\/\//i.test(value) ||
   /hooks\.slack\.com/i.test(value) ||
@@ -2137,6 +2286,8 @@ const bodyValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Oper
   ["ackOpsAlert", requireObject("#/components/schemas/OpsAlertAckRequest", [], true)],
   ["recordOpsAlertDelivery", requireOpsNotificationDeliveryBody("#/components/schemas/OpsNotificationDeliveryRequest")],
   ["sendOpsAlertWebhookDelivery", requireOpsNotificationWebhookSendBody("#/components/schemas/OpsNotificationWebhookSendRequest")],
+  ["createOpsAlertNotificationRoute", requireOpsAlertNotificationRouteBody("#/components/schemas/OpsAlertNotificationRouteCreateRequest", "create")],
+  ["updateOpsAlertNotificationRoute", requireOpsAlertNotificationRouteBody("#/components/schemas/OpsAlertNotificationRouteUpdateRequest", "update")],
   ["recordProductionReadinessEvidence", requireProductionReadinessEvidenceBody("#/components/schemas/ProductionReadinessEvidenceRequest")],
   ["recordAiGovernanceEvidence", requireAiGovernanceEvidenceBody("#/components/schemas/AiGovernanceEvidenceRequest")],
   ["createProcessMiningImport", requireProcessMiningImportBody("#/components/schemas/ProcessMiningImportCreateRequest")],
@@ -2192,6 +2343,8 @@ const paramsValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Op
   ["listOpsAlertDeliveries", requireParams("#/components/schemas/OpsAlertPathParams", ["alert_id"])],
   ["recordOpsAlertDelivery", requireParams("#/components/schemas/OpsAlertPathParams", ["alert_id"])],
   ["sendOpsAlertWebhookDelivery", requireParams("#/components/schemas/OpsAlertPathParams", ["alert_id"])],
+  ["updateOpsAlertNotificationRoute", requireParams("#/components/schemas/OpsAlertNotificationRoutePathParams", ["route_id"])],
+  ["deleteOpsAlertNotificationRoute", requireParams("#/components/schemas/OpsAlertNotificationRoutePathParams", ["route_id"])],
   ["getAutomationIdea", requireParams("#/components/schemas/AutomationIdeaPathParams", ["idea_id"])],
   ["getDocumentJob", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],
   ["extractDocumentJob", requireParams("#/components/schemas/DocumentJobPathParams", ["job_id"])],
@@ -2257,6 +2410,7 @@ const queryValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Ope
   ["listRunTriggerFires", passQuery("#/components/schemas/RunTriggerFireListQuery")],
   ["listOpsAlerts", passQuery("#/components/schemas/OpsAlertListQuery")],
   ["listOpsAlertDeliveries", passQuery("#/components/schemas/OpsAlertDeliveryListQuery")],
+  ["listOpsAlertNotificationRoutes", passQuery("#/components/schemas/OpsAlertNotificationRouteListQuery")],
   ["listProductionReadinessEvidence", requireProductionReadinessEvidenceQuery("#/components/schemas/ProductionReadinessEvidenceListQuery")],
   ["listAiGovernanceEvidence", requireAiGovernanceEvidenceQuery("#/components/schemas/AiGovernanceEvidenceListQuery")],
   ["listProcessMiningImports", passQuery("#/components/schemas/ProcessMiningImportListQuery")],

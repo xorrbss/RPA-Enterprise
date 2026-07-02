@@ -7,6 +7,7 @@ import { mergeParams, navigate, useHashParam } from "../router";
 import type {
   IntegrationHandoff,
   OpsAlertItem,
+  OpsAlertNotificationRoute,
   OpsNotificationAttempt,
   OpsNotificationDelivery,
   OpsNotificationWebhookSendRequest,
@@ -21,6 +22,7 @@ import { TriggerScheduler } from "./orchestration/TriggerScheduler";
 import { StatusColumn } from "./orchestration/StatusColumn";
 import { NotificationRoutingReadiness } from "./orchestration/NotificationRoutingReadiness";
 import { OpsAlertCenter, type OpsWebhookSendDraft } from "./orchestration/OpsAlertCenter";
+import { OpsAlertRoutePanel, type OpsAlertRouteDraft } from "./orchestration/OpsAlertRoutePanel";
 import { BotPoolCapacityPanel } from "./orchestration/BotPoolCapacityPanel";
 import {
   IntegrationHandoffPanel,
@@ -145,6 +147,8 @@ export function OrchestrationView(): JSX.Element {
   const [deliveryAlertId, setDeliveryAlertId] = useState<string | null>(null);
   const [ackErrorAlertId, setAckErrorAlertId] = useState<string | null>(null);
   const [webhookSendErrorAlertId, setWebhookSendErrorAlertId] = useState<string | null>(null);
+  const [toggleErrorRouteId, setToggleErrorRouteId] = useState<string | null>(null);
+  const [deleteErrorRouteId, setDeleteErrorRouteId] = useState<string | null>(null);
   const [queuedWebhookAttempt, setQueuedWebhookAttempt] = useState<OpsNotificationAttempt | null>(null);
   const [dispatchErrorHandoffId, setDispatchErrorHandoffId] = useState<string | null>(null);
   const [receiptErrorHandoffId, setReceiptErrorHandoffId] = useState<string | null>(null);
@@ -168,6 +172,11 @@ export function OrchestrationView(): JSX.Element {
     queryKey: ["ops-alerts", alertParams],
     queryFn: () => api.listOpsAlerts(alertParams),
     refetchInterval: 5_000,
+  });
+  const opsAlertRoutes = useQuery({
+    queryKey: ["ops-alert-routes"],
+    queryFn: () => api.listOpsAlertNotificationRoutes({ limit: 50 }),
+    refetchInterval: 30_000,
   });
   const deliveryReceipts = useQuery({
     queryKey: ["ops-alert-deliveries", deliveryAlertId],
@@ -209,6 +218,52 @@ export function OrchestrationView(): JSX.Element {
     },
     onError: (_error, { alert }) => {
       setWebhookSendErrorAlertId(alert.alert_id);
+    },
+  });
+  const createAlertRouteMutation = useMutation({
+    mutationFn: (draft: OpsAlertRouteDraft) =>
+      api.createOpsAlertNotificationRoute({
+        source: draft.source,
+        min_severity: draft.minSeverity,
+        provider_alias: draft.providerAlias,
+        endpoint_secret_ref: draft.endpointSecretRef,
+        callback_signature_secret_ref: draft.callbackSignatureSecretRef,
+        route_policy_ref: draft.routePolicyRef,
+        recipient_group_ref: draft.recipientGroupRef,
+        allowed_hosts: draft.allowedHosts,
+      }, alertRouteCreateIdempotencyKey(draft)),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["ops-alert-routes"] });
+    },
+  });
+  const toggleAlertRouteMutation = useMutation({
+    mutationFn: (route: OpsAlertNotificationRoute) =>
+      api.updateOpsAlertNotificationRoute(
+        route.route_id,
+        { enabled: !route.enabled },
+        `ops-alert-route-toggle-${route.route_id}-${!route.enabled}-${Date.now()}`,
+      ),
+    onMutate: () => {
+      setToggleErrorRouteId(null);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["ops-alert-routes"] });
+    },
+    onError: (_error, route) => {
+      setToggleErrorRouteId(route.route_id);
+    },
+  });
+  const deleteAlertRouteMutation = useMutation({
+    mutationFn: (route: OpsAlertNotificationRoute) =>
+      api.deleteOpsAlertNotificationRoute(route.route_id, `ops-alert-route-delete-${route.route_id}-${Date.now()}`),
+    onMutate: () => {
+      setDeleteErrorRouteId(null);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["ops-alert-routes"] });
+    },
+    onError: (_error, route) => {
+      setDeleteErrorRouteId(route.route_id);
     },
   });
   const recordSloEvidenceMutation = useMutation({
@@ -560,6 +615,24 @@ export function OrchestrationView(): JSX.Element {
     />
   );
 
+  const opsAlertRoutePanel = (
+    <OpsAlertRoutePanel
+      routes={opsAlertRoutes.data?.items ?? []}
+      isLoading={opsAlertRoutes.data === undefined && opsAlertRoutes.isFetching}
+      isError={opsAlertRoutes.isError}
+      canManage={can("ops_alert.deliver")}
+      isCreating={createAlertRouteMutation.isPending}
+      createError={createAlertRouteMutation.isError}
+      onCreate={(draft) => createAlertRouteMutation.mutate(draft)}
+      togglingRouteId={toggleAlertRouteMutation.isPending ? toggleAlertRouteMutation.variables?.route_id ?? null : null}
+      toggleErrorRouteId={toggleErrorRouteId}
+      onToggle={(route) => toggleAlertRouteMutation.mutate(route)}
+      deletingRouteId={deleteAlertRouteMutation.isPending ? deleteAlertRouteMutation.variables?.route_id ?? null : null}
+      deleteErrorRouteId={deleteErrorRouteId}
+      onDelete={(route) => deleteAlertRouteMutation.mutate(route)}
+    />
+  );
+
   const botPoolCapacityPanel = (
     <BotPoolCapacityPanel
       pools={botPools.data?.items ?? []}
@@ -626,6 +699,7 @@ export function OrchestrationView(): JSX.Element {
               ]}
             />
             {notificationRouting}
+            {opsAlertRoutePanel}
             {opsAlertCenter}
           </div>
         </section>
@@ -687,6 +761,15 @@ function opsAlertWebhookIdempotencyKey(alert: OpsAlertItem, draft: OpsWebhookSen
     "ops-alert-webhook",
     stableIdempotencyPart(alert.alert_id),
     stableIdempotencyPart(alert.detected_at),
+    stableIdempotencyPart(draft.endpointSecretRef),
+    Date.now(),
+  ].join("-");
+}
+
+function alertRouteCreateIdempotencyKey(draft: OpsAlertRouteDraft): string {
+  return [
+    "ops-alert-route-create",
+    stableIdempotencyPart(draft.providerAlias),
     stableIdempotencyPart(draft.endpointSecretRef),
     Date.now(),
   ].join("-");

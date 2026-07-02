@@ -5,7 +5,7 @@
  *   npm --prefix app exec tsx -- app/test/api-ops-alerts.int.ts
  */
 import { readFileSync } from "node:fs";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { SignJWT } from "jose";
@@ -54,6 +54,17 @@ const AUDIT_A = "8a900000-0000-4000-8000-000000000001";
 const AUDIT_VERIFIER_INVALID = "8a910000-0000-4000-8000-000000000001";
 const READINESS_EVIDENCE_SLO = "8aa00000-0000-4000-8000-000000000001";
 const READINESS_EVIDENCE_SUPPORT = "8aa00000-0000-4000-8000-000000000002";
+// S4b session_expiry: 같은 site/identity 에 identity_key 로 구분되는 세션 2건(임박 warning / 만료 critical).
+const SESSION_KEY_SOON = "";
+const SESSION_KEY_OVERDUE = "ops@example.com";
+
+function md5Hex(value: string): string {
+  return createHash("md5").update(value).digest("hex");
+}
+
+function sessionExpiryAlertId(identityKey: string): string {
+  return `session_expiry:${SITE_POOL_A}:${IDENTITY_POOL_A}:${md5Hex(identityKey)}`;
+}
 const OPS_CALLBACK_SIGNATURE_SECRET_REF = "secret://tenant-a/notification/webhook/callback-signing" as SecretRef;
 const OPS_CALLBACK_SIGNATURE_SECRET = "ops-notification-callback-signing-secret" as PlainSecret;
 
@@ -181,6 +192,13 @@ async function seedAlerts(pool: Pool): Promise<void> {
          (id, tenant_id, site_profile_id, browser_identity_id, run_id, owner_worker_id, isolation, state, cleanup_policy, expires_at)
        VALUES ($1,$2,$3,$4,$5,$6,'context','active','preserve_session',$7::timestamptz)`,
       [LEASE_POOL_EXPIRED, TENANT_A, SITE_POOL_A, IDENTITY_POOL_A, RUN_A, WORKER_POOL_A, isoMinutesFromNow(-7)],
+    );
+    // 로그인 세션: 6시간 뒤 만료(임박 warning) + 2시간 전 만료(critical). 쿠키 원문은 절대 시드하지 않는다(불투명 바이트).
+    await client.query(
+      `INSERT INTO browser_sessions (tenant_id, site_profile_id, browser_identity_id, identity_key, ciphertext, enc_kid, expires_at)
+       VALUES ($1,$2,$3,$4,$6::bytea,'dev-plaintext-v1',$7::timestamptz),
+              ($1,$2,$3,$5,$6::bytea,'dev-plaintext-v1',$8::timestamptz)`,
+      [TENANT_A, SITE_POOL_A, IDENTITY_POOL_A, SESSION_KEY_SOON, SESSION_KEY_OVERDUE, Buffer.from([0]), isoMinutesFromNow(360), isoMinutesFromNow(-120)],
     );
     for (const [index, runId] of RUN_SLA_EXTRA.entries()) {
       await client.query(
@@ -379,8 +397,8 @@ async function main(): Promise<void> {
     };
     const alertById = new Map(allBody.items.map((item) => [item.alert_id, item]));
     check(
-      "all nine alert sources are present",
-      ["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "dlq", "bot_pool", "scim_secret_rotation", "audit_verifier", "readiness_evidence"].every((source) =>
+      "all ten alert sources are present",
+      ["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "dlq", "bot_pool", "scim_secret_rotation", "audit_verifier", "readiness_evidence", "session_expiry"].every((source) =>
         allBody.items.some((item) => item.source === source),
       ),
       all.body,
@@ -456,6 +474,76 @@ async function main(): Promise<void> {
           item.route === "#automationOps?panel=productionReadiness",
         ),
       readinessOnly.body,
+    );
+
+    // S4b: session_expiry — 목록/필터/by-id(ack 경유)/ack 원장.
+    const sessionOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=session_expiry", headers: { authorization: `Bearer ${viewer}` } });
+    const sessionBody = sessionOnly.json() as {
+      items: Array<{ alert_id: string; source: string; severity: string; title: string; detail: string; subject_type: string; subject_id: string | null; route: string | null; due_at?: string | null; detected_at: string }>;
+    };
+    check("session expiry alert filter -> 200", sessionOnly.statusCode === 200, sessionOnly.body);
+    check(
+      "session expiry emits overdue critical and due-soon warning",
+      sessionBody.items.length === 2 &&
+        sessionBody.items[0]?.alert_id === sessionExpiryAlertId(SESSION_KEY_OVERDUE) &&
+        sessionBody.items[0]?.severity === "critical" &&
+        sessionBody.items[0]?.title === "로그인 세션 만료" &&
+        sessionBody.items.some((item) => item.alert_id === sessionExpiryAlertId(SESSION_KEY_SOON) && item.severity === "warning" && item.title === "로그인 세션 만료 임박"),
+      sessionOnly.body,
+    );
+    check(
+      "session expiry alerts carry browser_session subject + site deep-link + stable due_at",
+      sessionBody.items.every((item) =>
+        item.source === "session_expiry" &&
+        item.subject_type === "browser_session" &&
+        item.subject_id === SITE_POOL_A &&
+        item.route === `#security?section=sites&site=${SITE_POOL_A}` &&
+        typeof item.due_at === "string" &&
+        item.due_at === item.detected_at,
+      ),
+      sessionOnly.body,
+    );
+    check(
+      "session expiry detail is operator Korean and never leaks cookies or identity key",
+      sessionBody.items.every((item) => item.detail.includes("만료") && !item.detail.includes(SESSION_KEY_OVERDUE) && !JSON.stringify(item).includes(SESSION_KEY_OVERDUE)),
+      sessionOnly.body,
+    );
+
+    const sessionAckMissing = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent(`session_expiry:${SITE_POOL_A}:${IDENTITY_POOL_A}:${"0".repeat(32)}`)}/ack`,
+      headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ack-session-missing" },
+      payload: {},
+    });
+    check("session expiry ack with non-current generation hash -> 404", sessionAckMissing.statusCode === 404 && sessionAckMissing.json().code === "RESOURCE_NOT_FOUND", sessionAckMissing.body);
+
+    const sessionAck = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent(sessionExpiryAlertId(SESSION_KEY_OVERDUE))}/ack`,
+      headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ack-session-overdue" },
+      payload: { comment: "세션 재등록 예정" },
+    });
+    const sessionAckBody = sessionAck.json() as { alert_id: string; status: string; source: string; subject_type: string; ack: { acknowledged_by: string; comment: string | null } };
+    check(
+      "operator acks overdue session expiry alert (by-id resolves current generation)",
+      sessionAck.statusCode === 200 &&
+        sessionAckBody.alert_id === sessionExpiryAlertId(SESSION_KEY_OVERDUE) &&
+        sessionAckBody.status === "acknowledged" &&
+        sessionAckBody.source === "session_expiry" &&
+        sessionAckBody.subject_type === "browser_session" &&
+        sessionAckBody.ack.acknowledged_by === "operator-a" &&
+        sessionAckBody.ack.comment === "세션 재등록 예정",
+      sessionAck.body,
+    );
+    const sessionOpenAfterAck = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=session_expiry", headers: { authorization: `Bearer ${viewer}` } });
+    const sessionOpenAfterAckBody = sessionOpenAfterAck.json() as { items: Array<{ alert_id: string; status: string }> };
+    check(
+      "acked session expiry alert hidden from open list, due-soon one stays open",
+      sessionOpenAfterAck.statusCode === 200 &&
+        sessionOpenAfterAckBody.items.length === 1 &&
+        sessionOpenAfterAckBody.items[0]?.alert_id === sessionExpiryAlertId(SESSION_KEY_SOON) &&
+        sessionOpenAfterAckBody.items[0]?.status === "open",
+      sessionOpenAfterAck.body,
     );
 
     const humanOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=human_task_sla&severity=warning", headers: { authorization: `Bearer ${viewer}` } });

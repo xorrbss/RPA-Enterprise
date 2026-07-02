@@ -19,6 +19,7 @@ export const OPS_ALERT_AUTO_FIRE_SOURCES = [
   "human_task_sla",
   "trigger_fire",
   "failure_spike",
+  "session_expiry",
 ] as const;
 
 export type OpsAlertAutoFireSource = (typeof OPS_ALERT_AUTO_FIRE_SOURCES)[number];
@@ -42,11 +43,97 @@ function isSecretRef(value: unknown): value is string {
   return typeof value === "string" && value.startsWith("secret://") && value.length > "secret://".length && value.length <= 500;
 }
 
-function requireField(record: Record<string, unknown>, key: string, index: number): unknown {
+function routeContext(context: string, index?: number): string {
+  return index === undefined ? context : `${context}[${index}]`;
+}
+
+function requireField(record: Record<string, unknown>, key: string, context: string, index?: number): unknown {
   if (!Object.prototype.hasOwnProperty.call(record, key)) {
-    throw new Error(`OPS_ALERT_ROUTES[${index}] missing required field "${key}"`);
+    throw new Error(`${routeContext(context, index)} missing required field "${key}"`);
   }
   return record[key];
+}
+
+export function isOpsAlertAutoFireSource(value: unknown): value is OpsAlertAutoFireSource {
+  return typeof value === "string" && (OPS_ALERT_AUTO_FIRE_SOURCES as readonly string[]).includes(value);
+}
+
+export function parseOpsAlertRouteObject(
+  record: Record<string, unknown>,
+  context: string,
+  index?: number,
+): OpsAlertRoute {
+  const label = routeContext(context, index);
+
+  const sourceRaw = record.source;
+  let source: OpsAlertAutoFireSource | undefined;
+  if (sourceRaw !== undefined && sourceRaw !== null) {
+    if (!isOpsAlertAutoFireSource(sourceRaw)) {
+      throw new Error(
+        `${label}.source must be one of ${OPS_ALERT_AUTO_FIRE_SOURCES.join(", ")} (or omitted for all)`,
+      );
+    }
+    source = sourceRaw;
+  }
+
+  const minSeverityRaw = requireField(record, "min_severity", context, index);
+  if (minSeverityRaw !== "warning" && minSeverityRaw !== "critical") {
+    throw new Error(`${label}.min_severity must be "warning" or "critical"`);
+  }
+
+  const providerAlias = requireField(record, "provider_alias", context, index);
+  if (typeof providerAlias !== "string" || providerAlias.length === 0 || providerAlias.length > 120) {
+    throw new Error(`${label}.provider_alias must be a non-empty string (<=120)`);
+  }
+
+  const endpointSecretRef = requireField(record, "endpoint_secret_ref", context, index);
+  if (!isSecretRef(endpointSecretRef)) {
+    throw new Error(`${label}.endpoint_secret_ref must be a secret:// reference`);
+  }
+
+  const allowedHostsRaw = requireField(record, "allowed_hosts", context, index);
+  if (
+    !Array.isArray(allowedHostsRaw) ||
+    allowedHostsRaw.length < 1 ||
+    allowedHostsRaw.length > 20 ||
+    !allowedHostsRaw.every((h) => typeof h === "string" && h.length > 0)
+  ) {
+    throw new Error(`${label}.allowed_hosts must be a non-empty string array (1..20)`);
+  }
+
+  const routePolicyRef = requireField(record, "route_policy_ref", context, index);
+  if (typeof routePolicyRef !== "string" || routePolicyRef.length === 0 || routePolicyRef.length > 200) {
+    throw new Error(`${label}.route_policy_ref must be a non-empty string (<=200)`);
+  }
+
+  const recipientGroupRefRaw = record.recipient_group_ref;
+  let recipientGroupRef: string | undefined;
+  if (recipientGroupRefRaw !== undefined && recipientGroupRefRaw !== null) {
+    if (typeof recipientGroupRefRaw !== "string" || recipientGroupRefRaw.length === 0 || recipientGroupRefRaw.length > 200) {
+      throw new Error(`${label}.recipient_group_ref must be a non-empty string (<=200)`);
+    }
+    recipientGroupRef = recipientGroupRefRaw;
+  }
+
+  const callbackSignatureSecretRefRaw = record.callback_signature_secret_ref;
+  let callbackSignatureSecretRef: string | undefined;
+  if (callbackSignatureSecretRefRaw !== undefined && callbackSignatureSecretRefRaw !== null) {
+    if (!isSecretRef(callbackSignatureSecretRefRaw)) {
+      throw new Error(`${label}.callback_signature_secret_ref must be a secret:// reference`);
+    }
+    callbackSignatureSecretRef = callbackSignatureSecretRefRaw;
+  }
+
+  return {
+    ...(source !== undefined ? { source } : {}),
+    minSeverity: minSeverityRaw,
+    providerAlias,
+    endpointSecretRef,
+    allowedHosts: allowedHostsRaw as string[],
+    routePolicyRef,
+    ...(recipientGroupRef !== undefined ? { recipientGroupRef } : {}),
+    ...(callbackSignatureSecretRef !== undefined ? { callbackSignatureSecretRef } : {}),
+  };
 }
 
 /**
@@ -71,76 +158,6 @@ export function parseOpsAlertRoutes(raw: string | undefined): OpsAlertRoute[] {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
       throw new Error(`OPS_ALERT_ROUTES[${index}] must be an object`);
     }
-    const record = entry as Record<string, unknown>;
-
-    const sourceRaw = record.source;
-    let source: OpsAlertAutoFireSource | undefined;
-    if (sourceRaw !== undefined && sourceRaw !== null) {
-      if (typeof sourceRaw !== "string" || !(OPS_ALERT_AUTO_FIRE_SOURCES as readonly string[]).includes(sourceRaw)) {
-        throw new Error(
-          `OPS_ALERT_ROUTES[${index}].source must be one of ${OPS_ALERT_AUTO_FIRE_SOURCES.join(", ")} (or omitted for all)`,
-        );
-      }
-      source = sourceRaw as OpsAlertAutoFireSource;
-    }
-
-    const minSeverityRaw = requireField(record, "min_severity", index);
-    if (minSeverityRaw !== "warning" && minSeverityRaw !== "critical") {
-      throw new Error(`OPS_ALERT_ROUTES[${index}].min_severity must be "warning" or "critical"`);
-    }
-
-    const providerAlias = requireField(record, "provider_alias", index);
-    if (typeof providerAlias !== "string" || providerAlias.length === 0 || providerAlias.length > 120) {
-      throw new Error(`OPS_ALERT_ROUTES[${index}].provider_alias must be a non-empty string (<=120)`);
-    }
-
-    const endpointSecretRef = requireField(record, "endpoint_secret_ref", index);
-    if (!isSecretRef(endpointSecretRef)) {
-      throw new Error(`OPS_ALERT_ROUTES[${index}].endpoint_secret_ref must be a secret:// reference`);
-    }
-
-    const allowedHostsRaw = requireField(record, "allowed_hosts", index);
-    if (
-      !Array.isArray(allowedHostsRaw) ||
-      allowedHostsRaw.length < 1 ||
-      allowedHostsRaw.length > 20 ||
-      !allowedHostsRaw.every((h) => typeof h === "string" && h.length > 0)
-    ) {
-      throw new Error(`OPS_ALERT_ROUTES[${index}].allowed_hosts must be a non-empty string array (1..20)`);
-    }
-
-    const routePolicyRef = requireField(record, "route_policy_ref", index);
-    if (typeof routePolicyRef !== "string" || routePolicyRef.length === 0 || routePolicyRef.length > 200) {
-      throw new Error(`OPS_ALERT_ROUTES[${index}].route_policy_ref must be a non-empty string (<=200)`);
-    }
-
-    const recipientGroupRefRaw = record.recipient_group_ref;
-    let recipientGroupRef: string | undefined;
-    if (recipientGroupRefRaw !== undefined && recipientGroupRefRaw !== null) {
-      if (typeof recipientGroupRefRaw !== "string" || recipientGroupRefRaw.length === 0 || recipientGroupRefRaw.length > 200) {
-        throw new Error(`OPS_ALERT_ROUTES[${index}].recipient_group_ref must be a non-empty string (<=200)`);
-      }
-      recipientGroupRef = recipientGroupRefRaw;
-    }
-
-    const callbackSignatureSecretRefRaw = record.callback_signature_secret_ref;
-    let callbackSignatureSecretRef: string | undefined;
-    if (callbackSignatureSecretRefRaw !== undefined && callbackSignatureSecretRefRaw !== null) {
-      if (!isSecretRef(callbackSignatureSecretRefRaw)) {
-        throw new Error(`OPS_ALERT_ROUTES[${index}].callback_signature_secret_ref must be a secret:// reference`);
-      }
-      callbackSignatureSecretRef = callbackSignatureSecretRefRaw;
-    }
-
-    return {
-      ...(source !== undefined ? { source } : {}),
-      minSeverity: minSeverityRaw,
-      providerAlias,
-      endpointSecretRef,
-      allowedHosts: allowedHostsRaw as string[],
-      routePolicyRef,
-      ...(recipientGroupRef !== undefined ? { recipientGroupRef } : {}),
-      ...(callbackSignatureSecretRef !== undefined ? { callbackSignatureSecretRef } : {}),
-    };
+    return parseOpsAlertRouteObject(entry as Record<string, unknown>, "OPS_ALERT_ROUTES", index);
   });
 }
