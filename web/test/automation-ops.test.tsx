@@ -1977,7 +1977,7 @@ describe("automation ops view", () => {
       }),
     }));
 
-    expect(await screen.findByText(/자동화 정의 오류./)).toHaveTextContent("예약식을 다시 확인해야 합니다.");
+    expect(await screen.findByText(/시나리오 정의 오류./)).toHaveTextContent("예약식을 다시 확인해야 합니다.");
     expect(screen.getByText(/항목: 예약식/)).toBeInTheDocument();
   });
 

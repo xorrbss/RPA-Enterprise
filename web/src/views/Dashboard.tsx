@@ -5,6 +5,7 @@ import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
 import { AdoptionEvidencePacket } from "../components/AdoptionEvidencePacket";
+import { DashboardEnvironmentState, environmentErrorKind, type DashboardEnvironmentError } from "../components/DashboardEnvironmentState";
 import { QueryPanel } from "../components/QueryPanel";
 import { Sparkline, type SparklinePoint } from "../components/Sparkline";
 import { EmptyState, ErrorState, desktopStateForError } from "../components/states";
@@ -264,6 +265,7 @@ function AdoptionReadinessPanel(props: {
   const readyCount = gates.filter((gate) => gate.status === "ready").length;
   const blockedCount = gates.filter((gate) => gate.status === "blocked").length;
   const needsCount = gates.filter((gate) => gate.status === "needs").length;
+  const allReady = readyCount === gates.length;
   return (
     <section className="panel adoption-readiness" aria-label="파일럿 준비 상태">
       <div className="panel-head">
@@ -275,63 +277,35 @@ function AdoptionReadinessPanel(props: {
           {readyCount}/{gates.length} 준비
         </span>
       </div>
-      <ul className="adoption-gates">
-        {gates.map((gate) => {
-          const actionAllowed = gate.action !== undefined && (gate.action.requiredAction === undefined || props.can(gate.action.requiredAction));
-          return (
-            <li key={gate.key}>
-              <span className={`badge ${gateTone(gate.status)}`}>{GATE_LABELS[gate.status]}</span>
-              <div>
-                <strong>{gate.label}</strong>
-                <span className="subtle">{gate.detail}</span>
-              </div>
-              {actionAllowed ? (
-                <button className="btn" type="button" onClick={() => navigate(gate.action!.view, gate.action!.params)}>
-                  {gate.action!.label}
-                </button>
-              ) : gate.action !== undefined ? (
-                <span className="subtle">권한 있는 담당자에게 요청</span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+      {allReady ? (
+        <p className="form-alert green" role="status">
+          모든 필수 관문이 준비되었습니다. 운영 전환 패킷과 최근 실행 증거를 기준으로 계속 모니터링하세요.
+        </p>
+      ) : (
+        <ul className="adoption-gates">
+          {gates.map((gate) => {
+            const actionAllowed = gate.action !== undefined && (gate.action.requiredAction === undefined || props.can(gate.action.requiredAction));
+            return (
+              <li key={gate.key}>
+                <span className={`badge ${gateTone(gate.status)}`}>{GATE_LABELS[gate.status]}</span>
+                <div>
+                  <strong>{gate.label}</strong>
+                  <span className="subtle">{gate.detail}</span>
+                </div>
+                {actionAllowed ? (
+                  <button className="btn" type="button" onClick={() => navigate(gate.action!.view, gate.action!.params)}>
+                    {gate.action!.label}
+                  </button>
+                ) : gate.action !== undefined ? (
+                  <span className="subtle">권한 있는 담당자에게 요청</span>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   );
-}
-
-function DashboardEnvironmentState(props: {
-  readonly isEmptyTenant: boolean;
-  readonly errors: readonly { readonly label: string; readonly error: unknown }[];
-  readonly can: (action: string) => boolean;
-}): JSX.Element | null {
-  if (props.errors.length > 0) {
-    const first = props.errors[0]!;
-    const state = desktopStateForError(first.error);
-    return (
-      <ErrorState
-        title={state.title}
-        message={`${first.label} 데이터를 확인하지 못했습니다. ${props.errors.length > 1 ? `${props.errors.length}개 영역에서 확인이 필요합니다. ` : ""}${state.message}`}
-        details={state.details}
-      />
-    );
-  }
-  if (props.isEmptyTenant) {
-    return (
-      <EmptyState
-        title="첫 실행 전"
-        message="아직 실행 기록이 없습니다. 첫 자동화 초안과 테스트 실행을 준비하세요."
-        action={
-          props.can("scenario.create") ? (
-            <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>
-              자동화 초안 만들기
-            </button>
-          ) : undefined
-        }
-      />
-    );
-  }
-  return null;
 }
 
 // 지표 카드 — 클릭 시 해당 목록 화면으로 드릴다운(죽은 대시보드 → 진입점). 카드 자체가 버튼이라 키보드 포커스/Enter 동작.
@@ -854,10 +828,10 @@ type ModelCostDayTrend = {
 const ROI_SOURCE_ORDER: readonly AutomationPerformanceRoiSource[] = ["process_mining", "task_mining", "manual", "imported"];
 
 const ROI_SOURCE_LABELS: Record<AutomationPerformanceRoiSource, string> = {
-  manual: "manual",
-  process_mining: "process mining",
-  task_mining: "task mining",
-  imported: "imported",
+  manual: "수기 등록",
+  process_mining: "프로세스 마이닝",
+  task_mining: "태스크 마이닝",
+  imported: "가져오기",
 };
 
 const ROI_SOURCE_TONES: Record<AutomationPerformanceRoiSource, CompactMixTone> = {
@@ -870,9 +844,9 @@ const ROI_SOURCE_TONES: Record<AutomationPerformanceRoiSource, CompactMixTone> =
 const ROI_STAGE_ORDER: readonly AutomationPerformanceRoiStage[] = ["approved", "build", "operate"];
 
 const ROI_STAGE_LABELS: Record<AutomationPerformanceRoiStage, string> = {
-  approved: "approved",
-  build: "build",
-  operate: "operate",
+  approved: "승인됨",
+  build: "구축 중",
+  operate: "운영 중",
 };
 
 const ROI_STAGE_TONES: Record<AutomationPerformanceRoiStage, CompactMixTone> = {
@@ -882,40 +856,40 @@ const ROI_STAGE_TONES: Record<AutomationPerformanceRoiStage, CompactMixTone> = {
 };
 
 function confidenceLabel(value: AutomationPerformanceReport["summary"]["roi_confidence"]): string {
-  return `H${value.high}/M${value.medium}/L${value.low}`;
+  return `높음 ${value.high}/중간 ${value.medium}/낮음 ${value.low}`;
 }
 
 function decisionSignalLabel(value: AutomationPerformanceReport["summary"]["decision_signal"]): string {
-  if (value.status === "expand") return "Expand";
-  if (value.status === "hold") return "Hold";
-  return "Watch";
+  if (value.status === "expand") return "확대";
+  if (value.status === "hold") return "보류";
+  return "관찰";
 }
 
 function roiActualsValue(value: AutomationPerformanceReport["summary"]["roi_actuals"]): string {
-  if (value.evidence_count === 0) return "No actuals";
-  if (value.estimated_transaction_count === 0) return `${compactNumber(value.actual_transaction_count)} actual tx`;
-  return `${compactNumber(value.comparable_actual_transaction_count)}/${compactNumber(value.estimated_transaction_count)} tx`;
+  if (value.evidence_count === 0) return "실적 없음";
+  if (value.estimated_transaction_count === 0) return `${compactNumber(value.actual_transaction_count)}건 실적`;
+  return `${compactNumber(value.comparable_actual_transaction_count)}/${compactNumber(value.estimated_transaction_count)}건`;
 }
 
 function roiActualsNote(value: AutomationPerformanceReport["summary"]["roi_actuals"]): string {
-  if (value.evidence_count === 0) return "evidence 0";
-  if (value.estimated_transaction_count === 0) return `no estimate · fail ${percentLabel(value.actual_failure_rate)}`;
-  return `attain ${percentLabel(value.transaction_attainment_rate)} · actual ${compactNumber(value.actual_transaction_count)}`;
+  if (value.evidence_count === 0) return "증거 0건";
+  if (value.estimated_transaction_count === 0) return `예상 없음 · 실패율 ${percentLabel(value.actual_failure_rate)}`;
+  return `달성 ${percentLabel(value.transaction_attainment_rate)} · 실적 ${compactNumber(value.actual_transaction_count)}건`;
 }
 
 function roiActualsTitle(value: AutomationPerformanceReport["summary"]["roi_actuals"]): string {
-  if (value.evidence_count === 0) return "No ROI actual evidence for this report period";
+  if (value.evidence_count === 0) return "이 리포트 기간에는 ROI 실적 증거가 없습니다";
   return [
-    `evidence ${compactNumber(value.evidence_count)}`,
-    `comparable/estimate ${compactNumber(value.comparable_actual_transaction_count)}/${compactNumber(value.estimated_transaction_count)}`,
-    `total actual ${compactNumber(value.actual_transaction_count)}`,
-    `attainment ${percentLabel(value.transaction_attainment_rate)}`,
-    `failure ${percentLabel(value.comparable_actual_failure_rate)} vs estimate ${percentLabel(value.estimated_exception_rate)}`,
-    `total actual failure ${percentLabel(value.actual_failure_rate)}`,
-    `delta ${percentLabel(value.failure_rate_delta)}`,
-    `human ${compactNumber(value.human_intervention_minutes, 1)}m`,
-    `rework ${compactNumber(value.reprocessing_minutes, 1)}m`,
-    `latest ${value.latest_period_end ?? "-"}`,
+    `증거 ${compactNumber(value.evidence_count)}건`,
+    `비교 가능/예상 ${compactNumber(value.comparable_actual_transaction_count)}/${compactNumber(value.estimated_transaction_count)}건`,
+    `전체 실적 ${compactNumber(value.actual_transaction_count)}건`,
+    `달성률 ${percentLabel(value.transaction_attainment_rate)}`,
+    `실패율 ${percentLabel(value.comparable_actual_failure_rate)} vs 예상 ${percentLabel(value.estimated_exception_rate)}`,
+    `전체 실적 실패율 ${percentLabel(value.actual_failure_rate)}`,
+    `증감 ${percentLabel(value.failure_rate_delta)}`,
+    `사람 개입 ${compactNumber(value.human_intervention_minutes, 1)}분`,
+    `재처리 ${compactNumber(value.reprocessing_minutes, 1)}분`,
+    `최근 기간 ${value.latest_period_end ?? "-"}`,
   ].join(" · ");
 }
 
@@ -971,7 +945,7 @@ function compactMixAriaLabel(chartName: string, items: readonly CompactMixItem[]
   const detail = items
     .map((item) => `${item.label} ${compactNumber(item.count)} (${compactMixPercent(item.count, total)})`)
     .join(", ");
-  return `${chartName}. total ${compactNumber(total)}. ${detail}`;
+  return `${chartName}. 총 ${compactNumber(total)}건. ${detail}`;
 }
 
 function CompactHorizontalBarSummary({
@@ -1026,9 +1000,9 @@ function RoiSourceMixChart({ lineage }: { lineage: AutomationPerformanceRoiSourc
   }));
   return (
     <CompactHorizontalBarSummary
-      title="ROI source mix"
+      title="ROI 근거 출처"
       items={items}
-      ariaLabel={compactMixAriaLabel("ROI source mix chart", items)}
+      ariaLabel={compactMixAriaLabel("ROI 근거 출처 차트", items)}
     />
   );
 }
@@ -1042,9 +1016,9 @@ function RoiStageMixChart({ lineage }: { lineage: AutomationPerformanceRoiSource
   }));
   return (
     <CompactHorizontalBarSummary
-      title="ROI stage mix"
+      title="ROI 단계 구성"
       items={items}
-      ariaLabel={compactMixAriaLabel("ROI stage mix chart", items)}
+      ariaLabel={compactMixAriaLabel("ROI 단계 구성 차트", items)}
     />
   );
 }
@@ -1087,11 +1061,11 @@ function modelCostTrendAriaLabel(days: readonly ModelCostDayTrend[]): string {
   const missingRows = modelCostMissingRows(days);
   const latest = days[days.length - 1];
   const latestText = latest === undefined
-    ? "latest empty"
+    ? "최근 데이터 없음"
     : latest.cost === null
-      ? `latest ${latest.day} missing cost`
-      : `latest ${latest.day} ${moneyLabel(latest.cost)}`;
-  return `Model cost trend chart. ${compactNumber(days.length)} days, total ${moneyLabel(total)}, missing costs ${compactNumber(missingRows)}. ${latestText}`;
+      ? `최근 ${latest.day} 비용 미집계`
+      : `최근 ${latest.day} ${moneyLabel(latest.cost)}`;
+  return `모델 비용 추이 차트. ${compactNumber(days.length)}일, 합계 ${moneyLabel(total)}, 미집계 ${compactNumber(missingRows)}건. ${latestText}`;
 }
 
 function ModelCostTrendMini({
@@ -1108,7 +1082,7 @@ function ModelCostTrendMini({
   return (
     <div className="performance-viz-card">
       <div className="performance-viz-head">
-        <h3>Model cost trend</h3>
+        <h3>모델 비용 추이</h3>
         <strong>합계</strong>
       </div>
       <div className="model-cost-mini">
@@ -1236,7 +1210,7 @@ function AutomationPerformancePanel({
             {exportState === "pending" && exportFormat === "csv" ? "준비 중" : "CSV"}
           </button>
           <button className="btn" type="button" disabled={exportState === "pending" || report === undefined || !canExportPocMarkdown} onClick={onExportPocMarkdown}>
-            {exportState === "pending" && exportFormat === "poc_markdown" ? "Preparing" : "PoC MD"}
+            {exportState === "pending" && exportFormat === "poc_markdown" ? "준비 중" : "PoC 문서"}
           </button>
           <button className="btn" type="button" disabled={exportState === "pending" || report === undefined || !canExportXlsx} onClick={onExportXlsx}>
             {exportState === "pending" && exportFormat === "xlsx" ? "준비 중" : "XLSX"}
@@ -1262,11 +1236,11 @@ function AutomationPerformancePanel({
             <ReportMetric label="성공률" value={percentLabel(report.summary.success_rate)} note={`${compactNumber(report.summary.completed)}건 완료`} />
             <ReportMetric label="절감 시간" value={`${compactNumber(report.summary.estimated_hours_saved, 1)}h`} note={moneyLabel(report.summary.estimated_value)} />
             <ReportMetric label="재처리율" value={percentLabel(report.summary.reprocessing_rate)} note={`${compactNumber(report.summary.rerun_count)}건 재실행`} />
-            <ReportMetric label="Gateway 비용" value={moneyLabel(report.summary.gateway_cost)} note={`${compactNumber(report.summary.total_runs)}건 실행`} />
-            <ReportMetric label="순가치" value={moneyLabel(report.summary.net_value)} note={`${ratioLabel(report.summary.value_to_cost_ratio)} value/cost`} />
-            <ReportMetric label="LLM 비용" value={nullableMoneyLabel(report.summary.llm_call_cost)} note={`delta ${nullableMoneyLabel(report.summary.run_vs_call_cost_delta)}`} />
+            <ReportMetric label="게이트웨이 비용" value={moneyLabel(report.summary.gateway_cost)} note={`${compactNumber(report.summary.total_runs)}건 실행`} />
+            <ReportMetric label="순가치" value={moneyLabel(report.summary.net_value)} note={`${ratioLabel(report.summary.value_to_cost_ratio)} 가치/비용`} />
+            <ReportMetric label="AI 호출 비용" value={nullableMoneyLabel(report.summary.llm_call_cost)} note={`증감 ${nullableMoneyLabel(report.summary.run_vs_call_cost_delta)}`} />
             <RoiSourceLineageMetric lineage={report.summary.roi_source_lineage} confidence={report.summary.roi_confidence} />
-            <ReportMetric label="ROI actuals" value={roiActualsValue(report.summary.roi_actuals)} note={roiActualsNote(report.summary.roi_actuals)} />
+            <ReportMetric label="ROI 실적" value={roiActualsValue(report.summary.roi_actuals)} note={roiActualsNote(report.summary.roi_actuals)} />
             <ReportMetric label="판단" value={decisionSignalLabel(report.summary.decision_signal)} note={report.summary.decision_signal.reason} />
           </div>
           <div className="performance-compact-visuals">
@@ -1284,8 +1258,8 @@ function AutomationPerformancePanel({
                     <th scope="col">성공률</th>
                     <th scope="col">재처리</th>
                     <th scope="col">비용</th>
-                    <th scope="col">Cost/run</th>
-                    <th scope="col">Delta</th>
+                    <th scope="col">건당 비용</th>
+                    <th scope="col">증감</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1306,15 +1280,15 @@ function AutomationPerformancePanel({
           )}
           {recentModelCostTrends.length > 0 && (
             <div className="table-wrap performance-workflow-table">
-              <table aria-label="Model cost daily trends">
+              <table aria-label="모델 비용 일별 추이">
                 <thead>
                   <tr>
                     <th scope="col">일자</th>
                     <th scope="col">모델</th>
-                    <th scope="col">Calls</th>
+                    <th scope="col">호출</th>
                     <th scope="col">비용</th>
                     <th scope="col">일 비중</th>
-                    <th scope="col">Delta</th>
+                    <th scope="col">증감</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1357,7 +1331,7 @@ function AutomationPerformancePanel({
                   {topCostModels.map((item) => (
                     <li key={item.model}>
                       <code>{item.model}</code>
-                      <strong>{nullableMoneyLabel(item.cost)} · {compactNumber(item.calls)} calls · {percentLabel(item.cost_share)}</strong>
+                      <strong>{nullableMoneyLabel(item.cost)} · {compactNumber(item.calls)}회 호출 · {percentLabel(item.cost_share)}</strong>
                     </li>
                   ))}
                 </ul>
@@ -1373,8 +1347,8 @@ function AutomationPerformancePanel({
                     <th scope="col">절감</th>
                     <th scope="col">순가치</th>
                     <th scope="col">비용</th>
-                    <th scope="col">Cost/run</th>
-                    <th scope="col">ROI actuals</th>
+                    <th scope="col">건당 비용</th>
+                    <th scope="col">ROI 실적</th>
                     <th scope="col">ROI 근거</th>
                     <th scope="col">판단</th>
                   </tr>
@@ -1515,19 +1489,30 @@ export function DashboardView(): JSX.Element {
   // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
   // isLoading/isError 중에는 미표시(데이터 도착 전 단정 금지). 실행이 1건이라도 생기면 자동 소멸.
   const isEmptyTenant = recent.isSuccess && recent.data.items.length === 0 && recent.data.next_cursor === null;
-  const dashboardErrors: { label: string; error: unknown }[] = [];
-  if (summary.isError) dashboardErrors.push({ label: "실행 요약", error: summary.error });
-  if (recent.isError) dashboardErrors.push({ label: "최근 실행", error: recent.error });
-  if (human.isError) dashboardErrors.push({ label: "사람 확인", error: human.error });
-  if (wiDlq.isError) dashboardErrors.push({ label: "작업 항목 재처리", error: wiDlq.error });
-  if (sinkDlq.isError) dashboardErrors.push({ label: "외부 전달 재처리", error: sinkDlq.error });
-  if (opsHealth.isError) dashboardErrors.push({ label: "운영 헬스", error: opsHealth.error });
-  if (opsAlerts.isError) dashboardErrors.push({ label: "운영 알림", error: opsAlerts.error });
+  const dashboardErrors: DashboardEnvironmentError[] = [];
+  if (summary.isError) dashboardErrors.push({ label: "실행 요약", error: summary.error, onRetry: () => void summary.refetch() });
+  if (recent.isError) dashboardErrors.push({ label: "최근 실행", error: recent.error, onRetry: () => void recent.refetch() });
+  if (human.isError) dashboardErrors.push({ label: "사람 확인", error: human.error, onRetry: () => void human.refetch() });
+  if (wiDlq.isError) dashboardErrors.push({ label: "작업 항목 재처리", error: wiDlq.error, onRetry: () => void wiDlq.refetch() });
+  if (sinkDlq.isError) dashboardErrors.push({ label: "외부 전달 재처리", error: sinkDlq.error, onRetry: () => void sinkDlq.refetch() });
+  if (opsHealth.isError) dashboardErrors.push({ label: "운영 헬스", error: opsHealth.error, onRetry: () => void opsHealth.refetch() });
+  if (opsAlerts.isError) dashboardErrors.push({ label: "운영 알림", error: opsAlerts.error, onRetry: () => void opsAlerts.refetch() });
+  const dashboardErrorKind = environmentErrorKind(dashboardErrors);
 
   return (
     <>
       {isEmptyTenant && <OnboardingBanner {...onboardingProps(can, roles)} />}
-      <DashboardEnvironmentState isEmptyTenant={isEmptyTenant} errors={dashboardErrors} can={can} />
+      <DashboardEnvironmentState
+        isEmptyTenant={isEmptyTenant}
+        errors={dashboardErrors}
+        emptyAction={
+          can("scenario.create") ? (
+            <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>
+              자동화 초안 만들기
+            </button>
+          ) : undefined
+        }
+      />
       <AdoptionReadinessPanel
         auth={authReadiness}
         production={productionReadiness}
@@ -1612,6 +1597,7 @@ export function DashboardView(): JSX.Element {
         title="최근 실행"
         query={recent}
         rowKey={(r) => r.run_id}
+        collapsedErrorKind={dashboardErrorKind}
         emptyTitle="첫 실행 전"
         emptyMessage="아직 실행이 없습니다."
         columns={[

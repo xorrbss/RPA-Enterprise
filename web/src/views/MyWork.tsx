@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { useSubject } from "../api/permissions";
 import { navigate, mergeParams } from "../router";
-import { StatusBadge } from "../components/badges";
+import { StatusBadge, kindLabel } from "../components/badges";
 import { Loading, ErrorState, EmptyState } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import type { HumanTaskItem, ScenarioItem } from "../api/types";
@@ -22,17 +22,6 @@ function taskTitle(t: HumanTaskItem): string {
     }
   }
   return kindLabel(t.kind);
-}
-
-function kindLabel(kind: string): string {
-  switch (kind) {
-    case "approval": return "승인 요청";
-    case "validation": return "문서 검증";
-    case "exception": return "예외 확인";
-    case "captcha": return "보안문자 입력";
-    case "mfa": return "추가 인증";
-    default: return "사람 확인";
-  }
 }
 
 // 인터프리터가 이미 순수 continue 신호(보안문자/추가 인증)와 구조화 검토를 가른다 — 여기선 목록 라벨만 구분.

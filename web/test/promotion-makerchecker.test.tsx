@@ -25,6 +25,16 @@ function jwt(roles: readonly string[]): string {
 
 const draftScenario = { scenario_id: "sc-1", name: "월말정산봇", version: 2, latest_version_id: "v", promotion_status: "draft" };
 
+async function openScenarioManagementActions(scenarioName: string): Promise<HTMLElement> {
+  const nameCell = await screen.findByText(scenarioName);
+  const row = nameCell.closest("tr");
+  if (row === null) {
+    throw new Error(`scenario row not found: ${scenarioName}`);
+  }
+  fireEvent.click(within(row).getByText("관리 작업"));
+  return row;
+}
+
 describe("승격 maker-checker (D4b)", () => {
   beforeEach(() => {
     location.hash = "#scenarioStudio";
@@ -35,9 +45,10 @@ describe("승격 maker-checker (D4b)", () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
     const createPromotionRequest = vi.fn(async () => ({ request_id: "r1", status: "pending" }));
     renderApp(fakeClient({ listScenarios: async () => ({ items: [draftScenario], next_cursor: null }), createPromotionRequest }));
-    fireEvent.click(await screen.findByRole("button", { name: "승격 요청" }));
+    const row = await openScenarioManagementActions(draftScenario.name);
+    fireEvent.click(within(row).getByRole("button", { name: "운영 기준 승인 요청" }));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText("승격 사유"), { target: { value: "운영 적용" } });
+    fireEvent.change(within(dialog).getByLabelText("요청 사유"), { target: { value: "운영 적용" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
     await waitFor(() => expect(createPromotionRequest).toHaveBeenCalledWith("sc-1", 2, "운영 적용", expect.any(String)));
   });
@@ -45,9 +56,10 @@ describe("승격 maker-checker (D4b)", () => {
   test("operator: 직접 '운영 지정'·승인 인박스는 권한 없어 미노출", async () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
     renderApp(fakeClient({ listScenarios: async () => ({ items: [draftScenario], next_cursor: null }) }));
-    await screen.findByRole("button", { name: "승격 요청" });
-    expect(screen.queryByRole("button", { name: "운영 지정" })).toBeNull();
-    expect(screen.queryByText("승격 승인 대기")).toBeNull();
+    const row = await openScenarioManagementActions(draftScenario.name);
+    expect(within(row).getByRole("button", { name: "운영 기준 승인 요청" })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "운영 기준 지정" })).toBeNull();
+    expect(screen.queryByText("운영 기준 승인 대기")).toBeNull();
   });
 
   test("approver: 승인 인박스에 pending 요청 노출 + 승인 시 decidePromotionRequest(approve)", async () => {

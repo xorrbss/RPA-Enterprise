@@ -1,7 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
-import { EmptyState, ErrorState, Loading, desktopStateForError } from "./states";
+import { EmptyState, ErrorState, Loading, desktopStateForError, type DesktopStateKind } from "./states";
 import type { Pager } from "../api/useListView";
 
 export interface Column<T> {
@@ -20,9 +20,11 @@ export function QueryPanel<T>(props: {
   emptyAction?: ReactNode;
   actions?: ReactNode;
   pager?: Pager;
+  collapsedErrorKind?: DesktopStateKind | null;
 }): JSX.Element {
-  const { title, query, columns, rowKey, emptyTitle, emptyMessage, emptyAction, actions, pager } = props;
+  const { title, query, columns, rowKey, emptyTitle, emptyMessage, emptyAction, actions, pager, collapsedErrorKind } = props;
   const errorState = query.isError ? desktopStateForError(query.error) : null;
+  const collapseError = errorState !== null && collapsedErrorKind === errorState.kind;
   return (
     <section className="panel">
       <div className="panel-head">
@@ -32,6 +34,14 @@ export function QueryPanel<T>(props: {
       <div className="panel-body">
         {query.isLoading ? (
           <Loading />
+        ) : query.isError && collapseError ? (
+          <p className="form-alert red" role="alert">
+            {title} 데이터를 확인하지 못했습니다. 위의 오류 요약을 확인하거나{" "}
+            <button className="linklike" type="button" onClick={() => void query.refetch()}>
+              다시 시도
+            </button>
+            하세요.
+          </p>
         ) : query.isError ? (
           <ErrorState
             title={errorState?.title}

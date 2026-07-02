@@ -90,9 +90,17 @@ async function seedStagehand(pool: Pool, tenant: string, run: string, stepId: st
   await withTenantTx(pool, tenant, (c) =>
     c.query(
       `INSERT INTO stagehand_calls (id, tenant_id, run_id, step_id, attempt, idempotency_key, request_hash, model,
-                                    transport, stream_status, ttfb_ms, input_tokens, output_tokens, cost, output_ref, input_redacted_ref)
-       VALUES (gen_random_uuid(), $1,$2,$3,0,$4,'rh','gpt-4o-mini','sse','done',120,500,200,0.001234,'obj://SECRET-OUTPUT','obj://SECRET-INPUT')`,
-      [tenant, run, stepId, `${run}:${stepId}:0`],
+                                    transport, stream_status, ttfb_ms, input_tokens, output_tokens, cost, output_ref,
+                                    input_redacted_ref, parsed_json)
+       VALUES (gen_random_uuid(), $1,$2,$3,0,$4,'rh','gpt-4o-mini','sse','done',120,500,200,0.001234,
+               'obj://SECRET-OUTPUT','obj://SECRET-INPUT',$5::jsonb)`,
+      [
+        tenant,
+        run,
+        stepId,
+        `${run}:${stepId}:0`,
+        JSON.stringify({ operation: "fill", selector: "#approval-note", value: "SECRET-FILL-VALUE" }),
+      ],
     ),
   );
 }
@@ -146,11 +154,13 @@ async function main(): Promise<void> {
       check("s1: action/status/duration", items[0]!.action === "navigate" && items[0]!.status === "success" && items[0]!.duration_ms === 800);
       check("s2: cache_mode=hit + artifact_ids 노출(본문 아님)", items[1]!.cache_mode === "hit" && Array.isArray(items[1]!.artifact_ids) && (items[1]!.artifact_ids as string[]).includes(ART_1));
       check("s3: exception {class,code}만(message/evidenceRefs 미노출)", JSON.stringify(items[2]!.exception) === JSON.stringify({ class: "system", code: "BROWSER_CRASH" }));
-      check("s2: stagehand 요약(model/tokens/cost)", Array.isArray(items[1]!.stagehand_calls) && (items[1]!.stagehand_calls as Array<Record<string, unknown>>)[0]?.model === "gpt-4o-mini" && (items[1]!.stagehand_calls as Array<Record<string, unknown>>)[0]?.output_tokens === 200);
+      const s2Calls = items[1]!.stagehand_calls as Array<Record<string, unknown>>;
+      check("s2: stagehand 요약(model/tokens/cost)", Array.isArray(items[1]!.stagehand_calls) && s2Calls[0]?.model === "gpt-4o-mini" && s2Calls[0]?.output_tokens === 200);
+      check("s2: stagehand action_summary exposes redacted action only", typeof s2Calls[0]?.action_summary === "string" && String(s2Calls[0]?.action_summary).includes("fill") && String(s2Calls[0]?.action_summary).includes("#approval-note") && String(s2Calls[0]?.action_summary).includes("value redacted"), JSON.stringify(s2Calls[0]));
 
       // 3) **민감 본문/평문 미노출** — 응답 직렬화에 시크릿 마커 0건
       const body = res.body;
-      for (const secret of ["SECRET-OUTPUT", "SECRET-INPUT", "SECRET-EXCEPTION-MESSAGE", "SECRET-EVIDENCE", "SECRET-PAGESTATE", "output_ref", "input_redacted_ref", "page_state"]) {
+      for (const secret of ["SECRET-OUTPUT", "SECRET-INPUT", "SECRET-FILL-VALUE", "SECRET-EXCEPTION-MESSAGE", "SECRET-EVIDENCE", "SECRET-PAGESTATE", "output_ref", "input_redacted_ref", "parsed_json", "page_state"]) {
         check(`민감 미노출: '${secret}' 응답에 없음`, !body.includes(secret), secret);
       }
 

@@ -140,6 +140,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   );
   const gatewayPolicies = policies.data?.items ?? [];
   const defaultGatewayPolicy = gatewayPolicies.find((policy) => policy.is_default === true) ?? null;
+  const targetSetupNotice = targetSetupNoticeFor(selectedSite, startUrl);
 
   function applySiteDefaults(site: SiteItem): void {
     setBrowserIdentityId(site.default_browser_identity_id ?? "");
@@ -173,6 +174,14 @@ export function PromptScenarioGenerator(): JSX.Element {
       return;
     }
     window.setTimeout(reveal, 0);
+  }
+
+  function openSiteSecurity(siteId?: string): void {
+    if (siteId === undefined) {
+      navigate("security", { section: "sites" });
+      return;
+    }
+    navigate("security", { section: "sites", site: siteId });
   }
 
   function handleStartUrlChange(nextStartUrl: string): void {
@@ -435,7 +444,7 @@ export function PromptScenarioGenerator(): JSX.Element {
     const hasAnyTarget = targetValues.some((v) => v.length > 0);
     const hasFullTarget = targetValues.every((v) => v.length > 0);
     if (hasAnyTarget && !hasFullTarget) {
-      throw new Error("사이트, 로그인 세션, 보안 정책을 모두 준비하세요.");
+      throw new Error("사이트, 로그인 세션, 보안 정책을 모두 준비하세요. 아래 사이트·세션 설정에서 바로 확인할 수 있습니다.");
     }
     const [site, identity, network] = targetValues as [string, string, string];
     const params = parseParamsText(paramsText);
@@ -459,7 +468,7 @@ export function PromptScenarioGenerator(): JSX.Element {
     const hasAnyTarget = targetValues.some((v) => v.length > 0);
     const hasFullTarget = targetValues.every((v) => v.length > 0);
     if (hasAnyTarget && !hasFullTarget) {
-      throw new Error("사이트, 로그인 세션, 보안 정책을 모두 준비하세요.");
+      throw new Error("사이트, 로그인 세션, 보안 정책을 모두 준비하세요. 아래 사이트·세션 설정에서 바로 확인할 수 있습니다.");
     }
     const [site, identity, network] = targetValues as [string, string, string];
     const params = parseParamsText(paramsText);
@@ -635,6 +644,26 @@ export function PromptScenarioGenerator(): JSX.Element {
             <strong>{model.trim().length > 0 ? model.trim() : defaultGatewayPolicy?.model ?? "기본값 자동 선택"}</strong>
           </span>
         </div>
+        {targetSetupNotice !== null && (
+          <div className={`form-alert ${targetSetupNotice.tone}`} role="status" style={{ display: "grid", gap: 6 }}>
+            <span>{targetSetupNotice.text}</span>
+            <span className="inline-facts">
+              {targetSetupNotice.showCreate && canCreateSite && (
+                <button className="linklike" type="button" onClick={openInlineSiteCreate}>
+                  새 사이트 등록
+                </button>
+              )}
+              <button className="linklike" type="button" onClick={() => openSiteSecurity(targetSetupNotice.siteId)}>
+                사이트·세션 설정
+              </button>
+              {targetSetupNotice.siteId !== undefined && (
+                <button className="linklike" type="button" onClick={() => openSiteSecurity(targetSetupNotice.siteId)}>
+                  세션 등록하러 가기
+                </button>
+              )}
+            </span>
+          </div>
+        )}
         <AdvancedSettings
           advancedOpen={advancedOpen}
           onAdvancedToggle={setAdvancedOpen}
@@ -732,4 +761,50 @@ export function PromptScenarioGenerator(): JSX.Element {
       </div>
     </section>
   );
+}
+
+type TargetSetupNotice = {
+  readonly tone: "amber" | "red";
+  readonly text: string;
+  readonly siteId?: string;
+  readonly showCreate: boolean;
+};
+
+function targetSetupNoticeFor(site: SiteItem | null, startUrl: string): TargetSetupNotice | null {
+  if (site !== null) {
+    const name = site.name ?? "선택한 사이트";
+    if (site.login_capable === true && site.session_ready !== true) {
+      return {
+        tone: "amber",
+        text: `${name}의 로그인 세션을 등록해야 저장 후 실행할 수 있습니다.`,
+        siteId: site.site_profile_id,
+        showCreate: false,
+      };
+    }
+    if (site.login_capable === true && (site.default_browser_identity_id === null || site.default_browser_identity_id === undefined)) {
+      return {
+        tone: "amber",
+        text: `${name}에 사용할 로그인 세션을 연결하세요.`,
+        siteId: site.site_profile_id,
+        showCreate: false,
+      };
+    }
+    if (site.default_network_policy_id === null || site.default_network_policy_id === undefined) {
+      return {
+        tone: "amber",
+        text: `${name}에 보안 정책을 연결해야 실행 대상이 완성됩니다.`,
+        siteId: site.site_profile_id,
+        showCreate: false,
+      };
+    }
+    return null;
+  }
+  if (httpOrigin(startUrl) !== null) {
+    return {
+      tone: "amber",
+      text: "이 주소로 저장 후 실행하려면 사이트와 로그인 세션 설정을 먼저 확인하세요.",
+      showCreate: true,
+    };
+  }
+  return null;
 }

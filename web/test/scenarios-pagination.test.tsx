@@ -147,11 +147,11 @@ describe("Scenario studio pagination", () => {
     expect(await screen.findByText("governed scenario")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "이력" }));
 
-    expect(await screen.findByText("pilot", { selector: "span.badge" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "stage: deprecated" }));
-    expect(screen.getByPlaceholderText("ticket:GOV-123")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "retire pilot" } });
-    fireEvent.change(screen.getByLabelText("Evidence ref"), { target: { value: "ticket:GOV-123" } });
+    expect(await screen.findByText("파일럿 운영", { selector: "span.badge" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "사용 중단 표시" }));
+    expect(screen.getByPlaceholderText("예: 결재 GOV-123 또는 감사 문서 링크")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("변경 사유"), { target: { value: "retire pilot" } });
+    fireEvent.change(screen.getByLabelText("근거 링크/문서"), { target: { value: "ticket:GOV-123" } });
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
 
     await waitFor(() => expect(calls).toHaveLength(1));

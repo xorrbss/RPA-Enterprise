@@ -6,6 +6,7 @@ import { useCan, useSubject } from "../api/permissions";
 import type { ApiClient } from "../api/client";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
+import { DashboardEnvironmentState, environmentErrorKind, type DashboardEnvironmentError } from "../components/DashboardEnvironmentState";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { HumanTaskReviewPanel } from "../components/HumanTaskReviewPanel";
@@ -275,9 +276,15 @@ function HumanTaskStreamView(): JSX.Element {
   const canFilterMine = subject !== null && subject.length > 0;
   const unassignedCount = unassignedQuery.data?.items.filter(isActiveHumanTask).length ?? 0;
   const unassignedCountLabel = unassignedQuery.data?.next_cursor !== null && unassignedQuery.data?.next_cursor !== undefined ? `${unassignedCount}+` : String(unassignedCount);
+  const pageErrors: DashboardEnvironmentError[] = [];
+  if (lv.query.isError) pageErrors.push({ label: "확인 업무 목록", error: lv.query.error, onRetry: () => void lv.query.refetch() });
+  if (unassignedQuery.isError) pageErrors.push({ label: "미배정 업무", error: unassignedQuery.error, onRetry: () => void unassignedQuery.refetch() });
+  if (principalsQuery.isError) pageErrors.push({ label: "담당자 목록", error: principalsQuery.error, onRetry: () => void principalsQuery.refetch() });
+  const pageErrorKind = environmentErrorKind(pageErrors);
   return (
     <>
       {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} principalOptions={principalOptions} onClose={() => { mergeParams({ ht: null }); }} />}
+      <DashboardEnvironmentState errors={pageErrors} />
       <section className="metrics human-task-metrics" aria-label="문서 검증 업무 요약">
         <button className="metric metric-link" type="button" onClick={() => setDocumentOnly((value) => !value)} aria-pressed={documentOnly}>
           <span className="label">검증 대기 문서</span>
@@ -412,6 +419,7 @@ function HumanTaskStreamView(): JSX.Element {
         title="검토 업무 목록"
         query={panelQuery}
         pager={lv.pager}
+        collapsedErrorKind={pageErrorKind}
         actions={
           <>
             <FilterSelect label="상태" value={lv.filter.status} options={HUMANTASK_STATES} labelFor={statusLabel} onChange={(v) => lv.setFilter({ ...lv.filter, status: v })} />

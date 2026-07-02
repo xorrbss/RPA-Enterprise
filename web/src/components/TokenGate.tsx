@@ -1,11 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 
+import { decodeTokenExpiration } from "../api/permissions";
 import { ApiError } from "../api/types";
 
 // 토큰 게이트 — Bearer 토큰(외부 발급 JWT)을 브라우저(localStorage)에만 저장. IdP 없음(토큰은 외부 공급).
 // 토큰 없으면 입력 화면, 있으면 콘솔. 조용한 401 루프 대신 명시적 접속 화면.
 const KEY = "rpa.token";
 const REDIRECT_TOKEN_KEYS = ["id_token", "access_token", "token"] as const;
+const EXPIRY_WARNING_MS = 10 * 60 * 1000;
 
 export function clearToken(): void {
   localStorage.removeItem(KEY);
@@ -29,6 +31,7 @@ export function TokenGate({ children }: { children: ReactNode }): JSX.Element {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(KEY));
   const [emptyTried, setEmptyTried] = useState(false);
   const [expired, setExpired] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const oidcAuthUrl = oidcLoginUrl();
 
   // 전역 401 구독: 세션 만료 시 토큰 제거 + 게이트 노출(전체 리로드 대신 SPA 유지 — 자식 언마운트로 폴링도 멈춘다).
@@ -53,7 +56,21 @@ export function TokenGate({ children }: { children: ReactNode }): JSX.Element {
     setToken(redirectedToken);
   }, []);
 
-  if (token !== null && token !== "") return <>{children}</>;
+  useEffect(() => {
+    if (token === null || token === "") return undefined;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [token]);
+
+  if (token !== null && token !== "") {
+    return (
+      <>
+        <SessionExpiryWarning token={token} now={now} />
+        {children}
+      </>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "var(--bg)" }}>
@@ -112,6 +129,26 @@ export function TokenGate({ children }: { children: ReactNode }): JSX.Element {
           운영 콘솔 접속
         </button>
       </form>
+    </div>
+  );
+}
+
+function SessionExpiryWarning({ token, now }: { token: string; now: number }): JSX.Element | null {
+  const expiresAt = decodeTokenExpiration(token);
+  if (expiresAt === null) return null;
+  const remainingMs = expiresAt - now;
+  if (remainingMs > EXPIRY_WARNING_MS) return null;
+  const expired = remainingMs <= 0;
+  const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+  return (
+    <div
+      className={`form-alert ${expired ? "red" : "amber"}`}
+      role={expired ? "alert" : "status"}
+      style={{ borderRadius: 0, margin: 0, textAlign: "center" }}
+    >
+      {expired
+        ? "접속 코드가 만료되었습니다. 처리 중인 요청은 실패할 수 있으니 새 접속 코드로 다시 접속하세요."
+        : `접속 코드가 약 ${minutes}분 후 만료됩니다. 제출 전에 새 접속 코드를 준비하세요.`}
     </div>
   );
 }

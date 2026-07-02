@@ -685,6 +685,105 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     });
   });
 
+  test("단계 트레이스: 100개 이후 단계는 더 보기로 cursor 페이지를 append한다", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      step_id: `s${index + 1}`,
+      node_id: `n${index + 1}`,
+      attempt: 0,
+      action: "act",
+      status: "success",
+      cache_mode: "bypass",
+      artifact_ids: [],
+      stagehand_calls: [],
+      started_at: null,
+      ended_at: null,
+      duration_ms: 10 + index,
+      exception: null,
+    }));
+    const step101 = {
+      step_id: "s101",
+      node_id: "n101",
+      attempt: 0,
+      action: "extract",
+      status: "success",
+      cache_mode: "bypass",
+      artifact_ids: [],
+      stagehand_calls: [],
+      started_at: null,
+      ended_at: null,
+      duration_ms: 101,
+      exception: null,
+    };
+
+    renderApp(
+      fakeClient({
+        listRunSteps: async (_runId, params) => {
+          calls.push(params ?? {});
+          if (params?.cursor === "cursor-step-101") {
+            return { items: [step101], next_cursor: null };
+          }
+          return { items: firstPage, next_cursor: "cursor-step-101" };
+        },
+      }),
+    );
+
+    await openDetail();
+    expect(await screen.findByText("단계 #100")).toBeInTheDocument();
+    expect(screen.getByText("관찰된 100+개 단계")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "더 보기" }));
+
+    expect(await screen.findByText("단계 #101")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(calls).toContainEqual({ limit: 100, cursor: "cursor-step-101" }),
+    );
+    expect(screen.queryByRole("button", { name: "더 보기" })).toBeNull();
+    expect(screen.getByText("관찰된 101개 단계")).toBeInTheDocument();
+  });
+
+  test("단계 트레이스: AI 판단 상세에 서버 마스킹 action_summary만 표시한다", async () => {
+    renderApp(
+      fakeClient({
+        listRunSteps: async () => ({
+          items: [
+            {
+              step_id: "s-fill",
+              node_id: "fill_approval_note",
+              attempt: 0,
+              action: "act",
+              status: "success",
+              cache_mode: "miss",
+              artifact_ids: [],
+              stagehand_calls: [
+                {
+                  model: "gpt-4o-mini",
+                  transport: "sse",
+                  stream_status: "done",
+                  ttfb_ms: 120,
+                  input_tokens: 500,
+                  output_tokens: 200,
+                  cost: "0.001234",
+                  action_summary: "fill · #approval-note · value redacted",
+                },
+              ],
+              started_at: null,
+              ended_at: null,
+              duration_ms: 1200,
+              exception: null,
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    await openDetail();
+    fireEvent.click(await screen.findByText("AI 판단 상세"));
+    expect(screen.getByText("결정한 동작")).toBeInTheDocument();
+    expect(screen.getByText("fill · #approval-note · value redacted")).toBeInTheDocument();
+    expect(screen.queryByText("SECRET-FILL-VALUE")).toBeNull();
+  });
+
   test("실행 상세 산출물: StepTrace 증빙 클릭은 실행 산출물 미리보기도 같은 artifact로 맞춘다", async () => {
     installObjectUrlMock();
     renderApp(

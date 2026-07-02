@@ -3,6 +3,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useApiClient } from "../api/context";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
+import { DashboardEnvironmentState, environmentErrorKind, type DashboardEnvironmentError } from "../components/DashboardEnvironmentState";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
 import { SlideOver } from "../components/SlideOver";
@@ -48,14 +49,21 @@ export function WorkitemsView(): JSX.Element {
   // 선택 작업항목을 해시(`#workitems?wi=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
   const sel = useHashIdParam("wi");
   const detail = useQuery({ queryKey: ["workitem-detail", sel], queryFn: () => api.getWorkitem(sel as string), enabled: sel !== null });
+  const pageErrors: DashboardEnvironmentError[] = [];
+  if (wi.query.isError) pageErrors.push({ label: "작업 목록", error: wi.query.error, onRetry: () => void wi.query.refetch() });
+  if (wiDlq.query.isError) pageErrors.push({ label: "작업 항목 재처리", error: wiDlq.query.error, onRetry: () => void wiDlq.query.refetch() });
+  if (sinkDlq.query.isError) pageErrors.push({ label: "외부 전달 재처리", error: sinkDlq.query.error, onRetry: () => void sinkDlq.query.refetch() });
+  const pageErrorKind = environmentErrorKind(pageErrors);
 
   return (
     <>
       {sel !== null && <WorkitemDetailPanel detail={detail} onClose={() => { mergeParams({ wi: null }); }} />}
+      <DashboardEnvironmentState errors={pageErrors} />
       <QueryPanel<WorkitemItem>
         title="작업 목록"
         query={wi.query}
         pager={wi.pager}
+        collapsedErrorKind={pageErrorKind}
         actions={<FilterSelect label="상태" value={wi.filter.status} options={WORKITEM_STATES} labelFor={statusLabel} onChange={(v) => wi.setFilter({ status: v })} />}
         rowKey={(r) => r.workitem_id}
         emptyMessage="조건에 맞는 작업 항목이 없습니다."
@@ -77,6 +85,7 @@ export function WorkitemsView(): JSX.Element {
         title="작업 항목 재처리 대기"
         query={wiDlq.query}
         pager={wiDlq.pager}
+        collapsedErrorKind={pageErrorKind}
         actions={
           wiDlqItems.length > 0 ? (
             <ActionButton
@@ -123,6 +132,7 @@ export function WorkitemsView(): JSX.Element {
         title="외부 전달 재시도 대상"
         query={sinkDlq.query}
         pager={sinkDlq.pager}
+        collapsedErrorKind={pageErrorKind}
         actions={
           sinkDlqItems.length > 0 ? (
             <ActionButton

@@ -89,6 +89,16 @@ describe("statusLabel / kindLabel — 필터 드롭다운 한국어 라벨", () 
     expect(statusLabel("totally_unknown")).toBe("totally_unknown");
   });
 
+  test.each([
+    ["approval", "승인 요청"],
+    ["validation", "문서 검증"],
+    ["exception", "예외 확인"],
+    ["captcha", "보안문자 입력"],
+    ["mfa", "추가 인증"],
+  ])("kindLabel(%s) → %s", (kind, label) => {
+    expect(kindLabel(kind)).toBe(label);
+  });
+
   // 완전성: 상태/위험도 필터 enum 전부 한국어로 치환(raw로 새지 않음).
   test.each([...RUN_STATES, ...WORKITEM_STATES, ...HUMANTASK_STATES, ...SITE_RISKS])(
     "statusLabel 필터 enum %s 라벨 존재",

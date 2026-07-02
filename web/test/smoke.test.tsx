@@ -60,6 +60,21 @@ function jwt(roles: readonly string[]): string {
   return `e30.${payload}.sig`;
 }
 
+async function openScenarioManagementActions(scenarioName: string): Promise<HTMLElement> {
+  const nameCell = await screen.findByText(scenarioName);
+  const row = nameCell.closest("tr");
+  if (row === null) {
+    throw new Error(`scenario row not found: ${scenarioName}`);
+  }
+  fireEvent.click(within(row).getByText("관리 작업"));
+  return row;
+}
+
+async function openManualScenarioCreate(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByText("양식으로 직접 만들기"));
+  return screen.findByRole("button", { name: "+ 새 자동화 만들기" });
+}
+
 function installObjectUrlMock(): void {
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
@@ -506,7 +521,8 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    const unpublish = await screen.findByRole("button", { name: "운영 해제" });
+    const row = await openScenarioManagementActions("삼성디스플레이 공지 수집");
+    const unpublish = within(row).getByRole("button", { name: "운영 기준 해제" });
     fireEvent.click(unpublish);
     fireEvent.click(await screen.findByRole("button", { name: "확인" }));
 
@@ -629,10 +645,11 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    const btn = await screen.findByRole("button", { name: "운영 지정" });
+    const row = await openScenarioManagementActions("리뷰 수집");
+    const btn = within(row).getByRole("button", { name: "운영 기준 지정" });
     expect(btn).toHaveAttribute(
       "title",
-      expect.stringContaining("실행에 꼭 필요한"),
+      expect.stringContaining("운영 기준 지정은 실행 필수 단계가 아니라"),
     );
     btn.click();
     expect(
@@ -654,9 +671,7 @@ describe("D7 운영 콘솔 shell", () => {
       }),
     );
     location.hash = "#scenarioStudio";
-    fireEvent.click(
-      await screen.findByRole("button", { name: "+ 새 자동화 만들기" }),
-    );
+    fireEvent.click(await openManualScenarioCreate());
     fireEvent.click(await screen.findByRole("button", { name: "단계 편집" }));
 
     const rule = screen.getByRole("textbox", { name: "추출 규칙" });
@@ -2425,6 +2440,7 @@ describe("D7 운영 콘솔 shell", () => {
       expect(screen.getByRole("button", { name: "실행" })).toBeInTheDocument(),
     ); // run.create: operator 보유
     expect(screen.getByRole("button", { name: "편집" })).toBeInTheDocument(); // scenario.update: operator 보유
-    expect(screen.queryByRole("button", { name: "운영 지정" })).toBeNull(); // scenario.promote: admin만
+    const row = await openScenarioManagementActions("a");
+    expect(within(row).queryByRole("button", { name: "운영 기준 지정" })).toBeNull(); // scenario.promote: admin만
   });
 });

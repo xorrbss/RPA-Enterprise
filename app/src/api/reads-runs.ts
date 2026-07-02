@@ -71,6 +71,59 @@ function normalizeFailureReason(value: unknown): { code: string; message: string
   return { code, message };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const SECRETISH_RE = /\b(secret|password|passwd|token|bearer|authorization|cookie|api[_-]?key|credential|otp|mfa)\b/i;
+
+function safeSummaryText(value: unknown, maxLength = 160): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (SECRETISH_RE.test(trimmed)) return "[redacted]";
+  return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength - 1)}…` : trimmed;
+}
+
+function firstSummaryText(record: Readonly<Record<string, unknown>>, keys: readonly string[], maxLength?: number): string | null {
+  for (const key of keys) {
+    const value = safeSummaryText(record[key], maxLength);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function stagehandActionSummary(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const operation = firstSummaryText(value, ["operation", "method", "action"], 48);
+  const selector = firstSummaryText(value, ["selector", "target_selector", "selector_ref"], 160);
+  const instruction = firstSummaryText(value, ["instruction", "goal", "description"], 160);
+  if (operation === null && selector === null && instruction === null) return null;
+
+  const parts: string[] = [];
+  if (operation !== null) parts.push(operation);
+  if (selector !== null) parts.push(selector);
+  if (instruction !== null) parts.push(`instruction: ${instruction}`);
+  if (operation === "fill" || operation === "select" || Object.prototype.hasOwnProperty.call(value, "value") || Object.prototype.hasOwnProperty.call(value, "valueRef") || Object.prototype.hasOwnProperty.call(value, "value_ref")) {
+    parts.push("value redacted");
+  }
+  return parts.join(" · ");
+}
+
+function normalizeStagehandCalls(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((call) => ({
+    model: typeof call.model === "string" ? call.model : null,
+    transport: typeof call.transport === "string" ? call.transport : null,
+    stream_status: typeof call.stream_status === "string" ? call.stream_status : null,
+    ttfb_ms: typeof call.ttfb_ms === "number" ? call.ttfb_ms : null,
+    input_tokens: typeof call.input_tokens === "number" ? call.input_tokens : null,
+    output_tokens: typeof call.output_tokens === "number" ? call.output_tokens : null,
+    cost: typeof call.cost === "string" ? call.cost : call.cost !== null && call.cost !== undefined ? String(call.cost) : null,
+    action_summary: stagehandActionSummary(call.parsed_json),
+  }));
+}
+
 interface RunArtifactRow {
   id: string;
   step_id: string | null;
@@ -310,7 +363,8 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
                SELECT json_agg(json_build_object(
                         'model', c2.model, 'transport', c2.transport, 'stream_status', c2.stream_status,
                         'ttfb_ms', c2.ttfb_ms, 'input_tokens', c2.input_tokens,
-                        'output_tokens', c2.output_tokens, 'cost', c2.cost
+                        'output_tokens', c2.output_tokens, 'cost', c2.cost,
+                        'parsed_json', c2.parsed_json
                       ) ORDER BY c2.created_at) AS calls
                  FROM stagehand_calls c2
                 WHERE c2.tenant_id = s.tenant_id AND c2.run_id = s.run_id
@@ -338,7 +392,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
             status: r.status,
             cache_mode: r.cache_mode,
             artifact_ids: r.artifacts,
-            stagehand_calls: r.stagehand_calls,
+            stagehand_calls: normalizeStagehandCalls(r.stagehand_calls),
             started_at: r.started_at !== null ? r.started_at.toISOString() : null,
             ended_at: r.ended_at !== null ? r.ended_at.toISOString() : null,
             duration_ms: r.duration_ms,

@@ -2022,6 +2022,8 @@ export interface StagehandCallSummary {
   readonly input_tokens: number | null;
   readonly output_tokens: number | null;
   readonly cost: string | null; // numeric → string
+  // parsed_json에서 서버가 추출·마스킹한 1줄 요약. fill/select 값과 secret-like 문자열은 미노출.
+  readonly action_summary?: string | null;
 }
 export interface StepSummary {
   readonly step_id: string;

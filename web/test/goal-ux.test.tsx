@@ -107,7 +107,8 @@ describe("goal UX improvements", () => {
     );
     location.hash = "#scenarioStudio";
 
-    fireEvent.click(await screen.findByRole("button", { name: "+ 새 자동화 만들기" }));
+    fireEvent.click(await screen.findByText("양식으로 직접 만들기"));
+    fireEvent.click(screen.getByRole("button", { name: "+ 새 자동화 만들기" }));
     fireEvent.change(await screen.findByLabelText("업무 템플릿"), { target: { value: "attachment_download" } });
     fireEvent.change(screen.getByLabelText("② 자동화할 페이지 주소 (전체 주소를 붙여넣으세요)"), { target: { value: "https://office.example/docs" } });
     fireEvent.change(screen.getByLabelText(/⑤ 성공 기준/), { target: { value: "첨부가 없으면 데이터 없음으로 종료한다." } });
@@ -124,7 +125,8 @@ describe("goal UX improvements", () => {
     renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
     location.hash = "#scenarioStudio";
 
-    fireEvent.click(await screen.findByRole("button", { name: "+ 새 자동화 만들기" }));
+    fireEvent.click(await screen.findByText("양식으로 직접 만들기"));
+    fireEvent.click(screen.getByRole("button", { name: "+ 새 자동화 만들기" }));
     fireEvent.change(await screen.findByLabelText("업무 템플릿"), { target: { value: "attachment_download" } });
 
     // list 템플릿이면 페이지 반복 옵션이 나타난다 — 판정 방법은 운영자 라벨로.
@@ -175,6 +177,51 @@ describe("goal UX improvements", () => {
     await waitFor(() => expect(location.hash).toBe("#llmGateway"));
   });
 
+  test("run panel links login-session readiness to the security sites section", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({
+          items: [{ scenario_id: "sc-run", name: "주문 수집", version: 1, latest_version_id: "ver-run", promotion_status: "draft" }],
+          next_cursor: null,
+        }),
+        getScenario: async () => ({
+          scenario_id: "sc-run",
+          name: "주문 수집",
+          version: 1,
+          promotion_status: "draft",
+          ir: { start: "open", nodes: { open: { what: [{ action: "navigate", url_ref: "orders_url" }], next: "done" }, done: { terminal: "success" } } },
+        }),
+        listSites: async () => ({
+          items: [
+            {
+              site_profile_id: "site-orders",
+              name: "주문 포털",
+              url_pattern: "https://orders.example",
+              risk: "green",
+              approval_status: "approved",
+              circuit_status: "closed",
+              login_capable: true,
+              session_ready: false,
+              default_browser_identity_id: "browser-orders",
+              default_network_policy_id: "network-orders",
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#scenarioStudio";
+
+    fireEvent.click(await screen.findByRole("button", { name: "실행" }));
+    fireEvent.change(await screen.findByLabelText(/주문 페이지 주소/), { target: { value: "https://orders.example/orders" } });
+
+    const readiness = await screen.findByRole("region", { name: "실행 전 준비 점검" });
+    await waitFor(() => expect(readiness).toHaveTextContent("로그인이 필요합니다. 세션을 등록하세요."));
+    within(readiness).getByRole("button", { name: "세션 등록하러 가기" }).click();
+
+    await waitFor(() => expect(location.hash).toBe("#security?section=sites&site=site-orders"));
+  });
+
   test("details open as slide-over panels while preserving hash deep links", async () => {
     renderApp(
       fakeClient({
@@ -209,15 +256,15 @@ describe("goal UX improvements", () => {
     location.hash = "#humanTasks";
 
     // 종류 필터 드롭다운에도 '보안문자/승인' 옵션이 있으므로, 작업 표시 여부 검증은 작업 표(table)로 좁힌다.
-    expect(within(await screen.findByRole("table")).getByText("보안문자")).toBeInTheDocument();
+    expect(within(await screen.findByRole("table")).getByText("보안문자 입력")).toBeInTheDocument();
     const controls = await screen.findByRole("region", { name: "검토 업무 목록 제어" });
     fireEvent.click(within(controls).getByRole("button", { name: "다음 업무 열기" }));
     await waitFor(() => expect(location.hash).toContain("ht=ht-due"));
     fireEvent.click(within(await screen.findByRole("region", { name: "검토 업무 상세" })).getByRole("button", { name: "닫기" }));
 
     fireEvent.click(within(controls).getByRole("button", { name: "마감 임박 1" }));
-    await waitFor(() => expect(within(screen.getByRole("table")).getByText("보안문자")).toBeInTheDocument());
-    expect(within(screen.getByRole("table")).queryByText("승인")).toBeNull();
+    await waitFor(() => expect(within(screen.getByRole("table")).getByText("보안문자 입력")).toBeInTheDocument());
+    expect(within(screen.getByRole("table")).queryByText("승인 요청")).toBeNull();
 
     // '마감 임박' 필터가 적용돼 화면에는 ht-due 1건만 보인다 → 일괄 배정도 보이는 1건만 대상이어야 한다
     // (visibleItems 기준). 숨은 ht-later 까지 배정하면 예상 외 업무 처리(안전 버그).
