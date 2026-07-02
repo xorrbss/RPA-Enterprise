@@ -120,6 +120,7 @@ describe("run identity (S1)", () => {
             status: "queued",
             mode: body.mode,
             as_of: "2026-06-26T00:00:00.000Z",
+            run_mode: "prod",
           };
         },
       }),

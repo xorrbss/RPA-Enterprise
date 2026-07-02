@@ -70,7 +70,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
     listRuns: async () => ({
       // current_node는 reads.ts:203이 영구 null(runs에 진행-노드 컬럼 없음) → fixture도 null(백엔드가 만들 수 없는 값 미창작).
-      items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", priority: "medium", current_node: null, as_of: "2026-06-15T00:00:00.000Z", failure_reason: null }],
+      items: [{ run_id: "11111111-aaaa-bbbb-cccc-000000000001", status: "running", priority: "medium", run_mode: "prod", current_node: null, as_of: "2026-06-15T00:00:00.000Z", failure_reason: null }],
       next_cursor: null,
     }),
     listRunSteps: async () => ({
@@ -586,6 +586,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     }),
     getAutomationPerformanceReport: async () => ({
       month: "2026-06",
+      run_mode: "prod",
       timezone: "Asia/Seoul",
       period_start: "2026-05-31T15:00:00.000Z",
       period_end: "2026-06-30T15:00:00.000Z",
@@ -1953,6 +1954,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       status: "queued",
       mode: body.mode,
       as_of: "2026-06-26T00:00:00.000Z",
+      run_mode: "prod",
     }),
     resumeRun: async (runId) => ({
       run_id: runId,
@@ -2230,7 +2232,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       version: latestVersion + 1,
       promotion_status: "draft",
     }),
-    getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null, failure_reason: null }),
+    getRun: async (id) => ({ run_id: id, status: "running", run_mode: "prod", worker_id: null, attempts: 1, as_of: null, failure_reason: null }),
     getRunSummary: async () => ({ by_status: {}, success_rate: null, total: 0, cache: { by_mode: {}, hit_rate: null } }),
     getRunTrends: async () => ({ window_days: 30, timezone: "Asia/Seoul", points: [] }),
     getWorkitem: async (id) => ({ workitem_id: id, status: "processing", unique_reference: "wi", attempts: 2, checked_out_by: "w-00000001", checked_out_at: "2026-06-15T00:00:00.000Z", run_id: "11111111-aaaa-bbbb-cccc-000000000001" }),
@@ -2438,7 +2440,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       draft_ir: {},
       validation_report: {},
     }),
-    createRun: async () => ({ run_id: "00000000-0000-0000-0000-000000000099", status: "queued" }),
+    createRun: async () => ({ run_id: "00000000-0000-0000-0000-000000000099", status: "queued", run_mode: "prod" }),
     pauseRun: async () => ({ status: "accepted" }),
     decideApproval: async (body) => ({
       decision_id: "00000000-0000-0000-0000-0000000000de",

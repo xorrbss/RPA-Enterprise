@@ -930,6 +930,8 @@ CREATE TABLE runs (
                                           'aborting','cancelled','failed_business','failed_system')),  -- RunState 13개
   priority            text        NOT NULL DEFAULT 'medium'
                         CHECK (priority IN ('low','medium','high','critical')), -- 운영자 큐 우선순위. Graphile priority로 enqueue 시 반영.
+  run_mode            text        NOT NULL DEFAULT 'prod'
+                        CHECK (run_mode IN ('test','prod')), -- 시험/운영 실행 구분. 월간 성과 집계는 기본 prod만 포함.
   attempts            int         NOT NULL DEFAULT 0,        -- R3a 재큐 시 attempts+1 (누적 requeue 카운터)
   consecutive_init_failures int   NOT NULL DEFAULT 0,        -- R3a/R3b 분기 입력: 연속 INIT(claimed→running 셋업) 실패 횟수.
                                                              --   R3a 재큐 시 +1, R2(=running 진입=INIT 성공) 시 0 으로 reset. attempts(누적)와 분리 —
@@ -956,6 +958,7 @@ CREATE TABLE runs (
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_runs_status ON runs (tenant_id, status);
+CREATE INDEX idx_runs_mode_created ON runs (tenant_id, run_mode, created_at DESC, id DESC);
 CREATE INDEX idx_runs_queue_priority ON runs (tenant_id, priority, created_at)
   WHERE status = 'queued';
 CREATE INDEX idx_runs_workitem ON runs (workitem_id);

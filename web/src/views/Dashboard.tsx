@@ -17,6 +17,7 @@ import { isActiveHumanTask } from "./humanTaskFilters";
 import type {
   AutomationPerformanceReport,
   AutomationPerformanceReportExportFormat,
+  AutomationPerformanceRunMode,
   AutomationPerformanceRoiSource,
   AutomationPerformanceRoiSourceLineage,
   AutomationPerformanceRoiStage,
@@ -609,10 +610,10 @@ function collectActionItems(args: {
 }): ActionItem[] {
   const out: ActionItem[] = [];
   for (const r of args.failedSys.slice(0, 2)) {
-    out.push({ key: `fs-${r.run_id}`, tone: "red", title: withRunIdentity("시스템 실패 실행", r), meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_system" } });
+    out.push({ key: `fs-${r.run_id}`, tone: "red", title: withRunIdentity("시스템 실패 실행", r), meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_system", run_mode: DASHBOARD_RUN_MODE } });
   }
   for (const r of args.failedBiz.slice(0, 2)) {
-    out.push({ key: `fb-${r.run_id}`, tone: "red", title: withRunIdentity("업무 실패 실행", r), meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
+    out.push({ key: `fb-${r.run_id}`, tone: "red", title: withRunIdentity("업무 실패 실행", r), meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_business", run_mode: DASHBOARD_RUN_MODE } });
   }
   for (const h of [...args.human].filter(isActiveHumanTask).sort(bySoonestTimeout).slice(0, 3)) {
     const humanMeta = humanTaskMeta(h);
@@ -629,7 +630,7 @@ function collectActionItems(args: {
   }
   for (const r of args.running.slice(0, 1)) {
     const freshness = runningFreshness(r);
-    out.push({ key: `run-${r.run_id}`, tone: freshness.tone, title: withRunIdentity("실행 중 상태 점검", r), meta: freshness.meta, traceTitle: `실행 추적 번호: ${r.run_id}`, view: "runTrace", params: { run: r.run_id, status: "running" } });
+    out.push({ key: `run-${r.run_id}`, tone: freshness.tone, title: withRunIdentity("실행 중 상태 점검", r), meta: freshness.meta, traceTitle: `실행 추적 번호: ${r.run_id}`, view: "runTrace", params: { run: r.run_id, status: "running", run_mode: DASHBOARD_RUN_MODE } });
   }
   return out.slice(0, 5);
 }
@@ -783,10 +784,18 @@ function navigateOpsAlert(route: string | null): void {
 
 type ReportExportState = "idle" | "pending" | "success" | "error";
 type ReportExportFormat = AutomationPerformanceReportExportFormat;
+const REPORT_RUN_MODE_OPTIONS: readonly AutomationPerformanceRunMode[] = ["prod", "test", "all"];
+const DASHBOARD_RUN_MODE = "prod" as const;
 
 function currentReportMonth(): string {
   const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
   return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function reportRunModeLabel(value: AutomationPerformanceRunMode): string {
+  if (value === "test") return "시험 실행";
+  if (value === "all") return "전체(시험 포함)";
+  return "운영 실행";
 }
 
 function percentLabel(value: number | null): string {
@@ -1160,12 +1169,14 @@ function RoiActualsInline({ actuals }: { actuals: AutomationPerformanceReport["s
 function AutomationPerformancePanel({
   report,
   month,
+  runMode,
   exportState,
   exportFormat,
   isLoading,
   isError,
   error,
   onMonthChange,
+  onRunModeChange,
   onRetry,
   onExportCsv,
   onExportXlsx,
@@ -1175,12 +1186,14 @@ function AutomationPerformancePanel({
 }: {
   report: AutomationPerformanceReport | undefined;
   month: string;
+  runMode: AutomationPerformanceRunMode;
   exportState: ReportExportState;
   exportFormat: ReportExportFormat | null;
   isLoading: boolean;
   isError: boolean;
   error?: unknown;
   onMonthChange: (month: string) => void;
+  onRunModeChange: (runMode: AutomationPerformanceRunMode) => void;
   onRetry: () => void;
   onExportCsv: () => void;
   onExportXlsx: () => void;
@@ -1198,12 +1211,20 @@ function AutomationPerformancePanel({
       <div className="panel-head">
         <div>
           <h2>월간 자동화 성과</h2>
-          <p className="subtle">{report !== undefined ? `${report.month} · ${report.timezone}` : `${month} · Asia/Seoul`}</p>
+          <p className="subtle">{report !== undefined ? `${report.month} · ${report.timezone} · ${reportRunModeLabel(report.run_mode)}` : `${month} · Asia/Seoul · ${reportRunModeLabel(runMode)}`}</p>
         </div>
         <div className="inline-actions">
           <label className="field month-field">
             <span>월</span>
             <input type="month" value={month} onChange={(event) => onMonthChange(event.target.value)} />
+          </label>
+          <label className="field month-field">
+            <span>실행 구분</span>
+            <select value={runMode} onChange={(event) => onRunModeChange(event.target.value as AutomationPerformanceRunMode)}>
+              {REPORT_RUN_MODE_OPTIONS.map((option) => (
+                <option key={option} value={option}>{reportRunModeLabel(option)}</option>
+              ))}
+            </select>
           </label>
           <button className="btn" type="button" onClick={onRetry}>새로고침</button>
           <button className="btn" type="button" disabled={exportState === "pending" || report === undefined} onClick={onExportCsv}>
@@ -1217,6 +1238,8 @@ function AutomationPerformancePanel({
           </button>
         </div>
       </div>
+      {runMode === "prod" && <p className="subtle" style={{ margin: "0 0 8px" }}>성과·ROI는 운영 실행만 집계합니다. 시험 실행은 포함하지 않습니다.</p>}
+      {runMode !== "prod" && <p className="form-alert red" role="alert">전체 또는 시험 실행을 선택했습니다. 이 수치는 운영 성과로 해석할 수 없습니다.</p>}
       {exportState === "success" && <p className="notice success" role="status">성과 리포트 {exportFormat?.toUpperCase() ?? "export"}를 준비했습니다.</p>}
       {exportState === "error" && <p className="form-alert red" role="alert">성과 리포트 {exportFormat?.toUpperCase() ?? "export"}를 준비하지 못했습니다.</p>}
       {isError ? (
@@ -1410,11 +1433,13 @@ export function DashboardView(): JSX.Element {
   const can = useCan();
   const roles = useRoles();
   const [reportMonth, setReportMonth] = useState(currentReportMonth);
+  const [reportRunMode, setReportRunMode] = useState<AutomationPerformanceRunMode>("prod");
   const [reportExportState, setReportExportState] = useState<ReportExportState>("idle");
   const [reportExportFormat, setReportExportFormat] = useState<ReportExportFormat | null>(null);
   // '실행 중'은 서버 status 필터로 정확히 집계(이전: 전체 50건을 클라에서 status==='running' 필터 → 50건 초과 시 구조적 오집계).
-  const running = useQuery({ queryKey: ["runs", "running"], queryFn: () => api.listRuns({ status: "running", limit: 50 }), refetchInterval: 5_000 });
-  const recent = useQuery({ queryKey: ["runs"], queryFn: () => api.listRuns({ limit: 50 }), refetchInterval: 5_000 });
+  const running = useQuery({ queryKey: ["runs", "running", DASHBOARD_RUN_MODE], queryFn: () => api.listRuns({ status: "running", run_mode: DASHBOARD_RUN_MODE, limit: 50 }), refetchInterval: 5_000 });
+  const recent = useQuery({ queryKey: ["runs", DASHBOARD_RUN_MODE], queryFn: () => api.listRuns({ run_mode: DASHBOARD_RUN_MODE, limit: 50 }), refetchInterval: 5_000 });
+  const anyRecent = useQuery({ queryKey: ["runs", "any", "empty-tenant-check"], queryFn: () => api.listRuns({ limit: 1 }), refetchInterval: 30_000 });
   const human = useQuery({ queryKey: ["human-tasks", "active"], queryFn: () => api.listHumanTasks({ terminal: "false", limit: 50 }), refetchInterval: 5_000 });
   const wiDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 5_000 });
   const sinkDlq = useQuery({ queryKey: ["dlq", "sink"], queryFn: () => api.listDlq("sink", { limit: 50 }), refetchInterval: 5_000 });
@@ -1422,15 +1447,15 @@ export function DashboardView(): JSX.Element {
   // 카드를 status별로 분리한다: 합산 단일 카드는 카운트(business+system)와 드릴다운 해시(단일 status)의 모집단이
   // 어긋나(RunTrace는 단일 status만 시드) 실패 총량을 오표상했다. 카드별 단일-status 카운트↔단일-status 해시로
   // '실행 중' 카드와 동일하게 카운트·목록 모집단 정합을 정확히 만족시킨다(조용한 false 인접 오표상 제거).
-  const failedBiz = useQuery({ queryKey: ["runs", "failed_business"], queryFn: () => api.listRuns({ status: "failed_business", limit: 50 }), refetchInterval: 5_000 });
-  const failedSys = useQuery({ queryKey: ["runs", "failed_system"], queryFn: () => api.listRuns({ status: "failed_system", limit: 50 }), refetchInterval: 5_000 });
+  const failedBiz = useQuery({ queryKey: ["runs", "failed_business", DASHBOARD_RUN_MODE], queryFn: () => api.listRuns({ status: "failed_business", run_mode: DASHBOARD_RUN_MODE, limit: 50 }), refetchInterval: 5_000 });
+  const failedSys = useQuery({ queryKey: ["runs", "failed_system", DASHBOARD_RUN_MODE], queryFn: () => api.listRuns({ status: "failed_system", run_mode: DASHBOARD_RUN_MODE, limit: 50 }), refetchInterval: 5_000 });
   const redSites = useQuery({ queryKey: ["sites", "red"], queryFn: () => api.listSites({ risk: "red", limit: 50 }), refetchInterval: 10_000 });
   // 관찰성 집계(§E run_success_rate + status별 정확 카운트). 서버 GROUP BY 라 카드가 '50+' 근사 대신 정확 총계.
   const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
   const trends = useQuery({ queryKey: ["runs", "trends"], queryFn: () => api.getRunTrends(30), refetchInterval: 30_000 });
   const performanceReport = useQuery({
-    queryKey: ["automation-performance-report", reportMonth],
-    queryFn: () => api.getAutomationPerformanceReport(reportMonth),
+    queryKey: ["automation-performance-report", reportMonth, reportRunMode],
+    queryFn: () => api.getAutomationPerformanceReport(reportMonth, reportRunMode),
     refetchInterval: 60_000,
   });
   const opsHealth = useQuery({ queryKey: ["ops-health", "dashboard"], queryFn: () => api.getOpsHealth(), refetchInterval: 5_000 });
@@ -1451,8 +1476,8 @@ export function DashboardView(): JSX.Element {
     setReportExportState("pending");
     setReportExportFormat("csv");
     try {
-      const csv = await api.exportAutomationPerformanceReportCsv(reportMonth);
-      downloadCsv(csv, `automation-performance-${reportMonth}.csv`);
+      const csv = await api.exportAutomationPerformanceReportCsv(reportMonth, reportRunMode);
+      downloadCsv(csv, `automation-performance-${reportRunMode}-${reportMonth}.csv`);
       setReportExportState("success");
     } catch {
       setReportExportState("error");
@@ -1464,8 +1489,8 @@ export function DashboardView(): JSX.Element {
     setReportExportFormat("xlsx");
     try {
       if (api.exportAutomationPerformanceReportXlsx === undefined) throw new Error("xlsx export is not available");
-      const xlsx = await api.exportAutomationPerformanceReportXlsx(reportMonth);
-      downloadBlob(xlsx, `automation-performance-${reportMonth}.xlsx`);
+      const xlsx = await api.exportAutomationPerformanceReportXlsx(reportMonth, reportRunMode);
+      downloadBlob(xlsx, `automation-performance-${reportRunMode}-${reportMonth}.xlsx`);
       setReportExportState("success");
     } catch {
       setReportExportState("error");
@@ -1477,8 +1502,8 @@ export function DashboardView(): JSX.Element {
     setReportExportFormat("poc_markdown");
     try {
       if (api.exportAutomationPerformanceReportPocMarkdown === undefined) throw new Error("PoC Markdown export is not available");
-      const markdown = await api.exportAutomationPerformanceReportPocMarkdown(reportMonth);
-      downloadMarkdown(markdown, `automation-performance-poc-${reportMonth}.md`);
+      const markdown = await api.exportAutomationPerformanceReportPocMarkdown(reportMonth, reportRunMode);
+      downloadMarkdown(markdown, `automation-performance-poc-${reportRunMode}-${reportMonth}.md`);
       setReportExportState("success");
     } catch {
       setReportExportState("error");
@@ -1488,7 +1513,7 @@ export function DashboardView(): JSX.Element {
   // 첫-실행 안내 배너: '진짜 빈 테넌트'(실행 0건)일 때만. recent(무필터 listRuns)의 실 필드로만 판정.
   // length===0 && next_cursor===null → 절단된 0(더 있을 수 있음)이 아닌 진짜 0(조용한 false 금지).
   // isLoading/isError 중에는 미표시(데이터 도착 전 단정 금지). 실행이 1건이라도 생기면 자동 소멸.
-  const isEmptyTenant = recent.isSuccess && recent.data.items.length === 0 && recent.data.next_cursor === null;
+  const isEmptyTenant = anyRecent.isSuccess && anyRecent.data.items.length === 0 && anyRecent.data.next_cursor === null;
   const dashboardErrors: DashboardEnvironmentError[] = [];
   if (summary.isError) dashboardErrors.push({ label: "실행 요약", error: summary.error, onRetry: () => void summary.refetch() });
   if (recent.isError) dashboardErrors.push({ label: "최근 실행", error: recent.error, onRetry: () => void recent.refetch() });
@@ -1540,12 +1565,12 @@ export function DashboardView(): JSX.Element {
         error={opsHealth.error ?? opsAlerts.error}
       />
       <div className="metrics">
-        <Metric label="실행 성공률" value={successRateLabel(summary.data)} view="runTrace" params={{ status: "completed" }} hint="완료 실행" />
-        <Metric label="캐시 재사용률" value={cacheHitRateLabel(summary.data)} view="runTrace" hint="실행 기록" />
-        <Metric label="실행 중" value={exactCount(summary.data, "running")} view="runTrace" params={{ status: "running" }} hint="실행 기록" />
+        <Metric label="실행 성공률" value={successRateLabel(summary.data)} view="runTrace" params={{ status: "completed", run_mode: DASHBOARD_RUN_MODE }} hint="완료 실행" />
+        <Metric label="캐시 재사용률" value={cacheHitRateLabel(summary.data)} view="runTrace" params={{ run_mode: DASHBOARD_RUN_MODE }} hint="실행 기록" />
+        <Metric label="실행 중" value={exactCount(summary.data, "running")} view="runTrace" params={{ status: "running", run_mode: DASHBOARD_RUN_MODE }} hint="실행 기록" />
         <Metric label="사람 확인 대기" value={pageCount(human.data === undefined ? undefined : { ...human.data, items: human.data.items.filter(isActiveHumanTask) })} view="humanTasks" params={{ terminal: "false" }} hint="사람 확인" />
-        <Metric label="업무 실패" value={exactCount(summary.data, "failed_business")} view="runTrace" params={{ status: "failed_business" }} hint="실행 기록" />
-        <Metric label="시스템 실패" value={exactCount(summary.data, "failed_system")} view="runTrace" params={{ status: "failed_system" }} hint="실행 기록" />
+        <Metric label="업무 실패" value={exactCount(summary.data, "failed_business")} view="runTrace" params={{ status: "failed_business", run_mode: DASHBOARD_RUN_MODE }} hint="실행 기록" />
+        <Metric label="시스템 실패" value={exactCount(summary.data, "failed_system")} view="runTrace" params={{ status: "failed_system", run_mode: DASHBOARD_RUN_MODE }} hint="실행 기록" />
         <Metric label="작업 항목 재처리 대기" value={pageCount(wiDlq.data)} view="workitems" hint="작업 목록" />
         <Metric label="외부 전달 재처리 대기" value={pageCount(sinkDlq.data)} view="workitems" hint="작업 목록" />
       </div>
@@ -1561,6 +1586,7 @@ export function DashboardView(): JSX.Element {
       <AutomationPerformancePanel
         report={performanceReport.data}
         month={reportMonth}
+        runMode={reportRunMode}
         exportState={reportExportState}
         exportFormat={reportExportFormat}
         isLoading={performanceReport.data === undefined && performanceReport.isFetching}
@@ -1568,6 +1594,11 @@ export function DashboardView(): JSX.Element {
         error={performanceReport.error}
         onMonthChange={(month) => {
           setReportMonth(month);
+          setReportExportState("idle");
+          setReportExportFormat(null);
+        }}
+        onRunModeChange={(runMode) => {
+          setReportRunMode(runMode);
           setReportExportState("idle");
           setReportExportFormat(null);
         }}

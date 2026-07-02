@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
-import { ApiError, type ApiErrorBody, type CreateRunBody, type GatewayPolicy, type Paginated, type ScenarioItem, type SiteItem } from "../api/types";
+import { ApiError, type ApiErrorBody, type CreateRunBody, type GatewayPolicy, type Paginated, type RunMode, type ScenarioItem, type SiteItem } from "../api/types";
 import {
   coerceParamValue,
   extractScenarioParamFields,
@@ -110,7 +110,7 @@ function writeRememberedRunParams(
   }
 }
 
-export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX.Element | null {
+export function RunScenarioButton({ scenario, runMode = "prod" }: { readonly scenario: ScenarioItem; readonly runMode?: RunMode }): JSX.Element | null {
   const api = useApiClient();
   const can = useCan();
   const qc = useQueryClient();
@@ -176,7 +176,7 @@ export function RunScenarioButton({ scenario }: { scenario: ScenarioItem }): JSX
           .filter((field) => shouldIncludeParam(field, submitted[field.key] ?? ""))
           .map((field) => [field.key, coerceParamValue(field, submitted[field.key] ?? "")]),
       );
-      const base: CreateRunBody = { scenario_version_id: scenario.latest_version_id, params };
+      const base: CreateRunBody = { scenario_version_id: scenario.latest_version_id, params, run_mode: runMode };
       const m = model.trim();
       return api.createRun(m.length > 0 ? { ...base, model: m } : base, crypto.randomUUID());
     },

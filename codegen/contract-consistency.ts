@@ -117,10 +117,17 @@ assertOpenApiContains(
   "createRun requestBody required",
   "      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/RunCreateRequest'",
 );
+assertOpenApiContains("createRun response requires run mode", "                $ref: '#/components/schemas/RunCreateCommandResponse'");
 assertOpenApiSchemaContains("RunCreateRequest", "        model:\n          type: string");
+assertOpenApiSchemaContains("RunCreateRequest", "        run_mode:\n          $ref: '#/components/schemas/RunMode'");
+assertOpenApiSchemaContains("RunCreateCommandResponse", "      required: [run_id, status, run_mode]");
 assertOpenApiSchemaContains("Run", "        - current_node");
 assertOpenApiSchemaContains("Run", "        - failure_reason");
 assertOpenApiSchemaContains("Run", "        - scenario_id");
+assertOpenApiSchemaContains("Run", "        - run_mode");
+assertOpenApiSchemaContains("Run", "        run_mode: { $ref: '#/components/schemas/RunMode' }");
+assertOpenApiSchemaContains("AutomationPerformanceReport", "        - run_mode");
+assertOpenApiSchemaContains("AutomationPerformanceReport", "        run_mode:\n          $ref: '#/components/schemas/AutomationPerformanceRunMode'");
 assertOpenApiSchemaContains("Run", "        current_node:\n          type: [string, \"null\"]");
 assertOpenApiSchemaContains("Run", "        failure_reason:\n          type: [object, \"null\"]");
 assertOpenApiSchemaContains("ScenarioGeneration", "        - params_context");

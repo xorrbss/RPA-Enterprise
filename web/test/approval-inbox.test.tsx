@@ -35,7 +35,7 @@ function inboxClient(content: string): ApiClient {
     listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
     listRuns: async (p) =>
       p?.scenario_version_id === "ver-c"
-        ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+        ? { items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
         : { items: [], next_cursor: null },
     listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
     getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content }),
@@ -103,7 +103,7 @@ describe("결재 인박스 — 뷰", () => {
           }
           return { items: [{ scenario_id: "sc-other", name: "다른 자동화", version: 1, latest_version_id: "ver-other" }], next_cursor: "scenario-cursor-2" };
         },
-        listRuns: async () => ({ items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }),
+        listRuns: async () => ({ items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }),
         listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: APPROVAL_ARTIFACT_TYPE, redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
         getArtifact: async (id) => ({ artifact_id: id, type: APPROVAL_ARTIFACT_TYPE, sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: [ROW()] }) }),
       }),
@@ -120,7 +120,7 @@ describe("결재 인박스 — 뷰", () => {
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
-        listRuns: async () => ({ items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }),
+        listRuns: async () => ({ items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }),
         listRunArtifacts: async (_runId, params) => {
           artifactCalls.push(params ?? {});
           if (params?.cursor === "artifact-cursor-2") {
@@ -225,7 +225,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
       listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
       listRuns: async (p) =>
         p?.scenario_version_id === "ver-c"
-          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          ? { items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
           : { items: [], next_cursor: null },
       listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
       getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: [ROW()] }) }),
@@ -233,7 +233,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
         captured = body;
         return { decision_id: "dec-1", source_run_id: body.source_run_id, doc_ref: body.doc_ref, decision: body.decision, spawned_run_id: "spawn-9" };
       },
-      getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+      getRun: async (id) => ({ run_id: id, status: "running", run_mode: "prod", worker_id: null, attempts: 1, as_of: null }),
     });
     renderApp(client);
     location.hash = "#approvalInbox";
@@ -269,7 +269,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
       listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
       listRuns: async (p) =>
         p?.scenario_version_id === "ver-c"
-          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          ? { items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
           : { items: [], next_cursor: null },
       listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
       getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
@@ -296,7 +296,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
       listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
       listRuns: async (p) =>
         p?.scenario_version_id === "ver-c"
-          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          ? { items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
           : { items: [], next_cursor: null },
       listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
       getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
@@ -324,7 +324,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
       listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
       listRuns: async (p) =>
         p?.scenario_version_id === "ver-c"
-          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          ? { items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
           : { items: [], next_cursor: null },
       listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
       getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
@@ -333,7 +333,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
         n += 1;
         return { decision_id: `dec-${n}`, source_run_id: body.source_run_id, doc_ref: body.doc_ref, decision: body.decision, spawned_run_id: `spawn-${n}` };
       },
-      getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+      getRun: async (id) => ({ run_id: id, status: "running", run_mode: "prod", worker_id: null, attempts: 1, as_of: null }),
     });
     renderApp(client);
     location.hash = "#approvalInbox";
@@ -368,7 +368,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
       listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
       listRuns: async (p) =>
         p?.scenario_version_id === "ver-c"
-          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          ? { items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
           : { items: [], next_cursor: null },
       listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
       getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
@@ -377,7 +377,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
         if (n === 1) throw new ApiError(409, "APPROVAL_ALREADY_DECIDED", { code: "APPROVAL_ALREADY_DECIDED" });
         return { decision_id: `dec-${n}`, source_run_id: body.source_run_id, doc_ref: body.doc_ref, decision: body.decision, spawned_run_id: `spawn-${n}` };
       },
-      getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+      getRun: async (id) => ({ run_id: id, status: "running", run_mode: "prod", worker_id: null, attempts: 1, as_of: null }),
     });
     renderApp(client);
     location.hash = "#approvalInbox";
@@ -402,7 +402,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
       listScenarios: async () => ({ items: [{ scenario_id: "sc-c", name: COLLECT_SCENARIO_NAME, version: 1, latest_version_id: "ver-c" }], next_cursor: null }),
       listRuns: async (p) =>
         p?.scenario_version_id === "ver-c"
-          ? { items: [{ run_id: "run-c", status: "completed", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
+          ? { items: [{ run_id: "run-c", status: "completed", run_mode: "prod", current_node: null, as_of: "2026-06-17T09:00:00.000Z" }], next_cursor: null }
           : { items: [], next_cursor: null },
       listRunArtifacts: async () => ({ items: [{ artifact_id: "art-1", type: "approval_inbox", redaction_status: "redacted", retention_until: null, legal_hold: false, created_at: "2026-06-17T09:00:01.000Z" }], next_cursor: null }),
       getArtifact: async (id) => ({ artifact_id: id, type: "approval_inbox", sha256: "x", redaction_status: "redacted", retention_until: null, content: JSON.stringify({ rows: ROWS }) }),
@@ -411,7 +411,7 @@ describe("결재 인박스 — 건별 결재(2c)", () => {
         n += 1;
         return { decision_id: `dec-${n}`, source_run_id: body.source_run_id, doc_ref: body.doc_ref, decision: body.decision, spawned_run_id: `spawn-${n}` };
       },
-      getRun: async (id) => ({ run_id: id, status: "running", worker_id: null, attempts: 1, as_of: null }),
+      getRun: async (id) => ({ run_id: id, status: "running", run_mode: "prod", worker_id: null, attempts: 1, as_of: null }),
     });
     renderApp(client);
     location.hash = "#approvalInbox";

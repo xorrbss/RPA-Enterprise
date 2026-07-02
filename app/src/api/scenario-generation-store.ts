@@ -205,6 +205,7 @@ export async function persistGenerationRun(
       correlationId,
       model,
       configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
+      runMode: "test",
     });
     nextStatus = "run_queued";
   }
@@ -313,6 +314,7 @@ export async function persistGeneration(
         correlationId,
         model: plan.request.model ?? null,
         configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
+        runMode: "test",
       });
       status = "run_queued";
     } else {

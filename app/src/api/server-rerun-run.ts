@@ -9,6 +9,7 @@ import { appendGovernanceAudit } from "./role-assignments";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { createRunInTx } from "./server-create-run";
+import type { RunMode } from "./server-create-run";
 import {
   apiErrorBody,
   isRecord,
@@ -29,6 +30,7 @@ interface SourceRunRow {
   params: unknown;
   as_of: Date | null;
   model: string | null;
+  run_mode: RunMode;
 }
 
 interface ParsedRerunBody {
@@ -75,7 +77,7 @@ export async function rerunRun(
     let response: CommandResponse | null = null;
     await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const source = await client.query<SourceRunRow>(
-        `SELECT id, status, scenario_version_id, params, as_of, model
+        `SELECT id, status, scenario_version_id, params, as_of, model, run_mode
            FROM runs
           WHERE tenant_id = $1::uuid
             AND id = $2::uuid
@@ -106,6 +108,7 @@ export async function rerunRun(
         correlationId: request.correlationId,
         model: row.model,
         configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
+        runMode: row.run_mode,
       });
       await client.query(
         `INSERT INTO run_reruns
@@ -129,6 +132,7 @@ export async function rerunRun(
         mode: body.mode,
         reason: body.reason,
         params_sha256: paramsHash(params),
+        run_mode: row.run_mode,
       });
       response = {
         status: 201,
@@ -139,6 +143,7 @@ export async function rerunRun(
           status: "queued",
           mode: body.mode,
           as_of: asOf,
+          run_mode: row.run_mode,
         },
       };
       await completeIdempotencyInTx(client, reservation.recordId, response);

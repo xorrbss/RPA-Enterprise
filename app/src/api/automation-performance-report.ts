@@ -13,6 +13,7 @@ const POC_MARKDOWN_CONTENT_TYPE = "text/markdown; charset=utf-8";
 const ROI_SOURCES = ["manual", "process_mining", "task_mining", "imported"] as const;
 const ROI_STAGES = ["approved", "build", "operate"] as const;
 const ROI_LINEAGE_SAMPLE_LIMIT = 5;
+type RunModeScope = "prod" | "test" | "all";
 
 type SpreadsheetCell = string | number | null;
 
@@ -238,6 +239,7 @@ interface WorkflowReportItem {
 
 interface AutomationPerformanceReport {
   readonly month: string;
+  readonly run_mode: RunModeScope;
   readonly timezone: typeof REPORT_TZ;
   readonly period_start: string;
   readonly period_end: string;
@@ -279,8 +281,10 @@ interface AutomationPerformanceReport {
 export function registerAutomationPerformanceReportRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get("/v1/reports/automation-performance", { config: { rbacAction: "run.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
-    const period = parseReportPeriod((request.query as Record<string, unknown>).month);
-    const report = await buildAutomationPerformanceReport(deps, principal.tenantId, period);
+    const query = request.query as Record<string, unknown>;
+    const period = parseReportPeriod(query.month);
+    const runMode = parseReportRunMode(query.run_mode);
+    const report = await buildAutomationPerformanceReport(deps, principal.tenantId, period, runMode);
     reply.code(200).send(report);
   });
 
@@ -292,7 +296,8 @@ export function registerAutomationPerformanceReportRoutes(app: FastifyInstance, 
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_export_format" });
     }
     const period = parseReportPeriod(query.month);
-    const report = await buildAutomationPerformanceReport(deps, principal.tenantId, period);
+    const runMode = parseReportRunMode(query.run_mode);
+    const report = await buildAutomationPerformanceReport(deps, principal.tenantId, period, runMode);
     if (format === "xlsx") {
       reply
         .code(200)
@@ -322,6 +327,7 @@ async function buildAutomationPerformanceReport(
   deps: ApiServerDeps,
   tenantId: string,
   period: ReportPeriod,
+  runMode: RunModeScope,
 ): Promise<AutomationPerformanceReport> {
   const { workflowRows, failureRows, trendRows, costByModelRows, modelCostTrendRows } = await withTenantTx(deps.pool, tenantId, async (client) => {
     const actualPeriodStart = `${period.month}-01`;
@@ -345,6 +351,7 @@ async function buildAutomationPerformanceReport(
           WHERE r.tenant_id = $1::uuid
             AND r.created_at >= $2::timestamptz
             AND r.created_at < $3::timestamptz
+            AND ($6::text = 'all' OR r.run_mode = $6)
           GROUP BY sv.scenario_id, s.name
        ),
        reruns_by_scenario AS (
@@ -357,6 +364,7 @@ async function buildAutomationPerformanceReport(
           WHERE rr.tenant_id = $1::uuid
             AND rr.created_at >= $2::timestamptz
             AND rr.created_at < $3::timestamptz
+            AND ($6::text = 'all' OR child.run_mode = $6)
           GROUP BY sv.scenario_id
        ),
        roi_by_scenario AS (
@@ -450,7 +458,7 @@ async function buildAutomationPerformanceReport(
          FULL OUTER JOIN actual_by_scenario actual ON actual.scenario_id = COALESCE(r.scenario_id, roi.scenario_id)
          LEFT JOIN reruns_by_scenario rr ON rr.scenario_id = COALESCE(r.scenario_id, roi.scenario_id, actual.scenario_id)
         ORDER BY COALESCE(r.total_runs, 0) DESC, COALESCE(roi.estimated_value::numeric, 0) DESC, COALESCE(r.scenario_name, roi.scenario_name, actual.scenario_name) ASC`,
-      [tenantId, period.start.toISOString(), period.end.toISOString(), actualPeriodStart, actualPeriodEnd],
+      [tenantId, period.start.toISOString(), period.end.toISOString(), actualPeriodStart, actualPeriodEnd, runMode],
     );
     const failures = await client.query<FailureTopRow>(
       `SELECT COALESCE(NULLIF(failure_reason->>'code', ''), 'RUN_FAILED') AS code,
@@ -460,10 +468,11 @@ async function buildAutomationPerformanceReport(
           AND status IN ('failed_business','failed_system')
           AND created_at >= $2::timestamptz
           AND created_at < $3::timestamptz
+          AND ($4::text = 'all' OR run_mode = $4)
         GROUP BY 1
         ORDER BY count(*) DESC, code ASC
         LIMIT 5`,
-      [tenantId, period.start.toISOString(), period.end.toISOString()],
+      [tenantId, period.start.toISOString(), period.end.toISOString(), runMode],
     );
     const trends = await client.query<TrendReportRow>(
       `WITH days AS (
@@ -484,10 +493,11 @@ async function buildAutomationPerformanceReport(
                 COALESCE(sum(r.usage_cost) FILTER (WHERE r.status = 'failed_business'), 0)::text AS failed_business_cost,
                 COALESCE(sum(r.usage_cost) FILTER (WHERE r.status = 'failed_system'), 0)::text AS failed_system_cost,
                 COALESCE(sum(r.usage_cost) FILTER (WHERE r.status NOT IN ('completed','failed_business','failed_system')), 0)::text AS other_cost
-           FROM runs r
+          FROM runs r
           WHERE r.tenant_id = $1::uuid
             AND r.created_at >= $2::timestamptz
             AND r.created_at < $3::timestamptz
+            AND ($5::text = 'all' OR r.run_mode = $5)
           GROUP BY 1
        ),
        reruns_by_day AS (
@@ -499,6 +509,7 @@ async function buildAutomationPerformanceReport(
           WHERE rr.tenant_id = $1::uuid
             AND rr.created_at >= $2::timestamptz
             AND rr.created_at < $3::timestamptz
+            AND ($5::text = 'all' OR child.run_mode = $5)
           GROUP BY 1
        )
        SELECT to_char(d.day_start AT TIME ZONE $4, 'YYYY-MM-DD') AS day,
@@ -517,35 +528,39 @@ async function buildAutomationPerformanceReport(
          LEFT JOIN runs_by_day r ON r.day_kst = date_trunc('day', d.day_start AT TIME ZONE $4)
          LEFT JOIN reruns_by_day rr ON rr.day_kst = date_trunc('day', d.day_start AT TIME ZONE $4)
        ORDER BY d.day_start`,
-      [tenantId, period.start.toISOString(), period.end.toISOString(), REPORT_TZ],
+      [tenantId, period.start.toISOString(), period.end.toISOString(), REPORT_TZ, runMode],
     );
     const costByModel = await client.query<CostByModelRow>(
-      `SELECT model,
+      `SELECT c.model,
               count(*)::int AS calls,
-              sum(input_tokens)::text AS input_tokens,
-              sum(output_tokens)::text AS output_tokens,
-              sum(cost)::text AS cost
-         FROM stagehand_calls
-        WHERE tenant_id = $1::uuid
-          AND created_at >= $2::timestamptz
-          AND created_at < $3::timestamptz
-        GROUP BY model
-        ORDER BY sum(cost) DESC NULLS LAST, model ASC`,
-      [tenantId, period.start.toISOString(), period.end.toISOString()],
+              sum(c.input_tokens)::text AS input_tokens,
+              sum(c.output_tokens)::text AS output_tokens,
+              sum(c.cost)::text AS cost
+         FROM stagehand_calls c
+         JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.run_id
+        WHERE c.tenant_id = $1::uuid
+          AND c.created_at >= $2::timestamptz
+          AND c.created_at < $3::timestamptz
+          AND ($4::text = 'all' OR r.run_mode = $4)
+        GROUP BY c.model
+        ORDER BY sum(c.cost) DESC NULLS LAST, c.model ASC`,
+      [tenantId, period.start.toISOString(), period.end.toISOString(), runMode],
     );
     const modelCostTrends = await client.query<ModelCostTrendRow>(
       `WITH model_daily AS (
-         SELECT to_char(date_trunc('day', created_at AT TIME ZONE $4), 'YYYY-MM-DD') AS day,
-                model,
+         SELECT to_char(date_trunc('day', c.created_at AT TIME ZONE $4), 'YYYY-MM-DD') AS day,
+                c.model,
                 count(*)::int AS calls,
-                sum(input_tokens) AS input_tokens,
-                sum(output_tokens) AS output_tokens,
-                sum(cost) AS cost
-           FROM stagehand_calls
-          WHERE tenant_id = $1::uuid
-            AND created_at >= $2::timestamptz
-            AND created_at < $3::timestamptz
-          GROUP BY 1, model
+                sum(c.input_tokens) AS input_tokens,
+                sum(c.output_tokens) AS output_tokens,
+                sum(c.cost) AS cost
+           FROM stagehand_calls c
+           JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.run_id
+          WHERE c.tenant_id = $1::uuid
+            AND c.created_at >= $2::timestamptz
+            AND c.created_at < $3::timestamptz
+            AND ($5::text = 'all' OR r.run_mode = $5)
+          GROUP BY 1, c.model
        ),
        day_cost AS (
          SELECT day,
@@ -562,9 +577,9 @@ async function buildAutomationPerformanceReport(
               md.cost::text AS cost,
               dc.known_cost::text AS day_known_cost
          FROM model_daily md
-         LEFT JOIN day_cost dc ON dc.day = md.day
-        ORDER BY md.day ASC, md.cost DESC NULLS LAST, md.model ASC`,
-      [tenantId, period.start.toISOString(), period.end.toISOString(), REPORT_TZ],
+        LEFT JOIN day_cost dc ON dc.day = md.day
+       ORDER BY md.day ASC, md.cost DESC NULLS LAST, md.model ASC`,
+      [tenantId, period.start.toISOString(), period.end.toISOString(), REPORT_TZ, runMode],
     );
     return {
       workflowRows: workflows.rows,
@@ -582,6 +597,7 @@ async function buildAutomationPerformanceReport(
   const summary = summarizeWorkflows(byWorkflow, costByModel);
   return {
     month: period.month,
+    run_mode: runMode,
     timezone: REPORT_TZ,
     period_start: period.start.toISOString(),
     period_end: period.end.toISOString(),
@@ -1063,6 +1079,12 @@ function parseReportPeriod(raw: unknown): ReportPeriod {
   };
 }
 
+function parseReportRunMode(raw: unknown): RunModeScope {
+  if (raw === undefined || raw === null || raw === "") return "prod";
+  if (raw === "prod" || raw === "test" || raw === "all") return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_run_mode" });
+}
+
 function currentKstMonth(): string {
   const now = new Date();
   const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
@@ -1083,6 +1105,7 @@ function reportToCsv(report: AutomationPerformanceReport): string {
   const summaryLines = [
     ["metric", "value"],
     ["month", report.month],
+    ["run_mode", report.run_mode],
     ["timezone", report.timezone],
     ["period_start", report.period_start],
     ["period_end", report.period_end],
@@ -1382,6 +1405,7 @@ function roiActualsCell(actuals: RoiActualsSummary): string {
 function reportToPocMarkdown(report: AutomationPerformanceReport): string {
   const summaryRows = [
     ["Month", report.month],
+    ["Run mode", report.run_mode],
     ["Timezone", report.timezone],
     ["Period start", report.period_start],
     ["Period end", report.period_end],
@@ -1481,6 +1505,7 @@ function reportToPocMarkdown(report: AutomationPerformanceReport): string {
     "# Automation Performance PoC Report",
     "",
     `- Month: ${markdownInline(report.month)}`,
+    `- Run mode: ${markdownInline(report.run_mode)}`,
     `- Reporting timezone: ${markdownInline(report.timezone)}`,
     `- Period: ${markdownInline(report.period_start)} to ${markdownInline(report.period_end)}`,
     `- Recommended decision: ${markdownInline(decisionSignalCell(report.summary.decision_signal))}`,

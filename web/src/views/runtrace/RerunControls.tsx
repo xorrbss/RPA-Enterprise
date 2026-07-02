@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useApiClient } from "../../api/context";
 import { ActionButton } from "../../components/ActionButton";
+import { RunModeBadge } from "../../components/badges";
 import type { RunDetail } from "../../api/types";
 
 // 실패 실행 재실행 — 원인을 확인한 그 자리(상세 패널)에서 목록 복귀 없이 재실행한다(실행 식별성 S1).
@@ -36,6 +37,9 @@ export function RerunControls({ detail }: { readonly detail: RunDetail }): JSX.E
       style={{ display: "grid", gap: 8, margin: "8px 0 0", padding: 12, border: "1px solid var(--line)", borderRadius: 8 }}
     >
       <strong>다시 실행</strong>
+      <span className="subtle">
+        원본과 같은 구분으로 다시 실행합니다. <RunModeBadge runMode={detail.run_mode} />
+      </span>
       <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         <ActionButton
           label="같은 입력 재실행"

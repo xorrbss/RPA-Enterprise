@@ -93,7 +93,7 @@ describe("RunScenarioButton URL memory", () => {
             },
           },
         }),
-        createRun: async () => ({ run_id: "run-url-memory", status: "queued" }),
+        createRun: async () => ({ run_id: "run-url-memory", status: "queued", run_mode: "prod" }),
       }),
     );
 

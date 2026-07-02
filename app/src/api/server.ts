@@ -80,6 +80,7 @@ interface RunRow {
   id: string;
   status: string;
   priority: string;
+  run_mode: string;
   scenario_id: string;
   scenario_name: string;
   scenario_version_id: string;
@@ -202,7 +203,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     }
     const run = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const result = await client.query<RunRow>(
-        `SELECT r.id, r.status, r.priority, sv.scenario_id, s.name AS scenario_name, r.scenario_version_id,
+        `SELECT r.id, r.status, r.priority, r.run_mode, sv.scenario_id, s.name AS scenario_name, r.scenario_version_id,
                 r.worker_id, r.attempts, r.as_of, r.params, r.failure_reason, r.updated_at
            FROM runs r
            JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
@@ -220,6 +221,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       run_id: run.id,
       status: run.status,
       priority: run.priority,
+      run_mode: run.run_mode,
       scenario_id: run.scenario_id,
       scenario_name: run.scenario_name,
       scenario_version_id: run.scenario_version_id,

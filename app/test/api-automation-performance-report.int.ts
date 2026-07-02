@@ -35,16 +35,19 @@ const RUN_FAILED_BUSINESS = "43000000-0000-4000-8000-000000000002";
 const RUN_FAILED_SYSTEM = "43000000-0000-4000-8000-000000000003";
 const RUN_RERUN_CHILD = "43000000-0000-4000-8000-000000000004";
 const RUN_OUTSIDE = "43000000-0000-4000-8000-000000000005";
+const RUN_TEST_MODE = "43000000-0000-4000-8000-000000000006";
 const RUN_TENANT_B = "44000000-0000-4000-8000-000000000001";
 const STEP_COMPLETED = "43000000-0000-4000-8000-000000000101";
 const STEP_FAILED_BUSINESS = "43000000-0000-4000-8000-000000000102";
 const STEP_FAILED_SYSTEM = "43000000-0000-4000-8000-000000000103";
 const STEP_RERUN_CHILD = "43000000-0000-4000-8000-000000000104";
+const STEP_TEST_MODE = "43000000-0000-4000-8000-000000000105";
 const STEP_TENANT_B = "44000000-0000-4000-8000-000000000101";
 const CALL_COMPLETED = "43000000-0000-4000-8000-000000000201";
 const CALL_FAILED_BUSINESS = "43000000-0000-4000-8000-000000000202";
 const CALL_FAILED_SYSTEM = "43000000-0000-4000-8000-000000000203";
 const CALL_RERUN_CHILD = "43000000-0000-4000-8000-000000000204";
+const CALL_TEST_MODE = "43000000-0000-4000-8000-000000000205";
 const CALL_TENANT_B = "44000000-0000-4000-8000-000000000201";
 const IDEA_A1 = "45000000-0000-4000-8000-000000000001";
 const IMPORT_A1 = "45000000-0000-4000-8000-000000000031";
@@ -116,14 +119,15 @@ async function seed(pool: Pool): Promise<void> {
 
   await withTenantTx(pool, TENANT_A, async (client) => {
     await client.query(
-      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, params, failure_reason, usage_cost, correlation_id, created_at, updated_at)
+      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, run_mode, params, failure_reason, usage_cost, correlation_id, created_at, updated_at)
        VALUES
-         ($1::uuid, $2::uuid, $3::uuid, 'completed', '{}'::jsonb, NULL, 1.500000, $1::uuid, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z'),
-         ($4::uuid, $2::uuid, $3::uuid, 'failed_business', '{}'::jsonb, '{"code":"BUSINESS_RULE","message":"blocked"}'::jsonb, 0.250000, $4::uuid, '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z'),
-         ($5::uuid, $2::uuid, $3::uuid, 'failed_system', '{}'::jsonb, '{"code":"SITE_DOWN","message":"offline"}'::jsonb, 0.500000, $5::uuid, '2026-06-04T00:00:00Z', '2026-06-04T00:00:00Z'),
-         ($6::uuid, $2::uuid, $3::uuid, 'completed', '{}'::jsonb, NULL, 0.750000, $6::uuid, '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z'),
-         ($7::uuid, $2::uuid, $3::uuid, 'completed', '{}'::jsonb, NULL, 9.000000, $7::uuid, '2026-05-31T14:59:59Z', '2026-05-31T14:59:59Z')`,
-      [RUN_COMPLETED, TENANT_A, SVER_A1, RUN_FAILED_BUSINESS, RUN_FAILED_SYSTEM, RUN_RERUN_CHILD, RUN_OUTSIDE],
+         ($1::uuid, $2::uuid, $3::uuid, 'completed', 'prod', '{}'::jsonb, NULL, 1.500000, $1::uuid, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z'),
+         ($4::uuid, $2::uuid, $3::uuid, 'failed_business', 'prod', '{}'::jsonb, '{"code":"BUSINESS_RULE","message":"blocked"}'::jsonb, 0.250000, $4::uuid, '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z'),
+         ($5::uuid, $2::uuid, $3::uuid, 'failed_system', 'prod', '{}'::jsonb, '{"code":"SITE_DOWN","message":"offline"}'::jsonb, 0.500000, $5::uuid, '2026-06-04T00:00:00Z', '2026-06-04T00:00:00Z'),
+         ($6::uuid, $2::uuid, $3::uuid, 'completed', 'prod', '{}'::jsonb, NULL, 0.750000, $6::uuid, '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z'),
+         ($7::uuid, $2::uuid, $3::uuid, 'completed', 'prod', '{}'::jsonb, NULL, 9.000000, $7::uuid, '2026-05-31T14:59:59Z', '2026-05-31T14:59:59Z'),
+         ($8::uuid, $2::uuid, $3::uuid, 'completed', 'test', '{}'::jsonb, NULL, 4.000000, $8::uuid, '2026-06-06T00:00:00Z', '2026-06-06T00:00:00Z')`,
+      [RUN_COMPLETED, TENANT_A, SVER_A1, RUN_FAILED_BUSINESS, RUN_FAILED_SYSTEM, RUN_RERUN_CHILD, RUN_OUTSIDE, RUN_TEST_MODE],
     );
     await client.query(
       `INSERT INTO run_steps (id, tenant_id, run_id, step_id, node_id, attempt, action, status, cache_mode, created_at)
@@ -131,8 +135,21 @@ async function seed(pool: Pool): Promise<void> {
          ($1::uuid, $2::uuid, $3::uuid, 'extract', 'extract', 0, 'extract', 'success', 'miss', '2026-06-02T00:00:10Z'),
          ($4::uuid, $2::uuid, $5::uuid, 'extract', 'extract', 0, 'extract', 'failed_business', 'miss', '2026-06-03T00:00:10Z'),
          ($6::uuid, $2::uuid, $7::uuid, 'extract', 'extract', 0, 'extract', 'failed_system', 'miss', '2026-06-04T00:00:10Z'),
-         ($8::uuid, $2::uuid, $9::uuid, 'extract', 'extract', 0, 'extract', 'success', 'hit', '2026-06-05T00:00:10Z')`,
-      [STEP_COMPLETED, TENANT_A, RUN_COMPLETED, STEP_FAILED_BUSINESS, RUN_FAILED_BUSINESS, STEP_FAILED_SYSTEM, RUN_FAILED_SYSTEM, STEP_RERUN_CHILD, RUN_RERUN_CHILD],
+         ($8::uuid, $2::uuid, $9::uuid, 'extract', 'extract', 0, 'extract', 'success', 'hit', '2026-06-05T00:00:10Z'),
+         ($10::uuid, $2::uuid, $11::uuid, 'extract', 'extract', 0, 'extract', 'success', 'miss', '2026-06-06T00:00:10Z')`,
+      [
+        STEP_COMPLETED,
+        TENANT_A,
+        RUN_COMPLETED,
+        STEP_FAILED_BUSINESS,
+        RUN_FAILED_BUSINESS,
+        STEP_FAILED_SYSTEM,
+        RUN_FAILED_SYSTEM,
+        STEP_RERUN_CHILD,
+        RUN_RERUN_CHILD,
+        STEP_TEST_MODE,
+        RUN_TEST_MODE,
+      ],
     );
     await client.query(
       `INSERT INTO stagehand_calls
@@ -142,8 +159,21 @@ async function seed(pool: Pool): Promise<void> {
          ($1::uuid, $2::uuid, $3::uuid, 'extract', 0, 'call-completed', 'sha256:completed', 'gpt-4o-mini', 'sse', 'done', 1000, 200, 1.250000, '2026-06-02T00:00:11Z'),
          ($4::uuid, $2::uuid, $5::uuid, 'extract', 0, 'call-business', 'sha256:business', 'gpt-4o-mini', 'sse', 'done', 300, 50, 0.200000, '2026-06-03T00:00:11Z'),
          ($6::uuid, $2::uuid, $7::uuid, 'extract', 0, 'call-system', 'sha256:system', 'claude-haiku', 'sync', 'done', 400, 100, 0.500000, '2026-06-04T00:00:11Z'),
-         ($8::uuid, $2::uuid, $9::uuid, 'extract', 0, 'call-rerun', 'sha256:rerun', 'gpt-4o-mini', 'sse', 'done', 500, 150, 0.750000, '2026-06-05T00:00:11Z')`,
-      [CALL_COMPLETED, TENANT_A, RUN_COMPLETED, CALL_FAILED_BUSINESS, RUN_FAILED_BUSINESS, CALL_FAILED_SYSTEM, RUN_FAILED_SYSTEM, CALL_RERUN_CHILD, RUN_RERUN_CHILD],
+         ($8::uuid, $2::uuid, $9::uuid, 'extract', 0, 'call-rerun', 'sha256:rerun', 'gpt-4o-mini', 'sse', 'done', 500, 150, 0.750000, '2026-06-05T00:00:11Z'),
+         ($10::uuid, $2::uuid, $11::uuid, 'extract', 0, 'call-test-mode', 'sha256:test-mode', 'test-only-model', 'sse', 'done', 700, 80, 4.000000, '2026-06-06T00:00:11Z')`,
+      [
+        CALL_COMPLETED,
+        TENANT_A,
+        RUN_COMPLETED,
+        CALL_FAILED_BUSINESS,
+        RUN_FAILED_BUSINESS,
+        CALL_FAILED_SYSTEM,
+        RUN_FAILED_SYSTEM,
+        CALL_RERUN_CHILD,
+        RUN_RERUN_CHILD,
+        CALL_TEST_MODE,
+        RUN_TEST_MODE,
+      ],
     );
     await client.query(
       `INSERT INTO run_reruns (id, tenant_id, source_run_id, child_run_id, mode, params, requested_by, reason, created_at)
@@ -301,6 +331,7 @@ async function main(): Promise<void> {
     const report = await getReport(viewer);
     const body = report.json();
     check("viewer can read monthly report", report.statusCode === 200 && body.month === "2026-06", report.body);
+    check("report defaults to prod run_mode", body.run_mode === "prod", report.body);
     check("KST month boundary is returned", body.period_start === "2026-05-31T15:00:00.000Z" && body.period_end === "2026-06-30T15:00:00.000Z", report.body);
     check("summary totals tenant-scoped monthly runs", body.summary.total_runs === 4 && body.summary.completed === 2, JSON.stringify(body.summary));
     check("success rate uses completed / terminal outcomes", approx(body.summary.success_rate, 0.5), String(body.summary.success_rate));
@@ -371,6 +402,7 @@ async function main(): Promise<void> {
         body.cost_by_model.every((r: { model: string }) => r.model !== "tenant-b-model"),
       JSON.stringify(body.cost_by_model),
     );
+    check("prod report excludes test-mode model costs", body.cost_by_model.every((r: { model: string }) => r.model !== "test-only-model"), JSON.stringify(body.cost_by_model));
     const gptModelTrend = (body.model_cost_trends as Array<{
       day: string;
       model: string;
@@ -486,8 +518,42 @@ async function main(): Promise<void> {
       JSON.stringify(rerunTrend),
     );
 
+    const allReport = await getReport(viewer, "month=2026-06&run_mode=all");
+    const allBody = allReport.json();
+    check(
+      "run_mode=all includes test executions and costs",
+      allReport.statusCode === 200 &&
+        allBody.run_mode === "all" &&
+        allBody.summary.total_runs === 5 &&
+        allBody.summary.completed === 3 &&
+        approx(allBody.summary.gateway_cost, 7) &&
+        (allBody.cost_by_model as Array<{ model: string; cost: number | null }>).some((row) => row.model === "test-only-model" && row.cost !== null && approx(row.cost, 4)),
+      allReport.body,
+    );
+
+    const testReport = await getReport(viewer, "month=2026-06&run_mode=test");
+    const testBody = testReport.json();
+    check(
+      "run_mode=test filters to test executions and costs",
+      testReport.statusCode === 200 &&
+        testBody.run_mode === "test" &&
+        testBody.summary.total_runs === 1 &&
+        testBody.summary.completed === 1 &&
+        testBody.summary.failed_business === 0 &&
+        testBody.summary.failed_system === 0 &&
+        approx(testBody.summary.gateway_cost, 4) &&
+        approx(testBody.summary.cost_by_status.completed, 4) &&
+        testBody.summary.rerun_count === 0 &&
+        (testBody.cost_by_model as Array<{ model: string; cost: number | null }>).length === 1 &&
+        testBody.cost_by_model[0]?.model === "test-only-model" &&
+        testBody.cost_by_model[0]?.cost !== null &&
+        approx(testBody.cost_by_model[0].cost, 4),
+      testReport.body,
+    );
+
     const csv = await exportReport(viewer);
     check("CSV export returns text/csv", csv.statusCode === 200 && csv.headers["content-type"]?.toString().includes("text/csv") === true, csv.body);
+    check("CSV export includes run_mode", csv.body.includes("\"run_mode\",\"prod\""), csv.body);
     check("CSV includes workflow section", csv.body.includes("Workflow ROI"), csv.body);
     check("CSV includes cost and ROI analytics sections", csv.body.includes("Cost By Model") && csv.body.includes("Model Cost Trends") && csv.body.includes("decision_signal_status") && csv.body.includes("net_value") && csv.body.includes("cost_delta_from_previous_day"), csv.body);
     check("CSV includes ROI source lineage", csv.body.includes("roi_source_counts") && csv.body.includes("process_mining:1") && csv.body.includes("finance owner"), csv.body);
@@ -508,6 +574,7 @@ async function main(): Promise<void> {
     const poc = await exportReport(viewer, "month=2026-06&format=poc_markdown");
     check("PoC Markdown export returns markdown", poc.statusCode === 200 && poc.headers["content-type"]?.toString().includes("text/markdown") === true, poc.body);
     check("PoC Markdown export uses md attachment filename", poc.headers["content-disposition"]?.toString().includes("automation-performance-poc-2026-06.md") === true, String(poc.headers["content-disposition"]));
+    check("PoC Markdown export includes run_mode", poc.body.includes("- Run mode: prod"), poc.body);
     check("PoC Markdown includes summary, failures, model cost, workflow ROI, and decision guide", poc.body.includes("## Summary Metrics") && poc.body.includes("## Failure Top N") && poc.body.includes("## Cost By Model") && poc.body.includes("## Model Cost Trends") && poc.body.includes("## Workflow ROI / Cost") && poc.body.includes("## Decision Guide"), poc.body);
     check("PoC Markdown includes ROI source lineage", poc.body.includes("ROI sources") && poc.body.includes("process\\_mining:1") && poc.body.includes("finance owner"), poc.body);
     check("PoC Markdown includes ROI actual comparison without evidence details", poc.body.includes("ROI actuals") && poc.body.includes("comparable tx 98/110") && !poc.body.includes("ticket:ROI-ACT-A1") && !poc.body.includes("ticket:ROI-ACT-SPAN"), poc.body);
@@ -520,8 +587,14 @@ async function main(): Promise<void> {
     const invalidMonth = await getReport(viewer, "month=2026-13");
     check("invalid month -> 422", invalidMonth.statusCode === 422 && invalidMonth.json().details?.reason === "invalid_month", invalidMonth.body);
 
+    const invalidRunMode = await getReport(viewer, "month=2026-06&run_mode=dry_run");
+    check("invalid run_mode -> 422", invalidRunMode.statusCode === 422 && invalidRunMode.json().details?.reason === "invalid_run_mode", invalidRunMode.body);
+
     const invalidFormat = await exportReport(viewer, "month=2026-06&format=pdf");
     check("invalid export format -> 422", invalidFormat.statusCode === 422 && invalidFormat.json().details?.reason === "invalid_export_format", invalidFormat.body);
+
+    const invalidExportRunMode = await exportReport(viewer, "month=2026-06&format=csv&run_mode=dry_run");
+    check("invalid export run_mode -> 422", invalidExportRunMode.statusCode === 422 && invalidExportRunMode.json().details?.reason === "invalid_run_mode", invalidExportRunMode.body);
 
     const denied = await getReport(noRole);
     check("missing role denied -> 403", denied.statusCode === 403 && denied.json().code === "AUTHZ_FORBIDDEN", denied.body);

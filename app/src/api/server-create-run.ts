@@ -28,6 +28,8 @@ import {
 // 엄격 ISO-8601(date-time). Date.parse는 느슨하고 calendar-invalid 값을 보정하므로 직접 검증한다(api-surface §0.6).
 const ISO_8601_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 
+export type RunMode = "test" | "prod";
+
 /**
  * run 생성(멱등 명령). 흐름: 키/본문 선검사(422) → 멱등 예약(replay/in-flight 409/hash mismatch 412) →
  * reserved면 작업(scenario_version 존재 확인 → runs(queued) + run.created outbox + run_claim enqueue, 동일 tx)
@@ -52,13 +54,15 @@ export async function createRun(deps: ApiServerDeps, request: FastifyRequest): P
     workitem_id?: unknown;
     model?: unknown;
     priority?: unknown;
+    run_mode?: unknown;
   };
   for (const key of Object.keys(body)) {
-    if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id" && key !== "model" && key !== "priority") {
+    if (key !== "scenario_version_id" && key !== "params" && key !== "workitem_id" && key !== "model" && key !== "priority" && key !== "run_mode") {
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unknown_field", field: key });
     }
   }
   const priority = parseRunPriority(body.priority);
+  const runMode = parseRunMode(body.run_mode);
   // Gap2(B+C): optional model. 형식 검증은 예약 이전, 정책 존재/해소는 작업 tx(RLS 스코프).
   let model: string | null = null;
   if (body.model !== undefined && body.model !== null) {
@@ -116,7 +120,7 @@ export async function createRun(deps: ApiServerDeps, request: FastifyRequest): P
   // (4) reserved → 작업 수행(동일 tx).
   const recordId = reservation.recordId;
   const runId = randomUUID();
-  const response: CommandResponse = { status: 201, body: { run_id: runId, status: "queued", as_of: asOf, priority } };
+  const response: CommandResponse = { status: 201, body: { run_id: runId, status: "queued", as_of: asOf, priority, run_mode: runMode } };
   try {
     await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       // run 생성 핵심(scenario_version 확인·model 해소·workitem 확인·INSERT·run.created outbox·run_claim enqueue)은
@@ -132,6 +136,7 @@ export async function createRun(deps: ApiServerDeps, request: FastifyRequest): P
         model,
         configuredPromptVersions: deps.aiGovernanceConfiguredPromptVersions,
         priority,
+        runMode,
       });
       // 멱등 성공 기록을 동일 tx에 원자화(작업 커밋 == 'succeeded' 커밋). 별도 tx 불일치 창 제거.
       await completeIdempotencyInTx(c, recordId, response);
@@ -163,6 +168,7 @@ export interface CreateRunInTxInput {
   readonly model?: string | null;
   readonly configuredPromptVersions?: readonly string[];
   readonly priority?: RunPriority;
+  readonly runMode?: RunMode;
   /** 미지정 시 생성(POST /v1/runs 는 응답에 미리 쓴 runId 를 주입). */
   readonly runId?: string;
 }
@@ -181,6 +187,7 @@ export async function createRunInTx(
   const runId = input.runId ?? randomUUID();
   const workitemId = input.workitemId ?? null;
   const priority = input.priority ?? "medium";
+  const runMode = input.runMode ?? "prod";
   // correlation_id 저장 coerce — runs.correlation_id/event envelope 는 uuid(format:uuid). 비-UUID 요청 헤더(에러 echo 엔
   //   그대로 실리되 추적용)는 저장 시점에 서버 UUID 로 대체해 ::uuid 캐스트 22P02→미분류 500 을 막는다(review 후속).
   const correlationId = UUID_RE.test(input.correlationId) ? input.correlationId : randomUUID();
@@ -267,9 +274,9 @@ export async function createRunInTx(
     }
   }
   await client.query(
-    `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, priority, params, as_of, correlation_id, model)
-     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5, $6::jsonb, $7::timestamptz, $8::uuid, $9)`,
-    [runId, input.tenantId, input.scenarioVersionId, workitemId, priority, JSON.stringify(input.params), input.asOf, correlationId, resolvedModel],
+    `INSERT INTO runs (id, tenant_id, scenario_version_id, workitem_id, status, priority, run_mode, params, as_of, correlation_id, model)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'queued', $5, $6, $7::jsonb, $8::timestamptz, $9::uuid, $10)`,
+    [runId, input.tenantId, input.scenarioVersionId, workitemId, priority, runMode, JSON.stringify(input.params), input.asOf, correlationId, resolvedModel],
   );
   await emitOutboxEvent(client, {
     tenantId: input.tenantId,
@@ -287,6 +294,12 @@ function parseRunPriority(raw: unknown): RunPriority {
   if (raw === undefined || raw === null) return "medium";
   if (raw === "low" || raw === "medium" || raw === "high" || raw === "critical") return raw;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_run_priority" });
+}
+
+function parseRunMode(raw: unknown): RunMode {
+  if (raw === undefined || raw === null) return "prod";
+  if (raw === "test" || raw === "prod") return raw;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_run_mode" });
 }
 
 function classifyRunCreateFailure(error: unknown): ApiResponseError | undefined {

@@ -2047,7 +2047,7 @@ describe("D7 운영 콘솔 shell", () => {
         }),
         createRun: async (body, key) => {
           calls.push({ sver: body.scenario_version_id, key });
-          return { run_id: "run-1", status: "queued" };
+          return { run_id: "run-1", status: "queued", run_mode: "prod" };
         },
       }),
     );
@@ -2094,7 +2094,7 @@ describe("D7 운영 콘솔 shell", () => {
         }),
         createRun: async (body) => {
           calls.push({ params: body.params ?? {} });
-          return { run_id: "run-2", status: "queued" };
+          return { run_id: "run-2", status: "queued", run_mode: "prod" };
         },
       }),
     );
@@ -2164,7 +2164,7 @@ describe("D7 운영 콘솔 shell", () => {
         }),
         createRun: async (body) => {
           calls.push({ params: body.params ?? {} });
-          return { run_id: "run-schema", status: "queued" };
+          return { run_id: "run-schema", status: "queued", run_mode: "prod" };
         },
       }),
     );
@@ -2235,7 +2235,7 @@ describe("D7 운영 콘솔 shell", () => {
             });
           }
           calls.push({ model: body.model });
-          return { run_id: "run-3", status: "queued" };
+          return { run_id: "run-3", status: "queued", run_mode: "prod" };
         },
       }),
     );

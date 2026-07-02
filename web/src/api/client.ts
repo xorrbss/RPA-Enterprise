@@ -19,6 +19,7 @@ import {
   type AuditVerificationRun,
   type AuditVerificationRunListParams,
   type AutomationPerformanceReport,
+  type AutomationPerformanceRunMode,
   type AuditLogListParams,
   type AutomationAdoptionEvidenceItem,
   type AutomationAdoptionEvidenceListParams,
@@ -196,10 +197,10 @@ export interface ApiClient {
   getAiGovernanceRuntimePolicy(): Promise<AiGovernanceRuntimePolicyEnvelope>;
   upsertAiGovernanceRuntimePolicy(body: AiGovernanceRuntimePolicyRequest, idempotencyKey: string): Promise<AiGovernanceRuntimePolicy>;
   listBotPools(p?: ListParams): Promise<Paginated<BotPoolItem>>;
-  getAutomationPerformanceReport(month?: string): Promise<AutomationPerformanceReport>;
-  exportAutomationPerformanceReportCsv(month?: string): Promise<string>;
-  exportAutomationPerformanceReportXlsx?(month?: string): Promise<Blob>;
-  exportAutomationPerformanceReportPocMarkdown?(month?: string): Promise<string>;
+  getAutomationPerformanceReport(month?: string, runMode?: AutomationPerformanceRunMode): Promise<AutomationPerformanceReport>;
+  exportAutomationPerformanceReportCsv(month?: string, runMode?: AutomationPerformanceRunMode): Promise<string>;
+  exportAutomationPerformanceReportXlsx?(month?: string, runMode?: AutomationPerformanceRunMode): Promise<Blob>;
+  exportAutomationPerformanceReportPocMarkdown?(month?: string, runMode?: AutomationPerformanceRunMode): Promise<string>;
   listProcessMiningImports(p?: ProcessMiningImportListParams): Promise<Paginated<ProcessMiningImportItem>>;
   createProcessMiningImport(body: ProcessMiningImportCreateBody, idempotencyKey: string): Promise<ProcessMiningImportItem>;
   listAutomationIdeas(p?: AutomationIdeaListParams): Promise<Paginated<AutomationIdeaItem>>;
@@ -666,18 +667,18 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     upsertAiGovernanceRuntimePolicy: (body, idempotencyKey) =>
       send("PUT", `/v1/ai-governance/runtime-policy`, body, { "Idempotency-Key": idempotencyKey }),
     listBotPools: (p) => get(`/v1/bot-pools${queryString(p)}`),
-    getAutomationPerformanceReport: (month) =>
-      get(`/v1/reports/automation-performance${queryString(month !== undefined ? { month } : undefined)}`),
-    exportAutomationPerformanceReportCsv: (month) =>
-      getText(`/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), format: "csv" })}`, "text/csv"),
-    exportAutomationPerformanceReportXlsx: (month) =>
+    getAutomationPerformanceReport: (month, runMode = "prod") =>
+      get(`/v1/reports/automation-performance${queryString({ ...(month !== undefined ? { month } : {}), run_mode: runMode })}`),
+    exportAutomationPerformanceReportCsv: (month, runMode = "prod") =>
+      getText(`/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), run_mode: runMode, format: "csv" })}`, "text/csv"),
+    exportAutomationPerformanceReportXlsx: (month, runMode = "prod") =>
       getBlob(
-        `/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), format: "xlsx" })}`,
+        `/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), run_mode: runMode, format: "xlsx" })}`,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       ),
-    exportAutomationPerformanceReportPocMarkdown: (month) =>
+    exportAutomationPerformanceReportPocMarkdown: (month, runMode = "prod") =>
       getText(
-        `/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), format: "poc_markdown" })}`,
+        `/v1/reports/automation-performance/export${queryString({ ...(month !== undefined ? { month } : {}), run_mode: runMode, format: "poc_markdown" })}`,
         "text/markdown",
       ),
     listProcessMiningImports: (p) => get(`/v1/process-mining/imports${queryString(p)}`),

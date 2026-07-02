@@ -630,6 +630,8 @@ assert.equal(registry.getBodyValidator("createRun")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1" }).valid, false);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {} }).valid, true);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini" }).valid, true);
+assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, run_mode: "test" }).valid, true);
+assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, run_mode: "dry_run" }).valid, false);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, tenant_id: "t1" }).valid, false);
 assert.equal(registry.getBodyValidator("createRun")?.validate({ scenario_version_id: "sv-1", params: {}, model: "gpt-4o-mini", tenant_id: "t1" }).valid, false);
 assert.equal(registry.getBodyValidator("createWebAttendedRunRequest")?.validate({}).valid, false);
@@ -1289,11 +1291,12 @@ assert.equal(fastifyRoutes[0]?.url, "/v1/runs/:run_id");
 const created = await handlers.createRun!(ctx("createRun", {
   method: "POST",
   path: "/v1/runs",
-  body: { scenario_version_id: "sv-2", params: { as_of: "2026-06-13T10:00:00Z" } },
+  body: { scenario_version_id: "sv-2", params: { as_of: "2026-06-13T10:00:00Z" }, run_mode: "test" },
 }));
 assert.equal(created.status, 201);
 assert.equal((created.body as { status: string }).status, "queued");
 assert.equal((created.body as { as_of: string }).as_of, "2026-06-13T10:00:00Z");
+assert.equal((created.body as { run_mode: string }).run_mode, "test");
 
 const listed = await handlers.listRuns!(ctx("listRuns", {
   method: "GET",
@@ -1301,6 +1304,13 @@ const listed = await handlers.listRuns!(ctx("listRuns", {
   query: { status: "running" },
 }));
 assert.equal((listed.body as { items: unknown[] }).items.length, 1);
+
+const listedTest = await handlers.listRuns!(ctx("listRuns", {
+  method: "GET",
+  path: "/v1/runs",
+  query: { run_mode: "test" },
+}));
+assert.equal((listedTest.body as { items: unknown[] }).items.length, 1);
 
 const aborted = await handlers.abortRun!(ctx("abortRun", {
   method: "POST",
