@@ -2383,9 +2383,10 @@ export interface ListParams {
   kind?: string;
   risk?: string;
   assignee?: string;
+  unassigned?: boolean;
   run_id?: string;
   // query-bag: 뷰별 추가 필터(model 등)를 허용. URLSearchParams로 직렬화.
-  [k: string]: string | number | undefined;
+  [k: string]: string | number | boolean | undefined;
 }
 
 /** 제어평면 ApiError(error-catalog) 본문. */

@@ -340,6 +340,28 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     await waitFor(() => expect(location.hash).toBe("#runTrace?status=failed_business"));
   });
 
+  test("사람 확인 대기 카드와 Top5는 종결 업무를 제외하고 terminal=false로 드릴다운한다", async () => {
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({
+          items: [
+            { human_task_id: "ht-open", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null },
+            { human_task_id: "ht-resolved", state: "resolved", kind: "approval", assignee: "u", timeout: "2026-06-01T00:00:00.000Z", on_timeout: "escalate", run_id: null },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    const humanCard = await screen.findByRole("button", { name: /사람 확인 대기/ });
+    await waitFor(() => expect(humanCard).toHaveTextContent("1"));
+    expect(document.body.textContent ?? "").toContain("ht-open");
+    expect(document.body.textContent ?? "").not.toContain("ht-resolv");
+
+    humanCard.click();
+    await waitFor(() => expect(location.hash).toBe("#humanTasks?terminal=false"));
+  });
+
   test("시스템 실패 카드 → #runTrace?status=failed_system", async () => {
     renderApp(fakeClient());
     const sysCard = await screen.findByRole("button", { name: /시스템 실패/ });

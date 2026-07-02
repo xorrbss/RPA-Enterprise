@@ -8,9 +8,9 @@ import { StatusBadge } from "../components/badges";
 import { Loading, ErrorState, EmptyState } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import type { HumanTaskItem, ScenarioItem } from "../api/types";
+import { isActiveHumanTask } from "./humanTaskFilters";
 
 const POLL_MS = 5_000;
-const TERMINAL = new Set(["resolved", "expired", "cancelled"]);
 
 // 사람 개입 큐 카드의 제목 — payload 의 제목/title 이 있으면 그걸, 없으면 업무 종류로(날조 없이 실 데이터만).
 function taskTitle(t: HumanTaskItem): string {
@@ -45,9 +45,14 @@ export function MyWorkView(): JSX.Element {
   const subject = useSubject();
 
   // 개입 큐 = 내게 배정된 미종결 사람-확인 업무(내 업무 먼저). sub 부재(미로그인)면 필터 없음.
-  const tasksQuery = useQuery({
+  const assignedTasksQuery = useQuery({
     queryKey: ["my-work", "human-tasks", subject],
-    queryFn: () => api.listHumanTasks(subject !== null && subject.length > 0 ? { assignee: subject } : {}),
+    queryFn: () => subject !== null && subject.length > 0 ? api.listHumanTasks({ assignee: subject }) : Promise.resolve({ items: [], next_cursor: null }),
+    refetchInterval: POLL_MS,
+  });
+  const unassignedTasksQuery = useQuery({
+    queryKey: ["my-work", "human-tasks", "unassigned"],
+    queryFn: () => api.listHumanTasks({ unassigned: true }),
     refetchInterval: POLL_MS,
   });
   const scenariosQuery = useQuery({
@@ -56,8 +61,14 @@ export function MyWorkView(): JSX.Element {
   });
 
   const myTasks = useMemo(
-    () => (tasksQuery.data?.items ?? []).filter((t) => !TERMINAL.has(t.state)),
-    [tasksQuery.data],
+    () => {
+      const byId = new Map<string, HumanTaskItem>();
+      for (const task of [...(assignedTasksQuery.data?.items ?? []), ...(unassignedTasksQuery.data?.items ?? [])]) {
+        if (isActiveHumanTask(task)) byId.set(task.human_task_id, task);
+      }
+      return [...byId.values()];
+    },
+    [assignedTasksQuery.data, unassignedTasksQuery.data],
   );
   const scenarios = scenariosQuery.data?.items ?? [];
 
@@ -69,12 +80,12 @@ export function MyWorkView(): JSX.Element {
           <button className="linklike" type="button" onClick={() => navigate("humanTasks")}>사람 확인 전체 →</button>
         </div>
         <div className="panel-body">
-          {tasksQuery.isLoading ? (
+          {assignedTasksQuery.isLoading || unassignedTasksQuery.isLoading ? (
             <Loading />
-          ) : tasksQuery.isError ? (
-            <ErrorState message="확인 대기 업무를 불러오지 못했습니다." onRetry={() => void tasksQuery.refetch()} />
+          ) : assignedTasksQuery.isError || unassignedTasksQuery.isError ? (
+            <ErrorState message="확인 대기 업무를 불러오지 못했습니다." onRetry={() => { void assignedTasksQuery.refetch(); void unassignedTasksQuery.refetch(); }} />
           ) : myTasks.length === 0 ? (
-            <EmptyState message="지금 확인할 일이 없습니다. 자동화가 알아서 처리하고 있습니다." />
+            <EmptyState message="지금 확인할 일이 없습니다. 자동화 상태는 실행 기록에서 확인하세요." />
           ) : (
             <ul className="my-work-queue" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
               {myTasks.map((t) => (
