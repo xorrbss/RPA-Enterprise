@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
-import type { AuthReadiness, AutomationPerformanceRoiSourceLineage, DeadLetterItem, ListParams, Paginated } from "../src/api/types";
+import type { AuthReadiness, AutomationPerformanceRoiSourceLineage, DeadLetterItem, ListParams, Paginated, ProductionReadiness } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 // 대시보드 관찰성 지표: run outcome 정확 집계(getRunSummary by_status) + run_success_rate + 절단 정직성(여전히
@@ -226,6 +226,56 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(within(panel).queryByRole("button", { name: "테스트 실행" })).toBeNull();
     expect(within(panel).queryByRole("button", { name: "운영 증빙 확인" })).toBeNull();
     expect(within(panel).getAllByText("권한 있는 담당자에게 요청").length).toBeGreaterThanOrEqual(5);
+  });
+
+  test("adoption evidence packet summarizes metadata without raw secret or audit payload", async () => {
+    renderApp(dashboardClient({
+      listSites: async () => ({
+        items: [
+          {
+            site_profile_id: "site-login",
+            name: "Login Site",
+            risk: "green",
+            approval_status: "approved",
+            circuit_status: "closed",
+            login_capable: true,
+            session_ready: true,
+            session_expires_at: null,
+            enc_kid: "kms-envelope-prod-1",
+          },
+        ],
+        next_cursor: null,
+      }),
+      listRunArtifacts: async () => ({
+        items: [
+          {
+            artifact_id: "artifact-1",
+            type: "screen_capture",
+            redaction_status: "redacted",
+            retention_until: null,
+            legal_hold: false,
+            created_at: "2026-06-23T00:00:00.000Z",
+          },
+        ],
+        next_cursor: null,
+      }),
+      getProductionReadiness: async () => ({
+        status: "warning",
+        summary: { blocker_count: 0, deferred_count: 1, ready_count: 1 },
+        signals: {},
+      } as unknown as ProductionReadiness),
+    }));
+
+    const panel = await screen.findByRole("region", { name: "도입 증빙 패킷" });
+    expect(within(panel).getByText("세션 저장 암호화")).toBeInTheDocument();
+    expect(await within(panel).findByText(/KMS envelope kid/)).toBeInTheDocument();
+    await waitFor(() => expect(panel).toHaveTextContent("S11"));
+    expect(within(panel).getByText("artifact redaction 상태")).toBeInTheDocument();
+    expect(within(panel).getByText(/1\/1개 artifact/)).toBeInTheDocument();
+    expect(within(panel).getByText("AI 데이터 반출 경계")).toBeInTheDocument();
+    expect(within(panel).getByText(/실행별 redaction proof는 S11/)).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("must-not-leak");
+    expect(panel).not.toHaveTextContent("payload");
   });
 
   // (a) run outcome 정확 집계: 카드 값은 getRunSummary.by_status에서 온다(서버 GROUP BY, 클라 50건 필터 아님).

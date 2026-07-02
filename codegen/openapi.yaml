@@ -1521,6 +1521,16 @@ paths:
           in: query
           required: false
           schema: { type: string, format: uuid }
+        - name: occurred_at_from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive lower bound for occurred_at.
+        - name: occurred_at_to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive upper bound for occurred_at.
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
       responses:
@@ -1557,6 +1567,16 @@ paths:
           in: query
           required: false
           schema: { type: string, format: uuid }
+        - name: occurred_at_from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive lower bound for occurred_at.
+        - name: occurred_at_to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive upper bound for occurred_at.
         - name: format
           in: query
           required: false
@@ -2156,6 +2176,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScenarioGenerationCapabilities'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /capabilities:
+    get:
+      tags: [Sites]
+      operationId: getCapabilities
+      summary: Runtime capability readout
+      description: Read-only deployment capability hints for console path selection. SESSION_CAPTURE_SERVER_MODE defaults fail-closed to off; dev means the server-side capture consumer exists.
+      responses:
+        '200':
+          description: Runtime capability readout.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeCapabilities'
         default:
           $ref: '#/components/responses/Error'
 
@@ -6531,6 +6567,8 @@ components:
           $ref: '#/components/schemas/AuditOutcome'
         actor: { type: string, minLength: 1 }
         correlation_id: { type: string, format: uuid }
+        occurred_at_from: { type: string, format: date-time }
+        occurred_at_to: { type: string, format: date-time }
         limit: { type: integer, minimum: 1 }
         cursor: { type: string, minLength: 1 }
     AuditLogExportQuery:
@@ -6542,6 +6580,8 @@ components:
           $ref: '#/components/schemas/AuditOutcome'
         actor: { type: string, minLength: 1 }
         correlation_id: { type: string, format: uuid }
+        occurred_at_from: { type: string, format: date-time }
+        occurred_at_to: { type: string, format: date-time }
         limit: { type: integer, minimum: 1 }
         cursor: { type: string, minLength: 1 }
         format:
@@ -8967,6 +9007,29 @@ components:
           default: never
           description: WebM/video capture request. Values other than never require the runtime video recorder capability; otherwise save_and_run returns video_recording_port_not_configured. The server normalizes planner output so requested evidence is reflected in IR meta.evidence and node policy.recording.
 
+    RuntimeCapabilities:
+      type: object
+      additionalProperties: false
+      required: [session_capture]
+      properties:
+        session_capture:
+          type: object
+          additionalProperties: false
+          required: [server]
+          properties:
+            server:
+              type: object
+              additionalProperties: false
+              required: [mode, enabled]
+              properties:
+                mode:
+                  type: string
+                  enum: [dev, off]
+                  description: SESSION_CAPTURE_SERVER_MODE projection. Defaults to off for fail-closed console routing.
+                enabled:
+                  type: boolean
+                  description: true only when mode=dev and a server-side capture consumer exists.
+
     ScenarioGenerationCapabilities:
       type: object
       additionalProperties: false
@@ -9598,6 +9661,9 @@ components:
         session_expires_at:
           type: [string, "null"]
           format: date-time
+        enc_kid:
+          type: [string, "null"]
+          description: Latest browser session encryption key identifier. KMS envelope kids indicate encrypted session storage; dev/plaintext kids are non-production evidence.
         default_browser_identity_id:
           type: [string, "null"]
           description: 사이트 선택 시 자연어 실행 target에 자동 제안할 최신 browser_identity id.
@@ -9730,7 +9796,7 @@ components:
           $ref: '#/components/schemas/CaptureSessionStatus'
         detail:
           type: [string, "null"]
-          description: Non-secret operator-facing status detail.
+          description: Non-secret operator-facing status detail. Stale launching rows lazily expire after 10 minutes with launching_expired_operator_pc_registration_required.
         updated_at:
           type: string
           format: date-time

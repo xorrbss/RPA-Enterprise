@@ -68,6 +68,7 @@ interface SiteRow {
   login_capable: boolean;
   session_ready: boolean;
   session_expires_at: Date | null;
+  enc_kid: string | null;
   default_browser_identity_id: string | null;
   default_network_policy_id: string | null;
   page_state_selectors: unknown;
@@ -104,6 +105,7 @@ function mapSite(r: SiteRow): Record<string, unknown> {
     login_capable: r.login_capable,
     session_ready: r.session_ready,
     session_expires_at: r.session_expires_at !== null ? r.session_expires_at.toISOString() : null,
+    enc_kid: r.enc_kid,
     default_browser_identity_id: r.default_browser_identity_id,
     default_network_policy_id: r.default_network_policy_id,
     page_state_selectors: r.page_state_selectors,
@@ -282,6 +284,14 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
                      AND bs.site_profile_id = s.id
                 ) AS session_expires_at,
                 (
+                  SELECT bs.enc_kid
+                    FROM browser_sessions bs
+                   WHERE bs.tenant_id = s.tenant_id
+                     AND bs.site_profile_id = s.id
+                   ORDER BY bs.updated_at DESC, bs.created_at DESC
+                   LIMIT 1
+                ) AS enc_kid,
+                (
                   SELECT bi.id::text
                     FROM browser_identities bi
                    WHERE bi.tenant_id = s.tenant_id
@@ -337,6 +347,14 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
                      WHERE bs.tenant_id = s.tenant_id
                        AND bs.site_profile_id = s.id
                   ) AS session_expires_at,
+                  (
+                    SELECT bs.enc_kid
+                      FROM browser_sessions bs
+                     WHERE bs.tenant_id = s.tenant_id
+                       AND bs.site_profile_id = s.id
+                     ORDER BY bs.updated_at DESC, bs.created_at DESC
+                     LIMIT 1
+                  ) AS enc_kid,
                   (
                     SELECT bi.id::text
                       FROM browser_identities bi

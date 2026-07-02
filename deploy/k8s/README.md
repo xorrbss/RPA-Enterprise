@@ -13,6 +13,10 @@ It is intentionally separate from local `compose.yaml`.
   sample image digest must be replaced in a platform-owned deployment repo only
   after owner approval.
 - `../helm/rpa/` is the Helm chart surface for platform-owned promotion.
+- The console is packaged as a separate nginx/static workload. Ingress should
+  route to `rpa-console`; nginx keeps the browser same-origin and forwards
+  `/api/*` to the API service after stripping `/api`, so `/api/v1/...` reaches
+  the upstream as `/v1/...`.
 - DB role bootstrap is not included in-cluster. Apply `db/roles.sql` and inject
   LOGIN passwords through the platform/DBA path before running the migration Job.
 - API and worker pods use `rpa_app`; migration uses `rpa_migrator`; lifecycle

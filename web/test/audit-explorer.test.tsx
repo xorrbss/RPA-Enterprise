@@ -150,7 +150,7 @@ describe("audit explorer view", () => {
     })));
   });
 
-  test("현재 필터로 감사 CSV 내보내기를 요청한다", async () => {
+  test("기간 필터와 현재 필터로 감사 CSV 전체 기간을 cursor로 이어받는다", async () => {
     const calls: unknown[] = [];
     const createObjectURL = vi.fn(() => "blob:audit-csv");
     const revokeObjectURL = vi.fn();
@@ -160,24 +160,52 @@ describe("audit explorer view", () => {
 
     location.hash = "#auditExplorer?action=artifact.read&outcome=allow&actor=viewer-a";
     renderApp(fakeClient({
-      exportAuditLogCsv: async (params) => {
+      listAuditLog: async (params) => {
         calls.push(params);
-        return "audit_id,action\n81000000-0000-4000-8000-0000000000a1,artifact.read\n";
+        const suffix = params?.cursor === "cursor-2" ? "a2" : "a1";
+        return {
+          items: [
+            {
+              audit_id: `81000000-0000-4000-8000-0000000000${suffix}`,
+              sequence_no: params?.cursor === "cursor-2" ? 1 : 2,
+              actor: { subject_id: "viewer-a", roles: ["viewer"] },
+              action: "artifact.read",
+              outcome: "allow",
+              reason: "artifact disclosed",
+              correlation_id: "82000000-0000-4000-8000-0000000000a1",
+              idempotency_key: "audit-fixture-1",
+              occurred_at: "2026-06-23T09:00:00.000Z",
+              payload_schema_ref: "audit/security-boundary-decision@1",
+              retention_until: "2026-09-23T09:00:00.000Z",
+              legal_hold: false,
+              previous_hash: "sha256:old",
+              hash: "sha256:new",
+              created_at: "2026-06-23T09:00:01.000Z",
+            },
+          ],
+          next_cursor: params?.cursor === "cursor-2" ? null : "cursor-2",
+        };
       },
     }));
 
-    fireEvent.click(await screen.findByRole("button", { name: "CSV 내보내기(최대 200건)" }));
+    fireEvent.change(await screen.findByLabelText("시작 시각"), { target: { value: "2026-06-01T00:00" } });
+    fireEvent.change(screen.getByLabelText("종료 시각"), { target: { value: "2026-06-30T23:59" } });
+    fireEvent.click(await screen.findByRole("button", { name: "기간 전체 CSV 내보내기" }));
 
-    await waitFor(() => expect(calls).toEqual([expect.objectContaining({
+    await waitFor(() => expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
       action: "artifact.read",
       outcome: "allow",
       actor: "viewer-a",
+      occurred_at_from: "2026-06-01T00:00",
+      occurred_at_to: "2026-06-30T23:59",
       limit: 200,
-      format: "csv",
-    })]));
+    }),
+      expect.objectContaining({ cursor: "cursor-2", limit: 200 }),
+    ])));
     expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:audit-csv");
-    expect(await screen.findByText("감사 기록 CSV를 준비했습니다. 현재 필터 기준 최대 200건입니다.")).toBeInTheDocument();
+    expect(await screen.findByText("감사 기록 기간 CSV를 준비했습니다. 현재 필터와 기간 기준 전체 페이지를 이어받았습니다.")).toBeInTheDocument();
   });
 });

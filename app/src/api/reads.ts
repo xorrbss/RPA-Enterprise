@@ -10,12 +10,14 @@ import type { FastifyInstance } from "fastify";
 
 import type { ApiServerDeps } from "./server";
 import { registerArtifactReadRoutes } from "./reads-artifacts";
+import { registerCapabilityReadRoutes } from "./capabilities";
 import { registerCatalogReadRoutes } from "./reads-catalog";
 import { registerPeopleReadRoutes } from "./reads-people";
 import { registerRunReadRoutes } from "./reads-runs";
 import { registerWorkReadRoutes } from "./reads-work";
 
 export function registerReadRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
+  registerCapabilityReadRoutes(app, deps);
   registerRunReadRoutes(app, deps);
   registerPeopleReadRoutes(app, deps);
   registerWorkReadRoutes(app, deps);

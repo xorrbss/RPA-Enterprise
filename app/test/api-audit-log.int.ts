@@ -200,6 +200,20 @@ async function main(): Promise<void> {
       });
       check("action/outcome/actor/correlation filters match one row", filtered.statusCode === 200 && filtered.json().items?.length === 1 && filtered.json().items?.[0]?.audit_id === AUDIT_A_NEW, filtered.body);
 
+      const period = await app.inject({
+        method: "GET",
+        url: "/v1/audit-log?occurred_at_from=2026-06-22T00%3A00%3A00.000Z&occurred_at_to=2026-06-22T23%3A59%3A59.999Z",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("occurred_at range filters one day", period.statusCode === 200 && period.json().items?.length === 1 && period.json().items?.[0]?.audit_id === AUDIT_A_OLD, period.body);
+
+      const periodExport = await app.inject({
+        method: "GET",
+        url: "/v1/audit-log/export?occurred_at_from=2026-06-22T00%3A00%3A00.000Z&occurred_at_to=2026-06-22T23%3A59%3A59.999Z&limit=10",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("audit export honors occurred_at range", periodExport.statusCode === 200 && periodExport.body.includes(AUDIT_A_OLD) && !periodExport.body.includes(AUDIT_A_NEW), periodExport.body);
+
       const exported = await app.inject({
         method: "GET",
         url: "/v1/audit-log/export?action=artifact.read&outcome=allow&limit=10",
@@ -227,6 +241,13 @@ async function main(): Promise<void> {
         headers: { authorization: `Bearer ${viewer}` },
       });
       check("invalid outcome -> 422", invalidOutcome.statusCode === 422 && invalidOutcome.json().code === "IR_SCHEMA_INVALID", invalidOutcome.body);
+
+      const invalidDate = await app.inject({
+        method: "GET",
+        url: "/v1/audit-log?occurred_at_from=not-a-date",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("invalid occurred_at_from -> 422", invalidDate.statusCode === 422 && invalidDate.json().code === "IR_SCHEMA_INVALID", invalidDate.body);
 
       const denied = await app.inject({
         method: "GET",

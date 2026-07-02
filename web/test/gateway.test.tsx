@@ -157,6 +157,9 @@ describe("LLM 게이트웨이 정책 — 목록·기본·CRUD", () => {
       screen.getByText((_, el) => el?.tagName === "SPAN" && el.textContent === label);
     expect(span("입력 800 토큰")).toBeInTheDocument();
     expect(span("출력 400 토큰")).toBeInTheDocument();
+    expect(screen.getByText("데이터 반출 경계")).toBeInTheDocument();
+    expect(screen.getByText(/Gateway 전송 전 마스킹 경계/)).toBeInTheDocument();
+    expect(screen.getByText(/실행별 redaction proof는 S11/)).toBeInTheDocument();
   });
 
   test("정책 요약: 미설정 한도엔 단위를 붙이지 않는다(조용한 false 금지)", async () => {

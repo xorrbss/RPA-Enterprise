@@ -688,9 +688,16 @@ describe("HttpApiClient 계약", () => {
 
   test("listAuditLog → GET /v1/audit-log + 필터 쿼리", async () => {
     const { calls, client } = harness({ body: { items: [], next_cursor: null } });
-    await client.listAuditLog({ action: "artifact.read", outcome: "allow", actor: "viewer-a", limit: 25 });
+    await client.listAuditLog({
+      action: "artifact.read",
+      outcome: "allow",
+      actor: "viewer-a",
+      occurred_at_from: "2026-06-01T00:00:00.000Z",
+      occurred_at_to: "2026-06-30T23:59:59.999Z",
+      limit: 25,
+    });
     expect(calls[0]?.method).toBe("GET");
-    expect(calls[0]?.url).toBe("http://api.test/v1/audit-log?action=artifact.read&outcome=allow&actor=viewer-a&limit=25");
+    expect(calls[0]?.url).toBe("http://api.test/v1/audit-log?action=artifact.read&outcome=allow&actor=viewer-a&occurred_at_from=2026-06-01T00%3A00%3A00.000Z&occurred_at_to=2026-06-30T23%3A59%3A59.999Z&limit=25");
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
   });
 
@@ -1351,6 +1358,15 @@ describe("HttpApiClient 계약", () => {
     await client.getScenarioGenerationCapabilities();
     expect(calls[0]?.method).toBe("GET");
     expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations/capabilities");
+  });
+
+  test("getCapabilities → GET /v1/capabilities", async () => {
+    const { calls, client } = harness({
+      body: { session_capture: { server: { mode: "off", enabled: false } } },
+    });
+    await client.getCapabilities();
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/capabilities");
   });
 
   test("getScenarioGeneration → GET /v1/scenario-generations/{id}", async () => {

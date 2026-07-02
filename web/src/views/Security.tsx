@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { mergeParams, useHashParam } from "../router";
@@ -100,10 +101,23 @@ function SectionAccessNotice({ title }: { title: string }): JSX.Element {
   );
 }
 
+function sessionEncryptionBadge(site: SiteItem): JSX.Element {
+  const kid = site.enc_kid ?? null;
+  if (kid === "dev-plaintext" || kid === "plaintext") {
+    return <span className="badge red">평문(dev)</span>;
+  }
+  if (kid !== null && kid.trim().length > 0) {
+    return <span className="badge green">KMS 봉투암호화({kid})</span>;
+  }
+  return <span className="badge muted">확인 필요</span>;
+}
+
 export function SecurityView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const [guideSite, setGuideSite] = useState<SiteItem | null>(null);
+  const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: () => api.getCapabilities(), retry: false });
+  const serverCaptureEnabled = capabilities.data?.session_capture?.server?.enabled === true;
   const lv = useListView<SiteItem>(["sites"], (p) => api.listSites(p), { refetchInterval: 10_000 });
   const sites = lv.query.data?.items ?? [];
   // 사이트 서킷 차단 안내: 로드된 목록에서 circuit_status='open'(차단) 건수만 센다(실 필드 기반, 데이터 창작 금지).
@@ -141,18 +155,22 @@ export function SecurityView(): JSX.Element {
             <section className="panel" style={{ marginBottom: 12, padding: 12 }} role="status" aria-label="세션 등록 안내">
               <strong>{focusSite.name ?? "선택한 사이트"} — 로그인 세션을 등록하세요</strong>
               <p className="subtle" style={{ margin: "4px 0 8px" }}>
-                이 사이트는 로그인이 필요합니다. 아래 버튼으로 로그인 창을 열어 직접 로그인하면 세션이 저장되어 이후 자동 실행이 재사용합니다.
+                {serverCaptureEnabled
+                  ? "이 사이트는 로그인이 필요합니다. 서버 캡처 또는 운영자 PC 등록으로 로그인 세션을 저장하면 이후 자동 실행이 재사용합니다."
+                  : "이 배포는 서버에서 로그인 창을 열 수 없습니다. 운영자 PC 등록으로 로그인 세션을 저장하면 이후 자동 실행이 재사용합니다."}
               </p>
               <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-                <ActionButton
-                  label="세션 등록"
-                  action="session.capture"
-                  confirmText={`${focusSite.name ?? "사이트"}에 로그인 창을 엽니다. 창에서 직접 로그인하시면 세션이 저장됩니다.`}
-                  run={(key) => api.captureSession(focusSite.site_profile_id, key)}
-                  invalidateKeys={[["sites"], ["capture-sessions", focusSite.site_profile_id]]}
-                />
+                {serverCaptureEnabled && (
+                  <ActionButton
+                    label="세션 등록"
+                    action="session.capture"
+                    confirmText={`${focusSite.name ?? "사이트"}에 서버 캡처용 로그인 창을 요청합니다. 창에서 직접 로그인하시면 세션이 저장됩니다.`}
+                    run={(key) => api.captureSession(focusSite.site_profile_id, key)}
+                    invalidateKeys={[["sites"], ["capture-sessions", focusSite.site_profile_id]]}
+                  />
+                )}
                 {can("session.capture") && (
-                  <button className="btn" type="button" onClick={() => setGuideSite(focusSite)}>
+                  <button className={serverCaptureEnabled ? "btn" : "btn primary"} type="button" onClick={() => setGuideSite(focusSite)}>
                     운영자 PC 등록
                   </button>
                 )}
@@ -163,6 +181,7 @@ export function SecurityView(): JSX.Element {
             <SessionRenewalQueue
               items={sessionQueue}
               canCapture={can("session.capture")}
+              serverCaptureEnabled={serverCaptureEnabled}
               onOpenGuide={setGuideSite}
               captureSession={(siteId, key) => api.captureSession(siteId, key)}
             />
@@ -181,6 +200,7 @@ export function SecurityView(): JSX.Element {
               { header: "위험도", render: (r) => <StatusBadge status={r.risk} /> },
               { header: "승인", render: (r) => <StatusBadge status={r.approval_status} /> },
               { header: "자동 차단", render: (r) => <StatusBadge status={r.circuit_status} kind="circuit" /> },
+              { header: "세션 저장 암호화", render: (r) => sessionEncryptionBadge(r) },
               {
                 header: "작업",
                 render: (r) => {
@@ -201,17 +221,17 @@ export function SecurityView(): JSX.Element {
                           {r.session_ready === true ? "세션 등록됨" : "세션 미등록"}
                         </span>
                       )}
-                      {r.login_capable === true && (
+                      {r.login_capable === true && serverCaptureEnabled && (
                         <ActionButton
                           label="세션 등록"
                           action="session.capture"
-                          confirmText={`${label}에 로그인 창을 엽니다. 창에서 직접 로그인하시면 세션이 저장되어 이후 자동 실행이 재사용합니다.`}
+                          confirmText={`${label}에 서버 캡처용 로그인 창을 요청합니다. 창에서 직접 로그인하시면 세션이 저장되어 이후 자동 실행이 재사용합니다.`}
                           run={(key) => api.captureSession(r.site_profile_id, key)}
                           invalidateKeys={[["sites"], ["capture-sessions", r.site_profile_id]]}
                         />
                       )}
                       {r.login_capable === true && can("session.capture") && (
-                        <button className="btn" type="button" onClick={() => setGuideSite(r)}>
+                        <button className={serverCaptureEnabled ? "btn" : "btn primary"} type="button" onClick={() => setGuideSite(r)}>
                           운영자 PC 등록
                         </button>
                       )}

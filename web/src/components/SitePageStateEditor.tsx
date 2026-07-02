@@ -76,6 +76,18 @@ function rowsFromSelectors(value: unknown): { loginUrl: string; authenticatedSel
   return { loginUrl, authenticatedSelector: authenticatedWhen, rows };
 }
 
+function selectorWarning(value: string): string | null {
+  if (value.length === 0) return null;
+  if (value !== value.trim()) return "앞뒤 공백이 포함되어 있습니다.";
+  if (/[가-힣]/.test(value)) return "한글 설명 대신 CSS selector를 입력하세요. 예: .user-menu";
+  return null;
+}
+
+function SelectorWarning({ value }: { value: string }): JSX.Element | null {
+  const warning = selectorWarning(value);
+  return warning === null ? null : <span className="badge amber">{warning}</span>;
+}
+
 export function SitePageStateEditor({ site }: { site: SiteItem }): JSX.Element | null {
   const api = useApiClient();
   const can = useCan();
@@ -172,8 +184,15 @@ export function SitePageStateEditor({ site }: { site: SiteItem }): JSX.Element |
                 <input value={loginUrl} onChange={(event) => setLoginUrl(event.target.value)} placeholder="https://login.example.com" />
               </label>
               <label className="page-state-field">
-                <span className="subtle">로그인 완료 확인 조건</span>
-                <input value={authenticatedSelector} onChange={(event) => setAuthenticatedSelector(event.target.value)} placeholder="사용자 메뉴" />
+                <span className="subtle">로그인 완료 CSS selector</span>
+                <input
+                  aria-label="로그인 완료 확인 조건"
+                  value={authenticatedSelector}
+                  onChange={(event) => setAuthenticatedSelector(event.target.value)}
+                  placeholder=".user-menu"
+                />
+                <span className="subtle">로그인 후 보이는 요소의 CSS selector를 개발자도구에서 복사하세요.</span>
+                <SelectorWarning value={authenticatedSelector} />
               </label>
               <span className="page-state-editor-head">
                 <span className="subtle">화면 상태 판정</span>
@@ -191,7 +210,8 @@ export function SitePageStateEditor({ site }: { site: SiteItem }): JSX.Element |
                       <select aria-label="판정 방식" value={row.kind} onChange={(event) => updateRow(row.id, { kind: event.target.value as FlagKind })}>
                         {FLAG_KINDS.map((kind) => <option key={kind} value={kind}>{FLAG_KIND_LABELS[kind]}</option>)}
                       </select>
-                      <input aria-label="화면 확인 조건" value={row.selector} onChange={(event) => updateRow(row.id, { selector: event.target.value })} placeholder="리뷰 카드" />
+                      <input aria-label="화면 확인 조건" value={row.selector} onChange={(event) => updateRow(row.id, { selector: event.target.value })} placeholder=".review-item" />
+                      <SelectorWarning value={row.selector} />
                       <input aria-label="최소 개수" type="number" min={1} value={row.n} disabled={row.kind !== "min_count"} onChange={(event) => updateRow(row.id, { n: Number(event.target.value) })} />
                       <button className="btn" type="button" onClick={() => removeRow(row.id)}>삭제</button>
                       <details style={{ gridColumn: "1 / -1", fontSize: 12 }}>

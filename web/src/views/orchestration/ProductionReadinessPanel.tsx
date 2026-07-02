@@ -178,7 +178,7 @@ export function ProductionReadinessPanel({
   }
 
   const topGates = readiness?.gates.filter((gate) => gate.status !== "pass").slice(0, 5) ?? [];
-  const auditVerifier = readiness?.signals.audit_verifier;
+  const auditVerifier = readiness?.signals?.audit_verifier;
   const latestAuditCompletedAt = auditVerifier?.latest_completed_at ?? null;
   const auditVerifierFresh = auditVerifier?.latest_status === "valid" && auditVerifier.stale === false;
   return (

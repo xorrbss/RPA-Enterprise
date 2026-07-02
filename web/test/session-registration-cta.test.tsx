@@ -41,18 +41,47 @@ describe("로그인 세션 등록 안내/진입", () => {
     localStorage.setItem("rpa.token", jwt(["operator", "admin"]));
   });
 
-  test("Security #site 딥링크 → 해당 사이트 세션 등록 배너(메시지+등록 버튼)", async () => {
+  test("Security #site 딥링크 → capability off이면 운영자 PC 등록만 주 CTA로 노출", async () => {
     renderApp(fakeClient({ listSites: async () => ({ items: [LOGIN_SITE], next_cursor: null }) }));
     location.hash = `#security?site=${LOGIN_SITE.site_profile_id}`;
     const banner = await screen.findByRole("status", { name: "세션 등록 안내" });
     expect(within(banner).getByText(/로그인 세션을 등록하세요/)).toBeInTheDocument();
-    expect(within(banner).getByRole("button", { name: "세션 등록" })).toBeInTheDocument();
+    expect(within(banner).getByText(/서버에서 로그인 창을 열 수 없습니다/)).toBeInTheDocument();
+    expect(within(banner).queryByRole("button", { name: "세션 등록" })).not.toBeInTheDocument();
+    expect(within(banner).getByRole("button", { name: "운영자 PC 등록" })).toBeInTheDocument();
+  });
+
+  test("Security #site 딥링크 → capability dev이면 서버 세션 등록 버튼도 노출", async () => {
+    renderApp(fakeClient({
+      getCapabilities: async () => ({ session_capture: { server: { mode: "dev", enabled: true } } }),
+      listSites: async () => ({ items: [LOGIN_SITE], next_cursor: null }),
+    }));
+    location.hash = `#security?site=${LOGIN_SITE.site_profile_id}`;
+    const banner = await screen.findByRole("status", { name: "세션 등록 안내" });
+    expect(await within(banner).findByRole("button", { name: "세션 등록" })).toBeInTheDocument();
+    expect(within(banner).getByText(/서버 캡처 또는 운영자 PC 등록/)).toBeInTheDocument();
   });
 
   test("Security 목록 — login_capable 사이트에 '세션 미등록' 배지", async () => {
     renderApp(fakeClient({ listSites: async () => ({ items: [LOGIN_SITE], next_cursor: null }) }));
     location.hash = "#security";
     expect((await screen.findAllByText("세션 미등록")).length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("Security 목록 — 세션 저장 암호화 kid와 dev/plaintext를 구분한다", async () => {
+    renderApp(fakeClient({
+      listSites: async () => ({
+        items: [
+          { ...LOGIN_SITE, enc_kid: "kms-envelope-prod-1", session_ready: true },
+          { ...LOGIN_SITE, site_profile_id: "site-dev", name: "Dev Plaintext", enc_kid: "dev-plaintext", session_ready: true },
+        ],
+        next_cursor: null,
+      }),
+    }));
+    location.hash = "#security";
+
+    expect(await screen.findByText("KMS 봉투암호화(kms-envelope-prod-1)")).toBeInTheDocument();
+    expect(await screen.findByText("평문(dev)")).toBeInTheDocument();
   });
 
   test("Security 상단 — 세션 갱신 큐에서 미등록 사이트를 바로 처리한다", async () => {
@@ -64,7 +93,7 @@ describe("로그인 세션 등록 안내/진입", () => {
     expect(within(queue).getByText("하이웍스")).toBeInTheDocument();
     expect(within(queue).getByText("로그인 세션이 없어 브라우저 실행 전에 등록이 필요합니다.")).toBeInTheDocument();
     expect(within(queue).getByText("세션 미등록")).toBeInTheDocument();
-    expect(within(queue).getByRole("button", { name: "세션 등록" })).toBeInTheDocument();
+    expect(within(queue).queryByRole("button", { name: "세션 등록" })).not.toBeInTheDocument();
     expect(within(queue).getByRole("button", { name: "운영자 PC 등록" })).toBeInTheDocument();
   });
 
@@ -91,6 +120,30 @@ describe("로그인 세션 등록 안내/진입", () => {
     expect(await within(panel).findByText("로그인 대기")).toBeInTheDocument();
     expect(within(panel).getByText("운영자 로그인을 기다리는 중입니다.")).toHaveAttribute("title", "operator login pending");
     expect(within(panel).queryByText("operator login pending")).not.toBeInTheDocument();
+  });
+
+  test("Security 목록 — 만료된 launching capture는 운영자 PC 등록 안내로 표시한다", async () => {
+    renderApp(
+      fakeClient({
+        listSites: async () => ({ items: [LOGIN_SITE], next_cursor: null }),
+        listSessionCaptures: async () => ({
+          items: [
+            {
+              capture_session_id: "c0000000-0000-0000-0000-000000000001",
+              status: "expired",
+              detail: "launching_expired_operator_pc_registration_required",
+              updated_at: "2026-06-23T09:00:00.000Z",
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#security";
+    fireEvent.click(await screen.findByRole("button", { name: "상태 보기" }));
+    const panel = await screen.findByRole("region", { name: /세션 등록 상태/ });
+    expect(await within(panel).findByText("만료")).toBeInTheDocument();
+    expect(within(panel).getByText("만료 — 이 환경에서는 운영자 PC 등록을 사용하세요.")).toBeInTheDocument();
   });
 
   test("Security 목록 — 사이트 화면 상태 조건을 수정 저장한다", async () => {

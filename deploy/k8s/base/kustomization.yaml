@@ -11,5 +11,6 @@ resources:
   - 20-api.yaml
   - 21-worker.yaml
   - 22-lifecycle-worker.yaml
+  - 23-console.yaml
   - 30-policies.yaml
   - 31-api-hpa.yaml
