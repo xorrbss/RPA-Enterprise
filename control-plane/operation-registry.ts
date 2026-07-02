@@ -58,6 +58,7 @@ export type SupportedControlPlaneOperationId = Extract<
   | "recordRoiActualEvidence"
   | "listAutomationAdoptionEvidence"
   | "recordAutomationAdoptionEvidence"
+  | "exportOffboardingData"
   | "listAuditLog"
   | "exportAuditLog"
   | "listConnectors"
@@ -440,6 +441,14 @@ export const CONTROL_PLANE_OPERATION_BINDINGS: readonly OpenApiOperationBinding[
     querySchemaRef: "#/components/schemas/AuditLogListQuery",
     responseSchemaRef: "#/components/schemas/AuditLogPage",
     rbacAction: "audit.read",
+  }),
+  operation({
+    operationId: "exportOffboardingData",
+    method: "GET",
+    path: "/v1/offboarding/export",
+    querySchemaRef: "#/components/schemas/OffboardingExportQuery",
+    responseSchemaRef: "#/components/schemas/OffboardingExportCsv",
+    rbacAction: "tenant_data.export",
   }),
   operation({
     operationId: "exportAuditLog",
@@ -2252,6 +2261,7 @@ const queryValidators: ReadonlyMap<OperationId, BoundaryValidator> = new Map<Ope
   ["listRoiActualEvidence", passQuery("#/components/schemas/RoiActualEvidenceListQuery")],
   ["listAutomationAdoptionEvidence", passQuery("#/components/schemas/AutomationAdoptionEvidenceListQuery")],
   ["listDocumentJobs", passQuery("#/components/schemas/DocumentJobListQuery")],
+  ["exportOffboardingData", passQuery("#/components/schemas/OffboardingExportQuery")],
   ["listAuditLog", passQuery("#/components/schemas/AuditLogListQuery")],
   ["exportAuditLog", passQuery("#/components/schemas/AuditLogExportQuery")],
   ["listConnectors", passQuery("#/components/schemas/ConnectorCatalogListQuery")],

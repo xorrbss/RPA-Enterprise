@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
+import { csvCell, csvWithBom, guardSpreadsheetFormula } from "./csv";
 import { ApiResponseError } from "./errors";
 import { requirePrincipal, type ApiServerDeps } from "./server";
 
@@ -313,7 +314,7 @@ export function registerAutomationPerformanceReportRoutes(app: FastifyInstance, 
       .header("content-type", "text/csv; charset=utf-8")
       .header("content-disposition", `attachment; filename="automation-performance-${period.month}.csv"`)
       // BOM 없으면 Windows Excel 이 CP949 로 열어 한글 자동화 이름이 깨진다.
-      .send(`\uFEFF${reportToCsv(report)}`);
+      .send(csvWithBom(reportToCsv(report)));
   });
 }
 
@@ -1376,15 +1377,6 @@ function roiActualsCell(actuals: RoiActualsSummary): string {
     `rework ${decimalCell(actuals.reprocessing_minutes, 1)}m`,
     `latest ${actuals.latest_period_end ?? "-"}`,
   ].join("; ");
-}
-
-function csvCell(value: string): string {
-  const guarded = guardSpreadsheetFormula(value);
-  return `"${guarded.replace(/"/g, "\"\"")}"`;
-}
-
-function guardSpreadsheetFormula(value: string): string {
-  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
 }
 
 function reportToPocMarkdown(report: AutomationPerformanceReport): string {

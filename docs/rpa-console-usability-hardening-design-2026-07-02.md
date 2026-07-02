@@ -288,7 +288,7 @@ Out of scope: 시나리오 실행 엔진·상태머신·보안 경계 변경(감
 | --- | --- | --- |
 | 시험/운영 실행 구분 | **계약 변경**(runs DDL 컬럼 or 별도 마킹) | 월간 성과 집계 모집단 순도 문제. run 생성 API·집계·UI 필터를 관통하는 additive 설계 필요. 오너: 구분 모델(환경 컬럼 vs playground 플래그) 결정 |
 | 알림 발화 하드닝 (S4b) | **계약 변경**(DDL) | ① `ops_notification_attempts` 자동발화 초기 세대 유니크 인덱스+ON CONFLICT는 2026-07-02 D-register 후속에서 해소(수동 발송·retry 의미 보존). 남은 범위: ② `source='session_expiry'` CHECK 확장(세션 만료를 attempt 파이프라인으로 발화) ③ 테넌트별 저장형 라우팅 테이블+관리 UI(멀티테넌트 셀프서비스). 둘 다 규모 확대/오너 결정 후 승격 |
-| 오프보딩 데이터 반출 | feature | runs/human_tasks/artifacts 일괄 export 계약 신설 필요. 심사 단골 질문이므로 v-next 우선 후보 |
+| 오프보딩 데이터 반출 | feature — ✅ 계약 신설 | `GET /v1/offboarding/export` metadata-only CSV(`tenant_data.export`)로 해소. `runs.params`, human task payload/result, artifact `object_ref`/`sha256`/본문은 미노출하고 redacted/not_required·미삭제·비격리 artifact만 포함. 원문 데이터 패키지/셀프서비스 삭제 플로우는 별도 오너 결정 |
 | 세션 캡처 helper 단일 실행파일 | 대형(L) | S6은 정직화·명령 호환까지. 근본 해소(다운로드→실행→로그인 3단계)는 패키징/서명 파이프라인 결정 필요 |
 | ROI 실적 시스템 프리필 | M, 정책 판단 | 플랫폼 보유 run 통계로 실적 폼 제안값 프리필. '사람 확정 증거' 경계(자동값=제안일 뿐) 문구 정책 확정 후 |
 
