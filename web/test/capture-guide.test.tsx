@@ -4,8 +4,9 @@ import { render, screen } from "@testing-library/react";
 import { CaptureGuide } from "../src/components/CaptureGuide";
 import type { SiteItem } from "../src/api/types";
 
-// P3.3 — 운영자-로컬 캡처 안내 모달. 핵심 불변: **접속 코드를 화면/명령에 임베드하지 않는다**(플레이스홀더만);
-// 명령은 실 플래그(--api/--site)를 정확히 안내; 정보 전용(확인 버튼 없음, 닫기만).
+// P3.3 → 단일 실행파일 — 운영자-로컬 캡처 안내 모달. 핵심 불변: **접속 코드를 화면/명령에 임베드하지 않는다**
+// (플레이스홀더만); 기본 경로는 실행파일 3단계(다운로드→실행→로그인, 저장소/Node 불필요), 개발 환경 실행법은
+// 접힌 상세; 명령은 실 플래그(--api/--site)를 정확히 안내; 정보 전용(확인 버튼 없음, 닫기만).
 const site = {
   site_profile_id: "70000000-0000-0000-0000-000000000abc",
   name: "하이웍스",
@@ -13,27 +14,38 @@ const site = {
 } as unknown as SiteItem;
 
 describe("CaptureGuide (P3.3 운영자-로컬 캡처 안내)", () => {
-  test("명령은 PowerShell 형식의 --api/--site 실 플래그 + 접속 코드 자리표시자를 안내", () => {
+  test("기본 경로 = 실행파일 3단계(전달받기→PowerShell 실행→로그인) + 실 플래그/자리표시자 안내", () => {
     const { container } = render(<CaptureGuide site={site} onClose={() => {}} />);
     const text = container.textContent ?? "";
+    expect(text).toContain("rpa-session-capture.exe");
     expect(text).toContain("--site 70000000-0000-0000-0000-000000000abc");
     expect(text).toContain("--api");
     expect(text).toContain('$env:RPA_OPERATOR_TOKEN="<본인 접속 코드>"');
-    expect(text).toContain("저장소가 체크아웃");
-    expect(text).toContain("IT 담당자에게 이 명령을 전달하세요");
+    expect(text).toContain("전달받으세요");
+    expect(text).toContain("별도 프로그램 설치는 필요 없습니다");
+    expect(text).toContain("열린 로그인 창에서 직접 로그인하세요");
     expect(text).toContain("등록 후 이 사이트는 “세션 등록됨”으로 표시됩니다.");
-    const summary = screen.getByText("Windows PowerShell 실행 방법 보기");
+    expect(screen.getByRole("button", { name: "PowerShell 실행 명령 복사" })).toBeInTheDocument();
+  });
+
+  test("개발 환경(저장소+Node) 실행법은 접힌 상세로 강등 — 기본 화면에 저장소 전제 없음", () => {
+    const { container } = render(<CaptureGuide site={site} onClose={() => {}} />);
+    const text = container.textContent ?? "";
+    expect(text).toContain("저장소가 체크아웃");
+    expect(text).toContain("npm --prefix app run session:capture-helper");
+    const summary = screen.getByText("개발 환경(저장소 체크아웃)에서 실행하는 방법 보기");
     const details = summary.closest("details");
     expect(details).not.toBeNull();
     expect((details as HTMLDetailsElement).open).toBe(false);
-    expect(screen.getByRole("button", { name: "PowerShell 실행 명령 복사" })).toBeInTheDocument();
+    // 저장소/Node 전제는 접힌 상세 안에만 있어야 한다(기본 3단계는 실행파일 전제 없음).
+    expect((details as HTMLDetailsElement).textContent).toContain("저장소가 체크아웃");
   });
 
   test("보안 불변: 실 접속 코드(JWT)를 임베드하지 않는다 — 플레이스홀더만, 경고 노출", () => {
     const { container } = render(<CaptureGuide site={site} onClose={() => {}} />);
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/eyJ[A-Za-z0-9_-]/); // JWT(base64 헤더) 미포함
-    expect(text).toContain("접속 코드는 고급 실행 방법의 자리표시자에만 넣고");
+    expect(text).toContain("접속 코드는 실행 명령의 자리표시자에만 넣고");
   });
 
   test("정보 전용 모달 — 제목에 사이트명, 닫기만(확인 버튼 없음)", () => {
