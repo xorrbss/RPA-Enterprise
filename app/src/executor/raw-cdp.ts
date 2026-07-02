@@ -16,6 +16,13 @@
  */
 import type { CdpSession } from "./cdp-session";
 
+/**
+ * raw CDP 보완이 요구하는 최소 세션 표면 — sendCDP 만. 실행기 풀 세션(CdpSession) 외에 캡처 helper 의
+ * 경량 세션(browser-helper/capture-chrome-session)도 수용한다(단일 실행파일 패키징이 Stagehand 어댑터를
+ * 번들 그래프에서 제외할 수 있도록 소비 지점에서 표면을 좁힘 — 기존 호출부는 전부 호환).
+ */
+export type CdpCommandSession = Pick<CdpSession, "sendCDP">;
+
 /** a11y 노드(필요 필드만 — role/name 의 value). */
 export type AxNode = { role?: { value?: unknown }; name?: { value?: unknown } };
 
@@ -85,7 +92,7 @@ function classifyFailure(cause: unknown): RawCdpFailureKind {
 
 /** sendCDP 를 CDP_DISCONNECTED 매핑으로 감싼다(원 예외를 조용히 흡수하지 않고 분류·전파). */
 async function rawCdp<T>(
-  session: CdpSession,
+  session: CdpCommandSession,
   method: string,
   params?: object,
   opts: RawCdpOptions = {},
@@ -112,7 +119,7 @@ async function rawCdp<T>(
  * #2/#3: 전체 a11y 트리. Stagehand page 에 접근자가 없어 raw CDP 로 보완한다.
  * nodes 미반환/비배열 응답은 malformed 로 실패시킨다. 빈 배열 자체만 "landmark 0개"로 유효하다.
  */
-export async function getAccessibilityTree(session: CdpSession, opts: RawCdpOptions = {}): Promise<AxNode[]> {
+export async function getAccessibilityTree(session: CdpCommandSession, opts: RawCdpOptions = {}): Promise<AxNode[]> {
   const res = await rawCdp<{ nodes?: unknown }>(session, "Accessibility.getFullAXTree", undefined, opts);
   if (!Array.isArray(res.nodes)) {
     throw new RawCdpMalformedResponseError("Accessibility.getFullAXTree", "nodes must be an array");
@@ -125,7 +132,7 @@ export async function getAccessibilityTree(session: CdpSession, opts: RawCdpOpti
  * (browser_leases.download_dir_ref 격리, eventsEnabled 로 진행 이벤트 활성).
  */
 export async function setDownloadBehavior(
-  session: CdpSession,
+  session: CdpCommandSession,
   downloadPath: string,
   opts: RawCdpOptions = {},
 ): Promise<void> {
@@ -141,7 +148,7 @@ export async function setDownloadBehavior(
  * 맞춘다(Network.setCookies 는 page 세션에서 Network.enable 선행을 요구할 수 있어 회피). 비배열 응답은 malformed 로 실패
  * (빈 스냅샷 묵인 금지). 반환 쿠키 value 는 인증 자료 — 단명 지역변수로만, 로그/직렬화 금지.
  */
-export async function getAllCookies(session: CdpSession, opts: RawCdpOptions = {}): Promise<RawCookie[]> {
+export async function getAllCookies(session: CdpCommandSession, opts: RawCdpOptions = {}): Promise<RawCookie[]> {
   const res = await rawCdp<{ cookies?: unknown }>(session, "Storage.getCookies", undefined, opts);
   if (!Array.isArray(res.cookies)) {
     throw new RawCdpMalformedResponseError("Storage.getCookies", "cookies must be an array");
@@ -153,7 +160,7 @@ export async function getAllCookies(session: CdpSession, opts: RawCdpOptions = {
  * 세션 재사용 — 쿠키 배치 주입(pre-navigate 복원). 쿠키는 origin-load 비의존이라 goto 이전 호출 가능.
  * Storage.getCookies 출력을 무변형으로 수용(reshaping 없음). 빈 배열이면 no-op(cold start).
  */
-export async function setCookies(session: CdpSession, cookies: readonly RawCookie[], opts: RawCdpOptions = {}): Promise<void> {
+export async function setCookies(session: CdpCommandSession, cookies: readonly RawCookie[], opts: RawCdpOptions = {}): Promise<void> {
   await rawCdp(session, "Storage.setCookies", { cookies }, opts);
 }
 
@@ -174,7 +181,7 @@ function registrableDomain(host: string): string {
  * getAllCookies 와 구분). 매칭: cookie.domain(선행 '.' 제거)이 reg 와 같거나 그 하위(domain.endsWith('.'+reg)).
  * 비배열 응답은 malformed 로 실패(getAllCookies 위임).
  */
-export async function getCookiesForOrigins(session: CdpSession, origins: readonly string[], opts: RawCdpOptions = {}): Promise<RawCookie[]> {
+export async function getCookiesForOrigins(session: CdpCommandSession, origins: readonly string[], opts: RawCdpOptions = {}): Promise<RawCookie[]> {
   const regs = origins.map((o) => {
     try {
       return registrableDomain(new URL(o).hostname.toLowerCase());
@@ -193,6 +200,6 @@ export async function getCookiesForOrigins(session: CdpSession, origins: readonl
  * 세션 재사용 — 현재 컨텍스트의 전체 쿠키 제거(복원 직전). 세션 상태를 저장소가 권위적으로 결정하게 하고, run/lease 간
  * 잔여 쿠키(특히 dev 단일세션 재사용·prod 풀 재할당) 누수를 막는다. 빈 컨텍스트에 호출해도 안전(no-op).
  */
-export async function clearCookies(session: CdpSession, opts: RawCdpOptions = {}): Promise<void> {
+export async function clearCookies(session: CdpCommandSession, opts: RawCdpOptions = {}): Promise<void> {
   await rawCdp(session, "Storage.clearCookies", undefined, opts);
 }

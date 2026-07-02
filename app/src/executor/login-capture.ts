@@ -10,6 +10,12 @@ import { existsSync } from "node:fs";
 import type { CdpSession } from "./cdp-session";
 import { getCookiesForOrigins, type RawCookie } from "./raw-cdp";
 
+/**
+ * 캡처 코어가 요구하는 최소 세션 표면 — evaluate(로그인 감지) + sendCDP(쿠키 스냅샷). 실행기 풀 세션
+ * (CdpSession)과 캡처 helper 의 경량 puppeteer 세션(browser-helper/capture-chrome-session) 공용.
+ */
+export type LoginCaptureSession = Pick<CdpSession, "evaluate" | "sendCDP">;
+
 /** 인증 상태 폴 간격. */
 export const CAPTURE_POLL_AUTH_MS = 1500;
 /** 운영자 로그인 대기 기본 데드라인 — ops-defaults human_task.default_timeout(30m). */
@@ -23,7 +29,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * 흔해 그 순간 CDP 타깃이 일시 단절되므로 **poll 에러는 catch 후 재시도**한다(창이 닫히면 deadline 까지 폴 후 null).
  */
 export async function awaitLoginCookies(
-  session: CdpSession,
+  session: LoginCaptureSession,
   authSelector: string,
   loginOrigin: string,
   deadlineMs = DEFAULT_LOGIN_DEADLINE_MS,
