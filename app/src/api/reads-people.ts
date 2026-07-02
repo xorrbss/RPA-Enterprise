@@ -102,6 +102,10 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
     const status = humanTaskStateFilter(query.status);
     const kind = humanTaskKindFilter(query.kind);
     const assignee = principalIdFilter(query.assignee, "invalid_assignee");
+    const unassigned = unassignedFilter(query.unassigned);
+    if (assignee !== undefined && unassigned) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "assignee_unassigned_conflict" });
+    }
     const runId = uuidFilter(query.run_id, "invalid_run_id");
 
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
@@ -115,15 +119,17 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
             AND ($2::text IS NULL OR state = $2)
             AND ($3::text IS NULL OR kind = $3)
             AND ($4::text IS NULL OR assignee = $4::text)
-            AND ($5::uuid IS NULL OR run_id = $5::uuid)
-            AND ($6::timestamptz IS NULL OR (created_at, id) < ($6::timestamptz, $7::uuid))
+            AND ($5::boolean = false OR assignee IS NULL)
+            AND ($6::uuid IS NULL OR run_id = $6::uuid)
+            AND ($7::timestamptz IS NULL OR (created_at, id) < ($7::timestamptz, $8::uuid))
           ORDER BY created_at DESC, id DESC
-          LIMIT $8`,
+          LIMIT $9`,
         [
           principal.tenantId,
           status ?? null,
           kind ?? null,
           assignee ?? null,
+          unassigned,
           runId ?? null,
           cursor?.createdAt ?? null,
           cursor?.id ?? null,
@@ -188,4 +194,10 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
     },
   );
 
+}
+
+function unassignedFilter(raw: unknown): boolean {
+  if (raw === undefined || raw === "false") return false;
+  if (raw === "true") return true;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_unassigned" });
 }

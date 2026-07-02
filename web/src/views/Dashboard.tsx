@@ -11,6 +11,7 @@ import { StatusBadge, errorCodeLabel, kindLabel } from "../components/badges";
 import { getInternalNavFlags, type NavPolicyFlags } from "../navPolicy";
 import { navigate, type ViewKey } from "../router";
 import { formatDeadline } from "../util/time";
+import { isActiveHumanTask } from "./humanTaskFilters";
 import type {
   AutomationPerformanceReport,
   AutomationPerformanceReportExportFormat,
@@ -637,7 +638,7 @@ function collectActionItems(args: {
   for (const r of args.failedBiz.slice(0, 2)) {
     out.push({ key: `fb-${r.run_id}`, tone: "red", title: withRunIdentity("업무 실패 실행", r), meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
   }
-  for (const h of [...args.human].sort(bySoonestTimeout).slice(0, 3)) {
+  for (const h of [...args.human].filter(isActiveHumanTask).sort(bySoonestTimeout).slice(0, 3)) {
     const humanMeta = humanTaskMeta(h);
     out.push({ key: `h-${h.human_task_id}`, tone: humanMeta.tone, title: `사람 확인 대기 · 접수번호 #${h.human_task_id.slice(0, 8)}`, meta: humanMeta.meta, traceTitle: `사람 확인 추적 번호: ${h.human_task_id}`, view: "humanTasks", params: { ht: h.human_task_id } });
   }
@@ -1438,7 +1439,7 @@ export function DashboardView(): JSX.Element {
   // '실행 중'은 서버 status 필터로 정확히 집계(이전: 전체 50건을 클라에서 status==='running' 필터 → 50건 초과 시 구조적 오집계).
   const running = useQuery({ queryKey: ["runs", "running"], queryFn: () => api.listRuns({ status: "running", limit: 50 }), refetchInterval: 5_000 });
   const recent = useQuery({ queryKey: ["runs"], queryFn: () => api.listRuns({ limit: 50 }), refetchInterval: 5_000 });
-  const human = useQuery({ queryKey: ["human-tasks"], queryFn: () => api.listHumanTasks({ limit: 50 }), refetchInterval: 5_000 });
+  const human = useQuery({ queryKey: ["human-tasks", "active"], queryFn: () => api.listHumanTasks({ limit: 50 }), refetchInterval: 5_000 });
   const wiDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 5_000 });
   const sinkDlq = useQuery({ queryKey: ["dlq", "sink"], queryFn: () => api.listDlq("sink", { limit: 50 }), refetchInterval: 5_000 });
   // 실패 터미널(failed_business/failed_system)을 서버 status 필터로 각각 정확 집계(클라 필터 아님).
@@ -1540,7 +1541,7 @@ export function DashboardView(): JSX.Element {
         <Metric label="실행 성공률" value={successRateLabel(summary.data)} view="runTrace" params={{ status: "completed" }} hint="완료 실행" />
         <Metric label="캐시 재사용률" value={cacheHitRateLabel(summary.data)} view="runTrace" hint="실행 기록" />
         <Metric label="실행 중" value={exactCount(summary.data, "running")} view="runTrace" params={{ status: "running" }} hint="실행 기록" />
-        <Metric label="사람 확인 대기" value={pageCount(human.data)} view="humanTasks" hint="사람 확인" />
+        <Metric label="사람 확인 대기" value={pageCount(human.data === undefined ? undefined : { ...human.data, items: human.data.items.filter(isActiveHumanTask) })} view="humanTasks" params={{ terminal: "false" }} hint="사람 확인" />
         <Metric label="업무 실패" value={exactCount(summary.data, "failed_business")} view="runTrace" params={{ status: "failed_business" }} hint="실행 기록" />
         <Metric label="시스템 실패" value={exactCount(summary.data, "failed_system")} view="runTrace" params={{ status: "failed_system" }} hint="실행 기록" />
         <Metric label="작업 항목 재처리 대기" value={pageCount(wiDlq.data)} view="workitems" hint="작업 목록" />

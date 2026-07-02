@@ -123,7 +123,7 @@ describe("UX quick-wins (A)", () => {
   // A2 — 죽은 대시보드 → 진입점: 4개 카드 각각의 드릴다운 대상 검증(손수 적은 to/hash 오타 가드).
   const NAV_CASES = [
     { name: /실행 중/, hash: "#runTrace?status=running" }, // 카운트(running)와 모집단 일치 딥링크
-    { name: /사람 확인 대기/, hash: "#humanTasks" },
+    { name: /사람 확인 대기/, hash: "#humanTasks?terminal=false" },
     { name: /작업 항목 재처리 대기/, hash: "#workitems" },
     { name: /외부 전달 재처리 대기/, hash: "#workitems" },
   ];

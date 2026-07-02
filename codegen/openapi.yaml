@@ -2805,6 +2805,13 @@ paths:
           in: query
           required: false
           schema: { type: string }
+        - name: unassigned
+          in: query
+          required: false
+          description: true이면 assignee IS NULL인 미배정 human task만 조회한다. assignee와 동시 지정하면 IR_SCHEMA_INVALID.
+          schema:
+            type: string
+            enum: ["true", "false"]
         - name: run_id
           in: query
           required: false

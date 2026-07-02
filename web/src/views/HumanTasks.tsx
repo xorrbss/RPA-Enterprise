@@ -17,9 +17,9 @@ import { formatDeadline } from "../util/time";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
 import { ApprovalInboxView } from "./ApprovalInbox";
 import type { HumanTaskItem } from "../api/types";
+import { HUMAN_TASK_TERMINAL_STATES, isActiveHumanTask } from "./humanTaskFilters";
 
 const KEYS = [["human-tasks"]] as const;
-const TERMINAL = new Set(["resolved", "expired", "cancelled"]);
 
 function dueTime(task: HumanTaskItem): number {
   return task.timeout !== null ? Date.parse(task.timeout) : Number.POSITIVE_INFINITY;
@@ -218,26 +218,42 @@ function HumanTaskStreamView(): JSX.Element {
     [principalsQuery.data],
   );
   const runParam = useHashParam("run_id");
+  const terminalParam = useHashParam("terminal");
+  const unassignedParam = useHashParam("unassigned");
+  const hashStatus = useHashParam("status");
+  const activeOnly = terminalParam === "false";
+  const initialFilter = runParam !== null
+    ? { run_id: runParam }
+    : unassignedParam === "true"
+      ? { unassigned: true }
+      : hashStatus !== null && hashStatus.length > 0
+        ? { status: hashStatus }
+        : activeOnly
+          ? undefined
+          : (subject !== null && subject.length > 0 ? { assignee: subject } : undefined);
   const lv = useListView<HumanTaskItem>(
     ["human-tasks"],
     (p) => api.listHumanTasks(p),
     // 디폴트 = 내게 배정(내 업무 먼저). run_id 딥링크가 있으면 그 우선. sub 부재(미로그인)면 필터 없음.
-    { refetchInterval: 5_000, initialFilter: runParam !== null ? { run_id: runParam } : (subject !== null && subject.length > 0 ? { assignee: subject } : undefined) },
+    { refetchInterval: 5_000, initialFilter },
   );
   // 선택 사람확인 업무를 해시(`#humanTasks?ht=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(RunTrace 패턴 재사용).
   const sel = useHashIdParam("ht");
   const detail = useQuery({ queryKey: ["humantask-detail", sel], queryFn: () => api.getHumanTask(sel as string), enabled: sel !== null });
+  const unassignedQuery = useQuery({ queryKey: ["human-tasks", "unassigned-count"], queryFn: () => api.listHumanTasks({ unassigned: true, limit: 50 }), refetchInterval: 5_000 });
   const pageItems = lv.query.data?.items ?? [];
-  const dueItems = useMemo(() => pageItems.filter((t) => !TERMINAL.has(t.state) && t.timeout !== null).sort((a, b) => dueTime(a) - dueTime(b)), [pageItems]);
-  const documentItems = useMemo(() => pageItems.filter((t) => !TERMINAL.has(t.state) && isDocumentValidationTask(t)), [pageItems]);
+  const activeItems = useMemo(() => pageItems.filter(isActiveHumanTask), [pageItems]);
+  const baseItems = activeOnly ? activeItems : pageItems;
+  const dueItems = useMemo(() => baseItems.filter((t) => isActiveHumanTask(t) && t.timeout !== null).sort((a, b) => dueTime(a) - dueTime(b)), [baseItems]);
+  const documentItems = useMemo(() => baseItems.filter((t) => isActiveHumanTask(t) && isDocumentValidationTask(t)), [baseItems]);
   const documentWithArtifacts = useMemo(() => documentItems.filter((t) => artifactCount(t) > 0), [documentItems]);
   const documentWithForm = useMemo(() => documentItems.filter(hasBusinessForm), [documentItems]);
-  const nextTask = useMemo(() => [...pageItems].filter((t) => !TERMINAL.has(t.state)).sort((a, b) => dueTime(a) - dueTime(b))[0], [pageItems]);
+  const nextTask = useMemo(() => [...baseItems].filter(isActiveHumanTask).sort((a, b) => dueTime(a) - dueTime(b))[0], [baseItems]);
   const visibleItems = useMemo(() => {
-    const base = documentOnly ? documentItems : pageItems;
+    const base = documentOnly ? documentItems : baseItems;
     if (!dueOnly) return base;
-    return base.filter((t) => !TERMINAL.has(t.state) && t.timeout !== null).sort((a, b) => dueTime(a) - dueTime(b));
-  }, [documentItems, documentOnly, dueOnly, pageItems]);
+    return base.filter((t) => isActiveHumanTask(t) && t.timeout !== null).sort((a, b) => dueTime(a) - dueTime(b));
+  }, [baseItems, documentItems, documentOnly, dueOnly]);
   const panelQuery: typeof lv.query = lv.query.data !== undefined
     ? ({ ...lv.query, data: { ...lv.query.data, items: visibleItems } } as typeof lv.query)
     : lv.query;
@@ -250,12 +266,14 @@ function HumanTaskStreamView(): JSX.Element {
   //   이미 배정된 업무(assigned/in_progress)는 **내게 배정된 것만** 포함(타인 업무 가로채기 방지). 권한은 kind 별 resolve 로 프리필터.
   const bulkApprovable = visibleItems.filter(
     (t) =>
-      !TERMINAL.has(t.state) &&
+      !HUMAN_TASK_TERMINAL_STATES.has(t.state) &&
       !requiresStructuredReviewInput(t) &&
       can(`human_task.resolve.${t.kind}`) &&
       (t.state === "open" || t.state === "escalated" || ((t.state === "assigned" || t.state === "in_progress") && t.assignee === subject)),
   );
   const canFilterMine = subject !== null && subject.length > 0;
+  const unassignedCount = unassignedQuery.data?.items.filter(isActiveHumanTask).length ?? 0;
+  const unassignedCountLabel = unassignedQuery.data?.next_cursor !== null && unassignedQuery.data?.next_cursor !== undefined ? `${unassignedCount}+` : String(unassignedCount);
   return (
     <>
       {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} principalOptions={principalOptions} onClose={() => { mergeParams({ ht: null }); }} />}
@@ -289,12 +307,15 @@ function HumanTaskStreamView(): JSX.Element {
             title={canFilterMine ? undefined : "로그인이 필요합니다."}
             onClick={() => {
               // assignee 필터는 `= $4::text`(any 문자열) — 비-UUID sub 도 안전. 토글: 내게 배정 ↔ 전체.
-              if (canFilterMine) lv.setFilter({ ...lv.filter, assignee: lv.filter.assignee === subject ? undefined : subject });
+              if (canFilterMine) lv.setFilter({ ...lv.filter, assignee: lv.filter.assignee === subject ? undefined : subject, unassigned: undefined });
             }}
           >
             {lv.filter.assignee === subject ? "전체 업무 보기" : "내 업무만 보기"}
           </button>
           {!canFilterMine && <span className="badge amber">로그인이 필요합니다.</span>}
+          <button className="btn" type="button" aria-pressed={lv.filter.unassigned === true} onClick={() => lv.setFilter({ ...lv.filter, assignee: undefined, unassigned: lv.filter.unassigned === true ? undefined : true })}>
+            미배정 {unassignedCountLabel}건
+          </button>
           <button className="btn" type="button" aria-pressed={dueOnly} onClick={() => setDueOnly((v) => !v)}>
             마감 임박 {dueItems.length}
           </button>

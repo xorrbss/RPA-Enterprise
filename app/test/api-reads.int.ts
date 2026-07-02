@@ -568,6 +568,25 @@ async function main(): Promise<void> {
       check("filter kind=approval → 2", byKind.json().items.length === 2, "");
       const byAssignee = await get(`/v1/human-tasks?assignee=${ASSIGNEE}`);
       check("filter assignee → 1", byAssignee.json().items.length === 1 && byAssignee.json().items[0].human_task_id === HT_A2, "");
+      const unassigned = await get("/v1/human-tasks?unassigned=true");
+      check("filter unassigned=true → 2 unassigned only",
+        unassigned.statusCode === 200 && unassigned.json().items.length === 2 &&
+        unassigned.json().items.every((h: { assignee: string | null }) => h.assignee === null) &&
+        unassigned.json().items.map((h: { human_task_id: string }) => h.human_task_id).join(",") === `${HT_A3},${HT_A1}`,
+        unassigned.body);
+      const unassignedFalse = await get("/v1/human-tasks?unassigned=false");
+      check("filter unassigned=false → existing behavior",
+        unassignedFalse.statusCode === 200 && unassignedFalse.json().items.length === 3,
+        unassignedFalse.body);
+      const unassignedConflict = await get(`/v1/human-tasks?assignee=${ASSIGNEE}&unassigned=true`);
+      check("filter assignee + unassigned=true → 422 fail-closed",
+        unassignedConflict.statusCode === 422 &&
+        unassignedConflict.json().details?.reason === "assignee_unassigned_conflict",
+        unassignedConflict.body);
+      const invalidUnassigned = await get("/v1/human-tasks?unassigned=yes");
+      check("filter invalid unassigned → 422",
+        invalidUnassigned.statusCode === 422 && invalidUnassigned.json().details?.reason === "invalid_unassigned",
+        invalidUnassigned.body);
       // assignee=PrincipalId(자유형 string)이므로 비-UUID sub 필터도 422가 아니라 200(매칭 0). uuid 강제 폐지 회귀.
       const byOidcAssignee = await get("/v1/human-tasks?assignee=auth0%7Cabc123");
       check("filter non-uuid assignee → 200 (0 matches, not 422)", byOidcAssignee.statusCode === 200 && byOidcAssignee.json().items.length === 0, byOidcAssignee.body);

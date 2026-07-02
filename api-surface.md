@@ -338,7 +338,7 @@ Release audit:
 
 | Method | Path | 요청 요지 | 응답 요지 | 주요 ErrorCode |
 |---|---|---|---|---|
-| GET | `/v1/human-tasks` | 쿼리: `?status=<HumanTaskState>&kind=<HumanTaskKind>&assignee=&run_id=&limit=&cursor=` | 200 + `{ items, next_cursor }` (인박스 목록; `run_id`는 suspended run→정확한 task 딥링크용) | — |
+| GET | `/v1/human-tasks` | 쿼리: `?status=<HumanTaskState>&kind=<HumanTaskKind>&assignee=&unassigned=true&run_id=&limit=&cursor=` (`unassigned=true`는 `assignee IS NULL`만 조회; `assignee`와 동시 지정 시 `IR_SCHEMA_INVALID`) | 200 + `{ items, next_cursor }` (인박스 목록; `run_id`는 suspended run→정확한 task 딥링크용) | `IR_SCHEMA_INVALID`(422) |
 | GET | `/v1/principals` | 쿼리: `?limit=&cursor=` | 200 + `{ items, next_cursor }` (담당자 디렉터리; 각 item `principal_id`/`sub`/`display_name`/`email`/`source`/`external_id`/`idp_provider`/`lifecycle_source` — name-picker용) | — |
 | POST | `/v1/principals` | `Idempotency-Key`. body: `sub`·`display_name`(필수)·optional `email`. admin 권한 | 201 + principal(`principal_id`/`sub`/`display_name`/`email`/`source=manual`/`external_id=null`/`idp_provider=null`/`lifecycle_source=local`) | `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422; 중복 `sub`) |
 | PATCH | `/v1/principals/{principal_id}` | `Idempotency-Key`. body: optional `display_name`·`email`(`null`=제거) 최소 1개. admin 권한. sub 불변 | 200 + principal 갱신 | `RESOURCE_NOT_FOUND`(404), `AUTHZ_FORBIDDEN`(403), `IR_SCHEMA_INVALID`(422) |

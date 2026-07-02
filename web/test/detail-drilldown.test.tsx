@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
+import type { ListParams } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 // 작업항목·사람확인 상세 드릴다운(getWorkitem/getHumanTask) + 원본 실행 교차 동선. smoke.test.tsx(500라인 한도)에서
@@ -107,6 +108,45 @@ describe("작업항목·사람확인 상세 드릴다운", () => {
     const panel = await screen.findByRole("region", { name: "검토 업무 상세" });
     await within(panel).findByText("상위 담당자에게 이관"); // on_timeout(실 컬럼) — 상세 쿼리 resolve 후 표시
     expect(within(panel).getByRole("button", { name: "완료 처리" })).toBeInTheDocument(); // in_progress 액션(HumanTaskActions 재사용)
+  });
+
+  test("미배정 버튼은 서버 unassigned=true 필터를 적용한다", async () => {
+    const calls: unknown[] = [];
+    renderApp(
+      fakeClient({
+        listHumanTasks: async (params) => {
+          calls.push(params ?? {});
+          return {
+            items: [{ human_task_id: "ht-unassigned-filter", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null }],
+            next_cursor: null,
+          };
+        },
+      }),
+    );
+    location.hash = "#humanTasks";
+    const unassigned = await screen.findByRole("button", { name: /미배정/ });
+    unassigned.click();
+    await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({ unassigned: true })));
+  });
+
+  test("terminal=false 딥링크는 기본 내 업무 필터를 건너뛴다", async () => {
+    location.hash = "#humanTasks?terminal=false";
+    const calls: ListParams[] = [];
+    renderApp(
+      fakeClient({
+        listHumanTasks: async (params) => {
+          calls.push(params ?? {});
+          return {
+            items: [{ human_task_id: "ht-all-active", state: "open", kind: "approval", assignee: null, timeout: null, on_timeout: "escalate", run_id: null }],
+            next_cursor: null,
+          };
+        },
+      }),
+    );
+
+    await screen.findByText("접수번호 #ht-all-a");
+    await waitFor(() => expect(calls.some((params) => params.assignee === "u")).toBe(false));
+    expect(calls).toContainEqual(expect.objectContaining({ limit: 50 }));
   });
 
   // 이관 사유(escalation_reason) 노출 — 재배정될 담당자에게 맥락 전달.
