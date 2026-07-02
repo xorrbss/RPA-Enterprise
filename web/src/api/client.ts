@@ -571,7 +571,9 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       method,
       headers: {
         Accept: "application/json",
-        "Content-Type": "application/json",
+        // 본문이 있을 때만 Content-Type 부여 — 무본문 변이(DELETE·bodyless PUT)에서 ct=json + 빈 본문이
+        // 나가면 서버 JSON 파서가 FST_ERR_CTP_EMPTY_JSON_BODY 를 던져 500 이 된다(빈 본문에 ct 미부여).
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(extraHeaders ?? {}),
         ...authHeaders(),
       },

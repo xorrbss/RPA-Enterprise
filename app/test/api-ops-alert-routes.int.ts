@@ -202,6 +202,22 @@ async function main(): Promise<void> {
       JSON.stringify(activeRoutes),
     );
 
+    // --- malformed request: Content-Type application/json + 빈 본문은 4xx(500 금지) ---
+    // 웹 send() 가 무본문 DELETE 에 ct=json 을 실으면 Fastify JSON 파서가 빈 본문을 거부한다.
+    // 미분류 500(CONTROL_PLANE_INTERNAL_ERROR)이 아니라 4xx 로 분류되어야 한다(조용한 500 금지).
+    const emptyJsonDelete = await app.inject({
+      method: "DELETE",
+      url: `/v1/ops-alert-routes/${createdBody.route_id}`,
+      headers: { authorization: `Bearer ${admin}`, "idempotency-key": "route-delete-empty-json", "content-type": "application/json" },
+    });
+    check(
+      "delete with ct=json + empty body -> 4xx, not 500",
+      emptyJsonDelete.statusCode >= 400 && emptyJsonDelete.statusCode < 500,
+      `status=${emptyJsonDelete.statusCode} body=${emptyJsonDelete.body}`,
+    );
+    const afterMalformed = await app.inject({ method: "GET", url: "/v1/ops-alert-routes", headers: { authorization: `Bearer ${viewer}` } });
+    check("malformed delete left the route intact", afterMalformed.statusCode === 200 && afterMalformed.json().items.length === 1, afterMalformed.body);
+
     // --- update ---
     const emptyPatch = await app.inject({
       method: "PATCH",
