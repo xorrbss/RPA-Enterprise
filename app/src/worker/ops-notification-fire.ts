@@ -1,10 +1,12 @@
 /**
- * 무인 운영 알림 자동 발화 (S4a) — producer.
+ * 무인 운영 알림 자동 발화 (S4a/S4b) — producer.
  *
  * 감사 alerts-console-pull-only(P1): 운영 알림이 콘솔 조회 시점에만 계산되고 외부 발송은 건별 수동 폼뿐이라,
  *   무인 시간대(야간·주말) 장애가 어디에도 통지되지 않았다. 전달 파이프라인(ops_notification_attempts → 워커
  *   ops_notification_send → deliverOpsNotificationAttempt)은 이미 완성돼 있으므로, 이 모듈이 빠져 있던 producer 를
- *   채운다: 계산된 알림을 env 라우팅 규칙에 매칭해 pending attempt 를 만들고 발송 잡을 인큐한다.
+ *   채운다: 계산된 알림을 라우팅 규칙에 매칭해 pending attempt 를 만들고 발송 잡을 인큐한다.
+ *   라우팅 규칙은 두 출처의 합집합이다 — 배포-소유 env `OPS_ALERT_ROUTES`(S4a) + 테넌트 저장형
+ *   `ops_alert_notification_routes`(S4b, fireForTenant 안에서 테넌트별로 읽음).
  *
  * 멱등: 같은 세대(tenant+alert_id+detected_at+provider)에 대해 non-deleted attempt 가 이미 있으면 건너뛴다.
  *   detected_at 은 행 타임스탬프(안정)라 같은 장애가 반복 틱마다 재발화되지 않는다(폭주 방지). 조건이 실제로 바뀌면
@@ -166,8 +168,9 @@ async function fireForTenant(
 }
 
 /**
- * 라우트 규칙에 따라 대상 테넌트의 계산 알림을 자동 발화한다. 라우트가 없으면 no-op(자동 통지 미설정).
- * 라우트가 있는데 대상 테넌트가 없으면 loud 경고(휴면 방지) 후 no-op.
+ * 라우트 규칙(env + 테넌트 저장형)에 따라 대상 테넌트의 계산 알림을 자동 발화한다.
+ * env·저장 라우트가 모두 없으면 no-op(자동 통지 미설정). env 라우트가 있는데 대상 테넌트가 없으면
+ * loud 경고(휴면 방지) 후 no-op — 저장형 라우트 테넌트는 maintenance 테넌트 발견에 포함되므로 이 분기에 오지 않는다.
  */
 export async function runOpsNotificationFire(
   pool: PgPool,

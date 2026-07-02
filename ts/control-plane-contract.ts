@@ -58,6 +58,8 @@ export type ControlPlanePath =
   | "/v1/ops-alerts/{alert_id}/ack"
   | "/v1/ops-alerts/{alert_id}/deliveries"
   | "/v1/ops-alerts/{alert_id}/deliveries/send-webhook"
+  | "/v1/ops-alert-routes"
+  | "/v1/ops-alert-routes/{route_id}"
   | "/v1/ops/health"
   | "/v1/ops/production-readiness"
   | "/v1/ops/production-readiness/evidence"

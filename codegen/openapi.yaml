@@ -770,8 +770,10 @@ paths:
       operationId: listOpsAlerts
       description: >
         List computed tenant-scoped operations alerts from current runs, human tasks, trigger fires, DLQ rows,
-        Bot Pool health, SCIM SecretRef rotation, and audit verifier evidence health. Product Open v1 delivery is console-only; acknowledgement state is persisted
-        by alert generation, while Teams/Slack/email/webhook notifications remain unopened.
+        Bot Pool health, SCIM SecretRef rotation, audit verifier evidence health, readiness evidence, and
+        browser login-session expiry. Acknowledgement state is persisted by alert generation. External delivery
+        is the generic webhook sender only: per-alert manual send plus automatic firing driven by env
+        OPS_ALERT_ROUTES and stored /v1/ops-alert-routes rules.
       summary: 운영 알림 목록
       parameters:
         - name: severity
@@ -947,6 +949,136 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OpsNotificationAttempt'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops-alert-routes:
+    get:
+      tags: [OpsAlerts]
+      operationId: listOpsAlertNotificationRoutes
+      summary: 저장형 자동 알림 경로 목록
+      description: >
+        List tenant-managed stored automatic notification routes. Routes carry SecretRef aliases, allowed host
+        names, and non-secret routing metadata only; raw endpoint URLs, provider tokens, and resolved SecretRef
+        values never appear. The maintenance producer unions these stored routes with env OPS_ALERT_ROUTES when
+        it auto-fires computed alerts into the durable webhook attempt pipeline.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Stored automatic notification route page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertNotificationRoutePage'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [OpsAlerts]
+      operationId: createOpsAlertNotificationRoute
+      summary: 저장형 자동 알림 경로 생성
+      description: >
+        Create a tenant-managed stored automatic notification route (admin-only, ops_alert.deliver, Idempotency-Key).
+        source is restricted to auto-fire sources with stable detected_at generations
+        (run_sla, human_task_sla, trigger_fire, failure_spike, session_expiry) or omitted/null for all of them.
+        endpoint_secret_ref and callback_signature_secret_ref must be SecretRef aliases; allowed_hosts are DNS
+        host names only. Raw URLs, tokens, and secret material are rejected fail-closed.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpsAlertNotificationRouteCreateRequest'
+      responses:
+        '201':
+          description: Stored automatic notification route created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertNotificationRoute'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops-alert-routes/{route_id}:
+    patch:
+      tags: [OpsAlerts]
+      operationId: updateOpsAlertNotificationRoute
+      summary: 저장형 자동 알림 경로 수정
+      description: >
+        Partially update a stored automatic notification route (admin-only, ops_alert.deliver, Idempotency-Key).
+        Provided fields are validated with the same fail-closed rules as creation; an empty patch body is rejected.
+        Setting enabled=false pauses automatic firing for the route without deleting it.
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpsAlertNotificationRouteUpdateRequest'
+      responses:
+        '200':
+          description: Stored automatic notification route updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertNotificationRoute'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [OpsAlerts]
+      operationId: deleteOpsAlertNotificationRoute
+      summary: 저장형 자동 알림 경로 삭제
+      description: >
+        Soft-delete a stored automatic notification route (admin-only, ops_alert.deliver, Idempotency-Key).
+        The route is disabled and excluded from listing and automatic firing; audit metadata rows are retained.
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Stored automatic notification route soft-deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertNotificationRouteDeleteResponse'
         '403':
           $ref: '#/components/responses/Error'
         '404':
@@ -4334,6 +4466,7 @@ components:
         - scim_secret_rotation
         - audit_verifier
         - readiness_evidence
+        - session_expiry
     OpsAlertSubjectType:
       type: string
       enum:
@@ -4345,6 +4478,7 @@ components:
         - scim_provider
         - audit_verifier
         - readiness_evidence
+        - browser_session
     OpsAlertStatus:
       type: string
       enum:
@@ -4404,6 +4538,206 @@ components:
           maximum: 100
         cursor:
           type: string
+    OpsAlertNotificationRouteSource:
+      type: string
+      description: Auto-fire alert sources with stable detected_at generations. Other alert sources stay console-only.
+      enum:
+        - run_sla
+        - human_task_sla
+        - trigger_fire
+        - failure_spike
+        - session_expiry
+    OpsAlertNotificationRouteListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
+    OpsAlertNotificationRoutePathParams:
+      type: object
+      additionalProperties: false
+      required: [route_id]
+      properties:
+        route_id:
+          type: string
+          format: uuid
+    OpsAlertNotificationRoute:
+      type: object
+      additionalProperties: false
+      description: >
+        Tenant-managed stored automatic notification route. SecretRef aliases and non-secret routing metadata only;
+        resolved secret values, raw endpoint URLs, and provider tokens never appear.
+      required:
+        - route_id
+        - source
+        - min_severity
+        - provider_alias
+        - endpoint_secret_ref
+        - callback_signature_secret_ref
+        - route_policy_ref
+        - recipient_group_ref
+        - allowed_hosts
+        - enabled
+        - created_by
+        - created_at
+        - updated_by
+        - updated_at
+      properties:
+        route_id:
+          type: string
+          format: uuid
+        source:
+          oneOf:
+            - $ref: '#/components/schemas/OpsAlertNotificationRouteSource'
+            - type: "null"
+          description: Matching alert source; null matches every auto-fire source.
+        min_severity:
+          type: string
+          enum: [warning, critical]
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        route_policy_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+        enabled:
+          type: boolean
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_by:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    OpsAlertNotificationRouteCreateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - min_severity
+        - provider_alias
+        - endpoint_secret_ref
+        - route_policy_ref
+        - allowed_hosts
+      properties:
+        source:
+          oneOf:
+            - $ref: '#/components/schemas/OpsAlertNotificationRouteSource'
+            - type: "null"
+        min_severity:
+          type: string
+          enum: [warning, critical]
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        route_policy_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+        enabled:
+          type: boolean
+    OpsAlertNotificationRouteUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        source:
+          oneOf:
+            - $ref: '#/components/schemas/OpsAlertNotificationRouteSource'
+            - type: "null"
+        min_severity:
+          type: string
+          enum: [warning, critical]
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        route_policy_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+        enabled:
+          type: boolean
+    OpsAlertNotificationRoutePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpsAlertNotificationRoute'
+        next_cursor:
+          type: [string, "null"]
+    OpsAlertNotificationRouteDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [deleted, route]
+      properties:
+        deleted:
+          type: boolean
+        route:
+          $ref: '#/components/schemas/OpsAlertNotificationRoute'
     SecretRefIdentifier:
       type: string
       minLength: 10

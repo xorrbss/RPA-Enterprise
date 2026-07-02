@@ -33,6 +33,27 @@ export function idempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// 웹훅 라우팅 폼 공용 검증 — OpsAlertCenter 발송 폼과 OpsAlertRoutePanel 저장 폼이 공유한다.
+export function parseAllowedHosts(value: string): string[] {
+  return [...new Set(value.split(/[\s,]+/).map((part) => part.trim().toLowerCase()).filter(Boolean))];
+}
+
+export function isDnsHost(host: string): boolean {
+  if (host === "localhost" || host.includes("/") || host.includes(":")) return false;
+  const labels = host.split(".");
+  return labels.length >= 2 && labels.every((label) =>
+    label.length > 0 &&
+    label.length <= 63 &&
+    /^[a-z0-9-]+$/i.test(label) &&
+    !label.startsWith("-") &&
+    !label.endsWith("-"),
+  );
+}
+
+export function isSecretRef(value: string): boolean {
+  return value.startsWith("secret://") && value.length > "secret://".length;
+}
+
 export function cronFrom(cadence: Cadence, time: string): string {
   const [hour = "9", minute = "0"] = time.split(":");
   if (cadence === "weekdays") return `${Number(minute)} ${Number(hour)} * * 1-5`;

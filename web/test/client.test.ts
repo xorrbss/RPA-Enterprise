@@ -198,6 +198,68 @@ describe("HttpApiClient 계약", () => {
     });
   });
 
+  test("ops alert notification route CRUD uses /v1/ops-alert-routes with idempotency keys", async () => {
+    const routeBody = {
+      route_id: "9a300000-0000-4000-8000-000000000001",
+      source: "session_expiry",
+      min_severity: "warning",
+      provider_alias: "webhook-primary",
+      endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+      callback_signature_secret_ref: null,
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      allowed_hosts: ["hooks.example.com"],
+      enabled: true,
+      created_by: "admin-a",
+      created_at: "2026-07-02T00:00:00.000Z",
+      updated_by: "admin-a",
+      updated_at: "2026-07-02T00:00:00.000Z",
+    };
+
+    const listHarness = harness({ body: { items: [routeBody], next_cursor: null } });
+    await listHarness.client.listOpsAlertNotificationRoutes({ limit: 50 });
+    expect(listHarness.calls[0]?.method).toBe("GET");
+    expect(listHarness.calls[0]?.url).toBe("http://api.test/v1/ops-alert-routes?limit=50");
+
+    const createHarness = harness({ body: routeBody });
+    const created = await createHarness.client.createOpsAlertNotificationRoute({
+      source: "session_expiry",
+      min_severity: "warning",
+      provider_alias: "webhook-primary",
+      endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      allowed_hosts: ["hooks.example.com"],
+    }, "route-create-1");
+    expect(created.route_id).toBe(routeBody.route_id);
+    expect(createHarness.calls[0]?.method).toBe("POST");
+    expect(createHarness.calls[0]?.url).toBe("http://api.test/v1/ops-alert-routes");
+    expect(createHarness.calls[0]?.headers.get("idempotency-key")).toBe("route-create-1");
+    expect(createHarness.calls[0]?.body).toEqual({
+      source: "session_expiry",
+      min_severity: "warning",
+      provider_alias: "webhook-primary",
+      endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      allowed_hosts: ["hooks.example.com"],
+    });
+
+    const patchHarness = harness({ body: { ...routeBody, enabled: false } });
+    await patchHarness.client.updateOpsAlertNotificationRoute(routeBody.route_id, { enabled: false }, "route-toggle-1");
+    expect(patchHarness.calls[0]?.method).toBe("PATCH");
+    expect(patchHarness.calls[0]?.url).toBe(`http://api.test/v1/ops-alert-routes/${routeBody.route_id}`);
+    expect(patchHarness.calls[0]?.headers.get("idempotency-key")).toBe("route-toggle-1");
+    expect(patchHarness.calls[0]?.body).toEqual({ enabled: false });
+
+    const deleteHarness = harness({ body: { deleted: true, route: { ...routeBody, enabled: false } } });
+    const deleted = await deleteHarness.client.deleteOpsAlertNotificationRoute(routeBody.route_id, "route-delete-1");
+    expect(deleted.deleted).toBe(true);
+    expect(deleteHarness.calls[0]?.method).toBe("DELETE");
+    expect(deleteHarness.calls[0]?.url).toBe(`http://api.test/v1/ops-alert-routes/${routeBody.route_id}`);
+    expect(deleteHarness.calls[0]?.headers.get("idempotency-key")).toBe("route-delete-1");
+  });
+
   test("integration handoff routes use SecretRef-only request and receipt metadata", async () => {
     const listHarness = harness({ body: { items: [], next_cursor: null } });
     await listHarness.client.listIntegrationHandoffs({ provider_alias: "uipath-primary", status: "deferred", limit: 5 });

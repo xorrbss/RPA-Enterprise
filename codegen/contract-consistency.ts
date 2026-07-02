@@ -227,6 +227,19 @@ assertOperationId("ackOpsAlert");
 assertOperationId("listOpsAlertDeliveries");
 assertOperationId("recordOpsAlertDelivery");
 assertOperationId("sendOpsAlertWebhookDelivery");
+assertOperationId("listOpsAlertNotificationRoutes");
+assertOperationId("createOpsAlertNotificationRoute");
+assertOperationId("updateOpsAlertNotificationRoute");
+assertOperationId("deleteOpsAlertNotificationRoute");
+assertOpenApiPath("/ops-alert-routes");
+assertOpenApiPath("/ops-alert-routes/{route_id}");
+assertControlPlanePath("/v1/ops-alert-routes");
+assertControlPlanePath("/v1/ops-alert-routes/{route_id}");
+// S4b: session_expiry alert source + browser_session subject must stay in the OpsAlert enums,
+// and stored-route source stays restricted to the stable auto-fire sources.
+assertOpenApiSchemaContains("OpsAlertSource", "        - session_expiry");
+assertOpenApiSchemaContains("OpsAlertSubjectType", "        - browser_session");
+assertOpenApiSchemaContains("OpsAlertNotificationRouteSource", "        - session_expiry");
 assertOperationId("getOpsHealth");
 assertOperationId("listAutomationIdeas");
 assertOperationId("listProcessMiningImports");

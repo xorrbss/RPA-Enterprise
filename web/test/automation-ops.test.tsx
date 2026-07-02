@@ -558,6 +558,189 @@ describe("automation ops view", () => {
     expect(screen.queryByText(/외부 발송 보류/)).not.toBeInTheDocument();
   });
 
+  test("저장형 자동 알림 경로 패널: 운영자는 라벨로 읽기만 가능하다(raw enum 미노출)", async () => {
+    openAutomationOpsSection("alerts");
+    renderApp(clientWithOpsData({
+      listOpsAlertNotificationRoutes: async () => ({
+        items: [{
+          route_id: "9a300000-0000-4000-8000-000000000001",
+          source: "session_expiry" as const,
+          min_severity: "critical" as const,
+          provider_alias: "oncall-webhook",
+          endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+          callback_signature_secret_ref: null,
+          route_policy_ref: "ops-alerts-primary",
+          recipient_group_ref: "ops-primary-oncall",
+          allowed_hosts: ["hooks.example.com"],
+          enabled: true,
+          created_by: "admin-a",
+          created_at: "2026-07-02T00:00:00.000Z",
+          updated_by: "admin-a",
+          updated_at: "2026-07-02T00:00:00.000Z",
+        }],
+        next_cursor: null,
+      }),
+    }));
+
+    expect(await screen.findByRole("heading", { name: "자동 알림 경로" })).toBeInTheDocument();
+    expect(await screen.findByText("자동 발송 1건")).toBeInTheDocument();
+    const routePanel = screen.getByRole("heading", { name: "자동 알림 경로" }).closest(".ops-alert-route-panel") as HTMLElement;
+    expect(within(routePanel).getByText("oncall-webhook")).toBeInTheDocument();
+    expect(within(routePanel).getByText(/로그인 세션 만료 · 위험만/)).toBeInTheDocument();
+    expect(within(routePanel).getByText("자동 발송 중")).toBeInTheDocument();
+    expect(within(routePanel).getByText("수신 그룹 ops-primary-oncall")).toBeInTheDocument();
+    // 운영자(ops_alert.deliver 없음)는 관리 액션·저장 폼이 보이지 않는다.
+    expect(within(routePanel).queryByRole("button", { name: "중지" })).toBeNull();
+    expect(within(routePanel).queryByRole("button", { name: "삭제" })).toBeNull();
+    expect(within(routePanel).queryByText("새 자동 알림 경로 추가")).toBeNull();
+    // 표시 계층은 계약 enum 원문을 노출하지 않는다.
+    expect(within(routePanel).queryByText(/session_expiry/)).toBeNull();
+    expect(within(routePanel).queryByText(/\bcritical\b/)).toBeNull();
+  });
+
+  test("admin이 새 자동 알림 경로를 저장하면 CRUD API가 검증된 본문으로 호출된다", async () => {
+    localStorage.setItem("rpa.token", jwt(["admin"]));
+    const createOpsAlertNotificationRoute = vi.fn(async (
+      body: Parameters<ApiClient["createOpsAlertNotificationRoute"]>[0],
+    ) => ({
+      route_id: "9a300000-0000-4000-8000-000000000002",
+      source: body.source ?? null,
+      min_severity: body.min_severity,
+      provider_alias: body.provider_alias,
+      endpoint_secret_ref: body.endpoint_secret_ref,
+      callback_signature_secret_ref: body.callback_signature_secret_ref ?? null,
+      route_policy_ref: body.route_policy_ref,
+      recipient_group_ref: body.recipient_group_ref ?? null,
+      allowed_hosts: body.allowed_hosts,
+      enabled: true,
+      created_by: "admin-a",
+      created_at: "2026-07-02T00:00:00.000Z",
+      updated_by: "admin-a",
+      updated_at: "2026-07-02T00:00:00.000Z",
+    }));
+    openAutomationOpsSection("alerts");
+    renderApp(clientWithOpsData({ createOpsAlertNotificationRoute }));
+
+    expect(await screen.findByRole("heading", { name: "자동 알림 경로" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("새 자동 알림 경로 추가"));
+    fireEvent.change(screen.getByLabelText("자동 발송 알림 유형"), { target: { value: "session_expiry" } });
+    fireEvent.change(screen.getByLabelText("자동 발송 최소 심각도"), { target: { value: "warning" } });
+    fireEvent.change(screen.getByLabelText("자동 발송 제공자 별칭"), { target: { value: "oncall-webhook" } });
+    fireEvent.change(screen.getByLabelText("자동 발송 Endpoint SecretRef"), {
+      target: { value: "secret://tenant-a/notification/webhook/ops-primary" },
+    });
+    fireEvent.change(screen.getByLabelText("자동 발송 허용 호스트"), { target: { value: "hooks.example.com" } });
+    fireEvent.change(screen.getByLabelText("자동 발송 수신 그룹"), { target: { value: "ops-primary-oncall" } });
+    fireEvent.click(screen.getByRole("button", { name: "경로 저장" }));
+
+    await waitFor(() => expect(createOpsAlertNotificationRoute).toHaveBeenCalledWith(
+      {
+        source: "session_expiry",
+        min_severity: "warning",
+        provider_alias: "oncall-webhook",
+        endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+        callback_signature_secret_ref: null,
+        route_policy_ref: "ops-alerts-primary",
+        recipient_group_ref: "ops-primary-oncall",
+        allowed_hosts: ["hooks.example.com"],
+      },
+      expect.stringMatching(/^ops-alert-route-create-/),
+    ));
+  });
+
+  test("자동 알림 경로 저장 폼은 raw URL endpoint를 거부한다", async () => {
+    localStorage.setItem("rpa.token", jwt(["admin"]));
+    const createOpsAlertNotificationRoute = vi.fn();
+    openAutomationOpsSection("alerts");
+    renderApp(clientWithOpsData({ createOpsAlertNotificationRoute }));
+
+    expect(await screen.findByRole("heading", { name: "자동 알림 경로" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("새 자동 알림 경로 추가"));
+    fireEvent.change(screen.getByLabelText("자동 발송 Endpoint SecretRef"), {
+      target: { value: "https://hooks.example.com/services/T000" },
+    });
+    fireEvent.change(screen.getByLabelText("자동 발송 허용 호스트"), { target: { value: "hooks.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "경로 저장" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("발송 주소는 secret:// 보안 연결로만 입력하세요.");
+    expect(createOpsAlertNotificationRoute).not.toHaveBeenCalled();
+  });
+
+  test("admin이 저장된 경로를 중지/삭제하면 update/delete API가 호출된다", async () => {
+    localStorage.setItem("rpa.token", jwt(["admin"]));
+    const storedRoute = {
+      route_id: "9a300000-0000-4000-8000-000000000003",
+      source: null,
+      min_severity: "warning" as const,
+      provider_alias: "webhook-primary",
+      endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+      callback_signature_secret_ref: null,
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: null,
+      allowed_hosts: ["hooks.example.com"],
+      enabled: true,
+      created_by: "admin-a",
+      created_at: "2026-07-02T00:00:00.000Z",
+      updated_by: "admin-a",
+      updated_at: "2026-07-02T00:00:00.000Z",
+    };
+    const updateOpsAlertNotificationRoute = vi.fn(async () => ({ ...storedRoute, enabled: false }));
+    const deleteOpsAlertNotificationRoute = vi.fn(async () => ({ deleted: true, route: { ...storedRoute, enabled: false } }));
+    openAutomationOpsSection("alerts");
+    renderApp(clientWithOpsData({
+      listOpsAlertNotificationRoutes: async () => ({ items: [storedRoute], next_cursor: null }),
+      updateOpsAlertNotificationRoute,
+      deleteOpsAlertNotificationRoute,
+    }));
+
+    expect(await screen.findByText("webhook-primary")).toBeInTheDocument();
+    expect(screen.getByText(/전체 유형 · 주의 이상/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "중지" }));
+    await waitFor(() => expect(updateOpsAlertNotificationRoute).toHaveBeenCalledWith(
+      storedRoute.route_id,
+      { enabled: false },
+      expect.stringMatching(/^ops-alert-route-toggle-/),
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    await waitFor(() => expect(deleteOpsAlertNotificationRoute).toHaveBeenCalledWith(
+      storedRoute.route_id,
+      expect.stringMatching(/^ops-alert-route-delete-/),
+    ));
+  });
+
+  test("세션 만료 알림은 알림 센터에서 한국어 라벨과 세션 등록 이동 버튼으로 노출된다", async () => {
+    renderApp(clientWithOpsData({
+      listOpsAlerts: async () => ({
+        items: [{
+          alert_id: "session_expiry:site-1:identity-1:d41d8cd98f00b204e9800998ecf8427e",
+          severity: "critical" as const,
+          source: "session_expiry" as const,
+          title: "로그인 세션 만료",
+          detail: "하이웍스 (https://hiworks.example/*) 세션이 30분 전에 만료되었습니다.",
+          subject_type: "browser_session" as const,
+          subject_id: "site-1",
+          status: "open" as const,
+          delivery: { channel: "console" as const, status: "delivered" as const, delivered_at: "2026-07-02T09:00:00.000Z", external_delivery: false as const },
+          ack: null,
+          recommended_action: "보안 설정에서 해당 사이트의 세션을 다시 등록하세요.",
+          route: "#security?section=sites&site=site-1",
+          detected_at: "2026-07-02T09:00:00.000Z",
+          due_at: "2026-07-02T09:00:00.000Z",
+        }],
+        next_cursor: null,
+      }),
+    }));
+
+    const sessionAlert = (await screen.findByText("로그인 세션 만료", { selector: "strong" })).closest("li") as HTMLLIElement;
+    expect(within(sessionAlert).getAllByText("로그인 세션 만료").length).toBeGreaterThanOrEqual(2);
+    // 알림 유형 필터에 세션 만료 선택지가 있다.
+    const sourceSelect = screen.getByLabelText("알림 유형") as HTMLSelectElement;
+    expect(Array.from(sourceSelect.options).some((option) => option.value === "session_expiry" && option.text === "로그인 세션 만료")).toBe(true);
+    fireEvent.click(within(sessionAlert).getByRole("button", { name: "세션 다시 등록" }));
+    expect(location.hash).toBe("#security?section=sites&site=site-1");
+  });
+
   test("알림 route 버튼은 백엔드 hash route로 이동한다", async () => {
     renderApp(clientWithOpsData());
 

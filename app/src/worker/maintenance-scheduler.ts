@@ -273,17 +273,16 @@ async function runMaintenancePoll(pool: PgPool, input: MaintenancePollInput): Pr
   if (maintenanceTenantIds.length > 0) {
     await enqueueBatch(pool, input.enqueuer, buildMaintenancePollJobs(maintenanceTenantIds, input.correlationId));
   }
-  // S4a: 무인 운영 알림 자동 발화 — 계산 알림을 라우트에 매칭해 발송 잡을 인큐(멱등). 스위퍼와 같은 테넌트 집합.
-  const opsAlertRoutes = input.opsAlertRoutes ?? [];
-  if (opsAlertRoutes.length > 0) {
-    await runOpsNotificationFire(pool, {
-      tenantIds: maintenanceTenantIds,
-      routes: opsAlertRoutes,
-      enqueuer: input.enqueuer,
-      correlationId: input.correlationId,
-      ...(input.onOpsFireWarn !== undefined ? { onWarn: input.onOpsFireWarn } : {}),
-    });
-  }
+  // S4a/S4b: 무인 운영 알림 자동 발화 — 계산 알림을 라우트에 매칭해 발송 잡을 인큐(멱등). 스위퍼와 같은 테넌트 집합.
+  // env 라우트가 비어도 항상 호출한다: 테넌트 저장형 라우트(ops_alert_notification_routes)는 fireForTenant 안에서
+  // 테넌트별로 읽히므로, env 게이트를 두면 저장형 라우트만 있는 테넌트가 조용히 발화되지 않는다(무발화 함정).
+  await runOpsNotificationFire(pool, {
+    tenantIds: maintenanceTenantIds,
+    routes: input.opsAlertRoutes ?? [],
+    enqueuer: input.enqueuer,
+    correlationId: input.correlationId,
+    ...(input.onOpsFireWarn !== undefined ? { onWarn: input.onOpsFireWarn } : {}),
+  });
   const triggerTenantIds = await resolveRunTriggerTenantIds(pool, input.tenantIds, input.now(), {
     lifecycleBypassPool: input.lifecycleBypassPool,
   });
