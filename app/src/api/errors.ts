@@ -36,6 +36,13 @@ export function registerErrorHandler(app: FastifyInstance): void {
       sendApiError(reply, error.code, request.correlationId, error.details);
       return;
     }
+    if (isMalformedRequestError(error)) {
+      // Fastify 본문 파싱/검증 오류(빈 JSON 본문·잘못된 미디어 타입·스키마 위반)는 클라이언트 요청 결함이다.
+      // 미분류 500 으로 뭉개지 말고(조용한 unknown 금지) 4xx(IR_SCHEMA_INVALID)로 분류한다.
+      request.log.warn({ err: error, correlation_id: request.correlationId }, "malformed control-plane request");
+      sendApiError(reply, "IR_SCHEMA_INVALID", request.correlationId, { reason: "malformed_request" });
+      return;
+    }
     request.log.error({ err: error, correlation_id: request.correlationId }, "unclassified control-plane error");
     sendApiError(reply, "CONTROL_PLANE_INTERNAL_ERROR", request.correlationId);
   });
@@ -61,4 +68,14 @@ function sendApiError(
   }
   // 도달 불가: code는 DEAD_LETTER(상태통지)를 타입에서 배제. 방어적 500.
   reply.code(500).send({ message: "내부 오류가 발생했습니다.", correlation_id: correlationId });
+}
+
+/**
+ * Fastify 요청-형식 오류(본문 파싱/검증)인지 — 빈 JSON 본문(FST_ERR_CTP_EMPTY_JSON_BODY)·잘못된 미디어
+ * 타입·본문 과대·스키마 위반(FST_ERR_VALIDATION)은 클라이언트 요청 결함이므로 5xx 가 아니라 4xx 로 분류한다.
+ */
+function isMalformedRequestError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && (code.startsWith("FST_ERR_CTP_") || code === "FST_ERR_VALIDATION");
 }

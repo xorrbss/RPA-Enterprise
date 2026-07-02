@@ -270,11 +270,11 @@ describe("coe pipeline view", () => {
     const recordAutomationAdoptionEvidence = vi.fn(fakeClient().recordAutomationAdoptionEvidence);
     renderApp(fakeClient({ recordAutomationAdoptionEvidence }));
 
-    expect(await screen.findByRole("heading", { name: "Pilot readiness evidence" })).toBeInTheDocument();
-    expect(screen.getAllByText("Pilot charter").length).toBeGreaterThan(0);
+    expect(await screen.findByRole("heading", { name: "파일럿 준비도 증빙" })).toBeInTheDocument();
+    expect(screen.getAllByText("파일럿 차터").length).toBeGreaterThan(0);
     expect(await screen.findByText("ticket:PILOT-123")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Record evidence" }));
+    fireEvent.click(screen.getByRole("button", { name: "증빙 기록" }));
 
     await waitFor(() => expect(recordAutomationAdoptionEvidence).toHaveBeenCalledWith(
       "61000000-0000-4000-8000-000000000001",
@@ -282,7 +282,7 @@ describe("coe pipeline view", () => {
         evidence_type: "pilot_charter_signoff",
         status: "valid",
         evidence_ref: "ticket:PILOT-123",
-        summary: "Pilot readiness evidence reviewed by the CoE owner.",
+        summary: "CoE 담당자가 검토한 파일럿 준비도 증빙입니다.",
         metadata: { source: "coe_pipeline" },
       }),
       expect.any(String),

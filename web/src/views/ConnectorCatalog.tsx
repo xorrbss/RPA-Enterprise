@@ -40,6 +40,27 @@ const STATUS_LABEL: Record<CatalogStatus, string> = {
   blocked: "차단됨",
 };
 
+const CATEGORY_LABEL: Record<string, string> = {
+  ERP: "ERP",
+  Integration: "연동",
+  Identity: "아이덴티티",
+  Federation: "연합",
+  Office: "오피스 파일",
+  "Document Automation": "문서 자동화",
+  Notification: "알림",
+  Data: "데이터",
+};
+
+function categoryLabel(category: string): string {
+  return CATEGORY_LABEL[category] ?? category;
+}
+
+const ENV_LABEL: Record<string, string> = { dev: "개발", staging: "스테이징", prod: "운영" };
+
+function envLabel(environment: string): string {
+  return ENV_LABEL[environment] ?? environment;
+}
+
 function statusTone(status: CatalogStatus): string {
   if (status === "available") return "green";
   if (status === "candidate" || status === "requires_admin") return "amber";
@@ -160,6 +181,14 @@ const ACTION_LABELS: Record<string, string> = {
   request: "요청",
   verify: "결과 확인",
   webhook: "웹훅 수신",
+  owner_evidence_review: "오너 증빙 검토",
+  handoff_request: "핸드오프 요청",
+  dispatch_attempt: "디스패치 시도",
+  receipt_record: "접수 기록",
+  provider_callback: "제공자 회신",
+  scim_provider_register: "SCIM 제공자 등록",
+  scim_group_role_import: "SCIM 그룹-역할 가져오기",
+  scim_provider_decommission: "SCIM 제공자 폐기",
 };
 
 const RBAC_LABELS: Record<string, string> = {
@@ -191,6 +220,10 @@ function implementationLabel(state: string): string {
   if (state.includes("notification routing")) return "알림 연동 검토";
   if (state.includes("browser-scope decision")) return "브라우저 범위 검토 필요";
   if (state.includes("no approved browser execution surface")) return "브라우저 실행 표면 없음";
+  if (state.includes("owner/provider evidence required")) return "오너/제공자 증빙 필요 (후보)";
+  if (state.includes("SCIM P1 uses")) return "SCIM P1 구현 (인바운드 서명)";
+  if (state.includes("metadata-only integration handoff ledger")) return "메타데이터 전용 핸드오프 원장 (P1)";
+  if (state.includes("Implemented: /v1/ops-alerts")) return "운영 알림 웹훅 발송 구현";
   return IMPLEMENTATION_LABELS[state] ?? state;
 }
 
@@ -559,7 +592,7 @@ export function ConnectorCatalogView(): JSX.Element {
                     <tr key={connector.connector_id} className={connector.connector_id === selectedConnector?.connector_id ? "selected-row" : undefined}>
                       <th scope="row">
                         <span>{connector.name}</span>
-                        <span className="subtle">{KIND_LABEL[connector.kind]} · {connector.category}</span>
+                        <span className="subtle">{KIND_LABEL[connector.kind]} · {categoryLabel(connector.category)}</span>
                       </th>
                       <td>
                         <span className={`badge ${statusTone(connector.status)}`}>{STATUS_LABEL[connector.status]}</span>
@@ -655,9 +688,9 @@ export function ConnectorCatalogView(): JSX.Element {
                         </div>
                         <div className="inline-facts">
                           <span className={`badge ${profileStatusTone(profile.status)}`}>{profileStatusLabel(profile.status)}</span>
-                          <span className="badge muted">{profile.environment}</span>
+                          <span className="badge muted">{envLabel(profile.environment)}</span>
                           <span className="badge blue">보안 연결 {profile.secret_refs.length}개</span>
-                          <span className="badge muted">host {profile.allowed_hosts.length}개</span>
+                          <span className="badge muted">호스트 {profile.allowed_hosts.length}개</span>
                         </div>
                         {profile.latest_certification !== null && (
                           <span className="subtle">
@@ -678,22 +711,22 @@ export function ConnectorCatalogView(): JSX.Element {
                   >
                     <label>
                       <span>프로파일 이름</span>
-                      <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder={`${selectedConnector.name} staging`} />
+                      <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder={`${selectedConnector.name} 스테이징`} />
                     </label>
                     <label>
-                      <span>SecretRef</span>
+                      <span>보안 연결(SecretRef)</span>
                       <textarea value={profileSecretRefs} onChange={(event) => setProfileSecretRefs(event.target.value)} rows={2} placeholder="secret://tenant/connector/name/key" />
                     </label>
                     <label>
-                      <span>허용 host</span>
+                      <span>허용 호스트</span>
                       <textarea value={profileAllowedHosts} onChange={(event) => setProfileAllowedHosts(event.target.value)} rows={2} placeholder="api.vendor.example" />
                     </label>
                     <label>
-                      <span>Owner ref</span>
+                      <span>업무 담당자</span>
                       <input value={profileOwnerRef} onChange={(event) => setProfileOwnerRef(event.target.value)} placeholder="team:business-owner" />
                     </label>
                     <label>
-                      <span>Support ref</span>
+                      <span>지원 담당자</span>
                       <input value={profileSupportOwnerRef} onChange={(event) => setProfileSupportOwnerRef(event.target.value)} placeholder="team:rpa-ops" />
                     </label>
                     <button

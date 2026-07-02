@@ -16,6 +16,7 @@ import {
   type RoiActualEvidence,
   type RoiActualSuggestion,
   type RoiEstimate,
+  type RoiViability,
   type RunTriggerItem,
   type ScenarioItem,
 } from "../api/types";
@@ -60,16 +61,16 @@ const SOURCE_LABEL: Record<AutomationIdeaSource, string> = {
 };
 
 const PROCESS_IMPORT_SOURCE_LABEL: Record<ProcessMiningImportSourceType, string> = {
-  process_mining: "Process mining export",
-  task_mining: "Task mining export",
-  monitoring_export: "Monitoring export",
-  api_import: "API import result",
+  process_mining: "프로세스 마이닝 내보내기",
+  task_mining: "태스크 마이닝 내보내기",
+  monitoring_export: "모니터링 내보내기",
+  api_import: "API 가져오기 결과",
 };
 
 const PROCESS_IMPORT_STATUS_LABEL: Record<ProcessMiningImportStatus, string> = {
-  received: "Received",
-  processed: "Processed",
-  blocked: "Blocked",
+  received: "접수됨",
+  processed: "처리됨",
+  blocked: "차단됨",
 };
 
 const TRIGGER_STATUS_LABEL: Record<RunTriggerItem["status"], string> = {
@@ -79,17 +80,26 @@ const TRIGGER_STATUS_LABEL: Record<RunTriggerItem["status"], string> = {
 };
 
 const ADOPTION_EVIDENCE_TYPE_LABEL: Record<AutomationAdoptionEvidenceType, string> = {
-  pilot_charter_signoff: "Pilot charter",
-  raci_signoff: "RACI signoff",
-  training_completion: "Training complete",
-  support_model_signoff: "Support model",
+  pilot_charter_signoff: "파일럿 차터",
+  raci_signoff: "RACI 승인",
+  training_completion: "교육 완료",
+  support_model_signoff: "지원 체계",
 };
 
 const ADOPTION_EVIDENCE_STATUS_LABEL: Record<AutomationAdoptionEvidenceStatus, string> = {
-  valid: "Valid",
-  failed: "Failed",
-  deferred: "Deferred",
+  valid: "유효",
+  failed: "실패",
+  deferred: "보류",
 };
+
+const ROI_VIABILITY_LABEL: Record<RoiViability, string> = {
+  viable: "타당",
+  not_viable: "부적합",
+};
+
+function viabilityLabel(viability: RoiViability | null): string {
+  return viability === null ? "-" : ROI_VIABILITY_LABEL[viability];
+}
 
 function idempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -227,7 +237,7 @@ function approvalDecision(idea: AutomationIdeaItem | null, roi: RoiEstimate | nu
     items.push("ROI를 저장해야 승인 검토를 시작할 수 있습니다.");
   } else {
     items.push(`회수 기간 ${numberLabel(roi.payback_months, "개월")} · 월 절감액 ${currency(roi.estimated_monthly_value)}`);
-    items.push(`순 월가치 ${currency(roi.monthly_value)} · 판정 ${roi.viability}`);
+    items.push(`순 월가치 ${currency(roi.monthly_value)} · 판정 ${ROI_VIABILITY_LABEL[roi.viability]}`);
     if (roi.viability === "not_viable") items.push("플랫폼 비용이 월 절감액을 초과해 유한한 회수 기간을 산정하지 않습니다.");
     if (roi.payback_months === null) items.push("회수 기간을 산정할 수 없어 CoE 검토가 필요합니다.");
     if (roi.payback_months !== null && roi.payback_months > 12) items.push("회수 기간이 12개월을 넘어 우선순위 재검토가 필요합니다.");
@@ -324,7 +334,7 @@ function currentMonthActualDefaults(): RoiActualFormState {
     human_intervention_minutes: "0",
     reprocessing_minutes: "0",
     evidence_ref: "ticket:ROI-ACTUAL",
-    summary: "Pilot actuals reconciled from run, review, and reprocessing evidence.",
+    summary: "실행·검토·재처리 증빙으로 정합한 파일럿 실제값입니다.",
   };
 }
 
@@ -333,7 +343,7 @@ function adoptionEvidenceDefaults(): AdoptionEvidenceFormState {
     evidence_type: "pilot_charter_signoff",
     status: "valid",
     evidence_ref: "ticket:PILOT-123",
-    summary: "Pilot readiness evidence reviewed by the CoE owner.",
+    summary: "CoE 담당자가 검토한 파일럿 준비도 증빙입니다.",
   };
 }
 
@@ -347,7 +357,7 @@ function processMiningImportDefaults(): ProcessMiningImportFormState {
     lineage_ref: "lineage:pm-import-1",
     row_count: "120",
     candidate_count: "4",
-    import_summary: "Aggregated process mining export from customer-owned monitoring.",
+    import_summary: "고객 소유 모니터링에서 집계한 프로세스 마이닝 내보내기입니다.",
   };
 }
 
@@ -375,22 +385,22 @@ function roiActualValidationMessage(input: RoiActualFormState): string | null {
 }
 
 function adoptionEvidenceValidationMessage(input: AdoptionEvidenceFormState): string | null {
-  if (input.evidence_ref.trim().length === 0) return "Pilot evidence ref is required.";
-  if (input.summary.trim().length === 0) return "Pilot evidence summary is required.";
+  if (input.evidence_ref.trim().length === 0) return "파일럿 증빙 참조가 필요합니다.";
+  if (input.summary.trim().length === 0) return "파일럿 증빙 요약이 필요합니다.";
   return null;
 }
 
 function processImportValidationMessage(input: ProcessMiningImportFormState): string | null {
-  if (input.source_system.trim().length === 0) return "Source system is required.";
-  if (input.source_owner_ref.trim().length === 0) return "Source owner is required.";
-  if (input.schema_version.trim().length === 0) return "Schema version is required.";
-  if (input.import_evidence_ref.trim().length === 0) return "Import evidence ref is required.";
-  if (input.lineage_ref.trim().length === 0) return "Lineage ref is required.";
+  if (input.source_system.trim().length === 0) return "원본 시스템을 입력해야 합니다.";
+  if (input.source_owner_ref.trim().length === 0) return "원본 담당자를 입력해야 합니다.";
+  if (input.schema_version.trim().length === 0) return "스키마 버전을 입력해야 합니다.";
+  if (input.import_evidence_ref.trim().length === 0) return "가져오기 증빙 참조가 필요합니다.";
+  if (input.lineage_ref.trim().length === 0) return "계보 참조가 필요합니다.";
   const rowCount = Number(input.row_count);
-  if (!Number.isInteger(rowCount) || rowCount < 1) return "Row count must be at least 1.";
+  if (!Number.isInteger(rowCount) || rowCount < 1) return "행 수는 1 이상이어야 합니다.";
   const candidateCount = Number(input.candidate_count);
-  if (!Number.isInteger(candidateCount) || candidateCount < 0 || candidateCount > rowCount) return "Candidate count must be 0 through row count.";
-  if (input.import_summary.trim().length === 0) return "Import summary is required.";
+  if (!Number.isInteger(candidateCount) || candidateCount < 0 || candidateCount > rowCount) return "후보 수는 0에서 행 수 사이여야 합니다.";
+  if (input.import_summary.trim().length === 0) return "가져오기 요약이 필요합니다.";
   return null;
 }
 
@@ -917,10 +927,10 @@ export function CoePipelineView(): JSX.Element {
           {requiresImportLineage && (
             <>
               <label className="field">
-                <span>Source import</span>
+                <span>가져오기 원본</span>
                 <select value={selectedSourceImport?.import_id ?? ""} onChange={(event) => setSelectedImportId(event.target.value)}>
                   {eligibleImports.length === 0 ? (
-                    <option value="">No usable import</option>
+                    <option value="">사용 가능한 가져오기 없음</option>
                   ) : (
                     eligibleImports.map((item) => (
                       <option key={item.import_id} value={item.import_id}>
@@ -931,7 +941,7 @@ export function CoePipelineView(): JSX.Element {
                 </select>
               </label>
               <label className="field">
-                <span>Source item ref</span>
+                <span>원본 항목 참조</span>
                 <input value={sourceItemRef} onChange={(event) => setSourceItemRef(event.target.value)} />
               </label>
             </>
@@ -955,21 +965,21 @@ export function CoePipelineView(): JSX.Element {
           <button className="btn primary" type="button" onClick={() => createIdea.mutate()} disabled={!canCreateIdea}>
             {createIdea.isPending ? "등록 중" : "후보 등록"}
           </button>
-          {requiresImportLineage && selectedSourceImport === null && <span className="badge amber">Import lineage required</span>}
+          {requiresImportLineage && selectedSourceImport === null && <span className="badge amber">가져오기 계보 필요</span>}
           <button className="btn" type="button" onClick={() => navigate("scenarioStudio")}>자동화 설계안 만들기</button>
           <button className="btn" type="button" onClick={() => navigate("automationOps")}>운영 예약 만들기</button>
           {createIdea.isError && <span className="badge red">등록 실패</span>}
         </div>
       </section>
 
-      <section className="panel coe-imports" aria-label="Process and task mining imports">
+      <section className="panel coe-imports" aria-label="프로세스·태스크 마이닝 가져오기">
         <div className="panel-head">
-          <h2>Import lineage</h2>
-          <span className="badge blue">{processImportItems.length} sources</span>
+          <h2>가져오기 계보</h2>
+          <span className="badge blue">출처 {processImportItems.length}개</span>
         </div>
         <div className="form-grid coe-form">
           <label className="field">
-            <span>Import type</span>
+            <span>가져오기 유형</span>
             <select
               value={processImportInput.source_type}
               onChange={(event) =>
@@ -981,35 +991,35 @@ export function CoePipelineView(): JSX.Element {
             </select>
           </label>
           <label className="field">
-            <span>Source system</span>
+            <span>원본 시스템</span>
             <input value={processImportInput.source_system} onChange={(event) => setProcessImportInput({ ...processImportInput, source_system: event.target.value })} />
           </label>
           <label className="field">
-            <span>Source owner</span>
+            <span>원본 담당자</span>
             <input value={processImportInput.source_owner_ref} onChange={(event) => setProcessImportInput({ ...processImportInput, source_owner_ref: event.target.value })} />
           </label>
           <label className="field">
-            <span>Schema version</span>
+            <span>스키마 버전</span>
             <input value={processImportInput.schema_version} onChange={(event) => setProcessImportInput({ ...processImportInput, schema_version: event.target.value })} />
           </label>
           <label className="field">
-            <span>Evidence ref</span>
+            <span>증빙 참조</span>
             <input value={processImportInput.import_evidence_ref} onChange={(event) => setProcessImportInput({ ...processImportInput, import_evidence_ref: event.target.value })} />
           </label>
           <label className="field">
-            <span>Lineage ref</span>
+            <span>계보 참조</span>
             <input value={processImportInput.lineage_ref} onChange={(event) => setProcessImportInput({ ...processImportInput, lineage_ref: event.target.value })} />
           </label>
           <label className="field">
-            <span>Rows</span>
+            <span>행 수</span>
             <input type="number" min={1} value={processImportInput.row_count} onChange={(event) => setProcessImportInput({ ...processImportInput, row_count: event.target.value })} />
           </label>
           <label className="field">
-            <span>Candidates</span>
+            <span>후보 수</span>
             <input type="number" min={0} value={processImportInput.candidate_count} onChange={(event) => setProcessImportInput({ ...processImportInput, candidate_count: event.target.value })} />
           </label>
           <label className="field coe-description">
-            <span>Summary</span>
+            <span>요약</span>
             <textarea value={processImportInput.import_summary} onChange={(event) => setProcessImportInput({ ...processImportInput, import_summary: event.target.value })} rows={2} />
           </label>
         </div>
@@ -1020,17 +1030,17 @@ export function CoePipelineView(): JSX.Element {
             onClick={() => importInvalidReason === null && createProcessImport.mutate()}
             disabled={!canManageIdeas || importInvalidReason !== null || createProcessImport.isPending}
           >
-            {createProcessImport.isPending ? "Registering" : "Register import"}
+            {createProcessImport.isPending ? "등록 중" : "가져오기 등록"}
           </button>
           {importInvalidReason !== null && <span className="badge red" role="alert">{importInvalidReason}</span>}
-          {createProcessImport.isError && <span className="badge red">Import rejected</span>}
+          {createProcessImport.isError && <span className="badge red">가져오기 거부됨</span>}
         </div>
         {processImports.isError ? (
-          <ErrorState message="Import lineage could not be loaded." onRetry={() => void processImports.refetch()} />
+          <ErrorState message="가져오기 계보를 불러오지 못했습니다." onRetry={() => void processImports.refetch()} />
         ) : (
-          <div className="coe-priority-list" aria-label="Import lineage list">
+          <div className="coe-priority-list" aria-label="가져오기 계보 목록">
             {processImportItems.length === 0 ? (
-              <p className="subtle">No import lineage registered.</p>
+              <p className="subtle">등록된 가져오기 계보가 없습니다.</p>
             ) : (
               processImportItems.slice(0, 4).map((item) => (
                 <button
@@ -1180,7 +1190,7 @@ export function CoePipelineView(): JSX.Element {
                 <div className="inline-facts">
                   <span className="badge blue">{PRIORITY_LABEL[selected.priority]}</span>
                   <span className="badge muted">{SOURCE_LABEL[selected.source]}</span>
-                  {selected.source_import_id !== null && <span className="badge green">Import lineage</span>}
+                  {selected.source_import_id !== null && <span className="badge green">가져오기 계보</span>}
                   {selected.source_item_ref !== null && <span className="badge muted">{selected.source_item_ref}</span>}
                   <span className="badge muted">우선순위 점수 {selected.score}</span>
                   <span className="badge muted">{selected.department}</span>
@@ -1278,16 +1288,16 @@ export function CoePipelineView(): JSX.Element {
                 </button>
                 {updateLinks.isError && <span className="badge red">연결 실패</span>}
               </div>
-              <div className="panel-subsection" aria-label="Pilot readiness evidence">
+              <div className="panel-subsection" aria-label="파일럿 준비도 증빙">
                 <div className="panel-head compact">
-                  <h3>Pilot readiness evidence</h3>
+                  <h3>파일럿 준비도 증빙</h3>
                   <span className={`badge ${validAdoptionEvidenceCount === ADOPTION_EVIDENCE_TYPES.length ? "green" : "amber"}`}>
-                    {validAdoptionEvidenceCount}/{ADOPTION_EVIDENCE_TYPES.length} valid
+                    유효 {validAdoptionEvidenceCount}/{ADOPTION_EVIDENCE_TYPES.length}
                   </span>
                 </div>
                 <div className="form-grid coe-roi-grid">
                   <label className="field">
-                    <span>Evidence type</span>
+                    <span>증빙 유형</span>
                     <select
                       value={adoptionEvidenceInput.evidence_type}
                       onChange={(event) =>
@@ -1302,7 +1312,7 @@ export function CoePipelineView(): JSX.Element {
                     </select>
                   </label>
                   <label className="field">
-                    <span>Status</span>
+                    <span>상태</span>
                     <select
                       value={adoptionEvidenceInput.status}
                       onChange={(event) =>
@@ -1311,13 +1321,13 @@ export function CoePipelineView(): JSX.Element {
                           status: event.target.value as AutomationAdoptionEvidenceStatus,
                         })}
                     >
-                      <option value="valid">Valid</option>
-                      <option value="failed">Failed</option>
-                      <option value="deferred">Deferred</option>
+                      <option value="valid">유효</option>
+                      <option value="failed">실패</option>
+                      <option value="deferred">보류</option>
                     </select>
                   </label>
                   <label className="field">
-                    <span>Evidence ref</span>
+                    <span>증빙 참조</span>
                     <input
                       value={adoptionEvidenceInput.evidence_ref}
                       onChange={(event) => setAdoptionEvidenceInput({ ...adoptionEvidenceInput, evidence_ref: event.target.value })}
@@ -1325,31 +1335,31 @@ export function CoePipelineView(): JSX.Element {
                     />
                   </label>
                   <label className="field wide">
-                    <span>Summary</span>
+                    <span>요약</span>
                     <input
                       value={adoptionEvidenceInput.summary}
                       onChange={(event) => setAdoptionEvidenceInput({ ...adoptionEvidenceInput, summary: event.target.value })}
-                      placeholder="Owner signoff recorded."
+                      placeholder="담당자 승인 기록됨."
                     />
                   </label>
                 </div>
                 <div className="coe-roi-summary">
-                  <span><strong>{adoptionEvidenceItems.length}</strong><small>records</small></span>
-                  <span><strong>{validAdoptionEvidenceCount}</strong><small>valid types</small></span>
+                  <span><strong>{adoptionEvidenceItems.length}</strong><small>기록</small></span>
+                  <span><strong>{validAdoptionEvidenceCount}</strong><small>유효 유형</small></span>
                   <button
                     className="btn"
                     type="button"
                     onClick={() => selected !== null && adoptionEvidenceInvalidReason === null && saveAdoptionEvidence.mutate(selected)}
                     disabled={!canSaveAdoptionEvidence}
                   >
-                    {saveAdoptionEvidence.isPending ? "Saving" : "Record evidence"}
+                    {saveAdoptionEvidence.isPending ? "저장 중" : "증빙 기록"}
                   </button>
                   {adoptionEvidenceInvalidReason !== null && <span className="badge red coe-roi-alert" role="alert">{adoptionEvidenceInvalidReason}</span>}
-                  {saveAdoptionEvidence.isError && <span className="badge red">Evidence save failed</span>}
+                  {saveAdoptionEvidence.isError && <span className="badge red">증빙 저장 실패</span>}
                 </div>
-                {adoptionEvidence.isError && <p className="form-alert red" role="alert">Pilot evidence could not be loaded.</p>}
+                {adoptionEvidence.isError && <p className="form-alert red" role="alert">파일럿 증빙을 불러오지 못했습니다.</p>}
                 {adoptionEvidenceItems.length > 0 && (
-                  <div className="mini-table" aria-label="Pilot readiness evidence list">
+                  <div className="mini-table" aria-label="파일럿 준비도 증빙 목록">
                     {adoptionEvidenceItems.map((item) => (
                       <div className="mini-table-row" key={item.evidence_id}>
                         <span>{ADOPTION_EVIDENCE_TYPE_LABEL[item.evidence_type]}</span>
@@ -1417,7 +1427,7 @@ export function CoePipelineView(): JSX.Element {
           <span><strong>{currency(preview.avoided_license_cost)}</strong><small>회피 비용</small></span>
           <span><strong>{currency(preview.monthly_value)}</strong><small>순 월가치</small></span>
           <span><strong>{numberLabel(preview.payback_months, "개월")}</strong><small>회수 기간</small></span>
-          <span><strong>{preview.viability ?? "-"}</strong><small>ROI 판정</small></span>
+          <span><strong>{viabilityLabel(preview.viability)}</strong><small>ROI 판정</small></span>
           <button className="btn primary" type="button" onClick={() => selected !== null && roiInvalidReason === null && saveRoi.mutate(selected)} disabled={!canSaveRoi}>
             {saveRoi.isPending ? "저장 중" : "ROI 저장"}
           </button>
