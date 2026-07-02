@@ -1593,6 +1593,27 @@ CREATE TABLE approval_decisions (
 CREATE INDEX idx_approval_decisions_source ON approval_decisions (tenant_id, source_run_id, created_at DESC);
 
 -- ============================================================
+-- 7c. approval_row_claims  (결재 fan-out 원장 — Phase 1)
+--    수집 run(source_run_id)이 인박스에 노출한 각 문서(doc_ref)를 검토 run(@human_task) 으로 fan-out 할 때,
+--    행 단위로 1건만 스폰되도록 예약(claim)한다. UNIQUE(tenant, source_run, doc_ref) → 재-fanout/스위퍼 재실행 시
+--    동일 문서 중복 스폰 차단(멱등). approval_decisions 와 동형 구조(runs 복합 FK) — spawned_run_id 는 nullable:
+--    claim 을 먼저 INSERT(행 예약)한 뒤 createRunInTx 로 검토 run 을 스폰하고 UPDATE 로 채운다(경합-안전 예약-후-스폰).
+--    mode 는 향후 처리모드 공유원장 확장(decide) 대비 컬럼(현재 'review' 만).
+-- ============================================================
+
+CREATE TABLE approval_row_claims (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  source_run_id   uuid        NOT NULL REFERENCES runs(id),   -- 결재 목록을 수집해 인박스에 노출한 run(fan-out 출처)
+  doc_ref         text        NOT NULL,                       -- 결재 문서 참조(approval origin 절대 URL)
+  mode            text        NOT NULL DEFAULT 'review' CHECK (mode IN ('review')),  -- 처리모드(현재 검토 run 만)
+  spawned_run_id  uuid        REFERENCES runs(id),            -- 스폰한 검토(review) run — 예약 후 UPDATE 로 채움(nullable)
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, source_run_id, doc_ref)                  -- 행 단위 1스폰 보장(중복 fan-out 차단)
+);
+CREATE INDEX idx_approval_row_claims_source ON approval_row_claims (tenant_id, source_run_id, created_at DESC);
+
+-- ============================================================
 -- 8. events_outbox
 --    event-envelope.schema.json 봉투를 컬럼화. 상태 변경과 **동일 트랜잭션** INSERT(README §결정2).
 --    idempotency_key UNIQUE(소비자 중복 무시). published_at NULL = 미발행(outbox relay 대상).
@@ -2298,6 +2319,14 @@ ALTER TABLE approval_decisions
   ADD CONSTRAINT fk_approval_decisions_spawned_run_tenant
   FOREIGN KEY (tenant_id, spawned_run_id) REFERENCES runs(tenant_id, id);
 
+-- approval_row_claims 복합 테넌트 FK(approval_decisions 동형) — tenant_id 가 참조 run 의 tenant 와 일치하도록 DB 강제.
+--   spawned_run_id 는 nullable(예약 INSERT 직후 NULL → createRunInTx 후 UPDATE; NULL 행은 FK 미검사).
+ALTER TABLE approval_row_claims
+  ADD CONSTRAINT fk_approval_row_claims_source_run_tenant
+  FOREIGN KEY (tenant_id, source_run_id) REFERENCES runs(tenant_id, id),
+  ADD CONSTRAINT fk_approval_row_claims_spawned_run_tenant
+  FOREIGN KEY (tenant_id, spawned_run_id) REFERENCES runs(tenant_id, id);
+
 ALTER TABLE events_outbox
   ADD CONSTRAINT fk_events_outbox_run_tenant
   FOREIGN KEY (tenant_id, run_id) REFERENCES runs(tenant_id, id),
@@ -2403,6 +2432,7 @@ BEGIN
     'connector_profiles',
     'connector_certifications',
     'approval_decisions',
+    'approval_row_claims',
     'browser_identities',
     'network_policies',
     'gateway_policies',
