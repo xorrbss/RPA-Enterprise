@@ -121,7 +121,7 @@ export function MyWorkView(): JSX.Element {
                     <tr key={s.scenario_id}>
                       <td>{s.name}</td>
                       <td><RunScenarioButton scenario={s} /></td>
-                      <td><button className="linklike" type="button" onClick={() => navigate("runTrace")}>실행 기록 보기 →</button></td>
+                      <td><button className="linklike" type="button" onClick={() => navigate("runTrace", { scenario: s.scenario_id })}>실행 기록 보기 →</button></td>
                     </tr>
                   ))}
                 </tbody>

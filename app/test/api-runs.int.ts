@@ -212,6 +212,9 @@ async function main(): Promise<void> {
       check("own run body.worker_id null", runBody.worker_id === null, JSON.stringify(runBody));
       check("own run body.current_node null", runBody.current_node === null, JSON.stringify(runBody));
       check("own run body.failure_reason null", runBody.failure_reason === null, JSON.stringify(runBody));
+      // 실행 식별성(S1): scenarios JOIN 이름 투영 + 원본 params 투영(직시드 run 은 params 없음 → null 정직).
+      check("own run body.scenario_name (scenarios JOIN)", runBody.scenario_name === "d41", JSON.stringify(runBody));
+      check("own run body.params null (params 미시드 run)", runBody.params === null, JSON.stringify(runBody));
       check("own run body.as_of round-trips", typeof runBody.as_of === "string" && new Date(runBody.as_of).toISOString() === "2026-06-14T00:00:00.000Z", JSON.stringify(runBody));
 
       // 3a) failed_* run은 비민감 failure_reason을 상세 응답에 노출한다(C-FR3 운영 가시성).
@@ -361,6 +364,18 @@ async function main(): Promise<void> {
       check("enqueue called once", enqueued.length === 1, `enqueued=${enqueued.length}`);
       check("enqueue correlation_id matches request", enqueued[0]?.correlationId === createCorrelationId, JSON.stringify(enqueued[0]));
       const firstRunId = createdBody.run_id;
+
+      // 6c-1) 상세의 params round-trip — '수정 입력 재실행' 프리필의 원천(S1).
+      const createdDetail = await app.inject({
+        method: "GET",
+        url: `/v1/runs/${firstRunId}`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      });
+      check(
+        "created run detail params round-trip",
+        createdDetail.statusCode === 200 && createdDetail.json().params?.as_of === "2026-06-14T09:00:00Z",
+        createdDetail.body,
+      );
 
       // 6d) 동일 키+본문 재요청 → 멱등 재생(같은 응답, 새 run/enqueue 없음).
       const replay = await app.inject({

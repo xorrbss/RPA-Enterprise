@@ -18,28 +18,48 @@ export { runDetailRefetchInterval } from "./runtrace/constants";
 
 export function RunTraceView(): JSX.Element {
   const api = useApiClient();
-  // 딥링크 `#runTrace?status=<RunState>`(예: 대시보드 '실행 중' 카드)로 진입 시 상태 필터를 시드 → 카운트와 목록 모집단 일치.
+  // 딥링크 시드 — `#runTrace?status=<RunState>`(대시보드 카드)·`#runTrace?scenario=<id>`(MyWork '실행 기록 보기')로
+  // 진입 시 필터를 시드 → 진입점의 모집단과 목록이 일치.
   const statusParam = useHashParam("status");
+  const scenarioParam = useHashIdParam("scenario");
   const statusFilter =
     statusParam !== null &&
     (RUN_STATES as readonly string[]).includes(statusParam)
       ? statusParam
       : undefined;
-  const initialFilter =
-    statusFilter !== undefined ? { status: statusFilter } : undefined;
+  const scenarioFilter = scenarioParam ?? undefined;
+  const initialFilter = buildRunFilter(statusFilter, scenarioFilter);
   const lv = useListView<RunItem>(["runs"], (p) => api.listRuns(p), {
     refetchInterval: POLL_MS,
     initialFilter,
   });
+  // 자동화 필터 옵션 — 이름으로 고르게 한다(식별성). 첫 페이지(50)만: 그 밖의 자동화는 딥링크로 여전히 필터 가능.
+  const scenariosForFilter = useQuery({
+    queryKey: ["scenarios-for-run-filter"],
+    queryFn: () => api.listScenarios({ limit: 50 }),
+  });
+  const scenarioNameById = new Map(
+    (scenariosForFilter.data?.items ?? []).map((s) => [s.scenario_id, s.name]),
+  );
+  const scenarioOptions = [...scenarioNameById.keys()];
+  if (scenarioFilter !== undefined && !scenarioNameById.has(scenarioFilter)) {
+    scenarioOptions.push(scenarioFilter);
+  }
   const currentStatusFilter =
     typeof lv.filter.status === "string" ? lv.filter.status : undefined;
+  const currentScenarioFilter =
+    typeof lv.filter.scenario_id === "string" ? lv.filter.scenario_id : undefined;
   useEffect(() => {
-    if (statusFilter === currentStatusFilter) return;
-    lv.setFilter(statusFilter === undefined ? {} : { status: statusFilter });
-  }, [currentStatusFilter, statusFilter]);
+    if (statusFilter === currentStatusFilter && scenarioFilter === currentScenarioFilter) return;
+    lv.setFilter(buildRunFilter(statusFilter, scenarioFilter) ?? {});
+  }, [currentStatusFilter, statusFilter, currentScenarioFilter, scenarioFilter]);
   const changeStatusFilter = (value: string | undefined): void => {
-    lv.setFilter(value === undefined ? {} : { status: value });
+    lv.setFilter(buildRunFilter(value, currentScenarioFilter) ?? {});
     mergeParams({ status: value ?? null });
+  };
+  const changeScenarioFilter = (value: string | undefined): void => {
+    lv.setFilter(buildRunFilter(currentStatusFilter, value) ?? {});
+    mergeParams({ scenario: value ?? null });
   };
   // 선택 run을 해시(`#runTrace?run=<id>`)에 보존 → 딥링크·뒤로가기로 드릴다운 복원(useState 휘발 대체).
   const sel = useHashIdParam("run");
@@ -93,22 +113,37 @@ export function RunTraceView(): JSX.Element {
         query={lv.query}
         pager={lv.pager}
         actions={
-          <FilterSelect
-            label="상태"
-            value={lv.filter.status}
-            options={RUN_STATES}
-            labelFor={statusLabel}
-            onChange={changeStatusFilter}
-          />
+          <>
+            <FilterSelect
+              label="자동화"
+              value={currentScenarioFilter}
+              options={scenarioOptions}
+              labelFor={(id) => scenarioNameById.get(id) ?? id.slice(0, 8)}
+              onChange={changeScenarioFilter}
+            />
+            <FilterSelect
+              label="상태"
+              value={lv.filter.status}
+              options={RUN_STATES}
+              labelFor={statusLabel}
+              onChange={changeStatusFilter}
+            />
+          </>
         }
         rowKey={(r) => r.run_id}
         emptyMessage="조건에 맞는 실행 기록이 없습니다."
         columns={[
           {
-            header: "실행 추적",
+            // 식별은 업무 언어(자동화 이름)로 — 원시 추적 번호는 운영자 표면에 노출하지 않는 기존 정책 유지
+            // (툴팁·상세 분석에서만). 같은 자동화의 실행끼리는 기준 시각 열로 구분한다.
+            header: "자동화",
             render: (r) => (
-              <span className="subtle" title={`실행 추적 번호: ${r.run_id}`}>
-                추적 번호 확인 가능
+              <span title={`실행 추적 번호: ${r.run_id}`}>
+                {r.scenario_name !== undefined ? (
+                  <strong>{r.scenario_name}</strong>
+                ) : (
+                  <span className="subtle">자동화 확인 필요</span>
+                )}
               </span>
             ),
           },
@@ -273,6 +308,16 @@ function RunPriorityControl(props: { readonly run: RunItem }): JSX.Element {
       />
     </span>
   );
+}
+
+function buildRunFilter(
+  status: string | undefined,
+  scenarioId: string | undefined,
+): Record<string, string> | undefined {
+  const filter: Record<string, string> = {};
+  if (status !== undefined) filter.status = status;
+  if (scenarioId !== undefined) filter.scenario_id = scenarioId;
+  return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
 function priorityLabel(priority: RunPriority): string {

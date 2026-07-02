@@ -10,6 +10,7 @@
 import { resolve } from "node:path";
 
 import { DEFAULT_JWT_CLAIM_MAPPING, type JwtClaimMapping, type JwtRoleMap } from "../api/auth";
+import { parseOpsAlertRoutes, type OpsAlertRoute } from "../api/ops-alert-routes";
 import {
   assertHttpsUrl,
   bool,
@@ -401,6 +402,8 @@ export interface WorkerConfig {
   readonly maintenanceTenantIds: readonly string[];
   /** Dedicated non-superuser BYPASSRLS pool used only for cross-tenant maintenance/lifecycle discovery. */
   readonly maintenanceLifecycleDatabaseUrl?: string;
+  /** S4a: env-sourced ops-alert auto-fire routing rules (OPS_ALERT_ROUTES). Empty = no automatic notifications. */
+  readonly opsAlertRoutes: readonly OpsAlertRoute[];
   readonly sinkDeliveryMaxAttempts: number;
   readonly sinkDeliveryRetryAfterMs: number;
   readonly sinkDelivery?: SinkDeliveryEgressConfig;
@@ -448,6 +451,7 @@ export function loadWorkerConfig(common: CommonConfig): WorkerConfig {
       .filter((key) => key.length > 0),
     maintenanceTenantIds,
     ...(maintenanceLifecycleDatabaseUrl !== undefined ? { maintenanceLifecycleDatabaseUrl } : {}),
+    opsAlertRoutes: parseOpsAlertRoutes(opt("OPS_ALERT_ROUTES")),
     sinkDeliveryMaxAttempts: positiveInt("SINK_DELIVERY_MAX_ATTEMPTS", 3),
     sinkDeliveryRetryAfterMs: positiveInt("SINK_DELIVERY_RETRY_AFTER_MS", 5_000),
     ...(sinkDelivery !== undefined ? { sinkDelivery } : {}),

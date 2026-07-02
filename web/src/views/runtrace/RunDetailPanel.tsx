@@ -11,6 +11,7 @@ import { StatusBadge, errorCodeLabel, errorLabel } from "../../components/badges
 import { ErrorState, Loading } from "../../components/states";
 import type { PromoteFromRunResult, RunDetail, ScenarioGenerationResult } from "../../api/types";
 import { HUMAN_TASK_TERMINAL, SUSPENDED, arrivalTone } from "./constants";
+import { RerunControls } from "./RerunControls";
 import { RunArtifactsList } from "./RunArtifactsList";
 
 // 실행 상세 — getRun(RLS 스코프) + run_steps 단계 트레이스(GET /v1/runs/{id}/steps, api-surface §1).
@@ -93,6 +94,7 @@ export function RunDetailPanel({
             attempts={detail.data.attempts}
             reason={detail.data.failure_reason ?? null}
           />
+          <RerunControls detail={detail.data} />
           <SessionHintBanner runId={runId} status={detail.data.status} />
           <GenerationRunContext runId={runId} generation={generation} />
           <PromoteFromRunPanel
@@ -110,6 +112,10 @@ export function RunDetailPanel({
               margin: 0,
             }}
           >
+            <dt className="subtle">자동화</dt>
+            <dd style={{ margin: 0 }}>
+              {detail.data.scenario_name ?? "—"}
+            </dd>
             <dt className="subtle">상태</dt>
             <dd style={{ margin: 0 }}>
               <StatusBadge status={detail.data.status} />

@@ -628,13 +628,13 @@ function collectActionItems(args: {
 }): ActionItem[] {
   const out: ActionItem[] = [];
   for (const r of args.failedSys.slice(0, 2)) {
-    out.push({ key: `fs-${r.run_id}`, tone: "red", title: "시스템 실패 실행", meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_system" } });
+    out.push({ key: `fs-${r.run_id}`, tone: "red", title: withRunIdentity("시스템 실패 실행", r), meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_system" } });
   }
   for (const r of args.failedBiz.slice(0, 2)) {
-    out.push({ key: `fb-${r.run_id}`, tone: "red", title: "업무 실패 실행", meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
+    out.push({ key: `fb-${r.run_id}`, tone: "red", title: withRunIdentity("업무 실패 실행", r), meta: failedRunMeta(r), traceTitle: failedRunTraceTitle(r), view: "runTrace", params: { run: r.run_id, status: "failed_business" } });
   }
   for (const h of [...args.human].sort(bySoonestTimeout).slice(0, 3)) {
-    out.push({ key: `h-${h.human_task_id}`, tone: h.timeout !== null ? "amber" : "blue", title: "사람 확인 대기", meta: humanTaskMeta(h), traceTitle: `사람 확인 추적 번호: ${h.human_task_id}`, view: "humanTasks", params: { ht: h.human_task_id } });
+    out.push({ key: `h-${h.human_task_id}`, tone: h.timeout !== null ? "amber" : "blue", title: `사람 확인 대기 · 접수번호 #${h.human_task_id.slice(0, 8)}`, meta: humanTaskMeta(h), traceTitle: `사람 확인 추적 번호: ${h.human_task_id}`, view: "humanTasks", params: { ht: h.human_task_id } });
   }
   for (const d of args.wiDlq.slice(0, 2)) {
     out.push({ key: `wd-${d.dead_letter_id}`, tone: "red", title: "작업 항목 재처리 대기", meta: workitemRetryMeta(d), traceTitle: workitemTraceTitle(d), view: "workitems" });
@@ -647,9 +647,14 @@ function collectActionItems(args: {
   }
   for (const r of args.running.slice(0, 1)) {
     const freshness = runningFreshness(r);
-    out.push({ key: `run-${r.run_id}`, tone: freshness.tone, title: "실행 중 상태 점검", meta: freshness.meta, traceTitle: `실행 추적 번호: ${r.run_id}`, view: "runTrace", params: { run: r.run_id, status: "running" } });
+    out.push({ key: `run-${r.run_id}`, tone: freshness.tone, title: withRunIdentity("실행 중 상태 점검", r), meta: freshness.meta, traceTitle: `실행 추적 번호: ${r.run_id}`, view: "runTrace", params: { run: r.run_id, status: "running" } });
   }
   return out.slice(0, 5);
+}
+
+// Top5 행 식별 — 어떤 자동화의 실행인지 제목에 병기(없으면 원제 유지 — 이름 날조 금지).
+function withRunIdentity(base: string, r: RunItem): string {
+  return r.scenario_name !== undefined ? `${base} · ${r.scenario_name}` : base;
 }
 
 function ActionQueue({ items }: { items: readonly ActionItem[] }): JSX.Element {
@@ -1398,7 +1403,8 @@ function AutomationPerformancePanel({
 }
 
 function downloadCsv(csv: string, filename: string): void {
-  downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), filename);
+  // BOM 없으면 Windows Excel 이 CP949 로 열어 한글이 깨진다. 서버 export 가 이미 붙였으면 중복 방지.
+  downloadBlob(new Blob([csv.startsWith("\uFEFF") ? csv : "\uFEFF" + csv], { type: "text/csv;charset=utf-8" }), filename);
 }
 
 function downloadMarkdown(markdown: string, filename: string): void {
@@ -1587,7 +1593,8 @@ export function DashboardView(): JSX.Element {
         emptyMessage="아직 실행이 없습니다."
         columns={[
           {
-            header: "실행 추적 번호",
+            // 식별은 업무 언어(자동화 이름)로 — 원시 추적 번호 미노출 정책 유지(툴팁·상세 분석에서만).
+            header: "자동화",
             render: (r) => (
               <button
                 type="button"
@@ -1596,7 +1603,7 @@ export function DashboardView(): JSX.Element {
                 title={`실행 추적 번호: ${r.run_id}`}
                 onClick={() => navigate("runTrace", { run: r.run_id })}
               >
-                상세 보기
+                {r.scenario_name ?? "상세 보기"}
               </button>
             ),
           },

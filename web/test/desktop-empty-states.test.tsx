@@ -19,13 +19,13 @@ describe("desktop-empty-states", () => {
     expect(desktopStateForError(new ApiError(500, "INTERNAL_ERROR", { code: "INTERNAL_ERROR", message: "boom" })).title).toBe("운영 실패");
   });
 
-  test("raw technical codes stay in the admin/support details disclosure", () => {
+  test("raw technical codes stay in the support details disclosure", () => {
     const classified = desktopStateForError(new ApiError(404, "HTTP_404", { code: "HTTP_404", message: "missing route" }));
     render(<ErrorState title={classified.title} message={classified.message} details={classified.details} />);
 
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent("API 연결 필요");
-    expect(alert).toHaveTextContent("admin/support details");
+    expect(alert).toHaveTextContent("담당자 전달용 기술 정보");
     expect(within(alert).getByText(/HTTP_404/)).toBeInTheDocument();
   });
 });

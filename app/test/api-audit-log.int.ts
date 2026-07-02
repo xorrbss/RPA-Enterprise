@@ -206,6 +206,7 @@ async function main(): Promise<void> {
         headers: { authorization: `Bearer ${viewer}` },
       });
       check("audit export -> 200 csv", exported.statusCode === 200 && String(exported.headers["content-type"] ?? "").includes("text/csv"), exported.body);
+      check("audit export starts with UTF-8 BOM (Excel 한글 보존)", exported.body.startsWith(String.fromCharCode(0xfeff)), JSON.stringify(exported.body.slice(0, 12)));
       check("audit export includes bounded summary fields", exported.body.includes("audit_id") && exported.body.includes(AUDIT_A_NEW) && exported.body.includes("artifact.read"), exported.body);
       check("audit export omits payload and other tenants", !exported.body.includes("must-not-leak") && !exported.body.includes(AUDIT_B), exported.body);
       check("audit export content-disposition filename", String(exported.headers["content-disposition"] ?? "").includes("audit-log-"), JSON.stringify(exported.headers));

@@ -1,3 +1,5 @@
+// 비보안 컨텍스트(사내망 HTTP)용 crypto.randomUUID 폴백 — 다른 모듈이 평가되기 전에 설치돼야 한다.
+import "./crypto-polyfill";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
