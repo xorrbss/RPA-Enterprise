@@ -9,6 +9,7 @@ import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, statusLabel, errorCodeLabel } from "../components/badges";
 import { ErrorState, Loading, desktopStateForError } from "../components/states";
 import { mergeParams, navigate, useHashIdParam } from "../router";
+import { formatDateTime } from "../util/time";
 import { WORKITEM_STATES } from "./filters";
 import type { DeadLetterItem, WorkitemItem } from "../api/types";
 
@@ -103,7 +104,7 @@ export function WorkitemsView(): JSX.Element {
           { header: "원본 작업", render: (r) => (r.source_id ? <span title={trackingTitle(r.source_id)}>원본 작업 연결됨</span> : "—") },
           // reason_code는 운영자 라벨 우선 표시, 원문 코드는 title로 보존한다. 부재 시 "—"(조용한 공백 금지).
           { header: "사유", render: (r) => <span title={r.reason_code ?? undefined}>{dlqReasonLabel(r.reason_code)}</span> },
-          { header: "발생", render: (r) => (r.created_at ? new Date(r.created_at).toLocaleString() : "—") },
+          { header: "발생", render: (r) => (r.created_at ? formatDateTime(r.created_at) : "—") },
           {
             header: "작업",
             render: (r) => (

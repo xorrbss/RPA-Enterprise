@@ -1,4 +1,5 @@
 import { errorCodeLabel } from "../badges";
+import { formatDateTime } from "../../util/time";
 import type {
   ApiErrorBody,
   ScenarioGenerationEvidence,
@@ -312,5 +313,5 @@ export function formatGenerationTime(value: string | undefined): string {
   if (value === undefined) return "-";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "-";
-  return date.toLocaleString();
+  return formatDateTime(value);
 }

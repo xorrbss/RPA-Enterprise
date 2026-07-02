@@ -2812,6 +2812,20 @@ paths:
           schema:
             type: string
             enum: ["true", "false"]
+        - name: terminal
+          in: query
+          required: false
+          description: false이면 state NOT IN ('resolved','expired','cancelled')인 active human task만 조회한다. terminal=true는 v1에서 IR_SCHEMA_INVALID.
+          schema:
+            type: string
+            enum: ["false"]
+        - name: active
+          in: query
+          required: false
+          description: terminal=false와 같은 alias. true만 허용하며 active=false는 v1에서 IR_SCHEMA_INVALID.
+          schema:
+            type: string
+            enum: ["true"]
         - name: run_id
           in: query
           required: false

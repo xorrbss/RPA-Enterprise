@@ -1,7 +1,7 @@
 // reads.ts 에서 추출 — human-task/principal 조회 라우트(동작 무변경, api-surface §1).
 import type { FastifyInstance } from "fastify";
 
-import type { HumanTaskKind, HumanTaskState } from "../../../ts/state-machine-types";
+import { HUMANTASK_TERMINAL, type HumanTaskKind, type HumanTaskState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
 import {
@@ -103,6 +103,7 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
     const kind = humanTaskKindFilter(query.kind);
     const assignee = principalIdFilter(query.assignee, "invalid_assignee");
     const unassigned = unassignedFilter(query.unassigned);
+    const activeOnly = activeHumanTaskFilter(query.terminal, query.active);
     if (assignee !== undefined && unassigned) {
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "assignee_unassigned_conflict" });
     }
@@ -121,9 +122,10 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
             AND ($4::text IS NULL OR assignee = $4::text)
             AND ($5::boolean = false OR assignee IS NULL)
             AND ($6::uuid IS NULL OR run_id = $6::uuid)
-            AND ($7::timestamptz IS NULL OR (created_at, id) < ($7::timestamptz, $8::uuid))
+            AND ($7::boolean = false OR state <> ALL($8::text[]))
+            AND ($9::timestamptz IS NULL OR (created_at, id) < ($9::timestamptz, $10::uuid))
           ORDER BY created_at DESC, id DESC
-          LIMIT $9`,
+          LIMIT $11`,
         [
           principal.tenantId,
           status ?? null,
@@ -131,6 +133,8 @@ export function registerPeopleReadRoutes(app: FastifyInstance, deps: ApiServerDe
           assignee ?? null,
           unassigned,
           runId ?? null,
+          activeOnly,
+          HUMANTASK_TERMINAL,
           cursor?.createdAt ?? null,
           cursor?.id ?? null,
           limit + 1,
@@ -200,4 +204,25 @@ function unassignedFilter(raw: unknown): boolean {
   if (raw === undefined || raw === "false") return false;
   if (raw === "true") return true;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_unassigned" });
+}
+
+function activeHumanTaskFilter(terminalRaw: unknown, activeRaw: unknown): boolean {
+  const terminalActiveOnly = terminalFilter(terminalRaw);
+  const activeAlias = activeFilter(activeRaw);
+  if (terminalActiveOnly !== undefined && activeAlias !== undefined && terminalActiveOnly !== activeAlias) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "terminal_active_conflict" });
+  }
+  return terminalActiveOnly ?? activeAlias ?? false;
+}
+
+function terminalFilter(raw: unknown): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "false") return true;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_terminal" });
+}
+
+function activeFilter(raw: unknown): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "true") return true;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_active" });
 }

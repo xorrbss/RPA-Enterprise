@@ -1,4 +1,5 @@
 import { tone, type Tone } from "../../components/badges";
+import { HUMAN_TASK_TERMINAL_STATES } from "../humanTaskFilters";
 
 export const POLL_MS = 5_000; // 실행 목록/상세 fallback 재조회 간격.
 export const TERMINAL = new Set([
@@ -7,7 +8,7 @@ export const TERMINAL = new Set([
   "failed_business",
   "failed_system",
 ]);
-export const HUMAN_TASK_TERMINAL = new Set(["resolved", "expired", "cancelled"]);
+export const HUMAN_TASK_TERMINAL = HUMAN_TASK_TERMINAL_STATES;
 // '사람 확인 대기'가 확실한 비-터미널 status만(state-machine). StatusBadge가 suspended를 '사람 확인 대기'로 라벨링하는 것과 정합.
 // suspending은 bookmark 저장 중 전이 상태(R11→suspended / R12→failed_system, 미정착)라 StatusBadge가 '보류 중'으로 라벨링하므로
 // 배너의 '대기 중'과 어휘가 충돌 + '대기' 단정이 한 발 앞선다 → 제외(suspended 단일 게이팅 = 배지와 동일 출처 정합).

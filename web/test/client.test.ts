@@ -1210,6 +1210,12 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.url).toBe("http://api.test/v1/human-tasks?unassigned=true&limit=50");
   });
 
+  test("listHumanTasks supports terminal=false query param", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listHumanTasks({ terminal: "false", limit: 50 });
+    expect(calls[0]?.url).toBe("http://api.test/v1/human-tasks?terminal=false&limit=50");
+  });
+
   test("detail GET-by-id 경로", async () => {
     const { calls, client } = harness({ body: { run_id: "r1", status: "running", worker_id: null, attempts: 1, as_of: null } });
     await client.getRun("r1");

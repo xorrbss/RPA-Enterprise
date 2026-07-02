@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
+import { formatDateTime } from "../src/util/time";
 import type { ApiClient } from "../src/api/client";
 import { fakeClient } from "./fake-client";
 
@@ -48,7 +49,7 @@ describe("작업 항목 재처리 대기 — 사유·발생 컬럼", () => {
     expect(row).not.toHaveTextContent("dl-aaaa1111"); // 전체 추적번호는 여전히 title에만
     expect(within(row).getByTitle("추적 번호 wi-bbbb2222")).toHaveTextContent("원본 작업 연결됨");
     expect(within(row).getByText("재시도됩니다.")).toBeInTheDocument(); // errorCodeLabel(WORKITEM_CHECKOUT_CONFLICT)
-    expect(within(row).getByText(new Date(createdAt).toLocaleString())).toBeInTheDocument();
+    expect(within(row).getByText(formatDateTime(createdAt))).toBeInTheDocument();
   });
 
   // 미매핑 reason_code도 운영자 라벨 우선(원문 코드는 title 보존, 조용한 공백 금지).

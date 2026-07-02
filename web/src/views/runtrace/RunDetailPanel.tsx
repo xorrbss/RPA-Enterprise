@@ -34,7 +34,7 @@ export function RunDetailPanel({
   const qc = useQueryClient();
   const humanTask = useQuery({
     queryKey: ["human-task-by-run", runId],
-    queryFn: () => api.listHumanTasks({ run_id: runId, limit: 10 }),
+    queryFn: () => api.listHumanTasks({ run_id: runId, terminal: "false", limit: 10 }),
     enabled: detail.data !== undefined && SUSPENDED.has(detail.data.status),
   });
   const pendingTask = humanTask.data?.items.find(

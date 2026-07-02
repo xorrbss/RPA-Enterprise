@@ -56,8 +56,8 @@ describe("MyWork human-task landing queue", () => {
     expect(await screen.findByText("Mine approval")).toBeInTheDocument();
     expect(await screen.findByText("Unassigned approval")).toBeInTheDocument();
     expect(screen.queryByText("Resolved approval")).toBeNull();
-    expect(params).toContainEqual({ assignee: "u-me" });
-    expect(params).toContainEqual({ unassigned: true });
+    expect(params).toContainEqual({ assignee: "u-me", terminal: "false" });
+    expect(params).toContainEqual({ unassigned: true, terminal: "false" });
     expect(params.some((p) => Object.keys(p).length === 0)).toBe(false);
 
     const unassignedRow = screen.getByText("Unassigned approval").closest("li");

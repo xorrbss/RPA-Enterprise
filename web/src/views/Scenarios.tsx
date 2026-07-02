@@ -13,6 +13,7 @@ import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
 import { errorLabel } from "../components/badges";
 import { navigate } from "../router";
+import { formatDateTime } from "../util/time";
 import type {
   ScenarioCertification,
   ScenarioEnvironmentBinding,
@@ -266,8 +267,8 @@ function ScenarioVersionsPanel(props: { scenario: ScenarioItem; onClose: () => v
               </span>
             ),
           },
-          { header: "작성", render: (r) => new Date(r.created_at).toLocaleString() },
-          { header: "승격", render: (r) => (r.promoted_at !== null ? new Date(r.promoted_at).toLocaleString() : "-") },
+          { header: "작성", render: (r) => formatDateTime(r.created_at) },
+          { header: "승격", render: (r) => (r.promoted_at !== null ? formatDateTime(r.promoted_at) : "-") },
           {
             header: "작업",
             render: (r) => (
@@ -370,7 +371,7 @@ function ScenarioReleasesPanel(props: { scenario: ScenarioItem; onClose: () => v
         columns={[
           { header: "환경", render: (r) => <span className={`badge ${r.environment === "prod" ? "green" : "muted"}`}>{r.environment}</span> },
           { header: "버전", render: (r) => `v${r.version}` },
-          { header: "활성화", render: (r) => new Date(r.activated_at).toLocaleString() },
+          { header: "활성화", render: (r) => formatDateTime(r.activated_at) },
           { header: "처리자", render: (r) => <code className="subtle">{r.activated_by}</code> },
         ]}
       />
@@ -457,7 +458,7 @@ function GovernanceStageBadge(props: { certification?: ScenarioCertification | n
       ? `by ${certification.governance_updated_by}`
       : null,
     certification?.governance_updated_at !== null && certification?.governance_updated_at !== undefined
-      ? new Date(certification.governance_updated_at).toLocaleString()
+      ? formatDateTime(certification.governance_updated_at)
       : null,
   ].filter((value): value is string => value !== null && value.length > 0);
   return (
@@ -566,7 +567,7 @@ function CertificationBadge(props: { certification?: ScenarioCertification | nul
   }
   if (certification.status === "certified") {
     return (
-      <span className="badge amber" title={certification.expires_at !== null ? `만료: ${new Date(certification.expires_at).toLocaleString()}` : "운영 인증 유효성 확인 필요"}>
+      <span className="badge amber" title={certification.expires_at !== null ? `만료: ${formatDateTime(certification.expires_at)}` : "운영 인증 유효성 확인 필요"}>
         만료
       </span>
     );

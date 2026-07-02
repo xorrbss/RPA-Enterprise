@@ -312,6 +312,7 @@ async function main(): Promise<void> {
     const HT_A1 = "73000000-0000-0000-0000-000000000001";
     const HT_A2 = "73000000-0000-0000-0000-000000000002";
     const HT_A3 = "73000000-0000-0000-0000-000000000003";
+    const HT_A4 = "73000000-0000-0000-0000-000000000004";
     const HT_B = "74000000-0000-0000-0000-000000000001";
     await seedHumanTask(pool, TENANT_A, A_RUNS[3][0], HT_A1, "open", "exception", null, ts(0));
     await seedHumanTask(pool, TENANT_A, A_RUNS[3][0], HT_A2, "assigned", "approval", ASSIGNEE, ts(1));
@@ -587,6 +588,37 @@ async function main(): Promise<void> {
       check("filter invalid unassigned → 422",
         invalidUnassigned.statusCode === 422 && invalidUnassigned.json().details?.reason === "invalid_unassigned",
         invalidUnassigned.body);
+      await seedHumanTask(pool, TENANT_A, A_RUNS[4][0], HT_A4, "resolved", "approval", null, ts(3));
+      const activeOnly = await get("/v1/human-tasks?terminal=false");
+      const activeOnlyItems = activeOnly.json().items as Array<{ human_task_id: string; state: string }>;
+      check("filter terminal=false → active only",
+        activeOnly.statusCode === 200 &&
+        activeOnlyItems.length === 3 &&
+        activeOnlyItems.every((h) => !["resolved", "expired", "cancelled"].includes(h.state)) &&
+        activeOnlyItems.map((h) => h.human_task_id).join(",") === `${HT_A3},${HT_A2},${HT_A1}`,
+        activeOnly.body);
+      const activeAlias = await get("/v1/human-tasks?active=true");
+      const activeAliasItems = activeAlias.json().items as Array<{ human_task_id: string; state: string }>;
+      check("filter active=true → terminal=false alias",
+        activeAlias.statusCode === 200 &&
+        activeAliasItems.map((h) => h.human_task_id).join(",") === `${HT_A3},${HT_A2},${HT_A1}`,
+        activeAlias.body);
+      const unassignedActive = await get("/v1/human-tasks?unassigned=true&terminal=false");
+      const unassignedActiveItems = unassignedActive.json().items as Array<{ human_task_id: string; assignee: string | null; state: string }>;
+      check("filter unassigned=true + terminal=false → active unassigned only",
+        unassignedActive.statusCode === 200 &&
+        unassignedActiveItems.length === 2 &&
+        unassignedActiveItems.every((h) => h.assignee === null && !["resolved", "expired", "cancelled"].includes(h.state)) &&
+        unassignedActiveItems.map((h) => h.human_task_id).join(",") === `${HT_A3},${HT_A1}`,
+        unassignedActive.body);
+      const invalidTerminal = await get("/v1/human-tasks?terminal=true");
+      check("filter terminal=true → 422 fail-closed",
+        invalidTerminal.statusCode === 422 && invalidTerminal.json().details?.reason === "invalid_terminal",
+        invalidTerminal.body);
+      const invalidActive = await get("/v1/human-tasks?active=false");
+      check("filter active=false → 422 fail-closed",
+        invalidActive.statusCode === 422 && invalidActive.json().details?.reason === "invalid_active",
+        invalidActive.body);
       // assignee=PrincipalId(자유형 string)이므로 비-UUID sub 필터도 422가 아니라 200(매칭 0). uuid 강제 폐지 회귀.
       const byOidcAssignee = await get("/v1/human-tasks?assignee=auth0%7Cabc123");
       check("filter non-uuid assignee → 200 (0 matches, not 422)", byOidcAssignee.statusCode === 200 && byOidcAssignee.json().items.length === 0, byOidcAssignee.body);

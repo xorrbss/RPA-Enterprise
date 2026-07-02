@@ -2384,6 +2384,8 @@ export interface ListParams {
   risk?: string;
   assignee?: string;
   unassigned?: boolean;
+  terminal?: "false";
+  active?: boolean;
   run_id?: string;
   // query-bag: 뷰별 추가 필터(model 등)를 허용. URLSearchParams로 직렬화.
   [k: string]: string | number | boolean | undefined;

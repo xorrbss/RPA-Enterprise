@@ -47,12 +47,12 @@ export function MyWorkView(): JSX.Element {
   // 개입 큐 = 내게 배정된 미종결 사람-확인 업무(내 업무 먼저). sub 부재(미로그인)면 필터 없음.
   const assignedTasksQuery = useQuery({
     queryKey: ["my-work", "human-tasks", subject],
-    queryFn: () => subject !== null && subject.length > 0 ? api.listHumanTasks({ assignee: subject }) : Promise.resolve({ items: [], next_cursor: null }),
+    queryFn: () => subject !== null && subject.length > 0 ? api.listHumanTasks({ assignee: subject, terminal: "false" }) : Promise.resolve({ items: [], next_cursor: null }),
     refetchInterval: POLL_MS,
   });
   const unassignedTasksQuery = useQuery({
     queryKey: ["my-work", "human-tasks", "unassigned"],
-    queryFn: () => api.listHumanTasks({ unassigned: true }),
+    queryFn: () => api.listHumanTasks({ unassigned: true, terminal: "false" }),
     refetchInterval: POLL_MS,
   });
   const scenariosQuery = useQuery({
