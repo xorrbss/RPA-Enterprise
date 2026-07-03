@@ -8,6 +8,7 @@ import type {
   WebAttendedRunRequest,
 } from "../../api/types";
 import { formatDateTime } from "./format";
+import { statusLabel } from "../../components/badges";
 
 export interface WebAttendedRunCreateDraft {
   readonly scenarioVersionId: string;
@@ -102,7 +103,7 @@ function PolicySummary({ policy }: { readonly policy: HumanTaskPolicySnapshot })
     <div className="ops-delivery-panel" role="status">
       <div className="ops-alert-badges">
         <span className="badge blue">{formatDuration(policy.default_timeout_ms)}</span>
-        <span className="badge amber">{policy.on_timeout}</span>
+        <span className="badge amber">{onTimeoutLabel(policy.on_timeout)}</span>
       </div>
       <span className="subtle">{policy.allowed_kinds.join(", ")}</span>
     </div>
@@ -244,7 +245,7 @@ function WebAttendedRunRequestList({
         <li key={request.request_id}>
           <div className="ops-alert-main">
             <div className="ops-alert-badges">
-              <span className={`badge ${webAttendedTone(request.status)}`}>{request.status}</span>
+              <span className={`badge ${webAttendedTone(request.status)}`}>{webAttendedStatusLabel(request.status)}</span>
               <span className="subtle">{formatDateTime(request.requested_at)}</span>
             </div>
             <strong>{request.scenario_version_id}</strong>
@@ -329,8 +330,8 @@ function RunResumeRequestList({
       {requests.map((request) => (
         <li key={request.request_id}>
           <div className="ops-alert-badges">
-            <span className={`badge ${resumeTone(request.status)}`}>{request.status}</span>
-            <span className="subtle">{request.previous_run_status}</span>
+            <span className={`badge ${resumeTone(request.status)}`}>{resumeStatusLabel(request.status)}</span>
+            <span className="subtle">이전 상태: {statusLabel(request.previous_run_status)}</span>
           </div>
           <strong>{request.run_id}</strong>
           <span className="subtle">{request.reason ?? "사유 없음"} / {formatDateTime(request.requested_at)}</span>
@@ -347,12 +348,29 @@ function formatDuration(ms: number): string {
   return `${minutes}m`;
 }
 
-function webAttendedTone(status: WebAttendedRunRequest["status"]): "green" | "amber" | "red" | "blue" {
+// U4-3: raw enum 배지 → 운영자 한국어(닫힌 맵+raw 폴백) + '취소됨=중립(muted)' 어휘 체인 정합(badges.tsx tone 원칙).
+const WEB_ATTENDED_STATUS_LABELS: Record<string, string> = {
+  requested: "요청됨", run_queued: "실행 대기", blocked: "차단됨", cancelled: "취소됨",
+};
+function webAttendedStatusLabel(status: WebAttendedRunRequest["status"]): string {
+  return WEB_ATTENDED_STATUS_LABELS[status] ?? status;
+}
+const RESUME_STATUS_LABELS: Record<string, string> = { requested: "요청됨", reenqueued: "재대기" };
+function resumeStatusLabel(status: RunResumeRequest["status"]): string {
+  return RESUME_STATUS_LABELS[status] ?? status;
+}
+const ON_TIMEOUT_LABELS: Record<string, string> = { fail: "실패 처리", escalate: "상위 이관" };
+function onTimeoutLabel(value: HumanTaskPolicySnapshot["on_timeout"]): string {
+  return ON_TIMEOUT_LABELS[value] ?? value;
+}
+
+function webAttendedTone(status: WebAttendedRunRequest["status"]): "green" | "amber" | "red" | "blue" | "muted" {
   if (status === "run_queued") return "green";
-  if (status === "blocked" || status === "cancelled") return "red";
+  if (status === "blocked") return "red";
+  if (status === "cancelled") return "muted"; // 취소됨=중립 — 실패(red)와 분리
   return "blue";
 }
 
-function resumeTone(status: RunResumeRequest["status"]): "green" | "amber" | "red" | "blue" {
+function resumeTone(status: RunResumeRequest["status"]): "green" | "amber" | "blue" {
   return status === "reenqueued" ? "amber" : "blue";
 }
