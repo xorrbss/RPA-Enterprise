@@ -35,7 +35,7 @@ function attendedRequest(status: WebAttendedRunRequest["status"]): WebAttendedRu
     requested_at: "2026-06-30T00:00:00.000Z",
     updated_at: "2026-06-30T00:00:00.000Z",
     legal_hold: false,
-  } as WebAttendedRunRequest;
+  };
 }
 
 function resumeRequest(status: RunResumeRequest["status"]): RunResumeRequest {
@@ -47,10 +47,14 @@ function resumeRequest(status: RunResumeRequest["status"]): RunResumeRequest {
     previous_run_status: "suspended",
     requested_by: "operator-a",
     reason: null,
+    input_refs: [],
     human_task_policy: POLICY,
+    audit_correlation_id: "corr-1",
+    request_idempotency_key: `key-${status}`,
     requested_at: "2026-06-30T00:00:00.000Z",
     updated_at: "2026-06-30T00:00:00.000Z",
-  } as RunResumeRequest;
+    legal_hold: false,
+  };
 }
 
 function renderPanel(runRequests: readonly WebAttendedRunRequest[], resumeRequests: readonly RunResumeRequest[] = []): void {
