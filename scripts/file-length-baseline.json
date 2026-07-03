@@ -41,7 +41,7 @@
   "web/src/views/ConnectorCatalog.tsx": 849,
   "web/src/views/Dashboard.tsx": 1656,
   "web/src/views/DocumentIdp.tsx": 1085,
-  "web/src/views/HumanTasks.tsx": 537,
+  "web/src/views/HumanTasks.tsx": 562,
   "web/src/views/Orchestration.tsx": 875,
   "web/src/views/Scenarios.tsx": 680,
   "web/src/views/SiteElements.tsx": 673,

@@ -154,11 +154,36 @@ function HumanTaskActions({
       검토 입력
     </button>
   );
+  // U2-1: 구조화 검토 1건이 지정(확인)→시작(확인)→입력→제출 4단계였다 — 일괄 승인이 이미 쓰는 H1→H2 체인
+  //   (task+step 결정형 멱등키, 재시도 안전)을 단건용으로 재사용해 확인 1회로 in_progress+검토 폼에 도달한다.
+  //   타인에게 배정된 업무는 제외(가로채기 방지) — 그 경우 기존 시작/이관 경로 그대로.
+  const reviewChain =
+    subject !== null &&
+    subject.length > 0 &&
+    requiresStructuredReview &&
+    (task.state === "open" || task.state === "escalated" || (task.state === "assigned" && task.assignee === subject)) ? (
+      <ActionButton
+        label="내가 검토 시작"
+        action="human_task.assign"
+        confirmText="이 업무를 내 담당으로 지정하고 바로 검토를 시작할까요? 검토 입력 화면이 열립니다."
+        run={async (key) => {
+          if (task.state === "open" || task.state === "escalated") {
+            await api.assignHumanTask(id, subject, `${key}:a`);
+          }
+          await api.startHumanTask(id, `${key}:s`);
+          mergeParams({ ht: id }); // 시작 즉시 상세(검토 폼)로 — in_progress 가 되면 판정 입력이 렌더된다.
+          return { started: true };
+        }}
+        invalidateKeys={KEYS}
+        successText="검토를 시작했습니다 — 검토 영역에서 판정을 입력하세요."
+      />
+    ) : null;
   return (
     <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-      {task.state === "open" && (<>{selfAssign}{assign}{escalate}</>)}
+      {task.state === "open" && (<>{reviewChain}{selfAssign}{assign}{escalate}</>)}
       {task.state === "assigned" && (
         <>
+          {reviewChain}
           <ActionButton label="시작" action="human_task.start" confirmText="이 업무를 시작할까요?" run={(key) => api.startHumanTask(id, key)} invalidateKeys={KEYS} />
           {escalate}
         </>
@@ -173,7 +198,7 @@ function HumanTaskActions({
           {escalate}
         </>
       )}
-      {task.state === "escalated" && (<>{selfAssign}{assign}</>)}
+      {task.state === "escalated" && (<>{reviewChain}{selfAssign}{assign}</>)}
       {HUMAN_TASK_TERMINAL_STATES.has(task.state) && "—"}
     </span>
   );

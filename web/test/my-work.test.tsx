@@ -72,3 +72,36 @@ describe("MyWork human-task landing queue", () => {
     expect(document.body.textContent ?? "").not.toContain("자동화가 알아서 처리");
   });
 });
+
+// U1-1: 랜딩(myWork)이 빈 테넌트 첫 사용자를 도입 여정으로 잇지 않던 회귀 가드 —
+// 자동화 0건이면 파일럿 준비 상태(대시보드 체크리스트)로 가는 진입점이 빈 상태에 보여야 한다.
+describe("MyWork onboarding entry (U1-1)", () => {
+  beforeEach(() => {
+    location.hash = "#myWork";
+    localStorage.setItem("rpa.token", jwt());
+  });
+
+  test("자동화 0건이면 파일럿 준비 상태 링크가 보이고 대시보드로 이동한다", async () => {
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listHumanTasks: async () => ({ items: [], next_cursor: null }),
+      }),
+    );
+
+    const link = await screen.findByRole("button", { name: /파일럿 준비 상태 보기/ });
+    link.click();
+    await waitFor(() => expect(location.hash.startsWith("#dashboard")).toBe(true));
+  });
+
+  test("자동화가 있으면 온보딩 링크를 그리지 않는다", async () => {
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({ items: [], next_cursor: null }),
+      }),
+    );
+
+    await screen.findByRole("heading", { name: "자동화" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: /파일럿 준비 상태 보기/ })).toBeNull());
+  });
+});

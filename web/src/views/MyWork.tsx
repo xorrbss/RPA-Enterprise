@@ -109,7 +109,16 @@ export function MyWorkView(): JSX.Element {
           ) : scenariosQuery.isError ? (
             <ErrorState message="자동화 목록을 불러오지 못했습니다." onRetry={() => void scenariosQuery.refetch()} />
           ) : scenarios.length === 0 ? (
-            <EmptyState message="아직 만든 자동화가 없습니다. ‘새 자동화 만들기’로 시작하세요." />
+            // U1-1: 랜딩이 myWork 라 빈 테넌트 첫 사용자가 사이트→세션→첫 자동화 준비 순서를 볼 곳이 없었다
+            // (도입 체크리스트는 대시보드에만 렌더). 첫 사용자를 파일럿 준비 상태로 잇는 진입점을 빈 상태에 연결.
+            <EmptyState
+              message="아직 만든 자동화가 없습니다. ‘자동화 만들기’로 시작하세요."
+              action={
+                <button className="linklike" type="button" onClick={() => navigate("dashboard")}>
+                  처음이신가요? 파일럿 준비 상태 보기 →
+                </button>
+              }
+            />
           ) : (
             <div className="table-wrap">
               <table>

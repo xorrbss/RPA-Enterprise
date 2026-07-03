@@ -117,16 +117,16 @@ describe("AI governance evidence panel", () => {
     }));
     renderApp(fakeClient({ listAiGovernanceEvidence }));
 
-    const panel = await screen.findByRole("region", { name: "AI governance evidence" });
+    const panel = await screen.findByRole("region", { name: "AI 거버넌스 증빙" });
     expect(await within(panel).findByText("Model registry approval recorded with policy and audit linkage")).toBeInTheDocument();
     expect(within(panel).getByText("Cost control owner evidence pending")).toBeInTheDocument();
 
-    fireEvent.change(within(panel).getByLabelText("Status"), { target: { value: "deferred" } });
+    fireEvent.change(within(panel).getByLabelText("상태"), { target: { value: "deferred" } });
     await waitFor(() => expect(listAiGovernanceEvidence).toHaveBeenLastCalledWith({ limit: 25, status: "deferred" }));
     expect(await within(panel).findByText("Cost control owner evidence pending")).toBeInTheDocument();
 
-    fireEvent.change(within(panel).getByLabelText("Subject"), { target: { value: "budget:ai-gateway/controlled-prod" } });
-    fireEvent.click(within(panel).getByRole("button", { name: "Apply" }));
+    fireEvent.change(within(panel).getByLabelText("대상"), { target: { value: "budget:ai-gateway/controlled-prod" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "적용" }));
     await waitFor(() =>
       expect(listAiGovernanceEvidence).toHaveBeenLastCalledWith({
         limit: 25,
@@ -144,12 +144,12 @@ describe("AI governance evidence panel", () => {
       recordAiGovernanceEvidence,
     }));
 
-    const panel = await screen.findByRole("region", { name: "AI governance evidence" });
+    const panel = await screen.findByRole("region", { name: "AI 거버넌스 증빙" });
     const scoped = within(panel);
-    const recordButton = scoped.getByRole("button", { name: "Record AI evidence" });
+    const recordButton = scoped.getByRole("button", { name: "AI 증빙 기록" });
     expect(recordButton).toBeDisabled();
 
-    fireEvent.change(scoped.getByLabelText("Audit correlation id"), {
+    fireEvent.change(scoped.getByLabelText("감사 추적 ID"), {
       target: { value: "71000000-0000-4000-8000-000000000099" },
     });
     expect(recordButton).not.toBeDisabled();
@@ -186,16 +186,16 @@ describe("AI governance evidence panel", () => {
       recordAiGovernanceEvidence,
     }));
 
-    const panel = await screen.findByRole("region", { name: "AI governance evidence" });
-    const form = within(panel).getByRole("button", { name: "Record AI evidence" }).closest("form");
+    const panel = await screen.findByRole("region", { name: "AI 거버넌스 증빙" });
+    const form = within(panel).getByRole("button", { name: "AI 증빙 기록" }).closest("form");
     expect(form).not.toBeNull();
     const scoped = within(form as HTMLElement);
 
-    fireEvent.change(scoped.getByLabelText("Status"), { target: { value: "deferred" } });
-    fireEvent.change(scoped.getByLabelText("Evidence ref"), { target: { value: "" } });
-    fireEvent.change(scoped.getByLabelText("Policy decision ref"), { target: { value: "" } });
-    fireEvent.change(scoped.getByLabelText("Summary"), { target: { value: "Owner evidence pending for model registry approval" } });
-    fireEvent.click(scoped.getByRole("button", { name: "Record AI evidence" }));
+    fireEvent.change(scoped.getByLabelText("상태"), { target: { value: "deferred" } });
+    fireEvent.change(scoped.getByLabelText("증빙 참조"), { target: { value: "" } });
+    fireEvent.change(scoped.getByLabelText("정책 결정 참조"), { target: { value: "" } });
+    fireEvent.change(scoped.getByLabelText("요약"), { target: { value: "Owner evidence pending for model registry approval" } });
+    fireEvent.click(scoped.getByRole("button", { name: "AI 증빙 기록" }));
 
     await waitFor(() => expect(recordAiGovernanceEvidence).toHaveBeenCalledTimes(1));
     const body = recordAiGovernanceEvidence.mock.calls[0]?.[0];
@@ -218,18 +218,18 @@ describe("AI governance evidence panel", () => {
       recordAiGovernanceEvidence,
     }));
 
-    const panel = await screen.findByRole("region", { name: "AI governance evidence" });
-    const form = within(panel).getByRole("button", { name: "Record AI evidence" }).closest("form");
+    const panel = await screen.findByRole("region", { name: "AI 거버넌스 증빙" });
+    const form = within(panel).getByRole("button", { name: "AI 증빙 기록" }).closest("form");
     expect(form).not.toBeNull();
     const scoped = within(form as HTMLElement);
 
-    fireEvent.change(scoped.getByLabelText("Audit correlation id"), {
+    fireEvent.change(scoped.getByLabelText("감사 추적 ID"), {
       target: { value: "71000000-0000-4000-8000-000000000099" },
     });
-    fireEvent.change(scoped.getByLabelText("Summary"), { target: { value: "see https://internal.example/evidence" } });
+    fireEvent.change(scoped.getByLabelText("요약"), { target: { value: "see https://internal.example/evidence" } });
 
-    expect(scoped.getByRole("button", { name: "Record AI evidence" })).toBeDisabled();
-    expect(scoped.getByText("Use opaque refs only; remove endpoints or credential-like material before recording.")).toBeInTheDocument();
+    expect(scoped.getByRole("button", { name: "AI 증빙 기록" })).toBeDisabled();
+    expect(scoped.getByText("참조 값만 입력하세요. 주소(URL)나 비밀번호·토큰 같은 값은 지운 뒤 기록하세요.")).toBeInTheDocument();
     expect(recordAiGovernanceEvidence).not.toHaveBeenCalled();
   });
 });

@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
 import { useApiClient } from "../api/context";
-import { StatusBadge, actionLabel, cacheLabel, errorCodeLabel, isStreamWarning, streamStatusLabel } from "./badges";
+import { StatusBadge, actionLabel, cacheLabel, errorCodeLabel, errorOperatorActionLabel, isStreamWarning, streamStatusLabel } from "./badges";
 import { ErrorState, Loading } from "./states";
 import { formatDateTime, hhmmss } from "../util/time";
 import { mergeParams, useHashParam } from "../router";
@@ -287,6 +287,10 @@ function StepCard({
         <div className="step-line">
           <span className="subtle">예외</span>
           <span className="badge red">{errorCodeLabel(s.exception.code)}</span>
+          {/* U3-1: 계약 operatorAction 미러 — 단계 예외에서도 다음 조치를 안내(매핑된 코드만; raw 폴백 미노출). */}
+          {errorOperatorActionLabel(s.exception.code) !== s.exception.code && (
+            <span className="subtle">권장 조치: {errorOperatorActionLabel(s.exception.code)}</span>
+          )}
           <details className="developer-details">
             <summary>예외 상세</summary>
             <code>{s.exception.class}</code>

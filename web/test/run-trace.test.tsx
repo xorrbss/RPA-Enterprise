@@ -1470,3 +1470,57 @@ describe("실행 취소 즉시 피드백", () => {
     expect(await screen.findByText("실행이 취소되었습니다.")).toBeInTheDocument();
   });
 });
+
+// U3-1: 계약 operatorAction 한국어 미러(errorOperatorActionLabel)가 정의·테스트만 있고 렌더 0곳이던 갭 —
+// 실패 배너가 원인+권장 조치를 함께 안내하는지, 미매핑 코드는 raw 조치 줄을 만들지 않는지 가드.
+describe("실패 배너 권장 조치 (U3-1)", () => {
+  beforeEach(() => {
+    location.hash = "#runTrace";
+    localStorage.setItem("rpa.token", jwt(["viewer", "operator"]));
+  });
+
+  test("매핑된 실패 코드는 배너에 권장 조치를 함께 그린다", async () => {
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "failed_system",
+          worker_id: "w1",
+          attempts: 1,
+          as_of: null,
+          failure_reason: { code: "SITE_CIRCUIT_OPEN", message: "" },
+        }),
+      }),
+    );
+    await openDetail();
+    const banner = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(".arrival-banner");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(banner.textContent).toContain("권장 조치:");
+    expect(banner.textContent).toContain("차단율");
+  });
+
+  test("미매핑 코드는 권장 조치 줄을 만들지 않는다(raw 폴백 미노출)", async () => {
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "failed_system",
+          worker_id: "w1",
+          attempts: 1,
+          as_of: null,
+          failure_reason: { code: "RUN_LOOP_FAILED", message: "boom" },
+        }),
+      }),
+    );
+    await openDetail();
+    const banner = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(".arrival-banner");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(banner.textContent).not.toContain("권장 조치:");
+  });
+});

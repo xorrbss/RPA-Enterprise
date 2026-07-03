@@ -26,6 +26,12 @@ const HUMAN_OVERRIDE_ACTIONS = [
   "rolled_back_prompt",
 ] as const;
 
+// 선택형 세부 항목 값 → 운영자 한국어(저장 값은 raw 유지). 미매핑은 raw 폴백(조용한 공백 금지).
+const METADATA_OPTION_LABELS: Record<string, string> = {
+  low: "낮음", medium: "중간", high: "높음", accepted_ai_output: "AI 결과 수용", rejected_ai_output: "AI 결과 반려",
+  corrected_ai_output: "AI 결과 수정", escalated_to_human: "담당자 이관", rolled_back_prompt: "프롬프트 되돌림",
+};
+
 type MetadataFieldKind = "text" | "number" | "boolean" | "select";
 
 interface MetadataField {
@@ -58,55 +64,55 @@ const DEFAULT_SUBJECTS: Readonly<Record<AiGovernanceEvidenceType, string>> = {
 };
 
 const DEFAULT_SUMMARIES: Readonly<Record<AiGovernanceEvidenceType, string>> = {
-  model_registry: "Model registry approval recorded with policy and audit linkage",
-  prompt_registry: "Prompt template approval recorded with rollback and eval refs",
-  eval_result: "Eval suite passed required AI governance checks",
-  cost_control: "Cost budget and anomaly controls are approved for controlled production",
-  human_override: "Human override decision recorded as audit-linked evidence",
+  model_registry: "정책·감사 연동과 함께 모델 등록 승인을 기록",
+  prompt_registry: "되돌림·평가 참조와 함께 프롬프트 템플릿 승인을 기록",
+  eval_result: "평가 묶음이 필수 AI 거버넌스 점검을 통과",
+  cost_control: "통제 운영 환경의 비용 예산·이상 감지 통제 승인",
+  human_override: "사람 개입 결정을 감사 연동 증빙으로 기록",
 };
 
 const METADATA_FIELDS: Readonly<Record<AiGovernanceEvidenceType, readonly MetadataField[]>> = {
   model_registry: [
-    { key: "provider_alias", label: "Provider alias", kind: "text", placeholder: "provider:primary-ai" },
-    { key: "model_alias", label: "Model alias", kind: "text", placeholder: "model:codex-prod-primary" },
-    { key: "model_version", label: "Model version", kind: "text", placeholder: "2026-06-approved" },
-    { key: "risk_tier", label: "Risk tier", kind: "select", options: ["low", "medium", "high"] },
-    { key: "data_retention_policy_ref", label: "Retention policy ref", kind: "text", placeholder: "policy:data-retention/ai" },
-    { key: "tenant_allowlist_ref", label: "Tenant allowlist ref", kind: "text", placeholder: "tenant-allowlist:controlled-prod" },
-    { key: "approved_at", label: "Approved at", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
+    { key: "provider_alias", label: "제공자 별칭", kind: "text", placeholder: "provider:primary-ai" },
+    { key: "model_alias", label: "모델 별칭", kind: "text", placeholder: "model:codex-prod-primary" },
+    { key: "model_version", label: "모델 버전", kind: "text", placeholder: "2026-06-approved" },
+    { key: "risk_tier", label: "위험 등급", kind: "select", options: ["low", "medium", "high"] },
+    { key: "data_retention_policy_ref", label: "보존 정책 참조", kind: "text", placeholder: "policy:data-retention/ai" },
+    { key: "tenant_allowlist_ref", label: "테넌트 허용 목록 참조", kind: "text", placeholder: "tenant-allowlist:controlled-prod" },
+    { key: "approved_at", label: "승인 시각", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
   ],
   prompt_registry: [
-    { key: "prompt_template_id", label: "Prompt template id", kind: "text", placeholder: "prompt-template:invoice-triage" },
-    { key: "prompt_template_version", label: "Prompt version", kind: "text", placeholder: "v3" },
-    { key: "owner_ref", label: "Owner ref", kind: "text", placeholder: "team:finance-automation" },
-    { key: "eval_suite_ref", label: "Eval suite ref", kind: "text", placeholder: "eval-suite:invoice-triage-regression" },
-    { key: "rollback_target_ref", label: "Rollback target ref", kind: "text", placeholder: "prompt-template:invoice-triage@2" },
-    { key: "approved_at", label: "Approved at", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
+    { key: "prompt_template_id", label: "프롬프트 템플릿 ID", kind: "text", placeholder: "prompt-template:invoice-triage" },
+    { key: "prompt_template_version", label: "프롬프트 버전", kind: "text", placeholder: "v3" },
+    { key: "owner_ref", label: "담당 참조", kind: "text", placeholder: "team:finance-automation" },
+    { key: "eval_suite_ref", label: "평가 묶음 참조", kind: "text", placeholder: "eval-suite:invoice-triage-regression" },
+    { key: "rollback_target_ref", label: "되돌림 대상 참조", kind: "text", placeholder: "prompt-template:invoice-triage@2" },
+    { key: "approved_at", label: "승인 시각", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
   ],
   eval_result: [
-    { key: "eval_suite_ref", label: "Eval suite ref", kind: "text", placeholder: "eval-suite:invoice-triage-regression" },
-    { key: "dataset_ref", label: "Dataset ref", kind: "text", placeholder: "dataset:invoice-redacted-sample" },
-    { key: "sampled_at", label: "Sampled at", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
-    { key: "pass_rate", label: "Pass rate", kind: "number", placeholder: "0.98" },
-    { key: "prompt_injection_passed", label: "Injection check", kind: "boolean" },
-    { key: "data_leakage_passed", label: "Data leakage check", kind: "boolean" },
-    { key: "hallucination_passed", label: "Hallucination check", kind: "boolean" },
-    { key: "policy_block_passed", label: "Policy block check", kind: "boolean" },
+    { key: "eval_suite_ref", label: "평가 묶음 참조", kind: "text", placeholder: "eval-suite:invoice-triage-regression" },
+    { key: "dataset_ref", label: "데이터셋 참조", kind: "text", placeholder: "dataset:invoice-redacted-sample" },
+    { key: "sampled_at", label: "표본 시각", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
+    { key: "pass_rate", label: "통과율", kind: "number", placeholder: "0.98" },
+    { key: "prompt_injection_passed", label: "주입 공격 점검", kind: "boolean" },
+    { key: "data_leakage_passed", label: "정보 유출 점검", kind: "boolean" },
+    { key: "hallucination_passed", label: "환각 점검", kind: "boolean" },
+    { key: "policy_block_passed", label: "정책 차단 점검", kind: "boolean" },
   ],
   cost_control: [
-    { key: "budget_ref", label: "Budget ref", kind: "text", placeholder: "budget:ai-gateway/controlled-prod" },
-    { key: "scope_ref", label: "Scope ref", kind: "text", placeholder: "scope:tenant-a/prod" },
-    { key: "anomaly_alert_ref", label: "Anomaly alert ref", kind: "text", placeholder: "alert-route:ai-cost-anomaly" },
-    { key: "monthly_limit", label: "Monthly limit", kind: "number", placeholder: "500" },
-    { key: "per_run_cap", label: "Per-run cap", kind: "number", placeholder: "5" },
-    { key: "effective_at", label: "Effective at", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
+    { key: "budget_ref", label: "예산 참조", kind: "text", placeholder: "budget:ai-gateway/controlled-prod" },
+    { key: "scope_ref", label: "범위 참조", kind: "text", placeholder: "scope:tenant-a/prod" },
+    { key: "anomaly_alert_ref", label: "이상 비용 알림 참조", kind: "text", placeholder: "alert-route:ai-cost-anomaly" },
+    { key: "monthly_limit", label: "월 한도", kind: "number", placeholder: "500" },
+    { key: "per_run_cap", label: "회당 한도", kind: "number", placeholder: "5" },
+    { key: "effective_at", label: "적용 시각", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
   ],
   human_override: [
-    { key: "override_actor_ref", label: "Actor ref", kind: "text", placeholder: "principal:reviewer-a" },
-    { key: "override_action", label: "Override action", kind: "select", options: HUMAN_OVERRIDE_ACTIONS },
-    { key: "reason_code", label: "Reason code", kind: "text", placeholder: "policy_exception_review" },
-    { key: "audit_event_ref", label: "Audit event ref", kind: "text", placeholder: "audit-event:human-override" },
-    { key: "occurred_at", label: "Occurred at", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
+    { key: "override_actor_ref", label: "처리자 참조", kind: "text", placeholder: "principal:reviewer-a" },
+    { key: "override_action", label: "개입 조치", kind: "select", options: HUMAN_OVERRIDE_ACTIONS },
+    { key: "reason_code", label: "사유 코드", kind: "text", placeholder: "policy_exception_review" },
+    { key: "audit_event_ref", label: "감사 이벤트 참조", kind: "text", placeholder: "audit-event:human-override" },
+    { key: "occurred_at", label: "발생 시각", kind: "text", placeholder: "2026-06-29T00:00:00.000Z" },
   ],
 };
 
@@ -141,21 +147,21 @@ export function AiGovernanceEvidencePanel(): JSX.Element {
   }
 
   return (
-    <section className="panel" aria-label="AI governance evidence">
+    <section className="panel" aria-label="AI 거버넌스 증빙">
       <div className="panel-head">
         <div>
-          <h2>AI governance evidence</h2>
+          <h2>AI 거버넌스 증빙</h2>
         </div>
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <FilterSelect
-            label="Type"
+            label="종류"
             value={stringFilterValue(lv.filter.evidence_type)}
             options={EVIDENCE_TYPES}
             labelFor={(value) => evidenceTypeLabel(value as AiGovernanceEvidenceType)}
             onChange={(value) => setFilter("evidence_type", value)}
           />
           <FilterSelect
-            label="Status"
+            label="상태"
             value={stringFilterValue(lv.filter.status)}
             options={EVIDENCE_STATUSES}
             labelFor={(value) => evidenceStatusLabel(value as AiGovernanceEvidenceStatus)}
@@ -163,7 +169,7 @@ export function AiGovernanceEvidencePanel(): JSX.Element {
           />
           <form onSubmit={applySubjectFilter} style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <label className="subtle" htmlFor="ai-governance-subject-filter">
-              Subject
+              대상
             </label>
             <input
               id="ai-governance-subject-filter"
@@ -180,29 +186,23 @@ export function AiGovernanceEvidencePanel(): JSX.Element {
                 padding: "5px 8px",
               }}
             />
-            <button className="btn" type="submit">
-              Apply
-            </button>
+            <button className="btn" type="submit">적용</button>
           </form>
         </span>
       </div>
       <div className="panel-body">
         <div className="ops-health-grid" style={{ paddingTop: 16 }}>
-          <EvidenceTile title="Evidence rows" value={String(summary.total)} detail="current filter page" tone="blue" />
-          <EvidenceTile title="Valid" value={String(summary.valid)} detail="audit-linked approvals" tone={summary.valid > 0 ? "green" : "muted"} />
-          <EvidenceTile title="Deferred" value={String(summary.deferred)} detail="owner evidence pending" tone={summary.deferred > 0 ? "amber" : "muted"} />
-          <EvidenceTile title="Failed" value={String(summary.failed)} detail="control check failed" tone={summary.failed > 0 ? "red" : "muted"} />
+          <EvidenceTile title="증빙 건수" value={String(summary.total)} detail="현재 필터 페이지" tone="blue" />
+          <EvidenceTile title="유효" value={String(summary.valid)} detail="감사 연동 승인" tone={summary.valid > 0 ? "green" : "muted"} />
+          <EvidenceTile title="보류" value={String(summary.deferred)} detail="증빙 보완 대기" tone={summary.deferred > 0 ? "amber" : "muted"} />
+          <EvidenceTile title="실패" value={String(summary.failed)} detail="통제 점검 실패" tone={summary.failed > 0 ? "red" : "muted"} />
         </div>
         <EvidenceTable queryState={lv.query} items={items} />
         {lv.pager.hasPrev || lv.pager.hasNext ? (
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px", alignItems: "center" }}>
-            <button className="btn" type="button" onClick={lv.pager.onPrev} disabled={!lv.pager.hasPrev}>
-              Previous
-            </button>
-            <span className="subtle">page {lv.pager.pageIndex + 1}</span>
-            <button className="btn" type="button" onClick={lv.pager.onNext} disabled={!lv.pager.hasNext}>
-              Next
-            </button>
+            <button className="btn" type="button" onClick={lv.pager.onPrev} disabled={!lv.pager.hasPrev}>이전</button>
+            <span className="subtle">{lv.pager.pageIndex + 1}페이지</span>
+            <button className="btn" type="button" onClick={lv.pager.onNext} disabled={!lv.pager.hasNext}>다음</button>
           </div>
         ) : null}
         {can("ai_governance.manage") ? (
@@ -214,7 +214,7 @@ export function AiGovernanceEvidencePanel(): JSX.Element {
           />
         ) : (
           <p className="subtle" style={{ borderTop: "1px solid var(--line)", margin: "0 16px 16px", paddingTop: 12 }}>
-            Admin role is required to record AI governance evidence.
+            AI 거버넌스 증빙 기록은 관리자 권한이 필요합니다.
           </p>
         )}
       </div>
@@ -231,18 +231,18 @@ function EvidenceTable({
 }): JSX.Element {
   if (queryState.isLoading) return <Loading />;
   if (queryState.isError) return <ErrorState message={errorLabel(queryState.error)} onRetry={() => void queryState.refetch()} />;
-  if (items.length === 0) return <EmptyState message="No AI governance evidence matches the current filters." />;
+  if (items.length === 0) return <EmptyState message="현재 필터에 맞는 AI 거버넌스 증빙이 없습니다." />;
   return (
     <div className="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Type</th>
-            <th>Status</th>
-            <th>Subject</th>
-            <th>Evidence</th>
-            <th>Policy/audit</th>
-            <th>Recorded</th>
+            <th>종류</th>
+            <th>상태</th>
+            <th>대상</th>
+            <th>증빙</th>
+            <th>정책·감사</th>
+            <th>기록</th>
           </tr>
         </thead>
         <tbody>
@@ -260,7 +260,7 @@ function EvidenceTable({
               <td>
                 <strong style={{ display: "block", overflowWrap: "anywhere" }}>{safeText(item.summary)}</strong>
                 <span className="subtle" style={{ display: "block" }}>
-                  evidence {refText(item.evidence_ref)}
+                  증빙 {refText(item.evidence_ref)}
                 </span>
                 <span className="subtle" style={{ display: "block" }}>
                   {metadataSummary(item)}
@@ -268,13 +268,13 @@ function EvidenceTable({
               </td>
               <td>
                 <span className="subtle" style={{ display: "block" }}>
-                  policy {refText(item.policy_decision_ref)}
+                  정책 {refText(item.policy_decision_ref)}
                 </span>
                 <span className="subtle" style={{ display: "block" }}>
-                  audit {refText(item.audit_correlation_id)}
+                  감사 {refText(item.audit_correlation_id)}
                 </span>
                 <span className="subtle" style={{ display: "block" }}>
-                  expires {formatDateTime(item.expires_at)}
+                  만료 {formatDateTime(item.expires_at)}
                 </span>
               </td>
               <td>
@@ -282,9 +282,9 @@ function EvidenceTable({
                   {formatDateTime(item.recorded_at)}
                 </span>
                 <span className="subtle" style={{ display: "block" }}>
-                  by {safeText(item.recorded_by)}
+                  처리자 {safeText(item.recorded_by)}
                 </span>
-                {item.legal_hold ? <span className="badge amber">legal hold</span> : null}
+                {item.legal_hold ? <span className="badge amber">법적 보존</span> : null}
               </td>
             </tr>
           ))}
@@ -366,16 +366,16 @@ function AiGovernanceEvidenceRecorder({
     <form className="production-readiness-record" onSubmit={submit}>
       <div className="production-readiness-evidence-head">
         <div>
-          <strong>Record AI governance evidence</strong>
+          <strong>AI 거버넌스 증빙 기록</strong>
         </div>
         <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-          {lastRecordedId !== null ? <span className="badge green">recorded {lastRecordedId}</span> : null}
+          {lastRecordedId !== null ? <span className="badge green">기록됨 {lastRecordedId}</span> : null}
           {error !== null ? <span className="badge red">{errorLabel(error)}</span> : null}
         </span>
       </div>
       <div className="production-readiness-record-grid">
         <label>
-          Evidence type
+          증빙 종류
           <select value={evidenceType} onChange={(event) => selectEvidenceType(event.target.value as AiGovernanceEvidenceType)}>
             {EVIDENCE_TYPES.map((type) => (
               <option key={type} value={type}>
@@ -385,7 +385,7 @@ function AiGovernanceEvidenceRecorder({
           </select>
         </label>
         <label>
-          Status
+          상태
           <select value={status} onChange={(event) => setStatus(event.target.value as AiGovernanceEvidenceStatus)}>
             {EVIDENCE_STATUSES.map((item) => (
               <option key={item} value={item}>
@@ -395,27 +395,27 @@ function AiGovernanceEvidenceRecorder({
           </select>
         </label>
         <label>
-          Subject ref
+          대상 참조
           <input value={subjectRef} onChange={(event) => setSubjectRef(event.target.value)} placeholder="model:codex-prod-primary" />
         </label>
         <label>
-          Summary
-          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Approval recorded with audit-linked evidence" />
+          요약
+          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="감사 연동 증빙과 함께 승인을 기록" />
         </label>
         <label>
-          Evidence ref
+          증빙 참조
           <input value={evidenceRef} onChange={(event) => setEvidenceRef(event.target.value)} placeholder="artifact:ai-governance/model-approval" />
         </label>
         <label>
-          Policy decision ref
+          정책 결정 참조
           <input value={policyDecisionRef} onChange={(event) => setPolicyDecisionRef(event.target.value)} placeholder="policy-decision:ai-governance/model-approval" />
         </label>
         <label>
-          Audit correlation id
+          감사 추적 ID
           <input value={auditCorrelationId} onChange={(event) => setAuditCorrelationId(event.target.value)} placeholder="00000000-0000-4000-8000-000000000000" />
         </label>
         <label>
-          Expires on
+          만료일
           <input type="date" value={expiresOn} onChange={(event) => setExpiresOn(event.target.value)} />
         </label>
       </div>
@@ -426,16 +426,16 @@ function AiGovernanceEvidenceRecorder({
       </div>
       <label className="subtle" style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
         <input type="checkbox" checked={legalHold} onChange={(event) => setLegalHold(event.target.checked)} />
-        Retain under legal hold
+        법적 보존으로 유지
       </label>
       {isValid && !validLinkageReady ? (
-        <span className="subtle">Valid evidence requires evidence ref, policy decision ref, audit correlation id, and future expiry except human override.</span>
+        <span className="subtle">유효 증빙에는 증빙 참조, 정책 결정 참조, 감사 추적 ID가 필요하며 사람 개입 외에는 미래 만료일도 필요합니다.</span>
       ) : null}
-      {isValid && !metadataReady ? <span className="subtle">Valid {evidenceTypeLabel(evidenceType)} evidence requires all template metadata fields.</span> : null}
-      {hasBlockedText ? <span className="subtle">Use opaque refs only; remove endpoints or credential-like material before recording.</span> : null}
+      {isValid && !metadataReady ? <span className="subtle">유효한 {evidenceTypeLabel(evidenceType)} 증빙에는 템플릿 세부 항목을 모두 입력해야 합니다.</span> : null}
+      {hasBlockedText ? <span className="subtle">참조 값만 입력하세요. 주소(URL)나 비밀번호·토큰 같은 값은 지운 뒤 기록하세요.</span> : null}
       <div className="form-actions">
         <button className="btn primary" type="submit" disabled={!canSubmit}>
-          {isRecording ? "Recording" : "Record AI evidence"}
+          {isRecording ? "기록 중" : "AI 증빙 기록"}
         </button>
       </div>
     </form>
@@ -456,8 +456,8 @@ function MetadataInput({
       <label>
         {field.label}
         <select value={value} onChange={(event) => onChange(event.target.value)}>
-          <option value="true">passed</option>
-          <option value="false">failed</option>
+          <option value="true">통과</option>
+          <option value="false">실패</option>
         </select>
       </label>
     );
@@ -469,7 +469,7 @@ function MetadataInput({
         <select value={value} onChange={(event) => onChange(event.target.value)}>
           {(field.options ?? []).map((option) => (
             <option key={option} value={option}>
-              {option.replaceAll("_", " ")}
+              {METADATA_OPTION_LABELS[option] ?? option}
             </option>
           ))}
         </select>
@@ -624,18 +624,18 @@ function defaultFutureDate(): string {
   return new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+// 증빙 종류 → 운영자 한국어(닫힌 맵). 미매핑은 raw 폴백(조용한 공백 금지).
+const EVIDENCE_TYPE_LABELS: Record<string, string> = {
+  model_registry: "모델 등록", prompt_registry: "프롬프트 등록", eval_result: "평가 결과", cost_control: "비용 통제", human_override: "사람 개입",
+};
 function evidenceTypeLabel(type: AiGovernanceEvidenceType): string {
-  if (type === "model_registry") return "Model registry";
-  if (type === "prompt_registry") return "Prompt registry";
-  if (type === "eval_result") return "Eval result";
-  if (type === "cost_control") return "Cost control";
-  return "Human override";
+  return EVIDENCE_TYPE_LABELS[type] ?? type;
 }
 
+// 증빙 상태 → 운영자 한국어(닫힌 맵). 미매핑은 raw 폴백(조용한 공백 금지).
+const EVIDENCE_STATUS_LABELS: Record<string, string> = { valid: "유효", deferred: "보류", failed: "실패" };
 function evidenceStatusLabel(status: AiGovernanceEvidenceStatus): string {
-  if (status === "valid") return "Valid";
-  if (status === "deferred") return "Deferred";
-  return "Failed";
+  return EVIDENCE_STATUS_LABELS[status] ?? status;
 }
 
 function evidenceStatusTone(status: AiGovernanceEvidenceStatus): "green" | "amber" | "red" {
@@ -648,56 +648,56 @@ function metadataSummary(item: AiGovernanceEvidence): string {
   const metadata = item.metadata;
   if (item.evidence_type === "model_registry") {
     return [
-      `provider ${metadataText(metadata.provider_alias)}`,
-      `model ${metadataText(metadata.model_alias)}`,
-      `version ${metadataText(metadata.model_version)}`,
-      `risk ${metadataText(metadata.risk_tier)}`,
+      `제공자 ${metadataText(metadata.provider_alias)}`,
+      `모델 ${metadataText(metadata.model_alias)}`,
+      `버전 ${metadataText(metadata.model_version)}`,
+      `위험 ${metadataText(metadata.risk_tier)}`,
     ].join(" / ");
   }
   if (item.evidence_type === "prompt_registry") {
     return [
-      `template ${metadataText(metadata.prompt_template_id)}`,
-      `version ${metadataText(metadata.prompt_template_version)}`,
-      `eval ${metadataText(metadata.eval_suite_ref)}`,
-      `rollback ${metadataText(metadata.rollback_target_ref)}`,
+      `템플릿 ${metadataText(metadata.prompt_template_id)}`,
+      `버전 ${metadataText(metadata.prompt_template_version)}`,
+      `평가 ${metadataText(metadata.eval_suite_ref)}`,
+      `되돌림 ${metadataText(metadata.rollback_target_ref)}`,
     ].join(" / ");
   }
   if (item.evidence_type === "eval_result") {
     return [
-      `suite ${metadataText(metadata.eval_suite_ref)}`,
-      `dataset ${metadataText(metadata.dataset_ref)}`,
-      `pass rate ${metadataText(metadata.pass_rate)}`,
-      `sampled ${metadataText(metadata.sampled_at)}`,
+      `평가 묶음 ${metadataText(metadata.eval_suite_ref)}`,
+      `데이터셋 ${metadataText(metadata.dataset_ref)}`,
+      `통과율 ${metadataText(metadata.pass_rate)}`,
+      `표본 ${metadataText(metadata.sampled_at)}`,
     ].join(" / ");
   }
   if (item.evidence_type === "cost_control") {
     return [
-      `budget ${metadataText(metadata.budget_ref)}`,
-      `scope ${metadataText(metadata.scope_ref)}`,
-      `monthly ${metadataText(metadata.monthly_limit)}`,
-      `per-run ${metadataText(metadata.per_run_cap)}`,
+      `예산 ${metadataText(metadata.budget_ref)}`,
+      `범위 ${metadataText(metadata.scope_ref)}`,
+      `월 한도 ${metadataText(metadata.monthly_limit)}`,
+      `회당 한도 ${metadataText(metadata.per_run_cap)}`,
     ].join(" / ");
   }
   return [
-    `actor ${metadataText(metadata.override_actor_ref)}`,
-    `action ${metadataText(metadata.override_action)}`,
-    `reason ${metadataText(metadata.reason_code)}`,
-    `event ${metadataText(metadata.audit_event_ref)}`,
+    `처리자 ${metadataText(metadata.override_actor_ref)}`,
+    `조치 ${metadataText(metadata.override_action)}`,
+    `사유 ${metadataText(metadata.reason_code)}`,
+    `이벤트 ${metadataText(metadata.audit_event_ref)}`,
   ].join(" / ");
 }
 
 function metadataText(value: unknown): string {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value === "boolean") return String(value);
-  return typeof value === "string" && value.trim().length > 0 ? safeText(value) : "missing";
+  return typeof value === "string" && value.trim().length > 0 ? safeText(value) : "없음";
 }
 
 function refText(value: string | null): string {
-  return value === null || value.trim().length === 0 ? "missing" : safeText(value);
+  return value === null || value.trim().length === 0 ? "없음" : safeText(value);
 }
 
 function safeText(value: string): string {
-  if (isBlockedEvidenceText(value)) return "withheld";
+  if (isBlockedEvidenceText(value)) return "표시 제한";
   return value;
 }
 
