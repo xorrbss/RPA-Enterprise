@@ -132,49 +132,6 @@ assertOpenApiSchemaContains("Run", "        current_node:\n          type: [stri
 assertOpenApiSchemaContains("Run", "        failure_reason:\n          type: [object, \"null\"]");
 assertOpenApiSchemaContains("ScenarioGeneration", "        - params_context");
 assertOpenApiSchemaContains("ScenarioGeneration", "        params_context:\n          type: object");
-assertOpenApiPath("/runs/{run_id}/steps");
-assertOpenApiPath("/runs/{run_id}/artifacts");
-assertOpenApiPath("/run-resume-requests");
-assertOpenApiPath("/web-attended/run-requests");
-assertOpenApiPath("/run-triggers");
-assertOpenApiPath("/run-triggers/{trigger_id}");
-assertOpenApiPath("/run-triggers/{trigger_id}/pause");
-assertOpenApiPath("/run-triggers/{trigger_id}/resume");
-assertOpenApiPath("/run-triggers/{trigger_id}/fires");
-assertOpenApiPath("/webhooks/run-triggers/{tenant_id}/{trigger_id}");
-assertOpenApiPath("/integration-handoffs");
-assertOpenApiPath("/connector-profiles");
-assertOpenApiPath("/connector-profiles/{profile_id}/certifications");
-assertOpenApiPath("/integration-handoffs/{handoff_id}/dispatch");
-assertOpenApiPath("/integration-handoffs/{handoff_id}/callback");
-assertOpenApiPath("/webhooks/integration-handoffs/{tenant_id}/{handoff_id}");
-assertOpenApiPath("/ops-alerts");
-assertOpenApiPath("/ops-alerts/{alert_id}/ack");
-assertOpenApiPath("/ops-alerts/{alert_id}/deliveries");
-assertOpenApiPath("/ops-alerts/{alert_id}/deliveries/send-webhook");
-assertOpenApiPath("/webhooks/ops-alerts/{tenant_id}/{attempt_id}");
-assertOpenApiPath("/ops/health");
-assertOpenApiPath("/ai-governance/evidence");
-assertOpenApiPath("/automation-ideas");
-assertOpenApiPath("/process-mining/imports");
-assertOpenApiPath("/automation-ideas/{idea_id}");
-assertOpenApiPath("/automation-ideas/{idea_id}/transition");
-assertOpenApiPath("/automation-ideas/{idea_id}/roi-estimate");
-assertOpenApiPath("/automation-ideas/{idea_id}/adoption-evidence");
-assertOpenApiPath("/scenarios/{scenario_id}/versions/{version}/governance-stage");
-assertOpenApiPath("/scenarios/{scenario_id}/promote-from-run");
-assertOpenApiPath("/scenario-generations/{generation_id}/run");
-assertOpenApiPath("/scenario-generations/{generation_id}/artifacts");
-assertOpenApiPath("/scenario-generations/{generation_id}/artifacts/{artifact_id}");
-assertOpenApiPath("/scenario-generations/capabilities");
-assertOpenApiPath("/sites/{site_profile_id}/session/capture");
-assertOpenApiPath("/sites/{site_profile_id}/page-state");
-assertOpenApiPath("/sites/{site_profile_id}/elements");
-assertOpenApiPath("/sites/{site_profile_id}/elements/{element_id}");
-assertOpenApiPath("/sites/{site_profile_id}/elements/{element_id}/probe");
-assertOpenApiPath("/sites/{site_profile_id}/recordings");
-assertOpenApiPath("/sites/{site_profile_id}/recordings/{recording_session_id}/events");
-assertOpenApiPath("/sites/{site_profile_id}/recordings/{recording_session_id}/complete");
 assertControlPlanePath("/v1/runs/{run_id}/steps");
 assertControlPlanePath("/v1/runs/{run_id}/artifacts");
 assertControlPlanePath("/v1/run-resume-requests");
@@ -231,8 +188,6 @@ assertOperationId("listOpsAlertNotificationRoutes");
 assertOperationId("createOpsAlertNotificationRoute");
 assertOperationId("updateOpsAlertNotificationRoute");
 assertOperationId("deleteOpsAlertNotificationRoute");
-assertOpenApiPath("/ops-alert-routes");
-assertOpenApiPath("/ops-alert-routes/{route_id}");
 assertControlPlanePath("/v1/ops-alert-routes");
 assertControlPlanePath("/v1/ops-alert-routes/{route_id}");
 // S4b: session_expiry alert source + browser_session subject must stay in the OpsAlert enums,
@@ -268,13 +223,11 @@ assertOpenApiSchemaContains("ProductionReadinessEvidenceRequest", "             
 assertOpenApiSchemaContains("OpsNotificationAttempt", "        - callback_signature_secret_ref");
 assertOpenApiSchemaContains("OpsNotificationWebhookSendRequest", "        callback_signature_secret_ref:");
 assertOpenApiSchemaContains("OpsNotificationWebhookCallbackRequest", "          enum: [delivered, failed]");
-assertOpenApiPath("/auth/readiness");
 assertControlPlanePath("/v1/auth/readiness");
 assertOperationId("getAuthReadiness");
 assertOperationId("listAuditLog");
 assertOperationId("exportAuditLog");
 assertOperationId("exportOffboardingData");
-assertOpenApiPath("/offboarding/export");
 assertControlPlanePath("/v1/offboarding/export");
 assertOpenApiSchemaContains("OffboardingExportQuery", "        format:\n          type: string\n          enum: [csv]");
 assertOpenApiSchemaContains("OffboardingExportCsv", "Metadata-only offboarding CSV");
@@ -295,7 +248,6 @@ assertOperationId("runScenarioGeneration");
 assertOperationId("getScenarioGenerationCapabilities");
 assertOperationId("listScenarioGenerationArtifacts");
 assertOperationId("getScenarioGenerationArtifact");
-assertOpenApiPath("/principals");
 assertControlPlanePath("/v1/principals");
 assertOperationId("listPrincipals");
 assertOperationId("listSessionCaptures");
@@ -310,6 +262,8 @@ assertOperationId("startBrowserRecording");
 assertOperationId("listBrowserRecordingEvents");
 assertOperationId("appendBrowserRecordingEvents");
 assertOperationId("completeBrowserRecording");
+
+assertOpenApiSurfaceParity();
 
 if (failures.length > 0) {
   console.error(`contract consistency: ${failures.length} failed`);
@@ -381,11 +335,52 @@ function openApiEnum(schemaName: string): string[] {
   return values;
 }
 
-function assertOpenApiPath(path: string): void {
-  if (!text("codegen/openapi.yaml").includes(`  ${path}:\n`)) {
-    failures.push(`OpenAPI path missing: ${path}`);
+// R1-1: api-surface.md ↔ openapi.yaml 전수 대조(양방향 집합 동등). 이전의 수기 assertOpenApiPath 스팟체크는
+// 부분 레지스트리 drift(문서 경로의 28%가 openapi에 없어도 green)를 놓쳤다 — openapi.yaml은 스스로
+// "api-surface.md를 1:1 변환한 산출물"이라 선언하므로(헤더 description) 집합 동등이 정확한 게이트다.
+// 파라미터 이름은 표기 관례가 갈릴 수 있어({id} vs {artifact_id}) shape({})로 정규화해 비교한다.
+function assertOpenApiSurfaceParity(): void {
+  const normalize = (method: string, path: string): string => `${method} ${path.replace(/\{[^}]*\}/g, "{}")}`;
+  const surface = text("api-surface.md");
+  const surfacePairs = new Set<string>();
+  // 표 행 표기: | GET | `/v1/...` |
+  for (const m of surface.matchAll(/^\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`([^`\s]+)`/gm)) {
+    const raw = m[2] as string;
+    if (!raw.startsWith("/v1/")) continue;
+    surfacePairs.add(normalize(m[1] as string, raw.slice(3)));
+  }
+  // 산문(백틱 인라인) 표기: `GET /v1/...` — auth/readiness·ai-governance·governance-stage 등.
+  // '...' 축약(예시/생략)은 canonical 표면이 아니므로 제외.
+  for (const m of surface.matchAll(/`(GET|POST|PUT|PATCH|DELETE)\s+(\/v1\/[^`\s]+)`/g)) {
+    const raw = m[2] as string;
+    if (raw.includes("...")) continue;
+    surfacePairs.add(normalize(m[1] as string, raw.slice(3)));
+  }
+  const openapi = text("codegen/openapi.yaml");
+  const openapiPairs = new Set<string>();
+  let currentPath: string | null = null;
+  let inPaths = false;
+  for (const line of openapi.split(/\r?\n/)) {
+    if (/^paths:\s*$/.test(line)) { inPaths = true; continue; }
+    if (inPaths && /^[A-Za-z]/.test(line)) inPaths = false; // 다음 최상위 키 → paths 종료
+    if (!inPaths) continue;
+    const pathKey = line.match(/^  (\/[^\s:]*):\s*$/);
+    if (pathKey) { currentPath = pathKey[1] as string; continue; }
+    const methodKey = line.match(/^    (get|post|put|patch|delete):\s*$/);
+    if (methodKey && currentPath !== null) openapiPairs.add(normalize((methodKey[1] as string).toUpperCase(), currentPath));
+  }
+  if (surfacePairs.size === 0 || openapiPairs.size === 0) {
+    failures.push("OpenAPI parity: parsed zero endpoints (parser drift) — check api-surface.md/openapi.yaml formats");
+    return;
+  }
+  for (const pair of surfacePairs) {
+    if (!openapiPairs.has(pair)) failures.push(`OpenAPI missing endpoint (documented in api-surface.md): ${pair}`);
+  }
+  for (const pair of openapiPairs) {
+    if (!surfacePairs.has(pair)) failures.push(`OpenAPI extra endpoint (not in api-surface.md): ${pair}`);
   }
 }
+
 
 function assertOpenApiContains(label: string, expected: string): void {
   if (!text("codegen/openapi.yaml").includes(expected)) {
