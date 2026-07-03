@@ -1,50 +1,33 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileVideo, Image, Play } from "lucide-react";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
-import { SiteCreateForm, type CreatedSite } from "./SiteCreateForm";
-import { errorLabel, StatusBadge } from "./badges";
-import { navigate, useHashParam } from "../router";
+import type { CreatedSite } from "./SiteCreateForm";
+import { StatusBadge } from "./badges";
+import { navigate } from "../router";
 import {
-  ApiError,
   type Paginated,
   type ScenarioGenerationPlanner,
   type ScenarioGenerationRequest,
-  type ScenarioGenerationRunRequest,
   type ScenarioGenerationResult,
   type SiteItem,
 } from "../api/types";
 import { AdvancedSettings } from "./prompt-generator/AdvancedSettings";
 import { GenerationHistory } from "./prompt-generator/GenerationHistory";
 import { GenerationResult } from "./prompt-generator/GenerationResult";
+import { GeneratorFormFields } from "./prompt-generator/GeneratorFormFields";
+import { useGenerationActions } from "./prompt-generator/useGenerationActions";
+import { usePrefill } from "./prompt-generator/usePrefill";
 import {
   DEFAULT_AVAILABLE_PLANNERS,
   FALLBACK_SCREENSHOT_POLICIES,
   FALLBACK_VIDEO_POLICIES,
-  PROMPT_EXAMPLES,
-  START_URL_REPAIR_BLOCKERS,
-  TARGET_REPAIR_BLOCKERS,
-  canRunGenerationWithCorrections,
-  correctionGuideError,
   createdSiteToItem,
-  draftStartUrl,
-  draftTarget,
-  extractFirstHttpUrl,
   firstAllowedPolicy,
-  hasAnyBlocker,
-  httpOrigin,
-  modelRequiredOf,
-  paramsInputTextFromDraftIr,
-  parseParamsText,
   screenshotPolicyLabel,
-  singleMatchingSiteForUrl,
-  siteLabel,
-  siteNetworkLabel,
-  siteSessionLabel,
   videoPolicyLabel,
-  type CorrectionGuideState,
   type ScreenshotPolicy,
   type VideoPolicy,
 } from "./prompt-generator/helpers";
@@ -53,15 +36,6 @@ export function PromptScenarioGenerator(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const qc = useQueryClient();
-  const prefillSiteId = useHashParam("site");
-  const prefillStartUrl = useHashParam("start_url");
-  const prefillBrowserIdentityId = useHashParam("browser_identity");
-  const prefillNetworkPolicyId = useHashParam("network_policy");
-  const prefillConnectorId = useHashParam("connector_id");
-  const prefillTemplateId = useHashParam("template_id");
-  const prefillPrompt = useHashParam("prompt");
-  const prefillName = useHashParam("name");
-  const prefillParams = useHashParam("params");
   const sites = useQuery({ queryKey: ["sites", "scenario-generator"], queryFn: () => api.listSites({ limit: 100 }) });
   const policies = useQuery({
     queryKey: ["gateway-policies", "scenario-generator"],
@@ -102,8 +76,6 @@ export function PromptScenarioGenerator(): JSX.Element {
   const siteCreateRef = useRef<HTMLDivElement | null>(null);
   const autoStartUrlRef = useRef<string | null>(null);
   const targetManuallyEditedRef = useRef(false);
-  const hashPrefillKeyRef = useRef<string | null>(null);
-  const templatePrefillKeyRef = useRef<string | null>(null);
   const canCreateSite = can("site.create");
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
@@ -140,7 +112,6 @@ export function PromptScenarioGenerator(): JSX.Element {
   );
   const gatewayPolicies = policies.data?.items ?? [];
   const defaultGatewayPolicy = gatewayPolicies.find((policy) => policy.is_default === true) ?? null;
-  const targetSetupNotice = targetSetupNoticeFor(selectedSite, startUrl);
 
   function applySiteDefaults(site: SiteItem): void {
     setBrowserIdentityId(site.default_browser_identity_id ?? "");
@@ -246,102 +217,26 @@ export function PromptScenarioGenerator(): JSX.Element {
     }
   }
 
-  function currentCorrectionGuide(generation: ScenarioGenerationResult): CorrectionGuideState {
-    const targetValues = [siteProfileId.trim(), browserIdentityId.trim(), networkPolicyId.trim()];
-    const targetPartial = targetValues.some((value) => value.length > 0) && targetValues.some((value) => value.length === 0);
-    const startOrigin = httpOrigin(startUrl);
-    const selectedSiteOrigin = selectedSite?.url_pattern === undefined ? null : httpOrigin(selectedSite.url_pattern);
-    const needsStartUrl = hasAnyBlocker(generation.blockers, START_URL_REPAIR_BLOCKERS);
-    const needsTarget = hasAnyBlocker(generation.blockers, TARGET_REPAIR_BLOCKERS);
-    const targetStartUrlMatches =
-      !generation.blockers.includes("target_start_url_site_mismatch") ||
-      selectedSiteOrigin === null ||
-      startOrigin === null ||
-      selectedSiteOrigin === startOrigin;
-    return {
-      needsStartUrl,
-      needsTarget,
-      needsVideoPolicy: generation.blockers.includes("video_recording_port_not_configured"),
-      needsParams: generation.blockers.includes("params_context_redacted_value_required"),
-      startUrlReady: startUrl.trim().length > 0,
-      targetReady: targetValues.every((value) => value.length > 0),
-      targetPartial,
-      targetStartUrlMatches,
-      videoPolicyReady: video === "never",
-      paramsReady: paramsText.trim().length > 0,
-      hasSelectableSites: (sites.data?.items ?? []).length > 0,
-      canCreateSite,
-    };
-  }
-
-  useEffect(() => {
-    const key = JSON.stringify([prefillConnectorId, prefillTemplateId, prefillPrompt, prefillName, prefillParams]);
-    if (templatePrefillKeyRef.current === key) return;
-    if (
-      prefillConnectorId === null &&
-      prefillTemplateId === null &&
-      prefillPrompt === null &&
-      prefillName === null &&
-      prefillParams === null
-    ) {
-      return;
-    }
-
-    templatePrefillKeyRef.current = key;
-    if (prefillPrompt !== null) setPrompt(prefillPrompt);
-    if (prefillName !== null) setName(prefillName);
-    if (prefillParams !== null) {
-      setParamsText(prefillParams);
-      setAdvancedOpen(true);
-      setDeveloperOpen(true);
-    }
-    if (prefillConnectorId !== null || prefillTemplateId !== null) setMode("save");
-    setLocalError(null);
-    setResult(null);
-  }, [prefillConnectorId, prefillName, prefillParams, prefillPrompt, prefillTemplateId]);
-
-  useEffect(() => {
-    const key = JSON.stringify([prefillSiteId, prefillStartUrl, prefillBrowserIdentityId, prefillNetworkPolicyId]);
-    if (hashPrefillKeyRef.current === key) return;
-    hashPrefillKeyRef.current = key;
-    if (
-      prefillSiteId === null &&
-      prefillStartUrl === null &&
-      prefillBrowserIdentityId === null &&
-      prefillNetworkPolicyId === null
-    ) {
-      return;
-    }
-
-    targetManuallyEditedRef.current = true;
-    if (prefillSiteId !== null) setSiteProfileId(prefillSiteId);
-    if (prefillStartUrl !== null) {
-      setStartUrl(prefillStartUrl);
-      autoStartUrlRef.current = prefillStartUrl;
-    }
-    if (prefillBrowserIdentityId !== null) setBrowserIdentityId(prefillBrowserIdentityId);
-    if (prefillNetworkPolicyId !== null) setNetworkPolicyId(prefillNetworkPolicyId);
-  }, [prefillBrowserIdentityId, prefillNetworkPolicyId, prefillSiteId, prefillStartUrl]);
-
-  useEffect(() => {
-    const detectedUrl = extractFirstHttpUrl(prompt);
-    if (detectedUrl === null) return;
-
-    const currentStartUrl = startUrl.trim();
-    if (currentStartUrl.length > 0 && currentStartUrl !== autoStartUrlRef.current) return;
-
-    autoStartUrlRef.current = detectedUrl;
-    if (currentStartUrl !== detectedUrl) {
-      setStartUrl(detectedUrl);
-    }
-
-    if (targetManuallyEditedRef.current) return;
-    const matchedSite = singleMatchingSiteForUrl(detectedUrl, sites.data?.items ?? []);
-    if (matchedSite === null) return;
-
-    setSiteProfileId(matchedSite.site_profile_id);
-    applySiteDefaults(matchedSite);
-  }, [prompt, sites.data?.items, startUrl]);
+  usePrefill({
+    prompt,
+    startUrl,
+    siteItems: sites.data?.items,
+    autoStartUrlRef,
+    targetManuallyEditedRef,
+    setPrompt,
+    setName,
+    setParamsText,
+    setAdvancedOpen,
+    setDeveloperOpen,
+    setMode,
+    setLocalError,
+    setResult,
+    setStartUrl,
+    setSiteProfileId,
+    setBrowserIdentityId,
+    setNetworkPolicyId,
+    applySiteDefaults,
+  });
 
   useEffect(() => {
     if (screenshotCapability === undefined) return;
@@ -381,169 +276,43 @@ export function PromptScenarioGenerator(): JSX.Element {
     }
   }, [availablePlanners, defaultPlanner, planner]);
 
-  const mutation = useMutation({
-    mutationFn: async (body: ScenarioGenerationRequest) => {
-      return api.generateScenario(body, crypto.randomUUID());
-    },
-    onSuccess: (next) => {
-      setResult(next);
-      setLocalError(null);
-      setModelRequired(null);
-      setCheckedModel("");
-      void qc.invalidateQueries({ queryKey: ["scenarios"] });
-      void qc.invalidateQueries({ queryKey: ["scenario-generations"] });
-      qc.setQueryData(["scenario-generation", next.generation_id], next);
-      if (next.run_id !== null) {
-        void qc.invalidateQueries({ queryKey: ["runs"] });
-        navigate("runTrace", { run: next.run_id, generation: next.generation_id, focus: "artifacts" });
-      }
-    },
-    onError: (error) => {
-      handleMutationError(error);
-    },
+  const actions = useGenerationActions({
+    prompt,
+    name,
+    mode,
+    planner,
+    model,
+    startUrl,
+    paramsText,
+    siteProfileId,
+    browserIdentityId,
+    networkPolicyId,
+    screenshot,
+    video,
+    selectedSite,
+    siteItems: sites.data?.items,
+    canCreateSite,
+    needModel,
+    evidenceSettingsLoading,
+    autoStartUrlRef,
+    targetManuallyEditedRef,
+    setResult,
+    setLocalError,
+    setModelRequired,
+    setCheckedModel,
+    setModel,
+    setScreenshot,
+    setScreenshotTouched,
+    setVideo,
+    setVideoTouched,
+    setParamsText,
+    setStartUrl,
+    setSiteProfileId,
+    setBrowserIdentityId,
+    setNetworkPolicyId,
   });
 
-  const runMutation = useMutation({
-    mutationFn: async ({ generation, body }: { generation: ScenarioGenerationResult; body: ScenarioGenerationRunRequest }) => {
-      return api.runScenarioGeneration(generation.generation_id, body, crypto.randomUUID());
-    },
-    onSuccess: (next) => {
-      setResult(next);
-      setLocalError(null);
-      setModelRequired(null);
-      setCheckedModel("");
-      void qc.invalidateQueries({ queryKey: ["scenarios"] });
-      void qc.invalidateQueries({ queryKey: ["scenario-generations"] });
-      qc.setQueryData(["scenario-generation", next.generation_id], next);
-      if (next.run_id !== null) {
-        void qc.invalidateQueries({ queryKey: ["runs"] });
-        navigate("runTrace", { run: next.run_id, generation: next.generation_id, focus: "artifacts" });
-      }
-    },
-    onError: (error) => {
-      handleMutationError(error);
-    },
-  });
-
-  function handleMutationError(error: unknown): void {
-    const mr = error instanceof ApiError && error.code === "IR_SCHEMA_INVALID" ? modelRequiredOf(error.body) : null;
-    if (mr !== null) {
-      setModelRequired(mr);
-      setLocalError(`AI 모델을 지정해야 합니다 (정책 ${mr.available}개, 기본 미지정). 모델명 입력 후 확인하고 다시 실행하세요.`);
-      return;
-    }
-    setLocalError(errorLabel(error));
-  }
-
-  function buildRequest(): ScenarioGenerationRequest {
-    const trimmedPrompt = prompt.trim();
-    if (trimmedPrompt.length === 0) {
-      throw new Error("자연어 요청을 입력하세요.");
-    }
-    const targetValues = [siteProfileId.trim(), browserIdentityId.trim(), networkPolicyId.trim()];
-    const hasAnyTarget = targetValues.some((v) => v.length > 0);
-    const hasFullTarget = targetValues.every((v) => v.length > 0);
-    if (hasAnyTarget && !hasFullTarget) {
-      throw new Error("사이트, 로그인 세션, 보안 정책을 모두 준비하세요. 아래 사이트·세션 설정에서 바로 확인할 수 있습니다.");
-    }
-    const [site, identity, network] = targetValues as [string, string, string];
-    const params = parseParamsText(paramsText);
-    return {
-      prompt: trimmedPrompt,
-      ...(name.trim().length > 0 ? { name: name.trim() } : {}),
-      mode,
-      planner,
-      ...(model.trim().length > 0 ? { model: model.trim() } : {}),
-      ...(startUrl.trim().length > 0 ? { start_url: startUrl.trim() } : {}),
-      ...(params !== undefined ? { params } : {}),
-      ...(hasFullTarget
-        ? { target: { site_profile_id: site, browser_identity_id: identity, network_policy_id: network } }
-        : {}),
-      evidence: { screenshot, video },
-    };
-  }
-
-  function buildRunRequest(): ScenarioGenerationRunRequest {
-    const targetValues = [siteProfileId.trim(), browserIdentityId.trim(), networkPolicyId.trim()];
-    const hasAnyTarget = targetValues.some((v) => v.length > 0);
-    const hasFullTarget = targetValues.every((v) => v.length > 0);
-    if (hasAnyTarget && !hasFullTarget) {
-      throw new Error("사이트, 로그인 세션, 보안 정책을 모두 준비하세요. 아래 사이트·세션 설정에서 바로 확인할 수 있습니다.");
-    }
-    const [site, identity, network] = targetValues as [string, string, string];
-    const params = parseParamsText(paramsText);
-    return {
-      ...(startUrl.trim().length > 0 ? { start_url: startUrl.trim() } : {}),
-      ...(params !== undefined ? { params } : {}),
-      ...(hasFullTarget
-        ? { target: { site_profile_id: site, browser_identity_id: identity, network_policy_id: network } }
-        : {}),
-      ...(model.trim().length > 0 ? { model: model.trim() } : {}),
-      evidence: { screenshot, video },
-    };
-  }
-
-  function submit(): void {
-    setLocalError(null);
-    if (needModel) {
-      setLocalError("AI 모델을 입력하고 확인을 완료한 뒤 다시 실행하세요.");
-      return;
-    }
-    if (evidenceSettingsLoading) {
-      setLocalError("증거 저장 설정을 확인한 뒤 다시 실행하세요.");
-      return;
-    }
-    try {
-      const body = buildRequest();
-      mutation.mutate(body);
-    } catch (error) {
-      setLocalError(error instanceof Error ? error.message : "요청 실패");
-    }
-  }
-
-  function runWithCorrections(generation: ScenarioGenerationResult): void {
-    setLocalError(null);
-    if (!canRunGenerationWithCorrections(generation)) {
-      setLocalError("이 생성 결과는 보정 실행을 시작할 수 없습니다.");
-      return;
-    }
-    if (needModel) {
-      setLocalError("AI 모델을 입력하고 확인을 완료한 뒤 다시 실행하세요.");
-      return;
-    }
-    const guide = currentCorrectionGuide(generation);
-    const guideError = correctionGuideError(guide);
-    if (guideError !== null) {
-      setLocalError(guideError);
-      return;
-    }
-    try {
-      const body = buildRunRequest();
-      runMutation.mutate({ generation, body });
-    } catch (error) {
-      setLocalError(error instanceof Error ? error.message : "요청 실패");
-    }
-  }
-
-  function selectGeneration(item: ScenarioGenerationResult): void {
-    setResult(item);
-    setModel(item.model ?? "");
-    setScreenshot(item.evidence_policy.screenshot ?? "each_step");
-    setScreenshotTouched(true);
-    setVideo(item.evidence_policy.video ?? "never");
-    setVideoTouched(true);
-    setParamsText(paramsInputTextFromDraftIr(item.draft_ir, item.params_context));
-    autoStartUrlRef.current = null;
-    targetManuallyEditedRef.current = true;
-    setStartUrl(draftStartUrl(item.draft_ir) ?? "");
-    const target = draftTarget(item.draft_ir);
-    setSiteProfileId(target?.site_profile_id ?? "");
-    setBrowserIdentityId(target?.browser_identity_id ?? "");
-    setNetworkPolicyId(target?.network_policy_id ?? "");
-    qc.setQueryData(["scenario-generation", item.generation_id], item);
-  }
-
-  const correctionGuide = result === null ? null : currentCorrectionGuide(result);
+  const correctionGuide = result === null ? null : actions.currentCorrectionGuide(result);
 
   return (
     <section className="panel scenario-generator">
@@ -551,119 +320,35 @@ export function PromptScenarioGenerator(): JSX.Element {
         <h2>말로 설명해 만들기</h2>
       </div>
       <div className="scenario-generator-body">
-        <div className="prompt-examples" role="group" aria-label="예시 프롬프트">
-          <span className="subtle">예시로 시작하기</span>
-          {PROMPT_EXAMPLES.map((ex) => (
-            <button
-              key={ex.label}
-              type="button"
-              className="prompt-example-chip"
-              aria-label={`예시 프롬프트 채우기: ${ex.label}`}
-              onClick={() => setPrompt(ex.prompt)}
-            >
-              {ex.label}
-            </button>
-          ))}
-        </div>
-        <label className="field field-wide">
-          <span>자연어 요청</span>
-          <textarea
-            id="scenario-natural-language-request"
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            rows={4}
-            placeholder="예: https://example.com 에서 오늘 신규 주문 목록을 확인하고 요약해줘"
-          />
-        </label>
-        <div className="form-grid">
-          <label className="field">
-            <span>시작 주소</span>
-            <input ref={startUrlInputRef} value={startUrl} onChange={(event) => handleStartUrlChange(event.target.value)} placeholder="https://..." />
-          </label>
-          <label className="field">
-            <span>사이트</span>
-            <select ref={siteSelectRef} value={siteProfileId} onChange={(event) => selectSite(event.target.value)}>
-              <option value="">사이트 선택 안 함</option>
-              {(sites.data?.items ?? []).map((site) => (
-                <option key={site.site_profile_id} value={site.site_profile_id}>
-                  {siteLabel(site)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>AI 모델</span>
-            <select aria-label="AI 모델" value={model} onChange={(event) => handleModelChange(event.target.value)}>
-              <option value="">{defaultGatewayPolicy === null ? "기본 AI 모델 사용" : `기본 AI 모델 사용 (${defaultGatewayPolicy.model})`}</option>
-              {gatewayPolicies.map((policy) => (
-                <option key={policy.model} value={policy.model}>
-                  {policy.model}
-                  {policy.is_default === true ? " · 기본" : ""}
-                </option>
-              ))}
-            </select>
-            {modelRequired !== null && (
-              <span className="model-confirm-row">
-                <button className="btn" type="button" onClick={() => setCheckedModel(model.trim())} disabled={model.trim().length === 0 || policyCheck.isFetching}>
-                  확인
-                </button>
-                <span className="subtle" role="status">
-                  {policyCheck.isFetching
-                    ? "AI 모델 확인 중..."
-                    : modelConfirmed
-                      ? `확인됨 - '${policyCheck.data?.model ?? checkedModel}' 사용`
-                      : checkedModel.length > 0 && checkedModel === model.trim() && policyCheck.isError
-                        ? `'${checkedModel}'을 사용할 수 없습니다. AI 모델명을 확인하세요.`
-                        : "AI 모델을 선택하고 확인 후 다시 실행하세요."}
-                </span>
-              </span>
-            )}
-          </label>
-          <div className="field field-wide" ref={siteCreateRef}>
-            <SiteCreateForm
-              embedded
-              title="새 사이트 온보딩"
-              triggerLabel="등록"
-              initialUrl={startUrl}
-              openSignal={siteCreateOpenSignal}
-              onCreated={handleInlineSiteCreated}
-            />
-          </div>
-        </div>
-        <div className="target-summary" aria-label="실행 대상 요약">
-          <span>
-            <span className="subtle">로그인 세션</span>
-            <strong>{siteSessionLabel(selectedSite)}</strong>
-          </span>
-          <span>
-            <span className="subtle">보안 정책</span>
-            <strong>{siteNetworkLabel(selectedSite)}</strong>
-          </span>
-          <span>
-            <span className="subtle">AI 모델</span>
-            <strong>{model.trim().length > 0 ? model.trim() : defaultGatewayPolicy?.model ?? "기본값 자동 선택"}</strong>
-          </span>
-        </div>
-        {targetSetupNotice !== null && (
-          <div className={`form-alert ${targetSetupNotice.tone}`} role="status" style={{ display: "grid", gap: 6 }}>
-            <span>{targetSetupNotice.text}</span>
-            <span className="inline-facts">
-              {targetSetupNotice.showCreate && canCreateSite && (
-                <button className="linklike" type="button" onClick={openInlineSiteCreate}>
-                  새 사이트 등록
-                </button>
-              )}
-              <button className="linklike" type="button" onClick={() => openSiteSecurity(targetSetupNotice.siteId)}>
-                사이트·세션 설정
-              </button>
-              {targetSetupNotice.siteId !== undefined && (
-                <button className="linklike" type="button" onClick={() => openSiteSecurity(targetSetupNotice.siteId)}>
-                  세션 등록하러 가기
-                </button>
-              )}
-            </span>
-          </div>
-        )}
+        <GeneratorFormFields
+          prompt={prompt}
+          onPromptChange={setPrompt}
+          startUrl={startUrl}
+          onStartUrlChange={handleStartUrlChange}
+          startUrlInputRef={startUrlInputRef}
+          siteSelectRef={siteSelectRef}
+          siteItems={sites.data?.items}
+          siteProfileId={siteProfileId}
+          onSelectSite={selectSite}
+          model={model}
+          onModelChange={handleModelChange}
+          gatewayPolicies={gatewayPolicies}
+          defaultGatewayPolicy={defaultGatewayPolicy}
+          modelRequired={modelRequired}
+          modelConfirmed={modelConfirmed}
+          checkedModel={checkedModel}
+          onConfirmModel={() => setCheckedModel(model.trim())}
+          policyCheckFetching={policyCheck.isFetching}
+          policyCheckError={policyCheck.isError}
+          policyCheckModel={policyCheck.data?.model}
+          siteCreateRef={siteCreateRef}
+          siteCreateOpenSignal={siteCreateOpenSignal}
+          onSiteCreated={handleInlineSiteCreated}
+          selectedSite={selectedSite}
+          canCreateSite={canCreateSite}
+          onOpenSiteCreate={openInlineSiteCreate}
+          onOpenSiteSecurity={openSiteSecurity}
+        />
         <AdvancedSettings
           advancedOpen={advancedOpen}
           onAdvancedToggle={setAdvancedOpen}
@@ -714,11 +399,11 @@ export function PromptScenarioGenerator(): JSX.Element {
             type="button"
             aria-label={actionLabel}
             title={actionLabel}
-            onClick={submit}
-            disabled={mutation.isPending || needModel || evidenceSettingsLoading}
+            onClick={actions.submit}
+            disabled={actions.generatePending || needModel || evidenceSettingsLoading}
           >
             <Play size={15} aria-hidden="true" />
-            {mutation.isPending ? "생성 중…" : evidenceSettingsLoading ? "증거 설정 확인 중…" : "자동화 초안 만들기"}
+            {actions.generatePending ? "생성 중…" : evidenceSettingsLoading ? "증거 설정 확인 중…" : "자동화 초안 만들기"}
           </button>
           <span className="evidence-chip">
             <Image size={14} aria-hidden="true" />
@@ -738,9 +423,9 @@ export function PromptScenarioGenerator(): JSX.Element {
           <GenerationResult
             result={result}
             correctionGuide={correctionGuide}
-            runPending={runMutation.isPending}
+            runPending={actions.runPending}
             modelConfirmationRequired={needModel}
-            onRunWithCorrections={runWithCorrections}
+            onRunWithCorrections={actions.runWithCorrections}
             onFocusStartUrl={() => focusField(startUrlInputRef.current)}
             onFocusTarget={() => focusField(siteSelectRef.current)}
             onOpenSiteCreate={openInlineSiteCreate}
@@ -756,55 +441,9 @@ export function PromptScenarioGenerator(): JSX.Element {
         )}
         <GenerationHistory
           selectedGenerationId={result?.generation_id ?? null}
-          onSelect={selectGeneration}
+          onSelect={actions.selectGeneration}
         />
       </div>
     </section>
   );
-}
-
-type TargetSetupNotice = {
-  readonly tone: "amber" | "red";
-  readonly text: string;
-  readonly siteId?: string;
-  readonly showCreate: boolean;
-};
-
-function targetSetupNoticeFor(site: SiteItem | null, startUrl: string): TargetSetupNotice | null {
-  if (site !== null) {
-    const name = site.name ?? "선택한 사이트";
-    if (site.login_capable === true && site.session_ready !== true) {
-      return {
-        tone: "amber",
-        text: `${name}의 로그인 세션을 등록해야 저장 후 실행할 수 있습니다.`,
-        siteId: site.site_profile_id,
-        showCreate: false,
-      };
-    }
-    if (site.login_capable === true && (site.default_browser_identity_id === null || site.default_browser_identity_id === undefined)) {
-      return {
-        tone: "amber",
-        text: `${name}에 사용할 로그인 세션을 연결하세요.`,
-        siteId: site.site_profile_id,
-        showCreate: false,
-      };
-    }
-    if (site.default_network_policy_id === null || site.default_network_policy_id === undefined) {
-      return {
-        tone: "amber",
-        text: `${name}에 보안 정책을 연결해야 실행 대상이 완성됩니다.`,
-        siteId: site.site_profile_id,
-        showCreate: false,
-      };
-    }
-    return null;
-  }
-  if (httpOrigin(startUrl) !== null) {
-    return {
-      tone: "amber",
-      text: "이 주소로 저장 후 실행하려면 사이트와 로그인 세션 설정을 먼저 확인하세요.",
-      showCreate: true,
-    };
-  }
-  return null;
 }
