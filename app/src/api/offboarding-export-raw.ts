@@ -9,7 +9,7 @@ import {
   dateTimeFilter,
   iso,
   nullableIso,
-  recordOffboardingExportAudit,
+  recordOffboardingAudit,
   requireOffboardingSecurityAudit,
 } from "./offboarding-export";
 import { requirePrincipal, type ApiServerDeps } from "./server";
@@ -63,7 +63,7 @@ export function registerOffboardingRawExportRoutes(app: FastifyInstance, deps: A
       ? await selectRawRunsPage(deps, principal.tenantId, createdAtFrom, createdAtTo, cursor, limit)
       : await selectRawHumanTasksPage(deps, principal.tenantId, createdAtFrom, createdAtTo, cursor, limit);
 
-    await recordOffboardingExportAudit(securityAudit, request, principal, "offboarding_raw_export_disclosed", {
+    await recordOffboardingAudit(securityAudit, request, principal, "tenant_data.export", "offboarding_raw_export_disclosed", {
       decision_kind: "tenant_data.export",
       delivery: "raw_jsonl",
       section,

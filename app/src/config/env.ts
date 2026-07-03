@@ -198,6 +198,8 @@ export interface ApiConfig {
   /** Console origin allowlist for CORS; omit for same-origin (no CORS registered). No wildcard. */
   readonly corsOrigins?: readonly string[];
   readonly hsts: boolean;
+  /** 오프보딩 purge 유예기간(일) — ops-defaults offboarding.purge_grace_default(7d). */
+  readonly offboardingPurgeGraceDays: number;
   /** Optional object-store root the API may read for audited artifact body/blob disclosure. */
   readonly artifactDir?: string;
   /** Optional S3 object-store reader for runtime visual evidence stored outside the local FS. */
@@ -324,6 +326,7 @@ export function loadApiConfig(common: CommonConfig, options: { readonly runMode?
       ? origins.split(",").map((s) => s.trim()).filter((s) => s.length > 0)
       : undefined,
     hsts: bool("ENABLE_HSTS", true),
+    offboardingPurgeGraceDays: positiveInt("OFFBOARDING_PURGE_GRACE_DAYS", 7),
     artifactDir: resolveApiArtifactDir(),
     ...(artifactObjectStore !== undefined ? { artifactObjectStore } : {}),
     videoRecordingEnabled,

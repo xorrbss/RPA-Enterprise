@@ -77,6 +77,7 @@ const baselineCoreTables = [
   "audit_log",
   "audit_verifier_runs",
   "scenario_promotion_requests",
+  "tenant_offboarding_requests",
   "worker_pools",
   "worker_pool_assignments",
   "worker_pool_memberships",

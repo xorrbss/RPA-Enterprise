@@ -82,6 +82,8 @@ export type RbacAction =
   | "audit.read"
   | "audit.verify"
   | "tenant_data.export"
+  | "tenant_data.purge.request"
+  | "tenant_data.purge.approve"
   | "ai_governance.read"
   | "ai_governance.manage"
   | "workitem.read"
@@ -459,6 +461,8 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "rbac.revoke",
   "scim.sync",
   "tenant_data.export",
+  "tenant_data.purge.request",
+  "tenant_data.purge.approve",
   "network.request",
   "prompt.inspect",
   "ai_governance.manage",

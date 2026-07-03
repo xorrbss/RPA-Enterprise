@@ -97,6 +97,7 @@ DECLARE
     'audit_log',
     'audit_verifier_runs',
     'scenario_promotion_requests',
+    'tenant_offboarding_requests',
     'worker_pools',
     'worker_pool_assignments',
     'worker_pool_memberships'
@@ -186,6 +187,7 @@ DECLARE
     'audit_log',
     'audit_verifier_runs',
     'scenario_promotion_requests',
+    'tenant_offboarding_requests',
     'worker_pool_assignments'
   ];
   table_name text;

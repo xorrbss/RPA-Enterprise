@@ -607,6 +607,33 @@ CREATE UNIQUE INDEX uq_promotion_requests_pending ON scenario_promotion_requests
 CREATE INDEX idx_promotion_requests_pending ON scenario_promotion_requests (tenant_id, created_at DESC)
   WHERE status = 'pending';
 
+-- tenant_offboarding_requests — 테넌트 오프보딩 삭제 원장(설계 rpa-offboarding-data-export-deletion-design O2).
+--   maker-checker(요청자≠승인자 admin 2인, scenario_promotion_requests 선례) 2단계 삭제:
+--   pending → approved(soft: 쓰기 명령 차단 + purge_after=now()+grace) → (유예 경과) purging → purged(비가역).
+--   행별 deleted_at 을 도메인 테이블에 신설하는 대신 테넌트-원장 1테이블 + 상태 게이트 + purge sweeper 로 구성(설계 §4-2).
+--   원장 자신은 purge 대상에서 제외(처분 증빙, 무기한 보존 — Open Decision D5).
+CREATE TABLE tenant_offboarding_requests (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  status          text        NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','approved','rejected','cancelled','purging','purged')),
+  reason          text        NOT NULL CHECK (length(trim(reason)) > 0),  -- 요청 사유 필수(maker-checker 감사)
+  requested_by    text        NOT NULL,                   -- PrincipalId(요청자; ::uuid 캐스트 금지 — OIDC sub 허용)
+  decided_by      text,                                   -- PrincipalId(승인/반려자; SoD: requested_by ≠ decided_by)
+  decision_reason text,                                   -- 승인/반려 메모(선택)
+  decided_at      timestamptz,
+  purge_after     timestamptz,                            -- 승인 시 now()+grace(기본 7d, ops-defaults offboarding.purge_grace_default)
+  purged_at       timestamptz,
+  held_rows       jsonb       NOT NULL DEFAULT '{}'::jsonb, -- legal_hold 로 잔존한 행 카운트(table→count; 조용한 skip 금지)
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+-- 테넌트당 활성(pending/approved/purging) 요청 1건만 — 중복 오프보딩 차단(부분 UNIQUE).
+CREATE UNIQUE INDEX uq_tenant_offboarding_active ON tenant_offboarding_requests (tenant_id)
+  WHERE status IN ('pending','approved','purging');
+-- 원장 조회 — 최신순.
+CREATE INDEX idx_tenant_offboarding_recent ON tenant_offboarding_requests (tenant_id, created_at DESC);
+
 -- ============================================================
 -- 2a. scenario release workflow / environment bindings
 --    Enterprise ALM v1: draft package -> submit -> approve -> deploy, maker-checker, rollback evidence.
@@ -2528,6 +2555,7 @@ BEGIN
     'audit_log',
     'audit_verifier_runs',
     'scenario_promotion_requests',
+    'tenant_offboarding_requests',
     'worker_pool_assignments'
   ]
   LOOP

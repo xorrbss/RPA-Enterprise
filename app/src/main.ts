@@ -384,11 +384,14 @@ async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMod
         }
       : {}),
     security: { corsOrigins: cfg.corsOrigins, hsts: cfg.hsts },
+    // 오프보딩 반출/원장 전이는 fail-closed audit 필수 — artifactStore 유무와 무관하게 항상 주입(조건 스프레드에
+    // 묶으면 artifact store 미구성 배포에서 offboarding 경로가 500 misconfig 로 죽는다).
+    securityAudit,
+    offboardingPurgeGraceDays: cfg.offboardingPurgeGraceDays,
     ...(selectorProbe !== undefined ? { selectorProbe } : {}),
     ...(artifactObjectReader !== undefined
       ? {
           artifactStore: artifactObjectReader,
-          securityAudit,
         }
       : {}),
     ...(sessionStore !== undefined ? { sessionStore } : {}),
