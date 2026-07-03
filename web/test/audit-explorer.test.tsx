@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
+import { ACTION_LABEL } from "../src/views/audit/audit-labels";
 import { fakeClient } from "./fake-client";
 
 function renderApp(client: ApiClient): void {
@@ -124,8 +125,8 @@ describe("audit explorer view", () => {
     renderApp(fakeClient({ listAuditLog: async () => ({ items: [], next_cursor: null }) }));
 
     fireEvent.change(await screen.findByLabelText("업무"), { target: { value: "run.started" } });
-    fireEvent.change(screen.getByPlaceholderText("계정 또는 담당자"), { target: { value: "operator-a" } });
-    fireEvent.change(screen.getByPlaceholderText("예: 요청-123"), { target: { value: "corr-999" } });
+    fireEvent.change(screen.getByPlaceholderText("목록의 '이 처리자로 조회'로 채워집니다"), { target: { value: "operator-a" } });
+    fireEvent.change(screen.getByPlaceholderText("추적 번호 전체 값"), { target: { value: "corr-999" } });
 
     await waitFor(() => {
       expect(location.hash).toContain("action=run.started");
@@ -197,8 +198,9 @@ describe("audit explorer view", () => {
       action: "artifact.read",
       outcome: "allow",
       actor: "viewer-a",
-      occurred_at_from: "2026-06-01T00:00",
-      occurred_at_to: "2026-06-30T23:59",
+      // datetime-local 입력은 브라우저 로컬 TZ 의도 — API 에는 UTC ISO 로 고정 전송(서버 로컬 TZ 해석 차단)
+      occurred_at_from: new Date("2026-06-01T00:00").toISOString(),
+      occurred_at_to: new Date("2026-06-30T23:59").toISOString(),
       limit: 200,
     }),
       expect.objectContaining({ cursor: "cursor-2", limit: 200 }),
@@ -207,5 +209,82 @@ describe("audit explorer view", () => {
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:audit-csv");
     expect(await screen.findByText("감사 기록 기간 CSV를 준비했습니다. 현재 필터와 기간 기준 전체 페이지를 이어받았습니다.")).toBeInTheDocument();
+  });
+
+  test("행의 '이 번호로 조회'가 추적 번호 필터를 전체 값으로 채운다", async () => {
+    renderApp(fakeClient());
+
+    fireEvent.click(await screen.findByRole("button", { name: "이 번호로 조회" }));
+
+    await waitFor(() => expect(location.hash).toContain("correlation_id=82000000-0000-4000-8000-0000000000a1"));
+    expect(screen.getByPlaceholderText("추적 번호 전체 값")).toHaveValue("82000000-0000-4000-8000-0000000000a1");
+  });
+
+  test("행의 '이 처리자로 조회'가 처리자 필터를 정확한 식별값으로 채운다", async () => {
+    renderApp(fakeClient());
+
+    fireEvent.click(await screen.findByRole("button", { name: "이 처리자로 조회" }));
+
+    await waitFor(() => expect(location.hash).toContain("actor=viewer-a"));
+    expect(screen.getByPlaceholderText("목록의 '이 처리자로 조회'로 채워집니다")).toHaveValue("viewer-a");
+  });
+
+  test("기간 필터는 목록 조회에도 UTC ISO로 변환되어 전송되고 딥링크에는 원문이 남는다", async () => {
+    const calls: unknown[] = [];
+    renderApp(fakeClient({
+      listAuditLog: async (params) => {
+        calls.push(params);
+        return { items: [], next_cursor: null };
+      },
+    }));
+
+    fireEvent.change(await screen.findByLabelText("시작 시각"), { target: { value: "2026-06-01T09:00" } });
+
+    await waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
+      occurred_at_from: new Date("2026-06-01T09:00").toISOString(),
+    })));
+    expect(decodeURIComponent(location.hash)).toContain("occurred_at_from=2026-06-01T09:00");
+  });
+
+  test("감사 action 라벨은 계약 레지스트리 전수를 커버하고 그 밖은 두지 않는다", () => {
+    // ts/security-middleware-contract.ts SECURITY_AUDIT_REQUIRED_ACTIONS 미러(fake-client 와 같은 서버 계약 미러 패턴).
+    // audit_log 는 레지스트리 밖 action 을 fail-closed 로 거부하므로 라벨 맵과 레지스트리는 정확히 일치해야 한다.
+    const SECURITY_AUDIT_REQUIRED_ACTIONS = [
+      "artifact.read",
+      "secret.resolve",
+      "connector.enable",
+      "connector.install",
+      "scenario.certify",
+      "scenario.decertify",
+      "scenario_release.create",
+      "scenario_release.submit",
+      "scenario_release.approve",
+      "scenario_release.reject",
+      "scenario_release.deploy",
+      "scenario_release.rollback",
+      "run.create",
+      "run.rerun",
+      "run.resume",
+      "run.pause",
+      "run.prioritize",
+      "credential.manage",
+      "worker_pool.manage",
+      "rbac.grant",
+      "rbac.revoke",
+      "scim.sync",
+      "tenant_data.export",
+      "tenant_data.purge.request",
+      "tenant_data.purge.approve",
+      "network.request",
+      "prompt.inspect",
+      "ai_governance.manage",
+      "ai_governance.enforce",
+      "bypassrls.use",
+    ];
+
+    expect(Object.keys(ACTION_LABEL).sort()).toEqual([...SECURITY_AUDIT_REQUIRED_ACTIONS].sort());
+    for (const action of SECURITY_AUDIT_REQUIRED_ACTIONS) {
+      expect(ACTION_LABEL[action], action).toMatch(/[가-힣]/);
+    }
   });
 });
