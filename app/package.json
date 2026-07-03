@@ -1,6 +1,9 @@
 {
   "name": "rpa-runtime",
   "version": "0.1.0",
+  "engines": {
+    "node": ">=24"
+  },
   "private": true,
   "type": "module",
   "description": "D2+ 프로덕션 런타임 — 계약(ts/·schema/·db/)과 검증된 codegen 산출물을 PostgreSQL·Worker에 연결한다. 계약 SSoT는 상위 디렉터리(consumed, not redefined).",
