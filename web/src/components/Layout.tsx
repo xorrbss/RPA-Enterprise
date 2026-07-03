@@ -22,6 +22,7 @@ import {
 import { VIEW_META } from "../views/meta";
 import { CommandPalette } from "./CommandPalette";
 import { Freshness } from "./Freshness";
+import { OffboardingBanner } from "./OffboardingBanner";
 import { clearToken } from "./TokenGate";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -372,6 +373,7 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
             )}
           </span>
         </header>
+        <OffboardingBanner />
         <main className="content">{children}</main>
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} roles={roles} navMode={navMode} flags={flags} />

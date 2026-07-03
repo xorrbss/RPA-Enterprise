@@ -43,6 +43,7 @@ import { registerAutomationPerformanceReportRoutes } from "./automation-performa
 import { registerProcessMiningImportRoutes } from "./process-mining-imports";
 import { registerOffboardingExportRoutes } from "./offboarding-export";
 import { registerOffboardingRawExportRoutes } from "./offboarding-export-raw";
+import { isTenantOffboardingLocked, OFFBOARDING_LOCK_EXEMPT_ACTIONS } from "./offboarding-lock";
 import { registerOffboardingPurgeRoutes } from "./offboarding-purge";
 import { registerRoiActualRoutes } from "./roi-actuals";
 import { registerRoiEstimateRoutes } from "./roi-estimate";
@@ -191,6 +192,21 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
         "rbac denied",
       );
       throw new ApiResponseError(decision.code);
+    }
+  });
+
+  // 6) 오프보딩 잠금(설계 O3) — approved/purging 테넌트의 쓰기 명령을 409 로 차단.
+  //    읽기(GET/HEAD)·반출은 허용(유예 창의 목적 = 반출+복구), 복구 방향 명령(취소/결정/run.abort)은 예외.
+  //    원장 활성행 조회는 쓰기 명령에서만 요청당 1회(부분 인덱스 단건 — 설계 O3 구현 노트).
+  app.addHook("preHandler", async (request) => {
+    if (request.routeOptions.config.skipJwtAuth === true) return; // 웹훅 발화는 자체 핸들러에서 잠금 검사
+    if (request.is404) return;
+    if (request.method === "GET" || request.method === "HEAD") return;
+    const action = request.routeOptions.config.rbacAction;
+    if (action !== undefined && OFFBOARDING_LOCK_EXEMPT_ACTIONS.has(action)) return;
+    const principal = requirePrincipal(request);
+    if (await isTenantOffboardingLocked(deps.pool, principal.tenantId)) {
+      throw new ApiResponseError("TENANT_OFFBOARDING", { reason: "tenant_offboarding_locked" });
     }
   });
 

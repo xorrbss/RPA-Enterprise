@@ -1804,6 +1804,35 @@ export interface RuntimeCapabilities {
       readonly enabled?: boolean;
     };
   };
+  /** 오프보딩 원장 활성 상태(O3 전역 배너) — 전 역할 가시. 잠금(쓰기 409)의 이유를 화면에서 설명한다. */
+  readonly offboarding?: {
+    readonly active?: boolean;
+    readonly status?: "pending" | "approved" | "purging" | null;
+    readonly purge_after?: string | null;
+    readonly request_id?: string | null;
+  };
+}
+
+export type OffboardingPurgeRequestStatus = "pending" | "approved" | "rejected" | "cancelled" | "purging" | "purged";
+
+export interface OffboardingPurgeRequestItem {
+  readonly request_id: string;
+  readonly status: OffboardingPurgeRequestStatus;
+  readonly reason: string;
+  readonly requested_by: string;
+  readonly decided_by: string | null;
+  readonly decision_reason: string | null;
+  readonly decided_at: string | null;
+  readonly purge_after: string | null;
+  readonly purged_at: string | null;
+  readonly held_rows: Readonly<Record<string, number>>;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface OffboardingPurgeRequestPage {
+  readonly items: readonly OffboardingPurgeRequestItem[];
+  readonly grace_days: number;
 }
 
 export type SiteElementType = "button" | "input" | "link" | "table" | "row" | "field" | "message" | "other";

@@ -362,6 +362,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
           WHERE r.tenant_id = $1::uuid AND r.status = 'completed' AND s.auto_fan_out = true
             AND r.ended_at IS NOT NULL AND r.ended_at > now() - interval '1 day'
             AND NOT EXISTS (SELECT 1 FROM approval_row_claims cl WHERE cl.tenant_id = r.tenant_id AND cl.source_run_id = r.id)
+            -- 오프보딩 잠금(O3): approved/purging 테넌트는 자동 fan-out(검토 run 스폰) 제외 — 신규 활동 금지.
+            AND NOT EXISTS (SELECT 1 FROM tenant_offboarding_requests o WHERE o.tenant_id = r.tenant_id AND o.status IN ('approved','purging'))
           ORDER BY r.ended_at ASC LIMIT 50`,
         [tenantId],
       );

@@ -538,6 +538,7 @@ Raw media download/preview는 `GET /v1/artifacts/{id}/blob`을 사용한다. 이
 - `audit_log`는 PostgreSQL append-only/hash-chain 권위 저장소이며 조회 API는 변이 동작을 제공하지 않는다.
 - 조회는 `withTenantTx`/RLS로 tenant scope를 강제한다. 타 tenant 행은 목록에 나타나지 않는다.
 - `payload` 본문은 보안 경계 판단의 내부 근거일 수 있어 콘솔/API에서 직접 노출하지 않는다. 운영자 검토 표면은 actor/action/outcome/reason/correlation/hash-chain 요약만 사용한다.
+- **오프보딩 잠금(O3)**: 원장이 `approved|purging`인 테넌트는 **모든 비-GET 쓰기 명령이 전역 preHandler에서 409 `TENANT_OFFBOARDING`(`tenant_offboarding_locked`)로 거부**된다(웹훅 발화 `POST /v1/webhooks/run-triggers/...`는 서명 검증 후 동일 차단; cron 스케줄러·auto fan-out 스위퍼도 해당 테넌트 제외). 예외(허용 쓰기): `tenant_data.purge.request`(취소)·`tenant_data.purge.approve`(결정)·`run.abort`(활동 중지). 읽기·반출(GET)은 전부 허용 — 유예 창의 목적. 활성 원장 상태는 `GET /v1/capabilities`의 `offboarding {active,status,purge_after,request_id}`로 전 역할에 노출(전역 배너 데이터).
 
 ---
 
