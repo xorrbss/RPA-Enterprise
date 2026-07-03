@@ -458,7 +458,7 @@ describe("automation ops view", () => {
     expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
 
     fireEvent.click(sectionTab("외부 전달"));
-    expect(await screen.findByRole("heading", { name: "Existing RPA handoff" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "기존 RPA 전달" })).toBeInTheDocument();
     expect(location.hash).toBe("#automationOps?section=external");
   });
 
@@ -779,13 +779,13 @@ describe("automation ops view", () => {
     openAutomationOpsSection("external");
     renderApp(clientWithOpsData({ createIntegrationHandoff }));
 
-    await screen.findByRole("heading", { name: "Existing RPA handoff" });
-    fireEvent.change(screen.getByLabelText("Handoff provider"), { target: { value: "uipath-secondary" } });
-    fireEvent.change(screen.getByLabelText("Handoff job ref"), { target: { value: "queue:cash-app" } });
-    fireEvent.change(screen.getByLabelText("Handoff payload ref"), { target: { value: "artifact://handoff/cash-app-042" } });
-    fireEvent.change(screen.getByLabelText("Handoff callback SecretRef"), { target: { value: "secret://tenant-a/integration/uipath-secondary/callback-url" } });
-    fireEvent.change(screen.getByLabelText("Handoff signature SecretRef"), { target: { value: "secret://tenant-a/integration/uipath-secondary/callback-signing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create handoff" }));
+    await screen.findByRole("heading", { name: "기존 RPA 전달" });
+    fireEvent.change(screen.getByLabelText("전달 대상 별칭"), { target: { value: "uipath-secondary" } });
+    fireEvent.change(screen.getByLabelText("전달 작업 참조"), { target: { value: "queue:cash-app" } });
+    fireEvent.change(screen.getByLabelText("전달 자료 참조"), { target: { value: "artifact://handoff/cash-app-042" } });
+    fireEvent.change(screen.getByLabelText("전달 회신 SecretRef"), { target: { value: "secret://tenant-a/integration/uipath-secondary/callback-url" } });
+    fireEvent.change(screen.getByLabelText("전달 서명 SecretRef"), { target: { value: "secret://tenant-a/integration/uipath-secondary/callback-signing" } });
+    fireEvent.click(screen.getByRole("button", { name: "전달 만들기" }));
 
     await waitFor(() => expect(createIntegrationHandoff).toHaveBeenCalledWith(
       {
@@ -898,28 +898,28 @@ describe("automation ops view", () => {
     openAutomationOpsSection("external");
     renderApp(clientWithOpsData({ createIntegrationHandoff }));
 
-    await screen.findByRole("heading", { name: "Existing RPA handoff" });
-    expect(screen.getByText(/Vendor API\/OAuth, job mapping, and endpoint ownership remain owner\/provider decisions/)).toBeInTheDocument();
-    expect((screen.getByLabelText("Handoff provider") as HTMLInputElement).value).toBe("existing-rpa-primary");
+    await screen.findByRole("heading", { name: "기존 RPA 전달" });
+    expect(screen.getByText(/벤더 API\/OAuth, 작업 매핑, 엔드포인트 관리는 운영 담당자와 제공자가 결정/)).toBeInTheDocument();
+    expect((screen.getByLabelText("전달 대상 별칭") as HTMLInputElement).value).toBe("existing-rpa-primary");
 
-    const profileSelect = screen.getByLabelText("Handoff provider profile") as HTMLSelectElement;
+    const profileSelect = screen.getByLabelText("전달 대상 프로필") as HTMLSelectElement;
     expect(Array.from(profileSelect.options).map((option) => option.text)).toEqual([
-      "Owner-defined existing RPA",
-      "UiPath provider profile",
-      "Automation Anywhere provider profile",
-      "Power Automate provider profile",
-      "Blue Prism provider profile",
+      "직접 지정 기존 RPA",
+      "UiPath 연동 프로필",
+      "Automation Anywhere 연동 프로필",
+      "Power Automate 연동 프로필",
+      "Blue Prism 연동 프로필",
     ]);
 
     fireEvent.change(profileSelect, { target: { value: "power-automate" } });
-    expect((screen.getByLabelText("Handoff provider") as HTMLInputElement).value).toBe("power-automate-primary");
-    expect((screen.getByLabelText("Handoff callback SecretRef") as HTMLInputElement).value).toBe("secret://tenant-a/integration/power-automate/callback-url");
-    expect((screen.getByLabelText("Handoff signature SecretRef") as HTMLInputElement).value).toBe("secret://tenant-a/integration/power-automate/callback-signing");
+    expect((screen.getByLabelText("전달 대상 별칭") as HTMLInputElement).value).toBe("power-automate-primary");
+    expect((screen.getByLabelText("전달 회신 SecretRef") as HTMLInputElement).value).toBe("secret://tenant-a/integration/power-automate/callback-url");
+    expect((screen.getByLabelText("전달 서명 SecretRef") as HTMLInputElement).value).toBe("secret://tenant-a/integration/power-automate/callback-signing");
 
-    fireEvent.change(screen.getByLabelText("Handoff callback SecretRef"), { target: { value: "https://flows.example.com/raw-callback" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create handoff" }));
+    fireEvent.change(screen.getByLabelText("전달 회신 SecretRef"), { target: { value: "https://flows.example.com/raw-callback" } });
+    fireEvent.click(screen.getByRole("button", { name: "전달 만들기" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Callback URL must be a SecretRef.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("회신 주소는 SecretRef 형식이어야 합니다.");
     expect(createIntegrationHandoff).not.toHaveBeenCalled();
   });
 
@@ -970,21 +970,21 @@ describe("automation ops view", () => {
     renderApp(clientWithOpsData({ listIntegrationHandoffs, dispatchIntegrationHandoff }));
 
     expect(await screen.findByText("queue:bot-dispatch")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Dispatch" }));
-    const endpointInput = screen.getByLabelText("Dispatch endpoint SecretRef for integration-handoff-aa") as HTMLInputElement;
-    const hostsInput = screen.getByLabelText("Dispatch allowed hosts for integration-handoff-aa") as HTMLInputElement;
+    fireEvent.click(screen.getByRole("button", { name: "발송" }));
+    const endpointInput = screen.getByLabelText("발송 대상 SecretRef integration-handoff-aa") as HTMLInputElement;
+    const hostsInput = screen.getByLabelText("허용 호스트 integration-handoff-aa") as HTMLInputElement;
     expect(endpointInput.value).toBe("secret://tenant-a/integration/automation-anywhere/dispatch-endpoint");
     expect(hostsInput.value).toBe("automation-anywhere.example.com");
 
     fireEvent.change(endpointInput, { target: { value: "https://controlroom.example.com/jobs" } });
-    fireEvent.click(screen.getByRole("button", { name: "Queue dispatch" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Dispatch endpoint must be a SecretRef.");
+    fireEvent.click(screen.getByRole("button", { name: "발송 예약" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("발송 대상 주소는 SecretRef 형식이어야 합니다.");
     expect(dispatchIntegrationHandoff).not.toHaveBeenCalled();
 
     fireEvent.change(endpointInput, { target: { value: "secret://tenant-a/integration/automation-anywhere/dispatch-endpoint" } });
     fireEvent.change(hostsInput, { target: { value: "controlroom.example.com, botrunner.example.com" } });
-    fireEvent.change(screen.getByLabelText("Dispatch max attempts for integration-handoff-aa"), { target: { value: "4" } });
-    fireEvent.click(screen.getByRole("button", { name: "Queue dispatch" }));
+    fireEvent.change(screen.getByLabelText("최대 시도 횟수 integration-handoff-aa"), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "발송 예약" }));
 
     await waitFor(() => expect(dispatchIntegrationHandoff).toHaveBeenCalledWith(
       "integration-handoff-aa",
@@ -1046,11 +1046,11 @@ describe("automation ops view", () => {
     renderApp(clientWithOpsData({ listIntegrationHandoffs, recordIntegrationHandoffCallback }));
 
     expect(await screen.findByText("queue:invoice-posting")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Record receipt" }));
-    fireEvent.change(screen.getByLabelText("Handoff external job id"), { target: { value: "job-uipath-20260629-001" } });
-    fireEvent.change(screen.getByLabelText("Handoff receipt status"), { target: { value: "completed" } });
-    fireEvent.change(screen.getByLabelText("Handoff receipt id"), { target: { value: "receipt-uipath-001" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save receipt" }));
+    fireEvent.click(screen.getByRole("button", { name: "수신 확인 기록" }));
+    fireEvent.change(screen.getByLabelText("외부 작업 ID"), { target: { value: "job-uipath-20260629-001" } });
+    fireEvent.change(screen.getByLabelText("수신 확인 상태"), { target: { value: "completed" } });
+    fireEvent.change(screen.getByLabelText("수신 확인 ID"), { target: { value: "receipt-uipath-001" } });
+    fireEvent.click(screen.getByRole("button", { name: "수신 확인 저장" }));
 
     await waitFor(() => expect(recordIntegrationHandoffCallback).toHaveBeenCalledWith(
       "integration-handoff-deferred",

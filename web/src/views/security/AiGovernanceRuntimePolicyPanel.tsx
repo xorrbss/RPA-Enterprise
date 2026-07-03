@@ -76,10 +76,10 @@ export function AiGovernanceRuntimePolicyPanel(): JSX.Element {
   }
 
   return (
-    <section className="panel" aria-label="AI runtime policy" style={{ marginBottom: 12 }}>
+    <section className="panel" aria-label="AI 운영 정책" style={{ marginBottom: 12 }}>
       <div className="panel-head">
         <div>
-          <h2>AI runtime policy</h2>
+          <h2>AI 운영 정책</h2>
         </div>
         <span className={`badge ${policyTone(policy)}`}>{policyBadgeLabel(policy)}</span>
       </div>
@@ -91,26 +91,26 @@ export function AiGovernanceRuntimePolicyPanel(): JSX.Element {
         ) : (
           <>
             <div className="ops-health-grid" style={{ paddingTop: 16 }}>
-              <PolicyTile title="Configured" value={policy !== undefined ? "Yes" : "No"} detail="tenant runtime gate" tone={policy !== undefined ? "green" : "amber"} />
-              <PolicyTile title="Mode" value={policy !== undefined ? modeLabel(policy.mode) : "Not configured"} detail={modeDetail(policy?.mode)} tone={policyTone(policy)} />
-              <PolicyTile title="Grace until" value={formatDateTime(policy?.grace_until)} detail={graceDetail(policy?.grace_until)} tone={graceTone(policy?.grace_until)} />
-              <PolicyTile title="Audit action" value={policy?.audit_action ?? "Not configured"} detail="immutable audit row" tone={policy !== undefined ? "blue" : "amber"} />
+              <PolicyTile title="정책 설정" value={policy !== undefined ? "설정됨" : "미설정"} detail="테넌트 AI 실행 통제" tone={policy !== undefined ? "green" : "amber"} />
+              <PolicyTile title="적용 방식" value={policy !== undefined ? modeLabel(policy.mode) : "미설정"} detail={modeDetail(policy?.mode)} tone={policyTone(policy)} />
+              <PolicyTile title="유예 기한" value={formatDateTime(policy?.grace_until)} detail={graceDetail(policy?.grace_until)} tone={graceTone(policy?.grace_until)} />
+              <PolicyTile title="감사 기록" value={policy?.audit_action ?? "미설정"} detail="변경 불가 감사 기록" tone={policy !== undefined ? "blue" : "amber"} />
             </div>
             <CurrentPolicy policy={policy} />
             {canManage ? (
               <form className="production-readiness-record" onSubmit={submit}>
                 <div className="production-readiness-evidence-head">
                   <div>
-                    <strong>Upsert runtime policy</strong>
+                    <strong>운영 정책 등록·변경</strong>
                   </div>
                   <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-                    {lastSavedPolicyId !== null ? <span className="badge green">saved {safeRef(lastSavedPolicyId)}</span> : null}
+                    {lastSavedPolicyId !== null ? <span className="badge green">저장됨 {safeRef(lastSavedPolicyId)}</span> : null}
                     {save.error !== null ? <span className="badge red">{errorLabel(save.error)}</span> : null}
                   </span>
                 </div>
                 <div className="production-readiness-record-grid">
                   <label>
-                    Mode
+                    적용 방식
                     <select value={draft.mode} onChange={(event) => setField("mode", event.target.value as AiGovernanceRuntimePolicyMode)}>
                       {POLICY_MODES.map((mode) => (
                         <option key={mode} value={mode}>
@@ -120,38 +120,38 @@ export function AiGovernanceRuntimePolicyPanel(): JSX.Element {
                     </select>
                   </label>
                   <label>
-                    Subject mapping ref
+                    대상 매핑 참조
                     <input value={draft.subjectMappingRef} onChange={(event) => setField("subjectMappingRef", event.target.value)} placeholder="subject-map:ai-runtime/default" />
                   </label>
                   <label>
-                    Grace until
+                    유예 기한
                     <input type="datetime-local" value={draft.graceUntil} onChange={(event) => setField("graceUntil", event.target.value)} />
                   </label>
                   <label>
-                    Override owner ref
+                    긴급 해제 담당 참조
                     <input value={draft.emergencyOverrideOwnerRef} onChange={(event) => setField("emergencyOverrideOwnerRef", event.target.value)} placeholder="team:ai-governance-oncall" />
                   </label>
                   <label>
-                    Policy decision ref
+                    정책 결정 참조
                     <input value={draft.policyDecisionRef} onChange={(event) => setField("policyDecisionRef", event.target.value)} placeholder="policy-decision:ai-governance/runtime-enforcement" />
                   </label>
                   <label>
-                    Evidence ref
+                    증빙 참조
                     <input value={draft.evidenceRef} onChange={(event) => setField("evidenceRef", event.target.value)} placeholder="artifact:ai-governance/runtime-policy" />
                   </label>
                 </div>
-                {!validation.hasRequiredRefs ? <span className="subtle">Mode, subject mapping, override owner, and policy decision refs are required.</span> : null}
-                {validation.graceInvalid ? <span className="subtle">Grace until must be a future date and time.</span> : null}
-                {validation.hasBlockedText ? <span className="subtle">Use opaque refs only; remove endpoints or credential-like material before saving.</span> : null}
+                {!validation.hasRequiredRefs ? <span className="subtle">적용 방식, 대상 매핑, 긴급 해제 담당, 정책 결정 참조를 모두 입력하세요.</span> : null}
+                {validation.graceInvalid ? <span className="subtle">유예 기한은 미래 날짜와 시간이어야 합니다.</span> : null}
+                {validation.hasBlockedText ? <span className="subtle">참조 값만 입력하세요. 주소(URL)나 비밀번호·토큰 같은 값은 지운 뒤 저장하세요.</span> : null}
                 <div className="form-actions">
                   <button className="btn primary" type="submit" disabled={!validation.canSubmit || save.isPending}>
-                    {save.isPending ? "Saving" : "Save runtime policy"}
+                    {save.isPending ? "저장 중" : "운영 정책 저장"}
                   </button>
                 </div>
               </form>
             ) : (
               <p className="subtle" style={{ borderTop: "1px solid var(--line)", margin: "0 16px 16px", paddingTop: 12 }}>
-                Admin role is required to manage AI runtime policy.
+                AI 운영 정책 관리는 관리자 권한이 필요합니다.
               </p>
             )}
           </>
@@ -162,16 +162,16 @@ export function AiGovernanceRuntimePolicyPanel(): JSX.Element {
 }
 
 function CurrentPolicy({ policy }: { policy: AiGovernanceRuntimePolicy | undefined }): JSX.Element {
-  if (policy === undefined) return <EmptyState message="No AI runtime policy is configured." />;
+  if (policy === undefined) return <EmptyState message="설정된 AI 운영 정책이 없습니다." />;
   return (
     <div className="table-wrap">
       <table className="ops-table">
         <thead>
           <tr>
-            <th scope="col">State</th>
-            <th scope="col">Refs</th>
-            <th scope="col">Audit</th>
-            <th scope="col">Updated</th>
+            <th scope="col">상태</th>
+            <th scope="col">참조</th>
+            <th scope="col">감사</th>
+            <th scope="col">변경</th>
           </tr>
         </thead>
         <tbody>
@@ -179,21 +179,21 @@ function CurrentPolicy({ policy }: { policy: AiGovernanceRuntimePolicy | undefin
             <td>
               <span className={`badge ${policyTone(policy)}`}>{modeLabel(policy.mode)}</span>
               <span className="subtle" style={{ display: "block" }}>
-                grace {formatDateTime(policy.grace_until)}
+                유예 {formatDateTime(policy.grace_until)}
               </span>
             </td>
             <td>
               <span className="subtle" style={{ display: "block" }}>
-                subject {safeRef(policy.subject_mapping_ref)}
+                대상 {safeRef(policy.subject_mapping_ref)}
               </span>
               <span className="subtle" style={{ display: "block" }}>
-                owner {safeRef(policy.emergency_override_owner_ref)}
+                담당 {safeRef(policy.emergency_override_owner_ref)}
               </span>
               <span className="subtle" style={{ display: "block" }}>
-                decision {safeRef(policy.policy_decision_ref)}
+                결정 {safeRef(policy.policy_decision_ref)}
               </span>
               <span className="subtle" style={{ display: "block" }}>
-                evidence {nullableRef(policy.evidence_ref)}
+                증빙 {nullableRef(policy.evidence_ref)}
               </span>
             </td>
             <td>
@@ -201,7 +201,7 @@ function CurrentPolicy({ policy }: { policy: AiGovernanceRuntimePolicy | undefin
             </td>
             <td>
               <span className="subtle" style={{ display: "block" }}>
-                by {safeRef(policy.updated_by)}
+                처리자 {safeRef(policy.updated_by)}
               </span>
               <span className="subtle" style={{ display: "block" }}>
                 {formatDateTime(policy.updated_at)}
@@ -285,27 +285,27 @@ function policyTone(policy: AiGovernanceRuntimePolicy | undefined): "green" | "b
 }
 
 function policyBadgeLabel(policy: AiGovernanceRuntimePolicy | undefined): string {
-  return policy === undefined ? "not configured" : modeLabel(policy.mode);
+  return policy === undefined ? "미설정" : modeLabel(policy.mode);
 }
 
+// 적용 방식 → 운영자 한국어(닫힌 맵). 미매핑은 raw 폴백(조용한 공백 금지).
+const MODE_LABELS: Record<string, string> = { observe: "관찰", warn: "경고", block: "차단" };
 function modeLabel(mode: AiGovernanceRuntimePolicyMode): string {
-  if (mode === "observe") return "Observe";
-  if (mode === "warn") return "Warn";
-  return "Block";
+  return MODE_LABELS[mode] ?? mode;
 }
 
 function modeDetail(mode: AiGovernanceRuntimePolicyMode | undefined): string {
-  if (mode === "block") return "fail closed";
-  if (mode === "warn") return "warn and audit";
-  if (mode === "observe") return "audit only";
-  return "policy required";
+  if (mode === "block") return "미충족 실행 차단";
+  if (mode === "warn") return "경고 후 기록";
+  if (mode === "observe") return "기록만 수집";
+  return "정책 설정 필요";
 }
 
 function graceDetail(value: string | null | undefined): string {
-  if (value === null || value === undefined) return "no grace";
+  if (value === null || value === undefined) return "유예 없음";
   const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) return "configured";
-  return ms > Date.now() ? "active grace" : "expired grace";
+  if (!Number.isFinite(ms)) return "설정됨";
+  return ms > Date.now() ? "유예 적용 중" : "유예 만료";
 }
 
 function graceTone(value: string | null | undefined): "green" | "blue" | "amber" | "red" {
@@ -339,11 +339,11 @@ function safeFormValue(value: string): string {
 }
 
 function safeRef(value: string): string {
-  return isBlockedRawText(value) ? "withheld" : value;
+  return isBlockedRawText(value) ? "표시 제한" : value;
 }
 
 function nullableRef(value: string | null): string {
-  return value === null || value.trim().length === 0 ? "not set" : safeRef(value);
+  return value === null || value.trim().length === 0 ? "미입력" : safeRef(value);
 }
 
 function blankToNull(value: string): string | null {

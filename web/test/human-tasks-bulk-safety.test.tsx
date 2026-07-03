@@ -95,3 +95,57 @@ describe("HumanTasks 일괄 동작 안전성", () => {
     expect(calls.filter((c) => c.startsWith("resolve:"))).toHaveLength(2); // DOC/OTHER 미승인(제외 확인)
   });
 });
+
+// U2-1: 구조화 검토 1건이 지정(확인)→시작(확인)→입력→제출 4단계였다 — '내가 검토 시작' 원클릭 체인이
+// H1→H2를 확인 1회로 축약하고 상세(검토 폼)로 이동하는지의 회귀 가드.
+describe("HumanTasks 원클릭 검토 체인 (U2-1)", () => {
+  beforeEach(() => {
+    location.hash = "";
+    localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
+  });
+
+  test("open 구조화 검토 업무: 확인 1회로 내 배정+시작 후 상세로 이동", async () => {
+    const calls: string[] = [];
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({ items: [DOC_TASK], next_cursor: null }),
+        assignHumanTask: async (id, assignee, key) => {
+          calls.push(`assign:${id}:${assignee}:${key.endsWith(":a")}`);
+          return { human_task_id: id, state: "assigned" };
+        },
+        startHumanTask: async (id, key) => {
+          calls.push(`start:${id}:${key.endsWith(":s")}`);
+          return { human_task_id: id, state: "in_progress" };
+        },
+      }),
+    );
+    location.hash = "#humanTasks";
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "내가 검토 시작" }))[0]!);
+    fireEvent.click(await screen.findByRole("button", { name: "확인" }));
+
+    await waitFor(() => expect(calls).toEqual([
+      `assign:${DOC_TASK.human_task_id}:u:true`,
+      `start:${DOC_TASK.human_task_id}:true`,
+    ]));
+    // 시작 즉시 상세(검토 폼)로 딥링크 — ht 파라미터가 해당 업무를 가리킨다.
+    await waitFor(() => expect(location.hash).toContain(`ht=${DOC_TASK.human_task_id}`));
+  });
+
+  test("타인에게 배정된 구조화 검토 업무에는 체인 버튼을 그리지 않는다(가로채기 방지)", async () => {
+    const OTHERS_TASK = { ...DOC_TASK, human_task_id: "73000000-0000-0000-0000-0000000000d2", state: "assigned", assignee: "someone-else" };
+    renderApp(fakeClient({ listHumanTasks: async () => ({ items: [OTHERS_TASK], next_cursor: null }) }));
+    location.hash = "#humanTasks";
+
+    await screen.findByRole("button", { name: "시작" });
+    expect(screen.queryByRole("button", { name: "내가 검토 시작" })).toBeNull();
+  });
+
+  test("단순 확인 업무(구조화 입력 없음)에는 체인 버튼 대신 기존 경로 유지", async () => {
+    renderApp(fakeClient({ listHumanTasks: async () => ({ items: [PLAIN_TASK], next_cursor: null }) }));
+    location.hash = "#humanTasks";
+
+    await screen.findByRole("button", { name: "내 담당으로 지정" });
+    expect(screen.queryByRole("button", { name: "내가 검토 시작" })).toBeNull();
+  });
+});

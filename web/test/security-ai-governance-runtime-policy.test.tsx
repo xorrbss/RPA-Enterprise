@@ -75,14 +75,14 @@ describe("AI governance runtime policy panel", () => {
     }));
     renderApp(fakeClient({ getAiGovernanceRuntimePolicy }));
 
-    const panel = await screen.findByRole("region", { name: "AI runtime policy" });
-    expect(await within(panel).findByText("AI runtime policy")).toBeInTheDocument();
-    expect(await within(panel).findByText("subject subject-map:ai-runtime/prod")).toBeInTheDocument();
-    expect(await within(panel).findByText("owner team:ai-governance-oncall")).toBeInTheDocument();
-    expect(await within(panel).findByText("decision policy-decision:ai-governance/runtime-enforcement")).toBeInTheDocument();
+    const panel = await screen.findByRole("region", { name: "AI 운영 정책" });
+    expect(await within(panel).findByText("AI 운영 정책")).toBeInTheDocument();
+    expect(await within(panel).findByText("대상 subject-map:ai-runtime/prod")).toBeInTheDocument();
+    expect(await within(panel).findByText("담당 team:ai-governance-oncall")).toBeInTheDocument();
+    expect(await within(panel).findByText("결정 policy-decision:ai-governance/runtime-enforcement")).toBeInTheDocument();
     expect((await within(panel).findAllByText("ai_governance.enforce")).length).toBeGreaterThan(0);
-    expect(within(panel).getByText("Admin role is required to manage AI runtime policy.")).toBeInTheDocument();
-    expect(within(panel).queryByRole("button", { name: "Save runtime policy" })).toBeNull();
+    expect(within(panel).getByText("AI 운영 정책 관리는 관리자 권한이 필요합니다.")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "운영 정책 저장" })).toBeNull();
     expect(getAiGovernanceRuntimePolicy).toHaveBeenCalled();
   });
 
@@ -94,17 +94,17 @@ describe("AI governance runtime policy panel", () => {
       upsertAiGovernanceRuntimePolicy,
     }));
 
-    const panel = await screen.findByRole("region", { name: "AI runtime policy" });
+    const panel = await screen.findByRole("region", { name: "AI 운영 정책" });
     const scoped = within(panel);
-    await scoped.findByRole("button", { name: "Save runtime policy" });
-    fireEvent.change(scoped.getByLabelText("Mode"), { target: { value: "block" } });
-    fireEvent.change(scoped.getByLabelText("Subject mapping ref"), { target: { value: "subject-map:ai-runtime/prod" } });
-    fireEvent.change(scoped.getByLabelText("Override owner ref"), { target: { value: "team:ai-governance-oncall" } });
-    fireEvent.change(scoped.getByLabelText("Policy decision ref"), {
+    await scoped.findByRole("button", { name: "운영 정책 저장" });
+    fireEvent.change(scoped.getByLabelText("적용 방식"), { target: { value: "block" } });
+    fireEvent.change(scoped.getByLabelText("대상 매핑 참조"), { target: { value: "subject-map:ai-runtime/prod" } });
+    fireEvent.change(scoped.getByLabelText("긴급 해제 담당 참조"), { target: { value: "team:ai-governance-oncall" } });
+    fireEvent.change(scoped.getByLabelText("정책 결정 참조"), {
       target: { value: "policy-decision:ai-governance/runtime-enforcement" },
     });
-    fireEvent.change(scoped.getByLabelText("Evidence ref"), { target: { value: "artifact:ai-governance/runtime-policy-prod" } });
-    fireEvent.click(scoped.getByRole("button", { name: "Save runtime policy" }));
+    fireEvent.change(scoped.getByLabelText("증빙 참조"), { target: { value: "artifact:ai-governance/runtime-policy-prod" } });
+    fireEvent.click(scoped.getByRole("button", { name: "운영 정책 저장" }));
 
     await waitFor(() => expect(upsertAiGovernanceRuntimePolicy).toHaveBeenCalledTimes(1));
     const body = upsertAiGovernanceRuntimePolicy.mock.calls[0]?.[0];
@@ -131,13 +131,13 @@ describe("AI governance runtime policy panel", () => {
       upsertAiGovernanceRuntimePolicy,
     }));
 
-    const panel = await screen.findByRole("region", { name: "AI runtime policy" });
+    const panel = await screen.findByRole("region", { name: "AI 운영 정책" });
     const scoped = within(panel);
-    await scoped.findByRole("button", { name: "Save runtime policy" });
-    fireEvent.change(scoped.getByLabelText("Subject mapping ref"), { target: { value: "https://internal.example/runtime-policy" } });
+    await scoped.findByRole("button", { name: "운영 정책 저장" });
+    fireEvent.change(scoped.getByLabelText("대상 매핑 참조"), { target: { value: "https://internal.example/runtime-policy" } });
 
-    expect(scoped.getByRole("button", { name: "Save runtime policy" })).toBeDisabled();
-    expect(scoped.getByText("Use opaque refs only; remove endpoints or credential-like material before saving.")).toBeInTheDocument();
+    expect(scoped.getByRole("button", { name: "운영 정책 저장" })).toBeDisabled();
+    expect(scoped.getByText("참조 값만 입력하세요. 주소(URL)나 비밀번호·토큰 같은 값은 지운 뒤 저장하세요.")).toBeInTheDocument();
     expect(upsertAiGovernanceRuntimePolicy).not.toHaveBeenCalled();
   });
 });

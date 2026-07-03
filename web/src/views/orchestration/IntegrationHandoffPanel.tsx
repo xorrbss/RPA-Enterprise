@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { IntegrationHandoff, IntegrationHandoffReceiptStatus } from "../../api/types";
+import { statusLabel } from "../../components/badges";
 import { formatDateTime } from "./format";
 
 export interface IntegrationHandoffCreateDraft {
@@ -40,7 +41,7 @@ interface HandoffProviderProfile {
 const HANDOFF_PROVIDER_PROFILES: readonly HandoffProviderProfile[] = [
   {
     id: "owner-defined",
-    label: "Owner-defined existing RPA",
+    label: "직접 지정 기존 RPA",
     alias: "existing-rpa-primary",
     callbackUrlSecretRef: "secret://tenant-a/integration/existing-rpa/callback-url",
     callbackSignatureSecretRef: "secret://tenant-a/integration/existing-rpa/callback-signing",
@@ -49,7 +50,7 @@ const HANDOFF_PROVIDER_PROFILES: readonly HandoffProviderProfile[] = [
   },
   {
     id: "uipath",
-    label: "UiPath provider profile",
+    label: "UiPath 연동 프로필",
     alias: "uipath-primary",
     callbackUrlSecretRef: "secret://tenant-a/integration/uipath/callback-url",
     callbackSignatureSecretRef: "secret://tenant-a/integration/uipath/callback-signing",
@@ -58,7 +59,7 @@ const HANDOFF_PROVIDER_PROFILES: readonly HandoffProviderProfile[] = [
   },
   {
     id: "automation-anywhere",
-    label: "Automation Anywhere provider profile",
+    label: "Automation Anywhere 연동 프로필",
     alias: "automation-anywhere-primary",
     callbackUrlSecretRef: "secret://tenant-a/integration/automation-anywhere/callback-url",
     callbackSignatureSecretRef: "secret://tenant-a/integration/automation-anywhere/callback-signing",
@@ -67,7 +68,7 @@ const HANDOFF_PROVIDER_PROFILES: readonly HandoffProviderProfile[] = [
   },
   {
     id: "power-automate",
-    label: "Power Automate provider profile",
+    label: "Power Automate 연동 프로필",
     alias: "power-automate-primary",
     callbackUrlSecretRef: "secret://tenant-a/integration/power-automate/callback-url",
     callbackSignatureSecretRef: "secret://tenant-a/integration/power-automate/callback-signing",
@@ -76,7 +77,7 @@ const HANDOFF_PROVIDER_PROFILES: readonly HandoffProviderProfile[] = [
   },
   {
     id: "blue-prism",
-    label: "Blue Prism provider profile",
+    label: "Blue Prism 연동 프로필",
     alias: "blue-prism-primary",
     callbackUrlSecretRef: "secret://tenant-a/integration/blue-prism/callback-url",
     callbackSignatureSecretRef: "secret://tenant-a/integration/blue-prism/callback-signing",
@@ -123,8 +124,8 @@ export function IntegrationHandoffPanel({
   return (
     <div className="ops-column">
       <div className="ops-alert-center-head">
-        <h3>Existing RPA handoff</h3>
-        <span className="badge muted">{isLoading ? "Loading" : `${handoffs.length} shown`}</span>
+        <h3>기존 RPA 전달</h3>
+        <span className="badge muted">{isLoading ? "불러오는 중" : `${handoffs.length}건 표시`}</span>
       </div>
       {canCreate && (
         <IntegrationHandoffCreateForm
@@ -183,15 +184,15 @@ function IntegrationHandoffCreateForm({
     const callbackRef = callbackUrlSecretRef.trim();
     const callbackSignatureRef = callbackSignatureSecretRef.trim();
     if (provider.length === 0 || job.length === 0 || payload.length === 0) {
-      setValidationError("Provider, job ref, and payload ref are required.");
+      setValidationError("전달 대상, 작업 참조, 자료 참조를 모두 입력하세요.");
       return;
     }
     if (callbackRef.length > 0 && !callbackRef.startsWith("secret://")) {
-      setValidationError("Callback URL must be a SecretRef.");
+      setValidationError("회신 주소는 SecretRef 형식이어야 합니다.");
       return;
     }
     if (callbackSignatureRef.length > 0 && !callbackSignatureRef.startsWith("secret://")) {
-      setValidationError("Callback signature key must be a SecretRef.");
+      setValidationError("회신 서명 키는 SecretRef 형식이어야 합니다.");
       return;
     }
     setValidationError(null);
@@ -209,45 +210,45 @@ function IntegrationHandoffCreateForm({
     <form className="ops-webhook-form" onSubmit={submit}>
       <div className="form-grid ops-webhook-grid">
         <label className="field">
-          Handoff provider profile
-          <select aria-label="Handoff provider profile" value={providerProfileId} onChange={(event) => selectProviderProfile(event.target.value)}>
+          전달 대상 프로필
+          <select aria-label="전달 대상 프로필" value={providerProfileId} onChange={(event) => selectProviderProfile(event.target.value)}>
             {HANDOFF_PROVIDER_PROFILES.map((profile) => (
               <option key={profile.id} value={profile.id}>{profile.label}</option>
             ))}
           </select>
         </label>
         <label className="field">
-          Handoff provider alias
-          <input aria-label="Handoff provider" value={providerAlias} onChange={(event) => setProviderAlias(event.target.value)} />
+          전달 대상 별칭
+          <input aria-label="전달 대상 별칭" value={providerAlias} onChange={(event) => setProviderAlias(event.target.value)} />
         </label>
         <label className="field">
-          Handoff job ref
-          <input aria-label="Handoff job ref" value={jobRef} onChange={(event) => setJobRef(event.target.value)} />
+          전달 작업 참조
+          <input aria-label="전달 작업 참조" value={jobRef} onChange={(event) => setJobRef(event.target.value)} />
         </label>
         <label className="field">
-          Handoff payload ref
-          <input aria-label="Handoff payload ref" value={payloadRef} onChange={(event) => setPayloadRef(event.target.value)} />
+          전달 자료 참조
+          <input aria-label="전달 자료 참조" value={payloadRef} onChange={(event) => setPayloadRef(event.target.value)} />
         </label>
         <label className="field">
-          Handoff callback SecretRef
-          <input aria-label="Handoff callback URL SecretRef" value={callbackUrlSecretRef} onChange={(event) => setCallbackUrlSecretRef(event.target.value)} />
+          전달 회신 SecretRef
+          <input aria-label="전달 회신 SecretRef" value={callbackUrlSecretRef} onChange={(event) => setCallbackUrlSecretRef(event.target.value)} />
         </label>
         <label className="field">
-          Handoff signature SecretRef
-          <input aria-label="Handoff callback signature SecretRef" value={callbackSignatureSecretRef} onChange={(event) => setCallbackSignatureSecretRef(event.target.value)} />
+          전달 서명 SecretRef
+          <input aria-label="전달 서명 SecretRef" value={callbackSignatureSecretRef} onChange={(event) => setCallbackSignatureSecretRef(event.target.value)} />
         </label>
       </div>
-      <p className="subtle">Provider profiles are metadata-only handoff guides. Vendor API/OAuth, job mapping, and endpoint ownership remain owner/provider decisions; callback and dispatch material must stay SecretRef-only.</p>
+      <p className="subtle">연동 프로필은 참고용 안내(메타데이터 전용)입니다. 벤더 API/OAuth, 작업 매핑, 엔드포인트 관리는 운영 담당자와 제공자가 결정하며, 회신·발송 정보는 SecretRef로만 보관해야 합니다.</p>
       <div className="inline-actions">
         <label className="checkbox-inline">
           <input type="checkbox" checked={legalHold} onChange={(event) => setLegalHold(event.target.checked)} />
-          Legal hold
+          법적 보존
         </label>
         <button className="btn" type="submit" disabled={isCreating}>
-          {isCreating ? "Recording" : "Create handoff"}
+          {isCreating ? "기록 중" : "전달 만들기"}
         </button>
         {validationError !== null && <span className="form-alert red" role="alert">{validationError}</span>}
-        {hasError && <span className="form-alert red" role="alert">Handoff request failed</span>}
+        {hasError && <span className="form-alert red" role="alert">전달 요청에 실패했습니다</span>}
       </div>
     </form>
   );
@@ -282,16 +283,16 @@ function IntegrationHandoffList({
   if (isError) {
     return (
       <div className="ops-alert-empty" role="status">
-        <strong>Handoff ledger unavailable</strong>
-        <span className="subtle">Existing RPA handoff evidence could not be loaded.</span>
+        <strong>전달 기록을 확인할 수 없습니다</strong>
+        <span className="subtle">기존 RPA 전달 증빙을 불러오지 못했습니다.</span>
       </div>
     );
   }
   if (handoffs.length === 0) {
     return (
       <div className="ops-alert-empty" role="status">
-        <strong>No handoff requests recorded</strong>
-        <span className="subtle">External RPA completion is not inferred without a receipt.</span>
+        <strong>기록된 전달 요청이 없습니다</strong>
+        <span className="subtle">수신 확인이 없으면 외부 RPA 완료로 처리하지 않습니다.</span>
       </div>
     );
   }
@@ -301,24 +302,20 @@ function IntegrationHandoffList({
         <li key={handoff.handoff_id}>
           <div className="ops-alert-main">
             <div className="ops-alert-badges">
-              <span className={`badge ${handoffTone(handoff.status)}`}>{handoff.status}</span>
+              <span className={`badge ${handoffTone(handoff.status)}`}>{handoffStatusLabel(handoff.status)}</span>
               <span className="subtle">{handoff.provider_alias}</span>
             </div>
             <strong>{handoff.job_ref}</strong>
-            <span className="subtle">payload {handoff.payload_ref}</span>
-            <span className="subtle">{formatDateTime(handoff.requested_at)} by {handoff.requested_by}</span>
+            <span className="subtle">자료 {handoff.payload_ref}</span>
+            <span className="subtle">{formatDateTime(handoff.requested_at)} · 요청자 {handoff.requested_by}</span>
             {handoff.latest_receipt_id !== null && (
-              <span className="subtle">receipt {handoff.latest_receipt_id} / external job {handoff.external_job_id ?? "pending"}</span>
+              <span className="subtle">수신 확인 {handoff.latest_receipt_id} / 외부 작업 {handoff.external_job_id ?? "대기"}</span>
             )}
           </div>
           <div className="inline-actions">
             {canDispatch && isDispatchable(handoff) && (
-              <button
-                className="linklike"
-                type="button"
-                onClick={() => setDispatchFormHandoffId((current) => (current === handoff.handoff_id ? null : handoff.handoff_id))}
-              >
-                {dispatchFormHandoffId === handoff.handoff_id ? "Hide dispatch" : "Dispatch"}
+              <button className="linklike" type="button" onClick={() => setDispatchFormHandoffId((current) => (current === handoff.handoff_id ? null : handoff.handoff_id))}>
+                {dispatchFormHandoffId === handoff.handoff_id ? "발송 닫기" : "발송"}
               </button>
             )}
             {canRecordReceipt && (
@@ -327,11 +324,11 @@ function IntegrationHandoffList({
                 type="button"
                 onClick={() => setReceiptFormHandoffId((current) => (current === handoff.handoff_id ? null : handoff.handoff_id))}
               >
-                {receiptFormHandoffId === handoff.handoff_id ? "Hide receipt" : "Record receipt"}
+                {receiptFormHandoffId === handoff.handoff_id ? "수신 확인 닫기" : "수신 확인 기록"}
               </button>
             )}
-            {dispatchErrorHandoffId === handoff.handoff_id && <span className="form-alert red" role="alert">Dispatch failed</span>}
-            {receiptErrorHandoffId === handoff.handoff_id && <span className="form-alert red" role="alert">Receipt failed</span>}
+            {dispatchErrorHandoffId === handoff.handoff_id && <span className="form-alert red" role="alert">발송에 실패했습니다</span>}
+            {receiptErrorHandoffId === handoff.handoff_id && <span className="form-alert red" role="alert">수신 확인 기록에 실패했습니다</span>}
           </div>
           {dispatchFormHandoffId === handoff.handoff_id && (
             <IntegrationHandoffDispatchForm
@@ -377,15 +374,15 @@ function IntegrationHandoffDispatchForm({
       .map((host) => host.trim().toLowerCase())
       .filter((host) => host.length > 0);
     if (!endpoint.startsWith("secret://")) {
-      setValidationError("Dispatch endpoint must be a SecretRef.");
+      setValidationError("발송 대상 주소는 SecretRef 형식이어야 합니다.");
       return;
     }
     if (hosts.length === 0 || hosts.some((host) => host.includes("/") || host.includes(":") || host === "localhost")) {
-      setValidationError("Allowed hosts must be public host names.");
+      setValidationError("허용 호스트는 공개 호스트 이름만 입력할 수 있습니다.");
       return;
     }
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) {
-      setValidationError("Max attempts must be between 1 and 20.");
+      setValidationError("최대 시도 횟수는 1에서 20 사이여야 합니다.");
       return;
     }
     setValidationError(null);
@@ -396,25 +393,25 @@ function IntegrationHandoffDispatchForm({
     <form className="ops-webhook-form nested-form" onSubmit={submit}>
       <div className="form-grid ops-webhook-grid">
         <label className="field">
-          Dispatch endpoint SecretRef
-          <input aria-label={`Dispatch endpoint SecretRef for ${handoff.handoff_id}`} value={endpointSecretRef} onChange={(event) => setEndpointSecretRef(event.target.value)} />
+          발송 대상 SecretRef
+          <input aria-label={`발송 대상 SecretRef ${handoff.handoff_id}`} value={endpointSecretRef} onChange={(event) => setEndpointSecretRef(event.target.value)} />
         </label>
         <label className="field">
-          Allowed hosts
-          <input aria-label={`Dispatch allowed hosts for ${handoff.handoff_id}`} value={allowedHosts} onChange={(event) => setAllowedHosts(event.target.value)} />
+          허용 호스트
+          <input aria-label={`허용 호스트 ${handoff.handoff_id}`} value={allowedHosts} onChange={(event) => setAllowedHosts(event.target.value)} />
         </label>
         <label className="field">
-          Max attempts
-          <input aria-label={`Dispatch max attempts for ${handoff.handoff_id}`} type="number" min={1} max={20} value={maxAttempts} onChange={(event) => setMaxAttempts(Number(event.target.value))} />
+          최대 시도 횟수
+          <input aria-label={`최대 시도 횟수 ${handoff.handoff_id}`} type="number" min={1} max={20} value={maxAttempts} onChange={(event) => setMaxAttempts(Number(event.target.value))} />
         </label>
       </div>
       <div className="inline-actions">
         <label className="checkbox-inline">
           <input type="checkbox" checked={legalHold} onChange={(event) => setLegalHold(event.target.checked)} />
-          Legal hold
+          법적 보존
         </label>
         <button className="btn" type="submit" disabled={isDispatching}>
-          {isDispatching ? "Dispatching" : "Queue dispatch"}
+          {isDispatching ? "발송 중" : "발송 예약"}
         </button>
         {validationError !== null && <span className="form-alert red" role="alert">{validationError}</span>}
       </div>
@@ -444,11 +441,11 @@ function IntegrationHandoffReceiptForm({
     const receipt = receiptId.trim();
     const error = errorCode.trim();
     if (externalJob.length === 0 || receipt.length === 0) {
-      setValidationError("External job id and receipt id are required.");
+      setValidationError("외부 작업 ID와 수신 확인 ID를 입력하세요.");
       return;
     }
     if (status === "failed" && error.length === 0) {
-      setValidationError("Failed handoffs require an error code.");
+      setValidationError("실패 처리에는 오류 코드가 필요합니다.");
       return;
     }
     setValidationError(null);
@@ -465,34 +462,34 @@ function IntegrationHandoffReceiptForm({
     <form className="ops-webhook-form" onSubmit={submit}>
       <div className="form-grid ops-webhook-grid">
         <label className="field">
-          Handoff external job id
-          <input aria-label="External RPA job id" value={externalJobId} onChange={(event) => setExternalJobId(event.target.value)} />
+          외부 작업 ID
+          <input aria-label="외부 작업 ID" value={externalJobId} onChange={(event) => setExternalJobId(event.target.value)} />
         </label>
         <label className="field">
-          Handoff receipt status
-          <select aria-label="Handoff receipt status" value={status} onChange={(event) => setStatus(event.target.value as IntegrationHandoffReceiptStatus)}>
-            <option value="accepted">accepted</option>
-            <option value="completed">completed</option>
-            <option value="failed">failed</option>
-            <option value="cancelled">cancelled</option>
+          수신 확인 상태
+          <select aria-label="수신 확인 상태" value={status} onChange={(event) => setStatus(event.target.value as IntegrationHandoffReceiptStatus)}>
+            <option value="accepted">{handoffStatusLabel("accepted")}</option>
+            <option value="completed">{handoffStatusLabel("completed")}</option>
+            <option value="failed">{handoffStatusLabel("failed")}</option>
+            <option value="cancelled">{handoffStatusLabel("cancelled")}</option>
           </select>
         </label>
         <label className="field">
-          Handoff receipt id
-          <input aria-label="Handoff receipt id" value={receiptId} onChange={(event) => setReceiptId(event.target.value)} />
+          수신 확인 ID
+          <input aria-label="수신 확인 ID" value={receiptId} onChange={(event) => setReceiptId(event.target.value)} />
         </label>
         <label className="field">
-          Handoff error code
-          <input aria-label="Handoff error code" value={errorCode} onChange={(event) => setErrorCode(event.target.value)} />
+          오류 코드
+          <input aria-label="오류 코드" value={errorCode} onChange={(event) => setErrorCode(event.target.value)} />
         </label>
       </div>
       <div className="inline-actions">
         <label className="checkbox-inline">
           <input type="checkbox" checked={legalHold} onChange={(event) => setLegalHold(event.target.checked)} />
-          Legal hold
+          법적 보존
         </label>
         <button className="btn" type="submit" disabled={isRecording}>
-          {isRecording ? "Recording" : "Save receipt"}
+          {isRecording ? "기록 중" : "수신 확인 저장"}
         </button>
         {validationError !== null && <span className="form-alert red" role="alert">{validationError}</span>}
       </div>
@@ -500,9 +497,12 @@ function IntegrationHandoffReceiptForm({
   );
 }
 
-function handoffTone(status: IntegrationHandoff["status"]): "green" | "amber" | "red" | "blue" {
+const HANDOFF_STATUS_LABELS: Record<string, string> = { accepted: "접수됨", deferred: "전달 대기" }; // 패널 고유값만 로컬
+function handoffStatusLabel(status: string): string { return HANDOFF_STATUS_LABELS[status] ?? statusLabel(status); } // 공유 enum(completed/failed/cancelled)은 badges statusLabel 재사용, 미매핑 raw 폴백(조용한 공백 금지)
+function handoffTone(status: IntegrationHandoff["status"]): "green" | "amber" | "red" | "blue" | "muted" {
   if (status === "completed") return "green";
-  if (status === "failed" || status === "cancelled") return "red";
+  if (status === "failed") return "red";
+  if (status === "cancelled") return "muted"; // 취소됨=중립 — 실패와 분리(어휘 정합: badges.tsx tone)
   if (status === "deferred") return "amber";
   return "blue";
 }
