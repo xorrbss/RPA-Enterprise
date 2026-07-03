@@ -1451,8 +1451,9 @@ export function DashboardView(): JSX.Element {
   const failedSys = useQuery({ queryKey: ["runs", "failed_system", DASHBOARD_RUN_MODE], queryFn: () => api.listRuns({ status: "failed_system", run_mode: DASHBOARD_RUN_MODE, limit: 50 }), refetchInterval: 5_000 });
   const redSites = useQuery({ queryKey: ["sites", "red"], queryFn: () => api.listSites({ risk: "red", limit: 50 }), refetchInterval: 10_000 });
   // 관찰성 집계(§E run_success_rate + status별 정확 카운트). 서버 GROUP BY 라 카드가 '50+' 근사 대신 정확 총계.
-  const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
-  const trends = useQuery({ queryKey: ["runs", "trends"], queryFn: () => api.getRunTrends(30), refetchInterval: 30_000 });
+  // run_mode=prod 고정 — 카드/스파크라인 집계와 드릴다운 목록(runTrace?run_mode=prod)의 모집단 통일(A1-1).
+  const summary = useQuery({ queryKey: ["runs", "summary", DASHBOARD_RUN_MODE], queryFn: () => api.getRunSummary(DASHBOARD_RUN_MODE), refetchInterval: 5_000 });
+  const trends = useQuery({ queryKey: ["runs", "trends", DASHBOARD_RUN_MODE], queryFn: () => api.getRunTrends(30, DASHBOARD_RUN_MODE), refetchInterval: 30_000 });
   const performanceReport = useQuery({
     queryKey: ["automation-performance-report", reportMonth, reportRunMode],
     queryFn: () => api.getAutomationPerformanceReport(reportMonth, reportRunMode),
