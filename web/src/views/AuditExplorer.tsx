@@ -2,80 +2,26 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
-import { ROLE_LABELS, useCan } from "../api/permissions";
-import type { AuditLogItem, AuditLogListParams, AuditOutcome, AuditVerificationRun } from "../api/types";
+import { useCan } from "../api/permissions";
+import type { AuditLogListParams, AuditOutcome } from "../api/types";
 import { ErrorState, Loading } from "../components/states";
 import { mergeParams, useHashParam } from "../router";
 import { formatShortDateTime } from "../util/time";
-
-const OUTCOME_LABEL: Record<AuditOutcome, string> = {
-  allow: "허용",
-  deny: "거부",
-  blocked: "차단",
-  error: "오류",
-};
-
-const ACTION_LABEL: Record<string, string> = {
-  "artifact.read": "증빙 조회",
-  "approval.decide": "결재 처리",
-  "human_task.assign": "확인 업무 배정",
-  "human_task.resolve": "확인 업무 완료",
-  "run.abort": "자동화 중단",
-  "run.create": "자동화 실행 시작",
-  "scenario.promote": "운영 버전 지정",
-  "site.approve": "업무 사이트 승인",
-};
-
-const VERIFICATION_STATUS_LABEL: Record<AuditVerificationRun["status"], string> = {
-  valid: "정상",
-  invalid: "무결성 오류",
-  failed: "검증 실패",
-};
-
-function outcomeTone(outcome: AuditOutcome): string {
-  if (outcome === "allow") return "green";
-  if (outcome === "deny" || outcome === "blocked") return "red";
-  return "amber";
-}
-
-function verificationTone(status: AuditVerificationRun["status"]): string {
-  return status === "valid" ? "green" : "red";
-}
-
-function actionLabel(action: string): string {
-  return ACTION_LABEL[action] ?? "기록된 업무";
-}
-
-function actionFilterText(value: string | null): string {
-  if (value === null) return "";
-  return ACTION_LABEL[value] ?? value;
-}
-
-function actionFilterValue(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return "";
-  const match = Object.entries(ACTION_LABEL).find(
-    ([raw, label]) => raw === trimmed || label === trimmed,
-  );
-  return match?.[0] ?? trimmed;
-}
-
-function permissionScopeText(roles: readonly string[]): string {
-  const labels = roles.map((role) => ROLE_LABELS[role] ?? role);
-  return labels.length > 0 ? labels.join(", ") : "권한 범위 미확인";
-}
-
-function actorLabel(value: string | null): string {
-  return value === null ? "담당자 미확인" : "처리자 확인됨";
-}
-
-function traceLabel(): string {
-  return "요청 추적 가능";
-}
-
-function hashStateLabel(value: string | null): string {
-  return value === null ? "첫 감사 기록" : "이전 기록과 연결됨";
-}
+import { exportAuditPeriodCsv, downloadCsv } from "./audit/audit-csv";
+import {
+  ACTION_LABEL,
+  OUTCOME_LABEL,
+  VERIFICATION_STATUS_LABEL,
+  actionFilterText,
+  actionFilterValue,
+  actionLabel,
+  actorLabel,
+  hashStateLabel,
+  occurredAtParam,
+  outcomeTone,
+  permissionScopeText,
+  verificationTone,
+} from "./audit/audit-labels";
 
 function dateLabel(value: string | null): string {
   return formatShortDateTime(value);
@@ -116,8 +62,8 @@ export function AuditExplorerView(): JSX.Element {
         ...(outcome !== "all" ? { outcome } : {}),
         ...(actor.trim().length > 0 ? { actor: actor.trim() } : {}),
         ...(correlationId.trim().length > 0 ? { correlation_id: correlationId.trim() } : {}),
-        ...(occurredAtFrom.trim().length > 0 ? { occurred_at_from: occurredAtFrom.trim() } : {}),
-        ...(occurredAtTo.trim().length > 0 ? { occurred_at_to: occurredAtTo.trim() } : {}),
+        ...(occurredAtFrom.trim().length > 0 ? { occurred_at_from: occurredAtParam(occurredAtFrom) } : {}),
+        ...(occurredAtTo.trim().length > 0 ? { occurred_at_to: occurredAtParam(occurredAtTo) } : {}),
       };
     },
     [action, actor, correlationId, cursor, occurredAtFrom, occurredAtTo, outcome],
@@ -148,8 +94,8 @@ export function AuditExplorerView(): JSX.Element {
         ...(outcome !== "all" ? { outcome } : {}),
         ...(actor.trim().length > 0 ? { actor: actor.trim() } : {}),
         ...(correlationId.trim().length > 0 ? { correlation_id: correlationId.trim() } : {}),
-        ...(occurredAtFrom.trim().length > 0 ? { occurred_at_from: occurredAtFrom.trim() } : {}),
-        ...(occurredAtTo.trim().length > 0 ? { occurred_at_to: occurredAtTo.trim() } : {}),
+        ...(occurredAtFrom.trim().length > 0 ? { occurred_at_from: occurredAtParam(occurredAtFrom) } : {}),
+        ...(occurredAtTo.trim().length > 0 ? { occurred_at_to: occurredAtParam(occurredAtTo) } : {}),
       };
     },
     [action, actor, correlationId, occurredAtFrom, occurredAtTo, outcome],
@@ -332,11 +278,11 @@ export function AuditExplorerView(): JSX.Element {
           </label>
           <label className="field">
             <span>처리자</span>
-            <input value={actor} placeholder="계정 또는 담당자" onChange={(event) => { setFilter({ actor: event.target.value }); }} />
+            <input value={actor} placeholder="목록의 '이 처리자로 조회'로 채워집니다" onChange={(event) => { setFilter({ actor: event.target.value }); }} />
           </label>
           <label className="field">
             <span>추적 번호</span>
-            <input value={correlationId} placeholder="예: 요청-123" onChange={(event) => { setFilter({ correlationId: event.target.value }); }} />
+            <input value={correlationId} placeholder="추적 번호 전체 값" onChange={(event) => { setFilter({ correlationId: event.target.value }); }} />
           </label>
           <label className="field">
             <span>시작 시각</span>
@@ -413,8 +359,18 @@ export function AuditExplorerView(): JSX.Element {
                     <td>
                       <span title={item.actor.subject_id === null ? undefined : `처리자 식별값: ${item.actor.subject_id}`}>{actorLabel(item.actor.subject_id)}</span>
                       <span className="subtle">권한 범위 {permissionScopeText(item.actor.roles)}</span>
+                      {item.actor.subject_id !== null && (
+                        <button className="linklike" type="button" onClick={() => { setFilter({ actor: item.actor.subject_id ?? "" }); }}>
+                          이 처리자로 조회
+                        </button>
+                      )}
                     </td>
-                    <td><span title={`요청 추적 번호: ${item.correlation_id}`}>{traceLabel()}</span></td>
+                    <td>
+                      <span title={`요청 추적 번호: ${item.correlation_id}`}>요청 추적 가능</span>
+                      <button className="linklike" type="button" onClick={() => { setFilter({ correlationId: item.correlation_id }); }}>
+                        이 번호로 조회
+                      </button>
+                    </td>
                     <td>
                       <span>{hashStateLabel(item.hash)}</span>
                       <details className="audit-technical-details">
@@ -448,77 +404,4 @@ export function AuditExplorerView(): JSX.Element {
       </section>
     </div>
   );
-}
-
-async function exportAuditPeriodCsv(
-  listAuditLog: (params?: AuditLogListParams) => Promise<{ readonly items: readonly AuditLogItem[]; readonly next_cursor: string | null }>,
-  params: AuditLogListParams,
-): Promise<string> {
-  const rows: AuditLogItem[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await listAuditLog({ ...params, limit: 200, ...(cursor !== undefined ? { cursor } : {}) });
-    rows.push(...page.items);
-    cursor = page.next_cursor ?? undefined;
-  } while (cursor !== undefined);
-  return auditItemsToCsv(rows);
-}
-
-function auditItemsToCsv(rows: readonly AuditLogItem[]): string {
-  const header = [
-    "audit_id",
-    "sequence_no",
-    "actor_subject_id",
-    "actor_roles",
-    "action",
-    "outcome",
-    "reason",
-    "correlation_id",
-    "idempotency_key",
-    "occurred_at",
-    "payload_schema_ref",
-    "retention_until",
-    "legal_hold",
-    "previous_hash",
-    "hash",
-    "created_at",
-  ];
-  const lines = rows.map((row) => [
-    row.audit_id,
-    String(row.sequence_no),
-    row.actor.subject_id ?? "",
-    row.actor.roles.join(";"),
-    row.action,
-    row.outcome,
-    row.reason ?? "",
-    row.correlation_id,
-    row.idempotency_key,
-    row.occurred_at,
-    row.payload_schema_ref,
-    row.retention_until ?? "",
-    String(row.legal_hold),
-    row.previous_hash ?? "",
-    row.hash,
-    row.created_at,
-  ].map(csvCell).join(","));
-  return [header.join(","), ...lines].join("\n");
-}
-
-function csvCell(value: string): string {
-  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  return `"${guarded.replace(/"/g, "\"\"")}"`;
-}
-
-function downloadCsv(csv: string, filename: string): void {
-  if (typeof URL.createObjectURL !== "function") return;
-  // BOM 없으면 Windows Excel 이 CP949 로 열어 한글이 깨진다. 서버 export 가 이미 붙였으면 중복 방지.
-  const blob = new Blob([csv.startsWith("\uFEFF") ? csv : "\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
 }

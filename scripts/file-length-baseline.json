@@ -36,7 +36,6 @@
   "web/src/components/ScenarioForm.tsx": 592,
   "web/src/components/StepBuilder.tsx": 797,
   "web/src/views/ApprovalInbox.tsx": 509,
-  "web/src/views/AuditExplorer.tsx": 524,
   "web/src/views/CoePipeline.tsx": 1562,
   "web/src/views/ConnectorCatalog.tsx": 849,
   "web/src/views/Dashboard.tsx": 1656,
