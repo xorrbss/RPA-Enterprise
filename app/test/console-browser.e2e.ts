@@ -273,7 +273,9 @@ function apiFixture(url: URL): unknown {
       current_principal: {
         subject_id: "e2e-subject",
         tenant_id: "00000000-0000-4000-8000-0000000000a1",
-        roles: ["admin"],
+        // 실서버 계약 미러: 효과 역할 = 토큰 클레임 ∪ 수동 부여. e2e-token 은 roles 클레임이 없고 부여도 없으므로 [].
+        // (nav/useRoles 가 이 응답을 게이팅에 쓰므로 고정 admin 이면 '역할 스코프 nav(viewer 6개)' 단정과 모순.)
+        roles: [],
         source: "jwt",
         display_name: null,
         email: null,
