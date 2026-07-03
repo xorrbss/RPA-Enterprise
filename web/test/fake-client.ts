@@ -1,4 +1,5 @@
 import type { ApiClient } from "../src/api/client";
+import { decodeRoles, decodeSubject } from "../src/api/permissions";
 import type {
   AiGovernanceEvidence,
   AiGovernanceRuntimePolicy,
@@ -886,10 +887,12 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
         { claim: "name", label: "표시 이름", required: false, present: true, mapped_to: "담당자 디렉터리 표시명" },
         { claim: "email", label: "이메일", required: false, present: true, mapped_to: "담당자 디렉터리 이메일" },
       ],
+      // 실서버 계약 미러: current_principal.roles = 토큰 클레임 ∪ 수동 부여(기본 fake는 부여 없음 → 토큰 역할).
+      // useRoles가 효과 역할(A3-1)을 이 응답에서 읽으므로, 고정값이면 모든 테스트의 게이팅이 왜곡된다.
       current_principal: {
-        subject_id: "viewer-a",
+        subject_id: decodeSubject(localStorage.getItem("rpa.token")) ?? "viewer-a",
         tenant_id: "00000000-0000-4000-8000-0000000000a1",
-        roles: ["viewer"],
+        roles: decodeRoles(localStorage.getItem("rpa.token")),
         source: "jwt",
         display_name: "Viewer A",
         email: "viewer@example.com",

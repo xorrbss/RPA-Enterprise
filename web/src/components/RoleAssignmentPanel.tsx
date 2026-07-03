@@ -39,6 +39,8 @@ export function RoleAssignmentPanel(): JSX.Element {
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["role-assignments"] });
     if (principalId !== "") void qc.invalidateQueries({ queryKey: ["principal-role-assignments", principalId] });
+    // 효과 역할 게이팅(useRoles)이 서버 합산 역할을 읽으므로, 부여/회수 직후 자기 자신에게 준 역할도 즉시 화면 반영.
+    void qc.invalidateQueries({ queryKey: ["auth-readiness"] });
   };
 
   const grant = useMutation({
