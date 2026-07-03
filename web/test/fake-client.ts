@@ -65,6 +65,26 @@ const aiGovernanceRuntimePolicy: AiGovernanceRuntimePolicy = {
 };
 
 // 테스트용 fake ApiClient(백엔드 무의존). 뷰는 동일 포트로 주입되므로 fixture만 갈아끼운다.
+function fakeOffboardingRequest(
+  overrides: Partial<import("../src/api/types").OffboardingPurgeRequestItem> = {},
+): import("../src/api/types").OffboardingPurgeRequestItem {
+  return {
+    request_id: "70000000-0000-4000-8000-000000000001",
+    status: "pending",
+    reason: "계약 종료",
+    requested_by: "admin-1",
+    decided_by: null,
+    decision_reason: null,
+    decided_at: null,
+    purge_after: null,
+    purged_at: null,
+    held_rows: {},
+    created_at: "2026-07-03T00:00:00.000Z",
+    updated_at: "2026-07-03T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
   const empty = async () => ({ items: [], next_cursor: null });
   return {
@@ -1997,6 +2017,17 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       review_status: "promoted_to_studio",
     }),
     getCapabilities: async () => ({ session_capture: { server: { mode: "off", enabled: false } } }),
+    listOffboardingPurgeRequests: async () => ({ items: [], grace_days: 7 }),
+    createOffboardingPurgeRequest: async (reason) => fakeOffboardingRequest({ status: "pending", reason }),
+    decideOffboardingPurgeRequest: async (requestId, decision) =>
+      fakeOffboardingRequest({
+        request_id: requestId,
+        status: decision,
+        decided_by: "admin-2",
+        decided_at: "2026-07-03T00:10:00.000Z",
+        purge_after: decision === "approved" ? "2026-07-10T00:10:00.000Z" : null,
+      }),
+    cancelOffboardingPurgeRequest: async (requestId) => fakeOffboardingRequest({ request_id: requestId, status: "cancelled" }),
     listSites: empty,
     listSessionCaptures: empty,
     listGatewayPolicies: async () => ({

@@ -17,6 +17,7 @@ import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import type { RunEnqueuer } from "../src/api/run-queue";
 import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer } from "../src/api/server";
+import { processDueRunTriggers } from "../src/worker/run-trigger-scheduler";
 import { createPool, withTenantTx } from "../src/db/pool";
 import type { SecretRef } from "../../ts/core-types";
 import type { DurableSecurityAuditDecisionWriter, SignedCommandRegistry } from "../../ts/security-middleware-contract";
@@ -235,6 +236,128 @@ async function main(): Promise<void> {
       check("tenant B list -> empty", listB.statusCode === 200 && (listB.json() as { items: unknown[] }).items.length === 0, listB.body);
       const crossDecide = await post(`/v1/offboarding/purge-requests/${secondId}/decide`, adminB, { decision: "approved" });
       check("tenant B decide on A request -> 404", crossDecide.statusCode === 404, crossDecide.body);
+
+      // ===== O3: 오프보딩 잠금 — approved/purging 이면 쓰기 명령 409, 읽기·반출·복구 명령은 허용 =====
+      const third = await post("/v1/offboarding/purge-requests", maker, { reason: "잠금 검증" });
+      const thirdId = String((third.json() as Record<string, unknown>).request_id);
+      check("lock: 3rd request -> 201 pending", third.statusCode === 201, third.body);
+
+      const capsPending = await app.inject({ method: "GET", url: "/v1/capabilities", headers: { authorization: `Bearer ${maker}` } });
+      const capsPendingBody = capsPending.json() as { offboarding: Record<string, unknown> };
+      check(
+        "capabilities: pending 원장 노출(active, 잠금 전)",
+        capsPending.statusCode === 200 && capsPendingBody.offboarding.active === true && capsPendingBody.offboarding.status === "pending"
+          && capsPendingBody.offboarding.request_id === thirdId,
+        capsPending.body,
+      );
+      // pending 은 아직 잠금 전 — 쓰기 명령이 잠금(409)이 아니라 핸들러 형상검사(422)까지 도달한다.
+      const writeWhilePending = await post("/v1/scenarios", maker, {});
+      check("lock: pending 은 쓰기 미차단(422 도달)", writeWhilePending.statusCode === 422, writeWhilePending.body);
+
+      const approveThird = await post(`/v1/offboarding/purge-requests/${thirdId}/decide`, checker, { decision: "approved" });
+      check("lock: 3rd approved", approveThird.statusCode === 200, approveThird.body);
+
+      const capsApproved = await app.inject({ method: "GET", url: "/v1/capabilities", headers: { authorization: `Bearer ${maker}` } });
+      const capsApprovedBody = capsApproved.json() as { offboarding: Record<string, unknown> };
+      check(
+        "capabilities: approved + purge_after 노출(전역 배너 데이터)",
+        capsApproved.statusCode === 200 && capsApprovedBody.offboarding.status === "approved"
+          && typeof capsApprovedBody.offboarding.purge_after === "string",
+        capsApproved.body,
+      );
+
+      const writeLocked = await post("/v1/scenarios", maker, {});
+      check(
+        "lock: approved 테넌트 scenario 쓰기 -> 409 tenant_offboarding_locked",
+        writeLocked.statusCode === 409 && writeLocked.json().code === "TENANT_OFFBOARDING"
+          && (writeLocked.json() as { details?: { reason?: string } }).details?.reason === "tenant_offboarding_locked",
+        writeLocked.body,
+      );
+      const runCreateLocked = await post("/v1/runs", maker, {});
+      check("lock: run 생성 -> 409", runCreateLocked.statusCode === 409 && runCreateLocked.json().code === "TENANT_OFFBOARDING", runCreateLocked.body);
+
+      const readWhileLocked = await app.inject({ method: "GET", url: "/v1/runs", headers: { authorization: `Bearer ${maker}` } });
+      check("lock: 읽기는 허용(GET /v1/runs 200)", readWhileLocked.statusCode === 200, readWhileLocked.body.slice(0, 200));
+      const exportWhileLocked = await app.inject({
+        method: "GET",
+        url: "/v1/offboarding/export/raw?section=runs",
+        headers: { authorization: `Bearer ${maker}` },
+      });
+      check("lock: 원문 반출은 허용(유예 창의 목적)", exportWhileLocked.statusCode === 200, exportWhileLocked.body.slice(0, 200));
+
+      // 복구 방향 명령은 예외: run.abort 는 잠금을 통과해 핸들러(404 — 미존재 run)까지 도달해야 한다.
+      const abortProbe = await post(`/v1/runs/${randomUUID()}/abort`, maker, undefined);
+      check("lock: run.abort 는 잠금 예외(409 아님)", abortProbe.statusCode !== 409, `status=${abortProbe.statusCode} ${abortProbe.body}`);
+      // purge 명령 자체도 예외 — 잠금이 아니라 활성 UNIQUE 가 거부(reason 구분 증명).
+      const purgeWhileLocked = await post("/v1/offboarding/purge-requests", checker, { reason: "locked-dup" });
+      check(
+        "lock: purge 요청은 잠금 예외(활성 UNIQUE 409 로 도달)",
+        purgeWhileLocked.statusCode === 409
+          && (purgeWhileLocked.json() as { details?: { reason?: string } }).details?.reason === "purge_request_active",
+        purgeWhileLocked.body,
+      );
+
+      const cancelThird = await post(`/v1/offboarding/purge-requests/${thirdId}/cancel`, checker, undefined);
+      check("lock: 취소는 잠금 중에도 허용(복구 창)", cancelThird.statusCode === 200, cancelThird.body);
+      const writeUnlocked = await post("/v1/scenarios", maker, {});
+      check("lock: 취소 후 쓰기 재개(422 도달)", writeUnlocked.statusCode === 422, writeUnlocked.body);
+      const capsAfterCancel = await app.inject({ method: "GET", url: "/v1/capabilities", headers: { authorization: `Bearer ${maker}` } });
+      check(
+        "capabilities: 취소 후 active=false",
+        (capsAfterCancel.json() as { offboarding: Record<string, unknown> }).offboarding.active === false,
+        capsAfterCancel.body,
+      );
+
+      // ===== O3: run-trigger 스케줄러 발화 제외(테넌트 B) =====
+      const SCEN_B = "20000000-0000-4000-8000-0000000000b1";
+      const SVER_B = "21000000-0000-4000-8000-0000000000b1";
+      const TRIGGER_B = "22000000-0000-4000-8000-0000000000b1";
+      await withTenantTx(pool, TENANT_B, async (client) => {
+        await client.query(`INSERT INTO scenarios (id, tenant_id, name) VALUES ($1,$2,'offboarding-lock-b')`, [SCEN_B, TENANT_B]);
+        await client.query(
+          `INSERT INTO scenario_versions (id, tenant_id, scenario_id, version, promotion_status, ir)
+           VALUES ($1,$2,$3,1,'draft',$4::jsonb)`,
+          [SVER_B, TENANT_B, SCEN_B, JSON.stringify({
+            nodes: [],
+            target: {
+              site_profile_id: "00000000-0000-4000-8000-0000000000f1",
+              browser_identity_id: "00000000-0000-4000-8000-0000000000f2",
+              network_policy_id: "00000000-0000-4000-8000-0000000000f3",
+            },
+          })],
+        );
+        await client.query(
+          `INSERT INTO run_triggers
+             (id, tenant_id, scenario_version_id, status, cron_expression, timezone, params,
+              catchup_policy, max_concurrent_runs, next_fire_at, created_by)
+           VALUES ($1,$2,$3,'enabled','0 8 * * *','Asia/Seoul','{}'::jsonb,'skip_missed',1,'2026-06-23T08:00:00Z','seed')`,
+          [TRIGGER_B, TENANT_B, SVER_B],
+        );
+      });
+      const adminB2 = await mint(["admin"], "admin-b2", TENANT_B);
+      const reqB = await post("/v1/offboarding/purge-requests", adminB, { reason: "B 잠금" });
+      const reqBId = String((reqB.json() as Record<string, unknown>).request_id);
+      const approveB = await post(`/v1/offboarding/purge-requests/${reqBId}/decide`, adminB2, { decision: "approved" });
+      check("scheduler: B 승인", reqB.statusCode === 201 && approveB.statusCode === 200, `${reqB.body} ${approveB.body}`);
+
+      let seq = 0;
+      const schedulerOptions = {
+        tenantIds: [TENANT_B],
+        enqueuer: noopEnqueuer,
+        now: () => new Date("2026-06-23T09:00:00Z"),
+        correlationId: () => `66000000-0000-4000-8000-${String(++seq).padStart(12, "0")}`,
+      };
+      const lockedStats = await processDueRunTriggers(pool, schedulerOptions);
+      check("scheduler: 오프보딩 테넌트는 발화 제외(claimed 0)", lockedStats.triggersClaimed === 0, JSON.stringify(lockedStats));
+
+      const cancelB = await post(`/v1/offboarding/purge-requests/${reqBId}/cancel`, adminB, undefined);
+      check("scheduler: B 취소", cancelB.statusCode === 200, cancelB.body);
+      const unlockedStats = await processDueRunTriggers(pool, schedulerOptions);
+      check(
+        "scheduler: 취소 후 발화 재개(claimed 1)",
+        unlockedStats.triggersClaimed === 1 && unlockedStats.fireLedgersCreated === 1,
+        JSON.stringify(unlockedStats),
+      );
 
       // 감사 fail-closed = 전이 롤백: audit append 가 죽으면 요청 생성 자체가 롤백된다(설계 §4-4).
       const throwingAudit: DurableSecurityAuditDecisionWriter = {

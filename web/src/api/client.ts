@@ -111,6 +111,8 @@ import {
   type RunSummary,
   type RunTrends,
   type RuntimeCapabilities,
+  type OffboardingPurgeRequestItem,
+  type OffboardingPurgeRequestPage,
   type RoleAssignmentItem,
   type ScenarioDetail,
   type ScenarioEnvironmentBinding,
@@ -167,6 +169,11 @@ import {
 
 export interface ApiClient {
   getCapabilities(): Promise<RuntimeCapabilities>;
+  // 오프보딩 삭제 원장(O2/O3) — 조회는 admin(tenant_data.export), 명령은 admin(tenant_data.purge.*).
+  listOffboardingPurgeRequests(): Promise<OffboardingPurgeRequestPage>;
+  createOffboardingPurgeRequest(reason: string, idempotencyKey: string): Promise<OffboardingPurgeRequestItem>;
+  decideOffboardingPurgeRequest(requestId: string, decision: "approved" | "rejected", idempotencyKey: string, reason?: string): Promise<OffboardingPurgeRequestItem>;
+  cancelOffboardingPurgeRequest(requestId: string, idempotencyKey: string): Promise<OffboardingPurgeRequestItem>;
   listRuns(p?: ListParams): Promise<Paginated<RunItem>>;
   search(query: string, limit?: number): Promise<GlobalSearchResult>;
   // run 하위 단계 트레이스(api-surface §1). 비민감 요약+참조만(본문은 artifact_ids→getArtifact).
@@ -639,6 +646,13 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
 
   return {
     getCapabilities: () => get(`/v1/capabilities`),
+    listOffboardingPurgeRequests: () => get(`/v1/offboarding/purge-requests`),
+    createOffboardingPurgeRequest: (reason, idempotencyKey) =>
+      post(`/v1/offboarding/purge-requests`, idempotencyKey, { reason }),
+    decideOffboardingPurgeRequest: (requestId, decision, idempotencyKey, reason) =>
+      post(`/v1/offboarding/purge-requests/${encodeURIComponent(requestId)}/decide`, idempotencyKey, reason !== undefined ? { decision, reason } : { decision }),
+    cancelOffboardingPurgeRequest: (requestId, idempotencyKey) =>
+      post(`/v1/offboarding/purge-requests/${encodeURIComponent(requestId)}/cancel`, idempotencyKey, {}),
     listRuns: (p) => get(`/v1/runs${queryString(p)}`),
     search: (q, limit = 20) => get(`/v1/search${queryString({ q, limit })}`),
     listRunSteps: (runId, p) => get(`/v1/runs/${runId}/steps${queryString(p)}`),

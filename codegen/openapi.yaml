@@ -9791,7 +9791,7 @@ components:
     RuntimeCapabilities:
       type: object
       additionalProperties: false
-      required: [session_capture]
+      required: [session_capture, offboarding]
       properties:
         session_capture:
           type: object
@@ -9810,6 +9810,21 @@ components:
                 enabled:
                   type: boolean
                   description: true only when mode=dev and a server-side capture consumer exists.
+        offboarding:
+          type: object
+          additionalProperties: false
+          required: [active, status, purge_after, request_id]
+          description: >
+            Active tenant offboarding ledger state, visible to every authenticated role so the
+            console can explain the write lock (409 TENANT_OFFBOARDING) with a global banner.
+            Only pending/approved/purging ledgers appear; approved/purging block write commands.
+          properties:
+            active: { type: boolean }
+            status:
+              type: [string, "null"]
+              description: pending | approved | purging (null when no active ledger).
+            purge_after: { type: [string, "null"], format: date-time }
+            request_id: { type: [string, "null"], format: uuid }
 
     ScenarioGenerationCapabilities:
       type: object

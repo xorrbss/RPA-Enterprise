@@ -126,6 +126,27 @@ async function main(): Promise<void> {
     };
     const worker = new PgRuntimeWorker(pool, options);
 
+    // 0) 오프보딩 잠금(O3): approved 원장이 있으면 auto_fan_out 후보에서 제외(신규 활동 금지) — 취소 후 재개(step 1).
+    const OFFBOARDING_ID = "88000000-0000-4000-8000-000000000001";
+    await withTenantTx(pool, TENANT, (c) => c.query(
+      `INSERT INTO tenant_offboarding_requests (id, tenant_id, status, reason, requested_by, decided_by, decided_at, purge_after)
+       VALUES ($1::uuid, $2::uuid, 'approved', 'lock test', 'admin-1', 'admin-2', now(), now() + interval '7 days')`,
+      [OFFBOARDING_ID, TENANT],
+    ));
+    const r0 = await worker.handle({
+      kind: "approval_fan_out_sweeper",
+      tenantId: TENANT as RuntimeWorkerJob["tenantId"],
+      correlationId: CORR as RuntimeWorkerJob["correlationId"],
+    });
+    check("오프보딩 잠금: sweep completed(에러 아님)", r0.kind === "completed", JSON.stringify(r0));
+    const auto0 = await counts(pool, AUTO_RUN);
+    check("오프보딩 잠금: auto run fan-out 제외(claim/스폰 0)", auto0.claims === 0 && auto0.spawned === 0, JSON.stringify(auto0));
+    check("오프보딩 잠금: run_claim enqueue 0", enqueued.length === 0, `enqueued=${enqueued.length}`);
+    await withTenantTx(pool, TENANT, (c) => c.query(
+      `UPDATE tenant_offboarding_requests SET status = 'cancelled', updated_at = now() WHERE id = $1::uuid`,
+      [OFFBOARDING_ID],
+    ));
+
     // 1) sweep → auto_fan_out run 만 fan-out.
     const r1 = await worker.handle({
       kind: "approval_fan_out_sweeper",
