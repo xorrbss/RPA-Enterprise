@@ -20,6 +20,9 @@ export const OPS_ALERT_AUTO_FIRE_SOURCES = [
   "trigger_fire",
   "failure_spike",
   "session_expiry",
+  // A4-3: 레다크션 terminal 실패 — detected_at=artifact_redaction_failures 행 타임스탬프(안정 세대).
+  //   failed 행은 RLS 로 콘솔에서 숨겨지므로 무인 통지가 사실상 유일한 외부 신호 경로다.
+  "artifact_redaction",
 ] as const;
 
 export type OpsAlertAutoFireSource = (typeof OPS_ALERT_AUTO_FIRE_SOURCES)[number];

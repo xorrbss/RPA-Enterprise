@@ -188,7 +188,7 @@ export function RunTraceView(): JSX.Element {
                 {r.failure_reason !== null &&
                   r.failure_reason !== undefined && (
                     <span className="badge red">
-                      {errorCodeLabel(r.failure_reason.code)}
+                      {errorCodeLabel(r.failure_reason.code, { terminal: true })}
                     </span>
                   )}
               </span>

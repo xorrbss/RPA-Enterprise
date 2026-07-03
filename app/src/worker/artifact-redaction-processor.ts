@@ -373,5 +373,25 @@ export class ArtifactRedactionProcessor {
     if (updated.rowCount !== 1) {
       throw new Error("RuntimeWorker: artifact_redaction finalize CAS conflict after object I/O");
     }
+
+    if (status === "failed") {
+      // ops-defaults §6 "N회 실패 → failed + 알림"의 알림 절반: failed 행은 RLS(artifacts_visible_isolation)가
+      // 콘솔에서 숨기므로(D8-A1) 앱-가시 원장에 push 기록 — ops-alerts source=artifact_redaction 의 유일한 원천.
+      // finalize CAS 성공과 같은 tx 라 원자적이고, failed 는 터미널이라 ON CONFLICT 는 도달 불가 방어선일 뿐이다.
+      await client.query(
+        `INSERT INTO artifact_redaction_failures (id, tenant_id, artifact_id, run_id, failure_kind, attempts)
+         SELECT $1::uuid, a.tenant_id, a.id, a.run_id, $4, $5::int
+           FROM artifacts a
+          WHERE a.tenant_id = $2::uuid AND a.id = $3::uuid
+         ON CONFLICT (tenant_id, artifact_id) DO NOTHING`,
+        [
+          randomUUID(),
+          input.claim.tenantId,
+          input.claim.artifact.artifactRef,
+          input.decision.kind === "terminal_failed" ? "terminal" : "attempts_exhausted",
+          nextAttempts,
+        ],
+      );
+    }
   }
 }

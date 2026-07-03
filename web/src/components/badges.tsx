@@ -171,9 +171,32 @@ const ERROR_LABELS: Record<string, string> = {
   DEAD_LETTER: "수동 재처리 대기.",
 };
 
+// 터미널(종결) 문맥 전용 라벨(U3-2). ERROR_LABELS의 "재시도됩니다" 계열은 계약 userMessage(in-flight 표면) 미러라,
+// 재시도가 모두 소진되어 종결된 실행의 배너/목록에서는 "실행이 종료되었습니다 · 재시도됩니다"라는 자기모순 문장이 되고
+// 운영자가 시스템이 알아서 복구할 것으로 오인해 재실행하지 않는다. 종결 문맥에서만 과거형+다음 조치형으로 덮어쓴다.
+// (in-flight 표면 — 단계 트레이스의 시도별 예외 등 — 은 계속 ERROR_LABELS 사용.)
+const TERMINAL_ERROR_LABELS: Record<string, string> = {
+  BROWSER_LEASE_EXPIRED: "브라우저 사용 시간 만료로 실행이 실패했습니다 — 다시 실행이 필요합니다.",
+  BROWSER_CRASH: "브라우저 비정상 종료로 실행이 실패했습니다 — 다시 실행이 필요합니다.",
+  CDP_DISCONNECTED: "브라우저 연결이 끊겨 실행이 실패했습니다 — 다시 실행이 필요합니다.",
+  NAVIGATION_TIMEOUT: "페이지 응답 지연으로 재시도가 모두 실패했습니다 — 다시 실행이 필요합니다.",
+  SESSION_LOCKED: "다른 실행이 같은 로그인 세션을 사용 중이어서 완료하지 못했습니다 — 다시 실행이 필요합니다.",
+  LLM_STREAM_IDLE_TIMEOUT: "AI 응답 지연으로 재시도가 모두 실패했습니다 — 다시 실행이 필요합니다.",
+  LLM_MALFORMED_OUTPUT: "AI 응답 형식 오류로 재시도가 모두 실패했습니다 — 다시 실행이 필요합니다.",
+  LLM_RATE_LIMITED: "AI 요청 한도로 재시도가 모두 실패했습니다 — 잠시 후 다시 실행하세요.",
+  LLM_BACKEND_UNAVAILABLE: "AI 서비스 연결 실패로 재시도가 모두 소진되었습니다 — 다시 실행이 필요합니다.",
+  LLM_CONNECTION_FAILED: "AI 연결 실패로 재시도가 모두 소진되었습니다 — 다시 실행이 필요합니다.",
+  VERIFY_FAILED: "결과 검증이 반복 실패해 실행이 종료되었습니다 — 화면 변경 여부를 확인한 뒤 다시 실행하세요.",
+  RAW_PERSIST_FAILED: "수집 데이터 저장이 반복 실패했습니다 — 다시 실행이 필요합니다.",
+  WORKITEM_CHECKOUT_CONFLICT: "작업 점유 충돌이 해소되지 않아 실행이 종료되었습니다 — 다시 실행이 필요합니다.",
+  SINK_DELIVERY_FAILED: "외부 전달이 반복 실패했습니다 — 재처리 대기함을 확인하세요.",
+};
+
 // 에러 코드 문자열 → 비기술 한국어(ApiError가 아닌 bare code 호출부용: failure_reason.code / exception.code).
 // 미매핑은 raw code 폴백(조용한 공백 금지) — errorLabel의 ApiError 분기와 동일 규칙·동일 ERROR_LABELS 출처.
-export function errorCodeLabel(code: string): string {
+// terminal=true: 종결된 실행 표면(도착 배너·목록 failure_reason 배지) 전용 — 미래형 재시도 문구를 과거형으로 교체.
+export function errorCodeLabel(code: string, opts?: { terminal?: boolean }): string {
+  if (opts?.terminal === true) return TERMINAL_ERROR_LABELS[code] ?? ERROR_LABELS[code] ?? code;
   return ERROR_LABELS[code] ?? code;
 }
 

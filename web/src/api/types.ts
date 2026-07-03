@@ -774,7 +774,8 @@ export type OpsAlertSource =
   | "scim_secret_rotation"
   | "audit_verifier"
   | "readiness_evidence"
-  | "session_expiry";
+  | "session_expiry"
+  | "artifact_redaction";
 export type OpsAlertSubjectType =
   | "run"
   | "human_task"
@@ -875,7 +876,8 @@ export type OpsAlertNotificationRouteSource =
   | "human_task_sla"
   | "trigger_fire"
   | "failure_spike"
-  | "session_expiry";
+  | "session_expiry"
+  | "artifact_redaction";
 export type OpsAlertNotificationRouteSeverity = "warning" | "critical";
 
 export interface OpsAlertNotificationRoute {
