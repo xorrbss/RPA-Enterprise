@@ -52,6 +52,7 @@ export const TENANT_PURGE_TABLE_ORDER: readonly string[] = [
   "dead_letter",
   "document_extractions",
   "document_jobs",
+  "artifact_redaction_failures",
   "artifacts",
   "events_outbox",
   "gateway_policies",
